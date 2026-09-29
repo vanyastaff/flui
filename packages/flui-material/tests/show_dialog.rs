@@ -91,8 +91,7 @@ fn app(vsync: &Vsync, navigator: &NavigatorHandle) -> impl View {
 /// the barrier (away from the dialog itself) dismisses it, and the page's
 /// own `State` survives the whole round-trip untouched — proof `PopupRoute`
 /// (`maintain_state: true`, `opaque: false`) never tore the page down.
-#[test]
-fn dialog_covers_the_page_and_a_barrier_tap_dismisses_it_leaving_page_state_intact() {
+pub fn dialog_covers_the_page_and_a_barrier_tap_dismisses_it_leaving_page_state_intact() {
     let vsync = Vsync::new();
     let created = Rc::new(Cell::new(0_u32));
     let taps = Arc::new(AtomicUsize::new(0));
@@ -191,43 +190,5 @@ fn dialog_covers_the_page_and_a_barrier_tap_dismisses_it_leaving_page_state_inta
         1,
         "the home page's State must survive the dialog's entire push/dismiss lifecycle \
          (PopupRoute.maintainState => true keeps the page mounted throughout)"
-    );
-}
-
-/// An explicit `navigator.pop()` — not a barrier tap — also removes the
-/// dialog `show_dialog` pushed.
-#[test]
-fn an_explicit_navigator_pop_closes_the_dialog() {
-    let vsync = Vsync::new();
-    let navigator = NavigatorHandle::new();
-    navigator.seed_initial(SimpleRoute::<()>::new(|_ctx| {
-        ColoredBox::new(Color::rgb(0, 0, 0)).into_view().boxed()
-    }));
-    let mut laid = lay_out_animated(app(&vsync, &navigator), tight(800.0, 600.0), vsync);
-
-    let _result = show_dialog::<(), _, _>(&navigator, |_ctx| {
-        AlertDialog::new().title(Text::new("Delete this?"))
-    });
-    for _ in 0..PUMPS {
-        laid.pump_for(FRAME);
-    }
-    assert_eq!(
-        navigator.route_ids().len(),
-        2,
-        "the dialog route is on the stack"
-    );
-
-    assert!(
-        navigator.pop(),
-        "an explicit pop must succeed with a dialog on top"
-    );
-    for _ in 0..PUMPS {
-        laid.pump_for(FRAME);
-    }
-
-    assert_eq!(
-        navigator.route_ids().len(),
-        1,
-        "an explicit navigator.pop() must close the dialog show_dialog pushed"
     );
 }

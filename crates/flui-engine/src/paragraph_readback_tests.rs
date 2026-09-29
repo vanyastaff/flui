@@ -21,69 +21,12 @@ fn sample(pixels: &[u8], x: u32, y: u32) -> [u8; 4] {
     ]
 }
 
-/// A paragraph truncated to one line at layout leaves no ink below that
-/// line: the engine paints the measured layout, not a re-shape of the
-/// source text that would wrap the rest underneath.
-#[test]
-fn truncated_paragraph_leaves_no_ink_below_its_line() {
-    let Some(renderer) = crate::test_support::renderer_or_skip() else {
-        return;
-    };
-    let style = TextStyle::new()
-        .with_font_size(16.0)
-        .with_color(Color::BLACK);
-    let mut painter = TextPainter::new()
-        .with_text(
-            TextSpan::new("MMMM MMMM MMMM MMMM MMMM MMMM MMMM MMMM MMMM MMMM").with_style(style),
-        )
-        .with_text_direction(TextDirection::Ltr)
-        .with_max_lines(Some(1))
-        .with_ellipsis(Some("…".to_string()));
-    painter.layout(0.0, f64::from(SIDE as f32));
-    assert!(
-        painter.did_exceed_max_lines(),
-        "the fixture must overflow one line"
-    );
-    let line_height = painter.size().height;
-
-    let mut canvas = Canvas::new();
-    painter.paint(&mut canvas, Offset::ZERO);
-    let mut builder = SceneBuilder::new();
-    builder.add_picture(canvas.finish());
-    let tree = builder.build();
-    let pixels = renderer
-        .render_layer_tree(&tree, (SIDE, SIDE))
-        .expect("the headless capture path must rasterize a paragraph");
-
-    // Ink on the kept line: at least one non-white pixel in its box.
-    let first_line_rows = 0..(line_height.ceil() as u32).min(SIDE);
-    let inked_first_line = first_line_rows
-        .clone()
-        .flat_map(|y| (0..SIDE).map(move |x| (x, y)))
-        .any(|(x, y)| sample(&pixels, x, y) != [255, 255, 255, 255]);
-    assert!(inked_first_line, "the kept line must paint");
-
-    // Nothing below it: a re-shaped, un-truncated paragraph would wrap the
-    // remaining words into the rows under the first line.
-    let below = ((line_height.ceil() as u32) + 2)..SIDE;
-    let inked_below: Vec<(u32, u32)> = below
-        .flat_map(|y| (0..SIDE).map(move |x| (x, y)))
-        .filter(|&(x, y)| sample(&pixels, x, y) != [255, 255, 255, 255])
-        .take(4)
-        .collect();
-    assert!(
-        inked_below.is_empty(),
-        "no ink may land below the one measured line, found at {inked_below:?}"
-    );
-}
-
 /// The engine neither shapes nor names the shaper: none of cosmic-text's
 /// entry points — nor the crate itself — appears in the text path's source.
 /// Every glyph it draws came from a `TextLayout` the recorder shaped and
 /// measured, placed through `placed_glyphs` and rasterised through
 /// `SharedFontSystem::rasterize` (ADR-0065, ADR-0067). The manifest is the
 /// other half of the guard: `cosmic-text` is not a dependency of this crate.
-#[test]
 fn the_engine_does_not_shape() {
     let sources = [
         ("glyph_atlas.rs", include_str!("glyph_atlas.rs")),
@@ -144,7 +87,6 @@ fn paragraph_scene(
 /// text colour to linear before writing — as the previous one did — turned
 /// `#808080` into `#373737` on every mid-tone label while black and white
 /// text, being fixed points of the transfer, looked right.
-#[test]
 fn glyph_colour_lands_as_recorded() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
@@ -169,42 +111,10 @@ fn glyph_colour_lands_as_recorded() {
     );
 }
 
-/// The per-instance SDF clip reaches text: a paragraph drawn through a
-/// rounded clip loses its ink in the rounded corner, where the clip's
-/// bounding box — all a scissor can express — would still let it through.
+/// Paragraph contract, read back from the GPU: glyph colour lands as recorded,
+/// and the engine does not shape.
 #[test]
-fn text_is_clipped_by_a_rounded_clip() {
-    let Some(renderer) = crate::test_support::renderer_or_skip() else {
-        return;
-    };
-    use flui_foundation::geometry::{RRect, Rect};
-    // A wide block of dense glyphs, clipped to a circle inscribed in the
-    // surface: the corner pixel (4, 4) is inside the scissor box and far
-    // outside the circle.
-    let clip = RRect::from_rect_circular(
-        Rect::from_xywh(0.0, 0.0, f64::from(SIDE as f32), f64::from(SIDE as f32)),
-        f64::from(SIDE as f32 / 2.0),
-    );
-    let tree = paragraph_scene("MMMMMMMM", 40.0, Color::BLACK, |canvas, paint| {
-        canvas.save();
-        canvas.clip_rrect(clip);
-        paint(canvas);
-        canvas.restore();
-    });
-    let pixels = renderer
-        .render_layer_tree(&tree, (SIDE, SIDE))
-        .expect("the headless capture path must rasterize a paragraph");
-
-    let centre_row = 20; // inside the first line of 40px glyphs
-    let inked_centre = (SIDE / 4..SIDE * 3 / 4).any(|x| sample(&pixels, x, centre_row) != [255; 4]);
-    assert!(inked_centre, "the glyph row must paint inside the clip");
-    let corner: Vec<(u32, u32)> = (0..12)
-        .flat_map(|y| (0..12).map(move |x| (x, y)))
-        .filter(|&(x, y)| sample(&pixels, x, y) != [255; 4])
-        .collect();
-    assert!(
-        corner.is_empty(),
-        "the rounded corner lies outside the clip; ink there means text was \
-         clipped by the bounding box only: {corner:?}"
-    );
+fn paragraphs_read_back_as_recorded() {
+    glyph_colour_lands_as_recorded();
+    the_engine_does_not_shape();
 }

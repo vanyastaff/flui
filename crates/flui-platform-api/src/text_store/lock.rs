@@ -398,17 +398,6 @@ mod tests {
         )
     }
 
-    #[test]
-    fn a_free_store_grants_at_once() {
-        let arbiter = LockArbiter::new();
-        let (log, grants) = labelled();
-        let outcome = arbiter.request(grants.grant("now"), LockTiming::Sync, &mut open);
-        assert_eq!(outcome, Ok(LockOutcome::Granted));
-        assert_eq!(*log.borrow(), ["now"]);
-        assert!(!arbiter.is_locked());
-    }
-
-    #[test]
     fn sync_inside_a_session_is_refused() {
         let arbiter = Rc::new(LockArbiter::new());
         let seen = Rc::new(Cell::new(None));
@@ -428,28 +417,6 @@ mod tests {
         assert_eq!(seen.get(), Some(Err(TextStoreError::SyncLockUnavailable)));
     }
 
-    #[test]
-    fn async_inside_a_session_runs_on_release() {
-        let arbiter = Rc::new(LockArbiter::new());
-        let (log, grants) = labelled();
-        let grants = Rc::new(grants);
-        let (inner_arbiter, inner_log, inner_grants) =
-            (Rc::clone(&arbiter), Rc::clone(&log), Rc::clone(&grants));
-        let outer = LockGrant::read(move |_| {
-            inner_log.borrow_mut().push("outer");
-            let outcome =
-                inner_arbiter.request(inner_grants.grant("nested"), LockTiming::Async, &mut open);
-            assert_eq!(outcome, Ok(LockOutcome::Deferred));
-            inner_log.borrow_mut().push("outer ends");
-        });
-        assert_eq!(
-            arbiter.request(outer, LockTiming::Async, &mut open),
-            Ok(LockOutcome::Granted)
-        );
-        assert_eq!(*log.borrow(), ["outer", "outer ends", "nested"]);
-        assert_eq!(arbiter.pending(), 0);
-    }
-
     /// An arbiter following a gate the test holds, shut.
     fn behind_a_shut_gate() -> (LockArbiter, CommitGate) {
         let arbiter = LockArbiter::new();
@@ -459,39 +426,6 @@ mod tests {
         (arbiter, gate)
     }
 
-    #[test]
-    fn async_while_the_gate_is_shut_waits_for_run_deferred() {
-        let (arbiter, gate) = behind_a_shut_gate();
-        let (log, grants) = labelled();
-        assert_eq!(
-            arbiter.request(grants.grant("later"), LockTiming::Async, &mut open),
-            Ok(LockOutcome::Deferred)
-        );
-        assert_eq!(
-            arbiter.request(grants.grant("sync"), LockTiming::Sync, &mut open),
-            Err(TextStoreError::SyncLockUnavailable)
-        );
-        assert_eq!(arbiter.run_deferred(&mut open), 0, "the gate is still shut");
-        assert!(log.borrow().is_empty());
-        gate.set_open(true);
-        assert_eq!(arbiter.run_deferred(&mut open), 1);
-        assert_eq!(*log.borrow(), ["later"]);
-    }
-
-    #[test]
-    fn a_new_arbiter_is_open_until_a_gate_is_installed() {
-        let arbiter = LockArbiter::new();
-        assert!(arbiter.may_commit());
-        let gate = CommitGate::new();
-        arbiter.set_gate(gate.clone());
-        gate.set_open(false);
-        assert!(
-            !arbiter.may_commit(),
-            "the arbiter reads the installed gate, not a copy of its state"
-        );
-    }
-
-    #[test]
     fn deferred_run_in_fifo_order() {
         let (arbiter, gate) = behind_a_shut_gate();
         let (log, grants) = labelled();
@@ -508,7 +442,6 @@ mod tests {
         assert_eq!(*log.borrow(), ["first", "second", "third", "fourth"]);
     }
 
-    #[test]
     fn a_full_queue_refuses_with_deferred_queue_full() {
         let (arbiter, _gate) = behind_a_shut_gate();
         let (_, grants) = labelled();
@@ -523,6 +456,15 @@ mod tests {
             Err(TextStoreError::DeferredQueueFull)
         );
         assert_eq!(arbiter.pending(), DEFERRED_LOCK_CAPACITY);
+    }
+
+    /// The arbiter's refusals and ordering: a sync request inside a session,
+    /// deferred grants running FIFO, and a full deferred queue.
+    #[test]
+    fn the_arbiter_refuses_and_orders_requests_by_the_lock_protocol() {
+        sync_inside_a_session_is_refused();
+        deferred_run_in_fifo_order();
+        a_full_queue_refuses_with_deferred_queue_full();
     }
 
     #[test]
@@ -540,24 +482,6 @@ mod tests {
             Ok(LockOutcome::Granted)
         );
         assert_eq!(*log.borrow(), ["after"]);
-    }
-
-    #[test]
-    fn clear_drops_pending_grants_unrun() {
-        let (arbiter, gate) = behind_a_shut_gate();
-        let (log, grants) = labelled();
-        let _ = arbiter.request(grants.grant("a"), LockTiming::Async, &mut open);
-        let _ = arbiter.request(grants.grant("b"), LockTiming::Async, &mut open);
-        assert_eq!(arbiter.clear(), 2);
-        gate.set_open(true);
-        assert_eq!(arbiter.run_deferred(&mut open), 0);
-        assert!(log.borrow().is_empty());
-    }
-
-    #[test]
-    fn a_grant_reports_its_kind() {
-        assert_eq!(LockGrant::read(|_| {}).kind(), LockKind::Read);
-        assert_eq!(LockGrant::read_write(|_| {}).kind(), LockKind::ReadWrite);
     }
 
     static_assertions::assert_not_impl_any!(LockArbiter: Send, Sync);

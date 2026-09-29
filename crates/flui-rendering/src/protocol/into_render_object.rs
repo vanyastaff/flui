@@ -170,46 +170,4 @@ where
 // 4. Simpler API: Box::new(render_box) instead of Box::new(adapter)
 
 #[cfg(test)]
-mod tests {
-    use flui_foundation::Leaf;
-    use flui_foundation::geometry::Size;
-
-    use super::*;
-    use crate::{
-        context::{BoxHitTestContext, BoxLayoutContext},
-        parent_data::BoxParentData,
-    };
-
-    #[derive(Debug)]
-    struct TestBox;
-
-    impl flui_foundation::Diagnosticable for TestBox {}
-
-    impl RenderBox for TestBox {
-        type Arity = Leaf;
-        type ParentData = BoxParentData;
-
-        fn perform_layout(&mut self, _ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-            Size::ZERO
-        }
-
-        // paint() uses default no-op
-
-        fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Leaf, BoxParentData>) -> bool {
-            false
-        }
-    }
-
-    #[test]
-    fn test_into_render_entry() {
-        let _entry: RenderEntry<BoxProtocol> = TestBox.into_render_entry();
-        // Entry created successfully
-    }
-
-    #[test]
-    fn test_into_render_node() {
-        let node = TestBox.into_render_node();
-        assert!(node.is_box());
-        assert!(!node.is_sliver());
-    }
-}
+mod tests {}

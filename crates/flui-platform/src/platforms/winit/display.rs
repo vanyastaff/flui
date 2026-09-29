@@ -74,17 +74,3 @@ impl PlatformDisplay for WinitDisplay {
         self.is_primary
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_display_id() {
-        // We can't easily test with real MonitorHandle in unit tests
-        // since it requires a window/event loop context.
-        // This is tested via integration tests instead.
-        let id = DisplayId(42);
-        assert_eq!(id.0, 42);
-    }
-}

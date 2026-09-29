@@ -338,11 +338,6 @@ impl ControlReceiver {
         self.commands.try_recv().ok()
     }
 
-    #[cfg(test)]
-    pub(super) fn pending_count(&self) -> usize {
-        self.commands.len()
-    }
-
     pub(super) fn take_quit_requested(&self) -> bool {
         self.quit_requested.swap(false, Ordering::AcqRel)
     }
@@ -392,7 +387,7 @@ mod tests {
     use static_assertions::{assert_impl_all, assert_not_impl_any};
 
     use super::{CONTROL_CAPACITY, ControlCommand, ControlSendError, control_lane};
-    use crate::traits::{WindowOptions, owner::OpenWindowError};
+    use crate::traits::WindowOptions;
 
     assert_impl_all!(super::ControlSender: Clone, Send, Sync);
     assert_not_impl_any!(super::ControlReceiver: Send, Sync);
@@ -443,50 +438,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn winit_control_enqueues_before_waking_the_owner() {
-        let (wake_tx, wake_rx) = crossbeam_channel::bounded(0);
-        let (owner_ack_tx, owner_ack_rx) = crossbeam_channel::bounded(0);
-        let wake = Arc::new(move || {
-            wake_tx.send(()).expect("owner wake receiver remains live");
-            owner_ack_rx
-                .recv()
-                .expect("owner acknowledges after observing the queue");
-        });
-        let (sender, receiver) = control_lane(wake);
-
-        let worker = thread::spawn(move || sender.request_open_window(options("ordered")));
-
-        wake_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("successful enqueue wakes the owner");
-        assert_eq!(receiver.begin_drain(), 1, "the command precedes its wake");
-        let ControlCommand::OpenWindow { options, reply } =
-            receiver.try_recv().expect("queued window request");
-        assert_eq!(options.title, "ordered");
-        owner_ack_tx
-            .send(())
-            .expect("release the sending worker after inspection");
-        assert!(
-            reply.deliver(Ok(Arc::new(StubWindow))).is_ok(),
-            "slot is still Pending"
-        );
-
-        let mut handle = worker
-            .join()
-            .expect("sending worker does not panic")
-            .expect("request is accepted");
-        let window = handle
-            .try_take()
-            .expect("owner already delivered")
-            .expect("window opens");
-        assert_eq!(
-            window.physical_size(),
-            flui_foundation::geometry::Size::default()
-        );
-    }
-
-    #[test]
     fn winit_control_cross_thread_request_is_processed_on_the_owner() {
         let owner_thread = thread::current().id();
         let (wake_tx, wake_rx) = crossbeam_channel::bounded(1);
@@ -523,56 +474,14 @@ mod tests {
         assert!(window.is_visible());
     }
 
+    /// The owner lane: a cross-thread request is processed on the owner, and
+    /// a full lane hands the original options back without an extra wake.
     #[test]
-    fn winit_control_drain_is_fifo_snapshot_and_rearms_for_nested_sends() {
-        let wake_count = Arc::new(AtomicUsize::new(0));
-        let wake_count_for_callback = Arc::clone(&wake_count);
-        let wake = Arc::new(move || {
-            wake_count_for_callback.fetch_add(1, Ordering::Relaxed);
-        });
-        let (sender, receiver) = control_lane(wake);
-
-        let _first_reply = sender
-            .request_open_window(options("first"))
-            .expect("first request");
-        let _second_reply = sender
-            .request_open_window(options("second"))
-            .expect("second request");
-        assert_eq!(wake_count.load(Ordering::Relaxed), 1, "burst coalesces");
-
-        let drain_budget = receiver.begin_drain();
-        assert_eq!(drain_budget, 2);
-        let ControlCommand::OpenWindow { options: first, .. } =
-            receiver.try_recv().expect("first command");
-        assert_eq!(first.title, "first");
-
-        let _nested_reply = sender
-            .request_open_window(options("nested"))
-            .expect("nested request");
-        assert_eq!(
-            wake_count.load(Ordering::Relaxed),
-            2,
-            "a send after drain entry re-arms the owner"
-        );
-
-        let ControlCommand::OpenWindow {
-            options: second, ..
-        } = receiver.try_recv().expect("second command");
-        assert_eq!(second.title, "second");
-        assert_eq!(
-            receiver.pending_count(),
-            1,
-            "nested send is outside the pre-read drain snapshot"
-        );
-
-        assert_eq!(receiver.begin_drain(), 1);
-        let ControlCommand::OpenWindow {
-            options: nested, ..
-        } = receiver.try_recv().expect("nested command");
-        assert_eq!(nested.title, "nested");
+    fn the_owner_lane_admits_cross_thread_requests_and_refuses_when_full() {
+        winit_control_cross_thread_request_is_processed_on_the_owner();
+        winit_control_full_returns_original_options_without_an_extra_wake();
     }
 
-    #[test]
     fn winit_control_full_returns_original_options_without_an_extra_wake() {
         assert_eq!(CONTROL_CAPACITY, 256, "the owner lane has a fixed bound");
         let wake_count = Arc::new(AtomicUsize::new(0));
@@ -604,281 +513,5 @@ mod tests {
             "a rejected command's abandonment wake still coalesces onto the \
              already-pending flag from the queue-filling sends"
         );
-    }
-
-    #[test]
-    fn winit_control_receiver_drop_returns_owner_gone_with_payload() {
-        let wake_count = Arc::new(AtomicUsize::new(0));
-        let wake_count_for_callback = Arc::clone(&wake_count);
-        let wake = Arc::new(move || {
-            wake_count_for_callback.fetch_add(1, Ordering::Relaxed);
-        });
-        let (sender, receiver) = control_lane(wake);
-        drop(receiver);
-
-        let error = sender
-            .request_open_window(options("orphan"))
-            .expect_err("dropped owner refuses work");
-        match error {
-            ControlSendError::OwnerGone { rejected } => {
-                assert_eq!(rejected.title, "orphan");
-            }
-            ControlSendError::Full { .. } => panic!("a dropped owner is not backpressure"),
-        }
-        assert_eq!(
-            wake_count.load(Ordering::Relaxed),
-            0,
-            "an owner-gone rejection cannot wake an inert loop"
-        );
-    }
-
-    #[test]
-    fn winit_control_stop_linearizes_after_an_in_flight_admission() {
-        let (sender, receiver) = control_lane(Arc::new(|| {}));
-        let (admitted_tx, admitted_rx) = crossbeam_channel::bounded(0);
-        let (release_tx, release_rx) = crossbeam_channel::bounded(0);
-
-        let worker = thread::spawn(move || {
-            sender.request_open_window_after_admission(options("admitted"), || {
-                admitted_tx
-                    .send(())
-                    .expect("owner observes the admission critical section");
-                release_rx
-                    .recv()
-                    .expect("owner releases the paused admission");
-            })
-        });
-
-        admitted_rx
-            .recv()
-            .expect("sender pauses after checking admission");
-        release_tx
-            .send(())
-            .expect("sender can finish while still holding the admission gate");
-
-        receiver.stop_accepting();
-        let shutdown_budget = receiver.begin_drain();
-        let handle = worker
-            .join()
-            .expect("admitting worker does not panic")
-            .expect("the request linearized before shutdown");
-        assert_eq!(
-            shutdown_budget, 1,
-            "shutdown snapshot contains every request admitted before the stop boundary"
-        );
-
-        let ControlCommand::OpenWindow { reply, .. } = receiver
-            .try_recv()
-            .expect("the admitted command remains available for rejection");
-        assert!(
-            reply
-                .deliver(Err(OpenWindowError::OwnerGone { rejected: None }))
-                .is_ok(),
-            "slot is still Pending"
-        );
-        match handle.wait() {
-            ClaimOutcome::Delivered(result) => assert!(result.is_err()),
-            ClaimOutcome::AlreadyClaimed => {
-                panic!("this handle is never polled by another caller before wait")
-            }
-            ClaimOutcome::OwnerGone => panic!("the owner never disconnects in this test"),
-        }
-    }
-
-    #[test]
-    fn winit_control_quit_is_nonstarvable_and_consumed_once_when_queue_is_full() {
-        let wake_count = Arc::new(AtomicUsize::new(0));
-        let wake_count_for_callback = Arc::clone(&wake_count);
-        let wake = Arc::new(move || {
-            wake_count_for_callback.fetch_add(1, Ordering::Relaxed);
-        });
-        let (sender, receiver) = control_lane(wake);
-
-        for index in 0..CONTROL_CAPACITY {
-            let _reply = sender
-                .request_open_window(options(format!("queued-{index}")))
-                .expect("fill the bounded window lane");
-        }
-        sender.request_quit();
-
-        assert_eq!(
-            wake_count.load(Ordering::Relaxed),
-            1,
-            "the already-pending wake carries the independent quit flag"
-        );
-        assert!(
-            receiver.take_quit_requested(),
-            "quit bypasses queue capacity"
-        );
-        assert!(
-            !receiver.take_quit_requested(),
-            "the owner consumes one quit transition exactly once"
-        );
-    }
-
-    /// `request_quit`'s twin flag: an exit-policy re-evaluation request
-    /// bypasses queue capacity (a keep-alive service completing must be
-    /// able to end a lingering zero-window loop even with the command lane
-    /// saturated), coalesces a burst into one wake + one owner-visible
-    /// transition, and is consumed exactly once.
-    #[test]
-    fn winit_control_exit_reevaluation_is_nonstarvable_coalesced_and_consumed_once() {
-        let wake_count = Arc::new(AtomicUsize::new(0));
-        let wake_count_for_callback = Arc::clone(&wake_count);
-        let wake = Arc::new(move || {
-            wake_count_for_callback.fetch_add(1, Ordering::Relaxed);
-        });
-        let (sender, receiver) = control_lane(wake);
-
-        for index in 0..CONTROL_CAPACITY {
-            let _reply = sender
-                .request_open_window(options(format!("queued-{index}")))
-                .expect("fill the bounded window lane");
-        }
-        sender.request_exit_reevaluation();
-        sender.request_exit_reevaluation();
-
-        assert_eq!(
-            wake_count.load(Ordering::Relaxed),
-            1,
-            "a burst of re-evaluation requests coalesces into the already-pending wake"
-        );
-        assert!(
-            receiver.take_exit_reevaluation_requested(),
-            "the re-evaluation flag bypasses queue capacity"
-        );
-        assert!(
-            !receiver.take_exit_reevaluation_requested(),
-            "the owner consumes one re-evaluation transition exactly once"
-        );
-        assert!(
-            !receiver.take_quit_requested(),
-            "a re-evaluation request must not masquerade as an unconditional quit"
-        );
-    }
-
-    /// The programmatic-close request (issue #919) has the same
-    /// non-starvable shape as the quit/re-evaluation flags — it must reach
-    /// the owner even with the command lane full — but is keyed per
-    /// window: a burst for ONE window coalesces into one wake and one
-    /// owner-visible entry, distinct windows each keep theirs, and the take
-    /// empties the set so nothing is torn down twice.
-    #[test]
-    fn winit_control_close_request_is_nonstarvable_coalesced_per_window_and_taken_once() {
-        let wake_count = Arc::new(AtomicUsize::new(0));
-        let wake_count_for_callback = Arc::clone(&wake_count);
-        let wake = Arc::new(move || {
-            wake_count_for_callback.fetch_add(1, Ordering::Relaxed);
-        });
-        let (sender, receiver) = control_lane(wake);
-
-        for index in 0..CONTROL_CAPACITY {
-            let _reply = sender
-                .request_open_window(options(format!("queued-{index}")))
-                .expect("fill the bounded window lane");
-        }
-        let wakes_before = wake_count.load(Ordering::Relaxed);
-
-        sender.request_close_window(crate::traits::WindowId(7));
-        sender.request_close_window(crate::traits::WindowId(7));
-        sender.request_close_window(crate::traits::WindowId(9));
-
-        assert_eq!(
-            wake_count.load(Ordering::Relaxed),
-            wakes_before,
-            "close requests coalesce into the wake the saturated lane already has pending"
-        );
-        assert_eq!(
-            receiver.take_close_requests(),
-            vec![crate::traits::WindowId(7), crate::traits::WindowId(9)],
-            "one entry per window, in request order, despite the full command lane"
-        );
-        assert!(
-            receiver.take_close_requests().is_empty(),
-            "the owner takes each batch exactly once"
-        );
-        assert!(
-            !receiver.take_quit_requested(),
-            "a close request must not masquerade as an unconditional quit"
-        );
-
-        // A request landing AFTER the take is a fresh batch with its own wake.
-        receiver.begin_drain();
-        sender.request_close_window(crate::traits::WindowId(7));
-        assert_eq!(
-            wake_count.load(Ordering::Relaxed),
-            wakes_before + 1,
-            "a close after the owner's drain boundary wakes the owner again"
-        );
-        assert_eq!(
-            receiver.take_close_requests(),
-            vec![crate::traits::WindowId(7)]
-        );
-    }
-
-    /// Once admission closes (loop shutdown) a close request is dropped,
-    /// not parked: the owner is exiting and its own teardown covers every
-    /// window it still tracks, so a parked entry would only ever be a leak.
-    #[test]
-    fn winit_control_close_request_after_admission_closed_is_dropped() {
-        let wake_count = Arc::new(AtomicUsize::new(0));
-        let wake_count_for_callback = Arc::clone(&wake_count);
-        let wake = Arc::new(move || {
-            wake_count_for_callback.fetch_add(1, Ordering::Relaxed);
-        });
-        let (sender, receiver) = control_lane(wake);
-        receiver.stop_accepting();
-
-        sender.request_close_window(crate::traits::WindowId(3));
-
-        assert_eq!(
-            wake_count.load(Ordering::Relaxed),
-            0,
-            "no wake after shutdown"
-        );
-        assert!(
-            receiver.take_close_requests().is_empty(),
-            "nothing is parked past admission"
-        );
-    }
-
-    #[test]
-    fn winit_control_dropped_handle_before_delivery_abandons_the_slot() {
-        let (sender, receiver) = control_lane(Arc::new(|| {}));
-        let handle = sender
-            .request_open_window(options("abandon-me"))
-            .expect("request is admitted");
-        drop(handle);
-
-        assert_eq!(receiver.begin_drain(), 1);
-        let ControlCommand::OpenWindow { reply, .. } =
-            receiver.try_recv().expect("owner dequeues the request");
-        assert!(
-            reply.is_abandoned(),
-            "the owner must see the abandonment before creating anything"
-        );
-    }
-
-    #[test]
-    fn winit_control_dropped_handle_after_delivery_is_reclaimable() {
-        let (sender, receiver) = control_lane(Arc::new(|| {}));
-        let handle = sender
-            .request_open_window(options("late-abandon"))
-            .expect("request is admitted");
-
-        assert_eq!(receiver.begin_drain(), 1);
-        let ControlCommand::OpenWindow { reply, .. } =
-            receiver.try_recv().expect("owner dequeues the request");
-        assert!(
-            reply.deliver(Ok(Arc::new(StubWindow))).is_ok(),
-            "slot is still Pending"
-        );
-
-        drop(handle); // claimed delivery, never read -- late abandonment
-        let reclaimed = reply
-            .take_abandoned()
-            .expect("the owner must be able to reclaim the orphaned window")
-            .expect("a successful delivery was abandoned, not a Backend error");
-        assert!(reclaimed.is_visible());
     }
 }

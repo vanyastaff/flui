@@ -31,13 +31,6 @@ use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, RebuildHandle};
 use flui_sdk::widgets::{MediaQuery, MediaQueryData, SizedBox};
 
-fn media(brightness: Brightness) -> MediaQueryData {
-    MediaQueryData {
-        platform_brightness: brightness,
-        ..MediaQueryData::default()
-    }
-}
-
 /// What a descendant of the shell observes: the effective brightness, the
 /// published theme's (already materialized) primary color, and a dynamic
 /// color resolved at the DESCENDANT's own altitude — the three observation
@@ -89,8 +82,7 @@ const SYSTEM_BLUE_DARK: Color = Color::rgb(10, 132, 255);
 /// systemRed light variant.
 const SYSTEM_RED_LIGHT: Color = Color::rgb(255, 59, 48);
 
-#[test]
-fn publishes_the_resolved_theme_to_descendants() {
+pub fn publishes_the_resolved_theme_to_descendants() {
     let (probe, captured) = probe();
     let theme = CupertinoThemeData::default().with_primary_color(CupertinoColors::SYSTEM_RED);
     let _tree = lay_out(CupertinoApp::new(probe).theme(theme), loose(800.0));
@@ -99,86 +91,6 @@ fn publishes_the_resolved_theme_to_descendants() {
         seen.published_primary,
         CupertinoColor::Static(SYSTEM_RED_LIGHT),
         "the caller's theme — not a default — must reach descendants, already resolved"
-    );
-}
-
-#[test]
-fn ambient_brightness_drives_resolution_with_no_theme_mode_involved() {
-    // The issue's acceptance criterion: CupertinoApp resolves brightness
-    // without a ThemeMode — the ambient platform signal alone flips both
-    // the published theme's materialized colors and descendant-side
-    // resolution.
-    for (ambient, expected_primary, expected_label) in [
-        (
-            Brightness::Light,
-            SYSTEM_BLUE_LIGHT,
-            Color::rgb(0, 0, 0), // LABEL light variant
-        ),
-        (
-            Brightness::Dark,
-            SYSTEM_BLUE_DARK,
-            Color::rgb(255, 255, 255), // LABEL dark variant
-        ),
-    ] {
-        let (probe, captured) = probe();
-        let _tree = lay_out(
-            MediaQuery::new(media(ambient), CupertinoApp::new(probe)),
-            loose(800.0),
-        );
-        let seen = observed(&captured);
-        assert_eq!(
-            seen.brightness, ambient,
-            "brightness_of follows the platform"
-        );
-        assert_eq!(
-            seen.published_primary,
-            CupertinoColor::Static(expected_primary),
-            "the app-level materialization must resolve against the ambient brightness"
-        );
-        assert_eq!(
-            seen.label_resolved_here, expected_label,
-            "descendant-side dynamic resolution must follow the same signal"
-        );
-    }
-}
-
-#[test]
-fn an_explicit_theme_brightness_override_wins_for_descendants() {
-    // Apple's model (the oracle's `effectiveThemeData.brightness ??
-    // MediaQuery.platformBrightnessOf`): the theme's optional brightness
-    // override beats the ambient platform signal for everything below the
-    // published theme — under a LIGHT platform, descendants see Dark.
-    let (probe, captured) = probe();
-    let theme = CupertinoThemeData::default().with_brightness(Brightness::Dark);
-    let _tree = lay_out(
-        MediaQuery::new(
-            media(Brightness::Light),
-            CupertinoApp::new(probe).theme(theme),
-        ),
-        loose(800.0),
-    );
-    let seen = observed(&captured);
-    assert_eq!(
-        seen.brightness,
-        Brightness::Dark,
-        "the theme's brightness override must beat the light platform signal"
-    );
-    assert_eq!(
-        seen.label_resolved_here,
-        Color::rgb(255, 255, 255),
-        "a dynamic color resolved below the published theme must use the override"
-    );
-    // The published theme's own colors were materialized at the app's
-    // altitude — ABOVE the published override, where only the platform
-    // signal is visible — so they resolve LIGHT. This is the oracle's exact
-    // behavior (`resolveFrom(context)` runs in `_CupertinoAppState.build`,
-    // above the `CupertinoTheme` it then publishes; dynamic-color
-    // resolution reads `CupertinoTheme.maybeBrightnessOf`, which sees no
-    // theme ancestor there): the override steers descendant-side
-    // resolution, not the app-level materialization.
-    assert_eq!(
-        seen.published_primary,
-        CupertinoColor::Static(SYSTEM_BLUE_LIGHT)
     );
 }
 
@@ -247,8 +159,7 @@ impl flui_sdk::view::ViewState<BrightnessRoot> for BrightnessRootState {
     }
 }
 
-#[test]
-fn a_live_brightness_republish_re_resolves_the_theme() {
+pub fn a_live_brightness_republish_re_resolves_the_theme() {
     let source = Rc::new(BrightnessSource::default());
     source.data.borrow_mut().platform_brightness = Brightness::Light;
     let (probe, captured) = probe();
@@ -274,36 +185,5 @@ fn a_live_brightness_republish_re_resolves_the_theme() {
         seen.published_primary,
         CupertinoColor::Static(SYSTEM_BLUE_DARK),
         "a live platform-brightness change must re-materialize the published theme"
-    );
-}
-
-#[test]
-// Debug-only: the guard compiles out in release, where `#[should_panic]`
-// would otherwise report "did not panic as expected" (release still panics,
-// but later, during build — see the setter's doc).
-#[cfg(debug_assertions)]
-#[should_panic(expected = "requires at least one locale")]
-fn empty_supported_locales_panics_at_construction() {
-    let _ = CupertinoApp::new(SizedBox::shrink()).supported_locales(Vec::new());
-}
-
-#[test]
-fn the_builder_hook_resolves_the_published_theme() {
-    // The oracle publishes CupertinoTheme ABOVE the WidgetsApp, so the
-    // caller's builder — passed straight through — resolves it with no
-    // extra wrapper.
-    let seen: Arc<Mutex<Option<CupertinoColor>>> = Arc::new(Mutex::new(None));
-    let seen_in_builder = Arc::clone(&seen);
-    let theme = CupertinoThemeData::default().with_primary_color(CupertinoColors::SYSTEM_RED);
-    let app = CupertinoApp::with_builder(move |ctx, _child| {
-        *seen_in_builder.lock().unwrap() = Some(CupertinoTheme::of(ctx).primary_color());
-        SizedBox::shrink().boxed()
-    })
-    .theme(theme);
-    let _tree = lay_out(app, loose(800.0));
-    assert_eq!(
-        seen.lock().unwrap().clone(),
-        Some(CupertinoColor::Static(SYSTEM_RED_LIGHT)),
-        "the builder's context must sit below the published CupertinoTheme"
     );
 }

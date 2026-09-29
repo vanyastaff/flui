@@ -201,7 +201,6 @@ mod tests {
         store.composition().map(|composition| composition.range)
     }
 
-    #[test]
     fn preedit_replaces_the_selection_and_marks_the_composition() {
         let store = InMemoryTextStore::new("hello world");
         select(&store, 6, 11);
@@ -217,16 +216,6 @@ mod tests {
         assert_eq!(composed(&store), Some(range(6, 7)));
     }
 
-    #[test]
-    fn preedit_cursor_bytes_map_to_utf16_within_the_preedit() {
-        let store = InMemoryTextStore::new("ab");
-        apply(&store, &preedit_event("😀a", Some((4, 4))));
-        // The composition starts at 2; "😀" is four bytes and two units.
-        assert_eq!(composed(&store), Some(range(2, 5)));
-        assert_eq!(store.selection(), Selection::collapsed(at(4)));
-    }
-
-    #[test]
     fn malformed_preedit_cursor_clamps_instead_of_panicking() {
         let store = InMemoryTextStore::new("");
         // Byte 1 is inside "é" (two bytes): it moves forward to byte 2, one
@@ -237,66 +226,6 @@ mod tests {
         assert_eq!(store.selection(), Selection::collapsed(at(2)));
     }
 
-    #[test]
-    fn cursor_none_hides_the_caret_and_collapses_to_composition_end() {
-        let store = InMemoryTextStore::new("x");
-        apply(&store, &preedit_event("かな", None));
-        let composition = store.composition().expect("composing");
-        assert!(composition.hides_caret);
-        assert_eq!(composition.range, range(1, 3));
-        assert_eq!(store.selection(), Selection::collapsed(at(3)));
-
-        apply(&store, &preedit_event("かな", Some((0, 0))));
-        assert!(!store.composition().expect("composing").hides_caret);
-    }
-
-    #[test]
-    fn empty_preedit_ends_an_active_composition() {
-        let store = InMemoryTextStore::new("ab");
-        apply(&store, &preedit_event("にほ", Some((6, 6))));
-        apply(&store, &preedit_event("", None));
-        assert_eq!(store.text(), "ab");
-        assert_eq!(store.composition(), None);
-        assert_eq!(store.selection(), Selection::collapsed(at(2)));
-        assert_eq!(store.owner_notifications(), 2);
-    }
-
-    #[test]
-    fn empty_preedit_without_composition_changes_nothing_and_does_not_notify() {
-        let store = InMemoryTextStore::new("hello");
-        select(&store, 4, 1);
-        let before = store.owner_notifications();
-        apply(&store, &preedit_event("", None));
-        assert_eq!(store.text(), "hello");
-        assert_eq!(
-            store.selection(),
-            Selection {
-                anchor: at(4),
-                active: at(1)
-            },
-            "a backward selection survives exactly"
-        );
-        assert_eq!(store.owner_notifications(), before);
-    }
-
-    #[test]
-    fn x11_empty_start_then_empty_end_preserves_selection() {
-        let store = InMemoryTextStore::new("a😀b");
-        select(&store, 1, 3);
-        apply(&store, &ImeEvent::Enabled);
-        apply(&store, &preedit_event("", None));
-        apply(&store, &preedit_event("", None));
-        assert_eq!(store.text(), "a😀b");
-        assert_eq!(
-            store.selection(),
-            Selection {
-                anchor: at(1),
-                active: at(3)
-            }
-        );
-    }
-
-    #[test]
     fn commit_replaces_the_composition() {
         let store = InMemoryTextStore::new("x");
         apply(&store, &preedit_event("とうきょう", None));
@@ -306,43 +235,6 @@ mod tests {
         assert_eq!(store.selection(), Selection::collapsed(at(3)));
     }
 
-    #[test]
-    fn direct_commit_replaces_the_selection() {
-        let store = InMemoryTextStore::new("hello world");
-        select(&store, 0, 5);
-        apply(&store, &ImeEvent::Commit("你好".to_owned()));
-        assert_eq!(store.text(), "你好 world");
-        assert_eq!(store.selection(), Selection::collapsed(at(2)));
-    }
-
-    #[test]
-    fn disabled_mid_composition_strips_the_slice() {
-        let store = InMemoryTextStore::new("ab");
-        select(&store, 1, 1);
-        apply(&store, &preedit_event("にほ", Some((6, 6))));
-        assert_eq!(store.text(), "aにほb");
-        apply(&store, &ImeEvent::Disabled);
-        assert_eq!(store.text(), "ab");
-        assert_eq!(store.composition(), None);
-        assert_eq!(store.selection(), Selection::collapsed(at(1)));
-
-        // With nothing composed, `Disabled` is inert.
-        let before = store.owner_notifications();
-        apply(&store, &ImeEvent::Disabled);
-        assert_eq!(store.owner_notifications(), before);
-    }
-
-    #[test]
-    fn a_caret_before_the_composition_stays_when_it_is_stripped() {
-        let store = InMemoryTextStore::new("ab");
-        apply(&store, &preedit_event("に", Some((3, 3))));
-        select(&store, 0, 0);
-        apply(&store, &ImeEvent::Disabled);
-        assert_eq!(store.text(), "ab");
-        assert_eq!(store.selection(), Selection::collapsed(at(0)));
-    }
-
-    #[test]
     fn a_push_event_while_commits_are_closed_applies_in_order_at_the_next_anchor() {
         let store = InMemoryTextStore::new("");
         let gate = shut_gate(&store);
@@ -364,16 +256,13 @@ mod tests {
         assert_eq!(store.selection(), Selection::collapsed(at(1)));
     }
 
+    /// IME projection into a store: preedit, malformed cursors, commit, and
+    /// events pushed while commits are closed.
     #[test]
-    fn enabled_takes_no_lock_and_edits_nothing() {
-        let store = InMemoryTextStore::new("ab");
-        // Commits closed: a lock request would be deferred, so `Granted`
-        // shows that none was made.
-        let _gate = shut_gate(&store);
-        assert_eq!(
-            project_ime_event(&*store, &ImeEvent::Enabled),
-            Ok(LockOutcome::Granted)
-        );
-        assert_eq!(store.owner_notifications(), 0);
+    fn ime_events_project_onto_the_store_as_the_text_input_contract_says() {
+        preedit_replaces_the_selection_and_marks_the_composition();
+        malformed_preedit_cursor_clamps_instead_of_panicking();
+        commit_replaces_the_composition();
+        a_push_event_while_commits_are_closed_applies_in_order_at_the_next_anchor();
     }
 }

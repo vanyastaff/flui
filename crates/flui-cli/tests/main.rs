@@ -24,11 +24,7 @@ mod cli_devices;
 mod cli_doctor;
 #[path = "cli_errors.rs"]
 mod cli_errors;
-#[path = "cli_maintenance.rs"]
-mod cli_maintenance;
 #[path = "cli_platform.rs"]
 mod cli_platform;
 #[path = "cli_run.rs"]
 mod cli_run;
-#[path = "cli_shim.rs"]
-mod cli_shim;

@@ -84,13 +84,11 @@ pub(super) fn docs_only_include_targets(root: &Path) -> anyhow::Result<Vec<Offen
 mod tests {
     use super::*;
 
-    #[test]
     fn the_real_tree_includes_no_docs_only_file() {
         let offenders = docs_only_include_targets(&crate::util::repo_root()).expect("walk");
         assert_eq!(offenders, Vec::<Offender>::new());
     }
 
-    #[test]
     fn a_docs_only_include_target_is_reported() {
         let dir = std::env::temp_dir().join(format!("xtask-paths-filter-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -117,6 +115,23 @@ mod tests {
                 rs_file: "crates/a/src/lib.rs".to_owned(),
                 target: "docs/guide.md".to_owned()
             }]
+        );
+    }
+
+    #[test]
+    fn docs_only_include_guard() {
+        crate::table_test::run_table(
+            "docs_only_include_guard",
+            &[
+                (
+                    "the_real_tree_includes_no_docs_only_file",
+                    the_real_tree_includes_no_docs_only_file as fn(),
+                ),
+                (
+                    "a_docs_only_include_target_is_reported",
+                    a_docs_only_include_target_is_reported as fn(),
+                ),
+            ],
         );
     }
 }

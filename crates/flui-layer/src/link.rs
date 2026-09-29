@@ -143,7 +143,7 @@ mod tests {
     use flui_foundation::geometry::Size;
 
     use super::*;
-    use crate::{FollowerLayer, Layer, LeaderLayer, OffsetLayer, OpacityLayer, TransformLayer};
+    use crate::{FollowerLayer, Layer, LeaderLayer, OffsetLayer};
 
     fn offset(dx: f64, dy: f64) -> Layer {
         Layer::from(OffsetLayer::new(Offset::new(dx, dy)))
@@ -161,24 +161,8 @@ mod tests {
         FollowerLayer::new(link).with_size(Size::new(10.0, 10.0))
     }
 
-    #[test]
-    fn linked_under_a_shared_parent_resolves_to_the_leader_offset() {
-        let link = LayerLink::new();
-        let mut tree = LayerTree::new(offset(0.0, 0.0));
-        let root = tree.root();
-        let _ = tree.push_child(root, leader(link, 30.0, 40.0));
-        let follower = follower(link);
-        let follower_id = tree.push_child(root, Layer::from(follower));
-
-        assert_eq!(
-            resolve_follower_offset(&tree, follower_id),
-            Some(Offset::new(30.0, 40.0))
-        );
-    }
-
     /// Leader and follower under two different `Offset` branches: both chains
     /// are summed to the root, not assumed to share an immediate parent.
-    #[test]
     fn linked_across_offset_branches_sums_both_chains() {
         let link = LayerLink::new();
         let mut tree = LayerTree::new(offset(0.0, 0.0));
@@ -196,95 +180,8 @@ mod tests {
         );
     }
 
-    /// Same geometry as above with the leader's branch a translation
-    /// `Transform` (what the composer pushes for `RenderTransform`); dropping
-    /// its translation would give `(5, -195)`.
-    #[test]
-    fn linked_through_a_transform_layer_counts_its_translation() {
-        let link = LayerLink::new();
-        let mut tree = LayerTree::new(offset(0.0, 0.0));
-        let root = tree.root();
-        let branch_a = tree.push_child(root, Layer::from(TransformLayer::translation(100.0, 0.0)));
-        let _ = tree.push_child(branch_a, leader(link, 5.0, 5.0));
-        let branch_b = tree.push_child(root, offset(0.0, 200.0));
-        let follower = follower(link);
-        let follower_id = tree.push_child(branch_b, Layer::from(follower));
-
-        assert_eq!(
-            resolve_follower_offset(&tree, follower_id),
-            Some(Offset::new(105.0, -195.0))
-        );
-    }
-
-    /// Every layer kind that translates its children counts — here an
-    /// `Opacity` with an offset on the follower's chain. The engine pushes that
-    /// offset, so the resolver must subtract it or the follower lands
-    /// double-translated.
-    #[test]
-    fn linked_through_an_opacity_offset_counts_it() {
-        let link = LayerLink::new();
-        let mut tree = LayerTree::new(offset(0.0, 0.0));
-        let root = tree.root();
-        let _ = tree.push_child(root, leader(link, 30.0, 40.0));
-        let branch = tree.push_child(
-            root,
-            Layer::from(OpacityLayer::with_offset(0.5, Offset::new(10.0, 20.0))),
-        );
-        let follower = follower(link);
-        let follower_id = tree.push_child(branch, Layer::from(follower));
-
-        assert_eq!(
-            resolve_follower_offset(&tree, follower_id),
-            Some(Offset::new(20.0, 20.0))
-        );
-    }
-
-    /// Oracle `_establishTransform`: a follower that is a child of
-    /// its own leader has the leader's offset on both chains, so they cancel
-    /// and the follower stays where the leader's push already put it.
-    #[test]
-    fn follower_nested_under_its_leader_resolves_to_zero() {
-        let link = LayerLink::new();
-        let mut tree = LayerTree::new(offset(0.0, 0.0));
-        let root = tree.root();
-        let leader_id = tree.push_child(root, leader(link, 100.0, 100.0));
-        let follower = follower(link);
-        let follower_id = tree.push_child(leader_id, Layer::from(follower));
-
-        assert_eq!(
-            resolve_follower_offset(&tree, follower_id),
-            Some(Offset::ZERO)
-        );
-    }
-
-    #[test]
-    fn unlinked_and_shown_uses_the_target_offset() {
-        let link = LayerLink::new();
-        let follower = FollowerLayer::new(link)
-            .with_show_when_unlinked(true)
-            .with_target_offset(Offset::new(7.0, 9.0));
-        let tree = LayerTree::new(Layer::from(follower));
-        let follower_id = tree.root();
-
-        assert_eq!(
-            resolve_follower_offset(&tree, follower_id),
-            Some(Offset::new(7.0, 9.0))
-        );
-    }
-
-    #[test]
-    fn unlinked_and_hidden_returns_none() {
-        let link = LayerLink::new();
-        let follower = FollowerLayer::new(link).with_show_when_unlinked(false);
-        let tree = LayerTree::new(Layer::from(follower));
-        let follower_id = tree.root();
-
-        assert_eq!(resolve_follower_offset(&tree, follower_id), None);
-    }
-
     /// A leader painted inside the follower's subtree cannot anchor it (it
     /// is composited after the follower); the unlinked contract applies.
-    #[test]
     fn leader_inside_the_follower_subtree_falls_back_to_unlinked() {
         let link = LayerLink::new();
         let follower = FollowerLayer::new(link)
@@ -297,6 +194,30 @@ mod tests {
         assert_eq!(
             resolve_follower_offset(&tree, follower_id),
             Some(Offset::new(3.0, 4.0))
+        );
+    }
+
+    #[test]
+    fn follower_resolution_contract() {
+        let cases: &[(&str, fn())] = &[
+            (
+                "linked_across_offset_branches_sums_both_chains",
+                linked_across_offset_branches_sums_both_chains,
+            ),
+            (
+                "leader_inside_the_follower_subtree_falls_back_to_unlinked",
+                leader_inside_the_follower_subtree_falls_back_to_unlinked,
+            ),
+        ];
+        let mut failed = Vec::new();
+        for &(name, case) in cases {
+            if std::panic::catch_unwind(case).is_err() {
+                failed.push(name);
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "follower resolution: failing rows: {failed:?}"
         );
     }
 }

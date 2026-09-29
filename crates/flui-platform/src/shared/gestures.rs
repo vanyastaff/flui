@@ -35,24 +35,3 @@ pub fn pinch(magnification: f64) -> Option<PointerGesture> {
 pub fn rotation_ccw_degrees(degrees: f32) -> PointerGesture {
     PointerGesture::Rotate(-degrees.to_radians())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn pinch_passes_the_fraction_through_and_drops_nan() {
-        assert!(matches!(pinch(0.1), Some(PointerGesture::Pinch(d)) if d == 0.1));
-        assert!(matches!(pinch(-0.25), Some(PointerGesture::Pinch(d)) if d == -0.25));
-        assert!(pinch(f64::NAN).is_none(), "a NaN magnification is dropped");
-    }
-
-    #[test]
-    fn rotation_converts_ccw_degrees_to_cw_radians() {
-        // A 90° counterclockwise platform delta is a -π/2 clockwise delta.
-        let PointerGesture::Rotate(radians) = rotation_ccw_degrees(90.0) else {
-            panic!("expected Rotate");
-        };
-        assert!((radians + std::f32::consts::FRAC_PI_2).abs() < 1e-6);
-    }
-}

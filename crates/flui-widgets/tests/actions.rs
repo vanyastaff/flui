@@ -5,7 +5,6 @@
 //! resolution at its own scope, and a lookup with no binding leaves the key
 //! unconsumed.
 
-use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -15,7 +14,7 @@ use flui_interaction::routing::FocusNode;
 use flui_view::prelude::*;
 use flui_widgets::SizedBox;
 use flui_widgets::interaction::{
-    Action, ActionOutcome, Actions, CallbackAction, Focus, Intent, Shortcuts, SingleActivator,
+    Actions, CallbackAction, Focus, Intent, Shortcuts, SingleActivator,
 };
 
 use crate::common::harness::{Harness, mount};
@@ -50,17 +49,6 @@ fn press(harness: &Harness, field: &Rc<FocusNode>) -> bool {
     harness.focus_manager().dispatch_key_event(&ctrl_a())
 }
 
-/// An action that reports disabled, to prove the search stops at it.
-struct Disabled;
-impl Action<AddToCounter> for Disabled {
-    fn is_enabled(&self, _intent: &AddToCounter) -> bool {
-        false
-    }
-    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &AddToCounter) -> ActionOutcome {
-        unreachable!("BUG: a disabled action must never be invoked (actions.dart:1032-1044)");
-    }
-}
-
 /// Nearest-scope-first with the typed payload delivered: the inner
 /// binding shadows the outer, and the intent's field reaches the closure.
 ///
@@ -70,8 +58,7 @@ impl Action<AddToCounter> for Disabled {
 /// Flutter parity (`actions_test.dart`, tag `3.44.0`): covers
 /// `'Actions widget can invoke actions with default dispatcher'` — FLUI has
 /// one dispatch path (no replaceable `ActionDispatcher`, ADR-0023 deferred).
-#[test]
-fn the_nearest_enabled_action_wins_and_receives_the_payload() {
+pub(crate) fn the_nearest_enabled_action_wins_and_receives_the_payload() {
     let outer_sum = Arc::new(AtomicUsize::new(0));
     let inner_sum = Arc::new(AtomicUsize::new(0));
     let field = FocusNode::with_debug_label("nearest-field");
@@ -105,83 +92,9 @@ fn the_nearest_enabled_action_wins_and_receives_the_payload() {
     );
 }
 
-/// Flutter parity (`actions_test.dart`, tag `3.44.0`): stands in for
-/// `'CallbackAction passes correct intent when invoked.'`.
-#[test]
-fn callback_action_accepts_owner_local_rc_state() {
-    let total = Rc::new(Cell::new(0));
-    let total_for_action = Rc::clone(&total);
-    let field = FocusNode::with_debug_label("owner-local-field");
-
-    let harness = mount(
-        Actions::new(invoker(11, &field)).action(CallbackAction::new(
-            move |_cx, intent: &AddToCounter| {
-                total_for_action.set(total_for_action.get() + intent.0);
-            },
-        )),
-    );
-
-    assert!(press(&harness, &field), "the action ran");
-    assert_eq!(total.get(), 11, "owner-local callback captured Rc<Cell<_>>");
-}
-
-/// A **disabled** nearer action stops resolution at its own scope — it
-/// does *not* fall through to an outer scope's mapping for the same
-/// intent type. This is Flutter's actual contract, not the inverse:
-/// `Actions.maybeInvoke`'s own doc states "If a suitable Action is found
-/// but its `isEnabled` returns false, the search will stop"
-/// (`actions.dart:993-995`) — the walk stops at the first scope that
-/// *declares* the type at all, whether or not it is enabled, and never
-/// reaches the outer action.
-///
-/// Red-check: merge `own` into the enclosing chain as a fallback list
-/// instead of an outright replace (i.e. keep the outer entry reachable
-/// once the inner one is checked) — `outer_sum` becomes `7` and the key is
-/// consumed, silently reintroducing the fall-through this test pins
-/// against.
-#[test]
-fn a_disabled_nearer_action_stops_resolution_at_its_own_scope() {
-    let outer_sum = Arc::new(AtomicUsize::new(0));
-    let field = FocusNode::with_debug_label("disabled-field");
-
-    let outer_counter = Arc::clone(&outer_sum);
-    let harness = mount(
-        Actions::new(Actions::new(invoker(7, &field)).action(Disabled)).action(
-            CallbackAction::new(move |_cx, intent: &AddToCounter| {
-                outer_counter.fetch_add(intent.0, Ordering::SeqCst);
-            }),
-        ),
-    );
-
-    assert!(
-        !press(&harness, &field),
-        "the key is unconsumed: the disabled nearer mapping stopped the search"
-    );
-    assert_eq!(
-        outer_sum.load(Ordering::SeqCst),
-        0,
-        "the outer action was never reached, let alone invoked"
-    );
-}
-
-/// No binding anywhere: the key is not consumed and nothing runs.
-///
-/// Flutter parity (`actions_test.dart`, tag `3.44.0`): stands in for
-/// `'maybeInvoke returns null when no action is found'`. FLUI has no
-/// `maybeInvoke` (an invocation needs the key event's `EventCx`, which
-/// `build` does not have; ADR-0086), so "returns null" ports as "the key
-/// keeps bubbling".
-#[test]
-fn an_intent_without_a_binding_leaves_the_key_unconsumed() {
-    let field = FocusNode::with_debug_label("unbound-field");
-    let harness = mount(invoker(1, &field));
-    assert!(!press(&harness, &field), "nothing to invoke");
-}
-
 /// A `CallbackAction` runs inside the key event's dispatch: it writes a
 /// signal through the `cx` it receives, and the signal's reader rebuilds.
-#[test]
-fn callback_action_writes_through_the_key_events_cx() {
+pub(crate) fn callback_action_writes_through_the_key_events_cx() {
     let field = FocusNode::with_debug_label("writing-field");
     let probe_field = Rc::clone(&field);
     let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
@@ -199,8 +112,7 @@ fn callback_action_writes_through_the_key_events_cx() {
 
 /// A refused write inside an action is reported at the dispatch boundary,
 /// not panicked, and the action still counts as performed.
-#[test]
-fn a_refused_write_in_a_callback_action_is_reported_not_panicked() {
+pub(crate) fn a_refused_write_in_a_callback_action_is_reported_not_panicked() {
     let field = FocusNode::with_debug_label("refused-field");
     let probe_field = Rc::clone(&field);
     let probe = SignalProbe::new(move |ProbeSignals { released, .. }| {

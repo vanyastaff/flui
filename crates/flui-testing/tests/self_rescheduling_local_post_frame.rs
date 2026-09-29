@@ -45,8 +45,7 @@ fn schedule_self_rescheduling_tick(handle: LocalPostFrameHandle, fire_count: Rc<
 /// never zero (the design would silently never track the caret) and never
 /// more than one (a double-fire would send stale geometry every other
 /// frame).
-#[test]
-fn self_rescheduling_local_post_frame_callback_fires_exactly_once_per_pumped_frame() {
+pub(crate) fn self_rescheduling_local_post_frame_callback_fires_exactly_once_per_pumped_frame() {
     let mut binding = HeadlessBinding::new();
     let mut build_owner = BuildOwner::new();
     binding.install_build_capabilities(&mut build_owner);

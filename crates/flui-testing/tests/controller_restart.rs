@@ -18,8 +18,7 @@ use flui_testing::HeadlessBinding;
 /// One frame's worth of virtual time at 20ms — five of these span the 100ms run.
 const FRAME: Duration = Duration::from_millis(20);
 
-#[test]
-fn second_run_ticks_from_its_own_start_not_a_stale_anchor() {
+pub(crate) fn second_run_ticks_from_its_own_start_not_a_stale_anchor() {
     let mut binding = HeadlessBinding::new();
     let scheduler = UpdateScheduler::new();
     let controller = AnimationController::new(Duration::from_millis(100), &scheduler);

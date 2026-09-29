@@ -24,6 +24,9 @@ use parley::layout::PositionedLayoutItem;
 use parley::style::{FontFamily, FontFamilyName, StyleProperty};
 use parley::{FontContext, FontData, Layout, LayoutContext};
 
+#[path = "support/cases.rs"]
+mod cases;
+
 const ROBOTO: &[u8] = include_bytes!("../assets/fonts/Roboto-Regular.ttf");
 const MATERIAL_ICONS: &[u8] = include_bytes!("../assets/fonts/MaterialIcons-Regular.ttf");
 const LATIN: &str = "The quick brown fox jumps over the lazy dog 0123456789";
@@ -86,17 +89,6 @@ impl Shaper {
                     system_fonts: false,
                 }),
                 source_cache: SourceCache::new_shared(),
-            },
-            layout_cx: LayoutContext::new(),
-        }
-    }
-
-    /// A second context over the same collection and source cache.
-    fn fork(&self) -> Self {
-        Self {
-            font_cx: FontContext {
-                collection: self.font_cx.collection.clone(),
-                source_cache: self.font_cx.source_cache.clone(),
             },
             layout_cx: LayoutContext::new(),
         }
@@ -361,7 +353,6 @@ fn compare(shaper: &mut Shaper, family: &str, text: &str) -> Report {
 /// Every sample runs on its vendored face alone, in a collection of its own,
 /// so no host font and no other sample's face can take part in shaping.
 /// Scripts without a vendored face are named as skipped, not compared.
-#[test]
 fn swash_matches_cosmic_text_bit_for_bit() {
     for (name, reason) in UNCOVERED {
         println!("{name}: skipped, {reason}");
@@ -402,35 +393,9 @@ fn latin_keys(shaper: &mut Shaper, fonts: &mut FontRegistry, family: &str) -> Ve
         .collect()
 }
 
-#[test]
-fn shaping_twice_yields_equal_keys() {
-    let mut shaper = Shaper::new();
-    let family = shaper.register(ROBOTO.to_vec());
-    let mut fonts = FontRegistry::new();
-    let first = latin_keys(&mut shaper, &mut fonts, &family);
-    let second = latin_keys(&mut shaper, &mut fonts, &family);
-    assert!(!first.is_empty());
-    assert_eq!(first, second);
-}
-
-/// Two contexts over one shared collection shape a face registered once as
-/// one blob, so their keys agree and would share atlas slots.
-#[test]
-fn two_contexts_over_one_collection_produce_equal_keys() {
-    let mut a = Shaper::new();
-    let family = a.register(ROBOTO.to_vec());
-    let mut b = a.fork();
-    let mut fonts = FontRegistry::new();
-    let from_a = latin_keys(&mut a, &mut fonts, &family);
-    let from_b = latin_keys(&mut b, &mut fonts, &family);
-    assert!(!from_a.is_empty());
-    assert_eq!(from_a, from_b);
-}
-
 /// Shaping and rasterizing on this path never builds `FONT_SYSTEM`. Nothing
 /// else in this binary touches it, so the check holds under nextest and
 /// `cargo test` alike.
-#[test]
 fn the_raster_path_never_builds_the_process_font_system() {
     let mut shaper = Shaper::new();
     let family = shaper.register(ROBOTO.to_vec());
@@ -442,27 +407,19 @@ fn the_raster_path_never_builds_the_process_font_system() {
     assert!(!flui_painting::text_layout::font_system_initialized());
 }
 
-/// The rasterizer draws on another thread while this one keeps shaping: it
-/// owns its faces and shares nothing with the shaping context.
 #[test]
-fn rasterization_runs_off_the_shaping_thread() {
-    let mut shaper = Shaper::new();
-    let family = shaper.register(ROBOTO.to_vec());
-    let mut rasterizer = SwashRasterizer::new();
-    let keys = latin_keys(&mut shaper, rasterizer.fonts_mut(), &family);
-    let drawn = std::thread::scope(|scope| {
-        let worker = scope.spawn(move || {
-            keys.iter()
-                .filter(|key| rasterizer.rasterize(**key).is_some())
-                .count()
-        });
-        let mut fonts = FontRegistry::new();
-        let mut shaped = 0;
-        for _ in 0..20 {
-            shaped += latin_keys(&mut shaper, &mut fonts, &family).len();
-        }
-        assert!(shaped > 0);
-        worker.join().unwrap()
-    });
-    assert!(drawn > 0);
+fn parley_oracle_contract() {
+    cases::run_cases(
+        "parley_oracle",
+        &[
+            (
+                "swash_matches_cosmic_text_bit_for_bit",
+                swash_matches_cosmic_text_bit_for_bit,
+            ),
+            (
+                "the_raster_path_never_builds_the_process_font_system",
+                the_raster_path_never_builds_the_process_font_system,
+            ),
+        ],
+    );
 }

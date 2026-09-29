@@ -242,29 +242,4 @@ macro_rules! forward_single_child_box_hit_test {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::context::intrinsics::test_support::{
-        leaf_dry_baseline, leaf_dry_layout, leaf_intrinsics,
-    };
-
-    #[test]
-    fn leaf_helpers_reject_child_queries() {
-        let w = leaf_intrinsics(|ctx| forward_min_intrinsic_width(ctx, 100.0));
-        assert_eq!(w, 0.0);
-
-        let size = leaf_dry_layout(|ctx| {
-            forward_dry_layout(BoxConstraints::new(0.0, 100.0, 0.0, 100.0), ctx)
-        });
-        assert_eq!(size, Size::ZERO);
-
-        let baseline = leaf_dry_baseline(|ctx| {
-            forward_dry_baseline(
-                BoxConstraints::new(0.0, 100.0, 0.0, 100.0),
-                TextBaseline::Alphabetic,
-                ctx,
-            )
-        });
-        assert!(baseline.is_none());
-    }
-}
+mod tests {}

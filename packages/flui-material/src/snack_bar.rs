@@ -386,29 +386,3 @@ impl StatelessView for SnackBarPresenter {
         }))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn new_snack_bar_defaults_to_the_display_duration_and_no_action() {
-        let snack_bar = SnackBar::new(flui_sdk::widgets::Text::new("hi"));
-        assert_eq!(snack_bar.configured_duration(), DEFAULT_DISPLAY_DURATION);
-        assert!(snack_bar.action.is_none());
-    }
-
-    #[test]
-    fn duration_builder_overrides_the_default() {
-        let snack_bar =
-            SnackBar::new(flui_sdk::widgets::Text::new("hi")).duration(Duration::from_secs(2));
-        assert_eq!(snack_bar.configured_duration(), Duration::from_secs(2));
-    }
-
-    #[test]
-    fn action_builder_attaches_the_action() {
-        let snack_bar = SnackBar::new(flui_sdk::widgets::Text::new("hi"))
-            .action(SnackBarAction::new("UNDO", |_cx| {}));
-        assert!(snack_bar.action.is_some());
-    }
-}

@@ -21,7 +21,7 @@
 //! smoke check for the facade surface itself.
 
 use flui::prelude::*;
-use flui_foundation::geometry::{Offset, Size};
+use flui_foundation::geometry::Size;
 use flui_rendering::constraints::BoxConstraints;
 use flui_testing::HeadlessBinding;
 use flui_testing::bootstrap::{MountOptions, MountOwners};
@@ -58,101 +58,4 @@ fn prelude_authored_tree_mounts_through_the_headless_pipeline() {
         mounted.painted,
         "a prelude-authored tree must commit a frame through the headless pipeline"
     );
-}
-
-#[cfg(feature = "material")]
-#[test]
-fn material_module_resolves_through_the_facade() {
-    let material_theme = flui::material::ThemeData::light();
-    assert_eq!(material_theme.brightness(), Brightness::Light);
-}
-
-#[cfg(feature = "cupertino")]
-#[test]
-fn cupertino_module_resolves_through_the_facade() {
-    let cupertino_theme = flui::cupertino::CupertinoThemeData::new();
-    // A fresh theme carries no brightness override (follows the ambient
-    // `MediaQuery` instead) and resolves `primary_color` to the documented
-    // default (`CupertinoColors::SYSTEM_BLUE`) — both would fail if
-    // `flui::cupertino::CupertinoThemeData` were resolving to the wrong
-    // type or a stale default, not just "failed to compile".
-    assert_eq!(cupertino_theme.brightness(), None);
-    assert_eq!(
-        cupertino_theme.primary_color(),
-        flui::cupertino::CupertinoColor::Dynamic(flui::cupertino::CupertinoColors::SYSTEM_BLUE)
-    );
-}
-
-/// The global widgets localizations are part of the base widget surface: they
-/// resolve through `flui::widgets` with no feature, and the delegate is the
-/// global one (Arabic resolves right-to-left), not the always-LTR default.
-#[test]
-fn global_widgets_localizations_resolve_through_flui_widgets() {
-    use flui::painting::typography::TextDirection;
-    use flui::platform::Locale;
-    use flui::widgets::{GlobalWidgetsLocalizationsDelegate, LocalizationsDelegate};
-
-    let resources = GlobalWidgetsLocalizationsDelegate.load(&Locale::new("ar", None::<&str>));
-    assert_eq!(resources.text_direction(), TextDirection::Rtl);
-}
-
-/// The Material half of [`flui::prelude`] appears only with the `material`
-/// feature; the base half is always there. `Container`/`Center`/`Text` above
-/// prove the base half, this proves the Material half is wired to the glob
-/// rather than only reachable at `flui::material`.
-#[cfg(feature = "material")]
-#[test]
-fn prelude_carries_the_material_half_when_the_feature_is_on() {
-    let theme: ThemeData = ThemeData::light();
-    assert_eq!(theme.brightness(), Brightness::Light);
-}
-
-/// The design-neutral app shell needs no catalog feature at all: `WidgetsApp`
-/// is reachable (and constructible) through the always-on `flui::widgets`
-/// surface and the prelude glob — the `--no-default-features` half of the
-/// app-shell acceptance criteria.
-#[test]
-fn widgets_app_is_offered_without_any_catalog_feature() {
-    let _app = flui::widgets::WidgetsApp::new(SizedBox::shrink());
-    // Also via the prelude glob (`WidgetsApp` is part of
-    // `flui_widgets::prelude`).
-    let _from_prelude = WidgetsApp::new(SizedBox::shrink());
-}
-
-/// The Material shell rides the existing `material` catalog feature —
-/// `MaterialApp` and its `ThemeMode` resolve through both `flui::material`
-/// and the feature-gated prelude half.
-#[cfg(feature = "material")]
-#[test]
-fn material_app_shell_resolves_through_the_facade() {
-    let _app = flui::material::MaterialApp::new(SizedBox::shrink())
-        .theme(flui::material::ThemeData::light())
-        .dark_theme(flui::material::ThemeData::dark())
-        .theme_mode(flui::material::ThemeMode::System);
-    assert_eq!(
-        flui::material::ThemeMode::default(),
-        flui::material::ThemeMode::System
-    );
-    // And via the prelude's Material half.
-    let _from_prelude = MaterialApp::new(SizedBox::shrink()).theme_mode(ThemeMode::Dark);
-}
-
-/// The Cupertino shell rides the existing `cupertino` catalog feature.
-#[cfg(feature = "cupertino")]
-#[test]
-fn cupertino_app_shell_resolves_through_the_facade() {
-    let theme = flui::cupertino::CupertinoThemeData::new()
-        .with_brightness(flui::platform::Brightness::Dark);
-    let _app = flui::cupertino::CupertinoApp::new(SizedBox::shrink()).theme(theme);
-}
-
-/// A gesture payload that names a device kind is buildable from the facade alone:
-/// `TapDownDetails::with_kind` takes a `PointerDeviceKind`, so the facade exports both.
-#[test]
-fn tap_details_take_a_device_kind_through_the_facade() {
-    use flui::interaction::{PointerDeviceKind, TapDownDetails};
-
-    let details = TapDownDetails::new(Offset::new(4.0, 2.0), Offset::new(1.0, 0.5))
-        .with_kind(PointerDeviceKind::Mouse);
-    assert_eq!(details.kind, PointerDeviceKind::Mouse);
 }

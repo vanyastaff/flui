@@ -469,13 +469,11 @@ mod tests {
         names(&["fast-lane", "fast-lane-ios", "standalone"])
     }
 
-    #[test]
     fn heavy_jobs_list_matches_the_jobs_gated_on_heavy() {
         let w = workflow();
         assert_eq!(gated_on(&w, WIDE_CONDITION), w.lanes.wide);
     }
 
-    #[test]
     fn lane_lists_match_the_job_conditions() {
         let w = workflow();
         assert_eq!(gated_on(&w, FULL_CONDITION), w.lanes.full);
@@ -488,37 +486,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn every_gated_job_uses_a_known_condition() {
-        let w = workflow();
-        let known = [
-            WIDE_CONDITION,
-            FULL_CONDITION,
-            EXTENDED_CONDITION,
-            "needs.plan.outputs.lane == 'fast'",
-            "needs.plan.outputs.lane == 'fast' && needs.plan.outputs.cross_ios == 'true'",
-            "needs.plan.outputs.lane == 'tooling' && needs.plan.outputs.standalone != ''",
-            "needs.plan.outputs.lane != 'docs'",
-        ];
-        for job in w.jobs.iter().filter(|j| w.gated.contains(&j.name)) {
-            match job.condition.as_deref() {
-                None => assert!(
-                    ["checks", "plan"].contains(&job.name.as_str()),
-                    "{} has no if:",
-                    job.name
-                ),
-                Some(condition) => assert!(
-                    known.contains(&condition),
-                    "{}: `if: {condition}` is not a lane condition the aggregator knows",
-                    job.name
-                ),
-            }
-        }
-    }
-
     /// The jobs outside the lane lists: each one's `if:` must be the
     /// condition [`planned_runs`] runs it under, not just some known one.
-    #[test]
     fn jobs_outside_the_lane_lists_have_their_own_condition() {
         let w = workflow();
         let expected: BTreeMap<&str, &str> = [
@@ -549,14 +518,12 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
-    #[test]
     fn the_aggregator_needs_every_gated_job() {
         let w = workflow();
         let ci = w.jobs.iter().find(|j| j.name == "ci").expect("a `ci` job");
         assert_eq!(ci.needs.iter().cloned().collect::<BTreeSet<_>>(), w.gated);
     }
 
-    #[test]
     fn wide_lane_skips_platform_jobs() {
         let w = workflow();
         let skipped: Vec<String> = not_whole_workspace()
@@ -575,7 +542,6 @@ mod tests {
         red(&run("wide"), &without(wide, "gpu-test"), "gpu-test");
     }
 
-    #[test]
     fn full_lane() {
         let w = workflow();
         let skipped: Vec<String> = not_whole_workspace()
@@ -598,7 +564,6 @@ mod tests {
         red(&main, &without(full, "fast-lane"), "fast-lane");
     }
 
-    #[test]
     fn extended_jobs_skipped_on_main_is_green_and_on_schedule_is_red() {
         let w = workflow();
         assert!(w.lanes.extended.contains("macos-ci"));
@@ -624,7 +589,6 @@ mod tests {
         red(&push, &without(main_push, "macos-ci"), "macos-ci");
     }
 
-    #[test]
     fn fast_lane() {
         let w = workflow();
         let whole: Vec<String> = w
@@ -647,7 +611,6 @@ mod tests {
         red(&run("fast"), &without(fast, "doc"), "doc");
     }
 
-    #[test]
     fn ios_leg_follows_the_plan() {
         let w = workflow();
         let whole: Vec<String> = w
@@ -679,7 +642,6 @@ mod tests {
         red(&run("fast"), &skipping(&whole), "fast-lane-ios");
     }
 
-    #[test]
     fn tooling_and_docs_lanes() {
         let w = workflow();
         let compiling: Vec<String> = w
@@ -718,7 +680,6 @@ mod tests {
 
     /// `checks` is all a docs-only PR compiles, and it holds the markdown
     /// link check: it has no `if:`, and skipping it there is red.
-    #[test]
     fn checks_runs_on_a_docs_only_pr() {
         let w = workflow();
         let checks = w
@@ -741,7 +702,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn failed_plan_is_red() {
         let (ok, log) = aggregate(&run(""), &skipping(&names(&["plan"])));
         assert!(!ok);
@@ -757,7 +717,6 @@ mod tests {
         assert!(!ok && log.contains("lane='heavy'"), "{log}");
     }
 
-    #[test]
     fn a_job_missing_from_needs_is_red() {
         let w = workflow();
         let mut needs: BTreeMap<String, String> = w
@@ -780,7 +739,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn a_job_no_lane_runs_is_red() {
         // a job added with a new `if:` but in no lane list can only skip,
         // which every lane reports
@@ -801,7 +759,6 @@ mod tests {
         assert!(!ok && log.contains("'new-job': 'ran (success)"), "{log}");
     }
 
-    #[test]
     fn a_narrow_lane_on_main_or_nightly_is_red() {
         // every job the narrow lane skips did skip, so rule 2 alone is green:
         // only the event's floor catches a plan that under-ran main
@@ -869,7 +826,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn the_reader_handles_quoted_keys_comments_and_refuses_block_needs() {
         let text = "on: push\njobs:\n  \"quoted\":\n    if: always() # why\n    needs: [a, b]\n  plain: # comment\n    needs: a\n\
                     \x20   env:\n      HEAVY_JOBS: >-\n        x y\n        z\n      FULL_JOBS: >-\n        w\n\
@@ -895,5 +851,63 @@ mod tests {
         assert!(err.to_string().contains("block list"), "{err}");
         let err = parse_jobs("jobs:\n  {a: 1}\n").expect_err("flow map");
         assert!(err.to_string().contains("ci.yml:2"), "{err}");
+    }
+
+    #[test]
+    fn aggregator_contract() {
+        crate::table_test::run_table(
+            "aggregator_contract",
+            &[
+                (
+                    "heavy_jobs_list_matches_the_jobs_gated_on_heavy",
+                    heavy_jobs_list_matches_the_jobs_gated_on_heavy as fn(),
+                ),
+                (
+                    "lane_lists_match_the_job_conditions",
+                    lane_lists_match_the_job_conditions as fn(),
+                ),
+                (
+                    "jobs_outside_the_lane_lists_have_their_own_condition",
+                    jobs_outside_the_lane_lists_have_their_own_condition as fn(),
+                ),
+                (
+                    "the_aggregator_needs_every_gated_job",
+                    the_aggregator_needs_every_gated_job as fn(),
+                ),
+                (
+                    "wide_lane_skips_platform_jobs",
+                    wide_lane_skips_platform_jobs as fn(),
+                ),
+                ("full_lane", full_lane as fn()),
+                (
+                    "extended_jobs_skipped_on_main_is_green_and_on_schedule_is_red",
+                    extended_jobs_skipped_on_main_is_green_and_on_schedule_is_red as fn(),
+                ),
+                ("fast_lane", fast_lane as fn()),
+                ("ios_leg_follows_the_plan", ios_leg_follows_the_plan as fn()),
+                ("tooling_and_docs_lanes", tooling_and_docs_lanes as fn()),
+                (
+                    "checks_runs_on_a_docs_only_pr",
+                    checks_runs_on_a_docs_only_pr as fn(),
+                ),
+                ("failed_plan_is_red", failed_plan_is_red as fn()),
+                (
+                    "a_job_missing_from_needs_is_red",
+                    a_job_missing_from_needs_is_red as fn(),
+                ),
+                (
+                    "a_job_no_lane_runs_is_red",
+                    a_job_no_lane_runs_is_red as fn(),
+                ),
+                (
+                    "a_narrow_lane_on_main_or_nightly_is_red",
+                    a_narrow_lane_on_main_or_nightly_is_red as fn(),
+                ),
+                (
+                    "the_reader_handles_quoted_keys_comments_and_refuses_block_needs",
+                    the_reader_handles_quoted_keys_comments_and_refuses_block_needs as fn(),
+                ),
+            ],
+        );
     }
 }

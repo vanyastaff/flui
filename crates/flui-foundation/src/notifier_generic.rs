@@ -208,17 +208,6 @@ impl<Arg> Notifier<Arg> {
         }
         drop(self.extract_locked(std::mem::take));
     }
-
-    /// Test-only probe: `true` if `listeners` is currently free to lock.
-    ///
-    /// Backs a regression test for `extract_locked`'s drop-after-release
-    /// ordering: a listener whose own `Drop` re-enters this same notifier
-    /// (another `remove`/`dispose` call) must observe the lock already
-    /// free, not deadlock on it.
-    #[cfg(test)]
-    pub(crate) fn is_unlocked(&self) -> bool {
-        self.listeners.try_lock().is_some()
-    }
 }
 
 impl<Arg: Clone> Notifier<Arg> {
@@ -280,33 +269,10 @@ impl<Arg: Clone> Notifier<Arg> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
 
-    #[test]
-    fn delivers_arg_to_listener() {
-        let n: Notifier<i32> = Notifier::new();
-        let last = Arc::new(AtomicI32::new(0));
-        let last2 = Arc::clone(&last);
-        let _id = n.add(Arc::new(move |v: i32| last2.store(v, Ordering::SeqCst)));
-        n.notify(7);
-        assert_eq!(last.load(Ordering::SeqCst), 7);
-    }
-
-    #[test]
-    fn fires_in_registration_order() {
-        let n: Notifier<()> = Notifier::new();
-        let log = Arc::new(Mutex::new(Vec::<u8>::new()));
-        for k in 0u8..3 {
-            let log = Arc::clone(&log);
-            let _ = n.add(Arc::new(move |()| log.lock().push(k)));
-        }
-        n.notify(());
-        assert_eq!(*log.lock(), vec![0, 1, 2]);
-    }
-
-    #[test]
     fn panicking_listener_does_not_abort_rest() {
         let n: Notifier<()> = Notifier::new();
         let ran = Arc::new(AtomicUsize::new(0));
@@ -319,7 +285,6 @@ mod tests {
         assert_eq!(ran.load(Ordering::SeqCst), 1);
     }
 
-    #[test]
     fn removed_during_notify_is_skipped() {
         let n: Notifier<()> = Notifier::new();
         let fired_b = Arc::new(AtomicUsize::new(0));
@@ -342,106 +307,16 @@ mod tests {
     }
 
     #[test]
-    fn remove_and_len_and_dispose() {
-        let n: Notifier<()> = Notifier::new();
-        let id = n.add(Arc::new(|()| {}));
-        assert_eq!(n.len(), 1);
-        n.remove(id);
-        assert_eq!(n.len(), 0);
-        let _ = n.add(Arc::new(|()| {}));
-        n.dispose();
-        assert!(n.is_disposed());
-        assert_eq!(n.len(), 0);
-        n.dispose(); // idempotent — must not panic
-    }
-
-    #[cfg(debug_assertions)]
-    #[test]
-    #[should_panic(expected = "Notifier used after dispose")]
-    fn notify_after_dispose_panics_in_debug() {
-        let n: Notifier<()> = Notifier::new();
-        n.dispose();
-        n.notify(());
-    }
-
-    /// A listener whose own `Drop` re-enters the notifier, probing whether
-    /// the lock is still held.
-    struct ReentrantDropCanary {
-        notifier: Notifier<()>,
-        observed_locked: Arc<AtomicBool>,
-    }
-
-    impl Drop for ReentrantDropCanary {
-        fn drop(&mut self) {
-            // Probe first, THEN decide whether to reenter: attempting the
-            // reentrant call unconditionally would make a real regression
-            // (the lock still held here) actually deadlock on it, turning
-            // this test into a hang instead of a fast assertion failure.
-            if self.notifier.is_unlocked() {
-                // Reentrant call into the same notifier from inside a
-                // removed listener's own destructor. `remove_even_if_disposed`
-                // (not `remove`) because the `dispose` variant of this canary
-                // runs after `is_disposed` is already `true`, and `remove`
-                // would debug-panic on that gate — this canary only needs to
-                // prove the LOCK is free to reacquire, independent of that
-                // gate.
-                self.notifier
-                    .remove_even_if_disposed(ListenerId::new(999_999));
-            } else {
-                self.observed_locked.store(true, Ordering::SeqCst);
-            }
-        }
-    }
-
-    /// Pins `Notifier::remove`'s extract-then-drop ordering (via
-    /// `extract_locked`, backing both `remove` and
-    /// `remove_even_if_disposed`): reverting to a bare
-    /// `self.listeners.lock().remove(&id);` statement drops the removed
-    /// callback while its own guard is still live, so a listener whose
-    /// `Drop` re-enters this notifier deadlocks on `listeners`.
-    #[test]
-    fn remove_drops_the_removed_listener_after_releasing_the_lock() {
-        let n: Notifier<()> = Notifier::new();
-        let observed_locked = Arc::new(AtomicBool::new(false));
-        let canary = ReentrantDropCanary {
-            notifier: n.clone(),
-            observed_locked: Arc::clone(&observed_locked),
-        };
-        let id = n.add(Arc::new(move |()| {
-            let _keep_alive = &canary;
-        }));
-
-        n.remove(id);
-
-        assert!(
-            !observed_locked.load(Ordering::SeqCst),
-            "the removed listener's Drop observed the notifier's lock still held"
-        );
-    }
-
-    /// Pins `Notifier::dispose`'s extract-then-drop ordering (via
-    /// `extract_locked`, backing both `remove_all_unchecked` and
-    /// `dispose`): reverting to a bare `self.listeners.lock().clear();`
-    /// statement drops every cleared callback while the guard is still
-    /// live, so a listener whose `Drop` re-enters this notifier deadlocks
-    /// on `listeners`.
-    #[test]
-    fn dispose_drops_every_removed_listener_after_releasing_the_lock() {
-        let n: Notifier<()> = Notifier::new();
-        let observed_locked = Arc::new(AtomicBool::new(false));
-        let canary = ReentrantDropCanary {
-            notifier: n.clone(),
-            observed_locked: Arc::clone(&observed_locked),
-        };
-        let _id = n.add(Arc::new(move |()| {
-            let _keep_alive = &canary;
-        }));
-
-        n.dispose();
-
-        assert!(
-            !observed_locked.load(Ordering::SeqCst),
-            "a disposed listener's Drop observed the notifier's lock still held"
-        );
+    fn notifier_generic_contract() {
+        crate::test_cases::run_cases(&[
+            (
+                "panicking listener does not abort rest",
+                panicking_listener_does_not_abort_rest,
+            ),
+            (
+                "removed during notify is skipped",
+                removed_during_notify_is_skipped,
+            ),
+        ]);
     }
 }

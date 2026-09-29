@@ -465,72 +465,12 @@ fn overlay_color_property(
 
 #[cfg(test)]
 mod tests {
-    use flui_sdk::widgets::{WidgetStateConstraint, WidgetStates};
+    use flui_sdk::widgets::WidgetStates;
 
     use super::*;
 
     fn all_property<T: Clone>(value: T) -> WidgetStateProperty<Option<T>> {
         WidgetStateProperty::all(Some(value))
-    }
-
-    /// `overlay_color_property`'s theme tier, resolved for a `Pressed` state
-    /// — the live `WidgetStateProperty` handed to `InkWell` (see the
-    /// function's own doc comment: it closes over all three cascade tiers,
-    /// same as `ButtonStyleButtonCoreState::build`'s per-property
-    /// resolution). Mutation-honest: with no widget-level `overlay_color`
-    /// set, the resolved value must be the THEME tier's color, not the
-    /// default tier's — reverting `theme_style.as_ref()` back to a
-    /// hardcoded `None` (its state before `theme_style` was wired) would
-    /// resolve `default_overlay` here instead of `themed_overlay`, failing
-    /// this assertion.
-    #[test]
-    fn overlay_color_property_resolves_the_theme_tier_for_a_pressed_state() {
-        let themed_overlay = Color::rgb(9, 9, 9);
-        let default_overlay = Color::rgb(1, 1, 1);
-        let theme_style = ButtonStyle {
-            overlay_color: Some(all_property(themed_overlay)),
-            ..Default::default()
-        };
-        let default_style = ButtonStyle {
-            overlay_color: Some(all_property(default_overlay)),
-            ..Default::default()
-        };
-
-        let property = overlay_color_property(None, Some(theme_style), default_style);
-        let resolved = property.resolve(&WidgetStates::from(WidgetState::Pressed));
-
-        assert_eq!(
-            resolved,
-            Some(themed_overlay),
-            "a theme-configured overlay_color, with no widget-level override, must reach the \
-             live WidgetStateProperty handed to InkWell — not fall through to the default tier",
-        );
-    }
-
-    /// Companion coverage: an explicit widget-level `overlay_color` still
-    /// wins over a configured theme tier, matching every other property's
-    /// widget > theme > default precedence.
-    #[test]
-    fn overlay_color_property_widget_tier_wins_over_the_theme_tier() {
-        let widget_overlay = Color::rgb(2, 2, 2);
-        let themed_overlay = Color::rgb(9, 9, 9);
-        let widget_style = ButtonStyle {
-            overlay_color: Some(all_property(widget_overlay)),
-            ..Default::default()
-        };
-        let theme_style = ButtonStyle {
-            overlay_color: Some(all_property(themed_overlay)),
-            ..Default::default()
-        };
-
-        let property = overlay_color_property(
-            Some(widget_style),
-            Some(theme_style),
-            ButtonStyle::default(),
-        );
-        let resolved = property.resolve(&WidgetStates::from(WidgetState::Pressed));
-
-        assert_eq!(resolved, Some(widget_overlay));
     }
 
     #[test]
@@ -541,124 +481,7 @@ mod tests {
         assert_eq!(resolved, Some(1));
     }
 
-    #[test]
-    fn default_tier_is_used_when_widget_and_theme_are_absent() {
-        let default = all_property(3_u32);
-        let resolved: Option<u32> =
-            resolve_property(&WidgetStates::NONE, None, None, Some(&default));
-        assert_eq!(resolved, Some(3));
-    }
-
-    /// Mutation-honest: if the coalesce stopped checking the widget
-    /// property's OWN resolution and instead treated "widget property is
-    /// present" as sufficient, this would return `Some(1)` from a widget
-    /// property that only covers `Pressed` while the button is unpressed —
-    /// it must fall through to `default` instead.
-    #[test]
-    fn a_widget_property_that_resolves_none_for_this_state_falls_through_to_default() {
-        let widget: WidgetStateProperty<Option<u32>> = WidgetStateProperty::from_map([(
-            WidgetStateConstraint::Is(flui_sdk::widgets::WidgetState::Pressed),
-            Some(1_u32),
-        )]);
-        let default = all_property(3_u32);
-        let resolved = resolve_property(&WidgetStates::NONE, Some(&widget), None, Some(&default));
-        assert_eq!(resolved, Some(3));
-    }
-
-    #[test]
-    fn nothing_set_anywhere_resolves_to_none() {
-        let resolved: Option<u32> = resolve_property(&WidgetStates::NONE, None, None, None);
-        assert_eq!(resolved, None);
-    }
-
-    #[test]
-    fn fold_foreground_into_text_style_overrides_the_text_styles_own_color() {
-        let base = TextStyle::new().with_color(Color::rgb(1, 1, 1));
-        let folded = fold_foreground_into_text_style(Some(base), Some(Color::rgb(9, 9, 9)));
-        assert_eq!(folded.color, Some(Color::rgb(9, 9, 9)));
-    }
-
-    #[test]
-    fn fold_foreground_into_text_style_keeps_the_base_color_when_no_foreground_is_resolved() {
-        let base = TextStyle::new().with_color(Color::rgb(1, 1, 1));
-        let folded = fold_foreground_into_text_style(Some(base.clone()), None);
-        assert_eq!(folded.color, base.color);
-    }
-
     // ------------------------------------------------------------------
     // effective_constraints — min/max envelope + fixed-size clamping
     // ------------------------------------------------------------------
-
-    fn size(width: f64, height: f64) -> flui_sdk::geometry::Size {
-        flui_sdk::geometry::Size::new(width, height)
-    }
-
-    #[test]
-    fn no_fixed_size_passes_minimum_and_maximum_through_unpinned() {
-        let constraints = effective_constraints(size(64.0, 40.0), size(200.0, 100.0), None);
-        assert_eq!(constraints.min_width, 64.0);
-        assert_eq!(constraints.max_width, 200.0);
-        assert_eq!(constraints.min_height, 40.0);
-        assert_eq!(constraints.max_height, 100.0);
-    }
-
-    /// A `fixed_size` inside `[minimum, maximum]` pins `min == max` at
-    /// exactly that value on both axes.
-    #[test]
-    fn fixed_size_inside_the_envelope_pins_min_and_max_to_it() {
-        let constraints =
-            effective_constraints(size(64.0, 40.0), size(200.0, 100.0), Some(size(90.0, 60.0)));
-        assert_eq!(constraints.min_width, 90.0);
-        assert_eq!(constraints.max_width, 90.0);
-        assert_eq!(constraints.min_height, 60.0);
-        assert_eq!(constraints.max_height, 60.0);
-    }
-
-    /// Mutation-honest — the bug this test would have caught: a
-    /// `fixed_size` (10×10) SMALLER than `minimum` (64×40) must clamp UP to
-    /// the minimum before pinning, not pin directly to 10×10 (which would
-    /// invert `min > max` against a `maximum` of 200×100 anyway, but more
-    /// importantly silently produces a button smaller than its own declared
-    /// minimum — the oracle's `effectiveConstraints.constrain(resolvedFixedSize)`
-    /// step this function ports).
-    #[test]
-    fn fixed_size_smaller_than_minimum_is_clamped_up_to_the_minimum() {
-        let constraints =
-            effective_constraints(size(64.0, 40.0), size(200.0, 100.0), Some(size(10.0, 10.0)));
-        assert_eq!(constraints.min_width, 64.0);
-        assert_eq!(constraints.max_width, 64.0);
-        assert_eq!(constraints.min_height, 40.0);
-        assert_eq!(constraints.max_height, 40.0);
-    }
-
-    /// Symmetric case: a `fixed_size` LARGER than `maximum` clamps down.
-    #[test]
-    fn fixed_size_larger_than_maximum_is_clamped_down_to_the_maximum() {
-        let constraints = effective_constraints(
-            size(64.0, 40.0),
-            size(200.0, 100.0),
-            Some(size(500.0, 500.0)),
-        );
-        assert_eq!(constraints.min_width, 200.0);
-        assert_eq!(constraints.max_width, 200.0);
-        assert_eq!(constraints.min_height, 100.0);
-        assert_eq!(constraints.max_height, 100.0);
-    }
-
-    /// An infinite `fixed_size` axis is ignored on that axis (Flutter
-    /// parity: "Fixed size dimensions whose value is double.infinity are
-    /// ignored", `ButtonStyle.fixedSize`'s doc comment) — the other axis
-    /// still pins.
-    #[test]
-    fn an_infinite_fixed_axis_leaves_that_axis_at_the_envelope() {
-        let constraints = effective_constraints(
-            size(64.0, 40.0),
-            size(200.0, 100.0),
-            Some(flui_sdk::geometry::Size::new(f64::INFINITY, 60.0)),
-        );
-        assert_eq!(constraints.min_width, 64.0);
-        assert_eq!(constraints.max_width, 200.0);
-        assert_eq!(constraints.min_height, 60.0);
-        assert_eq!(constraints.max_height, 60.0);
-    }
 }

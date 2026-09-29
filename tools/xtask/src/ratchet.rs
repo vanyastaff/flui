@@ -105,7 +105,6 @@ mod tests {
     const PLAN_FIXTURE: &str = include_str!("../fixtures/ratchet/plan.md.txt");
     const CASES: &str = include_str!("../fixtures/ratchet/exits.txt");
 
-    #[test]
     fn exit_names_an_adr_or_a_plan_step() {
         let exits = Exits::from_parts(["0081".to_owned()], PLAN_FIXTURE);
         let mut checked = 0;
@@ -122,10 +121,26 @@ mod tests {
         assert!(checked >= 6, "the fixture lost its cases");
     }
 
-    #[test]
     fn the_real_plan_and_adrs_are_readable() {
         let exits = Exits::from_repo(&crate::util::repo_root()).expect("reads");
         assert!(exits.check("ADR-0078").is_ok());
         assert!(!exits.steps.is_empty(), "no step rows found in {PLAN}");
+    }
+
+    #[test]
+    fn ratchet_exits_contract() {
+        crate::table_test::run_table(
+            "ratchet_exits_contract",
+            &[
+                (
+                    "exit_names_an_adr_or_a_plan_step",
+                    exit_names_an_adr_or_a_plan_step as fn(),
+                ),
+                (
+                    "the_real_plan_and_adrs_are_readable",
+                    the_real_plan_and_adrs_are_readable as fn(),
+                ),
+            ],
+        );
     }
 }

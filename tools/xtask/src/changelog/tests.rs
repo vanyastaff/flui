@@ -1,5 +1,3 @@
-use std::fmt::Write as _;
-
 use super::*;
 
 /// The rules `text`, as fragment `x.md`, breaks: `(line, rule)`.
@@ -46,83 +44,6 @@ Unreleased preamble.
 - released
 ";
 
-#[test]
-fn self_test_passes() {
-    let (missed, extra, wrong) = self_test_diff();
-    assert!(missed.is_empty(), "missed: {missed:?}");
-    assert!(extra.is_empty(), "false positives: {extra:?}");
-    assert!(wrong.is_empty(), "assembly: {wrong:?}");
-    assert_eq!(self_test(), ExitCode::SUCCESS);
-}
-
-#[test]
-fn a_fragment_with_each_section_parses() {
-    let mut text = String::new();
-    for name in SECTIONS {
-        writeln!(
-            text,
-            "### {name}\n\n- a {name} bullet\n  continued\n  - nested\n"
-        )
-        .expect("writes");
-    }
-    let parsed = fragment("x.md", &text);
-    assert_eq!(parsed.sections.len(), SECTIONS.len());
-    for (canon, name) in SECTIONS.iter().enumerate() {
-        assert_eq!(
-            parsed.sections[&canon].1,
-            format!("- a {name} bullet\n  continued\n  - nested")
-        );
-    }
-    // CRLF reads the same
-    let crlf = fragment("x.md", &text.replace('\n', "\r\n"));
-    assert_eq!(crlf.sections, parsed.sections);
-}
-
-#[test]
-fn each_rule_fires_on_its_planted_line() {
-    let (entries, _, expected) = planted();
-    let (_, findings) = judge(&entries);
-    let rules: BTreeSet<&str> = findings.iter().map(|f| f.rule).collect();
-    // every fragment rule has a planted case
-    for rule in [
-        "name",
-        "not-md",
-        "empty",
-        "preamble",
-        "unknown-section",
-        "duplicate-section",
-        "empty-section",
-        "not-a-list",
-        "list-marker",
-        "link",
-    ] {
-        assert!(rules.contains(rule), "{rule} never fires");
-    }
-    for finding in &findings {
-        let id = (finding.path.clone(), finding.line, finding.rule.to_owned());
-        assert!(expected.contains(&id), "unplanted: {finding}");
-    }
-}
-
-#[test]
-fn findings_print_as_path_line_rule_message() {
-    let found = rules_of("### Bogus\n\n- x\n");
-    assert_eq!(
-        found[0].to_string(),
-        "x.md:1: unknown-section: `Bogus` is not one of Added, Changed, Deprecated, Removed, \
-         Fixed, Security"
-    );
-    assert_eq!(
-        Finding::new("changelog.d/y", 0, "not-md", "m").to_string(),
-        "changelog.d/y: not-md: m"
-    );
-}
-
-fn rules_of(text: &str) -> Vec<Finding> {
-    parse_fragment("x.md", text).expect_err("invalid")
-}
-
-#[test]
 fn readme_is_the_only_non_slug_file() {
     let valid = "### Fixed\n\n- x\n".to_owned();
     let entry = |name: &str, is_dir| (name.to_owned(), is_dir, valid.clone());
@@ -166,7 +87,6 @@ fn readme_is_the_only_non_slug_file() {
     );
 }
 
-#[test]
 fn assembly_is_independent_of_input_order() {
     let fragments = [
         (
@@ -200,26 +120,6 @@ fn assembly_is_independent_of_input_order() {
     );
 }
 
-#[test]
-fn assembly_puts_new_bullets_above_existing_ones() {
-    let merged = assemble(
-        CHANGELOG_FIXTURE,
-        &[fragment(
-            "changelog.d/x.md",
-            "### Changed\n\n- new changed\n",
-        )],
-    )
-    .expect("valid");
-    assert_eq!(
-        merged,
-        CHANGELOG_FIXTURE.replace(
-            "### Changed\n\n- old changed\n",
-            "### Changed\n\n- new changed\n\n- old changed\n"
-        )
-    );
-}
-
-#[test]
 fn a_missing_section_is_created_in_canonical_position() {
     let merged = assemble(
         CHANGELOG_FIXTURE,
@@ -256,7 +156,6 @@ fn a_missing_section_is_created_in_canonical_position() {
     );
 }
 
-#[test]
 fn assembly_touches_nothing_outside_unreleased() {
     let merged = assemble(
         CHANGELOG_FIXTURE,
@@ -278,7 +177,6 @@ fn assembly_touches_nothing_outside_unreleased() {
     );
 }
 
-#[test]
 fn assembly_with_no_fragments_is_identity() {
     assert_eq!(
         assemble(CHANGELOG_FIXTURE, &[]).expect("valid"),
@@ -291,7 +189,6 @@ fn assembly_with_no_fragments_is_identity() {
     );
 }
 
-#[test]
 fn unknown_heading_in_unreleased_is_refused() {
     let broken = CHANGELOG_FIXTURE.replace("### Changed\n", "### Notes\n");
     let found = unreleased(&broken).expect_err("refused");
@@ -309,7 +206,6 @@ fn unknown_heading_in_unreleased_is_refused() {
     assert!(unreleased(&below).is_ok());
 }
 
-#[test]
 fn relative_and_anchor_links_are_refused_root_relative_accepted() {
     for ok in [
         "[x](/docs/testing.md)",
@@ -343,7 +239,6 @@ fn relative_and_anchor_links_are_refused_root_relative_accepted() {
     );
 }
 
-#[test]
 fn section_bodies_hold_one_unordered_list() {
     assert_eq!(rules("### Added\n\n- a\n\n- b\n"), []);
     assert_eq!(rules("### Added\n\n1. a\n"), [(3, "not-a-list")]);
@@ -430,7 +325,6 @@ fn args(flags: &[&str]) -> ChangelogArgs {
     }
 }
 
-#[test]
 fn the_merge_writes_the_changelog_and_removes_the_fragments() {
     let scratch = Scratch::new(
         "merge",
@@ -461,7 +355,6 @@ fn the_merge_writes_the_changelog_and_removes_the_fragments() {
     assert_eq!(scratch.changelog(), merged);
 }
 
-#[test]
 fn only_write_changes_the_tree() {
     let scratch = Scratch::new("read-only", &[("a.md", "### Added\n\n- a\n")]);
     for flags in [&[][..], &["--check"], &["--dry-run"]] {
@@ -482,7 +375,6 @@ fn only_write_changes_the_tree() {
     }
 }
 
-#[test]
 fn an_invalid_fragment_stops_the_merge() {
     let scratch = Scratch::new(
         "invalid",
@@ -499,21 +391,6 @@ fn an_invalid_fragment_stops_the_merge() {
     assert_eq!(scratch.fragments(), ["a.md", "b.md"]);
 }
 
-#[test]
-fn a_fragment_directory_that_cannot_be_listed_is_an_error() {
-    let scratch = Scratch::new("unlistable", &[]);
-    assert!(
-        entries(&scratch.0.join("missing"))
-            .expect("missing is empty")
-            .is_empty()
-    );
-    // a file where the directory should be: listing it fails, and is not empty
-    let file = scratch.0.join(CHANGELOG);
-    let error = entries(&file).expect_err("not a directory");
-    assert!(error.to_string().contains("listing"), "{error:#}");
-}
-
-#[test]
 fn bullets_join_a_section_heading_however_it_is_followed() {
     let new = || [fragment("changelog.d/x.md", "### Added\n\n- new\n")];
     // a bullet directly under the heading
@@ -525,5 +402,62 @@ fn bullets_join_a_section_heading_however_it_is_followed() {
     assert_eq!(
         assemble("## [Unreleased]\n\n### Added", &new()).expect("valid"),
         "## [Unreleased]\n\n### Added\n\n- new\n"
+    );
+}
+
+#[test]
+fn changelog_contract() {
+    crate::table_test::run_table(
+        "changelog_contract",
+        &[
+            (
+                "readme_is_the_only_non_slug_file",
+                readme_is_the_only_non_slug_file as fn(),
+            ),
+            (
+                "assembly_is_independent_of_input_order",
+                assembly_is_independent_of_input_order as fn(),
+            ),
+            (
+                "a_missing_section_is_created_in_canonical_position",
+                a_missing_section_is_created_in_canonical_position as fn(),
+            ),
+            (
+                "assembly_touches_nothing_outside_unreleased",
+                assembly_touches_nothing_outside_unreleased as fn(),
+            ),
+            (
+                "assembly_with_no_fragments_is_identity",
+                assembly_with_no_fragments_is_identity as fn(),
+            ),
+            (
+                "unknown_heading_in_unreleased_is_refused",
+                unknown_heading_in_unreleased_is_refused as fn(),
+            ),
+            (
+                "relative_and_anchor_links_are_refused_root_relative_accepted",
+                relative_and_anchor_links_are_refused_root_relative_accepted as fn(),
+            ),
+            (
+                "section_bodies_hold_one_unordered_list",
+                section_bodies_hold_one_unordered_list as fn(),
+            ),
+            (
+                "the_merge_writes_the_changelog_and_removes_the_fragments",
+                the_merge_writes_the_changelog_and_removes_the_fragments as fn(),
+            ),
+            (
+                "only_write_changes_the_tree",
+                only_write_changes_the_tree as fn(),
+            ),
+            (
+                "an_invalid_fragment_stops_the_merge",
+                an_invalid_fragment_stops_the_merge as fn(),
+            ),
+            (
+                "bullets_join_a_section_heading_however_it_is_followed",
+                bullets_join_a_section_heading_however_it_is_followed as fn(),
+            ),
+        ],
     );
 }

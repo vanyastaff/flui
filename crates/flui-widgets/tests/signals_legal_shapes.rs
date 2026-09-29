@@ -93,8 +93,7 @@ impl ViewState<Counter> for CounterState {
     }
 }
 
-#[test]
-fn the_accepted_shapes_compile_and_run() {
+pub(crate) fn the_accepted_shapes_compile_and_run() {
     let tapped = Rc::new(Cell::new(0));
     let mut laid = lay_out(
         Counter {

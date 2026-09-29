@@ -170,10 +170,6 @@ pub mod hit_testable {
 
     // Blanket impl: any CustomHitTestable automatically gets Sealed
     impl<T: super::CustomHitTestable> Sealed for T {}
-
-    // Test implementations
-    #[cfg(test)]
-    impl Sealed for crate::routing::event_router::tests::MockLayer {}
 }
 
 /// Sealed trait for gesture recognizers.

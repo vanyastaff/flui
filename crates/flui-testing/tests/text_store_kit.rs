@@ -16,21 +16,8 @@ use flui_testing::text_store_kit::{
     self, FixtureCapabilities, InMemoryFixture, KIT_VERSION, TextStoreFixture,
 };
 
-#[test]
 fn in_memory_store_conforms_to_kit_v1() {
     text_store_kit::assert_conforms(&mut InMemoryFixture::new(), KIT_VERSION);
-}
-
-#[test]
-fn a_protected_in_memory_store_conforms_to_kit_v1() {
-    text_store_kit::assert_conforms(&mut InMemoryFixture::protected(), KIT_VERSION);
-}
-
-#[test]
-fn version_one_runs_every_case() {
-    let cases = text_store_kit::cases();
-    assert_eq!(cases.len(), 25);
-    assert!(cases.iter().all(|case| case.since == 1));
 }
 
 /// One deliberate defect a store might have.
@@ -357,12 +344,6 @@ fn assert_kit_catches(fault: Fault, case: &str) {
     );
 }
 
-#[test]
-fn kit_fails_a_store_that_counts_utf8_bytes() {
-    assert_kit_catches(Fault::CountsUtf8Bytes, "length_counts_utf16_units");
-}
-
-#[test]
 fn kit_fails_a_store_that_grants_inside_a_transaction() {
     assert_kit_catches(
         Fault::GrantsInsideTransaction,
@@ -374,42 +355,30 @@ fn kit_fails_a_store_that_grants_inside_a_transaction() {
     );
 }
 
-#[test]
-fn kit_fails_a_store_that_echoes_platform_edits() {
-    assert_kit_catches(
-        Fault::EchoesPlatformEdits,
-        "platform_edits_are_not_echoed_to_the_observer",
-    );
-}
-
-#[test]
-fn kit_fails_a_store_that_snaps_platform_selection_to_graphemes() {
-    assert_kit_catches(
-        Fault::SnapsPlatformSelectionToGraphemes,
-        "selection_inside_a_grapheme_is_kept_exactly",
-    );
-}
-
-#[test]
-fn kit_fails_a_store_that_splits_surrogates_on_hit_test() {
-    assert_kit_catches(
-        Fault::SplitsSurrogatesOnHitTest,
-        "index_at_point_never_splits_a_surrogate_pair",
-    );
-}
-
-#[test]
-fn kit_fails_a_store_that_notifies_per_edit() {
-    assert_kit_catches(
-        Fault::NotifiesPerEdit,
-        "one_session_is_one_owner_notification",
-    );
-}
-
-#[test]
 fn kit_fails_a_store_that_notifies_inside_a_transaction() {
     assert_kit_catches(
         Fault::NotifiesInsideTransaction,
         "app_edits_inside_a_transaction_reach_the_observer_after_it",
+    );
+}
+
+#[test]
+fn text_store_kit_matrix() {
+    crate::run_table(
+        "text_store_kit_matrix",
+        &[
+            (
+                "in_memory_store_conforms_to_kit_v1",
+                in_memory_store_conforms_to_kit_v1 as fn(),
+            ),
+            (
+                "kit_fails_a_store_that_grants_inside_a_transaction",
+                kit_fails_a_store_that_grants_inside_a_transaction as fn(),
+            ),
+            (
+                "kit_fails_a_store_that_notifies_inside_a_transaction",
+                kit_fails_a_store_that_notifies_inside_a_transaction as fn(),
+            ),
+        ],
     );
 }

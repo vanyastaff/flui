@@ -3,31 +3,6 @@
 
 use super::*;
 
-const RS: &str = include_str!("../../fixtures/markers/planted.rs.txt");
-const MD: &str = include_str!("../../fixtures/markers/planted.md.txt");
-
-/// The line numbers of `text` whose content contains `needle`.
-fn lines_with(text: &str, needle: &str) -> Vec<usize> {
-    let lines: Vec<usize> = text
-        .lines()
-        .enumerate()
-        .filter(|(_, line)| line.contains(needle))
-        .map(|(index, _)| index + 1)
-        .collect();
-    assert!(!lines.is_empty(), "no fixture line contains {needle:?}");
-    lines
-}
-
-/// The classes found on `line` of `text`, read as the file `path`.
-fn classes_on(path: &str, text: &str, line: usize) -> Vec<&'static str> {
-    find(path, text, false)
-        .into_iter()
-        .filter(|marker| marker.line == line)
-        .map(|marker| marker.class)
-        .collect()
-}
-
-#[test]
 fn self_test_reports_exactly_the_planted_findings() {
     let (missed, extra) = self_test_diff().expect("self-test runs");
     assert!(missed.is_empty(), "missed: {missed:?}");
@@ -43,87 +18,6 @@ fn self_test_reports_exactly_the_planted_findings() {
     }
 }
 
-#[test]
-fn quotation_is_not_prose() {
-    for needle in [
-        "This doc comment is Markdown",
-        "Phase::B",
-        "pub enum Phase",
-        "const W400",
-        "lowercase is domain vocabulary",
-        "lay out the children",
-        "a history link",
-        "the keys",
-        "fn nine_slice_advanced",
-    ] {
-        for line in lines_with(RS, needle) {
-            assert_eq!(classes_on("x.rs", RS, line), Vec::<&str>::new(), "{needle}");
-        }
-    }
-    for needle in [
-        "in a fenced block",
-        "[the plan]",
-        "for the history",
-        "A code span",
-    ] {
-        for line in lines_with(MD, needle) {
-            assert_eq!(classes_on("x.md", MD, line), Vec::<&str>::new(), "{needle}");
-        }
-    }
-}
-
-#[test]
-fn a_cli_flag_is_not_a_slice_label() {
-    let flag = lines_with(RS, "run with --");
-    assert_eq!(classes_on("x.rs", RS, flag[0]), Vec::<&str>::new());
-    let label = lines_with(RS, "a plain slice");
-    assert_eq!(classes_on("x.rs", RS, label[0]), ["slice"]);
-}
-
-#[test]
-fn horizon_names_pass_in_markdown_only() {
-    let md = lines_with(MD, "Horizon names");
-    assert_eq!(classes_on("x.md", MD, md[0]), Vec::<&str>::new());
-    // the same shape in a Rust comment is a tracker id
-    let rs = lines_with(RS, "a heading named");
-    assert_eq!(classes_on("x.rs", RS, rs[0]), ["tracker-h"]);
-    // and the same Markdown read as plain text is prose whole
-    assert!(classes_on("x.toml", MD, md[0]).contains(&"tracker-h"));
-}
-
-#[test]
-fn strings_raw_strings_and_identifiers_are_read_by_the_lexer() {
-    for (needle, class) in [
-        ("string\" //", "cycle"),
-        ("raw string", "slice"),
-        ("fn test_", "spec-task"),
-        ("block comment", "wave"),
-    ] {
-        let line = lines_with(RS, needle)[0];
-        assert_eq!(classes_on("x.rs", RS, line), [class], "{needle}");
-    }
-}
-
-#[test]
-fn allowlist_counts_are_exact() {
-    let found = planted_markers();
-    let allow = Allowlist::parse(PLANTED_ALLOWLIST).expect("parses");
-    let exits = Exits::from_parts(Vec::new(), PLANTED_PLAN);
-    let scanned: BTreeSet<String> = PLANTED.iter().map(|&(path, ..)| path.to_owned()).collect();
-    let labels: BTreeSet<String> = judge(&found, &scanned, &allow, &exits)
-        .iter()
-        .map(Finding::identity)
-        .filter(|(_, line, _)| *line == 0)
-        .map(|(path, _, label)| format!("{path} {label}"))
-        .collect();
-    let expected: BTreeSet<String> = RATCHET_EXPECTED
-        .iter()
-        .map(|(path, label)| format!("{path} {label}"))
-        .collect();
-    assert_eq!(labels, expected);
-}
-
-#[test]
 fn a_bad_exit_or_missing_reason_is_a_finding() {
     let found = planted_markers();
     let scanned: BTreeSet<String> = PLANTED.iter().map(|&(path, ..)| path.to_owned()).collect();
@@ -139,24 +33,6 @@ fn a_bad_exit_or_missing_reason_is_a_finding() {
     assert_eq!(labels, ["no-reason", "bad-exit"]);
 }
 
-#[test]
-fn exit_values_are_not_scanned() {
-    // the planted allowlist's exit is a step id: silent as an allowlist
-    let exit_line = lines_with(PLANTED_ALLOWLIST, "exit = ")[0];
-    let as_allowlist: Vec<usize> = find("a.toml", PLANTED_ALLOWLIST, true)
-        .iter()
-        .map(|marker| marker.line)
-        .collect();
-    assert!(!as_allowlist.contains(&exit_line), "{as_allowlist:?}");
-    // and reported when the same text is not an allowlist
-    let as_text: Vec<usize> = find("a.toml", PLANTED_ALLOWLIST, false)
-        .iter()
-        .map(|marker| marker.line)
-        .collect();
-    assert!(as_text.contains(&exit_line), "{as_text:?}");
-}
-
-#[test]
 fn seed_round_trips() {
     let found = planted_markers();
     let seeded = seed(&found)
@@ -172,7 +48,6 @@ fn seed_round_trips() {
     assert!(!judge(&found, &scanned, &unfilled, &exits).is_empty());
 }
 
-#[test]
 fn archival_roots_are_the_ones_agents_md_lists() {
     let agents = crate::util::read("AGENTS.md").expect("AGENTS.md");
     assert_eq!(archival_drift(&agents), Ok(()));
@@ -184,7 +59,6 @@ fn archival_roots_are_the_ones_agents_md_lists() {
     assert!(archival_drift("no list here").is_err());
 }
 
-#[test]
 fn the_real_allowlist_parses_and_names_known_classes() {
     let allow = Allowlist::parse(&crate::util::read(ALLOWLIST).expect("reads")).expect("parses");
     for entry in &allow.allow {
@@ -198,7 +72,6 @@ fn the_real_allowlist_parses_and_names_known_classes() {
     }
 }
 
-#[test]
 fn the_token_walk_tells_code_from_comments_and_strings() {
     use tokens::{DocStyle, Token, tokens};
     let src = concat!(
@@ -251,4 +124,34 @@ fn the_token_walk_tells_code_from_comments_and_strings() {
     for absent in ["a", "outer", "z"] {
         assert!(!idents.contains(&absent), "{absent} lexed as an identifier");
     }
+}
+
+#[test]
+fn markers_contract() {
+    crate::table_test::run_table(
+        "markers_contract",
+        &[
+            (
+                "self_test_reports_exactly_the_planted_findings",
+                self_test_reports_exactly_the_planted_findings as fn(),
+            ),
+            (
+                "a_bad_exit_or_missing_reason_is_a_finding",
+                a_bad_exit_or_missing_reason_is_a_finding as fn(),
+            ),
+            ("seed_round_trips", seed_round_trips as fn()),
+            (
+                "archival_roots_are_the_ones_agents_md_lists",
+                archival_roots_are_the_ones_agents_md_lists as fn(),
+            ),
+            (
+                "the_real_allowlist_parses_and_names_known_classes",
+                the_real_allowlist_parses_and_names_known_classes as fn(),
+            ),
+            (
+                "the_token_walk_tells_code_from_comments_and_strings",
+                the_token_walk_tells_code_from_comments_and_strings as fn(),
+            ),
+        ],
+    );
 }

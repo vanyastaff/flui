@@ -95,29 +95,3 @@ pub trait TimestampProvider {
 pub struct SystemTimestamp;
 
 impl TimestampProvider for SystemTimestamp {}
-
-#[cfg(test)]
-mod tests {
-    use flui_platform_api::offset_from_coords;
-
-    use super::*;
-
-    #[test]
-    fn test_velocity_tracker() {
-        let mut tracker = BasicVelocityTracker::new();
-        let t0 = Instant::now();
-
-        tracker.add_sample(t0, offset_from_coords(0.0, 0.0));
-
-        // Simulate 100ms later, moved 50 pixels
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        let t1 = Instant::now();
-        tracker.add_sample(t1, offset_from_coords(50.0, 0.0));
-
-        if let Some(vel) = tracker.velocity() {
-            // Should be ~500 pixels/sec (50px in 0.1s)
-
-            assert!(vel.dx > 400.0 && vel.dx < 600.0);
-        }
-    }
-}

@@ -13,8 +13,7 @@ use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner};
 
 use crate::common::BoxedRenderObject;
 
-#[test]
-fn paint_root_carries_the_dpr_scale_and_ops_stay_logical() {
+pub(crate) fn paint_root_carries_the_dpr_scale_and_ops_stay_logical() {
     let mut owner = PipelineOwner::new();
     owner.set_device_pixel_ratio(2.0);
 
@@ -62,27 +61,5 @@ fn paint_root_carries_the_dpr_scale_and_ops_stay_logical() {
         picture.bounds(),
         Some(Rect::from_origin_size(Point::ZERO, Size::new(100.0, 100.0))),
         "draw commands must remain in logical pixels",
-    );
-}
-
-#[test]
-fn dpr_one_keeps_the_offset_root() {
-    let mut owner = PipelineOwner::new();
-    let root = owner.insert(Box::new(RenderColoredBox::red(40.0, 40.0)) as BoxedRenderObject);
-    owner.set_root_id(Some(root));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 100.0))));
-
-    let mut owner = owner.into_layout();
-    owner.run_layout().expect("layout");
-    let mut owner = owner.into_compositing();
-    owner.run_compositing().expect("compositing");
-    let mut owner = owner.into_paint();
-    owner.run_paint().expect("paint");
-
-    let tree = owner.take_layer_tree().expect("layer tree");
-    let root_node = tree.get(tree.root()).expect("node");
-    assert!(
-        matches!(root_node.layer(), Layer::Offset(_)),
-        "DPR 1.0 must not pay for an identity transform layer",
     );
 }

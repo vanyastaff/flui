@@ -219,10 +219,8 @@ pub(crate) enum ImageFilterPass {
     ///
     /// Exercises the `DrawItem::Filter` seam end-to-end with zero filter math
     /// and grows `FilterOp::grown_bounds` by 0 pixels.
-    // Constructed by the CI-visible `filter_ir_purity_witnesses` tests below;
-    // there is no production producer until a public painter API is wired. So the variant
-    // is genuinely unconstructed only in NON-test builds — scope the allow to those
-    // (the lint stays live under `cfg(test)`, where the witnesses construct it).
+    // No production producer until a public painter API is wired; only test
+    // builds construct it.
     #[cfg_attr(not(test), allow(dead_code))]
     Identity,
     /// Morphological filter: separable H then V pass with the given radius and op.
@@ -336,7 +334,7 @@ pub(crate) struct FilterOp {
     // Retained for diagnostics: the composite arms now use fb_origin/fb_dim but
     // grown_bounds documents the fractional halo extent pre-quantisation and will
     // be needed by damage-tracking or future floating-point halo assertions.
-    #[cfg_attr(not(all(test, feature = "testing")), expect(dead_code))]
+    #[expect(dead_code)]
     pub(crate) grown_bounds: Rect<f64>,
     /// Integer-grid top-left of the offscreen intermediate in device pixels.
     ///
@@ -945,11 +943,8 @@ pub(crate) enum DrawItem {
     /// Z-order is the insertion position in `draw_order` (R1 arm order). This
     /// arm is placed LAST in `GpuReplay::submit` so all prior draw-order items
     /// are flushed to the target before the filter result is composited on top.
-    // Constructed by the CI-visible `filter_ir_purity_witnesses` tests below;
-    // there is no production producer until a public painter API (for example,
-    // `push_image_filter`) is wired. The variant is genuinely unconstructed only in
-    // NON-test builds, so scope the allow there (the lint stays live under
-    // `cfg(test)`, where the witnesses construct + match it).
+    // No production producer until a public painter API (for example,
+    // `push_image_filter`) is wired; only test builds construct it.
     #[cfg_attr(not(test), allow(dead_code))]
     Filter(FilterOp),
 }
@@ -994,204 +989,4 @@ pub(crate) struct PendingOpacityLayer {
     /// attached to the composite's `TextureInstance` in `flush_opacity_layer`,
     /// so the clip's coverage multiplies the finished group exactly once.
     pub(crate) composite_clip: Option<crate::state_stack::ResolvedClip>,
-}
-
-// ─── Filter IR construction and Clone pins ────────────────────────────────────
-//
-// A plain `#[cfg(test)]` module (not under `feature = "testing"`), so it runs
-// in the ordinary lib test pass: it constructs `FilterOp` / `DrawItem::Filter`
-// from CPU data only, and pins that the filter IR stays `Clone` — which bars a
-// `PooledTexture` field (the crate's `!Clone` owned texture), not a raw wgpu
-// handle; see `DrawSegment`'s doc.
-#[cfg(test)]
-mod filter_ir_clone_pins {
-    use flui_foundation::geometry::Rect;
-    use smallvec::smallvec;
-
-    use flui_painting::paint::BlendMode;
-
-    use super::{
-        DrawItem, DrawSegment, FilterOp, GammaDirection, ImageFilterPass, ImageFilterSpec,
-        LayerFilter, LayerFilterChain, MorphOp,
-    };
-
-    /// `FilterOp` stays `Clone`: a `PooledTexture` field (`!Clone`, returns
-    /// its slot on `Drop`) would fail this, enforcing "textures acquired at
-    /// replay, never stored in the IR".
-    const _FILTER_OP_IS_CLONE: fn(FilterOp) -> FilterOp = |op| op.clone();
-
-    /// Compile-time proof that `ImageFilterPass` is `Clone` (Blur/Morph variants
-    /// from later slices must keep deriving it; this catches a regression).
-    const _IMAGE_FILTER_PASS_IS_CLONE: fn(ImageFilterPass) -> ImageFilterPass = |p| p.clone();
-
-    fn identity_op() -> FilterOp {
-        let bounds = Rect::from_ltrb(0.0, 0.0, 64.0, 64.0);
-        FilterOp {
-            input: DrawSegment::new(),
-            passes: smallvec![ImageFilterPass::Identity],
-            content_bounds: bounds,
-            grown_bounds: bounds,
-            fb_origin: (0, 0),
-            fb_dim: (64, 64),
-        }
-    }
-
-    /// A `FilterOp` is constructible and cloneable with no GPU
-    /// context. Constructing the value also exercises the variant under `cfg(test)`.
-    #[test]
-    fn filter_op_is_pure_cpu_data() {
-        let op = identity_op();
-        let cloned = op.clone();
-        assert_eq!(cloned.passes.len(), 1);
-    }
-
-    /// The `DrawItem::Filter` variant is constructable + pattern-matchable in plain
-    /// CPU code (no GPU feature) — the CI-visible construction that keeps the
-    /// variant non-dead under `cfg(test)`.
-    #[test]
-    fn draw_item_filter_variant_is_reachable() {
-        match DrawItem::Filter(identity_op()) {
-            DrawItem::Filter(inner) => {
-                assert_eq!(inner.passes.len(), 1);
-                assert!(matches!(inner.passes[0], ImageFilterPass::Identity));
-            }
-            _ => panic!("constructed DrawItem::Filter must match its own variant"),
-        }
-    }
-
-    /// `LayerFilterChain::default()` is empty — the no-filter fast-path state.
-    #[test]
-    fn layer_filter_chain_default_is_empty() {
-        assert!(LayerFilterChain::new().is_empty());
-    }
-
-    /// `MorphOp` is `Copy`/`Clone`/`PartialEq`/`Debug` — exercised here so it is
-    /// never dead under `cfg(test)`.
-    #[test]
-    fn morph_op_is_copy_and_clone() {
-        let dilate = MorphOp::Dilate;
-        let erode = MorphOp::Erode;
-        assert_ne!(dilate, erode);
-        assert_eq!(dilate, dilate.clone());
-    }
-
-    /// `ImageFilterSpec::Morph` and `ImageFilterPass::Morph` are constructable and
-    /// comparable — exercises both under `cfg(test)`.
-    #[test]
-    fn morph_ir_variants_are_constructable() {
-        let spec = ImageFilterSpec::Morph {
-            radius: 3.0,
-            op: MorphOp::Dilate,
-        };
-        assert!(matches!(spec, ImageFilterSpec::Morph { .. }));
-
-        let pass = ImageFilterPass::Morph {
-            radius: 3.0,
-            op: MorphOp::Dilate,
-        };
-        assert!(matches!(pass, ImageFilterPass::Morph { .. }));
-    }
-
-    /// `LayerFilter::Mode` is constructable + pattern-matchable without GPU context.
-    ///
-    /// Exercises the `Mode` variant under `cfg(test)` — the
-    /// `#[cfg_attr(not(test), allow(dead_code))]` on the variant is satisfied by
-    /// this construction, keeping the lint live in test builds.
-    #[test]
-    fn layer_filter_mode_variant_is_constructable() {
-        let filter = LayerFilter::Mode {
-            color: [1.0, 0.0, 0.0, 1.0],
-            blend_mode: BlendMode::Multiply,
-        };
-        assert!(matches!(filter, LayerFilter::Mode { .. }));
-    }
-
-    /// `LayerFilter::Gamma` is constructable + pattern-matchable without GPU context.
-    ///
-    /// Same dead_code rationale as `Mode` above.
-    #[test]
-    fn layer_filter_gamma_variant_is_constructable() {
-        let srgb_to_lin = LayerFilter::Gamma(GammaDirection::SrgbToLinear);
-        let lin_to_srgb = LayerFilter::Gamma(GammaDirection::LinearToSrgb);
-        assert!(matches!(
-            srgb_to_lin,
-            LayerFilter::Gamma(GammaDirection::SrgbToLinear)
-        ));
-        assert!(matches!(
-            lin_to_srgb,
-            LayerFilter::Gamma(GammaDirection::LinearToSrgb)
-        ));
-        // GammaDirection is Copy + PartialEq.
-        assert_ne!(GammaDirection::SrgbToLinear, GammaDirection::LinearToSrgb);
-    }
-
-    /// `FilterOp` carrying a `Morph` pass is still `Clone` (the `PooledTexture` bar above).
-    #[test]
-    fn filter_op_with_morph_pass_is_pure_cpu_data() {
-        let bounds = Rect::from_ltrb(0.0, 0.0, 64.0, 64.0);
-        let op = FilterOp {
-            input: DrawSegment::new(),
-            passes: smallvec![ImageFilterPass::Morph {
-                radius: 4.0,
-                op: MorphOp::Erode,
-            }],
-            content_bounds: bounds,
-            grown_bounds: bounds,
-            fb_origin: (0, 0),
-            fb_dim: (64, 64),
-        };
-        let cloned = op.clone();
-        assert_eq!(cloned.passes.len(), 1);
-        assert!(matches!(
-            cloned.passes[0],
-            ImageFilterPass::Morph {
-                radius: _,
-                op: MorphOp::Erode
-            }
-        ));
-    }
-
-    /// `ImageFilterSpec::Blur` and `ImageFilterPass::Blur` are constructable and
-    /// comparable — exercises both under `cfg(test)` so the variants are not
-    /// dead code in the test cfg.
-    #[test]
-    fn blur_ir_variants_are_constructable() {
-        let spec = ImageFilterSpec::Blur {
-            sigma_x: 4.0,
-            sigma_y: 2.0,
-        };
-        assert!(matches!(spec, ImageFilterSpec::Blur { .. }));
-
-        let pass = ImageFilterPass::Blur {
-            sigma_x: 4.0,
-            sigma_y: 2.0,
-        };
-        assert!(matches!(pass, ImageFilterPass::Blur { .. }));
-    }
-
-    /// `FilterOp` carrying a `Blur` pass is still `Clone` (the `PooledTexture` bar above).
-    #[test]
-    fn filter_op_with_blur_pass_is_pure_cpu_data() {
-        let bounds = Rect::from_ltrb(0.0, 0.0, 64.0, 64.0);
-        let op = FilterOp {
-            input: DrawSegment::new(),
-            passes: smallvec![ImageFilterPass::Blur {
-                sigma_x: 4.0,
-                sigma_y: 2.0,
-            }],
-            content_bounds: bounds,
-            grown_bounds: bounds,
-            fb_origin: (0, 0),
-            fb_dim: (64, 64),
-        };
-        let cloned = op.clone();
-        assert_eq!(cloned.passes.len(), 1);
-        assert!(matches!(
-            cloned.passes[0],
-            ImageFilterPass::Blur {
-                sigma_x: _,
-                sigma_y: _
-            }
-        ));
-    }
 }

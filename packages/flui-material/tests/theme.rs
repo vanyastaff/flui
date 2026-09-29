@@ -51,8 +51,7 @@ impl StatelessView for ThemeOfCapture {
 /// `Theme::of` returns exactly the ancestor's data when a `Theme` is present
 /// — the success path of the panicking accessor, distinct from (and until
 /// now uncovered by) the `Theme::maybe_of` tests in `inherited_theme.rs`.
-#[test]
-fn theme_of_panicking_accessor_returns_ancestor_theme_data() {
+pub fn theme_of_panicking_accessor_returns_ancestor_theme_data() {
     let captured: Arc<Mutex<Option<ThemeData>>> = Arc::new(Mutex::new(None));
     // Sentinel primary color distinct from both presets so the assertion
     // fails if `Theme::of` returned a preset instead of the provided value.

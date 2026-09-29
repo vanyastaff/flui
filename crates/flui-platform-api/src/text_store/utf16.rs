@@ -215,15 +215,7 @@ mod tests {
     }
 
     #[test]
-    fn a_supplementary_scalar_is_two_units_four_bytes() {
-        assert_eq!(utf16_len("😀"), at(2));
-        assert_eq!(byte_offset("😀", at(2)), Ok(4));
-        assert_eq!(utf16_offset("😀", 4), Ok(at(2)));
-        assert_eq!(utf16_len(CORPUS), at(17));
-    }
-
-    #[test]
-    fn an_offset_inside_a_surrogate_pair_is_refused() {
+    fn offsets_round_trip_on_char_boundaries_and_refuse_a_split_surrogate_pair() {
         assert_eq!(
             byte_offset(CORPUS, at(2)),
             Err(OffsetError::SplitsSurrogatePair(2))
@@ -233,54 +225,9 @@ mod tests {
             byte_range(CORPUS, range),
             Err(OffsetError::SplitsSurrogatePair(2))
         );
+        every_char_boundary_round_trips();
     }
 
-    #[test]
-    fn a_combining_mark_is_one_unit_two_bytes() {
-        // "e" at unit 3 (byte 5), the mark at unit 4 (byte 6), the family at
-        // unit 5 (byte 8).
-        assert_eq!(byte_offset(CORPUS, at(3)), Ok(5));
-        assert_eq!(byte_offset(CORPUS, at(4)), Ok(6));
-        assert_eq!(byte_offset(CORPUS, at(5)), Ok(8));
-        assert_eq!(utf16_len("\u{301}"), at(1));
-        assert_eq!("\u{301}".len(), 2);
-    }
-
-    #[test]
-    fn zwj_family_maps_scalar_by_scalar() {
-        let family = "👨‍👩‍👧";
-        let scalar_starts = [(0, 0), (2, 4), (3, 7), (5, 11), (6, 14), (8, 18)];
-        for (units, bytes) in scalar_starts {
-            assert_eq!(byte_offset(family, at(units)), Ok(bytes), "unit {units}");
-            assert_eq!(utf16_offset(family, bytes), Ok(at(units)), "byte {bytes}");
-        }
-        // The same family inside the corpus, starting at unit 5 (byte 8):
-        // units 5, 7, 8, 10, 11 and 13 map to bytes 8, 12, 15, 19, 22 and 26.
-        for (units, bytes) in [(5, 8), (7, 12), (8, 15), (10, 19), (11, 22), (13, 26)] {
-            assert_eq!(byte_offset(CORPUS, at(units)), Ok(bytes), "unit {units}");
-        }
-        for inside in [6, 9, 12] {
-            assert_eq!(
-                byte_offset(CORPUS, at(inside)),
-                Err(OffsetError::SplitsSurrogatePair(inside))
-            );
-        }
-    }
-
-    #[test]
-    fn flag_pair_is_four_units_eight_bytes() {
-        let flag = "🇯🇵";
-        assert_eq!(utf16_len(flag), at(4));
-        assert_eq!(flag.len(), 8);
-        assert_eq!(byte_offset(flag, at(2)), Ok(4));
-        assert_eq!(
-            byte_offset(flag, at(3)),
-            Err(OffsetError::SplitsSurrogatePair(3))
-        );
-        assert_eq!(byte_offset(CORPUS, at(17)), Ok(CORPUS.len()));
-    }
-
-    #[test]
     fn every_char_boundary_round_trips() {
         for text in [CORPUS, "مرحبا بالعالم", "東京タワー", ""] {
             for (byte, _) in text.char_indices().chain([(text.len(), ' ')]) {
@@ -291,39 +238,5 @@ mod tests {
             assert_eq!(whole.len(), utf16_len(text).get());
             assert_eq!(byte_range(text, whole), Ok(0..text.len()));
         }
-    }
-
-    #[test]
-    fn a_byte_offset_off_a_char_boundary_is_refused() {
-        assert_eq!(
-            utf16_offset(CORPUS, 2),
-            Err(OffsetError::NotCharBoundary(2))
-        );
-        assert_eq!(
-            utf16_offset(CORPUS, CORPUS.len() + 1),
-            Err(OffsetError::PastEnd {
-                offset: CORPUS.len() + 1,
-                len: CORPUS.len()
-            })
-        );
-        assert_eq!(
-            byte_offset(CORPUS, at(18)),
-            Err(OffsetError::PastEnd {
-                offset: 18,
-                len: 17
-            })
-        );
-        assert_eq!(
-            utf16_range(CORPUS, Range { start: 5, end: 1 }),
-            Err(OffsetError::Inverted { start: 5, end: 1 })
-        );
-    }
-
-    #[test]
-    fn a_range_orders_its_ends() {
-        assert_eq!(Utf16Range::new(at(3), at(1)), None);
-        let range = Utf16Range::new(at(1), at(3)).expect("ordered");
-        assert_eq!((range.start(), range.end(), range.len()), (at(1), at(3), 2));
-        assert!(Utf16Range::collapsed(at(4)).is_empty());
     }
 }

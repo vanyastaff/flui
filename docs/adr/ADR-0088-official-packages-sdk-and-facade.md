@@ -339,22 +339,21 @@ In place with moves 2 and 3:
   that names an official package (normal and dev planted), on an official package whose normal
   edge leaves the SDK, on an official package's dev edge to another official package, and on a member under `packages/` that is not official or lists
   `edge-exceptions`; excepted edges and a `tool` crate's edge stay silent.
-- **The design systems on the SDK alone.** `the_design_systems_build_on_the_sdk_alone` in
-  `tools/xtask` reads the real metadata: the manifests are `packages/flui-material/Cargo.toml`
-  and `packages/flui-cupertino/Cargo.toml`, and each one's normal and build dependencies are
-  exactly `flui-sdk` and `tracing`; `the_design_systems_carry_no_dependents_list` checks that
-  neither keeps an `allowed-dependents` list.
+- **The design systems on the SDK alone.** The manifests are
+  `packages/flui-material/Cargo.toml` and `packages/flui-cupertino/Cargo.toml`, and each one's
+  normal and build dependencies are `flui-sdk` and `tracing`; the kind rule above fails
+  `cargo xtask workspace` on any other framework edge, and neither keeps an
+  `allowed-dependents` list.
 - **Derives through the SDK.** `sdk_consumers_derive_through_the_sdk_even_beside_the_facade` in
   `tests/facade_consumer.rs` builds a consumer on `flui-sdk` alone (plain and renamed) and one
   with the facade as a dev-dependency, each using the FLUI derives.
 
 In place with move 4 (devtools):
 
-- **Devtools on the SDK alone.** `devtools_builds_on_the_sdk_alone` in `tools/xtask` reads the
-  real metadata: the manifest is `packages/flui-devtools/Cargo.toml`, it lists no
-  `edge-exceptions`, and its normal and build dependencies are exactly `flui-sdk`,
-  `parking_lot`, `serde`, `serde_json`, `tracing`, `tracing-subscriber` and `web-time`. The
-  seeded exception set in `the_tiers_match_the_adr_0081_table` no longer holds devtools' or
+- **Devtools on the SDK alone.** The manifest is `packages/flui-devtools/Cargo.toml`, it lists
+  no `edge-exceptions`, and its only framework normal dependency is `flui-sdk` (the rest are
+  `parking_lot`, `serde`, `serde_json`, `tracing`, `tracing-subscriber` and `web-time`), held
+  by the kind rule. The seeded `edge-exceptions` no longer hold devtools' or
   `flui-testing`'s entries, and `crates/flui-sdk/tests/surface.rs` pins `hooks::FrameSnapshot`
   and names the `foundation::observe` items.
 

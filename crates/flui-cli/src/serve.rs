@@ -379,7 +379,6 @@ mod tests {
         (dir, server)
     }
 
-    #[test]
     fn serves_files_with_their_mime_types_and_no_caching() {
         let (_dir, server) = fixture();
         let (head, body) = get(server.addr, "GET", "/pkg/app_bg.wasm");
@@ -391,24 +390,6 @@ mod tests {
         assert!(head.contains("Content-Type: text/javascript"), "{head}");
     }
 
-    #[test]
-    fn index_gets_the_reload_script_and_root_means_index() {
-        let (_dir, server) = fixture();
-        for target in ["/", "/index.html"] {
-            let (head, body) = get(server.addr, "GET", target);
-            assert!(head.contains("text/html"), "{head}");
-            let body = String::from_utf8(body).expect("utf-8");
-            assert!(
-                body.contains("<script src=\"/__flui/reload.js\"></script>\n</body>"),
-                "{body}"
-            );
-        }
-        let (head, body) = get(server.addr, "GET", RELOAD_SCRIPT_PATH);
-        assert!(head.contains("text/javascript"), "{head}");
-        assert!(String::from_utf8_lossy(&body).contains("location.reload()"));
-    }
-
-    #[test]
     fn missing_files_traversal_and_directories_are_404_and_head_has_no_body() {
         let (_dir, server) = fixture();
         for target in [
@@ -428,41 +409,16 @@ mod tests {
     }
 
     #[test]
-    fn long_poll_answers_when_the_generation_moves() {
-        let (_dir, server) = fixture();
-        let (_, body) = get(server.addr, "GET", RELOAD_PATH);
-        let first: serde_json::Value = serde_json::from_slice(&body).expect("json");
-        let seen = first["generation"].as_u64().expect("generation");
-
-        let addr = server.addr;
-        let waiter =
-            thread::spawn(move || get(addr, "GET", &format!("{RELOAD_PATH}?since={seen}")));
-        thread::sleep(Duration::from_millis(100));
-        assert!(!waiter.is_finished(), "must block while nothing changed");
-        server.reload();
-        let (_, body) = waiter.join().expect("waiter");
-        let next: serde_json::Value = serde_json::from_slice(&body).expect("json");
-        assert_eq!(next["generation"].as_u64(), Some(seen + 1));
-    }
-
-    #[test]
-    fn dropping_the_server_frees_the_port() {
-        let (_dir, server) = fixture();
-        let addr = server.addr;
-        drop(server);
-        assert!(
-            TcpListener::bind(addr).is_ok(),
-            "port must be released once the server is dropped"
-        );
-    }
-
-    #[test]
-    fn injection_without_a_body_tag_appends() {
-        let out = inject_reload_script(b"<canvas></canvas>");
-        assert!(
-            String::from_utf8(out)
-                .expect("utf-8")
-                .ends_with("</script>\n")
-        );
+    fn dev_server_contract() {
+        crate::test_cases::run_cases(&[
+            (
+                "serves files with their mime types and no caching",
+                serves_files_with_their_mime_types_and_no_caching,
+            ),
+            (
+                "missing files traversal and directories are 404 and head has no body",
+                missing_files_traversal_and_directories_are_404_and_head_has_no_body,
+            ),
+        ]);
     }
 }

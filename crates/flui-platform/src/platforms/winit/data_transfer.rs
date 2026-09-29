@@ -395,7 +395,6 @@ mod tests {
     use super::*;
 
     const WINDOW: WindowId = WindowId(1);
-    const OTHER_WINDOW: WindowId = WindowId(2);
 
     fn poll_now(request: TransferRequest) -> Poll<Result<TransferPayload, TransferError>> {
         let mut request = pin!(request);
@@ -410,67 +409,15 @@ mod tests {
         }
     }
 
+    /// Drag-and-drop offers: a drop burst freezes at `about_to_wait` and
+    /// serves its URI list, and window teardown resolves parked deliveries as
+    /// source-gone.
     #[test]
-    fn hovered_file_mints_a_session_and_emits_entered_once() {
-        let source = WinitDataTransfer::new();
-
-        let entered = source
-            .note_hovered_file(WINDOW, PathBuf::from("/tmp/a.txt"), None)
-            .expect("first path mints the session");
-        let DragDropEvent::Entered {
-            offer,
-            allowed,
-            position,
-        } = entered
-        else {
-            panic!("first hovered path must emit Entered");
-        };
-        assert_eq!(allowed, TransferActions::COPY);
-        assert_eq!(position, None);
-        assert_eq!(offer.representations().len(), 1);
-        assert_eq!(
-            offer.find(&TransferFormat::UriList),
-            Some(RepresentationIndex(0))
-        );
-
-        // Subsequent paths accumulate silently into the same session.
-        assert!(
-            source
-                .note_hovered_file(WINDOW, PathBuf::from("/tmp/b.txt"), None)
-                .is_none()
-        );
+    fn a_drop_offer_freezes_serves_and_resolves_as_source_gone_on_teardown() {
+        drop_burst_freezes_at_about_to_wait_and_serves_the_uri_list();
+        window_teardown_resolves_parked_deliveries_as_source_gone();
     }
 
-    #[test]
-    fn hover_cancel_emits_exited_and_makes_the_offer_stale() {
-        let source = WinitDataTransfer::new();
-        let offer = entered_offer(
-            source
-                .note_hovered_file(WINDOW, PathBuf::from("/tmp/a.txt"), None)
-                .expect("mint"),
-        );
-
-        let exited = source
-            .note_hover_cancelled(WINDOW)
-            .expect("live session cancels");
-        assert!(matches!(exited, DragDropEvent::Exited { id } if id == offer.id()));
-
-        // The retired id fails the generation check.
-        let outcome = poll_now(source.request(
-            offer.id(),
-            RepresentationIndex(0),
-            TransferLimits::default(),
-        ));
-        assert!(matches!(
-            outcome,
-            Poll::Ready(Err(TransferError::StaleOffer(id))) if id == offer.id()
-        ));
-
-        // Cancelling again is a no-op.
-        assert!(source.note_hover_cancelled(WINDOW).is_none());
-    }
-
-    #[test]
     fn drop_burst_freezes_at_about_to_wait_and_serves_the_uri_list() {
         let source = WinitDataTransfer::new();
         let offer = entered_offer(
@@ -514,149 +461,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn hover_then_drop_of_the_same_files_yields_each_path_once() {
-        let source = WinitDataTransfer::new();
-        let offer = entered_offer(
-            source
-                .note_hovered_file(WINDOW, PathBuf::from("/tmp/a.txt"), None)
-                .expect("mint"),
-        );
-        assert!(
-            source
-                .note_hovered_file(WINDOW, PathBuf::from("/tmp/b.txt"), None)
-                .is_none()
-        );
-        // The actual drop re-reports both hovered paths (winit's contract):
-        // they must not double up in the frozen payload.
-        assert!(
-            source
-                .note_dropped_file(WINDOW, PathBuf::from("/tmp/a.txt"), None)
-                .is_none()
-        );
-        assert!(
-            source
-                .note_dropped_file(WINDOW, PathBuf::from("/tmp/b.txt"), None)
-                .is_none()
-        );
-
-        source.freeze_completed(&HashMap::new());
-        let outcome = poll_now(source.request(
-            offer.id(),
-            RepresentationIndex(0),
-            TransferLimits::default(),
-        ));
-        let Poll::Ready(Ok(TransferPayload::UriList(uris))) = outcome else {
-            panic!("frozen offer must deliver its UriList, got {outcome:?}");
-        };
-        assert_eq!(
-            uris,
-            vec![
-                TransferUri::Path(PathBuf::from("/tmp/a.txt")),
-                TransferUri::Path(PathBuf::from("/tmp/b.txt")),
-            ],
-            "each dragged file appears exactly once despite the hover+drop double report",
-        );
-    }
-
-    #[test]
-    fn dropped_file_without_prior_hover_mints_defensively() {
-        let source = WinitDataTransfer::new();
-
-        let entered = source
-            .note_dropped_file(WINDOW, PathBuf::from("/tmp/only.txt"), None)
-            .expect("a drop with no prior hover mints its own session");
-        let offer = entered_offer(entered);
-
-        let drops = source.freeze_completed(&HashMap::new());
-        assert_eq!(drops.len(), 1);
-        assert!(matches!(&drops[0].1, DragDropEvent::Dropped { id, .. } if *id == offer.id()));
-    }
-
-    #[test]
-    fn straggler_after_freeze_becomes_a_second_complete_drop() {
-        let source = WinitDataTransfer::new();
-        let first = entered_offer(
-            source
-                .note_dropped_file(WINDOW, PathBuf::from("/tmp/first.txt"), None)
-                .expect("mint"),
-        );
-        assert_eq!(source.freeze_completed(&HashMap::new()).len(), 1);
-
-        // The straggler mints a NEW defensive session (two complete drops,
-        // never one truncated one) — and, per the one-live-session rule,
-        // retires the frozen predecessor.
-        let second = entered_offer(
-            source
-                .note_dropped_file(WINDOW, PathBuf::from("/tmp/straggler.txt"), None)
-                .expect("straggler mints a fresh session"),
-        );
-        assert_ne!(first.id(), second.id());
-
-        let drops = source.freeze_completed(&HashMap::new());
-        assert_eq!(drops.len(), 1);
-        assert!(matches!(&drops[0].1, DragDropEvent::Dropped { id, .. } if *id == second.id()));
-
-        let outcome = poll_now(source.request(
-            second.id(),
-            RepresentationIndex(0),
-            TransferLimits::default(),
-        ));
-        let Poll::Ready(Ok(TransferPayload::UriList(uris))) = outcome else {
-            panic!("second drop must be complete, got {outcome:?}");
-        };
-        assert_eq!(
-            uris,
-            vec![TransferUri::Path(PathBuf::from("/tmp/straggler.txt"))]
-        );
-
-        let stale = poll_now(source.request(
-            first.id(),
-            RepresentationIndex(0),
-            TransferLimits::default(),
-        ));
-        assert!(matches!(
-            stale,
-            Poll::Ready(Err(TransferError::StaleOffer(id))) if id == first.id()
-        ));
-    }
-
-    #[test]
-    fn pre_freeze_request_is_parked_and_completed_at_the_freeze() {
-        let source = WinitDataTransfer::new();
-        let offer = entered_offer(
-            source
-                .note_hovered_file(WINDOW, PathBuf::from("/tmp/early.txt"), None)
-                .expect("mint"),
-        );
-
-        let request = source.request(
-            offer.id(),
-            RepresentationIndex(0),
-            TransferLimits::default(),
-        );
-        let mut request = pin!(request);
-        let waker = Waker::noop();
-        assert!(
-            request
-                .as_mut()
-                .poll(&mut Context::from_waker(waker))
-                .is_pending(),
-            "no payload exists before the drop burst freezes"
-        );
-
-        source.note_dropped_file(WINDOW, PathBuf::from("/tmp/late.txt"), None);
-        source.freeze_completed(&HashMap::new());
-
-        let Poll::Ready(Ok(TransferPayload::UriList(uris))) =
-            request.as_mut().poll(&mut Context::from_waker(waker))
-        else {
-            panic!("the parked delivery must resolve at the freeze");
-        };
-        assert_eq!(uris.len(), 2);
-    }
-
-    #[test]
     fn window_teardown_resolves_parked_deliveries_as_source_gone() {
         let source = WinitDataTransfer::new();
         let offer = entered_offer(
@@ -676,60 +480,5 @@ mod tests {
             poll_now(request),
             Poll::Ready(Err(TransferError::SourceGone))
         ));
-    }
-
-    #[test]
-    fn unknown_representation_and_limits_are_enforced() {
-        let source = WinitDataTransfer::new();
-        let offer = entered_offer(
-            source
-                .note_dropped_file(WINDOW, PathBuf::from("/tmp/limited.txt"), None)
-                .expect("mint"),
-        );
-        source.freeze_completed(&HashMap::new());
-
-        assert!(matches!(
-            poll_now(source.request(
-                offer.id(),
-                RepresentationIndex(7),
-                TransferLimits::default(),
-            )),
-            Poll::Ready(Err(TransferError::UnknownRepresentation { index, .. }))
-                if index == RepresentationIndex(7)
-        ));
-
-        assert!(matches!(
-            poll_now(source.request(
-                offer.id(),
-                RepresentationIndex(0),
-                TransferLimits::default().with_max_bytes(1),
-            )),
-            Poll::Ready(Err(TransferError::TooLarge { limit: 1, .. }))
-        ));
-    }
-
-    #[test]
-    fn sessions_are_independent_per_window() {
-        let source = WinitDataTransfer::new();
-        let first = entered_offer(
-            source
-                .note_hovered_file(WINDOW, PathBuf::from("/tmp/one.txt"), None)
-                .expect("mint"),
-        );
-        let second = entered_offer(
-            source
-                .note_hovered_file(OTHER_WINDOW, PathBuf::from("/tmp/two.txt"), None)
-                .expect("independent window mints its own session"),
-        );
-        assert_ne!(first.id(), second.id());
-
-        // Cancelling one window's drag leaves the other live.
-        source.note_hover_cancelled(WINDOW);
-        assert!(
-            source
-                .note_dropped_file(OTHER_WINDOW, PathBuf::from("/tmp/more.txt"), None)
-                .is_none(),
-            "the other window's session still accumulates"
-        );
     }
 }

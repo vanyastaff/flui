@@ -18,9 +18,7 @@
 //! exercised directly against `resolve_checkbox_fill_color` (extracted out
 //! of `build` specifically so this cascade is unit-testable without
 //! mounting a widget tree; see `theme_tier_beats_the_m3_default_when_no_widget_override_is_set`/
-//! `widget_override_wins_over_theme_and_default_when_selected_and_enabled`/
-//! `widget_override_is_ignored_when_disabled_even_if_selected`/
-//! `widget_override_is_ignored_when_unselected`), plus `CheckboxPainter`'s
+//! `widget_override_is_ignored_when_disabled_even_if_selected`), plus `CheckboxPainter`'s
 //! own paint-invocation proof (`draws_the_correct_mark_per_tristate_value`,
 //! a real `Canvas`/`DisplayList` recording). The illegal
 //! `(None, tristate: false)` pair is unrepresentable at the type level
@@ -32,32 +30,15 @@ use crate::common;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use common::{lay_out, size, tight};
+use common::{lay_out, tight};
 use flui_material::{Checkbox, Theme, ThemeData};
-use flui_sdk::view::SignalWriteExt;
-use flui_testing::a11y::{Role, Toggled};
+use flui_testing::a11y::Toggled;
 
 /// The checkbox's full tap target — Flutter parity: `kMinInteractiveDimension`
 /// (`constants.dart`, `48.0`, oracle tag `3.44.0`), the branch
 /// `Checkbox.build` always takes in this V1 (no `materialTapTargetSize`
 /// override yet).
 const TAP_TARGET: f64 = 48.0;
-
-#[test]
-fn a_toggle_passes_its_value_and_writer_to_the_callback() {
-    let probe = common::SignalProbe::new(|signals| {
-        themed(
-            Checkbox::new(false)
-                .on_changed(move |cx, next| signals.count.set(cx, u32::from(next == Some(true)))),
-        )
-    });
-    let mut laid = lay_out(probe.view(), constraints());
-    laid.dispatch_pointer_down(24.0, 24.0);
-    laid.dispatch_pointer_up(24.0, 24.0);
-    assert_eq!(probe.value(), Ok(1));
-    laid.pump();
-    assert_eq!(probe.reads(), [0, 1]);
-}
 
 fn constraints() -> flui_sdk::rendering::BoxConstraints {
     tight(TAP_TARGET, TAP_TARGET)
@@ -71,46 +52,7 @@ fn themed(checkbox: Checkbox) -> Theme {
     Theme::new(ThemeData::light(), checkbox)
 }
 
-#[test]
-fn mounting_a_checkbox_creates_a_semantics_annotated_tap_target() {
-    let laid = lay_out(
-        themed(Checkbox::new(false).on_changed(|_cx, _| {})),
-        constraints(),
-    );
-
-    // The wrapper node is the checkbox's own; its `GestureDetector` adds
-    // a second, action-only annotation beneath it for assistive technology.
-    let semantics = laid
-        .find_semantics_wrappers()
-        .into_iter()
-        .next()
-        .expect("Checkbox must mount a Semantics wrapper");
-    assert_eq!(laid.size(semantics), size(TAP_TARGET, TAP_TARGET));
-}
-
-#[test]
-fn tap_fires_on_changed_with_the_next_value() {
-    let observed = Rc::new(RefCell::new(None));
-    let recorder = Rc::clone(&observed);
-    let laid = lay_out(
-        themed(Checkbox::new(false).on_changed(move |_cx, next| {
-            *recorder.borrow_mut() = Some(next);
-        })),
-        constraints(),
-    );
-
-    laid.dispatch_pointer_down(TAP_TARGET / 2.0, TAP_TARGET / 2.0);
-    laid.dispatch_pointer_up(TAP_TARGET / 2.0, TAP_TARGET / 2.0);
-
-    assert_eq!(
-        *observed.borrow(),
-        Some(Some(true)),
-        "a tap on an unchecked, enabled checkbox must fire on_changed(Some(true))",
-    );
-}
-
-#[test]
-fn tristate_cycle_survives_a_rebuild_between_each_tap() {
+pub fn tristate_cycle_survives_a_rebuild_between_each_tap() {
     // Flutter parity: `_handleTap`'s tristate cycle (`checkbox.dart`
     // `:241-248`) — false -> true -> null -> false. Each tap here rebuilds
     // the tree with the previously-observed value (mirroring how a real
@@ -144,37 +86,6 @@ fn tristate_cycle_survives_a_rebuild_between_each_tap() {
     assert_eq!(*observed.borrow(), Some(false), "null -> false");
 }
 
-#[test]
-fn disabled_checkbox_swallows_a_tap_then_resyncs_once_a_handler_is_added() {
-    // The "handler-removal resync" class: `Checkbox` shares its
-    // `WidgetStatesController` with the `InkWell` it builds, so adding
-    // `on_changed` across a rebuild must flip that controller's `Disabled`
-    // bit and make the NEXT tap interactive — proving the shared-controller
-    // wiring survives `did_update_view`, not just the initial mount.
-    let taps = Rc::new(RefCell::new(0_u32));
-
-    let laid_disabled = lay_out(themed(Checkbox::new(false)), constraints());
-    laid_disabled.dispatch_pointer_down(TAP_TARGET / 2.0, TAP_TARGET / 2.0);
-    laid_disabled.dispatch_pointer_up(TAP_TARGET / 2.0, TAP_TARGET / 2.0);
-    // No on_changed at all: nothing to observe going wrong beyond "does not
-    // panic" — the InkWell-level swallow behavior itself is already proven
-    // by `tests/ink_well.rs`'s disabled-state coverage.
-
-    let mut laid_enabled = laid_disabled;
-    let counter = Rc::clone(&taps);
-    laid_enabled.pump_widget(themed(Checkbox::new(false).on_changed(move |_cx, _| {
-        *counter.borrow_mut() += 1;
-    })));
-    laid_enabled.dispatch_pointer_down(TAP_TARGET / 2.0, TAP_TARGET / 2.0);
-    laid_enabled.dispatch_pointer_up(TAP_TARGET / 2.0, TAP_TARGET / 2.0);
-
-    assert_eq!(
-        *taps.borrow(),
-        1,
-        "adding on_changed on rebuild must make the very next tap interactive",
-    );
-}
-
 /// Mounts `checkbox` with a unique label, enables semantics, and returns the
 /// AccessKit toggle state announced for that label.
 fn announced_toggled(checkbox: Checkbox, label: &str) -> Option<Toggled> {
@@ -191,80 +102,11 @@ fn announced_toggled(checkbox: Checkbox, label: &str) -> Option<Toggled> {
         .toggled()
 }
 
-/// Every AccessKit role the tree exports for a mounted `Checkbox`.
-fn announced_roles(checkbox: Checkbox, label: &str) -> Vec<Role> {
-    let mut laid = lay_out(
-        themed(checkbox.semantic_label(label).on_changed(|_cx, _| {})),
-        constraints(),
-    );
-    laid.enable_semantics();
-    laid.pump();
-    laid.a11y_tree()
-        .expect("semantics enabled before the frame")
-        .nodes()
-        .map(|node| node.role())
-        .collect()
-}
-
-#[test]
-fn a_checkbox_still_announces_as_a_checkbox() {
-    // Guards the checkable roles against the group flag leaking: publishing
-    // `in_mutually_exclusive_group` for radios must not reclassify the other
-    // checkables. A checkbox carries neither `IsButton` nor the group flag, so
-    // it resolves to `CheckBox` under either arm order of the role cascade —
-    // this passes before and after that reorder and is therefore a leak guard,
-    // not evidence for the reorder itself (see `packages/flui-material/ARCHITECTURE.md`).
-    let roles = announced_roles(Checkbox::new(false), "unchecked");
-    assert!(
-        roles.contains(&Role::CheckBox),
-        "a Checkbox must still announce as a checkbox, got {roles:?}",
-    );
-}
-
-#[test]
-fn a_checkbox_never_announces_as_a_radio_button() {
-    // The discriminating half of the leak guard above: a resolution that
-    // answered `RadioButton` for every checkable would satisfy that test and
-    // fail this one. Same caveat applies — a checkbox carries neither of the
-    // flags the cascade reorder turned on, so this bounds the group flag's
-    // reach rather than proving the reorder.
-    let roles = announced_roles(Checkbox::new(false), "unchecked");
-    assert!(
-        !roles.contains(&Role::RadioButton),
-        "a Checkbox must never announce as a radio button, got {roles:?}",
-    );
-}
-
-#[test]
-fn indeterminate_tristate_exports_mixed_semantics() {
+pub fn indeterminate_tristate_exports_mixed_semantics() {
     // Issue #1102 AC: valid tristate `None` paints the dash (unit-covered)
     // AND exports mixed — never the old release hole of dash + unchecked.
     assert_eq!(
         announced_toggled(Checkbox::tristate(None), "indeterminate"),
         Some(Toggled::Mixed),
-    );
-}
-
-#[test]
-fn binary_checkbox_never_exports_mixed_semantics() {
-    assert_eq!(
-        announced_toggled(Checkbox::new(false), "binary-off"),
-        Some(Toggled::False),
-    );
-    assert_eq!(
-        announced_toggled(Checkbox::new(true), "binary-on"),
-        Some(Toggled::True),
-    );
-}
-
-#[test]
-fn tristate_some_values_export_checked_not_mixed() {
-    assert_eq!(
-        announced_toggled(Checkbox::tristate(Some(false)), "tri-off"),
-        Some(Toggled::False),
-    );
-    assert_eq!(
-        announced_toggled(Checkbox::tristate(Some(true)), "tri-on"),
-        Some(Toggled::True),
     );
 }

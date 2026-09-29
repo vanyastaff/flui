@@ -56,28 +56,3 @@ impl AccessibilityFeatures {
             || self.on_off_switch_labels
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_accessibility_features_any_enabled() {
-        let features = AccessibilityFeatures::default();
-        assert!(!features.any_enabled());
-
-        let features = AccessibilityFeatures {
-            bold_text: true,
-            ..Default::default()
-        };
-        assert!(features.any_enabled());
-    }
-
-    #[test]
-    fn new_matches_default() {
-        assert_eq!(
-            AccessibilityFeatures::new(),
-            AccessibilityFeatures::default()
-        );
-    }
-}

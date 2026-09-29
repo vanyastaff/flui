@@ -1122,7 +1122,7 @@ where
                     // bare mount (element-tree root, no parent) has
                     // `element_parent == None` and stays silent — it is
                     // pinned by `mount_bootstrap.rs` /
-                    // `orphaned_render_mount_tests`.
+                    // `orphaned_render_mount.rs`.
                     tracing::error!(
                         element_id = ?core.self_id(),
                         ?element_parent,

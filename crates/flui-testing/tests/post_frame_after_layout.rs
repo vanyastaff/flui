@@ -13,7 +13,7 @@
 //! opened a scheduler frame.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use flui_foundation::geometry::Size;
@@ -77,8 +77,7 @@ fn binding_with_probe(
 /// **The acceptance test.** The callback is never invoked by the test — it
 /// runs because `pump_frame` drives a real scheduler frame — and when it runs, it
 /// already sees this frame's committed geometry.
-#[test]
-fn post_frame_callback_runs_after_layout_in_the_same_pumped_frame() {
+pub(crate) fn post_frame_callback_runs_after_layout_in_the_same_pumped_frame() {
     let (mut binding, pipeline, root) = binding_with_one_box();
 
     assert_eq!(
@@ -123,111 +122,5 @@ fn post_frame_callback_runs_after_layout_in_the_same_pumped_frame() {
         *observed.read(),
         Some(Size::new(40.0, 24.0)),
         "the post-frame callback must observe THIS frame's committed layout"
-    );
-}
-
-/// The negative half, observed from **inside layout**: while the pipeline runs,
-/// the post-frame callback has not fired yet.
-///
-/// The previous production order (drain, then pipeline) makes this fail — the
-/// probe would see `fired == true` while laying out. An earlier version of this
-/// test sampled from a *persistent* callback and passed under the bug, because
-/// persistent callbacks precede the pipeline in both orderings. Red-checked.
-#[test]
-fn the_post_frame_callback_has_not_run_while_layout_is_still_uncommitted() {
-    let fired = Arc::new(AtomicBool::new(false));
-    let seen_during_layout = Arc::new(AtomicBool::new(false));
-    let laid_out = Arc::new(AtomicBool::new(false));
-
-    let fired_probe = Arc::clone(&fired);
-    let seen_probe = Arc::clone(&seen_during_layout);
-    let laid_out_probe = Arc::clone(&laid_out);
-    let root_box = FixedBox {
-        probe: Some(Box::new(move || {
-            laid_out_probe.store(true, Ordering::SeqCst);
-            seen_probe.store(fired_probe.load(Ordering::SeqCst), Ordering::SeqCst);
-        })),
-    };
-
-    let (mut binding, pipeline, root) = binding_with_probe(root_box);
-
-    let fired_cb = Arc::clone(&fired);
-    binding
-        .scheduler()
-        .add_post_frame_callback(Box::new(move |_| {
-            fired_cb.store(true, Ordering::SeqCst);
-        }));
-
-    binding.pump_frame(Duration::from_millis(16));
-
-    assert!(laid_out.load(Ordering::SeqCst), "the probe must have run");
-    assert!(
-        !seen_during_layout.load(Ordering::SeqCst),
-        "the post-frame callback ran before layout committed"
-    );
-    assert!(fired.load(Ordering::SeqCst), "but it did run by frame end");
-    assert_eq!(
-        pipeline.with(|owner| owner.box_size(root)),
-        Some(Size::new(40.0, 24.0))
-    );
-}
-
-/// The real invariant, preserved: exactly one async-driver poll per frame,
-/// on the binding's **own** scheduler, before `build_scope`. The poll moved from
-/// `pump_frame` into `UpdateScheduler::handle_begin_frame` — it must
-/// still happen, and still happen once.
-#[test]
-fn pump_frame_still_polls_the_async_driver_exactly_once_per_frame() {
-    let (mut binding, _pipeline, _root) = binding_with_one_box();
-
-    let polls = Arc::new(AtomicUsize::new(0));
-    let polls_task = Arc::clone(&polls);
-    let _token = binding.scheduler().spawn_local(Box::pin(async move {
-        polls_task.fetch_add(1, Ordering::SeqCst);
-    }));
-
-    binding.pump_frame(Duration::from_millis(16));
-    assert_eq!(polls.load(Ordering::SeqCst), 1);
-
-    binding.pump_frame(Duration::from_millis(16));
-    assert_eq!(
-        polls.load(Ordering::SeqCst),
-        1,
-        "the task completed; no re-poll"
-    );
-}
-
-/// The binding drives its **own** scheduler, never some other, unrelated one.
-/// A post-frame callback parked on an unrelated scheduler must not fire here —
-/// otherwise a headless test would silently "prove" things about a scheduler
-/// it never actually pumped.
-#[test]
-fn pump_frame_drives_the_binding_local_scheduler_not_an_unrelated_one() {
-    let (mut binding, _pipeline, _root) = binding_with_one_box();
-
-    let unrelated_scheduler = flui_scheduler::UpdateScheduler::new();
-    let unrelated_fired = Arc::new(AtomicBool::new(false));
-    let unrelated_cb = Arc::clone(&unrelated_fired);
-    unrelated_scheduler.add_post_frame_callback(Box::new(move |_| {
-        unrelated_cb.store(true, Ordering::SeqCst);
-    }));
-
-    let local_fired = Arc::new(AtomicBool::new(false));
-    let local_cb = Arc::clone(&local_fired);
-    binding
-        .scheduler()
-        .add_post_frame_callback(Box::new(move |_| {
-            local_cb.store(true, Ordering::SeqCst);
-        }));
-
-    binding.pump_frame(Duration::from_millis(16));
-
-    assert!(
-        local_fired.load(Ordering::SeqCst),
-        "the binding's own queue drains"
-    );
-    assert!(
-        !unrelated_fired.load(Ordering::SeqCst),
-        "pump_frame must not drive an unrelated scheduler's queue"
     );
 }

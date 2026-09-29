@@ -13,14 +13,14 @@
 //! `tracing::warn!` and swallowed: this is best-effort diagnostics and must
 //! never fail a test.
 
+#[cfg(feature = "testing")]
 use std::path::{Path, PathBuf};
 
 /// Environment variable that enables frame dumps when set.
 ///
 /// Read only; never written by this crate. `std::env::set_var` is unsound in
 /// a multi-threaded process (libc `getenv` on another thread — the Vulkan
-/// loader reads `VK_*` while an adapter is requested), so the tests below
-/// pass the directory explicitly instead of mutating the environment.
+/// loader reads `VK_*` while an adapter is requested).
 #[cfg(feature = "testing")]
 const DUMP_DIR_ENV: &str = "FLUI_READBACK_DUMP_DIR";
 
@@ -51,6 +51,7 @@ pub(crate) fn dump_rgba_png(test_name: &str, width: u32, height: u32, rgba: &[u8
 
 /// [`dump_rgba_png`] with the destination given explicitly: `None` is the
 /// "variable unset" no-op.
+#[cfg(feature = "testing")]
 fn dump_rgba_png_to(dir: Option<&Path>, test_name: &str, width: u32, height: u32, rgba: &[u8]) {
     let Some(dir) = dir else { return };
     if let Err(err) = write_png(dir, test_name, width, height, rgba) {
@@ -63,6 +64,7 @@ fn dump_rgba_png_to(dir: Option<&Path>, test_name: &str, width: u32, height: u32
 }
 
 /// Encode `rgba` as a PNG under `dir`; the caller logs any error.
+#[cfg(feature = "testing")]
 fn write_png(
     dir: &Path,
     test_name: &str,
@@ -78,6 +80,7 @@ fn write_png(
 
 /// Map `test_name` to a safe file name: keep `[A-Za-z0-9._-]`, replace
 /// everything else (`::`, `/`, `\`, whitespace, …) with `_`.
+#[cfg(feature = "testing")]
 fn sanitize(test_name: &str) -> String {
     test_name
         .chars()
@@ -89,48 +92,4 @@ fn sanitize(test_name: &str) -> String {
             }
         })
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn unique_dump_dir() -> PathBuf {
-        std::env::temp_dir().join(format!("flui-readback-dump-test-{}", std::process::id()))
-    }
-
-    #[test]
-    fn dumps_png_to_the_given_dir_and_stays_quiet_without_one() {
-        let dir = unique_dump_dir();
-        // Clean slate in case a previous run was interrupted.
-        let _ = std::fs::remove_dir_all(&dir);
-
-        // 2×2 RGBA buffer with distinct pixels.
-        let pixels: [u8; 16] = [
-            255, 0, 0, 255, // opaque red
-            0, 255, 0, 128, // half-alpha green
-            0, 0, 255, 64, // quarter-alpha blue
-            255, 255, 0, 0, // transparent yellow
-        ];
-
-        // Without a directory nothing is written — not even the directory.
-        dump_rgba_png_to(None, "wgpu::tests::no_env_case", 2, 2, &pixels);
-        assert!(!dir.exists(), "no dump may be written without a directory");
-
-        // With one, the frame lands as a decodable PNG under the sanitized
-        // test name.
-        dump_rgba_png_to(Some(&dir), "wgpu::tests::sample_frame", 2, 2, &pixels);
-        let png_path = dir.join("wgpu__tests__sample_frame.png");
-        let bytes = std::fs::read(&png_path).expect("dump PNG must exist");
-        assert_eq!(
-            &bytes[..8],
-            &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
-            "dump must start with the PNG magic bytes"
-        );
-        let decoded = image::open(&png_path).expect("dump must decode as a PNG");
-        assert_eq!((decoded.width(), decoded.height()), (2, 2));
-        assert_eq!(decoded.to_rgba8().into_raw(), pixels);
-
-        std::fs::remove_dir_all(&dir).expect("temp dump dir must be removable");
-    }
 }

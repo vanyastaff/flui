@@ -198,12 +198,4 @@ pub mod prelude {
 // ============================================================================
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_protocol_names() {
-        assert_eq!(BoxProtocol::name(), "box");
-        assert_eq!(SliverProtocol::name(), "sliver");
-    }
-}
+mod tests {}

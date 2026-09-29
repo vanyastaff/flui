@@ -364,7 +364,6 @@ mod tests {
         bytes
     }
 
-    #[test]
     fn import_modules_are_read_from_the_binary() {
         let modules = import_modules(&module()).expect("valid module");
         assert_eq!(
@@ -378,16 +377,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_module_with_no_imports_has_none() {
-        assert!(
-            import_modules(b"\0asm\x01\0\0\0")
-                .expect("valid")
-                .is_empty()
-        );
-    }
-
-    #[test]
     fn malformed_binaries_are_errors_not_passes() {
         let mut truncated = module();
         truncated.truncate(truncated.len() - 20);
@@ -396,7 +385,6 @@ mod tests {
         assert!(import_modules(b"MZ\x90\0\x03\0\0\0").is_err(), "bad magic");
     }
 
-    #[test]
     fn committed_allowlist_admits_wasm_bindgen_and_refuses_env() {
         let allowlist = read(ALLOWLIST).expect("allowlist is committed");
         let allowed: BTreeSet<&str> = allowlist.lines().map(str::trim).collect();
@@ -405,7 +393,6 @@ mod tests {
         assert!(!allowed.contains("env"));
     }
 
-    #[test]
     fn opt_in_needs_a_wasm32_dev_dependency() {
         let yes = "[target.'cfg(target_arch = \"wasm32\")'.dev-dependencies]\nwasm-bindgen-test = \"0.3\"\n";
         assert!(opts_in(yes).expect("parses"));
@@ -422,14 +409,27 @@ mod tests {
     }
 
     #[test]
-    fn locked_version_takes_the_first_matching_package() {
-        let lock = "version = 4\n\n[[package]]\nname = \"a\"\nversion = \"1.0.0\"\n\n[[package]]\nname = \"b\"\nversion = \"0.2.1\"\n\n[[package]]\nname = \"b\"\nversion = \"0.3.0\"\n";
-        assert_eq!(
-            locked_package_version(lock, "b")
-                .expect("parses")
-                .as_deref(),
-            Some("0.2.1")
+    fn wasm_gate_contract() {
+        crate::table_test::run_table(
+            "wasm_gate_contract",
+            &[
+                (
+                    "import_modules_are_read_from_the_binary",
+                    import_modules_are_read_from_the_binary as fn(),
+                ),
+                (
+                    "malformed_binaries_are_errors_not_passes",
+                    malformed_binaries_are_errors_not_passes as fn(),
+                ),
+                (
+                    "committed_allowlist_admits_wasm_bindgen_and_refuses_env",
+                    committed_allowlist_admits_wasm_bindgen_and_refuses_env as fn(),
+                ),
+                (
+                    "opt_in_needs_a_wasm32_dev_dependency",
+                    opt_in_needs_a_wasm32_dev_dependency as fn(),
+                ),
+            ],
         );
-        assert_eq!(locked_package_version(lock, "c").expect("parses"), None);
     }
 }

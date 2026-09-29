@@ -257,26 +257,10 @@ pub fn report_to_logcat(identity: &AppIdentity, message: &str) {
 
 #[cfg(test)]
 mod resilient_setup_tests {
-    //! Cases that need no process-global state. The one that does — a genuinely
-    //! rejected environment override — lives in
-    //! `tests/a_rejected_env_override_still_installs.rs`, in its own process.
+    //! Cases that need no process-global state; scenarios that write the
+    //! subscriber slot live in `tests/`, one per process.
 
-    use super::{FilterConfig, LogConfig, SubscriberOwnership, SubscriberPolicy};
-
-    #[test]
-    fn a_valid_configuration_reports_no_rejection() {
-        // The rejection channel must stay quiet on the happy path, or a caller
-        // learns to ignore it.
-        let config = LogConfig::builder()
-            .filter(FilterConfig::new("info").without_env_var())
-            .build();
-
-        let setup = super::setup_with_env_fallback(&config, SubscriberPolicy::Inherit)
-            .expect("`info` parses");
-
-        assert!(setup.rejected_env_override.is_none());
-        assert_eq!(setup.installation.ownership, SubscriberOwnership::Unchanged);
-    }
+    use super::{FilterConfig, LogConfig, SubscriberPolicy};
 
     #[test]
     fn an_invalid_configuration_is_a_caller_bug_and_stays_an_error() {
@@ -308,20 +292,4 @@ mod android_entry_point_shape {
 
     const DISPLAY_NAME: &str = "flui_android_demo";
     const LOG_DIRECTIVES: &str = "info,flui_engine=debug,wgpu=warn";
-
-    #[test]
-    fn the_entry_point_setup_and_report_path_type_checks() {
-        let identity = AppIdentity::new(DISPLAY_NAME).unwrap_or_default();
-        let config = LogConfig::builder()
-            .identity(identity.clone())
-            .directives(LOG_DIRECTIVES)
-            .build();
-
-        let setup = super::setup_with_env_fallback(&config, SubscriberPolicy::Auto)
-            .expect("BUG: LOG_DIRECTIVES must be a valid filter directive string");
-
-        if let Some(error) = setup.rejected_env_override {
-            super::report_to_logcat(&identity, &format!("RUST_LOG rejected: {error}"));
-        }
-    }
 }

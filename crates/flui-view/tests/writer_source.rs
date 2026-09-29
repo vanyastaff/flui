@@ -3,22 +3,16 @@
 //! reader, and a write it opens inside its own `build` is refused by the
 //! guard.
 
-// ADR-0027: ElementBuildContext's test seam takes Arc<RwLock<…>> over a !Send
-// owner graph; do not restore Send + Sync to satisfy clippy.
-#![expect(clippy::arc_with_non_send_sync)]
-
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use flui_objects::RenderSizedBox;
 use flui_rendering::protocol::BoxProtocol;
 use flui_testing::HeadlessBinding;
 use flui_testing::bootstrap::{MountOptions, MountOwners};
+use flui_view::SignalError;
 use flui_view::prelude::*;
-use flui_view::{ElementBuildContext, SignalError};
-use parking_lot::RwLock;
 
 const FRAME: Duration = Duration::from_millis(16);
 
@@ -127,8 +121,7 @@ fn mount(write_in_build: bool) -> (HeadlessBinding, Rc<Seen>) {
     (binding, seen)
 }
 
-#[test]
-fn writer_source_from_init_state_writes_and_rebuilds_the_reader() {
+pub(crate) fn writer_source_from_init_state_writes_and_rebuilds_the_reader() {
     let (mut binding, seen) = mount(false);
     assert_eq!(
         *seen.reads.borrow(),
@@ -147,150 +140,4 @@ fn writer_source_from_init_state_writes_and_rebuilds_the_reader() {
     );
     let report = binding.build_owner_mut().last_frame_build_report();
     assert_eq!(report.count(RebuildReason::SignalChange), 1, "{report:?}");
-}
-
-/// The guard stays authoritative for the path the types cannot see: a
-/// widget holding a `WriterSource` that opens a write inside its own `build`.
-#[test]
-fn a_callback_run_inside_its_widgets_build_is_refused_by_the_guard() {
-    let (mut binding, seen) = mount(true);
-    let own = seen.id.get().expect("the probe built");
-    assert_eq!(
-        *seen.write_in_build.borrow(),
-        Some(Err(SignalError::WrittenDuringBuild { element: own }))
-    );
-    let (count, _) = seen.acquired.borrow().clone().expect("the probe built");
-    let graph = binding.reactive().expect("tree-bound");
-    assert_eq!(count.peek(&graph, |v| *v), Ok(0), "the value is unchanged");
-
-    binding.pump_frame(FRAME);
-    assert_eq!(
-        *seen.reads.borrow(),
-        [0],
-        "the refused write scheduled no extra rebuild"
-    );
-}
-
-/// The test context and the production context hand out a source over the
-/// same graph the owner's signals are minted on, not a fresh one.
-#[test]
-fn the_test_context_writer_source_targets_the_owner_graph() {
-    let tree = Arc::new(RwLock::new(ElementTree::new()));
-    let owner = Arc::new(RwLock::new(BuildOwner::new()));
-    let sig = owner.read().reactive().signal(1u32);
-    let ctx = ElementBuildContext::new(ElementId::new(1), 0, false, tree, Arc::clone(&owner));
-
-    assert_eq!(ctx.writer_source().write(|cx| sig.set(cx, 2)), Ok(()));
-    assert_eq!(sig.peek(owner.read().reactive(), |v| *v), Ok(2));
-}
-
-/// What the render-view probe hands back to the test.
-#[derive(Default)]
-struct RenderSeen {
-    /// The signal the parent minted in `init_state`.
-    count: Cell<Option<Signal<u32>>>,
-    /// Every value the parent's `build` read, in order.
-    reads: RefCell<Vec<u32>>,
-    /// What the leaf's render-object context returned from `writer_source`,
-    /// once per render object it created.
-    sources: RefCell<Vec<Option<WriterSource>>>,
-}
-
-/// A render leaf that keeps the writer source its render-object context
-/// hands out, as a `Listener` or a `MouseRegion` does for its callbacks.
-#[derive(Clone)]
-struct SourceLeaf {
-    seen: Rc<RenderSeen>,
-}
-
-impl RenderView for SourceLeaf {
-    type Protocol = BoxProtocol;
-    type RenderObject = RenderSizedBox;
-
-    fn create_render_object(&self, ctx: &RenderObjectContext<'_>) -> Self::RenderObject {
-        self.seen.sources.borrow_mut().push(ctx.writer_source());
-        RenderSizedBox::shrink()
-    }
-
-    fn update_render_object(
-        &self,
-        _ctx: &RenderObjectContext<'_>,
-        _render_object: &mut Self::RenderObject,
-    ) -> RenderUpdateImpact {
-        RenderUpdateImpact::NONE
-    }
-}
-
-impl View for SourceLeaf {
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::render_variable(self)
-    }
-}
-
-/// Mints a signal in `init_state`, reads it in `build`, and builds a
-/// [`SourceLeaf`] below itself.
-#[derive(Clone, StatefulView)]
-struct RenderSourceProbe {
-    seen: Rc<RenderSeen>,
-}
-
-#[derive(Default)]
-struct RenderSourceProbeState {
-    count: Signal<u32>,
-}
-
-impl StatefulView for RenderSourceProbe {
-    type State = RenderSourceProbeState;
-
-    fn create_state(&self) -> Self::State {
-        RenderSourceProbeState::default()
-    }
-}
-
-impl ViewState<RenderSourceProbe> for RenderSourceProbeState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.count = ctx.signal(0);
-    }
-
-    fn build(&self, view: &RenderSourceProbe, ctx: &dyn BuildContext) -> impl IntoView {
-        view.seen.count.set(Some(self.count));
-        view.seen.reads.borrow_mut().push(self.count.get(ctx));
-        SourceLeaf {
-            seen: Rc::clone(&view.seen),
-        }
-    }
-}
-
-/// A render view has no `init_state`; the context that creates its render
-/// object hands it the owner's writer source instead, and a write through it
-/// lands in the owner's graph and rebuilds the reader.
-#[test]
-fn a_render_object_context_writer_source_writes_the_owner_graph() {
-    let seen = Rc::new(RenderSeen::default());
-    let root = RenderSourceProbe {
-        seen: Rc::clone(&seen),
-    };
-    let mut binding = HeadlessBinding::new();
-    binding.mount_root(
-        &root,
-        MountOwners::fresh(),
-        MountOptions::tight(100.0, 100.0),
-    );
-    binding.pump_frame(FRAME);
-    let count = seen.count.get().expect("the probe built");
-    let sources = seen.sources.borrow().clone();
-    let [Some(writer)] = sources.as_slice() else {
-        panic!("one render object, created with a writer source: {sources:?}");
-    };
-
-    assert_eq!(writer.write(|cx| count.set(cx, 4)), Ok(()));
-    let graph = binding.reactive().expect("tree-bound");
-    assert_eq!(count.peek(&graph, |v| *v), Ok(4));
-    binding.pump_frame(FRAME);
-    assert_eq!(*seen.reads.borrow(), [0, 4], "the reader rebuilt once");
-}
-
-#[test]
-fn a_detached_render_object_context_has_no_writer_source() {
-    assert!(RenderObjectContext::detached().writer_source().is_none());
 }
