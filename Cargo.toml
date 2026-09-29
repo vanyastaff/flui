@@ -697,6 +697,9 @@ flui-testing = { workspace = true }
 flui-widgets = { path = "crates/flui-widgets", version = "=0.2.0-dev", features = ["testing"] }
 # Snapshot assertions + `cargo insta review` for tests/demo_layer_snapshots.rs.
 insta = { workspace = true }
+# tests/facade_serde.rs round-trips a value from each crate `flui/serde` reaches.
+serde = { workspace = true }
+serde_json = { workspace = true }
 parking_lot.workspace = true
 
 # NOTE: flui-material / flui-cupertino moved to [dependencies] above — the
@@ -771,10 +774,18 @@ hot-reload = ["dep:flui-hot-reload", "flui-hot-reload/app-plugin", "flui-app/hot
 a11y = ["flui-app/a11y"]
 
 # === Core Features ===
-# Serialization of the paint, style and geometry values (flui-painting's serde,
-# which forwards to foundation's); other crates' serde features are opted into
-# per-crate, not through the facade.
-serde = ["flui-painting/serde"]
+# Serialization of the value types, in every crate that owns some: geometry
+# (foundation, through painting), paint and style (painting), locale and
+# brightness (platform-api), velocity and gesture details (interaction), the
+# layout enums (rendering, and objects through widgets) and curves (animation).
+serde = [
+    "flui-painting/serde",
+    "flui-platform-api/serde",
+    "flui-interaction/serde",
+    "flui-rendering/serde",
+    "flui-animation/serde",
+    "flui-widgets/serde",
+]
 
 # The facade declares no other features. Earlier revisions carried commented
 # blocks for parallel / profiling / tracy / devtools / memory-profiler /
@@ -882,6 +893,11 @@ required-features = ["material"]
 name = "cupertino_demo"
 path = "tests/cupertino_demo.rs"
 required-features = ["cupertino"]
+
+[[test]]
+name = "facade_serde"
+path = "tests/facade_serde.rs"
+required-features = ["serde"]
 
 # Structural snapshots of the demo trees' painted layer trees. Needs both
 # catalogs because it snapshots the Material and Cupertino demos; both are

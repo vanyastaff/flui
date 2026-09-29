@@ -518,27 +518,25 @@ impl From<Path> for PathRepr {
     }
 }
 
+/// Deserialization replays the elements through the public builders, so input no builder
+/// could have produced — a contour that starts without a `MoveTo`, a `Close` with no open
+/// contour — is normalized the way the builders normalize it instead of reaching kurbo's
+/// `BezPath` invariants. A path the builders made replays to the same elements.
 #[cfg(feature = "serde")]
 impl From<PathRepr> for Path {
     fn from(repr: PathRepr) -> Self {
-        let mut path = kurbo::BezPath::new();
+        let mut path = Self::with_fill_type(repr.fill_type);
         for command in repr.commands {
             match command {
-                PathCommand::MoveTo(p) => path.move_to(to_kurbo(p)),
-                PathCommand::LineTo(p) => path.line_to(to_kurbo(p)),
-                PathCommand::QuadraticTo(c, p) => path.quad_to(to_kurbo(c), to_kurbo(p)),
-                PathCommand::CubicTo(c1, c2, p) => {
-                    path.curve_to(to_kurbo(c1), to_kurbo(c2), to_kurbo(p));
-                }
-                PathCommand::Close => path.close_path(),
+                PathCommand::MoveTo(p) => path.move_to(p),
+                PathCommand::LineTo(p) => path.line_to(p),
+                PathCommand::QuadraticTo(c, p) => path.quadratic_bezier_to(c, p),
+                PathCommand::CubicTo(c1, c2, p) => path.cubic_to(c1, c2, p),
+                PathCommand::Close => path.close(),
             }
         }
-        Self {
-            geometry: Arc::new(path),
-            hint: repr.hint,
-            fill_type: repr.fill_type,
-            bounds: None,
-        }
+        path.hint = repr.hint;
+        path
     }
 }
 
@@ -572,6 +570,53 @@ mod tests {
 
         let untouched = recorded.clone();
         assert!(untouched.shares_commands_with(&recorded));
+    }
+
+    /// Deserialized elements no builder could produce are normalized, not trusted: a leading
+    /// `LineTo` starts its contour at the origin and a stray `Close` is dropped, where pushing
+    /// them into the `BezPath` as-is trips kurbo's missing-`MoveTo` assertion.
+    #[cfg(feature = "serde")]
+    #[test]
+    fn deserializing_malformed_elements_normalizes_them() {
+        let json = serde_json::json!({
+            "commands": [
+                "Close",
+                { "LineTo": { "x": 10.0, "y": 0.0 } },
+                "Close",
+                "Close",
+                { "LineTo": { "x": 0.0, "y": 10.0 } },
+            ],
+            "fill_type": "NonZero",
+            "hint": "None",
+        });
+        let path: Path =
+            serde_json::from_value(json).expect("malformed elements still deserialize");
+
+        let origin = Point::new(0.0, 0.0);
+        assert_eq!(
+            path.commands().collect::<Vec<_>>(),
+            [
+                PathCommand::MoveTo(origin),
+                PathCommand::LineTo(Point::new(10.0, 0.0)),
+                PathCommand::Close,
+                PathCommand::MoveTo(origin),
+                PathCommand::LineTo(Point::new(0.0, 10.0)),
+            ]
+        );
+    }
+
+    /// A builder-made path replays to the same elements, fill type and shape.
+    #[cfg(feature = "serde")]
+    #[test]
+    fn a_serialized_path_round_trips() {
+        let mut path = open_triangle(PathFillType::EvenOdd);
+        path.close();
+        path.add_rect(Rect::from_ltrb(1.0, 2.0, 3.0, 4.0));
+        let json = serde_json::to_value(&path).expect("a path serializes");
+        let back: Path = serde_json::from_value(json).expect("and deserializes");
+        assert!(back.commands().eq(path.commands()));
+        assert_eq!(back.fill_type, path.fill_type);
+        assert_eq!(back.hint, path.hint);
     }
 
     /// Builds the triangle (0,0)→(100,0)→(50,100) without an explicit `close()`.

@@ -140,22 +140,27 @@ where
         Ok(point)
     }
 
-    /// Creates a point, clamping invalid values to valid range.
+    /// Creates a point, clamping invalid values to valid range: NaN becomes zero and an
+    /// infinity the scalar's own finite extreme, so the result always passes
+    /// [`Self::is_valid`] whatever `T` is.
     #[inline]
     pub fn new_clamped(x: T, y: T) -> Self {
-        let clamp_f32 = |v: f64| {
-            if v.is_nan() {
-                0.0
-            } else if v.is_infinite() {
-                if v > 0.0 { f64::MAX } else { f64::MIN }
+        let clamp = |v: T| {
+            let wide: f64 = v.into();
+            if wide.is_nan() {
+                T::zero()
+            } else if wide == f64::INFINITY {
+                T::MAX
+            } else if wide == f64::NEG_INFINITY {
+                T::MIN
             } else {
                 v
             }
         };
 
         Self {
-            x: T::from_f64(clamp_f32(x.into())),
-            y: T::from_f64(clamp_f32(y.into())),
+            x: clamp(x),
+            y: clamp(y),
         }
     }
 }
@@ -1431,6 +1436,20 @@ mod typed_tests {
         let p = Point::<f64>::new_clamped(f64::INFINITY, -f64::INFINITY);
         assert_eq!(p.x, f64::MAX);
         assert_eq!(p.y, f64::MIN);
+    }
+
+    /// Clamping lands on the scalar's own finite range: routing `f32` through `f64::MAX`
+    /// narrowed back to infinity, and the saturating operations inherited it.
+    #[test]
+    fn clamping_stays_finite_for_f32() {
+        let p = Point::<f32>::new_clamped(f32::INFINITY, f32::NEG_INFINITY);
+        assert_eq!((p.x, p.y), (f32::MAX, f32::MIN));
+        assert!(p.is_valid());
+
+        let far = Point::<f32>::new(f32::MAX, 1.0);
+        assert!(far.saturating_add_vec(f32::MAX, 0.0).is_valid());
+        let scaled = far.saturating_mul(4.0);
+        assert_eq!((scaled.x, scaled.y), (f32::MAX, 4.0));
     }
 
     #[test]

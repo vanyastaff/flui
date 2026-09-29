@@ -193,7 +193,14 @@ asset-images = ["dep:flui-assets", "flui-assets/images", "images", "dep:futures-
 # `flui-assets`' `NetworkLoader` (reqwest). Implies `asset-images` — both
 # share the same decode cache, coalescing engine, and background runtime.
 network-images = ["asset-images", "flui-assets/network"]
-serde = ["flui-painting/serde"]
+# Serialization of the value types the widgets take, in each crate that owns some.
+serde = [
+    "flui-painting/serde",
+    "flui-objects/serde",
+    "flui-rendering/serde",
+    "flui-interaction/serde",
+    "flui-animation/serde",
+]
 # The canonical headless test harness (`flui_widgets::testing`): mounts a
 # widget tree through the real pipeline inside a `HeadlessBinding` and exposes
 # geometry probes + synthetic pointer dispatch. Downstream test suites

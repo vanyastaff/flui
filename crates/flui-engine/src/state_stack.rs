@@ -25,7 +25,11 @@ pub(super) struct GpuStateStack {
     saved: Vec<SavedState>,
 
     /// Current accumulated transform (CTM). Identity at frame start.
-    current_transform: glam::Mat4,
+    ///
+    /// Composed in `f64`, the precision the display list records offsets in,
+    /// and narrowed to `f32` only when read: a large ancestor offset and its
+    /// child's nearly cancelling one keep their residual.
+    current_transform: glam::DMat4,
 
     /// Current active scissor rectangle in physical pixels `(x, y, w, h)`.
     /// `None` means no axis-aligned scissor clip is active.
@@ -65,7 +69,7 @@ pub(super) struct GpuStateStack {
 
 #[derive(Debug, Clone, Copy)]
 struct SavedState {
-    transform: glam::Mat4,
+    transform: glam::DMat4,
     scissor: Option<(u32, u32, u32, u32)>,
     rrect_clip: [f32; 8],
     rsuperellipse_clip: [f32; 12],
@@ -111,7 +115,7 @@ impl GpuStateStack {
     pub(super) fn new() -> Self {
         Self {
             saved: Vec::new(),
-            current_transform: glam::Mat4::IDENTITY,
+            current_transform: glam::DMat4::IDENTITY,
             current_scissor: None,
             current_rrect_clip: [0.0; 8],
             current_clip_hard: false,
@@ -146,7 +150,7 @@ impl GpuStateStack {
         self.current_clip_inv = CLIP_INV_IDENTITY;
         // Identity is the construction-time value. Reset to the same initial
         // value so no cross-frame CTM leak can occur.
-        self.current_transform = glam::Mat4::IDENTITY;
+        self.current_transform = glam::DMat4::IDENTITY;
         self.saved.clear();
     }
 
@@ -232,9 +236,8 @@ impl GpuStateStack {
         #[cfg(debug_assertions)]
         tracing::trace!("GpuStateStack::translate: offset={:?}", offset);
 
-        let translation =
-            glam::Mat4::from_translation(glam::vec3(offset.dx as f32, offset.dy as f32, 0.0));
-        self.current_transform *= translation;
+        self.current_transform *=
+            glam::DMat4::from_translation(glam::dvec3(offset.dx, offset.dy, 0.0));
     }
 
     /// Post-multiply the CTM by a Z-axis rotation.
@@ -242,19 +245,18 @@ impl GpuStateStack {
         #[cfg(debug_assertions)]
         tracing::trace!("GpuStateStack::rotate: angle={}", angle_radians);
 
-        let rotation = glam::Mat4::from_rotation_z(angle_radians);
-        self.current_transform *= rotation;
+        self.current_transform *= glam::DMat4::from_rotation_z(f64::from(angle_radians));
     }
 
     /// Post-multiply the CTM by an arbitrary matrix — the whole matrix, so a
-    /// skew or a perspective row survives. `Matrix4` and `glam::Mat4` are
-    /// both column-major `[f32; 16]`; the conversion is a reinterpretation of
-    /// the sixteen floats, the inverse of [`Self::current_transform_matrix`].
+    /// skew or a perspective row survives. `Matrix4` and `glam::DMat4` are
+    /// both column-major `[f64; 16]`; the conversion is a reinterpretation of
+    /// the sixteen values, the inverse of [`Self::current_transform_matrix`].
     pub(super) fn concat(&mut self, matrix: &flui_foundation::geometry::Matrix4) {
         #[cfg(debug_assertions)]
         tracing::trace!("GpuStateStack::concat: matrix={:?}", matrix);
 
-        self.current_transform *= glam::Mat4::from_cols_array(&matrix.to_cols_array_f32());
+        self.current_transform *= glam::DMat4::from_cols_array(&matrix.m);
     }
 
     /// Post-multiply the CTM by a uniform scale.
@@ -262,8 +264,8 @@ impl GpuStateStack {
         #[cfg(debug_assertions)]
         tracing::trace!("GpuStateStack::scale: sx={}, sy={}", sx, sy);
 
-        let scaling = glam::Mat4::from_scale(glam::vec3(sx, sy, 1.0));
-        self.current_transform *= scaling;
+        self.current_transform *=
+            glam::DMat4::from_scale(glam::dvec3(f64::from(sx), f64::from(sy), 1.0));
     }
 
     // =========================================================================
@@ -276,50 +278,31 @@ impl GpuStateStack {
     /// painter fields (e.g. `current_segment`) without a borrow conflict.
     #[inline]
     pub(super) fn current_transform(&self) -> glam::Mat4 {
-        self.current_transform
+        self.current_transform.as_mat4()
     }
 
     /// The accumulated CTM as a [`flui_foundation::geometry::Matrix4`] (column-major).
     ///
-    /// Both `glam::Mat4` and `flui_foundation::geometry::Matrix4` are column-major `[f32; 16]`,
-    /// so the conversion is a direct reinterpret of the 16 floats.
-    ///
-    /// Ported verbatim from `WgpuPainter::current_transform_matrix` — the
-    /// float column ordering is **not** changed; round-4/5 transform-bake and
-    /// HiDPI device-sizing correctness depend on the exact layout.
+    /// Both `glam::DMat4` and `flui_foundation::geometry::Matrix4` are column-major
+    /// `[f64; 16]`, so the conversion is a direct reinterpret of the 16 values, at full
+    /// precision. Transform baking and HiDPI device sizing depend on that layout.
     pub(super) fn current_transform_matrix(&self) -> flui_foundation::geometry::Matrix4 {
-        let c = self.current_transform.to_cols_array();
-        flui_foundation::geometry::Matrix4::new(
-            f64::from(c[0]),
-            f64::from(c[1]),
-            f64::from(c[2]),
-            f64::from(c[3]),
-            f64::from(c[4]),
-            f64::from(c[5]),
-            f64::from(c[6]),
-            f64::from(c[7]),
-            f64::from(c[8]),
-            f64::from(c[9]),
-            f64::from(c[10]),
-            f64::from(c[11]),
-            f64::from(c[12]),
-            f64::from(c[13]),
-            f64::from(c[14]),
-            f64::from(c[15]),
-        )
+        flui_foundation::geometry::Matrix4 {
+            m: self.current_transform.to_cols_array(),
+        }
     }
 
     /// Apply the CTM to a local-space point and return the screen-space result.
     pub(super) fn apply_transform(&self, point: Point<f64>) -> Point<f64> {
-        let p = self.current_transform * glam::vec4(point.x as f32, point.y as f32, 0.0, 1.0);
-        Point::new(f64::from(p.x), f64::from(p.y))
+        let p = self.current_transform * glam::dvec4(point.x, point.y, 0.0, 1.0);
+        Point::new(p.x, p.y)
     }
 
     /// `true` when the current transform has no rotation or skew component.
     ///
     /// When `false`, rects must be tessellated rather than instanced.
     pub(super) fn is_axis_aligned(&self) -> bool {
-        let m = self.current_transform;
+        let m = self.current_transform();
         m.x_axis.y.abs() < 1e-6 && m.y_axis.x.abs() < 1e-6
     }
 
@@ -333,7 +316,7 @@ impl GpuStateStack {
     /// (e.g. `scale(0.5, 10)`) `max_scale()` returns 10, squaring to 100,
     /// while the true area scale is 5. Use [`Self::area_scale`] for area thresholds.
     pub(super) fn max_scale(&self) -> f32 {
-        let m = self.current_transform;
+        let m = self.current_transform();
         let col_x = (m.x_axis.x * m.x_axis.x + m.x_axis.y * m.x_axis.y).sqrt();
         let col_y = (m.y_axis.x * m.y_axis.x + m.y_axis.y * m.y_axis.y).sqrt();
         col_x.max(col_y)
@@ -350,7 +333,7 @@ impl GpuStateStack {
     /// more accurate than `max_scale²`, which overestimates under anisotropic
     /// scale (e.g. `scale(0.5, 10)` → `area_scale=5`, `max_scale²=100`).
     pub(super) fn area_scale(&self) -> f32 {
-        let m = self.current_transform;
+        let m = self.current_transform();
         (m.x_axis.x * m.y_axis.y - m.x_axis.y * m.y_axis.x).abs()
     }
 
@@ -417,7 +400,7 @@ impl GpuStateStack {
     /// scale: the only transforms under which device edges can be snapped
     /// (ADR-0098 §6). A rotation, skew, reflection or perspective term fails it.
     pub(super) fn is_translate_scale(&self) -> bool {
-        let m = self.current_transform;
+        let m = self.current_transform();
         m.x_axis.y.abs() < 1e-6
             && m.y_axis.x.abs() < 1e-6
             && m.x_axis.x > 0.0
@@ -455,7 +438,7 @@ impl GpuStateStack {
     /// and their AABB taken, which is conservative for a rotation — the box
     /// around a rotated box is larger than the box.
     fn device_aabb(&self, rect: Rect<f64>) -> (f32, f32, f32, f32) {
-        let transform = self.current_transform;
+        let transform = self.current_transform();
         if transform == glam::Mat4::IDENTITY {
             return (
                 (rect.left() as f32),
@@ -653,7 +636,7 @@ impl GpuStateStack {
                 collapse(rrect.bottom_left.x as f32, rrect.bottom_left.y as f32),
             ],
             kind: [1, 0, u32::from(hard), 0],
-            device_to_local: Self::device_to_local(self.current_transform),
+            device_to_local: Self::device_to_local(self.current_transform()),
         }
     }
 
@@ -714,7 +697,7 @@ impl GpuStateStack {
         let rect = rse.outer_rect();
 
         self.current_rsuperellipse_clip = Self::rsuperellipse_slots(rse);
-        self.current_clip_inv = Self::device_to_local(self.current_transform);
+        self.current_clip_inv = Self::device_to_local(self.current_transform());
         // Clear the rrect clip to prevent `apply_active_clip` from falling
         // back to it. Mirror of the corresponding clear in `clip_rrect`.
         self.current_rrect_clip = [0.0; 8];
@@ -783,7 +766,7 @@ impl GpuStateStack {
         let resolved = ResolvedClip {
             rrect: crate::instancing::reduce_superellipse_clip(Self::rsuperellipse_slots(rse)),
             kind: [2, 0, 0, 0],
-            device_to_local: Self::device_to_local(self.current_transform),
+            device_to_local: Self::device_to_local(self.current_transform()),
         };
         self.clip_rect_enclosing(rse.outer_rect(), surface_size);
         resolved
@@ -895,6 +878,25 @@ mod tests {
              ancestor's, so the compositing bounds derived from it cannot \
              admit anything an ancestor already excluded"
         );
+    }
+
+    /// Nested translations compose at the display list's `f64` precision.
+    ///
+    /// `f32` spaces values near 5e7 four units apart, so an ancestor at -5e7
+    /// and a child at 5e7 + 1 would each round and cancel to 0; composed in
+    /// `f64` they leave the child's one-pixel residual.
+    #[test]
+    fn nested_translations_keep_their_residual() {
+        let mut stack = identity_stack();
+        stack.translate(Offset::new(-5.0e7, 0.0));
+        stack.translate(Offset::new(5.0e7 + 1.0, 0.5));
+
+        assert_eq!(
+            stack.apply_transform(Point::new(0.0, 0.0)),
+            Point::new(1.0, 0.5)
+        );
+        assert_eq!(stack.current_transform().w_axis.x, 1.0);
+        assert_eq!(stack.current_transform_matrix().m[12], 1.0);
     }
 
     /// (1) `debug_assert_balanced` panics in debug mode on an unbalanced stack.
