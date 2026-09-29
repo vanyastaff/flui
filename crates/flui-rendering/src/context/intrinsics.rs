@@ -14,8 +14,6 @@ use crate::parent_data::{FlexParentData, ParentData};
 use crate::pipeline::{TextCx, TextSlot};
 use crate::storage::IntrinsicDimension;
 use crate::traits::TextBaseline;
-use flui_painting::TextContext;
-use std::cell::RefCell;
 
 // ============================================================================
 // DryBaselineChildRequest / DryBaselineChildResponse
@@ -128,7 +126,7 @@ impl<'a> BoxDryBaselineCtx<'a> {
         child_count: usize,
         child_parent_data: &'a [Option<&'a dyn ParentData>],
         query: &'a mut dyn FnMut(usize, DryBaselineChildRequest) -> DryBaselineChildResponse,
-        text: Option<&'a RefCell<TextContext>>,
+        text: Option<crate::pipeline::TextSource<'a>>,
     ) -> Self {
         Self {
             child_count,
@@ -271,7 +269,7 @@ impl<'a> BoxIntrinsicsCtx<'a> {
         child_count: usize,
         child_parent_data: &'a [Option<&'a dyn ParentData>],
         query: &'a mut dyn FnMut(usize, IntrinsicDimension, f64) -> f64,
-        text: Option<&'a RefCell<TextContext>>,
+        text: Option<crate::pipeline::TextSource<'a>>,
     ) -> Self {
         Self {
             child_count,
@@ -403,7 +401,7 @@ impl<'a> BoxDryLayoutCtx<'a> {
         child_count: usize,
         child_parent_data: &'a [Option<&'a dyn ParentData>],
         query: &'a mut dyn FnMut(usize, DryLayoutChildRequest) -> DryLayoutChildResponse,
-        text: Option<&'a RefCell<TextContext>>,
+        text: Option<crate::pipeline::TextSource<'a>>,
     ) -> Self {
         Self {
             child_count,

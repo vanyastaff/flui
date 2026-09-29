@@ -32,7 +32,7 @@ pub use owner::{
     ReleaseDetachedRenderSubtreesError, ReleaseDetachedRenderSubtreesFailure, WeakPipelineCell,
 };
 pub use phase::{Compositing, Idle, Layout, PaintPhase, PipelinePhase, Semantics};
-pub use text_context::{TextContextHandle, TextCx};
+pub use text_context::{TextContextHandle, TextCx, TextSource};
 pub(crate) use text_context::{TextSlot, private_context};
 
 // Re-export contexts from context module (canonical location)

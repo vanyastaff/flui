@@ -4,9 +4,12 @@
 //! presentation's [`PipelineOwner`](super::PipelineOwner) holds a
 //! [`TextContextHandle`] to it. Layout, intrinsic, dry-layout and
 //! dry-baseline contexts lend it to a render object as a [`TextCx`], a scoped
-//! `&mut TextContext` taken from `&mut` context, so a render object never
-//! names the `RefCell` and cannot hold two loans at once through the context
-//! API.
+//! `&mut TextContext` taken from `&mut` context, so a render object cannot
+//! hold two loans at once through the context API. The raw
+//! [`RenderObject`](crate::traits::RenderObject) methods and the erased layout
+//! context carry the context as a [`TextSource`], an opaque token only this
+//! crate can borrow, so a direct `RenderObject` implementation cannot hold a
+//! loan across a child query either.
 //!
 //! The one `RefCell` sits between the realm and its pipelines, not on a
 //! render object: it is borrowed once per measurement, on the owner thread,
@@ -23,8 +26,10 @@ use flui_painting::{FontCollection, TextContext};
 
 /// A realm's text context, shared with each presentation's pipeline.
 ///
-/// Cloning shares the context ([`TextContextHandle::ptr_eq`]). `!Send`, like
-/// the realm and pipeline owners that hold it.
+/// Cloning shares the context. `!Send`, like the realm and pipeline owners
+/// that hold it. A render object measures through the [`TextCx`] its layout
+/// context lends; `ptr_eq` and `with`, under the `testing` feature, let a
+/// test compare handles and inspect the context.
 #[derive(Clone)]
 pub struct TextContextHandle(Rc<RefCell<TextContext>>);
 
@@ -36,6 +41,7 @@ impl TextContextHandle {
     }
 
     /// Whether `a` and `b` share one context.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn ptr_eq(a: &Self, b: &Self) -> bool {
         Rc::ptr_eq(&a.0, &b.0)
@@ -47,6 +53,7 @@ impl TextContextHandle {
     ///
     /// If the context is already lent, which only a measurement that
     /// re-enters another on the same realm could cause.
+    #[cfg(any(test, feature = "testing"))]
     pub fn with<R>(&self, f: impl FnOnce(&mut TextContext) -> R) -> R {
         f(&mut lend(&self.0))
     }
@@ -66,6 +73,42 @@ impl fmt::Debug for TextContextHandle {
             Err(_) => debug.field("context", &"<lent>"),
         };
         debug.finish()
+    }
+}
+
+/// The realm's text context as a layout or query walk carries it to a node.
+///
+/// Opaque outside this crate: a render object passes it on (to a child's
+/// raw query, or to a context it builds) but cannot borrow it. The borrow
+/// happens only inside a context's `text()`, which ties the loan to `&mut`
+/// context, so no loan can outlive a measurement or span a child's.
+///
+/// ```compile_fail
+/// fn hold(source: flui_rendering::TextSource<'_>) {
+///     // The cell is crate-private: a raw render object cannot borrow it.
+///     let _loan = source.cell().borrow_mut();
+/// }
+/// ```
+#[derive(Clone, Copy)]
+pub struct TextSource<'a>(&'a RefCell<TextContext>);
+
+impl<'a> TextSource<'a> {
+    /// A source over the pipeline's shared cell.
+    pub(crate) fn new(cell: &'a RefCell<TextContext>) -> Self {
+        Self(cell)
+    }
+
+    /// The cell a context borrows from.
+    pub(crate) fn cell(self) -> &'a RefCell<TextContext> {
+        self.0
+    }
+}
+
+impl fmt::Debug for TextSource<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("TextSource")
+            .field(&std::ptr::from_ref(self.0))
+            .finish()
     }
 }
 
@@ -129,29 +172,26 @@ pub(crate) fn private_context() -> TextContext {
 /// pipeline's, or one of its own built on first use.
 #[derive(Default)]
 pub(crate) struct TextSlot<'a> {
-    source: Option<&'a RefCell<TextContext>>,
+    source: Option<TextSource<'a>>,
     own: Option<Box<TextContext>>,
 }
 
 impl<'a> TextSlot<'a> {
     /// A slot that lends `source`, or its own context when `None`.
-    pub(crate) fn new(source: Option<&'a RefCell<TextContext>>) -> Self {
+    pub(crate) fn new(source: Option<TextSource<'a>>) -> Self {
         Self { source, own: None }
     }
 
     /// The pipeline's context, if the slot has one.
-    pub(crate) fn source(&self) -> Option<&'a RefCell<TextContext>> {
+    pub(crate) fn source(&self) -> Option<TextSource<'a>> {
         self.source
     }
 
     /// Lends `source` when given, else the pipeline's context, else the
     /// slot's own.
-    pub(crate) fn lend_from<'s>(
-        &'s mut self,
-        source: Option<&'s RefCell<TextContext>>,
-    ) -> TextCx<'s> {
+    pub(crate) fn lend_from<'s>(&'s mut self, source: Option<TextSource<'s>>) -> TextCx<'s> {
         match source.or(self.source) {
-            Some(cell) => lend(cell),
+            Some(source) => lend(source.cell()),
             None => self.lend_own(),
         }
     }
@@ -181,7 +221,7 @@ impl fmt::Debug for TextSlot<'_> {
 mod tests {
     use static_assertions::assert_not_impl_any;
 
-    use super::{TextContextHandle, TextSlot, private_context};
+    use super::{TextContextHandle, TextSlot, TextSource, private_context};
 
     assert_not_impl_any!(TextContextHandle: Send, Sync);
 
@@ -198,7 +238,7 @@ mod tests {
     #[test]
     fn a_slot_lends_the_shared_context_and_releases_it() {
         let handle = TextContextHandle::new(private_context());
-        let mut slot = TextSlot::new(Some(handle.cell()));
+        let mut slot = TextSlot::new(Some(TextSource::new(handle.cell())));
         let lent = slot.lend();
         assert!(
             handle.cell().try_borrow_mut().is_err(),

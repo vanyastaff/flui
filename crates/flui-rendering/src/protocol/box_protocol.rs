@@ -9,10 +9,6 @@ use flui_foundation::Arity;
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
 
-use std::cell::RefCell;
-
-use flui_painting::TextContext;
-
 use crate::{
     constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry},
     parent_data::{BoxParentData, ParentData},
@@ -206,7 +202,7 @@ impl Protocol for BoxProtocol {
     /// helper.
     fn with_leaf_erased_ctx<R>(
         constraints: BoxConstraints,
-        text: Option<&RefCell<TextContext>>,
+        text: Option<crate::pipeline::TextSource<'_>>,
         f: impl FnOnce(&mut Self::LayoutCtxErased<'_>) -> R,
     ) -> R {
         let mut typed = BoxLayoutCtx::<flui_foundation::Leaf, BoxParentData>::new(constraints)
@@ -613,7 +609,10 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
     /// Lends `text` to the render object this context lays out; `None`
     /// leaves it a context of its own, built on first use.
     #[must_use]
-    pub fn with_text_source(mut self, text: Option<&'ctx RefCell<TextContext>>) -> Self {
+    pub(crate) fn with_text_source(
+        mut self,
+        text: Option<crate::pipeline::TextSource<'ctx>>,
+    ) -> Self {
         self.text = TextSlot::new(text);
         self
     }
@@ -846,7 +845,7 @@ pub trait BoxLayoutCtxErased {
 
     /// The realm's text context, when the pipeline that built this context
     /// has one; the typed view lends it through `BoxLayoutCtx::text`.
-    fn text_source(&self) -> Option<&RefCell<TextContext>> {
+    fn text_source(&self) -> Option<crate::pipeline::TextSource<'_>> {
         None
     }
 
@@ -1004,7 +1003,7 @@ pub trait BoxLayoutCtxErased {
 
 impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, A, P> {
     #[inline]
-    fn text_source(&self) -> Option<&RefCell<TextContext>> {
+    fn text_source(&self) -> Option<crate::pipeline::TextSource<'_>> {
         match &self.storage {
             BoxLayoutCtxStorage::Direct { .. } => self.text.source(),
             BoxLayoutCtxStorage::Proxy { erased, .. } => erased.text_source(),
@@ -1303,7 +1302,7 @@ pub struct ErasedBoxLayoutCtx<'ctx> {
     /// already used for the Sliver→Box intrinsic path.
     intrinsics_child_callback: Option<BoxChildIntrinsicCallback<'ctx>>,
     /// The realm's text context, lent to the node this context lays out.
-    text: Option<&'ctx RefCell<TextContext>>,
+    text: Option<crate::pipeline::TextSource<'ctx>>,
 }
 
 impl std::fmt::Debug for ErasedBoxLayoutCtx<'_> {
@@ -1342,7 +1341,7 @@ impl<'ctx> ErasedBoxLayoutCtx<'ctx> {
         sliver_layout_child_callback: Option<SliverLayoutChildCallback<'ctx>>,
         intrinsics_child_callback: Option<BoxChildIntrinsicCallback<'ctx>>,
         degradation: Option<DegradationProbe<'ctx>>,
-        text: Option<&'ctx RefCell<TextContext>>,
+        text: Option<crate::pipeline::TextSource<'ctx>>,
     ) -> Self {
         Self {
             constraints,
@@ -1363,7 +1362,7 @@ impl BoxLayoutCtxErased for ErasedBoxLayoutCtx<'_> {
         self.constraints
     }
 
-    fn text_source(&self) -> Option<&RefCell<TextContext>> {
+    fn text_source(&self) -> Option<crate::pipeline::TextSource<'_>> {
         self.text
     }
 

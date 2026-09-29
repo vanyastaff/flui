@@ -448,7 +448,7 @@ impl RenderObject<BoxProtocol> for CountingIntrinsicBox {
         _child_count: usize,
         _child_parent_data: &[Option<&dyn ParentData>],
         child_query: &mut dyn FnMut(usize, IntrinsicDimension, f64) -> f64,
-        _text: Option<&std::cell::RefCell<flui_painting::TextContext>>,
+        _text: Option<flui_rendering::pipeline::TextSource<'_>>,
     ) -> f64 {
         self.attempts.fetch_add(1, Ordering::Relaxed);
         if self.fail {
