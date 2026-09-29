@@ -576,7 +576,8 @@ impl PresentationState {
         let PresentationWindow {
             window,
             accessibility,
-        } = window.into(); // The one place a presentation's pipeline gets the realm's text
+        } = window.into();
+        // The one place a presentation's pipeline gets the realm's text
         // context, before anything can lay it out.
         pipeline.with_mut(|owner| owner.set_text_context(capabilities.text));
         let gestures = Self::build_gestures(id, &window);
