@@ -207,11 +207,9 @@ there.
 
 - The facade gets `default = []` and no `material`, `cupertino`, `devtools` or `hot-reload`
   features. `pub use flui_material as material` and the Material half of the prelude go.
-- `flui create` names in the generated manifest exactly the packages and features its source
-  uses. Today's templates use no catalog, so they name none; a template that uses a design
-  system adds it as a direct dependency. `flui-material` gains a `prelude` module with the names
-  the facade prelude carries today, so an application imports `flui::prelude::*` and
-  `flui_material::prelude::*`.
+- `flui create` adds `flui-material` to a new project explicitly, and `flui-material` gains a
+  `prelude` module with the names the facade prelude carries today, so an application imports
+  `flui::prelude::*` and `flui_material::prelude::*`.
 - **The reason is semver and train order, not a Cargo cycle.** A Stable facade that publicly
   re-exports an Evolving package makes every major of that package a major of `flui`; publishing
   `flui` must not wait for a package; and the reverse gate of §2 then has no exceptions. The cycle
@@ -248,8 +246,8 @@ Five moves, each of which leaves `main` green and merges on its own. The
 | 2. Material (in place) | `flui-material`'s nine internal normal dependencies become `flui-sdk` (plus `tracing`), its imports move to SDK paths, and it moves to `packages/flui-material` in the same change, with its dev-dependency paths rewritten. Done when no `flui_(widgets\|view\|types\|objects\|rendering\|foundation\|animation\|interaction\|scheduler\|painting)::` path is left in its `src`. Its examples stay with the facade until move 5b. **Outcome:** done, with no change to the SDK's surface; the view, inherited and animation derives resolve through `flui-sdk` first, so a package on the SDK alone can use them (the `Diagnosticable` derive has no SDK path yet); the kind rule of §2 is checked, and Material's `allowed-dependents` lists are replaced by it. It landed ahead of the parity command of §3, which still waits | move 1; the `cargo package` parity command of §3 |
 | 3. Cupertino (in place) | The same for `flui-cupertino`, which moves to `packages/flui-cupertino`. **Outcome:** done, with no change to the SDK's surface: its normal dependencies are `flui-sdk` and `tracing`, and its six seeded internal-crate exceptions and `allowed-dependents` lists are gone | move 1; independent of move 2 |
 | 4. Devtools and hot reload | `flui-devtools` moves onto the SDK and the observation-seam test moves into it, removing `flui-testing`'s dev edge. `flui-hot-reload` moves together with the `DevReloadHook` of ADR-0094 §2, which deletes the `flui-app` edge and the facade's `hot-reload` feature. **Outcome for devtools:** done. Its normal dependencies are `flui-sdk` plus six third-party crates, and its two internal-crate exceptions are gone. The SDK gained `hooks` with one item, `FrameSnapshot`, which the timeline records; the facade has no scheduler module, so the item is Evolving. No public API produces a `FrameSnapshot` yet (only `flui-app`'s crate-private presentation calls `FrameClock::frames_since`), so the timeline bridge is reachable from tests only; a public snapshot source, a frame-telemetry capability on the realm or on `LifecycleContext`, is the follow-up, recorded in `docs/plans/2026-09-25-architecture-migration-plan.md`, and lands after the realm moves into `flui-runtime`. The observation seam (ADR-0040) needed no new item: `foundation::observe` and `foundation::RebuildReason` are Stable paths inside the whole `foundation` re-export, and putting them in `hooks` would break the facade-path rule of §4. The seam test and the observer-overhead bench moved from `flui-testing` to `packages/flui-devtools`. **Hot reload stays in `crates/`:** `flui-app` names it (its `hot-reload` feature, the presentation's `apply_hot_reload`, and the runner code that installs its drivers), and so does the facade; deleting those edges needs the runtime hook of ADR-0094 §1, which as specified cannot host the dlopen worker or the Android scene plugin without amending ADR-0094, and whose Subsecond path is blocked by ADR-0094 §5. Its imports (`flui_layer::Scene` in the plugin ABI, `PipelineOwner`, `WidgetsBinding`, `flui-view/runtime-internals`) are not package-author items: SDK re-exports would add Evolving surface for a path ADR-0094 deletes, and enabling `runtime-internals` from the SDK would leak it to every package. Its two `reach-exceptions` and six `globals` entries, all exiting through ADR-0094, are more than a member under `packages/` may carry | move 1; for hot reload also `flui-view`'s `runtime-internals` feature replaced by a hidden module, and the runtime hook of ADR-0094 |
-| 5a. Facade defaults (in place) | §6: `default = []`. **Outcome:** done. Every catalog is opt-in: the facade's examples and tests already declared `required-features`; `examples/web_counter`, the local and fast-lane test scopes and `cargo xtask demo-snapshots` name `material` (and `cupertino`) explicitly; the `flui create` templates use no catalog and name none | moves 2 and 3 |
-| 5b. Facade names no package | §6: no `material`/`cupertino` features, dependencies, `edge-exceptions`, re-exports or Material prelude half; `flui_material::prelude`; a `flui create` template that uses a design system adds it as a direct dependency, with a CLI test that checks the generated project; Material examples move to `packages/flui-material/examples`; `cargo xtask facade-combos` and the documents from the `rg` list of the Consequences are updated; the CI Material example build changes with the owner's sign-off | move 5a |
+| 5a. Facade defaults (in place) | §6: `default = []`. **Outcome:** done. Every catalog is opt-in: the facade's examples and tests already declared `required-features`; `examples/web_counter`, the local and fast-lane test scopes and `cargo xtask demo-snapshots` name `material` (and `cupertino`) explicitly. The `flui create` templates use no catalog yet, so a generated project names none and turns Material on by hand (`features = ["material"]` on `flui`) until 5b | moves 2 and 3 |
+| 5b. Facade names no package | §6: no `material`/`cupertino` features, dependencies, `edge-exceptions`, re-exports or Material prelude half; `flui_material::prelude`; `flui create` adds `flui-material`, with a CLI test that checks the generated project; Material examples move to `packages/flui-material/examples`; `cargo xtask facade-combos` and the documents from the `rg` list of the Consequences are updated; the CI Material example build changes with the owner's sign-off | move 5a |
 
 Material's and Cupertino's `allowed-dependents` lists were replaced in moves 2 and 3 by the kind
 rule of §2, which refuses every edge they refused: a core crate names either design system only
@@ -365,7 +363,8 @@ In place with move 5a:
 - **An outside consumer gets no catalog.** `ordinary_facade_graph_excludes_test_support` in
   `tests/facade_consumer.rs` resolves a consumer's normal graph with and without
   `default-features` and requires neither `flui-material` nor `flui-cupertino` in it.
-- **Generated projects name what they use.** The template checks in
+- **Generated projects pull in no catalog yet.** Until `flui create` adds `flui-material`
+  (move 5b), the template checks in
   `crates/flui-cli/tests/cli_create.rs` resolve every generated project's normal graph and
   require no `flui-testing`, `flui-material` or `flui-cupertino` in it, after `cargo check`
   proves the project builds with the features its manifest names.
@@ -375,7 +374,7 @@ Not yet in place:
 - The `cargo package` parity command of §3 passes on every change.
 - The out-of-tree fixture builds against `flui-sdk` alone.
 - The Evolving surface counted from rustdoc JSON instead of from source.
-- A `flui-cli` test generates a template and runs `cargo check` on it with `flui-material` as a
-  direct dependency, once a template uses Material.
+- A `flui-cli` test generates the counter template and runs `cargo check` on it with
+  `flui-material` as a direct dependency.
 - A doctest that `use flui::prelude::*; use flui_material::prelude::*;` resolves without
   ambiguity.
