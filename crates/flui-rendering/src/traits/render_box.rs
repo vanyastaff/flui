@@ -746,14 +746,19 @@ where
         child_count: usize,
         child_parent_data: &[Option<&dyn crate::parent_data::ParentData>],
         child_query: &mut dyn FnMut(usize, crate::storage::IntrinsicDimension, f64) -> f64,
+        text: Option<&std::cell::RefCell<flui_painting::TextContext>>,
     ) -> f64 {
         // The intrinsics bridge: wrap the driver's memoizing child
         // recursion in the typed ctx and dispatch the dimension to the
         // matching typed compute_* — same shape as the paint/hit
         // bridges, no GAT erasure needed.
         use crate::storage::IntrinsicDimension as Dim;
-        let mut ctx =
-            crate::context::BoxIntrinsicsCtx::new(child_count, child_parent_data, child_query);
+        let mut ctx = crate::context::BoxIntrinsicsCtx::new(
+            child_count,
+            child_parent_data,
+            child_query,
+            text,
+        );
         match dimension {
             Dim::MinWidth => T::compute_min_intrinsic_width(self, extent, &mut ctx),
             Dim::MaxWidth => T::compute_max_intrinsic_width(self, extent, &mut ctx),
@@ -771,9 +776,10 @@ where
             usize,
             crate::context::DryLayoutChildRequest,
         ) -> crate::context::DryLayoutChildResponse,
+        text: Option<&std::cell::RefCell<flui_painting::TextContext>>,
     ) -> crate::protocol::ProtocolGeometry<BoxProtocol> {
         let mut ctx =
-            crate::context::BoxDryLayoutCtx::new(child_count, child_parent_data, child_query);
+            crate::context::BoxDryLayoutCtx::new(child_count, child_parent_data, child_query, text);
         T::compute_dry_layout(self, constraints, &mut ctx)
     }
 
@@ -787,9 +793,14 @@ where
             usize,
             crate::context::DryBaselineChildRequest,
         ) -> crate::context::DryBaselineChildResponse,
+        text: Option<&std::cell::RefCell<flui_painting::TextContext>>,
     ) -> Option<f64> {
-        let mut ctx =
-            crate::context::BoxDryBaselineCtx::new(child_count, child_parent_data, child_query);
+        let mut ctx = crate::context::BoxDryBaselineCtx::new(
+            child_count,
+            child_parent_data,
+            child_query,
+            text,
+        );
         T::compute_dry_baseline(self, constraints, baseline, &mut ctx)
     }
 

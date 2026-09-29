@@ -6,6 +6,11 @@ use flui_foundation::geometry::Offset;
 use flui_painting::typography::{TextAlign, TextDirection, TextPosition, TextSpan};
 use flui_painting::{Canvas, TextBaseline, TextPainter};
 
+/// A text context over a fresh collection, lent to each measurement.
+fn text_cx() -> flui_painting::TextContext {
+    flui_painting::TextContext::new(&flui_painting::FontCollection::new())
+}
+
 #[test]
 fn test_text_painter_new() {
     let painter = TextPainter::new();
@@ -32,7 +37,7 @@ fn test_text_painter_layout() {
         .with_text(TextSpan::new("Hello, World!"))
         .with_text_direction(TextDirection::Ltr);
 
-    painter.layout(0.0, 200.0);
+    painter.layout(&mut text_cx(), 0.0, 200.0);
 
     assert!(painter.has_layout());
     assert!(painter.width() > 0.0);
@@ -45,7 +50,7 @@ fn test_text_painter_setters_invalidate_layout() {
         .with_text(TextSpan::new("Hello"))
         .with_text_direction(TextDirection::Ltr);
 
-    painter.layout(0.0, 200.0);
+    painter.layout(&mut text_cx(), 0.0, 200.0);
     assert!(painter.has_layout());
 
     // Alignment is a paint offset over the shaped lines (shaped/paint
@@ -76,7 +81,7 @@ fn test_get_offset_for_caret() {
         .with_text(TextSpan::new("Hello, World!"))
         .with_text_direction(TextDirection::Ltr);
 
-    painter.layout(0.0, 200.0);
+    painter.layout(&mut text_cx(), 0.0, 200.0);
 
     let start = painter.get_offset_for_caret(TextPosition::upstream(0));
     let mid = painter.get_offset_for_caret(TextPosition::upstream(5));
@@ -93,7 +98,7 @@ fn test_get_position_for_offset() {
         .with_text(TextSpan::new("Hello"))
         .with_text_direction(TextDirection::Ltr);
 
-    painter.layout(0.0, 200.0);
+    painter.layout(&mut text_cx(), 0.0, 200.0);
 
     let pos = painter.get_position_for_offset(Offset::new(0.0, 5.0));
     assert_eq!(pos.offset, 0);
@@ -108,7 +113,7 @@ fn test_get_line_metrics() {
         .with_text(TextSpan::new("Line 1\nLine 2"))
         .with_text_direction(TextDirection::Ltr);
 
-    painter.layout(0.0, 200.0);
+    painter.layout(&mut text_cx(), 0.0, 200.0);
 
     let metrics = painter.get_line_metrics();
     assert_eq!(metrics.len(), 2);
@@ -122,7 +127,7 @@ fn test_get_boxes_for_selection() {
         .with_text(TextSpan::new("Hello, World!"))
         .with_text_direction(TextDirection::Ltr);
 
-    painter.layout(0.0, 200.0);
+    painter.layout(&mut text_cx(), 0.0, 200.0);
 
     let boxes = painter.get_boxes_for_selection(1, 5);
     assert!(!boxes.is_empty());
@@ -138,7 +143,7 @@ fn test_get_word_boundary() {
         .with_text(TextSpan::new("Hello World"))
         .with_text_direction(TextDirection::Ltr);
 
-    painter.layout(0.0, 200.0);
+    painter.layout(&mut text_cx(), 0.0, 200.0);
 
     let boundary = painter.get_word_boundary(TextPosition::upstream(2));
     assert!(boundary.start <= 2);
@@ -160,7 +165,7 @@ fn painted_span_contributes_its_laid_out_box_to_display_list_bounds() {
     let mut painter = TextPainter::new()
         .with_text(TextSpan::new("Hello, FLUI!"))
         .with_text_direction(TextDirection::Ltr);
-    painter.layout(0.0, f64::INFINITY);
+    painter.layout(&mut text_cx(), 0.0, f64::INFINITY);
 
     let size = painter.size();
     assert!(
@@ -194,10 +199,10 @@ fn max_lines_does_not_collapse_min_intrinsic_width() {
         .with_text_direction(TextDirection::Ltr)
         .with_max_lines(Some(1));
 
-    let full_min = full.min_intrinsic_width();
-    let full_max = full.max_intrinsic_width();
-    let clipped_min = clipped.min_intrinsic_width();
-    let clipped_max = clipped.max_intrinsic_width();
+    let full_min = full.min_intrinsic_width(&mut text_cx());
+    let full_max = full.max_intrinsic_width(&mut text_cx());
+    let clipped_min = clipped.min_intrinsic_width(&mut text_cx());
+    let clipped_max = clipped.max_intrinsic_width(&mut text_cx());
 
     assert!(
         full_min > 0.0,
@@ -226,9 +231,9 @@ fn max_lines_does_not_collapse_min_intrinsic_width() {
         .with_text(TextSpan::new(phrase))
         .with_text_direction(TextDirection::Ltr)
         .with_max_lines(Some(1));
-    laid_out.layout(0.0, 200.0);
-    let cached_min = laid_out.min_intrinsic_width();
-    let cached_max = laid_out.max_intrinsic_width();
+    laid_out.layout(&mut text_cx(), 0.0, 200.0);
+    let cached_min = laid_out.min_intrinsic_width(&mut text_cx());
+    let cached_max = laid_out.max_intrinsic_width(&mut text_cx());
     assert!(
         (cached_min - clipped_min).abs() < 0.01,
         "cached min {cached_min} must match uncached {clipped_min}"
@@ -250,9 +255,9 @@ fn unbreakable_run_min_intrinsic_stays_positive_under_max_lines() {
         .with_text(TextSpan::new("WWWWWWWWWW"))
         .with_text_direction(TextDirection::Ltr)
         .with_max_lines(Some(1));
-    let full_min = full.min_intrinsic_width();
-    let clipped_min = clipped.min_intrinsic_width();
-    let clipped_max = clipped.max_intrinsic_width();
+    let full_min = full.min_intrinsic_width(&mut text_cx());
+    let clipped_min = clipped.min_intrinsic_width(&mut text_cx());
+    let clipped_max = clipped.max_intrinsic_width(&mut text_cx());
     assert!(
         clipped_min > 0.0,
         "long run min intrinsic must be positive, got {clipped_min}"
@@ -276,9 +281,9 @@ fn hard_newlines_keep_positive_width_intrinsics_under_max_lines() {
         .with_text_direction(TextDirection::Ltr)
         .with_max_lines(Some(1));
 
-    let full_min = full.min_intrinsic_width();
-    let clipped_min = clipped.min_intrinsic_width();
-    let clipped_max = clipped.max_intrinsic_width();
+    let full_min = full.min_intrinsic_width(&mut text_cx());
+    let clipped_min = clipped.min_intrinsic_width(&mut text_cx());
+    let clipped_max = clipped.max_intrinsic_width(&mut text_cx());
     assert!(
         clipped_min > 0.0,
         "hard-newline min intrinsic must stay positive"
@@ -300,8 +305,8 @@ fn max_lines_with_ellipsis_keeps_positive_min_intrinsic_and_still_truncates_layo
         .with_max_lines(Some(1))
         .with_ellipsis(Some("…".to_string()));
 
-    let min = painter.min_intrinsic_width();
-    let max = painter.max_intrinsic_width();
+    let min = painter.min_intrinsic_width(&mut text_cx());
+    let max = painter.max_intrinsic_width(&mut text_cx());
     assert!(
         min > 0.0,
         "ellipsis + max_lines must not zero min intrinsic, got {min}"
@@ -309,7 +314,7 @@ fn max_lines_with_ellipsis_keeps_positive_min_intrinsic_and_still_truncates_layo
     assert!(min <= max);
 
     // Dry layout still enforces truncation — distinct from width intrinsics.
-    let dry = painter.dry_size(0.0, 40.0);
+    let dry = painter.dry_size(&mut text_cx(), 0.0, 40.0);
     assert!(
         dry.width > 0.0 && dry.width <= 40.0 + 0.01,
         "dry layout under narrow width must stay within the constraint, got {}",
@@ -321,14 +326,14 @@ fn max_lines_with_ellipsis_keeps_positive_min_intrinsic_and_still_truncates_layo
         dry.width
     );
 
-    painter.layout(0.0, 40.0);
+    painter.layout(&mut text_cx(), 0.0, 40.0);
     assert!(
         painter.did_exceed_max_lines(),
         "committed narrow layout must still enforce max_lines truncation"
     );
     // After layout, cached intrinsics must still ignore the truncation.
     assert!(
-        (painter.min_intrinsic_width() - min).abs() < 0.01,
+        (painter.min_intrinsic_width(&mut text_cx()) - min).abs() < 0.01,
         "layout must not rewrite min intrinsic from the truncating pass"
     );
 }
@@ -351,9 +356,9 @@ fn wide_ellipsis_floors_min_intrinsic_width() {
         .with_max_lines(Some(1))
         .with_ellipsis(Some(ellipsis.to_string()));
 
-    let text_min = text_only.min_intrinsic_width();
-    let ellipsis_width = ellipsis_only.max_intrinsic_width();
-    let floored = truncated.min_intrinsic_width();
+    let text_min = text_only.min_intrinsic_width(&mut text_cx());
+    let ellipsis_width = ellipsis_only.max_intrinsic_width(&mut text_cx());
+    let floored = truncated.min_intrinsic_width(&mut text_cx());
 
     assert!(
         ellipsis_width > text_min + 0.01,
@@ -370,9 +375,9 @@ fn wide_ellipsis_floors_min_intrinsic_width() {
         .with_text_direction(TextDirection::Ltr)
         .with_max_lines(Some(1))
         .with_ellipsis(Some(ellipsis.to_string()));
-    laid_out.layout(0.0, 200.0);
+    laid_out.layout(&mut text_cx(), 0.0, 200.0);
     assert!(
-        (laid_out.min_intrinsic_width() - floored).abs() < 0.01,
+        (laid_out.min_intrinsic_width(&mut text_cx()) - floored).abs() < 0.01,
         "cached min must keep the ellipsis floor"
     );
 }
@@ -389,11 +394,127 @@ fn intrinsic_height_still_honors_max_lines() {
         .with_max_lines(Some(1));
 
     let narrow = 40.0;
-    let tall = uncapped.intrinsic_height(narrow);
-    let short = capped.intrinsic_height(narrow);
+    let tall = uncapped.intrinsic_height(&mut text_cx(), narrow);
+    let short = capped.intrinsic_height(&mut text_cx(), narrow);
     assert!(tall > 0.0 && short > 0.0);
     assert!(
         short + 0.01 < tall,
         "height probe must still apply max_lines: capped {short} vs uncapped {tall}"
     );
+}
+
+/// Parley measurement on the lent context (ADR-0092 §10 step 3). The painter
+/// is pinned to Parley, so these run under `parley` without `parley-layout`.
+#[cfg(feature = "parley")]
+mod parley_measurement {
+    use flui_painting::parley_text::ParagraphSpec;
+    use flui_painting::testing::measure_with_parley;
+    use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
+    use flui_painting::{FontCollection, TextContext, TextPainter};
+
+    const PROBE_MONO: &[u8] = include_bytes!("../assets/fonts/probe-mono-100.ttf");
+    const SIZE: f64 = 20.0;
+    /// Finite, so a repeated layout is served from the painter's cache when
+    /// nothing it is keyed on changed.
+    const WIDTH: f64 = 1000.0;
+
+    /// The probe face maps `A` one em wide, so four `A`s measure exactly
+    /// four em where it is registered; elsewhere the family falls back to
+    /// Roboto, whose `A` is narrower.
+    fn probe_style() -> TextStyle {
+        TextStyle {
+            font_family: Some("FLUI Probe Mono".to_owned()),
+            font_weight: Some(FontWeight::W100),
+            font_size: Some(SIZE),
+            ..TextStyle::default()
+        }
+    }
+
+    fn probe_painter() -> TextPainter {
+        let mut painter = TextPainter::new()
+            .with_text(TextSpan::styled("AAAA", probe_style()))
+            .with_text_direction(TextDirection::Ltr);
+        measure_with_parley(&mut painter);
+        painter
+    }
+
+    /// The same painter measures through whichever context it is lent: the
+    /// probe width through the realm whose collection holds the face, the
+    /// fallback width through one that does not, and on the first exactly
+    /// what that context shapes the paragraph to.
+    #[test]
+    fn measurement_follows_the_context_it_is_given() {
+        let with_probe = FontCollection::new();
+        with_probe
+            .register_font(PROBE_MONO)
+            .expect("the probe face loads");
+        let mut a = TextContext::new(&with_probe);
+        let mut b = TextContext::new(&FontCollection::new());
+        let mut painter = probe_painter();
+
+        painter.layout(&mut a, 0.0, WIDTH);
+        let through_a = painter.size();
+        painter.layout(&mut b, 0.0, WIDTH);
+        let through_b = painter.size();
+
+        assert!(
+            (through_a.width - 4.0 * SIZE).abs() < 0.01,
+            "four one-em `A`s through A's context are {} px, got {}",
+            4.0 * SIZE,
+            through_a.width
+        );
+        assert!(
+            (through_b.width - through_a.width).abs() > 1.0,
+            "B's collection lacks the face, so the same painter measures the \
+             fallback: A {} vs B {}",
+            through_a.width,
+            through_b.width
+        );
+
+        let spans = vec![("AAAA".to_owned(), Some(probe_style()))];
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "the probe size is exact in f32"
+        )]
+        let shaped = a
+            .shape(&ParagraphSpec {
+                spans: &spans,
+                default_style: None,
+                font_size: SIZE as f32,
+                max_width: None,
+                line_height: None,
+                direction: TextDirection::Ltr,
+                max_lines: None,
+            })
+            .metrics();
+        painter.layout(&mut a, 0.0, WIDTH);
+        assert!((painter.size().width - shaped.width).abs() < f64::EPSILON);
+        assert!((painter.size().height - shaped.height).abs() < f64::EPSILON);
+    }
+
+    /// A face registered on the collection after the painter measured makes
+    /// the next layout measure again under the same constraints.
+    #[test]
+    fn a_registration_on_the_collection_invalidates_the_painter_cache() {
+        let fonts = FontCollection::new();
+        let mut context = TextContext::new(&fonts);
+        let mut painter = probe_painter();
+
+        painter.layout(&mut context, 0.0, WIDTH);
+        let before = painter.width();
+        fonts
+            .register_font(PROBE_MONO)
+            .expect("the probe face loads");
+        painter.layout(&mut context, 0.0, WIDTH);
+        let after = painter.width();
+
+        assert!(
+            (before - 4.0 * SIZE).abs() > 1.0,
+            "before registration the family falls back, got {before}"
+        );
+        assert!(
+            (after - 4.0 * SIZE).abs() < 0.01,
+            "after registration the cached fallback width is re-measured, got {after}"
+        );
+    }
 }

@@ -28,6 +28,7 @@ fn spec(spans: &[(String, Option<TextStyle>)], max_width: Option<f32>) -> Paragr
         max_width,
         line_height: None,
         direction: TextDirection::Ltr,
+        max_lines: None,
     }
 }
 

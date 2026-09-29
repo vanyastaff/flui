@@ -69,6 +69,21 @@ system: family and weight are resolved against the host database first
 RE-SHAPES the kept prefix so size, line metrics, and glyphs agree.
 `TextPainter` is the Flutter-shaped facade over it that `RenderParagraph`
 drives; its intrinsic-width probes shape without truncation (decision 9).
+
+Every `TextPainter` measurement takes the `TextContext` it measures through:
+`layout`, the four intrinsics, `dry_size` and `dry_baseline` each take
+`&mut TextContext`, and a render object lends its realm's (decision 14). The
+default build measures on cosmic-text as above and only counts the loan. Under
+`parley-layout`, size, baselines and intrinsics come from Parley shaping on
+that context (`ParagraphSpec` with the painter's spans, scale and
+`max_lines`; intrinsic widths from `ParagraphLayout::content_widths`), while
+the cosmic-text `TextLayout` is still built for paint, carets and selection
+until ADR-0092 §10 step 5 (decision 15). `parley` alone compiles that path
+without choosing it, because the workspace test scope turns `parley` on and
+must still test the build that ships; its tests pin a painter to Parley
+through `testing::measure_with_parley`. The painter's cache keys on the
+context's collection and its `FontCollection::generation`, so a layout from
+another realm's collection, or from before a registration, measures again.
 `TextPainter::paint` records `DrawCommand::Paragraph { layout, offset,
 color }` with the very `Arc<TextLayout>` its cache holds (ADR-0065): the
 engine rasterises what was measured and shapes nothing. The root colour
@@ -128,7 +143,8 @@ engine's `with_mut` closure, which takes no painting lock. The crate's
 step 6.
 
 The Parley path takes no FLUI lock. A `TextContext` is `Send` and used
-through `&mut` by the realm that owns it, so two realms shape at the same time
+through `&mut` by the realm that owns it (flui-rendering lends it to one
+measurement at a time), so two realms shape at the same time
 (`tests/text_context.rs`, `two_realms_shape_in_parallel`). The
 `FontCollection` they share is fontique's shared mode: a registration takes
 fontique's mutex and bumps a version, and each context re-reads the collection
@@ -457,8 +473,8 @@ the collection reaches every context built from it, including ones built
 before the registration. The collection offers no removal. This crate provides
 both types; the runtime constructs them (the app's shared engine services hold
 the collection, and each realm owns a context built in its constructor,
-ADR-0092 §10 step 2). Shaping through the context has no production caller
-until layout measures through it (step 3).
+ADR-0092 §10 step 2). Layout, intrinsic and dry queries measure through the
+realm's context (step 3, decision 14); it shapes under `parley-layout`.
 
 **Flutter:** one engine-wide `FontCollection` behind `dart:ui`, reached
 ambiently by every paragraph builder in the process; `loadFontFromList` adds
@@ -502,8 +518,11 @@ of `Rtl` that can be honoured today.
 **Accepted trade-off:** a right-to-left paragraph whose text starts with Latin
 or neutrals lays out its runs in the wrong order until the base direction can
 be set; that belongs to ADR-0092 §10 step 5, where editable text moves to
-Parley and its acceptance covers LTR, RTL and mixed bidi. No production path
-shapes through `ParagraphSpec` before then. Locked by
+Parley and its acceptance covers LTR, RTL and mixed bidi. Under
+`parley-layout`, `TextPainter` measures through `ParagraphSpec`, so an `Rtl`
+paragraph's measured size is that of the wrongly ordered runs; line widths do
+not depend on run order, so only a line break that falls differently shows.
+The default build does not shape through `ParagraphSpec`. Locked by
 `rtl_aligns_lines_right_without_setting_the_base_direction`
 (`src/parley_text/shape.rs`).
 
@@ -522,14 +541,76 @@ stops. Locked by `lerp_to_transparent_keeps_the_hue`
 (`tests/color_property.rs`) and `lerp_follows_flutter`
 (`src/styling/border.rs`).
 
+### 14. `TextPainter` measures through the context it is given
+
+**Rule:** every measuring method of `TextPainter` takes `&mut TextContext`;
+there is no ambient collection to fall back on. A render object lends its
+realm's context (`ctx.text()` in flui-rendering), and the painter's cache is
+keyed on that context's collection and generation as well as the
+constraints.
+
+**Flutter:** `TextPainter.layout` builds a `ui.Paragraph` that reaches the
+engine-wide `FontCollection` ambiently; nothing is passed. Recalled from
+Flutter's API, not checked against a clone.
+
+**Why:** a realm owns its text context (decision 11), and a realm's layout
+must measure with it rather than with whichever context is ambient. Passing it
+makes the realm visible in every signature that measures, which is what keeps
+two realms' layouts apart (ADR-0092 §3). Keying the cache on the collection
+closes the case a single ambient collection never had: one painter measured
+through two collections.
+
+**Accepted trade-off:** the default build still measures on the process font
+system, so the context is lent and counted but not shaped on until
+`parley-layout` becomes the default (ADR-0092 §10 step 4 folds `parley` into
+the default build). Locked by `measurement_follows_the_context_it_is_given`
+and `a_registration_on_the_collection_invalidates_the_painter_cache`
+(`tests/text_painter_unit.rs`, under `parley`).
+
+### 15. Under `parley-layout`, measurement and paint use different shapers
+
+**Rule:** with `parley-layout`, size, baselines and intrinsic widths come from
+Parley on the realm's context; glyphs, carets, selection and hit-testing still
+come from the cosmic-text `TextLayout` the painter builds beside it. Parley
+metrics are unquantized, as cosmic-text's are, so a baseline reaches the
+device grid once, when painted (`(line_y * scale).round()`). The ellipsis is
+not shaped into the last kept line: `max_lines` stops the metrics at the kept
+lines, and the ellipsis only floors the intrinsic widths. Parley's width
+excludes trailing whitespace; cosmic-text's includes it.
+
+**Flutter:** one paragraph object answers metrics and paints, so what is
+painted is what was measured, ellipsis included. Recalled from Flutter's API,
+not checked against a clone.
+
+**Why:** painted-as-measured returns when `DrawOp::Paragraph` carries runs
+from the same Parley layout (ADR-0092 §10 step 4) and carets come from its
+clusters (step 5). Until then measurement can move to the realm's context
+without a paint path, behind a feature that is off everywhere.
+
+**Accepted trade-off:** under `parley-layout`, a face the two shapers resolve
+differently measures and paints in different faces, a truncated paragraph's
+painted ellipsis can overhang its measured width, and a face registered
+through `SharedFontSystem::register_font` reaches paint but not measurement
+(ADR-0092 §10 step 3b routes registration through the collection). On the same
+face the two agree: `tests/parley_metrics_oracle.rs` pins equal width and
+height and the same device baseline for the bundled Roboto at 13–32 px,
+default and 1.5 line height, scales 1–2 (its cosmic side registers Roboto,
+because the cosmic-text path loads the bundled Roboto only on a host with no
+fonts). Two painting tests fail under `parley-layout` for these reasons:
+`painted_span_contributes_its_laid_out_box_to_display_list_bounds` (paint
+bounds from cosmic-text, size from Parley) and
+`register_font_invalidates_a_laid_out_painter` (registration on the process
+font system).
+
 ---
 
 ## Open items
 
 - **Nothing marks text render objects dirty on `register_font`.** The caches
-  heal at the next layout (they key on `generation()`), but the layout is
-  not requested by the registration — Flutter's `PaintingBinding.systemFonts`
-  listener is a realm-level broadcast that belongs to flui-app.
+  heal at the next layout (they key on `generation()` and on the collection's
+  `FontCollection::generation`), but the layout is not requested by the
+  registration — ADR-0092 §10 step 3b raises a font-collection-changed event
+  on every realm for it.
 - **`Save`/`Restore` carry a transform nobody reads.** Every command is
   stamped, the markers included; a marker-only shape would save 64 bytes
   per scope at the cost of a second command type on the wire.

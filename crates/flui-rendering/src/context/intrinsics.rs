@@ -11,8 +11,11 @@ use flui_foundation::geometry::Size;
 
 use crate::constraints::BoxConstraints;
 use crate::parent_data::{FlexParentData, ParentData};
+use crate::pipeline::{TextCx, TextSlot};
 use crate::storage::IntrinsicDimension;
 use crate::traits::TextBaseline;
+use flui_painting::TextContext;
+use std::cell::RefCell;
 
 // ============================================================================
 // DryBaselineChildRequest / DryBaselineChildResponse
@@ -106,6 +109,8 @@ pub struct BoxDryBaselineCtx<'a> {
     /// objects downcast entries via [`Self::child_parent_data_as`].
     child_parent_data: &'a [Option<&'a dyn ParentData>],
     query: &'a mut dyn FnMut(usize, DryBaselineChildRequest) -> DryBaselineChildResponse,
+    /// The text context this computation measures with.
+    text: TextSlot<'a>,
 }
 
 impl std::fmt::Debug for BoxDryBaselineCtx<'_> {
@@ -123,12 +128,25 @@ impl<'a> BoxDryBaselineCtx<'a> {
         child_count: usize,
         child_parent_data: &'a [Option<&'a dyn ParentData>],
         query: &'a mut dyn FnMut(usize, DryBaselineChildRequest) -> DryBaselineChildResponse,
+        text: Option<&'a RefCell<TextContext>>,
     ) -> Self {
         Self {
             child_count,
             child_parent_data,
             query,
+            text: TextSlot::new(text),
         }
+    }
+
+    /// The text context to measure with: the realm's, lent through the
+    /// pipeline, for as long as the returned [`TextCx`] lives.
+    ///
+    /// # Panics
+    ///
+    /// If the realm's context is already lent, which only a measurement that
+    /// re-enters another could cause.
+    pub fn text(&mut self) -> TextCx<'_> {
+        self.text.lend()
     }
 
     /// Number of tree children.
@@ -234,6 +252,8 @@ pub struct BoxIntrinsicsCtx<'a> {
     /// Erased per-child parent data; same semantics as [`BoxDryLayoutCtx::child_parent_data`].
     child_parent_data: &'a [Option<&'a dyn ParentData>],
     query: &'a mut dyn FnMut(usize, IntrinsicDimension, f64) -> f64,
+    /// The text context this computation measures with.
+    text: TextSlot<'a>,
 }
 
 impl std::fmt::Debug for BoxIntrinsicsCtx<'_> {
@@ -251,12 +271,25 @@ impl<'a> BoxIntrinsicsCtx<'a> {
         child_count: usize,
         child_parent_data: &'a [Option<&'a dyn ParentData>],
         query: &'a mut dyn FnMut(usize, IntrinsicDimension, f64) -> f64,
+        text: Option<&'a RefCell<TextContext>>,
     ) -> Self {
         Self {
             child_count,
             child_parent_data,
             query,
+            text: TextSlot::new(text),
         }
+    }
+
+    /// The text context to measure with: the realm's, lent through the
+    /// pipeline, for as long as the returned [`TextCx`] lives.
+    ///
+    /// # Panics
+    ///
+    /// If the realm's context is already lent, which only a measurement that
+    /// re-enters another could cause.
+    pub fn text(&mut self) -> TextCx<'_> {
+        self.text.lend()
     }
 
     /// Number of tree children.
@@ -351,6 +384,8 @@ pub struct BoxDryLayoutCtx<'a> {
     /// mismatches are impossible in correctly-constructed trees.
     child_parent_data: &'a [Option<&'a dyn ParentData>],
     query: &'a mut dyn FnMut(usize, DryLayoutChildRequest) -> DryLayoutChildResponse,
+    /// The text context this computation measures with.
+    text: TextSlot<'a>,
 }
 
 impl std::fmt::Debug for BoxDryLayoutCtx<'_> {
@@ -368,12 +403,25 @@ impl<'a> BoxDryLayoutCtx<'a> {
         child_count: usize,
         child_parent_data: &'a [Option<&'a dyn ParentData>],
         query: &'a mut dyn FnMut(usize, DryLayoutChildRequest) -> DryLayoutChildResponse,
+        text: Option<&'a RefCell<TextContext>>,
     ) -> Self {
         Self {
             child_count,
             child_parent_data,
             query,
+            text: TextSlot::new(text),
         }
+    }
+
+    /// The text context to measure with: the realm's, lent through the
+    /// pipeline, for as long as the returned [`TextCx`] lives.
+    ///
+    /// # Panics
+    ///
+    /// If the realm's context is already lent, which only a measurement that
+    /// re-enters another could cause.
+    pub fn text(&mut self) -> TextCx<'_> {
+        self.text.lend()
     }
 
     /// Number of tree children.
@@ -490,7 +538,7 @@ pub mod test_support {
                  a childless compute_* must not consult children"
             )
         };
-        f(&mut BoxIntrinsicsCtx::new(0, &[], &mut deny_query))
+        f(&mut BoxIntrinsicsCtx::new(0, &[], &mut deny_query, None))
     }
 
     /// Leaf context for `compute_dry_layout` tests; panics on any child query
@@ -512,7 +560,7 @@ pub mod test_support {
                 ),
             }
         };
-        f(&mut BoxDryLayoutCtx::new(0, &[], &mut deny))
+        f(&mut BoxDryLayoutCtx::new(0, &[], &mut deny, None))
     }
 
     /// Leaf context for `compute_dry_baseline` tests; panics on any child query.
@@ -535,7 +583,7 @@ pub mod test_support {
                 ),
             }
         };
-        f(&mut BoxDryBaselineCtx::new(0, &[], &mut deny))
+        f(&mut BoxDryBaselineCtx::new(0, &[], &mut deny, None))
     }
 }
 
@@ -562,7 +610,7 @@ mod tests {
             assert_eq!(extent, 42.0);
             99.0
         };
-        let mut ctx = BoxIntrinsicsCtx::new(3, &[], &mut query);
+        let mut ctx = BoxIntrinsicsCtx::new(3, &[], &mut query, None);
 
         assert_eq!(ctx.child_count(), 3);
         assert_eq!(
@@ -583,7 +631,7 @@ mod tests {
                 IntrinsicDimension::MaxHeight => extent + 4.0,
             }
         };
-        let mut ctx = BoxIntrinsicsCtx::new(1, &[], &mut query);
+        let mut ctx = BoxIntrinsicsCtx::new(1, &[], &mut query, None);
 
         assert_eq!(ctx.child_min_intrinsic_width(0, 10.0), 11.0);
         assert_eq!(ctx.child_max_intrinsic_width(0, 10.0), 12.0);
@@ -596,7 +644,7 @@ mod tests {
         let flex_data = FlexParentData::flexible(3);
         let slots: [Option<&dyn ParentData>; 2] = [Some(&flex_data), None];
         let mut query = |_i: usize, _d: IntrinsicDimension, _e: f64| -> f64 { 0.0 };
-        let ctx = BoxIntrinsicsCtx::new(2, &slots, &mut query);
+        let ctx = BoxIntrinsicsCtx::new(2, &slots, &mut query, None);
 
         assert!(ctx.child_parent_data(0).is_some());
         assert!(
@@ -631,7 +679,7 @@ mod tests {
             Some(&wrong_type),
         ];
         let mut query = |_i: usize, _d: IntrinsicDimension, _e: f64| -> f64 { 0.0 };
-        let ctx = BoxIntrinsicsCtx::new(4, &slots, &mut query);
+        let ctx = BoxIntrinsicsCtx::new(4, &slots, &mut query, None);
 
         assert_eq!(ctx.child_flex(0), 5);
         assert_eq!(ctx.child_flex(1), 0, "negative flex must clamp to zero");
@@ -662,7 +710,7 @@ mod tests {
                 DryLayoutChildRequest::Baseline(..) => DryLayoutChildResponse::Baseline(Some(7.0)),
             }
         };
-        let mut ctx = BoxDryLayoutCtx::new(1, &[], &mut query);
+        let mut ctx = BoxDryLayoutCtx::new(1, &[], &mut query, None);
 
         assert_eq!(ctx.child_count(), 1);
         assert_eq!(
@@ -703,7 +751,7 @@ mod tests {
                     DryLayoutChildRequest::Baseline(..) => DryLayoutChildResponse::Intrinsic(2.0),
                 }
             };
-        let mut ctx = BoxDryLayoutCtx::new(1, &[], &mut always_wrong_kind);
+        let mut ctx = BoxDryLayoutCtx::new(1, &[], &mut always_wrong_kind, None);
 
         assert_eq!(
             ctx.child_dry_layout(0, BoxConstraints::tight(Size::ZERO)),
@@ -732,7 +780,7 @@ mod tests {
         let mut query = |_i: usize, _r: DryLayoutChildRequest| -> DryLayoutChildResponse {
             DryLayoutChildResponse::DryLayout(Size::ZERO)
         };
-        let ctx = BoxDryLayoutCtx::new(1, &slots, &mut query);
+        let ctx = BoxDryLayoutCtx::new(1, &slots, &mut query, None);
 
         assert_eq!(
             ctx.child_parent_data_as::<FlexParentData>(0).unwrap().flex,
@@ -762,7 +810,7 @@ mod tests {
                     }
                 }
             };
-        let mut ctx = BoxDryBaselineCtx::new(1, &[], &mut query);
+        let mut ctx = BoxDryBaselineCtx::new(1, &[], &mut query, None);
 
         assert_eq!(ctx.child_count(), 1);
         assert_eq!(
@@ -802,7 +850,7 @@ mod tests {
                 }
             }
         };
-        let mut ctx = BoxDryBaselineCtx::new(1, &[], &mut always_wrong_kind);
+        let mut ctx = BoxDryBaselineCtx::new(1, &[], &mut always_wrong_kind, None);
 
         assert_eq!(
             ctx.child_dry_baseline(
@@ -829,7 +877,7 @@ mod tests {
         let mut query = |_i: usize, _r: DryBaselineChildRequest| -> DryBaselineChildResponse {
             DryBaselineChildResponse::Baseline(None)
         };
-        let ctx = BoxDryBaselineCtx::new(1, &slots, &mut query);
+        let ctx = BoxDryBaselineCtx::new(1, &slots, &mut query, None);
 
         assert_eq!(
             ctx.child_parent_data_as::<FlexParentData>(0).unwrap().flex,

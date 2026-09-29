@@ -288,7 +288,7 @@ fn with_leaf_erased_ctx_matches_direct_bridge_call() {
     // Mirror what RenderEntry::layout_leaf_only does.
     // `with_leaf_erased_ctx` forwards the closure return, which is now
     // `RenderResult<Size>`; unwrap on the happy path.
-    let size = <BoxProtocol as Protocol>::with_leaf_erased_ctx(constraints, |erased| {
+    let size = <BoxProtocol as Protocol>::with_leaf_erased_ctx(constraints, None, |erased| {
         <RenderColoredBox as RenderObject<BoxProtocol>>::perform_layout_raw(&mut obj, erased)
     })
     .expect("with_leaf_erased_ctx happy path must succeed");
@@ -378,7 +378,7 @@ fn render_view_adapter_bridge_smoke() {
     // (caught by the colored-box e2e gate, pinned by
     // tests/root_resize_repaint.rs).
     let incoming = BoxConstraints::tight(Size::new(999.0, 999.0));
-    let size = <BoxProtocol as Protocol>::with_leaf_erased_ctx(incoming, |erased| {
+    let size = <BoxProtocol as Protocol>::with_leaf_erased_ctx(incoming, None, |erased| {
         <RenderViewAdapter as RenderObject<BoxProtocol>>::perform_layout_raw(&mut adapter, erased)
     })
     .expect("RenderViewAdapter root layout must always succeed");

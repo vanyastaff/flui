@@ -3,11 +3,11 @@
 //! key that names its face by font blob, the registry that keeps those faces
 //! alive, and a swash rasterizer that draws the keys.
 //!
-//! Nothing on the production path reaches this module yet: layout measures
-//! through the realm's context in ADR-0092 §10 step 3, and shaped runs join
-//! the display list, with the engine's atlas on [`SwashRasterizer`], in step
-//! 4. It holds no `static` and takes no lock; every object is owned and used
-//! through `&mut`.
+//! Layout reaches this module through `TextPainter` under `parley-layout`
+//! (ADR-0092 §10 step 3): size, baselines and intrinsics come from
+//! [`ParagraphLayout`]. Shaped runs join the display list, with the engine's
+//! atlas on [`SwashRasterizer`], in step 4. It holds no `static` and takes
+//! no lock; every object is owned and used through `&mut`.
 //!
 //! - `shape` — [`ParagraphSpec`] in, [`ParagraphLayout`] out, through
 //!   `TextContext::shape`.

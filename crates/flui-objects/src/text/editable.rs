@@ -648,7 +648,7 @@ impl RenderBox for RenderEditable {
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
         let constraints = *ctx.constraints();
         let (min_width, max_width) = self.text_width_constraints(&constraints);
-        self.painter.layout(min_width, max_width);
+        self.painter.layout(&mut ctx.text(), min_width, max_width);
         let size = self.size_for_text(&constraints, self.painter.size());
         let caret_position =
             TextPosition::downstream(self.safe_caret_offset(self.caret_byte_offset));
@@ -659,10 +659,10 @@ impl RenderBox for RenderEditable {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        _ctx: &mut BoxDryLayoutCtx<'_>,
+        ctx: &mut BoxDryLayoutCtx<'_>,
     ) -> Size {
         let (min_width, max_width) = self.text_width_constraints(&constraints);
-        let text_size = self.painter.dry_size(min_width, max_width);
+        let text_size = self.painter.dry_size(&mut ctx.text(), min_width, max_width);
         self.size_for_text(&constraints, text_size)
     }
 
@@ -670,7 +670,7 @@ impl RenderBox for RenderEditable {
         &self,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-        _ctx: &mut BoxDryBaselineCtx<'_>,
+        ctx: &mut BoxDryBaselineCtx<'_>,
     ) -> Option<f64> {
         let (min_width, max_width) = self.text_width_constraints(&constraints);
         let painter_baseline = match baseline {
@@ -678,26 +678,26 @@ impl RenderBox for RenderEditable {
             TextBaseline::Ideographic => PainterBaseline::Ideographic,
         };
         self.painter
-            .dry_baseline(min_width, max_width, painter_baseline)
+            .dry_baseline(&mut ctx.text(), min_width, max_width, painter_baseline)
     }
 
-    fn compute_min_intrinsic_width(&self, _height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.painter.min_intrinsic_width() + self.caret_margin()
+    fn compute_min_intrinsic_width(&self, _height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+        self.painter.min_intrinsic_width(&mut ctx.text()) + self.caret_margin()
     }
 
-    fn compute_max_intrinsic_width(&self, _height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.painter.max_intrinsic_width() + self.caret_margin()
+    fn compute_max_intrinsic_width(&self, _height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+        self.painter.max_intrinsic_width(&mut ctx.text()) + self.caret_margin()
     }
 
-    fn compute_min_intrinsic_height(&self, width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.painter
-            .intrinsic_height(self.intrinsic_text_width(width))
+            .intrinsic_height(&mut ctx.text(), self.intrinsic_text_width(width))
             .max(self.caret_height)
     }
 
-    fn compute_max_intrinsic_height(&self, width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.painter
-            .intrinsic_height(self.intrinsic_text_width(width))
+            .intrinsic_height(&mut ctx.text(), self.intrinsic_text_width(width))
             .max(self.caret_height)
     }
 

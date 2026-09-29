@@ -10,6 +10,11 @@ use flui_painting::typography::{
 };
 use flui_painting::{Canvas, TextPainter};
 
+/// A text context over a fresh collection, lent to each measurement.
+fn text_cx() -> flui_painting::TextContext {
+    flui_painting::TextContext::new(&flui_painting::FontCollection::new())
+}
+
 // ============================================================================
 // measure_text standalone function
 // ============================================================================
@@ -21,7 +26,7 @@ fn text_painter_layout_produces_valid_metrics() {
         .with_text(span)
         .with_text_direction(TextDirection::Ltr);
 
-    painter.layout(0.0, 300.0);
+    painter.layout(&mut text_cx(), 0.0, 300.0);
 
     assert!(painter.has_layout());
     assert!(painter.width() > 0.0);
@@ -35,7 +40,7 @@ fn text_painter_paint_emits_draw_command() {
         .with_text(span)
         .with_text_direction(TextDirection::Ltr);
 
-    painter.layout(0.0, 300.0);
+    painter.layout(&mut text_cx(), 0.0, 300.0);
 
     let mut canvas = Canvas::new();
     painter.paint(&mut canvas, Offset::ZERO);
@@ -54,7 +59,7 @@ fn text_painter_caret_and_hit_test_roundtrip() {
         .with_text(span)
         .with_text_direction(TextDirection::Ltr);
 
-    painter.layout(0.0, 300.0);
+    painter.layout(&mut text_cx(), 0.0, 300.0);
 
     // Get caret offset at position 5
     let caret = painter.get_offset_for_caret(TextPosition::upstream(5));
@@ -77,7 +82,7 @@ fn text_painter_line_metrics() {
         .with_text(span)
         .with_text_direction(TextDirection::Ltr);
 
-    painter.layout(0.0, 300.0);
+    painter.layout(&mut text_cx(), 0.0, 300.0);
 
     let metrics = painter.get_line_metrics();
     assert_eq!(metrics.len(), 3, "should have 3 lines");
@@ -98,7 +103,7 @@ fn text_painter_selection_boxes() {
         .with_text(span)
         .with_text_direction(TextDirection::Ltr);
 
-    painter.layout(0.0, 300.0);
+    painter.layout(&mut text_cx(), 0.0, 300.0);
 
     // Select "ello"
     let boxes = painter.get_boxes_for_selection(1, 5);
@@ -119,7 +124,7 @@ fn text_painter_word_boundary() {
         .with_text(span)
         .with_text_direction(TextDirection::Ltr);
 
-    painter.layout(0.0, 300.0);
+    painter.layout(&mut text_cx(), 0.0, 300.0);
 
     let boundary = painter.get_word_boundary(TextPosition::upstream(2));
     assert!(boundary.start <= 2);
@@ -133,14 +138,14 @@ fn text_painter_alignment_affects_offset() {
         .with_text(TextSpan::new("Short"))
         .with_text_direction(TextDirection::Ltr)
         .with_text_align(TextAlign::Left);
-    left.layout(0.0, 300.0);
+    left.layout(&mut text_cx(), 0.0, 300.0);
 
     // Right-aligned
     let mut right = TextPainter::new()
         .with_text(TextSpan::new("Short"))
         .with_text_direction(TextDirection::Ltr)
         .with_text_align(TextAlign::Right);
-    right.layout(0.0, 300.0);
+    right.layout(&mut text_cx(), 0.0, 300.0);
 
     // Both should have the same size
     assert!(
@@ -154,13 +159,13 @@ fn text_painter_scale_factor_affects_size() {
     let mut normal = TextPainter::new()
         .with_text(TextSpan::new("Hello"))
         .with_text_direction(TextDirection::Ltr);
-    normal.layout(0.0, 500.0);
+    normal.layout(&mut text_cx(), 0.0, 500.0);
 
     let mut scaled = TextPainter::new()
         .with_text(TextSpan::new("Hello"))
         .with_text_direction(TextDirection::Ltr)
         .with_text_scale_factor(2.0);
-    scaled.layout(0.0, 500.0);
+    scaled.layout(&mut text_cx(), 0.0, 500.0);
 
     assert!(
         scaled.width() > normal.width(),
@@ -178,11 +183,11 @@ fn text_painter_layout_caching() {
         .with_text_direction(TextDirection::Ltr);
 
     // First layout
-    painter.layout(0.0, 200.0);
+    painter.layout(&mut text_cx(), 0.0, 200.0);
     let w1 = painter.width();
 
     // Same constraints -- should return cached result
-    painter.layout(0.0, 200.0);
+    painter.layout(&mut text_cx(), 0.0, 200.0);
     let w2 = painter.width();
 
     assert!(
@@ -200,7 +205,7 @@ fn text_painter_invalidation_on_setter() {
         .with_text(span)
         .with_text_direction(TextDirection::Ltr);
 
-    painter.layout(0.0, 200.0);
+    painter.layout(&mut text_cx(), 0.0, 200.0);
     assert!(painter.has_layout());
 
     // Alignment is a PAINT offset over the shaped lines (the
@@ -243,7 +248,7 @@ fn full_pipeline_with_styled_text() {
         .with_text(span)
         .with_text_direction(TextDirection::Ltr);
 
-    painter.layout(0.0, 400.0);
+    painter.layout(&mut text_cx(), 0.0, 400.0);
     assert!(painter.width() > 0.0);
 
     let mut canvas = Canvas::new();

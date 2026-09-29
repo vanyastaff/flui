@@ -848,7 +848,7 @@ mod tests {
         let constraints = vertical_constraints(0.0, 600.0);
         let mut sliver = FixedHeightSliver::new(200.0);
 
-        let result = SliverProtocol::with_leaf_erased_ctx(constraints, |erased| {
+        let result = SliverProtocol::with_leaf_erased_ctx(constraints, None, |erased| {
             use crate::protocol::RenderObject;
             sliver.perform_layout_raw(erased)
         });
@@ -865,7 +865,7 @@ mod tests {
         let constraints = vertical_constraints(50.0, 600.0);
         let mut sliver = FixedHeightSliver::new(200.0);
 
-        let result = SliverProtocol::with_leaf_erased_ctx(constraints, |erased| {
+        let result = SliverProtocol::with_leaf_erased_ctx(constraints, None, |erased| {
             use crate::protocol::RenderObject;
             sliver.perform_layout_raw(erased)
         });
@@ -887,7 +887,7 @@ mod tests {
         let constraints = vertical_constraints(0.0, 80.0);
         let mut sliver = FixedHeightSliver::new(200.0);
 
-        let result = SliverProtocol::with_leaf_erased_ctx(constraints, |erased| {
+        let result = SliverProtocol::with_leaf_erased_ctx(constraints, None, |erased| {
             use crate::protocol::RenderObject;
             sliver.perform_layout_raw(erased)
         });
@@ -1122,7 +1122,7 @@ mod tests {
         let constraints = vertical_constraints(0.0, 600.0);
         let mut sliver = SingleAritySliver;
 
-        let result = SliverProtocol::with_leaf_erased_ctx(constraints, |erased| {
+        let result = SliverProtocol::with_leaf_erased_ctx(constraints, None, |erased| {
             use crate::protocol::RenderObject;
             sliver.perform_layout_raw(erased)
         });

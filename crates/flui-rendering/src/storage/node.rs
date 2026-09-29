@@ -524,14 +524,15 @@ impl RenderNode {
     pub fn layout_leaf_erased(
         &mut self,
         constraints: crate::storage::ErasedConstraints,
+        text: Option<&std::cell::RefCell<flui_painting::TextContext>>,
     ) -> crate::error::RenderResult<crate::storage::ErasedGeometry> {
         use crate::storage::ErasedConstraints;
         match (self, constraints) {
             (Self::Box(entry), ErasedConstraints::Box(c)) => {
-                entry.layout_leaf_only(c).map(Into::into)
+                entry.layout_leaf_only(c, text).map(Into::into)
             }
             (Self::Sliver(entry), ErasedConstraints::Sliver(c)) => {
-                entry.layout_leaf_only(c).map(Into::into)
+                entry.layout_leaf_only(c, text).map(Into::into)
             }
             (Self::Box(_), ErasedConstraints::Sliver(_)) => {
                 Err(crate::error::RenderError::ProtocolMismatch {

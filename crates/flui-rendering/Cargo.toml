@@ -143,6 +143,9 @@ flui-rendering = { path = ".", features = ["testing"] }
 # flui-objects in production (that would invert the layer order).
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-objects = { path = "../flui-objects", features = ["testing"] }
+# The text-context tests count the loans of a realm's context
+# (`flui_painting::testing::text_context_lends`).
+flui-painting = { path = "../flui-painting", version = "=0.2.0-dev", features = ["testing"] }
 
 [features]
 default = []

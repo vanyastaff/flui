@@ -11,6 +11,11 @@ use flui_painting::text_layout::TextLayout;
 use flui_painting::text_painter::TextPainter;
 use flui_painting::typography::{TextDirection, TextSpan};
 
+/// A text context over a fresh collection, lent to each measurement.
+fn text_cx() -> flui_painting::TextContext {
+    flui_painting::TextContext::new(&flui_painting::FontCollection::new())
+}
+
 #[test]
 fn baselines_come_from_the_shaper() {
     let layout = TextLayout::new("Hello xyj", None, 14.0, None, None, TextDirection::Ltr);
@@ -51,7 +56,7 @@ fn color_change_keeps_the_shaped_layout() {
             TextSpan::new("Hello").with_style(TextStyle::new().with_color(Color::rgb(255, 0, 0))),
         )
         .with_text_direction(TextDirection::Ltr);
-    painter.layout(0.0, 200.0);
+    painter.layout(&mut text_cx(), 0.0, 200.0);
     let size_before = painter.size();
     let baseline_before =
         painter.compute_distance_to_actual_baseline(flui_painting::TextBaseline::Alphabetic);
@@ -127,7 +132,7 @@ fn rich_child_span_styles_reach_the_shaper() {
     let mut rich_painter = TextPainter::new()
         .with_text(rich)
         .with_text_direction(TextDirection::Ltr);
-    rich_painter.layout(0.0, f64::INFINITY);
+    rich_painter.layout(&mut text_cx(), 0.0, f64::INFINITY);
 
     let mut flat_painter = TextPainter::new()
         .with_text({
@@ -136,7 +141,7 @@ fn rich_child_span_styles_reach_the_shaper() {
             root
         })
         .with_text_direction(TextDirection::Ltr);
-    flat_painter.layout(0.0, f64::INFINITY);
+    flat_painter.layout(&mut text_cx(), 0.0, f64::INFINITY);
 
     assert!(
         rich_painter.width() > flat_painter.width() + 1.0,
@@ -168,11 +173,11 @@ fn rich_inheritance_merges_parent_style_into_children() {
     let mut a = TextPainter::new()
         .with_text(inherited)
         .with_text_direction(TextDirection::Ltr);
-    a.layout(0.0, f64::INFINITY);
+    a.layout(&mut text_cx(), 0.0, f64::INFINITY);
     let mut b = TextPainter::new()
         .with_text(flat)
         .with_text_direction(TextDirection::Ltr);
-    b.layout(0.0, f64::INFINITY);
+    b.layout(&mut text_cx(), 0.0, f64::INFINITY);
 
     assert!(
         (a.width() - b.width()).abs() < 0.5,
@@ -203,7 +208,7 @@ fn rich_truncation_keeps_span_styling() {
         .with_text_direction(TextDirection::Ltr)
         .with_max_lines(Some(1))
         .with_ellipsis(Some("…".to_string()));
-    painter.layout(0.0, 120.0);
+    painter.layout(&mut text_cx(), 0.0, 120.0);
 
     assert!(painter.did_exceed_max_lines());
     assert_eq!(painter.get_line_metrics().len(), 1, "one kept line");
@@ -224,7 +229,7 @@ fn painter_layout_limits_height_to_max_lines() {
         .with_max_lines(Some(1))
         .with_ellipsis(Some("…".to_string()));
 
-    painter.layout(0.0, 60.0);
+    painter.layout(&mut text_cx(), 0.0, 60.0);
 
     assert!(painter.did_exceed_max_lines());
     let one_line_height = painter.height();
@@ -234,7 +239,7 @@ fn painter_layout_limits_height_to_max_lines() {
             "one two three four five six seven eight nine",
         ))
         .with_text_direction(TextDirection::Ltr);
-    unlimited.layout(0.0, 60.0);
+    unlimited.layout(&mut text_cx(), 0.0, 60.0);
 
     assert!(
         one_line_height < unlimited.height(),
@@ -335,7 +340,7 @@ fn a_truncated_paragraph_paints_exactly_the_lines_it_measured() {
         .with_text_direction(TextDirection::Ltr)
         .with_max_lines(Some(1))
         .with_ellipsis(Some("…".to_string()));
-    painter.layout(0.0, 80.0);
+    painter.layout(&mut text_cx(), 0.0, 80.0);
     assert!(painter.did_exceed_max_lines());
 
     let mut canvas = Canvas::new();
@@ -401,7 +406,7 @@ fn root_recolor_keeps_the_shaped_buffer_and_span_recolor_reshapes_once() {
     let mut painter = TextPainter::new()
         .with_text(styled(red, blue))
         .with_text_direction(TextDirection::Ltr);
-    painter.layout(0.0, f64::INFINITY);
+    painter.layout(&mut text_cx(), 0.0, f64::INFINITY);
     let (first, first_color) = recorded(&painter);
     assert_eq!(first_color, red);
 
@@ -423,7 +428,7 @@ fn root_recolor_keeps_the_shaped_buffer_and_span_recolor_reshapes_once() {
         painter.set_text(Some(styled(green, red).into())),
         Invalidation::Layout
     );
-    painter.layout(0.0, f64::INFINITY);
+    painter.layout(&mut text_cx(), 0.0, f64::INFINITY);
     let (third, _) = recorded(&painter);
     assert!(
         !std::sync::Arc::ptr_eq(&second, &third),

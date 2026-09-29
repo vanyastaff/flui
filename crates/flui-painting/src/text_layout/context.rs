@@ -17,6 +17,7 @@
 
 use std::fmt;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(feature = "parley")]
 use crate::error::RegisterFontError;
@@ -32,6 +33,9 @@ use crate::parley_text::SpanBrush;
 pub struct FontCollection(Arc<FontCollectionInner>);
 
 struct FontCollectionInner {
+    /// Bumped once per registration that added a face; a measurement
+    /// cached against an older value is stale.
+    generation: AtomicU64,
     /// fontique's collection in shared mode, with no host scan.
     #[cfg(feature = "parley")]
     collection: parley::fontique::Collection,
@@ -57,6 +61,22 @@ impl FontCollection {
     #[must_use]
     pub fn ptr_eq(a: &Self, b: &Self) -> bool {
         Arc::ptr_eq(&a.0, &b.0)
+    }
+
+    /// How many registrations have added a face to this collection.
+    ///
+    /// Starts at zero and only grows. A measurement cached against an older
+    /// value may shape differently now, so it is re-measured; a registration
+    /// that found no face leaves the value alone.
+    #[must_use]
+    pub fn generation(&self) -> u64 {
+        self.0.generation.load(Ordering::Acquire)
+    }
+
+    /// An identity for this collection, equal across clones: the address of
+    /// the shared allocation. Only compared, never dereferenced.
+    pub(crate) fn identity(&self) -> usize {
+        Arc::as_ptr(&self.0) as usize
     }
 
     /// How many handles hold this collection: every clone, including the one
@@ -93,6 +113,7 @@ impl FontCollection {
         if families.is_empty() {
             return Err(RegisterFontError);
         }
+        self.0.generation.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
 }
@@ -100,7 +121,9 @@ impl FontCollection {
 impl FontCollectionInner {
     #[cfg(not(feature = "parley"))]
     fn new() -> Self {
-        Self {}
+        Self {
+            generation: AtomicU64::new(0),
+        }
     }
 
     #[cfg(feature = "parley")]
@@ -118,6 +141,7 @@ impl FontCollectionInner {
         #[cfg(feature = "bundled-fonts")]
         bind_bundled_faces(&mut collection);
         Self {
+            generation: AtomicU64::new(0),
             collection,
             source_cache: SourceCache::new_shared(),
         }
@@ -171,6 +195,10 @@ impl fmt::Debug for FontCollection {
 /// shape at the same time without waiting on each other.
 pub struct TextContext {
     fonts: FontCollection,
+    /// How many measurements this context was lent for; read by tests
+    /// through `testing::text_context_lends`.
+    #[cfg(any(test, feature = "testing"))]
+    lent: u64,
     #[cfg(feature = "parley")]
     pub(crate) font_cx: parley::FontContext,
     #[cfg(feature = "parley")]
@@ -184,6 +212,8 @@ impl TextContext {
     pub fn new(fonts: &FontCollection) -> Self {
         Self {
             fonts: fonts.clone(),
+            #[cfg(any(test, feature = "testing"))]
+            lent: 0,
             #[cfg(feature = "parley")]
             font_cx: parley::FontContext {
                 collection: fonts.0.collection.clone(),
@@ -198,6 +228,22 @@ impl TextContext {
     #[must_use]
     pub fn fonts(&self) -> &FontCollection {
         &self.fonts
+    }
+
+    /// Records one measurement made through this context. Counted only in
+    /// test builds, where it shows which context a layout measured on.
+    #[inline]
+    pub(crate) fn note_lent(&mut self) {
+        #[cfg(any(test, feature = "testing"))]
+        {
+            self.lent += 1;
+        }
+    }
+
+    /// How many measurements this context was lent for.
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn lends(&self) -> u64 {
+        self.lent
     }
 }
 
@@ -253,5 +299,24 @@ mod tests {
         let fonts = FontCollection::new();
         assert!(fonts.register_font(b"not a font").is_err());
         assert!(fonts.register_font(&[]).is_err());
+        assert_eq!(
+            fonts.generation(),
+            0,
+            "a refused registration is no new generation"
+        );
+    }
+
+    #[cfg(all(feature = "parley", feature = "bundled-fonts"))]
+    #[test]
+    fn a_registration_that_adds_a_face_bumps_the_generation_on_every_clone() {
+        let fonts = FontCollection::new();
+        let clone = fonts.clone();
+        assert_eq!(fonts.generation(), 0);
+        fonts
+            .register_font(crate::fonts::ROBOTO_REGULAR)
+            .expect("BUG: the bundled Roboto face parses");
+        assert_eq!(fonts.generation(), 1);
+        assert_eq!(clone.generation(), 1);
+        assert_eq!(FontCollection::new().generation(), 0);
     }
 }

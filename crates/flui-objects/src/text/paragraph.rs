@@ -1,9 +1,11 @@
 //! RenderParagraph — lays out and paints styled text.
 //!
-//! Wraps [`flui_painting::TextPainter`] (the cosmic-text-backed shaping +
-//! metrics authority) the way [`RenderImage`](crate::RenderImage) wraps a
-//! leaf: the render object owns a painter, drives its layout from box
-//! constraints, and forwards intrinsics / baseline / paint to it. Ports the
+//! Wraps [`flui_painting::TextPainter`] (the shaping and metrics authority)
+//! the way [`RenderImage`](crate::RenderImage) wraps a leaf: the render
+//! object owns a painter, drives its layout from box constraints, and
+//! forwards intrinsics / baseline / paint to it. Every measurement goes
+//! through the realm's text context, lent by the layout, intrinsics and dry
+//! contexts as `ctx.text()` (ADR-0092 §10 step 3). Ports the
 //! renderable core of Flutter's `RenderParagraph` (`paragraph.dart`): layout,
 //! dry layout, the four intrinsics, baseline, and paint — with `softWrap`,
 //! `maxLines`, and ellipsis truncation.
@@ -207,7 +209,8 @@ impl RenderBox for RenderParagraph {
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
         let constraints = *ctx.constraints();
         let max_width = self.layout_max_width(&constraints);
-        self.painter.layout(constraints.min_width, max_width);
+        self.painter
+            .layout(&mut ctx.text(), constraints.min_width, max_width);
         // The text's own size, then clamped into the box constraints
         // (Flutter `size = constraints.constrain(textPainter.size)`).
         constraints.constrain(self.painter.size())
@@ -216,10 +219,12 @@ impl RenderBox for RenderParagraph {
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
-        _ctx: &mut BoxDryLayoutCtx<'_>,
+        ctx: &mut BoxDryLayoutCtx<'_>,
     ) -> Size {
         let max_width = self.layout_max_width(&constraints);
-        let text_size = self.painter.dry_size(constraints.min_width, max_width);
+        let text_size = self
+            .painter
+            .dry_size(&mut ctx.text(), constraints.min_width, max_width);
         constraints.constrain(text_size)
     }
 
@@ -227,34 +232,38 @@ impl RenderBox for RenderParagraph {
         &self,
         constraints: BoxConstraints,
         baseline: TextBaseline,
-        _ctx: &mut BoxDryBaselineCtx<'_>,
+        ctx: &mut BoxDryBaselineCtx<'_>,
     ) -> Option<f64> {
         let max_width = self.layout_max_width(&constraints);
         let painter_baseline = match baseline {
             TextBaseline::Alphabetic => PainterBaseline::Alphabetic,
             TextBaseline::Ideographic => PainterBaseline::Ideographic,
         };
-        self.painter
-            .dry_baseline(constraints.min_width, max_width, painter_baseline)
+        self.painter.dry_baseline(
+            &mut ctx.text(),
+            constraints.min_width,
+            max_width,
+            painter_baseline,
+        )
     }
 
     // Width intrinsics ignore the height extent (text width does not depend on
     // available height); height intrinsics lay the text out at the given width.
 
-    fn compute_min_intrinsic_width(&self, _height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.painter.min_intrinsic_width()
+    fn compute_min_intrinsic_width(&self, _height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+        self.painter.min_intrinsic_width(&mut ctx.text())
     }
 
-    fn compute_max_intrinsic_width(&self, _height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.painter.max_intrinsic_width()
+    fn compute_max_intrinsic_width(&self, _height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+        self.painter.max_intrinsic_width(&mut ctx.text())
     }
 
-    fn compute_min_intrinsic_height(&self, width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.painter.intrinsic_height(width)
+    fn compute_min_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+        self.painter.intrinsic_height(&mut ctx.text(), width)
     }
 
-    fn compute_max_intrinsic_height(&self, width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.painter.intrinsic_height(width)
+    fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
+        self.painter.intrinsic_height(&mut ctx.text(), width)
     }
 
     fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f64> {

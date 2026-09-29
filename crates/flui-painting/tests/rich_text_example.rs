@@ -17,6 +17,11 @@ use flui_painting::{
     },
 };
 
+/// A text context over a fresh collection, lent to each measurement.
+fn text_cx() -> flui_painting::TextContext {
+    flui_painting::TextContext::new(&flui_painting::FontCollection::new())
+}
+
 // ============================================================================
 // Example: Basic Rich Text
 // ============================================================================
@@ -57,7 +62,7 @@ fn example_rich_text_basic() {
         .with_text_align(TextAlign::Left);
 
     // Layout with max width
-    painter.layout(0.0, 300.0);
+    painter.layout(&mut text_cx(), 0.0, 300.0);
 
     // Verify layout computed
     assert!(painter.width() > 0.0);
@@ -83,7 +88,7 @@ fn example_cursor_positioning() {
         .with_text(InlineSpan::new(span))
         .with_text_direction(TextDirection::Ltr);
 
-    painter.layout(0.0, 200.0);
+    painter.layout(&mut text_cx(), 0.0, 200.0);
 
     // Get cursor position at different offsets
     let positions = [0, 5, 7, 13];
@@ -118,7 +123,7 @@ fn example_hit_testing() {
         .with_text(InlineSpan::new(span))
         .with_text_direction(TextDirection::Ltr);
 
-    painter.layout(0.0, 300.0);
+    painter.layout(&mut text_cx(), 0.0, 300.0);
 
     // Simulate clicks at different x positions
     let click_positions = [
@@ -157,7 +162,7 @@ fn example_text_selection() {
         .with_text(InlineSpan::new(span))
         .with_text_direction(TextDirection::Ltr);
 
-    painter.layout(0.0, 300.0);
+    painter.layout(&mut text_cx(), 0.0, 300.0);
 
     // Get selection boxes for "some" (offsets 7-11)
     let selection_boxes = painter.get_boxes_for_selection(7, 11);
@@ -194,7 +199,7 @@ fn example_word_boundary() {
         .with_text(InlineSpan::new(span))
         .with_text_direction(TextDirection::Ltr);
 
-    painter.layout(0.0, 300.0);
+    painter.layout(&mut text_cx(), 0.0, 300.0);
 
     // Get word boundary at position 8 (middle of "click")
     let word_range = painter.get_word_boundary(TextPosition::upstream(8));
@@ -231,7 +236,7 @@ fn example_line_metrics() {
         .with_text(InlineSpan::new(span))
         .with_text_direction(TextDirection::Ltr);
 
-    painter.layout(0.0, 300.0);
+    painter.layout(&mut text_cx(), 0.0, 300.0);
 
     let metrics = painter.get_line_metrics();
 
@@ -273,7 +278,7 @@ fn example_bidirectional_text() {
         .with_text(InlineSpan::new(span))
         .with_text_direction(TextDirection::Ltr); // Base direction LTR
 
-    painter.layout(0.0, 400.0);
+    painter.layout(&mut text_cx(), 0.0, 400.0);
 
     println!("Bidirectional text size: {:?}", painter.size());
     println!("Width: {}, Height: {}", painter.width(), painter.height());
@@ -310,7 +315,7 @@ fn example_text_alignment() {
             .with_text_direction(TextDirection::Ltr)
             .with_text_align(align);
 
-        painter.layout(0.0, 300.0);
+        painter.layout(&mut text_cx(), 0.0, 300.0);
 
         println!("{:?} alignment - width: {:.1}", align, painter.width());
     }
@@ -339,7 +344,7 @@ fn example_max_lines_ellipsis() {
     let mut painter_full = TextPainter::new()
         .with_text(InlineSpan::new(make_span()))
         .with_text_direction(TextDirection::Ltr);
-    painter_full.layout(0.0, 200.0);
+    painter_full.layout(&mut text_cx(), 0.0, 200.0);
 
     // With max lines = 2
     let mut painter_truncated = TextPainter::new()
@@ -347,7 +352,7 @@ fn example_max_lines_ellipsis() {
         .with_text_direction(TextDirection::Ltr)
         .with_max_lines(Some(2))
         .with_ellipsis(Some("…".to_string()));
-    painter_truncated.layout(0.0, 200.0);
+    painter_truncated.layout(&mut text_cx(), 0.0, 200.0);
 
     println!("Full text height: {:.1}", painter_full.height());
     println!(
@@ -383,7 +388,7 @@ fn example_accessibility_scaling() {
             .with_text_direction(TextDirection::Ltr)
             .with_text_scale_factor(scale);
 
-        painter.layout(0.0, 400.0);
+        painter.layout(&mut text_cx(), 0.0, 400.0);
 
         println!("Scale {:.2}x: size {:?}", scale, painter.size());
     }
@@ -408,7 +413,7 @@ fn example_paint_to_canvas() {
         .with_text(InlineSpan::new(span))
         .with_text_direction(TextDirection::Ltr);
 
-    painter.layout(0.0, 300.0);
+    painter.layout(&mut text_cx(), 0.0, 300.0);
 
     // Create canvas and paint
     let mut canvas = Canvas::new();
@@ -454,7 +459,7 @@ fn example_nested_spans() {
         .with_text(InlineSpan::new(paragraph))
         .with_text_direction(TextDirection::Ltr);
 
-    painter.layout(0.0, 400.0);
+    painter.layout(&mut text_cx(), 0.0, 400.0);
 
     println!("Nested spans size: {:?}", painter.size());
     assert!(painter.width() > 0.0);
@@ -496,7 +501,7 @@ fn example_builder_pattern() {
         .with_text(InlineSpan::new(rich_text))
         .with_text_direction(TextDirection::Ltr);
 
-    painter.layout(0.0, 500.0);
+    painter.layout(&mut text_cx(), 0.0, 500.0);
 
     println!("Builder pattern result: {:?}", painter.size());
     assert!(painter.width() > 0.0);

@@ -84,10 +84,16 @@ testing = []
 
 # parley: the Parley path — shaping on a per-realm `TextContext` over the
 # app's `FontCollection`, and the raster side (`ParleyGlyphKey`,
-# `FontRegistry`, `SwashRasterizer`). Off by default; the cosmic-text path is
-# unchanged either way. No production caller until layout measures through the
-# realm's context at ADR-0092 §10 step 3.
+# `FontRegistry`, `SwashRasterizer`). Off by default. It compiles the Parley
+# measurement without choosing it: the workspace test scope turns `parley` on,
+# and CI must still measure the way the default build does.
 parley = ["dep:swash", "dep:parley"]
+
+# parley-layout: `TextPainter` measures size, baselines and intrinsics with
+# Parley on the realm's `TextContext` (ADR-0092 §10 step 3). Glyphs and carets
+# still come from cosmic-text until step 5. Off by default and outside the test
+# scope.
+parley-layout = ["parley"]
 
 [[test]]
 name = "painting_it"
@@ -111,6 +117,14 @@ required-features = ["parley"]
 [[test]]
 name = "text_context"
 path = "tests/text_context.rs"
+required-features = ["parley"]
+
+# Parley's paragraph metrics against cosmic-text's on the bundled Roboto
+# (ADR-0092 gate 8, measurement side). Its own binary: it builds the process
+# font system, which `text_context` asserts the Parley path never does.
+[[test]]
+name = "parley_metrics_oracle"
+path = "tests/parley_metrics_oracle.rs"
 required-features = ["parley"]
 
 # cargo-shear reports the trybuild compile-fail inputs as unlinked: the

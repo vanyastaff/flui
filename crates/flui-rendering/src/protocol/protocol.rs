@@ -184,8 +184,13 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
     /// the leaf / single-node layout path. The pipeline's
     /// `layout_dirty_root` constructs its own typed context with
     /// children access via disjoint borrows and bypasses this helper.
+    ///
+    /// `text` is the realm's text context the leaf measures with (box
+    /// protocol only; slivers do not measure text); `None` leaves the leaf a
+    /// context of its own.
     fn with_leaf_erased_ctx<R>(
         constraints: <Self::Layout as LayoutCapability>::Constraints,
+        text: Option<&std::cell::RefCell<flui_painting::TextContext>>,
         f: impl FnOnce(&mut Self::LayoutCtxErased<'_>) -> R,
     ) -> R
     where

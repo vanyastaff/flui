@@ -164,7 +164,7 @@ fn sliver_leaf_layout_rejects_invalid_geometry_before_state_commit() {
         .and_then(|node| node.as_sliver_mut())
         .expect("sliver entry");
     let err = entry
-        .layout_leaf_only(sliver_constraints())
+        .layout_leaf_only(sliver_constraints(), None)
         .expect_err("invalid sliver geometry must fail layout");
 
     assert_invalid_geometry(err, "paint_extent is negative");
@@ -193,7 +193,7 @@ fn sliver_content_contract_violation_commits_and_stays_clean() {
         .and_then(|node| node.as_sliver_mut())
         .expect("sliver entry");
     let committed = entry
-        .layout_leaf_only(sliver_constraints())
+        .layout_leaf_only(sliver_constraints(), None)
         .expect("a content-contract violation must not fail layout");
 
     assert_eq!(

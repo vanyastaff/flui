@@ -3,13 +3,18 @@
 
 use flui_foundation::geometry::Offset;
 use flui_layer::SceneBuilder;
-use flui_painting::{Canvas, TextPainter};
+use flui_painting::{Canvas, FontCollection, TextContext, TextPainter};
 use flui_painting::{
     styling::Color,
     typography::{TextDirection, TextSpan, TextStyle},
 };
 
 const SIDE: u32 = 96;
+
+/// A text context over a fresh collection, lent to each measurement.
+fn text_cx() -> TextContext {
+    TextContext::new(&FontCollection::new())
+}
 
 fn sample(pixels: &[u8], x: u32, y: u32) -> [u8; 4] {
     let index = ((y * SIDE + x) * 4) as usize;
@@ -39,7 +44,7 @@ fn truncated_paragraph_leaves_no_ink_below_its_line() {
         .with_text_direction(TextDirection::Ltr)
         .with_max_lines(Some(1))
         .with_ellipsis(Some("…".to_string()));
-    painter.layout(0.0, f64::from(SIDE as f32));
+    painter.layout(&mut text_cx(), 0.0, f64::from(SIDE as f32));
     assert!(
         painter.did_exceed_max_lines(),
         "the fixture must overflow one line"
@@ -126,7 +131,7 @@ fn paragraph_scene(
     let mut painter = TextPainter::new()
         .with_text(TextSpan::new(text).with_style(style))
         .with_text_direction(TextDirection::Ltr);
-    painter.layout(0.0, f64::from(SIDE as f32 * 4.0));
+    painter.layout(&mut text_cx(), 0.0, f64::from(SIDE as f32 * 4.0));
     let mut canvas = Canvas::new();
     decorate(&mut canvas, &mut |canvas| {
         painter.paint(canvas, Offset::ZERO);

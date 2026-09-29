@@ -44,6 +44,10 @@
 // rest of the owner module's unit tests ride along in the same filter).
 #![expect(unsafe_code)]
 
+use std::cell::RefCell;
+
+use flui_painting::TextContext;
+
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -219,6 +223,10 @@ pub(super) struct SubtreeArena<'tree> {
     /// again.  Also gates the success sink below so a skip's stand-in
     /// `Ok` is never mistaken for a recovery.
     layout_poison: &'tree LayoutPoison,
+    /// The realm's text context, lent to each node the walk lays out or
+    /// measures: box leaves, box parents, and box intrinsic queries, whether
+    /// a box or a sliver parent asked for them.
+    text: &'tree RefCell<TextContext>,
     /// Nodes this walk re-attempted despite being poisoned because the
     /// incoming constraints differ from the failed attempt's.  A success
     /// for such a node IS a real recovery, so
@@ -276,6 +284,7 @@ impl<'tree> SubtreeArena<'tree> {
         ids: &[RenderId],
         refs: Vec<&'tree mut RenderNode>,
         layout_poison: &'tree LayoutPoison,
+        text: &'tree RefCell<TextContext>,
         #[cfg(any(test, feature = "testing"))] all_seeds: &FxHashMap<RenderId, ParentDataSeed>,
     ) -> Self {
         debug_assert_eq!(
@@ -309,6 +318,7 @@ impl<'tree> SubtreeArena<'tree> {
             laid_out: Mutex::new(Vec::new()),
             laid_out_count: std::cell::Cell::new(0),
             layout_poison,
+            text,
             poison_retries: Mutex::new(FxHashSet::default()),
             layout_failures: Mutex::new(Vec::new()),
             layout_successes: Mutex::new(Vec::new()),
@@ -544,6 +554,7 @@ impl<'tree> SubtreeArena<'tree> {
         render_tree: &'tree mut RenderTree,
         id: RenderId,
         layout_poison: &'tree LayoutPoison,
+        text: &'tree RefCell<TextContext>,
         #[cfg(any(test, feature = "testing"))] all_seeds: &FxHashMap<RenderId, ParentDataSeed>,
     ) -> crate::error::RenderResult<Self> {
         let subtree_ids = render_tree.collect_subtree_ids(id);
@@ -557,6 +568,7 @@ impl<'tree> SubtreeArena<'tree> {
             &subtree_ids,
             node_refs,
             layout_poison,
+            text,
             #[cfg(any(test, feature = "testing"))]
             all_seeds,
         ))
@@ -1144,7 +1156,7 @@ unsafe fn layout_subtree_borrowed_impl(
 
         // Leaf path: delegate to layout_leaf_only.
         if is_leaf {
-            return entry.layout_leaf_only(constraints);
+            return entry.layout_leaf_only(constraints, Some(arena.text));
         }
 
         // Descendant-error tracking flag.  Closure flips to `true` on any
@@ -1354,6 +1366,7 @@ unsafe fn layout_subtree_borrowed_impl(
             Some(crate::protocol::DegradationProbe::new(
                 &arena.degradation_events,
             )),
+            Some(arena.text),
         );
         let erased: &mut dyn BoxLayoutCtxErased = &mut ctx;
 
@@ -1658,6 +1671,7 @@ unsafe fn box_intrinsic_query_borrowed_impl(
             child_ids.len(),
             &child_parent_data_refs,
             &mut child_query,
+            Some(arena.text),
         )
     };
 
@@ -2193,10 +2207,12 @@ mod tests {
         // (zero ids, zero refs).  Verifies the debug_assert does not fire
         // and the resulting arena is empty with drained pending sinks.
         let poison = LayoutPoison::default();
+        let text = std::cell::RefCell::new(crate::pipeline::private_context());
         let arena: SubtreeArena<'_> = SubtreeArena::new(
             &[],
             vec![],
             &poison,
+            &text,
             #[cfg(any(test, feature = "testing"))]
             &FxHashMap::default(),
         );
@@ -2222,10 +2238,12 @@ mod tests {
         let id_a = RenderId::new(1);
         let id_b = RenderId::new(2);
         let poison = LayoutPoison::default();
+        let text = std::cell::RefCell::new(crate::pipeline::private_context());
         let _ = SubtreeArena::new(
             &[id_a, id_b],
             vec![], // wrong length
             &poison,
+            &text,
             #[cfg(any(test, feature = "testing"))]
             &FxHashMap::default(),
         );
@@ -2279,6 +2297,7 @@ mod tests {
             ),
         );
         let poison = LayoutPoison::default();
+        let text = std::cell::RefCell::new(crate::pipeline::private_context());
         let arena: SubtreeArena<'_> = SubtreeArena {
             by_id,
             #[cfg(any(test, feature = "testing"))]
@@ -2288,6 +2307,7 @@ mod tests {
             laid_out: Mutex::new(Vec::new()),
             laid_out_count: std::cell::Cell::new(0),
             layout_poison: &poison,
+            text: &text,
             poison_retries: Mutex::new(FxHashSet::default()),
             layout_failures: Mutex::new(Vec::new()),
             layout_successes: Mutex::new(Vec::new()),
@@ -2320,6 +2340,7 @@ mod tests {
     #[test]
     fn pending_sink_drains_are_idempotent() {
         let poison = LayoutPoison::default();
+        let text = std::cell::RefCell::new(crate::pipeline::private_context());
         let arena: SubtreeArena<'_> = SubtreeArena {
             by_id: HashMap::new(),
             #[cfg(any(test, feature = "testing"))]
@@ -2329,6 +2350,7 @@ mod tests {
             laid_out: Mutex::new(Vec::new()),
             laid_out_count: std::cell::Cell::new(0),
             layout_poison: &poison,
+            text: &text,
             poison_retries: Mutex::new(FxHashSet::default()),
             layout_failures: Mutex::new(Vec::new()),
             layout_successes: Mutex::new(Vec::new()),

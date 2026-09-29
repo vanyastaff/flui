@@ -13,6 +13,7 @@ mod notifier;
 mod owner;
 pub mod phase;
 pub(super) mod scheduler;
+mod text_context;
 
 // Re-export Clip from flui_painting
 // Re-export layer types from flui-layer
@@ -31,6 +32,8 @@ pub use owner::{
     ReleaseDetachedRenderSubtreesError, ReleaseDetachedRenderSubtreesFailure, WeakPipelineCell,
 };
 pub use phase::{Compositing, Idle, Layout, PaintPhase, PipelinePhase, Semantics};
+pub use text_context::{TextContextHandle, TextCx};
+pub(crate) use text_context::{TextSlot, private_context};
 
 // Re-export contexts from context module (canonical location)
 pub use crate::context::{Canvas, DisplayList, Paint, PaintStyle};

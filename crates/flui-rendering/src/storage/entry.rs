@@ -363,6 +363,7 @@ impl<P: Protocol> RenderEntry<P> {
     pub fn layout_leaf_only(
         &mut self,
         constraints: ProtocolConstraints<P>,
+        text: Option<&std::cell::RefCell<flui_painting::TextContext>>,
     ) -> crate::error::RenderResult<ProtocolGeometry<P>>
     where
         ProtocolGeometry<P>: Clone,
@@ -416,6 +417,7 @@ impl<P: Protocol> RenderEntry<P> {
         // message. Net: closure returns `Result<G, RenderError>`.
         let geometry = <P as crate::protocol::Protocol>::with_leaf_erased_ctx(
             constraints_for_ctx,
+            text,
             |erased_ctx| {
                 let unwind_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     render_object.perform_layout_raw(erased_ctx)

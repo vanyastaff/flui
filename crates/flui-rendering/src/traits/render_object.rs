@@ -326,6 +326,9 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// context and call the protocol-level `compute_*` methods (e.g.
     /// [`RenderBox::compute_min_intrinsic_width`](crate::traits::RenderBox::compute_min_intrinsic_width)).
     ///
+    /// `text` is the realm's text context the node measures with; `None`
+    /// leaves the typed context one of its own.
+    ///
     /// Default: `0.0` — Flutter's `RenderBox` default for every
     /// intrinsic dimension; protocols without intrinsic sizing (sliver)
     /// keep it.
@@ -336,6 +339,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         _child_count: usize,
         _child_parent_data: &[Option<&dyn ParentData>],
         _child_query: &mut dyn FnMut(usize, crate::storage::IntrinsicDimension, f64) -> f64,
+        _text: Option<&std::cell::RefCell<flui_painting::TextContext>>,
     ) -> f64 {
         0.0
     }
@@ -359,6 +363,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
             usize,
             crate::context::DryLayoutChildRequest,
         ) -> crate::context::DryLayoutChildResponse,
+        _text: Option<&std::cell::RefCell<flui_painting::TextContext>>,
     ) -> ProtocolGeometry<P> {
         P::default_geometry()
     }
@@ -380,6 +385,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
             usize,
             crate::context::DryBaselineChildRequest,
         ) -> crate::context::DryBaselineChildResponse,
+        _text: Option<&std::cell::RefCell<flui_painting::TextContext>>,
     ) -> Option<f64> {
         None
     }
