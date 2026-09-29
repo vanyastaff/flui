@@ -695,8 +695,8 @@ fn test_build_owner_memory_size() {
     // assertions and 720 without, each rounded up to the 8-byte alignment.
     // No cargo feature changes the layout: the workspace build enables
     // `test-utils` on this crate beyond what `-p flui-view` does, and it
-    // gates no field of `BuildOwner` or of a type it holds inline; `-p flui-view` and the whole-workspace lane both
-    // measure 728.
+    // gates no field of `BuildOwner` or of a type it holds inline; `-p flui-view`
+    // and the whole-workspace lane both measure 728.
     let expected = if cfg!(debug_assertions) { 728 } else { 720 };
     assert_eq!(
         size, expected,

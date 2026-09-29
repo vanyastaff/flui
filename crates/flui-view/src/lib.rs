@@ -158,13 +158,13 @@ mod test_only_global_key_registry {
 // Re-exports
 // ============================================================================
 
-// View traits
-// Binding
+// Runtime seam for flui-runtime, flui-testing and flui-app (ADR-0081 §4)
 #[doc(hidden)]
 pub mod __runtime;
+// Lifecycle notifications
 mod lifecycle;
 pub use lifecycle::{LifecycleClosed, LifecycleHandle, LifecycleSubscription};
-
+// Binding
 pub use binding::{
     AppExitResponse, AppLifecycleState, AttachError, PredictiveBackEvent, RouteInformation,
     ViewFocusDirection, ViewFocusEvent, ViewFocusState, WidgetsBinding, WidgetsBindingObserver,
