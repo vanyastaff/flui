@@ -2,8 +2,9 @@
 //! through the retained target, read back.
 //!
 //! Every test drives [`RetainedCapture`](crate::headless::RetainedCapture),
-//! which records each frame through the windowed renderer's own
-//! `record_frame_content` and `plan_frame`. The sample points are chosen so
+//! which runs each frame through the windowed renderer's own
+//! `FrameProtocol` (plan, target selection, clear, commit, the unmanaged
+//! frame's bookkeeping) and `record_frame_content`. The sample points are chosen so
 //! a broken implementation fails: a pixel outside the damage that a full
 //! repaint would overwrite, a pixel the old position left behind, a pixel
 //! whose colour depends on whether the partial clear ran first.
@@ -341,6 +342,130 @@ fn an_invalid_target_promotes_to_full() {
         WHITE,
         "the stale sentinel is repainted"
     );
+
+    // A full frame rendered straight into the surface, with no resize: the
+    // target did not see it, so it no longer holds the last frame.
+    let mut capture = renderer
+        .retained_capture((SIDE, SIDE))
+        .expect("capture target");
+    capture.mark_full_repaint();
+    capture.render_scene(&still).expect("first frame");
+    warm(&mut capture, &still);
+    capture.paint_retained(sentinel, GREEN);
+    capture.mark_full_repaint();
+    capture.render_scene(&still).expect("the direct frame");
+    assert_eq!(capture.last_plan(), Some(FramePlan::Direct));
+    capture.mark_dirty(small);
+    capture
+        .render_scene(&still)
+        .expect("the next partial frame");
+    assert_eq!(
+        capture.last_plan(),
+        Some(FramePlan::RetainedFull),
+        "a direct frame invalidates the target"
+    );
+    let pixels = capture.read_rgba().expect("readback");
+    assert_eq!(
+        px(&pixels, 84, 84),
+        WHITE,
+        "the stale sentinel is repainted"
+    );
+}
+
+/// A frame rendered outside the damage protocol (a hot-reload plugin's
+/// scene through `Renderer::render_scene`) is followed by a full frame, on
+/// a surface that renders every frame through the retained target: the
+/// producer diffs against the last scene IT submitted, which is no longer
+/// what the target and the screen hold.
+///
+/// Both a partial region and an unchanged one must repaint everything; a
+/// pixel far from the damage reads the app's background, not the plugin's
+/// green.
+#[test]
+fn a_frame_outside_the_protocol_is_followed_by_a_full_one() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let (root, card, plugin_root, plugin) = (
+        ContentToken::mint(),
+        ContentToken::mint(),
+        ContentToken::mint(),
+        ContentToken::mint(),
+    );
+    let red = square(Color::RED);
+    let flood = |canvas: &mut Canvas| {
+        canvas.draw_rect(
+            Rect::from_xywh(0.0, 0.0, 128.0, 128.0),
+            &Paint::fill(Color::rgba(0, 255, 0, 255)),
+        );
+    };
+    let app = |at: Offset<f64>| {
+        scene(
+            &root,
+            &[Boundary {
+                id: 2,
+                token: &card,
+                at,
+                paint: &red,
+            }],
+            None,
+        )
+    };
+    let plugin_scene = scene(
+        &plugin_root,
+        &[Boundary {
+            id: 2,
+            token: &plugin,
+            at: Offset::ZERO,
+            paint: &flood,
+        }],
+        None,
+    );
+
+    for resume_with_change in [true, false] {
+        let mut capture = renderer
+            .retained_capture((SIDE, SIDE))
+            .expect("capture target");
+        capture.require_intermediate();
+        let mut differ = LayerDiffer::default();
+        let first = app(Offset::new(8.0, 8.0));
+        let region = differ.diff(&first, (SIDE, SIDE));
+        frame(&mut capture, &first, region, |plan| {
+            plan == FramePlan::RetainedFull
+        });
+
+        capture
+            .render_unmanaged(&plugin_scene)
+            .expect("the plugin frame");
+        assert_eq!(capture.last_plan(), Some(FramePlan::RetainedFull));
+        assert_eq!(
+            px(&capture.read_rgba().expect("readback"), 100, 100),
+            GREEN,
+            "precondition: the plugin frame is on screen"
+        );
+
+        let resumed = if resume_with_change {
+            app(Offset::new(8.0, 12.0))
+        } else {
+            app(Offset::new(8.0, 8.0))
+        };
+        let region = differ.diff(&resumed, (SIDE, SIDE));
+        assert_eq!(
+            matches!(region, DamageRegion::Partial(_)),
+            resume_with_change,
+            "precondition: the producer sees only its own scenes: {region:?}"
+        );
+        frame(&mut capture, &resumed, region, |plan| {
+            plan == FramePlan::RetainedFull
+        });
+        let pixels = capture.read_rgba().expect("readback");
+        assert_eq!(
+            px(&pixels, 100, 100),
+            WHITE,
+            "the plugin's pixels are gone (resumed with a change: {resume_with_change})"
+        );
+        assert_eq!(px(&pixels, 14, 18), RED, "the app's box is painted");
+    }
 }
 
 /// Renders `after` in full on a fresh capture and returns its pixels.

@@ -730,12 +730,10 @@ pub struct Renderer {
     /// Set by the device-lost callback; checked at frame start to trigger
     /// device recreation. `Arc<AtomicBool>` because the callback is `'static`.
     device_lost: Arc<std::sync::atomic::AtomicBool>,
-    /// Tracks dirty regions for incremental rendering (skip frames with no damage)
-    damage_tracker: crate::damage::DamageTracker,
-    /// The last frame, kept so a partial frame can repaint only its damage
-    /// and blit the rest — see [`crate::damage::plan_frame`]. Allocated by
-    /// the first frame that renders through it.
-    retained: crate::retained_target::RetainedTarget,
+    /// The damage owed, the retained last frame a partial frame repaints
+    /// into, and the one-frame promotion to full — the protocol the headless
+    /// retained capture runs too (see [`crate::frame_protocol`]).
+    frame: crate::frame_protocol::FrameProtocol,
     /// Runs immediately before every `queue.present` — see
     /// [`crate::RasterBackend::set_pre_present_hook`].
     pre_present_hook: Option<crate::raster::PrePresentHook>,
@@ -760,27 +758,6 @@ pub struct Renderer {
     /// Controlled by [`Renderer::force_intermediate_for_testing`].
     #[cfg(test)]
     force_intermediate: bool,
-
-    /// When `true`, the NEXT call to `render_scene` will promote the
-    /// damage to a full repaint before any scissor logic runs.
-    ///
-    /// Set when the current frame detected a partial-damage scissor AND a
-    /// `DrawItem::AdvancedShape` (or SSAA-path with an advanced blend) whose
-    /// `device_bounds` straddle the damage edge.  Such items call
-    /// `flush_advanced_layer` with `LoadOp::Load` on the full `device_bounds`
-    /// with no scissor — if the foreground is restricted by the scissor,
-    /// the out-of-damage slice blends `transparent_fg` over the stale
-    /// prior-frame backdrop, writing stale pixels.
-    ///
-    /// Self-healing: the next frame is forced full, repainting the shape
-    /// over its true `device_bounds` without a scissor restriction. A partial
-    /// frame renders into the retained target, whose pixels outside the
-    /// damage are the correct previous frame, so what a straddling shape can
-    /// disturb there is limited to its own out-of-damage slice for one
-    /// frame; this is the second line of defence for that slice. A
-    /// this-frame re-record or a precomputed `Scene` bit is the upgrade path
-    /// if the one-frame transient ever shows.
-    force_full_repaint_next_frame: bool,
 }
 
 // `Renderer: Send` is a compiler derivation: every field is `Send` —
@@ -907,15 +884,13 @@ impl Renderer {
             offscreen: stack.offscreen,
             supports_copy_src: stack.supports_copy_src,
             device_lost: stack.device_lost,
-            damage_tracker: crate::damage::DamageTracker::new(),
-            retained: crate::retained_target::RetainedTarget::default(),
+            frame: crate::frame_protocol::FrameProtocol::new(),
             pre_present_hook: None,
             lease,
             #[cfg(feature = "gpu-profiler")]
             gpu_profiler: stack.gpu_profiler,
             #[cfg(test)]
             force_intermediate: false,
-            force_full_repaint_next_frame: false,
             _single_mutator: PhantomData,
         })
     }
@@ -1264,8 +1239,9 @@ impl Renderer {
     ///
     /// `true` when the swapchain surface lacks `COPY_SRC` (real adapter
     /// limitation) OR when the test flag `force_intermediate_for_testing` is
-    /// set.  In both cases the frame is rendered into a pooled intermediate
-    /// texture and blitted onto the swapchain at the end of the frame.
+    /// set.  In both cases every frame renders into the retained target and
+    /// is blitted onto the swapchain at the end of the frame (a full frame as
+    /// `FramePlan::RetainedFull`, never `Direct`).
     ///
     /// When `false` (the common path on COPY_SRC-capable adapters) the frame
     /// renders directly into the swapchain surface — no allocation, no blit.
@@ -1370,9 +1346,9 @@ impl Renderer {
         }
         self.lease.replace_surface(released, stack.surface);
         // Force a full repaint so the first recovered frame is complete.
-        self.damage_tracker.mark_full_repaint();
+        self.frame.mark_full_repaint();
         // The retained target belongs to the lost device.
-        self.retained.release();
+        self.frame.release_target();
 
         tracing::info!(
             width = self.config.width,
@@ -1653,8 +1629,7 @@ impl Renderer {
 
         self.painter.resize(width, height);
 
-        self.damage_tracker.mark_full_repaint();
-        self.retained.invalidate();
+        self.frame.surface_changed();
 
         tracing::debug!("Surface resized to {}x{}", width, height);
     }
@@ -1667,18 +1642,18 @@ impl Renderer {
 
     /// Mark a screen region as dirty (needs repaint).
     pub fn mark_dirty(&mut self, rect: flui_foundation::geometry::Rect<f64>) {
-        self.damage_tracker.mark_dirty(rect);
+        self.frame.mark_dirty(rect);
     }
 
     /// Mark the entire screen as needing repaint.
     pub fn mark_full_repaint(&mut self) {
-        self.damage_tracker.mark_full_repaint();
+        self.frame.mark_full_repaint();
     }
 
     /// Check if the renderer has pending damage.
     #[must_use]
     pub fn has_damage(&self) -> bool {
-        self.damage_tracker.has_damage()
+        self.frame.has_damage()
     }
 
     /// The latest completed GPU frame profile, or `None` when the `gpu-profiler`
@@ -1723,8 +1698,7 @@ impl Renderer {
             return;
         };
         surface.configure(&self.device, &self.config);
-        self.damage_tracker.mark_full_repaint();
-        self.retained.invalidate();
+        self.frame.surface_changed();
         tracing::info!(
             "Surface reconfigured ({}x{})",
             self.config.width,
@@ -1769,7 +1743,7 @@ impl Renderer {
         // later, which mints its own token.
         let _released = lease.release();
         // A released presentation is suspended; its frame memory goes too.
-        self.retained.release();
+        self.frame.release_target();
         // Distinct from `SurfaceLease`'s own `surface_released` event, which
         // fires when the lease is dropped: this one says the owner asked for
         // the release, and a reader of a log needs to tell those apart.
@@ -1949,8 +1923,7 @@ impl Renderer {
 
         self.config = fresh_config;
         self.supports_copy_src = supports_copy_src;
-        self.damage_tracker.mark_full_repaint();
-        self.retained.invalidate();
+        self.frame.surface_changed();
 
         tracing::debug!(
             target: "flui.gpu",
@@ -1962,15 +1935,17 @@ impl Renderer {
         Ok(())
     }
 
-    /// Render a `flui_layer::Scene` to the surface.
+    /// Renders `scene` in full, outside the damage protocol a raster owner
+    /// drives, and reports what became of the frame.
     ///
-    /// Traverses the scene's LayerTree depth-first, dispatching each layer's
-    /// DisplayList commands through the GPU backend (WgpuPainter).
-    ///
-    /// For scenes containing `BackdropFilterLayer`, the render flow supports
-    /// mid-frame flush: painter batches are submitted early so the surface
-    /// texture can be copied, blurred, and composited before continuing.
-    /// Renders `scene` and reports what became of the frame.
+    /// This is the entry point for a caller that holds no damage producer (a
+    /// direct-mode app, an example, a hot-reload plugin's scene). The frame
+    /// always repaints everything, and because it shows a scene the owner's
+    /// producer never saw, the retained target stops describing the screen
+    /// and the next frame renders in full too, even one the producer found
+    /// unchanged. A frame a [`crate::RasterOwner`] retires goes through
+    /// [`RasterBackend::render_scene`](crate::RasterBackend::render_scene)
+    /// instead, which renders the damage the owner applied.
     ///
     /// [`PresentDisposition::Presented`] means `present()` ran. Whether that
     /// call paced the frame depends on the backend: under the default Fifo
@@ -1978,15 +1953,31 @@ impl Renderer {
     /// path, while the native AppKit backend returns from it in ~42 µs and
     /// takes its cadence from AppKit's display-pass scheduling instead
     /// (ADR-0058's per-backend facts).
-    /// [`PresentDisposition::NoDamage`] and
-    /// [`PresentDisposition::NotShown`] both skip presentation without error
-    /// and so carry no vsync signal, but they are not interchangeable to the
-    /// caller: the first means nothing was owed, the second that this
-    /// backend owed content it could not put on screen (the surface reporting
-    /// `Occluded`, or released by its owner via
-    /// [`Renderer::release_surface`]) and that the caller should come back
-    /// for it rather than counting the frame finished.
+    /// [`PresentDisposition::NotShown`] skips presentation without error and
+    /// so carries no vsync signal: this backend owed content it could not put
+    /// on screen (the surface reporting `Occluded`, or released by its owner
+    /// via [`Renderer::release_surface`]) and the caller should come back for
+    /// it rather than counting the frame finished.
     pub fn render_scene(
+        &mut self,
+        scene: &flui_layer::Scene,
+    ) -> Result<PresentDisposition, EngineError> {
+        self.frame.begin_unmanaged();
+        let result = self.render_frame(scene);
+        self.frame.end_unmanaged();
+        result
+    }
+
+    /// Renders `scene` with the damage applied since the last presented
+    /// frame: the raster owner's path (`RasterBackend::render_scene`).
+    ///
+    /// Traverses the scene's LayerTree depth-first, dispatching each layer's
+    /// DisplayList commands through the GPU backend (WgpuPainter). For scenes
+    /// containing `BackdropFilterLayer`, painter batches are submitted early
+    /// so the target can be copied, blurred, and composited before
+    /// continuing. [`PresentDisposition::NoDamage`] means nothing was owed;
+    /// otherwise the dispositions are [`Self::render_scene`]'s.
+    pub(crate) fn render_frame(
         &mut self,
         scene: &flui_layer::Scene,
     ) -> Result<PresentDisposition, EngineError> {
@@ -1995,25 +1986,7 @@ impl Renderer {
         // consecutive layer trees, ADR-0087 §3) to the tracker before calling
         // this. Widgets reporting their own bounds does not work, and ADR-0061
         // records why: the objects that always repaint cover the screen.
-
-        // If the previous frame detected a straddling advanced shape under partial
-        // damage, promote this frame to a full repaint so the shape is redrawn
-        // without scissor restriction, self-healing any stale out-of-damage pixels.
-        // Consumed here (set to false) so it does not propagate beyond one frame.
-        if self.force_full_repaint_next_frame {
-            self.force_full_repaint_next_frame = false;
-            self.damage_tracker.mark_full_repaint();
-            tracing::trace!(
-                "force_full_repaint_next_frame: promoting to full repaint \
-                 (advanced shape straddled partial damage last frame)"
-            );
-        }
-
-        let plan = crate::damage::plan_frame(
-            &self.damage_tracker,
-            self.retained.is_valid(),
-            self.uses_intermediate_texture(),
-        );
+        let plan = self.frame.plan(self.uses_intermediate_texture());
         if plan == crate::damage::FramePlan::Skip {
             // Nothing changed — skip this frame entirely; no present, no vsync block.
             tracing::trace!("Skipping frame: no damage");
@@ -2042,67 +2015,34 @@ impl Renderer {
 
         let surface_format = self.config.format;
 
-        // Where this frame renders (`plan_frame`'s doc has the table):
-        //   - `Direct`: straight into the swapchain image. The retained
-        //     target does not see this frame, so it is no longer the last
-        //     frame and stops being valid.
-        //   - `RetainedFull` / `RetainedPartial`: into the retained target,
-        //     which then holds this frame; only the final blit writes the
-        //     swapchain view. This is also the path of a surface without
-        //     `COPY_SRC`: the target carries `COPY_SRC | COPY_DST`, so
-        //     backdrop-filter and advanced-blend dst-reads work on it.
-        // The target is invalid from `begin` until `commit`, so a content
-        // pass that fails or unwinds leaves the next partial frame rendering
-        // in full rather than trusting half-written pixels.
-        let retained = match plan {
-            crate::damage::FramePlan::Direct => {
-                self.retained.invalidate();
-                None
-            }
-            _ => Some(self.retained.begin(
-                &self.device,
-                (self.config.width, self.config.height),
-                surface_format,
-            )),
-        };
-        let (render_view, render_texture): (&wgpu::TextureView, &wgpu::Texture) =
-            match retained.as_ref() {
-                Some((texture, target_view)) => (target_view, texture),
-                None => (&view, &output.texture),
-            };
-        let partial_damage = match plan {
-            crate::damage::FramePlan::RetainedPartial(damage) => Some(damage),
-            _ => None,
-        };
-
-        // 1. Clear pass — submit immediately so the render target is ready for
-        //    mid-frame copy operations (backdrop blur needs pixels on the target).
-        //    A partial frame clears only its damage, inside the content pass
-        //    (`damage::begin_partial`): a full clear would wipe the retained
-        //    pixels outside it.
-        if partial_damage.is_none() {
-            self.run_clear_pass(render_view);
-        }
-
-        // 2. Render scene content via LayerTree traversal. A failed content
-        //    pass is the frame's failure: nothing below presents it.
-        self.render_scene_content(
+        // Where this frame renders is `FrameProtocol::run`'s: the swapchain
+        // image for a direct frame; otherwise the retained target, whose
+        // `COPY_SRC | COPY_DST` also serves backdrop-filter and advanced-blend
+        // dst-reads on a surface without `COPY_SRC`, and which reaches the
+        // swapchain through one blit of the whole target — the only encoder
+        // that writes `&view` on that path. The blit uses Replace/Copy blend
+        // (no blend equation), so the surface is pixel-identical to a direct
+        // render. A failed content pass is the frame's failure: nothing below
+        // presents it.
+        let mut steps = SwapchainFrame {
+            device: &self.device,
+            queue: &self.queue,
+            painter: &mut self.painter,
+            offscreen: &mut self.offscreen,
             scene,
-            render_view,
-            render_texture,
-            retained.is_some(),
-            partial_damage,
+            supports_copy_src: self.supports_copy_src,
+            format: surface_format,
+            #[cfg(feature = "gpu-profiler")]
+            gpu_profiler: &mut self.gpu_profiler,
+        };
+        self.frame.run(
+            plan,
+            &self.device,
+            (self.config.width, self.config.height),
+            surface_format,
+            (&view, &output.texture),
+            &mut steps,
         )?;
-
-        // A retained frame reaches the swapchain through one blit of the whole
-        // target — the only encoder that writes to `&view` on this path. The
-        // blit uses Replace/Copy blend (no blend equation), so the surface is
-        // pixel-identical to a direct render.
-        if let Some((texture, _)) = retained.as_ref() {
-            self.offscreen
-                .blit_to_surface(texture, &view, surface_format);
-            self.retained.commit();
-        }
 
         // The platform's frame-pacing signal, armed strictly before the
         // present that follows (see `RasterBackend::set_pre_present_hook`).
@@ -2146,8 +2086,8 @@ impl Renderer {
             profiler.process_finished_frame(timestamp_period);
         }
 
-        // Reset damage for next frame
-        self.damage_tracker.reset();
+        // The damage this frame covered is paid.
+        self.frame.presented();
 
         Ok(classify_frame(true, true))
     }
@@ -2208,151 +2148,6 @@ impl Renderer {
                 );
             }
         }
-    }
-
-    /// Submit the clear render pass, cleaning the render target before scene
-    /// traversal so backdrop-blur mid-frame copies see a cleared surface.
-    fn run_clear_pass(&mut self, render_view: &wgpu::TextureView) {
-        let mut clear_encoder =
-            self.device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("FLUI Clear Encoder"),
-                });
-        // Hoist the color attachments array before the #[cfg] split so both
-        // the profiled and non-profiled paths share one definition. The descriptor
-        // borrows `render_view`, so the array binding must live at the same scope level.
-        let clear_color_attachments = [Some(wgpu::RenderPassColorAttachment {
-            view: render_view,
-            resolve_target: None,
-            depth_slice: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
-                store: wgpu::StoreOp::Store,
-            },
-        })];
-        let clear_pass_desc = wgpu::RenderPassDescriptor {
-            label: Some("FLUI Clear Pass"),
-            color_attachments: &clear_color_attachments,
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        };
-        // Profiler scope wraps the clear render pass. The scope borrows
-        // `clear_encoder` exclusively; we access the encoder through
-        // `scope.recorder` so the pass sees the same underlying encoder.
-        // Scope drops at end of block → end_query fires → resolve_queries
-        // copies the result → encoder finishes and is submitted.
-        #[cfg(feature = "gpu-profiler")]
-        if let Some(profiler) = self.gpu_profiler.as_ref() {
-            let mut scope = profiler.scope("clear", &mut clear_encoder);
-            {
-                let _pass = scope.recorder().begin_render_pass(&clear_pass_desc);
-            }
-            // scope drops here → end_query fires
-        } else {
-            // Feature compiled but no capable adapter (gpu_profiler is None):
-            // fall back to the unprofiled clear pass so the surface is still
-            // cleared. Branching on the Option, not just the Cargo feature, is
-            // what makes the documented "graceful no-op" actually graceful.
-            let _pass = clear_encoder.begin_render_pass(&clear_pass_desc);
-        }
-        #[cfg(not(feature = "gpu-profiler"))]
-        {
-            let _pass = clear_encoder.begin_render_pass(&clear_pass_desc);
-        }
-        // Resolve query results into the GPU buffer before finishing the encoder.
-        #[cfg(feature = "gpu-profiler")]
-        if let Some(profiler) = self.gpu_profiler.as_mut() {
-            profiler.resolve_queries(&mut clear_encoder);
-        }
-        self.queue.submit(std::iter::once(clear_encoder.finish()));
-    }
-
-    /// Traverse the scene's layer tree and flush all painter batches to the GPU,
-    /// including the damage-straddle self-heal check and final encoder submission.
-    fn render_scene_content(
-        &mut self,
-        scene: &flui_layer::Scene,
-        render_view: &wgpu::TextureView,
-        render_texture: &wgpu::Texture,
-        intermediate_active: bool,
-        partial_damage: Option<flui_foundation::geometry::Rect<f64>>,
-    ) -> EngineResult<()> {
-        let straddled = Self::record_frame_content(
-            &mut self.painter,
-            &mut self.offscreen,
-            scene,
-            (render_view, render_texture),
-            RenderContext {
-                supports_copy_src: self.supports_copy_src,
-                intermediate_active,
-            },
-            partial_damage,
-        );
-        if straddled {
-            self.force_full_repaint_next_frame = true;
-        }
-        let painter = &mut self.painter;
-
-        // Final flush — submit remaining painter batches.
-        let mut final_encoder =
-            self.device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("FLUI Final Render Encoder"),
-                });
-        // Profiler scope wraps painter.render. The scope borrows
-        // `final_encoder` exclusively; we pass `scope.recorder` so
-        // painter.render writes into the same underlying encoder.
-        // Scope drops at end of block → end_query fires → resolve_queries
-        // copies the result → encoder finishes and is submitted.
-        // Branch on the Option (runtime), not just the Cargo feature
-        // (compile-time): when the feature is compiled but `gpu_profiler` is
-        // None (incapable adapter), the render must STILL run — otherwise the
-        // frame presents only the clear pass (blank content). This is the
-        // documented graceful no-op.
-        // The render target is always sampleable in this frame:
-        //   - Common path (supports_copy_src=true, intermediate_active=false):
-        //     `render_texture` = `output.texture` which has COPY_SRC.
-        //   - Intermediate path (intermediate_active=true):
-        //     `render_texture` = intermediate which has COPY_SRC|COPY_DST.
-        // Both cases satisfy the dst-read contract required by advanced blend
-        // and backdrop-filter.  The `view_only` fallback in `flush_opacity_layer`
-        // is only reached from benches/tests that construct a bare TextureView
-        // without a backing texture — see the reshaped fallback comments there.
-        let frame_target =
-            crate::render_target::RenderTarget::sampleable(render_view, render_texture);
-        #[cfg(feature = "gpu-profiler")]
-        let render_result = if let Some(profiler) = self.gpu_profiler.as_ref() {
-            let mut scope = profiler.scope("final_render", &mut final_encoder);
-            painter.render(frame_target, scope.recorder())
-            // scope drops here → end_query fires
-        } else {
-            painter.render(frame_target, &mut final_encoder)
-        };
-        #[cfg(not(feature = "gpu-profiler"))]
-        let render_result = painter.render(frame_target, &mut final_encoder);
-        if let Err(error) = render_result {
-            // The frame is not presented; the per-frame painter state is
-            // still reset so the next frame starts clean, and the caller's
-            // classifier (`Recoverability`, `RasterOwner::handle_render_failure`)
-            // finally sees the error `render_scene` documents.
-            painter.end_frame_maintenance();
-            return Err(error);
-        }
-        // Resolve before finishing the encoder.
-        #[cfg(feature = "gpu-profiler")]
-        if let Some(profiler) = self.gpu_profiler.as_mut() {
-            profiler.resolve_queries(&mut final_encoder);
-        }
-        self.queue.submit(std::iter::once(final_encoder.finish()));
-
-        // Frame boundary: run texture-cache maintenance ONCE, after the
-        // final flush. `painter.render` runs per-pass (backdrop-filter
-        // flushes call it mid-frame), so maintenance lives here — not inside
-        // `render` — to avoid resetting use-counters between passes.
-        painter.end_frame_maintenance();
-        Ok(())
     }
 
     /// Records one frame's content into `painter`: binds the target, resets the
@@ -2712,6 +2507,171 @@ impl Renderer {
             dev_width,
             dev_height
         );
+    }
+}
+
+/// The windowed renderer's side of [`FrameProtocol::run`]: the swapchain
+/// frame's clear, content and blit, over the renderer's fields borrowed apart
+/// from its frame protocol.
+///
+/// [`FrameProtocol::run`]: crate::frame_protocol::FrameProtocol::run
+struct SwapchainFrame<'a> {
+    device: &'a wgpu::Device,
+    queue: &'a wgpu::Queue,
+    painter: &'a mut crate::painter::WgpuPainter,
+    offscreen: &'a mut crate::offscreen::OffscreenRenderer,
+    scene: &'a flui_layer::Scene,
+    supports_copy_src: bool,
+    format: wgpu::TextureFormat,
+    #[cfg(feature = "gpu-profiler")]
+    gpu_profiler: &'a mut Option<crate::profiler::GpuFrameProfiler>,
+}
+
+impl crate::frame_protocol::FrameSteps for SwapchainFrame<'_> {
+    /// Submits the clear pass at once, so mid-frame copies (backdrop blur
+    /// reads the target) see a cleared target.
+    fn clear(&mut self, render_view: &wgpu::TextureView) {
+        let mut clear_encoder =
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("FLUI Clear Encoder"),
+                });
+        // Hoist the color attachments array before the #[cfg] split so both
+        // the profiled and non-profiled paths share one definition. The descriptor
+        // borrows `render_view`, so the array binding must live at the same scope level.
+        let clear_color_attachments = [Some(wgpu::RenderPassColorAttachment {
+            view: render_view,
+            resolve_target: None,
+            depth_slice: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(crate::frame_protocol::background_clear_value()),
+                store: wgpu::StoreOp::Store,
+            },
+        })];
+        let clear_pass_desc = wgpu::RenderPassDescriptor {
+            label: Some("FLUI Clear Pass"),
+            color_attachments: &clear_color_attachments,
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        };
+        // Profiler scope wraps the clear render pass. The scope borrows
+        // `clear_encoder` exclusively; we access the encoder through
+        // `scope.recorder` so the pass sees the same underlying encoder.
+        // Scope drops at end of block → end_query fires → resolve_queries
+        // copies the result → encoder finishes and is submitted.
+        #[cfg(feature = "gpu-profiler")]
+        if let Some(profiler) = self.gpu_profiler.as_ref() {
+            let mut scope = profiler.scope("clear", &mut clear_encoder);
+            {
+                let _pass = scope.recorder().begin_render_pass(&clear_pass_desc);
+            }
+            // scope drops here → end_query fires
+        } else {
+            // Feature compiled but no capable adapter (gpu_profiler is None):
+            // fall back to the unprofiled clear pass so the surface is still
+            // cleared. Branching on the Option, not just the Cargo feature, is
+            // what makes the documented "graceful no-op" actually graceful.
+            let _pass = clear_encoder.begin_render_pass(&clear_pass_desc);
+        }
+        #[cfg(not(feature = "gpu-profiler"))]
+        {
+            let _pass = clear_encoder.begin_render_pass(&clear_pass_desc);
+        }
+        // Resolve query results into the GPU buffer before finishing the encoder.
+        #[cfg(feature = "gpu-profiler")]
+        if let Some(profiler) = self.gpu_profiler.as_mut() {
+            profiler.resolve_queries(&mut clear_encoder);
+        }
+        self.queue.submit(std::iter::once(clear_encoder.finish()));
+    }
+
+    /// Traverses the scene's layer tree and flushes all painter batches to
+    /// the GPU, reporting the damage-straddle check.
+    fn content(
+        &mut self,
+        render_view: &wgpu::TextureView,
+        render_texture: &wgpu::Texture,
+        intermediate_active: bool,
+        partial_damage: Option<flui_foundation::geometry::Rect<f64>>,
+    ) -> EngineResult<bool> {
+        let straddled = Renderer::record_frame_content(
+            self.painter,
+            self.offscreen,
+            self.scene,
+            (render_view, render_texture),
+            RenderContext {
+                supports_copy_src: self.supports_copy_src,
+                intermediate_active,
+            },
+            partial_damage,
+        );
+        let painter = &mut *self.painter;
+
+        // Final flush — submit remaining painter batches.
+        let mut final_encoder =
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("FLUI Final Render Encoder"),
+                });
+        // Profiler scope wraps painter.render. The scope borrows
+        // `final_encoder` exclusively; we pass `scope.recorder` so
+        // painter.render writes into the same underlying encoder.
+        // Scope drops at end of block → end_query fires → resolve_queries
+        // copies the result → encoder finishes and is submitted.
+        // Branch on the Option (runtime), not just the Cargo feature
+        // (compile-time): when the feature is compiled but `gpu_profiler` is
+        // None (incapable adapter), the render must STILL run — otherwise the
+        // frame presents only the clear pass (blank content). This is the
+        // documented graceful no-op.
+        // The render target is always sampleable in this frame:
+        //   - Direct path (supports_copy_src=true, intermediate_active=false):
+        //     `render_texture` = `output.texture` which has COPY_SRC.
+        //   - Retained path (intermediate_active=true): `render_texture` = the
+        //     retained target, which has COPY_SRC|COPY_DST.
+        // Both cases satisfy the dst-read contract required by advanced blend
+        // and backdrop-filter.  The `view_only` fallback in `flush_opacity_layer`
+        // is only reached from benches/tests that construct a bare TextureView
+        // without a backing texture — see the reshaped fallback comments there.
+        let frame_target =
+            crate::render_target::RenderTarget::sampleable(render_view, render_texture);
+        #[cfg(feature = "gpu-profiler")]
+        let render_result = if let Some(profiler) = self.gpu_profiler.as_ref() {
+            let mut scope = profiler.scope("final_render", &mut final_encoder);
+            painter.render(frame_target, scope.recorder())
+            // scope drops here → end_query fires
+        } else {
+            painter.render(frame_target, &mut final_encoder)
+        };
+        #[cfg(not(feature = "gpu-profiler"))]
+        let render_result = painter.render(frame_target, &mut final_encoder);
+        if let Err(error) = render_result {
+            // The frame is not presented; the per-frame painter state is
+            // still reset so the next frame starts clean, and the caller's
+            // classifier (`Recoverability`, `RasterOwner::handle_render_failure`)
+            // finally sees the error `render_scene` documents.
+            painter.end_frame_maintenance();
+            return Err(error);
+        }
+        // Resolve before finishing the encoder.
+        #[cfg(feature = "gpu-profiler")]
+        if let Some(profiler) = self.gpu_profiler.as_mut() {
+            profiler.resolve_queries(&mut final_encoder);
+        }
+        self.queue.submit(std::iter::once(final_encoder.finish()));
+
+        // Frame boundary: run texture-cache maintenance ONCE, after the
+        // final flush. `painter.render` runs per-pass (backdrop-filter
+        // flushes call it mid-frame), so maintenance lives here — not inside
+        // `render` — to avoid resetting use-counters between passes.
+        painter.end_frame_maintenance();
+        Ok(straddled)
+    }
+
+    fn blit(&mut self, retained: &wgpu::Texture, surface: &wgpu::TextureView) {
+        self.offscreen
+            .blit_to_surface(retained, surface, self.format);
     }
 }
 
@@ -3982,10 +3942,10 @@ mod tests {
     // actual rendered pixels.
     // =========================================================================
 
-    /// Clears `view` to `color`. Mirrors `Renderer::run_clear_pass`'s body;
+    /// Clears `view` to `color`. Mirrors `SwapchainFrame::clear`'s body;
     /// duplicated here because these tests build `WgpuPainter`/`LayerDispatcher`
     /// manually (like OCR-1 above) rather than through a full `Renderer`, so
-    /// `run_clear_pass` (an inherent `&mut Renderer` method) isn't reachable.
+    /// the swapchain frame's clear step isn't reachable.
     /// `painter.render` uses `LoadOp::Load` (see the C2-full test's own
     /// pre-clear), so every one of these tests must pre-clear its target.
     fn clear_texture(

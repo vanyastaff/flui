@@ -352,7 +352,7 @@ impl GpuReplay {
                 //
                 // Self-healing: `renderer.rs` detects straddling advanced shapes
                 // after `render_layer_recursive` and sets
-                // `force_full_repaint_next_frame`, so the NEXT frame repaints the
+                // `FrameProtocol::force_full_next_frame`, so the NEXT frame repaints the
                 // full `device_bounds` without scissor restriction. A partial
                 // frame renders into the retained target, so the backdrop
                 // outside the damage is the correct previous frame and the

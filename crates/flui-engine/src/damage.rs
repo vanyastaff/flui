@@ -131,7 +131,9 @@ pub(crate) fn plan_frame(
 }
 
 /// Opens a partial frame on `painter`: scissors every later draw to the
-/// whole pixels `damage` touches, and repaints them the clear colour.
+/// whole pixels `damage` touches, and repaints them the frame's
+/// [`BACKGROUND`](crate::frame_protocol::BACKGROUND), the colour the full
+/// clear pass uses.
 ///
 /// The clear has to be a draw inside the scissor rather than the full-frame
 /// clear pass, which would wipe the retained pixels outside the damage; and
@@ -150,7 +152,7 @@ pub(crate) fn begin_partial(painter: &mut crate::painter::WgpuPainter, damage: R
     );
     painter.draw_rect(
         covering,
-        &flui_painting::Paint::fill(flui_painting::styling::Color::WHITE),
+        &flui_painting::Paint::fill(crate::frame_protocol::BACKGROUND),
     );
 }
 

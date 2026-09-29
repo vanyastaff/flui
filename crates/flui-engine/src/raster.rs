@@ -178,7 +178,9 @@ pub trait RasterBackend: Send {
 // ---------------------------------------------------------------------------
 impl RasterBackend for crate::Renderer {
     fn render_scene(&mut self, scene: &Scene) -> Result<PresentDisposition, EngineError> {
-        self.render_scene(scene)
+        // The owner applied this frame's damage; Renderer::render_scene is
+        // the entry point for frames no producer accounted for.
+        self.render_frame(scene)
     }
 
     fn resize(&mut self, width: u32, height: u32) {

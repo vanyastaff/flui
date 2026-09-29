@@ -262,6 +262,9 @@ pub(crate) mod color_matrix;
 pub(crate) mod command_ir;
 /// Per-frame dirty-rect accumulator behind the `render_scene` scissor.
 mod damage;
+/// The frame protocol the windowed renderer and the headless retained
+/// capture share: damage, retained target, and the plan-to-GPU sequence.
+mod frame_protocol;
 /// Per-channel sRGB ↔ linear-light gamma transfer filter pass:
 /// [`gamma::apply_gamma`] applies a [`command_ir::LayerFilter::Gamma`] to a
 /// premultiplied layer offscreen (unpremul → transfer per RGB → clamp →

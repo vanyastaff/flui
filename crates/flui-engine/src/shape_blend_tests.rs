@@ -673,14 +673,14 @@ mod gpu_tests {
     /// The right half is NOT asserted — its pixel value depends on whether the
     /// `flush_advanced_layer` backdrop copy wrote transparent-over-stale or fresh
     /// content there, which is the HAZARD documented in the damage-straddle
-    /// correctness bug (`force_full_repaint_next_frame`).  Asserting the right half
+    /// correctness bug (`FrameProtocol::force_full_next_frame`).  Asserting the right half
     /// would enshrine that hazard as a guarantee.
     ///
     /// What this test does NOT cover:
     /// - The stale-pixel hazard when `device_bounds` straddles a partial damage edge.
     ///   That is covered by the `has_advanced_shape_straddling_detector_*` tests
-    ///   (detector unit tests) and the `force_full_repaint_next_frame` field in
-    ///   `Renderer` (self-healing integration).
+    ///   (detector unit tests) and the `force_full_next_frame` field of
+    ///   `FrameProtocol` (self-healing integration).
     /// - Renderer-level damage tracking, which requires a full Renderer+surface setup.
     ///
     /// Setup:
@@ -768,7 +768,7 @@ mod gpu_tests {
         }
         // Right half is NOT asserted: its content depends on the backdrop-blend
         // outcome for a transparent foreground, which is the stale-pixel hazard
-        // addressed by `force_full_repaint_next_frame` in `Renderer`.
+        // addressed by `FrameProtocol`'s `force_full_next_frame`.
     }
 
     // ── S9: SrcOver shape byte-identity ───────────────────────────────────────

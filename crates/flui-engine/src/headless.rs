@@ -198,7 +198,7 @@ impl HeadlessRenderer {
         let texture = self.create_capture_texture(width, height);
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        self.clear_to_white(&view);
+        self.clear_to_background(&view);
 
         let mut painter = WgpuPainter::with_shared_device(
             Arc::clone(&self.device),
@@ -246,8 +246,8 @@ impl HeadlessRenderer {
         })
     }
 
-    fn clear_to_white(&self, view: &wgpu::TextureView) {
-        clear_to_white(&self.device, &self.queue, view);
+    fn clear_to_background(&self, view: &wgpu::TextureView) {
+        clear_to_background(&self.device, &self.queue, view);
     }
 
     /// [`readback_rgba`] on this renderer's device.
@@ -289,18 +289,17 @@ impl HeadlessRenderer {
             ),
             surface,
             surface_view,
-            retained: crate::retained_target::RetainedTarget::default(),
-            damage: crate::damage::DamageTracker::new(),
+            frame: crate::frame_protocol::FrameProtocol::new(),
             size,
-            force_full_next_frame: false,
+            intermediate_required: false,
             fail_after_begin: false,
             last_plan: None,
         })
     }
 }
 
-/// Clears `view` to opaque white with one submitted pass.
-fn clear_to_white(device: &wgpu::Device, queue: &wgpu::Queue, view: &wgpu::TextureView) {
+/// Clears `view` to the frame background with one submitted pass.
+fn clear_to_background(device: &wgpu::Device, queue: &wgpu::Queue, view: &wgpu::TextureView) {
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("FLUI Headless Capture Clear Encoder"),
     });
@@ -312,7 +311,7 @@ fn clear_to_white(device: &wgpu::Device, queue: &wgpu::Queue, view: &wgpu::Textu
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                    load: wgpu::LoadOp::Clear(crate::frame_protocol::background_clear_value()),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -416,19 +415,22 @@ fn readback_rgba(
 }
 
 /// A windowless stand-in for the windowed [`Renderer`]'s frame path, for
-/// tests of partial frames: it keeps the damage tracker, the retained target
-/// and a "surface" texture across frames, and renders each frame the way
-/// `Renderer::render_scene` does — [`plan_frame`] picks the target,
-/// `Renderer::record_frame_content` records into it (the partial-frame
-/// scissor and clear included), and a retained frame reaches the surface
-/// through the same blit.
+/// tests of partial frames: it keeps a [`FrameProtocol`] and a "surface"
+/// texture across frames and runs each frame through the same
+/// [`FrameProtocol::plan`] and [`FrameProtocol::run`] the windowed renderer
+/// does, recording content through the same `Renderer::record_frame_content`
+/// (the partial-frame scissor and clear included). Only the clear, the
+/// content submission and the blit are its own ([`FrameSteps`]).
 ///
 /// Crate-private and test-only: the public golden-image API is settled with
 /// the CPU backend (ADR-0087 §2), and this exists to pin the GPU partial
 /// path's pixels, which a swapchain cannot be read back to show.
 ///
 /// [`Renderer`]: crate::Renderer
-/// [`plan_frame`]: crate::damage::plan_frame
+/// [`FrameProtocol`]: crate::frame_protocol::FrameProtocol
+/// [`FrameProtocol::plan`]: crate::frame_protocol::FrameProtocol::plan
+/// [`FrameProtocol::run`]: crate::frame_protocol::FrameProtocol::run
+/// [`FrameSteps`]: crate::frame_protocol::FrameSteps
 #[cfg(test)]
 pub(crate) struct RetainedCapture {
     device: Arc<wgpu::Device>,
@@ -438,12 +440,13 @@ pub(crate) struct RetainedCapture {
     /// Stands in for the swapchain image the windowed path presents.
     surface: wgpu::Texture,
     surface_view: wgpu::TextureView,
-    retained: crate::retained_target::RetainedTarget,
-    damage: crate::damage::DamageTracker,
+    frame: crate::frame_protocol::FrameProtocol,
     size: (u32, u32),
-    force_full_next_frame: bool,
-    /// When set, the next frame fails right after the retained target was
-    /// begun — the failure a content pass can meet — and clears itself.
+    /// Stands in for a surface without `COPY_SRC`: every frame renders
+    /// through the retained target.
+    intermediate_required: bool,
+    /// When set, the next frame's content pass fails (after the retained
+    /// target was begun) and the flag clears itself.
     fail_after_begin: bool,
     last_plan: Option<crate::damage::FramePlan>,
 }
@@ -473,8 +476,8 @@ impl RetainedCapture {
         rgba: [u8; 4],
     ) {
         let texture = self
-            .retained
-            .texture()
+            .frame
+            .retained_texture()
             .expect("the retained target is allocated by a retained frame");
         let data: Vec<u8> = std::iter::repeat_n(rgba, (width * height) as usize)
             .flatten()
@@ -500,9 +503,16 @@ impl RetainedCapture {
         );
     }
 
-    /// Makes the next frame fail after it began the retained target.
+    /// Makes the next frame's content pass fail after it began the retained
+    /// target.
     pub(crate) fn fail_next_frame_after_begin(&mut self) {
         self.fail_after_begin = true;
+    }
+
+    /// Renders every later frame through the retained target, as on a
+    /// surface without `COPY_SRC`.
+    pub(crate) fn require_intermediate(&mut self) {
+        self.intermediate_required = true;
     }
 
     /// The plan the last frame ran.
@@ -510,8 +520,80 @@ impl RetainedCapture {
         self.last_plan
     }
 
-    fn clear_to_white(&self, view: &wgpu::TextureView) {
-        clear_to_white(&self.device, &self.queue, view);
+    /// Renders `scene` the way `Renderer::render_scene` does: a frame no
+    /// damage producer accounted for.
+    ///
+    /// # Errors
+    /// The frame's failure.
+    pub(crate) fn render_unmanaged(
+        &mut self,
+        scene: &flui_layer::Scene,
+    ) -> Result<crate::raster::PresentDisposition, EngineError> {
+        use crate::raster::RasterBackend;
+
+        self.frame.begin_unmanaged();
+        let result = self.render_scene(scene);
+        self.frame.end_unmanaged();
+        result
+    }
+}
+
+/// The capture's side of `FrameProtocol::run`.
+#[cfg(test)]
+struct CaptureFrame<'a> {
+    device: &'a wgpu::Device,
+    queue: &'a wgpu::Queue,
+    painter: &'a mut WgpuPainter,
+    offscreen: &'a mut crate::offscreen::OffscreenRenderer,
+    scene: &'a flui_layer::Scene,
+    fail: &'a mut bool,
+}
+
+#[cfg(test)]
+impl crate::frame_protocol::FrameSteps for CaptureFrame<'_> {
+    fn clear(&mut self, view: &wgpu::TextureView) {
+        clear_to_background(self.device, self.queue, view);
+    }
+
+    fn content(
+        &mut self,
+        view: &wgpu::TextureView,
+        texture: &wgpu::Texture,
+        retained: bool,
+        partial: Option<flui_foundation::geometry::Rect<f64>>,
+    ) -> EngineResult<bool> {
+        if std::mem::take(self.fail) {
+            return Err(EngineError::Timeout);
+        }
+        let straddled = crate::Renderer::record_frame_content(
+            self.painter,
+            self.offscreen,
+            self.scene,
+            (view, texture),
+            crate::renderer::RenderContext {
+                supports_copy_src: true,
+                intermediate_active: retained,
+            },
+            partial,
+        );
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("FLUI Retained Capture Encoder"),
+            });
+        let rendered = self
+            .painter
+            .render(RenderTarget::sampleable(view, texture), &mut encoder);
+        if rendered.is_ok() {
+            self.queue.submit(std::iter::once(encoder.finish()));
+        }
+        self.painter.end_frame_maintenance();
+        rendered.map(|()| straddled)
+    }
+
+    fn blit(&mut self, retained: &wgpu::Texture, surface: &wgpu::TextureView) {
+        self.offscreen
+            .blit_to_surface(retained, surface, CAPTURE_FORMAT);
     }
 }
 
@@ -524,75 +606,35 @@ impl crate::raster::RasterBackend for RetainedCapture {
         use crate::damage::FramePlan;
         use crate::raster::PresentDisposition;
 
-        if std::mem::take(&mut self.force_full_next_frame) {
-            self.damage.mark_full_repaint();
-        }
-        let plan = crate::damage::plan_frame(&self.damage, self.retained.is_valid(), false);
+        let plan = self.frame.plan(self.intermediate_required);
         self.last_plan = Some(plan);
         if plan == FramePlan::Skip {
             return Ok(PresentDisposition::NoDamage);
         }
-        let retained = match plan {
-            FramePlan::Direct => {
-                self.retained.invalidate();
-                None
-            }
-            _ => Some(self.retained.begin(&self.device, self.size, CAPTURE_FORMAT)),
-        };
-        if std::mem::take(&mut self.fail_after_begin) {
-            return Err(EngineError::Timeout);
-        }
-        let (view, texture) = match retained.as_ref() {
-            Some((texture, view)) => (view.clone(), texture.clone()),
-            None => (self.surface_view.clone(), self.surface.clone()),
-        };
-        let partial = match plan {
-            FramePlan::RetainedPartial(damage) => Some(damage),
-            _ => None,
-        };
-        if partial.is_none() {
-            self.clear_to_white(&view);
-        }
-        let straddled = crate::Renderer::record_frame_content(
-            &mut self.painter,
-            &mut self.offscreen,
+        let mut steps = CaptureFrame {
+            device: &self.device,
+            queue: &self.queue,
+            painter: &mut self.painter,
+            offscreen: &mut self.offscreen,
             scene,
-            (&view, &texture),
-            crate::renderer::RenderContext {
-                supports_copy_src: true,
-                intermediate_active: retained.is_some(),
-            },
-            partial,
-        );
-        self.force_full_next_frame |= straddled;
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("FLUI Retained Capture Encoder"),
-            });
-        if let Err(error) = self
-            .painter
-            .render(RenderTarget::sampleable(&view, &texture), &mut encoder)
-        {
-            self.painter.end_frame_maintenance();
-            return Err(error);
-        }
-        self.queue.submit(std::iter::once(encoder.finish()));
-        self.painter.end_frame_maintenance();
-        if retained.is_some() {
-            self.offscreen
-                .blit_to_surface(&texture, &self.surface_view, CAPTURE_FORMAT);
-            self.retained.commit();
-        }
-        self.damage.reset();
+            fail: &mut self.fail_after_begin,
+        };
+        self.frame.run(
+            plan,
+            &self.device,
+            self.size,
+            CAPTURE_FORMAT,
+            (&self.surface_view, &self.surface),
+            &mut steps,
+        )?;
+        self.frame.presented();
         Ok(PresentDisposition::Presented)
     }
 
     fn resize(&mut self, _width: u32, _height: u32) {
         // The capture's size is fixed at construction; a resize is modelled
         // by what the windowed renderer does to its frame state.
-        self.damage.mark_full_repaint();
-        self.retained.invalidate();
+        self.frame.surface_changed();
     }
 
     fn is_device_lost(&self) -> bool {
@@ -600,15 +642,15 @@ impl crate::raster::RasterBackend for RetainedCapture {
     }
 
     fn mark_dirty(&mut self, rect: flui_foundation::geometry::Rect<f64>) {
-        self.damage.mark_dirty(rect);
+        self.frame.mark_dirty(rect);
     }
 
     fn mark_full_repaint(&mut self) {
-        self.damage.mark_full_repaint();
+        self.frame.mark_full_repaint();
     }
 
     fn has_damage(&self) -> bool {
-        self.damage.has_damage()
+        self.frame.has_damage()
     }
 
     fn size(&self) -> (u32, u32) {
