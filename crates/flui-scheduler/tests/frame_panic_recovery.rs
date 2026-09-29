@@ -160,7 +160,6 @@ fn assert_recovered_from_panic(
 
 // ── Transient callback ──────────────────────────────────────────────────
 
-#[test]
 fn transient_callback_panic_closes_the_frame_and_preserves_its_sibling() {
     let scheduler = UpdateScheduler::new();
     let frame_count_before = scheduler.frame_count();
@@ -212,111 +211,10 @@ fn transient_callback_panic_closes_the_frame_and_preserves_its_sibling() {
 
 // ── Mid-frame microtask ─────────────────────────────────────────────────
 
-#[test]
-fn mid_frame_microtask_panic_closes_the_frame_and_preserves_its_sibling() {
-    let scheduler = UpdateScheduler::new();
-    let frame_count_before = scheduler.frame_count();
-    let (completion_future, completion_counter) = armed_completion_probe(&scheduler);
-
-    let sibling_ran = Arc::new(AtomicUsize::new(0));
-    let sibling_ran_task = Arc::clone(&sibling_ran);
-    scheduler.schedule_microtask(Box::new(|| panic!("microtask probe")));
-    scheduler.schedule_microtask(Box::new(move || {
-        sibling_ran_task.fetch_add(1, Ordering::SeqCst);
-    }));
-
-    let payload = catch_unwind(AssertUnwindSafe(|| {
-        scheduler.drive_frame(Instant::now(), far_deadline(), || {});
-    }))
-    .expect_err("the panic must propagate");
-
-    assert_recovered_from_panic(
-        &scheduler,
-        &*payload,
-        "microtask probe",
-        frame_count_before,
-        completion_future,
-        &completion_counter,
-    );
-    assert_eq!(
-        sibling_ran.load(Ordering::SeqCst),
-        0,
-        "not yet reached this frame"
-    );
-
-    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
-    assert_eq!(
-        sibling_ran.load(Ordering::SeqCst),
-        1,
-        "the preserved microtask survives to the next frame, exactly once"
-    );
-    assert_eq!(
-        completion_counter.count(),
-        1,
-        "the completion waiter's notifier was drained by the abort; a later, unrelated \
-         clean frame must not wake it a second time"
-    );
-}
-
 // ── Build-priority task ─────────────────────────────────────────────────
-
-#[test]
-fn build_priority_task_panic_closes_the_frame_and_preserves_its_sibling() {
-    let scheduler = UpdateScheduler::new();
-    let frame_count_before = scheduler.frame_count();
-    let (completion_future, completion_counter) = armed_completion_probe(&scheduler);
-
-    let sibling_ran = Arc::new(AtomicUsize::new(0));
-    let sibling_ran_task = Arc::clone(&sibling_ran);
-    let queue_len_before = scheduler.task_queue().len();
-    scheduler.add_task(Priority::Build, || panic!("build task probe"));
-    scheduler.add_task(Priority::Build, move || {
-        sibling_ran_task.fetch_add(1, Ordering::SeqCst);
-    });
-    assert_eq!(scheduler.task_queue().len(), queue_len_before + 2);
-
-    let payload = catch_unwind(AssertUnwindSafe(|| {
-        scheduler.drive_frame(Instant::now(), far_deadline(), || {});
-    }))
-    .expect_err("the panic must propagate");
-
-    assert_recovered_from_panic(
-        &scheduler,
-        &*payload,
-        "build task probe",
-        frame_count_before,
-        completion_future,
-        &completion_counter,
-    );
-    assert_eq!(
-        sibling_ran.load(Ordering::SeqCst),
-        0,
-        "not yet reached this frame"
-    );
-    assert_eq!(
-        scheduler.task_queue().len(),
-        queue_len_before + 1,
-        "the panicking task is gone; the sibling is still queued -- no underflow, no resurrection"
-    );
-
-    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
-    assert_eq!(
-        sibling_ran.load(Ordering::SeqCst),
-        1,
-        "the preserved task survives to the next frame, exactly once"
-    );
-    assert_eq!(scheduler.task_queue().len(), queue_len_before);
-    assert_eq!(
-        completion_counter.count(),
-        1,
-        "the completion waiter's notifier was drained by the abort; a later, unrelated \
-         clean frame must not wake it a second time"
-    );
-}
 
 // ── Persistent callback ─────────────────────────────────────────────────
 
-#[test]
 fn persistent_callback_panic_closes_the_frame_before_the_pipeline_slot_ever_opens() {
     let scheduler = UpdateScheduler::new();
     let frame_count_before = scheduler.frame_count();
@@ -417,7 +315,6 @@ impl Future for CountedThenReady {
     }
 }
 
-#[test]
 fn async_future_poll_panic_closes_the_frame() {
     let scheduler = UpdateScheduler::new();
     let frame_count_before = scheduler.frame_count();
@@ -478,90 +375,10 @@ fn async_future_poll_panic_closes_the_frame() {
 
 // ── Owner-local-lane entry point ────────────────────────────────────────
 
-#[test]
-fn transient_callback_panic_recovers_identically_through_drive_frame_with_lane() {
-    let scheduler = UpdateScheduler::new();
-    let lane = scheduler.new_local_post_frame_lane();
-    let frame_count_before = scheduler.frame_count();
-    let (completion_future, completion_counter) = armed_completion_probe(&scheduler);
-
-    scheduler.schedule_frame_callback(Box::new(|_| panic!("lane transient probe")));
-
-    let payload = catch_unwind(AssertUnwindSafe(|| {
-        scheduler.drive_frame_with_lane(Instant::now(), far_deadline(), || {}, &lane);
-    }))
-    .expect_err("the panic must propagate");
-
-    assert_recovered_from_panic(
-        &scheduler,
-        &*payload,
-        "lane transient probe",
-        frame_count_before,
-        completion_future,
-        &completion_counter,
-    );
-
-    // The owner-local lane recovers too: a clean frame through the SAME
-    // entry point still drains it.
-    let local_ran = Arc::new(AtomicUsize::new(0));
-    let local_ran_cb = Arc::clone(&local_ran);
-    lane.local_handle()
-        .schedule_local(move |_timing| {
-            local_ran_cb.fetch_add(1, Ordering::SeqCst);
-        })
-        .expect("lane is alive after recovery");
-    scheduler.drive_frame_with_lane(Instant::now(), far_deadline(), || {}, &lane);
-    assert_eq!(local_ran.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        completion_counter.count(),
-        1,
-        "the completion waiter's notifier was drained by the abort; a later, unrelated \
-         clean frame must not wake it a second time"
-    );
-}
-
 // ── execute_frame (ALT-1: the no-pipeline convenience path) ────────────
-
-#[test]
-fn transient_callback_panic_recovers_identically_through_execute_frame() {
-    let scheduler = UpdateScheduler::new();
-    let frame_count_before = scheduler.frame_count();
-    let (completion_future, completion_counter) = armed_completion_probe(&scheduler);
-
-    scheduler.schedule_frame_callback(Box::new(|_| panic!("execute_frame transient probe")));
-
-    let payload = catch_unwind(AssertUnwindSafe(|| scheduler.execute_frame()))
-        .expect_err("the panic must propagate");
-
-    assert_recovered_from_panic(
-        &scheduler,
-        &*payload,
-        "execute_frame transient probe",
-        frame_count_before,
-        completion_future,
-        &completion_counter,
-    );
-
-    // `execute_frame` keeps its clean-path contract too: a complete frame
-    // whose post-frame callbacks run.
-    let post_frame_ran = Arc::new(AtomicUsize::new(0));
-    let post_frame_ran_cb = Arc::clone(&post_frame_ran);
-    scheduler.add_post_frame_callback(Box::new(move |_| {
-        post_frame_ran_cb.fetch_add(1, Ordering::SeqCst);
-    }));
-    scheduler.execute_frame();
-    assert_eq!(post_frame_ran.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        completion_counter.count(),
-        1,
-        "the completion waiter's notifier was drained by the abort; a later, unrelated \
-         clean frame must not wake it a second time"
-    );
-}
 
 // ── Idle work and post-frame callbacks are not starved by recovery ─────
 
-#[test]
 fn idle_priority_work_and_post_frame_callbacks_are_not_starved_after_a_panic_recovers() {
     let scheduler = UpdateScheduler::new();
     scheduler.schedule_frame_callback(Box::new(|_| panic!("idle-starvation probe")));
@@ -603,7 +420,6 @@ fn idle_priority_work_and_post_frame_callbacks_are_not_starved_after_a_panic_rec
 /// future must resolve `Completed`, never `Aborted`, even though the panic
 /// still propagates to the caller (issue #1162; this distinction did not
 /// exist before it -- both paths resolved the same bare `FrameTiming`).
-#[test]
 fn a_post_frame_callback_panic_still_resolves_completed_not_aborted() {
     let scheduler = UpdateScheduler::new();
     let (mut completion_future, completion_counter) = armed_completion_probe(&scheduler);
@@ -655,7 +471,6 @@ impl Wake for PanicWaker {
 /// reaching `resume_unwind(payload)`, so the caller observes the waker's
 /// panic instead of the pipeline's -- the ORIGINAL failure this frame was
 /// actually reporting is lost.
-#[test]
 fn the_original_pipeline_panic_survives_a_panicking_completion_waker_during_abort() {
     let scheduler = UpdateScheduler::new();
     let mut future = scheduler.end_of_frame();
@@ -684,55 +499,38 @@ fn the_original_pipeline_panic_survives_a_panicking_completion_waker_during_abor
     );
 }
 
-struct PoisonPill;
-
-impl Drop for PoisonPill {
-    fn drop(&mut self) {
-        panic!("poison pill dropped");
-    }
-}
-
-struct PoisonWaker;
-
-impl Wake for PoisonWaker {
-    fn wake(self: Arc<Self>) {
-        std::panic::panic_any(PoisonPill);
-    }
-}
-
-/// The same class of bug as the test above, one step further: the secondary
-/// panic `drive_frame_impl`'s `catch_unwind(|| self.abort_frame())` catches
-/// can itself carry a payload whose own `Drop` panics (a payload can own any
-/// type, including one with a panicking destructor). An ordinary `drop` of
-/// that payload would let a THIRD panic escape uncontained, displacing the
-/// ORIGINAL pipeline panic `resume_unwind(payload)` is about to carry out
-/// right below it -- the same bug this issue already fixed in
-/// `notify_frame_completion` and `end_frame_impl`, at this third site.
 #[test]
-fn the_original_pipeline_panic_survives_a_panicking_wakers_own_drop_panic_during_abort() {
-    let scheduler = UpdateScheduler::new();
-    let mut future = scheduler.end_of_frame();
-    let poison_waker = Waker::from(Arc::new(PoisonWaker));
-    let mut cx = Context::from_waker(&poison_waker);
-    assert!(Pin::new(&mut future).poll(&mut cx).is_pending());
-
-    let payload = catch_unwind(AssertUnwindSafe(|| {
-        scheduler.drive_frame(Instant::now(), far_deadline(), || {
-            panic!("probe frame panic")
-        })
-    }))
-    .expect_err("a panic must still escape drive_frame");
-
-    assert_eq!(
-        flui_foundation::panic::payload_text(&*payload),
-        Some("probe frame panic"),
-        "the ORIGINAL pipeline panic must survive a completion waker whose own panic \
-         payload's Drop ALSO panics, not be displaced by either secondary panic"
-    );
-    assert_eq!(
-        scheduler.phase(),
-        SchedulerPhase::Idle,
-        "the phase reset inside abort_frame happens before notify_frame_completion runs, \
-         so it must hold regardless of the waker's panic or its payload's own Drop panic"
+fn frame_panic_recovery_matrix() {
+    crate::run_table(
+        "frame_panic_recovery_matrix",
+        &[
+            (
+                "transient_callback_panic_closes_the_frame_and_preserves_its_sibling",
+                transient_callback_panic_closes_the_frame_and_preserves_its_sibling as fn(),
+            ),
+            (
+                "persistent_callback_panic_closes_the_frame_before_the_pipeline_slot_ever_opens",
+                persistent_callback_panic_closes_the_frame_before_the_pipeline_slot_ever_opens
+                    as fn(),
+            ),
+            (
+                "async_future_poll_panic_closes_the_frame",
+                async_future_poll_panic_closes_the_frame as fn(),
+            ),
+            (
+                "idle_priority_work_and_post_frame_callbacks_are_not_starved_after_a_panic_recovers",
+                idle_priority_work_and_post_frame_callbacks_are_not_starved_after_a_panic_recovers
+                    as fn(),
+            ),
+            (
+                "a_post_frame_callback_panic_still_resolves_completed_not_aborted",
+                a_post_frame_callback_panic_still_resolves_completed_not_aborted as fn(),
+            ),
+            (
+                "the_original_pipeline_panic_survives_a_panicking_completion_waker_during_abort",
+                the_original_pipeline_panic_survives_a_panicking_completion_waker_during_abort
+                    as fn(),
+            ),
+        ],
     );
 }

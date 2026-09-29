@@ -103,7 +103,6 @@ thiserror.workspace = true
 # UiRealm owner inbox (bounded typed mailbox)
 crossbeam-channel.workspace = true
 anyhow.workspace = true
-raw-window-handle.workspace = true
 pollster = { workspace = true }
 web-time = { workspace = true }
 
@@ -165,7 +164,6 @@ flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["test-u
 # device-recovery, frame-pacing and dispatch tests mount; the realm that
 # production code drives names them from `flui-runtime`.
 flui-objects = { path = "../flui-objects", version = "=0.2.0-dev" }
-flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
 
 [lints]
 workspace = true

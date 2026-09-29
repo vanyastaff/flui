@@ -28,8 +28,7 @@ impl StatelessView for BoxBuilder {
     }
 }
 
-#[test]
-fn component_child_keeps_slot_order_before_a_render_sibling() {
+pub(crate) fn component_child_keeps_slot_order_before_a_render_sibling() {
     // Row 300 wide: a component child FIRST (builds its box in a later
     // iteration), a directly-rendered box SECOND. Slot order must win.
     let laid = lay_out(

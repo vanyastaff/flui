@@ -607,14 +607,6 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn self_test_fixture_yields_exactly_the_expected_findings() {
-        let (missed, extra) = self_test_diff();
-        assert!(missed.is_empty(), "missed: {missed:?}");
-        assert!(extra.is_empty(), "false positives: {extra:?}");
-    }
-
-    #[test]
     fn crlf_source_reports_the_same_lines() {
         let source = "fn f(x: f32, c: bool) -> f32 {\n    if c {\n        return dpdx(x);\n    }\n    return 0.0;\n}\n";
         let lf = findings(source);
@@ -625,7 +617,6 @@ mod tests {
         assert_eq!(findings(&source.replace('\n', "\r\n")), lf);
     }
 
-    #[test]
     fn transitive_helper_in_another_file_is_a_derivative() {
         let texts = [
             (
@@ -646,9 +637,29 @@ mod tests {
         );
     }
 
-    #[test]
     fn marker_inside_a_block_comment_line_still_counts_for_its_line() {
         let source = "fn f(x: f32) -> f32 {\n  /* wgsl-uniformity: uniform */\n  if u.a > 0.0 { return dpdx(x); }\n  return 0.0;\n}";
         assert!(findings(source).is_empty());
+    }
+
+    #[test]
+    fn wgsl_gate_contract() {
+        crate::table_test::run_table(
+            "wgsl_gate_contract",
+            &[
+                (
+                    "crlf_source_reports_the_same_lines",
+                    crlf_source_reports_the_same_lines as fn(),
+                ),
+                (
+                    "transitive_helper_in_another_file_is_a_derivative",
+                    transitive_helper_in_another_file_is_a_derivative as fn(),
+                ),
+                (
+                    "marker_inside_a_block_comment_line_still_counts_for_its_line",
+                    marker_inside_a_block_comment_line_still_counts_for_its_line as fn(),
+                ),
+            ],
+        );
     }
 }

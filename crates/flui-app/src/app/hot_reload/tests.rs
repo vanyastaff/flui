@@ -121,7 +121,6 @@ fn no_wake() -> Arc<dyn Fn() + Send + Sync> {
     Arc::new(|| {})
 }
 
-#[test]
 fn a_patch_polled_through_the_hook_reassembles_the_realm() {
     let hook = Scripted::default();
     hook.then(ReloadEvent::Patched);
@@ -141,7 +140,6 @@ fn a_patch_polled_through_the_hook_reassembles_the_realm() {
     );
 }
 
-#[test]
 fn without_a_hook_the_frame_is_unchanged() {
     let realm = settled_realm();
     frame_boundary(&WorkerReload::from_config(&AppConfig::new()), &realm);
@@ -166,7 +164,6 @@ fn without_a_hook_the_frame_is_unchanged() {
     );
 }
 
-#[test]
 fn one_patch_reaches_every_realm_exactly_once() {
     let hook = Scripted::default();
     let config = AppConfig::new().with_dev_reload(hook.clone());
@@ -207,7 +204,6 @@ fn one_patch_reaches_every_realm_exactly_once() {
     assert_eq!(hook.polls(), 6, "every boundary polls");
 }
 
-#[test]
 fn a_realm_first_polled_after_a_patch_does_not_replay_it() {
     let hook = Scripted::default();
     let reload = WorkerReload::from_config(&AppConfig::new().with_dev_reload(hook.clone()));
@@ -224,7 +220,6 @@ fn a_realm_first_polled_after_a_patch_does_not_replay_it() {
     );
 }
 
-#[test]
 fn a_realm_mounted_before_a_patch_applies_it_at_its_first_boundary() {
     let hook = Scripted::default();
     let config = AppConfig::new().with_dev_reload(hook.clone());
@@ -252,7 +247,6 @@ fn a_realm_mounted_before_a_patch_applies_it_at_its_first_boundary() {
     );
 }
 
-#[test]
 fn a_panicking_poll_disables_the_hook_and_the_frame_continues() {
     let (calls, drops) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
     let reload = WorkerReload::from_config(&AppConfig::new().with_dev_reload(Panics {
@@ -286,7 +280,6 @@ fn a_panicking_poll_disables_the_hook_and_the_frame_continues() {
     drain(&realm);
 }
 
-#[test]
 fn attach_and_detach_pair_once_per_loop_and_a_second_attach_is_refused() {
     let hook = Scripted::default();
     let reload = WorkerReload::from_config(&AppConfig::new().with_dev_reload(hook.clone()));
@@ -321,7 +314,6 @@ fn attach_and_detach_pair_once_per_loop_and_a_second_attach_is_refused() {
     assert_eq!(hook.0.lock().detaches, 2);
 }
 
-#[test]
 fn a_detach_that_arrives_during_a_hook_call_runs_when_the_call_returns() {
     let hook = Scripted::default();
     let reload = WorkerReload::from_config(&AppConfig::new().with_dev_reload(hook.clone()));
@@ -351,7 +343,6 @@ fn a_detach_that_arrives_during_a_hook_call_runs_when_the_call_returns() {
     );
 }
 
-#[test]
 fn a_panicking_attach_leaves_the_loop_without_reload() {
     let (calls, drops) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
     let reload = WorkerReload::from_config(&AppConfig::new().with_dev_reload(Panics {
@@ -376,11 +367,59 @@ fn a_panicking_attach_leaves_the_loop_without_reload() {
     assert!(reload.spawn_watcher(no_wake()).is_none());
 }
 
-#[test]
 fn each_reload_event_maps_to_the_realm_tier() {
     assert_eq!(reload_tier(ReloadEvent::Unchanged), None);
     assert_eq!(
         reload_tier(ReloadEvent::Patched),
         Some(ReloadTier::Reassemble)
+    );
+}
+
+#[test]
+fn dev_reload_hook_matrix() {
+    crate::table_test::run_table(
+        "dev_reload_hook_matrix",
+        &[
+            (
+                "a_patch_polled_through_the_hook_reassembles_the_realm",
+                a_patch_polled_through_the_hook_reassembles_the_realm as fn(),
+            ),
+            (
+                "without_a_hook_the_frame_is_unchanged",
+                without_a_hook_the_frame_is_unchanged as fn(),
+            ),
+            (
+                "one_patch_reaches_every_realm_exactly_once",
+                one_patch_reaches_every_realm_exactly_once as fn(),
+            ),
+            (
+                "a_realm_first_polled_after_a_patch_does_not_replay_it",
+                a_realm_first_polled_after_a_patch_does_not_replay_it as fn(),
+            ),
+            (
+                "a_realm_mounted_before_a_patch_applies_it_at_its_first_boundary",
+                a_realm_mounted_before_a_patch_applies_it_at_its_first_boundary as fn(),
+            ),
+            (
+                "a_panicking_poll_disables_the_hook_and_the_frame_continues",
+                a_panicking_poll_disables_the_hook_and_the_frame_continues as fn(),
+            ),
+            (
+                "attach_and_detach_pair_once_per_loop_and_a_second_attach_is_refused",
+                attach_and_detach_pair_once_per_loop_and_a_second_attach_is_refused as fn(),
+            ),
+            (
+                "a_detach_that_arrives_during_a_hook_call_runs_when_the_call_returns",
+                a_detach_that_arrives_during_a_hook_call_runs_when_the_call_returns as fn(),
+            ),
+            (
+                "a_panicking_attach_leaves_the_loop_without_reload",
+                a_panicking_attach_leaves_the_loop_without_reload as fn(),
+            ),
+            (
+                "each_reload_event_maps_to_the_realm_tier",
+                each_reload_event_maps_to_the_realm_tier as fn(),
+            ),
+        ],
     );
 }

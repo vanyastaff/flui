@@ -109,7 +109,7 @@ ADR-0016 wanted and could not have while glyphon existed.
   glyph pass and `discard`ed transparent texels measured +25% and was
   fixed before landing.
 - **Correct where glyphon was not:** a rounded clip rounds text
-  (`text_is_clipped_by_a_rounded_clip`, red without the SDF slot); mid-tone
+  (red without the SDF slot); mid-tone
   colours land as recorded (`glyph_colour_lands_as_recorded`, red under a
   linear conversion); text inside a filter input or advanced shape renders
   in that op's frame with the rest of its segment instead of over
@@ -121,8 +121,7 @@ ADR-0016 wanted and could not have while glyphon existed.
   before, and under a rotated or anisotropic CTM each quad carries the
   CTM's linear part over that scale and is resampled (bilinear) into the
   transformed shape. The old "stretched uniformly by the larger axis" limit
-  is gone: `anisotropic_scale_squashes_glyphs_on_one_axis` and
-  `a_quarter_turn_rotates_the_label` replace the pin that recorded it.
+  is gone.
 - The engine gains one dependency (`etagere`, already in the lock through
   glyphon) and `rustc-hash`; it loses glyphon and, transitively, `lru 0.16`.
 
@@ -142,21 +141,8 @@ ADR-0016 wanted and could not have while glyphon existed.
 
 ## Replacement tests
 
-`a_slot_is_shared_by_equal_keys_and_an_empty_glyph_takes_no_space`,
-`eviction_reclaims_slots_before_the_page_grows`,
-`a_page_grows_within_a_frame_and_earlier_slots_keep_their_place`
-(`crates/flui-engine/src/glyph_atlas.rs`);
-`glyph_colour_lands_as_recorded`, `text_is_clipped_by_a_rounded_clip`, and
-the strengthened `the_engine_does_not_shape`
-(`crates/flui-engine/src/paragraph_readback_tests.rs`);
-`anisotropic_scale_squashes_glyphs_on_one_axis` and
-`a_quarter_turn_rotates_the_label` (`aa_oracle_tests.rs`, both red when the
-affine path is disabled);
-`a_quad_touching_the_scissor_edge_is_inside_and_one_past_it_is_outside`
-(`crates/flui-engine/src/batches/text.rs`). The existing text readback
-suites (`text_is_clipped_by_the_active_clip_rect`,
-`text_ordering_across_an_opacity_layer_boundary`,
-`truncated_paragraph_leaves_no_ink_below_its_line`) pass unchanged;
-`anisotropic_scale_stretches_glyphs_uniformly`, which pinned the old limit,
-is replaced. The
+`swash_glyphs_land_and_equal_keys_share_a_slot`
+(`crates/flui-engine/src/glyph_atlas.rs`); `glyph_colour_lands_as_recorded`
+and the strengthened `the_engine_does_not_shape`
+(`crates/flui-engine/src/paragraph_readback_tests.rs`). The
 benchmark is `crates/flui-engine/benches/text_throughput.rs`.

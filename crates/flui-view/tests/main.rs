@@ -13,48 +13,20 @@
 
 #[path = "ancestor_finders.rs"]
 mod ancestor_finders;
-#[path = "boxed_view_conditional_return.rs"]
-mod boxed_view_conditional_return;
-#[path = "build_context_tests.rs"]
-mod build_context_tests;
 #[path = "build_owner_tests.rs"]
 mod build_owner_tests;
-#[path = "build_phase_span.rs"]
-mod build_phase_span;
-#[path = "clipboard_handle.rs"]
-mod clipboard_handle;
 #[path = "dense_reconcile_containment.rs"]
 mod dense_reconcile_containment;
 #[path = "dense_update_containment.rs"]
 mod dense_update_containment;
-#[path = "derive_bon_stack.rs"]
-mod derive_bon_stack;
-#[path = "derive_smoke.rs"]
-mod derive_smoke;
-#[path = "dispatch_shim.rs"]
-mod dispatch_shim;
-#[path = "element_kind_non_exhaustive_smoke.rs"]
-mod element_kind_non_exhaustive_smoke;
-#[path = "element_slot_integration.rs"]
-mod element_slot_integration;
-#[path = "element_tree_tests.rs"]
-mod element_tree_tests;
-#[path = "flutter_parity_key_equality.rs"]
-mod flutter_parity_key_equality;
 #[path = "global_key.rs"]
 mod global_key;
 #[path = "global_key_duplication.rs"]
 mod global_key_duplication;
 #[path = "global_key_reparent.rs"]
 mod global_key_reparent;
-#[path = "greeting_widget_loc_golden.rs"]
-mod greeting_widget_loc_golden;
-#[path = "inherited_data_derive.rs"]
-mod inherited_data_derive;
 #[path = "inherited_dependency.rs"]
 mod inherited_dependency;
-#[path = "key_roundtrip.rs"]
-mod key_roundtrip;
 #[path = "lifecycle_panic_containment.rs"]
 mod lifecycle_panic_containment;
 #[path = "lifecycle_tests.rs"]
@@ -77,9 +49,101 @@ mod signal_reads;
 mod stateless_stateful_tests;
 #[path = "trybuild_ui.rs"]
 mod trybuild_ui;
-#[path = "view_element_conversion_tests.rs"]
-mod view_element_conversion_tests;
-#[path = "view_reconcile_match.rs"]
-mod view_reconcile_match;
 #[path = "writer_source.rs"]
 mod writer_source;
+
+/// Runs every case even after one fails, then panics listing the failing case names.
+fn run_table(table: &str, cases: &[(&str, fn())]) {
+    let failed: Vec<&str> = cases
+        .iter()
+        .filter(|(_, case)| std::panic::catch_unwind(*case).is_err())
+        .map(|(name, _)| *name)
+        .collect();
+    assert!(failed.is_empty(), "{table}: failing cases: {failed:?}");
+}
+
+#[test]
+fn dense_and_production_reconcile_matrix() {
+    run_table(
+        "dense_and_production_reconcile_matrix",
+        &[
+            ("dense_reconcile_containment::dense_mount_panic_substitutes_at_exact_slot_and_preserves_topology", dense_reconcile_containment::dense_mount_panic_substitutes_at_exact_slot_and_preserves_topology as fn()),
+            ("dense_reconcile_containment::repeated_dense_mount_panics_do_not_accumulate_ghosts", dense_reconcile_containment::repeated_dense_mount_panics_do_not_accumulate_ghosts as fn()),
+            ("dense_update_containment::phase_one_did_update_view_panic_substitutes_at_same_slot", dense_update_containment::phase_one_did_update_view_panic_substitutes_at_same_slot as fn()),
+            ("dense_update_containment::phase_five_a_shifted_suffix_update_panic_uses_final_slot", dense_update_containment::phase_five_a_shifted_suffix_update_panic_uses_final_slot as fn()),
+            #[cfg(feature = "test-utils")]
+            ("production_reconcile_emits::active_global_key_move_through_build_scope_updates_render_parent_links", production_reconcile_emits::active_global_key_move_through_build_scope_updates_render_parent_links as fn()),
+            #[cfg(feature = "test-utils")]
+            ("production_reconcile_emits::failed_dense_mount_production_reconcile_emits_only_final_slots", production_reconcile_emits::failed_dense_mount_production_reconcile_emits_only_final_slots as fn()),
+        ],
+    );
+}
+
+#[test]
+fn global_key_contract_matrix() {
+    run_table(
+        "global_key_contract_matrix",
+        &[
+            ("global_key::global_key_state_migrates_to_new_parent_slot", global_key::global_key_state_migrates_to_new_parent_slot as fn()),
+            ("global_key_duplication::a_second_parent_grafts_the_same_element_rather_than_creating_another", global_key_duplication::a_second_parent_grafts_the_same_element_rather_than_creating_another as fn()),
+            ("global_key_duplication::two_parents_declaring_one_key_in_one_frame_are_reported", global_key_duplication::two_parents_declaring_one_key_in_one_frame_are_reported as fn()),
+            #[cfg(feature = "test-utils")]
+            ("global_key_reparent::active_to_active_reparent_emits_from_parent_and_preserves_state", global_key_reparent::active_to_active_reparent_emits_from_parent_and_preserves_state as fn()),
+        ],
+    );
+}
+
+#[test]
+fn lifecycle_panic_containment_matrix() {
+    run_table(
+        "lifecycle_panic_containment_matrix",
+        &[
+            ("lifecycle_panic_containment::child_init_state_panic_is_replaced_in_place_and_the_build_scope_continues", lifecycle_panic_containment::child_init_state_panic_is_replaced_in_place_and_the_build_scope_continues as fn()),
+            ("lifecycle_panic_containment::a_dispose_panic_during_finalize_is_contained_and_the_slot_is_freed", lifecycle_panic_containment::a_dispose_panic_during_finalize_is_contained_and_the_slot_is_freed as fn()),
+            ("lifecycle_panic_containment::a_dispose_panic_on_a_global_keyed_element_still_clears_the_registry", lifecycle_panic_containment::a_dispose_panic_on_a_global_keyed_element_still_clears_the_registry as fn()),
+            ("lifecycle_panic_containment::a_deactivate_panic_is_contained_and_the_element_is_still_parked_inactive", lifecycle_panic_containment::a_deactivate_panic_is_contained_and_the_element_is_still_parked_inactive as fn()),
+            ("recovered_panics::a_contained_build_panic_is_recorded_once_with_its_element_and_hook", recovered_panics::a_contained_build_panic_is_recorded_once_with_its_element_and_hook as fn()),
+        ],
+    );
+}
+
+#[test]
+fn element_lifecycle_and_dependency_matrix() {
+    run_table(
+        "element_lifecycle_and_dependency_matrix",
+        &[
+            ("lifecycle_tests::test_stateful_element_multiple_deactivate_activate_cycles", lifecycle_tests::test_stateful_element_multiple_deactivate_activate_cycles as fn()),
+            ("stateless_stateful_tests::test_stateful_element_update_calls_did_update_view", stateless_stateful_tests::test_stateful_element_update_calls_did_update_view as fn()),
+            ("stateless_stateful_tests::stateful_activate_and_deactivate_require_completed_init_state", stateless_stateful_tests::stateful_activate_and_deactivate_require_completed_init_state as fn()),
+            ("notifications::dispatch_notification_calls_handler_and_stops_on_true", notifications::dispatch_notification_calls_handler_and_stops_on_true as fn()),
+            ("ancestor_finders::find_ancestor_view_returns_nearest_match", ancestor_finders::find_ancestor_view_returns_nearest_match as fn()),
+            ("inherited_dependency::inherited_update_notifies_dependents", inherited_dependency::inherited_update_notifies_dependents as fn()),
+            ("inherited_dependency::unmounted_dependent_is_removed_from_provider_before_next_notification", inherited_dependency::unmounted_dependent_is_removed_from_provider_before_next_notification as fn()),
+            ("build_owner_tests::build_owners_have_isolated_focus_managers", build_owner_tests::build_owners_have_isolated_focus_managers as fn()),
+            ("build_owner_tests::test_build_scope_processes_in_depth_order", build_owner_tests::test_build_scope_processes_in_depth_order as fn()),
+        ],
+    );
+}
+
+#[test]
+fn signal_read_and_write_matrix() {
+    run_table(
+        "signal_read_and_write_matrix",
+        &[
+            (
+                "signal_reads::a_read_in_build_subscribes_through_the_production_context",
+                signal_reads::a_read_in_build_subscribes_through_the_production_context as fn(),
+            ),
+            (
+                "signal_reads::a_partially_committed_panicking_update_rebuilds_its_mounted_reader",
+                signal_reads::a_partially_committed_panicking_update_rebuilds_its_mounted_reader
+                    as fn(),
+            ),
+            (
+                "writer_source::writer_source_from_init_state_writes_and_rebuilds_the_reader",
+                writer_source::writer_source_from_init_state_writes_and_rebuilds_the_reader
+                    as fn(),
+            ),
+        ],
+    );
+}

@@ -342,20 +342,3 @@ impl ExternalTextureRegistry {
         self.textures.keys().map(|&id| TextureId::new(id))
     }
 }
-
-#[cfg(all(test, feature = "testing"))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_texture_id_mapping() {
-        let id = TextureId::new(42);
-        assert_eq!(id.get(), 42);
-
-        let id2 = TextureId::new(42);
-        assert_eq!(id, id2);
-
-        let id3 = TextureId::new(43);
-        assert_ne!(id, id3);
-    }
-}

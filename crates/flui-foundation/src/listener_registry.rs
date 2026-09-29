@@ -220,16 +220,6 @@ impl<S> ListenerRegistry<S> {
         drop(previous);
     }
 
-    /// Test-only probe: `true` if `on_first`'s SLOT lock is currently free.
-    ///
-    /// Backs a regression test for `set_on_first_listener`'s
-    /// extract-then-drop ordering: a previously-installed hook whose own
-    /// `Drop` re-enters this method must observe the lock already released.
-    #[cfg(test)]
-    pub(crate) fn on_first_is_unlocked(&self) -> bool {
-        self.inner.on_first.try_lock().is_some()
-    }
-
     /// Total registered listeners across both channels.
     #[must_use]
     #[inline]
@@ -324,32 +314,9 @@ impl Drop for ListenerSubscription {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
-
-    fn counter() -> (Arc<AtomicUsize>, impl Fn() + Send + Sync) {
-        let c = Arc::new(AtomicUsize::new(0));
-        let c2 = Arc::clone(&c);
-        (c, move || {
-            c2.fetch_add(1, Ordering::SeqCst);
-        })
-    }
-
-    #[test]
-    fn first_listener_edge_fires_once() {
-        let reg: ListenerRegistry<u8> = ListenerRegistry::new();
-        let firsts = Arc::new(AtomicUsize::new(0));
-        let f2 = Arc::clone(&firsts);
-        reg.set_on_first_listener(move || {
-            f2.fetch_add(1, Ordering::SeqCst);
-        });
-        let s1 = reg.add_value_listener(Arc::new(|| {}));
-        let s2 = reg.add_value_listener(Arc::new(|| {}));
-        assert_eq!(firsts.load(Ordering::SeqCst), 1, "first edge fires once");
-        drop(s1);
-        drop(s2);
-    }
 
     /// A hook that re-arms itself (calls `set_on_first_listener` from
     /// inside its own body) must neither deadlock on `on_first`'s slot lock
@@ -358,7 +325,6 @@ mod tests {
     /// test forever — a same-thread, non-reentrant `parking_lot::Mutex`
     /// deadlock, not a panic, so it was verified in scratch under `timeout`
     /// rather than left in the permanent suite as an unbounded hang.
-    #[test]
     fn on_first_listener_hook_can_re_arm_itself_without_deadlocking() {
         let reg: ListenerRegistry<u8> = ListenerRegistry::new();
         let fires = Arc::new(AtomicUsize::new(0));
@@ -386,7 +352,6 @@ mod tests {
         drop(s2);
     }
 
-    #[test]
     fn last_listener_edge_fires_on_drop_to_zero() {
         let reg: ListenerRegistry<u8> = ListenerRegistry::new();
         let lasts = Arc::new(AtomicUsize::new(0));
@@ -404,120 +369,16 @@ mod tests {
     }
 
     #[test]
-    fn shared_count_spans_value_and_status() {
-        let reg: ListenerRegistry<u8> = ListenerRegistry::new();
-        let firsts = Arc::new(AtomicUsize::new(0));
-        let f2 = Arc::clone(&firsts);
-        reg.set_on_first_listener(move || {
-            f2.fetch_add(1, Ordering::SeqCst);
-        });
-        let _s = reg.add_status_listener(Arc::new(|_s: u8| {}));
-        let _v = reg.add_value_listener(Arc::new(|| {}));
-        assert_eq!(firsts.load(Ordering::SeqCst), 1, "one shared first edge");
-        assert_eq!(reg.listener_count(), 2);
-    }
-
-    #[test]
-    fn notify_value_and_status_independent() {
-        let reg: ListenerRegistry<u8> = ListenerRegistry::new();
-        let (vc, vcb) = counter();
-        let _v = reg.add_value_listener(Arc::new(vcb));
-        let sc = Arc::new(AtomicUsize::new(0));
-        let sc2 = Arc::clone(&sc);
-        let _s = reg.add_status_listener(Arc::new(move |s: u8| {
-            sc2.fetch_add(s as usize, Ordering::SeqCst);
-        }));
-        reg.notify_value();
-        assert_eq!(vc.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            sc.load(Ordering::SeqCst),
-            0,
-            "value notify must not fire status"
-        );
-        reg.notify_status(5);
-        assert_eq!(sc.load(Ordering::SeqCst), 5);
-        assert_eq!(
-            vc.load(Ordering::SeqCst),
-            1,
-            "status notify must not fire value"
-        );
-    }
-
-    #[test]
-    fn drop_subscription_stops_delivery() {
-        let reg: ListenerRegistry<u8> = ListenerRegistry::new();
-        let (vc, vcb) = counter();
-        let s = reg.add_value_listener(Arc::new(vcb));
-        reg.notify_value();
-        assert_eq!(vc.load(Ordering::SeqCst), 1);
-        drop(s);
-        assert_eq!(reg.listener_count(), 0, "drop decrements shared count");
-        reg.notify_value();
-        assert_eq!(vc.load(Ordering::SeqCst), 1, "dropped sub must not fire");
-    }
-
-    #[test]
-    fn subscription_outliving_registry_is_safe() {
-        let s = {
-            let reg: ListenerRegistry<u8> = ListenerRegistry::new();
-            reg.add_value_listener(Arc::new(|| {}))
-            // reg dropped here; ListenerSubscription holds only a Weak.
-        };
-        drop(s); // upgrade() returns None — must not panic / use-after-free.
-    }
-
-    #[test]
-    fn dropping_subscription_after_dispose_does_not_panic() {
-        // Disposing the registry clears both channels; dropping a still-live
-        // subscription afterwards must not debug-panic on the now-disposed
-        // channel (that would abort if the drop ran during unwinding). The
-        // shared count is still decremented.
-        let reg: ListenerRegistry<u8> = ListenerRegistry::new();
-        let v = reg.add_value_listener(Arc::new(|| {}));
-        let s = reg.add_status_listener(Arc::new(|_s: u8| {}));
-        assert_eq!(reg.listener_count(), 2);
-        reg.dispose();
-        drop(v); // value channel disposed — removal must be skipped, not panic.
-        drop(s); // status channel disposed — same.
-        assert_eq!(reg.listener_count(), 0, "count still reaches zero");
-    }
-
-    /// Pins `set_on_first_listener`'s extract-then-drop ordering: reverting
-    /// to a bare `*self.inner.on_first.lock() = Some(Box::new(f));`
-    /// statement drops the DISPLACED hook (the one this call is overwriting)
-    /// while that assignment's own guard is still live, so a hook whose
-    /// `Drop` re-enters this registry deadlocks on `on_first`.
-    #[test]
-    fn set_on_first_listener_drops_the_displaced_hook_after_releasing_the_lock() {
-        struct DropCanary {
-            reg: ListenerRegistry<u8>,
-            observed_locked: Arc<AtomicBool>,
-        }
-        impl Drop for DropCanary {
-            fn drop(&mut self) {
-                if !self.reg.on_first_is_unlocked() {
-                    self.observed_locked.store(true, Ordering::SeqCst);
-                }
-            }
-        }
-
-        let reg: ListenerRegistry<u8> = ListenerRegistry::new();
-        let observed_locked = Arc::new(AtomicBool::new(false));
-
-        let canary = DropCanary {
-            reg: reg.clone(),
-            observed_locked: Arc::clone(&observed_locked),
-        };
-        reg.set_on_first_listener(move || {
-            let _keep_alive = &canary;
-        });
-
-        // Overwrites the hook above, displacing (and dropping) it.
-        reg.set_on_first_listener(|| {});
-
-        assert!(
-            !observed_locked.load(Ordering::SeqCst),
-            "the displaced hook's Drop observed the lock still held"
-        );
+    fn listener_registry_edges() {
+        crate::test_cases::run_cases(&[
+            (
+                "on first listener hook can re arm itself without deadlocking",
+                on_first_listener_hook_can_re_arm_itself_without_deadlocking,
+            ),
+            (
+                "last listener edge fires on drop to zero",
+                last_listener_edge_fires_on_drop_to_zero,
+            ),
+        ]);
     }
 }

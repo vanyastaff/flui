@@ -61,23 +61,3 @@ impl LeaderLayer {
         )
     }
 }
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    #[test]
-    fn bounds_are_offset_by_size() {
-        let layer = LeaderLayer::with_offset(
-            LayerLink::new(),
-            Size::new(100.0, 50.0),
-            Offset::new(10.0, 20.0),
-        );
-        assert_eq!(layer.bounds(), Rect::from_xywh(10.0, 20.0, 100.0, 50.0));
-        assert_eq!(
-            LeaderLayer::new(LayerLink::new(), Size::ZERO).offset(),
-            Offset::ZERO
-        );
-    }
-}

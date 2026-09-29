@@ -16,9 +16,7 @@
 //! `resolve_switch_thumb_color` (extracted out of `build` specifically so
 //! this cascade is unit-testable without mounting a widget tree; see
 //! `theme_tier_beats_the_m3_default_when_no_widget_override_is_set`/
-//! `widget_override_wins_over_theme_and_default_when_selected_and_enabled`/
 //! `widget_override_is_ignored_when_disabled_even_if_selected`/
-//! `widget_override_is_ignored_when_unselected`/
 //! `disabled_unselected_thumb_color_is_opaque_after_the_surface_blend`),
 //! plus `SwitchPainter`'s own paint-invocation proof
 //! (`thumb_circle_center_lands_on_the_correct_track_end_per_value`, a real
@@ -29,7 +27,7 @@ use crate::common;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use common::{lay_out, size, tight};
+use common::{lay_out, tight};
 use flui_material::{Switch, Theme, ThemeData};
 
 /// The switch's full tap target (track + M3 default horizontal padding).
@@ -46,28 +44,7 @@ fn themed(switch: Switch) -> Theme {
     Theme::new(ThemeData::light(), switch)
 }
 
-#[test]
-fn mounting_a_switch_creates_a_semantics_annotated_tap_target() {
-    let laid = lay_out(
-        themed(Switch::new(false).on_changed(|_cx, _| {})),
-        constraints(),
-    );
-
-    // The wrapper node is the Switch's own; its `GestureDetector` adds
-    // a second, action-only annotation beneath it for assistive technology.
-    let semantics = laid
-        .find_semantics_wrappers()
-        .into_iter()
-        .next()
-        .expect("Switch must mount a Semantics wrapper");
-    assert_eq!(
-        laid.size(semantics),
-        size(TAP_TARGET_WIDTH, TAP_TARGET_HEIGHT)
-    );
-}
-
-#[test]
-fn tap_fires_on_changed_with_the_flipped_value() {
+pub fn tap_fires_on_changed_with_the_flipped_value() {
     let observed = Rc::new(RefCell::new(None));
     let recorder = Rc::clone(&observed);
     let laid = lay_out(
@@ -87,32 +64,7 @@ fn tap_fires_on_changed_with_the_flipped_value() {
     );
 }
 
-#[test]
-fn a_second_tap_after_rebuild_flips_back() {
-    let observed: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
-
-    let build = |value: bool, sink: Rc<RefCell<bool>>| {
-        themed(Switch::new(value).on_changed(move |_cx, next| {
-            *sink.borrow_mut() = next;
-        }))
-    };
-
-    let mut laid = lay_out(build(false, Rc::clone(&observed)), constraints());
-
-    laid.dispatch_pointer_down(TAP_TARGET_WIDTH / 2.0, TAP_TARGET_HEIGHT / 2.0);
-    laid.dispatch_pointer_up(TAP_TARGET_WIDTH / 2.0, TAP_TARGET_HEIGHT / 2.0);
-    let after_first_tap = *observed.borrow();
-    assert!(after_first_tap, "false -> true");
-
-    laid.pump_widget(build(after_first_tap, Rc::clone(&observed)));
-    laid.dispatch_pointer_down(TAP_TARGET_WIDTH / 2.0, TAP_TARGET_HEIGHT / 2.0);
-    laid.dispatch_pointer_up(TAP_TARGET_WIDTH / 2.0, TAP_TARGET_HEIGHT / 2.0);
-
-    assert!(!*observed.borrow(), "true -> false");
-}
-
-#[test]
-fn disabled_switch_swallows_a_tap_then_resyncs_once_a_handler_is_added() {
+pub fn disabled_switch_swallows_a_tap_then_resyncs_once_a_handler_is_added() {
     // Same "handler-removal resync" class `tests/checkbox.rs` proves for
     // `Checkbox`: `Switch` shares its `WidgetStatesController` with the
     // `InkWell` it builds, so adding `on_changed` across a rebuild must

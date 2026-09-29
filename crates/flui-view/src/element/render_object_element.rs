@@ -11,8 +11,7 @@
 //! child-adopts-itself"); the replacement guarantee for the live contract
 //! is `RenderBehavior::on_mount`'s orphaned-mount gate plus its
 //! `orphaned_render_mount` test family
-//! (`crates/flui-view/tests/orphaned_render_mount.rs`,
-//! `crates/flui-view/src/tree/element_tree/orphaned_render_mount_tests.rs`).
+//! (`crates/flui-view/tests/orphaned_render_mount.rs`).
 
 /// Marker trait for root elements that bootstrap a new render tree.
 ///

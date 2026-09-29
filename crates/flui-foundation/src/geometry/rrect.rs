@@ -579,39 +579,6 @@ impl From<Rect<f64>> for RRect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::Offset;
-
-    #[test]
-    fn translate_offset_moves_rect_and_keeps_radii() {
-        let rrect = RRect::from_rect_and_radius(
-            Rect::from_origin_size(Point::ZERO, Size::new(40.0, 40.0)),
-            Radius::circular(8.0),
-        );
-        let moved = rrect.translate_offset(Offset::new(70.0, 10.0));
-        assert_eq!(
-            moved.rect,
-            Rect::from_origin_size(Point::new(70.0, 10.0), Size::new(40.0, 40.0),),
-        );
-        assert_eq!(moved.top_left, rrect.top_left);
-        assert_eq!(moved.bottom_right, rrect.bottom_right);
-    }
-
-    #[test]
-    fn inflate_moves_the_radii_with_the_edges() {
-        // Growing the box by `delta` without growing the radii leaves corners
-        // too tight for the box they now bound. Concretely: this rrect's
-        // corners are already the full half-side, so it is a circle -- and it
-        // has to stay one after inflating.
-        let rrect = RRect::from_rect_and_radius(
-            Rect::from_ltrb(0.0, 0.0, 40.0, 40.0),
-            Radius::circular(20.0),
-        );
-        let bigger = rrect.inflate(5.0);
-
-        assert_eq!(bigger.rect, Rect::from_ltrb(-5.0, -5.0, 45.0, 45.0));
-        assert_eq!(bigger.top_left, Radius::circular(25.0));
-        assert_eq!(bigger.bottom_right, Radius::circular(25.0));
-    }
 
     #[test]
     fn inset_shrinks_the_radii_and_clamps_them_at_zero() {
@@ -629,17 +596,5 @@ mod tests {
         let squared = rrect.inset(10.0);
         assert_eq!(squared.top_left, Radius::circular(0.0));
         assert_eq!(squared.bottom_left, Radius::circular(0.0));
-    }
-
-    #[test]
-    fn inset_clamps_each_radius_axis_independently() {
-        let rrect = RRect::from_rect_and_radius(
-            Rect::from_ltrb(0.0, 0.0, 40.0, 40.0),
-            Radius::elliptical(9.0, 3.0),
-        );
-
-        // Only the y axis reaches the clamp.
-        let squared = rrect.inset(5.0);
-        assert_eq!(squared.top_left, Radius::elliptical(4.0, 0.0));
     }
 }

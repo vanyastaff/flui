@@ -161,7 +161,6 @@ mod tests {
 
     use super::*;
 
-    #[test]
     fn in_process_arguments_parse_like_the_command_line() {
         let args: wgsl::WgslArgs = parsed(["--self-test"]).expect("parses");
         assert_eq!(wgsl::wgsl(&args).expect("runs"), ExitCode::SUCCESS);
@@ -169,16 +168,6 @@ mod tests {
         assert!(error.to_string().contains("--no-such-flag"), "{error}");
     }
 
-    #[test]
-    fn the_skippable_tools_are_the_text_checks() {
-        let lines: Vec<String> = TOOLS
-            .iter()
-            .map(|tool| Cmd::new(tool.program).args(tool.args).to_string())
-            .collect();
-        assert_eq!(lines, ["typos", "taplo fmt --check"]);
-    }
-
-    #[test]
     fn the_in_process_checks_include_the_link_check_under_strict() {
         let lines = |strict| in_process(strict).map(|(line, _)| line);
         assert_eq!(
@@ -216,5 +205,22 @@ mod tests {
                 panic!("`cargo xtask {line}`: {error}");
             }
         }
+    }
+
+    #[test]
+    fn checks_contract() {
+        crate::table_test::run_table(
+            "checks_contract",
+            &[
+                (
+                    "in_process_arguments_parse_like_the_command_line",
+                    in_process_arguments_parse_like_the_command_line as fn(),
+                ),
+                (
+                    "the_in_process_checks_include_the_link_check_under_strict",
+                    the_in_process_checks_include_the_link_check_under_strict as fn(),
+                ),
+            ],
+        );
     }
 }

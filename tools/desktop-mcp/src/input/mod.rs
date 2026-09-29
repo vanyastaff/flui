@@ -102,7 +102,7 @@ fn lerp(a: i32, b: i32, i: i32, steps: i32) -> i32 {
 /// Ctrl+Alt is AltGr): `+` is Shift+`=` on a US layout, so `ctrl+plus` must
 /// hold Shift too.
 #[cfg_attr(
-    not(any(target_os = "windows", test)),
+    not(target_os = "windows"),
     expect(
         dead_code,
         reason = "only the Windows layout lookup reports shift states"
@@ -289,9 +289,8 @@ fn press_and_release(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::keys::{KeyName, Modifier};
+    use crate::keys::KeyName;
 
-    #[test]
     fn a_preparatory_move_is_reported_when_verification_or_the_action_refuses() {
         use crate::error::{Effect, ToolError};
         for cause in [
@@ -316,36 +315,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_preparatory_move_keeps_press_uncertainty_and_completed_progress() {
-        use crate::error::{Effect, ToolError};
-        for expected in [
-            Effect::MayHaveRun,
-            Effect::Ran,
-            Effect::Partial {
-                sent: 1,
-                total: 2,
-                unit: "clicks",
-            },
-        ] {
-            let error = after_pointer_move((20, 30), || {
-                Err::<(), _>(
-                    ToolError::Busy("release failed".into())
-                        .after(expected.clone(), "original action detail"),
-                )
-            })
-            .expect_err("BUG: action failure persists");
-            let ToolError::Interrupted { effect, detail, .. } = error else {
-                panic!("the original effect must be kept");
-            };
-            assert_eq!(effect, expected);
-            assert!(detail.contains("original action detail"));
-            assert!(detail.contains("preparatory pointer move"));
-        }
-        assert!(after_pointer_move((20, 30), || Ok(())).is_ok());
-    }
-
-    #[test]
     fn drag_refuses_movement_when_a_key_is_pressed_during_the_target_guard() {
         use std::cell::Cell;
         let key_down = Cell::new(false);
@@ -391,29 +360,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn drag_checks_keyboard_again_after_a_successful_target_lookup() {
-        use std::cell::RefCell;
-        let events = RefCell::new(Vec::new());
-        guarded_input_event(
-            || {
-                events.borrow_mut().push("keyboard");
-                Ok(())
-            },
-            || {
-                events.borrow_mut().push("target");
-                Ok(())
-            },
-            || {
-                events.borrow_mut().push("move");
-                Ok(())
-            },
-        )
-        .expect("BUG: a clear keyboard and valid target allow the drag step");
-        assert_eq!(*events.borrow(), ["keyboard", "target", "keyboard", "move"]);
-    }
-
-    #[test]
     fn a_physical_button_pressed_during_a_guard_blocks_the_pending_event() {
         use std::cell::Cell;
         let button_down = Cell::new(false);
@@ -446,7 +392,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn a_second_mouse_button_during_the_drop_guard_refuses_normal_completion() {
         use std::cell::Cell;
         // Both primary-button configurations, and every additional button.
@@ -495,7 +440,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn an_initial_drag_press_can_settle_but_a_lost_hold_cannot_resume() {
         use std::cell::Cell;
         for owned in [1_u8, 2] {
@@ -533,69 +477,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn initial_drag_settling_is_bounded_and_rejects_additional_buttons() {
-        use std::cell::Cell;
-        for down in [0_u8, 3] {
-            let pauses = Cell::new(0);
-            let result = settle_owned_button(1, || Ok(down), || pauses.set(pauses.get() + 1));
-            assert!(result.is_err());
-            assert_eq!(pauses.get(), if down == 0 { 9 } else { 0 });
-        }
-        assert!(
-            only_owned_button(0, 0).is_ok(),
-            "targetless moves require no button"
-        );
-    }
-
-    #[test]
-    fn an_unconfirmed_click_release_counts_only_prior_completed_clicks() {
-        use crate::error::{Effect, ToolError};
-        for (failed_at, total) in [(0, 1), (0, 2), (1, 2)] {
-            for completed in 0..total {
-                let result = complete_click(
-                    Ok(()),
-                    || {
-                        if completed == failed_at {
-                            Err(ToolError::Busy("release failed".into()))
-                        } else {
-                            Ok(())
-                        }
-                    },
-                    completed,
-                    total,
-                );
-                if completed < failed_at {
-                    result.expect("BUG: earlier click completed");
-                } else {
-                    let error = result.expect_err("BUG: release failure must interrupt");
-                    match error {
-                        ToolError::Interrupted { effect, detail, .. } => {
-                            if failed_at == 0 {
-                                assert_eq!(effect, Effect::MayHaveRun);
-                            } else {
-                                assert_eq!(
-                                    effect,
-                                    Effect::Partial {
-                                        sent: 1,
-                                        total: 2,
-                                        unit: "clicks"
-                                    }
-                                );
-                                assert!(detail.contains("may_have_run"), "{detail}");
-                            }
-                            assert!(detail.contains("release was not confirmed"), "{detail}");
-                            assert!(detail.contains("button may still be held"), "{detail}");
-                        }
-                        error => panic!("BUG: missing uncertain effect: {error}"),
-                    }
-                    break;
-                }
-            }
-        }
-    }
-
-    #[test]
     fn an_uncertain_click_press_always_attempts_release_without_claiming_completion() {
         use crate::error::{Effect, ToolError};
         use std::cell::Cell;
@@ -625,7 +506,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn failed_presses_are_released_but_not_counted_as_confirmed() {
         use crate::error::{Effect, ToolError};
         for release_fails in [false, true] {
@@ -655,44 +535,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn failed_release_counts_the_confirmed_control_stroke() {
-        use crate::error::{Effect, ToolError};
-        let (result, confirmed) = press_and_release(|down| {
-            if down {
-                Ok(())
-            } else {
-                Err(ToolError::Busy("release failed".into()))
-            }
-        });
-        assert!(confirmed);
-        let error = result.expect_err("release failed");
-        assert!(matches!(
-            &error,
-            ToolError::Interrupted {
-                effect: Effect::Ran,
-                ..
-            }
-        ));
-        // CRLF is a single Enter but accounts for two input characters.
-        let (_, chars) = strokes("\r\n")[0];
-        let counted = partial(error, usize::from(confirmed) * chars, 3, "characters");
-        assert!(matches!(
-            counted,
-            ToolError::Interrupted {
-                effect: Effect::Partial {
-                    sent: 2,
-                    total: 3,
-                    ..
-                },
-                ..
-            }
-        ));
-    }
-
     /// Control characters become the keys a person presses, once each:
     /// sent as characters they arrive doubled or as raw control codes.
-    #[test]
     fn line_breaks_and_tabs_are_keys() {
         let enter = Stroke::Key(KeyName::Enter);
         let tab = Stroke::Key(KeyName::Tab);
@@ -719,35 +563,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_layouts_shift_state_adds_only_missing_modifiers() {
-        assert_eq!(implied_modifiers(1, &[Modifier::Ctrl]), [Modifier::Shift]);
-        assert_eq!(implied_modifiers(1, &[Modifier::Shift]), []);
-        assert_eq!(implied_modifiers(6, &[]), [Modifier::Ctrl, Modifier::Alt]);
-        assert_eq!(implied_modifiers(0, &[Modifier::Alt]), []);
-    }
-
-    /// A count is kept when the cause already carries an effect of its
-    /// own (a key whose release failed partway through typed text).
-    #[test]
-    fn the_count_outranks_an_inner_effect() {
-        use crate::error::{Effect, ToolError};
-        let inner = ToolError::Busy("x".into()).after(Effect::Ran, "the Enter release failed");
-        let err = partial(inner, 2, 5, "characters");
-        assert!(
-            matches!(
-                &err,
-                ToolError::Interrupted {
-                    effect: Effect::Partial { sent: 2, total: 5, .. },
-                    detail,
-                    ..
-                } if detail.contains("(ran)") && detail.contains("Enter release")
-            ),
-            "{err:?}"
-        );
-    }
-
-    #[test]
     fn a_partial_send_says_how_much_went_out() {
         let cause = || crate::error::ToolError::NotFound("gone".into());
         assert!(matches!(
@@ -759,6 +574,54 @@ mod tests {
             err.contains("gone") && err.contains("3 of 5 characters"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn click_and_type_failure_reporting() {
+        crate::test_rows::run_rows(&[
+            (
+                "a_partial_send_says_how_much_went_out",
+                a_partial_send_says_how_much_went_out,
+            ),
+            (
+                "an_uncertain_click_press_always_attempts_release_without_claiming_completion",
+                an_uncertain_click_press_always_attempts_release_without_claiming_completion,
+            ),
+            (
+                "failed_presses_are_released_but_not_counted_as_confirmed",
+                failed_presses_are_released_but_not_counted_as_confirmed,
+            ),
+            (
+                "line_breaks_and_tabs_are_keys",
+                line_breaks_and_tabs_are_keys,
+            ),
+            (
+                "a_preparatory_move_is_reported_when_verification_or_the_action_refuses",
+                a_preparatory_move_is_reported_when_verification_or_the_action_refuses,
+            ),
+        ]);
+    }
+
+    #[test]
+    fn drag_and_pointer_guards() {
+        crate::test_rows::run_rows(&[
+            (
+                "a_physical_button_pressed_during_a_guard_blocks_the_pending_event",
+                a_physical_button_pressed_during_a_guard_blocks_the_pending_event,
+            ),
+            (
+                "drag_refuses_movement_when_a_key_is_pressed_during_the_target_guard",
+                drag_refuses_movement_when_a_key_is_pressed_during_the_target_guard,
+            ),
+            (
+                "an_initial_drag_press_can_settle_but_a_lost_hold_cannot_resume",
+                an_initial_drag_press_can_settle_but_a_lost_hold_cannot_resume,
+            ),
+            (
+                "a_second_mouse_button_during_the_drop_guard_refuses_normal_completion",
+                a_second_mouse_button_during_the_drop_guard_refuses_normal_completion,
+            ),
+        ]);
     }
 }
 

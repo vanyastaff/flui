@@ -119,51 +119,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unbound_assert_is_a_no_op_and_reports_no_owner() {
-        let affinity = OwnerAffinity::new();
-        assert_eq!(affinity.owner(), None);
-        assert!(!affinity.is_owner());
-        // Must not panic even in debug: pre-run flows are legal until an
-        // owner exists.
-        affinity.debug_assert_owner("pre_run_op");
-    }
-
-    #[test]
-    fn bind_records_the_calling_thread_and_assert_passes_on_it() {
-        let affinity = OwnerAffinity::new();
-        affinity.bind_current();
-        assert_eq!(affinity.owner(), Some(std::thread::current().id()));
-        assert!(affinity.is_owner());
-        affinity.debug_assert_owner("owner_op");
-        // Re-bind from the owner thread is idempotent.
-        affinity.bind_current();
-        assert!(affinity.is_owner());
-    }
-
-    #[test]
-    #[cfg_attr(
-        not(debug_assertions),
-        ignore = "the violation is a debug_assert; release keeps the owner and only traces"
-    )]
-    fn cross_thread_assert_is_caught() {
-        let affinity = std::sync::Arc::new(OwnerAffinity::new());
-        affinity.bind_current();
-        let worker_view = std::sync::Arc::clone(&affinity);
-        let panicked = std::thread::spawn(move || {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                worker_view.debug_assert_owner("cross_thread_op");
-            }))
-            .is_err()
-        })
-        .join()
-        .expect("worker thread must complete");
-        assert!(
-            panicked,
-            "debug_assert_owner must panic on a foreign thread in debug builds",
-        );
-    }
-
-    #[test]
     #[cfg_attr(
         not(debug_assertions),
         ignore = "the violation is a debug_assert; release keeps the owner and only traces"

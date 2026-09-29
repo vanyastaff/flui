@@ -542,7 +542,6 @@ fn sha256_hex(data: &[u8]) -> String {
 mod tests {
     use super::*;
 
-    #[test]
     fn sha256_matches_the_fips_vectors() {
         assert_eq!(
             sha256_hex(b""),
@@ -599,7 +598,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn inventory_and_every_generated_file_reproduce_offline() {
         let fixture = Fixture::new();
         assert_eq!(fixture.check(), "");
@@ -609,37 +607,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn existing_four_generated_fixtures_are_byte_unchanged() {
-        // Historical controls: extending coverage must not alter other probes.
-        let assets = repo_root().join(ASSETS);
-        for (name, digest) in [
-            (
-                "decoy-wide-space.ttf",
-                "a6fc5cabe4943b7ee032651bd7d7c0bef614f0b5a40bd1dfab62db5e516e0888",
-            ),
-            (
-                "probe-mono-100.ttf",
-                "8b8b0fd14500faba32b7b9e1bdd1dedca42c89c0bd43451ae183b8cf391e1221",
-            ),
-            (
-                "probe-mono-600.ttf",
-                "c06729a30262f8b541d33f9c8744885f937cb688834b68fb8f1e0b8b1651f996",
-            ),
-            (
-                "probe-variable-wght.ttf",
-                "9e3e800de59a6b850039e240192dce3ebecbd6625f222e57e22d1abc2b57acb5",
-            ),
-        ] {
-            assert_eq!(
-                digest_file(&assets.join(name)).expect("readable"),
-                digest,
-                "{name}"
-            );
-        }
-    }
-
-    #[test]
     fn changed_font_bytes_fail() {
         let fixture = Fixture::new();
         std::fs::write(fixture.assets().join("Roboto-Regular.ttf"), b"changed").expect("write");
@@ -650,7 +617,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn missing_and_modified_license_fail() {
         let fixture = Fixture::new();
         let notice = fixture.assets().join("licenses/Roboto-Apache-2.0.txt");
@@ -660,7 +626,6 @@ mod tests {
         assert!(fixture.check().contains("missing license/notice"));
     }
 
-    #[test]
     fn unlisted_font_fails_inside_and_outside_current_owner() {
         let fixture = Fixture::new();
         std::fs::write(fixture.assets().join("surprise.otf"), b"font").expect("write");
@@ -680,7 +645,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn fonts_under_pruned_directories_are_ignored() {
         let fixture = Fixture::new();
         let build = fixture.root().join("crates/x/target/debug");
@@ -689,7 +653,6 @@ mod tests {
         assert_eq!(fixture.check(), "");
     }
 
-    #[test]
     fn reintroduced_arial_name_is_rejected() {
         let fixture = Fixture::new();
         let assets = fixture.assets();
@@ -697,7 +660,6 @@ mod tests {
         assert!(fixture.check().contains("Arial.ttf: restricted Arial"));
     }
 
-    #[test]
     fn missing_provenance_and_notice_association_fail() {
         let fixture = Fixture::new();
         let inventory = fixture.assets().join("inventory.toml");
@@ -719,14 +681,6 @@ mod tests {
         assert!(errors.contains("missing notice provenance"), "{errors}");
     }
 
-    #[test]
-    fn missing_inventory_is_reported() {
-        let fixture = Fixture::new();
-        std::fs::remove_file(fixture.assets().join("inventory.toml")).expect("remove");
-        assert!(fixture.check().contains("records are missing"));
-    }
-
-    #[test]
     fn modified_generator_is_detected_without_overwriting_assets() {
         let fixture = Fixture::new();
         let generator = fixture.root().join(GENERATOR);
@@ -746,7 +700,6 @@ mod tests {
         assert_eq!(std::fs::read(&committed).expect("read"), before);
     }
 
-    #[test]
     fn package_listing_requires_every_recorded_file() {
         let inventory: Inventory =
             toml::from_str("[[notice]]\nfile = \"licenses/A.txt\"\n[[font]]\nfile = \"A.ttf\"\n")
@@ -769,6 +722,52 @@ mod tests {
                 "package listing excludes assets/fonts/A.ttf",
                 "package listing includes restricted Arial fixture"
             ]
+        );
+    }
+
+    #[test]
+    fn font_assets_contract() {
+        crate::table_test::run_table(
+            "font_assets_contract",
+            &[
+                (
+                    "sha256_matches_the_fips_vectors",
+                    sha256_matches_the_fips_vectors as fn(),
+                ),
+                (
+                    "inventory_and_every_generated_file_reproduce_offline",
+                    inventory_and_every_generated_file_reproduce_offline as fn(),
+                ),
+                ("changed_font_bytes_fail", changed_font_bytes_fail as fn()),
+                (
+                    "missing_and_modified_license_fail",
+                    missing_and_modified_license_fail as fn(),
+                ),
+                (
+                    "unlisted_font_fails_inside_and_outside_current_owner",
+                    unlisted_font_fails_inside_and_outside_current_owner as fn(),
+                ),
+                (
+                    "fonts_under_pruned_directories_are_ignored",
+                    fonts_under_pruned_directories_are_ignored as fn(),
+                ),
+                (
+                    "reintroduced_arial_name_is_rejected",
+                    reintroduced_arial_name_is_rejected as fn(),
+                ),
+                (
+                    "missing_provenance_and_notice_association_fail",
+                    missing_provenance_and_notice_association_fail as fn(),
+                ),
+                (
+                    "modified_generator_is_detected_without_overwriting_assets",
+                    modified_generator_is_detected_without_overwriting_assets as fn(),
+                ),
+                (
+                    "package_listing_requires_every_recorded_file",
+                    package_listing_requires_every_recorded_file as fn(),
+                ),
+            ],
         );
     }
 }

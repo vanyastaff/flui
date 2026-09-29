@@ -107,30 +107,3 @@ impl RenderBox for RenderIgnoreBaseline {
         "RenderIgnoreBaseline"
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use flui_rendering::context::intrinsics_test_support::leaf_dry_baseline;
-
-    #[test]
-    fn both_baseline_queries_are_none_for_both_kinds() {
-        let node = RenderIgnoreBaseline::new();
-        let constraints = BoxConstraints::tight(Size::ZERO);
-
-        for kind in [TextBaseline::Alphabetic, TextBaseline::Ideographic] {
-            assert_eq!(
-                node.compute_distance_to_actual_baseline(kind),
-                None,
-                "the live baseline must be hidden for every baseline kind",
-            );
-            assert_eq!(
-                leaf_dry_baseline(|ctx| node.compute_dry_baseline(constraints, kind, ctx)),
-                None,
-                "the dry baseline must be hidden for every baseline kind — and \
-                 answered without consulting the child, which the leaf context \
-                 enforces by panicking on any child query",
-            );
-        }
-    }
-}

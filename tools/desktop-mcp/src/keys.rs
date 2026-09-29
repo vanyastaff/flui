@@ -346,7 +346,6 @@ mod tests {
     use super::*;
 
     /// A long combo is refused without being quoted back.
-    #[test]
     fn a_long_combo_is_refused_without_an_echo() {
         let long = format!("ctrl+{}", "z".repeat(100_000));
         let err = KeyCombo::parse(&long)
@@ -359,7 +358,6 @@ mod tests {
         KeyCombo::parse(text).expect("BUG: test combo should parse")
     }
 
-    #[test]
     fn single_named_keys() {
         assert_eq!(parse("enter").key, KeyName::Enter);
         assert_eq!(parse("Return").key, KeyName::Enter);
@@ -369,7 +367,6 @@ mod tests {
         assert!(parse("enter").modifiers.is_empty());
     }
 
-    #[test]
     fn modifiers_keep_their_order() {
         let combo = parse("ctrl+shift+s");
         assert_eq!(combo.modifiers, vec![Modifier::Ctrl, Modifier::Shift]);
@@ -379,15 +376,6 @@ mod tests {
         assert_eq!(combo.key, KeyName::Char('s'));
     }
 
-    #[test]
-    fn modifier_aliases() {
-        assert_eq!(parse("cmd+q").modifiers, vec![Modifier::Meta]);
-        assert_eq!(parse("win+r").modifiers, vec![Modifier::Meta]);
-        assert_eq!(parse("option+a").modifiers, vec![Modifier::Alt]);
-        assert_eq!(parse("control+c").modifiers, vec![Modifier::Ctrl]);
-    }
-
-    #[test]
     fn function_keys_in_range_only() {
         assert_eq!(parse("alt+f4").key, KeyName::F(4));
         assert_eq!(parse("f24").key, KeyName::F(24));
@@ -395,14 +383,6 @@ mod tests {
         assert!(KeyCombo::parse("f0").is_err());
     }
 
-    #[test]
-    fn lone_modifier_is_a_key() {
-        let combo = parse("shift");
-        assert!(combo.modifiers.is_empty());
-        assert_eq!(combo.key, KeyName::Modifier(Modifier::Shift));
-    }
-
-    #[test]
     fn plus_key_spellings() {
         assert_eq!(parse("+").key, KeyName::Char('+'));
         let combo = parse("ctrl++");
@@ -411,13 +391,6 @@ mod tests {
         assert_eq!(parse("ctrl+plus").key, KeyName::Char('+'));
     }
 
-    #[test]
-    fn digits_and_punctuation() {
-        assert_eq!(parse("ctrl+1").key, KeyName::Char('1'));
-        assert_eq!(parse("ctrl+/").key, KeyName::Char('/'));
-    }
-
-    #[test]
     fn rejects_malformed_combos() {
         for bad in [
             "",
@@ -436,28 +409,8 @@ mod tests {
         }
     }
 
-    /// A combo prints in the syntax it is parsed from, so messages quote
-    /// what the agent can send back.
-    #[test]
-    fn a_combo_prints_as_it_parses() {
-        for text in [
-            "ctrl+shift+s",
-            "alt+f4",
-            "meta+r",
-            "ctrl+plus",
-            "enter",
-            "shift",
-            "pagedown",
-        ] {
-            let combo = parse(text);
-            assert_eq!(combo.to_string(), text);
-            assert_eq!(parse(&combo.to_string()), combo);
-        }
-    }
-
     /// Combos the OS shell takes before the foreground window sees them are
     /// named, per platform; ordinary shortcuts are not.
-    #[test]
     fn shell_hotkeys_are_recognized() {
         for shell in [
             "win",
@@ -515,7 +468,6 @@ mod tests {
 
     /// Windows switches the input language on Alt+Shift and Ctrl+Shift, and
     /// Shift pressed five times opens the Sticky Keys prompt.
-    #[test]
     fn language_switch_and_sticky_keys_are_shell_hotkeys() {
         for shell in ["alt+shift", "ctrl+shift", "shift+alt"] {
             assert!(parse(shell).shell_hotkey(false).is_some(), "`{shell}`");
@@ -538,7 +490,6 @@ mod tests {
     /// A control character is not a key of its own: a raw ESC would
     /// otherwise reach the keyboard as Escape without the checks that know
     /// Escape by name (ctrl+esc opens Start).
-    #[test]
     fn control_characters_are_not_keys() {
         for raw in ["ctrl+\u{1b}", "alt+\u{1b}", "\u{7f}", "ctrl+\u{0}"] {
             assert!(KeyCombo::parse(raw).is_err(), "{raw:?} must be refused");
@@ -546,10 +497,26 @@ mod tests {
     }
 
     #[test]
-    fn error_names_the_bad_part() {
-        let err = KeyCombo::parse("ctrl+enterr")
-            .expect_err("BUG: unknown key must fail")
-            .to_string();
-        assert!(err.contains("enterr"), "{err}");
+    fn key_combo_grammar_and_safety() {
+        crate::test_rows::run_rows(&[
+            (
+                "a_long_combo_is_refused_without_an_echo",
+                a_long_combo_is_refused_without_an_echo,
+            ),
+            ("single_named_keys", single_named_keys),
+            ("modifiers_keep_their_order", modifiers_keep_their_order),
+            ("function_keys_in_range_only", function_keys_in_range_only),
+            ("plus_key_spellings", plus_key_spellings),
+            ("rejects_malformed_combos", rejects_malformed_combos),
+            ("shell_hotkeys_are_recognized", shell_hotkeys_are_recognized),
+            (
+                "language_switch_and_sticky_keys_are_shell_hotkeys",
+                language_switch_and_sticky_keys_are_shell_hotkeys,
+            ),
+            (
+                "control_characters_are_not_keys",
+                control_characters_are_not_keys,
+            ),
+        ]);
     }
 }

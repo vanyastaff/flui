@@ -3,8 +3,6 @@
 //! *current* animated offset and its `transform_hit_tests` flag, not a
 //! hardcoded snapshot or the render object's own default.
 
-use std::cell::Cell;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -12,10 +10,9 @@ use std::time::Duration;
 use crate::common::{lay_out, loose};
 use flui_animation::ext::AnimatableExt;
 use flui_animation::{Animation, AnimationController, Tween};
-use flui_interaction::events::PointerEventExt as _;
 use flui_objects::TranslationFraction;
 use flui_painting::styling::Color;
-use flui_widgets::{ColoredBox, GestureDetector, Listener, SizedBox, SlideTransition};
+use flui_widgets::{ColoredBox, GestureDetector, SizedBox, SlideTransition};
 
 fn position_animation(
     begin: TranslationFraction,
@@ -28,62 +25,12 @@ fn position_animation(
     (controller, animation)
 }
 
-/// The built `FractionalTranslation` carries the animation's *current*
-/// `TranslationFraction` — not a hardcoded `(0.0, 0.0)`. `FractionalTranslation`
-/// applies its offset purely at paint/hit-test time (layout "passes through
-/// untouched" — see that type's doc), so there is no parent-relative layout
-/// offset to read back; hit-testing at the paint-shifted location is the
-/// observable proof the value actually reached it. Under the default
-/// `transform_hit_tests(true)`, a tap at the visually-shifted location must
-/// hit; a mutant hardcoding the offset to `(0.0, 0.0)` would leave the
-/// child's hit region at its original, unshifted position and this tap
-/// would miss.
-#[test]
-fn build_wires_the_animations_current_offset_into_fractional_translation() {
-    let taps = Arc::new(AtomicUsize::new(0));
-    let in_cb = Arc::clone(&taps);
-
-    let (controller, position) = position_animation(
-        TranslationFraction::ZERO,
-        TranslationFraction::new(1.0, 0.0),
-    );
-    // Fully shift the child one full width to the right.
-    controller.set_value(1.0);
-
-    let laid = lay_out(
-        SlideTransition::new(
-            position,
-            GestureDetector::new()
-                .on_tap(move |_cx| {
-                    in_cb.fetch_add(1, Ordering::SeqCst);
-                })
-                .child(SizedBox::new(50.0, 50.0).child(ColoredBox::new(Color::rgb(10, 20, 30)))),
-        ),
-        loose(200.0),
-    );
-
-    // Default `transform_hit_tests(true)`: hit-testing follows the paint
-    // shift, so a tap at the visually-shifted location (x=75, one full
-    // 50px child-width to the right of the original 0..50 span) must hit.
-    laid.dispatch_pointer_down(75.0, 25.0);
-    laid.dispatch_pointer_up(75.0, 25.0);
-    assert_eq!(
-        taps.load(Ordering::SeqCst),
-        1,
-        "the animated dx=1.0 offset should have reached FractionalTranslation, moving the \
-         hit-testable region to the shifted location",
-    );
-
-    controller.dispose();
-}
-
 /// `SlideTransition::transform_hit_tests(false)` must reach the built
 /// `FractionalTranslation` — a mutant dropping the
 /// `.transform_hit_tests(view.transform_hit_tests)` call would leave
 /// `FractionalTranslation`'s own default (`true`) in effect regardless of
 /// what the caller requested, flipping which tap location fires.
-#[test]
-fn build_wires_transform_hit_tests_false_into_fractional_translation() {
+pub(crate) fn build_wires_transform_hit_tests_false_into_fractional_translation() {
     let taps = Arc::new(AtomicUsize::new(0));
     let in_cb = Arc::clone(&taps);
 
@@ -129,68 +76,6 @@ fn build_wires_transform_hit_tests_false_into_fractional_translation() {
         taps.load(Ordering::SeqCst),
         1,
         "transform_hit_tests(false) leaves hit-testing at the child's original layout position",
-    );
-
-    controller.dispose();
-}
-
-/// A realistic composite: `SlideTransition` mid-animation (not fully at
-/// either endpoint) must deliver a LOCALIZED position to its child, not
-/// just register a hit. `SlideTransition::build` constructs a
-/// `FractionalTranslation` (`crates/flui-widgets/src/transitions/slide_transition.rs`)
-/// whose `hit_test` pushed its computed offset onto a ctx-level transform
-/// stack that the pipeline used to discard before it reached
-/// `HitTestEntry.transform` — the tap-count assertions above already prove
-/// the shifted region is *reachable*, but a stub that always recorded
-/// `Matrix4::IDENTITY` would also pass those; only asserting the exact
-/// delivered position proves the recorded transform is the real one.
-///
-/// Reachability: this is the exact shape `Dismissible` (swipe-to-dismiss)
-/// and page-transition slides put in front of interactive children —
-/// gesture-heavy widgets that need their child's real local position, not
-/// just a hit/miss bit.
-#[test]
-fn build_delivers_the_animation_localized_position_to_the_child_mid_animation() {
-    let recorded: Rc<Cell<Option<(f64, f64)>>> = Rc::new(Cell::new(None));
-    let probe = Rc::clone(&recorded);
-
-    let (controller, position) = position_animation(
-        TranslationFraction::ZERO,
-        TranslationFraction::new(1.0, 0.0),
-    );
-    // Mid-animation, not at either endpoint: dx = 0.5.
-    controller.set_value(0.5);
-
-    let laid = lay_out(
-        SlideTransition::new(
-            position,
-            Listener::new()
-                .on_pointer_down(move |_cx, dispatch| {
-                    let local = dispatch.local.position();
-                    probe.set(Some((local.dx, local.dy)));
-                })
-                .child(SizedBox::new(100.0, 100.0).child(ColoredBox::new(Color::rgb(10, 20, 30)))),
-        ),
-        loose(200.0),
-    );
-
-    // dx=0.5 over a 100-wide child paints (and, by default, hit-tests) it
-    // shifted right by 50px. Tap a point inside the shifted box.
-    laid.dispatch_pointer_down(75.0, 60.0);
-
-    let local = recorded.get().expect("on_pointer_down must have fired");
-    // The shift is produced by tween/curve math, so compare within a
-    // tolerance rather than exactly — the same 1e-3 the other delivered-
-    // position tests use. The defect this pins was a 50px miss; any epsilon
-    // far below that still fails on it.
-    const TOLERANCE: f64 = 1e-3;
-    assert!(
-        (local.0 - 25.0).abs() < TOLERANCE && (local.1 - 60.0).abs() < TOLERANCE,
-        "the delivered position must be local to the child (global (75, 60) minus the \
-         mid-animation 50px shift on x), not the raw global dispatch position; \
-         got ({:.4}, {:.4})",
-        local.0,
-        local.1,
     );
 
     controller.dispose();

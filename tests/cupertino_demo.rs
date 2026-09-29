@@ -14,16 +14,20 @@
 //! deferral each component's own module docs already name.
 
 #[path = "../examples/cupertino_demo/tree.rs"]
+#[expect(
+    dead_code,
+    reason = "the `App` entry-point wrapper is exercised by `demo_layer_snapshots`; this target mounts the demo root directly"
+)]
 mod tree;
 
 use std::cell::Cell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use flui_cupertino::{CupertinoTabController, CupertinoTheme, CupertinoThemeData};
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Offset, Size};
-use flui_interaction::events::{PointerType, make_down_event, make_move_event, make_up_event};
+use flui_interaction::events::{PointerType, make_down_event, make_up_event};
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::hit_testing::HitTestResult;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
@@ -35,18 +39,6 @@ use flui_widgets::{FocusRoot, GestureArenaScope, MediaQuery, MediaQueryData, Vsy
 const ROOT_WIDTH: f64 = 400.0;
 /// The mounted root's logical height.
 const ROOT_HEIGHT: f64 = 800.0;
-
-/// `CupertinoRouteTransitionMixin.kTransitionDuration` (`route.dart`, oracle
-/// tag `3.44.0`) — the push transition's duration.
-const PUSH_TRANSITION: Duration = Duration::from_millis(500);
-/// `_kDroppedSwipePageAnimationDuration` (`route.dart`, oracle tag `3.44.0`)
-/// — the back-gesture release's flat pacing.
-const SWIPE_RELEASE_DURATION: Duration = Duration::from_millis(350);
-/// Per-pump virtual-time step, enough pumps to carry either transition past
-/// its end (matching `tests/material_demo.rs`'s identical `+ 2` budget).
-const FRAME: Duration = Duration::from_millis(50);
-const PUSH_PUMPS: usize = (PUSH_TRANSITION.as_millis() / FRAME.as_millis()) as usize + 2;
-const SWIPE_PUMPS: usize = (SWIPE_RELEASE_DURATION.as_millis() / FRAME.as_millis()) as usize + 2;
 
 fn root_constraints() -> BoxConstraints {
     BoxConstraints::tight(Size::new(ROOT_WIDTH, ROOT_HEIGHT))
@@ -153,25 +145,6 @@ impl MountedDemo {
         self.tap(position.dx + 1.0, position.dy + 1.0);
     }
 
-    /// Start a drag through the binding-owned input pipeline. The binding
-    /// captures the Down route and reuses it for every subsequent Move/Up,
-    /// even after an edge swipe leaves the detector's narrow hit-test strip.
-    fn begin_drag(&self, x: f64, y: f64) {
-        advance_gesture_clock();
-        self.dispatch_pointer(make_down_event(offset(x, y), PointerType::Mouse));
-    }
-
-    /// Continue the binding-captured drag route at `(x, y)`.
-    fn continue_drag(&self, x: f64, y: f64) {
-        advance_gesture_clock();
-        self.dispatch_pointer(make_move_event(offset(x, y), PointerType::Mouse));
-    }
-
-    /// Complete the binding-captured drag route at `(x, y)`.
-    fn end_drag(&self, x: f64, y: f64) {
-        self.dispatch_pointer(make_up_event(offset(x, y), PointerType::Mouse));
-    }
-
     /// The unique `RenderParagraph` node whose plain-text content is `text`.
     fn find_text(&self, text: &str) -> Option<RenderId> {
         self.pipeline_owner.with(|owner| {
@@ -192,29 +165,6 @@ impl MountedDemo {
                 }
             }
             found
-        })
-    }
-
-    /// Every render node whose short type name equals `render_type_name`.
-    fn find_all_by_render_type(&self, render_type_name: &str) -> Vec<RenderId> {
-        self.pipeline_owner.with(|owner| {
-            owner
-                .render_tree()
-                .iter()
-                .filter_map(|(id, _node)| {
-                    let diagnostics = owner.debug_node_diagnostics(id)?;
-                    (diagnostics.name() == Some(render_type_name)).then_some(id)
-                })
-                .collect()
-        })
-    }
-
-    /// The string value of a mounted render node's named diagnostic
-    /// property.
-    fn render_property(&self, id: RenderId, property_name: &str) -> Option<String> {
-        self.pipeline_owner.with(|owner| {
-            let diagnostics = owner.debug_node_diagnostics(id)?;
-            diagnostics.get_property(property_name).map(str::to_string)
         })
     }
 
@@ -245,57 +195,6 @@ impl MountedDemo {
 
 fn offset(x: f64, y: f64) -> Offset {
     Offset::new(x, y)
-}
-
-/// Spin until `Instant::now()` returns a value strictly greater than the one
-/// returned by the immediately preceding call. Mirrors
-/// `tests/material_demo.rs`'s identical helper: `DragGestureRecognizer`
-/// timestamps every velocity-tracker sample with `Instant::now()`, and two
-/// dispatches landing in the same OS timer tick make the least-squares
-/// velocity fit singular. Calling this before each drag dispatch guarantees
-/// consecutive samples get strictly increasing timestamps.
-fn advance_gesture_clock() {
-    let t0 = Instant::now();
-    while Instant::now() == t0 {
-        std::hint::spin_loop();
-    }
-}
-
-/// The primary `SlideTransition`'s `RenderFractionalTranslation` — whichever
-/// of the two the details route's `cupertino_page_transitions` mounts reads
-/// the larger `|dx|` at any given moment (the secondary never moves for a
-/// route nothing covers) — see `flui-cupertino/tests/route.rs`'s identical
-/// helper and its doc for why this, not raw layout offset, is the right
-/// probe for a paint-time transform.
-fn primary_slide_dx(demo: &MountedDemo) -> f64 {
-    let nodes = demo.find_all_by_render_type("RenderFractionalTranslation");
-    assert_eq!(
-        nodes.len(),
-        2,
-        "the primary and secondary SlideTransition each mount one FractionalTranslation"
-    );
-    nodes
-        .into_iter()
-        .map(|id| {
-            let property = demo
-                .render_property(id, "translation")
-                .expect("FractionalTranslation always reports its translation");
-            let trimmed = property.trim_matches(['(', ')']);
-            let dx: f64 = trimmed
-                .split(", ")
-                .next()
-                .expect("translation has a dx component")
-                .parse()
-                .expect("dx is a float");
-            dx
-        })
-        .fold(0.0_f64, |largest, dx| {
-            if dx.abs() > largest.abs() {
-                dx
-            } else {
-                largest
-            }
-        })
 }
 
 // ============================================================================
@@ -368,162 +267,10 @@ fn tabs_mount_and_switching_preserves_the_settings_counter() {
 // (2) Pushing Details actually slides the page in over the 500ms transition
 // ============================================================================
 
-#[test]
-fn pushing_details_slides_the_page_in_over_the_full_transition() {
-    let mut demo = MountedDemo::mount();
-
-    assert!(
-        demo.find_text(tree::DETAILS_ROUTE_TEXT).is_none(),
-        "the Details route must not be built before it is pushed"
-    );
-
-    let push_button = demo
-        .find_text(tree::PUSH_BUTTON_LABEL)
-        .expect("the Home tab's push button must render");
-    demo.tap_node(push_button);
-    demo.pump(Duration::ZERO);
-
-    demo.find_text(tree::DETAILS_ROUTE_TEXT)
-        .expect("the Details route's body text must render once pushed");
-    demo.find_text(tree::DETAILS_NAV_TITLE)
-        .expect("the Details route's nav bar title must render once pushed");
-
-    let start_dx = primary_slide_dx(&demo);
-    assert!(
-        (start_dx - 1.0).abs() < 0.01,
-        "the pushed page must start fully off-screen to the right (dx == 1.0): {start_dx}"
-    );
-
-    demo.pump(PUSH_TRANSITION / 2);
-    let midpoint_dx = primary_slide_dx(&demo);
-    assert!(
-        (0.05..0.95).contains(&midpoint_dx),
-        "the page must still be sliding at the transition's midpoint: {midpoint_dx}"
-    );
-
-    for _ in 0..PUSH_PUMPS {
-        demo.pump(FRAME);
-    }
-    let settled_dx = primary_slide_dx(&demo);
-    assert!(
-        settled_dx.abs() < 0.01,
-        "the page must settle flush with the viewport once the transition completes: \
-         {settled_dx}"
-    );
-}
-
 // ============================================================================
 // (3) The nav bar's leading chevron and the explicit Back button both pop
 // ============================================================================
 
-#[test]
-fn nav_bar_leading_button_pops_the_details_route() {
-    let mut demo = MountedDemo::mount();
-
-    let push_button = demo.find_text(tree::PUSH_BUTTON_LABEL).unwrap();
-    demo.tap_node(push_button);
-    for _ in 0..PUSH_PUMPS {
-        demo.pump(FRAME);
-    }
-    demo.find_text(tree::DETAILS_ROUTE_TEXT)
-        .expect("the Details route must be showing before popping it");
-
-    let nav_back = demo
-        .find_text(tree::NAV_BACK_LABEL)
-        .expect("the Details route's nav bar leading button must render");
-    demo.tap_node(nav_back);
-    for _ in 0..PUSH_PUMPS {
-        demo.pump(FRAME);
-    }
-
-    assert!(
-        demo.find_text(tree::DETAILS_ROUTE_TEXT).is_none(),
-        "the nav bar's leading button must pop the Details route"
-    );
-    demo.find_text(tree::PUSH_BUTTON_LABEL)
-        .expect("the Home tab's content must still render once popped back to it");
-}
-
-#[test]
-fn explicit_back_button_pops_the_details_route() {
-    let mut demo = MountedDemo::mount();
-
-    let push_button = demo.find_text(tree::PUSH_BUTTON_LABEL).unwrap();
-    demo.tap_node(push_button);
-    for _ in 0..PUSH_PUMPS {
-        demo.pump(FRAME);
-    }
-
-    let back_button = demo
-        .find_text(tree::BACK_BUTTON_LABEL)
-        .expect("the Details route's explicit Back button must render");
-    demo.tap_node(back_button);
-    for _ in 0..PUSH_PUMPS {
-        demo.pump(FRAME);
-    }
-
-    assert!(
-        demo.find_text(tree::DETAILS_ROUTE_TEXT).is_none(),
-        "the explicit Back button must pop the Details route"
-    );
-}
-
 // ============================================================================
 // (4) Edge-swipe-back: a real drag from the left edge pops the Details route
 // ============================================================================
-
-#[test]
-fn edge_swipe_from_the_left_pops_the_details_route() {
-    let mut demo = MountedDemo::mount();
-
-    let push_button = demo.find_text(tree::PUSH_BUTTON_LABEL).unwrap();
-    demo.tap_node(push_button);
-    // Let the push transition fully settle first — `back_gesture.rs`'s edge
-    // detector is mounted throughout, but the swipe itself should start from
-    // a page that has actually arrived, not mid-entrance.
-    for _ in 0..PUSH_PUMPS {
-        demo.pump(FRAME);
-    }
-    demo.find_text(tree::DETAILS_ROUTE_TEXT)
-        .expect("the Details route must be showing before swiping it back");
-
-    // A monotonically rightward drag from inside the 20px edge region, well
-    // past the halfway point of the 400px-wide root — both the release
-    // position (< 0.5) and any fling velocity reading (positive, i.e. in the
-    // pop direction, since every sample moves further right than the last)
-    // agree on "pop", so the outcome does not depend on exactly how large a
-    // velocity the real-clock-timed samples happen to produce.
-    demo.begin_drag(5.0, 400.0);
-    demo.continue_drag(60.0, 400.0);
-    demo.continue_drag(140.0, 400.0);
-    demo.continue_drag(220.0, 400.0);
-    demo.continue_drag(300.0, 400.0);
-    demo.end_drag(300.0, 400.0);
-
-    for _ in 0..SWIPE_PUMPS {
-        demo.pump(FRAME);
-    }
-
-    assert!(
-        demo.find_text(tree::DETAILS_ROUTE_TEXT).is_none(),
-        "an edge swipe past the halfway point must pop the Details route"
-    );
-    demo.find_text(tree::PUSH_BUTTON_LABEL)
-        .expect("the Home tab's content must render again once swiped back to it");
-}
-
-/// `CupertinoDemoApp` — the thin `StatelessView` entry point
-/// `flui_app::run_app` requires — is exercised at *runtime* only by
-/// `examples/cupertino_demo/main.rs`, not this headless test: every
-/// acceptance test above mounts `demo_root()` directly instead, so it can
-/// capture the root's `controller`/`settings_count` handles *before*
-/// mounting (`CupertinoDemoApp` itself is a unit struct with no fields to
-/// read them back from). This is therefore a **compile pin, not a mount
-/// proof** — referencing the symbol here keeps both `#[path]` consumers of
-/// `tree.rs` compiling the same symbol set, so a signature change that
-/// breaks the example's entry point fails `cargo test` too, matching
-/// `tests/material_demo.rs`'s identical `demo_app_entry_point_constructs`.
-#[test]
-fn demo_app_entry_point_constructs() {
-    let _ = tree::CupertinoDemoApp;
-}

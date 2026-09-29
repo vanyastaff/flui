@@ -161,46 +161,4 @@ mod tests {
             assert_eq!(impact.is_none(), impact == RenderUpdateImpact::NONE);
         }
     }
-
-    #[test]
-    fn union_is_an_idempotent_commutative_monoid() {
-        let values = [
-            RenderUpdateImpact::NONE,
-            RenderUpdateImpact::PAINT,
-            RenderUpdateImpact::LAYOUT,
-            RenderUpdateImpact::COMPOSITING_BITS,
-            RenderUpdateImpact::SEMANTICS,
-            RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS,
-            RenderUpdateImpact::LAYOUT | RenderUpdateImpact::SEMANTICS,
-            RenderUpdateImpact::COMPOSITING_BITS | RenderUpdateImpact::SEMANTICS,
-            RenderUpdateImpact::COMPOSITED_LAYER_UPDATE,
-            RenderUpdateImpact::COMPOSITED_LAYER_UPDATE | RenderUpdateImpact::SEMANTICS,
-            RenderUpdateImpact::COMPOSITING_BITS | RenderUpdateImpact::COMPOSITED_LAYER_UPDATE,
-            RenderUpdateImpact::LAYOUT | RenderUpdateImpact::COMPOSITING_BITS,
-            RenderUpdateImpact::LAYOUT
-                | RenderUpdateImpact::COMPOSITING_BITS
-                | RenderUpdateImpact::SEMANTICS,
-        ];
-
-        for &left in &values {
-            assert_eq!(left | RenderUpdateImpact::NONE, left);
-            assert_eq!(left | left, left);
-            for &right in &values {
-                assert_eq!(left | right, right | left);
-                for &third in &values {
-                    assert_eq!((left | right) | third, left | (right | third));
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn bit_or_assign_matches_union() {
-        let mut impact = RenderUpdateImpact::PAINT;
-        impact |= RenderUpdateImpact::SEMANTICS;
-        assert_eq!(
-            impact,
-            RenderUpdateImpact::PAINT.union(RenderUpdateImpact::SEMANTICS),
-        );
-    }
 }

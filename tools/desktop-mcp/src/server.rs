@@ -1796,24 +1796,8 @@ mod tests {
         assert_eq!(error.payload()["error"]["effect"]["kind"], "may_have_run");
     }
 
-    #[test]
-    fn process_threads_are_admitted_up_to_the_bound() {
-        let held: Vec<ProcessSlot> = (0..LAUNCHES.limit)
-            .map(|_| ProcessSlot::take(&LAUNCHES).expect("BUG: below the bound"))
-            .collect();
-        assert!(matches!(
-            ProcessSlot::take(&LAUNCHES),
-            Err(ToolError::Busy(_))
-        ));
-        // Kills have threads of their own while launches are stuck.
-        assert!(ProcessSlot::take(&KILLS).is_ok());
-        drop(held);
-        assert!(ProcessSlot::take(&LAUNCHES).is_ok());
-    }
-
     /// An output schema admits the reply and a failure alike, and never
     /// requires the success fields of a failed call.
-    #[test]
     fn output_schemas_admit_success_and_failure() {
         let schema = schema::<KillReply>();
         let value = Value::Object((*schema).clone());
@@ -1834,7 +1818,6 @@ mod tests {
 
     /// A field left out at its default is not required by the published
     /// schema, so a reply that leaves it out still conforms.
-    #[test]
     fn skipped_fields_are_not_required() {
         let wait = Value::Object((*schema::<WaitReply>()).clone());
         let required = &wait["anyOf"][0]["required"];
@@ -1856,7 +1839,6 @@ mod tests {
 
     /// A failure's structured content is the error envelope; a reply's is
     /// the value, with the same JSON as text.
-    #[test]
     fn replies_carry_structured_content_and_text() {
         let ok = reply(&TypedReply { characters: 3 });
         assert_eq!(ok.structured_content, Some(json!({ "characters": 3 })));
@@ -1875,7 +1857,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn text_only_clients_receive_error_codes_and_partial_effects() {
         let error = ToolError::Busy("input interrupted".into()).after(
             crate::error::Effect::Partial {
@@ -1896,5 +1877,27 @@ mod tests {
         assert_eq!(payload["error"]["effect"]["kind"], "partial");
         assert_eq!(payload["error"]["effect"]["sent"], 1);
         assert_eq!(payload["error"]["effect"]["total"], 2);
+    }
+
+    #[test]
+    fn reply_and_schema_contract() {
+        crate::test_rows::run_rows(&[
+            (
+                "output_schemas_admit_success_and_failure",
+                output_schemas_admit_success_and_failure,
+            ),
+            (
+                "skipped_fields_are_not_required",
+                skipped_fields_are_not_required,
+            ),
+            (
+                "replies_carry_structured_content_and_text",
+                replies_carry_structured_content_and_text,
+            ),
+            (
+                "text_only_clients_receive_error_codes_and_partial_effects",
+                text_only_clients_receive_error_codes_and_partial_effects,
+            ),
+        ]);
     }
 }

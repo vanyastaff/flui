@@ -125,8 +125,6 @@ flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", featu
 flui-testing = { workspace = true }
 # Shared Arc<RwLock<PipelineOwner>> in the headless layout harness.
 parking_lot = { workspace = true }
-# Compile-time ownership-boundary assertions for ADR-0027.
-static_assertions = { workspace = true }
 # `#[tokio::test]` for the `image::decode_cache` coalescing unit tests
 # (`asset-images` feature) and the async `Image` widget integration tests.
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

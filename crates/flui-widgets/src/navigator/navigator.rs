@@ -925,20 +925,6 @@ impl NavigatorHandle {
         }
     }
 
-    /// Re-registrations that changed a name's `Output` type, and the conflict
-    /// warnings actually emitted. Test-facing: `warns_emitted` is incremented in
-    /// the same block that calls `tracing::warn!`, so asserting on it asserts on
-    /// the warn rather than on a parallel predicate.
-    #[cfg(test)]
-    pub(crate) fn route_conflicts_seen(&self) -> usize {
-        self.shared.named_routes.conflicts_seen()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn route_conflict_warns(&self) -> usize {
-        self.shared.named_routes.warns_emitted()
-    }
-
     /// How many attached observers drive hero flights — the auto-default plus any
     /// hand-attached `HeroController`s. Test-facing: pins that automatic attach adds
     /// exactly one, and that a manual controller suppresses it. Read through
@@ -1075,17 +1061,6 @@ impl NavigatorHandle {
     #[must_use]
     pub fn user_gesture_in_progress(&self) -> bool {
         self.shared.user_gesture_in_progress()
-    }
-
-    /// Flutter's `userGestureInProgressNotifier` (`ValueNotifier<bool>`,
-    /// `navigator.dart:5819`): fires on the 0→1 and 1→0 transitions of
-    /// [`user_gesture_in_progress`](Self::user_gesture_in_progress), with no
-    /// navigator lock held. Test-facing: production code reaches the same
-    /// notifier only through [`user_gesture_signal`](Self::user_gesture_signal)'s
-    /// Send+Sync-safe bundle.
-    #[cfg(test)]
-    pub(crate) fn user_gesture_in_progress_notifier(&self) -> ChangeNotifier {
-        self.shared.user_gesture_in_progress_notifier.clone()
     }
 
     /// A Send+Sync-safe snapshot of this navigator's user-gesture state — the

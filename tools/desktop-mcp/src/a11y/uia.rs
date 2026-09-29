@@ -2258,130 +2258,6 @@ fn classify_code(
 mod tests {
     use super::*;
 
-    /// Every tool in the wire vocabulary has a pattern here, so none answers
-    /// `action_unsupported` on an element that offers it. `pattern_of` ends in
-    /// a wildcard (the vocabulary is `#[non_exhaustive]`), so this is the pin.
-    #[test]
-    fn every_action_name_has_a_uia_pattern() {
-        for &action in ActionName::ALL {
-            assert!(
-                pattern_of(action).is_some(),
-                "`{action}` has no UIA pattern"
-            );
-        }
-    }
-
-    #[test]
-    fn fresh_value_password_flag_replaces_the_earlier_text_role() {
-        use uiautomation::variants::Variant;
-
-        for (fresh_flag, expected_role, readable) in [
-            (Some(Variant::from(true)), Role::PasswordInput, true),
-            (None, Role::Unknown, false),
-            (Some(Variant::from(1_i32)), Role::Unknown, false),
-            (Some(Variant::from(false)), Role::TextInput, true),
-        ] {
-            let mut node = crate::a11y::tests_node();
-            node.role = role_of(ControlType::Edit);
-            node.native_role = "Edit".into();
-            node.has_text_value = true;
-            refine_role(&mut node, Some(false), None);
-            assert_eq!(node.role, Role::TextInput);
-            let value_read = std::cell::Cell::new(false);
-            let result = consume_value_snapshot(&mut node, flag_value(fresh_flag), || {
-                value_read.set(true);
-                Some("new secret".into())
-            });
-            assert_eq!(result.is_ok(), readable);
-            assert_eq!(node.role, expected_role);
-            assert_eq!(node.unmatchable, !readable);
-            assert_eq!(value_read.get(), expected_role == Role::TextInput);
-            let wire = serde_json::to_value(&node).expect("BUG: node serializes");
-            assert_eq!(wire["role"], expected_role.name());
-            assert_eq!(
-                wire.get("value").is_some(),
-                expected_role == Role::TextInput
-            );
-            for role in [Role::TextInput, Role::PasswordInput] {
-                let query = crate::a11y::Query {
-                    role: Some(role.name().into()),
-                    ..crate::a11y::Query::default()
-                }
-                .prepared()
-                .expect("BUG: valid role query");
-                assert_eq!(query.matches(&node), expected_role == role);
-            }
-        }
-    }
-
-    #[test]
-    fn semantic_roles_require_readable_discriminants_even_without_a_value_pattern() {
-        use uiautomation::variants::Variant;
-
-        for (control, native, ordinary, alternative) in [
-            (
-                ControlType::Edit,
-                "Edit",
-                Role::TextInput,
-                Role::PasswordInput,
-            ),
-            (ControlType::Window, "Window", Role::Window, Role::Dialog),
-        ] {
-            for (value, expected) in [
-                (None, None),
-                (Some(Variant::from(1_i32)), None),
-                (Some(Variant::from(false)), Some(ordinary)),
-                (Some(Variant::from(true)), Some(alternative)),
-            ] {
-                for has_text_value in [false, true] {
-                    let mut node = crate::a11y::tests_node();
-                    node.role = role_of(control);
-                    node.native_role = native.into();
-                    node.has_text_value = has_text_value;
-                    let flag = flag_value(value.clone());
-                    let (password, dialog) = if ordinary == Role::TextInput {
-                        (flag, None)
-                    } else {
-                        (None, flag)
-                    };
-                    refine_role(&mut node, password, dialog);
-                    assert_eq!(
-                        node.unmatchable,
-                        expected.is_none(),
-                        "an incomplete role must mark the tree read truncated"
-                    );
-                    let wire = serde_json::to_value(&node).expect("BUG: node serializes");
-                    assert_eq!(wire["role"], expected.unwrap_or(Role::Unknown).name());
-                    assert_eq!(wire["native_role"], native);
-                    for role in [ordinary, alternative] {
-                        let query = crate::a11y::Query {
-                            role: Some(role.name().into()),
-                            ..crate::a11y::Query::default()
-                        }
-                        .prepared()
-                        .expect("BUG: valid role query");
-                        // Queries also accept native names: a confirmed
-                        // dialog still has the native control type Window.
-                        let native_window_match =
-                            role == Role::Window && expected == Some(Role::Dialog);
-                        assert_eq!(
-                            query.matches(&node),
-                            expected == Some(role) || native_window_match
-                        );
-                    }
-                    let native_query = crate::a11y::Query {
-                        role: Some(native.into()),
-                        ..crate::a11y::Query::default()
-                    }
-                    .prepared()
-                    .expect("BUG: valid native role query");
-                    assert_eq!(native_query.matches(&node), expected.is_some());
-                }
-            }
-        }
-    }
-
-    #[test]
     fn replacement_during_preparation_never_reaches_dispatch() {
         for fails in [false, true] {
             let current = std::cell::Cell::new(true);
@@ -2417,27 +2293,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn conclusive_preparation_removal_survives_unreadable_final_identity() {
-        let validated = std::cell::Cell::new(false);
-        let result = dispatch_while_current(
-            || Err::<(), _>(ToolError::gone_element("e1", "provider reported removal")),
-            || {
-                validated.set(true);
-                Err(ToolError::platform(
-                    "re-reading identity",
-                    "provider timed out",
-                ))
-            },
-            |()| panic!("an observed removal cannot dispatch an action"),
-        );
-        assert!(validated.get(), "the final identity check still runs");
-        let error = result.expect_err("BUG: observed removal remains final");
-        assert_eq!(error.code(), "gone");
-        assert!(error.payload()["error"].get("effect").is_none());
-    }
-
-    #[test]
     fn unchanged_preparation_dispatches_once_and_preserves_action_effects() {
         let dispatched = std::cell::Cell::new(0);
         let result = dispatch_while_current(
@@ -2459,77 +2314,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn value_refresh_replacement_is_rejected_before_consumption() {
-        // The original and replacement belong to the same live process;
-        // process-only postchecks cannot distinguish these snapshots.
-        let original = (42, 10, vec![1, 2], 50004);
-        for replacement in [
-            (42, 10, vec![1, 3], 50004),
-            (42, 10, vec![1, 2], 50000),
-            original.clone(),
-        ] {
-            let consumed = std::cell::Cell::new(false);
-            let result = value_while_current(
-                || Ok((replacement.clone(), "replacement value")),
-                |(identity, _)| {
-                    if identity == &original {
-                        Ok(())
-                    } else {
-                        Err(ToolError::gone_element(
-                            "e1",
-                            "replaced during value refresh",
-                        ))
-                    }
-                },
-            )
-            .map(|(_, value)| {
-                consumed.set(true);
-                value
-            });
-            assert_eq!(consumed.get(), replacement == original);
-            if replacement != original {
-                assert_eq!(
-                    result
-                        .expect_err("BUG: replacement value is refused")
-                        .code(),
-                    "gone"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn hit_test_revalidates_after_successful_and_failed_provider_walks() {
-        for provider_fails in [false, true] {
-            let mut current = true;
-            let result = hit_while_current(
-                &mut current,
-                |current| {
-                    *current = false;
-                    if provider_fails {
-                        Err(ToolError::platform("hit test", "provider disconnected"))
-                    } else {
-                        Ok(true)
-                    }
-                },
-                |current| {
-                    if *current {
-                        Ok(())
-                    } else {
-                        Err(ToolError::gone_element("e1", "replaced during hit test"))
-                    }
-                },
-            );
-            assert!(matches!(result, Err(ToolError::Gone { .. })));
-        }
-        assert!(
-            hit_while_current(&mut (), |()| Ok(true), |()| Ok(()))
-                .expect("BUG: unchanged hit remains valid")
-        );
-    }
-
-    #[test]
     fn destructive_action_readback_exposes_no_actions_or_old_value() {
         let mut node = crate::a11y::tests_node();
         node.actions = vec![ActionName::Invoke, ActionName::Focus];
@@ -2542,7 +2326,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn disconnected_provider_is_gone_when_its_process_id_was_reused() {
         for code in [
             E_DISCONNECTED,
@@ -2574,43 +2357,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn subtree_validation_budget_covers_all_three_provider_calls() {
-        let request_start = Instant::now();
-        let request_deadline = request_start + std::time::Duration::from_secs(10);
-        let traversal = subtree_traversal_deadline(request_start, request_deadline);
-        assert!(traversal > request_start && traversal < request_deadline);
-        // Traversal's final admitted call consumes the remaining request
-        // budget. Final verification still has time for all three calls.
-        let clock = std::cell::Cell::new(request_deadline);
-        let calls = std::cell::Cell::new(0);
-        let duration =
-            std::time::Duration::from_millis(u64::from(crate::os::UIA_TRANSACTION_TIMEOUT_MS) - 1);
-        let validation = validate_subtree(clock.get(), |deadline| {
-            for _ in 0..3 {
-                before_identity_call("e1", Some(deadline), clock.get())?;
-                calls.set(calls.get() + 1);
-                clock.set(clock.get() + duration);
-            }
-            Ok(())
-        });
-        let read = finish_subtree(
-            Read {
-                roots: vec![crate::a11y::tests_node()],
-                truncated: true,
-            },
-            &HashSet::new(),
-            validation,
-            |_| panic!("verified partial reads preserve their handles"),
-        )
-        .expect("BUG: all three bounded validation calls fit");
-        assert_eq!(calls.get(), 3);
-        assert!(clock.get() > request_deadline + duration);
-        assert!(read.truncated);
-        assert_eq!(read.roots.len(), 1);
-    }
-
-    #[test]
     fn subtree_validation_deadline_stops_new_calls_and_never_returns_unverified_tree() {
         let clock = std::cell::Cell::new(Instant::now());
         let calls = std::cell::Cell::new(0);
@@ -2636,7 +2382,6 @@ mod tests {
         assert!(matches!(result, Err(ToolError::Timeout { .. })));
     }
 
-    #[test]
     fn subtree_failure_retires_handles_from_a_replaced_root() {
         let mut cache = ElementCache::default();
         let child = cache.insert("child", ());
@@ -2662,7 +2407,6 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[test]
     fn unidentifiable_nodes_offer_no_actions() {
         for identifiable in [false, true] {
             let mut node = crate::a11y::tests_node();
@@ -2673,24 +2417,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn unknown_enabled_state_is_omitted_and_cannot_satisfy_a_wait() {
-        for enabled in [None, Some(false), Some(true)] {
-            let mut node = crate::a11y::tests_node();
-            enabled_state(&mut node, enabled);
-            let wire = serde_json::to_value(&node).expect("BUG: nodes serialize");
-            assert_eq!(wire.get("disabled").is_some(), enabled == Some(false));
-            for disabled in [false, true] {
-                let state = crate::params::StateArg {
-                    disabled: Some(disabled),
-                    ..crate::params::StateArg::default()
-                };
-                assert_eq!(state.holds(&node), enabled == Some(!disabled));
-            }
-        }
-    }
-
-    #[test]
     fn direct_focus_requires_a_live_readable_focusable_flag() {
         for focusable in [
             Ok(false),
@@ -2730,7 +2456,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn readback_rechecks_process_after_the_last_provider_call() {
         for fails in [false, true] {
             for replacement in [None, Some(20)] {
@@ -2768,46 +2493,6 @@ mod tests {
         assert!(readback_while_current("e1", Some(10), || Ok(()), || Ok(Some(10))).is_ok());
     }
 
-    #[test]
-    fn unreadable_process_identity_does_not_erase_conclusive_element_evidence() {
-        let unread = || Err(ToolError::Busy("identity temporarily inaccessible".into()));
-        for same in [Some(true), None] {
-            let error = identity_after_refresh(10, || same, unread)
-                .expect_err("BUG: unreadable is neither current nor gone");
-            assert_eq!(error.code(), "busy");
-        }
-        assert_eq!(
-            identity_after_refresh(10, || Some(false), unread)
-                .expect("BUG: observed replacement remains conclusive"),
-            Some(false)
-        );
-        assert_eq!(
-            identity_after_refresh(10, || None, || Ok(Some(20)))
-                .expect("BUG: process replacement is conclusive"),
-            Some(false)
-        );
-        let error = readback_while_current("e1", Some(10), || Ok(()), unread)
-            .expect_err("BUG: unreadable readback is refused");
-        assert_eq!(error.code(), "busy");
-        assert!(matches!(
-            error,
-            ToolError::Interrupted {
-                effect: Effect::Ran,
-                ..
-            }
-        ));
-        let error = classify_code(
-            "e1",
-            "reading",
-            E_DISCONNECTED,
-            &"disconnected",
-            Some((42, 10)),
-            |_| unread(),
-        );
-        assert_ne!(error.code(), "gone");
-    }
-
-    #[test]
     fn process_replacement_during_identity_refresh_is_refused() {
         let started = std::cell::Cell::new(Some(10));
         assert_eq!(
@@ -2839,7 +2524,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn expansion_dispatch_requires_a_supported_live_transition() {
         for (state, expand, collapse) in [
             (ExpandCollapseState::Collapsed, true, false),
@@ -2894,7 +2578,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn read_only_values_never_reach_the_provider_write() {
         for pattern in [
             UIProperty::IsValuePatternAvailable,
@@ -2917,7 +2600,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn unreadable_read_only_flags_never_reach_the_provider_write() {
         for pattern in [
             UIProperty::IsValuePatternAvailable,
@@ -2948,24 +2630,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_writable_range_is_used_when_the_text_pattern_is_read_only() {
-        let mut written = None;
-        perform_set_value(
-            "e1",
-            "42",
-            |prop| Ok(prop != UIProperty::RangeValueIsReadOnly),
-            |value| {
-                written = Some(value);
-                Ok(())
-            },
-            unsupported_value,
-        )
-        .expect("BUG: the range is writable");
-        assert_eq!(written, Some(ValueWrite::Range(42.0)));
-    }
-
-    #[test]
     fn writable_text_preserves_its_value_and_invalid_ranges_are_not_sent() {
         let mut written = None;
         perform_set_value(
@@ -2992,78 +2656,83 @@ mod tests {
         }
     }
 
-    /// Only the three real toggle states have names; any other value is
-    /// unreadable, not "indeterminate".
+    /// `action_unsupported` on an element that offers it. `pattern_of` ends in
+    /// a wildcard (the vocabulary is `#[non_exhaustive]`), so this is the pin.
     #[test]
-    fn only_real_toggle_states_are_named() {
-        assert_eq!(checked_state(ToggleState::On as i32), Some(Checked::True));
-        assert_eq!(checked_state(ToggleState::Off as i32), Some(Checked::False));
-        assert_eq!(
-            checked_state(ToggleState::Indeterminate as i32),
-            Some(Checked::Mixed)
-        );
-        assert_eq!(checked_state(99), None);
-        assert_eq!(expanded_state(ExpandCollapseState::LeafNode as i32), None);
-        assert_eq!(
-            expanded_state(ExpandCollapseState::PartiallyExpanded as i32),
-            None
-        );
-    }
-
-    #[test]
-    fn partial_expansion_satisfies_neither_completed_state_wait() {
-        let mut node = crate::a11y::tests_node();
-        for (native, expected) in [
-            (ExpandCollapseState::Collapsed, Some(false)),
-            (ExpandCollapseState::Expanded, Some(true)),
-            (ExpandCollapseState::PartiallyExpanded, None),
-            (ExpandCollapseState::LeafNode, None),
-        ] {
-            node.expanded = expanded_state(native as i32);
-            for wanted in [false, true] {
-                let state = crate::params::StateArg {
-                    expanded: Some(wanted),
-                    ..crate::params::StateArg::default()
-                };
-                assert_eq!(state.holds(&node), expected == Some(wanted), "{native:?}");
-            }
+    fn every_action_name_has_a_uia_pattern() {
+        for &action in ActionName::ALL {
+            assert!(
+                pattern_of(action).is_some(),
+                "`{action}` has no UIA pattern"
+            );
         }
     }
 
-    /// A clipped string keeps no provider-sized buffer behind it.
     #[test]
-    fn a_clipped_string_is_right_sized() {
-        let cut = clip("x".repeat(1 << 20));
-        assert_eq!(cut.chars().count(), MAX_PROPERTY_CHARS + 1);
-        assert!(
-            cut.capacity() < 2 * MAX_PROPERTY_CHARS,
-            "{}",
-            cut.capacity()
-        );
+    fn element_action_dispatch_safety() {
+        crate::test_rows::run_rows(&[
+            (
+                "read_only_values_never_reach_the_provider_write",
+                read_only_values_never_reach_the_provider_write,
+            ),
+            (
+                "unreadable_read_only_flags_never_reach_the_provider_write",
+                unreadable_read_only_flags_never_reach_the_provider_write,
+            ),
+            (
+                "replacement_during_preparation_never_reaches_dispatch",
+                replacement_during_preparation_never_reaches_dispatch,
+            ),
+            (
+                "unchanged_preparation_dispatches_once_and_preserves_action_effects",
+                unchanged_preparation_dispatches_once_and_preserves_action_effects,
+            ),
+            (
+                "destructive_action_readback_exposes_no_actions_or_old_value",
+                destructive_action_readback_exposes_no_actions_or_old_value,
+            ),
+            (
+                "expansion_dispatch_requires_a_supported_live_transition",
+                expansion_dispatch_requires_a_supported_live_transition,
+            ),
+            (
+                "direct_focus_requires_a_live_readable_focusable_flag",
+                direct_focus_requires_a_live_readable_focusable_flag,
+            ),
+            (
+                "unidentifiable_nodes_offer_no_actions",
+                unidentifiable_nodes_offer_no_actions,
+            ),
+            (
+                "writable_text_preserves_its_value_and_invalid_ranges_are_not_sent",
+                writable_text_preserves_its_value_and_invalid_ranges_are_not_sent,
+            ),
+        ]);
     }
 
-    /// A provider's string is cut at a character boundary, marked, and
-    /// left alone when it fits.
     #[test]
-    fn long_properties_are_cut_on_a_character_boundary() {
-        assert_eq!(clip("short".into()), "short");
-        let fits = "я".repeat(MAX_PROPERTY_CHARS);
-        assert_eq!(clip(fits.clone()), fits);
-        let cut = clip("я".repeat(MAX_PROPERTY_CHARS + 10));
-        assert_eq!(cut.chars().count(), MAX_PROPERTY_CHARS + 1);
-        assert!(cut.ends_with('…'));
-    }
-
-    /// Reading a runtime id repeatedly does not grow the process: the
-    /// arrays UI Automation hands back are freed.
-    #[test]
-    fn runtime_ids_are_read_without_leaking() {
-        let uia = Uia::new().expect("BUG: UI Automation is available on Windows");
-        let root = uia
-            .automation
-            .get_root_element()
-            .expect("BUG: the desktop element exists");
-        let id = crate::os::runtime_id(root.as_ref()).expect("BUG: the desktop has a runtime id");
-        assert!(id.is_some_and(|id| !id.is_empty()));
+    fn tree_read_validation() {
+        crate::test_rows::run_rows(&[
+            (
+                "subtree_validation_deadline_stops_new_calls_and_never_returns_unverified_tree",
+                subtree_validation_deadline_stops_new_calls_and_never_returns_unverified_tree,
+            ),
+            (
+                "subtree_failure_retires_handles_from_a_replaced_root",
+                subtree_failure_retires_handles_from_a_replaced_root,
+            ),
+            (
+                "disconnected_provider_is_gone_when_its_process_id_was_reused",
+                disconnected_provider_is_gone_when_its_process_id_was_reused,
+            ),
+            (
+                "readback_rechecks_process_after_the_last_provider_call",
+                readback_rechecks_process_after_the_last_provider_call,
+            ),
+            (
+                "process_replacement_during_identity_refresh_is_refused",
+                process_replacement_during_identity_refresh_is_refused,
+            ),
+        ]);
     }
 }

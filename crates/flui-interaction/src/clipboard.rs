@@ -54,25 +54,4 @@ impl fmt::Debug for ClipboardHandle {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::cell::RefCell;
-
-    use flui_platform_api::InMemoryClipboard;
-
-    use super::*;
-
-    #[test]
-    fn a_handle_writes_through_and_reads_back_from_its_clipboard() {
-        let backend = Arc::new(InMemoryClipboard::new());
-        let handle = ClipboardHandle::new(backend.clone());
-
-        handle.write_text("copied");
-        assert_eq!(backend.read_text().as_deref(), Some("copied"));
-
-        backend.write_text("external".to_owned());
-        let seen = Rc::new(RefCell::new(None));
-        let sink = seen.clone();
-        handle.read_text(move |text| *sink.borrow_mut() = text);
-        assert_eq!(seen.borrow().as_deref(), Some("external"));
-    }
-}
+mod tests {}

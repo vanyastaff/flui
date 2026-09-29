@@ -192,6 +192,9 @@ mod post_frame;
 // already-unwinding recovery paths -- see the module doc.
 mod panic_payload;
 
+#[cfg(test)]
+mod table_test;
+
 pub use web_time::Instant;
 // Re-exports - Duration types
 pub use duration::{BudgetPercentage, FrameDuration, Microseconds, Milliseconds, Seconds};

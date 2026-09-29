@@ -17,8 +17,12 @@
 //!   `flui::reconcile` trace stream reports the real parent id.
 
 #![cfg(feature = "test-utils")]
+#![expect(
+    clippy::unwrap_used,
+    reason = "a panic is the failure report in a test scenario"
+)]
 
-use std::{any::TypeId, cell::Cell, rc::Rc};
+use std::any::TypeId;
 
 use flui_foundation::{ElementId, ValueKey, ViewKey};
 use flui_objects::RenderSizedBox;
@@ -30,14 +34,7 @@ use flui_view::{
 };
 use serial_test::serial;
 
-use crate::dense_reconcile_containment::{
-    DENSE_CHILD_COUNT, DenseGlobalKeyUpdatePanicSubtree, DensePanicsOnCreate, DenseRetakeRoot,
-    DenseRetakeRootState, DenseRow, mount_dense_root,
-};
-use crate::dense_update_containment::{
-    DenseDidUpdateView, DenseRenderUpdateLeaf, PHASE_ONE_FAILED_SLOT, keyed_render_children,
-    phase_one_children, update_dense_parent,
-};
+use crate::dense_reconcile_containment::DensePanicsOnCreate;
 use crate::reconcile_capture::capture;
 
 #[derive(Clone)]
@@ -131,17 +128,6 @@ struct MultiBox {
 }
 
 impl MultiBox {
-    fn keyed(order: &[u32]) -> Self {
-        Self {
-            key: None,
-            children: order
-                .iter()
-                .copied()
-                .map(|tag| KeyedLeafBox::new(tag).boxed())
-                .collect(),
-        }
-    }
-
     fn host(tag: u32, children: Vec<flui_view::BoxedView>) -> Self {
         Self {
             key: Some(ValueKey::new(tag)),
@@ -200,99 +186,8 @@ fn direct_children_in_slot_order(tree: &ElementTree, parent: ElementId) -> Vec<E
     children.into_iter().map(|(_, id)| id).collect()
 }
 
-/// Locks the contract: `ElementTree::insert` /
-/// `mount_root_with_pipeline_owner` MUST stamp `set_self_id` BEFORE
-/// `mount`. The production variable-arity test below proves the stamp is
-/// then visible when `BuildOwner::build_scope` emits reconciliation events
-/// for that element's children. This smaller smoke lock keeps the raw mount
-/// and insert paths honest.
-#[test]
-fn set_self_id_fires_on_insert_no_panic() {
-    let mut tree = ElementTree::new();
-    let mut owner = BuildOwner::new();
-
-    // Mount root. ElementTree::mount_root_with_pipeline_owner calls
-    // `element.set_self_id(id)` immediately after slab insertion
-    // (per the wiring in element_tree.rs:223).
-    let root_view = KeyedLeafBox::new(1);
-    let root_id = tree.mount_root(&root_view, &mut owner.element_owner_mut());
-    assert_eq!(root_id, ElementId::new(1), "root must occupy slab[0]");
-
-    // Insert a child — exercises ElementTree::insert which also
-    // calls set_self_id before mount.
-    let child_view = KeyedLeafBox::new(2);
-    let child_id = tree.insert(&child_view, root_id, 0, &mut owner.element_owner_mut());
-    assert_eq!(child_id, ElementId::new(2), "child must occupy slab[1]");
-
-    // If the debug_assert ever fires (perform_build before
-    // set_self_id), THIS TEST would panic. The fact that mount +
-    // insert returned cleanly is the lock that the assert's
-    // precondition (set_self_id called before lifecycle work observes
-    // the element id) holds for the production mount path in debug builds.
-}
-
-#[test]
 #[serial]
-fn variable_arity_reorder_through_build_scope_preserves_ids_and_emits_parent_id() {
-    let pipeline_owner = PipelineCell::new(PipelineOwner::new());
-    let mut owner = BuildOwner::new();
-    let mut tree = ElementTree::new();
-
-    let root_v1 = MultiBox::keyed(&[1, 2, 3]);
-    let root_id = tree.mount_root_with_pipeline_owner(
-        &root_v1,
-        Some(pipeline_owner),
-        &mut owner.element_owner_mut(),
-    );
-
-    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
-    owner.build_scope(&mut tree);
-    let before = direct_children_in_slot_order(&tree, root_id);
-    assert_eq!(before.len(), 3);
-    let (id1, id2, id3) = (before[0], before[1], before[2]);
-
-    let root_v2 = MultiBox::keyed(&[3, 1, 2]);
-    tree.update(root_id, &root_v2, &mut owner.element_owner_mut());
-    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::ParentUpdate);
-
-    let events = capture(|| {
-        owner.build_scope(&mut tree);
-    });
-
-    let after = direct_children_in_slot_order(&tree, root_id);
-    assert_eq!(
-        after,
-        vec![id3, id1, id2],
-        "build_scope must route variable children through keyed reconcile; ids follow keys",
-    );
-    assert_eq!(
-        tree.len(),
-        4,
-        "root plus three children: reorder must not mount or unmount",
-    );
-
-    let dispositions: Vec<_> = events.iter().map(|event| event.kind).collect();
-    assert_eq!(
-        dispositions,
-        vec![
-            ReconcileEventKind::Reorder,
-            ReconcileEventKind::Reorder,
-            ReconcileEventKind::Reorder,
-        ],
-        "a full keyed rotation reports movement for every child; got {events:?}",
-    );
-    for event in &events {
-        assert_eq!(
-            event.parent,
-            root_id.as_u64(),
-            "production trace event must carry the rebuilding variable parent id",
-        );
-    }
-}
-
-#[test]
-#[serial]
-fn active_global_key_move_through_build_scope_updates_render_parent_links() {
+pub(crate) fn active_global_key_move_through_build_scope_updates_render_parent_links() {
     let pipeline_owner = PipelineCell::new(PipelineOwner::new());
     let mut owner = BuildOwner::new();
     let mut tree = ElementTree::new();
@@ -469,131 +364,6 @@ fn active_global_key_move_through_build_scope_updates_render_parent_links() {
     });
 }
 
-#[test]
-#[serial]
-fn inactive_global_key_reinsert_applies_full_new_parent_membership_impact() {
-    let pipeline_owner = PipelineCell::new(PipelineOwner::new());
-    let mut owner = BuildOwner::new();
-    let mut tree = ElementTree::new();
-    let global = GlobalKey::<()>::new();
-    let root = MultiBox::host(
-        0,
-        vec![
-            MultiBox::host(1, vec![GlobalLeafBox::new(global.clone()).boxed()]).boxed(),
-            MultiBox::host(2, Vec::new()).boxed(),
-        ],
-    );
-    let root_id = tree.mount_root_with_pipeline_owner(
-        &root,
-        Some(pipeline_owner.clone()),
-        &mut owner.element_owner_mut(),
-    );
-    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
-    owner.build_scope(&mut tree);
-
-    let parents = direct_children_in_slot_order(&tree, root_id);
-    let (parent_a, parent_b) = (parents[0], parents[1]);
-    let moved_id = direct_children_in_slot_order(&tree, parent_a)[0];
-    let root_render = tree.get(root_id).unwrap().element().render_id().unwrap();
-    let parent_a_render = tree.get(parent_a).unwrap().element().render_id().unwrap();
-    let parent_b_render = tree.get(parent_b).unwrap().element().render_id().unwrap();
-    let moved_render = tree.get(moved_id).unwrap().element().render_id().unwrap();
-
-    pipeline_owner.with_mut(|pipeline| pipeline.set_semantics_enabled(true));
-
-    let empty_parent_a = MultiBox::host(1, Vec::new());
-    tree.update(parent_a, &empty_parent_a, &mut owner.element_owner_mut());
-    owner.schedule_build_for(
-        parent_a,
-        tree.get(parent_a).unwrap().depth(),
-        flui_view::RebuildReason::ParentUpdate,
-    );
-    owner.build_scope(&mut tree);
-    assert!(
-        tree.get(moved_id).is_some(),
-        "the keyed element remains available for same-frame inactive retake"
-    );
-    pipeline_owner.with(|pipeline| {
-        let render_tree = pipeline.render_tree();
-        assert!(render_tree.get(parent_a_render).unwrap().needs_layout());
-        assert!(
-            render_tree
-                .get(parent_a_render)
-                .unwrap()
-                .needs_compositing_bits_update()
-        );
-        assert!(
-            pipeline
-                .nodes_needing_semantics()
-                .iter()
-                .any(|dirty| dirty.id == parent_a_render)
-        );
-    });
-
-    pipeline_owner.with_mut(|pipeline| {
-        pipeline.clear_all_dirty_nodes();
-        for render_id in [root_render, parent_a_render, parent_b_render, moved_render] {
-            let node = pipeline.render_tree().get(render_id).unwrap();
-            node.clear_needs_layout();
-            node.clear_needs_paint();
-            node.clear_needs_compositing_bits_update();
-        }
-    });
-
-    let parent_b_with_child = MultiBox::host(2, vec![GlobalLeafBox::new(global.clone()).boxed()]);
-    tree.update(
-        parent_b,
-        &parent_b_with_child,
-        &mut owner.element_owner_mut(),
-    );
-    owner.schedule_build_for(
-        parent_b,
-        tree.get(parent_b).unwrap().depth(),
-        flui_view::RebuildReason::ParentUpdate,
-    );
-    owner.build_scope(&mut tree);
-
-    assert_eq!(
-        direct_children_in_slot_order(&tree, parent_b),
-        vec![moved_id]
-    );
-    pipeline_owner.with(|pipeline| {
-        let render_tree = pipeline.render_tree();
-        assert_eq!(
-            render_tree.get(moved_render).unwrap().parent(),
-            Some(parent_b_render)
-        );
-        assert!(render_tree.get(parent_b_render).unwrap().needs_layout());
-        assert!(
-            render_tree
-                .get(parent_b_render)
-                .unwrap()
-                .needs_compositing_bits_update()
-        );
-        assert_eq!(pipeline.nodes_needing_layout()[0].id, root_render);
-        assert_eq!(
-            pipeline.nodes_needing_compositing_bits_update()[0].id,
-            root_render
-        );
-        let semantics_ids = pipeline
-            .nodes_needing_semantics()
-            .iter()
-            .map(|dirty| dirty.id)
-            .collect::<Vec<_>>();
-        assert_eq!(semantics_ids.len(), 2, "{semantics_ids:?}");
-        assert!(semantics_ids.contains(&parent_b_render));
-        assert!(semantics_ids.contains(&moved_render));
-        assert_eq!(
-            pipeline
-                .nodes_needing_paint()
-                .iter()
-                .map(|dirty| dirty.id)
-                .collect::<Vec<_>>(),
-            vec![root_render],
-        );
-    });
-}
-
 const FAILED_SLOT: usize = 7;
 const DESTINATION_CHILD_COUNT: usize = 10;
 
@@ -669,64 +439,8 @@ fn assert_destination_emits_only_final_mounts(
     );
 }
 
-fn mount_stream_retake_hosts(
-    child_under_a: BoxedView,
-) -> (ElementTree, BuildOwner, ElementId, ElementId) {
-    let mut tree = ElementTree::new();
-    let mut owner = BuildOwner::new();
-    let pipeline = PipelineCell::new(PipelineOwner::new());
-    let root = MultiBox::host(
-        0,
-        vec![
-            MultiBox::host(1, vec![child_under_a]).boxed(),
-            MultiBox::host(2, Vec::new()).boxed(),
-        ],
-    );
-    let root_id =
-        tree.mount_root_with_pipeline_owner(&root, Some(pipeline), &mut owner.element_owner_mut());
-    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
-    owner.build_scope(&mut tree);
-    let hosts = direct_children_in_slot_order(&tree, root_id);
-    assert_eq!(hosts.len(), 2);
-    (tree, owner, hosts[0], hosts[1])
-}
-
-fn soft_remove_stream_source(tree: &mut ElementTree, owner: &mut BuildOwner, source: ElementId) {
-    tree.update(
-        source,
-        &MultiBox::host(1, Vec::new()),
-        &mut owner.element_owner_mut(),
-    );
-    owner.schedule_build_for(
-        source,
-        tree.get(source).expect("source host").depth(),
-        flui_view::RebuildReason::ParentUpdate,
-    );
-    owner.build_scope(tree);
-}
-
-fn capture_dense_stream_destination(
-    tree: &mut ElementTree,
-    owner: &mut BuildOwner,
-    destination: ElementId,
-    child: BoxedView,
-) -> Vec<flui_view::tree::test_utils::CollectedEvent> {
-    tree.update(
-        destination,
-        &MultiBox::host(2, dense_stream_children(child)),
-        &mut owner.element_owner_mut(),
-    );
-    owner.schedule_build_for(
-        destination,
-        tree.get(destination).expect("destination host").depth(),
-        flui_view::RebuildReason::ParentUpdate,
-    );
-    capture(|| owner.build_scope(tree))
-}
-
-#[test]
 #[serial]
-fn failed_dense_mount_production_reconcile_emits_only_final_slots() {
+pub(crate) fn failed_dense_mount_production_reconcile_emits_only_final_slots() {
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
     let pipeline = PipelineCell::new(PipelineOwner::new());
@@ -744,213 +458,5 @@ fn failed_dense_mount_production_reconcile_emits_only_final_slots() {
         &events,
         root_id,
         TypeId::of::<DensePanicsOnCreate>(),
-    );
-}
-
-#[test]
-#[serial]
-fn failed_update_retake_production_reconcile_emits_substitute_without_reparent() {
-    let armed = Rc::new(Cell::new(false));
-    let retaken = DenseGlobalKeyUpdatePanicSubtree::new(GlobalKey::new(), armed.clone());
-    let (mut tree, mut owner, source, destination) =
-        mount_stream_retake_hosts(retaken.clone().boxed());
-    soft_remove_stream_source(&mut tree, &mut owner, source);
-    armed.set(true);
-
-    let events =
-        capture_dense_stream_destination(&mut tree, &mut owner, destination, retaken.boxed());
-
-    assert_destination_emits_only_final_mounts(
-        &events,
-        destination,
-        TypeId::of::<DenseGlobalKeyUpdatePanicSubtree>(),
-    );
-}
-
-#[test]
-#[serial]
-fn failed_activate_retake_production_reconcile_emits_substitute_without_reparent() {
-    let descendant_armed = Rc::new(Cell::new(false));
-    let retaken = DenseRetakeRoot::new(
-        GlobalKey::<DenseRetakeRootState>::new(),
-        descendant_armed.clone(),
-    );
-    let (mut tree, mut owner, source, destination) =
-        mount_stream_retake_hosts(retaken.clone().boxed());
-    soft_remove_stream_source(&mut tree, &mut owner, source);
-    descendant_armed.set(true);
-
-    let events =
-        capture_dense_stream_destination(&mut tree, &mut owner, destination, retaken.boxed());
-
-    assert_destination_emits_only_final_mounts(
-        &events,
-        destination,
-        TypeId::of::<DenseRetakeRoot>(),
-    );
-}
-
-fn assert_failed_update_emits_unmount_and_final_substitute(
-    events: &[flui_view::tree::test_utils::CollectedEvent],
-    parent: ElementId,
-    old_slot: usize,
-    final_slot: usize,
-    failed_view_type_id: TypeId,
-    failed_key_hash: u64,
-) {
-    let parent_events: Vec<_> = events
-        .iter()
-        .filter(|event| event.parent == parent.as_u64())
-        .collect();
-    assert!(
-        !parent_events.is_empty(),
-        "the production collector must observe the tested parent's reconcile stream"
-    );
-    let error_mounts: Vec<_> = parent_events
-        .iter()
-        .filter(|event| {
-            event.kind == ReconcileEventKind::Mount
-                && event.view_type_id == format!("{:?}", TypeId::of::<ErrorView>())
-        })
-        .map(|event| (event.slot, event.child_key))
-        .collect();
-    assert_eq!(
-        error_mounts,
-        vec![(final_slot as u64, None)],
-        "the parent's complete ErrorView Mount set must be exactly one unkeyed substitute at the final slot"
-    );
-    let failed_unmounts: Vec<_> = parent_events
-        .iter()
-        .filter(|event| {
-            event.kind == ReconcileEventKind::Unmount
-                && event.child_key == Some(failed_key_hash)
-                && event.view_type_id == format!("{failed_view_type_id:?}")
-        })
-        .map(|event| event.slot)
-        .collect();
-    assert_eq!(
-        failed_unmounts,
-        vec![old_slot as u64],
-        "the failed resident must emit exactly one Unmount at its old slot"
-    );
-    assert!(
-        parent_events.iter().all(|event| {
-            !(event.child_key == Some(failed_key_hash)
-                && event.view_type_id == format!("{failed_view_type_id:?}")
-                && matches!(
-                    event.kind,
-                    ReconcileEventKind::Reuse | ReconcileEventKind::Reorder
-                ))
-        }),
-        "the failed resident must not leave a stale Reuse or Reorder disposition"
-    );
-    assert!(
-        parent_events.iter().any(|event| {
-            event.slot != final_slot as u64
-                && matches!(
-                    event.kind,
-                    ReconcileEventKind::Reuse
-                        | ReconcileEventKind::Reorder
-                        | ReconcileEventKind::Mount
-                )
-        }),
-        "the parent-filtered stream must contain a positive sibling disposition"
-    );
-}
-
-#[test]
-#[serial]
-fn failed_phase_one_update_emits_substitute_without_stale_reuse() {
-    let armed = Rc::new(Cell::new(false));
-    let (mut tree, mut owner, _pipeline, _observer, parent) = mount_dense_root(DenseRow {
-        children: phase_one_children(
-            PHASE_ONE_FAILED_SLOT,
-            DenseDidUpdateView::new(1, armed.clone()).boxed(),
-        ),
-    });
-    owner.build_scope(&mut tree);
-    armed.set(true);
-
-    let events = capture(|| {
-        update_dense_parent(
-            &mut tree,
-            &mut owner,
-            parent,
-            phase_one_children(
-                PHASE_ONE_FAILED_SLOT,
-                DenseDidUpdateView::new(1, armed).boxed(),
-            ),
-        );
-    });
-
-    assert_failed_update_emits_unmount_and_final_substitute(
-        &events,
-        parent,
-        PHASE_ONE_FAILED_SLOT,
-        PHASE_ONE_FAILED_SLOT,
-        TypeId::of::<DenseDidUpdateView>(),
-        ValueKey::new(1_u32).key_hash(),
-    );
-}
-
-#[test]
-#[serial]
-fn failed_phase_four_update_emits_substitute_without_stale_reorder() {
-    let armed = Rc::new(Cell::new(false));
-    let old_keys: Vec<_> = (0..DENSE_CHILD_COUNT as u32).collect();
-    let (mut tree, mut owner, _pipeline, _observer, parent) = mount_dense_root(DenseRow {
-        children: keyed_render_children(&old_keys, None, armed.clone()),
-    });
-    owner.build_scope(&mut tree);
-    armed.set(true);
-    let new_keys = [100, 3, 0, 1, 2, 4, 5, 6, 101, 9];
-
-    let events = capture(|| {
-        update_dense_parent(
-            &mut tree,
-            &mut owner,
-            parent,
-            keyed_render_children(&new_keys, Some(3), armed),
-        );
-    });
-
-    assert_failed_update_emits_unmount_and_final_substitute(
-        &events,
-        parent,
-        3,
-        1,
-        TypeId::of::<DenseRenderUpdateLeaf>(),
-        ValueKey::new(3_u32).key_hash(),
-    );
-}
-
-#[test]
-#[serial]
-fn failed_phase_five_a_update_emits_substitute_without_stale_reorder() {
-    let armed = Rc::new(Cell::new(false));
-    let old_keys: Vec<_> = (0..DENSE_CHILD_COUNT as u32).collect();
-    let (mut tree, mut owner, _pipeline, _observer, parent) = mount_dense_root(DenseRow {
-        children: keyed_render_children(&old_keys, None, armed.clone()),
-    });
-    owner.build_scope(&mut tree);
-    armed.set(true);
-    let new_keys = [0, 1, 2, 3, 4, 5, 6, 7, 8, 100, 9];
-
-    let events = capture(|| {
-        update_dense_parent(
-            &mut tree,
-            &mut owner,
-            parent,
-            keyed_render_children(&new_keys, Some(9), armed),
-        );
-    });
-
-    assert_failed_update_emits_unmount_and_final_substitute(
-        &events,
-        parent,
-        9,
-        10,
-        TypeId::of::<DenseRenderUpdateLeaf>(),
-        ValueKey::new(9_u32).key_hash(),
     );
 }

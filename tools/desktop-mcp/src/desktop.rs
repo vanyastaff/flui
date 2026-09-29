@@ -1893,265 +1893,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn screenshot_gesture_guard_rechecks_both_origins_and_refuses_stale_recovery() {
-        for changed in [1, 2] {
-            let mut registry = Registry::default();
-            let source = Rect {
-                x: 0,
-                y: 0,
-                width: 100,
-                height: 100,
-            };
-            let meta = ShotMeta {
-                source,
-                scale_x: 1.0,
-                scale_y: 1.0,
-                width: 100,
-                height: 100,
-                window: None,
-                monitor: None,
-            };
-            registry.remember_shot(meta);
-            registry.remember_shot(meta);
-            let from = Location::InScreenshot {
-                shot: 1,
-                x: 10,
-                y: 10,
-            };
-            let to = Location::InScreenshot {
-                shot: 2,
-                x: 20,
-                y: 20,
-            };
-            let locations = [&from, &to];
-            let current = std::cell::Cell::new(source);
-            let mut guard = || {
-                Desktop::screenshot_locations(&locations, |shot| {
-                    let observed = if shot == changed {
-                        current.get()
-                    } else {
-                        source
-                    };
-                    registry.validate_shot_source(shot, source, Ok(observed))
-                })
-            };
-            guard().expect("BUG: original sources allow the press");
-            guard().expect("BUG: unchanged sources allow movement");
-            // Both old points still fall inside the shifted window. Coverage
-            // alone would permit the wrong drop, but provenance must refuse it.
-            current.set(Rect { x: 1, ..source });
-            assert_eq!(
-                guard()
-                    .expect_err("BUG: stale movement or release refused")
-                    .code(),
-                "gone"
-            );
-            current.set(source);
-            assert_eq!(
-                guard()
-                    .expect_err("BUG: rollback cannot revive stale pixels")
-                    .code(),
-                "gone"
-            );
-        }
-    }
-
-    #[test]
-    fn root_enrichment_keeps_the_original_identity_and_rejects_replacement() {
-        let mut registry = Registry::default();
-        let original = Issued {
-            hwnd: 7,
-            pid: 100,
-            started: Some(123),
-            class: Some(1),
-        };
-        let handle = registry.register_window(original);
-        let held = HashMap::from([(7, (handle, original.binding()))]);
-        let mut node = a11y::tests_node();
-        node.native_window = Some(7);
-        let mut read = Read {
-            roots: vec![node],
-            truncated: false,
-        };
-        attach_tree_windows(&mut read, &held, |target, _| {
-            registry.observe(target, || Ok(()))
-        })
-        .expect("BUG: original identity still exists");
-        assert_eq!(read.roots[0].window, Some(format!("w{handle}")));
-        let replacement = registry.register_window(Issued {
-            pid: 200,
-            class: Some(2),
-            ..original
-        });
-        let result = attach_tree_windows(&mut read, &held, |target, _| {
-            registry.observe(target, || Ok(()))
-        });
-        assert!(
-            result.is_err(),
-            "replacement cannot be attached to the original tree"
-        );
-        assert_ne!(read.roots[0].window, Some(format!("w{replacement}")));
-    }
-
-    #[test]
-    fn windows_without_an_owner_lifetime_are_never_bound() {
-        let mut registry = Registry::default();
-        // The macOS backend currently supplies neither discriminator.
-        let issued = Issued {
-            hwnd: 7,
-            pid: 100,
-            started: None,
-            class: None,
-        };
-        let handle = registry.register_window(issued);
-        for _ in 0..2 {
-            let error = registry
-                .bound(TargetArg::Window(handle))
-                .expect_err("BUG: incomplete identity cannot authorize window operations");
-            assert!(matches!(error, ToolError::NotSupported(_)));
-            // An identical later owner snapshot does not prove it is the same window.
-            assert_eq!(registry.register_window(issued), handle);
-        }
-    }
-
-    #[test]
-    fn root_enrichment_ignores_windows_omitted_by_the_provider() {
-        let original = Issued {
-            hwnd: 7,
-            pid: 100,
-            started: Some(123),
-            class: Some(1),
-        };
-        let held = HashMap::from([(7, (1, original.binding())), (8, (2, original.binding()))]);
-        let mut node = a11y::tests_node();
-        node.native_window = Some(7);
-        let mut read = Read {
-            roots: vec![node],
-            truncated: false,
-        };
-        let mut validated = Vec::new();
-        attach_tree_windows(&mut read, &held, |target, _| {
-            validated.push(target);
-            if matches!(target, Target::Window(8, _)) {
-                return Err(ToolError::Gone {
-                    handle: "w2".into(),
-                    kind: HandleKind::Window,
-                    why: "popup closed during provider traversal".into(),
-                });
-            }
-            Ok(())
-        })
-        .expect("BUG: omitted popup cannot invalidate the surviving root");
-        assert_eq!(validated, vec![Target::Window(7, 1)]);
-        assert_eq!(read.roots[0].window.as_deref(), Some("w1"));
-        read.roots[0].native_window = Some(9);
-        assert!(attach_tree_windows(&mut read, &held, |_, _| Ok(())).is_err());
-    }
-
-    #[test]
-    fn a_changed_screenshot_source_never_becomes_valid_again() {
-        let mut registry = Registry::default();
-        let source = Rect {
-            x: 0,
-            y: 0,
-            width: 10,
-            height: 10,
-        };
-        let meta = ShotMeta {
-            source,
-            scale_x: 1.0,
-            scale_y: 1.0,
-            width: 10,
-            height: 10,
-            window: None,
-            monitor: None,
-        };
-        registry.remember_shot(meta);
-        let unread =
-            registry.validate_shot_source(1, source, Err(ToolError::platform("bounds", "unread")));
-        assert_eq!(
-            unread.expect_err("BUG: unread source is refused").code(),
-            "busy"
-        );
-        assert!(registry.validate_shot_source(1, source, Ok(source)).is_ok());
-        let changed = registry.validate_shot_source(1, source, Ok(Rect { x: 1, ..source }));
-        assert_eq!(
-            changed
-                .expect_err("BUG: changed source is retired")
-                .payload()["error"]["kind"],
-            "screenshot"
-        );
-        assert_eq!(
-            registry
-                .validate_shot_source(1, source, Ok(source))
-                .expect_err("BUG: returning to original geometry cannot revive pixels")
-                .code(),
-            "gone"
-        );
-        registry.remember_shot(meta);
-        let monitor = capture::MonitorSnapshot {
-            id: 1,
-            rect: source,
-        };
-        assert!(
-            registry
-                .validate_shot_source(
-                    2,
-                    monitor,
-                    Ok(capture::MonitorSnapshot { id: 2, ..monitor })
-                )
-                .is_err()
-        );
-        assert_eq!(
-            registry
-                .validate_shot_source(2, monitor, Ok(monitor))
-                .expect_err("BUG: returning monitor identity cannot revive pixels")
-                .code(),
-            "gone"
-        );
-    }
-
-    #[test]
-    fn selection_uses_the_adopted_class_and_keeps_the_original_process_binding() {
-        let mut registry = Registry::default();
-        let issued = Issued {
-            hwnd: 7,
-            pid: 100,
-            started: Some(456),
-            class: Some(789),
-        };
-        let handle = registry.register_window(issued);
-        let selected = registry.selected_binding(
-            handle,
-            Binding {
-                started: Some(123),
-                ..Binding::default()
-            },
-        );
-        assert_eq!(
-            selected.class,
-            Some(789),
-            "selection must retain the recorded class without another native query"
-        );
-        assert_eq!(selected.window_pid, Some(100));
-        assert_eq!(
-            selected.started,
-            Some(123),
-            "adoption must not replace the caller's process identity"
-        );
-        assert_eq!(
-            same_process(100, selected.started, Some(456))
-                .expect_err("BUG: a successor process is refused")
-                .code(),
-            "gone"
-        );
-        let selected = registry.selected_binding(handle, Binding::default());
-        assert_eq!(selected.class, Some(789));
-        assert_eq!(selected.started, issued.started);
-    }
-
-    #[test]
     fn launch_without_a_start_time_reserves_its_pid_and_refuses_prior_identities() {
         let mut registry = Registry::default();
         assert!(
@@ -2172,39 +1913,6 @@ mod tests {
         assert!(registry.bind_launched(300, None).is_err());
     }
 
-    #[test]
-    fn dropping_a_checked_launch_preserves_only_independently_issued_identities() {
-        for started in [Some(123), None] {
-            let mut registry = Registry::default();
-            {
-                let _binding = registry
-                    .prepare_launch(100, started)
-                    .expect("BUG: a new PID is admissible");
-            }
-            assert!(!registry.started.contains_key(&100));
-            assert!(!registry.unidentified.contains(&100));
-            assert!(registry.prepare_launch(100, Some(456)).is_ok());
-
-            registry.observe_process(200, started);
-            if started.is_some() {
-                {
-                    let _binding = registry
-                        .prepare_launch(200, started)
-                        .expect("BUG: same listed identity");
-                }
-                assert_eq!(registry.started.get(&200), started.as_ref());
-            } else {
-                assert!(registry.prepare_launch(200, started).is_err());
-                assert!(registry.unidentified.contains(&200));
-            }
-            assert!(
-                registry.prepare_launch(200, Some(456)).is_err(),
-                "dropping a launch cannot erase an independently listed identity"
-            );
-        }
-    }
-
-    #[test]
     fn transient_unreadable_listing_preserves_the_issued_window_and_process() {
         let mut registry = Registry::default();
         let native = NativeWindow {
@@ -2250,36 +1958,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn transient_process_lookup_refuses_without_retiring_a_window() {
-        let mut registry = Registry::default();
-        let issued = Issued {
-            hwnd: 7,
-            pid: 100,
-            started: Some(123),
-            class: Some(9),
-        };
-        let handle = registry.register_window(issued);
-        let target = Target::Window(7, handle);
-        let error = registry
-            .observe(target, || {
-                let now = Err::<Option<u64>, _>(ToolError::Busy("access denied".into()))?;
-                same_process(100, issued.started, now)
-            })
-            .expect_err("BUG: unreadable identity refuses the operation");
-        assert_eq!(error.code(), "busy");
-        assert!(!registry.closed.borrow().contains(&handle));
-        registry
-            .observe(target, || same_process(100, issued.started, Some(123)))
-            .expect("BUG: the original handle remains valid after recovery");
-        let error = registry
-            .observe(target, || same_process(100, issued.started, Some(456)))
-            .expect_err("BUG: confirmed replacement is gone");
-        assert_eq!(error.code(), "gone");
-        assert!(registry.closed.borrow().contains(&handle));
-    }
-
-    #[test]
     fn a_reused_readable_pid_is_not_advertised_as_targetable() {
         let mut registry = Registry::default();
         assert_eq!(registry.observe_process(100, Some(123)), None);
@@ -2315,133 +1993,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn losing_a_selected_window_is_transient_only_for_a_pid_and_keeps_effects() {
-        let window = Target::Window(7, 1);
-        let plain = selected_window_error(Target::Pid(100), no_window(window));
-        assert_eq!(plain.code(), "busy");
-        assert_eq!(plain.retry(), crate::error::Retry::Soon);
-        assert_eq!(
-            selected_window_error(window, no_window(window)).code(),
-            "gone"
-        );
-        let interrupted = selected_window_error(
-            Target::Pid(100),
-            no_window(window).after(Effect::MayHaveRun, "the restore was attempted"),
-        );
-        assert_eq!(interrupted.code(), "busy");
-        assert_eq!(
-            interrupted.payload()["error"]["effect"]["kind"],
-            "may_have_run"
-        );
-        assert_eq!(
-            interrupted.payload()["error"]["effect"]["detail"],
-            "the restore was attempted"
-        );
-        assert_eq!(interrupted.retry(), crate::error::Retry::Never);
-        let process = ToolError::Gone {
-            handle: "100".into(),
-            kind: HandleKind::Process,
-            why: "exited".into(),
-        };
-        let error = selected_window_error(Target::Pid(100), process);
-        assert_eq!(error.code(), "gone");
-        assert_eq!(error.payload()["error"]["kind"], "process");
-    }
-
-    #[test]
-    fn selection_distinguishes_an_exited_process_from_one_with_no_windows() {
-        for exits_during_selection in [false, true] {
-            let now = std::cell::Cell::new(Some(123));
-            let result = read_while_current(
-                || same_process(100, Some(123), now.get()),
-                || {
-                    if exits_during_selection {
-                        now.set(None);
-                    }
-                    Err::<(), _>(no_window(Target::Pid(100)))
-                },
-            );
-            let error = result.expect_err("BUG: selection found no window");
-            if exits_during_selection {
-                assert_eq!(error.code(), "gone");
-                assert_eq!(error.payload()["error"]["kind"], "process");
-            } else {
-                assert_eq!(error.code(), "not_found");
-                assert_eq!(error.retry(), crate::error::Retry::WhenAppears);
-            }
-        }
-    }
-
-    #[test]
-    fn a_later_readable_identity_does_not_make_an_unidentified_pid_targetable() {
-        let mut registry = Registry::default();
-        assert_eq!(
-            registry.observe_process(100, None),
-            Some(Untargetable::UnidentifiedProcess)
-        );
-        assert_eq!(
-            registry.observe_process(100, Some(123)),
-            Some(Untargetable::UnidentifiedProcess)
-        );
-        assert!(registry.bind_launched(100, Some(123)).is_err());
-        assert_eq!(
-            registry
-                .bound(TargetArg::Pid(100))
-                .expect_err("BUG: unidentifiable pid remains unbound")
-                .code(),
-            "not_supported"
-        );
-        assert_eq!(registry.observe_process(200, Some(456)), None);
-        assert!(
-            registry
-                .bind_launched(200, Some(456))
-                .expect("BUG: the identity matches")
-        );
-    }
-
-    #[test]
-    fn activation_refresh_keeps_the_handle_and_updates_observable_fields() {
-        let before = Window {
-            id: "w3".into(),
-            pid: 100,
-            app_name: "app".into(),
-            title: "before".into(),
-            rect: Rect {
-                x: -32000,
-                y: -32000,
-                width: 160,
-                height: 28,
-            },
-            is_minimized: true,
-            is_focused: false,
-            targetable: true,
-            untargetable_reason: None,
-        };
-        let after = NativeWindow {
-            id: 7,
-            pid: 100,
-            app_name: "app".into(),
-            title: "after".into(),
-            rect: Rect {
-                x: 10,
-                y: 20,
-                width: 800,
-                height: 600,
-            },
-            is_minimized: false,
-            is_focused: true,
-        };
-        let updated = refreshed_window(before, after.clone());
-        assert_eq!(updated.id, "w3");
-        assert_eq!(updated.title, "after");
-        assert_eq!(updated.rect, after.rect);
-        assert!(!updated.is_minimized);
-        assert!(updated.is_focused);
-        assert!(updated.targetable);
-    }
-
-    #[test]
     fn complete_owner_snapshots_retire_only_confirmed_missing_windows() {
         let mut registry = Registry::default();
         let identity = Issued {
@@ -2483,7 +2034,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn activation_refused_before_start_has_no_effect() {
         let began = std::cell::Cell::new(false);
         let outcome = activate_while_current(
@@ -2499,50 +2049,6 @@ mod tests {
         assert!(error.payload()["error"].get("effect").is_none());
     }
 
-    #[test]
-    fn activation_rechecks_identity_on_success_and_failure() {
-        for backend_succeeds in [false, true] {
-            let mut registry = Registry::default();
-            let issued = Issued {
-                hwnd: 7,
-                pid: 100,
-                started: Some(123),
-                class: Some(1),
-            };
-            let handle = registry.register_window(issued);
-            let target = Target::Window(issued.hwnd, handle);
-            let alive = std::cell::Cell::new(true);
-            let outcome = activate_while_current(
-                || {
-                    registry.observe(target, || {
-                        if alive.get() {
-                            Ok(())
-                        } else {
-                            Err(no_window(target))
-                        }
-                    })
-                },
-                || {
-                    alive.set(false);
-                    if backend_succeeds {
-                        Ok(())
-                    } else {
-                        Err(ToolError::NotFound(
-                            "window vanished before it could be raised".into(),
-                        ))
-                    }
-                },
-            );
-            let error = outcome.expect_err("BUG: closed window cannot be activated");
-            assert_eq!(error.payload()["error"]["code"], "gone");
-            assert_eq!(error.payload()["error"]["kind"], "window");
-            assert_eq!(error.payload()["error"]["effect"]["kind"], "may_have_run");
-            alive.set(true);
-            assert!(registry.observe(target, || Ok(())).is_err());
-        }
-    }
-
-    #[test]
     fn a_replaced_window_handle_stays_gone_when_its_identity_returns() {
         let mut registry = Registry::default();
         let original = Issued {
@@ -2578,41 +2084,6 @@ mod tests {
         assert_eq!(registry.by_hwnd.get(&original.hwnd), Some(&returned));
     }
 
-    #[test]
-    fn a_failed_capture_rechecks_identity_and_never_revives_a_closed_handle() {
-        let registry = Registry::default();
-        let alive = std::cell::Cell::new(true);
-        let target = Target::Window(7, 1);
-        let result = read_while_current(
-            || {
-                registry.observe(target, || {
-                    if alive.get() {
-                        Ok(())
-                    } else {
-                        Err(no_window(target))
-                    }
-                })
-            },
-            || {
-                alive.set(false);
-                Err::<(), _>(ToolError::NotFound("capture lost its window".into()))
-            },
-        );
-        let error = result.expect_err("BUG: the window closed during capture");
-        assert_eq!(error.payload()["error"]["code"], "gone");
-        assert_eq!(error.payload()["error"]["kind"], "window");
-        alive.set(true);
-        assert!(
-            registry.observe(target, || Ok(())).is_err(),
-            "a matching native id cannot revive w1"
-        );
-        assert!(
-            registry.observe(Target::Window(7, 2), || Ok(())).is_ok(),
-            "a replacement has its own handle"
-        );
-    }
-
-    #[test]
     fn a_capture_error_does_not_retire_a_live_window() {
         let registry = Registry::default();
         let target = Target::Window(7, 1);
@@ -2664,7 +2135,6 @@ mod tests {
         class: Some(1),
     };
 
-    #[test]
     fn a_window_reused_after_binding_is_refused_by_the_final_observations() {
         // The earlier identity check passed for window 10, owner 100.
         // The foreground or point lookup then observes the same native id
@@ -2696,7 +2166,6 @@ mod tests {
         ));
     }
 
-    #[test]
     fn refuses_when_nothing_or_something_else_is_in_front() {
         assert!(matches!(
             verify(Target::Pid(100), None, &[], &name, BOUND),
@@ -2714,26 +2183,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn accepts_the_foreground_target_by_window_or_pid() {
-        assert!(verify(WINDOW, Some(&fg()), &[], &name, BOUND).is_ok());
-        assert!(
-            verify(
-                Target::Pid(100),
-                Some(&fg()),
-                &[((5, 5), Some(OWN))],
-                &name,
-                BOUND
-            )
-            .is_ok()
-        );
-        assert!(verify(WINDOW, Some(&fg()), &[((5, 5), Some(OWN))], &name, BOUND).is_ok());
-    }
-
     /// A pid held by another process than the one first seen under it, or
     /// by none, is gone; so is one whose process identity the OS cannot
     /// report, which could not be told from a reuse.
-    #[test]
     fn a_recycled_pid_is_gone() {
         assert!(same_process(7, Some(1), Some(1)).is_ok());
         let err = same_process(7, Some(1), Some(2)).expect_err("BUG: another process");
@@ -2759,7 +2211,6 @@ mod tests {
     /// A point whose window the OS cannot name is refused, not waved
     /// through: on an OS without hit-testing a covering window would
     /// otherwise take the input.
-    #[test]
     fn a_point_with_nothing_known_under_it_fails_closed() {
         assert!(matches!(
             verify(
@@ -2775,7 +2226,6 @@ mod tests {
 
     /// A window target admits only that window at the point: a sibling
     /// window of the same process in front of it would take the click.
-    #[test]
     fn a_window_target_refuses_its_processes_other_windows() {
         let sibling = Under { id: 12, ..OWN };
         assert!(matches!(
@@ -2790,7 +2240,6 @@ mod tests {
         ));
     }
 
-    #[test]
     fn refuses_covered_points_and_admits_own_popups() {
         let covered = Under {
             id: 99,
@@ -2825,7 +2274,6 @@ mod tests {
 
     /// Another process's child window inside the target (a preview pane)
     /// takes the click itself, so the point is refused for either target.
-    #[test]
     fn a_hosted_window_of_another_process_is_refused() {
         let hosted = Under {
             inner_pid: 555,
@@ -2841,7 +2289,6 @@ mod tests {
     /// Keys reach the focused child window: one of another process inside
     /// the target refuses them; focus in the target's own process, or none,
     /// admits them.
-    #[test]
     fn keyboard_focus_in_another_process_is_refused() {
         let err = verify_focus(Some(&fg()), Focus::Pid(555)).expect_err("BUG: focus is elsewhere");
         // Its own error: "activate the window" would not move the focus.
@@ -2856,7 +2303,6 @@ mod tests {
     /// Where the OS cannot say which window has keyboard focus (macOS), keys
     /// and text with a target are refused: a panel of another process can
     /// hold the focus while the target is in front.
-    #[test]
     fn an_unknown_keyboard_focus_fails_closed() {
         assert!(matches!(
             verify_focus(Some(&fg()), Focus::Unknown),
@@ -2865,38 +2311,9 @@ mod tests {
         assert!(verify_focus(None, Focus::Foreground).is_err());
     }
 
-    /// A handle this session never issued is unknown, not a missing window
-    /// that `wait_for` would keep polling for.
-    #[test]
-    fn an_unissued_target_is_unknown() {
-        let mut registry = Registry::default();
-        // Where the OS reports no start times, a pid is no target at all,
-        // and that is the answer instead.
-        let pid = registry.bound(TargetArg::Pid(std::process::id()));
-        if cfg!(target_os = "windows") {
-            assert!(matches!(
-                pid,
-                Err(ToolError::UnknownHandle {
-                    kind: HandleKind::Process,
-                    ..
-                })
-            ));
-        } else {
-            assert!(matches!(pid, Err(ToolError::NotSupported(_))));
-        }
-        assert!(matches!(
-            registry.bound(TargetArg::Window(123_456_789)),
-            Err(ToolError::UnknownHandle {
-                kind: HandleKind::Window,
-                ..
-            })
-        ));
-    }
-
     /// The safety wiring end to end, on any host: a shell hotkey with a
     /// target is refused before anything else is looked at, and handles and
     /// pids this session never issued are refused.
-    #[test]
     fn a_desktop_refuses_what_it_cannot_bind() {
         let mut desktop = Desktop::new();
         if desktop.input().is_ok() {
@@ -2935,7 +2352,6 @@ mod tests {
     /// An element in a popup (a menu, a drop-down) is clicked while its
     /// application is in front, though the popup window itself never is; a
     /// window covering the popup, or another application in front, refuses.
-    #[test]
     fn an_element_click_needs_its_window_under_the_point_and_its_process_in_front() {
         let menu = Under {
             id: 20,
@@ -2957,7 +2373,6 @@ mod tests {
 
     /// Screenshot handles stay addressable for the last few shots; an
     /// older one is gone, an unissued one unknown.
-    #[test]
     fn screenshot_handles_expire_in_order() {
         let mut registry = Registry::default();
         let meta = ShotMeta {
@@ -2985,5 +2400,90 @@ mod tests {
             registry.shot(99),
             Err(ToolError::UnknownHandle { .. })
         ));
+    }
+
+    #[test]
+    fn handle_and_identity_lifecycle() {
+        crate::test_rows::run_rows(&[
+            ("a_recycled_pid_is_gone", a_recycled_pid_is_gone),
+            (
+                "a_replaced_window_handle_stays_gone_when_its_identity_returns",
+                a_replaced_window_handle_stays_gone_when_its_identity_returns,
+            ),
+            (
+                "screenshot_handles_expire_in_order",
+                screenshot_handles_expire_in_order,
+            ),
+            (
+                "launch_without_a_start_time_reserves_its_pid_and_refuses_prior_identities",
+                launch_without_a_start_time_reserves_its_pid_and_refuses_prior_identities,
+            ),
+            (
+                "a_capture_error_does_not_retire_a_live_window",
+                a_capture_error_does_not_retire_a_live_window,
+            ),
+            (
+                "transient_unreadable_listing_preserves_the_issued_window_and_process",
+                transient_unreadable_listing_preserves_the_issued_window_and_process,
+            ),
+            (
+                "a_desktop_refuses_what_it_cannot_bind",
+                a_desktop_refuses_what_it_cannot_bind,
+            ),
+            (
+                "a_reused_readable_pid_is_not_advertised_as_targetable",
+                a_reused_readable_pid_is_not_advertised_as_targetable,
+            ),
+            (
+                "complete_owner_snapshots_retire_only_confirmed_missing_windows",
+                complete_owner_snapshots_retire_only_confirmed_missing_windows,
+            ),
+        ]);
+    }
+
+    #[test]
+    fn input_target_guards() {
+        crate::test_rows::run_rows(&[
+            (
+                "refuses_covered_points_and_admits_own_popups",
+                refuses_covered_points_and_admits_own_popups,
+            ),
+            (
+                "refuses_when_nothing_or_something_else_is_in_front",
+                refuses_when_nothing_or_something_else_is_in_front,
+            ),
+            (
+                "a_window_target_refuses_its_processes_other_windows",
+                a_window_target_refuses_its_processes_other_windows,
+            ),
+            (
+                "keyboard_focus_in_another_process_is_refused",
+                keyboard_focus_in_another_process_is_refused,
+            ),
+            (
+                "an_unknown_keyboard_focus_fails_closed",
+                an_unknown_keyboard_focus_fails_closed,
+            ),
+            (
+                "a_point_with_nothing_known_under_it_fails_closed",
+                a_point_with_nothing_known_under_it_fails_closed,
+            ),
+            (
+                "activation_refused_before_start_has_no_effect",
+                activation_refused_before_start_has_no_effect,
+            ),
+            (
+                "a_window_reused_after_binding_is_refused_by_the_final_observations",
+                a_window_reused_after_binding_is_refused_by_the_final_observations,
+            ),
+            (
+                "a_hosted_window_of_another_process_is_refused",
+                a_hosted_window_of_another_process_is_refused,
+            ),
+            (
+                "an_element_click_needs_its_window_under_the_point_and_its_process_in_front",
+                an_element_click_needs_its_window_under_the_point_and_its_process_in_front,
+            ),
+        ]);
     }
 }

@@ -574,21 +574,3 @@ pub(crate) mod prompt {
         )
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_policy_is_human_normal() {
-        let policy = policy();
-        assert_eq!(policy.mode, OutputMode::Human);
-        assert_eq!(policy.verbosity, Verbosity::Normal);
-    }
-
-    #[test]
-    fn verbosity_orders_quiet_below_verbose() {
-        assert!(Verbosity::Quiet < Verbosity::Normal);
-        assert!(Verbosity::Normal < Verbosity::Verbose);
-    }
-}

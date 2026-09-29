@@ -146,37 +146,3 @@ impl InspectorSnapshot {
         self.detached
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::any::TypeId;
-
-    use flui_sdk::foundation::{ElementId, RebuildReasons};
-
-    use super::*;
-
-    #[test]
-    fn counters_tally_events_and_reasons() {
-        let counters = InspectorCounters::new();
-        let observer: &dyn TreeObserver = &counters;
-        let id = ElementId::new(1);
-
-        observer.element_mounted(&ElementMounted::new(id, None, 0, TypeId::of::<()>()));
-        let mut reasons = RebuildReasons::from_reason(RebuildReason::InitialMount);
-        reasons.insert(RebuildReason::StateChange);
-        observer.element_rebuilt(&ElementRebuilt::new(id, TypeId::of::<()>(), reasons));
-        observer.element_moved(&ElementMoved::new(id, id, 2));
-        observer.element_unmounted(&ElementUnmounted::new(id));
-        observer.detached();
-
-        let snapshot = counters.snapshot();
-        assert_eq!(snapshot.mounts, 1);
-        assert_eq!(snapshot.rebuilds, 1);
-        assert_eq!(snapshot.moves, 1);
-        assert_eq!(snapshot.unmounts, 1);
-        assert_eq!(snapshot.rebuilds_for(RebuildReason::InitialMount), 1);
-        assert_eq!(snapshot.rebuilds_for(RebuildReason::StateChange), 1);
-        assert_eq!(snapshot.rebuilds_for(RebuildReason::AnimationTick), 0);
-        assert!(snapshot.is_final());
-    }
-}

@@ -71,7 +71,7 @@ system-clipboard = { max-threads = 1 }
 nested-cargo = { max-threads = "num-cpus" }
 
 [[profile.default.overrides]]
-filter = 'binary_id(flui::composited_layer_update_readback) | (binary_id(flui-engine) & (test(/_readback_tests::/) | test(=renderer::tests::sdr_surface_selection_painter_readback_preserves_swatches_and_blending)))'
+filter = 'binary_id(flui::composited_layer_update_readback) | (binary_id(flui-engine) & (test(/_readback_tests::/) | test(=renderer::tests::renderer_surface_selection_and_layer_compositing_read_back_as_specified)))'
 test-group = 'gpu-readback'
 
 # flui-platform's clipboard tests write the one system clipboard and read it

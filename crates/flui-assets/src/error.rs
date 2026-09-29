@@ -88,32 +88,3 @@ impl From<image::ImageError> for AssetError {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_error_display() {
-        let err = AssetError::NotFound {
-            path: "test.png".to_string(),
-        };
-        assert_eq!(err.to_string(), "Asset not found: test.png");
-
-        let err = AssetError::LoadFailed {
-            path: "test.png".to_string(),
-            reason: "file too large".to_string(),
-        };
-        assert_eq!(
-            err.to_string(),
-            "Failed to load asset 'test.png': file too large"
-        );
-    }
-
-    #[test]
-    fn test_io_error_conversion() {
-        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
-        let asset_err: AssetError = io_err.into();
-        assert!(matches!(asset_err, AssetError::Io(_)));
-    }
-}

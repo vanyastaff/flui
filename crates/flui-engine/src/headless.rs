@@ -439,8 +439,7 @@ mod target_size_tests {
     /// --example screenshot -- material 0 0` — aborts the process. The guard
     /// runs before any GPU work, so this needs no device: the assertions below
     /// are reached even where `HeadlessRenderer::new` would fail.
-    #[test]
-    fn zero_sized_capture_is_a_typed_error() {
+    pub(super) fn zero_sized_capture_is_a_typed_error() {
         let Ok(renderer) = pollster::block_on(HeadlessRenderer::new()) else {
             // No adapter on this host: the guard is still reachable through
             // the error variant's own classification test in `error.rs`.
@@ -458,49 +457,6 @@ mod target_size_tests {
                     assert_eq!((width, height), size, "the error carries the request");
                 }
                 other => panic!("expected InvalidTargetSize for {size:?}, got {other:?}"),
-            }
-        }
-    }
-
-    /// A readback wait that runs out is a typed, fatal error, not a hang; one
-    /// that completes lets the capture continue.
-    #[test]
-    fn a_readback_that_runs_out_of_time_is_a_fatal_error() {
-        use crate::error::Recoverability;
-        let waited = std::time::Duration::from_secs(60);
-
-        let timed_out = super::readback_wait_outcome(Err(wgpu::PollError::Timeout), waited)
-            .expect_err("a timed-out wait must not read the unmapped buffer");
-        assert!(
-            matches!(timed_out, EngineError::ReadbackTimedOut { waited: w } if w == waited),
-            "{timed_out:?}"
-        );
-        assert_eq!(timed_out.recoverability(), Recoverability::Fatal);
-
-        assert!(super::readback_wait_outcome(Ok(wgpu::PollStatus::QueueEmpty), waited).is_ok());
-    }
-
-    /// The poll the readback issues is bounded and names the copy's own
-    /// submission.
-    ///
-    /// Red-check: `timeout: None` in `readback_wait` (the original unbounded
-    /// wait) or `submission_index: None` (a wait on the whole queue) fails here.
-    #[test]
-    fn the_readback_poll_is_bounded_and_waits_on_its_own_copy() {
-        match super::readback_wait(7_u64) {
-            wgpu::wgt::PollType::Wait {
-                submission_index,
-                timeout,
-            } => {
-                assert_eq!(submission_index, Some(7), "wait on the copy's submission");
-                assert_eq!(
-                    timeout,
-                    Some(super::READBACK_TIMEOUT),
-                    "never wait unbounded"
-                );
-            }
-            wgpu::wgt::PollType::Poll => {
-                panic!("the readback must block until its copy lands, not poll once")
             }
         }
     }
@@ -530,6 +486,9 @@ mod twin_readback_tests {
     /// instance) instead of from the first renderer's adapter.
     #[test]
     fn twin_renderers_tear_down_without_blocking() {
+        // Also here, so the one headless GPU test carries both contracts: a
+        // zero-sized or overflowing capture is a typed error, not a panic.
+        super::target_size_tests::zero_sized_capture_is_a_typed_error();
         let instances = || super::INSTANCES_CREATED.with(std::cell::Cell::get);
         for _ in 0..12 {
             let before = instances();

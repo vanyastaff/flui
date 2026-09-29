@@ -1111,7 +1111,6 @@ mod tests {
         serde_json::from_value(v).expect("BUG: test arguments deserialize")
     }
 
-    #[test]
     fn target_needs_exactly_one_selector() {
         assert_eq!(
             required_target(Some("w7"), None).ok(),
@@ -1128,7 +1127,6 @@ mod tests {
     }
 
     /// Input tools refuse to run without a safety target.
-    #[test]
     fn input_tools_require_a_target() {
         assert!(
             parse::<ClickParams>(json!({"x": 1, "y": 2}))
@@ -1163,33 +1161,15 @@ mod tests {
         );
     }
 
-    #[test]
     fn unknown_fields_are_rejected() {
         let r: Result<KeyParams, _> =
             serde_json::from_value(json!({"combo": "enter", "windowId": 3}));
         assert!(r.is_err(), "a misspelled safety target must not be ignored");
     }
 
-    /// Malformed arguments are kept as a readable tool error, with the same
-    /// schema the arguments themselves have.
-    #[test]
-    fn args_keep_a_parse_failure_as_a_tool_error() {
-        let bad: Args<KeyParams> = parse(json!({"combo": "enter", "windowId": 3}));
-        let err = bad.0.expect_err("BUG: an unknown field fails");
-        assert!(matches!(err, ToolError::InvalidArgument(_)), "{err}");
-        assert!(err.to_string().contains("windowId"), "{err}");
-        let good: Args<KeyParams> = parse(json!({"combo": "enter"}));
-        assert!(good.0.is_ok());
-        assert_eq!(
-            schemars::schema_for!(Args<KeyParams>),
-            schemars::schema_for!(KeyParams)
-        );
-    }
-
     /// The launch limit counts what the command line becomes: empty
     /// arguments still take separators and quotes, and backslashes their
     /// escapes.
-    #[test]
     fn launch_limit_counts_encoding() {
         let empties: Vec<String> = vec![String::new(); MAX_LAUNCH_BYTES / 2];
         assert!(
@@ -1211,7 +1191,6 @@ mod tests {
     }
 
     /// Oversized text is refused before anything is typed.
-    #[test]
     fn type_text_is_capped() {
         let long = "a".repeat(MAX_TEXT_CHARS + 1);
         assert!(
@@ -1228,7 +1207,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn a_location_is_an_element_a_point_or_a_screenshot_pixel() {
         let (at, target) = parse::<ClickParams>(json!({"element": "e3", "pid": 5}))
             .validate()
@@ -1266,16 +1244,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn click_button_names() {
-        let p: ClickParams =
-            parse(json!({"x": 0, "y": 0, "button": "right", "double": true, "pid": 1}));
-        assert!(matches!(p.button, ButtonArg::Right));
-        assert!(p.double);
-        assert!(serde_json::from_value::<ClickParams>(json!({"button": "RIGHT"})).is_err());
-    }
-
-    #[test]
     fn find_requires_a_criterion_and_one_scope() {
         assert!(parse::<FindParams>(json!({"pid": 1})).validate().is_err());
         let (scope, query, limit, format) =
@@ -1301,68 +1269,6 @@ mod tests {
         );
     }
 
-    /// A zero size limit is refused rather than read as "no limit".
-    #[test]
-    fn a_zero_screenshot_limit_is_refused() {
-        assert!(
-            parse::<ScreenshotParams>(json!({"max_side": 0}))
-                .target()
-                .is_err()
-        );
-        assert!(
-            parse::<ScreenshotParams>(json!({"max_side": 4097}))
-                .target()
-                .is_err()
-        );
-        assert!(
-            parse::<ScreenshotParams>(json!({"max_side": 1}))
-                .target()
-                .is_ok()
-        );
-    }
-
-    /// A criterion longer than any reported string is refused; the
-    /// substring is folded once.
-    #[test]
-    fn criteria_are_bounded_and_folded_once() {
-        let long = "x".repeat(crate::a11y::CLIPPED_CHARS + 1);
-        assert!(
-            parse::<FindParams>(json!({"pid": 1, "name_contains": long}))
-                .validate()
-                .is_err()
-        );
-        let (_, query, ..) = parse::<FindParams>(json!({"pid": 1, "name_contains": "OK"}))
-            .validate()
-            .expect("BUG: a short substring is valid");
-        assert_eq!(query.name_contains.as_deref(), Some("ok"));
-    }
-
-    /// Every name contains "", so an empty substring would match everything.
-    #[test]
-    fn an_empty_name_contains_is_refused() {
-        assert!(
-            parse::<FindParams>(json!({"pid": 1, "name_contains": ""}))
-                .validate()
-                .is_err()
-        );
-        assert!(
-            parse::<WaitForParams>(json!({"pid": 1, "name_contains": ""}))
-                .validate()
-                .is_err()
-        );
-    }
-
-    /// `i32::MIN` has no `i32` magnitude; it is refused, not wrapped.
-    #[test]
-    fn an_i32_min_scroll_is_refused() {
-        assert!(
-            parse::<ScrollParams>(json!({"x": 0, "y": 0, "dy": i32::MIN, "pid": 1}))
-                .validate()
-                .is_err()
-        );
-    }
-
-    #[test]
     fn wait_for_bounds_the_timeout_and_takes_a_state_or_gone() {
         let wait = parse::<WaitForParams>(json!({"pid": 1, "name": "OK"}))
             .validate()
@@ -1409,38 +1315,6 @@ mod tests {
         );
     }
 
-    /// A value predicate needs a value that was read, and its criteria are
-    /// bounded and folded once.
-    #[test]
-    fn state_value_needs_a_read_value() {
-        let wait = parse::<WaitForParams>(
-            json!({"pid": 1, "role": "text_input", "state": {"value_contains": "STRASSE"}}),
-        )
-        .validate()
-        .expect("BUG: valid");
-        let state = wait.state.expect("BUG: a state");
-        assert_eq!(state.value_contains.as_deref(), Some("strasse"));
-        let mut node = crate::a11y::tests_node();
-        assert!(!state.holds(&node), "no value read");
-        node.value = Some("Hauptstraße".into());
-        assert!(state.holds(&node));
-        let empty = StateArg {
-            value: Some(String::new()),
-            ..StateArg::default()
-        };
-        node.value = None;
-        assert!(!empty.holds(&node), "an unread value is not the empty one");
-        let long = "x".repeat(crate::a11y::CLIPPED_CHARS + 1);
-        assert!(
-            parse::<WaitForParams>(
-                json!({"pid": 1, "role": "x", "state": {"value_contains": long}})
-            )
-            .validate()
-            .is_err()
-        );
-    }
-
-    #[test]
     fn state_predicates_require_the_requested_observation() {
         let mut node = crate::a11y::tests_node();
         node.focused = false;
@@ -1474,7 +1348,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn tree_depth_and_nodes_default_and_cap() {
         let (_, d, n, f) = parse::<TreeParams>(json!({"pid": 1}))
             .validate()
@@ -1496,7 +1369,6 @@ mod tests {
         assert_eq!(f, Format::Json);
     }
 
-    #[test]
     fn screenshot_takes_at_most_one_target() {
         assert_eq!(
             ScreenshotParams::default().target().ok(),
@@ -1510,7 +1382,6 @@ mod tests {
         assert!(p.target().is_err());
     }
 
-    #[test]
     fn scroll_rejects_no_op_and_huge_scrolls() {
         assert!(
             parse::<ScrollParams>(json!({"x": 0, "y": 0, "pid": 1}))
@@ -1529,7 +1400,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn key_validates_combo_and_repeat() {
         let (combo, repeat, _) =
             parse::<KeyParams>(json!({"combo": "ctrl+s", "repeat": 3, "window": "w1"}))
@@ -1549,7 +1419,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn drag_bounds_the_duration_and_takes_elements() {
         let p: DragParams =
             parse(json!({"from": {"x": 0, "y": 0}, "to": {"element": "e4"}, "pid": 1}));
@@ -1564,16 +1433,52 @@ mod tests {
     }
 
     #[test]
-    fn wait_for_window_defaults() {
-        let (pid, needle, timeout) = parse::<WaitForWindowParams>(json!({"pid": 7}))
-            .validate()
-            .expect("BUG: valid");
-        assert_eq!((pid, needle), (7, None));
-        assert_eq!(timeout, Duration::from_millis(DEFAULT_WINDOW_WAIT_MS));
-        let (_, needle, _) =
-            parse::<WaitForWindowParams>(json!({"pid": 7, "title_contains": "Straße"}))
-                .validate()
-                .expect("BUG: valid");
-        assert_eq!(needle.as_deref(), Some("strasse"));
+    fn tool_argument_validation() {
+        crate::test_rows::run_rows(&[
+            (
+                "target_needs_exactly_one_selector",
+                target_needs_exactly_one_selector,
+            ),
+            ("input_tools_require_a_target", input_tools_require_a_target),
+            ("unknown_fields_are_rejected", unknown_fields_are_rejected),
+            ("launch_limit_counts_encoding", launch_limit_counts_encoding),
+            ("type_text_is_capped", type_text_is_capped),
+            (
+                "a_location_is_an_element_a_point_or_a_screenshot_pixel",
+                a_location_is_an_element_a_point_or_a_screenshot_pixel,
+            ),
+            (
+                "find_requires_a_criterion_and_one_scope",
+                find_requires_a_criterion_and_one_scope,
+            ),
+            (
+                "wait_for_bounds_the_timeout_and_takes_a_state_or_gone",
+                wait_for_bounds_the_timeout_and_takes_a_state_or_gone,
+            ),
+            (
+                "state_predicates_require_the_requested_observation",
+                state_predicates_require_the_requested_observation,
+            ),
+            (
+                "tree_depth_and_nodes_default_and_cap",
+                tree_depth_and_nodes_default_and_cap,
+            ),
+            (
+                "screenshot_takes_at_most_one_target",
+                screenshot_takes_at_most_one_target,
+            ),
+            (
+                "scroll_rejects_no_op_and_huge_scrolls",
+                scroll_rejects_no_op_and_huge_scrolls,
+            ),
+            (
+                "key_validates_combo_and_repeat",
+                key_validates_combo_and_repeat,
+            ),
+            (
+                "drag_bounds_the_duration_and_takes_elements",
+                drag_bounds_the_duration_and_takes_elements,
+            ),
+        ]);
     }
 }

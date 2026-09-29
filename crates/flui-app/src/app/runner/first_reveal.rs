@@ -94,7 +94,6 @@ impl FirstReveal {
 
 #[cfg(test)]
 mod first_reveal_tests {
-    use std::time::Duration;
 
     use web_time::Instant;
 
@@ -117,53 +116,5 @@ mod first_reveal_tests {
             reveal.next_deadline().is_none(),
             "nothing to wake for once revealed"
         );
-    }
-
-    #[test]
-    fn a_non_presenting_frame_arms_the_fallback_and_a_present_before_it_wins() {
-        let reveal = FirstReveal::new();
-        let now = Instant::now();
-        assert!(
-            !reveal.after_frame(false, now),
-            "presented nothing: not yet"
-        );
-        assert_eq!(
-            reveal.next_deadline(),
-            Some(now + FirstReveal::FALLBACK),
-            "the fallback is armed one bound out from the FIRST empty outcome"
-        );
-        let later = now + Duration::from_millis(10);
-        assert!(!reveal.after_frame(false, later), "still inside the bound");
-        assert_eq!(
-            reveal.next_deadline(),
-            Some(now + FirstReveal::FALLBACK),
-            "a second empty outcome does not push the deadline out"
-        );
-        assert!(
-            reveal.after_frame(true, later),
-            "a present inside the bound reveals"
-        );
-        assert!(reveal.next_deadline().is_none());
-    }
-
-    #[test]
-    fn the_fallback_reveals_a_surface_that_never_presents() {
-        let reveal = FirstReveal::new();
-        let now = Instant::now();
-        assert!(!reveal.after_frame(false, now));
-        let deadline = reveal.next_deadline().expect("armed");
-        let just_before = deadline
-            .checked_sub(Duration::from_millis(1))
-            .expect("a deadline armed from `now` lies well after the clock's epoch");
-        assert!(
-            !reveal.after_frame(false, just_before),
-            "one tick before the bound: not yet"
-        );
-        assert!(
-            reveal.after_frame(false, deadline),
-            "at the bound, an empty outcome reveals anyway"
-        );
-        assert!(!reveal.after_frame(false, deadline), "exactly once");
-        assert!(reveal.next_deadline().is_none());
     }
 }

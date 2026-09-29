@@ -204,14 +204,6 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    #[cfg(feature = "network")]
-    async fn test_network_loader_creation() {
-        let loader = NetworkLoader::new();
-        // Should compile and create successfully
-        assert!(std::mem::size_of_val(&loader) > 0);
-    }
-
-    #[tokio::test]
     #[cfg(not(feature = "network"))]
     async fn test_network_loader_without_feature() {
         let loader = NetworkLoader::new();
@@ -221,22 +213,6 @@ mod tests {
         if let Err(AssetError::LoadFailed { reason, .. }) = result {
             assert!(reason.contains("network"));
         }
-    }
-
-    // Integration test with real HTTP request (only runs with network feature)
-    #[tokio::test]
-    #[cfg(feature = "network")]
-    #[ignore = "requires internet connection"]
-    async fn test_network_loader_real_request() {
-        let loader = NetworkLoader::new();
-
-        // Use a reliable public URL
-        let result = loader.load_url("https://httpbin.org/bytes/100").await;
-
-        if let Ok(bytes) = result {
-            assert_eq!(bytes.len(), 100);
-        }
-        // If it fails, it's likely a network issue, not a code issue
     }
 
     /// A single-request, single-response HTTP/1.1 server bound to an

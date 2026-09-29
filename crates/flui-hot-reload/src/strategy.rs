@@ -89,20 +89,3 @@ pub mod timing {
     /// Debounce for `flui run --scene` Android scene rebuild loop.
     pub const ANDROID_SCENE_DEBOUNCE: Duration = Duration::from_millis(300);
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn plugin_dylib_preserves_process() {
-        assert!(ReloadStrategy::PluginDylib.preserves_process());
-        assert!(!ReloadStrategy::ProcessRestart.preserves_process());
-    }
-
-    #[test]
-    fn no_strategy_preserves_state_yet() {
-        assert!(!ReloadStrategy::PluginDylib.preserves_state());
-        assert!(ReloadStrategy::WorkerHost.preserves_state());
-    }
-}

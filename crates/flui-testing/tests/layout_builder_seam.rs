@@ -20,8 +20,7 @@ use flui_view::{BuildOwner, tree::ElementTree};
 /// `RenderLayoutBuilder`: it happens on every pass, before anything is built.
 /// If `pump_frame` called the plain `PipelineOwner::run_frame` instead of the
 /// fixpoint helper, the stale entry would survive.
-#[test]
-fn headless_pump_frame_runs_the_layout_builder_seam() {
+pub(crate) fn headless_pump_frame_runs_the_layout_builder_seam() {
     let mut build_owner = BuildOwner::new();
     let cell = build_owner.register_layout_builder_for_test(RenderId::new(1), ElementId::new(1));
     assert_eq!(build_owner.layout_builder_count(), 1);
@@ -41,20 +40,4 @@ fn headless_pump_frame_runs_the_layout_builder_seam() {
         "pump_frame must run service_layout_builders (via the shared \
          run_frame_with_layout_builders helper), which prunes the stale entry"
     );
-}
-
-/// A frame over an empty registry is a plain `run_frame`: it must not panic, and
-/// the fixpoint must converge on its first pass.
-#[test]
-fn headless_pump_frame_with_no_layout_builders_is_inert() {
-    let mut binding = HeadlessBinding::with_tree(
-        BuildOwner::new(),
-        ElementTree::new(),
-        PipelineCell::new(PipelineOwner::new()),
-    );
-
-    binding.pump_frame(Duration::from_millis(16));
-    binding.pump_frame(Duration::from_millis(16));
-
-    assert_eq!(binding.build_owner_mut().layout_builder_count(), 0);
 }

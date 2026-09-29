@@ -46,19 +46,20 @@ pub(crate) fn capture_rendered_events(emit: impl FnOnce()) -> Vec<String> {
         .clone()
 }
 
-/// Like [`capture_rendered_events`], but with the renderer sitting behind the
-/// privacy [`RedactLayer`](crate::backend::redact::RedactLayer) — the exact
-/// composition the Android sink ships with, minus the FFI write.
-pub(crate) fn capture_rendered_events_behind_redaction(emit: impl FnOnce()) -> Vec<String> {
-    let capture = RenderCapture::default();
-    let subscriber =
-        Registry::default().with(crate::backend::redact::RedactLayer::new(capture.clone()));
-
-    tracing::subscriber::with_default(subscriber, emit);
-
-    capture
-        .0
-        .lock()
-        .expect("BUG: capture mutex is only locked by this test's own thread")
-        .clone()
+/// Runs every `(name, scenario)` row; the first failure names its row.
+pub(crate) fn run_cases(cases: &[(&str, fn())]) {
+    for (name, case) in cases {
+        if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(case)) {
+            let message = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| {
+                    payload
+                        .downcast_ref::<&str>()
+                        .map(|text| (*text).to_owned())
+                })
+                .unwrap_or_else(|| "non-string panic payload".to_owned());
+            panic!("case `{name}` failed: {message}");
+        }
+    }
 }

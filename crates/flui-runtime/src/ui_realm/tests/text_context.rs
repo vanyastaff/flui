@@ -5,7 +5,7 @@ use super::*;
 
 fn realm_over(fonts: &FontCollection) -> UiRealm {
     UiRealm::new(
-        noop_wake(),
+        Arc::new(|| {}),
         test_window(),
         1.0,
         Arc::new(AtomicBool::new(false)),
@@ -19,7 +19,6 @@ fn realm_over(fonts: &FontCollection) -> UiRealm {
 /// the caller handed in, not over one the realm made for itself. Fails if a
 /// realm builds its own collection (`ptr_eq`), or shares or skips a context
 /// (the holder count: the caller's handle plus one per realm).
-#[test]
 fn two_realms_hold_contexts_over_the_one_collection_they_were_given() {
     let fonts = FontCollection::new();
     let a = realm_over(&fonts);
@@ -41,7 +40,6 @@ fn two_realms_hold_contexts_over_the_one_collection_they_were_given() {
 /// The context lives exactly as long as its realm: dropping a realm releases
 /// its hold on the collection. Fails if a realm leaks the context (into an
 /// `Rc` cycle, a static, or anything else that outlives the realm).
-#[test]
 fn dropping_a_realm_releases_its_text_context() {
     let fonts = FontCollection::new();
     assert_eq!(font_collection_holders(&fonts), 1);
@@ -58,7 +56,6 @@ fn dropping_a_realm_releases_its_text_context() {
 
 /// The context is per realm, not per presentation: a second presentation
 /// shares the realm's context rather than building another.
-#[test]
 fn a_second_presentation_adds_no_text_context() {
     let fonts = FontCollection::new();
     let mut realm = realm_over(&fonts);
@@ -73,5 +70,26 @@ fn a_second_presentation_adds_no_text_context() {
         font_collection_holders(&fonts),
         2,
         "a presentation must not build a text context of its own"
+    );
+}
+
+#[test]
+fn text_context_matrix() {
+    crate::table_test::run_table(
+        "text_context_matrix",
+        &[
+            (
+                "two_realms_hold_contexts_over_the_one_collection_they_were_given",
+                two_realms_hold_contexts_over_the_one_collection_they_were_given as fn(),
+            ),
+            (
+                "dropping_a_realm_releases_its_text_context",
+                dropping_a_realm_releases_its_text_context as fn(),
+            ),
+            (
+                "a_second_presentation_adds_no_text_context",
+                a_second_presentation_adds_no_text_context as fn(),
+            ),
+        ],
     );
 }

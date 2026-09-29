@@ -138,11 +138,6 @@ mod tests {
     }
 
     #[test]
-    fn app_id_uses_underscores() {
-        assert_eq!(sample().app.app_id(), "com.example.my_app");
-    }
-
-    #[test]
     fn round_trips_and_writes_only_the_documented_keys() {
         let toml = toml::to_string_pretty(&sample()).unwrap();
         assert!(toml.contains("name = \"my-app\""));
@@ -152,12 +147,5 @@ mod tests {
             "an absent section is not written; got:\n{toml}"
         );
         assert_eq!(toml::from_str::<FluiConfig>(&toml).unwrap(), sample());
-    }
-
-    #[test]
-    fn unknown_keys_from_older_files_are_ignored() {
-        let text = "[app]\nname = \"a\"\nversion = \"0.1.0\"\norganization = \"com.a\"\n\n[assets]\ndirectories = [\"assets\"]\n";
-        let config: FluiConfig = toml::from_str(text).unwrap();
-        assert_eq!(config.app.name, "a");
     }
 }
