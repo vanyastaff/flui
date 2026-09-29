@@ -142,7 +142,12 @@ clip). A changed token or placement damages the old and new regions, as does a k
 paint order changed relative to the other kept ones (those outside a longest increasing run of
 their previous order), an added or removed boundary its one region; textures (a texture layer, or a picture's texture draws through
 `DisplayList::volatile_extent`), platform views, canvases, overlays and anything under a follower
-are damaged every frame; a backdrop filter whose blur-widened bounds meet the damage
+are damaged every frame; a shader mask or backdrop filter's bounds are not clipped by the clips
+above it (the engine composites the offscreen unscissored), and an opacity layer whose blend
+changes pixels under a transparent source, or a colour filter that paints transparent black,
+damages the whole surface; damage that meets a foreground image filter's footprint (its
+children's extents grown by the filter's reach) joins that footprint, since the engine re-renders
+the filter from children recorded under the damage scissor; a backdrop filter whose blur-widened bounds meet the damage
 joins it until nothing more does. The result is `Full` for an unpairable frame (first frame,
 surface size change, unstamped root, root boundary or placement change, a boundary stamped
 twice) or above `DamageMode::On::full_above`, `Unchanged` for nothing, and otherwise one

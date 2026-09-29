@@ -468,6 +468,37 @@ pub enum ColorFilter {
 }
 
 impl ColorFilter {
+    /// Whether the filter turns a transparent black pixel into a visible
+    /// one, so a layer it filters changes pixels its children never inked
+    /// (Flutter's `DlColorFilter::modifies_transparent_black`).
+    ///
+    /// A `Mode` filter blends its colour (the source) over the pixel (the
+    /// destination): over a transparent destination only the source factor
+    /// counts, which is zero for `Clear`, `Dst`, `SrcIn`, `DstIn`, `DstOut`,
+    /// `SrcATop` and `Modulate`, and one or more for every other mode. A
+    /// `Matrix` maps transparent black to its offset column, visible when
+    /// the alpha offset is positive. The gamma transfers pass alpha through.
+    #[must_use]
+    pub fn modifies_transparent_black(&self) -> bool {
+        match self {
+            ColorFilter::Mode { color, blend_mode } => {
+                color.a > 0
+                    && !matches!(
+                        blend_mode,
+                        BlendMode::Clear
+                            | BlendMode::Dst
+                            | BlendMode::SrcIn
+                            | BlendMode::DstIn
+                            | BlendMode::DstOut
+                            | BlendMode::SrcATop
+                            | BlendMode::Modulate
+                    )
+            }
+            ColorFilter::Matrix(matrix) => matrix.values[19] > 0.0,
+            ColorFilter::LinearToSrgbGamma | ColorFilter::SrgbToLinearGamma => false,
+        }
+    }
+
     /// Creates a color filter that applies a color blend mode.
     #[inline]
     #[must_use]

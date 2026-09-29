@@ -962,6 +962,18 @@ fn partial_and_full(
     before: &Scene,
     after: &Scene,
 ) -> (Vec<u8>, Vec<u8>) {
+    damaged_and_full(renderer, before, after, |plan| {
+        matches!(plan, FramePlan::RetainedPartial(_))
+    })
+}
+
+/// [`partial_and_full`] for a second frame whose plan `plan` accepts.
+fn damaged_and_full(
+    renderer: &crate::headless::HeadlessRenderer,
+    before: &Scene,
+    after: &Scene,
+    plan: fn(FramePlan) -> bool,
+) -> (Vec<u8>, Vec<u8>) {
     let mut partial = renderer
         .retained_capture((SIDE, SIDE))
         .expect("capture target");
@@ -972,9 +984,7 @@ fn partial_and_full(
     });
     warm(&mut partial, before);
     let region = differ.diff(after, (SIDE, SIDE));
-    frame(&mut partial, after, region, |plan| {
-        matches!(plan, FramePlan::RetainedPartial(_))
-    });
+    frame(&mut partial, after, region, plan);
     (
         partial.read_rgba().expect("readback"),
         full_frame_pixels(renderer, after),
@@ -1262,4 +1272,229 @@ fn a_removed_clear_shader_mask_leaves_nothing_behind() {
     let (partial, full) = partial_and_full(&renderer, &before, &after);
     let stale = mismatches(&partial, &full, 0);
     assert!(stale.is_empty(), "stale pixels at {stale:?}");
+}
+
+/// A frame's tree: a stamped root over a stamped full-surface backdrop
+/// (boundary 3), then whatever `extra` adds under the root.
+fn backdrop_scene(
+    root: &ContentToken,
+    backdrop: &ContentToken,
+    paint_backdrop: &dyn Fn(&mut Canvas),
+    extra: &dyn Fn(&mut LayerTree, flui_layer::LayerId),
+) -> Scene {
+    let mut tree = LayerTree::new(
+        LayerNode::new(Layer::from(TransformLayer::new(Matrix4::IDENTITY)))
+            .with_boundary(id(1), root.clone()),
+    );
+    let root_id = tree.root();
+    let layer = tree.push_child(
+        root_id,
+        LayerNode::new(Layer::from(OffsetLayer::new(Offset::ZERO)))
+            .with_boundary(id(3), backdrop.clone()),
+    );
+    let mut canvas = Canvas::new();
+    paint_backdrop(&mut canvas);
+    tree.push_child(layer, Layer::from(PictureLayer::new(canvas.finish())));
+    extra(&mut tree, root_id);
+    Scene::new(tree)
+}
+
+/// A picture of one `color` rect.
+fn rect_picture(rect: Rect<f64>, color: Color) -> Layer {
+    let mut canvas = Canvas::new();
+    canvas.draw_rect(rect, &Paint::fill(color));
+    Layer::from(PictureLayer::new(canvas.finish()))
+}
+
+/// Vertical stripes, so a blur of the backdrop changes its pixels.
+fn striped_backdrop(canvas: &mut Canvas) {
+    green_background(canvas);
+    for x in (0..SIDE).step_by(8) {
+        canvas.draw_rect(
+            Rect::from_xywh(f64::from(x), 0.0, 4.0, f64::from(SIDE)),
+            &Paint::fill(Color::BLUE),
+        );
+    }
+}
+
+/// Removing an effect that draws through an offscreen (a shader mask, a
+/// backdrop filter) under an ancestor clip smaller than its bounds leaves
+/// nothing behind, wherever the offscreen composite lands.
+#[test]
+fn a_removed_offscreen_effect_under_a_clip_leaves_nothing_behind() {
+    use flui_layer::{ClipRectLayer, ShaderMaskLayer};
+    use flui_painting::paint::Shader;
+
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let (root, background, card) = (
+        ContentToken::mint(),
+        ContentToken::mint(),
+        ContentToken::mint(),
+    );
+    let clip = Rect::from_xywh(30.0, 30.0, 20.0, 20.0);
+    for backdrop_filter in [false, true] {
+        let build = |present: bool| {
+            backdrop_scene(&root, &background, &striped_backdrop, &|tree, root_id| {
+                if !present {
+                    return;
+                }
+                let boundary = tree.push_child(
+                    root_id,
+                    LayerNode::new(Layer::from(OffsetLayer::new(Offset::ZERO)))
+                        .with_boundary(id(2), card.clone()),
+                );
+                let clipped =
+                    tree.push_child(boundary, Layer::from(ClipRectLayer::hard_edge(clip)));
+                let effect_bounds = Rect::from_xywh(10.0, 10.0, 80.0, 80.0);
+                if backdrop_filter {
+                    tree.push_child(
+                        clipped,
+                        Layer::from(BackdropFilterLayer::new(
+                            ImageFilter::blur(4.0),
+                            BlendMode::SrcOver,
+                            effect_bounds,
+                        )),
+                    );
+                } else {
+                    let mask = tree.push_child(
+                        clipped,
+                        Layer::from(ShaderMaskLayer::new(
+                            Shader::solid(Color::WHITE),
+                            BlendMode::SrcOver,
+                            effect_bounds,
+                        )),
+                    );
+                    tree.push_child(mask, rect_picture(effect_bounds, Color::RED));
+                }
+            })
+        };
+        let (before, after) = (build(true), build(false));
+        let (partial, full) = partial_and_full(&renderer, &before, &after);
+        let stale = mismatches(&partial, &full, 0);
+        assert!(
+            stale.is_empty(),
+            "backdrop filter {backdrop_filter}: stale pixels at {stale:?}"
+        );
+    }
+}
+
+/// A small change next to an unchanged foreground blur (an image-filter
+/// layer) presents the same pixels as a full frame: the blur reads its input
+/// past the damage and writes past it, so damage that meets it takes it in.
+#[test]
+fn a_change_beside_a_foreground_blur_matches_a_full_frame() {
+    use flui_layer::ImageFilterLayer;
+
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let (root, background, blurred, moving) = (
+        ContentToken::mint(),
+        ContentToken::mint(),
+        ContentToken::mint(),
+        ContentToken::mint(),
+    );
+    let build = |at: Offset<f64>| {
+        backdrop_scene(&root, &background, &green_background, &|tree, root_id| {
+            let boundary = tree.push_child(
+                root_id,
+                LayerNode::new(Layer::from(OffsetLayer::new(Offset::ZERO)))
+                    .with_boundary(id(4), blurred.clone()),
+            );
+            let filter = tree.push_child(boundary, Layer::from(ImageFilterLayer::blur(4.0)));
+            tree.push_child(
+                filter,
+                rect_picture(Rect::from_xywh(40.0, 40.0, 30.0, 30.0), Color::RED),
+            );
+            let mover = tree.push_child(
+                root_id,
+                LayerNode::new(Layer::from(OffsetLayer::new(at)))
+                    .with_boundary(id(2), moving.clone()),
+            );
+            tree.push_child(
+                mover,
+                rect_picture(Rect::from_xywh(0.0, 0.0, 6.0, 6.0), Color::BLUE),
+            );
+        })
+    };
+    let (before, after) = (
+        build(Offset::new(66.0, 50.0)),
+        build(Offset::new(66.0, 54.0)),
+    );
+    let (partial, full) = partial_and_full(&renderer, &before, &after);
+    let stale = mismatches(&partial, &full, 2);
+    assert!(stale.is_empty(), "stale pixels at {stale:?}");
+}
+
+/// Removing an opacity layer with a destination-replacing blend, or a colour
+/// filter that paints transparent pixels, leaves nothing behind wherever
+/// their composite reached, not only under their child.
+#[test]
+fn a_removed_destination_affecting_layer_leaves_nothing_behind() {
+    use flui_layer::{ColorFilterLayer, OpacityLayer};
+    use flui_painting::paint::ColorFilter;
+
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let (root, background, card) = (
+        ContentToken::mint(),
+        ContentToken::mint(),
+        ContentToken::mint(),
+    );
+    let effects = [
+        (
+            "opacity Src",
+            Layer::from(OpacityLayer::with_blend(1.0, Offset::ZERO, BlendMode::Src)),
+        ),
+        (
+            "opacity Clear",
+            Layer::from(OpacityLayer::with_blend(
+                1.0,
+                Offset::ZERO,
+                BlendMode::Clear,
+            )),
+        ),
+        (
+            "color filter Src",
+            Layer::from(ColorFilterLayer::new(ColorFilter::Mode {
+                color: Color::rgba(255, 0, 255, 255),
+                blend_mode: BlendMode::Src,
+            })),
+        ),
+    ];
+    for (name, effect) in effects {
+        let build = |present: bool| {
+            backdrop_scene(&root, &background, &green_background, &|tree, root_id| {
+                if !present {
+                    return;
+                }
+                let boundary = tree.push_child(
+                    root_id,
+                    LayerNode::new(Layer::from(OffsetLayer::new(Offset::new(40.0, 40.0))))
+                        .with_boundary(id(2), card.clone()),
+                );
+                let layer = tree.push_child(boundary, effect.clone());
+                tree.push_child(
+                    layer,
+                    rect_picture(Rect::from_xywh(0.0, 0.0, 16.0, 16.0), Color::RED),
+                );
+            })
+        };
+        let (before, after) = (build(true), build(false));
+        let drawn = full_frame_pixels(&renderer, &before);
+        let (partial, full) =
+            damaged_and_full(&renderer, &before, &after, |plan| plan != FramePlan::Skip);
+        let stale = mismatches(&partial, &full, 0);
+        assert!(
+            stale.is_empty(),
+            "{name}: stale pixels at {stale:?}; the frame drawn had {:?} at (10, 10), \
+             {:?} at (44, 44), {:?} at (100, 100)",
+            px(&drawn, 10, 10),
+            px(&drawn, 44, 44),
+            px(&drawn, 100, 100)
+        );
+    }
 }

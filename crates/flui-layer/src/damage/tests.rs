@@ -449,6 +449,132 @@ fn a_shader_mask_damages_its_whole_bounds() {
     );
 }
 
+/// An offscreen effect under a clip smaller than its bounds composites over
+/// its whole bounds, past the clip: its damage is not clipped.
+#[test]
+fn a_shader_mask_under_a_clip_damages_its_unclipped_bounds() {
+    let root = ContentToken::mint();
+    let build = |token: &ContentToken| {
+        let mut frame = Frame::new(1.0, &root);
+        let parent = frame.root();
+        let node = LayerNode::new(Layer::from(OffsetLayer::new(Offset::ZERO)))
+            .with_boundary(id(2), token.clone());
+        let boundary = frame.tree.push_child(parent, node);
+        let clipped = frame.push(
+            boundary,
+            ClipRectLayer::hard_edge(Rect::from_xywh(130.0, 130.0, 20.0, 20.0)),
+        );
+        let mask = frame.push(
+            clipped,
+            crate::ShaderMaskLayer::new(
+                flui_painting::paint::Shader::solid(Color::WHITE),
+                BlendMode::SrcOver,
+                Rect::from_xywh(100.0, 100.0, 80.0, 60.0),
+            ),
+        );
+        frame.push(mask, picture(Rect::from_xywh(100.0, 100.0, 80.0, 60.0)));
+        frame.scene()
+    };
+    let mut differ = LayerDiffer::default();
+    differ.diff(&build(&ContentToken::mint()), SURFACE);
+    assert_eq!(
+        partial(differ.diff(&build(&ContentToken::mint()), SURFACE)),
+        covering(100.0, 100.0, 180.0, 160.0)
+    );
+}
+
+/// Damage that meets an unchanged foreground blur's footprint takes all of
+/// it: the blur is re-rendered from children recorded under the damage
+/// scissor and composited unscissored.
+#[test]
+fn damage_meeting_a_foreground_blur_takes_its_footprint() {
+    let (root, blurred) = (ContentToken::mint(), ContentToken::mint());
+    let build = |moving: &ContentToken, at: Offset<f64>| {
+        let mut frame = Frame::new(1.0, &root);
+        let parent = frame.root();
+        let node = LayerNode::new(Layer::from(OffsetLayer::new(Offset::ZERO)))
+            .with_boundary(id(3), blurred.clone());
+        let boundary = frame.tree.push_child(parent, node);
+        let filter = frame.push(boundary, crate::ImageFilterLayer::blur(4.0));
+        frame.push(filter, picture(Rect::from_xywh(100.0, 100.0, 50.0, 50.0)));
+        frame.boundary(parent, 2, moving, at, Size::new(6.0, 6.0));
+        frame.scene()
+    };
+    let moving = ContentToken::mint();
+    let mut differ = LayerDiffer::default();
+    differ.diff(&build(&moving, Offset::new(300.0, 300.0)), SURFACE);
+    assert_eq!(
+        partial(differ.diff(&build(&moving, Offset::new(300.0, 310.0)), SURFACE)),
+        covering(300.0, 300.0, 306.0, 316.0),
+        "damage away from the blur stays small"
+    );
+    differ.diff(&build(&moving, Offset::new(150.0, 120.0)), SURFACE);
+    // The blur's footprint: its child grown by three sigma.
+    assert_eq!(
+        partial(differ.diff(&build(&moving, Offset::new(150.0, 124.0)), SURFACE)),
+        covering(88.0, 88.0, 162.0, 162.0)
+    );
+}
+
+/// A layer whose composite changes pixels its children never inked (an
+/// opacity layer with a `Src` blend, a colour filter painting transparent
+/// pixels) damages the whole surface when it changes.
+#[test]
+fn layers_that_paint_transparent_pixels_damage_everything() {
+    let root = ContentToken::mint();
+    let effects = [
+        Layer::from(OpacityLayer::with_blend(1.0, Offset::ZERO, BlendMode::Src)),
+        Layer::from(crate::ColorFilterLayer::new(
+            flui_painting::paint::ColorFilter::Mode {
+                color: Color::BLUE,
+                blend_mode: BlendMode::Src,
+            },
+        )),
+    ];
+    for effect in effects {
+        let build = |token: &ContentToken| {
+            let mut frame = Frame::new(1.0, &root);
+            let parent = frame.root();
+            let node = LayerNode::new(Layer::from(OffsetLayer::new(Offset::ZERO)))
+                .with_boundary(id(2), token.clone());
+            let boundary = frame.tree.push_child(parent, node);
+            let layer = frame.push(boundary, effect.clone());
+            frame.push(layer, picture(Rect::from_xywh(100.0, 100.0, 10.0, 10.0)));
+            frame.scene()
+        };
+        let mut differ = LayerDiffer::default();
+        differ.diff(&build(&ContentToken::mint()), SURFACE);
+        assert_eq!(
+            differ.diff(&build(&ContentToken::mint()), SURFACE),
+            DamageRegion::Full,
+            "{effect:?}"
+        );
+    }
+    // A colour filter that keeps transparent pixels transparent stays small.
+    let build = |token: &ContentToken| {
+        let mut frame = Frame::new(1.0, &root);
+        let parent = frame.root();
+        let node = LayerNode::new(Layer::from(OffsetLayer::new(Offset::ZERO)))
+            .with_boundary(id(2), token.clone());
+        let boundary = frame.tree.push_child(parent, node);
+        let layer = frame.push(
+            boundary,
+            crate::ColorFilterLayer::new(flui_painting::paint::ColorFilter::Mode {
+                color: Color::BLUE,
+                blend_mode: BlendMode::SrcIn,
+            }),
+        );
+        frame.push(layer, picture(Rect::from_xywh(100.0, 100.0, 10.0, 10.0)));
+        frame.scene()
+    };
+    let mut differ = LayerDiffer::default();
+    differ.diff(&build(&ContentToken::mint()), SURFACE);
+    assert_eq!(
+        partial(differ.diff(&build(&ContentToken::mint()), SURFACE)),
+        covering(100.0, 100.0, 110.0, 110.0)
+    );
+}
+
 /// A picture that draws an external texture (`Canvas::draw_texture`) keeps
 /// its boundary's token while the texture's producer replaces the content
 /// behind the same id: the texture's rect is damaged on every frame, the

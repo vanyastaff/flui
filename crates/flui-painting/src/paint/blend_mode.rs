@@ -197,6 +197,31 @@ impl BlendMode {
         !matches!(self, BlendMode::Clear | BlendMode::Src)
     }
 
+    /// Returns `true` if a fully transparent source leaves the destination
+    /// as it was.
+    ///
+    /// Porter-Duff modes whose destination factor is zero where the source
+    /// is transparent (`Clear`, `Src`, `SrcIn`, `DstIn`, `SrcOut`, `DstATop`)
+    /// and `Modulate` (source times destination) change pixels the source
+    /// never covers; every other mode, the advanced ones included, reduces
+    /// to the destination there. A layer composited with a mode for which
+    /// this is `false` changes every pixel of its composite area, not only
+    /// the ones its content inks.
+    #[must_use]
+    #[inline]
+    pub const fn keeps_destination_under_transparent_source(&self) -> bool {
+        !matches!(
+            self,
+            BlendMode::Clear
+                | BlendMode::Src
+                | BlendMode::SrcIn
+                | BlendMode::DstIn
+                | BlendMode::SrcOut
+                | BlendMode::DstATop
+                | BlendMode::Modulate
+        )
+    }
+
     /// Returns `true` for the advanced (non-Porter-Duff) blend modes, i.e.
     /// `Screen` and beyond.
     #[must_use]

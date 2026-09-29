@@ -522,3 +522,64 @@ fn atlas_extent_covers_the_sprite_destination() {
         "the sprite lands at the translation: {extent:?}"
     );
 }
+
+/// Which blends change a destination their source leaves transparent, and
+/// which colour filters paint a transparent pixel: the two answers a damage
+/// producer widens a layer's composite by.
+#[test]
+fn transparent_source_and_transparent_black_predicates() {
+    use flui_painting::paint::{BlendMode, ColorFilter};
+
+    let changing = [
+        BlendMode::Clear,
+        BlendMode::Src,
+        BlendMode::SrcIn,
+        BlendMode::DstIn,
+        BlendMode::SrcOut,
+        BlendMode::DstATop,
+        BlendMode::Modulate,
+    ];
+    for mode in [
+        BlendMode::SrcOver,
+        BlendMode::Dst,
+        BlendMode::DstOver,
+        BlendMode::DstOut,
+        BlendMode::SrcATop,
+        BlendMode::Xor,
+        BlendMode::Plus,
+        BlendMode::Screen,
+        BlendMode::Multiply,
+    ] {
+        assert!(
+            mode.keeps_destination_under_transparent_source(),
+            "{mode:?}"
+        );
+    }
+    for mode in changing {
+        assert!(
+            !mode.keeps_destination_under_transparent_source(),
+            "{mode:?}"
+        );
+    }
+
+    let mode = |blend_mode| ColorFilter::Mode {
+        color: Color::BLUE,
+        blend_mode,
+    };
+    assert!(mode(BlendMode::Src).modifies_transparent_black());
+    assert!(mode(BlendMode::SrcOver).modifies_transparent_black());
+    assert!(!mode(BlendMode::SrcIn).modifies_transparent_black());
+    assert!(!mode(BlendMode::Modulate).modifies_transparent_black());
+    assert!(
+        !ColorFilter::Mode {
+            color: Color::TRANSPARENT,
+            blend_mode: BlendMode::Src,
+        }
+        .modifies_transparent_black()
+    );
+    assert!(!ColorFilter::grayscale().modifies_transparent_black());
+    let mut offset = [0.0_f32; 20];
+    offset[19] = 1.0;
+    assert!(ColorFilter::matrix(offset).modifies_transparent_black());
+    assert!(!ColorFilter::linear_to_srgb_gamma().modifies_transparent_black());
+}

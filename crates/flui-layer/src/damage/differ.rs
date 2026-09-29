@@ -121,6 +121,20 @@ struct Frame {
     /// Every backdrop filter's surface bounds and how far its filter reads
     /// past them, in surface pixels.
     backdrops: Vec<(Rect<f64>, f64)>,
+    /// Every foreground image filter's footprint in surface pixels: its
+    /// children's extents grown by how far the filter spreads them.
+    foreground: Vec<Rect<f64>>,
+}
+
+/// A foreground image filter the walk is inside of, accumulating its input.
+#[derive(Debug)]
+struct ForegroundFilter {
+    /// The filter this one is nested in.
+    parent: Option<usize>,
+    /// The union of its children's extents, unclipped, in surface pixels.
+    input: Option<Rect<f64>>,
+    /// How far the filter spreads its input, in surface pixels.
+    reach: f64,
 }
 
 /// One stamped layer.
@@ -161,6 +175,9 @@ struct Ctx {
     effects: Option<usize>,
     owner: Option<RenderId>,
     volatile: bool,
+    /// The innermost foreground image filter above this layer, as an index
+    /// into the walk's filter list.
+    filter: Option<usize>,
 }
 
 impl Frame {
@@ -176,7 +193,9 @@ impl Frame {
             boundaries: HashMap::new(),
             volatile: None,
             backdrops: Vec::new(),
+            foreground: Vec::new(),
         };
+        let mut filters: Vec<ForegroundFilter> = Vec::new();
         // (parent link, index into `frame.effects`): a persistent list, so a
         // layer's chain is its parent's plus at most one link.
         let mut chain: Vec<(Option<usize>, usize)> = Vec::new();
@@ -189,6 +208,7 @@ impl Frame {
                 effects: None,
                 owner: None,
                 volatile: false,
+                filter: None,
             },
         )];
 
@@ -225,6 +245,14 @@ impl Frame {
                 ctx.reach = Reach::Within(ctx.clip);
             }
 
+            if let Layer::ImageFilter(filter) = layer {
+                filters.push(ForegroundFilter {
+                    parent: ctx.filter,
+                    input: None,
+                    reach: filter_reach(filter.filter()) * max_scale(&ctx.transform),
+                });
+                ctx.filter = Some(filters.len() - 1);
+            }
             if is_effect(layer) {
                 frame.effects.push(layer.clone());
                 chain.push((ctx.effects, frame.effects.len() - 1));
@@ -266,6 +294,15 @@ impl Frame {
                 ctx.owner = Some(render_id);
             }
 
+            // Whether the composite this extent describes honours the clips
+            // above it. An offscreen effect's result (a shader mask, a
+            // backdrop filter) is composited over its bounds with no scissor
+            // and captured without the ancestor clip, and a save layer over
+            // the viewport (an opacity layer whose blend changes pixels a
+            // transparent source covers, a colour filter that paints
+            // transparent pixels) is taken as reaching past the clip too:
+            // the unclipped answer can only repaint more.
+            let mut clipped = true;
             let extent = match layer {
                 Layer::Picture(picture) => {
                     // A texture draw's pixels come from a texture its
@@ -274,7 +311,7 @@ impl Frame {
                     if let Some(rect) = picture
                         .picture()
                         .volatile_extent()
-                        .and_then(|extent| place(extent, &ctx, full))
+                        .and_then(|extent| place(extent, &ctx, full, true))
                     {
                         frame.volatile = Some(join(frame.volatile, rect));
                     }
@@ -300,10 +337,28 @@ impl Frame {
                 // with the mask's blend mode: under a destination-replacing
                 // mode (Src, Clear, DstIn...) the pixels it changes reach the
                 // whole rect, not just the children's ink.
-                Layer::ShaderMask(mask) => Some(DamageExtent::rect(mask.bounds())),
+                Layer::ShaderMask(mask) => {
+                    clipped = false;
+                    Some(DamageExtent::rect(mask.bounds()))
+                }
+                // Such a layer composites over the whole viewport, and every
+                // pixel of it can change.
+                Layer::Opacity(opacity)
+                    if !opacity.blend().keeps_destination_under_transparent_source() =>
+                {
+                    clipped = false;
+                    Some(DamageExtent::Unbounded)
+                }
+                Layer::ColorFilter(filter)
+                    if filter.color_filter().modifies_transparent_black() =>
+                {
+                    clipped = false;
+                    Some(DamageExtent::Unbounded)
+                }
                 Layer::BackdropFilter(backdrop) => {
+                    clipped = false;
                     let bounds = DamageExtent::rect(backdrop.bounds());
-                    if let Some(rect) = place(bounds, &ctx, full) {
+                    if let Some(rect) = place(bounds, &ctx, full, false) {
                         let reach = filter_reach(backdrop.filter()) * max_scale(&ctx.transform);
                         frame.backdrops.push((rect, reach));
                     }
@@ -311,7 +366,15 @@ impl Frame {
                 }
                 _ => None,
             };
-            if let Some(rect) = extent.and_then(|extent| place(extent, &ctx, full)) {
+            if let (Some(extent), Some(filter)) = (extent, ctx.filter) {
+                let input = extent
+                    .transformed(&ctx.transform)
+                    .covering_rect()
+                    .filter(Rect::is_finite)
+                    .unwrap_or(full);
+                filters[filter].input = Some(join(filters[filter].input, input));
+            }
+            if let Some(rect) = extent.and_then(|extent| place(extent, &ctx, full, clipped)) {
                 if let Some(record) = ctx.owner.and_then(|owner| frame.boundaries.get_mut(&owner)) {
                     record.region = Some(join(record.region, rect));
                 }
@@ -322,6 +385,20 @@ impl Frame {
 
             for &child in node.children().iter().rev() {
                 stack.push((child, ctx));
+            }
+        }
+        // A nested filter comes after its parent in the list, so walking it
+        // backwards folds each footprint into its parent's input first.
+        for index in (0..filters.len()).rev() {
+            let Some(input) = filters[index].input else {
+                continue;
+            };
+            let Some(footprint) = input.expand(filters[index].reach).intersect(&full) else {
+                continue;
+            };
+            frame.foreground.push(footprint);
+            if let Some(parent) = filters[index].parent {
+                filters[parent].input = Some(join(filters[parent].input, footprint));
             }
         }
         Some(frame)
@@ -373,11 +450,21 @@ fn compare(previous: &Frame, current: &Frame, full_above: f64) -> DamageRegion {
     add(current.volatile);
 
     // A backdrop filter reads what is behind it: damage that reaches its
-    // input changes its whole output. Joining one backdrop can reach
-    // another, so repeat until a pass joins nothing.
+    // input changes its whole output. A foreground image filter re-renders
+    // its children under the damage scissor and composites the result
+    // unscissored: damage that meets its footprint must take all of it, or
+    // the filter reads a truncated input and spreads it past the damage.
+    // Joining one filter can reach another, so repeat until a pass joins
+    // nothing.
     if let Some(mut region) = damage {
         loop {
             let mut grew = false;
+            for &footprint in &current.foreground {
+                if region.overlaps(&footprint) && !region.contains_rect(&footprint) {
+                    region = region.union(&footprint);
+                    grew = true;
+                }
+            }
             for &(bounds, reach) in &current.backdrops {
                 if region.overlaps(&bounds.expand(reach)) && !region.contains_rect(&bounds) {
                     region = region.union(&bounds);
@@ -471,12 +558,15 @@ fn materialize(chain: &[(Option<usize>, usize)], head: Option<usize>) -> Vec<usi
     effects
 }
 
-/// `extent` in surface pixels under `ctx`, clipped to the surface; `None`
-/// when nothing of it is on the surface.
-fn place(extent: DamageExtent, ctx: &Ctx, full: Rect<f64>) -> Option<Rect<f64>> {
+/// `extent` in surface pixels under `ctx`, clipped to the surface and, when
+/// `clipped`, to the clips above it; `None` when nothing of it is on the
+/// surface.
+fn place(extent: DamageExtent, ctx: &Ctx, full: Rect<f64>, clipped: bool) -> Option<Rect<f64>> {
+    let clip = if clipped { ctx.clip } else { None };
     let rect = match (ctx.reach, extent) {
-        (Reach::Within(bound), _) => bound.unwrap_or(full),
-        (Reach::Exact, DamageExtent::Unbounded) => ctx.clip.unwrap_or(full),
+        (Reach::Within(bound), _) if clipped => bound.unwrap_or(full),
+        (Reach::Within(_), _) => full,
+        (Reach::Exact, DamageExtent::Unbounded) => clip.unwrap_or(full),
         (Reach::Exact, DamageExtent::Bounded { .. }) => {
             // The walk marked a projective transform `Within` above, so the
             // mapped extent is bounded here.
@@ -487,7 +577,7 @@ fn place(extent: DamageExtent, ctx: &Ctx, full: Rect<f64>) -> Option<Rect<f64>> 
             // A non-finite transform maps to nothing measurable; the whole
             // surface is the only answer that cannot fall short.
             if mapped.is_finite() {
-                match ctx.clip {
+                match clip {
                     Some(clip) => clip.intersect(&mapped)?,
                     None => mapped,
                 }
