@@ -27,10 +27,10 @@
 //!
 //! It also diverges from this catalog's dominant convention rather than being a
 //! novelty in it: the widget crates carry 56 `Rc<dyn Fn(..)>` callback aliases
-//! (44 in `flui-widgets/src`, 12 in `flui-material/src`), and ten existing
-//! public builders already take `impl Fn(..) + Send + Sync + 'static`
-//! (`interaction/draggable.rs`, `interaction/drag_target.rs`,
-//! `scroll/page_view.rs`). The market survey, the rejected alternatives, and the
+//! (44 in `flui-widgets/src`, 12 in `flui-material/src`), and the one other
+//! public family that takes `impl Fn(..) + Send + Sync + 'static` is
+//! `interaction/drag_target.rs`, whose callbacks ride the same kind of
+//! `Send + Sync` render-object metadata. The market survey, the rejected alternatives, and the
 //! reason the reference's shape does not transcribe are recorded in
 //! `ARCHITECTURE.md` §17.
 
