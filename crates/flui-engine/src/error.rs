@@ -207,6 +207,17 @@ pub enum EngineError {
         /// The requested height in device pixels.
         height: u32,
     },
+
+    /// A pixel readback did not complete within its bound.
+    ///
+    /// The GPU never signalled the copy's completion: a stalled device or
+    /// driver. Waiting without a bound turned that into a process that never
+    /// returns; this is the error a caller sees instead.
+    #[error("GPU readback did not complete within {waited:?}")]
+    ReadbackTimedOut {
+        /// How long the readback waited.
+        waited: std::time::Duration,
+    },
 }
 
 // ============================================================================
@@ -266,6 +277,7 @@ impl EngineError {
             | Self::AdapterRequest(_)
             | Self::DeviceCreation(_)
             | Self::InvalidTargetSize { .. }
+            | Self::ReadbackTimedOut { .. }
             | Self::NotInitialized => Recoverability::Fatal,
             Self::SurfaceValidation
             | Self::ResourceIo { .. }
