@@ -18,7 +18,7 @@
 //! `a_rotated_box_quarter_turn_update_patches_the_layer_and_writes_back` in
 //! `crates/flui-rendering/tests/retained_boundary_layers.rs`.
 
-use flui_widgets::testing::{lay_out, tight};
+use flui_testing::widgets::{lay_out, tight};
 use flui_widgets::{RotatedBox, SizedBox};
 
 #[test]

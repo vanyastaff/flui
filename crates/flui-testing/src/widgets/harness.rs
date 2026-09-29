@@ -1,4 +1,4 @@
-//! An element-level headless harness for `flui-*` widget crates' unit tests.
+//! An element-level headless harness for widget crates' tests.
 //!
 //! [`lay_out`](super::lay_out) is the canonical geometry harness, but route,
 //! overlay and text-editing code needs element-tree probes (`children_of`,
@@ -9,16 +9,14 @@
 //! mount `build_scope`**), drops the geometry helpers, and shares the
 //! pointer-contact identity and sample-interval policy with the canonical
 //! harness via [`PointerContacts`] / [`POINTER_SAMPLE_INTERVAL`].
-//!
-//! Compiled like the rest of [`testing`](super): for this crate's own tests,
-//! or under the `testing` feature, which the navigation, scrolling and
-//! text-editing crates enable from their dev-dependencies.
 
 use std::any::TypeId;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::HeadlessBinding;
+use crate::bootstrap::{BuildCapabilities, MountOptions, MountOwners};
 use flui_foundation::ElementId;
 use flui_foundation::geometry::Bounds;
 use flui_foundation::geometry::Offset;
@@ -29,12 +27,10 @@ use flui_interaction::events::{
 };
 use flui_painting::Alignment;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
-use flui_testing::HeadlessBinding;
-use flui_testing::bootstrap::{BuildCapabilities, MountOptions, MountOwners};
 use flui_view::{ElementNode, RootRenderView, View};
 
 use super::{POINTER_SAMPLE_INTERVAL, PointerContacts};
-use crate::{Align, FocusRoot, GestureArenaScope};
+use flui_widgets::{Align, FocusRoot, GestureArenaScope};
 
 /// A mounted, laid-out widget tree.
 pub struct Harness {
@@ -58,8 +54,8 @@ pub struct Harness {
     ime_allowed_calls: Option<Arc<parking_lot::Mutex<Vec<bool>>>>,
     /// Owner-local state backing the installed IME capability.
     text_input_owner: Option<Rc<flui_interaction::TextInputOwner>>,
-    /// Per-contact pointer identity, shared with `crate::testing`'s
-    /// integration harness so the two cannot drift.
+    /// Per-contact pointer identity, shared with [`super::LaidOut`] so
+    /// the two cannot drift.
     contacts: PointerContacts,
     /// The clipboard installed in the build owner, as a realm installs its
     /// platform's: always present.
@@ -242,14 +238,14 @@ impl Harness {
     /// `None` until [`enable_semantics`](Self::enable_semantics) has been
     /// called and a frame has run since.
     #[must_use]
-    pub fn a11y_tree(&self) -> Option<flui_testing::A11yTree> {
+    pub fn a11y_tree(&self) -> Option<crate::A11yTree> {
         self.binding.a11y_tree()
     }
 
     /// Advance the binding's virtual clock by the shared
     /// [`POINTER_SAMPLE_INTERVAL`] before a synthetic Move that records a new
     /// velocity sample — the same mechanism (and same 8ms rationale) as
-    /// `crate::testing::LaidOut`. `DragGestureRecognizer` timestamps its
+    /// [`super::LaidOut`]. `DragGestureRecognizer` timestamps its
     /// velocity samples from `RecognizerBase::now()`, which reads this SAME
     /// clock-bound `GestureArena` via `binding.arena()` above, so a spin-wait
     /// on the real clock (which made sample spacing depend on however much

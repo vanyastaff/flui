@@ -92,7 +92,7 @@
 //! assert!(fired.load(Ordering::SeqCst));
 //! ```
 
-// Ship bar (wave 3): every public item is documented; keep it that way.
+// Every public item is documented; keep it that way.
 #![deny(missing_docs)]
 
 pub mod a11y;
@@ -101,6 +101,7 @@ pub mod fonts;
 pub mod log_capture;
 pub mod replay;
 pub mod text_store_kit;
+pub mod widgets;
 
 pub use a11y::{
     A11yNode, A11yQuery, A11yQueryError, A11yTree, Action, ActionData, ActionRequest,

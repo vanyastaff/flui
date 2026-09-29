@@ -710,7 +710,7 @@ fn on_drawer_changed_forwards_to_the_app_authors_callback() {
 #[test]
 fn drawer_edges_write_the_owning_presentations_signal() {
     use flui_sdk::view::SignalWriteExt as _;
-    use flui_sdk::widgets::testing::{ProbeSignals, SignalProbe};
+    use flui_testing::widgets::{ProbeSignals, SignalProbe};
 
     let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
         themed(

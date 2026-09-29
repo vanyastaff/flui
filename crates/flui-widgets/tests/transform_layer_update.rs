@@ -21,7 +21,7 @@
 //! `crates/flui-rendering/tests/retained_boundary_layers.rs`).
 
 use flui_foundation::geometry::Matrix4;
-use flui_widgets::testing::{lay_out, tight};
+use flui_testing::widgets::{lay_out, tight};
 use flui_widgets::{SizedBox, Transform};
 
 #[test]

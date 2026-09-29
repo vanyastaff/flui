@@ -690,11 +690,10 @@ flui-platform = { path = "crates/flui-platform", version = "=0.2.0-dev" }
 # === Hot-Reload (for examples) ===
 flui-hot-reload = { path = "crates/flui-hot-reload", version = "=0.2.0-dev" }
 
-# === Test support (for the vertical_slice_demo acceptance test) ===
+# === Test support (the vertical_slice_demo acceptance test, and the widget
+# harness `flui_testing::widgets` that tests/todo_example.rs and its siblings
+# run in the default feature set instead of only under `flui/testing`) ===
 flui-testing = { workspace = true }
-# `lay_out` for tests/todo_example.rs, which then runs in the default feature
-# set instead of only under `flui/testing`.
-flui-widgets = { path = "crates/flui-widgets", version = "=0.2.0-dev", features = ["testing"] }
 # Snapshot assertions + `cargo insta review` for tests/demo_layer_snapshots.rs.
 insta = { workspace = true }
 # tests/facade_serde.rs round-trips a value from each crate `flui/serde` reaches.
@@ -732,7 +731,7 @@ objc2-app-kit = { workspace = true, features = ["NSApplication", "NSResponder", 
 dispatch2.workspace = true
 
 [features]
-testing = ["dep:flui-testing", "flui-widgets/testing", "flui-rendering/testing"]
+testing = ["dep:flui-testing", "flui-rendering/testing"]
 # Material-first by default: `cargo add flui` keeps working exactly as the
 # README and the crate-level docs teach it. An author who wants a different
 # catalog — or none — turns the default off and selects explicitly. The base

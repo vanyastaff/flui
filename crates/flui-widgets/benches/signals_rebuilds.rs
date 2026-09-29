@@ -22,9 +22,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use criterion::{Criterion, criterion_group, criterion_main};
+use flui_testing::widgets::{LaidOut, lay_out, loose};
 use flui_view::{FrameBuildReport, Reactive, RebuildReason, Signal, StateHandle, View};
 use flui_widgets::prelude::*;
-use flui_widgets::testing::{LaidOut, lay_out, loose};
 use flui_widgets::{Column, SizedBox};
 
 const LIST_ROWS: usize = 10_000;

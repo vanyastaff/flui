@@ -14,7 +14,7 @@
 //! child was spared belongs to the render-level tests that can count paints
 //! (`an_alpha_change_updates_the_layer_without_repainting_the_subtree`).
 
-use flui_widgets::testing::{lay_out, tight};
+use flui_testing::widgets::{lay_out, tight};
 use flui_widgets::{Opacity, SizedBox};
 
 /// The alpha of the only `OpacityLayer` in the pumped frame, as the u8 the
@@ -23,7 +23,7 @@ use flui_widgets::{Opacity, SizedBox};
 /// Compared as a u8 because an opacity round-trips through `opacity_to_alpha`:
 /// asserting on the float that was set would be asserting about the rounding
 /// rather than about the update.
-fn opacity_alpha_u8(harness: &flui_widgets::testing::LaidOut) -> Option<u8> {
+fn opacity_alpha_u8(harness: &flui_testing::widgets::LaidOut) -> Option<u8> {
     fn find(tree: &flui_rendering::layer::LayerTree, id: flui_foundation::LayerId) -> Option<u8> {
         let node = tree.get(id)?;
         if let flui_rendering::layer::Layer::Opacity(o) = node.layer() {

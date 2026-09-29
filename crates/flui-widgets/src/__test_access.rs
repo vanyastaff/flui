@@ -2,9 +2,9 @@
 //! (ADR-0083 §4). **No semver promise; only `crates/flui-widgets/tests` may
 //! import it.**
 //!
-//! The tests that drive the headless harness live in `tests/`, where the
-//! library links once; the harness module is not compiled into the unit-test
-//! build (`#[cfg(all(feature = "testing", not(test)))]` in `lib.rs`). Some of
+//! The tests that drive the headless harness (`flui_testing::widgets`) live
+//! in `tests/`, where the library links once; the harness depends on this
+//! crate, so a unit test under `src/` would meet a second copy of it. Some of
 //! them still assert on private state — the navigator's route stack
 //! (ADR-0019), the overlay's entry list (ADR-0076), the hero registry, the
 //! transition and modal routes. This module is the one place those items are

@@ -923,7 +923,7 @@ fn a_mapping_change_alone_restamps_the_resident_children() {
     laid.enable_semantics();
     laid.pump();
 
-    let announced = |laid: &mut flui_widgets::testing::LaidOut, label: &str| {
+    let announced = |laid: &mut flui_testing::widgets::LaidOut, label: &str| {
         let tree = laid.a11y_tree().expect("semantics enabled");
         let node = tree
             .find_by_label(label)
@@ -1044,7 +1044,7 @@ fn a_composed_offset_reaches_both_fixed_extent_delegate_kinds() {
         (Some(OFFSET as usize + 2), Some(SET)),
     ];
 
-    let announce = |laid: &mut flui_widgets::testing::LaidOut| {
+    let announce = |laid: &mut flui_testing::widgets::LaidOut| {
         laid.enable_semantics();
         laid.pump();
         let tree = laid.a11y_tree().expect("semantics enabled");
@@ -1111,7 +1111,7 @@ fn a_lazy_sliver_with_no_declared_mapping_announces_its_real_set_size() {
             .child(SizedBox::new(200.0, 60.0))
             .boxed()
     };
-    let announced = |laid: &mut flui_widgets::testing::LaidOut| {
+    let announced = |laid: &mut flui_testing::widgets::LaidOut| {
         laid.enable_semantics();
         laid.pump();
         let tree = laid.a11y_tree().expect("semantics enabled");
@@ -1293,7 +1293,7 @@ use flui_testing::{Action, ActionData, ActionRequest, NodeId, TreeId, invoke_sem
 fn pump_labelled(
     semantics: Semantics,
 ) -> (
-    flui_widgets::testing::LaidOut,
+    flui_testing::widgets::LaidOut,
     flui_testing::A11yTree,
     NodeId,
 ) {

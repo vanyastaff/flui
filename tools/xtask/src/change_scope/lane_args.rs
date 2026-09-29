@@ -707,13 +707,17 @@ mod tests {
 
     #[test]
     fn per_feature_pass_covers_feature_gated_dependents() {
-        // flui-widgets reaches flui-assets only through its optional
-        // `asset-images` edge: a source-only flui-assets change must compile
+        // flui-app reaches flui-hot-reload only through its optional
+        // `hot-reload` edge: a source-only flui-hot-reload change must compile
         // that edge, which the default build never does
-        let a = args(&["crates/flui-assets/src/lib.rs"]);
-        assert!(a.hack_args.contains("-p flui-assets"));
-        assert!(a.hack_args.contains("-p flui-widgets"));
-        assert!(!a.heavy_required);
+        let a = args(&["crates/flui-hot-reload/src/lib.rs"]);
+        assert!(
+            a.hack_args.contains("-p flui-hot-reload"),
+            "{}",
+            a.hack_args
+        );
+        assert!(a.hack_args.contains("-p flui-app"), "{}", a.hack_args);
+        assert!(!a.heavy_required, "{}", a.reason);
     }
 
     #[test]

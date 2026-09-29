@@ -5,9 +5,9 @@
 //! [`HeadlessBinding`] owns its clock and frame state; [`widgets`] provides
 //! widget mounting, layout inspection, and pointer-input helpers.
 
+pub use flui_testing::widgets;
 pub use flui_testing::{BuildCapabilities, HeadlessBinding, MountOptions, MountOwners, Mounted};
 pub use flui_testing::{a11y, replay};
-pub use flui_widgets::testing as widgets;
 
 /// Render-object tests that drive layout and queries without a widget tree,
 /// plus the render-tree diagnostics dump a mounted application can be

@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use flui::animation::Vsync;
 use flui::widgets::VsyncScope;
-use flui_widgets::testing::{LaidOut, lay_out_animated, tight};
+use flui_testing::widgets::{LaidOut, lay_out_animated, tight};
 
 fn mount() -> LaidOut {
     let vsync = Vsync::new();

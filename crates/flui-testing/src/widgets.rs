@@ -1,21 +1,17 @@
-//! Headless view-level layout harness — the Core.1 parity-oracle
-//! infrastructure — shared by the integration tests of `flui-widgets` and of
-//! the design-system crates built on it (`flui-material`, `flui-cupertino`).
+//! Headless view-level layout harness, shared by the integration tests of
+//! `flui-widgets` and of the design-system packages built on it
+//! (`flui-material`, `flui-cupertino`).
 //!
-//! It mounts a root [`View`] (a widget tree) directly as the render-tree root,
-//! runs a build pass (reconciling + mounting the whole subtree's render
-//! objects), then drives a real headless frame and exposes the resulting
-//! render-node geometry. No GPU, no window, no `WidgetsBinding` singleton —
-//! so the tests are order-independent and can run in parallel.
+//! It mounts a root [`View`] (a widget tree) as the render-tree root, runs a
+//! build pass (reconciling and mounting the whole subtree's render objects),
+//! then drives a real headless frame and exposes the resulting render-node
+//! geometry. No GPU, no window, no process-global binding, so the tests are
+//! order-independent and run in parallel.
 //!
-//! Compiled only when a consumer enables the `testing` feature — never in
-//! production builds, and never in this crate's own unit-test build
-//! (`cfg(not(test))`, ADR-0083 §4): a test that drives the harness lives in
-//! `crates/flui-widgets/tests/`. This module is the single canonical harness:
-//! the per-crate `tests/common/mod.rs` files are thin re-export shims over it,
-//! so mount ordering, pointer-contact identity, and virtual-clock policy
-//! cannot drift apart between crates again.
-
+//! This module is the single canonical harness: the per-crate
+//! `tests/common/mod.rs` files are thin re-export shims over it, so mount
+//! ordering, pointer-contact identity and virtual-clock policy cannot drift
+//! apart between crates.
 pub mod harness;
 mod signal_probe;
 
@@ -28,6 +24,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::HeadlessBinding;
+use crate::bootstrap::{MountOptions, MountOwners};
 use flui_animation::{AnimationController, Vsync};
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::Matrix4;
@@ -53,8 +51,6 @@ use flui_rendering::constraints::{BoxConstraints, SliverGeometry};
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::storage::IntrinsicDimension;
 use flui_rendering::testing::inspect;
-use flui_testing::HeadlessBinding;
-use flui_testing::bootstrap::{MountOptions, MountOwners};
 use flui_view::BoxedView;
 use flui_view::InheritedView;
 use flui_view::RootRenderView;
@@ -62,7 +58,7 @@ use flui_view::View;
 use flui_view::ViewExt;
 use flui_view::element::InheritedElementAccess;
 
-use crate::{Align, ConstrainedBox, FocusRoot, GestureArenaScope, UnconstrainedBox};
+use flui_widgets::{Align, ConstrainedBox, FocusRoot, GestureArenaScope, UnconstrainedBox};
 
 /// A laid-out widget tree, holding the element + render trees alive (inside a
 /// tree-bound [`HeadlessBinding`]) so geometry can be queried after layout — and
@@ -367,10 +363,10 @@ fn install_clipboard(build_owner: &mut flui_view::BuildOwner) -> Arc<InMemoryCli
 /// Shallowest mounted element of `logical_root_type` → its render id.
 ///
 /// RenderViews own a node directly. Composition roots (`StatelessView` /
-/// `StatefulView`, e.g. [`AnimatedContainer`](crate::AnimatedContainer)) do
+/// `StatefulView`, e.g. [`AnimatedContainer`](flui_widgets::AnimatedContainer)) do
 /// not: walk to the first render-owning descendant so `LaidOut::root` still
 /// names the caller's outermost laid-out box (Flutter's "size of the
-/// widget"). [`Container`](crate::Container) is a `RenderView` and takes the
+/// widget"). [`Container`](flui_widgets::Container) is a `RenderView` and takes the
 /// direct path.
 fn resolve_logical_render_root(
     binding: &mut HeadlessBinding,
@@ -689,7 +685,7 @@ impl LaidOut {
     /// sliver parity cases that record a "no semantics-tree assertion
     /// capability here" gap are describing its absence.
     #[must_use]
-    pub fn a11y_tree(&self) -> Option<flui_testing::A11yTree> {
+    pub fn a11y_tree(&self) -> Option<crate::A11yTree> {
         self.binding.a11y_tree()
     }
 

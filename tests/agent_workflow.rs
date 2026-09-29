@@ -13,7 +13,7 @@
 //! `packages/flui-material/tests/elevated_button.rs`, both of which reach past
 //! the facade into `flui_rendering`/`flui_interaction` directly, and both of
 //! which drive taps through a widget-testing convenience
-//! (`flui_widgets::testing::lay_out`'s `dispatch_pointer_down`) rather than
+//! (`flui_testing::widgets::lay_out`'s `dispatch_pointer_down`) rather than
 //! the general pointer-replay path this test uses).
 //!
 //! ## The five steps, and which public API answers each one
@@ -103,7 +103,7 @@ impl ViewState<AgentCounter> for AgentCounterState {
 }
 
 /// Mounts [`AgentCounter`] through the canonical headless bootstrap, wrapped
-/// exactly as `flui_widgets::testing::lay_out` wraps every widget-tier test
+/// exactly as `flui_testing::widgets::lay_out` wraps every widget-tier test
 /// (`GestureArenaScope` for tap routing, `FocusRoot` because a mounted tree
 /// always needs a focus scope, `Theme` because `ElevatedButton` panics
 /// without one — see `flui_material::Theme::of`'s doc comment).

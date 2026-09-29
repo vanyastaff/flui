@@ -99,19 +99,6 @@ pub mod image;
 pub mod interaction;
 pub mod layout;
 pub mod localization;
-// Canonical headless mount/layout/pointer harness (`testing::LaidOut`).
-// Compiled only when a consumer enables the `testing` feature (which
-// activates the optional `flui-testing` dependency) — never in production
-// builds. The integration tests in `tests/` and those of `flui-material` and
-// `flui-cupertino` re-export it instead of carrying drifted copies. See
-// [`testing`] for the module overview.
-//
-// `not(test)` keeps it out of this crate's own unit-test build even though
-// the self dev-dependency turns the feature on there (ADR-0083 §4): a unit
-// test under `src/` that reaches for the harness fails to compile, and a
-// test that needs it lives in `tests/`.
-#[cfg(all(feature = "testing", not(test)))]
-pub mod testing;
 
 /// `Navigator` and routing — see `docs/adr/ADR-0019-navigator-routing-seam.md`. The
 /// route stack, its lifecycle, the flush algorithm and the result channel are
