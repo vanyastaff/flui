@@ -73,6 +73,9 @@ uses the current directory as its source checkout; from another directory, use
 the generated `flui` dependency points to the checkout root by absolute path.
 `flui` is the application's only framework dependency. Start UI code with
 `use flui::prelude::*;`; Cargo dependency renames are supported by its derives.
+The facade turns no design system on by default: to use `flui::material` or
+`flui::cupertino`, add `features = ["material"]` (or `"cupertino"`) to the `flui`
+dependency in the generated `Cargo.toml`.
 
 Add `--hot-reload` to `flui create` to generate the host/worker/types workspace
 used by the reload runner. See the [CLI guide](../crates/flui-cli/README.md) for

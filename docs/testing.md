@@ -149,21 +149,20 @@ only runs when someone remembers to run it by hand.
 
 One scope for the whole local suite:
 `--workspace --exclude flui-platform --lib --bins --tests
---features flui/cupertino,flui-painting/parley`, run as the two stages below.
+--features flui/material,flui/cupertino,flui-painting/parley`, run as the two stages below.
 `flui-painting/parley` is on so the Parley raster path's oracle test runs until
 ADR-0092 §10 makes that path the default.
 Two choices in it differ from CI on purpose:
 
-- **One feature slice.** The facade's non-default catalog (`cupertino`)
-  joins the workspace run through feature unification. The
+- **One feature slice.** The facade turns no catalog on by default, so both
+  (`material`, `cupertino`) are named and join the workspace run through
+  feature unification. The
   alternative, a second `cargo nextest run -p flui --features ...`, resolves
   features for `flui`'s own graph, without the dev-dependency features other
   members switch on (`testing` and friends), so every crate the two runs share
   was built twice under different hashes. No test is lost: the root crate has
-  no `cfg(not(feature = ...))` code, so the default-feature facade's tests are
-  a subset of these. **Not covered locally:** the facade in its default
-  configuration (Material only, no Cupertino). CI's `test`
-  job and `feature-matrix` build and test it; `cargo xtask feature-matrix` does too.
+  no `cfg(not(feature = ...))` code, so the no-feature facade's tests are a
+  subset of these, and `cargo xtask facade-combos` lints that build.
 - **Examples are not linked.** `cargo nextest run` with no target flags builds
   every example of every package it tests: about 60 binaries, each linking the
   whole render stack, on every run. `--lib --bins --tests` selects exactly the
@@ -801,7 +800,7 @@ each changes those lines and fails the matching test, naming the layer and the
 command.
 
 No GPU, no device-specific baseline: CI's `test` job (its scope turns
-`flui/cupertino` on) runs the suite
+`flui/material` and `flui/cupertino` on) runs the suite
 like any other test, and it takes about a tenth of a second.
 
 ### Why structural and not pixels

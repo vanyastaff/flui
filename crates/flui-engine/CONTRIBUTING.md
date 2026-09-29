@@ -76,7 +76,7 @@ A green harness test is necessary but not sufficient — pixels can be wrong in
 ways the test never looks at. When a change affects appearance, capture it:
 
 ```bash
-cargo run -p flui --example screenshot -- material 900 760 /tmp/out.png
+cargo run -p flui --example screenshot --features material,cupertino -- material 900 760 /tmp/out.png
 ```
 
 Demos: `material`, `cupertino`, `vertical-slice` (alias `vslice`), `gallery`,
