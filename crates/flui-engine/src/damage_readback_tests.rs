@@ -572,7 +572,11 @@ fn partial_equals_full_inside_damage() {
                     ),
                 )
                 .with_text_direction(TextDirection::Ltr);
-            painter.layout(0.0, 100.0);
+            painter.layout(
+                &mut flui_painting::TextContext::new(&flui_painting::FontCollection::new()),
+                0.0,
+                100.0,
+            );
             let shadow = Path::rectangle(Rect::from_xywh(0.0, 20.0, 30.0, 8.0));
             canvas.draw_shadow(&shadow, Color::BLACK, 3.0);
             painter.paint(canvas, Offset::ZERO);
@@ -915,7 +919,11 @@ fn removed_text_under_a_tight_line_height_leaves_no_ink() {
                 ),
             )
             .with_text_direction(TextDirection::Ltr);
-        painter.layout(0.0, 100.0);
+        painter.layout(
+            &mut flui_painting::TextContext::new(&flui_painting::FontCollection::new()),
+            0.0,
+            100.0,
+        );
         painter.paint(canvas, Offset::ZERO);
     };
     let before = scene(
