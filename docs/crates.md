@@ -114,7 +114,7 @@ Empty since [ADR-0081](adr/ADR-0081-workspace-tiers-and-reach-facts.md) deleted 
 
 | Crate | Status | Purpose |
 |-------|--------|---------|
-| `flui` | ✅ ACTIVE | The root package / app-author facade. Feature-selective: `material` (default), `cupertino`, `hot-reload`; `localizations` is empty and deprecated. A module whose feature is off is absent, not empty. Every supported combination is compiled in isolation by `cargo xtask facade-combos` (run by the CI feature-matrix job), so a combination cannot pass through workspace feature unification. |
+| `flui` | ✅ ACTIVE | The root package / app-author facade. Feature-selective, nothing on by default: `material`, `cupertino`, `hot-reload`; `localizations` is empty and deprecated. A module whose feature is off is absent, not empty. Every supported combination is compiled in isolation by `cargo xtask facade-combos` (run by the CI feature-matrix job), so a combination cannot pass through workspace feature unification. |
 
 ## Examples and Tools
 

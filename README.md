@@ -41,27 +41,27 @@ For a step-by-step setup including platform notes (Windows / macOS / Android NDK
 
 ## Choosing a catalog
 
-The `flui` facade is **Material-first by default** and feature-selective. The
-base surface — the widget catalog, the View/Element layer, animation, and
-`run_app` — needs no feature at all.
+The `flui` facade is feature-selective and turns **nothing on by default**: an
+application names the catalog it uses. The base surface — the widget catalog,
+the View/Element layer, animation, and `run_app` — needs no feature at all.
 
 ```toml
-# Default: the Material catalog, exactly as the quick start teaches it.
-flui = { path = "…" }
+# The Material catalog.
+flui = { path = "…", features = ["material"] }
 
 # Cupertino only, no Material compiled.
-flui = { path = "…", default-features = false, features = ["cupertino"] }
+flui = { path = "…", features = ["cupertino"] }
 
 # Both catalogs.
-flui = { path = "…", default-features = false, features = ["material", "cupertino"] }
+flui = { path = "…", features = ["material", "cupertino"] }
 
 # Catalog-free: still gets widgets, navigation, focus, and media information.
-flui = { path = "…", default-features = false }
+flui = { path = "…" }
 ```
 
 | Feature | Default | Enables |
 |---|---|---|
-| `material` | **on** | `flui::material` and the Material half of `flui::prelude` |
+| `material` | off | `flui::material` and the Material half of `flui::prelude` |
 | `cupertino` | off | `flui::cupertino` |
 | `localizations` | off | nothing: deprecated and empty; the global widgets localizations are in `flui::widgets` |
 | `hot-reload` | off | desktop/Android development reload machinery; absent from an ordinary production graph |
