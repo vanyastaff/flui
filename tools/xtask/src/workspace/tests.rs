@@ -757,6 +757,25 @@ fn a_reach_exception_citing_a_missing_adr_is_reported() {
     assert_eq!(fixture.findings(), Vec::<String>::new());
 }
 
+/// The facade turns no catalog, tool or capability on by default (ADR-0088
+/// §6): an application names the features it uses.
+fn the_facade_turns_no_feature_on_by_default() {
+    let metadata = util::metadata(&util::repo_root()).expect("cargo metadata on the repository");
+    let facade = metadata
+        .workspace_packages()
+        .into_iter()
+        .find(|package| package.name.as_str() == "flui")
+        .expect("the facade is a workspace member");
+    let defaults = facade
+        .features
+        .get("default")
+        .map_or(&[][..], Vec::as_slice);
+    assert!(
+        defaults.is_empty(),
+        "the `flui` facade must have `default = []` (ADR-0088 §6), found {defaults:?}"
+    );
+}
+
 /// Cargo reports canonical manifest paths; a root spelled through a symlink
 /// (macOS's `/var` -> `/private/var`) must still own them. Where the host
 /// refuses to create a symlink (Windows without the privilege), the root's
@@ -800,6 +819,10 @@ fn workspace_gate_contract() {
             (
                 "a_well_formed_workspace_passes",
                 a_well_formed_workspace_passes as fn(),
+            ),
+            (
+                "the_facade_turns_no_feature_on_by_default",
+                the_facade_turns_no_feature_on_by_default as fn(),
             ),
             (
                 "an_upward_dependency_is_refused",

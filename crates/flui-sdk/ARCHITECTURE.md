@@ -104,10 +104,9 @@ normal dependency beside `flui-sdk` as a dev-dependency only, has no instance
 (`crates/flui-macros/ARCHITECTURE.md`, "Resolve runtime paths"). The `Diagnosticable` derive
 itself has no SDK path; its expansion still resolves through the SDK.
 
-Because `flui-sdk`'s dev-dependency on the facade reaches `flui-material` through the facade's
-default `material` feature, a unit test inside this crate would see a second copy of
-`flui_sdk` (the one Material links). The same holds for Cupertino whenever a build enables
-`flui/cupertino`, as an `--all-features` test run does. The surface test is an integration test
+Whenever a build enables `flui/material` or `flui/cupertino` (the test scope and `--all-features`
+do), `flui-sdk`'s dev-dependency on the facade reaches that catalog, and a unit test inside this
+crate would see a second copy of `flui_sdk` (the one the catalog links). The surface test is an integration test
 and is not affected.
 
 The count is from source, not from rustdoc JSON; the rustdoc measurement ADR-0088 §4 asks for

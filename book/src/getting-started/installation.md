@@ -37,7 +37,9 @@ The generated application can live outside the FLUI repository. Bare `--local` u
 directory as its source checkout; from another directory, use `--local=/path/to/flui`. The source
 must remain available afterward — the generated `flui` dependency points at the checkout root by
 absolute path. `flui` is the application's only framework dependency; UI code starts with
-`use flui::prelude::*;`.
+`use flui::prelude::*;`. No design system is on by default: to use `flui::material` or
+`flui::cupertino`, add `features = ["material"]` (or `"cupertino"`) to the `flui` dependency in
+the generated `Cargo.toml`.
 
 Add `--hot-reload` to `flui create` to generate the host/worker/types workspace used by the reload
 runner — see the

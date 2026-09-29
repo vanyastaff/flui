@@ -100,7 +100,7 @@ gestures, and pointer-driven widget rebuilds. They also exercise a downstream
 recognizer's public extension traits, registering
 competing members and observing arena acceptance and rejection after pointer
 movement. Separate normal dependency graphs
-with and without the default catalog must exclude testing and hot reload. Tests
+with no feature and with a catalog must exclude testing and hot reload. Tests
 in the facade's own package alone cannot establish that property because its
 development dependencies expose implementation crates.
 ### Products and registry support have different roles

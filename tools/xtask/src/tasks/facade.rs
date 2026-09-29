@@ -6,6 +6,10 @@ use super::exec::{Cmd, Runner};
 
 /// The facade's supported feature combinations; `""` is its defaults.
 ///
+/// The defaults are empty, so `""` builds what `--no-default-features` does and
+/// is a cached no-op; it stays so that a default someone adds back is still
+/// built on its own.
+///
 /// Each is its own clippy of the `flui` package alone: a `--workspace` build
 /// proves nothing here, since feature unification would enable `material`
 /// from a sibling and turn a broken combination green. `--all-targets` is

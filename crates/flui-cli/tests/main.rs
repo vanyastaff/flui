@@ -48,6 +48,10 @@ fn subcommand_contracts() {
             cli_completions::completions_bash,
         ),
         (
+            "cli_create::generated_projects_compile",
+            cli_create::generated_projects_compile,
+        ),
+        (
             "cli_create::generated_widget_project_test_passes",
             cli_create::generated_widget_project_test_passes,
         ),

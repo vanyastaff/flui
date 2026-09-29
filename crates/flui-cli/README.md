@@ -117,7 +117,7 @@ pipe: completion scripts and `--json` events.
 
 ```bash
 flui create my_app                          # counter (default)
-flui create my_app --template basic         # Hello, FLUI! with a Material theme
+flui create my_app --template basic         # Hello, FLUI! stateless app
 flui create my_app --template empty         # smallest runnable app
 flui create my_widgets --lib                # widget library with a widget test
 flui create my_app --hot-reload             # host / worker / types workspace

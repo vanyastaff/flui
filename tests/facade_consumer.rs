@@ -137,6 +137,15 @@ fn ordinary_facade_graph_excludes_test_support() {
             graph.lines().any(|line| line.starts_with("flui v")),
             "{graph}"
         );
+        // The facade turns no design system on by default (ADR-0088 §6): a
+        // consumer that names no feature gets neither catalog.
+        for catalog in ["flui-material ", "flui-cupertino "] {
+            assert!(
+                !graph.lines().any(|line| line.starts_with(catalog)),
+                "`{}` in default={defaults} normal graph:\n{graph}",
+                catalog.trim_end()
+            );
+        }
         assert!(
             !graph.lines().any(|line| line.starts_with("flui-testing ")),
             "test driver in default={defaults} normal graph:\n{graph}"

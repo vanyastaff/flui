@@ -8,7 +8,7 @@
 //! the workspace root, so the acceptance test exercises the exact tree this
 //! binary runs.
 //!
-//! Run with: cargo run --example material_demo
+//! Run with: cargo run --example material_demo --features material
 //!
 //! No local `tracing_subscriber` init here, matching every other
 //! `run_app`-based example (`vertical_slice_demo`, `colored_box_app`,
