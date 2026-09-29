@@ -44,7 +44,9 @@ vocabulary! {
         InputHeld => "input_held",
         /// The server or the application is shutting down.
         ShuttingDown => "shutting_down",
-        /// The platform failed in a way no other code names.
+        /// The platform failed in a way no other code names. A code a newer
+        /// schema added reads as this one.
+        #[cfg_attr(feature = "serde", serde(other))]
         Platform => "platform",
     }
 }
@@ -122,6 +124,11 @@ mod tests {
                 Some(serde_json::Value::String(code.to_string()))
             );
         }
+        assert_eq!(
+            serde_json::from_value::<ErrorCode>(serde_json::json!("rate_limited")).ok(),
+            Some(ErrorCode::Platform),
+            "a code a newer schema added reads as the catch-all"
+        );
         for retry in [Retry::Never, Retry::Soon, Retry::WhenAppears] {
             assert_eq!(
                 serde_json::to_value(retry).ok(),

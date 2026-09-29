@@ -28,9 +28,11 @@
 //!
 //! # Rectangles
 //!
-//! A node's bounds are its published AccessKit bounds scaled to physical
-//! pixels and covered by whole pixels, measured from the window's drawing
-//! surface ([`Coordinates::Surface`]): the realm knows no window position.
+//! A node's bounds are its published AccessKit bounds, with every ancestor's
+//! transform applied, scaled to physical pixels and covered by whole pixels.
+//! They are measured from the window's drawing surface, so they are reported
+//! as [`Node::surface_rect`] and `rect`, which is screen pixels, is left out:
+//! the realm knows no window position.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -38,8 +40,7 @@ use accesskit::{Action, NodeId, Toggled, TreeId};
 use accesskit_consumer::{FilterResult, NodeRef, common_filter};
 use flui_foundation::geometry::{DevicePixelRatio, Rect as LogicalRect, device_rect_covering};
 use flui_protocol::{
-    ActionName, ActionRequest, Checked, Coordinates, ElementId, ErrorCode, Node, ReadQuery, Rect,
-    Role, Tree, WindowId,
+    ActionName, ActionRequest, Checked, ElementId, Node, ReadQuery, Rect, Role, Tree, WindowId,
 };
 
 use crate::action::{ActionArgs, SemanticsAction, SemanticsActionRequest};
@@ -87,18 +88,6 @@ pub enum WireReadError {
     Malformed,
 }
 
-impl WireReadError {
-    /// The ADR-0080 code for this error.
-    #[must_use]
-    pub fn code(&self) -> ErrorCode {
-        match self {
-            Self::NoTree => ErrorCode::Busy,
-            Self::NotFound { .. } => ErrorCode::Gone,
-            Self::Malformed => ErrorCode::Platform,
-        }
-    }
-}
-
 /// Why a wire action was refused before reaching any handler.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
@@ -138,21 +127,6 @@ pub enum WireActionError {
     Malformed,
 }
 
-impl WireActionError {
-    /// The ADR-0080 code for this error.
-    #[must_use]
-    pub fn code(&self) -> ErrorCode {
-        match self {
-            Self::NoTree => ErrorCode::Busy,
-            Self::NotFound { .. } => ErrorCode::Gone,
-            Self::Disabled { .. } => ErrorCode::Disabled,
-            Self::ActionUnsupported { .. } => ErrorCode::ActionUnsupported,
-            Self::InvalidArgument { .. } => ErrorCode::InvalidArgument,
-            Self::Malformed => ErrorCode::Platform,
-        }
-    }
-}
-
 /// The FLUI action a wire action reaches, as AccessKit's Windows adapter
 /// routes the UI Automation call behind it: `invoke`, `toggle` and `select`
 /// click, which is FLUI's tap; `expand` and `collapse` toggle an expandable
@@ -162,7 +136,7 @@ impl WireActionError {
 /// `None` for a wire action FLUI has no route for; `ActionName` is
 /// `#[non_exhaustive]`, so a tool added to the vocabulary lands here.
 #[must_use]
-pub fn semantics_action_for_wire(action: ActionName) -> Option<SemanticsAction> {
+pub(crate) fn semantics_action_for_wire(action: ActionName) -> Option<SemanticsAction> {
     Some(match action {
         ActionName::Invoke
         | ActionName::Toggle
@@ -175,6 +149,12 @@ pub fn semantics_action_for_wire(action: ActionName) -> Option<SemanticsAction> 
         _ => return None,
     })
 }
+
+/// The `accesskit_windows` release [`wire_role`], `offers_selection_item` and
+/// `reads_selected` were transcribed from; a test fails when the workspace
+/// locks another one.
+#[cfg(test)]
+const WIRE_ROLE_TRANSCRIBED_FROM: &str = "0.35.0";
 
 /// The wire role the desktop server reports for a node AccessKit publishes as
 /// `role` on Windows: UI Automation's control type for it
@@ -465,7 +445,7 @@ impl Walk<'_> {
     /// depth and node budget.
     fn node(&mut self, node: &NodeRef<'_>, id: ElementId, depth: usize) -> Node {
         let mut out = wire_node(node, id, self.root_claims_focus);
-        out.rect = self.rect(node);
+        out.surface_rect = self.rect(node);
         let children: Vec<NodeRef<'_>> = node.filtered_children(common_filter).collect();
         if children.is_empty() {
             return out;
@@ -596,14 +576,14 @@ impl SemanticsOwner {
                 root_claims_focus,
             };
             if walk.remaining == 0 {
-                return Ok(Tree::new(Vec::new(), true, Coordinates::Surface));
+                return Ok(Tree::new(Vec::new(), true));
             }
             walk.remaining -= 1;
             let mut root = walk.node(&start, id, 0);
             if is_window_root {
                 root.window = Some(placement.window);
             }
-            Ok(Tree::new(vec![root], walk.truncated, Coordinates::Surface))
+            Ok(Tree::new(vec![root], walk.truncated))
         });
         match read {
             Ok(result) => result,
@@ -613,11 +593,15 @@ impl SemanticsOwner {
     }
 
     /// Resolves a wire action into the FLUI action it performs, checked
-    /// against the element as the wire shows it now: the element is in the
-    /// tree, it is not disabled, and it advertises the action. `expand` and
-    /// `collapse` are advertised only toward the state the element lacks, so
-    /// a second `expand` before the next frame is refused here rather than
-    /// toggling the element back (mapping decision 7).
+    /// against the element as this owner's tree shows it: the element is in
+    /// the tree, it is not disabled, and it advertises the action. `expand`
+    /// and `collapse` are advertised only toward the state the element lacks,
+    /// so `expand` on an element the tree shows expanded is refused.
+    ///
+    /// The tree is the last committed one, so the check does not close the
+    /// double-toggle race of mapping decision 5: two `expand`s resolved
+    /// before the frame that shows the first one's effect both pass, and the
+    /// second collapses the element again.
     ///
     /// # Errors
     ///

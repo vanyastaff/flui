@@ -9,11 +9,17 @@
 //!   refuses a schema that differs from its version's golden file.
 //! - An additive change in ADR-0080's sense (a new optional field, tool, role,
 //!   action or error code) needs nothing more: the same test checks that every
-//!   published schema is a subset of the next one.
+//!   published schema is a subset of the next one. A reader built on an older
+//!   schema still reads the newer reply: an unknown field is ignored, an
+//!   unknown role reads as [`Role::Unknown`](crate::Role::Unknown), an
+//!   unknown action name is dropped from a node's `actions`, and an unknown
+//!   error code reads as [`ErrorCode::Platform`](crate::ErrorCode::Platform).
 //! - A change that is not additive (a field renamed or removed, a name
-//!   respelled, an optional field made required) is listed in [`BREAKING`]
-//!   with the ADR that decided it. After 1.0 it also bumps `major`, and that
-//!   ADR supersedes ADR-0080.
+//!   respelled, an optional field made required, or an existing field given
+//!   a new meaning) is listed in [`BREAKING`] with the ADR that decided it.
+//!   After 1.0 it also bumps `major`, and that ADR supersedes ADR-0080. The
+//!   test sees only the schema's shape, so a new meaning is caught in review:
+//!   it goes under a new name instead, as `surface_rect` did beside `rect`.
 
 use std::fmt;
 use std::str::FromStr;

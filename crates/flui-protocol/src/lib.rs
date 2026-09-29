@@ -44,6 +44,6 @@ pub mod wire;
 pub use act::ActionRequest;
 pub use error::{ErrorCode, Retry};
 pub use semantics::{SemanticsAction, SemanticsRole};
-pub use tree::{Coordinates, ElementId, Node, ReadQuery, Rect, Tree, WindowId, outline};
+pub use tree::{ElementId, Node, ReadQuery, Rect, Tree, WindowId, outline};
 pub use version::{PROTOCOL_VERSION, ProtocolVersion};
 pub use wire::{ActionName, Checked, Role};

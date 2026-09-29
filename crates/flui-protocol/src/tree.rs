@@ -146,33 +146,6 @@ pub struct Rect {
     pub height: u32,
 }
 
-/// What a tree's rectangles are measured from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(rename_all = "snake_case")
-)]
-#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
-#[non_exhaustive]
-pub enum Coordinates {
-    /// Physical screen pixels, what the desktop server reports and what
-    /// pointer tools take. Left out of a reply, being the default.
-    #[default]
-    Screen,
-    /// Physical pixels from the top-left of the window's drawing surface: the
-    /// in-process backend knows no window position.
-    Surface,
-}
-
-impl Coordinates {
-    /// Whether this is [`Self::Screen`], the value a reply leaves out.
-    #[must_use]
-    pub fn is_screen(&self) -> bool {
-        *self == Self::Screen
-    }
-}
-
 /// One element as a read reports it. A state at its default (enabled, not
 /// focused, no children) is left out of the JSON, so a tree costs the reader
 /// only what is notable about each node.
@@ -212,12 +185,23 @@ pub struct Node {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub class_name: Option<String>,
-    /// Bounds, in the tree's [`Coordinates`].
+    /// Bounds in physical screen pixels, what pointer tools take. Left out
+    /// by a backend that knows no window position, which reports
+    /// `surface_rect` instead.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub rect: Option<Rect>,
+    /// Bounds in physical pixels from the top-left of the window's drawing
+    /// surface, what the in-process backend reports: it knows no window
+    /// position. A separate field, so a client that takes `rect` for screen
+    /// pixels sees no rectangle rather than a misplaced one.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub surface_rect: Option<Rect>,
     /// Whether the element refuses interaction; reported only when it does.
     #[cfg_attr(
         feature = "serde",
@@ -254,10 +238,15 @@ pub struct Node {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub selected: Option<bool>,
-    /// The tools that act on this element.
+    /// The tools that act on this element. A reader drops a name it does not
+    /// know: a tool added after it was built is one it cannot call.
     #[cfg_attr(
         feature = "serde",
-        serde(default, skip_serializing_if = "Vec::is_empty")
+        serde(
+            default,
+            skip_serializing_if = "Vec::is_empty",
+            deserialize_with = "known_actions"
+        )
     )]
     pub actions: Vec<ActionName>,
     /// The window this element is the root of; on roots only.
@@ -308,6 +297,7 @@ impl Node {
             automation_id: None,
             class_name: None,
             rect: None,
+            surface_rect: None,
             disabled: false,
             focused: false,
             focusable: false,
@@ -331,9 +321,13 @@ impl Node {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct Tree {
-    /// The schema version the reply was written in.
-    #[cfg_attr(feature = "serde", serde(default = "current_version"))]
-    pub protocol: ProtocolVersion,
+    /// The schema version the reply was written in; `None` for a reply that
+    /// does not say, such as one written before the field existed.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub protocol: Option<ProtocolVersion>,
     /// One tree per window read.
     pub roots: Vec<Node>,
     /// Elements reported.
@@ -341,30 +335,29 @@ pub struct Tree {
     /// Whether the read left anything out (its depth, its node budget): then
     /// read a subtree with `root`, or more nodes.
     pub truncated: bool,
-    /// What the rectangles are measured from; left out when it is the screen.
-    #[cfg_attr(
-        feature = "serde",
-        serde(default, skip_serializing_if = "Coordinates::is_screen")
-    )]
-    pub coordinates: Coordinates,
 }
 
+/// The action names of a node, less those this build does not know.
 #[cfg(feature = "serde")]
-fn current_version() -> ProtocolVersion {
-    PROTOCOL_VERSION
+fn known_actions<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<ActionName>, D::Error> {
+    use serde::Deserialize as _;
+    let names = <Vec<std::borrow::Cow<'de, str>>>::deserialize(d)?;
+    Ok(names
+        .iter()
+        .filter_map(|name| ActionName::ALL.iter().copied().find(|a| a.name() == name))
+        .collect())
 }
 
 impl Tree {
     /// A tree of `roots` in this crate's [`PROTOCOL_VERSION`], its `count`
     /// taken from the roots.
     #[must_use]
-    pub fn new(roots: Vec<Node>, truncated: bool, coordinates: Coordinates) -> Self {
+    pub fn new(roots: Vec<Node>, truncated: bool) -> Self {
         Self {
-            protocol: PROTOCOL_VERSION,
+            protocol: Some(PROTOCOL_VERSION),
             count: count(&roots),
             roots,
             truncated,
-            coordinates,
         }
     }
 }
@@ -494,8 +487,7 @@ pub fn outline(roots: &[Node]) -> String {
 }
 
 /// How many elements `roots` hold.
-#[must_use]
-pub fn count(roots: &[Node]) -> usize {
+fn count(roots: &[Node]) -> usize {
     roots.iter().map(|n| 1 + count(&n.children)).sum()
 }
 
@@ -569,12 +561,8 @@ mod tests {
 
     #[cfg(feature = "serde")]
     #[test]
-    fn a_tree_says_its_version_and_leaves_screen_coordinates_out() {
-        let tree = Tree::new(
-            vec![Node::new(e(1), Role::Window, "Window")],
-            false,
-            Coordinates::Screen,
-        );
+    fn a_tree_says_its_version_and_a_reply_without_one_reads_as_unversioned() {
+        let tree = Tree::new(vec![Node::new(e(1), Role::Window, "Window")], false);
         assert_eq!(
             serde_json::to_value(&tree).ok(),
             Some(serde_json::json!({
@@ -584,22 +572,50 @@ mod tests {
                 "truncated": false
             }))
         );
-        let surface = Tree::new(Vec::new(), true, Coordinates::Surface);
-        assert_eq!(
-            serde_json::to_value(&surface)
-                .ok()
-                .and_then(|v| v.get("coordinates").cloned()),
-            Some(serde_json::json!("surface"))
-        );
-        // A reply written before the two fields existed still reads.
+        // A reply written before the field existed still reads, and is not
+        // labelled with this reader's version.
         let older: Tree = serde_json::from_value(
             serde_json::json!({"roots": [], "count": 0, "truncated": false}),
         )
-        .expect("the version and coordinates are optional on the way in");
+        .expect("the version is optional on the way in");
+        assert_eq!(older.protocol, None);
+    }
+
+    /// Surface-relative bounds travel under their own name, so a client that
+    /// reads `rect` as screen pixels finds none rather than a misplaced one.
+    #[cfg(feature = "serde")]
+    #[test]
+    fn surface_bounds_are_not_spelled_rect() {
+        let mut node = Node::new(e(1), Role::Button, "Button");
+        node.surface_rect = Some(Rect {
+            x: 4,
+            y: 8,
+            width: 10,
+            height: 20,
+        });
+        let json = serde_json::to_value(&node).expect("a node serializes");
+        assert_eq!(json.get("rect"), None);
         assert_eq!(
-            (older.protocol, older.coordinates),
-            (PROTOCOL_VERSION, Coordinates::Screen)
+            json.get("surface_rect"),
+            Some(&serde_json::json!({"x": 4, "y": 8, "width": 10, "height": 20}))
         );
+    }
+
+    /// A reply from a newer schema still reads: a role this build does not
+    /// know is `unknown` (its native role still says what it is), and an
+    /// action name it does not know is dropped, since it cannot call it.
+    #[cfg(feature = "serde")]
+    #[test]
+    fn a_newer_role_or_action_name_does_not_fail_the_read() {
+        let node: Node = serde_json::from_value(serde_json::json!({
+            "id": "e1",
+            "role": "carousel",
+            "native_role": "Carousel",
+            "actions": ["invoke", "swipe", "focus"]
+        }))
+        .expect("a node with names from a newer schema reads");
+        assert_eq!(node.role, Role::Unknown);
+        assert_eq!(node.actions, [ActionName::Invoke, ActionName::Focus]);
     }
 
     #[test]

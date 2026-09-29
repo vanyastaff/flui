@@ -99,7 +99,7 @@ pub use accesskit_translation::{semantics_action_args_for, semantics_action_for,
 // ============================================================================
 // RE-EXPORTS - Agent read and act (ADR-0095)
 // ============================================================================
-pub use agent::{Placement, WireActionError, WireReadError, semantics_action_for_wire};
+pub use agent::{Placement, WireActionError, WireReadError};
 // `SemanticsUpdateCallback` names `TreeUpdate` in its signature, so a consumer
 // implementing that callback must be able to name it without adding accesskit
 // itself at a version that must match ours. `NodeId` comes along because

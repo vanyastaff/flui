@@ -105,7 +105,9 @@ vocabulary! {
         /// A splitter between panes.
         Splitter => "splitter",
         /// A control this vocabulary has no name for; the reply's native role
-        /// says what the OS calls it.
+        /// says what the OS calls it. A role a newer schema added reads as
+        /// this one.
+        #[cfg_attr(feature = "serde", serde(other))]
         Unknown => "unknown",
     }
 }
@@ -271,9 +273,10 @@ mod tests {
             );
             assert_eq!(serde_json::from_value::<Role>(wire).ok(), Some(role));
         }
-        assert!(
-            serde_json::from_value::<Role>(serde_json::json!("Edit")).is_err(),
-            "a native name is not a role"
+        assert_eq!(
+            serde_json::from_value::<Role>(serde_json::json!("Edit")).ok(),
+            Some(Role::Unknown),
+            "a name outside the vocabulary (a native name, a role a newer schema              added) reads as unknown"
         );
     }
 

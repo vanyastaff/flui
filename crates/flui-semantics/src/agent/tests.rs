@@ -158,6 +158,37 @@ fn every_role_bearing_flag_reads_as_the_role_uia_reports() {
 /// the desktop server reads from that control type (`uia.rs` `role_of`,
 /// `refine_role`; `role.rs` `role_from_aria`). Transcribed from those
 /// sources, not derived from `wire_role`.
+/// The table below and `wire_role` were transcribed from one release of
+/// `accesskit_windows`, which this crate cannot depend on. Bumping the adapter
+/// fails here until the transcription is checked against the new release and
+/// [`WIRE_ROLE_TRANSCRIBED_FROM`] moves with it.
+#[test]
+fn the_role_fold_was_transcribed_from_the_locked_windows_adapter() {
+    let lock_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.lock");
+    let lock = std::fs::read_to_string(lock_path)
+        .unwrap_or_else(|error| panic!("reading {lock_path}: {error}"));
+    let locked: Vec<&str> = lock
+        .split("[[package]]")
+        .filter(|entry| {
+            entry
+                .lines()
+                .any(|line| line.trim() == r#"name = "accesskit_windows""#)
+        })
+        .filter_map(|entry| {
+            entry.lines().find_map(|line| {
+                line.trim()
+                    .strip_prefix("version = \"")
+                    .and_then(|rest| rest.strip_suffix('"'))
+            })
+        })
+        .collect();
+    assert_eq!(
+        locked,
+        [WIRE_ROLE_TRANSCRIBED_FROM],
+        "the workspace locks a different accesskit_windows: re-check `wire_role`,          `offers_selection_item`, `reads_selected` and the table in          `wire_role_matches_the_windows_adapter_for_every_role_flui_publishes` against it,          then update WIRE_ROLE_TRANSCRIBED_FROM"
+    );
+}
+
 #[test]
 fn wire_role_matches_the_windows_adapter_for_every_role_flui_publishes() {
     use SemanticsFlag as F;
@@ -258,7 +289,6 @@ fn a_read_before_the_first_assembly_is_no_tree_and_busy() {
     let owner = SemanticsOwner::new_without_callback();
     let read = owner.read_wire(&ReadQuery::new(), placement());
     assert_eq!(read, Err(WireReadError::NoTree));
-    assert_eq!(WireReadError::NoTree.code(), ErrorCode::Busy);
 }
 
 /// A `GenericContainer` is lifted into its parent and a hidden node takes its
@@ -440,10 +470,6 @@ fn expand_on_an_expanded_node_is_action_unsupported() {
             action: ActionName::Expand
         })
     );
-    assert_eq!(
-        expand.map_err(|error| error.code()),
-        Err(ErrorCode::ActionUnsupported)
-    );
 
     let collapse = f
         .owner
@@ -493,9 +519,9 @@ fn set_value_reaches_set_text_with_its_text() {
     let without_value = f
         .owner
         .resolve_wire_action(&ActionRequest::new(e(2), ActionName::SetValue));
-    assert_eq!(
-        without_value.map_err(|error| error.code()),
-        Err(ErrorCode::InvalidArgument)
+    assert!(
+        matches!(without_value, Err(WireActionError::InvalidArgument { .. })),
+        "{without_value:?}"
     );
 }
 
@@ -513,16 +539,11 @@ fn a_disabled_node_refuses_with_disabled() {
         .owner
         .resolve_wire_action(&ActionRequest::new(e(2), ActionName::Invoke));
     assert_eq!(refused, Err(WireActionError::Disabled { element: e(2) }));
-    assert_eq!(
-        refused.map_err(|error| error.code()),
-        Err(ErrorCode::Disabled)
-    );
 
     let gone = f
         .owner
         .resolve_wire_action(&ActionRequest::new(e(40), ActionName::Invoke));
     assert_eq!(gone, Err(WireActionError::NotFound { element: e(40) }));
-    assert_eq!(gone.map_err(|error| error.code()), Err(ErrorCode::Gone));
 }
 
 #[test]
@@ -584,7 +605,6 @@ fn a_read_tree_round_trips_through_json() {
 
     let tree = f.read(&ReadQuery::new());
     let json = serde_json::to_value(&tree).expect("a tree serializes");
-    assert_eq!(json["coordinates"], "surface");
     assert_eq!(json["protocol"], "0.1");
     assert_eq!(
         json["roots"][0]["children"][0],
@@ -593,10 +613,10 @@ fn a_read_tree_round_trips_through_json() {
             "role": "button",
             "native_role": "Button",
             "name": "Save",
-            "rect": {"x": 20, "y": 40, "width": 61, "height": 42},
+            "surface_rect": {"x": 20, "y": 40, "width": 61, "height": 42},
             "actions": ["invoke"],
         }),
-        "the rect covers the logical bounds at a device pixel ratio of 2"
+        "the surface rect covers the logical bounds at a device pixel ratio of 2, and no          screen `rect` is claimed"
     );
     let back: Tree = serde_json::from_value(json).expect("a tree deserializes");
     assert_eq!(back, tree);

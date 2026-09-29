@@ -480,6 +480,16 @@
           "null"
         ]
       },
+      "surface_rect": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Rect"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "value": {
         "type": [
           "string",
@@ -610,18 +620,6 @@
           }
         ]
       },
-      "Coordinates": {
-        "oneOf": [
-          {
-            "const": "screen",
-            "type": "string"
-          },
-          {
-            "const": "surface",
-            "type": "string"
-          }
-        ]
-      },
       "ElementId": {
         "pattern": "^e[1-9][0-9]*$",
         "type": "string"
@@ -720,6 +718,16 @@
             "type": [
               "boolean",
               "null"
+            ]
+          },
+          "surface_rect": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Rect"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "value": {
@@ -954,17 +962,20 @@
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "properties": {
-      "coordinates": {
-        "$ref": "#/$defs/Coordinates"
-      },
       "count": {
         "format": "uint",
         "minimum": 0,
         "type": "integer"
       },
       "protocol": {
-        "$ref": "#/$defs/ProtocolVersion",
-        "default": "0.1"
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ProtocolVersion"
+          },
+          {
+            "type": "null"
+          }
+        ]
       },
       "roots": {
         "items": {
