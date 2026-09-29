@@ -131,7 +131,6 @@ fn host_tree() -> (
 /// `SparseChildren`, so relocation must not require membership in the
 /// donor's dense `child_ids` list. `ensure` supplies the reconciliation guard
 /// needed to move the child's render subtree.
-#[test]
 fn a_global_key_moving_between_lazy_hosts_relocates_instead_of_panicking() {
     let (mut tree, mut build_owner, pipeline, host_a) = host_tree();
     let host_b = tree.insert(
@@ -236,7 +235,6 @@ impl View for GlobalKeyedPanicsOnActivate {
 /// ran AFTER it instead, so an `activate` panic left the relocated
 /// element live and reparented but reported nowhere: the undo found
 /// nothing armed and removed nothing, stranding it.
-#[test]
 fn a_panicking_activate_removes_the_reactivated_element_instead_of_stranding_it() {
     let (mut tree, mut build_owner, pipeline, host) = host_tree();
     let pre_mount_count = tree.len();
@@ -335,4 +333,22 @@ fn a_panicking_activate_removes_the_reactivated_element_instead_of_stranding_it(
             ..
         } if element == first
     ));
+}
+
+#[test]
+fn sparse_children_global_key_matrix() {
+    crate::table_test::run_table(
+        "sparse_children_global_key_matrix",
+        &[
+            (
+                "a_global_key_moving_between_lazy_hosts_relocates_instead_of_panicking",
+                a_global_key_moving_between_lazy_hosts_relocates_instead_of_panicking as fn(),
+            ),
+            (
+                "a_panicking_activate_removes_the_reactivated_element_instead_of_stranding_it",
+                a_panicking_activate_removes_the_reactivated_element_instead_of_stranding_it
+                    as fn(),
+            ),
+        ],
+    );
 }

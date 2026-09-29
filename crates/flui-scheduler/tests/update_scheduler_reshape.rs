@@ -18,7 +18,6 @@ use flui_scheduler::{IdleDeadline, Instant, MAX_BUILD_REENTRY_PASSES, Priority, 
 /// before this reshape there was no separate `deadline` at all, and a
 /// regression that re-couples Build to the deadline (or drops Idle's own
 /// gate) fails this test.
-#[test]
 fn tiny_deadline_defers_idle_but_never_defers_build_or_animation() {
     let scheduler = UpdateScheduler::new();
 
@@ -86,7 +85,6 @@ fn tiny_deadline_defers_idle_but_never_defers_build_or_animation() {
 /// shape existed before this bound and would have caught the same leftover
 /// task the same way; the bound only changes how the FIRST 32 executions
 /// are contained, not this trailing sweep.
-#[test]
 fn a_self_reenqueuing_build_task_is_bounded_by_the_reentry_cap_not_hung_forever() {
     let scheduler = UpdateScheduler::new();
     let runs = Arc::new(AtomicUsize::new(0));
@@ -123,5 +121,23 @@ fn a_self_reenqueuing_build_task_is_bounded_by_the_reentry_cap_not_hung_forever(
         log.count_containing("reentrant drain"),
         1,
         "the reentry-cap warning must fire exactly once: {log}"
+    );
+}
+
+#[test]
+fn update_scheduler_bounds_matrix() {
+    crate::run_table(
+        "update_scheduler_bounds_matrix",
+        &[
+            (
+                "tiny_deadline_defers_idle_but_never_defers_build_or_animation",
+                tiny_deadline_defers_idle_but_never_defers_build_or_animation as fn(),
+            ),
+            (
+                "a_self_reenqueuing_build_task_is_bounded_by_the_reentry_cap_not_hung_forever",
+                a_self_reenqueuing_build_task_is_bounded_by_the_reentry_cap_not_hung_forever
+                    as fn(),
+            ),
+        ],
     );
 }

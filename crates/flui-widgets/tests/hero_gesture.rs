@@ -199,8 +199,7 @@ fn gesture_fixture(
 /// replays and the flight lands: `finish`'s `Completed` arm keeps the
 /// (now-gone) from-hero's placeholder rather than clearing it
 /// (`from_hero.end_flight(status.is_completed())`, `heroes.dart:614`).
-#[test]
-fn complete_release_pops_to_the_destination_route_and_the_flight_lands() {
+pub(crate) fn complete_release_pops_to_the_destination_route_and_the_flight_lands() {
     let (navigator, mut harness, controller, to, from, from_controller) =
         gesture_fixture(true, true);
 

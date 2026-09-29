@@ -9,8 +9,7 @@ use crate::common::{lay_out, offset, size, tight};
 use flui_widgets::row;
 use flui_widgets::{Expanded, Row, SizedBox};
 
-#[test]
-fn two_expandeds_split_main_axis_by_flex_factor() {
+pub(crate) fn two_expandeds_split_main_axis_by_flex_factor() {
     // Two Expandeds at flex 1 and 2 split a 300-wide row 100 / 200.
     let laid = lay_out(
         Row::new(row![

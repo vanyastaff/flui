@@ -93,7 +93,6 @@ fn fixture() -> (ElementTree, BuildOwner, ElementId) {
 /// Keyed reorder: permuting keyed children makes the stored ids
 /// follow their keys (the element — and thus its state — moves with
 /// its key, it is not absorbed by the sibling in the old position).
-#[test]
 fn keyed_reorder_ids_follow_keys() {
     let (mut tree, mut owner, root) = fixture();
 
@@ -134,7 +133,6 @@ fn keyed_reorder_ids_follow_keys() {
 /// Type-mismatch replacement: a keyless slot whose view type changes
 /// is removed and a fresh element of the new type is inserted (not
 /// reused).
-#[test]
 fn type_mismatch_replaces_child() {
     let (mut tree, mut owner, root) = fixture();
 
@@ -164,6 +162,23 @@ fn type_mismatch_replaces_child() {
     assert!(
         tree.get(new_id).is_some(),
         "replacement element must resolve"
+    );
+}
+
+#[test]
+fn id_reconcile_matrix() {
+    crate::table_test::run_table(
+        "id_reconcile_matrix",
+        &[
+            (
+                "keyed_reorder_ids_follow_keys",
+                keyed_reorder_ids_follow_keys as fn(),
+            ),
+            (
+                "type_mismatch_replaces_child",
+                type_mismatch_replaces_child as fn(),
+            ),
+        ],
     );
 }
 

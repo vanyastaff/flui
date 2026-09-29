@@ -110,8 +110,7 @@ fn primary_slide_dx(laid: &common::LaidOut) -> f64 {
 /// `route.rs` — `midpoint_dx` reads `0.5` (linear at `t=0.5`), which is
 /// `> 0.05` away from `FastEaseInToSlowEaseOut`'s real value asserted below,
 /// so the tight-tolerance assertion fails.
-#[test]
-fn cupertino_page_route_slides_in_from_off_the_right_edge_over_500ms() {
+pub fn cupertino_page_route_slides_in_from_off_the_right_edge_over_500ms() {
     let vsync = Vsync::new();
     let navigator = seeded_navigator();
     let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 800.0), vsync);

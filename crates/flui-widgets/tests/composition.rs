@@ -6,8 +6,7 @@
 use crate::common::{lay_out, loose, offset, size};
 use flui_widgets::{Padding, SizedBox};
 
-#[test]
-fn nested_padding_accumulates_insets_through_levels() {
+pub(crate) fn nested_padding_accumulates_insets_through_levels() {
     // Padding(10) → Padding(5) → SizedBox(100): inner 110, outer 130.
     let laid = lay_out(
         Padding::all(10.0).child(Padding::all(5.0).child(SizedBox::square(100.0))),

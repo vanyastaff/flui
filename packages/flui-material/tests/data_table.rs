@@ -46,8 +46,7 @@ fn center_of(laid: &LaidOut, id: RenderId) -> (f64, f64) {
 /// — the full triple, proven on a mounted tree (the theme-vs-default and
 /// widget-vs-theme halves are already unit-tested in isolation against
 /// `resolve_style`; this closes the loop end to end).
-#[test]
-fn widget_override_beats_theme_beats_default_on_a_mounted_tree() {
+pub fn widget_override_beats_theme_beats_default_on_a_mounted_tree() {
     let mut theme = ThemeData::light();
     theme.data_table_theme = Some(DataTableThemeData {
         heading_row_height: Some(80.0),
@@ -59,7 +58,9 @@ fn widget_override_beats_theme_beats_default_on_a_mounted_tree() {
     )
     .heading_row_height(96.0);
     let laid = common::lay_out(themed(theme, table), loose(400.0));
-    let render_table = laid.try_find_by_render_type("RenderTable").unwrap();
+    let render_table = laid
+        .try_find_by_render_type("RenderTable")
+        .expect("RenderTable is mounted");
     let heading_cell = laid.child(render_table, 0);
 
     assert_eq!(
@@ -79,8 +80,7 @@ fn widget_override_beats_theme_beats_default_on_a_mounted_tree() {
 /// rows — it never clears them, even though the checkbox's own naive
 /// tap-cycle would suggest otherwise. A broken `someChecked ||` (e.g.
 /// dropped, or `&&`) flips this assertion.
-#[test]
-fn heading_checkbox_tap_selects_all_from_the_indeterminate_state() {
+pub fn heading_checkbox_tap_selects_all_from_the_indeterminate_state() {
     let log = Rc::new(RefCell::new(Vec::new()));
     let selected_recorder = Rc::clone(&log);
     let unselected_recorder = Rc::clone(&log);
@@ -100,7 +100,9 @@ fn heading_checkbox_tap_selects_all_from_the_indeterminate_state() {
         ],
     );
     let laid = common::lay_out(themed(ThemeData::light(), table), loose(400.0));
-    let render_table = laid.try_find_by_render_type("RenderTable").unwrap();
+    let render_table = laid
+        .try_find_by_render_type("RenderTable")
+        .expect("RenderTable is mounted");
 
     let heading_checkbox = laid.child(render_table, 0);
     let (x, y) = center_of(&laid, heading_checkbox);

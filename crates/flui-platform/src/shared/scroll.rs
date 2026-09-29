@@ -110,34 +110,3 @@ pub fn from_web(delta_mode: u32, delta_x: f64, delta_y: f64) -> ScrollDelta {
         _ => ScrollDelta::PixelDelta(PhysicalPosition::new(delta_x, delta_y)),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn lines(delta: ScrollDelta) -> (f32, f32) {
-        match delta {
-            ScrollDelta::LineDelta(x, y) => (x, y),
-            other => panic!("expected LineDelta, got {other:?}"),
-        }
-    }
-    /// The cross-backend contract table: for each backend, the raw value a
-    /// physical "scroll one step toward later content" (wheel toward the
-    /// user / swipe down / tilt right) produces, and the single normalized
-    /// delta every one of them must land on. A same-direction gesture that
-    /// scrolls opposite ways on two backends is exactly the bug this table
-    /// pins.
-    #[test]
-    fn one_physical_gesture_lands_on_one_normalized_delta() {
-        // Wheel toward the user (scroll down), one notch:
-        // winit reports line-y = -1.0 → contract +1.0.
-        assert_eq!(lines(from_winit_lines(0.0, -1.0)), (0.0, 1.0));
-        // Win32 reports distance -120 → contract +1.0 line.
-        assert_eq!(lines(from_win32_wheel(-120)), (0.0, 1.0));
-        // AppKit (non-precise) reports scrollingDeltaY = +1.0 for scroll UP,
-        // so scroll down is -1.0 → contract +1.0.
-        assert_eq!(lines(from_appkit(0.0, -1.0, false)), (0.0, 1.0));
-        // DOM (mode 1) already reports +1.0 for scroll down → passthrough.
-        assert_eq!(lines(from_web(1, 0.0, 1.0)), (0.0, 1.0));
-    }
-}

@@ -59,13 +59,11 @@ fn recording_owner() -> (SemanticsOwner, Arc<Mutex<Vec<TreeUpdate>>>) {
     (owner, received)
 }
 
-/// **The idle contract.** An assembly pass that reproduces the same tree —
-/// the shape of "something upstream was marked, nothing observable moved" —
-/// must deliver nothing to the platform. Before the diff, every such pass
-/// republished the entire tree and relied on the adapter to suppress the
-/// resulting event storm.
+/// **The incremental-publish contract.** An identical rebuild publishes
+/// nothing (the idle contract); one changed label publishes exactly that node,
+/// not its siblings or the unchanged root (the O(dirty) contract).
 #[test]
-fn a_rebuild_that_changes_nothing_publishes_nothing() {
+fn a_rebuild_publishes_only_what_changed() {
     let (mut owner, received) = recording_owner();
 
     rebuild(&mut owner, &["alpha", "beta", "gamma"]);
@@ -78,23 +76,11 @@ fn a_rebuild_that_changes_nothing_publishes_nothing() {
 
     rebuild(&mut owner, &["alpha", "beta", "gamma"]);
     owner.flush();
-
     assert_eq!(
         received.lock().len(),
         1,
         "an identical rebuild must not deliver a second update"
     );
-}
-
-/// **The O(dirty) contract.** One toggled label in the tree publishes
-/// exactly the node that changed — not its unchanged siblings, not the
-/// unchanged root. Before the diff this update carried all four nodes.
-#[test]
-fn a_single_content_change_publishes_exactly_that_node() {
-    let (mut owner, received) = recording_owner();
-
-    rebuild(&mut owner, &["alpha", "beta", "gamma"]);
-    owner.flush();
 
     rebuild(&mut owner, &["alpha", "CHANGED", "gamma"]);
     owner.flush();

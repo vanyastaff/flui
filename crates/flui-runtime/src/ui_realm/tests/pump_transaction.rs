@@ -15,8 +15,7 @@ use flui_foundation::ManualClock;
 /// Fails against a pump that skips end frame (no call), that drives the
 /// pipeline after end frame (the callback sees no layout), or that ends the
 /// frame without the realm's local lane (the lane is never drained).
-#[test]
-fn pump_post_frame_callback_observes_this_frames_committed_layout() {
+pub(crate) fn pump_post_frame_callback_observes_this_frames_committed_layout() {
     use flui_rendering::prelude::Leaf;
     use flui_rendering::prelude::{BoxLayoutContext, BoxParentData, PaintCx, RenderBox};
 

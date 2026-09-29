@@ -79,8 +79,7 @@ fn find_leading_icon_button_material(laid: &common::LaidOut) -> flui_sdk::founda
         })
 }
 
-#[test]
-fn tapping_the_implied_back_button_pops_the_route() {
+pub fn tapping_the_implied_back_button_pops_the_route() {
     let handle = NavigatorHandle::new();
     handle.seed_initial(home_route());
     let _details = handle.push(details_route());

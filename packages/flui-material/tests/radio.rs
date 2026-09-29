@@ -66,8 +66,7 @@ fn announced_roles(radio: Radio<&'static str>) -> Vec<Role> {
         .collect()
 }
 
-#[test]
-fn a_mounted_radio_announces_as_a_radio_button() {
+pub fn a_mounted_radio_announces_as_a_radio_button() {
     // Issue #1117: `Radio::new(value, group_value)` makes a radio a
     // mutually-exclusive group member by construction (`is_selected` derives
     // from `group_value`), so a node announcing as a checkbox is announcing
@@ -79,8 +78,7 @@ fn a_mounted_radio_announces_as_a_radio_button() {
     );
 }
 
-#[test]
-fn tap_on_an_unselected_radio_fires_on_changed_with_its_own_value() {
+pub fn tap_on_an_unselected_radio_fires_on_changed_with_its_own_value() {
     let observed = Rc::new(RefCell::new(None));
     let recorder = Rc::clone(&observed);
     let laid = lay_out(

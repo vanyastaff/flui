@@ -36,8 +36,7 @@ fn character_key_event(ch: char) -> flui_interaction::events::KeyEvent {
 
 /// A normal post-mount focus edge attaches one IME client and routes
 /// composition to this field's controller.
-#[test]
-fn focus_gain_attaches_an_ime_client_and_routes_preedit_to_the_controller() {
+pub(crate) fn focus_gain_attaches_an_ime_client_and_routes_preedit_to_the_controller() {
     let controller = TextEditingController::new();
     let focus_node = FocusNode::with_debug_label("IME focus gain");
     let harness = crate::common::harness::mount_with_ime(EditableText::new(
@@ -135,8 +134,7 @@ fn with_render_editable<T>(
 /// The assertion is on the ABSENCE of the plaintext, not merely on the
 /// presence of bullets: a mask built beside a still-forwarded original
 /// would satisfy the second and fail this.
-#[test]
-fn an_obscured_field_never_hands_its_real_text_to_the_render_object() {
+pub(crate) fn an_obscured_field_never_hands_its_real_text_to_the_render_object() {
     let controller = TextEditingController::with_text("hunter2");
     let focus_node = FocusNode::with_debug_label("obscured field");
     let harness = crate::common::harness::mount_with_ime(
@@ -168,8 +166,7 @@ fn an_obscured_field_never_hands_its_real_text_to_the_render_object() {
 /// Red-check: drop `controller.set_caret_byte_offset(offset)` from the
 /// pointer-down handler — the caret stays at the end, where
 /// `with_text` left it.
-#[test]
-fn a_tap_places_the_caret_where_it_landed() {
+pub(crate) fn a_tap_places_the_caret_where_it_landed() {
     let controller = TextEditingController::with_text("hello world");
     let focus_node = FocusNode::with_debug_label("tapped field");
     let harness = crate::common::harness::mount_with_ime(EditableText::new(
@@ -197,8 +194,7 @@ fn a_tap_places_the_caret_where_it_landed() {
 ///
 /// Red-check: drop the `set_selection(from, to)` in the pointer-move
 /// handler — the selection stays collapsed at the down position.
-#[test]
-fn a_drag_selects_from_its_start_to_the_pointer() {
+pub(crate) fn a_drag_selects_from_its_start_to_the_pointer() {
     let controller = TextEditingController::with_text("hello world");
     let focus_node = FocusNode::with_debug_label("dragged field");
     let harness = crate::common::harness::mount_with_ime(EditableText::new(
@@ -236,8 +232,7 @@ fn a_drag_selects_from_its_start_to_the_pointer() {
 /// Red-check: skip wrapping `install_pointer_handlers`'s return value
 /// in `wrap_double_tap_word_select` — the selection stays collapsed
 /// after the second tap, same as the first.
-#[test]
-fn a_double_tap_selects_the_word_under_it() {
+pub(crate) fn a_double_tap_selects_the_word_under_it() {
     let controller = TextEditingController::with_text("hello world");
     let focus_node = FocusNode::with_debug_label("double-tapped field");
     let harness = crate::common::harness::mount_with_ime(EditableText::new(
@@ -273,7 +268,7 @@ fn a_double_tap_selects_the_word_under_it() {
 // each other's changes.
 // ------------------------------------------------------------------
 
-mod text_store {
+pub(crate) mod text_store {
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -342,8 +337,7 @@ mod text_store {
 
     /// The store's UTF-16 offsets and the controller's UTF-8 bytes name the
     /// same positions, in both directions.
-    #[test]
-    fn store_offsets_match_controller_bytes_across_surrogates_and_graphemes() {
+    pub(crate) fn store_offsets_match_controller_bytes_across_surrogates_and_graphemes() {
         let controller = TextEditingController::with_text(CORPUS);
         let (harness, _focus) = focused(&controller);
         let store = store(&harness);
@@ -378,8 +372,7 @@ mod text_store {
 
     /// Red-check: drop `run_deferred_before_app_edit` from the key handler —
     /// the key lands while the commit is still queued and the text reads "b".
-    #[test]
-    fn typing_after_a_deferred_commit_lands_after_the_commit() {
+    pub(crate) fn typing_after_a_deferred_commit_lands_after_the_commit() {
         let controller = TextEditingController::new();
         let (harness, _focus) = focused(&controller);
 
@@ -402,7 +395,7 @@ mod text_store {
 /// Event context (ADR-0086): `on_changed` and `on_submitted` run inside a
 /// write the field opens from the writer source it acquired in
 /// `init_state`, whichever path made the edit.
-mod event_cx {
+pub(crate) mod event_cx {
     use std::rc::Rc;
 
     use flui_interaction::routing::FocusNode;
@@ -429,8 +422,7 @@ mod event_cx {
         (probe, harness, controller)
     }
 
-    #[test]
-    fn typing_writes_through_on_changed_and_rebuilds_its_reader() {
+    pub(crate) fn typing_writes_through_on_changed_and_rebuilds_its_reader() {
         let (probe, mut harness, _controller) = mounted(|signals, controller, node| {
             let count = signals.count;
             EditableText::new(controller, node)
@@ -446,8 +438,7 @@ mod event_cx {
         assert_eq!(probe.reads().last(), Some(&2), "the reader rebuilt");
     }
 
-    #[test]
-    fn a_refused_write_in_on_changed_is_reported_not_panicked() {
+    pub(crate) fn a_refused_write_in_on_changed_is_reported_not_panicked() {
         let (probe, harness, controller) = mounted(|signals, controller, node| {
             let released = signals.released;
             EditableText::new(controller, node).on_changed(move |cx, _text| released.set(cx, 1))

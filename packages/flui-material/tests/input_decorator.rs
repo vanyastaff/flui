@@ -36,8 +36,7 @@ fn child_stub() -> SizedBox {
 
 /// Error replaces helper: with both set, exactly one helper/error text row
 /// renders, not two.
-#[test]
-fn error_replaces_helper_at_the_mounted_level() {
+pub fn error_replaces_helper_at_the_mounted_level() {
     let theme = ThemeData::light();
     let decoration = InputDecoration {
         helper_text: Some("Helper".to_string()),

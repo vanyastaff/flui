@@ -48,8 +48,7 @@ fn bar_at(offset: f64) -> Theme {
 /// Collapsed under a deep pinned scroll (`t = 1`): the background has faded
 /// out entirely and drifted up by a quarter of the collapse distance —
 /// `delta = 200 − 56 = 144`, so `top = −36`.
-#[test]
-fn collapsed_background_fades_out_and_parallaxes_up() {
+pub fn collapsed_background_fades_out_and_parallaxes_up() {
     let mut laid = lay_out(bar_at(0.0), tight(400.0, 600.0));
     laid.pump_widget(bar_at(500.0));
 

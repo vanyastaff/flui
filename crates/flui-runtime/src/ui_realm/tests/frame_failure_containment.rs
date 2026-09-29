@@ -116,8 +116,8 @@ fn with_quiet_panics<R>(f: impl FnOnce() -> R) -> R {
 /// `WidgetsBinding::draw_frame`, so this test intentionally makes no
 /// building-flag claim; lifecycle insertion panics are now bounded by
 /// the dense reconciler itself.
-#[test]
-fn an_escaped_segment_panic_is_contained_to_its_own_presentation_and_the_sibling_still_frames() {
+pub(crate) fn an_escaped_segment_panic_is_contained_to_its_own_presentation_and_the_sibling_still_frames()
+ {
     let mut realm = UiRealm::for_test();
     let a_id = realm.presentation_id();
     let b_id = realm.install_second_presentation_for_test();
@@ -272,8 +272,7 @@ fn an_escaped_segment_panic_is_contained_to_its_own_presentation_and_the_sibling
 /// The consecutive-failure streak counts uninterrupted failures and
 /// resets on the next cleanly completed segment — the field an
 /// embedder keys escalation off.
-#[test]
-fn consecutive_failures_count_up_and_reset_on_a_clean_segment() {
+pub(crate) fn consecutive_failures_count_up_and_reset_on_a_clean_segment() {
     let realm = UiRealm::for_test();
     realm
         .attach_root_widget(&SizedBox::new(10.0, 10.0))
@@ -344,8 +343,7 @@ impl flui_rendering::traits::RenderBox for PanicOnLayoutForReportBox {
 /// re-reported it — invoking the same panicking handler a second
 /// time, now outside any catch. Containment at the delivery site
 /// means exactly one delivery, of the Pipeline kind, per failure.
-#[test]
-fn a_panicking_handler_during_a_pipeline_report_is_delivered_once_not_re_reported() {
+pub(crate) fn a_panicking_handler_during_a_pipeline_report_is_delivered_once_not_re_reported() {
     let realm = UiRealm::for_test();
     let delivered = Arc::new(StdMutex::new(Vec::new()));
     let sink = Arc::clone(&delivered);

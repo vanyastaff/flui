@@ -257,9 +257,8 @@ pub fn report_to_logcat(identity: &AppIdentity, message: &str) {
 
 #[cfg(test)]
 mod resilient_setup_tests {
-    //! Cases that need no process-global state. The one that does — a genuinely
-    //! rejected environment override — lives in
-    //! `tests/a_rejected_env_override_still_installs.rs`, in its own process.
+    //! Cases that need no process-global state; scenarios that write the
+    //! subscriber slot live in `tests/`, one per process.
 
     use super::{FilterConfig, LogConfig, SubscriberPolicy};
 

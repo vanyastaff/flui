@@ -58,8 +58,7 @@ impl ViewState<OpacityProbe> for OpacityProbeState {
     }
 }
 
-#[test]
-fn animated_opacity_retargets_from_the_current_value_midflight() {
+pub(crate) fn animated_opacity_retargets_from_the_current_value_midflight() {
     let vsync = Vsync::new();
     let target = Arc::new(Mutex::new(0.0));
     let probe = OpacityProbe {
@@ -150,8 +149,7 @@ impl ViewState<ContainerProbe> for ContainerProbeState {
     }
 }
 
-#[test]
-fn animated_container_interpolates_size_over_frames() {
+pub(crate) fn animated_container_interpolates_size_over_frames() {
     let vsync = Vsync::new();
     let side = Arc::new(Mutex::new(20.0));
     let probe = ContainerProbe {

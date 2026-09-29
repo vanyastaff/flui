@@ -969,14 +969,21 @@ impl Simulation for BoundedFrictionSimulation {
 mod tests {
     use super::*;
 
-    #[test]
-    #[should_panic(expected = "drag >= 1 never decelerates")]
     fn friction_drag_ge_one_panics_instead_of_hanging() {
         // drag >= 1 would make dx grow forever; construction must reject it.
-        let _ = FrictionSimulation::new(1.5, 0.0, 100.0);
+        let payload = std::panic::catch_unwind(|| FrictionSimulation::new(1.5, 0.0, 100.0))
+            .expect_err("drag >= 1 must be rejected at construction");
+        let message = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or_default();
+        assert!(
+            message.contains("drag >= 1 never decelerates"),
+            "unexpected panic message: {message}"
+        );
     }
 
-    #[test]
     fn test_gravity_simulation() {
         let sim = GravitySimulation::new(9.8, 0.0, 0.0, 100.0);
 
@@ -990,7 +997,6 @@ mod tests {
         assert!(sim.dx(1.0) > sim.dx(0.0));
     }
 
-    #[test]
     fn spring_regimes_preserve_initial_conditions_and_settle() {
         let cases = [
             (
@@ -1060,5 +1066,20 @@ mod tests {
                 sim.dx(10.0)
             );
         }
+    }
+
+    #[test]
+    fn simulation_contract() {
+        crate::test_cases::run_cases(&[
+            (
+                "friction drag ge one panics instead of hanging",
+                friction_drag_ge_one_panics_instead_of_hanging,
+            ),
+            ("test gravity simulation", test_gravity_simulation),
+            (
+                "spring regimes preserve initial conditions and settle",
+                spring_regimes_preserve_initial_conditions_and_settle,
+            ),
+        ]);
     }
 }

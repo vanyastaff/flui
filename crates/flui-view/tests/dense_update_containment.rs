@@ -390,13 +390,11 @@ fn assert_phase_one_did_update_view_panic_containment(
     );
 }
 
-#[test]
-fn phase_one_did_update_view_panic_substitutes_at_same_slot() {
+pub(crate) fn phase_one_did_update_view_panic_substitutes_at_same_slot() {
     assert_phase_one_did_update_view_panic_containment(PanicClassification::Ordinary);
 }
 
-#[test]
-fn phase_five_a_shifted_suffix_update_panic_uses_final_slot() {
+pub(crate) fn phase_five_a_shifted_suffix_update_panic_uses_final_slot() {
     let armed = Rc::new(Cell::new(false));
     let old_keys: Vec<_> = (0..DENSE_CHILD_COUNT as u32).collect();
     let (mut tree, mut owner, pipeline, observer, parent) = mount_dense_root(DenseRow {

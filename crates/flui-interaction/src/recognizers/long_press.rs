@@ -764,7 +764,24 @@ mod tests {
     use super::*;
     use crate::arena::GestureArena;
 
+    // Long-press recognizer matrix: timer acceptance and early up with a competitor.
     #[test]
+    fn long_press_recognizer_matrix() {
+        let cases: &[(&str, fn())] = &[
+            ("test_long_press_timer", test_long_press_timer),
+            (
+                "up_before_deadline_with_competitor_does_not_deadlock",
+                up_before_deadline_with_competitor_does_not_deadlock,
+            ),
+        ];
+        for &(name, case) in cases {
+            if let Err(payload) = std::panic::catch_unwind(case) {
+                eprintln!("matrix case `{name}` failed");
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+
     fn up_before_deadline_with_competitor_does_not_deadlock() {
         // Regression: handle_up's Possible branch used to hold the
         // gesture_state lock across stop_tracking(). stop_tracking sweeps the
@@ -794,7 +811,6 @@ mod tests {
         assert_eq!(recognizer.primary_pointer(), None);
     }
 
-    #[test]
     fn test_long_press_timer() {
         let arena = GestureArena::new();
         let pressed = Arc::new(Mutex::new(false));

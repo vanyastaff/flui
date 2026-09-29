@@ -251,8 +251,7 @@ mod keyboard_conversion_tests {
     /// be called directly from a test. What this test pins is the
     /// completeness of the `ui-events-winit` version `Cargo.lock` resolves
     /// to — the dependency `keyboard_event` delegates to unconditionally.
-    #[test]
-    fn every_winit_keycode_maps_to_a_canonical_code() {
+    pub(super) fn every_winit_keycode_maps_to_a_canonical_code() {
         assert_eq!(ALL_WINIT_KEYCODES.len(), 194);
         assert_eq!(
             ALL_WINIT_KEYCODES.iter().collect::<BTreeSet<_>>().len(),
@@ -734,8 +733,18 @@ mod cross_backend_physical_key_agreement {
         ),
     ];
 
+    /// The winit event translation: every winit key code maps to a canonical
+    /// code, the three backends agree on shared physical keys, and pointer
+    /// events meet the cross-wire field contract.
     #[test]
-    fn winit_win32_and_appkit_agree_on_shared_physical_keys() {
+    fn winit_events_translate_to_the_cross_backend_contract() {
+        super::keyboard_conversion_tests::every_winit_keycode_maps_to_a_canonical_code();
+        super::super::pointer_translation_tests::translated_events_meet_the_pointer_field_contract(
+        );
+        physical_keys_agree_across_backends();
+    }
+
+    fn physical_keys_agree_across_backends() {
         let mut disagreements = Vec::new();
         for &(label, winit_code, win32, appkit) in PHYSICAL_KEYS {
             let winit_result = from_winit_code(PhysicalKey::Code(winit_code));

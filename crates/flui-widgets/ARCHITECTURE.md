@@ -99,6 +99,13 @@ edits `layers` in the same change, which is where it is reviewed. An edge the
 layers refuse and that cannot move yet goes into `exceptions` with the ADR
 whose change removes it and the date it was added.
 
+## Integration tests
+
+The scenario functions in `tests/*.rs` are rows of the capability-family tables in
+`tests/contracts.rs`: one `#[test]` per family, each row run in turn and every failing row
+named in the panic message. The test names cited in this document are those row names;
+find one with `rg <name> tests/`.
+
 ## Mapping decisions
 
 ### 1. `DragTarget` publishes a shared `DragTargetSlot`, not its `State`

@@ -71,7 +71,6 @@ fn render_and_sample(renderer: &HeadlessRenderer, tree: &LayerTree) -> [u8; 4] {
 /// Content that overflows a clip layer is not painted past it; the same
 /// content with no clip layer is. The surface is cleared to opaque white, so
 /// "clipped away" reads as white and "painted" reads as blue.
-#[test]
 fn a_clip_rect_layer_clips_its_content_and_its_absence_does_not() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
@@ -206,7 +205,6 @@ fn icon_squircle() -> flui_foundation::geometry::RSuperellipse {
 /// an assertion would be measuring anti-aliasing, not geometry. The count of
 /// surviving points is asserted too: a filter that excluded everything would
 /// otherwise leave this test green and empty.
-#[test]
 fn the_squircle_sdf_agrees_with_the_cpu_path_across_the_whole_boundary() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
@@ -293,7 +291,6 @@ fn fill_everything(canvas: &mut Canvas) {
 /// fails and says which promise changed, rather than the gap being closed
 /// silently or — worse — the approximation being mistaken for exactness by a
 /// reader of the tests.
-#[test]
 fn a_path_clip_lets_through_what_lies_inside_the_box_but_outside_the_shape() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
@@ -343,7 +340,6 @@ fn a_path_clip_lets_through_what_lies_inside_the_box_but_outside_the_shape() {
 /// the shape are both empty. Asserted rather than assumed: the previous
 /// behaviour was that an empty clip path clipped nothing at all, and the chain
 /// that turns a zero-area scissor into a dropped draw runs through three files.
-#[test]
 fn an_empty_clip_path_clips_everything() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
@@ -439,7 +435,6 @@ fn a_clip_beside_a_sibling(with_filter: bool) -> LayerTree {
 /// only along a clip's fractional edge under overlapping translucency, and a
 /// blur pass smears exactly that edge — there is no sample point here that
 /// could tell them apart, so no assertion pretends to.
-#[test]
 fn a_clip_inside_an_image_filter_layer_keeps_its_content_and_its_siblings() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
@@ -515,7 +510,6 @@ type PushClip = fn(&mut Canvas, flui_painting::paint::ClipOp, Rect<f64>);
 ///
 /// Read on RED: the content is blue and the cleared ground is white, so the two
 /// agree on blue and an assertion there would pass either way.
-#[test]
 fn every_canvas_clip_shape_refuses_difference_rather_than_inverting() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
@@ -591,4 +585,17 @@ fn every_canvas_clip_shape_refuses_difference_rather_than_inverting() {
              (issue #941)"
         );
     }
+}
+
+/// Clip contract, read back from the GPU: one row per clip feature, each keeping
+/// its own sample points (rect, squircle SDF, path, empty path, clip inside an
+/// image-filter layer, difference refusal).
+#[test]
+fn clip_layers_read_back_as_the_clip_contract_specifies() {
+    a_clip_rect_layer_clips_its_content_and_its_absence_does_not();
+    the_squircle_sdf_agrees_with_the_cpu_path_across_the_whole_boundary();
+    a_path_clip_lets_through_what_lies_inside_the_box_but_outside_the_shape();
+    an_empty_clip_path_clips_everything();
+    a_clip_inside_an_image_filter_layer_keeps_its_content_and_its_siblings();
+    every_canvas_clip_shape_refuses_difference_rather_than_inverting();
 }

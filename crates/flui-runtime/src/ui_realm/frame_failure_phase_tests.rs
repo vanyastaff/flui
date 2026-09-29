@@ -36,8 +36,7 @@ fn mount() -> UiRealm {
 
 /// Every segment publishes its identity before either its probe or work
 /// begins. The value survives unwind, and a clean retry reaches Scene.
-#[test]
-fn every_segment_phase_survives_unwind_and_retries_to_scene() {
+pub(crate) fn every_segment_phase_survives_unwind_and_retries_to_scene() {
     let phases = [
         SegmentPhase::Build,
         SegmentPhase::Finalize,

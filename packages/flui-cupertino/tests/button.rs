@@ -11,8 +11,7 @@ use flui_sdk::widgets::SizedBox;
 use flui_sdk::widgets::Text;
 use flui_testing::a11y::Role;
 
-#[test]
-fn tap_callback_writes_a_signal_and_rebuilds_its_reader() {
+pub fn tap_callback_writes_a_signal_and_rebuilds_its_reader() {
     let probe = common::SignalProbe::new(|signals| {
         CupertinoButton::new(SizedBox::shrink())
             .on_pressed(move |cx| signals.count.update(cx, |count| *count += 1))
@@ -36,8 +35,7 @@ fn tap_callback_writes_a_signal_and_rebuilds_its_reader() {
 /// `enabled` either (`cupertino/button.dart`), so unlike the Material case
 /// this node reports no enabled/disabled state at all — not asserted here
 /// because there is nothing to assert.
-#[test]
-fn cupertino_button_with_text_child_announces_one_labelled_button_node() {
+pub fn cupertino_button_with_text_child_announces_one_labelled_button_node() {
     let mut laid = lay_out(
         CupertinoButton::new(Text::new("Tap")).on_pressed(|_cx| {}),
         loose(200.0),

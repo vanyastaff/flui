@@ -106,7 +106,6 @@ mod tests {
     /// owned-runtime fallbacks — checked by resolving twice inside an
     /// ambient context that is NOT the injected one, proving the injected
     /// handle is preferred rather than the (also available) ambient ID.
-    #[test]
     fn resolve_prefers_an_injected_handle_over_starting_an_owned_runtime() {
         let source = Builder::new_current_thread()
             .enable_all()
@@ -133,7 +132,6 @@ mod tests {
     /// re-checking `Handle::try_current` fresh every call, not memoizing the
     /// first result) and fall back to its own durable owned runtime instead
     /// of returning a handle that will silently drop every future spawn.
-    #[test]
     fn resolve_does_not_reuse_a_since_shut_down_ambient_handle() {
         let bridge = BridgeRuntime::new();
 
@@ -169,7 +167,6 @@ mod tests {
     /// panic — the scenario is the last `Arc<AssetRegistry>` going out of
     /// scope inside a spawned task. Before the `shutdown_background` fix,
     /// `Runtime`'s default blocking `Drop` panicked here.
-    #[test]
     fn dropping_from_inside_its_own_task_does_not_panic() {
         let bridge = BridgeRuntime::new();
         // No ambient context in this plain #[test] fn and no injection, so
@@ -185,5 +182,15 @@ mod tests {
         done_rx
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("the drop must complete (not hang or panic) inside the async task");
+    }
+
+    /// The bridge's runtime resolution: an injected handle wins, a stale
+    /// ambient handle is never reused, and dropping the owner from inside its
+    /// own task neither panics nor hangs.
+    #[test]
+    fn the_bridge_resolves_a_live_runtime_and_survives_its_own_teardown() {
+        resolve_prefers_an_injected_handle_over_starting_an_owned_runtime();
+        resolve_does_not_reuse_a_since_shut_down_ambient_handle();
+        dropping_from_inside_its_own_task_does_not_panic();
     }
 }

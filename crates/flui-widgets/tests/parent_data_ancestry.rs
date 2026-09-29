@@ -21,8 +21,7 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
     }
 }
 
-#[test]
-fn expanded_under_stack_panics_at_attach_with_ancestry_diagnostic() {
+pub(crate) fn expanded_under_stack_panics_at_attach_with_ancestry_diagnostic() {
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         lay_out(
             Stack::new(row![Expanded::new(SizedBox::new(20.0, 20.0))]),

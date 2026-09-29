@@ -673,7 +673,27 @@ mod tests {
         Paint::fill(Color::RED)
     }
 
+    // Paint-context run matrix: ordered runs between child markers and baked origin.
     #[test]
+    fn paint_cx_run_matrix() {
+        let cases: &[(&str, fn())] = &[
+            (
+                "draws_between_child_markers_split_into_ordered_runs",
+                draws_between_child_markers_split_into_ordered_runs,
+            ),
+            (
+                "origin_is_baked_into_run_transforms",
+                origin_is_baked_into_run_transforms,
+            ),
+        ];
+        for &(name, case) in cases {
+            if let Err(payload) = std::panic::catch_unwind(case) {
+                eprintln!("matrix case `{name}` failed");
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+
     fn draws_between_child_markers_split_into_ordered_runs() {
         let mut rec = FragmentRecorder::new(Offset::ZERO, 1.0);
         let mut cx = PaintCx::<Variable>::new(&mut rec, 2, Size::ZERO);
@@ -712,7 +732,6 @@ mod tests {
         assert_eq!(indices, vec![0, 1]);
     }
 
-    #[test]
     fn origin_is_baked_into_run_transforms() {
         let mut rec = FragmentRecorder::new(Offset::new(7.0, 3.0), 1.0);
         let mut cx = PaintCx::<Leaf>::new(&mut rec, 0, Size::ZERO);

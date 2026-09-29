@@ -733,7 +733,6 @@ mod surface_lifecycle_tests {
     /// being aborted inside `wgpu-hal`'s `create_surface_android`. The
     /// scripted backend succeeds unconditionally because the property under
     /// test is the seam's, not the driver's.
-    #[test]
     fn an_acquire_request_recreates_over_a_held_surface_and_reports_recreated() {
         let mut backend = ScriptedSurfaceBackend::holding_a_surface();
         let before = backend.held;
@@ -760,7 +759,6 @@ mod surface_lifecycle_tests {
     /// the seam hands the renderer's own error to its caller, which owns the
     /// log line, and leaves the presentation released — no surface is
     /// committed, and no extra release is issued to "clean up" after it.
-    #[test]
     fn a_failed_recreation_carries_the_error_and_leaves_the_presentation_released() {
         let mut backend =
             ScriptedSurfaceBackend::whose_recreation_fails(EngineError::SurfaceCreation(Box::new(
@@ -785,6 +783,25 @@ mod surface_lifecycle_tests {
         assert_eq!(
             backend.held, None,
             "a failed rebuild commits no surface, so the released state stands"
+        );
+    }
+
+    #[test]
+    fn surface_lifecycle_matrix() {
+        crate::table_test::run_table(
+            "surface_lifecycle_matrix",
+            &[
+                (
+                    "an_acquire_request_recreates_over_a_held_surface_and_reports_recreated",
+                    an_acquire_request_recreates_over_a_held_surface_and_reports_recreated
+                        as fn(),
+                ),
+                (
+                    "a_failed_recreation_carries_the_error_and_leaves_the_presentation_released",
+                    a_failed_recreation_carries_the_error_and_leaves_the_presentation_released
+                        as fn(),
+                ),
+            ],
         );
     }
 

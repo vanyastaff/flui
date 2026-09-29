@@ -10,8 +10,7 @@ use crate::common::{lay_out, tight};
 use flui_painting::styling::Color;
 use flui_widgets::{ColoredBox, GestureDetector};
 
-#[test]
-fn gesture_detector_fires_on_tap_for_a_down_up_on_the_child() {
+pub(crate) fn gesture_detector_fires_on_tap_for_a_down_up_on_the_child() {
     let taps = Arc::new(AtomicUsize::new(0));
     let in_cb = Arc::clone(&taps);
 
@@ -46,8 +45,7 @@ fn gesture_detector_fires_on_tap_for_a_down_up_on_the_child() {
 /// arena-elimination behavior, and this test already covers it end to end, so
 /// the citation lives here instead of duplicating the case in the parity
 /// corpus.
-#[test]
-fn gesture_detector_recognizes_a_pan_and_suppresses_the_tap() {
+pub(crate) fn gesture_detector_recognizes_a_pan_and_suppresses_the_tap() {
     let taps = Arc::new(AtomicUsize::new(0));
     let starts = Arc::new(AtomicUsize::new(0));
     let updates = Arc::new(AtomicUsize::new(0));
@@ -112,8 +110,8 @@ fn gesture_detector_recognizes_a_pan_and_suppresses_the_tap() {
 /// Flutter parity: once a drag has won its arena, `PointerCancel` follows
 /// `didStopTrackingLastPointer`'s accepted branch and fires `onEnd`, not
 /// `onCancel`. The terminal event must still leave the recognizer reusable.
-#[test]
-fn horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_wedge_the_detector() {
+pub(crate) fn horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_wedge_the_detector()
+{
     let cancels = Arc::new(AtomicUsize::new(0));
     let ends = Arc::new(AtomicUsize::new(0));
     let starts = Arc::new(AtomicUsize::new(0));
@@ -168,7 +166,7 @@ fn horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_wedge_the_d
 // writes a signal through it; the write rebuilds the signal's reader.
 // ============================================================================
 
-mod event_cx {
+pub(crate) mod event_cx {
     use std::cell::Cell;
     use std::rc::Rc;
 
@@ -190,8 +188,7 @@ mod event_cx {
         app.dispatch_pointer_up(50.0, 50.0);
     }
 
-    #[test]
-    fn a_tap_writes_a_signal_and_rebuilds_its_reader() {
+    pub(crate) fn a_tap_writes_a_signal_and_rebuilds_its_reader() {
         let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
             GestureDetector::new()
                 .on_tap(move |cx| count.update(cx, |n| *n += 1))
@@ -237,8 +234,7 @@ mod event_cx {
         .expect("a click on a node advertising one resolves");
     }
 
-    #[test]
-    fn a_panicking_assistive_action_does_not_discard_the_fifo_tail() {
+    pub(crate) fn a_panicking_assistive_action_does_not_discard_the_fifo_tail() {
         let long_press_calls = Rc::new(Cell::new(0));
         let observed_long_press = Rc::clone(&long_press_calls);
         let mut app = lay_out(

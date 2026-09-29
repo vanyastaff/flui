@@ -623,26 +623,3 @@ impl std::fmt::Debug for Timeline {
             .finish()
     }
 }
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    #[test]
-    fn test_export_chrome_trace() {
-        let timeline = Timeline::new();
-
-        timeline.record_instant("Test Event", EventCategory::Layout);
-
-        let json = timeline.export_chrome_trace();
-        assert!(json.contains("Test Event"));
-        assert!(json.contains("\"ph\":\"B\"")); // Begin event
-        assert!(json.contains("\"ph\":\"E\"")); // End event
-        assert!(json.contains("traceEvents"));
-    }
-
-    // ------------------------------------------------------------------
-    // Frame telemetry export (issue #556): reuse, not a second format.
-    // ------------------------------------------------------------------
-}

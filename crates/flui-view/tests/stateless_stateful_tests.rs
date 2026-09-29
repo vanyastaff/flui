@@ -120,8 +120,7 @@ impl View for CounterView {
     }
 }
 
-#[test]
-fn test_stateful_element_update_calls_did_update_view() {
+pub(crate) fn test_stateful_element_update_calls_did_update_view() {
     let view1 = CounterView { initial_count: 0 };
     let view2 = CounterView { initial_count: 10 };
 
@@ -195,8 +194,7 @@ impl View for LifecycleCallbackView {
     }
 }
 
-#[test]
-fn stateful_activate_and_deactivate_require_completed_init_state() {
+pub(crate) fn stateful_activate_and_deactivate_require_completed_init_state() {
     let view = LifecycleCallbackView;
     let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
     let mut owner = BuildOwner::new();

@@ -16,8 +16,7 @@ use flui_painting::{Canvas, TextPainter};
 // Full pipeline: measure -> layout -> paint -> display list
 // ============================================================================
 
-#[test]
-fn full_pipeline_with_styled_text() {
+pub(crate) fn full_pipeline_with_styled_text() {
     let style = TextStyle::new()
         .with_font_size(20.0)
         .with_font_weight(FontWeight::BOLD);

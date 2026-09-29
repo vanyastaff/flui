@@ -20,8 +20,7 @@ use flui_view::{BuildOwner, tree::ElementTree};
 /// `RenderLayoutBuilder`: it happens on every pass, before anything is built.
 /// If `pump_frame` called the plain `PipelineOwner::run_frame` instead of the
 /// fixpoint helper, the stale entry would survive.
-#[test]
-fn headless_pump_frame_runs_the_layout_builder_seam() {
+pub(crate) fn headless_pump_frame_runs_the_layout_builder_seam() {
     let mut build_owner = BuildOwner::new();
     let cell = build_owner.register_layout_builder_for_test(RenderId::new(1), ElementId::new(1));
     assert_eq!(build_owner.layout_builder_count(), 1);

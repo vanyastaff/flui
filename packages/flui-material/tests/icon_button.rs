@@ -51,8 +51,7 @@ impl StatelessView for IconThemeProbe {
 /// `IconButton::build`'s widget-level override (see
 /// `a_style_foreground_color_override_reaches_the_icons_icon_theme` below),
 /// now with a theme-tier value and no widget-level override in the way.
-#[test]
-fn icon_button_theme_slot_reaches_the_icons_icon_theme() {
+pub fn icon_button_theme_slot_reaches_the_icons_icon_theme() {
     let themed_color = Color::rgb(30, 40, 50);
     let captured = Rc::new(RefCell::new(None));
     let probe = IconThemeProbe {

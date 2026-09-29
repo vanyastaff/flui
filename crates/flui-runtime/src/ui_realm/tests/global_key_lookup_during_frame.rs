@@ -101,8 +101,7 @@ impl flui_view::View for ToggleReader {
     }
 }
 
-#[test]
-fn state_read_across_presentations_during_a_segment_resolves() {
+pub(crate) fn state_read_across_presentations_during_a_segment_resolves() {
     let during = within_deadline(|| {
         let mut realm = UiRealm::for_test();
         let holder_id = realm.install_second_presentation_for_test();

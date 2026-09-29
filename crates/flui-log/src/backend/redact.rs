@@ -534,7 +534,15 @@ mod tests {
         Seen::Debugged(REDACTED_VALUE.to_owned())
     }
 
-    #[test]
+    fn the_private_marker_wins_over_the_public_marker() {
+        // `a.public.private` ends with `.private`, and only the trailing
+        // segment is the marker; deny beats allow when both could match.
+        assert_eq!(
+            FieldPrivacy::classify("a.public.private", FieldKind::Scalar, EventOrigin::Native),
+            FieldPrivacy::Private
+        );
+    }
+
     fn a_dynamic_string_field_is_redacted_by_default() {
         let capture = behind_redaction(|| {
             tracing::info!(path = "/home/user/secret.txt", "asset loaded");
@@ -550,7 +558,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn a_public_marker_publishes_a_dynamic_field_verbatim() {
         let capture = behind_redaction(|| {
             tracing::info!(phase.public = "commit", detail.public = ?(1, 2), "ok");
@@ -570,7 +577,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn a_bridged_log_message_is_redacted_by_default() {
         // Writes the process-global `log` logger slot — the only unit test in
         // this crate that touches it (the `tests/` bridge scenarios each own a
@@ -609,4 +615,26 @@ mod tests {
     }
 
     // --- composed with the logcat renderer, the exact Android line shape ----
+
+    #[test]
+    fn redaction_contract() {
+        crate::test_support::run_cases(&[
+            (
+                "the private marker wins over the public marker",
+                the_private_marker_wins_over_the_public_marker,
+            ),
+            (
+                "a dynamic string field is redacted by default",
+                a_dynamic_string_field_is_redacted_by_default,
+            ),
+            (
+                "a public marker publishes a dynamic field verbatim",
+                a_public_marker_publishes_a_dynamic_field_verbatim,
+            ),
+            (
+                "a bridged log message is redacted by default",
+                a_bridged_log_message_is_redacted_by_default,
+            ),
+        ]);
+    }
 }

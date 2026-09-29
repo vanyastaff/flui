@@ -114,7 +114,6 @@ fn frame_after_alpha_change(
 /// the old full-repaint path. Anything the patch gets wrong — a stale alpha, a
 /// dropped layer, a subtree replayed at the wrong offset — shows up here as a
 /// byte difference, including failures every layer-tree assertion would pass.
-#[test]
 fn the_update_path_and_a_repaint_produce_the_same_pixels() {
     // No `if let Ok(..) else { return }`: a host without an adapter must fail
     // loudly. A readback test that silently skips is counted as passing and
@@ -236,7 +235,6 @@ fn frame_after_transform_change(
 /// for `RenderTransform` instead of `RenderOpacity`: a stale origin, a
 /// dropped layer, or a subtree replayed at the wrong offset shows up here as
 /// a byte difference that no layer-tree assertion would catch.
-#[test]
 fn the_transform_update_path_and_a_repaint_produce_the_same_pixels() {
     let renderer = pollster::block_on(HeadlessRenderer::new())
         .expect("a GPU adapter for headless capture (CI runs this on the software rasterizer)");
@@ -374,7 +372,6 @@ fn frame_after_radius_change(
 /// forced through the full-repaint path. A stale radius, a dropped clip
 /// layer, or a subtree replayed at the wrong offset shows up here as a byte
 /// difference no layer-tree assertion would catch.
-#[test]
 fn the_clip_update_path_and_a_repaint_produce_the_same_pixels() {
     let renderer = pollster::block_on(HeadlessRenderer::new())
         .expect("a GPU adapter for headless capture (CI runs this on the software rasterizer)");
@@ -448,7 +445,6 @@ impl flui_rendering::traits::RenderBox for RunLocalClipParent {
     }
 }
 
-#[test]
 fn canvas_clip_stays_in_its_run_when_paint_child_splits_the_picture() {
     let mut owner = PipelineOwner::new();
     let (root_id, _) = tree::mount(
@@ -483,5 +479,59 @@ fn canvas_clip_stays_in_its_run_when_paint_child_splits_the_picture() {
         pixel(65),
         &[0, 255, 0, 255],
         "the resumed parent run starts unclipped"
+    );
+}
+
+/// Runs every row, then panics once naming each row that failed.
+fn run_cases(family: &str, cases: &[(&str, fn())]) {
+    let mut failures = Vec::new();
+    for (name, case) in cases {
+        if let Err(payload) = std::panic::catch_unwind(*case) {
+            let message = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap_or("<non-string panic payload>");
+            failures.push(format!("  {name}: {message}"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{family}: {} of {} rows failed:
+{}",
+        failures.len(),
+        cases.len(),
+        failures.join(
+            "
+"
+        )
+    );
+}
+
+/// GPU readbacks for the composited-layer update path: opacity, transform and clip
+/// updates rasterize exactly as a repaint does, and a canvas clip stays in its run when
+/// `paint_child` splits the picture. One software rasterizer, so the rows run in turn.
+#[test]
+fn composited_layer_update_readbacks() {
+    run_cases(
+        "composited_layer_update_readbacks",
+        &[
+            (
+                "the_update_path_and_a_repaint_produce_the_same_pixels",
+                the_update_path_and_a_repaint_produce_the_same_pixels,
+            ),
+            (
+                "the_transform_update_path_and_a_repaint_produce_the_same_pixels",
+                the_transform_update_path_and_a_repaint_produce_the_same_pixels,
+            ),
+            (
+                "the_clip_update_path_and_a_repaint_produce_the_same_pixels",
+                the_clip_update_path_and_a_repaint_produce_the_same_pixels,
+            ),
+            (
+                "canvas_clip_stays_in_its_run_when_paint_child_splits_the_picture",
+                canvas_clip_stays_in_its_run_when_paint_child_splits_the_picture,
+            ),
+        ],
     );
 }

@@ -849,7 +849,27 @@ mod tests {
         arena.close(pointer);
     }
 
+    // Drag recognizer matrix: vertical recognition and rejection on early up.
     #[test]
+    fn drag_recognizer_matrix() {
+        let cases: &[(&str, fn())] = &[
+            (
+                "test_drag_recognizer_vertical",
+                test_drag_recognizer_vertical,
+            ),
+            (
+                "up_before_acceptance_rejects_drag_and_preserves_the_competitor",
+                up_before_acceptance_rejects_drag_and_preserves_the_competitor,
+            ),
+        ];
+        for &(name, case) in cases {
+            if let Err(payload) = std::panic::catch_unwind(case) {
+                eprintln!("matrix case `{name}` failed");
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+
     fn up_before_acceptance_rejects_drag_and_preserves_the_competitor() {
         struct Winner(Arc<Mutex<u32>>);
 
@@ -891,7 +911,6 @@ mod tests {
         assert!(arena.is_empty());
     }
 
-    #[test]
     fn test_drag_recognizer_vertical() {
         let arena = GestureArena::new();
         let started = Arc::new(Mutex::new(false));

@@ -1,8 +1,8 @@
-//! Property-based tests for `Color` invariants: hex case/prefix
-//! insensitivity, the `to_hex`/`from_hex` roundtrip, and `lighten`/`darken`
-//! direction-of-change, checked for arbitrary inputs rather than pinned
-//! examples.
+//! `Color` contracts: the `to_hex`/`from_hex` roundtrip and the Porter-Duff
+//! mirror algebra of `blend` checked for arbitrary colors, `blend_over`
+//! against Flutter's `Color.alphaBlend` by hand, and multi-stop lerp.
 
+use flui_painting::paint::{BlendMode, BlendMode::*};
 use flui_painting::styling::Color;
 use proptest::prelude::*;
 
@@ -13,24 +13,10 @@ pub(crate) fn arb_color() -> impl Strategy<Value = Color> {
     (any::<u8>(), any::<u8>(), any::<u8>(), alpha).prop_map(|(r, g, b, a)| Color::rgba(r, g, b, a))
 }
 
-proptest! {
-    /// `to_hex` followed by `from_hex` returns the original color. `to_hex`
-    /// picks the 6- or 8-digit form based on `is_opaque`, so this exercises
-    /// both branches as `a` varies across its full range.
-    #[test]
-    fn prop_to_hex_from_hex_roundtrips(c in arb_color()) {
-        let hex = c.to_hex();
-        let parsed = Color::from_hex(&hex).unwrap();
-        prop_assert_eq!(parsed, c);
-    }
-
-}
-
 /// Stops at 0.25 / 0.75 / 1.0 (exact in binary, so the local t is too):
 /// outside the range clamps to the end colors, on a stop gives that stop,
 /// and between two stops lerps locally.
-#[test]
-fn lerp_multi_stop_brackets_and_clamps() {
+pub(crate) fn lerp_multi_stop_brackets_and_clamps() {
     let (red, blue, green) = (Color::RED, Color::BLUE, Color::GREEN);
     let stops = [(red, 0.25), (blue, 0.75), (green, 1.0)];
     for (t, expected) in [
@@ -55,4 +41,28 @@ fn lerp_multi_stop_brackets_and_clamps() {
     assert_eq!(Color::lerp_multi_stop(&hard, 0.5), green);
     assert_eq!(Color::lerp_multi_stop(&[], 0.5), Color::TRANSPARENT);
     assert_eq!(Color::lerp_multi_stop(&[(blue, 0.3)], 0.9), blue);
+}
+
+const MIRRORS: [(BlendMode, BlendMode); 7] = [
+    (SrcOver, DstOver),
+    (SrcIn, DstIn),
+    (SrcOut, DstOut),
+    (SrcATop, DstATop),
+    (Xor, Xor),
+    (Plus, Plus),
+    (Clear, Clear),
+];
+
+/// `to_hex` then `from_hex` returns the original color (both the 6- and
+/// 8-digit branches), and swapping source and destination turns each
+/// Porter-Duff operator into its mirror (`Xor`, `Plus` and `Clear` are their
+/// own).
+pub(crate) fn hex_roundtrips_and_porter_duff_modes_mirror() {
+    proptest!(|(s in arb_color(), d in arb_color())| {
+        let parsed = Color::from_hex(&s.to_hex()).expect("to_hex output must parse");
+        prop_assert_eq!(parsed, s);
+        for (mode, mirror) in MIRRORS {
+            prop_assert_eq!(s.blend(d, mode), d.blend(s, mirror), "{:?} / {:?}", mode, mirror);
+        }
+    });
 }

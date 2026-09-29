@@ -23,8 +23,7 @@ use flui_sdk::widgets::{ColoredBox, GestureDetector, SizedBox, Text};
 
 /// A tap on an action reaches its own `on_tap` handler — the action row is
 /// hit-testable, not just laid out.
-#[test]
-fn a_tap_on_an_action_fires_its_handler() {
+pub fn a_tap_on_an_action_fires_its_handler() {
     let taps = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&taps);
 

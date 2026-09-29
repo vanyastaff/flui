@@ -680,7 +680,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn main_window_pending_coalesces_and_recovers_after_installer_panic() {
         let _owner = OwnerHostClearGuard::arm();
         let _cleanup = Cleanup;
@@ -735,7 +734,6 @@ mod tests {
     }
     use std::cell::Cell;
 
-    #[test]
     fn main_window_factory_panic_is_typed_and_initial_window_is_fatal() {
         let app = Application::new(|_| -> flui_widgets::Text {
             panic!("factory witness");
@@ -747,5 +745,22 @@ mod tests {
             AppRunError::InitialWindow(AppWindowError::FactoryPanicked { .. })
         ));
         assert!(APP_RUNTIME.with(|slot| slot.borrow().main_ingress.is_none()));
+    }
+
+    #[test]
+    fn main_window_installer_matrix() {
+        crate::table_test::run_table(
+            "main_window_installer_matrix",
+            &[
+                (
+                    "main_window_pending_coalesces_and_recovers_after_installer_panic",
+                    main_window_pending_coalesces_and_recovers_after_installer_panic as fn(),
+                ),
+                (
+                    "main_window_factory_panic_is_typed_and_initial_window_is_fatal",
+                    main_window_factory_panic_is_typed_and_initial_window_is_fatal as fn(),
+                ),
+            ],
+        );
     }
 }

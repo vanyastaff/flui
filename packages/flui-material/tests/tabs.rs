@@ -35,8 +35,7 @@ fn themed(theme: ThemeData, child: impl flui_sdk::view::prelude::IntoView) -> Th
 /// [`TabController::set_index`] through [`flui_material::InkWell`]'s
 /// dispatch — not just a directly-called closure, as the unit tests in
 /// `tabs.rs` exercise.
-#[test]
-fn tap_sets_the_controller_index_through_real_pointer_dispatch() {
+pub fn tap_sets_the_controller_index_through_real_pointer_dispatch() {
     let controller = TabController::new(2, 0);
     let laid = lay_out(
         themed(
@@ -65,8 +64,7 @@ fn tap_sets_the_controller_index_through_real_pointer_dispatch() {
 /// for the pure-function proof) — end to end, through a real root swap:
 /// mounting does not panic, and a subsequent tap still dispatches correctly
 /// through the re-created controller.
-#[test]
-fn default_tab_controller_survives_a_length_shrink_past_the_selected_index() {
+pub fn default_tab_controller_survives_a_length_shrink_past_the_selected_index() {
     let three_tabs = vec![
         Tab::new().text("One"),
         Tab::new().text("Two"),

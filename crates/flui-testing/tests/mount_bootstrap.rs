@@ -60,8 +60,7 @@ fn leaf(width: f64, height: f64) -> SizedLeaf {
     }
 }
 
-#[test]
-fn mount_root_installs_the_render_root_and_lays_it_out() {
+pub(crate) fn mount_root_installs_the_render_root_and_lays_it_out() {
     let mut binding = HeadlessBinding::new();
     let pipeline_owner = PipelineCell::new(PipelineOwner::new());
     let mounted = binding.mount_root(
@@ -95,8 +94,7 @@ fn mount_root_installs_the_render_root_and_lays_it_out() {
     );
 }
 
-#[test]
-fn the_bound_binding_keeps_pumping_from_where_the_bootstrap_left_off() {
+pub(crate) fn the_bound_binding_keeps_pumping_from_where_the_bootstrap_left_off() {
     // The bootstrap ends bound, so the next frame is an ordinary pump: no
     // second mount, no re-rooting, and the committed layer tree survives a
     // frame that has no paint work.

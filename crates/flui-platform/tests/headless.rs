@@ -14,7 +14,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_platform::{WindowOptions, current_platform, headless_platform};
 
-#[test]
 fn flui_headless_env_var_selects_the_headless_platform() {
     // Set environment variable
     // SAFETY: no other thread reads the environment concurrently — supplied
@@ -52,7 +51,6 @@ fn flui_headless_env_var_selects_the_headless_platform() {
 /// tracked window is a no-op today (no `quit()` call), and this test pins
 /// that every embedder/test written before this mechanism existed keeps
 /// seeing exactly that.
-#[test]
 fn closing_the_only_window_without_a_hook_never_calls_quit() {
     let platform = headless_platform();
     let quit_calls = Arc::new(AtomicUsize::new(0));
@@ -76,7 +74,6 @@ fn closing_the_only_window_without_a_hook_never_calls_quit() {
 /// The hook's veto is honored: `quit` must not fire even after every window
 /// has closed, when the hook returns `false` (the drain-before-decide
 /// scenario `AppRuntime::should_exit` implements one layer up).
-#[test]
 fn exit_policy_hook_veto_prevents_quit_even_after_the_last_window_closes() {
     let platform = headless_platform();
     platform.set_exit_policy_hook(Box::new(|| false));
@@ -96,4 +93,14 @@ fn exit_policy_hook_veto_prevents_quit_even_after_the_last_window_closes() {
         0,
         "a hook that vetoes the exit must prevent quit from firing"
     );
+}
+
+/// Headless platform selection and its exit policy: the env var selects it,
+/// no hook never calls quit, and a vetoing hook prevents quit. The env-var
+/// case runs last because it writes process-global state.
+#[test]
+fn the_headless_platform_is_selected_and_its_exit_policy_is_honoured() {
+    closing_the_only_window_without_a_hook_never_calls_quit();
+    exit_policy_hook_veto_prevents_quit_even_after_the_last_window_closes();
+    flui_headless_env_var_selects_the_headless_platform();
 }

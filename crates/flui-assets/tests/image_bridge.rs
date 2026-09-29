@@ -66,7 +66,6 @@ fn block_on<F: Future>(future: F) -> F::Output {
 /// must still start its own owned single-worker runtime and decode the
 /// fixture. This is the test that fails if the owned-runtime fallback is ever
 /// removed or broken — a plain `#[test]` has no tokio context to fall back on.
-#[test]
 fn load_image_bridged_starts_an_owned_runtime_and_decodes_the_fixture() {
     let registry = AssetRegistryBuilder::new()
         .with_capacity(1024 * 1024)
@@ -85,7 +84,6 @@ fn load_image_bridged_starts_an_owned_runtime_and_decodes_the_fixture() {
 /// A missing file must resolve to a typed `Err` promptly, not hang: the
 /// bridge's oneshot completion must fire for the failure path exactly like
 /// the success path.
-#[test]
 fn load_image_bridged_reports_a_missing_file_as_an_error_not_a_hang() {
     let registry = AssetRegistryBuilder::new()
         .with_capacity(1024 * 1024)
@@ -101,4 +99,12 @@ fn load_image_bridged_reports_a_missing_file_as_an_error_not_a_hang() {
         result.is_err(),
         "a nonexistent path must surface a typed error, got {result:?}",
     );
+}
+
+/// The bridge end to end with no ambient runtime: the success path decodes and
+/// the failure path resolves to an error instead of hanging.
+#[test]
+fn load_image_bridged_completes_both_the_success_and_the_failure_path() {
+    load_image_bridged_starts_an_owned_runtime_and_decodes_the_fixture();
+    load_image_bridged_reports_a_missing_file_as_an_error_not_a_hang();
 }

@@ -336,19 +336,28 @@ pub(crate) fn renderer_or_skip() -> Option<crate::headless::HeadlessRenderer> {
 mod adapter_gate_tests {
     use super::resolve_unavailable_gpu;
 
-    /// Without the demand, an unavailable GPU is a skip.
-    #[test]
-    fn an_unavailable_gpu_is_a_skip_when_nothing_demands_one() {
-        resolve_unavailable_gpu("device request failed, for the test", false);
-    }
-
-    /// With it, the same absence is a failure — the whole point of the knob.
+    /// Without the demand, an unavailable GPU is a skip; with it, the same
+    /// absence is a failure — the whole point of the knob.
     ///
-    /// Asserted on the panic MESSAGE, not merely that a panic happened, so a
-    /// future panic added for an unrelated reason cannot make this pass.
+    /// The failure is asserted on the panic MESSAGE, not merely that a panic
+    /// happened, so a future panic added for an unrelated reason cannot make
+    /// this pass.
     #[test]
-    #[should_panic(expected = "FLUI_REQUIRE_GPU is set")]
-    fn an_unavailable_gpu_is_a_failure_when_the_run_demands_one() {
-        resolve_unavailable_gpu("device request failed, for the test", true);
+    fn an_unavailable_gpu_is_a_skip_unless_the_run_demands_one() {
+        resolve_unavailable_gpu("device request failed, for the test", false);
+
+        let payload = std::panic::catch_unwind(|| {
+            resolve_unavailable_gpu("device request failed, for the test", true);
+        })
+        .expect_err("a demanded GPU that is unavailable must fail");
+        let message = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .expect("the panic carries a message");
+        assert!(
+            message.contains("FLUI_REQUIRE_GPU is set"),
+            "unexpected panic message: {message}"
+        );
     }
 }

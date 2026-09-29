@@ -95,8 +95,7 @@ impl RenderSliver for FixedSliver {
     }
 }
 
-#[test]
-fn viewport_lays_out_forward_slivers_and_applies_content_dimensions() {
+pub(crate) fn viewport_lays_out_forward_slivers_and_applies_content_dimensions() {
     let viewport = RenderViewport::with_offset(
         AxisDirection::TopToBottom,
         AxisDirection::LeftToRight,
@@ -167,8 +166,7 @@ fn viewport_lays_out_forward_slivers_and_applies_content_dimensions() {
 // 0` for the reverse group, so its physical offset —
 // `size - layout_offset(0) - paint_extent(40) == size - 40` on the
 // paint-origin axis — is EXACTLY the old all-reverse row's expected value.
-#[test]
-fn viewport_positions_first_sliver_for_axis_and_growth_matrix() {
+pub(crate) fn viewport_positions_first_sliver_for_axis_and_growth_matrix() {
     let cases = [
         (
             AxisDirection::TopToBottom,

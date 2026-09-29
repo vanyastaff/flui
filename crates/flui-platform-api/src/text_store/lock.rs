@@ -398,7 +398,6 @@ mod tests {
         )
     }
 
-    #[test]
     fn sync_inside_a_session_is_refused() {
         let arbiter = Rc::new(LockArbiter::new());
         let seen = Rc::new(Cell::new(None));
@@ -427,7 +426,6 @@ mod tests {
         (arbiter, gate)
     }
 
-    #[test]
     fn deferred_run_in_fifo_order() {
         let (arbiter, gate) = behind_a_shut_gate();
         let (log, grants) = labelled();
@@ -444,7 +442,6 @@ mod tests {
         assert_eq!(*log.borrow(), ["first", "second", "third", "fourth"]);
     }
 
-    #[test]
     fn a_full_queue_refuses_with_deferred_queue_full() {
         let (arbiter, _gate) = behind_a_shut_gate();
         let (_, grants) = labelled();
@@ -459,6 +456,15 @@ mod tests {
             Err(TextStoreError::DeferredQueueFull)
         );
         assert_eq!(arbiter.pending(), DEFERRED_LOCK_CAPACITY);
+    }
+
+    /// The arbiter's refusals and ordering: a sync request inside a session,
+    /// deferred grants running FIFO, and a full deferred queue.
+    #[test]
+    fn the_arbiter_refuses_and_orders_requests_by_the_lock_protocol() {
+        sync_inside_a_session_is_refused();
+        deferred_run_in_fifo_order();
+        a_full_queue_refuses_with_deferred_queue_full();
     }
 
     #[test]

@@ -30,7 +30,6 @@ fn controller(ms: u64) -> AnimationController {
 
 // ---- remaining-fraction duration scaling (Flutter `_animateToInternal`) ----
 
-#[test]
 fn forward_from_mid_scales_run_duration() {
     let _serial = serial();
     let c = controller(100);
@@ -47,7 +46,6 @@ fn forward_from_mid_scales_run_duration() {
     c.dispose();
 }
 
-#[test]
 fn set_value_nan_is_canonicalized() {
     let _serial = serial();
     let c = controller(100);
@@ -70,7 +68,6 @@ fn set_value_nan_is_canonicalized() {
 /// ([`AnimationController::unbounded_without_ticker`]), not a bound
 /// value, so the same wide-open pair this test used to accept must now
 /// be rejected, and the unbounded shape starts at `0.0`, never `-inf`.
-#[test]
 fn without_ticker_bounds_rejects_wide_open_ones() {
     let _serial = serial();
     let rejected = AnimationController::without_ticker_bounds(Duration::from_millis(1), 20.0, 10.0);
@@ -96,7 +93,6 @@ fn without_ticker_bounds_rejects_wide_open_ones() {
     c.dispose();
 }
 
-#[test]
 fn disposed_controller_rejects_forward() {
     let _serial = serial();
     let c = controller(100);
@@ -108,7 +104,6 @@ fn disposed_controller_rejects_forward() {
 
 /// `+-inf` still CLAMPS on a bounded controller (Flutter's own "go to
 /// the end" idiom) -- only a bound-less direction refuses.
-#[test]
 fn bounded_controller_clamps_infinite_target_and_from_to_the_pointed_at_bound() {
     let _serial = serial();
 
@@ -157,7 +152,6 @@ fn bounded_controller_clamps_infinite_target_and_from_to_the_pointed_at_bound() 
 /// unguarded, `NaN < 0.0` is `false`, so a NaN velocity took the
 /// Forward branch and built a spring whose `SpringSimulation` never
 /// reaches `is_done` for a NaN target.
-#[test]
 fn fling_refuses_a_non_finite_velocity() {
     let _serial = serial();
     let c = controller(100);
@@ -194,7 +188,6 @@ impl Simulation for GoesNanMidRun {
 /// stops, and the run no longer holds `Vsync` open (checked via a real
 /// registration's `has_running()`). NOT "value unchanged, run
 /// continues": that would leave `active_run` installed forever.
-#[test]
 fn a_simulation_that_turns_non_finite_mid_run_ends_the_run_at_the_last_finite_value() {
     let _serial = serial();
     let c = AnimationController::unbounded_without_ticker(Duration::from_millis(100));
@@ -240,7 +233,6 @@ fn a_simulation_that_turns_non_finite_mid_run_ends_the_run_at_the_last_finite_va
 
 // ---- B1c: status listener may re-enter the controller without deadlock ----
 
-#[test]
 fn status_callback_can_reenter_controller_without_deadlock() {
     let _serial = serial();
     let c = controller(100);
@@ -264,7 +256,6 @@ fn status_callback_can_reenter_controller_without_deadlock() {
 
 // ---- repeat with a finite count stops + completes ----
 
-#[test]
 fn repeat_consumes_all_cycles_in_one_long_frame() {
     let _serial = serial();
     let c = controller(100);
@@ -289,7 +280,6 @@ fn repeat_consumes_all_cycles_in_one_long_frame() {
 /// `min: 1.0, max: 1.0` oracle sub-case, `animation_controller_test.dart`
 /// "calling repeat with specified min and max values" @ 3.44.0); FLUI
 /// rejects it, the mapping entry's rationale.
-#[test]
 fn repeat_with_rejects_equal_min_and_max() {
     let _serial = serial();
     let c = controller(100);
@@ -305,7 +295,6 @@ fn repeat_with_rejects_equal_min_and_max() {
 /// never on how many intervening ticks partitioned the way there —
 /// `tick_at(1.25)` must equal `tick_at(1.0); tick_at(1.25)`, for both
 /// restart and bounce.
-#[test]
 fn repeat_value_is_partition_invariant_across_a_skipped_cycle() {
     let _serial = serial();
 
@@ -364,7 +353,6 @@ fn repeat_value_is_partition_invariant_across_a_skipped_cycle() {
 /// cumulative 160ms. Pure sampling makes that rewind exact, with no
 /// `toStringAsFixed` rounding needed. The exhaustion assertion is
 /// FLUI's own addition — the oracle never ticks that far.
-#[test]
 fn repeat_bounce_flutter_oracle_finite_count_and_absolute_time_rewind() {
     let _serial = serial();
     let c = controller(100);
@@ -408,7 +396,6 @@ fn repeat_bounce_flutter_oracle_finite_count_and_absolute_time_rewind() {
 /// never exhaust a finite repeat while `forward()` on the same input
 /// completes normally. Red-check: `.map_or(0, |d| d.as_nanos())`
 /// instead of `.unwrap_or(Duration::MAX)` — this repeat never exhausts.
-#[test]
 fn repeat_tick_at_infinity_exhausts_a_finite_count_instead_of_rewinding() {
     let _serial = serial();
     let c = controller(100);
@@ -425,7 +412,6 @@ fn repeat_tick_at_infinity_exhausts_a_finite_count_instead_of_rewinding() {
 /// end"); Compose rejects it, Flutter asserts. A later `tick_at`
 /// changes nothing (no run was ever installed), and `run_generation` is
 /// untouched.
-#[test]
 fn repeat_with_zero_period_settles_synchronously_at_the_call() {
     let _serial = serial();
 
@@ -467,7 +453,6 @@ fn repeat_with_zero_period_settles_synchronously_at_the_call() {
 /// `reverse_mid_flight_keeps_full_range_velocity` as this behavior's
 /// "sibling repeat coverage" named a test that has no `.velocity()`
 /// call at all.
-#[test]
 fn repeat_reverse_leg_velocity_is_negative() {
     let _serial = serial();
     let c = controller(100);
@@ -489,7 +474,6 @@ fn repeat_reverse_leg_velocity_is_negative() {
 
 // ---- animate_to_curved / animate_back_curved thread a curve through the run ----
 
-#[test]
 fn animate_to_curved_eases_through_the_given_curve() {
     use crate::curve::Curves;
     let _serial = serial();
@@ -523,7 +507,6 @@ fn animate_to_curved_eases_through_the_given_curve() {
 /// still be observed BEFORE the displaced run's cancellation, exactly
 /// like a real-duration displacement
 /// (`a_new_runs_status_listener_fires_before_the_displaced_runs_cancellation`).
-#[test]
 fn a_zero_duration_run_cancels_the_displaced_run_after_its_own_status_is_observable() {
     let _serial = serial();
     let scheduler = UpdateScheduler::new();
@@ -575,7 +558,6 @@ impl Simulation for InstantSimulation {
     }
 }
 
-#[test]
 fn simulation_run_future_resolves_ok_when_the_simulation_finishes() {
     let _serial = serial();
     let c = AnimationController::without_ticker(Duration::from_millis(100));
@@ -591,7 +573,6 @@ fn simulation_run_future_resolves_ok_when_the_simulation_finishes() {
     c.dispose();
 }
 
-#[test]
 fn stop_cancels_the_active_run() {
     let _serial = serial();
     let c = AnimationController::without_ticker(Duration::from_millis(100));
@@ -601,7 +582,6 @@ fn stop_cancels_the_active_run() {
     c.dispose();
 }
 
-#[test]
 fn every_delivery_runs_with_the_controller_lock_free() {
     let _serial = serial();
     let c = AnimationController::without_ticker(Duration::from_millis(100));
@@ -625,7 +605,6 @@ fn every_delivery_runs_with_the_controller_lock_free() {
     c.dispose();
 }
 
-#[test]
 fn a_panicking_status_listener_leaves_the_finished_run_ok() {
     let _serial = serial();
     let c = AnimationController::without_ticker(Duration::from_millis(100));
@@ -668,4 +647,109 @@ fn a_panicking_status_listener_leaves_the_finished_run_ok() {
     );
     assert!(future.is_complete());
     c.dispose();
+}
+
+#[test]
+fn controller_contract() {
+    crate::test_cases::run_cases(&[
+        (
+            "forward from mid scales run duration",
+            forward_from_mid_scales_run_duration,
+        ),
+        (
+            "set value nan is canonicalized",
+            set_value_nan_is_canonicalized,
+        ),
+        (
+            "without ticker bounds rejects wide open ones",
+            without_ticker_bounds_rejects_wide_open_ones,
+        ),
+        (
+            "disposed controller rejects forward",
+            disposed_controller_rejects_forward,
+        ),
+        (
+            "bounded controller clamps infinite target and from to the pointed at bound",
+            bounded_controller_clamps_infinite_target_and_from_to_the_pointed_at_bound,
+        ),
+        (
+            "animate to curved eases through the given curve",
+            animate_to_curved_eases_through_the_given_curve,
+        ),
+        ("stop cancels the active run", stop_cancels_the_active_run),
+        (
+            "simulation run future resolves ok when the simulation finishes",
+            simulation_run_future_resolves_ok_when_the_simulation_finishes,
+        ),
+    ]);
+}
+
+#[test]
+fn repeat_contract_and_flutter_divergences() {
+    crate::test_cases::run_cases(&[
+        (
+            "repeat consumes all cycles in one long frame",
+            repeat_consumes_all_cycles_in_one_long_frame,
+        ),
+        (
+            "repeat with rejects equal min and max",
+            repeat_with_rejects_equal_min_and_max,
+        ),
+        (
+            "repeat value is partition invariant across a skipped cycle",
+            repeat_value_is_partition_invariant_across_a_skipped_cycle,
+        ),
+        (
+            "repeat bounce flutter oracle finite count and absolute time rewind",
+            repeat_bounce_flutter_oracle_finite_count_and_absolute_time_rewind,
+        ),
+        (
+            "repeat tick at infinity exhausts a finite count instead of rewinding",
+            repeat_tick_at_infinity_exhausts_a_finite_count_instead_of_rewinding,
+        ),
+        (
+            "repeat with zero period settles synchronously at the call",
+            repeat_with_zero_period_settles_synchronously_at_the_call,
+        ),
+        (
+            "repeat reverse leg velocity is negative",
+            repeat_reverse_leg_velocity_is_negative,
+        ),
+    ]);
+}
+
+#[test]
+fn failure_modes_are_contained() {
+    crate::test_cases::run_cases(&[
+        (
+            "fling refuses a non finite velocity",
+            fling_refuses_a_non_finite_velocity,
+        ),
+        (
+            "a simulation that turns non finite mid run ends the run at the last finite value",
+            a_simulation_that_turns_non_finite_mid_run_ends_the_run_at_the_last_finite_value,
+        ),
+        (
+            "a panicking status listener leaves the finished run ok",
+            a_panicking_status_listener_leaves_the_finished_run_ok,
+        ),
+    ]);
+}
+
+#[test]
+fn reentrancy_and_run_ordering() {
+    crate::test_cases::run_cases(&[
+        (
+            "status callback can reenter controller without deadlock",
+            status_callback_can_reenter_controller_without_deadlock,
+        ),
+        (
+            "a zero duration run cancels the displaced run after its own status is observable",
+            a_zero_duration_run_cancels_the_displaced_run_after_its_own_status_is_observable,
+        ),
+        (
+            "every delivery runs with the controller lock free",
+            every_delivery_runs_with_the_controller_lock_free,
+        ),
+    ]);
 }

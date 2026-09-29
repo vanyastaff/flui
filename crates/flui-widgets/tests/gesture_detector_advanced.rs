@@ -25,8 +25,7 @@ fn target() -> ColoredBox {
 // (1) Long press — held past the deadline, driven only by `pump`.
 // ============================================================================
 
-#[test]
-fn long_press_fires_when_held_past_the_deadline() {
+pub(crate) fn long_press_fires_when_held_past_the_deadline() {
     let presses = Arc::new(AtomicUsize::new(0));
     let in_cb = Arc::clone(&presses);
 
@@ -80,8 +79,7 @@ fn long_press_fires_when_held_past_the_deadline() {
 // (5) on_tap + on_double_tap on the SAME detector (the headline fix).
 // ============================================================================
 
-#[test]
-fn double_tap_combined_with_tap_fires_double_tap_once_and_tap_never() {
+pub(crate) fn double_tap_combined_with_tap_fires_double_tap_once_and_tap_never() {
     let taps = Arc::new(AtomicUsize::new(0));
     let double_taps = Arc::new(AtomicUsize::new(0));
     let (tap_cb, double_cb) = (Arc::clone(&taps), Arc::clone(&double_taps));

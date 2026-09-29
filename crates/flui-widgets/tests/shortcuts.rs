@@ -3,9 +3,7 @@
 //! `SingleActivator` matching test stays a unit test in
 //! `src/interaction/shortcuts.rs`.
 
-mod tests {}
-
-mod intent_tests {
+pub(crate) mod intent_tests {
 
     use std::rc::Rc;
     use std::sync::Arc;
@@ -38,8 +36,7 @@ mod intent_tests {
     ///
     /// Red-check: drop the `resolve` call from `Shortcuts::build`'s handler —
     /// nothing runs and dispatch reports unhandled.
-    #[test]
-    fn a_shortcut_dispatches_its_intent_through_the_actions_chain() {
+    pub(crate) fn a_shortcut_dispatches_its_intent_through_the_actions_chain() {
         let saves = Arc::new(AtomicUsize::new(0));
         let field = FocusNode::with_debug_label("intent-field");
 
@@ -68,7 +65,7 @@ mod intent_tests {
     }
 }
 
-mod tab_tests {
+pub(crate) mod tab_tests {
     use std::rc::Rc;
 
     use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
@@ -100,8 +97,7 @@ mod tab_tests {
     ///
     /// The traversal actions come from `DefaultFocusTraversal`, which the
     /// harness's `FocusRoot` installs.
-    #[test]
-    fn tab_and_shift_tab_move_the_focus_through_the_actions_chain() {
+    pub(crate) fn tab_and_shift_tab_move_the_focus_through_the_actions_chain() {
         let scope = FocusScopeNode::with_debug_label("tab-scope");
         let left = FocusNode::with_debug_label("left");
         let right = FocusNode::with_debug_label("right");
@@ -134,7 +130,7 @@ mod tab_tests {
     }
 }
 
-mod activation_tests {
+pub(crate) mod activation_tests {
     use std::cell::Cell;
     use std::rc::Rc;
 
@@ -160,8 +156,7 @@ mod activation_tests {
     ///
     /// Red-check: drop the three `ActivateIntent` bindings from
     /// `DefaultFocusTraversal` — every dispatch is ignored.
-    #[test]
-    fn enter_space_and_select_activate_the_focused_control() {
+    pub(crate) fn enter_space_and_select_activate_the_focused_control() {
         let runs = Rc::new(Cell::new(0));
         let button = FocusNode::with_debug_label("button");
         let counted = Rc::clone(&runs);

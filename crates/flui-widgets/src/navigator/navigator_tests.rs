@@ -33,8 +33,7 @@ use crate::SizedBox;
 /// rather than moving the map out. This test then hangs rather than failing,
 /// which is why it is written to make progress observable (`re_registrations`
 /// rises) instead of only asserting at the end.
-#[test]
-fn a_registration_dropped_while_replacing_or_clearing_may_re_enter_the_registry() {
+pub(super) fn a_registration_dropped_while_replacing_or_clearing_may_re_enter_the_registry() {
     /// Registers another route from its own `Drop` — the self-locking shape.
     struct ReRegisterOnDrop {
         navigator: NavigatorHandle,

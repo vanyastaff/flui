@@ -43,8 +43,7 @@ use crate::common::fresh_layout_pipeline;
 /// Trigger: Padding(P1) → Padding(P2) with P2.children additionally
 /// containing P1 (cyclic edge). Both widgets call `layout_child(0)`
 /// for their declared first child, so the cycle is reachable.
-#[test]
-fn callback_reentry_poisons_structural_cycle() {
+pub(crate) fn callback_reentry_poisons_structural_cycle() {
     let mut pipeline = fresh_layout_pipeline();
     let p1 = pipeline
         .render_tree_mut()
@@ -106,8 +105,7 @@ fn callback_reentry_poisons_structural_cycle() {
 ///
 /// The frame-2 retry shape verifies the guard's panic-safety property
 /// without needing a separate mock for the set state.
-#[test]
-fn drop_guard_clears_id_on_perform_layout_panic() {
+pub(crate) fn drop_guard_clears_id_on_perform_layout_panic() {
     use flui_foundation::Diagnosticable;
     use flui_foundation::Single;
     use flui_rendering::{

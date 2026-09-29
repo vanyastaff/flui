@@ -42,8 +42,7 @@ fn recorder(
 /// Loose constraints throughout, so the child's size (`biggest / 2`) actually
 /// discriminates: under tight constraints the child would be stretched to fill
 /// and the assertion would hold for the wrong reason.
-#[test]
-fn layout_builder_constraint_change_rebuilds_in_the_same_frame() {
+pub(crate) fn layout_builder_constraint_change_rebuilds_in_the_same_frame() {
     let log = Arc::new(Mutex::new(Vec::new()));
 
     let bounds = |w: f64, h: f64| BoxConstraints::new(0.0, w, 0.0, h);

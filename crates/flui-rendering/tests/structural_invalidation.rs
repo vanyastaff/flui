@@ -15,8 +15,7 @@ fn clear_node_dirty_flags(owner: &mut PipelineOwner, id: flui_foundation::Render
     }
 }
 
-#[test]
-fn pure_reorder_marks_layout_only() {
+pub(crate) fn pure_reorder_marks_layout_only() {
     let mut owner = PipelineOwner::new();
     let parent = owner.set_root_render_object(Box::new(RenderColoredBox::red(10.0, 10.0)));
     owner.set_semantics_enabled(true);

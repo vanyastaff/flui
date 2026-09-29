@@ -11,8 +11,7 @@ fn flui() -> Command {
     cargo_bin_cmd!("flui")
 }
 
-#[test]
-fn create_with_unknown_template_exits_with_usage_error() {
+pub fn create_with_unknown_template_exits_with_usage_error() {
     let tmp = TempDir::new().expect("temp dir");
 
     flui()
@@ -29,4 +28,18 @@ fn create_with_unknown_template_exits_with_usage_error() {
         .assert()
         .failure()
         .code(2);
+}
+
+pub fn create_with_an_invalid_project_name_is_rejected() {
+    let tmp = TempDir::new().expect("temp dir");
+
+    for name in ["", "123app", "my app", "my.app", "fn", "struct"] {
+        flui()
+            .args(["create", name, "--org", "com.test", "--no-check"])
+            .arg("--path")
+            .arg(tmp.path())
+            .assert()
+            .failure()
+            .stderr(predicates::str::contains("invalid project name"));
+    }
 }

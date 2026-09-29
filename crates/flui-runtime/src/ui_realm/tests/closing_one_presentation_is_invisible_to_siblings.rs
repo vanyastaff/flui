@@ -4,8 +4,7 @@ use super::*;
 /// produced `LayerTree`), never a rebuild/flush count — B's own
 /// render output, not merely whether B ran, must be byte-for-byte
 /// unaffected by A closing.
-#[test]
-fn closing_presentation_a_leaves_sibling_layer_tree_identical() {
+pub(crate) fn closing_presentation_a_leaves_sibling_layer_tree_identical() {
     let mut realm = UiRealm::for_test();
     let a_id = realm.presentation_id();
     let b_id = realm.install_second_presentation_for_test();

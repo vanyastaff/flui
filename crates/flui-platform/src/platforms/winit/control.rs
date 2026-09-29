@@ -438,7 +438,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn winit_control_cross_thread_request_is_processed_on_the_owner() {
         let owner_thread = thread::current().id();
         let (wake_tx, wake_rx) = crossbeam_channel::bounded(1);
@@ -475,7 +474,14 @@ mod tests {
         assert!(window.is_visible());
     }
 
+    /// The owner lane: a cross-thread request is processed on the owner, and
+    /// a full lane hands the original options back without an extra wake.
     #[test]
+    fn the_owner_lane_admits_cross_thread_requests_and_refuses_when_full() {
+        winit_control_cross_thread_request_is_processed_on_the_owner();
+        winit_control_full_returns_original_options_without_an_extra_wake();
+    }
+
     fn winit_control_full_returns_original_options_without_an_extra_wake() {
         assert_eq!(CONTROL_CAPACITY, 256, "the owner lane has a fixed bound");
         let wake_count = Arc::new(AtomicUsize::new(0));

@@ -13,8 +13,7 @@ use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner};
 
 use crate::common::BoxedRenderObject;
 
-#[test]
-fn paint_root_carries_the_dpr_scale_and_ops_stay_logical() {
+pub(crate) fn paint_root_carries_the_dpr_scale_and_ops_stay_logical() {
     let mut owner = PipelineOwner::new();
     owner.set_device_pixel_ratio(2.0);
 

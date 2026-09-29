@@ -198,7 +198,6 @@ fn gradient_at_full_strength(
 /// through to the solid-fill path and paint [`UNSHADED_BASE`] instead —
 /// opaque yellow, which no prediction in this file resembles. If a kind's
 /// pipeline were never built, the pixel would be the bare destination.
-#[test]
 fn each_gradient_kind_paints_through_its_own_pipeline() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
@@ -270,7 +269,6 @@ fn every_porter_duff_mode_renders_as_itself(kind: GradientKind) {
     }
 }
 
-#[test]
 fn a_linear_gradient_renders_every_porter_duff_mode() {
     every_porter_duff_mode_renders_as_itself(GradientKind::Linear);
 }
@@ -290,7 +288,6 @@ fn a_linear_gradient_renders_every_porter_duff_mode() {
 /// distance inside the bottom-right corner lies outside the rounding and must
 /// show the bare destination. A uniform radius — either corner's value applied
 /// to both — fails one of the two.
-#[test]
 fn gradient_rrect_keeps_per_corner_radii() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
@@ -339,4 +336,13 @@ fn gradient_rrect_keeps_per_corner_radii() {
          may show. Gradient colour here means the bottom-right radius was dropped \
          (a uniform radius taken from another corner)",
     );
+}
+
+/// Gradient contract, read back from the GPU: every Porter-Duff mode, each
+/// gradient kind through its own pipeline, and per-corner rrect radii.
+#[test]
+fn gradients_read_back_as_specified() {
+    a_linear_gradient_renders_every_porter_duff_mode();
+    each_gradient_kind_paints_through_its_own_pipeline();
+    gradient_rrect_keeps_per_corner_radii();
 }

@@ -61,8 +61,7 @@ impl ViewState<Probe> for ProbeState {
 /// Red-check: key each tab's `Offstage` subtree by `(index, current_index)`
 /// instead of `index` alone (forcing a fresh element on every switch) — this
 /// test's `created.get() == 1` assertion fails (would read `2`).
-#[test]
-fn an_inactive_tabs_state_survives_switching_away_and_back() {
+pub fn an_inactive_tabs_state_survives_switching_away_and_back() {
     let created = Rc::new(Cell::new(0_u32));
     let created_for_closure = Rc::clone(&created);
 
@@ -103,8 +102,7 @@ fn an_inactive_tabs_state_survives_switching_away_and_back() {
 /// rebuilds the scaffold's active tab — an end-to-end proof that
 /// `CupertinoTabScaffold` actually wires the bar's `on_tap`, not just that
 /// `CupertinoTabController::set_index` compiles.
-#[test]
-fn tapping_a_tab_item_switches_the_active_tab() {
+pub fn tapping_a_tab_item_switches_the_active_tab() {
     let controller = CupertinoTabController::new(0);
     let scaffold = CupertinoTabScaffold::new(two_tab_bar(), controller.clone(), |_ctx, index| {
         if index == 0 {

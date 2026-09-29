@@ -206,7 +206,6 @@ fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
 /// inside a transient callback, not merely that it is unlocked --
 /// `handle_begin_frame` sets `current_frame` before running the transient
 /// loop, so the id it returns must match what the callback reads back.
-#[test]
 fn transient_callback_runs_with_no_scheduler_lock_held() {
     let scheduler = UpdateScheduler::new();
     let probe = scheduler.clone();
@@ -235,7 +234,6 @@ fn transient_callback_runs_with_no_scheduler_lock_held() {
 /// This family was the only callback family in this file with no
 /// lock-discipline test, while `notify_frame_completion` is exactly where a
 /// lock-across-`wake()` regression would land.
-#[test]
 fn completion_waker_runs_with_no_scheduler_lock_held() {
     struct ProbingWaker {
         probe: UpdateScheduler,
@@ -268,6 +266,23 @@ fn completion_waker_runs_with_no_scheduler_lock_held() {
     assert!(
         ran.load(Ordering::Acquire),
         "the completion waker must actually have run"
+    );
+}
+
+#[test]
+fn callbacks_run_with_no_scheduler_lock_held() {
+    crate::table_test::run_table(
+        "callbacks_run_with_no_scheduler_lock_held",
+        &[
+            (
+                "transient_callback_runs_with_no_scheduler_lock_held",
+                transient_callback_runs_with_no_scheduler_lock_held as fn(),
+            ),
+            (
+                "completion_waker_runs_with_no_scheduler_lock_held",
+                completion_waker_runs_with_no_scheduler_lock_held as fn(),
+            ),
+        ],
     );
 }
 

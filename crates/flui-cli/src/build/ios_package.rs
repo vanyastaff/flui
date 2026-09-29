@@ -588,7 +588,6 @@ mod tests {
     fn token() -> Arc<AtomicU8> {
         Arc::new(AtomicU8::new(RUNNING))
     }
-    #[test]
     fn publication_rolls_back_and_retains_backup_when_rollback_fails() {
         for rollback_fails in [false, true] {
             let dir = tempfile::tempdir().expect("temp");
@@ -626,7 +625,6 @@ mod tests {
             }
         }
     }
-    #[test]
     fn cancelled_before_commit_preserves_destination() {
         let dir = tempfile::tempdir().expect("temp");
         let output = dir.path().join("flui.xcframework");
@@ -656,5 +654,19 @@ mod tests {
             .status()
             .expect("query child")
             .success()
+    }
+
+    #[test]
+    fn publication_contract() {
+        crate::test_cases::run_cases(&[
+            (
+                "publication rolls back and retains backup when rollback fails",
+                publication_rolls_back_and_retains_backup_when_rollback_fails,
+            ),
+            (
+                "cancelled before commit preserves destination",
+                cancelled_before_commit_preserves_destination,
+            ),
+        ]);
     }
 }

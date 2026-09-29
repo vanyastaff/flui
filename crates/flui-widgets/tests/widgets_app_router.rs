@@ -152,8 +152,7 @@ fn tap(laid: &mut LaidOut) {
     settle(laid);
 }
 
-#[test]
-fn widgets_app_router_navigates_by_handle_and_the_url_follows() {
+pub(crate) fn widgets_app_router_navigates_by_handle_and_the_url_follows() {
     let probe = Probe::default();
     let vsync = Vsync::new();
     let mut laid = mount(WidgetsApp::router(router(&probe, 1, "/")), &vsync);
@@ -193,10 +192,9 @@ impl AttachCounter {
     }
 }
 
-#[test]
 // The two forms are two view types, so the switch remounts the shell: the
 // navigator form's state is disposed, releasing its navigator and observers.
-fn switching_widgets_app_from_home_to_router_releases_the_navigator() {
+pub(crate) fn switching_widgets_app_from_home_to_router_releases_the_navigator() {
     let handle = NavigatorHandle::new();
     let observer = Arc::new(AttachCounter::default());
     let vsync = Vsync::new();

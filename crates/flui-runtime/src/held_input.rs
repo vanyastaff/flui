@@ -1039,7 +1039,6 @@ mod tests {
         RefCell::new(HeldPointerQueue::new(PresentationId::new(1)))
     }
 
-    #[test]
     fn latest_motion_moves_to_the_arrival_tail_across_interleaved_pointers() {
         let queue = queue();
         let first = pointer(2);
@@ -1054,7 +1053,6 @@ mod tests {
         assert_eq!(positions(&events), vec![0.0, 0.0, 2.0, 3.0]);
     }
 
-    #[test]
     fn reentrant_active_route_terminal_evicts_queued_contact_motion() {
         let queue = queue();
         let active_route = pointer(1);
@@ -1082,7 +1080,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn abort_after_reentrant_down_restores_only_interleaved_old_input_ahead_of_new_down() {
         let queue = queue();
         let superseded = pointer(2);
@@ -1115,7 +1112,6 @@ mod tests {
         assert_eq!(positions(&restored), vec![0.0, 2.0, 0.0]);
     }
 
-    #[test]
     fn clear_during_replay_prevents_drop_from_restoring_the_detached_suffix() {
         let queue = queue();
         let id = pointer(2);
@@ -1131,5 +1127,31 @@ mod tests {
 
         assert!(queue.borrow().is_empty());
         assert!(drain(&queue).is_empty());
+    }
+
+    #[test]
+    fn held_input_reentry_matrix() {
+        crate::table_test::run_table(
+            "held_input_reentry_matrix",
+            &[
+                (
+                    "latest_motion_moves_to_the_arrival_tail_across_interleaved_pointers",
+                    latest_motion_moves_to_the_arrival_tail_across_interleaved_pointers as fn(),
+                ),
+                (
+                    "reentrant_active_route_terminal_evicts_queued_contact_motion",
+                    reentrant_active_route_terminal_evicts_queued_contact_motion as fn(),
+                ),
+                (
+                    "abort_after_reentrant_down_restores_only_interleaved_old_input_ahead_of_new_down",
+                    abort_after_reentrant_down_restores_only_interleaved_old_input_ahead_of_new_down
+                        as fn(),
+                ),
+                (
+                    "clear_during_replay_prevents_drop_from_restoring_the_detached_suffix",
+                    clear_during_replay_prevents_drop_from_restoring_the_detached_suffix as fn(),
+                ),
+            ],
+        );
     }
 }

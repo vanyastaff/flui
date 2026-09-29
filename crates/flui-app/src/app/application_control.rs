@@ -419,7 +419,6 @@ mod tests {
         let owner = saved.take().expect("owner was delivered");
         (Ingress::new(owner.proxy(), false), owner)
     }
-    #[test]
     fn main_window_exit_and_admission_linearize_on_same_ingress() {
         let (ingress, _owner) = ingress();
         let handle = ingress.handle();
@@ -438,7 +437,6 @@ mod tests {
             Err(AppControlError::OwnerGone)
         ));
     }
-    #[test]
     fn main_window_worker_admission_races_autoexit_without_lost_accepted_intent() {
         for _ in 0..24 {
             let (ingress, _owner) = ingress();
@@ -459,5 +457,23 @@ mod tests {
             assert!(exited || admitted.is_ok(), "one serialized operation wins");
             ingress.close();
         }
+    }
+
+    #[test]
+    fn application_control_admission_matrix() {
+        crate::table_test::run_table(
+            "application_control_admission_matrix",
+            &[
+                (
+                    "main_window_exit_and_admission_linearize_on_same_ingress",
+                    main_window_exit_and_admission_linearize_on_same_ingress as fn(),
+                ),
+                (
+                    "main_window_worker_admission_races_autoexit_without_lost_accepted_intent",
+                    main_window_worker_admission_races_autoexit_without_lost_accepted_intent
+                        as fn(),
+                ),
+            ],
+        );
     }
 }

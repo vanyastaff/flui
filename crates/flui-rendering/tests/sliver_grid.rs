@@ -183,8 +183,7 @@ fn two_column_delegate() -> Arc<dyn flui_rendering::delegates::SliverGridDelegat
     Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(2))
 }
 
-#[test]
-fn sliver_grid_golden_geometry() {
+pub(crate) fn sliver_grid_golden_geometry() {
     // Oracle: scroll_extent=400, paint_extent=200, layout_extent=200,
     // max_paint_extent=400, cache_extent=200, has_visual_overflow=true.
     let (owner, _root, grid, _children) =

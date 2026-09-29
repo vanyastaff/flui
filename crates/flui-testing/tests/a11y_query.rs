@@ -70,8 +70,7 @@ fn pump(binding: &mut HeadlessBinding) {
 
 /// **The acceptance test.** A button in the render tree is findable by role,
 /// with its label, through the same translation a screen reader receives.
-#[test]
-fn a_button_in_the_render_tree_is_findable_by_role() {
+pub(crate) fn a_button_in_the_render_tree_is_findable_by_role() {
     let mut binding = binding_with(SemanticLeaf {
         label: "Submit".to_string(),
         button: true,

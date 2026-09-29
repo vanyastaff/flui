@@ -4,8 +4,15 @@ use flui_foundation::geometry::Size;
 use flui_objects::RenderColoredBox;
 use flui_rendering::testing::{DrawKind, RenderTester, box_node};
 
+/// Structural paint snapshots: a plain fill, and the shadow, fill, border
+/// ordering of a decorated box.
 #[test]
-fn frame_snapshot_and_predicate() {
+fn paint_snapshots() {
+    colored_box_snapshot();
+    decorated_box_snapshot();
+}
+
+fn colored_box_snapshot() {
     let run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)))
         .with_size(Size::new(40.0, 40.0))
         .run_frame();
@@ -35,8 +42,7 @@ fn frame_snapshot_and_predicate() {
 ///
 /// This is the highest-value snapshot: the command sequence (shadow → fill →
 /// border) is invisible to `structure()` and `picture_bounds()`.
-#[test]
-fn snapshot_decorated_box() {
+fn decorated_box_snapshot() {
     use flui_foundation::geometry::Offset;
     use flui_objects::RenderDecoratedBox;
     use flui_painting::styling::{
@@ -106,8 +112,7 @@ fn snapshot_decorated_box() {
 /// in-band index is "absent" on every pass and re-requested in full — this
 /// test is about the freshly computed window each pass, not about anything
 /// persisting across passes.
-#[test]
-fn scrolling_lazy_sliver_request_band_tracks_scroll_position_and_stays_bounded() {
+pub fn scrolling_lazy_sliver_request_band_tracks_scroll_position_and_stays_bounded() {
     use flui_objects::RenderSliverList;
     use flui_rendering::constraints::AxisDirection;
     use flui_rendering::{testing::sliver_node, view::ScrollableViewportOffset};

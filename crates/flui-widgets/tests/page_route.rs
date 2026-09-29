@@ -62,8 +62,7 @@ fn complete_entrance(transition: &TransitionHandle, harness: &mut Harness) {
 
 /// `PageRoute.opaque => true` (`pages.dart:50`): once the entrance transition
 /// completes, the route below is dropped from the widget tree.
-#[test]
-fn page_route_occludes_the_route_below_once_its_transition_completes() {
+pub(crate) fn page_route_occludes_the_route_below_once_its_transition_completes() {
     let (navigator, mut harness, bottom) = navigator_with_seed();
     let bottom_entry = navigator
         .entry_of(bottom)
@@ -102,8 +101,7 @@ fn page_route_occludes_the_route_below_once_its_transition_completes() {
 /// `secondaryAnimation` from the upper route's primary animation
 /// (`routes.dart:429-443`). Popping it re-points the proxy at the popped route,
 /// so the lower page animates back in as the upper reverses away (`:393-402`).
-#[test]
-fn secondary_animation_runs_on_the_previous_page_route_when_pushing_and_popping() {
+pub(crate) fn secondary_animation_runs_on_the_previous_page_route_when_pushing_and_popping() {
     let (navigator, mut harness, _bottom) = navigator_with_seed();
 
     let lower = PageRoute::<i32>::new(leaf);
@@ -185,8 +183,7 @@ fn secondary_animation_runs_on_the_previous_page_route_when_pushing_and_popping(
 /// Red-check: put back `width: Cell::new(BACK_GESTURE_WIDTH)` with no
 /// refresh — the observed value drop becomes ~40x larger (18.9/20 instead
 /// of 18.9/800) and the exact expectation fails.
-#[test]
-fn back_gesture_edge_drag_normalizes_against_the_routes_real_width_not_the_hit_strip() {
+pub(crate) fn back_gesture_edge_drag_normalizes_against_the_routes_real_width_not_the_hit_strip() {
     let (navigator, mut harness, _bottom) = navigator_with_seed();
 
     let route = PageRoute::<i32>::new(leaf).back_gesture(true);

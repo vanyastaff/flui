@@ -346,7 +346,6 @@ mod tests {
     // `.flutter/packages/flutter/test/widgets/async_test.dart`.
 
     /// `'tracks life-cycle of Future to success'`: `None` → `Waiting` → `Done + data`.
-    #[test]
     fn future_life_cycle_to_success() {
         let snapshot = Snap::initial(None);
         assert_eq!(snapshot.connection_state(), ConnectionState::None);
@@ -364,7 +363,6 @@ mod tests {
 
     /// Swapping streams: `after_disconnected` then `after_connected`, old value
     /// visible throughout. (`'gracefully handles transition to other stream'`.)
-    #[test]
     fn stream_reconnect_preserves_the_last_value() {
         let snapshot = Snap::initial(None)
             .after_connected()
@@ -377,4 +375,15 @@ mod tests {
     }
 
     // ── misc ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn async_snapshot_transitions() {
+        crate::test_cases::run_cases(&[
+            ("future life cycle to success", future_life_cycle_to_success),
+            (
+                "stream reconnect preserves the last value",
+                stream_reconnect_preserves_the_last_value,
+            ),
+        ]);
+    }
 }

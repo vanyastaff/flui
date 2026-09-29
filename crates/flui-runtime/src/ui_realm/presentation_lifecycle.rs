@@ -394,7 +394,6 @@ mod tests {
 
     use std::{cell::RefCell, rc::Rc};
 
-    #[test]
     fn lifecycle_subscription_direct_drop_preserves_outer_unwind_and_invalidates_handle() {
         let retained = Rc::new(RefCell::new(None));
         let output = Rc::clone(&retained);
@@ -424,7 +423,6 @@ mod tests {
         (realm, a, b)
     }
 
-    #[test]
     fn window_execution_suspension_cancels_real_pointer_before_public_notification() {
         let (realm, _a, b) = two_presentations();
         realm
@@ -485,6 +483,25 @@ mod tests {
         assert!(
             realm.scheduler().frames_enabled(),
             "visible sibling remains eligible"
+        );
+    }
+
+    #[test]
+    fn presentation_lifecycle_matrix() {
+        crate::table_test::run_table(
+            "presentation_lifecycle_matrix",
+            &[
+                (
+                    "lifecycle_subscription_direct_drop_preserves_outer_unwind_and_invalidates_handle",
+                    lifecycle_subscription_direct_drop_preserves_outer_unwind_and_invalidates_handle
+                        as fn(),
+                ),
+                (
+                    "window_execution_suspension_cancels_real_pointer_before_public_notification",
+                    window_execution_suspension_cancels_real_pointer_before_public_notification
+                        as fn(),
+                ),
+            ],
         );
     }
 }

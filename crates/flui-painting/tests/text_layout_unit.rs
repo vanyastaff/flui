@@ -5,8 +5,7 @@
 use flui_painting::TextLayout;
 use flui_painting::typography::{TextDirection, TextPosition};
 
-#[test]
-fn test_text_layout_caret_position() {
+pub(crate) fn test_text_layout_caret_position() {
     let layout = TextLayout::new("Hello", None, 14.0, None, None, TextDirection::Ltr);
 
     let start_offset = layout.get_offset_for_caret(TextPosition::upstream(0));
@@ -25,8 +24,7 @@ fn test_text_layout_caret_position() {
 /// the interior; this pins both edges too, against a two-space run
 /// specifically (the three-space one that test already used could not
 /// distinguish "the whole run" from "a two-space sub-range").
-#[test]
-fn get_word_boundary_two_space_run_boundary_matrix() {
+pub(crate) fn get_word_boundary_two_space_run_boundary_matrix() {
     use flui_painting::TextLayout;
     use flui_painting::typography::{TextAffinity, TextDirection, TextPosition};
 

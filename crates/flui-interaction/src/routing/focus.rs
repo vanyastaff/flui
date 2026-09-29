@@ -768,7 +768,31 @@ mod tests {
         }
     }
 
+    // Focus traversal matrix: key dispatch order, traversal policy, scope memory.
     #[test]
+    fn focus_traversal_matrix() {
+        let cases: &[(&str, fn())] = &[
+            (
+                "key_dispatch_walks_leaf_to_root_and_honors_skip",
+                key_dispatch_walks_leaf_to_root_and_honors_skip,
+            ),
+            (
+                "traversal_uses_policy_order_and_edge_behavior",
+                traversal_uses_policy_order_and_edge_behavior,
+            ),
+            (
+                "set_first_focus_restores_the_scopes_remembered_descendant",
+                set_first_focus_restores_the_scopes_remembered_descendant,
+            ),
+        ];
+        for &(name, case) in cases {
+            if let Err(payload) = std::panic::catch_unwind(case) {
+                eprintln!("matrix case `{name}` failed");
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+
     fn key_dispatch_walks_leaf_to_root_and_honors_skip() {
         let manager = FocusManager::new();
         let parent = FocusNode::new();
@@ -798,7 +822,6 @@ mod tests {
         assert!(calls.borrow().is_empty());
     }
 
-    #[test]
     fn traversal_uses_policy_order_and_edge_behavior() {
         let (manager, nodes) = manager_with_nodes(2);
         assert!(manager.focus_next());
@@ -822,7 +845,6 @@ mod tests {
         ));
     }
 
-    #[test]
     fn set_first_focus_restores_the_scopes_remembered_descendant() {
         let manager = FocusManager::new();
         let scope = FocusScopeNode::with_debug_label("route");
@@ -874,13 +896,47 @@ mod tests {
     // `flui-testing` in the layer DAG for everything else, but keeps it as
     // a dev-dependency for exactly this.
 
+    // Focus failure and reentrancy matrix: listener panics, bounded ping-pong,
+    /// queued requests against detached targets or a closing manager, and reentrant
+    /// requests during notification.
+    #[test]
+    fn focus_failure_and_reentrancy_matrix() {
+        let cases: &[(&str, fn())] = &[
+            (
+                "listener_panic_does_not_leave_notification_depth_stuck",
+                listener_panic_does_not_leave_notification_depth_stuck,
+            ),
+            (
+                "ping_pong_listeners_are_bounded_and_warned",
+                ping_pong_listeners_are_bounded_and_warned,
+            ),
+            (
+                "queued_focus_target_detached_before_its_turn_is_skipped_not_applied",
+                queued_focus_target_detached_before_its_turn_is_skipped_not_applied,
+            ),
+            (
+                "queued_requests_are_dropped_when_the_manager_closes_mid_drain",
+                queued_requests_are_dropped_when_the_manager_closes_mid_drain,
+            ),
+            (
+                "reentrant_request_during_notification_is_applied_after_and_published_in_order",
+                reentrant_request_during_notification_is_applied_after_and_published_in_order,
+            ),
+        ];
+        for &(name, case) in cases {
+            if let Err(payload) = std::panic::catch_unwind(case) {
+                eprintln!("matrix case `{name}` failed");
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+
     /// The issue #1040 reproducer: A is focused, B is requested, and B's
     /// own node listener reentrantly requests C while B is (momentarily)
     /// primary. The reentrant request must be applied only after the
     /// outer A -> B notification finishes, and published in the order
     /// requested — never the reversed `[(B, C), (A, B)]` the pre-fix code
     /// produced.
-    #[test]
     fn reentrant_request_during_notification_is_applied_after_and_published_in_order() {
         let (manager, nodes) = manager_with_nodes(3);
         nodes[0].request_focus();
@@ -919,7 +975,6 @@ mod tests {
     /// requests C, then detaches C before the outer notification finishes.
     /// The drain must skip the now-detached target rather than committing
     /// it as primary.
-    #[test]
     fn queued_focus_target_detached_before_its_turn_is_skipped_not_applied() {
         let manager = FocusManager::new();
         let a = FocusNode::with_debug_label("a");
@@ -968,7 +1023,6 @@ mod tests {
     /// `request_focus` on this manager would otherwise queue silently and
     /// never apply, since nothing would ever bring the depth back to zero
     /// to drain it.
-    #[test]
     fn listener_panic_does_not_leave_notification_depth_stuck() {
         let (manager, nodes) = manager_with_nodes(2);
         nodes[0].request_focus();
@@ -1015,7 +1069,6 @@ mod tests {
     /// per bounce), so the drain is bounded at
     /// `FocusManager::REENTRANT_FOCUS_DRAIN_BUDGET` applications and warns
     /// once when it drops the rest.
-    #[test]
     fn ping_pong_listeners_are_bounded_and_warned() {
         let (manager, nodes) = manager_with_nodes(2);
 
@@ -1116,7 +1169,6 @@ mod tests {
     /// notification already in flight — no further manager-level
     /// publication happens and any request still queued by a reentrant
     /// listener is dropped rather than applied.
-    #[test]
     fn queued_requests_are_dropped_when_the_manager_closes_mid_drain() {
         let (manager, nodes) = manager_with_nodes(3);
         nodes[0].request_focus();
@@ -1147,6 +1199,3 @@ mod tests {
         assert!(manager.is_closed());
     }
 }
-
-#[cfg(test)]
-mod unfocused_key_tests {}

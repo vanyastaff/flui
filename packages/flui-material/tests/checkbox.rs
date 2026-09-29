@@ -52,8 +52,7 @@ fn themed(checkbox: Checkbox) -> Theme {
     Theme::new(ThemeData::light(), checkbox)
 }
 
-#[test]
-fn tristate_cycle_survives_a_rebuild_between_each_tap() {
+pub fn tristate_cycle_survives_a_rebuild_between_each_tap() {
     // Flutter parity: `_handleTap`'s tristate cycle (`checkbox.dart`
     // `:241-248`) — false -> true -> null -> false. Each tap here rebuilds
     // the tree with the previously-observed value (mirroring how a real
@@ -103,8 +102,7 @@ fn announced_toggled(checkbox: Checkbox, label: &str) -> Option<Toggled> {
         .toggled()
 }
 
-#[test]
-fn indeterminate_tristate_exports_mixed_semantics() {
+pub fn indeterminate_tristate_exports_mixed_semantics() {
     // Issue #1102 AC: valid tristate `None` paints the dash (unit-covered)
     // AND exports mixed — never the old release hole of dash + unchecked.
     assert_eq!(

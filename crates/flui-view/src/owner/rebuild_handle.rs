@@ -317,7 +317,6 @@ mod tests {
     /// `schedule(reason)` is callable from another thread and rebuilds on the frame
     /// thread. Nothing is built off-thread: the build counter cannot move until
     /// `build_scope` runs here.
-    #[test]
     fn rebuild_handle_schedules_from_another_thread_and_builds_on_the_frame_thread() {
         let (mut owner, mut tree, handle, builds, _root) = mount();
         let before = builds.load(Ordering::Relaxed);
@@ -344,7 +343,6 @@ mod tests {
 
     /// A handle outliving its element is inert: scheduling queues an id whose
     /// node is gone, and the drain skips it. No panic, no resurrection.
-    #[test]
     fn rebuild_handle_outliving_its_element_is_inert() {
         let (mut owner, mut tree, handle, builds, root) = mount();
         let before = builds.load(Ordering::Relaxed);
@@ -361,6 +359,24 @@ mod tests {
             "a dead element must not rebuild"
         );
         assert_eq!(owner.pending_external_builds(), 0, "inbox still drained");
+    }
+
+    #[test]
+    fn rebuild_handle_matrix() {
+        crate::table_test::run_table(
+            "rebuild_handle_matrix",
+            &[
+                (
+                    "rebuild_handle_schedules_from_another_thread_and_builds_on_the_frame_thread",
+                    rebuild_handle_schedules_from_another_thread_and_builds_on_the_frame_thread
+                        as fn(),
+                ),
+                (
+                    "rebuild_handle_outliving_its_element_is_inert",
+                    rebuild_handle_outliving_its_element_is_inert as fn(),
+                ),
+            ],
+        );
     }
 
     // ── 5. frame request ────────────────────────────────────────────────────

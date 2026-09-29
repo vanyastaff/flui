@@ -24,6 +24,9 @@ use parley::layout::PositionedLayoutItem;
 use parley::style::{FontFamily, FontFamilyName, StyleProperty};
 use parley::{FontContext, FontData, Layout, LayoutContext};
 
+#[path = "support/cases.rs"]
+mod cases;
+
 const ROBOTO: &[u8] = include_bytes!("../assets/fonts/Roboto-Regular.ttf");
 const MATERIAL_ICONS: &[u8] = include_bytes!("../assets/fonts/MaterialIcons-Regular.ttf");
 const LATIN: &str = "The quick brown fox jumps over the lazy dog 0123456789";
@@ -350,7 +353,6 @@ fn compare(shaper: &mut Shaper, family: &str, text: &str) -> Report {
 /// Every sample runs on its vendored face alone, in a collection of its own,
 /// so no host font and no other sample's face can take part in shaping.
 /// Scripts without a vendored face are named as skipped, not compared.
-#[test]
 fn swash_matches_cosmic_text_bit_for_bit() {
     for (name, reason) in UNCOVERED {
         println!("{name}: skipped, {reason}");
@@ -394,7 +396,6 @@ fn latin_keys(shaper: &mut Shaper, fonts: &mut FontRegistry, family: &str) -> Ve
 /// Shaping and rasterizing on this path never builds `FONT_SYSTEM`. Nothing
 /// else in this binary touches it, so the check holds under nextest and
 /// `cargo test` alike.
-#[test]
 fn the_raster_path_never_builds_the_process_font_system() {
     let mut shaper = Shaper::new();
     let family = shaper.register(ROBOTO.to_vec());
@@ -404,4 +405,21 @@ fn the_raster_path_never_builds_the_process_font_system() {
         assert!(rasterizer.rasterize(key).is_some());
     }
     assert!(!flui_painting::text_layout::font_system_initialized());
+}
+
+#[test]
+fn parley_oracle_contract() {
+    cases::run_cases(
+        "parley_oracle",
+        &[
+            (
+                "swash_matches_cosmic_text_bit_for_bit",
+                swash_matches_cosmic_text_bit_for_bit,
+            ),
+            (
+                "the_raster_path_never_builds_the_process_font_system",
+                the_raster_path_never_builds_the_process_font_system,
+            ),
+        ],
+    );
 }

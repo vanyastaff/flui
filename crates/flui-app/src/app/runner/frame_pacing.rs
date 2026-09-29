@@ -447,7 +447,6 @@ mod desktop_pacing_tests {
 
     use super::{FallbackGate, FallbackWake, WakeAction, wake_action};
 
-    #[test]
     fn idle_wake_with_no_dirty_work_and_no_scheduled_frame_skips() {
         assert_eq!(
             wake_action(true, false, false, FallbackGate::default()),
@@ -462,7 +461,6 @@ mod desktop_pacing_tests {
     /// pump's own duration to every period — a slow, cumulative slide
     /// against the display that shows up as a periodic dropped frame while
     /// every median still reads healthy.
-    #[test]
     fn the_fallback_deadline_is_anchored_to_the_last_present() {
         let period = Duration::from_micros(6_065); // a 164.89 Hz panel
         let fallback = FallbackWake::new(period);
@@ -487,7 +485,6 @@ mod desktop_pacing_tests {
 
     /// The gate's whole point: a ticker-only wake that arrives before the
     /// deadline runs nothing, and real dirty work is never held behind it.
-    #[test]
     fn a_pending_fallback_defers_a_ticker_only_wake_but_never_dirty_work() {
         assert_eq!(
             wake_action(
@@ -520,6 +517,27 @@ mod desktop_pacing_tests {
             WakeAction::Render,
             "real dirty work overrides a pending deferral — input and state changes are \
              never paced behind the fallback"
+        );
+    }
+
+    #[test]
+    fn desktop_pacing_matrix() {
+        crate::table_test::run_table(
+            "desktop_pacing_matrix",
+            &[
+                (
+                    "idle_wake_with_no_dirty_work_and_no_scheduled_frame_skips",
+                    idle_wake_with_no_dirty_work_and_no_scheduled_frame_skips as fn(),
+                ),
+                (
+                    "the_fallback_deadline_is_anchored_to_the_last_present",
+                    the_fallback_deadline_is_anchored_to_the_last_present as fn(),
+                ),
+                (
+                    "a_pending_fallback_defers_a_ticker_only_wake_but_never_dirty_work",
+                    a_pending_fallback_defers_a_ticker_only_wake_but_never_dirty_work as fn(),
+                ),
+            ],
         );
     }
 }

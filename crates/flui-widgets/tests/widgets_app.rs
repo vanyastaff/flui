@@ -55,8 +55,7 @@ fn captured_value<T: Clone>(cell: &Arc<Mutex<Option<T>>>) -> Option<T> {
     cell.lock().expect("test mutex poisoned").clone()
 }
 
-#[test]
-fn home_is_seeded_once_as_the_root_route() {
+pub(crate) fn home_is_seeded_once_as_the_root_route() {
     let handle = NavigatorHandle::new();
     let (probe, captured) = capture(|_ctx| true);
     let app = WidgetsApp::new(probe).navigator(handle.clone());
@@ -86,8 +85,7 @@ fn home_is_seeded_once_as_the_root_route() {
     );
 }
 
-#[test]
-fn builder_only_app_receives_no_routing_and_supplies_the_subtree() {
+pub(crate) fn builder_only_app_receives_no_routing_and_supplies_the_subtree() {
     // The oracle builds no Navigator when home/routes/onGenerateRoute/
     // onUnknownRoute are all absent; builder receives a null child. Of
     // those four, only `home` is a knob this shell has — named-route
@@ -140,8 +138,7 @@ impl NavigatorObserver for RecordingObserver {
     }
 }
 
-#[test]
-fn observers_attach_at_mount_and_see_the_home_route() {
+pub(crate) fn observers_attach_at_mount_and_see_the_home_route() {
     let observer = Arc::new(RecordingObserver::default());
     mount(WidgetsApp::new(SizedBox::shrink()).observer(observer.clone()));
     assert_eq!(

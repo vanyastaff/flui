@@ -194,8 +194,7 @@ mod surface_acquisition_tests {
         }
     }
 
-    #[test]
-    fn outdated_and_lost_still_share_the_single_retry_budget() {
+    pub(super) fn outdated_and_lost_still_share_the_single_retry_budget() {
         for initial in [SurfaceAcquireOutcome::Outdated, SurfaceAcquireOutcome::Lost] {
             let mut surface = FakeSurface::new(vec![initial, SurfaceAcquireOutcome::Lost]);
 
@@ -232,6 +231,11 @@ mod new_probes_before_gpu_work_tests {
     /// than exactly `["window_handle"]` means the probe ran further than it
     /// should have, or something downstream of it ran at all.
     #[test]
+    fn renderer_construction_fails_before_gpu_work_and_surface_acquisition_shares_one_retry() {
+        super::surface_acquisition_tests::outdated_and_lost_still_share_the_single_retry_budget();
+        renderer_new_fails_before_instance_creation_when_target_is_unavailable();
+    }
+
     fn renderer_new_fails_before_instance_creation_when_target_is_unavailable() {
         let target = Arc::new(FakeTarget::unavailable());
 
@@ -2544,7 +2548,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn sdr_surface_selection_rejects_incompatible_pairs() {
         use wgpu::{SurfaceColorSpaces as Spaces, TextureFormat as Format};
         for pairs in [
@@ -2576,7 +2579,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn sdr_surface_selection_painter_readback_preserves_swatches_and_blending() {
         use crate::painter::WgpuPainter;
         use flui_foundation::geometry::Rect;
@@ -2673,7 +2675,6 @@ mod tests {
     /// Drives the real `Renderer::handle_backdrop_filter` (not a reimpl) with a
     /// synthetic surface texture and asserts the queued offscreen composite rect
     /// is the device rect. Red before the fix (logical (100,100,200,200)).
-    #[test]
     fn backdrop_filter_path_a_composites_at_device_rect_under_dpr() {
         use crate::layer_dispatcher::LayerDispatcher;
         use crate::offscreen::OffscreenRenderer;
@@ -2950,7 +2951,6 @@ mod tests {
     /// motivated the whole render-time-resolution design) must
     /// render its subtree at the LEADER's resolved position, not at its own
     /// natural (pre-resolution) tree position.
-    #[test]
     fn follower_gpu_renders_at_resolved_position_across_repaint_boundaries() {
         use crate::layer_dispatcher::LayerDispatcher;
         use crate::offscreen::OffscreenRenderer;
@@ -3101,7 +3101,6 @@ mod tests {
     // rendered pixels, the same style as the Follower Tier-2 tests above.
     // =========================================================================
 
-    #[test]
     fn shader_mask_layer_root_gpu_pixel_readback_reflects_mask() {
         use crate::layer_dispatcher::LayerDispatcher;
         use crate::offscreen::OffscreenRenderer;
@@ -3197,5 +3196,17 @@ mod tests {
              entirely (background white, ~[255,255,255]); expected a distinctly \
              blended pixel from the ~50% mask, got {pixel:?}"
         );
+    }
+
+    /// Surface selection and compositor readbacks, one row per feature: SDR pair
+    /// selection (rejections and swatch/blending readback), backdrop filters under
+    /// DPR, followers across repaint boundaries, and the shader-mask layer root.
+    #[test]
+    fn renderer_surface_selection_and_layer_compositing_read_back_as_specified() {
+        sdr_surface_selection_rejects_incompatible_pairs();
+        sdr_surface_selection_painter_readback_preserves_swatches_and_blending();
+        backdrop_filter_path_a_composites_at_device_rect_under_dpr();
+        follower_gpu_renders_at_resolved_position_across_repaint_boundaries();
+        shader_mask_layer_root_gpu_pixel_readback_reflects_mask();
     }
 }

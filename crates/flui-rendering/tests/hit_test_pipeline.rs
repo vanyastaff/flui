@@ -30,8 +30,7 @@ fn hits(
 // 1. Leaf-first recursion through a positioned child
 // ============================================================================
 
-#[test]
-fn padding_child_hits_leaf_first_at_laid_out_offset() {
+pub(crate) fn padding_child_hits_leaf_first_at_laid_out_offset() {
     let mut owner = PipelineOwner::new();
     let padding_id = owner.insert(Box::new(RenderPadding::all(5.0)) as BoxedRenderObject);
     let child_id = owner
@@ -63,8 +62,7 @@ fn padding_child_hits_leaf_first_at_laid_out_offset() {
 // 3. D8 gate: hit-test under transform walks the inverse paint matrix
 // ============================================================================
 
-#[test]
-fn transform_child_hits_through_inverse_matrix() {
+pub(crate) fn transform_child_hits_through_inverse_matrix() {
     let mut owner = PipelineOwner::new();
     let transform_id =
         owner.insert(Box::new(RenderTransform::scale(2.0, 2.0)) as BoxedRenderObject);
@@ -98,8 +96,7 @@ fn transform_child_hits_through_inverse_matrix() {
 /// bridge creates FlexParentData slots lazily. Before that, this exact
 /// tree PANICKED in from_erased (the walk hardcoded BoxParentData) —
 /// Flex/Stack were impossible in production layout.
-#[test]
-fn flex_lays_out_and_hits_children_at_layout_offsets() {
+pub(crate) fn flex_lays_out_and_hits_children_at_layout_offsets() {
     let mut owner = PipelineOwner::new();
     let flex_id = owner.insert(Box::new(RenderFlex::row()) as BoxedRenderObject);
     let first = owner

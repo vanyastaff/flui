@@ -52,8 +52,7 @@ use flui_sdk::widgets::TextEditingController;
 /// registration (or its `rebuild.schedule(reason)` call) — `tick()` then drains
 /// nothing, the decorator keeps rendering its first build's `focused: false`
 /// resolution, and the "after tap" assertion below fails.
-#[test]
-fn tapping_the_decorated_area_focuses_the_field_and_reaches_the_decorator() {
+pub fn tapping_the_decorated_area_focuses_the_field_and_reaches_the_decorator() {
     let theme = ThemeData::light();
     let colors = theme.color_scheme;
     let controller = TextEditingController::new();
@@ -70,7 +69,9 @@ fn tapping_the_decorated_area_focuses_the_field_and_reaches_the_decorator() {
         .try_find_by_render_type("RenderDecoratedBox")
         .expect("TextField must compose an InputDecorator's DecoratedBox");
 
-    let unfocused = laid.render_property(decorated_box, "decoration").unwrap();
+    let unfocused = laid
+        .render_property(decorated_box, "decoration")
+        .expect("decoration property");
     assert!(
         unfocused.contains(&format!("{:?}", colors.on_surface_variant)),
         "an unfocused, untapped field must render the plain M3 indicator color, got: {unfocused}"
@@ -82,7 +83,9 @@ fn tapping_the_decorated_area_focuses_the_field_and_reaches_the_decorator() {
     laid.dispatch_pointer_up(150.0, 50.0);
     laid.tick();
 
-    let focused = laid.render_property(decorated_box, "decoration").unwrap();
+    let focused = laid
+        .render_property(decorated_box, "decoration")
+        .expect("decoration property");
     assert!(
         focused.contains(&format!("{:?}", colors.primary)),
         "tapping the decorated area must focus the field and reach the decorator's focused \
@@ -93,7 +96,9 @@ fn tapping_the_decorated_area_focuses_the_field_and_reaches_the_decorator() {
     focus_node.unfocus();
     laid.tick();
 
-    let reverted = laid.render_property(decorated_box, "decoration").unwrap();
+    let reverted = laid
+        .render_property(decorated_box, "decoration")
+        .expect("decoration property");
     assert!(
         reverted.contains(&format!("{:?}", colors.on_surface_variant)),
         "unfocusing must revert the decorator to the plain indicator color, got: {reverted}"

@@ -26,8 +26,7 @@ use flui_widgets::{ColoredBox, SizedBox, Transform};
 /// asserts `firstChild == lastChild` at every step, which a flattened list
 /// cannot express. This pins that the shape is reachable, so that helper is
 /// portable when the features it exercises land.
-#[test]
-fn the_composited_tree_exposes_parent_child_shape_not_just_a_flat_list() {
+pub(crate) fn the_composited_tree_exposes_parent_child_shape_not_just_a_flat_list() {
     let mut laid = lay_out(
         Transform::new(Matrix4::scaling(2.0, 2.0, 1.0))
             .child(SizedBox::new(50.0, 50.0).child(ColoredBox::new(Color::rgb(10, 20, 30)))),

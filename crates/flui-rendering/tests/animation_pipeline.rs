@@ -46,8 +46,7 @@ fn frame(owner: PipelineOwner) -> (PipelineOwner, Option<LayerTree>) {
 // 2. Animated opacity: layer alpha follows; alpha==0 skips the subtree
 // ============================================================================
 
-#[test]
-fn animated_opacity_layer_follows_and_zero_alpha_skips() {
+pub(crate) fn animated_opacity_layer_follows_and_zero_alpha_skips() {
     let mut owner = PipelineOwner::new();
     let fade = owner.insert(Box::new(RenderOpacity::new(1.0)) as BoxedRenderObject);
     let _child = owner

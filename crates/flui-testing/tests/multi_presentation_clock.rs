@@ -21,8 +21,7 @@ fn presentation(index: u32) -> PresentationId {
 /// The test Flutter cannot write: A on a scripted 144 Hz cadence and B on
 /// 60 Hz, advanced in one interleaved script ⇒ per-presentation tick counts
 /// and animation values match their own cadences exactly.
-#[test]
-fn two_presentations_at_independent_scripted_cadences_tick_and_advance_independently() {
+pub(crate) fn two_presentations_at_independent_scripted_cadences_tick_and_advance_independently() {
     let mut binding = HeadlessBinding::new();
     let a = presentation(0); // 144 Hz -> ~6.94ms/frame
     let b = presentation(1); // 60 Hz -> ~16.67ms/frame

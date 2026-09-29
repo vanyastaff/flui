@@ -25,8 +25,7 @@ fn ndjson_events(stdout: &[u8]) -> Vec<serde_json::Value> {
         .collect()
 }
 
-#[test]
-fn devices_json_reports_at_least_the_host_desktop() {
+pub fn devices_json_reports_at_least_the_host_desktop() {
     let assert = flui().args(["devices", "--json"]).assert().success();
     let events = ndjson_events(&assert.get_output().stdout);
 
@@ -49,5 +48,5 @@ fn devices_json_reports_at_least_the_host_desktop() {
         1,
         "expected exactly one devices.summary event"
     );
-    assert!(summaries[0]["count"].as_u64().unwrap() >= 1);
+    assert!(summaries[0]["count"].as_u64().expect("count is a number") >= 1);
 }

@@ -16,7 +16,6 @@ use flui_testing::text_store_kit::{
     self, FixtureCapabilities, InMemoryFixture, KIT_VERSION, TextStoreFixture,
 };
 
-#[test]
 fn in_memory_store_conforms_to_kit_v1() {
     text_store_kit::assert_conforms(&mut InMemoryFixture::new(), KIT_VERSION);
 }
@@ -345,7 +344,6 @@ fn assert_kit_catches(fault: Fault, case: &str) {
     );
 }
 
-#[test]
 fn kit_fails_a_store_that_grants_inside_a_transaction() {
     assert_kit_catches(
         Fault::GrantsInsideTransaction,
@@ -357,10 +355,30 @@ fn kit_fails_a_store_that_grants_inside_a_transaction() {
     );
 }
 
-#[test]
 fn kit_fails_a_store_that_notifies_inside_a_transaction() {
     assert_kit_catches(
         Fault::NotifiesInsideTransaction,
         "app_edits_inside_a_transaction_reach_the_observer_after_it",
+    );
+}
+
+#[test]
+fn text_store_kit_matrix() {
+    crate::run_table(
+        "text_store_kit_matrix",
+        &[
+            (
+                "in_memory_store_conforms_to_kit_v1",
+                in_memory_store_conforms_to_kit_v1 as fn(),
+            ),
+            (
+                "kit_fails_a_store_that_grants_inside_a_transaction",
+                kit_fails_a_store_that_grants_inside_a_transaction as fn(),
+            ),
+            (
+                "kit_fails_a_store_that_notifies_inside_a_transaction",
+                kit_fails_a_store_that_notifies_inside_a_transaction as fn(),
+            ),
+        ],
     );
 }

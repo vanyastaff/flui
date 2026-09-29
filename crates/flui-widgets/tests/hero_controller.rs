@@ -100,8 +100,7 @@ fn install(navigator: &NavigatorHandle) -> Arc<HeroController> {
 ///
 /// Red-check: in `NavigatorShared::mutate`, call `apply(outcome)` inside the
 /// `history.lock()` scope; this test hangs.
-#[test]
-fn a_hero_controller_does_not_deadlock_the_observer_callback() {
+pub(crate) fn a_hero_controller_does_not_deadlock_the_observer_callback() {
     let navigator = seeded_navigator();
     let controller = install(&navigator);
 

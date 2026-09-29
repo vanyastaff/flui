@@ -26,8 +26,7 @@ fn color_property(color: Color) -> String {
 /// an unset `shape` on the same theme slot must still fall through to the
 /// M3 default independently (proven via `card.rs`'s own unit tests; this
 /// mount only needs to prove the theme tier is reachable at all).
-#[test]
-fn card_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
+pub fn card_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
     let themed_color = Color::rgb(77, 88, 99);
     let theme = ThemeData::light().copy_with(ThemeDataOverrides {
         card_theme: Some(CardThemeData {

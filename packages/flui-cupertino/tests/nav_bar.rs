@@ -19,8 +19,7 @@ use flui_sdk::widgets::{MediaQuery, MediaQueryData, SizedBox, Text};
 /// the constructor's stored fields — proven by a delta against a bar with
 /// none of the three set (whose own outer `SizedBox` already contributes one
 /// `RenderConstrainedBox`, so an absolute count would be misleading).
-#[test]
-fn leading_middle_and_trailing_all_mount() {
+pub fn leading_middle_and_trailing_all_mount() {
     let empty = lay_out(
         MediaQuery::new(MediaQueryData::default(), CupertinoNavigationBar::new()),
         tight(400.0, 44.0),

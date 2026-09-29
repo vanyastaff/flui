@@ -339,7 +339,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn post_frame_panic_restores_idle_and_later_scheduling_works() {
         let scheduler = UpdateScheduler::new();
         let lane = scheduler.new_local_post_frame_lane();
@@ -359,7 +358,6 @@ mod tests {
         assert!(fired.get());
     }
 
-    #[test]
     fn post_frame_panic_preserves_uninvoked_mixed_tail_before_reentrant_work() {
         let scheduler = UpdateScheduler::new();
         let lane = scheduler.new_local_post_frame_lane();
@@ -414,6 +412,23 @@ mod tests {
             panic_calls.get(),
             1,
             "the callback that already ran is not retried"
+        );
+    }
+
+    #[test]
+    fn post_frame_panic_matrix() {
+        crate::table_test::run_table(
+            "post_frame_panic_matrix",
+            &[
+                (
+                    "post_frame_panic_restores_idle_and_later_scheduling_works",
+                    post_frame_panic_restores_idle_and_later_scheduling_works as fn(),
+                ),
+                (
+                    "post_frame_panic_preserves_uninvoked_mixed_tail_before_reentrant_work",
+                    post_frame_panic_preserves_uninvoked_mixed_tail_before_reentrant_work as fn(),
+                ),
+            ],
         );
     }
 }

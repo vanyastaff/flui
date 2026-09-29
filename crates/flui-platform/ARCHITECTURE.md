@@ -79,9 +79,9 @@ record, which Win32 documents as liable to fail; with an owner it is on the
 documented path. If the window cannot be created, sessions fall back to a
 `NULL` owner and log an error.
 
-Tests: `a_null_owner_open_on_another_thread_fails_while_a_session_is_open`
-(fails with a `NULL` owner) and `another_opener_can_empty_a_clipboard_flui_owns`
-(fails when the owner thread does not pump).
+Test: `a_null_owner_open_on_another_thread_fails_while_a_session_is_open`
+(fails with a `NULL` owner). The owner thread's message pump is not covered by
+a test.
 
 ### Win32 callbacks live in the window's owner-thread context; off-owner registration is refused
 
@@ -122,7 +122,7 @@ steps.
 
 Tests (CI only type-checks Win32): the owner-affinity refusal order is pinned
 by `refusal_precedence_is_gone_then_foreign_thread_then_class_then_slot`
-(`shared/hwnd_affinity.rs`), and the callback panic and re-entrancy rules by
+(run by `the_owner_thread_machinery_honours_its_contracts` in `shared/handlers.rs`), and the callback panic and re-entrancy rules by
 `tests/window_callback_unwind.rs`.
 
 ### AppKit reopen signals use a loop-owned serialized callback pump

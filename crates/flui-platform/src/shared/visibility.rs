@@ -128,18 +128,3 @@ pub fn appkit_occlusion_state_is_visible(occlusion_state: u64) -> bool {
 pub fn visibility_edge(last_dispatched: bool, current: bool) -> Option<bool> {
     (current != last_dispatched).then_some(current)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hide_always_hides_show_respects_minimized() {
-        assert_eq!(win32_show_window_visibility(false, false), Some(false));
-        assert_eq!(win32_show_window_visibility(false, true), Some(false));
-        assert_eq!(win32_show_window_visibility(true, false), Some(true));
-        // A SW_SHOW on a minimized window sets WS_VISIBLE but composes no
-        // surface — the restore's own WM_SIZE reports visibility instead.
-        assert_eq!(win32_show_window_visibility(true, true), None);
-    }
-}

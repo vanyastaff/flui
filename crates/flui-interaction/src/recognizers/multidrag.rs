@@ -763,7 +763,27 @@ mod tests {
         }
     }
 
+    // Multi-drag recognizer matrix: independent pointers and dispose under a panicking cancel.
     #[test]
+    fn multidrag_recognizer_matrix() {
+        let cases: &[(&str, fn())] = &[
+            (
+                "each_pointer_gets_independent_drag",
+                each_pointer_gets_independent_drag,
+            ),
+            (
+                "dispose_finishes_every_pointer_before_resuming_a_cancel_panic",
+                dispose_finishes_every_pointer_before_resuming_a_cancel_panic,
+            ),
+        ];
+        for &(name, case) in cases {
+            if let Err(payload) = std::panic::catch_unwind(case) {
+                eprintln!("matrix case `{name}` failed");
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+
     fn each_pointer_gets_independent_drag() {
         // Two pointers, both with handles, both moved past slop.
         // Verifies per-pointer isolation: one drag's events don't leak
@@ -828,7 +848,6 @@ mod tests {
         assert_eq!(updates_p2.load(Ordering::SeqCst), 1);
     }
 
-    #[test]
     fn dispose_finishes_every_pointer_before_resuming_a_cancel_panic() {
         let arena = crate::arena::GestureArena::new();
         let later_cancels = Arc::new(AtomicUsize::new(0));

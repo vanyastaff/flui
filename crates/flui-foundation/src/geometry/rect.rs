@@ -889,7 +889,6 @@ mod tests {
     ///
     /// Not verified against the reference: `Rect.overlaps` lives in `dart:ui`,
     /// which the local `.flutter` clone does not include.
-    #[test]
     fn an_empty_rect_never_overlaps_itself() {
         let empty = Rect::from_xywh(10.0, 10.0, 0.0, 50.0);
         let straddling = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
@@ -906,7 +905,6 @@ mod tests {
         assert!(straddling.overlaps(&empty), "...and symmetrically");
     }
 
-    #[test]
     fn test_intersect() {
         let r1 = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
         let r2 = Rect::from_xywh(50.0, 50.0, 100.0, 100.0);
@@ -916,5 +914,16 @@ mod tests {
 
         let r3 = Rect::from_xywh(200.0, 200.0, 50.0, 50.0);
         assert!(r1.intersect(&r3).is_none());
+    }
+
+    #[test]
+    fn rect_contract() {
+        crate::test_cases::run_cases(&[
+            (
+                "an empty rect never overlaps itself",
+                an_empty_rect_never_overlaps_itself,
+            ),
+            ("test intersect", test_intersect),
+        ]);
     }
 }

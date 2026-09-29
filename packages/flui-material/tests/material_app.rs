@@ -91,8 +91,7 @@ fn captured_theme(cell: &Arc<Mutex<Option<ThemeData>>>) -> ThemeData {
 // Live brightness republish — the realm-source pattern
 // ============================================================================
 
-#[test]
-fn two_presentations_resolve_different_themes_simultaneously() {
+pub fn two_presentations_resolve_different_themes_simultaneously() {
     // The issue's per-presentation criterion: appearance is scoped to one
     // window's tree (ADR-0027, ADR-0042 §1). Two presentations — two
     // headless bindings in one process, the same isolation boundary two
@@ -123,8 +122,7 @@ fn two_presentations_resolve_different_themes_simultaneously() {
 // Composition bands
 // ============================================================================
 
-#[test]
-fn theme_mode_switch_on_a_live_app_updates_descendants() {
+pub fn theme_mode_switch_on_a_live_app_updates_descendants() {
     // The issue's acceptance criterion: MaterialApp switches between light
     // and dark when `theme_mode` changes on a rebuild.
     let (probe, captured) = theme_capture();

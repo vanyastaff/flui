@@ -114,8 +114,7 @@ impl View for LifecycleTrackingView {
 // StatefulElement Lifecycle Callbacks
 // ============================================================================
 
-#[test]
-fn test_stateful_element_multiple_deactivate_activate_cycles() {
+pub(crate) fn test_stateful_element_multiple_deactivate_activate_cycles() {
     let activated = Arc::new(AtomicUsize::new(0));
     let deactivated = Arc::new(AtomicUsize::new(0));
     let view = LifecycleTrackingView {

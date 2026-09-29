@@ -630,7 +630,6 @@ impl<C: Curve> CurveExt for C {}
 mod tests {
     use super::*;
 
-    #[test]
     fn test_color_tween() {
         let tween = ColorTween::new(Color::RED, Color::BLUE);
         let mid = tween.transform(0.5);
@@ -639,7 +638,6 @@ mod tests {
         assert_eq!(mid.b, 128);
     }
 
-    #[test]
     fn test_tween_sequence_weighted() {
         let items = vec![
             TweenSequenceItem::new(FloatTween::new(0.0, 50.0), 1.0),
@@ -658,4 +656,12 @@ mod tests {
     // ========================================================================
     // Tests for new types: CurveTween, ChainedTween, extension traits
     // ========================================================================
+
+    #[test]
+    fn tween_types_contract() {
+        crate::test_cases::run_cases(&[
+            ("test color tween", test_color_tween),
+            ("test tween sequence weighted", test_tween_sequence_weighted),
+        ]);
+    }
 }

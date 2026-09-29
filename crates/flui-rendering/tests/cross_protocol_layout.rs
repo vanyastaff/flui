@@ -127,8 +127,7 @@ impl RenderBox for BoxWithSliverChild {
 /// - `layout_dirty_root` returns `Ok` (parent's own geometry is produced).
 /// - The captured geometry equals `SliverGeometry::ZERO`.
 /// - Parent's `NEEDS_LAYOUT` is cleared (poison engaged — bounded retry).
-#[test]
-fn cross_protocol_layout_sliver_child_on_box_child_returns_zero_and_poisons() {
+pub(crate) fn cross_protocol_layout_sliver_child_on_box_child_returns_zero_and_poisons() {
     let sc = make_sliver_constraints();
     let captured: Arc<Mutex<Option<SliverGeometry>>> = Arc::new(Mutex::new(None));
 

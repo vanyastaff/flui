@@ -44,8 +44,7 @@ fn themed(switch: Switch) -> Theme {
     Theme::new(ThemeData::light(), switch)
 }
 
-#[test]
-fn tap_fires_on_changed_with_the_flipped_value() {
+pub fn tap_fires_on_changed_with_the_flipped_value() {
     let observed = Rc::new(RefCell::new(None));
     let recorder = Rc::clone(&observed);
     let laid = lay_out(
@@ -65,8 +64,7 @@ fn tap_fires_on_changed_with_the_flipped_value() {
     );
 }
 
-#[test]
-fn disabled_switch_swallows_a_tap_then_resyncs_once_a_handler_is_added() {
+pub fn disabled_switch_swallows_a_tap_then_resyncs_once_a_handler_is_added() {
     // Same "handler-removal resync" class `tests/checkbox.rs` proves for
     // `Checkbox`: `Switch` shares its `WidgetStatesController` with the
     // `InkWell` it builds, so adding `on_changed` across a rebuild must

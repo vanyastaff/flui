@@ -107,8 +107,7 @@ impl ViewState<Bystander> for BystanderState {
 
 const FRAME: Duration = Duration::from_millis(16);
 
-#[test]
-fn a_read_in_build_subscribes_through_the_production_context() {
+pub(crate) fn a_read_in_build_subscribes_through_the_production_context() {
     let owners = MountOwners::fresh();
     let graph = owners.build_owner.reactive().clone();
     let sig = graph.signal(1u32);
@@ -159,8 +158,7 @@ fn a_read_in_build_subscribes_through_the_production_context() {
     );
 }
 
-#[test]
-fn a_partially_committed_panicking_update_rebuilds_its_mounted_reader() {
+pub(crate) fn a_partially_committed_panicking_update_rebuilds_its_mounted_reader() {
     let owners = MountOwners::fresh();
     let graph = owners.build_owner.reactive().clone();
     let signal = graph.signal(1u32);

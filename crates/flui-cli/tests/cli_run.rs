@@ -33,8 +33,7 @@ fn run(dir: &Path) -> assert_cmd::Command {
 
 /// Every line of `--json` stdout is one event; the app's own stdout arrives
 /// as `run.app.log` instead of leaking into the machine stream.
-#[test]
-fn json_mode_streams_the_app_lifecycle_as_ndjson() {
+pub fn json_mode_streams_the_app_lifecycle_as_ndjson() {
     let tmp = TempDir::new().expect("fixture");
     let dependency = tmp.path().join("facade");
     package(&dependency, "flui", "");
@@ -74,7 +73,12 @@ fn json_mode_streams_the_app_lifecycle_as_ndjson() {
     let logs: Vec<(&str, &str)> = events
         .iter()
         .filter(|e| e["event"] == "run.app.log")
-        .map(|e| (e["stream"].as_str().unwrap(), e["line"].as_str().unwrap()))
+        .map(|e| {
+            (
+                e["stream"].as_str().expect("stream"),
+                e["line"].as_str().expect("line"),
+            )
+        })
         .collect();
     assert!(
         logs.contains(&("stdout", "FLUI_ADMISSION_MARKER")),

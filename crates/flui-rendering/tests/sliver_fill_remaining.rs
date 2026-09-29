@@ -116,8 +116,7 @@ impl RenderBox for SliverHost {
     }
 }
 
-#[test]
-fn sliver_fill_remaining_with_scrollable_sizes_child_to_remaining_paint_extent() {
+pub(crate) fn sliver_fill_remaining_with_scrollable_sizes_child_to_remaining_paint_extent() {
     let mut owner = PipelineOwner::new();
     let root_id = owner.insert(Box::new(SliverHost {
         constraints: vertical_constraints(0.0, 30.0, 70.0, 0.0),

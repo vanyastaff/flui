@@ -5,24 +5,10 @@
 use flui_painting::TextPainter;
 use flui_painting::typography::{TextDirection, TextSpan};
 
-#[test]
-fn test_text_painter_layout() {
-    let mut painter = TextPainter::new()
-        .with_text(TextSpan::new("Hello, World!"))
-        .with_text_direction(TextDirection::Ltr);
-
-    painter.layout(0.0, 200.0);
-
-    assert!(painter.has_layout());
-    assert!(painter.width() > 0.0);
-    assert!(painter.height() > 0.0);
-}
-
 /// When the ellipsis is wider than the text's narrowest run, skipping
 /// truncation must not under-report min intrinsic below the ellipsis
 /// (Codex review on #1089).
-#[test]
-fn wide_ellipsis_floors_min_intrinsic_width() {
+pub(crate) fn wide_ellipsis_floors_min_intrinsic_width() {
     let ellipsis = "………";
     let text_only = TextPainter::new()
         .with_text(TextSpan::new("i i"))

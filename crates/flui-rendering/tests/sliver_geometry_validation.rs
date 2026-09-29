@@ -89,8 +89,7 @@ impl RenderSliver for BadGeometrySliver {
     }
 }
 
-#[test]
-fn sliver_leaf_layout_rejects_invalid_geometry_before_state_commit() {
+pub(crate) fn sliver_leaf_layout_rejects_invalid_geometry_before_state_commit() {
     let mut owner = PipelineOwner::new();
     let sliver_id = owner
         .render_tree_mut()

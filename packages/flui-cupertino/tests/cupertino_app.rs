@@ -82,8 +82,7 @@ const SYSTEM_BLUE_DARK: Color = Color::rgb(10, 132, 255);
 /// systemRed light variant.
 const SYSTEM_RED_LIGHT: Color = Color::rgb(255, 59, 48);
 
-#[test]
-fn publishes_the_resolved_theme_to_descendants() {
+pub fn publishes_the_resolved_theme_to_descendants() {
     let (probe, captured) = probe();
     let theme = CupertinoThemeData::default().with_primary_color(CupertinoColors::SYSTEM_RED);
     let _tree = lay_out(CupertinoApp::new(probe).theme(theme), loose(800.0));
@@ -160,8 +159,7 @@ impl flui_sdk::view::ViewState<BrightnessRoot> for BrightnessRootState {
     }
 }
 
-#[test]
-fn a_live_brightness_republish_re_resolves_the_theme() {
+pub fn a_live_brightness_republish_re_resolves_the_theme() {
     let source = Rc::new(BrightnessSource::default());
     source.data.borrow_mut().platform_brightness = Brightness::Light;
     let (probe, captured) = probe();

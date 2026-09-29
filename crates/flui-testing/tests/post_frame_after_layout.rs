@@ -77,8 +77,7 @@ fn binding_with_probe(
 /// **The acceptance test.** The callback is never invoked by the test — it
 /// runs because `pump_frame` drives a real scheduler frame — and when it runs, it
 /// already sees this frame's committed geometry.
-#[test]
-fn post_frame_callback_runs_after_layout_in_the_same_pumped_frame() {
+pub(crate) fn post_frame_callback_runs_after_layout_in_the_same_pumped_frame() {
     let (mut binding, pipeline, root) = binding_with_one_box();
 
     assert_eq!(

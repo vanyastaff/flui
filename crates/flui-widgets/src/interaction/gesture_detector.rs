@@ -1153,7 +1153,6 @@ fn slot_is_some<T>(slot: &Rc<RefCell<Option<T>>>) -> bool {
 mod tests {
     use super::*;
 
-    #[test]
     #[expect(
         clippy::arc_with_non_send_sync,
         reason = "ElementBuildContext's test seam accepts Arc over owner-local state"
@@ -1207,15 +1206,30 @@ mod tests {
         }
     }
 
+    /// The gesture-detector contracts: queued semantics delivery re-checks the callback
+    /// and mount lifetime, and (debug builds only, where the guard exists) configuring
+    /// pan and horizontal-drag together is refused with a named diagnostic.
     #[test]
-    // Debug-only: the guard compiles out in release, where `#[should_panic]`
-    // would otherwise report "did not panic as expected".
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "on_pan_* and on_horizontal_drag_* are both configured")]
-    fn conflict_guard_panics_when_pan_and_horizontal_drag_coexist() {
-        let detector = GestureDetector::new()
-            .on_pan_start(|_, _| {})
-            .on_horizontal_drag_start(|_, _| {});
-        assert_no_pan_horizontal_drag_conflict(&detector);
+    fn gesture_detector_delivery_lifetime_and_conflict_guard() {
+        queued_semantics_delivery_rechecks_the_callback_and_mount_lifetime();
+        #[cfg(debug_assertions)]
+        {
+            let detector = GestureDetector::new()
+                .on_pan_start(|_, _| {})
+                .on_horizontal_drag_start(|_, _| {});
+            let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                assert_no_pan_horizontal_drag_conflict(&detector);
+            }))
+            .expect_err("pan and horizontal drag together must be refused");
+            let message = refused
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| refused.downcast_ref::<&str>().copied())
+                .unwrap_or_default();
+            assert!(
+                message.contains("on_pan_* and on_horizontal_drag_* are both configured"),
+                "conflict guard: unexpected diagnostic {message:?}"
+            );
+        }
     }
 }

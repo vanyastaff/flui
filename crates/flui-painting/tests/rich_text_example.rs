@@ -42,8 +42,7 @@ use flui_painting::{
 // ============================================================================
 
 /// Demonstrates mixed LTR/RTL text.
-#[test]
-fn example_bidirectional_text() {
+pub(crate) fn example_bidirectional_text() {
     // Mixed English and Hebrew
     let mixed_text = "Hello שלום World עולם";
 
@@ -58,9 +57,6 @@ fn example_bidirectional_text() {
         .with_text_direction(TextDirection::Ltr); // Base direction LTR
 
     painter.layout(0.0, 400.0);
-
-    println!("Bidirectional text size: {:?}", painter.size());
-    println!("Width: {}, Height: {}", painter.width(), painter.height());
 
     // Should layout successfully
     assert!(painter.width() > 0.0);

@@ -538,7 +538,6 @@ mod tests {
     /// Two presentations, two answers, one router: the addressing that lets
     /// a document window refuse a close while the preferences window beside
     /// it closes normally. The sibling's handler must not even be consulted.
-    #[test]
     fn one_presentations_veto_does_not_reach_its_sibling() {
         let router = CloseRequestRouter::new();
         let keeps_open = address(1, 1);
@@ -578,7 +577,6 @@ mod tests {
     /// work, so it vetoes -- the same conservative answer
     /// `WindowCallbacks::dispatch_should_close` gives a reentrant query --
     /// and stays registered, so a handler that stops panicking works again.
-    #[test]
     fn a_panicking_handler_vetoes_and_stays_registered() {
         let router = CloseRequestRouter::new();
         let a = address(1, 1);
@@ -626,6 +624,23 @@ mod tests {
             router.consult(a),
             CloseResponse::Close,
             "the handler must still be registered after containing its panic"
+        );
+    }
+
+    #[test]
+    fn close_request_matrix() {
+        crate::table_test::run_table(
+            "close_request_matrix",
+            &[
+                (
+                    "one_presentations_veto_does_not_reach_its_sibling",
+                    one_presentations_veto_does_not_reach_its_sibling as fn(),
+                ),
+                (
+                    "a_panicking_handler_vetoes_and_stays_registered",
+                    a_panicking_handler_vetoes_and_stays_registered as fn(),
+                ),
+            ],
         );
     }
 }

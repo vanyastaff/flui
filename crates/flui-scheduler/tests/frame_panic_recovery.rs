@@ -160,7 +160,6 @@ fn assert_recovered_from_panic(
 
 // ── Transient callback ──────────────────────────────────────────────────
 
-#[test]
 fn transient_callback_panic_closes_the_frame_and_preserves_its_sibling() {
     let scheduler = UpdateScheduler::new();
     let frame_count_before = scheduler.frame_count();
@@ -216,7 +215,6 @@ fn transient_callback_panic_closes_the_frame_and_preserves_its_sibling() {
 
 // ── Persistent callback ─────────────────────────────────────────────────
 
-#[test]
 fn persistent_callback_panic_closes_the_frame_before_the_pipeline_slot_ever_opens() {
     let scheduler = UpdateScheduler::new();
     let frame_count_before = scheduler.frame_count();
@@ -317,7 +315,6 @@ impl Future for CountedThenReady {
     }
 }
 
-#[test]
 fn async_future_poll_panic_closes_the_frame() {
     let scheduler = UpdateScheduler::new();
     let frame_count_before = scheduler.frame_count();
@@ -382,7 +379,6 @@ fn async_future_poll_panic_closes_the_frame() {
 
 // ── Idle work and post-frame callbacks are not starved by recovery ─────
 
-#[test]
 fn idle_priority_work_and_post_frame_callbacks_are_not_starved_after_a_panic_recovers() {
     let scheduler = UpdateScheduler::new();
     scheduler.schedule_frame_callback(Box::new(|_| panic!("idle-starvation probe")));
@@ -424,7 +420,6 @@ fn idle_priority_work_and_post_frame_callbacks_are_not_starved_after_a_panic_rec
 /// future must resolve `Completed`, never `Aborted`, even though the panic
 /// still propagates to the caller (issue #1162; this distinction did not
 /// exist before it -- both paths resolved the same bare `FrameTiming`).
-#[test]
 fn a_post_frame_callback_panic_still_resolves_completed_not_aborted() {
     let scheduler = UpdateScheduler::new();
     let (mut completion_future, completion_counter) = armed_completion_probe(&scheduler);
@@ -476,7 +471,6 @@ impl Wake for PanicWaker {
 /// reaching `resume_unwind(payload)`, so the caller observes the waker's
 /// panic instead of the pipeline's -- the ORIGINAL failure this frame was
 /// actually reporting is lost.
-#[test]
 fn the_original_pipeline_panic_survives_a_panicking_completion_waker_during_abort() {
     let scheduler = UpdateScheduler::new();
     let mut future = scheduler.end_of_frame();
@@ -502,5 +496,41 @@ fn the_original_pipeline_panic_survives_a_panicking_completion_waker_during_abor
         SchedulerPhase::Idle,
         "the phase reset inside abort_frame happens before notify_frame_completion \
          runs, so it must hold regardless of the waker's own panic"
+    );
+}
+
+#[test]
+fn frame_panic_recovery_matrix() {
+    crate::run_table(
+        "frame_panic_recovery_matrix",
+        &[
+            (
+                "transient_callback_panic_closes_the_frame_and_preserves_its_sibling",
+                transient_callback_panic_closes_the_frame_and_preserves_its_sibling as fn(),
+            ),
+            (
+                "persistent_callback_panic_closes_the_frame_before_the_pipeline_slot_ever_opens",
+                persistent_callback_panic_closes_the_frame_before_the_pipeline_slot_ever_opens
+                    as fn(),
+            ),
+            (
+                "async_future_poll_panic_closes_the_frame",
+                async_future_poll_panic_closes_the_frame as fn(),
+            ),
+            (
+                "idle_priority_work_and_post_frame_callbacks_are_not_starved_after_a_panic_recovers",
+                idle_priority_work_and_post_frame_callbacks_are_not_starved_after_a_panic_recovers
+                    as fn(),
+            ),
+            (
+                "a_post_frame_callback_panic_still_resolves_completed_not_aborted",
+                a_post_frame_callback_panic_still_resolves_completed_not_aborted as fn(),
+            ),
+            (
+                "the_original_pipeline_panic_survives_a_panicking_completion_waker_during_abort",
+                the_original_pipeline_panic_survives_a_panicking_completion_waker_during_abort
+                    as fn(),
+            ),
+        ],
     );
 }

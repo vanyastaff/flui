@@ -1373,7 +1373,6 @@ mod tests {
     /// A panicking task reports `Panicked` instead of unwinding into the
     /// executor: the deterministic drive survives, and the owner gets
     /// evidence rather than silence.
-    #[test]
     fn task_panic_is_contained_and_reported() {
         let (services, deterministic) = deterministic_services();
         let spawner = TaskSpawner::new(&services);
@@ -1393,7 +1392,6 @@ mod tests {
 
     /// A panicking worker job drops that submission but leaves the worker
     /// usable for the next one.
-    #[test]
     fn worker_survives_a_panicking_job() {
         let (services, deterministic) = deterministic_services();
         let spawner = TaskSpawner::new(&services);
@@ -1417,7 +1415,6 @@ mod tests {
 
     // ── Service events: bounded, pull-only, inert after owner death ─────────
 
-    #[test]
     fn service_events_ring_drops_oldest_and_never_blocks() {
         let (publisher, events) = service_events::<u32>("positions", 3);
         for value in 0..5 {
@@ -1454,7 +1451,6 @@ mod tests {
     /// that waits for its signal gets its flush window and reports
     /// `Completed`. Fails if the cancel stage is skipped (the join would
     /// time out) or if the join is skipped (the flush would be unobserved).
-    #[test]
     fn shutdown_cancels_then_joins_and_the_flush_window_is_real() {
         // Real pools: the service future must run CONCURRENTLY with the
         // registry's blocking join.
@@ -1479,5 +1475,30 @@ mod tests {
             "the service must have used its flush window before shutdown returned"
         );
         services.shutdown(Duration::from_secs(5));
+    }
+
+    #[test]
+    fn service_lifecycle_matrix() {
+        crate::table_test::run_table(
+            "service_lifecycle_matrix",
+            &[
+                (
+                    "task_panic_is_contained_and_reported",
+                    task_panic_is_contained_and_reported as fn(),
+                ),
+                (
+                    "worker_survives_a_panicking_job",
+                    worker_survives_a_panicking_job as fn(),
+                ),
+                (
+                    "service_events_ring_drops_oldest_and_never_blocks",
+                    service_events_ring_drops_oldest_and_never_blocks as fn(),
+                ),
+                (
+                    "shutdown_cancels_then_joins_and_the_flush_window_is_real",
+                    shutdown_cancels_then_joins_and_the_flush_window_is_real as fn(),
+                ),
+            ],
+        );
     }
 }

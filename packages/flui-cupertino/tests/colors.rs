@@ -46,8 +46,7 @@ impl StatelessView for StaticResolveCapture {
 /// `Dynamic` color's light variant) would still pass a construct-and-compare
 /// unit test but fails here, since a real ambient theme is present and could
 /// have perturbed the result if `resolve` consulted it.
-#[test]
-fn static_color_resolves_to_itself_through_a_real_context() {
+pub fn static_color_resolves_to_itself_through_a_real_context() {
     let sentinel = Color::rgba(11, 22, 33, 200);
     let captured: Arc<Mutex<Option<Color>>> = Arc::new(Mutex::new(None));
 

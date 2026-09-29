@@ -101,8 +101,7 @@ fn dismiss(handle: &TransitionHandle) {
 /// is `navigator.dart:3274-3290`).
 ///
 /// Red-check: return `PushCompletion::Immediate` from `TransitionRoute::did_push`.
-#[test]
-fn push_transition_parks_the_entry_in_pushing_until_the_controller_completes() {
+pub(crate) fn push_transition_parks_the_entry_in_pushing_until_the_controller_completes() {
     let (navigator_handle, mut harness) = navigator();
     let (route, animation) = transition("second");
     let top = {
@@ -149,8 +148,7 @@ fn push_transition_parks_the_entry_in_pushing_until_the_controller_completes() {
 /// Red-check: drop the `entry.state == RouteLifecycle::Pushing` guard in
 /// `RouteHistory::apply_pending_commands`'s `PushCompleted` arm — the stale
 /// command resurrects the entry to `Idle` instead of leaving it `Popping`.
-#[test]
-fn pop_mid_push_cancels_the_push_future_inside_the_flush_and_ends_popping() {
+pub(crate) fn pop_mid_push_cancels_the_push_future_inside_the_flush_and_ends_popping() {
     let vsync = Vsync::new();
     let navigator_handle = NavigatorHandle::new();
     navigator_handle.seed_initial(SimpleRoute::<i32>::new(|_ctx| {
@@ -205,8 +203,7 @@ fn pop_mid_push_cancels_the_push_future_inside_the_flush_and_ends_popping() {
 ///
 /// This is a smoke test rather than an assertion — it completes, or nextest's
 /// timeout catches it.
-#[test]
-fn status_listener_does_not_hold_a_lock_across_the_binding_call() {
+pub(crate) fn status_listener_does_not_hold_a_lock_across_the_binding_call() {
     let (navigator_handle, mut harness) = navigator();
     let (route, animation) = transition("second");
     navigator_handle.push(route);

@@ -166,7 +166,6 @@ mod lifecycle_derivation_tests {
         }
     }
 
-    #[test]
     fn derivation_truth_table() {
         assert_eq!(
             derive_lifecycle_state(true, true),
@@ -189,7 +188,6 @@ mod lifecycle_derivation_tests {
 
     /// Pause's ladder: Resumed -> Paused must visit Inactive, then Hidden,
     /// then Paused, in that order.
-    #[test]
     fn ladder_steps_forward_through_every_intermediate_state_in_order() {
         assert_eq!(
             lifecycle_ladder(AppLifecycleState::Resumed, AppLifecycleState::Paused),
@@ -201,7 +199,6 @@ mod lifecycle_derivation_tests {
         );
     }
 
-    #[test]
     fn multi_step_lifecycle_commits_the_target_before_the_first_panic_resumes() {
         let realm = crate::ui_realm::UiRealm::for_test();
         realm.synchronize_window_lifecycle();
@@ -287,5 +284,24 @@ mod lifecycle_derivation_tests {
                 realm.update_host_lifecycle(AppLifecycleState::Resumed);
             });
         });
+    }
+
+    #[test]
+    fn lifecycle_derivation_matrix() {
+        crate::table_test::run_table(
+            "lifecycle_derivation_matrix",
+            &[
+                ("derivation_truth_table", derivation_truth_table as fn()),
+                (
+                    "ladder_steps_forward_through_every_intermediate_state_in_order",
+                    ladder_steps_forward_through_every_intermediate_state_in_order as fn(),
+                ),
+                (
+                    "multi_step_lifecycle_commits_the_target_before_the_first_panic_resumes",
+                    multi_step_lifecycle_commits_the_target_before_the_first_panic_resumes
+                        as fn(),
+                ),
+            ],
+        );
     }
 }

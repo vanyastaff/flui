@@ -508,6 +508,12 @@ The constitution requires `///` doc comments on every public item and `//!` over
   declares it once, as `mod common;` in `tests/main.rs`, and each suite imports it
   with `use crate::common;`: a `mod common;` inside every `#[path]`-loaded suite
   would load the same file once per suite, which `clippy::duplicate_mod` rejects.
+- **A family of scenarios is one table test.** `flui-view`, `flui-runtime`, `flui-app`,
+  `flui-scheduler` and `flui-testing` run related scenarios (a failure-recovery matrix, a
+  realm-isolation family) as rows of a single `#[test]` through a small `run_table`
+  helper: each row is a named `fn()`, every row runs even after one fails, and the panic
+  lists the failing row names. The rows keep their own assertions; the table keeps the
+  set small enough that a refactor touches a table, not a hundred tests.
 - **Property-based tests** use [`proptest`](https://docs.rs/proptest) for layout algorithms and geometric operations.
 - **Demo composition tests** live in `tests/demo_layer_snapshots.rs`: each demo mounts headless and its committed `LayerTree` is compared, as structured text, against an `insta` snapshot. See [Demo composition snapshots](#demo-composition-snapshots) below for the run/review workflow and why they are structural rather than pixels.
 - **No mocking frameworks.** Use trait-based test doubles. The `HeadlessPlatform` backend is the canonical test surface for platform-dependent code.

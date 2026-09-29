@@ -927,8 +927,8 @@ fn create_instanced_texture_with_blend_state(
 /// shader does not declare fails pipeline creation
 /// (`PipelineConstantError::NotFound`), so this catches a rename before it
 /// reaches a device.
-#[test]
-fn premultiplied_source_override_matches_the_shader() {
+#[cfg(test)]
+pub(crate) fn premultiplied_source_override_matches_the_shader() {
     let declaration = format!("override {PREMULTIPLIED_SOURCE_OVERRIDE}:");
     assert!(
         crate::shaders::TEXTURE_INSTANCED.contains(&declaration),

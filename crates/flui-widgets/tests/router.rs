@@ -217,8 +217,7 @@ fn laid_out_text(laid: &LaidOut, label: &str) -> bool {
 
 /// Divergence (ARCHITECTURE.md mapping decision 23): a Router never pops its
 /// last page, through its own handle or through the navigator facade.
-#[test]
-fn router_never_pops_its_last_page() {
+pub(crate) fn router_never_pops_its_last_page() {
     let (mut laid, home) = two_screen_app();
     let router = home.handle();
 
@@ -232,8 +231,7 @@ fn router_never_pops_its_last_page() {
     assert!(!router.can_pop());
 }
 
-#[test]
-fn router_opens_at_a_location_with_its_back_stack() {
+pub(crate) fn router_opens_at_a_location_with_its_back_stack() {
     let home = Probe::default();
     let router = Router::from_location("/note/5", pages(&home)).expect("a known location");
     let mut laid = mount(router);
@@ -256,8 +254,7 @@ fn router_opens_at_a_location_with_its_back_stack() {
 // The facade under a Router
 // ============================================================================
 
-#[test]
-fn popup_routes_are_admitted_and_leave_the_location_alone() {
+pub(crate) fn popup_routes_are_admitted_and_leave_the_location_alone() {
     let (mut laid, home) = two_screen_app();
     let router = home.handle();
     let navigator = home.navigator();

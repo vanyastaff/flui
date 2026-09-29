@@ -27,8 +27,7 @@ fn counter() -> (
     )
 }
 
-#[test]
-fn listener_routes_down_and_up_to_their_own_callbacks() {
+pub(crate) fn listener_routes_down_and_up_to_their_own_callbacks() {
     let (downs, on_down) = counter();
     let (ups, on_up) = counter();
 
@@ -55,7 +54,7 @@ fn listener_routes_down_and_up_to_their_own_callbacks() {
 // from its render-object context and opens one write per event.
 // ============================================================================
 
-mod event_cx {
+pub(crate) mod event_cx {
 
     use crate::common::{ProbeSignals, SignalProbe, lay_out, tight};
     use flui_painting::styling::Color;
@@ -66,8 +65,7 @@ mod event_cx {
         ColoredBox::new(Color::rgb(10, 20, 30))
     }
 
-    #[test]
-    fn a_refused_write_in_a_pointer_callback_is_reported_not_panicked() {
+    pub(crate) fn a_refused_write_in_a_pointer_callback_is_reported_not_panicked() {
         let probe = SignalProbe::new(|ProbeSignals { released, .. }| {
             Listener::new()
                 .on_pointer_down(move |cx, _dispatch| released.set(cx, 1))

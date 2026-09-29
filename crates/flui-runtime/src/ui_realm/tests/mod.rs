@@ -55,8 +55,7 @@ fn new_runtime_with_capacity(
     )
 }
 
-#[test]
-fn full_inbox_retries_outstanding_wake_debt_before_rejecting() {
+pub(crate) fn full_inbox_retries_outstanding_wake_debt_before_rejecting() {
     let fail_next_wake = Arc::new(AtomicBool::new(true));
     let fail_next_wake_in_callback = Arc::clone(&fail_next_wake);
     let wake_count = Arc::new(AtomicUsize::new(0));
@@ -141,8 +140,7 @@ fn coexistence_constraints() -> BoxConstraints {
 /// side from ever reaching its frame closure would hang the test
 /// forever instead of failing it; `rendezvous_or_timeout` below fails
 /// loudly on a bounded deadline instead of deadlocking.
-#[test]
-fn two_realms_two_threads_no_shared_state() {
+pub(crate) fn two_realms_two_threads_no_shared_state() {
     let parties_arrived = std::sync::atomic::AtomicUsize::new(0);
     let rendezvous_or_timeout = |label: &'static str| {
         parties_arrived.fetch_add(1, Ordering::SeqCst);
@@ -217,8 +215,7 @@ fn two_realms_two_threads_no_shared_state() {
 /// realms: dropping realm A must leave realm B's wake counter and inbox
 /// completely untouched, and A's own senders must turn `OwnerGone`
 /// rather than silently reaching B.
-#[test]
-fn dropping_realm_a_cannot_wake_realm_b() {
+pub(crate) fn dropping_realm_a_cannot_wake_realm_b() {
     // Realm A's own wake counter has nothing left to assert once A is
     // dropped below (its `wake` closure can never fire again); only
     // realm B's counter is the interesting observable here.
@@ -384,3 +381,72 @@ mod global_key_lookup_during_frame;
 // in whichever presentation owns it (ADR-0085 §1).
 // ========================================================================
 mod signal_write_routing;
+
+#[test]
+fn wake_debt_and_signal_write_matrix() {
+    crate::table_test::run_table(
+        "wake_debt_and_signal_write_matrix",
+        &[
+            ("signal_write_routing::a_write_to_a_secondary_presentations_signal_rebuilds_its_reader", signal_write_routing::a_write_to_a_secondary_presentations_signal_rebuilds_its_reader as fn()),
+            ("signal_write_routing::stale_signal_command_disposal_panic_rearms_its_fifo_tail", signal_write_routing::stale_signal_command_disposal_panic_rearms_its_fifo_tail as fn()),
+            ("signal_write_routing::a_failed_signal_write_rearm_retries_at_the_next_owner_boundary", signal_write_routing::a_failed_signal_write_rearm_retries_at_the_next_owner_boundary as fn()),
+            ("signal_write_routing::an_older_overlapping_wake_cannot_clear_newer_failed_delivery_debt", signal_write_routing::an_older_overlapping_wake_cannot_clear_newer_failed_delivery_debt as fn()),
+            ("redraw_wake_routing::a_cross_thread_frame_request_reaches_the_realms_platform_wake", redraw_wake_routing::a_cross_thread_frame_request_reaches_the_realms_platform_wake as fn()),
+            ("addressed_input_routing::panicking_keyboard_dispatch_keeps_priority_over_a_panicking_wake", addressed_input_routing::panicking_keyboard_dispatch_keeps_priority_over_a_panicking_wake as fn()),
+            ("full_inbox_retries_outstanding_wake_debt_before_rejecting", full_inbox_retries_outstanding_wake_debt_before_rejecting as fn()),
+        ],
+    );
+}
+
+#[test]
+fn realm_and_presentation_isolation_matrix() {
+    crate::table_test::run_table(
+        "realm_and_presentation_isolation_matrix",
+        &[
+            ("addressed_input_routing::input_stamped_for_b_never_reaches_as_arena", addressed_input_routing::input_stamped_for_b_never_reaches_as_arena as fn()),
+            ("async_completion_isolation::async_completion_after_presentation_teardown_fails_closed_no_sibling_reach", async_completion_isolation::async_completion_after_presentation_teardown_fails_closed_no_sibling_reach as fn()),
+            ("closing_one_presentation_is_invisible_to_siblings::closing_presentation_a_leaves_sibling_layer_tree_identical", closing_one_presentation_is_invisible_to_siblings::closing_presentation_a_leaves_sibling_layer_tree_identical as fn()),
+            ("global_key_lookup_during_frame::state_read_across_presentations_during_a_segment_resolves", global_key_lookup_during_frame::state_read_across_presentations_during_a_segment_resolves as fn()),
+            ("presentation_forest_isolation::sibling_presentations_flush_independently", presentation_forest_isolation::sibling_presentations_flush_independently as fn()),
+            ("two_realms_two_threads_no_shared_state", two_realms_two_threads_no_shared_state as fn()),
+            ("dropping_realm_a_cannot_wake_realm_b", dropping_realm_a_cannot_wake_realm_b as fn()),
+        ],
+    );
+}
+
+#[test]
+fn frame_pacing_and_pump_matrix() {
+    crate::table_test::run_table(
+        "frame_pacing_and_pump_matrix",
+        &[
+            ("frame_clock_segment_gate::segment_runs_iff_woken_or_has_pending_work_over_the_full_table", frame_clock_segment_gate::segment_runs_iff_woken_or_has_pending_work_over_the_full_table as fn()),
+            ("frame_clock_segment_gate::n_ticks_under_backpressure_wake_the_platform_exactly_once_then_rearm", frame_clock_segment_gate::n_ticks_under_backpressure_wake_the_platform_exactly_once_then_rearm as fn()),
+            ("frame_clock_segment_gate::occlude_then_dirty_then_unocclude_wakes_exactly_once_and_produces_exactly_once", frame_clock_segment_gate::occlude_then_dirty_then_unocclude_wakes_exactly_once_and_produces_exactly_once as fn()),
+            ("frame_clock_segment_gate::surface_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame", frame_clock_segment_gate::surface_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame as fn()),
+            ("frame_pipeline_and_vsync::attach_root_widget_bootstraps_shared_render_tree", frame_pipeline_and_vsync::attach_root_widget_bootstraps_shared_render_tree as fn()),
+            ("frame_pipeline_and_vsync::the_production_frame_polls_the_realms_async_driver_once_before_the_pipeline", frame_pipeline_and_vsync::the_production_frame_polls_the_realms_async_driver_once_before_the_pipeline as fn()),
+            ("frame_pipeline_and_vsync::surface_lost_keeps_needs_redraw_armed_for_a_retry", frame_pipeline_and_vsync::surface_lost_keeps_needs_redraw_armed_for_a_retry as fn()),
+            ("pump_transaction::pump_post_frame_callback_observes_this_frames_committed_layout", pump_transaction::pump_post_frame_callback_observes_this_frames_committed_layout as fn()),
+            ("presentation_text_input::a_text_store_lock_requested_during_a_frame_is_granted_after_the_drive_returns", presentation_text_input::a_text_store_lock_requested_during_a_frame_is_granted_after_the_drive_returns as fn()),
+        ],
+    );
+}
+
+#[test]
+fn frame_failure_containment_matrix() {
+    crate::table_test::run_table(
+        "frame_failure_containment_matrix",
+        &[
+            ("frame_failure_containment::an_escaped_segment_panic_is_contained_to_its_own_presentation_and_the_sibling_still_frames", frame_failure_containment::an_escaped_segment_panic_is_contained_to_its_own_presentation_and_the_sibling_still_frames as fn()),
+            ("frame_failure_containment::consecutive_failures_count_up_and_reset_on_a_clean_segment", frame_failure_containment::consecutive_failures_count_up_and_reset_on_a_clean_segment as fn()),
+            ("frame_failure_containment::a_panicking_handler_during_a_pipeline_report_is_delivered_once_not_re_reported", frame_failure_containment::a_panicking_handler_during_a_pipeline_report_is_delivered_once_not_re_reported as fn()),
+            ("super::frame_failure_phase_tests::every_segment_phase_survives_unwind_and_retries_to_scene", super::frame_failure_phase_tests::every_segment_phase_survives_unwind_and_retries_to_scene as fn()),
+            ("super::frame_failure_recovery_tests::real_build_recovery_is_reported_once_in_the_same_attempt", super::frame_failure_recovery_tests::real_build_recovery_is_reported_once_in_the_same_attempt as fn()),
+            ("super::frame_failure_recovery_tests::two_real_recoveries_from_one_attempt_are_delivered_in_production_queue_order", super::frame_failure_recovery_tests::two_real_recoveries_from_one_attempt_are_delivered_in_production_queue_order as fn()),
+            ("super::frame_failure_recovery_tests::panicking_handler_does_not_escape_or_duplicate_recovery", super::frame_failure_recovery_tests::panicking_handler_does_not_escape_or_duplicate_recovery as fn()),
+            ("super::frame_commit_state_tests::errored_frame_is_uncommitted", super::frame_commit_state_tests::errored_frame_is_uncommitted as fn()),
+            ("super::frame_commit_state_tests::deferred_painted_frame_waits_for_the_later_present_to_commit", super::frame_commit_state_tests::deferred_painted_frame_waits_for_the_later_present_to_commit as fn()),
+            ("super::frame_commit_state_tests::the_withheld_retry_is_bounded_and_then_parks", super::frame_commit_state_tests::the_withheld_retry_is_bounded_and_then_parks as fn()),
+        ],
+    );
+}

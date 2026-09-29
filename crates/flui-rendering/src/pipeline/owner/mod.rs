@@ -525,13 +525,34 @@ mod tests {
     // adopt_child/drop_child/child_count/children API. Multi-PipelineOwner
     // scenarios (multi-window) are now owned by flui-app side-by-side.
 
+    // Semantics publish matrix: identical passes publish nothing, local changes
+    /// reassemble and republish only the affected subtree.
+    #[test]
+    fn semantics_publish_matrix() {
+        let cases: &[(&str, fn())] = &[
+            (
+                "an_identical_second_semantics_pass_publishes_nothing",
+                an_identical_second_semantics_pass_publishes_nothing,
+            ),
+            (
+                "a_local_change_reassembles_only_the_affected_subtree",
+                a_local_change_reassembles_only_the_affected_subtree,
+            ),
+        ];
+        for &(name, case) in cases {
+            if let Err(payload) = std::panic::catch_unwind(case) {
+                eprintln!("matrix case `{name}` failed");
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+
     /// The pipeline-level idle contract: `run_semantics` reassembles the
     /// whole arena whenever anything is marked (flui-semantics ARCHITECTURE.md, semantics assembly), but a pass whose
     /// assembly reproduces the same tree must deliver NOTHING to the
     /// platform — the owner's flush diffs per-node payloads against the
     /// last delivered update. Before that diff, every marked-but-unchanged
     /// pass republished the entire tree.
-    #[test]
     fn an_identical_second_semantics_pass_publishes_nothing() {
         let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = std::sync::Arc::clone(&captured);
@@ -581,7 +602,6 @@ mod tests {
     /// re-assembles that boundary's subtree — counted in render-node visits
     /// — and republishes only the node whose payload changed. The sibling
     /// branch is neither re-visited nor republished.
-    #[test]
     fn a_local_change_reassembles_only_the_affected_subtree() {
         let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = std::sync::Arc::clone(&captured);
@@ -783,10 +803,31 @@ mod tests {
         }
     }
 
+    // Panic containment matrix: paint panics and render-entry layout panics become
+    /// poisoned errors and leave the owner usable.
+    #[test]
+    fn frame_panic_containment_matrix() {
+        let cases: &[(&str, fn())] = &[
+            (
+                "test_run_frame_catches_paint_panic",
+                test_run_frame_catches_paint_panic,
+            ),
+            (
+                "test_render_entry_layout_catches_panic",
+                test_render_entry_layout_catches_panic,
+            ),
+        ];
+        for &(name, case) in cases {
+            if let Err(payload) = std::panic::catch_unwind(case) {
+                eprintln!("matrix case `{name}` failed");
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+
     /// A panicking `paint` call must surface as
     /// `RenderError::Poisoned { phase: PoisonPhase::Paint, .. }` and not
     /// abort. The owner must remain usable for a subsequent frame.
-    #[test]
     fn test_run_frame_catches_paint_panic() {
         use crate::constraints::BoxConstraints;
         use crate::error::{PoisonPhase, RenderError};
@@ -851,7 +892,6 @@ mod tests {
     /// owner's `run_layout` (the propagation stubs are empty per the
     /// Mythos Outstanding Refactors list), so this test exercises the
     /// entry directly rather than through `run_frame`.
-    #[test]
     fn test_render_entry_layout_catches_panic() {
         use crate::error::{PoisonPhase, RenderError};
         use crate::storage::RenderEntry;

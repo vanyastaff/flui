@@ -48,8 +48,7 @@ impl RenderView for TestView {
 // Basic BuildOwner Tests
 // ============================================================================
 
-#[test]
-fn build_owners_have_isolated_focus_managers() {
+pub(crate) fn build_owners_have_isolated_focus_managers() {
     let first = BuildOwner::new();
     let second = BuildOwner::new();
 
@@ -64,8 +63,7 @@ fn build_owners_have_isolated_focus_managers() {
 // Build Scope Tests
 // ============================================================================
 
-#[test]
-fn test_build_scope_processes_in_depth_order() {
+pub(crate) fn test_build_scope_processes_in_depth_order() {
     let mut owner = BuildOwner::new();
     let mut tree = ElementTree::new();
 

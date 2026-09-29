@@ -202,9 +202,8 @@ fn set_sentinel(
 /// Flutter parity: `framework.dart:4571` `_retakeInactiveElement` pulls
 /// the previously-keyed element out of `_inactiveElements` and re-mounts
 /// it under the new parent.
-#[test]
 #[serial_test::serial(global_key_registry)]
-fn global_key_state_migrates_to_new_parent_slot() {
+pub(crate) fn global_key_state_migrates_to_new_parent_slot() {
     let (tree, owner) = fresh_tree();
 
     // Two distinct parents to migrate between.

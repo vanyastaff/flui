@@ -67,8 +67,7 @@ fn loose(width: f64, height: f64) -> BoxConstraints {
 // 8. Churn stress: 20 remove+reinsert cycles with frames between
 // ============================================================================
 
-#[test]
-fn repeated_churn_cycles_stay_clean_and_generations_protect_every_round() {
+pub(crate) fn repeated_churn_cycles_stay_clean_and_generations_protect_every_round() {
     let mut run = RenderTester::mount(
         box_node(RenderPadding::all(5.0))
             .child(box_node(RenderColoredBox::red(10.0, 10.0)).label("initial")),

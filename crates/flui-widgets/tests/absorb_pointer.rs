@@ -16,8 +16,7 @@ fn target() -> ColoredBox {
     ColoredBox::new(Color::rgb(10, 20, 30))
 }
 
-#[test]
-fn absorbing_true_blocks_the_tap_from_reaching_a_child_gesture_detector() {
+pub(crate) fn absorbing_true_blocks_the_tap_from_reaching_a_child_gesture_detector() {
     let taps = Arc::new(AtomicUsize::new(0));
     let in_cb = Arc::clone(&taps);
 

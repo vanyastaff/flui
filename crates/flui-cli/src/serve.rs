@@ -379,7 +379,6 @@ mod tests {
         (dir, server)
     }
 
-    #[test]
     fn serves_files_with_their_mime_types_and_no_caching() {
         let (_dir, server) = fixture();
         let (head, body) = get(server.addr, "GET", "/pkg/app_bg.wasm");
@@ -391,7 +390,6 @@ mod tests {
         assert!(head.contains("Content-Type: text/javascript"), "{head}");
     }
 
-    #[test]
     fn missing_files_traversal_and_directories_are_404_and_head_has_no_body() {
         let (_dir, server) = fixture();
         for target in [
@@ -408,5 +406,19 @@ mod tests {
         assert!(body.is_empty());
         let (head, _) = get(server.addr, "POST", "/");
         assert!(head.starts_with("HTTP/1.1 405"), "{head}");
+    }
+
+    #[test]
+    fn dev_server_contract() {
+        crate::test_cases::run_cases(&[
+            (
+                "serves files with their mime types and no caching",
+                serves_files_with_their_mime_types_and_no_caching,
+            ),
+            (
+                "missing files traversal and directories are 404 and head has no body",
+                missing_files_traversal_and_directories_are_404_and_head_has_no_body,
+            ),
+        ]);
     }
 }

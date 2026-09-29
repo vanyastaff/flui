@@ -1053,7 +1053,6 @@ mod tests {
         ids
     }
 
-    #[test]
     fn write_schedules_exactly_the_registered_readers() {
         let (r, inbox) = graph_with_inbox();
         let a = r.signal(1u32);
@@ -1070,7 +1069,6 @@ mod tests {
         assert_eq!(a.peek(&r, |v| *v).unwrap(), 10);
     }
 
-    #[test]
     fn a_build_that_unwinds_keeps_its_previous_read_set() {
         let (r, inbox) = graph_with_inbox();
         let a = r.signal(0u8);
@@ -1088,7 +1086,6 @@ mod tests {
         assert_eq!(scheduled(&inbox).len(), 1, "the write still rebuilds it");
     }
 
-    #[test]
     fn writes_and_creations_during_build_are_refused() {
         let (r, _) = graph_with_inbox();
         let a = r.signal(0u8);
@@ -1108,7 +1105,6 @@ mod tests {
         assert!(r.try_signal(7u8).is_ok());
     }
 
-    #[test]
     fn unmounting_an_element_releases_what_it_owned_and_its_reads() {
         let (r, inbox) = graph_with_inbox();
         let e1 = ElementId::new(1);
@@ -1136,6 +1132,26 @@ mod tests {
     }
 
     #[test]
+    fn reactive_graph_contract_matrix() {
+        crate::table_test::run_table(
+            "reactive_graph_contract_matrix",
+            &[
+                (
+                    "write_schedules_exactly_the_registered_readers",
+                    write_schedules_exactly_the_registered_readers as fn(),
+                ),
+                (
+                    "writes_and_creations_during_build_are_refused",
+                    writes_and_creations_during_build_are_refused as fn(),
+                ),
+                (
+                    "unmounting_an_element_releases_what_it_owned_and_its_reads",
+                    unmounting_an_element_releases_what_it_owned_and_its_reads as fn(),
+                ),
+            ],
+        );
+    }
+
     fn releasing_a_slot_from_its_panicking_update_remains_authoritative() {
         let (r, inbox) = graph_with_inbox();
         let a = r.signal(String::from("alive"));
@@ -1161,7 +1177,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn reader_panic_keeps_priority_over_a_released_values_destructor_panic() {
         let (r, _) = graph_with_inbox();
         let signal = r.signal(DropBomb("value destructor probe"));
@@ -1181,7 +1196,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn a_panicking_update_returns_the_loaned_value_and_marks_its_readers() {
         let (r, inbox) = graph_with_inbox();
         let a = r.signal(3u32);
@@ -1226,7 +1240,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn updater_panic_keeps_priority_over_a_secondary_wake_panic() {
         let inbox = Arc::new(ExternalBuildInbox::default());
         let r = Reactive::new();
@@ -1253,7 +1266,6 @@ mod tests {
         assert_eq!(signal.peek(&r, |value| *value), Ok(1));
     }
 
-    #[test]
     fn updater_panic_keeps_priority_over_its_captures_destructor_panic() {
         let (r, inbox) = graph_with_inbox();
         let signal = r.signal(0u8);
@@ -1288,7 +1300,6 @@ mod tests {
         assert_eq!(signal.peek(&r, |value| *value), Ok(2));
     }
 
-    #[test]
     fn invalidation_panic_retains_a_successful_updaters_capture_bundle() {
         let inbox = Arc::new(ExternalBuildInbox::default());
         let r = Reactive::new();
@@ -1322,5 +1333,42 @@ mod tests {
         assert_eq!(signal.peek(&r, |value| *value), Ok(1));
         assert_eq!(scheduled(&inbox), vec![reader]);
         capture_armed.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[test]
+    fn reactive_unwind_matrix() {
+        crate::table_test::run_table(
+            "reactive_unwind_matrix",
+            &[
+                (
+                    "a_build_that_unwinds_keeps_its_previous_read_set",
+                    a_build_that_unwinds_keeps_its_previous_read_set as fn(),
+                ),
+                (
+                    "releasing_a_slot_from_its_panicking_update_remains_authoritative",
+                    releasing_a_slot_from_its_panicking_update_remains_authoritative as fn(),
+                ),
+                (
+                    "reader_panic_keeps_priority_over_a_released_values_destructor_panic",
+                    reader_panic_keeps_priority_over_a_released_values_destructor_panic as fn(),
+                ),
+                (
+                    "a_panicking_update_returns_the_loaned_value_and_marks_its_readers",
+                    a_panicking_update_returns_the_loaned_value_and_marks_its_readers as fn(),
+                ),
+                (
+                    "updater_panic_keeps_priority_over_a_secondary_wake_panic",
+                    updater_panic_keeps_priority_over_a_secondary_wake_panic as fn(),
+                ),
+                (
+                    "updater_panic_keeps_priority_over_its_captures_destructor_panic",
+                    updater_panic_keeps_priority_over_its_captures_destructor_panic as fn(),
+                ),
+                (
+                    "invalidation_panic_retains_a_successful_updaters_capture_bundle",
+                    invalidation_panic_retains_a_successful_updaters_capture_bundle as fn(),
+                ),
+            ],
+        );
     }
 }

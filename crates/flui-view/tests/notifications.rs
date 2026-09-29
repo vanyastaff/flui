@@ -214,8 +214,7 @@ fn create_tree_and_owner() -> (Arc<RwLock<ElementTree>>, Arc<RwLock<BuildOwner>>
 // Happy path — listener fires and bubble stops on `true` return
 // ============================================================================
 
-#[test]
-fn dispatch_notification_calls_handler_and_stops_on_true() {
+pub(crate) fn dispatch_notification_calls_handler_and_stops_on_true() {
     // Tree shape: Root[outer-listener] → Inner[middle-listener] → DummyChild.
     // The inner listener returns `true`. The outer listener MUST NOT fire.
     // This locks down the "stops on true" semantics of Flutter
@@ -260,7 +259,8 @@ fn dispatch_notification_calls_handler_and_stops_on_true() {
         &mut owner.write().element_owner_mut(),
     );
 
-    let ctx = ElementBuildContext::for_element(child_id, tree.clone(), owner.clone()).unwrap();
+    let ctx = ElementBuildContext::for_element(child_id, tree.clone(), owner.clone())
+        .expect("the child element is live");
 
     ctx.dispatch_notification(&ScrollNotification { delta: 42.0 });
 

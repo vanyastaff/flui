@@ -112,7 +112,6 @@ mod tests {
         parse(pattern).unwrap_or_else(|error| panic!("{pattern:?} parses: {error}"))
     }
 
-    #[test]
     fn match_order_puts_literals_before_parameters() {
         let patterns = vec![
             parsed("/s/:slug"),
@@ -131,7 +130,6 @@ mod tests {
         assert!(rank(4) < rank(1), "{order:?}");
     }
 
-    #[test]
     fn first_conflict_names_the_later_duplicate() {
         let patterns = vec![
             parsed("/"),
@@ -141,5 +139,11 @@ mod tests {
         ];
         assert_eq!(first_conflict(&patterns), Some((1, 3)));
         assert_eq!(first_conflict(&patterns[..3]), None);
+    }
+
+    #[test]
+    fn route_pattern_contract() {
+        match_order_puts_literals_before_parameters();
+        first_conflict_names_the_later_duplicate();
     }
 }

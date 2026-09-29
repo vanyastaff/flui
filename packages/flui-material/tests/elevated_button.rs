@@ -37,8 +37,7 @@ fn color_property(color: flui_sdk::painting::Color) -> String {
 /// `.style(..)` override on the widget itself must resolve over the theme's
 /// `elevated_button_theme`, matching Flutter's own `getProperty(widgetStyle)
 /// ?? getProperty(themeStyle) ?? …` precedence.
-#[test]
-fn widget_level_style_wins_over_the_elevated_button_theme() {
+pub fn widget_level_style_wins_over_the_elevated_button_theme() {
     let themed_background = flui_sdk::painting::Color::rgb(1, 1, 1);
     let widget_background = flui_sdk::painting::Color::rgb(9, 9, 9);
     let theme = ThemeData::light().copy_with(ThemeDataOverrides {
@@ -106,8 +105,7 @@ fn widget_level_style_wins_over_the_elevated_button_theme() {
 /// into the `Semantics(container: true, button: true)` boundary
 /// `ButtonStyleButtonCore` wraps around the whole composition, rather than
 /// forming a second, separate node.
-#[test]
-fn elevated_button_with_text_child_announces_one_labelled_button_node() {
+pub fn elevated_button_with_text_child_announces_one_labelled_button_node() {
     let mut laid = lay_out(
         Theme::new(
             ThemeData::light(),

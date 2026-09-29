@@ -3085,7 +3085,6 @@ mod tests {
     /// its slab entry intact, which is what a retake needs. `child_ids` is
     /// built directly here because only a reconcile pass populates it — the
     /// same fixture shape the relocation tests above use.
-    #[test]
     fn removing_an_unkeyed_subtree_deactivates_a_keyed_descendant() {
         let mut tree = ElementTree::new();
         let mut owner = crate::owner::BuildOwner::new();
@@ -3149,7 +3148,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn active_retake_wires_provisional_order_and_sparse_merge_end_to_end() {
         type BoxObject =
             Box<dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>>;
@@ -3290,7 +3288,6 @@ mod tests {
 
     /// The core ABA guard: an id that addressed a since-freed slot must NOT
     /// resolve to the unrelated element that later reuses the same slab slot.
-    #[test]
     fn stale_id_after_slot_reuse_resolves_none() {
         let mut tree = ElementTree::new();
         let mut owner = BuildOwner::new();
@@ -3391,7 +3388,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn nested_same_type_provider_shadows_nearest() {
         let mut tree = ElementTree::new();
         let mut owner = BuildOwner::new();
@@ -3414,6 +3410,31 @@ mod tests {
         assert_eq!(
             tree.get(outer).unwrap().inherited_provider(theme_ty),
             Some(outer),
+        );
+    }
+
+    #[test]
+    fn element_tree_contract_matrix() {
+        crate::table_test::run_table(
+            "element_tree_contract_matrix",
+            &[
+                (
+                    "removing_an_unkeyed_subtree_deactivates_a_keyed_descendant",
+                    removing_an_unkeyed_subtree_deactivates_a_keyed_descendant as fn(),
+                ),
+                (
+                    "active_retake_wires_provisional_order_and_sparse_merge_end_to_end",
+                    active_retake_wires_provisional_order_and_sparse_merge_end_to_end as fn(),
+                ),
+                (
+                    "stale_id_after_slot_reuse_resolves_none",
+                    stale_id_after_slot_reuse_resolves_none as fn(),
+                ),
+                (
+                    "nested_same_type_provider_shadows_nearest",
+                    nested_same_type_provider_shadows_nearest as fn(),
+                ),
+            ],
         );
     }
 }

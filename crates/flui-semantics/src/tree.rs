@@ -676,16 +676,6 @@ impl Default for SemanticsTree {
 }
 
 // ============================================================================
-// TESTS
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-
-    // ========== Read and navigation ==========
-}
-
-// ============================================================================
 // SLAB-TREE HYGIENE TESTS (add_child auto-detach + remove cascade)
 // ============================================================================
 
@@ -699,38 +689,8 @@ mod slab_hygiene_tests {
         SemanticsNode::new()
     }
 
-    // ----- add_child auto-detach -----
-
-    // ----- cycle rejection -----
-
     #[test]
-    fn add_child_rejects_attaching_ancestor_under_descendant() {
-        let mut tree = SemanticsTree::new();
-        let root = tree.insert(empty_node());
-        let mid = tree.insert(empty_node());
-        let leaf = tree.insert(empty_node());
-        tree.add_child(root, mid);
-        tree.add_child(mid, leaf);
-
-        // Would create a 3-cycle: root → mid → leaf → root.
-        // Pre-rejection, `tree.remove(root)` would have recursed
-        // root → mid → leaf → root → … indefinitely.
-        tree.add_child(leaf, root);
-
-        // Tree shape unchanged after rejected call.
-        assert_eq!(tree.get(root).unwrap().parent(), None);
-        let empty: &[SemanticsId] = &[];
-        assert_eq!(tree.get(leaf).unwrap().children(), empty);
-        // Cascade terminates.
-        let removed = tree.remove(root);
-        assert!(removed.is_some());
-        assert_eq!(tree.len(), 0);
-    }
-
-    // ----- remove cascade + remove_shallow -----
-
-    #[test]
-    fn remove_cascades_to_descendants() {
+    fn cycle_rejection_and_remove_cascade() {
         let mut tree = SemanticsTree::new();
         let root = tree.insert(empty_node());
         let mid = tree.insert(empty_node());
@@ -739,8 +699,17 @@ mod slab_hygiene_tests {
         tree.add_child(mid, leaf);
         assert_eq!(tree.len(), 3);
 
-        let removed = tree.remove(root);
-        assert!(removed.is_some());
+        // Would create a 3-cycle: root -> mid -> leaf -> root. Pre-rejection,
+        // `tree.remove(root)` recursed indefinitely.
+        tree.add_child(leaf, root);
+
+        // Tree shape unchanged after the rejected call.
+        assert_eq!(tree.get(root).unwrap().parent(), None);
+        let empty: &[SemanticsId] = &[];
+        assert_eq!(tree.get(leaf).unwrap().children(), empty);
+
+        // Removal cascades to every descendant and terminates.
+        assert!(tree.remove(root).is_some());
         assert_eq!(tree.len(), 0);
         assert!(!tree.contains(mid));
         assert!(!tree.contains(leaf));

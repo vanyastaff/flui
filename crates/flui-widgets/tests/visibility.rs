@@ -127,8 +127,7 @@ impl StatelessView for VisibilityToggleHost {
     }
 }
 
-#[test]
-fn maintained_child_mutes_and_resumes_without_remounting_as_visibility_changes() {
+pub(crate) fn maintained_child_mutes_and_resumes_without_remounting_as_visibility_changes() {
     let vsync = Vsync::new();
     let controller = animation_controller();
     let (probe, found_ambient, init_count, dispose_count) = animation_probe(&controller);
@@ -189,8 +188,7 @@ fn maintained_child_mutes_and_resumes_without_remounting_as_visibility_changes()
     controller.dispose();
 }
 
-#[test]
-fn hidden_without_maintain_state_shows_the_default_replacement() {
+pub(crate) fn hidden_without_maintain_state_shows_the_default_replacement() {
     let laid = lay_out(
         Visibility::new(SizedBox::new(30.0, 20.0)).visible(false),
         loose(1000.0),

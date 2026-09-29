@@ -880,6 +880,27 @@ impl DirtyTracker {
 #[cfg(test)]
 mod tests {
 
+    // Scheduler routing matrix: mid-paint repaint survival and mid-phase layout marks.
+    #[test]
+    fn scheduler_routing_matrix() {
+        let cases: &[(&str, fn())] = &[
+            (
+                "a_repaint_raised_mid_paint_survives_a_boundary_already_queued_as_an_update",
+                a_repaint_raised_mid_paint_survives_a_boundary_already_queued_as_an_update,
+            ),
+            (
+                "mid_phase_layout_marks_route_to_side_queue_then_drain_back",
+                mid_phase_layout_marks_route_to_side_queue_then_drain_back,
+            ),
+        ];
+        for &(name, case) in cases {
+            if let Err(payload) = std::panic::catch_unwind(case) {
+                eprintln!("matrix case `{name}` failed");
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+
     /// A repaint raised mid-paint for a boundary ALREADY queued as an update
     /// must survive the pass.
     ///
@@ -894,7 +915,6 @@ mod tests {
     /// `&mut self` while the walk takes `&self` — so this drives the scheduler
     /// directly. `exit_phase` documents the window all the same, and this is
     /// what keeps the routing honest with that contract.
-    #[test]
     fn a_repaint_raised_mid_paint_survives_a_boundary_already_queued_as_an_update() {
         let mut tracker = DirtyTracker::new(std::sync::Arc::new(parking_lot::RwLock::new(
             VisualUpdateNotifier::new(),
@@ -956,7 +976,6 @@ mod tests {
 
     /// Direct test of the mid-phase routing → drain integration using a
     /// DirtyTracker pair directly (no PipelineOwner needed for this path).
-    #[test]
     fn mid_phase_layout_marks_route_to_side_queue_then_drain_back() {
         let (mut tracker, _tree) = DirtyTracker::new_test_pair();
 

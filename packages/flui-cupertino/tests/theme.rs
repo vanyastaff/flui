@@ -62,8 +62,7 @@ fn mount_and_capture(
 /// conflicting ambient `MediaQuery::platform_brightness` — the oracle's
 /// `brightness ?? MediaQuery...` chain short-circuits on the theme's own
 /// value, never consulting `MediaQuery` at all when it is set.
-#[test]
-fn explicit_theme_brightness_overrides_media_query() {
+pub fn explicit_theme_brightness_overrides_media_query() {
     let primary_color = mount_and_capture(|capture| {
         MediaQuery::new(
             MediaQueryData {

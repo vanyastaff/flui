@@ -160,6 +160,8 @@ mod test_only_global_key_registry {
 // View traits
 // Binding
 mod lifecycle;
+#[cfg(test)]
+mod table_test;
 #[cfg(feature = "runtime-internals")]
 #[doc(hidden)]
 pub use lifecycle::LifecycleSource;

@@ -794,7 +794,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn a_user_read_panic_keeps_priority_over_a_subscription_panic() {
         let graph = OneSlot::new(1, 7u32);
         let sink = PanickingSink;
@@ -821,7 +820,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn reader_panic_keeps_priority_over_its_captures_destructor_panic() {
         let graph = OneSlot::new(1, 7u32);
         let sink = Recorder::default();
@@ -852,7 +850,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn graph_panic_keeps_priority_over_the_unread_closures_destructor_panic() {
         let graph = PreReadPanickingGraph(1);
         let signal = Signal::<u32>::from_slot(SignalSlot::new(graph.graph_id(), 0, 0));
@@ -872,7 +869,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn a_foreign_or_stale_read_subscribes_nobody() {
         let graph = OneSlot::new(1, 7u32);
         let sink = Recorder::default();
@@ -891,5 +887,27 @@ mod tests {
             Err(SignalError::Released { .. })
         ));
         assert!(sink.0.borrow().is_empty());
+    }
+
+    #[test]
+    fn read_scope_failure_priority() {
+        crate::test_cases::run_cases(&[
+            (
+                "a user read panic keeps priority over a subscription panic",
+                a_user_read_panic_keeps_priority_over_a_subscription_panic,
+            ),
+            (
+                "reader panic keeps priority over its captures destructor panic",
+                reader_panic_keeps_priority_over_its_captures_destructor_panic,
+            ),
+            (
+                "graph panic keeps priority over the unread closures destructor panic",
+                graph_panic_keeps_priority_over_the_unread_closures_destructor_panic,
+            ),
+            (
+                "a foreign or stale read subscribes nobody",
+                a_foreign_or_stale_read_subscribes_nobody,
+            ),
+        ]);
     }
 }

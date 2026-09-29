@@ -132,8 +132,7 @@ fn fixed_extent_tree(
     (laid_out(owner, root_id), root_id, sliver_id, child_ids)
 }
 
-#[test]
-fn sliver_fixed_extent_list_sizes_children_to_item_extent() {
+pub(crate) fn sliver_fixed_extent_list_sizes_children_to_item_extent() {
     let (owner, _root_id, sliver_id, child_ids) =
         fixed_extent_tree(vertical_constraints(25.0), 30.0, 4);
 

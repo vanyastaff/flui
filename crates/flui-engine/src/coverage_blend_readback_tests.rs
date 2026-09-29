@@ -214,7 +214,6 @@ fn assert_partial_coverage_feathers(mode: BlendMode) {
 /// (`Clear`, `Src`, `SrcIn`, `SrcOut` and `Modulate` scale the destination by
 /// coverage alone; `DstIn` and `DstATop` by `coverage * (1 - alpha)`) each
 /// feather a partially covered edge.
-#[test]
 fn modes_that_cannot_absorb_coverage_feather_their_partially_covered_edge() {
     for mode in [
         BlendMode::Clear,
@@ -240,7 +239,6 @@ fn modes_that_cannot_absorb_coverage_feather_their_partially_covered_edge() {
 /// path does. Predicting that number would pin this test to the SSAA sample
 /// grid; agreeing across devices pins what actually matters — that nothing in
 /// this change reached a mode it was not meant to.
-#[test]
 fn dst_out_renders_the_same_with_and_without_a_second_blend_source() {
     let Some(feathering) = crate::test_support::renderer_or_skip() else {
         return;
@@ -280,4 +278,12 @@ fn dst_out_renders_the_same_with_and_without_a_second_blend_source() {
         feathered_samples.fully_covered, folded_samples.fully_covered,
         "DstOut at full coverage must be untouched by this change"
     );
+}
+
+/// Coverage-blend contract, read back from the GPU: dst-out independence of the
+/// second blend source, and feathered edges for modes that cannot absorb coverage.
+#[test]
+fn coverage_blend_reads_back_as_specified() {
+    dst_out_renders_the_same_with_and_without_a_second_blend_source();
+    modes_that_cannot_absorb_coverage_feather_their_partially_covered_edge();
 }

@@ -117,8 +117,7 @@ impl RenderSliver for MainAxisBandSliver {
     }
 }
 
-#[test]
-fn sliver_hit_direction_matrix_through_box_host() {
+pub(crate) fn sliver_hit_direction_matrix_through_box_host() {
     let cases = [
         (
             AxisDirection::TopToBottom,

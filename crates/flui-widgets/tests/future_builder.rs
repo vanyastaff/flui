@@ -129,8 +129,7 @@ fn done(data: Option<i32>, error: Option<&'static str>) -> Seen {
 }
 
 /// `'tracks life-cycle of Future to error'`: the error clears the data.
-#[test]
-fn future_builder_pending_then_error() {
+pub(crate) fn future_builder_pending_then_error() {
     let log = Arc::new(Mutex::new(Vec::new()));
     let completer = Completer::new();
 

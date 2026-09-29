@@ -34,8 +34,7 @@ fn ndjson_events(stdout: &[u8]) -> Vec<serde_json::Value> {
         .collect()
 }
 
-#[test]
-fn desktop_build_outside_a_project_in_json_mode_emits_a_pure_error_event() {
+pub fn desktop_build_outside_a_project_in_json_mode_emits_a_pure_error_event() {
     let tmp = TempDir::new().expect("empty temp dir");
 
     let output = flui()
@@ -66,8 +65,7 @@ fn desktop_build_outside_a_project_in_json_mode_emits_a_pure_error_event() {
 /// Real end-to-end build: scaffolds a project against this checkout and
 /// builds it for desktop, gated behind `FLUI_CLI_LIVE_BUILD=1` because it
 /// runs a genuine `cargo build` (slow, and needs a working toolchain).
-#[test]
-fn live_desktop_build_produces_an_artifact_on_disk() {
+pub fn live_desktop_build_produces_an_artifact_on_disk() {
     if std::env::var_os("FLUI_CLI_LIVE_BUILD").is_none() {
         eprintln!(
             "skipping live_desktop_build_produces_an_artifact_on_disk: set FLUI_CLI_LIVE_BUILD=1 to run a real `flui build desktop`"

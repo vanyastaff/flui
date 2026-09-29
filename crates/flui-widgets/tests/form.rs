@@ -63,8 +63,7 @@ fn mount_probed(form: Form) -> (LaidOut, SignalProbe) {
 ///
 /// Also fails if the error is stored but the field never schedules its
 /// rebuild: `tick` would then keep painting the old frame.
-#[test]
-fn validate_shows_the_validator_error_and_revalidating_a_valid_value_clears_it() {
+pub(crate) fn validate_shows_the_validator_error_and_revalidating_a_valid_value_clears_it() {
     let form = FormHandle::new();
     let node = FocusNode::with_debug_label("name");
     let mut laid = mount(
@@ -102,8 +101,7 @@ fn validate_shows_the_validator_error_and_revalidating_a_valid_value_clears_it()
 ///
 /// Also fails if writing the initial text back into the controller counted
 /// as the user's edit: the field would stay interacted and show the error.
-#[test]
-fn reset_restores_initial_values_and_clears_errors_and_interaction() {
+pub(crate) fn reset_restores_initial_values_and_clears_errors_and_interaction() {
     let form = FormHandle::new();
     let field = FormFieldHandle::new();
     let controller = TextEditingController::with_text("init");
@@ -153,8 +151,7 @@ fn reset_restores_initial_values_and_clears_errors_and_interaction() {
 // hand it to the callbacks they run; a field's edit hands on its own.
 // ============================================================================
 
-#[test]
-fn a_panicking_reset_callback_does_not_disable_later_form_validation() {
+pub(crate) fn a_panicking_reset_callback_does_not_disable_later_form_validation() {
     let form = FormHandle::new();
     let field = FormFieldHandle::new();
     let controller = TextEditingController::with_text("valid");
@@ -200,8 +197,7 @@ fn a_panicking_reset_callback_does_not_disable_later_form_validation() {
 ///
 /// Fails without an attachment lease because `Form::create_state` configures
 /// the shared handle and the second `init_state` replaces its writer.
-#[test]
-fn a_form_handle_refuses_a_second_simultaneous_mount_before_mutating_the_first() {
+pub(crate) fn a_form_handle_refuses_a_second_simultaneous_mount_before_mutating_the_first() {
     let form = FormHandle::new();
     let field = FormFieldHandle::new();
     let first_changes = Rc::new(Cell::new(0));

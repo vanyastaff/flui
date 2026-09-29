@@ -120,8 +120,7 @@ impl View for TwoPanickingChildren {
     }
 }
 
-#[test]
-fn real_build_recovery_is_reported_once_in_the_same_attempt() {
+pub(crate) fn real_build_recovery_is_reported_once_in_the_same_attempt() {
     let realm = UiRealm::for_test();
     realm.set_frame_failure_detail(FrameFailureDetail::Verbatim);
     let observed = install_collecting_handler(&realm);
@@ -151,8 +150,7 @@ fn real_build_recovery_is_reported_once_in_the_same_attempt() {
     }
 }
 
-#[test]
-fn two_real_recoveries_from_one_attempt_are_delivered_in_production_queue_order() {
+pub(crate) fn two_real_recoveries_from_one_attempt_are_delivered_in_production_queue_order() {
     let realm = UiRealm::for_test();
     realm.set_frame_failure_detail(FrameFailureDetail::Verbatim);
     let observed = install_collecting_handler(&realm);
@@ -184,8 +182,7 @@ fn two_real_recoveries_from_one_attempt_are_delivered_in_production_queue_order(
     );
 }
 
-#[test]
-fn panicking_handler_does_not_escape_or_duplicate_recovery() {
+pub(crate) fn panicking_handler_does_not_escape_or_duplicate_recovery() {
     let realm = UiRealm::for_test();
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let handler_calls = Arc::clone(&calls);

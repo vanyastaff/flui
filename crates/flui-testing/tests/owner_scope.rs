@@ -8,8 +8,7 @@ use flui_interaction::testing::input::{device_kind_from_button, pointer_down};
 use flui_interaction::{GestureRecognizer, PointerId, TapGestureRecognizer};
 use flui_testing::HeadlessBinding;
 
-#[test]
-fn interaction_targets_are_isolated_between_headless_bindings() {
+pub(crate) fn interaction_targets_are_isolated_between_headless_bindings() {
     let first = HeadlessBinding::new();
     let second = HeadlessBinding::new();
     let first_handle = first.interaction_dispatch_handle();
@@ -29,8 +28,7 @@ fn interaction_targets_are_isolated_between_headless_bindings() {
     });
 }
 
-#[test]
-fn pointer_route_panic_still_runs_the_down_arena_lifecycle() {
+pub(crate) fn pointer_route_panic_still_runs_the_down_arena_lifecycle() {
     let binding = HeadlessBinding::new();
     let pointer = PointerId::PRIMARY;
     let recognizer = TapGestureRecognizer::new(binding.arena().clone());

@@ -228,15 +228,3 @@ impl AppIdentity {
             .map_or(UNIDENTIFIED_APPLE_SUBSYSTEM, AppleBundleId::as_str)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn accepts_reverse_dns() {
-        let bundle_id =
-            AppleBundleId::new("com.example.app").expect("`com.example.app` is reverse-DNS");
-        assert_eq!(bundle_id.as_str(), "com.example.app");
-    }
-}

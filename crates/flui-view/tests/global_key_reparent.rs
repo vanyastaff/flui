@@ -147,9 +147,8 @@ fn direct_children_in_slot_order(
 /// that is still ACTIVE under another parent in the same frame. The old parent
 /// forgets the child, the element id/state survive, and the trace event records
 /// `from_parent: Some(old_parent)`.
-#[test]
 #[serial_test::serial(global_key_registry)]
-fn active_to_active_reparent_emits_from_parent_and_preserves_state() {
+pub(crate) fn active_to_active_reparent_emits_from_parent_and_preserves_state() {
     let (tree, owner) = fresh_tree();
 
     let parent_a = tree

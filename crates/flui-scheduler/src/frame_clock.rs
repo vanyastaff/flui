@@ -1029,7 +1029,6 @@ mod tests {
     // without re-arm").
     // ----------------------------------------------------------------
 
-    #[test]
     fn deferred_runs_the_segment_withheld_and_lift_with_retained_demand_produces_exactly_once() {
         let (clock, manual) = manual();
         clock.defer();
@@ -1090,7 +1089,6 @@ mod tests {
     // matrix -- kills "test clock is a second, laxer produce path".
     // ----------------------------------------------------------------
 
-    #[test]
     fn manual_and_platform_sources_agree_on_every_matrix_cell() {
         for hidden in [false, true] {
             for deferred in [false, true] {
@@ -1158,7 +1156,6 @@ mod tests {
     /// is that `last_compositor_tick_interval` ends up matching each
     /// feed's own distinct cadence, proving the two clocks' pacing
     /// feedback stays independent, not just their produce counts.
-    #[test]
     fn scripted_60hz_and_144hz_feeds_produce_independently_proportional_counts() {
         let (clock_60, manual_60) = manual();
         let (clock_144, manual_144) = manual();
@@ -1220,6 +1217,18 @@ mod tests {
              (144Hz={:?}, 60Hz={:?})",
             clock_144.last_compositor_tick_interval(),
             clock_60.last_compositor_tick_interval()
+        );
+    }
+
+    #[test]
+    fn frame_clock_gate_matrix() {
+        crate::table_test::run_table(
+            "frame_clock_gate_matrix",
+            &[
+                ("deferred_runs_the_segment_withheld_and_lift_with_retained_demand_produces_exactly_once", deferred_runs_the_segment_withheld_and_lift_with_retained_demand_produces_exactly_once as fn()),
+                ("manual_and_platform_sources_agree_on_every_matrix_cell", manual_and_platform_sources_agree_on_every_matrix_cell as fn()),
+                ("scripted_60hz_and_144hz_feeds_produce_independently_proportional_counts", scripted_60hz_and_144hz_feeds_produce_independently_proportional_counts as fn()),
+            ],
         );
     }
 

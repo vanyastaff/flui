@@ -1646,7 +1646,40 @@ mod tests {
     // Resampler wiring tests
     // ========================================================================
 
+    // Pointer-sequence routing matrix: route caching, pending moves, supersession,
+    /// resampling and cancel.
     #[test]
+    fn pointer_sequence_matrix() {
+        let cases: &[(&str, fn())] = &[
+            (
+                "contact_move_uses_down_route_and_fresh_mouse_tracking_route",
+                contact_move_uses_down_route_and_fresh_mouse_tracking_route,
+            ),
+            (
+                "terminal_dispatches_the_pending_move_before_up_on_the_detached_route",
+                terminal_dispatches_the_pending_move_before_up_on_the_detached_route,
+            ),
+            (
+                "superseding_down_abandons_old_arena_and_pending_move_before_hit_test",
+                superseding_down_abandons_old_arena_and_pending_move_before_hit_test,
+            ),
+            (
+                "resampling_never_crosses_a_reused_pointer_sequence",
+                resampling_never_crosses_a_reused_pointer_sequence,
+            ),
+            (
+                "cancel_active_pointers_delivers_cancel_and_demotes_following_moves_to_hover",
+                cancel_active_pointers_delivers_cancel_and_demotes_following_moves_to_hover,
+            ),
+        ];
+        for &(name, case) in cases {
+            if let Err(payload) = std::panic::catch_unwind(case) {
+                eprintln!("matrix case `{name}` failed");
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+
     fn contact_move_uses_down_route_and_fresh_mouse_tracking_route() {
         let lane = InteractionLane::try_new().expect("lane");
         let handle = lane.dispatch_handle();
@@ -1736,7 +1769,6 @@ mod tests {
         });
     }
 
-    #[test]
     fn terminal_dispatches_the_pending_move_before_up_on_the_detached_route() {
         use std::{cell::RefCell, rc::Rc};
 
@@ -1770,7 +1802,6 @@ mod tests {
             .remove_route(PointerId::PRIMARY, &handler);
     }
 
-    #[test]
     fn superseding_down_abandons_old_arena_and_pending_move_before_hit_test() {
         use std::cell::Cell;
 
@@ -1801,7 +1832,31 @@ mod tests {
         assert_eq!(binding.pending_move_count(), 0);
     }
 
+    // Reentrancy matrix: input arriving from inside callbacks and destructors.
     #[test]
+    fn reentrancy_matrix() {
+        let cases: &[(&str, fn())] = &[
+            (
+                "same_pointer_reentry_is_blocked_during_pending_move_and_terminal_callbacks",
+                same_pointer_reentry_is_blocked_during_pending_move_and_terminal_callbacks,
+            ),
+            (
+                "cancel_all_rejects_reentrant_input_from_route_destructors",
+                cancel_all_rejects_reentrant_input_from_route_destructors,
+            ),
+            (
+                "reentrant_target_unregister_defers_owner_drop_until_terminal_cleanup",
+                reentrant_target_unregister_defers_owner_drop_until_terminal_cleanup,
+            ),
+        ];
+        for &(name, case) in cases {
+            if let Err(payload) = std::panic::catch_unwind(case) {
+                eprintln!("matrix case `{name}` failed");
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+
     fn same_pointer_reentry_is_blocked_during_pending_move_and_terminal_callbacks() {
         use std::{cell::Cell, rc::Rc};
 
@@ -1847,7 +1902,6 @@ mod tests {
             .remove_route(PointerId::PRIMARY, &handler);
     }
 
-    #[test]
     fn resampling_never_crosses_a_reused_pointer_sequence() {
         use std::{cell::RefCell, rc::Rc};
 
@@ -1967,7 +2021,6 @@ mod tests {
     /// arena rejects its members, and a following Move — the pointer may
     /// keep moving while the window is defocused — is a hover, not a drag
     /// update on the dead sequence's route.
-    #[test]
     fn cancel_active_pointers_delivers_cancel_and_demotes_following_moves_to_hover() {
         let lane = InteractionLane::try_new().expect("lane");
         let handle = lane.dispatch_handle();
@@ -2033,7 +2086,37 @@ mod tests {
         });
     }
 
+    // Panic containment matrix: each row is one failure point (alone, or in
+    /// competition with a later one) and must leave the binding able to run the next
+    /// operation.
     #[test]
+    fn panic_containment_matrix() {
+        let cases: &[(&str, fn())] = &[
+            (
+                "arena_accept_panic_cleans_up_handle_pointer_event",
+                arena_accept_panic_cleans_up_handle_pointer_event,
+            ),
+            (
+                "per_target_panic_still_delivers_later_targets_and_cleans_up_the_sequence",
+                per_target_panic_still_delivers_later_targets_and_cleans_up_the_sequence,
+            ),
+            (
+                "target_panic_wins_over_a_later_route_cleanup_panic",
+                target_panic_wins_over_a_later_route_cleanup_panic,
+            ),
+            (
+                "cancel_all_pointer_sequences_finishes_after_the_first_cleanup_panic",
+                cancel_all_pointer_sequences_finishes_after_the_first_cleanup_panic,
+            ),
+        ];
+        for &(name, case) in cases {
+            if let Err(payload) = std::panic::catch_unwind(case) {
+                eprintln!("matrix case `{name}` failed");
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+
     fn per_target_panic_still_delivers_later_targets_and_cleans_up_the_sequence() {
         let lane = InteractionLane::try_new().expect("lane");
         let handle = lane.dispatch_handle();
@@ -2084,7 +2167,6 @@ mod tests {
         });
     }
 
-    #[test]
     fn target_panic_wins_over_a_later_route_cleanup_panic() {
         let lane = InteractionLane::try_new().expect("lane");
         let handle = lane.dispatch_handle();
@@ -2136,7 +2218,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn cancel_all_pointer_sequences_finishes_after_the_first_cleanup_panic() {
         let lane = InteractionLane::try_new().expect("lane");
         let handle = lane.dispatch_handle();
@@ -2227,7 +2308,6 @@ mod tests {
         });
     }
 
-    #[test]
     fn cancel_all_rejects_reentrant_input_from_route_destructors() {
         let lane = InteractionLane::try_new().expect("lane");
         let handle = lane.dispatch_handle();
@@ -2260,7 +2340,6 @@ mod tests {
         });
     }
 
-    #[test]
     fn reentrant_target_unregister_defers_owner_drop_until_terminal_cleanup() {
         let lane = InteractionLane::try_new().expect("lane");
         let handle = lane.dispatch_handle();
@@ -2374,7 +2453,6 @@ mod tests {
         });
     }
 
-    #[test]
     fn arena_accept_panic_cleans_up_handle_pointer_event() {
         assert_arena_accept_panic_cleanup(BindingEntryPoint::HitTestClosure);
     }

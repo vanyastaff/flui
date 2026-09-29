@@ -116,7 +116,6 @@ fn production_lines(source: &str) -> Vec<&str> {
 ///
 /// Red-check: change any site back to `scheduler.drive_frame_with_lane(...)`
 /// around `render_frame`, or to `handle_begin_frame` + `handle_draw_frame`.
-#[test]
 fn every_runner_frame_site_drives_the_realm_pump() {
     let code_lines: Vec<&str> = RUNNER_SOURCES
         .iter()
@@ -175,7 +174,6 @@ fn every_runner_frame_site_drives_the_realm_pump() {
 ///
 /// Red-check: delete the `realm.pump_background();` call from the desktop
 /// `PumpAsync` arm and this fails (found 4, not 5).
-#[test]
 fn every_background_wake_calls_pump_background() {
     let code_lines: Vec<&str> = RUNNER_SOURCES
         .iter()
@@ -203,7 +201,6 @@ fn every_background_wake_calls_pump_background() {
 ///
 /// Red-check: revert any native bootstrap to `Arc<Mutex<Renderer>>` +
 /// `DirectSink` and the corresponding count here breaks.
-#[test]
 fn native_frame_sites_drive_the_raster_mailbox_not_the_direct_backend() {
     // `main` split the flat `runner.rs` into the `runner/` module, so this
     // pin scans every file in it (the shared `RUNNER_SOURCES` list) rather
@@ -235,5 +232,26 @@ fn native_frame_sites_drive_the_raster_mailbox_not_the_direct_backend() {
          direct-backend path, the only one with a stated reason to bypass the mailbox); \
          found {direct_sink_sites} — a second site means a native path regressed to the \
          pre-mailbox direct call"
+    );
+}
+
+#[test]
+fn runner_frame_ordering_scan() {
+    crate::run_table(
+        "runner_frame_ordering_scan",
+        &[
+            (
+                "every_runner_frame_site_drives_the_realm_pump",
+                every_runner_frame_site_drives_the_realm_pump as fn(),
+            ),
+            (
+                "every_background_wake_calls_pump_background",
+                every_background_wake_calls_pump_background as fn(),
+            ),
+            (
+                "native_frame_sites_drive_the_raster_mailbox_not_the_direct_backend",
+                native_frame_sites_drive_the_raster_mailbox_not_the_direct_backend as fn(),
+            ),
+        ],
     );
 }

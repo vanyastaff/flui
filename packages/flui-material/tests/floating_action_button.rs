@@ -27,8 +27,7 @@ fn color_property(color: flui_sdk::painting::Color) -> String {
 /// `background_color`/`elevation` reaches the mounted `Material` — both the
 /// enabled-default and (per `resolve_elevation`'s doc comment) the disabled
 /// tier of the elevation state chain.
-#[test]
-fn fab_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
+pub fn fab_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
     let themed_background = flui_sdk::painting::Color::rgb(70, 80, 90);
     let theme = ThemeData::light().copy_with(ThemeDataOverrides {
         floating_action_button_theme: Some(FabThemeData {
@@ -66,8 +65,7 @@ fn fab_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
     );
 }
 
-#[test]
-fn mounted_geometry_in_a_scaffold_slot_is_exactly_56_by_56_at_the_end_float_position() {
+pub fn mounted_geometry_in_a_scaffold_slot_is_exactly_56_by_56_at_the_end_float_position() {
     // Mirrors `tests/scaffold.rs`'s own FAB-slot geometry tests, but with a
     // real `FloatingActionButton` (56x56 via its own `ConstrainedBox`, not a
     // stand-in `SizedBox`) proving this V1's `FAB_SIZE` constant actually

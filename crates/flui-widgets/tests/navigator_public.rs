@@ -142,8 +142,8 @@ fn leaf(_ctx: &dyn BuildContext) -> BoxedView {
 /// Red-check for the refusal: drop the `TypeId` comparison in
 /// `GeneratedRoute::checked`. Red-check for the disposal: delete
 /// `impl Drop for GeneratedRoute`.
-#[test]
-fn push_named_typed_with_the_wrong_result_type_errors_disposes_the_route_and_changes_nothing() {
+pub(crate) fn push_named_typed_with_the_wrong_result_type_errors_disposes_the_route_and_changes_nothing()
+ {
     /// A route that records its own `dispose()` into a shared log.
     struct DisposeProbe {
         settings: RouteSettings,
@@ -271,8 +271,7 @@ fn push_named_typed_with_the_wrong_result_type_errors_disposes_the_route_and_cha
 ///
 /// Red-check for the lock: hold the registry guard across the factory call in
 /// `RouteRegistry::resolve` and this test deadlocks the owner thread.
-#[test]
-fn a_factory_that_pushes_re_entrantly_does_not_deadlock() {
+pub(crate) fn a_factory_that_pushes_re_entrantly_does_not_deadlock() {
     let built = Built::default();
     let cell: Rc<RefCell<Option<NavigatorHandle>>> = Rc::new(RefCell::new(None));
     let handle = NavigatorHandle::new();
@@ -326,8 +325,7 @@ fn a_factory_that_pushes_re_entrantly_does_not_deadlock() {
 /// Red-check: change `COUNT`'s type parameter to `RouteKey<String>` and the
 /// registration stops compiling; change `push_keyed`'s body to drop the result
 /// handle and the delivered-value assertion fails.
-#[test]
-fn a_route_key_carries_its_result_type_from_registration_to_delivery() {
+pub(crate) fn a_route_key_carries_its_result_type_from_registration_to_delivery() {
     const COUNT: RouteKey<i32> = RouteKey::new("/count");
     const ORDER: RouteKey<u32> = RouteKey::new("/order");
 
@@ -465,8 +463,7 @@ impl NavigatorRoute for DeferredExitRoute {
 ///
 /// Red-check: emit the `tracing::error!` and drop the box inside
 /// `RouteRecord::did_complete` again, and this deadlocks the owner thread.
-#[test]
-fn a_mismatched_pop_result_is_reported_and_dropped_outside_the_history_lock() {
+pub(crate) fn a_mismatched_pop_result_is_reported_and_dropped_outside_the_history_lock() {
     /// A payload whose `Drop` commands the navigator — a supported API, on the
     /// drop path, from a `Send` value.
     struct CommandsNavigatorOnDrop {
@@ -547,8 +544,7 @@ fn a_mismatched_pop_result_is_reported_and_dropped_outside_the_history_lock() {
 ///
 /// Red-check: restore any one early return to dropping `result` inline and that
 /// row's operation list goes empty.
-#[test]
-fn every_operation_that_cannot_deliver_a_result_reports_it() {
+pub(crate) fn every_operation_that_cannot_deliver_a_result_reports_it() {
     /// Drive one scenario and report how many "no route" warnings it emitted.
     fn warnings_from(drive: impl FnOnce(&NavigatorHandle)) -> Vec<String> {
         let ((), log) = flui_testing::log_capture::capture(|| {
@@ -799,8 +795,7 @@ impl NavigatorRoute for VetoingRoute {
 /// (Moving the factory invocation inside the registry guard, which this line first
 /// claimed would hang, does **not** go red: the guard releases as the frame
 /// unwinds. Measured under an external timeout, not assumed.)
-#[test]
-fn a_factory_that_panics_after_the_result_is_erased_loses_only_the_report() {
+pub(crate) fn a_factory_that_panics_after_the_result_is_erased_loses_only_the_report() {
     let built = Built::default();
     let dropped = Arc::new(AtomicUsize::new(0));
     let payload_counter = Arc::clone(&dropped);

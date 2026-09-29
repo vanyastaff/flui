@@ -1204,7 +1204,6 @@ where
 mod tests {
     use super::*;
 
-    #[test]
     fn new_clamped_maps_nan_to_zero_and_infinity_to_the_finite_range() {
         let p = Point::<f64>::new_clamped(f64::NAN, 2.0);
         assert_eq!((p.x, p.y), (0.0, 2.0));
@@ -1212,12 +1211,25 @@ mod tests {
         assert_eq!((p.x, p.y), (f64::MAX, f64::MIN));
     }
 
-    #[test]
     fn checked_operations_reject_non_finite_results() {
         let p = Point::new(1.0, 2.0);
         assert_eq!(p.checked_add_vec(3.0, 4.0), Some(Point::new(4.0, 6.0)));
         assert!(p.checked_add_vec(f64::NAN, 4.0).is_none());
         assert_eq!(p.checked_mul(2.0), Some(Point::new(2.0, 4.0)));
         assert!(p.checked_mul(f64::INFINITY).is_none());
+    }
+
+    #[test]
+    fn point_contract() {
+        crate::test_cases::run_cases(&[
+            (
+                "new clamped maps nan to zero and infinity to the finite range",
+                new_clamped_maps_nan_to_zero_and_infinity_to_the_finite_range,
+            ),
+            (
+                "checked operations reject non finite results",
+                checked_operations_reject_non_finite_results,
+            ),
+        ]);
     }
 }

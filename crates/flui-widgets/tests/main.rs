@@ -2,7 +2,13 @@
 //! module here (files stay in place) so cargo links ONE binary instead of 49 — cutting
 //! link time and target/ disk. The shared harness is mounted once as `crate::common`.
 
+#![allow(
+    clippy::unwrap_used,
+    reason = "scenario functions are rows of the contract tables, so clippy no longer sees them as test functions"
+)]
+
 mod common;
+mod contracts;
 
 #[path = "absorb_pointer.rs"]
 mod absorb_pointer;

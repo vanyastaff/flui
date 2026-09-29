@@ -27,7 +27,6 @@ fn sample(pixels: &[u8], x: u32, y: u32) -> [u8; 4] {
 /// measured, placed through `placed_glyphs` and rasterised through
 /// `SharedFontSystem::rasterize` (ADR-0065, ADR-0067). The manifest is the
 /// other half of the guard: `cosmic-text` is not a dependency of this crate.
-#[test]
 fn the_engine_does_not_shape() {
     let sources = [
         ("glyph_atlas.rs", include_str!("glyph_atlas.rs")),
@@ -88,7 +87,6 @@ fn paragraph_scene(
 /// text colour to linear before writing — as the previous one did — turned
 /// `#808080` into `#373737` on every mid-tone label while black and white
 /// text, being fixed points of the transfer, looked right.
-#[test]
 fn glyph_colour_lands_as_recorded() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
@@ -111,4 +109,12 @@ fn glyph_colour_lands_as_recorded() {
         "a fully covered pixel of a #808080 glyph must read back as #808080, \
          darkest channel found {darkest} (a linear conversion would give ~55)"
     );
+}
+
+/// Paragraph contract, read back from the GPU: glyph colour lands as recorded,
+/// and the engine does not shape.
+#[test]
+fn paragraphs_read_back_as_recorded() {
+    glyph_colour_lands_as_recorded();
+    the_engine_does_not_shape();
 }

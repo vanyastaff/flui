@@ -183,8 +183,7 @@ impl StatelessView for HandleProbe {
 /// `open_panel`'s scrim detector in `drawer.rs` — the scrim still mounts
 /// (this test's first two assertions still pass) but the tap does nothing,
 /// so the final mount-check assertion fails (the scrim never unmounts).
-#[test]
-fn scrim_mounts_when_open_and_a_tap_closes_the_drawer() {
+pub fn scrim_mounts_when_open_and_a_tap_closes_the_drawer() {
     let vsync = Vsync::new();
     let handle_slot: Rc<RefCell<Option<DrawerHandle>>> = Rc::new(RefCell::new(None));
     let probe = HandleProbe {
@@ -276,8 +275,7 @@ fn scrim_mounts_when_open_and_a_tap_closes_the_drawer() {
 /// lands on the same instant, the tracker's zero-span guard reports zero
 /// velocity, `_settle` falls through to the position branch, and the drawer
 /// closes instead — failing the assertion below.
-#[test]
-fn a_fast_release_below_halfway_flings_the_drawer_open_rather_than_snapping_shut() {
+pub fn a_fast_release_below_halfway_flings_the_drawer_open_rather_than_snapping_shut() {
     let vsync = Vsync::new();
     let handle_slot: Rc<RefCell<Option<DrawerHandle>>> = Rc::new(RefCell::new(None));
     let probe = HandleProbe {

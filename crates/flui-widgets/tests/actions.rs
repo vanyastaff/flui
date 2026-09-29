@@ -50,8 +50,7 @@ impl StatelessView for InvokeProbe {
 /// maybeInvoke'` — FLUI has one dispatch path (no replaceable
 /// `ActionDispatcher`, ADR-0023 deferred), so both oracle cases collapse
 /// onto this one.
-#[test]
-fn the_nearest_enabled_action_wins_and_receives_the_payload() {
+pub(crate) fn the_nearest_enabled_action_wins_and_receives_the_payload() {
     let ran = Arc::new(AtomicUsize::new(0));
     let outer_sum = Arc::new(AtomicUsize::new(0));
     let inner_sum = Arc::new(AtomicUsize::new(0));

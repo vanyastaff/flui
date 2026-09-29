@@ -45,3 +45,21 @@ pub(crate) fn capture_rendered_events(emit: impl FnOnce()) -> Vec<String> {
         .expect("BUG: capture mutex is only locked by this test's own thread")
         .clone()
 }
+
+/// Runs every `(name, scenario)` row; the first failure names its row.
+pub(crate) fn run_cases(cases: &[(&str, fn())]) {
+    for (name, case) in cases {
+        if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(case)) {
+            let message = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| {
+                    payload
+                        .downcast_ref::<&str>()
+                        .map(|text| (*text).to_owned())
+                })
+                .unwrap_or_else(|| "non-string panic payload".to_owned());
+            panic!("case `{name}` failed: {message}");
+        }
+    }
+}

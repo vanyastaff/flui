@@ -6,6 +6,7 @@
 //! shared across the modules lives in [`common`].
 
 mod common;
+mod contract_matrices;
 
 #[path = "animation_pipeline.rs"]
 mod animation_pipeline;

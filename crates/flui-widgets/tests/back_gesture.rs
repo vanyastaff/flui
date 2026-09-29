@@ -45,8 +45,7 @@ fn mounted_with_transition_route() -> (NavigatorHandle, Harness, RouteId, Animat
 
 // ---- release matrix: v = -2.0 / +2.0 / 0 at value 0.49 / 0.51 ----
 
-#[test]
-fn release_matrix_fling_and_slow_release() {
+pub(crate) fn release_matrix_fling_and_slow_release() {
     // Fast negative velocity (screen-widths/s): stay (route animates
     // forward to 1.0 = new page fully covers again) regardless of value.
     {

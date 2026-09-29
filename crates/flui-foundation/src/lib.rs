@@ -158,6 +158,9 @@
 )]
 extern crate self as flui_foundation;
 
+#[cfg(test)]
+mod test_cases;
+
 pub mod affinity;
 // Compile-time child-count markers the render protocol attaches to nodes.
 pub mod arity;

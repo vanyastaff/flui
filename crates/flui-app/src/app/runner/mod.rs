@@ -346,7 +346,6 @@ mod tests {
     /// `AppBinding` is gone entirely and every `UiRealm` owns its own fresh
     /// `UpdateScheduler` value — and because a per-test-thread thread-local needs
     /// no cross-test lock in the first place.
-    #[test]
     fn desktop_bootstrap_stores_the_window_before_the_first_synchronous_redraw_observes_it() {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
@@ -411,7 +410,6 @@ mod tests {
     // Owner-platform host tests (ADR-0039 §6)
     // ========================================================================
 
-    #[test]
     fn owner_platform_host_panic_in_on_ready_still_clears() {
         use flui_platform::headless_platform;
 
@@ -430,6 +428,17 @@ mod tests {
             "a panic inside on_ready must still unwind through the clear guard \
              (armed before Platform::run, not inside on_ready) rather than \
              leaking the host onto this thread"
+        );
+    }
+
+    #[test]
+    fn runner_bootstrap_matrix() {
+        crate::table_test::run_table(
+            "runner_bootstrap_matrix",
+            &[
+                ("desktop_bootstrap_stores_the_window_before_the_first_synchronous_redraw_observes_it", desktop_bootstrap_stores_the_window_before_the_first_synchronous_redraw_observes_it as fn()),
+                ("owner_platform_host_panic_in_on_ready_still_clears", owner_platform_host_panic_in_on_ready_still_clears as fn()),
+            ],
         );
     }
 }

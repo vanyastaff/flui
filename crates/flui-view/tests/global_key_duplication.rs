@@ -282,9 +282,8 @@ fn children_of(tree: &Arc<RwLock<ElementTree>>, parent: ElementId) -> Vec<Elemen
 /// and only *afterwards*, at end of frame, decides the tree was illegal. This
 /// test pins the graft half, which the two frameworks agree on; the half they
 /// disagree on is pinned by the tug-of-war test below.
-#[test]
 #[serial_test::serial(global_key_registry)]
-fn a_second_parent_grafts_the_same_element_rather_than_creating_another() {
+pub(crate) fn a_second_parent_grafts_the_same_element_rather_than_creating_another() {
     let (tree, owner) = fresh_tree();
     // `GlobalKey::current_element` reads a realm-scoped registry that is
     // inactive in unit tests driving `ElementTree` directly.
@@ -368,9 +367,8 @@ impl View for KeyedParent {
 /// before relinking it, so raw inserts never leave two parents claiming the
 /// key and never cross a frame boundary. Here both parents genuinely declare
 /// the key in one frame, so the check must see the conflict.
-#[test]
 #[serial_test::serial(global_key_registry)]
-fn two_parents_declaring_one_key_in_one_frame_are_reported() {
+pub(crate) fn two_parents_declaring_one_key_in_one_frame_are_reported() {
     let (tree, owner) = fresh_tree();
     flui_view::test_only_set_global_key_registry(&tree, &owner);
     let key = GlobalKey::<KeyedState>::new();

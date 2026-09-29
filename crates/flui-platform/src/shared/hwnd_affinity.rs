@@ -284,33 +284,3 @@ pub(crate) fn show_owned_window(
     focus();
     check()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const OWNER: u32 = 7;
-    const FOREIGN: u32 = 8;
-
-    #[test]
-    fn refusal_precedence_is_gone_then_foreign_thread_then_class_then_slot() {
-        // All four conditions failing at once report the highest-precedence
-        // refusal, walking down as each earlier condition is repaired.
-        assert_eq!(
-            classify_user_data_access(OWNER_GONE, FOREIGN, false, 0),
-            UserDataVerdict::Refuse(UserDataRefusal::WindowGone)
-        );
-        assert_eq!(
-            classify_user_data_access(OWNER, FOREIGN, false, 0),
-            UserDataVerdict::Refuse(UserDataRefusal::ForeignThread)
-        );
-        assert_eq!(
-            classify_user_data_access(OWNER, OWNER, false, 0),
-            UserDataVerdict::Refuse(UserDataRefusal::ForeignClass)
-        );
-        assert_eq!(
-            classify_user_data_access(OWNER, OWNER, true, 0),
-            UserDataVerdict::Refuse(UserDataRefusal::EmptySlot)
-        );
-    }
-}

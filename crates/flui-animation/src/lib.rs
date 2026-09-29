@@ -93,6 +93,9 @@
 )]
 extern crate self as flui_animation;
 
+#[cfg(test)]
+mod test_cases;
+
 pub mod animation;
 pub mod builder;
 pub mod compound;

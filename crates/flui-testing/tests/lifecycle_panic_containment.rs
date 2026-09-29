@@ -326,8 +326,7 @@ fn assert_no_stranded_build_work(binding: &mut HeadlessBinding, replacement: Ele
     assert_eq!(owner.pending_rebuild_reasons(replacement), None);
 }
 
-#[test]
-fn lifecycle_panic_containment_init_state_paints_exact_error_slot() {
+pub(crate) fn lifecycle_panic_containment_init_state_paints_exact_error_slot() {
     let (mut binding, pipeline, root, initial) = mount_healthy_row();
     let failed_id = Rc::new(Cell::new(None));
     let init_calls = Rc::new(Cell::new(0));

@@ -201,7 +201,6 @@ mod tests {
         store.composition().map(|composition| composition.range)
     }
 
-    #[test]
     fn preedit_replaces_the_selection_and_marks_the_composition() {
         let store = InMemoryTextStore::new("hello world");
         select(&store, 6, 11);
@@ -217,7 +216,6 @@ mod tests {
         assert_eq!(composed(&store), Some(range(6, 7)));
     }
 
-    #[test]
     fn malformed_preedit_cursor_clamps_instead_of_panicking() {
         let store = InMemoryTextStore::new("");
         // Byte 1 is inside "é" (two bytes): it moves forward to byte 2, one
@@ -228,7 +226,6 @@ mod tests {
         assert_eq!(store.selection(), Selection::collapsed(at(2)));
     }
 
-    #[test]
     fn commit_replaces_the_composition() {
         let store = InMemoryTextStore::new("x");
         apply(&store, &preedit_event("とうきょう", None));
@@ -238,7 +235,6 @@ mod tests {
         assert_eq!(store.selection(), Selection::collapsed(at(3)));
     }
 
-    #[test]
     fn a_push_event_while_commits_are_closed_applies_in_order_at_the_next_anchor() {
         let store = InMemoryTextStore::new("");
         let gate = shut_gate(&store);
@@ -258,5 +254,15 @@ mod tests {
         assert_eq!(store.text(), "東");
         assert_eq!(store.composition(), None);
         assert_eq!(store.selection(), Selection::collapsed(at(1)));
+    }
+
+    /// IME projection into a store: preedit, malformed cursors, commit, and
+    /// events pushed while commits are closed.
+    #[test]
+    fn ime_events_project_onto_the_store_as_the_text_input_contract_says() {
+        preedit_replaces_the_selection_and_marks_the_composition();
+        malformed_preedit_cursor_clamps_instead_of_panicking();
+        commit_replaces_the_composition();
+        a_push_event_while_commits_are_closed_applies_in_order_at_the_next_anchor();
     }
 }

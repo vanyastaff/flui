@@ -455,7 +455,6 @@ mod device_recovery_tests {
         }
     }
 
-    #[test]
     fn a_pre_frame_loss_with_a_failing_recovery_still_renders_the_frame_and_backs_off() {
         let mut realm = mount_root();
         let mut lane = lane_over(ScriptedDeviceBackend {
@@ -508,7 +507,6 @@ mod device_recovery_tests {
         );
     }
 
-    #[test]
     fn a_mid_frame_loss_with_a_failing_recovery_backs_off() {
         let mut realm = mount_root();
         let mut lane = lane_over(ScriptedDeviceBackend {
@@ -567,7 +565,6 @@ mod device_recovery_tests {
     /// = true` there, from this same issue's `ui_realm/` fix) — the bug
     /// only shows up once that leftover demand is exhausted, on the frame
     /// AFTER, which is exactly why this drives (and checks) three.
-    #[test]
     fn needs_redraw_stays_armed_across_three_consecutive_frames_against_a_permanently_dead_device()
     {
         let mut realm = mount_root();
@@ -597,5 +594,17 @@ mod device_recovery_tests {
             // failure at all).
             now += Duration::from_secs(2);
         }
+    }
+
+    #[test]
+    fn device_recovery_matrix() {
+        crate::table_test::run_table(
+            "device_recovery_matrix",
+            &[
+                ("a_pre_frame_loss_with_a_failing_recovery_still_renders_the_frame_and_backs_off", a_pre_frame_loss_with_a_failing_recovery_still_renders_the_frame_and_backs_off as fn()),
+                ("a_mid_frame_loss_with_a_failing_recovery_backs_off", a_mid_frame_loss_with_a_failing_recovery_backs_off as fn()),
+                ("needs_redraw_stays_armed_across_three_consecutive_frames_against_a_permanently_dead_device", needs_redraw_stays_armed_across_three_consecutive_frames_against_a_permanently_dead_device as fn()),
+            ],
+        );
     }
 }

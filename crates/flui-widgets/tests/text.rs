@@ -15,8 +15,7 @@ use flui_widgets::{DefaultTextStyle, Text};
 ///
 /// Red-check: drop the `depend_on::<DefaultTextStyle, _>` read from `Text::build`
 /// — both boxes measure identically.
-#[test]
-fn an_enclosing_default_text_style_styles_a_bare_run() {
+pub(crate) fn an_enclosing_default_text_style_styles_a_bare_run() {
     let bare = lay_out(Text::new("ambient type"), loose(1000.0));
     let styled = lay_out(
         DefaultTextStyle::new(

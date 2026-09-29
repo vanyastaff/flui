@@ -72,8 +72,7 @@ fn three_destinations() -> Vec<NavigationDestination> {
     ]
 }
 
-#[test]
-fn tap_fires_on_destination_selected_with_the_tapped_index() {
+pub fn tap_fires_on_destination_selected_with_the_tapped_index() {
     let observed = Rc::new(RefCell::new(None));
     let recorder = Rc::clone(&observed);
     let laid = lay_out(
@@ -97,8 +96,7 @@ fn tap_fires_on_destination_selected_with_the_tapped_index() {
     );
 }
 
-#[test]
-fn tapping_a_disabled_destination_does_not_fire_the_callback() {
+pub fn tapping_a_disabled_destination_does_not_fire_the_callback() {
     let observed = Rc::new(RefCell::new(None));
     let recorder = Rc::clone(&observed);
     let mut destinations = three_destinations();

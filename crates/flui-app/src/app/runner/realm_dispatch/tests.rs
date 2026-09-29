@@ -39,7 +39,6 @@ fn install_test_realm() -> RealmDispatcher {
     install_platform_realm(crate::app::ui_realm::UiRealm::for_test(), &test_window())
 }
 
-#[test]
 fn background_owner_pump_drains_before_polling_without_a_frame() {
     use std::sync::atomic::{AtomicBool, Ordering};
     let _clear = OwnerHostClearGuard::arm();
@@ -84,7 +83,6 @@ fn background_owner_pump_drains_before_polling_without_a_frame() {
     teardown_platform_realm();
 }
 
-#[test]
 fn explicit_platform_quit_detaches_every_installed_realm() {
     let _clear = OwnerHostClearGuard::arm();
     let platform = flui_platform::HeadlessPlatform::new();
@@ -139,7 +137,6 @@ fn explicit_platform_quit_detaches_every_installed_realm() {
 /// `install_platform_realm` and the first assertion fails; remove the
 /// `shutdown_execution` call from `teardown_platform_realm` (or make it
 /// leave the slot filled) and the second loop's assertions fail.
-#[test]
 fn install_resolves_execution_services_and_teardown_shuts_them_down() {
     use flui_runtime::execution::DeterministicExecutors;
 
@@ -202,7 +199,6 @@ fn install_resolves_execution_services_and_teardown_shuts_them_down() {
     teardown_platform_realm();
 }
 
-#[test]
 fn late_event_never_crosses_realm_incarnations() {
     let stale = install_test_realm();
     let removed = APP_RUNTIME.with(|slot| slot.borrow_mut().realms.remove(&stale.address.realm_id));
@@ -221,7 +217,6 @@ fn late_event_never_crosses_realm_incarnations() {
         .expect("current incarnation dispatches");
 }
 
-#[test]
 fn panic_restores_dispatch_host_for_next_event() {
     let dispatcher = install_test_realm();
     let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -282,7 +277,6 @@ fn install_two_test_realms() -> (RealmDispatcher, RealmDispatcher) {
     (dispatcher_a, dispatcher_b)
 }
 
-#[test]
 fn reentrant_owner_turns_preserve_global_fifo_across_realms() {
     let (dispatcher_a, dispatcher_b) = install_two_test_realms();
 
@@ -362,7 +356,6 @@ fn install_realm_a_through_a_real_owner_platform() -> (RealmDispatcher, OwnerHos
 /// (`two_window_realms_share_no_ui_state_through_app_runtime` already
 /// covers that). Same oracle: a pointer dispatched only to realm A must
 /// leave realm B's gesture arena completely untouched.
-#[test]
 fn two_realms_via_separate_windows_policy_share_nothing() {
     let (dispatcher_a, _clear_guard) = install_realm_a_through_a_real_owner_platform();
 
@@ -429,7 +422,6 @@ fn two_realms_via_separate_windows_policy_share_nothing() {
 /// routing (a second PRESENTATION of the SAME realm), not a second realm
 /// in disguise: the hosted-realm count must stay at one, while the
 /// realm's own presentation count grows from one to two.
-#[test]
 fn one_realm_two_windows_policy_routes_by_presentation() {
     let (dispatcher_a, _clear_guard) = install_realm_a_through_a_real_owner_platform();
 
@@ -573,7 +565,6 @@ fn install_realm_a_with_exit_policy_quit_counter_and_reevaluation() -> (
 /// request was made at all, and that driving it produces the quit. The
 /// first is what actually pins the fix — without the tail change nothing
 /// is parked, and `drive()` returns `false` with nothing to run.
-#[test]
 fn closing_the_last_window_reentrantly_from_inside_a_dispatch_still_exits() {
     use std::sync::atomic::Ordering;
 
@@ -630,7 +621,6 @@ fn closing_the_last_window_reentrantly_from_inside_a_dispatch_still_exits() {
 /// at `realm: None`, nor wedge `iterating_all_realms` at `true` forever
 /// -- both of which would (after the fix above) silently defer every
 /// future realm-map mutation request for the rest of the process.
-#[test]
 fn panicking_visit_restores_the_checked_out_realm_and_clears_iterating_all_realms() {
     let dispatcher = install_test_realm();
 
@@ -678,6 +668,56 @@ fn panicking_visit_restores_the_checked_out_realm_and_clears_iterating_all_realm
     );
 
     teardown_platform_realm();
+}
+
+#[test]
+fn realm_dispatch_matrix() {
+    crate::table_test::run_table(
+        "realm_dispatch_matrix",
+        &[
+            (
+                "background_owner_pump_drains_before_polling_without_a_frame",
+                background_owner_pump_drains_before_polling_without_a_frame as fn(),
+            ),
+            (
+                "explicit_platform_quit_detaches_every_installed_realm",
+                explicit_platform_quit_detaches_every_installed_realm as fn(),
+            ),
+            (
+                "install_resolves_execution_services_and_teardown_shuts_them_down",
+                install_resolves_execution_services_and_teardown_shuts_them_down as fn(),
+            ),
+            (
+                "late_event_never_crosses_realm_incarnations",
+                late_event_never_crosses_realm_incarnations as fn(),
+            ),
+            (
+                "panic_restores_dispatch_host_for_next_event",
+                panic_restores_dispatch_host_for_next_event as fn(),
+            ),
+            (
+                "reentrant_owner_turns_preserve_global_fifo_across_realms",
+                reentrant_owner_turns_preserve_global_fifo_across_realms as fn(),
+            ),
+            (
+                "two_realms_via_separate_windows_policy_share_nothing",
+                two_realms_via_separate_windows_policy_share_nothing as fn(),
+            ),
+            (
+                "one_realm_two_windows_policy_routes_by_presentation",
+                one_realm_two_windows_policy_routes_by_presentation as fn(),
+            ),
+            (
+                "closing_the_last_window_reentrantly_from_inside_a_dispatch_still_exits",
+                closing_the_last_window_reentrantly_from_inside_a_dispatch_still_exits as fn(),
+            ),
+            (
+                "panicking_visit_restores_the_checked_out_realm_and_clears_iterating_all_realms",
+                panicking_visit_restores_the_checked_out_realm_and_clears_iterating_all_realms
+                    as fn(),
+            ),
+        ],
+    );
 }
 
 // ========================================================================

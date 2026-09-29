@@ -50,8 +50,7 @@ fn tag(name: &'static str) -> HeroTag {
 /// Red-check: revert `HeroState::build` to the old toggling shape (pass-through out of
 /// flight, `SizedBox → Offstage → child` in flight) — the child's depth changes, its
 /// element is rebuilt, and `create_state` runs again.
-#[test]
-fn a_hero_child_keeps_its_state_across_a_flight_without_a_global_key() {
+pub(crate) fn a_hero_child_keeps_its_state_across_a_flight_without_a_global_key() {
     /// Counts how many times its state is created.
     #[derive(Clone)]
     struct Counter(Arc<AtomicUsize>);

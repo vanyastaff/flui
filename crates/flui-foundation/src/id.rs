@@ -1393,7 +1393,6 @@ mod tests {
     // -----------------------------------------------------------------------
 
     /// ABA safety: same slot, different generation → distinct ids.
-    #[test]
     fn gen_id_stale_generation_is_distinct() {
         let gen1 = NonZeroU32::new(1).unwrap();
         let gen2 = NonZeroU32::new(2).unwrap();
@@ -1415,7 +1414,6 @@ mod tests {
 
     /// Niche/size: `Option<ElementId>` must have the same size as `ElementId`.
     /// The all-zero bit pattern is unreachable because generation >= 1.
-    #[test]
     fn element_id_niche_size() {
         assert_eq!(
             size_of::<ElementId>(),
@@ -1430,16 +1428,23 @@ mod tests {
     }
 
     /// Zero input panics with a helpful message.
-    #[test]
-    #[should_panic(expected = "ElementId::new requires n >= 1")]
     fn element_id_new_zero_panics() {
-        let _ = ElementId::new(0);
+        let payload = std::panic::catch_unwind(|| ElementId::new(0))
+            .expect_err("ElementId::new(0) must panic");
+        let message = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .unwrap_or_default();
+        assert!(
+            message.contains("ElementId::new requires n >= 1"),
+            "unexpected panic message: {message}"
+        );
     }
 
     /// The deserialiser rejects a packed `u64` whose high 32 bits
     /// (generation) are zero — a tampered/foreign value that could otherwise
     /// fabricate a generation-0 id that no live slot ever mints.
-    #[test]
     #[cfg(feature = "serde")]
     fn element_id_serde_rejects_zero_generation() {
         // index=1, generation=0 → high 32 bits clear.
@@ -1454,5 +1459,22 @@ mod tests {
         // A fully-zero packed value (the `Option` niche / None sentinel) is
         // likewise not a valid `ElementId`.
         assert!(serde_json::from_str::<ElementId>("0").is_err());
+    }
+
+    #[test]
+    fn id_contract() {
+        crate::test_cases::run_cases(&[
+            (
+                "a stale generation is distinct",
+                gen_id_stale_generation_is_distinct,
+            ),
+            ("Option<ElementId> keeps the niche", element_id_niche_size),
+            ("ElementId::new(0) panics", element_id_new_zero_panics),
+            #[cfg(feature = "serde")]
+            (
+                "serde rejects a zero generation",
+                element_id_serde_rejects_zero_generation,
+            ),
+        ]);
     }
 }

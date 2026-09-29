@@ -55,8 +55,7 @@ fn segment_constraints() -> BoxConstraints {
 /// tree still flushes every segment its own dirty state (or wake
 /// bit) causes to run, and a presentation that was never dirtied
 /// must NOT flush just because its sibling did.
-#[test]
-fn sibling_presentations_flush_independently() {
+pub(crate) fn sibling_presentations_flush_independently() {
     let mut realm = UiRealm::for_test();
     let second_id = realm.install_second_presentation_for_test();
 

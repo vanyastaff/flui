@@ -121,8 +121,7 @@ fn make_editable_text_handler(controller: TextEditingController) -> KeyEventHand
 // Each test owns a fresh manager, node, and generation-checked attachment, so
 // these fixtures are naturally parallel-safe.
 
-#[test]
-fn focused_character_key_inserts_into_controller() {
+pub(crate) fn focused_character_key_inserts_into_controller() {
     let manager = FocusManager::new();
     let controller = TextEditingController::new();
     let node = FocusNode::with_debug_label("test-field");
@@ -146,8 +145,7 @@ fn focused_character_key_inserts_into_controller() {
     );
 }
 
-#[test]
-fn unfocused_field_does_not_receive_key_events() {
+pub(crate) fn unfocused_field_does_not_receive_key_events() {
     let manager = FocusManager::new();
     let controller = TextEditingController::new();
     let node = FocusNode::with_debug_label("test-field");

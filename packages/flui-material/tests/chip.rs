@@ -91,8 +91,7 @@ fn chip_only_point() -> (f64, f64) {
 
 /// The shared root arena installed by the binding makes the nested delete
 /// target and chip body compete exactly as they do in a production `UiRealm`.
-#[test]
-fn tapping_the_delete_icon_fires_on_deleted_only_not_the_chip_tap() {
+pub fn tapping_the_delete_icon_fires_on_deleted_only_not_the_chip_tap() {
     let presses = Rc::new(RefCell::new(0_u32));
     let deletions = Rc::new(RefCell::new(0_u32));
     let press_counter = Rc::clone(&presses);
@@ -136,8 +135,7 @@ fn tapping_the_delete_icon_fires_on_deleted_only_not_the_chip_tap() {
 // (d) Disabled chip + delete icon are inert through real dispatch.
 // ------------------------------------------------------------------
 
-#[test]
-fn disabled_chip_and_its_delete_icon_are_both_inert_through_dispatch() {
+pub fn disabled_chip_and_its_delete_icon_are_both_inert_through_dispatch() {
     let presses = Rc::new(RefCell::new(0_u32));
     let deletions = Rc::new(RefCell::new(0_u32));
     let press_counter = Rc::clone(&presses);

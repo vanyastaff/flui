@@ -107,7 +107,6 @@ fn compile_consumer(dependencies: toml::Table, source: &str) -> Output {
     run_consumer(dependencies, None, source, "check")
 }
 
-#[test]
 fn ordinary_facade_graph_excludes_test_support() {
     let Some(root) = checkout_root() else { return };
     for defaults in [false, true] {
@@ -151,7 +150,6 @@ fn ordinary_facade_graph_excludes_test_support() {
     }
 }
 
-#[test]
 fn external_consumers_extend_and_test_through_the_facade() {
     let Some(root) = checkout_root() else { return };
     for alias in ["flui", "ui"] {
@@ -223,7 +221,6 @@ const SCENE_PLUGIN_SOURCE: &str = "fn build(_: f64, _: f64) -> flui_layer::Scene
 const APP_PLUGIN_SOURCE: &str =
     "flui::hot_reload::app_plugin!(flui::widgets::Text::new(\"hello\"));";
 
-#[test]
 fn plugin_factory_requires_the_canonical_scene() {
     let Some(dependencies) = hot_reload_dependencies(true) else {
         return;
@@ -256,7 +253,6 @@ fn reject_safe_teardown(source: &str, function: &str) {
     );
 }
 
-#[test]
 fn plugin_teardown_requires_unsafe() {
     for (source, function) in [
         (SCENE_PLUGIN_SOURCE, "flui_scene_drop"),
@@ -266,4 +262,59 @@ fn plugin_teardown_requires_unsafe() {
     ] {
         reject_safe_teardown(source, function);
     }
+}
+
+/// Runs every row, then panics once naming each row that failed.
+fn run_cases(family: &str, cases: &[(&str, fn())]) {
+    let mut failures = Vec::new();
+    for (name, case) in cases {
+        if let Err(payload) = std::panic::catch_unwind(*case) {
+            let message = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap_or("<non-string panic payload>");
+            failures.push(format!("  {name}: {message}"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{family}: {} of {} rows failed:
+{}",
+        failures.len(),
+        cases.len(),
+        failures.join(
+            "
+"
+        )
+    );
+}
+
+/// The facade as an external consumer sees it: the ordinary graph excludes test support,
+/// consumers extend and test through it, and the hot-reload plugin macros reject a
+/// non-`Scene` factory and safe calls to the unsafe teardown entry points. Each row runs
+/// a nested cargo build, so they share one test rather than four.
+#[test]
+fn facade_consumer_contracts() {
+    run_cases(
+        "facade_consumer_contracts",
+        &[
+            (
+                "ordinary_facade_graph_excludes_test_support",
+                ordinary_facade_graph_excludes_test_support,
+            ),
+            (
+                "external_consumers_extend_and_test_through_the_facade",
+                external_consumers_extend_and_test_through_the_facade,
+            ),
+            (
+                "plugin_factory_requires_the_canonical_scene",
+                plugin_factory_requires_the_canonical_scene,
+            ),
+            (
+                "plugin_teardown_requires_unsafe",
+                plugin_teardown_requires_unsafe,
+            ),
+        ],
+    );
 }

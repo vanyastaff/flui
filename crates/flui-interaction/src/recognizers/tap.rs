@@ -924,7 +924,27 @@ mod tests {
     fn primary_down(p: Offset<f64>) -> PointerEvent {
         crate::events::make_down_event_with_button(p, PointerType::Touch, PointerButton::Primary)
     }
+    // Tap recognizer matrix: callback delivery and containment of a panicking cancel.
     #[test]
+    fn tap_recognizer_matrix() {
+        let cases: &[(&str, fn())] = &[
+            (
+                "test_tap_recognizer_with_callback",
+                test_tap_recognizer_with_callback,
+            ),
+            (
+                "panicking_cancel_callback_cannot_strand_tap_tracking",
+                panicking_cancel_callback_cannot_strand_tap_tracking,
+            ),
+        ];
+        for &(name, case) in cases {
+            if let Err(payload) = std::panic::catch_unwind(case) {
+                eprintln!("matrix case `{name}` failed");
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+
     fn panicking_cancel_callback_cannot_strand_tap_tracking() {
         let arena = GestureArena::new();
         let recognizer = TapGestureRecognizer::new(arena.clone())
@@ -949,7 +969,6 @@ mod tests {
     /// Legacy primary path: down + up with the Primary button
     /// fires `on_tap` (`add_pointer` no longer
     /// pre-stages the down; the down event itself does).
-    #[test]
     fn test_tap_recognizer_with_callback() {
         let arena = GestureArena::new();
         let tapped = Arc::new(Mutex::new(false));

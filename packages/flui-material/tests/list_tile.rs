@@ -30,8 +30,7 @@ fn themed(theme: ThemeData, child: impl IntoView) -> MediaQuery {
 /// (`list_tile.dart`, oracle tag `3.44.0`), mirroring `tests/card.rs`'s
 /// `default_corner_radius_reaches_the_mounted_material` pattern of probing
 /// the mounted surface rather than the title's own bounds.
-#[test]
-fn whole_tile_tap_fires_from_a_point_inside_the_content_padding() {
+pub fn whole_tile_tap_fires_from_a_point_inside_the_content_padding() {
     let taps = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&taps);
     let laid = lay_out(
@@ -83,8 +82,7 @@ fn whole_tile_tap_fires_from_a_point_inside_the_content_padding() {
 /// node and is not this test's claim, so it is split off rather than pinned. What the merged
 /// node still lacks against the oracle — its `'Title'` label, its `tap` action
 /// — is recorded in `crates/flui-semantics/ARCHITECTURE.md`, not asserted here.
-#[test]
-fn merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button() {
+pub fn merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button() {
     let mut laid = lay_out(
         themed(
             ThemeData::light(),

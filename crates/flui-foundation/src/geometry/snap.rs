@@ -154,7 +154,6 @@ pub fn resolve_stroke_width(width: f64, ratio: DevicePixelRatio) -> f64 {
 mod tests {
     use super::*;
 
-    #[test]
     fn snap_rounds_half_way_toward_positive_infinity() {
         for (x, expected) in [
             (0.5, 1.0),
@@ -169,16 +168,32 @@ mod tests {
     }
 
     /// Snapping edges, not sizes: two rectangles sharing an edge share it after snapping.
-    #[test]
     fn abutting_rectangles_stay_abutting() {
         let a = snap_edges(Rect::from_ltrb(0.3, 0.0, 10.4, 1.0));
         let b = snap_edges(Rect::from_ltrb(10.4, 0.0, 20.6, 1.0));
         assert_eq!(a.right(), b.left());
     }
 
-    #[test]
     fn cover_never_loses_a_partly_covered_pixel() {
         let rect = cover(Rect::from_ltrb(-0.2, 0.7, 3.1, 4.0));
         assert_eq!(rect, Rect::from_ltrb(-1.0, 0.0, 4.0, 4.0));
+    }
+
+    #[test]
+    fn snap_contract() {
+        crate::test_cases::run_cases(&[
+            (
+                "snap rounds half way toward positive infinity",
+                snap_rounds_half_way_toward_positive_infinity,
+            ),
+            (
+                "abutting rectangles stay abutting",
+                abutting_rectangles_stay_abutting,
+            ),
+            (
+                "cover never loses a partly covered pixel",
+                cover_never_loses_a_partly_covered_pixel,
+            ),
+        ]);
     }
 }

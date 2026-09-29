@@ -93,8 +93,7 @@ fn fingerprint(t: &flui_layer::LayerTree) -> Vec<(&'static str, usize)> {
 /// The comparison is against a SECOND owner that never retains anything,
 /// because it paints its first frame — so any divergence is the graft's, not
 /// the scenario's.
-#[test]
-fn a_retained_frame_matches_what_a_full_repaint_produces() {
+pub(crate) fn a_retained_frame_matches_what_a_full_repaint_produces() {
     const N: usize = 8;
 
     let (owner, ids) = mount(N);
@@ -135,8 +134,7 @@ fn a_retained_frame_matches_what_a_full_repaint_produces() {
 /// has a `paint_count` field that looks made for this, but nothing in the
 /// pipeline ever calls `increment_paint_count` — it is a dead diagnostic, and a
 /// test reading it would always see zero.
-#[test]
-fn the_content_of_a_clean_boundary_is_not_repainted() {
+pub(crate) fn the_content_of_a_clean_boundary_is_not_repainted() {
     use flui_foundation::Leaf;
     use flui_rendering::{
         context::{BoxHitTestContext, BoxLayoutContext, PaintCx},
@@ -335,8 +333,7 @@ fn set_opacity(
 /// Both halves are asserted and neither alone is evidence: the paint count
 /// alone passes if nothing painted at all, and the alpha alone passes on a
 /// full repaint.
-#[test]
-fn an_alpha_change_updates_the_layer_without_repainting_the_subtree() {
+pub(crate) fn an_alpha_change_updates_the_layer_without_repainting_the_subtree() {
     let (owner, opacity_id, _sibling, painted) = mount_opacity_under_boundary(0.5);
     let (mut owner, result) = owner.run_frame();
     result.expect("first frame");
@@ -377,8 +374,7 @@ fn an_alpha_change_updates_the_layer_without_repainting_the_subtree() {
 /// Note this is a regression the update path can introduce and the paint path
 /// alone cannot: without an update queued, the still-queued boundary is in
 /// `dirty_set` and refuses the graft outright.
-#[test]
-fn a_failed_pass_does_not_downgrade_a_real_repaint_to_an_update() {
+pub(crate) fn a_failed_pass_does_not_downgrade_a_real_repaint_to_an_update() {
     use std::sync::atomic::AtomicBool;
 
     #[derive(Debug)]

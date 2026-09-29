@@ -59,8 +59,7 @@ impl ViewState<Counter> for CounterState {
     }
 }
 
-#[test]
-fn perform_reassemble_rebuilds_in_place_and_preserves_state() {
+pub(crate) fn perform_reassemble_rebuilds_in_place_and_preserves_state() {
     let side = Arc::new(AtomicU32::new(40));
     let builds = Arc::new(AtomicU32::new(0));
     let creates = Arc::new(AtomicU32::new(0));

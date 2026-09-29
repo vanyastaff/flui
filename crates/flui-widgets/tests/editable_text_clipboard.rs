@@ -48,8 +48,7 @@ fn mount_field(
 ///
 /// Fails without the change: the chord was left unconsumed by the field and
 /// bound by nothing, so the clipboard stayed empty.
-#[test]
-fn copy_then_paste_round_trips_text_in_an_editable_text() {
+pub(crate) fn copy_then_paste_round_trips_text_in_an_editable_text() {
     let controller = TextEditingController::with_text("abc");
     let (harness, _node) = mount_field(&controller, |field| field);
     controller.set_selection(0, 3);
@@ -71,8 +70,8 @@ fn copy_then_paste_round_trips_text_in_an_editable_text() {
 
 /// A password field never hands its text to the clipboard, and the chord it
 /// declines keeps bubbling.
-#[test]
-fn copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_and_the_key_unconsumed() {
+pub(crate) fn copy_and_cut_on_an_obscured_field_leave_the_clipboard_untouched_and_the_key_unconsumed()
+ {
     let controller = TextEditingController::with_text("secret");
     let (harness, _node) = mount_field(&controller, |field| field.obscure_text(true));
     controller.set_selection(0, 6);

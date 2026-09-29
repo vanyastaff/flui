@@ -75,8 +75,7 @@ fn width(laid: &crate::common::LaidOut) -> f64 {
     laid.size(laid.current_root()).width
 }
 
-#[test]
-fn animated_size_interpolates_to_a_new_child_size_over_frames() {
+pub(crate) fn animated_size_interpolates_to_a_new_child_size_over_frames() {
     let vsync = Vsync::new();
     let side = Arc::new(Mutex::new(20.0));
     let probe = SizeProbe {

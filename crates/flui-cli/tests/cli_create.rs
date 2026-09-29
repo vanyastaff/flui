@@ -47,8 +47,7 @@ fn workspace_target_dir(root: &Path) -> PathBuf {
 /// never executed. This runs the generated library's own test binary and
 /// requires that test to actually execute and pass, the same way
 /// `run_generated_counter_tests` does for the counter template.
-#[test]
-fn generated_widget_project_test_passes() {
+pub fn generated_widget_project_test_passes() {
     let root = repo_root();
     let target = workspace_target_dir(&root);
     let name = "flui-tmpl-check-widget-test";
@@ -102,8 +101,7 @@ fn generated_widget_project_test_passes() {
     );
 }
 
-#[test]
-fn create_project_default_template_is_counter() {
+pub fn create_project_default_template_is_counter() {
     let tmp = TempDir::new().expect("temp dir");
     let project_dir = tmp.path().join("test-default");
 
@@ -118,8 +116,7 @@ fn create_project_default_template_is_counter() {
     assert!(project_dir.join("src").join("main.rs").exists());
 }
 
-#[test]
-fn all_templates_depend_on_the_public_facade_only() {
+pub fn all_templates_depend_on_the_public_facade_only() {
     let tmp = TempDir::new().expect("temp dir");
     for (name, template, hot_reload) in [
         ("basic", "basic", false),
@@ -213,8 +210,7 @@ fn dependency_identities(dependencies: &toml::Table) -> Vec<&str> {
     packages
 }
 
-#[test]
-fn dry_run_writes_nothing_and_lists_key_files() {
+pub fn dry_run_writes_nothing_and_lists_key_files() {
     let tmp = TempDir::new().expect("temp dir");
     let project_dir = tmp.path().join("dry-app");
 
@@ -243,8 +239,7 @@ fn dry_run_writes_nothing_and_lists_key_files() {
     );
 }
 
-#[test]
-fn json_create_stdout_is_pure_ndjson_ending_in_create_done() {
+pub fn json_create_stdout_is_pure_ndjson_ending_in_create_done() {
     let tmp = TempDir::new().expect("temp dir");
 
     let output = flui()

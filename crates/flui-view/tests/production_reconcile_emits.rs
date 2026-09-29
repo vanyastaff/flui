@@ -17,6 +17,10 @@
 //!   `flui::reconcile` trace stream reports the real parent id.
 
 #![cfg(feature = "test-utils")]
+#![expect(
+    clippy::unwrap_used,
+    reason = "a panic is the failure report in a test scenario"
+)]
 
 use std::any::TypeId;
 
@@ -182,9 +186,8 @@ fn direct_children_in_slot_order(tree: &ElementTree, parent: ElementId) -> Vec<E
     children.into_iter().map(|(_, id)| id).collect()
 }
 
-#[test]
 #[serial]
-fn active_global_key_move_through_build_scope_updates_render_parent_links() {
+pub(crate) fn active_global_key_move_through_build_scope_updates_render_parent_links() {
     let pipeline_owner = PipelineCell::new(PipelineOwner::new());
     let mut owner = BuildOwner::new();
     let mut tree = ElementTree::new();
@@ -436,9 +439,8 @@ fn assert_destination_emits_only_final_mounts(
     );
 }
 
-#[test]
 #[serial]
-fn failed_dense_mount_production_reconcile_emits_only_final_slots() {
+pub(crate) fn failed_dense_mount_production_reconcile_emits_only_final_slots() {
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
     let pipeline = PipelineCell::new(PipelineOwner::new());

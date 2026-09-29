@@ -93,6 +93,10 @@
 //! [`catalog_covers_every_render_object_name`] guards the table: every row's
 //! type string must appear in this file so a missing harness test fails CI.
 
+// Row functions are plain `fn`s run by the family tables below, so clippy no
+// longer treats them as `#[test]` bodies where `unwrap` is allowed.
+#![allow(clippy::unwrap_used)]
+
 // Single-binary consolidation (`autotests = false` in `Cargo.toml`): the
 // snapshot dogfood suite compiles as a module of this target instead of
 // linking the full dependency stack a second time. Its insta snapshots are
@@ -528,7 +532,6 @@ fn shrink_wrapping_viewport(sliver: TreeNode) -> TreeNode {
 // Leaf box objects
 // ============================================================================
 
-#[test]
 fn harness_sized_box_forces_dimensions() {
     let run = RenderTester::mount(box_node(RenderSizedBox::fixed(80.0, 60.0)))
         .with_constraints(loose(200.0))
@@ -538,7 +541,6 @@ fn harness_sized_box_forces_dimensions() {
     assert_descendant_properties(&run.diagnostics(), "RenderSizedBox", &["width", "height"]);
 }
 
-#[test]
 fn harness_colored_box_self_describes_and_paints() {
     let run = RenderTester::mount(box_node(RenderColoredBox::red(50.0, 50.0)))
         .with_size(Size::new(100.0, 100.0))
@@ -557,7 +559,6 @@ fn harness_colored_box_self_describes_and_paints() {
     );
 }
 
-#[test]
 fn harness_render_error_box_fills_bounded_constraints_and_paints() {
     let run = RenderTester::mount(box_node(RenderErrorBox::new("boom", None)))
         .with_size(Size::new(100.0, 60.0))
@@ -597,7 +598,6 @@ fn error_box_size(run: &flui_rendering::testing::FrameRun) -> (f64, f64) {
     (field("width"), field("height"))
 }
 
-#[test]
 fn harness_render_error_box_falls_back_to_a_finite_extent_on_an_unbounded_axis() {
     // A lazy list's main axis is unbounded: the box must take a finite row,
     // not the whole scroll extent (Flutter's 100000 px would).
@@ -607,7 +607,6 @@ fn harness_render_error_box_falls_back_to_a_finite_extent_on_an_unbounded_axis()
     assert_eq!(error_box_size(&run), (200.0, ERROR_BOX_FALLBACK_EXTENT));
 }
 
-#[test]
 fn harness_custom_paint_orders_background_child_foreground() {
     let run = RenderTester::mount(
         box_node(RenderCustomPaint::new(
@@ -677,7 +676,6 @@ fn harness_custom_paint_orders_background_child_foreground() {
 // Debug-only: the imbalance is detected by a `debug_assert_eq!`
 // (`flui-rendering/src/context/paint_cx.rs`), so in release nothing panics,
 // nothing is poisoned, and this test's own `panic!` arm fires instead.
-#[test]
 #[cfg(debug_assertions)]
 fn harness_custom_paint_unbalanced_save_poisons_the_paint_phase() {
     #[derive(Debug)]
@@ -727,7 +725,6 @@ fn harness_custom_paint_unbalanced_save_poisons_the_paint_phase() {
     }
 }
 
-#[test]
 fn harness_listener_passes_layout_through_and_attaches_handler() {
     // A lane-registered no-op target — the harness verifies its identity
     // reaches the hit entry (the pipeline wiring); that it FIRES end-to-end is
@@ -773,7 +770,6 @@ fn harness_listener_passes_layout_through_and_attaches_handler() {
     );
 }
 
-#[test]
 fn harness_mouse_region_uses_one_tracker_target_for_hover_enter_and_exit() {
     let hovers = Rc::new(Cell::new(0));
     let enters = Rc::new(Cell::new(0));
@@ -884,7 +880,6 @@ fn harness_mouse_region_uses_one_tracker_target_for_hover_enter_and_exit() {
     );
 }
 
-#[test]
 fn harness_image_paints_placeholder_frame() {
     let run = RenderTester::mount(box_node(RenderImage::new(
         Size::new(50.0, 50.0),
@@ -897,7 +892,6 @@ fn harness_image_paints_placeholder_frame() {
     assert!(run.painted());
 }
 
-#[test]
 fn harness_paragraph_paints_text_frame() {
     let run = RenderTester::mount(box_node(RenderParagraph::new(
         TextSpan::new("paint me"),
@@ -909,7 +903,6 @@ fn harness_paragraph_paints_text_frame() {
     assert!(run.painted());
 }
 
-#[test]
 fn harness_editable_lays_out_and_paints_collapsed_caret() {
     let run = RenderTester::mount(box_node(
         RenderEditable::new(TextSpan::new("edit me"), TextDirection::Ltr)
@@ -954,7 +947,6 @@ fn harness_editable_lays_out_and_paints_collapsed_caret() {
 ///
 /// Red-check: move `self.paint_selection(ctx)` after `self.painter.paint(..)`
 /// in `RenderEditable::paint` — the indices invert and this fails.
-#[test]
 fn harness_editable_paints_the_selection_behind_the_glyphs() {
     let run = RenderTester::mount(box_node(
         RenderEditable::new(TextSpan::new("edit me"), TextDirection::Ltr)
@@ -996,7 +988,6 @@ fn harness_editable_paints_the_selection_behind_the_glyphs() {
 /// branch exists (or with `composing_range` never wired in) — it fails
 /// because no `DrawRect` command matches the expected rect at all (only the
 /// `Paragraph` command is present).
-#[test]
 fn harness_editable_composing_underline_paints_at_the_exact_multibyte_box() {
     // "abc" (3 ASCII bytes) + "你好" (two 3-byte CJK chars = 6 bytes) + "def".
     let text = "abc你好def";
@@ -1062,7 +1053,6 @@ fn harness_editable_composing_underline_paints_at_the_exact_multibyte_box() {
 // Single-child box proxies
 // ============================================================================
 
-#[test]
 fn harness_padding_deflates_child_offset() {
     let run = RenderTester::mount(
         box_node(RenderPadding::all(12.0))
@@ -1078,7 +1068,6 @@ fn harness_padding_deflates_child_offset() {
     );
 }
 
-#[test]
 fn harness_custom_single_child_layout_positions_child_with_delegate() {
     let delegate = custom_single_child_delegate(
         Size::new(120.0, 80.0),
@@ -1118,7 +1107,6 @@ fn harness_custom_single_child_layout_positions_child_with_delegate() {
     );
 }
 
-#[test]
 fn harness_custom_multi_child_layout_positions_children_by_layout_id() {
     let delegate = custom_multi_child_delegate(Size::new(120.0, 90.0));
     let run = RenderTester::mount(
@@ -1169,7 +1157,6 @@ fn harness_custom_multi_child_layout_positions_children_by_layout_id() {
     );
 }
 
-#[test]
 fn harness_center_centers_child() {
     let run = RenderTester::mount(
         box_node(RenderCenter::new())
@@ -1182,7 +1169,6 @@ fn harness_center_centers_child() {
     assert!(run.diagnostics().find_descendant("RenderCenter").is_some());
 }
 
-#[test]
 fn harness_baseline_positions_text_at_offset() {
     let mut run = RenderTester::mount(
         box_node(RenderBaseline::new(TextBaseline::Alphabetic, 0.0)).child(
@@ -1227,7 +1213,6 @@ fn harness_baseline_positions_text_at_offset() {
 /// the same stale-value regression the oracle guards against (whether FLUI's
 /// dry-baseline query is memoized per call or always recomputed live, the
 /// observable contract — fresh state in, fresh answer out — must hold).
-#[test]
 fn harness_baseline_dry_baseline_recomputes_per_kind_offsets_after_relayout() {
     use flui_foundation::Leaf;
     use flui_rendering::context::{BoxDryBaselineCtx, BoxDryLayoutCtx, BoxLayoutContext};
@@ -1392,7 +1377,6 @@ impl RenderBox for SizedBaselineProbe {
 /// Flutter parity: `RenderIgnoreBaseline` (`proxy_box.dart`, tag `3.44.0`)
 /// nulls both baseline queries; `basic_test.dart` `'Row and IgnoreBaseline
 /// (with ignored baseline)'` pins the row-level consequence.
-#[test]
 fn harness_ignore_baseline_hides_its_child_from_a_baseline_row() {
     let run = RenderTester::mount(
         box_node(
@@ -1441,7 +1425,6 @@ fn harness_ignore_baseline_hides_its_child_from_a_baseline_row() {
     );
 }
 
-#[test]
 fn harness_aspect_ratio_enforces_ratio() {
     // Loose constraints let `_apply_aspect_ratio` honour the ratio; tight
     // constraints return `constraints.smallest()` unchanged (Flutter parity).
@@ -1462,7 +1445,6 @@ fn harness_aspect_ratio_enforces_ratio() {
     );
 }
 
-#[test]
 fn harness_constrained_box_enforces_minimums() {
     let extra = BoxConstraints::new(100.0, f64::INFINITY, 100.0, f64::INFINITY);
     let run = RenderTester::mount(
@@ -1751,7 +1733,6 @@ fn assert_container_matches_stack(spec: ContainerStackCase) {
 /// outcome, so no single level can be dropped without a failure: an alignment
 /// that leaves slack, additional constraints that pin the size against a
 /// smaller child, a tight incoming constraint, and a minimum on one axis only.
-#[test]
 fn harness_container_matches_the_widget_stack_it_collapses() {
     let unbounded = f64::INFINITY;
 
@@ -1950,7 +1931,6 @@ fn harness_container_matches_the_widget_stack_it_collapses() {
 /// A childless container stands in for Flutter's placeholder subtree,
 /// `LimitedBox(0, 0, child: ConstrainedBox(expand))`: it fills the space it is
 /// given, and collapses where that space is unbounded.
-#[test]
 fn harness_container_childless_fills_bounded_and_collapses_unbounded() {
     let bounded = RenderTester::mount(box_node(RenderContainer::new()))
         .with_constraints(loose(200.0))
@@ -1978,7 +1958,6 @@ fn harness_container_childless_fills_bounded_and_collapses_unbounded() {
 
 /// A singular matrix compresses the subtree below a pixel, so nothing is
 /// painted and nothing is hit.
-#[test]
 fn harness_container_singular_transform_paints_and_hits_nothing() {
     let run = RenderTester::mount(
         box_node(RenderContainer::new().with_transform(Matrix4::scaling(0.0, 1.0, 1.0)))
@@ -1996,7 +1975,6 @@ fn harness_container_singular_transform_paints_and_hits_nothing() {
     );
 }
 
-#[test]
 fn harness_limited_box_caps_unbounded_width_in_row() {
     let run = RenderTester::mount(
         box_node(RenderFlex::row()).child(
@@ -2047,7 +2025,6 @@ fn harness_limited_box_caps_unbounded_width_in_row() {
 //   `relayoutBoundary=upN` annotations: Flutter-internal render-object
 //   bookkeeping with no FLUI diagnostics equivalent to assert against.
 
-#[test]
 fn harness_offstage_hidden_collapses_and_misses_hits() {
     let run = RenderTester::mount(
         box_node(RenderOffstage::hidden())
@@ -2072,7 +2049,6 @@ fn harness_offstage_hidden_collapses_and_misses_hits() {
 ///
 /// Red-check: delete `RenderOffstage::excludes_semantics_subtree`; the child's
 /// labelled semantics node reappears in the tree.
-#[test]
 fn harness_offstage_hidden_drops_its_semantics_subtree() {
     let annotated = || {
         box_node(
@@ -2113,7 +2089,6 @@ fn harness_offstage_hidden_drops_its_semantics_subtree() {
     );
 }
 
-#[test]
 fn harness_opacity_paints_with_alpha_layer() {
     let run = RenderTester::mount(
         box_node(RenderOpacity::new(0.5))
@@ -2144,7 +2119,6 @@ fn animation_from(controller: &AnimationController) -> ProxyAnimation<f64> {
     ProxyAnimation::new(parent)
 }
 
-#[test]
 fn harness_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255() {
     for (value, expect_layer) in [(0.0, false), (0.5, true), (1.0, false)] {
         let controller = ticking_controller(100, value);
@@ -2169,7 +2143,6 @@ fn harness_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255
     }
 }
 
-#[test]
 fn harness_semantics_annotations_builds_semantics_node_and_passes_layout() {
     let mut properties = SemanticsProperties::new()
         .with_label("Submit")
@@ -2203,7 +2176,6 @@ fn harness_semantics_annotations_builds_semantics_node_and_passes_layout() {
     assert_eq!(node.config().is_toggled(), Some(false));
 }
 
-#[test]
 fn harness_indexed_semantics_reports_its_index_and_only_republishes_on_change() {
     let run = RenderTester::mount(
         box_node(RenderIndexedSemantics::new(11))
@@ -2242,7 +2214,6 @@ fn harness_indexed_semantics_reports_its_index_and_only_republishes_on_change() 
     assert_eq!(object.index(), 12);
 }
 
-#[test]
 fn harness_merge_semantics_collapses_descendant_boundaries() {
     let alpha = SemanticsProperties::new().with_label("Alpha");
     let beta = SemanticsProperties::new()
@@ -2276,7 +2247,6 @@ fn harness_merge_semantics_collapses_descendant_boundaries() {
     assert!(label.contains("Alpha") && label.contains("Beta"));
 }
 
-#[test]
 fn harness_exclude_semantics_drops_descendant_content_but_keeps_layout() {
     let hidden = SemanticsProperties::new().with_label("Hidden");
 
@@ -2309,7 +2279,6 @@ fn harness_exclude_semantics_drops_descendant_content_but_keeps_layout() {
     );
 }
 
-#[test]
 fn harness_transform_paints_with_transform_layer() {
     let run = RenderTester::mount(
         box_node(RenderTransform::uniform_scale(2.0))
@@ -2322,7 +2291,6 @@ fn harness_transform_paints_with_transform_layer() {
     assert!(run.structure().contains(&"Transform"));
 }
 
-#[test]
 fn harness_fitted_box_preserves_aspect_ratio_when_sizing_box() {
     // child 100×50 (aspect 2.0); under maxW=60 with loose height, Contain sizes
     // the BOX preserving aspect → (60, 30), not a plain clamp (60, 50). Flutter
@@ -2342,7 +2310,6 @@ fn harness_fitted_box_preserves_aspect_ratio_when_sizing_box() {
     assert_eq!(run.box_geometry(run.root()), Size::new(60.0, 30.0));
 }
 
-#[test]
 fn harness_fractionally_sized_box_applies_width_factor() {
     let run = RenderTester::mount(
         box_node(RenderFractionallySizedBox::new().with_width_factor(FractionFactor::HALF))
@@ -2354,7 +2321,6 @@ fn harness_fractionally_sized_box_applies_width_factor() {
     assert_eq!(run.box_geometry(run.id("child")).width, 100.0);
 }
 
-#[test]
 fn harness_fractional_translation_hits_shifted_child_outside_own_bounds() {
     // translation (1.0, 0.0) shifts the 40×40 child to visual x ∈ [40, 80). A
     // pointer at (50, 20) is OUTSIDE the box's own [0,40) bounds but inside the
@@ -2373,7 +2339,6 @@ fn harness_fractional_translation_hits_shifted_child_outside_own_bounds() {
     assert_eq!(run.hit_first(50.0, 20.0), Some(run.id("child")));
 }
 
-#[test]
 fn harness_decorated_box_circle_shape_hit_test_misses_the_corner() {
     // BoxShape::Circle inscribes the circle in the shorter side (here: the
     // full 100x100 square, r=50, centered at (50,50)). (4,4) is inside the
@@ -2403,7 +2368,6 @@ fn harness_decorated_box_circle_shape_hit_test_misses_the_corner() {
     );
 }
 
-#[test]
 fn harness_decorated_box_paints_background_before_child() {
     // Flutter parity: proxy_box.dart `RenderDecoratedBox.paint` (3.44.0) — with
     // the default `DecorationPosition::Background`, the decoration's fill must
@@ -2447,7 +2411,6 @@ fn harness_decorated_box_paints_background_before_child() {
     );
 }
 
-#[test]
 fn harness_clip_rect_self_describes() {
     let run = RenderTester::mount(
         box_node(RenderClipRect::new(Clip::HardEdge))
@@ -2460,7 +2423,6 @@ fn harness_clip_rect_self_describes() {
     assert_eq!(run.box_geometry(run.root()), Size::new(40.0, 40.0));
 }
 
-#[test]
 fn harness_clip_rrect_wraps_child() {
     let run = RenderTester::mount(
         box_node(RenderClipRRect::new(Clip::AntiAlias))
@@ -2473,7 +2435,6 @@ fn harness_clip_rrect_wraps_child() {
     assert_eq!(run.box_geometry(run.root()), Size::new(40.0, 40.0));
 }
 
-#[test]
 fn harness_clip_oval_wraps_child() {
     let run = RenderTester::mount(
         box_node(RenderClipOval::new(Clip::AntiAlias))
@@ -2486,7 +2447,6 @@ fn harness_clip_oval_wraps_child() {
     assert_eq!(run.box_geometry(run.root()), Size::new(40.0, 40.0));
 }
 
-#[test]
 fn harness_clip_path_wraps_child() {
     let run = RenderTester::mount(
         box_node(RenderClipPath::new(Clip::AntiAlias))
@@ -2509,7 +2469,6 @@ fn solid_white_shader() -> Shader {
     Shader::solid(Color::WHITE)
 }
 
-#[test]
 fn harness_shader_mask_paints_with_shader_mask_layer() {
     let run = RenderTester::mount(
         box_node(RenderShaderMask::new(solid_white_shader()))
@@ -2522,7 +2481,6 @@ fn harness_shader_mask_paints_with_shader_mask_layer() {
     assert!(run.structure().contains(&"ShaderMask"));
 }
 
-#[test]
 fn harness_backdrop_filter_paints_with_backdrop_filter_layer() {
     let run = RenderTester::mount(
         box_node(RenderBackdropFilter::new(ImageFilter::blur(5.0)))
@@ -2539,7 +2497,6 @@ fn harness_backdrop_filter_paints_with_backdrop_filter_layer() {
 // RenderLeaderLayer / RenderFollowerLayer
 // ============================================================================
 
-#[test]
 fn harness_leader_layer_always_pushes_layer_even_with_zero_children() {
     // Regression test for the highest-risk trap in the design research
     // plan: unlike ShaderMask/BackdropFilter's OWN no-child
@@ -2597,7 +2554,6 @@ fn harness_leader_layer_always_pushes_layer_even_with_zero_children() {
 /// `resolve_follower_offset` must sum BOTH ancestor chains to their common
 /// ancestor (summing `branch_a`'s (50,60) and subtracting `branch_b`'s
 /// (0,0)) rather than assuming a shared parent or a same-numbered offset.
-#[test]
 fn harness_follower_layer_hit_tests_at_resolved_position_across_repaint_boundaries() {
     let link = LayerLink::new();
 
@@ -2657,7 +2613,6 @@ fn harness_follower_layer_hit_tests_at_resolved_position_across_repaint_boundari
 // RenderPhysicalModel / RenderPhysicalShape
 // ============================================================================
 
-#[test]
 fn harness_physical_model_elevation_casts_shadow_before_fill_and_child() {
     let run = RenderTester::mount(
         box_node(RenderPhysicalModel::new(Color::WHITE).with_elevation(4.0))
@@ -2703,7 +2658,6 @@ fn harness_physical_model_elevation_casts_shadow_before_fill_and_child() {
 // or "always fill inside" (either would double-paint or bleed an edge).
 //
 
-#[test]
 fn harness_physical_shape_hit_test_triangular_clipper() {
     let lane = InteractionLane::try_new().expect("interaction lane");
     let handle = lane.dispatch_handle();
@@ -2741,7 +2695,6 @@ fn harness_physical_shape_hit_test_triangular_clipper() {
     );
 }
 
-#[test]
 fn harness_repaint_boundary_splits_layer_tree() {
     let run = RenderTester::mount(
         box_node(RenderRepaintBoundary::new())
@@ -2753,7 +2706,6 @@ fn harness_repaint_boundary_splits_layer_tree() {
     assert_eq!(run.structure(), vec!["Offset", "Picture"]);
 }
 
-#[test]
 fn harness_metadata_with_payload() {
     let run = RenderTester::mount(
         box_node(RenderMetaData::new().with_metadata(42u32))
@@ -2774,7 +2726,6 @@ fn harness_metadata_with_payload() {
 // Multi-child box objects
 // ============================================================================
 
-#[test]
 fn harness_flex_row_positions_children_on_main_axis() {
     let run = RenderTester::mount(
         box_node(RenderFlex::row())
@@ -2793,7 +2744,6 @@ fn harness_flex_row_positions_children_on_main_axis() {
     );
 }
 
-#[test]
 fn harness_stack_positioned_child_layout_and_hit_test() {
     let run = RenderTester::mount(
         box_node(RenderStack::new())
@@ -2812,7 +2762,6 @@ fn harness_stack_positioned_child_layout_and_hit_test() {
     assert_eq!(run.hit_first(5.0, 5.0), Some(run.id("base")));
 }
 
-#[test]
 fn harness_indexed_stack_sizes_like_stack_but_only_paints_and_hits_selected_child() {
     let run = RenderTester::mount(
         box_node(RenderIndexedStack::new().with_index(Some(1)))
@@ -2855,7 +2804,6 @@ fn harness_indexed_stack_sizes_like_stack_but_only_paints_and_hits_selected_chil
     );
 }
 
-#[test]
 fn harness_list_body_vertical_down_stretches_cross_axis_and_hits_children() {
     let constraints = BoxConstraints::new(0.0, 100.0, 0.0, f64::INFINITY);
     let run = RenderTester::mount(
@@ -2891,7 +2839,6 @@ fn harness_list_body_vertical_down_stretches_cross_axis_and_hits_children() {
 /// A hidden `RenderVisibility` keeps its child's geometry — that is the whole
 /// contract `Visibility::maintain_size` rests on, so it is asserted as
 /// geometry rather than inferred from the flag.
-#[test]
 fn harness_visibility_keeps_child_geometry_while_hidden() {
     for visible in [true, false] {
         let run = RenderTester::mount(
@@ -2914,7 +2861,6 @@ fn harness_visibility_keeps_child_geometry_while_hidden() {
     }
 }
 
-#[test]
 fn harness_absorb_pointer_blocks_child_hits() {
     let run = RenderTester::mount(
         box_node(RenderStack::new())
@@ -2933,7 +2879,6 @@ fn harness_absorb_pointer_blocks_child_hits() {
     assert!(!path.contains(&run.id("inner")));
 }
 
-#[test]
 fn harness_ignore_pointer_lets_hits_pass_to_sibling_below() {
     let run = RenderTester::mount(
         box_node(RenderStack::new())
@@ -2954,7 +2899,6 @@ fn harness_ignore_pointer_lets_hits_pass_to_sibling_below() {
 // Sliver objects (via viewport host)
 // ============================================================================
 
-#[test]
 fn harness_sliver_fixed_extent_list_geometry() {
     let run = RenderTester::mount(viewport(
         fixed_extent_list(
@@ -3033,7 +2977,6 @@ fn harness_sliver_fixed_extent_list_geometry() {
 /// commits `attached_child_count`, so the panic leaves both the resident
 /// count and the committed offsets exactly as the last successful pass left
 /// them.
-#[test]
 fn harness_render_sliver_grid_hit_test_keeps_pre_panic_band_after_a_poisoned_relayout() {
     #[derive(Debug)]
     struct ZeroCrossAxisCountDelegate;
@@ -3171,7 +3114,6 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_panic_band_after_a_poisoned_rel
 // wrong in `RenderSliverGrid`'s own (correct, checked separately by the two
 // hit-test cases above) behavior.
 
-#[test]
 fn harness_sliver_padding_insets_geometry() {
     let run = RenderTester::mount(viewport(
         sliver_node(RenderSliverPadding::symmetric(10.0, 0.0))
@@ -3196,7 +3138,6 @@ fn harness_sliver_padding_insets_geometry() {
     );
 }
 
-#[test]
 fn harness_sliver_to_box_adapter_scroll_extent_matches_child() {
     let run = RenderTester::mount(viewport(
         sliver_node(RenderSliverToBoxAdapter::new())
@@ -3214,7 +3155,6 @@ fn harness_sliver_to_box_adapter_scroll_extent_matches_child() {
     );
 }
 
-#[test]
 fn harness_sliver_fill_viewport_fraction() {
     let run = RenderTester::mount(viewport(
         sliver_node(RenderSliverFillViewport::new(0.5))
@@ -3233,7 +3173,6 @@ fn harness_sliver_fill_viewport_fraction() {
     );
 }
 
-#[test]
 fn harness_sliver_fill_remaining_uses_viewport_remainder() {
     let run = RenderTester::mount(viewport(
         sliver_node(RenderSliverFillRemaining::new())
@@ -3249,7 +3188,6 @@ fn harness_sliver_fill_remaining_uses_viewport_remainder() {
     assert_has_committed_geometry(node);
 }
 
-#[test]
 fn harness_sliver_fill_remaining_and_overscroll_fills_viewport() {
     let run = RenderTester::mount(viewport(
         sliver_node(RenderSliverFillRemainingAndOverscroll::new())
@@ -3268,7 +3206,6 @@ fn harness_sliver_fill_remaining_and_overscroll_fills_viewport() {
     assert_has_committed_geometry(node);
 }
 
-#[test]
 fn harness_sliver_fill_remaining_with_scrollable_reports_full_scroll_extent() {
     let run = RenderTester::mount(viewport(
         sliver_node(RenderSliverFillRemainingWithScrollable::new())
@@ -3287,7 +3224,6 @@ fn harness_sliver_fill_remaining_with_scrollable_reports_full_scroll_extent() {
     assert_has_committed_geometry(node);
 }
 
-#[test]
 fn harness_sliver_ignore_pointer_blocks_hits_when_active() {
     let run = RenderTester::mount(viewport(
         sliver_node(RenderSliverIgnorePointer::new(true))
@@ -3309,7 +3245,6 @@ fn harness_sliver_ignore_pointer_blocks_hits_when_active() {
 
 // ─── RenderSliverList (request seam — INERT without a child manager) ─────────
 
-#[test]
 fn harness_sliver_list_seeded_residents_laid_out_at_expected_offsets() {
     // Pre-seed 2 arena-resident children at logical indices 0 and 1 (48 px
     // each).  With no scrolling and a 3-item list, items 0 and 1 are present
@@ -3367,7 +3302,6 @@ fn harness_sliver_list_seeded_residents_laid_out_at_expected_offsets() {
     );
 }
 
-#[test]
 fn harness_sliver_list_anchor_correction_emits_in_both_scroll_directions() {
     // Two-pass test for the anchor-correction state machine.
     //
@@ -3458,7 +3392,6 @@ fn harness_sliver_list_anchor_correction_emits_in_both_scroll_directions() {
     );
 }
 
-#[test]
 fn harness_sliver_offstage_hidden_reports_zero_geometry() {
     let run = RenderTester::mount(viewport(
         sliver_node(RenderSliverOffstage::hidden())
@@ -3483,7 +3416,6 @@ fn harness_sliver_offstage_hidden_reports_zero_geometry() {
 // defect this pins: reporting `Some(0)` through `paint_effects().opacity`
 // makes the owner wrap the child in a 0-alpha OpacityLayer (present in
 // structure); the correct answer at alpha=0 is `None`, no layer emitted.
-#[test]
 fn harness_sliver_opacity_alpha_zero_emits_no_opacity_layer() {
     let run = RenderTester::mount(viewport(
         sliver_node(RenderSliverOpacity::transparent()) // alpha = 0
@@ -3532,7 +3464,6 @@ fn animated_opacity_sliver_spec(controller: AnimationController) -> TreeNode {
     ))
 }
 
-#[test]
 fn harness_sliver_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255() {
     for (value, expect_layer) in [(0.0, false), (0.5, true), (1.0, false)] {
         let run = RenderTester::mount(viewport(animated_opacity_sliver_spec(ticking_controller(
@@ -3551,7 +3482,6 @@ fn harness_sliver_animated_opacity_paint_alpha_tracks_controller_value_at_0_part
     }
 }
 
-#[test]
 fn harness_viewport_stacks_two_slivers() {
     let run = RenderTester::mount(viewport_multi([
         fixed_extent_list(20.0, vec![box_node(RenderColoredBox::red(300.0, 1000.0))])
@@ -3603,7 +3533,6 @@ fn harness_viewport_stacks_two_slivers() {
 // `sliver_scroll_offset`.
 //
 
-#[test]
 fn harness_shrink_wrapping_viewport_sizes_to_sliver_extent_under_unbounded_main_axis() {
     let run = RenderTester::mount(shrink_wrapping_viewport(
         fixed_extent_list(
@@ -3724,7 +3653,6 @@ impl RenderBox for PanicAfterNBoxLayouts {
 
 impl flui_foundation::Diagnosticable for PanicAfterNBoxLayouts {}
 
-#[test]
 fn harness_viewport_degraded_pass_does_not_move_the_scroll_position() {
     use flui_rendering::view::{ScrollPosition, ViewportOffset};
 
@@ -3814,7 +3742,6 @@ fn harness_viewport_degraded_pass_does_not_move_the_scroll_position() {
 /// is an adapter over a box that panics after its first layout. The window
 /// plus its 250 px cache reaches 650 px, so that adapter — at 800..1200 — is
 /// beyond it and is exactly the child the cache path serves.
-#[test]
 fn harness_viewport_does_not_serve_a_cache_built_by_a_degraded_pass() {
     use flui_rendering::view::ScrollPosition;
 
@@ -3900,7 +3827,6 @@ fn harness_viewport_does_not_serve_a_cache_built_by_a_degraded_pass() {
 // ============================================================================
 
 // BOTTOM_RIGHT alignment: free space = 60×60 → offset = (60,60).
-#[test]
 fn harness_align_bottom_right_places_child_at_free_space() {
     let run = RenderTester::mount(
         box_node(RenderAlign::new(Alignment::BOTTOM_RIGHT))
@@ -3920,7 +3846,6 @@ fn harness_align_bottom_right_places_child_at_free_space() {
 // Wrap
 // ============================================================================
 
-#[test]
 fn harness_render_wrap_wraps_to_second_run() {
     // Three 40×40 boxes in a max-100-wide loose constraint.
     // Run 1: a(40) + b(40) = 80 ≤ 100. Run 2: c(40) wraps.
@@ -3957,7 +3882,6 @@ fn harness_render_wrap_wraps_to_second_run() {
 // ---- Oracle port: rendering/intrinsic_width_test.dart (3.44.0) ------------
 
 /// Oracle: `test('Shrink-wrapping width', ...)`.
-#[test]
 fn harness_intrinsic_width_shrink_wrapping_width_oracle() {
     let mut run = RenderTester::mount(
         box_node(RenderIntrinsicWidth::unconstrained())
@@ -4000,7 +3924,6 @@ fn harness_intrinsic_width_shrink_wrapping_width_oracle() {
 /// intrinsic it receives so the harness can assert equality.  It is
 /// GREEN after Slice 1 (channel wired) and would be RED before it
 /// (the accessor did not exist).
-#[test]
 fn harness_dry_layout_child_intrinsic_channel_matches_standalone_query() {
     use std::sync::{Arc, Mutex};
 
@@ -4113,7 +4036,6 @@ fn harness_dry_layout_child_intrinsic_channel_matches_standalone_query() {
 // RenderIntrinsicWidth's.)
 
 /// Oracle: `test('Shrink-wrapping height', ...)`.
-#[test]
 fn harness_intrinsic_height_shrink_wrapping_height_oracle() {
     let mut run = RenderTester::mount(
         box_node(RenderIntrinsicHeight::new())
@@ -4145,7 +4067,6 @@ fn harness_intrinsic_height_shrink_wrapping_height_oracle() {
 // RenderConstrainedOverflowBox
 // ============================================================================
 
-#[test]
 fn harness_constrained_overflow_box_max_fit_claims_full_parent() {
     // Max fit (default): OverflowBox claims all of its loose parent space.
     let run = RenderTester::mount(
@@ -4167,7 +4088,6 @@ fn harness_constrained_overflow_box_max_fit_claims_full_parent() {
 // RenderSizedOverflowBox
 // ============================================================================
 
-#[test]
 fn harness_sized_overflow_box_child_lays_out_under_incoming_constraints() {
     // Key contract: child sees the PARENT constraints, not the requested size.
     // Under loose(200) the child (fixed 40×40 ColoredBox) stays at 40×40,
@@ -4190,7 +4110,6 @@ fn harness_sized_overflow_box_child_lays_out_under_incoming_constraints() {
 // RenderConstraintsTransformBox
 // ============================================================================
 
-#[test]
 fn harness_constraints_transform_box_reports_overflow_when_child_exceeds_own_size() {
     let mut run = RenderTester::mount(
         box_node(RenderConstraintsTransformBox::new(
@@ -4220,7 +4139,6 @@ fn harness_constraints_transform_box_reports_overflow_when_child_exceeds_own_siz
 // RenderRotatedBox
 // ============================================================================
 
-#[test]
 fn harness_rotated_box_odd_turns_swaps_axes() {
     // 1 quarter turn: child is constrained under flipped constraints (200h×200w),
     // then size is swapped: child 60×40 → parent reports 40×60.
@@ -4324,7 +4242,6 @@ impl FlowDelegate for DegenerateFlowDelegate {
     }
 }
 
-#[test]
 fn harness_flow_paints_children_in_delegate_order_under_per_child_transform_layers() {
     let run = RenderTester::mount(
         box_node(RenderFlow::new(Arc::new(StepFlowDelegate { step: 30.0 })))
@@ -4376,7 +4293,6 @@ fn harness_flow_paints_children_in_delegate_order_under_per_child_transform_laye
     );
 }
 
-#[test]
 fn harness_flow_degenerate_transform_is_never_hit_but_siblings_still_are() {
     let run = RenderTester::mount(
         box_node(RenderFlow::new(Arc::new(DegenerateFlowDelegate)))
@@ -4407,7 +4323,6 @@ fn table_tight_width_loose_height(width: f64, max_height: f64) -> BoxConstraints
     BoxConstraints::new(width, width, 0.0, max_height)
 }
 
-#[test]
 fn harness_table_grid_lays_out_each_cell_at_its_exact_offset_and_size() {
     // 2 columns: Fixed(50) + Flex(1.0, the default) under a tight 200px
     // width -> column widths resolve to [50, 150] (pass 2 grows the flex
@@ -4451,7 +4366,6 @@ fn harness_table_grid_lays_out_each_cell_at_its_exact_offset_and_size() {
     );
 }
 
-#[test]
 fn harness_table_paints_row_decoration_then_children_then_border_in_order() {
     // 1 row x 2 columns, uniform border (so the outer edge is one DrawDRRect)
     // plus a solid `vertical_inside` (so there's exactly one interior line —
@@ -4508,7 +4422,6 @@ fn harness_table_paints_row_decoration_then_children_then_border_in_order() {
     assert!(commands[4].line.contains("#0000FFFF"), "{:?}", commands[4]);
 }
 
-#[test]
 fn harness_table_baseline_alignment_lines_up_cells_on_their_shared_baseline() {
     // Both cells opt into `Baseline` alignment; the table-wide baseline
     // (`before_baseline`) is the max reported baseline in the row (30, from
@@ -4576,7 +4489,6 @@ fn assert_size_approx(actual: Size, expected: Size, eps: f64, what: &str) {
     );
 }
 
-#[test]
 fn harness_render_animated_size_interpolates_over_several_frames_not_snap() {
     let (controller, driver) = animated_size_controller(100);
     let ro = RenderAnimatedSize::new(
@@ -4648,7 +4560,6 @@ fn harness_render_animated_size_interpolates_over_several_frames_not_snap() {
     );
 }
 
-#[test]
 fn harness_render_animated_size_retarget_mid_flight_has_no_discontinuous_jump() {
     let (controller, driver) = animated_size_controller(100);
     let ro = RenderAnimatedSize::new(
@@ -4779,7 +4690,6 @@ fn filler_sliver() -> TreeNode {
         .child(box_node(RenderColoredBox::red(300.0, 2000.0)).label("filler_child"))
 }
 
-#[test]
 fn harness_sliver_persistent_header_scrolling_shrinks_then_scrolls_off() {
     let header = RenderSliverScrollingPersistentHeader::new(40.0, 120.0);
     let mut run = RenderTester::mount(viewport_multi_with_scroll(
@@ -4840,7 +4750,6 @@ fn harness_sliver_persistent_header_scrolling_shrinks_then_scrolls_off() {
     );
 }
 
-#[test]
 fn harness_sliver_persistent_header_pinned_stays_at_zero_and_reports_max_scroll_obstruction_extent()
 {
     let header = RenderSliverPinnedPersistentHeader::new(40.0, 120.0);
@@ -4899,7 +4808,6 @@ fn harness_sliver_persistent_header_pinned_stays_at_zero_and_reports_max_scroll_
     );
 }
 
-#[test]
 fn harness_sliver_persistent_header_floating_reveals_on_reverse_scroll_and_pointer_scroll_start_direction_permits_reveal()
  {
     let header: RenderSliverFloatingPersistentHeader =
@@ -4997,7 +4905,6 @@ fn harness_sliver_persistent_header_floating_reveals_on_reverse_scroll_and_point
     );
 }
 
-#[test]
 fn harness_sliver_persistent_header_floating_pinned_shares_reveal_sequence_but_clamps_paint_extent_and_stays_pinned()
  {
     // Same re-reveal state machine as plain Floating (shared, not
@@ -5073,7 +4980,6 @@ fn harness_sliver_persistent_header_floating_pinned_shares_reveal_sequence_but_c
 /// placeholder, and not a default. This is the regression that catches a
 /// reprise of the pre-rewrite `LayoutBuilder`, whose builder was handed
 /// `BoxConstraints::UNCONSTRAINED` (commit `bb58a8fa`).
-#[test]
 fn harness_layout_builder_publishes_the_real_incoming_constraints() {
     let cell = Arc::new(LayoutConstraintsCell::new());
     let incoming = BoxConstraints::new(10.0, 120.0, 20.0, 90.0);
@@ -5104,13 +5010,17 @@ fn harness_layout_builder_publishes_the_real_incoming_constraints() {
 fn catalog_covers_every_render_object_name() {
     let source = include_str!("render_object_harness.rs");
     for &type_name in RENDER_OBJECT_TYPES {
-        let covered = source
-            .split("#[test]")
-            .skip(1)
-            .any(|chunk| chunk.contains("fn harness_") && chunk.contains(type_name));
+        // A row body ends at the first closing brace in column 0; the family
+        // tables and these guards sit after the last row and must not count.
+        let covered = source.split("\nfn harness_").skip(1).any(|chunk| {
+            chunk
+                .split("\n}\n")
+                .next()
+                .is_some_and(|body| body.contains(type_name))
+        });
         assert!(
             covered,
-            "{type_name} must appear in at least one `#[test] fn harness_*` block",
+            "{type_name} must appear in at least one `fn harness_*` family-table row",
         );
     }
 }
@@ -5156,7 +5066,6 @@ fn render_object_types_match_exports() {
 /// not hit-tested. Flutter's `_childrenInPaintOrder` / `_childrenInHitTestOrder`
 /// both start at `_firstOnstageChild` (`overlay.dart:1424-1458`), and
 /// `performLayout` only walks paint order (`:1481-1484`).
-#[test]
 fn harness_theater_skips_leading_children_in_layout_paint_and_hit_test() {
     let run = RenderTester::mount(
         box_node(RenderTheater::new().with_skip_count(1))
@@ -5223,7 +5132,6 @@ fn harness_theater_skips_leading_children_in_layout_paint_and_hit_test() {
 
 /// Nesting the two override cases inside a transforming ancestor: the walk must
 /// compose every level, outermost first.
-#[test]
 fn harness_transform_to_composes_a_whole_chain() {
     let run = RenderTester::mount(
         box_node(RenderTransform::uniform_scale(2.0))
@@ -5268,7 +5176,6 @@ fn assert_transform_point(x: f64, y: f64, expected_x: f64, expected_y: f64, what
 
 /// `attach` publishes the render object's **real** id — the one the pipeline
 /// knows it by, not a fabricated or zeroed placeholder.
-#[test]
 fn harness_subtree_anchor_attach_publishes_the_real_render_id() {
     let anchor = SubtreeAnchor::new();
     assert_eq!(anchor.get(), None, "an anchor names nothing before mount");
@@ -5290,7 +5197,6 @@ fn harness_subtree_anchor_attach_publishes_the_real_render_id() {
     assert!(anchor.is_anchored());
 }
 
-#[test]
 fn harness_sliver_main_axis_group_composes_scroll_extents_and_places_children() {
     let run = RenderTester::mount(viewport(
         sliver_node(RenderSliverMainAxisGroup::new())
@@ -5336,7 +5242,6 @@ fn harness_sliver_main_axis_group_composes_scroll_extents_and_places_children() 
 /// Oracle: `rendering/table.dart` groups `intrinsicHeight` with
 /// `top`/`middle`/`bottom` in the measure pass (`:1401-1405`) and with `fill`
 /// in the position pass (`:1437-1441`).
-#[test]
 fn harness_table_intrinsic_height_measures_the_row_then_stretches_every_cell_to_it() {
     let run = RenderTester::mount(
         box_node(
@@ -5425,7 +5330,6 @@ impl RenderBox for LaysOutFirstN {
 /// (`placed_by == 0`) rather than as skipped. The gate therefore excludes only
 /// children a parent once laid out and then dropped — this case — and leaves
 /// alone the ones it never touched, which is what that harness fixture has.
-#[test]
 fn harness_placed_generation_gate_excludes_a_dropped_child_from_semantics() {
     let labelled = |label: &str| {
         box_node(
@@ -5499,7 +5403,6 @@ fn harness_placed_generation_gate_excludes_a_dropped_child_from_semantics() {
 ///
 /// Red without `RenderTheater::visits_child_for_semantics`: the covered entry
 /// is announced.
-#[test]
 fn harness_theater_offstage_from_the_first_pass_publishes_no_semantics() {
     let labelled = |label: &str| {
         box_node(
@@ -5547,7 +5450,6 @@ fn harness_theater_offstage_from_the_first_pass_publishes_no_semantics() {
 /// suite passes with the flip hard-coded to `false`, so the behaviour lived
 /// entirely on widget-level coverage one layer up. This pins it where it is
 /// implemented.
-#[test]
 fn harness_flex_row_rtl_lays_children_out_from_the_right() {
     let row = |direction| {
         RenderTester::mount(
@@ -5605,7 +5507,6 @@ fn harness_flex_row_rtl_lays_children_out_from_the_right() {
 ///   children make that invisible;
 /// * with no free space, `Start` lands on the same coordinate whether or not
 ///   the alignment itself is flipped, so the test cannot see that half at all.
-#[test]
 fn harness_wrap_horizontal_rtl_packs_its_run_against_the_right_edge() {
     let wrap = |direction| {
         RenderTester::mount(
@@ -5655,7 +5556,6 @@ fn harness_wrap_horizontal_rtl_packs_its_run_against_the_right_edge() {
     );
 }
 
-#[test]
 fn harness_subtree_anchor_detach_preserves_replacement_publication() {
     use flui_rendering::pipeline::PipelineOwner;
     use flui_rendering::protocol::BoxProtocol;
@@ -5668,4 +5568,537 @@ fn harness_subtree_anchor_detach_preserves_replacement_publication() {
     assert_eq!(anchor.get(), Some(second));
     owner.remove_render_object(second);
     assert_eq!(anchor.get(), None);
+}
+
+// ============================================================================
+// Family tables: one `#[test]` per family, one row per render object
+// ============================================================================
+
+type Case = (&'static str, fn());
+
+/// Runs every row of a family and names each failing row, so one broken
+/// render object cannot hide the rest of its family.
+fn run_family(family: &str, cases: &[Case]) {
+    let mut failed = Vec::new();
+    for &(name, case) in cases {
+        if std::panic::catch_unwind(case).is_err() {
+            failed.push(name);
+        }
+    }
+    assert!(failed.is_empty(), "{family}: failing rows: {failed:?}");
+}
+
+#[test]
+fn family_sizing() {
+    run_family(
+        "sizing",
+        &[
+            (
+                "sized_box_forces_dimensions",
+                harness_sized_box_forces_dimensions,
+            ),
+            (
+                "aspect_ratio_enforces_ratio",
+                harness_aspect_ratio_enforces_ratio,
+            ),
+            (
+                "constrained_box_enforces_minimums",
+                harness_constrained_box_enforces_minimums,
+            ),
+            (
+                "limited_box_caps_unbounded_width_in_row",
+                harness_limited_box_caps_unbounded_width_in_row,
+            ),
+            (
+                "fitted_box_preserves_aspect_ratio_when_sizing_box",
+                harness_fitted_box_preserves_aspect_ratio_when_sizing_box,
+            ),
+            (
+                "fractionally_sized_box_applies_width_factor",
+                harness_fractionally_sized_box_applies_width_factor,
+            ),
+            (
+                "constrained_overflow_box_max_fit_claims_full_parent",
+                harness_constrained_overflow_box_max_fit_claims_full_parent,
+            ),
+            (
+                "sized_overflow_box_child_lays_out_under_incoming_constraints",
+                harness_sized_overflow_box_child_lays_out_under_incoming_constraints,
+            ),
+            (
+                "constraints_transform_box_reports_overflow_when_child_exceeds_own_size",
+                harness_constraints_transform_box_reports_overflow_when_child_exceeds_own_size,
+            ),
+            (
+                "rotated_box_odd_turns_swaps_axes",
+                harness_rotated_box_odd_turns_swaps_axes,
+            ),
+            (
+                "layout_builder_publishes_the_real_incoming_constraints",
+                harness_layout_builder_publishes_the_real_incoming_constraints,
+            ),
+        ],
+    );
+}
+
+#[test]
+fn family_intrinsics() {
+    run_family(
+        "intrinsics",
+        &[
+            (
+                "intrinsic_width_shrink_wrapping_width_oracle",
+                harness_intrinsic_width_shrink_wrapping_width_oracle,
+            ),
+            (
+                "dry_layout_child_intrinsic_channel_matches_standalone_query",
+                harness_dry_layout_child_intrinsic_channel_matches_standalone_query,
+            ),
+            (
+                "intrinsic_height_shrink_wrapping_height_oracle",
+                harness_intrinsic_height_shrink_wrapping_height_oracle,
+            ),
+        ],
+    );
+}
+
+#[test]
+fn family_alignment() {
+    run_family(
+        "alignment",
+        &[
+            (
+                "padding_deflates_child_offset",
+                harness_padding_deflates_child_offset,
+            ),
+            ("center_centers_child", harness_center_centers_child),
+            (
+                "align_bottom_right_places_child_at_free_space",
+                harness_align_bottom_right_places_child_at_free_space,
+            ),
+            (
+                "baseline_positions_text_at_offset",
+                harness_baseline_positions_text_at_offset,
+            ),
+            (
+                "baseline_dry_baseline_recomputes_per_kind_offsets_after_relayout",
+                harness_baseline_dry_baseline_recomputes_per_kind_offsets_after_relayout,
+            ),
+            (
+                "ignore_baseline_hides_its_child_from_a_baseline_row",
+                harness_ignore_baseline_hides_its_child_from_a_baseline_row,
+            ),
+            (
+                "fractional_translation_hits_shifted_child_outside_own_bounds",
+                harness_fractional_translation_hits_shifted_child_outside_own_bounds,
+            ),
+            (
+                "custom_single_child_layout_positions_child_with_delegate",
+                harness_custom_single_child_layout_positions_child_with_delegate,
+            ),
+            (
+                "custom_multi_child_layout_positions_children_by_layout_id",
+                harness_custom_multi_child_layout_positions_children_by_layout_id,
+            ),
+        ],
+    );
+}
+
+#[test]
+fn family_content_paint() {
+    run_family(
+        "content_paint",
+        &[
+            (
+                "colored_box_self_describes_and_paints",
+                harness_colored_box_self_describes_and_paints,
+            ),
+            (
+                "render_error_box_fills_bounded_constraints_and_paints",
+                harness_render_error_box_fills_bounded_constraints_and_paints,
+            ),
+            (
+                "render_error_box_falls_back_to_a_finite_extent_on_an_unbounded_axis",
+                harness_render_error_box_falls_back_to_a_finite_extent_on_an_unbounded_axis,
+            ),
+            (
+                "custom_paint_orders_background_child_foreground",
+                harness_custom_paint_orders_background_child_foreground,
+            ),
+            ("metadata_with_payload", harness_metadata_with_payload),
+            (
+                "decorated_box_circle_shape_hit_test_misses_the_corner",
+                harness_decorated_box_circle_shape_hit_test_misses_the_corner,
+            ),
+            (
+                "decorated_box_paints_background_before_child",
+                harness_decorated_box_paints_background_before_child,
+            ),
+            (
+                "container_matches_the_widget_stack_it_collapses",
+                harness_container_matches_the_widget_stack_it_collapses,
+            ),
+            (
+                "container_childless_fills_bounded_and_collapses_unbounded",
+                harness_container_childless_fills_bounded_and_collapses_unbounded,
+            ),
+            (
+                "container_singular_transform_paints_and_hits_nothing",
+                harness_container_singular_transform_paints_and_hits_nothing,
+            ),
+        ],
+    );
+}
+
+#[test]
+fn family_text_and_image() {
+    run_family(
+        "text_and_image",
+        &[
+            (
+                "image_paints_placeholder_frame",
+                harness_image_paints_placeholder_frame,
+            ),
+            (
+                "paragraph_paints_text_frame",
+                harness_paragraph_paints_text_frame,
+            ),
+            (
+                "editable_lays_out_and_paints_collapsed_caret",
+                harness_editable_lays_out_and_paints_collapsed_caret,
+            ),
+            (
+                "editable_paints_the_selection_behind_the_glyphs",
+                harness_editable_paints_the_selection_behind_the_glyphs,
+            ),
+            (
+                "editable_composing_underline_paints_at_the_exact_multibyte_box",
+                harness_editable_composing_underline_paints_at_the_exact_multibyte_box,
+            ),
+        ],
+    );
+}
+
+#[test]
+fn family_clips_and_effects() {
+    run_family(
+        "clips_and_effects",
+        &[
+            ("clip_rect_self_describes", harness_clip_rect_self_describes),
+            ("clip_rrect_wraps_child", harness_clip_rrect_wraps_child),
+            ("clip_oval_wraps_child", harness_clip_oval_wraps_child),
+            ("clip_path_wraps_child", harness_clip_path_wraps_child),
+            (
+                "shader_mask_paints_with_shader_mask_layer",
+                harness_shader_mask_paints_with_shader_mask_layer,
+            ),
+            (
+                "backdrop_filter_paints_with_backdrop_filter_layer",
+                harness_backdrop_filter_paints_with_backdrop_filter_layer,
+            ),
+            (
+                "opacity_paints_with_alpha_layer",
+                harness_opacity_paints_with_alpha_layer,
+            ),
+            (
+                "animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255",
+                harness_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255,
+            ),
+            (
+                "transform_paints_with_transform_layer",
+                harness_transform_paints_with_transform_layer,
+            ),
+            (
+                "transform_to_composes_a_whole_chain",
+                harness_transform_to_composes_a_whole_chain,
+            ),
+            (
+                "repaint_boundary_splits_layer_tree",
+                harness_repaint_boundary_splits_layer_tree,
+            ),
+            (
+                "physical_model_elevation_casts_shadow_before_fill_and_child",
+                harness_physical_model_elevation_casts_shadow_before_fill_and_child,
+            ),
+            (
+                "physical_shape_hit_test_triangular_clipper",
+                harness_physical_shape_hit_test_triangular_clipper,
+            ),
+        ],
+    );
+}
+
+#[test]
+fn family_layer_links() {
+    run_family(
+        "layer_links",
+        &[
+            (
+                "leader_layer_always_pushes_layer_even_with_zero_children",
+                harness_leader_layer_always_pushes_layer_even_with_zero_children,
+            ),
+            (
+                "follower_layer_hit_tests_at_resolved_position_across_repaint_boundaries",
+                harness_follower_layer_hit_tests_at_resolved_position_across_repaint_boundaries,
+            ),
+            (
+                "subtree_anchor_attach_publishes_the_real_render_id",
+                harness_subtree_anchor_attach_publishes_the_real_render_id,
+            ),
+            (
+                "subtree_anchor_detach_preserves_replacement_publication",
+                harness_subtree_anchor_detach_preserves_replacement_publication,
+            ),
+        ],
+    );
+}
+
+#[test]
+fn family_visibility() {
+    run_family(
+        "visibility",
+        &[
+            (
+                "offstage_hidden_collapses_and_misses_hits",
+                harness_offstage_hidden_collapses_and_misses_hits,
+            ),
+            (
+                "visibility_keeps_child_geometry_while_hidden",
+                harness_visibility_keeps_child_geometry_while_hidden,
+            ),
+        ],
+    );
+}
+
+#[test]
+fn family_semantics() {
+    run_family(
+        "semantics",
+        &[
+            (
+                "offstage_hidden_drops_its_semantics_subtree",
+                harness_offstage_hidden_drops_its_semantics_subtree,
+            ),
+            (
+                "semantics_annotations_builds_semantics_node_and_passes_layout",
+                harness_semantics_annotations_builds_semantics_node_and_passes_layout,
+            ),
+            (
+                "indexed_semantics_reports_its_index_and_only_republishes_on_change",
+                harness_indexed_semantics_reports_its_index_and_only_republishes_on_change,
+            ),
+            (
+                "merge_semantics_collapses_descendant_boundaries",
+                harness_merge_semantics_collapses_descendant_boundaries,
+            ),
+            (
+                "exclude_semantics_drops_descendant_content_but_keeps_layout",
+                harness_exclude_semantics_drops_descendant_content_but_keeps_layout,
+            ),
+            (
+                "placed_generation_gate_excludes_a_dropped_child_from_semantics",
+                harness_placed_generation_gate_excludes_a_dropped_child_from_semantics,
+            ),
+            (
+                "theater_offstage_from_the_first_pass_publishes_no_semantics",
+                harness_theater_offstage_from_the_first_pass_publishes_no_semantics,
+            ),
+        ],
+    );
+}
+
+#[test]
+fn family_pointer() {
+    run_family(
+        "pointer",
+        &[
+            (
+                "listener_passes_layout_through_and_attaches_handler",
+                harness_listener_passes_layout_through_and_attaches_handler,
+            ),
+            (
+                "mouse_region_uses_one_tracker_target_for_hover_enter_and_exit",
+                harness_mouse_region_uses_one_tracker_target_for_hover_enter_and_exit,
+            ),
+            (
+                "absorb_pointer_blocks_child_hits",
+                harness_absorb_pointer_blocks_child_hits,
+            ),
+            (
+                "ignore_pointer_lets_hits_pass_to_sibling_below",
+                harness_ignore_pointer_lets_hits_pass_to_sibling_below,
+            ),
+        ],
+    );
+}
+
+#[test]
+fn family_multi_child() {
+    run_family(
+        "multi_child",
+        &[
+            (
+                "flex_row_positions_children_on_main_axis",
+                harness_flex_row_positions_children_on_main_axis,
+            ),
+            (
+                "flex_row_rtl_lays_children_out_from_the_right",
+                harness_flex_row_rtl_lays_children_out_from_the_right,
+            ),
+            (
+                "stack_positioned_child_layout_and_hit_test",
+                harness_stack_positioned_child_layout_and_hit_test,
+            ),
+            (
+                "indexed_stack_sizes_like_stack_but_only_paints_and_hits_selected_child",
+                harness_indexed_stack_sizes_like_stack_but_only_paints_and_hits_selected_child,
+            ),
+            (
+                "list_body_vertical_down_stretches_cross_axis_and_hits_children",
+                harness_list_body_vertical_down_stretches_cross_axis_and_hits_children,
+            ),
+            (
+                "theater_skips_leading_children_in_layout_paint_and_hit_test",
+                harness_theater_skips_leading_children_in_layout_paint_and_hit_test,
+            ),
+        ],
+    );
+}
+
+#[test]
+fn family_wrap_flow_table() {
+    run_family(
+        "wrap_flow_table",
+        &[
+            (
+                "render_wrap_wraps_to_second_run",
+                harness_render_wrap_wraps_to_second_run,
+            ),
+            (
+                "wrap_horizontal_rtl_packs_its_run_against_the_right_edge",
+                harness_wrap_horizontal_rtl_packs_its_run_against_the_right_edge,
+            ),
+            (
+                "flow_paints_children_in_delegate_order_under_per_child_transform_layers",
+                harness_flow_paints_children_in_delegate_order_under_per_child_transform_layers,
+            ),
+            (
+                "flow_degenerate_transform_is_never_hit_but_siblings_still_are",
+                harness_flow_degenerate_transform_is_never_hit_but_siblings_still_are,
+            ),
+            (
+                "table_grid_lays_out_each_cell_at_its_exact_offset_and_size",
+                harness_table_grid_lays_out_each_cell_at_its_exact_offset_and_size,
+            ),
+            (
+                "table_paints_row_decoration_then_children_then_border_in_order",
+                harness_table_paints_row_decoration_then_children_then_border_in_order,
+            ),
+            (
+                "table_baseline_alignment_lines_up_cells_on_their_shared_baseline",
+                harness_table_baseline_alignment_lines_up_cells_on_their_shared_baseline,
+            ),
+            (
+                "table_intrinsic_height_measures_the_row_then_stretches_every_cell_to_it",
+                harness_table_intrinsic_height_measures_the_row_then_stretches_every_cell_to_it,
+            ),
+        ],
+    );
+}
+
+#[test]
+fn family_animation() {
+    run_family(
+        "animation",
+        &[
+            (
+                "render_animated_size_interpolates_over_several_frames_not_snap",
+                harness_render_animated_size_interpolates_over_several_frames_not_snap,
+            ),
+            (
+                "render_animated_size_retarget_mid_flight_has_no_discontinuous_jump",
+                harness_render_animated_size_retarget_mid_flight_has_no_discontinuous_jump,
+            ),
+        ],
+    );
+}
+
+#[test]
+fn family_sliver_lists() {
+    run_family("sliver_lists", &[
+        ("sliver_fixed_extent_list_geometry", harness_sliver_fixed_extent_list_geometry),
+        ("sliver_list_seeded_residents_laid_out_at_expected_offsets", harness_sliver_list_seeded_residents_laid_out_at_expected_offsets),
+        ("sliver_list_anchor_correction_emits_in_both_scroll_directions", harness_sliver_list_anchor_correction_emits_in_both_scroll_directions),
+        ("sliver_main_axis_group_composes_scroll_extents_and_places_children", harness_sliver_main_axis_group_composes_scroll_extents_and_places_children),
+        ("scrolling_lazy_request_band", harness_snapshot::scrolling_lazy_sliver_request_band_tracks_scroll_position_and_stays_bounded),
+    ]);
+}
+
+#[test]
+fn family_sliver_wrappers() {
+    run_family("sliver_wrappers", &[
+        ("sliver_padding_insets_geometry", harness_sliver_padding_insets_geometry),
+        ("sliver_to_box_adapter_scroll_extent_matches_child", harness_sliver_to_box_adapter_scroll_extent_matches_child),
+        ("sliver_fill_viewport_fraction", harness_sliver_fill_viewport_fraction),
+        ("sliver_fill_remaining_uses_viewport_remainder", harness_sliver_fill_remaining_uses_viewport_remainder),
+        ("sliver_fill_remaining_and_overscroll_fills_viewport", harness_sliver_fill_remaining_and_overscroll_fills_viewport),
+        ("sliver_fill_remaining_with_scrollable_reports_full_scroll_extent", harness_sliver_fill_remaining_with_scrollable_reports_full_scroll_extent),
+        ("sliver_ignore_pointer_blocks_hits_when_active", harness_sliver_ignore_pointer_blocks_hits_when_active),
+        ("sliver_offstage_hidden_reports_zero_geometry", harness_sliver_offstage_hidden_reports_zero_geometry),
+        ("sliver_opacity_alpha_zero_emits_no_opacity_layer", harness_sliver_opacity_alpha_zero_emits_no_opacity_layer),
+        ("sliver_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255", harness_sliver_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255),
+    ]);
+}
+
+#[test]
+fn family_viewport() {
+    run_family(
+        "viewport",
+        &[
+            (
+                "viewport_stacks_two_slivers",
+                harness_viewport_stacks_two_slivers,
+            ),
+            (
+                "shrink_wrapping_viewport_sizes_to_sliver_extent_under_unbounded_main_axis",
+                harness_shrink_wrapping_viewport_sizes_to_sliver_extent_under_unbounded_main_axis,
+            ),
+        ],
+    );
+}
+
+#[test]
+fn family_persistent_header() {
+    run_family("persistent_header", &[
+        ("sliver_persistent_header_scrolling_shrinks_then_scrolls_off", harness_sliver_persistent_header_scrolling_shrinks_then_scrolls_off),
+        ("sliver_persistent_header_pinned_stays_at_zero_and_reports_max_scroll_obstruction_extent", harness_sliver_persistent_header_pinned_stays_at_zero_and_reports_max_scroll_obstruction_extent),
+        ("sliver_persistent_header_floating_reveals_on_reverse_scroll_and_pointer_scroll_start_direction_permits_reveal", harness_sliver_persistent_header_floating_reveals_on_reverse_scroll_and_pointer_scroll_start_direction_permits_reveal),
+        ("sliver_persistent_header_floating_pinned_shares_reveal_sequence_but_clamps_paint_extent_and_stays_pinned", harness_sliver_persistent_header_floating_pinned_shares_reveal_sequence_but_clamps_paint_extent_and_stays_pinned),
+    ]);
+}
+
+#[test]
+fn family_recovery() {
+    run_family(
+        "recovery",
+        &[
+            #[cfg(debug_assertions)]
+            (
+                "custom_paint_unbalanced_save_poisons_the_paint_phase",
+                harness_custom_paint_unbalanced_save_poisons_the_paint_phase,
+            ),
+            (
+                "render_sliver_grid_hit_test_keeps_pre_panic_band_after_a_poisoned_relayout",
+                harness_render_sliver_grid_hit_test_keeps_pre_panic_band_after_a_poisoned_relayout,
+            ),
+            (
+                "viewport_degraded_pass_does_not_move_the_scroll_position",
+                harness_viewport_degraded_pass_does_not_move_the_scroll_position,
+            ),
+            (
+                "viewport_does_not_serve_a_cache_built_by_a_degraded_pass",
+                harness_viewport_does_not_serve_a_cache_built_by_a_degraded_pass,
+            ),
+        ],
+    );
 }

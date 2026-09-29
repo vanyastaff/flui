@@ -787,7 +787,6 @@ mod tests {
     /// The control matters: the same chain with an ABSENT primary reaches
     /// `Roboto`, so the stop is about presence and not about the chain being
     /// unread.
-    #[test]
     fn a_present_but_narrow_family_stops_the_chain_where_flutter_would_not() {
         let mut system = font_system(database(&[ROBOTO, MATERIAL_ICONS]));
         let mut installed = InstalledFamilies::default();
@@ -904,7 +903,6 @@ mod tests {
     /// Its hermetic counterpart,
     /// `an_uninstalled_family_shapes_in_the_bound_generic_both_ways`, pins the
     /// same fix through family selection and needs no fixture at all.
-    #[test]
     fn oversized_space_from_an_emoji_face_is_closed() {
         let style = styled(Some("CupertinoSystemText"));
         let fixture = || database(&[ROBOTO, DECOY_WIDE_SPACE]);
@@ -938,6 +936,31 @@ mod tests {
         assert!(
             em < 0.5,
             "a space of {em} em is a foreign face's advance, not a text face's"
+        );
+    }
+
+    /// Font resolution rows: each names the family-selection rule it pins.
+    #[test]
+    fn family_resolution_contract() {
+        let cases: [(&str, fn()); 2] = [
+            (
+                "a_present_but_narrow_family_stops_the_chain",
+                a_present_but_narrow_family_stops_the_chain_where_flutter_would_not,
+            ),
+            (
+                "oversized_space_from_an_emoji_face_is_closed",
+                oversized_space_from_an_emoji_face_is_closed,
+            ),
+        ];
+        let mut failed = Vec::new();
+        for (name, case) in cases {
+            if std::panic::catch_unwind(case).is_err() {
+                failed.push(name);
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "font resolution: failing rows: {failed:?}"
         );
     }
 }

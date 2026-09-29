@@ -193,26 +193,3 @@ impl FilterConfig {
         })
     }
 }
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    #[test]
-    fn invalid_configured_directives_are_reported_not_swallowed() {
-        let error = FilterConfig::new("=not a directive=")
-            .without_env_var()
-            .env_filter()
-            .expect_err("`=not a directive=` must not parse");
-
-        assert!(matches!(error, FilterError::Configured { .. }));
-    }
-
-    // --- environment resolution
-    //
-    // Driven through `env_filter_from` rather than `std::env::set_var`, so the
-    // cases are deterministic, order-independent, and safe under a threaded
-    // test runner. `tests/env_var_is_read_and_trimmed.rs` covers the wiring to
-    // the real process environment in a process of its own.
-}

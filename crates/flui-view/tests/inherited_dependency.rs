@@ -154,8 +154,7 @@ fn create_tree_and_owner() -> (Arc<RwLock<ElementTree>>, Arc<RwLock<BuildOwner>>
 //      dependents dirty
 // ============================================================================
 
-#[test]
-fn inherited_update_notifies_dependents() {
+pub(crate) fn inherited_update_notifies_dependents() {
     // Same scaffolding as the depend_on-records-dependent test above.
     let (tree, owner) = create_tree_and_owner();
 
@@ -177,7 +176,8 @@ fn inherited_update_notifies_dependents() {
 
     // Record dependency via depend_on
     {
-        let ctx = ElementBuildContext::for_element(child_id, tree.clone(), owner.clone()).unwrap();
+        let ctx = ElementBuildContext::for_element(child_id, tree.clone(), owner.clone())
+            .expect("the child element is live");
         let _ = ctx.depend_on::<ThemeProvider, ()>(|_| ());
     }
 
@@ -220,8 +220,7 @@ fn inherited_update_notifies_dependents() {
 // Edge: unmounted dependent is removed from the provider immediately
 // ============================================================================
 
-#[test]
-fn unmounted_dependent_is_removed_from_provider_before_next_notification() {
+pub(crate) fn unmounted_dependent_is_removed_from_provider_before_next_notification() {
     let (tree, owner) = create_tree_and_owner();
 
     let provider_v1 = ThemeProvider {
@@ -242,7 +241,8 @@ fn unmounted_dependent_is_removed_from_provider_before_next_notification() {
 
     // Register as dependent.
     {
-        let ctx = ElementBuildContext::for_element(child_id, tree.clone(), owner.clone()).unwrap();
+        let ctx = ElementBuildContext::for_element(child_id, tree.clone(), owner.clone())
+            .expect("the child element is live");
         let _ = ctx.depend_on::<ThemeProvider, ()>(|_| ());
     }
 

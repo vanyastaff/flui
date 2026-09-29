@@ -206,7 +206,6 @@ fn opaque(width: u32, height: u32) -> PixelImage {
 /// dropped there. This test asserts the end-to-end outcome; the generation
 /// guard's own behaviour is pinned by the unit tests in
 /// `flui_widgets::image::resolve`.
-#[test]
 fn a_retired_providers_late_completion_cannot_replace_the_current_image() {
     let (old_provider, old_completer) = ControlledProvider::new("out-of-order-old");
     let (new_provider, new_completer) = ControlledProvider::new("out-of-order-new");
@@ -244,7 +243,6 @@ fn a_retired_providers_late_completion_cannot_replace_the_current_image() {
 /// Unmounting the widget cancels its load too — the `dispose` half of the
 /// same rule, and the one that decides whether a completion can reach a state
 /// that no longer exists.
-#[test]
 fn unmounting_the_widget_cancels_its_in_flight_load() {
     let (provider, completer) = ControlledProvider::new("unmount-cancels");
 
@@ -272,4 +270,12 @@ fn unmounting_the_widget_cancels_its_in_flight_load() {
             "a completion for an unmounted widget must publish nothing",
         );
     }
+}
+
+/// Asynchronous image loads are owned by the widget that started them: a retired
+/// provider's late completion is dropped, and unmounting cancels the load in flight.
+#[test]
+fn async_image_loads_are_owned_by_their_widget() {
+    a_retired_providers_late_completion_cannot_replace_the_current_image();
+    unmounting_the_widget_cancels_its_in_flight_load();
 }

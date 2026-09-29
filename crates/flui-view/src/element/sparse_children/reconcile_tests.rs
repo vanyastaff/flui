@@ -154,7 +154,6 @@ impl View for PlainBox {
 /// is still reconciled — here its data moved into the band, so it is
 /// relocated rather than rebuilt fresh. Nothing is mounted outside the
 /// band, even when the builder has a view for the index.
-#[test]
 fn keyless_residents_outside_the_band_are_carried_over_not_rebuilt() {
     let mut fx = fixture();
     // Keyless residents at 0 and 1, a keyed one (id 7) at 2; the band
@@ -283,7 +282,6 @@ fn ensure_at(fx: &mut Fixture, index: usize, view: &dyn View) -> flui_foundation
     )
 }
 
-#[test]
 fn a_child_panicking_in_create_render_object_is_replaced_at_that_index_only() {
     let mut fx = fixture();
     ensure_at(&mut fx, 0, &KeyedBox::new(0));
@@ -346,7 +344,6 @@ fn a_child_panicking_in_create_render_object_is_replaced_at_that_index_only() {
     }
 }
 
-#[test]
 fn a_panicking_builder_yields_the_error_view_for_that_index_only() {
     let builder: Rc<dyn Fn(usize) -> Option<BoxedView>> = Rc::new(|i| {
         assert!(i != 1, "boom");
@@ -359,4 +356,25 @@ fn a_panicking_builder_yields_the_error_view_for_that_index_only() {
         std::any::TypeId::of::<crate::view::ErrorView>()
     );
     assert!(recovered.0.key().is_none(), "the error view is unkeyed");
+}
+
+#[test]
+fn sparse_reconcile_containment_matrix() {
+    crate::table_test::run_table(
+        "sparse_reconcile_containment_matrix",
+        &[
+            (
+                "keyless_residents_outside_the_band_are_carried_over_not_rebuilt",
+                keyless_residents_outside_the_band_are_carried_over_not_rebuilt as fn(),
+            ),
+            (
+                "a_child_panicking_in_create_render_object_is_replaced_at_that_index_only",
+                a_child_panicking_in_create_render_object_is_replaced_at_that_index_only as fn(),
+            ),
+            (
+                "a_panicking_builder_yields_the_error_view_for_that_index_only",
+                a_panicking_builder_yields_the_error_view_for_that_index_only as fn(),
+            ),
+        ],
+    );
 }

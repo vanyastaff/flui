@@ -45,8 +45,7 @@ use flui_widgets::{
 /// increase the scroll offset because upward drag reveals content below the
 /// current viewport position. This test FAILS if the pan callback is not
 /// wired: `controller.pixels()` stays 0.0 when no gesture fires.
-#[test]
-fn scrollable_drag_up_increases_scroll_offset() {
+pub(crate) fn scrollable_drag_up_increases_scroll_offset() {
     let controller = ScrollController::new();
     // 300px viewport, 800px content → 500px scroll extent.
     controller.update_dimensions(300.0, 0.0, 500.0);
@@ -94,8 +93,7 @@ fn fling_scoped(widget: Scrollable, vsync: Vsync, constraints: BoxConstraints) -
 /// continue to advance beyond the release position when the binding pumps
 /// animation frames — confirming that the fling animation controller is wired
 /// to the scroll controller and the vsync is driving it.
-#[test]
-fn scrollable_fling_advances_offset_past_release() {
+pub(crate) fn scrollable_fling_advances_offset_past_release() {
     let controller = ScrollController::new();
     // Large extent prevents the fling from hitting the boundary on the first
     // frame — we want to observe forward motion, not clamping.
@@ -143,8 +141,7 @@ fn scrollable_fling_advances_offset_past_release() {
 /// `max_scroll_extent` with spring damping. On release, a
 /// `ScrollSpringSimulation` springs the position back to the boundary. After
 /// enough frames the position must be within 1 px of `max_scroll_extent`.
-#[test]
-fn bouncing_physics_fling_springs_back_after_overscroll() {
+pub(crate) fn bouncing_physics_fling_springs_back_after_overscroll() {
     let controller = ScrollController::new();
     let max_extent = 500.0_f64;
     controller.update_dimensions(300.0, 0.0, max_extent);
@@ -203,8 +200,7 @@ fn bouncing_physics_fling_springs_back_after_overscroll() {
 /// Flutter parity: `ScrollPosition.jumpTo` calls `goIdle()` — cancelling
 /// whatever activity currently owns the position — before touching `pixels`
 /// (`scroll_position_with_single_context.dart`, tag `3.44.0`).
-#[test]
-fn scrollable_jump_to_during_animate_to_cancels_it_synchronously() {
+pub(crate) fn scrollable_jump_to_during_animate_to_cancels_it_synchronously() {
     let controller = ScrollController::new();
     controller.update_dimensions(300.0, 0.0, 4700.0);
 
@@ -301,8 +297,7 @@ fn scrollable_jump_to_during_animate_to_cancels_it_synchronously() {
 /// from the grab with the user's direction recorded, live through the
 /// ballistic run past the release, and idle again — direction reset — once
 /// the run settles. The signal a floating header's snap trigger keys on.
-#[test]
-fn scroll_activity_tracks_the_whole_gesture_lifecycle() {
+pub(crate) fn scroll_activity_tracks_the_whole_gesture_lifecycle() {
     let controller = ScrollController::new();
     controller.update_dimensions(300.0, 0.0, 4700.0);
     let position = controller.position();
@@ -392,8 +387,7 @@ fn nested_scrollables(outer: &ScrollController, inner: &ScrollController, vsync:
 /// and the rest never act (`gestures/pointer_signal_resolver.dart`,
 /// `widgets/scrollable.dart` `_receivedPointerSignal`). Without arbitration
 /// the same tick advances BOTH controllers (issue #717's double-scroll).
-#[test]
-fn a_wheel_tick_over_nested_scrollables_moves_only_the_inner() {
+pub(crate) fn a_wheel_tick_over_nested_scrollables_moves_only_the_inner() {
     let outer = ScrollController::new();
     let inner = ScrollController::new();
     let scoped = nested_scrollables(&outer, &inner, Vsync::new());

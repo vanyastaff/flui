@@ -7,8 +7,7 @@ use flui_widgets::{SizedBox, Wrap};
 
 // ── Run wrapping ──────────────────────────────────────────────────────────────
 
-#[test]
-fn wrap_three_boxes_form_two_runs_when_width_is_narrow() {
+pub(crate) fn wrap_three_boxes_form_two_runs_when_width_is_narrow() {
     // Three 40×40 boxes in a max-100-wide loose constraint.
     // Run 1: box[0] at (0,0), box[1] at (40,0) — both fit (80 ≤ 100).
     // Run 2: box[2] wraps to (0,40).

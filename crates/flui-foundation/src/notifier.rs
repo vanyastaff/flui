@@ -570,7 +570,6 @@ mod tests {
 
     use super::*;
 
-    #[test]
     fn test_change_notifier() {
         let notifier = ChangeNotifier::new();
         let counter = Arc::new(AtomicUsize::new(0));
@@ -591,7 +590,6 @@ mod tests {
         assert_eq!(counter.load(Ordering::SeqCst), 2);
     }
 
-    #[test]
     fn listener_fires_after_panic() {
         // A panicking listener must NOT abort the remaining listeners.
         // Given 3 listeners: panic-1, listener-2, listener-3 — listener-2 and
@@ -631,7 +629,6 @@ mod tests {
     // and :376 (dispose).
     // ------------------------------------------------------------------
 
-    #[test]
     fn dispose_during_notify_iteration_safe() {
         // Reentrancy guarantee: a listener-callback may call `dispose` on the
         // notifier mid-`notify_listeners`. The snapshot-then-fire path at
@@ -670,5 +667,17 @@ mod tests {
         // After the iteration, the notifier is disposed.
         assert!(notifier.is_disposed());
         assert_eq!(notifier.len(), 0, "dispose cleared listeners");
+    }
+
+    #[test]
+    fn change_notifier_contract() {
+        crate::test_cases::run_cases(&[
+            ("test change notifier", test_change_notifier),
+            ("listener fires after panic", listener_fires_after_panic),
+            (
+                "dispose during notify iteration safe",
+                dispose_during_notify_iteration_safe,
+            ),
+        ]);
     }
 }

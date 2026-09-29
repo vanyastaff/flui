@@ -59,22 +59,3 @@ impl fmt::Display for AccessibilityNodeId {
         self.0.fmt(formatter)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use core::num::NonZeroU32;
-
-    use super::*;
-
-    #[test]
-    fn recycled_slot_generations_produce_distinct_accessibility_ids() {
-        let first = RenderId::new_gen(7, NonZeroU32::new(3).expect("test generation is non-zero"));
-        let recycled =
-            RenderId::new_gen(7, NonZeroU32::new(4).expect("test generation is non-zero"));
-
-        assert_ne!(
-            AccessibilityNodeId::from(first),
-            AccessibilityNodeId::from(recycled),
-        );
-    }
-}

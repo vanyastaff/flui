@@ -30,8 +30,7 @@ fn position_animation(
 /// `.transform_hit_tests(view.transform_hit_tests)` call would leave
 /// `FractionalTranslation`'s own default (`true`) in effect regardless of
 /// what the caller requested, flipping which tap location fires.
-#[test]
-fn build_wires_transform_hit_tests_false_into_fractional_translation() {
+pub(crate) fn build_wires_transform_hit_tests_false_into_fractional_translation() {
     let taps = Arc::new(AtomicUsize::new(0));
     let in_cb = Arc::clone(&taps);
 

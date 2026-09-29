@@ -1865,7 +1865,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn binding_is_not_a_singleton_two_instances_are_independent() {
         // The binding is realm-owned; two bindings are two
         // independent trees (HeadlessBinding's "many can exist" contract,
@@ -1948,7 +1947,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn global_key_lookup_from_build_during_draw_frame_returns_instead_of_deadlocking() {
         let (during, after) = within_deadline(|| {
             let key = crate::GlobalKey::<RegistryState>::new();
@@ -1980,7 +1978,6 @@ mod tests {
     /// The mounted root element produces a working render-tree root
     /// when a `PipelineOwner` is wired — `RootRenderElement` inserts the
     /// `RenderView` and sets it as the pipeline owner's root node.
-    #[test]
     fn test_attach_root_widget_bootstraps_render_tree() {
         let binding = WidgetsBinding::new();
         let pipeline_owner = PipelineCell::new(PipelineOwner::new());
@@ -2060,7 +2057,6 @@ mod tests {
     /// unmount `RootRenderView`'s own element and silently leak every
     /// descendant's `State::dispose` — this test is the regression guard for
     /// that exact class of bug.
-    #[test]
     fn detach_root_widget_disposes_every_descendant_not_just_the_root() {
         #[derive(Clone)]
         struct ParentOfDisposeMarker {
@@ -2097,6 +2093,32 @@ mod tests {
             *disposed.lock(),
             "detach_root_widget must run State::dispose for every descendant, \
              not just unmount the (internal RootRenderView-wrapped) root node"
+        );
+    }
+
+    #[test]
+    fn binding_lifecycle_matrix() {
+        crate::table_test::run_table(
+            "binding_lifecycle_matrix",
+            &[
+                (
+                    "binding_is_not_a_singleton_two_instances_are_independent",
+                    binding_is_not_a_singleton_two_instances_are_independent as fn(),
+                ),
+                (
+                    "global_key_lookup_from_build_during_draw_frame_returns_instead_of_deadlocking",
+                    global_key_lookup_from_build_during_draw_frame_returns_instead_of_deadlocking
+                        as fn(),
+                ),
+                (
+                    "test_attach_root_widget_bootstraps_render_tree",
+                    test_attach_root_widget_bootstraps_render_tree as fn(),
+                ),
+                (
+                    "detach_root_widget_disposes_every_descendant_not_just_the_root",
+                    detach_root_widget_disposes_every_descendant_not_just_the_root as fn(),
+                ),
+            ],
         );
     }
 

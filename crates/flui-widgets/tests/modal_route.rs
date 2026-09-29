@@ -122,8 +122,7 @@ fn complete_entrance(transition: &TransitionHandle, harness: &mut Harness) {
 ///
 /// Previously this write had nowhere to go. Now it drops the route below out of
 /// the tree entirely, because that route has no `maintain_state`.
-#[test]
-fn modal_opaque_route_occludes_the_route_below_once_its_transition_completes() {
+pub(crate) fn modal_opaque_route_occludes_the_route_below_once_its_transition_completes() {
     let (navigator, mut harness, bottom) = navigator_with_seed();
     let bottom_entry = navigator
         .entry_of(bottom)
@@ -167,8 +166,7 @@ fn modal_opaque_route_occludes_the_route_below_once_its_transition_completes() {
 ///
 /// **Divergence, not parity.** FLUI has no `ModalBarrier`, no `BlockSemantics`
 /// and no `barrierLabel`; the barrier absorbs pointers only. See the module docs.
-#[test]
-fn modal_barrier_absorbs_pointers_and_a_dismissible_one_adds_a_gesture_detector() {
+pub(crate) fn modal_barrier_absorbs_pointers_and_a_dismissible_one_adds_a_gesture_detector() {
     let (navigator, mut harness, _bottom) = navigator_with_seed();
     let _result = navigator.push(modal(&Built::default(), &Arc::new(AtomicUsize::new(0))));
     harness.tick();

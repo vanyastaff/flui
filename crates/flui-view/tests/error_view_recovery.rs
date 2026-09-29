@@ -183,7 +183,6 @@ fn child_ids(tree: &ElementTree, parent: flui_view::ElementId) -> Vec<flui_view:
 // Happy path — registered builder, stateless build panics
 // ============================================================================
 
-#[test]
 fn stateless_build_panic_substitutes_registered_error_view() {
     let _guard = acquire_builder_guard();
     // A custom builder records that it ran and returns a plain ErrorView
@@ -231,7 +230,6 @@ fn stateless_build_panic_substitutes_registered_error_view() {
 // Stateful — ViewState::build panic is caught too
 // ============================================================================
 
-#[test]
 fn lifecycle_recovery_factory_panic_leaves_the_original_child_retryable() {
     let _guard = acquire_builder_guard();
     clear_error_view_builder();
@@ -329,7 +327,6 @@ fn lifecycle_recovery_factory_panic_leaves_the_original_child_retryable() {
 // Edge — nested child panic: only the panicking subtree is replaced
 // ============================================================================
 
-#[test]
 fn nested_child_build_panic_replaces_only_that_subtree() {
     let _guard = acquire_builder_guard();
     clear_error_view_builder();
@@ -379,7 +376,6 @@ fn nested_child_build_panic_replaces_only_that_subtree() {
 // Recovery is repeatable — a second build does not double-panic / leak
 // ============================================================================
 
-#[test]
 fn repeated_build_after_panic_stays_stable() {
     let _guard = acquire_builder_guard();
     clear_error_view_builder();
@@ -413,4 +409,39 @@ fn repeated_build_after_panic_stays_stable() {
         tree.get(root_id).unwrap().element().lifecycle(),
         Lifecycle::Active
     );
+}
+
+#[test]
+fn error_view_recovery_matrix() {
+    run_table(
+        "error_view_recovery_matrix",
+        &[
+            (
+                "stateless_build_panic_substitutes_registered_error_view",
+                stateless_build_panic_substitutes_registered_error_view as fn(),
+            ),
+            (
+                "lifecycle_recovery_factory_panic_leaves_the_original_child_retryable",
+                lifecycle_recovery_factory_panic_leaves_the_original_child_retryable as fn(),
+            ),
+            (
+                "nested_child_build_panic_replaces_only_that_subtree",
+                nested_child_build_panic_replaces_only_that_subtree as fn(),
+            ),
+            (
+                "repeated_build_after_panic_stays_stable",
+                repeated_build_after_panic_stays_stable as fn(),
+            ),
+        ],
+    );
+}
+
+/// Runs every case even after one fails, then panics listing the failing case names.
+fn run_table(table: &str, cases: &[(&str, fn())]) {
+    let failed: Vec<&str> = cases
+        .iter()
+        .filter(|(_, case)| std::panic::catch_unwind(*case).is_err())
+        .map(|(name, _)| *name)
+        .collect();
+    assert!(failed.is_empty(), "{table}: failing cases: {failed:?}");
 }

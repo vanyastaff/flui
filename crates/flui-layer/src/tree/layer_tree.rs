@@ -345,7 +345,6 @@ mod tests {
         (tree, [root, a, b, c])
     }
 
-    #[test]
     fn descendants_are_pre_order_with_depth_and_siblings_in_paint_order() {
         let (tree, [root, a, b, c]) = cousins();
         assert_eq!(
@@ -359,7 +358,6 @@ mod tests {
         assert_eq!(tree.descendants(LayerId::new(999)).count(), 0);
     }
 
-    #[test]
     fn descendants_of_a_deep_chain_use_no_rust_stack() {
         const DEPTH: usize = 100_000;
         let mut tree = LayerTree::new(offset());
@@ -375,7 +373,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn push_child_links_both_sides_in_paint_order() {
         let mut tree = LayerTree::new(offset());
         let root = tree.root();
@@ -393,7 +390,6 @@ mod tests {
         assert!(matches!(tree.get_layer(b), Some(Layer::Picture(_))));
     }
 
-    #[test]
     #[cfg(debug_assertions)]
     fn rejected_duplicate_leader_preserves_the_index() {
         let link = LayerLink::new();
@@ -411,5 +407,35 @@ mod tests {
         let child = tree.push_child(root, offset());
         assert_eq!(tree.parent(child), Some(root));
         assert_eq!(tree.leader(link), Some(root));
+    }
+
+    #[test]
+    fn tree_structure_contract() {
+        let cases: &[(&str, fn())] = &[
+            (
+                "descendants_are_pre_order_with_depth_and_siblings_in_paint_order",
+                descendants_are_pre_order_with_depth_and_siblings_in_paint_order,
+            ),
+            (
+                "descendants_of_a_deep_chain_use_no_rust_stack",
+                descendants_of_a_deep_chain_use_no_rust_stack,
+            ),
+            (
+                "push_child_links_both_sides_in_paint_order",
+                push_child_links_both_sides_in_paint_order,
+            ),
+            #[cfg(debug_assertions)]
+            (
+                "rejected_duplicate_leader_preserves_the_index",
+                rejected_duplicate_leader_preserves_the_index,
+            ),
+        ];
+        let mut failed = Vec::new();
+        for &(name, case) in cases {
+            if std::panic::catch_unwind(case).is_err() {
+                failed.push(name);
+            }
+        }
+        assert!(failed.is_empty(), "layer tree: failing rows: {failed:?}");
     }
 }

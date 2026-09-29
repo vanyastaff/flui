@@ -36,7 +36,6 @@ fn solid_image(width: u32, height: u32) -> PixelImage {
 // Tests
 // ---------------------------------------------------------------------------
 
-#[test]
 fn image_from_decoded_lays_out_at_intrinsic_size() {
     // A 4×6-pixel image under unconstrained (loose 1000×1000) layout should
     // occupy exactly its intrinsic size: 4×6 logical pixels. Asserts that the
@@ -67,7 +66,6 @@ fn image_from_decoded_lays_out_at_intrinsic_size() {
 // proving the update path (not just the create path) wires correctly.
 // ---------------------------------------------------------------------------
 
-#[test]
 fn image_widget_sync_provider_swap_replaces_the_displayed_image_not_the_stale_one() {
     // `RawImage::update_render_object` always pushes the freshly resolved
     // image (`render.set_image(self.image.clone())`) on every rebuild --
@@ -89,4 +87,12 @@ fn image_widget_sync_provider_swap_replaces_the_displayed_image_not_the_stale_on
         "the render object must carry the NEW image, not have cleared to \
          the empty placeholder",
     );
+}
+
+/// The `Image` widget: an eagerly decoded image lays out at its intrinsic size, and a
+/// synchronous provider swap replaces the displayed image rather than keeping the stale one.
+#[test]
+fn image_widget_decoded_size_and_provider_swap() {
+    image_from_decoded_lays_out_at_intrinsic_size();
+    image_widget_sync_provider_swap_replaces_the_displayed_image_not_the_stale_one();
 }

@@ -661,7 +661,6 @@ mod tests {
 
     /// The anti-hang guarantee: a builder that never settles terminates the loop
     /// at the bound instead of spinning forever.
-    #[test]
     fn layout_builder_fixpoint_is_bounded_and_never_spins() {
         let mut passes = 0;
         let converged = drive_fixpoint(|| {
@@ -678,7 +677,6 @@ mod tests {
 
     /// The core of the seam: a live, dirty builder is scheduled, built, its cell
     /// committed, its render node re-dirtied, and another pass requested.
-    #[test]
     fn layout_builder_service_schedules_build_commits_cell_and_marks_layout() {
         let mut owner = BuildOwner::new();
         let mut tree = ElementTree::new();
@@ -721,6 +719,23 @@ mod tests {
             !owner.service_layout_builders(&mut tree, &pipeline),
             "an unchanged builder must not re-dirty itself — this is what makes \
              the fixpoint converge"
+        );
+    }
+
+    #[test]
+    fn owner_layout_builder_matrix() {
+        crate::table_test::run_table(
+            "owner_layout_builder_matrix",
+            &[
+                (
+                    "layout_builder_fixpoint_is_bounded_and_never_spins",
+                    layout_builder_fixpoint_is_bounded_and_never_spins as fn(),
+                ),
+                (
+                    "layout_builder_service_schedules_build_commits_cell_and_marks_layout",
+                    layout_builder_service_schedules_build_commits_cell_and_marks_layout as fn(),
+                ),
+            ],
         );
     }
 }

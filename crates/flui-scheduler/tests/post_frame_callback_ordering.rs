@@ -47,7 +47,6 @@ impl Log {
 /// `handleDrawFrame`'s two phases, in order: persistent, then post-frame
 /// (`scheduler/binding.dart:1343-1358`). The pipeline sits in the persistent
 /// slot, so a post-frame callback must observe everything it did.
-#[test]
 fn drive_frame_runs_post_frame_callbacks_after_the_pipeline() {
     let scheduler = UpdateScheduler::new();
     let log = Log::default();
@@ -76,7 +75,6 @@ fn drive_frame_runs_post_frame_callbacks_after_the_pipeline() {
 /// `abort_frame` must not go through `set_scheduler_phase`: `PersistentCallbacks
 /// -> Idle` is an illegal transition, so its `debug_assert!` would fire and — were
 /// this a `Drop` guard running during unwind — double-panic into `abort`.
-#[test]
 fn a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks() {
     let scheduler = UpdateScheduler::new();
     let fired = Arc::new(AtomicUsize::new(0));
@@ -112,7 +110,6 @@ fn a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks() {
 /// The guard the previous test's `Idle` assertion protects: a frame left open at
 /// `PersistentCallbacks` would make the next `handle_begin_frame` attempt an
 /// illegal `PersistentCallbacks -> TransientCallbacks` transition.
-#[test]
 fn a_frame_after_a_panicking_frame_starts_cleanly() {
     let scheduler = UpdateScheduler::new();
     let _ = catch_unwind(AssertUnwindSafe(|| {
@@ -138,7 +135,6 @@ fn a_frame_after_a_panicking_frame_starts_cleanly() {
 /// later runs *after* the pipeline. FLUI's pipeline is a closure, so every
 /// registered persistent callback runs *before* it. Nothing in the framework
 /// registers one today.
-#[test]
 fn persistent_callbacks_run_before_the_pipeline_a_divergence_from_flutter() {
     let scheduler = UpdateScheduler::new();
     let log = Log::default();
@@ -161,5 +157,30 @@ fn persistent_callbacks_run_before_the_pipeline_a_divergence_from_flutter() {
         log.get(),
         vec!["persistent", "pipeline", "post_frame"],
         "in Flutter the pipeline IS the first persistent callback; here it follows them"
+    );
+}
+
+#[test]
+fn post_frame_ordering_matrix() {
+    crate::run_table(
+        "post_frame_ordering_matrix",
+        &[
+            (
+                "drive_frame_runs_post_frame_callbacks_after_the_pipeline",
+                drive_frame_runs_post_frame_callbacks_after_the_pipeline as fn(),
+            ),
+            (
+                "a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks",
+                a_panicking_pipeline_aborts_the_frame_and_runs_no_post_frame_callbacks as fn(),
+            ),
+            (
+                "a_frame_after_a_panicking_frame_starts_cleanly",
+                a_frame_after_a_panicking_frame_starts_cleanly as fn(),
+            ),
+            (
+                "persistent_callbacks_run_before_the_pipeline_a_divergence_from_flutter",
+                persistent_callbacks_run_before_the_pipeline_a_divergence_from_flutter as fn(),
+            ),
+        ],
     );
 }

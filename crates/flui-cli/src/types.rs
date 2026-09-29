@@ -378,28 +378,3 @@ impl From<ProjectPath> for PathBuf {
         path.0
     }
 }
-
-// ============================================================================
-// Tests
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    mod project_name {
-        use super::*;
-
-        #[test]
-        fn invalid_names() {
-            assert!(ProjectName::new("").is_err());
-            assert!(ProjectName::new("123app").is_err());
-            assert!(ProjectName::new("my app").is_err());
-            assert!(ProjectName::new("my.app").is_err());
-            assert!(ProjectName::new("fn").is_err());
-            assert!(ProjectName::new("struct").is_err());
-        }
-    }
-
-    mod organization_id {}
-}

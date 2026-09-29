@@ -343,7 +343,6 @@ mod tests {
     static_assertions::assert_not_impl_any!(LifecycleHandle: Send, Sync);
     static_assertions::assert_not_impl_any!(LifecycleSubscription: Send, Sync);
 
-    #[test]
     fn lifecycle_subscription_reentrant_events_are_fifo_and_new_listeners_do_not_replay() {
         let source = Rc::new(LifecycleSource::new());
         let weak = Rc::downgrade(&source);
@@ -380,7 +379,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn lifecycle_subscription_terminal_reentry_drains_before_invalidating() {
         let source = Rc::new(LifecycleSource::new());
         let handle = source.handle();
@@ -418,5 +416,23 @@ mod tests {
             [(1, Inactive), (2, Inactive), (1, Detached), (2, Detached)]
         );
         assert_eq!(handle.snapshot(), Err(LifecycleClosed));
+    }
+
+    #[test]
+    fn lifecycle_subscription_matrix() {
+        crate::table_test::run_table(
+            "lifecycle_subscription_matrix",
+            &[
+                (
+                    "lifecycle_subscription_reentrant_events_are_fifo_and_new_listeners_do_not_replay",
+                    lifecycle_subscription_reentrant_events_are_fifo_and_new_listeners_do_not_replay
+                        as fn(),
+                ),
+                (
+                    "lifecycle_subscription_terminal_reentry_drains_before_invalidating",
+                    lifecycle_subscription_terminal_reentry_drains_before_invalidating as fn(),
+                ),
+            ],
+        );
     }
 }

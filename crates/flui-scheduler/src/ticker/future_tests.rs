@@ -52,7 +52,6 @@ use super::*;
 /// `first_payload.get_or_insert(payload)` with an unconditional overwrite
 /// (`Option::insert`) reddens the "first, not last" half — the re-raised
 /// text would read "second continuation panics" instead.
-#[test]
 fn a_panicking_continuation_does_not_starve_its_siblings_and_the_first_payload_is_reraised() {
     let (completer, future) = TickerFuture::pending();
     let middle_ran = Arc::new(AtomicBool::new(false));
@@ -86,7 +85,6 @@ fn a_panicking_continuation_does_not_starve_its_siblings_and_the_first_payload_i
 /// panic-during-panic, which the Rust runtime aborts rather than unwinds. A
 /// `Drop for TickerCompleter` that runs mid-unwind is exactly the shape a
 /// caller's own panicking `Drop` produces in production.
-#[test]
 fn a_completer_dropped_mid_unwind_with_a_panicking_continuation_does_not_abort() {
     let (completer, future) = TickerFuture::pending();
     future.when_complete_or_cancel(|_outcome| panic!("continuation panics"));
@@ -109,6 +107,17 @@ fn a_completer_dropped_mid_unwind_with_a_panicking_continuation_does_not_abort()
     assert!(
         log.count_containing("already unwinding") >= 1,
         "the continuation's panic must be logged rather than silently lost: {log}"
+    );
+}
+
+#[test]
+fn ticker_future_unwind_matrix() {
+    crate::table_test::run_table(
+        "ticker_future_unwind_matrix",
+        &[
+            ("a_panicking_continuation_does_not_starve_its_siblings_and_the_first_payload_is_reraised", a_panicking_continuation_does_not_starve_its_siblings_and_the_first_payload_is_reraised as fn()),
+            ("a_completer_dropped_mid_unwind_with_a_panicking_continuation_does_not_abort", a_completer_dropped_mid_unwind_with_a_panicking_continuation_does_not_abort as fn()),
+        ],
     );
 }
 

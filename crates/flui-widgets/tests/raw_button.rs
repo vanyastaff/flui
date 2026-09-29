@@ -112,8 +112,7 @@ fn button_node(app: &mut LaidOut) -> (flui_testing::A11yTree, NodeId) {
     (tree, id)
 }
 
-#[test]
-fn raw_button_press_is_reachable_through_a_platform_click() {
+pub(crate) fn raw_button_press_is_reachable_through_a_platform_click() {
     let (root, seen) = counter(Press::Add(1));
     let mut app = lay_out(root, loose(400.0));
     let (tree, id) = button_node(&mut app);
@@ -155,8 +154,7 @@ fn raw_button_press_is_reachable_through_a_platform_click() {
     );
 }
 
-#[test]
-fn a_refused_write_in_a_press_is_reported_not_panicked() {
+pub(crate) fn a_refused_write_in_a_press_is_reported_not_panicked() {
     let (root, seen) = counter(Press::Released);
     let mut app = lay_out(root, loose(400.0));
 

@@ -17,8 +17,7 @@ fn two_items() -> Vec<CupertinoTabBarItem> {
 /// Every item's icon and label reach the mounted render tree. Both `Icon`
 /// (a glyph from an icon font) and `Text` mount as `RenderParagraph` — two
 /// items × (one icon + one label) = 4.
-#[test]
-fn every_item_mounts_its_icon_and_label() {
+pub fn every_item_mounts_its_icon_and_label() {
     let laid = lay_out(
         MediaQuery::new(MediaQueryData::default(), CupertinoTabBar::new(two_items())),
         tight(400.0, 50.0),

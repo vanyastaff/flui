@@ -768,9 +768,6 @@ mod tests {
 
     /// The shared window a renderer holds is a raw-handle target on its own,
     /// with no other crate in the graph enabling `raw-window-handle/alloc`.
-    #[test]
-    fn arc_dyn_platform_window_is_a_raw_handle_target() {
-        fn assert_bounds<T: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static>() {}
-        assert_bounds::<std::sync::Arc<dyn PlatformWindow>>();
-    }
+    const fn assert_bounds<T: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static>() {}
+    const _: () = assert_bounds::<std::sync::Arc<dyn PlatformWindow>>();
 }

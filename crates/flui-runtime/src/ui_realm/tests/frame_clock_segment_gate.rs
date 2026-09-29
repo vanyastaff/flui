@@ -36,8 +36,7 @@ fn mount_root_here() -> UiRealm {
 /// | true  | false         | true          |
 /// | false | true          | true          |
 /// | true  | true          | true          |
-#[test]
-fn segment_runs_iff_woken_or_has_pending_work_over_the_full_table() {
+pub(crate) fn segment_runs_iff_woken_or_has_pending_work_over_the_full_table() {
     for (case, woken, attach_root, expect_segment_runs) in [
         ("neither", false, false, false),
         ("woken_only", true, false, true),
@@ -91,8 +90,7 @@ fn segment_runs_iff_woken_or_has_pending_work_over_the_full_table() {
 /// runs after `poll()` already reset the latch), not on a
 /// SEPARATE, later callback the way it did when the check ran
 /// before `poll()`.
-#[test]
-fn n_ticks_under_backpressure_wake_the_platform_exactly_once_then_rearm() {
+pub(crate) fn n_ticks_under_backpressure_wake_the_platform_exactly_once_then_rearm() {
     use std::time::Duration;
 
     use flui_animation::AnimationController;
@@ -157,8 +155,7 @@ fn n_ticks_under_backpressure_wake_the_platform_exactly_once_then_rearm() {
 /// pump again. Without the unconditional wake in
 /// `set_presentation_hidden`, this demand would strand: nothing
 /// self-wakes an idle `ControlFlow::Wait` loop.
-#[test]
-fn occlude_then_dirty_then_unocclude_wakes_exactly_once_and_produces_exactly_once() {
+pub(crate) fn occlude_then_dirty_then_unocclude_wakes_exactly_once_and_produces_exactly_once() {
     let (wake, wake_count) = super::counting_wake();
     let realm = super::new_runtime(wake).expect("runtime");
     realm
@@ -265,8 +262,7 @@ fn occlude_then_dirty_then_unocclude_wakes_exactly_once_and_produces_exactly_onc
 /// already empty and carry no attribution at all. Drives the exact
 /// sequence the finding names: input -> `SurfaceLost` -> retry ->
 /// the presented frame still carries the original epoch.
-#[test]
-fn surface_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame() {
+pub(crate) fn surface_lost_retry_preserves_the_original_input_epoch_for_the_presented_frame() {
     use flui_foundation::geometry::Offset;
     use flui_interaction::events::{PointerType, make_down_event};
 

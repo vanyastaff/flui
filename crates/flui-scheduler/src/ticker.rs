@@ -1908,7 +1908,6 @@ mod tests {
     /// must leave exactly one live transient registration behind — not two.
     /// Before this fix: `(pending_after_restart, old_calls, new_calls)` was
     /// `(2, 3, 0)` (issue #1059's own measured evidence).
-    #[test]
     fn restart_inside_auto_tick_preserves_new_callback_and_one_pending_tick() {
         let scheduler = crate::scheduler::UpdateScheduler::new();
         let ticker = Arc::new(Mutex::new(Ticker::new_with_scheduler(&scheduler)));
@@ -1957,7 +1956,6 @@ mod tests {
     /// before this fix, `tick_and_reschedule_static` took the callback with
     /// a bare `Option::take()` and only restored it on the NORMAL return
     /// path, so an unwind lost it permanently.
-    #[test]
     fn a_panicking_tick_callback_leaves_the_slot_restored() {
         let scheduler = crate::scheduler::UpdateScheduler::new();
         let mut ticker = Ticker::new_with_scheduler(&scheduler);
@@ -2039,7 +2037,6 @@ mod tests {
     /// Red on `main` (tail predicate `scheduled_callback_id.is_none()`
     /// alone, no re-check of `state`): `transient_callback_count() == 1` —
     /// the tail's fresh registration survives the stop that raced it.
-    #[test]
     fn a_stop_racing_the_tick_tail_leaves_no_live_registration() {
         let scheduler = crate::scheduler::UpdateScheduler::new();
         let ticker = Arc::new(Mutex::new(Ticker::new_with_scheduler(&scheduler)));
@@ -2078,6 +2075,27 @@ mod tests {
             0,
             "a stop racing the tick tail's re-registration must leave no live \
              transient callback behind"
+        );
+    }
+
+    #[test]
+    fn ticker_recovery_matrix() {
+        crate::table_test::run_table(
+            "ticker_recovery_matrix",
+            &[
+                (
+                    "restart_inside_auto_tick_preserves_new_callback_and_one_pending_tick",
+                    restart_inside_auto_tick_preserves_new_callback_and_one_pending_tick as fn(),
+                ),
+                (
+                    "a_panicking_tick_callback_leaves_the_slot_restored",
+                    a_panicking_tick_callback_leaves_the_slot_restored as fn(),
+                ),
+                (
+                    "a_stop_racing_the_tick_tail_leaves_no_live_registration",
+                    a_stop_racing_the_tick_tail_leaves_no_live_registration as fn(),
+                ),
+            ],
         );
     }
 }

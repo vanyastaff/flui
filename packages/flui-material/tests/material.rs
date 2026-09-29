@@ -41,8 +41,7 @@ fn tap_counter() -> (Arc<AtomicUsize>, impl Fn(&mut EventCx<'_>) + 'static) {
     })
 }
 
-#[test]
-fn stadium_shape_excludes_a_corner_a_sharp_rectangle_would_include() {
+pub fn stadium_shape_excludes_a_corner_a_sharp_rectangle_would_include() {
     let (taps, on_tap) = tap_counter();
     let laid = lay_out(
         Material::new(Color::WHITE)

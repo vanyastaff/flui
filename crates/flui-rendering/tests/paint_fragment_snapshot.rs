@@ -102,8 +102,7 @@ impl RenderBox for SimpleRow {
     }
 }
 
-#[test]
-fn inline_siblings_merge_into_one_origin_baked_picture() {
+pub(crate) fn inline_siblings_merge_into_one_origin_baked_picture() {
     let mut owner = PipelineOwner::new();
     let row_id = owner.insert(Box::new(SimpleRow) as BoxedRenderObject);
     owner
@@ -146,8 +145,7 @@ fn inline_siblings_merge_into_one_origin_baked_picture() {
 // 3. Repaint-boundary child splits into a rebased OffsetLayer
 // ============================================================================
 
-#[test]
-fn repaint_boundary_child_splits_into_rebased_offset_layer() {
+pub(crate) fn repaint_boundary_child_splits_into_rebased_offset_layer() {
     let mut owner = PipelineOwner::new();
     let padding_id = owner.insert(Box::new(RenderPadding::all(5.0)) as BoxedRenderObject);
     let boundary_id = owner
@@ -183,8 +181,7 @@ fn repaint_boundary_child_splits_into_rebased_offset_layer() {
 // 4. Clip render object produces a real clip layer over the child
 // ============================================================================
 
-#[test]
-fn clip_rect_object_brackets_child_in_clip_layer() {
+pub(crate) fn clip_rect_object_brackets_child_in_clip_layer() {
     let mut owner = PipelineOwner::new();
     let clip_id = owner.insert(Box::new(RenderClipRect::hard_edge()) as BoxedRenderObject);
     owner

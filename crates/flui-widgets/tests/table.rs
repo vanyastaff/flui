@@ -7,8 +7,7 @@ use flui_objects::TableColumnWidth;
 use flui_view::ViewExt;
 use flui_widgets::{SizedBox, Table, TableRow};
 
-#[test]
-fn table_mounts_render_table_and_lays_out_a_grid_row_major() {
+pub(crate) fn table_mounts_render_table_and_lays_out_a_grid_row_major() {
     // Column 0 fixed at 30; column 1 (default Flex(1.0)) fills the 70px
     // remainder under the tight 100px width.
     let laid = lay_out(

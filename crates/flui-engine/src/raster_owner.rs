@@ -1824,7 +1824,6 @@ mod tests {
     // 1. latest-frame-wins supersedes a pending, un-started frame
     // -----------------------------------------------------------------------
 
-    #[test]
     fn latest_frame_wins_supersedes_pending() {
         let (owner, handle, ack_rx, shutdown_complete_rx) = new_owner(FakeBackend::default());
         let start = Barrier::new(2);
@@ -1886,7 +1885,6 @@ mod tests {
     // 2. presented acks arrive in submission order (pump-per-frame flavor)
     // -----------------------------------------------------------------------
 
-    #[test]
     fn presented_acks_arrive_in_submission_order() {
         let (mut owner, handle, ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
         let epoch1 = FrameEpoch::ZERO.next();
@@ -1935,7 +1933,6 @@ mod tests {
     // 3. shutdown handshake completes; the owner thread joins; the ack is last
     // -----------------------------------------------------------------------
 
-    #[test]
     fn shutdown_handshake_completes_and_thread_joins() {
         let (owner, handle, _ack_rx, shutdown_complete_rx) = new_owner(FakeBackend::default());
         let start = Barrier::new(2);
@@ -1964,7 +1961,6 @@ mod tests {
     // 4. submit after shutdown / after owner drop fails typed
     // -----------------------------------------------------------------------
 
-    #[test]
     fn submit_after_shutdown_fails_typed() {
         let (_owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
         handle.shutdown();
@@ -1978,7 +1974,6 @@ mod tests {
     // 5. render failure acks Dropped { RenderFailed }
     // -----------------------------------------------------------------------
 
-    #[test]
     fn render_failure_acks_dropped_render_failed() {
         let backend = FakeBackend::with_planned([Err(EngineError::NotInitialized)]);
         let (mut owner, handle, ack_rx, _shutdown_complete_rx) = new_owner(backend);
@@ -2028,7 +2023,6 @@ mod tests {
     // 8. stale surface generation is rejected before render
     // -----------------------------------------------------------------------
 
-    #[test]
     fn stale_surface_generation_is_rejected_before_render() {
         let (mut owner, handle, ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
         let _ = handle.resize(800, 600);
@@ -2080,6 +2074,16 @@ mod tests {
         });
     }
 
+    /// Submit/ack matrix: presented acks arrive in submission order, the latest
+    /// frame supersedes a pending one, and a stale surface generation is rejected
+    /// before render.
+    #[test]
+    fn submitted_frames_ack_in_order_and_stale_or_superseded_ones_never_render() {
+        presented_acks_arrive_in_submission_order();
+        latest_frame_wins_supersedes_pending();
+        stale_surface_generation_is_rejected_before_render();
+    }
+
     // -----------------------------------------------------------------------
     // 9. pump after shutdown-complete does not re-signal (the
     // one-shot fires exactly once)
@@ -2112,7 +2116,6 @@ mod tests {
     // 10. Reliable in-flight accounting + retire→wake.
     // -----------------------------------------------------------------------
 
-    #[test]
     fn device_lost_completion_retires_the_ticket() {
         let backend = FakeBackend::with_planned([Err(EngineError::DeviceLost)]);
         let (mut owner, handle, ack_rx, _shutdown_complete_rx) = new_owner(backend);
@@ -2147,7 +2150,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn owner_dropped_with_a_still_pending_frame_retires_it_instead_of_leaking() {
         let (owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
         handle
@@ -2172,7 +2174,6 @@ mod tests {
     /// Mutant-confirmed: replacing the `drop(frame)` tail in `pump` with a
     /// `std::mem::forget(frame)` (simulating "the ticket leaks") makes
     /// this test's final assertion fail (`in_flight()` reads 1, not 0).
-    #[test]
     fn panic_mid_render_retires_the_ticket_and_capacity_is_usable_again() {
         let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
         owner.with_backend(|backend| backend.panic_next_render = true);
@@ -2217,6 +2218,17 @@ mod tests {
         assert_eq!(handle.in_flight(), 0);
     }
 
+    /// Failure matrix: a render failure, a lost device, a panic mid-render and an
+    /// owner dropped with a pending frame each retire the ticket, and capacity is
+    /// usable afterwards.
+    #[test]
+    fn every_failure_boundary_retires_its_ticket() {
+        render_failure_acks_dropped_render_failed();
+        device_lost_completion_retires_the_ticket();
+        panic_mid_render_retires_the_ticket_and_capacity_is_usable_again();
+        owner_dropped_with_a_still_pending_frame_retires_it_instead_of_leaking();
+    }
+
     // -----------------------------------------------------------------------
     // Retire → wake edge: every retire site invokes the registered hook
     // exactly once, and a plain accepted submit invokes it zero times.
@@ -2232,7 +2244,6 @@ mod tests {
     /// external trigger of any kind. Kills silent-stall: a mutant that
     /// drops the `notify_retired()` call from `pump`'s tail leaves `woken`
     /// false forever.
-    #[test]
     fn stalled_capacity_then_released_wakes_with_no_external_trigger() {
         let (mut owner, handle, _ack_rx, _shutdown_complete_rx) = new_owner(FakeBackend::default());
         let woken = Arc::new(AtomicBool::new(false));
@@ -2277,6 +2288,16 @@ mod tests {
             0,
             "and capacity is genuinely free again"
         );
+    }
+
+    /// Shutdown and backpressure matrix: the handshake completes and the thread
+    /// joins, a submit after shutdown fails typed, and stalled capacity wakes on
+    /// release with no external trigger.
+    #[test]
+    fn shutdown_and_backpressure_are_typed_and_live() {
+        shutdown_handshake_completes_and_thread_joins();
+        submit_after_shutdown_fails_typed();
+        stalled_capacity_then_released_wakes_with_no_external_trigger();
     }
 
     // -----------------------------------------------------------------------

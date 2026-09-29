@@ -129,8 +129,7 @@ fn fly(
 /// Red-check: in `FlightManager::start`, replace the `existing.divert(…); return;`
 /// with an end-and-restart (`self.flights.lock().remove(&tag)` + `finish` + a fresh
 /// `start`). The entry id then changes and the begin/end are the fresh push tween.
-#[test]
-fn a_push_flight_interrupted_by_a_pop_diverts_in_place() {
+pub(crate) fn a_push_flight_interrupted_by_a_pop_diverts_in_place() {
     let navigator = seeded_navigator();
     let controller = install(&navigator);
     let mut harness = mount_navigator(&navigator);
@@ -237,8 +236,7 @@ fn assert_rect_close(actual: Rect, expected: Rect, what: &str) {
 ///
 /// Red-check: resolve the curve from `from_hero` for a push in `MeasurementPass::launch`
 /// — the source's default fastOutSlowIn applies and the shuttle is mid-flight.
-#[test]
-fn a_push_eases_on_the_destination_hero_curve() {
+pub(crate) fn a_push_eases_on_the_destination_hero_curve() {
     let navigator = seeded_navigator();
     let controller = install(&navigator);
     let mut harness = mount_navigator(&navigator);

@@ -149,8 +149,7 @@ fn overlay_with(entries: &[OverlayEntry]) -> (OverlayHandle, Overlay) {
 /// Red-check: delete `OverlayEntryView::key`. Reconciliation then matches by
 /// index and type, so element ids stay put while the *views* swap — A's element
 /// would silently host B's entry, and `did_update_view`'s `debug_assert` fires.
-#[test]
-fn overlay_rearrange_reorders_and_preserves_entry_state() {
+pub(crate) fn overlay_rearrange_reorders_and_preserves_entry_state() {
     let (creations_a, creations_b) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
     let (entry_a, entry_b) = (probe_entry(&creations_a), probe_entry(&creations_b));
     let (handle, overlay) = overlay_with(&[entry_a.clone(), entry_b.clone()]);
@@ -200,8 +199,7 @@ fn overlay_rearrange_reorders_and_preserves_entry_state() {
 ///
 /// Replaces the earlier `overlay_deferred_opaque_builds_every_entry`, which
 /// pinned the not-yet-implemented behavior and is red by design now.
-#[test]
-fn overlay_opaque_top_entry_drops_lower_entries_entirely() {
+pub(crate) fn overlay_opaque_top_entry_drops_lower_entries_entirely() {
     let (bottom, top) = (Calls::default(), Calls::default());
     let entry_a = counting_entry(&bottom);
     let entry_b = counting_entry(&top).with_opaque(true);

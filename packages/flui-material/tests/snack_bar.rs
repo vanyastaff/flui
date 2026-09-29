@@ -171,8 +171,7 @@ fn snack_bar_material_count(laid: &common::LaidOut) -> usize {
 // 4. Action press closes with Action reason and disables after one press.
 // ============================================================================
 
-#[test]
-fn action_press_closes_the_snack_bar_and_is_single_fire() {
+pub fn action_press_closes_the_snack_bar_and_is_single_fire() {
     let vsync = Vsync::new();
     let action_presses = Arc::new(AtomicUsize::new(0));
     let action_presses_for_cb = Arc::clone(&action_presses);
@@ -304,8 +303,7 @@ fn action_press_closes_the_snack_bar_and_is_single_fire() {
 //     must not take effect until a LATER frame.
 // ============================================================================
 
-#[test]
-fn a_snack_bar_completion_cannot_write_another_presentations_signal() {
+pub fn a_snack_bar_completion_cannot_write_another_presentations_signal() {
     let signal_slot = Rc::new(RefCell::new(None));
     let captured = Rc::clone(&signal_slot);
     let probe = common::SignalProbe::new(move |common::ProbeSignals { count, .. }| {

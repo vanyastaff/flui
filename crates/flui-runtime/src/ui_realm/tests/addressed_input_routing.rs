@@ -53,8 +53,7 @@ impl StatelessView for PanickingKeyReader {
 /// actually exercises the addressed lookup: reverting the `Pointer`
 /// arm to `self.presentations.primary()` makes this fail (B's count
 /// stays `0`, A's becomes `1`).
-#[test]
-fn input_stamped_for_b_never_reaches_as_arena() {
+pub(crate) fn input_stamped_for_b_never_reaches_as_arena() {
     let mut realm = UiRealm::for_test();
     let a_id = realm.presentation_id();
     let b_id = realm.install_second_presentation_for_test();
@@ -87,8 +86,7 @@ fn input_stamped_for_b_never_reaches_as_arena() {
     );
 }
 
-#[test]
-fn panicking_keyboard_dispatch_keeps_priority_over_a_panicking_wake() {
+pub(crate) fn panicking_keyboard_dispatch_keeps_priority_over_a_panicking_wake() {
     let panic_on_wake = Arc::new(AtomicBool::new(false));
     let wake_attempts = Arc::new(AtomicUsize::new(0));
     let wake_gate = Arc::clone(&panic_on_wake);

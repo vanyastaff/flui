@@ -273,7 +273,6 @@ mod tests {
 
     use super::*;
 
-    #[test]
     fn panicking_listener_does_not_abort_rest() {
         let n: Notifier<()> = Notifier::new();
         let ran = Arc::new(AtomicUsize::new(0));
@@ -286,7 +285,6 @@ mod tests {
         assert_eq!(ran.load(Ordering::SeqCst), 1);
     }
 
-    #[test]
     fn removed_during_notify_is_skipped() {
         let n: Notifier<()> = Notifier::new();
         let fired_b = Arc::new(AtomicUsize::new(0));
@@ -306,5 +304,19 @@ mod tests {
         let _prev = id_b_cell.lock().replace(id_b);
         n.notify(());
         assert_eq!(fired_b.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn notifier_generic_contract() {
+        crate::test_cases::run_cases(&[
+            (
+                "panicking listener does not abort rest",
+                panicking_listener_does_not_abort_rest,
+            ),
+            (
+                "removed during notify is skipped",
+                removed_during_notify_is_skipped,
+            ),
+        ]);
     }
 }

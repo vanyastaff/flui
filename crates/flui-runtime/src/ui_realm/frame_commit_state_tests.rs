@@ -59,8 +59,7 @@ fn arm_one_shot_build_panic(realm: &UiRealm) {
     );
 }
 
-#[test]
-fn errored_frame_is_uncommitted() {
+pub(crate) fn errored_frame_is_uncommitted() {
     let realm = mount_box();
     arm_one_shot_build_panic(&realm);
     let mut backend = ScriptedSink::always_presents();
@@ -70,8 +69,7 @@ fn errored_frame_is_uncommitted() {
     assert_eq!(backend.submit_calls, 0);
 }
 
-#[test]
-fn deferred_painted_frame_waits_for_the_later_present_to_commit() {
+pub(crate) fn deferred_painted_frame_waits_for_the_later_present_to_commit() {
     let realm = mount_box();
     realm.defer_first_frame();
     let mut backend = ScriptedSink::always_presents();
@@ -95,8 +93,7 @@ fn deferred_painted_frame_waits_for_the_later_present_to_commit() {
 /// unavailable. Retrying is itself what re-dirties the presentation, so with
 /// no cap a surface that stays withdrawn produces one frame per fallback
 /// period indefinitely.
-#[test]
-fn the_withheld_retry_is_bounded_and_then_parks() {
+pub(crate) fn the_withheld_retry_is_bounded_and_then_parks() {
     let budget = super::MAX_NOT_SHOWN_RETRIES;
     let realm = mount_box();
     // Every attempt is withheld, including the one that exhausts the budget,

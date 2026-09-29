@@ -126,8 +126,7 @@ fn total(counts: &[Count]) -> u32 {
     counts.iter().map(|c| c.get()).sum()
 }
 
-#[test]
-fn changing_one_theme_slot_rebuilds_that_slots_readers_and_whole_theme_readers_only() {
+pub fn changing_one_theme_slot_rebuilds_that_slots_readers_and_whole_theme_readers_only() {
     let c = counters();
     let base = ThemeData::light();
     let mut laid = lay_out(Theme::new(base.clone(), subtree(&c)), loose(4000.0));

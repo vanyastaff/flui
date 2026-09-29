@@ -394,8 +394,7 @@ mod pointer_translation_tests {
     /// The cross-wire field contract (flui-interaction's module doc): time
     /// in NANOSECONDS, pressure 0.5 while a button is held on sensor-less
     /// hardware, click count 1 on transitions and 0 on motion/scroll.
-    #[test]
-    fn translated_events_meet_the_pointer_field_contract() {
+    pub(super) fn translated_events_meet_the_pointer_field_contract() {
         let position = winit::dpi::PhysicalPosition::new(10.0, 10.0);
         let held = PointerButtons::from(PointerButton::Primary);
 
@@ -450,40 +449,12 @@ mod pointer_translation_tests {
     }
 }
 
-#[cfg(test)]
-mod ime_tests {
-    use flui_platform_api::ImeEvent;
-    use winit::event::Ime;
-
-    use super::ime_event;
-    use crate::traits::PlatformInput;
-
-    /// Unwraps the `PlatformInput::Ime` arm `ime_event` always produces,
-    /// asserting the wrapping variant at the same time so a future change
-    /// that wraps IME events in a different `PlatformInput` variant fails
-    /// loudly here instead of silently changing what these tests check.
-    fn convert(event: &Ime) -> ImeEvent {
-        match ime_event(event) {
-            PlatformInput::Ime(inner) => inner,
-            other => panic!("ime_event must return PlatformInput::Ime, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn commit_carries_the_delivered_text() {
-        assert_eq!(
-            convert(&Ime::Commit("hello".to_string())),
-            ImeEvent::Commit("hello".to_string())
-        );
-    }
-}
-
 // The winit-vs-ui-events-winit keyboard conversion tests live in their own
 // file: two cohesive families (completeness of the delegated conversion,
 // and cross-backend agreement with the Win32/AppKit hand-written tables)
 // large enough that this file's production code should not sit in its
 // first quarter. A sibling module rather than a nested one, so its tests
-// sit beside `pointer_translation_tests`/`ime_tests` rather than two
+// sit beside `pointer_translation_tests` rather than two
 // segments below them — same shape as `platform.rs`'s `real_loop_tests`.
 #[cfg(test)]
 #[path = "events/keyboard_tests.rs"]

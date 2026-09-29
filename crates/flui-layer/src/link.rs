@@ -163,7 +163,6 @@ mod tests {
 
     /// Leader and follower under two different `Offset` branches: both chains
     /// are summed to the root, not assumed to share an immediate parent.
-    #[test]
     fn linked_across_offset_branches_sums_both_chains() {
         let link = LayerLink::new();
         let mut tree = LayerTree::new(offset(0.0, 0.0));
@@ -183,7 +182,6 @@ mod tests {
 
     /// A leader painted inside the follower's subtree cannot anchor it (it
     /// is composited after the follower); the unlinked contract applies.
-    #[test]
     fn leader_inside_the_follower_subtree_falls_back_to_unlinked() {
         let link = LayerLink::new();
         let follower = FollowerLayer::new(link)
@@ -196,6 +194,30 @@ mod tests {
         assert_eq!(
             resolve_follower_offset(&tree, follower_id),
             Some(Offset::new(3.0, 4.0))
+        );
+    }
+
+    #[test]
+    fn follower_resolution_contract() {
+        let cases: &[(&str, fn())] = &[
+            (
+                "linked_across_offset_branches_sums_both_chains",
+                linked_across_offset_branches_sums_both_chains,
+            ),
+            (
+                "leader_inside_the_follower_subtree_falls_back_to_unlinked",
+                leader_inside_the_follower_subtree_falls_back_to_unlinked,
+            ),
+        ];
+        let mut failed = Vec::new();
+        for &(name, case) in cases {
+            if std::panic::catch_unwind(case).is_err() {
+                failed.push(name);
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "follower resolution: failing rows: {failed:?}"
         );
     }
 }

@@ -40,8 +40,7 @@ fn test_constraints() -> BoxConstraints {
 /// E2/E3 regression: `UiRealm` hands its shared `PipelineOwner` to the
 /// `WidgetsBinding` it owns, so `attach_root_widget` actually
 /// bootstraps the root render tree.
-#[test]
-fn attach_root_widget_bootstraps_shared_render_tree() {
+pub(crate) fn attach_root_widget_bootstraps_shared_render_tree() {
     let realm = UiRealm::for_test();
     realm
         .enter(|realm| realm.attach_root_widget(&LeafView))
@@ -65,8 +64,7 @@ fn attach_root_widget_bootstraps_shared_render_tree() {
 /// The production frame path polls the async driver **exactly once**,
 /// on the realm's own scheduler, in the mid-frame slot — and the
 /// pipeline runs afterwards, in the persistent slot.
-#[test]
-fn the_production_frame_polls_the_realms_async_driver_once_before_the_pipeline() {
+pub(crate) fn the_production_frame_polls_the_realms_async_driver_once_before_the_pipeline() {
     let realm = UiRealm::for_test();
     let scheduler = realm.scheduler();
 
@@ -122,8 +120,7 @@ fn mount_root() -> UiRealm {
     realm
 }
 
-#[test]
-fn surface_lost_keeps_needs_redraw_armed_for_a_retry() {
+pub(crate) fn surface_lost_keeps_needs_redraw_armed_for_a_retry() {
     let realm = mount_root();
     let mut backend = ScriptedSink::single_shot(SubmitVerdict::SurfaceStale);
 

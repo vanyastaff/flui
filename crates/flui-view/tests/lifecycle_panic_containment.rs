@@ -318,8 +318,7 @@ fn direct_children_in_slot_order(tree: &ElementTree, parent: ElementId) -> Vec<E
     children.into_iter().map(|(_, id)| id).collect()
 }
 
-#[test]
-fn child_init_state_panic_is_replaced_in_place_and_the_build_scope_continues() {
+pub(crate) fn child_init_state_panic_is_replaced_in_place_and_the_build_scope_continues() {
     let left_key = GlobalKey::<()>::new();
     let failed_key = GlobalKey::<InitStatePanicChildState>::new();
     let right_key = GlobalKey::<()>::new();
@@ -434,8 +433,7 @@ fn child_init_state_panic_is_replaced_in_place_and_the_build_scope_continues() {
 // id-reconcile that drops the child, and the freed slot never re-disposes.
 // ============================================================================
 
-#[test]
-fn a_dispose_panic_during_finalize_is_contained_and_the_slot_is_freed() {
+pub(crate) fn a_dispose_panic_during_finalize_is_contained_and_the_slot_is_freed() {
     let (counter, disposed, _init_state_calls) = new_counter(None, true);
 
     let mut tree = ElementTree::new();
@@ -524,8 +522,7 @@ fn a_dispose_panic_during_finalize_is_contained_and_the_slot_is_freed() {
 // cleared.
 // ============================================================================
 
-#[test]
-fn a_dispose_panic_on_a_global_keyed_element_still_clears_the_registry() {
+pub(crate) fn a_dispose_panic_on_a_global_keyed_element_still_clears_the_registry() {
     let key = GlobalKey::<DisposeCounterState>::new();
     let (counter, disposed, init_state_calls) = new_counter(Some(key.clone()), true);
 
@@ -725,8 +722,7 @@ impl View for BuildCountingLeaf {
     }
 }
 
-#[test]
-fn a_deactivate_panic_is_contained_and_the_element_is_still_parked_inactive() {
+pub(crate) fn a_deactivate_panic_is_contained_and_the_element_is_still_parked_inactive() {
     let key = GlobalKey::<DeactivateCounterState>::new();
     let armed = Rc::new(Cell::new(true));
     let deactivated = Rc::new(Cell::new(0u32));

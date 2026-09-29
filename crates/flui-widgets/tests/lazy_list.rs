@@ -111,8 +111,7 @@ impl ViewState<ProbeItem> for ProbeItemState {
 /// moves away. Every disposed index was initialised first, and no index is
 /// initialised twice while resident. (Same-frame timing is pinned by the test
 /// above; this one pins the lifecycle pairing.)
-#[test]
-fn lazy_list_view_builder_stateful_items_init_and_dispose_with_the_band() {
+pub(crate) fn lazy_list_view_builder_stateful_items_init_and_dispose_with_the_band() {
     const ITEM_COUNT: usize = 100;
     const ITEM_EXTENT: f64 = 48.0;
     let log: Arc<parking_lot::Mutex<Vec<(usize, &'static str)>>> =
@@ -214,8 +213,7 @@ fn sliver_list_geometry(laid: &LaidOut) -> flui_rendering::constraints::SliverGe
 /// deferral path, and it must stay a deferral: no `BUG:` panic in a debug
 /// build, and the band completes over the following frames exactly as the
 /// old post-paint service path would have.
-#[test]
-fn lazy_list_view_builder_pathological_extents_defer_instead_of_panicking() {
+pub(crate) fn lazy_list_view_builder_pathological_extents_defer_instead_of_panicking() {
     const ITEM_COUNT: usize = 400;
     const ENTRY: usize = 25;
     const SEED: f64 = 200.0;
@@ -261,8 +259,7 @@ fn lazy_list_view_builder_pathological_extents_defer_instead_of_panicking() {
 /// laid out until the next frame — and that next frame completes it. The
 /// default budget settles the same scene in one frame (the test above), so
 /// the knob is what makes this path observable.
-#[test]
-fn lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_the_next_frame() {
+pub(crate) fn lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_the_next_frame() {
     const ITEM_COUNT: usize = 1000;
     const SEED_ESTIMATE: f64 = 200.0;
     const ACTUAL: f64 = 10.0;
@@ -409,8 +406,7 @@ fn born_ids(laid: &LaidOut, ids: &[u32]) -> Vec<u32> {
 /// new place in the same frame keeps its state: the reconcile relocates it
 /// before the band eviction judges it by its NEW index. Evicting first
 /// destroyed it and mounted a fresh row at the destination.
-#[test]
-fn lazy_list_view_builder_keyed_row_moving_with_the_viewport_keeps_state() {
+pub(crate) fn lazy_list_view_builder_keyed_row_moving_with_the_viewport_keeps_state() {
     const EXTENT: f64 = 48.0;
     let data: Data = Arc::new(parking_lot::Mutex::new((0..100).collect()));
     let inits = Arc::new(parking_lot::Mutex::new(Vec::new()));

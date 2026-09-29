@@ -70,8 +70,7 @@ fn assert_point_eq(actual: Point, expected: Point) {
 /// `RenderBox.applyPaintTransform` translates by the child's committed offset
 /// (`box.dart:3014`), and `getTransformTo` composes one step per level
 /// (`object.dart:3728-3731`). Two nested offsets must add.
-#[test]
-fn transform_to_accumulates_offsets_through_a_plain_chain() {
+pub(crate) fn transform_to_accumulates_offsets_through_a_plain_chain() {
     let run = RenderTester::mount(
         box_node(OffsetBox(Offset::new(10.0, 5.0)))
             .label("outer")

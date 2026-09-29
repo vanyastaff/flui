@@ -502,7 +502,6 @@ mod tests {
 
     /// `'tracks life-cycle of Future to success'`: `Waiting` → `Done + data`,
     /// observed through the normal frame path.
-    #[test]
     fn future_builder_pending_future_waits_then_completes_with_data() {
         let log = Arc::new(Mutex::new(Vec::new()));
         let completer = Completer::new();
@@ -547,7 +546,6 @@ mod tests {
     /// This proves **cancellation**, not the generation guard — the guard is
     /// unreachable through the widget precisely because cancellation gets there
     /// first. `apply_completion_*` below tests the guard directly.
-    #[test]
     fn future_builder_dispose_cancels_and_never_rebuilds() {
         let log = Arc::new(Mutex::new(Vec::new()));
         let completer = Completer::new();
@@ -576,6 +574,23 @@ mod tests {
             harness.owner.pending_external_builds(),
             0,
             "no rebuild queued"
+        );
+    }
+
+    #[test]
+    fn future_builder_matrix() {
+        crate::table_test::run_table(
+            "future_builder_matrix",
+            &[
+                (
+                    "future_builder_pending_future_waits_then_completes_with_data",
+                    future_builder_pending_future_waits_then_completes_with_data as fn(),
+                ),
+                (
+                    "future_builder_dispose_cancels_and_never_rebuilds",
+                    future_builder_dispose_cancels_and_never_rebuilds as fn(),
+                ),
+            ],
         );
     }
 

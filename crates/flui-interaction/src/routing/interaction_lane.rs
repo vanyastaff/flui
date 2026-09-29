@@ -1794,7 +1794,27 @@ mod tests {
         HitTestEntry::new(flui_foundation::RenderId::new(1)).pointer_target(target)
     }
 
+    // Lane isolation matrix: per-target panics and reentrant replacement drops.
     #[test]
+    fn lane_isolation_matrix() {
+        let cases: &[(&str, fn())] = &[
+            (
+                "invoke_isolates_per_target_panics_and_returns_the_first_payload",
+                invoke_isolates_per_target_panics_and_returns_the_first_payload,
+            ),
+            (
+                "replacement_drop_can_reenter_public_registration_api",
+                replacement_drop_can_reenter_public_registration_api,
+            ),
+        ];
+        for &(name, case) in cases {
+            if let Err(payload) = std::panic::catch_unwind(case) {
+                eprintln!("matrix case `{name}` failed");
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+
     fn invoke_isolates_per_target_panics_and_returns_the_first_payload() {
         let lane = InteractionLane::try_new().expect("lane");
         let handle = lane.dispatch_handle();
@@ -1861,7 +1881,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn replacement_drop_can_reenter_public_registration_api() {
         let lane = InteractionLane::try_new().expect("lane");
         let handle = lane.dispatch_handle();

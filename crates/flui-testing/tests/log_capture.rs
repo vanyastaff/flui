@@ -12,7 +12,6 @@
 
 use flui_testing::log_capture::capture;
 
-#[test]
 fn fields_and_levels_survive_the_round_trip() {
     let ((), log) = capture(|| {
         tracing::error!(count = 3, name = "widget", "structured probe");
@@ -31,7 +30,6 @@ fn fields_and_levels_survive_the_round_trip() {
     );
 }
 
-#[test]
 fn a_panicking_body_still_tears_the_sink_down() {
     let panicked = std::panic::catch_unwind(|| {
         capture(|| panic!("probe panic"));
@@ -41,4 +39,21 @@ fn a_panicking_body_still_tears_the_sink_down() {
     // If the sink had leaked, this would panic on the nesting assertion.
     let ((), log) = capture(|| tracing::warn!("after the panic"));
     assert!(log.contains("after the panic"), "{log}");
+}
+
+#[test]
+fn log_capture_matrix() {
+    crate::run_table(
+        "log_capture_matrix",
+        &[
+            (
+                "fields_and_levels_survive_the_round_trip",
+                fields_and_levels_survive_the_round_trip as fn(),
+            ),
+            (
+                "a_panicking_body_still_tears_the_sink_down",
+                a_panicking_body_still_tears_the_sink_down as fn(),
+            ),
+        ],
+    );
 }

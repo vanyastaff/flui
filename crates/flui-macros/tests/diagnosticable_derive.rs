@@ -8,7 +8,6 @@
 use flui_foundation::{Diagnosticable, DiagnosticsProperty};
 use flui_macros::Diagnosticable;
 
-#[test]
 fn diagnosticable_derive_basic() {
     #[derive(Debug, Diagnosticable)]
     struct TestWidget {
@@ -41,7 +40,6 @@ fn diagnosticable_derive_basic() {
     );
 }
 
-#[test]
 fn diagnosticable_derive_generic() {
     #[derive(Debug, Diagnosticable)]
     struct Wrap<T: std::fmt::Debug> {
@@ -58,4 +56,10 @@ fn diagnosticable_derive_generic() {
     assert_eq!(props.len(), 1);
     assert_eq!(props[0].name(), "inner");
     assert_eq!(props[0].value(), "7");
+}
+
+#[test]
+fn diagnosticable_derive_contract() {
+    diagnosticable_derive_basic();
+    diagnosticable_derive_generic();
 }

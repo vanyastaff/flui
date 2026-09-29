@@ -553,7 +553,6 @@ mod tests {
         (wake, count)
     }
 
-    #[test]
     fn dropped_after_delivery_abandons_with_recoverable_payload() {
         let (wake, wake_count) = counting_wake();
         let (slot, handle) = claim_slot::<String>(wake);
@@ -592,7 +591,6 @@ mod tests {
         assert!(slot.is_settled());
     }
 
-    #[test]
     fn concurrent_abandon_and_deliver_race_wakes_exactly_once() {
         // Stress the race the module doc calls out: the owner may call
         // `deliver` concurrently with the requester dropping its handle.
@@ -620,7 +618,6 @@ mod tests {
     /// scrutinee temporary lives through its arm body), so a waker that
     /// re-enters this same slot from its own `wake()` would observe the
     /// lock still held. This waker's `wake_by_ref` probes exactly that.
-    #[test]
     fn wake_task_releases_the_waker_lock_before_calling_wake() {
         struct ProbingWake {
             inner: Arc<Inner<u32>>,
@@ -656,7 +653,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn panic_during_owner_work_before_delivery_leaves_the_slot_claimable_or_abandoned() {
         // Simulates the owner panicking while producing `T`, *before* ever
         // calling `deliver` — the hazard this test rules out is a wedged
@@ -694,5 +690,27 @@ mod tests {
              so the WakeOwner callback (which wakes the owner on requester \
              abandonment) must not fire"
         );
+    }
+
+    #[test]
+    fn claim_slot_contract() {
+        crate::test_cases::run_cases(&[
+            (
+                "dropped after delivery abandons with recoverable payload",
+                dropped_after_delivery_abandons_with_recoverable_payload,
+            ),
+            (
+                "concurrent abandon and deliver race wakes exactly once",
+                concurrent_abandon_and_deliver_race_wakes_exactly_once,
+            ),
+            (
+                "wake task releases the waker lock before calling wake",
+                wake_task_releases_the_waker_lock_before_calling_wake,
+            ),
+            (
+                "panic during owner work before delivery leaves the slot claimable or abandoned",
+                panic_during_owner_work_before_delivery_leaves_the_slot_claimable_or_abandoned,
+            ),
+        ]);
     }
 }

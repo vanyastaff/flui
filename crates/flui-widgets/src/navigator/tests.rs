@@ -157,7 +157,6 @@ fn boxed(value: i32) -> super::route::AnyResult {
 ///
 /// Red-check: delete that early-return in `RouteEntry::arm_complete`; the second
 /// `remove_route` re-arms a disposed-or-removing entry.
-#[test]
 fn double_pop_or_double_remove_does_not_double_complete() {
     let log: Log = Log::default();
     let mut history = RouteHistory::new();
@@ -212,12 +211,20 @@ fn double_pop_or_double_remove_does_not_double_complete() {
 /// stack enforces.
 ///
 /// Red-check: delete the `assert!` in `RouteHistory::flush`.
-#[test]
-#[should_panic(expected = "BUG: flush_history_updates re-entered")]
 fn reentrant_flush_panics_with_bug() {
     let mut history = RouteHistory::new();
     history.force_flushing_for_test();
-    history.flush(true);
+    let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| history.flush(true)))
+        .expect_err("a re-entered flush must panic");
+    let message = refused
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| refused.downcast_ref::<&str>().copied())
+        .unwrap_or_default();
+    assert!(
+        message.contains("BUG: flush_history_updates re-entered"),
+        "reentrant_flush_panics_with_bug: unexpected diagnostic {message:?}"
+    );
 }
 
 // ============================================================================
@@ -324,7 +331,6 @@ fn binding_for(history: &RouteHistory, id: RouteId) -> RouteBinding {
 /// Red-check: make `RouteBinding::finalize` call `RouteHistory::finalize_route`
 /// directly — it deadlocks on the history mutex (a hang, not a panic), which is
 /// exactly why the queue exists.
-#[test]
 fn route_binding_finalize_during_flush_is_deferred_not_reentrant() {
     let log: Log = Log::default();
     let mut history = RouteHistory::new();
@@ -357,3 +363,32 @@ fn route_binding_finalize_during_flush_is_deferred_not_reentrant() {
 // ============================================================================
 // 11. PURITY
 // ============================================================================
+
+/// History failure paths: double completion, re-entered flush, deferred finalization and
+/// registrations that re-enter the registry from `Drop`. Each row runs to completion and a
+/// failing row is named.
+#[test]
+fn history_reentrancy_and_completion_contracts() {
+    let rows: [(&str, fn()); 4] = [
+        (
+            "double_pop_or_double_remove_does_not_double_complete",
+            double_pop_or_double_remove_does_not_double_complete,
+        ),
+        ("reentrant_flush_panics_with_bug", reentrant_flush_panics_with_bug),
+        (
+            "route_binding_finalize_during_flush_is_deferred_not_reentrant",
+            route_binding_finalize_during_flush_is_deferred_not_reentrant,
+        ),
+        (
+            "a_registration_dropped_while_replacing_or_clearing_may_re_enter_the_registry",
+            super::navigator_tests::a_registration_dropped_while_replacing_or_clearing_may_re_enter_the_registry,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (name, row) in rows {
+        if std::panic::catch_unwind(row).is_err() {
+            failures.push(name);
+        }
+    }
+    assert!(failures.is_empty(), "history rows failed: {failures:?}");
+}

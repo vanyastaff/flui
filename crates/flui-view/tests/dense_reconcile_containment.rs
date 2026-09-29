@@ -563,8 +563,7 @@ fn assert_dense_mount_panic_containment(
     );
 }
 
-#[test]
-fn dense_mount_panic_substitutes_at_exact_slot_and_preserves_topology() {
+pub(crate) fn dense_mount_panic_substitutes_at_exact_slot_and_preserves_topology() {
     assert_dense_mount_panic_containment(
         DensePanicsOnCreate::ordinary().boxed(),
         TypeId::of::<DensePanicsOnCreate>(),
@@ -572,8 +571,7 @@ fn dense_mount_panic_substitutes_at_exact_slot_and_preserves_topology() {
     );
 }
 
-#[test]
-fn repeated_dense_mount_panics_do_not_accumulate_ghosts() {
+pub(crate) fn repeated_dense_mount_panics_do_not_accumulate_ghosts() {
     let (mut tree, mut owner, pipeline, observer, parent) = mount_dense_root(DenseRow {
         children: dense_healthy_children(),
     });

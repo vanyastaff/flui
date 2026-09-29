@@ -36,8 +36,7 @@ fn directionality_dependents(cross: CrossAxisAlignment) -> usize {
 ///
 /// This is the control that keeps its sibling honest: without it, a zero there
 /// could mean the lookup is gated correctly OR that nothing ever registers.
-#[test]
-fn a_start_aligned_column_depends_on_directionality() {
+pub(crate) fn a_start_aligned_column_depends_on_directionality() {
     assert_eq!(
         directionality_dependents(CrossAxisAlignment::Start),
         1,

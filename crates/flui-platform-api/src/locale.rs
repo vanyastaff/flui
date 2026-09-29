@@ -327,48 +327,45 @@ impl Locale {
 mod tests {
     use super::*;
 
+    /// Deprecated subtags canonicalize at construction (and, with `serde`, at
+    /// deserialization, which must route through the canonicalizing
+    /// constructor rather than a bare derive), so the deprecated and preferred
+    /// spellings are one locale: equal and hash-equal.
     #[test]
-    fn deprecated_and_preferred_language_subtags_are_equal_and_hash_equal() {
+    fn deprecated_subtags_canonicalize_everywhere_a_locale_is_built() {
+        for (deprecated, preferred) in DEPRECATED_LANGUAGE_SUBTAGS {
+            assert_eq!(
+                Locale::new(*deprecated, None::<&str>).language(),
+                *preferred,
+                "language {deprecated}"
+            );
+        }
+        for (deprecated, preferred) in DEPRECATED_REGION_SUBTAGS {
+            assert_eq!(
+                Locale::new("en", Some(*deprecated)).country(),
+                Some(*preferred),
+                "region {deprecated}"
+            );
+        }
+
         let iw = Locale::new("iw", None::<&str>);
         let he = Locale::new("he", None::<&str>);
-        assert_eq!(
-            iw, he,
-            "Locale(\"iw\") and Locale(\"he\") must be the same locale"
-        );
-
+        assert_eq!(iw, he, "iw and he must be the same locale");
         let mut set = std::collections::HashSet::new();
         set.insert(iw);
         assert!(
             set.contains(&he),
             "canonicalized locales must hash identically, not just compare equal"
         );
-    }
 
-    #[test]
-    fn every_deprecated_subtag_canonicalizes() {
-        for (deprecated, preferred) in DEPRECATED_LANGUAGE_SUBTAGS {
-            assert_eq!(
-                Locale::new(*deprecated, None::<&str>).language(),
-                *preferred
-            );
+        #[cfg(feature = "serde")]
+        {
+            let iw: Locale =
+                serde_json::from_str(r#"{"language":"iw","country":null,"script":null}"#)
+                    .expect("valid Locale JSON");
+            assert_eq!(iw, he, "deserialized iw");
+            assert_eq!(iw.language(), "he");
+            assert!(iw.is_rtl());
         }
-        for (deprecated, preferred) in DEPRECATED_REGION_SUBTAGS {
-            assert_eq!(
-                Locale::new("en", Some(*deprecated)).country(),
-                Some(*preferred)
-            );
-        }
-    }
-
-    /// Deserialization must route through the canonicalizing constructor:
-    /// a bare derive would write "iw" straight into the private field.
-    #[cfg(feature = "serde")]
-    #[test]
-    fn deserializing_a_deprecated_subtag_canonicalizes_it() {
-        let iw: Locale = serde_json::from_str(r#"{"language":"iw","country":null,"script":null}"#)
-            .expect("valid Locale JSON");
-        assert_eq!(iw, Locale::new("he", None::<&str>));
-        assert_eq!(iw.language(), "he");
-        assert!(iw.is_rtl());
     }
 }

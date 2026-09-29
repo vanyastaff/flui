@@ -107,8 +107,7 @@ fn mount_navigator(navigator: &NavigatorHandle) -> Harness {
 ///
 /// Red-check: deliver notifications under the history lock (as above); this times
 /// out instead of failing an assertion.
-#[test]
-fn an_observer_may_push_from_did_push_without_deadlocking() {
+pub(crate) fn an_observer_may_push_from_did_push_without_deadlocking() {
     /// Pushes exactly one extra route, the first time it hears about a push.
     #[derive(Default)]
     struct Reentrant {

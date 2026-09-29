@@ -13,8 +13,7 @@ fn counting_window(id: u64) -> (Arc<dyn PlatformWindow>, Arc<AtomicU32>) {
 ///
 /// The wake handed to a realm is `Send + Sync` precisely so this is
 /// legal; this pins that the scheduler seam preserves it.
-#[test]
-fn a_cross_thread_frame_request_reaches_the_realms_platform_wake() {
+pub(crate) fn a_cross_thread_frame_request_reaches_the_realms_platform_wake() {
     let wakes = Arc::new(AtomicU32::new(0));
     let wake_counter = Arc::clone(&wakes);
     let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {

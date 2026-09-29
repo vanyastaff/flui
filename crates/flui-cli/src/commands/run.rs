@@ -2228,7 +2228,6 @@ mod tests {
     /// The env-var names are duplicated from `flui-hot-reload` so the CLI
     /// does not link the framework; this is the only place that proves they
     /// still agree.
-    #[test]
     fn env_names_match_the_runtime() {
         assert_eq!(env::HOT_RELOAD, flui_hot_reload::strategy::env::HOT_RELOAD);
         assert_eq!(
@@ -2237,7 +2236,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn device_selection_prefers_exact_id_then_name_then_unique_prefix() {
         use crate::DevicePlatform;
         use crate::commands::devices::{Device, Kind, Status};
@@ -2268,5 +2266,16 @@ mod tests {
         assert_eq!(ambiguous.exit_code(), 5);
         let missing = super::select_device(&devices, "pixel").unwrap_err();
         assert_eq!(missing.exit_code(), 5);
+    }
+
+    #[test]
+    fn run_contract() {
+        crate::test_cases::run_cases(&[
+            ("env names match the runtime", env_names_match_the_runtime),
+            (
+                "device selection prefers exact id then name then unique prefix",
+                device_selection_prefers_exact_id_then_name_then_unique_prefix,
+            ),
+        ]);
     }
 }

@@ -2971,7 +2971,6 @@ mod tests {
     #[derive(Clone)]
     struct TestView;
 
-    #[test]
     fn wake_debt_is_shared_and_only_a_hooked_scheduler_can_pay_it() {
         let inbox = Arc::new(ExternalBuildInbox::default());
         let wake_panics = Arc::new(AtomicBool::new(true));
@@ -3008,7 +3007,6 @@ mod tests {
         assert_eq!(wake_calls.load(Ordering::Relaxed), 3);
     }
 
-    #[test]
     fn same_id_schedule_racing_a_failed_wake_gets_a_compensating_wake() {
         let inbox = Arc::new(ExternalBuildInbox::default());
         let wake_calls = Arc::new(AtomicUsize::new(0));
@@ -3067,7 +3065,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn reentrant_retry_preserves_the_first_panic_when_the_retry_payload_drop_panics() {
         struct DropBomb;
 
@@ -3116,7 +3113,6 @@ mod tests {
         assert_eq!(wake_calls.load(Ordering::Relaxed), 2);
     }
 
-    #[test]
     fn direct_build_scheduling_retries_a_failed_wake() {
         let mut owner = BuildOwner::new();
         let wake_panics = Arc::new(AtomicBool::new(true));
@@ -3179,7 +3175,6 @@ mod tests {
         owner.build_scope(tree);
     }
 
-    #[test]
     fn nested_scope_quarantines_work_until_its_own_drain() {
         let mut owner = BuildOwner::new();
         let mut tree = ElementTree::new();
@@ -3324,7 +3319,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn queued_work_follows_a_live_global_key_reparent_across_build_scopes() {
         let mut owner = BuildOwner::new();
         let mut tree = ElementTree::new();
@@ -3425,7 +3419,6 @@ mod tests {
     /// same scope still holds it must fail eagerly (traced, then panicked),
     /// and the failed attempt must leave the first owner's tree completely
     /// undisturbed — not partially unmounted, not re-tagged.
-    #[test]
     fn duplicate_global_key_across_owners_sharing_a_scope_fails_eagerly_and_leaves_first_tree_undisturbed()
      {
         let scope = GlobalKeyScope::new();
@@ -3471,7 +3464,6 @@ mod tests {
     /// hash, so `try_retake_global_key` finds no candidate and creates a
     /// genuinely new element — nothing to carry state over from even in
     /// principle.
-    #[test]
     fn mount_in_b_after_a_finalizes_is_fresh_mount_no_state_carryover() {
         let scope = GlobalKeyScope::new();
         let keyed = KeyedView {
@@ -3690,7 +3682,6 @@ mod tests {
     /// Calls `build_scope_impl` directly, not `build_scope`: the public
     /// entry point resets `mid_drain_absorbs_left`/`built_this_frame` at
     /// every call, which would erase the precondition this test just armed.
-    #[test]
     fn mid_drain_panic_after_a_cap_still_flushes_the_capped_id_to_the_inbox() {
         let mut owner = BuildOwner::new();
         let mut tree = ElementTree::new();
@@ -3745,7 +3736,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn mid_drain_absorb_budget_caps_a_self_rescheduler_and_rearms_after_a_clean_frame() {
         let mut owner = BuildOwner::new();
         let mut tree = ElementTree::new();
@@ -3819,5 +3809,24 @@ mod tests {
         // Cleanup: leave the owner in a clean state.
         should_reschedule.store(false, Ordering::Relaxed);
         owner.build_scope(&mut tree);
+    }
+
+    #[test]
+    fn build_owner_scheduling_matrix() {
+        crate::table_test::run_table(
+            "build_owner_scheduling_matrix",
+            &[
+                ("wake_debt_is_shared_and_only_a_hooked_scheduler_can_pay_it", wake_debt_is_shared_and_only_a_hooked_scheduler_can_pay_it as fn()),
+                ("same_id_schedule_racing_a_failed_wake_gets_a_compensating_wake", same_id_schedule_racing_a_failed_wake_gets_a_compensating_wake as fn()),
+                ("reentrant_retry_preserves_the_first_panic_when_the_retry_payload_drop_panics", reentrant_retry_preserves_the_first_panic_when_the_retry_payload_drop_panics as fn()),
+                ("direct_build_scheduling_retries_a_failed_wake", direct_build_scheduling_retries_a_failed_wake as fn()),
+                ("nested_scope_quarantines_work_until_its_own_drain", nested_scope_quarantines_work_until_its_own_drain as fn()),
+                ("queued_work_follows_a_live_global_key_reparent_across_build_scopes", queued_work_follows_a_live_global_key_reparent_across_build_scopes as fn()),
+                ("duplicate_global_key_across_owners_sharing_a_scope_fails_eagerly_and_leaves_first_tree_undisturbed", duplicate_global_key_across_owners_sharing_a_scope_fails_eagerly_and_leaves_first_tree_undisturbed as fn()),
+                ("mount_in_b_after_a_finalizes_is_fresh_mount_no_state_carryover", mount_in_b_after_a_finalizes_is_fresh_mount_no_state_carryover as fn()),
+                ("mid_drain_panic_after_a_cap_still_flushes_the_capped_id_to_the_inbox", mid_drain_panic_after_a_cap_still_flushes_the_capped_id_to_the_inbox as fn()),
+                ("mid_drain_absorb_budget_caps_a_self_rescheduler_and_rearms_after_a_clean_frame", mid_drain_absorb_budget_caps_a_self_rescheduler_and_rearms_after_a_clean_frame as fn()),
+            ],
+        );
     }
 }

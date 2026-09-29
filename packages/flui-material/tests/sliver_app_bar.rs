@@ -51,8 +51,7 @@ fn header_child_height(laid: &common::LaidOut, render_type: &str) -> f64 {
 
 /// Scrolled deep, a pinned bar collapses to — and holds — its collapsed
 /// extent (the toolbar height, with no bottom and no inset).
-#[test]
-fn a_pinned_bar_holds_its_collapsed_height_at_deep_scroll() {
+pub fn a_pinned_bar_holds_its_collapsed_height_at_deep_scroll() {
     let bar = SliverAppBar::new()
         .title(Text::new("FLUI"))
         .expanded_height(200.0)

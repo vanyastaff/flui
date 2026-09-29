@@ -96,8 +96,7 @@ fn seeded() -> NavigatorHandle {
 ///
 /// Red-check: delete the `None => { … observers.push(HeroController::new()) }` arm from
 /// `NavigatorState::init_state` — no controller, no shuttle, `max == 0`.
-#[test]
-fn a_hero_push_flight_runs_and_settles() {
+pub(crate) fn a_hero_push_flight_runs_and_settles() {
     let vsync = Vsync::new();
     let navigator = seeded();
     let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 400.0), vsync);

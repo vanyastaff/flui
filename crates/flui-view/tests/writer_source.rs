@@ -121,8 +121,7 @@ fn mount(write_in_build: bool) -> (HeadlessBinding, Rc<Seen>) {
     (binding, seen)
 }
 
-#[test]
-fn writer_source_from_init_state_writes_and_rebuilds_the_reader() {
+pub(crate) fn writer_source_from_init_state_writes_and_rebuilds_the_reader() {
     let (mut binding, seen) = mount(false);
     assert_eq!(
         *seen.reads.borrow(),

@@ -14,8 +14,7 @@ use flui_painting::typography::{TextDirection, TextSpan};
 /// What `paint` records is the layout that was measured — the very `Arc`,
 /// not a re-shape — so a truncated paragraph paints exactly the lines it
 /// measured, ellipsis included.
-#[test]
-fn a_truncated_paragraph_paints_exactly_the_lines_it_measured() {
+pub(crate) fn a_truncated_paragraph_paints_exactly_the_lines_it_measured() {
     use flui_foundation::geometry::Offset;
     use flui_painting::styling::Color;
     use flui_painting::{Canvas, DrawOp};
@@ -67,8 +66,7 @@ fn a_truncated_paragraph_paints_exactly_the_lines_it_measured() {
 /// `Arc`) and the new colour rides on the paragraph command. A span recolour
 /// is baked into the layout and so is a layout change: the next layout
 /// shapes again, once.
-#[test]
-fn root_recolor_keeps_the_shaped_buffer_and_span_recolor_reshapes_once() {
+pub(crate) fn root_recolor_keeps_the_shaped_buffer_and_span_recolor_reshapes_once() {
     use flui_foundation::geometry::Offset;
     use flui_painting::{Canvas, DrawOp, Invalidation};
     use flui_painting::{styling::Color, typography::TextStyle};

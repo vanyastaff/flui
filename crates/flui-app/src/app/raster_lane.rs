@@ -530,7 +530,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn a_presented_frame_classifies_presented_and_renders_through_the_mailbox() {
         let mut lane = RasterLane::new(ScriptedBackend::presenting(), test_address(), 640, 480);
         let verdict = lane.submit_and_pump(test_scene());
@@ -548,7 +547,6 @@ mod tests {
         });
     }
 
-    #[test]
     fn a_device_loss_classifies_device_lost_and_recovery_reminting_unblocks() {
         let backend = ScriptedBackend::presenting().queue(Err(EngineError::DeviceLost));
         let mut lane = RasterLane::new(backend, test_address(), 640, 480);
@@ -576,5 +574,23 @@ mod tests {
                 "recovery re-minted at the platform's latest size"
             );
         });
+    }
+
+    #[test]
+    fn raster_lane_outcome_matrix() {
+        crate::table_test::run_table(
+            "raster_lane_outcome_matrix",
+            &[
+                (
+                    "a_presented_frame_classifies_presented_and_renders_through_the_mailbox",
+                    a_presented_frame_classifies_presented_and_renders_through_the_mailbox
+                        as fn(),
+                ),
+                (
+                    "a_device_loss_classifies_device_lost_and_recovery_reminting_unblocks",
+                    a_device_loss_classifies_device_lost_and_recovery_reminting_unblocks as fn(),
+                ),
+            ],
+        );
     }
 }

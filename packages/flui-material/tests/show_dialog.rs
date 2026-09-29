@@ -91,8 +91,7 @@ fn app(vsync: &Vsync, navigator: &NavigatorHandle) -> impl View {
 /// the barrier (away from the dialog itself) dismisses it, and the page's
 /// own `State` survives the whole round-trip untouched — proof `PopupRoute`
 /// (`maintain_state: true`, `opaque: false`) never tore the page down.
-#[test]
-fn dialog_covers_the_page_and_a_barrier_tap_dismisses_it_leaving_page_state_intact() {
+pub fn dialog_covers_the_page_and_a_barrier_tap_dismisses_it_leaving_page_state_intact() {
     let vsync = Vsync::new();
     let created = Rc::new(Cell::new(0_u32));
     let taps = Arc::new(AtomicUsize::new(0));

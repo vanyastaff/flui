@@ -138,8 +138,7 @@ fn mount_failing(mode: FailMode) -> (FrameRun, RenderId, RenderId, Arc<AtomicUsi
 /// invalidation source keeps re-dirtying its parent. Without the poison
 /// mechanism the leaf is re-attempted on every re-marked frame — this
 /// assertion fails without the fix.
-#[test]
-fn permanent_structural_failure_is_poisoned_after_bounded_retries() {
+pub(crate) fn permanent_structural_failure_is_poisoned_after_bounded_retries() {
     let (mut run, root, _leaf, attempts) = mount_failing(FailMode::Structural);
     assert_eq!(
         attempts.load(Ordering::Relaxed),
@@ -174,8 +173,7 @@ fn permanent_structural_failure_is_poisoned_after_bounded_retries() {
 /// re-invalidating the failing node itself (a real property change, via
 /// the harness `update` → `mark_needs_layout` flow) lifts the poison, and
 /// the next layout succeeds and clears the failure record.
-#[test]
-fn fresh_invalidation_lifts_poison_and_layout_recovers() {
+pub(crate) fn fresh_invalidation_lifts_poison_and_layout_recovers() {
     let (mut run, root, leaf, attempts) = mount_failing(FailMode::Structural);
     assert_eq!(attempts.load(Ordering::Relaxed), 1);
 
@@ -219,8 +217,7 @@ fn fresh_invalidation_lifts_poison_and_layout_recovers() {
 /// A retriable-class error that fails once and then succeeds must never
 /// engage the poison: the node is retried on the next invalidation and
 /// recovers. (Guard test — passes with and without the fix.)
-#[test]
-fn single_transient_failure_does_not_poison() {
+pub(crate) fn single_transient_failure_does_not_poison() {
     let (mut run, root, leaf, attempts) = mount_failing(FailMode::Retriable);
     assert_eq!(attempts.load(Ordering::Relaxed), 1);
 
@@ -374,8 +371,7 @@ fn node(run: &FrameRun, id: RenderId) -> &RenderNode {
 ///   test goes RED on the call count: nothing ever poisons the leaf, so
 ///   marking the parent in pass 3 re-attempts it — `calls` reads 2 for a
 ///   completely different reason (a second real attempt, not a skip).
-#[test]
-fn a_poisoned_leaf_stands_in_with_its_last_committed_size_not_zero() {
+pub(crate) fn a_poisoned_leaf_stands_in_with_its_last_committed_size_not_zero() {
     let s1 = Size::new(30.0, 40.0);
     let s2 = Size::new(50.0, 60.0);
 

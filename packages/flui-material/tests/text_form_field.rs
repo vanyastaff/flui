@@ -22,8 +22,7 @@ fn required(value: &str) -> Option<String> {
 ///
 /// Fails without the builder writing the field's error into the decoration:
 /// nothing renders "Required".
-#[test]
-fn validator_error_reaches_the_input_decorator_error_line() {
+pub fn validator_error_reaches_the_input_decorator_error_line() {
     let form = FormHandle::new();
     let node = FocusNode::with_debug_label("email");
     let mut laid = lay_out(

@@ -31,8 +31,7 @@ fn find_by_size(laid: &LaidOut, width: f64, height: f64) -> RenderId {
 /// Red-check: drop `+ media.padding.top` from `top_padding`'s computation in
 /// `page_scaffold.rs` — this test's offset assertion fails (would read
 /// `44.0` instead of `64.0`).
-#[test]
-fn content_is_padded_below_the_nav_bar_plus_the_top_inset() {
+pub fn content_is_padded_below_the_nav_bar_plus_the_top_inset() {
     let media = MediaQueryData {
         padding: EdgeInsets::new(20.0, 0.0, 0.0, 0.0),
         ..MediaQueryData::default()

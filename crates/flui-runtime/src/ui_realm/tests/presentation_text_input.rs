@@ -108,8 +108,7 @@ fn drive_one_frame_with(
 /// grant runs inside `build` and the outcome is `Granted`; run the anchor
 /// inside the frame — the grant's phase is not `Idle`; have the pump call the
 /// scheduler's drive itself — the outcome is `Granted` again.
-#[test]
-fn a_text_store_lock_requested_during_a_frame_is_granted_after_the_drive_returns() {
+pub(crate) fn a_text_store_lock_requested_during_a_frame_is_granted_after_the_drive_returns() {
     let (_realm, requester) = drive_one_frame_with(|_| Rc::new(|| {}));
 
     assert_eq!(

@@ -631,38 +631,3 @@ impl std::fmt::Debug for ForcePressGestureRecognizer {
             .finish_non_exhaustive()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::arena::GestureArena;
-
-    #[test]
-    fn test_force_press_peak() {
-        let arena = GestureArena::new();
-        let peaked = Arc::new(Mutex::new(false));
-        let peaked_clone = peaked.clone();
-
-        let recognizer = ForcePressGestureRecognizer::new(arena).with_on_peak(move |_details| {
-            *peaked_clone.lock() = true;
-        });
-
-        let pointer = PointerId::new(2).expect("nonzero pointer id");
-        let position = Offset::new(100.0, 100.0);
-
-        // Start tracking
-        recognizer.add_pointer(pointer, position, position);
-
-        // Down with moderate pressure
-        recognizer.handle_down(position, 0.5);
-
-        // Peak not reached yet
-        assert!(!*peaked.lock());
-
-        // Move with high pressure
-        recognizer.handle_move(position, 0.9, PointerType::Touch);
-
-        // Peak should be triggered
-        assert!(*peaked.lock());
-    }
-}

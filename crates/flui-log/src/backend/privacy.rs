@@ -187,18 +187,3 @@ impl FieldPrivacy {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_private_marker_wins_over_the_public_marker() {
-        // `a.public.private` ends with `.private`, and only the trailing
-        // segment is the marker; deny beats allow when both could match.
-        assert_eq!(
-            FieldPrivacy::classify("a.public.private", FieldKind::Scalar, EventOrigin::Native),
-            FieldPrivacy::Private
-        );
-    }
-}

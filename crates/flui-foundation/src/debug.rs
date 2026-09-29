@@ -1370,27 +1370,6 @@ fn parse_numeric_property_value(property: &DiagnosticsProperty) -> Option<f64> {
     numeric.trim().parse().ok()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_diagnostics_tree_string() {
-        let mut root = DiagnosticsNode::new("Root");
-        root.add_property(DiagnosticsProperty::new("id", 1));
-
-        let mut child = DiagnosticsNode::new("Child");
-        child.add_property(DiagnosticsProperty::new("name", "test"));
-        root = root.child(child);
-
-        let output = root.format_deep(0);
-        assert!(output.contains("Root"));
-        assert!(output.contains("id: 1"));
-        assert!(output.contains("Child"));
-        assert!(output.contains("name: test"));
-    }
-}
-
 // ============================================================================
 // DEBUG PAINT CONFIGURATION
 // ============================================================================

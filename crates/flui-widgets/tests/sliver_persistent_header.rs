@@ -87,8 +87,7 @@ fn scroll_view_at(offset: f64, header: SliverPersistentHeader) -> CustomScrollVi
 /// extent setters mark the child update, layout republishes the freshly
 /// clamped pair, and the ONE rebuild the delegate sees carries it. Probed,
 /// not assumed: exactly one post-swap build, value 60, never 120.
-#[test]
-fn a_swap_that_shrinks_max_extent_never_hands_the_delegate_an_out_of_range_pair() {
+pub(crate) fn a_swap_that_shrinks_max_extent_never_hands_the_delegate_an_out_of_range_pair() {
     let builds = Rc::new(RefCell::new(Vec::new()));
     let header = |max_extent: f64, builds: &Rc<RefCell<Vec<(f64, bool)>>>| {
         SliverPersistentHeader::new(RecordingDelegate {
@@ -179,8 +178,7 @@ impl SliverPersistentHeaderDelegate for SnappingDelegate {
 /// command, and the floating header must animate to FULLY revealed
 /// (`shrink_offset == 0`) even though the scroll offset itself stays deep.
 /// Snapping is reveal animation, not scroll-to-top.
-#[test]
-fn a_floating_snap_header_snaps_fully_open_when_a_startward_scroll_ends() {
+pub(crate) fn a_floating_snap_header_snaps_fully_open_when_a_startward_scroll_ends() {
     use std::time::Duration;
 
     use flui_animation::Vsync;

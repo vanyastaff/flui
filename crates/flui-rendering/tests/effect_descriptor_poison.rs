@@ -123,8 +123,7 @@ fn mount(
 /// kind of descriptor, reached via an ordinary repaint rather than a
 /// layer-only patch, poisons the frame with phase [`PoisonPhase::Paint`] --
 /// once -- and a disarmed retry paints cleanly.
-#[test]
-fn a_panicking_descriptor_under_a_repaint_poisons_the_frame_in_the_paint_phase() {
+pub(crate) fn a_panicking_descriptor_under_a_repaint_poisons_the_frame_in_the_paint_phase() {
     let armed = Arc::new(AtomicBool::new(false));
     let calls = Arc::new(AtomicUsize::new(0));
     let (owner, fx) = mount(Arc::clone(&armed), Arc::clone(&calls), 128, false);

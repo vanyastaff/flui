@@ -96,7 +96,6 @@ fn pixel_at(rgba: &[u8], size: u32, x: u32, y: u32) -> [u8; 4] {
 ///
 /// With exact texel-boundary UVs and a transparent gutter: left pixel maps to
 /// `texel 0.5` → pure RED; right pixel maps to `texel 1.5` → pure GREEN.
-#[test]
 fn atlas_image_is_sharp_at_one_to_one() {
     use flui_painting::paint::Image;
 
@@ -177,7 +176,6 @@ fn atlas_image_is_sharp_at_one_to_one() {
 /// composited with `Clear`. `Clear` ignores the source entirely and writes
 /// zero, so the centre must come back transparent. `SrcOver` (the pre-fix
 /// behaviour) would leave red.
-#[test]
 fn an_offscreen_result_composites_with_its_own_blend_mode() {
     use flui_painting::Paint;
 
@@ -235,4 +233,12 @@ fn an_offscreen_result_composites_with_its_own_blend_mode() {
         "centre pixel = {center:?}; a Clear composite of a GREEN offscreen \
          must erase the red frame to transparent."
     );
+}
+
+/// Painter readbacks: an atlas image is sharp at 1:1, and an offscreen result
+/// composites with its own blend mode.
+#[test]
+fn painter_images_and_offscreen_results_read_back_as_specified() {
+    atlas_image_is_sharp_at_one_to_one();
+    an_offscreen_result_composites_with_its_own_blend_mode();
 }

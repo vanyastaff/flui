@@ -474,7 +474,6 @@ mod tests {
     /// registry that is itself unmuted still never advances while an ancestor
     /// is muted — the ancestor simply never forwards the tick. There is no
     /// flag to compose, and no way to get the composition wrong.
-    #[test]
     fn a_muted_ancestor_starves_an_unmuted_descendant() {
         let outer = Vsync::new();
         let middle = Vsync::new();
@@ -513,7 +512,6 @@ mod tests {
 
     /// A cycle would hang the tick walk, so nesting a registry inside itself
     /// (or inside one of its own descendants) is refused, not linked.
-    #[test]
     fn a_cyclic_nesting_is_refused() {
         let outer = Vsync::new();
         let inner = Vsync::new();
@@ -541,7 +539,6 @@ mod tests {
     /// and hung. Found by the first end-to-end `PopupRoute` pop and recorded in
     /// ADR-0020 ("A real deadlock in `flui-animation`, found by the first end-to-end
     /// pop").
-    #[test]
     fn a_listener_may_unregister_from_inside_tick_all() {
         let vsync = Vsync::new();
         let controller =
@@ -567,5 +564,20 @@ mod tests {
         assert_eq!(vsync.len(), 0, "and the registry dropped the controller");
 
         controller.dispose();
+    }
+
+    #[test]
+    fn vsync_nesting_and_reentrancy() {
+        crate::test_cases::run_cases(&[
+            (
+                "a muted ancestor starves an unmuted descendant",
+                a_muted_ancestor_starves_an_unmuted_descendant,
+            ),
+            ("a cyclic nesting is refused", a_cyclic_nesting_is_refused),
+            (
+                "a listener may unregister from inside tick all",
+                a_listener_may_unregister_from_inside_tick_all,
+            ),
+        ]);
     }
 }

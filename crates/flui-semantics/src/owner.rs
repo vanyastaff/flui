@@ -929,28 +929,26 @@ mod tests {
     use crate::{AccessibilityNodeId, SemanticsActionRequest};
 
     #[test]
-    fn snapshot_rejects_duplicate_accessibility_identity() {
+    fn snapshot_rejects_malformed_trees_and_action_resolution_rejects_stale_nodes() {
+        // Case: one stable identity naming two live nodes.
         let render_id = RenderId::new(7);
         let mut owner = SemanticsOwner::new_without_callback();
         let root = owner.insert(SemanticsNode::new().with_source_render_id(render_id));
         let duplicate = owner.insert(SemanticsNode::new().with_source_render_id(render_id));
         owner.add_child(root, duplicate);
         owner.set_root(Some(root));
-
         assert_eq!(
             owner
                 .snapshot()
-                .expect_err("one stable identity cannot name two live nodes"),
+                .expect_err("duplicate identity: one stable identity cannot name two live nodes"),
             SemanticsSnapshotError::DuplicateAccessibilityIdentity {
                 id: render_id.into(),
                 first_node: root,
                 duplicate_node: duplicate,
             },
         );
-    }
 
-    #[test]
-    fn snapshot_rejects_a_cycle() {
+        // Case: a cycle.
         let mut owner = SemanticsOwner::new_without_callback();
         let root = owner.insert(SemanticsNode::new().with_source_render_id(RenderId::new(1)));
         let child = owner.insert(SemanticsNode::new().with_source_render_id(RenderId::new(2)));
@@ -960,15 +958,14 @@ mod tests {
             .expect("child must remain live")
             .add_child(root);
         owner.set_root(Some(root));
-
         assert_eq!(
-            owner.snapshot().expect_err("cycles cannot be snapshotted"),
+            owner
+                .snapshot()
+                .expect_err("cycle: cycles cannot be snapshotted"),
             SemanticsSnapshotError::RepeatedNode { node: root },
         );
-    }
 
-    #[test]
-    fn action_resolution_ignores_orphaned_and_stale_snapshot_nodes() {
+        // Case: action resolution ignores orphaned and stale nodes.
         let root_render_id = RenderId::new(1);
         let orphan_render_id = RenderId::new(2);
         let stale_render_id = RenderId::new(99);

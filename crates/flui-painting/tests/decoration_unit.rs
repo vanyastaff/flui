@@ -37,8 +37,7 @@ fn commands_in(rect: Rect<f64>, decoration: &BoxDecoration<f64>) -> Vec<DrawOp> 
     canvas.finish().iter().map(|c| c.op.clone()).collect()
 }
 
-#[test]
-fn flutter_paint_order_shadow_background_border() {
+pub(crate) fn flutter_paint_order_shadow_background_border() {
     let decoration = BoxDecoration::with_color(Color::WHITE)
         .set_border(Some(Border::all(BorderSide::new(
             Color::BLACK,
@@ -65,8 +64,7 @@ fn flutter_paint_order_shadow_background_border() {
     );
 }
 
-#[test]
-fn hit_test_respects_rounded_corners() {
+pub(crate) fn hit_test_respects_rounded_corners() {
     let decoration =
         BoxDecoration::with_color(Color::RED).set_border_radius(Some(BorderRadius::circular(20.0)));
     let rect = rect100();
@@ -108,8 +106,7 @@ fn square_rect() -> Rect<f64> {
     Rect::from_ltrb(0.0, 0.0, 100.0, 100.0)
 }
 
-#[test]
-fn circle_uniform_border_is_a_stroked_circle_not_a_drrect() {
+pub(crate) fn circle_uniform_border_is_a_stroked_circle_not_a_drrect() {
     let rect = square_rect(); // r = 50
     let decoration = BoxDecoration::with_color(Color::WHITE)
         .set_shape(BoxShape::Circle)

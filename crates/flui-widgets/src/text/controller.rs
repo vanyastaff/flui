@@ -1260,7 +1260,6 @@ mod tests {
     /// joined by two Zero-Width-Joiners); one Backspace removes all of it.
     const FAMILY: &str = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}";
 
-    #[test]
     fn backspace_removes_a_whole_zwj_sequence_not_one_scalar() {
         let controller = TextEditingController::with_text(format!("a{FAMILY}"));
         controller.backspace();
@@ -1316,7 +1315,6 @@ mod tests {
     ///
     /// Red-check: comment out the `guard.composing = None;` line in
     /// `backspace` — the composition survives with a stale range.
-    #[test]
     fn backspace_during_active_composition_clears_it() {
         let controller = TextEditingController::with_text("Hello nihao");
         compose(&controller, 6..11, false);
@@ -1325,5 +1323,12 @@ mod tests {
 
         assert_eq!(controller.text(), "Hello niha");
         assert!(!controller.is_composing());
+    }
+
+    /// Backspace edits on grapheme and composition boundaries.
+    #[test]
+    fn backspace_grapheme_and_composition_contracts() {
+        backspace_removes_a_whole_zwj_sequence_not_one_scalar();
+        backspace_during_active_composition_clears_it();
     }
 }

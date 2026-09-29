@@ -3555,7 +3555,6 @@ mod tests {
     ///
     /// Red-check (reverted `finish_async_pump`): `(is_frame_scheduled(),
     /// hook_fires) == (false, 1)`, not `(true, 2)`.
-    #[test]
     fn finish_async_pump_reissues_a_stranded_live_waiters_demand() {
         let mut scheduler = UpdateScheduler::new();
         let hook_fires = Arc::new(AtomicU64::new(0));
@@ -3600,7 +3599,6 @@ mod tests {
     /// silent, and `handle_begin_frame` re-arms the edge. A ticker that
     /// re-registers its callback during the frame therefore wakes the
     /// platform for the NEXT frame — the self-sustaining animation loop.
-    #[test]
     fn frame_scheduled_hook_fires_once_per_transition() {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -3643,7 +3641,6 @@ mod tests {
     /// Unlike the Build cap, the run count is exactly the cap, not
     /// `+ 1`: `flush_microtasks` has no trailing, unconditional second sweep
     /// the way `handle_draw_frame` does for `Priority::Idle`.
-    #[test]
     fn a_self_reenqueuing_microtask_is_bounded_by_the_reentry_cap_not_hung_forever() {
         use std::sync::atomic::AtomicUsize;
 
@@ -3686,7 +3683,6 @@ mod tests {
     /// 3.44.0): the disabled→enabled edge must actually schedule a frame,
     /// through the real `request_frame` path so `on_frame_scheduled` fires —
     /// otherwise a resumed app never wakes an idle event loop.
-    #[test]
     fn lifecycle_reenable_edge_schedules_exactly_one_frame() {
         let scheduler = UpdateScheduler::new();
         let wakes = Arc::new(AtomicU64::new(0));
@@ -3738,7 +3734,6 @@ mod tests {
     /// A waker that panics must not starve waiters registered after it: the
     /// panic is caught, logged, and re-raised only once every waiter has
     /// been notified (issue #1057).
-    #[test]
     fn notify_frame_completion_still_wakes_a_later_waiter_when_an_earlier_waker_panics() {
         use std::sync::atomic::AtomicUsize;
         use std::task::Wake;
@@ -3796,7 +3791,6 @@ mod tests {
     /// the scheduler that would have resolved it is gone: dropping the last
     /// strong `UpdateScheduler` handle must resolve every registered waiter
     /// with `Err(SchedulerClosed)` and wake it exactly once.
-    #[test]
     fn scheduler_drop_resolves_a_pending_waiter_with_scheduler_closed() {
         use std::sync::atomic::AtomicUsize;
 
@@ -3833,7 +3827,6 @@ mod tests {
     /// notify payload through `discard_panic_payload`, not an uncontained
     /// `drop`, when the post-frame callback ALSO panicked and so is what
     /// actually propagates.
-    #[test]
     fn end_frame_impl_survives_a_panicking_notify_payloads_own_drop_panic() {
         use std::task::Wake;
 
@@ -3871,6 +3864,45 @@ mod tests {
             SchedulerPhase::Idle,
             "the phase reset must still run even though discarding the notify side's own \
              panic-on-drop payload could itself have panicked"
+        );
+    }
+
+    #[test]
+    fn scheduler_frame_contract_matrix() {
+        crate::table_test::run_table(
+            "scheduler_frame_contract_matrix",
+            &[
+                (
+                    "finish_async_pump_reissues_a_stranded_live_waiters_demand",
+                    finish_async_pump_reissues_a_stranded_live_waiters_demand as fn(),
+                ),
+                (
+                    "frame_scheduled_hook_fires_once_per_transition",
+                    frame_scheduled_hook_fires_once_per_transition as fn(),
+                ),
+                (
+                    "a_self_reenqueuing_microtask_is_bounded_by_the_reentry_cap_not_hung_forever",
+                    a_self_reenqueuing_microtask_is_bounded_by_the_reentry_cap_not_hung_forever
+                        as fn(),
+                ),
+                (
+                    "lifecycle_reenable_edge_schedules_exactly_one_frame",
+                    lifecycle_reenable_edge_schedules_exactly_one_frame as fn(),
+                ),
+                (
+                    "notify_frame_completion_still_wakes_a_later_waiter_when_an_earlier_waker_panics",
+                    notify_frame_completion_still_wakes_a_later_waiter_when_an_earlier_waker_panics
+                        as fn(),
+                ),
+                (
+                    "scheduler_drop_resolves_a_pending_waiter_with_scheduler_closed",
+                    scheduler_drop_resolves_a_pending_waiter_with_scheduler_closed as fn(),
+                ),
+                (
+                    "end_frame_impl_survives_a_panicking_notify_payloads_own_drop_panic",
+                    end_frame_impl_survives_a_panicking_notify_payloads_own_drop_panic as fn(),
+                ),
+            ],
         );
     }
 

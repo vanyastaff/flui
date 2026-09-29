@@ -105,8 +105,7 @@ fn create_tree_and_owner() -> (Arc<RwLock<ElementTree>>, Arc<RwLock<BuildOwner>>
 // R6: find_ancestor_view returns the nearest matching ancestor
 // ============================================================================
 
-#[test]
-fn find_ancestor_view_returns_nearest_match() {
+pub(crate) fn find_ancestor_view_returns_nearest_match() {
     // Tree shape: LabeledView(42) -> Spacer -> DummyChild.
     // From DummyChild, find_ancestor::<LabeledView> should yield 42.
     let (tree, owner) = create_tree_and_owner();
@@ -130,7 +129,8 @@ fn find_ancestor_view_returns_nearest_match() {
         &mut owner.write().element_owner_mut(),
     );
 
-    let ctx = ElementBuildContext::for_element(child_id, tree.clone(), owner.clone()).unwrap();
+    let ctx = ElementBuildContext::for_element(child_id, tree.clone(), owner.clone())
+        .expect("the child element is live");
 
     let value = ctx.find_ancestor::<LabeledView, u32>(LabeledView::value);
     assert_eq!(

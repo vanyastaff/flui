@@ -865,7 +865,6 @@ mod tests {
     /// forever, and a later `poll_ready` would silently skip over it
     /// (not `ready`, so never selected) rather than ever making progress
     /// or erroring.
-    #[test]
     fn async_driver_poll_panic_does_not_leave_a_zombie_slot() {
         let driver = AsyncDriver::new();
         let before = driver.pending_task_count();
@@ -894,7 +893,6 @@ mod tests {
 
     // ── 2. wake coalescing + frame requests ─────────────────────────────────
 
-    #[test]
     fn async_driver_coalesces_repeated_wakes_into_one_frame_request() {
         let driver = AsyncDriver::new();
         let frames = Arc::new(AtomicUsize::new(0));
@@ -937,7 +935,6 @@ mod tests {
 
     /// A wake from a worker thread arms the task and requests a frame, but the
     /// future is polled only when the frame thread calls `poll_ready`.
-    #[test]
     fn async_driver_wake_from_another_thread_polls_on_the_driving_thread() {
         let driver = AsyncDriver::new();
         let frames = Arc::new(AtomicUsize::new(0));
@@ -985,7 +982,6 @@ mod tests {
     // ── determinism / re-entrancy ───────────────────────────────────────────
 
     /// Tasks are polled in ascending spawn order, so a frame is reproducible.
-    #[test]
     fn async_driver_polls_in_deterministic_spawn_order() {
         let driver = AsyncDriver::new();
         let order = Arc::new(Mutex::new(Vec::new()));
@@ -1003,7 +999,6 @@ mod tests {
     }
 
     /// A task woken *during* the poll is picked up next frame, not spun on.
-    #[test]
     fn async_driver_self_wake_defers_to_the_next_frame() {
         let driver = AsyncDriver::new();
         let polls = Arc::new(AtomicUsize::new(0));
@@ -1032,7 +1027,6 @@ mod tests {
     /// external wake needed. `tests/frame_panic_recovery.rs`'s
     /// `async_future_poll_panic_closes_the_frame` is this same fixture
     /// end-to-end, through `UpdateScheduler`; this is the driver-level unit.
-    #[test]
     fn panic_mid_pump_keeps_unreached_siblings_indexed() {
         let driver = AsyncDriver::new();
         let third_polls = Arc::new(AtomicUsize::new(0));
@@ -1094,7 +1088,6 @@ mod tests {
     /// `on_unmount`'s own `catch_unwind`-based hook-panic recovery;
     /// `cancel()` swallowing this panic itself would hide it from that
     /// accounting instead of reporting through it.
-    #[test]
     fn cancel_propagates_the_removed_futures_panic() {
         struct PanicsOnDrop;
         impl Drop for PanicsOnDrop {
@@ -1126,7 +1119,6 @@ mod tests {
     /// to an unconditional `self.cancel();` `abort`s this whole test
     /// process before the outer `catch_unwind` below can even return —
     /// reaching the final assertion is itself the proof.
-    #[test]
     fn drop_while_already_unwinding_contains_the_cancel_panic_instead_of_aborting() {
         struct PanicsOnDrop;
         impl Drop for PanicsOnDrop {
@@ -1155,6 +1147,48 @@ mod tests {
             outer.is_err(),
             "the outer panic must still propagate; only the token's own \
              nested cancel panic is contained"
+        );
+    }
+
+    #[test]
+    fn async_driver_failure_and_ordering_matrix() {
+        crate::table_test::run_table(
+            "async_driver_failure_and_ordering_matrix",
+            &[
+                (
+                    "async_driver_poll_panic_does_not_leave_a_zombie_slot",
+                    async_driver_poll_panic_does_not_leave_a_zombie_slot as fn(),
+                ),
+                (
+                    "async_driver_coalesces_repeated_wakes_into_one_frame_request",
+                    async_driver_coalesces_repeated_wakes_into_one_frame_request as fn(),
+                ),
+                (
+                    "async_driver_wake_from_another_thread_polls_on_the_driving_thread",
+                    async_driver_wake_from_another_thread_polls_on_the_driving_thread as fn(),
+                ),
+                (
+                    "async_driver_polls_in_deterministic_spawn_order",
+                    async_driver_polls_in_deterministic_spawn_order as fn(),
+                ),
+                (
+                    "async_driver_self_wake_defers_to_the_next_frame",
+                    async_driver_self_wake_defers_to_the_next_frame as fn(),
+                ),
+                (
+                    "panic_mid_pump_keeps_unreached_siblings_indexed",
+                    panic_mid_pump_keeps_unreached_siblings_indexed as fn(),
+                ),
+                (
+                    "cancel_propagates_the_removed_futures_panic",
+                    cancel_propagates_the_removed_futures_panic as fn(),
+                ),
+                (
+                    "drop_while_already_unwinding_contains_the_cancel_panic_instead_of_aborting",
+                    drop_while_already_unwinding_contains_the_cancel_panic_instead_of_aborting
+                        as fn(),
+                ),
+            ],
         );
     }
 }

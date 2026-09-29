@@ -177,8 +177,7 @@ fn fixture() -> Fixture {
 // 1. Memoization per level + extent keying
 // ============================================================================
 
-#[test]
-fn intrinsic_walk_memoizes_every_level() {
+pub(crate) fn intrinsic_walk_memoizes_every_level() {
     let mut f = fixture();
 
     let v = f

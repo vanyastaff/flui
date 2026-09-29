@@ -21,8 +21,7 @@ use flui_widgets::{FadeTransition, SizedBox};
 
 /// A registered, running controller drives a `FadeTransition`'s opacity upward
 /// frame-to-frame as `pump_for` advances virtual time.
-#[test]
-fn registered_controller_advances_fade_opacity_frame_to_frame() {
+pub(crate) fn registered_controller_advances_fade_opacity_frame_to_frame() {
     let controller = AnimationController::without_ticker(Duration::from_millis(100));
     // The `Arc<dyn Animation>` handed to the FadeTransition and the clone
     // registered with the binding share the same inner notifier, so a binding

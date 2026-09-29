@@ -148,8 +148,7 @@ fn waiting(data: Option<i32>, error: Option<&'static str>) -> Seen {
 
 /// `'tracks events and errors of stream until completion'`:
 /// `Waiting` → `Active(d)` → `Active(err)` → `Active(d)` → `Done`.
-#[test]
-fn stream_builder_data_error_data_then_done() {
+pub(crate) fn stream_builder_data_error_data_then_done() {
     let log = Arc::new(Mutex::new(Vec::new()));
     let sender = Sender::new();
 

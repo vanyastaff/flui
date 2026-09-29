@@ -66,8 +66,7 @@ fn capture<T: Clone + Send + Sync + 'static>(
 /// right-to-left: `Localizations` wraps its child in the `Directionality`
 /// its widgets resource names, and `GlobalWidgetsLocalizationsDelegate`
 /// resolves `ar` to RTL where the default delegate is always LTR.
-#[test]
-fn the_global_delegate_makes_an_rtl_locale_subtree_rtl() {
+pub(crate) fn the_global_delegate_makes_an_rtl_locale_subtree_rtl() {
     let (probe, captured) = capture(Directionality::of);
     let _harness = mount(
         Localizations::new(

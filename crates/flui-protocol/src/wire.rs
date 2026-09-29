@@ -248,6 +248,8 @@ mod tests {
         );
     }
 
+    /// Serde spells every wire name as its vocabulary string, and (with
+    /// `schemars`) the published schemas admit exactly those names.
     #[cfg(feature = "serde")]
     #[test]
     fn every_wire_name_serializes_to_its_vocabulary_string() {
@@ -273,6 +275,8 @@ mod tests {
             );
         }
         assert!(serde_json::from_value::<ActionName>(serde_json::json!("SetValue")).is_err());
+        #[cfg(feature = "schemars")]
+        assert_schemas_list_every_wire_name();
     }
 
     /// Every string a schema admits, whether it spells them as an `enum` list
@@ -306,8 +310,7 @@ mod tests {
     /// vocabulary, so a role the server can send is never one the client's
     /// validator rejects.
     #[cfg(feature = "schemars")]
-    #[test]
-    fn the_role_schema_lists_every_wire_name() {
+    fn assert_schemas_list_every_wire_name() {
         let schema =
             serde_json::to_value(schemars::schema_for!(Role)).expect("a schema serializes to JSON");
         let mut admitted = Vec::new();

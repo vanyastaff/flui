@@ -409,7 +409,15 @@ mod tests {
         }
     }
 
+    /// Drag-and-drop offers: a drop burst freezes at `about_to_wait` and
+    /// serves its URI list, and window teardown resolves parked deliveries as
+    /// source-gone.
     #[test]
+    fn a_drop_offer_freezes_serves_and_resolves_as_source_gone_on_teardown() {
+        drop_burst_freezes_at_about_to_wait_and_serves_the_uri_list();
+        window_teardown_resolves_parked_deliveries_as_source_gone();
+    }
+
     fn drop_burst_freezes_at_about_to_wait_and_serves_the_uri_list() {
         let source = WinitDataTransfer::new();
         let offer = entered_offer(
@@ -453,7 +461,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn window_teardown_resolves_parked_deliveries_as_source_gone() {
         let source = WinitDataTransfer::new();
         let offer = entered_offer(

@@ -7,8 +7,7 @@ use crate::common::{lay_out, offset, size, tight};
 use flui_widgets::row;
 use flui_widgets::{Positioned, SizedBox, Stack};
 
-#[test]
-fn positioned_places_child_at_explicit_edges() {
+pub(crate) fn positioned_places_child_at_explicit_edges() {
     // A 200×200 stack with a 50×50 child pinned 10 from the left, 20 from top.
     let laid = lay_out(
         Stack::new(row![

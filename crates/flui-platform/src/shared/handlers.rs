@@ -1086,8 +1086,11 @@ impl std::fmt::Debug for WindowCallbacks {
 
 #[cfg(test)]
 mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::Arc;
-    use std::sync::atomic::AtomicU32;
+    use std::sync::atomic::{AtomicU32, AtomicUsize};
+
+    use crate::shared::{hwnd_affinity, owner_signal};
 
     use super::*;
 
@@ -1132,8 +1135,139 @@ mod tests {
         assert!(callbacks.on_moved.lock().is_none());
     }
 
+    fn owner_callback_and_capture_panics_do_not_replace_an_existing_unwind() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        struct Hostile;
+        impl Drop for Hostile {
+            fn drop(&mut self) {
+                panic!("hostile payload drop");
+            }
+        }
+        struct Capture(Arc<AtomicUsize>);
+        impl Drop for Capture {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                std::panic::panic_any(Hostile);
+            }
+        }
+        struct Guard(Option<Box<dyn FnMut() + Send>>);
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                crate::shared::panic_boundary::invoke_and_drop_owner_callback(
+                    self.0.take().expect("callback"),
+                );
+            }
+        }
+        for already_unwinding in [false, true] {
+            let invoked = Arc::new(AtomicUsize::new(0));
+            let dropped = Arc::new(AtomicUsize::new(0));
+            let capture = Capture(Arc::clone(&dropped));
+            let observed = Arc::clone(&invoked);
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
+                let guard = Guard(Some(Box::new(move || {
+                    let _ = &capture;
+                    observed.fetch_add(1, Ordering::SeqCst);
+                    std::panic::panic_any(Hostile);
+                })));
+                assert!(!already_unwinding, "original bootstrap panic");
+                drop(guard);
+            }));
+            if already_unwinding {
+                assert_eq!(
+                    *outcome
+                        .expect_err("original panic")
+                        .downcast::<&str>()
+                        .expect("original identity"),
+                    "original bootstrap panic"
+                );
+            } else {
+                assert!(outcome.is_ok());
+            }
+            assert_eq!(invoked.load(Ordering::SeqCst), 1);
+            assert_eq!(dropped.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    const HW_OWNER: u32 = 7;
+    const HW_FOREIGN: u32 = 8;
+
+    fn refusal_precedence_is_gone_then_foreign_thread_then_class_then_slot() {
+        // All four conditions failing at once report the highest-precedence
+        // refusal, walking down as each earlier condition is repaired.
+        assert_eq!(
+            hwnd_affinity::classify_user_data_access(
+                hwnd_affinity::OWNER_GONE,
+                HW_FOREIGN,
+                false,
+                0
+            ),
+            hwnd_affinity::UserDataVerdict::Refuse(hwnd_affinity::UserDataRefusal::WindowGone)
+        );
+        assert_eq!(
+            hwnd_affinity::classify_user_data_access(HW_OWNER, HW_FOREIGN, false, 0),
+            hwnd_affinity::UserDataVerdict::Refuse(hwnd_affinity::UserDataRefusal::ForeignThread)
+        );
+        assert_eq!(
+            hwnd_affinity::classify_user_data_access(HW_OWNER, HW_OWNER, false, 0),
+            hwnd_affinity::UserDataVerdict::Refuse(hwnd_affinity::UserDataRefusal::ForeignClass)
+        );
+        assert_eq!(
+            hwnd_affinity::classify_user_data_access(HW_OWNER, HW_OWNER, true, 0),
+            hwnd_affinity::UserDataVerdict::Refuse(hwnd_affinity::UserDataRefusal::EmptySlot)
+        );
+    }
+
+    fn worker_burst_coalesces_and_reentrant_wake_gets_a_later_finite_turn() {
+        let posts = Arc::new(AtomicUsize::new(0));
+        let recorded = Arc::clone(&posts);
+        let signal = owner_signal::OwnerSignal::new(Arc::new(move || {
+            recorded.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let recorded = Arc::clone(&calls);
+        let weak = Arc::downgrade(&signal);
+        signal
+            .register(Box::new(move || {
+                if recorded.fetch_add(1, Ordering::SeqCst) == 0 {
+                    let signal = weak.upgrade().expect("live");
+                    signal.wake().expect("reentrant wake");
+                    assert!(!signal.drive());
+                }
+            }))
+            .expect("register");
+        signal.start().expect("start");
+        let worker = Arc::clone(&signal);
+        std::thread::spawn(move || {
+            for _ in 0..100 {
+                worker.wake().expect("wake");
+            }
+        })
+        .join()
+        .expect("worker");
+        assert_eq!(posts.load(Ordering::SeqCst), 1);
+        assert!(!signal.drive());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(posts.load(Ordering::SeqCst), 2);
+        assert!(!signal.drive());
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(posts.load(Ordering::SeqCst), 2);
+        signal.close();
+    }
+
+    /// The owner-thread machinery's contracts: hostile callback captures and
+    /// payloads are contained (a direct clear drops each capture without
+    /// unwinding; an owner callback's own and capture panics never replace an
+    /// existing unwind), the HWND user-data refusal precedence holds, and the
+    /// owner signal coalesces a burst and gives a re-entrant wake a later turn.
     #[test]
-    fn direct_clear_contains_each_capture_panic() {
+    fn the_owner_thread_machinery_honours_its_contracts() {
         clear_multiple_panicking_captures(false);
+        owner_callback_and_capture_panics_do_not_replace_an_existing_unwind();
+        refusal_precedence_is_gone_then_foreign_thread_then_class_then_slot();
+        worker_burst_coalesces_and_reentrant_wake_gets_a_later_finite_turn();
     }
 }

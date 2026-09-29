@@ -44,8 +44,7 @@ fn mount_two_node_tree() -> (
 /// owner-side `mark_needs_layout` walk enqueued a relayout boundary) and
 /// the caller drives the phases directly, skipping `run_layout`. The paint
 /// phase begins with layout work pending and must refuse.
-#[test]
-fn run_paint_refuses_to_start_with_layout_work_pending() {
+pub(crate) fn run_paint_refuses_to_start_with_layout_work_pending() {
     let (owner, child_id) = mount_two_node_tree();
 
     let (mut owner, frame) = owner.run_frame();

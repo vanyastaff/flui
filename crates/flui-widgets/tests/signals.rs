@@ -113,8 +113,7 @@ impl ViewState<WriterInBuild> for WriterInBuildState {
     }
 }
 
-#[test]
-fn writing_a_signal_rebuilds_exactly_its_readers() {
+pub(crate) fn writing_a_signal_rebuilds_exactly_its_readers() {
     // Mount a placeholder first: the tree's own graph is the one the build
     // contexts hand out, so the signals must be minted there.
     let mut laid = lay_out(SizedBox::square(1.0), loose(1000.0));
@@ -171,8 +170,7 @@ fn writing_a_signal_rebuilds_exactly_its_readers() {
     );
 }
 
-#[test]
-fn a_stale_handle_read_in_build_is_a_typed_error_through_try_get() {
+pub(crate) fn a_stale_handle_read_in_build_is_a_typed_error_through_try_get() {
     let mut laid = lay_out(SizedBox::square(1.0), loose(1000.0));
     let r = laid.build_owner_mut().reactive().clone();
     let sig = r.signal(4u32);
@@ -196,8 +194,7 @@ fn a_stale_handle_read_in_build_is_a_typed_error_through_try_get() {
     assert_eq!(laid.size(laid.current_root()), size(1.0, 1.0));
 }
 
-#[test]
-fn writes_and_creations_inside_build_are_refused_by_the_runtime() {
+pub(crate) fn writes_and_creations_inside_build_are_refused_by_the_runtime() {
     let mut laid = lay_out(SizedBox::square(1.0), loose(1000.0));
     let r = laid.build_owner_mut().reactive().clone();
     let sig = r.signal(1u32);

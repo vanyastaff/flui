@@ -215,7 +215,7 @@ mod tests {
     }
 
     #[test]
-    fn an_offset_inside_a_surrogate_pair_is_refused() {
+    fn offsets_round_trip_on_char_boundaries_and_refuse_a_split_surrogate_pair() {
         assert_eq!(
             byte_offset(CORPUS, at(2)),
             Err(OffsetError::SplitsSurrogatePair(2))
@@ -225,9 +225,9 @@ mod tests {
             byte_range(CORPUS, range),
             Err(OffsetError::SplitsSurrogatePair(2))
         );
+        every_char_boundary_round_trips();
     }
 
-    #[test]
     fn every_char_boundary_round_trips() {
         for text in [CORPUS, "مرحبا بالعالم", "東京タワー", ""] {
             for (byte, _) in text.char_indices().chain([(text.len(), ' ')]) {

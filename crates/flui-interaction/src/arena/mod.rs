@@ -1762,7 +1762,31 @@ mod tests {
         }
     }
 
+    // Arena failure and reentrancy matrix.
     #[test]
+    fn arena_failure_and_reentrancy_matrix() {
+        let cases: &[(&str, fn())] = &[
+            (
+                "explicit_resolution_removes_slot_rejects_losers_then_finishes_panicking_winner",
+                explicit_resolution_removes_slot_rejects_losers_then_finishes_panicking_winner,
+            ),
+            (
+                "reject_gesture_reentering_arena_does_not_deadlock",
+                reject_gesture_reentering_arena_does_not_deadlock,
+            ),
+            (
+                "stale_entry_cannot_resolve_a_reused_pointer_slot",
+                stale_entry_cannot_resolve_a_reused_pointer_slot,
+            ),
+        ];
+        for &(name, case) in cases {
+            if let Err(payload) = std::panic::catch_unwind(case) {
+                eprintln!("matrix case `{name}` failed");
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+
     fn reject_gesture_reentering_arena_does_not_deadlock() {
         use std::{sync::mpsc, time::Duration};
 
@@ -1795,7 +1819,24 @@ mod tests {
         }
     }
 
+    // Arena resolution rules: deferred lone default winner, first eager winner.
     #[test]
+    fn arena_resolution_rules_matrix() {
+        let cases: &[(&str, fn())] = &[
+            (
+                "close_defers_a_lone_default_winner",
+                close_defers_a_lone_default_winner,
+            ),
+            ("test_first_eager_winner_wins", test_first_eager_winner_wins),
+        ];
+        for &(name, case) in cases {
+            if let Err(payload) = std::panic::catch_unwind(case) {
+                eprintln!("matrix case `{name}` failed");
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+
     fn close_defers_a_lone_default_winner() {
         let arena = GestureArena::new();
         let pointer = PointerId::PRIMARY;
@@ -1811,7 +1852,6 @@ mod tests {
         assert!(arena.contains(pointer));
     }
 
-    #[test]
     fn explicit_resolution_removes_slot_rejects_losers_then_finishes_panicking_winner() {
         let arena = GestureArena::new();
         let pointer = PointerId::PRIMARY;
@@ -1846,7 +1886,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn stale_entry_cannot_resolve_a_reused_pointer_slot() {
         let arena = GestureArena::new();
         let pointer = PointerId::PRIMARY;
@@ -1872,7 +1911,6 @@ mod tests {
     // Eager Winner tests
     // ========================================================================
 
-    #[test]
     fn test_first_eager_winner_wins() {
         let arena = GestureArena::new();
         let pointer = PointerId::PRIMARY;

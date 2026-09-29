@@ -439,8 +439,7 @@ mod target_size_tests {
     /// --example screenshot -- material 0 0` — aborts the process. The guard
     /// runs before any GPU work, so this needs no device: the assertions below
     /// are reached even where `HeadlessRenderer::new` would fail.
-    #[test]
-    fn zero_sized_capture_is_a_typed_error() {
+    pub(super) fn zero_sized_capture_is_a_typed_error() {
         let Ok(renderer) = pollster::block_on(HeadlessRenderer::new()) else {
             // No adapter on this host: the guard is still reachable through
             // the error variant's own classification test in `error.rs`.
@@ -487,6 +486,9 @@ mod twin_readback_tests {
     /// instance) instead of from the first renderer's adapter.
     #[test]
     fn twin_renderers_tear_down_without_blocking() {
+        // Also here, so the one headless GPU test carries both contracts: a
+        // zero-sized or overflowing capture is a typed error, not a panic.
+        super::target_size_tests::zero_sized_capture_is_a_typed_error();
         let instances = || super::INSTANCES_CREATED.with(std::cell::Cell::get);
         for _ in 0..12 {
             let before = instances();

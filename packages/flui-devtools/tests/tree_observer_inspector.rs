@@ -141,7 +141,6 @@ fn mount_root_with_pipeline(
 /// clear, asserting exact counts at each step. Any emission site silently
 /// removed fails a specific assertion here (red→green verified during
 /// development by disabling sites).
-#[test]
 fn inspector_counts_mounts_moves_rebuilds_and_unmounts_exactly() {
     let counters = Arc::new(InspectorCounters::new());
     let mut owner = BuildOwner::new();
@@ -238,7 +237,6 @@ fn inspector_counts_mounts_moves_rebuilds_and_unmounts_exactly() {
 
 /// A panicking observer is detached and the frame survives; `detached()`
 /// is NOT called on the panicking observer.
-#[test]
 fn panicking_observer_is_detached_and_the_tree_survives() {
     struct PanicOnMount;
     impl TreeObserver for PanicOnMount {
@@ -264,4 +262,34 @@ fn panicking_observer_is_detached_and_the_tree_survives() {
     owner.schedule_build_for(root_id, 0, RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
     assert_eq!(tree.len(), 2, "root + one child built normally");
+}
+
+/// The tree-observation contract as one table: exact counts through mount,
+/// reorder, shrink and detach, then a panicking observer being contained.
+#[test]
+fn tree_observation_contract() {
+    let cases: &[(&str, fn())] = &[
+        (
+            "inspector counts mounts, moves, rebuilds and unmounts exactly",
+            inspector_counts_mounts_moves_rebuilds_and_unmounts_exactly,
+        ),
+        (
+            "a panicking observer is detached and the tree survives",
+            panicking_observer_is_detached_and_the_tree_survives,
+        ),
+    ];
+    for (name, case) in cases {
+        if let Err(payload) = std::panic::catch_unwind(case) {
+            let message = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| {
+                    payload
+                        .downcast_ref::<&str>()
+                        .map(|text| (*text).to_owned())
+                })
+                .unwrap_or_default();
+            panic!("case `{name}` failed: {message}");
+        }
+    }
 }

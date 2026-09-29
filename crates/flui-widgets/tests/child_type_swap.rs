@@ -46,8 +46,7 @@ impl StatelessView for Swapper {
     }
 }
 
-#[test]
-fn a_replaced_root_render_object_is_laid_out_in_the_frame_it_is_mounted() {
+pub(crate) fn a_replaced_root_render_object_is_laid_out_in_the_frame_it_is_mounted() {
     let mut laid = lay_out(Swapper { wrapped: true }, loose(1000.0));
     assert_eq!(
         laid.size(laid.current_root()),

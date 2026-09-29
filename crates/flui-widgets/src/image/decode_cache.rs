@@ -230,7 +230,6 @@ mod tests {
     /// forever waiting for a completion nobody will ever observe. This is
     /// the leak Flutter's `ImageCache` avoids by removing `_pendingImages`
     /// entries when the last listener detaches, not only on completion.
-    #[tokio::test]
     async fn abandoning_the_only_subscriber_before_completion_removes_the_pending_entry() {
         let _cache = isolated_cache().await;
         let key = fresh_key("abandoned-before-completion");
@@ -271,7 +270,6 @@ mod tests {
 
     /// Two concurrent callers for the same key must invoke `start` exactly
     /// once between them, and both must observe the same decoded image.
-    #[tokio::test]
     async fn load_coalesced_shares_one_load_across_concurrent_callers() {
         let _cache = isolated_cache().await;
         let key = fresh_key("coalesced-concurrent");
@@ -301,5 +299,13 @@ mod tests {
             "two concurrent subscribers for the same key must share ONE load",
         );
         assert_eq!(first_result.unwrap(), second_result.unwrap());
+    }
+
+    /// Both coalescing contracts in one runtime: an abandoned load leaves no pending entry,
+    /// and concurrent callers share one load.
+    #[tokio::test]
+    async fn decode_cache_coalescing_contracts() {
+        abandoning_the_only_subscriber_before_completion_removes_the_pending_entry().await;
+        load_coalesced_shares_one_load_across_concurrent_callers().await;
     }
 }

@@ -154,8 +154,7 @@ fn snapshot(c: &Counters) -> [u32; 4] {
     [c.size.get(), c.scale.get(), c.whole.get(), c.none.get()]
 }
 
-#[test]
-fn a_size_only_change_rebuilds_size_and_whole_readers_only() {
+pub(crate) fn a_size_only_change_rebuilds_size_and_whole_readers_only() {
     let c = Counters {
         size: count(),
         scale: count(),
@@ -182,8 +181,7 @@ fn a_size_only_change_rebuilds_size_and_whole_readers_only() {
     );
 }
 
-#[test]
-fn a_build_that_panics_before_reading_keeps_its_dependency() {
+pub(crate) fn a_build_that_panics_before_reading_keeps_its_dependency() {
     // Reset-on-build must not treat a recovered panic as "read nothing": the
     // element would lose its dependency and never rebuild after the failing
     // condition clears. The recovered build keeps its previous masks.

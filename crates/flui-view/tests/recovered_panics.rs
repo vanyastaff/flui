@@ -105,8 +105,7 @@ fn only_child(tree: &ElementTree, parent: ElementId) -> ElementId {
 // A contained build panic is recorded once, with its element and hook
 // ============================================================================
 
-#[test]
-fn a_contained_build_panic_is_recorded_once_with_its_element_and_hook() {
+pub(crate) fn a_contained_build_panic_is_recorded_once_with_its_element_and_hook() {
     let host = HostView {
         child: PanicBuildView {
             message: "injected build panic",

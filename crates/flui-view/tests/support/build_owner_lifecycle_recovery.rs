@@ -76,7 +76,6 @@ impl View for InitPanicView {
     }
 }
 
-#[test]
 fn scoped_child_dependency_panic_is_replaced_without_consuming_foreign_work() {
     let mut owner = BuildOwner::new();
     let mut tree = ElementTree::new();
@@ -162,7 +161,6 @@ fn scoped_child_dependency_panic_is_replaced_without_consuming_foreign_work() {
     }
 }
 
-#[test]
 fn production_layout_builder_contains_a_stateful_descendant_init_panic() {
     let mut owner = BuildOwner::new();
     let mut tree = ElementTree::new();
@@ -226,6 +224,17 @@ fn production_layout_builder_contains_a_stateful_descendant_init_panic() {
     assert_eq!(
         tree.get(scope).expect("scope root stays live").child_ids(),
         &[replacement]
+    );
+}
+
+#[test]
+fn build_owner_lifecycle_recovery_matrix() {
+    crate::table_test::run_table(
+        "build_owner_lifecycle_recovery_matrix",
+        &[
+            ("scoped_child_dependency_panic_is_replaced_without_consuming_foreign_work", scoped_child_dependency_panic_is_replaced_without_consuming_foreign_work as fn()),
+            ("production_layout_builder_contains_a_stateful_descendant_init_panic", production_layout_builder_contains_a_stateful_descendant_init_panic as fn()),
+        ],
     );
 }
 

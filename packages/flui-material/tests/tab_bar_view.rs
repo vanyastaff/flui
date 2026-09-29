@@ -59,8 +59,7 @@ impl ViewState<Probe> for ProbeState {
 /// instead of `index` alone (forcing a fresh element identity on every
 /// switch) — `created.get()` would read `2` instead of `1` after the round
 /// trip below.
-#[test]
-fn an_inactive_tabs_state_survives_switching_away_and_back() {
+pub fn an_inactive_tabs_state_survives_switching_away_and_back() {
     let created = Rc::new(Cell::new(0_u32));
     let created_for_tab_0 = Rc::clone(&created);
 

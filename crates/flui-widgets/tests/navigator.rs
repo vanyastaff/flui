@@ -121,8 +121,7 @@ fn layers(harness: &mut Harness) -> Vec<ElementId> {
 ///
 /// Red-check: drop the `self.shared.apply(&outcome)` in `NavigatorHandle::push`;
 /// the new layer never reaches the overlay.
-#[test]
-fn navigator_push_builds_new_route_and_rearranges_overlay() {
+pub(crate) fn navigator_push_builds_new_route_and_rearranges_overlay() {
     let built = Built::default();
     let (handle, mut harness) = navigator_with(&built);
 
@@ -142,8 +141,7 @@ fn navigator_push_builds_new_route_and_rearranges_overlay() {
 ///
 /// Red-check: skip the `entry.remove()` loop in `NavigatorShared::apply`; the
 /// stale layer stays in the overlay.
-#[test]
-fn navigator_pop_removes_top_route_and_completes_result() {
+pub(crate) fn navigator_pop_removes_top_route_and_completes_result() {
     let built = Built::default();
     let (handle, mut harness) = navigator_with(&built);
     let result = handle.push(page(&built, "second"));
@@ -169,8 +167,7 @@ fn navigator_pop_removes_top_route_and_completes_result() {
 ///
 /// Red-check: none available as a mutation — a deadlock hangs rather than fails.
 /// Its value is as a regression tripwire (nextest's per-test timeout catches it).
-#[test]
-fn navigator_of_then_push_from_a_route_build_does_not_deadlock() {
+pub(crate) fn navigator_of_then_push_from_a_route_build_does_not_deadlock() {
     let pushed = Arc::new(AtomicUsize::new(0));
     let handle = NavigatorHandle::new();
 
@@ -216,8 +213,7 @@ fn navigator_of_then_push_from_a_route_build_does_not_deadlock() {
 ///
 /// Red-check: drop the `vetoes_pop` arm from `pop_disposition_of_top` — the
 /// first `maybe_pop` pops the route and the stays-put assertion fails.
-#[test]
-fn pop_scope_vetoes_maybe_pop_but_not_programmatic_pop() {
+pub(crate) fn pop_scope_vetoes_maybe_pop_but_not_programmatic_pop() {
     use std::sync::atomic::AtomicBool;
 
     use flui_widgets::PopScope;
@@ -269,7 +265,7 @@ fn pop_scope_vetoes_maybe_pop_but_not_programmatic_pop() {
 // Local history (routes.dart:747-973)
 // ============================================================================
 
-mod local_history {
+pub(crate) mod local_history {
     use std::sync::atomic::AtomicUsize;
     use std::time::Duration;
 
@@ -360,8 +356,7 @@ mod local_history {
     /// Red-check: skip the `local_history.pop_last_deferred()` arm in
     /// `ModalRoute::did_pop` — the first `maybe_pop` removes the route and the
     /// stays-put assertion fails.
-    #[test]
-    fn an_entry_pops_before_the_route_and_observers_stay_silent() {
+    pub(crate) fn an_entry_pops_before_the_route_and_observers_stay_silent() {
         let built = Built::default();
         let (handle, mut harness) = navigator_with(&built);
         let pops = Arc::new(PopCounter::default());
@@ -409,8 +404,6 @@ mod local_history {
 // User gestures (navigator.dart:5803-5860)
 // ============================================================================
 
-mod user_gesture {}
-
 /// A panic in a route lifecycle hook must not brick the navigator.
 ///
 /// `parking_lot` does not poison, so the mutex survives an unwind — but the
@@ -430,8 +423,7 @@ mod user_gesture {}
 /// Red-check: replace the `FlushingGuard` in `RouteHistory::flush_once` with a
 /// bare `self.flushing.set(false)` after the call, and the second push panics on
 /// the flush assertion instead of succeeding.
-#[test]
-fn a_panicking_route_hook_leaves_the_navigator_usable() {
+pub(crate) fn a_panicking_route_hook_leaves_the_navigator_usable() {
     /// Panics from `did_pop`, once.
     struct PanicsOnPop {
         settings: RouteSettings,

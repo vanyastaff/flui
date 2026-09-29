@@ -50,6 +50,8 @@ mod proc;
 mod runner;
 mod serve;
 mod templates;
+#[cfg(test)]
+mod test_cases;
 mod types;
 mod ui;
 mod watch;

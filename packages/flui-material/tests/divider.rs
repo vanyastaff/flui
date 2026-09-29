@@ -12,8 +12,7 @@ use flui_sdk::painting::Color;
 
 /// A widget-level `.color(...)` override wins over a configured
 /// `divider_theme.color` — the standard widget → theme → default cascade.
-#[test]
-fn widget_color_override_wins_over_the_divider_theme() {
+pub fn widget_color_override_wins_over_the_divider_theme() {
     let theme = ThemeData::light().copy_with(ThemeDataOverrides {
         divider_theme: Some(DividerThemeData {
             color: Some(Color::rgb(1, 1, 1)),

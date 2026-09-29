@@ -18,14 +18,33 @@ assert_impl_all!(PointerTarget: Copy, Send, Sync);
 assert_impl_all!(MouseRegionTarget: Copy, Send, Sync);
 assert_impl_all!(ResolvedRouteToken: Copy, Send, Sync);
 
+// Lane capability matrix: least-privilege handle and realm recreation.
 #[test]
+fn lane_capability_matrix() {
+    let cases: &[(&str, fn())] = &[
+        (
+            "lane_mints_a_send_safe_least_privilege_handle",
+            lane_mints_a_send_safe_least_privilege_handle,
+        ),
+        (
+            "realm_recreation_rejects_every_old_capability",
+            realm_recreation_rejects_every_old_capability,
+        ),
+    ];
+    for &(name, case) in cases {
+        if let Err(payload) = std::panic::catch_unwind(case) {
+            eprintln!("matrix case `{name}` failed");
+            std::panic::resume_unwind(payload);
+        }
+    }
+}
+
 fn lane_mints_a_send_safe_least_privilege_handle() {
     let lane = InteractionLane::try_new().expect("lane identity should be available");
     let handle = lane.dispatch_handle();
     assert_eq!(format!("{handle:?}"), "InteractionDispatchHandle { .. }");
 }
 
-#[test]
 fn realm_recreation_rejects_every_old_capability() {
     let old_lane = InteractionLane::try_new().expect("old lane");
     let old_handle = old_lane.dispatch_handle();

@@ -15,8 +15,7 @@ use flui_sdk::interaction::FocusNode;
 use flui_sdk::view::SignalWriteExt;
 use flui_sdk::widgets::{SizedBox, WidgetState, WidgetStatesController};
 
-#[test]
-fn pointer_and_keyboard_activation_write_the_owning_signal() {
+pub fn pointer_and_keyboard_activation_write_the_owning_signal() {
     let node = FocusNode::with_debug_label("writer-activation");
     let child_node = Rc::clone(&node);
     let probe = common::SignalProbe::new(move |signals| {
@@ -35,8 +34,7 @@ fn pointer_and_keyboard_activation_write_the_owning_signal() {
     assert_eq!(probe.reads(), [0, 2]);
 }
 
-#[test]
-fn disabled_ink_well_does_not_fire_a_tap_callback() {
+pub fn disabled_ink_well_does_not_fire_a_tap_callback() {
     // Mutation-honest companion to the enabled case above: this test only
     // proves something if a *would-be* tap on a disabled InkWell is
     // observably inert. It mounts with no `on_tap` at all (there is nothing

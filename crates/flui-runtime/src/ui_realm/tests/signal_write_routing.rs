@@ -48,8 +48,7 @@ fn graph_of(realm: &UiRealm, id: PresentationId) -> Reactive {
         .with_build_owner(|owner| owner.reactive().clone())
 }
 
-#[test]
-fn a_write_to_a_secondary_presentations_signal_rebuilds_its_reader() {
+pub(crate) fn a_write_to_a_secondary_presentations_signal_rebuilds_its_reader() {
     let mut realm = UiRealm::for_test();
     let a = realm.presentation_id();
     let b = realm.install_second_presentation_for_test();
@@ -111,8 +110,7 @@ fn a_write_to_a_secondary_presentations_signal_rebuilds_its_reader() {
     );
 }
 
-#[test]
-fn stale_signal_command_disposal_panic_rearms_its_fifo_tail() {
+pub(crate) fn stale_signal_command_disposal_panic_rearms_its_fifo_tail() {
     struct DropBomb;
 
     impl Drop for DropBomb {
@@ -171,8 +169,7 @@ fn stale_signal_command_disposal_panic_rearms_its_fifo_tail() {
     assert_eq!(tail.peek(&live_graph, |value| *value), Ok(9));
 }
 
-#[test]
-fn a_failed_signal_write_rearm_retries_at_the_next_owner_boundary() {
+pub(crate) fn a_failed_signal_write_rearm_retries_at_the_next_owner_boundary() {
     let panic_on_wake = Arc::new(AtomicBool::new(false));
     let panic_on_wake_in_callback = Arc::clone(&panic_on_wake);
     let wake_count = Arc::new(AtomicUsize::new(0));
@@ -249,8 +246,7 @@ fn a_failed_signal_write_rearm_retries_at_the_next_owner_boundary() {
     );
 }
 
-#[test]
-fn an_older_overlapping_wake_cannot_clear_newer_failed_delivery_debt() {
+pub(crate) fn an_older_overlapping_wake_cannot_clear_newer_failed_delivery_debt() {
     let first_started = Arc::new(std::sync::Barrier::new(2));
     let release_first = Arc::new(std::sync::Barrier::new(2));
     let wake_count = Arc::new(AtomicUsize::new(0));

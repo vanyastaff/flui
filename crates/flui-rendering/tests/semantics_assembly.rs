@@ -322,8 +322,7 @@ fn assert_snapshot_node(
 // MergeSemantics-equivalent collapses its whole subtree into one node.
 // ============================================================================
 
-#[test]
-fn merge_semantics_boundary_collapses_plain_children_into_one_node() {
+pub(crate) fn merge_semantics_boundary_collapses_plain_children_into_one_node() {
     let run = RenderTester::mount(
         box_node(SemanticsContainer::merge_semantics())
             .child(box_node(SemanticsLeaf::new(20.0).with_label("Alpha")))
@@ -362,8 +361,7 @@ fn merge_semantics_boundary_collapses_plain_children_into_one_node() {
 // ExcludeSemantics-equivalent drops its subtree entirely from the walk.
 // ============================================================================
 
-#[test]
-fn excludes_semantics_subtree_drops_descendant_content() {
+pub(crate) fn excludes_semantics_subtree_drops_descendant_content() {
     let run = RenderTester::mount(
         box_node(SemanticsContainer::exclude_semantics())
             .child(box_node(SemanticsLeaf::new(20.0).with_label("Hidden"))),
@@ -391,8 +389,7 @@ fn excludes_semantics_subtree_drops_descendant_content() {
     );
 }
 
-#[test]
-fn explicit_child_nodes_forms_direct_contributors() {
+pub(crate) fn explicit_child_nodes_forms_direct_contributors() {
     let mut group_configuration = SemanticsConfiguration::new();
     group_configuration.set_label("Group");
     let run = RenderTester::mount(
@@ -467,8 +464,7 @@ fn explicit_child_nodes_forms_direct_contributors() {
     );
 }
 
-#[test]
-fn sibling_insert_and_reorder_preserve_existing_accessibility_ids() {
+pub(crate) fn sibling_insert_and_reorder_preserve_existing_accessibility_ids() {
     let mut run = RenderTester::mount(
         box_node(SemanticsContainer::default())
             .label("root")
@@ -550,8 +546,7 @@ fn sibling_insert_and_reorder_preserve_existing_accessibility_ids() {
 /// A child with nothing left after its ancestor's semantics clip contributes
 /// no node at all — it is not on screen and not reachable, so announcing it
 /// would point a screen reader at empty space.
-#[test]
-fn a_semantics_clip_drops_a_child_that_falls_entirely_outside_it() {
+pub(crate) fn a_semantics_clip_drops_a_child_that_falls_entirely_outside_it() {
     let run = RenderTester::mount(
         box_node(
             SemanticsContainer::default()

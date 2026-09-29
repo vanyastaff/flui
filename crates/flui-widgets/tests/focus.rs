@@ -59,8 +59,7 @@ impl StatelessView for Host {
 ///
 /// Red-check: make `enclosing_scope` always answer the root scope — the
 /// node parents to the root and the first assertion fails.
-#[test]
-fn a_focus_widget_attaches_under_the_nearest_scope_and_unmount_releases() {
+pub(crate) fn a_focus_widget_attaches_under_the_nearest_scope_and_unmount_releases() {
     let scope = FocusScopeNode::with_debug_label("host-scope");
     let node = FocusNode::with_debug_label("host-node");
     let mut harness = mount(Host {
@@ -133,8 +132,7 @@ fn a_focus_widget_attaches_under_the_nearest_scope_and_unmount_releases() {
 /// Red-check (the pre-fix behavior): skip `install_rect_provider` in
 /// `init_state` — every rect reads zero, the sort degenerates to attach
 /// order, and the first assertion gets `b`.
-#[test]
-fn tab_traversal_follows_geometry_not_attach_order() {
+pub(crate) fn tab_traversal_follows_geometry_not_attach_order() {
     let scope = FocusScopeNode::with_debug_label("traversal-scope");
     let a = FocusNode::with_debug_label("a-middle");
     let b = FocusNode::with_debug_label("b-top");
@@ -184,7 +182,7 @@ fn tab_traversal_follows_geometry_not_attach_order() {
 /// Event context (ADR-0086): the focus edge and the key handler run inside a
 /// write the `Focus` opens from the writer source it acquired in
 /// `init_state`.
-mod event_cx {
+pub(crate) mod event_cx {
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -196,8 +194,7 @@ mod event_cx {
     use crate::common::harness::mount;
     use crate::common::{ProbeSignals, SignalProbe};
 
-    #[test]
-    fn replacing_a_focused_node_delivers_a_writable_loss_and_new_gain() {
+    pub(crate) fn replacing_a_focused_node_delivers_a_writable_loss_and_new_gain() {
         let old_node = FocusNode::with_debug_label("old-signal-focus");
         let new_node = FocusNode::with_debug_label("new-signal-focus");
         let selected = Rc::new(RefCell::new(Rc::clone(&old_node)));
@@ -232,8 +229,7 @@ mod event_cx {
         );
     }
 
-    #[test]
-    fn a_refused_write_in_a_focus_edge_is_reported_not_panicked() {
+    pub(crate) fn a_refused_write_in_a_focus_edge_is_reported_not_panicked() {
         let node = FocusNode::with_debug_label("probe");
         let probe_node = Rc::clone(&node);
         let probe = SignalProbe::new(move |ProbeSignals { released, .. }| {

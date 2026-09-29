@@ -14,6 +14,9 @@ use flui_painting::parley_text::{ParagraphLayout, ParagraphSpec};
 use flui_painting::typography::{FontWeight, TextDirection, TextStyle};
 use flui_painting::{FontCollection, TextContext, TextLayoutResult};
 
+#[path = "support/cases.rs"]
+mod cases;
+
 const PROBE_MONO: &[u8] = include_bytes!("../assets/fonts/probe-mono-100.ttf");
 /// Every word is narrower than the widths the tests break at, so no line
 /// overflows its width.
@@ -59,7 +62,6 @@ const _: () = assert_send::<TextContext>();
 /// shows they really ran at once; that neither waited on the other rests on
 /// the structure (no lock in the API, the crate's `disallowed_types` lint),
 /// not on a timing measurement.
-#[test]
 fn two_realms_shape_in_parallel() {
     const SHAPES: usize = 200;
     let fonts = FontCollection::new();
@@ -106,7 +108,6 @@ fn two_realms_shape_in_parallel() {
 /// in both. The probe face maps only the space and `A`, each one em wide, so
 /// four `A`s in it are exactly four em; Roboto, the fallback a context that
 /// never saw the face shapes with, draws a narrower `A`.
-#[test]
 fn a_face_registered_after_the_fork_shapes_in_every_realm() {
     const SIZE: f32 = 20.0;
     let fonts = FontCollection::new();
@@ -144,5 +145,19 @@ fn a_face_registered_after_the_fork_shapes_in_every_realm() {
     assert!(
         (before - f64::from(4.0 * SIZE)).abs() > 1.0,
         "before registration the probe family falls back to Roboto, got {before}"
+    );
+}
+
+#[test]
+fn text_context_contract() {
+    cases::run_cases(
+        "text_context",
+        &[
+            ("two_realms_shape_in_parallel", two_realms_shape_in_parallel),
+            (
+                "a_face_registered_after_the_fork_shapes_in_every_realm",
+                a_face_registered_after_the_fork_shapes_in_every_realm,
+            ),
+        ],
     );
 }

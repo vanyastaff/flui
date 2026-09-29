@@ -93,8 +93,7 @@ impl RenderBox for SliverHost {
     }
 }
 
-#[test]
-fn sliver_to_box_adapter_lays_out_box_child_and_commits_geometry() {
+pub(crate) fn sliver_to_box_adapter_lays_out_box_child_and_commits_geometry() {
     let mut owner = PipelineOwner::new();
     let root_id = owner.insert(Box::new(SliverHost {
         constraints: vertical_constraints(40.0),

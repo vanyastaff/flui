@@ -78,8 +78,7 @@ use crate::common::fresh_layout_pipeline;
 /// flips the `descendant_error_flag`. Padding's perform_layout
 /// completes (0+padding = small size); stage 6 skips
 /// `clear_needs_layout` per the flag.
-#[test]
-fn descendant_err_preserves_parent_needs_layout() {
+pub(crate) fn descendant_err_preserves_parent_needs_layout() {
     let mut pipeline = fresh_layout_pipeline();
 
     // Build Padding → Child. Insert both, then REMOVE the child from

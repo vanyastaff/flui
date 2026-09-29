@@ -61,8 +61,7 @@ fn replay_against(
     });
 }
 
-#[test]
-fn a_long_press_script_held_past_the_deadline_fires_it() {
+pub(crate) fn a_long_press_script_held_past_the_deadline_fires_it() {
     let mut binding = HeadlessBinding::new();
     let (recognizer, fired) = long_press_probe(&binding, Duration::from_millis(500));
 
@@ -78,8 +77,7 @@ fn a_long_press_script_held_past_the_deadline_fires_it() {
     );
 }
 
-#[test]
-fn the_same_script_released_before_the_deadline_does_not() {
+pub(crate) fn the_same_script_released_before_the_deadline_does_not() {
     let mut binding = HeadlessBinding::new();
     let (recognizer, fired) = long_press_probe(&binding, Duration::from_millis(500));
 

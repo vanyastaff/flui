@@ -177,7 +177,7 @@ fn explicit_role(role: SemanticsRole) -> Option<Role> {
         SemanticsRole::DragHandle | SemanticsRole::HotKey => Role::GenericContainer,
         // `SemanticsRole::None`, which declares no role. SemanticsRole is
         // non_exhaustive, so this arm would also take a role added later; the
-        // pin is `every_role_but_none_maps_to_an_accesskit_role`, not this match.
+        // pin is `roles_and_checkbox_states_translate_to_accesskit`, not this match.
         _ => return None,
     })
 }
@@ -722,7 +722,7 @@ mod tests {
     /// any arm there sends that role to `None` (the flags decide) and nothing
     /// but this test notices.
     #[test]
-    fn every_role_but_none_maps_to_an_accesskit_role() {
+    fn roles_and_checkbox_states_translate_to_accesskit() {
         let mut generic = Vec::new();
         for &role in SemanticsRole::ALL {
             let mapped = explicit_role(role);
@@ -741,10 +741,8 @@ mod tests {
             [SemanticsRole::DragHandle, SemanticsRole::HotKey],
             "only the roles AccessKit has no counterpart for may be generic",
         );
-    }
 
-    #[test]
-    fn a_checkbox_translates_all_three_of_its_states() {
+        // Checkbox states: unchecked, checked and mixed stay three distinct values.
         let checkable = [SemanticsFlag::HasCheckedState];
         assert_eq!(
             translate(&SemanticsNodeData {
@@ -782,7 +780,7 @@ mod tests {
     /// identities are deliberately unrelated numbers, so a translation that
     /// leaked `SemanticsId` would produce visibly different ids.
     #[test]
-    fn node_ids_are_the_stable_render_identity_not_the_arena_position() {
+    fn node_ids_are_the_stable_render_identity_not_the_arena_position_or_a_recycled_slot() {
         let mut tree = SemanticsTree::new();
         let root_render = render_id(41);
         let child_render = render_id(87);
@@ -815,48 +813,37 @@ mod tests {
             &[expected_child],
             "child references must be in the same stable space as the ids"
         );
-    }
-}
 
-#[cfg(test)]
-mod owner_entry_point_tests {
-    use flui_foundation::geometry::Rect;
+        // A recycled slot (same index, next generation) is a distinct identity.
+        let recycled = flui_foundation::RenderId::new_gen(
+            7,
+            core::num::NonZeroU32::new(4).expect("fixture generation is non-zero"),
+        );
+        let first = flui_foundation::RenderId::new_gen(
+            7,
+            core::num::NonZeroU32::new(3).expect("fixture generation is non-zero"),
+        );
+        assert_ne!(
+            AccessibilityNodeId::from(first),
+            AccessibilityNodeId::from(recycled),
+            "a recycled arena slot must not reuse the previous occupant's accessibility id"
+        );
 
-    use super::*;
-    use crate::identity::AccessibilityNodeId;
-    use crate::node::SemanticsNode;
-    use crate::owner::SemanticsOwner;
-
-    /// Production assembly always attaches the boundary's render object, which
-    /// is where the OS-facing identity comes from — see `tree_to_update`.
-    fn source() -> flui_foundation::RenderId {
-        flui_foundation::RenderId::new_gen(
-            21,
-            core::num::NonZeroU32::new(2).expect("fixture generation is non-zero"),
-        )
-    }
-
-    /// The owner-level entry point is what a platform bridge and a test harness
-    /// both call, so it must produce a tree whose roles are queryable — the
-    /// whole point of routing both through one translation.
-    #[test]
-    fn the_owner_publishes_a_queryable_tree_for_the_assembled_semantics() {
-        let mut owner = SemanticsOwner::new_without_callback();
-
-        let mut node = SemanticsNode::new().with_source_render_id(source());
-        node.set_rect(Rect::from_xywh(0.0, 0.0, 200.0, 100.0));
-        let root = owner.tree_mut().insert(node);
-        owner.tree_mut().set_root(Some(root));
-
-        let update = owner
+        // The owner-level entry point (platform bridge and harness alike) routes
+        // through the same translation and focuses the root.
+        let mut owner = crate::owner::SemanticsOwner::new_without_callback();
+        let owner_root = owner
+            .tree_mut()
+            .insert(SemanticsNode::new().with_source_render_id(root_render));
+        owner.tree_mut().set_root(Some(owner_root));
+        let owner_update = owner
             .to_accesskit_tree_update(None)
             .expect("a rooted tree yields an update");
-
         assert_eq!(
-            update.tree.as_ref().expect("tree").root,
-            NodeId(AccessibilityNodeId::from(source()).as_u64())
+            owner_update.tree.as_ref().expect("tree").root,
+            expected_root
         );
-        assert_eq!(update.focus, update.tree.as_ref().expect("tree").root);
-        assert_eq!(update.nodes.len(), 1);
+        assert_eq!(owner_update.focus, expected_root);
+        assert_eq!(owner_update.nodes.len(), 1);
     }
 }

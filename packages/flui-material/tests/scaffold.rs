@@ -27,8 +27,7 @@ fn layout_root(laid: &common::LaidOut) -> flui_sdk::foundation::RenderId {
         .expect("Scaffold must mount exactly one CustomMultiChildLayout")
 }
 
-#[test]
-fn body_is_positioned_below_the_app_bar_with_no_padding() {
+pub fn body_is_positioned_below_the_app_bar_with_no_padding() {
     let laid = lay_out(
         Theme::new(
             ThemeData::light(),
@@ -58,8 +57,7 @@ fn body_is_positioned_below_the_app_bar_with_no_padding() {
     );
 }
 
-#[test]
-fn floating_action_button_floats_above_the_keyboard() {
+pub fn floating_action_button_floats_above_the_keyboard() {
     let media_query = MediaQueryData {
         view_insets: EdgeInsets::new(0.0, 0.0, 300.0, 0.0),
         ..MediaQueryData::default()

@@ -728,12 +728,13 @@ mod blend_logic {
     /// `common/fragment_second_source.wgsl` — so checking the shape's checks
     /// the gradients' too.
     #[test]
-    fn override_constant_name_matches_the_shader() {
+    fn override_constant_names_match_their_shaders() {
         let declaration = format!("override {DESTINATION_ALPHA_SCALE_OVERRIDE}:");
         assert!(
             crate::shaders::SHAPE.second_source.contains(&declaration),
             "no `{declaration}` in the second-source shape shader"
         );
+        crate::pipeline_set::premultiplied_source_override_matches_the_shader();
     }
 
     // =========================================================================

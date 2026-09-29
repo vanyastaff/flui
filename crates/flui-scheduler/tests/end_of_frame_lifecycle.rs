@@ -89,7 +89,6 @@ impl Wake for RegisteringWaker {
 
 /// Criterion 1 — an idle registration IS the demand, and the frame it buys
 /// is the one it resolves with.
-#[test]
 fn an_idle_registration_demands_one_frame_and_resolves_with_its_timing() {
     let scheduler = UpdateScheduler::new();
     let edges = counting_wake_hook(&scheduler);
@@ -130,7 +129,6 @@ fn an_idle_registration_demands_one_frame_and_resolves_with_its_timing() {
 /// `scheduler/lock_discipline_tests.rs`) catches that same regression in
 /// its own process, fast, with a `try_lock` probe. Read a hang here as a
 /// pointer to that sibling, never as the intended signal.
-#[test]
 fn a_registration_from_inside_an_aborted_frames_waker_demands_exactly_one_frame() {
     let scheduler = UpdateScheduler::new();
     let edges = counting_wake_hook(&scheduler);
@@ -165,6 +163,24 @@ fn a_registration_from_inside_an_aborted_frames_waker_demands_exactly_one_frame(
         "the abort path must demand exactly one frame for the fresh registration"
     );
     assert!(scheduler.is_frame_scheduled());
+}
+
+#[test]
+fn end_of_frame_demand_matrix() {
+    crate::run_table(
+        "end_of_frame_demand_matrix",
+        &[
+            (
+                "an_idle_registration_demands_one_frame_and_resolves_with_its_timing",
+                an_idle_registration_demands_one_frame_and_resolves_with_its_timing as fn(),
+            ),
+            (
+                "a_registration_from_inside_an_aborted_frames_waker_demands_exactly_one_frame",
+                a_registration_from_inside_an_aborted_frames_waker_demands_exactly_one_frame
+                    as fn(),
+            ),
+        ],
+    );
 }
 
 // ── Guards: green against the unfixed code too, so a green run proves

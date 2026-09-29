@@ -954,7 +954,6 @@ mod tests {
     /// regression guard against the old `fetch_add` + unchecked-
     /// construction shape, which wrapped `u64::MAX -> 0` and then
     /// silently re-issued keys after a caught panic.
-    #[test]
     fn key_counter_exhaustion() {
         use std::panic::{AssertUnwindSafe, catch_unwind};
         // Drive a LOCAL counter pre-set to the sentinel, not the shared
@@ -997,12 +996,22 @@ mod tests {
     /// `key_eq` rejects cross-type compares: `Key` vs `ValueKey<u32>`
     /// is never a match, even if the underlying numeric values
     /// coincide. The downcast inside the impl is what enforces this.
-    #[test]
     fn test_key_view_key_eq_rejects_cross_type() {
         let key: &dyn ViewKey = &Key::from_u64(42).unwrap();
         let value_key = ValueKey::<u64>::new(42);
         let value: &dyn ViewKey = &value_key;
         assert!(!key.key_eq(value));
         assert!(!value.key_eq(key));
+    }
+
+    #[test]
+    fn key_contract() {
+        crate::test_cases::run_cases(&[
+            ("key counter exhaustion", key_counter_exhaustion),
+            (
+                "test key view key eq rejects cross type",
+                test_key_view_key_eq_rejects_cross_type,
+            ),
+        ]);
     }
 }

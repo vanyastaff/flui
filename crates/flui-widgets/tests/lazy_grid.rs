@@ -40,8 +40,7 @@ fn two_column_delegate() -> Arc<dyn SliverGridDelegate> {
 /// sliver's own `children()` array (shared behavior with the `RenderSliverList`
 /// lazy backend — confirmed by inspecting both trees' `children()` output),
 /// so the offsets are compared as an unordered set instead of by slot index.
-#[test]
-fn lazy_grid_view_builder_places_tiles_at_oracle_positions() {
+pub(crate) fn lazy_grid_view_builder_places_tiles_at_oracle_positions() {
     let mut laid = lay_out(
         GridView::builder(two_column_delegate(), 4, |i| {
             if i < 4 {

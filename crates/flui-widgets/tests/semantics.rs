@@ -21,8 +21,7 @@ use flui_widgets::{MergeSemantics, Semantics, SizedBox};
 /// findable" would pass just as well against a tree where they never
 /// contributed semantics at all — which is the ordinary state of affairs for a
 /// bare `SizedBox`, and why the children here carry real `Semantics`.
-#[test]
-fn merge_semantics_collapses_its_descendants_in_the_a11y_tree() {
+pub(crate) fn merge_semantics_collapses_its_descendants_in_the_a11y_tree() {
     use flui_view::ViewExt as _;
     use flui_widgets::Column;
 
@@ -138,8 +137,7 @@ fn request(action: Action, node_id: NodeId, data: Option<ActionData>) -> ActionR
 /// action exists, and pressing it must *do* something. A node that passes only
 /// the first is the dead control this whole surface exists to rule out — an
 /// action advertised outbound that nothing routes inbound.
-#[test]
-fn a_tap_handler_round_trips_from_a_platform_click_to_the_callback() {
+pub(crate) fn a_tap_handler_round_trips_from_a_platform_click_to_the_callback() {
     let activations = Arc::new(AtomicU32::new(0));
     let counted = Arc::clone(&activations);
 
@@ -182,8 +180,7 @@ fn a_tap_handler_round_trips_from_a_platform_click_to_the_callback() {
 /// route into a silent erasure of whatever the field held. The request itself
 /// resolves: this is the payload being dropped, not the action being refused,
 /// which is why the outcome is asserted positive as well.
-#[test]
-fn a_set_text_request_without_a_payload_is_dropped_rather_than_emptied() {
+pub(crate) fn a_set_text_request_without_a_payload_is_dropped_rather_than_emptied() {
     let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&seen);
 
@@ -294,8 +291,7 @@ platform_actions! {
 /// register a handler nothing can ever invoke is a lying API, and the only way
 /// to keep that from happening by accident is to name the unreachable set and
 /// fail when it changes.
-#[test]
-fn the_actions_the_platform_cannot_reach_are_exactly_the_documented_drop_set() {
+pub(crate) fn the_actions_the_platform_cannot_reach_are_exactly_the_documented_drop_set() {
     let reachable: Vec<SemanticsAction> = FLUI_ACTIONS
         .iter()
         .copied()
@@ -354,8 +350,7 @@ fn the_actions_the_platform_cannot_reach_are_exactly_the_documented_drop_set() {
 /// over and the match answering it are expanded from one invocation above, so
 /// this asserts a property of the production table rather than of two
 /// hand-maintained copies of it.
-#[test]
-fn the_exhaustive_routing_list_agrees_with_the_translation_table() {
+pub(crate) fn the_exhaustive_routing_list_agrees_with_the_translation_table() {
     for &action in PLATFORM_ACTIONS {
         assert_eq!(
             flui_routes(action),

@@ -155,10 +155,9 @@ For the accepted part:
 
 - `cargo nextest run -p flui-protocol --all-features`:
   `the_advertised_action_names_are_adr_0080s`,
-  `every_wire_name_serializes_to_its_vocabulary_string` and
-  `the_role_schema_lists_every_wire_name`. The
-  serde and schemars tests compile only with those features.
-- `cargo nextest run -p flui-semantics`: `every_role_but_none_maps_to_an_accesskit_role` (the
+  `every_wire_name_serializes_to_its_vocabulary_string` (which also checks the schemars
+  schemas when that feature is on). The serde test compiles only with its feature.
+- `cargo nextest run -p flui-semantics`: `roles_and_checkbox_states_translate_to_accesskit` (the
   pin for the mapping now that `explicit_role` ends in a wildcard) and
   `every_wire_action_routes_to_a_semantics_action` (every `ActionName` reaches a FLUI action
   through AccessKit's Windows adapter).

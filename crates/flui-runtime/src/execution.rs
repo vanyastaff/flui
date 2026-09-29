@@ -895,7 +895,6 @@ mod tests {
     // queued deterministic work actually run; it is a no-op for the default
     // pools (their worker threads run the work themselves).
 
-    #[test]
     fn conformance_admission_is_bounded_and_released() {
         // Deterministic backend: queued work does not run until driven, so
         // the admission window fills deterministically.
@@ -939,7 +938,6 @@ mod tests {
     /// this thread) still completes immediately. This pins the structural
     /// half of "background work cannot starve frame-required compute" — the
     /// sizing half is `compute_pool_sizing_leaves_owner_thread_headroom`.
-    #[test]
     fn frame_lane_makes_progress_while_background_lanes_are_saturated() {
         let services = ExecutionServices::with_limits(None, 2, 2);
         let gate = Arc::new(AtomicBool::new(false));
@@ -980,7 +978,6 @@ mod tests {
 
     /// The latch clears on unwind: after a driven job panics, a later
     /// drive on the same executor works instead of tripping the guard.
-    #[test]
     fn deterministic_drive_recovers_after_a_panicking_job() {
         let deterministic = DeterministicExecutors::new();
         deterministic
@@ -1014,7 +1011,6 @@ mod tests {
     // `Backend::Sequential` and builds no pools at all, so there is no
     // pool-start failure to simulate there.
     #[cfg(not(target_arch = "wasm32"))]
-    #[test]
     fn pool_start_failure_refuses_the_spawn_and_recovers() {
         let slot = parking_lot::Mutex::new(PoolSlot::NotStarted);
 
@@ -1044,6 +1040,31 @@ mod tests {
         if let Some(runtime) = runtime {
             runtime.shutdown_background();
         }
+    }
+
+    #[test]
+    fn execution_lane_matrix() {
+        crate::table_test::run_table(
+            "execution_lane_matrix",
+            &[
+                (
+                    "conformance_admission_is_bounded_and_released",
+                    conformance_admission_is_bounded_and_released as fn(),
+                ),
+                (
+                    "frame_lane_makes_progress_while_background_lanes_are_saturated",
+                    frame_lane_makes_progress_while_background_lanes_are_saturated as fn(),
+                ),
+                (
+                    "deterministic_drive_recovers_after_a_panicking_job",
+                    deterministic_drive_recovers_after_a_panicking_job as fn(),
+                ),
+                (
+                    "pool_start_failure_refuses_the_spawn_and_recovers",
+                    pool_start_failure_refuses_the_spawn_and_recovers as fn(),
+                ),
+            ],
+        );
     }
 }
 

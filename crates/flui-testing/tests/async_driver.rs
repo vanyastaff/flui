@@ -36,8 +36,7 @@ impl std::future::Future for Signal {
 
 /// A wake from a worker thread is picked up by the next frame, on the frame
 /// thread.
-#[test]
-fn headless_wake_from_another_thread_is_polled_on_the_frame_thread() {
+pub(crate) fn headless_wake_from_another_thread_is_polled_on_the_frame_thread() {
     let mut binding = HeadlessBinding::new();
     let done = Arc::new(AtomicBool::new(false));
     let waker: Arc<Mutex<Option<Waker>>> = Arc::new(Mutex::new(None));

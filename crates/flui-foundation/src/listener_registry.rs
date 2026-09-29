@@ -325,7 +325,6 @@ mod tests {
     /// test forever — a same-thread, non-reentrant `parking_lot::Mutex`
     /// deadlock, not a panic, so it was verified in scratch under `timeout`
     /// rather than left in the permanent suite as an unbounded hang.
-    #[test]
     fn on_first_listener_hook_can_re_arm_itself_without_deadlocking() {
         let reg: ListenerRegistry<u8> = ListenerRegistry::new();
         let fires = Arc::new(AtomicUsize::new(0));
@@ -353,7 +352,6 @@ mod tests {
         drop(s2);
     }
 
-    #[test]
     fn last_listener_edge_fires_on_drop_to_zero() {
         let reg: ListenerRegistry<u8> = ListenerRegistry::new();
         let lasts = Arc::new(AtomicUsize::new(0));
@@ -368,5 +366,19 @@ mod tests {
         assert_eq!(lasts.load(Ordering::SeqCst), 0, "still 1 listener");
         drop(s2);
         assert_eq!(lasts.load(Ordering::SeqCst), 1, "last edge at 1->0");
+    }
+
+    #[test]
+    fn listener_registry_edges() {
+        crate::test_cases::run_cases(&[
+            (
+                "on first listener hook can re arm itself without deadlocking",
+                on_first_listener_hook_can_re_arm_itself_without_deadlocking,
+            ),
+            (
+                "last listener edge fires on drop to zero",
+                last_listener_edge_fires_on_drop_to_zero,
+            ),
+        ]);
     }
 }

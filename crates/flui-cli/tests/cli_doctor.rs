@@ -14,8 +14,7 @@ fn flui() -> Command {
 /// `--json` must produce nothing but NDJSON on stdout: every line parses,
 /// each carries an `event`, there is at least one `doctor.check` and
 /// exactly one `doctor.summary`.
-#[test]
-fn doctor_json_stdout_is_pure_ndjson() {
+pub fn doctor_json_stdout_is_pure_ndjson() {
     let assert = flui().args(["--json", "doctor"]).assert();
     let output = assert.get_output();
     let stdout = String::from_utf8_lossy(&output.stdout);
