@@ -97,9 +97,7 @@ pub(crate) struct SharedEngineServices {
     pub(super) accessibility_features: RwLock<AccessibilityFeatures>,
     /// The app's font collection. Every realm built on this thread gets a
     /// clone (`UiRealm::new`'s `fonts`) and owns a `TextContext` over it, so
-    /// a face registered here reaches every realm. It outlives realm
-    /// teardown: a hot-restarted realm builds a new context over the same
-    /// collection.
+    /// a face registered here reaches every realm.
     pub(super) fonts: FontCollection,
 }
 

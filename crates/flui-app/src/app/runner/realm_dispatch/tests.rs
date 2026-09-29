@@ -3366,12 +3366,13 @@ fn two_realms_via_separate_windows_policy_share_nothing() {
 }
 
 /// Every realm a runner builds shapes over the app's one font collection
-/// (ADR-0092 §2): two `SeparateRealms` windows go through the production
-/// `UiRealm::new` call in `secondary_window.rs`, and each realm's
+/// (ADR-0092 §2): two `SeparateRealms` windows go through
+/// `host::build_runtime_realm`, the one call every runner site (desktop, web,
+/// Android, iOS, secondary windows) builds its realm with, and each realm's
 /// `TextContext` must be built over `runtime_font_collection()`. Realm A comes
 /// from `UiRealm::for_test`, which builds its own collection, so it is not
-/// asserted on. Fails if the production site hands a realm a fresh
-/// collection, or if the runtime resolves a new one per call.
+/// asserted on. Fails if that call hands a realm a fresh collection, or if
+/// the runtime resolves a new one per call.
 #[test]
 fn separate_realm_windows_shape_over_the_runtimes_font_collection() {
     let (dispatcher_a, _clear_guard) = install_realm_a_through_a_real_owner_platform();
