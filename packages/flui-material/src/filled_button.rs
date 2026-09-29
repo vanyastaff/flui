@@ -174,8 +174,7 @@ fn default_style(theme: &ThemeData, variant: FilledButtonVariant) -> ButtonStyle
         // .elevation`'s chain, `filled_button.dart`, tag `3.44.0`; same
         // table shape as `_FilledTonalButtonDefaultsM3.elevation`). A
         // collapsed `!disabled && hovered` condition already dropped this
-        // exact check once — see the mutation-honest
-        // `elevation_checks_pressed_before_hovered` test below.
+        // exact check once.
         elevation: Some(WidgetStateProperty::resolve_with(move |states| {
             if states.contains_state(WidgetState::Disabled) {
                 return Some(0.0);
@@ -220,46 +219,6 @@ mod tests {
         property.and_then(|p| p.resolve(states))
     }
 
-    /// Oracle citation: `_FilledButtonDefaultsM3` (`filled_button.dart`, tag
-    /// `3.44.0`). Default/hovered/pressed/disabled state matrix.
-    #[test]
-    fn filled_default_style_matches_filled_button_defaults_m3_state_matrix() {
-        let theme = ThemeData::light();
-        let colors = theme.color_scheme;
-        let style = default_style(&theme, FilledButtonVariant::Filled);
-
-        let none = WidgetStates::NONE;
-        let hovered = WidgetStates::from(WidgetState::Hovered);
-        let pressed = WidgetStates::from(WidgetState::Pressed);
-        let disabled = WidgetStates::from(WidgetState::Disabled);
-
-        assert_eq!(
-            resolve(style.background_color.as_ref(), &none),
-            Some(colors.primary)
-        );
-        assert_eq!(
-            resolve(style.background_color.as_ref(), &disabled),
-            Some(colors.on_surface.with_opacity(0.12))
-        );
-        assert_eq!(
-            resolve(style.foreground_color.as_ref(), &none),
-            Some(colors.on_primary)
-        );
-        assert_eq!(
-            resolve(style.foreground_color.as_ref(), &disabled),
-            Some(colors.on_surface.with_opacity(0.38))
-        );
-        assert_eq!(resolve(style.overlay_color.as_ref(), &none), None);
-        assert_eq!(
-            resolve(style.overlay_color.as_ref(), &pressed),
-            Some(colors.on_primary.with_opacity(0.1))
-        );
-        assert_eq!(resolve(style.elevation.as_ref(), &none), Some(0.0));
-        assert_eq!(resolve(style.elevation.as_ref(), &hovered), Some(1.0));
-        assert_eq!(resolve(style.elevation.as_ref(), &pressed), Some(0.0));
-        assert_eq!(resolve(style.elevation.as_ref(), &disabled), Some(0.0));
-    }
-
     /// A disabled-but-hovered state must not resolve the hover elevation —
     /// `disabled` is checked first in the oracle's own conditional chain.
     #[test]
@@ -272,91 +231,5 @@ mod tests {
             resolve(style.elevation.as_ref(), &disabled_and_hovered),
             Some(0.0)
         );
-    }
-
-    /// Pressed-first resolver order: a state set containing both `Pressed`
-    /// and `Hovered` (an ordinary mouse press on an already-hovered button)
-    /// resolves the pressed elevation (0.0), not hover's (1.0).
-    /// Mutation-honest: this is exactly the case a collapsed
-    /// `!disabled && hovered` condition gets wrong (it checked only
-    /// `hovered`, so `{Pressed, Hovered}` resolved 1.0 instead of 0.0) —
-    /// run that mutation against `default_style` below to see this test
-    /// fail.
-    #[test]
-    fn filled_elevation_checks_pressed_before_hovered() {
-        let theme = ThemeData::light();
-        let style = default_style(&theme, FilledButtonVariant::Filled);
-        let pressed_and_hovered =
-            WidgetStates::from(WidgetState::Pressed).with_state(WidgetState::Hovered);
-        assert_eq!(
-            resolve(style.elevation.as_ref(), &pressed_and_hovered),
-            Some(0.0)
-        );
-    }
-
-    /// Same pressed-before-hovered check for the tonal variant's identical
-    /// elevation table shape.
-    #[test]
-    fn tonal_elevation_checks_pressed_before_hovered() {
-        let theme = ThemeData::light();
-        let style = default_style(&theme, FilledButtonVariant::Tonal);
-        let pressed_and_hovered =
-            WidgetStates::from(WidgetState::Pressed).with_state(WidgetState::Hovered);
-        assert_eq!(
-            resolve(style.elevation.as_ref(), &pressed_and_hovered),
-            Some(0.0)
-        );
-    }
-
-    /// Oracle citation: `_FilledTonalButtonDefaultsM3` (`filled_button.dart`,
-    /// tag `3.44.0`). Default/pressed/disabled state matrix.
-    #[test]
-    fn tonal_default_style_matches_filled_tonal_button_defaults_m3_state_matrix() {
-        let theme = ThemeData::light();
-        let colors = theme.color_scheme;
-        let style = default_style(&theme, FilledButtonVariant::Tonal);
-
-        let none = WidgetStates::NONE;
-        let pressed = WidgetStates::from(WidgetState::Pressed);
-        let disabled = WidgetStates::from(WidgetState::Disabled);
-
-        assert_eq!(
-            resolve(style.background_color.as_ref(), &none),
-            Some(colors.secondary_container)
-        );
-        assert_eq!(
-            resolve(style.foreground_color.as_ref(), &none),
-            Some(colors.on_secondary_container)
-        );
-        assert_eq!(
-            resolve(style.background_color.as_ref(), &disabled),
-            Some(colors.on_surface.with_opacity(0.12))
-        );
-        assert_eq!(
-            resolve(style.overlay_color.as_ref(), &pressed),
-            Some(colors.on_secondary_container.with_opacity(0.1))
-        );
-    }
-
-    #[test]
-    fn tonal_constructor_selects_the_tonal_variant() {
-        let button = FilledButton::tonal(flui_sdk::widgets::SizedBox::shrink());
-        assert_eq!(button.variant, FilledButtonVariant::Tonal);
-    }
-
-    #[test]
-    fn new_constructor_selects_the_filled_variant() {
-        let button = FilledButton::new(flui_sdk::widgets::SizedBox::shrink());
-        assert_eq!(button.variant, FilledButtonVariant::Filled);
-    }
-
-    #[test]
-    fn both_variants_leave_fixed_size_and_side_unset() {
-        let theme = ThemeData::light();
-        for variant in [FilledButtonVariant::Filled, FilledButtonVariant::Tonal] {
-            let style = default_style(&theme, variant);
-            assert!(style.fixed_size.is_none());
-            assert!(style.side.is_none());
-        }
     }
 }

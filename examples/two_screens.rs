@@ -9,7 +9,6 @@
 //! show its address bar.
 //!
 //! Run with: cargo run --example two_screens
-//! (`tests/two_screens_example.rs` mounts this file's tree headless.)
 
 use flui::prelude::*;
 use flui::widgets::column;

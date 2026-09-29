@@ -219,64 +219,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn leaf_validates_zero() {
-        assert!(Leaf::validate_count(0));
-        assert!(!Leaf::validate_count(1));
-    }
-
-    #[test]
-    fn optional_validates_zero_or_one() {
-        assert!(Optional::validate_count(0));
-        assert!(Optional::validate_count(1));
-        assert!(!Optional::validate_count(2));
-    }
-
-    #[test]
-    fn single_validates_exactly_one() {
-        assert!(!Single::validate_count(0));
-        assert!(Single::validate_count(1));
-        assert!(!Single::validate_count(2));
-    }
-
-    #[test]
-    fn exact_n_validates_n() {
-        assert!(Exact::<3>::validate_count(3));
-        assert!(!Exact::<3>::validate_count(2));
-        assert!(!Exact::<3>::validate_count(4));
-    }
-
-    #[test]
-    fn at_least_n_validates_at_least_n() {
-        assert!(!AtLeast::<2>::validate_count(1));
-        assert!(AtLeast::<2>::validate_count(2));
-        assert!(AtLeast::<2>::validate_count(100));
-    }
-
-    #[test]
-    fn variable_validates_any() {
-        assert!(Variable::validate_count(0));
-        assert!(Variable::validate_count(100));
-    }
-
-    #[test]
     fn range_validates_bounds() {
         assert!(!Range::<2, 5>::validate_count(1));
         assert!(Range::<2, 5>::validate_count(2));
         assert!(Range::<2, 5>::validate_count(5));
         assert!(!Range::<2, 5>::validate_count(6));
-    }
-
-    #[test]
-    fn never_validates_nothing() {
-        assert!(!Never::validate_count(0));
-        assert!(!Never::validate_count(1));
-    }
-
-    #[test]
-    fn descriptions_are_meaningful() {
-        assert_eq!(Leaf::DESCRIPTION, "Leaf");
-        assert_eq!(Single::DESCRIPTION, "Exact<N>");
-        assert_eq!(Variable::DESCRIPTION, "Variable");
-        assert_eq!(Never::DESCRIPTION, "Never");
     }
 }

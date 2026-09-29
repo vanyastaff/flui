@@ -33,11 +33,6 @@ flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 bitflags = { workspace = true }
 tracing = { workspace = true }
 
-[dev-dependencies]
-# Compile-time pins of the raster-boundary auto traits (`Send + Sync` on
-# `Layer`, `LayerTree`, `Scene`, `SceneSnapshot`).
-static_assertions.workspace = true
-
 [lints]
 workspace = true
 

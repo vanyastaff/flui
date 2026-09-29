@@ -158,6 +158,9 @@
 )]
 extern crate self as flui_foundation;
 
+#[cfg(test)]
+mod test_cases;
+
 pub mod affinity;
 // Compile-time child-count markers the render protocol attaches to nodes.
 pub mod arity;
@@ -352,38 +355,4 @@ pub mod prelude {
         VoidCallback,
         WithKey,
     };
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_basic_types() {
-        // ElementId::new(n) is 1-based: new(1).index() == 0.
-        let element_id = ElementId::new(1);
-        assert_eq!(element_id.index(), 0);
-
-        let _key = Key::new();
-
-        let notifier = ChangeNotifier::new();
-        let _listener = notifier.add_listener(std::sync::Arc::new(|| {}));
-    }
-}
-
-#[cfg(test)]
-mod derive_owner_tests {
-    use super::Diagnosticable;
-
-    #[derive(Debug, flui_macros::Diagnosticable)]
-    struct Property {
-        width: u32,
-    }
-
-    #[test]
-    fn derive_resolves_owner_inside_library() {
-        let node = Property { width: 42 }.to_diagnostics_node();
-        assert_eq!(node.name(), Some("Property"));
-        assert_eq!(node.properties().len(), 1);
-    }
 }

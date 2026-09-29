@@ -6,6 +6,9 @@
 
 mod util;
 
+#[cfg(test)]
+mod table_test;
+
 mod device;
 mod tasks;
 

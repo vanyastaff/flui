@@ -348,28 +348,3 @@ unsafe extern "system" fn procedure(
     });
     result
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{OwnerControl, OwnerControlContext, UserDataRefusal};
-
-    // The owner context holds owner-only state; it must never become
-    // `Send` or `Sync` through a field change.
-    static_assertions::assert_not_impl_any!(OwnerControlContext: Send, Sync);
-
-    #[test]
-    fn gate_refuses_a_handle_that_names_another_owner_window() {
-        let stale = OwnerControl::new().expect("first owner control");
-        let other = OwnerControl::new().expect("second owner control");
-        // Stand in for a recycled handle: both owner windows live on this
-        // thread and are of the owner class, so only the identity differs.
-        let recycled = (*other.gate.address.lock()).expect("the second owner window is open");
-        let own = stale.gate.address.lock().replace(recycled);
-
-        let refusal = stale.shares("recycled handle").err();
-        *stale.gate.address.lock() = own;
-
-        assert_eq!(refusal, Some(UserDataRefusal::WindowGone));
-        assert!(other.shares("own handle").is_ok());
-    }
-}

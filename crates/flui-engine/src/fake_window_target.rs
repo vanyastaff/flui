@@ -8,15 +8,12 @@
 //! `Unavailable` at construction or mid-test.
 
 use std::ffi::c_ulong;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
     RawWindowHandle, WindowHandle, XlibDisplayHandle, XlibWindowHandle,
 };
-
-use crate::error::{EngineError, EngineResult};
-use crate::window_target::WindowTarget;
 
 pub(crate) struct FakeTarget {
     window_id: Mutex<c_ulong>,
@@ -47,13 +44,6 @@ impl FakeTarget {
             .available
             .lock()
             .expect("BUG: test-only mutex is never poisoned") = available;
-    }
-
-    pub(crate) fn set_window_id(&self, window_id: c_ulong) {
-        *self
-            .window_id
-            .lock()
-            .expect("BUG: test-only mutex is never poisoned") = window_id;
     }
 
     pub(crate) fn call_log(&self) -> Vec<&'static str> {
@@ -111,20 +101,5 @@ impl HasDisplayHandle for FakeTarget {
         #[expect(unsafe_code)] // test double, no FFI island: see SAFETY above
         let handle = unsafe { DisplayHandle::borrow_raw(raw) };
         Ok(handle)
-    }
-}
-
-/// Reads back the Xlib window ID a `FakeTarget`-backed `Arc<dyn
-/// WindowTarget>` currently hands out, through the real `HasWindowHandle`
-/// trait method — not a backdoor accessor — so tests build/rebuild a
-/// minimal `S` stand-in via the same call production code makes.
-pub(crate) fn xlib_window_id(target: &Arc<dyn WindowTarget>) -> EngineResult<c_ulong> {
-    let raw = target
-        .window_handle()
-        .map_err(EngineError::surface_target_unavailable)?
-        .as_raw();
-    match raw {
-        RawWindowHandle::Xlib(handle) => Ok(handle.window),
-        _ => unreachable!("BUG: FakeTarget only ever hands out Xlib handles"),
     }
 }

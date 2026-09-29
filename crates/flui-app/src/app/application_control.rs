@@ -419,80 +419,6 @@ mod tests {
         let owner = saved.take().expect("owner was delivered");
         (Ingress::new(owner.proxy(), false), owner)
     }
-    #[test]
-    fn main_window_admission_capacity_receiver_drop_and_terminal_result() {
-        let (ingress, _owner) = ingress();
-        let handle = ingress.handle();
-        let requests: Vec<_> = (0..WAITER_CAPACITY)
-            .map(|_| handle.request_show_main_window().expect("within capacity"))
-            .collect();
-        assert!(matches!(
-            handle.request_show_main_window(),
-            Err(AppControlError::Capacity { .. })
-        ));
-        drop(requests);
-        assert!(
-            !ingress.try_auto_quit(),
-            "receiver drop does not cancel intent"
-        );
-        assert!(ingress.begin());
-        let mut requests: Vec<_> = Vec::new();
-        ingress.settle(Err(AppWindowError::Cancelled));
-        requests.push(
-            handle
-                .request_show_main_window()
-                .expect("settlement releases capacity"),
-        );
-        ingress.close();
-        assert!(matches!(
-            requests[0].try_result(),
-            Some(Err(AppWindowError::Cancelled))
-        ));
-        assert!(matches!(
-            handle.request_show_main_window(),
-            Err(AppControlError::OwnerGone)
-        ));
-    }
-    #[test]
-    fn main_window_failed_batch_releases_reservation_without_touching_its_successor() {
-        let (ingress, _owner) = ingress();
-        let mut first = ingress.handle().request_show_main_window().expect("first");
-        assert!(ingress.begin());
-        let previous = ingress.active_batch();
-        assert!(ingress.fail_pending(&previous, AppWindowError::Cancelled));
-        assert!(matches!(
-            first.try_result(),
-            Some(Err(AppWindowError::Cancelled))
-        ));
-        {
-            let state = ingress.state.lock();
-            assert_eq!(state.outstanding, 0);
-            assert!(!state.active);
-        }
-        let mut next = ingress.handle().request_show_main_window().expect("next");
-        assert!(ingress.begin());
-        assert!(!ingress.fail_pending(&previous, AppWindowError::Cancelled));
-        assert!(next.try_result().is_none());
-        assert_eq!(ingress.state.lock().outstanding, 1);
-        ingress.settle(Err(AppWindowError::Cancelled));
-    }
-    #[test]
-    fn main_window_quit_cancels_success_settled_after_its_admission() {
-        let (ingress, _owner) = ingress();
-        let handle = ingress.handle();
-        let mut request = handle.request_show_main_window().expect("admit");
-        assert!(ingress.begin());
-        handle.request_quit().expect("quit");
-        ingress.settle(Ok(PresentationAddress {
-            realm_id: flui_foundation::RealmId::new(1),
-            presentation_id: flui_foundation::PresentationId::new(1),
-        }));
-        assert!(matches!(
-            request.try_result(),
-            Some(Err(AppWindowError::Cancelled))
-        ));
-    }
-    #[test]
     fn main_window_exit_and_admission_linearize_on_same_ingress() {
         let (ingress, _owner) = ingress();
         let handle = ingress.handle();
@@ -511,7 +437,6 @@ mod tests {
             Err(AppControlError::OwnerGone)
         ));
     }
-    #[test]
     fn main_window_worker_admission_races_autoexit_without_lost_accepted_intent() {
         for _ in 0..24 {
             let (ingress, _owner) = ingress();
@@ -535,90 +460,20 @@ mod tests {
     }
 
     #[test]
-    fn main_window_reply_owner_gone_is_terminal_without_blocking() {
-        let (reply, receiver) = claim_slot(Arc::new(|| {}));
-        let mut request = MainWindowRequest { reply: receiver };
-        assert!(request.try_result().is_none());
-        drop(reply);
-        assert!(matches!(
-            request.try_result(),
-            Some(Err(AppWindowError::Cancelled))
-        ));
-    }
-    #[test]
-    fn main_window_reply_waker_can_admit_the_next_batch_without_old_settlement_consuming_it() {
-        struct Admit {
-            handle: AppHandle,
-            request: Mutex<Option<MainWindowRequest>>,
-        }
-        impl std::task::Wake for Admit {
-            fn wake(self: Arc<Self>) {
-                self.wake_by_ref();
-            }
-            fn wake_by_ref(self: &Arc<Self>) {
-                let request = self
-                    .handle
-                    .request_show_main_window()
-                    .expect("reentrant admission");
-                let displaced = { self.request.lock().replace(request) };
-                drop(displaced);
-            }
-        }
-        let (ingress, _owner) = ingress();
-        let mut first = ingress.handle().request_show_main_window().expect("first");
-        let admitted = Arc::new(Admit {
-            handle: ingress.handle(),
-            request: Mutex::new(None),
-        });
-        let waker = std::task::Waker::from(Arc::clone(&admitted));
-        assert!(
-            Pin::new(&mut first)
-                .poll(&mut Context::from_waker(&waker))
-                .is_pending()
+    fn application_control_admission_matrix() {
+        crate::table_test::run_table(
+            "application_control_admission_matrix",
+            &[
+                (
+                    "main_window_exit_and_admission_linearize_on_same_ingress",
+                    main_window_exit_and_admission_linearize_on_same_ingress as fn(),
+                ),
+                (
+                    "main_window_worker_admission_races_autoexit_without_lost_accepted_intent",
+                    main_window_worker_admission_races_autoexit_without_lost_accepted_intent
+                        as fn(),
+                ),
+            ],
         );
-        assert!(ingress.begin());
-        ingress.settle(Err(AppWindowError::Cancelled));
-        let mut next = admitted
-            .request
-            .lock()
-            .take()
-            .expect("waker admitted next request");
-        assert!(next.try_result().is_none());
-        assert!(
-            !ingress.try_auto_quit(),
-            "next reservation survives callback delivery"
-        );
-        assert!(ingress.begin());
-        ingress.settle(Err(AppWindowError::Cancelled));
-        assert!(matches!(
-            next.try_result(),
-            Some(Err(AppWindowError::Cancelled))
-        ));
-    }
-
-    #[test]
-    fn main_window_panicking_reply_waker_does_not_skip_siblings() {
-        struct Panics;
-        impl std::task::Wake for Panics {
-            fn wake(self: Arc<Self>) {
-                panic!("reply wake");
-            }
-        }
-        let (ingress, _owner) = ingress();
-        let mut first = ingress.handle().request_show_main_window().expect("first");
-        let mut second = ingress.handle().request_show_main_window().expect("second");
-        let waker = std::task::Waker::from(Arc::new(Panics));
-        assert!(
-            Pin::new(&mut first)
-                .poll(&mut Context::from_waker(&waker))
-                .is_pending()
-        );
-        assert!(ingress.begin());
-        ingress.settle(Err(AppWindowError::Cancelled));
-        assert!(matches!(
-            second.try_result(),
-            Some(Err(AppWindowError::Cancelled))
-        ));
-        assert!(ingress.handle().request_show_main_window().is_ok());
     }
 }

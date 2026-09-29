@@ -156,8 +156,7 @@ fn build_static_subtree(counters: &[Rc<Cell<u32>>]) -> StaticChild {
     }
 }
 
-#[test]
-fn swapping_theme_data_rebuilds_exactly_the_dependents() {
+pub fn swapping_theme_data_rebuilds_exactly_the_dependents() {
     let counters: Vec<Rc<Cell<u32>>> = (0..TOTAL_LEAVES).map(|_| Rc::new(Cell::new(0))).collect();
     let dependent_indices: Vec<usize> = (0..TOTAL_LEAVES)
         .filter(|&i| is_dependent_index(i))

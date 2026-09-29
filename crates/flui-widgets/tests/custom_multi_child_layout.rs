@@ -54,8 +54,7 @@ fn two_slot_delegate() -> Arc<dyn MultiChildLayoutDelegate> {
     })
 }
 
-#[test]
-fn custom_multi_child_layout_mounts_render_object_and_positions_layout_id_children() {
+pub(crate) fn custom_multi_child_layout_mounts_render_object_and_positions_layout_id_children() {
     let laid = lay_out(
         CustomMultiChildLayout::new(
             two_slot_delegate(),

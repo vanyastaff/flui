@@ -157,7 +157,5 @@ their proc-macro entry points.
 Focused checks:
 
 ```bash
-cargo test -p flui-view --test derive_smoke --features test-utils
-cargo test -p flui-view --test derive_bon_stack --features test-utils
 cargo clippy -p flui-macros --all-targets -- -D warnings
 ```

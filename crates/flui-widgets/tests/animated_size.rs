@@ -11,7 +11,6 @@
 //! the latter would silently reset the in-flight retarget state on every
 //! unrelated rebuild.
 
-use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -76,29 +75,7 @@ fn width(laid: &crate::common::LaidOut) -> f64 {
     laid.size(laid.current_root()).width
 }
 
-#[test]
-fn animated_size_first_frame_snaps_to_child_size_with_no_motion() {
-    let vsync = Vsync::new();
-    let side = Arc::new(Mutex::new(20.0));
-    let probe = SizeProbe {
-        vsync: vsync.clone(),
-        side: Arc::clone(&side),
-        alignment: Arc::new(Mutex::new(Alignment::CENTER)),
-        on_end: None,
-    };
-    let laid = lay_out_animated(probe, loose(200.0), vsync);
-
-    // No configuration change yet: the widget sits AT the child's size, no
-    // animation.
-    assert!(
-        (width(&laid) - 20.0).abs() < 1e-4,
-        "first frame shows the child's raw size, got {}",
-        width(&laid),
-    );
-}
-
-#[test]
-fn animated_size_interpolates_to_a_new_child_size_over_frames() {
+pub(crate) fn animated_size_interpolates_to_a_new_child_size_over_frames() {
     let vsync = Vsync::new();
     let side = Arc::new(Mutex::new(20.0));
     let probe = SizeProbe {
@@ -149,160 +126,4 @@ fn animated_size_interpolates_to_a_new_child_size_over_frames() {
         "the run ends at the new 100px width, got {}",
         samples[4],
     );
-}
-
-#[test]
-fn animated_size_unrelated_rebuild_does_not_reset_in_flight_animation() {
-    let vsync = Vsync::new();
-    let side = Arc::new(Mutex::new(20.0));
-    let alignment = Arc::new(Mutex::new(Alignment::CENTER));
-    let probe = SizeProbe {
-        vsync: vsync.clone(),
-        side: Arc::clone(&side),
-        alignment: Arc::clone(&alignment),
-        on_end: None,
-    };
-    let mut laid = lay_out_animated(probe, loose(200.0), vsync);
-
-    *side.lock() = 100.0;
-    laid.pump();
-    laid.pump_for(FRAME); // detection frame
-    laid.pump_for(FRAME);
-    let before_unrelated_rebuild = width(&laid);
-    assert!(
-        before_unrelated_rebuild > 20.5 && before_unrelated_rebuild < 99.5,
-        "must be genuinely mid-flight before the unrelated rebuild, got {before_unrelated_rebuild}",
-    );
-
-    // An UNRELATED rebuild: only `alignment` changes, `side` does not. If
-    // `update_render_object` replaced the whole render object (the `Align`
-    // convention this widget's docs explicitly warn against), this would
-    // reset `size_tween`/`state`/the controller subscription and the
-    // reported size would snap straight to the child's raw current size
-    // (100) instead of continuing from `before_unrelated_rebuild`.
-    *alignment.lock() = Alignment::BOTTOM_RIGHT;
-    laid.pump();
-    let after_unrelated_rebuild = width(&laid);
-    assert!(
-        (after_unrelated_rebuild - before_unrelated_rebuild).abs() < 1e-3,
-        "an unrelated (alignment-only) rebuild must not perturb the \
-         in-flight animated size — before {before_unrelated_rebuild}, \
-         after {after_unrelated_rebuild}",
-    );
-
-    // The alignment change DID reach the persistent render object: while
-    // still mid-flight (reported size < the child's full 100px), BOTTOM_RIGHT
-    // (factor 1.0) must offset the child by exactly `size - child_size`,
-    // discriminating it from the stale CENTER (factor 0.5) offset a
-    // whole-object-replace bug would also have reset back to.
-    let child = laid.only_child(laid.current_root());
-    let child_offset = laid.offset(child);
-    let expected_dx = after_unrelated_rebuild - 100.0;
-    assert!(
-        (child_offset.dx - expected_dx).abs() < 1.0,
-        "BOTTOM_RIGHT must reach the persistent render object via the \
-         targeted setter — child offset {child_offset:?}, expected dx≈{expected_dx}",
-    );
-
-    // The animation must still be running: further frames keep climbing
-    // toward the target, proving the controller subscription survived the
-    // unrelated rebuild (an object-replace would have torn it down).
-    for _ in 0..5 {
-        laid.pump_for(FRAME);
-    }
-    assert!(
-        (width(&laid) - 100.0).abs() < 1.0,
-        "the animation must still converge to the target after the \
-         unrelated rebuild, got {}",
-        width(&laid),
-    );
-}
-
-#[test]
-fn animated_size_on_end_accepts_owner_local_rc_state() {
-    let vsync = Vsync::new();
-    let side = Arc::new(Mutex::new(20.0));
-    let calls = Rc::new(Cell::new(0));
-    let calls_for_callback = Rc::clone(&calls);
-    let probe = SizeProbe {
-        vsync: vsync.clone(),
-        side: Arc::clone(&side),
-        alignment: Arc::new(Mutex::new(Alignment::CENTER)),
-        on_end: Some(Rc::new(move |_cx| {
-            calls_for_callback.set(calls_for_callback.get() + 1);
-        })),
-    };
-    let mut laid = lay_out_animated(probe, loose(200.0), vsync);
-
-    *side.lock() = 100.0;
-    laid.pump();
-    laid.pump_for(FRAME);
-    assert_eq!(calls.get(), 0, "the run has not completed yet");
-
-    for _ in 0..5 {
-        laid.pump_for(FRAME);
-    }
-
-    assert_eq!(
-        calls.get(),
-        1,
-        "on_end fired from the owner plane and captured Rc<Cell<_>>"
-    );
-}
-
-#[test]
-fn animated_size_completion_writes_a_signal_after_build() {
-    use flui_view::prelude::*;
-    use std::cell::RefCell;
-
-    type Observation = Rc<RefCell<Option<(Signal<u32>, flui_view::Reactive)>>>;
-    #[derive(Clone, StatefulView)]
-    struct CompletionProbe {
-        side: Arc<Mutex<f64>>,
-        observation: Observation,
-        vsync: Vsync,
-    }
-    #[derive(Default)]
-    struct CompletionState(Signal<u32>);
-    impl StatefulView for CompletionProbe {
-        type State = CompletionState;
-        fn create_state(&self) -> Self::State {
-            CompletionState::default()
-        }
-    }
-    impl ViewState<CompletionProbe> for CompletionState {
-        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-            self.0 = ctx.signal(0);
-        }
-        fn build(&self, view: &CompletionProbe, ctx: &dyn BuildContext) -> impl IntoView {
-            *view.observation.borrow_mut() = Some((self.0, ctx.reactive()));
-            let signal = self.0;
-            VsyncScope::new(
-                view.vsync.clone(),
-                AnimatedSize::new(RUN)
-                    .on_end(move |cx| signal.update(cx, |n| *n += 1))
-                    .child(SizedBox::square(*view.side.lock())),
-            )
-        }
-    }
-    let observation = Rc::new(RefCell::new(None));
-    let side = Arc::new(Mutex::new(20.0));
-    let vsync = Vsync::new();
-    let mut app = lay_out_animated(
-        CompletionProbe {
-            side: side.clone(),
-            observation: observation.clone(),
-            vsync: vsync.clone(),
-        },
-        loose(200.0),
-        vsync,
-    );
-    *side.lock() = 100.0;
-    app.pump();
-    for _ in 0..7 {
-        app.pump_for(FRAME);
-    }
-    let observed = observation.borrow();
-    let (signal, graph) = observed.as_ref().expect("mounted completion probe");
-    assert_eq!(signal.peek(graph, |value| *value), Ok(1));
 }

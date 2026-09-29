@@ -102,14 +102,12 @@ host.
   except the `execution` host-injection seam below.
   `allowed-dependents = ["flui-app", "flui-testing"]` makes the application
   host and the headless test driver the only crates allowed a normal edge,
-  checked by `cargo xtask workspace` (and pinned by its
-  `the_runtime_admits_the_host_and_the_test_driver_as_normal_dependents`).
-  That rule is what keeps ADR-0047's invariant true now that
-  `ExecutionServices` is `pub`: only a host crate, one of the runtime's
-  `allowed-dependents`, constructs the services, and no other workspace crate
-  reaches the pools. `flui-testing` is the host of its own headless loop
-  (ADR-0083 §4) and constructs no execution services. Dev edges are not
-  restricted.
+  checked by `cargo xtask workspace`. That rule is what keeps ADR-0047's
+  invariant true now that `ExecutionServices` is `pub`: only a host crate, one
+  of the runtime's `allowed-dependents`, constructs the services, and no other
+  workspace crate reaches the pools. `flui-testing` is the host of its own
+  headless loop (ADR-0083 §4) and constructs no execution services. Dev edges
+  are not restricted.
 - **The execution host-injection seam carries the Stable promise.**
   `HostExecutors`, `HostComputePool`, `HostIoPool`, `ComputeJob`, `IoFuture`,
   `SpawnError` and `DeterministicExecutors` are defined in `execution` but

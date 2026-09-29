@@ -111,23 +111,6 @@ impl UiRealm {
             .gestures()
     }
 
-    /// This realm's `TextInputHandle` for the presentation named `id` — the
-    /// addressed counterpart to [`Self::text_input_handle`] (primary-only),
-    /// for the isolation suite proving IME sessions stay exclusive to the
-    /// exact presentation they were attached on
-    /// (`ime_event_addressed_to_b_does_not_reach_as_session`).
-    #[must_use]
-    #[cfg(test)]
-    pub(crate) fn presentation_text_input_handle_for_test(
-        &self,
-        id: PresentationId,
-    ) -> flui_interaction::TextInputHandle {
-        self.presentations
-            .get(id)
-            .expect("BUG: presentation_text_input_handle_for_test called with an unknown id")
-            .text_input_handle()
-    }
-
     /// Assemble another presentation for this realm, sharing its exact
     /// `GlobalKeyScope` and realm-level dispatch handles — WITHOUT
     /// installing it into the forest yet. Deliberately split from

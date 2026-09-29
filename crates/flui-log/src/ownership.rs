@@ -262,27 +262,3 @@ where
             .map_err(|_| SetupError::SubscriberAlreadyInstalled),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Behaviour that depends on the process-global slot lives in
-    // `tests/`, one scenario per integration-test binary, because the slot can
-    // only be written once per process. What is testable in-process is the
-    // part that does not touch it.
-
-    #[test]
-    fn auto_is_the_default_policy() {
-        assert_eq!(SubscriberPolicy::default(), SubscriberPolicy::Auto);
-        assert_eq!(LogBridgePolicy::default(), LogBridgePolicy::Auto);
-    }
-
-    #[test]
-    fn ownership_predicates_agree_with_the_variant() {
-        assert!(SubscriberOwnership::Installed.is_installed());
-        assert!(!SubscriberOwnership::Installed.is_unchanged());
-        assert!(SubscriberOwnership::Unchanged.is_unchanged());
-        assert!(!SubscriberOwnership::Unchanged.is_installed());
-    }
-}

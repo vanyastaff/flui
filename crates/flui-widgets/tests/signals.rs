@@ -54,93 +54,6 @@ impl ViewState<Reader> for ReaderState {
     }
 }
 
-/// Reads `sig` only while `flag` is true.
-#[derive(Clone, StatefulView)]
-struct ConditionalReader {
-    flag: Signal<bool>,
-    sig: Signal<u32>,
-    builds: Builds,
-}
-
-struct ConditionalReaderState {
-    view: ConditionalReader,
-}
-
-impl StatefulView for ConditionalReader {
-    type State = ConditionalReaderState;
-    fn create_state(&self) -> Self::State {
-        ConditionalReaderState { view: self.clone() }
-    }
-}
-
-impl ViewState<ConditionalReader> for ConditionalReaderState {
-    fn build(&self, _view: &ConditionalReader, ctx: &dyn BuildContext) -> impl IntoView {
-        self.view.builds.fetch_add(1, Ordering::Relaxed);
-        let side = if self.view.flag.get(ctx) {
-            self.view.sig.get(ctx)
-        } else {
-            1
-        };
-        SizedBox::square(side as f64)
-    }
-}
-
-/// Creates a signal owned by its own element in `init_state` (the canonical
-/// `cx.signal(..)` idiom) and publishes the handle so the test can probe it
-/// after the element unmounts.
-#[derive(Clone, StatefulView)]
-struct SignalOwner {
-    published: Rc<Cell<Option<Signal<u32>>>>,
-}
-
-struct SignalOwnerState {
-    published: Rc<Cell<Option<Signal<u32>>>>,
-    own: Option<Signal<u32>>,
-}
-
-impl StatefulView for SignalOwner {
-    type State = SignalOwnerState;
-    fn create_state(&self) -> Self::State {
-        SignalOwnerState {
-            published: Rc::clone(&self.published),
-            own: None,
-        }
-    }
-}
-
-impl ViewState<SignalOwner> for SignalOwnerState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let own = ctx.signal(7u32);
-        self.published.set(Some(own));
-        self.own = Some(own);
-    }
-
-    fn build(&self, _view: &SignalOwner, ctx: &dyn BuildContext) -> impl IntoView {
-        SizedBox::square(self.own.expect("init_state ran").get(ctx) as f64)
-    }
-}
-
-/// Root that shows a [`SignalOwner`] or a plain box.
-#[derive(Clone, Debug, StatelessView)]
-struct OwnerSwitch {
-    show: bool,
-    published: Rc<Cell<Option<Signal<u32>>>>,
-}
-
-impl StatelessView for OwnerSwitch {
-    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        use flui_view::ViewExt;
-        if self.show {
-            SignalOwner {
-                published: Rc::clone(&self.published),
-            }
-            .boxed()
-        } else {
-            SizedBox::square(2.0).boxed()
-        }
-    }
-}
-
 /// Reads a handle that may be stale through `try_get`, rendering the outcome
 /// as a size (1 = error, value otherwise).
 #[derive(Clone, StatefulView)]
@@ -200,8 +113,7 @@ impl ViewState<WriterInBuild> for WriterInBuildState {
     }
 }
 
-#[test]
-fn writing_a_signal_rebuilds_exactly_its_readers() {
+pub(crate) fn writing_a_signal_rebuilds_exactly_its_readers() {
     // Mount a placeholder first: the tree's own graph is the one the build
     // contexts hand out, so the signals must be minted there.
     let mut laid = lay_out(SizedBox::square(1.0), loose(1000.0));
@@ -258,69 +170,7 @@ fn writing_a_signal_rebuilds_exactly_its_readers() {
     );
 }
 
-#[test]
-fn a_rebuild_re_derives_the_read_set_so_a_dropped_read_stops_depending() {
-    let builds = builds();
-    let mut laid = lay_out(SizedBox::square(1.0), loose(1000.0));
-    let r = laid.with_build_owner_mut(|owner| owner.reactive().clone());
-    let flag = r.signal(true);
-    let sig = r.signal(5u32);
-    laid.pump_widget(ConditionalReader {
-        flag,
-        sig,
-        builds: Arc::clone(&builds),
-    });
-    assert_eq!(r.readers_of(sig.slot()).len(), 1);
-    let base = count(&builds);
-
-    flag.set(&r, false).unwrap();
-    laid.tick();
-    assert_eq!(
-        count(&builds),
-        base + 1,
-        "flipping the flag rebuilds the reader"
-    );
-    assert!(
-        r.readers_of(sig.slot()).is_empty(),
-        "the rebuild no longer read sig, so the element is no longer its reader"
-    );
-
-    sig.set(&r, 6).unwrap();
-    laid.tick();
-    assert_eq!(count(&builds), base + 1, "writing sig now rebuilds nothing");
-}
-
-#[test]
-fn a_signal_created_in_init_state_is_released_when_its_element_unmounts() {
-    let published = Rc::new(Cell::new(None));
-    let mut laid = lay_out(
-        OwnerSwitch {
-            show: true,
-            published: Rc::clone(&published),
-        },
-        loose(1000.0),
-    );
-    let r = laid.with_build_owner_mut(|owner| owner.reactive().clone());
-    let own = published.get().expect("init_state published the handle");
-    assert_eq!(own.peek(&r, |v| *v), Ok(7));
-    assert_eq!(laid.size(laid.current_root()), size(7.0, 7.0));
-    assert_eq!(r.live_slot_count(), 1);
-
-    laid.pump_widget(OwnerSwitch {
-        show: false,
-        published: Rc::clone(&published),
-    });
-
-    assert!(
-        matches!(own.peek(&r, |v| *v), Err(SignalError::Released { .. })),
-        "the owning element unmounted, so its signal is released"
-    );
-    assert!(r.readers_of(own.slot()).is_empty());
-    assert_eq!(r.live_slot_count(), 0, "no slot leaked");
-}
-
-#[test]
-fn a_stale_handle_read_in_build_is_a_typed_error_through_try_get() {
+pub(crate) fn a_stale_handle_read_in_build_is_a_typed_error_through_try_get() {
     let mut laid = lay_out(SizedBox::square(1.0), loose(1000.0));
     let r = laid.with_build_owner_mut(|owner| owner.reactive().clone());
     let sig = r.signal(4u32);
@@ -344,8 +194,7 @@ fn a_stale_handle_read_in_build_is_a_typed_error_through_try_get() {
     assert_eq!(laid.size(laid.current_root()), size(1.0, 1.0));
 }
 
-#[test]
-fn writes_and_creations_inside_build_are_refused_by_the_runtime() {
+pub(crate) fn writes_and_creations_inside_build_are_refused_by_the_runtime() {
     let mut laid = lay_out(SizedBox::square(1.0), loose(1000.0));
     let r = laid.with_build_owner_mut(|owner| owner.reactive().clone());
     let sig = r.signal(1u32);

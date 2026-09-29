@@ -1005,8 +1005,6 @@ mod tests {
     static_assertions::assert_not_impl_any!(Reactive: ReaderSink);
     static_assertions::assert_impl_all!(ElementReads: ReaderSink);
 
-    struct PanickingSubscriber;
-
     struct DropBomb(&'static str);
 
     impl Drop for DropBomb {
@@ -1042,38 +1040,6 @@ mod tests {
         }
     }
 
-    impl tracing::Subscriber for PanickingSubscriber {
-        fn register_callsite(
-            &self,
-            _metadata: &'static tracing::Metadata<'static>,
-        ) -> tracing::subscriber::Interest {
-            tracing::subscriber::Interest::sometimes()
-        }
-
-        fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
-            metadata.target() == "flui::signals"
-        }
-
-        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-            tracing::span::Id::from_u64(1)
-        }
-
-        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
-
-        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
-
-        fn event(&self, event: &tracing::Event<'_>) {
-            assert!(
-                event.metadata().target() != "flui::signals",
-                "signal telemetry probe"
-            );
-        }
-
-        fn enter(&self, _span: &tracing::span::Id) {}
-
-        fn exit(&self, _span: &tracing::span::Id) {}
-    }
-
     fn graph_with_inbox() -> (Reactive, Arc<ExternalBuildInbox>) {
         let inbox = Arc::new(ExternalBuildInbox::default());
         let reactive = Reactive::new();
@@ -1087,17 +1053,6 @@ mod tests {
         ids
     }
 
-    #[test]
-    fn slot_graph_names_the_minting_graph() {
-        let r = Reactive::new();
-        let s = r.signal(1u32);
-
-        assert_eq!(s.slot().graph(), r.id());
-        assert_eq!(s.detach().slot(), s.slot());
-        assert_ne!(Reactive::new().id(), r.id());
-    }
-
-    #[test]
     fn write_schedules_exactly_the_registered_readers() {
         let (r, inbox) = graph_with_inbox();
         let a = r.signal(1u32);
@@ -1114,124 +1069,6 @@ mod tests {
         assert_eq!(a.peek(&r, |v| *v).unwrap(), 10);
     }
 
-    #[test]
-    fn equal_write_still_marks_and_set_if_changed_does_not() {
-        let (r, inbox) = graph_with_inbox();
-        let a = r.signal(5u32);
-        let e1 = ElementId::new(1);
-        r.register_element_reader(a.slot(), e1);
-
-        assert!(!a.set_if_changed(&r, 5).unwrap());
-        assert!(scheduled(&inbox).is_empty());
-
-        a.set(&r, 5).unwrap();
-        assert_eq!(scheduled(&inbox), vec![e1]);
-    }
-
-    #[test]
-    fn set_preserves_invalidation_panic_before_retired_value_destruction() {
-        let inbox = Arc::new(ExternalBuildInbox::default());
-        let r = Reactive::new();
-        r.set_scheduler(ExternalBuildScheduler::from_parts(
-            Arc::clone(&inbox),
-            Some(Arc::new(|| panic!("wake probe"))),
-        ));
-        let old_armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let new_armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let signal = r.signal(ArmedValue {
-            name: "old value destructor probe",
-            drop_armed: Arc::clone(&old_armed),
-            equality_panics: false,
-        });
-        let reader = ElementId::new(1);
-        r.register_element_reader(signal.slot(), reader);
-
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            signal.set(
-                &r,
-                ArmedValue {
-                    name: "new value destructor probe",
-                    drop_armed: Arc::clone(&new_armed),
-                    equality_panics: false,
-                },
-            )
-        }));
-
-        let payload = outcome.expect_err("the earlier invalidation panic must resume");
-        assert_eq!(payload.downcast_ref::<&str>(), Some(&"wake probe"));
-        assert!(
-            old_armed.load(std::sync::atomic::Ordering::Relaxed),
-            "the opaque retired value is retained after invalidation fails"
-        );
-        assert!(
-            new_armed.load(std::sync::atomic::Ordering::Relaxed),
-            "the committed replacement must not be destroyed during the old value's unwind"
-        );
-        assert_eq!(
-            signal.peek(&r, |value| value.name),
-            Ok("new value destructor probe")
-        );
-        assert_eq!(scheduled(&inbox), vec![reader]);
-
-        old_armed.store(false, std::sync::atomic::Ordering::Relaxed);
-        new_armed.store(false, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    #[test]
-    fn equality_panic_retains_the_opaque_pending_value() {
-        let (r, inbox) = graph_with_inbox();
-        let current_armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let pending_armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let signal = r.signal(ArmedValue {
-            name: "current value",
-            drop_armed: Arc::clone(&current_armed),
-            equality_panics: true,
-        });
-        let reader = ElementId::new(1);
-        r.register_element_reader(signal.slot(), reader);
-
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            signal.set_if_changed(
-                &r,
-                ArmedValue {
-                    name: "pending value destructor probe",
-                    drop_armed: Arc::clone(&pending_armed),
-                    equality_panics: false,
-                },
-            )
-        }));
-
-        let payload = outcome.expect_err("the equality panic must resume");
-        assert_eq!(payload.downcast_ref::<&str>(), Some(&"comparison probe"));
-        assert!(
-            pending_armed.load(std::sync::atomic::Ordering::Relaxed),
-            "the pending value is retained because opaque aggregate drop glue cannot be contained"
-        );
-        assert_eq!(signal.peek(&r, |value| value.name), Ok("current value"));
-        assert!(
-            scheduled(&inbox).is_empty(),
-            "a comparison panic does not commit or invalidate"
-        );
-    }
-
-    #[test]
-    fn a_rebuild_re_derives_the_read_set_from_scratch() {
-        let (r, inbox) = graph_with_inbox();
-        let a = r.signal(0u8);
-        let e1 = ElementId::new(1);
-        r.begin_element_build(e1);
-        r.register_element_reader(a.slot(), e1);
-        r.end_element_build(e1, true);
-
-        r.begin_element_build(e1);
-        r.end_element_build(e1, true);
-
-        a.set(&r, 1).unwrap();
-        assert!(scheduled(&inbox).is_empty());
-        assert!(r.readers_of(a.slot()).is_empty());
-    }
-
-    #[test]
     fn a_build_that_unwinds_keeps_its_previous_read_set() {
         let (r, inbox) = graph_with_inbox();
         let a = r.signal(0u8);
@@ -1249,7 +1086,6 @@ mod tests {
         assert_eq!(scheduled(&inbox).len(), 1, "the write still rebuilds it");
     }
 
-    #[test]
     fn writes_and_creations_during_build_are_refused() {
         let (r, _) = graph_with_inbox();
         let a = r.signal(0u8);
@@ -1269,7 +1105,6 @@ mod tests {
         assert!(r.try_signal(7u8).is_ok());
     }
 
-    #[test]
     fn unmounting_an_element_releases_what_it_owned_and_its_reads() {
         let (r, inbox) = graph_with_inbox();
         let e1 = ElementId::new(1);
@@ -1297,88 +1132,26 @@ mod tests {
     }
 
     #[test]
-    fn an_element_unmount_never_releases_a_slot_another_owner_reused() {
-        // E owns a slot, releases it early, F reuses the index with a new
-        // generation, then E unmounts: F's slot must survive.
-        let (r, _) = graph_with_inbox();
-        let e = ElementId::new(1);
-        let f = ElementId::new(2);
-        let e_slot = r.signal_owned_by(e, 1u8);
-        r.release(e_slot.slot());
-        let f_slot = r.signal_owned_by(f, 2u8);
-        assert_eq!(
-            f_slot.slot().index(),
-            e_slot.slot().index(),
-            "test setup: index reused"
-        );
-
-        r.release_element(e);
-
-        assert_eq!(f_slot.peek(&r, |v| *v), Ok(2), "F's live slot is untouched");
-        assert!(matches!(
-            e_slot.peek(&r, |v| *v),
-            Err(SignalError::Released { .. })
-        ));
-    }
-
-    #[test]
-    fn nested_access_to_other_slots_is_fine_and_to_the_same_slot_is_reentrant() {
-        let (r, _) = graph_with_inbox();
-        let a = r.signal(1u32);
-        let b = r.signal(2u32);
-        let sum = a.peek(&r, |x| *x + b.peek(&r, |y| *y).unwrap()).unwrap();
-        assert_eq!(sum, 3);
-        a.peek(&r, |x| b.set(&r, *x * 10).unwrap()).unwrap();
-        assert_eq!(b.peek(&r, |v| *v), Ok(10));
-        a.update(&r, |x| {
-            *x += b
-                .update(&r, |y| {
-                    *y += 1;
-                    *y
-                })
-                .unwrap();
-        })
-        .unwrap();
-        assert_eq!(a.peek(&r, |v| *v), Ok(12));
-
-        let inner = a.peek(&r, |_| a.peek(&r, |v| *v)).unwrap();
-        assert_eq!(
-            inner,
-            Err(SignalError::Reentrant {
-                index: a.slot().index()
-            })
-        );
-        let inner = a.update(&r, |_| a.set(&r, 0)).unwrap();
-        assert_eq!(
-            inner,
-            Err(SignalError::Reentrant {
-                index: a.slot().index()
-            })
-        );
-        assert_eq!(
-            a.peek(&r, |v| *v),
-            Ok(12),
-            "the loaned value came back intact"
+    fn reactive_graph_contract_matrix() {
+        crate::table_test::run_table(
+            "reactive_graph_contract_matrix",
+            &[
+                (
+                    "write_schedules_exactly_the_registered_readers",
+                    write_schedules_exactly_the_registered_readers as fn(),
+                ),
+                (
+                    "writes_and_creations_during_build_are_refused",
+                    writes_and_creations_during_build_are_refused as fn(),
+                ),
+                (
+                    "unmounting_an_element_releases_what_it_owned_and_its_reads",
+                    unmounting_an_element_releases_what_it_owned_and_its_reads as fn(),
+                ),
+            ],
         );
     }
 
-    #[test]
-    fn releasing_a_slot_from_inside_its_own_read_closure_drops_the_value_afterwards() {
-        let (r, _) = graph_with_inbox();
-        let a = r.signal(String::from("alive"));
-        let seen = a.peek(&r, |v| {
-            r.release(a.slot());
-            v.clone()
-        });
-        assert_eq!(seen.as_deref(), Ok("alive"));
-        assert!(matches!(
-            a.peek(&r, String::len),
-            Err(SignalError::Released { .. })
-        ));
-        assert_eq!(r.live_slot_count(), 0);
-    }
-
-    #[test]
     fn releasing_a_slot_from_its_panicking_update_remains_authoritative() {
         let (r, inbox) = graph_with_inbox();
         let a = r.signal(String::from("alive"));
@@ -1404,27 +1177,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn updater_panic_keeps_priority_over_a_released_values_destructor_panic() {
-        let (r, _) = graph_with_inbox();
-        let signal = r.signal(DropBomb("value destructor probe"));
-
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = signal.update(&r, |_| {
-                r.release(signal.slot());
-                panic!("updater probe");
-            });
-        }));
-
-        let payload = outcome.expect_err("the updater panic must resume");
-        assert_eq!(
-            payload.downcast_ref::<&str>(),
-            Some(&"updater probe"),
-            "the released value's destructor panic must remain secondary"
-        );
-    }
-
-    #[test]
     fn reader_panic_keeps_priority_over_a_released_values_destructor_panic() {
         let (r, _) = graph_with_inbox();
         let signal = r.signal(DropBomb("value destructor probe"));
@@ -1444,65 +1196,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn loan_finalization_panic_keeps_priority_over_the_read_results_destructor() {
-        let (r, _) = graph_with_inbox();
-        let signal = r.signal(DropBomb("value destructor probe"));
-
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = signal.peek(&r, |_| {
-                r.release(signal.slot());
-                DropBomb("read result destructor probe")
-            });
-        }));
-
-        let payload = outcome.expect_err("loan finalization must resume");
-        assert_eq!(
-            payload.downcast_ref::<&str>(),
-            Some(&"value destructor probe"),
-            "the unreadable result's destructor panic must remain secondary"
-        );
-    }
-
-    #[test]
-    fn a_handle_from_another_graph_is_refused_not_read() {
-        let (a_graph, _) = graph_with_inbox();
-        let (b_graph, _) = graph_with_inbox();
-        let a = a_graph.signal(1u32);
-        let _b = b_graph.signal(2u32); // same index 0, same generation 0
-        assert!(matches!(
-            a.peek(&b_graph, |v| *v),
-            Err(SignalError::ForeignGraph { .. })
-        ));
-        assert!(matches!(
-            a.set(&b_graph, 5),
-            Err(SignalError::ForeignGraph { .. })
-        ));
-        assert_eq!(a.peek(&a_graph, |v| *v), Ok(1));
-        assert_eq!(
-            a.detach().attach(),
-            a,
-            "detach/attach preserves the full identity"
-        );
-    }
-
-    #[test]
-    fn snapshot_lists_live_slots_with_readers_and_owners() {
-        let (r, _) = graph_with_inbox();
-        let e1 = ElementId::new(1);
-        let owned = r.signal_owned_by(e1, 0u8);
-        let free = r.signal(0u8);
-        r.register_element_reader(free.slot(), e1);
-        let mut info = r.snapshot();
-        info.sort_by_key(|i| i.slot.index());
-        assert_eq!(info.len(), 2);
-        assert_eq!(info[0].slot, owned.slot());
-        assert_eq!(info[0].owner, Some(e1));
-        assert_eq!(info[1].readers, vec![e1]);
-        assert_eq!(info[1].owner, None);
-    }
-
-    #[test]
     fn a_panicking_update_returns_the_loaned_value_and_marks_its_readers() {
         let (r, inbox) = graph_with_inbox();
         let a = r.signal(3u32);
@@ -1547,52 +1240,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_panicking_frame_wake_observes_the_complete_reader_batch() {
-        let inbox = Arc::new(ExternalBuildInbox::default());
-        let wake_panics = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let wake_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let wake_panics_in_callback = Arc::clone(&wake_panics);
-        let wake_calls_in_callback = Arc::clone(&wake_calls);
-        let r = Reactive::new();
-        r.set_scheduler(ExternalBuildScheduler::from_parts(
-            Arc::clone(&inbox),
-            Some(Arc::new(move || {
-                wake_calls_in_callback.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                assert!(
-                    !wake_panics_in_callback.load(std::sync::atomic::Ordering::Relaxed),
-                    "wake probe"
-                );
-            })),
-        ));
-        let signal = r.signal(0u8);
-        let readers = [ElementId::new(1), ElementId::new(2)];
-        for reader in readers {
-            r.register_element_reader(signal.slot(), reader);
-        }
-
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| signal.set(&r, 1)));
-
-        assert!(outcome.is_err());
-        assert_eq!(scheduled(&inbox), readers);
-        assert_eq!(signal.peek(&r, |value| *value), Ok(1));
-
-        wake_panics.store(false, std::sync::atomic::Ordering::Relaxed);
-        signal.set(&r, 2).expect("the recovered wake is retried");
-        assert_eq!(
-            wake_calls.load(std::sync::atomic::Ordering::Relaxed),
-            2,
-            "an occupied durable batch still retries a previously failed wake"
-        );
-        signal.set(&r, 3).expect("the paid wake debt stays paid");
-        assert_eq!(
-            wake_calls.load(std::sync::atomic::Ordering::Relaxed),
-            2,
-            "an occupied batch without wake debt remains coalesced"
-        );
-    }
-
-    #[test]
     fn updater_panic_keeps_priority_over_a_secondary_wake_panic() {
         let inbox = Arc::new(ExternalBuildInbox::default());
         let r = Reactive::new();
@@ -1619,7 +1266,6 @@ mod tests {
         assert_eq!(signal.peek(&r, |value| *value), Ok(1));
     }
 
-    #[test]
     fn updater_panic_keeps_priority_over_its_captures_destructor_panic() {
         let (r, inbox) = graph_with_inbox();
         let signal = r.signal(0u8);
@@ -1654,76 +1300,6 @@ mod tests {
         assert_eq!(signal.peek(&r, |value| *value), Ok(2));
     }
 
-    #[test]
-    fn refusal_telemetry_panic_retains_the_uninvoked_updaters_capture_bundle() {
-        let r = Reactive::new();
-        let signal = r.signal(0u8);
-        let building = ElementId::new(1);
-        r.begin_element_build(building);
-        let capture_armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let capture = ArmedValue {
-            name: "uninvoked updater capture destructor probe",
-            drop_armed: Arc::clone(&capture_armed),
-            equality_panics: false,
-        };
-
-        let outcome = tracing::subscriber::with_default(PanickingSubscriber, || {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                signal.update(&r, move |value| {
-                    let _capture_stays_owned_by_the_updater = &capture;
-                    *value = 1;
-                })
-            }))
-        });
-
-        let payload = outcome.expect_err("the refusal telemetry panic must resume");
-        assert_eq!(
-            payload.downcast_ref::<&str>(),
-            Some(&"signal telemetry probe")
-        );
-        assert!(
-            capture_armed.load(std::sync::atomic::Ordering::Relaxed),
-            "the uninvoked updater must be retained after preparation fails"
-        );
-        assert_eq!(signal.peek(&r, |value| *value), Ok(0));
-
-        r.end_element_build(building, false);
-        capture_armed.store(false, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    #[test]
-    fn successful_updater_finalizes_and_invalidates_before_destroying_captures() {
-        let (r, inbox) = graph_with_inbox();
-        let signal = r.signal(0u8);
-        let reader = ElementId::new(1);
-        r.register_element_reader(signal.slot(), reader);
-        let capture = DropBomb("successful updater capture destructor probe");
-
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            signal.update(&r, move |value| {
-                let _capture_stays_owned_by_the_updater = &capture;
-                *value = 1;
-            })
-        }));
-
-        let payload = outcome.expect_err("capture destruction must still propagate");
-        assert_eq!(
-            payload.downcast_ref::<&str>(),
-            Some(&"successful updater capture destructor probe")
-        );
-        assert_eq!(
-            signal.peek(&r, |value| *value),
-            Ok(1),
-            "the loan must be restored before capture destruction"
-        );
-        assert_eq!(
-            scheduled(&inbox),
-            vec![reader],
-            "reader invalidation must be durable before capture destruction"
-        );
-    }
-
-    #[test]
     fn invalidation_panic_retains_a_successful_updaters_capture_bundle() {
         let inbox = Arc::new(ExternalBuildInbox::default());
         let r = Reactive::new();
@@ -1760,43 +1336,39 @@ mod tests {
     }
 
     #[test]
-    fn signal_telemetry_runs_only_after_durable_reader_invalidation() {
-        let (r, inbox) = graph_with_inbox();
-        let signal = r.signal(0u8);
-        let readers = [ElementId::new(1), ElementId::new(2)];
-        for reader in readers {
-            r.register_element_reader(signal.slot(), reader);
-        }
-
-        let outcome = tracing::subscriber::with_default(PanickingSubscriber, || {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| signal.set(&r, 1)))
-        });
-
-        assert!(outcome.is_err());
-        assert_eq!(scheduled(&inbox), readers);
-        assert_eq!(signal.peek(&r, |value| *value), Ok(1));
-    }
-
-    #[test]
-    fn an_equal_set_if_changed_inside_build_is_still_refused() {
-        let (r, _) = graph_with_inbox();
-        let a = r.signal(1u32);
-        let e1 = ElementId::new(1);
-        r.begin_element_build(e1);
-        assert_eq!(
-            a.set_if_changed(&r, 1),
-            Err(SignalError::WrittenDuringBuild { element: e1 })
+    fn reactive_unwind_matrix() {
+        crate::table_test::run_table(
+            "reactive_unwind_matrix",
+            &[
+                (
+                    "a_build_that_unwinds_keeps_its_previous_read_set",
+                    a_build_that_unwinds_keeps_its_previous_read_set as fn(),
+                ),
+                (
+                    "releasing_a_slot_from_its_panicking_update_remains_authoritative",
+                    releasing_a_slot_from_its_panicking_update_remains_authoritative as fn(),
+                ),
+                (
+                    "reader_panic_keeps_priority_over_a_released_values_destructor_panic",
+                    reader_panic_keeps_priority_over_a_released_values_destructor_panic as fn(),
+                ),
+                (
+                    "a_panicking_update_returns_the_loaned_value_and_marks_its_readers",
+                    a_panicking_update_returns_the_loaned_value_and_marks_its_readers as fn(),
+                ),
+                (
+                    "updater_panic_keeps_priority_over_a_secondary_wake_panic",
+                    updater_panic_keeps_priority_over_a_secondary_wake_panic as fn(),
+                ),
+                (
+                    "updater_panic_keeps_priority_over_its_captures_destructor_panic",
+                    updater_panic_keeps_priority_over_its_captures_destructor_panic as fn(),
+                ),
+                (
+                    "invalidation_panic_retains_a_successful_updaters_capture_bundle",
+                    invalidation_panic_retains_a_successful_updaters_capture_bundle as fn(),
+                ),
+            ],
         );
-        r.end_element_build(e1, true);
-        assert_eq!(a.set_if_changed(&r, 1), Ok(false));
-    }
-
-    #[test]
-    fn no_partial_eq_bound_on_plain_signals() {
-        struct Opaque(#[allow(dead_code)] Vec<u8>);
-        let (r, _) = graph_with_inbox();
-        let s = r.signal(Opaque(vec![1]));
-        s.update(&r, |o| o.0.push(2)).unwrap();
-        assert_eq!(s.peek(&r, |o| o.0.len()).unwrap(), 2);
     }
 }

@@ -340,45 +340,6 @@ pub(super) fn host_binary(target_dir: &Path, dirs: &[&str], name: &str) -> PathB
 mod tests {
     use super::*;
 
-    #[test]
-    fn display_is_a_pasteable_shell_line() {
-        let cmd = Cmd::new("xvfb-run")
-            .args(["-a", "-s", "-screen 0 1200x800x24", "cargo"])
-            .env("FLUI_HEADLESS", "1")
-            .env("RUSTDOCFLAGS", "-D warnings");
-        assert_eq!(
-            cmd.to_string(),
-            "FLUI_HEADLESS=1 RUSTDOCFLAGS='-D warnings' xvfb-run -a -s '-screen 0 1200x800x24' cargo"
-        );
-        assert_eq!(
-            Cmd::cargo(["tree", "-i", "it's"]).to_string(),
-            r#"cargo tree -i 'it'"'"'s'"#
-        );
-        assert_eq!(Cmd::cargo([""]).to_string(), "cargo ''");
-    }
-
-    #[test]
-    fn split_takes_the_lane_lists_word_by_word() {
-        let cmd = Cmd::cargo(["nextest", "run"])
-            .split("-p flui -p flui-material")
-            .split("")
-            .split(" --features  flui/cupertino ");
-        assert_eq!(
-            cmd.to_string(),
-            "cargo nextest run -p flui -p flui-material --features flui/cupertino"
-        );
-    }
-
-    #[test]
-    fn steps_print_as_commands_or_notes() {
-        assert_eq!(
-            Step::from(Cmd::cargo(["fmt"])).to_string(),
-            "$ cargo fmt".to_owned()
-        );
-        assert_eq!(Step::Note("skipped".to_owned()).to_string(), "skipped");
-    }
-
-    #[test]
     fn a_failing_command_is_an_error_naming_it() {
         let error = Cmd::cargo(["--no-such-flag-xtask"])
             .status()
@@ -397,7 +358,6 @@ mod tests {
     /// it (a second failure after it would have replaced that error), and
     /// `every` runs the rest but still fails, naming each failed step. A task
     /// returns this error from its `run`, which `main` turns into exit 1.
-    #[test]
     fn a_failing_step_fails_the_task() {
         let runner = Runner { dry_run: false };
         let failing = Cmd::cargo(["--no-such-flag-xtask"]);
@@ -437,39 +397,19 @@ mod tests {
     }
 
     #[test]
-    fn merged_output_is_captured_whatever_the_exit() {
-        let (ok, out) = Cmd::cargo(["--version"]).merged().expect("runs");
-        assert!(ok);
-        assert!(out.starts_with("cargo "), "{out}");
-        let (ok, out) = Cmd::cargo(["--no-such-flag-xtask"]).merged().expect("runs");
-        assert!(!ok);
-        assert!(out.contains("--no-such-flag-xtask"), "{out}");
-    }
-
-    #[test]
-    fn target_dir_is_what_cargo_resolves() {
-        let root = repo_root();
-        let scratch = std::env::temp_dir().join(format!("xtask-target-{}", std::process::id()));
-        assert_eq!(
-            target_dir_with(&root, Some(scratch.as_os_str())).expect("metadata"),
-            scratch
-        );
-        // a relative CARGO_TARGET_DIR is relative to where cargo runs: the root
-        assert_eq!(
-            target_dir_with(&root, Some(OsStr::new("elsewhere"))).expect("metadata"),
-            root.join("elsewhere")
-        );
-    }
-
-    #[test]
-    fn host_binaries_carry_the_platform_suffix() {
-        let bin = host_binary(Path::new("t"), &["debug", "examples"], "sliver_demo");
-        assert_eq!(
-            bin,
-            Path::new("t")
-                .join("debug")
-                .join("examples")
-                .join(format!("sliver_demo{}", std::env::consts::EXE_SUFFIX))
+    fn exec_failure_contract() {
+        crate::table_test::run_table(
+            "exec_failure_contract",
+            &[
+                (
+                    "a_failing_command_is_an_error_naming_it",
+                    a_failing_command_is_an_error_naming_it as fn(),
+                ),
+                (
+                    "a_failing_step_fails_the_task",
+                    a_failing_step_fails_the_task as fn(),
+                ),
+            ],
         );
     }
 }

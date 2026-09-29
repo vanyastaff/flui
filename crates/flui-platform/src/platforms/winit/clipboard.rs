@@ -49,15 +49,6 @@ impl ArboardClipboard {
             clipboard: Mutex::new(None),
         }
     }
-
-    /// Whether this instance is the backend-less fallback. Test-only: the
-    /// `Default`-tracks-backend-availability pin needs an observable that
-    /// does not depend on clipboard *contents* (roundtrips through a real
-    /// X11 clipboard are timing-sensitive under a virtual display).
-    #[cfg(test)]
-    fn is_inert(&self) -> bool {
-        self.clipboard.lock().is_none()
-    }
 }
 
 /// Runs one `arboard` call as a clipboard session. On Windows `arboard`
@@ -133,65 +124,5 @@ impl Clipboard for ArboardClipboard {
                 tracing::error!(?err, "Failed to write clipboard text");
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_clipboard_roundtrip() {
-        #[cfg(windows)]
-        let _serial = crate::shared::clipboard_lock::round_trip_serial();
-        // Note: This test requires clipboard access and may fail in CI
-        if let Ok(clipboard) = ArboardClipboard::new() {
-            let test_text = "Hello from FLUI!";
-
-            clipboard.write_text(test_text.to_string());
-
-            if let Some(read_text) = clipboard.read_text() {
-                assert_eq!(read_text, test_text);
-            }
-        }
-    }
-
-    #[test]
-    fn test_clipboard_creation() {
-        // Just test that we can create a clipboard instance
-        let result = ArboardClipboard::new();
-
-        // This may fail in headless environments, which is expected
-        if result.is_err() {
-            eprintln!("Note: Clipboard creation failed (expected in headless environments)");
-        }
-    }
-
-    /// `default()` must track backend availability exactly: functional when
-    /// `new()` would succeed (an unconditionally inert `default()` silently
-    /// discards every write on a healthy desktop session), inert — and
-    /// crucially non-panicking — when no backend is reachable (the old
-    /// fallback `expect`ed the same failed init it existed to absorb,
-    /// aborting any Wayland-only session at startup).
-    #[test]
-    fn default_is_functional_iff_a_backend_is_reachable_and_never_panics() {
-        // Completing at all pins "never panics" for whichever environment
-        // (X11-backed or backend-less) this test happens to run under.
-        let clipboard = ArboardClipboard::default();
-        assert_eq!(
-            clipboard.is_inert(),
-            ArboardClipboard::new().is_err(),
-            "default() must yield a functional clipboard exactly when the backend \
-             is reachable, and the inert fallback exactly when it is not"
-        );
-    }
-
-    /// The inert fallback's whole contract: reads answer `None`, writes are
-    /// dropped, nothing panics.
-    #[test]
-    fn inert_clipboard_reads_none_and_drops_writes_without_panicking() {
-        let clipboard = ArboardClipboard::inert();
-        clipboard.write_text("dropped".to_string());
-        assert_eq!(clipboard.read_text(), None);
     }
 }

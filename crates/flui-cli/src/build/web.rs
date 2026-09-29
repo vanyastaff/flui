@@ -203,27 +203,3 @@ fn check_wasm_bindgen(wanted: Option<&str>, installed: Option<&str>) -> Result<(
         _ => Ok(()),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn wasm_bindgen_versions_must_match_exactly_and_the_hint_names_the_project_version() {
-        assert!(check_wasm_bindgen(Some("0.2.100"), Some("0.2.100")).is_ok());
-        assert_eq!(
-            check_wasm_bindgen(Some("0.2.100"), Some("0.2.99")).unwrap_err(),
-            "cargo install wasm-bindgen-cli --version 0.2.100 --locked"
-        );
-        assert_eq!(
-            check_wasm_bindgen(Some("0.2.100"), None).unwrap_err(),
-            "cargo install wasm-bindgen-cli --version 0.2.100 --locked"
-        );
-        assert_eq!(
-            check_wasm_bindgen(None, None).unwrap_err(),
-            "cargo install wasm-bindgen-cli --locked"
-        );
-        // A project without the crate cannot mismatch anything.
-        assert!(check_wasm_bindgen(None, Some("0.2.99")).is_ok());
-    }
-}

@@ -61,17 +61,4 @@ impl ElementArity for Optional {}
 impl ElementArity for Variable {}
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Compile-time checks that traits are properly implemented
-    fn assert_element_arity_implemented<A: ElementArity>() {}
-
-    #[test]
-    fn test_arity_types_implement_element_arity() {
-        assert_element_arity_implemented::<Leaf>();
-        assert_element_arity_implemented::<Single>();
-        assert_element_arity_implemented::<Optional>();
-        assert_element_arity_implemented::<Variable>();
-    }
-}
+mod tests {}

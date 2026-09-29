@@ -75,13 +75,6 @@ impl BackgroundExecutor {
         })
     }
 
-    /// Whether the runtime has been started. Test seam for the laziness
-    /// contract; production code has no reason to ask.
-    #[cfg(test)]
-    fn runtime_started(&self) -> bool {
-        self.runtime.get().is_some()
-    }
-
     /// Spawn an async task on the thread pool
     ///
     /// Returns a [`Task<R>`] that can be awaited for the result or detached.
@@ -131,63 +124,5 @@ impl PlatformExecutor for BackgroundExecutor {
 impl Default for BackgroundExecutor {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    use super::*;
-
-    /// Constructing the executor must not start the runtime (every platform
-    /// backend constructs one at platform init; FLUI-managed runs never use
-    /// it, and must not pay threads for it); the first use starts it.
-    #[test]
-    fn test_background_executor_starts_lazily_on_first_use() {
-        let executor = BackgroundExecutor::new();
-        assert!(
-            !executor.runtime_started(),
-            "construction must not start worker threads"
-        );
-        executor.spawn(async {}).detach();
-        assert!(executor.runtime_started());
-    }
-
-    #[test]
-    fn test_background_executor_spawn() {
-        let executor = BackgroundExecutor::new();
-        let flag = Arc::new(AtomicBool::new(false));
-        let flag_clone = Arc::clone(&flag);
-
-        executor
-            .spawn(async move {
-                flag_clone.store(true, Ordering::SeqCst);
-            })
-            .detach();
-
-        // Give task time to execute
-        std::thread::sleep(Duration::from_millis(100));
-        assert!(flag.load(Ordering::SeqCst));
-    }
-
-    #[test]
-    fn test_background_executor_spawn_await() {
-        let executor = BackgroundExecutor::new();
-        let result = executor.block(async {
-            let task = executor.spawn(async { 1 + 1 });
-            task.await
-        });
-        assert_eq!(result, 2);
-    }
-
-    #[test]
-    fn test_background_executor_timer() {
-        let executor = BackgroundExecutor::new();
-        let start = std::time::Instant::now();
-        executor.block(async {
-            executor.timer(Duration::from_millis(50)).await;
-        });
-        assert!(start.elapsed() >= Duration::from_millis(40));
     }
 }

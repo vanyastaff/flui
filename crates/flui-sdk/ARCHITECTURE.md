@@ -86,8 +86,9 @@ not SDK surface.
   already inside the whole `foundation` re-export at the facade's path, so the `measured`
   module names them and `src/lib.rs` gains no line for them.
 
-`the_design_systems_build_on_the_sdk_alone` and `devtools_builds_on_the_sdk_alone` in
-`tools/xtask` pin the three manifests.
+The kind rule of `cargo xtask workspace` (ADR-0081 §3, ADR-0088 §2) keeps the three
+manifests on the SDK: an official package's normal and build dependencies are `flui-sdk` and
+the contract crates, and its self-test plants each way of leaving it.
 
 An item a package needs that is not here is added by ADR-0088 §4 (at the facade's path when the
 facade has one, otherwise in an Evolving module: `pipeline` for render internals, `hooks` for

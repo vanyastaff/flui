@@ -13,8 +13,6 @@
 //! FLUI has no equivalent of Flutter's `_currentBeforeChild` insertion cursor.
 
 use std::any::{Any, TypeId};
-#[cfg(test)]
-use std::collections::btree_map::Keys;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::panic::AssertUnwindSafe;
 
@@ -63,27 +61,9 @@ impl SparseChildren {
         self.by_logical_index.len()
     }
 
-    /// Whether no child is currently built.
-    ///
-    /// Used in tests; suppressed in release builds to avoid the dead-code lint
-    /// until a production caller lands.
-    #[cfg(test)]
-    pub(crate) fn is_empty(&self) -> bool {
-        self.by_logical_index.is_empty()
-    }
-
     /// The `ElementId` of the child built at `logical_index`, if any.
     pub(crate) fn get(&self, logical_index: usize) -> Option<ElementId> {
         self.by_logical_index.get(&logical_index).copied()
-    }
-
-    /// The logical indices of all currently-built children, ascending.
-    ///
-    /// Used in tests; suppressed in release builds to avoid the dead-code lint
-    /// until a production caller lands.
-    #[cfg(test)]
-    pub(crate) fn logical_indices(&self) -> Keys<'_, usize, ElementId> {
-        self.by_logical_index.keys()
     }
 
     /// Iterate over all currently-built `(logical_index, ElementId)` pairs.

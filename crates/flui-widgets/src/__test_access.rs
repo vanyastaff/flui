@@ -702,7 +702,6 @@ mod tests {
     /// probe trait; or drop the `#[doc(hidden)]` above `pub mod __test_access;`
     /// in `lib.rs`. `surface_refuses_what_the_pin_cannot_name` plants the
     /// shapes the pin refuses.
-    #[test]
     fn lists_exactly_the_temporary_entries() {
         const SOURCE: &str = include_str!("__test_access.rs");
         const LIB: &str = include_str!("lib.rs");
@@ -739,7 +738,6 @@ mod tests {
     /// Each shape an export can take that the pin cannot list by name is
     /// refused, and a new probe method or re-exported type shows up in the
     /// surface, so the exact comparison above fails on it.
-    #[test]
     fn surface_refuses_what_the_pin_cannot_name() {
         let refused = [
             "pub use crate::navigator::hero::*;",
@@ -782,5 +780,13 @@ mod tests {
                 Ok(names.into_iter().map(String::from).collect())
             );
         }
+    }
+
+    /// The test-access pin: the temporary entries are listed exactly, and the pin
+    /// refuses the shapes it cannot name.
+    #[test]
+    fn test_access_surface_is_pinned() {
+        lists_exactly_the_temporary_entries();
+        surface_refuses_what_the_pin_cannot_name();
     }
 }

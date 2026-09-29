@@ -696,29 +696,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bon"
-version = "3.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60eafe0d77c3a2fc292c1d1346c3041b33c0a108085a2afabf672b70f69dbbc9"
-dependencies = [
- "bon-macros",
-]
-
-[[package]]
-name = "bon-macros"
-version = "3.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd0f9631d8aaaee112c41985d675ef269e02acbd4f33122836af4f0c5f699ff6"
-dependencies = [
- "darling 0.24.1",
- "ident_case",
- "prettyplease",
- "proc-macro2",
- "quote",
- "syn 3.0.6",
-]
-
-[[package]]
 name = "borsh"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1896,7 +1873,6 @@ dependencies = [
  "android-activity",
  "anyhow",
  "crossbeam-channel",
- "flui-animation",
  "flui-engine",
  "flui-foundation",
  "flui-interaction",
@@ -1915,7 +1891,6 @@ dependencies = [
  "flui-widgets",
  "parking_lot",
  "pollster",
- "raw-window-handle",
  "static_assertions",
  "thiserror 2.0.20",
  "tokio-util",
@@ -2016,7 +1991,6 @@ dependencies = [
  "flui-log",
  "flui-objects",
  "flui-rendering",
- "flui-scheduler",
  "flui-sdk",
  "flui-testing",
  "parking_lot",
@@ -2064,7 +2038,6 @@ name = "flui-foundation"
 version = "0.2.0-dev"
 dependencies = [
  "criterion",
- "flui-macros",
  "glam",
  "parking_lot",
  "serde",
@@ -2072,7 +2045,6 @@ dependencies = [
  "smallvec",
  "thiserror 2.0.20",
  "tracing",
- "tracing-subscriber",
  "wasm-bindgen-test",
  "web-time",
 ]
@@ -2086,7 +2058,6 @@ dependencies = [
  "flui-layer",
  "flui-rendering",
  "flui-sdk",
- "flui-testing",
  "flui-view",
  "libc",
  "parking_lot",
@@ -2122,7 +2093,6 @@ dependencies = [
  "static_assertions",
  "thiserror 2.0.20",
  "tracing",
- "tracing-subscriber",
  "ui-events",
  "web-time",
 ]
@@ -2134,7 +2104,6 @@ dependencies = [
  "bitflags 2.13.2",
  "flui-foundation",
  "flui-painting",
- "static_assertions",
  "tracing",
 ]
 
@@ -2210,9 +2179,7 @@ dependencies = [
  "parking_lot",
  "parley",
  "proptest",
- "rstest",
  "serde",
- "serde_json",
  "swash",
  "thiserror 2.0.20",
  "tracing",
@@ -2257,7 +2224,6 @@ dependencies = [
  "dispatch2",
  "dpi",
  "flui-foundation",
- "flui-painting",
  "flui-platform-api",
  "flui-semantics",
  "keyboard-types",
@@ -2290,7 +2256,6 @@ dependencies = [
  "cursor-icon",
  "flui-foundation",
  "parking_lot",
- "proptest",
  "raw-window-handle",
  "serde",
  "serde_json",
@@ -2344,7 +2309,6 @@ dependencies = [
 name = "flui-runtime"
 version = "0.2.0-dev"
 dependencies = [
- "accesskit",
  "crossbeam-channel",
  "flui-animation",
  "flui-foundation",
@@ -2357,7 +2321,6 @@ dependencies = [
  "flui-rendering",
  "flui-scheduler",
  "flui-semantics",
- "flui-testing",
  "flui-view",
  "flui-widgets",
  "parking_lot",
@@ -2366,7 +2329,6 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
- "tracing-subscriber",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-time",
@@ -2412,7 +2374,6 @@ name = "flui-semantics"
 version = "0.2.0-dev"
 dependencies = [
  "accesskit",
- "accesskit_consumer",
  "criterion",
  "flui-foundation",
  "flui-protocol",
@@ -2452,7 +2413,6 @@ dependencies = [
 name = "flui-view"
 version = "0.2.0-dev"
 dependencies = [
- "bon",
  "criterion",
  "downcast-rs 2.0.2",
  "dyn-clone",
@@ -2462,7 +2422,6 @@ dependencies = [
  "flui-macros",
  "flui-objects",
  "flui-painting",
- "flui-platform-api",
  "flui-rendering",
  "flui-scheduler",
  "flui-testing",
@@ -2537,7 +2496,6 @@ dependencies = [
  "parking_lot",
  "percent-encoding",
  "proptest",
- "static_assertions",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -2746,12 +2704,6 @@ name = "futures-task"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd417de3d1d015fc3bfd2b1ea46dfc7bab72ef86f1cc7cc9c78e728b34a6d1fd"
-
-[[package]]
-name = "futures-timer"
-version = "3.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af43fadb8a98512d547e37b4e92e0ced13e205c061b87b4623eff01d918d6968"
 
 [[package]]
 name = "futures-util"
@@ -5433,12 +5385,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
-name = "relative-path"
-version = "1.9.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba39f3699c378cd8970968dcbff9c43159ea4cfbd88d43c00b22f2ef10a435d2"
-
-[[package]]
 name = "renderdoc-sys"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5539,35 +5485,6 @@ name = "roxmltree"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
-
-[[package]]
-name = "rstest"
-version = "0.27.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "948203e6d13b83e51a90d7cf236dd58a0065f23f4b902f00f306e7eb2bd09b9c"
-dependencies = [
- "futures-timer",
- "futures-util",
- "rstest_macros",
-]
-
-[[package]]
-name = "rstest_macros"
-version = "0.27.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8d92eaf7b6e51e12471d71ddc72608e7151573de44099aacfbb1128177c0da4"
-dependencies = [
- "cfg-if",
- "glob",
- "proc-macro-crate",
- "proc-macro2",
- "quote",
- "regex",
- "relative-path",
- "rustc_version",
- "syn 2.0.119",
- "unicode-ident",
-]
 
 [[package]]
 name = "rustc-hash"

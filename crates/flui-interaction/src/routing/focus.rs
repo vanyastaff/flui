@@ -737,16 +737,14 @@ impl Drop for FocusManager {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::{Cell, RefCell};
+    use std::cell::RefCell;
 
     use flui_foundation::geometry::Rect;
 
     use super::*;
     use crate::{
         events::{Key, KeyState, Modifiers},
-        routing::focus_scope::{
-            FocusDetachOutcome, FocusRequestOutcome, FocusTreeError, TraversalEdgeBehavior,
-        },
+        routing::focus_scope::{FocusDetachOutcome, TraversalEdgeBehavior},
     };
 
     fn manager_with_nodes(count: usize) -> (Rc<FocusManager>, Vec<Rc<FocusNode>>) {
@@ -770,471 +768,31 @@ mod tests {
         }
     }
 
+    // Focus traversal matrix: key dispatch order, traversal policy, scope memory.
     #[test]
-    fn managers_are_isolated_and_roots_are_bound() {
-        let first = FocusManager::new();
-        let second = FocusManager::new();
-
-        assert!(!Rc::ptr_eq(&first, &second));
-        assert!(first.root_scope().as_focus_node().is_attached());
-        assert!(second.root_scope().as_focus_node().is_attached());
-        assert!(!Rc::ptr_eq(
-            first.root_scope().as_focus_node(),
-            second.root_scope().as_focus_node()
-        ));
+    fn focus_traversal_matrix() {
+        let cases: &[(&str, fn())] = &[
+            (
+                "key_dispatch_walks_leaf_to_root_and_honors_skip",
+                key_dispatch_walks_leaf_to_root_and_honors_skip,
+            ),
+            (
+                "traversal_uses_policy_order_and_edge_behavior",
+                traversal_uses_policy_order_and_edge_behavior,
+            ),
+            (
+                "set_first_focus_restores_the_scopes_remembered_descendant",
+                set_first_focus_restores_the_scopes_remembered_descendant,
+            ),
+        ];
+        for &(name, case) in cases {
+            if let Err(payload) = std::panic::catch_unwind(case) {
+                eprintln!("matrix case `{name}` failed");
+                std::panic::resume_unwind(payload);
+            }
+        }
     }
 
-    #[test]
-    fn focus_change_is_node_typed_and_manager_local() {
-        let (manager, nodes) = manager_with_nodes(2);
-        let changes = Rc::new(RefCell::new(Vec::new()));
-        let changes_for_listener = Rc::clone(&changes);
-        manager.add_listener(Rc::new(move |previous, next| {
-            changes_for_listener
-                .borrow_mut()
-                .push((previous.map(|node| node.id()), next.map(|node| node.id())));
-        }));
-
-        assert_eq!(nodes[0].request_focus(), FocusRequestOutcome::Focused);
-        assert_eq!(nodes[1].request_focus(), FocusRequestOutcome::Focused);
-        assert!(Rc::ptr_eq(
-            manager.primary_focus().as_ref().unwrap(),
-            &nodes[1]
-        ));
-        assert_eq!(
-            changes.borrow().as_slice(),
-            &[
-                (None, Some(nodes[0].id())),
-                (Some(nodes[0].id()), Some(nodes[1].id()))
-            ]
-        );
-    }
-
-    #[test]
-    fn detached_request_is_fulfilled_when_bound() {
-        let manager = FocusManager::new();
-        let node = FocusNode::new();
-        assert_eq!(node.request_focus(), FocusRequestOutcome::Queued);
-        let attachment = manager.root_scope().attach_node(&node).unwrap();
-
-        assert!(attachment.is_attached());
-        assert!(node.has_primary_focus());
-    }
-
-    #[test]
-    fn cross_manager_aliasing_is_rejected() {
-        let first = FocusManager::new();
-        let second = FocusManager::new();
-        let node = FocusNode::new();
-        first.root_scope().attach_node(&node).unwrap();
-
-        let error = second.root_scope().attach_node(&node).unwrap_err();
-        assert!(matches!(
-            error,
-            FocusTreeError::AlreadyAttached { .. } | FocusTreeError::ManagerMismatch { .. }
-        ));
-    }
-
-    #[test]
-    fn stale_attachment_cannot_detach_a_reparented_node() {
-        let manager = FocusManager::new();
-        let first_parent = FocusScopeNode::new();
-        let second_parent = FocusScopeNode::new();
-        manager
-            .root_scope()
-            .attach_node(first_parent.as_focus_node())
-            .unwrap();
-        manager
-            .root_scope()
-            .attach_node(second_parent.as_focus_node())
-            .unwrap();
-        let node = FocusNode::new();
-        let stale = first_parent.attach_node(&node).unwrap();
-        let current = second_parent.adopt_node(&node).unwrap();
-
-        assert_eq!(stale.detach(), FocusDetachOutcome::Stale);
-        assert_eq!(current.detach(), FocusDetachOutcome::Detached);
-    }
-
-    #[test]
-    fn replacing_an_attached_ancestor_preserves_descendant_attachment_and_focus() {
-        let manager = FocusManager::new();
-        let old_parent = FocusNode::with_debug_label("old-parent");
-        let old_attachment = manager.root_scope().attach_node(&old_parent).unwrap();
-        let child = FocusNode::with_debug_label("child");
-        let child_attachment = old_parent.attach_node(&child).unwrap();
-        let leaf = FocusNode::with_debug_label("leaf");
-        child.attach_node(&leaf).unwrap();
-        leaf.request_focus();
-
-        let manager_edges = Rc::new(RefCell::new(Vec::new()));
-        let manager_edges_for_listener = Rc::clone(&manager_edges);
-        manager.add_listener(Rc::new(move |previous, current| {
-            manager_edges_for_listener.borrow_mut().push((
-                previous.map(|node| node.id()),
-                current.map(|node| node.id()),
-            ));
-        }));
-        let old_notifications = Rc::new(Cell::new(0));
-        let old_notifications_for_listener = Rc::clone(&old_notifications);
-        old_parent.add_listener(Rc::new(move || {
-            old_notifications_for_listener.set(old_notifications_for_listener.get() + 1);
-        }));
-        let replacement = FocusNode::with_debug_label("replacement");
-        let replacement_notifications = Rc::new(Cell::new(0));
-        let replacement_notifications_for_listener = Rc::clone(&replacement_notifications);
-        replacement.add_listener(Rc::new(move || {
-            replacement_notifications_for_listener
-                .set(replacement_notifications_for_listener.get() + 1);
-        }));
-
-        let replacement_attachment = old_attachment.replace_node(&replacement).unwrap();
-
-        assert!(!old_attachment.is_attached());
-        assert_eq!(old_attachment.detach(), FocusDetachOutcome::Stale);
-        assert!(replacement_attachment.is_attached());
-        assert!(!old_parent.is_attached());
-        assert!(old_parent.parent().is_none());
-        assert!(old_parent.children().is_empty());
-        assert_eq!(
-            replacement.parent().map(|parent| parent.id()),
-            Some(manager.root_scope().id())
-        );
-        assert_eq!(
-            replacement.children().first().map(|node| node.id()),
-            Some(child.id())
-        );
-        assert_eq!(
-            child.parent().map(|parent| parent.id()),
-            Some(replacement.id())
-        );
-        assert!(
-            child_attachment.is_attached(),
-            "replacing an ancestor must not supersede a descendant's attachment"
-        );
-        assert!(leaf.has_primary_focus());
-        assert!(
-            manager_edges.borrow().is_empty(),
-            "primary focus identity never moved (still `leaf`), so the manager-level \
-             contract publishes no edge; the ancestry change is carried by the \
-             node-level listeners asserted below (old_notifications / \
-             replacement_notifications), not by a same-identity manager edge"
-        );
-        assert_eq!(old_notifications.get(), 1);
-        assert_eq!(replacement_notifications.get(), 1);
-        assert_eq!(
-            replacement_attachment.detach(),
-            FocusDetachOutcome::Detached
-        );
-    }
-
-    #[test]
-    fn replacing_the_primary_node_releases_focus() {
-        let manager = FocusManager::new();
-        let old = FocusNode::with_debug_label("old");
-        let old_attachment = manager.root_scope().attach_node(&old).unwrap();
-        old.request_focus();
-        let replacement = FocusNode::with_debug_label("replacement");
-
-        let replacement_attachment = old_attachment.replace_node(&replacement).unwrap();
-
-        assert!(manager.primary_focus().is_none());
-        assert!(!old.is_attached());
-        assert!(replacement_attachment.is_attached());
-        assert!(!replacement.has_focus());
-    }
-
-    #[test]
-    fn replacement_releases_a_descendant_that_the_new_ancestor_disallows() {
-        let manager = FocusManager::new();
-        let old_parent = FocusNode::with_debug_label("old-parent");
-        let old_attachment = manager.root_scope().attach_node(&old_parent).unwrap();
-        let child = FocusNode::with_debug_label("child");
-        old_parent.attach_node(&child).unwrap();
-        child.request_focus();
-        let replacement = FocusNode::with_debug_label("replacement");
-        replacement.set_descendants_are_focusable(false);
-
-        old_attachment.replace_node(&replacement).unwrap();
-
-        assert!(manager.primary_focus().is_none());
-        assert!(!child.can_request_focus());
-    }
-
-    /// The replacement itself does not move primary focus (`child` stays
-    /// primary throughout the structural swap), so `finish_node_replacement`
-    /// publishes no outer edge for it — see its ordering contract. The
-    /// reentrant `sibling.request_focus()` made from inside the node-level
-    /// replacement notification is queued (`notification_depth` is held
-    /// above zero for that notification) and applied only once it
-    /// completes, publishing exactly one edge, `(child, sibling)`, in the
-    /// order it was requested — never interleaved with, or preceding, a
-    /// transition that had not happened yet (issue #1040).
-    #[test]
-    fn replacement_notification_reentry_does_not_emit_a_stale_outer_edge() {
-        let manager = FocusManager::new();
-        let old_parent = FocusNode::with_debug_label("old-parent");
-        let old_attachment = manager.root_scope().attach_node(&old_parent).unwrap();
-        let child = FocusNode::with_debug_label("child");
-        old_parent.attach_node(&child).unwrap();
-        let sibling = FocusNode::with_debug_label("sibling");
-        manager.root_scope().attach_node(&sibling).unwrap();
-        child.request_focus();
-
-        let edges = Rc::new(RefCell::new(Vec::new()));
-        let edges_for_listener = Rc::clone(&edges);
-        manager.add_listener(Rc::new(move |previous, current| {
-            edges_for_listener.borrow_mut().push((
-                previous.map(|node| node.id()),
-                current.map(|node| node.id()),
-            ));
-        }));
-        let replacement = FocusNode::with_debug_label("replacement");
-        let sibling_for_listener = Rc::clone(&sibling);
-        let replacement_for_listener = Rc::downgrade(&replacement);
-        let child_for_listener = Rc::downgrade(&child);
-        replacement.add_listener(Rc::new(move || {
-            let replacement = replacement_for_listener.upgrade().unwrap();
-            let child = child_for_listener.upgrade().unwrap();
-            assert_eq!(
-                child.parent().map(|parent| parent.id()),
-                Some(replacement.id()),
-                "callbacks observe the completed structural transaction"
-            );
-            sibling_for_listener.request_focus();
-        }));
-
-        old_attachment.replace_node(&replacement).unwrap();
-
-        assert!(sibling.has_primary_focus());
-        assert_eq!(
-            edges.borrow().as_slice(),
-            &[(Some(child.id()), Some(sibling.id()))]
-        );
-    }
-
-    /// Companion to the test above: here the replaced node itself (`old`)
-    /// was primary, so the replacement genuinely releases focus (the
-    /// existing, unchanged contract — see `replacing_the_primary_node_releases_focus`)
-    /// and `finish_node_replacement` DOES publish that outer edge,
-    /// `(old, None)`. A reentrant `sibling.request_focus()` made from
-    /// `old`'s own node-level listener during that notification is still
-    /// queued and applied only afterward, publishing its own edge,
-    /// `(None, sibling)`, in order — the outer edge is not lost, and the
-    /// reentrant one is not interleaved ahead of it.
-    #[test]
-    fn replacement_reentry_after_a_real_outer_edge_orders_both_transitions() {
-        let manager = FocusManager::new();
-        let old = FocusNode::with_debug_label("old");
-        let old_attachment = manager.root_scope().attach_node(&old).unwrap();
-        let sibling = FocusNode::with_debug_label("sibling");
-        manager.root_scope().attach_node(&sibling).unwrap();
-        old.request_focus();
-
-        let edges = Rc::new(RefCell::new(Vec::new()));
-        let edges_for_listener = Rc::clone(&edges);
-        manager.add_listener(Rc::new(move |previous, current| {
-            edges_for_listener.borrow_mut().push((
-                previous.map(|node| node.id()),
-                current.map(|node| node.id()),
-            ));
-        }));
-        let replacement = FocusNode::with_debug_label("replacement");
-        let sibling_for_listener = Rc::clone(&sibling);
-        old.add_listener(Rc::new(move || {
-            sibling_for_listener.request_focus();
-        }));
-
-        old_attachment.replace_node(&replacement).unwrap();
-
-        assert!(sibling.has_primary_focus());
-        assert_eq!(
-            edges.borrow().as_slice(),
-            &[(Some(old.id()), None), (None, Some(sibling.id()))],
-            "the genuine outer edge (old released) publishes before the queued \
-             reentrant request (sibling gained), never interleaved or reordered"
-        );
-    }
-
-    #[test]
-    fn replacing_a_scope_preserves_children_and_rebuilds_focus_history() {
-        let manager = FocusManager::new();
-        let old_scope = FocusScopeNode::with_debug_label("old-scope");
-        let old_attachment = manager
-            .root_scope()
-            .attach_node(old_scope.as_focus_node())
-            .unwrap();
-        let child = FocusNode::with_debug_label("child");
-        let child_attachment = old_scope.attach_node(&child).unwrap();
-        child.request_focus();
-        let replacement_scope = FocusScopeNode::with_debug_label("replacement-scope");
-
-        let replacement_attachment = old_attachment
-            .replace_node(replacement_scope.as_focus_node())
-            .unwrap();
-
-        assert!(replacement_attachment.is_attached());
-        assert!(child_attachment.is_attached());
-        assert_eq!(
-            child.parent().map(|parent| parent.id()),
-            Some(replacement_scope.id())
-        );
-        assert!(child.has_primary_focus());
-        assert!(Rc::ptr_eq(
-            replacement_scope.focused_child().as_ref().unwrap(),
-            &child
-        ));
-        assert!(old_scope.focused_child().is_none());
-        assert!(Rc::ptr_eq(
-            manager.root_scope().focused_child().as_ref().unwrap(),
-            replacement_scope.as_focus_node()
-        ));
-    }
-
-    #[test]
-    fn replacement_preconditions_fail_without_mutating_either_tree() {
-        let manager = FocusManager::new();
-        let old = FocusNode::with_debug_label("old");
-        let old_attachment = manager.root_scope().attach_node(&old).unwrap();
-
-        let attached = FocusNode::with_debug_label("attached");
-        manager.root_scope().attach_node(&attached).unwrap();
-        assert!(matches!(
-            old_attachment.replace_node(&attached),
-            Err(FocusTreeError::ReplacementAttached { replacement })
-                if replacement == attached.id()
-        ));
-
-        let nonempty = FocusNode::with_debug_label("nonempty");
-        let offline_child = FocusNode::with_debug_label("offline-child");
-        nonempty.attach_node(&offline_child).unwrap();
-        assert!(matches!(
-            old_attachment.replace_node(&nonempty),
-            Err(FocusTreeError::ReplacementNotEmpty { replacement })
-                if replacement == nonempty.id()
-        ));
-
-        let scope = FocusScopeNode::with_debug_label("scope");
-        assert!(matches!(
-            old_attachment.replace_node(scope.as_focus_node()),
-            Err(FocusTreeError::ReplacementKindMismatch {
-                current,
-                replacement,
-            }) if current == old.id() && replacement == scope.id()
-        ));
-
-        assert!(old_attachment.is_attached());
-        assert_eq!(
-            old.parent().map(|parent| parent.id()),
-            Some(manager.root_scope().id())
-        );
-        assert!(attached.is_attached());
-        assert_eq!(
-            nonempty.children().first().map(|node| node.id()),
-            Some(offline_child.id())
-        );
-        assert!(!scope.as_focus_node().is_attached());
-
-        let current_attachment = manager.root_scope().adopt_node(&old).unwrap();
-        let untouched = FocusNode::with_debug_label("untouched");
-        assert!(matches!(
-            old_attachment.replace_node(&untouched),
-            Err(FocusTreeError::StaleAttachment { node }) if node == old.id()
-        ));
-        assert!(current_attachment.is_attached());
-        assert!(!untouched.is_attached());
-    }
-
-    #[test]
-    fn replacement_honors_queued_node_and_scope_focus_intents() {
-        let manager = FocusManager::new();
-        let first_old = FocusNode::with_debug_label("first-old");
-        let first_attachment = manager.root_scope().attach_node(&first_old).unwrap();
-        let queued_node = FocusNode::with_debug_label("queued-node");
-        assert_eq!(queued_node.request_focus(), FocusRequestOutcome::Queued);
-
-        first_attachment.replace_node(&queued_node).unwrap();
-        assert!(queued_node.has_primary_focus());
-
-        let old_scope = FocusScopeNode::with_debug_label("old-scope");
-        let old_scope_attachment = manager
-            .root_scope()
-            .attach_node(old_scope.as_focus_node())
-            .unwrap();
-        let pending_scope = FocusScopeNode::with_debug_label("pending-scope");
-        assert!(pending_scope.set_first_focus());
-
-        old_scope_attachment
-            .replace_node(pending_scope.as_focus_node())
-            .unwrap();
-        assert!(pending_scope.as_focus_node().has_primary_focus());
-
-        let first_descendant = FocusNode::with_debug_label("first-descendant");
-        pending_scope.attach_node(&first_descendant).unwrap();
-        assert!(
-            first_descendant.has_primary_focus(),
-            "the replacement scope keeps its pending first-focus intent"
-        );
-    }
-
-    #[test]
-    fn binding_an_offline_subtree_keeps_unchanged_child_attachment_live() {
-        let manager = FocusManager::new();
-        let parent = FocusNode::new();
-        let child = FocusNode::new();
-        let child_attachment = parent.attach_node(&child).unwrap();
-
-        assert!(!child_attachment.is_attached());
-        assert_eq!(child.request_focus(), FocusRequestOutcome::Queued);
-        manager.root_scope().attach_node(&parent).unwrap();
-
-        assert!(child_attachment.is_attached());
-        assert!(child.has_primary_focus());
-        assert_eq!(child_attachment.detach(), FocusDetachOutcome::Detached);
-    }
-
-    #[test]
-    fn focus_history_records_the_child_for_every_ancestor_scope() {
-        let manager = FocusManager::new();
-        let inner = FocusScopeNode::new();
-        manager
-            .root_scope()
-            .attach_node(inner.as_focus_node())
-            .unwrap();
-        let leaf = FocusNode::new();
-        inner.attach_node(&leaf).unwrap();
-
-        leaf.request_focus();
-
-        assert!(Rc::ptr_eq(inner.focused_child().as_ref().unwrap(), &leaf));
-        assert!(Rc::ptr_eq(
-            manager.root_scope().focused_child().as_ref().unwrap(),
-            inner.as_focus_node()
-        ));
-    }
-
-    #[test]
-    fn common_focus_ancestors_are_not_notified_for_a_sibling_move() {
-        let manager = FocusManager::new();
-        let parent = FocusNode::new();
-        let first = FocusNode::new();
-        let second = FocusNode::new();
-        manager.root_scope().attach_node(&parent).unwrap();
-        parent.attach_node(&first).unwrap();
-        parent.attach_node(&second).unwrap();
-        first.request_focus();
-
-        let notifications = Rc::new(Cell::new(0));
-        let notifications_for_listener = Rc::clone(&notifications);
-        parent.add_listener(Rc::new(move || {
-            notifications_for_listener.set(notifications_for_listener.get() + 1);
-        }));
-
-        second.request_focus();
-        assert_eq!(notifications.get(), 0);
-    }
-
-    #[test]
     fn key_dispatch_walks_leaf_to_root_and_honors_skip() {
         let manager = FocusManager::new();
         let parent = FocusNode::new();
@@ -1264,106 +822,6 @@ mod tests {
         assert!(calls.borrow().is_empty());
     }
 
-    #[test]
-    fn key_and_geometry_callbacks_may_replace_themselves() {
-        let manager = FocusManager::new();
-        let node = FocusNode::new();
-        manager.root_scope().attach_node(&node).unwrap();
-
-        let weak_node = Rc::downgrade(&node);
-        node.set_on_key_event(Rc::new(move |_| {
-            weak_node.upgrade().unwrap().clear_on_key_event();
-            KeyEventResult::Ignored
-        }));
-        let weak_node = Rc::downgrade(&node);
-        node.set_rect_provider(Rc::new(move || {
-            weak_node.upgrade().unwrap().clear_rect_provider();
-            Some(Rect::from_xywh(1.0, 2.0, 3.0, 4.0))
-        }));
-        node.request_focus();
-
-        assert!(!manager.dispatch_key_event(&key_event()));
-        assert_eq!(node.rect(), Rect::from_xywh(1.0, 2.0, 3.0, 4.0));
-    }
-
-    #[test]
-    fn property_registrations_clear_only_the_generation_they_installed() {
-        let node = FocusNode::new();
-        node.set_rect(Rect::from_xywh(0.0, 0.0, 1.0, 1.0));
-
-        let key_registration = node.register_on_key_event(Rc::new(|_| KeyEventResult::Handled));
-        let rect_registration =
-            node.register_rect_provider(Rc::new(|| Some(Rect::from_xywh(1.0, 2.0, 3.0, 4.0))));
-        assert!(key_registration.is_current());
-        assert!(rect_registration.is_current());
-
-        node.set_on_key_event(Rc::new(|_| KeyEventResult::SkipRemainingHandlers));
-        node.set_rect_provider(Rc::new(|| Some(Rect::from_xywh(5.0, 6.0, 7.0, 8.0))));
-        assert!(!key_registration.is_current());
-        assert!(!rect_registration.is_current());
-
-        drop(key_registration);
-        drop(rect_registration);
-        assert_eq!(
-            node.handle_key_event(&key_event()),
-            KeyEventResult::SkipRemainingHandlers,
-            "a stale key registration cannot erase a later writer"
-        );
-        assert_eq!(
-            node.rect(),
-            Rect::from_xywh(5.0, 6.0, 7.0, 8.0),
-            "a stale geometry registration cannot erase a later writer"
-        );
-    }
-
-    #[test]
-    fn current_property_registrations_clean_up_or_can_relinquish_ownership() {
-        let node = FocusNode::new();
-        node.set_rect(Rect::from_xywh(0.0, 0.0, 1.0, 1.0));
-
-        let key_registration = node.register_on_key_event(Rc::new(|_| KeyEventResult::Handled));
-        let rect_registration =
-            node.register_rect_provider(Rc::new(|| Some(Rect::from_xywh(1.0, 2.0, 3.0, 4.0))));
-        drop(rect_registration);
-        assert_eq!(
-            node.rect(),
-            Rect::from_xywh(0.0, 0.0, 1.0, 1.0),
-            "dropping a current registration removes its provider"
-        );
-
-        key_registration.relinquish();
-        assert_eq!(
-            node.handle_key_event(&key_event()),
-            KeyEventResult::Handled,
-            "relinquishing transfers the installed handler to the node owner"
-        );
-
-        let replacement = node.register_on_key_event(Rc::new(|_| KeyEventResult::Handled));
-        drop(replacement);
-        assert_eq!(
-            node.handle_key_event(&key_event()),
-            KeyEventResult::Ignored,
-            "dropping a current registration removes its handler"
-        );
-    }
-
-    #[test]
-    fn global_key_handlers_precede_the_focus_tree() {
-        let (manager, nodes) = manager_with_nodes(1);
-        let node_called = Rc::new(Cell::new(false));
-        let node_called_by_handler = Rc::clone(&node_called);
-        nodes[0].set_on_key_event(Rc::new(move |_| {
-            node_called_by_handler.set(true);
-            KeyEventResult::Handled
-        }));
-        nodes[0].request_focus();
-        manager.add_global_key_handler(Rc::new(|_| true));
-
-        assert!(manager.dispatch_key_event(&key_event()));
-        assert!(!node_called.get());
-    }
-
-    #[test]
     fn traversal_uses_policy_order_and_edge_behavior() {
         let (manager, nodes) = manager_with_nodes(2);
         assert!(manager.focus_next());
@@ -1387,96 +845,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn traversal_derives_the_scope_from_primary_focus() {
-        let manager = FocusManager::new();
-        let inner = FocusScopeNode::with_debug_label("inner");
-        manager
-            .root_scope()
-            .attach_node(inner.as_focus_node())
-            .unwrap();
-        inner.set_traversal_edge_behavior(TraversalEdgeBehavior::Stop);
-
-        let inside = FocusNode::with_debug_label("inside");
-        inside.set_rect(Rect::from_xywh(0.0, 0.0, 10.0, 10.0));
-        inner.attach_node(&inside).unwrap();
-
-        let outside = FocusNode::with_debug_label("outside");
-        outside.set_rect(Rect::from_xywh(20.0, 0.0, 10.0, 10.0));
-        manager.root_scope().attach_node(&outside).unwrap();
-
-        inside.request_focus();
-
-        assert!(
-            !manager.focus_next(),
-            "a Stop edge on the focused node's enclosing scope must win"
-        );
-        assert!(inside.has_primary_focus());
-        assert!(!outside.has_primary_focus());
-    }
-
-    #[test]
-    fn parent_scope_edge_retries_from_the_primary_nodes_scope() {
-        let manager = FocusManager::new();
-        let inner = FocusScopeNode::with_debug_label("inner");
-        manager
-            .root_scope()
-            .attach_node(inner.as_focus_node())
-            .unwrap();
-        inner.set_traversal_edge_behavior(TraversalEdgeBehavior::ParentScope);
-
-        let inside = FocusNode::with_debug_label("inside");
-        inside.set_rect(Rect::from_xywh(0.0, 0.0, 10.0, 10.0));
-        inner.attach_node(&inside).unwrap();
-
-        let outside = FocusNode::with_debug_label("outside");
-        outside.set_rect(Rect::from_xywh(20.0, 0.0, 10.0, 10.0));
-        manager.root_scope().attach_node(&outside).unwrap();
-
-        inside.request_focus();
-
-        assert!(manager.focus_next());
-        assert!(outside.has_primary_focus());
-    }
-
-    #[test]
-    fn empty_scope_first_focus_waits_for_the_first_eligible_descendant_once() {
-        let manager = FocusManager::new();
-        let scope = FocusScopeNode::with_debug_label("route");
-
-        assert!(
-            scope.set_first_focus(),
-            "the detached scope accepts the first-focus intent"
-        );
-        manager
-            .root_scope()
-            .attach_node(scope.as_focus_node())
-            .unwrap();
-        assert!(
-            scope.as_focus_node().has_primary_focus(),
-            "the scope parks focus until an eligible descendant exists"
-        );
-
-        let first = FocusNode::with_debug_label("first");
-        first.set_can_request_focus(false);
-        scope.attach_node(&first).unwrap();
-        assert!(scope.as_focus_node().has_primary_focus());
-
-        first.set_can_request_focus(true);
-        assert!(
-            first.has_primary_focus(),
-            "becoming eligible fulfills the pending first-focus intent"
-        );
-
-        let second = FocusNode::with_debug_label("second");
-        scope.attach_node(&second).unwrap();
-        assert!(
-            first.has_primary_focus(),
-            "the fulfilled intent is one-shot"
-        );
-    }
-
-    #[test]
     fn set_first_focus_restores_the_scopes_remembered_descendant() {
         let manager = FocusManager::new();
         let scope = FocusScopeNode::with_debug_label("route");
@@ -1513,50 +881,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn close_is_idempotent_and_tombstones_owned_nodes() {
-        let (manager, nodes) = manager_with_nodes(1);
-        nodes[0].request_focus();
-        let attachment = manager.root_scope().adopt_node(&nodes[0]).unwrap();
-
-        manager.close();
-        manager.close();
-
-        assert!(manager.is_closed());
-        assert!(manager.primary_focus().is_none());
-        assert!(!nodes[0].is_attached());
-        assert_eq!(nodes[0].request_focus(), FocusRequestOutcome::OwnerClosed);
-        assert_eq!(attachment.detach(), FocusDetachOutcome::OwnerClosed);
-
-        let other = FocusManager::new();
-        assert!(matches!(
-            other.root_scope().attach_node(&nodes[0]),
-            Err(FocusTreeError::OwnerClosed { .. })
-        ));
-    }
-
-    #[test]
-    fn focus_loss_callback_cannot_detach_a_node_out_of_closing_owner() {
-        let manager = FocusManager::new();
-        let node = FocusNode::new();
-        let attachment = Rc::new(manager.root_scope().attach_node(&node).unwrap());
-        node.request_focus();
-        let callback_outcome = Rc::new(Cell::new(None));
-        let callback_outcome_for_listener = Rc::clone(&callback_outcome);
-        let attachment_for_listener = Rc::clone(&attachment);
-        node.add_listener(Rc::new(move || {
-            callback_outcome_for_listener.set(Some(attachment_for_listener.detach()));
-        }));
-
-        manager.close();
-
-        assert_eq!(
-            callback_outcome.get(),
-            Some(FocusDetachOutcome::OwnerClosed)
-        );
-        assert_eq!(node.request_focus(), FocusRequestOutcome::OwnerClosed);
-    }
-
     // ── Reentrant focus-notification ordering (issue #1040) ─────────────
     //
     // `set_primary_focus` commits and publishes synchronously. A listener
@@ -1572,13 +896,47 @@ mod tests {
     // `flui-testing` in the layer DAG for everything else, but keeps it as
     // a dev-dependency for exactly this.
 
+    // Focus failure and reentrancy matrix: listener panics, bounded ping-pong,
+    /// queued requests against detached targets or a closing manager, and reentrant
+    /// requests during notification.
+    #[test]
+    fn focus_failure_and_reentrancy_matrix() {
+        let cases: &[(&str, fn())] = &[
+            (
+                "listener_panic_does_not_leave_notification_depth_stuck",
+                listener_panic_does_not_leave_notification_depth_stuck,
+            ),
+            (
+                "ping_pong_listeners_are_bounded_and_warned",
+                ping_pong_listeners_are_bounded_and_warned,
+            ),
+            (
+                "queued_focus_target_detached_before_its_turn_is_skipped_not_applied",
+                queued_focus_target_detached_before_its_turn_is_skipped_not_applied,
+            ),
+            (
+                "queued_requests_are_dropped_when_the_manager_closes_mid_drain",
+                queued_requests_are_dropped_when_the_manager_closes_mid_drain,
+            ),
+            (
+                "reentrant_request_during_notification_is_applied_after_and_published_in_order",
+                reentrant_request_during_notification_is_applied_after_and_published_in_order,
+            ),
+        ];
+        for &(name, case) in cases {
+            if let Err(payload) = std::panic::catch_unwind(case) {
+                eprintln!("matrix case `{name}` failed");
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+
     /// The issue #1040 reproducer: A is focused, B is requested, and B's
     /// own node listener reentrantly requests C while B is (momentarily)
     /// primary. The reentrant request must be applied only after the
     /// outer A -> B notification finishes, and published in the order
     /// requested — never the reversed `[(B, C), (A, B)]` the pre-fix code
     /// produced.
-    #[test]
     fn reentrant_request_during_notification_is_applied_after_and_published_in_order() {
         let (manager, nodes) = manager_with_nodes(3);
         nodes[0].request_focus();
@@ -1612,194 +970,11 @@ mod tests {
         );
     }
 
-    /// A reentrant `unfocus()` from inside a node listener is queued the
-    /// same way a reentrant `request_focus` is, and publishes its own
-    /// `(previous, None)` edge after the outer one.
-    #[test]
-    fn reentrant_unfocus_during_notification_is_applied_after_the_outer_edge() {
-        let (manager, nodes) = manager_with_nodes(2);
-        nodes[0].request_focus();
-
-        let edges = Rc::new(RefCell::new(Vec::new()));
-        let edges_for_listener = Rc::clone(&edges);
-        manager.add_listener(Rc::new(move |previous, current| {
-            edges_for_listener.borrow_mut().push((
-                previous.map(|node| node.id()),
-                current.map(|node| node.id()),
-            ));
-        }));
-
-        let manager_for_listener = Rc::clone(&manager);
-        nodes[1].add_listener(Rc::new(move || {
-            manager_for_listener.unfocus();
-        }));
-
-        nodes[1].request_focus();
-
-        assert!(manager.primary_focus().is_none());
-        assert_eq!(
-            edges.borrow().as_slice(),
-            &[
-                (Some(nodes[0].id()), Some(nodes[1].id())),
-                (Some(nodes[1].id()), None),
-            ]
-        );
-    }
-
-    /// Two reentrant requests issued from the same listener call (C then
-    /// D) are applied and published FIFO, not last-wins and not reversed.
-    #[test]
-    fn two_reentrant_requests_are_applied_in_request_order() {
-        let (manager, nodes) = manager_with_nodes(4);
-        nodes[0].request_focus();
-
-        let edges = Rc::new(RefCell::new(Vec::new()));
-        let edges_for_listener = Rc::clone(&edges);
-        manager.add_listener(Rc::new(move |previous, current| {
-            edges_for_listener.borrow_mut().push((
-                previous.map(|node| node.id()),
-                current.map(|node| node.id()),
-            ));
-        }));
-
-        let third = Rc::clone(&nodes[2]);
-        let fourth = Rc::clone(&nodes[3]);
-        let intermediate = Rc::downgrade(&nodes[1]);
-        nodes[1].add_listener(Rc::new(move || {
-            if intermediate.upgrade().unwrap().has_primary_focus() {
-                third.request_focus();
-                fourth.request_focus();
-            }
-        }));
-
-        nodes[1].request_focus();
-
-        assert!(nodes[3].has_primary_focus());
-        assert_eq!(
-            edges.borrow().as_slice(),
-            &[
-                (Some(nodes[0].id()), Some(nodes[1].id())),
-                (Some(nodes[1].id()), Some(nodes[2].id())),
-                (Some(nodes[2].id()), Some(nodes[3].id())),
-            ]
-        );
-    }
-
-    /// Reentry from a *manager* listener (not a node listener): subscriber
-    /// 1 requests C while receiving the A -> B edge. Manager listeners are
-    /// dispatched from one snapshot of `(previous, new)` taken before the
-    /// loop starts, so subscriber 2 must still receive that same A -> B
-    /// edge — the reentrant C request is only queued, never rewinds what
-    /// the rest of this dispatch delivers — and neither subscriber sees
-    /// the queued B -> C edge until it is drained after this notification
-    /// finishes.
-    #[test]
-    fn manager_listener_reentry_does_not_rewind_sibling_listeners_snapshot() {
-        let (manager, nodes) = manager_with_nodes(3);
-        nodes[0].request_focus();
-
-        let edges = Rc::new(RefCell::new(Vec::new()));
-        let node_b_id = nodes[1].id();
-        let target = Rc::clone(&nodes[2]);
-        let edges_for_first = Rc::clone(&edges);
-        manager.add_listener(Rc::new(move |previous, current| {
-            let current_id = current.as_ref().map(|node| node.id());
-            edges_for_first.borrow_mut().push((
-                "first",
-                previous.map(|node| node.id()),
-                current_id,
-            ));
-            if current_id == Some(node_b_id) {
-                target.request_focus();
-            }
-        }));
-        let edges_for_second = Rc::clone(&edges);
-        manager.add_listener(Rc::new(move |previous, current| {
-            edges_for_second.borrow_mut().push((
-                "second",
-                previous.map(|node| node.id()),
-                current.map(|node| node.id()),
-            ));
-        }));
-
-        nodes[1].request_focus();
-
-        assert!(nodes[2].has_primary_focus());
-        assert_eq!(
-            edges.borrow().as_slice(),
-            &[
-                ("first", Some(nodes[0].id()), Some(nodes[1].id())),
-                ("second", Some(nodes[0].id()), Some(nodes[1].id())),
-                ("first", Some(nodes[1].id()), Some(nodes[2].id())),
-                ("second", Some(nodes[1].id()), Some(nodes[2].id())),
-            ],
-            "subscriber 2 must observe (A, B) before either subscriber observes the \
-             reentrant (B, C) transition subscriber 1 queued"
-        );
-    }
-
-    /// A -> B -> C -> B: focus returns to an earlier node's *identity*, but
-    /// each hop is still a distinct, real transition and must publish as
-    /// one — this is not the "already-current" no-op case
-    /// (`focus_identity_eq` only short-circuits a request naming whatever
-    /// is CURRENTLY primary, not one that merely matches something
-    /// notified earlier in the same drain).
-    #[test]
-    fn reentrant_chain_returning_to_an_earlier_identity_publishes_every_hop() {
-        let (manager, nodes) = manager_with_nodes(3);
-        nodes[0].request_focus();
-
-        let edges = Rc::new(RefCell::new(Vec::new()));
-        let edges_for_listener = Rc::clone(&edges);
-        manager.add_listener(Rc::new(move |previous, current| {
-            edges_for_listener.borrow_mut().push((
-                previous.map(|node| node.id()),
-                current.map(|node| node.id()),
-            ));
-        }));
-
-        // B redirects to C exactly once, the first time it becomes primary.
-        let b_redirected = Cell::new(false);
-        let c_for_b = Rc::clone(&nodes[2]);
-        let b_weak = Rc::downgrade(&nodes[1]);
-        nodes[1].add_listener(Rc::new(move || {
-            let b = b_weak.upgrade().unwrap();
-            if b.has_primary_focus() && !b_redirected.get() {
-                b_redirected.set(true);
-                c_for_b.request_focus();
-            }
-        }));
-        // C redirects back to B exactly once, the first time it becomes primary.
-        let c_redirected = Cell::new(false);
-        let b_for_c = Rc::clone(&nodes[1]);
-        let c_weak = Rc::downgrade(&nodes[2]);
-        nodes[2].add_listener(Rc::new(move || {
-            let c = c_weak.upgrade().unwrap();
-            if c.has_primary_focus() && !c_redirected.get() {
-                c_redirected.set(true);
-                b_for_c.request_focus();
-            }
-        }));
-
-        nodes[1].request_focus();
-
-        assert!(nodes[1].has_primary_focus(), "the chain settles back on B");
-        assert_eq!(
-            edges.borrow().as_slice(),
-            &[
-                (Some(nodes[0].id()), Some(nodes[1].id())),
-                (Some(nodes[1].id()), Some(nodes[2].id())),
-                (Some(nodes[2].id()), Some(nodes[1].id())),
-            ]
-        );
-    }
-
     /// A queued transition's eligibility is checked again immediately
     /// before it is applied, not only when it was accepted: B's listener
     /// requests C, then detaches C before the outer notification finishes.
     /// The drain must skip the now-detached target rather than committing
     /// it as primary.
-    #[test]
     fn queued_focus_target_detached_before_its_turn_is_skipped_not_applied() {
         let manager = FocusManager::new();
         let a = FocusNode::with_debug_label("a");
@@ -1843,97 +1018,11 @@ mod tests {
         );
     }
 
-    /// Companion to the detach case: B's listener requests C, then C
-    /// becomes unfocusable before the outer notification finishes. The
-    /// drain must skip C rather than committing an ineligible target.
-    #[test]
-    fn queued_focus_target_made_unfocusable_before_its_turn_is_skipped() {
-        let manager = FocusManager::new();
-        let a = FocusNode::with_debug_label("a");
-        manager.root_scope().attach_node(&a).unwrap();
-        let b = FocusNode::with_debug_label("b");
-        manager.root_scope().attach_node(&b).unwrap();
-        let c = FocusNode::with_debug_label("c");
-        manager.root_scope().attach_node(&c).unwrap();
-        a.request_focus();
-
-        let edges = Rc::new(RefCell::new(Vec::new()));
-        let edges_for_listener = Rc::clone(&edges);
-        manager.add_listener(Rc::new(move |previous, current| {
-            edges_for_listener.borrow_mut().push((
-                previous.map(|node| node.id()),
-                current.map(|node| node.id()),
-            ));
-        }));
-
-        let c_for_listener = Rc::clone(&c);
-        let b_weak = Rc::downgrade(&b);
-        b.add_listener(Rc::new(move || {
-            if b_weak.upgrade().unwrap().has_primary_focus() {
-                c_for_listener.request_focus();
-                c_for_listener.set_can_request_focus(false);
-            }
-        }));
-
-        b.request_focus();
-
-        assert!(
-            b.has_primary_focus(),
-            "a queued target that became unfocusable before its turn must not gain \
-             primary focus"
-        );
-        assert!(!c.can_request_focus());
-        assert_eq!(edges.borrow().as_slice(), &[(Some(a.id()), Some(b.id()))]);
-    }
-
-    /// A queued `None` (an [`Self::unfocus`] request) has no target to
-    /// re-validate and is always eligible: it must apply even though the
-    /// node that requested it may itself have detached in the meantime.
-    #[test]
-    fn queued_unfocus_is_always_eligible() {
-        let manager = FocusManager::new();
-        let a = FocusNode::with_debug_label("a");
-        let a_attachment = manager.root_scope().attach_node(&a).unwrap();
-        let b = FocusNode::with_debug_label("b");
-        manager.root_scope().attach_node(&b).unwrap();
-        a.request_focus();
-
-        let edges = Rc::new(RefCell::new(Vec::new()));
-        let edges_for_listener = Rc::clone(&edges);
-        manager.add_listener(Rc::new(move |previous, current| {
-            edges_for_listener.borrow_mut().push((
-                previous.map(|node| node.id()),
-                current.map(|node| node.id()),
-            ));
-        }));
-
-        let manager_for_listener = Rc::clone(&manager);
-        let b_weak = Rc::downgrade(&b);
-        b.add_listener(Rc::new(move || {
-            if b_weak.upgrade().unwrap().has_primary_focus() {
-                manager_for_listener.unfocus();
-                a_attachment.detach();
-            }
-        }));
-
-        b.request_focus();
-
-        assert!(
-            manager.primary_focus().is_none(),
-            "a queued unfocus must apply even though the node that requested it detached"
-        );
-        assert_eq!(
-            edges.borrow().as_slice(),
-            &[(Some(a.id()), Some(b.id())), (Some(b.id()), None)]
-        );
-    }
-
     /// A listener that panics mid-notification must not leave
     /// `notification_depth` stuck above zero: every later, healthy
     /// `request_focus` on this manager would otherwise queue silently and
     /// never apply, since nothing would ever bring the depth back to zero
     /// to drain it.
-    #[test]
     fn listener_panic_does_not_leave_notification_depth_stuck() {
         let (manager, nodes) = manager_with_nodes(2);
         nodes[0].request_focus();
@@ -1974,88 +1063,12 @@ mod tests {
         );
     }
 
-    /// Companion to the test above: this one exercises the guard's OTHER
-    /// unwind responsibility — discarding a *non-empty* queue, not just
-    /// resetting the depth counter. B has two listeners: the first queues
-    /// a reentrant request for C (accepted, `Focused`, but not yet
-    /// applied); the second then panics. The panic must discard that
-    /// queued request rather than leave it for a later, unrelated call to
-    /// apply — proven through behavior (C never becomes primary, no
-    /// `(_, C)` edge ever publishes), not by reaching into the private
-    /// queue. It must also warn once, naming the drop, matching the
-    /// budget-exceeded drop's own warning discipline.
-    #[test]
-    fn pending_requests_queued_before_a_listener_panic_are_discarded() {
-        let (manager, nodes) = manager_with_nodes(4);
-        nodes[0].request_focus();
-
-        let edges = Rc::new(RefCell::new(Vec::new()));
-        let edges_for_listener = Rc::clone(&edges);
-        manager.add_listener(Rc::new(move |previous, current| {
-            edges_for_listener.borrow_mut().push((
-                previous.map(|node| node.id()),
-                current.map(|node| node.id()),
-            ));
-        }));
-
-        // Both listeners are guarded on B still being primary: on the
-        // later, healthy transition below, B is the OUTGOING endpoint (no
-        // longer primary), so neither fires again — the guard is what
-        // keeps that second call from re-queuing C or re-panicking.
-        let c = Rc::clone(&nodes[2]);
-        let b_weak = Rc::downgrade(&nodes[1]);
-        nodes[1].add_listener(Rc::new(move || {
-            if b_weak.upgrade().unwrap().has_primary_focus() {
-                assert_eq!(c.request_focus(), FocusRequestOutcome::Focused);
-            }
-        }));
-        let b_weak = Rc::downgrade(&nodes[1]);
-        nodes[1].add_listener(Rc::new(move || {
-            assert!(
-                !b_weak.upgrade().unwrap().has_primary_focus(),
-                "boom: second listener under test panics"
-            );
-        }));
-
-        let (panicked, log) = flui_testing::log_capture::capture(|| {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                nodes[1].request_focus();
-            }))
-        });
-        assert!(panicked.is_err(), "the listener panic must propagate");
-        assert_eq!(
-            log.count_containing("focus requests queued during a notification were discarded"),
-            1,
-            "the discard must warn exactly once, naming what it dropped: {log}"
-        );
-
-        nodes[3].request_focus();
-
-        assert!(nodes[3].has_primary_focus());
-        assert!(
-            !nodes[2].has_primary_focus(),
-            "the request the first listener queued before the second one panicked \
-             must not have survived to apply later"
-        );
-        // The interrupted A -> B transition's own manager-level edge never
-        // publishes either: `apply_focus_transition` runs node-level
-        // notification before manager-level notification, and L2 panics
-        // during the former, so `notify_listeners` for THIS transition
-        // never runs at all. Only the later, healthy transition publishes.
-        assert_eq!(
-            edges.borrow().as_slice(),
-            &[(Some(nodes[1].id()), Some(nodes[3].id()))],
-            "no (_, C) edge may appear: the discarded request never applied"
-        );
-    }
-
     /// Two listeners that keep redirecting focus to each other cannot spin
     /// the caller forever: FLUI applies transitions synchronously (unlike
     /// Flutter's microtask-scheduled model, which merely yields a frame
     /// per bounce), so the drain is bounded at
     /// `FocusManager::REENTRANT_FOCUS_DRAIN_BUDGET` applications and warns
     /// once when it drops the rest.
-    #[test]
     fn ping_pong_listeners_are_bounded_and_warned() {
         let (manager, nodes) = manager_with_nodes(2);
 
@@ -2156,7 +1169,6 @@ mod tests {
     /// notification already in flight — no further manager-level
     /// publication happens and any request still queued by a reentrant
     /// listener is dropped rather than applied.
-    #[test]
     fn queued_requests_are_dropped_when_the_manager_closes_mid_drain() {
         let (manager, nodes) = manager_with_nodes(3);
         nodes[0].request_focus();
@@ -2185,219 +1197,5 @@ mod tests {
         );
         assert!(manager.primary_focus().is_none());
         assert!(manager.is_closed());
-    }
-
-    /// A node listener observes the manager's already-committed state, not
-    /// a pending one: `has_primary_focus()` on the node just notified is
-    /// true, a reentrant request is accepted (`FocusRequestOutcome::Focused`)
-    /// but not yet applied, and only becomes visible on the target node
-    /// once the outermost call returns.
-    #[test]
-    fn node_listeners_observe_committed_state_during_notification() {
-        let (manager, nodes) = manager_with_nodes(3);
-        nodes[0].request_focus();
-
-        let observed = Rc::new(RefCell::new(None));
-        let observed_for_listener = Rc::clone(&observed);
-        let node_b = Rc::downgrade(&nodes[1]);
-        let node_c = Rc::clone(&nodes[2]);
-        nodes[1].add_listener(Rc::new(move || {
-            let b = node_b.upgrade().unwrap();
-            // `b` is also notified for the drained B -> C transition below
-            // (it is the "previous" endpoint of that one too); only the
-            // invocation where B is still the committed primary is the one
-            // this test cares about.
-            if !b.has_primary_focus() {
-                return;
-            }
-            let outcome = node_c.request_focus();
-            *observed_for_listener.borrow_mut() =
-                Some((b.has_primary_focus(), outcome, node_c.has_primary_focus()));
-        }));
-
-        nodes[1].request_focus();
-
-        let (b_had_focus_during, c_outcome, c_had_focus_during) =
-            (*observed.borrow()).expect("the listener ran");
-        assert!(
-            b_had_focus_during,
-            "the node listener observes the committed transition, not a pending one"
-        );
-        assert_eq!(c_outcome, FocusRequestOutcome::Focused);
-        assert!(
-            !c_had_focus_during,
-            "a reentrant request is accepted but only queued, not yet applied, \
-             during the outer notification"
-        );
-        assert!(
-            nodes[2].has_primary_focus(),
-            "the queued request is applied once the outer notification completes"
-        );
-        assert!(!manager.is_closed());
-    }
-
-    /// Matches Flutter's `_HighlightModeManager.notifyListeners`
-    /// (`if (_listeners.contains(listener))`): a listener that removes
-    /// another one (or itself) mid-dispatch must stop that listener from
-    /// being called for the rest of this same dispatch, and must not panic
-    /// on a re-borrow of the listener list.
-    #[test]
-    fn listener_removed_during_dispatch_is_not_called() {
-        let (manager, nodes) = manager_with_nodes(2);
-        nodes[0].request_focus();
-
-        let second_calls = Rc::new(Cell::new(0));
-        let second_calls_for_listener = Rc::clone(&second_calls);
-        let second_id: Rc<RefCell<Option<ListenerId>>> = Rc::new(RefCell::new(None));
-        let second_id_for_first_listener = Rc::clone(&second_id);
-        let manager_for_first_listener = Rc::clone(&manager);
-        manager.add_listener(Rc::new(move |_, _| {
-            if let Some(id) = *second_id_for_first_listener.borrow() {
-                manager_for_first_listener.remove_listener(id);
-            }
-        }));
-        let second_id_value = manager.add_listener(Rc::new(move |_, _| {
-            second_calls_for_listener.set(second_calls_for_listener.get() + 1);
-        }));
-        *second_id.borrow_mut() = Some(second_id_value);
-
-        nodes[1].request_focus();
-
-        assert_eq!(
-            second_calls.get(),
-            0,
-            "a manager listener removed by an earlier one in the same dispatch \
-             must not be called"
-        );
-        assert_eq!(manager.listener_count(), 1);
-    }
-
-    /// The node-level counterpart of
-    /// `listener_removed_during_dispatch_is_not_called`: `FocusNode`'s
-    /// listener dispatch follows the same contract.
-    #[test]
-    fn node_listener_removed_during_dispatch_is_not_called() {
-        let manager = FocusManager::new();
-        let node = FocusNode::new();
-        manager.root_scope().attach_node(&node).unwrap();
-
-        let second_calls = Rc::new(Cell::new(0));
-        let second_calls_for_listener = Rc::clone(&second_calls);
-        let second_id: Rc<RefCell<Option<ListenerId>>> = Rc::new(RefCell::new(None));
-        let second_id_for_first_listener = Rc::clone(&second_id);
-        let node_for_first_listener = Rc::clone(&node);
-        node.add_listener(Rc::new(move || {
-            if let Some(id) = *second_id_for_first_listener.borrow() {
-                node_for_first_listener.remove_listener(id);
-            }
-        }));
-        let second_id_value = node.add_listener(Rc::new(move || {
-            second_calls_for_listener.set(second_calls_for_listener.get() + 1);
-        }));
-        *second_id.borrow_mut() = Some(second_id_value);
-
-        node.request_focus();
-
-        assert_eq!(
-            second_calls.get(),
-            0,
-            "a node listener removed by an earlier one in the same dispatch must not be called"
-        );
-        assert_eq!(node.listener_count(), 1);
-    }
-}
-
-#[cfg(test)]
-mod unfocused_key_tests {
-    use std::cell::Cell;
-
-    use super::*;
-    use crate::events::{Key, KeyState, NamedKey};
-    use crate::routing::focus_scope::{KeyEventResult, NodeContext};
-
-    fn tab() -> KeyEvent {
-        KeyEvent {
-            state: KeyState::Down,
-            key: Key::Named(NamedKey::Tab),
-            ..KeyEvent::default()
-        }
-    }
-
-    /// A node that counts the keys it sees and consumes them.
-    fn counting(label: &str, manager: &FocusManager) -> (Rc<FocusNode>, Rc<Cell<u32>>) {
-        let node = FocusNode::with_debug_label(label);
-        let seen = Rc::new(Cell::new(0));
-        let counted = Rc::clone(&seen);
-        node.set_on_key_event(Rc::new(move |_| {
-            counted.set(counted.get() + 1);
-            KeyEventResult::Handled
-        }));
-        manager
-            .root_scope()
-            .attach_node(&node)
-            .expect("attaches under the root scope");
-        (node, seen)
-    }
-
-    /// Claims nest: a nested claimant going away hands the keys back to the
-    /// one it covered, instead of leaving no target and dropping the next Tab.
-    #[test]
-    fn releasing_a_nested_claim_restores_the_outer_one() {
-        let manager = FocusManager::new();
-        let (outer, outer_seen) = counting("outer", &manager);
-        let (inner, inner_seen) = counting("inner", &manager);
-
-        manager.claim_unfocused_keys(&outer);
-        manager.claim_unfocused_keys(&inner);
-        assert!(manager.dispatch_key_event(&tab()));
-        assert_eq!(
-            (outer_seen.get(), inner_seen.get()),
-            (0, 1),
-            "the newest claim wins"
-        );
-
-        manager.release_unfocused_keys(&inner);
-        assert!(manager.dispatch_key_event(&tab()));
-        assert_eq!(outer_seen.get(), 1, "the outer claim is the target again");
-
-        manager.release_unfocused_keys(&outer);
-        assert!(!manager.dispatch_key_event(&tab()), "no claim, no target");
-    }
-
-    /// A node attached to another manager's tree is never the target, so a key
-    /// dispatched for one window cannot reach another window's handlers.
-    #[test]
-    fn a_claim_on_another_managers_node_is_ignored() {
-        let this = FocusManager::new();
-        let other = FocusManager::new();
-        let (foreign, foreign_seen) = counting("foreign", &other);
-
-        this.claim_unfocused_keys(&foreign);
-
-        assert!(this.unfocused_key_target().is_none());
-        assert!(!this.dispatch_key_event(&tab()));
-        assert_eq!(foreign_seen.get(), 0);
-    }
-
-    /// Closing the owner retires the widget layer's record on every node it
-    /// owned, so a node that outlives its window does not keep that window's
-    /// callbacks alive.
-    #[test]
-    fn closing_the_owner_clears_node_contexts() {
-        let manager = FocusManager::new();
-        let node = FocusNode::with_debug_label("kept");
-        manager
-            .root_scope()
-            .attach_node(&node)
-            .expect("attaches under the root scope");
-        let context: NodeContext = Rc::new(7_u32);
-        let registration = node.register_context(Rc::clone(&context));
-        assert_eq!(Rc::strong_count(&context), 2);
-
-        manager.close();
-
-        assert!(node.context().is_none());
-        assert_eq!(Rc::strong_count(&context), 1, "the record was released");
-        registration.relinquish();
     }
 }

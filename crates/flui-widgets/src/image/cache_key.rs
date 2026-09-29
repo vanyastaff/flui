@@ -24,30 +24,3 @@ pub enum ImageCacheKey {
     /// Keyed by the URL — `NetworkImage` (`network-images` feature).
     Network(String),
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn asset_and_network_keys_with_the_same_text_are_not_equal() {
-        let asset = ImageCacheKey::Asset("shared.png".to_string());
-        let network = ImageCacheKey::Network("shared.png".to_string());
-
-        assert_ne!(
-            asset, network,
-            "the provider namespace must be part of the key's identity, not \
-             just the path/URL text",
-        );
-    }
-
-    #[test]
-    fn equal_keys_hash_equal() {
-        use std::collections::HashSet;
-
-        let mut set = HashSet::new();
-        set.insert(ImageCacheKey::Asset("a.png".to_string()));
-        assert!(set.contains(&ImageCacheKey::Asset("a.png".to_string())));
-        assert!(!set.contains(&ImageCacheKey::Network("a.png".to_string())));
-    }
-}

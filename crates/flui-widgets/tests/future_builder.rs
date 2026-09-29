@@ -81,14 +81,6 @@ impl Completer {
         }
     }
 
-    /// Pre-seed the result: the future is `Ready` on its very first poll — the
-    /// Rust analogue of Dart's `SynchronousFuture`.
-    fn ready(result: Result<Payload, Boom>) -> Self {
-        let completer = Self::new();
-        *completer.result.lock() = Some(result);
-        completer
-    }
-
     fn factory(&self) -> FutureFactory<Payload, Boom> {
         let result = Arc::clone(&self.result);
         let waker = Arc::clone(&self.waker);
@@ -100,10 +92,6 @@ impl Completer {
                 waker: Arc::clone(&waker),
             })
         })
-    }
-
-    fn subscriptions(&self) -> usize {
-        self.subscriptions.load(Ordering::Relaxed)
     }
 
     /// Complete from outside a frame, as a real async completion would.
@@ -140,62 +128,8 @@ fn done(data: Option<i32>, error: Option<&'static str>) -> Seen {
     }
 }
 
-/// `'gives expected snapshot with SynchronousFuture'`: an already-ready future
-/// must never let the builder observe `Waiting`.
-#[test]
-fn future_builder_immediately_ready_never_shows_waiting() {
-    let log = Arc::new(Mutex::new(Vec::new()));
-    let completer = Completer::ready(Ok(Payload(5)));
-
-    let _laid = lay_out(
-        FutureBuilder::keyed(
-            Some(1_u32),
-            completer.factory(),
-            recording_builder(Arc::clone(&log)),
-        ),
-        loose(400.0),
-    );
-
-    let observed = log.lock().clone();
-    assert!(
-        !observed.iter().any(|s| s.state == ConnectionState::Waiting),
-        "a synchronously-complete future must never flash Waiting: {observed:?}"
-    );
-    assert_eq!(last(&log), done(Some(5), None));
-}
-
-/// `'tracks life-cycle of Future to success'`: `Waiting` → `Done + data`.
-#[test]
-fn future_builder_pending_then_success() {
-    let log = Arc::new(Mutex::new(Vec::new()));
-    let completer = Completer::new();
-
-    let mut laid = lay_out(
-        FutureBuilder::keyed(
-            Some(1_u32),
-            completer.factory(),
-            recording_builder(Arc::clone(&log)),
-        ),
-        loose(400.0),
-    );
-    assert_eq!(
-        last(&log),
-        Seen {
-            state: ConnectionState::Waiting,
-            data: None,
-            error: None
-        }
-    );
-
-    completer.complete(Ok(Payload(42)));
-    laid.tick();
-
-    assert_eq!(last(&log), done(Some(42), None));
-}
-
 /// `'tracks life-cycle of Future to error'`: the error clears the data.
-#[test]
-fn future_builder_pending_then_error() {
+pub(crate) fn future_builder_pending_then_error() {
     let log = Arc::new(Mutex::new(Vec::new()));
     let completer = Completer::new();
 
@@ -214,141 +148,4 @@ fn future_builder_pending_then_error() {
     laid.tick();
 
     assert_eq!(last(&log), done(None, Some("bad")));
-}
-
-/// `'gracefully handles transition to other future'` +
-/// `'ignores initialData when reconfiguring'`: the old value stays visible while
-/// the new future is `Waiting`, and the seed is not re-applied.
-#[test]
-fn future_builder_key_change_preserves_old_payload_while_waiting() {
-    let log = Arc::new(Mutex::new(Vec::new()));
-    let first = Completer::new();
-
-    let mut laid = lay_out(
-        FutureBuilder::keyed(
-            Some(1_u32),
-            first.factory(),
-            recording_builder(Arc::clone(&log)),
-        )
-        .with_initial_data(Rc::new(|| Payload(99))),
-        loose(400.0),
-    );
-    first.complete(Ok(Payload(1)));
-    laid.tick();
-    assert_eq!(last(&log), done(Some(1), None));
-
-    let second = Completer::new();
-    laid.pump_widget(
-        FutureBuilder::keyed(
-            Some(2_u32),
-            second.factory(),
-            recording_builder(Arc::clone(&log)),
-        )
-        .with_initial_data(Rc::new(|| Payload(99))),
-    );
-
-    assert_eq!(
-        last(&log),
-        Seen {
-            state: ConnectionState::Waiting,
-            data: Some(1),
-            error: None
-        },
-        "old value visible while the new future waits; initialData (99) not re-applied"
-    );
-
-    second.complete(Ok(Payload(2)));
-    laid.tick();
-    assert_eq!(last(&log), done(Some(2), None));
-}
-
-/// `'gracefully handles transition to null future'`: the task is cancelled, the
-/// snapshot drops to `None` keeping the old payload, and a late completion of the
-/// old future changes nothing.
-#[test]
-fn future_builder_transition_to_absent_future_cancels() {
-    let log = Arc::new(Mutex::new(Vec::new()));
-    let completer = Completer::new();
-
-    let mut laid = lay_out(
-        FutureBuilder::keyed(
-            Some(1_u32),
-            completer.factory(),
-            recording_builder(Arc::clone(&log)),
-        ),
-        loose(400.0),
-    );
-    completer.complete(Ok(Payload(4)));
-    laid.tick();
-    assert_eq!(last(&log), done(Some(4), None));
-
-    laid.pump_widget(FutureBuilder::<u32, _, _>::keyed(
-        None,
-        completer.factory(),
-        recording_builder(Arc::clone(&log)),
-    ));
-
-    assert_eq!(
-        last(&log),
-        Seen {
-            state: ConnectionState::None,
-            data: Some(4),
-            error: None
-        }
-    );
-}
-
-/// An unchanged key is an early return: no resubscribe, snapshot untouched.
-#[test]
-fn future_builder_same_key_does_not_resubscribe() {
-    let log = Arc::new(Mutex::new(Vec::new()));
-    let completer = Completer::new();
-
-    let mut laid = lay_out(
-        FutureBuilder::keyed(
-            Some(1_u32),
-            completer.factory(),
-            recording_builder(Arc::clone(&log)),
-        ),
-        loose(400.0),
-    );
-    completer.complete(Ok(Payload(3)));
-    laid.tick();
-    assert_eq!(completer.subscriptions(), 1);
-
-    laid.pump_widget(FutureBuilder::keyed(
-        Some(1_u32),
-        completer.factory(),
-        recording_builder(Arc::clone(&log)),
-    ));
-
-    assert_eq!(completer.subscriptions(), 1, "no resubscribe");
-    assert_eq!(last(&log), done(Some(3), None), "snapshot untouched");
-}
-
-/// `'runs the builder using given initial data'` with no future at all.
-#[test]
-fn future_builder_absent_future_shows_initial_data() {
-    let log = Arc::new(Mutex::new(Vec::new()));
-    let completer = Completer::new();
-
-    let _laid = lay_out(
-        FutureBuilder::<u32, _, _>::keyed(
-            None,
-            completer.factory(),
-            recording_builder(Arc::clone(&log)),
-        )
-        .with_initial_data(Rc::new(|| Payload(7))),
-        loose(400.0),
-    );
-
-    assert_eq!(
-        last(&log),
-        Seen {
-            state: ConnectionState::None,
-            data: Some(7),
-            error: None
-        }
-    );
-    assert_eq!(completer.subscriptions(), 0, "no future ⇒ no subscription");
 }

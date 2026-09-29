@@ -65,3 +65,6 @@ pub mod sink;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 pub mod ui_realm;
+
+#[cfg(test)]
+mod table_test;

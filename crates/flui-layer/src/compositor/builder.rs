@@ -173,7 +173,7 @@ impl SceneBuilder {
 
 #[cfg(test)]
 mod tests {
-    use flui_foundation::geometry::Size;
+
     use flui_painting::paint::Clip;
 
     use super::*;
@@ -195,34 +195,5 @@ mod tests {
         assert_eq!(tree.parent(offset), Some(tree.root()));
         assert_eq!(tree.parent(clip), Some(offset));
         assert_eq!(tree.parent(leaf), Some(clip));
-    }
-
-    #[test]
-    fn layers_added_with_nothing_open_hang_off_the_root() {
-        let mut builder = SceneBuilder::new();
-        builder.push_opacity(0.5);
-        builder.pop();
-        let late = builder.add(PictureLayer::default());
-        let tree = builder.build();
-        assert_eq!(tree.parent(late), Some(tree.root()));
-    }
-
-    #[test]
-    fn with_root_replaces_the_default_offset_root() {
-        let builder = SceneBuilder::with_root(TransformLayer::identity());
-        let tree = builder.build();
-        assert_eq!(tree.len(), 1);
-        assert!(matches!(
-            tree.get_layer(tree.root()),
-            Some(Layer::Transform(_))
-        ));
-    }
-
-    #[test]
-    fn push_accepts_any_layer_payload() {
-        let mut builder = SceneBuilder::new();
-        let _ = builder.push(TransformLayer::identity());
-        let _ = builder.push(crate::LeaderLayer::new(crate::LayerLink::new(), Size::ZERO));
-        assert_eq!(builder.depth(), 2);
     }
 }

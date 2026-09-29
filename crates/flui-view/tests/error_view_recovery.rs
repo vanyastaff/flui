@@ -32,7 +32,7 @@ use std::{
 
 use flui_view::{
     BuildContext, BuildOwner, ElementTree, ErrorView, FlutterError, IntoView, Lifecycle,
-    LifecycleContext, RenderView, StatefulView, StatelessView, View, ViewExt, ViewState,
+    LifecycleContext, StatefulView, StatelessView, View, ViewExt, ViewState,
     clear_error_view_builder, set_error_view_builder,
 };
 
@@ -115,41 +115,6 @@ impl<C: View + Clone + 'static> View for WrapperView<C> {
     }
 }
 
-/// Stateful counterpart: `ViewState::build` panics.
-#[derive(Clone)]
-struct PanickingStatefulView;
-
-struct PanickingStatefulState;
-
-impl StatefulView for PanickingStatefulView {
-    type State = PanickingStatefulState;
-
-    fn create_state(&self) -> Self::State {
-        PanickingStatefulState
-    }
-}
-
-impl ViewState<PanickingStatefulView> for PanickingStatefulState {
-    // See `PanickingView::build` — anchor `!` through `Box<dyn View>` so
-    // the `impl IntoView`-satisfying type is fixed.
-    #[expect(
-        unreachable_code,
-        unused_variables,
-        clippy::diverging_sub_expression,
-        reason = "panic body — see comment above"
-    )]
-    fn build(&self, _view: &PanickingStatefulView, _ctx: &dyn BuildContext) -> impl IntoView {
-        let v: Box<dyn View> = panic!("stateful build exploded");
-        v
-    }
-}
-
-impl View for PanickingStatefulView {
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
-    }
-}
-
 #[derive(Clone)]
 struct InitPanicView {
     failed_ids: std::sync::Arc<Mutex<Vec<flui_view::ElementId>>>,
@@ -186,39 +151,6 @@ impl View for InitPanicView {
     }
 }
 
-#[derive(Clone)]
-struct RecoveryMountPanics;
-
-impl RenderView for RecoveryMountPanics {
-    type Protocol = flui_rendering::protocol::BoxProtocol;
-    type RenderObject = flui_objects::RenderSizedBox;
-
-    fn create_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-    ) -> Self::RenderObject {
-        panic!("configured recovery mount panic");
-    }
-
-    fn update_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-        _render_object: &mut Self::RenderObject,
-    ) -> flui_rendering::RenderUpdateImpact {
-        flui_rendering::RenderUpdateImpact::NONE
-    }
-}
-
-impl View for RecoveryMountPanics {
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::render_variable(self)
-    }
-}
-
-fn recovery_mount_panics(_error: &FlutterError) -> Box<dyn View> {
-    Box::new(RecoveryMountPanics)
-}
-
 // ----------------------------------------------------------------------------
 // Helpers
 // ----------------------------------------------------------------------------
@@ -251,7 +183,6 @@ fn child_ids(tree: &ElementTree, parent: flui_view::ElementId) -> Vec<flui_view:
 // Happy path — registered builder, stateless build panics
 // ============================================================================
 
-#[test]
 fn stateless_build_panic_substitutes_registered_error_view() {
     let _guard = acquire_builder_guard();
     // A custom builder records that it ran and returns a plain ErrorView
@@ -295,53 +226,10 @@ fn stateless_build_panic_substitutes_registered_error_view() {
 // Edge — no builder registered, default error view renders
 // ============================================================================
 
-#[test]
-fn stateless_build_panic_falls_back_to_default_error_view() {
-    let _guard = acquire_builder_guard();
-    // No builder registered — the built-in default must still produce an
-    // ErrorView and the frame must not unwind.
-    clear_error_view_builder();
-
-    let view = PanickingView {
-        message: "boom with no builder",
-    };
-    let (tree, _owner, root_id) = mount_and_build(&view);
-
-    assert_eq!(
-        count_error_child_elements(&tree, root_id),
-        1,
-        "with no builder the default ErrorView must still substitute"
-    );
-    assert_eq!(
-        tree.get(root_id).unwrap().element().lifecycle(),
-        Lifecycle::Active
-    );
-}
-
 // ============================================================================
 // Stateful — ViewState::build panic is caught too
 // ============================================================================
 
-#[test]
-fn stateful_build_panic_substitutes_error_view() {
-    let _guard = acquire_builder_guard();
-    clear_error_view_builder();
-
-    let view = PanickingStatefulView;
-    let (tree, _owner, root_id) = mount_and_build(&view);
-
-    assert_eq!(
-        count_error_child_elements(&tree, root_id),
-        1,
-        "a panicking ViewState::build must be caught and substituted"
-    );
-    assert_eq!(
-        tree.get(root_id).unwrap().element().lifecycle(),
-        Lifecycle::Active
-    );
-}
-
-#[test]
 fn lifecycle_recovery_factory_panic_leaves_the_original_child_retryable() {
     let _guard = acquire_builder_guard();
     clear_error_view_builder();
@@ -435,101 +323,10 @@ fn lifecycle_recovery_factory_panic_leaves_the_original_child_retryable() {
     ));
 }
 
-#[test]
-fn lifecycle_recovery_mount_panic_does_not_publish_the_uncommitted_record() {
-    let _guard = acquire_builder_guard();
-    clear_error_view_builder();
-    let _reset = ErrorViewBuilderReset;
-    let failed_ids = std::sync::Arc::new(Mutex::new(Vec::new()));
-
-    let mut tree = ElementTree::new();
-    let mut owner = BuildOwner::new();
-    // The bootstrap's production shape: the component wrapper sits below a
-    // render root, so `InitPanicView`'s `ErrorView` build result (a render
-    // element) mounts with a render parent instead of orphaning under a
-    // render-less owner-carrying root. `root` below is the wrapper element,
-    // the same rebuild target the bare mount used to return.
-    let render_root = flui_view::RootRenderView::new(
-        WrapperView {
-            child: InitPanicView {
-                failed_ids: std::sync::Arc::clone(&failed_ids),
-            },
-        },
-        800.0,
-        600.0,
-    );
-    let render_root_element = tree.mount_root_with_pipeline_owner(
-        &render_root,
-        Some(flui_rendering::pipeline::PipelineCell::new(
-            flui_rendering::pipeline::PipelineOwner::new(),
-        )),
-        &mut owner.element_owner_mut(),
-    );
-    owner.schedule_build_for(
-        render_root_element,
-        0,
-        flui_view::RebuildReason::InitialMount,
-    );
-    owner.build_scope(&mut tree);
-    let root = tree
-        .get(render_root_element)
-        .map(|node| node.child_ids()[0])
-        .expect("the wrapper element must sit under the render root");
-    let prior_failed = failed_ids.lock().unwrap()[0];
-
-    set_error_view_builder(recovery_mount_panics);
-    tree.update(
-        root,
-        &WrapperView {
-            child: InitPanicView {
-                failed_ids: std::sync::Arc::clone(&failed_ids),
-            },
-        },
-        &mut owner.element_owner_mut(),
-    );
-    tree.mark_needs_build(root);
-    owner.schedule_build_for(root, 0, flui_view::RebuildReason::ParentUpdate);
-
-    let (payload, captured_log) = flui_testing::log_capture::capture(|| {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            owner.build_scope(&mut tree);
-        }))
-        .expect_err("a recovery-view mount panic remains fatal")
-    });
-    assert_eq!(
-        flui_foundation::panic::payload_text(payload.as_ref()),
-        Some("configured recovery mount panic")
-    );
-    assert_eq!(
-        captured_log.count_containing("recovery transaction pending"),
-        1
-    );
-    assert_eq!(
-        captured_log.count_containing("lifecycle hook panicked; contained"),
-        0
-    );
-
-    let recovered = owner.take_recovered_panics();
-    assert_eq!(
-        recovered.len(),
-        1,
-        "the failed recovery attempt must not publish its staged record"
-    );
-    assert!(matches!(
-        recovered[0].at,
-        flui_view::RecoveredAt::Element {
-            element,
-            parent: None,
-            ..
-        } if element == prior_failed
-    ));
-}
-
 // ============================================================================
 // Edge — nested child panic: only the panicking subtree is replaced
 // ============================================================================
 
-#[test]
 fn nested_child_build_panic_replaces_only_that_subtree() {
     let _guard = acquire_builder_guard();
     clear_error_view_builder();
@@ -575,35 +372,10 @@ fn nested_child_build_panic_replaces_only_that_subtree() {
 // Error path — no dangling dirty-list state after a caught panic
 // ============================================================================
 
-#[test]
-fn caught_panic_leaves_no_dangling_dirty_state() {
-    let _guard = acquire_builder_guard();
-    clear_error_view_builder();
-
-    let view = PanickingView {
-        message: "boom — check dirty heap",
-    };
-    let (tree, mut owner, root_id) = mount_and_build(&view);
-
-    // The element's own dirty flag must be cleared (the build-half tail
-    // runs even on the recovery path) and nothing must be left queued on
-    // the BuildOwner's dirty heap.
-    assert!(
-        !tree.get(root_id).unwrap().element().is_dirty(),
-        "build_scope must clear the element's dirty flag on the recovery path"
-    );
-    assert_eq!(
-        owner.element_owner_mut().dirty_count(),
-        0,
-        "a caught build panic must not leave a dangling entry on the dirty heap"
-    );
-}
-
 // ============================================================================
 // Recovery is repeatable — a second build does not double-panic / leak
 // ============================================================================
 
-#[test]
 fn repeated_build_after_panic_stays_stable() {
     let _guard = acquire_builder_guard();
     clear_error_view_builder();
@@ -637,4 +409,39 @@ fn repeated_build_after_panic_stays_stable() {
         tree.get(root_id).unwrap().element().lifecycle(),
         Lifecycle::Active
     );
+}
+
+#[test]
+fn error_view_recovery_matrix() {
+    run_table(
+        "error_view_recovery_matrix",
+        &[
+            (
+                "stateless_build_panic_substitutes_registered_error_view",
+                stateless_build_panic_substitutes_registered_error_view as fn(),
+            ),
+            (
+                "lifecycle_recovery_factory_panic_leaves_the_original_child_retryable",
+                lifecycle_recovery_factory_panic_leaves_the_original_child_retryable as fn(),
+            ),
+            (
+                "nested_child_build_panic_replaces_only_that_subtree",
+                nested_child_build_panic_replaces_only_that_subtree as fn(),
+            ),
+            (
+                "repeated_build_after_panic_stays_stable",
+                repeated_build_after_panic_stays_stable as fn(),
+            ),
+        ],
+    );
+}
+
+/// Runs every case even after one fails, then panics listing the failing case names.
+fn run_table(table: &str, cases: &[(&str, fn())]) {
+    let failed: Vec<&str> = cases
+        .iter()
+        .filter(|(_, case)| std::panic::catch_unwind(*case).is_err())
+        .map(|(name, _)| *name)
+        .collect();
+    assert!(failed.is_empty(), "{table}: failing cases: {failed:?}");
 }

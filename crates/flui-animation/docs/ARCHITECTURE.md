@@ -478,6 +478,9 @@ replaced oracle is `repeat_restart_finite_count_exhausts_from_the_phase_origin`
 and `repeat_bounce_flutter_oracle_finite_count_and_absolute_time_rewind`'s
 exhaustion assertion (`crates/flui-animation/src/controller.rs`), which pin
 the new landing/status instead of Flutter's wrap.
+(The `repeat_*` and `without_ticker_bounds_*` names in this document are rows of the table tests
+`repeat_contract_and_flutter_divergences` and `controller_contract` in
+`src/controller_tests.rs`; a failure names its row.)
 
 **`min == max` stays rejected.** Flutter permits the degenerate range
 (`assert(max >= min)`); FLUI does not, the same contract `with_bounds`

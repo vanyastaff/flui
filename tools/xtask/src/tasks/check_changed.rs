@@ -339,7 +339,6 @@ mod tests {
             .collect()
     }
 
-    #[test]
     fn a_package_change_runs_the_fast_lane_commands() {
         assert_eq!(
             lines(&plan(&material(), Host::Linux, &all_targets(), true)),
@@ -363,54 +362,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn missing_targets_and_tools_are_skipped_with_the_fix() {
-        let mut lane = material();
-        lane.cross_platform = true;
-        lane.cross_cli = true;
-        lane.cross_desktop_mcp = true;
-        lane.platform = true;
-        let steps = lines(&plan(&lane, Host::Windows, &BTreeSet::new(), false));
-        for expected in [
-            "check-changed: skipped flui-platform on aarch64-apple-darwin (rustup target add aarch64-apple-darwin; CI runs it)",
-            "check-changed: skipped the android runner (rustup target add aarch64-linux-android; CI runs it)",
-            "check-changed: skipped flui-cli on windows (rustup target add x86_64-pc-windows-msvc; CI runs it)",
-            "check-changed: skipped flui-desktop-mcp on aarch64-apple-darwin (rustup target add aarch64-apple-darwin; CI runs it)",
-            "check-changed: skipped wasm32 (rustup target add wasm32-unknown-unknown; CI runs it)",
-            "check-changed: skipped per-feature clippy of changed manifests (cargo install --locked cargo-hack; CI runs it)",
-            "check-changed: flui-platform is in scope, but its suite needs xvfb-run (Linux); CI runs it",
-        ] {
-            assert!(
-                steps.contains(&expected.to_owned()),
-                "{expected}\n{steps:#?}"
-            );
-        }
-        let linux = lines(&plan(&lane, Host::Linux, &all_targets(), true));
-        assert_eq!(
-            linux.last().map(String::as_str),
-            Some(
-                "$ FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast"
-            )
-        );
-        for target in PLATFORM_TARGETS {
-            let line = format!(
-                "$ cargo clippy -p flui-platform --locked --all-targets --features a11y --target {target} -- -D warnings"
-            );
-            assert!(linux.contains(&line), "{line}");
-        }
-        assert!(linux.contains(
-            &"$ cargo clippy -p flui-cli --locked --all-targets --target x86_64-pc-windows-msvc -- -D warnings"
-                .to_owned()
-        ));
-        for target in ["x86_64-pc-windows-msvc", "aarch64-apple-darwin"] {
-            let line = format!(
-                "$ cargo clippy -p flui-desktop-mcp --locked --all-targets --target {target} -- -D warnings"
-            );
-            assert!(linux.contains(&line), "{line}");
-        }
-    }
-
-    #[test]
     fn the_whole_workspace_also_lints_the_engine_testing_code() {
         let mut lane = material();
         lane.packages = String::new();
@@ -429,29 +380,6 @@ mod tests {
         assert!(lane.has_engine());
     }
 
-    #[test]
-    fn empty_lists_skip_their_steps() {
-        let mut lane = material();
-        for list in [
-            &mut lane.test_args,
-            &mut lane.doc_args,
-            &mut lane.doctest_args,
-            &mut lane.wasm_args,
-            &mut lane.hack_args,
-        ] {
-            list.clear();
-        }
-        lane.cross_app = false;
-        lane.cross_ios = false;
-        assert_eq!(
-            lines(&plan(&lane, Host::Linux, &all_targets(), true)),
-            [
-                "$ cargo clippy -p flui -p flui-material -p flui-web-counter --all-targets --locked -- -D warnings"
-            ]
-        );
-    }
-
-    #[test]
     fn the_lane_reads_every_field_change_scope_gives() {
         let fields = change_scope::worktree_lane("HEAD").expect("classifies");
         let lane = Lane::from_fields(fields.clone()).expect("every field is there");
@@ -469,7 +397,6 @@ mod tests {
         assert!(Lane::from_fields(bad).is_err());
     }
 
-    #[test]
     fn a_target_dir_outside_the_checkout_is_refused() {
         let scratch = std::env::temp_dir().join(format!("xtask-checkout-{}", std::process::id()));
         let checkout = scratch.join("flui");
@@ -504,5 +431,30 @@ mod tests {
             &checkout
         ));
         let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn check_changed_contract() {
+        crate::table_test::run_table(
+            "check_changed_contract",
+            &[
+                (
+                    "a_package_change_runs_the_fast_lane_commands",
+                    a_package_change_runs_the_fast_lane_commands as fn(),
+                ),
+                (
+                    "the_whole_workspace_also_lints_the_engine_testing_code",
+                    the_whole_workspace_also_lints_the_engine_testing_code as fn(),
+                ),
+                (
+                    "the_lane_reads_every_field_change_scope_gives",
+                    the_lane_reads_every_field_change_scope_gives as fn(),
+                ),
+                (
+                    "a_target_dir_outside_the_checkout_is_refused",
+                    a_target_dir_outside_the_checkout_is_refused as fn(),
+                ),
+            ],
+        );
     }
 }

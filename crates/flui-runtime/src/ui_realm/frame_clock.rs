@@ -70,23 +70,6 @@ impl UiRealm {
         self.presentations.primary().set_vsync(vsync);
     }
 
-    /// Whether at least one registered implicit-animation controller is
-    /// currently running, on ANY presentation this realm hosts.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "draw_frame_entered reads has_running() on each presentation's own \
-                      Vsync clone directly, not through this wrapper; kept for \
-                      tests and future external callers"
-        )
-    )]
-    pub(crate) fn has_vsync_running(&self) -> bool {
-        self.presentations
-            .iter()
-            .any(|presentation| presentation.vsync().has_running())
-    }
-
     /// Current virtual seconds for the Vsync tick, relative to this realm's
     /// `start`.
     ///
@@ -391,26 +374,6 @@ impl UiRealm {
         }
     }
 
-    /// Whether the primary presentation should hand a produced frame to the
-    /// engine right now — exactly `!is_deferred()`. See
-    /// [`FrameClock::is_deferred`](flui_scheduler::FrameClock::is_deferred).
-    ///
-    /// `render_frame` consults the SAME query directly at its own
-    /// submit point (see that method's own doc); this forwarder exists for
-    /// tests exercising the deferral contract end to end through `UiRealm`'s
-    /// own API rather than reaching into the presentation's clock directly.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "render_frame reads presentation.clock().is_deferred() directly, \
-                      not through this wrapper; kept for tests and future external callers"
-        )
-    )]
-    pub(crate) fn send_frames_to_engine(&self) -> bool {
-        !self.presentations.primary().clock().is_deferred()
-    }
-
     /// Records a compositor/platform-delivered frame-request signal — a
     /// native `RedrawRequested` the platform actually paces (Wayland's
     /// per-surface frame callbacks; see `docs/adr/ADR-0044-driver-loop-hybrid.md`'s
@@ -432,36 +395,6 @@ impl UiRealm {
             .primary()
             .clock()
             .record_compositor_tick(now);
-    }
-
-    /// Total frames rendered successfully by this presentation.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "draw_frame_entered reads self.presentations.primary().frames_rendered() \
-                      directly for the frame-number computation, not through \
-                      this wrapper; kept for tests and future external callers"
-        )
-    )]
-    pub(crate) fn frames_rendered(&self) -> u64 {
-        self.presentations.primary().frames_rendered()
-    }
-
-    /// Frames dropped due to surface errors on this presentation. See
-    /// `PresentationState::frames_dropped`'s own doc for how this stays
-    /// structurally distinct from `FrameClock::produces_deferred` (a
-    /// backpressure/hidden deferral is never counted here).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no production caller yet -- exercised by \
-                      frame_clock_segment_gate's frames-dropped-vs-deferred pin"
-        )
-    )]
-    pub(crate) fn frames_dropped(&self) -> u64 {
-        self.presentations.primary().frames_dropped()
     }
 
     /// Turn this presentation's performance overlay on or off. See the

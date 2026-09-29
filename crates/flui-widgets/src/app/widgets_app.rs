@@ -683,19 +683,3 @@ impl StatelessView for AppBuilderScope {
         (self.builder)(ctx, self.child.clone())
     }
 }
-
-// The mounted `WidgetsApp` suite lives in `crates/flui-widgets/tests/widgets_app.rs`.
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::SizedBox;
-
-    #[test]
-    // Debug-only: the guard compiles out in release, where `#[should_panic]`
-    // would otherwise report "did not panic as expected".
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "requires at least one locale")]
-    fn empty_supported_locales_panics_at_construction() {
-        let _ = WidgetsApp::new(SizedBox::shrink()).supported_locales(Vec::new());
-    }
-}

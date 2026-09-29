@@ -894,12 +894,10 @@ mod tests {
         assert_eq!(plan.len(), recipe.len(), "{check:?}: {plan:#?}");
     }
 
-    #[test]
     fn the_cli_is_well_formed() {
         Cli::command().debug_assert();
     }
 
-    #[test]
     fn every_recipe_name_parses_to_its_check() {
         for (args, check) in [
             (&["macos-close-path"][..], DeviceCheck::MacosClosePath),
@@ -942,7 +940,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn the_input_check_passes_its_driver_arguments_through_verbatim() {
         let check = parse(&[
             "ios-input-check-app",
@@ -969,7 +966,6 @@ mod tests {
         assert!(parse(&["ios-input-check"]).is_err());
     }
 
-    #[test]
     fn off_macos_the_gated_checks_skip_and_the_drivers_decide_the_rest() {
         let gated = [
             DeviceCheck::MacosClosePath,
@@ -1018,99 +1014,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn macos_close_path_matches_its_recipe() {
-        assert_plan(
-            &DeviceCheck::MacosClosePath,
-            &[
-                "cargo build -p flui-platform --locked --example close_path_probe",
-                "rm -rf target/macos-close-path/ClosePathProbe.app",
-                "mkdir -p target/macos-close-path/ClosePathProbe.app/Contents/MacOS",
-                "cp crates/flui-platform/examples/Info.plist.close_path_probe target/macos-close-path/ClosePathProbe.app/Contents/Info.plist",
-                "cp target/debug/examples/close_path_probe target/macos-close-path/ClosePathProbe.app/Contents/MacOS/close_path_probe",
-                "out=$(RUST_LOG=info target/macos-close-path/ClosePathProbe.app/Contents/MacOS/close_path_probe 2>&1); printf '%s\\n' \"$out\"; unless exit 0 and 'CLOSE_PATH_PROBE_RESULT=PASS' in $out: echo 'macos-close-path FAILED: probe exit code or PASS marker missing (output above)'; exit 1",
-            ],
-        );
-    }
-
-    #[test]
-    fn macos_frame_pump_matches_its_recipe() {
-        assert_plan(
-            &DeviceCheck::MacosFramePump,
-            &[
-                "cargo build -p flui-platform --locked --example frame_pump_probe",
-                "rm -rf target/macos-frame-pump/FramePumpProbe.app",
-                "mkdir -p target/macos-frame-pump/FramePumpProbe.app/Contents/MacOS",
-                "cp crates/flui-platform/examples/Info.plist.frame_pump_probe target/macos-frame-pump/FramePumpProbe.app/Contents/Info.plist",
-                "cp target/debug/examples/frame_pump_probe target/macos-frame-pump/FramePumpProbe.app/Contents/MacOS/frame_pump_probe",
-                "out=$(RUST_LOG=info target/macos-frame-pump/FramePumpProbe.app/Contents/MacOS/frame_pump_probe 2>&1); printf '%s\\n' \"$out\"; unless exit 0 and 'FRAME_PUMP_PROBE_RESULT=PASS' in $out: echo 'macos-frame-pump FAILED: probe exit code or PASS marker missing (output above)'; exit 1",
-            ],
-        );
-    }
-
-    #[test]
-    fn macos_resize_jitter_matches_its_recipe() {
-        assert_plan(
-            &DeviceCheck::MacosResizeJitter,
-            &[
-                "cargo build -p flui --locked --example resize_jitter_probe",
-                "rm -rf target/macos-resize-jitter/ResizeJitterProbe.app",
-                "mkdir -p target/macos-resize-jitter/ResizeJitterProbe.app/Contents/MacOS",
-                "cp examples/Info.plist.resize_jitter_probe target/macos-resize-jitter/ResizeJitterProbe.app/Contents/Info.plist",
-                "cp target/debug/examples/resize_jitter_probe target/macos-resize-jitter/ResizeJitterProbe.app/Contents/MacOS/resize_jitter_probe",
-                "out=$(RUST_LOG=info target/macos-resize-jitter/ResizeJitterProbe.app/Contents/MacOS/resize_jitter_probe 2>&1); printf '%s\\n' \"$out\"; unless exit 0 and 'RESIZE_JITTER_PROBE_RESULT=PASS' and 'RESIZE_JITTER_PROBE_STALE=0' in $out: echo 'macos-resize-jitter FAILED: probe exit code, PASS marker, or the zero stale-size marker is missing (output above)'; exit 1",
-            ],
-        );
-    }
-
-    #[test]
-    fn macos_ime_matches_its_recipe() {
-        assert_plan(
-            &DeviceCheck::MacosIme,
-            &[
-                "cargo build -p flui-platform --locked --example ime_probe",
-                "rm -rf target/macos-ime/ImeProbe.app",
-                "mkdir -p target/macos-ime/ImeProbe.app/Contents/MacOS",
-                "cp crates/flui-platform/examples/Info.plist.ime_probe target/macos-ime/ImeProbe.app/Contents/Info.plist",
-                "cp target/debug/examples/ime_probe target/macos-ime/ImeProbe.app/Contents/MacOS/ime_probe",
-                "out=$(RUST_LOG=info target/macos-ime/ImeProbe.app/Contents/MacOS/ime_probe 2>&1); printf '%s\\n' \"$out\"; unless exit 0 and 'IME_PROBE_RESULT=PASS' in $out: echo 'macos-ime FAILED: probe exit code or PASS marker missing (output above)'; exit 1",
-            ],
-        );
-    }
-
-    #[test]
-    fn macos_launch_render_matches_its_recipe() {
-        assert_plan(
-            &DeviceCheck::MacosLaunchRender,
-            &[
-                "cargo build -p flui --locked --example colored_box_app",
-                "python tools/device-checks/check-macos-launch-render.py target/debug/examples/colored_box_app --runs 5 --expect 240,0,0; if rc=2: echo 'macos-launch-render CANNOT VERIFY: this host could not take the measurement (Screen Recording not granted, or swiftc missing) — a denied capture is NOT a blank window, so nothing was decided; details above'; elif rc!=0: echo 'macos-launch-render FAILED: a launch route was refused, put no window on screen, or put up a window that stayed blank for the whole settle - details and images above'; exit $rc",
-            ],
-        );
-    }
-
-    #[test]
-    fn macos_lifecycle_matches_its_recipe() {
-        assert_plan(
-            &DeviceCheck::MacosLifecycle,
-            &[
-                "cargo build -p flui --locked --release --example lifecycle_probe --features material",
-                "out=$(RUST_LOG=warn target/release/examples/lifecycle_probe 2>&1); printf '%s\\n' \"$out\"; unless exit 0 and 'LIFECYCLE_PROBE_RESULT=PASS' in $out: echo 'macos-lifecycle FAILED: a phase was over budget or the probe did not finish (phase lines above)'; exit 1",
-            ],
-        );
-    }
-
-    #[test]
-    fn macos_a11y_matches_its_recipe() {
-        assert_plan(
-            &DeviceCheck::MacosA11y,
-            &[
-                "python -B tools/device-checks/check-macos-a11y.py; if rc=2: echo 'macos-a11y CANNOT VERIFY: this host could not take the measurement (accessibility trust not granted, or swiftc missing) — details above'; elif rc!=0: echo 'macos-a11y FAILED: the button was not in the accessibility tree, AXPress was refused, or the count did not advance (tree dumps above)'; exit $rc",
-            ],
-        );
-    }
-
-    #[test]
     fn windows_a11y_builds_the_probe_and_drives_it_in_process() {
         assert_plan(
             &DeviceCheck::WindowsA11y,
@@ -1121,39 +1024,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn windows_input_builds_the_probe_and_drives_it_in_process() {
-        assert_plan(
-            &DeviceCheck::WindowsInput,
-            &[
-                "cargo build -p flui --locked --release --example a11y_probe --features material,a11y",
-                "send-input target/release/examples/a11y_probe.exe; if rc=2: echo 'windows-input CANNOT VERIFY: the probe window could not be kept in the foreground, or UI Automation was unavailable — no input was sent past that point; details above'; elif rc!=0: echo 'windows-input FAILED: a missed click changed the count, or a click on the button or Tab then Enter did not advance it (tree dumps above)'; exit $rc",
-            ],
-        );
-    }
-
-    #[test]
-    fn macos_workload_matches_its_recipe() {
-        assert_plan(
-            &DeviceCheck::MacosWorkload,
-            &["python -B tools/device-checks/check-macos-workload.py; exit $rc"],
-        );
-    }
-
-    #[test]
-    fn macos_hot_reload_loop_matches_its_recipe_and_names_the_built_cli() {
-        assert_plan(
-            &DeviceCheck::MacosHotReloadLoop {
-                work: "target/hot-reload-loop/work".into(),
-            },
-            &[
-                "cargo build -p flui-cli --locked",
-                "python -B tools/device-checks/check-hot-reload-loop.py target/hot-reload-loop/work --cli target/debug/flui; exit $rc",
-            ],
-        );
-    }
-
-    #[test]
     fn ios_sim_matches_its_recipe() {
         assert_plan(
             &DeviceCheck::IosSim,
@@ -1199,50 +1069,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn ios_sim_boots_the_simulator_the_environment_names() {
-        let context = Context {
-            target_dir: "target".into(),
-            sim_device: "iPad Pro 13-inch (M4)".into(),
-        };
-        let plan = DeviceCheck::IosSim.plan(&context);
-        assert_eq!(
-            plan[0].to_string(),
-            "xcrun simctl boot 'iPad Pro 13-inch (M4)' 2>/dev/null || true"
-        );
-    }
-
-    #[test]
-    fn ios_input_check_matches_its_recipe() {
-        assert_plan(
-            &DeviceCheck::IosInputCheck {
-                udid: "UDID-1".into(),
-            },
-            &[
-                "cargo build -p flui --locked --features material --example ios_demo --target aarch64-apple-ios-sim",
-                "rm -rf target/ios-input/IosDemo.app",
-                "mkdir -p target/ios-input/IosDemo.app",
-                "cp examples/Info.plist.ios_demo target/ios-input/IosDemo.app/Info.plist",
-                "cp target/aarch64-apple-ios-sim/debug/examples/ios_demo target/ios-input/IosDemo.app/ios_demo",
-                "xcrun simctl uninstall UDID-1 dev.flui.ios-demo 2>/dev/null || true",
-                "python -B tools/device-checks/check-ios-input.py UDID-1 target/ios-input/IosDemo.app; if rc=2: echo 'ios-input-check CANNOT VERIFY: this host could not take the measurement (no Xcode toolchain, the simulator was not booted, or the probe produced no report) - nothing was decided about the framework; details above'; elif rc!=0: echo 'ios-input-check FAILED: a real touch did not reach a widget, or the state it changed did not survive Home/return, or a control did not behave - details and per-stage screenshots above'; exit $rc",
-            ],
-        );
-    }
-
-    #[test]
-    fn ios_safe_area_check_matches_its_recipe() {
-        assert_plan(
-            &DeviceCheck::IosSafeAreaCheck {
-                udid: "UDID-1".into(),
-            },
-            &[
-                "python -B tools/device-checks/check-ios-safe-area.py UDID-1 target/ios-safe-area-check; exit $rc",
-            ],
-        );
-    }
-
-    #[test]
     fn every_staged_input_and_driver_is_in_the_tree() {
         let root = repo_root();
         let checks = [
@@ -1277,5 +1103,39 @@ mod tests {
             }
         }
         assert_eq!(inputs, 13, "committed plists and drivers the plans read");
+    }
+
+    #[test]
+    fn device_check_contract() {
+        crate::table_test::run_table(
+            "device_check_contract",
+            &[
+                ("the_cli_is_well_formed", the_cli_is_well_formed as fn()),
+                (
+                    "every_recipe_name_parses_to_its_check",
+                    every_recipe_name_parses_to_its_check as fn(),
+                ),
+                (
+                    "the_input_check_passes_its_driver_arguments_through_verbatim",
+                    the_input_check_passes_its_driver_arguments_through_verbatim as fn(),
+                ),
+                (
+                    "off_macos_the_gated_checks_skip_and_the_drivers_decide_the_rest",
+                    off_macos_the_gated_checks_skip_and_the_drivers_decide_the_rest as fn(),
+                ),
+                (
+                    "windows_a11y_builds_the_probe_and_drives_it_in_process",
+                    windows_a11y_builds_the_probe_and_drives_it_in_process as fn(),
+                ),
+                (
+                    "ios_sim_matches_its_recipe",
+                    ios_sim_matches_its_recipe as fn(),
+                ),
+                (
+                    "every_staged_input_and_driver_is_in_the_tree",
+                    every_staged_input_and_driver_is_in_the_tree as fn(),
+                ),
+            ],
+        );
     }
 }
