@@ -22,7 +22,10 @@ use flui_rendering::{
 /// Every stamp's token, by boundary.
 fn tokens(t: &LayerTree) -> HashMap<RenderId, ContentToken> {
     t.iter()
-        .filter_map(|(_, node)| Some((node.render_id()?, node.content_token()?.clone())))
+        .filter_map(|(_, node)| {
+            node.boundary()
+                .map(|stamp| (stamp.render_id(), stamp.content().clone()))
+        })
         .collect()
 }
 

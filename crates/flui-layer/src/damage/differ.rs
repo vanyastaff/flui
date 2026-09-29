@@ -60,12 +60,6 @@ impl LayerDiffer {
         }
     }
 
-    /// The current mode.
-    #[must_use]
-    pub fn mode(&self) -> DamageMode {
-        self.mode
-    }
-
     /// Switches mode. Any switch forgets the previous frame, so the next diff
     /// is `Full`; switching [`DamageMode::Off`] also releases its records.
     pub fn set_mode(&mut self, mode: DamageMode) {

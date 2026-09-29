@@ -102,13 +102,6 @@ impl LayerNode {
     pub fn render_id(&self) -> Option<RenderId> {
         self.boundary.as_ref().map(BoundaryStamp::render_id)
     }
-
-    /// The version of the content the boundary painted — see
-    /// [`Self::boundary`].
-    #[inline]
-    pub fn content_token(&self) -> Option<&ContentToken> {
-        self.boundary.as_ref().map(BoundaryStamp::content)
-    }
 }
 
 impl From<Layer> for LayerNode {
@@ -519,7 +512,9 @@ mod tests {
             Some(render_id)
         );
         assert_eq!(
-            tree.get(root).and_then(LayerNode::content_token),
+            tree.get(root)
+                .and_then(LayerNode::boundary)
+                .map(BoundaryStamp::content),
             Some(&content)
         );
         assert_eq!(tree.get(leaf).and_then(LayerNode::render_id), None);

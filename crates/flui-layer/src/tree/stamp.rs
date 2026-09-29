@@ -68,7 +68,7 @@ pub struct BoundaryStamp {
 impl BoundaryStamp {
     /// A stamp for `render_id`'s content version `content`.
     #[must_use]
-    pub fn new(render_id: RenderId, content: ContentToken) -> Self {
+    pub(crate) fn new(render_id: RenderId, content: ContentToken) -> Self {
         Self { render_id, content }
     }
 

@@ -4,11 +4,12 @@
   consecutive scenes' repaint-boundary stamps and produces `DamageRegion::Partial(DamageRect)` or
   `DamageRegion::Unchanged`; `flui-app`'s raster lane sends it, and `flui-engine` renders a partial
   frame into a retained target and blits it, so an unchanged frame does not present at all
-  ([ADR-0087](/docs/adr/ADR-0087-raster-contract-and-cpu-backend.md) §3–§4).
-- **`flui-layer`**: `BoundaryStamp`, `ContentToken`, `DamageRect`, `DamageMode`,
-  `DamageRegion::union` and `Layer::same_effect`.
-- **`flui-painting`**: `DisplayList::damage_extent` and `DrawOp::damage_bounds`, a conservative
-  ink extent (glyph overflow, stroke joins, shadow blur, `Unbounded` for full-canvas fills).
+  ([ADR-0087](/docs/adr/ADR-0087-raster-contract-and-cpu-backend.md) §3–§4). Damage is on by
+  default; `FLUI_DAMAGE=off` switches it off for every window the process opens.
+- **`flui-layer`**: `BoundaryStamp`, `ContentToken`, `DamageRect`, `DamageMode` and
+  `DamageRegion::union`.
+- **`flui-painting`**: `DisplayList::damage_extent` and `DamageExtent`, a conservative ink
+  extent (glyph overflow, stroke joins, shadow blur, `Unbounded` for full-canvas fills).
 - **`cargo xtask bench-collect --with-features`** runs the feature-gated bench targets too.
 
 ### Changed
@@ -19,3 +20,6 @@
 - **`flui-engine`**: `RasterOwner` applies each frame's damage to the backend (`mark_dirty` for a
   partial region) instead of always calling `mark_full_repaint`, including for frames it rejects
   or that a newer submit supersedes; a failed render marks the next frame full.
+- **`flui-engine`**: `Renderer::render_scene` is now the entry point for frames outside a raster
+  owner (direct mode, a hot-reload plugin's scene): it always renders in full and makes the next
+  frame full too. `RasterBackend::render_scene` renders the damage the owner applied.

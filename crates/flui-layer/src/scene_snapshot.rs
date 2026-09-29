@@ -93,18 +93,6 @@ impl DamageRect {
         })
     }
 
-    /// The whole surface of `(width, height)`; `None` for a zero-sized one.
-    #[must_use]
-    pub fn surface(surface: (u32, u32)) -> Option<Self> {
-        let (right, bottom) = surface;
-        (right > 0 && bottom > 0).then_some(Self {
-            left: 0,
-            top: 0,
-            right,
-            bottom,
-        })
-    }
-
     /// The smallest rectangle covering both.
     #[must_use]
     pub fn union(self, other: Self) -> Self {

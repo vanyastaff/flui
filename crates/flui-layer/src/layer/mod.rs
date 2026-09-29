@@ -221,7 +221,7 @@ impl Layer {
     /// `PerformanceOverlay`) apply no effect to a subtree and answer `false`;
     /// an `AnnotatedRegion` changes no pixel and answers `true` for any two.
     #[must_use]
-    pub fn same_effect(&self, other: &Layer) -> bool {
+    pub(crate) fn same_effect(&self, other: &Layer) -> bool {
         match (self, other) {
             (Layer::ClipRect(a), Layer::ClipRect(b)) => a == b,
             (Layer::ClipRRect(a), Layer::ClipRRect(b)) => a == b,
