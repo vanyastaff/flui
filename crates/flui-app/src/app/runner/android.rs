@@ -75,7 +75,7 @@ fn run_android<V>(root: V, config: AppConfig, app: android_activity::AndroidApp)
 where
     V: View + StatelessView + Clone + 'static,
 {
-    use std::{path::PathBuf, sync::Arc};
+    use std::sync::Arc;
 
     use flui_engine::Renderer;
     use flui_platform::{
@@ -88,14 +88,9 @@ where
 
     tracing::info!("Starting Android platform via flui-platform");
 
-    // Hot-reload: build plugin path from app's internal data directory
-    let plugin_path: PathBuf = app.internal_data_path().map_or_else(
-        || PathBuf::from("/data/local/tmp/libflui_scene.so"),
-        |p| p.join("libflui_scene.so"),
-    );
-
-    // Inert unless this build carries the `hot-reload` feature.
-    let hot_reload = ScenePlugin::new(&plugin_path);
+    // The application's development reload hook may own frames with a scene
+    // plugin (`flui run --scene`); inert unless one is installed.
+    let hot_reload = ScenePlugin::from_config(&config, app.internal_data_path().as_deref());
 
     let platform: Box<dyn Platform> = Box::new(AndroidPlatform::new(app));
 
@@ -319,8 +314,8 @@ where
 
                         // If a scene plugin is live it owns this presentation frame,
                         // but the callback still executes inside the realm entry
-                        // scope. Always `false` in a build without the `hot-reload`
-                        // feature. The plugin renders through the backend directly
+                        // scope. Always `false` without an installed development
+                        // reload hook. The plugin renders through the backend directly
                         // (its own diagnostic scene, not a realm-produced frame),
                         // so it goes through the lane's scoped backend access —
                         // per ADR-0045 decision 6 the plugin path is one of the
@@ -661,7 +656,7 @@ where
         // 10. Request initial redraw, now that the window is stored.
         wake();
 
-        tracing::info!("Android platform initialized with callbacks (hot-reload enabled)");
+        tracing::info!("Android platform initialized with callbacks");
         Ok(())
     }
 
