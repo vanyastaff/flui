@@ -21,7 +21,7 @@ use std::{
 };
 
 use super::{
-    Vec2,
+    Offset, Vec2,
     error::GeometryError,
     traits::{FloatUnit, NumericUnit, Unit},
 };
@@ -570,6 +570,56 @@ where
     fn sub_assign(&mut self, rhs: Vec2<T>) {
         self.x = T::sub(self.x, rhs.x);
         self.y = T::sub(self.y, rhs.y);
+    }
+}
+
+// ============================================================================
+// Operators: Point ± Offset = Point (generic)
+// ============================================================================
+
+impl<T> Add<Offset<T>> for Point<T>
+where
+    T: NumericUnit,
+{
+    type Output = Self;
+
+    /// The position `rhs` away from `self`. The scalars must match, so a logical point
+    /// cannot be moved by a device-grid offset.
+    #[inline]
+    fn add(self, rhs: Offset<T>) -> Self {
+        Self::new(T::add(self.x, rhs.dx), T::add(self.y, rhs.dy))
+    }
+}
+
+impl<T> AddAssign<Offset<T>> for Point<T>
+where
+    T: NumericUnit,
+{
+    #[inline]
+    fn add_assign(&mut self, rhs: Offset<T>) {
+        *self = *self + rhs;
+    }
+}
+
+impl<T> Sub<Offset<T>> for Point<T>
+where
+    T: NumericUnit,
+{
+    type Output = Self;
+
+    #[inline]
+    fn sub(self, rhs: Offset<T>) -> Self {
+        Self::new(T::sub(self.x, rhs.dx), T::sub(self.y, rhs.dy))
+    }
+}
+
+impl<T> SubAssign<Offset<T>> for Point<T>
+where
+    T: NumericUnit,
+{
+    #[inline]
+    fn sub_assign(&mut self, rhs: Offset<T>) {
+        *self = *self - rhs;
     }
 }
 
@@ -1172,6 +1222,16 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_point_moves_by_an_offset() {
+        let mut p = Point::new(10.0, 20.0) + Offset::new(1.5, -2.0);
+        assert_eq!(p, Point::new(11.5, 18.0));
+        p -= Offset::new(1.5, -2.0);
+        assert_eq!(p, Point::new(10.0, 20.0));
+        p += Offset::new(0.0, 5.0);
+        assert_eq!(p - Offset::new(0.0, 5.0), Point::new(10.0, 20.0));
+    }
 
     #[test]
     fn test_construction() {

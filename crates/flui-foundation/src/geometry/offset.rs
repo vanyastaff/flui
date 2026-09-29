@@ -598,16 +598,6 @@ impl Offset<f64> {
         det.atan2(dot).abs()
     }
 
-    /// Calculate the angle between this offset and another as typed [`Radians`](crate::geometry::Radians).
-    ///
-    /// Same as [`angle_to`](Self::angle_to), returning the absolute angle
-    /// difference in range [0, π] as a typed unit.
-    #[inline]
-    #[must_use]
-    pub fn angle_to_radians(self, other: impl Into<Offset<f64>>) -> f64 {
-        self.angle_to(other)
-    }
-
     /// Convert this offset to a delta offset.
     #[inline]
     #[must_use]
