@@ -70,7 +70,7 @@ performance-overlay = []
 [dependencies]
 flui-platform-api = { workspace = true }
 # Core FLUI crates
-flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["runtime-internals"] }
+flui-view = { path = "../flui-view", version = "=0.2.0-dev" }
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev" }
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 # Composition-only logging backend. `flui-app` is a composition root, so it is

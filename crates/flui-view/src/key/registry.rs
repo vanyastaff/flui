@@ -43,20 +43,10 @@
 //! nothing. Bindings are `!Send`, so a held lock can only mean re-entry on
 //! the owner thread, never a race with another thread.
 
-use std::{cell::RefCell, mem::ManuallyDrop, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, mem::ManuallyDrop, rc::Rc, sync::Arc};
 
 use crate::view::ElementBase;
 use flui_foundation::{ElementId, ViewKey};
-
-// `build_composite` (below) is the sole user of `HashMap`/`Rc` — both go
-// unused (and therefore unused-import-warn, `-D warnings`-fail under CI's
-// feature-matrix `cargo-hack` sweep) in a build with neither `test` nor
-// `runtime-internals` active, e.g. `flui-widgets`'s own `--features images`
-// test build, which pulls in `flui-view` with its default feature set only.
-// Gated identically to the function that needs them, not a blanket
-// `#[allow(unused_imports)]`.
-#[cfg(any(test, feature = "runtime-internals"))]
-use std::{collections::HashMap, rc::Rc};
 
 /// Snapshot of the framework's global-key lookup surface that
 /// `GlobalKey::current_element` / `with_current_state` consult.
@@ -190,7 +180,6 @@ impl GlobalKeyRegistryHandle {
 /// busy. A visit routed by the cache to a busy member reports busy at once
 /// rather than scanning the others, which could reach an unrelated element
 /// that reuses the same raw id.
-#[cfg(any(test, feature = "runtime-internals"))]
 pub(crate) fn build_composite(members: Vec<GlobalKeyRegistryHandle>) -> GlobalKeyRegistryHandle {
     let resolved_by: Rc<RefCell<HashMap<ElementId, usize>>> = Rc::new(RefCell::new(HashMap::new()));
     let lookup_members = members.clone();
@@ -264,12 +253,10 @@ thread_local! {
 
 /// RAII activation token. Private so only the binding's scoped entry method
 /// can manipulate the ambient registry.
-#[cfg(any(test, feature = "runtime-internals"))]
 struct RegistryActivation {
     expected: GlobalKeyRegistryHandle,
 }
 
-#[cfg(any(test, feature = "runtime-internals"))]
 impl Drop for RegistryActivation {
     fn drop(&mut self) {
         REGISTRY_STACK.with(|stack| {
@@ -288,14 +275,12 @@ impl Drop for RegistryActivation {
     }
 }
 
-#[cfg(any(test, feature = "runtime-internals"))]
 fn activate_registry(handle: GlobalKeyRegistryHandle) -> RegistryActivation {
     REGISTRY_STACK.with(|stack| stack.borrow_mut().push(handle.clone()));
     RegistryActivation { expected: handle }
 }
 
 /// Activate `handle` for the dynamic extent of `f`.
-#[cfg(any(test, feature = "runtime-internals"))]
 pub(crate) fn with_active_registry<R>(
     handle: &GlobalKeyRegistryHandle,
     f: impl FnOnce() -> R,

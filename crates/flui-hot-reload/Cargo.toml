@@ -24,7 +24,6 @@ default = []
 app-plugin = [
     "dep:flui-foundation",
     "dep:flui-view",
-    "flui-view/runtime-internals",
     "dep:flui-rendering",
     "dep:parking_lot",
 ]

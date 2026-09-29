@@ -105,6 +105,7 @@ fn the_re_exports_are_the_facades_types() {
     let _: fn(flui::geometry::Rect) -> flui_sdk::geometry::Rect = |x| x;
     let _: fn(flui::painting::styling::Color) -> flui_sdk::painting::Color = |x| x;
     let _: fn(flui::view::RebuildHandle) -> flui_sdk::view::RebuildHandle = |x| x;
+    let _: fn(flui::view::WidgetsBinding) -> flui_sdk::view::WidgetsBinding = |x| x;
     let _: fn(flui::view::dev_reload::ReloadWake) -> flui_sdk::view::dev_reload::ReloadWake = |x| x;
     let _: fn(flui::widgets::Text) -> flui_sdk::widgets::Text = |x| x;
 
@@ -147,6 +148,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub mod pipeline {",
         "pub mod platform {",
         "pub mod rendering {",
+        "pub mod view {",
         "pub use flui_animation as animation;",
         "pub use flui_foundation as foundation;",
         "pub use flui_foundation::geometry;",
@@ -178,7 +180,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_rendering::hit_testing::HitTestBehavior;",
         "pub use flui_rendering::protocol::BoxProtocol;",
         "pub use flui_scheduler::FrameSnapshot;",
-        "pub use flui_view as view;",
+        "pub use flui_view::*;",
         "pub use flui_widgets as widgets;",
     ];
     assert_eq!(declared_surface(), pinned);

@@ -16,7 +16,6 @@ pub struct LifecycleClosed;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Phase {
     Open,
-    #[cfg(any(test, feature = "runtime-internals"))]
     Closing,
     Closed,
 }
@@ -200,7 +199,6 @@ impl LifecycleSource {
     }
     /// Last committed local observation, including during terminal cleanup.
     #[must_use]
-    #[cfg(any(test, feature = "runtime-internals"))]
     pub fn current(&self) -> Option<AppLifecycleState> {
         self.inner.0.borrow().current
     }
@@ -211,7 +209,6 @@ impl LifecycleSource {
         self.commit_for_phase(state, Phase::Open)
     }
     /// Fence new subscriptions and ordinary commits before terminal callbacks.
-    #[cfg(any(test, feature = "runtime-internals"))]
     pub fn begin_close(&self) {
         let mut state = self.inner.0.borrow_mut();
         if state.phase == Phase::Open {
@@ -221,7 +218,6 @@ impl LifecycleSource {
     /// Commit an authorized terminal ladder step after `begin_close`.
     /// # Errors
     /// Returns [`LifecycleClosed`] outside the terminal notification phase.
-    #[cfg(any(test, feature = "runtime-internals"))]
     pub fn commit_terminal(&self, state: AppLifecycleState) -> Result<(), LifecycleClosed> {
         self.commit_for_phase(state, Phase::Closing)
     }
@@ -299,7 +295,6 @@ impl LifecycleSource {
     }
     /// Invalidate capabilities and release callbacks before widget disposal.
     /// Cleanup completes before any callback-capture destructor panic resumes.
-    #[cfg(any(test, feature = "runtime-internals"))]
     pub fn finish_close(&self) {
         self.begin_close();
         self.inner.0.borrow_mut().finish_requested = true;
@@ -339,6 +334,7 @@ impl Drop for LifecycleSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::__runtime::BindingRuntime as _;
     use AppLifecycleState::{Detached, Hidden, Inactive, Resumed};
     static_assertions::assert_not_impl_any!(LifecycleHandle: Send, Sync);
     static_assertions::assert_not_impl_any!(LifecycleSubscription: Send, Sync);

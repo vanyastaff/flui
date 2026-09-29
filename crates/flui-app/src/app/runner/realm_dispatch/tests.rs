@@ -13,7 +13,7 @@ use flui_interaction::{
     events::{PointerType, make_down_event},
 };
 use flui_platform::traits::{PlatformInput, PlatformWindow};
-use flui_view::View;
+use flui_view::{__runtime::BindingRuntime as _, View};
 
 use super::super::host::{
     OwnerHostClearGuard, install_exit_policy_hook, install_owner_platform, with_owner_platform,

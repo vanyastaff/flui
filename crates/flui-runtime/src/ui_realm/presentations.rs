@@ -8,7 +8,7 @@ use flui_foundation::PresentationId;
 use flui_interaction::FocusManager;
 use flui_interaction::GestureBinding;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
-use flui_view::GlobalKeyRegistryComposite;
+use flui_view::__runtime::GlobalKeyRegistryComposite;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 #[cfg(any(test, feature = "test-support"))]
 use std::rc::Rc;

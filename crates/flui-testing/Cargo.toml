@@ -48,7 +48,7 @@ flui-platform-api = { workspace = true }
 # Canonical hit-test positions accepted by the production input pipeline.
 # The element tree + build owner this binding drives each frame (`build_scope`
 # drains the external inbox an animation/listenable tick fills).
-flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["runtime-internals"] }
+flui-view = { path = "../flui-view", version = "=0.2.0-dev" }
 # The pipeline owner the frame loop lays out / paints / composites (`run_frame`).
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev" }
 # The process-wide `FontSystem` text measurement resolves against. `fonts`

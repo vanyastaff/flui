@@ -192,7 +192,7 @@ struct TreeBinding {
 /// move or share the binding itself.
 #[derive(Debug)]
 pub struct HeadlessBinding {
-    lifecycle: flui_view::LifecycleSource,
+    lifecycle: flui_view::__runtime::LifecycleSource,
     /// The single virtual time authority. Every time-based read flows from here.
     clock: ManualClock,
     /// The canonical input owner. Its arena, pointer routes, coalescing queues,
@@ -299,7 +299,7 @@ impl HeadlessBinding {
         let local_post_frame = scheduler.new_local_post_frame_lane();
         let interaction_lane = InteractionLane::try_new()?;
         Ok(Self {
-            lifecycle: flui_view::LifecycleSource::new(),
+            lifecycle: flui_view::__runtime::LifecycleSource::new(),
             clock,
             gestures,
             vsync: Vsync::new(),

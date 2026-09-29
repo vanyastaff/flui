@@ -160,21 +160,15 @@ mod test_only_global_key_registry {
 
 // View traits
 // Binding
-mod lifecycle;
-#[cfg(feature = "runtime-internals")]
 #[doc(hidden)]
-pub use lifecycle::LifecycleSource;
+pub mod __runtime;
+mod lifecycle;
 pub use lifecycle::{LifecycleClosed, LifecycleHandle, LifecycleSubscription};
 
 pub use binding::{
     AppExitResponse, AppLifecycleState, AttachError, PredictiveBackEvent, RouteInformation,
     ViewFocusDirection, ViewFocusEvent, ViewFocusState, WidgetsBinding, WidgetsBindingObserver,
 };
-// Internal seam (see `GlobalKeyRegistryComposite`'s own doc): re-exported only
-// under the same `runtime-internals`/test gate the type itself is defined
-// behind, so an ordinary downstream build never sees it.
-#[cfg(any(test, feature = "runtime-internals"))]
-pub use binding::GlobalKeyRegistryComposite;
 // Child helpers
 pub use child::{Child, Children};
 // Context
