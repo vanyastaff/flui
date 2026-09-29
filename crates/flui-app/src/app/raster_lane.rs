@@ -158,6 +158,31 @@ impl RasterResizeHook {
     }
 }
 
+/// The environment variable that switches damage production off for every
+/// presentation the process opens: `FLUI_DAMAGE=off` sends every frame as
+/// `Full`, retains nothing and never renders a partial frame (ADR-0087 §3).
+/// It is the fallback for stale pixels in the field, read once per lane, and
+/// stays until an `AppConfig` switch carries the same choice per app.
+#[cfg(not(target_arch = "wasm32"))]
+const DAMAGE_ENV: &str = "FLUI_DAMAGE";
+
+/// The damage mode [`DAMAGE_ENV`]'s value selects: `off` (any case) turns
+/// damage off; unset, empty or `on` keeps the default; anything else keeps
+/// the default and says so, since a typo must not silently disable the
+/// fallback someone reached for.
+#[cfg(not(target_arch = "wasm32"))]
+fn damage_mode_from(value: Option<&str>) -> DamageMode {
+    match value.map(str::trim) {
+        None | Some("") => DamageMode::default(),
+        Some(value) if value.eq_ignore_ascii_case("off") => DamageMode::Off,
+        Some(value) if value.eq_ignore_ascii_case("on") => DamageMode::default(),
+        Some(value) => {
+            tracing::warn!(value, "{DAMAGE_ENV} takes `on` or `off`; damage stays on");
+            DamageMode::default()
+        }
+    }
+}
+
 /// The inline raster lane: a [`RasterOwner`] pumped synchronously on the
 /// owner thread, plus the stamp state that keeps its frames fresh.
 ///
@@ -205,7 +230,7 @@ impl<B: RasterBackend> RasterLane<B> {
                 physical_size: (width, height),
             }),
         });
-        Self {
+        let mut lane = Self {
             owner,
             handle,
             ack_rx,
@@ -214,20 +239,14 @@ impl<B: RasterBackend> RasterLane<B> {
             epoch: FrameEpoch::ZERO,
             stamp,
             damage: LayerDiffer::default(),
-        }
+        };
+        lane.set_damage_mode(damage_mode_from(std::env::var(DAMAGE_ENV).ok().as_deref()));
+        lane
     }
 
     /// Switches damage production on or off for this presentation.
     /// [`DamageMode::Off`] retains nothing and sends every frame as `Full`,
     /// at the per-frame cost of having no differ.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the application-level switch reaches this once `AppConfig` carries it; \
-                      until then damage runs in its default mode"
-        )
-    )]
     pub(crate) fn set_damage_mode(&mut self, mode: DamageMode) {
         self.damage.set_mode(mode);
     }
@@ -742,6 +761,25 @@ mod tests {
             lane.submit_and_pump(stamped_scene(&root, &child, at)),
             SubmitVerdict::NoPresent
         );
+    }
+
+    /// `FLUI_DAMAGE` is the field fallback: `off` in any case turns damage
+    /// off, and nothing else does, a typo included.
+    #[test]
+    fn the_damage_variable_selects_the_mode() {
+        for off in ["off", "OFF", " Off "] {
+            assert_eq!(damage_mode_from(Some(off)), DamageMode::Off, "{off:?}");
+        }
+        for on in [
+            None,
+            Some(""),
+            Some("on"),
+            Some("ON"),
+            Some("of"),
+            Some("0"),
+        ] {
+            assert_eq!(damage_mode_from(on), DamageMode::default(), "{on:?}");
+        }
     }
 
     #[test]
