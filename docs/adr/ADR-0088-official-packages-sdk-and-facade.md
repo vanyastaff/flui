@@ -60,7 +60,7 @@ The facade publicly re-exports Material: `pub use flui_material as material` beh
 (`src/lib.rs:146-149`) and a Material half of the prelude (`src/lib.rs:267-276`). The facade
 also carries a `hot-reload` feature that pulls `flui-hot-reload` and `flui-app/hot-reload`
 (`Cargo.toml:630`), and `flui-app` has its own optional edge to `flui-hot-reload`
-(`crates/flui-app/Cargo.toml:65`, `:108`; removed on 2026-09-29, see move 4).
+(`crates/flui-app/Cargo.toml:65`, `:108`; since removed, see move 4).
 `flui-material` has no `prelude` module.
 
 Other edges from core crates to what the review classifies as official packages:

@@ -88,8 +88,11 @@ The loop attaches the hook once, before the first window, and detaches it when
 it ends. Every realm polls it at its frame boundary, on the owner thread; a
 reload (or a worker's `request_rebuild`) is applied once to every realm, as a
 reassemble that keeps `State`. A hook that panics is dropped and the app keeps
-running without reload. The Android `--scene` host installs
-`flui::hot_reload::ScenePluginHook` the same way.
+running without reload. An idle window applies a reload when it next draws.
+The Android `--scene` host installs `flui::hot_reload::ScenePluginHook` the
+same way; the Android runner calls only its `scene_frame`, so a worker hook
+does nothing there, and it warns when a scene plugin is on the device but no
+hook is installed.
 
 ### The host watches the artifact, not the clock
 

@@ -2,13 +2,14 @@
 
 - `flui::view::dev_reload` (`DevReloadHook`, `ReloadEvent`, `ReloadWake`): the development-reload seam of ADR-0094 §1. The host attaches an installed hook once per event loop, polls it at every realm's frame boundary and applies a patch once to every realm; a hook that panics is dropped and the app keeps running.
 - `AppConfig::with_dev_reload` and the `dev_reload` field, which install a hook on the application's configuration.
-- `flui_hot_reload::WorkerReloadHook` (the host/worker dlopen reload, with its artifact watcher) and `flui_hot_reload::ScenePluginHook` (Android `flui run --scene` frames), the hooks a host installs.
+- `flui_hot_reload::WorkerReloadHook` (the host/worker dlopen reload, with its artifact watcher) and `flui_hot_reload::ScenePluginHook` (Android `flui run --scene` frames), the hooks a host installs, behind `flui-hot-reload`'s new `host-hook` feature (the facade's `hot-reload` feature turns it on). A scene plugin or worker crate on `flui-hot-reload`'s default features does not build the widget catalog.
 
 ### Changed
 
 - The facade's `hot-reload` feature no longer changes `flui-app`; it only re-exports `flui-hot-reload` as `flui::hot_reload`. `flui-app` names no reload crate under any feature.
 - An Android app that wants `flui run --scene` frames installs `ScenePluginHook` (`ScenePluginHook::device_library_path` gives the path the CLI pushes to); the runner no longer loads `libflui_scene.so` on its own.
-- A worker's `request_rebuild` now reassembles every realm; before, only the most recently opened window's. A secondary window reloads only when it is opened with the application's configuration.
+- A worker's `request_rebuild` now reassembles every realm; before, only the most recently opened window's. Each window applies it when it next draws, so an idle secondary window catches up on its next frame. A secondary window reloads only when it is opened with the application's configuration.
+- `flui-app` no longer loads a worker from `FLUI_WORKER_PLUGIN` by itself; with no hook installed it only warns that the variable is set. A host that relied on the variable installs `WorkerReloadHook` with the path it names. Likewise the Android runner warns when a scene plugin is on the device and no hook is installed.
 
 ### Removed
 

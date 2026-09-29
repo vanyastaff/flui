@@ -21,12 +21,6 @@
 - **Refs:** decision D15 in the [decision index](../../design/decisions.md); the dynamic linking
   study in [`design/dynamic-linking.md`](../../design/dynamic-linking.md)
 
-What has landed: the driver half of §1's hook (`flui_view::dev_reload`), installed with
-`AppConfig::with_dev_reload`; `flui-hot-reload`'s dlopen worker and scene plugin implement it;
-and §2's removal of `flui-app`'s feature, optional dependency and edge exception. The facade's
-edge and feature, the move to `packages/`, the per-call seam and everything Subsecond-specific
-have not (see "§1 as implemented" and §2).
-
 ## Context
 
 Hot reload today loads a worker `cdylib` with `dlopen`/`LoadLibrary` and re-runs `build()` in
@@ -188,11 +182,11 @@ over that raw shape is settled in the Subsecond implementation step.
 - The reload tier type belongs to the runtime. `flui_hot_reload::HotReloadTier` leaves
   `flui-app`'s signatures.
 
-#### §1 as implemented (2026-09-29): the hook lands in two halves
+#### §1 as implemented: the hook lands in two halves
 
 The hook is split so the edge from `flui-app` could go before Subsecond exists.
 
-- **The driver half has landed.** `flui_view::dev_reload` holds `DevReloadHook` with
+- **The driver half.** `flui_view::dev_reload` holds `DevReloadHook` with
   `attach(ReloadWake)`, `detach()`, `poll() -> ReloadEvent` and
   `scene_frame(width, height, &mut dyn FnMut(&Scene)) -> bool`, and a `ReloadEvent` of
   `Unchanged` and `Patched`. A package reaches it as `flui_sdk::view::dev_reload`, which the
@@ -209,8 +203,10 @@ The hook is split so the edge from `flui-app` could go before Subsecond exists.
 - **`Patched` reaches every realm once, at its frame boundary, not through the owner inbox.**
   Each realm polls the hook at its frame boundary on the owner thread, before the frame's own
   work. A poll that returns `Patched` advances an epoch; each realm reassembles
-  (`ReloadTier::Reassemble`) when its own boundary finds it behind the latest patch, and a realm
-  first seen after a patch starts at the current epoch. This replaces the owner-queued command
+  (`ReloadTier::Reassemble`) when its own boundary finds it behind the latest patch. The runner
+  records a realm at the current epoch when its root mounts, since the tree is built from the
+  code loaded then: a realm mounted before a patch applies it at its first frame, and one mounted
+  after it does not replay it. An idle window applies a patch when it next draws. This replaces the owner-queued command
   of the bullet above: the poll already runs on the owner thread at a boundary, so queueing
   adds nothing, and the epoch keeps a patch that one realm's poll saw from being lost to the
   others. The worker's `request_rebuild` now sets a flag and wakes the host through the same
@@ -220,10 +216,21 @@ The hook is split so the edge from `flui-app` could go before Subsecond exists.
   is dropped inside its own containment and never called again; the frame continues and the
   realm is untouched. A `detach` that arrives while a call has the hook runs when that call
   returns.
-- **`flui-hot-reload` hosts the dlopen paths on it.** `WorkerReloadHook` watches the worker
-  artifact from `attach`, reloads it on `poll`, and turns a worker's rebuild request into
-  `Patched`; `ScenePluginHook` draws Android `--scene` frames through `scene_frame`, lending the
-  scene to the host so it cannot outlive the library that built it.
+- **Each host calls a fixed set of methods.** Desktop and iOS call `attach`, `poll` and
+  `detach`; Android calls only `scene_frame`, and logs so when a hook is installed; the web calls
+  none. The trait's module docs carry the table.
+- **`flui-hot-reload` hosts the dlopen paths on it**, behind its `host-hook` feature, because the
+  trait comes through `flui-sdk` and a scene plugin or worker `cdylib` that only loads code must
+  not build the widget catalog (a reach fact pins its default graph free of `flui-widgets`).
+  `WorkerReloadHook` watches the worker artifact from `attach`, reloads it on `poll`, and turns a
+  worker's rebuild request into `Patched`; `ScenePluginHook` draws Android `--scene` frames
+  through `scene_frame`, lending the scene to the host so it cannot outlive the library that
+  built it.
+- **No edge from `flui-app`.** Its `hot-reload` feature, optional dependency and
+  `edge-exceptions` entry are gone; the reach facts say `flui-hot-reload` is absent from
+  `flui-app`'s graph under every feature, that the facade's feature brings it in, and that the
+  first-party host enables its `app-plugin`. What still blocks §2 is tracked in ADR-0088's
+  move-4 row and the migration plan.
 - **The per-call seam is not built yet.** `call(entry, data)` and `ReloadEvent::RestartRequired`
   land with the Subsecond implementation, their first producer; until then they would be
   surface nothing reaches.
@@ -236,15 +243,6 @@ into the official packages. The application adds the package itself, and the `fl
 template adds it for development builds. The three hot-reload facts of the reach gate
 (ADR-0081 §2) are replaced in this change by the "core names no official
 crate" rule (ADR-0081 §3, ADR-0088 §2), whose dated exceptions for these edges expire here.
-
-**Status (2026-09-29).** `flui-app`'s half is done: its `hot-reload` feature, its optional
-dependency and its `edge-exceptions` entry are gone, and the reach facts now say
-`flui-hot-reload` is absent from `flui-app`'s graph under every feature, that the facade's
-feature brings it in, and that the first-party host enables its `app-plugin`. The facade's
-edges and feature stay until the move, which waits on the `runtime-internals` change
-(ADR-0081 §4), an ADR-0088 decision on the plugin ABI's SDK items (`Scene`, `LayerTree`,
-`PipelineCell`, `PipelineOwner`), and CI's wasm32 check of the facade, which names the feature
-(see ADR-0088's move-4 row).
 
 ### 3. The package implements the hook on Subsecond
 
@@ -345,7 +343,9 @@ The spike seam exists on `spike/subsecond` (not merged). The driver half of §1 
 
 - **Host (`crates/flui-app/src/app/hot_reload/tests.rs`).** A patch polled through the hook
   reassembles the realm; with no hook, or an `Unchanged` poll, nothing is marked dirty; one patch
-  reaches each of two realms exactly once; a realm first polled after a patch does not replay it;
+  reaches each of two realms exactly once; a realm mounted before a patch that another realm's
+  poll took applies it at its first boundary; a realm first polled after a patch does not replay
+  it;
   a panicking `poll` (with a panicking `Drop`) is contained, the hook dropped once and never
   polled again; `attach` and `detach` pair once per loop and a second attach is refused; a detach
   that arrives during a hook call runs when the call returns; a panicking `attach` leaves the
@@ -357,7 +357,8 @@ The spike seam exists on `spike/subsecond` (not merged). The driver half of §1 
   `detach` neither wakes nor patches; an artifact change wakes the host; dropping an attached
   hook joins its watcher; a scene hook with no plugin draws nothing.
 - **No edge.** `cargo xtask reach`'s facts: `flui-hot-reload` is absent from `flui-app`'s graph
-  by default and with `--all-features`.
+  by default and with `--all-features`, and `flui-widgets` is absent from `flui-hot-reload`'s
+  default graph.
 
 None of the tests below exists yet.
 
