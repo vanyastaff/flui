@@ -12,7 +12,7 @@
   event-log shapes; the `flui-mcp` library; `flui-testing`'s query types; §3's server in
   `flui-devtools`, its transport and `flui mcp`; and §§4–5.
 - **Date:** 2026-09-25
-- **Amends (on acceptance of §3, not yet accepted):** [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md)
+- **Amends (once §3's transport is accepted; §3's realm half is):** [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md)
   (settles its "Not decided here" in-process transport; the wire contract is unchanged)
 - **Related:** [ADR-0040](ADR-0040-tree-observation-seam.md),
   [ADR-0079](ADR-0079-keyboard-activation-and-focus-for-assistive-technology.md),
@@ -115,7 +115,9 @@ This settles ADR-0080's open item:
 - `flui mcp` is an MCP server over stdio that proxies to that endpoint. The agent sees one MCP
   server whether it drives a FLUI app in-process or any app through the OS.
 - The handle table belongs to the backend, not to the MCP session, which keeps the design
-  compatible with a stateless MCP transport.
+  compatible with a stateless MCP transport. The realm's `SemanticsAgent` reports render
+  identities scoped to one presentation (another window can report the same `e<n>`); the
+  backend's table maps them when a session spans windows.
 
 ### 4. A normalized outline projection is the cross-backend contract
 
@@ -129,6 +131,9 @@ This settles ADR-0080's open item:
 For the same application state, the projection of the UIA backend's tree and the projection of
 the in-process backend's tree are equal. The projection is a test artifact and a golden-file
 format, not the wire: replies still carry `role` and `native_role` exactly as ADR-0080 defines.
+Under §2 as amended, the in-process backend's replies already carry the role UI Automation
+would report (the desktop backend's `role`), with the AccessKit name in `native_role`, so the
+projection's fold is the identity on them.
 
 ### 5. Tests, devtools and agents share artifacts
 
@@ -145,9 +150,15 @@ differs from its version's file. Any change to the schema bumps `minor` and adds
 file; a change additive in ADR-0080's sense needs nothing more, and a test checks that each
 published schema is contained in the next. A change that is not additive is listed in
 `version::BREAKING` with the ADR that decided it; after 1.0 it also bumps `major` and that ADR
-supersedes ADR-0080. Two fields are additive under ADR-0080 and new here: `protocol`, and
-`coordinates` (`screen`, left out, or `surface` for the in-process backend, which knows no
-window position).
+supersedes ADR-0080. A change that gives an existing field a new meaning is not additive
+either, though the schema's shape does not show it; it goes under a new name instead. An older
+reader still reads a newer reply: an unknown field is ignored, an unknown role reads as
+`unknown`, an unknown action name is dropped from a node's `actions`, and an unknown error code
+reads as `platform`. Two optional fields are new here: `protocol` on a `Tree` (a reply without it
+reads as unversioned), and `surface_rect` on a `Node`, the bounds from the window's drawing
+surface that the in-process backend reports in place of `rect`, which stays screen pixels: the
+realm knows no window position, and a client that reads `rect` as screen pixels must find none
+rather than a misplaced one.
 
 ## Alternatives considered
 
@@ -204,23 +215,31 @@ For the accepted part:
   (`tests/wire_schema.rs`); `the_error_codes_are_adr_0080s`,
   `element_ids_serialize_as_e_handles_and_refuse_other_spellings`,
   `a_node_at_its_defaults_serializes_only_role_id_and_native_role` and
-  `outline_is_one_line_per_element`.
+  `outline_is_one_line_per_element`, `a_newer_role_or_action_name_does_not_fail_the_read`,
+  `surface_bounds_are_not_spelled_rect` and
+  `a_tree_says_its_version_and_a_reply_without_one_reads_as_unversioned`.
 - **Mapping pinned.** `cargo nextest run -p flui-semantics agent`:
   `every_role_but_the_documented_ones_reads_as_a_wire_role` walks every semantics role (`none`,
   `drag_handle` and `hot_key` are the documented exceptions, published as a container the wire
   lifts), with `every_role_bearing_flag_reads_as_the_role_uia_reports`,
   `wire_role_matches_the_windows_adapter_for_every_role_flui_publishes`,
+  `the_role_fold_was_transcribed_from_the_locked_windows_adapter`,
   `generic_containers_are_lifted_and_hidden_subtrees_dropped`,
   `advertised_actions_follow_the_uia_patterns`, `expand_on_an_expanded_node_is_action_unsupported`,
   `set_value_reaches_set_text_with_its_text`, `a_disabled_node_refuses_with_disabled`,
   `read_honours_max_depth_and_max_nodes_and_says_truncated` and
   `a_read_tree_round_trips_through_json`.
 - **The realm half of §3.** `cargo nextest run -p flui-runtime agent_semantics`: a counter's
-  tree read as wire nodes, a tap through the agent reaching the widget's handler and its
-  signal, `busy` before the first semantics frame, collection stopping with the last agent,
-  `gone` for a node that left the tree and for a closed window, `unknown_handle` for a handle
-  no read reported, `busy` on a full inbox, a panicking handler failing its reply first and
-  leaving the queued read for the next drain, and traces without labels or values.
+  tree read as wire nodes, a tap through the agent delivered to the widget's handler (a
+  `GestureDetector` runs it in the next frame, so the reply's `Ok` means delivered, and the
+  signal's new value reads two frames on), `busy` before the first semantics frame, collection
+  stopping with the last agent even while a reply is unanswered, `gone` for a node that left the
+  tree and for a closed window, `unknown_handle` for a handle no read reported (for a read scoped
+  to it as for an action), a record of issued handles bounded by render slots, `busy` on a full
+  inbox, a panicking handler failing its reply first and leaving the queued read for the next
+  drain, a panic before the handler reported as `ResolvePanicked` rather than the handler's, and
+  traces without labels or values. The in-process `expand`/`collapse` check reads the committed
+  tree and does not close the double-toggle race (`flui-semantics` mapping decisions 5 and 7).
 - **Round trip against the wire, in part.** `cargo nextest run -p flui-desktop-mcp`:
   `the_desktop_node_is_a_protocol_node` (the desktop server's node JSON reads as
   `flui_protocol::Node`, writes back unchanged, and outlines the same) and
