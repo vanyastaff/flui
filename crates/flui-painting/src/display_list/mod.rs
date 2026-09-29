@@ -54,6 +54,11 @@ pub struct DisplayList {
     /// the ink, since a damage region computed from it decides which pixels a
     /// partial repaint may leave untouched.
     pub(crate) damage: Option<DamageExtent>,
+
+    /// Cached extent of every command whose pixels come from outside the
+    /// list, or `None` while no such command was recorded — see
+    /// [`Self::volatile_extent`].
+    pub(crate) volatile: Option<DamageExtent>,
 }
 
 /// Folds one command's bounds into an accumulating union: the one place that
@@ -89,6 +94,7 @@ impl DisplayList {
             commands: Vec::new(),
             bounds: None,
             damage: None,
+            volatile: None,
         }
     }
 
@@ -138,12 +144,30 @@ impl DisplayList {
         self.damage
     }
 
+    /// The extent of the commands whose pixels this list does not
+    /// determine, in the list's own coordinate space; `None` when there is
+    /// none.
+    ///
+    /// A texture draw (`DrawOp::Texture`) names an external texture whose
+    /// content its producer (a video decoder, a camera, a platform surface)
+    /// replaces behind the same id, so replaying an unchanged list can paint
+    /// different pixels there. A damage producer that vouches for unchanged
+    /// content by the list's identity treats this extent as changed on
+    /// every frame.
+    #[must_use]
+    pub fn volatile_extent(&self) -> Option<DamageExtent> {
+        self.volatile
+    }
+
     pub(crate) fn push(&mut self, command: DrawCommand) {
         if let Some(cmd_bounds) = command.bounds() {
             accumulate_bounds(&mut self.bounds, cmd_bounds);
         }
         if let Some(extent) = command.damage_extent() {
             accumulate_damage(&mut self.damage, extent);
+            if matches!(command.op, DrawOp::Texture { .. }) {
+                accumulate_damage(&mut self.volatile, extent);
+            }
         }
         self.commands.push(command);
     }
@@ -152,6 +176,7 @@ impl DisplayList {
         self.commands.clear();
         self.bounds = None;
         self.damage = None;
+        self.volatile = None;
     }
 
     /// Moves every command of `other` onto the end of this list, unioning
@@ -166,6 +191,7 @@ impl DisplayList {
             std::mem::swap(&mut self.commands, &mut other.commands);
             self.bounds = other.bounds;
             self.damage = other.damage;
+            self.volatile = other.volatile;
         } else if !other.commands.is_empty() {
             self.commands.append(&mut other.commands);
             if let Some(other_bounds) = other.bounds {
@@ -173,6 +199,9 @@ impl DisplayList {
             }
             if let Some(other_damage) = other.damage {
                 accumulate_damage(&mut self.damage, other_damage);
+            }
+            if let Some(other_volatile) = other.volatile {
+                accumulate_damage(&mut self.volatile, other_volatile);
             }
         }
     }

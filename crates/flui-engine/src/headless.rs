@@ -509,6 +509,52 @@ impl RetainedCapture {
         self.fail_after_begin = true;
     }
 
+    /// Registers a one-texel external texture of `rgba` under `id`, or, when
+    /// `id` is registered already, replaces its content through
+    /// `ExternalTextureRegistry::update`, as a video decoder hands over its
+    /// next frame behind the same id.
+    pub(crate) fn set_solid_texture(&mut self, id: flui_painting::paint::TextureId, rgba: [u8; 4]) {
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("retained capture external texture"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        let registry = self.painter.external_texture_registry_mut();
+        if registry.get(id).is_some() {
+            assert!(registry.update(id, texture), "the texture is registered");
+        } else {
+            registry.register(id, texture, 1, 1, true, false);
+        }
+    }
+
     /// Renders every later frame through the retained target, as on a
     /// surface without `COPY_SRC`.
     pub(crate) fn require_intermediate(&mut self) {

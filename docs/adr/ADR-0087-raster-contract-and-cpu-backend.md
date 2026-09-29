@@ -213,20 +213,27 @@ platform-contract and frame-transaction changes (ADR-0082, ADR-0083); ordering i
   `an_ancestor_opacity_change_damages_nested_boundaries`, `clip_bounds_the_region`,
   `unbounded_picture_takes_the_clip`, `unstamped_root_is_full`, `root_id_change_is_full`,
   `size_change_is_full`, `textures_and_overlays_are_damaged_every_frame`,
+  `a_pictures_texture_draw_is_damaged_every_frame`,
+  `a_shadow_under_a_non_uniform_scale_damages_its_blur_on_both_axes`,
   `a_leader_move_damages_its_follower`, `damage_meeting_a_backdrop_includes_the_backdrop`,
   `damage_disjoint_from_a_backdrop_does_not_expand`, `damage_over_threshold_is_full`,
   `off_retains_nothing_and_is_always_full`, `a_boundary_stamped_twice_is_full`),
   `scene_snapshot.rs`'s `union_table` and `bounds_round_outward_with_aa_margin`;
   `flui-rendering`'s `tests/boundary_content_tokens.rs` (the token rule, and
   `pipeline_frames_diff_to_the_changed_boundary_rect` end to end); `flui-painting`'s
-  `a_color_fill_makes_the_extent_unbounded`, `paragraph_extent_covers_ink_overflow`,
-  `stroke_and_shadow_extents_cover_their_outsets`; `flui-app`'s raster-lane tests
+  `a_color_fill_makes_the_extent_unbounded`, `paragraph_extent_covers_every_rasterized_glyph`,
+  `stroke_and_shadow_extents_cover_their_outsets`,
+  `shadow_extent_spreads_by_the_largest_scale_on_both_axes`; `flui-app`'s raster-lane tests
   `a_changed_boundary_reaches_the_backend_as_a_dirty_rect`, `an_identical_scene_does_not_present`,
   `damage_off_sends_every_frame_full_and_retains_nothing`, `the_damage_variable_selects_the_mode`.
 - §4: `flui-engine`'s `damage_readback_tests.rs`
   (`a_moved_box_repaints_its_old_and_new_positions_only`,
   `the_partial_clear_runs_before_content`, `an_invalid_target_promotes_to_full`,
   `partial_equals_full_inside_damage`, `a_removed_shadow_leaves_no_penumbra`,
+  `a_removed_shadow_under_a_non_uniform_scale_leaves_no_penumbra`,
+  `removed_text_under_a_tight_line_height_leaves_no_ink`,
+  `an_updated_texture_repaints_under_an_unchanged_picture`,
+  `a_damage_edge_through_an_advanced_blend_matches_a_full_frame`,
   `a_frame_outside_the_protocol_is_followed_by_a_full_one`), which drive the same
   `FrameProtocol` the windowed renderer runs; `damage::tests::plan_frame_table`; and the
   `raster_owner` tests `the_owner_applies_partial_damage_as_a_dirty_rect`,

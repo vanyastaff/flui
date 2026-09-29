@@ -9,7 +9,10 @@
 - **`flui-layer`**: `BoundaryStamp`, `ContentToken`, `DamageRect`, `DamageMode` and
   `DamageRegion::union`.
 - **`flui-painting`**: `DisplayList::damage_extent` and `DamageExtent`, a conservative ink
-  extent (glyph overflow, stroke joins, shadow blur, `Unbounded` for full-canvas fills).
+  extent (glyph ink from each face's bounds, stroke joins, a shadow's blur as a spread that
+  scales with the transform's largest stretch, `Unbounded` for full-canvas fills), and
+  `DisplayList::volatile_extent`, the texture draws whose pixels change behind an unchanged
+  list.
 - **`cargo xtask bench-collect --with-features`** runs the feature-gated bench targets too.
 
 ### Changed

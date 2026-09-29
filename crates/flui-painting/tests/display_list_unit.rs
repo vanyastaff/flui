@@ -290,11 +290,11 @@ fn save_and_restore_carry_no_state_but_the_clip_scope() {
     assert_eq!(cmds[0].transform, Matrix4::translation(1.0, 0.0, 0.0));
 }
 
+/// The rect covering a bounded damage extent in the list's own space.
 fn bounded(list: &DisplayList) -> Rect<f64> {
-    match list.damage_extent() {
-        Some(flui_painting::DamageExtent::Bounded(rect)) => rect,
-        other => panic!("expected a bounded damage extent, got {other:?}"),
-    }
+    list.damage_extent()
+        .and_then(flui_painting::DamageExtent::covering_rect)
+        .unwrap_or_else(|| panic!("expected a bounded damage extent, got {list:?}"))
 }
 
 /// A full-canvas fill has no `bounds()` (it is not a layout box), but it
@@ -335,31 +335,74 @@ fn a_color_fill_makes_the_extent_unbounded() {
     );
 }
 
-/// Glyph ink reaches past the laid-out box: the extent covers the box grown
-/// by half its height on every side.
+/// Every glyph bitmap the rasterizer produces for a paragraph lies inside
+/// the list's damage extent, however far the ink reaches past the laid-out
+/// box: under a line height a third of the font size, the glyphs' ascenders
+/// and descenders stand well outside the line box.
+///
+/// The oracle is the rasterizer itself: each glyph's bitmap placed as the
+/// engine places it (`TextLayout::placed_glyphs` plus the bitmap's bearings),
+/// not a restatement of how the extent is computed.
 #[test]
-fn paragraph_extent_covers_ink_overflow() {
+fn paragraph_extent_covers_every_rasterized_glyph() {
     use flui_foundation::geometry::Offset;
     use flui_painting::TextPainter;
-    use flui_painting::typography::{TextDirection, TextSpan};
+    use flui_painting::typography::{TextDirection, TextSpan, TextStyle};
 
-    let mut painter = TextPainter::new()
-        .with_text(TextSpan::new("Hello, FLUI!"))
-        .with_text_direction(TextDirection::Ltr);
-    painter.layout(0.0, f64::INFINITY);
-    let size = painter.size();
-    let origin = Offset::new(40.0, 50.0);
-    let mut canvas = Canvas::new();
-    painter.paint(&mut canvas, origin);
-    let list = canvas.finish();
+    for (text, line_height) in [("Hello, FLUI!", None), ("Hgjpqy|", Some(0.3))] {
+        let mut style = TextStyle::new().with_font_size(40.0);
+        if let Some(height) = line_height {
+            style = style.with_height(height);
+        }
+        let mut painter = TextPainter::new()
+            .with_text(TextSpan::new(text).with_style(style))
+            .with_text_direction(TextDirection::Ltr);
+        painter.layout(0.0, f64::INFINITY);
+        let origin = Offset::new(40.0, 50.0);
+        let mut canvas = Canvas::new();
+        painter.paint(&mut canvas, origin);
+        let list = canvas.finish();
+        let extent = bounded(&list);
 
-    let layout_box = list.bounds().expect("a painted span has bounds");
-    let extent = bounded(&list);
-    assert_eq!(extent, layout_box.expand(size.height * 0.5));
-    assert!(
-        extent.top() < layout_box.top() && extent.left() < layout_box.left(),
-        "the extent must reach past the layout box: {extent:?} vs {layout_box:?}"
-    );
+        let (layout, offset) = list
+            .iter()
+            .find_map(|command| match &command.op {
+                DrawOp::Paragraph { layout, offset, .. } => Some((layout.clone(), *offset)),
+                _ => None,
+            })
+            .expect("the painter records a paragraph");
+        let fonts = flui_painting::shared_font_system();
+        let mut glyphs = 0;
+        let mut past_box = false;
+        let layout_box = list.bounds().expect("a painted span has bounds");
+        for glyph in layout.placed_glyphs((offset.dx as f32, offset.dy as f32), 1.0) {
+            let Some(image) = fonts.rasterize(glyph.key) else {
+                continue;
+            };
+            if image.width == 0 || image.height == 0 {
+                continue;
+            }
+            glyphs += 1;
+            let ink = Rect::from_xywh(
+                f64::from(glyph.x + image.left),
+                f64::from(glyph.y - image.top),
+                f64::from(image.width),
+                f64::from(image.height),
+            );
+            past_box |= !layout_box.contains_rect(&ink);
+            assert!(
+                extent.contains_rect(&ink),
+                "{text:?} (line height {line_height:?}): glyph ink {ink:?} escapes the                  damage extent {extent:?}"
+            );
+        }
+        assert!(glyphs > 0, "precondition: {text:?} rasterizes glyphs");
+        if line_height.is_some() {
+            assert!(
+                past_box,
+                "precondition: under a tight line height the ink leaves the layout box                  {layout_box:?}"
+            );
+        }
+    }
 }
 
 /// A stroke's miter reaches a full width past the geometry (the layout box
@@ -390,5 +433,39 @@ fn stroke_and_shadow_extents_cover_their_outsets() {
     assert_eq!(
         bounded(&scaled),
         Matrix4::scaling(2.0, 2.0, 1.0).transform_rect(&rect.expand(8.0))
+    );
+}
+
+/// A shadow's blur reaches equally far on both axes of the target, because
+/// the renderer blurs with one sigma taken from the transform's largest
+/// scale: under `scale(4, 0.25)` the compressed vertical axis gets the full
+/// 3.5 x elevation x 4 too, whether the scale is the canvas's own or a
+/// layer's above the list.
+#[test]
+fn shadow_extent_spreads_by_the_largest_scale_on_both_axes() {
+    use flui_painting::DamageExtent;
+
+    let rect = Rect::from_xywh(10.0, 20.0, 10.0, 40.0);
+    let path = flui_painting::paint::Path::rectangle(rect);
+    let scale = Matrix4::scaling(4.0, 0.25, 1.0);
+    // Device rect of the path: (40, 5)-(80, 15); reach 3.5 x 2 x 4 = 28.
+    let expected = Rect::from_ltrb(12.0, -23.0, 108.0, 43.0);
+
+    let scaled = flui_painting::testing::record(|canvas| {
+        canvas.scale(4.0, 0.25);
+        canvas.draw_shadow(&path, Color::BLACK, 2.0);
+    });
+    assert_eq!(bounded(&scaled), expected, "a canvas scale");
+
+    let plain = flui_painting::testing::record(|canvas| {
+        canvas.draw_shadow(&path, Color::BLACK, 2.0);
+    });
+    assert_eq!(
+        plain
+            .damage_extent()
+            .map(|extent| extent.transformed(&scale))
+            .and_then(DamageExtent::covering_rect),
+        Some(expected),
+        "a layer's scale above the list"
     );
 }

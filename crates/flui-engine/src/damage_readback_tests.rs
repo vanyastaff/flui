@@ -666,3 +666,289 @@ fn partial_equals_full_inside_damage() {
         "precondition: the static art painted"
     );
 }
+
+/// A picture that draws an external texture keeps its boundary's token when
+/// the texture's producer hands over a new frame behind the same id, as a
+/// video decoder or a camera does: the next frame repaints the texture's
+/// rect and shows the new content, rather than finding the scene unchanged
+/// and presenting the old frame.
+#[test]
+fn an_updated_texture_repaints_under_an_unchanged_picture() {
+    use flui_painting::paint::{FilterQuality, TextureId};
+
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let mut capture = renderer
+        .retained_capture((SIDE, SIDE))
+        .expect("capture target");
+    let texture = TextureId::new(41);
+    capture.set_solid_texture(texture, RED);
+    let (root, card) = (ContentToken::mint(), ContentToken::mint());
+    let video = move |canvas: &mut Canvas| {
+        canvas.draw_texture(
+            texture,
+            Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+            None,
+            FilterQuality::None,
+            1.0,
+        );
+    };
+    let build = || {
+        scene(
+            &root,
+            &[Boundary {
+                id: 2,
+                token: &card,
+                at: Offset::new(40.0, 40.0),
+                paint: &video,
+            }],
+            None,
+        )
+    };
+    let mut differ = LayerDiffer::default();
+    let first = build();
+    let region = differ.diff(&first, (SIDE, SIDE));
+    frame(&mut capture, &first, region, |plan| {
+        plan == FramePlan::Direct
+    });
+    warm(&mut capture, &first);
+    assert!(
+        near(px(&capture.read_rgba().expect("readback"), 56, 56), RED, 2),
+        "precondition: the texture's first frame is on screen"
+    );
+
+    capture.set_solid_texture(texture, BLUE);
+    let second = build();
+    let region = differ.diff(&second, (SIDE, SIDE));
+    apply(&mut capture, region);
+    capture.render_scene(&second).expect("the frame renders");
+    let shown = px(&capture.read_rgba().expect("readback"), 56, 56);
+    assert!(
+        near(shown, BLUE, 2),
+        "the texture's new content is shown, got {shown:?} (red is the frozen \
+         previous frame; region {region:?}, plan {:?})",
+        capture.last_plan()
+    );
+}
+
+/// A partial frame whose damage cuts through destination-reading blends (a
+/// Multiply rect, a ColorBurn circle, a Screen save-layer) presents the same
+/// pixels as the frame rendered in full, everywhere. Such a shape composites
+/// over its whole device bounds with no scissor, but its foreground was
+/// recorded under the damage scissor: outside the damage it is transparent,
+/// and a blend of a transparent source leaves the retained pixels (which
+/// already hold the shape's result) as they were.
+#[test]
+fn a_damage_edge_through_an_advanced_blend_matches_a_full_frame() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let art = |canvas: &mut Canvas| {
+        canvas.draw_rect(
+            Rect::from_xywh(0.0, 0.0, 48.0, 48.0),
+            &Paint::fill(Color::rgba(255, 160, 0, 255)),
+        );
+        canvas.draw_rect(
+            Rect::from_xywh(8.0, 8.0, 32.0, 32.0),
+            &Paint::fill(Color::rgba(128, 128, 128, 255)).with_blend_mode(BlendMode::Multiply),
+        );
+        canvas.draw_circle(
+            flui_foundation::geometry::Point::new(24.0, 24.0),
+            14.0,
+            &Paint::fill(Color::rgba(40, 90, 200, 200)).with_blend_mode(BlendMode::ColorBurn),
+        );
+        canvas.save_layer_blend(
+            Some(Rect::from_xywh(4.0, 14.0, 10.0, 30.0)),
+            BlendMode::Screen,
+        );
+        canvas.draw_rect(
+            Rect::from_xywh(4.0, 14.0, 10.0, 30.0),
+            &Paint::fill(Color::rgba(0, 120, 255, 160)),
+        );
+        canvas.restore();
+    };
+    let marker = square(Color::rgba(0, 160, 0, 255));
+    let (root, fixed, moving) = (
+        ContentToken::mint(),
+        ContentToken::mint(),
+        ContentToken::mint(),
+    );
+    let build = |at: Offset<f64>| {
+        scene(
+            &root,
+            &[
+                Boundary {
+                    id: 3,
+                    token: &fixed,
+                    at: Offset::new(40.0, 40.0),
+                    paint: &art,
+                },
+                Boundary {
+                    id: 2,
+                    token: &moving,
+                    at,
+                    paint: &marker,
+                },
+            ],
+            None,
+        )
+    };
+    let before = build(Offset::new(36.0, 36.0));
+    let after = build(Offset::new(36.0, 40.0));
+
+    let mut partial = renderer
+        .retained_capture((SIDE, SIDE))
+        .expect("capture target");
+    let mut differ = LayerDiffer::default();
+    let region = differ.diff(&before, (SIDE, SIDE));
+    frame(&mut partial, &before, region, |plan| {
+        plan == FramePlan::Direct
+    });
+    warm(&mut partial, &before);
+    let region = differ.diff(&after, (SIDE, SIDE));
+    let DamageRegion::Partial(damage) = region else {
+        panic!("the moved marker is a partial region, got {region:?}");
+    };
+    let multiply = Rect::from_xywh(48.0, 48.0, 32.0, 32.0);
+    assert!(
+        damage.to_rect().intersects(&multiply) && !damage.to_rect().contains_rect(&multiply),
+        "precondition: the damage {damage:?} cuts through the multiply {multiply:?}"
+    );
+    frame(&mut partial, &after, region, |plan| {
+        matches!(plan, FramePlan::RetainedPartial(_))
+    });
+    let partial_pixels = partial.read_rgba().expect("readback");
+    let full_pixels = full_frame_pixels(&renderer, &after);
+
+    let wrong = mismatches(&partial_pixels, &full_pixels, 2);
+    assert!(
+        wrong.is_empty(),
+        "the presented frame differs from the full frame at (x, y, partial, full): {wrong:?}"
+    );
+    assert!(
+        near(px(&full_pixels, 79, 79), [128, 80, 0, 255], 3),
+        "precondition: the multiply painted, got {:?}",
+        px(&full_pixels, 79, 79)
+    );
+}
+
+/// A removed shadow under `scale(4, 0.25)` leaves no penumbra on the axis
+/// the scale compresses: the renderer blurs with one sigma from the largest
+/// scale (4 x elevation) on both axes, so the damage reaches that far
+/// vertically too, not a quarter of it.
+#[test]
+fn a_removed_shadow_under_a_non_uniform_scale_leaves_no_penumbra() {
+    use flui_foundation::geometry::RRect;
+
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let (root, card) = (ContentToken::mint(), ContentToken::mint());
+    let shadowed = |canvas: &mut Canvas| {
+        let shape = Path::from_rrect(RRect::from_rect_circular(
+            Rect::from_xywh(0.0, 0.0, 8.0, 64.0),
+            1.0,
+        ));
+        canvas.scale(4.0, 0.25);
+        canvas.draw_shadow(&shape, Color::BLACK, 2.0);
+    };
+    let before = scene(
+        &root,
+        &[Boundary {
+            id: 2,
+            token: &card,
+            at: Offset::new(40.0, 40.0),
+            paint: &shadowed,
+        }],
+        None,
+    );
+    let after = scene(&root, &[], None);
+
+    let mut partial = renderer
+        .retained_capture((SIDE, SIDE))
+        .expect("capture target");
+    let mut differ = LayerDiffer::default();
+    let region = differ.diff(&before, (SIDE, SIDE));
+    frame(&mut partial, &before, region, |plan| {
+        plan == FramePlan::Direct
+    });
+    warm(&mut partial, &before);
+    assert_ne!(
+        px(&partial.read_rgba().expect("readback"), 56, 62),
+        WHITE,
+        "precondition: the penumbra reaches below the shape on the compressed axis"
+    );
+    let region = differ.diff(&after, (SIDE, SIDE));
+    frame(&mut partial, &after, region, |plan| {
+        matches!(plan, FramePlan::RetainedPartial(_))
+    });
+    let partial_pixels = partial.read_rgba().expect("readback");
+    let full_pixels = full_frame_pixels(&renderer, &after);
+
+    let stale = mismatches(&partial_pixels, &full_pixels, 0);
+    assert!(
+        stale.is_empty(),
+        "the old shadow's penumbra survived outside the damage at \
+         (x, y, partial, full): {stale:?}"
+    );
+}
+
+/// Removed text leaves no ink behind when its glyphs stand far outside its
+/// line box: under a line height a third of the font size, ascenders and
+/// descenders reach well past half a line.
+#[test]
+fn removed_text_under_a_tight_line_height_leaves_no_ink() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let (root, card) = (ContentToken::mint(), ContentToken::mint());
+    let text = |canvas: &mut Canvas| {
+        let mut painter = TextPainter::new()
+            .with_text(
+                TextSpan::new("Hgjy").with_style(
+                    TextStyle::new()
+                        .with_font_size(24.0)
+                        .with_height(0.3)
+                        .with_color(Color::BLACK),
+                ),
+            )
+            .with_text_direction(TextDirection::Ltr);
+        painter.layout(0.0, 100.0);
+        painter.paint(canvas, Offset::ZERO);
+    };
+    let before = scene(
+        &root,
+        &[Boundary {
+            id: 2,
+            token: &card,
+            at: Offset::new(30.0, 50.0),
+            paint: &text,
+        }],
+        None,
+    );
+    let after = scene(&root, &[], None);
+
+    let mut partial = renderer
+        .retained_capture((SIDE, SIDE))
+        .expect("capture target");
+    let mut differ = LayerDiffer::default();
+    let region = differ.diff(&before, (SIDE, SIDE));
+    frame(&mut partial, &before, region, |plan| {
+        plan == FramePlan::Direct
+    });
+    warm(&mut partial, &before);
+    let region = differ.diff(&after, (SIDE, SIDE));
+    frame(&mut partial, &after, region, |plan| {
+        matches!(plan, FramePlan::RetainedPartial(_))
+    });
+    let partial_pixels = partial.read_rgba().expect("readback");
+    let full_pixels = full_frame_pixels(&renderer, &after);
+
+    let stale = mismatches(&partial_pixels, &full_pixels, 0);
+    assert!(
+        stale.is_empty(),
+        "the old glyphs' ink survived outside the damage at \
+         (x, y, partial, full): {stale:?}"
+    );
+}

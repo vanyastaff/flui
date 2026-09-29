@@ -371,6 +371,80 @@ fn textures_and_overlays_are_damaged_every_frame() {
     }
 }
 
+/// A picture that draws an external texture (`Canvas::draw_texture`) keeps
+/// its boundary's token while the texture's producer replaces the content
+/// behind the same id: the texture's rect is damaged on every frame, the
+/// rest of the boundary is not.
+#[test]
+fn a_pictures_texture_draw_is_damaged_every_frame() {
+    let (root, card) = (ContentToken::mint(), ContentToken::mint());
+    let build = || {
+        let mut frame = Frame::new(1.0, &root);
+        let parent = frame.root();
+        let node = LayerNode::new(Layer::from(OffsetLayer::new(Offset::new(100.0, 100.0))))
+            .with_boundary(id(2), card.clone());
+        let boundary = frame.tree.push_child(parent, node);
+        let mut canvas = Canvas::new();
+        canvas.draw_rect(
+            Rect::from_xywh(0.0, 0.0, 200.0, 200.0),
+            &Paint::fill(Color::RED),
+        );
+        canvas.draw_texture(
+            flui_painting::paint::TextureId::new(7),
+            Rect::from_xywh(10.0, 20.0, 30.0, 40.0),
+            None,
+            flui_painting::paint::FilterQuality::None,
+            1.0,
+        );
+        frame.push(boundary, PictureLayer::new(canvas.finish()));
+        frame.scene()
+    };
+    let mut differ = LayerDiffer::default();
+    differ.diff(&build(), SURFACE);
+    for _ in 0..2 {
+        assert_eq!(
+            partial(differ.diff(&build(), SURFACE)),
+            covering(110.0, 120.0, 140.0, 160.0),
+            "the texture's rect, and only it, is damaged under an unchanged token"
+        );
+    }
+}
+
+/// A shadow's blur reaches as far on an axis a boundary's transform
+/// compresses as on the one it stretches, because the renderer blurs with
+/// one sigma from the largest scale: a removed shadow under `scale(4, 0.25)`
+/// damages its blur's full reach vertically too.
+#[test]
+fn a_shadow_under_a_non_uniform_scale_damages_its_blur_on_both_axes() {
+    let root = ContentToken::mint();
+    let with_shadow = |shadow: bool, card: &ContentToken| {
+        let mut frame = Frame::new(1.0, &root);
+        let parent = frame.root();
+        let node = LayerNode::new(Layer::from(TransformLayer::new(
+            Matrix4::translation(100.0, 200.0, 0.0) * Matrix4::scaling(4.0, 0.25, 1.0),
+        )))
+        .with_boundary(id(2), card.clone());
+        let boundary = frame.tree.push_child(parent, node);
+        if shadow {
+            let mut canvas = Canvas::new();
+            canvas.draw_shadow(
+                &flui_painting::paint::Path::rectangle(Rect::from_xywh(0.0, 0.0, 10.0, 40.0)),
+                Color::BLACK,
+                2.0,
+            );
+            frame.push(boundary, PictureLayer::new(canvas.finish()));
+        }
+        frame.scene()
+    };
+    let mut differ = LayerDiffer::default();
+    differ.diff(&with_shadow(true, &ContentToken::mint()), SURFACE);
+    // Device rect (100, 200)-(140, 210); reach 3.5 x elevation 2 x scale 4.
+    assert_eq!(
+        partial(differ.diff(&with_shadow(false, &ContentToken::mint()), SURFACE)),
+        covering(72.0, 172.0, 168.0, 238.0)
+    );
+}
+
 /// A leader that moves carries its follower's content with it, while the
 /// boundary holding the follower keeps its token.
 #[test]

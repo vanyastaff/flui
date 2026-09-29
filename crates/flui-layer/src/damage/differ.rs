@@ -22,9 +22,10 @@ use crate::{
 /// layers above it) and its own region in surface pixels. A boundary
 /// contributes damage when it was added (its new region), removed (its old
 /// region), or kept with a different token or placement (both). Content that
-/// cannot be vouched for by a token — textures, platform views, live canvases,
-/// performance overlays and anything under a follower — is damaged on every
-/// frame at its old and new positions. A backdrop filter whose (blur-reach
+/// cannot be vouched for by a token — textures (a texture layer or a picture's
+/// texture draw), platform views, live canvases, performance overlays and
+/// anything under a follower — is damaged on every frame at its old and new
+/// positions. A backdrop filter whose (blur-reach
 /// widened) bounds meet the damage joins it, repeatedly, until nothing more
 /// joins.
 ///
@@ -258,25 +259,37 @@ impl Frame {
             }
 
             let extent = match layer {
-                Layer::Picture(picture) => picture.picture().damage_extent(),
+                Layer::Picture(picture) => {
+                    // A texture draw's pixels come from a texture its
+                    // producer replaces behind the same id: the picture's
+                    // identity does not vouch for them.
+                    if let Some(rect) = picture
+                        .picture()
+                        .volatile_extent()
+                        .and_then(|extent| place(extent, &ctx, full))
+                    {
+                        frame.volatile = Some(join(frame.volatile, rect));
+                    }
+                    picture.picture().damage_extent()
+                }
                 Layer::Canvas(canvas) => {
                     ctx.volatile = true;
                     canvas.display_list().damage_extent()
                 }
                 Layer::Texture(texture) => {
                     ctx.volatile = true;
-                    Some(DamageExtent::Bounded(texture.bounds()))
+                    Some(DamageExtent::rect(texture.bounds()))
                 }
                 Layer::PlatformView(view) => {
                     ctx.volatile = true;
-                    Some(DamageExtent::Bounded(view.bounds()))
+                    Some(DamageExtent::rect(view.bounds()))
                 }
                 Layer::PerformanceOverlay(overlay) => {
                     ctx.volatile = true;
-                    Some(DamageExtent::Bounded(overlay.bounds()))
+                    Some(DamageExtent::rect(overlay.bounds()))
                 }
                 Layer::BackdropFilter(backdrop) => {
-                    let bounds = DamageExtent::Bounded(backdrop.bounds());
+                    let bounds = DamageExtent::rect(backdrop.bounds());
                     if let Some(rect) = place(bounds, &ctx, full) {
                         let reach = filter_reach(backdrop.filter()) * max_scale(&ctx.transform);
                         frame.backdrops.push((rect, reach));
@@ -399,8 +412,13 @@ fn place(extent: DamageExtent, ctx: &Ctx, full: Rect<f64>) -> Option<Rect<f64>> 
     let rect = match (ctx.reach, extent) {
         (Reach::Within(bound), _) => bound.unwrap_or(full),
         (Reach::Exact, DamageExtent::Unbounded) => ctx.clip.unwrap_or(full),
-        (Reach::Exact, DamageExtent::Bounded(local)) => {
-            let mapped = ctx.transform.transform_rect(&local);
+        (Reach::Exact, DamageExtent::Bounded { .. }) => {
+            // The walk marked a projective transform `Within` above, so the
+            // mapped extent is bounded here.
+            let mapped = extent
+                .transformed(&ctx.transform)
+                .covering_rect()
+                .unwrap_or(full);
             // A non-finite transform maps to nothing measurable; the whole
             // surface is the only answer that cannot fall short.
             if mapped.is_finite() {

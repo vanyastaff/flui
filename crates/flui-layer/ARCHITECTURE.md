@@ -136,10 +136,12 @@ pass keeps while the boundary is clean and mints otherwise (`flui-rendering`'s
 frozen tree once with an explicit stack, recording per stamp its token, its placement (the
 accumulated transform and the effect layers above it, compared with `Layer::same_effect`) and its
 own region in surface pixels (its subtree minus nested boundaries' subtrees, from each picture's
-`DisplayList::damage_extent`, clipped; content under an image filter or a perspective transform
-takes the clip). A changed token or placement damages the old and new regions, an added or
-removed boundary its one region; textures, platform views, canvases, overlays and anything under
-a follower are damaged every frame; a backdrop filter whose blur-widened bounds meet the damage
+`DisplayList::damage_extent`, mapped with its isotropic shadow spread scaled by the transform's
+largest stretch, and clipped; content under an image filter or a perspective transform takes the
+clip). A changed token or placement damages the old and new regions, an added or removed boundary
+its one region; textures (a texture layer, or a picture's texture draws through
+`DisplayList::volatile_extent`), platform views, canvases, overlays and anything under a follower
+are damaged every frame; a backdrop filter whose blur-widened bounds meet the damage
 joins it until nothing more does. The result is `Full` for an unpairable frame (first frame,
 surface size change, unstamped root, root boundary or placement change, a boundary stamped
 twice) or above `DamageMode::On::full_above`, `Unchanged` for nothing, and otherwise one
