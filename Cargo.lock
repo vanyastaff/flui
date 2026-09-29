@@ -2437,6 +2437,7 @@ dependencies = [
  "flui-painting",
  "flui-platform-api",
  "flui-rendering",
+ "flui-runtime",
  "flui-scheduler",
  "flui-semantics",
  "flui-view",

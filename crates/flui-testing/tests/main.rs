@@ -24,6 +24,8 @@ mod a11y_query;
 mod async_driver;
 #[path = "controller_restart.rs"]
 mod controller_restart;
+#[path = "headless_realm.rs"]
+mod headless_realm;
 #[path = "layout_builder_seam.rs"]
 mod layout_builder_seam;
 #[path = "lifecycle_panic_containment.rs"]

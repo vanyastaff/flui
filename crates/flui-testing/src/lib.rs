@@ -99,6 +99,7 @@ pub mod a11y;
 pub mod bootstrap;
 pub mod fonts;
 pub mod log_capture;
+pub mod realm;
 pub mod replay;
 pub mod text_store_kit;
 pub mod widgets;
@@ -110,6 +111,7 @@ pub use a11y::{
 pub use bootstrap::{BuildCapabilities, MountOptions, MountOwners, Mounted};
 pub use fonts::pin_font_faces;
 pub use log_capture::{CapturedLog, CapturedRecord, capture, disarm_interest_cache};
+pub use realm::{HeadlessRealm, HeadlessSink, HeadlessWindow};
 pub use replay::{GestureRecorder, PointerPhase, PointerScript, ScriptedPointer};
 
 use std::collections::HashMap;
