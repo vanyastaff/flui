@@ -194,13 +194,14 @@ few hundred tests): a new test needs a reason to exist next to the ones already 
 caps the count, so the review question is which existing table the new case joins.
 
 - **Test through the public API.** A test lives in `tests/` and sees what a consumer sees. An
-  in-`src` `mod tests` is for what a consumer cannot reach: `compile_fail`/trybuild input, a
-  failure-path matrix that needs a private seam, a recorded Flutter divergence. Do not pin
-  private fields or helpers, which dirty flag a setter raises, `size_of`, an implementation's
-  constants and token tables, or `Default`/`Debug`/getter round trips: a refactor that keeps
-  behavior must not touch a test. Values a consumer sees and a document fixes (wire spellings
-  such as `flui-protocol`'s ADR-0080 names, ABI, other ADR-pinned tokens) are contract, and
-  their tests stay.
+  in-`src` `mod tests` is for what a consumer cannot reach: a failure-path matrix that needs a
+  private seam, a recorded Flutter divergence. Compile-fail cases are not among them: they are
+  trybuild fixtures driven from `tests/` (or `compile_fail` doctests on public items), so
+  privacy and sealing are checked the way a consumer meets them. Do not pin private fields or
+  helpers, which dirty flag a setter raises, `size_of`, an implementation's constants and token
+  tables, or `Default`/`Debug`/getter round trips: a refactor that keeps behavior must not touch
+  a test. Values a consumer sees and a document fixes (wire spellings such as `flui-protocol`'s
+  ADR-0080 names, ABI, other ADR-pinned tokens) are contract, and their tests stay.
 - **One behavior, one test; a family is one table.** Cases that differ only in their input are
   rows of one table-driven `#[test]`: each row a plain `fn` named after the case, every row run,
   and the failure report naming each failing row. Use the crate's existing runner
@@ -210,10 +211,12 @@ caps the count, so the review question is which existing table the new case join
   stack and grows `target/`. Crates build their integration tests as modules of one binary
   (`tests/main.rs` with `#[path = "x.rs"] mod x;`, `autotests = false` and one `[[test]]` in the
   manifest, as `flui-widgets`, `flui-material` and `flui-rendering` do). A new file is a new
-  `mod` line, not a new `[[test]]`. Subdirectories are not targets and are never mounted: helpers
-  (`tests/common/`) and trybuild fixtures (`tests/ui/`). A separate target is for process-global state
-  (`Registry::global`, a global subscriber, allocation counting) and for a feature the rest of
-  the crate builds without.
+  `mod` line, not a new `[[test]]` (with `autotests = false` only the `[[test]]` entries are
+  targets). Subdirectories are never auto-discovered as targets: a helper directory
+  (`tests/common/`, `tests/support/`) is mounted from `main.rs` as a module, a trybuild fixture
+  directory (`tests/ui/`) is not mounted at all, since its sources are meant not to compile. A
+  separate target is for process-global state (`Registry::global`, a global subscriber,
+  allocation counting) and for a feature the rest of the crate builds without.
 - **Do not fold what runs its own process.** Tests that spawn `cargo` or another program
   (trybuild suites, `cli_create::generated_*`, `flui::facade_consumer`) stay separate tests:
   `.config/nextest.toml` names them one by one (group `nested-cargo`) so nextest runs them in
