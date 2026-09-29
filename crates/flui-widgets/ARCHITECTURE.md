@@ -1362,12 +1362,12 @@ storage, so it has to be met somewhere, and this is where it is met:
   `RenderObject<_> + Send + Sync + 'static`
   (`crates/flui-view/src/view/render.rs`), so the annotation render object the
   widget wraps cannot hold a `!Send` closure either.
-- The catalog's **dominant** callback convention is `Rc<dyn Fn(..)>`, owner-thread-local: 56 such
-  type aliases across `flui-widgets/src` (44) and `flui-material/src` (12), counted as
-  `type <name> = Rc<dyn Fn…>` declarations *including* those whose `Rc<dyn Fn` sits on a
-  continuation line (`pub trait`-style wrapping is common on these signatures, so a same-line read
-  under-counts them: 34/11). This bound is stricter than that convention, and a
-  caller meets it on the first handler they write.
+- The catalog's **dominant** callback convention is `Rc<dyn Fn(..)>`, owner-thread-local: the
+  callback type aliases in `flui-widgets/src` and `flui-material/src` are `Rc<dyn Fn…>`, spelled
+  out or through `support::EventCallback`/`ValueCallback`
+  (`git grep -nE "type \w+(<[^=]*>)? = (Rc<dyn Fn|EventCallback|ValueCallback)" --
+  crates/flui-widgets/src packages/flui-material/src` lists them). This bound is stricter than
+  that convention, and a caller meets it on the first handler they write.
 - It is **not unprecedented**. The one other public family that takes `impl Fn(..) + Send + Sync
   + 'static` is `interaction/drag_target.rs` (4 builders), for the same reason: its callbacks
   ride `Send + Sync` render-object metadata. `Draggable` and `PageView::on_page_changed` used
