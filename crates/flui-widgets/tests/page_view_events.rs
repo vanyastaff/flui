@@ -104,7 +104,6 @@ impl Drop for DropProbe {
 /// released with the state.
 #[test]
 fn a_page_view_unmounted_before_it_rebuilds_drops_its_recorded_change() {
-
     let controller = PageController::new();
     let show = Rc::new(Cell::new(true));
     let drops = Rc::new(Cell::new(0));
