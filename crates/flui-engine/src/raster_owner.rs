@@ -51,7 +51,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 use flui_foundation::{FrameEpoch, GpuResourceGeneration, PresentationAddress, SurfaceGeneration};
-use flui_layer::SceneSnapshot;
+use flui_layer::{DamageRegion, SceneSnapshot};
 use parking_lot::{Condvar, Mutex};
 
 use crate::error::EngineError;
@@ -755,7 +755,7 @@ impl RasterHandle {
     /// [`RasterSubmitError::ShuttingDown`] once [`Self::shutdown`] has been
     /// called; [`RasterSubmitError::OwnerGone`] once the owning
     /// [`RasterOwner`] has dropped.
-    pub fn submit(&self, frame: SceneSnapshot) -> Result<(), RasterSubmitError> {
+    pub fn submit(&self, mut frame: SceneSnapshot) -> Result<(), RasterSubmitError> {
         if frame.stamp.address != self.mailbox.address {
             return Err(RasterSubmitError::AddressMismatch {
                 expected: self.mailbox.address,
@@ -788,6 +788,13 @@ impl RasterHandle {
             // `Ordering::Acquire` load that never takes `state` at all, so
             // holding this lock confers no atomicity on the net-zero pair
             // below — the guarantee comes entirely from minting first.
+            // The frame about to be superseded never reaches the backend, but
+            // its damage is real: the producer compared the replacement
+            // against IT, not against what the screen shows. Its region
+            // travels with the replacement, or those pixels would go stale.
+            if let Some(superseded) = state.pending_frame.as_ref() {
+                frame.damage = frame.damage.union(superseded.snapshot.damage);
+            }
             let ticket = InFlightTicket::new(&self.mailbox.accounting);
             let pending = PendingFrame {
                 snapshot: frame,
@@ -1402,17 +1409,15 @@ impl<B: RasterBackend> RasterOwner<B> {
         // says. Only the `Ok` arm below can report anything else, and it
         // overwrites this with the backend's own answer.
         let mut disposition = PresentDisposition::NotShown;
-        let outcome = if surface_fresh && resource_fresh {
-            // `DamageRegion::Full` is the only variant that exists today
-            // (flui-layer's own doc: fine-grained damage is an additive,
-            // `#[non_exhaustive]`-guarded follow-up, so
-            // `frame.snapshot.damage` is not yet inspected here — there is
-            // exactly one correct action regardless of its value. Revisit
-            // this call once a `Partial` variant lands and `RasterBackend`
-            // gains a partial-repaint path (`mark_dirty` already exists
-            // for it).
-            self.backend.mark_full_repaint();
 
+        // The frame's damage reaches the backend whatever becomes of the
+        // frame, before the freshness checks below. The producer diffs each
+        // frame against the one submitted before it, so a frame rejected here
+        // still carries the only record of what changed since that one; the
+        // backend accumulates it and forgets it only once something presents.
+        apply_damage(&mut self.backend, frame.snapshot.damage);
+
+        let outcome = if surface_fresh && resource_fresh {
             match self.backend.render_scene(&frame.snapshot.scene) {
                 // The legacy ack/outcome names classify a successful render
                 // attempt. What the backend actually did with the frame is
@@ -1437,12 +1442,18 @@ impl<B: RasterBackend> RasterOwner<B> {
                         address: frame.snapshot.stamp.address,
                     }
                 }
-                Err(error) => self.handle_render_failure(
-                    frame.snapshot.stamp.epoch,
-                    frame.snapshot.stamp.address,
-                    frame.snapshot.stamp.surface_generation,
-                    error,
-                ),
+                Err(error) => {
+                    // A render that failed partway may have left the frame's
+                    // targets half-written; the next frame must not trust
+                    // any pixel of them.
+                    self.backend.mark_full_repaint();
+                    self.handle_render_failure(
+                        frame.snapshot.stamp.epoch,
+                        frame.snapshot.stamp.address,
+                        frame.snapshot.stamp.surface_generation,
+                        error,
+                    )
+                }
             }
         } else if !surface_fresh {
             let stale = frame_surface_generation;
@@ -1613,6 +1624,17 @@ impl<B: RasterBackend> RasterOwner<B> {
     }
 }
 
+/// Hands one frame's damage to `backend`'s accumulator.
+fn apply_damage<B: RasterBackend>(backend: &mut B, damage: DamageRegion) {
+    match damage {
+        DamageRegion::Partial(rect) => backend.mark_dirty(rect.to_rect()),
+        DamageRegion::Unchanged => {}
+        // `Full`, and any region a later producer adds before this match
+        // learns it: repainting everything is never wrong.
+        _ => backend.mark_full_repaint(),
+    }
+}
+
 impl<B: RasterBackend> Drop for RasterOwner<B> {
     fn drop(&mut self) {
         self.mailbox.owner_alive.store(false, Ordering::Release);
@@ -1694,6 +1716,8 @@ mod tests {
         render_calls: usize,
         resize_calls: Vec<(u32, u32)>,
         full_repaint_calls: usize,
+        /// Every rect `mark_dirty` received, in order.
+        dirty_rects: Vec<Rect<f64>>,
         planned_results: VecDeque<Result<PresentDisposition, EngineError>>,
         size: (u32, u32),
         /// When `true`, the NEXT `render_scene` call panics instead of
@@ -1800,7 +1824,9 @@ mod tests {
             false
         }
 
-        fn mark_dirty(&mut self, _rect: Rect<f64>) {}
+        fn mark_dirty(&mut self, rect: Rect<f64>) {
+            self.dirty_rects.push(rect);
+        }
 
         fn mark_full_repaint(&mut self) {
             self.full_repaint_calls += 1;
@@ -2421,9 +2447,113 @@ mod tests {
                 "the resize itself still applies even though the frame is rejected"
             );
             assert_eq!(
+                backend.full_repaint_calls, 1,
+                "the rejected frame's (full) damage still reaches the backend, \
+                 which keeps it until a frame presents"
+            );
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // Damage: every retired frame's region reaches the backend
+    // -----------------------------------------------------------------------
+
+    fn partial(l: f64, t: f64, r: f64, b: f64) -> DamageRegion {
+        DamageRegion::Partial(
+            flui_layer::DamageRect::covering(Rect::from_ltrb(l, t, r, b), (1000, 1000))
+                .expect("on the surface"),
+        )
+    }
+
+    fn rect_of(region: DamageRegion) -> Rect<f64> {
+        match region {
+            DamageRegion::Partial(rect) => rect.to_rect(),
+            other => panic!("expected a partial region, got {other:?}"),
+        }
+    }
+
+    /// A frame stamped with the generation the construction-time resize
+    /// mints, carrying `damage`.
+    fn fresh_frame(epoch: FrameEpoch, damage: DamageRegion) -> SceneSnapshot {
+        let mut frame = test_frame(epoch, SurfaceGeneration::ZERO.next());
+        frame.damage = damage;
+        frame
+    }
+
+    #[test]
+    fn the_owner_applies_partial_damage_as_a_dirty_rect() {
+        let (mut owner, handle, _acks, _done) = new_owner(FakeBackend::default());
+        let _ = handle.resize(800, 600);
+        let region = partial(10.0, 10.0, 20.0, 20.0);
+        let epoch = FrameEpoch::ZERO.next();
+        handle.submit(fresh_frame(epoch, region)).expect("submit");
+        assert!(matches!(owner.pump(), PumpOutcome::Presented { .. }));
+        handle
+            .submit(fresh_frame(epoch.next(), DamageRegion::Unchanged))
+            .expect("submit");
+        assert!(matches!(owner.pump(), PumpOutcome::Presented { .. }));
+
+        owner.with_backend(|backend| {
+            assert_eq!(backend.dirty_rects, vec![rect_of(region)]);
+            assert_eq!(
                 backend.full_repaint_calls, 0,
-                "mark_full_repaint is only called on the render path, never \
- for a proactively-rejected frame"
+                "a partial frame must not be widened to a full repaint, and an \
+                 unchanged one marks nothing"
+            );
+            assert_eq!(backend.render_calls, 2);
+        });
+    }
+
+    /// The frame a submit supersedes never renders, but the producer diffed
+    /// the survivor against it: its damage has to ride along.
+    #[test]
+    fn superseded_damage_folds_into_the_survivor() {
+        let (mut owner, handle, _acks, _done) = new_owner(FakeBackend::default());
+        let _ = handle.resize(800, 600);
+        let first = partial(10.0, 10.0, 20.0, 20.0);
+        let second = partial(100.0, 100.0, 110.0, 110.0);
+        let epoch = FrameEpoch::ZERO.next();
+        handle.submit(fresh_frame(epoch, first)).expect("submit");
+        handle
+            .submit(fresh_frame(epoch.next(), second))
+            .expect("the second submit supersedes the first");
+        assert!(matches!(owner.pump(), PumpOutcome::Presented { .. }));
+
+        owner.with_backend(|backend| {
+            assert_eq!(backend.render_calls, 1);
+            assert_eq!(backend.dirty_rects, vec![rect_of(first.union(second))]);
+        });
+    }
+
+    #[test]
+    fn rejected_frame_damage_reaches_the_backend() {
+        let (mut owner, handle, _acks, _done) = new_owner(FakeBackend::default());
+        let _ = handle.resize(800, 600);
+        let region = partial(10.0, 10.0, 20.0, 20.0);
+        // Stamped against ZERO: rejected before render.
+        let mut frame = test_frame(FrameEpoch::ZERO.next(), SurfaceGeneration::ZERO);
+        frame.damage = region;
+        handle.submit(frame).expect("submit");
+        assert!(matches!(owner.pump(), PumpOutcome::SurfaceOutdated { .. }));
+        owner.with_backend(|backend| {
+            assert_eq!(backend.render_calls, 0, "precondition: never rendered");
+            assert_eq!(backend.dirty_rects, vec![rect_of(region)]);
+        });
+    }
+
+    #[test]
+    fn render_error_marks_full() {
+        let (mut owner, handle, _acks, _done) =
+            new_owner(FakeBackend::with_planned([Err(EngineError::Timeout)]));
+        let _ = handle.resize(800, 600);
+        let frame = fresh_frame(FrameEpoch::ZERO.next(), partial(10.0, 10.0, 20.0, 20.0));
+        handle.submit(frame).expect("submit");
+        assert!(matches!(owner.pump(), PumpOutcome::Dropped { .. }));
+        owner.with_backend(|backend| {
+            assert_eq!(backend.render_calls, 1);
+            assert_eq!(
+                backend.full_repaint_calls, 1,
+                "a failed render leaves nothing the next frame may trust"
             );
         });
     }

@@ -247,89 +247,250 @@ impl HeadlessRenderer {
     }
 
     fn clear_to_white(&self, view: &wgpu::TextureView) {
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("FLUI Headless Capture Clear Encoder"),
-            });
-        {
-            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("FLUI Headless Capture Clear Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-        }
-        self.queue.submit(std::iter::once(encoder.finish()));
+        clear_to_white(&self.device, &self.queue, view);
     }
 
-    /// Copy the texture to a mappable buffer and de-pad the 256-byte-aligned
-    /// rows into a tight `width * height * 4` RGBA8 buffer.
-    ///
-    /// The row arithmetic is `u64` throughout, and that is hardening rather
-    /// than a fix: `render_layer_tree` bounds both axes by
-    /// `max_texture_dimension_2d` before any GPU work, so `width * 4` cannot
-    /// reach `u32::MAX` and the `u32` form would not wrap today. It is `u64`
-    /// so that the invariant is local to this function instead of resting on
-    /// a check in a different one — the failure mode it avoids is a *silent*
-    /// wrap (`width = 2^30` makes `width * 4` zero) that would size the
-    /// staging buffer at zero bytes and re-enter the `wgpu-core` panic, which
-    /// is worth one conversion not to have to re-derive later.
+    /// [`readback_rgba`] on this renderer's device.
     fn readback_rgba(
         &self,
         texture: &wgpu::Texture,
         width: u32,
         height: u32,
     ) -> EngineResult<Vec<u8>> {
-        const BYTES_PER_PIXEL: u64 = 4;
-        let align = u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-        let unpadded_row_bytes = u64::from(width) * BYTES_PER_PIXEL;
-        let padded_row_bytes = unpadded_row_bytes.div_ceil(align) * align;
+        readback_rgba(&self.device, &self.queue, texture, width, height)
+    }
 
-        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("FLUI Headless Capture Readback Staging"),
-            size: padded_row_bytes * u64::from(height),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
+    /// A capture that keeps its frames: see [`RetainedCapture`].
+    ///
+    /// # Errors
+    /// [`EngineError::InvalidTargetSize`] for a zero or over-limit size.
+    #[cfg(test)]
+    pub(crate) fn retained_capture(&self, size: (u32, u32)) -> EngineResult<RetainedCapture> {
+        let (width, height) = size;
+        let max_dim = self.device.limits().max_texture_dimension_2d;
+        if width == 0 || height == 0 || width > max_dim || height > max_dim {
+            return Err(EngineError::InvalidTargetSize { width, height });
+        }
+        let surface = self.create_capture_texture(width, height);
+        let surface_view = surface.create_view(&wgpu::TextureViewDescriptor::default());
+        Ok(RetainedCapture {
+            device: Arc::clone(&self.device),
+            queue: Arc::clone(&self.queue),
+            painter: WgpuPainter::with_shared_device(
+                Arc::clone(&self.device),
+                Arc::clone(&self.queue),
+                CAPTURE_FORMAT,
+                size,
+            ),
+            offscreen: crate::offscreen::OffscreenRenderer::new(
+                Arc::clone(&self.device),
+                Arc::clone(&self.queue),
+                CAPTURE_FORMAT,
+            ),
+            surface,
+            surface_view,
+            retained: crate::retained_target::RetainedTarget::default(),
+            damage: crate::damage::DamageTracker::new(),
+            size,
+            force_full_next_frame: false,
+            fail_after_begin: false,
+            last_plan: None,
+        })
+    }
+}
+
+/// Clears `view` to opaque white with one submitted pass.
+fn clear_to_white(device: &wgpu::Device, queue: &wgpu::Queue, view: &wgpu::TextureView) {
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("FLUI Headless Capture Clear Encoder"),
+    });
+    {
+        let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("FLUI Headless Capture Clear Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
         });
+    }
+    queue.submit(std::iter::once(encoder.finish()));
+}
 
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("FLUI Headless Capture Readback Encoder"),
-            });
-        encoder.copy_texture_to_buffer(
+/// Copies `texture` to a mappable buffer and de-pads the 256-byte-aligned
+/// rows into a tight `width * height * 4` RGBA8 buffer.
+///
+/// The row arithmetic is `u64` throughout, and that is hardening rather
+/// than a fix: every caller bounds both axes by `max_texture_dimension_2d`
+/// before any GPU work, so `width * 4` cannot reach `u32::MAX` and the `u32`
+/// form would not wrap today. It is `u64` so that the invariant is local to
+/// this function instead of resting on a check in a different one — the
+/// failure mode it avoids is a *silent* wrap (`width = 2^30` makes
+/// `width * 4` zero) that would size the staging buffer at zero bytes and
+/// re-enter the `wgpu-core` panic, which is worth one conversion not to have
+/// to re-derive later.
+fn readback_rgba(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+) -> EngineResult<Vec<u8>> {
+    const BYTES_PER_PIXEL: u64 = 4;
+    let align = u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    let unpadded_row_bytes = u64::from(width) * BYTES_PER_PIXEL;
+    let padded_row_bytes = unpadded_row_bytes.div_ceil(align) * align;
+
+    let staging = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("FLUI Headless Capture Readback Staging"),
+        size: padded_row_bytes * u64::from(height),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("FLUI Headless Capture Readback Encoder"),
+    });
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &staging,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                // `u32` because wgpu's layout field is. In range by
+                // construction: every caller bounds `width` by
+                // `max_texture_dimension_2d` before any GPU work, so
+                // `width * 4` padded to 256 is far below `u32::MAX`.
+                bytes_per_row: Some(u32::try_from(padded_row_bytes).expect(
+                    "BUG: every capture bounds width by max_texture_dimension_2d \
+                         before readback",
+                )),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    let copied = queue.submit(std::iter::once(encoder.finish()));
+
+    staging.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+    // Wait for THIS copy, not the whole queue: the renderer is `&self`, so
+    // another thread's slow capture must not run this one out of time.
+    readback_wait_outcome(device.poll(readback_wait(copied)), READBACK_TIMEOUT)?;
+
+    let mapped = staging.slice(..).get_mapped_range().expect(
+        "BUG: readback staging buffer must be mapped — the poll above waited for the \
+             map_async issued on this same slice",
+    );
+    // `usize` for indexing; the `u64` row math above is already known to
+    // fit this address space or `create_buffer` would have failed first.
+    let tight_size = (unpadded_row_bytes * u64::from(height)) as usize;
+    let mut pixels = Vec::with_capacity(tight_size);
+    for row in 0..u64::from(height) {
+        let start = (row * padded_row_bytes) as usize;
+        let end = start + unpadded_row_bytes as usize;
+        pixels.extend_from_slice(&mapped[start..end]);
+    }
+    debug_assert_eq!(
+        pixels.len(),
+        tight_size,
+        "the de-padded readback must be exactly width*height*4"
+    );
+    Ok(pixels)
+}
+
+/// A windowless stand-in for the windowed [`Renderer`]'s frame path, for
+/// tests of partial frames: it keeps the damage tracker, the retained target
+/// and a "surface" texture across frames, and renders each frame the way
+/// `Renderer::render_scene` does — [`plan_frame`] picks the target,
+/// `Renderer::record_frame_content` records into it (the partial-frame
+/// scissor and clear included), and a retained frame reaches the surface
+/// through the same blit.
+///
+/// Crate-private and test-only: the public golden-image API is settled with
+/// the CPU backend (ADR-0087 §2), and this exists to pin the GPU partial
+/// path's pixels, which a swapchain cannot be read back to show.
+///
+/// [`Renderer`]: crate::Renderer
+/// [`plan_frame`]: crate::damage::plan_frame
+#[cfg(test)]
+pub(crate) struct RetainedCapture {
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+    painter: WgpuPainter,
+    offscreen: crate::offscreen::OffscreenRenderer,
+    /// Stands in for the swapchain image the windowed path presents.
+    surface: wgpu::Texture,
+    surface_view: wgpu::TextureView,
+    retained: crate::retained_target::RetainedTarget,
+    damage: crate::damage::DamageTracker,
+    size: (u32, u32),
+    force_full_next_frame: bool,
+    /// When set, the next frame fails right after the retained target was
+    /// begun — the failure a content pass can meet — and clears itself.
+    fail_after_begin: bool,
+    last_plan: Option<crate::damage::FramePlan>,
+}
+
+#[cfg(test)]
+impl RetainedCapture {
+    /// The surface's pixels as tight RGBA8 rows, top row first.
+    ///
+    /// # Errors
+    /// [`EngineError::ReadbackTimedOut`] when the GPU stalls.
+    pub(crate) fn read_rgba(&self) -> EngineResult<Vec<u8>> {
+        readback_rgba(
+            &self.device,
+            &self.queue,
+            &self.surface,
+            self.size.0,
+            self.size.1,
+        )
+    }
+
+    /// Writes `rgba` into `(x, y, width, height)` of the retained target, as
+    /// a stale previous frame would have left it. Panics before the target
+    /// exists.
+    pub(crate) fn paint_retained(
+        &self,
+        (x, y, width, height): (u32, u32, u32, u32),
+        rgba: [u8; 4],
+    ) {
+        let texture = self
+            .retained
+            .texture()
+            .expect("the retained target is allocated by a retained frame");
+        let data: Vec<u8> = std::iter::repeat_n(rgba, (width * height) as usize)
+            .flatten()
+            .collect();
+        self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture,
                 mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
+                origin: wgpu::Origin3d { x, y, z: 0 },
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &staging,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    // `u32` because wgpu's layout field is. In range by
-                    // construction: `render_layer_tree` bounds `width` by
-                    // `max_texture_dimension_2d` before any GPU work, so
-                    // `width * 4` padded to 256 is far below `u32::MAX`.
-                    bytes_per_row: Some(
-                        u32::try_from(padded_row_bytes).expect(
-                            "BUG: render_layer_tree bounds width by                              max_texture_dimension_2d before readback",
-                        ),
-                    ),
-                    rows_per_image: Some(height),
-                },
+            &data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: Some(height),
             },
             wgpu::Extent3d {
                 width,
@@ -337,32 +498,125 @@ impl HeadlessRenderer {
                 depth_or_array_layers: 1,
             },
         );
-        let copied = self.queue.submit(std::iter::once(encoder.finish()));
+    }
 
-        staging.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-        // Wait for THIS copy, not the whole queue: the renderer is `&self`, so
-        // another thread's slow capture must not run this one out of time.
-        readback_wait_outcome(self.device.poll(readback_wait(copied)), READBACK_TIMEOUT)?;
+    /// Makes the next frame fail after it began the retained target.
+    pub(crate) fn fail_next_frame_after_begin(&mut self) {
+        self.fail_after_begin = true;
+    }
 
-        let mapped = staging.slice(..).get_mapped_range().expect(
-            "BUG: readback staging buffer must be mapped — the poll above waited for the \
-             map_async issued on this same slice",
-        );
-        // `usize` for indexing; the `u64` row math above is already known to
-        // fit this address space or `create_buffer` would have failed first.
-        let tight_size = (unpadded_row_bytes * u64::from(height)) as usize;
-        let mut pixels = Vec::with_capacity(tight_size);
-        for row in 0..u64::from(height) {
-            let start = (row * padded_row_bytes) as usize;
-            let end = start + unpadded_row_bytes as usize;
-            pixels.extend_from_slice(&mapped[start..end]);
+    /// The plan the last frame ran.
+    pub(crate) fn last_plan(&self) -> Option<crate::damage::FramePlan> {
+        self.last_plan
+    }
+
+    fn clear_to_white(&self, view: &wgpu::TextureView) {
+        clear_to_white(&self.device, &self.queue, view);
+    }
+}
+
+#[cfg(test)]
+impl crate::raster::RasterBackend for RetainedCapture {
+    fn render_scene(
+        &mut self,
+        scene: &flui_layer::Scene,
+    ) -> Result<crate::raster::PresentDisposition, EngineError> {
+        use crate::damage::FramePlan;
+        use crate::raster::PresentDisposition;
+
+        if std::mem::take(&mut self.force_full_next_frame) {
+            self.damage.mark_full_repaint();
         }
-        debug_assert_eq!(
-            pixels.len(),
-            tight_size,
-            "the de-padded readback must be exactly width*height*4"
+        let plan = crate::damage::plan_frame(&self.damage, self.retained.is_valid(), false);
+        self.last_plan = Some(plan);
+        if plan == FramePlan::Skip {
+            return Ok(PresentDisposition::NoDamage);
+        }
+        let retained = match plan {
+            FramePlan::Direct => {
+                self.retained.invalidate();
+                None
+            }
+            _ => Some(self.retained.begin(&self.device, self.size, CAPTURE_FORMAT)),
+        };
+        if std::mem::take(&mut self.fail_after_begin) {
+            return Err(EngineError::Timeout);
+        }
+        let (view, texture) = match retained.as_ref() {
+            Some((texture, view)) => (view.clone(), texture.clone()),
+            None => (self.surface_view.clone(), self.surface.clone()),
+        };
+        let partial = match plan {
+            FramePlan::RetainedPartial(damage) => Some(damage),
+            _ => None,
+        };
+        if partial.is_none() {
+            self.clear_to_white(&view);
+        }
+        let straddled = crate::Renderer::record_frame_content(
+            &mut self.painter,
+            &mut self.offscreen,
+            scene,
+            (&view, &texture),
+            crate::renderer::RenderContext {
+                supports_copy_src: true,
+                intermediate_active: retained.is_some(),
+            },
+            partial,
         );
-        Ok(pixels)
+        self.force_full_next_frame |= straddled;
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("FLUI Retained Capture Encoder"),
+            });
+        if let Err(error) = self
+            .painter
+            .render(RenderTarget::sampleable(&view, &texture), &mut encoder)
+        {
+            self.painter.end_frame_maintenance();
+            return Err(error);
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+        self.painter.end_frame_maintenance();
+        if retained.is_some() {
+            self.offscreen
+                .blit_to_surface(&texture, &self.surface_view, CAPTURE_FORMAT);
+            self.retained.commit();
+        }
+        self.damage.reset();
+        Ok(PresentDisposition::Presented)
+    }
+
+    fn resize(&mut self, _width: u32, _height: u32) {
+        // The capture's size is fixed at construction; a resize is modelled
+        // by what the windowed renderer does to its frame state.
+        self.damage.mark_full_repaint();
+        self.retained.invalidate();
+    }
+
+    fn is_device_lost(&self) -> bool {
+        false
+    }
+
+    fn mark_dirty(&mut self, rect: flui_foundation::geometry::Rect<f64>) {
+        self.damage.mark_dirty(rect);
+    }
+
+    fn mark_full_repaint(&mut self) {
+        self.damage.mark_full_repaint();
+    }
+
+    fn has_damage(&self) -> bool {
+        self.damage.has_damage()
+    }
+
+    fn size(&self) -> (u32, u32) {
+        self.size
+    }
+
+    fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
+        Ok(())
     }
 }
 

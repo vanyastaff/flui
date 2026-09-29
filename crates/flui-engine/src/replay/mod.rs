@@ -353,10 +353,11 @@ impl GpuReplay {
                 // Self-healing: `renderer.rs` detects straddling advanced shapes
                 // after `render_layer_recursive` and sets
                 // `force_full_repaint_next_frame`, so the NEXT frame repaints the
-                // full `device_bounds` without scissor restriction.  Acceptable
-                // because partial damage is currently unused (callers use
-                // `mark_full_repaint`); a this-frame re-record or a precomputed
-                // Scene bit is the future upgrade when partial damage becomes hot.
+                // full `device_bounds` without scissor restriction. A partial
+                // frame renders into the retained target, so the backdrop
+                // outside the damage is the correct previous frame and the
+                // stale slice lasts one frame; a this-frame re-record or a
+                // precomputed Scene bit is the upgrade if that ever shows.
                 DrawItem::AdvancedShape(mut op) => {
                     if let Some(surface_texture) = target.texture {
                         // Render the shape into a full-viewport offscreen foreground.

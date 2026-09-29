@@ -529,16 +529,15 @@ impl GpuCapabilities {
 /// and surface format used to live here for mid-frame backdrop blur; that path
 /// now sources them from the offscreen renderer inside
 /// `LayerDispatcher::apply_backdrop_blur`, so they were removed as dead fields.)
-struct RenderContext {
+pub(crate) struct RenderContext {
     /// Whether the surface supports COPY_SRC (for backdrop filter on the
     /// common direct-render path).
-    supports_copy_src: bool,
-    /// Whether this frame renders into a pooled intermediate texture instead
-    /// of directly into the swapchain surface.  When `true`, the intermediate
-    /// already carries COPY_SRC (all pool textures have it), so backdrop-filter
-    /// and advanced-blend dst-reads both work regardless of
-    /// `supports_copy_src`.
-    intermediate_active: bool,
+    pub(crate) supports_copy_src: bool,
+    /// Whether this frame renders into the retained target instead of
+    /// directly into the swapchain surface. When `true`, the target carries
+    /// COPY_SRC (it is created with it), so backdrop-filter and
+    /// advanced-blend dst-reads both work regardless of `supports_copy_src`.
+    pub(crate) intermediate_active: bool,
 }
 
 /// The render walk's visit steps.
@@ -733,6 +732,10 @@ pub struct Renderer {
     device_lost: Arc<std::sync::atomic::AtomicBool>,
     /// Tracks dirty regions for incremental rendering (skip frames with no damage)
     damage_tracker: crate::damage::DamageTracker,
+    /// The last frame, kept so a partial frame can repaint only its damage
+    /// and blit the rest — see [`crate::damage::plan_frame`]. Allocated by
+    /// the first frame that renders through it.
+    retained: crate::retained_target::RetainedTarget,
     /// Runs immediately before every `queue.present` — see
     /// [`crate::RasterBackend::set_pre_present_hook`].
     pre_present_hook: Option<crate::raster::PrePresentHook>,
@@ -770,11 +773,13 @@ pub struct Renderer {
     /// prior-frame backdrop, writing stale pixels.
     ///
     /// Self-healing: the next frame is forced full, repainting the shape
-    /// over its true `device_bounds` without a scissor restriction.  The
-    /// transient is unobservable today because callers use full repaint
-    /// exclusively (see the `damage_rect()` call-site comment); a this-frame
-    /// re-record or a precomputed `Scene` bit would be the upgrade path once
-    /// partial damage becomes hot.
+    /// over its true `device_bounds` without a scissor restriction. A partial
+    /// frame renders into the retained target, whose pixels outside the
+    /// damage are the correct previous frame, so what a straddling shape can
+    /// disturb there is limited to its own out-of-damage slice for one
+    /// frame; this is the second line of defence for that slice. A
+    /// this-frame re-record or a precomputed `Scene` bit is the upgrade path
+    /// if the one-frame transient ever shows.
     force_full_repaint_next_frame: bool,
 }
 
@@ -903,6 +908,7 @@ impl Renderer {
             supports_copy_src: stack.supports_copy_src,
             device_lost: stack.device_lost,
             damage_tracker: crate::damage::DamageTracker::new(),
+            retained: crate::retained_target::RetainedTarget::default(),
             pre_present_hook: None,
             lease,
             #[cfg(feature = "gpu-profiler")]
@@ -1365,6 +1371,8 @@ impl Renderer {
         self.lease.replace_surface(released, stack.surface);
         // Force a full repaint so the first recovered frame is complete.
         self.damage_tracker.mark_full_repaint();
+        // The retained target belongs to the lost device.
+        self.retained.release();
 
         tracing::info!(
             width = self.config.width,
@@ -1646,6 +1654,7 @@ impl Renderer {
         self.painter.resize(width, height);
 
         self.damage_tracker.mark_full_repaint();
+        self.retained.invalidate();
 
         tracing::debug!("Surface resized to {}x{}", width, height);
     }
@@ -1715,6 +1724,7 @@ impl Renderer {
         };
         surface.configure(&self.device, &self.config);
         self.damage_tracker.mark_full_repaint();
+        self.retained.invalidate();
         tracing::info!(
             "Surface reconfigured ({}x{})",
             self.config.width,
@@ -1758,6 +1768,8 @@ impl Renderer {
         // A bare release: the owner asked for it and will ask for a recreate
         // later, which mints its own token.
         let _released = lease.release();
+        // A released presentation is suspended; its frame memory goes too.
+        self.retained.release();
         // Distinct from `SurfaceLease`'s own `surface_released` event, which
         // fires when the lease is dropped: this one says the owner asked for
         // the release, and a reader of a log needs to tell those apart.
@@ -1938,6 +1950,7 @@ impl Renderer {
         self.config = fresh_config;
         self.supports_copy_src = supports_copy_src;
         self.damage_tracker.mark_full_repaint();
+        self.retained.invalidate();
 
         tracing::debug!(
             target: "flui.gpu",
@@ -1977,19 +1990,11 @@ impl Renderer {
         &mut self,
         scene: &flui_layer::Scene,
     ) -> Result<PresentDisposition, EngineError> {
-        // Fine-grained damage tracking is the caller's responsibility: the
-        // application layer calls `mark_dirty()` / `mark_full_repaint()` after
-        // input events or state changes. Nothing calls `mark_dirty` today, so
-        // every frame is a full repaint.
-        //
-        // The design this comment used to anticipate — widgets reporting their
-        // own bounds on state change — does not work, and ADR-0061 records why:
-        // the paint walk repaints all inline content every frame, so the union
-        // of repainted bounds is the whole surface no matter how many repaint
-        // boundaries the tree has. Damage has to come from comparing
-        // consecutive layer trees, which needs a layer identity that survives a
-        // frame boundary. `flui-engine`'s `damage_scissor` benchmark measures
-        // what that is worth.
+        // Damage arrives from the raster owner, which applies each frame's
+        // `flui_layer::DamageRegion` (the `LayerDiffer`'s comparison of
+        // consecutive layer trees, ADR-0087 §3) to the tracker before calling
+        // this. Widgets reporting their own bounds does not work, and ADR-0061
+        // records why: the objects that always repaint cover the screen.
 
         // If the previous frame detected a straddling advanced shape under partial
         // damage, promote this frame to a full repaint so the shape is redrawn
@@ -2004,8 +2009,12 @@ impl Renderer {
             );
         }
 
-        // Check if we need to render at all
-        if !self.damage_tracker.has_damage() && !self.damage_tracker.needs_full_repaint() {
+        let plan = crate::damage::plan_frame(
+            &self.damage_tracker,
+            self.retained.is_valid(),
+            self.uses_intermediate_texture(),
+        );
+        if plan == crate::damage::FramePlan::Skip {
             // Nothing changed — skip this frame entirely; no present, no vsync block.
             tracing::trace!("Skipping frame: no damage");
             return Ok(classify_frame(false, false));
@@ -2031,77 +2040,68 @@ impl Renderer {
         // configured surface size (resize transient → stretched frame).
         self.warn_on_size_mismatch(&output.texture);
 
-        // Determine whether this frame should go through the intermediate-texture
-        // path (COPY_SRC-less adapters, or forced in tests).
-        //
-        // When intermediate-active:
-        //   - ALL frame passes (clear, backdrop-flush, final render) target
-        //     `render_view`/`render_texture`, which point at the intermediate.
-        //   - Only the final blit encoder writes to the real swapchain `view`.
-        //   - The intermediate already has COPY_SRC|COPY_DST (all pool textures
-        //     carry those usages), so backdrop-filter and advanced-blend dst-reads
-        //     both work correctly.
-        //
-        // When NOT intermediate-active (common path on COPY_SRC-capable adapters):
-        //   - `render_view`/`render_texture` point directly at the swapchain.
-        //   - No intermediate texture is allocated; no blit is issued.
-        //   - Behaviour is byte-identical to the pre-PR-6 code.
-        let intermediate_active = self.uses_intermediate_texture();
-
         let surface_format = self.config.format;
 
-        // Acquire the intermediate texture when the path is active.  The pool
-        // texture has RENDER_ATTACHMENT|TEXTURE_BINDING|COPY_SRC|COPY_DST, so
-        // it satisfies every downstream usage without extra flags.
-        let intermediate_texture_slot: Option<crate::texture_pool::PooledTexture> =
-            intermediate_active.then(|| {
-                self.offscreen.texture_pool_mut().acquire(
-                    self.config.width,
-                    self.config.height,
-                    surface_format,
-                )
-            });
-
-        // Select per-frame render view/texture.  Every pass in this frame
-        // (clear, backdrop-flush, final render) writes to these targets.
-        // Only the blit encoder writes to the real swapchain `view`.
-        let effective_intermediate_active =
-            intermediate_active && intermediate_texture_slot.is_some();
+        // Where this frame renders (`plan_frame`'s doc has the table):
+        //   - `Direct`: straight into the swapchain image. The retained
+        //     target does not see this frame, so it is no longer the last
+        //     frame and stops being valid.
+        //   - `RetainedFull` / `RetainedPartial`: into the retained target,
+        //     which then holds this frame; only the final blit writes the
+        //     swapchain view. This is also the path of a surface without
+        //     `COPY_SRC`: the target carries `COPY_SRC | COPY_DST`, so
+        //     backdrop-filter and advanced-blend dst-reads work on it.
+        // The target is invalid from `begin` until `commit`, so a content
+        // pass that fails or unwinds leaves the next partial frame rendering
+        // in full rather than trusting half-written pixels.
+        let retained = match plan {
+            crate::damage::FramePlan::Direct => {
+                self.retained.invalidate();
+                None
+            }
+            _ => Some(self.retained.begin(
+                &self.device,
+                (self.config.width, self.config.height),
+                surface_format,
+            )),
+        };
         let (render_view, render_texture): (&wgpu::TextureView, &wgpu::Texture) =
-            if let Some(ref slot) = intermediate_texture_slot {
-                (slot.view(), slot.texture())
-            } else {
-                (&view, &output.texture)
+            match retained.as_ref() {
+                Some((texture, target_view)) => (target_view, texture),
+                None => (&view, &output.texture),
             };
+        let partial_damage = match plan {
+            crate::damage::FramePlan::RetainedPartial(damage) => Some(damage),
+            _ => None,
+        };
 
         // 1. Clear pass — submit immediately so the render target is ready for
         //    mid-frame copy operations (backdrop blur needs pixels on the target).
-        self.run_clear_pass(render_view);
+        //    A partial frame clears only its damage, inside the content pass
+        //    (`damage::begin_partial`): a full clear would wipe the retained
+        //    pixels outside it.
+        if partial_damage.is_none() {
+            self.run_clear_pass(render_view);
+        }
 
-        // 2. Build render context for backdrop filter support.
-        //    `surface_format` was already computed above when selecting the
-        //    intermediate texture, so we reuse it here.
-        let ctx = RenderContext {
-            supports_copy_src: self.supports_copy_src,
-            intermediate_active: effective_intermediate_active,
-        };
-
-        // 3. Render scene content via LayerTree traversal. A failed content
+        // 2. Render scene content via LayerTree traversal. A failed content
         //    pass is the frame's failure: nothing below presents it.
-        self.render_scene_content(scene, render_view, render_texture, &ctx)?;
+        self.render_scene_content(
+            scene,
+            render_view,
+            render_texture,
+            retained.is_some(),
+            partial_damage,
+        )?;
 
-        // If the intermediate path was active, blit the fully-rendered
-        // intermediate onto the real swapchain surface now.  This is the only
-        // encoder that writes to `&view` (the swapchain view); no other pass
-        // above touches it when intermediate_active = true.
-        //
-        // The blit uses Replace/Copy blend (no blend equation) so the surface
-        // is pixel-identical to a direct render.  The intermediate is released
-        // back to the pool when `intermediate_texture_slot` drops at the end of
-        // this function.
-        if effective_intermediate_active && let Some(slot) = intermediate_texture_slot.as_ref() {
+        // A retained frame reaches the swapchain through one blit of the whole
+        // target — the only encoder that writes to `&view` on this path. The
+        // blit uses Replace/Copy blend (no blend equation), so the surface is
+        // pixel-identical to a direct render.
+        if let Some((texture, _)) = retained.as_ref() {
             self.offscreen
-                .blit_to_surface(slot.texture(), &view, surface_format);
+                .blit_to_surface(texture, &view, surface_format);
+            self.retained.commit();
         }
 
         // The platform's frame-pacing signal, armed strictly before the
@@ -2276,102 +2276,26 @@ impl Renderer {
         scene: &flui_layer::Scene,
         render_view: &wgpu::TextureView,
         render_texture: &wgpu::Texture,
-        ctx: &RenderContext,
+        intermediate_active: bool,
+        partial_damage: Option<flui_foundation::geometry::Rect<f64>>,
     ) -> EngineResult<()> {
-        use crate::layer_dispatcher::LayerDispatcher;
-
-        // Borrowed in place — `painter` and `offscreen` are disjoint fields,
-        // so the LayerDispatcher can hold both while the rest of the frame reads
-        // `damage_tracker` / `device` / `queue` / `gpu_profiler`.
-        let painter = &mut self.painter;
-        let mut backend = LayerDispatcher::with_offscreen(painter, &mut self.offscreen);
-        // Bind the frame render target so the DisplayList-level
-        // `render_backdrop_filter` path can flush + blur the same
-        // target the layer-level path uses.
-        // When intermediate-active, `render_view`/`render_texture` point
-        // at the intermediate; otherwise they point at the swapchain.
-        // Without this bind, that command path falls back to passthrough
-        // — a visible regression vs Flutter.
-        backend.bind_surface(render_view, render_texture);
-
-        // Reset per-frame clip/transform/opacity/layer state so that
-        // partial-damage scissors from frame N cannot leak into frame N+1.
-        // This must happen BEFORE the damage clip_rect below.
-        backend.painter_mut().reset_frame_state();
-
-        // Apply damage rect as scissor optimization: when only part of the
-        // screen changed, limit GPU work to the damaged region.
-        // `damage_rect()` returns `None` for full repaint (no scissor needed),
-        // `Some(rect)` for partial damage.
-        //
-        // We capture `partial_damage` separately: after `render_layer_recursive`
-        // populates `draw_order`, we check whether any advanced shape (or SSAA
-        // path with an advanced blend) straddles the damage edge.  If so, we
-        // schedule a full repaint next frame to self-heal stale pixels outside
-        // the damage rect that `flush_advanced_layer` may have written.
-        let partial_damage = self
-            .damage_tracker
-            .damage_rect()
-            .filter(|r| r.width() > 0.0 && r.height() > 0.0);
-        if let Some(damage) = partial_damage {
-            // Covering, not hard-edged: the damage region is a repaint window,
-            // and a pixel it only partly touches has changed too. Dropping it
-            // would leave that pixel stale.
-            backend.painter_mut().clip_rect_enclosing(damage);
-            tracing::trace!(
-                left = damage.left(),
-                top = damage.top(),
-                width = damage.width(),
-                height = damage.height(),
-                "Damage scissor applied"
-            );
-        }
-
-        // Depth-first traversal of layer tree.
-        // `render_texture`/`render_view` point at the intermediate when
-        // intermediate-active, or directly at the swapchain otherwise.
-        // Backdrop-filter and advanced-blend passes read from
-        // `render_texture`, which always has COPY_SRC in this context.
-        Self::render_layer_recursive(
-            scene.tree(),
-            scene.root(),
-            &mut backend,
-            ctx,
-            render_texture,
-            render_view,
+        let straddled = Self::record_frame_content(
+            &mut self.painter,
+            &mut self.offscreen,
+            scene,
+            (render_view, render_texture),
+            RenderContext {
+                supports_copy_src: self.supports_copy_src,
+                intermediate_active,
+            },
+            partial_damage,
         );
-
-        // Damage-straddle self-healing: if a partial scissor was applied AND
-        // `draw_order` now contains an advanced shape whose `device_bounds`
-        // straddle the damage edge, schedule a full repaint for the next frame.
-        //
-        // Why next-frame and not this-frame: `render_layer_recursive` has
-        // already populated the draw commands with the scissored geometry; a
-        // this-frame re-record would require replaying the entire scene graph.
-        // Partial damage is currently unused (callers use `mark_full_repaint`),
-        // so the transient stale pixel is unobservable.  A precomputed Scene
-        // bit or a re-record is the future upgrade path if partial damage
-        // becomes a hot path.
-        if let Some(damage) = partial_damage
-            && backend.painter().has_advanced_shape_straddling(damage)
-        {
+        if straddled {
             self.force_full_repaint_next_frame = true;
-            tracing::debug!(
-                left = damage.left(),
-                top = damage.top(),
-                width = damage.width(),
-                height = damage.height(),
-                "Advanced shape straddles partial damage; \
-                 scheduling full repaint next frame"
-            );
         }
+        let painter = &mut self.painter;
 
-        // 5. Final flush — submit remaining painter batches.
-        // Drop the dispatcher first: Drop calls flush_active_transform(), which
-        // balances any deferred lazy-coalescing save left by `with_transform`.
-        // Once `backend` is dropped the exclusive borrow on `painter` ends, so
-        // `painter` is directly accessible for the render and maintenance calls.
-        drop(backend);
+        // Final flush — submit remaining painter batches.
         let mut final_encoder =
             self.device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -2429,6 +2353,93 @@ impl Renderer {
         // `render` — to avoid resetting use-counters between passes.
         painter.end_frame_maintenance();
         Ok(())
+    }
+
+    /// Records one frame's content into `painter`: binds the target, resets the
+    /// per-frame state, opens a partial frame when `partial_damage` is set
+    /// (`damage::begin_partial`: the scissor and the clear inside it), walks
+    /// the scene, and reports whether an advanced shape straddles the damage
+    /// edge — in which case the caller forces its next frame full.
+    ///
+    /// The windowed renderer and the crate's headless retained capture both
+    /// record through this, so the partial-frame protocol a readback test
+    /// pins is the one the swapchain path runs. Submitting the painter's
+    /// batches stays with the caller.
+    pub(crate) fn record_frame_content(
+        painter: &mut crate::painter::WgpuPainter,
+        offscreen: &mut crate::offscreen::OffscreenRenderer,
+        scene: &flui_layer::Scene,
+        (render_view, render_texture): (&wgpu::TextureView, &wgpu::Texture),
+        ctx: RenderContext,
+        partial_damage: Option<flui_foundation::geometry::Rect<f64>>,
+    ) -> bool {
+        use crate::layer_dispatcher::LayerDispatcher;
+
+        let mut backend = LayerDispatcher::with_offscreen(painter, offscreen);
+        // Bind the frame render target so the DisplayList-level
+        // `render_backdrop_filter` path can flush + blur the same
+        // target the layer-level path uses: the retained target on a
+        // retained frame, the swapchain image on a direct one.
+        // Without this bind, that command path falls back to passthrough
+        // — a visible regression vs Flutter.
+        backend.bind_surface(render_view, render_texture);
+
+        // Reset per-frame clip/transform/opacity/layer state so that
+        // partial-damage scissors from frame N cannot leak into frame N+1.
+        // This must happen BEFORE the damage clip_rect below.
+        backend.painter_mut().reset_frame_state();
+
+        // A partial frame scissors every draw to its damage and repaints the
+        // background there first (`damage::begin_partial`); `partial_damage`
+        // is `None` for a full frame, which needs neither.
+        if let Some(damage) = partial_damage {
+            crate::damage::begin_partial(backend.painter_mut(), damage);
+            tracing::trace!(
+                left = damage.left(),
+                top = damage.top(),
+                width = damage.width(),
+                height = damage.height(),
+                "Damage scissor applied"
+            );
+        }
+
+        // Depth-first traversal of layer tree. Backdrop-filter and
+        // advanced-blend passes read from `render_texture`, which always has
+        // COPY_SRC here: the swapchain image when the surface offers it, the
+        // retained target (created with it) otherwise.
+        Self::render_layer_recursive(
+            scene.tree(),
+            scene.root(),
+            &mut backend,
+            &ctx,
+            render_texture,
+            render_view,
+        );
+
+        // Damage-straddle self-healing: if a partial scissor was applied AND
+        // `draw_order` now contains an advanced shape whose `device_bounds`
+        // straddle the damage edge, the caller repaints the next frame in full.
+        //
+        // Why next-frame and not this-frame: `render_layer_recursive` has
+        // already populated the draw commands with the scissored geometry; a
+        // this-frame re-record would require replaying the entire scene graph.
+        // The frame rendered into the retained target, so outside the damage
+        // it holds the correct previous frame and the straddling shape's own
+        // out-of-damage slice is the only pixel it can disturb, for one frame.
+        // A precomputed Scene bit or a re-record is the upgrade path if that
+        // transient ever shows.
+        let straddled = partial_damage
+            .is_some_and(|damage| backend.painter().has_advanced_shape_straddling(damage));
+        if straddled {
+            tracing::debug!(
+                "Advanced shape straddles partial damage; scheduling full repaint next frame"
+            );
+        }
+        // The dispatcher drops here: its Drop calls flush_active_transform(),
+        // which balances any deferred lazy-coalescing save left by
+        // `with_transform`, before the caller renders the painter's batches.
+        drop(backend);
+        straddled
     }
 
     /// Recursively render a layer and its children (depth-first, back-to-front /
