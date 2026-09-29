@@ -16,7 +16,7 @@ use super::frame_pacing::{
 };
 use super::host::{
     APP_RUNTIME, desktop_secondary_wake_deadline, install_wake_deadline_hook, merge_wake_deadlines,
-    runtime_needs_redraw_handle, runtime_wake_callback,
+    runtime_wake_callback,
 };
 use super::realm_dispatch::{
     PlatformToUi, RealmDispatcher, RealmTask, close_this_window, dispatch_platform_realm,
@@ -123,13 +123,8 @@ where
     // and the first frame agree on the scale from construction.
     let scale_factor = window.scale_factor();
     let wake = runtime_wake_callback();
-    let ui_realm = match crate::app::ui_realm::UiRealm::new(
-        Arc::clone(&wake),
-        presentation_window,
-        scale_factor,
-        runtime_needs_redraw_handle(),
-        super::host::runtime_clipboard(),
-    ) {
+    let ui_realm = match super::host::build_runtime_realm(&wake, presentation_window, scale_factor)
+    {
         Ok(realm) => realm,
         Err(e) => {
             tracing::error!(error = %e, "UiRealm construction failed");
