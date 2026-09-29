@@ -138,8 +138,9 @@ accumulated transform and the effect layers above it, compared with `Layer::same
 own region in surface pixels (its subtree minus nested boundaries' subtrees, from each picture's
 `DisplayList::damage_extent`, mapped with its isotropic shadow spread scaled by the transform's
 largest stretch, and clipped; content under an image filter or a perspective transform takes the
-clip). A changed token or placement damages the old and new regions, an added or removed boundary
-its one region; textures (a texture layer, or a picture's texture draws through
+clip). A changed token or placement damages the old and new regions, as does a kept boundary whose
+paint order changed relative to the other kept ones (those outside a longest increasing run of
+their previous order), an added or removed boundary its one region; textures (a texture layer, or a picture's texture draws through
 `DisplayList::volatile_extent`), platform views, canvases, overlays and anything under a follower
 are damaged every frame; a backdrop filter whose blur-widened bounds meet the damage
 joins it until nothing more does. The result is `Full` for an unpairable frame (first frame,

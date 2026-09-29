@@ -152,6 +152,12 @@ fn point_bounds<'a>(
     Some(Rect::from_ltrb(min_x, min_y, max_x, max_y))
 }
 
+/// The width a line or a point is drawn at: the paint's raw `stroke_width`,
+/// whatever its style, and at least one pixel, as the renderer draws it.
+fn line_width(paint: &crate::paint::Paint) -> f64 {
+    paint.stroke_width.max(1.0)
+}
+
 /// How many elevations a shadow's ink reaches past its path. The GPU's
 /// analytic shadow (`flui-engine`'s `draw_analytic_rrect_shadow`) blurs with
 /// a sigma of one elevation out to three sigma, around a copy of the shape
@@ -171,7 +177,13 @@ impl DrawOp {
     /// - a stroke reaches a full stroke width past its geometry (a miter
     ///   join's point), and twice that on open paths, lines and points (a
     ///   square cap on top of a miter), not the half width `local_bounds`
-    ///   adds;
+    ///   adds; a line or a point is stroked whatever the paint's style (the
+    ///   renderer reads `stroke_width` as is, at least one pixel), so a
+    ///   fill-style line reaches as far as a stroked one;
+    /// - an atlas sprite lands where the renderer places it: the sprite's
+    ///   size at its transform's translation, joined with the sprite's size
+    ///   mapped by the whole transform, not the source rect's position in
+    ///   the image;
     /// - a paragraph's glyphs overflow its laid-out box (ascenders under a
     ///   tight line height, italic overhang, swashes, combining marks), so
     ///   it covers the box joined with the layout's glyph ink bounds, and is
@@ -205,12 +217,13 @@ impl DrawOp {
                 ))
             }
             DrawOp::Line { p1, p2, paint } => point_bounds([p1, p2].into_iter())
-                .and_then(|b| bounded(b.expand(stroke(paint) * 2.0))),
+                .and_then(|b| bounded(b.expand(line_width(paint) * 2.0))),
             DrawOp::Path { path, paint } => {
                 bounded(path.compute_bounds().expand(stroke(paint) * 2.0))
             }
-            DrawOp::Points { points, paint, .. } => point_bounds(points.iter())
-                .and_then(|b| bounded(b.expand(stroke(paint).max(1.0) * 2.0))),
+            DrawOp::Points { points, paint, .. } => {
+                point_bounds(points.iter()).and_then(|b| bounded(b.expand(line_width(paint) * 2.0)))
+            }
             DrawOp::Shadow {
                 path, elevation, ..
             } => Some(DamageExtent::Bounded {
@@ -237,8 +250,26 @@ impl DrawOp {
             | DrawOp::ImageRepeat { .. }
             | DrawOp::ImageNineSlice { .. }
             | DrawOp::Texture { .. }
-            | DrawOp::Vertices { .. }
-            | DrawOp::Atlas { .. } => self.local_bounds().map(DamageExtent::rect),
+            | DrawOp::Vertices { .. } => self.local_bounds().map(DamageExtent::rect),
+            DrawOp::Atlas {
+                sprites,
+                transforms,
+                ..
+            } => sprites
+                .iter()
+                .zip(transforms.iter())
+                .map(|(sprite, transform)| {
+                    let size = Rect::from_xywh(0.0, 0.0, sprite.width(), sprite.height());
+                    let placed = Rect::from_xywh(
+                        transform.m[12],
+                        transform.m[13],
+                        sprite.width(),
+                        sprite.height(),
+                    );
+                    placed.union(&transform.transform_rect(&size))
+                })
+                .reduce(|acc, rect| acc.union(&rect))
+                .map(DamageExtent::rect),
             DrawOp::ClipRect { .. }
             | DrawOp::ClipRRect { .. }
             | DrawOp::ClipRSuperellipse { .. }

@@ -214,6 +214,7 @@ platform-contract and frame-transaction changes (ADR-0082, ADR-0083); ordering i
   `unbounded_picture_takes_the_clip`, `unstamped_root_is_full`, `root_id_change_is_full`,
   `size_change_is_full`, `textures_and_overlays_are_damaged_every_frame`,
   `a_pictures_texture_draw_is_damaged_every_frame`,
+  `a_paint_order_swap_of_overlapping_siblings_damages_their_overlap`,
   `a_shadow_under_a_non_uniform_scale_damages_its_blur_on_both_axes`,
   `a_leader_move_damages_its_follower`, `damage_meeting_a_backdrop_includes_the_backdrop`,
   `damage_disjoint_from_a_backdrop_does_not_expand`, `damage_over_threshold_is_full`,
@@ -223,7 +224,8 @@ platform-contract and frame-transaction changes (ADR-0082, ADR-0083); ordering i
   `pipeline_frames_diff_to_the_changed_boundary_rect` end to end); `flui-painting`'s
   `a_color_fill_makes_the_extent_unbounded`, `paragraph_extent_covers_every_rasterized_glyph`,
   `stroke_and_shadow_extents_cover_their_outsets`,
-  `shadow_extent_spreads_by_the_largest_scale_on_both_axes`; `flui-app`'s raster-lane tests
+  `shadow_extent_spreads_by_the_largest_scale_on_both_axes`,
+  `fill_style_lines_and_points_reach_their_stroke_width`, `atlas_extent_covers_the_sprite_destination`; `flui-app`'s raster-lane tests
   `a_changed_boundary_reaches_the_backend_as_a_dirty_rect`, `an_identical_scene_does_not_present`,
   `damage_off_sends_every_frame_full_and_retains_nothing`, `the_damage_variable_selects_the_mode`.
 - §4: `flui-engine`'s `damage_readback_tests.rs`
@@ -233,6 +235,9 @@ platform-contract and frame-transaction changes (ADR-0082, ADR-0083); ordering i
   `a_removed_shadow_under_a_non_uniform_scale_leaves_no_penumbra`,
   `removed_text_under_a_tight_line_height_leaves_no_ink`,
   `an_updated_texture_repaints_under_an_unchanged_picture`,
+  `overlapping_boundaries_that_swap_order_repaint_the_overlap`,
+  `a_removed_atlas_sprite_leaves_nothing_at_its_destination`,
+  `removed_fill_style_lines_and_points_leave_nothing`,
   `a_damage_edge_through_an_advanced_blend_matches_a_full_frame`,
   `a_frame_outside_the_protocol_is_followed_by_a_full_one`), which drive the same
   `FrameProtocol` the windowed renderer runs; `damage::tests::plan_frame_table`; and the

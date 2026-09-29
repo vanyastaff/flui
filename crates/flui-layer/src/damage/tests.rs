@@ -371,6 +371,53 @@ fn textures_and_overlays_are_damaged_every_frame() {
     }
 }
 
+/// Two overlapping sibling boundaries that swap paint order keep their
+/// tokens and transforms; the swap still damages the one that moved, which
+/// covers their overlap, so the one now on top is painted over the other. A boundary inserted before them shifts their
+/// positions without changing their relative order and damages only itself.
+#[test]
+fn a_paint_order_swap_of_overlapping_siblings_damages_their_overlap() {
+    let tokens = [
+        ContentToken::mint(),
+        ContentToken::mint(),
+        ContentToken::mint(),
+        ContentToken::mint(),
+    ];
+    let build = |order: &[u64]| {
+        let mut frame = Frame::new(1.0, &tokens[0]);
+        let parent = frame.root();
+        for &raw in order {
+            let at = match raw {
+                2 => Offset::new(100.0, 100.0),
+                3 => Offset::new(120.0, 120.0),
+                _ => Offset::new(300.0, 300.0),
+            };
+            frame.boundary(
+                parent,
+                raw,
+                &tokens[raw as usize - 1],
+                at,
+                Size::new(40.0, 40.0),
+            );
+        }
+        frame.scene()
+    };
+    let mut differ = LayerDiffer::default();
+    differ.diff(&build(&[2, 3]), SURFACE);
+    let (l, t, r, b) = partial(differ.diff(&build(&[3, 2]), SURFACE));
+    let (overlap_l, overlap_t, overlap_r, overlap_b) = covering(120.0, 120.0, 140.0, 140.0);
+    assert!(
+        l <= overlap_l && t <= overlap_t && r >= overlap_r && b >= overlap_b,
+        "the overlap the swap changes is damaged: {:?}",
+        (l, t, r, b)
+    );
+    assert_eq!(
+        partial(differ.diff(&build(&[4, 3, 2]), SURFACE)),
+        covering(300.0, 300.0, 340.0, 340.0),
+        "an insertion ahead of them damages only the new boundary"
+    );
+}
+
 /// A picture that draws an external texture (`Canvas::draw_texture`) keeps
 /// its boundary's token while the texture's producer replaces the content
 /// behind the same id: the texture's rect is damaged on every frame, the

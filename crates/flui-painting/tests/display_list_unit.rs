@@ -469,3 +469,56 @@ fn shadow_extent_spreads_by_the_largest_scale_on_both_axes() {
         "a layer's scale above the list"
     );
 }
+
+/// A line and a point are stroked whatever the paint's style: the renderer
+/// draws a fill-style `draw_line` at its raw `stroke_width`, and a point as a
+/// circle of half of it, so their extents reach that far too rather than
+/// collapsing to the bare geometry.
+#[test]
+fn fill_style_lines_and_points_reach_their_stroke_width() {
+    use flui_foundation::geometry::Point;
+    use flui_painting::paint::PointMode;
+
+    let mut paint = Paint::fill(Color::RED);
+    paint.stroke_width = 6.0;
+    let line = flui_painting::testing::record(|canvas| {
+        canvas.draw_line(Point::new(10.0, 20.0), Point::new(90.0, 20.0), &paint);
+    });
+    let extent = bounded(&line);
+    assert!(
+        extent.contains_rect(&Rect::from_ltrb(7.0, 17.0, 93.0, 23.0)),
+        "the line's 6 px body is covered: {extent:?}"
+    );
+
+    let points = flui_painting::testing::record(|canvas| {
+        canvas.draw_points_with_mode(PointMode::Points, vec![Point::new(50.0, 50.0)], &paint);
+    });
+    let extent = bounded(&points);
+    assert!(
+        extent.contains_rect(&Rect::from_ltrb(47.0, 47.0, 53.0, 53.0)),
+        "the point's 3 px radius is covered: {extent:?}"
+    );
+}
+
+/// An atlas sprite's extent is where the renderer lands it, the sprite's size
+/// at its transform's translation, not the source rect mapped by the
+/// transform (which is where the sprite sits in the image).
+#[test]
+fn atlas_extent_covers_the_sprite_destination() {
+    let image = flui_painting::paint::Image::solid_color(64, 64, Color::RED);
+    let list = flui_painting::testing::record(|canvas| {
+        canvas.draw_atlas(
+            image,
+            vec![Rect::from_ltrb(50.0, 50.0, 60.0, 60.0)],
+            vec![Matrix4::translation(100.0, 100.0, 0.0)],
+            None,
+            flui_painting::paint::BlendMode::SrcOver,
+            None,
+        );
+    });
+    let extent = bounded(&list);
+    assert!(
+        extent.contains_rect(&Rect::from_ltrb(100.0, 100.0, 110.0, 110.0)),
+        "the sprite lands at the translation: {extent:?}"
+    );
+}

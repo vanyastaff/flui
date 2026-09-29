@@ -21,7 +21,9 @@ use crate::{
 /// [`ContentToken`], its placement (the accumulated transform and the effect
 /// layers above it) and its own region in surface pixels. A boundary
 /// contributes damage when it was added (its new region), removed (its old
-/// region), or kept with a different token or placement (both). Content that
+/// region), or kept with a different token or placement (both), or kept but
+/// painted in a different order relative to the other kept boundaries (both:
+/// see [`moved_in_paint_order`]). Content that
 /// cannot be vouched for by a token — textures (a texture layer or a picture's
 /// texture draw), platform views, live canvases, performance overlays and
 /// anything under a follower — is damaged on every frame at its old and new
@@ -132,6 +134,9 @@ struct Record {
     /// The pixels the boundary's own content can reach: its subtree minus
     /// every nested boundary's.
     region: Option<Rect<f64>>,
+    /// Position in the frame's paint order among stamped layers (the walk
+    /// is a pre-order, back to front).
+    order: usize,
 }
 
 /// How far a subtree's content can reach.
@@ -246,6 +251,7 @@ impl Frame {
                 if frame.boundaries.contains_key(&render_id) {
                     return None;
                 }
+                let order = frame.boundaries.len();
                 frame.boundaries.insert(
                     render_id,
                     Record {
@@ -253,6 +259,7 @@ impl Frame {
                         transform: ctx.transform,
                         effects: materialize(&chain, ctx.effects),
                         region: None,
+                        order,
                     },
                 );
                 ctx.owner = Some(render_id);
@@ -352,6 +359,10 @@ fn compare(previous: &Frame, current: &Frame, full_above: f64) -> DamageRegion {
             add(old.region);
         }
     }
+    for (old, new) in moved_in_paint_order(previous, current) {
+        add(old.region);
+        add(new.region);
+    }
     add(previous.volatile);
     add(current.volatile);
 
@@ -383,6 +394,54 @@ fn compare(previous: &Frame, current: &Frame, full_above: f64) -> DamageRegion {
     } else {
         DamageRegion::Partial(rect)
     }
+}
+
+/// The kept boundaries whose paint order changed relative to the others, as
+/// `(previous, current)` records.
+///
+/// A boundary keeps its token and placement when a parent only reorders its
+/// children, and the parent's own region excludes theirs, so without this two
+/// overlapping siblings that swap places would compare unchanged and leave
+/// the old topmost content on screen. The kept boundaries in current paint
+/// order, keyed by their previous order, keep a longest increasing
+/// subsequence in place; every boundary outside it moved. Any pair whose
+/// order flipped has at least one member outside it, and damaging that
+/// member's regions repaints every pixel the two share. Boundaries added or
+/// removed shift no one: only relative order among kept ones counts.
+fn moved_in_paint_order<'a>(
+    previous: &'a Frame,
+    current: &'a Frame,
+) -> Vec<(&'a Record, &'a Record)> {
+    let mut kept: Vec<(&Record, &Record)> = current
+        .boundaries
+        .iter()
+        .filter_map(|(render_id, new)| Some((previous.boundaries.get(render_id)?, new)))
+        .collect();
+    kept.sort_unstable_by_key(|(_, new)| new.order);
+
+    // Patience sort: `tails[k]` is the index into `kept` ending the best
+    // increasing run of length `k + 1`; `links` walks each run back.
+    let mut tails: Vec<usize> = Vec::new();
+    let mut links: Vec<Option<usize>> = vec![None; kept.len()];
+    for (index, (old, _)) in kept.iter().enumerate() {
+        let length = tails.partition_point(|&tail| kept[tail].0.order < old.order);
+        links[index] = length.checked_sub(1).map(|shorter| tails[shorter]);
+        if length == tails.len() {
+            tails.push(index);
+        } else {
+            tails[length] = index;
+        }
+    }
+    let mut in_place = vec![false; kept.len()];
+    let mut cursor = tails.last().copied();
+    while let Some(index) = cursor {
+        in_place[index] = true;
+        cursor = links[index];
+    }
+    kept.into_iter()
+        .zip(in_place)
+        .filter_map(|(pair, stays)| (!stays).then_some(pair))
+        .collect()
 }
 
 /// Whether a boundary sits under the same transform and the same effects in

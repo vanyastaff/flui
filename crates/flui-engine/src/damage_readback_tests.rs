@@ -32,6 +32,7 @@ fn id(raw: usize) -> RenderId {
 
 /// One boundary of a test scene: a stamped `OffsetLayer` at `at` holding the
 /// picture `paint` records at its origin.
+#[derive(Clone, Copy)]
 struct Boundary<'a> {
     id: usize,
     token: &'a ContentToken,
@@ -951,4 +952,169 @@ fn removed_text_under_a_tight_line_height_leaves_no_ink() {
         "the old glyphs' ink survived outside the damage at \
          (x, y, partial, full): {stale:?}"
     );
+}
+
+/// Renders `before` in full, then `after` as the partial frame its diff
+/// produces, and returns the partial frame's pixels beside `after` rendered
+/// in full on a fresh capture.
+fn partial_and_full(
+    renderer: &crate::headless::HeadlessRenderer,
+    before: &Scene,
+    after: &Scene,
+) -> (Vec<u8>, Vec<u8>) {
+    let mut partial = renderer
+        .retained_capture((SIDE, SIDE))
+        .expect("capture target");
+    let mut differ = LayerDiffer::default();
+    let region = differ.diff(before, (SIDE, SIDE));
+    frame(&mut partial, before, region, |plan| {
+        plan == FramePlan::Direct
+    });
+    warm(&mut partial, before);
+    let region = differ.diff(after, (SIDE, SIDE));
+    frame(&mut partial, after, region, |plan| {
+        matches!(plan, FramePlan::RetainedPartial(_))
+    });
+    (
+        partial.read_rgba().expect("readback"),
+        full_frame_pixels(renderer, after),
+    )
+}
+
+/// Two overlapping boundaries that swap paint order, keeping their tokens and
+/// positions: where they overlap, the one now on top shows.
+#[test]
+fn overlapping_boundaries_that_swap_order_repaint_the_overlap() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let (root, red_token, blue_token) = (
+        ContentToken::mint(),
+        ContentToken::mint(),
+        ContentToken::mint(),
+    );
+    let red = square(Color::RED);
+    let blue = square(Color::BLUE);
+    let red_box = Boundary {
+        id: 2,
+        token: &red_token,
+        at: Offset::new(40.0, 40.0),
+        paint: &red,
+    };
+    let blue_box = Boundary {
+        id: 3,
+        token: &blue_token,
+        at: Offset::new(48.0, 48.0),
+        paint: &blue,
+    };
+    let red_on_top = scene(&root, &[blue_box, red_box], None);
+    let blue_on_top = scene(&root, &[red_box, blue_box], None);
+
+    let mut capture = renderer
+        .retained_capture((SIDE, SIDE))
+        .expect("capture target");
+    let mut differ = LayerDiffer::default();
+    let region = differ.diff(&red_on_top, (SIDE, SIDE));
+    frame(&mut capture, &red_on_top, region, |plan| {
+        plan == FramePlan::Direct
+    });
+    warm(&mut capture, &red_on_top);
+    assert_eq!(
+        px(&capture.read_rgba().expect("readback"), 52, 52),
+        RED,
+        "precondition: red is on top"
+    );
+    let region = differ.diff(&blue_on_top, (SIDE, SIDE));
+    apply(&mut capture, region);
+    capture
+        .render_scene(&blue_on_top)
+        .expect("the frame renders");
+    let partial = capture.read_rgba().expect("readback");
+    let full = full_frame_pixels(&renderer, &blue_on_top);
+    assert_eq!(px(&full, 52, 52), BLUE, "precondition: blue is on top");
+    assert_eq!(
+        px(&partial, 52, 52),
+        BLUE,
+        "the overlap shows the boundary now on top (region {region:?})"
+    );
+    let stale = mismatches(&partial, &full, 0);
+    assert!(stale.is_empty(), "stale pixels at {stale:?}");
+}
+
+/// A removed atlas sprite leaves nothing where the renderer placed it: the
+/// sprite's size at its transform's translation, far from the source rect's
+/// position in the image.
+#[test]
+fn a_removed_atlas_sprite_leaves_nothing_at_its_destination() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let (root, card) = (ContentToken::mint(), ContentToken::mint());
+    let sprites = |canvas: &mut Canvas| {
+        canvas.draw_atlas(
+            flui_painting::paint::Image::solid_color(64, 64, Color::RED),
+            vec![Rect::from_ltrb(40.0, 40.0, 56.0, 56.0)],
+            vec![Matrix4::translation(8.0, 8.0, 0.0)],
+            None,
+            BlendMode::SrcOver,
+            None,
+        );
+    };
+    let before = scene(
+        &root,
+        &[Boundary {
+            id: 2,
+            token: &card,
+            at: Offset::ZERO,
+            paint: &sprites,
+        }],
+        None,
+    );
+    let after = scene(&root, &[], None);
+    let (partial, full) = partial_and_full(&renderer, &before, &after);
+    assert_eq!(px(&full, 16, 16), WHITE);
+    assert_eq!(px(&partial, 16, 16), WHITE, "the sprite is gone");
+    let stale = mismatches(&partial, &full, 0);
+    assert!(stale.is_empty(), "stale pixels at {stale:?}");
+}
+
+/// A removed fill-style line and point leave nothing behind: the renderer
+/// strokes both at the paint's raw `stroke_width` whatever its style.
+#[test]
+fn removed_fill_style_lines_and_points_leave_nothing() {
+    use flui_foundation::geometry::Point;
+    use flui_painting::paint::PointMode;
+
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let (root, card) = (ContentToken::mint(), ContentToken::mint());
+    let strokes = |canvas: &mut Canvas| {
+        let mut paint = Paint::fill(Color::BLACK);
+        paint.stroke_width = 6.0;
+        canvas.draw_line(Point::new(10.0, 20.0), Point::new(90.0, 20.0), &paint);
+        canvas.draw_points_with_mode(PointMode::Points, vec![Point::new(60.0, 60.0)], &paint);
+    };
+    let before = scene(
+        &root,
+        &[Boundary {
+            id: 2,
+            token: &card,
+            at: Offset::ZERO,
+            paint: &strokes,
+        }],
+        None,
+    );
+    let drawn = full_frame_pixels(&renderer, &before);
+    assert_ne!(px(&drawn, 50, 22), WHITE, "precondition: the line is drawn");
+    assert_ne!(
+        px(&drawn, 60, 62),
+        WHITE,
+        "precondition: the point is drawn"
+    );
+
+    let after = scene(&root, &[], None);
+    let (partial, full) = partial_and_full(&renderer, &before, &after);
+    let stale = mismatches(&partial, &full, 0);
+    assert!(stale.is_empty(), "stale pixels at {stale:?}");
 }
