@@ -320,8 +320,9 @@ internal boundary is a visibility switch that is always on.
 **Alternatives rejected.** An `unstable` feature (the same unification problem).
 
 **Evidence.** `crates/flui-app/Cargo.toml:90`; `crates/flui-view/Cargo.toml:118`. Verification
-did not challenge this decision; ADR-0081 §4 owns it, and the migration plan schedules the
-replacement as its own step, which also removes the feature's allowlist entry.
+did not challenge this decision; ADR-0081 §4 owns it. The facade and `flui-sdk` re-export
+`flui-view` as a glob module that shadows `__runtime`, so the seam is not reachable through
+`flui::view` or `flui_sdk::view`.
 
 ### D12. Text shapes per realm over Parley
 

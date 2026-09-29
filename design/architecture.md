@@ -217,7 +217,7 @@ stays in `flui-scheduler` (returned at `build_context.rs:406`), `GlobalKeyScope`
 |---|---|---|
 | `stable` | `flui`, `flui-platform-api`, `flui-protocol` (Evolving until H3) | Semver on the measured transitive closure of public types, gated by `cargo-semver-checks` from H3. |
 | `evolving` | `flui-sdk` | `0.N`, bumped on every release train, published by the same run; no promise across trains. |
-| `internal` | every other core crate | Exact train pins; may change in any release. `#[doc(hidden)] pub mod __runtime` replaces the `runtime-internals` feature (`crates/flui-view/Cargo.toml:118`, enabled by `crates/flui-app/Cargo.toml:90`). |
+| `internal` | every other core crate | Exact train pins; may change in any release. A seam the composition roots need is an always-compiled `#[doc(hidden)] pub mod __runtime` (`flui_view::__runtime`), never a feature; the facade and `flui-sdk` shadow it in their `view` modules. |
 | `official` | `packages/*` | Same train, same publish run, built on `flui-sdk`. |
 | `tool` | `flui-cli`, `tools/*` | `flui-cli` versions on its own; `tools/*` are `publish = false` and never a dependency. |
 
@@ -318,7 +318,7 @@ created, and the other names are unchecked
 
 1. **Features are additive**, and every optional dependency sits behind a `dep:` feature. A
    feature with zero `cfg` sites fails `cargo xtask workspace`.
-2. **A feature is never a visibility switch.** `runtime-internals` becomes
+2. **A feature is never a visibility switch.** Cross-crate internals live in
    `#[doc(hidden)] pub mod __runtime`. Experimental API is `#[cfg(flui_unstable)]`, set through
    `RUSTFLAGS=--cfg flui_unstable`, because a Cargo feature leaks through feature unification
    (owner decision 2).

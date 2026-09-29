@@ -148,7 +148,8 @@ in `flui-view` or below (`AsyncDriver` in `flui-scheduler`, `GlobalKeyScope` in 
 frame phases — `UpdateScheduler::drive_frame`/`drive_frame_with_lane`
 (`scheduler.rs:1860,1874`), `handle_begin_frame`/`handle_draw_frame` (`scheduler.rs:1274,1422`)
 and `WidgetsBinding::draw_frame`/`draw_frame_with_phase_marker`
-(`crates/flui-view/src/binding.rs:1218,1232`) — are called from `flui-runtime` and nowhere else
+(`crates/flui-view/src/binding.rs:1218,1232`; the latter is now a method of the sealed
+`flui_view::__runtime::BindingRuntime`, ADR-0081 §4) — are called from `flui-runtime` and nowhere else
 outside their own crates' tests.
 
 The mechanism, in order of preference:

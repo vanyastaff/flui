@@ -429,7 +429,7 @@ through the realm by `ui_realm/tests/global_key_lookup_during_frame.rs` in `flui
 `dev_reload::DevReloadHook` (ADR-0094 §1) is the only seam between a host and a reload tool.
 It sits in this crate, below the runtime, so the host (`flui-app`) and the tool
 (`flui-hot-reload`) each name it without naming each other, and a package reaches it through
-`flui-sdk`'s whole `view` re-export with no new SDK item. Flutter has no counterpart: its
+`flui-sdk`'s `view` glob re-export with no new SDK item. Flutter has no counterpart: its
 reload is the VM's, not a framework trait. The trait is the driver half — `attach`, `detach`,
 `poll` and `scene_frame`; the per-call seam a code patcher needs arrives with its first
 producer. Its bound is `Send + 'static` because the instance travels in the application's
@@ -437,6 +437,22 @@ configuration; it is only ever called on the owner thread. `scene_frame` lends t
 callback so a scene built by a plugin image cannot outlive it. Pinned by
 `scene_frame_default_never_calls_render` and by the host's tests in `flui-app`
 (`app/hot_reload/tests.rs`).
+
+### The composition-root seam is a hidden module, not a feature
+
+What the realm-owning crates (`flui-runtime`, `flui-app`, `flui-testing`, `flui-hot-reload`)
+need from a binding lives in `#[doc(hidden)] pub mod __runtime` (ADR-0081 §4): the
+`GlobalKey` registry activation, the frame-phase stamp at the build-to-finalize boundary
+(`FramePhaseMarker`), the multi-presentation `GlobalKeyRegistryComposite`, and the terminal
+lifecycle ladder (`LifecycleSource`). Flutter has no counterpart: its bindings are one
+process-wide mixin stack, with no second crate to hand the seam to. The module is always
+compiled, so no build configuration changes what `WidgetsBinding` holds, and it has no semver
+promise. The methods it adds to `WidgetsBinding` are on the sealed `BindingRuntime` trait
+rather than inherent, so they resolve only where the trait is imported and are not part of the
+binding's surface as `flui::view` and `flui_sdk::view` expose it. Those two re-export this
+crate as a glob module with a private `mod __runtime {}` that shadows the glob's, so the seam
+is not reachable through them; a `compile_fail,E0603` doctest on each pins it. Pinned from
+outside the crate by `tests/runtime_seam.rs`.
 
 ### Not adopted
 
