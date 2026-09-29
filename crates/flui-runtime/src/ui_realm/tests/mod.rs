@@ -1701,6 +1701,13 @@ fn full_restart_command_does_not_arm_a_presentation_redraw() {
 }
 
 // ========================================================================
+// `SemanticsAgent`: an agent's wire read of, and actions on, a
+// presentation's committed semantics tree through the owner inbox
+// (ADR-0095 §3).
+// ========================================================================
+mod agent_semantics;
+
+// ========================================================================
 // Frame pipeline, first-frame deferral, and Vsync — migrated from the
 // retired `AppBinding`'s own test module (`binding.rs`, deleted alongside
 // it). These are the frame-loop parity oracle: `draw_frame_entered`'s

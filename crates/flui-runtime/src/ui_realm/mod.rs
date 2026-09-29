@@ -104,6 +104,7 @@ const DEFAULT_COMMAND_CAPACITY: usize = 256;
 /// after the bound does not depend on this counter ever being reset by hand.
 const MAX_NOT_SHOWN_RETRIES: u32 = 128;
 
+mod agent;
 mod attach;
 mod commands;
 mod construct;
@@ -113,6 +114,7 @@ mod input;
 mod presentations;
 mod pump;
 
+pub use agent::{AgentError, AgentReply, SemanticsAgent};
 pub use commands::{CommandSendError, DrainReport, UiCommand, UiCommandSender};
 use input::FocusCoordinator;
 #[cfg(test)]

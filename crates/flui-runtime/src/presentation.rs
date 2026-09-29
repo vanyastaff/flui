@@ -919,20 +919,10 @@ impl PresentationState {
     /// This presentation's semantics enablement gate and platform
     /// accessibility delivery — the per-window home the retired
     /// `SemanticsBinding` singleton's enablement/announce/event state moved
-    /// into. `Self::new` reads the underlying flag directly (before `self`
-    /// exists to call this wrapper through) to wire the renderer's
-    /// semantics-enabled fan-out; announce/event delivery itself still has
-    /// no production caller (future platform-embedder wiring).
+    /// into. `UiRealm::semantics_agent` acquires its enablement handle
+    /// here; announce/event delivery itself still has no production caller
+    /// (future platform-embedder wiring).
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "this accessor's one production caller moved inline into \
-                      Self::new's own assembly; kept for tests and any future \
-                      external caller"
-        )
-    )]
     pub(crate) fn semantics_host(&self) -> &SemanticsHost {
         &self.semantics
     }

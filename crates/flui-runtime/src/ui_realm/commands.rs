@@ -89,6 +89,28 @@ pub enum UiCommand {
         /// The stable node identity and action to resolve.
         request: SemanticsActionRequest,
     },
+    /// Read the addressed presentation's semantics tree as wire nodes, for
+    /// a [`SemanticsAgent`](super::SemanticsAgent), and answer on `reply`.
+    SemanticsRead {
+        /// The presentation the agent was vended for.
+        presentation_id: PresentationId,
+        /// How much of the tree to read.
+        query: flui_protocol::ReadQuery,
+        /// Where the answer goes.
+        reply: super::agent::ReplySender<flui_protocol::Tree>,
+    },
+    /// Resolve an agent's wire action against the addressed presentation's
+    /// committed tree, invoke it, and answer on `reply`.
+    SemanticsAgentAction {
+        /// The presentation the agent was vended for.
+        presentation_id: PresentationId,
+        /// The element and action.
+        request: flui_protocol::ActionRequest,
+        /// Whether the agent's reads ever reported the element.
+        issued: bool,
+        /// Where the answer goes.
+        reply: super::agent::ReplySender<()>,
+    },
     /// Apply a typed navigator mutation on the owner thread.
     Navigation(NavigatorCommand),
     /// Run a write against the reactive graph that minted `target` (ADR-0074
@@ -119,6 +141,26 @@ impl std::fmt::Debug for UiCommand {
                 .field("presentation_id", presentation_id)
                 .field("request", request)
                 .finish(),
+            UiCommand::SemanticsRead {
+                presentation_id,
+                query,
+                ..
+            } => f
+                .debug_struct("UiCommand::SemanticsRead")
+                .field("presentation_id", presentation_id)
+                .field("query", query)
+                .finish_non_exhaustive(),
+            // The request's value stays out: it may be what a user typed.
+            UiCommand::SemanticsAgentAction {
+                presentation_id,
+                request,
+                ..
+            } => f
+                .debug_struct("UiCommand::SemanticsAgentAction")
+                .field("presentation_id", presentation_id)
+                .field("element", &request.element)
+                .field("action", &request.action)
+                .finish_non_exhaustive(),
             UiCommand::Navigation(command) => f
                 .debug_tuple("UiCommand::Navigation")
                 .field(command)
@@ -511,6 +553,75 @@ impl UiRealm {
                                 "dropping semantics action against a stale snapshot"
                             );
                             report.dropped_stale += 1;
+                        }
+                    }
+                }
+                UiCommand::SemanticsRead {
+                    presentation_id,
+                    query,
+                    reply,
+                } => {
+                    let result = self.serve_semantics_read(presentation_id, &query);
+                    if result == Err(super::AgentError::PresentationGone) {
+                        report.dropped_stale += 1;
+                    } else {
+                        report.invoked += 1;
+                    }
+                    super::agent::send_reply(&reply, query.root, result);
+                }
+                UiCommand::SemanticsAgentAction {
+                    presentation_id,
+                    request,
+                    issued,
+                    reply,
+                } => {
+                    let element = request.element;
+                    let served = catch_unwind(AssertUnwindSafe(|| {
+                        self.serve_semantics_act(presentation_id, &request, issued)
+                    }));
+                    match served {
+                        Ok(result) => {
+                            if result == Err(super::AgentError::PresentationGone) {
+                                report.dropped_stale += 1;
+                            } else {
+                                report.invoked += 1;
+                            }
+                            super::agent::send_reply(&reply, Some(element), result);
+                        }
+                        Err(payload) => {
+                            // The handler panicked. Its reply fails first, so
+                            // the agent learns of it whatever happens next;
+                            // then a queued tail gets a future owner turn,
+                            // since this one is unwinding; then the original
+                            // panic resumes, never replaced by a later one.
+                            let answered = catch_unwind(AssertUnwindSafe(|| {
+                                super::agent::send_reply(
+                                    &reply,
+                                    Some(element),
+                                    Err(super::AgentError::HandlerPanicked { element }),
+                                );
+                            }))
+                            .err();
+                            let mut first_panic = Some(payload);
+                            preserve_first_input_panic(
+                                &mut first_panic,
+                                answered,
+                                "semantics agent reply",
+                            );
+                            if !self.rx.is_empty() {
+                                let wake_panic = catch_unwind(AssertUnwindSafe(|| {
+                                    self.sender_prototype.wake_owner();
+                                }))
+                                .err();
+                                preserve_first_input_panic(
+                                    &mut first_panic,
+                                    wake_panic,
+                                    "semantics agent action wake",
+                                );
+                            }
+                            resume_unwind(first_panic.expect(
+                                "BUG: the semantics agent handler panic must be preserved",
+                            ));
                         }
                     }
                 }

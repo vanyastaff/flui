@@ -37,8 +37,11 @@ flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev" }
 # `Scene`, what a frame sink submits.
 flui-layer = { path = "../flui-layer", version = "=0.2.0-dev" }
-# `Assertiveness`/`SemanticsEvent`, what the semantics host delivers.
+# `Assertiveness`/`SemanticsEvent`, what the semantics host delivers, and the
+# wire projection a semantics agent reads through.
 flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
+# The agent-protocol schema a semantics agent reads and acts in (ADR-0095).
+flui-protocol = { workspace = true }
 # `PlatformWindow` and its capability traits, the window contract a
 # presentation drives; no backend (ADR-0082).
 flui-platform-api = { workspace = true }
@@ -100,6 +103,9 @@ flui-platform = { path = "../flui-platform", version = "=0.2.0-dev" }
 flui-objects = { path = "../flui-objects", version = "=0.2.0-dev" }
 accesskit = { workspace = true }
 static_assertions = { workspace = true }
+# A semantics agent's read round-trips through JSON in its tests.
+flui-protocol = { workspace = true, features = ["serde"] }
+serde_json = { workspace = true }
 # The test-only hooks of the crates the realm drives: `push_pending_child_
 # request_for_test`, `register_layout_builder_for_test`.
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features = ["testing"] }
