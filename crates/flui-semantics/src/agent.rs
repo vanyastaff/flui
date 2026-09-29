@@ -18,7 +18,7 @@
 //!
 //! # Roles
 //!
-//! [`wire_role`] folds an AccessKit role to the wire role the desktop server
+//! `wire_role` folds an AccessKit role to the wire role the desktop server
 //! would report for it on Windows: the UI Automation control type
 //! `accesskit_windows` 0.35 gives it, read through the desktop server's
 //! control-type table, with the two refinements that server applies (a
