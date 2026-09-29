@@ -24,8 +24,9 @@ use flui_view::prelude::StatelessView;
 use flui_view::{BuildContext, IntoView, ViewExt};
 use flui_widgets::{
     BouncingScrollPhysics, ClampingScrollPhysics, ColoredBox, CustomScrollView, GestureDetector,
-    GridView, ListView, Listener, ScrollController, ScrollMetrics, ScrollPhysics, Scrollable,
-    SharedScrollPhysics, SingleChildScrollView, SizedBox, SliverFixedExtentList, VsyncScope,
+    GridView, LayoutBuilder, ListView, Listener, ScrollController, ScrollMetrics, ScrollPhysics,
+    Scrollable, SharedScrollPhysics, SingleChildScrollView, SizedBox, SliverFixedExtentList, Stack,
+    VsyncScope,
 };
 
 /// Flutter parity (tag `3.44.0`):
@@ -854,9 +855,11 @@ fn scrollable_offset_listener_settles_within_a_bounded_number_of_ticks_after_ext
 /// flush `ScrollableState::init_state` installs.
 ///
 /// FAILS if `apply_content_dimensions` stops writing through to the shared
-/// position (the `max_scroll_extent` assertion), or if the coalesced flush
+/// position (the `max_scroll_extent` assertion), if the coalesced flush
 /// never fires (the listener-count assertion) — e.g. a flush handle that
-/// silently isn't installed, or a flush that never calls `notify()`.
+/// silently isn't installed, or a flush that never calls `notify()` — or if
+/// the notification runs synchronously inside layout instead of being
+/// deferred to the post-frame flush (the probe laid out after the viewport).
 #[test]
 fn scrollable_content_dimension_feedback_supplies_extents_and_notifies_a_listener() {
     let controller = ScrollController::new();
@@ -869,9 +872,24 @@ fn scrollable_content_dimension_feedback_supplies_extents_and_notifies_a_listene
     // 300px viewport, 800px content — the exact geometry
     // `scrollable_drag_up_increases_scroll_offset` seeds by hand via
     // `update_dimensions(300.0, 0.0, 500.0)`. Here nothing seeds it.
-    let widget = Scrollable::new()
-        .controller(controller.clone())
-        .child(SizedBox::new(300.0, 800.0));
+    // A probe laid out after the viewport, in the same layout pass, records
+    // how often the listener had fired by then: the notification must not
+    // have run synchronously inside layout.
+    let fired_during_layout = Rc::new(Cell::new(None::<usize>));
+    let (probe_count, probe_slot) = (Arc::clone(&listener_fired), Rc::clone(&fired_during_layout));
+    let widget = Stack::new(vec![
+        Scrollable::new()
+            .controller(controller.clone())
+            .child(SizedBox::new(300.0, 800.0))
+            .boxed(),
+        LayoutBuilder::new(move |_ctx, _constraints| {
+            if probe_slot.get().is_none() {
+                probe_slot.set(Some(probe_count.load(std::sync::atomic::Ordering::SeqCst)));
+            }
+            SizedBox::shrink()
+        })
+        .boxed(),
+    ]);
 
     let scoped = lay_out(widget, tight(300.0, 300.0));
 
@@ -883,6 +901,11 @@ fn scrollable_content_dimension_feedback_supplies_extents_and_notifies_a_listene
          viewport, 800px content -> 500px scroll extent) into the shared ScrollPosition with \
          zero update_dimensions calls; got {:.1}",
         controller.max_scroll_extent()
+    );
+    assert_eq!(
+        fired_during_layout.get(),
+        Some(0),
+        "the coalesced flush must not notify inside the layout that supplied the extents"
     );
     // The mount is a complete realm frame, so its end-frame phase already
     // drained the scheduler's post-frame queue and fired the coalesced flush.
