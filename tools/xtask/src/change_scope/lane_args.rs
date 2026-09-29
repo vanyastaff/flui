@@ -29,7 +29,8 @@
 //!   features (the doc job's flags, narrowed): a moved item's broken intra-doc
 //!   link otherwise merges green and fails main's `doc` job;
 //! - doctests run over the scope's library packages (the `doc-test` job,
-//!   narrowed): nextest never executes them;
+//!   narrowed): nextest never executes them; both name the facade's catalogs
+//!   when `flui` is in scope, as the tests do;
 //! - CI's `fast-lane` runs its tests as `ci_test_args`: the workspace's
 //!   [`TEST_SCOPE`](crate::tasks::TEST_SCOPE) build, narrowed to the scope by a
 //!   nextest filterset, so it builds what the `workspace-tests` cache holds
@@ -37,6 +38,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
+
+/// The facade's design-system features, none on by default (ADR-0088 §6):
+/// every fast-lane step that selects `flui` names them.
+const FACADE_CATALOGS: [&str; 2] = ["flui/material", "flui/cupertino"];
 
 use super::classify::{Mode, Package, Repo, Scope, Workspace};
 
@@ -397,8 +402,13 @@ pub(super) fn lane_args(
         } else {
             p(set.iter().copied())
         };
-        if !testing.is_empty() {
-            let feats: Vec<String> = testing.iter().map(|n| format!("{n}/testing")).collect();
+        let mut feats: Vec<String> = testing.iter().map(|n| format!("{n}/testing")).collect();
+        // the facade's catalogs are off by default: name them, or rustdoc and
+        // the doctests skip the Material-gated half of the facade
+        if has("flui") {
+            feats.extend(FACADE_CATALOGS.iter().map(|f| (*f).to_owned()));
+        }
+        if !feats.is_empty() {
             let _ = write!(doc_args, " --features {}", feats.join(","));
         }
         // doctests (nextest runs none): `cargo test --doc -p` errors on a
@@ -415,6 +425,10 @@ pub(super) fn lane_args(
                 })
             }))
         };
+        // `flui` has a library, so it is selected whenever `has("flui")`
+        if has("flui") {
+            let _ = write!(doctest_args, " --features {}", FACADE_CATALOGS.join(","));
+        }
     }
 
     // Dependents that compile the change only under a feature get the
@@ -488,7 +502,7 @@ pub(super) fn lane_args(
             }
         },
         features: if has("flui") {
-            "--features flui/material,flui/cupertino".to_owned()
+            format!("--features {}", FACADE_CATALOGS.join(","))
         } else {
             String::new()
         },
@@ -749,7 +763,10 @@ mod tests {
     fn doctests_cover_the_scopes_library_packages() {
         let a = args(&["packages/flui-material/src/lib.rs"]);
         // flui-sdk is in scope through its dev-dependency on the facade
-        assert_eq!(a.doctest_args, "-p flui -p flui-material -p flui-sdk");
+        assert_eq!(
+            a.doctest_args,
+            "-p flui -p flui-material -p flui-sdk --features flui/material,flui/cupertino"
+        );
         // flui-web-counter is in scope but has no rlib: `cargo test --doc -p` would reject it
         assert!(a.packages.contains("flui-web-counter"));
         assert!(!a.doctest_args.contains("flui-web-counter"));
@@ -770,6 +787,34 @@ mod tests {
         // a testing feature of a package outside the scope would be rejected by cargo
         assert!(!a.doc_args.contains("flui-rendering/testing"));
         assert_eq!(args(&["docs/x.md"]).doc_args, "");
+    }
+
+    #[test]
+    fn rustdoc_and_doctests_name_the_facades_catalogs_when_it_is_in_scope() {
+        // neither catalog is a default feature: without them the Material-gated
+        // half of the facade is neither documented nor doctested
+        let a = args(&["packages/flui-material/src/lib.rs"]);
+        assert!(
+            a.doc_args.contains("flui/material,flui/cupertino"),
+            "{}",
+            a.doc_args
+        );
+        assert!(
+            a.doctest_args
+                .ends_with(" --features flui/material,flui/cupertino"),
+            "{}",
+            a.doctest_args
+        );
+        // a feature of a package outside the selection would be rejected by cargo
+        let devtools = args(&["packages/flui-devtools/src/lib.rs"]);
+        assert!(!devtools.packages.split(' ').any(|n| n == "flui"));
+        assert!(devtools.doctest_args.starts_with("-p flui-devtools"));
+        assert!(
+            !devtools.doc_args.contains("flui/") && !devtools.doctest_args.contains("flui/"),
+            "{} / {}",
+            devtools.doc_args,
+            devtools.doctest_args
+        );
     }
 
     #[test]
@@ -809,6 +854,7 @@ mod tests {
         assert!(
             a.doc_args.starts_with("--workspace --features ")
                 && a.doc_args.contains("flui/testing")
+                && a.doc_args.contains("flui/material,flui/cupertino")
         );
         assert_eq!(
             (
@@ -816,7 +862,11 @@ mod tests {
                 a.hack_args.as_str(),
                 a.packages.as_str()
             ),
-            ("--workspace", "", "")
+            (
+                "--workspace --features flui/material,flui/cupertino",
+                "",
+                ""
+            )
         );
         assert!(
             a.cross_platform
