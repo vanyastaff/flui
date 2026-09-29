@@ -2133,6 +2133,7 @@ name = "flui-layer"
 version = "0.2.0-dev"
 dependencies = [
  "bitflags 2.13.2",
+ "criterion",
  "flui-foundation",
  "flui-painting",
  "static_assertions",

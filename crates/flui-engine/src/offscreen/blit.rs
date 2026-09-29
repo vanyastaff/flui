@@ -172,17 +172,21 @@ impl OffscreenRenderer {
 
     /// Blit the intermediate texture 1:1 onto the swapchain surface view.
     ///
-    /// Used by the COPY_SRC-less present path: after all frame passes have
-    /// rendered into `intermediate_texture`, this method copies it onto the
-    /// real surface without any blend equation (Replace/Copy semantics).
+    /// Used by every retained frame (a partial one, and every frame on a
+    /// surface without COPY_SRC): after all frame passes have rendered into
+    /// the retained target, this method copies it onto the real surface
+    /// without any blend equation (Replace/Copy semantics).
     ///
     /// # Arguments
     ///
-    /// * `intermediate_texture` — the pooled offscreen texture holding the
+    /// * `intermediate_texture` — the retained target holding the
     ///   fully-rendered frame.
     /// * `surface_view` — the swapchain view to write into.
     /// * `surface_format` — the swapchain surface format.
-    pub(crate) fn blit_to_surface(
+    // `pub` under `testing`: the `render_throughput` bench measures the
+    // retained-target blit. Private otherwise.
+    #[cfg_attr(not(feature = "testing"), expect(unreachable_pub))]
+    pub fn blit_to_surface(
         &mut self,
         intermediate_texture: &wgpu::Texture,
         surface_view: &wgpu::TextureView,

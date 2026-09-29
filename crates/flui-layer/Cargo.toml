@@ -13,7 +13,7 @@ categories = ["gui", "graphics", "rendering"]
 
 # Dev-only files a `cargo package --list` sweep found leaking into the
 # published archive (internal architecture docs, criterion benches, etc.):
-exclude = ["/ARCHITECTURE.md"]
+exclude = ["/ARCHITECTURE.md", "/benches/"]
 
 [features]
 default = []
@@ -37,6 +37,13 @@ tracing = { workspace = true }
 # Compile-time pins of the raster-boundary auto traits (`Send + Sync` on
 # `Layer`, `LayerTree`, `Scene`, `SceneSnapshot`).
 static_assertions.workspace = true
+# The `damage_diff` bench.
+criterion = { workspace = true }
+
+# The damage producer's per-frame cost over 1,000 boundaries.
+[[bench]]
+name = "damage_diff"
+harness = false
 
 [lints]
 workspace = true
