@@ -29,7 +29,7 @@ members = [
     "crates/flui-widgets",   # User-facing widget catalog (ACTIVE — Core.1 slice)
     "crates/flui-runtime",   # Frame runtime: per-presentation lanes a realm drives (ADR-0083)
     "crates/flui-sdk",       # Package-author surface: what official and third-party packages build on (ADR-0088)
-    "crates/flui-testing",   # Test-support: headless deterministic frame driver (pump_frame) (ACTIVE)
+    "crates/flui-testing",   # Test-support: headless realm host, widget harness, substrate driver (ACTIVE)
 
     # === Phase 4: Application Layer ===
     "crates/flui-app",    # Application framework (ACTIVE - Migration)

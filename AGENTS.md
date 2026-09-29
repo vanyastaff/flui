@@ -65,7 +65,7 @@ declares its tier and layer in `[package.metadata.flui]` (checked by `cargo xtas
   reconciliation, signals), `flui-widgets`, `flui-runtime` (the frame runtime a realm drives,
   moving out of `flui-app` per ADR-0083; no host, platform or GPU edge), `flui-sdk` (the
   Evolving package-author surface, versioned `0.N` apart from the train; ADR-0088), `flui-testing`
-  (deterministic headless frame driver on a virtual clock).
+  (a headless host that pumps a realm on a virtual clock, and the widget harness on it).
 - **Official packages** (`packages/`, ADR-0088) — `flui-material`, `flui-cupertino` and
   `flui-devtools`, built on `flui-sdk` alone, as a third-party package would be;
   `flui-hot-reload` is an official package still under `crates/` until ADR-0094's runtime hook
