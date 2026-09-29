@@ -3,8 +3,9 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-/// Runs every `(name, scenario)` row; the first failure names its row.
+/// Runs every `(name, scenario)` row, then panics once naming each failing row.
 pub(crate) fn run_cases(cases: &[(&str, fn())]) {
+    let mut failures = Vec::new();
     for (name, case) in cases {
         if let Err(payload) = catch_unwind(AssertUnwindSafe(case)) {
             let message = payload
@@ -16,7 +17,15 @@ pub(crate) fn run_cases(cases: &[(&str, fn())]) {
                         .map(|text| (*text).to_owned())
                 })
                 .unwrap_or_else(|| "non-string panic payload".to_owned());
-            panic!("case `{name}` failed: {message}");
+            failures.push(format!("case `{name}` failed: {message}"));
         }
     }
+    assert!(
+        failures.is_empty(),
+        "{}",
+        failures.join(
+            "
+"
+        )
+    );
 }

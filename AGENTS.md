@@ -196,19 +196,22 @@ caps the count, so the review question is which existing table the new case join
 - **Test through the public API.** A test lives in `tests/` and sees what a consumer sees. An
   in-`src` `mod tests` is for what a consumer cannot reach: `compile_fail`/trybuild input, a
   failure-path matrix that needs a private seam, a recorded Flutter divergence. Do not pin
-  private fields or helpers, which dirty flag a setter raises, `size_of`, constants and token
-  tables, or `Default`/`Debug`/getter round trips: a refactor that keeps behavior must not
-  touch a test.
+  private fields or helpers, which dirty flag a setter raises, `size_of`, an implementation's
+  constants and token tables, or `Default`/`Debug`/getter round trips: a refactor that keeps
+  behavior must not touch a test. Values a consumer sees and a document fixes (wire spellings
+  such as `flui-protocol`'s ADR-0080 names, ABI, other ADR-pinned tokens) are contract, and
+  their tests stay.
 - **One behavior, one test; a family is one table.** Cases that differ only in their input are
   rows of one table-driven `#[test]`: each row a plain `fn` named after the case, every row run,
   and the failure report naming each failing row. Use the crate's existing runner
   (`table_test::run_table`, `test_cases::run_cases`, `tests/contracts.rs`) instead of a new one.
   A new `#[test]` beside a near-identical one is a row.
-- **Few binaries.** Every file under `tests/` is its own binary: it links the whole dependency
+- **Few binaries.** Every root `tests/*.rs` file is its own binary: it links the whole dependency
   stack and grows `target/`. Crates build their integration tests as modules of one binary
   (`tests/main.rs` with `#[path = "x.rs"] mod x;`, `autotests = false` and one `[[test]]` in the
   manifest, as `flui-widgets`, `flui-material` and `flui-rendering` do). A new file is a new
-  `mod` line, not a new `[[test]]`. A separate target is for process-global state
+  `mod` line, not a new `[[test]]`. Subdirectories are not targets and are never mounted: helpers
+  (`tests/common/`) and trybuild fixtures (`tests/ui/`). A separate target is for process-global state
   (`Registry::global`, a global subscriber, allocation counting) and for a feature the rest of
   the crate builds without.
 - **Do not fold what runs its own process.** Tests that spawn `cargo` or another program
@@ -231,9 +234,9 @@ Linux, macOS or wasm.
   it goes: gate the item, and any import only a `cfg`'d test uses, with the same `cfg`.
 - Once a function stops being `#[test]` (a table row), clippy applies `unwrap_used` to it.
 - A test that reads its own source with `include_str!` must not depend on line endings.
-- `cargo clippy --target x86_64-unknown-linux-gnu` and `--target aarch64-apple-darwin` check unix
-  test code without linking, except in crates whose dependencies have a C build script;
-  `cargo xtask wasm-check` covers wasm.
+- `cargo clippy --all-targets --target x86_64-unknown-linux-gnu` and `--target aarch64-apple-darwin`
+  check unix test code without linking (without `--all-targets` the test targets are skipped),
+  except in crates whose dependencies have a C build script; `cargo xtask wasm-check` covers wasm.
 
 ## Definition of Done
 
