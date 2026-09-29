@@ -127,23 +127,48 @@ fn the_realm_makes_progress_after_a_raised_failure() {
     );
 }
 
+/// Schedule a post-frame callback that panics, through the realm's own
+/// owner-local lane.
+fn schedule_post_frame_panic(realm: &HeadlessRealm) {
+    realm
+        .local_post_frame_handle()
+        .schedule_local(|_timing| panic!("post-frame callback panicked"))
+        .expect("the realm's post-frame lane is alive");
+}
+
+/// After a pump that unwound, the next pump runs: it returns, and the
+/// post-frame lane the unwind went through still runs a callback. A frame is
+/// requested first, so the frame latch the unwind left behind must let it
+/// through.
+fn assert_progress_after_unwind(realm: &mut HeadlessRealm) -> flui_runtime::pump::FrameOutcome {
+    let ran = Arc::new(AtomicBool::new(false));
+    let ran_in_callback = Arc::clone(&ran);
+    realm
+        .local_post_frame_handle()
+        .schedule_local(move |_timing| ran_in_callback.store(true, Ordering::SeqCst))
+        .expect("the post-frame lane survives the unwind");
+    realm.request_frame();
+
+    let outcome = realm.pump(Duration::ZERO);
+
+    assert!(
+        ran.load(Ordering::SeqCst),
+        "the frame after the unwind runs its post-frame callbacks"
+    );
+    outcome
+}
+
 /// A panic that unwinds out of the pump after the realm contained a failure
 /// in the same pump does not replace it: the contained failure is raised.
+/// Once the cause is gone, the realm frames again.
 ///
 /// Fails against a driver that resumes the later unwind (the post-frame
 /// callback's text would be raised) or that loses the report when the pump
 /// unwinds.
 #[test]
 fn a_contained_failure_stays_authoritative_over_a_later_unwind() {
-    let (mut realm, _armed) = tripwire_realm(true);
-    let post_frame = realm
-        .realm()
-        .widgets()
-        .with_build_owner(|owner| owner.local_post_frame_handle().cloned())
-        .expect("the realm installs its owner-local post-frame handle");
-    post_frame
-        .schedule_local(|_timing| panic!("post-frame callback panicked"))
-        .expect("the realm's post-frame lane is alive");
+    let (mut realm, armed) = tripwire_realm(true);
+    schedule_post_frame_panic(&realm);
 
     let raised = catch_unwind(AssertUnwindSafe(|| realm.pump(Duration::ZERO)))
         .expect_err("the pump fails twice and raises once");
@@ -157,28 +182,31 @@ fn a_contained_failure_stays_authoritative_over_a_later_unwind() {
         !text.contains("post-frame callback panicked"),
         "the later unwind must not replace the first failure, got {text:?}"
     );
+
+    armed.store(false, Ordering::SeqCst);
+    let outcome = assert_progress_after_unwind(&mut realm);
+    assert!(
+        outcome.presented(),
+        "the tripwire, still waiting for paint, presents once disarmed"
+    );
+    assert_eq!(realm.sink().submits(), 1);
 }
 
 /// With nothing contained, a panic that unwinds out of the pump is raised as
-/// itself.
+/// itself, and the realm frames again afterwards: the unwind left its frame
+/// latch and post-frame lane usable.
 ///
 /// Fails against a driver that swallows an unwind it has no report for.
 #[test]
 fn an_uncontained_unwind_is_raised_as_itself() {
     let (mut realm, _armed) = tripwire_realm(false);
     let _ = realm.pump(Duration::ZERO);
-    let post_frame = realm
-        .realm()
-        .widgets()
-        .with_build_owner(|owner| owner.local_post_frame_handle().cloned())
-        .expect("the realm installs its owner-local post-frame handle");
-    post_frame
-        .schedule_local(|_timing| panic!("post-frame callback panicked"))
-        .expect("the realm's post-frame lane is alive");
-    realm.realm().request_redraw();
+    schedule_post_frame_panic(&realm);
+    realm.request_frame();
 
     let raised = catch_unwind(AssertUnwindSafe(|| realm.pump(Duration::ZERO)))
         .expect_err("the post-frame panic unwinds out of the pump");
 
     assert_eq!(panic_text(&*raised), "post-frame callback panicked");
+    let _outcome = assert_progress_after_unwind(&mut realm);
 }

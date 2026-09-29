@@ -148,7 +148,9 @@ host.
   calls them; what only `flui-app`'s tests call is `pub` under
   `test-support`; the rest is `pub(crate)`. `flui-app` re-exports none of
   them, only `frame_failure`'s report types and `RenderingFlutterBinding`,
-  at their old `flui_app` paths.
+  at their old `flui_app` paths. `flui-testing` hosts a realm in its
+  `HeadlessRealm` and keeps it crate-private, so `flui::testing` does not
+  reach it either.
 - **The frame sink is the host's, the verdict is the realm's.** A host
   implements `sink::FrameSink`; the realm reads its `SubmitVerdict` and
   classifies retry, device loss and not-shown (ADR-0068). The trait stays

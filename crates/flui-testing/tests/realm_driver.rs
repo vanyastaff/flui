@@ -140,6 +140,66 @@ fn harness_frames_are_text_store_transactions() {
     );
 }
 
+/// A pump that unwinds out of a post-frame callback skips its commit anchor,
+/// so the async grant that callback queued stays queued; the next pump runs
+/// it at its own anchor, back in `Idle`.
+///
+/// Fails against a harness whose unwind drops the queued grant (it never
+/// runs) or leaves the commit gate open (the grant runs inside the unwinding
+/// frame, or the next pump runs it inside its frame).
+#[test]
+fn a_grant_queued_before_an_unwind_runs_at_the_next_pumps_anchor() {
+    let controller = TextEditingController::with_text("abc");
+    let focus_node = FocusNode::with_debug_label("unwind field");
+    let mut laid = flui_testing::widgets::harness::mount_with_ime(EditableText::new(
+        controller,
+        Rc::clone(&focus_node),
+    ));
+    laid.enter_owner_scope(|| focus_node.request_focus());
+    laid.tick();
+    let store = laid
+        .active_text_store()
+        .expect("the focused field is the realm's active IME client");
+
+    let outcome = Rc::new(RefCell::new(None));
+    let granted_in_phase = Rc::new(Cell::new(None));
+    let scheduler = laid.scheduler().clone();
+    let (outcome_slot, phase_slot) = (Rc::clone(&outcome), Rc::clone(&granted_in_phase));
+    laid.local_post_frame_handle()
+        .schedule_local(move |_timing| {
+            *outcome_slot.borrow_mut() = Some(store.request_lock(
+                LockGrant::read(move |_: &dyn TextStoreRead| {
+                    phase_slot.set(Some(scheduler.phase()));
+                }),
+                LockTiming::Async,
+            ));
+            panic!("post-frame callback panicked");
+        })
+        .expect("the realm's post-frame lane is alive");
+
+    let raised = catch_unwind(AssertUnwindSafe(|| laid.tick()))
+        .expect_err("the post-frame panic unwinds out of the pump");
+    assert_eq!(panic_text(&*raised), "post-frame callback panicked");
+    assert_eq!(
+        *outcome.borrow(),
+        Some(Ok(LockOutcome::Deferred)),
+        "the lock was asked for inside the frame"
+    );
+    assert_eq!(
+        granted_in_phase.get(),
+        None,
+        "the unwound pump skipped its commit anchor"
+    );
+
+    laid.tick();
+
+    assert_eq!(
+        granted_in_phase.get(),
+        Some(SchedulerPhase::Idle),
+        "the next pump ran the queued grant at its anchor"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The owner inbox
 // ---------------------------------------------------------------------------
@@ -173,7 +233,6 @@ fn an_action_sent_off_thread_is_applied_by_the_next_harness_pump() {
     laid.tick();
     let node = tap_node(&laid.a11y_tree().expect("semantics is on"));
     let listener = laid
-        .realm()
         .accessibility_action_listener()
         .expect("the realm registers an action listener on its window");
 
@@ -332,6 +391,33 @@ fn a_contained_frame_failure_stays_authoritative_over_a_later_post_frame_panic()
     );
 }
 
+/// A post-frame panic that unwinds out of a harness pump leaves the harness
+/// able to paint: the next frame with a dirty render tree paints it.
+///
+/// Fails against a harness whose unwind leaves the realm's frame latch or
+/// pipeline stuck: the later frame paints nothing.
+#[test]
+fn the_harness_paints_after_a_post_frame_unwind() {
+    let (mut laid, armed) = armed_tripwire();
+    armed.store(false, Ordering::SeqCst);
+    laid.local_post_frame_handle()
+        .schedule_local(|_timing| panic!("post-frame callback panicked"))
+        .expect("the realm's post-frame lane is alive");
+    let raised = catch_unwind(AssertUnwindSafe(|| laid.tick()))
+        .expect_err("the post-frame panic unwinds out of the pump");
+    assert_eq!(panic_text(&*raised), "post-frame callback panicked");
+    let painted = laid.painted_frame_count();
+
+    laid.reassemble_render_tree();
+    laid.tick();
+
+    assert!(
+        laid.did_paint_last_frame(),
+        "the frame after the unwind paints"
+    );
+    assert_eq!(laid.painted_frame_count(), painted + 1);
+}
+
 // ---------------------------------------------------------------------------
 // The window
 // ---------------------------------------------------------------------------
@@ -348,9 +434,9 @@ fn mouse_region_cursor_reaches_the_window_through_the_realm() {
             .child(SizedBox::new(40.0, 40.0)),
         tight(100.0, 100.0),
     );
-    assert_eq!(laid.realm().window().cursor(), CursorIcon::Default);
+    assert_eq!(laid.cursor(), CursorIcon::Default);
 
     laid.dispatch_pointer_hover(20.0, 20.0);
 
-    assert_eq!(laid.realm().window().cursor(), CursorIcon::Pointer);
+    assert_eq!(laid.cursor(), CursorIcon::Pointer);
 }

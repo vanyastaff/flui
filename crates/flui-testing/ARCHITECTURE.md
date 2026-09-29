@@ -30,8 +30,12 @@ substrate driver over raw owners, which the raw-owner suites still use.
   returned; when a later panic unwinds out of the same pump, the report is
   raised and the later payload is leaked (its destructor could panic),
   logged at error level. A lifecycle panic the tree recovered from (an
-  `ErrorView`) is not raised: its frame completed. Pinned by
-  `tests/headless_realm.rs` and the failure tests in `tests/realm_driver.rs`.
+  `ErrorView`) is not raised: its frame completed. A report the realm makes
+  between pumps is raised by the next pump before it frames, not erased.
+  After any raise, including a pump that unwound past its commit anchor, the
+  next pump frames and runs the grants the unwound one queued. Pinned by
+  `tests/headless_realm.rs`, `realm::tests` and the failure tests in
+  `tests/realm_driver.rs`.
 - **The realm root is attached once.** The widget harness attaches one
   harness root that builds whatever tree its slot holds; a root swap
   replaces the slot and rebuilds that root, so the realm's root scopes stay
@@ -47,10 +51,23 @@ substrate driver over raw owners, which the raw-owner suites still use.
   configurations a realm cannot express. Its `pump_frame`, `run_pipeline` and
   `pump_presentation`/`pump_all` go when those suites move to the pump
   (ADR-0083 `## Migration`, move 6b).
-- **No shared type crosses the dev cycles.** `flui-widgets` and
+- **Only `log_capture` crosses the dev cycles.** `flui-widgets` and
   `flui-runtime` name this crate on dev edges while it depends on both, so
-  their unit-test builds compile a second copy of themselves. Only
-  `log_capture` crosses those edges, and it names no type of either crate.
+  their unit-test builds compile a second copy of themselves. Their unit
+  tests use only `log_capture`, which names no type of either crate. The
+  compiler does not refuse more: a `flui-widgets` unit test could hand
+  `widgets::lay_out` a view (the `View` trait lives in `flui-view`, of which
+  there is one copy), and its lookups of `MediaQuery`, `FocusRoot` or
+  `VsyncScope` would then silently miss the scopes the realm installed from
+  the other copy. Review keeps harness tests in `tests/`.
+- **The realm stays behind its host.** `HeadlessRealm::realm` and
+  `HeadlessRealm::enter` are crate-private, and `LaidOut` and `Harness` hand
+  out narrow accessors (the window's cursor, the accessibility action
+  listener, the post-frame handle, the scheduler) rather than the realm:
+  `flui-runtime` is not an embedder API, and `flui::testing` re-exports
+  `widgets`, so a public path to `UiRealm` here would open the realm's frame
+  entry points (ADR-0083 §2) to every application with the `testing`
+  feature.
 
 ## Mapping decisions
 

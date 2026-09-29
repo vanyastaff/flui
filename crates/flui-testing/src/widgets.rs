@@ -451,10 +451,21 @@ impl LaidOut {
             .expect("the realm installs an owner-local post-frame handle")
     }
 
-    /// The realm this tree is mounted in.
-    pub fn realm(&self) -> &crate::HeadlessRealm {
-        self.host.realm()
+    /// The last cursor the realm set on its window, from the hovered
+    /// region's cursor through the presentation's mouse tracker.
+    pub fn cursor(&self) -> flui_platform_api::CursorIcon {
+        self.host.realm().window().cursor()
     }
+
+    /// The listener the realm registered on its window for actions assistive
+    /// technology requests; see
+    /// [`HeadlessRealm::accessibility_action_listener`](crate::HeadlessRealm::accessibility_action_listener).
+    pub fn accessibility_action_listener(
+        &self,
+    ) -> Option<flui_semantics::platform::AccessibilityActionListener> {
+        self.host.realm().accessibility_action_listener()
+    }
+
     /// The render id of the root widget's render object.
     pub fn root(&self) -> RenderId {
         self.root_render_id

@@ -4,7 +4,11 @@
   `HeadlessWindow`, a `HeadlessSink` that keeps the last scene, and one
   `ManualClock` the realm reads as its clock source — that drives every frame
   through `UiRealm::pump` and raises a frame failure the realm contained after
-  the pump, the first failure of a pump authoritative over a later unwind.
+  the pump, the first failure of a pump authoritative over a later unwind; a
+  report made between pumps is raised by the next one. The realm itself stays
+  private to the host.
+- **`LaidOut::cursor` and `LaidOut::accessibility_action_listener`**: the
+  window's last cursor and the realm's assistive-technology action listener.
 
 ### Changed
 

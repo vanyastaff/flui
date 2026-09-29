@@ -24,7 +24,8 @@
 //! report of the pump as a panic once the pump has returned, carrying the
 //! report's text (the realm retains it verbatim here). A later panic that
 //! unwinds out of the same pump does not replace it: the first failure stays
-//! authoritative. A lifecycle panic the tree recovered from (an `ErrorView`
+//! authoritative. A dropped-frame report the realm makes between pumps is
+//! raised by the next pump, before it frames. A lifecycle panic the tree recovered from (an `ErrorView`
 //! substitution) is not raised: the frame it happened in completed.
 
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
@@ -47,7 +48,7 @@ use flui_runtime::presentation::PresentationWindow;
 use flui_runtime::pump::FrameOutcome;
 use flui_runtime::sink::{FrameSink, SubmitVerdict};
 use flui_runtime::ui_realm::UiRealm;
-use flui_scheduler::ClockSource;
+use flui_scheduler::{ClockSource, LocalPostFrameHandle};
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
 };
@@ -240,7 +241,7 @@ pub struct HeadlessSink {
 impl HeadlessSink {
     /// A `width` × `height` surface that has presented nothing yet.
     #[must_use]
-    pub fn new(width: u32, height: u32) -> Self {
+    pub(crate) fn new(width: u32, height: u32) -> Self {
         Self {
             size: (width, height),
             last_scene: None,
@@ -283,8 +284,9 @@ pub struct HeadlessRealm {
     window: Arc<HeadlessWindow>,
     accessibility: Arc<HeadlessAccessibility>,
     clipboard: Arc<InMemoryClipboard>,
-    /// The dropped-frame reports of the pump in progress, as the text a
-    /// raised failure carries.
+    /// Dropped-frame reports not yet raised, as the text a raised failure
+    /// carries: those of the pump in progress, and any the realm made
+    /// between pumps, which the next pump raises before it frames.
     failures: Arc<Mutex<Vec<String>>>,
 }
 
@@ -376,13 +378,18 @@ impl HeadlessRealm {
     ///
     /// # Panics
     ///
-    /// With the first dropped-frame report of this pump (a segment panic or
-    /// a pipeline error the realm contained), after the pump returned; or
-    /// with a panic that unwound out of the pump when nothing was reported
-    /// before it. See the [module docs](self#failures).
+    /// With a dropped-frame report the realm made since the last pump, before
+    /// this one frames or moves the clock; with the first dropped-frame
+    /// report of this pump (a segment panic or a pipeline error the realm
+    /// contained), after the pump returned; or with a panic that unwound out
+    /// of the pump when nothing was reported before it. See the
+    /// [module docs](self#failures).
     pub fn pump(&mut self, dt: Duration) -> FrameOutcome {
+        let pending = std::mem::take(&mut *self.failures.lock());
+        if let Some(failure) = pending.into_iter().next() {
+            panic!("{failure}");
+        }
         self.clock.advance(dt);
-        self.failures.lock().clear();
         let mut frame_clock = self.clock.clone();
         let Self { realm, sink, .. } = self;
         let attempt = catch_unwind(AssertUnwindSafe(|| realm.pump(&mut frame_clock, sink)));
@@ -409,12 +416,6 @@ impl HeadlessRealm {
                 panic!("{failure}")
             }
         }
-    }
-
-    /// A wake that runs no frame: `UiRealm::pump_background`, which clears
-    /// the frame latch and polls the async driver once.
-    pub fn pump_background(&mut self) {
-        self.realm.pump_background();
     }
 
     /// Deliver `input` to the realm's primary presentation, as a runner
@@ -479,14 +480,39 @@ impl HeadlessRealm {
 
     /// Run `f` inside the realm's owner scope (its interaction lane, global
     /// key registry and post-frame lane), as every realm entry point does.
-    pub fn enter<R>(&self, f: impl FnOnce(&UiRealm) -> R) -> R {
+    ///
+    /// Crate-private, as is [`realm`](Self::realm): the realm's frame entry
+    /// points are the host's (ADR-0083 §2), and `flui-runtime` is not an
+    /// embedder API, so a test reaches the realm only through this host.
+    pub(crate) fn enter<R>(&self, f: impl FnOnce(&UiRealm) -> R) -> R {
         self.realm.enter(f)
     }
 
     /// The hosted realm.
-    #[must_use]
-    pub fn realm(&self) -> &UiRealm {
+    pub(crate) fn realm(&self) -> &UiRealm {
         &self.realm
+    }
+
+    /// The owner-local post-frame handle the realm installed on its build
+    /// owner: a callback scheduled through it runs in the next pump's
+    /// post-frame phase.
+    ///
+    /// # Panics
+    ///
+    /// If the realm installed no owner-local post-frame handle, which a
+    /// realm's presentation always does.
+    #[must_use]
+    pub fn local_post_frame_handle(&self) -> LocalPostFrameHandle {
+        self.realm
+            .widgets()
+            .with_build_owner(|owner| owner.local_post_frame_handle().cloned())
+            .expect("BUG: a realm's presentation installs its owner-local post-frame handle")
+    }
+
+    /// Ask the realm for a frame, as a widget's `setState` would: the next
+    /// [`pump`](Self::pump) runs the pipeline even with nothing dirty.
+    pub fn request_frame(&self) {
+        self.realm.request_redraw();
     }
 
     /// The clock the realm reads. Advancing it moves the frame time, the
@@ -528,4 +554,42 @@ fn dropped_frame_text(report: &FrameFailureReport) -> Option<String> {
         FrameFailureKind::Pipeline { error } => format!("frame pipeline failed: {error}"),
         other => format!("frame dropped: {other:?}"),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::time::Duration;
+
+    use super::{HeadlessRealm, HeadlessWindow};
+
+    /// A dropped-frame report the realm made between pumps (from input
+    /// delivery, say) is raised by the next pump, before it frames or moves
+    /// the clock, and only once.
+    ///
+    /// Fails against a pump that clears the buffer before it runs: the
+    /// report is erased unseen and the pump returns normally.
+    #[test]
+    fn a_report_made_between_pumps_is_raised_by_the_next_pump() {
+        let mut realm = HeadlessRealm::new(HeadlessWindow::new(40, 24));
+        realm
+            .failures
+            .lock()
+            .push("frame dropped: reported between pumps".to_owned());
+        let before = flui_foundation::MonotonicClock::now(realm.clock());
+
+        let raised = catch_unwind(AssertUnwindSafe(|| realm.pump(Duration::from_millis(16))))
+            .expect_err("the leftover report is raised");
+
+        assert_eq!(
+            raised.downcast_ref::<String>().map(String::as_str),
+            Some("frame dropped: reported between pumps")
+        );
+        assert_eq!(
+            flui_foundation::MonotonicClock::now(realm.clock()),
+            before,
+            "the raising pump did not move the clock"
+        );
+        let _outcome = realm.pump(Duration::ZERO);
+    }
 }
