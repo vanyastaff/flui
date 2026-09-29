@@ -203,10 +203,12 @@ caps the count, so the review question is which existing table the new case join
   a test. Values a consumer sees and a document fixes (wire spellings such as `flui-protocol`'s
   ADR-0080 names, ABI, other ADR-pinned tokens) are contract, and their tests stay.
 - **One behavior, one test; a family is one table.** Cases that differ only in their input are
-  rows of one table-driven `#[test]`: each row a plain `fn` named after the case, every row run,
-  and the failure report naming each failing row. Use the crate's existing runner
-  (`table_test::run_table`, `test_cases::run_cases`, `tests/contracts.rs`) instead of a new one.
-  A new `#[test]` beside a near-identical one is a row.
+  rows of one table-driven `#[test]`: each row a plain `fn` named after the case, every row run
+  after an ordinary panic, and the failure report naming each failing row. Use the crate's
+  existing runner (`table_test::run_table`, `test_cases::run_cases`, `tests/contracts.rs`)
+  instead of a new one. Most runners do not contain a panic payload whose `Drop` itself panics
+  (those in `flui-foundation` and `flui-animation` do): a row must not throw one. A new
+  `#[test]` beside a near-identical one is a row.
 - **Few binaries.** Every root `tests/*.rs` file is its own binary: it links the whole dependency
   stack and grows `target/`. Crates build their integration tests as modules of one binary
   (`tests/main.rs` with `#[path = "x.rs"] mod x;`, `autotests = false` and one `[[test]]` in the
