@@ -62,11 +62,7 @@ pub(crate) fn interactive_create() -> CliResult<ProjectConfig> {
                 "Counter",
                 "Simple counter with state management",
             ),
-            (
-                Template::Basic,
-                "Basic",
-                "Hello, FLUI! with a Material theme",
-            ),
+            (Template::Basic, "Basic", "Hello, FLUI! stateless app"),
             (Template::Empty, "Empty", "Smallest runnable app"),
             (Template::Widget, "Widget", "Reusable widget library"),
         ],

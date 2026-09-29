@@ -133,7 +133,10 @@ fn assert_generated_project_compiles(template: &str) {
         "`flui create --template {template}` generated a project that does not compile:\n{}",
         String::from_utf8_lossy(&output.stderr),
     );
-    if template == "counter" {
+    // A template names exactly the packages and features its source uses
+    // (ADR-0088 §6). None uses a design system today, so none may pull one in
+    // -- through a facade default included -- nor test support.
+    {
         let output = std::process::Command::new(&cargo)
             .args([
                 "tree",
@@ -154,11 +157,16 @@ fn assert_generated_project_compiles(template: &str) {
             String::from_utf8_lossy(&output.stderr)
         );
         let graph = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            !graph.lines().any(|line| line.starts_with("flui-testing ")),
-            "{graph}"
-        );
-
+        for unused in ["flui-testing ", "flui-material ", "flui-cupertino "] {
+            assert!(
+                !graph.lines().any(|line| line.starts_with(unused)),
+                "`flui create --template {template}` must not depend on `{}`, \
+                 which its source does not use:\n{graph}",
+                unused.trim_end()
+            );
+        }
+    }
+    if template == "counter" {
         run_generated_counter_tests(&cargo, &project, &target);
     }
 }

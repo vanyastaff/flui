@@ -6,7 +6,7 @@
 //! PNG. This is the capture path OS screenshot tools cannot provide on a
 //! GNOME/Wayland session (the wgpu surface never lands in the X11 framebuffer).
 //!
-//! Run: `cargo run -p flui --example screenshot -- <demo> [width] [height] [out.png]`
+//! Run: `cargo run -p flui --example screenshot --features material,cupertino -- <demo> [width] [height] [out.png]`
 //! where `<demo>` is `material` | `cupertino` | `vertical-slice` | `gallery` |
 //! `animated-box` | `colored-box` | `text` | `telemetry-overlay`.
 //! Defaults: `material`, 900 x 760, `<demo>.png`.

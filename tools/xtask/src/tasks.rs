@@ -36,12 +36,14 @@ const PLATFORM_TARGETS: [&str; 4] = [WINDOWS_TARGET, MACOS_TARGET, ANDROID_TARGE
 
 /// The local test scope, one slice for the whole suite (docs/testing.md,
 /// "What `cargo xtask test` runs"):
-/// - `--features flui/cupertino`: the facade's non-default catalog joins the
-///   workspace run through feature unification, instead of a second `-p flui --features ...` run that re-resolved features for flui's
-///   graph alone and so rebuilt every shared crate under a second hash. The
-///   default-feature facade (material only) is then not tested here, CI's
-///   `test` job included (it runs this scope); its `cargo build --workspace
-///   --all-targets` compiles it, and `feature-matrix` lints it.
+/// - `--features flui/material,flui/cupertino`: the facade turns no catalog on
+///   by default, so both are named here rather than left to whichever
+///   workspace member happens to enable one through feature unification. They
+///   join the workspace run instead of a second `-p flui --features ...` run
+///   that re-resolved features for flui's graph alone and so rebuilt every
+///   shared crate under a second hash. The facade with no feature is then not
+///   tested here, CI's `test` job included (it runs this scope);
+///   `cargo xtask facade-combos` and `feature-matrix` lint it.
 /// - `flui-painting/parley`: the Parley path's raster side, off by default
 ///   until ADR-0092 §10 folds it into the default build; on here so its
 ///   `parley_oracle` test runs in CI's `test` and `fast-lane` jobs.
@@ -64,7 +66,7 @@ pub(crate) const TEST_SCOPE: [&str; 10] = [
     "--bins",
     "--tests",
     "--features",
-    "flui/cupertino,flui-painting/parley",
+    "flui/material,flui/cupertino,flui-painting/parley",
 ];
 
 /// Options every task takes.
@@ -326,7 +328,7 @@ fn cross_typecheck_plan(host: Host) -> Vec<Step> {
 
 /// CI's `test-features` job: the suites behind features the default run never
 /// enables (flui-assets and flui-widgets default to `default = []`). The
-/// facade's non-default catalogs are in [`TEST_SCOPE`]. The last step names
+/// facade's catalogs, neither on by default, are in [`TEST_SCOPE`]. The last step names
 /// the `signals` features, which are now accepted and ignored (signals are
 /// always compiled, ADR-0085 §5); it mirrors the job until the job drops it.
 fn test_features_plan() -> Vec<Step> {
@@ -946,8 +948,8 @@ pub(crate) struct DemoSnapshotsArgs {
 /// `cargo xtask demo-snapshots`: the demo layer snapshot suite.
 ///
 /// Structural snapshots of the demo trees' painted layer trees, no GPU. With
-/// `cupertino` on: the suite snapshots the Material and the Cupertino demo,
-/// and Material is the facade default. Review changed snapshots with
+/// `material` and `cupertino` on: the suite snapshots the Material and the
+/// Cupertino demo, and the facade turns neither on by default. Review changed snapshots with
 /// `cargo insta review`, one diff at a time: a snapshot diff is the regression
 /// report, so it is read before it is accepted.
 pub(crate) fn demo_snapshots(args: &DemoSnapshotsArgs) -> anyhow::Result<ExitCode> {
@@ -958,7 +960,7 @@ pub(crate) fn demo_snapshots(args: &DemoSnapshotsArgs) -> anyhow::Result<ExitCod
         "flui",
         "--locked",
         "--features",
-        "cupertino",
+        "material,cupertino",
         "--test",
         "demo_layer_snapshots",
     ])))
@@ -1012,7 +1014,7 @@ mod tests {
         steps.iter().map(ToString::to_string).collect()
     }
 
-    const SCOPE: &str = "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/cupertino,flui-painting/parley";
+    const SCOPE: &str = "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/material,flui/cupertino,flui-painting/parley";
 
     #[test]
     fn workflow_lint_runs_each_installed_linter_and_skips_the_rest() {

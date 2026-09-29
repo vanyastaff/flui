@@ -12,9 +12,10 @@ crate-type = ["cdylib"]
 
 [dependencies]
 # The same sole dependency a generated application has: everything below
-# `run_app` — widgets, Material, the web runner and its WebGPU renderer —
-# comes through the facade.
-flui = { path = "../..", version = "=0.2.0-dev" }
+# `run_app` — widgets, the web runner and its WebGPU renderer — comes through
+# the facade. The counter uses Material, so it names the catalog, as a
+# generated application names what it uses.
+flui = { path = "../..", version = "=0.2.0-dev", features = ["material"] }
 wasm-bindgen = "0.2"
 console_error_panic_hook = "0.1"
 

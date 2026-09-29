@@ -138,6 +138,15 @@ fn ordinary_facade_graph_excludes_test_support() {
             graph.lines().any(|line| line.starts_with("flui v")),
             "{graph}"
         );
+        // The facade turns no design system on by default (ADR-0088 §6): a
+        // consumer that names no feature gets neither catalog.
+        for catalog in ["flui-material ", "flui-cupertino "] {
+            assert!(
+                !graph.lines().any(|line| line.starts_with(catalog)),
+                "`{}` in default={defaults} normal graph:\n{graph}",
+                catalog.trim_end()
+            );
+        }
         assert!(
             !graph.lines().any(|line| line.starts_with("flui-testing ")),
             "test driver in default={defaults} normal graph:\n{graph}"
@@ -227,15 +236,22 @@ fn external_notes_consumer_executes_edit_save_and_navigation() {
     // A real external Cargo package with local path dependencies, not a
     // published-crate or native platform end-to-end acceptance claim.
     let Some(root) = checkout_root() else { return };
+    // The notes app uses Material, so it names the catalog: the facade turns
+    // none on by default.
     let mut dependencies = toml::Table::new();
-    dependencies.insert("flui".into(), dependency("flui", root, true));
+    let mut app = dependency("flui", root, true);
+    app.as_table_mut().expect("app dependency").insert(
+        "features".into(),
+        toml::Value::Array(vec!["material".into()]),
+    );
+    dependencies.insert("flui".into(), app);
     let mut framework = dependency("flui", root, true);
     framework
         .as_table_mut()
         .expect("framework dependency")
         .insert(
             "features".into(),
-            toml::Value::Array(vec!["testing".into()]),
+            toml::Value::Array(vec!["material".into(), "testing".into()]),
         );
     let mut dev_dependencies = toml::Table::new();
     dev_dependencies.insert("flui".into(), framework);

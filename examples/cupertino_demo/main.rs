@@ -8,7 +8,7 @@
 //! the workspace root, so the acceptance test exercises the exact tree this
 //! binary runs.
 //!
-//! Run with: cargo run --example cupertino_demo
+//! Run with: cargo run --example cupertino_demo --features cupertino
 //!
 //! No local `tracing_subscriber` init here, matching every other
 //! `run_app`-based example (`material_demo`, `vertical_slice_demo`, …):

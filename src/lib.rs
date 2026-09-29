@@ -36,15 +36,14 @@
 //!
 //! | Feature | Default | Enables |
 //! |---|---|---|
-//! | `material` | **on** | `flui::material` and the Material half of [`prelude`] |
+//! | `material` | off | `flui::material` and the Material half of [`prelude`] |
 //! | `cupertino` | off | `flui::cupertino` |
 //! | `localizations` | off | nothing; deprecated, kept so existing feature lists resolve |
 //! | `hot-reload` | off | re-exports `flui-hot-reload` as `hot_reload`; install its hook with `AppConfig::with_dev_reload` |
 //!
-//! `default = ["material"]` keeps the documented Material-first quick start
-//! working out of the box. Turning defaults off (`default-features = false`)
-//! gives a catalog-free application that still has the full widget layer,
-//! navigation, focus, and media information. A module whose feature is off is
+//! Nothing is on by default (ADR-0088 §6): an application names the catalog it
+//! uses, e.g. `features = ["material"]`; with no feature the facade still gives
+//! the full widget layer, navigation, focus, and media information. A module whose feature is off is
 //! **absent**, not empty — `flui::cupertino` without the `cupertino` feature is
 //! an unresolved-import error at the use site, which is the diagnostic you
 //! want.
@@ -138,7 +137,7 @@ pub use flui_hot_reload as hot_reload;
 /// Derive structured diagnostic properties without a direct implementation-crate dependency.
 pub use flui_macros::Diagnosticable;
 /// The Material Design system (`flui-material`). Requires the `material`
-/// feature, which is on by default.
+/// feature.
 #[cfg(feature = "material")]
 pub use flui_material as material;
 pub use flui_platform_api as platform;
