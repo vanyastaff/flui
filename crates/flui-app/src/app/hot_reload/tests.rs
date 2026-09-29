@@ -225,6 +225,34 @@ fn a_realm_first_polled_after_a_patch_does_not_replay_it() {
 }
 
 #[test]
+fn a_realm_mounted_before_a_patch_applies_it_at_its_first_boundary() {
+    let hook = Scripted::default();
+    let config = AppConfig::new().with_dev_reload(hook.clone());
+    let (reload_main, reload_second) = (
+        WorkerReload::from_config(&config.clone()),
+        WorkerReload::from_config(&config),
+    );
+    let main = settled_realm();
+    reload_main.register_realm(&main);
+    frame_boundary(&reload_main, &main);
+
+    // A secondary window mounts its tree from the code loaded now...
+    let second = settled_realm();
+    reload_second.register_realm(&second);
+    // ...and the main window's next boundary takes a patch before the
+    // secondary window has produced a frame.
+    hook.then(ReloadEvent::Patched);
+    frame_boundary(&reload_main, &main);
+    assert!(main.widgets().has_pending_builds());
+
+    frame_boundary(&reload_second, &second);
+    assert!(
+        second.widgets().has_pending_builds(),
+        "a realm built before the patch must reassemble at its first boundary"
+    );
+}
+
+#[test]
 fn a_panicking_poll_disables_the_hook_and_the_frame_continues() {
     let (calls, drops) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
     let reload = WorkerReload::from_config(&AppConfig::new().with_dev_reload(Panics {

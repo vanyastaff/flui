@@ -158,6 +158,7 @@ where
             source: Arc::new(e),
         });
     }
+    worker_reload.register_realm(&ui_realm);
 
     // 3b. Wire the wake chain (E0a).
     //

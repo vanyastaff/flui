@@ -309,6 +309,7 @@ where
         tracing::error!("Root widget attach failed: {:?}", e);
         return Err(anyhow::anyhow!(e).context("Root widget attach failed"));
     }
+    worker_reload.register_realm(&ui_realm);
     let realm_dispatch = install_realm_alongside(ui_realm, &window)?;
     struct ProvisionalRealm(Option<RealmDispatcher>);
     impl Drop for ProvisionalRealm {

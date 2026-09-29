@@ -252,13 +252,28 @@ impl WorkerReload {
         }
     }
 
+    /// Record a realm the runner has just mounted as current with the latest
+    /// patch: its tree was built from the code loaded now, so it must apply
+    /// every later patch, including one another realm's boundary polls
+    /// before this realm's first frame. The runner calls this right after
+    /// the root attaches.
+    pub(crate) fn register_realm(&self, realm: &UiRealm) {
+        let Some(reload) = &self.0 else {
+            return;
+        };
+        let mut slot = reload.0.lock();
+        let epoch = slot.epoch;
+        slot.seen.insert(realm.realm_id(), epoch);
+    }
+
     /// Poll the hook at `realm`'s frame boundary and reassemble the realm
     /// if a patch has arrived that it has not applied yet.
     ///
     /// A patch reaches every realm exactly once: the poll that sees it
     /// advances an epoch, and each realm applies the latest patch when its
-    /// own boundary finds it behind. A realm seen for the first time starts
-    /// at the current epoch, so it never replays a patch older than itself.
+    /// own boundary finds it behind. A realm the runner did not
+    /// [register](Self::register_realm) starts at the epoch of its first
+    /// poll, so it never replays a patch older than itself.
     pub(crate) fn poll_and_apply(&self, realm: &UiRealm) {
         let Some(reload) = &self.0 else {
             return;
