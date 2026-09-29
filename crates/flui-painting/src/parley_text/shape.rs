@@ -318,6 +318,10 @@ mod tests {
     }
 
     fn wrapped(max_lines: Option<usize>) -> ParagraphLayout {
+        wrapped_in(TextDirection::Ltr, max_lines)
+    }
+
+    fn wrapped_in(direction: TextDirection, max_lines: Option<usize>) -> ParagraphLayout {
         let spans: Vec<(String, Option<TextStyle>)> = vec![(
             "one two three four five six seven eight nine ten".to_owned(),
             None,
@@ -328,7 +332,7 @@ mod tests {
             font_size: 16.0,
             max_width: Some(60.0),
             line_height: Some(20.0),
-            direction: TextDirection::Ltr,
+            direction,
             max_lines,
         })
     }
@@ -360,6 +364,24 @@ mod tests {
         let exact = wrapped(Some(full.line_count)).metrics();
         assert!(!exact.truncated, "keeping every line is no truncation");
         assert!((exact.height - full.height).abs() < 1e-3);
+    }
+
+    /// A truncated paragraph measures its kept lines' content, not where
+    /// alignment placed them: right-aligned `Rtl` lines report the same width
+    /// as the same lines aligned left.
+    #[test]
+    fn a_truncated_width_ignores_the_alignment_offset() {
+        for kept in [1, 2] {
+            let ltr = wrapped_in(TextDirection::Ltr, Some(kept)).metrics();
+            let rtl = wrapped_in(TextDirection::Rtl, Some(kept)).metrics();
+            assert!(ltr.truncated && rtl.truncated);
+            assert!(
+                (rtl.width - ltr.width).abs() < 1e-3,
+                "{kept} kept line(s): Rtl {} vs Ltr {}",
+                rtl.width,
+                ltr.width
+            );
+        }
     }
 
     /// The content widths are the widest word and the single-line width,

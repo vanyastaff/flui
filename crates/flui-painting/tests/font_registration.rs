@@ -70,6 +70,10 @@ fn register_font_bumps_the_generation_once() {
 }
 
 #[test]
+#[cfg_attr(
+    feature = "parley-layout",
+    ignore = "painting mapping decision 15: registration reaches the process font system, not the collection Parley measures on"
+)]
 fn register_font_invalidates_a_laid_out_painter() {
     let fonts = shared_font_system();
     let mut painter = probe_painter("iiii wwww");

@@ -138,7 +138,7 @@ pub(super) struct TextLayoutCache {
     /// The collection the layout was measured on and its generation, so a
     /// layout from another realm's fonts, or from before a registration, is
     /// measured again.
-    pub(super) fonts: (usize, u64),
+    pub(super) fonts: crate::text_layout::FontsKey,
     /// The min width constraint used for layout.
     pub(super) min_width: f64,
     /// The max width constraint used for layout.

@@ -9,9 +9,27 @@ use flui_foundation::geometry::{Offset, Size};
 use super::{
     DEFAULT_FONT_SIZE, LayoutMetrics, MeasureBackend, TextBaseline, TextLayoutCache, TextPainter,
 };
-use crate::text_layout::{TextContext, TextLayout, TextLayoutResult};
+use crate::text_layout::{FontsKey, TextContext, TextLayout, TextLayoutResult};
 
 impl TextPainter {
+    /// What a cached layout was measured against: the process font
+    /// database's generation, and `text_cx`'s collection and its generation.
+    fn font_key(text_cx: &TextContext) -> (u64, FontsKey) {
+        (
+            crate::shared_font_system().generation(),
+            text_cx.fonts().key(),
+        )
+    }
+
+    /// The cached layout, when it was measured against the fonts `text_cx`
+    /// measures with now.
+    fn cache_for(&self, text_cx: &TextContext) -> Option<&TextLayoutCache> {
+        let (font_generation, fonts) = Self::font_key(text_cx);
+        self.layout_cache
+            .as_ref()
+            .filter(|cache| cache.font_generation == font_generation && cache.fonts.matches(&fonts))
+    }
+
     /// Computes the text layout within the given width constraints,
     /// measuring through `text_cx`.
     ///
@@ -35,11 +53,8 @@ impl TextPainter {
         );
         text_cx.note_lent();
 
-        let font_generation = crate::shared_font_system().generation();
-        let fonts = (text_cx.fonts().identity(), text_cx.fonts().generation());
-        if let Some(cache) = &self.layout_cache
-            && cache.font_generation == font_generation
-            && cache.fonts == fonts
+        let (font_generation, fonts) = Self::font_key(text_cx);
+        if let Some(cache) = self.cache_for(text_cx)
             && (cache.min_width - min_width).abs() < f64::EPSILON
             && (cache.max_width - max_width).abs() < f64::EPSILON
         {
@@ -420,12 +435,13 @@ impl TextPainter {
     /// is floored at the ellipsis width so intrinsic sizing cannot under-
     /// allocate a truncating layout.
     ///
-    /// Returns the precomputed value from the layout cache when available
-    /// (O(1) after `layout()`). Otherwise measures through `text_cx`.
+    /// Returns the precomputed value from the layout cache when it was
+    /// measured against `text_cx`'s fonts (O(1) after `layout()`).
+    /// Otherwise measures through `text_cx`.
     #[must_use]
     pub fn max_intrinsic_width(&self, text_cx: &mut TextContext) -> f64 {
         text_cx.note_lent();
-        if let Some(cache) = &self.layout_cache {
+        if let Some(cache) = self.cache_for(text_cx) {
             return cache.max_intrinsic_width;
         }
         let Some(text) = self.text.as_ref() else {
@@ -444,12 +460,13 @@ impl TextPainter {
     /// layouts may commit an ellipsis-only buffer once the prefix is
     /// exhausted.
     ///
-    /// Returns the precomputed value from the layout cache when available
-    /// (O(1) after `layout()`). Otherwise measures through `text_cx`.
+    /// Returns the precomputed value from the layout cache when it was
+    /// measured against `text_cx`'s fonts (O(1) after `layout()`).
+    /// Otherwise measures through `text_cx`.
     #[must_use]
     pub fn min_intrinsic_width(&self, text_cx: &mut TextContext) -> f64 {
         text_cx.note_lent();
-        if let Some(cache) = &self.layout_cache {
+        if let Some(cache) = self.cache_for(text_cx) {
             return cache.min_intrinsic_width;
         }
         let Some(text) = self.text.as_ref() else {

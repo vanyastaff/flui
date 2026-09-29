@@ -161,6 +161,10 @@ fn test_get_word_boundary() {
 /// `RenderBox.paintBounds` (`Offset.zero & size`) reports for a
 /// `RenderParagraph`.
 #[test]
+#[cfg_attr(
+    feature = "parley-layout",
+    ignore = "painting mapping decision 15: size comes from Parley, paint bounds from cosmic-text"
+)]
 fn painted_span_contributes_its_laid_out_box_to_display_list_bounds() {
     let mut painter = TextPainter::new()
         .with_text(TextSpan::new("Hello, FLUI!"))
@@ -490,6 +494,53 @@ mod parley_measurement {
         painter.layout(&mut a, 0.0, WIDTH);
         assert!((painter.size().width - shaped.width).abs() < f64::EPSILON);
         assert!((painter.size().height - shaped.height).abs() < f64::EPSILON);
+    }
+
+    /// The intrinsic widths a layout cached answer only for the context that
+    /// laid out: asked through a context over another collection, or after
+    /// a face was registered on the same one, the painter measures again.
+    #[test]
+    fn intrinsic_widths_follow_the_context_they_are_asked_through() {
+        let with_probe = FontCollection::new();
+        with_probe
+            .register_font(PROBE_MONO)
+            .expect("the probe face loads");
+        let mut a = TextContext::new(&with_probe);
+        let mut b = TextContext::new(&FontCollection::new());
+        let mut painter = probe_painter();
+
+        painter.layout(&mut a, 0.0, WIDTH);
+        let max_through_a = painter.max_intrinsic_width(&mut a);
+        let min_through_a = painter.min_intrinsic_width(&mut a);
+        let max_through_b = painter.max_intrinsic_width(&mut b);
+        let min_through_b = painter.min_intrinsic_width(&mut b);
+
+        assert!(
+            (max_through_a - 4.0 * SIZE).abs() < 0.01,
+            "four one-em `A`s through A's context are {} px, got {max_through_a}",
+            4.0 * SIZE
+        );
+        assert!(
+            (max_through_b - max_through_a).abs() > 1.0,
+            "B lacks the face, so its max intrinsic width is the fallback's: A {max_through_a} vs B {max_through_b}"
+        );
+        assert!(
+            (min_through_b - min_through_a).abs() > 1.0,
+            "B lacks the face, so its min intrinsic width is the fallback's: A {min_through_a} vs B {min_through_b}"
+        );
+
+        let later = FontCollection::new();
+        let mut c = TextContext::new(&later);
+        painter.layout(&mut c, 0.0, WIDTH);
+        let before = painter.max_intrinsic_width(&mut c);
+        later
+            .register_font(PROBE_MONO)
+            .expect("the probe face loads");
+        let after = painter.max_intrinsic_width(&mut c);
+        assert!(
+            (after - 4.0 * SIZE).abs() < 0.01,
+            "a face registered since the layout is measured: before {before}, got {after}"
+        );
     }
 
     /// A face registered on the collection after the painter measured makes

@@ -16,8 +16,8 @@
 //! without `parley` they hold nothing and shape nothing.
 
 use std::fmt;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Weak};
 
 #[cfg(feature = "parley")]
 use crate::error::RegisterFontError;
@@ -69,14 +69,17 @@ impl FontCollection {
     /// value may shape differently now, so it is re-measured; a registration
     /// that found no face leaves the value alone.
     #[must_use]
-    pub fn generation(&self) -> u64 {
+    pub(crate) fn generation(&self) -> u64 {
         self.0.generation.load(Ordering::Acquire)
     }
 
-    /// An identity for this collection, equal across clones: the address of
-    /// the shared allocation. Only compared, never dereferenced.
-    pub(crate) fn identity(&self) -> usize {
-        Arc::as_ptr(&self.0) as usize
+    /// What a measurement on this collection is taken against: the
+    /// collection and its current generation.
+    pub(crate) fn key(&self) -> FontsKey {
+        FontsKey {
+            collection: Arc::downgrade(&self.0),
+            generation: self.generation(),
+        }
     }
 
     /// How many handles hold this collection: every clone, including the one
@@ -115,6 +118,33 @@ impl FontCollection {
         }
         self.0.generation.fetch_add(1, Ordering::AcqRel);
         Ok(())
+    }
+}
+
+/// A collection and its generation, as a cached measurement records them.
+///
+/// Holds the collection weakly: the allocation outlives the key, so another
+/// collection can never take its address and match a stale key, and the key
+/// keeps no faces alive.
+#[derive(Clone)]
+pub(crate) struct FontsKey {
+    collection: Weak<FontCollectionInner>,
+    generation: u64,
+}
+
+impl FontsKey {
+    /// Whether both keys name the same collection at the same generation.
+    pub(crate) fn matches(&self, other: &Self) -> bool {
+        self.generation == other.generation && Weak::ptr_eq(&self.collection, &other.collection)
+    }
+}
+
+impl fmt::Debug for FontsKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FontsKey")
+            .field("collection", &self.collection.as_ptr())
+            .field("generation", &self.generation)
+            .finish()
     }
 }
 
