@@ -37,7 +37,7 @@ pub use drag_target::{
     DragTargetLeave, DragTargetMove, DragTargetSlot, DragTargetState, DragTargetWillAccept,
     ErasedDragData,
 };
-pub use draggable::{Draggable, DraggableDetails, DraggableState};
+pub use draggable::{Draggable, DraggableCanceledDetails, DraggableDetails, DraggableState};
 pub use focus::{
     ExcludeFocus, Focus, FocusChangeHandler, FocusRoot, FocusRootState, FocusScope,
     FocusScopeState, FocusState,
