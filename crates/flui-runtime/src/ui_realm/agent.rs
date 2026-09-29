@@ -13,9 +13,12 @@
 //! Holding an agent keeps semantics collected for its presentation (a
 //! [`SemanticsHandle`] shared by every clone), so the tree an agent reads is
 //! the tree assistive technology is published. Dropping the last clone lets
-//! collection stop on the next frame.
+//! collection stop on the next frame; a reply still unanswered does not keep
+//! it on.
 
-use std::collections::HashSet;
+use std::cell::Cell;
+use std::collections::HashMap;
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -82,10 +85,20 @@ pub enum AgentError {
     /// The published semantics tree breaks AccessKit's contract.
     #[error("the published semantics tree is malformed")]
     Malformed,
-    /// The element's handler panicked. It may have run in part; the panic
-    /// continues on the owner thread.
+    /// The element's handler panicked while the owner invoked it. It may
+    /// have run in part; the panic continues on the owner thread. Only a
+    /// handler that runs when invoked reports this: a widget that defers the
+    /// work to a later frame (a `GestureDetector`) has answered `Ok` by then,
+    /// and a panic there is the frame's.
     #[error("the handler of element {element} panicked")]
     HandlerPanicked {
+        /// The element addressed.
+        element: ElementId,
+    },
+    /// The owner panicked while resolving the action, before any handler was
+    /// invoked; the panic continues on the owner thread.
+    #[error("resolving the action on element {element} panicked")]
+    ResolvePanicked {
         /// The element addressed.
         element: ElementId,
     },
@@ -103,7 +116,9 @@ impl AgentError {
             Self::ActionUnsupported { .. } => ErrorCode::ActionUnsupported,
             Self::Disabled { .. } => ErrorCode::Disabled,
             Self::InvalidArgument { .. } => ErrorCode::InvalidArgument,
-            Self::Malformed | Self::HandlerPanicked { .. } => ErrorCode::Platform,
+            Self::Malformed | Self::HandlerPanicked { .. } | Self::ResolvePanicked { .. } => {
+                ErrorCode::Platform
+            }
         }
     }
 
@@ -133,13 +148,10 @@ impl AgentError {
         }
     }
 
-    fn from_read(error: WireReadError) -> Self {
+    fn from_read(error: WireReadError, issued: bool) -> Self {
         match error {
             WireReadError::NoTree => Self::NoTreeYet,
-            WireReadError::NotFound { element } => Self::NodeNotFound {
-                element,
-                issued: true,
-            },
+            WireReadError::NotFound { element } => Self::NodeNotFound { element, issued },
             _ => Self::Malformed,
         }
     }
@@ -168,16 +180,66 @@ impl AgentError {
 /// The owner's half of an [`AgentReply`].
 pub(super) type ReplySender<T> = Sender<Result<T, AgentError>>;
 
-/// Records the element handles a read reported, so a later action on one
+/// What an agent's reads have reported, enough to tell a handle that is
+/// gone from one that was never issued, in memory bounded by the render
+/// slots the presentation has used rather than by how many elements came and
+/// went.
+///
+/// An element handle is the generational accessibility id of its render
+/// object: the render slot in the low 32 bits, the slot's generation in the
+/// high 32 (`RenderId::new_gen`), and a removed element's slot is reused only
+/// under a higher generation. So the record keeps, per slot, the newest
+/// generation a read reported: a handle at or below it was issued (the
+/// element it names is gone if the tree no longer shows it), and one above it,
+/// or at a slot no read reported, was not.
+#[derive(Debug, Default)]
+pub(super) struct IssuedHandles {
+    newest: HashMap<u32, NonZeroU32>,
+}
+
+impl IssuedHandles {
+    fn split(element: ElementId) -> (u32, Option<NonZeroU32>) {
+        let packed = element.get();
+        let slot = u32::try_from(packed & u64::from(u32::MAX))
+            .expect("BUG: the low half of a u64 fits a u32");
+        let generation =
+            u32::try_from(packed >> 32).expect("BUG: the high half of a u64 fits a u32");
+        (slot, NonZeroU32::new(generation))
+    }
+
+    pub(super) fn record(&mut self, element: ElementId) {
+        let (slot, Some(generation)) = Self::split(element) else {
+            return;
+        };
+        let newest = self.newest.entry(slot).or_insert(generation);
+        *newest = (*newest).max(generation);
+    }
+
+    pub(super) fn was_issued(&self, element: ElementId) -> bool {
+        let (slot, generation) = Self::split(element);
+        generation.is_some_and(|generation| {
+            self.newest
+                .get(&slot)
+                .is_some_and(|newest| generation <= *newest)
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn slots(&self) -> usize {
+        self.newest.len()
+    }
+}
+
+/// Records the element handles a read reported, so a later call naming one
 /// that is no longer in the tree answers `gone` rather than `unknown_handle`.
-fn record_issued(tree: &Tree, shared: &Shared) {
-    fn walk(nodes: &[flui_protocol::Node], issued: &mut HashSet<ElementId>) {
+fn record_issued(tree: &Tree, issued: &Mutex<IssuedHandles>) {
+    fn walk(nodes: &[flui_protocol::Node], issued: &mut IssuedHandles) {
         for node in nodes {
-            issued.insert(node.id);
+            issued.record(node.id);
             walk(&node.children, issued);
         }
     }
-    walk(&tree.roots, &mut shared.issued.lock());
+    walk(&tree.roots, &mut issued.lock());
 }
 
 /// The answer to one [`SemanticsAgent::read`] or [`SemanticsAgent::act`],
@@ -186,9 +248,11 @@ fn record_issued(tree: &Tree, shared: &Shared) {
 #[derive(Debug)]
 pub struct AgentReply<T> {
     rx: Receiver<Result<T, AgentError>>,
-    shared: Arc<Shared>,
+    /// The agent's record of issued handles, and not its semantics handle:
+    /// an unanswered reply does not keep collection on.
+    issued: Arc<Mutex<IssuedHandles>>,
     /// What the agent learns from a successful answer.
-    record: fn(&T, &Shared),
+    record: fn(&T, &Mutex<IssuedHandles>),
     delivered: bool,
 }
 
@@ -196,7 +260,7 @@ impl<T> AgentReply<T> {
     fn deliver(&mut self, received: Result<T, AgentError>) -> Result<T, AgentError> {
         self.delivered = true;
         if let Ok(answer) = &received {
-            (self.record)(answer, &self.shared);
+            (self.record)(answer, &self.issued);
         }
         received
     }
@@ -229,36 +293,34 @@ impl<T> AgentReply<T> {
     }
 }
 
-/// What every clone of one agent shares.
-#[derive(Debug)]
-struct Shared {
-    /// Keeps semantics collected while any clone is alive.
-    _semantics: SemanticsHandle,
-    /// Every element handle a read has reported to this agent, so a handle
-    /// that is not in the tree can be told `gone` from `unknown_handle`.
-    /// Touched only on the agent's side, never by the owner.
-    issued: Mutex<HashSet<ElementId>>,
-}
-
 /// A capability to read one presentation's semantics tree and act on its
 /// elements, from any thread, through the realm's owner inbox.
 ///
 /// Vended by [`UiRealm::semantics_agent`]. `Clone + Send + Sync`; clones
 /// share one semantics handle and one record of issued element handles.
+///
+/// Its [`ElementId`]s are scoped to the one presentation it was vended for:
+/// they are render identities, so another window's agent can report the same
+/// `e<n>` for a different element. A server that addresses several windows
+/// through one session keeps its own handle table over these (ADR-0095 §3).
 #[derive(Debug, Clone)]
 pub struct SemanticsAgent {
     sender: UiCommandSender,
-    shared: Arc<Shared>,
+    /// Keeps semantics collected while any clone is alive.
+    _semantics: Arc<SemanticsHandle>,
+    /// What this agent's reads reported. Touched only on the agent's side,
+    /// never by the owner.
+    issued: Arc<Mutex<IssuedHandles>>,
 }
 
 impl SemanticsAgent {
-    fn reply<T>(&self, record: fn(&T, &Shared)) -> (ReplySender<T>, AgentReply<T>) {
+    fn reply<T>(&self, record: fn(&T, &Mutex<IssuedHandles>)) -> (ReplySender<T>, AgentReply<T>) {
         let (tx, rx) = crossbeam_channel::bounded(1);
         (
             tx,
             AgentReply {
                 rx,
-                shared: Arc::clone(&self.shared),
+                issued: Arc::clone(&self.issued),
                 record,
                 delivered: false,
             },
@@ -273,11 +335,15 @@ impl SemanticsAgent {
     /// [`AgentError::InboxFull`] or [`AgentError::RealmGone`] when the
     /// request cannot be enqueued; the reply carries the rest.
     pub fn read(&self, query: ReadQuery) -> Result<AgentReply<Tree>, AgentError> {
+        let issued = query
+            .root
+            .is_none_or(|root| self.issued.lock().was_issued(root));
         let (reply, answer) = self.reply(record_issued);
         self.sender
             .send(UiCommand::SemanticsRead {
                 presentation_id: self.sender.presentation_id,
                 query,
+                issued,
                 reply,
             })
             .map_err(AgentError::from_send)?;
@@ -287,16 +353,21 @@ impl SemanticsAgent {
     /// Perform `request` on its element, checked against the element as the
     /// last committed frame shows it.
     ///
-    /// The reply comes at the owner's next drain, once the element's handler
-    /// has been invoked; what the handler changes shows in a read after the
-    /// next frame.
+    /// The reply comes at the owner's next drain. `Ok` means the action was
+    /// delivered to the element's semantics handler, not that its effect has
+    /// happened: a handler may do its work later. A `GestureDetector`, behind
+    /// most tappable widgets, runs a semantics tap in the frame after the
+    /// drain, so its effect shows in a read two frames on, and a tap it drops
+    /// (the widget unmounted first) still answered `Ok`. Read the tree for
+    /// the effect rather than acting again, since a second action is a second
+    /// press.
     ///
     /// # Errors
     ///
     /// [`AgentError::InboxFull`] or [`AgentError::RealmGone`] when the
     /// request cannot be enqueued; the reply carries the rest.
     pub fn act(&self, request: ActionRequest) -> Result<AgentReply<()>, AgentError> {
-        let issued = self.shared.issued.lock().contains(&request.element);
+        let issued = self.issued.lock().was_issued(request.element);
         let (reply, answer) = self.reply(|(), _| {});
         self.sender
             .send(UiCommand::SemanticsAgentAction {
@@ -344,10 +415,8 @@ impl UiRealm {
         self.request_redraw_for(state);
         Some(SemanticsAgent {
             sender,
-            shared: Arc::new(Shared {
-                _semantics: handle,
-                issued: Mutex::new(HashSet::new()),
-            }),
+            _semantics: Arc::new(handle),
+            issued: Arc::new(Mutex::new(IssuedHandles::default())),
         })
     }
 
@@ -356,6 +425,7 @@ impl UiRealm {
         &self,
         presentation: PresentationId,
         query: &ReadQuery,
+        issued: bool,
     ) -> Result<Tree, AgentError> {
         let state = self
             .presentations
@@ -370,19 +440,21 @@ impl UiRealm {
                 .semantics_owner()
                 .ok_or(AgentError::NoTreeYet)?
                 .read_wire(query, Placement::new(ratio, window))
-                .map_err(AgentError::from_read)
+                .map_err(|error| AgentError::from_read(error, issued))
         })
     }
 
     /// The owner half of [`SemanticsAgent::act`]: resolves the wire action
     /// against the committed tree, then invokes the handler through the path
-    /// an assistive technology's action takes. The caller contains a
-    /// handler's panic.
+    /// an assistive technology's action takes. The caller contains a panic;
+    /// `reached_handler` is set just before the handler is invoked, so the
+    /// caller can tell a handler's panic from one while resolving.
     pub(super) fn serve_semantics_act(
         &self,
         presentation: PresentationId,
         request: &ActionRequest,
         issued: bool,
+        reached_handler: &Cell<bool>,
     ) -> Result<(), AgentError> {
         let state = self
             .presentations
@@ -396,6 +468,7 @@ impl UiRealm {
                 .map_err(|error| AgentError::from_act(error, issued))
         })?;
         let element = request.element;
+        reached_handler.set(true);
         state
             .dispatch_semantics_action(resolved)
             .map_err(|error| match error {

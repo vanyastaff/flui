@@ -36,7 +36,7 @@ use parking_lot::RwLock;
 ///
 /// Constructed only by [`SemanticsHost::ensure_semantics`]; the realm's
 /// semantics agent holds one while any clone of it is alive.
-pub struct SemanticsHandle {
+pub(crate) struct SemanticsHandle {
     counter: Arc<AtomicUsize>,
 }
 
@@ -160,7 +160,7 @@ impl SemanticsHost {
     ///
     /// The returned handle keeps semantics enabled until it is dropped.
     #[must_use]
-    pub fn ensure_semantics(&self) -> SemanticsHandle {
+    pub(crate) fn ensure_semantics(&self) -> SemanticsHandle {
         SemanticsHandle::new(Arc::clone(&self.handle_count))
     }
 

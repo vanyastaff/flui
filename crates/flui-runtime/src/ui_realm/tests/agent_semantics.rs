@@ -163,7 +163,8 @@ fn an_agent_reads_a_widget_tree_as_wire_nodes_that_round_trip_through_json() {
         )
     );
     assert_eq!(root.window.map(flui_protocol::WindowId::get), Some(window));
-    let rect = button.rect.expect("a laid-out button has bounds");
+    assert_eq!(button.rect, None, "no screen rect is claimed in process");
+    let rect = button.surface_rect.expect("a laid-out button has bounds");
     assert!(
         rect.width > 0 && rect.height > 0 && rect.y > 0,
         "the button's surface rect sits below the count text: {rect:?}"
@@ -263,13 +264,15 @@ fn dropping_the_last_agent_stops_semantics_collection() {
         "a live clone keeps collection on"
     );
 
+    let unanswered = clone.read(ReadQuery::new()).expect("the inbox has room");
     drop(clone);
     realm.request_redraw();
     frame(&realm, &mut sink);
     assert!(
         pipeline.with(|p| p.semantics_owner().is_none()),
-        "the last clone gone, the next frame stops collecting"
+        "the last clone gone, the next frame stops collecting, though a reply is unanswered"
     );
+    drop(unanswered);
 }
 
 #[test]
@@ -319,6 +322,95 @@ fn an_action_on_a_node_that_left_the_tree_is_gone_not_retargeted() {
         Err(ErrorCode::UnknownHandle),
         "a handle no read reported was never issued"
     );
+
+    // A read scoped to either handle answers as an action on it does.
+    let scoped_gone = agent
+        .read(ReadQuery::new().with_root(button))
+        .expect("the inbox has room");
+    assert_eq!(
+        answer(&realm, scoped_gone).map_err(|e| e.code()),
+        Err(ErrorCode::Gone)
+    );
+    let scoped_unknown = agent
+        .read(ReadQuery::new().with_root(never))
+        .expect("the inbox has room");
+    assert_eq!(
+        answer(&realm, scoped_unknown).map_err(|e| e.code()),
+        Err(ErrorCode::UnknownHandle)
+    );
+}
+
+/// The record that tells `gone` from `unknown_handle` grows with the render
+/// slots a presentation uses, not with every element that came and went: a
+/// slot reused under ever newer generations is one entry.
+#[test]
+fn the_record_of_issued_handles_is_bounded_by_render_slots() {
+    let at = |slot: u32, generation: u32| {
+        element(RenderId::new_gen(
+            slot,
+            std::num::NonZeroU32::new(generation).expect("test generations are non-zero"),
+        ))
+    };
+    let mut issued = super::super::agent::IssuedHandles::default();
+    for generation in 1..=10_000 {
+        issued.record(at(7, generation));
+    }
+    assert_eq!(issued.slots(), 1);
+    assert!(
+        issued.was_issued(at(7, 1)),
+        "an older generation was issued"
+    );
+    assert!(issued.was_issued(at(7, 10_000)));
+    assert!(
+        !issued.was_issued(at(7, 10_001)),
+        "a newer generation than any read reported was not"
+    );
+    assert!(!issued.was_issued(at(8, 1)), "nor a slot no read reported");
+}
+
+/// A panic before the handler is reached (here, the pipeline already borrowed
+/// when the owner resolves the action) is not reported as the handler's: no
+/// part of the action ran.
+#[test]
+fn a_panic_while_resolving_is_not_reported_as_the_handlers() {
+    let realm = UiRealm::for_test();
+    let render_id = RenderId::new(1);
+    let ran = Arc::new(AtomicU32::new(0));
+    let counter = Arc::clone(&ran);
+    install_node(&realm, render_id, move |config| {
+        config.set_button(true);
+        config.set_label("Press");
+        config.add_action(
+            SemanticsAction::Tap,
+            Arc::new(move |_, _| {
+                counter.fetch_add(1, Ordering::Relaxed);
+            }),
+        );
+    });
+    let agent = realm
+        .semantics_agent(realm.presentation_id())
+        .expect("the realm hosts its primary presentation");
+    let button = find(&read(&realm, &agent), "Press").id;
+
+    let mut act = agent
+        .act(ActionRequest::new(button, ActionName::Invoke))
+        .expect("the inbox has room");
+    let pipeline = realm.pipeline_for_test();
+    let unwound = catch_unwind(AssertUnwindSafe(|| {
+        pipeline.with_mut(|_| realm.drain_commands())
+    }));
+    assert!(
+        unwound.is_err(),
+        "resolving against a borrowed pipeline panics"
+    );
+    let failed = act
+        .try_take()
+        .expect("the reply was answered before unwinding");
+    assert_eq!(failed, Err(AgentError::ResolvePanicked { element: button }));
+    let error = failed.expect_err("checked above");
+    assert!(!error.may_have_run());
+    assert_eq!(error.code(), ErrorCode::Platform);
+    assert_eq!(ran.load(Ordering::Relaxed), 0, "no handler ran");
 }
 
 #[test]

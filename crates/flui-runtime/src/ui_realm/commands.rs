@@ -96,6 +96,9 @@ pub enum UiCommand {
         presentation_id: PresentationId,
         /// How much of the tree to read.
         query: flui_protocol::ReadQuery,
+        /// Whether the agent's reads ever reported the query's root; true
+        /// when the query has none.
+        issued: bool,
         /// Where the answer goes.
         reply: super::agent::ReplySender<flui_protocol::Tree>,
     },
@@ -559,9 +562,10 @@ impl UiRealm {
                 UiCommand::SemanticsRead {
                     presentation_id,
                     query,
+                    issued,
                     reply,
                 } => {
-                    let result = self.serve_semantics_read(presentation_id, &query);
+                    let result = self.serve_semantics_read(presentation_id, &query, issued);
                     if result == Err(super::AgentError::PresentationGone) {
                         report.dropped_stale += 1;
                     } else {
@@ -576,8 +580,14 @@ impl UiRealm {
                     reply,
                 } => {
                     let element = request.element;
+                    let reached_handler = std::cell::Cell::new(false);
                     let served = catch_unwind(AssertUnwindSafe(|| {
-                        self.serve_semantics_act(presentation_id, &request, issued)
+                        self.serve_semantics_act(
+                            presentation_id,
+                            &request,
+                            issued,
+                            &reached_handler,
+                        )
                     }));
                     match served {
                         Ok(result) => {
@@ -589,17 +599,19 @@ impl UiRealm {
                             super::agent::send_reply(&reply, Some(element), result);
                         }
                         Err(payload) => {
-                            // The handler panicked. Its reply fails first, so
-                            // the agent learns of it whatever happens next;
-                            // then a queued tail gets a future owner turn,
-                            // since this one is unwinding; then the original
-                            // panic resumes, never replaced by a later one.
+                            // The handler, or the owner before reaching it,
+                            // panicked. The reply fails first, so the agent
+                            // learns of it whatever happens next; then a
+                            // queued tail gets a future owner turn, since this
+                            // one is unwinding; then the original panic
+                            // resumes, never replaced by a later one.
+                            let failure = if reached_handler.get() {
+                                super::AgentError::HandlerPanicked { element }
+                            } else {
+                                super::AgentError::ResolvePanicked { element }
+                            };
                             let answered = catch_unwind(AssertUnwindSafe(|| {
-                                super::agent::send_reply(
-                                    &reply,
-                                    Some(element),
-                                    Err(super::AgentError::HandlerPanicked { element }),
-                                );
+                                super::agent::send_reply(&reply, Some(element), Err(failure));
                             }))
                             .err();
                             let mut first_panic = Some(payload);
