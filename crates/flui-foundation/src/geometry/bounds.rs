@@ -663,19 +663,6 @@ impl<T: Unit> Bounds<T> {
             size: self.size.cast(),
         }
     }
-
-    /// Converts the bounds to f64-based Pixels.
-    #[inline]
-    #[must_use]
-    pub fn to_f32(self) -> Bounds<f64>
-    where
-        T: Into<f64>,
-    {
-        Bounds {
-            origin: Point::new(self.origin.x.into(), self.origin.y.into()),
-            size: Size::new(self.size.width.into(), self.size.height.into()),
-        }
-    }
 }
 
 // =============================================================================

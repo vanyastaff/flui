@@ -861,26 +861,6 @@ impl<T: NumericUnit> Point<T>
 where
     T: Into<f64>,
 {
-    /// Converts to `Point` (shorthand for GPU usage).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_foundation::geometry::Point;
-    ///
-    /// let p = Point::<f64>::new(100.0, 200.0);
-    /// let p_f32 = p.to_f32();
-    /// assert_eq!(p_f32, Point::new(100.0, 200.0));
-    /// ```
-    #[inline]
-    #[must_use]
-    pub fn to_f32(self) -> Point<f64> {
-        Point {
-            x: self.x.into(),
-            y: self.y.into(),
-        }
-    }
-
     /// Converts to raw array [x, y] for GPU buffers.
     ///
     /// # Examples
@@ -920,7 +900,7 @@ where
 
 // Note: We cannot implement From<Point<T>> for Point generically
 // because it conflicts with the reflexive impl From<T> for T when T=f64.
-// Instead, users should use .cast(), .to_f32(), or .into() on specific types.
+// Instead, users should use .cast() or .into() on specific types.
 
 /// Converts from `Point<T>` to `(f64, f64)` for any T that converts to f64.
 impl<T: Unit> From<Point<T>> for (f64, f64)
@@ -1458,13 +1438,6 @@ mod typed_tests {
         let p_f32: Point<f64> = p.cast();
         assert_eq!(p_f32.x, 100.0);
         assert_eq!(p_f32.y, 200.0);
-    }
-
-    #[test]
-    fn test_point_to_f32() {
-        let p = Point::<f64>::new(100.0, 200.0);
-        let p_f32 = p.to_f32();
-        assert_eq!(p_f32.x, 100.0);
     }
 
     #[test]

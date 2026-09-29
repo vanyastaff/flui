@@ -1104,6 +1104,29 @@ mod gpu_tests {
         );
     }
 
+    /// Nine-slice edges stay in f64 until the transform rebases them: a destination
+    /// three pixels wide at x = 2^24, drawn under a -2^24 translation, covers three
+    /// device pixels. Narrowed first, its right edge rounds to 2^24 + 4 and the
+    /// slices span four.
+    #[test]
+    fn draw_image_nine_slice_rebases_before_narrowing() {
+        let (device, queue) = acquire_test_device_and_queue();
+
+        let image = Image::from_rgba8(6, 6, [200u8, 100, 50, 255].repeat(6 * 6));
+        let center_slice = Rect::from_xywh(2.0, 2.0, 2.0, 2.0);
+        let far = 16_777_216.0;
+        let dst = Rect::from_ltrb(far, 0.0, far + 3.0, 6.0);
+
+        let mut painter = build_painter(Arc::clone(&device), Arc::clone(&queue));
+        painter.translate(Offset::new(-far, 0.0));
+        painter.draw_image_nine_slice(&image, center_slice, dst, BlendMode::Screen);
+
+        let advanced = painter.advanced_shapes_for_test();
+        assert_eq!(advanced.len(), 1);
+        let bounds = advanced[0].device_bounds;
+        assert_eq!((bounds.left(), bounds.right()), (0.0, 3.0));
+    }
+
     // ── I3: draw_atlas advanced → exactly one AdvancedShape ──────────────────
 
     /// I3: `draw_atlas` with an advanced blend mode must produce EXACTLY ONE

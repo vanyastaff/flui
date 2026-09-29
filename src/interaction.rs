@@ -35,8 +35,8 @@ pub use flui_interaction::{
     VerticalDragGestureRecognizer,
 };
 pub use flui_interaction::{
-    ForcePressDetails, LongPressEndDetails, LongPressMoveUpdateDetails, TapDownDetails,
-    TapUpDetails, Velocity, VelocityEstimate,
+    ForcePressDetails, LongPressEndDetails, LongPressMoveUpdateDetails, PointerDeviceKind,
+    TapDownDetails, TapUpDetails, Velocity, VelocityEstimate,
 };
 
 pub use flui_interaction::events::KeyEvent;

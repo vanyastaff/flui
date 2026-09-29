@@ -30,12 +30,10 @@
 //!   element tree, which clamps the item count, and the next pass reports the
 //!   real extent and the viewport clamps its pixels. A non-monotone builder
 //!   therefore truncates at its first `None` where Flutter would teleport.
-//! - **The precision tolerance is `f64`-scaled.** Flutter compares layout
-//!   offsets in doubles against `precisionErrorTolerance = 1e-10`; FLUI's
-//!   pixels are `f64`, whose spacing at a few thousand pixels is already
-//!   `~1e-4`, so `PRECISION_ERROR_TOLERANCE` is `1e-3` px — far below any
-//!   layout-relevant distance, wide enough to absorb the rounding the
-//!   reference's own regression tests exist for.
+//! - **The precision tolerance is Flutter's.** Offsets are `f64`, as Flutter's
+//!   doubles are, so `PRECISION_ERROR_TOLERANCE` is `precisionErrorTolerance`
+//!   (`1e-10` px, ADR-0098): wide enough for the division's rounding, narrow
+//!   enough that an edge `1e-4` px past a boundary reaches the next child.
 //! - **An unbounded window is bounded here.** With an infinite
 //!   `remainingCacheExtent` Flutter lays out to the end of the data; so does
 //!   this sliver for a real count (shrink-wrap materialises everything, as
@@ -71,9 +69,8 @@ use flui_rendering::{
 use super::sliver_grid::{MAX_UNBOUNDED_WINDOW_CHILDREN, UNBOUNDED_SENTINEL_WINDOW};
 
 /// How far a layout offset may miss an exact multiple of the item extent and
-/// still count as that multiple, in pixels. Flutter's `precisionErrorTolerance`
-/// scaled from doubles to `f64` (see the module's mapping decisions).
-pub const PRECISION_ERROR_TOLERANCE: f64 = 1e-3;
+/// still count as that multiple, in pixels: Flutter's `precisionErrorTolerance`.
+pub const PRECISION_ERROR_TOLERANCE: f64 = flui_foundation::EPSILON;
 
 /// A sliver that places lazily built Box children one after another along the
 /// scroll axis, each with the same main-axis extent.
@@ -539,15 +536,15 @@ mod tests {
     //! The index math, against Flutter's `rendering/sliver_fixed_extent_layout_test.dart`
     //! (`group('getMaxChildIndexForScrollOffset')` and the two
     //! `'… correctly references itemExtent …'` cases). The reference nudges
-    //! offsets by `1e-10` / `1e-11` doubles around `precisionErrorTolerance`;
-    //! here the nudges are `1e-2` / `1e-4` px around the `f64`-scaled
-    //! `PRECISION_ERROR_TOLERANCE` — the same side of the tolerance each time.
+    //! offsets by `1e-10` / `1e-11` around `precisionErrorTolerance`; here the
+    //! nudge outside is `1e-9`, clear of the division's rounding, and the nudge
+    //! inside is the reference's `1e-11`.
 
     use super::*;
 
     const GENERIC_ITEM_EXTENT: f64 = 600.0;
-    const OUTSIDE_TOLERANCE: f64 = 1e-2;
-    const INSIDE_TOLERANCE: f64 = 1e-4;
+    const OUTSIDE_TOLERANCE: f64 = 1e-9;
+    const INSIDE_TOLERANCE: f64 = 1e-11;
 
     fn list(item_extent: f64) -> RenderSliverFixedExtentList {
         RenderSliverFixedExtentList::new(item_extent, 100)
@@ -620,6 +617,22 @@ mod tests {
         assert_eq!(
             list(GENERIC_ITEM_EXTENT)
                 .max_child_index_for_scroll_offset(GENERIC_ITEM_EXTENT + INSIDE_TOLERANCE),
+            0
+        );
+    }
+
+    /// A window edge `1e-4` px past a boundary is a real overlap, not rounding
+    /// noise: the child beyond the boundary is requested, and the child before
+    /// it is kept while the leading edge is `1e-4` px short of its end.
+    #[test]
+    fn a_ten_thousandth_of_a_pixel_is_not_rounding_noise() {
+        let list = list(GENERIC_ITEM_EXTENT);
+        assert_eq!(
+            list.max_child_index_for_scroll_offset(GENERIC_ITEM_EXTENT + 1e-4),
+            1
+        );
+        assert_eq!(
+            list.min_child_index_for_scroll_offset(GENERIC_ITEM_EXTENT - 1e-4),
             0
         );
     }

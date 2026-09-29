@@ -15,8 +15,7 @@
 //!     25.0
 //! );
 //!
-//! // Convert to f64 for GPU
-//! let gpu_circle: Circle<f64> = ui_circle.to_f32();
+//! assert!(ui_circle.contains(Point::new(60.0, 50.0)));
 //! ```
 
 use std::fmt;
@@ -256,18 +255,18 @@ where
     #[inline]
     #[must_use]
     pub fn nearest_point(&self, point: Point<T>) -> Point<T> {
-        let center_f32 = self.center.to_f32();
-        let point_f32 = point.to_f32();
+        let center = self.center.cast::<f64>();
+        let target = point.cast::<f64>();
 
-        if point_f32 == center_f32 {
+        if target == center {
             // Any point on boundary is equally close
             let r: f64 = self.radius.into();
-            return Point::new(T::from_f64(center_f32.x + r), T::from_f64(center_f32.y));
+            return Point::new(T::from_f64(center.x + r), T::from_f64(center.y));
         }
 
-        let dir = (point_f32 - center_f32).normalize_or(Vec2::ZERO);
+        let dir = (target - center).normalize_or(Vec2::ZERO);
         let r: f64 = self.radius.into();
-        let result = center_f32 + dir * r;
+        let result = center + dir * r;
         Point::new(T::from_f64(result.x), T::from_f64(result.y))
     }
 
@@ -277,11 +276,11 @@ where
     #[inline]
     #[must_use]
     pub fn point_at_angle(&self, angle: f64) -> Point<T> {
-        let center_f32 = self.center.to_f32();
+        let center = self.center.cast::<f64>();
         let r: f64 = self.radius.into();
         Point::new(
-            T::from_f64(center_f32.x + r * angle.cos()),
-            T::from_f64(center_f32.y + r * angle.sin()),
+            T::from_f64(center.x + r * angle.cos()),
+            T::from_f64(center.y + r * angle.sin()),
         )
     }
 
@@ -291,9 +290,9 @@ where
     #[inline]
     #[must_use]
     pub fn angle_to(&self, point: Point<T>) -> f64 {
-        let center_f32 = self.center.to_f32();
-        let point_f32 = point.to_f32();
-        (point_f32.y - center_f32.y).atan2(point_f32.x - center_f32.x)
+        let center = self.center.cast::<f64>();
+        let target = point.cast::<f64>();
+        (target.y - center.y).atan2(target.x - center.x)
     }
 }
 
@@ -366,21 +365,6 @@ where
 // ============================================================================
 // Conversions
 // ============================================================================
-
-impl<T: NumericUnit> Circle<T>
-where
-    T: Into<f64>,
-{
-    /// Converts the circle to f64-based Pixels.
-    #[inline]
-    #[must_use]
-    pub fn to_f32(&self) -> Circle<f64> {
-        Circle {
-            center: self.center.to_f32(),
-            radius: self.radius.into(),
-        }
-    }
-}
 
 impl<T: Unit> Circle<T>
 where

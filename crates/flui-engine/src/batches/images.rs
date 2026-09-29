@@ -531,23 +531,24 @@ impl DrawBatcher {
         dst: Rect<f64>,
         blend_mode: BlendMode,
     ) {
-        let img_w = image.width() as f32;
-        let img_h = image.height() as f32;
+        let img_w = f64::from(image.width());
+        let img_h = f64::from(image.height());
         if img_w <= 0.0 || img_h <= 0.0 {
             return;
         }
 
         // Slice boundaries in image space.
-        let sl = center_slice.left() as f32;
-        let st = center_slice.top() as f32;
-        let sr = center_slice.right() as f32;
-        let sb = center_slice.bottom() as f32;
+        let sl = center_slice.left();
+        let st = center_slice.top();
+        let sr = center_slice.right();
+        let sb = center_slice.bottom();
 
-        // Destination boundaries.
-        let dl = dst.left() as f32;
-        let dt = dst.top() as f32;
-        let dr = dst.right() as f32;
-        let db = dst.bottom() as f32;
+        // Destination boundaries, kept in f64 until the transform has rebased them
+        // to device space; narrowing here would round a far-offset slice edge.
+        let dl = dst.left();
+        let dt = dst.top();
+        let dr = dst.right();
+        let db = dst.bottom();
 
         // Inner destination boundaries (corners keep their pixel size).
         let d_inner_left = dl + sl;
@@ -569,7 +570,7 @@ impl DrawBatcher {
         //
         // For correct 9-slice, we create sub-images from the pixel data.
         // Extract a sub-region of the image as a new Image.
-        let extract = |sx: f32, sy: f32, sw: f32, sh: f32| -> Option<Image> {
+        let extract = |sx: f64, sy: f64, sw: f64, sh: f64| -> Option<Image> {
             extract_rgba8_region(
                 image,
                 sx.max(0.0) as u32,
@@ -580,7 +581,7 @@ impl DrawBatcher {
         };
 
         // 9 slices: (src_x, src_y, src_w, src_h) -> dst rect.
-        let slices: [(f32, f32, f32, f32, f32, f32, f32, f32); 9] = [
+        let slices: [(f64, f64, f64, f64, f64, f64, f64, f64); 9] = [
             // Top-left corner
             (
                 0.0,
@@ -694,8 +695,7 @@ impl DrawBatcher {
                     continue;
                 }
                 if let Some(sub_image) = extract(sx, sy, sw, sh) {
-                    let tile_dst =
-                        Rect::from_xywh(f64::from(dx), f64::from(dy), f64::from(dw), f64::from(dh));
+                    let tile_dst = Rect::from_xywh(dx, dy, dw, dh);
 
                     let top_left =
                         state.apply_transform(Point::new(tile_dst.left(), tile_dst.top()));
@@ -771,8 +771,7 @@ impl DrawBatcher {
                 continue;
             }
             if let Some(sub_image) = extract(sx, sy, sw, sh) {
-                let tile_dst =
-                    Rect::from_xywh(f64::from(dx), f64::from(dy), f64::from(dw), f64::from(dh));
+                let tile_dst = Rect::from_xywh(dx, dy, dw, dh);
                 Self::draw_image(
                     segment,
                     draw_order,

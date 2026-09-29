@@ -266,21 +266,6 @@ where
 // Conversions
 // ============================================================================
 
-impl<T: NumericUnit> Line<T>
-where
-    T: Into<f64>,
-{
-    /// Converts the line segment to use `Pixels` units.
-    #[inline]
-    #[must_use]
-    pub fn to_f32(&self) -> Line<f64> {
-        Line {
-            p0: self.p0.to_f32(),
-            p1: self.p1.to_f32(),
-        }
-    }
-}
-
 impl<T: Unit> Line<T>
 where
     T: Into<f64>,

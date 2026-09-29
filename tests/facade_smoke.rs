@@ -21,7 +21,7 @@
 //! smoke check for the facade surface itself.
 
 use flui::prelude::*;
-use flui_foundation::geometry::Size;
+use flui_foundation::geometry::{Offset, Size};
 use flui_rendering::constraints::BoxConstraints;
 use flui_testing::HeadlessBinding;
 use flui_testing::bootstrap::{MountOptions, MountOwners};
@@ -144,4 +144,15 @@ fn cupertino_app_shell_resolves_through_the_facade() {
     let theme = flui::cupertino::CupertinoThemeData::new()
         .with_brightness(flui::platform::Brightness::Dark);
     let _app = flui::cupertino::CupertinoApp::new(SizedBox::shrink()).theme(theme);
+}
+
+/// A gesture payload that names a device kind is buildable from the facade alone:
+/// `TapDownDetails::with_kind` takes a `PointerDeviceKind`, so the facade exports both.
+#[test]
+fn tap_details_take_a_device_kind_through_the_facade() {
+    use flui::interaction::{PointerDeviceKind, TapDownDetails};
+
+    let details = TapDownDetails::new(Offset::new(4.0, 2.0), Offset::new(1.0, 0.5))
+        .with_kind(PointerDeviceKind::Mouse);
+    assert_eq!(details.kind, PointerDeviceKind::Mouse);
 }

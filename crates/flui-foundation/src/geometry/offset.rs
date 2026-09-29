@@ -192,30 +192,6 @@ impl<T: Unit> Offset<T> {
     }
 }
 
-impl<T: NumericUnit> Offset<T>
-where
-    T: Into<f64>,
-{
-    /// Convert to f64 offset.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_foundation::geometry::Offset;
-    ///
-    /// let offset = Offset::new(10.0, 20.0);
-    /// let f32_offset = offset.to_f32();
-    /// assert_eq!(f32_offset.dx, 10.0);
-    #[inline]
-    #[must_use]
-    pub fn to_f32(self) -> Offset<f64> {
-        Offset {
-            dx: self.dx.into(),
-            dy: self.dy.into(),
-        }
-    }
-}
-
 // ============================================================================
 // Legacy Float Methods (for backwards compatibility)
 // ============================================================================
@@ -1099,14 +1075,6 @@ mod typed_tests {
     fn test_offset_cast() {
         let px_offset = Offset::<f64>::new(10.0, 20.0);
         let f32_offset: Offset<f64> = px_offset.cast();
-        assert_eq!(f32_offset.dx, 10.0);
-        assert_eq!(f32_offset.dy, 20.0);
-    }
-
-    #[test]
-    fn test_offset_to_f32() {
-        let px_offset = Offset::<f64>::new(10.0, 20.0);
-        let f32_offset = px_offset.to_f32();
         assert_eq!(f32_offset.dx, 10.0);
         assert_eq!(f32_offset.dy, 20.0);
     }

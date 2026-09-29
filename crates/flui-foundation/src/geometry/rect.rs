@@ -810,21 +810,6 @@ where
 // Conversions
 // ============================================================================
 
-impl<T: NumericUnit> Rect<T>
-where
-    T: Into<f64>,
-{
-    /// Converts to `Rect` with f64 values.
-    #[inline]
-    #[must_use]
-    pub fn to_f32(&self) -> Rect<f64> {
-        Rect {
-            min: self.min.to_f32(),
-            max: self.max.to_f32(),
-        }
-    }
-}
-
 impl<T: Unit> Rect<T>
 where
     T: Into<f64>,
@@ -1127,14 +1112,6 @@ mod tests {
             rect(10.0, 20.0, 100.0, 50.0),
             Rect::from_xywh(10.0, 20.0, 100.0, 50.0)
         );
-    }
-
-    #[test]
-    fn test_to_f32() {
-        let r = Rect::<f64>::from_origin_size(Point::new(10.0, 20.0), Size::new(100.0, 50.0));
-        let f = r.to_f32();
-        assert_eq!(f.min, point(10.0, 20.0));
-        assert_eq!(f.max, point(110.0, 70.0));
     }
 
     #[test]

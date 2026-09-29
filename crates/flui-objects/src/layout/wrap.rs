@@ -39,11 +39,9 @@ use flui_rendering::{
 // This `pub use` also serves as the module-level import for the code below.
 pub use super::wrap_alignment::{WrapAlignment, WrapCrossAlignment};
 
-/// Precision tolerance for run-overflow detection.
-///
-/// Mirrors Flutter's `precisionErrorTolerance` (1e-10 in Dart `double`),
-/// adapted for f64.
-const PRECISION_TOLERANCE: f64 = 1e-6;
+/// Precision tolerance for run-overflow detection: Flutter's
+/// `precisionErrorTolerance`, at the same `f64` scale (ADR-0098).
+const PRECISION_TOLERANCE: f64 = flui_foundation::EPSILON;
 
 // ── Layout helpers ────────────────────────────────────────────────────────────
 
@@ -884,6 +882,22 @@ mod tests {
         assert_eq!(wrap.alignment, WrapAlignment::Center);
         assert_eq!(wrap.run_alignment, WrapAlignment::SpaceBetween);
         assert_eq!(wrap.cross_axis_alignment, WrapCrossAlignment::End);
+    }
+
+    /// Run breaking uses Flutter's `f64` tolerance: children that overflow the
+    /// line by 5e-7 px start a new run, and only a rounding-sized excess stays.
+    #[test]
+    fn a_representable_overflow_starts_a_new_run() {
+        let wrap = RenderWrap::new();
+        let constraints = BoxConstraints::loose(Size::new(100.0, 100.0));
+        let runs_for = |second: f64| {
+            let widths = [50.0, second];
+            wrap.compute_runs(constraints, 2, |i, _| Size::new(widths[i], 10.0))
+                .runs
+                .len()
+        };
+        assert_eq!(runs_for(50.000_000_5), 2);
+        assert_eq!(runs_for(50.0 + 1e-12), 1);
     }
 
     // ── distribute_space ──────────────────────────────────────────────────────

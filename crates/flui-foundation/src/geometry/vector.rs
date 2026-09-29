@@ -266,21 +266,6 @@ impl<T: Unit> Vec2<T> {
     }
 }
 
-impl<T: NumericUnit> Vec2<T>
-where
-    T: Into<f64>,
-{
-    /// Converts the vector to `f64` logical pixels.
-    #[inline]
-    #[must_use]
-    pub fn to_f32(self) -> Vec2<f64> {
-        Vec2 {
-            x: self.x.into(),
-            y: self.y.into(),
-        }
-    }
-}
-
 // ============================================================================
 // Length & Normalization
 // ============================================================================

@@ -19,19 +19,10 @@ impl Lerp for Color {
     fn lerp_to(&self, other: &Self, t: f64) -> Self {
         // The `Lerp` contract is no-clamp: `t` may fall outside [0, 1] so
         // overshoot curves (elastic/back) propagate through `Tween<Color>`.
-        // Delegating to `Color::lerp` (which clamps `t`) would flatten that
-        // overshoot — the very thing the no-clamp tween path restores — so the
-        // channels are interpolated directly here. `t` is NOT clamped; the
-        // channel *values* still saturate into [0, 255] (the `f64 as u8` cast
-        // saturates). Round, not truncate, to avoid biasing each channel down.
-        let lerp_channel =
-            |a: u8, b: u8| (f64::from(a) + (f64::from(b) - f64::from(a)) * t).round() as u8;
-        Color::rgba(
-            lerp_channel(self.r, other.r),
-            lerp_channel(self.g, other.g),
-            lerp_channel(self.b, other.b),
-            lerp_channel(self.a, other.a),
-        )
+        // `Color::lerp` clamps `t`, which would flatten that overshoot, so this
+        // takes the same premultiplied interpolation without the clamp. Colour
+        // channels interpolate in f32; the animation parameter arrives as f64.
+        Color::lerp_unclamped(*self, *other, t as f32)
     }
 }
 
@@ -75,6 +66,16 @@ mod tests {
         assert_eq!(a.lerp_to(&b, 2.6).r, 255, "channel saturates at 255");
         // t = -0.5 -> r = -50 -> saturates to 0.
         assert_eq!(a.lerp_to(&b, -0.5).r, 0, "undershoot saturates at 0");
+    }
+
+    /// A tween toward transparent keeps its hue, as `Color::lerp` does: straight
+    /// interpolation would darken the midpoint to (128, 0, 0, 128).
+    #[test]
+    fn color_lerp_to_is_premultiplied() {
+        let red = Color::rgba(255, 0, 0, 255);
+        let clear = Color::rgba(0, 0, 0, 0);
+        assert_eq!(red.lerp_to(&clear, 0.5), Color::rgba(255, 0, 0, 128));
+        assert_eq!(red.lerp_to(&clear, 0.5), Color::lerp(red, clear, 0.5));
     }
 
     #[test]

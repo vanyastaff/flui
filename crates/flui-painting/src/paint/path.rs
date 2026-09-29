@@ -360,8 +360,8 @@ impl Path {
     }
 
     /// Adds `rect` as a closed contour of its own, clockwise from its top-left corner (y-down).
+    /// An open contour before it stays open: a stroke does not gain a closing edge.
     pub fn add_rect(&mut self, rect: Rect<f64>) {
-        self.close();
         let path = self.edit();
         path.move_to((rect.left(), rect.top()));
         path.line_to((rect.right(), rect.top()));
@@ -373,7 +373,6 @@ impl Path {
     /// Adds the oval inscribed in `rect` as a closed contour of its own, clockwise from its
     /// rightmost point (y-down), like [`Self::add_rect`].
     pub fn add_oval(&mut self, rect: Rect<f64>) {
-        self.close();
         let ellipse = kurbo::Ellipse::from_rect(to_kurbo_rect(rect));
         self.edit().extend(ellipse.path_elements(CURVE_TOLERANCE));
         // kurbo leaves the ellipse's contour open; a standalone shape is closed.
@@ -617,6 +616,31 @@ mod tests {
         assert!(back.commands().eq(path.commands()));
         assert_eq!(back.fill_type, path.fill_type);
         assert_eq!(back.hint, path.hint);
+    }
+
+    /// A standalone shape starts its own contour without closing the open one before it,
+    /// which would stroke an edge back to that contour's start.
+    #[test]
+    fn standalone_shapes_leave_an_open_contour_open() {
+        let far = Rect::from_ltrb(50.0, 50.0, 60.0, 60.0);
+        for add in [Path::add_rect as fn(&mut Path, Rect<f64>), Path::add_oval] {
+            let mut path = Path::new();
+            path.move_to(Point::new(0.0, 0.0));
+            path.line_to(Point::new(10.0, 0.0));
+            path.line_to(Point::new(10.0, 10.0));
+            add(&mut path, far);
+
+            let commands: Vec<_> = path.commands().collect();
+            assert!(matches!(commands[3], PathCommand::MoveTo(_)));
+            assert_eq!(
+                commands
+                    .iter()
+                    .filter(|c| **c == PathCommand::Close)
+                    .count(),
+                1,
+                "only the standalone shape is closed"
+            );
+        }
     }
 
     /// Builds the triangle (0,0)→(100,0)→(50,100) without an explicit `close()`.

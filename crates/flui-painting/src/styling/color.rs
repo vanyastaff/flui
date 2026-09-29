@@ -251,7 +251,14 @@ impl Color {
     /// interpolation does, flutter#48674; CSS Color 4 premultiplies too).
     #[inline]
     fn lerp_scalar(a: Color, b: Color, t: f32) -> Color {
-        let t = t.clamp(0.0, 1.0);
+        Self::lerp_unclamped(a, b, t.clamp(0.0, 1.0))
+    }
+
+    /// [`Self::lerp`]'s premultiplied interpolation without clamping `t`, for the `Lerp`
+    /// contract that lets an overshooting curve extrapolate. Channels and alpha still
+    /// saturate into `0..=255`.
+    #[inline]
+    pub(crate) fn lerp_unclamped(a: Color, b: Color, t: f32) -> Color {
         // Round, not truncate: `x as u8` truncates toward zero, biasing every
         // interpolated channel down by up to ~1 and producing a visibly darker
         // mid-tween (the `as u8` cast still saturates to [0, 255]).

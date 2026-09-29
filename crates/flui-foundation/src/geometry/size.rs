@@ -297,26 +297,6 @@ impl<T: NumericUnit> Size<T>
 where
     T: Into<f64>,
 {
-    /// Converts to a size with f64 components.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use flui_foundation::geometry::Size;
-    ///
-    /// let size = Size::new(100.0, 200.0);
-    /// let f32_size = size.to_f32();
-    /// assert_eq!(f32_size.width, 100.0);
-    /// ```
-    #[inline]
-    #[must_use]
-    pub fn to_f32(self) -> Size<f64> {
-        Size {
-            width: self.width.into(),
-            height: self.height.into(),
-        }
-    }
-
     /// Converts to an array [width, height].
     ///
     /// # Examples
