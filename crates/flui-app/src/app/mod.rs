@@ -37,6 +37,7 @@ pub use flui_runtime::frame_failure::{
     FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
     FrameFailureReport, PanicText, SegmentPhase,
 };
+pub use hot_reload::DevReload;
 #[cfg(not(target_arch = "wasm32"))]
 pub use lifecycle::{
     CancellationSignal, JoinTimeout, PublishError, ServiceContext, ServiceDefinition,

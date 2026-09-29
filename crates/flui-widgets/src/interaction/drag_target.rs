@@ -24,10 +24,12 @@
 //!   [`DragTargetState`] reads its candidate/rejected lists back out of it.
 //!   Recorded in `crates/flui-widgets/ARCHITECTURE.md` (`## Mapping decisions`).
 //! - **Callbacks are `Arc<dyn Fn … + Send + Sync>`, not `Rc<dyn Fn …>`.**
-//!   Forced by the same payload bound, and it makes `DragTarget` consistent
-//!   with [`Draggable`](crate::Draggable), whose callbacks already were.
-//!   The *builder* stays `Rc`: it produces a `BoxedView`, which is
-//!   owner-local by construction.
+//!   Forced by the same payload bound, which also keeps these callbacks
+//!   without an `EventCx` until hit-test metadata becomes owner-local
+//!   (ADR-0086 Status). [`Draggable`](crate::Draggable)'s callbacks never
+//!   cross the payload and are owner-local `EventCx` callbacks. The
+//!   *builder* stays `Rc`: it produces a `BoxedView`, which is owner-local by
+//!   construction.
 //! - **`DragTargetDetails` also carries a target-local position.** The
 //!   oracle's `DragTargetDetails.offset` is a global position and nothing
 //!   else; a Dart target that wants a local one calls `globalToLocal` on its

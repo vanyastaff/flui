@@ -191,7 +191,7 @@ fn an_ancestor_paste_action_does_not_replace_the_fields_own() {
             controller.clone(),
             Rc::clone(&focus_node),
         ))
-        .action(CallbackAction::new(move |_: &PasteTextIntent| {
+        .action(CallbackAction::new(move |_cx, _: &PasteTextIntent| {
             counter.set(counter.get() + 1);
         })),
     );

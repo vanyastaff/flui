@@ -4,8 +4,9 @@
 //! The list is every path `flui-material`, `flui-cupertino` and `flui-devtools`
 //! import from the internal crates outside their tests, rewritten to its SDK
 //! path (an associated item reduced to its type), plus `painting::DrawOp`,
-//! which the design systems' paint tests read. ARCHITECTURE.md records how it
-//! was measured.
+//! which the design systems' paint tests read, and `view::dev_reload`, the
+//! hook `flui-hot-reload`'s host drivers implement (ADR-0094 §1).
+//! ARCHITECTURE.md records how it was measured.
 
 /// Every measured item through its SDK path: removing or moving one fails to
 /// build this test.
@@ -48,6 +49,7 @@ mod measured {
     use flui_sdk::rendering::{
         BoxConstraints as _, BoxProtocol as _, HitTestBehavior as _, RenderUpdateImpact as _,
     };
+    use flui_sdk::view::dev_reload::{DevReloadHook as _, ReloadEvent as _, ReloadWake as _};
     use flui_sdk::view::element::ElementKind as _;
     use flui_sdk::view::prelude::{BuildContext as _, InheritedData as _, StatelessView as _};
     use flui_sdk::view::{
@@ -103,6 +105,7 @@ fn the_re_exports_are_the_facades_types() {
     let _: fn(flui::geometry::Rect) -> flui_sdk::geometry::Rect = |x| x;
     let _: fn(flui::painting::styling::Color) -> flui_sdk::painting::Color = |x| x;
     let _: fn(flui::view::RebuildHandle) -> flui_sdk::view::RebuildHandle = |x| x;
+    let _: fn(flui::view::dev_reload::ReloadWake) -> flui_sdk::view::dev_reload::ReloadWake = |x| x;
     let _: fn(flui::widgets::Text) -> flui_sdk::widgets::Text = |x| x;
 
     let _: fn(flui::interaction::DragDownDetails) -> flui_sdk::interaction::DragDownDetails = |x| x;

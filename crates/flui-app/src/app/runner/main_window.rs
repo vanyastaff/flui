@@ -1113,10 +1113,10 @@ mod tests {
                             1.0,
                             Arc::new(AtomicBool::new(false)),
                             crate::app::presentation::test_clipboard(),
+                            &flui_painting::FontCollection::new(),
                         )
                         .expect("realm");
                         realm.enter(|realm| realm.update_host_lifecycle(host));
-                        let sender = realm.command_sender();
                         let dispatch =
                             super::super::realm_dispatch::install_realm_alongside(realm, &window)
                                 .expect("install realm");
@@ -1134,8 +1134,6 @@ mod tests {
                         Ok(RenderedMain {
                             window: wrapped,
                             address: dispatch.address,
-                            _rebuild_registration: WorkerReload::from_config(&AppConfig::new())
-                                .register_rebuild_hook(sender),
                         })
                     }),
                     None,
@@ -1197,10 +1195,10 @@ mod tests {
                                 1.0,
                                 Arc::new(AtomicBool::new(false)),
                                 crate::app::presentation::test_clipboard(),
+                                &flui_painting::FontCollection::new(),
                             )
                             .expect("realm");
                             realm.enter(|realm| realm.update_host_lifecycle(host));
-                            let sender = realm.command_sender();
                             let dispatch = super::super::realm_dispatch::install_realm_alongside(
                                 realm, &window,
                             )
@@ -1242,8 +1240,6 @@ mod tests {
                             Ok(RenderedMain {
                                 window: wrapped,
                                 address: dispatch.address,
-                                _rebuild_registration: WorkerReload::from_config(&AppConfig::new())
-                                    .register_rebuild_hook(sender),
                             })
                         }),
                         None,
@@ -1387,11 +1383,39 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "hot-reload")]
+    /// The loop's development reload hook is attached once, when the loop
+    /// starts, stays attached while main-window opens fail and are retried,
+    /// and is detached exactly once, when the loop ends.
     #[test]
-    fn main_window_active_artifact_watcher_survives_failed_reopens_and_stops_with_loop() {
-        let lifetime = Rc::new(RefCell::new(None));
-        let captured = Rc::clone(&lifetime);
+    fn main_window_reload_hook_stays_attached_across_failed_reopens_and_detaches_with_loop() {
+        #[derive(Default)]
+        struct Counts {
+            attaches: AtomicUsize,
+            detaches: AtomicUsize,
+        }
+        impl Counts {
+            fn get(&self) -> (usize, usize) {
+                (
+                    self.attaches.load(Ordering::SeqCst),
+                    self.detaches.load(Ordering::SeqCst),
+                )
+            }
+        }
+        struct Counting(Arc<Counts>);
+        impl flui_view::dev_reload::DevReloadHook for Counting {
+            fn attach(&mut self, _wake: flui_view::dev_reload::ReloadWake) {
+                self.0.attaches.fetch_add(1, Ordering::SeqCst);
+            }
+            fn detach(&mut self) {
+                self.0.detaches.fetch_add(1, Ordering::SeqCst);
+            }
+            fn poll(&mut self) -> flui_view::dev_reload::ReloadEvent {
+                flui_view::dev_reload::ReloadEvent::Unchanged
+            }
+        }
+
+        let counts = Arc::new(Counts::default());
+        let observed = Arc::clone(&counts);
         let app = Application::new(|_| -> flui_widgets::Text {
             panic!("factory failure before GPU setup");
         })
@@ -1399,20 +1423,20 @@ mod tests {
         .with_config(
             AppConfig::new()
                 .with_exit_policy(ExitPolicy::ExplicitQuit)
-                .with_worker_plugin_path("/nonexistent/flui-resident-test-worker.dylib"),
+                .with_dev_reload(Counting(Arc::clone(&counts))),
         )
         .on_ready(move |handle| {
-            let initial = APP_RUNTIME.with(|slot| {
-                slot.borrow()
+            assert_eq!(observed.get(), (1, 0), "attached when the loop starts");
+            assert!(
+                APP_RUNTIME.with(|slot| slot
+                    .borrow()
                     .main_controller
                     .as_ref()
                     .expect("controller installed")
                     .watcher
-                    .as_ref()
-                    .expect("real configured watcher")
-                    .test_lifetime()
-            });
-            assert!(!initial.1.load(Ordering::Acquire));
+                    .is_some()),
+                "the loop holds the attachment"
+            );
             for _ in 0..2 {
                 let mut request = handle.request_show_main_window().expect("admit retry");
                 drive_main_window();
@@ -1420,30 +1444,18 @@ mod tests {
                     request.try_result(),
                     Some(Err(AppWindowError::FactoryPanicked { .. }))
                 ));
-                let current = APP_RUNTIME.with(|slot| {
-                    slot.borrow()
-                        .main_controller
-                        .as_ref()
-                        .expect("controller restored")
-                        .watcher
-                        .as_ref()
-                        .expect("watcher retained")
-                        .test_lifetime()
-                });
                 assert_eq!(
-                    current.0, initial.0,
-                    "same actual worker thread across retries"
+                    observed.get(),
+                    (1, 0),
+                    "a failed open neither re-attaches nor detaches"
                 );
-                assert!(Arc::ptr_eq(&current.1, &initial.1));
-                assert!(!current.1.load(Ordering::Acquire));
             }
-            captured.replace(Some(initial));
         });
         run_with_platform(app, Box::new(HeadlessPlatform::new())).expect("ordinary owner teardown");
-        let (_, stopped) = lifetime.take().expect("observed real watcher");
-        assert!(
-            stopped.load(Ordering::Acquire),
-            "loop teardown stopped and joined the real watcher"
+        assert_eq!(
+            counts.get(),
+            (1, 1),
+            "loop teardown detached the hook exactly once"
         );
     }
 
