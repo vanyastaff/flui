@@ -13,8 +13,9 @@
   scales with the transform's largest stretch, `Unbounded` for full-canvas fills), and
   `DisplayList::volatile_extent`, the texture draws whose pixels change behind an unchanged
   list.
-- **`flui-painting`**: `BlendMode::keeps_destination_under_transparent_source` and
-  `ColorFilter::modifies_transparent_black`, which tell a damage producer when a layer's composite
+- **`flui-painting`**: `BlendMode::keeps_destination_under_transparent_source`,
+  `ColorFilter::modifies_transparent_black`, `ImageFilter::modifies_transparent_black` and
+  `ColorMatrix::modifies_transparent_black`, which tell a damage producer when a layer's composite
   reaches pixels its children never inked.
 - **`cargo xtask bench-collect --with-features`** runs the feature-gated bench targets too.
 

@@ -494,7 +494,7 @@ impl ColorFilter {
                             | BlendMode::Modulate
                     )
             }
-            ColorFilter::Matrix(matrix) => matrix.values[19] > 0.0,
+            ColorFilter::Matrix(matrix) => matrix.modifies_transparent_black(),
             ColorFilter::LinearToSrgbGamma | ColorFilter::SrgbToLinearGamma => false,
         }
     }

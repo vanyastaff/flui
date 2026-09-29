@@ -1562,19 +1562,26 @@ fn a_change_in_a_shrunk_blurs_halo_matches_a_full_frame() {
 
 /// An unchanged layer that composites over the whole viewport (an opacity
 /// layer whose blend changes what a transparent source covers, a colour
-/// filter that paints transparent pixels) matches a full frame when an
+/// filter or an image filter that paints transparent pixels, alone or inside
+/// a composition) matches a full frame when an
 /// unrelated boundary elsewhere changes. The layer's child is recorded under
 /// the damage scissor but its result composites over the viewport, so a
 /// partial frame would composite a truncated input over retained pixels
 /// that already hold its result, and over a later sibling it would wipe.
 #[test]
 fn a_change_beside_a_viewport_compositing_layer_matches_a_full_frame() {
-    use flui_layer::{ColorFilterLayer, OpacityLayer};
+    use flui_layer::{ColorFilterLayer, ImageFilterLayer, OpacityLayer};
     use flui_painting::paint::ColorFilter;
+    use flui_painting::paint::effects::{ColorAdjustment, ColorMatrix};
 
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
         return;
     };
+    // Identity plus an offset that turns transparent black into half-opaque
+    // red.
+    let mut offset = ColorMatrix::identity();
+    offset.values[4] = 1.0;
+    offset.values[19] = 0.5;
     let (root, background, card, later, moving) = (
         ContentToken::mint(),
         ContentToken::mint(),
@@ -1609,7 +1616,25 @@ fn a_change_beside_a_viewport_compositing_layer_matches_a_full_frame() {
                 blend_mode: BlendMode::Src,
             })),
         ),
+        (
+            "image filter matrix",
+            Layer::from(ImageFilterLayer::matrix(offset)),
+        ),
+        (
+            "image filter colour adjustment",
+            Layer::from(ImageFilterLayer::new(ImageFilter::ColorAdjust(
+                ColorAdjustment::Matrix(offset),
+            ))),
+        ),
+        (
+            "image filter composing a matrix",
+            Layer::from(ImageFilterLayer::new(ImageFilter::Compose(vec![
+                ImageFilter::blur(1.0),
+                ImageFilter::Matrix(offset),
+            ]))),
+        ),
     ];
+    let mut failed = Vec::new();
     for (name, effect) in effects {
         let build = |at: Offset<f64>| {
             backdrop_scene(&root, &background, &green_background, &|tree, root_id| {
@@ -1650,8 +1675,11 @@ fn a_change_beside_a_viewport_compositing_layer_matches_a_full_frame() {
         let (partial, full) =
             damaged_and_full(&renderer, &before, &after, |plan| plan != FramePlan::Skip);
         let stale = mismatches(&partial, &full, 0);
-        assert!(stale.is_empty(), "{name}: stale pixels at {stale:?}");
+        if !stale.is_empty() {
+            failed.push(format!("{name}: stale pixels at {stale:?}"));
+        }
     }
+    assert!(failed.is_empty(), "{failed:#?}");
 }
 
 /// A performance overlay narrower than its readouts shows the same pixels

@@ -120,6 +120,21 @@ impl ColorMatrix {
         Self { values }
     }
 
+    /// Whether the matrix turns a transparent black pixel into a visible one:
+    /// it maps `(0, 0, 0, 0)` to its offset column, whose alpha is visible
+    /// when positive. The colour offsets alone are not, since a pixel of
+    /// zero alpha stays invisible whatever its colour.
+    ///
+    /// The one answer [`ColorFilter::modifies_transparent_black`] and
+    /// [`ImageFilter::modifies_transparent_black`] give for a matrix.
+    ///
+    /// [`ColorFilter::modifies_transparent_black`]: crate::paint::ColorFilter::modifies_transparent_black
+    #[inline]
+    #[must_use]
+    pub fn modifies_transparent_black(&self) -> bool {
+        self.values[19] > 0.0
+    }
+
     /// Create an identity matrix (no transformation).
     #[inline]
     pub fn identity() -> Self {
@@ -654,6 +669,28 @@ impl ImageFilter {
     #[must_use]
     pub fn erode(radius: f64) -> Self {
         Self::Erode { radius }
+    }
+
+    /// Whether the filter turns a transparent black pixel into a visible
+    /// one, so a layer it filters changes pixels its children never inked
+    /// (Flutter's `DlImageFilter::modifies_transparent_black`).
+    ///
+    /// A colour matrix or adjustment answers as its matrix does
+    /// ([`ColorMatrix::modifies_transparent_black`]); a composition does when
+    /// any filter in it does. A blur or a morphology of transparent input is
+    /// transparent.
+    #[must_use]
+    pub fn modifies_transparent_black(&self) -> bool {
+        match self {
+            Self::Matrix(matrix) => matrix.modifies_transparent_black(),
+            Self::ColorAdjust(adjustment) => {
+                adjustment.to_color_matrix().modifies_transparent_black()
+            }
+            Self::Compose(filters) => filters.iter().any(Self::modifies_transparent_black),
+            Self::Blur { .. } | Self::Dilate { .. } | Self::Erode { .. } => false,
+            #[cfg(debug_assertions)]
+            Self::OverflowIndicator { .. } => false,
+        }
     }
 
     /// Create a matrix filter.

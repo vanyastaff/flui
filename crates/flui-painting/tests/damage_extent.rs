@@ -294,4 +294,32 @@ pub(crate) fn transparent_source_and_transparent_black_predicates() {
     offset[19] = 1.0;
     assert!(ColorFilter::matrix(offset).modifies_transparent_black());
     assert!(!ColorFilter::linear_to_srgb_gamma().modifies_transparent_black());
+
+    // An image filter answers as the colour matrix it applies, through a
+    // composition too; a blur or a morphology keeps transparent transparent.
+    use flui_painting::paint::ImageFilter;
+    use flui_painting::paint::effects::{ColorAdjustment, ColorMatrix};
+    let visible = ColorMatrix::new(offset);
+    let mut colour_only = ColorMatrix::identity();
+    colour_only.values[4] = 1.0;
+    assert!(ImageFilter::Matrix(visible).modifies_transparent_black());
+    assert!(!ImageFilter::Matrix(colour_only).modifies_transparent_black());
+    assert!(
+        ImageFilter::ColorAdjust(ColorAdjustment::Matrix(visible)).modifies_transparent_black()
+    );
+    assert!(
+        !ImageFilter::ColorAdjust(ColorAdjustment::Brightness(0.5)).modifies_transparent_black()
+    );
+    assert!(
+        ImageFilter::Compose(vec![ImageFilter::blur(2.0), ImageFilter::Matrix(visible)])
+            .modifies_transparent_black()
+    );
+    for filter in [
+        ImageFilter::blur(2.0),
+        ImageFilter::dilate(2.0),
+        ImageFilter::erode(2.0),
+        ImageFilter::Compose(vec![ImageFilter::blur(2.0), ImageFilter::dilate(1.0)]),
+    ] {
+        assert!(!filter.modifies_transparent_black(), "{filter:?}");
+    }
 }

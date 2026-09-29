@@ -31,7 +31,8 @@ use crate::{
 /// positions. A backdrop filter whose (blur-reach
 /// widened) bounds meet the damage joins it, repeatedly, until nothing more
 /// joins; so does a foreground image filter's footprint, and the whole
-/// surface when a colour filter that paints transparent pixels is present.
+/// surface when a colour or image filter that paints transparent pixels is
+/// present.
 ///
 /// The answer is [`DamageRegion::Full`] when the frames cannot be paired:
 /// the first frame, a surface size change, a root that no boundary stamped or
@@ -124,7 +125,8 @@ struct Frame {
     backdrops: Vec<(Rect<f64>, f64)>,
     /// Every foreground image filter's footprint in surface pixels: its
     /// children's extents grown by how far the filter spreads them; and the
-    /// whole surface for each colour filter that paints transparent pixels.
+    /// whole surface for each colour or image filter that paints transparent
+    /// pixels.
     foreground: Vec<Rect<f64>>,
 }
 
@@ -352,14 +354,20 @@ impl Frame {
                     Some(DamageExtent::Unbounded)
                 }
                 // The renderer records its child under the damage scissor
-                // but composites the filtered viewport-sized result without
-                // one, so outside the damage it filters a truncated input
-                // over pixels that already hold the filter's output. It is a
-                // viewport-wide footprint: damage anywhere takes all of it,
-                // even while the layer itself is unchanged.
+                // but composites the filtered result without one, so outside
+                // the damage it filters a truncated input over pixels that
+                // already hold the filter's output. It is a viewport-wide
+                // footprint: damage anywhere takes all of it, even while the
+                // layer itself is unchanged. A colour filter and an image
+                // filter answer the same question through the same predicate.
                 Layer::ColorFilter(filter)
                     if filter.color_filter().modifies_transparent_black() =>
                 {
+                    clipped = false;
+                    frame.foreground.push(full);
+                    Some(DamageExtent::Unbounded)
+                }
+                Layer::ImageFilter(filter) if filter.filter().modifies_transparent_black() => {
                     clipped = false;
                     frame.foreground.push(full);
                     Some(DamageExtent::Unbounded)
