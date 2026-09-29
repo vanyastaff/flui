@@ -56,8 +56,8 @@ serde = ["dep:serde"]
 [package.metadata.docs.rs]
 all-features = true
 
-# Layer 1: depends only on `flui-types` (layer 0) and `flui-foundation`
-# (layer 1); its dependents are `flui-interaction`, `flui-platform`,
+# Layer 1: depends only on `flui-foundation` (layer 1) among framework
+# crates; its dependents are `flui-interaction`, `flui-platform`,
 # `flui-widgets` and `flui-app`. The contracts sit below every backend
 # (ADR-0082 §1), and on top of its tier's set this crate may never reach
 # AccessKit or tokio (ADR-0082 Verification).

@@ -249,7 +249,6 @@ impl<T: Unit> Vec2<T> {
     /// use flui_foundation::geometry::Vec2;
     ///
     /// let logical = Vec2::<f64>::new(10.0, 20.0);
-    /// // Pixels: Into<PixelDelta> is implemented.
     /// let delta: Vec2 = logical.cast();
     /// assert_eq!(delta.x, 10.0);
     /// assert_eq!(delta.y, 20.0);
@@ -271,7 +270,7 @@ impl<T: NumericUnit> Vec2<T>
 where
     T: Into<f64>,
 {
-    /// Converts the vector to use Pixels unit type.
+    /// Converts the vector to `f64` logical pixels.
     #[inline]
     #[must_use]
     pub fn to_f32(self) -> Vec2<f64> {
@@ -926,7 +925,7 @@ impl<T: Unit> Default for Vec2<T> {
 // Convenience function (f64 only for backwards compatibility)
 // ============================================================================
 
-/// Convenience function to create a Pixels vector from x and y floats.
+/// Creates a logical-pixel vector from `x` and `y`.
 #[inline]
 #[must_use]
 pub const fn vec2(x: f64, y: f64) -> Vec2<f64> {

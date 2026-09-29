@@ -808,7 +808,7 @@ impl<T: Unit> Default for Size<T> {
 // Convenience function (f64 only)
 // ============================================================================
 
-/// Convenience function to create a Pixels size from width and height floats.
+/// Creates a logical-pixel size from `width` and `height`.
 #[inline]
 #[must_use]
 pub const fn size(width: f64, height: f64) -> Size<f64> {
@@ -931,7 +931,7 @@ where
 }
 
 // ============================================================================
-// Specialized implementations for Pixels
+// Logical-pixel (`f64`) implementations
 // ============================================================================
 
 impl Size<f64> {
@@ -1261,7 +1261,6 @@ mod typed_tests {
 
     #[test]
     fn test_size_abs_signum() {
-        // Test abs and signum methods with Pixels
         let s_px = Size::new(-10.0, 20.0);
         let abs_s = s_px.abs();
         assert_eq!(abs_s.width, 10.0);

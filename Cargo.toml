@@ -436,7 +436,7 @@ parley = { version = "0.11.1", default-features = false, features = ["std"] }
 dyn-clone = "1.0"
 downcast-rs = "2.0.2"
 static_assertions = "1.1"
-# Compile-fail suites (flui-types, flui-view, flui-engine, flui-rendering):
+# Compile-fail suites (flui-painting, flui-view, flui-engine, flui-rendering):
 # each drives `tests/<dir>/*.rs` fixtures and pins the diagnostic text a
 # wrong program receives, not merely that it fails.
 trybuild = "1.0"
@@ -771,8 +771,9 @@ hot-reload = ["dep:flui-hot-reload", "flui-hot-reload/app-plugin", "flui-app/hot
 a11y = ["flui-app/a11y"]
 
 # === Core Features ===
-# Serialization support (flui-types only today; other crates' serde features
-# are opted into per-crate, not through the facade)
+# Serialization of the paint, style and geometry values (flui-painting's serde,
+# which forwards to foundation's); other crates' serde features are opted into
+# per-crate, not through the facade.
 serde = ["flui-painting/serde"]
 
 # The facade declares no other features. Earlier revisions carried commented

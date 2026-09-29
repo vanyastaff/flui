@@ -70,7 +70,7 @@ tracing-subscriber = { workspace = true }
 # benchmark template at `rust-studio/.../templates/benchmark-report.md`.
 criterion = { workspace = true }
 # Property tests for the pure-math substrate (LSQ solver, velocity tracker).
-# Same version as the rest of the workspace (flui-types / flui-foundation).
+# Same version as the rest of the workspace (flui-painting / flui-platform-api).
 proptest = "1.5"
 # Bench fixtures use the `make_*_event` test helpers which are gated
 # behind the `testing` feature (they're not part of the release API).
