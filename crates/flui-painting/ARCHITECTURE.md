@@ -7,8 +7,9 @@ inline span through cosmic-text and answers layout queries on the result.
 Nothing is rasterised here — `flui-engine` replays the list.
 
 The reference is `dart:ui`'s `Canvas`/`Paint`/`Path` vocabulary and
-Flutter's `TextPainter`; the paint vocabulary itself (`Paint`, `Shader`,
-`BlendMode`, `Path`, geometry) is defined in `flui-types` and re-exported.
+Flutter's `TextPainter`; the paint, style and text values (`paint`, `styling`, `typography`, plus
+`Alignment`, `BoxFit` and `TextBaseline`) are owned here too (ADR-0098 §8), and
+geometry comes from `flui_foundation::geometry`.
 Divergences from Flutter are recorded under [Mapping decisions](#mapping-decisions).
 
 ---
@@ -23,6 +24,10 @@ Divergences from Flutter are recorded under [Mapping decisions](#mapping-decisio
 | Per-realm text context | `text_layout/context.rs` (every build; shaping and registration behind `parley`) | `FontCollection` (the app's shared, add-only fontique collection) and `TextContext` (one realm's Parley font and layout contexts over it, used through `&mut`); no production caller until ADR-0092 §10 step 3 |
 | Parley shaping | `parley_text/shape.rs` (`parley` feature) | `TextContext::shape`: a `ParagraphSpec` (styled spans, width, line height, direction) to a `ParagraphLayout` whose `metrics()` read the laid-out lines |
 | Parley raster side | `parley_text/{key,registry,swash}.rs` (`parley` feature) | `ParleyGlyphKey` (a face named by font blob), `FontRegistry` (faces and interned variation instances), `SwashRasterizer`; no production caller until ADR-0092 §10 step 4 |
+| Paint values | `paint/{style,path,shader,effects,image,clipping,blend_mode,canvas}.rs` | `Paint`, `Path` (with its shape hint), shaders, filters, images, clip and blend modes: the vocabulary the recorder records |
+| Style values | `styling/*.rs`, `lerp_impls.rs` | `Color` (straight-alpha sRGB, premultiplied `lerp`), borders, radii, decorations, gradients, shadows |
+| Text values | `typography/*.rs` | `TextStyle`, spans, alignment, decoration, metrics |
+| Layout-facing values | `alignment.rs`, `box_fit.rs`, `text_painter/baseline.rs` | `Alignment` and its directional form, `BoxFit`/`BoxShape`/`FittedSizes`, `TextBaseline` |
 | Decorations | `decoration.rs`, `table_border.rs` | `paint_box_decoration` / `box_decoration_hit_test`, `paint_table_border` |
 | Test support | `testing/mod.rs`, `text_layout::init_font_system_with_faces` | `record` (`testing` feature); pinning the font system to a known face set |
 
@@ -500,6 +505,21 @@ Parley and its acceptance covers LTR, RTL and mixed bidi. No production path
 shapes through `ParagraphSpec` before then. Locked by
 `rtl_aligns_lines_right_without_setting_the_base_direction`
 (`src/parley_text/shape.rs`).
+
+### 13. `Color::lerp` interpolates premultiplied
+
+Flutter's `Color.lerp` interpolates each straight-alpha channel on its own, so
+fading a colour to `Colors.transparent` (transparent *black*) darkens it on the
+way ([flutter#48674](https://github.com/flutter/flutter/issues/48674)): red to
+transparent passes through `(128, 0, 0, 128)`. FLUI weights each channel by its
+endpoint's alpha and divides by the mixed alpha, as CSS Color 4 does, so the
+same fade stays red: `(255, 0, 0, 128)`. Between two opaque colours the result
+is Flutter's. When the mixed alpha is zero there is nothing to weight by and the
+channels interpolate straight, which keeps both endpoints exact. Everything that
+lerps a colour inherits it: border sides, shadows, decorations and gradient
+stops. Locked by `lerp_to_transparent_keeps_the_hue`
+(`tests/color_property.rs`) and `lerp_follows_flutter`
+(`src/styling/border.rs`).
 
 ---
 

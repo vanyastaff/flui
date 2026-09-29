@@ -989,21 +989,31 @@ impl IntoLyonPath for Rect<f64> {
 }
 
 impl IntoLyonPath for flui_painting::paint::path::Path {
+    /// The one kurbo-to-lyon adapter (ADR-0098 §7): a FLUI path's elements, whose curves
+    /// kurbo built, become a lyon path. It is also the one narrowing point from logical `f64`
+    /// path geometry to lyon's `f32` (ADR-0098 §2).
     fn to_lyon_path(&self) -> Path {
         use flui_painting::paint::path::PathCommand;
 
-        // The one narrowing point from logical f64 path geometry to lyon's f32 (ADR-0098 §2).
-        let lyon_point = |p: &Point<f64>| lyon::geom::point(p.x as f32, p.y as f32);
-        let origin = lyon::geom::point(0.0_f32, 0.0);
+        let lyon_point = |p: Point<f64>| lyon::geom::point(p.x as f32, p.y as f32);
 
         let mut builder = Path::builder();
         let mut has_begun = false;
-        // Skia's pen: where a segment drawn with no contour open starts. The
-        // origin at first, the start of a contour once it is closed, and the
-        // origin again after a standalone shape. `Path::contains` walks the
-        // commands with the same pen, so what is drawn is what is hit.
-        let mut pen = origin;
-        let mut contour_start = origin;
+        // `flui_painting::paint::Path` starts every contour with a `MoveTo`; the pen only
+        // matters if a segment ever arrives without one, and then it starts where Skia's pen
+        // would: the origin, or the start of the contour just closed.
+        let mut pen = lyon::geom::point(0.0_f32, 0.0);
+        let mut contour_start = pen;
+        let begin_at_pen = |builder: &mut lyon::path::path::Builder,
+                            has_begun: &mut bool,
+                            pen: lyon::math::Point,
+                            contour_start: &mut lyon::math::Point| {
+            if !*has_begun {
+                *contour_start = pen;
+                builder.begin(pen);
+                *has_begun = true;
+            }
+        };
 
         for command in self.commands() {
             match command {
@@ -1016,113 +1026,27 @@ impl IntoLyonPath for flui_painting::paint::path::Path {
                     builder.begin(pen);
                     has_begun = true;
                 }
-
                 PathCommand::LineTo(point) => {
-                    if !has_begun {
-                        contour_start = pen;
-                        builder.begin(pen);
-                        has_begun = true;
-                    }
+                    begin_at_pen(&mut builder, &mut has_begun, pen, &mut contour_start);
                     pen = lyon_point(point);
                     builder.line_to(pen);
                 }
-
                 PathCommand::QuadraticTo(control, end) => {
-                    if !has_begun {
-                        contour_start = pen;
-                        builder.begin(pen);
-                        has_begun = true;
-                    }
+                    begin_at_pen(&mut builder, &mut has_begun, pen, &mut contour_start);
                     pen = lyon_point(end);
                     builder.quadratic_bezier_to(lyon_point(control), pen);
                 }
-
                 PathCommand::CubicTo(control1, control2, end) => {
-                    if !has_begun {
-                        contour_start = pen;
-                        builder.begin(pen);
-                        has_begun = true;
-                    }
+                    begin_at_pen(&mut builder, &mut has_begun, pen, &mut contour_start);
                     pen = lyon_point(end);
                     builder.cubic_bezier_to(lyon_point(control1), lyon_point(control2), pen);
                 }
-
                 PathCommand::Close => {
                     if has_begun {
                         builder.close();
                         has_begun = false;
                     }
                     pen = contour_start;
-                }
-
-                PathCommand::AddRect(rect) => {
-                    // Start new subpath for rectangle
-                    if has_begun {
-                        builder.end(false);
-                    }
-                    builder.begin(lyon::geom::point(rect.left() as f32, rect.top() as f32));
-                    builder.line_to(lyon::geom::point(rect.right() as f32, rect.top() as f32));
-                    builder.line_to(lyon::geom::point(rect.right() as f32, rect.bottom() as f32));
-                    builder.line_to(lyon::geom::point(rect.left() as f32, rect.bottom() as f32));
-                    builder.close();
-                    has_begun = false;
-                    pen = origin;
-                    contour_start = origin;
-                }
-
-                PathCommand::AddOval(rect) => {
-                    // Start new subpath for oval/ellipse
-                    if has_begun {
-                        builder.end(false);
-                    }
-                    let center = rect.center();
-                    let radii = lyon::geom::vector(rect.width() / 2.0, rect.height() / 2.0);
-                    builder.add_ellipse(
-                        lyon::geom::point(center.x as f32, center.y as f32),
-                        (radii).cast::<f32>(),
-                        lyon::geom::Angle::radians(0.0),
-                        lyon::path::Winding::Positive,
-                    );
-                    has_begun = false;
-                    pen = origin;
-                    contour_start = origin;
-                }
-
-                PathCommand::AddArc(rect, start_angle, sweep_angle) => {
-                    let center = rect.center();
-                    let rx = rect.width() / 2.0;
-                    let ry = rect.height() / 2.0;
-
-                    let arc = lyon::geom::Arc {
-                        center: lyon::geom::point(center.x as f32, center.y as f32),
-                        radii: lyon::geom::vector(rx as f32, ry as f32),
-                        start_angle: lyon::geom::Angle::radians(*start_angle as f32),
-                        sweep_angle: lyon::geom::Angle::radians(*sweep_angle as f32),
-                        x_rotation: lyon::geom::Angle::radians(0.0),
-                    };
-
-                    // An arc appended to an open contour *continues* it: move
-                    // along the contour to the arc's start, then trace the arc.
-                    // `Path::from_rrect` builds a rounded rectangle as one
-                    // contour (edge, corner arc, edge, corner arc, …); starting
-                    // a fresh subpath per arc instead fragments it, and each open
-                    // fragment's implicit fill-closure chord renders as a
-                    // diagonal slash across the corner. Only open a new subpath
-                    // when nothing is in progress (a standalone arc).
-                    let arc_start = arc.from();
-                    if has_begun {
-                        builder.line_to(arc_start);
-                    } else {
-                        contour_start = arc_start;
-                        builder.begin(arc_start);
-                        has_begun = true;
-                    }
-
-                    arc.for_each_cubic_bezier(&mut |cubic| {
-                        builder.cubic_bezier_to(cubic.ctrl1, cubic.ctrl2, cubic.to);
-                    });
-
-                    pen = arc.to();
                 }
             }
         }
@@ -1178,13 +1102,16 @@ mod cpu_tests {
         after_close.quadratic_bezier_to(p(30.0, 30.0), p(40.0, 6.0));
         assert_eq!(contour_starts(&after_close), [(5.0, 6.0), (5.0, 6.0)]);
 
+        // A standalone shape is a closed contour like any other, so the next
+        // segment starts at its start, as Skia's `addRect` (a `moveTo` ...
+        // `close`) leaves the pen.
         let mut after_shape = FluiPath::new();
         after_shape.move_to(p(5.0, 6.0));
         after_shape.add_rect(Rect::from_ltrb(50.0, 50.0, 60.0, 60.0));
         after_shape.line_to(p(10.0, 10.0));
         assert_eq!(
             contour_starts(&after_shape),
-            [(5.0, 6.0), (50.0, 50.0), (0.0, 0.0)]
+            [(5.0, 6.0), (50.0, 50.0), (50.0, 50.0)]
         );
     }
 

@@ -11,7 +11,7 @@ use flui_painting::{
     Canvas, DecorationPaintOptions, DrawOp, box_decoration_hit_test, paint_box_decoration,
 };
 use flui_painting::{
-    paint::{Image, PaintStyle, PathCommand, Shader},
+    paint::{Image, PaintStyle, Shader},
     styling::{
         Border, BorderRadius, BorderRadiusExt, BorderSide, BorderStyle, BoxDecoration, BoxShadow,
         Color, DecorationImage, Gradient, LinearGradient,
@@ -30,6 +30,23 @@ fn commands(decoration: &BoxDecoration<f64>) -> Vec<DrawOp> {
 /// fixed 100x50 `rect100()` — needed for the `BoxShape::Circle` cases,
 /// which care about the rect's aspect ratio (the inscribed circle) and
 /// about non-degenerate vs. degenerate sizes.
+/// `path` is the oval inscribed in `expected`: the same bounds (to the curve
+/// construction tolerance), its centre inside, the box's corner outside.
+fn assert_oval(path: &flui_painting::paint::Path, expected: Rect) {
+    let bounds = path.compute_bounds();
+    for (actual, edge) in [
+        (bounds.left(), expected.left()),
+        (bounds.top(), expected.top()),
+        (bounds.right(), expected.right()),
+        (bounds.bottom(), expected.bottom()),
+    ] {
+        assert!((actual - edge).abs() < 1e-2, "{bounds:?} vs {expected:?}");
+    }
+    let centre = expected.center();
+    assert!(path.contains(Point::new(centre.x, centre.y)));
+    assert!(!path.contains(Point::new(expected.left() + 1.0, expected.top() + 1.0)));
+}
+
 fn commands_in(rect: Rect<f64>, decoration: &BoxDecoration<f64>) -> Vec<DrawOp> {
     let mut canvas = Canvas::new();
     paint_box_decoration(
@@ -576,15 +593,10 @@ fn circle_shadow_spread_inflates_the_radius_translates_the_center_and_clamps_at_
         *elevation, 4.0,
         "blur_radius must ride as the shadow's elevation input"
     );
-    match path.commands() {
-        [PathCommand::AddOval(oval)] => {
-            // r + spread = 50 + 10 = 60 -> bounding square side 120,
-            // centered at (50 + 5, 50 - 3) = (55, 47) after the offset
-            // translate.
-            assert_eq!(*oval, Rect::from_ltrb(-5.0, -13.0, 115.0, 107.0));
-        }
-        other => panic!("expected a single AddOval command, got {other:?}"),
-    }
+    // r + spread = 50 + 10 = 60 -> a circle of radius 60 centred at
+    // (50 + 5, 50 - 3) = (55, 47) after the offset translate: its bounds are
+    // that square, its centre is inside and the square's corner is not.
+    assert_oval(path, Rect::from_ltrb(-5.0, -13.0, 115.0, 107.0));
 
     // A spread radius that would drive the radius negative clamps to 0
     // (`Circle::inflate`'s clamp) instead of panicking in
@@ -602,15 +614,13 @@ fn circle_shadow_spread_inflates_the_radius_translates_the_center_and_clamps_at_
     let DrawOp::Shadow { path, .. } = &cmds[0] else {
         panic!("expected DrawShadow first; commands: {cmds:?}");
     };
-    match path.commands() {
-        [PathCommand::AddOval(oval)] => {
-            assert_eq!(
-                *oval,
-                Rect::from_ltrb(50.0, 50.0, 50.0, 50.0),
-                "radius clamped to 0: a zero-size oval centered on the circle's own center"
-            );
-        }
-        other => panic!("expected a single AddOval command, got {other:?}"),
+    // Radius clamped to 0: a zero-size oval centred on the circle's own centre.
+    let bounds = path.compute_bounds();
+    for edge in [bounds.left(), bounds.top(), bounds.right(), bounds.bottom()] {
+        assert!(
+            (edge - 50.0).abs() < 1e-9,
+            "a zero-size oval at (50, 50): {bounds:?}"
+        );
     }
 }
 

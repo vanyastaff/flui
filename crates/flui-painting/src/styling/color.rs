@@ -245,20 +245,38 @@ impl Color {
         Self::lerp_scalar(a, b, t)
     }
 
+    /// Premultiplied interpolation (ADR-0098 §7): each colour channel is
+    /// weighted by its endpoint's alpha, so a fade to transparent keeps its
+    /// hue instead of passing through dark grey (Flutter's straight
+    /// interpolation does, flutter#48674; CSS Color 4 premultiplies too).
     #[inline]
     fn lerp_scalar(a: Color, b: Color, t: f32) -> Color {
         let t = t.clamp(0.0, 1.0);
         // Round, not truncate: `x as u8` truncates toward zero, biasing every
         // interpolated channel down by up to ~1 and producing a visibly darker
-        // mid-tween. `.round()` matches Flutter's `Color.lerp` (and the `as u8`
-        // cast still saturates out-of-range values to [0, 255]).
-        let lerp_u8 = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t).round() as u8;
-
+        // mid-tween (the `as u8` cast still saturates to [0, 255]).
+        let mix = |a: f32, b: f32| a + (b - a) * t;
+        let (alpha_a, alpha_b) = (f32::from(a.a), f32::from(b.a));
+        let alpha = mix(alpha_a, alpha_b);
+        if alpha <= 0.0 {
+            // Both ends transparent at this `t`: no alpha to weight by, so the
+            // channels interpolate straight (which keeps the endpoints exact).
+            let straight = |a: u8, b: u8| mix(f32::from(a), f32::from(b)).round() as u8;
+            return Color::rgba(
+                straight(a.r, b.r),
+                straight(a.g, b.g),
+                straight(a.b, b.b),
+                0,
+            );
+        }
+        let channel = |a_c: u8, b_c: u8| {
+            (mix(f32::from(a_c) * alpha_a, f32::from(b_c) * alpha_b) / alpha).round() as u8
+        };
         Color::rgba(
-            lerp_u8(a.r, b.r),
-            lerp_u8(a.g, b.g),
-            lerp_u8(a.b, b.b),
-            lerp_u8(a.a, b.a),
+            channel(a.r, b.r),
+            channel(a.g, b.g),
+            channel(a.b, b.b),
+            alpha.round() as u8,
         )
     }
 
@@ -791,8 +809,8 @@ impl Color {
 /// Applies the IEC 61966-2-1 piecewise formula to a single channel `c` in
 /// `[0, 1]` (straight sRGB). Returns the linearized value in `[0, 1]`.
 ///
-/// Used by [`Color::to_oklab`] and the GPU gamma `ColorFilter` CPU oracle
-/// (Slice 3). One home for both callers — do not inline copies elsewhere.
+/// Used by [`Color::to_oklab`] and the GPU gamma `ColorFilter`'s CPU oracle.
+/// One home for both callers — do not inline copies elsewhere.
 ///
 /// # Examples
 /// ```
@@ -1164,8 +1182,8 @@ mod tests {
     /// Characterization golden for `Color::blend` advanced modes.
     ///
     /// Locks the per-pixel output of every advanced (non-Porter-Duff) blend
-    /// mode at representative inputs so the WGSL port (PR-2) has a frozen CPU
-    /// oracle to compare against.  These assertions pass against the EXISTING
+    /// mode at representative inputs so the WGSL implementation has a frozen
+    /// CPU oracle to compare against.  These assertions pass against the EXISTING
     /// implementation — they must NOT be changed to match a buggy edit.
     ///
     /// If an assertion fails after a refactor, the formula changed: verify the

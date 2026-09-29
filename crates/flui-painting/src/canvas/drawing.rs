@@ -12,7 +12,7 @@
 //! amortised across the recording.
 //!
 //! `Path` clones are O(1): its command buffer is copy-on-write
-//! (`Arc<Vec<PathCommand>>`), so `draw_path`, `draw_shadow`, and `clip_path`
+//! (an `Arc`-shared geometry buffer), so `draw_path`, `draw_shadow`, and `clip_path`
 //! share the caller's buffer until either side mutates.
 
 use std::sync::Arc;

@@ -327,11 +327,12 @@ mod tests {
         );
         assert_eq!(BorderSide::lerp(a, b, 5.0), b);
 
-        // Fading a red border out to `none` (black, 0px) keeps its red and
-        // lowers its alpha, instead of darkening toward black and vanishing
-        // at t = 0.5.
+        // Fading a red border out to `none` (transparent black, 0px) keeps its
+        // red and lowers its alpha: `Color::lerp` is premultiplied, so the
+        // transparent end contributes no black (Flutter's straight lerp gives
+        // `(50, 0, 0, 64)`, a darkened red).
         let red = solid(Color::rgb(200, 0, 0), 4.0);
-        let faded = solid(Color::rgba(50, 0, 0, 64), 1.0);
+        let faded = solid(Color::rgba(200, 0, 0, 64), 1.0);
         assert_eq!(BorderSide::lerp(red, BorderSide::none(), 0.75), faded);
         assert_eq!(BorderSide::lerp(BorderSide::none(), red, 0.25), faded);
 

@@ -123,11 +123,11 @@ mod tests {
             panic!("expected the first command to be the vertical interior line path");
         };
         assert_eq!(
-            path.commands(),
-            &[
+            path.commands().collect::<Vec<_>>(),
+            [
                 PathCommand::MoveTo(GeomPoint::new(50.0, 0.0)),
                 PathCommand::LineTo(GeomPoint::new(50.0, 60.0)),
-            ][..]
+            ]
         );
 
         #[expect(clippy::panic)] // Test assertion
@@ -135,11 +135,11 @@ mod tests {
             panic!("expected the second command to be the horizontal interior line path");
         };
         assert_eq!(
-            path.commands(),
-            &[
+            path.commands().collect::<Vec<_>>(),
+            [
                 PathCommand::MoveTo(GeomPoint::new(0.0, 30.0)),
                 PathCommand::LineTo(GeomPoint::new(100.0, 30.0)),
-            ][..]
+            ]
         );
 
         assert!(

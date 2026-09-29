@@ -191,7 +191,7 @@ impl PathCache {
 
         // Hash each path command
         for cmd in path.commands() {
-            hash_command(cmd, &mut hasher);
+            hash_command(&cmd, &mut hasher);
         }
 
         hasher.finish()
@@ -223,29 +223,13 @@ fn hash_command(cmd: &PathCommand, hasher: &mut DefaultHasher) {
             hash_point(*ep, hasher);
         }
         PathCommand::Close => {}
-        PathCommand::AddRect(r) | PathCommand::AddOval(r) => {
-            hash_rect(r, hasher);
-        }
-        PathCommand::AddArc(r, start, sweep) => {
-            hash_rect(r, hasher);
-            start.to_bits().hash(hasher);
-            sweep.to_bits().hash(hasher);
-        }
     }
 }
 
-/// Hash a `Point` by its f32 bit patterns.
+/// Hash a `Point` by its bit patterns (bit-exact: equal geometry, equal key).
 fn hash_point(p: flui_foundation::geometry::Point<f64>, hasher: &mut DefaultHasher) {
     p.x.to_bits().hash(hasher);
     p.y.to_bits().hash(hasher);
-}
-
-/// Hash a `Rect` by its four edge f32 bit patterns.
-fn hash_rect(r: &flui_foundation::geometry::Rect<f64>, hasher: &mut DefaultHasher) {
-    r.left().to_bits().hash(hasher);
-    r.top().to_bits().hash(hasher);
-    r.right().to_bits().hash(hasher);
-    r.bottom().to_bits().hash(hasher);
 }
 
 #[cfg(test)]

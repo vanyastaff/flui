@@ -117,13 +117,36 @@ proptest! {
     }
 }
 
-/// `lerp` rounds each channel to nearest (half away from zero), matching
-/// Flutter's `Color.lerp`; truncation would give `(0, 1, 2, 127)` here.
+/// `lerp` rounds each channel to nearest (half away from zero); truncation
+/// would give an alpha of 127 here.
 #[test]
 fn lerp_rounds_to_nearest() {
-    let from = Color::rgba(0, 0, 0, 0);
-    let to = Color::rgba(1, 3, 5, 255);
-    assert_eq!(Color::lerp(from, to, 0.5), Color::rgba(1, 2, 3, 128));
+    let from = Color::rgba(10, 20, 30, 255);
+    let to = Color::rgba(11, 23, 35, 255);
+    assert_eq!(Color::lerp(from, to, 0.5), Color::rgba(11, 22, 33, 255));
+    assert_eq!(
+        Color::lerp(Color::rgba(0, 0, 0, 0), Color::rgba(0, 0, 0, 255), 0.5).a,
+        128
+    );
+}
+
+/// `lerp` is premultiplied: a fade to transparent keeps the colour's hue.
+/// Straight interpolation (Flutter's) would give `(128, 0, 0, 128)`, a
+/// half-transparent dark red, where this gives half-transparent red.
+///
+/// Red-check: interpolate the channels without weighting them by alpha.
+#[test]
+fn lerp_to_transparent_keeps_the_hue() {
+    let red = Color::rgba(255, 0, 0, 255);
+    let transparent = Color::rgba(0, 0, 0, 0);
+    assert_eq!(
+        Color::lerp(red, transparent, 0.5),
+        Color::rgba(255, 0, 0, 128)
+    );
+    assert_eq!(
+        Color::lerp(transparent, red, 0.25),
+        Color::rgba(255, 0, 0, 64)
+    );
 }
 
 /// Directional and endpoint properties can't tell a correct blend from one

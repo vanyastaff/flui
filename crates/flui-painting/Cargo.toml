@@ -24,6 +24,8 @@ autotests = false
 [dependencies]
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 
+# `Path` geometry: arcs and ovals as curves, exact winding, tight bounds (ADR-0098 §7).
+kurbo = { workspace = true }
 thiserror = { workspace = true }
 # Serialization of the style values (optional). `rc` covers `InlineSpan::Text(Arc<TextSpan>)`;
 # deserialization does not preserve `Arc` sharing, which no snapshot relies on.
@@ -110,6 +112,11 @@ required-features = ["parley"]
 name = "text_context"
 path = "tests/text_context.rs"
 required-features = ["parley"]
+
+# cargo-shear reports the trybuild compile-fail inputs as unlinked: the
+# `compile_fail` test hands them to rustc by glob, no module declares them.
+[package.metadata.cargo-shear]
+ignored-paths = ["tests/compile_fail/*.rs"]
 
 [lints]
 workspace = true
