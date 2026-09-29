@@ -459,7 +459,9 @@ packages, same run).
   as "passes ≤ N, target 1".
 - **Layer identity is retained:** every repaint boundary is an `Arc` subtree keyed by `RenderId`.
   `LayerNode` already carries `render_id: Option<RenderId>` (`crates/flui-layer/src/tree/layer_tree.rs:38`);
-  grafting is O(1) and damage becomes a pointer diff.
+  grafting is O(1). Damage is not a pointer diff: an outer boundary re-records its inline pictures
+  whenever a nested one is dirty, so their `Arc`s change on most frames; the test is a
+  paint-certified `ContentToken` on the boundary stamp (ADR-0087 §3 as amended).
 
 ### 8.2 Realms and threads
 

@@ -140,6 +140,10 @@ engine (`crates/flui-engine/src/damage.rs:22`) with `mark_dirty`, `mark_full_rep
 - Damage has a real off switch: with it off, no subtree is retained, no differ runs and the cost
   per frame is the same as today.
 
+*Amended (2026-09-29):* the switch is the `FLUI_DAMAGE` environment variable (`off`), which
+`flui-app`'s raster lane reads when it is built, so every window of the process renders in full
+without a rebuild. A per-app `AppConfig` switch can replace it; damage is on by default.
+
 ### 4. The retained render target is conditional
 
 wgpu does not expose swapchain buffer age (gfx-rs/wgpu#682, as cited by the review), so a partial repaint renders into a retained target
@@ -200,7 +204,8 @@ platform-contract and frame-transaction changes (ADR-0082, ADR-0083); ordering i
 
 ## Verification
 
-§3 and §4 are verified; the rest does not exist yet.
+§3 and §4 are verified by the tests below, headless: the GPU readbacks ran on one desktop adapter
+(DX12), and no partial frame has been observed in a real window yet. The rest does not exist yet.
 
 - §3: `flui-layer`'s `src/damage/tests.rs` (`first_frame_is_full`,
   `identical_tokens_are_unchanged`, `a_new_token_damages_that_boundary_in_physical_pixels`,
@@ -217,11 +222,13 @@ platform-contract and frame-transaction changes (ADR-0082, ADR-0083); ordering i
   `a_color_fill_makes_the_extent_unbounded`, `paragraph_extent_covers_ink_overflow`,
   `stroke_and_shadow_extents_cover_their_outsets`; `flui-app`'s raster-lane tests
   `a_changed_boundary_reaches_the_backend_as_a_dirty_rect`, `an_identical_scene_does_not_present`,
-  `damage_off_sends_every_frame_full_and_retains_nothing`.
+  `damage_off_sends_every_frame_full_and_retains_nothing`, `the_damage_variable_selects_the_mode`.
 - §4: `flui-engine`'s `damage_readback_tests.rs`
   (`a_moved_box_repaints_its_old_and_new_positions_only`,
   `the_partial_clear_runs_before_content`, `an_invalid_target_promotes_to_full`,
-  `partial_equals_full_inside_damage`), `damage::tests::plan_frame_table`, and the
+  `partial_equals_full_inside_damage`, `a_removed_shadow_leaves_no_penumbra`,
+  `a_frame_outside_the_protocol_is_followed_by_a_full_one`), which drive the same
+  `FrameProtocol` the windowed renderer runs; `damage::tests::plan_frame_table`; and the
   `raster_owner` tests `the_owner_applies_partial_damage_as_a_dirty_rect`,
   `superseded_damage_folds_into_the_survivor`, `rejected_frame_damage_reaches_the_backend`,
   `render_error_marks_full`. The windowed swapchain path runs only on a developer machine.
@@ -236,7 +243,10 @@ Still to do:
   check: it errors on an absent package.
 - The `flui-layer` conformance suite passes on both backends, including `BackdropFilter`,
   `ShaderMask` and `Follower`, or lists each as a named gap.
-- An application-level off switch (the lane's `set_damage_mode` has no `AppConfig` caller yet),
-  and `forget()` after a hot-reload plugin frame renders outside the lane.
+- A per-app `AppConfig` off switch in place of `FLUI_DAMAGE`. A hot-reload plugin frame needs
+  no `forget()`: `Renderer::render_scene`, the path it renders through, makes the next frame
+  full.
+- A partial frame observed in a real window (`RUST_LOG=flui.gpu=trace` shows
+  `Damage scissor applied`), and a readback run on a second adapter and backend.
 - `damage_scissor` rerun on the machine that recorded ADR-0061's baseline, against a frame
   whose damage the producer computed.
