@@ -34,7 +34,10 @@ use flui_semantics::{
     AccessibilityNodeId, SemanticsActionError, SemanticsActionRequest, semantics_action_args_for,
     semantics_action_for,
 };
-use flui_view::{GlobalKeyScope, WidgetsBinding, binding::FramePhaseMarker};
+use flui_view::{
+    __runtime::{BindingRuntime as _, FramePhaseMarker},
+    GlobalKeyScope, WidgetsBinding,
+};
 use web_time::{Duration, Instant};
 
 use crate::epoch::{FrameCommitState, TreeRevision};

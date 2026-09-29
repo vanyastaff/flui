@@ -49,8 +49,6 @@
 //! binding.draw_frame();
 //! ```
 
-#[cfg(any(test, feature = "runtime-internals"))]
-use std::cell::Cell;
 use std::{
     future::Future,
     pin::Pin,
@@ -384,70 +382,6 @@ pub trait WidgetsBindingObserver {
 /// tied to real frame-scheduling behavior (`frames_enabled`).
 pub use flui_scheduler::AppLifecycleState;
 
-/// Data-only phase cell shared with an internal frame composition driver.
-///
-/// This type exists only for runtime composition and tests. It lets the
-/// widget binding stamp an externally-owned `Copy` phase value at its exact
-/// build-to-finalize boundary without invoking foreign code while the
-/// binding's inner write guard is held.
-#[doc(hidden)]
-#[cfg(any(test, feature = "runtime-internals"))]
-#[derive(Debug)]
-pub struct FramePhaseMarker<T: Copy> {
-    phase: Cell<T>,
-    /// Data-only fault injection for downstream test-utils consumers.
-    /// Consumed at the next build-to-finalize boundary.
-    #[cfg(any(test, feature = "test-utils"))]
-    panic_once_at_boundary: Cell<bool>,
-}
-
-#[cfg(any(test, feature = "runtime-internals"))]
-impl<T: Copy> FramePhaseMarker<T> {
-    /// Create a marker with its initial phase.
-    #[doc(hidden)]
-    pub fn new(initial_phase: T) -> Self {
-        Self {
-            phase: Cell::new(initial_phase),
-            #[cfg(any(test, feature = "test-utils"))]
-            panic_once_at_boundary: Cell::new(false),
-        }
-    }
-
-    /// Store the phase that is about to run.
-    #[doc(hidden)]
-    pub fn set(&self, phase: T) {
-        self.phase.set(phase);
-    }
-
-    fn set_at_frame_boundary(&self, phase: T) {
-        self.phase.set(phase);
-        #[cfg(any(test, feature = "test-utils"))]
-        let should_panic = self.panic_once_at_boundary.replace(false);
-        #[cfg(any(test, feature = "test-utils"))]
-        assert!(
-            !should_panic,
-            "frame phase marker — intentional one-shot test panic"
-        );
-    }
-
-    /// Read the last phase stored.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn get(&self) -> T {
-        self.phase.get()
-    }
-
-    /// Arm a fixed one-shot panic at the next build-to-finalize boundary.
-    ///
-    /// This is a data-only runtime test seam: it stores only a phase value
-    /// and never accepts executable code across the widget binding's lock.
-    #[doc(hidden)]
-    #[cfg(any(test, feature = "test-utils"))]
-    pub fn arm_test_panic_once(&self) {
-        self.panic_once_at_boundary.set(true);
-    }
-}
-
 /// The owner-local binding for one widgets layer.
 ///
 /// WidgetsBinding manages:
@@ -471,7 +405,7 @@ impl<T: Copy> FramePhaseMarker<T> {
 ///
 /// WidgetsBinding uses internal RwLock for thread-safe mutable access.
 pub struct WidgetsBinding {
-    lifecycle: crate::lifecycle::LifecycleSource,
+    pub(crate) lifecycle: crate::lifecycle::LifecycleSource,
     /// Inner mutable state. `Arc` so the GlobalKey registry closures can
     /// hold a `Weak` back-reference to *this* binding's tree (a dead
     /// binding's keys resolve to `None` — the weak-callback pattern);
@@ -481,8 +415,7 @@ pub struct WidgetsBinding {
 
     /// This binding's GlobalKey lookup handle. It is activated by the owning
     /// `UiRealm` for the dynamic extent of each realm entry.
-    #[cfg(any(test, feature = "runtime-internals"))]
-    global_key_registry: crate::key::registry::GlobalKeyRegistryHandle,
+    pub(crate) global_key_registry: crate::key::registry::GlobalKeyRegistryHandle,
 
     /// Callback when a frame is needed.
     on_need_frame: RwLock<Option<Box<dyn Fn() + Send + Sync>>>,
@@ -567,47 +500,6 @@ pub enum AttachError {
     AlreadyAttached,
 }
 
-/// A realm-level `GlobalKey` registry spanning several [`WidgetsBinding`]s —
-/// one per presentation sharing a realm's `GlobalKeyScope` (ADR-0043 §1).
-///
-/// Assembled once over the presentations installed at the time
-/// [`Self::assemble`] runs, tried in the given order (a realm's mount
-/// order). `GlobalKeyScope`'s uniqueness invariant guarantees at most one
-/// binding ever answers a given hash, so trying each in turn and returning
-/// the first hit is exact, not a heuristic — see
-/// `key::registry::build_composite`'s doc for why resolving the FOLLOW-UP
-/// `with_element` call correctly (rather than by the same blind scan) needs
-/// a small correlation cache.
-///
-/// Internal seam: this type is visible at the crate boundary only because
-/// the owning realm above `flui-view` needs to hold and activate it, not a
-/// stable downstream API — gated identically to
-/// [`WidgetsBinding::with_global_key_registry`].
-#[doc(hidden)]
-#[cfg(any(test, feature = "runtime-internals"))]
-#[derive(Debug)]
-pub struct GlobalKeyRegistryComposite(crate::key::registry::GlobalKeyRegistryHandle);
-
-#[cfg(any(test, feature = "runtime-internals"))]
-impl GlobalKeyRegistryComposite {
-    /// Assemble a composite spanning `bindings`' own registries, in order.
-    #[must_use]
-    pub fn assemble<'a>(bindings: impl IntoIterator<Item = &'a WidgetsBinding>) -> Self {
-        let handles = bindings
-            .into_iter()
-            .map(WidgetsBinding::global_key_registry_handle)
-            .collect();
-        Self(crate::key::registry::build_composite(handles))
-    }
-
-    /// Activate this composite for the dynamic extent of `f` — the
-    /// multi-presentation counterpart to
-    /// [`WidgetsBinding::with_global_key_registry`].
-    pub fn enter<R>(&self, f: impl FnOnce() -> R) -> R {
-        crate::key::registry::with_active_registry(&self.0, f)
-    }
-}
-
 impl WidgetsBinding {
     /// Create a binding with a fresh, isolated focus manager.
     ///
@@ -648,12 +540,10 @@ impl WidgetsBinding {
             build_scheduled: false,
             need_to_report_first_frame: true,
         }));
-        #[cfg(any(test, feature = "runtime-internals"))]
         let global_key_registry = Self::make_global_key_registry(&inner);
         Self {
             lifecycle,
             inner,
-            #[cfg(any(test, feature = "runtime-internals"))]
             global_key_registry,
             on_need_frame: RwLock::new(None),
             first_frame_rasterized: AtomicBool::new(false),
@@ -661,21 +551,6 @@ impl WidgetsBinding {
             #[cfg(debug_assertions)]
             debug_building_dirty_elements: AtomicBool::new(false),
         }
-    }
-
-    /// Run one owner-runtime entry with this binding's GlobalKey registry
-    /// active on the current thread.
-    ///
-    /// This is the only runtime-facing registry seam. Activation is nested and
-    /// unwind-safe; after `f` returns or panics the previous realm is restored.
-    /// Raw TLS/registry handles remain private to `flui-view`. The method is
-    /// compiled only for the workspace-internal `runtime-internals` feature;
-    /// despite Rust visibility being required at the crate boundary, it is not
-    /// a stable downstream API or a general-purpose ambient-context hook.
-    #[doc(hidden)]
-    #[cfg(any(test, feature = "runtime-internals"))]
-    pub fn with_global_key_registry<R>(&self, f: impl FnOnce() -> R) -> R {
-        crate::key::registry::with_active_registry(&self.global_key_registry, f)
     }
 
     /// Build the `GlobalKey` registry handle for one binding.
@@ -695,7 +570,6 @@ impl WidgetsBinding {
     /// recursive because `GlobalKey::with_current_state`'s callback runs
     /// inside the visit's read guard and may look up a second key; with a
     /// fair lock a plain nested read could queue behind a waiting writer.
-    #[cfg(any(test, feature = "runtime-internals"))]
     fn make_global_key_registry(
         inner: &Arc<RwLock<WidgetsBindingInner>>,
     ) -> crate::key::registry::GlobalKeyRegistryHandle {
@@ -729,9 +603,11 @@ impl WidgetsBinding {
     }
 
     /// This binding's own `GlobalKey` registry handle, for composing into a
-    /// [`GlobalKeyRegistryComposite`] spanning several bindings.
-    #[cfg(any(test, feature = "runtime-internals"))]
-    fn global_key_registry_handle(&self) -> crate::key::registry::GlobalKeyRegistryHandle {
+    /// [`GlobalKeyRegistryComposite`](crate::__runtime::GlobalKeyRegistryComposite)
+    /// spanning several bindings.
+    pub(crate) fn global_key_registry_handle(
+        &self,
+    ) -> crate::key::registry::GlobalKeyRegistryHandle {
         self.global_key_registry.clone()
     }
 
@@ -1238,25 +1114,7 @@ impl WidgetsBinding {
         self.draw_frame_impl(|| {});
     }
 
-    /// Pump a widget frame and stamp `finalize_phase` at the exact boundary
-    /// between the build drain and inactive-element finalization.
-    ///
-    /// This is an internal composition seam for the application frame driver.
-    /// Only a [`FramePhaseMarker`] write occurs while the binding's inner
-    /// write guard and debug building-flag guard remain active; no external
-    /// executable callback crosses that lock boundary. Ordinary users should
-    /// call [`Self::draw_frame`].
-    #[doc(hidden)]
-    #[cfg(any(test, feature = "runtime-internals"))]
-    pub fn draw_frame_with_phase_marker<T: Copy>(
-        &self,
-        marker: &FramePhaseMarker<T>,
-        finalize_phase: T,
-    ) {
-        self.draw_frame_impl(|| marker.set_at_frame_boundary(finalize_phase));
-    }
-
-    fn draw_frame_impl(&self, before_finalize: impl FnOnce()) {
+    pub(crate) fn draw_frame_impl(&self, before_finalize: impl FnOnce()) {
         let mut inner = self.inner.write();
 
         #[cfg(debug_assertions)]
@@ -1489,13 +1347,6 @@ impl WidgetsBinding {
         }
     }
 
-    /// Composition-root access to this binding's exact local lifecycle source.
-    #[cfg(any(test, feature = "runtime-internals"))]
-    #[doc(hidden)]
-    pub fn lifecycle_source(&self) -> &crate::lifecycle::LifecycleSource {
-        &self.lifecycle
-    }
-
     /// Commit a local lifecycle observation and notify legacy and scoped listeners.
     /// Legacy observers retain their snapshot iteration behavior. Scoped
     /// subscriptions still drain when a legacy observer panics.
@@ -1505,13 +1356,7 @@ impl WidgetsBinding {
         }
     }
 
-    #[cfg(any(test, feature = "runtime-internals"))]
-    #[doc(hidden)]
-    pub fn notify_committed_lifecycle(&self, state: AppLifecycleState) {
-        self.notify_lifecycle(state);
-    }
-
-    fn notify_lifecycle(&self, state: AppLifecycleState) {
+    pub(crate) fn notify_lifecycle(&self, state: AppLifecycleState) {
         let mut first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let observers: Vec<Arc<dyn WidgetsBindingObserver>> =
                 self.inner.read().observers.clone();
@@ -1791,6 +1636,7 @@ mod tests {
     use static_assertions::assert_not_impl_any;
 
     use super::*;
+    use crate::__runtime::BindingRuntime as _;
     use crate::RootRenderElement;
 
     // Carries a `PipelineCell` (via `CoreState::pipeline_owner`), so it must

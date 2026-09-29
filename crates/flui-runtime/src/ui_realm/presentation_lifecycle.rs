@@ -4,6 +4,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use flui_foundation::PresentationId;
 use flui_rendering::binding::RendererBinding as _;
 use flui_scheduler::AppLifecycleState;
+use flui_view::__runtime::BindingRuntime as _;
 
 use super::UiRealm;
 use crate::lifecycle_state::{

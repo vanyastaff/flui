@@ -14,7 +14,8 @@
   by `cargo xtask workspace`, with today's refused edges seeded as `edge-exceptions` in place of
   a separate allowlist (ADR-0088 §2), but remain Proposed until the owner accepts them. §4 and
   §5 remain Proposed. The §1 deletions of `flui-tree` and `flui-localizations` landed
-  2026-09-26.
+  2026-09-26. §4.2 is implemented (2026-09-29): `runtime-internals` is gone and its items are
+  at `flui_view::__runtime`; the facade and the SDK shadow it.
 - **Date:** 2026-09-25
 - **Supersedes in part:** [ADR-0041](ADR-0041-workspace-topology-contract.md) through the
   accepted §1 (the numbered layer table, "a crate is a layer" as the only reason for a crate, and
@@ -305,7 +306,13 @@ its second consumer or the compile or semver seam it buys.
    live in `#[doc(hidden)] pub mod __runtime` in the owning crate, always compiled, with a
    module doc stating that it carries no semver promise. `runtime-internals` is removed and its
    27 `cfg` sites become `__runtime` items. No gate can tell a visibility feature from a real
-   one, so this rule is a review rule; the one instance is removed.
+   one, so this rule is a review rule; the one instance is removed. A crate that re-exports a
+   whole crate with a `__runtime` module does it as a glob module plus a private
+   `mod __runtime {}` that shadows the glob's (`pub mod view { pub use flui_view::*; ... }` in
+   the facade and `flui-sdk`), never as a whole-crate alias, which would make the seam reachable
+   at its path; a `compile_fail,E0603` doctest on each such module pins it. Methods the seam
+   adds to a type the facade exposes live on a sealed trait inside `__runtime`
+   (`BindingRuntime` for `WidgetsBinding`), not as inherent methods.
 3. Features stay additive, and every optional dependency sits behind `dep:` (unchanged).
 
 ### 5. The B0 exit is gates, invariants and ratchets
@@ -364,8 +371,8 @@ recorded:
   for `flui-platform`: ADR-0082's trait move landed first. The two that exit with ADR-0094
   become stale, and must be deleted, in the change that lands it.
 - Applications that enabled `flui-view/runtime-internals` directly (none in this workspace
-  besides the three composition roots) lose the feature; the items stay reachable under
-  `__runtime`.
+  besides the composition roots) lose the feature; the items are reachable at
+  `flui_view::__runtime`, not through `flui::view` or `flui_sdk::view`.
 - AGENTS.md's "Crate layering" rows and the "Crate" row of "Extending FLUI" and `docs/crates.md`
   changed with the tier gate; `docs/ROADMAP.md:11` changes with §5. ADR-0041 carries the
   `Superseded in part by: ADR-0081` back-link.

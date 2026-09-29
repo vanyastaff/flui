@@ -9,9 +9,10 @@
 //! train, and its surface may change on any train without a `flui` major.
 //!
 //! - **Whole modules** at the facade's paths: [`animation`], [`foundation`],
-//!   [`geometry`], [`view`] and [`widgets`] are the internal crates (or, for
+//!   [`geometry`] and [`widgets`] are the internal crates (or, for
 //!   `geometry`, foundation's module) themselves, so `flui_sdk::widgets::Text`
-//!   and `flui::widgets::Text` are one type.
+//!   and `flui::widgets::Text` are one type. [`view`] is a glob of the whole
+//!   `flui-view` crate that shadows its `__runtime` seam (ADR-0081 §4).
 //! - **Curated modules** at the facade's paths: [`interaction`], [`painting`],
 //!   [`platform`] and [`rendering`] hold the subset of the facade's module that
 //!   packages use, as the same items, not wrappers.
@@ -26,8 +27,26 @@
 pub use flui_animation as animation;
 pub use flui_foundation as foundation;
 pub use flui_foundation::geometry;
-pub use flui_view as view;
 pub use flui_widgets as widgets;
+
+/// The view layer (`flui-view`): every public item of the crate, at the
+/// facade's path, as the same items.
+///
+/// A glob module rather than a whole-crate alias, so that it can shadow
+/// `flui_view::__runtime`, the composition roots' seam (ADR-0081 §4), which
+/// is not package-author surface:
+///
+/// ```compile_fail,E0603
+/// use flui_sdk::view::__runtime::BindingRuntime;
+/// ```
+pub mod view {
+    pub use flui_view::*;
+    #[expect(
+        hidden_glob_reexports,
+        reason = "shadows the glob's `__runtime` (ADR-0081 §4): the composition roots' seam is not SDK surface"
+    )]
+    mod __runtime {}
+}
 
 /// Platform values: brightness and locale.
 pub mod platform {

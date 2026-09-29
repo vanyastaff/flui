@@ -49,12 +49,12 @@ flui-platform-api = { workspace = true }
 # each realm owns over the app's font collection (ADR-0092 §3).
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 # The realm core (ADR-0083 move 4): the widget tree a presentation hosts
-# (`WidgetsBinding`, `GlobalKeyScope`; `runtime-internals` is the seam a
+# (`WidgetsBinding`, `GlobalKeyScope`; `flui_view::__runtime` is the seam a
 # realm drives it through), its render pipeline, the realm-owned scheduler,
 # the vsync the root's animations tick on, and the root wrappers the realm
 # installs above every root widget (`FocusRoot`, `GestureArenaScope`,
 # `VsyncScope`, `MediaQuery`).
-flui-view = { path = "../flui-view", version = "=0.2.0-dev", features = ["runtime-internals"] }
+flui-view = { path = "../flui-view", version = "=0.2.0-dev" }
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev" }
 flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
 flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }

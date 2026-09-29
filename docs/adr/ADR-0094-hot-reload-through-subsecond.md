@@ -175,7 +175,7 @@ over that raw shape is settled in the Subsecond implementation step.
   the realm's `Option` hook.
 - `ReloadEvent::Patched` becomes an owner-queued hot reload in every realm (ADR-0027 §9), which
   runs the existing reassemble: every element dirty, state kept
-  (`WidgetsBinding::perform_reassemble`, `crates/flui-view/src/binding.rs:1192`).
+  (`WidgetsBinding::perform_reassemble`, `crates/flui-view/src/binding.rs:1068`).
 - `ReloadEvent::RestartRequired` tears the realm down and hosts a fresh one on the same loop
   (ADR-0039 §6), in every presentation. State is lost; the process and its windows are not. The
   spike showed only a root remount in the same realm.

@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use flui_layer::Scene;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
-use flui_view::{StatelessView, View, WidgetsBinding};
+use flui_view::{__runtime::BindingRuntime as _, StatelessView, View, WidgetsBinding};
 
 /// Log messages via Android logcat (or stderr on other platforms).
 ///

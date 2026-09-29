@@ -12,6 +12,7 @@ use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::PipelineOwner;
 use flui_scheduler::{DemandKind, FrameSnapshot, Instant, PresentOutcome};
+use flui_view::__runtime::BindingRuntime as _;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 impl UiRealm {

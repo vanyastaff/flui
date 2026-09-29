@@ -41,6 +41,8 @@ mod production_reconcile_emits;
 mod reconcile_capture;
 #[path = "recovered_panics.rs"]
 mod recovered_panics;
+#[path = "runtime_seam.rs"]
+mod runtime_seam;
 #[path = "signal_reads.rs"]
 mod signal_reads;
 #[path = "stateless_stateful_tests.rs"]

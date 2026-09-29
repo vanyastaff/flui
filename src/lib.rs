@@ -141,8 +141,26 @@ pub use flui_macros::Diagnosticable;
 #[cfg(feature = "material")]
 pub use flui_material as material;
 pub use flui_platform_api as platform;
-pub use flui_view as view;
 pub use flui_widgets as widgets;
+
+/// The view layer (`flui-view`): View/Element, `BuildContext`, keys,
+/// signals and the widgets binding.
+///
+/// A glob module rather than a whole-crate alias, so that it can shadow
+/// `flui_view::__runtime`, the composition roots' seam (ADR-0081 §4), which
+/// is not application surface:
+///
+/// ```compile_fail,E0603
+/// use flui::view::__runtime::BindingRuntime;
+/// ```
+pub mod view {
+    pub use flui_view::*;
+    #[expect(
+        hidden_glob_reexports,
+        reason = "shadows the glob's `__runtime` (ADR-0081 §4): the composition roots' seam is not facade surface"
+    )]
+    mod __runtime {}
+}
 
 /// The `android-activity` crate `android_main` receives its `AndroidApp`
 /// from, so an application declares no Android dependency of its own.
