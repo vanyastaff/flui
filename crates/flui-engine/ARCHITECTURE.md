@@ -108,7 +108,7 @@ DrawSegment`, `&GpuStateStack`, …) — never `&mut WgpuPainter` — so the
 borrow checker is what keeps record logic out of the coordinator.
 
 `GpuStateStack` stores transforms as `glam::Mat4`; the conversion from
-`flui_types::Matrix4` happens once, at `LayerDispatcher`'s `CommandRenderer`
+`flui_foundation::geometry::Matrix4` happens once, at `LayerDispatcher`'s `CommandRenderer`
 implementation, and `Matrix4` never appears in `batches/`, `pipeline_set.rs`,
 or `replay/`. Direct `glam` is expected in the GPU modules and kept out of
 the GPU-free ones (`raster*`, `dispatch`, `error`, `fonts`, `frame_timing`,
@@ -446,6 +446,34 @@ atlas tests (`a_slot_is_shared_by_equal_keys_and_an_empty_glyph_takes_no_space`,
 `a_page_grows_within_a_frame_and_earlier_slots_keep_their_place`) pass
 unchanged.
 
+### 17. One rounding rule per purpose: hard edges snap, bounds cover — [ADR-0098 §6](../../docs/adr/ADR-0098-owned-f64-geometry-values.md)
+
+Every place that turns a device-space float into a whole pixel goes through
+`flui_foundation::geometry::{snap_edges, cover}`, and which one is decided by
+what the rectangle is for:
+
+- **A hard rect clip snaps its edges** under a translation plus a positive
+  axis-aligned scale (`GpuStateStack::is_translate_scale`): a pixel is kept
+  exactly when its centre is inside, Skia's non-antialiased clip, with ties
+  toward +∞. Under rotation, skew or a reflection it covers its device
+  bounding box. Here the scissor *is* the clip.
+- **Bounds cover** (floor of the minimum, ceiling of the maximum): the
+  scissor in front of a rounded or squircle clip's SDF, the damage scissor,
+  a path clip's bounding box, backdrop-filter and advanced-blend copy
+  regions, filter offscreens and SSAA tiles. None of them may lose a partly
+  covered pixel: behind an SDF that pixel carries the feathered fringe
+  (`dst_atop_feathers_its_partially_covered_edge` samples it).
+
+This replaced three rules that disagreed: the identity-transform scissor
+truncated every edge (keeping column 0 of a clip starting at 0.75 and
+dropping column 10 of one ending at 10.75), the transformed scissor floored
+the origin and ceiled the extent, and the backdrop copies rounded half away
+from zero. Flutter has no single rule to follow here (Impeller and Skia each
+round per call site). Content quads are not yet snapped; see Open items.
+Locked by `a_hard_rect_clip_keeps_the_pixels_whose_centres_are_inside`,
+`a_rotated_rect_clip_covers_its_device_bounding_box` and
+`clip_rect_enclosing_grows_outward_on_both_branches` (`src/state_stack.rs`).
+
 ---
 
 ## Open items
@@ -459,3 +487,12 @@ unchanged.
   poisons the frame rather than isolating the layer, which is a deliberate
   divergence from Flutter's per-layer isolation; changing it is a contract
   change that needs its own ADR.
+- **Content snapping (ADR-0098 §6).** Solid, gradient and image quads are
+  still drawn at their fractional device positions, antialiased; §6 has them
+  snap their edges under a translation plus a positive scale, with animated
+  layers composited unsnapped. That needs the engine to know which layers
+  animate, and it moves every existing readback, so it lands on its own with
+  readbacks that tell a snapped edge from an antialiased one. Border and
+  stroke widths resolved to whole device pixels in layout
+  (`geometry::resolve_stroke_width`) and a text run's baseline snap belong to
+  the same change.

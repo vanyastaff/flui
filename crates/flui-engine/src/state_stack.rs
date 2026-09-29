@@ -12,7 +12,7 @@
 //! `active_transform` save, balanced by `LayerDispatcher`'s own `Drop`) must not
 //! false-positive-panic, and a `Drop` panic during unwind would trigger an abort.
 
-use flui_foundation::geometry::{Offset, Point, RRect, Rect};
+use flui_foundation::geometry::{self, Offset, Point, RRect, Rect};
 
 /// GPU draw state and complete snapshots for nested save/restore scopes.
 ///
@@ -377,12 +377,14 @@ impl GpuStateStack {
     /// parameter rather than stored on the stack so the painter remains the
     /// single owner of the surface dimensions.
     ///
-    /// A fractional edge TRUNCATES: a clip ending at column 10.75 ends the
-    /// scissor at column 10, so the outer fraction of that column is lost.
-    /// Every clip that reaches here carries something behind it that makes
-    /// that acceptable — a rounded or squircle clip has its exact SDF, and a
-    /// rect clip's own edge is what the caller asked to cut on. A clip with
-    /// NOTHING behind it must not lose that fraction; see
+    /// A hard edge (ADR-0098 §6): under a translation plus a positive
+    /// axis-aligned scale each device edge snaps to the nearest pixel boundary,
+    /// so a pixel is kept exactly when its centre is inside the clip — Skia's
+    /// non-antialiased clip. A clip ending at column 10.75 keeps column 10
+    /// (centre 10.5) and one starting at 0.75 drops column 0 (centre 0.5).
+    /// Under rotation, skew or a reflection the device bounding box is covered
+    /// instead, since no pixel grid lines up with the clip's edges. A clip with
+    /// nothing behind it that must keep every partly covered pixel uses
     /// [`Self::clip_rect_enclosing`].
     pub(super) fn clip_rect(&mut self, rect: Rect<f64>, surface_size: (u32, u32)) {
         let (x, y, width, height) = self.scissor_of(rect, surface_size);
@@ -406,13 +408,45 @@ impl GpuStateStack {
     /// pixel ratio. Growing before the transform is not merely insufficient,
     /// it is inert.
     pub(super) fn clip_rect_enclosing(&mut self, rect: Rect<f64>, surface_size: (u32, u32)) {
-        let (min_x, min_y, max_x, max_y) = self.device_aabb(rect);
-        let x = min_x.floor().max(0.0).min(surface_size.0 as f32) as u32;
-        let y = min_y.floor().max(0.0).min(surface_size.1 as f32) as u32;
-        let right = max_x.ceil().max(0.0).min(surface_size.0 as f32) as u32;
-        let bottom = max_y.ceil().max(0.0).min(surface_size.1 as f32) as u32;
-        let scissor = (x, y, right.saturating_sub(x), bottom.saturating_sub(y));
+        let scissor =
+            Self::clamp_to_surface(geometry::cover(self.device_bounds(rect)), surface_size);
         self.commit_scissor(rect, scissor, surface_size);
+    }
+
+    /// `true` when the transform is a translation plus a positive axis-aligned
+    /// scale: the only transforms under which device edges can be snapped
+    /// (ADR-0098 §6). A rotation, skew, reflection or perspective term fails it.
+    pub(super) fn is_translate_scale(&self) -> bool {
+        let m = self.current_transform;
+        m.x_axis.y.abs() < 1e-6
+            && m.y_axis.x.abs() < 1e-6
+            && m.x_axis.x > 0.0
+            && m.y_axis.y > 0.0
+            && m.x_axis.w == 0.0
+            && m.y_axis.w == 0.0
+            && m.w_axis.w == 1.0
+    }
+
+    /// The clip rect's device bounding box as a [`Rect`].
+    fn device_bounds(&self, rect: Rect<f64>) -> Rect<f64> {
+        let (min_x, min_y, max_x, max_y) = self.device_aabb(rect);
+        Rect::from_ltrb(
+            f64::from(min_x),
+            f64::from(min_y),
+            f64::from(max_x),
+            f64::from(max_y),
+        )
+    }
+
+    /// A pixel-aligned device rect clamped to the attachment, as a scissor
+    /// `(x, y, width, height)`.
+    fn clamp_to_surface(rect: Rect<f64>, (width, height): (u32, u32)) -> (u32, u32, u32, u32) {
+        let clamp = |v: f64, max: u32| v.clamp(0.0, f64::from(max)) as u32;
+        let x = clamp(rect.left(), width);
+        let y = clamp(rect.top(), height);
+        let right = clamp(rect.right(), width);
+        let bottom = clamp(rect.bottom(), height);
+        (x, y, right.saturating_sub(x), bottom.saturating_sub(y))
     }
 
     /// The clip rect's axis-aligned bounding box in device space, unrounded.
@@ -462,30 +496,16 @@ impl GpuStateStack {
         )
     }
 
-    /// The truncating rounding [`Self::clip_rect`] has always used, kept
-    /// bit-for-bit: the identity fast path floors every edge independently,
-    /// and the transformed branch floors the origin and ceils the EXTENT. The
-    /// two do not agree on a fractional rect, and unifying them would move the
-    /// scissor of every rect, rounded and squircle clip in the engine.
+    /// The hard-edge scissor of [`Self::clip_rect`]: edges snapped under a
+    /// translation plus a positive scale, the bounding box covered otherwise.
     fn scissor_of(&self, rect: Rect<f64>, surface_size: (u32, u32)) -> (u32, u32, u32, u32) {
-        let transform = self.current_transform;
-        if transform == glam::Mat4::IDENTITY {
-            let x = rect.left().max(0.0) as u32;
-            let y = rect.top().max(0.0) as u32;
-            let right = rect.right().min(f64::from(surface_size.0 as f32)) as u32;
-            let bottom = rect.bottom().min(f64::from(surface_size.1 as f32)) as u32;
-            return (x, y, right.saturating_sub(x), bottom.saturating_sub(y));
-        }
-        let (min_x, min_y, max_x, max_y) = self.device_aabb(rect);
-        let x = min_x.max(0.0) as u32;
-        let y = min_y.max(0.0) as u32;
-        let w = (max_x.min(surface_size.0 as f32) - min_x.max(0.0))
-            .ceil()
-            .max(0.0) as u32;
-        let h = (max_y.min(surface_size.1 as f32) - min_y.max(0.0))
-            .ceil()
-            .max(0.0) as u32;
-        (x, y, w, h)
+        let device = self.device_bounds(rect);
+        let aligned = if self.is_translate_scale() {
+            geometry::snap_edges(device)
+        } else {
+            geometry::cover(device)
+        };
+        Self::clamp_to_surface(aligned, surface_size)
     }
 
     /// Intersect a freshly computed scissor with any active one, clamp it to
@@ -553,25 +573,14 @@ impl GpuStateStack {
         // per-instance `clip_kind` level.
         self.current_rsuperellipse_clip = [0.0; 12];
 
-        // Bounding-box scissor for early rasterizer rejection. Conservative
-        // under rotation — `clip_rect` takes the AABB of all four transformed
-        // corners — which is exactly what a coarse pre-pass should be now that
-        // the SDF does the precise work.
-        // Exact bounds, deliberately, even though this is nominally a coarse
-        // early reject in front of an SDF that does the precise work.
-        //
-        // Padding it outward so the anti-aliased fringe is never cut was tried
-        // and reverted: for a rectangular clip the scissor IS the clip (a
-        // rect clip installs no SDF), so a pixel of pad lets every primitive
-        // render outside the clip — visible — to recover half a pixel of
-        // feather at the boundary — not. The cost of exactness is that a
-        // fractional edge truncates (10.75 ends the scissor at column 10) and
-        // the outer half of the feather is lost there.
-        //
-        // The pad becomes correct the moment text routes through the same mask;
-        // that is what #848 stays open for.
+        // Bounding-box scissor in front of the SDF, covering every pixel the
+        // clip touches (ADR-0098 §6): the SDF does the exact work, so the
+        // scissor must not cut the feathered fringe on either side. Snapping
+        // the edges here instead drops a half-covered edge column the SDF
+        // would have feathered. Text does not read the SDF yet, so a glyph can
+        // show in a partly covered edge pixel; that is what #848 stays open for.
         let _ = hard;
-        self.clip_rect(rrect.rect, surface_size);
+        self.clip_rect_enclosing(rrect.rect, surface_size);
     }
 
     /// Apply a rounded clip's bounding-box scissor and hand the clip itself
@@ -602,7 +611,7 @@ impl GpuStateStack {
         // Soft, always: the mode is `AntiAliasWithSaveLayer`, and a hard edge
         // would threshold the coverage the composite exists to feather.
         let resolved = self.resolve_rrect_clip(rrect, false);
-        self.clip_rect(rrect.rect, surface_size);
+        self.clip_rect_enclosing(rrect.rect, surface_size);
         resolved
     }
 
@@ -710,9 +719,9 @@ impl GpuStateStack {
         // back to it. Mirror of the corresponding clear in `clip_rrect`.
         self.current_rrect_clip = [0.0; 8];
 
-        // Exact, for the reason spelled out in `clip_rrect`.
+        // Covering, for the reason spelled out in `clip_rrect`.
         let _ = hard;
-        self.clip_rect(rect, surface_size);
+        self.clip_rect_enclosing(rect, surface_size);
     }
 
     // =========================================================================
@@ -776,7 +785,7 @@ impl GpuStateStack {
             kind: [2, 0, 0, 0],
             device_to_local: Self::device_to_local(self.current_transform),
         };
-        self.clip_rect(rse.outer_rect(), surface_size);
+        self.clip_rect_enclosing(rse.outer_rect(), surface_size);
         resolved
     }
 
@@ -1187,6 +1196,60 @@ mod tests {
              rect to whole pixels BEFORE the transform cannot produce this — a \
              fractional translation re-fractions it"
         );
+    }
+
+    /// A hard rect clip keeps a pixel exactly when its centre is inside, under
+    /// the identity and under a translation plus a positive scale alike: edges
+    /// snap to the nearest pixel boundary, ties toward +∞ (ADR-0098 §6).
+    ///
+    /// Red-check: truncating every edge (the rule this replaced) gives
+    /// `(0, 0, 10, 10)` for the identity case, keeping column 0 whose centre
+    /// is outside and dropping column 10 whose centre is inside.
+    #[test]
+    fn a_hard_rect_clip_keeps_the_pixels_whose_centres_are_inside() {
+        let surface = (64, 64);
+
+        let mut identity = identity_stack();
+        identity.clip_rect(Rect::from_ltrb(0.75, 0.75, 10.75, 10.75), surface);
+        assert_eq!(identity.current_scissor(), Some((1, 1, 10, 10)));
+
+        // Half-way edges: 0.5 and 10.5 both snap up, so the width stays 10.
+        let mut half = identity_stack();
+        half.clip_rect(Rect::from_ltrb(0.5, 0.5, 10.5, 10.5), surface);
+        assert_eq!(half.current_scissor(), Some((1, 1, 10, 10)));
+
+        // Under scale(2) + translate(0.1): [0.3, 5.3] → device [0.7, 10.7] → [1, 11).
+        let mut scaled = identity_stack();
+        scaled.translate(Offset::new(0.1, 0.1));
+        scaled.scale(2.0, 2.0);
+        scaled.clip_rect(Rect::from_ltrb(0.3, 0.3, 5.3, 5.3), surface);
+        assert_eq!(scaled.current_scissor(), Some((1, 1, 10, 10)));
+    }
+
+    /// Under a rotation no pixel grid lines up with the clip's edges, so the
+    /// hard clip falls back to covering its device bounding box.
+    #[test]
+    fn a_rotated_rect_clip_covers_its_device_bounding_box() {
+        let surface = (64, 64);
+        let mut rotated = identity_stack();
+        rotated.translate(Offset::new(32.0, 32.0));
+        rotated.rotate(std::f32::consts::FRAC_PI_4);
+        assert!(!rotated.is_translate_scale());
+        rotated.clip_rect(Rect::from_ltrb(-4.0, -4.0, 4.0, 4.0), surface);
+        // The rotated square's bounding box is ±4√2 ≈ ±5.66 around 32: [26.34, 37.66] → [26, 38).
+        assert_eq!(rotated.current_scissor(), Some((26, 26, 12, 12)));
+    }
+
+    #[test]
+    fn translate_scale_rejects_reflection_and_skew() {
+        let mut reflected = identity_stack();
+        reflected.scale(-1.0, 1.0);
+        assert!(!reflected.is_translate_scale());
+
+        let mut scaled = identity_stack();
+        scaled.translate(Offset::new(3.5, 1.25));
+        scaled.scale(1.5, 2.0);
+        assert!(scaled.is_translate_scale());
     }
 
     /// The degenerate inputs `Path::compute_bounds` can hand a scissor.

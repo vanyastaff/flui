@@ -108,23 +108,13 @@ pub(crate) fn copy_backdrop_region(
     let surface_w = surface_size.width;
     let surface_h = surface_size.height;
 
-    // Round before truncate (mirrors renderer.rs policy).
-    let x = device_rect
-        .left()
-        .clamp(0.0, f64::from(surface_w as f32))
-        .round() as u32;
-    let y = device_rect
-        .top()
-        .clamp(0.0, f64::from(surface_h as f32))
-        .round() as u32;
-    let right = device_rect
-        .right()
-        .clamp(0.0, f64::from(surface_w as f32))
-        .round() as u32;
-    let bottom = device_rect
-        .bottom()
-        .clamp(0.0, f64::from(surface_h as f32))
-        .round() as u32;
+    // The copy region covers every pixel the device rect touches, clamped to
+    // the surface (ADR-0098 §6; the rule the backdrop filter uses too).
+    let covered = flui_foundation::geometry::cover(device_rect);
+    let x = covered.left().clamp(0.0, f64::from(surface_w)) as u32;
+    let y = covered.top().clamp(0.0, f64::from(surface_h)) as u32;
+    let right = covered.right().clamp(0.0, f64::from(surface_w)) as u32;
+    let bottom = covered.bottom().clamp(0.0, f64::from(surface_h)) as u32;
 
     // Entirely off-screen after clamping → no copy possible.
     if right <= x || bottom <= y {

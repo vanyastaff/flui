@@ -2314,13 +2314,10 @@ impl Renderer {
             .damage_rect()
             .filter(|r| r.width() > 0.0 && r.height() > 0.0);
         if let Some(damage) = partial_damage {
-            // Hard: this is the damage-rect scissor, an internal repaint
-            // optimisation with pixel-aligned bounds, not a user clip whose
-            // edge anyone can see. Feathering it would blend the boundary of a
-            // region that is supposed to be an exact repaint window.
-            backend
-                .painter_mut()
-                .clip_rect(damage, flui_painting::paint::Clip::HardEdge);
+            // Covering, not hard-edged: the damage region is a repaint window,
+            // and a pixel it only partly touches has changed too. Dropping it
+            // would leave that pixel stale.
+            backend.painter_mut().clip_rect_enclosing(damage);
             tracing::trace!(
                 left = damage.left(),
                 top = damage.top(),

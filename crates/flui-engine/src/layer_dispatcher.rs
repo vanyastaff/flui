@@ -366,30 +366,18 @@ impl<'frame> LayerDispatcher<'frame> {
             )
         };
 
-        // Clamp the device rect to the surface extent. `.round()` before
-        // truncation avoids a 1-device-pixel undersize on sub-pixel boundaries
-        // (DPR ≠ 1 or fractional-offset CTMs) — the canonical clamp both paths
-        // now share (Path B previously truncated here, undersizing fractional
-        // backdrops). Edges are kept ≥ 0 by the prior `clamp`.
+        // The copy region covers every pixel the device rect touches (floor of
+        // the minimum, ceiling of the maximum, ADR-0098 §6), clamped to the
+        // surface: a partly covered pixel is still under the backdrop. Both
+        // backdrop paths share this rule.
         let surface_extent = surface_texture.size();
         let surface_w = surface_extent.width;
         let surface_h = surface_extent.height;
-        let x = device_rect
-            .left()
-            .clamp(0.0, f64::from(surface_w as f32))
-            .round() as u32;
-        let y = device_rect
-            .top()
-            .clamp(0.0, f64::from(surface_h as f32))
-            .round() as u32;
-        let right = device_rect
-            .right()
-            .clamp(0.0, f64::from(surface_w as f32))
-            .round() as u32;
-        let bottom = device_rect
-            .bottom()
-            .clamp(0.0, f64::from(surface_h as f32))
-            .round() as u32;
+        let covered = flui_foundation::geometry::cover(device_rect);
+        let x = covered.left().clamp(0.0, f64::from(surface_w)) as u32;
+        let y = covered.top().clamp(0.0, f64::from(surface_h)) as u32;
+        let right = covered.right().clamp(0.0, f64::from(surface_w)) as u32;
+        let bottom = covered.bottom().clamp(0.0, f64::from(surface_h)) as u32;
         let w = right.saturating_sub(x).max(1);
         let h = bottom.saturating_sub(y).max(1);
 

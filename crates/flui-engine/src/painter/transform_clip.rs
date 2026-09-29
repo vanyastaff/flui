@@ -103,6 +103,13 @@ impl WgpuPainter {
         self.state.clip_rect(rect, self.size);
     }
 
+    /// Intersect the current scissor with the pixels `rect` touches at all:
+    /// floor of the minimum, ceiling of the maximum (ADR-0098 §6). For bounds
+    /// that must never lose a partly covered pixel, such as a damage region.
+    pub(crate) fn clip_rect_enclosing(&mut self, rect: Rect<f64>) {
+        self.state.clip_rect_enclosing(rect, self.size);
+    }
+
     /// Intersect the clip region with a rounded rectangle.
     ///
     /// Applies a coarse bounding-rect scissor for early rasteriser rejection,
