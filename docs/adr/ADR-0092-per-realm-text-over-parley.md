@@ -2,9 +2,10 @@
 
 - **Status:** Proposed — gate 1 (§8) met by a prototype on 2026-09-26 (see Context); §10 step 1
   landed (the raster seam), and step 2a, the flui-painting half of step 2, landed
-  (`FontCollection` and `TextContext` behind `parley`, the lock lint, no production caller).
-  Step 2b, the runtime holding the collection and each realm owning a `TextContext`, is not
-  built. A passed gate is evidence, not shipped behaviour: the record is accepted section by section as the text
+  (`FontCollection` and `TextContext` behind `parley`, the lock lint). Step 2b landed:
+  `SharedEngineServices` builds the collection (one per owner thread, which is one per process
+  while [ADR-0091](ADR-0091-one-owner-thread-isolated-realms-raster-thread.md) fixes one
+  owner thread), `UiRealm::new` takes it, and each realm owns a `TextContext` over it; nothing shapes through that context until step 3. A passed gate is evidence, not shipped behaviour: the record is accepted section by section as the text
   migration lands §§1–7, and gates 2–8 bind those changes. The three supersessions below take
   effect together, when §§1–5 are accepted; a section accepted before then supersedes nothing.
 - **Date:** 2026-09-25
@@ -150,9 +151,10 @@ a style's family is resolved by FLUI's policy before shaping, whatever the shape
 
 The application owns one fontique `Collection` with `shared: true`, wrapped as
 `flui_painting::FontCollection`. Faces are only ever added, never removed or changed: the handle
-offers `register_font` and no removal, so the rule is the API's, not a convention. It is to live
-in the runtime's shared engine services (`SharedEngineServices`) and reach each realm through
-`UiRealm::new` (§10 step 2b, not built yet); no `static` holds it. Registering a font adds it to the collection and
+offers `register_font` and no removal, so the rule is the API's, not a convention. It lives in
+the runtime's shared engine services (`SharedEngineServices`, one per owner thread, which is one
+per app while ADR-0091 fixes a single owner thread) and reaches each realm through
+`UiRealm::new`; no `static` holds it. Registering a font adds it to the collection and
 raises a font-collection-changed event on every realm, which marks every text render object in
 that realm as needing layout — closing ADR-0065's named gap.
 
@@ -292,7 +294,7 @@ that wires what it adds.
    `cargo xtask reach` are green.
 2. **Per-realm text context**, in two halves that land separately: 2a in `flui-painting`
    (the types, the lint and their tests), 2b in the runtime (the bullet on shared engine
-   services and `UiRealm::new`). 2a has landed; 2b has not.
+   services and `UiRealm::new`). 2a and 2b have landed.
    - `flui_painting::FontCollection` wraps the shared fontique `Collection` (no host scan; with
      `bundled-fonts`, the bundled faces registered and the generic families bound to Roboto) and
      offers `register_font` and no removal. `TextContext`, built from it, owns Parley's
@@ -309,13 +311,19 @@ that wires what it adds.
    - *Acceptance (2a):* two contexts over one collection shape on two threads whose intervals
      overlap, with equal metrics; a face registered after both contexts exist shapes in each;
      the Parley path never builds `FONT_SYSTEM`; `cargo xtask globals` is unchanged.
-   - *Acceptance (2b):* two realms built from one set of shared engine services hold contexts
-     over the same collection (`FontCollection::ptr_eq`), and a face registered on it shapes in
-     both realms' contexts.
+   - *Acceptance (2b):* two realms built over one collection each hold one context over it
+     (`FontCollection::ptr_eq`, and a holder count of one per realm), a realm releases its
+     context when it drops, a second presentation adds none, and the realms a runner builds get
+     the runtime's collection. That a face registered on the collection shapes in every context
+     built from it is 2a's `a_face_registered_after_the_fork_shapes_in_every_realm`; with the
+     realms' contexts proven to be built from that same collection, it is not repeated at the
+     runtime level, which would need `parley` on the runtime's test build.
 3. **Layout reaches the realm's text context; registration re-lays out text.**
    - The realm lends `&mut TextContext` to each presentation's layout flush, and the box layout,
      intrinsics, dry-layout and dry-baseline contexts expose it; `TextPainter::layout` measures
-     through it behind `parley`.
+     through it behind `parley`. The realm holds the context as a plain field, while `pump` and
+     `render_frame` take `&self`; how the realm lends `&mut TextContext` from there (a `RefCell`
+     or a `&mut` threaded down) is decided in this step.
    - Registering raises a font-collection-changed event on every realm, which marks text render
      objects for layout (ADR-0065's named gap).
    - *Acceptance:* a two-realm test: a font registered through realm A re-lays out text in
@@ -378,7 +386,7 @@ that wires what it adds.
 - `FONT_SYSTEM` and `flui_painting::shared_font_system()` are deleted at §10 step 6, with
   cosmic-text, and with them the lock on every measurement and every glyph rasterization. Until
   then the bundled faces sit in both the fontique collection and `FONT_SYSTEM`.
-  From §10 step 2b `SharedEngineServices` constructs the collection; once `FONT_SYSTEM` is gone
+  Since §10 step 2b `SharedEngineServices` constructs the collection; once `FONT_SYSTEM` is gone
   it no longer forces the font scan.
 - Every capability context that measures text gains an explicit font-context handle; test
   bootstraps construct one.
@@ -406,8 +414,8 @@ that wires what it adds.
 ## Verification
 
 The gate 1 prototype exists on `spike/parley_atlas` (not merged). The raster seam, the
-same-key-twice test, and the flui-painting half of the per-realm text context (§10 step 2a)
-with its tests exist; the rest do not exist yet, including any realm that owns a context.
+same-key-twice test, and the per-realm text context (§10 step 2, both halves) with its tests
+exist; the rest do not exist yet, including any layout that measures through the context.
 
 - The raster seam, `ParleyGlyphKey`, `FontRegistry` and `SwashRasterizer` exist behind
   flui-painting's `parley` feature, with the oracle (`crates/flui-painting/tests/parley_oracle.rs`).
@@ -421,8 +429,12 @@ with its tests exist; the rest do not exist yet, including any realm that owns a
 - FLUI's text path names no `Mutex` or `RwLock`: clippy `disallowed_types` in
   `crates/flui-painting/clippy.toml`, with `FONT_SYSTEM` the one `#[expect]`ed site until §10
   step 6. fontique's own locks are outside that check (§3).
-- A realm test: two realms built from one set of shared engine services hold contexts over the
-  same collection (§10 step 2b).
+- Realm tests (§10 step 2b), in `crates/flui-runtime/src/ui_realm/tests/text_context.rs`:
+  `two_realms_hold_contexts_over_the_one_collection_they_were_given`,
+  `dropping_a_realm_releases_its_text_context` and `a_second_presentation_adds_no_text_context`;
+  in flui-app, `separate_realm_windows_shape_over_the_runtimes_font_collection` (the runner's
+  own `UiRealm::new` site) and `ensure_services_resolves_both_and_caches_them` (one collection
+  per runtime).
 - A two-realm test: registering a font in one realm makes text in the other re-lay out.
 - A registry test: a source-cache prune while the registry holds the blob keeps keys equal, and
   the test fails without the registry.
