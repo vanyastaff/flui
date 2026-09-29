@@ -417,7 +417,7 @@ use std::sync::{Arc, atomic::AtomicI32};
 
 use __TYPES_CRATE__::{CounterApp, CounterShell};
 use flui::app::{AppConfig, run_app_with_config};
-use flui::hot_reload::engine::env;
+use flui::hot_reload::{WorkerReloadHook, engine::env};
 
 /// Default worker dylib path, used when `FLUI_WORKER_PLUGIN` is unset (a bare
 /// `cargo run -p __HOST_PACKAGE__` without `flui run`).
@@ -462,7 +462,7 @@ fn main() {
     let config = AppConfig::new()
         .with_title("__NAME__")
         .with_size(480, 320)
-        .with_worker_plugin_path(worker_path);
+        .with_dev_reload(WorkerReloadHook::new(worker_path));
 
     run_app_with_config(root, config);
 

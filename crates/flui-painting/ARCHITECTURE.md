@@ -21,7 +21,7 @@ Divergences from Flutter are recorded under [Mapping decisions](#mapping-decisio
 | Recorder | `canvas/{mod,state,transform,clipping,drawing,scoped}.rs` | `Canvas`: the `dart:ui` surface, save/restore, transforms, clips, `draw_*`, and the `with_*` helpers that pair a save with its restore |
 | Wire vocabulary | `display_list/{mod,command,command_ops}.rs` | `DisplayList` (commands + cached bounds), `DrawCommand` (the closed enum `flui-engine` matches exhaustively), `DrawCommand::bounds` |
 | Text | `text_layout/{layout,font_resolve}.rs`, `text_painter/{mod,measure,paint,baseline}.rs` | The process-wide font system and `SharedFontSystem`, `TextLayout` (shape, truncate, caret/hit-test/line queries), family resolution against the host, `TextPainter` |
-| Per-realm text context | `text_layout/context.rs` (every build; shaping and registration behind `parley`) | `FontCollection` (the app's shared, add-only fontique collection) and `TextContext` (one realm's Parley font and layout contexts over it, used through `&mut`); no production caller until ADR-0092 §10 step 3 |
+| Per-realm text context | `text_layout/context.rs` (every build; shaping and registration behind `parley`) | `FontCollection` (the app's shared, add-only fontique collection) and `TextContext` (one realm's Parley font and layout contexts over it, used through `&mut`); constructed by the runtime, one context per realm; shaping has no production caller until ADR-0092 §10 step 3 |
 | Parley shaping | `parley_text/shape.rs` (`parley` feature) | `TextContext::shape`: a `ParagraphSpec` (styled spans, width, line height, direction) to a `ParagraphLayout` whose `metrics()` read the laid-out lines |
 | Parley raster side | `parley_text/{key,registry,swash}.rs` (`parley` feature) | `ParleyGlyphKey` (a face named by font blob), `FontRegistry` (faces and interned variation instances), `SwashRasterizer`; no production caller until ADR-0092 §10 step 4 |
 | Paint values | `paint/{style,path,shader,effects,image,clipping,blend_mode,canvas}.rs` | `Paint`, `Path` (with its shape hint), shaders, filters, images, clip and blend modes: the vocabulary the recorder records |
@@ -455,9 +455,10 @@ against paragraph output. Locked by `synthetic_bold_adds_the_interpolated_width`
 shapes through a `TextContext` of its own built from it. A face registered on
 the collection reaches every context built from it, including ones built
 before the registration. The collection offers no removal. This crate provides
-both types; nothing constructs them in production yet. The runtime handing the
-collection to each realm's constructor is the other half of ADR-0092 §10
-step 2, and layout measuring through the context is step 3.
+both types; the runtime constructs them (the app's shared engine services hold
+the collection, and each realm owns a context built in its constructor,
+ADR-0092 §10 step 2). Shaping through the context has no production caller
+until layout measures through it (step 3).
 
 **Flutter:** one engine-wide `FontCollection` behind `dart:ui`, reached
 ambiently by every paragraph builder in the process; `loadFontFromList` adds

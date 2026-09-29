@@ -17,9 +17,7 @@ use crate::app::close_request::CloseRequestHandler;
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-use super::host::{
-    APP_RUNTIME, runtime_needs_redraw_handle, runtime_wake_callback, with_owner_platform,
-};
+use super::host::{APP_RUNTIME, runtime_wake_callback, with_owner_platform};
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),
@@ -972,12 +970,10 @@ fn finish_open_secondary_window(
         WindowPolicy::SeparateRealms => {
             let scale_factor = window.scale_factor();
             let wake = runtime_wake_callback();
-            let ui_realm = crate::app::ui_realm::UiRealm::new(
-                Arc::clone(&wake),
+            let ui_realm = super::host::build_runtime_realm(
+                &wake,
                 super::presentation_window(Arc::clone(&host)),
                 scale_factor,
-                runtime_needs_redraw_handle(),
-                super::host::runtime_clipboard(),
             )
             .map_err(mount_error)?;
             ui_realm.set_frame_failure_detail(frame_failure_detail);

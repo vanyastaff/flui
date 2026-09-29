@@ -33,7 +33,7 @@
 //! # Deferred, and named
 //!
 //! `ActionDispatcher` as a replaceable object, `Action.addActionListener`,
-//! `Actions.handler` and `DoNothingAction` (write `CallbackAction::new(|_| ())`
+//! `Actions.handler` and `DoNothingAction` (write `CallbackAction::new(|_cx, _| ())`
 //! until the propagation-control use case arrives). A `Shortcuts` resolves
 //! from the primary focus's position, the chain each `Focus` records on its
 //! node (ADR-0079).
@@ -46,6 +46,9 @@ use flui_interaction::routing::{FocusManager, FocusNode, KeyEventResult, NodeCon
 use flui_view::element::ElementKind;
 use flui_view::impl_inherited_view;
 use flui_view::prelude::*;
+use flui_view::{EventCx, EventOutcome};
+
+use crate::support::{RefCallback, ref_callback};
 
 /// A marker for "something the user wants to happen" — Flutter's `Intent`
 /// (`actions.dart:64`). Carries the operation's parameters; an [`Action`]
@@ -95,10 +98,12 @@ pub trait Action<T: Intent> {
         true
     }
 
-    /// Perform the operation (`:354`). The [`ActionOutcome`] reaches the key
-    /// path through [`to_key_event_result`](Self::to_key_event_result); a
-    /// direct `Actions::maybe_invoke` caller may ignore it.
-    fn invoke(&self, intent: &T) -> ActionOutcome;
+    /// Perform the operation (`:354`) inside the dispatch that resolved it:
+    /// `cx` is the key event's [`EventCx`], so an action writes signals the
+    /// same way every other event callback does (ADR-0086). The
+    /// [`ActionOutcome`] reaches the key path through
+    /// [`to_key_event_result`](Self::to_key_event_result).
+    fn invoke(&self, cx: &mut EventCx<'_>, intent: &T) -> ActionOutcome;
 
     /// What a key event that invoked this action reports —
     /// `Action.toKeyEventResult` (`actions.dart:312-314`).
@@ -123,15 +128,34 @@ pub trait Action<T: Intent> {
 
 /// An [`Action`] from a closure — Flutter's `CallbackAction<T>`
 /// (`actions.dart:606`).
+///
+/// The closure receives the key event's [`EventCx`] and the intent, and may
+/// return `()` or a `Result` whose refusal is reported at the dispatch
+/// boundary (ADR-0086):
+///
+/// ```rust
+/// # use flui_view::{Signal, SignalWriteExt};
+/// # use flui_widgets::{CallbackAction, Intent};
+/// struct SaveIntent;
+/// impl Intent for SaveIntent {}
+///
+/// fn save_action(saves: Signal<u32>) -> CallbackAction<SaveIntent> {
+///     CallbackAction::new(move |cx, _: &SaveIntent| saves.update(cx, |n| *n += 1))
+/// }
+/// ```
 pub struct CallbackAction<T: Intent> {
-    on_invoke: Rc<dyn Fn(&T)>,
+    on_invoke: RefCallback<T>,
 }
 
 impl<T: Intent> CallbackAction<T> {
     /// An always-enabled, key-consuming action calling `on_invoke`.
-    pub fn new(on_invoke: impl Fn(&T) + 'static) -> Self {
+    pub fn new<F, R>(on_invoke: F) -> Self
+    where
+        F: for<'a> Fn(&mut EventCx<'_>, &'a T) -> R + 'static,
+        R: EventOutcome,
+    {
         Self {
-            on_invoke: Rc::new(on_invoke),
+            on_invoke: ref_callback(on_invoke),
         }
     }
 }
@@ -145,8 +169,8 @@ impl<T: Intent> std::fmt::Debug for CallbackAction<T> {
 }
 
 impl<T: Intent> Action<T> for CallbackAction<T> {
-    fn invoke(&self, intent: &T) -> ActionOutcome {
-        (self.on_invoke)(intent);
+    fn invoke(&self, cx: &mut EventCx<'_>, intent: &T) -> ActionOutcome {
+        (self.on_invoke)(cx, intent);
         ActionOutcome::Performed
     }
 }
@@ -161,7 +185,7 @@ impl<T: Intent> Action<T> for CallbackAction<T> {
 /// A predicate over an erased intent (`is_enabled`).
 type ErasedPredicate = Rc<dyn Fn(&dyn Any) -> bool>;
 /// The erased `invoke`, carrying its outcome back out.
-type ErasedInvoke = Rc<dyn Fn(&dyn Any) -> ActionOutcome>;
+type ErasedInvoke = Rc<dyn Fn(&mut EventCx<'_>, &dyn Any) -> ActionOutcome>;
 /// The erased `to_key_event_result`.
 type ErasedKeyResult = Rc<dyn Fn(&dyn Any, ActionOutcome) -> KeyEventResult>;
 
@@ -189,7 +213,9 @@ impl ErasedAction {
         let key_result_action = Rc::clone(&action);
         Self {
             is_enabled: Rc::new(move |intent| enabled_action.is_enabled(typed::<T>(intent))),
-            invoke: Rc::new(move |intent| action.invoke(typed::<T>(intent))),
+            invoke: Rc::new(move |cx: &mut EventCx<'_>, intent: &dyn Any| {
+                action.invoke(cx, typed::<T>(intent))
+            }),
             to_key_event_result: Rc::new(move |intent, outcome| {
                 key_result_action.to_key_event_result(typed::<T>(intent), outcome)
             }),
@@ -200,14 +226,11 @@ impl ErasedAction {
         (self.is_enabled)(intent)
     }
 
-    pub(crate) fn invoke(&self, intent: &dyn Any) -> ActionOutcome {
-        (self.invoke)(intent)
-    }
-
-    /// Invoke, then report what the key dispatch should do — **one** call, so
-    /// the key result cannot disagree with what actually ran.
-    pub(crate) fn invoke_for_key(&self, intent: &dyn Any) -> KeyEventResult {
-        let outcome = (self.invoke)(intent);
+    /// Invoke inside the key event's dispatch, then report what the key
+    /// dispatch should do — **one** call, so the key result cannot disagree
+    /// with what actually ran.
+    pub(crate) fn invoke_for_key(&self, cx: &mut EventCx<'_>, intent: &dyn Any) -> KeyEventResult {
+        let outcome = (self.invoke)(cx, intent);
         (self.to_key_event_result)(intent, outcome)
     }
 }
@@ -243,9 +266,10 @@ pub(crate) fn resolve<'c>(chain: &'c ActionChain, intent: &dyn Any) -> Option<&'
 /// intent's type — enabled or not — exactly as Flutter's ancestor walk
 /// resolves and its own doc states (`:1032-1044`, `:993-995`): a disabled
 /// nearer mapping is not skipped in favor of an enclosing scope's mapping for
-/// the same type. Invoke with [`Actions::maybe_invoke`] from build-time code,
-/// or let a [`Shortcuts`](crate::Shortcuts) dispatch into it from the
-/// keyboard.
+/// the same type. A [`Shortcuts`](crate::Shortcuts) dispatches into it from
+/// the keyboard, handing the action the key event's [`EventCx`]. There is no
+/// `Actions.maybeInvoke`: the only place it could be called from is `build`,
+/// which has no event context (ADR-0086).
 #[derive(Clone)]
 pub struct Actions {
     own: Vec<(TypeId, ErasedAction)>,
@@ -269,23 +293,6 @@ impl Actions {
     pub fn action<T: Intent>(mut self, action: impl Action<T> + 'static) -> Self {
         self.own.push(erased_action(action));
         self
-    }
-
-    /// Resolve `intent`'s type to its nearest declaring scope's action and, if
-    /// enabled, invoke it. Returns whether one ran. Flutter's
-    /// `Actions.maybeInvoke` (`actions.dart:1032-1044`), minus the result
-    /// value (dropped on the key path anyway, `:348-349`).
-    pub fn maybe_invoke<T: Intent>(ctx: &dyn BuildContext, intent: &T) -> bool {
-        let Some(chain) = ambient_action_chain(ctx) else {
-            return false;
-        };
-        match resolve(&chain, intent) {
-            Some(action) => {
-                action.invoke(intent);
-                true
-            }
-            None => false,
-        }
     }
 }
 
@@ -458,7 +465,7 @@ impl NextFocusAction {
 }
 
 impl Action<NextFocusIntent> for NextFocusAction {
-    fn invoke(&self, _intent: &NextFocusIntent) -> ActionOutcome {
+    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &NextFocusIntent) -> ActionOutcome {
         if self.focus_manager.focus_next() {
             ActionOutcome::Performed
         } else {
@@ -484,7 +491,7 @@ impl PreviousFocusAction {
 }
 
 impl Action<PreviousFocusIntent> for PreviousFocusAction {
-    fn invoke(&self, _intent: &PreviousFocusIntent) -> ActionOutcome {
+    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &PreviousFocusIntent) -> ActionOutcome {
         if self.focus_manager.focus_previous() {
             ActionOutcome::Performed
         } else {

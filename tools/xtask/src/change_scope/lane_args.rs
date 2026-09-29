@@ -598,10 +598,13 @@ mod tests {
             [Lane::Docs, Lane::Tooling, Lane::Fast, Lane::Wide]
         );
         // feature-gated edges into many dependents need feature-matrix
-        assert_eq!(pr_lane(&["crates/flui-view/src/lib.rs"], false), Lane::Wide);
+        assert_eq!(
+            pr_lane(&["crates/flui-layer/src/lib.rs"], false),
+            Lane::Wide
+        );
         let a = plan_args(
             repo(),
-            &scope(&["crates/flui-view/src/lib.rs"]),
+            &scope(&["crates/flui-layer/src/lib.rs"]),
             Event::PullRequest,
             false,
         )
@@ -745,7 +748,7 @@ mod tests {
 
     #[test]
     fn many_feature_gated_dependents_take_the_wide_lane() {
-        let a = args(&["crates/flui-view/src/lib.rs"]);
+        let a = args(&["crates/flui-layer/src/lib.rs"]);
         assert!(a.heavy_required);
         assert_eq!(a.lane, Lane::Wide);
         assert!(a.reason.contains("feature-matrix"));

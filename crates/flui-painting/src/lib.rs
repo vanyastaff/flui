@@ -81,10 +81,10 @@ pub mod table_border;
 pub mod text_layout;
 pub mod text_painter;
 
-// The Parley path: paragraph shaping and the raster side (ADR-0092 §10 step 1 and
-// step 2's flui-painting half). No production caller yet: the runtime building a
-// `FontCollection` and giving each realm a `TextContext` is step 2's other half,
-// and layout measuring through that context is step 3.
+// The Parley path: paragraph shaping and the raster side (ADR-0092 §10 steps 1
+// and 2). The runtime builds the app's `FontCollection` and each realm owns a
+// `TextContext` over it, but nothing shapes through that context until layout
+// measures with it (step 3).
 #[cfg(feature = "parley")]
 pub mod parley_text;
 

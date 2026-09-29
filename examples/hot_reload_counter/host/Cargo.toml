@@ -12,8 +12,11 @@ name = "hot-reload-counter-host"
 path = "src/main.rs"
 
 [dependencies]
-flui-app = { path = "../../../crates/flui-app", features = ["hot-reload"] }
-flui-hot-reload = { path = "../../../crates/flui-hot-reload", features = ["app-plugin"] }
+flui-app = { path = "../../../crates/flui-app" }
+flui-hot-reload = { path = "../../../crates/flui-hot-reload", features = [
+    "app-plugin",
+    "host-hook",
+] }
 hot-reload-counter-types = { path = "../types" }
 tracing = { workspace = true }
 
