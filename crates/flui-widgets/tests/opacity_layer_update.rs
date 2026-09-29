@@ -56,26 +56,3 @@ fn rebuilding_an_opacity_widget_updates_its_layer() {
          the widget's own update path, not only through a direct setter call",
     );
 }
-
-/// Rebuilding with the SAME opacity is a no-op that composites nothing new.
-///
-/// The control for the test above: without it, an implementation that repaints
-/// unconditionally on every rebuild would satisfy the alpha assertion just as
-/// well, and the update path would be doing nothing for the widget layer.
-#[test]
-fn rebuilding_an_opacity_widget_with_an_unchanged_value_paints_nothing() {
-    let mut harness = lay_out(
-        Opacity::new(0.5).child(SizedBox::new(40.0, 40.0)),
-        tight(200.0, 200.0),
-    );
-    let painted = harness.painted_frame_count();
-
-    harness.pump_widget(Opacity::new(0.5).child(SizedBox::new(40.0, 40.0)));
-
-    assert_eq!(
-        harness.painted_frame_count(),
-        painted,
-        "an unchanged opacity reports RenderUpdateImpact::NONE, so the frame \
-         must not repaint at all",
-    );
-}

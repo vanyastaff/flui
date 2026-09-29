@@ -2259,7 +2259,6 @@ dependencies = [
  "dispatch2",
  "dpi",
  "flui-foundation",
- "flui-painting",
  "flui-platform-api",
  "flui-semantics",
  "keyboard-types",

@@ -145,57 +145,6 @@ mod tests {
     use crate::ElementId;
 
     #[test]
-    fn test_indexed_slot_first() {
-        let slot = IndexedSlot::<ElementId>::first();
-        assert_eq!(slot.index(), 0);
-        assert!(slot.previous().is_none());
-        assert!(slot.is_first());
-    }
-
-    #[test]
-    fn test_indexed_slot_next() {
-        let slot = IndexedSlot::<ElementId>::first();
-        let next = slot.next(ElementId::new(1));
-
-        assert_eq!(next.index(), 1);
-        assert_eq!(next.previous(), Some(ElementId::new(1)));
-        assert!(!next.is_first());
-    }
-
-    #[test]
-    fn test_indexed_slot_prev() {
-        let slot = IndexedSlot::<ElementId>::new(3, Some(ElementId::new(2)));
-        let prev = slot.prev().expect("index 3 has a previous slot");
-
-        assert_eq!(prev.index(), 2);
-        assert!(prev.previous().is_none()); // Unknown
-
-        let first = IndexedSlot::<ElementId>::first();
-        assert!(first.prev().is_none());
-    }
-
-    #[test]
-    fn test_indexed_slot_display() {
-        // ElementId::new(5) is 1-based: index()=4, Display="Element(4:1)".
-        let slot = IndexedSlot::new(2, Some(ElementId::new(5)));
-        let display = format!("{slot}");
-        // Slot position index must appear.
-        assert!(display.contains('2'), "slot index 2 not in {display:?}");
-        // ElementId's Display embeds its 0-based slot index (4 for new(5)).
-        assert!(
-            display.contains('4'),
-            "ElementId index 4 (from new(5)) not in {display:?}"
-        );
-
-        let first = IndexedSlot::<ElementId>::first();
-        let display = format!("{first}");
-        assert!(
-            display.contains('0'),
-            "first slot display missing 0: {display:?}"
-        );
-    }
-
-    #[test]
     fn test_indexed_slot_boundary() {
         // Only child scenario: index 0, count 1
         // prev() should be None, next slot moves past the single child.

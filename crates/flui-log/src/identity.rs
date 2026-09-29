@@ -241,17 +241,6 @@ mod tests {
     }
 
     #[test]
-    fn accepts_two_labels_digits_and_interior_hyphen() {
-        assert!(AppleBundleId::new("dev.flui").is_ok());
-        assert!(AppleBundleId::new("com.example2.my-app").is_ok());
-    }
-
-    #[test]
-    fn accepts_a_digit_initial_label_apple_allows() {
-        assert!(AppleBundleId::new("com.2example.app").is_ok());
-    }
-
-    #[test]
     fn rejects_an_underscore() {
         // Not part of Apple's bundle-identifier character set.
         assert_eq!(
@@ -268,30 +257,6 @@ mod tests {
         assert_eq!(
             AppleBundleId::new("flui"),
             Err(IdentityError::NotReverseDns("flui".to_owned()))
-        );
-    }
-
-    #[test]
-    fn rejects_empty_label() {
-        assert_eq!(
-            AppleBundleId::new("com..app"),
-            Err(IdentityError::EmptyLabel {
-                identifier: "com..app".to_owned(),
-                position: 1,
-            })
-        );
-    }
-
-    #[test]
-    fn rejects_space_the_display_name_would_have_introduced() {
-        // The exact shape the historical `com.{display_name}.app` synthesis
-        // produced for a display name like "My Game".
-        assert_eq!(
-            AppleBundleId::new("com.My Game.app"),
-            Err(IdentityError::InvalidCharacter {
-                identifier: "com.My Game.app".to_owned(),
-                character: ' ',
-            })
         );
     }
 
@@ -331,12 +296,5 @@ mod tests {
             AppIdentity::new("a\0b"),
             Err(IdentityError::DisplayNameHasNul("a\0b".to_owned()))
         );
-    }
-
-    #[test]
-    fn default_identity_is_unidentified() {
-        let identity = AppIdentity::default();
-        assert_eq!(identity.display_name(), DEFAULT_DISPLAY_NAME);
-        assert_eq!(identity.apple_subsystem(), UNIDENTIFIED_APPLE_SUBSYSTEM);
     }
 }

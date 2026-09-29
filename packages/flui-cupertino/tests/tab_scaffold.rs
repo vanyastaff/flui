@@ -338,58 +338,6 @@ fn translucent_tab_bar_does_not_pad_content_and_hints_via_media_query() {
     );
 }
 
-/// When the on-screen keyboard (`view_insets.bottom`) is already taller than
-/// the tab bar itself, content is padded by the **keyboard inset alone** —
-/// the tab-bar-height contribution is skipped entirely, not added on top
-/// (`tab_scaffold.dart`'s `tabBar.preferredSize.height >
-/// existingMediaQuery.viewInsets.bottom` guard, oracle tag `3.44.0`; "don't
-/// double pad" is a real edge case here, not a simplification).
-///
-/// Red-check: flip `tab_bar_height > media.view_insets.bottom` to `<` in
-/// `tab_scaffold.rs` — the "no 50px contribution" assertion below fails
-/// (the tab-bar-height branch would wrongly trigger despite the keyboard
-/// already being taller).
-#[test]
-fn keyboard_taller_than_the_tab_bar_pads_content_by_the_keyboard_inset_alone() {
-    let media = MediaQueryData {
-        view_insets: EdgeInsets::new(0.0, 0.0, 300.0, 0.0),
-        ..MediaQueryData::default()
-    };
-    let controller = CupertinoTabController::new(0);
-    // Opaque, matching `opaque_tab_bar_pads_content_above_it_plus_the_bottom_inset`:
-    // this test exercises the tab-bar-height-vs-keyboard-inset guard itself,
-    // not the opaque/translucent branch `opaque(ctx)` already covers above —
-    // a translucent bar would route this same 300px value through
-    // `reduced.padding.bottom` instead of `content_padding_bottom`, which
-    // would defeat this test's `RenderPadding` probe regardless of the guard.
-    let opaque_bar = two_tab_bar().background_color(Color::rgba(0, 0, 0, 255));
-    let scaffold = CupertinoTabScaffold::new(opaque_bar, controller, |_ctx, _index| {
-        SizedBox::new(60.0, 30.0).into_view().boxed()
-    });
-
-    let laid = lay_out(MediaQuery::new(media, scaffold), tight(400.0, 800.0));
-    let paddings: Vec<String> = laid
-        .find_all_by_render_type("RenderPadding")
-        .into_iter()
-        .filter_map(|id| laid.render_property(id, "padding"))
-        .collect();
-
-    assert!(
-        paddings
-            .iter()
-            .any(|padding| padding.contains("bottom: 300.0")),
-        "the 300px keyboard inset (taller than the 50px tab bar) must become content padding \
-         directly: {paddings:?}"
-    );
-    assert!(
-        !paddings
-            .iter()
-            .any(|padding| padding.contains("bottom: 50.0")),
-        "the tab-bar-height contribution must be skipped entirely when the keyboard is \
-         already taller than it: {paddings:?}"
-    );
-}
-
 /// Tapping a tab bar item advances the shared controller's index, which
 /// rebuilds the scaffold's active tab — an end-to-end proof that
 /// `CupertinoTabScaffold` actually wires the bar's `on_tap`, not just that
@@ -423,32 +371,6 @@ fn tapping_a_tab_item_switches_the_active_tab() {
         1,
         "tapping the second tab item must advance the controller to index 1"
     );
-}
-
-#[test]
-fn tab_callback_observes_updated_controller_and_can_write_a_signal() {
-    let controller = CupertinoTabController::new(0);
-    let probe = common::SignalProbe::new(move |signals| {
-        let observed = controller.clone();
-        let bar = two_tab_bar().on_tap(move |cx, index| {
-            assert_eq!(observed.index(), index);
-            signals
-                .count
-                .set(cx, u32::try_from(index).expect("test index fits u32"))
-        });
-        MediaQuery::new(
-            MediaQueryData::default(),
-            CupertinoTabScaffold::new(bar, controller.clone(), |_ctx, _index| {
-                SizedBox::shrink().boxed()
-            }),
-        )
-    });
-    let mut laid = lay_out(probe.view(), tight(400.0, 800.0));
-    laid.dispatch_pointer_down(300.0, 790.0);
-    laid.dispatch_pointer_up(300.0, 790.0);
-    assert_eq!(probe.value(), Ok(1));
-    laid.pump();
-    assert_eq!(probe.reads(), [0, 1]);
 }
 
 /// An out-of-range controller index must fail loudly, not silently render

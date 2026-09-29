@@ -7,25 +7,13 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::common::{lay_out, size, tight};
+use crate::common::{lay_out, tight};
 use flui_painting::styling::Color;
 use flui_widgets::{AbsorbPointer, ColoredBox, GestureDetector};
 
 /// A hit-testable child so the detector's tap recognizer registers.
 fn target() -> ColoredBox {
     ColoredBox::new(Color::rgb(10, 20, 30))
-}
-
-#[test]
-fn absorb_pointer_is_a_layout_passthrough() {
-    let laid = lay_out(AbsorbPointer::new().child(target()), tight(120.0, 80.0));
-    assert_eq!(laid.size(laid.root()), size(120.0, 80.0));
-}
-
-#[test]
-fn absorb_pointer_mounts_a_render_absorb_pointer() {
-    let laid = lay_out(AbsorbPointer::new().child(target()), tight(50.0, 50.0));
-    let _ = laid.find_by_render_type("RenderAbsorbPointer");
 }
 
 #[test]

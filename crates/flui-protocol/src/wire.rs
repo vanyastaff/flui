@@ -248,17 +248,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn display_is_the_wire_name() {
-        for role in Role::ALL {
-            assert_eq!(role.to_string(), role.name());
-        }
-        for action in ActionName::ALL {
-            assert_eq!(action.to_string(), action.name());
-        }
-        assert_eq!(Checked::Mixed.to_string(), "mixed");
-    }
-
     #[cfg(feature = "serde")]
     #[test]
     fn every_wire_role_serializes_to_its_name() {

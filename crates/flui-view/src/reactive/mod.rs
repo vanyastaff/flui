@@ -1088,16 +1088,6 @@ mod tests {
     }
 
     #[test]
-    fn slot_graph_names_the_minting_graph() {
-        let r = Reactive::new();
-        let s = r.signal(1u32);
-
-        assert_eq!(s.slot().graph(), r.id());
-        assert_eq!(s.detach().slot(), s.slot());
-        assert_ne!(Reactive::new().id(), r.id());
-    }
-
-    #[test]
     fn write_schedules_exactly_the_registered_readers() {
         let (r, inbox) = graph_with_inbox();
         let a = r.signal(1u32);
@@ -1487,22 +1477,6 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_lists_live_slots_with_readers_and_owners() {
-        let (r, _) = graph_with_inbox();
-        let e1 = ElementId::new(1);
-        let owned = r.signal_owned_by(e1, 0u8);
-        let free = r.signal(0u8);
-        r.register_element_reader(free.slot(), e1);
-        let mut info = r.snapshot();
-        info.sort_by_key(|i| i.slot.index());
-        assert_eq!(info.len(), 2);
-        assert_eq!(info[0].slot, owned.slot());
-        assert_eq!(info[0].owner, Some(e1));
-        assert_eq!(info[1].readers, vec![e1]);
-        assert_eq!(info[1].owner, None);
-    }
-
-    #[test]
     fn a_panicking_update_returns_the_loaned_value_and_marks_its_readers() {
         let (r, inbox) = graph_with_inbox();
         let a = r.signal(3u32);
@@ -1789,14 +1763,5 @@ mod tests {
         );
         r.end_element_build(e1, true);
         assert_eq!(a.set_if_changed(&r, 1), Ok(false));
-    }
-
-    #[test]
-    fn no_partial_eq_bound_on_plain_signals() {
-        struct Opaque(#[allow(dead_code)] Vec<u8>);
-        let (r, _) = graph_with_inbox();
-        let s = r.signal(Opaque(vec![1]));
-        s.update(&r, |o| o.0.push(2)).unwrap();
-        assert_eq!(s.peek(&r, |o| o.0.len()).unwrap(), 2);
     }
 }

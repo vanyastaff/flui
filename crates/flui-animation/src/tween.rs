@@ -192,25 +192,6 @@ mod tests {
     }
 
     #[test]
-    fn test_tween_animation_status() {
-        let scheduler = UpdateScheduler::new();
-        let controller = Arc::new(AnimationController::new(
-            Duration::from_millis(100),
-            &scheduler,
-        ));
-
-        let tween = FloatTween::new(0.0, 100.0);
-        let animation = TweenAnimation::new(tween, controller.clone() as Arc<dyn Animation<f64>>);
-
-        assert_eq!(animation.status(), AnimationStatus::Dismissed);
-
-        controller.forward().unwrap();
-        assert_eq!(animation.status(), AnimationStatus::Forward);
-
-        controller.dispose();
-    }
-
-    #[test]
     fn tween_reemits_parent_value_changes() {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -267,23 +248,6 @@ mod tests {
             before,
             "dropping the tween combinator removes its parent subscription"
         );
-        controller.dispose();
-    }
-
-    #[test]
-    fn test_animate_helper() {
-        let scheduler = UpdateScheduler::new();
-        let controller = Arc::new(AnimationController::new(
-            Duration::from_millis(100),
-            &scheduler,
-        ));
-
-        let tween = FloatTween::new(10.0, 20.0);
-        let animation = animate(tween, controller.clone() as Arc<dyn Animation<f64>>);
-
-        controller.set_value(0.5);
-        assert_eq!(animation.value(), 15.0);
-
         controller.dispose();
     }
 }

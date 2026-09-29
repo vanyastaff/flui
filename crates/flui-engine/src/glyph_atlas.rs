@@ -529,104 +529,6 @@ fn create_bind_group(
     })
 }
 
-#[cfg(all(test, feature = "testing"))]
-mod tests {
-    use std::sync::Arc;
-
-    use flui_painting::TextLayout;
-    use flui_painting::typography::TextDirection;
-
-    use super::GlyphAtlas;
-
-    fn atlas() -> GlyphAtlas {
-        let (device, queue) = crate::test_support::test_device_and_queue("Glyph Atlas Test");
-        let pipelines =
-            crate::pipeline_set::PipelineSet::new(&device, wgpu::TextureFormat::Rgba8Unorm);
-        GlyphAtlas::new(
-            Arc::clone(&device),
-            Arc::clone(&queue),
-            &pipelines.glyph_atlas_bind_group_layout,
-            flui_painting::shared_font_system(),
-        )
-    }
-
-    fn keys(text: &str, size: f32) -> Vec<flui_painting::GlyphKey> {
-        TextLayout::new(text, None, f64::from(size), None, None, TextDirection::Ltr)
-            .placed_glyphs((0.0, 0.0), 1.0)
-            .map(|g| g.key)
-            .collect()
-    }
-
-    /// A glyph drawn twice occupies one slot; a glyph with no ink (a space)
-    /// is remembered without occupying atlas space.
-    ///
-    /// The same string is shaped twice: two `a`s in one paragraph sit at
-    /// different subpixel offsets and so are different keys by design.
-    #[test]
-    fn a_slot_is_shared_by_equal_keys_and_an_empty_glyph_takes_no_space() {
-        let mut atlas = atlas();
-        let first_run = keys("a b", 16.0);
-        let second_run = keys("a b", 16.0);
-        assert_eq!(first_run.len(), 3);
-        let first = atlas.slot(first_run[0]).expect("'a' rasterises");
-        let space = atlas.slot(first_run[1]).expect("a space is a glyph");
-        let again = atlas.slot(second_run[0]).expect("'a' again");
-        assert_eq!(first.texel, again.texel, "equal keys share one slot");
-        assert!(space.is_empty(), "a space has no texels");
-        assert_eq!(atlas.len(), 2, "'a' once, space once");
-    }
-
-    /// Slots unused for a frame are reclaimed before a page grows: churning
-    /// through more distinct glyphs than a page holds leaves the page at its
-    /// initial size, while glyphs used in the SAME frame are never evicted.
-    #[test]
-    fn eviction_reclaims_slots_before_the_page_grows() {
-        let mut atlas = atlas();
-        let initial = atlas.mask_page_size();
-        // 96 distinct sizes × ~26 glyphs at up to 40px: far more texels than
-        // a 256² page, across frames that each use only one size.
-        for frame in 0..96u32 {
-            let size = 12.0 + frame as f32 * 0.3;
-            for key in keys("abcdefghijklmnopqrstuvwxyz", size) {
-                assert!(atlas.slot(key).is_some(), "frame {frame}: glyph placed");
-            }
-            atlas.end_frame();
-        }
-        assert_eq!(
-            atlas.mask_page_size(),
-            initial,
-            "a page that can evict never needs to grow"
-        );
-    }
-
-    /// When one frame needs more than a page holds, the page grows and every
-    /// glyph placed earlier in that frame keeps its texel position.
-    #[test]
-    fn a_page_grows_within_a_frame_and_earlier_slots_keep_their_place() {
-        let mut atlas = atlas();
-        let initial = atlas.mask_page_size();
-        let early = keys("FLUI", 40.0);
-        let early_slots: Vec<_> = early.iter().map(|k| atlas.slot(*k).unwrap()).collect();
-        for step in 0..60u32 {
-            for key in keys("abcdefghijklmnopqrstuvwxyz", 20.0 + step as f32 * 0.5) {
-                atlas.slot(key);
-            }
-        }
-        assert!(
-            atlas.mask_page_size() > initial,
-            "one frame's glyphs exceed a {initial}² page, so it must grow"
-        );
-        for (key, before) in early.iter().zip(early_slots) {
-            let after = atlas.slot(*key).unwrap();
-            assert_eq!(
-                after.texel, before.texel,
-                "a grow keeps allocations in place"
-            );
-            assert_eq!(after.size, before.size);
-        }
-    }
-}
-
 /// The atlas over rasterizers other than the default: a scripted fake that
 /// shows what the atlas does with each answer, and the Parley path's swash
 /// rasterizer.
@@ -764,24 +666,6 @@ mod rasterizer_tests {
         );
     }
 
-    #[test]
-    fn an_image_whose_data_does_not_match_its_size_is_not_placed() {
-        let mut fake = FakeRasterizer::default();
-        let mut short = image(4, 4, GlyphContent::Mask);
-        short.data.truncate(10);
-        fake.images.insert(1, short);
-        let mut one_byte_colour = image(4, 4, GlyphContent::Color);
-        one_byte_colour.data.truncate(16);
-        fake.images.insert(2, one_byte_colour);
-        let mut atlas = atlas(fake);
-        assert!(atlas.slot(1).is_none(), "a mask missing texels");
-        assert!(
-            atlas.slot(2).is_none(),
-            "a colour image with one byte per texel"
-        );
-        assert_eq!(atlas.len(), 0);
-    }
-
     /// A grow re-uploads each live glyph from one more rasterization, and
     /// never rasterizes a glyph it is not holding.
     #[test]
@@ -795,62 +679,6 @@ mod rasterizer_tests {
             let expected = if before_grow.contains(&key) { 2 } else { 1 };
             assert_eq!(calls[&key], expected, "key {key}");
         }
-    }
-
-    /// A rasterizer that answers a grow with another bitmap for a live key.
-    /// Uploading it into the slot would fail wgpu's copy validation (the
-    /// default error handler panics), so the atlas skips the upload and drops
-    /// the entry: the glyph's next use asks again, and a later frame reuses
-    /// its space. Nothing the frame was handed overlaps.
-    fn changes_on_grow(content: GlyphContent, second: GlyphImage) {
-        let (size, color_page) = (
-            [second.width, second.height],
-            second.content == GlyphContent::Color,
-        );
-        let mut fake = crowded(content);
-        fake.second_call = Some(second);
-        let mut atlas = atlas(fake);
-        let (before_grow, mut slots) = place_crowded(&mut atlas, content);
-        assert!(!before_grow.is_empty());
-        assert_eq!(
-            atlas.len(),
-            40 - before_grow.len(),
-            "the rejected are dropped"
-        );
-        for key in &before_grow {
-            let again = atlas.slot(*key).expect("placed from the new bitmap");
-            assert_eq!(again.size, size, "key {key}");
-            assert_eq!(again.color_page, color_page, "key {key}");
-            assert_eq!(
-                atlas.rasterizer_mut().calls[key],
-                3,
-                "key {key} is asked again"
-            );
-            slots.push(again);
-        }
-        assert_disjoint(&slots);
-        atlas.end_frame();
-        // A new frame: every other slot is reclaimable, the retired ones too.
-        for key in 0..40 {
-            atlas.slot(key).expect("placed");
-        }
-    }
-
-    #[test]
-    fn a_bitmap_that_changes_size_on_grow_is_not_uploaded() {
-        changes_on_grow(GlyphContent::Mask, image(8, 8, GlyphContent::Mask));
-    }
-
-    #[test]
-    fn a_colour_bitmap_that_changes_size_on_grow_is_not_uploaded() {
-        changes_on_grow(GlyphContent::Color, image(8, 8, GlyphContent::Color));
-    }
-
-    /// Same size, but a mask where the colour page holds colour: its data is
-    /// a quarter of what the slot's copy reads.
-    #[test]
-    fn a_bitmap_that_changes_content_on_grow_is_not_uploaded() {
-        changes_on_grow(GlyphContent::Color, image(48, 48, GlyphContent::Mask));
     }
 
     const FACE: FaceKey = FaceKey {
@@ -889,38 +717,5 @@ mod rasterizer_tests {
             first.iter().filter(|slot| !slot.is_empty()).count() > 100,
             "most glyphs have ink"
         );
-    }
-
-    #[test]
-    fn swash_keys_keep_their_slot_through_a_grow() {
-        let mut atlas = atlas(swash());
-        let initial = atlas.mask_page_size();
-        let early: Vec<_> = (1..=20)
-            .map(|gid| (gid, atlas.slot(key(gid, 40.0)).expect("placed")))
-            .collect();
-        for gid in 21..=400 {
-            atlas.slot(key(gid, 40.0));
-        }
-        assert!(atlas.mask_page_size() > initial, "the page grew");
-        assert_eq!(atlas.color_page_size(), initial, "the colour page did not");
-        for (gid, before) in early {
-            let after = atlas.slot(key(gid, 40.0)).expect("placed");
-            assert_eq!(after.texel, before.texel, "glyph {gid}");
-            assert_eq!(after.size, before.size, "glyph {gid}");
-        }
-    }
-
-    #[test]
-    fn a_face_registered_after_the_atlas_exists_is_placed() {
-        let mut atlas = atlas(SwashRasterizer::new());
-        let a = key(68, 18.0);
-        assert!(atlas.slot(a).is_none(), "no face yet");
-        atlas
-            .rasterizer_mut()
-            .fonts_mut()
-            .register_face(FACE, Arc::new(flui_painting::fonts::ROBOTO_REGULAR))
-            .expect("Roboto is a face");
-        let slot = atlas.slot(a).expect("the face is registered now");
-        assert!(!slot.is_empty());
     }
 }

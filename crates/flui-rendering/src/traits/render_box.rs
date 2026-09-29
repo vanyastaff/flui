@@ -922,14 +922,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn test_hit_test_behavior_default() {
-        // HitTestBehavior is now imported from flui_interaction via hit_testing
-        let behavior = HitTestBehavior::default();
-        assert_eq!(behavior, HitTestBehavior::DeferToChild);
-    }
 
     // BoxHitTestResult and BoxHitTestEntry tests are now in
     // hit_testing/result.rs

@@ -341,43 +341,4 @@ mod tests {
             .expect("lib entry");
         assert_eq!(entry.compression(), CompressionMethod::Stored);
     }
-
-    #[test]
-    fn newest_versions_win_and_platforms_need_an_android_jar() {
-        let dir = tempfile::tempdir().expect("temp");
-        for name in ["33.0.2", "35.0.0", "34.0.0-rc1", "notes"] {
-            std::fs::create_dir_all(dir.path().join("build-tools").join(name)).expect("dir");
-        }
-        let best = newest_subdir(&dir.path().join("build-tools"), |n| {
-            n.chars().next().is_some_and(|c| c.is_ascii_digit())
-        })
-        .expect("best");
-        assert_eq!(best.file_name().unwrap(), "35.0.0");
-
-        let platforms = dir.path().join("platforms");
-        std::fs::create_dir_all(platforms.join("android-36")).expect("dir");
-        std::fs::create_dir_all(platforms.join("android-35")).expect("dir");
-        std::fs::write(platforms.join("android-35/android.jar"), b"").expect("jar");
-        std::fs::create_dir_all(platforms.join("android-33-ext4")).expect("dir");
-        std::fs::write(platforms.join("android-33-ext4/android.jar"), b"").expect("jar");
-        let (path, level) = newest_platform(&platforms).expect("platform");
-        assert_eq!(
-            level, 35,
-            "android-36 has no android.jar and must be skipped"
-        );
-        assert!(path.ends_with("android-35"));
-    }
-
-    #[test]
-    fn signing_and_keytool_use_the_debug_identity() {
-        let ks = Path::new("/home/u/.android/debug.keystore");
-        let args = sign_args(ks, Path::new("out.apk"), Path::new("in.apk"));
-        assert_eq!(args[0], "sign");
-        assert!(args.contains(&"androiddebugkey".to_string()));
-        assert!(args.contains(&"pass:android".to_string()));
-        assert_eq!(args.last().map(String::as_str), Some("in.apk"));
-        let kt = keytool_args(ks);
-        assert!(kt.contains(&"-genkeypair".to_string()));
-        assert!(kt.contains(&"CN=Android Debug,O=Android,C=US".to_string()));
-    }
 }

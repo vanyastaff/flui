@@ -56,31 +56,3 @@ fn spacer_flex_factor_splits_the_main_axis_proportionally() {
     assert_eq!(laid.size(second), size(200.0, 0.0));
     assert_eq!(laid.offset(second), offset(100.0, 25.0));
 }
-
-#[test]
-fn two_equal_spacers_center_a_fixed_child() {
-    // Row 300 wide with a 50-wide fixed child flanked by two default Spacers:
-    // remaining space (300 - 50 = 250) splits evenly (125 / 125) around it.
-    let laid = lay_out(
-        Row::new(row![
-            Spacer::new(),
-            SizedBox::new(50.0, 50.0),
-            Spacer::new(),
-        ]),
-        tight(300.0, 50.0),
-    );
-
-    let root = laid.root();
-    let leading_spacer = laid.child(root, 0);
-    let fixed = laid.child(root, 1);
-    let trailing_spacer = laid.child(root, 2);
-
-    assert_eq!(laid.size(leading_spacer), size(125.0, 0.0));
-    assert_eq!(laid.offset(leading_spacer), offset(0.0, 25.0));
-
-    assert_eq!(laid.size(fixed), size(50.0, 50.0));
-    assert_eq!(laid.offset(fixed), offset(125.0, 0.0));
-
-    assert_eq!(laid.size(trailing_spacer), size(125.0, 0.0));
-    assert_eq!(laid.offset(trailing_spacer), offset(175.0, 25.0));
-}

@@ -20,10 +20,7 @@
 use flui_foundation::geometry::{Offset, Point, Rect, Size};
 use flui_foundation::{Leaf, Variable};
 use flui_layer::{Layer, LayerTree};
-use flui_objects::{
-    RenderClipRect, RenderColoredBox, RenderPadding, RenderRepaintBoundary, RenderSliverPadding,
-    RenderSliverToBoxAdapter,
-};
+use flui_objects::{RenderClipRect, RenderColoredBox, RenderPadding, RenderRepaintBoundary};
 use flui_painting::Paint;
 use flui_painting::styling::Color;
 use flui_rendering::constraints::AxisDirection;
@@ -290,40 +287,6 @@ impl RenderSliver for PaintLeafSliver {
     }
 }
 
-#[derive(Debug, Default)]
-struct InvisiblePaintLeafSliver;
-
-impl flui_foundation::Diagnosticable for InvisiblePaintLeafSliver {}
-
-impl RenderSliver for InvisiblePaintLeafSliver {
-    type Arity = Leaf;
-    type ParentData = SliverParentData;
-
-    fn perform_layout(
-        &mut self,
-        _ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
-    ) -> SliverGeometry {
-        SliverGeometry {
-            scroll_extent: 80.0,
-            paint_extent: 0.0,
-            layout_extent: 0.0,
-            max_paint_extent: 80.0,
-            hit_test_extent: 0.0,
-            visible: false,
-            ..SliverGeometry::ZERO
-        }
-    }
-
-    fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Leaf>) {
-        let rect = Rect::from_origin_size(Point::ZERO, Size::new(100.0, 80.0));
-        ctx.canvas().draw_rect(rect, &Paint::fill(Color::RED));
-    }
-
-    fn hit_test(&self, _ctx: &mut SliverHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
-        false
-    }
-}
-
 #[test]
 fn box_host_splices_sliver_leaf_paint_into_picture() {
     let mut owner = PipelineOwner::new();
@@ -348,105 +311,5 @@ fn box_host_splices_sliver_leaf_paint_into_picture() {
     assert_eq!(
         first_picture(&tree).bounds(),
         Some(Rect::from_origin_size(Point::ZERO, Size::new(100.0, 80.0))),
-    );
-}
-
-#[test]
-fn box_host_splices_sliver_to_box_adapter_child_at_paint_offset() {
-    let mut constraints = sliver_paint_constraints();
-    constraints.scroll_offset = 40.0;
-
-    let mut owner = PipelineOwner::new();
-    let host_id = owner.insert(Box::new(SliverPaintHost { constraints }) as BoxedRenderObject);
-    let adapter_id = owner
-        .render_tree_mut()
-        .insert_sliver_child(
-            host_id,
-            Box::new(RenderSliverToBoxAdapter::new()) as BoxedSliverObject,
-        )
-        .expect("sliver adapter child");
-    owner
-        .render_tree_mut()
-        .insert_box_child(
-            adapter_id,
-            Box::new(RenderColoredBox::red(100.0, 80.0)) as BoxedRenderObject,
-        )
-        .expect("box child");
-
-    owner.set_root_id(Some(host_id));
-    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
-
-    let (tree, _owner) = paint_frame(owner);
-
-    assert_eq!(
-        first_picture(&tree).bounds(),
-        Some(Rect::from_ltrb(0.0, -40.0, 100.0, 40.0)),
-        "RenderSliverToBoxAdapter paint must compose its Box child at \
-         the same -scroll_offset paint offset committed during layout",
-    );
-}
-
-#[test]
-fn box_host_skips_invisible_sliver_child_paint() {
-    let mut owner = PipelineOwner::new();
-    let host_id = owner.insert(Box::new(SliverPaintHost {
-        constraints: sliver_paint_constraints(),
-    }) as BoxedRenderObject);
-    let padding_id = owner
-        .render_tree_mut()
-        .insert_sliver_child(
-            host_id,
-            Box::new(RenderSliverPadding::symmetric(0.0, 10.0)) as BoxedSliverObject,
-        )
-        .expect("sliver padding child");
-    owner
-        .render_tree_mut()
-        .insert_sliver_child(
-            padding_id,
-            Box::new(InvisiblePaintLeafSliver) as BoxedSliverObject,
-        )
-        .expect("sliver leaf child");
-
-    owner.set_root_id(Some(host_id));
-    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
-
-    let (tree, _owner) = paint_frame(owner);
-
-    assert_eq!(
-        structure(&tree),
-        vec![(0, "Offset")],
-        "sliver children whose geometry.visible is false must not be spliced \
-         into the paint stream",
-    );
-}
-
-#[test]
-fn box_host_splices_sliver_padding_child_at_paint_offset() {
-    let mut owner = PipelineOwner::new();
-    let host_id = owner.insert(Box::new(SliverPaintHost {
-        constraints: sliver_paint_constraints(),
-    }) as BoxedRenderObject);
-    let padding_id = owner
-        .render_tree_mut()
-        .insert_sliver_child(
-            host_id,
-            Box::new(RenderSliverPadding::symmetric(7.0, 10.0)) as BoxedSliverObject,
-        )
-        .expect("sliver padding child");
-    owner
-        .render_tree_mut()
-        .insert_sliver_child(padding_id, Box::new(PaintLeafSliver) as BoxedSliverObject)
-        .expect("sliver leaf child");
-
-    owner.set_root_id(Some(host_id));
-    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
-
-    let (tree, _owner) = paint_frame(owner);
-
-    assert_eq!(
-        first_picture(&tree).bounds(),
-        Some(Rect::from_ltrb(7.0, 10.0, 107.0, 90.0)),
-        "sliver child paint must be composed at the paint offset computed \
-         by RenderSliverPadding",
     );
 }

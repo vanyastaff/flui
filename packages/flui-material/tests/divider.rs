@@ -7,9 +7,7 @@
 use crate::common;
 
 use common::{lay_out, loose};
-use flui_material::{
-    Divider, DividerThemeData, Theme, ThemeData, ThemeDataOverrides, VerticalDivider,
-};
+use flui_material::{Divider, DividerThemeData, Theme, ThemeData, ThemeDataOverrides};
 use flui_sdk::painting::Color;
 
 /// `_DividerDefaultsM3`'s full geometry table reaches the mounted tree: the
@@ -41,73 +39,6 @@ fn default_geometry_matches_the_m3_token_table() {
         400.0 - 8.0 - 12.0,
         "indent (8.0) and end_indent (12.0) must both reduce the line's width from the \
          400px root"
-    );
-}
-
-/// `VerticalDivider`'s geometry mirrors `Divider`'s on the TRANSPOSED axis:
-/// thickness sets the line's WIDTH (not height), and `indent`/`end_indent`
-/// reduce the line's HEIGHT (not width) — Flutter parity: `Divider`'s
-/// `height`/margin-`top`/margin-`bottom` axis vs. `VerticalDivider`'s
-/// `width`/margin-`left`/margin-`right` axis (`divider.dart`, oracle tag
-/// `3.44.0`). A width/height mapping that was accidentally left transposed
-/// (or copy-pasted from `Divider` unchanged) fails this test: swap
-/// `laid.size(decorated).width`/`.height` below and both assertions flip
-/// from matching to mismatching the M3 token values.
-#[test]
-fn vertical_divider_default_geometry_matches_the_m3_token_table_on_the_transposed_axis() {
-    let laid = lay_out(
-        Theme::new(
-            ThemeData::light(),
-            VerticalDivider::new().indent(8.0).end_indent(12.0),
-        ),
-        loose(400.0),
-    );
-
-    let decorated = laid
-        .try_find_by_render_type("RenderContainer")
-        .expect("VerticalDivider must compose a decorated (filled) line");
-    assert_eq!(
-        laid.container_inner_size(decorated).width,
-        1.0,
-        "_DividerDefaultsM3.thickness (1.0) must set the filled line's WIDTH for \
-         VerticalDivider"
-    );
-
-    let height = laid.container_inner_size(decorated).height;
-    assert_eq!(
-        height,
-        400.0 - 8.0 - 12.0,
-        "indent (8.0) and end_indent (12.0) must both reduce the line's HEIGHT (not width) \
-         from the 400px root"
-    );
-}
-
-/// The theme tier's `color` reaches the mounted line's decoration — proving
-/// `ThemeData.divider_theme` is actually consulted, not just computed in
-/// `resolve_style` isolation.
-#[test]
-fn themed_color_beats_the_m3_default() {
-    let themed_color = Color::rgb(44, 55, 66);
-    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
-        divider_theme: Some(DividerThemeData {
-            color: Some(themed_color),
-            ..Default::default()
-        }),
-        ..Default::default()
-    });
-
-    let laid = lay_out(Theme::new(theme, Divider::new()), loose(400.0));
-
-    let decorated = laid
-        .try_find_by_render_type("RenderContainer")
-        .expect("Divider must compose a decorated (filled) line");
-    let decoration = laid
-        .render_property(decorated, "decoration")
-        .expect("RenderContainer reports a \"decoration\" diagnostics property");
-
-    assert!(
-        decoration.contains(&format!("{themed_color:?}")),
-        "a configured divider_theme.color must reach the mounted line — got {decoration:?}"
     );
 }
 

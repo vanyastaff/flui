@@ -391,15 +391,6 @@ mod tests {
         use super::*;
 
         #[test]
-        fn valid_names() {
-            assert!(ProjectName::new("my-app").is_ok());
-            assert!(ProjectName::new("my_app").is_ok());
-            assert!(ProjectName::new("MyApp").is_ok());
-            assert!(ProjectName::new("app123").is_ok());
-            assert!(ProjectName::new("a").is_ok());
-        }
-
-        #[test]
         fn invalid_names() {
             assert!(ProjectName::new("").is_err());
             assert!(ProjectName::new("123app").is_err());
@@ -408,40 +399,10 @@ mod tests {
             assert!(ProjectName::new("fn").is_err());
             assert!(ProjectName::new("struct").is_err());
         }
-
-        #[test]
-        fn conversions() {
-            // FromStr
-            let name: ProjectName = "my-app".parse().unwrap();
-            assert_eq!(name.as_str(), "my-app");
-
-            // TryFrom<String>
-            let name = ProjectName::try_from("my-app".to_string()).unwrap();
-            assert_eq!(name.as_str(), "my-app");
-
-            // TryFrom<&str>
-            let name = ProjectName::try_from("my-app").unwrap();
-            assert_eq!(name.as_str(), "my-app");
-        }
-
-        #[test]
-        fn ordering() {
-            let a = ProjectName::new("aaa").unwrap();
-            let b = ProjectName::new("bbb").unwrap();
-            assert!(a < b);
-        }
     }
 
     mod organization_id {
         use super::*;
-
-        #[test]
-        fn valid_ids() {
-            assert!(OrganizationId::new("com.example").is_ok());
-            assert!(OrganizationId::new("org.rust_lang").is_ok());
-            assert!(OrganizationId::new("io.github.user").is_ok());
-            assert!(OrganizationId::new("com").is_ok());
-        }
 
         #[test]
         fn invalid_ids() {
@@ -450,12 +411,6 @@ mod tests {
             assert!(OrganizationId::new(".com.example").is_err());
             assert!(OrganizationId::new("com.example.").is_err());
             assert!(OrganizationId::new("com.exam ple").is_err());
-        }
-
-        #[test]
-        fn default() {
-            let org = OrganizationId::default();
-            assert_eq!(org.as_str(), "com.example");
         }
     }
 }

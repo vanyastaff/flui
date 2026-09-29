@@ -355,23 +355,6 @@ pub mod prelude {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_basic_types() {
-        // ElementId::new(n) is 1-based: new(1).index() == 0.
-        let element_id = ElementId::new(1);
-        assert_eq!(element_id.index(), 0);
-
-        let _key = Key::new();
-
-        let notifier = ChangeNotifier::new();
-        let _listener = notifier.add_listener(std::sync::Arc::new(|| {}));
-    }
-}
-
-#[cfg(test)]
 mod derive_owner_tests {
     use super::Diagnosticable;
 

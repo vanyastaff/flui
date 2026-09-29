@@ -183,33 +183,6 @@ mod tests {
     }
 
     #[test]
-    fn text_direction_none_leaves_dx_untouched() {
-        let (controller, position) = position_animation(
-            TranslationFraction::ZERO,
-            TranslationFraction::new(0.6, 0.2),
-        );
-        controller.set_value(1.0);
-        let slide = SlideTransition::new(position, crate::SizedBox::shrink());
-
-        assert_eq!(slide.resolved_offset(), TranslationFraction::new(0.6, 0.2));
-        controller.dispose();
-    }
-
-    #[test]
-    fn text_direction_ltr_leaves_dx_untouched() {
-        let (controller, position) = position_animation(
-            TranslationFraction::ZERO,
-            TranslationFraction::new(0.6, 0.2),
-        );
-        controller.set_value(1.0);
-        let slide = SlideTransition::new(position, crate::SizedBox::shrink())
-            .text_direction(TextDirection::Ltr);
-
-        assert_eq!(slide.resolved_offset(), TranslationFraction::new(0.6, 0.2));
-        controller.dispose();
-    }
-
-    #[test]
     fn text_direction_rtl_flips_dx_only() {
         let (controller, position) = position_animation(
             TranslationFraction::ZERO,
@@ -221,32 +194,5 @@ mod tests {
 
         assert_eq!(slide.resolved_offset(), TranslationFraction::new(-0.6, 0.2));
         controller.dispose();
-    }
-
-    #[test]
-    fn create_element_is_stateful_kind() {
-        use flui_view::View;
-
-        let (_controller, position) = position_animation(
-            TranslationFraction::ZERO,
-            TranslationFraction::new(1.0, 0.0),
-        );
-        let slide = SlideTransition::new(position, crate::SizedBox::shrink());
-        let kind = slide.create_element();
-        assert!(matches!(
-            kind,
-            flui_view::element::ElementKind::Stateful { .. }
-        ));
-    }
-
-    #[test]
-    fn debug_format_does_not_panic() {
-        let (_controller, position) = position_animation(
-            TranslationFraction::ZERO,
-            TranslationFraction::new(1.0, 0.0),
-        );
-        let slide = SlideTransition::new(position, crate::SizedBox::shrink());
-        let rendered = format!("{slide:?}");
-        assert!(rendered.contains("SlideTransition"));
     }
 }

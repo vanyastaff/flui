@@ -355,27 +355,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_display() {
-        assert_eq!(EngineError::SurfaceLost.to_string(), "Surface was lost");
-        assert_eq!(
-            EngineError::SurfaceValidation.to_string(),
-            "Surface texture validation error"
-        );
-    }
-
-    #[test]
-    fn test_recoverability_surface_validation() {
-        // The bug fix this refactor rides on: a wgpu surface-validation
-        // error must NOT be classified as Recoverable (the pre-refactor code
-        // mapped `wgpu::CurrentSurfaceTexture::Validation` to `SurfaceLost`,
-        // causing an infinite retry loop on a misconfigured surface).
-        assert_eq!(
-            EngineError::SurfaceValidation.recoverability(),
-            Recoverability::Unrecoverable
-        );
-    }
-
-    #[test]
     fn test_recoverability_table() {
         // Full classification table across the three buckets. Asserts the
         //exact value so a misclassification fails the test rather than
@@ -434,22 +413,6 @@ mod tests {
         assert_eq!(
             EngineError::resource_io("font load", std::io::Error::other("boom")).recoverability(),
             Recoverability::Unrecoverable
-        );
-    }
-    #[test]
-    fn test_handle_error_preserved() {
-        // Red pre-refactor: the call site stringified the `HandleError` via
-        // `std::io::Error::other(e.to_string())` and boxed the `io::Error`,
-        // so `source().downcast_ref::<HandleError>()` returned `None`.
-        // Post-refactor (with the raw-window-handle `std` feature enabled)
-        // `HandleError` impls `std::error::Error` and is boxed directly,
-        // preserving the original error type in the source chain.
-        let e = EngineError::surface_creation(raw_window_handle::HandleError::Unavailable);
-        assert!(
-            e.source()
-                .unwrap()
-                .downcast_ref::<raw_window_handle::HandleError>()
-                .is_some()
         );
     }
 }

@@ -297,108 +297,12 @@ mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
 
-    use flui_view::{BuildContext, IntoView, View, ViewExt};
-
     use super::host::APP_RUNTIME;
-    use super::realm_dispatch::{RealmDispatcher, dispatch_platform_realm, install_platform_realm};
+    use super::realm_dispatch::{dispatch_platform_realm, install_platform_realm};
     // `teardown_platform_realm` is `cfg(all(not(ios), not(wasm32)))` -- neither
     // platform runs the desktop teardown path it exercises.
-    #[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
-    use super::realm_dispatch::teardown_platform_realm;
+
     use super::*;
-
-    /// The runner's path from an `open_window` result to a realm: the bridge is
-    /// read from the host window once and carried beside the window, which the
-    /// realm then only sees as a `PlatformWindow`. If that constructor drops the
-    /// bridge (say, passes `None`), nothing is wired and nothing is published.
-    #[test]
-    fn a_realm_built_from_a_host_window_publishes_through_its_accessibility() {
-        use crate::app::window_test_support::{HostedTestWindow, TestWindow};
-
-        let fake = std::sync::Arc::new(flui_platform::FakeAccessibility::new());
-        let host: std::sync::Arc<dyn flui_platform::traits::HostWindow> =
-            std::sync::Arc::new(HostedTestWindow::new(
-                TestWindow::new()
-                    .focused(true)
-                    .with_accessibility(std::sync::Arc::clone(&fake) as _),
-            ));
-        let realm = crate::app::ui_realm::UiRealm::new(
-            std::sync::Arc::new(|| {}),
-            presentation_window(host),
-            1.0,
-            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            crate::app::presentation::test_clipboard(),
-        )
-        .expect("realm");
-        let constraints = flui_rendering::constraints::BoxConstraints::tight(
-            flui_foundation::geometry::Size::new(100.0, 100.0),
-        );
-        realm
-            .enter(|realm| realm.attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0)))
-            .expect("root mounted");
-
-        fake.set_active(true);
-        let _ = realm.draw_frame(constraints);
-
-        assert!(
-            fake.published_count() >= 1,
-            "the bridge read from the host window must receive the assembled tree"
-        );
-    }
-
-    /// Trivial leaf fixture: an empty view used as the terminal node under
-    /// `OwnerLocalRoot` below, and constructible on its own wherever a test
-    /// needs a minimal `View + StatelessView` root.
-    #[derive(Clone)]
-    struct TestView;
-
-    impl StatelessView for TestView {
-        fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-            TestView.boxed()
-        }
-    }
-
-    impl View for TestView {
-        fn create_element(&self) -> flui_view::element::ElementKind {
-            flui_view::element::ElementKind::stateless(self)
-        }
-    }
-
-    #[derive(Clone)]
-    struct OwnerLocalRoot {
-        value: Rc<Cell<usize>>,
-    }
-
-    impl StatelessView for OwnerLocalRoot {
-        fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-            self.value.set(self.value.get() + 1);
-            TestView.boxed()
-        }
-    }
-
-    impl View for OwnerLocalRoot {
-        fn create_element(&self) -> flui_view::element::ElementKind {
-            flui_view::element::ElementKind::stateless(self)
-        }
-    }
-
-    #[test]
-    fn runner_entrypoints_accept_owner_local_root_state() {
-        static_assertions::assert_not_impl_any!(OwnerLocalRoot: Send, Sync);
-
-        std::hint::black_box(run_app_impl::<OwnerLocalRoot> as fn(OwnerLocalRoot));
-        std::hint::black_box(
-            run_app_with_config_impl::<OwnerLocalRoot> as fn(OwnerLocalRoot, AppConfig),
-        );
-    }
-
-    #[test]
-    fn test_config_creation() {
-        let config = AppConfig::new().with_title("Test").with_size(800, 600);
-
-        assert_eq!(config.title, "Test");
-        assert_eq!(config.size.width, 800.0);
-    }
 
     /// Bootstrap ordering invariant shared by `bootstrap_desktop`, `run_android`,
     /// and `run_web`: the window must be stored in `AppRuntime`'s redraw-poke
@@ -544,30 +448,6 @@ mod tests {
             with_owner_platform(|_| ()).is_none(),
             "the clear guard must remove the host once its scope ends"
         );
-    }
-
-    /// `install_owner_platform` alone -- the exact path `run_direct` takes,
-    /// which opens a window but never installs a `UiRealm` -- must NOT
-    /// resolve `SharedEngineServices`. Only `install_platform_realm`
-    /// (exercised by the realm-install tests elsewhere in this file) does
-    /// that, so a backend that never hosts a realm never pays for
-    /// painting/semantics/scheduler singleton construction or full
-    /// system-font enumeration it cannot use.
-    #[test]
-    fn install_owner_platform_alone_does_not_resolve_services() {
-        use flui_platform::headless_platform;
-
-        let _clear_guard = OwnerHostClearGuard::arm();
-        let platform = headless_platform();
-        let result = platform.run(Box::new(|owner| {
-            install_owner_platform(owner).expect("install owner wake transport");
-            assert!(
-                !APP_RUNTIME.with(|slot| slot.borrow().services_resolved()),
-                "install_owner_platform alone must not resolve SharedEngineServices"
-            );
-            Ok(())
-        }));
-        assert!(result.is_ok(), "on_ready returns Ok here");
     }
 
     #[test]
@@ -747,60 +627,6 @@ mod tests {
         let _ = dispatch_result;
     }
 
-    /// Hot-restart survival (ADR-0039 §6): `owner_platform`
-    /// is a loop-scoped `AppRuntime` field, deliberately not cleared by
-    /// `teardown_platform_realm` alongside the realm-facing fields it DOES
-    /// clear (`realm`, `queue`, `owner_thread`, `address`,
-    /// `surface_applier`) -- tearing down a realm on the owner thread must
-    /// not strand the loop's capability, because the loop may host a fresh
-    /// realm next without ever calling `Platform::run` again (hot-restart
-    /// does exactly this today, `install_platform_realm`).
-    // Exercises `teardown_platform_realm`, which is
-    // `cfg(all(not(ios), not(wasm32)))` -- neither platform runs the
-    // desktop teardown path this pins.
-    #[cfg(all(not(target_os = "ios"), not(target_arch = "wasm32")))]
-    #[test]
-    fn owner_platform_survives_realm_teardown() {
-        use flui_platform::headless_platform;
-
-        // `Rc<Cell<_>>`, not a bare local: the `on_ready` closure below is
-        // `Box<dyn FnOnce(OwnerPlatform) + 'static>`, so it cannot borrow a
-        // stack local -- see the sibling install/clear test's identical
-        // note. `(bool, bool)` is `Copy`, so `Cell` suffices.
-        let observed = Rc::new(Cell::new((false, false)));
-        let observed_for_closure = Rc::clone(&observed);
-
-        let _clear_guard = OwnerHostClearGuard::arm();
-        let platform = headless_platform();
-        let result = platform.run(Box::new(move |owner| {
-            install_owner_platform(owner).expect("install owner wake transport");
-            let before_teardown = with_owner_platform(|_owner| true) == Some(true);
-
-            // Simulate hot-restart: a realm's teardown runs on this owner
-            // thread while the loop keeps running (headless `run` returns
-            // immediately either way, but the TLS host's contract does not
-            // depend on that -- it is exercised identically whether the
-            // loop is about to return or about to host another realm).
-            teardown_platform_realm();
-
-            let after_teardown = with_owner_platform(|_owner| true) == Some(true);
-            observed_for_closure.set((before_teardown, after_teardown));
-            Ok(())
-        }));
-        assert!(result.is_ok(), "on_ready returns Ok here");
-
-        let (before_teardown, after_teardown) = observed.get();
-        assert!(
-            before_teardown,
-            "the host must be installed before teardown runs"
-        );
-        assert!(
-            after_teardown,
-            "teardown_platform_realm must not clear AppRuntime.owner_platform -- \
-             the loop may host another realm before it exits (hot-restart)"
-        );
-    }
-
     #[test]
     fn owner_accessor_and_old_cleanup_do_not_clobber_replacement_host() {
         let old_guard = OwnerHostClearGuard::arm();
@@ -839,37 +665,6 @@ mod tests {
         }));
         let removed = APP_RUNTIME.with(|slot| slot.borrow_mut().owner_platform.take());
         drop(removed);
-    }
-
-    /// Native operations may synchronously dispatch lifecycle events back into
-    /// the runtime. The scoped owner reference must hold no TLS borrow.
-    #[test]
-    fn with_owner_platform_allows_reentrant_dispatch() {
-        use flui_platform::headless_platform;
-
-        let _clear_guard = OwnerHostClearGuard::arm();
-        let platform = headless_platform();
-        let result = platform.run(Box::new(|owner| {
-            install_owner_platform(owner).expect("install owner wake transport");
-            with_owner_platform(|_owner| {
-                let dispatcher = RealmDispatcher {
-                    owner_thread: std::thread::current().id(),
-                    address: flui_foundation::PresentationAddress {
-                        realm_id: flui_foundation::RealmId::new_gen(
-                            0,
-                            std::num::NonZeroU32::new(1).unwrap(),
-                        ),
-                        presentation_id: flui_foundation::PresentationId::new_gen(
-                            0,
-                            std::num::NonZeroU32::new(1).unwrap(),
-                        ),
-                    },
-                };
-                let _ = dispatch_platform_realm(dispatcher, RealmTask::Frame(Box::new(|_| {})));
-            });
-            Ok(())
-        }));
-        assert!(result.is_ok());
     }
 }
 

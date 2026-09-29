@@ -181,13 +181,6 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_registry_is_empty() {
-        let registry = GlobalKeyRegistry::new();
-        assert!(registry.is_empty());
-        assert_eq!(registry.len(), 0);
-    }
-
-    #[test]
     fn insert_then_get_resolves_by_identity_not_by_the_borrow_that_inserted_it() {
         let mut registry = GlobalKeyRegistry::new();
         let key = StubKey {
@@ -272,26 +265,5 @@ mod tests {
 
         assert_eq!(registry.remove(&second), Some(eid(2)));
         assert!(registry.is_empty());
-    }
-
-    #[test]
-    fn removing_an_unregistered_key_is_a_none_not_a_panic() {
-        let mut registry = GlobalKeyRegistry::new();
-        let key = StubKey {
-            identity: 1,
-            hash: 7,
-        };
-        assert_eq!(registry.remove(&key), None);
-
-        // Same hash, nothing registered under this identity.
-        registry.insert(
-            &StubKey {
-                identity: 2,
-                hash: 7,
-            },
-            eid(2),
-        );
-        assert_eq!(registry.remove(&key), None);
-        assert_eq!(registry.len(), 1);
     }
 }

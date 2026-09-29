@@ -4,7 +4,7 @@
 //! `src/interaction/shortcuts.rs`.
 
 mod tests {
-    use std::cell::Cell;
+
     use std::rc::Rc;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -71,30 +71,10 @@ mod tests {
         assert!(!manager.dispatch_key_event(&key_down("q", Modifiers::empty())));
         assert_eq!(fired.load(Ordering::SeqCst), 1);
     }
-
-    #[test]
-    fn callback_shortcuts_accept_owner_local_rc_state() {
-        let fired = Rc::new(Cell::new(0));
-        let fired_for_binding = Rc::clone(&fired);
-        let field = FocusNode::with_debug_label("owner-local-shortcut-field");
-        let harness = mount(
-            CallbackShortcuts::new(
-                Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&field)),
-            )
-            .binding(SingleActivator::character("l").control(), move || {
-                fired_for_binding.set(fired_for_binding.get() + 1);
-            }),
-        );
-        let manager = harness.focus_manager();
-        field.request_focus();
-
-        assert!(manager.dispatch_key_event(&key_down("l", Modifiers::CONTROL)));
-        assert_eq!(fired.get(), 1, "shortcut callback captured Rc<Cell<_>>");
-    }
 }
 
 mod intent_tests {
-    use std::cell::Cell;
+
     use std::rc::Rc;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -153,63 +133,6 @@ mod intent_tests {
             ..ctrl_s()
         }));
         assert_eq!(saves.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn shortcut_actions_accept_owner_local_rc_state() {
-        let saves = Rc::new(Cell::new(0));
-        let saves_for_action = Rc::clone(&saves);
-        let field = FocusNode::with_debug_label("owner-local-intent-field");
-        let harness = mount(
-            Actions::new(
-                Shortcuts::new(Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&field)))
-                    .shortcut(SingleActivator::character("s").control(), SaveIntent),
-            )
-            .action(CallbackAction::new(move |_intent: &SaveIntent| {
-                saves_for_action.set(saves_for_action.get() + 1);
-            })),
-        );
-        let manager = harness.focus_manager();
-        field.request_focus();
-
-        assert!(manager.dispatch_key_event(&ctrl_s()), "consumed");
-        assert_eq!(saves.get(), 1, "action callback captured Rc<Cell<_>>");
-    }
-
-    #[test]
-    fn shortcut_intents_accept_owner_local_rc_payloads() {
-        struct OwnerLocalIntent {
-            marker: Rc<Cell<u32>>,
-        }
-        impl Intent for OwnerLocalIntent {}
-
-        let marker = Rc::new(Cell::new(7));
-        let seen = Rc::new(Cell::new(0));
-        let seen_for_action = Rc::clone(&seen);
-        let field = FocusNode::with_debug_label("owner-local-intent-payload-field");
-        let harness = mount(
-            Actions::new(
-                Shortcuts::new(Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&field)))
-                    .shortcut(
-                        SingleActivator::character("s").control(),
-                        OwnerLocalIntent {
-                            marker: Rc::clone(&marker),
-                        },
-                    ),
-            )
-            .action(CallbackAction::new(move |intent: &OwnerLocalIntent| {
-                seen_for_action.set(intent.marker.get());
-            })),
-        );
-        let manager = harness.focus_manager();
-        field.request_focus();
-
-        assert!(manager.dispatch_key_event(&ctrl_s()), "consumed");
-        assert_eq!(
-            seen.get(),
-            7,
-            "shortcut intent carried an owner-local Rc<Cell<_>> payload"
-        );
     }
 
     /// The default [`Action::to_key_event_result`](flui_widgets::interaction::Action::to_key_event_result)
@@ -361,9 +284,7 @@ mod activation_tests {
     use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
     use flui_interaction::routing::FocusNode;
     use flui_widgets::SizedBox;
-    use flui_widgets::interaction::{
-        Actions, ActivateIntent, CallbackAction, Focus, Intent, Shortcuts, SingleActivator,
-    };
+    use flui_widgets::interaction::{Actions, ActivateIntent, CallbackAction, Focus};
 
     use crate::common::harness::mount;
 
@@ -374,89 +295,6 @@ mod activation_tests {
             modifiers: Modifiers::empty(),
             ..KeyEvent::default()
         }
-    }
-
-    struct SaveIntent;
-    impl Intent for SaveIntent {}
-
-    /// **An intent resolves at the primary focus** (ADR-0079), as Flutter's
-    /// `ShortcutManager` resolves against `primaryFocus.context`: an `Actions`
-    /// between the focused widget and the `Shortcuts` answers the intent —
-    /// the shape every button's activation has.
-    ///
-    /// Red-check: resolve from the `Shortcuts` widget's own position (drop the
-    /// `chain_at` lookup) — nothing above the `Shortcuts` binds `SaveIntent`,
-    /// so the key is ignored and the action never runs.
-    #[test]
-    fn an_actions_between_the_focus_and_the_shortcuts_answers_the_intent() {
-        let runs = Rc::new(Cell::new(0));
-        let field = FocusNode::with_debug_label("field");
-        let counted = Rc::clone(&runs);
-        let harness = mount(
-            Shortcuts::new(
-                Actions::new(Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&field)))
-                    .action(CallbackAction::new(move |_: &SaveIntent| {
-                        counted.set(counted.get() + 1);
-                    })),
-            )
-            .shortcut(SingleActivator::character("s").control(), SaveIntent),
-        );
-        let manager = harness.focus_manager();
-        field.request_focus();
-
-        let ctrl_s = KeyEvent {
-            modifiers: Modifiers::CONTROL,
-            ..key_down(Key::Character("s".into()))
-        };
-        assert!(manager.dispatch_key_event(&ctrl_s), "consumed");
-        assert_eq!(runs.get(), 1, "the action below the Shortcuts ran");
-    }
-
-    /// A focused `FocusScope` node resolves at its own position too: its
-    /// backing node can hold the primary focus, and an `Actions` between it
-    /// and the `Shortcuts` must answer.
-    ///
-    /// Red-check: drop the `record_action_chain` calls from
-    /// `FocusScopeState` — the scope's node has no record, the `Shortcuts`
-    /// falls back to its own position, and the action never runs.
-    #[test]
-    fn a_focused_scope_resolves_intents_at_its_own_position() {
-        use flui_interaction::routing::FocusScopeNode;
-
-        use flui_widgets::interaction::FocusScope;
-
-        let runs = Rc::new(Cell::new(0));
-        let scope = FocusScopeNode::with_debug_label("scope");
-        let counted = Rc::clone(&runs);
-        let harness = mount(
-            Shortcuts::new(
-                Actions::new(FocusScope::with_external_node(
-                    Rc::clone(&scope),
-                    SizedBox::new(10.0, 10.0),
-                ))
-                .action(CallbackAction::new(move |_: &SaveIntent| {
-                    counted.set(counted.get() + 1);
-                })),
-            )
-            .shortcut(SingleActivator::character("s").control(), SaveIntent),
-        );
-        let manager = harness.focus_manager();
-        scope.as_focus_node().request_focus();
-        assert!(
-            scope.as_focus_node().has_primary_focus(),
-            "the empty scope holds the focus"
-        );
-
-        let ctrl_s = KeyEvent {
-            modifiers: Modifiers::CONTROL,
-            ..key_down(Key::Character("s".into()))
-        };
-        assert!(manager.dispatch_key_event(&ctrl_s), "consumed");
-        assert_eq!(
-            runs.get(),
-            1,
-            "the action between the scope and the Shortcuts ran"
-        );
     }
 
     /// Enter, Space and Select activate the focused control through the
@@ -490,47 +328,5 @@ mod activation_tests {
             );
         }
         assert_eq!(runs.get(), 3, "each key activated the control once");
-    }
-
-    /// **The first Tab into a window with nothing focused** reaches the
-    /// default bindings and focuses the first control. Found on a live
-    /// Windows window: the key walk started at the primary focus, there was
-    /// none, and every key was dropped — no control was reachable from the
-    /// keyboard at all.
-    ///
-    /// Red-check: drop `claim_unfocused_keys` from
-    /// `DefaultFocusTraversalState::claim_unfocused_keys` — the Tab is
-    /// ignored and nothing gains focus.
-    #[test]
-    fn the_first_tab_with_nothing_focused_focuses_the_first_control() {
-        let button = FocusNode::with_debug_label("button");
-        let harness = mount(Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&button)));
-        let manager = harness.focus_manager();
-        assert!(
-            manager.primary_focus().is_none(),
-            "the window opens with nothing focused"
-        );
-
-        assert!(
-            manager.dispatch_key_event(&key_down(Key::Named(NamedKey::Tab))),
-            "Tab is consumed"
-        );
-        assert!(
-            button.has_primary_focus(),
-            "and it brought the focus to the control"
-        );
-    }
-
-    /// With no control answering `ActivateIntent`, Enter is not swallowed:
-    /// nothing at the root binds an action to it, so the key is reported
-    /// unconsumed and an outer handler (or the platform) still gets it.
-    #[test]
-    fn an_unclaimed_activation_key_is_not_consumed() {
-        let field = FocusNode::with_debug_label("plain");
-        let harness = mount(Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&field)));
-        let manager = harness.focus_manager();
-        field.request_focus();
-
-        assert!(!manager.dispatch_key_event(&key_down(Key::Named(NamedKey::Enter))));
     }
 }

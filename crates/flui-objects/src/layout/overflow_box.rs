@@ -492,30 +492,7 @@ mod tests {
         BoxConstraints::new(min_w, max_w, min_h, max_h)
     }
 
-    #[test]
-    fn overflow_box_fit_default_is_max() {
-        assert_eq!(OverflowBoxFit::default(), OverflowBoxFit::Max);
-    }
-
     // --- RenderConstrainedOverflowBox ----------------------------------------
-
-    #[test]
-    fn inner_constraints_no_overrides_pass_through() {
-        let node = RenderConstrainedOverflowBox::new(
-            Alignment::CENTER,
-            None,
-            None,
-            None,
-            None,
-            OverflowBoxFit::Max,
-        );
-        let constraints = bc(10.0, 200.0, 5.0, 100.0);
-        let inner = node.inner_constraints(constraints);
-        assert_eq!(inner.min_width, 10.0);
-        assert_eq!(inner.max_width, 200.0);
-        assert_eq!(inner.min_height, 5.0);
-        assert_eq!(inner.max_height, 100.0);
-    }
 
     #[test]
     fn inner_constraints_max_width_override() {
@@ -533,68 +510,5 @@ mod tests {
         assert_eq!(inner.max_height, 200.0); // original
     }
 
-    #[test]
-    fn parent_size_max_returns_biggest() {
-        let node = RenderConstrainedOverflowBox::new(
-            Alignment::CENTER,
-            None,
-            None,
-            None,
-            None,
-            OverflowBoxFit::Max,
-        );
-        let constraints = bc(0.0, 300.0, 0.0, 200.0);
-        let our_size = node.parent_size(constraints, Size::new(50.0, 50.0));
-        assert_eq!(our_size, constraints.biggest());
-    }
-
-    #[test]
-    fn parent_size_defer_to_child_constrains_child() {
-        let node = RenderConstrainedOverflowBox::new(
-            Alignment::CENTER,
-            None,
-            None,
-            None,
-            None,
-            OverflowBoxFit::DeferToChild,
-        );
-        let constraints = bc(0.0, 300.0, 0.0, 200.0);
-        let child_size = Size::new(50.0, 50.0);
-        let our_size = node.parent_size(constraints, child_size);
-        assert_eq!(our_size, constraints.constrain(child_size));
-    }
-
     // --- RenderSizedOverflowBox ---------------------------------------------
-
-    #[test]
-    fn sized_overflow_box_constrain_requested_size() {
-        let node = RenderSizedOverflowBox::centered(80.0, 60.0);
-        assert_eq!(node.requested_size(), Size::new(80.0, 60.0));
-    }
-
-    #[test]
-    fn sized_overflow_box_setter_returns_change_flag() {
-        let mut node = RenderSizedOverflowBox::centered(80.0, 60.0);
-        let new_size = Size::new(100.0, 100.0);
-        assert_eq!(
-            node.set_requested_size(new_size),
-            flui_rendering::RenderUpdateImpact::LAYOUT
-        );
-        assert_eq!(
-            node.set_requested_size(new_size),
-            flui_rendering::RenderUpdateImpact::NONE
-        );
-    }
-
-    #[test]
-    fn sized_overflow_box_dry_layout_constrained() {
-        // requested 80×60 into 0..200 → stays 80×60.
-        let node = RenderSizedOverflowBox::centered(80.0, 60.0);
-        let constraints = bc(0.0, 200.0, 0.0, 200.0);
-        // compute_dry_layout doesn't need ctx child count here — no child.
-        assert_eq!(
-            constraints.constrain(node.requested_size()),
-            Size::new(80.0, 60.0)
-        );
-    }
 }

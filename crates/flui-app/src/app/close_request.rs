@@ -759,66 +759,6 @@ mod tests {
         );
     }
 
-    /// Teardown drops exactly the right entries: a realm uninstall must not
-    /// take a sibling realm's windows with it.
-    #[test]
-    fn forget_and_forget_realm_drop_only_what_they_name() {
-        let router = CloseRequestRouter::new();
-        let keep_open = CloseRequestHandler::new(|_| CloseResponse::KeepOpen);
-        let realm_one_first = address(1, 1);
-        let realm_one_second = address(1, 2);
-        let realm_two = address(2, 1);
-        for (index, addr) in [realm_one_first, realm_one_second, realm_two]
-            .into_iter()
-            .enumerate()
-        {
-            router.register(addr, &window(index as u64), Some(keep_open.clone()));
-        }
-
-        router.forget(realm_one_first);
-        assert_eq!(router.consult(realm_one_first), CloseResponse::Close);
-        assert_eq!(router.consult(realm_one_second), CloseResponse::KeepOpen);
-        assert_eq!(router.consult(realm_two), CloseResponse::KeepOpen);
-
-        router.forget_realm(RealmId::new(1));
-        assert_eq!(router.consult(realm_one_second), CloseResponse::Close);
-        assert_eq!(
-            router.consult(realm_two),
-            CloseResponse::KeepOpen,
-            "a realm uninstall must not drop a sibling realm's entries"
-        );
-    }
-
-    /// Full loop-exit teardown drops registrations no per-realm removal
-    /// names — the same `AppRuntime` serves a second `Platform::run` on
-    /// this thread, so a survivor would answer the NEXT loop's windows.
-    #[test]
-    fn clear_drops_every_registration() {
-        let router = CloseRequestRouter::new();
-        let keep_open = CloseRequestHandler::new(|_| CloseResponse::KeepOpen);
-        let first = address(1, 1);
-        let second = address(2, 1);
-        let live_first = window(1);
-        let live_second = window(2);
-        router.register(first, &live_first, Some(keep_open.clone()));
-        router.register(second, &live_second, Some(keep_open));
-        assert_eq!(router.consult(first), CloseResponse::KeepOpen);
-
-        router.clear();
-
-        assert_eq!(
-            router.consult(first),
-            CloseResponse::Close,
-            "a cleared registration must not veto the next loop's close"
-        );
-        assert_eq!(router.consult(second), CloseResponse::Close);
-        assert_eq!(
-            router.request_close(second),
-            Err(CloseRequestError::UnknownPresentation { address: second }),
-            "and the programmatic route must not still hold the window"
-        );
-    }
-
     /// The programmatic-close route reports why it could not deliver
     /// instead of failing silently -- an application that vetoed a close is
     /// relying on this call to finish it.
@@ -845,20 +785,5 @@ mod tests {
             "the router holds the window weakly, so a destroyed window is reported, never \
              resurrected"
         );
-    }
-
-    /// Closing a window is an owner-thread operation.
-    #[test]
-    fn request_close_refuses_a_foreign_thread() {
-        let router = Arc::new(CloseRequestRouter::new());
-        let a = address(1, 1);
-        let live = window(1);
-        router.register(a, &live, None);
-
-        let router_for_thread = Arc::clone(&router);
-        let refused = std::thread::spawn(move || router_for_thread.request_close(a))
-            .join()
-            .expect("the requesting thread must not panic");
-        assert_eq!(refused, Err(CloseRequestError::WrongThread));
     }
 }

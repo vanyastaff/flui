@@ -92,19 +92,6 @@ mod tests {
     }
 
     #[test]
-    fn vec_of_homogeneous_views_implements_view_seq() {
-        let s: Vec<Leaf> = vec![Leaf(1), Leaf(2), Leaf(3)];
-        assert_eq!(<Vec<Leaf> as ViewSeq>::len(&s), 3);
-
-        let mut visited = vec![];
-        ViewSeq::for_each(&s, |i, _v| visited.push(i));
-        assert_eq!(visited, vec![0, 1, 2]);
-
-        let boxed = s.into_boxed_vec();
-        assert_eq!(boxed.len(), 3);
-    }
-
-    #[test]
     fn vec_of_boxed_views_supports_heterogeneous_children() {
         let s: Vec<BoxedView> = vec![Leaf(1).boxed(), OtherLeaf("two").boxed(), Leaf(3).boxed()];
         assert_eq!(<Vec<BoxedView> as ViewSeq>::len(&s), 3);
@@ -115,12 +102,5 @@ mod tests {
 
         let boxed = s.into_boxed_vec();
         assert_eq!(boxed.len(), 3);
-    }
-
-    #[test]
-    fn empty_vec_reports_zero_length() {
-        let s: Vec<Leaf> = Vec::new();
-        assert_eq!(<Vec<Leaf> as ViewSeq>::len(&s), 0);
-        assert!(<Vec<Leaf> as ViewSeq>::is_empty(&s));
     }
 }

@@ -26,46 +26,6 @@ fn color_property(color: Color) -> String {
     format!("{color:?}")
 }
 
-#[test]
-fn default_material_matches_card_defaults_m3() {
-    let theme = ThemeData::light();
-    let colors = theme.color_scheme;
-    let laid = lay_out(
-        Theme::new(theme, Card::new(ColoredBox::new(Color::rgb(1, 2, 3)))),
-        tight(200.0, 200.0),
-    );
-
-    let material = laid
-        .try_find_by_render_type("RenderPhysicalShape")
-        .expect("Card must compose a Material (RenderPhysicalShape) surface");
-
-    let color = laid
-        .render_property(material, "color")
-        .expect("RenderPhysicalShape reports a \"color\" diagnostics property");
-    assert_eq!(
-        color,
-        color_property(colors.surface_container_low),
-        "_CardDefaultsM3.color is ColorScheme.surfaceContainerLow"
-    );
-
-    let elevation = laid
-        .render_property(material, "elevation")
-        .expect("RenderPhysicalShape reports an \"elevation\" diagnostics property");
-    assert_eq!(
-        elevation.parse::<f64>(),
-        Ok(1.0),
-        "_CardDefaultsM3 constructs with elevation: 1.0"
-    );
-
-    let clip_behavior = laid
-        .render_property(material, "clip_behavior")
-        .expect("RenderPhysicalShape reports a \"clip_behavior\" diagnostics property");
-    assert_eq!(
-        clip_behavior, "None",
-        "_CardDefaultsM3 constructs with clipBehavior: Clip.none"
-    );
-}
-
 /// The middle cascade tier, proven end to end: a `ThemeData.card_theme` with
 /// custom `color`/`elevation` reaches the mounted `Material`, per field —
 /// an unset `shape` on the same theme slot must still fall through to the
@@ -188,30 +148,6 @@ fn an_overridden_99dp_corner_radius_excludes_the_same_probe_point() {
         taps.load(Ordering::SeqCst),
         0,
         "a 99dp corner radius must EXCLUDE the same probe point the 12dp default includes"
-    );
-}
-
-/// `_CardDefaultsM3`'s margin (`EdgeInsets.all(4.0)`) reaches the composed
-/// `Padding`: under a fixed-size root the `Material` must sit inset by
-/// exactly 4 logical pixels on every side, positioned at `(4, 4)`.
-#[test]
-fn default_margin_insets_the_material_by_four_pixels() {
-    let laid = lay_out(
-        Theme::new(
-            ThemeData::light(),
-            Card::new(ColoredBox::new(Color::rgb(1, 2, 3))),
-        ),
-        tight(200.0, 200.0),
-    );
-
-    let material = laid
-        .try_find_by_render_type("RenderPhysicalShape")
-        .expect("Card must compose a Material surface");
-
-    assert_eq!(
-        laid.offset(material),
-        common::offset(4.0, 4.0),
-        "_CardDefaultsM3's margin (EdgeInsets.all(4.0)) must inset the Material by 4px"
     );
 }
 

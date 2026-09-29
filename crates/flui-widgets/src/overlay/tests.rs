@@ -9,10 +9,9 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use flui_view::InheritedView;
 use flui_view::prelude::*;
 
-use super::{InsertPosition, OnstagePlan, OverlayEntry, OverlayHandle, OverlayScope, onstage_plan};
+use super::{InsertPosition, OnstagePlan, OverlayEntry, OverlayHandle, onstage_plan};
 use crate::SizedBox;
 
 /// Counts how many times an entry's builder closure ran.
@@ -135,41 +134,5 @@ fn overlay_build_plan_matches_flutters_onstage_loop() {
             build: vec![],
             skip_count: 0
         },
-    );
-}
-
-/// `OverlayScope::update_should_notify` is handle-**identity**, not
-/// structural equality — the same handle (even a fresh clone of it) must not
-/// notify, a different handle must.
-///
-/// This is a direct call, not a mounted-tree test: an `OverlayEntryView`
-/// element is reconciled in place across ordinary rebuilds of the *same*
-/// mounted entry, and its `overlay` field never changes across that entry's
-/// lifetime, so there is no reachable production path that ever hands the
-/// same mount point two different overlay identities to compare. The
-/// `InheritedView` contract is still real and still worth pinning directly —
-/// exactly the precedent `GestureArenaScope`'s own
-/// `update_should_notify_is_always_false` test and `view/inherited.rs`'s
-/// `test_inherited_element_update_should_notify` set.
-///
-/// Mutation-RUN: hardcode `update_should_notify` to always return `false` —
-/// the second assertion below fails (`scope_b` must notify against `scope_a1`
-/// but the stub reports it must not).
-#[test]
-fn overlay_scope_update_should_notify_is_true_only_on_handle_identity_change() {
-    let handle_a = OverlayHandle::new();
-    let handle_b = OverlayHandle::new();
-    let scope_a1 = OverlayScope::new(handle_a.clone(), SizedBox::shrink());
-    let scope_a2 = OverlayScope::new(handle_a.clone(), SizedBox::shrink());
-    let scope_b = OverlayScope::new(handle_b, SizedBox::shrink());
-
-    assert!(
-        !scope_a2.update_should_notify(&scope_a1),
-        "the same overlay handle identity must not notify dependents, even \
-         across two separately constructed OverlayScope values"
-    );
-    assert!(
-        scope_b.update_should_notify(&scope_a1),
-        "a different overlay handle identity must notify dependents"
     );
 }

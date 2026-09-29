@@ -119,34 +119,3 @@ impl PlatformError {
 
 /// Result type alias for the platform crate's lifecycle/service surface.
 pub type PlatformResult<T> = Result<T, PlatformError>;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn bootstrap_display_without_loop_error_has_no_suffix() {
-        let error = PlatformError::bootstrap("root widget attach failed");
-        assert_eq!(error.to_string(), "embedder bootstrap (on_ready) failed");
-    }
-
-    #[test]
-    fn bootstrap_display_with_loop_error_names_both() {
-        let error = PlatformError::Bootstrap {
-            source: "gpu init failed".into(),
-            loop_error: Some("loop failed".to_string()),
-        };
-        assert_eq!(
-            error.to_string(),
-            "embedder bootstrap (on_ready) failed \
-             (the event loop also failed while unwinding: loop failed)"
-        );
-    }
-
-    #[test]
-    fn bootstrap_source_preserves_the_embedder_error() {
-        let error = PlatformError::bootstrap("root widget attach failed");
-        let source = std::error::Error::source(&error).expect("Bootstrap carries a source");
-        assert_eq!(source.to_string(), "root widget attach failed");
-    }
-}

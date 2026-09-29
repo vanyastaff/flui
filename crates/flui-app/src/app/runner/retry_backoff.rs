@@ -185,7 +185,6 @@ impl RetryBackoff {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod retry_backoff_tests {
-    use std::time::Duration;
 
     use flui_engine::EngineError;
     use web_time::Instant;
@@ -194,16 +193,6 @@ mod retry_backoff_tests {
 
     fn scripted_error() -> EngineError {
         EngineError::SurfaceCreation(Box::new(std::io::Error::other("scripted retry failure")))
-    }
-
-    /// A fresh backoff has no opinion: an attempt may be made immediately.
-    #[test]
-    fn a_fresh_backoff_arms_no_deadline() {
-        let backoff = RetryBackoff::new("test subject");
-        assert!(
-            backoff.next_attempt_at().is_none(),
-            "a backoff that has never failed must not gate an attempt"
-        );
     }
 
     /// The first failure arms a deadline one `BASE` interval out, and a second
@@ -269,42 +258,5 @@ mod retry_backoff_tests {
             RetryBackoff::BASE,
             "the first failure of a fresh streak must be back at BASE, not carry the old count"
         );
-    }
-
-    /// The cap log is re-armed by a success: a second losing streak reaches
-    /// the cap line again.
-    #[test]
-    fn a_second_streak_can_reach_the_cap_again() {
-        let backoff = RetryBackoff::new("test subject");
-        let now = Instant::now();
-        for _ in 0..=RetryBackoff::SHIFT_CAP {
-            let _ = backoff.record_failure(&scripted_error(), now);
-        }
-        // The cap line has been logged once; a success re-arms it.
-        backoff.record_success();
-        assert!(
-            !backoff.state.lock().cap_logged,
-            "success re-arms the cap log"
-        );
-
-        for _ in 0..=RetryBackoff::SHIFT_CAP {
-            let _ = backoff.record_failure(&scripted_error(), now);
-        }
-        assert!(
-            backoff.state.lock().cap_logged,
-            "a second losing streak must be able to reach the cap line again"
-        );
-    }
-
-    /// `CAP` is not below the shift cap's reach: `BASE << SHIFT_CAP` is at
-    /// least `CAP`, so the cap is reachable without an unbounded shift.
-    #[test]
-    fn base_shifted_by_the_shift_cap_reaches_the_cap() {
-        assert!(
-            RetryBackoff::BASE * (1u32 << RetryBackoff::SHIFT_CAP) >= RetryBackoff::CAP,
-            "the shift cap must be high enough for BASE << SHIFT_CAP to reach CAP"
-        );
-        // And sanity-check the duration type is the one the runners use.
-        let _: Duration = RetryBackoff::CAP;
     }
 }

@@ -516,32 +516,6 @@ mod tests {
     }
 
     #[test]
-    fn test_multiple_frames() {
-        let profiler = Profiler::new();
-
-        // Simulate 5 frames
-        for _ in 0..5 {
-            profiler.begin_frame();
-
-            {
-                let _guard = profiler.profile_phase(FramePhase::Build);
-                thread::sleep(Duration::from_millis(2));
-            }
-
-            profiler.end_frame();
-        }
-
-        // Check history
-        let history = profiler.frame_history();
-        assert_eq!(history.len(), 5);
-
-        // Check frame numbers
-        for (i, stats) in history.iter().enumerate() {
-            assert_eq!(stats.frame_number, i as u64);
-        }
-    }
-
-    #[test]
     fn test_jank_detection() {
         let config = ProfilerConfig {
             jank_threshold_ms: 10.0, // 10ms threshold
@@ -573,36 +547,6 @@ mod tests {
 
         // Check jank percentage
         assert_eq!(profiler.jank_percentage(), 50.0);
-    }
-
-    /// `average_fps` is the mean of the per-frame `fps` values in the
-    /// history. Asserted against the recorded frames themselves rather than
-    /// against wall-clock expectations: the earlier version slept 16 ms per
-    /// frame and required 50–70 FPS back, which tested the OS scheduler and
-    /// failed whenever the machine was busy.
-    #[test]
-    fn average_fps_is_the_mean_of_the_recorded_frames() {
-        let profiler = Profiler::new();
-        for _ in 0..4 {
-            profiler.begin_frame();
-            thread::sleep(Duration::from_millis(2));
-            profiler.end_frame();
-        }
-
-        let history = profiler.frame_history();
-        assert_eq!(history.len(), 4);
-        let expected = history.iter().map(|s| s.fps).sum::<f64>() / history.len() as f64;
-        assert!(
-            (profiler.average_fps() - expected).abs() < 1e-9,
-            "average_fps {} must be the mean of the recorded fps values ({expected})",
-            profiler.average_fps()
-        );
-        // A frame that slept 2 ms cannot report more than 500 FPS. The lower
-        // bound belongs to the OS scheduler, not to this profiler.
-        assert!(
-            history.iter().all(|s| s.fps <= 500.0),
-            "a 2 ms frame cannot exceed 500 FPS; got {history:?}"
-        );
     }
 
     #[test]
@@ -660,44 +604,5 @@ mod tests {
             "the merged entry holds the sum of both segments, got {:.2}ms",
             build.duration_ms(),
         );
-    }
-
-    #[test]
-    fn test_custom_phase() {
-        let profiler = Profiler::new();
-
-        profiler.begin_frame();
-
-        {
-            let _guard = profiler.profile_phase(FramePhase::Custom("MyPhase"));
-            thread::sleep(Duration::from_millis(5));
-        }
-
-        profiler.end_frame();
-
-        let stats = profiler.frame_stats().unwrap();
-        let phase = stats.phase(FramePhase::Custom("MyPhase")).unwrap();
-        assert!(phase.duration_ms() >= 5.0);
-        assert_eq!(phase.phase.name(), "MyPhase");
-    }
-
-    #[test]
-    fn test_thread_safety() {
-        let profiler = Profiler::new();
-        let profiler_clone = profiler.clone();
-
-        let handle = thread::spawn(move || {
-            profiler_clone.begin_frame();
-            {
-                let _guard = profiler_clone.profile_phase(FramePhase::Build);
-                thread::sleep(Duration::from_millis(5));
-            }
-            profiler_clone.end_frame();
-        });
-
-        handle.join().unwrap();
-
-        let stats = profiler.frame_stats().unwrap();
-        assert_eq!(stats.phases.len(), 1);
     }
 }

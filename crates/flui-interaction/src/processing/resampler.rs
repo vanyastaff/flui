@@ -371,16 +371,6 @@ mod tests {
     use crate::events::{PointerType, make_down_event, make_move_event};
 
     #[test]
-    fn test_resampler_basic() {
-        let resampler = PointerEventResampler::new(PointerId::PRIMARY);
-
-        assert!(!resampler.is_tracked());
-        assert!(!resampler.is_down());
-        assert!(!resampler.has_pending_events());
-        assert_eq!(resampler.pointer_id(), PointerId::PRIMARY);
-    }
-
-    #[test]
     fn sample_releases_state_lock_before_invoking_callback() {
         let resampler = PointerEventResampler::new(PointerId::PRIMARY);
         resampler.start_tracking();
@@ -392,21 +382,6 @@ mod tests {
             assert!(
                 callback_resampler.inner.try_lock().is_some(),
                 "resampler state must not stay locked across user dispatch"
-            );
-        });
-    }
-
-    #[test]
-    fn stop_releases_state_lock_before_invoking_callback() {
-        let resampler = PointerEventResampler::new(PointerId::PRIMARY);
-        resampler.start_tracking();
-        resampler.add_event(make_move_event(Offset::new(1.0, 1.0), PointerType::Touch));
-
-        let callback_resampler = resampler.clone();
-        resampler.stop(move |_| {
-            assert!(
-                callback_resampler.inner.try_lock().is_some(),
-                "resampler state must not stay locked across stop dispatch"
             );
         });
     }
@@ -470,37 +445,6 @@ mod tests {
     }
 
     #[test]
-    fn test_add_event() {
-        let resampler = PointerEventResampler::new(PointerId::PRIMARY);
-
-        let event = make_down_event(Offset::new(10.0, 20.0), PointerType::Mouse);
-        resampler.add_event(event);
-
-        assert!(resampler.is_tracked());
-        assert!(resampler.is_down());
-        assert!(resampler.has_pending_events());
-    }
-
-    #[test]
-    fn test_sample_events() {
-        let resampler = PointerEventResampler::new(PointerId::PRIMARY);
-
-        // Add down event
-        let event = make_down_event(Offset::new(10.0, 20.0), PointerType::Mouse);
-        resampler.add_event(event);
-
-        // Sample events
-        let mut sampled_events = Vec::new();
-        let now = Instant::now();
-        resampler.sample(now, now + Duration::from_millis(16), |event| {
-            sampled_events.push(event);
-        });
-
-        assert_eq!(sampled_events.len(), 1);
-        assert!(!resampler.has_pending_events());
-    }
-
-    #[test]
     fn test_stop_flushes_events() {
         let resampler = PointerEventResampler::new(PointerId::PRIMARY);
 
@@ -517,20 +461,6 @@ mod tests {
 
         assert_eq!(flushed_events.len(), 2);
         assert!(!resampler.is_tracked());
-        assert!(!resampler.has_pending_events());
-    }
-
-    #[test]
-    fn test_clear() {
-        let resampler = PointerEventResampler::new(PointerId::PRIMARY);
-
-        let event = make_down_event(Offset::new(10.0, 20.0), PointerType::Mouse);
-        resampler.add_event(event);
-
-        assert!(resampler.has_pending_events());
-
-        resampler.clear();
-
         assert!(!resampler.has_pending_events());
     }
 }

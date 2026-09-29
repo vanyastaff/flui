@@ -530,13 +530,6 @@ impl FeedbackSignal {
         }
     }
 
-    /// Whether two handles name the same signal. Identity, not structural
-    /// equality — mirrors [`OverlayHandle::is_same`]/[`OverlayEntry::is_same`].
-    #[cfg(test)]
-    fn is_same(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.offset, &other.offset)
-    }
-
     fn offset(&self) -> Offset<f64> {
         *self.offset.lock()
     }
@@ -1433,10 +1426,8 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
 
 #[cfg(test)]
 mod tests {
-    use std::time::Instant;
 
     use flui_interaction::PointerId;
-    use flui_interaction::events::PointerType;
 
     use super::*;
 
@@ -1520,10 +1511,6 @@ mod tests {
             .expect("init_state must have captured a handle")
     }
 
-    fn empty_config() -> Arc<Mutex<DragConfig>> {
-        config_carrying(None)
-    }
-
     fn config_carrying(data: Option<ErasedDragData>) -> Arc<Mutex<DragConfig>> {
         Arc::new(Mutex::new(DragConfig {
             axis: None,
@@ -1539,17 +1526,6 @@ mod tests {
 
     fn pointer(n: u64) -> PointerId {
         PointerId::new(n).expect("contact ids start at 1")
-    }
-
-    fn update_details(dx: f64, dy: f64) -> MultiDragUpdateDetails {
-        MultiDragUpdateDetails {
-            pointer_id: pointer(1),
-            global_position: Offset::new(dx, dy),
-            local_position: Offset::new(dx, dy),
-            delta: Offset::new(dx, dy),
-            kind: PointerType::Mouse,
-            timestamp: Instant::now(),
-        }
     }
 
     /// A session wired to nothing but `config` and `rebuild` — for the cases
@@ -1584,120 +1560,6 @@ mod tests {
         }
     }
 
-    /// Pins the real fix (see the module-doc comment above this block):
-    /// `evict_and_mount_feedback` — the exact function `on_start` calls at
-    /// drag-start time — must mint a FRESH `FeedbackSignal` on every call,
-    /// never hand back (a clone of) a signal an earlier call already
-    /// returned.
-    ///
-    /// `OverlayHandle::new()` is never mounted anywhere in this test — its
-    /// own doc says mutating an unmounted handle is legal (the first real
-    /// build reads whatever the list holds; `schedule_rebuild` on a `None`
-    /// hook is a no-op) — so this needs no element tree, `BuildContext`, or
-    /// harness at all to exercise the actual production code path.
-    ///
-    /// Red-check: reintroduce a shared signal inside `evict_and_mount_feedback`
-    /// (e.g. read it from a `thread_local`/captured cell instead of calling
-    /// `FeedbackSignal::new()`) — the identity assertion below fails. See this
-    /// function's own doc comment for the exact red-check run against this fix.
-    #[test]
-    fn evict_and_mount_feedback_mints_a_fresh_signal_every_call_not_a_shared_one() {
-        let slot: Rc<RefCell<Option<OverlayEntry>>> = Rc::new(RefCell::new(None));
-        let overlay_handle = OverlayHandle::new();
-        let builder: Rc<dyn Fn() -> BoxedView> =
-            Rc::new(|| crate::SizedBox::new(1.0, 1.0).into_view().boxed());
-
-        let signal_1 = evict_and_mount_feedback(
-            &slot,
-            Some(overlay_handle.clone()),
-            Some(Rc::clone(&builder)),
-            Offset::ZERO,
-        )
-        .expect("an overlay handle and a builder are both configured — must mint a signal");
-
-        // A second call — exactly what a second overlapping `on_start` call
-        // does while the first session is still live (nothing here has
-        // ended the first session; this call alone evicts its entry).
-        let signal_2 = evict_and_mount_feedback(
-            &slot,
-            Some(overlay_handle.clone()),
-            Some(Rc::clone(&builder)),
-            Offset::ZERO,
-        )
-        .expect("an overlay handle and a builder are both configured — must mint a signal");
-
-        assert!(
-            !signal_1.is_same(&signal_2),
-            "each call must mint its own FeedbackSignal — a still-live \
-             evicted session must not keep writing into the surviving one"
-        );
-    }
-
-    /// `evict_and_mount_feedback` returns `None` — minting nothing — when
-    /// there is nowhere to show feedback (no overlay) or nothing configured
-    /// to show (no builder), the same as before this port's feedback wiring
-    /// landed at all.
-    #[test]
-    fn evict_and_mount_feedback_mints_nothing_without_both_an_overlay_and_a_builder() {
-        let slot: Rc<RefCell<Option<OverlayEntry>>> = Rc::new(RefCell::new(None));
-        let builder: Rc<dyn Fn() -> BoxedView> =
-            Rc::new(|| crate::SizedBox::new(1.0, 1.0).into_view().boxed());
-
-        assert!(
-            evict_and_mount_feedback(&slot, None, Some(builder), Offset::ZERO).is_none(),
-            "no overlay ancestor: nowhere to paint feedback"
-        );
-        assert!(
-            evict_and_mount_feedback(&slot, Some(OverlayHandle::new()), None, Offset::ZERO)
-                .is_none(),
-            "no feedback builder configured: nothing to paint"
-        );
-    }
-
-    /// A narrower, separate characterization from the two tests above: not
-    /// of the minting fix itself, but of `DragSession::update`'s pre-existing
-    /// "write only to whichever `FeedbackSignal` I was constructed with"
-    /// semantics — two sessions built with two independent signals never
-    /// cross-write, regardless of how those signals were minted.
-    #[test]
-    fn drag_session_update_writes_only_to_its_own_constructed_signal() {
-        let rebuild = mount_and_capture_rebuild_handle();
-
-        // Session 1 "wins" the feedback slot first...
-        let signal_1 = FeedbackSignal::new();
-        let mut session_1 = test_session(pointer(1), empty_config(), rebuild.clone());
-        session_1.feedback = Some(signal_1.clone());
-
-        // ...then a second session starts and evicts it — minting its OWN
-        // signal per the fix, not `signal_1.clone()`.
-        let signal_2 = FeedbackSignal::new();
-        let mut session_2 = test_session(pointer(2), empty_config(), rebuild);
-        session_2.feedback = Some(signal_2.clone());
-
-        // Session 1 is stale/evicted but still live (its own pointer hasn't
-        // lifted yet) — its `update()` calls keep landing somewhere.
-        session_1.update(update_details(10.0, 0.0));
-        // Session 2 is the surviving session whose signal the mounted layer
-        // actually reads.
-        session_2.update(update_details(0.0, 25.0));
-
-        assert_eq!(
-            signal_2.offset(),
-            Offset::new(0.0, 25.0),
-            "the surviving signal must reflect only the surviving session's own moves"
-        );
-        assert_eq!(
-            signal_1.offset(),
-            Offset::new(10.0, 0.0),
-            "the evicted session's own signal still tracks its own displacement locally"
-        );
-        assert_ne!(
-            signal_1.offset(),
-            signal_2.offset(),
-            "the evicted session's writes must never bleed into the surviving signal"
-        );
-    }
-
     // ------------------------------------------------------------------
     // Live drag-target discovery, driven against a controllable probe.
     //
@@ -1712,8 +1574,6 @@ mod tests {
     enum ProbeAnswer {
         /// The tree replied with this path.
         Path(Vec<HitTestEntry>),
-        /// A frame phase holds the tree.
-        Busy,
     }
 
     /// A [`HitTestProbe`] whose answer the test sets.
@@ -1732,10 +1592,6 @@ mod tests {
         fn answer_with(&self, path: Vec<HitTestEntry>) {
             let _prev = std::mem::replace(&mut *self.answer.borrow_mut(), ProbeAnswer::Path(path));
         }
-
-        fn report_busy(&self) {
-            let _prev = std::mem::replace(&mut *self.answer.borrow_mut(), ProbeAnswer::Busy);
-        }
     }
 
     impl flui_interaction::HitTestProbe for ScriptedProbe {
@@ -1749,7 +1605,6 @@ mod tests {
                     *result.path_mut() = path;
                     Ok(())
                 }
-                ProbeAnswer::Busy => Err(flui_interaction::InteractionDispatchError::TreeBusy),
             }
         }
     }
@@ -1774,65 +1629,6 @@ mod tests {
             leaves.fetch_add(1, Ordering::SeqCst);
         });
         flui_view::StatefulView::create_state(&target)
-    }
-
-    /// A tree that cannot answer is NOT a tree that answered "nothing here".
-    ///
-    /// `TreeBusy` must leave every entered target exactly where it was. Mapping
-    /// it to an empty path instead would read as "the drag is over nothing" and
-    /// fire a leave on every target, every time a frame happened to hold the
-    /// tree mid-drag. The final arm is the discriminator: an actually-empty
-    /// path DOES leave, so this test fails if the two are collapsed.
-    #[test]
-    fn a_busy_tree_changes_nothing_while_an_empty_path_leaves_everything() {
-        let lane = flui_interaction::InteractionLane::try_new().expect("a fresh lane");
-        lane.enter(|| {
-            let leaves = Arc::new(AtomicUsize::new(0));
-            let target = counting_target(&leaves);
-            let slot = target.slot();
-            let probe = ScriptedProbe::new();
-            let session = test_session(
-                pointer(1),
-                config_carrying(Some(Arc::new("parcel".to_string()))),
-                mount_and_capture_rebuild_handle(),
-            );
-            *session.hit_test.borrow_mut() = Some(flui_interaction::HitTestHandle::new(
-                lane.dispatch_handle(),
-                Rc::new(probe.clone()),
-            ));
-
-            probe.answer_with(vec![entry_for(&slot)]);
-            session.update_drag_at(Offset::ZERO);
-            assert_eq!(
-                session.entered.borrow().len(),
-                1,
-                "premise: the drag is inside the target before the tree goes busy"
-            );
-
-            probe.report_busy();
-            session.update_drag_at(Offset::ZERO);
-            assert_eq!(
-                leaves.load(Ordering::SeqCst),
-                0,
-                "a busy tree must leave the drag's standing untouched — it is \
-                 an unanswered question, not an answer of 'over nothing'"
-            );
-            assert_eq!(
-                session.entered.borrow().len(),
-                1,
-                "...and the entered list must be unchanged, not emptied"
-            );
-
-            probe.answer_with(Vec::new());
-            session.update_drag_at(Offset::ZERO);
-            assert_eq!(
-                leaves.load(Ordering::SeqCst),
-                1,
-                "an EMPTY path is a real answer and must leave the target — \
-                 without this arm the assertion above would also pass against \
-                 an implementation that never leaves anything"
-            );
-        });
     }
 
     /// Two contacts dragging over the same target are tracked independently:

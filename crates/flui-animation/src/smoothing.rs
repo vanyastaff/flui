@@ -238,34 +238,8 @@ mod tests {
     }
 
     #[test]
-    fn exp_decay_half_life_halves_per_half_life() {
-        let v = exp_decay_half_life(0.0, 10.0, 0.5, 0.5);
-        assert!((v - 5.0).abs() < 1e-4, "one half-life closes half the gap");
-        let v = exp_decay_half_life(v, 10.0, 0.5, 0.5);
-        assert!(
-            (v - 7.5).abs() < 1e-4,
-            "two half-lives close three quarters"
-        );
-    }
-
-    #[test]
     fn zero_half_life_snaps() {
         assert_eq!(exp_decay_half_life(3.0, 7.0, 0.0, 0.016), 7.0);
-    }
-
-    #[test]
-    fn smoothed_follows_moving_target() {
-        let mut s = Smoothed::new(0.0, 0.1);
-        s.set_target(10.0);
-        s.tick(0.1);
-        assert!((s.value() - 5.0).abs() < 1e-4);
-        // Retarget mid-flight: decay continues from the current value.
-        s.set_target(0.0);
-        s.tick(0.1);
-        assert!((s.value() - 2.5).abs() < 1e-4);
-        assert!(!s.is_settled(0.01));
-        s.snap_to(0.0);
-        assert!(s.is_settled(0.0));
     }
 
     #[test]

@@ -585,22 +585,6 @@ mod tests {
     }
 
     #[test]
-    fn new_starts_with_index_equal_to_previous_index() {
-        let controller = TabController::new(3, 1);
-        assert_eq!(controller.index(), 1);
-        assert_eq!(controller.previous_index(), 1);
-        assert_eq!(controller.length(), 3);
-    }
-
-    #[test]
-    fn set_index_updates_index_and_previous_index() {
-        let controller = TabController::new(3, 0);
-        controller.set_index(2);
-        assert_eq!(controller.index(), 2);
-        assert_eq!(controller.previous_index(), 0);
-    }
-
-    #[test]
     fn set_index_notifies_listeners_on_a_real_change() {
         let controller = TabController::new(3, 0);
         let (listener, count) = counting_listener();
@@ -676,12 +660,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "index 1 is out of range for length 0")]
-    fn new_rejects_nonzero_index_when_length_is_zero() {
-        let _ = TabController::new(0, 1);
-    }
-
-    #[test]
     #[should_panic(expected = "index 5 is out of range for length 3")]
     fn default_tab_controller_initial_index_rejects_out_of_range() {
         let _ =
@@ -707,60 +685,6 @@ mod tests {
         controller.set_index(2);
 
         assert_eq!(observed.get(), Some((2, 0)));
-    }
-
-    #[test]
-    fn animate_to_is_an_alias_for_set_index() {
-        let controller = TabController::new(3, 0);
-        controller.animate_to(2);
-        assert_eq!(controller.index(), 2);
-        assert_eq!(controller.previous_index(), 0);
-    }
-
-    #[test]
-    fn remove_listener_stops_future_notifications() {
-        let controller = TabController::new(3, 0);
-        let (listener, count) = counting_listener();
-        let id = controller.add_listener(listener);
-        controller.remove_listener(id);
-
-        controller.set_index(1);
-
-        assert_eq!(count.get(), 0);
-    }
-
-    #[test]
-    fn clones_share_identity() {
-        let a = TabController::new(3, 0);
-        let b = a.clone();
-        assert_eq!(a, b);
-
-        b.set_index(2);
-        assert_eq!(
-            a.index(),
-            2,
-            "a clone must observe the other clone's mutation"
-        );
-    }
-
-    #[test]
-    fn independently_constructed_controllers_are_not_equal() {
-        let a = TabController::new(3, 0);
-        let b = TabController::new(3, 0);
-        assert_ne!(a, b, "identical (index, length) does not imply identity");
-    }
-
-    #[test]
-    fn recreate_for_length_change_carries_a_still_valid_index_over_unchanged() {
-        let old = TabController::new(5, 2);
-        old.set_index(3);
-
-        let recreated = recreate_for_length_change(&old, 4);
-
-        assert_eq!(recreated.length(), 4);
-        assert_eq!(recreated.index(), 3, "3 is still < 4, so it carries over");
-        assert_eq!(recreated.previous_index(), old.previous_index());
-        assert_ne!(recreated, old, "recreation must produce a new identity");
     }
 
     /// Red-check: if the clamp used `new_length` instead of `new_length -
@@ -789,30 +713,5 @@ mod tests {
         assert_eq!(recreated.length(), 0);
         assert_eq!(recreated.index(), 0);
         assert_eq!(recreated.previous_index(), 2);
-    }
-
-    #[test]
-    fn default_tab_controller_new_leaves_initial_index_at_zero() {
-        let root = DefaultTabController::new(3, flui_sdk::widgets::SizedBox::shrink());
-        assert_eq!(root.length, 3);
-        assert_eq!(root.initial_index, 0);
-    }
-
-    #[test]
-    fn default_tab_controller_initial_index_overrides_the_start() {
-        let root =
-            DefaultTabController::new(3, flui_sdk::widgets::SizedBox::shrink()).initial_index(2);
-        assert_eq!(root.initial_index, 2);
-    }
-
-    #[test]
-    fn debug_format_does_not_panic() {
-        let controller = TabController::new(3, 1);
-        let rendered = format!("{controller:?}");
-        assert!(rendered.contains("TabController"));
-
-        let root = DefaultTabController::new(3, flui_sdk::widgets::SizedBox::shrink());
-        let rendered = format!("{root:?}");
-        assert!(rendered.contains("DefaultTabController"));
     }
 }

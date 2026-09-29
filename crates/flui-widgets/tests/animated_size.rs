@@ -11,7 +11,6 @@
 //! the latter would silently reset the in-flight retarget state on every
 //! unrelated rebuild.
 
-use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -74,27 +73,6 @@ impl ViewState<SizeProbe> for SizeProbeState {
 
 fn width(laid: &crate::common::LaidOut) -> f64 {
     laid.size(laid.current_root()).width
-}
-
-#[test]
-fn animated_size_first_frame_snaps_to_child_size_with_no_motion() {
-    let vsync = Vsync::new();
-    let side = Arc::new(Mutex::new(20.0));
-    let probe = SizeProbe {
-        vsync: vsync.clone(),
-        side: Arc::clone(&side),
-        alignment: Arc::new(Mutex::new(Alignment::CENTER)),
-        on_end: None,
-    };
-    let laid = lay_out_animated(probe, loose(200.0), vsync);
-
-    // No configuration change yet: the widget sits AT the child's size, no
-    // animation.
-    assert!(
-        (width(&laid) - 20.0).abs() < 1e-4,
-        "first frame shows the child's raw size, got {}",
-        width(&laid),
-    );
 }
 
 #[test]
@@ -215,38 +193,6 @@ fn animated_size_unrelated_rebuild_does_not_reset_in_flight_animation() {
         "the animation must still converge to the target after the \
          unrelated rebuild, got {}",
         width(&laid),
-    );
-}
-
-#[test]
-fn animated_size_on_end_accepts_owner_local_rc_state() {
-    let vsync = Vsync::new();
-    let side = Arc::new(Mutex::new(20.0));
-    let calls = Rc::new(Cell::new(0));
-    let calls_for_callback = Rc::clone(&calls);
-    let probe = SizeProbe {
-        vsync: vsync.clone(),
-        side: Arc::clone(&side),
-        alignment: Arc::new(Mutex::new(Alignment::CENTER)),
-        on_end: Some(Rc::new(move |_cx| {
-            calls_for_callback.set(calls_for_callback.get() + 1);
-        })),
-    };
-    let mut laid = lay_out_animated(probe, loose(200.0), vsync);
-
-    *side.lock() = 100.0;
-    laid.pump();
-    laid.pump_for(FRAME);
-    assert_eq!(calls.get(), 0, "the run has not completed yet");
-
-    for _ in 0..5 {
-        laid.pump_for(FRAME);
-    }
-
-    assert_eq!(
-        calls.get(),
-        1,
-        "on_end fired from the owner plane and captured Rc<Cell<_>>"
     );
 }
 

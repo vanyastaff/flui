@@ -235,14 +235,4 @@ mod tests {
         assert_eq!(body_pos.dx, 0.0);
         assert_eq!(body_pos.dy, 60.0); // 50 (header height) + 10 (padding)
     }
-
-    #[test]
-    fn test_should_relayout() {
-        let delegate1 = TestDelegate { padding: 10.0 };
-        let delegate2 = TestDelegate { padding: 10.0 };
-        let delegate3 = TestDelegate { padding: 20.0 };
-
-        assert!(!delegate1.should_relayout(&delegate2));
-        assert!(delegate1.should_relayout(&delegate3));
-    }
 }

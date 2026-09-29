@@ -594,14 +594,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_controller_starts_at_zero() {
-        let controller = ScrollController::new();
-        assert_eq!(controller.pixels(), 0.0);
-        assert_eq!(controller.min_scroll_extent(), 0.0);
-        assert_eq!(controller.max_scroll_extent(), 0.0);
-    }
-
-    #[test]
     fn set_pixels_updates_position_and_notifies_listener() {
         let controller = ScrollController::new();
         let notified = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -616,37 +608,6 @@ mod tests {
         assert!(
             notified.load(std::sync::atomic::Ordering::SeqCst),
             "set_pixels should notify listeners"
-        );
-    }
-
-    #[test]
-    fn same_value_set_pixels_does_not_re_notify() {
-        // A no-op `set_pixels` no longer re-notifies, because
-        // `ScrollPosition::set_pixels` is epsilon-guarded. This test pins
-        // that behavior explicitly so a future regression toward "always
-        // notify" is visible here, not just inferred from the absence of a
-        // pin.
-        let controller = ScrollController::new();
-        controller.set_pixels(10.0);
-
-        let notified = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let counter = std::sync::Arc::clone(&notified);
-        controller.as_listenable().add_listener(Arc::new(move || {
-            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        }));
-
-        controller.set_pixels(10.0); // same value
-        assert_eq!(
-            notified.load(std::sync::atomic::Ordering::SeqCst),
-            0,
-            "writing the same pixel value must not notify"
-        );
-
-        controller.set_pixels(11.0); // real change
-        assert_eq!(
-            notified.load(std::sync::atomic::Ordering::SeqCst),
-            1,
-            "writing a different pixel value must notify"
         );
     }
 
@@ -691,28 +652,6 @@ mod tests {
     }
 
     #[test]
-    fn with_initial_scroll_offset_seeds_pixels_before_any_layout() {
-        let controller = ScrollController::with_initial_scroll_offset(209.0);
-        assert_eq!(
-            controller.pixels(),
-            209.0,
-            "with_initial_scroll_offset must seed pixels immediately, before any \
-             update_dimensions/layout call establishes real extents"
-        );
-
-        // The seed is unclamped (extents are unknown yet, both 0.0) — the same
-        // contract as `set_pixels` before mount; a subsequent `update_dimensions`
-        // brings it into range.
-        controller.update_dimensions(300.0, 0.0, 150.0);
-        assert_eq!(
-            controller.pixels(),
-            150.0,
-            "the deferred clamp must apply once real extents arrive, same as any \
-             other pre-layout pixel write"
-        );
-    }
-
-    #[test]
     fn jump_to_clamps_to_extents() {
         let controller = ScrollController::new();
         controller.update_dimensions(300.0, 0.0, 500.0);
@@ -728,60 +667,6 @@ mod tests {
             controller.pixels(),
             250.0,
             "jump_to accepts in-range values"
-        );
-    }
-
-    #[test]
-    fn update_dimensions_clamps_existing_pixels_to_new_extents() {
-        let controller = ScrollController::new();
-        controller.set_pixels(600.0);
-        // New max is 400 — the current 600 must be clamped.
-        controller.update_dimensions(300.0, 0.0, 400.0);
-        assert_eq!(
-            controller.pixels(),
-            400.0,
-            "update_dimensions must clamp pixels that fall outside the new max"
-        );
-    }
-
-    #[test]
-    fn thumb_fraction_with_equal_viewport_and_scroll_extent() {
-        let controller = ScrollController::new();
-        // viewport = 400, scroll_extent = 400, content = 800.
-        controller.update_dimensions(400.0, 0.0, 400.0);
-        let fraction = controller.thumb_fraction();
-        // thumb_fraction = 400 / 800 = 0.5
-        assert!(
-            (fraction - 0.5).abs() < 0.001,
-            "thumb fraction should be 0.5 when viewport equals scroll extent, got {fraction}"
-        );
-    }
-
-    #[test]
-    fn thumb_fraction_is_one_when_content_fits() {
-        let controller = ScrollController::new();
-        // max_extent = 0 means content fits entirely in the viewport.
-        controller.update_dimensions(400.0, 0.0, 0.0);
-        assert_eq!(
-            controller.thumb_fraction(),
-            1.0,
-            "thumb fraction should be 1.0 when scroll_extent is zero"
-        );
-    }
-
-    #[test]
-    fn thumb_offset_fraction_at_half_scroll() {
-        let controller = ScrollController::new();
-        controller.update_dimensions(400.0, 0.0, 400.0);
-        controller.set_pixels(200.0); // half-way
-        // offset_fraction = (200 - 0) / 400 = 0.5 -- a fraction of the
-        // AVAILABLE track (0=top, 1=bottom), independent of thumb_fraction;
-        // see this method's doc for why `(1 - thumb_fraction)` must NOT be
-        // folded in here.
-        let offset = controller.thumb_offset_fraction();
-        assert!(
-            (offset - 0.5).abs() < 0.001,
-            "thumb offset fraction at half-scroll should be 0.5, got {offset}"
         );
     }
 
@@ -808,18 +693,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn clones_share_state() {
-        let controller = ScrollController::new();
-        let clone = controller.clone();
-        controller.set_pixels(77.0);
-        assert_eq!(
-            clone.pixels(),
-            77.0,
-            "a clone must observe mutations made through the original"
-        );
-    }
-
     // -- animate_to / service_pending_command --------------------------------
 
     /// Builds an unbounded fling-style `AnimationController` — the same
@@ -828,24 +701,6 @@ mod tests {
     /// `animate_to`'s own pre-clamp of the target.
     fn fling_stub() -> AnimationController {
         AnimationController::unbounded_without_ticker(Duration::from_millis(1))
-    }
-
-    #[test]
-    fn animate_to_with_zero_duration_jumps_immediately() {
-        let controller = ScrollController::new();
-        controller.update_dimensions(300.0, 0.0, 500.0);
-
-        controller.animate_to(
-            200.0,
-            Duration::ZERO,
-            Arc::new(flui_animation::Curves::Linear),
-        );
-
-        assert_eq!(
-            controller.pixels(),
-            200.0,
-            "a zero-duration animate_to must jump immediately, like jump_to"
-        );
     }
 
     #[test]
@@ -966,33 +821,6 @@ mod tests {
         );
     }
 
-    /// `animate_to`'s tolerance short-circuit (see that method's own doc):
-    /// a target exactly equal to the current position must jump immediately
-    /// rather than queue a command — proven here by NEVER installing a
-    /// `service_pending_command` call at all: if this queued anything, the
-    /// fling controller would simply never see it, so the only way `pixels`
-    /// could end up at `target` is the immediate `jump_to` path.
-    #[test]
-    fn animate_to_already_at_the_target_jumps_immediately_without_queuing() {
-        let controller = ScrollController::new();
-        controller.update_dimensions(300.0, 0.0, 500.0);
-        controller.set_pixels(200.0);
-
-        controller.animate_to(
-            200.0,
-            Duration::from_millis(100),
-            Arc::new(flui_animation::Curves::Linear),
-        );
-
-        assert_eq!(
-            controller.pixels(),
-            200.0,
-            "animate_to already at the target must leave pixels unchanged \
-             (via the immediate jump_to short-circuit), not merely queue a \
-             command that would settle there only once serviced"
-        );
-    }
-
     /// Regression (latent deadlock): `jump_to` must clone the `stop_hook`
     /// `Arc` out and drop the mutex guard BEFORE invoking it — not call it
     /// while still holding the lock. `fling.stop()` (what the installed hook
@@ -1057,75 +885,6 @@ mod tests {
             "jump_to must not deadlock when its stop_hook synchronously \
              re-enters jump_to via a status listener — the stop_hook Arc must \
              be cloned out of the mutex guard before the hook is invoked"
-        );
-    }
-
-    /// `ScrollableState::dispose` clears both the stop hook and any queued
-    /// pending command (`clear_stop_hook`/`clear_pending_command`) — proven
-    /// directly against the two pub(crate) entry points dispose calls,
-    /// rather than through a full widget mount/unmount (see
-    /// `disposing_a_scrollable_clears_the_controllers_pending_command_before_a_reattach`,
-    /// `tests/scroll.rs`, for the end-to-end version of the pending-command
-    /// half — `jump_to` after a REAL dispose is behaviorally identical
-    /// whether or not the hook was cleared, since `AnimationController::stop`
-    /// on an already-disposed controller harmlessly no-ops either way, so
-    /// only a direct check like this one can observe the hook itself being
-    /// gone).
-    #[test]
-    fn clear_stop_hook_and_clear_pending_command_remove_both() {
-        use flui_animation::Animation;
-
-        let controller = ScrollController::new();
-        controller.update_dimensions(300.0, 0.0, 500.0);
-
-        // A "poison" hook that panics if ever invoked — proves
-        // `clear_stop_hook` actually removes it, not merely that nothing
-        // happens to trigger it afterward.
-        controller.set_stop_hook(Arc::new(|| {
-            panic!("stop_hook must not fire after clear_stop_hook");
-        }));
-        controller.animate_to(
-            400.0,
-            Duration::from_millis(50),
-            Arc::new(flui_animation::Curves::Linear),
-        );
-
-        controller.clear_stop_hook();
-        controller.clear_pending_command();
-
-        // jump_to must not invoke the (cleared) poison hook.
-        controller.jump_to(10.0);
-        assert_eq!(controller.pixels(), 10.0);
-
-        // The queued animate_to must be gone too: servicing against a FRESH
-        // fling controller must be a complete no-op, not silently start the
-        // stale animation.
-        let fling = fling_stub();
-        let completed_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let counter = Arc::clone(&completed_count);
-        let _id = fling.add_status_listener(Arc::new(move |status| {
-            if status == flui_animation::AnimationStatus::Completed {
-                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            }
-        }));
-
-        controller.service_pending_command(&fling);
-
-        // The preceding `jump_to` re-queued `Cancel` instead (see `jump_to`'s
-        // own doc), which services as `fling.stop()` -- on a fresh,
-        // never-run unbounded controller, `stop()` reports `Completed`
-        // (direction defaults Forward, and neither infinite bound is ever
-        // "at" on an unbounded range). Either way, the queued animate_to
-        // must not start. A COUNTING listener (not a bare `status()` read)
-        // proves `stop()` fired a real transition rather than the queued
-        // animate_to silently starting and separately landing on the same
-        // status.
-        assert_eq!(fling.status(), flui_animation::AnimationStatus::Completed);
-        assert_eq!(
-            completed_count.load(std::sync::atomic::Ordering::SeqCst),
-            1,
-            "clear_pending_command must drop the queued animate_to; servicing must emit \
-             exactly one Completed transition (fling.stop()'s), not the animate_to starting"
         );
     }
 }

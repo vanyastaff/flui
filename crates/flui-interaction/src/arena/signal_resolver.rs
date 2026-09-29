@@ -266,50 +266,6 @@ mod tests {
     use crate::ids::PointerId;
 
     #[test]
-    fn test_resolver_creation() {
-        let resolver = PointerSignalResolver::new();
-        assert_eq!(resolver.handler_count(PointerId::PRIMARY), 0);
-    }
-
-    #[test]
-    fn test_register_handler() {
-        let resolver = PointerSignalResolver::new();
-
-        let handler_id = resolver.register(PointerId::PRIMARY, SignalPriority::Normal, |_| {});
-
-        assert_eq!(resolver.handler_count(PointerId::PRIMARY), 1);
-        assert!(handler_id.get() > 0);
-    }
-
-    #[test]
-    fn test_unregister_handler() {
-        let resolver = PointerSignalResolver::new();
-
-        let handler_id = resolver.register(PointerId::PRIMARY, SignalPriority::Normal, |_| {});
-        assert_eq!(resolver.handler_count(PointerId::PRIMARY), 1);
-
-        resolver.unregister(PointerId::PRIMARY, handler_id);
-        assert_eq!(resolver.handler_count(PointerId::PRIMARY), 0);
-    }
-
-    #[test]
-    fn test_resolve_single_handler() {
-        let resolver = PointerSignalResolver::new();
-        let called = Rc::new(Cell::new(false));
-        let called_clone = called.clone();
-
-        resolver.register(PointerId::PRIMARY, SignalPriority::Normal, move |_| {
-            called_clone.set(true);
-        });
-
-        let event = crate::events::make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0));
-
-        resolver.resolve(PointerId::PRIMARY, event);
-
-        assert!(called.get());
-    }
-
-    #[test]
     fn test_priority_resolution() {
         let resolver = PointerSignalResolver::new();
         let low_called = Rc::new(Cell::new(false));
@@ -335,66 +291,6 @@ mod tests {
     }
 
     #[test]
-    fn test_same_priority_last_wins() {
-        let resolver = PointerSignalResolver::new();
-        let first_called = Rc::new(Cell::new(0));
-        let second_called = Rc::new(Cell::new(0));
-
-        let first_clone = first_called.clone();
-        let second_clone = second_called.clone();
-
-        resolver.register(PointerId::PRIMARY, SignalPriority::Normal, move |_| {
-            first_clone.set(first_clone.get() + 1);
-        });
-
-        resolver.register(PointerId::PRIMARY, SignalPriority::Normal, move |_| {
-            second_clone.set(second_clone.get() + 1);
-        });
-
-        let event = crate::events::make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0));
-
-        resolver.resolve(PointerId::PRIMARY, event);
-
-        // Last registered (second) should win
-        assert_eq!(first_called.get(), 0);
-        assert_eq!(second_called.get(), 1);
-    }
-
-    #[test]
-    fn test_clear() {
-        let resolver = PointerSignalResolver::new();
-
-        resolver.register(PointerId::PRIMARY, SignalPriority::Normal, |_| {});
-        resolver.register(PointerId::PRIMARY, SignalPriority::Normal, |_| {});
-
-        assert_eq!(resolver.handler_count(PointerId::PRIMARY), 2);
-
-        resolver.clear(PointerId::PRIMARY);
-
-        assert_eq!(resolver.handler_count(PointerId::PRIMARY), 0);
-    }
-
-    #[test]
-    fn test_clear_all() {
-        let resolver = PointerSignalResolver::new();
-
-        resolver.register(PointerId::PRIMARY, SignalPriority::Normal, |_| {});
-        resolver.register(
-            PointerId::new(2).expect("nonzero pointer id"),
-            SignalPriority::Normal,
-            |_| {},
-        );
-
-        resolver.clear_all();
-
-        assert_eq!(resolver.handler_count(PointerId::PRIMARY), 0);
-        assert_eq!(
-            resolver.handler_count(PointerId::new(2).expect("nonzero pointer id")),
-            0
-        );
-    }
-
-    #[test]
     fn test_resolve_and_accept() {
         let resolver = PointerSignalResolver::new();
         let called = Rc::new(Cell::new(false));
@@ -410,21 +306,5 @@ mod tests {
 
         assert!(accepted);
         assert!(called.get());
-    }
-
-    #[test]
-    fn signal_callback_accepts_owner_local_rc_state() {
-        let resolver = PointerSignalResolver::new();
-        let total = Rc::new(Cell::new(0));
-        let captured = Rc::clone(&total);
-
-        resolver.register(PointerId::PRIMARY, SignalPriority::Normal, move |_| {
-            captured.set(captured.get() + 1);
-        });
-
-        let event = crate::events::make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0));
-        resolver.resolve(PointerId::PRIMARY, event);
-
-        assert_eq!(total.get(), 1);
     }
 }

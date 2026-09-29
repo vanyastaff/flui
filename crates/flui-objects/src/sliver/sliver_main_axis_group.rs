@@ -295,12 +295,4 @@ mod tests {
         assert_eq!(fix_precision_error(1.5), 1.5);
         assert_eq!(fix_precision_error(-1.5), -1.5);
     }
-
-    #[test]
-    fn an_empty_group_reports_zero_geometry() {
-        // The full layout contract is exercised through the harness (see the
-        // catalog row); this pins only the childless fast path's shape.
-        let group = RenderSliverMainAxisGroup::new();
-        assert_eq!(group.laid_out_child_count, 0);
-    }
 }

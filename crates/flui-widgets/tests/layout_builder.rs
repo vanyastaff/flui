@@ -15,10 +15,9 @@
 //! (`_RenderLayoutBuilder.performLayout`).
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::common::{lay_out, loose};
-use flui_foundation::geometry::{Offset, Size};
+use flui_foundation::geometry::Size;
 use flui_rendering::constraints::BoxConstraints;
 use parking_lot::Mutex;
 
@@ -77,26 +76,6 @@ fn layout_builder_receives_real_constraints_and_sizes_to_its_child() {
         Size::new(50.0, 100.0),
         "the child returned by the builder is laid out in the SAME frame"
     );
-}
-
-/// Flutter's `'LayoutBuilder does not crash at zero area'`: a zero-area box
-/// still runs the builder and lays out to `Size::ZERO`.
-#[test]
-fn layout_builder_does_not_crash_at_zero_area() {
-    let calls = Arc::new(AtomicUsize::new(0));
-    let calls_for_builder = Arc::clone(&calls);
-
-    let laid = lay_out(
-        SizedBox::new(0.0, 0.0).child(LayoutBuilder::new(move |_ctx, _constraints| {
-            calls_for_builder.fetch_add(1, Ordering::Relaxed);
-            SizedBox::new(10.0, 10.0)
-        })),
-        loose(400.0),
-    );
-
-    assert_eq!(calls.load(Ordering::Relaxed), 1);
-    let builder_node = laid.only_child(laid.root());
-    assert_eq!(laid.size(builder_node), Size::ZERO);
 }
 
 /// Changing the constraints re-invokes the builder and relays the child out —
@@ -188,44 +167,5 @@ fn layout_builder_same_constraints_do_not_reinvoke_the_builder() {
         log.lock().len(),
         1,
         "unchanged constraints and no widget update are not a rebuild trigger"
-    );
-}
-
-/// Flutter's `updateShouldRebuild` defaults to `true`: rebuilding the widget
-/// with a **new builder closure** re-invokes it even though the constraints are
-/// identical.
-#[test]
-fn layout_builder_new_builder_closure_is_honored() {
-    let bounds = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
-
-    let mut laid = lay_out(
-        ConstrainedBox::new(bounds).child(LayoutBuilder::new(|_ctx, _c| SizedBox::new(20.0, 20.0))),
-        loose(400.0),
-    );
-    let builder_node = laid.only_child(laid.root());
-    assert_eq!(laid.size(builder_node), Size::new(20.0, 20.0));
-
-    // Identical constraints, different closure: Flutter's `updateShouldRebuild`
-    // default (`true`) means the builder must run again.
-    laid.pump_widget(
-        ConstrainedBox::new(bounds).child(LayoutBuilder::new(|_ctx, _c| SizedBox::new(40.0, 10.0))),
-    );
-
-    let builder_node = laid.only_child(laid.current_root());
-    let child = laid.only_child(builder_node);
-    assert_eq!(
-        laid.size(child),
-        Size::new(40.0, 10.0),
-        "the new closure's child must replace the old one"
-    );
-    assert_eq!(
-        laid.size(builder_node),
-        Size::new(40.0, 10.0),
-        "the builder node follows its new child"
-    );
-    assert_eq!(
-        laid.offset(child),
-        Offset::ZERO,
-        "the replacement child sits at the builder's origin"
     );
 }

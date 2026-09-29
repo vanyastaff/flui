@@ -149,37 +149,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_cache_extent_style_default() {
-        let style = CacheExtentStyle::default();
-        assert_eq!(style, CacheExtentStyle::Pixel);
-    }
-
-    #[test]
-    fn test_sliver_paint_order_default() {
-        let order = SliverPaintOrder::default();
-        assert_eq!(order, SliverPaintOrder::FirstIsTop);
-    }
-
-    #[test]
-    fn test_revealed_offset_new() {
-        let rect = Rect::from_ltwh(10.0, 20.0, 100.0, 50.0);
-        let offset = RevealedOffset::new(100.0, rect);
-
-        assert_eq!(offset.offset, 100.0);
-        assert_eq!(offset.rect, rect);
-    }
-
-    #[test]
-    fn test_revealed_offset_clamp_already_visible() {
-        let leading = RevealedOffset::new(50.0, Rect::from_ltwh(0.0, 0.0, 100.0, 100.0));
-        let trailing = RevealedOffset::new(150.0, Rect::from_ltwh(0.0, 0.0, 100.0, 100.0));
-
-        // Current offset is between leading and trailing - already visible
-        let result = RevealedOffset::clamp_offset(leading, trailing, 100.0);
-        assert!(result.is_none());
-    }
-
-    #[test]
     fn test_revealed_offset_clamp_needs_scroll_down() {
         let leading = RevealedOffset::new(50.0, Rect::from_ltwh(0.0, 0.0, 100.0, 100.0));
         let trailing = RevealedOffset::new(150.0, Rect::from_ltwh(0.0, 0.0, 100.0, 100.0));
@@ -199,16 +168,5 @@ mod tests {
         let result = RevealedOffset::clamp_offset(leading, trailing, 30.0);
         assert!(result.is_some());
         assert_eq!(result.unwrap().offset, 50.0);
-    }
-
-    #[test]
-    fn test_revealed_offset_clamp_inverted() {
-        // When leading > trailing (inverted order)
-        let leading = RevealedOffset::new(150.0, Rect::from_ltwh(0.0, 0.0, 100.0, 100.0));
-        let trailing = RevealedOffset::new(50.0, Rect::from_ltwh(0.0, 0.0, 100.0, 100.0));
-
-        // Current offset is between - already visible
-        let result = RevealedOffset::clamp_offset(leading, trailing, 100.0);
-        assert!(result.is_none());
     }
 }

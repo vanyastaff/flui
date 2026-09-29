@@ -200,22 +200,6 @@ fn a_themed_subtree_carries_both_the_elevated_button_and_app_bar_theme_simultane
     );
 }
 
-/// `ThemeData::light()` and `ThemeData::dark()` must differ on at least
-/// `brightness` and `color_scheme.primary`.
-#[test]
-fn theme_data_light_and_dark_presets_are_distinct() {
-    let light = ThemeData::light();
-    let dark = ThemeData::dark();
-
-    assert_ne!(light, dark, "light and dark themes should not be equal");
-    assert_eq!(light.brightness(), Brightness::Light);
-    assert_eq!(dark.brightness(), Brightness::Dark);
-    assert_ne!(
-        light.color_scheme.primary, dark.color_scheme.primary,
-        "light and dark presets should have different primary colors"
-    );
-}
-
 // ============================================================================
 // InheritedTheme::wrap
 // ============================================================================

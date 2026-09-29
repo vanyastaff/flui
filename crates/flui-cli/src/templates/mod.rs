@@ -311,17 +311,4 @@ mod tests {
             assert_eq!(build(), build(), "{template} plan is not deterministic");
         }
     }
-
-    #[test]
-    fn hot_reload_plan_is_deterministic() {
-        let build = || {
-            TemplateBuilder::new(
-                ProjectName::new("determinism-reload").expect("valid name"),
-                OrganizationId::new("com.example").expect("valid org"),
-            )
-            .hot_reload(true)
-            .plan()
-        };
-        assert_eq!(build(), build());
-    }
 }

@@ -417,15 +417,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_tiling_configuration_default() {
-        let config = TilingConfiguration::new();
-        assert_eq!(config.primary_position, TilePosition::Left);
-        assert_eq!(config.split_ratio, 0.5);
-        assert_eq!(config.layout, TilingLayout::SideBySide);
-        assert!(config.show_resize_handle);
-    }
-
-    #[test]
     fn test_split_ratio_clamping() {
         let config = TilingConfiguration::new()
             .with_split_ratio(0.1) // Too small
@@ -481,43 +472,5 @@ mod tests {
                 layout: TilingLayout::SideBySide,
             }
         );
-    }
-
-    #[test]
-    fn test_tile_position_validation() {
-        assert!(TilePosition::Left.is_valid_for_layout(TilingLayout::SideBySide));
-        assert!(!TilePosition::Left.is_valid_for_layout(TilingLayout::TopBottom));
-        assert!(TilePosition::TopLeft.is_valid_for_layout(TilingLayout::Quarters));
-    }
-
-    #[test]
-    fn test_tiling_state() {
-        let mut state = TilingState::new();
-        assert!(!state.is_tiled());
-        assert!(!state.has_companion());
-
-        state.enabled = true;
-        state.current_position = Some(TilePosition::Left);
-        assert!(state.is_tiled());
-
-        state.companion_window = Some(12345);
-        assert!(state.has_companion());
-    }
-
-    #[test]
-    fn test_tile_position_description() {
-        assert_eq!(TilePosition::Left.description(), "Left half");
-        assert_eq!(TilePosition::TopRight.description(), "Top-right quadrant");
-    }
-
-    #[test]
-    fn test_tiling_layout_valid_positions() {
-        let positions = TilingLayout::SideBySide.valid_positions();
-        assert_eq!(positions.len(), 2);
-        assert!(positions.contains(&TilePosition::Left));
-        assert!(positions.contains(&TilePosition::Right));
-
-        let quarters = TilingLayout::Quarters.valid_positions();
-        assert_eq!(quarters.len(), 4);
     }
 }

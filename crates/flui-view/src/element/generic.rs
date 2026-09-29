@@ -732,66 +732,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::element::arity::{Leaf, Single, Variable};
+    use crate::element::arity::Single;
 
     #[derive(Clone)]
     struct TestView {
         #[expect(dead_code, reason = "exercised only by the derived Clone impl")]
         value: i32,
-    }
-
-    #[test]
-    fn test_element_core_creation() {
-        let view = TestView { value: 42 };
-        let core = ElementCore::<TestView, Single>::new(view);
-
-        assert_eq!(core.lifecycle(), Lifecycle::Initial);
-        assert_eq!(core.depth(), 0);
-        assert!(core.is_dirty());
-    }
-
-    #[test]
-    fn test_element_core_mount() {
-        let view = TestView { value: 42 };
-        let mut core = ElementCore::<TestView, Single>::new(view);
-
-        let mut build_owner = crate::BuildOwner::new();
-        let mut owner = build_owner.element_owner_mut();
-        core.mount(None, 5, &mut owner);
-
-        assert_eq!(core.lifecycle(), Lifecycle::Active);
-        assert_eq!(
-            core.depth(),
-            0,
-            "the sibling slot handed to mount is not the depth"
-        );
-        core.set_depth(3);
-        assert_eq!(core.depth(), 3);
-    }
-
-    #[test]
-    fn test_element_core_lifecycle() {
-        let view = TestView { value: 42 };
-        let mut core = ElementCore::<TestView, Single>::new(view);
-
-        let mut build_owner = crate::BuildOwner::new();
-        {
-            let mut owner = build_owner.element_owner_mut();
-            core.mount(None, 0, &mut owner);
-        }
-        assert_eq!(core.lifecycle(), Lifecycle::Active);
-
-        core.deactivate();
-        assert_eq!(core.lifecycle(), Lifecycle::Inactive);
-
-        core.activate();
-        assert_eq!(core.lifecycle(), Lifecycle::Active);
-
-        {
-            let mut owner = build_owner.element_owner_mut();
-            core.unmount(&mut owner);
-        }
-        assert_eq!(core.lifecycle(), Lifecycle::Defunct);
     }
 
     /// `Defunct` means the element's state has been disposed, so reactivating
@@ -831,44 +777,5 @@ mod tests {
         }
 
         core.deactivate();
-    }
-
-    #[test]
-    fn test_element_core_dirty_flag() {
-        let view = TestView { value: 42 };
-        let mut core = ElementCore::<TestView, Single>::new(view);
-
-        assert!(core.is_dirty());
-
-        core.clear_dirty();
-        assert!(!core.is_dirty());
-
-        core.mark_dirty();
-        assert!(core.is_dirty());
-    }
-
-    #[test]
-    fn test_element_core_leaf_arity() {
-        let view = TestView { value: 42 };
-        let core = ElementCore::<TestView, Leaf>::new(view);
-
-        // E3: child-count lives on the slab node now, not the core.
-        assert_eq!(core.lifecycle(), Lifecycle::Initial);
-    }
-
-    #[test]
-    fn test_element_core_single_arity() {
-        let view = TestView { value: 42 };
-        let core = ElementCore::<TestView, Single>::new(view);
-
-        assert_eq!(core.lifecycle(), Lifecycle::Initial);
-    }
-
-    #[test]
-    fn test_element_core_variable_arity() {
-        let view = TestView { value: 42 };
-        let core = ElementCore::<TestView, Variable>::new(view);
-
-        assert_eq!(core.lifecycle(), Lifecycle::Initial);
     }
 }

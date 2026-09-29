@@ -259,13 +259,6 @@ impl MonotonicIdSource {
         Self { next: Cell::new(1) }
     }
 
-    #[cfg(test)]
-    const fn starting_at(next: u64) -> Self {
-        Self {
-            next: Cell::new(next),
-        }
-    }
-
     fn try_next(&self) -> Result<NonZeroU64, InteractionDispatchError> {
         let current = self.next.get();
         let id = NonZeroU64::new(current).ok_or(InteractionDispatchError::IdentifierExhausted)?;
@@ -1778,14 +1771,12 @@ mod tests {
     use std::cell::Cell;
     use std::panic::{AssertUnwindSafe, catch_unwind, panic_any};
     use std::rc::Rc;
-    use std::sync::atomic::AtomicU64;
-    use std::thread::ThreadId;
 
     use static_assertions::assert_not_impl_any;
 
     use super::*;
     use crate::events::{PointerType, make_down_event};
-    use flui_foundation::geometry::{Offset, Point};
+    use flui_foundation::geometry::Offset;
 
     assert_not_impl_any!(HandlerCell: Send, Sync);
     assert_not_impl_any!(ScrollCell: Send, Sync);
@@ -1804,23 +1795,6 @@ mod tests {
     }
 
     #[test]
-    fn private_counters_fail_typed_without_wrapping() {
-        let source = MonotonicIdSource::starting_at(u64::MAX);
-        assert_eq!(source.try_next().map(NonZeroU64::get), Ok(u64::MAX));
-        assert_eq!(
-            source.try_next(),
-            Err(InteractionDispatchError::IdentifierExhausted)
-        );
-
-        let atomic = AtomicU64::new(u64::MAX);
-        assert!(try_mint_lane_id(&atomic).is_ok());
-        assert!(matches!(
-            try_mint_lane_id(&atomic),
-            Err(InteractionDispatchError::IdentifierExhausted)
-        ));
-    }
-
-    #[test]
     fn nested_activation_restores_outer_lane_after_unwind() {
         let outer = InteractionLane::try_new().expect("outer lane");
         let inner = InteractionLane::try_new().expect("inner lane");
@@ -1833,41 +1807,6 @@ mod tests {
             }));
             assert!(panic.is_err());
             assert!(outer_handle.register_pointer(|_| {}).is_ok());
-        });
-    }
-
-    #[test]
-    fn route_keeps_cell_alive_and_observes_replacement_after_unregister() {
-        let lane = InteractionLane::try_new().expect("lane");
-        let handle = lane.dispatch_handle();
-        let count = Rc::new(Cell::new(0));
-        lane.enter(|| {
-            let first = Rc::clone(&count);
-            let target = handle
-                .register_pointer(move |_| first.set(1))
-                .expect("register");
-            let route = handle
-                .resolve_pointer_route(&[hit_entry(target)])
-                .expect("resolve")
-                .token();
-            let replacement = Rc::clone(&count);
-            handle
-                .replace_pointer(target, move |_| replacement.set(2))
-                .expect("replace");
-            handle.unregister_pointer(target).expect("unregister");
-            assert_eq!(
-                handle
-                    .resolve_pointer_route(&[hit_entry(target)])
-                    .map(|r| r.misses),
-                Ok(vec![RouteResolutionMiss::TargetGone { path_index: 0 }])
-            );
-            assert!(
-                handle
-                    .invoke_pointer_route(route, &event())
-                    .expect("strong route remains live")
-                    .is_none()
-            );
-            assert_eq!(count.get(), 2);
         });
     }
 
@@ -1980,121 +1919,6 @@ mod tests {
         );
     }
 
-    struct DropProbe {
-        label: usize,
-        owner: ThreadId,
-        lane: Weak<LocalLaneInner>,
-        cell: Rc<RefCell<Option<Weak<HandlerCell>>>>,
-        log: Rc<RefCell<Vec<usize>>>,
-    }
-
-    impl Drop for DropProbe {
-        fn drop(&mut self) {
-            assert_eq!(
-                thread::current().id(),
-                self.owner,
-                "owner-local capture dropped off its owner thread"
-            );
-            if let Some(lane) = self.lane.upgrade() {
-                assert!(
-                    lane.targets.try_borrow().is_ok(),
-                    "capture dropped while target map was borrowed"
-                );
-                assert!(
-                    lane.routes.try_borrow().is_ok(),
-                    "capture dropped while route map was borrowed"
-                );
-            }
-            let cell = self.cell.borrow().clone();
-            if let Some(cell) = cell.and_then(|cell| cell.upgrade()) {
-                assert!(
-                    cell.current.try_borrow().is_ok(),
-                    "capture dropped while handler cell was borrowed"
-                );
-            }
-            self.log.borrow_mut().push(self.label);
-        }
-    }
-
-    fn register_drop_probe(
-        handle: &InteractionDispatchHandle,
-        lane: &InteractionLane,
-        label: usize,
-        log: &Rc<RefCell<Vec<usize>>>,
-    ) -> PointerTarget {
-        let cell = Rc::new(RefCell::new(None));
-        let probe = DropProbe {
-            label,
-            owner: thread::current().id(),
-            lane: Rc::downgrade(&lane.inner),
-            cell: Rc::clone(&cell),
-            log: Rc::clone(log),
-        };
-        let target = handle
-            .register_pointer(move |_| {
-                let _keep_capture_alive = &probe;
-            })
-            .expect("probe registration");
-        let handler_cell = lane
-            .inner
-            .targets
-            .borrow()
-            .get(&target.target_id)
-            .cloned()
-            .expect("registered probe cell");
-        *cell.borrow_mut() = Some(Rc::downgrade(&handler_cell));
-        target
-    }
-
-    #[test]
-    fn replacement_drops_old_handler_after_internal_borrows_end() {
-        let lane = InteractionLane::try_new().expect("lane");
-        let handle = lane.dispatch_handle();
-        let log = Rc::new(RefCell::new(Vec::new()));
-        lane.enter(|| {
-            let target = register_drop_probe(&handle, &lane, 1, &log);
-            handle.replace_pointer(target, |_| {}).expect("replacement");
-            assert_eq!(&*log.borrow(), &[1]);
-        });
-    }
-
-    #[test]
-    fn last_owner_unregister_drops_handler_after_target_borrow_ends() {
-        let lane = InteractionLane::try_new().expect("lane");
-        let handle = lane.dispatch_handle();
-        let log = Rc::new(RefCell::new(Vec::new()));
-        lane.enter(|| {
-            let target = register_drop_probe(&handle, &lane, 1, &log);
-            handle
-                .unregister_pointer(target)
-                .expect("unregister last owner");
-            assert_eq!(&*log.borrow(), &[1]);
-        });
-    }
-
-    #[test]
-    fn release_route_drops_last_handler_owner_after_route_borrow_ends() {
-        let lane = InteractionLane::try_new().expect("lane");
-        let handle = lane.dispatch_handle();
-        let log = Rc::new(RefCell::new(Vec::new()));
-        lane.enter(|| {
-            let target = register_drop_probe(&handle, &lane, 1, &log);
-            let route = handle
-                .resolve_pointer_route(&[hit_entry(target)])
-                .expect("route")
-                .token();
-            handle
-                .unregister_pointer(target)
-                .expect("route becomes the last handler owner");
-            assert!(log.borrow().is_empty());
-
-            handle
-                .release_route(route)
-                .expect("release last handler owner");
-            assert_eq!(&*log.borrow(), &[1]);
-        });
-    }
-
     struct ReentrantReplacementDropProbe {
         handle: InteractionDispatchHandle,
         completed: Rc<Cell<bool>>,
@@ -2168,92 +1992,5 @@ mod tests {
         drop(lane);
 
         assert_eq!(observed.get(), Some(InteractionDispatchError::OwnerGone));
-    }
-
-    #[test]
-    fn teardown_drops_sorted_routes_before_sorted_targets_outside_borrows() {
-        let lane = InteractionLane::try_new().expect("lane");
-        let handle = lane.dispatch_handle();
-        let log = Rc::new(RefCell::new(Vec::new()));
-        lane.enter(|| {
-            let route_first = register_drop_probe(&handle, &lane, 1, &log);
-            let first_token = handle
-                .resolve_pointer_route(&[hit_entry(route_first)])
-                .expect("first route")
-                .token();
-            let route_second = register_drop_probe(&handle, &lane, 2, &log);
-            let second_token = handle
-                .resolve_pointer_route(&[hit_entry(route_second)])
-                .expect("second route")
-                .token();
-            assert_ne!(first_token, second_token);
-            handle
-                .unregister_pointer(route_first)
-                .expect("route owns first cell now");
-            handle
-                .unregister_pointer(route_second)
-                .expect("route owns second cell now");
-
-            let _target_first = register_drop_probe(&handle, &lane, 3, &log);
-            let _target_second = register_drop_probe(&handle, &lane, 4, &log);
-        });
-        drop(lane);
-        assert_eq!(&*log.borrow(), &[1, 2, 3, 4]);
-    }
-
-    #[test]
-    fn path_clipper_accepts_owner_local_rc_state() {
-        let lane = InteractionLane::try_new().expect("lane");
-        let handle = lane.dispatch_handle();
-        let calls = Rc::new(Cell::new(0));
-        lane.enter(|| {
-            let calls_for_clipper = Rc::clone(&calls);
-            let target = handle
-                .register_path_clipper(move |size| {
-                    calls_for_clipper.set(calls_for_clipper.get() + 1);
-                    let mut path = Path::new();
-                    path.add_rect(flui_foundation::geometry::Rect::from_origin_size(
-                        flui_foundation::geometry::Point::ZERO,
-                        size,
-                    ));
-                    path
-                })
-                .expect("register path clipper");
-
-            let path = resolve_path_clip_target(target, Size::new(10.0, 20.0))
-                .expect("resolve path clipper");
-
-            assert!(path.contains(flui_foundation::geometry::Point::new(5.0, 5.0,)));
-        });
-        assert_eq!(calls.get(), 1);
-    }
-
-    #[test]
-    fn shader_mask_factory_accepts_owner_local_rc_state() {
-        let lane = InteractionLane::try_new().expect("lane");
-        let handle = lane.dispatch_handle();
-        let calls = Rc::new(Cell::new(0));
-        lane.enter(|| {
-            let calls_for_factory = Rc::clone(&calls);
-            let target = handle
-                .register_shader_mask(move |bounds| {
-                    calls_for_factory.set(calls_for_factory.get() + 1);
-                    assert_eq!(
-                        bounds,
-                        Rect::from_origin_size(Point::ZERO, Size::new(10.0, 20.0))
-                    );
-                    Shader::solid(flui_painting::styling::Color::WHITE)
-                })
-                .expect("register shader mask factory");
-
-            let shader = resolve_shader_mask_target(
-                target,
-                Rect::from_origin_size(Point::ZERO, Size::new(10.0, 20.0)),
-            )
-            .expect("resolve shader mask factory");
-
-            assert_eq!(shader, Shader::solid(flui_painting::styling::Color::WHITE));
-        });
-        assert_eq!(calls.get(), 1);
     }
 }

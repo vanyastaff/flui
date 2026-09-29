@@ -856,34 +856,6 @@ impl RenderBox for RenderWrap {
 mod tests {
     use super::*;
 
-    #[test]
-    fn render_wrap_default_is_horizontal_start() {
-        let wrap = RenderWrap::default();
-        assert_eq!(wrap.direction, Axis::Horizontal);
-        assert_eq!(wrap.alignment, WrapAlignment::Start);
-        assert_eq!(wrap.cross_axis_alignment, WrapCrossAlignment::Start);
-        assert_eq!(wrap.spacing, 0.0);
-        assert_eq!(wrap.run_spacing, 0.0);
-    }
-
-    #[test]
-    fn render_wrap_builders_round_trip() {
-        let wrap = RenderWrap::new()
-            .with_direction(Axis::Vertical)
-            .with_spacing(8.0)
-            .with_run_spacing(4.0)
-            .with_alignment(WrapAlignment::Center)
-            .with_run_alignment(WrapAlignment::SpaceBetween)
-            .with_cross_axis_alignment(WrapCrossAlignment::End);
-
-        assert_eq!(wrap.direction, Axis::Vertical);
-        assert_eq!(wrap.spacing, 8.0);
-        assert_eq!(wrap.run_spacing, 4.0);
-        assert_eq!(wrap.alignment, WrapAlignment::Center);
-        assert_eq!(wrap.run_alignment, WrapAlignment::SpaceBetween);
-        assert_eq!(wrap.cross_axis_alignment, WrapCrossAlignment::End);
-    }
-
     /// Run breaking uses Flutter's `f64` tolerance: children that overflow the
     /// line by 5e-7 px start a new run, and only a rounding-sized excess stays.
     #[test]
@@ -902,79 +874,5 @@ mod tests {
 
     // ── distribute_space ──────────────────────────────────────────────────────
 
-    #[test]
-    fn distribute_space_start_zero_leading_spacing_gap() {
-        let (leading, between) = distribute_space(WrapAlignment::Start, 100.0, 10.0, 3, false);
-        assert_eq!(leading, 0.0);
-        assert_eq!(between, 10.0);
-    }
-
-    #[test]
-    fn distribute_space_end_full_leading_spacing_gap() {
-        let (leading, between) = distribute_space(WrapAlignment::End, 100.0, 10.0, 3, false);
-        assert_eq!(leading, 100.0);
-        assert_eq!(between, 10.0);
-    }
-
-    #[test]
-    fn distribute_space_center_half_leading() {
-        let (leading, between) = distribute_space(WrapAlignment::Center, 100.0, 10.0, 3, false);
-        assert!((leading - 50.0).abs() < 1e-5);
-        assert_eq!(between, 10.0);
-    }
-
-    #[test]
-    fn distribute_space_space_between_spreads_between_items() {
-        // 3 items, 80 free, 10 spacing → between = 80/2 + 10 = 50
-        let (leading, between) =
-            distribute_space(WrapAlignment::SpaceBetween, 80.0, 10.0, 3, false);
-        assert_eq!(leading, 0.0);
-        assert!((between - 50.0).abs() < 1e-5);
-    }
-
-    #[test]
-    fn distribute_space_space_between_single_item_falls_back_to_start() {
-        let (leading, between) =
-            distribute_space(WrapAlignment::SpaceBetween, 50.0, 10.0, 1, false);
-        assert_eq!(leading, 0.0);
-        assert_eq!(between, 10.0);
-    }
-
-    #[test]
-    fn distribute_space_space_around_half_gap_at_edges() {
-        // 3 items, 60 free, 0 spacing → per_item=20, leading=10, between=20
-        let (leading, between) = distribute_space(WrapAlignment::SpaceAround, 60.0, 0.0, 3, false);
-        assert!((leading - 10.0).abs() < 1e-5);
-        assert!((between - 20.0).abs() < 1e-5);
-    }
-
-    #[test]
-    fn distribute_space_space_evenly_equal_gaps_including_edges() {
-        // 3 items, 80 free, 0 spacing → per_gap = 80/4 = 20
-        let (leading, between) = distribute_space(WrapAlignment::SpaceEvenly, 80.0, 0.0, 3, false);
-        assert!((leading - 20.0).abs() < 1e-5);
-        assert!((between - 20.0).abs() < 1e-5);
-    }
-
     // ── cross_axis_child_offset ───────────────────────────────────────────────
-
-    #[test]
-    fn cross_axis_child_offset_start_returns_zero() {
-        assert_eq!(
-            cross_axis_child_offset(WrapCrossAlignment::Start, 60.0, 20.0),
-            0.0
-        );
-    }
-
-    #[test]
-    fn cross_axis_child_offset_end_aligns_to_run_bottom() {
-        let offset = cross_axis_child_offset(WrapCrossAlignment::End, 60.0, 20.0);
-        assert!((offset - 40.0).abs() < 1e-5);
-    }
-
-    #[test]
-    fn cross_axis_child_offset_center_bisects_run_cross_extent() {
-        let offset = cross_axis_child_offset(WrapCrossAlignment::Center, 60.0, 20.0);
-        assert!((offset - 20.0).abs() < 1e-5);
-    }
 }

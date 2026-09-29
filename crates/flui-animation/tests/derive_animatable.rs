@@ -34,9 +34,7 @@ fn named_struct_round_trips_through_vector() {
 
 #[test]
 fn tuple_struct_round_trips_through_vector() {
-    let p = Pair(1.0, 2.0);
-    assert_eq!(p.to_vector(), [1.0, 2.0]);
-
+    assert_eq!(Pair(1.0, 2.0).to_vector(), [1.0, 2.0]);
     let back = Pair::from_vector([3.0, 4.0]);
     assert_eq!((back.0, back.1), (3.0, 4.0));
 }

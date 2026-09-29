@@ -239,64 +239,6 @@ impl WgpuPainter {
         tracing::trace!("WgpuPainter::reset_frame_state: per-frame state cleared");
     }
 
-    /// Returns the current scissor rect for testing purposes.
-    ///
-    /// Gated to match its sole consumer (`reset_frame_state_clears_damage_scissor`)
-    /// so it is never dead code in either build configuration.
-    #[cfg(all(test, feature = "testing"))]
-    pub(crate) fn current_scissor_for_test(&self) -> Option<(u32, u32, u32, u32)> {
-        self.state.current_scissor()
-    }
-
-    /// Returns the `dst_rect` field `[x, y, w, h]` of each pending external-image
-    /// instance in the current segment.  Used by regression tests to verify that
-    /// `draw_texture` transforms the destination rect through `current_transform`.
-    #[cfg(all(test, feature = "testing"))]
-    pub(crate) fn external_image_rects_for_test(&self) -> Vec<[f32; 4]> {
-        self.current_segment
-            .external_images
-            .iter()
-            .map(|(_, inst, _)| inst.dst_rect)
-            .collect()
-    }
-
-    /// Returns the scissor stored alongside each pending external-image instance.
-    #[cfg(all(test, feature = "testing"))]
-    pub(crate) fn external_image_scissors_for_test(&self) -> Vec<crate::command_ir::ScissorRect> {
-        self.current_segment
-            .external_images
-            .iter()
-            .map(|(_, _, scissor)| *scissor)
-            .collect()
-    }
-
-    /// Returns a copy of the tessellated vertex positions accumulated in the
-    /// current segment.  Used by the transform-baking regression test to verify
-    /// that `submit_transformed_geometry` is applied exactly once.
-    ///
-    /// Gated to `#[cfg(all(test, feature = "testing"))]` so it is
-    /// never dead code in production builds.
-    #[cfg(all(test, feature = "testing"))]
-    pub(crate) fn tess_vertices_for_test(&self) -> Vec<[f32; 2]> {
-        self.current_segment
-            .vertices
-            .iter()
-            .map(|v| v.position)
-            .collect()
-    }
-
-    /// The tessellator's current flatten scale — to assert a draw call primed it.
-    #[cfg(all(test, feature = "testing"))]
-    pub(crate) fn tessellator_max_scale_for_test(&self) -> f32 {
-        self.batcher.tessellator.max_scale()
-    }
-
-    /// Force a stale tessellator scale to set up the prime-on-draw regression.
-    #[cfg(all(test, feature = "testing"))]
-    pub(crate) fn set_tessellator_max_scale_for_test(&mut self, scale: f32) {
-        self.batcher.tessellator.set_max_scale(scale);
-    }
-
     /// Returns `true` if any surface-reading draw item in the current `draw_order`
     /// has bounds that STRADDLE the given `damage` rect.
     ///
@@ -446,26 +388,6 @@ impl WgpuPainter {
                 // geometry; the grown_bounds / passes are test-infrastructure
                 // concerns and are not needed by the deterministic-replay drain.
                 DrawItem::Filter(op) => Some(op.input),
-            })
-            .collect()
-    }
-
-    /// Return clones of all [`FilterOp`]s in the current draw order.
-    ///
-    /// Used by structural tests (flatten-nesting, cumulative-bounds) to inspect
-    /// the `passes` and `grown_bounds` fields emitted by `restore_layer` without
-    /// needing GPU execution.  Finalises the current segment first so that any
-    /// in-progress content is in the draw order.
-    ///
-    /// Gated to test builds; must never be called from production code.
-    #[cfg(all(test, feature = "testing"))]
-    pub(crate) fn filter_ops_for_test(&mut self) -> Vec<crate::command_ir::FilterOp> {
-        self.finish_current_segment();
-        self.draw_order
-            .iter()
-            .filter_map(|item| match item {
-                DrawItem::Filter(op) => Some(op.clone()),
-                _ => None,
             })
             .collect()
     }

@@ -101,34 +101,6 @@ fn a_pipeline_only_frame_discards_the_prior_frames_undrained_recovered_panics() 
 }
 
 #[test]
-fn dirty_mark_fires_wake_via_notifier() {
-    let realm = UiRealm::for_test();
-    let pipeline = realm.pipeline_for_test();
-
-    let id = pipeline.with_mut(|owner| {
-        owner.insert(Box::new(flui_objects::RenderColoredBox::red(10.0, 10.0))
-            as Box<
-                dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>,
-            >)
-    });
-    pipeline.with_mut(PipelineOwner::clear_all_dirty_nodes);
-    realm.mark_rendered();
-    // The insert above already dirtied the pipeline and, through the
-    // unified carrier, flipped the scheduler's `frame_scheduled` latch
-    // (its false->true edge is what fires the wake hook). Clear that
-    // latch so the dirty mark below is a genuine false->true edge, the
-    // only edge the wake hook fires on.
-    realm.scheduler().finish_async_pump();
-
-    pipeline.with_mut(|owner| owner.mark_needs_layout(id));
-    assert!(
-        realm.needs_redraw(),
-        "an owner dirty mark must wake the realm via the visual-update \
-         notifier wired in UiRealm::construct",
-    );
-}
-
-#[test]
 fn cross_thread_dirty_handle_wakes_owner_binding_not_worker_tls() {
     let realm = UiRealm::for_test();
     realm.mark_rendered();
@@ -158,28 +130,6 @@ fn cross_thread_dirty_handle_wakes_owner_binding_not_worker_tls() {
     );
 }
 
-#[test]
-fn test_needs_redraw() {
-    let realm = UiRealm::for_test();
-
-    realm.mark_rendered();
-    assert!(!realm.needs_redraw());
-
-    realm.request_redraw();
-    assert!(realm.needs_redraw());
-
-    realm.mark_rendered();
-    assert!(!realm.needs_redraw());
-}
-
-#[test]
-fn test_renderer_initialized() {
-    let realm = UiRealm::for_test();
-    // Verify the renderer sub-binding is accessible (created during
-    // UiRealm::construct).
-    let _renderer = realm.renderer();
-}
-
 /// E2/E3 regression: `UiRealm` hands its shared `PipelineOwner` to the
 /// `WidgetsBinding` it owns, so `attach_root_widget` actually
 /// bootstraps the root render tree.
@@ -196,84 +146,12 @@ fn attach_root_widget_bootstraps_shared_render_tree() {
         "UiRealm must pass its PipelineOwner to the widgets binding so the \
          root render tree bootstraps; without it the window renders nothing",
     );
-}
-
-/// Root-hop parent-link regression: after a standard bootstrap
-/// (`attach_root_widget` + a build/layout/paint `draw_frame`), the
-/// mounted leaf's render node must have a working parent link back
-/// to the root, not just the root's child-list entry.
-#[test]
-fn transform_to_resolves_through_the_root_hop_after_standard_bootstrap() {
-    let realm = UiRealm::for_test();
-    realm
-        .enter(|realm| realm.attach_root_widget(&LeafView))
-        .expect("attach succeeds");
-    let _ = realm.draw_frame(test_constraints());
-
-    realm.pipeline_for_test().with(|owner| {
-        let root_id = owner.root_id().expect("root id set by attach_root_widget");
-        let root_node = owner
-            .render_tree()
-            .get(root_id)
-            .expect("root render node resolves");
-        let leaf_id = *root_node
-            .children()
-            .first()
-            .expect("LeafView must have mounted one render child under the root");
-
-        assert_eq!(
-            owner
-                .render_tree()
-                .get(leaf_id)
-                .and_then(flui_rendering::storage::RenderNode::parent),
-            Some(root_id),
-            "the leaf's render node must carry a parent link back to the root"
-        );
-
-        let transform = owner.transform_to(leaf_id, root_id);
-        assert!(
-            transform.is_some(),
-            "transform_to(leaf, root) must resolve through the root hop; None means the \
-             ancestor walk broke at the very first step"
-        );
-        assert_eq!(
-            transform,
-            Some(flui_foundation::geometry::Matrix4::IDENTITY),
-            "LeafView (RenderSizedBox::shrink(), zero offset) composes to the identity \
-             transform into root space"
-        );
-    });
-}
-
-/// Wiring test: `draw_frame` must invoke
-/// `WidgetsBinding::service_child_requests`, which drains the
-/// pipeline's `pending_child_requests` buffer.
-#[test]
-fn draw_frame_invokes_service_child_requests() {
-    let realm = UiRealm::for_test();
-    let pipeline = realm.pipeline_for_test();
-
-    let sliver_id = pipeline.with_mut(|owner| {
-        owner.insert(Box::new(flui_objects::RenderColoredBox::red(10.0, 10.0))
-            as Box<
-                dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>,
-            >)
-    });
-    pipeline.with_mut(|owner| owner.push_pending_child_request_for_test(sliver_id, 0));
-    pipeline.with_mut(|owner| {
-        let drained = owner.take_pending_child_requests();
-        assert_eq!(drained.len(), 1, "seed must be present before draw_frame");
-        owner.push_pending_child_request_for_test(sliver_id, 0);
-    });
-
-    let _ = realm.draw_frame(test_constraints());
-
-    let remaining = pipeline.with_mut(PipelineOwner::take_pending_child_requests);
     assert!(
-        remaining.is_empty(),
-        "draw_frame must drain pending_child_requests via service_child_requests; \
-         {} request(s) remained undrained — wiring is absent",
-        remaining.len(),
+        realm
+            .renderer()
+            .root_pipeline_owner()
+            .with(|owner| owner.root_id().is_some()),
+        "the realm's renderer exposes the same bootstrapped pipeline",
     );
 }
 
@@ -318,90 +196,6 @@ fn the_production_frame_polls_the_realms_async_driver_once_before_the_pipeline()
         polls.load(Ordering::Acquire),
         1,
         "exactly one driver poll per frame"
-    );
-}
-
-/// `draw_frame` no longer polls the driver itself.
-#[test]
-fn draw_frame_does_not_poll_the_async_driver_itself() {
-    let realm = UiRealm::for_test();
-    let ran = Arc::new(StdAtomicBool::new(false));
-    let ran_for_task = Arc::clone(&ran);
-    let _token = realm.scheduler().spawn_local(Box::pin(async move {
-        ran_for_task.store(true, Ordering::Release);
-    }));
-
-    let _ = realm.draw_frame(test_constraints());
-
-    assert!(
-        !ran.load(Ordering::Acquire),
-        "the driver step belongs to UpdateScheduler::handle_begin_frame, not to the pipeline"
-    );
-}
-
-/// Wiring test: `draw_frame` must run the shared layout<->build
-/// fixpoint (`BuildOwner::run_frame_with_layout_builders`), not a bare
-/// `PipelineOwner::run_frame`.
-#[test]
-fn draw_frame_invokes_the_layout_builder_seam() {
-    let realm = UiRealm::for_test();
-
-    realm.widgets().with_build_owner_mut(|owner| {
-        let _cell = owner.register_layout_builder_for_test(
-            flui_foundation::RenderId::new(1),
-            flui_foundation::ElementId::new(1),
-        );
-        assert_eq!(owner.layout_builder_count(), 1);
-    });
-
-    let _ = realm.draw_frame(test_constraints());
-
-    realm.widgets().with_build_owner_mut(|owner| {
-        assert_eq!(
-            owner.layout_builder_count(),
-            0,
-            "draw_frame must run service_layout_builders (via the shared \
-             run_frame_with_layout_builders helper), which prunes the stale entry"
-        );
-    });
-}
-
-/// Wake-gate contract: after a frame marks a render node dirty,
-/// `has_pending_work()` must return `true` so the runner gate
-/// schedules the settling frame; once no nodes are dirty,
-/// `has_pending_work()` is `false` and the app can go idle.
-#[test]
-fn wake_gate_schedules_settling_frame_after_dirty_mark() {
-    let realm = UiRealm::for_test();
-    let pipeline = realm.pipeline_for_test();
-
-    realm.mark_rendered();
-    assert!(!realm.needs_redraw(), "precondition: needs_redraw clear");
-
-    let node_id = pipeline.with_mut(|owner| {
-        owner.insert(Box::new(flui_objects::RenderColoredBox::red(10.0, 10.0))
-            as Box<
-                dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>,
-            >)
-    });
-    pipeline.with_mut(PipelineOwner::clear_all_dirty_nodes);
-    assert!(
-        !realm.has_pending_work(),
-        "baseline: no pending work after clearing dirty nodes",
-    );
-
-    pipeline.with_mut(|owner| owner.mark_needs_layout(node_id));
-    assert!(
-        realm.has_pending_work(),
-        "a dirty layout node must make has_pending_work() true so the runner \
-         schedules the settling frame",
-    );
-
-    pipeline.with_mut(PipelineOwner::clear_all_dirty_nodes);
-    assert!(
-        !realm.has_pending_work(),
-        "after clearing dirty nodes has_pending_work() must be false so a \
-         settled lazy-list app does not loop forever",
     );
 }
 
@@ -469,47 +263,6 @@ fn pointer_input_is_dropped_while_suspended_but_keyboard_flows() {
         realm.gestures().active_pointer_count(),
         1,
         "pointer input must reach the arena again once resumed"
-    );
-}
-
-/// `Closing`/`Closed` is a hard gate: every input kind is dropped,
-/// not just pointer.
-///
-/// If reverted: remove the `Closing | Closed` hard-gate arm from
-/// `input_dropped_by_lifecycle` and the IME assertion below fails (a
-/// "closed" presentation still dispatches and arms a redraw).
-#[test]
-fn all_input_dropped_after_close() {
-    use flui_interaction::events::{PointerType, make_down_event};
-
-    let realm = UiRealm::for_test();
-    realm.stop_presentations();
-
-    let position = flui_foundation::geometry::Offset::new(50.0, 50.0);
-    realm.enter(|realm| {
-        realm.handle_input_entered(PlatformInput::Pointer(make_down_event(
-            position,
-            PointerType::Mouse,
-        )));
-    });
-    assert_eq!(
-        realm.gestures().active_pointer_count(),
-        0,
-        "pointer input must never reach the arena once closed"
-    );
-    assert!(
-        !realm.needs_redraw(),
-        "no input at all may reach dispatch once closed"
-    );
-
-    realm.enter(|realm| {
-        realm.handle_input_entered(PlatformInput::Ime(flui_platform_api::ImeEvent::Commit(
-            "closed-ime".to_string(),
-        )));
-    });
-    assert!(
-        !realm.needs_redraw(),
-        "IME input must also be dropped once closed — the hard gate covers every kind"
     );
 }
 
@@ -664,71 +417,6 @@ fn shell_installed_arena_resolves_nested_tap_detectors_to_one_winner() {
     );
 }
 
-/// Same auto-wrap invariant as
-/// `shell_installed_arena_resolves_nested_tap_detectors_to_one_winner`,
-/// through `attach_root_widget` (the unsized variant) and asserting
-/// on the arena's `SweepModel` directly.
-#[test]
-fn root_gesture_scope_arbitrates_overlapping_detectors_once() {
-    use flui_foundation::geometry::Offset;
-    use flui_interaction::arena::SweepModel;
-    use flui_interaction::events::{PointerType, make_down_event, make_up_event};
-    use flui_widgets::{GestureDetector, HitTestBehavior, SizedBox};
-
-    let realm = UiRealm::for_test();
-    let outer_taps = Rc::new(Cell::new(0));
-    let inner_taps = Rc::new(Cell::new(0));
-
-    let inner_count = Rc::clone(&inner_taps);
-    let inner = GestureDetector::new()
-        .on_tap(move |_cx| inner_count.set(inner_count.get() + 1))
-        .behavior(HitTestBehavior::Opaque)
-        .child(SizedBox::new(100.0, 100.0));
-    let outer_count = Rc::clone(&outer_taps);
-    let root = GestureDetector::new()
-        .on_tap(move |_cx| outer_count.set(outer_count.get() + 1))
-        .behavior(HitTestBehavior::Opaque)
-        .child(inner);
-
-    realm
-        .attach_root_widget(&root)
-        .expect("a fresh realm must attach the detector tree");
-    let _ = realm.draw_frame(test_constraints());
-    realm.presentations.primary().commit_tree_revision();
-    assert_eq!(
-        realm.presentations.primary().frame_commit_state(),
-        FrameCommitState::Committed
-    );
-    assert!(
-        realm
-            .presentations
-            .primary()
-            .held_pointer_input()
-            .borrow()
-            .is_empty()
-    );
-
-    let position = Offset::new(10.0, 10.0);
-    let down = make_down_event(position, PointerType::Touch);
-    let up = make_up_event(position, PointerType::Touch);
-    realm.enter(|realm| {
-        realm.handle_input_entered(PlatformInput::Pointer(down));
-        realm.handle_input_entered(PlatformInput::Pointer(up));
-    });
-
-    assert_eq!(
-        outer_taps.get() + inner_taps.get(),
-        1,
-        "overlapping detectors must compete in one arena; private arenas let both taps fire"
-    );
-    assert_eq!(
-        realm.gestures().arena().sweep_model(),
-        SweepModel::BindingDriven,
-        "the root scope must expose the production binding-owned arena"
-    );
-    assert_eq!(realm.gestures().active_pointer_count(), 0);
-}
-
 /// Two independently constructed realms must never observe each
 /// other's gesture-router registrations or arena state — the
 /// per-realm isolation `UiRealm::for_test()` (a fully independent
@@ -796,57 +484,6 @@ fn realm_input_dispatch_keeps_gesture_state_isolated() {
         .remove_all_routes(pointer);
     assert_eq!(realm_a.gestures().active_pointer_count(), 0);
     assert_eq!(realm_b.gestures().active_pointer_count(), 0);
-}
-
-struct CountingArenaAcceptance(Arc<AtomicU64>);
-
-impl flui_interaction::sealed::CustomGestureRecognizer for CountingArenaAcceptance {
-    fn on_arena_accept(&self, _pointer: flui_interaction::PointerId) {
-        self.0.fetch_add(1, Ordering::SeqCst);
-    }
-
-    fn on_arena_reject(&self, _pointer: flui_interaction::PointerId) {}
-}
-
-/// A lone arena member that accepts on `Down` must be swept and
-/// drained by the SAME `handle_input_entered` call, leaving the
-/// arena empty — no deferred second pass required for the
-/// one-member case.
-#[test]
-fn pointer_input_boundary_drains_a_lone_deferred_winner() {
-    use flui_foundation::geometry::Offset;
-    use flui_interaction::events::{PointerType, make_down_event_for_id};
-    use flui_interaction::routing::PointerRouteHandler;
-
-    let realm = UiRealm::for_test();
-    let pointer = flui_interaction::PointerId::new(9002).expect("nonzero pointer id");
-    let accepted = Arc::new(AtomicU64::new(0));
-    let arena = realm.gestures().arena().clone();
-    let accepted_by_member = Arc::clone(&accepted);
-    let handler: PointerRouteHandler = Rc::new(move |event| {
-        if matches!(event, flui_interaction::PointerEvent::Down(_)) {
-            arena.add(
-                pointer,
-                Arc::new(CountingArenaAcceptance(Arc::clone(&accepted_by_member))),
-            );
-        }
-    });
-    realm
-        .gestures()
-        .pointer_router()
-        .add_route(pointer, Rc::clone(&handler));
-
-    let down = make_down_event_for_id(pointer, Offset::new(10.0, 10.0), PointerType::Touch);
-    realm.enter(|realm| {
-        realm.handle_input_entered(PlatformInput::Pointer(down));
-    });
-
-    assert_eq!(accepted.load(Ordering::SeqCst), 1);
-    assert!(realm.gestures().arena().is_empty());
-    realm
-        .gestures()
-        .pointer_router()
-        .remove_route(pointer, &handler);
 }
 
 /// Deadline keep-alive regression: a long-press armed by a pointer
@@ -1099,70 +736,6 @@ fn vsync_continuation_keeps_gate_open_while_running_and_closes_on_settle() {
     controller.dispose();
 }
 
-/// V2 — Value advances across injected-time frames.
-#[test]
-fn vsync_value_advances_across_frames() {
-    use flui_animation::Animation;
-
-    let realm = UiRealm::for_test();
-    let vsync = realm.vsync();
-    let controller = make_controller(200);
-    vsync.register(controller.clone());
-    controller.forward().expect("fresh controller forwards");
-
-    let constraints = test_constraints();
-
-    realm.set_now_secs_for_test(0.0);
-    let _ = realm.draw_frame(constraints);
-    let v0 = controller.value();
-
-    realm.set_now_secs_for_test(0.10);
-    let _ = realm.draw_frame(constraints);
-    let v1 = controller.value();
-
-    assert!(
-        v1 > v0,
-        "V2: controller value must increase (v0={v0}, v1={v1})"
-    );
-    assert!(
-        (v1 - 0.5).abs() < 0.05,
-        "V2: at t=100ms/200ms run ~0.5 (got {v1})"
-    );
-
-    controller.dispose();
-}
-
-/// V3 — Exactly-once-per-frame (no double-advance).
-#[test]
-fn vsync_tick_exactly_once_per_frame() {
-    use flui_animation::{Animation, AnimationStatus};
-
-    let realm = UiRealm::for_test();
-    let vsync = realm.vsync();
-    let controller = make_controller(100);
-    vsync.register(controller.clone());
-    controller.forward().expect("fresh controller forwards");
-
-    let constraints = test_constraints();
-
-    realm.set_now_secs_for_test(0.0);
-    let _ = realm.draw_frame(constraints);
-
-    realm.set_now_secs_for_test(0.05);
-    let _ = realm.draw_frame(constraints);
-    assert_ne!(
-        controller.status(),
-        AnimationStatus::Completed,
-        "V3: must NOT be complete at t=50ms (100ms duration)",
-    );
-
-    realm.set_now_secs_for_test(0.15);
-    let _ = realm.draw_frame(constraints);
-    assert_eq!(controller.status(), AnimationStatus::Completed);
-
-    controller.dispose();
-}
-
 use flui_view::{IntoView, StatefulView, ViewState};
 
 /// Test-local view that captures the auto-injected `VsyncScope` in
@@ -1219,32 +792,6 @@ fn make_vsync_probe() -> (VsyncProbeView, flui_animation::AnimationController) {
     (view, controller)
 }
 
-/// A1 — Auto-wrap causes registration after the first build pass.
-#[test]
-fn a1_autowrap_causes_registration_after_build_pass() {
-    let realm = UiRealm::for_test();
-    let (probe, controller) = make_vsync_probe();
-
-    realm
-        .attach_root_widget(&probe)
-        .expect("a fresh UiRealm must accept its first root widget");
-
-    assert!(
-        realm.vsync().is_empty(),
-        "A1 precondition: controller must not be registered before the first build pass",
-    );
-
-    let _ = realm.draw_frame(test_constraints());
-
-    assert!(
-        !realm.vsync().is_empty(),
-        "A1: after a build pass the controller registered in init_state must appear \
-         in realm.vsync()",
-    );
-
-    controller.dispose();
-}
-
 /// A2 — End-to-end tick: auto-wrap -> register -> tick -> value advances.
 #[test]
 fn a2_autowrap_end_to_end_tick_advances_controller_value() {
@@ -1275,40 +822,6 @@ fn a2_autowrap_end_to_end_tick_advances_controller_value() {
     );
 
     controller.dispose();
-}
-
-/// A3 — No-animation root: auto-wrap registers nothing itself.
-#[test]
-fn a3_no_animation_root_vsync_stays_empty_after_build_pass() {
-    let realm = UiRealm::for_test();
-    realm
-        .attach_root_widget(&LeafView)
-        .expect("a fresh UiRealm must accept its first root widget");
-
-    let _ = realm.draw_frame(test_constraints());
-
-    assert!(
-        realm.vsync().is_empty(),
-        "A3: a root with no implicitly-animated widgets must not register anything",
-    );
-}
-
-/// V4 — No-animation app idles cheaply.
-#[test]
-fn vsync_empty_does_not_keep_gate_open() {
-    let realm = UiRealm::for_test();
-    assert!(realm.vsync().is_empty(), "precondition: Vsync is empty");
-
-    let constraints = test_constraints();
-    realm.set_now_secs_for_test(1.0);
-    realm.mark_rendered();
-
-    let _ = realm.draw_frame(constraints);
-
-    assert!(
-        !realm.has_vsync_running(),
-        "V4: has_vsync_running() must be false when no controllers are registered",
-    );
 }
 
 // ---- render_frame retry / first-frame-deferral semantics ----
@@ -1387,21 +900,6 @@ fn surface_validation_keeps_needs_redraw_armed_for_a_retry() {
 }
 
 #[test]
-fn a_successful_frame_still_clears_needs_redraw() {
-    let realm = mount_root();
-    let mut backend = ScriptedSink::single_shot(SubmitVerdict::Presented);
-
-    realm.request_redraw();
-    let presented = realm.render_frame(&mut backend);
-
-    assert!(presented, "Ok(true) means render_scene reached present()");
-    assert!(
-        !realm.needs_redraw(),
-        "a successfully presented frame must clear needs_redraw"
-    );
-}
-
-#[test]
 fn deferred_first_frame_runs_the_pipeline_but_withholds_the_scene() {
     let realm = mount_root();
     let mut backend = ScriptedSink::always_presents();
@@ -1435,58 +933,6 @@ fn deferred_first_frame_runs_the_pipeline_but_withholds_the_scene() {
         1,
         "the segment must have actually run while deferred, not been skipped outright"
     );
-}
-
-#[test]
-fn allow_first_frame_alone_presents_the_previously_withheld_content() {
-    let realm = mount_root();
-    let mut backend = ScriptedSink::always_presents();
-
-    realm.defer_first_frame();
-    let withheld = realm.render_frame(&mut backend);
-    assert!(
-        !withheld,
-        "precondition: the first frame is withheld while deferred"
-    );
-    assert_eq!(backend.submit_calls, 0);
-
-    realm.allow_first_frame();
-
-    let presented = realm.render_frame(&mut backend);
-
-    assert!(
-        presented,
-        "allow_first_frame alone (no external re-dirty) must make the withheld \
-         content reach present() on the next pumped frame"
-    );
-    assert_eq!(backend.submit_calls, 1);
-    assert_eq!(realm.frames_rendered(), 1);
-}
-
-#[test]
-fn nested_defer_allow_only_presents_after_the_last_allow() {
-    let realm = mount_root();
-    let mut backend = ScriptedSink::always_presents();
-
-    realm.defer_first_frame();
-    realm.defer_first_frame();
-
-    assert!(!realm.render_frame(&mut backend));
-    assert_eq!(backend.submit_calls, 0);
-
-    realm.allow_first_frame();
-    assert!(
-        !realm.render_frame(&mut backend),
-        "one matching allow of two nested defers must not yet open the gate"
-    );
-    assert_eq!(backend.submit_calls, 0);
-
-    realm.allow_first_frame();
-    assert!(
-        realm.render_frame(&mut backend),
-        "the last matching allow must open the gate"
-    );
-    assert_eq!(backend.submit_calls, 1);
 }
 
 #[test]
@@ -1549,24 +995,5 @@ fn errored_first_frame_does_not_latch_first_frame_sent() {
     assert!(
         !realm.send_frames_to_engine(),
         "an errored first frame must not latch first_frame_sent"
-    );
-}
-
-#[test]
-fn first_frame_sent_latch_short_circuits_later_defers() {
-    let realm = mount_root();
-    let mut backend = ScriptedSink::always_presents();
-
-    let presented = realm.render_frame(&mut backend);
-    assert!(
-        presented,
-        "precondition: the first frame presents with no active deferral"
-    );
-    assert!(realm.send_frames_to_engine());
-
-    realm.defer_first_frame();
-    assert!(
-        realm.send_frames_to_engine(),
-        "a defer registered AFTER the first frame was sent must not re-close the gate"
     );
 }

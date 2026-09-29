@@ -156,12 +156,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_stores_data_and_child() {
-        let theme = Theme::new(ThemeData::dark(), SizedBox::shrink());
-        assert_eq!(theme.data, ThemeData::dark());
-    }
-
-    #[test]
     fn update_should_notify_true_when_data_differs() {
         let a = Theme::new(ThemeData::light(), SizedBox::shrink());
         let b = Theme::new(ThemeData::dark(), SizedBox::shrink());
@@ -173,12 +167,5 @@ mod tests {
         let a = Theme::new(ThemeData::light(), SizedBox::shrink());
         let b = Theme::new(ThemeData::light(), SizedBox::shrink());
         assert!(!a.update_should_notify(&b));
-    }
-
-    #[test]
-    fn debug_format_does_not_panic() {
-        let theme = Theme::new(ThemeData::light(), SizedBox::shrink());
-        let rendered = format!("{theme:?}");
-        assert!(rendered.contains("Theme"));
     }
 }

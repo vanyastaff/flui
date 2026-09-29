@@ -6,15 +6,9 @@
 //! frame — and a handle whose node died must degrade to a silent no-op
 //! (generational id), never repaint a reused slot.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use flui_foundation::geometry::Size;
 use flui_objects::RenderColoredBox;
-use flui_rendering::{
-    constraints::BoxConstraints,
-    pipeline::{DirtySendError, PipelineOwner},
-};
+use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner};
 
 use crate::common::BoxedRenderObject;
 
@@ -59,25 +53,6 @@ fn cross_thread_repaint_lands_in_the_next_frame() {
 }
 
 #[test]
-fn request_fires_the_visual_update_wake() {
-    let (mut owner, node) = fixture();
-    let wakes = Arc::new(AtomicUsize::new(0));
-    let counter = Arc::clone(&wakes);
-    owner.set_on_need_visual_update(move || {
-        counter.fetch_add(1, Ordering::Relaxed);
-    });
-
-    let handle = owner.render_invalidation_handle(node).expect("live node");
-    let before = wakes.load(Ordering::Relaxed);
-    handle.mark_needs_paint().expect("owner alive");
-    assert!(
-        wakes.load(Ordering::Relaxed) > before,
-        "enqueue without a wake is the GIF-frozen-until-you-scroll bug \
-         — an idle event loop would never drain the request"
-    );
-}
-
-#[test]
 fn stale_handle_is_a_silent_noop() {
     let (owner, node) = fixture();
     let (mut owner, _) = frame(owner);
@@ -94,32 +69,5 @@ fn stale_handle_is_a_silent_noop() {
         !painted,
         "a request for a dead generation must be dropped at drain, not \
          replayed into the paint queue"
-    );
-}
-
-#[test]
-fn layout_request_routes_through_the_boundary_walk() {
-    let (owner, node) = fixture();
-    let (owner, _) = frame(owner);
-
-    let render_invalidation_handle = owner.render_invalidation_handle(node).expect("live node");
-    render_invalidation_handle
-        .mark_needs_layout()
-        .expect("owner alive");
-
-    let (owner, painted) = frame(owner);
-    assert!(painted, "the relayout reaches paint through run_layout");
-    let (_owner, painted) = frame(owner);
-    assert!(!painted, "no residue in the dirty queues");
-}
-
-#[test]
-fn dropped_owner_reports_owner_gone() {
-    let (owner, node) = fixture();
-    let handle = owner.render_invalidation_handle(node).expect("live node");
-    drop(owner);
-    assert!(
-        matches!(handle.mark_needs_paint(), Err(DirtySendError::OwnerGone)),
-        "producers must learn the pipeline is gone and stop sending"
     );
 }

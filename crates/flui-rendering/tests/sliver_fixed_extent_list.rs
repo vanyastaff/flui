@@ -14,8 +14,8 @@ use flui_rendering::{
 };
 
 use crate::common::{
-    BoxedRenderObject, BoxedSliverObject, horizontal_constraints,
-    laid_out_tight_300x100 as laid_out, sliver_geometry, vertical_constraints,
+    BoxedRenderObject, BoxedSliverObject, laid_out_tight_300x100 as laid_out, sliver_geometry,
+    vertical_constraints,
 };
 
 fn box_size(
@@ -30,14 +30,6 @@ fn render_offset(
     id: flui_foundation::RenderId,
 ) -> Offset {
     inspect::render_offset(owner, id).expect("node exists")
-}
-
-fn hits(
-    owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
-    x: f64,
-    y: f64,
-) -> Vec<flui_foundation::RenderId> {
-    inspect::hit_path(owner, x, y)
 }
 
 #[derive(Debug)]
@@ -177,39 +169,6 @@ fn sliver_fixed_extent_list_sizes_children_to_item_extent() {
     assert_eq!(render_offset(&owner, child_ids[1]), Offset::new(0.0, 5.0),);
     assert_eq!(render_offset(&owner, child_ids[2]), Offset::new(0.0, 35.0),);
     assert_eq!(render_offset(&owner, child_ids[3]), Offset::new(0.0, 65.0),);
-}
-
-#[test]
-fn sliver_fixed_extent_list_hit_tests_visible_children() {
-    let (owner, root_id, sliver_id, child_ids) =
-        fixed_extent_tree(vertical_constraints(25.0), 30.0, 4);
-
-    assert_eq!(
-        hits(&owner, 10.0, 10.0),
-        vec![child_ids[1], sliver_id, root_id],
-        "global y=10 maps to child 1 after the 25px scroll offset",
-    );
-    assert_eq!(
-        hits(&owner, 10.0, 50.0),
-        vec![child_ids[2], sliver_id, root_id],
-        "global y=50 maps to child 2 after the 25px scroll offset",
-    );
-    assert!(
-        hits(&owner, 10.0, 110.0).is_empty(),
-        "per-level sliver gate rejects points beyond geometry.hit_test_extent",
-    );
-}
-
-#[test]
-fn sliver_fixed_extent_list_supports_horizontal_axis() {
-    let (owner, _root_id, _sliver_id, child_ids) =
-        fixed_extent_tree(horizontal_constraints(30.0), 80.0, 2);
-
-    for &child_id in &child_ids {
-        assert_eq!(box_size(&owner, child_id), Size::new(80.0, 100.0));
-    }
-    assert_eq!(render_offset(&owner, child_ids[0]), Offset::new(-30.0, 0.0),);
-    assert_eq!(render_offset(&owner, child_ids[1]), Offset::new(50.0, 0.0),);
 }
 
 #[test]

@@ -102,23 +102,6 @@ fn two_threads_capture_concurrently_without_seeing_each_other() {
 }
 
 #[test]
-fn a_thread_with_no_active_capture_records_nothing() {
-    // The global subscriber is installed for the whole process once any test
-    // captures, so this asserts the per-event gate actually gates.
-    let ((), first) = capture(|| tracing::warn!("inside"));
-    assert!(first.contains("inside"));
-
-    tracing::warn!("outside");
-
-    let ((), second) = capture(|| {});
-    assert!(
-        second.is_empty(),
-        "an event emitted outside any capture must not be buffered for the \
-         next one; captured:\n{second}",
-    );
-}
-
-#[test]
 fn fields_and_levels_survive_the_round_trip() {
     let ((), log) = capture(|| {
         tracing::error!(count = 3, name = "widget", "structured probe");

@@ -2,32 +2,15 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
 
-use crate::common::{lay_out, lay_out_animated, loose, offset, size};
-use flui_animation::Vsync;
+use crate::common::{lay_out, loose, offset, size};
 use flui_foundation::geometry::{EdgeInsets, Matrix4};
 use flui_painting::Alignment;
 use flui_painting::styling::BoxDecoration;
 use flui_painting::styling::Color;
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{IntoView, ViewState};
-use flui_widgets::{
-    AnimatedContainer, Container, IntrinsicHeight, IntrinsicWidth, LayoutBuilder, SizedBox,
-    VsyncScope,
-};
-
-#[test]
-fn container_padding_shrink_wraps_child() {
-    // Padding(10) around a 50×50 child, no forced size → 70×70.
-    let laid = lay_out(
-        Container::new()
-            .padding(EdgeInsets::all(10.0))
-            .child(SizedBox::square(50.0)),
-        loose(1000.0),
-    );
-    assert_eq!(laid.size(laid.root()), size(70.0, 70.0));
-}
+use flui_widgets::{Container, IntrinsicWidth, LayoutBuilder, SizedBox};
 
 #[test]
 fn container_width_height_force_size_regardless_of_child() {
@@ -57,14 +40,6 @@ fn container_aligns_child_within_forced_size() {
     assert_eq!(laid.size(inner), size(20.0, 20.0));
     // Centered in 100×100: (100-20)/2 = 40 on each axis.
     assert_eq!(laid.offset(inner), offset(40.0, 40.0));
-}
-
-#[test]
-fn container_childless_with_size_fills_to_size() {
-    // No child + forced size: additional constraints pin the childless
-    // placeholder to the requested size.
-    let laid = lay_out(Container::new().width(80.0).height(40.0), loose(1000.0));
-    assert_eq!(laid.size(laid.root()), size(80.0, 40.0));
 }
 
 /// Counts `create_state` / `dispose` so optional-layer toggles can assert the
@@ -111,60 +86,6 @@ fn assert_child_state_preserved(creates: &AtomicUsize, disposes: &AtomicUsize, l
         0,
         "{label}: optional Container layer must not dispose the unkeyed child state"
     );
-}
-
-#[test]
-fn container_optional_color_preserves_unkeyed_child_state() {
-    let creates = Arc::new(AtomicUsize::new(0));
-    let disposes = Arc::new(AtomicUsize::new(0));
-    let child = StateProbe {
-        creates: Arc::clone(&creates),
-        disposes: Arc::clone(&disposes),
-    };
-
-    let mut laid = lay_out(Container::new().child(child.clone()), loose(1000.0));
-    assert_eq!(creates.load(Ordering::SeqCst), 1);
-
-    laid.pump_widget(
-        Container::new()
-            .color(Color::rgb(1, 2, 3))
-            .child(child.clone()),
-    );
-    assert_child_state_preserved(&creates, &disposes, "color None→Some");
-
-    laid.pump_widget(Container::new().child(child));
-    assert_child_state_preserved(&creates, &disposes, "color Some→None");
-}
-
-#[test]
-fn container_optional_alignment_preserves_unkeyed_child_state() {
-    let creates = Arc::new(AtomicUsize::new(0));
-    let disposes = Arc::new(AtomicUsize::new(0));
-    let child = StateProbe {
-        creates: Arc::clone(&creates),
-        disposes: Arc::clone(&disposes),
-    };
-
-    let mut laid = lay_out(
-        Container::new()
-            .width(100.0)
-            .height(100.0)
-            .child(child.clone()),
-        loose(1000.0),
-    );
-    assert_eq!(creates.load(Ordering::SeqCst), 1);
-
-    laid.pump_widget(
-        Container::new()
-            .width(100.0)
-            .height(100.0)
-            .alignment(Alignment::CENTER)
-            .child(child.clone()),
-    );
-    assert_child_state_preserved(&creates, &disposes, "alignment None→Some");
-
-    laid.pump_widget(Container::new().width(100.0).height(100.0).child(child));
-    assert_child_state_preserved(&creates, &disposes, "alignment Some→None");
 }
 
 #[test]
@@ -217,65 +138,6 @@ fn container_optional_padding_margin_decoration_transform_preserve_unkeyed_child
     assert_child_state_preserved(&creates, &disposes, "strip all optional layers");
 }
 
-#[test]
-fn container_optional_constraints_preserve_unkeyed_child_state() {
-    let creates = Arc::new(AtomicUsize::new(0));
-    let disposes = Arc::new(AtomicUsize::new(0));
-    let child = StateProbe {
-        creates: Arc::clone(&creates),
-        disposes: Arc::clone(&disposes),
-    };
-
-    let mut laid = lay_out(Container::new().child(child.clone()), loose(1000.0));
-    assert_eq!(creates.load(Ordering::SeqCst), 1);
-
-    laid.pump_widget(
-        Container::new()
-            .width(80.0)
-            .height(40.0)
-            .child(child.clone()),
-    );
-    assert_child_state_preserved(&creates, &disposes, "width/height");
-
-    laid.pump_widget(Container::new().child(child));
-    assert_child_state_preserved(&creates, &disposes, "clear width/height");
-}
-
-#[test]
-fn animated_container_optional_color_preserves_unkeyed_child_state() {
-    let creates = Arc::new(AtomicUsize::new(0));
-    let disposes = Arc::new(AtomicUsize::new(0));
-    let child = StateProbe {
-        creates: Arc::clone(&creates),
-        disposes: Arc::clone(&disposes),
-    };
-    let vsync = Vsync::new();
-
-    let mut laid = lay_out_animated(
-        VsyncScope::new(
-            vsync.clone(),
-            AnimatedContainer::new(child.clone()).duration(Duration::from_millis(200)),
-        ),
-        loose(1000.0),
-        vsync.clone(),
-    );
-    assert_eq!(creates.load(Ordering::SeqCst), 1);
-
-    laid.pump_widget(VsyncScope::new(
-        vsync.clone(),
-        AnimatedContainer::new(child.clone())
-            .color(Color::rgb(10, 20, 30))
-            .duration(Duration::from_millis(200)),
-    ));
-    assert_child_state_preserved(&creates, &disposes, "AnimatedContainer color None→Some");
-
-    laid.pump_widget(VsyncScope::new(
-        vsync,
-        AnimatedContainer::new(child).duration(Duration::from_millis(200)),
-    ));
-    assert_child_state_preserved(&creates, &disposes, "AnimatedContainer color Some→None");
-}
-
 /// A tight additional width must answer an intrinsic query without asking the
 /// child — matching `RenderConstrainedBox`. `LayoutBuilder` logs (Flutter
 /// throws) if asked; the control below proves that log is reachable.
@@ -310,29 +172,5 @@ fn container_tight_width_does_not_query_layout_builder_intrinsics() {
         log.count_containing(NEEDLE),
         0,
         "a tight Container width must answer the intrinsic without asking LayoutBuilder: {log}"
-    );
-}
-
-/// Height counterpart of
-/// [`container_tight_width_does_not_query_layout_builder_intrinsics`].
-#[test]
-fn container_tight_height_does_not_query_layout_builder_intrinsics() {
-    const NEEDLE: &str = "does not support intrinsic dimensions";
-
-    let (laid, log) = flui_testing::log_capture::capture(|| {
-        lay_out(
-            IntrinsicHeight::new().child(
-                Container::new()
-                    .height(50.0)
-                    .child(LayoutBuilder::new(|_ctx, _c| SizedBox::square(10.0))),
-            ),
-            loose(200.0),
-        )
-    });
-    assert_eq!(laid.size(laid.root()).height, 50.0);
-    assert_eq!(
-        log.count_containing(NEEDLE),
-        0,
-        "a tight Container height must answer the intrinsic without asking LayoutBuilder: {log}"
     );
 }

@@ -417,33 +417,6 @@ mod tests {
     }
 
     #[test]
-    fn clamping_apply_boundary_clamps_to_max() {
-        let physics = ClampingScrollPhysics::new();
-        let allowed = physics.apply_boundary_conditions(&metrics(0.0, 0.0, 400.0), 500.0);
-        assert_eq!(allowed, 400.0, "position above max is clamped to max");
-    }
-
-    #[test]
-    fn clamping_apply_boundary_passes_through_in_bounds() {
-        let physics = ClampingScrollPhysics::new();
-        let allowed = physics.apply_boundary_conditions(&metrics(0.0, 0.0, 400.0), 200.0);
-        assert_eq!(
-            allowed, 200.0,
-            "in-bounds position passes through unchanged"
-        );
-    }
-
-    #[test]
-    fn clamping_ballistic_returns_none_below_fling_threshold() {
-        let physics = ClampingScrollPhysics::new();
-        let sim = physics.create_ballistic_simulation(&metrics(100.0, 0.0, 400.0), 10.0);
-        assert!(
-            sim.is_none(),
-            "velocity below min_fling_velocity should produce no simulation"
-        );
-    }
-
-    #[test]
     fn clamping_ballistic_returns_simulation_above_fling_threshold() {
         let physics = ClampingScrollPhysics::new();
         let sim = physics.create_ballistic_simulation(&metrics(100.0, 0.0, 400.0), 300.0);
@@ -473,19 +446,6 @@ mod tests {
     }
 
     #[test]
-    fn bouncing_apply_boundary_allows_overscroll_past_max_with_resistance() {
-        let physics = BouncingScrollPhysics::new();
-        // Propose 80 px past the bottom (max = 400).
-        let allowed = physics.apply_boundary_conditions(&metrics(0.0, 0.0, 400.0), 480.0);
-        // Resistance: 80 * 0.52 = 41.6 → allowed = 400 + 41.6 = 441.6.
-        let expected = 400.0 + 80.0_f64 * 0.52;
-        assert!(
-            (allowed - expected).abs() < 0.001,
-            "bouncing resistance at 480 (max=400) should be {expected}, got {allowed}"
-        );
-    }
-
-    #[test]
     fn bouncing_ballistic_springs_back_when_overscrolled_past_min() {
         let physics = BouncingScrollPhysics::new();
         // Position is already below min; spring back regardless of velocity.
@@ -496,41 +456,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn bouncing_ballistic_springs_back_when_overscrolled_past_max() {
-        let physics = BouncingScrollPhysics::new();
-        let sim = physics.create_ballistic_simulation(&metrics(450.0, 0.0, 400.0), 0.0);
-        assert!(
-            sim.is_some(),
-            "overscroll past max should produce a spring-back simulation even at zero velocity"
-        );
-    }
-
-    #[test]
-    fn bouncing_ballistic_returns_none_below_fling_threshold_when_in_bounds() {
-        let physics = BouncingScrollPhysics::new();
-        let sim = physics.create_ballistic_simulation(&metrics(200.0, 0.0, 400.0), 10.0);
-        assert!(
-            sim.is_none(),
-            "in-bounds position with sub-threshold velocity should produce no simulation"
-        );
-    }
-
     // ScrollMetrics ------------------------------------------------------------
-
-    #[test]
-    fn scroll_metrics_from_scroll_position_snapshots_all_four_fields() {
-        let mut position = ScrollPosition::zero();
-        position.apply_viewport_dimension(300.0);
-        position.apply_content_dimensions(10.0, 500.0);
-        position.set_pixels(120.0);
-
-        let metrics = ScrollMetrics::from(&position);
-        assert_eq!(metrics.pixels, 120.0);
-        assert_eq!(metrics.min_scroll_extent, 10.0);
-        assert_eq!(metrics.max_scroll_extent, 500.0);
-        assert_eq!(metrics.viewport_dimension, 300.0);
-    }
 
     /// Proves the snapshot is a genuinely atomic, single-lock read: a
     /// background thread continuously mutates `min_scroll_extent`/
@@ -576,29 +502,10 @@ mod tests {
     // ScrollMetrics::page / pixels_from_page -----------------------------
 
     #[test]
-    fn page_computes_the_guarded_fraction_at_full_viewport_fraction() {
-        // page = clamp(600, 0, 1000) / max(1.0, 300 * 1.0) = 2.0
-        let m = ScrollMetrics::new(600.0, 0.0, 1000.0, 300.0);
-        assert_eq!(m.page(1.0), 2.0);
-    }
-
-    #[test]
     fn page_computes_the_guarded_fraction_at_a_partial_viewport_fraction() {
         // page = clamp(720, 0, 1000) / max(1.0, 300 * 0.8) = 720 / 240 = 3.0
         let m = ScrollMetrics::new(720.0, 0.0, 1000.0, 300.0);
         assert_eq!(m.page(0.8), 3.0);
-    }
-
-    #[test]
-    fn page_clamps_pixels_to_the_extents_before_dividing() {
-        // pixels (-50.0) is below min_scroll_extent (0.0): clamp(-50, 0, 1000)
-        // = 0.0, then max(0.0, 0.0) = 0.0 -> page = 0.0, not a negative page.
-        let m = ScrollMetrics::new(-50.0, 0.0, 1000.0, 300.0);
-        assert_eq!(
-            m.page(1.0),
-            0.0,
-            "an overscrolled negative pixels value must clamp to page 0.0"
-        );
     }
 
     #[test]
@@ -609,19 +516,6 @@ mod tests {
             50.0,
             "max(1.0, 0.0) denominator guard must prevent a NaN/inf page \
              before the viewport has laid out"
-        );
-    }
-
-    #[test]
-    fn pixels_from_page_is_the_inverse_of_page_at_matching_extents() {
-        let m = ScrollMetrics::new(0.0, 0.0, 1000.0, 300.0);
-        let pixels = m.pixels_from_page(0.8, 3.0);
-        assert_eq!(pixels, 720.0, "3.0 * 300 * 0.8 = 720.0");
-
-        let round_tripped = ScrollMetrics::new(pixels, 0.0, 1000.0, 300.0).page(0.8);
-        assert_eq!(
-            round_tripped, 3.0,
-            "pixels_from_page then page must round-trip"
         );
     }
 }

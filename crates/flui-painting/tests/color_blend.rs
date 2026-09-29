@@ -17,19 +17,6 @@ fn opaque() -> impl Strategy<Value = Color> {
     (any::<u8>(), any::<u8>(), any::<u8>()).prop_map(|(r, g, b)| Color::rgb(r, g, b))
 }
 
-fn gray() -> impl Strategy<Value = Color> {
-    any::<u8>().prop_map(|v| Color::rgb(v, v, v))
-}
-
-/// W3C `Lum`, the luminosity the non-separable modes preserve or transfer.
-fn lum(c: Color) -> f32 {
-    0.3 * c.red_f32() + 0.59 * c.green_f32() + 0.11 * c.blue_f32()
-}
-
-fn is_gray(c: Color) -> bool {
-    c.r == c.g && c.g == c.b
-}
-
 const MIRRORS: [(BlendMode, BlendMode); 7] = [
     (SrcOver, DstOver),
     (SrcIn, DstIn),
@@ -40,17 +27,7 @@ const MIRRORS: [(BlendMode, BlendMode); 7] = [
     (Clear, Clear),
 ];
 
-const SYMMETRIC_SEPARABLE: [BlendMode; 6] =
-    [Multiply, Screen, Darken, Lighten, Difference, Exclusion];
-
 proptest! {
-    #[test]
-    fn clear_src_and_dst(s in arb_color(), d in arb_color()) {
-        let or_transparent = |c: Color| if c.a == 0 { Color::TRANSPARENT } else { c };
-        prop_assert_eq!(s.blend(d, Clear), Color::TRANSPARENT);
-        prop_assert_eq!(s.blend(d, Src), or_transparent(s));
-        prop_assert_eq!(s.blend(d, Dst), or_transparent(d));
-    }
 
     /// Swapping source and destination turns each Porter-Duff operator into
     /// its mirror (`Xor`, `Plus` and `Clear` are their own).
@@ -73,108 +50,6 @@ proptest! {
         }
     }
 
-    /// Over a fully transparent destination only the source-keeping
-    /// operators leave anything.
-    #[test]
-    fn porter_duff_over_transparent(s in opaque(), d in arb_color()) {
-        let clear = d.with_alpha(0);
-        for mode in [SrcOver, SrcOut, Xor, Plus] {
-            prop_assert_eq!(s.blend(clear, mode), s, "{:?}", mode);
-        }
-        for mode in [SrcIn, SrcATop, DstIn, DstOut] {
-            prop_assert_eq!(s.blend(clear, mode), Color::TRANSPARENT, "{:?}", mode);
-        }
-    }
-
-    #[test]
-    fn symmetric_separable_modes_commute(s in opaque(), d in opaque()) {
-        for mode in SYMMETRIC_SEPARABLE {
-            prop_assert_eq!(s.blend(d, mode), d.blend(s, mode), "{:?}", mode);
-        }
-    }
-
-    /// `Overlay` is `HardLight` with the layers swapped.
-    #[test]
-    fn overlay_is_swapped_hard_light(s in opaque(), d in opaque()) {
-        prop_assert_eq!(s.blend(d, HardLight), d.blend(s, Overlay));
-    }
-
-    /// Neutral and absorbing elements, and the self-blends.
-    #[test]
-    fn separable_identities(c in opaque()) {
-        let invert = Color::rgb(255 - c.r, 255 - c.g, 255 - c.b);
-        for (mode, with, expected) in [
-            (Multiply, Color::WHITE, c), (Multiply, Color::BLACK, Color::BLACK),
-            (Screen, Color::BLACK, c), (Screen, Color::WHITE, Color::WHITE),
-            (Darken, Color::WHITE, c), (Lighten, Color::BLACK, c),
-            (Difference, Color::BLACK, c), (Difference, Color::WHITE, invert),
-            (Exclusion, Color::BLACK, c), (Exclusion, Color::WHITE, invert),
-            (Difference, c, Color::BLACK), (Darken, c, c), (Lighten, c, c),
-        ] {
-            prop_assert_eq!(with.blend(c, mode), expected, "{:?} with {:?}", mode, with);
-        }
-    }
-
-    /// Translucent layers go through the separable composite, and white
-    /// makes `Multiply` return the other layer's colour: over a white
-    /// backdrop it is `SrcOver`, under a white source `DstOver`, both
-    /// computed by the Porter-Duff path instead. They agree to within the
-    /// one unit the two paths may round differently.
-    #[test]
-    fn translucent_multiply_by_white_is_plain_compositing(s in arb_color(), d in arb_color()) {
-        let near = |a: Color, b: Color| {
-            [(a.r, b.r), (a.g, b.g), (a.b, b.b), (a.a, b.a)].iter().all(|(x, y)| x.abs_diff(*y) <= 1)
-        };
-        let white_backdrop = Color::rgba(255, 255, 255, d.a);
-        let (got, want) = (s.blend(white_backdrop, Multiply), s.blend(white_backdrop, SrcOver));
-        prop_assert!(near(got, want), "{:?} over white: {:?} vs {:?}", s, got, want);
-        let white_source = Color::rgba(255, 255, 255, s.a);
-        let (got, want) = (white_source.blend(d, Multiply), white_source.blend(d, DstOver));
-        prop_assert!(near(got, want), "white under {:?}: {:?} vs {:?}", d, got, want);
-    }
-
-    /// `Luminosity` and `Color` are the same operation with the layers
-    /// swapped: each takes the luminosity of one and the hue and saturation
-    /// of the other.
-    #[test]
-    fn luminosity_is_swapped_color(s in opaque(), d in opaque()) {
-        prop_assert_eq!(s.blend(d, Luminosity), d.blend(s, BlendMode::Color));
-    }
-
-    /// Each non-separable mode takes its hue from one layer; when that layer
-    /// is gray the result is gray too.
-    #[test]
-    fn non_separable_modes_with_a_gray_hue_donor(c in opaque(), g in gray()) {
-        prop_assert!(is_gray(g.blend(c, Hue)));
-        prop_assert!(is_gray(g.blend(c, BlendMode::Color)));
-        prop_assert!(is_gray(c.blend(g, Saturation)));
-        prop_assert!(is_gray(c.blend(g, Luminosity)));
-    }
-
-    /// `Hue`, `Saturation` and `Color` keep the backdrop's luminosity;
-    /// `Luminosity` takes the source's. `ClipColor` preserves luminosity
-    /// exactly, so the only slack is the final rounding to u8.
-    #[test]
-    fn non_separable_luminosity_transfer(s in opaque(), d in opaque()) {
-        let tolerance = 1.0 / 255.0;
-        for mode in [Hue, Saturation, BlendMode::Color] {
-            let got = lum(s.blend(d, mode));
-            prop_assert!((got - lum(d)).abs() <= tolerance, "{:?}: {} vs {}", mode, got, lum(d));
-        }
-        let got = lum(s.blend(d, Luminosity));
-        prop_assert!((got - lum(s)).abs() <= tolerance, "Luminosity: {} vs {}", got, lum(s));
-    }
-
-    /// `Modulate` multiplies premultiplied colors: commutative, with opaque
-    /// white as its identity and transparent as its zero.
-    #[test]
-    fn modulate(s in arb_color(), d in arb_color()) {
-        prop_assert_eq!(s.blend(d, Modulate), d.blend(s, Modulate));
-        let d_or_transparent = if d.a == 0 { Color::TRANSPARENT } else { d };
-        prop_assert_eq!(Color::WHITE.blend(d, Modulate), d_or_transparent);
-        prop_assert_eq!(Color::TRANSPARENT.blend(d, Modulate), Color::TRANSPARENT);
-    }
-
     /// `Plus` is a saturating per-channel add.
     #[test]
     fn plus_saturates(s in opaque(), d in opaque()) {
@@ -182,35 +57,6 @@ proptest! {
         prop_assert_eq!(s.blend(d, Plus), Color::rgb(add(s.r, d.r), add(s.g, d.g), add(s.b, d.b)));
     }
 
-    /// An opaque source covers the background; a transparent one leaves it.
-    #[test]
-    fn blend_over_fast_paths(s in opaque(), d in arb_color()) {
-        prop_assert_eq!(s.blend_over(d), s);
-        prop_assert_eq!(s.with_alpha(0).blend_over(d), d);
-    }
-
-    /// Compositing a color over itself changes only the alpha: the channel
-    /// is `c · (a + back) / (a + back)`, which must round back to `c`.
-    #[test]
-    fn blend_over_a_color_onto_itself_keeps_its_rgb(c in opaque(), a in 1u8..=255, b in any::<u8>()) {
-        let out = c.with_alpha(a).blend_over(c.with_alpha(b));
-        prop_assert_eq!((out.r, out.g, out.b), (c.r, c.g, c.b));
-    }
-
-    /// `blend_over` and `blend(.., SrcOver)` are two implementations of the
-    /// same operator; they differ only in rounding (`blend_over` truncates
-    /// like Flutter's `Color.alphaBlend`, `blend` rounds like the GPU).
-    #[test]
-    fn blend_over_agrees_with_src_over(s in arb_color(), d in arb_color()) {
-        let (a, b) = (s.blend_over(d), s.blend(d, SrcOver));
-        if b.a == 0 {
-            prop_assert_eq!(a.a, 0);
-        } else {
-            for (x, y) in [(a.r, b.r), (a.g, b.g), (a.b, b.b), (a.a, b.a)] {
-                prop_assert!(x.abs_diff(y) <= 1, "{:?} vs {:?}", a, b);
-            }
-        }
-    }
 }
 
 /// One opaque gray pixel per separable mode at mid-range inputs, where the

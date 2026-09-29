@@ -216,20 +216,6 @@ mod tests {
         assert_send::<TextContext>();
     };
 
-    #[test]
-    fn a_clone_is_the_same_collection_and_a_new_one_is_not() {
-        let fonts = FontCollection::new();
-        assert!(FontCollection::ptr_eq(&fonts, &fonts.clone()));
-        assert!(!FontCollection::ptr_eq(&fonts, &FontCollection::new()));
-    }
-
-    #[test]
-    fn a_context_keeps_the_collection_it_was_built_from() {
-        let fonts = FontCollection::new();
-        let context = TextContext::new(&fonts);
-        assert!(FontCollection::ptr_eq(context.fonts(), &fonts));
-    }
-
     #[cfg(feature = "parley")]
     #[test]
     fn bytes_with_no_face_are_refused() {

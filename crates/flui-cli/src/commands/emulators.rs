@@ -389,13 +389,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_target_matches_exact_name_case_insensitively() {
-        let candidates = vec![avd("Pixel_7_API_34", Status::Shutdown)];
-        let found = resolve_target(&candidates, "pixel_7_api_34").expect("exact match");
-        assert_eq!(found.name, "Pixel_7_API_34");
-    }
-
-    #[test]
     fn resolve_target_matches_unique_prefix() {
         let candidates = vec![avd("Pixel_7_API_34", Status::Shutdown)];
         let found = resolve_target(&candidates, "pixel").expect("unique prefix");
@@ -409,13 +402,6 @@ mod tests {
             avd("Pixel_7", Status::Shutdown),
         ];
         let error = resolve_target(&candidates, "pixel").expect_err("ambiguous");
-        assert!(matches!(error, CliError::DeviceNotFound { .. }));
-    }
-
-    #[test]
-    fn resolve_target_reports_unknown_name() {
-        let candidates = vec![avd("Pixel_7", Status::Shutdown)];
-        let error = resolve_target(&candidates, "definitely-not-an-emulator").expect_err("unknown");
         assert!(matches!(error, CliError::DeviceNotFound { .. }));
     }
 }

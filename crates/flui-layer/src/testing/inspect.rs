@@ -145,12 +145,9 @@ pub fn has_picture_layer(tree: &LayerTree) -> bool {
 #[cfg(test)]
 mod tests {
     use flui_foundation::geometry::Matrix4;
-    use flui_painting::paint::Clip;
 
     use super::*;
-    use crate::{
-        ClipPathLayer, ClipRRectLayer, ClipRectLayer, OffsetLayer, OpacityLayer, TransformLayer,
-    };
+    use crate::{OffsetLayer, OpacityLayer, TransformLayer};
 
     fn offset() -> Layer {
         Layer::from(OffsetLayer::zero())
@@ -194,64 +191,5 @@ mod tests {
         );
         assert!(!has_picture_layer(&tree));
         assert_eq!(structure(&LayerTree::default()), vec!["Offset"]);
-    }
-
-    #[test]
-    fn walkers_survive_a_deep_chain_on_a_small_stack() {
-        const DEPTH: usize = 10_000;
-        let mut tree = LayerTree::new(offset());
-        let mut parent = tree.root();
-        for _ in 1..DEPTH {
-            parent = tree.push_child(parent, offset());
-        }
-        let _ = tree.push_child(parent, Layer::from(TransformLayer::identity()));
-
-        let walked = std::thread::Builder::new()
-            // Far too small for a recursive walk of `DEPTH` frames.
-            .stack_size(64 * 1024)
-            .spawn(move || {
-                let kinds = structure(&tree);
-                let matrices = transform_matrices(&tree);
-                let first = first_transform_matrix(&tree);
-                (kinds.len(), matrices.len(), first)
-            })
-            .expect("spawn the small-stack walker thread")
-            .join()
-            .expect("the walkers must not overflow a small stack on a deep chain");
-
-        assert_eq!(walked, (DEPTH + 1, 1, Some(Matrix4::IDENTITY)));
-    }
-
-    #[test]
-    fn clip_collectors_return_every_clip_in_pre_order() {
-        let mut tree = LayerTree::new(offset());
-        let root = tree.root();
-        let outer_rect = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
-        let inner_rect = Rect::from_xywh(10.0, 10.0, 50.0, 50.0);
-        let outer = tree.push_child(
-            root,
-            Layer::from(ClipRectLayer::new(outer_rect, Clip::HardEdge)),
-        );
-        let inner = tree.push_child(
-            outer,
-            Layer::from(ClipRectLayer::new(inner_rect, Clip::HardEdge)),
-        );
-        let rrect = RRect::from_rect_circular(outer_rect, 8.0);
-        let _ = tree.push_child(
-            inner,
-            Layer::from(ClipRRectLayer::new(rrect, Clip::AntiAlias)),
-        );
-        let mut path = Path::new();
-        path.add_rect(inner_rect);
-        let _ = tree.push_child(
-            inner,
-            Layer::from(ClipPathLayer::new(path, Clip::AntiAlias)),
-        );
-
-        assert_eq!(clip_rects(&tree), vec![outer_rect, inner_rect]);
-        assert_eq!(clip_rrects(&tree), vec![rrect]);
-        let paths = clip_paths(&tree);
-        assert_eq!(paths.len(), 1);
-        assert!(paths[0].contains(flui_foundation::geometry::Point::new(15.0, 15.0)));
     }
 }

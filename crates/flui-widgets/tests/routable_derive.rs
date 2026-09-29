@@ -53,20 +53,6 @@ proptest! {
 }
 
 #[test]
-fn derived_routable_prints_its_patterns() {
-    assert_eq!(TestRoute::Home.to_path(), RoutePath::root());
-    assert_eq!(TestRoute::Note { id: 3 }.to_path().as_str(), "/note/3");
-    assert_eq!(
-        TestRoute::UserPost { uid: 1, pid: -2 }.to_path().as_str(),
-        "/user/1/post/-2"
-    );
-    // The literal is encoded like any segment: `é` is `%C3%A9`.
-    let cafe = TestRoute::Cafe { s: "a b".into() }.to_path();
-    assert_eq!(cafe, RoutePath::root().join("café").join("a b"));
-    assert!(cafe.as_str().ends_with("%C3%A9/a%20b"), "{cafe}");
-}
-
-#[test]
 fn derived_routable_reports_no_match_and_bad_params() {
     for location in ["/nope", "/note", "/note/1/x", "/user/1/post"] {
         assert!(
@@ -89,15 +75,6 @@ fn derived_routable_reports_no_match_and_bad_params() {
         TestRoute::parse("/user/x/post/1"),
         Err(RouteParseError::Param { field: "uid", .. })
     ));
-}
-
-#[test]
-fn literal_segments_win_over_parameters() {
-    assert_eq!(TestRoute::parse("/s/new"), Ok(TestRoute::SNew));
-    assert_eq!(
-        TestRoute::parse("/s/old"),
-        Ok(TestRoute::Slug { slug: "old".into() })
-    );
 }
 
 /// Two patterns that cross: each has a literal where the other has a

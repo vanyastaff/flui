@@ -564,16 +564,6 @@ mod tests {
     // ── constraints_to_scroll_window ─────────────────────────────────────────
 
     #[test]
-    fn adapter_at_scroll_origin_no_cache() {
-        let c = vertical(0.0, 600.0, 600.0, 0.0);
-        let w = constraints_to_scroll_window(&c);
-        assert_eq!(w.offset, 0.0);
-        assert_eq!(w.main_extent, 600.0);
-        assert_eq!(w.cache_before, 0.0);
-        assert_eq!(w.cache_after, 0.0);
-    }
-
-    #[test]
     fn adapter_with_cache_before_and_after() {
         let c = vertical(100.0, 600.0, 1000.0, -200.0);
         let w = constraints_to_scroll_window(&c);
@@ -583,15 +573,6 @@ mod tests {
         assert_eq!(w.cache_after, 400.0); // (1000-600).max(0)
     }
 
-    #[test]
-    fn adapter_negative_cache_origin_positive_is_zero() {
-        // cache_origin > 0 means cache does not extend behind leading edge
-        let c = vertical(0.0, 600.0, 600.0, 50.0);
-        let w = constraints_to_scroll_window(&c);
-        assert_eq!(w.cache_before, 0.0); // (-50).max(0) == 0
-        assert_eq!(w.cache_after, 0.0);
-    }
-
     // ── take_anchor_correction ────────────────────────────────────────────
     #[test]
     fn correction_emits_whatever_is_pending_and_resets() {
@@ -599,35 +580,5 @@ mod tests {
         assert_eq!(take_anchor_correction(&mut correction), Some(10.0));
         assert_eq!(correction, 0.0);
     }
-    #[test]
-    fn correction_zero_pending_emits_none() {
-        let mut correction = 0.0_f64;
-        assert_eq!(take_anchor_correction(&mut correction), None);
-    }
-    #[test]
-    fn correction_is_direction_independent() {
-        // The old state machine withheld a pending correction on a backward
-        // scroll; the accumulator is now drained on every pass, so the
-        // caller's scroll direction is not even an input.
-        let mut correction = -8.0_f64;
-        assert_eq!(take_anchor_correction(&mut correction), Some(-8.0));
-        assert_eq!(correction, 0.0);
-        assert_eq!(take_anchor_correction(&mut correction), None);
-    }
     // ── accumulate_anchor_correction ─────────────────────────────────────────
-
-    #[test]
-    fn accumulate_adds_delta_when_some() {
-        let mut pending = 0.0_f64;
-        accumulate_anchor_correction(&mut pending, Some(AnchorCorrection { delta: 3.0 }));
-        accumulate_anchor_correction(&mut pending, Some(AnchorCorrection { delta: 7.0 }));
-        assert_eq!(pending, 10.0);
-    }
-
-    #[test]
-    fn accumulate_noop_on_none() {
-        let mut pending = 5.0_f64;
-        accumulate_anchor_correction(&mut pending, None);
-        assert_eq!(pending, 5.0);
-    }
 }

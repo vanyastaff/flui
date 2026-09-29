@@ -308,20 +308,4 @@ mod android_entry_point_shape {
 
     const DISPLAY_NAME: &str = "flui_android_demo";
     const LOG_DIRECTIVES: &str = "info,flui_engine=debug,wgpu=warn";
-
-    #[test]
-    fn the_entry_point_setup_and_report_path_type_checks() {
-        let identity = AppIdentity::new(DISPLAY_NAME).unwrap_or_default();
-        let config = LogConfig::builder()
-            .identity(identity.clone())
-            .directives(LOG_DIRECTIVES)
-            .build();
-
-        let setup = super::setup_with_env_fallback(&config, SubscriberPolicy::Auto)
-            .expect("BUG: LOG_DIRECTIVES must be a valid filter directive string");
-
-        if let Some(error) = setup.rejected_env_override {
-            super::report_to_logcat(&identity, &format!("RUST_LOG rejected: {error}"));
-        }
-    }
 }

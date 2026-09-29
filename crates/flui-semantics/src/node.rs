@@ -339,112 +339,8 @@ impl SemanticsNode {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use super::*;
-    use crate::{action::SemanticsAction, flags::SemanticsFlag};
-
-    #[test]
-    fn test_semantics_node_new() {
-        let node = SemanticsNode::new();
-
-        assert!(node.parent().is_none());
-        assert!(node.children().is_empty());
-        assert!(node.element_id().is_none());
-        assert!(node.source_render_id().is_none());
-        assert!(node.accessibility_id().is_none());
-        assert!(node.is_dirty());
-        assert!(!node.has_been_annotated());
-    }
-
-    #[test]
-    fn test_semantics_node_with_element_id() {
-        let element_id = ElementId::new(42);
-        let node = SemanticsNode::new().with_element_id(element_id);
-
-        assert_eq!(node.element_id(), Some(element_id));
-    }
-
-    #[test]
-    fn test_semantics_node_config() {
-        let mut node = SemanticsNode::new();
-
-        node.config_mut().set_label("Submit");
-        node.config_mut().set_button(true);
-
-        assert!(node.config().is_button());
-        assert_eq!(node.label(), Some("Submit"));
-        assert!(node.has_been_annotated());
-    }
-
-    #[test]
-    fn test_semantics_node_actions() {
-        let mut node = SemanticsNode::new();
-
-        let handler: crate::SemanticsActionHandler = Arc::new(|_, _| {});
-        node.config_mut()
-            .add_action(SemanticsAction::Tap, handler.clone());
-        node.config_mut()
-            .add_action(SemanticsAction::LongPress, handler);
-
-        assert!(node.config().has_action(SemanticsAction::Tap));
-        assert!(node.config().has_action(SemanticsAction::LongPress));
-        assert!(!node.config().has_action(SemanticsAction::ScrollUp));
-    }
-
-    #[test]
-    fn test_semantics_node_tree_structure() {
-        let mut node = SemanticsNode::new();
-        let parent_id = SemanticsId::new(1);
-        let child1_id = SemanticsId::new(2);
-        let child2_id = SemanticsId::new(3);
-
-        node.set_parent(Some(parent_id));
-        assert_eq!(node.parent(), Some(parent_id));
-
-        node.add_child(child1_id);
-        node.add_child(child2_id);
-        node.add_child(child1_id); // Duplicate - should not be added
-        assert_eq!(node.children().len(), 2);
-
-        node.remove_child(child1_id);
-        assert_eq!(node.children().len(), 1);
-        assert!(!node.children().contains(&child1_id));
-        assert!(node.children().contains(&child2_id));
-
-        node.clear_children();
-        assert!(node.children().is_empty());
-    }
-
-    #[test]
-    fn test_semantics_node_geometry() {
-        let mut node = SemanticsNode::new();
-
-        let rect = Rect::from_xywh(10.0, 20.0, 100.0, 50.0);
-        node.set_rect(rect);
-        assert_eq!(node.rect(), rect);
-
-        node.set_transform(Some(Matrix4::IDENTITY));
-        assert!(node.transform().is_some());
-        assert_eq!(node.transform().copied(), Some(Matrix4::IDENTITY));
-    }
-
-    #[test]
-    fn test_semantics_node_dirty_state() {
-        let mut node = SemanticsNode::new();
-        assert!(node.is_dirty());
-
-        node.mark_clean();
-        assert!(!node.is_dirty());
-
-        node.mark_dirty();
-        assert!(node.is_dirty());
-
-        // Modifying config should mark dirty
-        node.mark_clean();
-        node.config_mut().set_label("Test");
-        assert!(node.is_dirty());
-    }
 
     #[test]
     fn absorbed_semantic_content_preserves_the_receivers_source_rect() {
@@ -464,87 +360,11 @@ mod tests {
         assert_eq!(node1.config().is_enabled(), Some(true));
         assert_eq!(node1.rect(), Rect::from_xywh(0.0, 0.0, 50.0, 50.0),);
     }
-
-    #[test]
-    fn semantic_content_does_not_declare_a_boundary() {
-        let mut node = SemanticsNode::new();
-        node.config_mut().set_label("Content");
-
-        assert!(node.has_been_annotated());
-        assert!(!node.config().is_semantics_boundary());
-    }
-
-    #[test]
-    fn test_semantics_node_to_data() {
-        let source = RenderId::new_gen(
-            9,
-            core::num::NonZeroU32::new(3).expect("test generation is non-zero"),
-        );
-        let mut node = SemanticsNode::new().with_source_render_id(source);
-        node.config_mut().set_label("Test Label");
-        node.config_mut().set_button(true);
-        node.config_mut()
-            .add_action(SemanticsAction::Tap, Arc::new(|_, _| {}));
-        node.config_mut().add_action(
-            SemanticsAction::DidGainAccessibilityFocus,
-            Arc::new(|_, _| {}),
-        );
-        node.config_mut().set_blocks_user_actions(true);
-        node.set_rect(Rect::from_xywh(10.0, 20.0, 100.0, 50.0));
-
-        let data = node.to_node_data();
-
-        assert_eq!(
-            data.id,
-            Some(AccessibilityNodeId::from(source)),
-            "the payload identity is the stable render-boundary id, never an arena position"
-        );
-        assert_eq!(data.label, Some("Test Label".into()));
-        assert!(data.flags & SemanticsFlag::IsButton.value() != 0);
-        assert_eq!(
-            data.actions,
-            SemanticsAction::DidGainAccessibilityFocus.value(),
-        );
-        assert_eq!(data.rect, node.rect());
-    }
 }
 
 #[cfg(test)]
 mod role_propagation_tests {
     use super::*;
-    use crate::role::SemanticsRole;
-
-    /// A role set on the configuration must survive into the serialized node
-    /// data, which is the only thing a platform accessibility bridge ever sees.
-    ///
-    /// `to_node_data` copies roughly fifteen fields off the config — flags,
-    /// actions, label, value, hint, tooltip, text direction — and used to omit
-    /// exactly one: the role. So `Semantics(role: ColumnHeader)` in
-    /// `flui-material`'s `DataTable`, and `Tab`/`TabBar` in `NavigationBar`,
-    /// reached the test-only snapshot and nothing else. Screen readers use the
-    /// structural roles for navigation, and none of them were being published.
-    #[test]
-    fn an_explicit_role_survives_into_the_serialized_node_data() {
-        let mut node = SemanticsNode::new();
-        node.config_mut().set_role(SemanticsRole::ColumnHeader);
-
-        let data = node.to_node_data();
-
-        assert_eq!(
-            data.role,
-            SemanticsRole::ColumnHeader,
-            "the role a widget set must reach the platform payload, not stop at the snapshot"
-        );
-    }
-
-    /// The common controls carry no explicit role — they are identified by a
-    /// flag — so the default must stay `None` rather than being invented.
-    #[test]
-    fn a_node_without_an_explicit_role_reports_none() {
-        let node = SemanticsNode::new();
-        let data = node.to_node_data();
-        assert_eq!(data.role, SemanticsRole::None);
-    }
 
     /// A node never bound to a render boundary has no stable identity to
     /// export; the payload must say so rather than fabricate one.

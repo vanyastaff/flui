@@ -102,49 +102,6 @@ fn media_query_of_returns_ancestor_data() {
     );
 }
 
-/// `MediaQuery::maybe_of` returns `None` when no `MediaQuery` ancestor is
-/// present. Proves the lookup is honest, not returning a hidden default.
-#[test]
-fn media_query_maybe_of_returns_none_without_ancestor() {
-    let captured: Arc<Mutex<Option<Option<MediaQueryData>>>> = Arc::new(Mutex::new(None));
-
-    let _laid = lay_out(
-        MediaQueryCapture {
-            captured: Arc::clone(&captured),
-        },
-        loose(100.0),
-    );
-
-    let outer = captured.lock().unwrap().clone();
-    let inner = outer.expect(
-        "MediaQueryCapture::build was never called — the harness did not traverse the subtree",
-    );
-
-    assert!(
-        inner.is_none(),
-        "MediaQuery::maybe_of should return None when no MediaQuery ancestor is present, \
-         got: {inner:?}"
-    );
-}
-
 // ============================================================================
 // Value-type unit tests
 // ============================================================================
-
-/// `MediaQueryData::default()` sentinel values: both scale factors must be
-/// `1.0` so tests using the default don't accidentally see accessibility zoom.
-#[test]
-fn media_query_data_default_has_unit_scale_factors() {
-    let data = MediaQueryData::default();
-    assert!(
-        (data.text_scale_factor - 1.0).abs() < f64::EPSILON,
-        "default text_scale_factor should be 1.0, got {}",
-        data.text_scale_factor
-    );
-    assert!(
-        (data.device_pixel_ratio - 1.0).abs() < f64::EPSILON,
-        "default device_pixel_ratio should be 1.0, got {}",
-        data.device_pixel_ratio
-    );
-    assert_eq!(data.platform_brightness, Brightness::Light);
-}

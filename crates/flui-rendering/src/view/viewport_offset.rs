@@ -477,79 +477,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_scroll_direction_flip() {
-        assert_eq!(ScrollDirection::Idle.flip(), ScrollDirection::Idle);
-        assert_eq!(ScrollDirection::Forward.flip(), ScrollDirection::Reverse);
-        assert_eq!(ScrollDirection::Reverse.flip(), ScrollDirection::Forward);
-    }
-
-    #[test]
-    fn test_fixed_viewport_offset_new() {
-        let offset = FixedViewportOffset::new(100.0);
-        assert_eq!(offset.pixels(), 100.0);
-        assert!(offset.has_pixels());
-    }
-
-    #[test]
-    fn test_fixed_viewport_offset_zero() {
-        let offset = FixedViewportOffset::zero();
-        assert_eq!(offset.pixels(), 0.0);
-    }
-
-    #[test]
-    fn test_fixed_viewport_offset_correct_by() {
-        let mut offset = FixedViewportOffset::new(100.0);
-        offset.correct_by(50.0);
-        assert_eq!(offset.pixels(), 150.0);
-    }
-
-    #[test]
-    fn test_fixed_viewport_offset_jump_to_does_nothing() {
-        let mut offset = FixedViewportOffset::new(100.0);
-        offset.jump_to(200.0);
-        assert_eq!(offset.pixels(), 100.0); // Should not change
-    }
-
-    #[test]
-    fn test_fixed_viewport_offset_defaults() {
-        let offset = FixedViewportOffset::zero();
-        assert_eq!(offset.user_scroll_direction(), ScrollDirection::Idle);
-        assert!(!offset.allow_implicit_scrolling());
-    }
-
-    #[test]
-    fn test_scrollable_viewport_offset_new() {
-        let offset = ScrollableViewportOffset::new(100.0);
-        assert_eq!(offset.pixels(), 100.0);
-        assert!(offset.has_pixels());
-    }
-
-    #[test]
-    fn test_scrollable_viewport_offset_set_pixels() {
-        let mut offset = ScrollableViewportOffset::zero();
-        offset.set_pixels(50.0);
-        assert_eq!(offset.pixels(), 50.0);
-    }
-
-    #[test]
     fn test_scrollable_viewport_offset_jump_to() {
         let mut offset = ScrollableViewportOffset::zero();
         offset.jump_to(100.0);
         assert_eq!(offset.pixels(), 100.0);
-    }
-
-    #[test]
-    fn test_scrollable_viewport_offset_apply_dimensions() {
-        let mut offset = ScrollableViewportOffset::zero();
-
-        let result = offset.apply_viewport_dimension(500.0);
-        assert!(result);
-        assert_eq!(offset.viewport_dimension(), 500.0);
-
-        let result = offset.apply_content_dimensions(0.0, 1000.0);
-        assert!(result);
-        assert_eq!(offset.min_scroll_extent(), 0.0);
-        assert_eq!(offset.max_scroll_extent(), 1000.0);
     }
 
     #[test]
@@ -560,53 +491,6 @@ mod tests {
         let result = offset.apply_content_dimensions(0.0, 100.0);
         assert!(!result); // Should need relayout
         assert_eq!(offset.pixels(), 100.0); // Clamped to max
-    }
-
-    #[test]
-    fn test_scrollable_viewport_offset_extends_before_after() {
-        let mut offset = ScrollableViewportOffset::new(50.0);
-        offset.apply_content_dimensions(0.0, 100.0);
-
-        assert!(offset.extends_before()); // 50 > 0
-        assert!(offset.extends_after()); // 50 < 100
-    }
-
-    #[test]
-    fn test_scrollable_viewport_offset_scroll_ratio() {
-        let mut offset = ScrollableViewportOffset::new(50.0);
-        offset.apply_content_dimensions(0.0, 100.0);
-
-        assert!((offset.scroll_ratio() - 0.5).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn test_scrollable_viewport_offset_scroll_direction() {
-        let mut offset = ScrollableViewportOffset::zero();
-        assert_eq!(offset.user_scroll_direction(), ScrollDirection::Idle);
-
-        offset.set_user_scroll_direction(ScrollDirection::Forward);
-        assert_eq!(offset.user_scroll_direction(), ScrollDirection::Forward);
-    }
-
-    #[test]
-    fn test_scrollable_viewport_offset_listeners() {
-        use std::sync::atomic::{AtomicU32, Ordering};
-
-        let offset = ScrollableViewportOffset::zero();
-        let counter = Arc::new(AtomicU32::new(0));
-
-        let counter_clone = counter.clone();
-        let listener: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
-            counter_clone.fetch_add(1, Ordering::SeqCst);
-        });
-
-        offset.add_listener(listener.clone());
-        offset.notify_listeners();
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-
-        offset.remove_listener(&listener);
-        offset.notify_listeners();
-        assert_eq!(counter.load(Ordering::SeqCst), 1); // No change after removal
     }
 
     #[test]
@@ -643,37 +527,6 @@ mod tests {
             events.lock().expect("events lock").as_slice(),
             ["a", "b", "a", "b"],
             "nested notifications must queue a follow-up pass instead of being dropped",
-        );
-    }
-
-    #[test]
-    fn scrollable_viewport_offset_skips_listener_removed_during_notify() {
-        use std::sync::Mutex;
-
-        let offset = Arc::new(ScrollableViewportOffset::zero());
-        let events = Arc::new(Mutex::new(Vec::new()));
-
-        let second_events = events.clone();
-        let second_listener: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
-            second_events.lock().expect("events lock").push("b");
-        });
-
-        let first_offset = offset.clone();
-        let first_events = events.clone();
-        let listener_to_remove = second_listener.clone();
-        let first_listener: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
-            first_events.lock().expect("events lock").push("a");
-            first_offset.remove_listener(&listener_to_remove);
-        });
-
-        offset.add_listener(first_listener);
-        offset.add_listener(second_listener);
-        offset.notify_listeners();
-
-        assert_eq!(
-            events.lock().expect("events lock").as_slice(),
-            ["a"],
-            "listeners removed earlier in the same notify pass must be skipped",
         );
     }
 

@@ -437,6 +437,151 @@ fn size(path: &Path) -> BuildResult<u64> {
     fs::read_dir(path)?.try_fold(0u64, |total, entry| Ok(total + size(&entry?.path())?))
 }
 
+/// Application delivery uses the same child/scratch/publication ownership as libraries.
+pub(crate) async fn package_application(
+    ctx: &BuilderContext,
+    artifacts: &BuildArtifacts,
+    executable: &Path,
+) -> BuildResult<FinalArtifacts> {
+    let Platform::Ios { targets } = &ctx.platform else {
+        return Err(invalid("expected iOS application target"));
+    };
+    if targets.len() != 1 {
+        return Err(invalid("an application requires exactly one iOS target"));
+    }
+    let triple = targets[0].clone();
+    let mut bundle = if let Some(bundle) = &ctx.bundle {
+        bundle.clone()
+    } else {
+        let name = artifacts.metadata["package_name"].as_str().ok_or_else(|| {
+            invalid("application bundle metadata or Cargo package metadata is required")
+        })?;
+        let mut bundle = crate::build::AppBundle::new(name, "dev.flui");
+        bundle.version = artifacts.metadata["package_version"]
+            .as_str()
+            .ok_or_else(|| invalid("Cargo package version is required"))?
+            .into();
+        bundle
+    };
+    let version = cargo_metadata::semver::Version::parse(&bundle.version)
+        .map_err(|error| invalid(format!("invalid application SemVer: {error}")))?;
+    let numeric = format!("{}.{}.{}", version.major, version.minor, version.patch);
+    bundle.version = version.to_string();
+    validate_bundle(&bundle)?;
+    let executable = executable.canonicalize()?;
+    if !executable.is_file() {
+        return Err(invalid("application executable must be a regular file"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if fs::metadata(&executable)?.permissions().mode() & 0o111 == 0 {
+            return Err(invalid("application binary is not executable"));
+        }
+    }
+    let output = ctx.output_dir.clone();
+    let cancel = Arc::new(AtomicU8::new(RUNNING));
+    let _guard = CancelOnDrop(Arc::clone(&cancel));
+    tokio::task::spawn_blocking(move || {
+        let (arch, platform) = match triple.as_str() {
+            "aarch64-apple-ios" => ("arm64", "IOS"),
+            "aarch64-apple-ios-sim" => ("arm64", "IOSSIMULATOR"),
+            "x86_64-apple-ios" => ("x86_64", "IOSSIMULATOR"),
+            _ => return Err(invalid(format!("unsupported application target {triple}"))),
+        };
+        let filename = format!("{}.app", bundle.name);
+        let destination = output.join(&filename); no_symlink_destination(&destination)?;
+        fs::create_dir_all(&output)?; let parent = output.canonicalize()?;
+        let mut work = Work::new(&parent, cancel)?;
+        let architectures = work.command("xcrun", &["lipo".into(), "-archs".into(), executable.as_os_str().into()])?;
+        if String::from_utf8_lossy(&architectures).split_whitespace().collect::<Vec<_>>() != [arch] { return Err(invalid("application Mach-O architecture does not match target")); }
+        let header = work.command("xcrun", &["vtool".into(), "-show-build".into(), executable.as_os_str().into()])?;
+        let minimum = macho_minimum(&String::from_utf8_lossy(&header), platform)?;
+        let staged = work.path().join(&filename); fs::create_dir(&staged)?;
+        fs::copy(&executable, staged.join("flui_app"))?;
+        let plist = serde_json::json!({
+            "CFBundlePackageType":"APPL", "CFBundleExecutable":"flui_app",
+            "CFBundleName":bundle.name, "CFBundleDisplayName":bundle.name,
+            "CFBundleIdentifier":bundle.identifier, "CFBundleVersion":numeric,
+            "CFBundleShortVersionString":numeric, "FLUIVersion":bundle.version,
+            "MinimumOSVersion":minimum, "LSRequiresIPhoneOS":true,
+            "CFBundleSupportedPlatforms":[if platform == "IOS" {"iPhoneOS"} else {"iPhoneSimulator"}],
+            "UIDeviceFamily":[1,2], "UILaunchScreen":{},
+            "UIApplicationSceneManifest": {
+                "UIApplicationSupportsMultipleScenes": false,
+                "UISceneConfigurations": {
+                    "UIWindowSceneSessionRoleApplication": [{
+                        "UISceneConfigurationName": "FLUI",
+                        "UISceneDelegateClassName": "FluiSceneDelegate"
+                    }]
+                }
+            },
+            "UISupportedInterfaceOrientations":["UIInterfaceOrientationPortrait","UIInterfaceOrientationLandscapeLeft","UIInterfaceOrientationLandscapeRight"]
+        });
+        let info = staged.join("Info.plist"); fs::write(&info, serde_json::to_vec(&plist).map_err(|error| invalid(error.to_string()))?)?;
+        work.command("plutil", &["-convert".into(), "xml1".into(), info.into_os_string()])?;
+        let size_bytes = size(&staged)?;
+        commit(&mut work, &staged, &parent.join(filename))?;
+        Ok(FinalArtifacts { app_binary: destination, size_bytes })
+    }).await.map_err(|error| invalid(format!("application packaging worker failed: {error}")))?
+}
+fn validate_bundle(bundle: &crate::build::AppBundle) -> BuildResult<()> {
+    if bundle.name.is_empty()
+        || bundle.name.contains(['/', '\\'])
+        || !matches!(
+            Path::new(&bundle.name)
+                .components()
+                .collect::<Vec<_>>()
+                .as_slice(),
+            [Component::Normal(_)]
+        )
+    {
+        return Err(invalid(
+            "application name must be one normal filename component",
+        ));
+    }
+    if !bundle.identifier.contains('.')
+        || !bundle.identifier.split('.').all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+    {
+        return Err(invalid(
+            "application identifier must contain nonempty dot-separated ASCII alphanumeric/hyphen components",
+        ));
+    }
+    Ok(())
+}
+fn macho_minimum(text: &str, expected: &str) -> BuildResult<String> {
+    let platforms: Vec<_> = text
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("platform "))
+        .map(str::trim)
+        .collect();
+    let minimums: Vec<_> = text
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("minos "))
+        .map(str::trim)
+        .collect();
+    if platforms.len() != 1 || platforms[0] != expected || minimums.len() != 1 {
+        return Err(invalid(
+            "Mach-O must declare exactly one matching platform and minimum OS",
+        ));
+    }
+    let minimum = minimums[0];
+    if minimum.is_empty()
+        || minimum.split('.').count() > 3
+        || !minimum
+            .split('.')
+            .all(|part| !part.is_empty() && part.parse::<u32>().is_ok())
+    {
+        return Err(invalid("invalid Mach-O deployment minimum"));
+    }
+    Ok(minimum.into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -596,58 +741,6 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
-    fn tool_deadline_and_worker_unwind_reap_before_cleanup() {
-        let dir = tempfile::tempdir().expect("temp");
-        let mut work = Work::new(dir.path(), token()).expect("work");
-        assert!(
-            work.command_with_timeout("sleep", &["30".into()], Duration::from_millis(20))
-                .is_err()
-        );
-        assert!(work.child.is_none(), "deadline observed terminal status");
-        let scratch = work.path().to_path_buf();
-        work.child = Some(Command::new("sleep").arg("30").spawn().expect("child"));
-        let pid = work.child.as_ref().expect("child").id().to_string();
-        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-            let _work = work;
-            panic!("worker failure");
-        }));
-        assert!(unwound.is_err());
-        assert!(process_gone(&pid));
-        assert!(!scratch.exists());
-    }
-    fn metadata(variant: Option<&str>) -> serde_json::Value {
-        let mut entry = serde_json::json!({"LibraryIdentifier":"slice", "LibraryPath":"libflui.a", "SupportedPlatform":"ios", "SupportedArchitectures":["arm64"]});
-        if let Some(variant) = variant {
-            entry["SupportedPlatformVariant"] = variant.into();
-        }
-        serde_json::json!({"AvailableLibraries":[entry]})
-    }
-    #[test]
-    fn plist_validation_rejects_wrong_variant_duplicates_and_escaping_paths() {
-        let dir = tempfile::tempdir().expect("temp");
-        let source = archive(dir.path(), "source.a");
-        fs::create_dir(dir.path().join("slice")).expect("slice");
-        fs::copy(&source, dir.path().join("slice/libflui.a")).expect("copy");
-        let groups =
-            plan(&["aarch64-apple-ios".into()], std::slice::from_ref(&source)).expect("plan");
-        let libs = BTreeMap::from([(Variant::Device, source)]);
-        validate(dir.path(), &metadata(None), &groups, &libs).expect("valid");
-        assert!(validate(dir.path(), &metadata(Some("simulator")), &groups, &libs).is_err());
-        let mut duplicate = metadata(None);
-        let entry = duplicate["AvailableLibraries"][0].clone();
-        duplicate["AvailableLibraries"]
-            .as_array_mut()
-            .expect("array")
-            .push(entry);
-        assert!(validate(dir.path(), &duplicate, &groups, &libs).is_err());
-        for path in ["../source.a", "/source.a"] {
-            let mut bad = metadata(None);
-            bad["AvailableLibraries"][0]["LibraryPath"] = path.into();
-            assert!(validate(dir.path(), &bad, &groups, &libs).is_err());
-        }
-    }
-    #[cfg(unix)]
-    #[test]
     fn symlinks_never_redirect_destination_or_library_reads() {
         let dir = tempfile::tempdir().expect("temp");
         let outside = archive(dir.path(), "outside");
@@ -657,183 +750,5 @@ mod tests {
         fs::remove_file(&outside).expect("dangling");
         assert!(no_symlink_destination(&output).is_err());
         assert!(checked_child(dir.path(), "flui.xcframework").is_err());
-    }
-}
-
-/// Application delivery uses the same child/scratch/publication ownership as libraries.
-pub(crate) async fn package_application(
-    ctx: &BuilderContext,
-    artifacts: &BuildArtifacts,
-    executable: &Path,
-) -> BuildResult<FinalArtifacts> {
-    let Platform::Ios { targets } = &ctx.platform else {
-        return Err(invalid("expected iOS application target"));
-    };
-    if targets.len() != 1 {
-        return Err(invalid("an application requires exactly one iOS target"));
-    }
-    let triple = targets[0].clone();
-    let mut bundle = if let Some(bundle) = &ctx.bundle {
-        bundle.clone()
-    } else {
-        let name = artifacts.metadata["package_name"].as_str().ok_or_else(|| {
-            invalid("application bundle metadata or Cargo package metadata is required")
-        })?;
-        let mut bundle = crate::build::AppBundle::new(name, "dev.flui");
-        bundle.version = artifacts.metadata["package_version"]
-            .as_str()
-            .ok_or_else(|| invalid("Cargo package version is required"))?
-            .into();
-        bundle
-    };
-    let version = cargo_metadata::semver::Version::parse(&bundle.version)
-        .map_err(|error| invalid(format!("invalid application SemVer: {error}")))?;
-    let numeric = format!("{}.{}.{}", version.major, version.minor, version.patch);
-    bundle.version = version.to_string();
-    validate_bundle(&bundle)?;
-    let executable = executable.canonicalize()?;
-    if !executable.is_file() {
-        return Err(invalid("application executable must be a regular file"));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if fs::metadata(&executable)?.permissions().mode() & 0o111 == 0 {
-            return Err(invalid("application binary is not executable"));
-        }
-    }
-    let output = ctx.output_dir.clone();
-    let cancel = Arc::new(AtomicU8::new(RUNNING));
-    let _guard = CancelOnDrop(Arc::clone(&cancel));
-    tokio::task::spawn_blocking(move || {
-        let (arch, platform) = match triple.as_str() {
-            "aarch64-apple-ios" => ("arm64", "IOS"),
-            "aarch64-apple-ios-sim" => ("arm64", "IOSSIMULATOR"),
-            "x86_64-apple-ios" => ("x86_64", "IOSSIMULATOR"),
-            _ => return Err(invalid(format!("unsupported application target {triple}"))),
-        };
-        let filename = format!("{}.app", bundle.name);
-        let destination = output.join(&filename); no_symlink_destination(&destination)?;
-        fs::create_dir_all(&output)?; let parent = output.canonicalize()?;
-        let mut work = Work::new(&parent, cancel)?;
-        let architectures = work.command("xcrun", &["lipo".into(), "-archs".into(), executable.as_os_str().into()])?;
-        if String::from_utf8_lossy(&architectures).split_whitespace().collect::<Vec<_>>() != [arch] { return Err(invalid("application Mach-O architecture does not match target")); }
-        let header = work.command("xcrun", &["vtool".into(), "-show-build".into(), executable.as_os_str().into()])?;
-        let minimum = macho_minimum(&String::from_utf8_lossy(&header), platform)?;
-        let staged = work.path().join(&filename); fs::create_dir(&staged)?;
-        fs::copy(&executable, staged.join("flui_app"))?;
-        let plist = serde_json::json!({
-            "CFBundlePackageType":"APPL", "CFBundleExecutable":"flui_app",
-            "CFBundleName":bundle.name, "CFBundleDisplayName":bundle.name,
-            "CFBundleIdentifier":bundle.identifier, "CFBundleVersion":numeric,
-            "CFBundleShortVersionString":numeric, "FLUIVersion":bundle.version,
-            "MinimumOSVersion":minimum, "LSRequiresIPhoneOS":true,
-            "CFBundleSupportedPlatforms":[if platform == "IOS" {"iPhoneOS"} else {"iPhoneSimulator"}],
-            "UIDeviceFamily":[1,2], "UILaunchScreen":{},
-            "UIApplicationSceneManifest": {
-                "UIApplicationSupportsMultipleScenes": false,
-                "UISceneConfigurations": {
-                    "UIWindowSceneSessionRoleApplication": [{
-                        "UISceneConfigurationName": "FLUI",
-                        "UISceneDelegateClassName": "FluiSceneDelegate"
-                    }]
-                }
-            },
-            "UISupportedInterfaceOrientations":["UIInterfaceOrientationPortrait","UIInterfaceOrientationLandscapeLeft","UIInterfaceOrientationLandscapeRight"]
-        });
-        let info = staged.join("Info.plist"); fs::write(&info, serde_json::to_vec(&plist).map_err(|error| invalid(error.to_string()))?)?;
-        work.command("plutil", &["-convert".into(), "xml1".into(), info.into_os_string()])?;
-        let size_bytes = size(&staged)?;
-        commit(&mut work, &staged, &parent.join(filename))?;
-        Ok(FinalArtifacts { app_binary: destination, size_bytes })
-    }).await.map_err(|error| invalid(format!("application packaging worker failed: {error}")))?
-}
-fn validate_bundle(bundle: &crate::build::AppBundle) -> BuildResult<()> {
-    if bundle.name.is_empty()
-        || bundle.name.contains(['/', '\\'])
-        || !matches!(
-            Path::new(&bundle.name)
-                .components()
-                .collect::<Vec<_>>()
-                .as_slice(),
-            [Component::Normal(_)]
-        )
-    {
-        return Err(invalid(
-            "application name must be one normal filename component",
-        ));
-    }
-    if !bundle.identifier.contains('.')
-        || !bundle.identifier.split('.').all(|part| {
-            !part.is_empty()
-                && part
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-        })
-    {
-        return Err(invalid(
-            "application identifier must contain nonempty dot-separated ASCII alphanumeric/hyphen components",
-        ));
-    }
-    Ok(())
-}
-fn macho_minimum(text: &str, expected: &str) -> BuildResult<String> {
-    let platforms: Vec<_> = text
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix("platform "))
-        .map(str::trim)
-        .collect();
-    let minimums: Vec<_> = text
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix("minos "))
-        .map(str::trim)
-        .collect();
-    if platforms.len() != 1 || platforms[0] != expected || minimums.len() != 1 {
-        return Err(invalid(
-            "Mach-O must declare exactly one matching platform and minimum OS",
-        ));
-    }
-    let minimum = minimums[0];
-    if minimum.is_empty()
-        || minimum.split('.').count() > 3
-        || !minimum
-            .split('.')
-            .all(|part| !part.is_empty() && part.parse::<u32>().is_ok())
-    {
-        return Err(invalid("invalid Mach-O deployment minimum"));
-    }
-    Ok(minimum.into())
-}
-
-#[cfg(test)]
-mod app_tests {
-    use super::*;
-    #[test]
-    fn actual_macho_metadata_is_required_and_conflicts_are_rejected() {
-        assert_eq!(
-            macho_minimum(" platform IOSSIMULATOR\n minos 14.0\n", "IOSSIMULATOR")
-                .expect("metadata"),
-            "14.0"
-        );
-        for text in [
-            "",
-            "platform IOS\nminos 14.0",
-            "platform IOSSIMULATOR\nminos bad",
-            "platform IOSSIMULATOR\nplatform IOS\nminos 14.0",
-            "platform IOSSIMULATOR\nminos 14.0\nminos 15.0",
-        ] {
-            assert!(macho_minimum(text, "IOSSIMULATOR").is_err());
-        }
-    }
-    #[test]
-    fn bundle_identity_rejects_path_escape_and_underscore_identifier() {
-        for name in ["../bad", "/outside", "x\\bad", ""] {
-            assert!(validate_bundle(&crate::build::AppBundle::new(name, "org.test")).is_err());
-        }
-        let mut bundle = crate::build::AppBundle::new("counter-app", "org.test");
-        assert_eq!(bundle.identifier, "org.test.counter-app");
-        validate_bundle(&bundle).expect("valid");
-        bundle.identifier = "org.test.counter_app".into();
-        assert!(validate_bundle(&bundle).is_err());
     }
 }

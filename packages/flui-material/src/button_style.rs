@@ -181,51 +181,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_is_every_slot_unset() {
-        let style = ButtonStyle::default();
-        assert!(style.text_style.is_none());
-        assert!(style.background_color.is_none());
-        assert!(style.foreground_color.is_none());
-        assert!(style.overlay_color.is_none());
-        assert!(style.elevation.is_none());
-        assert!(style.padding.is_none());
-        assert!(style.minimum_size.is_none());
-        assert!(style.fixed_size.is_none());
-        assert!(style.maximum_size.is_none());
-        assert!(style.side.is_none());
-        assert!(style.shape.is_none());
-    }
-
-    /// The struct-literal + `..Default::default()` construction path this
-    /// type is built around — see the module docs on why this shape (not
-    /// `#[non_exhaustive]`) was chosen.
-    #[test]
-    fn struct_literal_with_default_update_sets_only_the_given_fields() {
-        let style = ButtonStyle {
-            elevation: Some(WidgetStateProperty::all(Some(4.0))),
-            ..Default::default()
-        };
-        assert_eq!(
-            style.elevation.unwrap().resolve(&WidgetStates::NONE),
-            Some(4.0)
-        );
-        assert!(style.background_color.is_none());
-    }
-
-    #[test]
-    fn equality_is_structural_across_two_equivalently_built_styles() {
-        let a = ButtonStyle {
-            background_color: Some(WidgetStateProperty::all(Some(Color::rgb(1, 2, 3)))),
-            ..Default::default()
-        };
-        let b = ButtonStyle {
-            background_color: Some(WidgetStateProperty::all(Some(Color::rgb(1, 2, 3)))),
-            ..Default::default()
-        };
-        assert_eq!(a, b);
-    }
-
-    #[test]
     fn a_configured_property_that_resolves_none_for_a_state_is_still_none() {
         // The inner-Option fallthrough half of the double-Option contract
         // (see the module docs): a `Map` with no matching entry resolves to

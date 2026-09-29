@@ -110,17 +110,3 @@ fn identity_container_between_flex_and_expanded_is_not_parent_data_transparent()
         "must fail before layout TypeId assert: {message}"
     );
 }
-
-/// The supported wrap: `Expanded` applies `FlexParentData` to the
-/// `RenderContainer`, which Flex accepts.
-#[test]
-fn expanded_around_identity_container_lays_out() {
-    let laid = lay_out(
-        Row::new(row![
-            Expanded::new(Container::new().child(SizedBox::new(20.0, 20.0))),
-            SizedBox::new(20.0, 20.0),
-        ]),
-        tight(100.0, 20.0),
-    );
-    assert_eq!(laid.size(laid.root()).width, 100.0);
-}

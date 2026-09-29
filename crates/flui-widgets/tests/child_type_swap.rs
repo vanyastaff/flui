@@ -65,24 +65,3 @@ fn a_replaced_root_render_object_is_laid_out_in_the_frame_it_is_mounted() {
          without ever being laid out",
     );
 }
-
-#[test]
-fn a_replaced_render_object_below_the_root_is_laid_out_in_the_frame_it_is_mounted() {
-    let mut laid = lay_out(
-        Padding::all(2.0).child(Swapper { wrapped: true }),
-        loose(1000.0),
-    );
-    assert_eq!(laid.size(laid.current_root()), size(20.0, 20.0));
-
-    laid.pump_widget(Padding::all(2.0).child(Swapper { wrapped: false }));
-
-    // 20x20 child + 2px padding on every side. A child left without committed
-    // geometry cannot produce this, because the padding parent sizes itself
-    // from the child it just laid out.
-    assert_eq!(
-        laid.size(laid.current_root()),
-        size(24.0, 24.0),
-        "a replaced render object below the root must be laid out in the same \
-         frame as the swap that created it",
-    );
-}

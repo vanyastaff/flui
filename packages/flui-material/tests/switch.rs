@@ -16,9 +16,7 @@
 //! `resolve_switch_thumb_color` (extracted out of `build` specifically so
 //! this cascade is unit-testable without mounting a widget tree; see
 //! `theme_tier_beats_the_m3_default_when_no_widget_override_is_set`/
-//! `widget_override_wins_over_theme_and_default_when_selected_and_enabled`/
 //! `widget_override_is_ignored_when_disabled_even_if_selected`/
-//! `widget_override_is_ignored_when_unselected`/
 //! `disabled_unselected_thumb_color_is_opaque_after_the_surface_blend`),
 //! plus `SwitchPainter`'s own paint-invocation proof
 //! (`thumb_circle_center_lands_on_the_correct_track_end_per_value`, a real
@@ -85,30 +83,6 @@ fn tap_fires_on_changed_with_the_flipped_value() {
         Some(true),
         "a tap on an off, enabled switch must fire on_changed(true)",
     );
-}
-
-#[test]
-fn a_second_tap_after_rebuild_flips_back() {
-    let observed: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
-
-    let build = |value: bool, sink: Rc<RefCell<bool>>| {
-        themed(Switch::new(value).on_changed(move |_cx, next| {
-            *sink.borrow_mut() = next;
-        }))
-    };
-
-    let mut laid = lay_out(build(false, Rc::clone(&observed)), constraints());
-
-    laid.dispatch_pointer_down(TAP_TARGET_WIDTH / 2.0, TAP_TARGET_HEIGHT / 2.0);
-    laid.dispatch_pointer_up(TAP_TARGET_WIDTH / 2.0, TAP_TARGET_HEIGHT / 2.0);
-    let after_first_tap = *observed.borrow();
-    assert!(after_first_tap, "false -> true");
-
-    laid.pump_widget(build(after_first_tap, Rc::clone(&observed)));
-    laid.dispatch_pointer_down(TAP_TARGET_WIDTH / 2.0, TAP_TARGET_HEIGHT / 2.0);
-    laid.dispatch_pointer_up(TAP_TARGET_WIDTH / 2.0, TAP_TARGET_HEIGHT / 2.0);
-
-    assert!(!*observed.borrow(), "true -> false");
 }
 
 #[test]

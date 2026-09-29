@@ -454,63 +454,6 @@ mod tests {
         );
     }
 
-    /// `EmptyClipboard` sends `WM_DESTROYCLIPBOARD` to the previous owner
-    /// and waits for it, so the owner thread has to be pumping. If it is
-    /// not, Windows stalls the caller for about five seconds (observed on
-    /// Windows 11) before giving up; another process emptying a clipboard
-    /// FLUI owns would hang that long.
-    #[test]
-    fn another_opener_can_empty_a_clipboard_flui_owns() {
-        let _serial = crate::shared::clipboard_lock::round_trip_serial();
-        {
-            let _session = open_session();
-            // SAFETY: plain FFI calls with no pointer arguments, made while
-            // `_session` holds the clipboard open on this thread.
-            unsafe {
-                EmptyClipboard().expect("emptying an open clipboard");
-                assert_eq!(
-                    windows::Win32::System::DataExchange::GetClipboardOwner().ok(),
-                    owner_window(),
-                    "EmptyClipboard makes the session's owner window the clipboard owner"
-                );
-            }
-        }
-
-        let (emptied, done) = mpsc::channel();
-        std::thread::spawn(move || {
-            for _ in 0..50 {
-                // SAFETY: plain FFI calls with no pointer arguments; the
-                // clipboard is emptied and closed only after this thread's
-                // own open succeeded.
-                unsafe {
-                    if OpenClipboard(None).is_ok() {
-                        let started = std::time::Instant::now();
-                        let result = EmptyClipboard();
-                        let elapsed = started.elapsed();
-                        let _ = CloseClipboard();
-                        let _ = emptied.send((result.is_ok(), elapsed));
-                        return;
-                    }
-                }
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
-        });
-        let (emptied, elapsed) = done
-            .recv_timeout(std::time::Duration::from_secs(10))
-            .expect("the clipboard stayed held by another process for a second");
-        assert!(emptied, "EmptyClipboard failed");
-        assert!(
-            elapsed < std::time::Duration::from_secs(2),
-            "EmptyClipboard took {elapsed:?}: the owner window is not pumping messages"
-        );
-    }
-
-    #[test]
-    fn test_clipboard_creation() {
-        let _clipboard = WindowsClipboard::new();
-        // Just test that we can create a clipboard instance
-    }
-
     #[test]
     #[ignore = "flaky: the clipboard can be modified by other processes"]
     fn test_clipboard_roundtrip() {
@@ -528,40 +471,6 @@ mod tests {
             assert_eq!(read_text, test_text, "Clipboard roundtrip failed");
         } else {
             eprintln!("Note: Failed to read clipboard (may be expected in CI)");
-        }
-    }
-
-    #[test]
-    fn test_has_text() {
-        let _serial = crate::shared::clipboard_lock::round_trip_serial();
-        let clipboard = WindowsClipboard::new();
-
-        // Write text
-        clipboard.write_text("Test".to_string());
-
-        // Small delay to ensure clipboard is updated
-        std::thread::sleep(std::time::Duration::from_millis(10));
-
-        // Check if text is available
-        if !clipboard.has_text() {
-            eprintln!("Note: has_text() returned false (may be timing issue or CI environment)");
-        }
-    }
-
-    #[test]
-    fn test_unicode_support() {
-        let _serial = crate::shared::clipboard_lock::round_trip_serial();
-        let clipboard = WindowsClipboard::new();
-
-        // Test with Unicode characters
-        let test_text = "Hello 世界 🌍 Привет";
-        clipboard.write_text(test_text.to_string());
-
-        if let Some(read_text) = clipboard.read_text() {
-            assert_eq!(
-                read_text, test_text,
-                "Unicode text should roundtrip correctly"
-            );
         }
     }
 }

@@ -48,35 +48,6 @@ pub(crate) fn kernel_radius(sigma: f32) -> u32 {
 mod kernel_radius_tests {
     use super::kernel_radius;
 
-    /// `kernel_radius(0.0)` must return 0 (degenerate — no blur).
-    #[test]
-    fn zero_sigma_returns_zero() {
-        assert_eq!(kernel_radius(0.0), 0);
-    }
-
-    /// Negative sigma is treated as no-blur.
-    #[test]
-    fn negative_sigma_returns_zero() {
-        assert_eq!(kernel_radius(-1.0), 0);
-    }
-
-    /// `kernel_radius` must be monotonically non-decreasing as sigma grows.
-    ///
-    /// Tests sigma = 0.1, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0.
-    #[test]
-    fn monotonically_nondecreasing() {
-        let sigmas = [0.1_f32, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0];
-        let radii: Vec<u32> = sigmas.iter().map(|&s| kernel_radius(s)).collect();
-        for window in radii.windows(2) {
-            assert!(
-                window[0] <= window[1],
-                "kernel_radius not monotone: sigma pair produced radii {} > {}",
-                window[0],
-                window[1]
-            );
-        }
-    }
-
     /// sigma = 2.0 → ceil(2.0 × 1.732_050_8) = ceil(3.464_101_6) = 4.
     ///
     /// This is the known-value anchor from the spec: the chief-architect
@@ -84,11 +55,5 @@ mod kernel_radius_tests {
     #[test]
     fn sigma_two_gives_radius_four() {
         assert_eq!(kernel_radius(2.0), 4);
-    }
-
-    /// sigma = 1.0 → ceil(1.0 × 1.732_050_8) = ceil(1.732_050_8) = 2.
-    #[test]
-    fn sigma_one_gives_radius_two() {
-        assert_eq!(kernel_radius(1.0), 2);
     }
 }

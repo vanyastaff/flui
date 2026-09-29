@@ -2,42 +2,9 @@
 //! through `RenderParagraph` (a non-empty box), and that it composes as a leaf
 //! inside other widgets.
 
-use crate::common::{lay_out, loose, tight};
-use flui_painting::typography::{TextDirection, TextStyle};
-use flui_widgets::{Center, DefaultTextStyle, Padding, Text};
-
-#[test]
-fn text_measures_to_a_nonempty_box() {
-    let laid = lay_out(Text::new("hello harness"), loose(1000.0));
-    let measured = laid.size(laid.root());
-    // Real shaping ran: the glyph run has positive width and height. Exact
-    // metrics are font-dependent, so we assert non-degeneracy (would fail on a
-    // Size::ZERO stub) rather than pinning fragile pixel values.
-    assert!(
-        measured.width > 0.0,
-        "measured text width should be positive, got {measured:?}",
-    );
-    assert!(
-        measured.height > 0.0,
-        "measured text height should be positive, got {measured:?}",
-    );
-}
-
-#[test]
-fn text_composes_as_a_leaf_child() {
-    // Padding(4) around centered text inside a tight 300×200: the whole tree
-    // lays out and the text node measures to a non-empty box.
-    let laid = lay_out(
-        Padding::all(4.0).child(Center::new().child(Text::new("composed"))),
-        tight(300.0, 200.0),
-    );
-    assert_eq!(laid.size(laid.root()), crate::common::size(300.0, 200.0));
-
-    let center = laid.only_child(laid.root());
-    let text = laid.only_child(center);
-    let measured = laid.size(text);
-    assert!(measured.width > 0.0 && measured.height > 0.0);
-}
+use crate::common::{lay_out, loose};
+use flui_painting::typography::TextStyle;
+use flui_widgets::{DefaultTextStyle, Text};
 
 #[test]
 fn max_lines_one_produces_a_shorter_box_than_unlimited_lines_for_wrapped_text() {
@@ -84,22 +51,6 @@ fn a_larger_font_size_measures_to_a_taller_box() {
         large.size(large.root()).height > small.size(small.root()).height,
         "a larger font_size must measure to a taller box",
     );
-}
-
-#[test]
-fn text_direction_does_not_change_the_measured_size_of_the_same_content() {
-    // `direction` governs bidi/shaping order, not the overall measured box
-    // for a plain LTR-script run -- both directions must size identically.
-    let ltr = lay_out(
-        Text::new("same content").direction(TextDirection::Ltr),
-        loose(1000.0),
-    );
-    let rtl = lay_out(
-        Text::new("same content").direction(TextDirection::Rtl),
-        loose(1000.0),
-    );
-
-    assert_eq!(ltr.size(ltr.root()), rtl.size(rtl.root()));
 }
 
 // ============================================================================

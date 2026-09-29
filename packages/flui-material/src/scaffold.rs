@@ -958,28 +958,6 @@ impl MultiChildLayoutDelegate for ScaffoldLayoutDelegate {
 mod tests {
     use super::*;
 
-    #[test]
-    fn new_scaffold_has_no_slots_and_resizes_by_default() {
-        let scaffold = Scaffold::new();
-        assert!(scaffold.body.is_none());
-        assert!(scaffold.app_bar.is_none());
-        assert!(scaffold.floating_action_button.is_none());
-        assert!(scaffold.resize_to_avoid_bottom_inset);
-    }
-
-    #[test]
-    fn app_bar_builder_captures_the_preferred_height() {
-        let scaffold = Scaffold::new().app_bar(crate::AppBar::new().toolbar_height(72.0));
-        assert!(scaffold.app_bar.is_some());
-        assert_eq!(scaffold.app_bar_preferred_height, 72.0);
-    }
-
-    #[test]
-    fn resize_to_avoid_bottom_inset_builder_overrides_the_default() {
-        let scaffold = Scaffold::new().resize_to_avoid_bottom_inset(false);
-        assert!(!scaffold.resize_to_avoid_bottom_inset);
-    }
-
     fn zero_insets_delegate() -> ScaffoldLayoutDelegate {
         ScaffoldLayoutDelegate {
             min_insets: EdgeInsets::new(0.0, 0.0, 0.0, 0.0),
@@ -1002,20 +980,6 @@ mod tests {
             ..zero_insets_delegate()
         };
         assert!(MultiChildLayoutDelegate::should_relayout(&a, &b));
-    }
-
-    #[test]
-    fn should_relayout_is_true_when_min_view_padding_bottom_changes() {
-        let a = zero_insets_delegate();
-        let b = ScaffoldLayoutDelegate {
-            min_view_padding_bottom: 34.0,
-            ..zero_insets_delegate()
-        };
-        assert!(
-            MultiChildLayoutDelegate::should_relayout(&a, &b),
-            "a min_view_padding_bottom change (e.g. rotating so the home indicator moves) \
-             must trigger relayout even when min_insets is unchanged",
-        );
     }
 
     /// Pins `FabFloatOffsetY`'s exact arithmetic

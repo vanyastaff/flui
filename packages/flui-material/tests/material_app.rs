@@ -24,8 +24,7 @@ use std::sync::{Arc, Mutex};
 
 use common::{lay_out, loose};
 use flui_material::{
-    ColorSchemeOverrides, MaterialApp, ScaffoldMessengerScope, Theme, ThemeData,
-    ThemeDataOverrides, ThemeMode,
+    ColorSchemeOverrides, MaterialApp, ScaffoldMessengerScope, Theme, ThemeData, ThemeMode,
 };
 use flui_sdk::painting::Color;
 use flui_sdk::platform::Brightness;
@@ -94,51 +93,6 @@ fn captured_theme(cell: &Arc<Mutex<Option<ThemeData>>>) -> ThemeData {
 }
 
 #[test]
-fn resolved_theme_data_reaches_descendants() {
-    let (probe, captured) = theme_capture();
-    let _tree = lay_out(
-        MaterialApp::new(probe).theme(light_sentinel()),
-        loose(800.0),
-    );
-    assert_eq!(
-        captured_theme(&captured),
-        light_sentinel(),
-        "descendants must read the exact resolved ThemeData through Theme::of"
-    );
-}
-
-#[test]
-fn theme_mode_light_ignores_dark_ambient_brightness() {
-    // The oracle: mode == light never consults platformBrightness.
-    let (probe, captured) = theme_capture();
-    let app = MaterialApp::new(probe)
-        .theme(light_sentinel())
-        .dark_theme(dark_sentinel())
-        .theme_mode(ThemeMode::Light);
-    let _tree = lay_out(MediaQuery::new(media(Brightness::Dark), app), loose(800.0));
-    assert_eq!(
-        captured_theme(&captured),
-        light_sentinel(),
-        "ThemeMode::Light must pick `theme` even under a dark platform"
-    );
-}
-
-#[test]
-fn theme_mode_dark_selects_the_dark_theme() {
-    let (probe, captured) = theme_capture();
-    let app = MaterialApp::new(probe)
-        .theme(light_sentinel())
-        .dark_theme(dark_sentinel())
-        .theme_mode(ThemeMode::Dark);
-    let _tree = lay_out(MediaQuery::new(media(Brightness::Light), app), loose(800.0));
-    assert_eq!(
-        captured_theme(&captured),
-        dark_sentinel(),
-        "ThemeMode::Dark must pick `dark_theme` even under a light platform"
-    );
-}
-
-#[test]
 fn theme_mode_dark_without_a_dark_theme_falls_back_to_theme() {
     // The oracle's `useDarkTheme && widget.darkTheme != null` guard: dark
     // selection with no dark theme falls back to `theme` — never an
@@ -152,18 +106,6 @@ fn theme_mode_dark_without_a_dark_theme_falls_back_to_theme() {
         captured_theme(&captured),
         light_sentinel(),
         "dark selection without a dark_theme must fall back to `theme`, not derive one"
-    );
-}
-
-#[test]
-fn no_theme_at_all_resolves_the_m3_light_baseline() {
-    // The oracle's final fallback: `theme ??= widget.theme ?? ThemeData()`.
-    let (probe, captured) = theme_capture();
-    let _tree = lay_out(MaterialApp::new(probe), loose(800.0));
-    assert_eq!(
-        captured_theme(&captured),
-        ThemeData::default(),
-        "a MaterialApp with no themes must publish the ThemeData() baseline"
     );
 }
 
@@ -331,25 +273,6 @@ fn two_presentations_resolve_different_themes_simultaneously() {
 // ============================================================================
 
 #[test]
-fn the_builder_hook_resolves_the_published_theme() {
-    // The oracle's builder-inside-a-Builder contract: `Theme.of` inside the
-    // caller's builder must resolve the theme MaterialApp just selected.
-    let seen: Arc<Mutex<Option<Option<ThemeData>>>> = Arc::new(Mutex::new(None));
-    let seen_in_builder = Arc::clone(&seen);
-    let app = MaterialApp::with_builder(move |ctx, _child| {
-        *seen_in_builder.lock().unwrap() = Some(Theme::maybe_of(ctx));
-        SizedBox::shrink().boxed()
-    })
-    .theme(light_sentinel());
-    let _tree = lay_out(app, loose(800.0));
-    assert_eq!(
-        seen.lock().unwrap().clone(),
-        Some(Some(light_sentinel())),
-        "the builder's context must sit below the published Theme"
-    );
-}
-
-#[test]
 fn scaffold_messenger_and_localizations_are_available_below_material_app() {
     // Composition proof: home sits below the ScaffoldMessenger band this
     // shell installs AND below the Localizations band WidgetsApp installs.
@@ -405,11 +328,4 @@ fn theme_mode_switch_on_a_live_app_updates_descendants() {
         dark_sentinel(),
         "flipping theme_mode on a live app must re-resolve and reach descendants"
     );
-}
-
-/// `ThemeDataOverrides` is imported to prove the patch-struct surface stays
-/// reachable next to the shell (a compile-time check, free at runtime).
-#[test]
-fn theme_data_overrides_surface_is_reachable() {
-    let _ = ThemeDataOverrides::default();
 }

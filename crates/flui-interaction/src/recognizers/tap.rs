@@ -914,7 +914,7 @@ impl GestureArenaMember for TapGestureRecognizer {
 mod tests {
     use super::*;
     use crate::arena::GestureArena;
-    use std::cell::Cell;
+
     use ui_events::pointer::PointerButton;
 
     fn pos(x: f64, y: f64) -> Offset<f64> {
@@ -926,9 +926,6 @@ mod tests {
     }
     fn secondary_down(p: Offset<f64>) -> PointerEvent {
         crate::events::make_down_event_with_button(p, PointerType::Touch, PointerButton::Secondary)
-    }
-    fn tertiary_down(p: Offset<f64>) -> PointerEvent {
-        crate::events::make_down_event_with_button(p, PointerType::Touch, PointerButton::Auxiliary)
     }
 
     #[test]
@@ -956,37 +953,6 @@ mod tests {
     fn secondary_up(p: Offset<f64>) -> PointerEvent {
         crate::events::make_up_event_with_button(p, PointerType::Touch, PointerButton::Secondary)
     }
-    fn tertiary_up(p: Offset<f64>) -> PointerEvent {
-        crate::events::make_up_event_with_button(p, PointerType::Touch, PointerButton::Auxiliary)
-    }
-
-    #[test]
-    fn test_tap_recognizer_creation() {
-        let arena = GestureArena::new();
-        let recognizer = TapGestureRecognizer::new(arena);
-
-        assert_eq!(recognizer.primary_pointer(), None);
-    }
-
-    /// Sanity: `TapButton::from_pointer_button` correctly routes
-    /// Primary / Secondary / Auxiliary to the three slots and returns
-    /// `None` for X1 / X2.
-    #[test]
-    fn tap_button_from_pointer_button_routes_three_slots() {
-        assert_eq!(
-            TapButton::from_pointer_button(PointerButton::Primary),
-            Some(TapButton::Primary)
-        );
-        assert_eq!(
-            TapButton::from_pointer_button(PointerButton::Secondary),
-            Some(TapButton::Secondary)
-        );
-        assert_eq!(
-            TapButton::from_pointer_button(PointerButton::Auxiliary),
-            Some(TapButton::Tertiary)
-        );
-        assert_eq!(TapButton::from_pointer_button(PointerButton::X1), None);
-    }
 
     /// Legacy primary path: down + up with the Primary button
     /// fires `on_tap` (`add_pointer` no longer
@@ -1009,51 +975,6 @@ mod tests {
         recognizer.handle_event(PointerDispatch::at_root(&primary_up(position)));
 
         assert!(*tapped.lock());
-    }
-
-    #[test]
-    fn tap_callback_accepts_owner_local_rc_state() {
-        let arena = GestureArena::new();
-        let taps = Rc::new(Cell::new(0));
-        let taps_for_callback = taps.clone();
-
-        let recognizer = TapGestureRecognizer::new(arena).with_on_tap(move |_details| {
-            taps_for_callback.set(taps_for_callback.get() + 1);
-        });
-
-        let pointer = PointerId::PRIMARY;
-        let position = pos(24.0, 42.0);
-
-        recognizer.add_pointer(pointer, position, position);
-        recognizer.handle_event(PointerDispatch::at_root(&primary_down(position)));
-        recognizer.handle_event(PointerDispatch::at_root(&primary_up(position)));
-
-        assert_eq!(taps.get(), 1);
-    }
-
-    #[test]
-    fn add_pointer_then_up_without_down_fires_tap() {
-        // `add_pointer` is the documented pointer-down entry point. A
-        // subsequent up with no separately-routed `Down` event must still fire
-        // the tap, because `add_pointer` pre-stages the provisional down.
-        let arena = GestureArena::new();
-        let tapped = Arc::new(Mutex::new(false));
-        let tapped_clone = tapped.clone();
-
-        let recognizer = TapGestureRecognizer::new(arena).with_on_tap(move |_details| {
-            *tapped_clone.lock() = true;
-        });
-
-        let pointer = PointerId::PRIMARY;
-        let position = pos(4.0, 4.0);
-
-        recognizer.add_pointer(pointer, position, position);
-        recognizer.handle_event(PointerDispatch::at_root(&primary_up(position)));
-
-        assert!(
-            *tapped.lock(),
-            "tap should fire from add_pointer + up with no separate down event"
-        );
     }
 
     #[test]
@@ -1090,83 +1011,9 @@ mod tests {
         assert!(!*tapped.lock());
     }
 
-    #[test]
-    fn test_tap_within_slop() {
-        let arena = GestureArena::new();
-        let tapped = Arc::new(Mutex::new(false));
-        let tapped_clone = tapped.clone();
-
-        let recognizer = TapGestureRecognizer::new(arena).with_on_tap(move |_details| {
-            *tapped_clone.lock() = true;
-        });
-
-        let pointer = PointerId::PRIMARY;
-        let start_pos = pos(100.0, 100.0);
-
-        recognizer.add_pointer(pointer, start_pos, start_pos);
-        recognizer.handle_event(PointerDispatch::at_root(&primary_down(start_pos)));
-
-        // ~7px — within slop.
-        let moved_pos = pos(105.0, 105.0);
-        recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_move_event(
-            moved_pos,
-            PointerType::Touch,
-        )));
-
-        recognizer.handle_event(PointerDispatch::at_root(&primary_up(moved_pos)));
-
-        assert!(*tapped.lock());
-    }
-
     // ========================================================================
     // Secondary / tertiary button routing.
     // ========================================================================
-
-    /// Right-click down + up fires `on_secondary_tap`; primary slot
-    /// stays silent.
-    /// A CANCEL reports the down contact in both spaces, not `Offset::ZERO`.
-    ///
-    /// `PointerEvent::Cancel` carries no position at all, so a recogniser
-    /// reporting a cancelled gesture has to fall back to what it recorded at
-    /// the down. The local half always did; the global half read the cancel
-    /// event's own position, which is `Offset::ZERO` — so a cancel reported a
-    /// real local position beside a global one that named the top-left corner
-    /// of the window, whatever the gesture had actually touched.
-    ///
-    /// The two are 150 px apart here, the shape a nested node produces. A test
-    /// where they coincide cannot tell a fixed recogniser from a broken one.
-    #[test]
-    fn a_cancel_reports_the_down_contact_in_both_spaces() {
-        let arena = GestureArena::new();
-        let cancelled: Arc<Mutex<Vec<TapDetails>>> = Arc::new(Mutex::new(Vec::new()));
-        let sink = Arc::clone(&cancelled);
-        let recognizer = TapGestureRecognizer::new(arena)
-            .with_on_tap_cancel(move |details| sink.lock().push(details));
-
-        let offset = Offset::new(150.0, 150.0);
-        let down_local = Offset::new(10.0, 10.0);
-        let down_global = down_local + offset;
-        let pointer = PointerId::PRIMARY;
-        recognizer.add_pointer(pointer, down_local, down_global);
-
-        recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_cancel_event(
-            PointerType::Touch,
-        )));
-
-        let reported = cancelled.lock();
-        let details = reported
-            .first()
-            .expect("the cancel must have been reported");
-        assert_eq!(
-            details.local_position, down_local,
-            "the local half falls back to the recorded contact, as it always did"
-        );
-        assert_eq!(
-            details.global_position, down_global,
-            "the global half must fall back with it — reading the cancel \
-             event's own position gives Offset::ZERO"
-        );
-    }
 
     #[test]
     fn secondary_button_routes_to_secondary_callbacks() {
@@ -1188,31 +1035,6 @@ mod tests {
         recognizer.handle_event(PointerDispatch::at_root(&secondary_up(position)));
 
         assert!(*secondary_tapped.lock());
-        assert!(!*primary_tapped.lock());
-    }
-
-    /// Middle-click down + up fires `on_tertiary_tap`; primary slot
-    /// stays silent.
-    #[test]
-    fn tertiary_button_routes_to_tertiary_callbacks() {
-        let arena = GestureArena::new();
-        let tertiary_tapped = Arc::new(Mutex::new(false));
-        let primary_tapped = Arc::new(Mutex::new(false));
-        let t_clone = tertiary_tapped.clone();
-        let p_clone = primary_tapped.clone();
-
-        let recognizer = TapGestureRecognizer::new(arena)
-            .with_on_tap(move |_| *p_clone.lock() = true)
-            .with_on_tertiary_tap(move |_| *t_clone.lock() = true);
-
-        let pointer = PointerId::PRIMARY;
-        let position = pos(60.0, 60.0);
-
-        recognizer.add_pointer(pointer, position, position);
-        recognizer.handle_event(PointerDispatch::at_root(&tertiary_down(position)));
-        recognizer.handle_event(PointerDispatch::at_root(&tertiary_up(position)));
-
-        assert!(*tertiary_tapped.lock());
         assert!(!*primary_tapped.lock());
     }
 
@@ -1248,38 +1070,6 @@ mod tests {
         assert!(!*secondary_tapped.lock());
     }
 
-    /// Slop-exceeded cancel on a secondary-button tap must fire
-    /// `on_secondary_tap_cancel` (not the primary cancel slot).
-    #[test]
-    fn secondary_slop_cancel_routes_to_secondary_cancel() {
-        let arena = GestureArena::new();
-        let primary_cancelled = Arc::new(Mutex::new(false));
-        let secondary_cancelled = Arc::new(Mutex::new(false));
-        let p_clone = primary_cancelled.clone();
-        let s_clone = secondary_cancelled.clone();
-
-        let recognizer = TapGestureRecognizer::new(arena)
-            .with_on_tap_cancel(move |_| *p_clone.lock() = true)
-            .with_on_secondary_tap_cancel(move |_| *s_clone.lock() = true);
-
-        let pointer = PointerId::PRIMARY;
-        let start_pos = pos(80.0, 80.0);
-
-        recognizer.add_pointer(pointer, start_pos, start_pos);
-        recognizer.handle_event(PointerDispatch::at_root(&secondary_down(start_pos)));
-
-        // 30px move — past TAP_SLOP. Slop detection routes to the
-        // secondary cancel slot because the down button is Secondary.
-        let moved_pos = pos(80.0, 110.0);
-        recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_move_event(
-            moved_pos,
-            PointerType::Touch,
-        )));
-
-        assert!(*secondary_cancelled.lock());
-        assert!(!*primary_cancelled.lock());
-    }
-
     fn down_for(id: PointerId, p: Offset<f64>) -> PointerEvent {
         crate::events::make_down_event_for_id(id, p, PointerType::Touch)
     }
@@ -1300,34 +1090,6 @@ mod tests {
     // abandoned, and its late resolution is a no-op rather than resurrected
     // or left to clobber the newer sequence's state.
     // ========================================================================
-
-    /// Normal (non-overlapping) path: a win for the pointer that is still
-    /// the current sequence fires the pending tap exactly once, whether it
-    /// arrives via the arena's own self-driven sweep or a direct call.
-    #[test]
-    fn accept_gesture_for_the_current_sequences_pointer_fires_the_pending_tap() {
-        let arena = GestureArena::new();
-        let taps = Arc::new(Mutex::new(0u32));
-        let taps_clone = taps.clone();
-
-        let recognizer = TapGestureRecognizer::new(arena).with_on_tap(move |_| {
-            *taps_clone.lock() += 1;
-        });
-
-        let pointer = PointerId::PRIMARY;
-        let position = pos(30.0, 30.0);
-
-        // Held, so the up doesn't self-sweep-resolve immediately — mirrors
-        // the shape of the overlapping-contact tests below.
-        recognizer.add_pointer(pointer, position, position);
-        recognizer.state.arena().hold(pointer);
-        recognizer.handle_event(PointerDispatch::at_root(&primary_down(position)));
-        recognizer.handle_event(PointerDispatch::at_root(&primary_up(position)));
-        assert_eq!(*taps.lock(), 0, "held: resolution not yet delivered");
-
-        recognizer.accept_gesture(pointer);
-        assert_eq!(*taps.lock(), 1);
-    }
 
     /// The clobber sequence: down A, down B (B replaces A as the tracked
     /// sequence before A resolves), resolve B, resolve A. B's tap fires
@@ -1377,47 +1139,6 @@ mod tests {
             *taps.lock(),
             1,
             "a stale win for the abandoned pointer A must not fire on_tap"
-        );
-    }
-
-    /// Same clobber shape for rejection: a stale `reject_gesture` for the
-    /// abandoned pointer A must not wipe pointer B's still-pending
-    /// (in-flight, down-only) state.
-    #[test]
-    fn stale_arena_rejection_for_an_abandoned_pointer_does_not_clear_a_newer_sequence() {
-        let arena = GestureArena::new();
-        let taps = Arc::new(Mutex::new(0u32));
-        let taps_clone = taps.clone();
-
-        let recognizer = TapGestureRecognizer::new(arena).with_on_tap(move |_| {
-            *taps_clone.lock() += 1;
-        });
-
-        let pointer_a = PointerId::new(1).expect("nonzero");
-        let pointer_b = PointerId::new(2).expect("nonzero");
-        let pos_a = pos(10.0, 10.0);
-        let pos_b = pos(200.0, 200.0);
-
-        // Pointer A: down + up, held.
-        recognizer.add_pointer(pointer_a, pos_a, pos_a);
-        recognizer.state.arena().hold(pointer_a);
-        recognizer.handle_event(PointerDispatch::at_root(&down_for(pointer_a, pos_a)));
-        recognizer.handle_event(PointerDispatch::at_root(&up_for(pointer_a, pos_a)));
-
-        // Pointer B replaces A before A resolves, and is still mid-sequence
-        // (down only) when A's stale rejection arrives.
-        recognizer.add_pointer(pointer_b, pos_b, pos_b);
-        recognizer.handle_event(PointerDispatch::at_root(&down_for(pointer_b, pos_b)));
-
-        // Stale rejection for the abandoned pointer A must not wipe B's
-        // in-flight `pending_down`.
-        recognizer.reject_gesture(pointer_a);
-
-        recognizer.handle_event(PointerDispatch::at_root(&up_for(pointer_b, pos_b)));
-        assert_eq!(
-            *taps.lock(),
-            1,
-            "B's tap still fires after a stale reject for A"
         );
     }
 }

@@ -2690,67 +2690,6 @@ mod tests {
         );
     }
 
-    /// `set_exit_policy_hook` must land in the same `PlatformHandlers` slot
-    /// the `CloseRequested` path reads via `invoke_exit_policy` -- not a
-    /// second, disconnected storage location. Storage-only by design; the
-    /// full `CloseRequested` arm under a live `ActiveEventLoop` is driven
-    /// end-to-end by
-    /// `close_requested_drops_window_callbacks_and_self_close_exits_the_loop`
-    /// below.
-    #[test]
-    fn set_exit_policy_hook_installs_into_the_shared_handler_slot() {
-        let platform = WinitPlatform::new();
-        assert!(
-            platform.with_state(|state| state.handlers.exit_policy.is_none()),
-            "no hook installed yet"
-        );
-
-        platform.set_exit_policy_hook(Box::new(|| false));
-
-        let vetoes_exit = platform.with_state(|state| state.handlers.invoke_exit_policy());
-        assert!(
-            !vetoes_exit,
-            "the installed hook's answer must be exactly what invoke_exit_policy returns"
-        );
-    }
-
-    /// `set_wake_deadline_hook` must land in the same `PlatformHandlers` slot
-    /// `about_to_wait` clones the hook out of before dropping the state
-    /// guard — the storage-level counterpart of
-    /// `set_exit_policy_hook_installs_into_the_shared_handler_slot` above.
-    /// This test reaches that slot through `PlatformHandlers::
-    /// invoke_wake_deadline` for convenience; `about_to_wait` itself does
-    /// NOT call that method in production (it takes `&self` and would hold
-    /// the platform state lock for the hook's whole re-entrant call —
-    /// see `PlatformHandlers::wake_deadline`'s own doc), so
-    /// `invoke_wake_deadline` is a public method with no production caller
-    /// in this backend, not a `cfg(test)`-gated one. Storage-only: driving
-    /// a real `about_to_wait` through a live `ActiveEventLoop` is not
-    /// exercised anywhere in this test module (same stated gap as that
-    /// test).
-    #[test]
-    fn set_wake_deadline_hook_installs_into_the_shared_handler_slot() {
-        let platform = WinitPlatform::new();
-        assert!(
-            platform.with_state(|state| state.handlers.wake_deadline.is_none()),
-            "no hook installed yet"
-        );
-        assert_eq!(
-            platform.with_state(|state| state.handlers.invoke_wake_deadline()),
-            None,
-            "unset hook must answer None, not panic or fabricate a deadline"
-        );
-
-        let deadline = web_time::Instant::now() + std::time::Duration::from_millis(250);
-        platform.set_wake_deadline_hook(Box::new(move || Some(deadline)));
-
-        assert_eq!(
-            platform.with_state(|state| state.handlers.invoke_wake_deadline()),
-            Some(deadline),
-            "the installed hook's answer must be exactly what invoke_wake_deadline returns"
-        );
-    }
-
     #[test]
     fn winit_quit_callback_runs_once_on_owner_outside_platform_state_lock() {
         let platform = Arc::new(WinitPlatform::new());

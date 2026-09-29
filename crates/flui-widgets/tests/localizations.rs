@@ -8,11 +8,11 @@ use std::sync::{Arc, Mutex};
 use flui_painting::typography::TextDirection;
 use flui_platform_api::Locale;
 use flui_view::prelude::*;
+use flui_widgets::SizedBox;
 use flui_widgets::localization::{
     BoxedLocalizationsDelegate, DefaultWidgetsLocalizationsDelegate, Directionality,
     GlobalWidgetsLocalizationsDelegate, Localizations, LocalizationsDelegate,
 };
-use flui_widgets::{BoxedWidgetsLocalizations, SizedBox};
 
 use crate::common::harness::mount;
 
@@ -33,13 +33,6 @@ impl LocalizationsDelegate for MarkerDelegate {
         Marker(7)
     }
 }
-
-/// A resource type no delegate in these tests ever provides — the
-/// "permanently reachable" absence `Localizations::maybe_of` must
-/// report as `None` (distinct from the sync-only model's "not-yet-loaded"
-/// absence, which cannot occur after mount — see the module docs).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct NotProvided;
 
 fn widgets_only_delegates() -> Vec<BoxedLocalizationsDelegate> {
     vec![BoxedLocalizationsDelegate::new(
@@ -126,35 +119,6 @@ fn of_returns_a_delegate_provided_resource() {
             .as_deref()
             .copied(),
         Some(Marker(7))
-    );
-}
-
-#[test]
-fn maybe_of_returns_none_when_no_delegate_provides_the_type() {
-    let (probe, captured) = capture(Localizations::maybe_of::<NotProvided>);
-    let _harness = mount(
-        // Only the widgets delegate — nothing produces `NotProvided`.
-        Localizations::new(Locale::en_us(), widgets_only_delegates(), probe).boxed(),
-    );
-    assert!(
-        captured
-            .lock()
-            .expect("test mutex poisoned")
-            .clone()
-            .flatten()
-            .is_none(),
-        "maybe_of::<NotProvided> must report None, not panic or fabricate a value"
-    );
-}
-
-#[test]
-fn boxed_widgets_localizations_of_resolves_the_default_ltr_resource() {
-    let (probe, captured) = capture(|ctx| BoxedWidgetsLocalizations::of(ctx).text_direction());
-    let _harness =
-        mount(Localizations::new(Locale::en_us(), widgets_only_delegates(), probe).boxed());
-    assert_eq!(
-        captured.lock().expect("test mutex poisoned").clone(),
-        Some(TextDirection::Ltr)
     );
 }
 

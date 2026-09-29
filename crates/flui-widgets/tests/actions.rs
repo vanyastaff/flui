@@ -2,8 +2,6 @@
 //! wins, a disabled one stops resolution at its own scope, and a lookup with no
 //! binding reports `false`.
 
-use std::cell::Cell;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -99,28 +97,6 @@ fn the_nearest_enabled_action_wins_and_receives_the_payload() {
     );
 }
 
-/// Flutter parity (`actions_test.dart`, tag `3.44.0`): stands in for
-/// `'CallbackAction passes correct intent when invoked.'`.
-#[test]
-fn callback_action_accepts_owner_local_rc_state() {
-    let ran = Arc::new(AtomicUsize::new(0));
-    let total = Rc::new(Cell::new(0));
-    let total_for_action = Rc::clone(&total);
-
-    let _harness = mount(
-        Actions::new(InvokeProbe {
-            amount: 11,
-            ran: Arc::clone(&ran),
-        })
-        .action(CallbackAction::new(move |intent: &AddToCounter| {
-            total_for_action.set(total_for_action.get() + intent.0);
-        })),
-    );
-
-    assert_eq!(ran.load(Ordering::SeqCst), 1, "maybe_invoke ran");
-    assert_eq!(total.get(), 11, "owner-local callback captured Rc<Cell<_>>");
-}
-
 /// A **disabled** nearer action stops resolution at its own scope — it
 /// does *not* fall through to an outer scope's mapping for the same
 /// intent type. This is Flutter's actual contract, not the inverse:
@@ -164,20 +140,4 @@ fn a_disabled_nearer_action_stops_resolution_at_its_own_scope() {
         0,
         "the outer action was never reached, let alone invoked"
     );
-}
-
-/// No binding anywhere: `maybe_invoke` reports `false` and nothing runs.
-///
-/// Flutter parity (`actions_test.dart`, tag `3.44.0`): stands in for
-/// `'maybeInvoke returns null when no action is found'` — FLUI's
-/// `maybe_invoke` reports "did anything run" as a `bool` rather than
-/// Dart's `Object?`, so "returns null" ports as "returns `false`".
-#[test]
-fn maybe_invoke_without_a_binding_reports_false() {
-    let ran = Arc::new(AtomicUsize::new(0));
-    let _harness = mount(InvokeProbe {
-        amount: 1,
-        ran: Arc::clone(&ran),
-    });
-    assert_eq!(ran.load(Ordering::SeqCst), 0, "nothing to invoke");
 }

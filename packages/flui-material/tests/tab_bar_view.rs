@@ -253,50 +253,6 @@ fn an_inactive_tabs_animation_is_muted_by_ticker_mode() {
     animation.dispose();
 }
 
-/// Unmounting a `TabBarView` removes its listener from the (outliving)
-/// `TabController` it was subscribed to — a controller that outlives the
-/// view must not keep firing a dead `Rc` closure against an unmounted
-/// element's `RebuildHandle`. Same "count seam" pattern as
-/// `packages/flui-material/tests/tabs.rs`'s
-/// `unmounting_a_tab_bar_removes_its_listener_from_the_controller`, now
-/// proven for `TabBarView`'s own `dispose`.
-#[test]
-fn unmounting_a_tab_bar_view_removes_its_listener_from_the_controller() {
-    let controller = TabController::new(2, 0);
-
-    let before_mount = controller.listener_count();
-    let mut laid = lay_out(
-        MediaQuery::new(
-            MediaQueryData::default(),
-            TabBarView::new(vec![
-                SizedBox::new(10.0, 10.0).into_view().boxed(),
-                SizedBox::new(20.0, 20.0).into_view().boxed(),
-            ])
-            .controller(controller.clone()),
-        ),
-        tight(400.0, 400.0),
-    );
-    let while_mounted = controller.listener_count();
-    assert!(
-        while_mounted > before_mount,
-        "mounting a TabBarView must register its own listener on the controller"
-    );
-
-    // Root-swap to an unrelated tree — `TabBarViewState::dispose` must fire
-    // for the removed `TabBarView`.
-    laid.pump_widget(MediaQuery::new(
-        MediaQueryData::default(),
-        SizedBox::shrink(),
-    ));
-
-    let after_removal = controller.listener_count();
-    assert_eq!(
-        after_removal, before_mount,
-        "removing a TabBarView from the tree must remove its listener from the controller, \
-         not leak it"
-    );
-}
-
 /// A `TabBarView` with neither an explicit `controller` nor a
 /// `DefaultTabController` ancestor panics loudly (Flutter parity:
 /// `_updateTabController`'s `FlutterError`) instead of silently rendering

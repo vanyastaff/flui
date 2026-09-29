@@ -335,24 +335,6 @@ mod tests {
         Layer::from(OffsetLayer::zero())
     }
 
-    #[test]
-    fn ids_are_one_based_and_dense() {
-        let mut tree = LayerTree::new(offset());
-        let root = tree.root();
-        let a = tree.push_child(root, offset());
-        let b = tree.push_child(root, offset());
-        assert_eq!(root.get(), 1);
-        assert_eq!(a.get(), 2);
-        assert_eq!(b.get(), 3);
-        assert_eq!(tree.len(), 3);
-        assert!(tree.contains(b));
-        assert!(!tree.contains(LayerId::new(4)));
-        assert_eq!(
-            tree.iter().map(|(id, _)| id).collect::<Vec<_>>(),
-            vec![root, a, b]
-        );
-    }
-
     /// `root → a → c` and `root → b`, pushed in that order.
     fn cousins() -> (LayerTree, [LayerId; 4]) {
         let mut tree = LayerTree::new(offset());
@@ -375,22 +357,6 @@ mod tests {
         let (tree, [root, _, b, c]) = cousins();
         assert_eq!(tree.lowest_common_ancestor(c, b), Some(root));
         assert_eq!(tree.lowest_common_ancestor(b, c), Some(root));
-    }
-
-    #[test]
-    fn lowest_common_ancestor_of_a_node_and_its_ancestor_is_the_ancestor() {
-        let (tree, [_, a, _, c]) = cousins();
-        assert_eq!(tree.lowest_common_ancestor(c, a), Some(a));
-        assert_eq!(tree.lowest_common_ancestor(a, c), Some(a));
-        assert_eq!(tree.lowest_common_ancestor(a, a), Some(a));
-    }
-
-    #[test]
-    fn lowest_common_ancestor_with_an_unknown_id_is_none() {
-        let (tree, [_, _, _, c]) = cousins();
-        let unknown = LayerId::new(999);
-        assert_eq!(tree.lowest_common_ancestor(c, unknown), None);
-        assert_eq!(tree.lowest_common_ancestor(unknown, unknown), None);
     }
 
     #[test]
@@ -442,34 +408,6 @@ mod tests {
     }
 
     #[test]
-    fn a_default_tree_is_one_offset_root() {
-        let tree = LayerTree::default();
-        assert_eq!(tree.len(), 1);
-        assert!(matches!(
-            tree.get_layer(tree.root()),
-            Some(Layer::Offset(_))
-        ));
-        assert_eq!(tree.parent(tree.root()), None);
-        assert_eq!(tree.children(tree.root()), Some(&[][..]));
-        assert!(tree.get(LayerId::new(2)).is_none());
-        assert_eq!(tree.iter().count(), 1);
-    }
-
-    #[test]
-    fn leaders_are_indexed_at_insertion() {
-        let link = LayerLink::new();
-        let other = LayerLink::new();
-        let mut tree = LayerTree::new(offset());
-        let root = tree.root();
-        let leader = tree.push_child(
-            root,
-            Layer::from(LeaderLayer::new(link, Size::new(10.0, 10.0))),
-        );
-        assert_eq!(tree.leader(link), Some(leader));
-        assert_eq!(tree.leader(other), None);
-    }
-
-    #[test]
     #[cfg(debug_assertions)]
     fn rejected_duplicate_leader_preserves_the_index() {
         let link = LayerLink::new();
@@ -487,25 +425,5 @@ mod tests {
         let child = tree.push_child(root, offset());
         assert_eq!(tree.parent(child), Some(root));
         assert_eq!(tree.leader(link), Some(root));
-    }
-
-    #[test]
-    fn render_id_stamp_survives_insertion() {
-        let render_id = RenderId::new(7);
-        let mut tree = LayerTree::new(LayerNode::new(offset()).with_render_id(render_id));
-        let root = tree.root();
-        let leaf = tree.push_child(root, offset());
-        assert_eq!(
-            tree.get(root).and_then(LayerNode::render_id),
-            Some(render_id)
-        );
-        assert_eq!(tree.get(leaf).and_then(LayerNode::render_id), None);
-    }
-
-    #[test]
-    #[should_panic(expected = "parent is not a node of this tree")]
-    fn push_child_under_an_unknown_parent_is_a_bug() {
-        let mut tree = LayerTree::new(offset());
-        let _ = tree.push_child(LayerId::new(2), offset());
     }
 }

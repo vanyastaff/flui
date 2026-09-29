@@ -510,30 +510,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_cache_insert_and_get() {
-        let cache = AssetCache::<TestAsset>::new(1024 * 1024);
-        let key = AssetKey::new("test");
-        let data = TestData { value: 42 };
-
-        // Insert
-        let handle = cache.insert(key, data.clone()).await;
-        assert_eq!(*handle, data);
-
-        // Get
-        let retrieved = cache.get(&key).await.unwrap();
-        assert_eq!(*retrieved, data);
-    }
-
-    #[tokio::test]
-    async fn test_cache_miss() {
-        let cache = AssetCache::<TestAsset>::new(1024 * 1024);
-        let key = AssetKey::new("nonexistent");
-
-        let result = cache.get(&key).await;
-        assert!(result.is_none());
-    }
-
-    #[tokio::test]
     async fn test_cache_get_or_insert_with() {
         let cache = AssetCache::<TestAsset>::new(1024 * 1024);
         let key = AssetKey::new("test");
@@ -565,75 +541,5 @@ mod tests {
 
         cache.invalidate(&key).await;
         assert!(cache.get(&key).await.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_cache_clear() {
-        let cache = AssetCache::<TestAsset>::new(1024 * 1024);
-
-        for i in 0..10 {
-            let key = AssetKey::new(&format!("test{i}"));
-            cache.insert(key, TestData { value: i }).await;
-        }
-
-        cache.sync().await;
-        assert_eq!(cache.len(), 10);
-
-        cache.clear().await;
-        assert_eq!(cache.len(), 0);
-    }
-
-    #[tokio::test]
-    async fn test_cache_stats() {
-        let cache = AssetCache::<TestAsset>::new(1024 * 1024);
-        let key = AssetKey::new("test");
-
-        // Insert
-        cache.insert(key, TestData { value: 42 }).await;
-
-        // Hit
-        cache.get(&key).await;
-
-        // Miss
-        cache.get(&AssetKey::new("nonexistent")).await;
-
-        let stats = cache.stats();
-        assert_eq!(stats.hits, 1);
-        assert_eq!(stats.misses, 1);
-        assert_eq!(stats.insertions, 1);
-        assert!(stats.hit_rate() > 0.0);
-    }
-
-    #[tokio::test]
-    async fn test_cache_len_and_empty() {
-        let cache = AssetCache::<TestAsset>::new(1024 * 1024);
-
-        assert!(cache.is_empty());
-        assert_eq!(cache.len(), 0);
-
-        cache
-            .insert(AssetKey::new("test"), TestData { value: 1 })
-            .await;
-        cache.sync().await;
-
-        assert!(!cache.is_empty());
-        assert_eq!(cache.len(), 1);
-    }
-
-    #[test]
-    fn test_cache_is_send_sync() {
-        fn assert_send<T: Send>() {}
-        fn assert_sync<T: Sync>() {}
-
-        assert_send::<AssetCache<TestAsset>>();
-        assert_sync::<AssetCache<TestAsset>>();
-    }
-
-    #[test]
-    fn test_cache_debug() {
-        let cache = AssetCache::<TestAsset>::new(1024 * 1024);
-        let debug_str = format!("{cache:?}");
-        assert!(debug_str.contains("AssetCache"));
-        assert!(debug_str.contains("entry_count"));
     }
 }

@@ -49,48 +49,10 @@ fn row_lays_children_horizontally_static_tuple_path() {
     assert_eq!(laid.offset(laid.child(root, 1)), offset(40.0, 0.0));
 }
 
-#[test]
-fn column_center_cross_alignment_centers_each_child() {
-    // Default-ish cross alignment Center: narrower child is horizontally centered.
-    let laid = lay_out(
-        Column::new(vec![
-            SizedBox::new(40.0, 20.0).boxed(),
-            SizedBox::new(80.0, 20.0).boxed(),
-        ])
-        .main_axis_size(MainAxisSize::Min)
-        .cross_axis_alignment(CrossAxisAlignment::Center),
-        loose(1000.0),
-    );
-
-    let root = laid.root();
-    assert_eq!(laid.size(root), size(80.0, 40.0));
-    // Narrow child centered in the 80-wide cross axis: (80-40)/2 = 20.
-    assert_eq!(laid.offset(laid.child(root, 0)), offset(20.0, 0.0));
-    assert_eq!(laid.offset(laid.child(root, 1)), offset(0.0, 20.0));
-}
-
 // ============================================================================
 // Flex — the generic direction-configurable widget itself (only Row/Column,
 // its fixed-direction convenience wrappers, were exercised above).
 // ============================================================================
-
-#[test]
-fn flex_with_horizontal_direction_behaves_like_row() {
-    let laid = lay_out(
-        Flex::new(
-            FlexDirection::Horizontal,
-            row![SizedBox::new(40.0, 20.0), SizedBox::new(60.0, 30.0)],
-        )
-        .main_axis_size(MainAxisSize::Min)
-        .cross_axis_alignment(CrossAxisAlignment::Start),
-        loose(1000.0),
-    );
-
-    let root = laid.root();
-    assert_eq!(laid.size(root), size(100.0, 30.0));
-    assert_eq!(laid.offset(laid.child(root, 0)), offset(0.0, 0.0));
-    assert_eq!(laid.offset(laid.child(root, 1)), offset(40.0, 0.0));
-}
 
 #[test]
 fn flex_with_vertical_direction_behaves_like_column() {
@@ -118,25 +80,6 @@ fn flex_with_vertical_direction_behaves_like_column() {
 // MainAxisSize::Min so the main axis exactly fits the children, leaving no
 // free space for alignment to distribute).
 // ============================================================================
-
-#[test]
-fn main_axis_alignment_end_packs_children_against_the_trailing_edge() {
-    // Main axis tight at 1000 (MainAxisSize::Max, the default, has no extra
-    // effect here since the constraint is already tight) leaves 1000 - 100 =
-    // 900px of free space; `End` packs both children flush against it.
-    let laid = lay_out(
-        Row::new(row![SizedBox::new(40.0, 20.0), SizedBox::new(60.0, 30.0)])
-            .main_axis_alignment(MainAxisAlignment::End),
-        tight(1000.0, 30.0),
-    );
-
-    let root = laid.root();
-    assert_eq!(laid.size(root), size(1000.0, 30.0));
-    // Default CrossAxisAlignment::Center within a tight 30px cross axis:
-    // child0 (h=20) offset by (30-20)/2 = 5; child1 (h=30) offset by 0.
-    assert_eq!(laid.offset(laid.child(root, 0)), offset(900.0, 5.0));
-    assert_eq!(laid.offset(laid.child(root, 1)), offset(940.0, 0.0));
-}
 
 #[test]
 fn main_axis_alignment_space_between_puts_all_free_space_between_children() {

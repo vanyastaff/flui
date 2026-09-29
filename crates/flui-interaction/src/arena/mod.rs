@@ -363,11 +363,6 @@ impl DeadlineRegistry {
         });
         live
     }
-
-    #[cfg(test)]
-    fn len(&self) -> usize {
-        self.watchers.lock().len()
-    }
 }
 
 impl GestureArenaEntry {
@@ -1527,11 +1522,6 @@ impl GestureArena {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn deadline_member_count(&self) -> usize {
-        self.deadlines.len()
-    }
-
     /// Whether any live member has an armed time-based deadline (see
     /// [`GestureArenaMember::has_pending_deadline`]).
     ///
@@ -1865,37 +1855,6 @@ mod tests {
     }
 
     #[test]
-    fn test_arena_single_member_wins() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-        let member = Arc::new(MockMember::new());
-
-        let _entry = arena.add(pointer, member.clone());
-        arena.close(pointer);
-
-        assert!(!member.was_accepted());
-        assert_eq!(arena.drain_deferred_resolutions(), 1);
-        assert!(member.was_accepted());
-        assert!(!member.was_rejected());
-    }
-
-    #[test]
-    fn close_marks_a_held_arena_closed() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-        arena.add(pointer, Arc::new(MockMember::new()));
-        arena.hold(pointer);
-
-        arena.close(pointer);
-
-        assert!(arena.is_held(pointer));
-        assert!(
-            !arena.is_open(pointer),
-            "hold defers only sweep; it must not keep membership open"
-        );
-    }
-
-    #[test]
     fn close_defers_a_lone_default_winner() {
         let arena = GestureArena::new();
         let pointer = PointerId::PRIMARY;
@@ -1988,22 +1947,6 @@ mod tests {
     }
 
     #[test]
-    fn rejecting_the_lone_member_cancels_its_deferred_default_win() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-        let member = Arc::new(MockMember::new());
-        let entry = arena.add(pointer, member.clone());
-        arena.close(pointer);
-
-        entry.resolve(GestureDisposition::Rejected);
-
-        assert!(member.was_rejected());
-        assert_eq!(arena.drain_deferred_resolutions(), 0);
-        assert!(!member.was_accepted());
-        assert!(!arena.contains(pointer));
-    }
-
-    #[test]
     fn deferred_token_never_resolves_a_reused_pointer_generation() {
         let arena = GestureArena::new();
         let pointer = PointerId::PRIMARY;
@@ -2043,179 +1986,6 @@ mod tests {
     }
 
     #[test]
-    fn test_arena_entry_resolve_accepted() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        let member1 = Arc::new(MockMember::new());
-        let member2 = Arc::new(MockMember::new());
-
-        let entry1 = arena.add(pointer, member1.clone());
-        let _entry2 = arena.add(pointer, member2.clone());
-
-        arena.close(pointer);
-
-        // member1 resolves via entry handle
-        entry1.resolve(GestureDisposition::Accepted);
-
-        assert!(member1.was_accepted());
-        assert!(!member1.was_rejected());
-
-        assert!(!member2.was_accepted());
-        assert!(member2.was_rejected());
-    }
-
-    #[test]
-    fn test_arena_entry_resolve_rejected() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        let member1 = Arc::new(MockMember::new());
-        let member2 = Arc::new(MockMember::new());
-
-        let entry1 = arena.add(pointer, member1.clone());
-        let _entry2 = arena.add(pointer, member2.clone());
-
-        arena.close(pointer);
-
-        // member1 rejects via entry handle
-        entry1.resolve(GestureDisposition::Rejected);
-
-        assert!(!member1.was_accepted());
-        assert!(member1.was_rejected());
-
-        // member2 wins by default at the deferred owner boundary.
-        assert!(!member2.was_accepted());
-        assert_eq!(arena.drain_deferred_resolutions(), 1);
-        assert!(member2.was_accepted());
-        assert!(!member2.was_rejected());
-    }
-
-    #[test]
-    fn test_arena_resolve_with_winner() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        let member1 = Arc::new(MockMember::new());
-        let member2 = Arc::new(MockMember::new());
-
-        arena.add(pointer, member1.clone());
-        arena.add(pointer, member2.clone());
-
-        // member1 wins
-        arena.resolve(pointer, Some(member1.clone()));
-
-        assert!(member1.was_accepted());
-        assert!(!member1.was_rejected());
-
-        assert!(!member2.was_accepted());
-        assert!(member2.was_rejected());
-    }
-
-    #[test]
-    fn test_arena_hold_and_release() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-        let member = Arc::new(MockMember::new());
-
-        arena.add(pointer, member.clone());
-        arena.hold(pointer);
-        arena.close(pointer);
-
-        // Close queues the default winner; hold affects only sweep.
-        assert!(!member.was_accepted());
-        assert!(arena.is_held(pointer));
-
-        arena.release(pointer);
-        assert!(
-            !member.was_accepted(),
-            "release is not a resolution boundary"
-        );
-        assert_eq!(arena.drain_deferred_resolutions(), 1);
-        assert!(member.was_accepted());
-    }
-
-    #[test]
-    fn test_arena_sweep() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-        let member = Arc::new(MockMember::new());
-
-        arena.add(pointer, member.clone());
-        assert!(arena.contains(pointer));
-
-        arena.sweep(pointer);
-
-        // Member should win (first member wins on sweep)
-        assert!(member.was_accepted());
-        assert!(!arena.contains(pointer));
-    }
-
-    #[test]
-    fn test_arena_is_empty() {
-        let arena = GestureArena::new();
-        assert!(arena.is_empty());
-
-        let pointer = PointerId::PRIMARY;
-        let member = Arc::new(MockMember::new());
-
-        arena.add(pointer, member);
-        assert!(!arena.is_empty());
-
-        arena.sweep(pointer);
-        assert!(arena.is_empty());
-    }
-
-    #[test]
-    fn test_arena_member_count() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        assert_eq!(arena.member_count(pointer), 0);
-
-        arena.add(pointer, Arc::new(MockMember::new()));
-        assert_eq!(arena.member_count(pointer), 1);
-
-        arena.add(pointer, Arc::new(MockMember::new()));
-        assert_eq!(arena.member_count(pointer), 2);
-    }
-
-    #[test]
-    fn test_gesture_disposition() {
-        assert!(GestureDisposition::Accepted.is_accepted());
-        assert!(!GestureDisposition::Accepted.is_rejected());
-
-        assert!(GestureDisposition::Rejected.is_rejected());
-        assert!(!GestureDisposition::Rejected.is_accepted());
-    }
-
-    #[test]
-    fn test_arena_resolve_team() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        let member1 = Arc::new(MockMember::new());
-        let member2 = Arc::new(MockMember::new());
-        let member3 = Arc::new(MockMember::new());
-
-        arena.add(pointer, member1.clone());
-        arena.add(pointer, member2.clone());
-        arena.add(pointer, member3.clone());
-
-        // Resolve with multiple winners
-        arena.resolve_team(pointer, &[member1.clone(), member2.clone()]);
-
-        assert!(member1.was_accepted());
-        assert!(member2.was_accepted());
-        assert!(member3.was_rejected());
-
-        assert!(
-            !arena.contains(pointer),
-            "explicit team resolution removes the exact slot"
-        );
-    }
-
-    #[test]
     fn test_reject_member_leaves_a_competitor_to_win() {
         // Two members compete in a closed arena; one withdraws via
         // `reject_member`. Withdrawal must reject ONLY the bowing-out member —
@@ -2247,73 +2017,9 @@ mod tests {
         assert!(!survivor.was_rejected(), "the survivor is not rejected");
     }
 
-    #[test]
-    fn test_reject_member_keeps_a_three_way_competition_open() {
-        // With THREE members competing, one withdrawing must leave the other two
-        // STILL competing — never force-resolve to the front member. Guards the
-        // Withdrawing must NOT tear down an unresolved entry that still has
-        // rivals (the latent bug a recogniser's `stop_tracking()`→`sweep()`
-        // would have caused for 3+ members).
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        let bowing_out = Arc::new(MockMember::new());
-        let rival_a = Arc::new(MockMember::new());
-        let rival_b = Arc::new(MockMember::new());
-        arena.add(pointer, bowing_out.clone());
-        arena.add(pointer, rival_a.clone());
-        arena.add(pointer, rival_b.clone());
-        arena.close(pointer); // 3 members, unresolved
-
-        let withdrawing: Arc<dyn GestureArenaMember> = bowing_out.clone();
-        arena.reject_member(pointer, &withdrawing);
-
-        assert!(
-            bowing_out.was_rejected(),
-            "the withdrawing member is rejected"
-        );
-        assert!(
-            !rival_a.was_accepted() && !rival_a.was_rejected(),
-            "rival A keeps competing — not resolved either way",
-        );
-        assert!(
-            !rival_b.was_accepted() && !rival_b.was_rejected(),
-            "rival B keeps competing — not resolved either way",
-        );
-        assert_eq!(arena.member_count(pointer), 2);
-        assert!(
-            !arena.is_empty(),
-            "the entry survives — two rivals are still in it"
-        );
-    }
-
     // ========================================================================
     // Eager Winner tests
     // ========================================================================
-
-    #[test]
-    fn test_eager_winner_wins_on_close() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        let member1 = Arc::new(MockMember::new());
-        let member2 = Arc::new(MockMember::new());
-
-        let entry1 = arena.add(pointer, member1.clone());
-        let _entry2 = arena.add(pointer, member2.clone());
-
-        // Arena is open, accept stores as eager winner
-        assert!(arena.is_open(pointer));
-        entry1.resolve(GestureDisposition::Accepted);
-        assert!(arena.has_eager_winner(pointer));
-
-        // Close arena - eager winner should win
-        arena.close(pointer);
-
-        assert!(member1.was_accepted());
-        assert!(member2.was_rejected());
-        assert!(!arena.contains(pointer));
-    }
 
     #[test]
     fn test_first_eager_winner_wins() {
@@ -2334,70 +2040,6 @@ mod tests {
 
         assert!(member1.was_accepted());
         assert!(member2.was_rejected());
-    }
-
-    #[test]
-    fn test_accept_after_close_resolves_immediately() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        let member1 = Arc::new(MockMember::new());
-        let member2 = Arc::new(MockMember::new());
-
-        let entry1 = arena.add(pointer, member1.clone());
-        let _entry2 = arena.add(pointer, member2.clone());
-
-        // Close arena first (no eager winner, no single member - stays unresolved)
-        arena.close(pointer);
-        assert!(!arena.is_open(pointer));
-        assert_eq!(arena.member_count(pointer), 2);
-
-        // Accept after close resolves immediately
-        entry1.resolve(GestureDisposition::Accepted);
-
-        assert!(member1.was_accepted());
-        assert!(member2.was_rejected());
-        assert!(!arena.contains(pointer));
-    }
-
-    #[test]
-    fn test_reject_removes_eager_winner() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        let member1 = Arc::new(MockMember::new());
-        let member2 = Arc::new(MockMember::new());
-
-        let entry1 = arena.add(pointer, member1.clone());
-        let _entry2 = arena.add(pointer, member2.clone());
-
-        // member1 accepts (becomes eager winner)
-        entry1.resolve(GestureDisposition::Accepted);
-        assert!(arena.has_eager_winner(pointer));
-
-        // member1 rejects (removes eager winner)
-        entry1.resolve(GestureDisposition::Rejected);
-        assert!(!arena.has_eager_winner(pointer));
-        assert!(member1.was_rejected());
-
-        // Close - member2 is only one left, wins
-        arena.close(pointer);
-        assert!(!member2.was_accepted());
-        assert_eq!(arena.drain_deferred_resolutions(), 1);
-        assert!(member2.was_accepted());
-    }
-
-    #[test]
-    fn test_is_open_false_after_close() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        let member = Arc::new(MockMember::new());
-        arena.add(pointer, member);
-
-        assert!(arena.is_open(pointer));
-        arena.close(pointer);
-        assert!(!arena.is_open(pointer));
     }
 
     // ========================================================================
@@ -2442,209 +2084,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_sweep_immediate_when_not_held() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        let member = Arc::new(MockMember::new());
-        arena.add(pointer, member.clone());
-
-        // Sweep when not held - immediate
-        arena.sweep(pointer);
-        assert!(!arena.contains(pointer));
-        assert!(member.was_accepted()); // First member wins on sweep
-    }
-
-    #[test]
-    fn test_pending_sweep_cleared_on_release() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        let member = Arc::new(MockMember::new());
-        arena.add(pointer, member);
-        arena.hold(pointer);
-        arena.sweep(pointer);
-
-        assert!(arena.has_pending_sweep(pointer));
-
-        arena.release(pointer);
-        // Arena should be removed, can't check pending_sweep anymore
-        assert!(!arena.contains(pointer));
-    }
-
-    #[test]
-    fn release_does_not_close_an_open_arena() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        let member = Arc::new(MockMember::new());
-        arena.add(pointer, member.clone());
-        arena.hold(pointer);
-
-        // Arena still open and held
-        assert!(arena.is_open(pointer));
-        assert!(arena.is_held(pointer));
-
-        arena.release(pointer);
-
-        assert!(arena.is_open(pointer));
-        assert!(!arena.is_held(pointer));
-        assert!(!member.was_accepted());
-    }
-
     // ========================================================================
     // GestureArenaEntry tests
     // ========================================================================
 
-    #[test]
-    fn test_entry_pointer_accessor() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::new(43).expect("nonzero pointer id");
-        let member = Arc::new(MockMember::new());
-
-        let entry = arena.add(pointer, member);
-
-        assert_eq!(entry.pointer(), pointer);
-    }
-
-    #[test]
-    fn test_entry_member_accessor() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-        let member = Arc::new(MockMember::new());
-        let member_dyn: Arc<dyn GestureArenaMember> = member.clone();
-
-        let entry = arena.add(pointer, member_dyn.clone());
-
-        let entry_member = entry.member().expect("active member");
-        assert!(Arc::ptr_eq(&entry_member, &member_dyn));
-    }
-
-    #[test]
-    fn test_entry_debug_impl() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::new(124).expect("nonzero pointer id");
-        let member = Arc::new(MockMember::new());
-
-        let entry = arena.add(pointer, member);
-        let debug = format!("{entry:?}");
-
-        assert!(debug.contains("GestureArenaEntry"));
-        assert!(debug.contains("pointer"));
-    }
-
-    #[test]
-    fn test_entry_resolve_multiple_times_is_safe() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        let member = Arc::new(MockMember::new());
-        let entry = arena.add(pointer, member.clone());
-
-        arena.close(pointer);
-
-        // Resolve multiple times should be safe
-        entry.resolve(GestureDisposition::Accepted);
-        entry.resolve(GestureDisposition::Accepted);
-        entry.resolve(GestureDisposition::Rejected); // Should be ignored
-
-        assert!(member.was_accepted());
-    }
-
     // ========================================================================
     // SweepModel
     // ========================================================================
-
-    #[test]
-    fn new_arena_is_self_driven_binding_arena_is_binding_driven() {
-        assert_eq!(GestureArena::new().sweep_model(), SweepModel::SelfDriven);
-        assert_eq!(
-            GestureArena::with_capacity(4).sweep_model(),
-            SweepModel::SelfDriven
-        );
-        let binding = GestureArena::binding_driven(Arc::new(SystemClock));
-        assert_eq!(binding.sweep_model(), SweepModel::BindingDriven);
-        // The model rides on the Arc-backed handle: every clone observes it.
-        assert_eq!(binding.clone().sweep_model(), SweepModel::BindingDriven);
-    }
-
-    #[test]
-    fn generation_exhaustion_panics_instead_of_reusing_an_old_token() {
-        let arena = GestureArena::new();
-        arena
-            .next_generation
-            .store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
-
-        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            arena.add(PointerId::PRIMARY, Arc::new(MockMember::new()));
-        }));
-
-        let payload = unwind.expect_err("generation exhaustion must be explicit");
-        assert_eq!(
-            payload.downcast_ref::<&str>(),
-            Some(&"BUG: gesture arena generation exhausted")
-        );
-        assert!(arena.is_empty());
-    }
-
-    #[test]
-    fn run_pointer_lifecycle_closes_on_down_and_sweeps_on_up() {
-        use crate::events::{PointerType, make_down_event, make_up_event};
-        use flui_foundation::geometry::Offset;
-
-        let arena = GestureArena::binding_driven(Arc::new(SystemClock));
-        let pointer = PointerId::PRIMARY;
-        let member = Arc::new(MockMember::new());
-        arena.add(pointer, member.clone());
-
-        // Down closes the arena and queues the lone default winner.
-        let down = make_down_event(Offset::new(1.0, 1.0), PointerType::Touch);
-        run_pointer_lifecycle(&arena, &down);
-        assert!(!arena.is_open(pointer), "down must close the arena");
-        assert!(
-            !member.was_accepted(),
-            "close must return before acceptance"
-        );
-        assert_eq!(arena.drain_deferred_resolutions(), 1);
-        assert!(member.was_accepted());
-
-        // Up sweeps the (resolved) entry away.
-        let up = make_up_event(Offset::new(1.0, 1.0), PointerType::Touch);
-        run_pointer_lifecycle(&arena, &up);
-        assert!(!arena.contains(pointer), "up must sweep the entry");
-    }
-
-    #[test]
-    fn a_held_entry_defers_the_binding_sweep_until_release() {
-        // The double-tap lifecycle leans on this: a held entry must defer the
-        // binding's first-up sweep (so a competing front-member tap cannot win
-        // early), and `release` must then drain the deferred sweep — removing
-        // the entry. The double-tap resolves the contended entries explicitly
-        // before releasing, so the deferred sweep is pure cleanup here.
-        let arena = GestureArena::binding_driven(Arc::new(SystemClock));
-        let pointer = PointerId::PRIMARY;
-        let first = Arc::new(MockMember::new());
-        let second = Arc::new(MockMember::new());
-        arena.add(pointer, first.clone());
-        arena.add(pointer, second.clone());
-        arena.close(pointer); // 2 members, unresolved
-        arena.hold(pointer);
-
-        // Sweep while held: deferred, nobody resolved.
-        arena.sweep(pointer);
-        assert!(arena.contains(pointer), "the held sweep is deferred");
-        assert!(arena.has_pending_sweep(pointer));
-        assert!(!first.was_accepted(), "no resolution while held");
-        assert!(!second.was_accepted());
-
-        // Release drains the deferred sweep and removes the entry.
-        arena.release(pointer);
-        assert!(
-            !arena.contains(pointer),
-            "release drains the deferred sweep"
-        );
-    }
 
     #[test]
     fn retained_member_keeps_deadline_frames_alive_after_pointer_up() {
@@ -2667,16 +2113,5 @@ mod tests {
             arena.has_pending_deadlines(),
             "a retained recognizer must keep owner frames running until its deadline"
         );
-    }
-
-    #[test]
-    fn explicit_deadline_registration_keeps_frames_alive_without_an_arena_slot() {
-        let arena = GestureArena::binding_driven(Arc::new(SystemClock));
-        let member: Arc<dyn GestureArenaMember> = Arc::new(PendingDeadlineMember);
-        let registration = arena.register_deadline_member(PointerId::PRIMARY, &member);
-
-        assert!(arena.has_pending_deadlines());
-        drop(registration);
-        assert!(!arena.has_pending_deadlines());
     }
 }

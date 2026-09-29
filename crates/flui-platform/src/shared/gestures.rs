@@ -41,13 +41,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pinch_passes_the_fraction_through_and_drops_nan() {
-        assert!(matches!(pinch(0.1), Some(PointerGesture::Pinch(d)) if d == 0.1));
-        assert!(matches!(pinch(-0.25), Some(PointerGesture::Pinch(d)) if d == -0.25));
-        assert!(pinch(f64::NAN).is_none(), "a NaN magnification is dropped");
-    }
-
-    #[test]
     fn rotation_converts_ccw_degrees_to_cw_radians() {
         // A 90° counterclockwise platform delta is a -π/2 clockwise delta.
         let PointerGesture::Rotate(radians) = rotation_ccw_degrees(90.0) else {

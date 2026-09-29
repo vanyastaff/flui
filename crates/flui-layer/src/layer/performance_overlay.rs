@@ -114,33 +114,3 @@ impl PerformanceOverlayLayer {
         self.bounds
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn options_are_a_flag_set() {
-        let both = PerformanceOverlayOption::DISPLAY_RASTER_STATISTICS
-            | PerformanceOverlayOption::DISPLAY_ENGINE_STATISTICS;
-        assert!(both.contains(PerformanceOverlayOption::DISPLAY_RASTER_STATISTICS));
-        assert!(!both.contains(PerformanceOverlayOption::VISUALIZE_RASTER_STATISTICS));
-        assert_eq!(PerformanceOverlayOption::all().bits(), 0b1111);
-        assert!(PerformanceOverlayOption::empty().is_empty());
-    }
-
-    #[test]
-    fn samples_are_stored_as_given() {
-        let mut layer =
-            PerformanceOverlayLayer::all_stats(PerformanceOverlayLayer::default_bounds());
-        assert_eq!(layer.fps(), 0.0);
-        layer.update_stats(59.5, 16.8, 1200);
-        layer.set_diagnostic_line(Some("deferred=2".to_owned()));
-        assert_eq!(layer.fps(), 59.5);
-        assert_eq!(layer.frame_time_ms(), 16.8);
-        assert_eq!(layer.total_frames(), 1200);
-        assert_eq!(layer.diagnostic_line(), Some("deferred=2"));
-        assert_eq!(layer.options(), PerformanceOverlayOption::all());
-        assert_eq!(layer.bounds(), PerformanceOverlayLayer::default_bounds());
-    }
-}

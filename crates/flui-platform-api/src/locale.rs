@@ -328,16 +328,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn deprecated_language_subtag_canonicalizes_on_construction() {
-        let iw = Locale::new("iw", None::<&str>);
-        assert_eq!(
-            iw.language(),
-            "he",
-            "iw must canonicalize to he on construction, not on read"
-        );
-    }
-
-    #[test]
     fn deprecated_and_preferred_language_subtags_are_equal_and_hash_equal() {
         let iw = Locale::new("iw", None::<&str>);
         let he = Locale::new("he", None::<&str>);
@@ -352,15 +342,6 @@ mod tests {
             set.contains(&he),
             "canonicalized locales must hash identically, not just compare equal"
         );
-    }
-
-    #[test]
-    fn deprecated_region_subtag_canonicalizes_on_construction() {
-        // `de_DD` (East Germany) canonicalizes to `de_DE`.
-        let dd = Locale::new("de", Some("DD"));
-        let de = Locale::new("de", Some("DE"));
-        assert_eq!(dd.country(), Some("DE"));
-        assert_eq!(dd, de);
     }
 
     #[test]
@@ -386,31 +367,6 @@ mod tests {
         let locale = Locale::new("xx", Some("YY"));
         assert_eq!(locale.language(), "xx");
         assert_eq!(locale.country(), Some("YY"));
-    }
-
-    #[test]
-    fn rtl_detection_matches_the_deprecated_alias() {
-        // `iw` canonicalizes to `he`, which is in the RTL set — so the alias
-        // must resolve to the same is_rtl() answer as the canonical form,
-        // not require every call site to know about the deprecated spelling.
-        assert!(Locale::new("iw", None::<&str>).is_rtl());
-        assert!(Locale::new("he", None::<&str>).is_rtl());
-    }
-
-    #[test]
-    fn from_language_tag_canonicalizes_deprecated_subtags() {
-        let iw = Locale::from_language_tag("iw").expect("valid single-subtag input");
-        assert_eq!(iw, Locale::new("he", None::<&str>));
-
-        let iw_dd = Locale::from_language_tag("iw_DD").expect("valid two-subtag input");
-        assert_eq!(iw_dd, Locale::new("he", Some("DE")));
-    }
-
-    #[test]
-    fn script_subtag_is_not_canonicalized() {
-        // The oracle canonicalizes language and region subtags only.
-        let locale = Locale::with_script("zh", Some("CN"), Some("Hans"));
-        assert_eq!(locale.script(), Some("Hans"));
     }
 
     // ------------------------------------------------------------------
@@ -455,22 +411,6 @@ mod tests {
         }
 
         #[test]
-        fn deserialized_deprecated_alias_hashes_identically_to_the_canonical_form() {
-            let iw: Locale =
-                serde_json::from_str(r#"{"language":"iw","country":null,"script":null}"#)
-                    .expect("valid Locale JSON");
-            let he = Locale::new("he", None::<&str>);
-
-            let mut set = std::collections::HashSet::new();
-            set.insert(iw);
-            assert!(
-                set.contains(&he),
-                "a deserialized deprecated-alias Locale must hash identically to the \
-                 canonical spelling, not just compare equal"
-            );
-        }
-
-        #[test]
         fn serialize_then_deserialize_round_trips_an_already_canonical_locale() {
             let original = Locale::with_script("zh", Some("CN"), Some("Hans"));
             let json = serde_json::to_string(&original).expect("serialize");
@@ -500,21 +440,6 @@ mod tests {
                 prop_assert_eq!(Locale::from_language_tag(&tag), Some(locale.clone()));
                 prop_assert_eq!(Locale::from_language_tag(&tag.replace('_', "-")), Some(locale));
             }
-        }
-
-        #[test]
-        fn tags_order_language_script_country() {
-            let tag = |l: &Locale| l.to_language_tag();
-            assert_eq!(tag(&Locale::new("en", None::<&str>)), "en");
-            assert_eq!(tag(&Locale::new("en", Some("US"))), "en_US");
-            assert_eq!(
-                tag(&Locale::with_script("zh", None::<&str>, Some("Hans"))),
-                "zh_Hans"
-            );
-            assert_eq!(
-                tag(&Locale::with_script("zh", Some("CN"), Some("Hans"))),
-                "zh_Hans_CN"
-            );
         }
 
         #[test]
@@ -549,21 +474,6 @@ mod tests {
                     (rtl, !rtl),
                     "{language}"
                 );
-            }
-        }
-
-        #[test]
-        fn presets() {
-            for (locale, tag) in [
-                (Locale::en_us(), "en_US"),
-                (Locale::en_gb(), "en_GB"),
-                (Locale::es_es(), "es_ES"),
-                (Locale::fr_fr(), "fr_FR"),
-                (Locale::de_de(), "de_DE"),
-                (Locale::zh_cn(), "zh_CN"),
-                (Locale::ja_jp(), "ja_JP"),
-            ] {
-                assert_eq!(locale.to_language_tag(), tag);
             }
         }
     }

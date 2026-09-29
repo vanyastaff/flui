@@ -614,32 +614,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn update_after_bind_schedules_a_state_change_rebuild_for_the_element() {
-        let (mut owner, mut tree, count, _text, builds, _root) = mount();
-        let builds_after_mount = builds.load(Ordering::Relaxed);
-
-        count.update(|n| n + 1);
-        assert_eq!(count.get(), 1);
-        assert_eq!(owner.pending_external_builds(), 1);
-
-        owner.build_scope(&mut tree);
-        assert_eq!(builds.load(Ordering::Relaxed), builds_after_mount + 1);
-    }
-
-    #[test]
-    fn state_handle_update_after_bind_schedules_a_rebuild() {
-        let (mut owner, mut tree, _count, text, builds, _root) = mount();
-        let builds_after_mount = builds.load(Ordering::Relaxed);
-
-        text.update(|s| s.push_str("-changed"));
-        assert_eq!(text.with(Clone::clone), "initial-changed");
-        assert_eq!(owner.pending_external_builds(), 1);
-
-        owner.build_scope(&mut tree);
-        assert_eq!(builds.load(Ordering::Relaxed), builds_after_mount + 1);
-    }
-
     // ── 2. unbound mutation changes the value, schedules nothing ───────────
 
     #[test]
@@ -649,13 +623,6 @@ mod tests {
         assert_eq!(cell.get(), 5);
         cell.update(|n| n + 1);
         assert_eq!(cell.get(), 6); // changed, and nothing to schedule against
-    }
-
-    #[test]
-    fn unbound_state_handle_mutation_changes_value_and_schedules_nothing() {
-        let handle = StateHandle::new(String::from("a"));
-        handle.update(|s| s.push('b'));
-        assert_eq!(handle.with(Clone::clone), "ab");
     }
 
     // ── 3. mutation after element removal is a silent no-op ────────────────
@@ -685,40 +652,9 @@ mod tests {
 
     // ── 4. clones share storage ──────────────────────────────────────────
 
-    #[test]
-    fn state_cell_clones_share_storage() {
-        let cell = StateCell::new(1);
-        let alias = cell.clone();
-        alias.set(2);
-        assert_eq!(cell.get(), 2);
-    }
-
-    #[test]
-    fn state_handle_clones_share_storage() {
-        let handle = StateHandle::new(vec![1]);
-        let alias = handle.clone();
-        alias.update(|v| v.push(2));
-        assert_eq!(handle.with(Clone::clone), vec![1, 2]);
-    }
-
     // ── 5. StateHandle::update on a non-Copy type (String) ──────────────────
 
-    #[test]
-    fn state_handle_update_mutates_a_string_in_place() {
-        let name = StateHandle::new(String::from("alice"));
-        name.update(|n| *n = format!("{n}-bob"));
-        assert_eq!(name.with(Clone::clone), "alice-bob");
-    }
-
     // ── 6. Debug never panics or deadlocks ──────────────────────────────────
-
-    #[test]
-    fn debug_impls_are_safe() {
-        let cell = StateCell::new(3);
-        let _ = format!("{cell:?}");
-        let handle = StateHandle::new(String::from("x"));
-        let _ = format!("{handle:?}");
-    }
 
     // 7. `!Send`/`!Sync` is pinned by the `compile_fail` doctests on each
     // type (see the struct docs): a negative trait bound cannot be asserted

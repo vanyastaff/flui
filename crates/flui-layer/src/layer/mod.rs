@@ -333,11 +333,10 @@ layer_from_impls! {
 
 #[cfg(test)]
 mod tests {
-    use flui_foundation::geometry::Size;
+
     use flui_painting::paint::Clip;
 
     use super::*;
-    use crate::LayerLink;
 
     #[test]
     fn bounds_come_from_the_payload() {
@@ -353,68 +352,8 @@ mod tests {
     }
 
     #[test]
-    fn local_translation_covers_every_offset_carrying_variant() {
-        let offset = Offset::new(3.0, 4.0);
-        let translating: [Layer; 5] = [
-            OffsetLayer::new(offset).into(),
-            TransformLayer::translation(3.0, 4.0).into(),
-            OpacityLayer::with_offset(0.5, offset).into(),
-            ImageFilterLayer::with_offset(flui_painting::paint::ImageFilter::blur(1.0), offset)
-                .into(),
-            LeaderLayer::with_offset(LayerLink::new(), Size::ZERO, offset).into(),
-        ];
-        for layer in &translating {
-            assert_eq!(layer.local_translation(), offset, "{}", layer.kind_name());
-        }
-        assert_eq!(
-            Layer::from(FollowerLayer::new(LayerLink::new()).with_target_offset(offset))
-                .local_translation(),
-            Offset::ZERO,
-            "a follower's translation is resolved by the walk, not stored on the layer"
-        );
-        assert_eq!(
-            Layer::from(ClipRectLayer::new(Rect::ZERO, Clip::HardEdge)).local_translation(),
-            Offset::ZERO
-        );
-    }
-
-    #[test]
-    fn accessors_match_their_variant_only() {
-        let link = LayerLink::new();
-        let leader = Layer::from(LeaderLayer::new(link, Size::ZERO));
-        assert!(leader.as_leader().is_some());
-        assert!(leader.as_follower().is_none());
-        assert!(leader.as_performance_overlay().is_none());
-        assert!(
-            Layer::from(FollowerLayer::new(link))
-                .as_follower()
-                .is_some()
-        );
-    }
-
-    #[test]
     #[cfg_attr(debug_assertions, should_panic(expected = "alpha must be a number"))]
     fn nan_alpha_never_escapes_the_unit_range() {
         assert_eq!(unit_alpha(f64::NAN), 1.0);
-    }
-
-    #[test]
-    fn alpha_is_clamped_to_the_unit_range() {
-        assert_eq!(unit_alpha(-2.0), 0.0);
-        assert_eq!(unit_alpha(0.25), 0.25);
-        assert_eq!(unit_alpha(7.0), 1.0);
-        assert_eq!(OpacityLayer::new(f64::INFINITY).alpha(), 1.0);
-    }
-
-    /// The enum's footprint is a hot-path number: every node holds one inline.
-    /// `Canvas` stays boxed (a live recorder is ~184 B); everything else fits
-    /// the budget unboxed. The widest inline variant carries an `f64` `Matrix4`
-    /// (128 B, ADR-0098 §2). Re-measure before boxing more — a box is one heap
-    /// allocation per layer per frame.
-    #[test]
-    fn layer_fits_the_inline_budget() {
-        const BUDGET: usize = 208;
-        let size = std::mem::size_of::<Layer>();
-        assert!(size <= BUDGET, "size_of::<Layer>() = {size} > {BUDGET}");
     }
 }

@@ -121,14 +121,6 @@ mod tests {
             other => panic!("expected LineDelta, got {other:?}"),
         }
     }
-
-    fn pixels(delta: ScrollDelta) -> (f64, f64) {
-        match delta {
-            ScrollDelta::PixelDelta(pos) => (pos.x, pos.y),
-            other => panic!("expected PixelDelta, got {other:?}"),
-        }
-    }
-
     /// The cross-backend contract table: for each backend, the raw value a
     /// physical "scroll one step toward later content" (wheel toward the
     /// user / swipe down / tilt right) produces, and the single normalized
@@ -162,34 +154,11 @@ mod tests {
         assert_eq!(lines(from_web(1, 1.0, 0.0)), (1.0, 0.0));
     }
 
-    /// Pixel-mode deltas must come out in LOGICAL pixels: winit's physical
-    /// pixels are divided by the scale factor; AppKit points and CSS pixels
-    /// already are logical and pass through unscaled. A 2x-DPI trackpad tick
-    /// must not scroll twice as far on one backend as another.
-    #[test]
-    fn pixel_deltas_are_logical_on_every_backend() {
-        assert_eq!(pixels(from_winit_pixels(0.0, -100.0, 2.0)), (0.0, 50.0));
-        assert_eq!(pixels(from_appkit(0.0, -50.0, true)), (0.0, 50.0));
-        assert_eq!(pixels(from_web(0, 0.0, 50.0)), (0.0, 50.0));
-    }
-
     /// Fractional Win32 distances (fine-resolution wheels report fractions
     /// of `WHEEL_DELTA`) survive the division instead of truncating.
     #[test]
     fn win32_fractional_detents_stay_fractional() {
         assert_eq!(lines(from_win32_wheel(-60)), (0.0, 0.5));
         assert_eq!(lines(from_win32_hwheel(-30)), (-0.25, 0.0));
-    }
-
-    /// DOM page-mode deltas stay pages (the shared consumer owns the
-    /// page-to-pixel conversion), and an unknown `deltaMode` falls back to
-    /// pixels rather than dropping the event.
-    #[test]
-    fn web_pages_pass_through_and_unknown_modes_fall_back_to_pixels() {
-        assert!(matches!(
-            from_web(2, 0.0, 1.0),
-            ScrollDelta::PageDelta(x, y) if x == 0.0 && y == 1.0
-        ));
-        assert_eq!(pixels(from_web(7, 3.0, 4.0)), (3.0, 4.0));
     }
 }

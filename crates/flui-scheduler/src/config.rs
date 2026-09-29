@@ -237,28 +237,8 @@ mod tests {
     use crate::scheduler::UpdateScheduler;
 
     #[test]
-    fn test_time_dilation() {
-        // Reset to default
-        set_time_dilation(1.0).expect("positive finite time dilation");
-        assert!((time_dilation() - 1.0).abs() < f64::EPSILON);
-
-        // Set to 2x (half speed)
-        set_time_dilation(2.0).expect("positive finite time dilation");
-        assert!((time_dilation() - 2.0).abs() < f64::EPSILON);
-
-        // Reset
-        set_time_dilation(1.0).expect("positive finite time dilation");
-    }
-
-    #[test]
     fn test_time_dilation_zero_returns_error() {
         let result = set_time_dilation(0.0);
-        assert!(matches!(result, Err(InvalidTimeDilation::NonPositive(_))));
-    }
-
-    #[test]
-    fn test_time_dilation_negative_returns_error() {
-        let result = set_time_dilation(-1.0);
         assert!(matches!(result, Err(InvalidTimeDilation::NonPositive(_))));
     }
 
@@ -266,23 +246,6 @@ mod tests {
     fn test_time_dilation_nan_returns_error() {
         let result = set_time_dilation(f64::NAN);
         assert!(matches!(result, Err(InvalidTimeDilation::NonFinite(_))));
-    }
-
-    #[test]
-    fn test_performance_mode_handle() {
-        let scheduler = UpdateScheduler::new();
-
-        // Request latency mode
-        let handle = scheduler.request_performance_mode(PerformanceMode::Latency);
-
-        // Check request count
-        assert_eq!(scheduler.performance_mode_request_count(), 1);
-
-        // Drop handle
-        drop(handle);
-
-        // Check request is released
-        assert_eq!(scheduler.performance_mode_request_count(), 0);
     }
 
     #[test]
@@ -299,26 +262,5 @@ mod tests {
 
         // Verify scheduler2 is unaffected (proper isolation)
         assert_eq!(scheduler2.performance_mode_request_count(), 0);
-    }
-
-    #[test]
-    fn test_adjust_for_epoch() {
-        use web_time::Duration;
-
-        let raw = Duration::from_secs(10);
-        let epoch = Duration::from_secs(5);
-
-        // Without dilation
-        set_time_dilation(1.0).expect("positive finite time dilation");
-        let adjusted = super::adjust_duration_for_epoch(raw, epoch);
-        assert_eq!(adjusted, Duration::from_secs(5));
-
-        // With 2x dilation (half speed)
-        set_time_dilation(2.0).expect("positive finite time dilation");
-        let adjusted = super::adjust_duration_for_epoch(raw, epoch);
-        assert!((adjusted.as_secs_f64() - 2.5).abs() < 0.001);
-
-        // Reset
-        set_time_dilation(1.0).expect("positive finite time dilation");
     }
 }

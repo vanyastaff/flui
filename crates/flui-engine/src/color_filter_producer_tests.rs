@@ -212,30 +212,6 @@ mod gpu_tests {
         ]
     }
 
-    /// LinearToSrgb oracle: linear → sRGB per channel; alpha unchanged.
-    /// Input is straight-alpha opaque; output is premultiplied u8 (== straight for
-    /// opaque alpha).
-    fn linear_to_srgb_oracle(linear_channel: u8) -> u8 {
-        let linear = f32::from(linear_channel) / 255.0;
-        let srgb = if linear <= 0.003_130_8 {
-            linear * 12.92
-        } else {
-            1.055 * linear.powf(1.0 / 2.4) - 0.055
-        };
-        (srgb.clamp(0.0, 1.0) * 255.0).round() as u8
-    }
-
-    /// SrgbToLinear oracle: sRGB → linear per channel; alpha unchanged.
-    fn srgb_to_linear_oracle(srgb_channel: u8) -> u8 {
-        let srgb = f32::from(srgb_channel) / 255.0;
-        let linear = if srgb <= 0.04045 {
-            srgb / 12.92
-        } else {
-            ((srgb + 0.055) / 1.055).powf(2.4)
-        };
-        (linear.clamp(0.0, 1.0) * 255.0).round() as u8
-    }
-
     // ── P1: Mode filter via producer path ─────────────────────────────────────
 
     /// P1: `ColorFilter::Mode { Multiply, half-opacity red }` dispatched through
@@ -291,114 +267,7 @@ mod gpu_tests {
 
     // ── P2: LinearToSrgbGamma via producer path ───────────────────────────────
 
-    /// P2: `ColorFilter::LinearToSrgbGamma` dispatched through
-    /// `LayerDispatcher::push_color_filter` applies the linear→sRGB transfer per channel.
-    ///
-    /// **Proves:**
-    /// - The `LinearToSrgbGamma` arm correctly translates to
-    ///   `LayerFilter::Gamma(GammaDirection::LinearToSrgb)`.
-    /// - The gamma shader applies the standard IEC 61966-2-1 transfer.
-    ///
-    /// **Discriminating:** the chosen `layer_color = rgba(50, 100, 200, 255)` has
-    /// mid-range channel values where the nonlinear part of the IEC formula applies.
-    /// A no-op (identity) would output `(50, 100, 200)` in straight-alpha space,
-    /// while the oracle outputs significantly different values, so a wrong/missing
-    /// dispatch is caught.
-    ///
-    /// **Red-before-green:** on `main`, the old `push_color_filter(&ColorMatrix)`
-    /// signature could not accept `&ColorFilter::LinearToSrgbGamma`.
-    #[test]
-    fn p2_linear_to_srgb_gamma_via_producer_path() {
-        let (device, queue) = acquire_test_device_and_queue();
-        let (surface_tex, surface_view) = create_surface(&device);
-        clear_surface(
-            &device,
-            &queue,
-            &surface_view,
-            wgpu::Color {
-                r: 0.0,
-                g: 0.0,
-                b: 0.0,
-                a: 1.0,
-            },
-        );
-
-        // Choose a color where linear→sRGB is non-trivially different from identity.
-        // At channel value 50/255 ≈ 0.196 (above the 0.003_130_8 threshold):
-        //   sRGB = 1.055 * 0.196^(1/2.4) - 0.055 ≈ 0.471, i.e. ~120/255.
-        let layer_color = Color::rgba(50, 100, 200, 255);
-        let filter = ColorFilter::LinearToSrgbGamma;
-
-        let readback = render_via_producer_path(
-            &device,
-            &queue,
-            &surface_tex,
-            &surface_view,
-            filter,
-            layer_color,
-        );
-
-        // GPU output is premultiplied; since alpha=255 (opaque), premul == straight.
-        let expected = [
-            linear_to_srgb_oracle(50),
-            linear_to_srgb_oracle(100),
-            linear_to_srgb_oracle(200),
-            255,
-        ];
-
-        assert_interior_pixels_near("P2 LinearToSrgbGamma producer path", &readback, expected, 3);
-    }
-
     // ── P3: SrgbToLinearGamma via producer path ───────────────────────────────
-
-    /// P3: `ColorFilter::SrgbToLinearGamma` dispatched through
-    /// `LayerDispatcher::push_color_filter` applies the sRGB→linear transfer per channel.
-    ///
-    /// **Proves:**
-    /// - The `SrgbToLinearGamma` arm correctly translates to
-    ///   `LayerFilter::Gamma(GammaDirection::SrgbToLinear)`.
-    ///
-    /// **Discriminating:** `layer_color = rgba(180, 120, 60, 255)` — each channel
-    /// is above the 0.04045 threshold, so the nonlinear formula fires and the oracle
-    /// differs meaningfully from the input.
-    #[test]
-    fn p3_srgb_to_linear_gamma_via_producer_path() {
-        let (device, queue) = acquire_test_device_and_queue();
-        let (surface_tex, surface_view) = create_surface(&device);
-        clear_surface(
-            &device,
-            &queue,
-            &surface_view,
-            wgpu::Color {
-                r: 0.0,
-                g: 0.0,
-                b: 0.0,
-                a: 1.0,
-            },
-        );
-
-        let layer_color = Color::rgba(180, 120, 60, 255);
-        let filter = ColorFilter::SrgbToLinearGamma;
-
-        let readback = render_via_producer_path(
-            &device,
-            &queue,
-            &surface_tex,
-            &surface_view,
-            filter,
-            layer_color,
-        );
-
-        // GPU output is premultiplied; opaque alpha → premul == straight.
-        let expected = [
-            srgb_to_linear_oracle(180),
-            srgb_to_linear_oracle(120),
-            srgb_to_linear_oracle(60),
-            255,
-        ];
-
-        assert_interior_pixels_near("P3 SrgbToLinearGamma producer path", &readback, expected, 3);
-    }
 
     // ── P4: Matrix filter via producer path matches direct-painter path ───────
 

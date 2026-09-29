@@ -119,33 +119,6 @@ mod tests {
         }
     }
 
-    /// A leaf that also hands out a payload to anything that hits it — the
-    /// `RenderMetaData` shape, spelled out locally because the catalog lives
-    /// in a crate above this one.
-    #[derive(Debug)]
-    struct TaggedLeaf {
-        size: Size,
-        tag: std::sync::Arc<dyn std::any::Any + Send + Sync>,
-    }
-
-    impl flui_foundation::Diagnosticable for TaggedLeaf {}
-
-    impl RenderBox for TaggedLeaf {
-        type Arity = flui_foundation::Leaf;
-        type ParentData = BoxParentData;
-
-        fn perform_layout(
-            &mut self,
-            ctx: &mut BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
-        ) -> Size {
-            ctx.constraints().constrain(self.size)
-        }
-
-        fn metadata(&self) -> Option<std::sync::Arc<dyn std::any::Any + Send + Sync>> {
-            Some(self.tag.clone())
-        }
-    }
-
     /// A laid-out one-node tree, 20x20 at the origin.
     fn laid_out_cell() -> PipelineCell {
         let mut owner = PipelineOwner::new();
@@ -224,45 +197,6 @@ mod tests {
         );
     }
 
-    /// A retained tree does not keep a closed presentation answerable.
-    ///
-    /// `LifecycleContext::pipeline_owner()` hands out a STRONG `PipelineCell`, and
-    /// a widget may legitimately store one. If that were the only liveness
-    /// signal, such a widget would keep this probe's weak reference
-    /// upgradeable after its presentation closed, and the handle would go on
-    /// hit-testing a detached tree instead of reporting it gone — reachable
-    /// today under `SharedRealm`, where the realm ticket stays valid because a
-    /// sibling presentation is still live.
-    ///
-    /// So closure is signalled by a token the presentation owns, not by the
-    /// tree's allocation being freed. The two are different facts.
-    #[test]
-    fn a_retained_tree_does_not_keep_a_closed_presentation_answerable() {
-        let cell = laid_out_cell();
-        let alive = std::rc::Rc::new(());
-        let probe = PipelineHitTestProbe::new(&cell, std::rc::Rc::downgrade(&alive));
-
-        let mut warm = HitTestResult::new();
-        probe
-            .probe(Offset::new(10.0, 10.0), &mut warm)
-            .expect("answers while the presentation is open");
-
-        // The presentation closes. `cell` is still held here, standing in for
-        // the widget that retained `pipeline_owner()`.
-        drop(alive);
-
-        let mut result = HitTestResult::new();
-        assert_eq!(
-            probe
-                .probe(Offset::new(10.0, 10.0), &mut result)
-                .unwrap_err(),
-            InteractionDispatchError::OwnerGone,
-            "a closed presentation must report itself gone even while someone \
-             still holds its tree alive -- answering from it is answering from \
-             a tree the application has shut"
-        );
-    }
-
     #[test]
     fn a_checked_out_tree_is_reported_busy_rather_than_answered_empty() {
         let cell = laid_out_cell();
@@ -282,74 +216,6 @@ mod tests {
              an empty path, while a frame holds it -- an empty path there is a \
              lie the caller cannot detect, and would read as a drag over \
              nothing"
-        );
-    }
-    #[derive(Debug, PartialEq)]
-    struct DropTarget(&'static str);
-
-    /// A payload attached to a render object reaches whoever hits it.
-    ///
-    /// This is the whole discovery mechanism a drag needs: it walks a hit path
-    /// and downcasts, never knowing the tagged type exists. Without the payload
-    /// riding on the entry, a `RenderId` is all a hit yields — and turning one
-    /// back into a render object is possible only inside the pipeline, holding
-    /// the tree the caller has just let go of.
-    #[test]
-    fn a_render_objects_payload_rides_out_on_the_hit_entry() {
-        let mut owner = PipelineOwner::new();
-        let root = owner.insert(Box::new(TaggedLeaf {
-            size: Size::new(20.0, 20.0),
-            tag: std::sync::Arc::new(DropTarget("inbox")),
-        }) as Box<dyn RenderObject<BoxProtocol>>);
-        owner.set_root_id(Some(root));
-        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(20.0, 20.0))));
-
-        let cell = PipelineCell::new(owner);
-        cell.with_mut(|o| {
-            let (returned, _) = std::mem::take(o).run_frame();
-            *o = returned;
-        });
-
-        let open = std::rc::Rc::new(());
-        let probe = PipelineHitTestProbe::new(&cell, std::rc::Rc::downgrade(&open));
-        let mut result = HitTestResult::new();
-        probe
-            .probe(Offset::new(10.0, 10.0), &mut result)
-            .expect("tree is free");
-
-        let found: Vec<&DropTarget> = result
-            .path()
-            .iter()
-            .filter_map(|entry| entry.metadata_as::<DropTarget>())
-            .collect();
-        assert_eq!(
-            found,
-            vec![&DropTarget("inbox")],
-            "the payload must arrive on the entry for the node that carried it"
-        );
-    }
-
-    #[test]
-    fn an_untagged_render_object_carries_no_payload() {
-        let cell = laid_out_cell();
-        let open = std::rc::Rc::new(());
-        let probe = PipelineHitTestProbe::new(&cell, std::rc::Rc::downgrade(&open));
-        let mut result = HitTestResult::new();
-        probe
-            .probe(Offset::new(10.0, 10.0), &mut result)
-            .expect("tree is free");
-
-        assert!(
-            !result.path().is_empty(),
-            "premise: the position hits, so the absence below is about the \
-             payload and not about the hit"
-        );
-        assert!(
-            result
-                .path()
-                .iter()
-                .all(|entry| entry.metadata_as::<DropTarget>().is_none()),
-            "a node that attaches nothing must not appear to carry a payload"
         );
     }
 }

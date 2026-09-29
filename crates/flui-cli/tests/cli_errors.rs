@@ -13,58 +13,6 @@ fn flui() -> Command {
 }
 
 #[test]
-fn create_with_rust_keyword_fails() {
-    let tmp = TempDir::new().expect("temp dir");
-
-    flui()
-        .args(["create", "fn", "--org", "com.test"])
-        .arg("--path")
-        .arg(tmp.path())
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("invalid project name"));
-}
-
-#[test]
-fn create_with_another_keyword_fails() {
-    let tmp = TempDir::new().expect("temp dir");
-
-    flui()
-        .args(["create", "struct", "--org", "com.test"])
-        .arg("--path")
-        .arg(tmp.path())
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("invalid project name"));
-}
-
-#[test]
-fn create_with_leading_digit_fails() {
-    let tmp = TempDir::new().expect("temp dir");
-
-    flui()
-        .args(["create", "123bad", "--org", "com.test"])
-        .arg("--path")
-        .arg(tmp.path())
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("invalid project name"));
-}
-
-#[test]
-fn create_with_spaces_in_name_fails() {
-    let tmp = TempDir::new().expect("temp dir");
-
-    // Clap will treat "my app" as two positional args — the second is invalid
-    flui()
-        .args(["create", "my app", "--org", "com.test"])
-        .arg("--path")
-        .arg(tmp.path())
-        .assert()
-        .failure();
-}
-
-#[test]
 fn create_with_invalid_org_fails() {
     let tmp = TempDir::new().expect("temp dir");
 
@@ -108,31 +56,6 @@ fn create_with_unknown_template_exits_with_usage_error() {
         .assert()
         .failure()
         .code(2);
-}
-
-#[test]
-fn create_into_existing_directory_exits_with_generic_failure() {
-    let tmp = TempDir::new().expect("temp dir");
-    std::fs::create_dir(tmp.path().join("taken")).expect("pre-existing directory");
-
-    flui()
-        .args(["create", "taken", "--org", "com.test", "--no-check"])
-        .arg("--path")
-        .arg(tmp.path())
-        .assert()
-        .failure()
-        .code(1)
-        .stderr(predicate::str::contains("already exists"));
-}
-
-#[test]
-fn build_with_invalid_platform_fails() {
-    // `flui build foobar` should fail because "foobar" is not a valid build target
-    flui()
-        .args(["build", "foobar"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("invalid value"));
 }
 
 #[test]

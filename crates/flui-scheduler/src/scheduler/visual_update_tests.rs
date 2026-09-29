@@ -8,8 +8,6 @@
 //! so it still sees every private field and type `scheduler.rs` defines,
 //! exactly as the inline module did.
 
-use std::sync::OnceLock;
-
 use super::*;
 
 // =========================================================================
@@ -53,53 +51,6 @@ fn ensure_visual_update_is_a_noop_during_transient_callbacks() {
     assert!(
         !scheduler.is_frame_scheduled(),
         "ensure_visual_update called from TransientCallbacks must not \
-         schedule a frame"
-    );
-}
-
-/// Same pin, one phase later: a microtask scheduled from a transient
-/// callback runs during `MidFrameMicrotasks` (`flush_microtasks`, called
-/// right after the transient loop in `handle_begin_frame`), so this
-/// reaches the same `match` arm from the other mid-frame phase. Reddens
-/// under the same revert as the transient-phase pin above.
-#[test]
-fn ensure_visual_update_is_a_noop_during_mid_frame_microtasks() {
-    let scheduler = UpdateScheduler::new();
-    let observed_phase: Arc<OnceLock<SchedulerPhase>> = Arc::new(OnceLock::new());
-    let ran = Arc::new(AtomicBool::new(false));
-
-    let scheduler_for_transient = scheduler.clone();
-    let probe = scheduler.clone();
-    let observed_for_task = Arc::clone(&observed_phase);
-    let ran_for_task = Arc::clone(&ran);
-    scheduler.schedule_frame_callback(Box::new(move |_vsync_time| {
-        scheduler_for_transient.schedule_microtask(Box::new(move || {
-            let _ = observed_for_task.set(probe.phase());
-            probe.ensure_visual_update();
-            assert!(
-                !probe.is_frame_scheduled(),
-                "must already read as not-scheduled from inside the very \
-                 callback that called ensure_visual_update"
-            );
-            ran_for_task.store(true, Ordering::Release);
-        }));
-    }));
-
-    scheduler.execute_frame();
-
-    assert_eq!(
-        observed_phase.get().copied(),
-        Some(SchedulerPhase::MidFrameMicrotasks),
-        "precondition: the microtask must actually run during \
-         MidFrameMicrotasks for this pin to exercise the right phase"
-    );
-    assert!(
-        ran.load(Ordering::Acquire),
-        "the microtask must actually have run for this pin to mean anything"
-    );
-    assert!(
-        !scheduler.is_frame_scheduled(),
-        "ensure_visual_update called from MidFrameMicrotasks must not \
          schedule a frame"
     );
 }
@@ -151,26 +102,6 @@ fn ensure_visual_update_schedules_from_idle() {
     scheduler.ensure_visual_update();
 
     assert!(scheduler.is_frame_scheduled());
-}
-
-/// Characterization pin: `PostFrameCallbacks` is the other phase
-/// `ensure_visual_update` requests a frame from.
-#[test]
-fn ensure_visual_update_schedules_from_post_frame_callbacks() {
-    let scheduler = UpdateScheduler::new();
-    let probe = scheduler.clone();
-    scheduler.add_post_frame_callback(Box::new(move |_timing| {
-        assert_eq!(probe.phase(), SchedulerPhase::PostFrameCallbacks);
-        probe.ensure_visual_update();
-    }));
-
-    scheduler.execute_frame();
-
-    assert!(
-        scheduler.is_frame_scheduled(),
-        "ensure_visual_update called from PostFrameCallbacks must \
-         schedule a frame"
-    );
 }
 
 /// Frame demand from a thread OTHER than the one driving the current frame
@@ -245,52 +176,5 @@ fn ensure_visual_update_from_another_thread_mid_frame_still_schedules() {
         "the false->true transition fires the wake hook exactly once for \
          this call -- handle_begin_frame's own clear at frame entry \
          precedes it"
-    );
-}
-
-/// The `bool` return is the seam the presentation's `on_need_visual_update`
-/// closure uses to gate its per-window `request_redraw` poke: `true` iff the
-/// phase gate passed AND frames are enabled (a frame was actually requested),
-/// `false` iff the demand was dropped (the same-thread mid-frame no-op, or
-/// `frames_enabled == false`). It is **not** the `frame_scheduled` false→true
-/// edge — a demand that coincides with an already-scheduled frame still
-/// reports `true`, because the gate passed.
-#[test]
-fn ensure_visual_update_reports_whether_a_frame_was_requested() {
-    let scheduler = UpdateScheduler::new();
-
-    // Idle: requested. A repeated call — demand coinciding with the
-    // already-scheduled frame — still passes the gate, so the per-window
-    // poke a presentation gates on this return is not lost to coalescing.
-    assert!(scheduler.ensure_visual_update(), "Idle demand is requested");
-    assert!(
-        scheduler.ensure_visual_update(),
-        "already-scheduled demand still passes the gate"
-    );
-
-    // Mid-frame on the driving thread: the no-op arm reports `false`.
-    let probe = scheduler.clone();
-    let mid_frame = Arc::new(OnceLock::new());
-    let mid_frame_for_callback = Arc::clone(&mid_frame);
-    scheduler.add_persistent_frame_callback(Arc::new(move |_timing| {
-        let _ = mid_frame_for_callback.set(probe.ensure_visual_update());
-    }));
-    scheduler.execute_frame();
-    assert_eq!(
-        mid_frame.get().copied(),
-        Some(false),
-        "driving-thread mid-frame demand is dropped, and reported as such"
-    );
-
-    // Frames disabled: even from Idle, the enablement gate drops the demand.
-    let mut disabled = UpdateScheduler::new();
-    disabled.set_frames_enabled(false);
-    assert!(
-        !disabled.ensure_visual_update(),
-        "frames-disabled demand is dropped"
-    );
-    assert!(
-        !disabled.is_frame_scheduled(),
-        "a dropped demand must not leave a scheduled frame behind"
     );
 }

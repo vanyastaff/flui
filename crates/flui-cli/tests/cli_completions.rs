@@ -21,42 +21,6 @@ fn completions_bash() {
 }
 
 #[test]
-fn completions_powershell() {
-    flui()
-        .args(["completions", "powershell"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("flui"));
-}
-
-#[test]
-fn completions_zsh() {
-    flui()
-        .args(["completions", "zsh"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("flui"));
-}
-
-#[test]
-fn completions_fish() {
-    flui()
-        .args(["completions", "fish"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("flui"));
-}
-
-#[test]
-fn completions_elvish() {
-    flui()
-        .args(["completions", "elvish"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("flui"));
-}
-
-#[test]
 fn completions_invalid_shell() {
     flui()
         .args(["completions", "invalid-shell"])

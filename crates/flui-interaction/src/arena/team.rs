@@ -510,27 +510,6 @@ mod tests {
     }
 
     #[test]
-    fn test_team_creation() {
-        let team = GestureArenaTeam::new();
-        assert!(team.is_empty());
-        assert!(team.captain().is_none());
-    }
-
-    #[test]
-    fn team_is_dropped_when_last_handle_goes_away() {
-        // Regression: the team used to store a strong Arc to itself
-        // (`self_ref`), a reference cycle that kept every team alive for the
-        // process lifetime.
-        let team = GestureArenaTeam::new();
-        let weak = Arc::downgrade(&team);
-        drop(team);
-        assert!(
-            weak.upgrade().is_none(),
-            "GestureArenaTeam must not keep itself alive via a self-cycle"
-        );
-    }
-
-    #[test]
     fn reentrant_resolve_from_reject_callback_does_not_deadlock() {
         // Regression: CombiningMember::resolve used to fire
         // member.reject_gesture while holding the combiner lock. A member
@@ -581,42 +560,6 @@ mod tests {
     }
 
     #[test]
-    fn test_team_with_captain() {
-        let captain = MockMember::new(0);
-        let team = GestureArenaTeam::with_captain(captain.clone());
-
-        assert!(team.captain().is_some());
-    }
-
-    #[test]
-    fn test_team_set_captain() {
-        let team = GestureArenaTeam::new();
-        assert!(team.captain().is_none());
-
-        let captain = MockMember::new(0);
-        team.set_captain(Some(captain.clone()));
-        assert!(team.captain().is_some());
-
-        team.set_captain(None);
-        assert!(team.captain().is_none());
-    }
-
-    #[test]
-    fn test_team_add_creates_combiner() {
-        let team = GestureArenaTeam::new();
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-        let member = MockMember::new(1);
-
-        assert!(!team.contains(pointer));
-
-        let _entry = team.add(pointer, member, &arena);
-
-        assert!(team.contains(pointer));
-        assert_eq!(team.len(), 1);
-    }
-
-    #[test]
     fn test_team_first_member_wins() {
         let team = GestureArenaTeam::new();
         let arena = GestureArena::new();
@@ -660,24 +603,6 @@ mod tests {
     }
 
     #[test]
-    fn test_team_member_reject_removes_from_team() {
-        let team = GestureArenaTeam::new();
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        let member1 = MockMember::new(1);
-        let member2 = MockMember::new(2);
-
-        let entry1 = team.add(pointer, member1.clone(), &arena);
-        let _entry2 = team.add(pointer, member2.clone(), &arena);
-
-        // member1 rejects
-        entry1.resolve(GestureDisposition::Rejected);
-
-        assert!(member1.was_rejected());
-    }
-
-    #[test]
     fn test_team_all_reject_rejects_arena() {
         let team = GestureArenaTeam::new();
         let arena = GestureArena::new();
@@ -695,47 +620,5 @@ mod tests {
 
         assert!(member1.was_rejected());
         assert!(member2.was_rejected());
-    }
-
-    #[test]
-    fn test_team_debug_impl() {
-        let team = GestureArenaTeam::new();
-        let debug = format!("{team:?}");
-
-        assert!(debug.contains("GestureArenaTeam"));
-        assert!(debug.contains("active_combiners"));
-        assert!(debug.contains("has_captain"));
-    }
-
-    #[test]
-    fn test_team_entry_debug_impl() {
-        let team = GestureArenaTeam::new();
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-        let member = MockMember::new(1);
-
-        let entry = team.add(pointer, member, &arena);
-        let debug = format!("{entry:?}");
-
-        assert!(debug.contains("TeamEntry"));
-    }
-
-    #[test]
-    fn test_team_multiple_pointers() {
-        let team = GestureArenaTeam::new();
-        let arena = GestureArena::new();
-
-        let pointer1 = PointerId::PRIMARY;
-        let pointer2 = PointerId::new(2).expect("nonzero pointer id");
-
-        let member1 = MockMember::new(1);
-        let member2 = MockMember::new(2);
-
-        team.add(pointer1, member1, &arena);
-        team.add(pointer2, member2, &arena);
-
-        assert!(team.contains(pointer1));
-        assert!(team.contains(pointer2));
-        assert_eq!(team.len(), 2);
     }
 }

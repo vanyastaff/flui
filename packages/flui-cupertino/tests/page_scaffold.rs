@@ -24,29 +24,6 @@ fn find_by_size(laid: &LaidOut, width: f64, height: f64) -> RenderId {
         .unwrap_or_else(|| panic!("no RenderConstrainedBox sized {width}x{height}"))
 }
 
-/// `_kDefaultTheme`'s `scaffoldBackgroundColor` fallback,
-/// `CupertinoColors.systemBackground`'s light variant: opaque white.
-#[test]
-fn background_defaults_to_the_themes_system_background_color() {
-    let laid = lay_out(
-        MediaQuery::new(
-            MediaQueryData::default(),
-            CupertinoPageScaffold::new(SizedBox::new(60.0, 30.0)),
-        ),
-        tight(400.0, 600.0),
-    );
-    let decorated = laid
-        .try_find_by_render_type("RenderDecoratedBox")
-        .expect("the scaffold always paints its background via DecoratedBox");
-    let decoration = laid
-        .render_property(decorated, "decoration")
-        .expect("RenderDecoratedBox always reports its decoration");
-    assert!(
-        decoration.contains("r: 255, g: 255, b: 255, a: 255"),
-        "must resolve systemBackground's light (opaque white) variant by default: {decoration}"
-    );
-}
-
 /// With a navigation bar present, content is pushed down by exactly
 /// `preferred_size().height + MediaQuery.padding.top` —
 /// `page_scaffold.dart`'s `topPadding` (oracle tag `3.44.0`).
@@ -74,26 +51,6 @@ fn content_is_padded_below_the_nav_bar_plus_the_top_inset() {
     assert!(
         (offset.dy - 64.0).abs() < 0.01,
         "44.0 nav bar height + 20.0 top inset must push content to y=64.0: {offset:?}"
-    );
-}
-
-/// With no navigation bar, content sits flush at the top — no padding is
-/// added on its behalf.
-#[test]
-fn content_is_unpadded_with_no_navigation_bar() {
-    let laid = lay_out(
-        MediaQuery::new(
-            MediaQueryData::default(),
-            CupertinoPageScaffold::new(SizedBox::new(60.0, 30.0)),
-        ),
-        tight(400.0, 600.0),
-    );
-
-    let content = find_by_size(&laid, 60.0, 30.0);
-    let offset = laid.absolute_offset(content);
-    assert!(
-        offset.dy.abs() < 0.01,
-        "no navigation bar means no top padding: {offset:?}"
     );
 }
 

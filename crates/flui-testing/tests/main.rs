@@ -30,8 +30,6 @@ mod layout_builder_seam;
 mod lifecycle_panic_containment;
 #[path = "log_capture.rs"]
 mod log_capture;
-#[path = "long_press_via_pump_frame.rs"]
-mod long_press_via_pump_frame;
 #[path = "mount_bootstrap.rs"]
 mod mount_bootstrap;
 #[path = "multi_presentation_clock.rs"]

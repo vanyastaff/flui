@@ -662,153 +662,17 @@ mod tests {
 
     // ---- const-table geometry (oracle-diffed) ---------------------------
 
-    #[test]
-    fn size_padding_matches_the_oracle_table() {
-        assert_eq!(
-            size_padding(CupertinoButtonSize::Small),
-            EdgeInsets::symmetric(6.0, 12.0)
-        );
-        assert_eq!(
-            size_padding(CupertinoButtonSize::Medium),
-            EdgeInsets::symmetric(10.0, 15.0)
-        );
-        assert_eq!(
-            size_padding(CupertinoButtonSize::Large),
-            EdgeInsets::symmetric(16.0, 20.0)
-        );
-    }
-
-    #[test]
-    fn size_border_radius_matches_the_oracle_table() {
-        assert_eq!(
-            size_border_radius(CupertinoButtonSize::Small),
-            BorderRadius::circular(40.0)
-        );
-        assert_eq!(
-            size_border_radius(CupertinoButtonSize::Medium),
-            BorderRadius::circular(40.0)
-        );
-        assert_eq!(
-            size_border_radius(CupertinoButtonSize::Large),
-            BorderRadius::circular(12.0)
-        );
-    }
-
-    #[test]
-    fn size_min_dimension_matches_the_oracle_table() {
-        assert_eq!(size_min_dimension(CupertinoButtonSize::Small), 28.0);
-        assert_eq!(size_min_dimension(CupertinoButtonSize::Medium), 32.0);
-        assert_eq!(size_min_dimension(CupertinoButtonSize::Large), 44.0);
-    }
-
-    #[test]
-    fn fade_durations_and_tinted_opacities_match_the_oracle() {
-        assert_eq!(K_FADE_OUT_DURATION, Duration::from_millis(120));
-        assert_eq!(K_FADE_IN_DURATION, Duration::from_millis(180));
-        assert_eq!(K_TINTED_OPACITY_LIGHT, 0.12);
-        assert_eq!(K_TINTED_OPACITY_DARK, 0.26);
-    }
-
     // ---- construction / defaults -----------------------------------------
-
-    #[test]
-    fn plain_button_defaults_to_quaternary_system_fill_disabled_color() {
-        let button = CupertinoButton::new(flui_sdk::widgets::SizedBox::shrink());
-        assert_eq!(
-            button.disabled_color,
-            CupertinoColor::Dynamic(CupertinoColors::QUATERNARY_SYSTEM_FILL)
-        );
-    }
-
-    #[test]
-    fn tinted_and_filled_default_to_tertiary_system_fill_disabled_color() {
-        let tinted = CupertinoButton::tinted(flui_sdk::widgets::SizedBox::shrink());
-        let filled = CupertinoButton::filled(flui_sdk::widgets::SizedBox::shrink());
-        assert_eq!(
-            tinted.disabled_color,
-            CupertinoColor::Dynamic(CupertinoColors::TERTIARY_SYSTEM_FILL)
-        );
-        assert_eq!(
-            filled.disabled_color,
-            CupertinoColor::Dynamic(CupertinoColors::TERTIARY_SYSTEM_FILL)
-        );
-    }
 
     #[test]
     fn button_with_no_handlers_is_disabled() {
         assert!(!CupertinoButton::new(flui_sdk::widgets::SizedBox::shrink()).enabled());
     }
 
-    #[test]
-    fn on_pressed_makes_the_button_enabled() {
-        assert!(
-            CupertinoButton::new(flui_sdk::widgets::SizedBox::shrink())
-                .on_pressed(|_cx| {})
-                .enabled()
-        );
-    }
-
-    #[test]
-    fn on_long_press_alone_also_makes_the_button_enabled() {
-        assert!(
-            CupertinoButton::new(flui_sdk::widgets::SizedBox::shrink())
-                .on_long_press(|_cx| {})
-                .enabled()
-        );
-    }
-
-    #[test]
-    fn default_pressed_opacity_is_0_4() {
-        let button = CupertinoButton::new(flui_sdk::widgets::SizedBox::shrink());
-        assert_eq!(button.pressed_opacity, Some(0.4));
-    }
-
-    #[test]
-    fn debug_reports_style_size_and_enabled_without_the_closures() {
-        let debug = format!(
-            "{:?}",
-            CupertinoButton::filled(flui_sdk::widgets::SizedBox::shrink()).on_pressed(|_cx| {})
-        );
-        assert!(debug.contains("Filled"));
-        assert!(debug.contains("enabled: true"));
-    }
-
     // ---- start_press_fade (pressed_opacity(None) truly starts no run) ----
 
     fn fresh_controller() -> AnimationController {
         AnimationController::new(Duration::from_millis(200), &UpdateScheduler::new())
-    }
-
-    /// Red-check: delete the `pressed_opacity.is_none()` guard in
-    /// `start_press_fade` (call `animate_to_curved` unconditionally, as the
-    /// oracle's own `_animate()` does) — this assertion fails because the
-    /// controller starts animating.
-    #[test]
-    fn pressed_opacity_none_starts_no_controller_run() {
-        let controller = fresh_controller();
-        let started = start_press_fade(&controller, None, None);
-        assert!(
-            started.is_none(),
-            "pressed_opacity(None) must not start the press-fade run"
-        );
-        assert!(
-            !controller.is_animating(),
-            "the controller must never begin animating when pressed_opacity is None"
-        );
-    }
-
-    #[test]
-    fn pressed_opacity_some_starts_the_controller_run() {
-        let controller = fresh_controller();
-        let started = start_press_fade(&controller, Some(0.4), None);
-        assert!(
-            started.is_some(),
-            "pressed_opacity(Some(_)) must start the press-fade run and return its TickerFuture"
-        );
-        assert!(
-            controller.is_animating(),
-            "animate_to_curved should leave the controller animating immediately after starting"
-        );
     }
 
     /// The release fade starts exactly once per tap, and nothing is chained

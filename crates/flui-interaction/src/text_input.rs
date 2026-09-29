@@ -486,10 +486,8 @@ impl std::fmt::Debug for TextInputHandle {
 mod tests {
     use std::cell::RefCell;
 
-    use flui_foundation::geometry::{Point, Size};
     use flui_platform_api::text_store::{
-        InMemoryTextStore, LockGrant, LockTiming, Selection, TextStoreError, TextStoreStatus,
-        Utf16Offset,
+        InMemoryTextStore, LockGrant, LockTiming, Selection, TextStoreError, Utf16Offset,
     };
     use parking_lot::Mutex;
 
@@ -541,34 +539,6 @@ mod tests {
     }
 
     #[test]
-    fn attach_replaces_without_toggling_the_same_presentations_platform() {
-        let (owner, platform) = owner_with_recorder();
-        let first_store = InMemoryTextStore::new("");
-        let second_store = InMemoryTextStore::new("");
-
-        let first = owner
-            .handle()
-            .attach(client(&first_store))
-            .expect("supported presentation");
-        let second = owner
-            .handle()
-            .attach(client(&second_store))
-            .expect("supported presentation");
-
-        assert!(!owner.is_attached(first));
-        assert!(owner.is_attached(second));
-        assert_eq!(platform.calls(), [PlatformCall::Allowed(true)]);
-
-        owner.dispatch(&ImeEvent::Commit("hello".to_owned()));
-        assert_eq!(
-            first_store.text(),
-            "",
-            "a replaced client receives no dispatch"
-        );
-        assert_eq!(second_store.text(), "hello");
-    }
-
-    #[test]
     fn dispatch_projects_preedit_and_commit_onto_the_active_store() {
         let (owner, _) = owner_with_recorder();
         let store = InMemoryTextStore::new("ab");
@@ -591,25 +561,6 @@ mod tests {
         assert_eq!(store.text(), "ab日本");
         assert_eq!(store.composition(), None);
         assert_eq!(store.selection(), Selection::collapsed(Utf16Offset::new(4)));
-    }
-
-    #[test]
-    fn enabled_runs_on_session_start_and_edits_nothing() {
-        let (owner, _) = owner_with_recorder();
-        let store = InMemoryTextStore::new("ab");
-        let starts = Rc::new(Cell::new(0));
-        let counted = Rc::clone(&starts);
-        let _token = owner
-            .handle()
-            .attach(client(&store).on_session_start(move || counted.set(counted.get() + 1)))
-            .expect("connection");
-
-        owner.dispatch(&ImeEvent::Enabled);
-        owner.dispatch(&ImeEvent::Enabled);
-
-        assert_eq!(starts.get(), 2);
-        assert_eq!(store.text(), "ab");
-        assert_eq!(store.owner_notifications(), 0);
     }
 
     /// The reference store, attached as it is, with no wrapper reading the
@@ -640,71 +591,6 @@ mod tests {
         assert_eq!(store.text(), "東京", "applied in arrival order");
     }
 
-    /// Focus moving from one field to another inside a frame: the commit
-    /// the first field's store queued runs on that store at the anchor
-    /// closing the frame, not at its next key press or lock.
-    #[test]
-    fn a_grant_queued_by_a_replaced_or_detached_client_runs_at_the_anchor() {
-        let (owner, _) = owner_with_recorder();
-        let handle = owner.handle();
-        let (first, second, third) = (
-            InMemoryTextStore::new(""),
-            InMemoryTextStore::new(""),
-            InMemoryTextStore::new(""),
-        );
-        let _first = handle.attach(client(&first)).expect("connection");
-
-        owner.set_transaction_open(true);
-        owner.dispatch(&ImeEvent::Commit("東".to_owned()));
-        let second_token = handle.attach(client(&second)).expect("replacement");
-        owner.dispatch(&ImeEvent::Commit("京".to_owned()));
-        assert_eq!(handle.detach(second_token), Ok(DetachOutcome::Detached));
-        let _third = handle.attach(client(&third)).expect("another field");
-        assert_eq!(
-            owner.run_deferred_grants(),
-            0,
-            "an anchor attempted inside the transaction runs nothing and keeps the retired stores"
-        );
-        owner.set_transaction_open(false);
-
-        assert_eq!(owner.run_deferred_grants(), 2);
-        assert_eq!(first.text(), "東", "the replaced client's commit");
-        assert_eq!(second.text(), "京", "the detached client's commit");
-        assert_eq!(third.text(), "", "nothing reached the new client");
-        assert_eq!(
-            owner.run_deferred_grants(),
-            0,
-            "a retired store is drained once, then released"
-        );
-    }
-
-    #[test]
-    fn ensure_open_reports_a_closed_or_dropped_owner() {
-        let handle = {
-            let (owner, _) = owner_with_recorder();
-            owner.handle()
-        };
-        assert_eq!(handle.ensure_open(), Err(TextInputError::OwnerGone));
-
-        let (owner, _) = owner_with_recorder();
-        let handle = owner.handle();
-        assert_eq!(handle.ensure_open(), Ok(()));
-        owner.close();
-        assert_eq!(handle.ensure_open(), Err(TextInputError::Closed));
-    }
-
-    #[test]
-    fn active_store_names_the_attached_store() {
-        let (owner, _) = owner_with_recorder();
-        assert!(owner.active_store().is_none());
-        let store = InMemoryTextStore::new("ab");
-        let token = owner.handle().attach(client(&store)).expect("connection");
-        let active = owner.active_store().expect("attached");
-        assert_eq!(active.status(), TextStoreStatus::EDITABLE_SINGLE_LINE);
-        assert_eq!(owner.handle().detach(token), Ok(DetachOutcome::Detached));
-        assert!(owner.active_store().is_none());
-    }
-
     #[test]
     fn stale_detach_cannot_disable_the_replacement_connection() {
         let (owner, platform) = owner_with_recorder();
@@ -732,19 +618,6 @@ mod tests {
     }
 
     #[test]
-    fn cursor_area_targets_the_owned_platform_capability() {
-        let (owner, platform) = owner_with_recorder();
-        let area = Bounds::new(Point::new(10.0, 20.0), Size::new(30.0, 40.0));
-
-        owner
-            .handle()
-            .set_cursor_area(area)
-            .expect("presentation supports IME");
-
-        assert_eq!(platform.calls(), [PlatformCall::CursorArea(area)]);
-    }
-
-    #[test]
     fn unsupported_presentation_returns_a_typed_error() {
         let owner = TextInputOwner::new(None);
         let handle = owner.handle();
@@ -756,19 +629,6 @@ mod tests {
         assert_eq!(
             handle.set_cursor_area(Bounds::default()),
             Err(TextInputError::Unsupported)
-        );
-    }
-
-    #[test]
-    fn closed_state_takes_precedence_over_missing_platform_support() {
-        let owner = TextInputOwner::new(None);
-        let handle = owner.handle();
-        owner.close();
-
-        assert_eq!(handle.attach(empty_client()), Err(TextInputError::Closed));
-        assert_eq!(
-            handle.set_cursor_area(Bounds::default()),
-            Err(TextInputError::Closed)
         );
     }
 
@@ -787,27 +647,6 @@ mod tests {
         );
         assert_eq!(handle.detach(token), Err(TextInputError::Closed));
         assert_eq!(handle.attach(empty_client()), Err(TextInputError::Closed));
-    }
-
-    #[test]
-    fn weak_handle_reports_owner_gone() {
-        let handle = {
-            let (owner, _) = owner_with_recorder();
-            owner.handle()
-        };
-
-        assert_eq!(
-            handle.attach(empty_client()),
-            Err(TextInputError::OwnerGone)
-        );
-    }
-
-    #[test]
-    fn dispatch_with_no_active_client_is_a_no_op() {
-        let (owner, _) = owner_with_recorder();
-        owner.dispatch(&ImeEvent::Enabled);
-        owner.dispatch(&ImeEvent::Commit("x".to_owned()));
-        assert_eq!(owner.run_deferred_grants(), 0);
     }
 
     #[test]

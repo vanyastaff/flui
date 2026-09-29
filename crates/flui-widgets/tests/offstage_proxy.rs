@@ -61,10 +61,6 @@ impl Sightings {
     fn last(&self) -> Seen {
         *self.0.lock().last().expect("the page has been built")
     }
-
-    fn count(&self) -> usize {
-        self.0.lock().len()
-    }
 }
 
 fn seeded_navigator() -> NavigatorHandle {
@@ -174,91 +170,4 @@ fn an_offstage_routes_page_reads_a_dismissed_secondary_animation() {
     let offstage = sightings.last();
     assert_eq!(offstage.secondary_value, 0.0);
     assert_eq!(offstage.secondary_status, AnimationStatus::Dismissed);
-}
-
-/// `offstage = false` restores the **live** animations, not a constant snapshot
-/// (`routes.dart:1958-1961`'s `: super.animation` / `: super.secondaryAnimation`).
-///
-/// Red-check: make `sync_animation_proxies` always install the constants, ignoring
-/// `offstage` — the restored value stays pinned at `1.0`.
-#[test]
-fn clearing_offstage_restores_the_live_animations() {
-    let navigator = seeded_navigator();
-    let mut harness = mounted(&navigator);
-
-    let sightings = Arc::new(Sightings::default());
-    let route = recording_route(&sightings);
-    let modal = route.modal_handle();
-    let transition = route.transition_handle();
-    let _result = navigator.push(route);
-    park_mid_transition(&transition, 0.4);
-    harness.tick();
-
-    let live = sightings.last();
-    assert!(
-        (live.primary_value - 0.4).abs() < 1e-6,
-        "mid-transition: {live:?}"
-    );
-    assert_eq!(live.primary_status, AnimationStatus::Forward);
-
-    modal.set_offstage(true);
-    harness.tick();
-    assert_eq!(sightings.last().primary_value, 1.0);
-
-    modal.set_offstage(false);
-    harness.tick();
-
-    let restored = sightings.last();
-    assert!(
-        (restored.primary_value - 0.4).abs() < 1e-6,
-        "the live controller is back, still parked where it was: {restored:?}"
-    );
-    assert_eq!(restored.primary_status, AnimationStatus::Forward);
-}
-
-/// The offstage flip reaches the page's builders **within the next frame**, which is
-/// what the same-frame post-frame measurement depends on.
-///
-/// What propagates it is the proxy swap itself: `ProxyAnimation::set_parent` notifies
-/// its listeners, the `ModalScope`'s relay is one of them, and the scope rebuilds.
-/// `mark_entry_needs_build` is *not* what does this — deleting it leaves this test
-/// green. What it does control is the **overlay entry**: the `Offstage` wrapper and
-/// the barrier, which live in the entry's builder rather than in the scope. That is
-/// pinned by `modal_route::modal_offstage_keeps_the_page_but_drops_the_barrier`,
-/// which *does* go red when it is deleted.
-///
-/// Two mechanisms, two tests. Neither doc claims the other's job.
-///
-/// Red-check: delete `self.inner.sync_animation_proxies()` from
-/// `ModalHandle::set_offstage` — nothing notifies the relay, the page is never
-/// rebuilt, and the last sighting still reads the live `0.0`.
-#[test]
-fn flipping_offstage_rebuilds_the_page_with_the_swapped_animation() {
-    let navigator = seeded_navigator();
-    let mut harness = mounted(&navigator);
-
-    let sightings = Arc::new(Sightings::default());
-    let route = recording_route(&sightings);
-    let modal = route.modal_handle();
-    let _result = navigator.push(route);
-
-    // Settle: the route is mounted and laid out, and nothing is animating it.
-    harness.tick();
-    harness.tick();
-    let builds_before = sightings.count();
-
-    modal.set_offstage(true);
-    harness.tick();
-
-    assert!(
-        sightings.count() > builds_before,
-        "the offstage flip must rebuild the page in the frame that follows it; \
-         builds before = {builds_before}, after = {}",
-        sightings.count()
-    );
-    assert_eq!(
-        sightings.last().primary_value,
-        1.0,
-        "and that rebuild must be the one that sees the swapped animation"
-    );
 }

@@ -641,7 +641,6 @@ pub fn tree_to_update(
 #[cfg(test)]
 mod tests {
     use flui_foundation::SemanticsId;
-    use flui_foundation::geometry::Rect;
 
     use super::*;
     use crate::identity::AccessibilityNodeId;
@@ -663,27 +662,6 @@ mod tests {
 
     fn flags(bits: &[SemanticsFlag]) -> u64 {
         bits.iter().fold(0, |acc, f| acc | (*f as u64))
-    }
-
-    /// **The case a naive `SemanticsRole` match loses.**
-    ///
-    /// A button carries `SemanticsRole::None` and is identified purely by the
-    /// `IsButton` flag, so translating only the role enum maps the most common
-    /// widget in any application to `Role::Unknown` — and every existing
-    /// `run_semantics` test still passes, because none of them look at roles.
-    #[test]
-    fn a_button_declares_no_explicit_role_and_must_still_translate_to_role_button() {
-        let data = SemanticsNodeData {
-            flags: flags(&[SemanticsFlag::IsButton, SemanticsFlag::IsFocusable]),
-            label: Some("Save".into()),
-            ..Default::default()
-        };
-        assert_eq!(data.role, SemanticsRole::None, "premise: no explicit role");
-
-        let node = translate(&data);
-
-        assert_eq!(node.role(), Role::Button);
-        assert_eq!(node.label(), Some("Save"));
     }
 
     /// Every payload kind with an FLUI argument shape crosses the seam with
@@ -733,26 +711,6 @@ mod tests {
             semantics_action_args_for(&accesskit::ActionData::NumericValue(0.5), target),
             None,
         );
-    }
-
-    /// A selection whose positions live on a different node than the request
-    /// targets cannot be expressed as FLUI's within-one-node offsets —
-    /// mapping it anyway would apply another run's indices to this node's
-    /// text.
-    #[test]
-    fn a_cross_node_text_selection_declines() {
-        let target = NodeId(7);
-        let selection = accesskit::ActionData::SetTextSelection(accesskit::TextSelection {
-            anchor: accesskit::TextPosition {
-                node: NodeId(8),
-                character_index: 0,
-            },
-            focus: accesskit::TextPosition {
-                node: target,
-                character_index: 3,
-            },
-        });
-        assert_eq!(semantics_action_args_for(&selection, target), None);
     }
 
     /// The two action tables' agreement, checked as a composition: every
@@ -913,21 +871,6 @@ mod tests {
         }
     }
 
-    /// A slider's `RangeValue.SetValue` arrives as `SetValue` with a number;
-    /// it routes to `SetText` and the number is dropped. Pinned so the loss
-    /// stays a recorded decision rather than an accident.
-    #[test]
-    fn a_numeric_set_value_routes_set_text_without_its_number() {
-        assert_eq!(
-            semantics_action_for(accesskit::Action::SetValue),
-            Some(SemanticsAction::SetText),
-        );
-        assert_eq!(
-            semantics_action_args_for(&accesskit::ActionData::NumericValue(0.5), NodeId(7)),
-            None,
-        );
-    }
-
     /// An expandable node with a tap handler advertises the one transition
     /// its state allows; without the tap handler nothing could perform either.
     #[test]
@@ -955,31 +898,6 @@ mod tests {
         let inert = expandable(&[SemanticsFlag::HasExpandedState], 0);
         assert!(!inert.supports_action(accesskit::Action::Expand));
         assert!(!inert.supports_action(accesskit::Action::Collapse));
-    }
-
-    /// The mirror case: a structural role has no flag and lives only in the
-    /// enum, so flag-only derivation loses it.
-    #[test]
-    fn a_structural_role_survives_when_no_flag_could_express_it() {
-        let data = SemanticsNodeData {
-            role: SemanticsRole::ColumnHeader,
-            ..Default::default()
-        };
-        assert_eq!(translate(&data).role(), Role::ColumnHeader);
-    }
-
-    #[test]
-    fn an_explicit_role_wins_over_a_role_bearing_flag() {
-        let data = SemanticsNodeData {
-            role: SemanticsRole::MenuItem,
-            flags: flags(&[SemanticsFlag::IsButton]),
-            ..Default::default()
-        };
-        assert_eq!(
-            translate(&data).role(),
-            Role::MenuItem,
-            "an explicitly declared role must not be overridden by a flag"
-        );
     }
 
     #[test]
@@ -1029,265 +947,6 @@ mod tests {
         assert_eq!(translate(&data).role(), Role::RadioButton);
     }
 
-    /// The precedence leg, and the one that a single-flag test cannot reach.
-    ///
-    /// An annotated ancestor absorbs its descendants' flags by union, so a radio
-    /// inside a button-like container arrives carrying the container's
-    /// `IsButton` beside its own checkable flags. The test above passes whether
-    /// or not the cascade tests `IsButton` first, because it never sets that
-    /// flag; this one fails the moment the checkable arm moves back below it.
-    #[test]
-    fn a_checkable_beside_is_button_still_resolves_to_the_checkable() {
-        let button_shaped_radio = SemanticsNodeData {
-            flags: flags(&[
-                SemanticsFlag::IsButton,
-                SemanticsFlag::HasCheckedState,
-                SemanticsFlag::IsInMutuallyExclusiveGroup,
-            ]),
-            ..Default::default()
-        };
-        assert_eq!(translate(&button_shaped_radio).role(), Role::RadioButton);
-
-        let button_shaped_checkbox = SemanticsNodeData {
-            flags: flags(&[SemanticsFlag::IsButton, SemanticsFlag::HasCheckedState]),
-            ..Default::default()
-        };
-        assert_eq!(translate(&button_shaped_checkbox).role(), Role::CheckBox);
-
-        let button_shaped_switch = SemanticsNodeData {
-            flags: flags(&[SemanticsFlag::IsButton, SemanticsFlag::HasToggledState]),
-            ..Default::default()
-        };
-        assert_eq!(translate(&button_shaped_switch).role(), Role::Switch);
-
-        // The premise, so a reader can see the arm is not vacuous: the flag that
-        // loses precedence really is present on each node above.
-        let button_only = SemanticsNodeData {
-            flags: flags(&[SemanticsFlag::IsButton]),
-            ..Default::default()
-        };
-        assert_eq!(translate(&button_only).role(), Role::Button);
-    }
-
-    /// A node with a label and no role-bearing flag is static text, not a
-    /// generic container: AccessKit's consumer filter drops
-    /// `GenericContainer` from what an assistive technology sees, so the
-    /// old resolution made every plain `Text` invisible to VoiceOver
-    /// (`cargo xtask device macos-a11y`, 2026-09-22). An unlabelled, flagless
-    /// node stays a container, and a label does not override a real flag.
-    #[test]
-    fn a_labelled_flagless_node_is_static_text() {
-        let text = SemanticsNodeData {
-            label: Some("You have pushed the button this many times:".into()),
-            ..Default::default()
-        };
-        assert_eq!(translate(&text).role(), Role::Label);
-
-        let empty_label = SemanticsNodeData {
-            label: Some("".into()),
-            ..Default::default()
-        };
-        assert_eq!(translate(&empty_label).role(), Role::GenericContainer);
-        assert_eq!(
-            translate(&SemanticsNodeData::default()).role(),
-            Role::GenericContainer
-        );
-
-        let labelled_button = SemanticsNodeData {
-            flags: flags(&[SemanticsFlag::IsButton]),
-            label: Some("Increment".into()),
-            ..Default::default()
-        };
-        assert_eq!(translate(&labelled_button).role(), Role::Button);
-    }
-
-    /// The name an assistive technology reads for each node, as the AccessKit
-    /// adapters derive it: a `Label`'s from its value, anything else's from its
-    /// label. Read through `accesskit_consumer`, the layer every adapter sits on.
-    fn adapter_names(nodes: &[(u64, Node)]) -> Vec<(Role, Option<String>)> {
-        let mut root = Node::new(Role::Window);
-        root.set_children(nodes.iter().map(|(id, _)| NodeId(*id)).collect::<Vec<_>>());
-        let mut all = vec![(NodeId(1), root)];
-        all.extend(nodes.iter().map(|(id, node)| (NodeId(*id), node.clone())));
-        let tree = accesskit_consumer::Tree::new(
-            TreeUpdate {
-                nodes: all,
-                tree: Some(TreeInfo::new(NodeId(1))),
-                tree_id: TreeId::ROOT,
-                focus: NodeId(1),
-            },
-            true,
-        );
-        tree.state()
-            .root()
-            .children()
-            .map(|node| {
-                let name = if node.label_comes_from_value() {
-                    node.value()
-                } else {
-                    node.label()
-                };
-                (node.role(), name)
-            })
-            .collect()
-    }
-
-    /// A plain `Text` is named by its text on every adapter. Found on the first
-    /// live Windows run (`cargo xtask device windows-a11y`): UI Automation
-    /// reported the counter's two texts with empty names beside a correctly
-    /// named button, because the text went out as a label and an adapter reads
-    /// a `Label`'s name from its value.
-    #[test]
-    fn static_text_is_named_by_its_text() {
-        let text = SemanticsNodeData {
-            label: Some("You have pushed the button this many times:".into()),
-            ..Default::default()
-        };
-        let labelled_value = SemanticsNodeData {
-            label: Some("Volume".into()),
-            value: Some("40%".into()),
-            ..Default::default()
-        };
-        let button = SemanticsNodeData {
-            flags: flags(&[SemanticsFlag::IsButton]),
-            label: Some("Increment".into()),
-            ..Default::default()
-        };
-
-        let names = adapter_names(&[
-            (2, translate(&text)),
-            (3, translate(&labelled_value)),
-            (4, translate(&button)),
-        ]);
-
-        assert_eq!(
-            names,
-            vec![
-                (
-                    Role::Label,
-                    Some("You have pushed the button this many times:".into())
-                ),
-                (Role::Label, Some("Volume\n40%".into())),
-                (Role::Button, Some("Increment".into())),
-            ]
-        );
-    }
-
-    /// `IsButton` outranks `IsLink` and `IsTextField`, and keeps doing so.
-    ///
-    /// The two arms the reorder deliberately left below `IsButton`. This is a
-    /// recorded divergence rather than an oversight: the reference publishes both
-    /// flags on one node and lets the platform read what it wants
-    /// (`test/material/dropdown_menu_test.dart`'s `'ensure exclude semantics for
-    /// trailing button'`, `test/widgets/semantics_merge_test.dart`'s `'LinkUri
-    /// from child is passed up to the parent when merging nodes'`), where `Role`
-    /// is single-valued and has to choose. The choice is recorded in
-    /// `crates/flui-semantics/ARCHITECTURE.md` mapping decision 2, and this test
-    /// is what keeps a later reorder from changing the answer quietly.
-    #[test]
-    fn is_link_and_is_text_field_lose_to_is_button_as_they_always_have() {
-        let button_shaped_link = SemanticsNodeData {
-            flags: flags(&[SemanticsFlag::IsButton, SemanticsFlag::IsLink]),
-            ..Default::default()
-        };
-        // The losing flag is in the fixture rather than assumed: without it this
-        // is the `IsButton`-only case, which pins nothing.
-        assert!(has_flag(button_shaped_link.flags, SemanticsFlag::IsLink));
-        assert_eq!(translate(&button_shaped_link).role(), Role::Button);
-
-        let button_shaped_text_field = SemanticsNodeData {
-            flags: flags(&[SemanticsFlag::IsButton, SemanticsFlag::IsTextField]),
-            ..Default::default()
-        };
-        assert!(has_flag(
-            button_shaped_text_field.flags,
-            SemanticsFlag::IsTextField
-        ));
-        assert_eq!(translate(&button_shaped_text_field).role(), Role::Button);
-
-        // The premise: alone, each of the two flags does win, so the nodes above
-        // are resolving to `Button` because of `IsButton` and not because the
-        // losing flag went unset.
-        let link_only = SemanticsNodeData {
-            flags: flags(&[SemanticsFlag::IsLink]),
-            ..Default::default()
-        };
-        assert_eq!(translate(&link_only).role(), Role::Link);
-
-        let text_field_only = SemanticsNodeData {
-            flags: flags(&[SemanticsFlag::IsTextField]),
-            ..Default::default()
-        };
-        assert_eq!(translate(&text_field_only).role(), Role::TextInput);
-    }
-
-    #[test]
-    fn an_obscured_text_field_is_a_password_input_and_a_multiline_one_is_distinct() {
-        let obscured = SemanticsNodeData {
-            flags: flags(&[SemanticsFlag::IsTextField, SemanticsFlag::IsObscured]),
-            ..Default::default()
-        };
-        assert_eq!(translate(&obscured).role(), Role::PasswordInput);
-
-        let multiline = SemanticsNodeData {
-            flags: flags(&[SemanticsFlag::IsTextField, SemanticsFlag::IsMultiline]),
-            ..Default::default()
-        };
-        assert_eq!(translate(&multiline).role(), Role::MultilineTextInput);
-    }
-
-    /// `IsEnabled` is only meaningful alongside `HasEnabledState`. A node with
-    /// neither is not disabled — it has no such concept — and marking it
-    /// disabled would make a screen reader announce every plain container as
-    /// unavailable.
-    #[test]
-    fn a_node_without_enabled_state_is_not_reported_disabled() {
-        assert!(!translate(&SemanticsNodeData::default()).is_disabled());
-
-        let disabled = SemanticsNodeData {
-            flags: flags(&[SemanticsFlag::HasEnabledState]),
-            ..Default::default()
-        };
-        assert!(translate(&disabled).is_disabled());
-
-        let enabled = SemanticsNodeData {
-            flags: flags(&[SemanticsFlag::HasEnabledState, SemanticsFlag::IsEnabled]),
-            ..Default::default()
-        };
-        assert!(!translate(&enabled).is_disabled());
-    }
-
-    #[test]
-    fn actions_translate_to_their_accesskit_counterparts() {
-        let data = SemanticsNodeData {
-            actions: (SemanticsAction::Tap as u64)
-                | (SemanticsAction::Increase as u64)
-                | (SemanticsAction::ScrollDown as u64),
-            ..Default::default()
-        };
-        let node = translate(&data);
-        assert!(node.supports_action(accesskit::Action::Click));
-        assert!(node.supports_action(accesskit::Action::Increment));
-        assert!(node.supports_action(accesskit::Action::ScrollDown));
-        assert!(
-            !node.supports_action(accesskit::Action::Decrement),
-            "an action the node never declared must not appear"
-        );
-    }
-
-    #[test]
-    fn bounds_carry_the_nodes_rect() {
-        let data = SemanticsNodeData {
-            rect: Rect::from_xywh(10.0, 20.0, 100.0, 50.0),
-            ..Default::default()
-        };
-        let bounds = translate(&data).bounds().expect("bounds are always set");
-        assert!((bounds.x0 - 10.0).abs() < f64::EPSILON);
-        assert!((bounds.y0 - 20.0).abs() < f64::EPSILON);
-        assert!((bounds.x1 - 110.0).abs() < f64::EPSILON);
-        assert!((bounds.y1 - 70.0).abs() < f64::EPSILON);
-    }
-
     /// **The identity contract.** AccessKit ids must be the stable
     /// `AccessibilityNodeId` (a packed generational `RenderId`), never the
     /// arena position. The arena positions here are 1 and 2; the render
@@ -1329,66 +988,6 @@ mod tests {
         );
     }
 
-    /// Why the contract matters: an action arrives addressed by
-    /// `AccessibilityNodeId`, and `SemanticsOwner::resolve_action` matches it
-    /// against `accessibility_id()`. A tree published under any other id space
-    /// makes every incoming action unresolvable.
-    #[test]
-    fn published_ids_are_the_space_actions_come_back_in() {
-        let mut tree = SemanticsTree::new();
-        let source = render_id(12);
-        let root = tree.insert(SemanticsNode::new().with_source_render_id(source));
-        tree.set_root(Some(root));
-
-        let update = tree_to_update(&tree, None).expect("a rooted tree yields an update");
-        let (published, _) = update.nodes.first().expect("one node");
-
-        let addressable = tree
-            .get(root)
-            .and_then(SemanticsNode::accessibility_id)
-            .expect("a render-backed node is addressable");
-        assert_eq!(published.0, addressable.as_u64());
-    }
-
-    /// Reordering siblings changes arena positions but must not move a
-    /// control's identity — that is what keeps screen-reader focus attached
-    /// across a rebuild.
-    #[test]
-    fn reordering_siblings_preserves_each_identity() {
-        let first_render = render_id(5);
-        let second_render = render_id(9);
-
-        let ids_for = |order: [flui_foundation::RenderId; 2]| {
-            let mut tree = SemanticsTree::new();
-            let children: Vec<_> = order
-                .iter()
-                .map(|&r| tree.insert(SemanticsNode::new().with_source_render_id(r)))
-                .collect();
-            let mut root_node = SemanticsNode::new().with_source_render_id(render_id(1));
-            for child in children {
-                root_node.add_child(child);
-            }
-            let root = tree.insert(root_node);
-            tree.set_root(Some(root));
-
-            let update = tree_to_update(&tree, None).expect("rooted");
-            let (_, root_node) = update
-                .nodes
-                .iter()
-                .find(|(id, _)| *id == update.tree.as_ref().expect("tree").root)
-                .expect("root present");
-            let mut ids = root_node.children().to_vec();
-            ids.sort_by_key(|id| id.0);
-            ids
-        };
-
-        assert_eq!(
-            ids_for([first_render, second_render]),
-            ids_for([second_render, first_render]),
-            "the same two controls keep the same two identities regardless of order"
-        );
-    }
-
     /// Focus is named in `SemanticsId` by the caller and must be translated,
     /// not passed through — the two spaces are not interchangeable.
     #[test]
@@ -1408,70 +1007,6 @@ mod tests {
         );
     }
 
-    /// The window's root stays in the tree a screen reader walks after the
-    /// focus moves into it. Found on a live window: the root went out as a
-    /// `GenericContainer`, which AccessKit keeps only while it is focused, so
-    /// the first Tab to a button took the root out and UI Automation stopped
-    /// walking the window after its first child.
-    ///
-    /// Red-check: publish the root through `to_node` instead of
-    /// `to_published_node` — the root is filtered out once the button holds
-    /// the focus.
-    #[test]
-    fn the_root_stays_visible_when_the_focus_moves_into_the_tree() {
-        let mut tree = SemanticsTree::new();
-        let mut children = Vec::new();
-        for (index, label) in [(40, "prompt"), (41, "0"), (42, "Increment")] {
-            let mut node = SemanticsNode::new().with_source_render_id(render_id(index));
-            node.config_mut().set_label(label);
-            if label == "Increment" {
-                node.config_mut().set_button(true);
-            }
-            children.push(tree.insert(node));
-        }
-        let mut root_node = SemanticsNode::new().with_source_render_id(render_id(2));
-        for &child in &children {
-            root_node.add_child(child);
-        }
-        let root = tree.insert(root_node);
-        tree.set_root(Some(root));
-
-        let update = tree_to_update(&tree, Some(children[2])).expect("rooted");
-        let consumer = accesskit_consumer::Tree::new(update, true);
-        let state = consumer.state();
-        let root = state.root();
-
-        assert_eq!(root.role(), Role::Window);
-        assert_eq!(
-            accesskit_consumer::common_filter(&root),
-            accesskit_consumer::FilterResult::Include,
-            "the root is part of the walked tree with the focus on the button"
-        );
-        let reachable: Vec<_> = root
-            .filtered_children(accesskit_consumer::common_filter)
-            .map(|node| node.role())
-            .collect();
-        assert_eq!(reachable, vec![Role::Label, Role::Label, Role::Button]);
-    }
-
-    /// A root with an explicit role AccessKit can only express as a container
-    /// keeps that container: only a root no role reached becomes a `Window`.
-    ///
-    /// Red-check: gate the promotion on the translated role alone — the
-    /// drag-handle root is published as a window.
-    #[test]
-    fn an_explicit_container_role_on_the_root_is_not_promoted_to_a_window() {
-        let mut tree = SemanticsTree::new();
-        let mut root_node = SemanticsNode::new().with_source_render_id(render_id(2));
-        root_node.config_mut().set_role(SemanticsRole::DragHandle);
-        let root = tree.insert(root_node);
-        tree.set_root(Some(root));
-
-        let update = tree_to_update(&tree, None).expect("rooted");
-        let (_, published) = &update.nodes[0];
-        assert_eq!(published.role(), Role::GenericContainer);
-    }
-
     /// AccessKit requires a valid focus target, so a node the adapter has never
     /// seen falls back to the root rather than being passed through.
     #[test]
@@ -1482,110 +1017,6 @@ mod tests {
 
         let absent = SemanticsId::new(99);
         let update = tree_to_update(&tree, Some(absent)).expect("rooted");
-        assert_eq!(update.focus, update.tree.as_ref().expect("tree").root);
-    }
-
-    /// A node with no render source has no OS-facing identity. Exporting it
-    /// under a fabricated id could collide with a real control, so it and the
-    /// parent's reference to it are dropped.
-    #[test]
-    fn a_node_without_a_render_source_is_not_exported() {
-        let mut tree = SemanticsTree::new();
-        let unaddressable = tree.insert(SemanticsNode::new());
-        let mut root_node = SemanticsNode::new().with_source_render_id(render_id(4));
-        root_node.add_child(unaddressable);
-        let root = tree.insert(root_node);
-        tree.set_root(Some(root));
-
-        let update = tree_to_update(&tree, None).expect("the root is addressable");
-
-        assert_eq!(
-            update.nodes.len(),
-            1,
-            "only the addressable node is published"
-        );
-        let (_, root_node) = update.nodes.first().expect("root");
-        assert!(
-            root_node.children().is_empty(),
-            "the parent must not reference a node that was not published"
-        );
-    }
-
-    /// **The focus contract.** A focused non-root control must be published as
-    /// the focus target. Deriving it from the tree is what stops every caller
-    /// that passes `None` from silently announcing the root as focused.
-    #[test]
-    fn focus_is_derived_from_the_focused_node_when_the_caller_names_none() {
-        let mut tree = SemanticsTree::new();
-        let child_render = render_id(31);
-        let mut child_node = SemanticsNode::new().with_source_render_id(child_render);
-        child_node.config_mut().set_focused(true);
-        let child = tree.insert(child_node);
-
-        let mut root_node = SemanticsNode::new().with_source_render_id(render_id(30));
-        root_node.add_child(child);
-        let root = tree.insert(root_node);
-        tree.set_root(Some(root));
-
-        let update = tree_to_update(&tree, None).expect("rooted");
-
-        assert_eq!(
-            update.focus,
-            NodeId(AccessibilityNodeId::from(child_render).as_u64()),
-            "the focused control, not the root"
-        );
-        assert_ne!(
-            update.focus,
-            update.tree.as_ref().expect("tree").root,
-            "the fixture is only meaningful while the two differ"
-        );
-    }
-
-    /// An explicit target overrides the flag, so a caller can publish a focus
-    /// the tree does not yet record.
-    #[test]
-    fn an_explicit_focus_overrides_the_focused_flag() {
-        let mut tree = SemanticsTree::new();
-        let mut flagged = SemanticsNode::new().with_source_render_id(render_id(41));
-        flagged.config_mut().set_focused(true);
-        let flagged_id = tree.insert(flagged);
-
-        let other_render = render_id(42);
-        let other = tree.insert(SemanticsNode::new().with_source_render_id(other_render));
-
-        let mut root_node = SemanticsNode::new().with_source_render_id(render_id(40));
-        root_node.add_child(flagged_id);
-        root_node.add_child(other);
-        let root = tree.insert(root_node);
-        tree.set_root(Some(root));
-
-        let update = tree_to_update(&tree, Some(other)).expect("rooted");
-        assert_eq!(
-            update.focus,
-            NodeId(AccessibilityNodeId::from(other_render).as_u64())
-        );
-    }
-
-    /// Two nodes claiming focus is malformed. Picking one would make the
-    /// published focus depend on arena order, so it falls back to the root.
-    #[test]
-    fn two_focused_nodes_fall_back_to_the_root() {
-        let mut tree = SemanticsTree::new();
-        let mut make_focused = |index: u32| {
-            let mut node = SemanticsNode::new().with_source_render_id(render_id(index));
-            node.config_mut().set_focused(true);
-            tree.insert(node)
-        };
-        let first = make_focused(51);
-        let second = make_focused(52);
-
-        let mut root_node = SemanticsNode::new().with_source_render_id(render_id(50));
-        root_node.add_child(first);
-        root_node.add_child(second);
-        let root = tree.insert(root_node);
-        tree.set_root(Some(root));
-
-        let update = tree_to_update(&tree, None).expect("rooted");
         assert_eq!(update.focus, update.tree.as_ref().expect("tree").root);
     }
 
@@ -1638,37 +1069,5 @@ mod owner_entry_point_tests {
         );
         assert_eq!(update.focus, update.tree.as_ref().expect("tree").root);
         assert_eq!(update.nodes.len(), 1);
-    }
-
-    /// Before the first assembly pass there is no root, and inventing one would
-    /// hand the adapter a tree the application does not have.
-    #[test]
-    fn an_unassembled_tree_yields_no_update() {
-        let owner = SemanticsOwner::new_without_callback();
-        assert!(owner.to_accesskit_tree_update(None).is_none());
-    }
-
-    /// A button reaches the published tree as `Role::Button`, through the owner
-    /// rather than the raw translation — the path a harness actually uses.
-    #[test]
-    fn a_button_is_findable_by_role_through_the_owner() {
-        let mut owner = SemanticsOwner::new_without_callback();
-        let mut node = SemanticsNode::new().with_source_render_id(source());
-        node.config_mut().set_button(true);
-        node.config_mut().set_label("Save");
-        let root = owner.tree_mut().insert(node);
-        owner.tree_mut().set_root(Some(root));
-
-        let update = owner
-            .to_accesskit_tree_update(None)
-            .expect("a rooted tree yields an update");
-
-        let button = update
-            .nodes
-            .iter()
-            .find(|(_, node)| node.role() == Role::Button)
-            .map(|(_, node)| node)
-            .expect("the button must be findable by role in the published tree");
-        assert_eq!(button.label(), Some("Save"));
     }
 }

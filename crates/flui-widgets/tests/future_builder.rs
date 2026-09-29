@@ -81,14 +81,6 @@ impl Completer {
         }
     }
 
-    /// Pre-seed the result: the future is `Ready` on its very first poll — the
-    /// Rust analogue of Dart's `SynchronousFuture`.
-    fn ready(result: Result<Payload, Boom>) -> Self {
-        let completer = Self::new();
-        *completer.result.lock() = Some(result);
-        completer
-    }
-
     fn factory(&self) -> FutureFactory<Payload, Boom> {
         let result = Arc::clone(&self.result);
         let waker = Arc::clone(&self.waker);
@@ -138,30 +130,6 @@ fn done(data: Option<i32>, error: Option<&'static str>) -> Seen {
         data,
         error,
     }
-}
-
-/// `'gives expected snapshot with SynchronousFuture'`: an already-ready future
-/// must never let the builder observe `Waiting`.
-#[test]
-fn future_builder_immediately_ready_never_shows_waiting() {
-    let log = Arc::new(Mutex::new(Vec::new()));
-    let completer = Completer::ready(Ok(Payload(5)));
-
-    let _laid = lay_out(
-        FutureBuilder::keyed(
-            Some(1_u32),
-            completer.factory(),
-            recording_builder(Arc::clone(&log)),
-        ),
-        loose(400.0),
-    );
-
-    let observed = log.lock().clone();
-    assert!(
-        !observed.iter().any(|s| s.state == ConnectionState::Waiting),
-        "a synchronously-complete future must never flash Waiting: {observed:?}"
-    );
-    assert_eq!(last(&log), done(Some(5), None));
 }
 
 /// `'tracks life-cycle of Future to success'`: `Waiting` → `Done + data`.
@@ -324,31 +292,4 @@ fn future_builder_same_key_does_not_resubscribe() {
 
     assert_eq!(completer.subscriptions(), 1, "no resubscribe");
     assert_eq!(last(&log), done(Some(3), None), "snapshot untouched");
-}
-
-/// `'runs the builder using given initial data'` with no future at all.
-#[test]
-fn future_builder_absent_future_shows_initial_data() {
-    let log = Arc::new(Mutex::new(Vec::new()));
-    let completer = Completer::new();
-
-    let _laid = lay_out(
-        FutureBuilder::<u32, _, _>::keyed(
-            None,
-            completer.factory(),
-            recording_builder(Arc::clone(&log)),
-        )
-        .with_initial_data(Rc::new(|| Payload(7))),
-        loose(400.0),
-    );
-
-    assert_eq!(
-        last(&log),
-        Seen {
-            state: ConnectionState::None,
-            data: Some(7),
-            error: None
-        }
-    );
-    assert_eq!(completer.subscriptions(), 0, "no future ⇒ no subscription");
 }

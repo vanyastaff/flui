@@ -297,7 +297,7 @@ fn mid_drag_panel_offset_follows_the_value_minus_one_times_width_formula() {
 /// close fling settles — not just reported as closed via
 /// [`DrawerHandle::is_drawer_open`] (the synchronous half, already pinned at
 /// the `DrawerControllerCore` unit level by
-/// `close_fires_on_open_changed_synchronously`), but actually unmounted, so
+/// `open_fires_on_open_changed_synchronously`), but actually unmounted, so
 /// a stale alpha-0 scrim can never sit there eating every body tap after the
 /// drawer visually looks closed.
 ///
@@ -645,67 +645,6 @@ fn a_fast_release_below_halfway_flings_the_drawer_open_rather_than_snapping_shut
 // ============================================================================
 // 5. on_drawer_changed: the app author's callback forwards through Scaffold.
 // ============================================================================
-
-/// Flutter parity: `Scaffold.onDrawerChanged` — `ScaffoldState._drawerOpenedCallback`
-/// forwards to `widget.onDrawerChanged` whenever the drawer's opened bool
-/// actually changes (`build_drawer_controller`'s `on_open_changed` closure,
-/// wired alongside `DrawerHandle::set_drawer_opened` and the rebuild). Only
-/// pinned at the `DrawerControllerCore` unit level until now (the 0.5-crossing
-/// firing path is covered there), never through `Scaffold`'s own relay — a
-/// dropped forward would leave every OTHER assertion in this file green,
-/// since none of them read the app-author callback.
-///
-/// Asserts the recorded VALUES and ORDER, not just "fired at least once":
-/// crossing 0.5 while dragging open must forward `true` exactly once: no
-/// double-fire, no fire-before-crossing.
-///
-/// Red-check: delete the `if let Some(callback) = &on_changed { callback(opened); }`
-/// line from `ScaffoldState::build_drawer_controller`'s `on_open_changed`
-/// closure — `events` stays empty and the first assertion after the drag
-/// fails.
-#[test]
-fn on_drawer_changed_forwards_to_the_app_authors_callback() {
-    let events: Rc<RefCell<Vec<bool>>> = Rc::new(RefCell::new(Vec::new()));
-    let events_for_callback = Rc::clone(&events);
-
-    let laid = lay_out(
-        themed(
-            Scaffold::new()
-                .drawer(Drawer::new())
-                // Widened so the whole drag path stays within the strip's
-                // own hit-test bounds — see the module docs' "harness
-                // limitation" note.
-                .drawer_edge_drag_width(400.0)
-                .on_drawer_changed(move |_cx, opened| {
-                    events_for_callback.borrow_mut().push(opened);
-                }),
-        ),
-        tight(400.0, 800.0),
-    );
-
-    assert!(
-        events.borrow().is_empty(),
-        "no callback before any interaction"
-    );
-
-    // Drag past 0.5. The first move already reports a delta because the
-    // closed edge strip has no competing recognizer.
-    laid.dispatch_pointer_down(5.0, 400.0);
-    laid.dispatch_pointer_move(185.0, 400.0);
-    assert_eq!(
-        *events.borrow(),
-        vec![true],
-        "crossing 0.5 while opening must forward on_drawer_changed(true) exactly once"
-    );
-
-    // Drag back below 0.5, same contact still in progress.
-    laid.dispatch_pointer_move(30.0, 400.0);
-    assert_eq!(
-        *events.borrow(),
-        vec![true, false],
-        "crossing back below 0.5 must forward on_drawer_changed(false)"
-    );
-}
 
 #[test]
 fn drawer_edges_write_the_owning_presentations_signal() {

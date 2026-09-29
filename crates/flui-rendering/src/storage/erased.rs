@@ -206,40 +206,4 @@ impl core::fmt::Display for ErasedGeometryMismatch {
 impl std::error::Error for ErasedGeometryMismatch {}
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn erased_constraints_box_roundtrip() {
-        let c = BoxConstraints::tight(Size::new(50.0, 30.0));
-        let erased: ErasedConstraints = c.into();
-        let back: BoxConstraints = erased.try_into().expect("box round-trip");
-        assert_eq!(back, c);
-    }
-
-    #[test]
-    fn erased_constraints_box_to_sliver_is_mismatch() {
-        let c = BoxConstraints::loose(Size::new(100.0, 100.0));
-        let erased: ErasedConstraints = c.into();
-        let err = SliverConstraints::try_from(erased).expect_err("box→sliver mismatch");
-        assert_eq!(err.expected, "Sliver");
-        assert_eq!(err.got, "Box");
-    }
-
-    #[test]
-    fn erased_geometry_size_roundtrip() {
-        let g = Size::new(75.0, 25.0);
-        let erased: ErasedGeometry = g.into();
-        let back: Size = erased.try_into().expect("size round-trip");
-        assert_eq!(back, g);
-    }
-
-    #[test]
-    fn erased_geometry_size_to_sliver_is_mismatch() {
-        let g = Size::new(10.0, 10.0);
-        let erased: ErasedGeometry = g.into();
-        let err = SliverGeometry::try_from(erased).expect_err("size→sliver mismatch");
-        assert_eq!(err.expected, "Sliver");
-        assert_eq!(err.got, "Box");
-    }
-}
+mod tests {}

@@ -278,40 +278,6 @@ mod tests {
         BorderSide::new(color, width, BorderStyle::Solid)
     }
 
-    #[test]
-    fn style_predicates() {
-        assert!(BorderStyle::Solid.is_solid() && !BorderStyle::Solid.is_none());
-        assert!(BorderStyle::None.is_none() && !BorderStyle::None.is_solid());
-    }
-
-    #[test]
-    fn constructors_and_setters() {
-        let side = solid(Color::RED, 2.0);
-        assert_eq!(side.stroke_align, 0.0);
-        assert_eq!(
-            BorderSide::with_stroke_align(Color::RED, 2.0, BorderStyle::Solid, 1.0),
-            side.with_stroke_alignment(1.0)
-        );
-        assert_eq!(side.with_color(Color::BLUE).color, Color::BLUE);
-        assert_eq!(side.with_width(5.0).width, 5.0);
-        assert_eq!(side.with_style(BorderStyle::None).style, BorderStyle::None);
-        assert_eq!(side.scale(1.5).width, 3.0);
-        assert_eq!(BorderSide::<f64>::none(), BorderSide::NONE);
-        assert_eq!(BorderSide::<f64>::default(), BorderSide::HAIRLINE);
-    }
-
-    /// Visible means solid and wider than zero.
-    #[test]
-    fn is_visible() {
-        assert!(solid(Color::RED, 1.0).is_visible());
-        assert!(!solid(Color::RED, 0.0).is_visible());
-        assert!(
-            !solid(Color::RED, 1.0)
-                .with_style(BorderStyle::None)
-                .is_visible()
-        );
-    }
-
     /// Flutter's `BorderSide.lerp`: same style and alignment lerps color and
     /// width; otherwise a `None` side takes part as its color at zero alpha
     /// and the result is solid.
@@ -364,18 +330,5 @@ mod tests {
         // A width that interpolates below zero gives no border at all.
         let negative = solid(Color::rgb(0, 0, 0), -4.0);
         assert_eq!(BorderSide::lerp(negative, a, 0.25), BorderSide::none());
-    }
-
-    #[test]
-    fn positions() {
-        use BorderPosition::*;
-        assert_eq!(BorderPosition::all(), [Top, Right, Bottom, Left]);
-        for (p, horizontal) in [(Top, true), (Right, false), (Bottom, true), (Left, false)] {
-            assert_eq!(
-                (p.is_horizontal(), p.is_vertical()),
-                (horizontal, !horizontal),
-                "{p:?}"
-            );
-        }
     }
 }

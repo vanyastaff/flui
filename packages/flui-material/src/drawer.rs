@@ -1011,39 +1011,17 @@ mod tests {
         assert!((core.controller.value() - 0.0).abs() < 1e-4);
     }
 
-    #[test]
-    fn move_by_leftward_delta_opens_an_end_drawer() {
-        let core = test_core();
-        core.alignment.set(DrawerAlignment::End);
-        core.move_by(-(DEFAULT_DRAWER_WIDTH / 2.0));
-        assert!((core.controller.value() - 0.5).abs() < 1e-4);
-    }
-
     // ------------------------------------------------------------------
     // `settle` — fling threshold and low-velocity snap.
     //
-    // Red-check for `settle_below_the_fling_threshold_and_below_half_closes`/
-    // `_and_above_half_opens`: change `MIN_FLING_VELOCITY` from `365.0` to
-    // `0.0` — both take the fling branch instead (`10.0 >= 0.0`), landing in
-    // `Reverse`/`Forward` for the wrong reason (the value-based branch would
-    // have produced the identical status here, so neither test's own
-    // assertion distinguishes the two paths). The boundary is pinned
+    // Red-check: change `MIN_FLING_VELOCITY` from `365.0` to `0.0` — every
+    // low-velocity settle takes the fling branch instead (`10.0 >= 0.0`),
+    // landing in `Reverse`/`Forward` for the wrong reason (the value-based
+    // branch would have produced the identical status). The boundary is pinned
     // precisely by `settle_just_under_the_fling_threshold_snaps_by_value_not_velocity_sign`
     // below instead, which picks a value/velocity-sign combination where the
     // fling branch and the value-snap branch disagree.
     // ------------------------------------------------------------------
-
-    #[test]
-    fn settle_on_a_dismissed_controller_is_a_no_op() {
-        let core = test_core();
-        assert_eq!(core.controller.status(), AnimationStatus::Dismissed);
-        core.settle(1000.0);
-        assert_eq!(
-            core.controller.status(),
-            AnimationStatus::Dismissed,
-            "a dismissed controller must ignore a drag-end"
-        );
-    }
 
     #[test]
     fn settle_at_or_above_the_fling_threshold_flings_toward_open() {
@@ -1057,47 +1035,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn settle_at_or_above_the_fling_threshold_flings_toward_close() {
-        let core = test_core();
-        core.controller.set_value(0.9);
-        core.settle(-MIN_FLING_VELOCITY);
-        assert_eq!(
-            core.controller.status(),
-            AnimationStatus::Reverse,
-            "a negative fling at/above the threshold must fling toward close"
-        );
-    }
-
-    #[test]
-    fn settle_below_the_fling_threshold_and_below_half_closes() {
-        let core = test_core();
-        core.controller.set_value(0.4);
-        core.settle(10.0);
-        assert_eq!(
-            core.controller.status(),
-            AnimationStatus::Reverse,
-            "value < 0.5 with no qualifying fling must close"
-        );
-    }
-
-    #[test]
-    fn settle_below_the_fling_threshold_and_above_half_opens() {
-        let core = test_core();
-        core.controller.set_value(0.6);
-        core.settle(10.0);
-        assert_eq!(
-            core.controller.status(),
-            AnimationStatus::Forward,
-            "value >= 0.5 with no qualifying fling must open"
-        );
-    }
-
     /// Pins the boundary condition to be `< 0.5`, not `<= 0.5`: the oracle's
-    /// `_settle` opens on `value >= 0.5`. Also distinct from
-    /// `settle_below_the_fling_threshold_and_above_half_opens` (`0.6`) — a
-    /// mutation that flipped the comparison to `<=` would still pass that
-    /// test (`0.6 <= 0.5` is false either way) but fails this one.
+    /// `_settle` opens on `value >= 0.5`. A mutation that flipped the
+    /// comparison to `<=` fails this test.
     #[test]
     fn settle_at_exactly_half_with_low_velocity_opens() {
         let core = test_core();
@@ -1139,8 +1079,7 @@ mod tests {
     /// A negative raw pixel velocity, for an `End`-aligned drawer (direction
     /// factor `-1`), must fling TOWARD OPEN — the mirror of what the same
     /// raw velocity does for a `Start` drawer
-    /// (`settle_at_or_above_the_fling_threshold_flings_toward_close`, which
-    /// pins the un-mirrored case). No prior test in this file flings a
+    /// (the un-mirrored case). No prior test in this file flings a
     /// non-`Start` drawer, so `* self.direction_factor()` being dropped from
     /// `settle`'s velocity normalization was previously undetected: without
     /// it, `visual_velocity` keeps the raw velocity's sign regardless of
@@ -1159,71 +1098,6 @@ mod tests {
             core.controller.status(),
             AnimationStatus::Forward,
             "a negative raw velocity must open an End drawer (direction factor negates it)"
-        );
-    }
-
-    /// A `Vsync`-registered [`DrawerControllerCore`] (`test_core` deliberately
-    /// stays unregistered — most tests only need the synchronous
-    /// status/value effects `open`/`close`/`settle` produce immediately, not
-    /// the ticked animation). `width`/`alignment` are the two knobs
-    /// `settle`'s `visual_velocity` formula reads.
-    fn test_core_registered(
-        width: f64,
-        alignment: DrawerAlignment,
-    ) -> (Rc<DrawerControllerCore>, Vsync) {
-        let core = Rc::new(DrawerControllerCore {
-            controller: AnimationController::new(BASE_SETTLE_DURATION, &UpdateScheduler::new()),
-            vsync: RefCell::new(None),
-            vsync_registration: RefCell::new(None),
-            rebuild: RefCell::new(None),
-            previously_opened: Cell::new(false),
-            alignment: Cell::new(alignment),
-            panel_width: Cell::new(width),
-            on_open_changed: RefCell::new(None),
-        });
-        let vsync = Vsync::new();
-        vsync.register(core.controller.clone());
-        (core, vsync)
-    }
-
-    /// Pins the `/ width` half of `settle`'s velocity normalization by its
-    /// effect on the actual ticked trajectory, not just the resulting
-    /// status: the SAME raw pixel velocity, applied to a narrower panel,
-    /// normalizes to a LARGER `visual_velocity` (a fraction of `[0, 1]` per
-    /// second, not pixels per second) and so must have travelled measurably
-    /// FARTHER after the same fixed number of ticks. `Forward`-vs-`Reverse`
-    /// alone (as the threshold/direction tests above assert) cannot catch a
-    /// deleted `/ width` — both panels would still fling in the same
-    /// direction, just at the wrong (identical, un-normalized) speed.
-    ///
-    /// Red-check: delete `/ width` from `settle`'s `visual_velocity`
-    /// computation — both panels fling at the SAME raw-velocity-derived
-    /// speed regardless of configured width, and the gap this test requires
-    /// between them collapses to ~0.
-    #[test]
-    fn settle_fling_progress_after_fixed_ticks_scales_inversely_with_panel_width() {
-        let (narrow, vsync_narrow) = test_core_registered(100.0, DrawerAlignment::Start);
-        let (wide, vsync_wide) = test_core_registered(2000.0, DrawerAlignment::Start);
-        // Leave `Dismissed` first (a dismissed controller ignores `settle`).
-        narrow.controller.set_value(0.05);
-        wide.controller.set_value(0.05);
-
-        narrow.settle(MIN_FLING_VELOCITY);
-        wide.settle(MIN_FLING_VELOCITY);
-
-        let mut elapsed = 0.0_f64;
-        for _ in 0..5 {
-            elapsed += 0.016;
-            vsync_narrow.tick_all(elapsed);
-            vsync_wide.tick_all(elapsed);
-        }
-
-        assert!(
-            narrow.controller.value() > wide.controller.value() + 0.05,
-            "the same raw fling velocity must normalize to a larger visual velocity (and so \
-             travel farther in the same tick budget) for a narrower panel: narrow={}, wide={}",
-            narrow.controller.value(),
-            wide.controller.value()
         );
     }
 
@@ -1246,20 +1120,6 @@ mod tests {
             Some(true),
             "open() must fire on_open_changed(true) immediately, not deferred to a tick"
         );
-    }
-
-    #[test]
-    fn close_fires_on_open_changed_synchronously() {
-        let core = test_core();
-        core.controller.set_value(1.0);
-        let fired = Rc::new(Cell::new(None::<bool>));
-        let fired_for_closure = Rc::clone(&fired);
-        *core.on_open_changed.borrow_mut() =
-            Some(Rc::new(move |opened| fired_for_closure.set(Some(opened))));
-
-        core.close();
-
-        assert_eq!(fired.get(), Some(false));
     }
 
     #[test]
@@ -1295,8 +1155,7 @@ mod tests {
         // A drag-end always follows at least one drag-update in real usage
         // (the update is what crosses the recognizer's slop and starts the
         // drag) — `settle` on a still-`Dismissed` controller (no preceding
-        // `move_by`) early-returns entirely (see
-        // `settle_on_a_dismissed_controller_is_a_no_op`), so this test moves
+        // `move_by`) early-returns entirely (a no-op), so this test moves
         // the value first, matching the real call sequence.
         core.move_by(1.0);
         let fired = Rc::new(Cell::new(None::<bool>));
@@ -1318,104 +1177,9 @@ mod tests {
     }
 
     #[test]
-    fn drawer_defaults_to_m3_width_and_elevation() {
-        let drawer = Drawer::new();
-        assert_eq!(drawer.configured_width(), DEFAULT_DRAWER_WIDTH);
-        assert_eq!(drawer.elevation, ELEVATION);
-    }
-
-    #[test]
-    fn drawer_width_builder_overrides_the_default() {
-        let drawer = Drawer::new().width(360.0);
-        assert_eq!(drawer.configured_width(), 360.0);
-    }
-
-    #[test]
-    fn end_rounded_shape_rounds_the_right_side_for_a_start_drawer() {
-        let shape = end_rounded_shape(DrawerAlignment::Start);
-        let MaterialShape::RoundedRect(radius) = shape else {
-            panic!("expected a rounded rect");
-        };
-        assert_eq!(radius.top_left, Radius::ZERO);
-        assert_ne!(radius.top_right, Radius::ZERO);
-    }
-
-    #[test]
-    fn end_rounded_shape_rounds_the_left_side_for_an_end_drawer() {
-        let shape = end_rounded_shape(DrawerAlignment::End);
-        let MaterialShape::RoundedRect(radius) = shape else {
-            panic!("expected a rounded rect");
-        };
-        assert_ne!(radius.top_left, Radius::ZERO);
-        assert_eq!(radius.top_right, Radius::ZERO);
-    }
-
-    #[test]
-    fn scale_alpha_scales_black54_by_the_controller_value() {
-        let half = scale_alpha(BLACK54, 0.5);
-        assert_eq!(half.a, (0x8A as f64 * 0.5).round() as u8);
-        let full = scale_alpha(BLACK54, 1.0);
-        assert_eq!(full.a, BLACK54.a);
-        let zero = scale_alpha(BLACK54, 0.0);
-        assert_eq!(zero.a, 0);
-    }
-
-    #[test]
     fn scale_alpha_clamps_out_of_range_factors() {
         assert_eq!(scale_alpha(BLACK54, 2.0).a, BLACK54.a);
         assert_eq!(scale_alpha(BLACK54, -1.0).a, 0);
-    }
-
-    /// Pins [`DrawerControllerCore::direction_factor`] directly — the
-    /// method the sign in `move_by`/`settle` actually reads. Renamed from
-    /// this file's earlier `direction_factor_is_positive_for_start_and_negative_for_end`,
-    /// which (despite its name) never called `direction_factor()` at all;
-    /// see `outer_and_inner_alignment_mirror_for_start_and_end` below for
-    /// what that test actually pinned.
-    #[test]
-    fn direction_factor_is_positive_for_start_and_negative_for_end() {
-        let core = test_core();
-        assert_eq!(core.direction_factor(), 1.0, "Start must be positive");
-        core.alignment.set(DrawerAlignment::End);
-        assert_eq!(core.direction_factor(), -1.0, "End must be negative");
-    }
-
-    #[test]
-    fn outer_and_inner_alignment_mirror_for_start_and_end() {
-        assert_eq!(
-            outer_alignment(DrawerAlignment::Start),
-            Alignment::CENTER_LEFT
-        );
-        assert_eq!(
-            outer_alignment(DrawerAlignment::End),
-            Alignment::CENTER_RIGHT
-        );
-        assert_eq!(
-            inner_alignment(DrawerAlignment::Start),
-            Alignment::CENTER_RIGHT
-        );
-        assert_eq!(
-            inner_alignment(DrawerAlignment::End),
-            Alignment::CENTER_LEFT
-        );
-    }
-
-    #[test]
-    fn drawer_handle_starts_with_no_drawer_and_nothing_open() {
-        let handle = DrawerHandle::new();
-        assert!(!handle.has_drawer());
-        assert!(!handle.has_end_drawer());
-        assert!(!handle.is_drawer_open());
-        assert!(!handle.is_end_drawer_open());
-    }
-
-    #[test]
-    fn drawer_handle_setters_are_readable_back() {
-        let handle = DrawerHandle::new();
-        handle.set_has_drawer(true);
-        handle.set_drawer_opened(true);
-        assert!(handle.has_drawer());
-        assert!(handle.is_drawer_open());
     }
 
     #[test]

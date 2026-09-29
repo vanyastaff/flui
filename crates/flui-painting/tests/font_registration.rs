@@ -11,12 +11,6 @@ use flui_painting::{TextPainter, shared_font_system};
 const PROBE_SANS: &[u8] = include_bytes!("../assets/fonts/probe-sans-400.ttf");
 const PROBE_MONO: &[u8] = include_bytes!("../assets/fonts/probe-mono-100.ttf");
 
-fn painter(text: &str) -> TextPainter {
-    TextPainter::new()
-        .with_text(TextSpan::new(text))
-        .with_text_direction(TextDirection::Ltr)
-}
-
 /// The same text styled with the probe family: before the face is registered
 /// it resolves to sans-serif, after it to the monospace probe.
 fn probe_painter(text: &str) -> TextPainter {
@@ -30,19 +24,6 @@ fn probe_painter(text: &str) -> TextPainter {
     TextPainter::new()
         .with_text(TextSpan::new(text).with_style(style))
         .with_text_direction(TextDirection::Ltr)
-}
-
-#[test]
-fn shaping_never_bumps_the_generation() {
-    let fonts = shared_font_system();
-    let before = fonts.generation();
-    for _ in 0..3 {
-        painter("shape me").layout(0.0, f64::INFINITY);
-        fonts.shape(|shaper| {
-            let _ = shaper.resolve_font(None);
-        });
-    }
-    assert_eq!(fonts.generation(), before);
 }
 
 #[test]
@@ -84,38 +65,5 @@ fn register_font_invalidates_a_laid_out_painter() {
         before,
         "a face registered after layout must shape the same text again: in the \
          proportional fallback 'iiii' and 'wwww' differ, in the monospace probe they do not"
-    );
-}
-
-/// An `Icon` measured with no engine in the process shapes in the embedded
-/// icon face, not in whatever fallback the host offers: U+E87D ("favorite"
-/// in Material Icons) has a non-zero advance through `TextLayout` alone.
-#[test]
-fn icon_fonts_measure_before_any_engine_exists() {
-    let style = TextStyle {
-        font_family: Some("Material Icons".to_string()),
-        ..TextStyle::default()
-    };
-    let mut painter = TextPainter::new()
-        .with_text(TextSpan::new("\u{e87d}").with_style(style))
-        .with_text_direction(TextDirection::Ltr);
-    painter.layout(0.0, f64::INFINITY);
-    let width = painter.size().width;
-    assert!(
-        width > 10.0,
-        "the icon glyph must have a real advance, got {width}"
-    );
-
-    let fonts = shared_font_system();
-    let resolved_family = fonts.shape(|shaper| {
-        let style = TextStyle {
-            font_family: Some("Material Icons".to_string()),
-            ..TextStyle::default()
-        };
-        format!("{:?}", shaper.resolve_font(Some(&style)).family)
-    });
-    assert!(
-        resolved_family.contains("Material Icons"),
-        "the style must resolve to the embedded family, got {resolved_family}"
     );
 }

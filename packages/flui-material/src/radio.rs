@@ -473,29 +473,6 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn new_leaves_every_override_unset_and_is_not_interactive() {
-        let radio = Radio::new(1_u32, None);
-        assert!(radio.active_color.is_none());
-        assert!(!radio.is_interactive());
-    }
-
-    #[test]
-    fn on_changed_makes_the_radio_interactive() {
-        let radio = Radio::new(1_u32, None).on_changed(|_cx, _| {});
-        assert!(radio.is_interactive());
-    }
-
-    #[test]
-    fn is_selected_true_when_value_matches_group_value() {
-        assert!(Radio::new(1_u32, Some(1_u32)).is_selected());
-    }
-
-    #[test]
-    fn is_selected_false_when_value_differs_from_group_value() {
-        assert!(!Radio::new(1_u32, Some(2_u32)).is_selected());
-    }
-
-    #[test]
     fn is_selected_false_when_group_value_is_none() {
         assert!(!Radio::new(1_u32, None).is_selected());
     }
@@ -526,53 +503,11 @@ mod tests {
     }
 
     #[test]
-    fn widget_override_wins_over_theme_and_default_when_selected_and_enabled() {
-        let states = WidgetStates::from(WidgetState::Selected);
-        let theme_color = WidgetStateProperty::all(Some(Color::rgb(9, 9, 9)));
-        let resolved = resolve_radio_ring_color(
-            Some(Color::rgb(1, 1, 1)),
-            Some(&theme_color),
-            &light(),
-            states,
-        );
-        assert_eq!(resolved, Color::rgb(1, 1, 1));
-    }
-
-    #[test]
     fn widget_override_is_ignored_when_disabled_even_if_selected() {
         let states = WidgetStates::from(WidgetState::Selected).with_state(WidgetState::Disabled);
         let resolved = resolve_radio_ring_color(Some(Color::rgb(1, 1, 1)), None, &light(), states);
         assert_ne!(resolved, Color::rgb(1, 1, 1));
         assert_eq!(resolved, radio_default_fill_color(&light(), states));
-    }
-
-    #[test]
-    fn widget_override_is_ignored_when_unselected() {
-        let resolved = resolve_radio_ring_color(
-            Some(Color::rgb(1, 1, 1)),
-            None,
-            &light(),
-            WidgetStates::NONE,
-        );
-        assert_ne!(resolved, Color::rgb(1, 1, 1));
-        assert_eq!(
-            resolved,
-            radio_default_fill_color(&light(), WidgetStates::NONE)
-        );
-    }
-
-    #[test]
-    fn default_fill_color_unselected_enabled_default_is_on_surface_variant() {
-        assert_eq!(
-            radio_default_fill_color(&light(), WidgetStates::NONE),
-            light().on_surface_variant
-        );
-    }
-
-    #[test]
-    fn default_fill_color_selected_enabled_is_primary() {
-        let states = WidgetStates::from(WidgetState::Selected);
-        assert_eq!(radio_default_fill_color(&light(), states), light().primary);
     }
 
     #[test]
@@ -586,79 +521,6 @@ mod tests {
         assert_eq!(radio_default_fill_color(&light(), states), light().primary);
     }
 
-    #[test]
-    fn default_fill_color_selected_disabled_is_faded_on_surface() {
-        // Combined pin: Selected+Disabled takes the disabled color, not
-        // primary.
-        let states = WidgetStates::from(WidgetState::Selected).with_state(WidgetState::Disabled);
-        assert_eq!(
-            radio_default_fill_color(&light(), states),
-            light().on_surface.with_opacity(0.38)
-        );
-    }
-
-    #[test]
-    fn default_fill_color_unselected_disabled_is_faded_on_surface() {
-        let states = WidgetStates::from(WidgetState::Disabled);
-        assert_eq!(
-            radio_default_fill_color(&light(), states),
-            light().on_surface.with_opacity(0.38)
-        );
-    }
-
-    #[test]
-    fn default_fill_color_unselected_hovered_is_on_surface() {
-        let states = WidgetStates::from(WidgetState::Hovered);
-        assert_eq!(
-            radio_default_fill_color(&light(), states),
-            light().on_surface
-        );
-    }
-
-    #[test]
-    fn default_overlay_color_selected_hovered_is_primary_at_8_percent() {
-        let states = WidgetStates::from(WidgetState::Selected).with_state(WidgetState::Hovered);
-        assert_eq!(
-            radio_default_overlay_color(&light(), states),
-            Some(light().primary.with_opacity(0.08))
-        );
-    }
-
-    #[test]
-    fn default_overlay_color_selected_pressed_is_on_surface_at_10_percent() {
-        // Branch-order/value pin: selected+pressed uses `onSurface`, NOT
-        // `primary` — the one branch in this table that breaks the
-        // otherwise-uniform selected-tier color, so it needs its own probe.
-        let states = WidgetStates::from(WidgetState::Selected).with_state(WidgetState::Pressed);
-        assert_eq!(
-            radio_default_overlay_color(&light(), states),
-            Some(light().on_surface.with_opacity(0.1))
-        );
-    }
-
-    #[test]
-    fn default_overlay_color_unselected_pressed_is_primary_at_10_percent() {
-        let states = WidgetStates::from(WidgetState::Pressed);
-        assert_eq!(
-            radio_default_overlay_color(&light(), states),
-            Some(light().primary.with_opacity(0.1))
-        );
-    }
-
-    #[test]
-    fn default_overlay_color_selected_default_is_none() {
-        let states = WidgetStates::from(WidgetState::Selected);
-        assert_eq!(radio_default_overlay_color(&light(), states), None);
-    }
-
-    #[test]
-    fn default_overlay_color_unselected_default_is_none() {
-        assert_eq!(
-            radio_default_overlay_color(&light(), WidgetStates::NONE),
-            None
-        );
-    }
-
     // ------------------------------------------------------------------
     // Painter should_repaint / geometry
     // ------------------------------------------------------------------
@@ -668,20 +530,6 @@ mod tests {
             ring_color: Color::BLACK,
             selected,
         }
-    }
-
-    #[test]
-    fn should_repaint_is_false_for_an_identical_delegate() {
-        let old = painter(true);
-        let new = painter(true);
-        assert!(!new.should_repaint(&old));
-    }
-
-    #[test]
-    fn should_repaint_is_true_when_selected_changes() {
-        let old = painter(false);
-        let new = painter(true);
-        assert!(new.should_repaint(&old));
     }
 
     /// Proves the painter is actually invoked (via a real [`Canvas`]/

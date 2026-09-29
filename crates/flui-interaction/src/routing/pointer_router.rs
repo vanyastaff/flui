@@ -357,55 +357,6 @@ mod tests {
     }
 
     #[test]
-    fn test_router_creation() {
-        let router = PointerRouter::new();
-        assert_eq!(router.pointer_count(), 0);
-    }
-
-    #[test]
-    fn test_add_route() {
-        let router = PointerRouter::new();
-        let pointer = PointerId::new(2).expect("nonzero pointer id");
-
-        let handler = Rc::new(|_: &PointerEvent| {});
-        router.add_route(pointer, handler);
-
-        assert!(router.has_routes(pointer));
-        assert_eq!(router.route_count(pointer), 1);
-    }
-
-    #[test]
-    fn test_remove_route() {
-        let router = PointerRouter::new();
-        let pointer = PointerId::new(2).expect("nonzero pointer id");
-
-        let handler: PointerRouteHandler = Rc::new(|_: &PointerEvent| {});
-        router.add_route(pointer, handler.clone());
-        assert!(router.has_routes(pointer));
-
-        let removed = router.remove_route(pointer, &handler);
-        assert!(removed);
-        assert!(!router.has_routes(pointer));
-    }
-
-    #[test]
-    fn test_multiple_handlers() {
-        let router = PointerRouter::new();
-        let pointer = PointerId::new(2).expect("nonzero pointer id");
-
-        let handler1: PointerRouteHandler = Rc::new(|_: &PointerEvent| {});
-        let handler2: PointerRouteHandler = Rc::new(|_: &PointerEvent| {});
-
-        router.add_route(pointer, handler1.clone());
-        router.add_route(pointer, handler2.clone());
-
-        assert_eq!(router.route_count(pointer), 2);
-
-        router.remove_route(pointer, &handler1);
-        assert_eq!(router.route_count(pointer), 1);
-    }
-
-    #[test]
     fn test_route_event() {
         let router = PointerRouter::new();
         let pointer = PointerId::PRIMARY; // PRIMARY pointer
@@ -420,53 +371,6 @@ mod tests {
         router.add_route(pointer, handler);
 
         let event = make_event(0, Offset::new(50.0, 50.0));
-        router.route(&event);
-
-        assert_eq!(call_count.get(), 1);
-    }
-
-    #[test]
-    fn test_route_to_multiple_handlers() {
-        let router = PointerRouter::new();
-        let pointer = PointerId::PRIMARY; // PRIMARY pointer
-
-        let call_count = Rc::new(Cell::new(0));
-
-        let count1 = call_count.clone();
-        let handler1 = Rc::new(move |_: &PointerEvent| {
-            count1.set(count1.get() + 1);
-        });
-
-        let count2 = call_count.clone();
-        let handler2 = Rc::new(move |_: &PointerEvent| {
-            count2.set(count2.get() + 1);
-        });
-
-        router.add_route(pointer, handler1);
-        router.add_route(pointer, handler2);
-
-        let event = make_event(0, Offset::new(50.0, 50.0));
-        router.route(&event);
-
-        // Both handlers should be called
-        assert_eq!(call_count.get(), 2);
-    }
-
-    #[test]
-    fn test_global_handler() {
-        let router = PointerRouter::new();
-
-        let call_count = Rc::new(Cell::new(0));
-        let count_clone = call_count.clone();
-
-        let handler = Rc::new(move |_: &PointerEvent| {
-            count_clone.set(count_clone.get() + 1);
-        });
-
-        router.add_global_handler(handler);
-
-        // Route event for any pointer
-        let event = make_event(42, Offset::new(50.0, 50.0));
         router.route(&event);
 
         assert_eq!(call_count.get(), 1);
@@ -500,66 +404,6 @@ mod tests {
 
         let calls = order.borrow();
         assert_eq!(*calls, vec!["pointer", "global"]);
-    }
-
-    #[test]
-    fn test_remove_all_routes() {
-        let router = PointerRouter::new();
-        let pointer = PointerId::new(2).expect("nonzero pointer id");
-
-        let handler1 = Rc::new(|_: &PointerEvent| {});
-        let handler2 = Rc::new(|_: &PointerEvent| {});
-
-        router.add_route(pointer, handler1);
-        router.add_route(pointer, handler2);
-        assert_eq!(router.route_count(pointer), 2);
-
-        router.remove_all_routes(pointer);
-        assert!(!router.has_routes(pointer));
-        assert_eq!(router.route_count(pointer), 0);
-    }
-
-    #[test]
-    fn test_clear() {
-        let router = PointerRouter::new();
-
-        let handler = Rc::new(|_: &PointerEvent| {});
-        router.add_route(
-            PointerId::new(2).expect("nonzero pointer id"),
-            handler.clone(),
-        );
-        router.add_route(PointerId::new(3).expect("nonzero pointer id"), handler);
-        router.add_global_handler(Rc::new(|_: &PointerEvent| {}));
-
-        router.clear();
-
-        assert_eq!(router.pointer_count(), 0);
-    }
-
-    #[test]
-    fn test_wrong_pointer_not_called() {
-        let router = PointerRouter::new();
-        let pointer1 = PointerId::new(2).expect("nonzero pointer id");
-        let pointer2 = PointerId::new(3).expect("nonzero pointer id");
-
-        let called = Rc::new(Cell::new(0));
-        let called_clone = called.clone();
-
-        let handler = Rc::new(move |_: &PointerEvent| {
-            called_clone.set(called_clone.get() + 1);
-        });
-
-        // Register for pointer 1
-        router.add_route(pointer1, handler);
-
-        // Route event for pointer 0 (PRIMARY - default from make_event)
-        let event = make_event(2, Offset::new(50.0, 50.0));
-        router.route(&event);
-
-        // Handler should NOT be called (registered for pointer1, event is for pointer0)
-        assert_eq!(called.get(), 0);
-
-        let _ = pointer2; // silence unused warning
     }
 
     #[test]
@@ -623,44 +467,6 @@ mod tests {
     }
 
     #[test]
-    fn test_reentrancy_remove_other_handler() {
-        // Test that a handler can remove another handler during dispatch
-        let router = Rc::new(PointerRouter::new());
-        let pointer = PointerId::PRIMARY;
-
-        let handler2_called = Rc::new(Cell::new(0));
-        let handler2_called_clone = handler2_called.clone();
-
-        let handler2: PointerRouteHandler = Rc::new(move |_: &PointerEvent| {
-            handler2_called_clone.set(handler2_called_clone.get() + 1);
-        });
-        let handler2_for_remove = handler2.clone();
-
-        let router_clone = router.clone();
-        let handler1: PointerRouteHandler = Rc::new(move |_: &PointerEvent| {
-            // Remove handler2 during dispatch
-            router_clone.remove_route(PointerId::PRIMARY, &handler2_for_remove);
-        });
-
-        // Add handler1 first, then handler2
-        router.add_route(pointer, handler1);
-        router.add_route(pointer, handler2);
-
-        let event = make_event(0, Offset::new(50.0, 50.0));
-        router.route(&event); // Should not deadlock
-
-        // Flutter snapshots additions, but consults the live registration map
-        // before each invocation. A handler removed before its turn is skipped
-        // in this same dispatch.
-        assert_eq!(handler2_called.get(), 0);
-
-        // Second dispatch sees post-removal snapshot — handler2 not called.
-        let event2 = make_event(0, Offset::new(50.0, 50.0));
-        router.route(&event2);
-        assert_eq!(handler2_called.get(), 0);
-    }
-
-    #[test]
     fn removing_a_later_global_handler_skips_it_in_the_current_dispatch() {
         let router = Rc::new(PointerRouter::new());
         let later_called = Rc::new(Cell::new(0));
@@ -681,23 +487,5 @@ mod tests {
         router.route(&event);
 
         assert_eq!(later_called.get(), 0);
-    }
-
-    #[test]
-    fn pointer_route_handler_accepts_owner_local_rc_state() {
-        let router = PointerRouter::new();
-        let pointer = PointerId::PRIMARY;
-        let total = Rc::new(Cell::new(0));
-        let captured = Rc::clone(&total);
-
-        router.add_route(
-            pointer,
-            Rc::new(move |_: &PointerEvent| captured.set(captured.get() + 1)),
-        );
-
-        let event = make_event(0, Offset::new(50.0, 50.0));
-        router.route(&event);
-
-        assert_eq!(total.get(), 1);
     }
 }

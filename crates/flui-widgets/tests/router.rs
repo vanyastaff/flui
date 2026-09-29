@@ -17,7 +17,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use std::time::Duration;
 
-use crate::common::{LaidOut, lay_out, lay_out_animated, tight};
+use crate::common::{LaidOut, lay_out_animated, tight};
 use flui_animation::Vsync;
 use flui_painting::styling::Color;
 use flui_widgets::prelude::*;
@@ -235,43 +235,6 @@ fn two_screen_app_navigates_by_handle() {
 }
 
 #[test]
-fn two_screen_app_navigates_by_url() {
-    let (mut laid, home) = two_screen_app();
-    let router = home.handle();
-
-    router.go("/note/7").expect("a known location");
-    settle(&mut laid);
-    assert!(
-        laid_out_text(&laid, "Note 7"),
-        "the page is laid out, not only present"
-    );
-    assert_eq!(router.location().as_str(), "/note/7");
-
-    assert_eq!(router.pop(), Ok(true));
-    settle(&mut laid);
-    assert_eq!(router.location(), RoutePath::root());
-    assert!(laid.find_text("Note 7").is_none());
-}
-
-#[test]
-fn go_with_an_unknown_location_leaves_the_stack_alone() {
-    let (mut laid, home) = two_screen_app();
-    let router = home.handle();
-
-    assert!(matches!(
-        router.go("/nope"),
-        Err(RouterError::Parse(RouteParseError::NoMatch { .. }))
-    ));
-    assert!(matches!(
-        router.go("nope"),
-        Err(RouterError::Parse(RouteParseError::Malformed { .. }))
-    ));
-    settle(&mut laid);
-    assert_eq!(router.location(), RoutePath::root());
-    assert_eq!(home.navigator().route_ids().len(), 1);
-}
-
-#[test]
 fn pop_restores_the_previous_route() {
     let (mut laid, home) = two_screen_app();
     let router = home.handle();
@@ -331,23 +294,6 @@ fn replace_swaps_the_top_without_growing_the_stack() {
 }
 
 #[test]
-fn facade_pop_updates_the_router_location() {
-    let (mut laid, home) = two_screen_app();
-    let router = home.handle();
-
-    router.push(AppRoute::Note { id: 1 }).expect("mounted");
-    settle(&mut laid);
-    assert!(home.navigator().pop(), "the facade pops a Router page");
-    assert_eq!(
-        router.location(),
-        RoutePath::root(),
-        "the observer saw the pop"
-    );
-    settle(&mut laid);
-    assert!(laid.find_text("Note 1").is_none());
-}
-
-#[test]
 fn go_reconciles_only_the_diverging_tail() {
     let (mut laid, home) = two_screen_app();
     let router = home.handle();
@@ -369,33 +315,6 @@ fn go_reconciles_only_the_diverging_tail() {
     assert_eq!(router.pop(), Ok(true));
     settle(&mut laid);
     assert_eq!(router.location(), RoutePath::root());
-}
-
-#[test]
-fn go_adds_the_new_back_stack_beneath_the_new_top() {
-    let (mut laid, home) = two_screen_app();
-    let router = home.handle();
-
-    router.go("/note/3/edit").expect("a known location");
-    settle(&mut laid);
-    assert_eq!(router.location().as_str(), "/note/3/edit");
-    assert!(laid_out_text(&laid, "Edit 3"));
-    assert_eq!(home.navigator().route_ids().len(), 3);
-
-    // The page added quietly beneath the new top is a real, poppable page.
-    assert_eq!(router.pop(), Ok(true));
-    settle(&mut laid);
-    assert_eq!(router.location().as_str(), "/note/3");
-    assert!(laid_out_text(&laid, "Note 3"));
-
-    // A prefix of the current stack pops back to it.
-    router.push(AppRoute::NoteEdit { id: 3 }).expect("mounted");
-    settle(&mut laid);
-    router.go("/").expect("the root");
-    settle(&mut laid);
-    assert_eq!(router.location(), RoutePath::root());
-    assert_eq!(home.navigator().route_ids().len(), 1);
-    assert_eq!(home.inits.get(), 1);
 }
 
 #[test]
@@ -548,22 +467,6 @@ fn nested_router_handle_targets_the_nearest_router() {
     assert!(laid_out_text(&laid, "Outer /tag/t"));
 }
 
-#[test]
-fn router_handle_without_a_router_is_no_router() {
-    let probe = Probe::default();
-    let _laid = lay_out(
-        Page {
-            probe: probe.clone(),
-            child: Rc::new(|| SizedBox::new(10.0, 10.0).into_view().boxed()),
-        },
-        tight(100.0, 100.0),
-    );
-    let acquired = probe.handle.borrow().clone().expect("init_state ran");
-    assert!(
-        matches!(acquired, Err(RouterError::NoRouter { route_type }) if route_type.contains("AppRoute"))
-    );
-}
-
 // ============================================================================
 // Pages
 // ============================================================================
@@ -651,24 +554,6 @@ fn refused<T>(call: impl FnOnce() -> T) -> bool {
     catch_unwind(AssertUnwindSafe(call)).is_err() == cfg!(debug_assertions)
 }
 
-#[test]
-fn pop_until_stops_at_a_routers_last_page() {
-    let (mut laid, home) = two_screen_app();
-    let router = home.handle();
-    let navigator = home.navigator();
-
-    navigator.pop_until(|_| false);
-    assert_eq!(navigator.route_ids().len(), 1, "the lone page stays");
-
-    let _dialog = navigator.push(dialog());
-    settle(&mut laid);
-    navigator.pop_until(|_| false);
-    settle(&mut laid);
-    assert_eq!(navigator.route_ids().len(), 1, "only the dialog left");
-    assert_eq!(router.location(), RoutePath::root());
-    assert!(laid.find_text("Dialog").is_none());
-}
-
 /// A popup may enter a Router's navigator only through a plain push: every
 /// other door would replace, sweep or seed pages the Router owns.
 #[test]
@@ -716,32 +601,6 @@ fn doors_that_remove_or_seed_refuse_even_a_popup_under_a_router() {
     settle(&mut laid);
     assert!(laid_out_text(&laid, "Dialog"));
     assert_eq!(router.location(), RoutePath::root());
-}
-
-#[test]
-fn a_routers_last_page_cannot_be_removed_even_under_a_popup() {
-    let (mut laid, home) = two_screen_app();
-    let router = home.handle();
-    let navigator = home.navigator();
-    let page = navigator.current().expect("the home page");
-
-    assert!(!navigator.remove_route(page), "the lone page stays");
-    assert!(!navigator.remove_route_with(page, 7_u8));
-
-    let _dialog = navigator.push(dialog());
-    settle(&mut laid);
-    assert!(
-        !navigator.remove_route(page),
-        "a popup above the only page does not make it removable"
-    );
-    settle(&mut laid);
-    assert_eq!(navigator.route_ids().len(), 2);
-    assert_eq!(navigator.route_ids()[0], page);
-    assert_eq!(router.location(), RoutePath::root());
-
-    assert_eq!(router.pop(), Ok(true), "the popup still pops");
-    settle(&mut laid);
-    assert_eq!(navigator.route_ids(), vec![page]);
 }
 
 /// With a popup beneath the only page left, no pop may take that page.

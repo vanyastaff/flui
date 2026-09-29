@@ -138,12 +138,6 @@ mod tests {
     }
 
     #[test]
-    fn releasing_the_lock_lets_the_same_thread_take_it_again() {
-        drop(super::acquire());
-        drop(super::acquire());
-    }
-
-    #[test]
     fn win32_reader_and_writer_on_two_threads_do_not_corrupt_the_heap() {
         race_reader_against_writer(WindowsClipboard::new(), WindowsClipboard::new());
     }

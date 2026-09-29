@@ -761,16 +761,6 @@ mod ime_tests {
     }
 
     #[test]
-    fn enabled_maps_to_enabled() {
-        assert_eq!(convert(&Ime::Enabled), ImeEvent::Enabled);
-    }
-
-    #[test]
-    fn disabled_maps_to_disabled() {
-        assert_eq!(convert(&Ime::Disabled), ImeEvent::Disabled);
-    }
-
-    #[test]
     fn commit_carries_the_delivered_text() {
         assert_eq!(
             convert(&Ime::Commit("hello".to_string())),

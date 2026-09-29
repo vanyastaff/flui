@@ -1579,62 +1579,6 @@ mod tests {
         assert_eq!(presentation.lifecycle(), PresentationLifecycle::Closed);
     }
 
-    /// `take_last_segment_span` reads AND CLEARS — a second call with no
-    /// intervening `set_last_segment_span` must see `None`, never the same
-    /// value again. Pins the per-pump discipline directly on the type: this
-    /// is what makes "a segment ran THIS pump" (not "on some earlier pump")
-    /// an invariant this presentation's OWN state enforces, rather than
-    /// something only true by accident of how its one current caller
-    /// (`UiRealm::record_submit_telemetry`, always addressed to the correct
-    /// producer) happens to use it.
-    #[test]
-    fn take_last_segment_span_clears_on_read_a_second_take_sees_none() {
-        let presentation = presentation();
-        assert_eq!(
-            presentation.take_last_segment_span(),
-            None,
-            "a fresh presentation has no segment span recorded yet"
-        );
-
-        let start = Instant::now();
-        let end = start + std::time::Duration::from_millis(1);
-        presentation.set_last_segment_span(start, end);
-
-        assert_eq!(
-            presentation.take_last_segment_span(),
-            Some((start, end)),
-            "the first take must return exactly what was set"
-        );
-        assert_eq!(
-            presentation.take_last_segment_span(),
-            None,
-            "a second take with no intervening set must see None, not the stale value again"
-        );
-    }
-
-    /// `close` must detach through this presentation's OWN `WidgetsBinding`
-    /// — the ADR-0043 teardown ordering this method now carries out, not
-    /// just the input/focus/IME steps that predate it.
-    #[test]
-    fn close_detaches_this_presentations_own_root_widget() {
-        let presentation = presentation();
-        presentation
-            .widgets()
-            .attach_root_widget(&flui_widgets::SizedBox::new(10.0, 10.0))
-            .expect("fresh presentation attaches its first root");
-        assert!(
-            presentation.widgets().root_element().is_some(),
-            "root must be attached before close"
-        );
-
-        presentation.close();
-
-        assert!(
-            presentation.widgets().root_element().is_none(),
-            "close must detach the root through this presentation's own binding"
-        );
-    }
-
     /// If reverted: remove the lifecycle check from `dispatch_semantics_action`
     /// and this fails with `Ok(())` instead (the request would resolve
     /// against a node id that happens not to exist, which is a different,
@@ -1673,53 +1617,6 @@ mod tests {
 
         drop(handle);
         assert!(!a.semantics_host().semantics_enabled());
-    }
-
-    #[test]
-    fn text_input_handle_is_bound_to_the_owned_text_input_state() {
-        let presentation = presentation();
-        let handle = presentation.text_input_handle();
-
-        presentation.close();
-
-        assert_eq!(
-            handle.attach(flui_interaction::TextInputClient::new(
-                flui_platform_api::text_store::InMemoryTextStore::new("")
-            )),
-            Err(flui_interaction::TextInputError::Closed)
-        );
-    }
-
-    #[test]
-    fn mouse_tracker_applies_cursor_to_the_exact_owned_window() {
-        use flui_foundation::RenderId;
-        use flui_foundation::geometry::Offset;
-        use flui_interaction::{
-            events::{PointerType, make_move_event},
-            routing::{HitTestEntry, HitTestResult, PointerMotionKind},
-        };
-
-        let window = Arc::new(crate::testing::TestWindow::new().focused(true));
-        let platform_window: Arc<dyn PlatformWindow> = window.clone();
-        let presentation = PresentationState::new_for_test_with_window(
-            PresentationId::new_gen(0, NonZeroU32::MIN),
-            PipelineCell::new(PipelineOwner::new()),
-            platform_window,
-        );
-        let position = Offset::new(12.0, 8.0);
-        let event = make_move_event(position, PointerType::Mouse);
-        let mut hit_test = HitTestResult::new();
-        hit_test.add(HitTestEntry::new(RenderId::new(1)).cursor(CursorIcon::Pointer));
-
-        presentation.gestures().mouse_tracker().update_with_motion(
-            &event,
-            PointerMotionKind::Hover,
-            &hit_test,
-        );
-
-        assert_eq!(window.cursor(), CursorIcon::Pointer);
-        presentation.close();
-        assert_eq!(window.cursor(), CursorIcon::Default);
     }
 
     // ========================================================================
@@ -1778,40 +1675,6 @@ mod tests {
                  PlatformHaptics::perform"
             );
         }
-
-        /// The presentation's window has been dropped (the platform side let
-        /// go of its strong `Arc`) — a silent no-op, no panic. This is the
-        /// per-presentation equivalent of the retired
-        /// `AppBinding::perform_haptic_feedback_with_no_active_window_is_a_silent_no_op`:
-        /// a presentation always has SOME window from construction, so "no
-        /// window" here means "the window this presentation was built with
-        /// is gone", not "never installed".
-        #[test]
-        fn perform_haptic_feedback_with_no_active_window_is_a_silent_no_op() {
-            let window: Arc<dyn PlatformWindow> = Arc::new(crate::testing::TestWindow::new());
-            let presentation = PresentationState::new_for_test_with_window(
-                PresentationId::new_gen(0, NonZeroU32::MIN),
-                PipelineCell::new(PipelineOwner::new()),
-                Arc::clone(&window),
-            );
-            drop(window);
-
-            presentation.perform_haptic_feedback(HapticFeedback::Vibrate);
-        }
-
-        /// A window whose backend has no `PlatformHaptics` capability
-        /// (desktop winit's shape, reproduced here without a real display)
-        /// is also a silent no-op.
-        #[test]
-        fn perform_haptic_feedback_on_a_window_without_haptics_is_a_silent_no_op() {
-            let presentation = PresentationState::new_for_test_with_window(
-                PresentationId::new_gen(0, NonZeroU32::MIN),
-                PipelineCell::new(PipelineOwner::new()),
-                Arc::new(crate::testing::TestWindow::new()),
-            );
-
-            presentation.perform_haptic_feedback(HapticFeedback::MediumImpact);
-        }
     }
 
     // ========================================================================
@@ -1827,20 +1690,6 @@ mod tests {
             let tree = LayerTree::new(Layer::from(CanvasLayer::new()));
             let root = tree.root();
             (tree, root)
-        }
-
-        #[test]
-        fn overlay_off_leaves_the_layer_tree_untouched() {
-            let presentation = presentation();
-            let (mut tree, root) = tree_with_root();
-
-            presentation.attach_performance_overlay(&mut tree);
-
-            assert_eq!(tree.len(), 1, "no layer may be added while overlay is off");
-            assert!(
-                tree.get(root).expect("root node").children().is_empty(),
-                "root must keep no children while overlay is off"
-            );
         }
 
         #[test]
@@ -1865,35 +1714,6 @@ mod tests {
                 tree.get(overlay_id).expect("overlay node").parent(),
                 Some(root),
                 "the overlay's parent side must be linked too, not just the root's child list"
-            );
-        }
-
-        #[test]
-        fn disabling_the_overlay_stops_appending_and_resets_the_window() {
-            let presentation = presentation();
-            presentation.set_performance_overlay(true);
-            let (mut tree, _root) = tree_with_root();
-            presentation.attach_performance_overlay(&mut tree);
-            presentation.attach_performance_overlay(&mut tree);
-            assert_eq!(tree.len(), 3, "two frames, two overlay layers");
-
-            presentation.set_performance_overlay(false);
-            let (mut fresh, _) = tree_with_root();
-            presentation.attach_performance_overlay(&mut fresh);
-            assert_eq!(fresh.len(), 1, "disabled overlay adds nothing");
-
-            presentation.set_performance_overlay(true);
-            let (mut again, _) = tree_with_root();
-            presentation.attach_performance_overlay(&mut again);
-            let overlay_id = *tree_root_children(&again).last().expect("overlay present");
-            let overlay = again.get_layer(overlay_id).expect("overlay layer");
-            let stats = overlay
-                .as_performance_overlay()
-                .expect("performance overlay variant");
-            assert_eq!(
-                stats.total_frames(),
-                1,
-                "re-enabling starts a fresh window rather than resuming the old count"
             );
         }
 

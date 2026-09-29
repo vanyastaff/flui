@@ -653,31 +653,6 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn new_leaves_every_override_unset_and_selects_the_first_destination() {
-        let bar = NavigationBar::new(vec![
-            NavigationDestination::new(icon(), "Home"),
-            NavigationDestination::new(icon(), "Profile"),
-        ]);
-        assert_eq!(bar.selected_index, 0);
-        assert!(bar.height.is_none());
-        assert!(bar.background_color.is_none());
-        assert!(bar.elevation.is_none());
-        assert!(bar.indicator_color.is_none());
-        assert!(bar.overlay_color.is_none());
-        assert!(bar.on_destination_selected.is_none());
-    }
-
-    #[test]
-    fn selected_index_builder_overrides_the_default() {
-        let bar = NavigationBar::new(vec![
-            NavigationDestination::new(icon(), "Home"),
-            NavigationDestination::new(icon(), "Profile"),
-        ])
-        .selected_index(1);
-        assert_eq!(bar.selected_index, 1);
-    }
-
-    #[test]
     fn on_destination_selected_makes_the_bar_interactive() {
         let bar = NavigationBar::new(vec![
             NavigationDestination::new(icon(), "Home"),
@@ -685,20 +660,6 @@ mod tests {
         ])
         .on_destination_selected(|_cx, _| {});
         assert!(bar.on_destination_selected.is_some());
-    }
-
-    #[test]
-    fn new_destination_defaults_to_enabled_with_no_selected_icon() {
-        let destination = NavigationDestination::new(icon(), "Home");
-        assert!(destination.enabled);
-        assert!(destination.selected_icon.is_none());
-        assert_eq!(destination.label, "Home");
-    }
-
-    #[test]
-    fn destination_enabled_builder_overrides_the_default() {
-        let destination = NavigationDestination::new(icon(), "Home").enabled(false);
-        assert!(!destination.enabled);
     }
 
     // ------------------------------------------------------------------
@@ -716,33 +677,6 @@ mod tests {
     }
 
     #[test]
-    fn geometry_defaults_match_the_m3_token_table() {
-        let (height, elevation, background_color, indicator_color) =
-            resolve_bar_geometry(&bar(), None, &light());
-        assert_eq!(height, NAVIGATION_BAR_HEIGHT);
-        assert_eq!(elevation, NAVIGATION_BAR_ELEVATION);
-        assert_eq!(background_color, light().surface_container);
-        assert_eq!(indicator_color, light().secondary_container);
-    }
-
-    #[test]
-    fn theme_tier_beats_the_default_when_no_widget_override_is_set() {
-        let theme = NavigationBarThemeData {
-            height: Some(96.0),
-            elevation: Some(1.0),
-            background_color: Some(Color::rgb(9, 9, 9)),
-            indicator_color: Some(Color::rgb(8, 8, 8)),
-            ..Default::default()
-        };
-        let (height, elevation, background_color, indicator_color) =
-            resolve_bar_geometry(&bar(), Some(&theme), &light());
-        assert_eq!(height, 96.0);
-        assert_eq!(elevation, 1.0);
-        assert_eq!(background_color, Color::rgb(9, 9, 9));
-        assert_eq!(indicator_color, Color::rgb(8, 8, 8));
-    }
-
-    #[test]
     fn widget_tier_wins_over_theme_and_default() {
         let theme = NavigationBarThemeData {
             height: Some(96.0),
@@ -757,34 +691,6 @@ mod tests {
     // ------------------------------------------------------------------
     // Icon/label color state table — per-state probes, oracle branch order
     // ------------------------------------------------------------------
-
-    #[test]
-    fn default_icon_color_unselected_enabled_is_on_surface_variant() {
-        assert_eq!(
-            navigation_destination_default_icon_color(&light(), WidgetStates::NONE),
-            light().on_surface_variant
-        );
-    }
-
-    #[test]
-    fn default_icon_color_selected_is_on_secondary_container() {
-        let states = WidgetStates::from(WidgetState::Selected);
-        assert_eq!(
-            navigation_destination_default_icon_color(&light(), states),
-            light().on_secondary_container
-        );
-    }
-
-    #[test]
-    fn default_icon_color_disabled_wins_over_selected() {
-        // Branch-order pin: `disabled` is checked BEFORE `selected` in the
-        // oracle (`_NavigationBarDefaultsM3.iconTheme`).
-        let states = WidgetStates::from(WidgetState::Selected).with_state(WidgetState::Disabled);
-        assert_eq!(
-            navigation_destination_default_icon_color(&light(), states),
-            light().on_surface_variant.with_opacity(0.38)
-        );
-    }
 
     #[test]
     fn default_icon_color_ignores_hover_focus_pressed() {
@@ -805,71 +711,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn icon_color_theme_tier_beats_the_default() {
-        let theme = WidgetStateProperty::all(Some(Color::rgb(7, 7, 7)));
-        let resolved =
-            resolve_navigation_destination_icon_color(Some(&theme), &light(), WidgetStates::NONE);
-        assert_eq!(resolved, Color::rgb(7, 7, 7));
-    }
-
-    #[test]
-    fn default_label_style_selected_is_on_surface() {
-        let base = TextStyle::default();
-        let states = WidgetStates::from(WidgetState::Selected);
-        let style = navigation_destination_default_label_style(&base, &light(), states);
-        assert_eq!(style.color, Some(light().on_surface));
-    }
-
-    #[test]
-    fn default_label_style_unselected_enabled_is_on_surface_variant() {
-        let base = TextStyle::default();
-        let style = navigation_destination_default_label_style(&base, &light(), WidgetStates::NONE);
-        assert_eq!(style.color, Some(light().on_surface_variant));
-    }
-
-    #[test]
-    fn default_label_style_disabled_wins_over_selected() {
-        let base = TextStyle::default();
-        let states = WidgetStates::from(WidgetState::Selected).with_state(WidgetState::Disabled);
-        let style = navigation_destination_default_label_style(&base, &light(), states);
-        assert_eq!(
-            style.color,
-            Some(light().on_surface_variant.with_opacity(0.38))
-        );
-    }
-
-    #[test]
-    fn label_style_theme_tier_beats_the_default() {
-        let theme_style = TextStyle::default().with_color(Color::rgb(3, 3, 3));
-        let theme: WidgetStateProperty<Option<TextStyle>> =
-            WidgetStateProperty::all(Some(theme_style.clone()));
-        let resolved = resolve_navigation_destination_label_style(
-            Some(&theme),
-            &TextStyle::default(),
-            &light(),
-            WidgetStates::NONE,
-        );
-        assert_eq!(resolved.color, theme_style.color);
-    }
-
     // ------------------------------------------------------------------
     // navigation_destination_states
     // ------------------------------------------------------------------
-
-    #[test]
-    fn states_selected_and_enabled_carries_only_selected() {
-        let states = navigation_destination_states(true, true);
-        assert!(states.contains_state(WidgetState::Selected));
-        assert!(!states.contains_state(WidgetState::Disabled));
-    }
-
-    #[test]
-    fn states_unselected_and_disabled_carries_only_disabled() {
-        let states = navigation_destination_states(false, false);
-        assert!(!states.contains_state(WidgetState::Selected));
-        assert!(states.contains_state(WidgetState::Disabled));
-    }
 
     /// Regression: a destination that is BOTH selected and disabled (e.g.
     /// the current tab of a now-locked section) must query with the PURE

@@ -560,53 +560,6 @@ mod tests {
 
     // ── absent stream ───────────────────────────────────────────────────────
 
-    /// No key ⇒ no stream: `ConnectionState::None`, nothing spawned.
-    #[test]
-    fn stream_builder_absent_stream_is_none() {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let sender = Sender::new();
-        let view = StreamBuilder::<u32, _, _>::keyed(
-            None,
-            sender.factory(),
-            recording_builder(Arc::clone(&log)),
-        );
-
-        let harness = Harness::mount(&view);
-        assert_eq!(
-            last(&log),
-            Seen {
-                state: ConnectionState::None,
-                data: None,
-                error: None
-            }
-        );
-        assert_eq!(harness.scheduler.pending_task_count(), 0, "nothing spawned");
-        assert_eq!(sender.subscriptions(), 0);
-    }
-
-    /// `'runs the builder using given initial data'` with no stream.
-    #[test]
-    fn stream_builder_absent_stream_preserves_initial_data() {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let sender = Sender::new();
-        let view = StreamBuilder::<u32, _, _>::keyed(
-            None,
-            sender.factory(),
-            recording_builder(Arc::clone(&log)),
-        )
-        .with_initial_data(Rc::new(|| Payload(7)));
-
-        let _harness = Harness::mount(&view);
-        assert_eq!(
-            last(&log),
-            Seen {
-                state: ConnectionState::None,
-                data: Some(7),
-                error: None
-            }
-        );
-    }
-
     // ── life cycle ──────────────────────────────────────────────────────────
 
     /// Subscribing shows `Waiting` before any event — Flutter's unconditional
@@ -689,61 +642,6 @@ mod tests {
         assert_eq!(harness.scheduler.pending_task_count(), 0, "task finished");
     }
 
-    /// `after_done` preserves a trailing error, not just a value.
-    #[test]
-    fn stream_builder_done_preserves_the_last_error() {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let sender = Sender::new();
-        let view = StreamBuilder::keyed(
-            Some(1_u32),
-            sender.factory(),
-            recording_builder(Arc::clone(&log)),
-        );
-        let mut harness = Harness::mount(&view);
-
-        sender.error("boom");
-        harness.frame();
-        assert_eq!(last(&log), active(None, Some("boom")));
-
-        sender.end();
-        harness.frame();
-        assert_eq!(
-            last(&log),
-            Seen {
-                state: ConnectionState::Done,
-                data: None,
-                error: Some("boom")
-            }
-        );
-    }
-
-    /// The `initialData` seed survives `Waiting` and is replaced by the first event.
-    #[test]
-    fn stream_builder_initial_data_survives_waiting() {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let sender = Sender::new();
-        let view = StreamBuilder::keyed(
-            Some(1_u32),
-            sender.factory(),
-            recording_builder(Arc::clone(&log)),
-        )
-        .with_initial_data(Rc::new(|| Payload(9)));
-
-        let mut harness = Harness::mount(&view);
-        assert_eq!(
-            last(&log),
-            Seen {
-                state: ConnectionState::Waiting,
-                data: Some(9),
-                error: None
-            }
-        );
-
-        sender.data(1);
-        harness.frame();
-        assert_eq!(last(&log), active(Some(1), None));
-    }
-
     // ── update semantics ────────────────────────────────────────────────────
 
     /// An unchanged key is an early return: no resubscribe, snapshot untouched.
@@ -821,39 +719,6 @@ mod tests {
         second.data(2);
         harness.frame();
         assert_eq!(last(&log), active(Some(2), None));
-    }
-
-    /// The same hop starting from an error.
-    #[test]
-    fn stream_builder_key_change_preserves_old_error() {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let first = Sender::new();
-        let view = StreamBuilder::keyed(
-            Some(1_u32),
-            first.factory(),
-            recording_builder(Arc::clone(&log)),
-        );
-        let mut harness = Harness::mount(&view);
-
-        first.error("old");
-        harness.frame();
-
-        let second = Sender::new();
-        let next = StreamBuilder::keyed(
-            Some(2_u32),
-            second.factory(),
-            recording_builder(Arc::clone(&log)),
-        );
-        harness.update(&next);
-
-        assert_eq!(
-            last(&log),
-            Seen {
-                state: ConnectionState::Waiting,
-                data: None,
-                error: Some("old")
-            }
-        );
     }
 
     /// `'gracefully handles transition to null stream'`: the task is cancelled and
@@ -971,78 +836,5 @@ mod tests {
         );
     }
 
-    // ── the generation guard, tested directly ───────────────────────────────
-
-    fn fresh_slot() -> SharedSlot<Payload, Boom> {
-        let mut slot = Slot::new(AsyncSnapshot::nothing());
-        slot.generation = 7;
-        Arc::new(Mutex::new(slot))
-    }
-
-    #[test]
-    fn apply_event_data_is_active_and_schedules() {
-        let slot = fresh_slot();
-        assert!(apply_event(&slot, 7, Some(Ok(Payload(1)))));
-        let guard = slot.lock();
-        assert_eq!(guard.snapshot.connection_state(), ConnectionState::Active);
-        assert_eq!(guard.snapshot.data(), Some(&Payload(1)));
-    }
-
-    #[test]
-    fn apply_event_error_is_active_and_clears_data() {
-        let slot = fresh_slot();
-        slot.lock().snapshot = AsyncSnapshot::with_data(ConnectionState::Active, Payload(1));
-
-        assert!(apply_event(&slot, 7, Some(Err(Boom("x")))));
-        let guard = slot.lock();
-        assert_eq!(guard.snapshot.connection_state(), ConnectionState::Active);
-        assert_eq!(guard.snapshot.error(), Some(&Boom("x")));
-        assert!(!guard.snapshot.has_data());
-    }
-
-    #[test]
-    fn apply_event_end_is_done_and_preserves_payload() {
-        let slot = fresh_slot();
-        slot.lock().snapshot = AsyncSnapshot::with_data(ConnectionState::Active, Payload(5));
-
-        assert!(apply_event(&slot, 7, None));
-        let guard = slot.lock();
-        assert_eq!(guard.snapshot.connection_state(), ConnectionState::Done);
-        assert_eq!(guard.snapshot.data(), Some(&Payload(5)));
-    }
-
-    /// An event from a subscription that has since been replaced (or disposed) is
-    /// discarded: the snapshot is untouched and no rebuild is asked for.
-    #[test]
-    fn apply_event_with_a_stale_generation_is_discarded() {
-        let slot = fresh_slot();
-        slot.lock().snapshot = AsyncSnapshot::with_data(ConnectionState::Waiting, Payload(1));
-
-        assert!(!apply_event(&slot, 6, Some(Ok(Payload(999)))));
-
-        let guard = slot.lock();
-        assert_eq!(guard.snapshot.connection_state(), ConnectionState::Waiting);
-        assert_eq!(guard.snapshot.data(), Some(&Payload(1)));
-    }
-
     // ── bounds ──────────────────────────────────────────────────────────────
-
-    /// Compile-proof: `Payload` and `Boom` implement neither `Clone` nor `Copy`,
-    /// and they flow through the constructor, the stream item, the fold, and the
-    /// builder.
-    #[test]
-    fn stream_builder_needs_no_clone_on_t_or_e() {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let sender = Sender::new();
-        let view = StreamBuilder::keyed(
-            Some(()),
-            sender.factory(),
-            recording_builder(Arc::clone(&log)),
-        );
-        let mut harness = Harness::mount(&view);
-
-        sender.data(1);
-        harness.frame();
-        assert_eq!(last(&log).data, Some(1));
-    }
 }

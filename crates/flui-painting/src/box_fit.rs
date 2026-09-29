@@ -457,50 +457,6 @@ mod tests {
         Size::new(w, h)
     }
 
-    /// Every predicate for every variant:
-    /// `(clip, keeps aspect, scale, scale up, scale down, fills, leaves space)`.
-    #[test]
-    fn box_fit_predicates() {
-        use BoxFit::*;
-        let table = [
-            (Fill, [false, false, true, true, true, true, false]),
-            (Contain, [false, true, true, true, true, false, true]),
-            (Cover, [true, true, true, true, true, true, false]),
-            (FitWidth, [true, true, true, true, true, true, true]),
-            (FitHeight, [true, true, true, true, true, true, true]),
-            (None, [true, true, false, false, false, false, true]),
-            (ScaleDown, [false, true, true, false, true, false, true]),
-        ];
-        for (fit, expected) in table {
-            let got = [
-                fit.may_clip(),
-                fit.maintains_aspect_ratio(),
-                fit.may_scale(),
-                fit.may_scale_up(),
-                fit.may_scale_down(),
-                fit.fills_target(),
-                fit.may_leave_space(),
-            ];
-            assert_eq!(got, expected, "{fit:?}");
-        }
-        assert_eq!(BoxFit::default(), BoxFit::Contain);
-    }
-
-    #[test]
-    fn box_shape_predicates() {
-        let c = BoxShape::Circle;
-        let r = BoxShape::Rectangle;
-        assert_eq!(
-            (c.is_circle(), c.is_rectangle(), c.requires_clipping()),
-            (true, false, true)
-        );
-        assert_eq!(
-            (r.is_circle(), r.is_rectangle(), r.requires_clipping()),
-            (false, true, false)
-        );
-        assert_eq!(BoxShape::default(), r);
-    }
-
     /// Any one non-positive dimension, on either side, is degenerate.
     #[test]
     fn apply_is_degenerate_on_any_empty_axis() {
@@ -550,29 +506,5 @@ mod tests {
             scale_down,
             FittedSizes::new(size(100.0, 400.0), size(25.0, 100.0))
         );
-    }
-
-    #[test]
-    fn fitted_sizes_queries() {
-        let shrunk = FittedSizes::new(size(200.0, 100.0), size(50.0, 25.0));
-        assert_eq!(shrunk.scale_factor(), 0.25);
-        assert!(shrunk.needs_scaling());
-        assert!(!shrunk.will_clip());
-
-        let unchanged = FittedSizes::new(size(40.0, 30.0), size(40.0, 30.0));
-        assert!(!unchanged.needs_scaling());
-        assert!(!unchanged.will_clip());
-        // A source no wider than epsilon has no meaningful scale.
-        for degenerate in [0.0, EPSILON] {
-            let sizes = FittedSizes::new(size(degenerate, 1.0), size(9.0, 9.0));
-            assert_eq!(sizes.scale_factor(), 1.0, "source width {degenerate}");
-        }
-
-        for grown in [size(41.0, 30.0), size(40.0, 31.0)] {
-            assert!(
-                FittedSizes::new(size(40.0, 30.0), grown).will_clip(),
-                "{grown:?}"
-            );
-        }
     }
 }

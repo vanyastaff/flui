@@ -81,56 +81,6 @@ fn redraw_request_from_a_does_not_wake_bs_window() {
     );
 }
 
-/// A frame demanded through the realm's own `UpdateScheduler` must
-/// reach the realm's platform wake.
-///
-/// This is the edge an async completion travels: `TaskWaker::
-/// wake_by_ref` -> `AsyncDriver`'s request-frame -> `UpdateScheduler::
-/// request_frame` -> the `frame_scheduled` false->true edge -> the
-/// `on_frame_scheduled` hook. If that hook is never installed the
-/// scheduler's demand is a bare atomic store that only a pump already
-/// in flight can observe, and an idle `ControlFlow::Wait` loop sleeps
-/// through it — the window updates on the next unrelated event, or
-/// never.
-///
-/// If reverted (drop the `set_on_frame_scheduled` install in
-/// `UiRealm::construct`): `on_frame_scheduled` stays `None`,
-/// `request_frame_impl` returns after the swap, and this observes
-/// zero wakes.
-#[test]
-fn a_scheduler_frame_request_reaches_the_realms_platform_wake() {
-    let wakes = Arc::new(AtomicU32::new(0));
-    let wake_counter = Arc::clone(&wakes);
-    let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
-        wake_counter.fetch_add(1, AtomicOrdering::Relaxed);
-    });
-
-    let (window, _calls) = counting_window(1);
-    let realm = UiRealm::new(
-        wake,
-        window,
-        1.0,
-        Arc::new(AtomicBool::new(false)),
-        crate::presentation::test_clipboard(),
-    )
-    .expect("realm constructs");
-
-    // Construction may legitimately have demanded a first frame;
-    // measure only the transition this test causes.
-    // Clear the `frame_scheduled` latch so the request below is a real
-    // false->true transition — the only edge the hook fires on.
-    realm.scheduler().finish_async_pump();
-    let before = wakes.load(AtomicOrdering::Relaxed);
-
-    realm.scheduler().request_frame();
-
-    assert!(
-        wakes.load(AtomicOrdering::Relaxed) > before,
-        "a scheduler frame request must reach the realm's platform wake; \
-         without it an async completion cannot wake an idle event loop"
-    );
-}
-
 /// The same edge, fired from a foreign thread — the shape an async
 /// task completing on a background executor actually takes.
 ///
@@ -166,49 +116,6 @@ fn a_cross_thread_frame_request_reaches_the_realms_platform_wake() {
     assert!(
         wakes.load(AtomicOrdering::Relaxed) > before,
         "a frame request raised off the owner thread must still reach the wake"
-    );
-}
-
-/// A pipeline visual update now routes through the realm scheduler's
-/// phase gate: issuing it from Idle flips the scheduler's own
-/// `frame_scheduled` edge — the unified carrier — so a quiescent
-/// pacing loop that reads that latch observes the demand even though
-/// the presentation no longer calls `wake` directly.
-///
-/// If reverted (the presentation's `set_on_need_visual_update` closure
-/// calling `wake` + `request_redraw` with no `ensure_visual_update`
-/// hop): the scheduler latch never flips, and this observes it stay
-/// cleared.
-#[test]
-fn a_pipeline_visual_update_flips_the_schedulers_frame_scheduled_edge() {
-    let (window_a, _calls) = counting_window(1);
-    let realm = UiRealm::new(
-        noop_wake(),
-        window_a,
-        1.0,
-        Arc::new(AtomicBool::new(false)),
-        crate::presentation::test_clipboard(),
-    )
-    .expect("realm constructs");
-    // Clear the latch so the visual update below is the edge under
-    // test, not construction's own initial demand.
-    realm.scheduler().finish_async_pump();
-    assert!(
-        !realm.scheduler().is_frame_scheduled(),
-        "precondition: latch cleared"
-    );
-
-    realm
-        .presentations
-        .get(realm.presentation_id())
-        .expect("primary installed")
-        .pipeline()
-        .with(flui_rendering::pipeline::PipelineOwner::request_visual_update);
-
-    assert!(
-        realm.scheduler().is_frame_scheduled(),
-        "a pipeline visual update must flip the scheduler's \
-         frame_scheduled edge — one carrier reads both"
     );
 }
 

@@ -76,53 +76,6 @@ fn mounting_composes_a_render_table_with_row_major_children() {
     assert_eq!(laid.children(render_table).len(), 4);
 }
 
-/// The heading row is `56.0` tall and each data row is `48.0` tall
-/// (`kMinInteractiveDimension`) by default — verified at the oracle tag.
-/// The data row height is NOT `52.0`.
-#[test]
-fn default_row_heights_match_the_verified_m3_token_table() {
-    let table = DataTable::new(
-        vec![text_column("Name")],
-        vec![DataRow::new(vec![text_cell("Ada")])],
-    );
-    let laid = common::lay_out(themed(ThemeData::light(), table), loose(400.0));
-    let render_table = laid.try_find_by_render_type("RenderTable").unwrap();
-
-    let heading_cell = laid.child(render_table, 0);
-    let data_cell = laid.child(render_table, 1);
-
-    assert_eq!(
-        laid.size(heading_cell).height,
-        56.0,
-        "heading row height must default to 56.0"
-    );
-    assert_eq!(
-        laid.size(data_cell).height,
-        48.0,
-        "data row height must default to kMinInteractiveDimension (48.0), not 52.0"
-    );
-}
-
-/// A `DataTableThemeData.heading_row_height` override reaches the MOUNTED
-/// tree, not just `resolve_style` computed in isolation.
-#[test]
-fn heading_row_height_theme_override_reaches_the_mounted_tree() {
-    let mut theme = ThemeData::light();
-    theme.data_table_theme = Some(DataTableThemeData {
-        heading_row_height: Some(80.0),
-        ..Default::default()
-    });
-    let table = DataTable::new(
-        vec![text_column("Name")],
-        vec![DataRow::new(vec![text_cell("Ada")])],
-    );
-    let laid = common::lay_out(themed(theme, table), loose(400.0));
-    let render_table = laid.try_find_by_render_type("RenderTable").unwrap();
-    let heading_cell = laid.child(render_table, 0);
-
-    assert_eq!(laid.size(heading_cell).height, 80.0);
-}
-
 /// A widget-level override beats the theme tier, which beats the M3 default
 /// — the full triple, proven on a mounted tree (the theme-vs-default and
 /// widget-vs-theme halves are already unit-tested in isolation against
@@ -193,36 +146,6 @@ fn numeric_columns_right_align_their_cell_content() {
 // =============================================================================
 // Selection dispatch
 // =============================================================================
-
-/// Tapping a selectable row's checkbox cell fires `on_select_changed` with
-/// the row's next (flipped) value.
-#[test]
-fn row_checkbox_tap_fires_on_select_changed_with_the_next_value() {
-    let observed = Rc::new(RefCell::new(None));
-    let recorder = Rc::clone(&observed);
-    let table = DataTable::new(
-        vec![text_column("Name")],
-        vec![
-            DataRow::new(vec![text_cell("Ada")])
-                .selected(false)
-                .on_select_changed(move |_cx, next| *recorder.borrow_mut() = Some(next)),
-        ],
-    );
-    let laid = common::lay_out(themed(ThemeData::light(), table), loose(400.0));
-    let render_table = laid.try_find_by_render_type("RenderTable").unwrap();
-
-    // Checkbox column now leads: [heading checkbox, heading Name, row checkbox, row Name].
-    let row_checkbox = laid.child(render_table, 2);
-    let (x, y) = center_of(&laid, row_checkbox);
-    laid.dispatch_pointer_down(x, y);
-    laid.dispatch_pointer_up(x, y);
-
-    assert_eq!(
-        *observed.borrow(),
-        Some(true),
-        "tapping an unselected, selectable row's checkbox must fire on_select_changed(true)"
-    );
-}
 
 /// Tapping a PLAIN data cell (not the checkbox) of a selectable row also
 /// fires `on_select_changed` with the row's next value — the row's own

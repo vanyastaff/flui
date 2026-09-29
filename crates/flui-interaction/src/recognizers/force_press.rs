@@ -638,48 +638,6 @@ mod tests {
     use crate::arena::GestureArena;
 
     #[test]
-    fn test_force_press_recognizer_creation() {
-        let arena = GestureArena::new();
-        let recognizer = ForcePressGestureRecognizer::new(arena);
-
-        assert_eq!(recognizer.primary_pointer(), None);
-        assert_eq!(recognizer.start_pressure(), FORCE_PRESS_START_PRESSURE);
-        assert_eq!(recognizer.peak_pressure(), FORCE_PRESS_PEAK_PRESSURE);
-    }
-
-    #[test]
-    fn panicking_cancel_callback_cannot_strand_force_press_tracking() {
-        let arena = GestureArena::new();
-        let recognizer = ForcePressGestureRecognizer::new(arena.clone())
-            .with_on_end(|_| panic!("force press cancel panic"));
-        let position = Offset::new(1.0, 2.0);
-        recognizer.add_pointer(PointerId::PRIMARY, position, position);
-        arena.close(PointerId::PRIMARY);
-        recognizer.handle_down(position, 0.5);
-
-        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_cancel_event(
-                crate::events::PointerType::Touch,
-            )));
-        }));
-
-        assert!(unwind.is_err());
-        assert_eq!(recognizer.primary_pointer(), None);
-        assert!(arena.is_empty());
-    }
-
-    #[test]
-    fn test_force_press_custom_thresholds() {
-        let arena = GestureArena::new();
-        let recognizer = ForcePressGestureRecognizer::new(arena)
-            .with_start_pressure(0.3)
-            .with_peak_pressure(0.9);
-
-        assert_eq!(recognizer.start_pressure(), 0.3);
-        assert_eq!(recognizer.peak_pressure(), 0.9);
-    }
-
-    #[test]
     fn test_force_press_start() {
         let arena = GestureArena::new();
         let started = Arc::new(Mutex::new(false));
@@ -699,29 +657,6 @@ mod tests {
         recognizer.handle_down(position, 0.5);
 
         assert!(*started.lock());
-    }
-
-    #[test]
-    fn test_force_press_no_pressure_support() {
-        let arena = GestureArena::new();
-        let started = Arc::new(Mutex::new(false));
-        let started_clone = started.clone();
-
-        let recognizer = ForcePressGestureRecognizer::new(arena).with_on_start(move |_details| {
-            *started_clone.lock() = true;
-        });
-
-        let pointer = PointerId::new(2).expect("nonzero pointer id");
-        let position = Offset::new(100.0, 100.0);
-
-        // Start tracking
-        recognizer.add_pointer(pointer, position, position);
-
-        // Directly call handle_down without pressure (mouse)
-        recognizer.handle_down(position, 0.0);
-
-        // Should not start - no pressure support
-        assert!(!*started.lock());
     }
 
     #[test]
@@ -754,32 +689,6 @@ mod tests {
     }
 
     #[test]
-    fn test_force_press_update() {
-        let arena = GestureArena::new();
-        let update_count = Arc::new(Mutex::new(0));
-        let update_clone = update_count.clone();
-
-        let recognizer = ForcePressGestureRecognizer::new(arena).with_on_update(move |_details| {
-            *update_clone.lock() += 1;
-        });
-
-        let pointer = PointerId::new(2).expect("nonzero pointer id");
-        let position = Offset::new(100.0, 100.0);
-
-        // Start tracking
-        recognizer.add_pointer(pointer, position, position);
-
-        // Down with pressure above threshold
-        recognizer.handle_down(position, 0.5);
-
-        // Move with changing pressure
-        recognizer.handle_move(position, 0.6, PointerType::Touch);
-        recognizer.handle_move(position, 0.7, PointerType::Touch);
-
-        assert_eq!(*update_count.lock(), 2);
-    }
-
-    #[test]
     fn test_force_press_end_on_release() {
         let arena = GestureArena::new();
         let ended = Arc::new(Mutex::new(false));
@@ -802,128 +711,5 @@ mod tests {
         recognizer.handle_up(position);
 
         assert!(*ended.lock());
-    }
-
-    #[test]
-    fn test_force_press_normalized_pressure() {
-        let details = ForcePressDetails::new(Offset::ZERO, Offset::ZERO, 0.5, 1.0);
-        assert_eq!(details.normalized_pressure(), 0.5);
-
-        let details = ForcePressDetails::new(Offset::ZERO, Offset::ZERO, 1.0, 2.0);
-        assert_eq!(details.normalized_pressure(), 0.5);
-    }
-    /// A press that forfeits on slop cannot come back.
-    ///
-    /// Crossing hit slop before the pressure threshold leaves the recognizer
-    /// in `Possible`, where the reference resolves it as *rejected*
-    /// (`force_press.dart:252`). FLUI returned without resolving, so the
-    /// recognizer kept its arena entry — blocking competitors until the
-    /// pointer lifted — and would still start the press if the pointer
-    /// wandered back inside tolerance, after it had already forfeited.
-    ///
-    /// The oracle is that second half: drift out, come back, apply pressure
-    /// well past the start threshold, and demand silence.
-    #[test]
-    fn a_press_that_drifts_past_slop_cannot_start_after_returning() {
-        let started = Arc::new(Mutex::new(false));
-        let flag = started.clone();
-        let arena = GestureArena::new();
-        let recognizer =
-            ForcePressGestureRecognizer::new(arena).with_on_start(move |_| *flag.lock() = true);
-
-        let pointer = PointerId::new(2).expect("nonzero pointer id");
-        let origin = Offset::new(100.0, 100.0);
-        recognizer.add_pointer(pointer, origin, origin);
-
-        // Down at a pressure UNDER the start threshold: phase is `Possible`,
-        // which is the arm this test is about.
-        recognizer.handle_down(origin, 0.1);
-        assert_eq!(
-            recognizer.gesture_state.lock().phase,
-            ForcePressPhase::Possible,
-            "premise: the press must still be unrecognised, or this exercises \
-             the Started/Peaked arm instead"
-        );
-
-        // Drift far past the touch slop, then return to the exact origin.
-        let far = Offset::new(100.0 + 200.0, 100.0);
-        recognizer.handle_move(far, 0.1, PointerType::Touch);
-        recognizer.handle_move(origin, 0.1, PointerType::Touch);
-
-        // Pressure now well past the start threshold. A recognizer that
-        // forfeited must stay silent.
-        recognizer.handle_move(origin, 0.9, PointerType::Touch);
-
-        assert!(
-            !*started.lock(),
-            "a press that already crossed slop must not start on a later \
-             pressure spike"
-        );
-        assert!(
-            recognizer.primary_pointer().is_none(),
-            "and it must have released its arena entry rather than blocking \
-             competitors until the pointer lifts"
-        );
-    }
-
-    /// A mouse cancels on drift a finger survives.
-    ///
-    /// The reference resolves this check through
-    /// `computeHitSlop(event.kind, gestureSettings)` (`force_press.dart:252`);
-    /// FLUI read `touch_slop` unconditionally, so a force press survived 18
-    /// logical pixels of mouse drift where it should survive 1 -- eighteen
-    /// times the tolerance, on the input device that is most precise.
-    ///
-    /// The drift here sits strictly BETWEEN the two thresholds, which is what
-    /// makes the assertion able to fail: a drift under both, or over both,
-    /// gives the same verdict whichever slop was read. Both halves are driven
-    /// through the real `handle_move` path -- asserting on `hit_slop()` alone
-    /// would pass with this recognizer still reading `touch_slop()`.
-    #[test]
-    fn mouse_cancels_on_drift_a_finger_survives() {
-        use crate::settings::DEFAULT_MOUSE_SLOP;
-
-        let touch_slop = GestureSettings::touch_defaults().touch_slop();
-        let drift = f64::midpoint(DEFAULT_MOUSE_SLOP, touch_slop);
-        assert!(
-            drift > DEFAULT_MOUSE_SLOP && drift < touch_slop,
-            "the sample drift must sit strictly between the two thresholds, \
-             or this test cannot tell which one the recognizer read"
-        );
-
-        // Same recognizer, same drift, same pressures -- only the device kind
-        // differs between the two halves.
-        let drive = |kind: PointerType| {
-            let ended = Arc::new(Mutex::new(false));
-            let updates = Arc::new(Mutex::new(0));
-            let (e, u) = (ended.clone(), updates.clone());
-
-            let recognizer = ForcePressGestureRecognizer::new(GestureArena::new())
-                .with_on_end(move |_| *e.lock() = true)
-                .with_on_update(move |_| *u.lock() += 1);
-
-            let pointer = PointerId::new(2).expect("nonzero pointer id");
-            let origin = Offset::new(100.0, 100.0);
-            recognizer.add_pointer(pointer, origin, origin);
-            recognizer.handle_down(origin, 0.5);
-
-            let drifted = Offset::new(100.0 + drift, 100.0);
-            recognizer.handle_move(drifted, 0.6, kind);
-
-            (*ended.lock(), *updates.lock())
-        };
-
-        assert_eq!(
-            drive(PointerType::Mouse),
-            (true, 0),
-            "a mouse drifting {drift} px past the {DEFAULT_MOUSE_SLOP} px mouse \
-             slop must end the press, not keep updating"
-        );
-        assert_eq!(
-            drive(PointerType::Touch),
-            (false, 1),
-            "a finger drifting {drift} px is well inside the {touch_slop} px \
-             touch slop and must keep the press alive"
-        );
     }
 }

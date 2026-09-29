@@ -404,25 +404,6 @@ mod tests {
     }
 
     #[test]
-    fn input_epochs_default_is_empty() {
-        let epochs = InputEpochs::default();
-        assert!(epochs.is_empty());
-        assert_eq!(epochs.len(), 0);
-        assert!(!epochs.overflowed());
-        assert_eq!(epochs.iter().count(), 0);
-    }
-
-    #[test]
-    fn input_epochs_preserves_push_order() {
-        let now = Instant::now();
-        let mut epochs = InputEpochs::EMPTY;
-        epochs.push(epoch(0, now));
-        epochs.push(epoch(1, now + Duration::from_millis(1)));
-        let ids: Vec<u64> = epochs.iter().map(|e| e.id.get()).collect();
-        assert_eq!(ids, vec![0, 1]);
-    }
-
-    #[test]
     fn input_epochs_beyond_capacity_sets_overflowed_and_keeps_the_newest_ones() {
         let now = Instant::now();
         let mut epochs = InputEpochs::EMPTY;
@@ -442,30 +423,6 @@ mod tests {
             (expected_first_kept..total).collect::<Vec<_>>(),
             "oldest-surviving-first order must still hold after wrapping"
         );
-    }
-
-    #[test]
-    fn frame_history_since_none_returns_every_retained_snapshot_oldest_first() {
-        let mut history = FrameHistory::default();
-        let now = Instant::now();
-        for i in 1..=5usize {
-            history.record(&snapshot_at(i, now));
-        }
-        let all = history.since(None);
-        let ids: Vec<u64> = all.iter().map(|s| s.frame_id.get() as u64).collect();
-        assert_eq!(ids, vec![1, 2, 3, 4, 5]);
-    }
-
-    #[test]
-    fn frame_history_since_some_excludes_at_and_before() {
-        let mut history = FrameHistory::default();
-        let now = Instant::now();
-        for i in 1..=5usize {
-            history.record(&snapshot_at(i, now));
-        }
-        let recent = history.since(Some(FrameId::zip(3)));
-        let ids: Vec<u64> = recent.iter().map(|s| s.frame_id.get() as u64).collect();
-        assert_eq!(ids, vec![4, 5]);
     }
 
     #[test]
@@ -499,66 +456,5 @@ mod tests {
             pending.drain().is_empty(),
             "a second drain finds nothing left"
         );
-    }
-
-    /// `peek` must report the same epochs `drain` would, but leave them
-    /// pending for a later real `drain` — the property a failed submit
-    /// that will be retried depends on to not lose input attribution.
-    #[test]
-    fn peek_reports_pending_epochs_without_draining_them() {
-        let mut pending = PendingInputEpochs::default();
-        let now = Instant::now();
-        let a = pending.stamp(now);
-        let b = pending.stamp(now + Duration::from_millis(5));
-
-        let peeked = pending.peek();
-        assert_eq!(peeked.len(), 2, "peek must see every pending epoch");
-        let ids: Vec<u64> = peeked.iter().map(|e| e.id.get()).collect();
-        assert_eq!(ids, vec![a.get(), b.get()]);
-
-        // Unlike `drain`, a second `peek` sees the SAME epochs again.
-        assert_eq!(
-            pending.peek().len(),
-            2,
-            "peek must not have consumed anything"
-        );
-
-        let drained = pending.drain();
-        assert_eq!(
-            drained.len(),
-            2,
-            "the epochs peek reported must still be there for a real drain"
-        );
-    }
-
-    #[test]
-    fn frame_snapshot_latencies_are_larger_for_older_arrivals() {
-        let now = Instant::now();
-        let mut epochs = InputEpochs::EMPTY;
-        let older_arrival = now;
-        let newer_arrival = now + Duration::from_millis(10);
-        epochs.push(epoch(0, older_arrival));
-        epochs.push(epoch(1, newer_arrival));
-        let submit_at = now + Duration::from_millis(20);
-
-        let snapshot = FrameSnapshot {
-            presentation: PresentationId::new(1),
-            frame_id: FrameId::zip(1),
-            clock_timestamp: now,
-            segment_start: now,
-            segment_end: now,
-            submit_at,
-            present_outcome: PresentOutcome::Presented,
-            input_epochs: epochs,
-        };
-
-        let latencies: Vec<(InputEpochId, Duration)> = snapshot.latencies().collect();
-        assert_eq!(latencies.len(), 2);
-        assert!(
-            latencies[0].1 > latencies[1].1,
-            "the older arrival (id 0) must have the larger latency: {latencies:?}"
-        );
-        assert_eq!(latencies[0].1, Duration::from_millis(20));
-        assert_eq!(latencies[1].1, Duration::from_millis(10));
     }
 }

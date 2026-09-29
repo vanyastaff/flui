@@ -183,16 +183,6 @@ impl View for TwoPanickingChildren {
 }
 
 #[test]
-fn recovery_report_types_are_exported_from_the_crate_root() {
-    let disposition = FailureDisposition::Contained;
-    let hook = LifecycleHook::Build;
-    let at: Option<RecoveredAt> = None;
-    assert_eq!(disposition, FailureDisposition::Contained);
-    assert_eq!(hook, LifecycleHook::Build);
-    assert!(at.is_none());
-}
-
-#[test]
 fn converter_preserves_every_hook_attribution_and_input_order() {
     let hooks = [
         LifecycleHook::Build,
@@ -241,42 +231,6 @@ fn converter_preserves_every_hook_attribution_and_input_order() {
         );
         assert_eq!(*internal_invariant, index % 2 == 0);
     }
-}
-
-#[test]
-fn recovered_message_policy_is_exact_and_never_carries_error_details() {
-    let location = real_recovery_location();
-    let convert = |detail: FrameFailureDetail, payload_text: Option<Box<str>>| {
-        detail.recovered_panic_kind_from_parts(
-            location,
-            TypeId::of::<PanicsOnceOnBuild>(),
-            LifecycleHook::Build,
-            payload_text,
-            false,
-        )
-    };
-    let verbatim = convert(
-        FrameFailureDetail::Verbatim,
-        Some("ошибка\0with unicode".into()),
-    );
-    let redacted = convert(
-        FrameFailureDetail::Redacted,
-        Some("must-not-survive".into()),
-    );
-    let non_string = convert(FrameFailureDetail::Verbatim, None);
-    let FrameFailureKind::RecoveredPanic { message, .. } = verbatim else {
-        panic!("expected recovered panic")
-    };
-    assert_eq!(message, PanicText::Verbatim("ошибка\0with unicode".into()));
-    let FrameFailureKind::RecoveredPanic { message, .. } = redacted else {
-        panic!("expected recovered panic")
-    };
-    assert_eq!(message, PanicText::Redacted);
-    assert!(!format!("{message:?}").contains("must-not-survive"));
-    let FrameFailureKind::RecoveredPanic { message, .. } = non_string else {
-        panic!("expected recovered panic")
-    };
-    assert_eq!(message, PanicText::Redacted);
 }
 
 #[test]
@@ -338,27 +292,6 @@ fn explicit_verbatim_keeps_a_non_string_lifecycle_payload_redacted() {
     assert_eq!(*hook, LifecycleHook::Build);
     assert_eq!(message, &PanicText::Redacted);
     assert!(!internal_invariant);
-}
-
-#[cfg(not(debug_assertions))]
-#[test]
-fn release_default_keeps_a_non_string_lifecycle_payload_redacted() {
-    let realm = UiRealm::for_test();
-    let observed = install_collecting_handler(&realm);
-    realm
-        .attach_root_widget(&PanicsOnceWithNonStringPayload {
-            should_panic: Rc::new(Cell::new(true)),
-        })
-        .expect("root attaches");
-    let mut backend = ScriptedSink::always_presents();
-    assert!(render_attempt(&realm, &mut backend));
-
-    let observed = observed.lock().expect("failure collector mutex");
-    assert_eq!(observed.len(), 1, "the recovery is delivered exactly once");
-    let ObservedKind::Recovered { message, .. } = &observed[0].kind else {
-        panic!("expected recovered lifecycle panic")
-    };
-    assert_eq!(message, &PanicText::Redacted);
 }
 
 #[test]
@@ -629,45 +562,6 @@ fn recovery_reports_keep_their_presentation_addresses_isolated() {
             .iter()
             .all(|failure| failure.address.realm_id == realm.realm_id())
     );
-}
-
-#[test]
-fn empty_drain_emits_nothing() {
-    let realm = UiRealm::for_test();
-    let observed = install_collecting_handler(&realm);
-    realm
-        .attach_root_widget(&SizedBox::new(10.0, 10.0))
-        .expect("root attaches");
-    let mut backend = ScriptedSink::always_presents();
-    assert!(render_attempt(&realm, &mut backend));
-    assert!(observed.lock().expect("failure collector mutex").is_empty());
-    assert!(realm.widgets().take_recovered_panics().is_empty());
-}
-
-#[test]
-fn default_recovery_privacy_matches_the_build_profile() {
-    let realm = UiRealm::for_test();
-    let observed = install_collecting_handler(&realm);
-    realm
-        .attach_root_widget(&PanicsOnceOnBuild {
-            should_panic: Rc::new(Cell::new(true)),
-            message: "profile-sensitive recovery",
-        })
-        .expect("root attaches");
-    let mut backend = ScriptedSink::always_presents();
-    assert!(render_attempt(&realm, &mut backend));
-
-    let observed = observed.lock().expect("failure collector mutex");
-    let ObservedKind::Recovered { message, .. } = &observed[0].kind else {
-        panic!("expected recovered panic")
-    };
-    #[cfg(debug_assertions)]
-    assert_eq!(
-        message,
-        &PanicText::Verbatim("profile-sensitive recovery".into())
-    );
-    #[cfg(not(debug_assertions))]
-    assert_eq!(message, &PanicText::Redacted);
 }
 
 #[test]

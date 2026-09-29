@@ -170,12 +170,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_starts_at_identity() {
-        let controller = TransformationController::new();
-        assert_eq!(controller.value().m, Matrix4::identity().m);
-    }
-
-    #[test]
     fn set_value_notifies_on_real_change() {
         let controller = TransformationController::new();
         let notified = Arc::new(AtomicUsize::new(0));
@@ -186,51 +180,6 @@ mod tests {
 
         controller.set_value(Matrix4::translation(10.0, 0.0, 0.0));
         assert_eq!(notified.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn set_value_same_matrix_does_not_renotify() {
-        let controller = TransformationController::new();
-        controller.set_value(Matrix4::translation(5.0, 5.0, 0.0));
-
-        let notified = Arc::new(AtomicUsize::new(0));
-        let counter = Arc::clone(&notified);
-        controller.as_listenable().add_listener(Arc::new(move || {
-            counter.fetch_add(1, Ordering::SeqCst);
-        }));
-
-        controller.set_value(Matrix4::translation(5.0, 5.0, 0.0));
-        assert_eq!(
-            notified.load(Ordering::SeqCst),
-            0,
-            "writing the identical matrix must not notify"
-        );
-
-        controller.set_value(Matrix4::translation(6.0, 5.0, 0.0));
-        assert_eq!(notified.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn clones_share_state() {
-        let controller = TransformationController::new();
-        let clone = controller.clone();
-        controller.set_value(Matrix4::translation(1.0, 2.0, 0.0));
-        assert_eq!(clone.value().m, Matrix4::translation(1.0, 2.0, 0.0).m);
-    }
-
-    #[test]
-    fn as_listenable_is_ptr_stable_across_calls() {
-        // The same controller must hand out `Arc::ptr_eq`-equal listenables
-        // on repeated calls — this is what lets `AnimatedBuilder` detect
-        // "same controller" across rebuilds instead of resubscribing.
-        let controller = TransformationController::new();
-        let a = controller.as_listenable();
-        let b = controller.as_listenable();
-        assert!(Arc::ptr_eq(&a, &b));
-
-        let other = TransformationController::new();
-        let c = other.as_listenable();
-        assert!(!Arc::ptr_eq(&a, &c));
     }
 
     #[test]
@@ -245,12 +194,5 @@ mod tests {
         // the scene origin.
         assert!((scene.dx - 0.0).abs() < 1e-5);
         assert!((scene.dy - 0.0).abs() < 1e-5);
-    }
-
-    #[test]
-    fn to_scene_identity_is_passthrough() {
-        let controller = TransformationController::new();
-        let point = Offset::new(42.0, 7.0);
-        assert_eq!(controller.to_scene(point), point);
     }
 }

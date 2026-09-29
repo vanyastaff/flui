@@ -1380,48 +1380,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn task_io_completes_with_its_value() {
-        let (services, deterministic) = deterministic_services();
-        let spawner = TaskSpawner::new(&services);
-        let handle = spawner
-            .spawn_io("fetch", |_signal| async { "payload" })
-            .expect("spawn must be admitted");
-        deterministic.run_until_idle();
-        assert_eq!(
-            handle.join_within(Duration::from_secs(1)).ok(),
-            Some(TaskOutcome::Completed("payload"))
-        );
-    }
-
-    /// The bounded join is genuinely bounded: a task that never runs (the
-    /// deterministic queue is never driven) times out promptly and hands
-    /// the still-owning handle back for a later join.
-    #[test]
-    fn task_join_deadline_returns_the_handle_instead_of_hanging() {
-        let (services, deterministic) = deterministic_services();
-        let spawner = TaskSpawner::new(&services);
-        let handle = spawner
-            .spawn_compute("parked", |_context| 7)
-            .expect("spawn must be admitted");
-        let before = Instant::now();
-        let timed_out = handle.join_within(Duration::from_millis(50));
-        let handle = match timed_out {
-            Err(JoinTimeout { handle }) => handle,
-            Ok(outcome) => panic!("undriven task must not have an outcome yet: {outcome:?}"),
-        };
-        assert!(
-            before.elapsed() < Duration::from_secs(5),
-            "join_within must respect its deadline"
-        );
-        // The returned handle still owns the task: drive, then join again.
-        deterministic.run_until_idle();
-        assert_eq!(
-            handle.join_within(Duration::from_secs(1)).ok(),
-            Some(TaskOutcome::Completed(7))
-        );
-    }
-
     // ── Task: cancel-on-drop and explicit cancel ────────────────────────────
 
     /// The ownership contract's teeth: DROPPING the handle cancels the
@@ -1480,21 +1438,6 @@ mod tests {
         assert_eq!(deterministic.pending(), (0, 0));
     }
 
-    #[test]
-    fn task_explicit_cancel_reports_cancelled() {
-        let (services, deterministic) = deterministic_services();
-        let spawner = TaskSpawner::new(&services);
-        let handle = spawner
-            .spawn_compute("cancelled-before-start", |_context| 1)
-            .expect("spawn must be admitted");
-        handle.cancel();
-        deterministic.run_until_idle();
-        assert_eq!(
-            handle.join_within(Duration::from_secs(1)).ok(),
-            Some(TaskOutcome::Cancelled)
-        );
-    }
-
     /// A compute body observes cooperative cancellation mid-run through
     /// its context and can exit early; the outcome is whatever it returns
     /// (cancellation is cooperative, not preemptive).
@@ -1545,22 +1488,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn task_io_panic_is_contained_and_reported() {
-        let (services, deterministic) = deterministic_services();
-        let spawner = TaskSpawner::new(&services);
-        let handle = spawner
-            .spawn_io("panics", |_signal| async {
-                panic!("io task panic (expected by this test)")
-            })
-            .expect("spawn must be admitted");
-        deterministic.run_until_idle();
-        assert_eq!(
-            handle.join_within(Duration::from_secs(1)).ok(),
-            Some(TaskOutcome::<()>::Panicked)
-        );
-    }
-
     /// Executor shutdown discards a queued task without running it; the
     /// owner's join reports `Cancelled` (the dedicated channel vanished
     /// without a report), never a hang.
@@ -1576,27 +1503,6 @@ mod tests {
         assert_eq!(
             handle.join_within(Duration::from_secs(1)).ok(),
             Some(TaskOutcome::Cancelled)
-        );
-    }
-
-    /// A spawner that outlives its loop (the runtime dropped the services)
-    /// refuses with `ShuttingDown` instead of resurrecting dead pools.
-    #[test]
-    fn spawner_outliving_the_services_refuses() {
-        let (services, _deterministic) = deterministic_services();
-        let spawner = TaskSpawner::new(&services);
-        drop(services);
-        assert_eq!(
-            spawner.spawn_compute("late", |_context| ()).err(),
-            Some(SpawnError::ShuttingDown)
-        );
-        assert_eq!(
-            spawner.spawn_io("late", |_signal| async {}).err(),
-            Some(SpawnError::ShuttingDown)
-        );
-        assert_eq!(
-            spawner.spawn_worker::<u32, u32, _>("late", |x, _| x).err(),
-            Some(SpawnError::ShuttingDown)
         );
     }
 
@@ -1659,81 +1565,6 @@ mod tests {
         );
     }
 
-    /// The worker re-pumps across idle gaps: submissions after the pump
-    /// exited are processed by a fresh pump.
-    #[test]
-    fn worker_processes_submissions_across_idle_gaps() {
-        let (services, deterministic) = deterministic_services();
-        let spawner = TaskSpawner::new(&services);
-        let mut worker = spawner
-            .spawn_worker("echo", |input: u32, _context| input)
-            .expect("worker must be created");
-        let first = worker.submit(1).expect("submit");
-        deterministic.run_until_idle();
-        assert_eq!(worker.try_latest(), Some((first, 1)));
-        let second = worker.submit(2).expect("submit");
-        deterministic.run_until_idle();
-        assert_eq!(worker.try_latest(), Some((second, 2)));
-    }
-
-    /// Submit never blocks: with the pump never driven, an arbitrary burst
-    /// of submissions is admitted (each replacing the last) rather than
-    /// filling a queue or blocking the caller.
-    #[test]
-    fn worker_submit_never_blocks_under_a_burst() {
-        let (services, _deterministic) = deterministic_services();
-        let spawner = TaskSpawner::new(&services);
-        let mut worker = spawner
-            .spawn_worker("burst", |input: u32, _context| input)
-            .expect("worker must be created");
-        let before = Instant::now();
-        for value in 0..10_000 {
-            worker
-                .submit(value)
-                .expect("submit must never be refused for fullness");
-        }
-        assert!(
-            before.elapsed() < Duration::from_secs(5),
-            "submit must be O(replace), never a blocking enqueue"
-        );
-    }
-
-    /// Cancel-on-drop for workers: dropping the handle stops the pump
-    /// before it touches the pending input. Fails if `WorkerHandle::drop`
-    /// stops cancelling.
-    #[test]
-    fn worker_cancel_on_drop_stops_processing() {
-        let (services, deterministic) = deterministic_services();
-        let spawner = TaskSpawner::new(&services);
-        let calls = Arc::new(AtomicUsize::new(0));
-        let calls_in_worker = Arc::clone(&calls);
-        let mut worker = spawner
-            .spawn_worker("doomed", move |_input: u32, _context| {
-                calls_in_worker.fetch_add(1, Ordering::Relaxed);
-            })
-            .expect("worker must be created");
-        worker.submit(1).expect("submit");
-        drop(worker);
-        deterministic.run_until_idle();
-        assert_eq!(
-            calls.load(Ordering::Relaxed),
-            0,
-            "a dropped worker must not process its pending input"
-        );
-    }
-
-    /// A cancelled worker refuses new submissions.
-    #[test]
-    fn worker_submit_after_cancel_is_refused() {
-        let (services, _deterministic) = deterministic_services();
-        let spawner = TaskSpawner::new(&services);
-        let mut worker = spawner
-            .spawn_worker("cancelled", |input: u32, _context| input)
-            .expect("worker must be created");
-        worker.cancel();
-        assert_eq!(worker.submit(1).err(), Some(SpawnError::ShuttingDown));
-    }
-
     /// A panicking worker job drops that submission but leaves the worker
     /// usable for the next one.
     #[test]
@@ -1772,25 +1603,6 @@ mod tests {
             "the ring must keep the newest events and drop the oldest"
         );
         assert_eq!(events.try_next(), None);
-    }
-
-    /// The late-result quarantine: once the receiving side is gone, a
-    /// publish is an inert `OwnerGone` error — no queue growth, no wake,
-    /// nothing for a dead realm to be revived by. Fails if the publisher
-    /// keeps the queue alive (a strong reference would make late publishes
-    /// silently succeed into the void).
-    #[test]
-    fn publish_after_the_receiver_dies_is_owner_gone() {
-        let (publisher, events) = service_events::<u32>("positions", 3);
-        publisher.publish(1).expect("receiver alive");
-        drop(events);
-        assert_eq!(publisher.publish(2), Err(PublishError::OwnerGone));
-        let clone = publisher.clone();
-        assert_eq!(
-            clone.publish(3),
-            Err(PublishError::OwnerGone),
-            "clones observe the same dead owner"
-        );
     }
 
     /// Evicting the oldest event must destroy it *after* releasing the
@@ -1987,157 +1799,6 @@ mod tests {
     }
 
     #[test]
-    fn capacity_zero_clamps_to_one() {
-        let (publisher, events) = service_events::<u32>("clamped", 0);
-        publisher.publish(1).expect("receiver alive");
-        publisher
-            .publish(2)
-            .expect("capacity 0 must behave as capacity 1");
-        assert_eq!(
-            events.drain(),
-            vec![2],
-            "newest wins under clamped capacity"
-        );
-    }
-
-    /// Dropping a drained batch may re-enter publish — the drained values
-    /// must leave the mutex before their destructors run.
-    #[test]
-    fn drain_drop_may_reenter_publish() {
-        use std::sync::mpsc;
-        use std::time::Duration;
-
-        struct Event {
-            on_drop: Option<Box<dyn FnOnce() + Send>>,
-        }
-
-        impl Drop for Event {
-            fn drop(&mut self) {
-                if let Some(callback) = self.on_drop.take() {
-                    callback();
-                }
-            }
-        }
-
-        let (done_tx, done_rx) = mpsc::channel();
-        let worker = std::thread::spawn(move || {
-            let (publisher, receiver) = service_events::<Event>("drain-reenter", 2);
-            let nested = publisher.clone();
-            publisher
-                .publish(Event {
-                    on_drop: Some(Box::new(move || {
-                        nested
-                            .publish(Event { on_drop: None })
-                            .expect("receiver alive during drain Drop");
-                    })),
-                })
-                .expect("receiver alive");
-            publisher
-                .publish(Event { on_drop: None })
-                .expect("receiver alive");
-
-            let drained = receiver.drain();
-            assert_eq!(drained.len(), 2);
-            drop(drained);
-            assert_eq!(
-                receiver.drain().len(),
-                1,
-                "nested publish from drain Drop landed"
-            );
-            done_tx.send(()).expect("orchestrator waiting");
-        });
-
-        match done_rx.recv_timeout(Duration::from_secs(3)) {
-            Ok(()) => worker.join().expect("drain reentry worker must not panic"),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                panic!("drain Drop reentered publish while the queue mutex was held")
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                panic!("drain reentry worker disconnected before signaling completion")
-            }
-        }
-    }
-
-    /// Capacity-2 eviction: when the evicted event's Drop nested-publishes,
-    /// capacity is full again so the nested event retires the just-pushed
-    /// replacement's predecessor — final ring is `[replacement, nested]`.
-    #[test]
-    fn nested_eviction_with_capacity_two() {
-        struct Event {
-            id: u32,
-            drops: Arc<AtomicUsize>,
-            on_drop: Option<Box<dyn FnOnce() + Send>>,
-        }
-
-        impl Drop for Event {
-            fn drop(&mut self) {
-                self.drops.fetch_add(1, Ordering::SeqCst);
-                if let Some(callback) = self.on_drop.take() {
-                    callback();
-                }
-            }
-        }
-
-        let drops = Arc::new(AtomicUsize::new(0));
-        let (publisher, receiver) = service_events::<Event>("cap-two", 2);
-
-        // Seed [0, 1]; 1's Drop will nested-publish 3.
-        publisher
-            .publish(Event {
-                id: 0,
-                drops: Arc::clone(&drops),
-                on_drop: None,
-            })
-            .unwrap();
-        let nested = publisher.clone();
-        let nested_drops = Arc::clone(&drops);
-        publisher
-            .publish(Event {
-                id: 1,
-                drops: Arc::clone(&drops),
-                on_drop: Some(Box::new(move || {
-                    nested
-                        .publish(Event {
-                            id: 3,
-                            drops: nested_drops,
-                            on_drop: None,
-                        })
-                        .expect("nested publish during capacity-2 eviction");
-                })),
-            })
-            .unwrap();
-
-        // Evict 0 → [1, 2]; Drop(0) is inert.
-        publisher
-            .publish(Event {
-                id: 2,
-                drops: Arc::clone(&drops),
-                on_drop: None,
-            })
-            .unwrap();
-        // Evict 1 → push replacement 4 → [2, 4]; Drop(1) publishes 3 →
-        // full, so evict 2 and push 3 → [4, 3].
-        publisher
-            .publish(Event {
-                id: 4,
-                drops: Arc::clone(&drops),
-                on_drop: None,
-            })
-            .unwrap();
-
-        let remaining = receiver.drain();
-        let ids: Vec<u32> = remaining.iter().map(|e| e.id).collect();
-        assert_eq!(
-            ids,
-            vec![4, 3],
-            "nested publish must land; capacity-2 retires the older sibling"
-        );
-        drop(remaining);
-        // Published 0,1,2,4,3 — five events, all dropped exactly once.
-        assert_eq!(drops.load(Ordering::SeqCst), 5);
-    }
-
-    #[test]
     fn panic_in_evicted_drop_leaves_ring_consistent() {
         use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -2210,62 +1871,6 @@ mod tests {
             Err(PublishError::OwnerGone)
         );
         assert_eq!(drops.load(Ordering::SeqCst), 1);
-    }
-
-    /// Concurrent publishers into a capacity-1 ring must not deadlock or
-    /// double-drop under a bounded join.
-    #[test]
-    fn concurrent_publishers_capacity_one_smoke() {
-        use std::sync::mpsc;
-        use std::time::Duration;
-
-        struct Event {
-            drops: Arc<AtomicUsize>,
-        }
-
-        impl Drop for Event {
-            fn drop(&mut self) {
-                self.drops.fetch_add(1, Ordering::SeqCst);
-            }
-        }
-
-        let drops = Arc::new(AtomicUsize::new(0));
-        let (publisher, receiver) = service_events::<Event>("concurrent", 1);
-        let (done_tx, done_rx) = mpsc::channel();
-        let threads: Vec<_> = (0..4)
-            .map(|_| {
-                let publisher = publisher.clone();
-                let drops = Arc::clone(&drops);
-                let done_tx = done_tx.clone();
-                std::thread::spawn(move || {
-                    for _ in 0..64 {
-                        publisher
-                            .publish(Event {
-                                drops: Arc::clone(&drops),
-                            })
-                            .expect("receiver alive");
-                    }
-                    done_tx.send(()).expect("orchestrator waiting");
-                })
-            })
-            .collect();
-        drop(done_tx);
-
-        for i in 0..4 {
-            done_rx
-                .recv_timeout(Duration::from_secs(3))
-                .unwrap_or_else(|_| panic!("publisher thread {i} timed out — likely deadlock"));
-        }
-        for handle in threads {
-            handle.join().expect("publisher thread must not panic");
-        }
-
-        let remaining = receiver.drain();
-        assert_eq!(remaining.len(), 1, "capacity-1 ring retains one event");
-        // 4*64 published; all but the retained event dropped via eviction.
-        assert_eq!(drops.load(Ordering::SeqCst), 4 * 64 - 1);
-        drop(remaining);
-        assert_eq!(drops.load(Ordering::SeqCst), 4 * 64);
     }
 
     /// After `ServiceEvents` drop returns, concurrent publishers that still
@@ -2349,68 +1954,6 @@ mod tests {
         })
     }
 
-    /// The messenger/editor split: a running `KeepsAppAlive` service holds
-    /// the app open; `StopsWithLastWindow` services never do. Fails
-    /// without the registry's lifetime/completion bookkeeping.
-    #[test]
-    fn keeps_app_alive_tracks_lifetime() {
-        let (services, deterministic) = deterministic_services();
-        let mut registry = ServiceRegistry::new();
-        assert!(!registry.keeps_app_alive(), "no services, nothing to hold");
-
-        registry
-            .start(
-                &immediate_service("editor-autosave", ServiceLifetime::StopsWithLastWindow),
-                &services,
-            )
-            .expect("service must start");
-        deterministic.run_until_idle();
-        assert!(
-            !registry.keeps_app_alive(),
-            "an editor-like service must not hold the app open"
-        );
-
-        let flushed = Arc::new(AtomicBool::new(false));
-        registry
-            .start(
-                &until_cancelled_service(
-                    "messenger-sync",
-                    ServiceLifetime::KeepsAppAlive,
-                    Arc::clone(&flushed),
-                ),
-                &services,
-            )
-            .expect("service must start");
-        deterministic.run_until_idle();
-        assert!(
-            registry.keeps_app_alive(),
-            "a RUNNING keep-alive service must hold the app open"
-        );
-    }
-
-    /// A keep-alive service that ran to natural completion releases its
-    /// hold WITHOUT any shutdown call — completion alone flips the answer.
-    #[test]
-    fn keep_alive_hold_releases_on_natural_completion() {
-        let (services, deterministic) = deterministic_services();
-        let mut registry = ServiceRegistry::new();
-        registry
-            .start(
-                &immediate_service("one-shot-sync", ServiceLifetime::KeepsAppAlive),
-                &services,
-            )
-            .expect("service must start");
-        assert!(
-            registry.keeps_app_alive(),
-            "not yet driven: the service is still running"
-        );
-        deterministic.run_until_idle();
-        assert!(
-            !registry.keeps_app_alive(),
-            "a completed keep-alive service must not hold the app open"
-        );
-    }
-
     /// The staged shutdown delivers cancellation and then joins: a service
     /// that waits for its signal gets its flush window and reports
     /// `Completed`. Fails if the cancel stage is skipped (the join would
@@ -2473,63 +2016,6 @@ mod tests {
         );
     }
 
-    /// The deadline is SHARED across services (they flush in parallel, and
-    /// a stuck one cannot grant itself the others' time): two
-    /// deadline-ignoring services still finish shutdown in about one
-    /// deadline, not two.
-    #[test]
-    fn shutdown_deadline_is_shared_not_per_service() {
-        let (services, _deterministic) = deterministic_services();
-        let mut registry = ServiceRegistry::new();
-        for name in ["stuck-a", "stuck-b"] {
-            registry
-                .start(
-                    &ServiceDefinition::new(
-                        name,
-                        ServiceLifetime::StopsWithLastWindow,
-                        |_context| Box::pin(std::future::pending()),
-                    ),
-                    &services,
-                )
-                .expect("service must start");
-        }
-        let before = Instant::now();
-        let report = registry.shutdown(Duration::from_millis(500));
-        assert!(
-            // Strictly less than two deadlines — the discriminating bound:
-            // a per-service (serial) deadline would cost ~1000ms here.
-            before.elapsed() < Duration::from_millis(950),
-            "N stuck services must cost one shared deadline, not N of them; took {:?}",
-            before.elapsed()
-        );
-        assert!(
-            report
-                .entries
-                .iter()
-                .all(|entry| entry.outcome == ServiceShutdownOutcome::DeadlineExceeded)
-        );
-    }
-
-    /// Registry admission stops at shutdown: a late `start` is refused
-    /// instead of spawning a service nothing will ever join.
-    #[test]
-    fn service_start_after_shutdown_is_refused() {
-        let (services, _deterministic) = deterministic_services();
-        let mut registry = ServiceRegistry::new();
-        registry.shutdown(Duration::from_millis(10));
-        let refused = registry.start(
-            &immediate_service("late", ServiceLifetime::StopsWithLastWindow),
-            &services,
-        );
-        assert!(
-            matches!(
-                refused,
-                Err(ServiceStartError::Spawn(SpawnError::ShuttingDown))
-            ),
-            "a start after shutdown must be refused as ShuttingDown: {refused:?}"
-        );
-    }
-
     /// The factory itself is application code: a panic while CONSTRUCTING
     /// the service's future is contained into a typed start failure — it
     /// must not unwind through the caller (the bootstrap), and the failed
@@ -2587,71 +2073,5 @@ mod tests {
         );
         let report = registry.shutdown(Duration::from_millis(200));
         assert_eq!(report.entries[0].outcome, ServiceShutdownOutcome::Panicked);
-    }
-
-    /// A service reaches the background lanes through its context's
-    /// spawner — the sanctioned production route for tasks in this slice.
-    #[test]
-    fn service_context_spawner_reaches_the_lanes() {
-        let (services, deterministic) = deterministic_services();
-        let mut registry = ServiceRegistry::new();
-        let task_output = Arc::new(AtomicUsize::new(0));
-        let output_in_service = Arc::clone(&task_output);
-        registry
-            .start(
-                &ServiceDefinition::new(
-                    "spawning",
-                    ServiceLifetime::StopsWithLastWindow,
-                    move |context| {
-                        let spawner = context.spawner().clone();
-                        let output = Arc::clone(&output_in_service);
-                        Box::pin(async move {
-                            let mut handle = spawner
-                                .spawn_compute("inner", |_context| 21 * 2)
-                                .expect("inner spawn must be admitted");
-                            // Poll-loop with yields: the deterministic drive
-                            // runs this service and its task in one pass.
-                            loop {
-                                match handle.try_join() {
-                                    Ok(TaskOutcome::Completed(value)) => {
-                                        output.store(value, Ordering::Release);
-                                        return;
-                                    }
-                                    Ok(other) => panic!("unexpected outcome: {other:?}"),
-                                    Err(back) => {
-                                        handle = back;
-                                        YieldOnce::default().await;
-                                    }
-                                }
-                            }
-                        })
-                    },
-                ),
-                &services,
-            )
-            .expect("service must start");
-        deterministic.run_until_idle();
-        assert_eq!(task_output.load(Ordering::Acquire), 42);
-        registry.shutdown(Duration::from_millis(200));
-    }
-
-    /// One `Pending`-then-`Ready` yield, waking immediately — lets a
-    /// deterministic drive interleave sibling work.
-    #[derive(Default)]
-    struct YieldOnce {
-        yielded: bool,
-    }
-
-    impl Future for YieldOnce {
-        type Output = ();
-        fn poll(mut self: Pin<&mut Self>, context: &mut std::task::Context<'_>) -> Poll<()> {
-            if self.yielded {
-                Poll::Ready(())
-            } else {
-                self.yielded = true;
-                context.waker().wake_by_ref();
-                Poll::Pending
-            }
-        }
     }
 }

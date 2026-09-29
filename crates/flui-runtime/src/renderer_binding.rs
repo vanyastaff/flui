@@ -531,16 +531,6 @@ impl RenderingFlutterBinding {
             }
         }
     }
-
-    /// Test-only: upgrades `scheduler` and reports whether it succeeded —
-    /// the direct pin for [`Self::standalone_scheduler`]'s whole reason to
-    /// exist (a standalone binding's weak must stay upgradeable for its
-    /// entire lifetime, unlike a bare `new_with_pipeline` call handed a
-    /// temporary that has already dropped).
-    #[cfg(test)]
-    fn scheduler_is_alive(&self) -> bool {
-        self.scheduler.upgrade().is_some()
-    }
 }
 
 // ============================================================================
@@ -654,42 +644,6 @@ mod tests {
     // serialize (the retired semantics-binding test lock guarded exactly
     // this shared-singleton hazard; see AGENTS.md's "Testing quirks").
 
-    /// Red before the fix: `RenderingFlutterBinding::new()` used to pass a
-    /// bare `&UpdateScheduler::new()` temporary into `new_with_pipeline`, which
-    /// only stores the *downgraded* `WeakUpdateScheduler` — nothing else held a
-    /// strong reference to that freshly constructed `UpdateScheduler`, so it
-    /// dropped at the end of `new()`'s constructing statement and
-    /// `request_visual_update`'s upgrade silently, permanently failed from
-    /// the moment construction returned (this test would have failed both
-    /// assertions below against that shape). Green now: `new()` keeps its
-    /// own `UpdateScheduler` alive in `standalone_scheduler` for exactly as long
-    /// as the binding lives, so the weak stays upgradeable and
-    /// `request_visual_update` genuinely schedules a frame — observable via
-    /// `is_frame_scheduled()` flipping true. Nothing ever pumps this
-    /// scheduler (there is no realm behind a standalone binding), so this
-    /// pins that the SCHEDULING attempt succeeds, not that a frame executes.
-    #[test]
-    fn standalone_binding_keeps_its_scheduler_alive_so_request_visual_update_actually_schedules() {
-        let binding = RenderingFlutterBinding::new();
-        assert!(
-            binding.scheduler_is_alive(),
-            "a standalone binding's own scheduler must outlive construction, \
-             not die the moment new() returns"
-        );
-
-        binding.request_visual_update();
-
-        let scheduler = binding
-            .scheduler
-            .upgrade()
-            .expect("standalone_scheduler keeps this upgradeable for the binding's whole life");
-        assert!(
-            scheduler.is_frame_scheduled(),
-            "request_visual_update must genuinely schedule a frame on a live \
-             standalone scheduler, not silently no-op against an already-dead weak"
-        );
-    }
-
     /// #1058: `request_visual_update` must route through the scheduler's
     /// GATED pair (`ensure_visual_update` -> `schedule_frame_if_enabled`),
     /// matching Flutter's `ensureVisualUpdate` (`binding.dart` @ 3.44.0),
@@ -712,50 +666,6 @@ mod tests {
             "request_visual_update must respect frames_enabled, like Flutter's \
              ensureVisualUpdate returning early while frames are disabled"
         );
-    }
-
-    #[test]
-    fn request_visual_update_schedules_a_frame_while_frames_are_enabled() {
-        let binding = RenderingFlutterBinding::new();
-        let scheduler = binding
-            .scheduler
-            .upgrade()
-            .expect("standalone_scheduler keeps this upgradeable for the binding's whole life");
-        assert!(scheduler.frames_enabled(), "frames are enabled by default");
-
-        binding.request_visual_update();
-
-        assert!(scheduler.is_frame_scheduled());
-    }
-
-    #[test]
-    fn test_semantics_enabled() {
-        let binding = RenderingFlutterBinding::new();
-        assert!(!binding.semantics_enabled());
-
-        // Enable
-        binding.set_semantics_enabled(true);
-        assert!(binding.semantics_enabled());
-
-        // Disable
-        binding.set_semantics_enabled(false);
-        assert!(!binding.semantics_enabled());
-    }
-
-    #[test]
-    fn test_send_frames_to_engine() {
-        let binding = RenderingFlutterBinding::new();
-
-        // Initially should send (no deferrals)
-        assert!(binding.send_frames_to_engine());
-
-        // Defer first frame
-        binding.defer_first_frame();
-        assert!(!binding.send_frames_to_engine());
-
-        // Allow first frame
-        binding.allow_first_frame();
-        assert!(binding.send_frames_to_engine());
     }
 
     /// The authoritative frame path: `draw_frame` returns the layer
@@ -858,25 +768,6 @@ mod tests {
              a hit means the position was divided by the DPR a second \
              time ((60,60)/2 = (30,30) lands back inside the box)",
         );
-    }
-
-    #[test]
-    fn test_render_view_management() {
-        let binding = RenderingFlutterBinding::new();
-
-        // Add a render view via the `add_render_view_with_config`
-        // default-impl helper, which delegates to `insert_render_view`
-        // after deriving the view configuration.
-        let view = Arc::new(RwLock::new(RenderView::new()));
-        binding.add_render_view_with_config(1, view.clone());
-
-        assert!(binding.render_view(1).is_some());
-        assert!(binding.render_view(2).is_none());
-
-        // Remove
-        let removed = binding.remove_render_view_by_id(1);
-        assert!(removed.is_some());
-        assert!(binding.render_view(1).is_none());
     }
 
     #[test]

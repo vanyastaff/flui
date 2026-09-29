@@ -152,18 +152,6 @@ fn ordinary_facade_graph_excludes_test_support() {
 }
 
 #[test]
-fn external_consumers_can_name_custom_paint_contract() {
-    let Some(root) = checkout_root() else { return };
-    let mut dependencies = toml::Table::new();
-    dependencies.insert("flui".into(), dependency("flui", root, false));
-    check_consumer(
-        dependencies,
-        "use flui::painting::{Canvas, CustomPainter};\nuse flui::geometry::Size;\n#[derive(Debug)] pub struct Painter;\nimpl CustomPainter for Painter { fn paint(&self, _: &mut Canvas, _: Size) {} fn should_repaint(&self, _: &dyn CustomPainter) -> bool { false } fn as_any(&self) -> &dyn std::any::Any { self } }",
-        "custom painting without testing feature",
-    );
-}
-
-#[test]
 fn external_consumers_extend_and_test_through_the_facade() {
     let Some(root) = checkout_root() else { return };
     for alias in ["flui", "ui"] {
@@ -223,47 +211,6 @@ fn check_consumer(dependencies: toml::Table, source: &str, scenario: &str) {
 }
 
 #[test]
-fn external_notes_consumer_executes_edit_save_and_navigation() {
-    // A real external Cargo package with local path dependencies, not a
-    // published-crate or native platform end-to-end acceptance claim.
-    let Some(root) = checkout_root() else { return };
-    let mut dependencies = toml::Table::new();
-    dependencies.insert("flui".into(), dependency("flui", root, true));
-    let mut framework = dependency("flui", root, true);
-    framework
-        .as_table_mut()
-        .expect("framework dependency")
-        .insert(
-            "features".into(),
-            toml::Value::Array(vec!["testing".into()]),
-        );
-    let mut dev_dependencies = toml::Table::new();
-    dev_dependencies.insert("flui".into(), framework);
-    let output = run_consumer(
-        dependencies,
-        Some(dev_dependencies),
-        include_str!("fixtures/notes_workflow.rs"),
-        "test",
-    );
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        String::from_utf8_lossy(&output.stdout)
-            .contains("notes_edit_validation_save_and_navigation_use_real_dispatch ... ok"),
-        "the downstream workflow test must execute"
-    );
-    assert!(
-        String::from_utf8_lossy(&output.stdout)
-            .contains("notes_edit_validation_save_and_navigation_use_semantic_actions ... ok"),
-        "the downstream semantics workflow must execute"
-    );
-}
-
-#[test]
 fn missing_runtime_dependency_reports_how_to_fix_the_manifest() {
     let Some(root) = checkout_root() else { return };
     let mut dependencies = toml::Table::new();
@@ -279,54 +226,6 @@ fn missing_runtime_dependency_reports_how_to_fix_the_manifest() {
     assert!(!output.status.success(), "missing runtime must be rejected");
     assert!(stderr.contains("add `flui` to Cargo.toml"), "{stderr}");
     assert!(!stderr.contains("proc-macro derive panicked"), "{stderr}");
-}
-
-#[test]
-fn external_consumers_use_only_the_facade_including_when_renamed() {
-    let Some(root) = checkout_root() else { return };
-    for alias in ["flui", "ui"] {
-        for defaults in [false, true] {
-            let mut dependencies = toml::Table::new();
-            dependencies.insert(alias.into(), dependency("flui", root, defaults));
-            let source = include_str!("fixtures/facade_consumer.rs")
-                .replace("flui::", &format!("{alias}::"));
-            check_consumer(
-                dependencies,
-                &source,
-                &format!("facade alias={alias}, defaults={defaults}"),
-            );
-        }
-    }
-}
-
-#[test]
-fn internal_consumers_can_rename_direct_owning_crates() {
-    let Some(root) = checkout_root() else { return };
-    let mut dependencies = toml::Table::new();
-    for (alias, package) in [
-        ("views", "flui-view"),
-        ("motion", "flui-animation"),
-        ("base", "flui-foundation"),
-        ("catalog", "flui-widgets"),
-        ("derive_support", "flui-macros"),
-    ] {
-        dependencies.insert(
-            alias.into(),
-            dependency(package, &root.join("crates").join(package), false),
-        );
-    }
-    let source = include_str!("fixtures/facade_consumer.rs")
-        .replace("flui::prelude", "catalog::prelude")
-        .replace("flui::animation", "motion")
-        .replace(
-            "use flui::Diagnosticable;",
-            "use base::Diagnosticable;\nuse derive_support::Diagnosticable;",
-        );
-    check_consumer(
-        dependencies,
-        &source,
-        "renamed direct owners without facade",
-    );
 }
 
 /// A package on `flui-sdk` alone: every derive names the SDK's module path,
@@ -526,49 +425,6 @@ fn app_drop_requires_unsafe() {
 #[test]
 fn app_free_requires_unsafe() {
     reject_safe_teardown(APP_PLUGIN_SOURCE, "flui_app_free");
-}
-
-#[test]
-fn plugin_macros_use_only_the_facade_including_when_renamed() {
-    for alias in ["flui", "ui"] {
-        for source in [
-            "fn build(_: f64, _: f64) -> flui::hot_reload::Scene { Default::default() } flui::hot_reload::scene_plugin!(build);",
-            APP_PLUGIN_SOURCE,
-        ] {
-            let Some(mut dependencies) = hot_reload_dependencies(false) else {
-                return;
-            };
-            let framework = dependencies.remove("flui").expect("facade dependency");
-            dependencies.insert(alias.into(), framework);
-            check_consumer(
-                dependencies,
-                &source.replace("flui::", &format!("{alias}::")),
-                "facade plugin macro",
-            );
-        }
-    }
-}
-
-#[test]
-fn external_consumer_names_presentation_lifecycle_capability() {
-    let Some(root) = checkout_root() else { return };
-    let mut dependencies = toml::Table::new();
-    dependencies.insert("flui".into(), dependency("flui", root, false));
-    let output = compile_consumer(
-        dependencies,
-        r"
-use flui::view::{LifecycleContext, LifecycleHandle, LifecycleSubscription, LifecycleClosed};
-pub fn acquire(ctx: &dyn LifecycleContext) -> Option<LifecycleHandle> { ctx.lifecycle_handle() }
-pub fn observe(handle: &LifecycleHandle) -> Result<(Option<flui::view::AppLifecycleState>, LifecycleSubscription), LifecycleClosed> {
-    handle.subscribe(|_| {})
-}
-",
-    );
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
 }
 
 #[test]

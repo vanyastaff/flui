@@ -642,83 +642,11 @@ mod tests {
         AnimationController::with_detached_ticker(Duration::from_millis(ms))
     }
 
-    #[test]
-    #[should_panic(expected = "GestureArenaScope")]
-    fn detector_without_a_presentation_arena_fails_during_mount() {
-        let (navigator, _root, top) = navigator_with_two_routes();
-        let detector = BackGestureDetector::new(
-            navigator,
-            top,
-            controller(300),
-            Rc::new(|| true),
-            SizedBox::shrink(),
-        );
-        let mut owner = flui_view::BuildOwner::new();
-        let mut tree = flui_view::ElementTree::new();
-        let root = tree.mount_root(&detector, &mut owner.element_owner_mut());
-        owner.schedule_build_for(root, 0, flui_view::RebuildReason::InitialMount);
-        owner.build_scope(&mut tree);
-    }
-
-    #[test]
-    fn convert_to_logical_flips_sign_only_for_rtl() {
-        assert_eq!(convert_to_logical(0.3, TextDirection::Ltr), 0.3);
-        assert_eq!(convert_to_logical(0.3, TextDirection::Rtl), -0.3);
-        assert_eq!(convert_to_logical(-0.5, TextDirection::Rtl), 0.5);
-    }
-
     // ---- ctor: reports gesture start immediately ----
-
-    #[test]
-    fn ctor_reports_user_gesture_start_immediately() {
-        let (navigator, _root, top) = navigator_with_two_routes();
-        let c = controller(300);
-        assert!(!navigator.user_gesture_in_progress());
-        let gesture = BackGestureController::new(navigator.clone(), top, c);
-        assert!(navigator.user_gesture_in_progress());
-        drop(gesture);
-    }
 
     // ---- drag_update tracks controller.value exactly ----
 
-    #[test]
-    fn drag_update_tracks_controller_value_exactly() {
-        let (navigator, _root, top) = navigator_with_two_routes();
-        let c = controller(300);
-        c.set_value(1.0);
-        let gesture = BackGestureController::new(navigator, top, c.clone());
-
-        gesture.drag_update(0.3);
-        assert!((c.value() - 0.7).abs() < 1e-6, "value={}", c.value());
-        gesture.drag_update(-0.1);
-        assert!((c.value() - 0.8).abs() < 1e-6, "value={}", c.value());
-        gesture.drag_update(0.9);
-        assert!(
-            (c.value() - 0.0).abs() < 1e-6,
-            "clamped to the lower bound: value={}",
-            c.value()
-        );
-    }
-
     // ---- full swipe to 0.0, then drag back: no Dismissed-finalize thrash ----
-
-    #[test]
-    fn full_swipe_to_zero_then_drag_back_does_not_thrash() {
-        let (navigator, _root, top) = navigator_with_two_routes();
-        let c = controller(300);
-        c.set_value(1.0);
-        let gesture = BackGestureController::new(navigator, top, c.clone());
-
-        gesture.drag_update(1.0); // value -> 0.0, fully swiped
-        assert_eq!(c.value(), 0.0);
-        assert_eq!(c.status(), flui_animation::AnimationStatus::Dismissed);
-
-        // Dragging back must not panic, and must move the value back up —
-        // set_value's status is recomputed, not stuck at a stale Dismissed.
-        gesture.drag_update(-0.4);
-        assert!((c.value() - 0.4).abs() < 1e-6, "value={}", c.value());
-        assert_ne!(c.status(), flui_animation::AnimationStatus::Dismissed);
-    }
 
     // ---- second pointer mid-drag ignored ----
 

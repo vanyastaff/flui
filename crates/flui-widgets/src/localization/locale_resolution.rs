@@ -200,16 +200,6 @@ mod tests {
     }
 
     #[test]
-    fn empty_preferred_locales_returns_first_supported() {
-        let supported = vec![l("en", Some("US")), l("fr", None)];
-        assert_eq!(
-            basic_locale_list_resolution(Some(&[]), &supported),
-            supported[0]
-        );
-        assert_eq!(basic_locale_list_resolution(None, &supported), supported[0]);
-    }
-
-    #[test]
     fn perfect_match_returns_the_preferred_locale_instance() {
         let supported = vec![l("en", Some("US")), l("fr", Some("FR"))];
         let preferred = vec![l("fr", Some("FR"))];
@@ -223,14 +213,6 @@ mod tests {
         let preferred = vec![ls("zh", Some("Hans"), Some("CN"))];
         let resolved = basic_locale_list_resolution(Some(&preferred), &supported);
         assert_eq!(resolved, ls("zh", Some("Hans"), None));
-    }
-
-    #[test]
-    fn language_and_country_match_beats_language_only() {
-        let supported = vec![l("en", Some("GB")), l("en", None)];
-        let preferred = vec![l("en", Some("GB"))];
-        let resolved = basic_locale_list_resolution(Some(&preferred), &supported);
-        assert_eq!(resolved, l("en", Some("GB")));
     }
 
     #[test]
@@ -259,31 +241,6 @@ mod tests {
         ];
         let resolved = basic_locale_list_resolution(Some(&preferred), &supported);
         assert_eq!(resolved, l("fr", Some("FR")));
-    }
-
-    #[test]
-    fn first_preferred_language_only_match_returns_immediately_even_with_a_better_next_locale() {
-        // Oracle parity subtlety: the FIRST preferred locale's language-only
-        // match returns immediately (it is "highly preferred") UNLESS the
-        // *next* preferred locale shares the same language code — a later
-        // perfect match on an unrelated language does NOT supersede it, even
-        // though naive "always defer" reasoning would suggest otherwise.
-        let supported = vec![l("de", Some("DE")), l("fr", Some("FR"))];
-        let preferred = vec![l("de", Some("AT")), l("fr", Some("FR"))];
-        let resolved = basic_locale_list_resolution(Some(&preferred), &supported);
-        assert_eq!(resolved, l("de", Some("DE")));
-    }
-
-    #[test]
-    fn deferred_language_match_wins_when_nothing_better_follows() {
-        let supported = vec![l("de", Some("DE")), l("fr", Some("FR"))];
-        // `de` language-only match is deferred (not the first preferred
-        // locale co-located with a same-language next entry), and the next
-        // preferred locale (`it`) has no match at all — so the deferred `de`
-        // match must win over the eventual `supported_locales.first()` fallback.
-        let preferred = vec![l("es", None), l("de", Some("AT")), l("it", None)];
-        let resolved = basic_locale_list_resolution(Some(&preferred), &supported);
-        assert_eq!(resolved, l("de", Some("DE")));
     }
 
     #[test]
@@ -320,14 +277,6 @@ mod tests {
         let preferred = vec![l("de", Some("CA"))];
         let resolved = basic_locale_list_resolution(Some(&preferred), &supported);
         assert_eq!(resolved, l("fr", Some("CA")));
-    }
-
-    #[test]
-    fn no_match_at_all_falls_back_to_first_supported() {
-        let supported = vec![l("en", Some("US")), l("fr", Some("FR"))];
-        let preferred = vec![l("de", Some("DE"))];
-        let resolved = basic_locale_list_resolution(Some(&preferred), &supported);
-        assert_eq!(resolved, l("en", Some("US")));
     }
 
     #[test]

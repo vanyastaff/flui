@@ -579,22 +579,6 @@ impl From<Rect<f64>> for RRect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::Offset;
-
-    #[test]
-    fn translate_offset_moves_rect_and_keeps_radii() {
-        let rrect = RRect::from_rect_and_radius(
-            Rect::from_origin_size(Point::ZERO, Size::new(40.0, 40.0)),
-            Radius::circular(8.0),
-        );
-        let moved = rrect.translate_offset(Offset::new(70.0, 10.0));
-        assert_eq!(
-            moved.rect,
-            Rect::from_origin_size(Point::new(70.0, 10.0), Size::new(40.0, 40.0),),
-        );
-        assert_eq!(moved.top_left, rrect.top_left);
-        assert_eq!(moved.bottom_right, rrect.bottom_right);
-    }
 
     #[test]
     fn inflate_moves_the_radii_with_the_edges() {

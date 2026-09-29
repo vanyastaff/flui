@@ -262,6 +262,11 @@ pub(crate) mod color_matrix;
 pub(crate) mod command_ir;
 /// Per-frame dirty-rect accumulator behind the `render_scene` scissor.
 mod damage;
+/// Gradient, shadow, and blur instance descriptors: the batch payloads the
+/// shader-paint and shadow dispatch build from a `Paint`/`DrawOp`.
+mod effects;
+mod effects_pipeline;
+mod external_texture_registry;
 /// Per-channel sRGB ↔ linear-light gamma transfer filter pass:
 /// [`gamma::apply_gamma`] applies a [`command_ir::LayerFilter::Gamma`] to a
 /// premultiplied layer offscreen (unpremul → transfer per RGB → clamp →
@@ -269,23 +274,6 @@ mod damage;
 /// Alpha is unchanged.  [`gamma::GammaPipeline`] owns the pipeline and
 /// bind-group layout.
 pub(crate) mod gamma;
-mod layer_dispatcher;
-/// Per-pixel ColorFilter::Mode blend pass: [`mode::apply_mode`] applies a
-/// [`command_ir::LayerFilter::Mode`] by compositing a solid filter color (SRC)
-/// over each layer pixel (DST) using one of the 28 Porter-Duff / W3C blend
-/// modes (unpremul DST → blend in straight sRGB → clamp → emit premul).
-/// [`mode::ModePipeline`] owns the pipeline and bind-group layout.
-pub(crate) mod mode;
-// A command recorder with no GPU: it exists so the dispatch tests can assert
-// which `render_*` arm fired without a device. Test-only, which is also what
-// makes it honest — nothing in a shipped build constructs one.
-#[cfg(test)]
-pub(crate) mod debug;
-/// Gradient, shadow, and blur instance descriptors: the batch payloads the
-/// shader-paint and shadow dispatch build from a `Paint`/`DrawOp`.
-mod effects;
-mod effects_pipeline;
-mod external_texture_registry;
 /// Windowless GPU capture: rasterize a `LayerTree` to an offscreen texture and
 /// read the pixels back (golden-image / screenshot tooling).
 pub mod headless;
@@ -297,11 +285,18 @@ mod instancing;
 /// `layer_stack` extracted from `WgpuPainter`.  Owns the book-keeping half of
 /// `save_layer`/`restore_layer`; GPU emission lives in `GpuReplay`.
 pub(crate) mod layer_compositor;
+mod layer_dispatcher;
 /// Offscreen-layer rendering and compositing: `render_segment_to_offscreen`,
 /// `render_layer_to_offscreen`, `flush_opacity_layer`, and the filter-chain
 /// folding they drive. Named for the job (a layer rendered to a texture), not
 /// for one of its callers.
 pub(crate) mod layer_offscreen;
+/// Per-pixel ColorFilter::Mode blend pass: [`mode::apply_mode`] applies a
+/// [`command_ir::LayerFilter::Mode`] by compositing a solid filter color (SRC)
+/// over each layer pixel (DST) using one of the 28 Porter-Duff / W3C blend
+/// modes (unpremul DST → blend in straight sRGB → clamp → emit premul).
+/// [`mode::ModePipeline`] owns the pipeline and bind-group layout.
+pub(crate) mod mode;
 /// Separable morphological filter (dilate / erode) pass: [`morphology::apply_morphology`]
 /// applies an [`command_ir::ImageFilterPass::Morph`] to a premultiplied layer
 /// offscreen via two H/V sub-passes into pooled ping-pong textures, then returns
@@ -399,9 +394,6 @@ pub(crate) mod test_support;
 pub(crate) mod fake_window_target;
 
 #[cfg(test)]
-mod sdf_smoke_test;
-
-#[cfg(test)]
 mod clip_layer_readback_tests;
 
 // The engine paints the paragraph it is handed and shapes nothing (ADR-0065).
@@ -423,9 +415,8 @@ mod coverage_blend_readback_tests;
 #[cfg(test)]
 mod gradient_blend_readback_tests;
 
-// aa_oracle_tests contains both CPU unit tests (no GPU) and GPU readback tests.
-// Include whenever test compilation is active.
-#[cfg(test)]
+// Analytic anti-aliasing oracle and the GPU readbacks measured against it.
+#[cfg(all(test, feature = "testing"))]
 mod aa_oracle_tests;
 
 #[cfg(all(test, feature = "testing"))]

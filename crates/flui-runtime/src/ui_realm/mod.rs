@@ -47,7 +47,7 @@ use flui_foundation::geometry::Size;
 use flui_interaction::InteractionLane;
 use flui_layer::Scene;
 #[cfg(test)]
-use flui_platform_api::{DragDropEvent, PlatformInput, PlatformWindow};
+use flui_platform_api::{PlatformInput, PlatformWindow};
 #[cfg(test)]
 use flui_rendering::binding::RendererBinding as _;
 #[cfg(test)]

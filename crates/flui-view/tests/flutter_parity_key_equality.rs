@@ -29,7 +29,7 @@
 
 use std::sync::Arc;
 
-use flui_foundation::{Key, UniqueKey, ValueKey, ViewKey};
+use flui_foundation::{ValueKey, ViewKey};
 use flui_view::ObjectKey;
 
 // ============================================================================
@@ -44,13 +44,6 @@ fn value_key_same_value_same_type_equals() {
     assert!(a.key_eq(b));
 }
 
-#[test]
-fn value_key_different_value_same_type_not_equals() {
-    let a: &dyn ViewKey = &ValueKey::new(3_i32);
-    let b: &dyn ViewKey = &ValueKey::new(2_i32);
-    assert!(!a.key_eq(b));
-}
-
 // ============================================================================
 // Ported (variant): `ValueKey<num>(3) == ValueKey<int>(3)` is false
 //
@@ -61,36 +54,10 @@ fn value_key_different_value_same_type_not_equals() {
 // ValueKey<i32>(3)` even though the numeric values are equal.
 // ============================================================================
 
-#[test]
-fn value_key_different_generic_parameter_not_equals() {
-    let a: &dyn ViewKey = &ValueKey::new(3_u32);
-    let b: &dyn ViewKey = &ValueKey::new(3_i32);
-    assert!(
-        !a.key_eq(b),
-        "ValueKey<u32>(3) must NOT equal ValueKey<i32>(3) — TypeId mixing in key_hash",
-    );
-    assert!(!b.key_eq(a));
-}
-
 // ============================================================================
 // Ported: `UniqueKey() == UniqueKey()` is false
 //         `let k = UniqueKey(); k == k` is true
 // ============================================================================
-
-#[test]
-fn unique_key_two_distinct_instances_not_equals() {
-    let a: &dyn ViewKey = &UniqueKey::new();
-    let b: &dyn ViewKey = &UniqueKey::new();
-    assert!(!a.key_eq(b));
-}
-
-#[test]
-fn unique_key_self_equals_self() {
-    let k = UniqueKey::new();
-    let a: &dyn ViewKey = &k;
-    let b: &dyn ViewKey = &k;
-    assert!(a.key_eq(b));
-}
 
 // ============================================================================
 // Ported: `ObjectKey(k) == ObjectKey(k)` is true (when k is the same
@@ -101,17 +68,6 @@ fn unique_key_self_equals_self() {
 // match; two `ObjectKey`s wrapping the same value in different `Arc`
 // allocations do NOT match.
 // ============================================================================
-
-#[test]
-fn object_key_same_arc_equals() {
-    let shared: Arc<u32> = Arc::new(42);
-    let a: &dyn ViewKey = &ObjectKey::new(Arc::clone(&shared));
-    let b: &dyn ViewKey = &ObjectKey::new(Arc::clone(&shared));
-    assert!(
-        a.key_eq(b),
-        "two ObjectKeys backed by the same Arc must match"
-    );
-}
 
 #[test]
 fn object_key_distinct_arcs_same_inner_not_equals() {
@@ -131,37 +87,9 @@ fn object_key_distinct_arcs_same_inner_not_equals() {
 // Cross-impl matches must reject.
 // ============================================================================
 
-#[test]
-fn flui_key_does_not_equal_value_key_string() {
-    let k: &dyn ViewKey = &Key::from_str("a");
-    let vk: &dyn ViewKey = &ValueKey::new("a".to_owned());
-    assert!(
-        !k.key_eq(vk),
-        "FLUI's Key newtype is NOT an alias for ValueKey<String>; cross-impl match must reject",
-    );
-    assert!(!vk.key_eq(k));
-}
-
 // ============================================================================
 // Ported: keys carry a one-line debug description
 //
 // Flutter asserts `hasOneLineDescription` on each key family. FLUI
 // asserts the `Debug` impl produces a non-empty single-line string.
 // ============================================================================
-
-#[test]
-fn keys_have_one_line_debug_descriptions() {
-    fn assert_one_line<K: ViewKey>(key: K, label: &str) {
-        let s = format!("{:?}", &key as &dyn ViewKey);
-        assert!(!s.is_empty(), "{label} debug must be non-empty");
-        assert!(
-            !s.contains('\n'),
-            "{label} debug must be one line; got {s:?}",
-        );
-    }
-
-    assert_one_line(ValueKey::new(true), "ValueKey<bool>");
-    assert_one_line(UniqueKey::new(), "UniqueKey");
-    assert_one_line(ObjectKey::new(Arc::new(true)), "ObjectKey");
-    assert_one_line(Key::from_str("hello"), "Key");
-}

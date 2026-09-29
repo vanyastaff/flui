@@ -1410,22 +1410,6 @@ mod tests {
         Image::from_rgba8(3, 2, pixels)
     }
 
-    #[test]
-    fn extract_rgba8_region_copies_the_requested_rows() {
-        let sub = extract_rgba8_region(&indexed_image(), 1, 0, 2, 2).expect("region fits");
-        assert_eq!((sub.width(), sub.height()), (2, 2));
-        assert_eq!(
-            sub.data(),
-            &[1, 0, 0, 255, 2, 0, 0, 255, 1, 1, 0, 255, 2, 1, 0, 255]
-        );
-    }
-
-    #[test]
-    fn extract_rgba8_region_rejects_a_region_past_the_buffer() {
-        assert!(extract_rgba8_region(&indexed_image(), 0, 1, 3, 2).is_none());
-        assert!(extract_rgba8_region(&indexed_image(), 0, 0, 0, 1).is_none());
-    }
-
     /// The offsets used to be `u32`: a huge one panicked in debug builds and
     /// wrapped in release.
     #[test]

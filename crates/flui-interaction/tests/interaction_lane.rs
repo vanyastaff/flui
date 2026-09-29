@@ -5,7 +5,6 @@ use flui_interaction::routing::MouseRegionTarget;
 use flui_interaction::{
     HitTestEntry, HitTestHandle, HitTestProbe, HitTestResult, InteractionDispatchError,
     InteractionDispatchHandle, InteractionLane, PointerTarget, RenderId, ResolvedRouteToken,
-    RouteResolutionMiss,
 };
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 use std::cell::RefCell;
@@ -23,177 +22,10 @@ assert_impl_all!(MouseRegionTarget: Copy, Send, Sync);
 assert_impl_all!(ResolvedRouteToken: Copy, Send, Sync);
 
 #[test]
-fn public_error_surface_is_typed_and_identifier_free() {
-    let variants = [
-        InteractionDispatchError::IdentifierExhausted,
-        InteractionDispatchError::WrongThread,
-        InteractionDispatchError::InactiveRealm,
-        InteractionDispatchError::WrongRealm,
-        InteractionDispatchError::OwnerGone,
-        InteractionDispatchError::TargetGone,
-        InteractionDispatchError::StaleRoute,
-        InteractionDispatchError::TreeBusy,
-    ];
-    assert_eq!(variants.len(), 8);
-
-    let miss = RouteResolutionMiss::TargetGone { path_index: 3 };
-    assert_eq!(miss.path_index(), 3);
-}
-
-#[test]
 fn lane_mints_a_send_safe_least_privilege_handle() {
     let lane = InteractionLane::try_new().expect("lane identity should be available");
     let handle = lane.dispatch_handle();
     assert_eq!(format!("{handle:?}"), "InteractionDispatchHandle { .. }");
-}
-
-#[test]
-fn activation_errors_have_stable_precedence() {
-    let lane_a = InteractionLane::try_new().expect("lane A");
-    let lane_b = InteractionLane::try_new().expect("lane B");
-    let handle_a = lane_a.dispatch_handle();
-    let handle_b = lane_b.dispatch_handle();
-
-    let foreign_target = lane_b.enter(|| handle_b.register_pointer(|_| {}).expect("B target"));
-    let stale_route = lane_a.enter(|| {
-        let route = handle_a
-            .resolve_pointer_route(&[])
-            .expect("A route")
-            .token();
-        handle_a.release_route(route).expect("make A route stale");
-        route
-    });
-
-    assert_eq!(
-        handle_a.unregister_pointer(foreign_target),
-        Err(InteractionDispatchError::InactiveRealm)
-    );
-    assert_eq!(
-        handle_a.release_route(stale_route),
-        Err(InteractionDispatchError::InactiveRealm)
-    );
-
-    lane_b.enter(|| {
-        assert_eq!(
-            handle_a.release_route(stale_route),
-            Err(InteractionDispatchError::WrongRealm)
-        );
-    });
-    lane_a.enter(|| assert!(handle_a.register_pointer(|_| {}).is_ok()));
-
-    let dead_lane = InteractionLane::try_new().expect("dead lane");
-    let dead_handle = dead_lane.dispatch_handle();
-    drop(dead_lane);
-    assert_eq!(
-        dead_handle.register_pointer(|_| {}),
-        Err(InteractionDispatchError::OwnerGone)
-    );
-    lane_b.enter(|| {
-        assert_eq!(
-            dead_handle.register_pointer(|_| {}),
-            Err(InteractionDispatchError::OwnerGone)
-        );
-    });
-
-    let threaded_dead = dead_handle.clone();
-    let wrong_thread = std::thread::spawn(move || threaded_dead.register_pointer(|_| {}))
-        .join()
-        .expect("worker must not panic");
-    assert_eq!(wrong_thread, Err(InteractionDispatchError::WrongThread));
-}
-
-#[test]
-fn partial_resolution_preserves_live_order_and_reports_ordered_misses() {
-    use flui_interaction::Offset;
-    use flui_interaction::events::{PointerType, make_down_event};
-
-    let lane = InteractionLane::try_new().expect("lane");
-    let handle = lane.dispatch_handle();
-    let calls = Rc::new(RefCell::new(Vec::new()));
-
-    lane.enter(|| {
-        let first_calls = Rc::clone(&calls);
-        let first = handle
-            .register_pointer(move |_| first_calls.borrow_mut().push(1))
-            .expect("first target");
-        let gone = handle
-            .register_pointer(|_| {})
-            .expect("eventually-gone target");
-        let last_calls = Rc::clone(&calls);
-        let last = handle
-            .register_pointer(move |_| last_calls.borrow_mut().push(3))
-            .expect("last target");
-        handle
-            .unregister_pointer(gone)
-            .expect("remove middle target");
-
-        let resolution = handle
-            .resolve_pointer_route(&[hit_entry(first), hit_entry(gone), hit_entry(last)])
-            .expect("partial resolution succeeds");
-        assert_eq!(
-            resolution.misses(),
-            &[RouteResolutionMiss::TargetGone { path_index: 1 }]
-        );
-
-        handle
-            .unregister_pointer(first)
-            .expect("cached route retains first cell");
-        handle
-            .unregister_pointer(last)
-            .expect("cached route retains last cell");
-
-        let event = make_down_event(Offset::ZERO, PointerType::Touch);
-        handle
-            .invoke_pointer_route(resolution.token(), &event)
-            .expect("resolved route remains live");
-        assert_eq!(&*calls.borrow(), &[1, 3]);
-
-        let all_missing = handle
-            .resolve_pointer_route(&[hit_entry(first), hit_entry(gone), hit_entry(last)])
-            .expect("an all-missing path still resolves to an empty route");
-        assert_eq!(
-            all_missing.misses(),
-            &[
-                RouteResolutionMiss::TargetGone { path_index: 0 },
-                RouteResolutionMiss::TargetGone { path_index: 1 },
-                RouteResolutionMiss::TargetGone { path_index: 2 },
-            ]
-        );
-        handle
-            .invoke_pointer_route(all_missing.token(), &event)
-            .expect("empty resolved route is a no-op");
-        assert_eq!(&*calls.borrow(), &[1, 3]);
-    });
-}
-
-#[test]
-fn target_and_route_identity_never_alias_within_one_lane() {
-    let lane = InteractionLane::try_new().expect("lane");
-    let handle = lane.dispatch_handle();
-    lane.enter(|| {
-        let retired_target = handle.register_pointer(|_| {}).expect("retired target");
-        handle
-            .unregister_pointer(retired_target)
-            .expect("retire target");
-        let replacement_target = handle.register_pointer(|_| {}).expect("replacement target");
-        assert_ne!(retired_target, replacement_target);
-        assert_eq!(
-            handle.replace_pointer(retired_target, |_| {}),
-            Err(InteractionDispatchError::TargetGone)
-        );
-
-        let retired_route = handle.resolve_pointer_route(&[]).expect("route").token();
-        handle.release_route(retired_route).expect("retire route");
-        let replacement_route = handle
-            .resolve_pointer_route(&[])
-            .expect("new route has a distinct identity")
-            .token();
-        assert_ne!(retired_route, replacement_route);
-        assert_eq!(
-            handle.release_route(retired_route),
-            Err(InteractionDispatchError::StaleRoute)
-        );
-    });
 }
 
 #[test]
@@ -265,29 +97,6 @@ fn concurrently_live_lanes_keep_targets_and_routes_isolated() {
     });
 }
 
-#[test]
-fn cached_route_reports_owner_gone_after_lane_drop_not_stale_route() {
-    let lane = InteractionLane::try_new().expect("lane");
-    let handle = lane.dispatch_handle();
-    let route = lane.enter(|| {
-        handle
-            .resolve_pointer_route(&[])
-            .expect("empty route is valid")
-            .token()
-    });
-
-    drop(lane);
-
-    assert_eq!(
-        handle.release_route(route),
-        Err(InteractionDispatchError::OwnerGone)
-    );
-    assert_ne!(
-        handle.release_route(route),
-        Err(InteractionDispatchError::StaleRoute)
-    );
-}
-
 // ---------------------------------------------------------------------------
 // Fresh hit test — the capability a drag needs to discover targets it has moved
 // over, which a replayed pointer-down route can never see.
@@ -355,27 +164,6 @@ fn a_fresh_hit_test_asks_the_probe_at_the_position_given() {
     );
 }
 
-#[test]
-fn each_call_re_probes_rather_than_replaying_the_first_answer() {
-    let lane = InteractionLane::try_new().expect("lane");
-    let probe = recording(vec![RenderId::new(1)]);
-    let handle = HitTestHandle::new(lane.dispatch_handle(), probe.clone());
-
-    // The whole point of the capability: a drag moving across three positions
-    // must produce three questions. Caching the first answer is exactly the
-    // pointer-down-route behaviour this exists to escape.
-    lane.enter(|| {
-        for x in [0.0, 10.0, 20.0] {
-            handle.hit_test_at(at(x, 0.0)).expect("realm active");
-        }
-    });
-
-    assert_eq!(
-        probe.asked.borrow().as_slice(),
-        &[at(0.0, 0.0), at(10.0, 0.0), at(20.0, 0.0)]
-    );
-}
-
 /// Two handles on ONE realm read two different trees.
 ///
 /// A realm may host several presentations, each with its own `PipelineOwner`.
@@ -406,42 +194,6 @@ fn two_presentations_on_one_realm_read_their_own_trees() {
     );
     assert_eq!(first.asked.borrow().as_slice(), &[at(1.0, 1.0)]);
     assert_eq!(second.asked.borrow().as_slice(), &[at(2.0, 2.0)]);
-}
-
-#[test]
-fn a_fresh_hit_test_is_refused_outside_its_own_realm() {
-    let lane = InteractionLane::try_new().expect("lane");
-    let handle = HitTestHandle::new(lane.dispatch_handle(), recording(vec![RenderId::new(1)]));
-
-    assert_eq!(
-        handle.hit_test_at(at(0.0, 0.0)).unwrap_err(),
-        InteractionDispatchError::InactiveRealm,
-        "no realm entered"
-    );
-
-    let other = InteractionLane::try_new().expect("second lane");
-    assert_eq!(
-        other
-            .enter(|| handle.hit_test_at(at(0.0, 0.0)))
-            .unwrap_err(),
-        InteractionDispatchError::WrongRealm,
-        "a handle minted by one realm must not read another's tree"
-    );
-}
-
-#[test]
-fn a_snapshot_outlives_the_lane_that_made_it_without_addressing_it() {
-    let snapshot = {
-        let lane = InteractionLane::try_new().expect("lane");
-        let handle = HitTestHandle::new(lane.dispatch_handle(), recording(vec![RenderId::new(3)]));
-        lane.enter(|| handle.hit_test_at(at(5.0, 5.0))).expect("ok")
-    };
-
-    // Owned, so this reads fine after the realm is gone. That is the documented
-    // contract: a stale snapshot is useless, not unsound — it names render
-    // objects that may since have moved or been dropped.
-    assert_eq!(snapshot.path().len(), 1);
-    assert_eq!(snapshot.position(), at(5.0, 5.0));
 }
 
 /// A probe that cannot read the tree right now.

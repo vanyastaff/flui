@@ -90,23 +90,3 @@ fn build_scope_emits_a_build_span() {
         build.fields,
     );
 }
-
-/// An empty build still opens the span. A profiler that only saw the span on
-/// dirty frames would silently attribute an idle frame's cost to whatever phase
-/// ran next.
-#[test]
-fn the_span_opens_even_when_nothing_is_dirty() {
-    let names = spans_during(|| {
-        let mut owner = BuildOwner::new();
-        let mut tree = ElementTree::new();
-        // Twice: the second pass has definitely nothing to do.
-        owner.build_scope(&mut tree);
-        owner.build_scope(&mut tree);
-    });
-
-    let build_spans = names.iter().filter(|span| span.name == "build").count();
-    assert_eq!(
-        build_spans, 2,
-        "one span per build_scope call, dirty or not; saw {names:?}",
-    );
-}

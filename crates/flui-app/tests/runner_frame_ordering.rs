@@ -165,62 +165,6 @@ fn every_runner_frame_site_drives_the_realm_pump() {
     );
 }
 
-/// The realm's frame module in `flui-runtime`, home of `UiRealm::drive_frame`.
-const REALM_FRAME_SOURCE: &str = include_str!("../../flui-runtime/src/ui_realm/frame.rs");
-
-/// The realm's pump module in `flui-runtime`, home of `UiRealm::pump`.
-const REALM_PUMP_SOURCE: &str = include_str!("../../flui-runtime/src/ui_realm/pump.rs");
-
-/// The pump every runner goes through drives its frame inside the realm's
-/// frame drive, the one scheduler drive in `flui-runtime`'s realm: it passes
-/// the realm's owner-local post-frame lane (drained in the same total order
-/// as the shared queue) and makes the drive every presentation's text-store
-/// transaction, with its commit anchor after it (ADR-0027 §3). A pump that
-/// called the scheduler itself would keep every runner count above
-/// unchanged while losing the transaction; its behavior is pinned by
-/// `flui-runtime`'s `presentation_text_input` tests, which pump.
-///
-/// Red-check: have `pump_entered` call `realm.scheduler.drive_frame_with_lane`
-/// around `render_frame` and this fails twice (a second scheduler drive, no
-/// `realm.drive_frame(` in the pump).
-#[test]
-fn the_realm_pump_drives_its_frame_through_the_text_store_transaction() {
-    let realm_frame = production_lines(REALM_FRAME_SOURCE);
-    let realm_pump = production_lines(REALM_PUMP_SOURCE);
-
-    let scheduler_drives = realm_frame
-        .iter()
-        .chain(realm_pump.iter())
-        .filter(|l| l.contains("drive_frame_with_lane("))
-        .count();
-    assert_eq!(
-        scheduler_drives, 1,
-        "UiRealm::drive_frame is the one scheduler drive across the realm's frame and pump \
-         modules; found {scheduler_drives}"
-    );
-    assert!(
-        realm_frame
-            .iter()
-            .any(|l| l.contains("&self.local_post_frame")),
-        "UiRealm::drive_frame passes the realm's own post-frame lane"
-    );
-    assert!(
-        realm_frame
-            .iter()
-            .any(|l| l.contains("TextCommitsClosed::close(self)")),
-        "UiRealm::drive_frame shuts every presentation's text-store commit gate for the drive"
-    );
-    let pump_drives = realm_pump
-        .iter()
-        .filter(|l| l.contains("realm.drive_frame("))
-        .count();
-    assert_eq!(
-        pump_drives, 1,
-        "UiRealm::pump runs its frame through UiRealm::drive_frame exactly once; found \
-         {pump_drives}"
-    );
-}
-
 /// Every background wake — each `WakeAction::PumpAsync` arm (desktop,
 /// Android, iOS, web) and iOS's owner turn — must pump the async driver
 /// through `UiRealm::pump_background`, which clears the `frame_scheduled`

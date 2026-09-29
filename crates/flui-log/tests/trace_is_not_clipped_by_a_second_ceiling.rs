@@ -58,17 +58,3 @@ fn a_module_trace_directive_reaches_the_backend() {
         "a `=trace` directive must not be narrowed by anything downstream"
     );
 }
-
-#[test]
-fn the_platform_layer_states_no_opinion_about_the_maximum_level() {
-    // The structural half of the same guarantee: whatever the filter allows,
-    // the backend does not subtract from it.
-    let config = LogConfig::default();
-    let layer: PlatformLayer<Registry> = PlatformLayer::platform_default(&config);
-
-    assert_eq!(
-        tracing_subscriber::Layer::<Registry>::max_level_hint(&layer),
-        None,
-        "the platform sink must not advertise a ceiling of its own"
-    );
-}

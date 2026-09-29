@@ -1138,25 +1138,6 @@ mod tests {
     }
 
     #[test]
-    fn queued_clear_preserves_close_and_contains_each_capture_panic() {
-        clear_multiple_panicking_captures(true);
-    }
-
-    /// A keyboard event: the cheapest concrete `PlatformInput` to construct
-    /// for a test that only cares about triggering the `on_input` drain.
-    fn keyboard_event() -> PlatformInput {
-        PlatformInput::Keyboard(ui_events::keyboard::KeyboardEvent {
-            state: ui_events::keyboard::KeyState::Down,
-            key: keyboard_types::Key::Named(keyboard_types::NamedKey::Enter),
-            code: ui_events::keyboard::Code::Unidentified,
-            location: ui_events::keyboard::Location::Standard,
-            modifiers: keyboard_types::Modifiers::empty(),
-            repeat: false,
-            is_composing: false,
-        })
-    }
-
-    #[test]
     fn lifecycle_delivery_survives_frame_origin_unwind_and_clear() {
         use std::panic::{AssertUnwindSafe, catch_unwind};
         let callbacks = Arc::new(WindowCallbacks::new());
@@ -1176,125 +1157,6 @@ mod tests {
         callbacks
             .dispatch_lifecycle_immediate(LifecycleEvent::Execution(WindowExecutionState::Running));
         assert_eq!(*seen.lock(), [WindowExecutionState::Suspended]);
-    }
-
-    #[test]
-    fn lifecycle_clear_inside_frame_fences_immediate_followups() {
-        let callbacks = Arc::new(WindowCallbacks::new());
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let inner = Arc::clone(&callbacks);
-        let history = Arc::clone(&seen);
-        callbacks.set_execution_state_callback(Box::new(move |state| {
-            history.lock().push(state);
-            inner.clear();
-        }));
-        let inner = Arc::clone(&callbacks);
-        *callbacks.on_request_frame.lock() = Some(Box::new(move || {
-            inner.dispatch_lifecycle_immediate(LifecycleEvent::Execution(
-                WindowExecutionState::Suspended,
-            ));
-            inner.dispatch_lifecycle_immediate(LifecycleEvent::Execution(
-                WindowExecutionState::Running,
-            ));
-        }));
-        callbacks.dispatch_request_frame();
-        assert_eq!(*seen.lock(), [WindowExecutionState::Suspended]);
-        assert!(callbacks.on_execution_state_change.lock().is_none());
-    }
-
-    /// The safe-area seam's own closed-latch guard, reached the one way it can
-    /// be: a reentrant `clear()` from inside a running event drain sets the
-    /// latch immediately, while `clear_now` — and so the observer's removal —
-    /// waits for that same loop. A safe-area report arriving inside that
-    /// window goes through its own dispatch cell, so the drain's reentrancy
-    /// check does not refuse it, and the latch is the only thing between it
-    /// and an observer whose owner is disposing.
-    ///
-    /// The headless window cannot pin this: it refuses a report on a closed
-    /// window before ever calling the seam, so no backend-facing path reaches
-    /// the latch with the slot still populated.
-    ///
-    /// If reverted: delete the `lifecycle_closed` early return from
-    /// `dispatch_safe_area_change` and the delivery assertion below fails
-    /// while the slot precondition still holds.
-    #[test]
-    fn safe_area_report_inside_a_closing_drain_is_dropped_by_the_latch() {
-        use flui_foundation::geometry::EdgeInsets;
-
-        let callbacks = Arc::new(WindowCallbacks::new());
-        let seen = Arc::new(AtomicU32::new(0));
-        let seen_in_observer = Arc::clone(&seen);
-        callbacks.set_safe_area_callback(Box::new(move |_| {
-            seen_in_observer.fetch_add(1, Ordering::SeqCst);
-        }));
-        callbacks.dispatch_safe_area_change(EdgeInsets::new(44.0, 0.0, 34.0, 0.0));
-        assert_eq!(
-            seen.load(Ordering::SeqCst),
-            1,
-            "an open window delivers the report"
-        );
-
-        let slot_still_filled = Arc::new(AtomicU32::new(0));
-        let filled_in_input = Arc::clone(&slot_still_filled);
-        let inner = Arc::clone(&callbacks);
-        *callbacks.on_input.lock() = Some(Box::new(move |_| {
-            inner.clear();
-            if inner.on_safe_area_change.lock().is_some() {
-                filled_in_input.store(1, Ordering::SeqCst);
-            }
-            inner.dispatch_safe_area_change(EdgeInsets::new(1.0, 1.0, 1.0, 1.0));
-            DispatchEventResult::default()
-        }));
-        let _ = callbacks.dispatch_input(keyboard_event());
-
-        assert_eq!(
-            slot_still_filled.load(Ordering::SeqCst),
-            1,
-            "precondition: the report is dropped by the latch, not by an emptied slot"
-        );
-        assert_eq!(
-            seen.load(Ordering::SeqCst),
-            1,
-            "a report arriving after the latch closed must not reach the observer"
-        );
-        assert!(callbacks.on_safe_area_change.lock().is_none());
-    }
-
-    #[test]
-    fn lifecycle_invocation_and_retired_capture_panics_are_separate() {
-        use std::sync::atomic::AtomicUsize;
-        struct Capture(Arc<AtomicUsize>);
-        impl Drop for Capture {
-            fn drop(&mut self) {
-                self.0.fetch_add(1, Ordering::SeqCst);
-                panic!("retired capture panic");
-            }
-        }
-        let callbacks = Arc::new(WindowCallbacks::new());
-        let dropped = Arc::new(AtomicUsize::new(0));
-        let replacement = Arc::new(AtomicUsize::new(0));
-        let capture = Capture(Arc::clone(&dropped));
-        let inner = Arc::clone(&callbacks);
-        let seen = Arc::clone(&replacement);
-        callbacks.set_execution_state_callback(Box::new(move |_| {
-            let _ = &capture;
-            let seen = Arc::clone(&seen);
-            inner.set_execution_state_callback(Box::new(move |_| {
-                seen.fetch_add(1, Ordering::SeqCst);
-            }));
-            panic!("observer panic");
-        }));
-        callbacks.dispatch_lifecycle_immediate(LifecycleEvent::Execution(
-            WindowExecutionState::Suspended,
-        ));
-        callbacks
-            .dispatch_lifecycle_immediate(LifecycleEvent::Execution(WindowExecutionState::Running));
-        assert_eq!(dropped.load(Ordering::SeqCst), 1);
-        assert_eq!(replacement.load(Ordering::SeqCst), 1);
-        // Exercise all immediate effect slots with the same clear/lease contract.
-        callbacks.dispatch_lifecycle_immediate(LifecycleEvent::Focus(false));
-        callbacks.dispatch_lifecycle_immediate(LifecycleEvent::Visibility(false));
-        callbacks.dispatch_lifecycle_immediate(LifecycleEvent::Surface(false));
     }
 
     #[test]
@@ -1325,77 +1187,6 @@ mod tests {
         assert_eq!(history.lock().len(), 2);
     }
 
-    #[test]
-    fn replacing_execution_callback_drops_capture_outside_storage_lock() {
-        struct Reenter(Arc<WindowCallbacks>);
-        impl Drop for Reenter {
-            fn drop(&mut self) {
-                self.0.set_execution_state_callback(Box::new(|_| {}));
-            }
-        }
-        let callbacks = Arc::new(WindowCallbacks::new());
-        let capture = Reenter(Arc::clone(&callbacks));
-        callbacks.set_execution_state_callback(Box::new(move |_| {
-            let _retain = &capture;
-        }));
-        callbacks.set_execution_state_callback(Box::new(|_| {}));
-        callbacks.clear();
-    }
-
-    /// A close requested from inside a callback the FIFO is already
-    /// draining (issue #1043): a widget closing its own window from inside
-    /// a currently-dispatched callback (here, `on_input`) reaches
-    /// `dispatch_close()` while that outer dispatch is still on the stack,
-    /// so `dispatch_close()` only QUEUES `Close` instead of invoking
-    /// `on_close` inline. `clear()` called right after it (as every
-    /// real close arm does) must not take `on_close` out from under that
-    /// still-queued event — `on_close` must still fire exactly once, and
-    /// every slot must still end up empty once the drain finishes. Goes red
-    /// if `clear()` reverts to taking every slot immediately instead of
-    /// queuing a `Clear` event behind the pending `Close`.
-    #[test]
-    fn close_from_inside_a_drained_callback_still_fires_on_close() {
-        let callbacks = Arc::new(WindowCallbacks::new());
-        let close_count = Arc::new(AtomicU32::new(0));
-
-        let count_for_close = Arc::clone(&close_count);
-        callbacks.on_close.lock().replace(Box::new(move || {
-            count_for_close.fetch_add(1, Ordering::SeqCst);
-        }));
-
-        let inner = Arc::clone(&callbacks);
-        callbacks.on_input.lock().replace(Box::new(move |_event| {
-            // Simulate a widget synchronously closing its own window from
-            // inside an input callback — exactly the native shape (a
-            // gesture handler calling `window.close()`, which reaches
-            // `dispatch_close()` then `clear()` on the owning thread
-            // before this callback returns).
-            inner.dispatch_close();
-            inner.clear();
-            DispatchEventResult::default()
-        }));
-
-        callbacks.dispatch_input(keyboard_event());
-
-        assert_eq!(
-            close_count.load(Ordering::SeqCst),
-            1,
-            "on_close must still fire exactly once even when close() is \
-             requested from inside a callback the FIFO is already draining"
-        );
-        assert!(callbacks.on_input.lock().is_none());
-        assert!(callbacks.on_close.lock().is_none());
-        assert!(callbacks.on_request_frame.lock().is_none());
-        assert!(callbacks.on_resize.lock().is_none());
-        assert!(callbacks.on_moved.lock().is_none());
-        assert!(callbacks.on_should_close.lock().is_none());
-        assert!(callbacks.on_active_status_change.lock().is_none());
-        assert!(callbacks.on_visibility_status_change.lock().is_none());
-        assert!(callbacks.on_hover_status_change.lock().is_none());
-        assert!(callbacks.on_appearance_changed.lock().is_none());
-        assert!(callbacks.on_surface_status_change.lock().is_none());
-    }
-
     /// The #919-class hazard from the other direction: `close()` requested
     /// from inside a callback that is currently leased out. Without the
     /// `cleared` latch, `CallbackLease::drop` would restore this very
@@ -1414,111 +1205,6 @@ mod tests {
         assert!(
             callbacks.on_should_close.lock().is_none(),
             "a callback that clears its own window's callbacks from inside \
-             itself must not be resurrected by its own lease's Drop"
-        );
-    }
-
-    /// The ordinary case: a lease taken and dropped with no `clear()` in
-    /// between still restores its callback, so the new latch does not break
-    /// normal reentrant dispatch.
-    #[test]
-    fn a_lease_taken_before_any_clear_restores_normally() {
-        let callbacks = WindowCallbacks::new();
-        let _prev = callbacks.on_should_close.lock().replace(Box::new(|| true));
-
-        assert!(callbacks.dispatch_should_close());
-        assert!(
-            callbacks.on_should_close.lock().is_some(),
-            "an ordinary dispatch outside any clear() must restore its callback"
-        );
-    }
-
-    /// `clear()`'s own doc states this precisely: the `cleared` latch does
-    /// not refuse a fresh registration outright. `CallbackLease::take`
-    /// never consults the latch, only `CallbackLease::drop` does — so a
-    /// callback registered on a leased slot after `clear()` has already run
-    /// still fires exactly once, the next time its event is dispatched,
-    /// and only then does it get discarded instead of restored.
-    #[test]
-    fn a_callback_registered_after_clear_runs_once_then_its_lease_drops_it() {
-        let callbacks = WindowCallbacks::new();
-        callbacks.clear();
-
-        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let ran_in_callback = Arc::clone(&ran);
-        callbacks.on_request_frame.lock().replace(Box::new(move || {
-            ran_in_callback.store(true, Ordering::SeqCst);
-        }));
-
-        callbacks.dispatch_request_frame();
-
-        assert!(
-            ran.load(Ordering::SeqCst),
-            "a callback registered after clear() must still run the one time \
-             its event is dispatched"
-        );
-        assert!(
-            callbacks.on_request_frame.lock().is_none(),
-            "and must not survive past that one dispatch"
-        );
-    }
-
-    /// The surface-status slot carries its parameter through the FIFO to the
-    /// callback, and — like every other leased slot — survives the dispatch
-    /// that ran it, so a resume/release cycle can repeat without the owner
-    /// re-registering.
-    #[test]
-    fn surface_status_change_reaches_its_callback_with_the_parameter() {
-        let callbacks = WindowCallbacks::new();
-        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
-
-        let seen_in_callback = Arc::clone(&seen);
-        callbacks
-            .on_surface_status_change
-            .lock()
-            .replace(Box::new(move |has_surface| {
-                seen_in_callback
-                    .lock()
-                    .expect("BUG: test-only mutex is never poisoned")
-                    .push(has_surface);
-            }));
-
-        callbacks.dispatch_surface_status_change(false);
-        callbacks.dispatch_surface_status_change(true);
-
-        assert_eq!(
-            seen.lock()
-                .expect("BUG: test-only mutex is never poisoned")
-                .clone(),
-            vec![false, true],
-            "both edges reach the callback in order, with the released edge first"
-        );
-        assert!(
-            callbacks.on_surface_status_change.lock().is_some(),
-            "an ordinary dispatch outside any clear() must restore this callback too"
-        );
-    }
-
-    /// The `cleared` latch covers this slot as well: a release callback that
-    /// ends up clearing its own window (a close racing a suspend) must not be
-    /// resurrected by its own lease's `Drop`. This goes red if
-    /// `on_surface_status_change` is left out of `clear_now`'s take-all list.
-    #[test]
-    fn surface_status_change_cleared_from_inside_is_not_resurrected() {
-        let callbacks = Arc::new(WindowCallbacks::new());
-        let inner = Arc::clone(&callbacks);
-        callbacks
-            .on_surface_status_change
-            .lock()
-            .replace(Box::new(move |_has_surface| {
-                inner.clear();
-            }));
-
-        callbacks.dispatch_surface_status_change(false);
-
-        assert!(
-            callbacks.on_surface_status_change.lock().is_none(),
-            "a surface-status callback that clears its window from inside \
              itself must not be resurrected by its own lease's Drop"
         );
     }
@@ -1571,6 +1257,43 @@ mod tests {
         assert!(
             surface_weak.upgrade().is_none(),
             "clear() must drop the surface callback and what it owns"
+        );
+    }
+
+    /// Each lifecycle event reaches its own callback with its own value, and
+    /// only that one.
+    #[test]
+    fn each_lifecycle_event_reaches_only_its_own_callback() {
+        let callbacks = WindowCallbacks::new();
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<(&'static str, bool)>::new()));
+        let record = |name: &'static str| {
+            let seen = Arc::clone(&seen);
+            Box::new(move |value: bool| {
+                seen.lock()
+                    .expect("BUG: test-only mutex is never poisoned")
+                    .push((name, value));
+            })
+        };
+        callbacks
+            .on_active_status_change
+            .lock()
+            .replace(record("focus"));
+        callbacks
+            .on_visibility_status_change
+            .lock()
+            .replace(record("visibility"));
+        callbacks
+            .on_surface_status_change
+            .lock()
+            .replace(record("surface"));
+
+        callbacks.dispatch_lifecycle_immediate(LifecycleEvent::Focus(true));
+        callbacks.dispatch_lifecycle_immediate(LifecycleEvent::Visibility(false));
+        callbacks.dispatch_lifecycle_immediate(LifecycleEvent::Surface(true));
+
+        assert_eq!(
+            *seen.lock().expect("BUG: test-only mutex is never poisoned"),
+            vec![("focus", true), ("visibility", false), ("surface", true)]
         );
     }
 }

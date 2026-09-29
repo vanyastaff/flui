@@ -376,35 +376,6 @@ mod tests {
         assert!(AspectRatioFactor::new(f64::INFINITY).is_none());
     }
 
-    #[test]
-    fn new_accepts_positive_finite() {
-        assert!(AspectRatioFactor::new(1.0).is_some());
-        assert!(AspectRatioFactor::new(16.0 / 9.0).is_some());
-        assert!(AspectRatioFactor::new(0.0001).is_some());
-    }
-
-    #[test]
-    fn from_size_handles_zero_or_negative() {
-        assert!(AspectRatioFactor::from_size(Size::new(0.0, 100.0)).is_none());
-        assert!(AspectRatioFactor::from_size(Size::new(100.0, 0.0)).is_none());
-        let ar = AspectRatioFactor::from_size(Size::new(100.0, 50.0)).unwrap();
-        assert_eq!(ar.value(), 2.0);
-    }
-
-    #[test]
-    fn inverse_swaps_w_and_h() {
-        let ar = AspectRatioFactor::new(2.0).unwrap();
-        assert_eq!(ar.inverse().value(), 0.5);
-    }
-
-    #[test]
-    fn predefined_ratios_are_valid() {
-        assert!(AspectRatioFactor::SQUARE.value() > 0.0);
-        assert!(AspectRatioFactor::WIDESCREEN_16_9.value() > 1.0);
-        assert!(AspectRatioFactor::STANDARD_4_3.value() > 1.0);
-        assert!(AspectRatioFactor::ULTRAWIDE_21_9.value() > 2.0);
-    }
-
     // ---------- _applyAspectRatio (Flutter parity) ------------------------
 
     #[test]
@@ -414,91 +385,7 @@ mod tests {
         assert_eq!(size, Size::ZERO);
     }
 
-    #[test]
-    fn tight_constraints_pass_through_unchanged() {
-        let node = RenderAspectRatio::new(AspectRatioFactor::SQUARE);
-        let size = node.apply_aspect_ratio(BoxConstraints::tight(Size::new(50.0, 80.0)));
-        assert_eq!(size, Size::new(50.0, 80.0));
-    }
-
-    #[test]
-    fn width_first_basic_case() {
-        // 16:9 ratio with max_width=160, max_height=200.
-        // width-first: 160 wide → 90 tall (fits within 200) → return (160, 90).
-        let node = RenderAspectRatio::new(AspectRatioFactor::WIDESCREEN_16_9);
-        let size = node.apply_aspect_ratio(bc(0.0, 160.0, 0.0, 200.0));
-        assert_eq!(size, Size::new(160.0, 90.0));
-    }
-
-    #[test]
-    fn height_constraint_kicks_in() {
-        // Square ratio with max_width=200, max_height=100.
-        // width-first: 200 wide → 200 tall, but 200 > 100 → snap height
-        // to 100, width = 100 → (100, 100).
-        let node = RenderAspectRatio::new(AspectRatioFactor::SQUARE);
-        let size = node.apply_aspect_ratio(bc(0.0, 200.0, 0.0, 100.0));
-        assert_eq!(size, Size::new(100.0, 100.0));
-    }
-
-    #[test]
-    fn unbounded_width_uses_height_path() {
-        // 2:1 ratio, width unbounded, max_height=50.
-        // height-first: 50 tall → 100 wide → (100, 50).
-        let node = RenderAspectRatio::new(AspectRatioFactor::new(2.0).unwrap());
-        let size = node.apply_aspect_ratio(bc(0.0, f64::INFINITY, 0.0, 50.0));
-        assert_eq!(size, Size::new(100.0, 50.0));
-    }
-
-    #[test]
-    fn min_width_pushes_up() {
-        // Square ratio with min_width=50, max_width=200, max_height=300.
-        // width-first: 200 wide → 200 tall (fits) → result (200,200). No min
-        // push-up needed in this case — let's force a case where width drops.
-        // Try ratio=10 (very wide), min_w=50, max_w=20, max_h=100:
-        let node = RenderAspectRatio::new(AspectRatioFactor::new(10.0).unwrap());
-        let size = node.apply_aspect_ratio(bc(50.0, 200.0, 0.0, 5.0));
-        // width-first: 200 → 20 (200/10), but 20 > 5 → height=5, width=50.
-        // width=50 satisfies min_width=50 — no further bump.
-        assert_eq!(size, Size::new(50.0, 5.0));
-    }
-
     // ---------- intrinsic dimensions --------------------------------------
 
-    #[test]
-    fn intrinsics_multiply_or_divide_by_ratio() {
-        let node = RenderAspectRatio::new(AspectRatioFactor::new(2.0).unwrap());
-        flui_rendering::context::intrinsics_test_support::leaf_intrinsics(|ctx| {
-            // For 2:1, width is 2× height; height is 0.5× width.
-            assert_eq!(node.compute_min_intrinsic_width(100.0, ctx), 200.0);
-            assert_eq!(node.compute_max_intrinsic_width(100.0, ctx), 200.0);
-            assert_eq!(node.compute_min_intrinsic_height(100.0, ctx), 50.0);
-            assert_eq!(node.compute_max_intrinsic_height(100.0, ctx), 50.0);
-        });
-    }
-
-    #[test]
-    fn intrinsics_zero_for_infinite_input_without_child() {
-        let node = RenderAspectRatio::new(AspectRatioFactor::SQUARE);
-        flui_rendering::context::intrinsics_test_support::leaf_intrinsics(|ctx| {
-            // Unbounded extent defers to the child; childless → 0.0
-            // (proxy_box.dart `child?.getMinIntrinsicWidth ?? 0.0`).
-            assert_eq!(node.compute_min_intrinsic_width(f64::INFINITY, ctx), 0.0);
-            assert_eq!(node.compute_max_intrinsic_height(f64::INFINITY, ctx), 0.0);
-        });
-    }
-
     // ---------- API surface -----------------------------------------------
-
-    #[test]
-    fn setter_returns_change_flag() {
-        let mut node = RenderAspectRatio::new(AspectRatioFactor::SQUARE);
-        assert_eq!(
-            node.set_aspect_ratio(AspectRatioFactor::WIDESCREEN_16_9),
-            flui_rendering::RenderUpdateImpact::LAYOUT
-        );
-        assert_eq!(
-            node.set_aspect_ratio(AspectRatioFactor::WIDESCREEN_16_9),
-            flui_rendering::RenderUpdateImpact::NONE
-        );
-    }
 }

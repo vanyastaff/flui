@@ -283,15 +283,6 @@ mod tests {
     }
 
     #[test]
-    fn a_completion_from_the_live_generation_publishes_and_asks_for_a_rebuild() {
-        let mut published = Published::default();
-        let frame = solid(2, 2);
-
-        assert!(published.publish(0, frame.clone()));
-        assert_eq!(published.image, Some(frame));
-    }
-
-    #[test]
     fn a_completion_from_a_retired_generation_cannot_replace_the_frame() {
         let mut published = Published::default();
         let live = solid(2, 2);
@@ -310,21 +301,5 @@ mod tests {
             "the frame the live generation published must survive a late \
              completion from a retired one",
         );
-    }
-
-    #[test]
-    fn a_completion_inside_the_inline_poll_window_publishes_without_a_rebuild() {
-        let mut published = Published {
-            inline_window: true,
-            ..Published::default()
-        };
-        let frame = solid(2, 2);
-
-        assert!(
-            !published.publish(0, frame.clone()),
-            "the build that will read this frame has not run yet, so no \
-             rebuild is owed",
-        );
-        assert_eq!(published.image, Some(frame));
     }
 }

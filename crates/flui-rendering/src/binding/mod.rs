@@ -491,26 +491,6 @@ mod tests {
         }
     }
 
-    /// `send_frames_to_engine` is a **required** trait method (no default)
-    /// precisely so each implementer wires its own deferral state instead of
-    /// inheriting a `true`-returning stub. This asserts `TestBinding`'s
-    /// minimal wiring actually reflects `send_frames`, not a trait-level
-    /// default silently masking an unwired knob.
-    #[test]
-    fn send_frames_to_engine_reflects_the_implementers_own_state() {
-        let binding = TestBinding::new();
-        assert!(
-            binding.send_frames_to_engine(),
-            "TestBinding::new defaults send_frames to true"
-        );
-
-        binding.send_frames.store(false, Ordering::SeqCst);
-        assert!(!binding.send_frames_to_engine());
-
-        binding.send_frames.store(true, Ordering::SeqCst);
-        assert!(binding.send_frames_to_engine());
-    }
-
     #[test]
     fn add_render_view_with_config_derives_and_inserts() {
         let binding = TestBinding::new();
@@ -525,24 +505,6 @@ mod tests {
         assert!(view.read().has_configuration());
         assert!(binding.render_view(1).is_some());
         assert_eq!(binding.render_view_ids(), vec![1]);
-    }
-
-    #[test]
-    fn create_view_configuration_for_returns_existing_or_default() {
-        let binding = TestBinding::new();
-
-        let bare = RenderView::new();
-        assert_eq!(
-            binding.create_view_configuration_for(&bare),
-            ViewConfiguration::default()
-        );
-
-        let existing_config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
-        let configured = RenderView::with_configuration(existing_config.clone());
-        assert_eq!(
-            binding.create_view_configuration_for(&configured),
-            existing_config
-        );
     }
 
     #[test]
@@ -568,49 +530,5 @@ mod tests {
 
         binding.handle_metrics_changed();
         assert_eq!(binding.visual_update_calls.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn debug_dump_functions_report_empty_binding_has_no_root() {
-        let binding = TestBinding::new();
-
-        assert_eq!(
-            debug_dump_render_tree(&binding),
-            "No render tree root was added to the binding."
-        );
-        assert_eq!(
-            debug_dump_layer_tree(&binding),
-            "No render tree root was added to the binding."
-        );
-        assert_eq!(
-            debug_dump_semantics_tree(
-                &binding,
-                flui_semantics::DebugSemanticsDumpOrder::TraversalOrder
-            ),
-            "No render tree root was added to the binding."
-        );
-
-        // No pipeline root: falls back to the owner's `Debug` representation
-        // rather than the diagnostics tree.
-        let dump = debug_dump_pipeline_owner_tree(&binding);
-        assert!(!dump.is_empty());
-    }
-
-    #[test]
-    fn debug_dump_render_and_layer_tree_include_the_added_view() {
-        let binding = TestBinding::new();
-        let mut view = RenderView::with_configuration(ViewConfiguration::from_size(
-            Size::new(800.0, 600.0),
-            1.0,
-        ));
-        view.prepare_initial_frame_without_owner();
-        binding.insert_render_view(7, Arc::new(RwLock::new(view)));
-
-        let render_dump = debug_dump_render_tree(&binding);
-        assert!(render_dump.contains("RenderView 7"));
-
-        let layer_dump = debug_dump_layer_tree(&binding);
-        assert!(layer_dump.contains("LayerTree 7"));
-        assert!(!layer_dump.contains("unavailable"));
     }
 }

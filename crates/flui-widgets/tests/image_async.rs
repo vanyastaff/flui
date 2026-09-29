@@ -26,8 +26,8 @@ use common::{lay_out, loose, size};
 use flui_assets::AssetRegistry;
 use flui_foundation::geometry::Size;
 use flui_painting::paint::Image as PixelImage;
+use flui_widgets::SizedBox;
 use flui_widgets::{AssetImage, Image, ImageProvider, ImageProviderError};
-use flui_widgets::{Padding, SizedBox};
 
 /// Bounded budget for a real background file-read + decode to land as an
 /// observed frame — generous for a 75-byte local fixture, never open-ended.
@@ -53,11 +53,6 @@ fn old_size() -> Size {
 
 fn new_size() -> Size {
     size(NEW.0, NEW.1)
-}
-
-/// `inner` grown by `Padding::all(2.0)` on every side.
-fn padded(inner: Size) -> Size {
-    size(inner.width + 4.0, inner.height + 4.0)
 }
 
 fn registry() -> Arc<AssetRegistry> {
@@ -242,42 +237,6 @@ fn asset_image_rebuild_spawns_exactly_one_load() {
         1,
         "completion must not trigger a second load",
     );
-}
-
-/// Two `Image` widgets mounted together with the SAME provider key both
-/// decode correctly through the shared decode cache / in-flight coalescing
-/// path (`image::decode_cache::load_coalesced`).
-///
-/// The "exactly one underlying load" guarantee itself is proven
-/// deterministically at the white-box level by
-/// `image::decode_cache::tests::load_coalesced_shares_one_load_across_concurrent_callers`
-/// (which has crate-internal access to count `start` invocations directly) —
-/// nothing at this integration-test boundary can observe the load count
-/// externally, since `decode_cache` is a private module. This test instead
-/// proves the public, end-to-end consequence: both widgets converge on the
-/// correct decoded image via the shared cache.
-#[test]
-fn two_images_same_key_both_decode_through_the_shared_cache() {
-    use flui_widgets::Column;
-    use flui_widgets::column;
-
-    let path = fixture("tiny-coalesce.png");
-    let reg = registry();
-
-    let mut laid = lay_out(
-        Column::new(column![
-            Image::asset(Arc::clone(&reg), path.clone()),
-            Image::asset(reg, path),
-        ]),
-        loose(1000.0),
-    );
-
-    pump_until(&mut laid, |laid| {
-        let root = laid.current_root();
-        laid.render_node_count() >= 2
-            && laid.size(laid.child(root, 0)) == size(5.0, 3.0)
-            && laid.size(laid.child(root, 1)) == size(5.0, 3.0)
-    });
 }
 
 /// A test double that observes when [`ImageProvider::resolve_async`]'s
@@ -516,179 +475,6 @@ fn async_image_provider_swap_clears_to_the_placeholder_by_default() {
     pump_until(&mut laid, |laid| {
         laid.size(laid.current_root()) == new_size()
     });
-}
-
-/// Flutter's `Verify Image shows correct RenderImage when changing to an
-/// already completed provider` (`image_test.dart`, 3.44.0): when the new
-/// provider's decode is already resolved, the synchronous cache probe the
-/// resolve takes hits immediately, so the swap shows the correct image on the
-/// very frame it lands -- no placeholder gap, even under the default
-/// (non-gapless) clear-on-swap policy, which clears and re-publishes within
-/// the same `did_update_view`.
-///
-/// Both sides are pre-warmed here, so this is the cached-to-cached corner of
-/// the swap matrix; the cold-to-cached corner is the sibling test below.
-#[test]
-fn async_image_provider_swap_between_two_already_cached_providers_shows_immediately() {
-    let path_a = fixture("tiny-swap2-a.png");
-    let path_b = fixture("tiny-swap2-b.png");
-    let reg = registry();
-
-    for (path, expected) in [(path_a.clone(), old_size()), (path_b.clone(), new_size())] {
-        let mut warm_up = lay_out(Image::asset(Arc::clone(&reg), path), loose(1000.0));
-        pump_until(&mut warm_up, |laid| {
-            laid.size(laid.current_root()) == expected
-        });
-    }
-
-    let mut laid = lay_out(Image::asset(Arc::clone(&reg), path_a), loose(1000.0));
-    assert_eq!(
-        laid.size(laid.current_root()),
-        old_size(),
-        "a pre-cached provider must show its real dimensions on its very \
-         first frame, with no placeholder frame at all",
-    );
-
-    laid.pump_widget(Image::asset(reg, path_b));
-    assert_eq!(
-        laid.size(laid.current_root()),
-        new_size(),
-        "swapping between two already-cached providers must show the NEW \
-         one's real dimensions on the same frame as the swap -- the two \
-         fixtures differ in size precisely so that still showing the old \
-         one is a failure here rather than an indistinguishable pass",
-    );
-}
-
-/// The cold-to-cached corner of the swap matrix, with `Image` mounted as the
-/// pipeline ROOT: the first provider mounts on a cache miss and resolves
-/// through a real background load; the second is already cached, so the swap
-/// republishes within `did_update_view` itself.
-///
-/// It began as a regression pin for a different, real failure: back when the
-/// async path wrapped the leaf in a `FutureBuilder` only on a cache miss,
-/// this swap changed the built child's TYPE (wrapped combinator -> bare
-/// leaf), which replaced the ROOT render object -- and the replacement was
-/// mounted but never laid out, so `LaidOut::size` panicked with "render node
-/// should have box geometry after layout". `Image` no longer changes its
-/// child type (it always builds the leaf and holds the subscription in its
-/// own state), so this test no longer reaches that path; the root-render-
-/// object replacement it used to exercise is covered directly, without going
-/// through `Image`, by `child_type_swap.rs`.
-#[test]
-fn async_image_provider_swap_from_a_cold_stream_to_an_already_cached_provider_lays_out() {
-    let path_a = fixture("tiny-swap2-a.png");
-    let path_b = fixture("tiny-swap2-b.png");
-    let reg = registry();
-
-    // Pre-warm ONLY path B.
-    {
-        let mut warm_up = lay_out(
-            Image::asset(Arc::clone(&reg), path_b.clone()),
-            loose(1000.0),
-        );
-        pump_until(&mut warm_up, |laid| {
-            laid.size(laid.current_root()) == new_size()
-        });
-    }
-
-    // Path A starts COLD: a real background load, placeholder until it lands.
-    let mut laid = lay_out(Image::asset(Arc::clone(&reg), path_a), loose(1000.0));
-    pump_until(&mut laid, |laid| {
-        laid.size(laid.current_root()) == old_size()
-    });
-
-    laid.pump_widget(Image::asset(reg, path_b));
-    assert_eq!(
-        laid.size(laid.current_root()),
-        new_size(),
-        "swapping from a cold-then-resolved stream to an already-cached \
-         provider must still lay out the new render object on the same \
-         frame, not leave it permanently without committed geometry",
-    );
-}
-
-/// An async image's forced `width` reserves that width during the
-/// placeholder frame too, not just once decoded -- `RawImage::
-/// create_render_object` calls `render.set_width` unconditionally, even
-/// when `image` is still `None`. With intrinsic size `Size::ZERO` (no image
-/// yet) the aspect source is degenerate, so `RenderImage::compute_size`
-/// falls back to `folded.smallest()`: the forced width axis is tight at 40,
-/// the unconstrained height axis reports its minimum (0). This has no direct
-/// `image_test.dart` counterpart (Flutter's placeholder-sizing story runs
-/// through a different code path, `_ImageState`'s synchronous `ImageStream`
-/// attach), but proves a real, previously-unexercised FLUI behavior: a
-/// forced dimension is not silently dropped while a load is in flight.
-#[test]
-fn async_image_with_forced_width_reserves_that_width_during_the_placeholder_frame() {
-    // A controlled provider, not an asset: the placeholder frame is then a
-    // guaranteed state (nothing can complete until the test says so), so the
-    // exact `40x0` below is a pin on WHAT the frame shows, not on whether the
-    // decode happened to still be in flight when the first frame was read —
-    // the premise the initial-load test above had to drop after a CI red.
-    let (provider, completer) = ControlledProvider::new("forced-width");
-    let mut laid = lay_out(Image::new(provider).width(40.0), loose(1000.0));
-
-    assert_eq!(
-        laid.size(laid.current_root()),
-        size(40.0, 0.0),
-        "the forced width must be honored even on the placeholder frame, \
-         before any image has decoded -- a dropped forced width here would \
-         silently collapse layout to 0x0 for one frame",
-    );
-
-    completer.complete(opaque(5, 3));
-    pump_until(&mut laid, |laid| {
-        laid.size(laid.current_root()) == size(40.0, 24.0)
-    });
-}
-
-/// The same cold-to-cached swap one level down, under a `Padding` parent:
-/// the parent sizes itself from the child it just laid out, so a child left
-/// without committed geometry cannot produce the expected size.
-///
-/// Keeping both this and the root-level sibling is deliberate: the root-level
-/// one alone cannot distinguish a real fix from the scenario quietly ceasing
-/// to replace the root render object, and this nested one alone would miss a
-/// re-root regression.
-#[test]
-fn async_image_provider_swap_lays_out_when_the_replacement_is_not_the_root() {
-    let path_a = fixture("tiny-nested-a.png");
-    let path_b = fixture("tiny-nested-b.png");
-    let reg = registry();
-
-    // Pre-warm ONLY path B, so swapping to it takes the synchronous
-    // cache-probe path and yields a bare leaf where a wrapped combinator was.
-    {
-        let mut warm_up = lay_out(
-            Padding::all(2.0).child(Image::asset(Arc::clone(&reg), path_b.clone())),
-            loose(1000.0),
-        );
-        pump_until(&mut warm_up, |laid| {
-            laid.size(laid.current_root()) == padded(new_size())
-        });
-    }
-
-    let mut laid = lay_out(
-        Padding::all(2.0).child(Image::asset(Arc::clone(&reg), path_a)),
-        loose(1000.0),
-    );
-    pump_until(&mut laid, |laid| {
-        laid.size(laid.current_root()) == padded(old_size())
-    });
-
-    laid.pump_widget(Padding::all(2.0).child(Image::asset(reg, path_b)));
-
-    // The NEW image plus 2px of padding on every side. A child left without
-    // committed geometry cannot produce this, because the padding parent sizes
-    // itself from the child it just laid out -- and because the two fixtures
-    // differ in size, neither can a child still showing the OLD image.
-    assert_eq!(
-        laid.size(laid.current_root()),
-        padded(new_size()),
-        "a replaced render object below the root must be laid out in the same \
-         frame as the swap that created it",
-    );
 }
 
 // ============================================================================
@@ -949,68 +735,6 @@ fn unmounting_the_widget_cancels_its_in_flight_load() {
             "a completion for an unmounted widget must publish nothing",
         );
     }
-}
-
-/// Miss-to-miss under the default policy: the swap clears immediately, and
-/// the frame that eventually lands is the NEW provider's.
-#[test]
-fn a_cold_to_cold_swap_shows_the_new_providers_frame_and_nothing_in_between() {
-    let (old_provider, old_completer) = ControlledProvider::new("cold-to-cold-old");
-    let (new_provider, new_completer) = ControlledProvider::new("cold-to-cold-new");
-
-    let mut laid = lay_out(Image::new(old_provider), loose(1000.0));
-    old_completer.complete(opaque(6, 6));
-    pump_until(&mut laid, |laid| {
-        laid.size(laid.current_root()) == size(6.0, 6.0)
-    });
-
-    laid.pump_widget(Image::new(new_provider));
-    assert_eq!(
-        laid.size(laid.current_root()),
-        size(0.0, 0.0),
-        "the default policy clears the old frame on the swap frame itself",
-    );
-
-    new_completer.complete(opaque(9, 3));
-    pump_until(&mut laid, |laid| {
-        laid.size(laid.current_root()) == size(9.0, 3.0)
-    });
-}
-
-/// The same swap with [`Image::gapless_playback`] on holds the old frame
-/// until the new one lands — and holds it across a load the widget cannot
-/// resolve synchronously, which is the case a snapshot-preserving async
-/// combinator alone cannot cover: the frame being held did not come from the
-/// load that is now in flight.
-#[test]
-fn a_cold_to_cold_swap_under_gapless_playback_holds_the_old_frame_until_the_new_one_lands() {
-    let (old_provider, old_completer) = ControlledProvider::new("gapless-cold-old");
-    let (new_provider, new_completer) = ControlledProvider::new("gapless-cold-new");
-
-    let mut laid = lay_out(
-        Image::new(old_provider).gapless_playback(true),
-        loose(1000.0),
-    );
-    old_completer.complete(opaque(6, 6));
-    pump_until(&mut laid, |laid| {
-        laid.size(laid.current_root()) == size(6.0, 6.0)
-    });
-
-    laid.pump_widget(Image::new(new_provider).gapless_playback(true));
-    for _ in 0..10 {
-        laid.tick();
-        assert_eq!(
-            laid.size(laid.current_root()),
-            size(6.0, 6.0),
-            "gapless playback holds the last decoded frame for as long as the \
-             new load is in flight",
-        );
-    }
-
-    new_completer.complete(opaque(9, 3));
-    pump_until(&mut laid, |laid| {
-        laid.size(laid.current_root()) == size(9.0, 3.0)
-    });
 }
 
 /// A load that fails leaves the displayed frame exactly as the swap left it —

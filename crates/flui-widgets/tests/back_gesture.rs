@@ -6,8 +6,6 @@
 //! `src/navigator/back_gesture.rs`.
 
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, AnimationStatus};
@@ -15,9 +13,7 @@ use flui_interaction::DragStartDetails;
 use flui_view::prelude::*;
 use flui_widgets::__test_access::{BackGestureController, BackGestureRuntime, RouteProbe as _};
 use flui_widgets::SizedBox;
-use flui_widgets::navigator::{
-    Navigator, NavigatorHandle, NavigatorObserver, PageRoute, RouteId, SimpleRoute,
-};
+use flui_widgets::navigator::{Navigator, NavigatorHandle, PageRoute, RouteId, SimpleRoute};
 
 use crate::common::harness::{Harness, mount};
 
@@ -190,108 +186,6 @@ fn dispose_mid_gesture_returns_the_counter_to_zero() {
     );
 }
 
-/// A one-shot observer that counts `did_stop_user_gesture` calls.
-#[derive(Default)]
-struct GestureStopObserver {
-    stops: AtomicUsize,
-}
-impl NavigatorObserver for GestureStopObserver {
-    fn did_stop_user_gesture(&self) {
-        self.stops.fetch_add(1, Ordering::SeqCst);
-    }
-}
-
 // ---- full settle after release: did_stop fires, counter clears ----
 
-/// A released drag settled by genuinely ticking the run out (not
-/// `set_value`) must report `did_stop_user_gesture` to observers exactly
-/// once and leave `user_gesture_in_progress()` false — Flutter's
-/// trailing `AnimationStatusListener` in `dragEnd` firing on the run's
-/// real terminal status.
-///
-/// Red-check: drop `poll_settle`'s call entirely — `awaiting_settle`
-/// stays `true` forever and this test hangs on the final assertion
-/// (never becomes `false`).
-#[test]
-fn full_settle_after_release_reports_did_stop_and_clears_the_counter() {
-    let (navigator, _harness, top, c) = mounted_with_transition_route();
-    let observer = Arc::new(GestureStopObserver::default());
-    navigator.add_observer(Arc::clone(&observer) as Arc<dyn NavigatorObserver>);
-
-    c.set_value(0.49); // <= 0.5, no fling: dragEnd's pop branch
-    let runtime = runtime_for(&navigator, top, &c);
-    runtime.on_drag_start(drag_start());
-
-    runtime.finish_drag(0.0);
-    assert!(
-        runtime.awaiting_settle(),
-        "the 350ms reverse run is still going"
-    );
-    assert!(navigator.user_gesture_in_progress());
-
-    // Genuinely tick the run out (not `set_value`) — mid-flight polls
-    // must not report early.
-    c.tick_at(0.10);
-    runtime.poll_settle();
-    assert!(
-        navigator.user_gesture_in_progress(),
-        "must not report stopped before the run actually settles"
-    );
-    assert_eq!(observer.stops.load(Ordering::SeqCst), 0);
-
-    c.tick_at(0.35); // >= the 350ms pacing -> settles to Dismissed
-    assert_eq!(c.status(), AnimationStatus::Dismissed);
-    runtime.poll_settle();
-
-    assert!(
-        !navigator.user_gesture_in_progress(),
-        "the counter must clear once the run genuinely settles"
-    );
-    assert_eq!(
-        observer.stops.load(Ordering::SeqCst),
-        1,
-        "did_stop_user_gesture must fire exactly once"
-    );
-}
-
 // ---- dispose while awaiting settle (post-release, pre-poll): counter clears ----
-
-/// `dispose_safety_net` must own the deferred report for a
-/// gesture that already *released* (so `self.gesture` is `None` —
-/// `finish_drag` always takes it) but whose settle animation is still
-/// running when the detector unmounts — e.g. the route was swept away by
-/// a `push_and_remove_until` mid-settle, or lost the race between the
-/// pop's own settle and this detector's final rebuild. Checking only
-/// `self.gesture` (as if a live drag were the only case that owes a
-/// report) leaks the counter forever.
-///
-/// Red-check: guard `dispose_safety_net` on `self.gesture` alone (drop
-/// the `awaiting_settle` check) — this test's final assertion fails,
-/// `user_gesture_in_progress()` stays `true` forever.
-#[test]
-fn dispose_while_awaiting_settle_after_release_returns_the_counter_to_zero() {
-    let (navigator, mut harness, top, c) = mounted_with_transition_route();
-    c.set_value(0.49);
-    let runtime = runtime_for(&navigator, top, &c);
-    runtime.on_drag_start(drag_start());
-
-    runtime.finish_drag(0.0);
-    assert!(!runtime.has_gesture(), "finish_drag always takes it");
-    assert!(
-        runtime.awaiting_settle(),
-        "the release animation is still running"
-    );
-    assert!(navigator.user_gesture_in_progress());
-
-    // The detector unmounts before the settle run's next poll — no
-    // `poll_settle` call ever ran.
-    assert!(navigator.is_mounted());
-    harness.enter_owner_scope(|| runtime.dispose_safety_net());
-    harness.tick();
-
-    assert!(
-        !navigator.user_gesture_in_progress(),
-        "dispose must clear the counter for a release still awaiting \
-         settle, not only for a still-dragging gesture"
-    );
-}

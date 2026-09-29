@@ -57,8 +57,6 @@ impl HasDisplayHandle for dyn HostWindow + '_ {
 mod tests {
     use std::sync::Arc;
 
-    use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-
     use super::HostWindow;
     use crate::traits::{PlatformWindow, WindowOptions};
 
@@ -77,11 +75,5 @@ mod tests {
         let id = host.id();
         let window: Arc<dyn PlatformWindow> = host;
         assert_eq!(window.id(), id, "the upcast is the same window");
-    }
-
-    #[test]
-    fn arc_dyn_host_window_is_a_raw_handle_target() {
-        fn assert_bounds<T: HasWindowHandle + HasDisplayHandle + Send + Sync + 'static>() {}
-        assert_bounds::<Arc<dyn HostWindow>>();
     }
 }

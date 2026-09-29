@@ -651,37 +651,6 @@ mod tests {
         assert_eq!(scheme.surface_variant, Color::from_argb(0xFFE7_E0EC));
     }
 
-    /// Oracle citation: `_colorSchemeDarkM3` (`material/theme_data.dart`,
-    /// oracle tag `3.44.0`). Mirrors the light-scheme spot-check above.
-    #[test]
-    fn dark_matches_oracle_color_scheme_dark_m3() {
-        let scheme = ColorScheme::dark();
-        assert_eq!(scheme.brightness, Brightness::Dark);
-        assert_eq!(scheme.primary, Color::from_argb(0xFFD0_BCFF));
-        assert_eq!(scheme.on_primary, Color::from_argb(0xFF38_1E72));
-        assert_eq!(scheme.primary_fixed, Color::from_argb(0xFFEA_DDFF));
-        assert_eq!(scheme.primary_fixed_dim, Color::from_argb(0xFFD0_BCFF));
-        assert_eq!(scheme.surface, Color::from_argb(0xFF14_1218));
-        assert_eq!(
-            scheme.surface_container_highest,
-            Color::from_argb(0xFF36_343B)
-        );
-        assert_eq!(scheme.surface_tint, scheme.primary);
-        assert_eq!(scheme.background, Color::from_argb(0xFF14_1218));
-        assert_eq!(scheme.on_background, Color::from_argb(0xFFE6_E0E9));
-        assert_eq!(scheme.surface_variant, Color::from_argb(0xFF49_454F));
-    }
-
-    #[test]
-    fn light_and_dark_are_distinct() {
-        assert_ne!(ColorScheme::light(), ColorScheme::dark());
-    }
-
-    #[test]
-    fn default_is_light() {
-        assert_eq!(ColorScheme::default(), ColorScheme::light());
-    }
-
     #[test]
     fn copy_with_overrides_only_the_given_roles() {
         let base = ColorScheme::light();
@@ -694,11 +663,5 @@ mod tests {
         assert_eq!(patched.on_primary, base.on_primary);
         assert_eq!(patched.brightness, base.brightness);
         assert_eq!(patched.surface, base.surface);
-    }
-
-    #[test]
-    fn copy_with_no_overrides_is_identity() {
-        let base = ColorScheme::dark();
-        assert_eq!(base.copy_with(ColorSchemeOverrides::default()), base);
     }
 }

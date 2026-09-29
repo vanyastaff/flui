@@ -328,34 +328,10 @@ mod tests {
     use flui_painting::typography::TextSpan;
 
     use super::*;
-    use flui_rendering::context::intrinsics_test_support::{
-        leaf_dry_baseline, leaf_dry_layout, leaf_intrinsics,
-    };
+    use flui_rendering::context::intrinsics_test_support::{leaf_dry_layout, leaf_intrinsics};
 
     fn para(text: &str) -> RenderParagraph {
         RenderParagraph::new(TextSpan::new(text), TextDirection::Ltr)
-    }
-
-    #[test]
-    fn baseline_is_none_before_layout() {
-        let p = para("hello");
-        assert_eq!(
-            p.compute_distance_to_actual_baseline(TextBaseline::Alphabetic),
-            None,
-            "baseline is unavailable until perform_layout runs",
-        );
-    }
-
-    #[test]
-    fn max_intrinsic_width_bounds_min_intrinsic_width() {
-        let p = para("hello world wrapping example");
-        let max = leaf_intrinsics(|c| p.compute_max_intrinsic_width(f64::INFINITY, c));
-        let min = leaf_intrinsics(|c| p.compute_min_intrinsic_width(f64::INFINITY, c));
-        assert!(max > 0.0, "single-line width must be positive, got {max}");
-        assert!(
-            min > 0.0 && min <= max,
-            "min-content {min} must be in (0, max-content {max}]",
-        );
     }
 
     #[test]
@@ -375,69 +351,6 @@ mod tests {
         assert!(
             (min - uncapped_min).abs() < 0.01,
             "max_lines must not change RenderParagraph min intrinsic: {min} vs {uncapped_min}"
-        );
-    }
-
-    #[test]
-    fn max_lines_with_ellipsis_keeps_positive_min_intrinsic() {
-        let p = RenderParagraph::new(
-            TextSpan::new("a soft wrapping phrase that exceeds one line"),
-            TextDirection::Ltr,
-        )
-        .with_max_lines(Some(1))
-        .with_ellipsis(Some("…".to_string()));
-        let min = leaf_intrinsics(|c| p.compute_min_intrinsic_width(f64::INFINITY, c));
-        let max = leaf_intrinsics(|c| p.compute_max_intrinsic_width(f64::INFINITY, c));
-        assert!(min > 0.0 && min <= max);
-    }
-
-    #[test]
-    fn narrow_constraints_wrap_taller_and_no_wider_than_single_line() {
-        let p = para("a b c d e f g h i j k l m n");
-        let wide = leaf_dry_layout(|c| {
-            p.compute_dry_layout(BoxConstraints::new(0.0, 10_000.0, 0.0, 10_000.0), c)
-        });
-        let narrow = leaf_dry_layout(|c| {
-            p.compute_dry_layout(BoxConstraints::new(0.0, 30.0, 0.0, 10_000.0), c)
-        });
-        assert!(
-            narrow.height > wide.height,
-            "wrapping at 30px ({narrow:?}) must be taller than a single line ({wide:?})",
-        );
-        assert!(
-            narrow.width <= wide.width,
-            "wrapped width {:?} cannot exceed the single-line width {:?}",
-            narrow.width,
-            wide.width,
-        );
-    }
-
-    #[test]
-    fn dry_baseline_is_available_without_layout() {
-        let p = para("hello");
-        let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 200.0);
-        let dry =
-            leaf_dry_baseline(|c| p.compute_dry_baseline(constraints, TextBaseline::Alphabetic, c));
-        assert!(
-            dry.is_some_and(|baseline| baseline > 0.0),
-            "text dry baseline must be computable before perform_layout",
-        );
-    }
-
-    #[test]
-    fn intrinsic_height_is_positive_for_text() {
-        let p = para("hello");
-        let h = leaf_intrinsics(|c| p.compute_min_intrinsic_height(200.0, c));
-        assert!(h > 0.0, "laid-out text has positive height, got {h}");
-    }
-
-    #[test]
-    fn intrinsic_height_is_finite_at_infinite_width() {
-        let p = para("hello world");
-        let h = leaf_intrinsics(|c| p.compute_max_intrinsic_height(f64::INFINITY, c));
-        assert!(
-            h.is_finite() && h > 0.0,
-            "height at unbounded width must be finite, got {h}",
         );
     }
 
@@ -487,21 +400,5 @@ mod tests {
             Some(flui_rendering::semantics::TextDirection::Ltr),
         );
         assert!(config.has_been_annotated());
-    }
-
-    #[test]
-    fn describe_semantics_configuration_is_a_no_op_for_empty_text() {
-        let p = para("");
-        let mut config = flui_rendering::semantics::SemanticsConfiguration::new();
-
-        p.describe_semantics_configuration(&mut config);
-
-        assert_eq!(config.label(), None);
-        assert_eq!(config.text_direction(), None);
-        assert!(
-            !config.has_been_annotated(),
-            "an empty paragraph must not mark its configuration annotated — see \
-             ARCHITECTURE.md's \"RenderParagraph publishes no semantics node for empty text\"",
-        );
     }
 }

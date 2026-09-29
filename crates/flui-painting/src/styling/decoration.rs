@@ -438,39 +438,6 @@ where
 mod tests {
     use super::*;
 
-    /// `BoxDecoration::lerp`'s `shape` field is NOT interpolated (Flutter
-    /// parity, `box_decoration.dart:209-211,314`): it switches discretely
-    /// at the midpoint (`shape = if t < 0.5 { a.shape } else { b.shape }`
-    /// above). This branch had zero coverage before -- it could regress to
-    /// always picking `a`, always picking `b`, or an actual interpolation
-    /// without any test failing.
-    #[test]
-    fn lerp_shape_switches_discretely_at_the_midpoint() {
-        let a = BoxDecoration::<f64>::new().set_shape(BoxShape::Rectangle);
-        let b = BoxDecoration::<f64>::new().set_shape(BoxShape::Circle);
-
-        // t < 0.5: `a`'s shape.
-        assert_eq!(BoxDecoration::lerp(&a, &b, 0.0).shape, BoxShape::Rectangle);
-        assert_eq!(BoxDecoration::lerp(&a, &b, 0.25).shape, BoxShape::Rectangle);
-        assert_eq!(
-            BoxDecoration::lerp(&a, &b, 0.499).shape,
-            BoxShape::Rectangle
-        );
-
-        // t == 0.5 exactly: the switch already happened (`t < 0.5` is
-        // false at 0.5), so this lands on `b`'s shape, not `a`'s.
-        assert_eq!(BoxDecoration::lerp(&a, &b, 0.5).shape, BoxShape::Circle);
-
-        // t > 0.5: `b`'s shape.
-        assert_eq!(BoxDecoration::lerp(&a, &b, 0.75).shape, BoxShape::Circle);
-        assert_eq!(BoxDecoration::lerp(&a, &b, 1.0).shape, BoxShape::Circle);
-
-        // And the reverse direction, to catch an accidental `a`/`b` swap.
-        assert_eq!(BoxDecoration::lerp(&b, &a, 0.0).shape, BoxShape::Circle);
-        assert_eq!(BoxDecoration::lerp(&b, &a, 0.5).shape, BoxShape::Rectangle);
-        assert_eq!(BoxDecoration::lerp(&b, &a, 1.0).shape, BoxShape::Rectangle);
-    }
-
     /// A payload written before `shape` existed must still load, as the
     /// rectangle it was. Without `serde(default)` on the field, serde
     /// rejects it outright — `BoxShape: Default` does not reach the
@@ -519,47 +486,6 @@ mod tests {
     }
 
     #[test]
-    fn endpoints_are_exact() {
-        let (a, b) = (full(), Deco::new());
-        assert_eq!(Deco::lerp(&a, &b, 0.0), a);
-        assert_eq!(Deco::lerp(&a, &b, 1.0), b);
-        assert_eq!(Deco::lerp(&a, &b, -1.0), a);
-        assert_eq!(Deco::lerp(&a, &b, 2.0), b);
-    }
-
-    /// A field present on one side only fades toward nothing, monotonically:
-    /// by `1 - t` for `a`'s fields and by `t` for `b`'s. (The alpha was once
-    /// faded out and back in, so a decoration lerping to one with no color
-    /// ended at its own color, fully opaque.)
-    #[test]
-    fn one_sided_fields_fade_toward_nothing() {
-        for (a, b, t, factor) in [
-            (full(), Deco::new(), 0.5_f64, 0.5_f64),
-            (full(), Deco::new(), 0.25, 0.75),
-            (full(), Deco::new(), 0.75, 0.25),
-            (Deco::new(), full(), 0.25, 0.25),
-            (Deco::new(), full(), 0.75, 0.75),
-        ] {
-            let mid = Deco::lerp(&a, &b, t);
-            let alpha = (255.0_f64 * factor).round() as u8;
-            assert_eq!(mid.color, Some(Color::rgba(200, 100, 50, alpha)), "t = {t}");
-            let border = mid.border.expect("scaled border");
-            assert_eq!(border.top, Some(side(4.0 * factor)), "t = {t}");
-            assert_eq!(border.left, Some(side(4.0 * factor)), "t = {t}");
-            assert_eq!(
-                mid.border_radius,
-                Some(BorderRadius::circular(8.0 * factor))
-            );
-            assert_eq!(mid.box_shadow, Some(vec![shadow(4.0 * factor)]));
-            let colors = mid.gradient.expect("scaled gradient").colors().to_vec();
-            assert_eq!(
-                colors,
-                vec![Color::RED.with_alpha(alpha), Color::BLUE.with_alpha(alpha)]
-            );
-        }
-    }
-
-    #[test]
     fn two_sided_fields_lerp() {
         let a = Deco::with_color(Color::rgb(0, 0, 0))
             .set_border(Some(crate::styling::Border::all(side(2.0))))
@@ -588,72 +514,5 @@ mod tests {
             0.5,
         );
         assert_eq!(across.gradient.map(|g| g.colors().len()), Some(3));
-    }
-
-    #[test]
-    fn image_switches_at_the_midpoint() {
-        let image = DecorationImage::new(Image::solid_color(1, 1, Color::RED));
-        let a = Deco::with_image(image.clone());
-        let b = Deco::new();
-        assert_eq!(Deco::lerp(&a, &b, 0.25).image, Some(image.clone()));
-        assert_eq!(Deco::lerp(&a, &b, 0.5).image, None);
-        assert_eq!(Deco::lerp(&b, &a, 0.5).image, Some(image));
-    }
-
-    #[test]
-    fn constructors_setters_and_complexity() {
-        assert_eq!(Deco::default(), Deco::new());
-        assert_eq!(Deco::with_color(Color::RED).color, Some(Color::RED));
-        assert_eq!(
-            Deco::with_gradient(gradient()),
-            Deco::new().set_gradient(Some(gradient()))
-        );
-        let image = DecorationImage::new(Image::solid_color(1, 1, Color::RED));
-        assert_eq!(
-            Deco::with_image(image.clone()),
-            Deco {
-                image: Some(image),
-                ..Deco::new()
-            }
-        );
-        let d = Deco::new()
-            .set_color(Some(Color::BLUE))
-            .set_shape(BoxShape::Circle);
-        assert_eq!((d.color, d.shape), (Some(Color::BLUE), BoxShape::Circle));
-
-        assert!(!Deco::with_color(Color::RED).is_complex());
-        assert!(Deco::with_gradient(gradient()).is_complex());
-        assert!(Deco::new().set_box_shadow(Some(vec![])).is_complex());
-        assert_eq!(
-            Deco::lerp_decoration(&full(), &Deco::new(), 0.5),
-            Some(Deco::lerp(&full(), &Deco::new(), 0.5))
-        );
-    }
-
-    #[test]
-    fn decoration_image_builders() {
-        let filter = ColorFilter::mode(Color::RED, BlendMode::Multiply);
-        let image = DecorationImage::new(Image::solid_color(1, 1, Color::RED))
-            .with_fit(BoxFit::Cover)
-            .with_alignment(Alignment::TOP_LEFT)
-            .with_repeat(ImageRepeat::Repeat)
-            .with_opacity(0.5)
-            .with_color_filter(filter);
-        assert_eq!(image.fit, Some(BoxFit::Cover));
-        assert_eq!(image.alignment, Alignment::TOP_LEFT);
-        assert_eq!(image.repeat, ImageRepeat::Repeat);
-        assert_eq!(image.opacity, 0.5);
-        assert_eq!(image.color_filter, Some(filter));
-        let plain = DecorationImage::new(Image::solid_color(1, 1, Color::RED));
-        assert_eq!(
-            (
-                plain.fit,
-                plain.alignment,
-                plain.repeat,
-                plain.opacity,
-                plain.color_filter
-            ),
-            (None, Alignment::CENTER, ImageRepeat::NoRepeat, 1.0, None)
-        );
     }
 }

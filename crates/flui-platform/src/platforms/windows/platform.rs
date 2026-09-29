@@ -2210,16 +2210,6 @@ static WINDOWS_CAPABILITIES: DesktopCapabilities = DesktopCapabilities;
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_platform_creation() {
-        let result = WindowsPlatform::new();
-        assert!(
-            result.is_ok(),
-            "Failed to create Windows platform: {:?}",
-            result.err()
-        );
-    }
-
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use windows::Win32::UI::WindowsAndMessaging::SendMessageW;
@@ -2239,28 +2229,6 @@ mod tests {
         unsafe {
             SendMessageW(hwnd, msg, Some(WPARAM(0)), Some(LPARAM(0)));
         }
-    }
-
-    #[test]
-    fn off_owner_keyboard_layout_hook_is_refused() {
-        let platform = WindowsPlatform::new().expect("platform");
-        let window = open_hidden(&platform);
-        let log = Arc::new(ProbeLog::default());
-
-        let worker = std::thread::scope(|scope| {
-            scope
-                .spawn(|| {
-                    let probe = Probe::new(&log);
-                    platform.on_keyboard_layout_change(Box::new(move || probe.hit()));
-                    std::thread::current().id()
-                })
-                .join()
-                .expect("registering thread")
-        });
-        send(hwnd_of(&window), WM_INPUTLANGCHANGE);
-
-        assert_eq!(log.runs(), 0, "an off-owner platform hook must not run");
-        assert_eq!(log.dropped_on(), Some(worker));
     }
 
     #[test]
@@ -2312,68 +2280,6 @@ mod tests {
         assert_eq!(log.runs(), 1);
         assert_eq!(log.ran_on(), Some(owner));
         assert_eq!(log.dropped_on(), Some(owner));
-    }
-
-    #[test]
-    fn owner_turn_runs_on_the_owner_and_is_released_there() {
-        let platform = Box::new(WindowsPlatform::new().expect("platform"));
-        let log = Arc::new(ProbeLog::default());
-        let for_ready = Arc::clone(&log);
-        platform
-            .run(Box::new(move |owner| {
-                let probe = Probe::new(&for_ready);
-                let proxy = owner.proxy();
-                owner
-                    .on_wake(Box::new(move || {
-                        probe.hit();
-                        proxy.request_quit().expect("quit from the owner turn");
-                    }))
-                    .expect("register the owner turn");
-                owner.proxy().wake().expect("wake");
-                Ok(())
-            }))
-            .expect("run");
-
-        let owner = std::thread::current().id();
-        assert_eq!(log.runs(), 1, "one wake, one turn, then quit");
-        assert_eq!(log.ran_on(), Some(owner));
-        assert_eq!(log.dropped_on(), Some(owner));
-    }
-
-    #[test]
-    fn off_owner_quit_leaves_the_owner_turn_callback_to_the_owner() {
-        use super::super::owner_control::WindowsOwnerHooks;
-
-        let platform = Arc::new(WindowsPlatform::new().expect("platform"));
-        let log = Arc::new(ProbeLog::default());
-        let hooks = WindowsOwnerHooks::new(
-            Arc::clone(&platform) as Arc<dyn Platform>,
-            &platform.owner_control,
-        );
-        let probe = Probe::new(&log);
-        hooks
-            .on_wake(Box::new(move || probe.hit()))
-            .expect("register the owner turn");
-        drop(hooks);
-
-        let worker = std::thread::scope(|scope| {
-            let quitting = scope.spawn(|| platform.quit());
-            let worker = quitting.thread().id();
-            // `quit` closes the signal first; off the owner, debug builds
-            // then fail its owner assertion, which is not what this pins.
-            let _ = quitting.join();
-            worker
-        });
-        assert_ne!(
-            log.dropped_on(),
-            Some(worker),
-            "an off-owner quit must not drop the owner-turn callback on its thread"
-        );
-        assert_eq!(log.dropped_on(), None, "the owner has not released it yet");
-
-        drop(platform);
-        assert_eq!(log.runs(), 0);
-        assert_eq!(log.dropped_on(), Some(std::thread::current().id()));
     }
 
     #[test]

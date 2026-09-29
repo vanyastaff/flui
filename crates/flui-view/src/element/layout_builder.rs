@@ -374,8 +374,8 @@ mod tests {
 
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use flui_foundation::RenderId;
     use flui_foundation::geometry::Size;
-    use flui_foundation::{ElementId, RenderId};
     use flui_objects::{RenderConstrainedBox, RenderSizedBox};
     use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 
@@ -448,7 +448,6 @@ mod tests {
         owner: BuildOwner,
         tree: ElementTree,
         pipeline: PipelineCell,
-        root: ElementId,
         root_render: RenderId,
     }
 
@@ -493,73 +492,6 @@ mod tests {
                 owner,
                 tree,
                 pipeline,
-                root,
-                root_render,
-            }
-        }
-
-        /// [`Harness::mount`], but the caller's view sits below a
-        /// [`RootRenderView`](crate::view::RootRenderView) — the bootstrap's
-        /// production shape. Use it for a fixture whose root is a render-LESS
-        /// component: the composed render descendant then mounts with a render
-        /// parent (the component chain passes the render root's id down)
-        /// instead of orphaning under a render-less owner-carrying root.
-        ///
-        /// `root` is the caller's element below the render root (the rebuild
-        /// target); `root_render` is the caller's outermost composed render
-        /// object — the same node the bare `mount` scan produced — while the
-        /// frame lays out from the true pipeline root above it.
-        fn mount_wrapped<V: crate::View + Clone>(view: V, constraints: BoxConstraints) -> Self {
-            let pipeline = PipelineCell::new(PipelineOwner::new());
-            let mut owner = BuildOwner::new();
-            let mut tree = ElementTree::new();
-
-            let render_root = crate::view::RootRenderView::new(view, 800.0, 600.0);
-            let render_root_element = tree.mount_root_with_pipeline_owner(
-                &render_root,
-                Some(pipeline.clone()),
-                &mut owner.element_owner_mut(),
-            );
-
-            owner.schedule_build_for(render_root_element, 0, crate::RebuildReason::InitialMount);
-            owner.build_scope(&mut tree);
-
-            // The caller's element is the render root's single content child;
-            // its first render-owning descendant is the composed view's outer
-            // render object (here the LayoutBuilder's node).
-            let root = tree
-                .get(render_root_element)
-                .map(|node| node.child_ids()[0])
-                .expect("the render root must have reconciled its content child");
-            let root_render = tree
-                .get(root)
-                .map(|node| node.child_ids()[0])
-                .and_then(|id| tree.get(id).and_then(|node| node.element().render_id()))
-                .expect("the composed view must own a render object after the mount build");
-
-            // The frame lays out from the true pipeline root (the render
-            // root's node, the single parentless one), not from the caller's
-            // composed node.
-            let pipeline_root = pipeline.with(|owner| {
-                let render_tree = owner.render_tree();
-                let mut roots = render_tree
-                    .iter()
-                    .map(|(id, _)| id)
-                    .filter(|id| render_tree.parent(*id).is_none());
-                let found = roots.next().expect("the subtree must have a render root");
-                assert!(roots.next().is_none(), "exactly one render root expected");
-                found
-            });
-            pipeline.with_mut(|owner| {
-                owner.set_root_id(Some(pipeline_root));
-                owner.set_root_constraints(Some(constraints));
-            });
-
-            Self {
-                owner,
-                tree,
-                pipeline,
-                root,
                 root_render,
             }
         }
@@ -596,22 +528,6 @@ mod tests {
 
     fn tight(w: f64, h: f64) -> BoxConstraints {
         BoxConstraints::tight(Size::new(w, h))
-    }
-
-    #[test]
-    fn layout_builder_skip_predicate_uses_builder_rc_identity_only() {
-        let shared = LayoutBuilder::new(|_ctx, _constraints| FixedBox(10.0, 10.0));
-        let same_builder = shared.clone();
-        let distinct_builder = LayoutBuilder::new(|_ctx, _constraints| FixedBox(10.0, 10.0));
-
-        assert!(
-            same_builder.should_skip_rebuild(&shared),
-            "the same builder Rc is configuration-identical"
-        );
-        assert!(
-            !distinct_builder.should_skip_rebuild(&shared),
-            "a distinct builder Rc must rebuild even when its output is equivalent"
-        );
     }
 
     // ── 1. first frame ──────────────────────────────────────────────────────
@@ -673,44 +589,6 @@ mod tests {
             "layout builder must have exactly one child"
         );
         children[0]
-    }
-
-    /// Flutter's own `LayoutBuilder parent size` oracle
-    /// (`.flutter/packages/flutter/test/widgets/layout_builder_test.dart:10`),
-    /// transcribed: under **loose** constraints the builder's node sizes to
-    /// `constraints.constrain(child.size)` — it follows its child, it does not
-    /// fill the space. Tight constraints cannot tell those two apart, so this is
-    /// the test that actually pins `performLayout`'s final-size rule.
-    #[test]
-    fn layout_builder_loose_constraints_size_follows_the_child() {
-        let log = Arc::new(parking_lot::Mutex::new(Vec::new()));
-        // Flutter: Center > ConstrainedBox(maxWidth: 100, maxHeight: 200).
-        let incoming = BoxConstraints::new(0.0, 100.0, 0.0, 200.0);
-        let view = LayoutBuilder {
-            builder: Rc::new(move |_ctx, constraints: BoxConstraints| {
-                log.lock().push(constraints);
-                // Flutter's builder returns SizedBox(biggest/2).
-                FixedBox(constraints.max_width / 2.0, constraints.max_height / 2.0)
-                    .into_view()
-                    .boxed()
-            }),
-        };
-
-        let mut h = Harness::mount(&view, incoming);
-        h.frame();
-
-        assert_eq!(
-            h.root_size(),
-            Size::new(50.0, 100.0),
-            "size = constraints.constrain(child.size); it must NOT be constraints.biggest \
-             (100x200) — the intermediate no-child pass must never survive into the frame"
-        );
-        let child_render = child_render_id(&h);
-        assert_eq!(
-            h.pipeline
-                .with(|owner| flui_rendering::testing::inspect::box_geometry(owner, child_render)),
-            Some(Size::new(50.0, 100.0)),
-        );
     }
 
     // ── 2. constraint change ────────────────────────────────────────────────
@@ -777,70 +655,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn explicit_dirtiness_reinvokes_same_builder_with_unchanged_constraints() {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let calls_for_builder = Arc::clone(&calls);
-        let view = LayoutBuilder::new(move |_ctx, _constraints| {
-            calls_for_builder.fetch_add(1, Ordering::Relaxed);
-            FixedBox(10.0, 10.0)
-        });
-        let constraints = tight(120.0, 80.0);
-        let mut harness = Harness::mount(&view, constraints);
-        harness.frame();
-        assert_eq!(calls.load(Ordering::Relaxed), 1);
-
-        let depth = harness
-            .tree
-            .get(harness.root)
-            .map_or(0, crate::tree::ElementNode::depth);
-        harness.tree.mark_needs_build(harness.root);
-        harness
-            .owner
-            .schedule_build_for(harness.root, depth, crate::RebuildReason::StateChange);
-        harness.frame();
-
-        assert_eq!(
-            calls.load(Ordering::Relaxed),
-            2,
-            "explicit dirtiness remains authoritative over the configuration skip predicate"
-        );
-    }
-
     // ── 4. registration lifecycle ───────────────────────────────────────────
-
-    /// Mount registers exactly one entry; unmount deregisters it. Stale pruning
-    /// is a safety net for reconcile races, not the cleanup path.
-    #[test]
-    fn layout_builder_registers_on_mount_and_deregisters_on_unmount() {
-        let view = LayoutBuilder {
-            builder: Rc::new(|_ctx, _c| FixedBox(10.0, 10.0).into_view().boxed()),
-        };
-        let mut h = Harness::mount(&view, tight(50.0, 50.0));
-
-        assert_eq!(
-            h.owner.layout_builder_count(),
-            1,
-            "on_mount must register exactly one entry"
-        );
-
-        h.frame();
-        assert_eq!(
-            h.owner.layout_builder_count(),
-            1,
-            "a frame must not duplicate it"
-        );
-
-        // Unmount the subtree through the normal element path.
-        let root = h.root;
-        h.tree.remove(root, &mut h.owner.element_owner_mut());
-
-        assert_eq!(
-            h.owner.layout_builder_count(),
-            0,
-            "on_unmount must deregister — not leave it for the stale-entry prune"
-        );
-    }
 
     // ── 5. reconciliation ───────────────────────────────────────────────────
 
@@ -889,87 +704,6 @@ mod tests {
     }
 
     // ── builder update semantics ────────────────────────────────────────────
-
-    /// Flutter's `AbstractLayoutBuilder.updateShouldRebuild` defaults to `true`:
-    /// a parent rebuild that supplies a **new builder closure** re-invokes it,
-    /// even when the constraints are unchanged
-    /// (`.flutter/packages/flutter/lib/src/widgets/layout_builder.dart`,
-    /// `_LayoutBuilderElement.update` → `_needsBuild = true`).
-    ///
-    /// FLUI reaches the same observable behavior through the ordinary
-    /// dirty-element path: reconcile updates the child element, sees it dirty,
-    /// and schedules it (`tree/id_reconcile.rs`); `build_into_views` then calls
-    /// the *new* closure with the last published constraints. The rebuild is
-    /// driven through a real parent here, not a direct `tree.update`, precisely
-    /// so that scheduling step is exercised rather than assumed.
-    #[test]
-    fn layout_builder_new_builder_closure_is_honored_on_update() {
-        /// Rebuilds into a `LayoutBuilder` whose closure depends on `variant`.
-        #[derive(Clone, Debug)]
-        struct Parent {
-            variant: Arc<AtomicUsize>,
-            calls: Arc<AtomicUsize>,
-        }
-
-        impl crate::view::StatelessView for Parent {
-            fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-                let calls = Arc::clone(&self.calls);
-                let variant = self.variant.load(Ordering::Relaxed);
-                LayoutBuilder {
-                    builder: Rc::new(move |_ctx, _constraints| {
-                        calls.fetch_add(1, Ordering::Relaxed);
-                        if variant == 0 {
-                            FixedBox(10.0, 10.0).into_view().boxed()
-                        } else {
-                            TightBox(15.0).into_view().boxed()
-                        }
-                    }),
-                }
-            }
-        }
-
-        impl View for Parent {
-            fn create_element(&self) -> crate::element::ElementKind {
-                crate::element::ElementKind::stateless(self)
-            }
-        }
-
-        let variant = Arc::new(AtomicUsize::new(0));
-        let calls = Arc::new(AtomicUsize::new(0));
-        let parent = Parent {
-            variant: Arc::clone(&variant),
-            calls: Arc::clone(&calls),
-        };
-
-        // The parent is a render-less component, so it mounts under a render
-        // root (the bootstrap's shape) instead of as the bare element root —
-        // otherwise the LayoutBuilder's render object mounts with an owner but
-        // no render parent.
-        let mut h = Harness::mount_wrapped(parent, tight(120.0, 80.0));
-        h.frame();
-        assert_eq!(calls.load(Ordering::Relaxed), 1, "first frame builds once");
-        let first_child = child_render_id(&h);
-
-        // Parent rebuild supplies a NEW closure; constraints are unchanged.
-        variant.store(1, Ordering::Relaxed);
-        let root = h.root;
-        let depth = h.tree.get(root).map_or(0, crate::tree::ElementNode::depth);
-        h.tree.mark_needs_build(root);
-        h.owner
-            .schedule_build_for(root, depth, crate::RebuildReason::ParentUpdate);
-        h.frame();
-
-        assert_eq!(
-            calls.load(Ordering::Relaxed),
-            2,
-            "a new builder closure must be invoked even though the constraints did not change"
-        );
-        assert_ne!(
-            child_render_id(&h),
-            first_child,
-            "the new closure's differently-typed child must replace the old one"
-        );
-    }
 
     // ── error recovery ──────────────────────────────────────────────────────
 

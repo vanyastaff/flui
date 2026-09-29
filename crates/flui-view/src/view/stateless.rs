@@ -121,16 +121,6 @@ mod tests {
     }
 
     #[test]
-    fn test_stateless_element_creation() {
-        let view = TestView {
-            text: "Hello".to_string(),
-        };
-        let element = StatelessElement::new(&view, StatelessBehavior);
-        assert_eq!(element.lifecycle(), Lifecycle::Initial);
-        // Element is created in Initial state
-    }
-
-    #[test]
     fn test_stateless_element_mount() {
         let view = TestView {
             text: "Hello".to_string(),

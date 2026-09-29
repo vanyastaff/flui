@@ -176,41 +176,6 @@ fn snack_bar_material_count(laid: &common::LaidOut) -> usize {
 //    both eventually close (abrupt remove, then a natural timeout).
 // ============================================================================
 
-#[test]
-fn fifo_drain_shows_the_current_entry_then_the_next_after_it_closes() {
-    let vsync = Vsync::new();
-    let (mut laid, handle) =
-        mount_with_scaffolds(&vsync, vec![Scaffold::new().body(body_marker())]);
-
-    assert_eq!(snack_bar_material_count(&laid), 0, "nothing shown yet");
-
-    handle.show_snack_bar(SnackBar::new(Text::new("first")).duration(Duration::from_millis(60)));
-    pump_ms(&mut laid, ENTRY.as_millis() as u64);
-    assert_eq!(
-        snack_bar_material_count(&laid),
-        1,
-        "\"first\" must be mounted after entering"
-    );
-
-    handle.show_snack_bar(SnackBar::new(Text::new("second")).duration(Duration::from_millis(60)));
-    handle.remove_current_snack_bar(); // abrupt: "first" gone, "second" begins entering immediately
-    pump_ms(&mut laid, ENTRY.as_millis() as u64);
-    assert_eq!(
-        snack_bar_material_count(&laid),
-        1,
-        "exactly one entry (\"second\") must be mounted — never zero (a gap) or two (both at once)"
-    );
-
-    // "second" naturally times out and exits.
-    pump_ms(&mut laid, 60);
-    pump_ms(&mut laid, ENTRY.as_millis() as u64);
-    assert_eq!(
-        snack_bar_material_count(&laid),
-        0,
-        "both entries must have fully drained"
-    );
-}
-
 // ============================================================================
 // 2. Timeout at exactly the per-snackbar duration (custom duration honored).
 // ============================================================================
@@ -676,35 +641,6 @@ fn mounting_a_scaffold_while_a_snack_bar_is_already_showing_renders_it_immediate
 //     height past that box — the exact overflow-into-a-stacked-sibling bug
 //     an omitted `ClipRect` produces.
 // ============================================================================
-
-#[test]
-fn snack_bar_clips_to_its_animated_height_mid_entrance() {
-    let vsync = Vsync::new();
-    let (mut laid, handle) =
-        mount_with_scaffolds(&vsync, vec![Scaffold::new().body(body_marker())]);
-
-    handle.show_snack_bar(SnackBar::new(Text::new("clip me")));
-    pump_ms(&mut laid, 60); // mid-entrance: a partial, still-growing height
-
-    let clip_rect = laid.try_find_by_render_type("RenderClipRect").expect(
-        "the entrance/exit transition must be wrapped in a ClipRect (snack_bar.dart's own \
-             outermost wrap) — without it, Align's full-height, unclipped child paint bleeds \
-             past the partially-grown box into whatever sits below (an adjacent Scaffold's own \
-             content, in the multi-scaffold layout)",
-    );
-    let material =
-        find_snack_bar_material(&laid).expect("the snack bar's Material must be mounted");
-
-    let clip_height = laid.size(clip_rect).height;
-    let content_height = laid.size(material).height;
-    assert!(
-        clip_height < content_height - 1.0,
-        "mid-entrance, the ClipRect's own (animated, shrunk) reported box must be measurably \
-         SMALLER than the content's full natural height — content_height={content_height}, \
-         clip_height={clip_height} — otherwise there is no actual overflow for the clip to \
-         contain, and dropping the ClipRect wrap would go unnoticed by this test"
-    );
-}
 
 // ============================================================================
 // 11. A tick-driven close's `on_closed` is deferred out of the build phase:

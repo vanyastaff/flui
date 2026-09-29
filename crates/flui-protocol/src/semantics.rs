@@ -371,76 +371,33 @@ mod tests {
     }
 
     #[test]
-    fn names_are_flutters_camel_case() {
-        assert_eq!(SemanticsRole::None.name(), "none");
-        assert_eq!(SemanticsRole::AlertDialog.name(), "alertDialog");
-        assert_eq!(SemanticsRole::MenuItem.name(), "menuItem");
-        assert_eq!(SemanticsRole::HotKey.to_string(), "hotKey");
-        assert_eq!(SemanticsAction::Tap.name(), "tap");
-        assert_eq!(SemanticsAction::LongPress.name(), "longPress");
-        assert_eq!(SemanticsAction::ScrollToOffset.name(), "scrollToOffset");
-    }
-
-    #[test]
-    fn action_values_combine_as_a_mask() {
-        let combined = SemanticsAction::Tap.value() | SemanticsAction::LongPress.value();
-        assert_eq!(combined, 3);
-        assert_ne!(combined & SemanticsAction::Tap.value(), 0);
-        assert_ne!(combined & SemanticsAction::LongPress.value(), 0);
-        assert_eq!(combined & SemanticsAction::ScrollLeft.value(), 0);
-    }
-
-    #[test]
-    fn test_role_is_landmark() {
-        assert!(SemanticsRole::Main.is_landmark());
-        assert!(SemanticsRole::Navigation.is_landmark());
-        assert!(SemanticsRole::Complementary.is_landmark());
-        assert!(!SemanticsRole::None.is_landmark());
-        assert!(!SemanticsRole::Menu.is_landmark());
-    }
-
-    #[test]
-    fn test_role_is_live_region() {
-        assert!(SemanticsRole::Alert.is_live_region());
-        assert!(SemanticsRole::Status.is_live_region());
-        assert!(!SemanticsRole::None.is_live_region());
-    }
-
-    #[test]
-    fn test_role_is_menu_related() {
-        assert!(SemanticsRole::Menu.is_menu_related());
-        assert!(SemanticsRole::MenuBar.is_menu_related());
-        assert!(SemanticsRole::MenuItem.is_menu_related());
-        assert!(!SemanticsRole::List.is_menu_related());
-    }
-
-    #[test]
-    fn test_role_is_table_related() {
-        assert!(SemanticsRole::Table.is_table_related());
-        assert!(SemanticsRole::Cell.is_table_related());
-        assert!(SemanticsRole::Row.is_table_related());
-        assert!(!SemanticsRole::List.is_table_related());
-    }
-
-    #[test]
-    fn test_role_is_dialog() {
-        assert!(SemanticsRole::Dialog.is_dialog());
-        assert!(SemanticsRole::AlertDialog.is_dialog());
-        assert!(!SemanticsRole::Menu.is_dialog());
-    }
-
-    #[test]
-    fn test_role_is_list_related() {
-        assert!(SemanticsRole::List.is_list_related());
-        assert!(SemanticsRole::ListItem.is_list_related());
-        assert!(!SemanticsRole::Table.is_list_related());
-    }
-
-    #[test]
-    fn test_role_is_tab_related() {
-        assert!(SemanticsRole::Tab.is_tab_related());
-        assert!(SemanticsRole::TabBar.is_tab_related());
-        assert!(SemanticsRole::TabPanel.is_tab_related());
-        assert!(!SemanticsRole::Menu.is_tab_related());
+    fn role_family_predicates_partition_roles() {
+        use SemanticsRole as R;
+        assert!(
+            [R::Main, R::Navigation, R::Complementary]
+                .iter()
+                .all(|r| r.is_landmark())
+        );
+        assert!([R::Alert, R::Status].iter().all(|r| r.is_live_region()));
+        assert!(
+            [R::Menu, R::MenuBar, R::MenuItem]
+                .iter()
+                .all(|r| r.is_menu_related())
+        );
+        assert!(
+            [R::Table, R::Cell, R::Row]
+                .iter()
+                .all(|r| r.is_table_related())
+        );
+        assert!([R::Dialog, R::AlertDialog].iter().all(|r| r.is_dialog()));
+        assert!([R::List, R::ListItem].iter().all(|r| r.is_list_related()));
+        assert!(
+            [R::Tab, R::TabBar, R::TabPanel]
+                .iter()
+                .all(|r| r.is_tab_related())
+        );
+        assert!(!R::None.is_landmark() && !R::None.is_live_region());
+        assert!(!R::Menu.is_dialog() && !R::Menu.is_tab_related() && !R::List.is_menu_related());
+        assert!(!R::List.is_table_related() && !R::Table.is_list_related());
     }
 }

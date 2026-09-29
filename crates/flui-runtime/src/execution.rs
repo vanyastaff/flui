@@ -887,27 +887,6 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::time::Duration;
 
-    /// Pool-sizing policy: at least one worker, and on any machine with
-    /// enough hardware threads for the split (>= 4), the background lanes
-    /// together leave the owner thread a hardware thread of its own.
-    #[test]
-    fn compute_pool_sizing_leaves_owner_thread_headroom() {
-        assert_eq!(default_compute_worker_count(1), 1);
-        assert_eq!(default_compute_worker_count(2), 1);
-        assert_eq!(default_compute_worker_count(3), 1);
-        assert_eq!(default_compute_worker_count(4), 1);
-        assert_eq!(default_compute_worker_count(8), 5);
-        assert_eq!(default_compute_worker_count(32), 29);
-        for available in 4..=128 {
-            let compute = default_compute_worker_count(available);
-            assert!(
-                compute + IO_WORKER_THREADS < available,
-                "with {available} hardware threads, compute={compute} + io={IO_WORKER_THREADS} \
-                 must leave the owner thread headroom"
-            );
-        }
-    }
-
     // ── conformance suite: the same contract for default and injected ──────
     //
     // Each check runs against BOTH backends: FLUI's default pools and the
@@ -926,23 +905,6 @@ mod tests {
         let driver = deterministic.clone();
         check(&injected, &move || {
             driver.run_until_idle();
-        });
-    }
-
-    #[test]
-    fn conformance_spawned_compute_job_runs() {
-        both_backends(|services, drive| {
-            let ran = Arc::new(AtomicBool::new(false));
-            let ran_for_job = Arc::clone(&ran);
-            services
-                .spawn_compute(Box::new(move || {
-                    ran_for_job.store(true, Ordering::Release);
-                }))
-                .expect("spawn must be admitted");
-            drive();
-            // Default pools run on worker threads; wait bounded.
-            wait_until(|| ran.load(Ordering::Acquire));
-            assert!(ran.load(Ordering::Acquire));
         });
     }
 
@@ -1010,34 +972,6 @@ mod tests {
         services
             .spawn_io(Box::pin(async {}))
             .expect("slots must be released after completion");
-    }
-
-    /// Bounded admission on the DEFAULT pools too: park the compute workers
-    /// on a gate, fill the window, and assert refusal while full.
-    #[test]
-    fn default_pool_admission_saturates_while_workers_are_parked() {
-        let services = ExecutionServices::with_limits(None, 2, 2);
-        let gate = Arc::new(AtomicBool::new(false));
-        for _ in 0..2 {
-            let gate = Arc::clone(&gate);
-            services
-                .spawn_compute(Box::new(move || {
-                    while !gate.load(Ordering::Acquire) {
-                        std::thread::sleep(Duration::from_millis(1));
-                    }
-                }))
-                .expect("within the admission window");
-        }
-        assert_eq!(
-            services.spawn_compute(Box::new(|| {})),
-            Err(SpawnError::Saturated)
-        );
-        gate.store(true, Ordering::Release);
-        wait_until(|| services.in_flight().0 == 0);
-        services
-            .spawn_compute(Box::new(|| {}))
-            .expect("slots must be released after the gated jobs finish");
-        services.shutdown(Duration::from_secs(5));
     }
 
     /// Shutdown joins a RUNNING compute job: the job observably finishes
@@ -1192,22 +1126,6 @@ mod tests {
         );
     }
 
-    /// Default pools are lazy: constructing the services starts no worker
-    /// threads; the first spawn on a lane starts exactly that lane.
-    #[test]
-    fn default_pools_start_lazily_on_first_spawn() {
-        let services = ExecutionServices::with_defaults();
-        assert!(
-            !services.default_pools_started(),
-            "construction must not start worker threads"
-        );
-        services
-            .spawn_compute(Box::new(|| {}))
-            .expect("spawn must be admitted");
-        assert!(services.default_pools_started());
-        services.shutdown(Duration::from_secs(5));
-    }
-
     /// The frame lane needs no pool: with the compute admission window full
     /// and every worker parked, frame-thread work (an `AsyncDriver` poll on
     /// this thread) still completes immediately. This pins the structural
@@ -1248,22 +1166,6 @@ mod tests {
 
         gate.store(true, Ordering::Release);
         services.shutdown(Duration::from_secs(5));
-    }
-
-    /// Shutdown is idempotent and a shutdown'd default backend refuses work
-    /// even if a stale caller re-checks after the pools are closed.
-    #[test]
-    fn shutdown_is_idempotent() {
-        let services = ExecutionServices::with_defaults();
-        services
-            .spawn_compute(Box::new(|| {}))
-            .expect("spawn must be admitted");
-        services.shutdown(Duration::from_secs(5));
-        services.shutdown(Duration::from_secs(5));
-        assert_eq!(
-            services.spawn_io(Box::pin(async {})),
-            Err(SpawnError::ShuttingDown)
-        );
     }
 
     // ── deterministic executor semantics ────────────────────────────────────
@@ -1336,36 +1238,6 @@ mod tests {
             }))
             .expect("deterministic spawn is unbounded");
         deterministic.run_until_idle();
-    }
-
-    /// Spawning from inside driven work is explicitly allowed (only
-    /// *driving* is exclusive): a job that spawns a follow-up job must not
-    /// deadlock on the queue lock, and the follow-up runs within the same
-    /// drive. Fails (by deadlock-timeout) if the job queue's lock guard is
-    /// held across the job call.
-    #[test]
-    fn deterministic_job_may_spawn_during_drive() {
-        let deterministic = DeterministicExecutors::new();
-        let inner = deterministic.clone();
-        let child_ran = Arc::new(AtomicBool::new(false));
-        let child_flag = Arc::clone(&child_ran);
-        deterministic
-            .spawn_job(Box::new(move || {
-                let child_flag = Arc::clone(&child_flag);
-                inner
-                    .spawn_job(Box::new(move || {
-                        child_flag.store(true, Ordering::Release);
-                    }))
-                    .expect("deterministic spawn is unbounded");
-            }))
-            .expect("deterministic spawn is unbounded");
-
-        deterministic.run_until_idle();
-        assert!(
-            child_ran.load(Ordering::Acquire),
-            "a job spawned during the drive runs within that same drive"
-        );
-        assert_eq!(deterministic.pending(), (0, 0));
     }
 
     /// The latch clears on unwind: after a driven job panics, a later

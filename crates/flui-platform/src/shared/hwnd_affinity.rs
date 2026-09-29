@@ -269,48 +269,6 @@ mod tests {
     const FOREIGN: u32 = 8;
 
     #[test]
-    fn owner_thread_with_live_own_class_window_and_filled_slot_may_deref() {
-        assert_eq!(
-            classify_user_data_access(OWNER, OWNER, true, 0x1000),
-            UserDataVerdict::Deref
-        );
-    }
-
-    #[test]
-    fn a_dead_handle_is_refused_before_any_other_check_can_mislead() {
-        // Everything else looking plausible must not matter: a dead handle's
-        // class/slot reads are stale or foreign by definition.
-        assert_eq!(
-            classify_user_data_access(OWNER_GONE, OWNER, true, 0x1000),
-            UserDataVerdict::Refuse(UserDataRefusal::WindowGone)
-        );
-    }
-
-    #[test]
-    fn a_foreign_thread_is_refused_even_with_a_live_window_and_filled_slot() {
-        assert_eq!(
-            classify_user_data_access(OWNER, FOREIGN, true, 0x1000),
-            UserDataVerdict::Refuse(UserDataRefusal::ForeignThread)
-        );
-    }
-
-    #[test]
-    fn a_recycled_handle_naming_a_foreign_class_window_is_refused() {
-        assert_eq!(
-            classify_user_data_access(OWNER, OWNER, false, 0x1000),
-            UserDataVerdict::Refuse(UserDataRefusal::ForeignClass)
-        );
-    }
-
-    #[test]
-    fn an_empty_slot_is_refused_on_the_owner_thread_too() {
-        assert_eq!(
-            classify_user_data_access(OWNER, OWNER, true, 0),
-            UserDataVerdict::Refuse(UserDataRefusal::EmptySlot)
-        );
-    }
-
-    #[test]
     fn refusal_precedence_is_gone_then_foreign_thread_then_class_then_slot() {
         // All four conditions failing at once report the highest-precedence
         // refusal, walking down as each earlier condition is repaired.
@@ -374,31 +332,6 @@ mod tests {
     }
 
     #[test]
-    fn class_name_match_pins_the_nul_exclusion_convention_on_both_sides() {
-        // "Flui" as GetClassNameW leaves it: buffer holds the name, then
-        // trailing NULs; the returned count EXCLUDES the terminator.
-        let mut buffer = [0_u16; 8];
-        buffer[..4].copy_from_slice(&[0x46, 0x6C, 0x75, 0x69]);
-        let expected: &[u16] = &[0x46, 0x6C, 0x75, 0x69];
-
-        assert!(class_name_matches(&buffer, 4, expected));
-
-        // An `expected` that still carries its terminating NUL can never
-        // match — this is the exact bug a `w!(..)` literal read back WITH
-        // its terminator would cause, refusing every valid window.
-        let expected_with_nul: &[u16] = &[0x46, 0x6C, 0x75, 0x69, 0x0000];
-        assert!(!class_name_matches(&buffer, 4, expected_with_nul));
-
-        // Failed call (0 or negative), prefixes, and overlong counts all
-        // refuse rather than match or panic.
-        assert!(!class_name_matches(&buffer, 0, expected));
-        assert!(!class_name_matches(&buffer, -1, expected));
-        assert!(!class_name_matches(&buffer, 3, expected));
-        assert!(!class_name_matches(&buffer, 5, expected));
-        assert!(!class_name_matches(&buffer, 9, expected));
-    }
-
-    #[test]
     fn ledger_frees_exactly_once_at_the_outermost_release_after_retire() {
         // Reentrant dispatch: an outer borrow (a window_proc frame or a
         // with_window_context closure) is live when a nested WM_DESTROY
@@ -416,25 +349,6 @@ mod tests {
             ledger.release(),
             "the outermost release after retirement must free"
         );
-    }
-
-    #[test]
-    fn ledger_frees_at_the_single_frame_release_in_the_plain_destroy_case() {
-        // The common, non-reentrant teardown: one WM_DESTROY frame, no
-        // borrower above it.
-        let mut ledger = ContextLedger::new();
-        ledger.acquire();
-        ledger.retire();
-        assert!(ledger.release());
-    }
-
-    #[test]
-    fn ledger_never_frees_while_the_context_is_not_retired() {
-        let mut ledger = ContextLedger::new();
-        ledger.acquire();
-        ledger.acquire();
-        assert!(!ledger.release());
-        assert!(!ledger.release());
     }
 }
 

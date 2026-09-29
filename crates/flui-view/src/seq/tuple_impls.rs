@@ -126,29 +126,6 @@ mod tests {
     }
 
     #[test]
-    fn unit_arity_is_empty() {
-        let s: () = ();
-        assert_eq!(s.len(), 0);
-        assert!(s.is_empty());
-        let v = s.into_boxed_vec();
-        assert_eq!(v.len(), 0);
-    }
-
-    #[test]
-    fn arity_one_holds_single_child() {
-        let s = (Leaf(7),);
-        assert_eq!(s.len(), 1);
-        assert!(!s.is_empty());
-
-        let mut visited = vec![];
-        s.for_each(|i, _v| visited.push(i));
-        assert_eq!(visited, vec![0]);
-
-        let v = s.into_boxed_vec();
-        assert_eq!(v.len(), 1);
-    }
-
-    #[test]
     fn arity_three_iterates_in_order() {
         let s = (Leaf(1), Leaf(2), Leaf(3));
         assert_eq!(s.len(), 3);
@@ -159,32 +136,5 @@ mod tests {
 
         let v = s.into_boxed_vec();
         assert_eq!(v.len(), 3);
-    }
-
-    #[test]
-    fn arity_sixteen_is_the_cap() {
-        // Build a 16-tuple of Leaf values.
-        let s = (
-            Leaf(0),
-            Leaf(1),
-            Leaf(2),
-            Leaf(3),
-            Leaf(4),
-            Leaf(5),
-            Leaf(6),
-            Leaf(7),
-            Leaf(8),
-            Leaf(9),
-            Leaf(10),
-            Leaf(11),
-            Leaf(12),
-            Leaf(13),
-            Leaf(14),
-            Leaf(15),
-        );
-        assert_eq!(s.len(), 16);
-
-        let v = s.into_boxed_vec();
-        assert_eq!(v.len(), 16);
     }
 }

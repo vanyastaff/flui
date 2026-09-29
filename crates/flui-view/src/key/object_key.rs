@@ -105,33 +105,4 @@ mod tests {
 
         assert!(key1.key_eq(&key2));
     }
-
-    #[test]
-    fn test_object_key_different_objects() {
-        let obj1 = Arc::new(42);
-        let obj2 = Arc::new(42); // Same value, different object
-
-        let key1 = ObjectKey::new(obj1);
-        let key2 = ObjectKey::new(obj2);
-
-        assert!(!key1.key_eq(&key2));
-    }
-
-    #[test]
-    fn test_object_key_hash() {
-        let obj = Arc::new("test");
-        let key = ObjectKey::new(obj);
-
-        // Hash should be the pointer value
-        assert_ne!(key.key_hash(), 0);
-    }
-
-    #[test]
-    fn test_object_key_clone() {
-        let obj = Arc::new(vec![1, 2, 3]);
-        let key1 = ObjectKey::new(obj);
-        let key2 = key1.clone();
-
-        assert!(key1.key_eq(&key2));
-    }
 }

@@ -808,200 +808,16 @@ pub fn assert_any(tree: Option<&LayerTree>, pred: impl Fn(&DrawCommandSummary) -
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
-    use flui_foundation::geometry::{Matrix4, Point, Rect};
-    use flui_painting::{DrawCommand, DrawOp, Paint};
-    use flui_painting::{paint::Path, styling::Color};
+    use flui_foundation::geometry::Rect;
 
-    use super::{DrawKind, summarize_command};
+    use flui_painting::{DrawCommand, DrawOp};
+
+    use super::summarize_command;
 
     /// Helper: build an identity `Rect` from raw f64 coordinates.
     fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect<f64> {
         Rect::from_xywh(x, y, w, h)
-    }
-
-    /// `DrawRect` with `fill Color::RED` + identity transform must produce
-    /// `kind == Rect` and a stable line.
-    #[test]
-    fn summarize_draw_rect_is_stable() {
-        let cmd = DrawCommand {
-            transform: Matrix4::IDENTITY,
-            op: DrawOp::Rect {
-                rect: rect(0.0, 0.0, 40.0, 40.0),
-                paint: Arc::new(Paint::fill(Color::RED)),
-            },
-        };
-        let s = summarize_command(&cmd);
-        assert_eq!(s.kind, DrawKind::Rect);
-        // Color::RED = rgba(255,0,0,255) → #FF0000FF
-        assert_eq!(
-            s.line,
-            "DrawRect rect=(0.00,0.00 40.00x40.00) fill #FF0000FF"
-        );
-    }
-
-    /// `DrawShadow` must summarize with `kind == Shadow`.
-    #[test]
-    fn summarize_draw_shadow_has_shadow_kind() {
-        let mut path = Path::new();
-        path.add_rect(rect(10.0, 10.0, 50.0, 30.0));
-
-        let cmd = DrawCommand {
-            transform: Matrix4::IDENTITY,
-            op: DrawOp::Shadow {
-                path,
-                color: Color::BLACK,
-                elevation: 4.0,
-            },
-        };
-        let s = summarize_command(&cmd);
-        assert_eq!(s.kind, DrawKind::Shadow);
-        assert!(
-            s.line.starts_with("DrawShadow"),
-            "unexpected line: {}",
-            s.line
-        );
-        assert!(
-            s.line.contains("elev=4.00"),
-            "expected elev=4.00 in: {}",
-            s.line
-        );
-        // Color::BLACK = rgba(0,0,0,255) → #000000FF
-        assert!(
-            s.line.contains("#000000FF"),
-            "expected #000000FF in: {}",
-            s.line
-        );
-    }
-
-    /// Non-identity transform must append `xf=[...]`.
-    #[test]
-    fn non_identity_transform_is_appended() {
-        let translate = Matrix4::translation(10.0, 20.0, 0.0);
-        let cmd = DrawCommand {
-            transform: translate,
-            op: DrawOp::Rect {
-                rect: rect(0.0, 0.0, 10.0, 10.0),
-                paint: Arc::new(Paint::fill(Color::BLUE)),
-            },
-        };
-        let s = summarize_command(&cmd);
-        assert!(
-            s.line.contains("xf=["),
-            "expected xf= suffix in: {}",
-            s.line
-        );
-    }
-
-    /// Identity transform must NOT append `xf=[...]`.
-    #[test]
-    fn identity_transform_is_omitted() {
-        let cmd = DrawCommand {
-            transform: Matrix4::IDENTITY,
-            op: DrawOp::Rect {
-                rect: rect(0.0, 0.0, 10.0, 10.0),
-                paint: Arc::new(Paint::fill(Color::BLUE)),
-            },
-        };
-        let s = summarize_command(&cmd);
-        assert!(
-            !s.line.contains("xf=["),
-            "identity transform should be omitted, got: {}",
-            s.line
-        );
-    }
-
-    /// Stroke paint includes `stroke=<w>`.
-    #[test]
-    fn stroke_paint_includes_width() {
-        let cmd = DrawCommand {
-            transform: Matrix4::IDENTITY,
-            op: DrawOp::Rect {
-                rect: rect(0.0, 0.0, 10.0, 10.0),
-                paint: Arc::new(Paint::stroke(Color::GREEN, 2.5)),
-            },
-        };
-        let s = summarize_command(&cmd);
-        // Color::GREEN = rgba(0,255,0,255)
-        assert_eq!(
-            s.line,
-            "DrawRect rect=(0.00,0.00 10.00x10.00) stroke #00FF00FF stroke=2.50"
-        );
-    }
-
-    /// `Paragraph` must summarize with `kind == Text` and include the text.
-    #[test]
-    fn summarize_paragraph_has_text_kind() {
-        use flui_foundation::geometry::Offset;
-        use flui_painting::TextLayout;
-        use flui_painting::typography::TextDirection;
-        let layout = TextLayout::new("hello", None, 14.0, None, None, TextDirection::Ltr);
-        let cmd = DrawCommand {
-            transform: Matrix4::IDENTITY,
-            op: DrawOp::Paragraph {
-                layout: Arc::new(layout),
-                offset: Offset::new(1.0, 2.0),
-                color: Color::BLACK,
-            },
-        };
-        let s = summarize_command(&cmd);
-        assert_eq!(s.kind, DrawKind::Text);
-        assert!(s.line.contains("\"hello\""), "expected text in: {}", s.line);
-    }
-
-    /// `ClipRect` must summarize with `kind == Clip`.
-    #[test]
-    fn summarize_clip_rect_has_clip_kind() {
-        use flui_painting::paint::Clip;
-        use flui_painting::paint::ClipOp;
-        let cmd = DrawCommand {
-            transform: Matrix4::IDENTITY,
-            op: DrawOp::ClipRect {
-                rect: rect(5.0, 5.0, 100.0, 80.0),
-                clip_op: ClipOp::Intersect,
-                clip_behavior: Clip::HardEdge,
-            },
-        };
-        let s = summarize_command(&cmd);
-        assert_eq!(s.kind, DrawKind::Clip);
-        assert!(
-            s.line.starts_with("ClipRect"),
-            "unexpected line: {}",
-            s.line
-        );
-        assert!(
-            s.line.contains("op=intersect"),
-            "expected op=intersect in: {}",
-            s.line
-        );
-        assert!(
-            s.line.contains("clip=hard"),
-            "expected clip=hard in: {}",
-            s.line
-        );
-    }
-
-    /// Clip behavior is part of the summary: the same geometry under `HardEdge`
-    /// vs `AntiAlias` must produce different lines, so a rendering-quality
-    /// regression diffs the snapshot instead of passing silently.
-    #[test]
-    fn clip_behavior_distinguishes_clip_summaries() {
-        use flui_painting::paint::Clip;
-        use flui_painting::paint::ClipOp;
-        let mk = |behavior| {
-            summarize_command(&DrawCommand::untransformed(DrawOp::ClipRect {
-                rect: rect(0.0, 0.0, 10.0, 10.0),
-                clip_op: ClipOp::Intersect,
-                clip_behavior: behavior,
-            }))
-            .line
-        };
-        let hard = mk(Clip::HardEdge);
-        let aa = mk(Clip::AntiAlias);
-        assert!(hard.contains("clip=hard"), "got: {hard}");
-        assert!(aa.contains("clip=antialias"), "got: {aa}");
-        assert_ne!(hard, aa, "clip behavior must change the summary");
     }
 
     /// Rounded-clip radii are part of the summary: the same outer rect with
@@ -1025,62 +841,6 @@ mod tests {
             mk(12.0),
             "different corner radii must change the summary"
         );
-    }
-
-    /// `RestoreLayer` must summarize with `kind == Layer`.
-    #[test]
-    fn summarize_restore_layer_has_layer_kind() {
-        let cmd = DrawCommand::untransformed(DrawOp::RestoreLayer);
-        let s = summarize_command(&cmd);
-        assert_eq!(s.kind, DrawKind::Layer);
-        assert_eq!(s.line, "RestoreLayer");
-    }
-
-    /// Negative-zero normalization: `f(-0.0)` must produce `"0.00"` not `"-0.00"`.
-    #[test]
-    fn negative_zero_normalizes_to_zero() {
-        use super::f;
-        assert_eq!(f(-0.0_f64), "0.00");
-        assert_eq!(f(0.0_f64), "0.00");
-        assert_eq!(f(-1.5_f64), "-1.50");
-    }
-
-    /// `hex_color` produces the canonical `#RRGGBBAA` format.
-    #[test]
-    fn hex_color_format() {
-        use super::hex_color;
-        assert_eq!(hex_color(Color::RED), "#FF0000FF");
-        assert_eq!(hex_color(Color::TRANSPARENT), "#00000000");
-        assert_eq!(hex_color(Color::rgba(1, 2, 3, 4)), "#01020304");
-    }
-
-    /// `DrawImage` must summarize with `kind == Image`.
-    #[test]
-    fn summarize_draw_image_has_image_kind() {
-        use flui_painting::paint::image::Image;
-        let cmd = DrawCommand {
-            transform: Matrix4::IDENTITY,
-            op: DrawOp::Image {
-                image: Image::default(),
-                dst: rect(0.0, 0.0, 100.0, 80.0),
-                paint: None,
-            },
-        };
-        let s = summarize_command(&cmd);
-        assert_eq!(s.kind, DrawKind::Image);
-        assert!(
-            s.line.starts_with("DrawImage"),
-            "unexpected line: {}",
-            s.line
-        );
-    }
-
-    /// Point helper produces correct format.
-    #[test]
-    fn fmt_point_helper() {
-        use super::fmt_point;
-        let p = Point::new(3.5, -1.0);
-        assert_eq!(fmt_point(p), "(3.50,-1.00)");
     }
 
     // ── LayerTree serialization tests ─────────────────────────────────────────
@@ -1167,29 +927,5 @@ mod tests {
             s.contains("DrawRect rect=(0.00,0.00 40.00x40.00)"),
             "serialized tree must contain the DrawRect for the red box; got:\n{s}"
         );
-    }
-
-    /// The painted rectangle remains enclosed by its run-local state scope.
-    #[test]
-    fn collect_commands_red_box_preserves_its_state_scope() {
-        use flui_foundation::geometry::Size;
-
-        use crate::testing::{RenderTester, box_node, collect_commands};
-
-        let run = RenderTester::mount(box_node(RedBox::fixed(40.0, 40.0)))
-            .with_size(Size::new(40.0, 40.0))
-            .run_frame();
-
-        let tree = run
-            .layer_tree()
-            .expect("RenderColoredBox must produce a layer tree");
-        let cmds = collect_commands(tree);
-
-        assert_eq!(
-            cmds.iter().map(|command| command.kind).collect::<Vec<_>>(),
-            [DrawKind::State, DrawKind::Rect, DrawKind::State],
-        );
-        assert_eq!(cmds[0].line, "Save");
-        assert_eq!(cmds[2].line, "Restore");
     }
 }

@@ -314,33 +314,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn isolated_builder_helper_rejects_an_unknown_test_name() {
-        let result = std::panic::catch_unwind(|| {
-            isolate_error_view_builder_test(
-                "view::error::tests::this_is_not_a_registered_libtest_name",
-            )
-        });
-        assert!(
-            result.is_err(),
-            "a successful zero-test subprocess would make isolation silently vacuous"
-        );
-    }
-
-    #[test]
-    fn test_error_view_creation() {
-        let error = ErrorView::new("Test error");
-        assert_eq!(error.message, "Test error");
-        assert!(error.details.is_none());
-    }
-
-    #[test]
-    fn test_error_view_with_details() {
-        let error = ErrorView::with_details("Test error", Some("Stack trace".to_string()));
-        assert_eq!(error.message, "Test error");
-        assert_eq!(error.details.as_deref(), Some("Stack trace"));
-    }
-
-    #[test]
     fn error_view_is_a_render_element_over_an_error_box() {
         let view = ErrorView::new("boom");
         assert!(

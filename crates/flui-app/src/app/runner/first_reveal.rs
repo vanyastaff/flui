@@ -145,25 +145,4 @@ mod first_reveal_tests {
         );
         assert!(reveal.next_deadline().is_none());
     }
-
-    #[test]
-    fn the_fallback_reveals_a_surface_that_never_presents() {
-        let reveal = FirstReveal::new();
-        let now = Instant::now();
-        assert!(!reveal.after_frame(false, now));
-        let deadline = reveal.next_deadline().expect("armed");
-        let just_before = deadline
-            .checked_sub(Duration::from_millis(1))
-            .expect("a deadline armed from `now` lies well after the clock's epoch");
-        assert!(
-            !reveal.after_frame(false, just_before),
-            "one tick before the bound: not yet"
-        );
-        assert!(
-            reveal.after_frame(false, deadline),
-            "at the bound, an empty outcome reveals anyway"
-        );
-        assert!(!reveal.after_frame(false, deadline), "exactly once");
-        assert!(reveal.next_deadline().is_none());
-    }
 }

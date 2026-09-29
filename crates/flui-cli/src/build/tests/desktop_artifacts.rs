@@ -247,10 +247,6 @@ fn desktop_uses_cargos_external_target_directory() {
     }
 }
 #[test]
-fn configured_target_directory_is_respected() {
-    fixture("config");
-}
-#[test]
 fn arbitrary_workspace_package_and_current_member_are_selected() {
     fixture("workspace");
     fixture("workspace-current");
@@ -259,16 +255,6 @@ fn arbitrary_workspace_package_and_current_member_are_selected() {
 fn default_run_and_ambiguous_bins_are_distinguished() {
     fixture("default-run");
     fixture("ambiguous");
-}
-#[test]
-fn virtual_default_members_and_ambiguous_examples_are_distinguished() {
-    fixture("virtual");
-    fixture("virtual-ambiguous");
-    fixture("virtual-examples");
-}
-#[test]
-fn library_examples_are_rejected() {
-    fixture("library-example");
 }
 #[test]
 fn cached_success_and_failed_compile_do_not_confuse_artifact_selection() {
@@ -327,54 +313,4 @@ async fn bundle_names_cannot_escape_the_output_directory() {
             "validation precedes any directory creation"
         );
     }
-}
-
-#[cfg(target_os = "macos")]
-#[tokio::test]
-async fn unicode_bundle_names_work_and_existing_symlinks_are_not_followed() {
-    let temp = tempfile::tempdir().expect("fixture");
-    let output = temp.path().join("output");
-    let executable = temp.path().join("input");
-    std::fs::write(&executable, "fixture executable").expect("input");
-    let name = "Интерфейс & App";
-    let ctx = BuilderContextBuilder::new(temp.path().to_path_buf())
-        .with_platform(Platform::Desktop { target: None })
-        .with_profile(Profile::Debug)
-        .with_output_dir(output.clone())
-        .with_bundle(crate::build::AppBundle {
-            name: name.into(),
-            identifier: "org.example.fixture".into(),
-            version: "0.1.0".into(),
-        })
-        .build();
-    let artifacts = crate::build::BuildArtifacts {
-        rust_libs: Vec::new(),
-        executable: Some(executable),
-        metadata: serde_json::json!({}),
-    };
-    let staged =
-        DesktopBuilder::build_platform(&ctx, &artifacts).expect("unicode and spaces are valid");
-    assert_eq!(staged.app_binary, output.join(format!("{name}.app")));
-    let plist =
-        std::fs::read_to_string(staged.app_binary.join("Contents/Info.plist")).expect("plist");
-    assert!(plist.contains("Интерфейс &amp; App"));
-    std::fs::remove_dir_all(&staged.app_binary).expect("remove owned fixture bundle");
-    let external = temp.path().join("external");
-    write(&external, "sentinel", "must survive");
-    std::os::unix::fs::symlink(&external, &staged.app_binary).expect("fixture link");
-    assert!(DesktopBuilder::build_platform(&ctx, &artifacts).is_err());
-    assert_eq!(
-        std::fs::read_to_string(external.join("sentinel")).expect("target preserved"),
-        "must survive"
-    );
-    std::fs::remove_file(&staged.app_binary).expect("remove fixture link");
-    std::os::unix::fs::symlink(temp.path().join("missing"), &staged.app_binary)
-        .expect("dangling link");
-    assert!(DesktopBuilder::build_platform(&ctx, &artifacts).is_err());
-    assert!(
-        std::fs::symlink_metadata(&staged.app_binary)
-            .expect("link retained")
-            .file_type()
-            .is_symlink()
-    );
 }

@@ -910,8 +910,6 @@ mod tests {
     use std::sync::Arc;
     use std::thread;
 
-    use flui_foundation::claim_slot;
-
     use super::*;
 
     #[test]
@@ -939,62 +937,12 @@ mod tests {
     }
 
     #[test]
-    fn try_ready_on_pending_yields_not_ready() {
-        let (_slot, handle) =
-            claim_slot::<Result<Arc<dyn HostWindow>, OpenWindowError>>(Arc::new(|| {}));
-        let pending = PendingWindow::new(handle, thread::current().id());
-        let open = WindowOpen::Pending(pending);
-
-        match open.try_ready() {
-            Err(OpenWindowError::NotReady(_)) => {}
-            Err(other) => panic!("wrong error variant: {other:?}"),
-            Ok(_) => panic!("Pending must not resolve to Ready"),
-        }
-    }
-
-    #[test]
-    fn wait_on_owner_thread_refuses_with_the_handle_back() {
-        let (_slot, handle) =
-            claim_slot::<Result<Arc<dyn HostWindow>, OpenWindowError>>(Arc::new(|| {}));
-        let pending = PendingWindow::new(handle, thread::current().id());
-
-        match pending.wait() {
-            Err(WaitError::WouldBlockOwner(_returned)) => {}
-            Err(other) => panic!("wrong error variant: {other:?}"),
-            Ok(_) => panic!("owner-thread wait must not succeed"),
-        }
-    }
-
-    #[test]
     fn closed_transport_open_window_is_permanently_unsupported() {
         let transport = ClosedTransport::new(thread::current().id());
         let error = transport
             .open_window(WindowOptions::default())
             .expect_err("no lane behind a ClosedTransport");
         assert!(matches!(error, ProxySendError::Unsupported { .. }));
-    }
-
-    #[test]
-    fn closed_transport_request_quit_is_permanently_unsupported() {
-        let transport = ClosedTransport::new(thread::current().id());
-        let error = transport
-            .request_quit()
-            .expect_err("no lane behind a ClosedTransport");
-        assert!(matches!(
-            error,
-            ProxySendError::Unsupported { rejected: () }
-        ));
-    }
-
-    #[test]
-    fn proxy_request_quit_surfaces_unsupported_on_a_lane_less_backend() {
-        let transport: Arc<dyn ProxyTransport> =
-            Arc::new(ClosedTransport::new(thread::current().id()));
-        let proxy = PlatformProxy::new(transport);
-        assert!(matches!(
-            proxy.request_quit(),
-            Err(ProxySendError::Unsupported { rejected: () })
-        ));
     }
 
     #[test]

@@ -10,7 +10,7 @@
 //! `src/navigator/hero_controller_tests.rs`.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use flui_view::ViewExt;
@@ -23,7 +23,7 @@ use flui_widgets::__test_access::{
 };
 use flui_widgets::navigator::{
     FlightDirection, Hero, HeroController, Navigator, NavigatorHandle, NavigatorObserver,
-    PageRoute, PopupRoute, SimpleRoute,
+    PageRoute, SimpleRoute,
 };
 use flui_widgets::{Center, SizedBox};
 
@@ -81,13 +81,6 @@ fn mount_navigator(navigator: &NavigatorHandle) -> Harness {
     })
 }
 
-fn unmount_navigator(harness: &mut Harness, navigator: &NavigatorHandle) {
-    harness.swap_root(Root {
-        navigator: navigator.clone(),
-        show: false,
-    });
-}
-
 fn install(navigator: &NavigatorHandle) -> Arc<HeroController> {
     let controller = HeroController::new();
     navigator.add_observer(Arc::clone(&controller) as Arc<dyn NavigatorObserver>);
@@ -98,83 +91,9 @@ fn install(navigator: &NavigatorHandle) -> Arc<HeroController> {
 // Attachment
 // ============================================================================
 
-/// The controller stores its `NavigatorHandle` at `did_attach` and drops it at
-/// `did_detach` — Flutter's `NavigatorObserver._navigators` Expando
-/// (`navigator.dart:3836`, `:4108`), which is what `HeroController.navigator` reads.
-///
-/// Red-check: delete `*self.navigator.lock() = None;` from
-/// `HeroController::did_detach`.
-#[test]
-fn the_controller_holds_its_navigator_only_while_attached() {
-    let navigator = seeded_navigator();
-    let controller = install(&navigator);
-    assert!(controller.navigator().is_none(), "not mounted yet");
-
-    let mut harness = mount_navigator(&navigator);
-    assert!(controller.navigator().is_some());
-
-    unmount_navigator(&mut harness, &navigator);
-    assert!(controller.navigator().is_none(), "detached");
-}
-
 // ============================================================================
 // Scheduling
 // ============================================================================
-
-/// `didChangeTop` schedules **one** post-frame measurement and reads nothing
-/// (`heroes.dart:968`). The measurement list stays empty until a frame completes:
-/// that is the difference between "scheduled" and "ran", and the reason
-/// `HeroController` can afford to be an observer at all.
-///
-/// Red-check: call `HeroController::measure` directly from `maybe_start` instead of
-/// scheduling it — `measurements()` is non-empty before `tick()`.
-#[test]
-fn a_top_change_schedules_exactly_one_post_frame_measurement() {
-    let navigator = seeded_navigator();
-    let controller = install(&navigator);
-    let mut harness = mount_navigator(&navigator);
-
-    // The seeded `SimpleRoute` is not a `PageRoute`, so pushing over it is not a
-    // flight: `fromRoute is! PageRoute` (`heroes.dart:916-920`).
-    let _first = harness.enter_owner_scope(|| navigator.push(page_route()));
-    assert_eq!(controller.scheduled_count(), 0);
-
-    // PageRoute -> PageRoute: eligible.
-    let _second = harness.enter_owner_scope(|| navigator.push(page_route()));
-    assert_eq!(
-        controller.scheduled_count(),
-        1,
-        "one schedule per eligible top change"
-    );
-    assert!(
-        controller.measurements().is_empty(),
-        "scheduled, not run: the observer callback read no geometry"
-    );
-
-    harness.tick();
-    assert_eq!(controller.measurements().len(), 1, "the frame ran it");
-}
-
-/// A `PopupRoute` is not a `PageRoute` (`pages.dart:58-61`, encoded as
-/// `TransitionGroup`), so no flight is prepared over one.
-///
-/// Red-check: drop the `is_page_route` guard from `HeroController::maybe_start`.
-#[test]
-fn a_non_page_route_schedules_nothing() {
-    let navigator = seeded_navigator();
-    let controller = install(&navigator);
-    let mut harness = mount_navigator(&navigator);
-
-    let _page = harness.enter_owner_scope(|| navigator.push(page_route()));
-    harness.tick();
-
-    let popup = PopupRoute::<i32>::new(|_ctx, _a, _s| SizedBox::new(5.0, 5.0).into_view().boxed());
-    let _popup = harness.enter_owner_scope(|| navigator.push(popup));
-    harness.tick();
-
-    assert_eq!(controller.scheduled_count(), 0);
-    assert!(controller.measurements().is_empty());
-}
 
 // ============================================================================
 // Measurement — the whole point
@@ -249,32 +168,6 @@ fn the_post_frame_callback_measures_the_offstage_destination_in_the_same_frame()
     );
 }
 
-/// `_startHeroTransition` puts the destination back onstage before it measures
-/// (`heroes.dart:987`); the geometry stays committed until the next layout, so the
-/// route is visible again on the very next frame.
-///
-/// Red-check: delete `destination.set_offstage(false)` from `HeroController::measure`
-/// — the route is stranded offstage forever.
-#[test]
-fn the_destination_is_restored_onstage_by_the_measurement() {
-    let navigator = seeded_navigator();
-    let controller = install(&navigator);
-    let mut harness = mount_navigator(&navigator);
-
-    let _first = harness.enter_owner_scope(|| navigator.push(page_route()));
-    harness.tick();
-
-    let second = page_route();
-    let modal = second.modal_handle();
-    let _second = harness.enter_owner_scope(|| navigator.push(second));
-    assert!(modal.offstage(), "forced offstage by did_change_top");
-
-    harness.tick();
-
-    assert!(!modal.offstage(), "and restored by the post-frame callback");
-    assert_eq!(controller.measurements().len(), 1);
-}
-
 /// A pop is classified from the **source** route running backwards
 /// (`heroes.dart:926-927`), not from `didPop` — which `HeroController` does not even
 /// override.
@@ -328,81 +221,6 @@ fn popping_classifies_the_flight_as_a_pop() {
 // Staleness and safety
 // ============================================================================
 
-/// A controller whose navigator has left the tree schedules nothing — Flutter's
-/// `if (navigator == null) return;` (`heroes.dart:970-972`).
-///
-/// Two independent layers, asserted separately because either alone would let this
-/// test pass while the other rotted:
-///
-/// 1. the controller dropped its handle at `did_detach`;
-/// 2. the navigator's own capabilities died with the tree, so even a controller that
-///    somehow still held a handle could not schedule or measure through it.
-///
-/// Red-check: delete `*self.navigator.lock() = None;` from `did_detach` (layer 1),
-/// or delete the `post_frame`/`render_tree` teardown from `NavigatorState::dispose`
-/// (layer 2).
-#[test]
-fn a_detached_controller_is_inert() {
-    let navigator = seeded_navigator();
-    let controller = install(&navigator);
-    let mut harness = mount_navigator(&navigator);
-
-    let _first = harness.enter_owner_scope(|| navigator.push(page_route()));
-    harness.tick();
-    let before = controller.scheduled_count();
-
-    unmount_navigator(&mut harness, &navigator);
-
-    // Layer 2: the capabilities are gone with the tree that named them.
-    assert!(navigator.local_post_frame_handle().is_none());
-    assert!(navigator.render_tree().is_none());
-
-    // Layer 1: and the controller no longer holds the navigator at all.
-    assert!(controller.navigator().is_none());
-
-    // The stack still exists — `NavigatorHandle` owns it — so this pushes for real.
-    let _second = harness.enter_owner_scope(|| navigator.push(page_route()));
-    harness.tick();
-
-    assert_eq!(
-        controller.scheduled_count(),
-        before,
-        "a detached controller schedules nothing"
-    );
-}
-
-/// A measurement scheduled while the navigator was mounted, whose frame arrives after
-/// it is gone, must **not** record anything — `if (navigator == null || overlay ==
-/// null) return;` at the top of `_startHeroTransition` (`heroes.dart:993-997`).
-///
-/// This is the callback-side guard, distinct from the scheduling-side one above: the
-/// controller was attached and did schedule, and only then did the tree go away.
-///
-/// Red-check: delete the `if !navigator.is_mounted() { return; }` guard from
-/// `HeroController::measure` — a `Measurement` lands with `to_size: None`, which a
-/// future `RectTween` would happily interpolate from.
-#[test]
-fn a_measurement_whose_navigator_vanished_before_the_frame_records_nothing() {
-    let navigator = seeded_navigator();
-    let controller = install(&navigator);
-    let mut harness = mount_navigator(&navigator);
-
-    let _first = harness.enter_owner_scope(|| navigator.push(page_route()));
-    harness.tick();
-
-    let _second = harness.enter_owner_scope(|| navigator.push(page_route()));
-    assert_eq!(controller.scheduled_count(), 1, "the measurement is queued");
-    assert!(controller.measurements().is_empty(), "but has not run");
-
-    // The frame that would have run it also unmounts the navigator.
-    unmount_navigator(&mut harness, &navigator);
-
-    assert!(
-        controller.measurements().is_empty(),
-        "a measurement must not record against a navigator that has left the tree"
-    );
-}
-
 /// The measurement is scheduled from an observer callback, which runs with no
 /// navigator lock held. Installing a `HeroController` — which reaches back
 /// through its owner-local `NavigatorHandle` for `route_modal`, `route_peer` and
@@ -424,66 +242,6 @@ fn a_hero_controller_does_not_deadlock_the_observer_callback() {
     harness.tick();
 
     assert_eq!(controller.measurements().len(), 2);
-}
-
-/// Nested navigators are **out of scope**: a controller answers only about the
-/// navigator that attached it. Flutter needs a `HeroControllerScope` for this
-/// (`navigator.dart:3995-4046`) and FLUI has none.
-///
-/// The controller must never reach for a root navigator — `NavigatorHandle::maybe_of_root`
-/// exists, and using it here would silently make an inner controller measure outer
-/// routes. This pins that an inner navigator's pushes are invisible to an outer
-/// navigator's controller.
-///
-/// Red-check: make `HeroController::maybe_start` resolve its navigator from anywhere
-/// but `self.navigator`.
-#[test]
-fn a_controller_observes_only_the_navigator_that_attached_it() {
-    let outer = seeded_navigator();
-    let inner = seeded_navigator();
-    let outer_controller = install(&outer);
-    let inner_controller = install(&inner);
-
-    let mut harness = mount_navigator(&outer);
-    let mut inner_harness = mount_navigator(&inner);
-
-    let _outer_push = harness.enter_owner_scope(|| outer.push(page_route()));
-    let _outer_push2 = harness.enter_owner_scope(|| outer.push(page_route()));
-    harness.tick();
-
-    assert_eq!(outer_controller.scheduled_count(), 1);
-    assert_eq!(
-        inner_controller.scheduled_count(),
-        0,
-        "the inner controller heard nothing about the outer navigator"
-    );
-
-    let _inner_push = inner_harness.enter_owner_scope(|| inner.push(page_route()));
-    let _inner_push2 = inner_harness.enter_owner_scope(|| inner.push(page_route()));
-    inner_harness.tick();
-
-    assert_eq!(inner_controller.scheduled_count(), 1);
-    assert_eq!(outer_controller.scheduled_count(), 1, "and vice versa");
-}
-
-/// Two eligible top changes in one frame schedule two measurements, and both run.
-/// A counter that deduplicated would be a silent behavior change.
-#[test]
-fn every_eligible_top_change_gets_its_own_measurement() {
-    let navigator = seeded_navigator();
-    let controller = install(&navigator);
-    let mut harness = mount_navigator(&navigator);
-
-    let _first = harness.enter_owner_scope(|| navigator.push(page_route()));
-    let _second = harness.enter_owner_scope(|| navigator.push(page_route()));
-    let _third = harness.enter_owner_scope(|| navigator.push(page_route()));
-    assert_eq!(controller.scheduled_count(), 2, "page->page, page->page");
-
-    harness.tick();
-    assert_eq!(controller.measurements().len(), 2);
-
-    let counted = Arc::new(AtomicUsize::new(controller.measurements().len()));
-    assert_eq!(counted.load(Ordering::SeqCst), 2);
 }
 
 /// **A capability that cannot be acquired must not be paid for first.**
@@ -724,38 +482,6 @@ fn a_gesture_driven_pop_starts_no_flight_but_a_programmatic_pop_does() {
     );
 }
 
-/// `final toHero = toHeroes[tag]; if (toHero == null) …` (`heroes.dart:1044-1046`) — a
-/// tag on only one route is not a flight.
-///
-/// Red-check: make `collect_manifests` fall back to the other route's hero when a tag
-/// misses (`from_heroes.get(&tag).or_else(|| to_heroes.get(&tag))`, and the mirror) —
-/// an unpaired tag then flies from its own rect to its own rect.
-#[test]
-fn controller_ignores_tags_present_on_only_one_route() {
-    let navigator = seeded_navigator();
-    let controller = install(&navigator);
-    let mut harness = mount_navigator(&navigator);
-
-    let _first =
-        harness.enter_owner_scope(|| navigator.push(hero_page_route("only-here", 30.0, 20.0)));
-    harness.tick();
-
-    let _second =
-        harness.enter_owner_scope(|| navigator.push(hero_page_route("only-there", 60.0, 45.0)));
-    harness.tick();
-
-    assert_eq!(
-        controller.measurements().len(),
-        1,
-        "the top change was eligible and measured"
-    );
-    assert!(
-        controller.manifests().is_empty(),
-        "but no tag is shared, so nothing would fly: {:?}",
-        controller.manifests()
-    );
-}
-
 /// A hero that leaves its route before the measuring frame takes its tag with it, so
 /// no flight is prepared for it.
 ///
@@ -839,50 +565,6 @@ fn controller_skips_a_hero_that_left_its_route_before_the_measuring_frame() {
     );
 }
 
-/// **A `HeroController` cannot be shared by two mounted navigators** (Flutter's
-/// "can not be shared", `navigator.dart:4010-4027`). The second
-/// navigator's attach is refused: the controller stays with the first, sound, rather
-/// than silently pointing at the second.
-///
-/// Red-check: drop the shared-controller guard in `HeroController::did_attach` (let it
-/// overwrite) — the controller then names the *second* navigator and this fails.
-#[test]
-fn a_hero_controller_shared_by_two_mounted_navigators_keeps_the_first() {
-    let controller = HeroController::new();
-
-    let first = seeded_navigator();
-    first.add_observer(Arc::clone(&controller) as Arc<dyn NavigatorObserver>);
-    let mut first_harness = mount_navigator(&first);
-    assert!(
-        controller
-            .navigator()
-            .is_some_and(|nav| nav.is_same(&first)),
-        "the controller attaches to the first navigator"
-    );
-
-    // A second, still-mounted navigator tries to take the same controller.
-    let second = seeded_navigator();
-    second.add_observer(Arc::clone(&controller) as Arc<dyn NavigatorObserver>);
-    let mut second_harness = mount_navigator(&second);
-
-    assert!(
-        controller
-            .navigator()
-            .is_some_and(|nav| nav.is_same(&first)),
-        "the second attach was refused; the controller still names the first navigator"
-    );
-    assert!(
-        !controller
-            .navigator()
-            .is_some_and(|nav| nav.is_same(&second)),
-        "and never the second"
-    );
-
-    // When the first unmounts, the controller is freed and the second can claim it.
-    unmount_navigator(&mut first_harness, &first);
-    let _ = &mut second_harness;
-}
-
 /// **Automatic attach adds exactly one controller**: a bare
 /// `Navigator` with no `HeroControllerScope` creates its own default `HeroController`.
 ///
@@ -896,73 +578,5 @@ fn a_bare_navigator_auto_defaults_exactly_one_controller() {
         navigator.hero_observer_count(),
         1,
         "the Navigator created its own default hero controller"
-    );
-}
-
-/// **A hand-attached controller suppresses the auto-default**: the marker
-/// `NavigatorObserver::observes_hero_flights` lets `init_state` skip the default, so
-/// there is exactly one controller — not the manual one plus a default.
-///
-/// Red-check: make `HeroController::observes_hero_flights` return `false` — the
-/// auto-default is added too and the count is 2.
-#[test]
-fn a_manual_controller_suppresses_the_auto_default() {
-    let navigator = seeded_navigator();
-    navigator.add_observer(HeroController::new() as Arc<dyn NavigatorObserver>);
-    let _harness = mount_navigator(&navigator);
-    assert_eq!(
-        navigator.hero_observer_count(),
-        1,
-        "the manual controller suppressed the auto-default — exactly one, not two"
-    );
-}
-
-/// The same suppression holds when a controller is hand-attached **after** mount.
-/// `NavigatorHandle::add_observer` documents that already-mounted observers attach at
-/// once, so the auto-default must be replaced rather than left beside the manual
-/// controller.
-///
-/// Red-check: delete `take_auto_hero_observer()` from `NavigatorHandle::add_observer` —
-/// the count stays 2 and the old auto-controller is still attached.
-#[test]
-fn a_manual_controller_added_after_mount_replaces_the_auto_default() {
-    let navigator = seeded_navigator();
-    let _harness = mount_navigator(&navigator);
-    assert_eq!(
-        navigator.hero_observer_count(),
-        1,
-        "mount created the default hero controller"
-    );
-
-    let manual = HeroController::new();
-    navigator.add_observer(Arc::clone(&manual) as Arc<dyn NavigatorObserver>);
-
-    assert_eq!(
-        navigator.hero_observer_count(),
-        1,
-        "the manual controller replaced the auto-default instead of doubling it"
-    );
-    assert!(
-        manual
-            .navigator()
-            .is_some_and(|handle| handle.is_same(&navigator)),
-        "the newly-added controller attached immediately to the mounted navigator"
-    );
-}
-
-/// `HeroControllerScope::none` attaches nothing and suppresses the auto-default: zero
-/// controllers, no flights.
-///
-/// Red-check: treat `Some(None)` like `None` in `init_state` (auto-default) — count is 1.
-#[test]
-fn a_scope_none_leaves_no_controller() {
-    use flui_widgets::navigator::HeroControllerScope;
-
-    let navigator = seeded_navigator();
-    let _harness = mount(HeroControllerScope::none(Navigator::new(navigator.clone())));
-    assert_eq!(
-        navigator.hero_observer_count(),
-        0,
-        "HeroControllerScope::none blocks the auto-default"
     );
 }

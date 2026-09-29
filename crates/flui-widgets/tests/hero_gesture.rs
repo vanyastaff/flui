@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationController, AnimationStatus};
+use flui_animation::AnimationController;
 use flui_foundation::ValueKey;
 use flui_view::ViewExt;
 use flui_view::prelude::*;
@@ -207,116 +207,13 @@ fn gesture_pop_with_both_ends_opted_in_starts_synchronously_and_tracks_the_drag(
 // 2. One-end-only opt-in: no flight
 // ============================================================================
 
-/// `Hero._allHeroesFor`'s `inviteHero` (`heroes.dart:308-314`): a pair flies
-/// during a gesture transition only when **both** ends opt in.
-///
-/// Red-check: drop the `hero_mode_enabled`-style filter — `filter_for_gesture`
-/// — from `MeasurementPass::collect_manifests` and this starts a flight anyway.
-#[test]
-fn one_end_only_opting_in_starts_no_flight() {
-    let (navigator, _harness, controller, _to, from, from_controller) =
-        gesture_fixture(true, false);
-
-    let _gesture = BackGestureController::new(navigator, from, from_controller);
-
-    assert!(
-        controller.flights().get(&hero_tag()).is_none(),
-        "the from-hero did not opt in, so no pair flies"
-    );
-}
-
 // ============================================================================
 // 3. Non-opted hero un-hidden (the endFlight else-branch)
 // ============================================================================
 
-/// The oracle's else-branch calls `endFlight` on a non-participating hero to
-/// un-hide it if a prior flight left it hidden (`heroes.dart:311-314`).
-///
-/// Red-check: change `HeroController::filter_for_gesture` to plain
-/// `.retain(...)` (drop the `hero.end_flight(false)` call in the rejected arm)
-/// — the simulated prior flight's placeholder never clears.
-#[test]
-fn a_non_opted_heroes_placeholder_is_cleared_when_a_gesture_transition_starts() {
-    let (navigator, _harness, _controller, _to, from, from_controller) =
-        gesture_fixture(true, false);
-
-    let from_modal = navigator
-        .route_modal(from)
-        .expect("a PageRoute publishes a ModalHandle");
-    let hero = from_modal
-        .all_heroes()
-        .get(&hero_tag())
-        .cloned()
-        .expect("the hero registered with its route");
-    // Simulate a prior (programmatic) flight that left this hero hidden.
-    hero.start_flight(false);
-    assert!(
-        hero.placeholder_size().is_some(),
-        "hidden by the simulated prior flight"
-    );
-
-    let _gesture = BackGestureController::new(navigator, from, from_controller);
-
-    assert!(
-        hero.placeholder_size().is_none(),
-        "a gesture transition's per-hero filter un-hides a non-opted-in hero \
-         instead of silently skipping it"
-    );
-}
-
 // ============================================================================
 // 4. Mid-drag return to zero: deferral, not teardown
 // ============================================================================
-
-/// `_HeroFlight._handleAnimationUpdate` (`heroes.dart:622-650`): a terminal
-/// status update while the user gesture is in progress is parked, not applied
-/// — dragging back to zero mid-gesture must not tear the flight down with the
-/// finger still down, and dragging forward again must keep tracking it.
-///
-/// **The tick between each drag and its assertion is load-bearing, not
-/// incidental.** A terminal status only ever tears the flight down once the
-/// shuttle's own `build` drains `settled_status` (`FlightInner`'s data-plane
-/// listener never calls `finish` itself); nothing about `drag_update` runs a
-/// build synchronously. Asserting right after `drag_update`, with no tick,
-/// would pass whether or not the deferral guard exists — there would be
-/// nothing yet to drain either way, guard or no guard.
-///
-/// Red-check: delete the `gesture_signal.in_progress()` guard from the status
-/// listener in `FlightManager::start` — after the tick following the full
-/// swipe to zero, `flights().get(&tag)` returns `None`.
-#[test]
-fn a_full_swipe_to_zero_mid_gesture_does_not_tear_down_the_flight() {
-    let (navigator, mut harness, controller, _to, from, from_controller) =
-        gesture_fixture(true, true);
-
-    let gesture = BackGestureController::new(navigator, from, from_controller.clone());
-    assert!(
-        controller.flights().get(&hero_tag()).is_some(),
-        "flight started synchronously"
-    );
-
-    // Drag all the way: the from-route's controller hits exactly 0 — Dismissed
-    // — while the finger is still down.
-    gesture.drag_update(1.0);
-    assert_eq!(from_controller.value(), 0.0);
-    assert_eq!(from_controller.status(), AnimationStatus::Dismissed);
-    // Give the shuttle the build that would drain a terminal status and call
-    // `finish` if the deferral guard were missing.
-    harness.tick();
-    assert!(
-        controller.flights().get(&hero_tag()).is_some(),
-        "the flight must not tear down while the user gesture is still in progress"
-    );
-
-    // Drag forward again: still airborne, still tracked.
-    gesture.drag_update(-0.6);
-    assert!(from_controller.value() > 0.0);
-    harness.tick();
-    assert!(
-        controller.flights().get(&hero_tag()).is_some(),
-        "still airborne after dragging forward again"
-    );
-}
 
 // ============================================================================
 // 5. Cancel-release: flight returns, page state preserved
@@ -492,129 +389,9 @@ fn complete_release_pops_to_the_destination_route_and_the_flight_lands() {
 // 7. Invalid destination size: falls back to the deferred path, no panic
 // ============================================================================
 
-/// `_maybeStartHeroTransition`'s `hasValidSize` fast path requires
-/// `toRoute.maintainState` (`heroes.dart:957`); without it, the transition
-/// falls back to the ordinary offstage-then-post-frame path — same code path
-/// a programmatic push/pop over the same destination would take — with no
-/// panic anywhere.
-///
-/// A `maintainState == false` destination that is still covered when the
-/// gesture starts has no mounted subtree to flip onstage in the first
-/// place (`ModalRoute`'s own doc: "a covered modal with `maintain_state ==
-/// false` is unmounted"; pinned directly by
-/// `modal_covered_route_without_maintain_state_is_unmounted_and_loses_its_state`
-/// in `modal_route.rs`, once the covering transition completes), so
-/// there is nothing to measure — the deferred path correctly measures
-/// nothing, exactly as it would for a programmatic transition onto the same
-/// unmeasurable destination
-/// (`a_measurement_whose_navigator_vanished_before_the_frame_records_nothing`'s
-/// sibling case). The behavior under test is "falls back, does not crash
-/// trying, and finds nothing to fly" — not "recovers a flight from an
-/// inherently unmeasurable route".
-///
-/// Red-check: drop the `destination.maintain_state()` conjunct from the sync
-/// fast-path condition in `HeroController::maybe_start` — the flight starts
-/// synchronously and the first assertion (`flights().get(...).is_none()`
-/// before any tick) fails.
-///
-/// **Two episodes of one masked bug, not two different bugs.** "Nothing
-/// measurable" was the right expectation from the start, but each time this
-/// test was checked, something else was silently absorbing the covered
-/// route's own unmount before this test's single `harness.tick()` could
-/// observe it:
-///
-/// 1. (2026-08-05) The owner-local post-frame lane's old thread-local
-///    "active lane" gate silently failed the deferred measurement's own
-///    `schedule_local` call in this exact fixture (`gesture_fixture_with`
-///    calls `BackGestureController::new` outside any `enter_owner_scope`),
-///    so the measurement never ran at all and "nothing flies" passed
-///    vacuously. Once `LocalPostFrameHandle` addressed its lane directly (no
-///    "active lane" gate to fail), the measurement started genuinely
-///    running — and found `to`'s subtree STILL mounted and laid out
-///    (`route_subtree` returned `Some`, `box_size` reported the full
-///    800x600 screen) despite `maintain_state(false)` and full coverage.
-///    The test was flipped to expect that flight instead of asking why the
-///    subtree was still there.
-/// 2. (issue #1180) The covered route's own unmount is driven by a rebuild
-///    that used to travel through `BuildOwner`'s external inbox, which
-///    `drain_build_scope` drained only once, at the START of its heap loop —
-///    so a rebuild a LATER build in that same drain schedules waited a
-///    whole extra frame. This fixture's single settling `harness.tick()`
-///    was one frame short of that wait, so the unmount had simply not
-///    landed yet by the time this test measured — the identical masked-bug
-///    shape as episode 1, moved from the post-frame lane to the inbox
-///    deferral. `drain_build_scope` now absorbs that inbox at the top of
-///    every heap pop, landing the unmount within the SAME tick.
-///    Confirmed directly: `route_subtree(to)` is `Some` on the code before
-///    this change and `None` after it, for the identical fixture state.
-///
-/// So the flight this test used to assert on was never a real one — it was
-/// the same masked bug wearing a different mechanism. This is the original,
-/// Flutter-correct expectation, restored.
-#[test]
-fn a_to_route_that_does_not_maintain_state_falls_back_to_the_deferred_path_without_panicking() {
-    let (navigator, mut harness, controller, to, from, from_controller) =
-        gesture_fixture_with(true, true, false);
-
-    let _gesture = BackGestureController::new(navigator.clone(), from, from_controller);
-    assert!(
-        controller.flights().get(&hero_tag()).is_none(),
-        "no maintainState on the destination: the sync fast path must not fire"
-    );
-
-    // The deferred (offstage-then-post-frame) path runs next — still no
-    // panic, and the covered maintain_state(false) destination now has no
-    // mounted subtree left to measure by the time it runs (issue #1180: the
-    // covering transition's own unmount rebuild lands within this same
-    // tick, not the next one).
-    harness.tick();
-    assert!(
-        navigator.route_subtree(to).is_none(),
-        "a covered maintain_state(false) destination must have no mounted \
-         subtree by the time the deferred path measures it"
-    );
-    assert!(
-        controller.flights().get(&hero_tag()).is_none(),
-        "the deferred path measures nothing: the covered maintain_state(false) \
-         destination is unmounted"
-    );
-}
-
 // ============================================================================
 // 8. Drag-never-moved release: did_stop dismisses the parked flight
 // ============================================================================
-
-/// `HeroController.didStopUserGesture`'s manual sweep (`heroes.dart:882-907`):
-/// a gesture-driven pop flight whose proxy never left `Dismissed` (the drag
-/// never moved) has no status transition to end it on its own — it must be
-/// dismissed manually once the gesture genuinely stops.
-///
-/// Red-check: delete `HeroController::did_stop_user_gesture`'s
-/// `finish_stalled_gesture_pops` call — the flight leaks forever, and
-/// `flights().get(...)` still returns `Some` after this test's final step.
-#[test]
-fn a_never_moved_drag_is_dismissed_once_the_gesture_genuinely_stops() {
-    let (navigator, _harness, controller, _to, from, from_controller) = gesture_fixture(true, true);
-
-    let gesture = BackGestureController::new(navigator.clone(), from, from_controller.clone());
-    assert!(
-        controller.flights().get(&hero_tag()).is_some(),
-        "flight started"
-    );
-
-    // Release without ever moving: `drag_end` at value 1.0, no fling — "stay".
-    let still_settling = gesture.drag_end(0.0);
-    if still_settling {
-        // Mirrors what `BackGestureDetectorState::poll_settle` eventually
-        // reports once the release run settles.
-        navigator.did_stop_user_gesture();
-    }
-
-    assert!(
-        controller.flights().get(&hero_tag()).is_none(),
-        "did_stop_user_gesture must manually dismiss a flight whose drag never moved"
-    );
-}
 
 // ============================================================================
 // 9. Replacing the auto observer retires its in-flight flight

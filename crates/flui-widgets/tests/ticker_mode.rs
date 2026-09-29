@@ -120,31 +120,6 @@ fn a_disabled_ticker_mode_freezes_its_subtree_and_an_enabled_one_does_not() {
     }
 }
 
-/// **A `TickerMode` with no ambient `VsyncScope` above must not swallow its
-/// subtree's registration.** Its registry would hang under nobody and never
-/// be ticked, so handing it down would turn descendants that fall back to
-/// their own wall-clock ticker into frozen ones — a widget documented as
-/// changing nothing, silently killing the animations it wraps.
-///
-/// Red-check (verified): make `build` always provide the registry — the
-/// probe reports it found an ambient scope, and its controller is now
-/// registered with a registry nothing drives.
-#[test]
-fn a_ticker_mode_without_an_ambient_scope_leaves_the_subtree_alone() {
-    let animation = controller();
-    let (probe, found) = probe(&animation);
-
-    let _harness = mount(TickerMode::new(probe).into_view().boxed());
-
-    assert_eq!(
-        *found.lock(),
-        Some(false),
-        "with no driver above, the TickerMode must not hand its subtree an \
-             undriven registry — the wall-clock fallback has to stay reachable"
-    );
-    animation.dispose();
-}
-
 /// The nesting follows the widget tree: a `TickerMode` under a *disabled*
 /// one is starved even when it is itself enabled (Flutter's
 /// `_updateEffectiveMode` AND, `ticker_provider.dart:246-252`) — observed

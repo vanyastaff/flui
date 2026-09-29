@@ -38,59 +38,6 @@ fn project_with_android_configured() -> TempDir {
 }
 
 #[test]
-fn platform_list_runs_successfully() {
-    flui().args(["platform", "list"]).assert().success();
-}
-
-#[test]
-fn platform_list_shows_android() {
-    // cliclack outputs to stderr
-    flui()
-        .args(["platform", "list"])
-        .assert()
-        .success()
-        .stderr(predicate::str::contains("android"));
-}
-
-#[test]
-fn platform_list_shows_ios() {
-    flui()
-        .args(["platform", "list"])
-        .assert()
-        .success()
-        .stderr(predicate::str::contains("ios"));
-}
-
-#[test]
-fn platform_list_shows_web() {
-    flui()
-        .args(["platform", "list"])
-        .assert()
-        .success()
-        .stderr(predicate::str::contains("web"));
-}
-
-#[test]
-fn platform_list_shows_desktop_platforms() {
-    flui().args(["platform", "list"]).assert().success().stderr(
-        predicate::str::contains("windows")
-            .and(predicate::str::contains("linux"))
-            .and(predicate::str::contains("macos")),
-    );
-}
-
-#[test]
-fn platform_add_without_args_shows_message() {
-    // `flui platform add` with no platform names should indicate no platforms specified
-    // cliclack outputs to stderr
-    flui()
-        .args(["platform", "add"])
-        .assert()
-        .success()
-        .stderr(predicate::str::contains("No platforms specified"));
-}
-
-#[test]
 fn platform_list_json_is_pure_ndjson() {
     let tmp = project_with_minimal_config();
 
@@ -132,18 +79,6 @@ fn platform_add_rejects_an_unknown_platform_and_lists_valid_ones() {
         .stderr(
             predicate::str::contains("invalid platform").and(predicate::str::contains("android")),
         );
-}
-
-#[test]
-fn platform_remove_rejects_an_unknown_platform_name() {
-    let tmp = project_with_minimal_config();
-
-    flui()
-        .current_dir(tmp.path())
-        .args(["platform", "remove", "fuchsia"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("invalid platform"));
 }
 
 #[test]

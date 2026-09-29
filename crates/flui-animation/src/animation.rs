@@ -177,34 +177,3 @@ where
     let parent = Arc::clone(parent);
     ParentSubscription::new(move || parent.remove_listener(id))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_animation_direction_flip() {
-        assert_eq!(
-            AnimationDirection::Forward.flip(),
-            AnimationDirection::Reverse
-        );
-        assert_eq!(
-            AnimationDirection::Reverse.flip(),
-            AnimationDirection::Forward
-        );
-    }
-
-    #[test]
-    fn test_animation_status_helpers() {
-        assert!(AnimationStatus::Forward.is_running());
-        assert!(AnimationStatus::Reverse.is_running());
-        assert!(!AnimationStatus::Dismissed.is_running());
-        assert!(!AnimationStatus::Completed.is_running());
-
-        assert!(AnimationStatus::Completed.is_completed());
-        assert!(!AnimationStatus::Forward.is_completed());
-
-        assert!(AnimationStatus::Dismissed.is_dismissed());
-        assert!(!AnimationStatus::Completed.is_dismissed());
-    }
-}

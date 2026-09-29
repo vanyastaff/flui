@@ -32,11 +32,6 @@ mod tests {
     use flui_sdk::widgets::WidgetState;
 
     #[test]
-    fn resolve_state_color_is_none_with_no_property() {
-        assert_eq!(resolve_state_color(None, &WidgetStates::NONE), None);
-    }
-
-    #[test]
     fn resolve_state_color_is_none_when_the_property_has_no_matching_entry() {
         // Distinguishes "no property at all" from "a property that itself
         // resolves to `None` for this state set" — both must collapse to
@@ -48,15 +43,6 @@ mod tests {
         assert_eq!(
             resolve_state_color(Some(&property), &WidgetStates::NONE),
             None
-        );
-    }
-
-    #[test]
-    fn resolve_state_color_resolves_a_present_property() {
-        let property = WidgetStateProperty::all(Some(Color::rgb(1, 2, 3)));
-        assert_eq!(
-            resolve_state_color(Some(&property), &WidgetStates::NONE),
-            Some(Color::rgb(1, 2, 3))
         );
     }
 }

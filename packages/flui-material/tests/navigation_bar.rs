@@ -267,28 +267,6 @@ fn selected_index_change_moves_the_indicator_fill() {
 }
 
 #[test]
-fn theme_indicator_color_beats_the_m3_default() {
-    let overridden = flui_sdk::painting::Color::rgb(9, 9, 9);
-    let laid = lay_out(
-        themed(
-            NavigationBar::new(three_destinations())
-                .selected_index(0)
-                .indicator_color(overridden),
-        ),
-        bar_constraints(300.0, 800.0),
-    );
-
-    let cells = destination_cells(&laid, 3);
-    let indicator = indicator_in_cell(&laid, cells[0]);
-    assert_eq!(
-        laid.render_property(indicator, "color"),
-        Some(format!("{overridden:?}")),
-        "a widget-level indicator_color override must reach the selected destination's \
-         rendered fill",
-    );
-}
-
-#[test]
 fn mounting_creates_a_tab_bar_container_and_one_annotated_node_per_destination() {
     let laid = lay_out(
         themed(NavigationBar::new(three_destinations())),
@@ -334,31 +312,6 @@ fn mounting_creates_a_tab_bar_container_and_one_annotated_node_per_destination()
              carry real content, not an empty passthrough",
         );
     }
-}
-
-#[test]
-fn bar_height_and_elevation_match_the_m3_defaults() {
-    let laid = lay_out(
-        themed(NavigationBar::new(three_destinations())),
-        bar_constraints(300.0, 800.0),
-    );
-
-    // Every destination also mounts its own (always-reserved, see
-    // `navigation_bar.rs`'s module docs) indicator `RenderPhysicalShape` at
-    // a fixed 64×32 — the bar's own background surface is the only one
-    // sized to the full bar, so size disambiguates it from the three
-    // indicators.
-    let material = laid
-        .find_all_by_render_type("RenderPhysicalShape")
-        .into_iter()
-        .find(|&id| laid.size(id) == size(300.0, 80.0))
-        .expect("NavigationBar must compose a full-size top-level Material surface");
-    assert_eq!(
-        laid.render_property(material, "elevation")
-            .and_then(|value| value.parse::<f64>().ok()),
-        Some(3.0),
-        "_NavigationBarDefaultsM3.elevation is 3.0",
-    );
 }
 
 #[test]

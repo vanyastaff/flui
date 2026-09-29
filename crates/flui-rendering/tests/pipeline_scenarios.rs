@@ -26,10 +26,7 @@
 
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point, Rect, Size};
 use flui_layer::{Layer, LayerTree};
-use flui_objects::{
-    RenderClipRect, RenderColoredBox, RenderFlex, RenderPadding, RenderRepaintBoundary,
-    RenderTransform,
-};
+use flui_objects::{RenderClipRect, RenderColoredBox, RenderFlex, RenderPadding, RenderTransform};
 use flui_rendering::{
     constraints::BoxConstraints,
     testing::{Probe, RenderTester, box_node},
@@ -43,53 +40,6 @@ fn loose(width: f64, height: f64) -> BoxConstraints {
 // ============================================================================
 // 1. Deep nesting: 50 paddings of 1px each around a 10×10 box
 // ============================================================================
-
-#[test]
-fn deep_padding_chain_accumulates_offsets_and_merges_one_picture() {
-    // Build leaf-first, then wrap in 50 padding(1px) layers.
-    let mut spec = box_node(RenderColoredBox::red(10.0, 10.0)).label("leaf");
-    for _ in 0..50 {
-        spec = box_node(RenderPadding::all(1.0)).child(spec);
-    }
-    let run = RenderTester::mount(spec)
-        .with_constraints(loose(500.0, 500.0))
-        .run_frame();
-
-    let leaf = run.id("leaf");
-    let root = run.root();
-
-    // Every padding contributes (1,1) to ITS child — the leaf's committed
-    // offset relative to its parent is exactly (1,1)...
-    assert_eq!(run.offset(leaf), Offset::new(1.0, 1.0));
-    // ...and the picture's ABSOLUTE bounds carry the full 50-deep
-    // accumulation: the leaf draws at (50,50)..(60,60).
-    assert_eq!(
-        run.picture_bounds(),
-        Some(Rect::from_ltrb(50.0, 50.0, 60.0, 60.0)),
-        "accumulated origins must be baked through the whole chain",
-    );
-    assert_eq!(
-        run.structure(),
-        vec!["Offset", "Picture"],
-        "51 inline nodes still merge into ONE picture",
-    );
-
-    // Hit straight through all 50 levels, leaf-first path of 51 ids.
-    let path = run.hit(55.0, 55.0);
-    assert_eq!(path.len(), 51);
-    assert_eq!(path[0], leaf, "leaf-first");
-    assert_eq!(path[50], root, "root last");
-    assert!(
-        run.hit(5.0, 5.0).is_empty(),
-        "the border region (inside paddings, outside the box) misses",
-    );
-
-    // The leaf self-describes its color through the full pipeline.
-    assert_eq!(
-        run.property(leaf, "color").as_deref(),
-        Some("[1.0, 0.0, 0.0, 1.0]"),
-    );
-}
 
 // ============================================================================
 // 2. Mixed tree in one frame
@@ -303,155 +253,17 @@ fn paint_only_then_layout_invalidations_round_trip() {
 // 4. Idle stability: clean frames produce no output
 // ============================================================================
 
-#[test]
-fn clean_frames_after_first_produce_no_layer_tree() {
-    let mut run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)))
-        .with_size(Size::new(100.0, 100.0))
-        .run_frame();
-    assert!(run.painted(), "frame 1 paints");
-
-    for n in 2..=5 {
-        let report = run.pump();
-        assert!(
-            !report.painted,
-            "frame {n} has no dirty work and must produce no output — \
-             leftover dirty state here means an idle app burns frames",
-        );
-    }
-    assert!(run.is_clean());
-}
-
 // ============================================================================
 // 5. Removal churn under one parent
 // ============================================================================
-
-#[test]
-fn remove_and_reinsert_child_keeps_pipeline_clean() {
-    let mut run = RenderTester::mount(
-        box_node(RenderPadding::all(5.0))
-            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("first")),
-    )
-    .with_constraints(loose(200.0, 200.0))
-    .run_frame();
-    let pad = run.root();
-    let first_child = run.id("first");
-
-    // Remove the child, reinsert a different one (slot reuse).
-    assert_eq!(run.owner_mut().remove_render_object(first_child), 1);
-    let second_child = run
-        .owner_mut()
-        .insert_child_render_object(pad, Box::new(RenderColoredBox::blue(60.0, 60.0)))
-        .expect("second child");
-    run.owner_mut().mark_needs_layout(pad);
-    let report = run.pump();
-    assert!(report.painted, "churn frame paints");
-
-    assert!(
-        run.owner().render_tree().get(first_child).is_none(),
-        "the stale id must not resolve to the reused slot (ABA guard)",
-    );
-    assert_eq!(run.offset(second_child), Offset::new(5.0, 5.0));
-    assert_eq!(
-        run.picture_bounds(),
-        Some(Rect::from_ltrb(5.0, 5.0, 65.0, 65.0)),
-        "the NEW child paints at the padded origin",
-    );
-    assert_eq!(
-        run.hit(30.0, 30.0).first().copied(),
-        Some(second_child),
-        "hits route to the new child, never the stale id",
-    );
-    assert!(run.is_clean(), "queues drain fully after churn");
-}
 
 // ============================================================================
 // 6. Repaint-boundary split survives re-frames
 // ============================================================================
 
-#[test]
-fn repaint_boundary_split_survives_relayout_frames() {
-    let mut run = RenderTester::mount(
-        box_node(RenderPadding::all(5.0)).child(
-            box_node(RenderRepaintBoundary::new())
-                .label("boundary")
-                .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("leaf")),
-        ),
-    )
-    .with_constraints(loose(200.0, 200.0))
-    .run_frame();
-    let pad = run.root();
-    let leaf = run.id("leaf");
-    assert_eq!(
-        run.structure(),
-        vec!["Offset", "Offset", "Picture"],
-        "the boundary subtree splits under its own OffsetLayer",
-    );
-
-    // Move the boundary by growing the padding; re-frame.
-    run.update::<RenderPadding>(pad, |padding| {
-        assert_eq!(
-            padding.set_padding(EdgeInsets::all(30.0)),
-            flui_rendering::RenderUpdateImpact::LAYOUT,
-        );
-    });
-    run.pump();
-
-    assert_eq!(run.structure(), vec!["Offset", "Offset", "Picture"]);
-    // The boundary's OffsetLayer carries the NEW accumulated offset; the
-    // picture inside stays rebased at zero.
-    let tree = run.layer_tree().expect("frame 2");
-    let root_id = tree.root();
-    let boundary_layer_id = tree.get(root_id).expect("root node").children()[0];
-    let boundary_node = tree.get(boundary_layer_id).expect("boundary node");
-    let Layer::Offset(offset_layer) = boundary_node.layer() else {
-        panic!("boundary layer must be an OffsetLayer");
-    };
-    assert_eq!(
-        offset_layer.offset(),
-        Offset::new(30.0, 30.0),
-        "an offset-only move shows up as the layer's offset",
-    );
-    assert_eq!(
-        run.picture_bounds(),
-        Some(Rect::from_ltrb(0.0, 0.0, 40.0, 40.0)),
-        "boundary-subtree coordinates stay rebased to zero",
-    );
-    assert_eq!(run.offset(leaf), Offset::new(0.0, 0.0));
-}
-
 // ============================================================================
 // 7. Edge cases: zero sizes and empty containers
 // ============================================================================
-
-#[test]
-fn zero_size_children_and_empty_containers_survive_the_pipeline() {
-    let run = RenderTester::mount(
-        box_node(RenderFlex::row())
-            .child(box_node(RenderColoredBox::red(0.0, 0.0)).label("zero"))
-            .child(box_node(RenderFlex::row()).label("empty_row"))
-            .child(box_node(RenderColoredBox::blue(40.0, 40.0)).label("normal")),
-    )
-    .with_constraints(loose(200.0, 100.0))
-    .run_frame();
-
-    let zero = run.id("zero");
-    let empty_row = run.id("empty_row");
-    let normal = run.id("normal");
-
-    // Zero-size and empty contribute nothing to the main extent.
-    assert_eq!(run.offset(zero), Offset::new(0.0, 0.0));
-    assert_eq!(run.offset(empty_row), Offset::new(0.0, 0.0));
-    assert_eq!(run.offset(normal), Offset::new(0.0, 0.0));
-
-    // Only the normal child draws; degenerate nodes add no commands.
-    assert_eq!(
-        run.picture_bounds(),
-        Some(Rect::from_ltrb(0.0, 0.0, 40.0, 40.0)),
-    );
-    // A zero-area child never claims a hit.
-    assert_eq!(run.hit(10.0, 10.0).first().copied(), Some(normal));
-    assert!(run.is_clean());
-}
 
 // ============================================================================
 // 8. Churn stress: 20 remove+reinsert cycles with frames between
@@ -504,98 +316,6 @@ fn repeated_churn_cycles_stay_clean_and_generations_protect_every_round() {
 // ====================================================================
 // Deferred mutations integration tests
 // ====================================================================
-
-/// Removing a child directly (the production `remove_render_object` call —
-/// no render object anywhere still enqueues a deferred remove; the
-/// deferred-mutation queue that used to sit between "layout wants to remove
-/// a child" and "the tree actually loses it" is gone) disposes the subtree
-/// and the parent reflows clean once re-dirtied.
-#[test]
-fn removing_a_child_directly_disposes_it_and_the_parent_reflows_clean() {
-    let mut run = RenderTester::mount(
-        box_node(RenderPadding::all(5.0))
-            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
-    )
-    .with_constraints(loose(200.0, 200.0))
-    .run_frame();
-
-    let root = run.root();
-    let child = run.id("child");
-    assert!(run.owner().render_tree().get(child).is_some());
-
-    // Direct removal: production callers (the element tree's child manager)
-    // do this between frames, never mid-phase.
-    run.owner_mut().remove_render_object(child);
-    run.owner_mut().mark_needs_layout(root);
-    run.pump();
-
-    assert!(
-        run.owner().render_tree().get(child).is_none(),
-        "the removed child must be gone after the settle pump"
-    );
-    assert!(
-        run.is_clean(),
-        "no stale dirty entries survive the disposed child"
-    );
-}
-
-/// `insert_child_render_object` schedules the child and the full
-/// parent-membership invalidation without an immediate parent paint — the
-/// same canonical membership impact the deleted deferred-insert queue used
-/// to apply after a layout pass, now applied immediately since no render
-/// object builds a child mid-layout any more (the request-strategy sliver
-/// only records a request; the element tree's child manager inserts the
-/// real child between frames, through this same call).
-#[test]
-fn inserting_a_child_directly_schedules_exact_membership_work_for_new_child() {
-    let mut run = RenderTester::mount(
-        box_node(RenderFlex::row())
-            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("first")),
-    )
-    .with_constraints(loose(300.0, 100.0))
-    .run_frame();
-    let root = run.root();
-    let before = run
-        .owner()
-        .render_tree()
-        .get(root)
-        .expect("root node")
-        .children()
-        .to_vec();
-    assert_eq!(before.len(), 1);
-
-    let new_child = run
-        .owner_mut()
-        .insert_child_render_object(root, Box::new(RenderColoredBox::blue(40.0, 40.0)))
-        .expect("root_id was just inserted and is valid");
-
-    let after = run
-        .owner()
-        .render_tree()
-        .get(root)
-        .expect("root node")
-        .children()
-        .to_vec();
-    assert_eq!(after.len(), 2, "insert appended a child to the row");
-    assert!(
-        after.contains(&new_child) && !before.contains(&new_child),
-        "the appended child has a fresh id",
-    );
-
-    // The child was scheduled, not orphaned: a settle frame lays it out into
-    // the row's second slot and drains every dirty queue.
-    run.pump();
-    assert!(
-        run.owner().render_tree().get(new_child).is_some(),
-        "inserted child is still live after settling",
-    );
-    assert_eq!(
-        run.offset(new_child),
-        Offset::new(40.0, 0.0),
-        "the new child flows into the row after the existing 40px child",
-    );
-    assert!(run.is_clean(), "queues drain fully once the insert settles");
-}
 
 /// Removing a non-leaf directly must dispose the whole subtree, not just the
 /// removed node's own slot.

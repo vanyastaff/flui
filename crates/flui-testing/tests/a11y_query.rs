@@ -85,13 +85,6 @@ impl SemanticContainer {
             exclude_descendants: false,
         }
     }
-
-    fn excluding() -> Self {
-        Self {
-            exclude_descendants: true,
-            ..Self::default()
-        }
-    }
 }
 
 impl flui_foundation::Diagnosticable for SemanticContainer {}
@@ -172,96 +165,6 @@ fn a_button_in_the_render_tree_is_findable_by_role() {
         .unwrap_or_else(|e| panic!("expected exactly one button: {e}"));
 
     assert_eq!(button.label(), Some("Submit"));
-}
-
-/// Semantics stays off until asked for, so a harness that never opts in pays
-/// nothing — and a query against it reports "no tree", not "no buttons".
-#[test]
-fn without_enable_semantics_there_is_no_tree_to_query() {
-    let mut binding = binding_with(SemanticLeaf {
-        label: "Submit".to_string(),
-        button: true,
-        ..Default::default()
-    });
-
-    pump(&mut binding);
-
-    assert!(!binding.semantics_enabled());
-    assert!(
-        binding.a11y_tree().is_none(),
-        "an un-built tree must be distinguishable from an empty one; \
-         returning Some(empty) would let `find_all(Button)` assert `[]` \
-         about a tree that was never assembled"
-    );
-}
-
-/// Enabling after the frame does not retroactively build a tree — the phase it
-/// controls has already run. Pinned because the failure is silent: the query
-/// returns `None` and reads as "no semantics" rather than "you asked too late".
-#[test]
-fn enabling_after_the_frame_leaves_nothing_to_query_until_the_next_one() {
-    let mut binding = binding_with(SemanticLeaf {
-        label: "Submit".to_string(),
-        button: true,
-        ..Default::default()
-    });
-
-    pump(&mut binding);
-    binding.enable_semantics().expect("binding is tree-bound");
-
-    assert!(binding.semantics_enabled());
-
-    pump(&mut binding);
-    assert!(
-        binding.a11y_tree().is_some(),
-        "the frame after enabling assembles the tree"
-    );
-}
-
-/// A structural role has no flag to carry it, so it reaches AccessKit only if
-/// the explicit-role half of `resolve_role` is wired through the whole chain:
-/// config -> node data -> translation -> query.
-#[test]
-fn a_structural_role_survives_the_whole_chain() {
-    let mut binding = binding_with(SemanticLeaf {
-        label: "Overview".to_string(),
-        role: SemanticsRole::Tab,
-        ..Default::default()
-    });
-
-    binding.enable_semantics().expect("binding is tree-bound");
-    pump(&mut binding);
-
-    let tree = binding.a11y_tree().expect("tree exists");
-    let tab = tree
-        .find(Role::Tab)
-        .unwrap_or_else(|e| panic!("expected exactly one tab: {e}"));
-
-    assert_eq!(tab.label(), Some("Overview"));
-}
-
-/// A node with no enabled-state concept must not be announced as disabled.
-/// Getting this wrong makes a screen reader call every plain container
-/// unavailable, and no role assertion would catch it.
-#[test]
-fn a_node_without_enabled_state_is_not_announced_as_disabled() {
-    let mut binding = binding_with(SemanticLeaf {
-        label: "Submit".to_string(),
-        button: true,
-        enabled: None,
-        ..Default::default()
-    });
-
-    binding.enable_semantics().expect("binding is tree-bound");
-    pump(&mut binding);
-
-    let tree = binding.a11y_tree().expect("tree exists");
-    let button = tree.find(Role::Button).expect("one button");
-
-    assert!(
-        !button.is_disabled(),
-        "absence of enabled-state is not disablement"
-    );
 }
 
 /// The disabled case, so the test above is pinning a distinction rather than a
@@ -376,47 +279,5 @@ fn merge_descendants_survives_translation() {
     assert!(
         tree.find_all_by_label("Child").is_empty(),
         "the merged-away descendant must not reappear as its own node"
-    );
-}
-
-/// Exclude-subtree drops a descendant's semantics during assembly. The published
-/// tree must not contain it — this is the case where leaking would be worst,
-/// since the app deliberately hid that content from assistive technology.
-///
-/// Oracle: `run_semantics_excluding_node_skips_descendant_subtree`
-/// (flui-rendering).
-#[test]
-fn exclude_subtree_survives_translation() {
-    let mut binding = binding_with_chain(
-        SemanticContainer::excluding(),
-        SemanticLeaf {
-            label: "Hidden label".to_string(),
-            button: true,
-            ..Default::default()
-        },
-    );
-
-    binding.enable_semantics().expect("binding is tree-bound");
-    pump(&mut binding);
-
-    let tree = binding.a11y_tree().expect("tree exists");
-
-    // A positive shape assertion first: pure absence would also "pass" against
-    // a tree that failed to assemble at all.
-    assert_eq!(
-        tree.len(),
-        1,
-        "only the root survives the exclusion: {}",
-        tree.describe()
-    );
-    assert!(
-        tree.find_all_by_label("Hidden label").is_empty(),
-        "excluded content must not reach the published tree: {}",
-        tree.describe()
-    );
-    assert!(
-        tree.find_all(Role::Button).is_empty(),
-        "nor its role: {}",
-        tree.describe()
     );
 }

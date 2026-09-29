@@ -25,8 +25,6 @@ mod box_extras;
 mod child_type_swap;
 #[path = "clip.rs"]
 mod clip;
-#[path = "clip_rrect_layer_update.rs"]
-mod clip_rrect_layer_update;
 #[path = "component_child_ordering.rs"]
 mod component_child_ordering;
 #[path = "composition.rs"]
@@ -49,8 +47,6 @@ mod directionality_dependency;
 mod editable_text;
 #[path = "editable_text_clipboard.rs"]
 mod editable_text_clipboard;
-#[path = "exclude_focus.rs"]
-mod exclude_focus;
 #[path = "fade_transition.rs"]
 mod fade_transition;
 #[path = "fitted_box.rs"]
@@ -146,8 +142,6 @@ mod post_frame_handle;
 mod raw_button;
 #[path = "rich_text.rs"]
 mod rich_text;
-#[path = "rotated_box_layer_update.rs"]
-mod rotated_box_layer_update;
 #[path = "rotation_transition.rs"]
 mod rotation_transition;
 #[path = "routable_derive.rs"]
@@ -198,9 +192,6 @@ mod text_field_widget;
 mod text_store_kit;
 #[path = "ticker_mode.rs"]
 mod ticker_mode;
-/// Issue #536: a `Transform` rebuild reaches the composited layer.
-#[path = "transform_layer_update.rs"]
-mod transform_layer_update;
 #[path = "transition_route.rs"]
 mod transition_route;
 #[path = "visibility.rs"]

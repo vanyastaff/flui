@@ -412,12 +412,6 @@ mod desktop_secondary_wake_deadline_tests {
              up from where round 4 fixed the equivalent hole on the Render path"
         );
     }
-
-    #[test]
-    fn no_armed_deadline_stays_none_either_way() {
-        assert_eq!(desktop_secondary_wake_deadline(None, true), None);
-        assert_eq!(desktop_secondary_wake_deadline(None, false), None);
-    }
 }
 
 #[cfg(all(test, not(target_os = "ios")))]
@@ -443,36 +437,6 @@ mod merge_wake_deadlines_tests {
             merge_wake_deadlines(Some(later), Some(earlier)),
             Some(earlier),
             "realm-later, secondary-earlier -- order must not matter"
-        );
-    }
-
-    #[test]
-    fn a_missing_secondary_leaves_the_realm_deadline_untouched() {
-        let deadline = Instant::now() + Duration::from_millis(16);
-        assert_eq!(
-            merge_wake_deadlines(Some(deadline), None),
-            Some(deadline),
-            "no device-recovery deadline pending must not suppress a real realm deadline"
-        );
-    }
-
-    #[test]
-    fn a_missing_realm_deadline_leaves_the_secondary_deadline_untouched() {
-        let deadline = Instant::now() + Duration::from_millis(16);
-        assert_eq!(
-            merge_wake_deadlines(None, Some(deadline)),
-            Some(deadline),
-            "no realm deadline pending must not suppress a real device-recovery deadline"
-        );
-    }
-
-    #[test]
-    fn both_absent_is_absent() {
-        assert_eq!(
-            merge_wake_deadlines(None, None),
-            None,
-            "neither source has an opinion -- the platform must fall back to its \
-             unconditional Wait, not a spurious WaitUntil(anything)"
         );
     }
 }

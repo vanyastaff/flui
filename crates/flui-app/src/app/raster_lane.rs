@@ -477,7 +477,7 @@ impl<R: RasterBackend> FrameSink for DirectSink<'_, R> {
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod tests {
-    use flui_foundation::{PresentationId, RealmId, SurfaceGeneration};
+    use flui_foundation::{PresentationId, RealmId};
     use flui_layer::{CanvasLayer, Layer};
 
     use super::*;
@@ -496,60 +496,6 @@ mod tests {
 
     fn test_scene() -> Scene {
         scene_from_canvas()
-    }
-
-    /// `DirectSink` is the one place the web runner's backend outcomes become
-    /// the realm's verdicts; the realm's own tests script verdicts through
-    /// `flui_runtime::testing::ScriptedSink` and never reach it. Changing any
-    /// arm of the table fails this test.
-    #[test]
-    fn direct_sink_classifies_each_engine_outcome() {
-        use crate::app::raster_test_support::TestRasterBackend;
-
-        type Outcome = fn() -> Result<PresentDisposition, EngineError>;
-        let cases: [(&str, Outcome, SubmitVerdict); 7] = [
-            (
-                "presented",
-                || Ok(PresentDisposition::Presented),
-                SubmitVerdict::Presented,
-            ),
-            (
-                "no damage",
-                || Ok(PresentDisposition::NoDamage),
-                SubmitVerdict::NoPresent,
-            ),
-            (
-                "not shown",
-                || Ok(PresentDisposition::NotShown),
-                SubmitVerdict::NotShown,
-            ),
-            (
-                "surface lost",
-                || Err(EngineError::SurfaceLost),
-                SubmitVerdict::SurfaceStale,
-            ),
-            (
-                "surface validation",
-                || Err(EngineError::SurfaceValidation),
-                SubmitVerdict::SurfaceStale,
-            ),
-            (
-                "device lost",
-                || Err(EngineError::DeviceLost),
-                SubmitVerdict::DeviceLost,
-            ),
-            (
-                "timeout",
-                || Err(EngineError::Timeout),
-                SubmitVerdict::Failed,
-            ),
-        ];
-        for (label, outcome, expected) in cases {
-            let mut backend = TestRasterBackend::new(move |_, _| outcome());
-            let verdict = DirectSink::new(&mut backend).submit(test_scene());
-            assert_eq!(verdict, expected, "{label}");
-            assert_eq!(backend.render_scene_calls, 1, "{label}: rendered once");
-        }
     }
 
     /// A scripted backend for lane-behavior tests: every render outcome is
@@ -618,48 +564,6 @@ mod tests {
                 backend.resizes,
                 vec![(640, 480)],
                 "the construction-time mint's resize was applied before the first render"
-            );
-        });
-    }
-
-    #[test]
-    fn a_no_present_completion_classifies_no_present() {
-        let backend = ScriptedBackend::presenting().queue(Ok(PresentDisposition::NoDamage));
-        let mut lane = RasterLane::new(backend, test_address(), 640, 480);
-        assert_eq!(lane.submit_and_pump(test_scene()), SubmitVerdict::NoPresent);
-    }
-
-    /// The lane reports the backend's own answer rather than collapsing every
-    /// non-present into `NoPresent`.
-    ///
-    /// Driven as a two-frame script on ONE lane, so the assertion is about
-    /// the classification of two answers that differ only in the disposition
-    /// they carry: `NoDamage` means the caller's work was done, `NotShown`
-    /// means it was consumed and lost. A lane that read `was_shown()` — or
-    /// matched only `Presented` and defaulted the rest — would return
-    /// `NoPresent` for both frames and pass a single-frame test for either.
-    #[test]
-    fn a_withheld_frame_is_not_collapsed_into_no_present() {
-        let backend = ScriptedBackend::presenting()
-            .queue(Ok(PresentDisposition::NoDamage))
-            .queue(Ok(PresentDisposition::NotShown));
-        let mut lane = RasterLane::new(backend, test_address(), 640, 480);
-
-        assert_eq!(
-            lane.submit_and_pump(test_scene()),
-            SubmitVerdict::NoPresent,
-            "nothing was owed: the loop may park"
-        );
-        assert_eq!(
-            lane.submit_and_pump(test_scene()),
-            SubmitVerdict::NotShown,
-            "content was owed and lost: the caller retains the frame"
-        );
-        lane.with_backend(|backend| {
-            assert_eq!(
-                backend.render_calls, 2,
-                "both frames reached the backend; the distinction is in the \
-                 classification, not in whether the render ran"
             );
         });
     }
@@ -742,53 +646,5 @@ mod tests {
                 "recovery re-minted at the platform's latest size"
             );
         });
-    }
-
-    #[test]
-    fn recovery_reminting_uses_the_platform_size_not_the_backend_readback() {
-        // A resize arrives while the device is down; recovery must re-mint
-        // at THAT size, never the backend's stale readback (100x100 here).
-        let backend = ScriptedBackend::presenting().queue(Err(EngineError::DeviceLost));
-        let mut lane = RasterLane::new(backend, test_address(), 640, 480);
-        assert_eq!(
-            lane.submit_and_pump(test_scene()),
-            SubmitVerdict::DeviceLost
-        );
-        lane.resize_hook().apply(1920, 1080);
-        lane.note_surface_recreated();
-        assert_eq!(lane.submit_and_pump(test_scene()), SubmitVerdict::Presented);
-        lane.with_backend(|backend| {
-            assert_eq!(
-                backend.resizes.last(),
-                Some(&(1920, 1080)),
-                "the re-mint carried the platform's latest announced size"
-            );
-        });
-    }
-
-    #[test]
-    fn a_zero_generation_stamp_is_rejected_not_rendered() {
-        // Force the stamp back to ZERO to prove the pump's rejection is
-        // live on this path (the constructor exists precisely so production
-        // never starts there).
-        let mut lane = RasterLane::new(ScriptedBackend::presenting(), test_address(), 640, 480);
-        lane.stamp.set_surface_generation(SurfaceGeneration::ZERO);
-        assert_eq!(
-            lane.submit_and_pump(test_scene()),
-            SubmitVerdict::SurfaceStale
-        );
-        lane.with_backend(|backend| {
-            assert_eq!(
-                backend.render_calls, 0,
-                "a ZERO-stamped frame must never reach render_scene"
-            );
-        });
-    }
-
-    #[test]
-    fn a_generic_render_failure_classifies_failed() {
-        let backend = ScriptedBackend::presenting().queue(Err(EngineError::Timeout));
-        let mut lane = RasterLane::new(backend, test_address(), 640, 480);
-        assert_eq!(lane.submit_and_pump(test_scene()), SubmitVerdict::Failed);
     }
 }

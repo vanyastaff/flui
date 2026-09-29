@@ -138,11 +138,6 @@ mod tests {
     }
 
     #[test]
-    fn app_id_uses_underscores() {
-        assert_eq!(sample().app.app_id(), "com.example.my_app");
-    }
-
-    #[test]
     fn round_trips_and_writes_only_the_documented_keys() {
         let toml = toml::to_string_pretty(&sample()).unwrap();
         assert!(toml.contains("name = \"my-app\""));

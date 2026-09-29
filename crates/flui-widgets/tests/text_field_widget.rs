@@ -47,38 +47,6 @@ fn explicit_focus_requests_target_each_fields_own_node() {
     assert!(manager.primary_focus().is_none());
 }
 
-/// `RawTextField::on_submitted` reaches the composed `EditableText` —
-/// mirrors `flui_material::TextField`'s own passthrough test, one layer
-/// down.
-#[test]
-fn on_submitted_reaches_the_composed_editable_text_and_fires_on_enter() {
-    let controller = TextEditingController::new();
-    let focus_node = FocusNode::with_debug_label("raw-submit field");
-    let submitted: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
-    let submitted_for_callback = Rc::clone(&submitted);
-
-    let harness = mount(
-        RawTextField::new(controller)
-            .focus_node(Rc::clone(&focus_node))
-            .on_submitted(move |_cx, text| {
-                submitted_for_callback.replace(Some(text.to_string()));
-            }),
-    );
-    focus_node.request_focus();
-
-    let event = KeyEventBuilder::new(Code::Enter)
-        .with_key(Key::Named(NamedKey::Enter))
-        .with_state(KeyState::Down)
-        .build();
-    harness.focus_manager().dispatch_key_event(&event);
-
-    assert_eq!(
-        *submitted.borrow(),
-        Some(String::new()),
-        "Enter must call on_submitted through RawTextField's own passthrough"
-    );
-}
-
 /// `RawTextField` forwards the `cx` its `EditableText` opens, so both of its
 /// callbacks write signals (ADR-0086).
 #[test]

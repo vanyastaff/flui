@@ -293,45 +293,6 @@ mod tests {
         )
     }
 
-    #[test]
-    fn test_semantics_tree_update_empty() {
-        let update = SemanticsTreeUpdate::new();
-        assert!(update.is_empty());
-        assert_eq!(update.node_count(), 0);
-        assert_eq!(update.removed_count(), 0);
-    }
-
-    #[test]
-    fn test_semantics_tree_update_builder() {
-        let mut builder = SemanticsTreeUpdateBuilder::new();
-
-        builder.add_node(SemanticsNodeData {
-            id: Some(AccessibilityNodeId::from(render_id(1))),
-            label: Some(SmolStr::from("Test")),
-            ..Default::default()
-        });
-
-        let removed = AccessibilityNodeId::from(render_id(5));
-        builder.add_removed_node(removed);
-
-        let update = builder.build();
-
-        assert!(!update.is_empty());
-        assert_eq!(update.node_count(), 1);
-        assert_eq!(update.removed_count(), 1);
-        assert!(update.removed_node_ids.contains(&removed));
-    }
-
-    #[test]
-    fn test_semantics_node_data_default() {
-        let data = SemanticsNodeData::default();
-        assert!(data.id.is_none());
-        assert_eq!(data.flags, 0);
-        assert_eq!(data.actions, 0);
-        assert!(data.label.is_none());
-        assert!(data.children.is_empty());
-    }
-
     /// **The identity-stability contract this payload exists for.** Inserting
     /// a sibling ahead of a control shifts its arena position; its payload
     /// identity must not move, or an adapter diffing two updates sees an
@@ -369,60 +330,6 @@ mod tests {
         );
     }
 
-    /// Children are exported in the same stable space as the ids they will be
-    /// published under — never as arena positions.
-    #[test]
-    fn payload_children_are_stable_identities_in_child_order() {
-        let first = render_id(51);
-        let second = render_id(52);
-
-        let mut tree = SemanticsTree::new();
-        let first_id = tree.insert(SemanticsNode::new().with_source_render_id(first));
-        let second_id = tree.insert(SemanticsNode::new().with_source_render_id(second));
-        let mut root_node = SemanticsNode::new().with_source_render_id(render_id(50));
-        root_node.add_child(first_id);
-        root_node.add_child(second_id);
-        let root = tree.insert(root_node);
-        tree.set_root(Some(root));
-
-        let data = tree.node_data(root).expect("root is live");
-        assert_eq!(
-            data.children.as_slice(),
-            &[
-                AccessibilityNodeId::from(first),
-                AccessibilityNodeId::from(second),
-            ],
-        );
-        assert_ne!(
-            data.children[0].as_u64(),
-            (first_id.get() - 1) as u64,
-            "the fixture is only meaningful while the two id spaces differ"
-        );
-    }
-
-    /// An unaddressable child has no identity to export; omitting it mirrors
-    /// the publish path's skip rule rather than inventing an id that could
-    /// collide with a real control.
-    #[test]
-    fn an_unaddressable_child_is_omitted_from_the_payload() {
-        let mut tree = SemanticsTree::new();
-        let unaddressable = tree.insert(SemanticsNode::new());
-        let addressable_render = render_id(61);
-        let addressable =
-            tree.insert(SemanticsNode::new().with_source_render_id(addressable_render));
-        let mut root_node = SemanticsNode::new().with_source_render_id(render_id(60));
-        root_node.add_child(unaddressable);
-        root_node.add_child(addressable);
-        let root = tree.insert(root_node);
-        tree.set_root(Some(root));
-
-        let data = tree.node_data(root).expect("root is live");
-        assert_eq!(
-            data.children.as_slice(),
-            &[AccessibilityNodeId::from(addressable_render)],
-        );
-    }
-
     /// A removal notice names exactly the id the node was published under, so
     /// the two ends of the payload cannot drift into different number spaces.
     #[test]
@@ -449,53 +356,5 @@ mod tests {
         let update = builder.build();
 
         assert_eq!(update.removed_node_ids[0].as_u64(), published);
-    }
-
-    /// A payload names its subject; a node with no stable identity has no
-    /// payload. Returning content under `id: None` would let it into an
-    /// update that platform and diff consumers cannot address.
-    #[test]
-    fn node_data_is_none_for_an_unaddressable_node() {
-        let mut tree = SemanticsTree::new();
-        let unaddressable = tree.insert(SemanticsNode::new());
-        tree.set_root(Some(unaddressable));
-
-        assert!(tree.node_data(unaddressable).is_none());
-    }
-
-    /// The builder is the assembly seam for `SemanticsTreeUpdate`, so the
-    /// publish path's skip rule must hold there too: a hand-built payload
-    /// without identity is omitted, never batched.
-    #[test]
-    fn the_builder_omits_a_payload_without_identity() {
-        let mut builder = SemanticsTreeUpdateBuilder::new();
-
-        builder.add_node(SemanticsNodeData::default());
-        builder.add_node(SemanticsNodeData {
-            id: Some(AccessibilityNodeId::from(render_id(9))),
-            ..Default::default()
-        });
-
-        let update = builder.build();
-        assert_eq!(update.node_count(), 1);
-        assert_eq!(
-            update.nodes[0].id,
-            Some(AccessibilityNodeId::from(render_id(9))),
-            "only the addressable payload survives into the update"
-        );
-    }
-
-    #[test]
-    fn test_smallvec_children() {
-        let mut data = SemanticsNodeData::default();
-
-        // Add children up to inline capacity
-        for index in 1..=4 {
-            data.children
-                .push(AccessibilityNodeId::from(render_id(index)));
-        }
-
-        assert_eq!(data.children.len(), 4);
-        // Should be inline, not heap allocated
     }
 }

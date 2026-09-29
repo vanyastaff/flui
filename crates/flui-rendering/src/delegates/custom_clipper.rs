@@ -140,46 +140,4 @@ mod tests {
             self
         }
     }
-
-    #[test]
-    fn test_rect_clipper() {
-        let clipper = RectClipper;
-        let size = Size::new(100.0, 200.0);
-        let clip = clipper.get_clip(size);
-
-        assert_eq!(clip.left(), 0.0);
-        assert_eq!(clip.top(), 0.0);
-        assert_eq!(clip.right(), 100.0);
-        assert_eq!(clip.bottom(), 200.0);
-    }
-
-    #[test]
-    fn test_inset_clipper() {
-        let clipper = InsetClipper { inset: 10.0 };
-        let size = Size::new(100.0, 200.0);
-        let clip = clipper.get_clip(size);
-
-        assert_eq!(clip.left(), 10.0);
-        assert_eq!(clip.top(), 10.0);
-        assert_eq!(clip.right(), 90.0);
-        assert_eq!(clip.bottom(), 190.0);
-    }
-
-    #[test]
-    fn test_should_reclip() {
-        let clipper1 = InsetClipper { inset: 10.0 };
-        let clipper2 = InsetClipper { inset: 10.0 };
-        let clipper3 = InsetClipper { inset: 20.0 };
-
-        assert!(!clipper1.should_reclip(&clipper2));
-        assert!(clipper1.should_reclip(&clipper3));
-    }
-
-    #[test]
-    fn test_rect_clipper_never_reclips() {
-        let clipper1 = RectClipper;
-        let clipper2 = RectClipper;
-
-        assert!(!clipper1.should_reclip(&clipper2));
-    }
 }

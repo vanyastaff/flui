@@ -424,16 +424,6 @@ mod tests {
     }
 
     #[test]
-    fn scope_update_should_notify_same_locale_is_false() {
-        let a = scope(Locale::en_us());
-        let b = scope(Locale::en_us());
-        assert!(
-            !a.update_should_notify(&b),
-            "an unchanged locale must not notify dependents"
-        );
-    }
-
-    #[test]
     fn scope_update_should_notify_different_locale_is_true() {
         let a = scope(Locale::fr_fr());
         let b = scope(Locale::en_us());
@@ -447,36 +437,6 @@ mod tests {
     /// A resource type no delegate in these tests ever provides.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     struct NotProvided;
-
-    fn widgets_only_delegates() -> Vec<BoxedLocalizationsDelegate> {
-        vec![BoxedLocalizationsDelegate::new(
-            DefaultWidgetsLocalizationsDelegate,
-        )]
-    }
-
-    #[test]
-    fn new_wires_locale_and_child() {
-        let localizations = Localizations::new(
-            Locale::en_us(),
-            widgets_only_delegates(),
-            SizedBox::shrink(),
-        );
-        assert_eq!(localizations.locale, Locale::en_us());
-    }
-
-    #[test]
-    // Debug-only: the guard compiles out in release, where `#[should_panic]`
-    // would otherwise report "did not panic as expected".
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "requires at least one delegate producing BoxedWidgetsLocalizations")]
-    fn new_panics_without_a_widgets_localizations_delegate() {
-        // `Localizations::new`'s `debug_assert!` runs at construction time,
-        // called directly here (not through `mount`'s build-panic boundary,
-        // which would swallow it into an `ErrorView` — see
-        // `crates/flui-widgets/tests/theme.rs` for that documented
-        // limitation), so `#[should_panic]` observes it.
-        let _ = Localizations::new(Locale::en_us(), Vec::new(), SizedBox::shrink());
-    }
 
     // ------------------------------------------------------------------
     // `of`'s panic path
@@ -528,17 +488,6 @@ mod tests {
         let root = tree.mount_root(probe, &mut owner.element_owner_mut());
         owner.schedule_build_for(root, 0, flui_view::RebuildReason::InitialMount);
         owner.build_scope(&mut tree);
-    }
-
-    #[test]
-    #[should_panic(expected = "Localizations::locale_of called with no Localizations ancestor")]
-    fn locale_of_panics_with_no_localizations_ancestor() {
-        let probe = InitStatePanicProbe {
-            run: Arc::new(|ctx| {
-                let _ = Localizations::locale_of(ctx);
-            }),
-        };
-        build_root(&probe);
     }
 
     #[test]

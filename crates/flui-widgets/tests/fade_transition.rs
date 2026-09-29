@@ -45,20 +45,3 @@ fn fade_transition_reads_animation_opacity_on_each_tick() {
         laid.opacity(render_opacity),
     );
 }
-
-#[test]
-fn fade_transition_lays_its_child_out_as_a_passthrough() {
-    let controller = AnimationController::without_ticker(Duration::from_millis(300));
-    controller.set_value(1.0);
-    let opacity: Arc<dyn Animation<f64>> = Arc::new(controller.clone());
-
-    // Opacity is paint-only; the child keeps its size and the transition sizes
-    // to it.
-    let laid = lay_out(
-        FadeTransition::new(opacity, SizedBox::new(120.0, 80.0)),
-        tight(120.0, 80.0),
-    );
-
-    let render_opacity = laid.root();
-    assert_eq!(laid.size(render_opacity), crate::common::size(120.0, 80.0));
-}

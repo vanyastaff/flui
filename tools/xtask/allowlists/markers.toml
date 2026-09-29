@@ -37,12 +37,12 @@ count = 1
 [[allow]]
 path = "crates/flui-engine/src/aa_oracle_tests.rs"
 class = "phase-letter"
-count = 2
+count = 1
 
 [[allow]]
 path = "crates/flui-engine/src/aa_oracle_tests.rs"
 class = "pr-label"
-count = 18
+count = 5
 
 [[allow]]
 path = "crates/flui-engine/src/advanced_blend/mod.rs"
@@ -52,7 +52,7 @@ count = 3
 [[allow]]
 path = "crates/flui-engine/src/batches/paths.rs"
 class = "pr-label"
-count = 4
+count = 3
 
 [[allow]]
 path = "crates/flui-engine/src/batches/shapes.rs"
@@ -82,7 +82,7 @@ count = 2
 [[allow]]
 path = "crates/flui-engine/src/layer_blend_tests.rs"
 class = "pr-label"
-count = 8
+count = 4
 
 [[allow]]
 path = "crates/flui-engine/src/layer_offscreen.rs"
@@ -92,7 +92,7 @@ count = 3
 [[allow]]
 path = "crates/flui-engine/src/painter/tests.rs"
 class = "phase-letter"
-count = 4
+count = 1
 
 [[allow]]
 path = "crates/flui-engine/src/pipeline_cache.rs"
@@ -102,7 +102,7 @@ count = 2
 [[allow]]
 path = "crates/flui-engine/src/pipeline_cache.rs"
 class = "pr-label"
-count = 4
+count = 3
 
 [[allow]]
 path = "crates/flui-engine/src/pipeline_cache.rs"
@@ -132,7 +132,7 @@ count = 1
 [[allow]]
 path = "crates/flui-engine/src/shape_blend_tests.rs"
 class = "pr-label"
-count = 6
+count = 1
 
 [[allow]]
 path = "crates/flui-engine/src/ssaa.rs"
@@ -185,11 +185,6 @@ class = "wave"
 count = 2
 
 [[allow]]
-path = "crates/flui-objects/src/layout/theater.rs"
-class = "wave"
-count = 1
-
-[[allow]]
 path = "crates/flui-objects/src/lib.rs"
 class = "wave"
 count = 1
@@ -197,12 +192,7 @@ count = 1
 [[allow]]
 path = "crates/flui-objects/tests/render_object_harness.rs"
 class = "slice"
-count = 7
-
-[[allow]]
-path = "crates/flui-painting/tests/text_layout_unit.rs"
-class = "pr-label"
-count = 1
+count = 3
 
 [[allow]]
 path = "crates/flui-platform-api/src/platform_window.rs"
@@ -255,46 +245,6 @@ class = "spec-task"
 count = 5
 
 [[allow]]
-path = "crates/flui-platform/tests/contract.rs"
-class = "spec-task"
-count = 5
-
-[[allow]]
-path = "crates/flui-platform/tests/event_contracts.rs"
-class = "spec-task"
-count = 14
-
-[[allow]]
-path = "crates/flui-platform/tests/event_handling.rs"
-class = "spec-task"
-count = 37
-
-[[allow]]
-path = "crates/flui-platform/tests/headless.rs"
-class = "spec-task"
-count = 14
-
-[[allow]]
-path = "crates/flui-platform/tests/performance.rs"
-class = "spec-task"
-count = 3
-
-[[allow]]
-path = "crates/flui-platform/tests/window_lifecycle.rs"
-class = "spec-task"
-count = 24
-
-[[allow]]
-path = "crates/flui-platform/tests/window_modes.rs"
-class = "spec-task"
-count = 26
-
-[[allow]]
-path = "crates/flui-platform/tests/windows_event_conversion.rs"
-class = "spec-task"
-count = 29
-
-[[allow]]
 path = "crates/flui-rendering/src/lib.rs"
 class = "wave"
 count = 1
@@ -322,7 +272,7 @@ count = 1
 [[allow]]
 path = "crates/flui-rendering/tests/cross_protocol_layout.rs"
 class = "wave"
-count = 2
+count = 1
 
 [[allow]]
 path = "crates/flui-rendering/tests/render_viewport.rs"

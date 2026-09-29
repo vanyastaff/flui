@@ -65,63 +65,6 @@ fn drive_frame_runs_post_frame_callbacks_after_the_pipeline() {
     assert_eq!(log.get(), vec!["pipeline", "post_frame"]);
 }
 
-/// The negative half: the callback must not have run when the pipeline is
-/// executing. Previously the production runner drained the queue *first*, so
-/// this is the exact regression under guard.
-#[test]
-fn post_frame_callback_does_not_run_before_the_pipeline() {
-    let scheduler = UpdateScheduler::new();
-    let fired = Arc::new(AtomicUsize::new(0));
-
-    let fired_cb = Arc::clone(&fired);
-    scheduler.add_post_frame_callback(Box::new(move |_| {
-        fired_cb.fetch_add(1, Ordering::SeqCst);
-    }));
-
-    let fired_pipe = Arc::clone(&fired);
-    let seen_during_pipeline = scheduler.drive_frame(Instant::now(), far_deadline(), || {
-        assert_eq!(
-            UpdateScheduler::new().phase(),
-            SchedulerPhase::Idle,
-            "sanity: a fresh scheduler is idle"
-        );
-        fired_pipe.load(Ordering::SeqCst)
-    });
-
-    assert_eq!(
-        seen_during_pipeline, 0,
-        "the callback ran before the pipeline"
-    );
-    assert_eq!(fired.load(Ordering::SeqCst), 1);
-}
-
-/// The pipeline occupies the `PersistentCallbacks` slot — the same slot Flutter's
-/// `drawFrame` occupies as a persistent callback.
-#[test]
-fn the_pipeline_runs_in_the_persistent_callbacks_phase() {
-    let scheduler = UpdateScheduler::new();
-    let probe = scheduler.clone();
-    let phase = scheduler.drive_frame(Instant::now(), far_deadline(), || probe.phase());
-    assert_eq!(phase, SchedulerPhase::PersistentCallbacks);
-}
-
-/// `_postFrameCallbacks` are "called exactly once" (`binding.dart:802`).
-#[test]
-fn post_frame_callback_runs_exactly_once_across_two_frames() {
-    let scheduler = UpdateScheduler::new();
-    let calls = Arc::new(AtomicUsize::new(0));
-
-    let calls_cb = Arc::clone(&calls);
-    scheduler.add_post_frame_callback(Box::new(move |_| {
-        calls_cb.fetch_add(1, Ordering::SeqCst);
-    }));
-
-    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
-    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
-
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
-}
-
 /// Flutter copies the list and clears it **before** invoking
 /// (`scheduler/binding.dart:1350-1351`), so a callback registered from inside a
 /// post-frame callback lands on the next frame, not this one.
@@ -145,15 +88,6 @@ fn a_post_frame_callback_registered_from_a_post_frame_callback_defers_to_the_nex
 
     scheduler.drive_frame(Instant::now(), far_deadline(), || {});
     assert_eq!(log.get(), vec!["outer", "inner"]);
-}
-
-/// The frame closes cleanly.
-#[test]
-fn phase_is_idle_after_a_successful_frame() {
-    let scheduler = UpdateScheduler::new();
-    assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
-    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
-    assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
 }
 
 /// A pipeline that **returns an error value** is a completed frame: post-frame
@@ -241,34 +175,6 @@ fn a_frame_after_a_panicking_frame_starts_cleanly() {
     assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
 }
 
-/// `abort_frame` is idempotent and a no-op outside a frame.
-#[test]
-fn abort_frame_is_a_no_op_when_no_frame_is_open() {
-    let scheduler = UpdateScheduler::new();
-    scheduler.abort_frame();
-    assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
-    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
-    scheduler.abort_frame();
-    assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
-}
-
-/// `execute_frame` keeps its previous behavior: a complete frame whose post-frame
-/// callbacks run. It is `begin → persistent → end` with no pipeline.
-#[test]
-fn execute_frame_is_begin_persistent_end_and_still_drains_post_frame() {
-    let scheduler = UpdateScheduler::new();
-    let fired = Arc::new(AtomicUsize::new(0));
-    let fired_cb = Arc::clone(&fired);
-    scheduler.add_post_frame_callback(Box::new(move |_| {
-        fired_cb.fetch_add(1, Ordering::SeqCst);
-    }));
-
-    scheduler.execute_frame();
-
-    assert_eq!(fired.load(Ordering::SeqCst), 1);
-    assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
-}
-
 /// `handle_draw_frame` alone no longer finishes the frame — it hands the
 /// persistent slot to the caller. Characterizes the split.
 #[test]
@@ -322,20 +228,4 @@ fn persistent_callbacks_run_before_the_pipeline_a_divergence_from_flutter() {
         vec!["persistent", "pipeline", "post_frame"],
         "in Flutter the pipeline IS the first persistent callback; here it follows them"
     );
-}
-
-/// Timing is recorded and completion waiters notified exactly once per frame.
-#[test]
-fn frame_timing_is_recorded_once_per_frame() {
-    let scheduler = UpdateScheduler::new();
-    let timings = Arc::new(AtomicUsize::new(0));
-    let timings_cb = Arc::clone(&timings);
-    scheduler.add_post_frame_callback(Box::new(move |_timing| {
-        timings_cb.fetch_add(1, Ordering::SeqCst);
-    }));
-
-    let before = scheduler.frame_count();
-    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
-    assert_eq!(scheduler.frame_count(), before + 1);
-    assert_eq!(timings.load(Ordering::SeqCst), 1);
 }

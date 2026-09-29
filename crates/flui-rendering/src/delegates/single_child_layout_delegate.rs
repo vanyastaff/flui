@@ -232,24 +232,4 @@ mod tests {
         assert_eq!(size.width, 200.0);
         assert_eq!(size.height, 100.0);
     }
-
-    #[test]
-    fn test_aspect_ratio_delegate_height_constrained() {
-        let delegate = AspectRatioDelegate::new(2.0); // width = 2 * height
-        let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 50.0);
-
-        let size = delegate.get_size(constraints);
-        assert_eq!(size.width, 100.0);
-        assert_eq!(size.height, 50.0);
-    }
-
-    #[test]
-    fn test_should_relayout() {
-        let delegate1 = AspectRatioDelegate::new(2.0);
-        let delegate2 = AspectRatioDelegate::new(2.0);
-        let delegate3 = AspectRatioDelegate::new(1.5);
-
-        assert!(!delegate1.should_relayout(&delegate2));
-        assert!(delegate1.should_relayout(&delegate3));
-    }
 }

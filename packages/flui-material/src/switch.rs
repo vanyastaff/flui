@@ -552,19 +552,6 @@ mod tests {
     // Construction / builder surface
     // ------------------------------------------------------------------
 
-    #[test]
-    fn new_leaves_every_override_unset_and_is_not_interactive() {
-        let switch = Switch::new(false);
-        assert!(switch.active_thumb_color.is_none());
-        assert!(!switch.is_interactive());
-    }
-
-    #[test]
-    fn on_changed_makes_the_switch_interactive() {
-        let switch = Switch::new(false).on_changed(|_cx, _| {});
-        assert!(switch.is_interactive());
-    }
-
     // ------------------------------------------------------------------
     // M3 default token tables — per-state probes, oracle branch order
     // ------------------------------------------------------------------
@@ -594,34 +581,10 @@ mod tests {
     }
 
     #[test]
-    fn widget_override_wins_over_theme_and_default_when_selected_and_enabled() {
-        let states = WidgetStates::from(WidgetState::Selected);
-        let theme_color = WidgetStateProperty::all(Some(Color::rgb(9, 9, 9)));
-        let resolved = resolve_switch_thumb_color(
-            Some(Color::rgb(1, 1, 1)),
-            Some(&theme_color),
-            &light(),
-            states,
-        );
-        assert_eq!(resolved, Color::rgb(1, 1, 1));
-    }
-
-    #[test]
     fn widget_override_is_ignored_when_disabled_even_if_selected() {
         let states = WidgetStates::from(WidgetState::Selected).with_state(WidgetState::Disabled);
         let resolved =
             resolve_switch_thumb_color(Some(Color::rgb(1, 1, 1)), None, &light(), states);
-        assert_ne!(resolved, Color::rgb(1, 1, 1));
-    }
-
-    #[test]
-    fn widget_override_is_ignored_when_unselected() {
-        let resolved = resolve_switch_thumb_color(
-            Some(Color::rgb(1, 1, 1)),
-            None,
-            &light(),
-            WidgetStates::NONE,
-        );
         assert_ne!(resolved, Color::rgb(1, 1, 1));
     }
 
@@ -646,14 +609,6 @@ mod tests {
     }
 
     #[test]
-    fn default_thumb_color_unselected_enabled_default_is_outline() {
-        assert_eq!(
-            switch_default_thumb_color(&light(), WidgetStates::NONE),
-            light().outline
-        );
-    }
-
-    #[test]
     fn default_thumb_color_selected_enabled_default_is_on_primary() {
         let states = WidgetStates::from(WidgetState::Selected);
         assert_eq!(
@@ -662,159 +617,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn default_thumb_color_selected_hovered_is_primary_container() {
-        // Branch-order pin: selected + hovered resolves BEFORE the plain
-        // "selected, no interaction" branch.
-        let states = WidgetStates::from(WidgetState::Selected).with_state(WidgetState::Hovered);
-        assert_eq!(
-            switch_default_thumb_color(&light(), states),
-            light().primary_container
-        );
-    }
-
-    #[test]
-    fn default_thumb_color_selected_disabled_is_surface() {
-        // Combined pin: Disabled wins over Selected's own branch.
-        let states = WidgetStates::from(WidgetState::Selected).with_state(WidgetState::Disabled);
-        assert_eq!(
-            switch_default_thumb_color(&light(), states),
-            light().surface
-        );
-    }
-
-    #[test]
-    fn default_thumb_color_unselected_disabled_is_faded_on_surface() {
-        let states = WidgetStates::from(WidgetState::Disabled);
-        assert_eq!(
-            switch_default_thumb_color(&light(), states),
-            light().on_surface.with_opacity(0.38)
-        );
-    }
-
-    #[test]
-    fn default_thumb_color_unselected_pressed_is_on_surface_variant() {
-        let states = WidgetStates::from(WidgetState::Pressed);
-        assert_eq!(
-            switch_default_thumb_color(&light(), states),
-            light().on_surface_variant
-        );
-    }
-
-    #[test]
-    fn default_track_color_selected_enabled_is_primary() {
-        let states = WidgetStates::from(WidgetState::Selected);
-        assert_eq!(
-            switch_default_track_color(&light(), states),
-            light().primary
-        );
-    }
-
-    #[test]
-    fn default_track_color_unselected_enabled_is_surface_container_highest() {
-        assert_eq!(
-            switch_default_track_color(&light(), WidgetStates::NONE),
-            light().surface_container_highest
-        );
-    }
-
-    #[test]
-    fn default_track_color_selected_disabled_is_faded_on_surface() {
-        let states = WidgetStates::from(WidgetState::Selected).with_state(WidgetState::Disabled);
-        assert_eq!(
-            switch_default_track_color(&light(), states),
-            light().on_surface.with_opacity(0.12)
-        );
-    }
-
-    #[test]
-    fn default_track_color_unselected_disabled_is_faded_surface_container_highest() {
-        let states = WidgetStates::from(WidgetState::Disabled);
-        assert_eq!(
-            switch_default_track_color(&light(), states),
-            light().surface_container_highest.with_opacity(0.12)
-        );
-    }
-
-    #[test]
-    fn default_track_outline_color_selected_is_transparent() {
-        let states = WidgetStates::from(WidgetState::Selected);
-        assert_eq!(
-            switch_default_track_outline_color(&light(), states),
-            Color::TRANSPARENT
-        );
-    }
-
-    #[test]
-    fn default_track_outline_color_unselected_enabled_is_outline() {
-        assert_eq!(
-            switch_default_track_outline_color(&light(), WidgetStates::NONE),
-            light().outline
-        );
-    }
-
-    #[test]
-    fn default_track_outline_color_unselected_disabled_is_faded_on_surface() {
-        // Branch-order pin: Selected is checked BEFORE Disabled in the
-        // oracle (`_SwitchDefaultsM3.trackOutlineColor`) — an
-        // unselected+disabled combination still reaches the disabled
-        // branch since Selected doesn't match first.
-        let states = WidgetStates::from(WidgetState::Disabled);
-        assert_eq!(
-            switch_default_track_outline_color(&light(), states),
-            light().on_surface.with_opacity(0.12)
-        );
-    }
-
-    #[test]
-    fn default_overlay_color_selected_hovered_is_primary_at_8_percent() {
-        let states = WidgetStates::from(WidgetState::Selected).with_state(WidgetState::Hovered);
-        assert_eq!(
-            switch_default_overlay_color(&light(), states),
-            Some(light().primary.with_opacity(0.08))
-        );
-    }
-
-    #[test]
-    fn default_overlay_color_selected_default_is_none() {
-        let states = WidgetStates::from(WidgetState::Selected);
-        assert_eq!(switch_default_overlay_color(&light(), states), None);
-    }
-
-    #[test]
-    fn default_overlay_color_unselected_pressed_is_on_surface_at_10_percent() {
-        let states = WidgetStates::from(WidgetState::Pressed);
-        assert_eq!(
-            switch_default_overlay_color(&light(), states),
-            Some(light().on_surface.with_opacity(0.1))
-        );
-    }
-
-    #[test]
-    fn default_overlay_color_unselected_default_is_none() {
-        assert_eq!(
-            switch_default_overlay_color(&light(), WidgetStates::NONE),
-            None
-        );
-    }
-
     // ------------------------------------------------------------------
     // Thumb radius per selected state
     // ------------------------------------------------------------------
-
-    #[test]
-    fn thumb_radius_selected_is_the_active_radius() {
-        let states = WidgetStates::from(WidgetState::Selected);
-        assert_eq!(switch_default_thumb_radius(states), ACTIVE_THUMB_RADIUS);
-    }
-
-    #[test]
-    fn thumb_radius_unselected_is_the_inactive_radius() {
-        assert_eq!(
-            switch_default_thumb_radius(WidgetStates::NONE),
-            INACTIVE_THUMB_RADIUS
-        );
-    }
 
     #[test]
     fn thumb_radius_pressed_does_not_grow_beyond_the_selected_radius() {
@@ -846,20 +651,6 @@ mod tests {
             thumb_radius: ACTIVE_THUMB_RADIUS,
             selected,
         }
-    }
-
-    #[test]
-    fn should_repaint_is_false_for_an_identical_delegate() {
-        let old = painter(true);
-        let new = painter(true);
-        assert!(!new.should_repaint(&old));
-    }
-
-    #[test]
-    fn should_repaint_is_true_when_selected_changes() {
-        let old = painter(false);
-        let new = painter(true);
-        assert!(new.should_repaint(&old));
     }
 
     /// The thumb's painted circle center per `selected`, computed

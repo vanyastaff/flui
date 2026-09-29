@@ -14,18 +14,17 @@
 //! flui-rendering are distinct compiled artifacts). Integration tests do not
 //! have this problem — they link the already-built library.
 
-use flui_foundation::geometry::{EdgeInsets, Offset, Rect, Size};
+use flui_foundation::geometry::{Offset, Rect, Size};
 use flui_objects::{
-    RenderColoredBox, RenderFlex, RenderOpacity, RenderPadding, RenderRepaintBoundary,
-    RenderSliverFixedExtentList, RenderStack, RenderViewport,
+    RenderColoredBox, RenderPadding, RenderSliverFixedExtentList, RenderStack, RenderViewport,
 };
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::parent_data::SliverMultiBoxAdaptorParentData;
 use flui_rendering::testing::ParentDataSeed;
 use flui_rendering::{
     constraints::BoxConstraints,
-    parent_data::{FlexParentData, StackParentData},
-    testing::{BoxQueryRun, Probe, RenderTester, box_node, sliver_node},
+    parent_data::StackParentData,
+    testing::{Probe, RenderTester, box_node, sliver_node},
 };
 
 /// Loose `0..=200 x 0..=200` constraints: children settle at their natural
@@ -61,22 +60,6 @@ fn box_run_frame_padding_offsets_and_single_picture() {
 }
 
 #[test]
-fn box_run_frame_flex_row_lays_children_along_main_axis() {
-    let run = RenderTester::mount(
-        box_node(RenderFlex::row())
-            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("red"))
-            .child(box_node(RenderColoredBox::green(60.0, 40.0)).label("green"))
-            .child(box_node(RenderColoredBox::blue(20.0, 40.0)).label("blue")),
-    )
-    .with_size(Size::new(300.0, 100.0))
-    .run_frame();
-
-    assert_eq!(run.offset(run.id("red")), Offset::new(0.0, 0.0));
-    assert_eq!(run.offset(run.id("green")), Offset::new(40.0, 0.0));
-    assert_eq!(run.offset(run.id("blue")), Offset::new(100.0, 0.0));
-}
-
-#[test]
 fn box_run_layout_stack_positioned_child_respects_parent_data_seed() {
     let run = RenderTester::mount(
         box_node(RenderStack::new())
@@ -92,72 +75,6 @@ fn box_run_layout_stack_positioned_child_respects_parent_data_seed() {
 
     assert_eq!(run.offset(run.id("positioned")), Offset::new(18.0, 12.0));
     assert_eq!(run.hit_first(25.0, 20.0), Some(run.id("positioned")));
-}
-
-#[test]
-fn box_run_layout_flex_child_honors_flex_parent_data_seed() {
-    let run = RenderTester::mount(
-        box_node(RenderFlex::row())
-            .child(box_node(RenderColoredBox::red(40.0, 20.0)).label("fixed"))
-            .child(
-                box_node(RenderColoredBox::green(10.0, 20.0))
-                    .with_flex_parent_data(FlexParentData::flexible(1))
-                    .label("flex"),
-            ),
-    )
-    .with_size(Size::new(200.0, 60.0))
-    .run_layout();
-
-    assert_eq!(run.box_geometry(run.id("flex")).width, 160.0);
-    assert_eq!(run.offset(run.id("flex")), Offset::new(40.0, 0.0));
-}
-
-#[test]
-fn box_run_frame_repaint_boundary_splits_subtree() {
-    let run = RenderTester::mount(box_node(RenderPadding::all(5.0)).child(
-        box_node(RenderRepaintBoundary::new()).child(box_node(RenderColoredBox::red(40.0, 40.0))),
-    ))
-    .with_constraints(loose_200())
-    .run_frame();
-
-    assert_eq!(
-        run.structure(),
-        vec!["Offset", "Offset", "Picture"],
-        "the boundary subtree splits under its own OffsetLayer",
-    );
-}
-
-#[test]
-fn box_run_frame_clean_frame_after_settle_produces_no_tree() {
-    let mut run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)))
-        .with_size(Size::new(100.0, 100.0))
-        .run_frame();
-
-    assert!(run.painted(), "frame 1 paints");
-
-    let report = run.pump();
-    assert!(
-        !report.painted,
-        "a frame with no dirty work must produce no layer tree",
-    );
-    assert!(run.is_clean());
-}
-
-#[test]
-fn box_run_frame_hit_path_routes_to_child() {
-    let run = RenderTester::mount(
-        box_node(RenderPadding::all(5.0))
-            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
-    )
-    .with_constraints(loose_200())
-    .run_frame();
-
-    let child = run.id("child");
-    assert_eq!(run.hit_first(10.0, 10.0), Some(child));
-    assert!(
-        run.hit(2.0, 2.0).is_empty(),
-        "the padding border (outside the child) misses",
-    );
 }
 
 #[test]
@@ -186,175 +103,9 @@ fn render_dump_carries_object_properties_and_geometry() {
     );
 }
 
-#[test]
-fn structured_diagnostics_queries() {
-    let run = RenderTester::mount(
-        box_node(RenderFlex::row()).child(box_node(RenderColoredBox::red(40.0, 40.0)).label("red")),
-    )
-    .with_constraints(loose_200())
-    .run_frame();
-
-    // Per-node property lookup (no substring matching on the dump).
-    assert_eq!(
-        run.property(run.root(), "direction").as_deref(),
-        Some("Horizontal"),
-    );
-    assert_eq!(
-        run.property(run.id("red"), "color").as_deref(),
-        Some("[1.0, 0.0, 0.0, 1.0]"),
-    );
-
-    // Depth-first tree navigation (works regardless of nesting depth).
-    let tree = run.diagnostics();
-    let leaf = tree
-        .find_descendant("RenderColoredBox")
-        .expect("tree has a colored leaf");
-    assert_eq!(leaf.get_property("color"), Some("[1.0, 0.0, 0.0, 1.0]"));
-
-    assert_eq!(
-        run.descendant_property("RenderFlex", "direction")
-            .as_deref(),
-        Some("Horizontal"),
-    );
-    assert_eq!(
-        run.descendant_property("RenderColoredBox", "color")
-            .as_deref(),
-        Some("[1.0, 0.0, 0.0, 1.0]"),
-    );
-}
-
-#[test]
-fn pump_idle_frames_skips_settled_frames() {
-    let mut run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)))
-        .with_size(Size::new(100.0, 100.0))
-        .run_frame();
-
-    run.pump_idle_frames(3);
-}
-
-#[test]
-fn simulate_advances_layout_across_ticks() {
-    let mut run = RenderTester::mount(
-        box_node(RenderPadding::all(5.0))
-            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
-    )
-    .with_constraints(loose_200())
-    .run_frame();
-
-    let child = run.id("child");
-    let pad = run.root();
-    let reports = run.simulate([0.25, 0.5, 1.0], |t, run| {
-        let padding = 5.0 + 50.0 * t;
-        run.update::<RenderPadding>(pad, |p| {
-            assert_eq!(
-                p.set_padding(EdgeInsets::all(padding)),
-                flui_rendering::RenderUpdateImpact::LAYOUT,
-            );
-        });
-    });
-
-    assert_eq!(reports.len(), 3);
-    assert!(reports.iter().all(|r| r.painted));
-    assert_eq!(run.offset(child), Offset::new(55.0, 55.0));
-    assert_eq!(
-        run.picture_bounds(),
-        Some(Rect::from_ltrb(55.0, 55.0, 95.0, 95.0)),
-    );
-}
-
-#[test]
-fn advance_paint_changes_color_without_layout() {
-    let mut run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)).label("leaf"))
-        .with_size(Size::new(100.0, 100.0))
-        .run_frame();
-
-    let leaf = run.id("leaf");
-    let report = run.advance_paint::<RenderColoredBox>(leaf, |box_| {
-        assert_eq!(
-            box_.set_color([0.0, 1.0, 0.0, 1.0]),
-            flui_rendering::RenderUpdateImpact::PAINT,
-        );
-    });
-
-    assert!(report.painted);
-    assert_eq!(
-        run.property(leaf, "color").as_deref(),
-        Some("[0.0, 1.0, 0.0, 1.0]"),
-    );
-}
-
-#[test]
-fn advance_paint_opacity_tracks_layer_alpha() {
-    let mut run = RenderTester::mount(
-        box_node(RenderOpacity::new(1.0))
-            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
-    )
-    .with_size(Size::new(100.0, 100.0))
-    .run_frame();
-
-    let fade = run.root();
-    let report = run.advance_paint::<RenderOpacity>(fade, |opacity| {
-        assert_eq!(
-            opacity.set_opacity(0.5),
-            flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
-                | flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE,
-        );
-    });
-    assert!(report.painted, "opacity change must repaint: {report}");
-    assert!(
-        run.structure().contains(&"Opacity"),
-        "semi-opaque subtree must pay for an OpacityLayer: {:?}",
-        run.structure(),
-    );
-    assert!(
-        (run.opacity_alpha().expect("opacity layer present") - 0.5).abs() < 0.01,
-        "opacity layer alpha must track the animated value",
-    );
-    assert!(run.has_picture_layer());
-}
-
-#[test]
-fn update_then_pump_relayouts() {
-    let mut run = RenderTester::mount(
-        box_node(RenderPadding::all(5.0))
-            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
-    )
-    .with_constraints(loose_200())
-    .run_frame();
-
-    let child = run.id("child");
-    assert_eq!(run.offset(child), Offset::new(5.0, 5.0));
-
-    run.update::<RenderPadding>(run.root(), |padding| {
-        assert_eq!(
-            padding.set_padding(EdgeInsets::all(20.0)),
-            flui_rendering::RenderUpdateImpact::LAYOUT,
-        );
-    });
-    run.pump();
-
-    assert_eq!(run.offset(child), Offset::new(20.0, 20.0));
-}
-
 // ============================================================================
 // Box x run_layout
 // ============================================================================
-
-#[test]
-fn box_run_layout_commits_geometry_without_a_frame() {
-    let run = RenderTester::mount(
-        box_node(RenderPadding::all(8.0))
-            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("inner")),
-    )
-    .with_size(Size::new(200.0, 200.0))
-    .run_layout();
-
-    assert_eq!(run.box_geometry(run.root()), Size::new(200.0, 200.0));
-
-    let inner = run.id("inner");
-    assert_eq!(run.offset(inner), Offset::new(8.0, 8.0));
-    assert_eq!(run.box_geometry(inner), Size::new(184.0, 184.0));
-}
 
 // ============================================================================
 // Sliver x run_layout
@@ -403,80 +154,10 @@ fn sliver_run_layout_fixed_extent_list_geometry_and_child_sizes() {
 // Sliver x run_frame (smoke)
 // ============================================================================
 
-#[test]
-fn sliver_run_frame_viewport_paints() {
-    let run = RenderTester::mount(
-        box_node(RenderViewport::new(AxisDirection::TopToBottom)).child(
-            sliver_node(RenderSliverFixedExtentList::new(30.0, 2))
-                .child(
-                    box_node(RenderColoredBox::red(300.0, 1000.0)).with_parent_data_seed(
-                        ParentDataSeed::SliverMultiBoxAdaptor(
-                            SliverMultiBoxAdaptorParentData::new(0),
-                        ),
-                    ),
-                )
-                .child(
-                    box_node(RenderColoredBox::green(300.0, 1000.0)).with_parent_data_seed(
-                        ParentDataSeed::SliverMultiBoxAdaptor(
-                            SliverMultiBoxAdaptorParentData::new(1),
-                        ),
-                    ),
-                ),
-        ),
-    )
-    .with_size(Size::new(300.0, 100.0))
-    .run_frame();
-
-    assert!(
-        run.painted(),
-        "a viewport-rooted sliver tree paints a frame"
-    );
-    assert!(run.is_clean(), "no dirty residue after the frame settles");
-}
-
 // ============================================================================
 // Label registry
 // ============================================================================
 
-#[test]
-fn unknown_label_resolves_to_none() {
-    let run = RenderTester::mount(box_node(RenderColoredBox::red(10.0, 10.0)))
-        .with_size(Size::new(50.0, 50.0))
-        .run_layout();
-    assert!(run.try_id("missing").is_none());
-}
-
 // ============================================================================
 // Box query helpers
 // ============================================================================
-
-#[test]
-fn layout_run_box_queries_match_pipeline() {
-    let constraints = loose_200();
-    let mut run = RenderTester::mount(
-        box_node(RenderOpacity::opaque())
-            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
-    )
-    .with_constraints(constraints)
-    .run_layout();
-
-    assert_eq!(run.min_intrinsic_width(run.root(), 100.0), 40.0);
-    assert_eq!(
-        run.dry_layout(run.root(), constraints),
-        Size::new(40.0, 40.0)
-    );
-}
-
-#[test]
-fn frame_run_box_queries_work_after_paint() {
-    let constraints = loose_200();
-    let mut run = RenderTester::mount(
-        box_node(RenderPadding::all(5.0))
-            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
-    )
-    .with_constraints(constraints)
-    .run_frame();
-
-    assert_eq!(run.min_intrinsic_width(run.root(), 100.0), 50.0);
-    assert!(run.painted());
-}

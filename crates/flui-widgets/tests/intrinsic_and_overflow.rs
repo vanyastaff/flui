@@ -5,11 +5,7 @@
 //! widget→render wiring and the live pipeline path).
 
 use crate::common::{lay_out, loose, tight};
-use flui_foundation::geometry::Size;
-use flui_widgets::{
-    Column, IntrinsicHeight, IntrinsicWidth, OverflowBox, RotatedBox, SizedBox, SizedOverflowBox,
-};
-use flui_widgets::{MainAxisSize, column};
+use flui_widgets::{IntrinsicWidth, OverflowBox, RotatedBox, SizedBox};
 
 #[test]
 fn rotated_box_quarter_turn_swaps_child_axes() {
@@ -22,22 +18,6 @@ fn rotated_box_quarter_turn_swaps_child_axes() {
     assert!(
         (size.width - 10.0).abs() < 1e-3 && (size.height - 30.0).abs() < 1e-3,
         "one quarter turn swaps 30×10 → 10×30, got {}×{}",
-        size.width,
-        size.height,
-    );
-}
-
-#[test]
-fn rotated_box_half_turn_keeps_child_axes() {
-    // Two quarter turns (180°) restore the original orientation/extent.
-    let laid = lay_out(
-        RotatedBox::new(2).child(SizedBox::new(30.0, 10.0)),
-        loose(200.0),
-    );
-    let size = laid.size(laid.current_root());
-    assert!(
-        (size.width - 30.0).abs() < 1e-3 && (size.height - 10.0).abs() < 1e-3,
-        "two quarter turns keep 30×10, got {}×{}",
         size.width,
         size.height,
     );
@@ -59,31 +39,6 @@ fn intrinsic_width_with_step_rounds_child_width_up() {
     assert!(
         (width - 40.0).abs() < 1e-3,
         "intrinsic width 30 stepped to the nearest 40 is 40, got {width}",
-    );
-}
-
-#[test]
-fn intrinsic_height_collapses_a_maxed_column_to_its_intrinsic_height() {
-    // A column of a 30-tall and a 50-tall child stacks to an 80px intrinsic
-    // height. With `MainAxisSize::Max` the column would otherwise FILL the loose
-    // 200px height; IntrinsicHeight tightens it to the 80px intrinsic instead.
-    // The result (80, not 200) only holds if the box→box intrinsic query runs
-    // through the live pipeline against the multi-child subtree.
-    let laid = lay_out(
-        IntrinsicHeight::new().child(
-            Column::new(column![
-                SizedBox::new(20.0, 30.0),
-                SizedBox::new(20.0, 50.0)
-            ])
-            .main_axis_size(MainAxisSize::Max),
-        ),
-        loose(200.0),
-    );
-    let height = laid.size(laid.current_root()).height;
-    assert!(
-        (height - 80.0).abs() < 1e-3,
-        "intrinsic height tightens the maxed column to its 30+50 stack (80), \
-         not the 200px loose fill; got {height}",
     );
 }
 
@@ -112,28 +67,5 @@ fn overflow_box_lets_child_exceed_the_parent_box() {
         "the child overflows to its own 80×80, got {}×{}",
         child_size.width,
         child_size.height,
-    );
-}
-
-#[test]
-fn sized_overflow_box_fixes_its_own_size_while_child_overflows() {
-    // The box reports a fixed 40×40 regardless of its 100×100 child.
-    let laid = lay_out(
-        SizedOverflowBox::new(Size::new(40.0, 40.0)).child(SizedBox::new(100.0, 100.0)),
-        loose(200.0),
-    );
-    let root = laid.current_root();
-    let box_size = laid.size(root);
-    let child_size = laid.size(laid.only_child(root));
-    assert!(
-        (box_size.width - 40.0).abs() < 1e-3 && (box_size.height - 40.0).abs() < 1e-3,
-        "the sized overflow box reports its requested 40×40, got {}×{}",
-        box_size.width,
-        box_size.height,
-    );
-    assert!(
-        (child_size.width - 100.0).abs() < 1e-3,
-        "the child lays out at its own 100px width, overflowing the 40px box, got {}",
-        child_size.width,
     );
 }

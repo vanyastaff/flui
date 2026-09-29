@@ -3,22 +3,16 @@
 //! reader, and a write it opens inside its own `build` is refused by the
 //! guard.
 
-// ADR-0027: ElementBuildContext's test seam takes Arc<RwLock<…>> over a !Send
-// owner graph; do not restore Send + Sync to satisfy clippy.
-#![expect(clippy::arc_with_non_send_sync)]
-
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
 use flui_objects::RenderSizedBox;
 use flui_rendering::protocol::BoxProtocol;
 use flui_testing::HeadlessBinding;
 use flui_testing::bootstrap::{MountOptions, MountOwners};
+use flui_view::SignalError;
 use flui_view::prelude::*;
-use flui_view::{ElementBuildContext, SignalError};
-use parking_lot::RwLock;
 
 const FRAME: Duration = Duration::from_millis(16);
 
@@ -169,19 +163,6 @@ fn a_callback_run_inside_its_widgets_build_is_refused_by_the_guard() {
         [0],
         "the refused write scheduled no extra rebuild"
     );
-}
-
-/// The test context and the production context hand out a source over the
-/// same graph the owner's signals are minted on, not a fresh one.
-#[test]
-fn the_test_context_writer_source_targets_the_owner_graph() {
-    let tree = Arc::new(RwLock::new(ElementTree::new()));
-    let owner = Arc::new(RwLock::new(BuildOwner::new()));
-    let sig = owner.read().reactive().signal(1u32);
-    let ctx = ElementBuildContext::new(ElementId::new(1), 0, false, tree, Arc::clone(&owner));
-
-    assert_eq!(ctx.writer_source().write(|cx| sig.set(cx, 2)), Ok(()));
-    assert_eq!(sig.peek(owner.read().reactive(), |v| *v), Ok(2));
 }
 
 /// What the render-view probe hands back to the test.

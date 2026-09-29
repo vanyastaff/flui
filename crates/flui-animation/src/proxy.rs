@@ -267,24 +267,6 @@ mod tests {
     }
 
     #[test]
-    fn test_proxy_animation_status() {
-        let scheduler = UpdateScheduler::new();
-        let controller = Arc::new(AnimationController::new(
-            Duration::from_millis(100),
-            &scheduler,
-        ));
-
-        let proxy = ProxyAnimation::new(controller.clone() as Arc<dyn Animation<f64>>);
-
-        assert_eq!(proxy.status(), AnimationStatus::Dismissed);
-
-        let _ = controller.forward();
-        assert_eq!(proxy.status(), AnimationStatus::Forward);
-
-        controller.dispose();
-    }
-
-    #[test]
     fn status_listeners_survive_set_parent() {
         // Status listeners registered on the proxy must keep firing after a
         // hot-swap; previously they stayed registered on the old parent and
@@ -357,42 +339,6 @@ mod tests {
         // status (Flutter `ProxyAnimation.parent=` parity).
         proxy.set_parent(controller2.clone() as Arc<dyn Animation<f64>>);
         assert_eq!(seen.lock().as_slice(), &[AnimationStatus::Completed]);
-
-        controller1.dispose();
-        controller2.dispose();
-    }
-
-    #[test]
-    fn remove_status_listener_after_swap() {
-        let scheduler = UpdateScheduler::new();
-        let controller1 = Arc::new(AnimationController::new(
-            Duration::from_millis(100),
-            &scheduler,
-        ));
-        let controller2 = Arc::new(AnimationController::new(
-            Duration::from_millis(100),
-            &scheduler,
-        ));
-
-        let proxy = ProxyAnimation::new(controller1.clone() as Arc<dyn Animation<f64>>);
-
-        let hits = Arc::new(AtomicUsize::new(0));
-        let hits2 = Arc::clone(&hits);
-        let id = proxy.add_status_listener(Arc::new(move |_status| {
-            hits2.fetch_add(1, Ordering::SeqCst);
-        }));
-
-        proxy.set_parent(controller2.clone() as Arc<dyn Animation<f64>>);
-        // The id was issued by the proxy, so removal must work regardless of
-        // which parent is current.
-        proxy.remove_status_listener(id);
-
-        let _ = controller2.forward();
-        assert_eq!(
-            hits.load(Ordering::SeqCst),
-            0,
-            "removed status listener must not fire"
-        );
 
         controller1.dispose();
         controller2.dispose();

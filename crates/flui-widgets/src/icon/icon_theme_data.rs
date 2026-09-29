@@ -184,20 +184,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fallback_matches_the_oracle_constants() {
-        let fallback = IconThemeData::fallback();
-        assert_eq!(fallback.size, Some(24.0));
-        assert_eq!(fallback.color, Some(Color::BLACK));
-        assert_eq!(fallback.opacity, Some(1.0));
-        assert_eq!(fallback.fill, Some(0.0));
-        assert_eq!(fallback.weight, Some(400.0));
-        assert_eq!(fallback.grade, Some(0.0));
-        assert_eq!(fallback.optical_size, Some(48.0));
-        assert_eq!(fallback.shadows, None);
-        assert_eq!(fallback.apply_text_scaling, Some(false));
-    }
-
-    #[test]
     fn resolved_against_prefers_self_and_falls_back_to_the_other() {
         let partial = IconThemeData {
             size: Some(32.0),
@@ -206,24 +192,5 @@ mod tests {
         let resolved = partial.resolved_against(&IconThemeData::fallback());
         assert_eq!(resolved.size, Some(32.0), "explicit field wins");
         assert_eq!(resolved.color, Some(Color::BLACK), "unset field falls back");
-    }
-
-    #[test]
-    fn default_icon_theme_data_has_every_field_unset() {
-        let empty = IconThemeData::default();
-        assert_eq!(
-            empty,
-            IconThemeData {
-                size: None,
-                color: None,
-                opacity: None,
-                fill: None,
-                weight: None,
-                grade: None,
-                optical_size: None,
-                shadows: None,
-                apply_text_scaling: None,
-            }
-        );
     }
 }

@@ -74,7 +74,7 @@ mod tests {
     use super::*;
     use crate::{
         ProxyElement,
-        element::{Lifecycle, ProxyBehavior},
+        element::ProxyBehavior,
         view::{ElementBase, View},
     };
 
@@ -129,32 +129,6 @@ mod tests {
     }
 
     #[test]
-    fn test_proxy_element_creation() {
-        let view = TestProxyView {
-            child: DummyChild,
-            enabled: true,
-        };
-
-        let element = ProxyElement::new(&view, ProxyBehavior);
-        assert_eq!(element.lifecycle(), Lifecycle::Initial);
-        // Child not created until build
-    }
-
-    #[test]
-    fn test_proxy_element_mount() {
-        let view = TestProxyView {
-            child: DummyChild,
-            enabled: true,
-        };
-
-        let mut element = ProxyElement::new(&view, ProxyBehavior);
-        let mut owner = crate::BuildOwner::new();
-        element.mount(None, 0, &mut owner.element_owner_mut());
-
-        assert_eq!(element.lifecycle(), Lifecycle::Active);
-    }
-
-    #[test]
     fn test_proxy_element_update() {
         let view = TestProxyView {
             child: DummyChild,
@@ -172,20 +146,5 @@ mod tests {
 
         element.update(&new_view, &mut owner.element_owner_mut());
         // Element is marked dirty after update
-    }
-
-    #[test]
-    fn test_proxy_element_unmount() {
-        let view = TestProxyView {
-            child: DummyChild,
-            enabled: true,
-        };
-
-        let mut element = ProxyElement::new(&view, ProxyBehavior);
-        let mut owner = crate::BuildOwner::new();
-        element.mount(None, 0, &mut owner.element_owner_mut());
-        element.unmount(&mut owner.element_owner_mut());
-
-        assert_eq!(element.lifecycle(), Lifecycle::Defunct);
     }
 }

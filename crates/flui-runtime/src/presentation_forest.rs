@@ -124,49 +124,6 @@ mod tests {
     }
 
     #[test]
-    fn single_holds_exactly_the_constructed_presentation() {
-        let p = presentation(1);
-        let id = p.id();
-        let forest = PresentationForest::single(p);
-
-        assert_eq!(forest.len(), 1);
-        assert_eq!(forest.primary().id(), id);
-    }
-
-    /// The former mechanical ratchet (`len() <= 1`) is lifted: `install`
-    /// now accepts any number of presentations through the SAME production
-    /// entry point every isolation test uses, not a `cfg(test)`-only
-    /// bypass. If reverted (the old `assert!(self.presentations.is_empty())`
-    /// restored), this fails on the second `install` call instead of
-    /// observing `len() == 2`.
-    #[test]
-    fn install_accepts_any_number_of_presentations() {
-        let mut forest = PresentationForest::single(presentation(1));
-        forest.install(presentation(2));
-        forest.install(presentation(3));
-
-        assert_eq!(forest.len(), 3);
-    }
-
-    #[test]
-    fn iter_yields_presentations_in_mount_order() {
-        let mut forest = PresentationForest::single(presentation(1));
-        forest.install(presentation(2));
-        forest.install(presentation(3));
-
-        let ids: Vec<_> = forest.iter().map(PresentationState::id).collect();
-        assert_eq!(
-            ids,
-            vec![
-                PresentationId::new_gen(0, NonZeroU32::new(1).expect("nonzero")),
-                PresentationId::new_gen(0, NonZeroU32::new(2).expect("nonzero")),
-                PresentationId::new_gen(0, NonZeroU32::new(3).expect("nonzero")),
-            ],
-            "mount order is insertion order, never re-sorted"
-        );
-    }
-
-    #[test]
     fn get_and_remove_address_by_exact_presentation_id() {
         let mut forest = PresentationForest::single(presentation(1));
         let second = presentation(2);

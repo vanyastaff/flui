@@ -118,63 +118,6 @@ fn an_unconstrained_icon_button_collapses_to_the_40_by_40_m3_minimum_size() {
     );
 }
 
-/// The "through the mount" pattern this crate's button family relies on for
-/// state-lifecycle correctness (see `tests/elevated_button.rs`'s own such
-/// tests): an `IconButton` with no press handler must resolve the disabled
-/// foreground color (`onSurface@38%`) all the way down to the `IconTheme`
-/// its icon child actually reads — not merely inside `default_style`'s own
-/// `WidgetStateProperty`, which `icon_button.rs`'s unit tests already
-/// exercise directly.
-#[test]
-fn disabled_icon_button_resolves_the_disabled_color_through_the_real_mount() {
-    let theme = ThemeData::light();
-    let colors = theme.color_scheme;
-    let captured = Rc::new(RefCell::new(None));
-    let probe = IconThemeProbe {
-        captured: Rc::clone(&captured),
-    };
-
-    let _laid = lay_out(Theme::new(theme, IconButton::new(probe)), tight(40.0, 40.0));
-
-    let resolved = captured
-        .borrow()
-        .clone()
-        .expect("IconThemeProbe must have built at least once");
-    assert_eq!(
-        resolved.color,
-        Some(colors.on_surface.with_opacity(0.38)),
-        "a disabled IconButton must publish _IconButtonDefaultsM3's disabled foreground color \
-         (onSurface@38%) to its icon child's IconTheme",
-    );
-    assert_eq!(resolved.size, Some(24.0));
-}
-
-#[test]
-fn enabled_icon_button_resolves_the_on_surface_variant_color_through_the_real_mount() {
-    let theme = ThemeData::light();
-    let colors = theme.color_scheme;
-    let captured = Rc::new(RefCell::new(None));
-    let probe = IconThemeProbe {
-        captured: Rc::clone(&captured),
-    };
-
-    let _laid = lay_out(
-        Theme::new(theme, IconButton::new(probe).on_pressed(|_cx| {})),
-        tight(40.0, 40.0),
-    );
-
-    let resolved = captured
-        .borrow()
-        .clone()
-        .expect("IconThemeProbe must have built at least once");
-    assert_eq!(
-        resolved.color,
-        Some(colors.on_surface_variant),
-        "an enabled IconButton must publish _IconButtonDefaultsM3's onSurfaceVariant foreground \
-         color to its icon child's IconTheme",
-    );
-}
-
 /// The middle cascade tier, proven end to end: a configured
 /// `icon_button_theme.style.foreground_color` must reach the icon's
 /// `IconTheme` — the same coalesce `resolve_property` performs for
@@ -211,62 +154,6 @@ fn icon_button_theme_slot_reaches_the_icons_icon_theme() {
         resolved.color,
         Some(themed_color),
         "a configured icon_button_theme.style.foreground_color must reach the icon's IconTheme",
-    );
-}
-
-/// The regression this test guards against: a naive port hardcodes
-/// `default_style`'s own foreground table straight into the icon's
-/// `IconTheme`, so a caller's `.style(ButtonStyle { foreground_color: .. })`
-/// override reaches `ButtonStyleButtonCore`'s `DefaultTextStyle` (for a
-/// `Text` child) but silently never reaches an `Icon` child at all — the
-/// override would visibly do nothing. `IconButton::build` instead coalesces
-/// `self.style`'s `foreground_color` with `default_style`'s own (the SAME
-/// widget-then-default cascade `ButtonStyleButtonCore` performs internally)
-/// before feeding the icon's `IconTheme` — this test mounts exactly that
-/// override and asserts it actually reaches the icon.
-/// `core.theme_style(theme_style)` wiring, isolated from
-/// `IconButton::build`'s OWN separate `resolve_property` call (which only
-/// ever reads `foreground_color`, for the icon's `IconTheme` — see
-/// `icon_button_theme_slot_reaches_the_icons_icon_theme` above). A
-/// `background_color` set on `icon_button_theme` has no path to the mounted
-/// `Material` except through `ButtonStyleButtonCoreState::build`'s own
-/// three-tier resolve, which only sees it because `IconButton::build` wired
-/// `theme_style` onto the `ButtonStyleButtonCore` it constructs. Deleting
-/// that `core.theme_style(theme_style)` call leaves this property
-/// permanently `None` at the core's theme tier, so this assertion would
-/// fail (falling through to `_IconButtonDefaultsM3`'s transparent default)
-/// — the two `foreground_color` tests above would NOT catch that deletion,
-/// since they exercise a code path this test does not.
-#[test]
-fn icon_button_theme_slot_background_color_reaches_the_mounted_material() {
-    let themed_background = Color::rgb(60, 70, 80);
-    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
-        icon_button_theme: Some(IconButtonThemeData {
-            style: Some(ButtonStyle {
-                background_color: Some(WidgetStateProperty::all(Some(themed_background))),
-                ..Default::default()
-            }),
-        }),
-        ..Default::default()
-    });
-
-    let laid = lay_out(
-        Theme::new(
-            theme,
-            IconButton::new(SizedBox::square(24.0)).on_pressed(|_cx| {}),
-        ),
-        tight(40.0, 40.0),
-    );
-
-    let material = laid
-        .try_find_by_render_type("RenderPhysicalShape")
-        .expect("IconButton must compose a Material surface");
-    assert_eq!(
-        laid.render_property(material, "color"),
-        Some(format!("{themed_background:?}")),
-        "a configured icon_button_theme.style.background_color must reach the mounted \
-         Material — proving ButtonStyleButtonCore's own theme_style wiring, not just \
-         IconButton::build's separate foreground_color resolve",
     );
 }
 

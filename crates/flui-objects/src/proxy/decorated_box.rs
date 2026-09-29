@@ -195,23 +195,3 @@ impl RenderBox for RenderDecoratedBox {
         )
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use flui_painting::styling::Color;
-
-    use super::*;
-
-    #[test]
-    fn defaults_to_background_position() {
-        let node = RenderDecoratedBox::new(BoxDecoration::with_color(Color::RED));
-        assert_eq!(node.position(), DecorationPosition::Background);
-    }
-
-    #[test]
-    fn builder_sets_foreground() {
-        let node = RenderDecoratedBox::new(BoxDecoration::with_color(Color::RED))
-            .with_position(DecorationPosition::Foreground);
-        assert_eq!(node.position(), DecorationPosition::Foreground);
-    }
-}

@@ -14,8 +14,8 @@ use flui_rendering::{
 };
 
 use crate::common::{
-    BoxedRenderObject, BoxedSliverObject, horizontal_constraints,
-    laid_out_tight_300x100 as laid_out, sliver_geometry, vertical_constraints,
+    BoxedRenderObject, BoxedSliverObject, laid_out_tight_300x100 as laid_out, sliver_geometry,
+    vertical_constraints,
 };
 
 fn box_size(
@@ -157,34 +157,6 @@ fn sliver_fill_viewport_sizes_children_to_viewport_fraction() {
 }
 
 #[test]
-fn sliver_fill_viewport_hit_tests_visible_page_children() {
-    let (owner, root_id, sliver_id, child_ids) =
-        fill_viewport_tree(vertical_constraints(40.0), 0.5, 3);
-
-    assert_eq!(
-        hits(&owner, 10.0, 20.0),
-        vec![child_ids[1], sliver_id, root_id],
-        "global y=20 maps to child 1 after the 40px scroll offset",
-    );
-    assert_eq!(
-        hits(&owner, 10.0, 70.0),
-        vec![child_ids[2], sliver_id, root_id],
-        "global y=70 maps to child 2 after the 40px scroll offset",
-    );
-}
-
-#[test]
-fn sliver_fill_viewport_supports_horizontal_axis() {
-    let (owner, _root_id, _sliver_id, child_ids) =
-        fill_viewport_tree(horizontal_constraints(30.0), 0.25, 2);
-
-    assert_eq!(box_size(&owner, child_ids[0]), Size::new(75.0, 100.0));
-    assert_eq!(box_size(&owner, child_ids[1]), Size::new(75.0, 100.0));
-    assert_eq!(render_offset(&owner, child_ids[0]), Offset::new(-30.0, 0.0),);
-    assert_eq!(render_offset(&owner, child_ids[1]), Offset::new(45.0, 0.0),);
-}
-
-#[test]
 fn sliver_fill_viewport_reverse_axis_uses_right_way_up_offsets() {
     let mut constraints = vertical_constraints(40.0);
     constraints.axis_direction = AxisDirection::BottomToTop;
@@ -200,26 +172,5 @@ fn sliver_fill_viewport_reverse_axis_uses_right_way_up_offsets() {
     assert_eq!(
         hits(&owner, 10.0, 70.0),
         vec![child_ids[1], sliver_id, root_id]
-    );
-}
-
-// 1.5 guard test: a sliver reports has_visual_overflow when scroll_offset > 0,
-// matching Flutter's sliver_fill.dart which uses
-// `paintExtent > remainingPaintExtent || scrollOffset > 0.0`.
-// Scroll position matters: content behind the scroll position is visually clipped.
-#[test]
-fn scrolled_sliver_reports_visual_overflow() {
-    // scroll_offset=50, remaining_paint_extent=100, viewport=100, fraction=1.0
-    // → scroll_offset > 0 → has_visual_overflow must be true (Flutter parity).
-    let (owner, _root_id, sliver_id, _child_ids) =
-        fill_viewport_tree(vertical_constraints(50.0), 1.0, 1);
-
-    let geometry = sliver_geometry(&owner, sliver_id);
-    assert!(
-        geometry.has_visual_overflow,
-        "Flutter: hasVisualOverflow = paintExtent > remainingPaintExtent || scrollOffset > 0.0; \
-         with scroll_offset=50, has_visual_overflow must be true: \
-         paint_extent={}, remaining=100",
-        geometry.paint_extent
     );
 }

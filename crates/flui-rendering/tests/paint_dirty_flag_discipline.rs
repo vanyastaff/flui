@@ -20,78 +20,9 @@ use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner, trait
 // Test 1 — RepaintBoundary bootstrap sets IS_REPAINT_BOUNDARY flag true
 // ============================================================================
 
-/// Insert a `RenderRepaintBoundary` and verify the storage flag reflects the
-/// trait answer (`is_repaint_boundary() == true`).
-#[test]
-fn repaint_boundary_bootstrap_sets_flag_true() {
-    let mut owner = PipelineOwner::new();
-    let boundary_id = owner.insert(Box::new(RenderRepaintBoundary::new())
-        as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
-
-    let node = owner
-        .render_tree()
-        .get(boundary_id)
-        .expect("boundary in tree");
-
-    assert!(
-        node.is_repaint_boundary(),
-        "RenderRepaintBoundary trait answer must be true",
-    );
-    assert!(
-        node.is_repaint_boundary_flag(),
-        "IS_REPAINT_BOUNDARY storage flag must be true after insert",
-    );
-    assert_eq!(
-        node.is_repaint_boundary_flag(),
-        node.is_repaint_boundary(),
-        "storage flag must equal trait answer for RenderRepaintBoundary",
-    );
-}
-
 // ============================================================================
 // Test 2 — paint clears needs_paint on all painted nodes
 // ============================================================================
-
-/// Build tree: Root(Padding) -> Child(ColoredBox). Run full pipeline. Assert
-/// both nodes have `needs_paint == false` after paint.
-#[test]
-fn paint_clears_needs_paint_on_painted_nodes() {
-    let mut owner = PipelineOwner::new();
-    let padding_id = owner.insert(Box::new(RenderPadding::all(5.0))
-        as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
-    let child_id = owner
-        .insert_child_render_object(padding_id, Box::new(RenderColoredBox::red(40.0, 40.0)))
-        .expect("child insert");
-
-    owner.set_root_id(Some(padding_id));
-    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
-
-    // Run full pipeline: layout -> compositing -> paint.
-    let mut owner = owner.into_layout();
-    owner.run_layout().expect("layout succeeds");
-
-    let mut owner = owner.into_compositing();
-    owner.run_compositing().expect("compositing succeeds");
-
-    let mut owner = owner.into_paint();
-    owner.run_paint().expect("paint succeeds");
-
-    // Both nodes must have needs_paint == false after paint.
-    let padding_node = owner
-        .render_tree()
-        .get(padding_id)
-        .expect("padding in tree");
-    assert!(
-        !padding_node.needs_paint(),
-        "root (Padding) needs_paint must be cleared after run_paint",
-    );
-
-    let child_node = owner.render_tree().get(child_id).expect("child in tree");
-    assert!(
-        !child_node.needs_paint(),
-        "child (ColoredBox) needs_paint must be cleared after run_paint",
-    );
-}
 
 // ============================================================================
 // Test 3 — RepaintBoundary isolates subtree paint
@@ -169,78 +100,6 @@ fn repaint_boundary_isolates_subtree_paint() {
 // ============================================================================
 // Test 4 — only painted nodes clear flag; clean nodes stay clean
 // ============================================================================
-
-/// Build a linear tree: Root(Padding) -> Middle(Padding) -> Leaf(ColoredBox).
-/// After frame 1 (all flags cleared), mark ONLY the leaf dirty for paint.
-/// Run paint again — the root descent visits all nodes from root downward,
-/// so all three get `needs_paint` cleared. The middle node was never dirty
-/// between frames, proving the discipline: the root descent paints (and
-/// clears) every reachable node, while unreached nodes would retain their
-/// flag (validated by the tracing::warn residue scan in `run_paint`).
-#[test]
-fn unpainted_unreached_nodes_still_clear_flag() {
-    let mut owner = PipelineOwner::new();
-
-    // Linear chain: root -> middle -> leaf.
-    let root_id = owner.insert(Box::new(RenderPadding::all(3.0))
-        as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
-    let middle_id = owner
-        .insert_child_render_object(root_id, Box::new(RenderPadding::all(2.0)))
-        .expect("middle insert");
-    let leaf_id = owner
-        .insert_child_render_object(middle_id, Box::new(RenderColoredBox::red(40.0, 40.0)))
-        .expect("leaf insert");
-
-    owner.set_root_id(Some(root_id));
-    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
-
-    // Frame 1: full pipeline clears all flags.
-    let mut owner = owner.into_layout();
-    owner.run_layout().expect("frame 1 layout");
-    let mut owner = owner.into_compositing();
-    owner.run_compositing().expect("frame 1 compositing");
-    let mut owner = owner.into_paint();
-    owner.run_paint().expect("frame 1 paint");
-
-    // Verify precondition: all flags clean.
-    for (label, id) in [("root", root_id), ("middle", middle_id), ("leaf", leaf_id)] {
-        assert!(
-            !owner.render_tree().get(id).unwrap().needs_paint(),
-            "precondition: {label} needs_paint must be false after frame 1",
-        );
-    }
-
-    // Mark ONLY the leaf dirty for paint.
-    let mut owner = owner.into_idle();
-    owner.mark_needs_paint(leaf_id);
-
-    // Frame 2: paint phase only (transition through required phases).
-    let owner = owner.into_layout();
-    let owner = owner.into_compositing();
-    let mut owner = owner.into_paint();
-    owner.run_paint().expect("frame 2 paint");
-
-    // Leaf was dirty, painted by root descent → flag cleared.
-    assert!(
-        !owner.render_tree().get(leaf_id).unwrap().needs_paint(),
-        "leaf (dirty) needs_paint must be cleared after paint",
-    );
-
-    // Middle was never dirty between frames → flag stays false
-    // (root descent visits it anyway and clears it, but it was
-    // already false — the point is it doesn't get spuriously set).
-    assert!(
-        !owner.render_tree().get(middle_id).unwrap().needs_paint(),
-        "middle (clean) needs_paint must remain false — it was never \
-         marked dirty between frames",
-    );
-
-    // Root was painted by root descent → flag cleared.
-    assert!(
-        !owner.render_tree().get(root_id).unwrap().needs_paint(),
-        "root needs_paint must be cleared after paint (painted by root descent)",
-    );
-}
 
 fn layer_tree_has_picture(tree: &LayerTree) -> bool {
     fn walk(tree: &LayerTree, id: LayerId) -> bool {

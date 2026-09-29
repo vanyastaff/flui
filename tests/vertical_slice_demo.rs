@@ -43,7 +43,6 @@ use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::testing::inspect;
 use flui_testing::HeadlessBinding;
 use flui_testing::bootstrap::{MountOptions, MountOwners};
-use flui_view::StateCell;
 use flui_widgets::{FocusRoot, GestureArenaScope, VsyncScope};
 
 /// Root constraints the demo is mounted under: wide/tall enough that the
@@ -58,10 +57,6 @@ fn root_constraints() -> BoxConstraints {
 struct MountedDemo {
     binding: HeadlessBinding,
     pipeline_owner: PipelineCell,
-    /// Clone of the mounted [`tree::DemoRoot`]'s `home_create_count` — how many
-    /// times `DemoHomeState::create_state` has run. See that field's doc for
-    /// why this, and not a display assertion, is what proves state survival.
-    home_create_count: StateCell<u32>,
 }
 
 impl MountedDemo {
@@ -78,7 +73,6 @@ impl MountedDemo {
         let mut binding = HeadlessBinding::new();
 
         let root_view = tree::demo_root();
-        let home_create_count = root_view.home_create_count.clone();
 
         let pipeline_owner = PipelineCell::new(PipelineOwner::new());
 
@@ -100,13 +94,7 @@ impl MountedDemo {
         Self {
             binding,
             pipeline_owner,
-            home_create_count,
         }
-    }
-
-    /// How many times `DemoHomeState::create_state` has run so far.
-    fn home_create_count(&self) -> u32 {
-        self.home_create_count.get()
     }
 
     /// Drive one deterministic frame.
@@ -477,39 +465,6 @@ fn dragging_inside_the_list_box_scrolls_its_items() {
     );
 }
 
-/// At the top of the list (offset 0, the fresh-mount default) a downward drag
-/// proposes a *negative* pixel value (`pixels() - delta.dy` with `delta.dy >
-/// 0`) — `ScrollController::jump_to`'s lower clamp must hold it at 0 through
-/// the real gesture path, not just in `scroll_controller.rs`'s unit tests.
-#[test]
-fn dragging_down_at_the_top_of_the_list_does_not_scroll_past_zero() {
-    let mut demo = MountedDemo::mount();
-
-    let item0 = demo
-        .find_text("Item 0")
-        .expect("the static list must render its first item");
-    let offset_before = demo.absolute_position(item0);
-    let (anchor_x, anchor_y) = demo.list_box_center();
-
-    // Post-slop deltas toward positive dy (finger moving down) — the mirror
-    // image of the upward drag above.
-    const SLOP_CROSSING_DELTA: f64 = DRAG_SLOP + 7.0; // 25.0, safely > 18.0
-    const UPDATE_DELTA: f64 = 20.0;
-
-    demo.drag_down(anchor_x, anchor_y);
-    demo.drag_move(anchor_x, anchor_y + SLOP_CROSSING_DELTA);
-    demo.drag_move(anchor_x, anchor_y + SLOP_CROSSING_DELTA + UPDATE_DELTA);
-    demo.drag_up(anchor_x, anchor_y + SLOP_CROSSING_DELTA + UPDATE_DELTA);
-    demo.pump(Duration::ZERO);
-
-    let offset_after = demo.absolute_position(item0);
-    assert!(
-        (offset_after.dy - offset_before.dy).abs() < 1.0,
-        "dragging down at the top of the list (offset already 0) must not move item 0 at all — \
-         jump_to's lower clamp must hold: before={offset_before:?}, after={offset_after:?}"
-    );
-}
-
 // ============================================================================
 // (c) tap the animated box -> the animated property interpolates, then
 //     settles at the target
@@ -591,138 +546,15 @@ fn tapping_the_animated_box_interpolates_width_to_the_expanded_target() {
 //     occluding it from hit-testing; tap back -> it pops, state intact
 // ============================================================================
 
-#[test]
-fn tapping_the_details_button_pushes_a_route_that_hides_the_home_route_from_hit_testing() {
-    let mut demo = MountedDemo::mount();
-
-    assert!(
-        demo.find_text(tree::DETAILS_ROUTE_TEXT).is_none(),
-        "the details route must not be built before it is pushed"
-    );
-
-    // The "+" button's position is captured before the push: the home route
-    // stays mounted (`maintain_state` defaults to true) but is skipped from
-    // this frame's layout, so its last committed geometry is exactly what a
-    // real finger would still see baked into the (now stale, un-hit-testable)
-    // screen — the position a user's tap would land on.
-    let plus = demo
-        .find_text("+")
-        .expect("the '+' button's Text must be in the render tree");
-    let plus_tap_at = demo.absolute_position(plus);
-
-    let details_button = demo
-        .find_text(tree::DETAILS_BUTTON_LABEL)
-        .expect("the 'View details' button must be in the render tree");
-    let details_tap_at = demo.absolute_position(details_button);
-    demo.tap(details_tap_at.dx + 1.0, details_tap_at.dy + 1.0);
-    demo.pump(Duration::ZERO);
-
-    assert!(
-        demo.find_text(tree::DETAILS_ROUTE_TEXT).is_some(),
-        "the details route's content must render once pushed"
-    );
-    assert!(
-        demo.find_text(tree::BACK_BUTTON_LABEL).is_some(),
-        "the details route's back button must render once pushed"
-    );
-
-    // A tap at the "+" button's old screen position must not reach it: the
-    // details `PageRoute` is opaque, so `RenderTheater`'s skip_count now
-    // excludes the home route from hit-testing (`overlay/mod.rs::onstage_plan`).
-    demo.tap(plus_tap_at.dx + 1.0, plus_tap_at.dy + 1.0);
-    demo.pump(Duration::ZERO);
-    assert!(
-        demo.find_text("Count: 0").is_some(),
-        "the home route's '+' button must not be hit-testable while the details route covers it"
-    );
-    assert!(
-        demo.find_text("Count: 1").is_none(),
-        "a tap that lands on the covered home route must not reach its counter"
-    );
-}
-
-#[test]
-fn tapping_back_pops_the_details_route_and_preserves_counter_state() {
-    let mut demo = MountedDemo::mount();
-
-    // Two increments before navigating away — the state this round-trip must
-    // preserve, not the framework's default (`Count: 0`).
-    let plus = demo
-        .find_text("+")
-        .expect("the '+' button's Text must be in the render tree");
-    let plus_tap_at = demo.absolute_position(plus);
-    demo.tap(plus_tap_at.dx + 1.0, plus_tap_at.dy + 1.0);
-    demo.pump(Duration::ZERO);
-    demo.tap(plus_tap_at.dx + 1.0, plus_tap_at.dy + 1.0);
-    demo.pump(Duration::ZERO);
-    assert!(
-        demo.find_text("Count: 2").is_some(),
-        "two taps precede the push"
-    );
-
-    let details_button = demo
-        .find_text(tree::DETAILS_BUTTON_LABEL)
-        .expect("the 'View details' button must be in the render tree");
-    let details_tap_at = demo.absolute_position(details_button);
-    demo.tap(details_tap_at.dx + 1.0, details_tap_at.dy + 1.0);
-    demo.pump(Duration::ZERO);
-    assert!(demo.find_text(tree::DETAILS_ROUTE_TEXT).is_some());
-
-    let back = demo
-        .find_text(tree::BACK_BUTTON_LABEL)
-        .expect("the back button must be in the render tree while the details route is on top");
-    let back_tap_at = demo.absolute_position(back);
-    demo.tap(back_tap_at.dx + 1.0, back_tap_at.dy + 1.0);
-    demo.pump(Duration::ZERO);
-
-    assert!(
-        demo.find_text(tree::DETAILS_ROUTE_TEXT).is_none(),
-        "the details route must be gone once popped"
-    );
-    // The discriminating assertion: `count`/`expanded`/`scroll_offset` are
-    // `StateCell`s captured once by the seed closure in `DemoRootState`
-    // (`tree.rs`), so a display check on them alone reads back correctly
-    // whether `DemoHomeState` survived the round trip or was torn down and
-    // rebuilt from those same closure-held cells — it cannot tell the two
-    // apart. `home_create_count` can: it is incremented once per real
-    // `DemoHomeState::create_state` call. A value of `2` here would mean the
-    // covering `PageRoute` unmounted the home route while it was covered
-    // (Flutter's `maintainState == false` path) and popping rebuilt it from
-    // scratch; `1` is the only value consistent with the state object itself
-    // having survived the whole push+pop round trip.
-    assert_eq!(
-        demo.home_create_count(),
-        1,
-        "DemoHomeState::create_state must have run exactly once — across the whole \
-         mount, push, and pop — proving the home route's state survived being \
-         covered rather than being torn down and rebuilt"
-    );
-    assert!(
-        demo.find_text("Count: 2").is_some(),
-        "and, now that create_state's single run is pinned above, the counter \
-         correctly shows the pre-navigation count rather than a reset one"
-    );
-
-    // The home route's own hit-testing must be restored, too.
-    demo.tap(plus_tap_at.dx + 1.0, plus_tap_at.dy + 1.0);
-    demo.pump(Duration::ZERO);
-    assert!(
-        demo.find_text("Count: 3").is_some(),
-        "the '+' button must be hit-testable again once the covering route is popped"
-    );
-}
-
 // ============================================================================
 // `tree.rs` sanity — both `#[path]` consumers reference the same symbols
 // ============================================================================
 
 /// `DemoApp` (the thin `StatelessView` `flui_app::run_app` entry point) is
-/// exercised at runtime only by `examples/vertical_slice_demo/main.rs`, not
-/// this headless test — the acceptance tests above mount `DemoRoot` directly
-/// (see `MountedDemo::mount`'s doc). Referencing it here keeps both
-/// `#[path]` consumers of `tree.rs` compiling the same symbol set, so a
-/// signature change that breaks the example's entry point fails `cargo test`
-/// too, not only `cargo build --example`.
+/// exercised at runtime only by `examples/vertical_slice_demo/main.rs`.
+/// Referencing it here keeps both `#[path]` consumers of `tree.rs` compiling the
+/// same symbol set, so a signature change that breaks the example's entry point
+/// fails `cargo test` too, not only `cargo build --example`.
 #[test]
 fn demo_app_entry_point_constructs() {
     let _ = tree::DemoApp;

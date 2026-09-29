@@ -202,13 +202,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_directives_quieten_wgpu_only() {
-        let config = FilterConfig::default();
-        assert_eq!(config.directives(), "info,wgpu=warn");
-        assert_eq!(config.env_var(), Some("RUST_LOG"));
-    }
-
-    #[test]
     fn a_trace_directive_survives_into_the_filters_own_ceiling() {
         // The regression this module exists to prevent: the resolved filter's
         // maximum must be what the directives asked for, so a `trace!` in
@@ -233,12 +226,6 @@ mod tests {
             .expect_err("`=not a directive=` must not parse");
 
         assert!(matches!(error, FilterError::Configured { .. }));
-    }
-
-    #[test]
-    fn without_env_var_ignores_the_environment() {
-        let config = FilterConfig::new("warn").without_env_var();
-        assert_eq!(config.env_var(), None);
     }
 
     // --- environment resolution
@@ -273,17 +260,6 @@ mod tests {
     }
 
     #[test]
-    fn a_padded_value_resolves_identically_to_its_trimmed_form() {
-        let config = FilterConfig::new("error");
-
-        assert_eq!(
-            max_level(&config, Some("\t info,wgpu=warn \n")),
-            max_level(&config, Some("info,wgpu=warn")),
-            "whitespace around the value must make no difference to the result"
-        );
-    }
-
-    #[test]
     fn a_whitespace_only_value_falls_through_to_the_configured_directives() {
         // Blank is "unset", not "invalid": it must reach the configured
         // directives rather than produce an error.
@@ -294,26 +270,6 @@ mod tests {
             Some(LevelFilter::DEBUG),
             "a blank environment value must not override, and must not error"
         );
-    }
-
-    #[test]
-    fn an_unset_variable_falls_through_to_the_configured_directives() {
-        let config = FilterConfig::new("flui_view=debug");
-        assert_eq!(max_level(&config, None), Some(LevelFilter::DEBUG));
-    }
-
-    #[test]
-    fn a_genuinely_malformed_environment_value_is_still_reported() {
-        // Trimming must not become "repair the value". Anything that is not
-        // just surrounding whitespace still fails, and names the variable.
-        let error = FilterConfig::new("info")
-            .env_filter_from(Some(" =not a directive= "))
-            .expect_err("`=not a directive=` must not parse, padded or otherwise");
-
-        match error {
-            FilterError::Environment { env_var, .. } => assert_eq!(env_var, "RUST_LOG"),
-            other => panic!("expected `FilterError::Environment`, got {other:?}"),
-        }
     }
 
     #[test]

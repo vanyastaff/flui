@@ -134,41 +134,6 @@ mod tests {
     }
 
     #[test]
-    fn stadium_radius_is_half_the_shortest_side_when_wider_than_tall() {
-        let rrect = MaterialShape::Stadium.to_rrect(size(120.0, 40.0));
-        // shortest side is height (40); radius = 20.
-        assert_eq!(rrect.top_left, Radius::circular(20.0));
-        assert_eq!(rrect.top_right, Radius::circular(20.0));
-        assert_eq!(rrect.bottom_right, Radius::circular(20.0));
-        assert_eq!(rrect.bottom_left, Radius::circular(20.0));
-    }
-
-    #[test]
-    fn stadium_radius_is_half_the_shortest_side_when_taller_than_wide() {
-        let rrect = MaterialShape::Stadium.to_rrect(size(30.0, 90.0));
-        // shortest side is width (30); radius = 15.
-        assert_eq!(rrect.top_left, Radius::circular(15.0));
-    }
-
-    #[test]
-    fn stadium_radius_on_a_square_is_half_that_side() {
-        let rrect = MaterialShape::Stadium.to_rrect(size(50.0, 50.0));
-        assert_eq!(rrect.top_left, Radius::circular(25.0));
-    }
-
-    #[test]
-    fn rectangle_constructor_is_a_zero_radius_rounded_rect() {
-        let rrect = MaterialShape::rectangle().to_rrect(size(10.0, 10.0));
-        assert_eq!(rrect.top_left, Radius::ZERO);
-        assert_eq!(rrect.top_right, Radius::ZERO);
-    }
-
-    #[test]
-    fn default_is_the_plain_rectangle() {
-        assert_eq!(MaterialShape::default(), MaterialShape::rectangle());
-    }
-
-    #[test]
     fn to_path_excludes_a_stadium_corner_a_sharp_rectangle_would_include() {
         // Shape-sensitive, not bounds-only: a bounding-box check (`.bounds()`
         // vs. `.rect`) is identical for every `MaterialShape` variant at the

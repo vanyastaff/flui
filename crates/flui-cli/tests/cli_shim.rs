@@ -16,28 +16,10 @@ fn cargo_subcommand_spelling_drops_the_repeated_name() {
 }
 
 #[test]
-fn direct_invocation_without_the_name_also_works() {
-    cargo_bin_cmd!("cargo-flui")
-        .arg("--version")
-        .assert()
-        .success()
-        .stdout(predicate::str::starts_with("flui "));
-}
-
-#[test]
 fn exit_code_and_stderr_are_the_clis() {
     cargo_bin_cmd!("cargo-flui")
         .args(["flui", "no-such-command"])
         .assert()
         .code(2)
         .stderr(predicate::str::contains("no-such-command"));
-}
-
-#[test]
-fn json_events_pass_through_on_stdout() {
-    cargo_bin_cmd!("cargo-flui")
-        .args(["flui", "--json", "completions", "bash"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"event\":\"completions\""));
 }

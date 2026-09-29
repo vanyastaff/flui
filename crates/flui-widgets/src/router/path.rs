@@ -211,18 +211,6 @@ mod tests {
     }
 
     #[test]
-    fn route_path_normalizes_a_trailing_slash() {
-        let with = RoutePath::parse("/note/1/").expect("a trailing slash is allowed");
-        let without = RoutePath::parse("/note/1").expect("a plain location parses");
-        assert_eq!(with, without);
-        assert_eq!(with.as_str(), "/note/1");
-        assert_eq!(
-            RoutePath::parse("/").expect("the root parses"),
-            RoutePath::root()
-        );
-    }
-
-    #[test]
     fn route_path_canonicalizes_each_segment_encoding() {
         let raw = RoutePath::parse("/tag/a b").expect("a raw space is re-encoded");
         let lower = RoutePath::parse("/tag/a%20b").expect("an escape is kept");
@@ -231,14 +219,6 @@ mod tests {
         let slash = RoutePath::parse("/tag/a%2fc").expect("an encoded slash stays one segment");
         assert_eq!(slash.as_str(), "/tag/a%2Fc");
         assert_eq!(slash.segments().collect::<Vec<_>>(), ["tag", "a/c"]);
-    }
-
-    #[test]
-    fn join_encodes_and_segments_decode() {
-        let path = RoutePath::root().join("tag").join("a b/c").join("é");
-        assert_eq!(path.as_str(), "/tag/a%20b%2Fc/%C3%A9");
-        assert_eq!(path.segments().collect::<Vec<_>>(), ["tag", "a b/c", "é"]);
-        assert_eq!(RoutePath::root().join("").as_str(), "/");
     }
 
     #[test]

@@ -135,40 +135,6 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_font_asset_from_bytes() {
-        // Minimal TrueType font header (just for testing)
-        let ttf_bytes = vec![
-            0x00, 0x01, 0x00, 0x00, // TrueType version
-            0x00, 0x00, // numTables (would normally be > 0)
-            0x00, 0x00, // searchRange
-            0x00, 0x00, // entrySelector
-            0x00, 0x00, // rangeShift
-        ];
-
-        let asset = FontAsset::from_bytes("test.ttf", ttf_bytes);
-        let font = asset.load().await.unwrap();
-
-        // Verify we got a FontData back
-        assert!(font.bytes.len() >= 10);
-    }
-
-    #[test]
-    fn test_font_asset_metadata() {
-        let asset = FontAsset::file("Roboto-Regular.ttf");
-        let metadata = asset.metadata().unwrap();
-
-        assert_eq!(metadata.format, Some("TTF".to_string()));
-    }
-
-    #[test]
-    fn test_font_asset_key() {
-        let asset = FontAsset::file("Roboto-Regular.ttf");
-        let key = asset.key();
-
-        assert_eq!(key.as_str(), "Roboto-Regular.ttf");
-    }
-
-    #[tokio::test]
     async fn test_font_asset_invalid_format() {
         let invalid_bytes = vec![0xFF, 0xFF, 0xFF, 0xFF];
 

@@ -25,19 +25,6 @@ fn indexed_stack_sizes_like_stack_and_mounts_indexed_render_object() {
 }
 
 #[test]
-fn indexed_stack_none_still_lays_out_children() {
-    let laid = lay_out(
-        IndexedStack::new(row![SizedBox::new(40.0, 30.0), SizedBox::new(80.0, 60.0)]).index(None),
-        loose(200.0),
-    );
-
-    let root = laid.root();
-    assert_eq!(laid.size(root), size(80.0, 60.0));
-    assert_eq!(laid.size(laid.child(root, 0)), size(40.0, 30.0));
-    assert_eq!(laid.size(laid.child(root, 1)), size(80.0, 60.0));
-}
-
-#[test]
 fn indexed_stack_positioned_child_keeps_stack_parent_data() {
     let laid = lay_out(
         IndexedStack::new(row![

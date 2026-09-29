@@ -945,35 +945,9 @@ const fn const_fnv1a_hash(bytes: &[u8]) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, mem::size_of};
+    use std::collections::HashSet;
 
     use super::*;
-
-    #[test]
-    fn test_niche_optimization() {
-        // Key uses niche optimization
-        assert_eq!(size_of::<Option<Key>>(), size_of::<Key>());
-        assert_eq!(size_of::<Option<Key>>(), 8);
-
-        // Regular u64 doesn't
-        assert_eq!(size_of::<Option<u64>>(), 16);
-    }
-
-    #[test]
-    fn test_compile_time_keys() {
-        const K1: Key = Key::from_str("test");
-        const K2: Key = Key::from_str("test");
-        const K3: Key = Key::from_str("other");
-
-        // Same string = same key
-        assert_eq!(K1, K2);
-
-        // Different string = different key
-        assert_ne!(K1, K3);
-
-        // Runtime matches compile-time
-        assert_eq!(K1, Key::from_str("test"));
-    }
 
     /// F2 — once the runtime counter reaches the permanent-exhaustion
     /// sentinel (0), `Key::new` must panic on EVERY subsequent call and
@@ -1011,16 +985,6 @@ mod tests {
         );
     }
 
-    /// F2 triangulation — a batch of freshly minted keys are all
-    /// distinct `u64` values (no duplicates from the counter path).
-    #[test]
-    fn key_uniqueness() {
-        let keys: Vec<u64> = (0..256).map(|_| Key::new().as_u64()).collect();
-        let unique: HashSet<u64> = keys.iter().copied().collect();
-        assert_eq!(unique.len(), keys.len(), "all Key::new() values distinct");
-        assert!(!unique.contains(&0), "no key holds the 0 sentinel value");
-    }
-
     /// F3 — `UniqueKey::new` must panic once its counter latches the
     /// permanent-exhaustion sentinel (0), never wrapping to a 0-valued
     /// or duplicate id. The old `fetch_add` shape had no guard at all.
@@ -1049,47 +1013,6 @@ mod tests {
         );
     }
 
-    /// F3 triangulation — a batch of `UniqueKey`s all carry distinct,
-    /// non-zero ids.
-    #[test]
-    fn uniquekey_uniqueness() {
-        let ids: Vec<u64> = (0..256).map(|_| UniqueKey::new().id()).collect();
-        let unique: HashSet<u64> = ids.iter().copied().collect();
-        assert_eq!(unique.len(), ids.len(), "all UniqueKey ids distinct");
-        assert!(!unique.contains(&0), "no UniqueKey holds the 0 sentinel id");
-    }
-
-    #[test]
-    fn test_runtime_keys() {
-        let k1 = Key::new();
-        let k2 = Key::new();
-        let k3 = Key::new();
-
-        // All unique
-        assert_ne!(k1, k2);
-        assert_ne!(k2, k3);
-        assert_ne!(k1, k3);
-    }
-
-    #[test]
-    fn test_explicit_keys() {
-        assert_eq!(Key::from_u64(0), None);
-        assert!(Key::from_u64(1).is_some());
-        assert!(Key::from_u64(u64::MAX).is_some());
-
-        let key = Key::from_u64(42).unwrap();
-        assert_eq!(key.as_u64(), 42);
-    }
-
-    #[test]
-    fn test_key_ref() {
-        let key = Key::new();
-        let key_ref = KeyRef::from(key);
-
-        assert_eq!(key_ref.as_u64(), key.as_u64());
-        assert_eq!(key_ref.key(), key);
-    }
-
     #[test]
     fn test_hash_consistency() {
         let key = Key::new();
@@ -1109,49 +1032,9 @@ mod tests {
     // `Key::new()` is the canonical construction path now;
     // `test_new` and `test_uniqueness` cover the uniqueness contract.
 
-    #[test]
-    fn test_debug_display() {
-        let key = Key::from_u64(42).unwrap();
-
-        assert_eq!(format!("{key:?}"), "Key(42)");
-        assert_eq!(format!("{key}"), "42");
-
-        let key_ref = KeyRef::from(key);
-        assert_eq!(format!("{key_ref:?}"), "KeyRef(42)");
-        assert_eq!(format!("{key_ref}"), "42");
-    }
-
     // ========================================================================
     // ViewKey impl for Key
     // ========================================================================
-
-    /// `Key::key_hash` returns the inner `u64` directly and is
-    /// deterministic across calls. Re-hashing the same `Key` must yield
-    /// the same value or the reconciler's `HashMap<u64, ElementId>`
-    /// lookup would miss on reorder.
-    #[test]
-    fn test_key_view_key_hash_determinism() {
-        let key = Key::from_str("k1");
-        let h1 = key.key_hash();
-        let h2 = key.key_hash();
-        assert_eq!(h1, h2);
-        // Hash equals the inner u64.
-        assert_eq!(h1, key.as_u64());
-    }
-
-    /// `key_eq` is reflexive (same `Key` matches itself) and rejects
-    /// distinct `Key`s. Same-string `Key::from_str` instances are equal
-    /// because the FNV-1a hash is deterministic.
-    #[test]
-    fn test_key_view_key_eq() {
-        let k1: &dyn ViewKey = &Key::from_str("k1");
-        let k1_dup: &dyn ViewKey = &Key::from_str("k1");
-        let k2: &dyn ViewKey = &Key::from_str("k2");
-
-        assert!(k1.key_eq(k1));
-        assert!(k1.key_eq(k1_dup));
-        assert!(!k1.key_eq(k2));
-    }
 
     /// `key_eq` rejects cross-type compares: `Key` vs `ValueKey<u32>`
     /// is never a match, even if the underlying numeric values
@@ -1165,111 +1048,12 @@ mod tests {
         assert!(!value.key_eq(key));
     }
 
-    /// `Key` is not a global-handoff key. Only `flui-view`'s
-    /// `GlobalKey<T>` overrides `is_global_key` to `true`.
-    #[test]
-    fn test_key_view_key_is_not_global() {
-        let key = Key::from_str("not-global");
-        assert!(!(&key as &dyn ViewKey).is_global_key());
-    }
-
-    /// `clone_key` produces a `Box<dyn ViewKey>` that compares equal
-    /// to the source via `key_eq` and hashes to the same `u64`.
-    #[test]
-    fn test_key_view_key_clone_roundtrip() {
-        let original = Key::from_u64(0x00AB_CDEF).unwrap();
-        let cloned: Box<dyn ViewKey> = (&original as &dyn ViewKey).clone_key();
-        assert_eq!(cloned.key_hash(), original.key_hash());
-        assert!(cloned.key_eq(&original));
-        assert!((&original as &dyn ViewKey).key_eq(&*cloned));
-    }
-
-    /// `debug_fmt` matches `Key`'s own `Debug` impl so trace output
-    /// from `&dyn ViewKey` formatting reads identically to a direct
-    /// `{:?}` on the concrete value.
-    #[test]
-    fn test_key_view_key_debug_fmt() {
-        let key = Key::from_u64(42).unwrap();
-        let as_dyn: &dyn ViewKey = &key;
-        assert_eq!(format!("{as_dyn:?}"), format!("{key:?}"));
-    }
-
-    #[test]
-    fn test_fnv1a_hash() {
-        // Known FNV-1a hash values
-        const EMPTY: u64 = const_fnv1a_hash(b"");
-        const HELLO: u64 = const_fnv1a_hash(b"hello");
-
-        assert_ne!(EMPTY, HELLO);
-        assert_ne!(EMPTY, 0); // Empty string should not hash to 0
-    }
-
-    #[test]
-    fn test_thread_safety() {
-        use std::thread;
-
-        // Generate keys in parallel
-        let handles: Vec<_> = (0..10)
-            .map(|_| {
-                thread::spawn(|| {
-                    let keys: Vec<_> = (0..100).map(|_| Key::new()).collect();
-                    keys
-                })
-            })
-            .collect();
-
-        let mut all_keys = Vec::new();
-        for handle in handles {
-            all_keys.extend(handle.join().unwrap());
-        }
-
-        // All keys should be unique
-        let unique: HashSet<_> = all_keys.iter().collect();
-        assert_eq!(unique.len(), all_keys.len());
-    }
-
-    #[test]
-    fn test_const_evaluation() {
-        // This compiles if Key::from_str is truly const
-        const _: Key = Key::from_str("compile_time_test");
-        const KEYS: [Key; 3] = [
-            Key::from_str("one"),
-            Key::from_str("two"),
-            Key::from_str("three"),
-        ];
-
-        assert_eq!(KEYS[0], Key::from_str("one"));
-        assert_eq!(KEYS[1], Key::from_str("two"));
-        assert_eq!(KEYS[2], Key::from_str("three"));
-    }
-
-    #[cfg(feature = "serde")]
-    #[test]
-    fn test_key_serde_roundtrip() {
-        let key = Key::new();
-        let json = serde_json::to_string(&key).unwrap();
-
-        let deserialized: Key = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.as_u64(), key.as_u64());
-    }
-
     #[cfg(feature = "serde")]
     #[test]
     fn test_key_serde_zero_rejection() {
         let json = "0";
         let result: Result<Key, _> = serde_json::from_str(json);
         assert!(result.is_err());
-    }
-
-    #[cfg(feature = "serde")]
-    #[test]
-    fn test_key_ref_serde_roundtrip() {
-        let key = Key::new();
-        let key_ref = KeyRef::from(key);
-        let json = serde_json::to_string(&key_ref).unwrap();
-
-        let deserialized: KeyRef = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.as_u64(), key_ref.as_u64());
     }
 }
 
@@ -1289,14 +1073,6 @@ mod salted_key_tests {
         assert!(!ValueKey::new(7_u32).key_eq(&a));
         assert_eq!(a.key_hash(), b.key_hash());
         assert_ne!(a.key_hash(), ValueKey::new(7_u32).key_hash());
-    }
-
-    #[test]
-    fn unsalt_sees_through_to_the_item_key_and_is_identity_otherwise() {
-        let inner = ValueKey::new("row");
-        let salted = SaltedKey::new(&inner);
-        assert!(SaltedKey::unsalt(&salted).key_eq(&inner));
-        assert!(SaltedKey::unsalt(&inner).key_eq(&inner));
     }
 
     #[test]

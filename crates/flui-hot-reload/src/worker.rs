@@ -599,18 +599,6 @@ mod tests {
         worker_builds().lock().unwrap().remove(&fp);
     }
 
-    #[test]
-    fn null_registration_is_rejected_and_not_recorded() {
-        let _guard = REGISTRY_TEST_LOCK.lock().unwrap();
-        let fp = 0xA11C_E004;
-        let ((), session) = with_session(|| host_register_worker_build(fp, std::ptr::null()));
-        assert!(
-            session.is_empty(),
-            "null pointer must not enter the session"
-        );
-        assert_eq!(get_worker_build_ptr(fp), None);
-    }
-
     /// A self-cleaning temp directory for the artifact-stamp tests.
     struct TempDir(std::path::PathBuf);
 

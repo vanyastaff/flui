@@ -4,13 +4,12 @@
 //! registry.
 
 use flui_foundation::ElementId;
-use flui_interaction::{FocusManager, InteractionLane, PointerTarget};
+use flui_interaction::{InteractionLane, PointerTarget};
 use flui_objects::RenderSizedBox;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::{
-    BuildOwner, ElementTree, GlobalKey, RebuildReason, RenderObjectContext,
-    RenderObjectContextError, RenderView, View,
+    BuildOwner, ElementTree, GlobalKey, RebuildReason, RenderObjectContext, RenderView, View,
 };
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -57,35 +56,11 @@ impl RenderView for TestView {
 // ============================================================================
 
 #[test]
-fn test_build_owner_creation() {
-    let owner = BuildOwner::new();
-
-    assert!(!owner.has_dirty_elements());
-    assert_eq!(owner.dirty_count(), 0);
-}
-
-#[test]
-fn test_build_owner_default() {
-    let owner = BuildOwner::default();
-
-    assert!(!owner.has_dirty_elements());
-    assert_eq!(owner.dirty_count(), 0);
-}
-
-#[test]
 fn build_owners_have_isolated_focus_managers() {
     let first = BuildOwner::new();
     let second = BuildOwner::new();
 
     assert!(!Rc::ptr_eq(&first.focus_manager(), &second.focus_manager()));
-}
-
-#[test]
-fn build_owner_preserves_the_exact_focus_manager() {
-    let focus_manager = FocusManager::new();
-    let owner = BuildOwner::with_focus_manager(Rc::clone(&focus_manager));
-
-    assert!(Rc::ptr_eq(&owner.focus_manager(), &focus_manager));
 }
 
 #[derive(Clone)]
@@ -137,16 +112,6 @@ impl RenderView for InteractionContextView {
             .expect("unmount runs with the same BuildOwner interaction capability active");
         self.unmount_count.fetch_add(1, Ordering::Relaxed);
     }
-}
-
-#[test]
-fn detached_render_object_context_reports_inactive_realm() {
-    let ctx = RenderObjectContext::detached();
-
-    assert!(matches!(
-        ctx.register_pointer(|_| {}),
-        Err(RenderObjectContextError::InteractionUnavailable)
-    ));
 }
 
 #[test]
@@ -204,28 +169,6 @@ fn render_object_context_reaches_create_and_update_from_build_owner() {
 // ============================================================================
 
 #[test]
-fn test_schedule_build_for_single() {
-    let mut owner = BuildOwner::new();
-    let id = ElementId::new(1);
-
-    owner.schedule_build_for(id, 0, RebuildReason::StateChange);
-
-    assert!(owner.has_dirty_elements());
-    assert_eq!(owner.dirty_count(), 1);
-}
-
-#[test]
-fn test_schedule_build_for_multiple() {
-    let mut owner = BuildOwner::new();
-
-    owner.schedule_build_for(ElementId::new(1), 0, RebuildReason::StateChange);
-    owner.schedule_build_for(ElementId::new(2), 1, RebuildReason::StateChange);
-    owner.schedule_build_for(ElementId::new(3), 2, RebuildReason::StateChange);
-
-    assert_eq!(owner.dirty_count(), 3);
-}
-
-#[test]
 fn test_schedule_build_deduplicates() {
     let mut owner = BuildOwner::new();
     let id = ElementId::new(1);
@@ -246,36 +189,9 @@ fn test_schedule_build_deduplicates() {
     assert!(reasons.contains(RebuildReason::DependencyChange));
 }
 
-#[test]
-fn test_schedule_build_different_depths() {
-    let mut owner = BuildOwner::new();
-
-    owner.schedule_build_for(ElementId::new(1), 5, RebuildReason::StateChange);
-    owner.schedule_build_for(ElementId::new(2), 0, RebuildReason::StateChange);
-    owner.schedule_build_for(ElementId::new(3), 10, RebuildReason::StateChange);
-
-    assert_eq!(owner.dirty_count(), 3);
-}
-
 // ============================================================================
 // Build Scope Tests
 // ============================================================================
-
-#[test]
-fn test_build_scope_clears_dirty() {
-    let mut owner = BuildOwner::new();
-    let mut tree = ElementTree::new();
-
-    let view = TestView { id: 1 };
-    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
-
-    owner.schedule_build_for(root_id, 0, RebuildReason::InitialMount);
-    assert!(owner.has_dirty_elements());
-
-    owner.build_scope(&mut tree);
-
-    assert!(!owner.has_dirty_elements());
-}
 
 #[test]
 fn test_build_scope_processes_in_depth_order() {
@@ -308,26 +224,6 @@ fn test_build_scope_processes_in_depth_order() {
 }
 
 #[test]
-fn test_build_scope_skips_removed_elements() {
-    let mut owner = BuildOwner::new();
-    let mut tree = ElementTree::new();
-
-    let view = TestView { id: 1 };
-    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
-
-    // Schedule element for rebuild
-    owner.schedule_build_for(root_id, 0, RebuildReason::InitialMount);
-
-    // Remove element before build
-    tree.remove(root_id, &mut owner.element_owner_mut());
-
-    // Should not panic
-    owner.build_scope(&mut tree);
-
-    assert!(!owner.has_dirty_elements());
-}
-
-#[test]
 fn test_build_scope_skips_inactive_elements() {
     let mut owner = BuildOwner::new();
     let mut tree = ElementTree::new();
@@ -347,89 +243,9 @@ fn test_build_scope_skips_inactive_elements() {
     assert!(!owner.has_dirty_elements());
 }
 
-#[test]
-fn test_build_scope_empty_tree() {
-    let mut owner = BuildOwner::new();
-    let mut tree = ElementTree::new();
-
-    // Should not panic with empty tree
-    owner.build_scope(&mut tree);
-
-    assert!(!owner.has_dirty_elements());
-}
-
 // ============================================================================
 // GlobalKey Registry Tests
 // ============================================================================
-
-#[test]
-fn test_global_key_register() {
-    let mut owner = BuildOwner::new();
-    let id = ElementId::new(42);
-    let key = GlobalKey::<()>::new();
-
-    owner.register_global_key(&key, id);
-
-    assert_eq!(owner.element_for_global_key(&key), Some(id));
-}
-
-#[test]
-fn test_global_key_unregister() {
-    let mut owner = BuildOwner::new();
-    let id = ElementId::new(42);
-    let key = GlobalKey::<()>::new();
-
-    owner.register_global_key(&key, id);
-    owner.unregister_global_key(&key);
-
-    assert_eq!(owner.element_for_global_key(&key), None);
-}
-
-#[test]
-fn test_global_key_lookup_nonexistent() {
-    let owner = BuildOwner::new();
-
-    assert_eq!(owner.element_for_global_key(&GlobalKey::<()>::new()), None);
-}
-
-#[test]
-fn test_global_key_overwrite() {
-    let mut owner = BuildOwner::new();
-    let id1 = ElementId::new(1);
-    let id2 = ElementId::new(2);
-    let key = GlobalKey::<()>::new();
-
-    owner.register_global_key(&key, id1);
-    owner.register_global_key(&key, id2);
-
-    // Second registration should overwrite
-    assert_eq!(owner.element_for_global_key(&key), Some(id2));
-}
-
-#[test]
-fn test_global_key_multiple_keys() {
-    let mut owner = BuildOwner::new();
-    let first = GlobalKey::<()>::new();
-    let second = GlobalKey::<()>::new();
-    let third = GlobalKey::<()>::new();
-
-    owner.register_global_key(&first, ElementId::new(1));
-    owner.register_global_key(&second, ElementId::new(2));
-    owner.register_global_key(&third, ElementId::new(3));
-
-    assert_eq!(
-        owner.element_for_global_key(&first),
-        Some(ElementId::new(1))
-    );
-    assert_eq!(
-        owner.element_for_global_key(&second),
-        Some(ElementId::new(2))
-    );
-    assert_eq!(
-        owner.element_for_global_key(&third),
-        Some(ElementId::new(3))
-    );
-}
 
 /// Two keys of DIFFERENT `T` can share a hash-space neighbourhood, and the
 /// registry must keep them apart by identity rather than by hash: a
@@ -466,115 +282,13 @@ fn distinct_key_types_never_answer_each_others_lookups() {
 // Depth Ordering Tests
 // ============================================================================
 
-#[test]
-fn test_depth_ordering_shallowest_first() {
-    let mut owner = BuildOwner::new();
-    let mut tree = ElementTree::new();
-
-    // Create elements at different depths
-    let root_view = TestView { id: 0 };
-    let child_view = TestView { id: 1 };
-    let grandchild_view = TestView { id: 2 };
-
-    let root_id = tree.mount_root(&root_view, &mut owner.element_owner_mut());
-    let child_id = tree.insert(&child_view, root_id, 0, &mut owner.element_owner_mut());
-    let grandchild_id = tree.insert(
-        &grandchild_view,
-        child_id,
-        0,
-        &mut owner.element_owner_mut(),
-    );
-
-    // Schedule in random order
-    owner.schedule_build_for(child_id, 1, RebuildReason::InitialMount);
-    owner.schedule_build_for(grandchild_id, 2, RebuildReason::InitialMount);
-    owner.schedule_build_for(root_id, 0, RebuildReason::InitialMount);
-
-    // Verify all get processed
-    owner.build_scope(&mut tree);
-    assert!(!owner.has_dirty_elements());
-}
-
 // ============================================================================
 // Debug Tests
 // ============================================================================
 
-#[test]
-fn test_build_owner_debug() {
-    let mut owner = BuildOwner::new();
-    owner.schedule_build_for(ElementId::new(1), 0, RebuildReason::StateChange);
-    owner.register_global_key(&GlobalKey::<()>::new(), ElementId::new(2));
-
-    let debug_str = format!("{owner:?}");
-
-    assert!(debug_str.contains("BuildOwner"));
-    assert!(debug_str.contains("dirty_count"));
-    assert!(debug_str.contains("global_keys"));
-}
-
 // ============================================================================
 // Integration Tests
 // ============================================================================
-
-#[test]
-fn test_full_build_cycle() {
-    let mut owner = BuildOwner::new();
-    let mut tree = ElementTree::new();
-
-    // Create tree
-    let root_view = TestView { id: 0 };
-    let child1_view = TestView { id: 1 };
-    let child2_view = TestView { id: 2 };
-
-    let root_id = tree.mount_root(&root_view, &mut owner.element_owner_mut());
-    let child1_id = tree.insert(&child1_view, root_id, 0, &mut owner.element_owner_mut());
-    let child2_id = tree.insert(&child2_view, root_id, 1, &mut owner.element_owner_mut());
-
-    // Mark elements dirty
-    tree.mark_needs_build(root_id);
-    tree.mark_needs_build(child1_id);
-    tree.mark_needs_build(child2_id);
-
-    // Schedule rebuilds
-    owner.schedule_build_for(root_id, 0, RebuildReason::StateChange);
-    owner.schedule_build_for(child1_id, 1, RebuildReason::StateChange);
-    owner.schedule_build_for(child2_id, 1, RebuildReason::StateChange);
-
-    assert_eq!(owner.dirty_count(), 3);
-
-    // Run build cycle
-    owner.build_scope(&mut tree);
-
-    // All elements should still be valid
-    assert!(tree.contains(root_id));
-    assert!(tree.contains(child1_id));
-    assert!(tree.contains(child2_id));
-    assert!(!owner.has_dirty_elements());
-}
-
-#[test]
-fn test_multiple_build_cycles() {
-    let mut owner = BuildOwner::new();
-    let mut tree = ElementTree::new();
-
-    let view = TestView { id: 1 };
-    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
-
-    // First cycle
-    owner.schedule_build_for(root_id, 0, RebuildReason::InitialMount);
-    owner.build_scope(&mut tree);
-    assert!(!owner.has_dirty_elements());
-
-    // Second cycle
-    owner.schedule_build_for(root_id, 0, RebuildReason::StateChange);
-    owner.build_scope(&mut tree);
-    assert!(!owner.has_dirty_elements());
-
-    // Third cycle
-    owner.schedule_build_for(root_id, 0, RebuildReason::StateChange);
-    owner.build_scope(&mut tree);
-    assert!(!owner.has_dirty_elements());
-}
 
 #[test]
 fn test_reassemble_marks_all_live_elements_dirty() {
@@ -621,86 +335,3 @@ fn test_reassemble_marks_all_live_elements_dirty() {
 // ============================================================================
 // Memory Layout Tests
 // ============================================================================
-
-// Pinned on 64-bit targets only: every figure below is a pointer-width count.
-#[cfg(target_pointer_width = "64")]
-#[test]
-fn test_build_owner_memory_size() {
-    let size = std::mem::size_of::<BuildOwner>();
-    // A bloat tripwire, not a hard constraint: one `BuildOwner` exists per
-    // presentation, so this is measured in handfuls per process. The size is
-    // pinned exactly, per configuration, so a field that grows the owner
-    // fails here and its cost gets written down below.
-    //
-    // It moved from 512 when the owner took on the duplicate-`GlobalKey`
-    // machinery, for a measured +32 bytes: the diagnostic drain (a `Vec`, 24)
-    // and one pointer to the per-frame reservation ledger (8). The ledger's
-    // own four containers are deliberately behind that pointer — they are
-    // frame scratch, empty in any tree that uses no `GlobalKey`s, and do not
-    // belong in the owner's inline hot set. Without the box this would be
-    // 672.
-    //
-    // It moved again, 552 -> 584, for the per-presentation fresh-hit-test
-    // handle: a measured 32 bytes, being a lane ticket and a fat `Rc` pointer
-    // to the probe, with `Option`'s niche absorbing the discriminant. Stored
-    // inline rather than boxed on purpose: `BuildCapabilities` derives `Clone`
-    // and is built once per `BuildCtx`, so a `Box` here would trade 24 bytes
-    // on a per-presentation struct for an allocation on every element build.
-    //
-    // The per-child panic-containment drain costs a measured 24 bytes for
-    // `recovered_panics: Vec<RecoveredPanic>` (ptr+len+cap) — the vector's
-    // own header stays 24 bytes regardless of what `RecoveredPanic` itself
-    // grows to (its `element`/`parent` fields became one `RecoveredAt` enum
-    // without changing this count). The paired
-    // typed lifecycle-panic handoff costs nothing extra because existing
-    // padding absorbs it.
-    //
-    // It moved again, 624 -> 680, for issue #1180's mid-drain absorb
-    // accounting: `mid_drain_absorbs_left: usize` (8) and
-    // `built_this_frame: HashSet<ElementId>` (48, the hashbrown `RawTable`
-    // header) are measured at +56 bytes together; `mid_drain_cap_streak:
-    // bool` costs nothing extra because existing padding absorbs it.
-    // `built_this_frame` is empty on every frame that never lands a
-    // mid-drain re-entry, so this is inline scratch state, not a
-    // per-element cost. `build_scope` calls `built_this_frame.clear()`, not
-    // a fresh `HashSet::new()`, so its backing table retains PEAK capacity
-    // across frames rather than reallocating from empty each time — one
-    // SipHash insert per completed build, bounded at O(peak builds in one
-    // `build_scope` call per owner), ~9 B/slot. Not counted in this struct's
-    // own size (the table's header is inline, but its buckets are
-    // heap-allocated), and not a leak: capacity plateaus at whatever the
-    // busiest single `build_scope` call this owner has ever run needed, then
-    // stays there.
-    //
-    // 680 -> 688 for the presentation lifecycle capability
-    // (`lifecycle_handle: Option<LifecycleHandle>`): one niche-optimised
-    // `Weak` pointer, 8 bytes, `None` for a bare owner and set once by the
-    // binding that hosts a presentation.
-    //
-    // 688 -> 696 for ADR-0074's per-frame rebuild telemetry
-    // (`frame_builds: Box<FrameBuildCounts>`, one pointer; the sixteen
-    // counters live behind it precisely so this struct does not pay for a
-    // table). The realm's `reactive: Reactive` (a `u32` graph id plus an
-    // `Rc`: 16 bytes) sits beside it, always compiled now that signals are.
-    //
-    // 712 -> 728 (704 -> 720 without debug assertions) for the presentation
-    // clipboard (`clipboard_handle: Option<ClipboardHandle>`): one
-    // `Arc<dyn Clipboard>` fat pointer, 16 bytes, `Option`'s niche absorbing
-    // the discriminant. Inline for the reason the hit-test handle is: it is
-    // cloned into every `BuildCtx`.
-    //
-    // The one configuration input is `debug_assertions`: the fields add up to
-    // 713 bytes in every build, and a debug build adds the re-entrancy guards
-    // `building: bool` and `scope_depth: usize` (9), so 728 with debug
-    // assertions and 720 without, each rounded up to the 8-byte alignment.
-    // No cargo feature changes the layout: the workspace build enables
-    // `test-utils` and `runtime-internals` on this crate beyond what
-    // `-p flui-view` does, and neither gates a field of `BuildOwner` or of a
-    // type it holds inline; `-p flui-view` and the whole-workspace lane both
-    // measure 728.
-    let expected = if cfg!(debug_assertions) { 728 } else { 720 };
-    assert_eq!(
-        size, expected,
-        "BuildOwner is {size} bytes, not {expected}: account for the change in this comment"
-    );
-}

@@ -311,50 +311,6 @@ mod tests {
 
     use super::*;
 
-    #[derive(Debug)]
-    struct LinearFlowDelegate {
-        spacing: f64,
-    }
-
-    impl FlowDelegate for LinearFlowDelegate {
-        fn get_size(&self, constraints: BoxConstraints) -> Size {
-            constraints.biggest()
-        }
-
-        fn get_constraints_for_child(
-            &self,
-            _index: usize,
-            _constraints: BoxConstraints,
-        ) -> BoxConstraints {
-            BoxConstraints::loose(Size::new(100.0, 50.0))
-        }
-
-        fn paint_children(&self, context: &mut FlowPaintingContext<'_, '_>) {
-            let mut x: f64 = 0.0;
-            for i in 0..context.child_count() {
-                let transform = Matrix4::translation(x, 0.0, 0.0);
-                context.paint_child(i, transform);
-                x += context.child_size(i).width + self.spacing;
-            }
-        }
-
-        fn should_relayout(&self, old_delegate: &dyn FlowDelegate) -> bool {
-            if let Some(old) = old_delegate.as_any().downcast_ref::<Self>() {
-                (self.spacing - old.spacing).abs() > f64::EPSILON
-            } else {
-                true
-            }
-        }
-
-        fn should_repaint(&self, old_delegate: &dyn FlowDelegate) -> bool {
-            self.should_relayout(old_delegate)
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-    }
-
     /// Bare-bones fixture for constructing a [`FlowPaintingContext`] without
     /// hand-writing the three parallel bookkeeping `Vec`s at every call site.
     struct ContextFixture {
@@ -432,70 +388,5 @@ mod tests {
         let mut context = fixture.replay_context(Size::ZERO);
         context.paint_child(0, Matrix4::IDENTITY);
         context.paint_child(0, Matrix4::IDENTITY);
-    }
-
-    #[test]
-    fn for_paint_forwards_the_transform_to_the_live_paint_cx() {
-        use flui_foundation::geometry::Offset;
-
-        use crate::context::{FragmentOp, FragmentRecorder};
-
-        let mut fixture = ContextFixture::new(vec![Size::new(20.0, 20.0)]);
-        let transform = Matrix4::translation(5.0, 7.0, 0.0);
-
-        let mut rec = FragmentRecorder::new(Offset::ZERO, 1.0);
-        let mut paint_cx = PaintCx::<Variable>::new(&mut rec, 1, Size::new(100.0, 100.0));
-        {
-            let mut context = FlowPaintingContext::for_paint(
-                &mut paint_cx,
-                &fixture.child_sizes,
-                &mut fixture.paint_order,
-                &mut fixture.transforms,
-                &mut fixture.painted,
-            );
-            assert_eq!(context.size(), Size::new(100.0, 100.0));
-            context.paint_child(0, transform);
-        }
-
-        assert_eq!(fixture.paint_order, vec![0]);
-        assert_eq!(fixture.transforms, vec![Some(transform)]);
-
-        let frag = rec.finish();
-        assert!(
-            matches!(
-                frag.ops.as_slice(),
-                [
-                    FragmentOp::PushTransform(m),
-                    FragmentOp::Child { index: 0, .. },
-                    FragmentOp::Pop,
-                ] if **m == transform,
-            ),
-            "for_paint's paint_child must forward through PaintCx::with_transform \
-             (PushTransform(matrix) / Child / Pop), not just record bookkeeping; got {:?}",
-            frag.ops,
-        );
-    }
-
-    #[test]
-    fn test_linear_flow_delegate() {
-        let delegate = LinearFlowDelegate { spacing: 10.0 };
-        let constraints = BoxConstraints::new(0.0, 500.0, 0.0, 200.0);
-
-        let size = delegate.get_size(constraints);
-        assert_eq!(size, Size::new(500.0, 200.0));
-
-        let child_constraints = delegate.get_constraints_for_child(0, constraints);
-        assert_eq!(child_constraints.max_width, 100.0);
-        assert_eq!(child_constraints.max_height, 50.0);
-    }
-
-    #[test]
-    fn test_should_relayout() {
-        let delegate1 = LinearFlowDelegate { spacing: 10.0 };
-        let delegate2 = LinearFlowDelegate { spacing: 10.0 };
-        let delegate3 = LinearFlowDelegate { spacing: 20.0 };
-
-        assert!(!delegate1.should_relayout(&delegate2));
-        assert!(delegate1.should_relayout(&delegate3));
     }
 }

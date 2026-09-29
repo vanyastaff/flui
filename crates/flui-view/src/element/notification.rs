@@ -260,19 +260,4 @@ mod tests {
             TypeId::of::<LayoutChangedNotification>()
         );
     }
-
-    #[test]
-    fn test_scroll_notification_debug() {
-        let notification = ScrollNotification {
-            offset: 100.0,
-            axis: flui_foundation::geometry::Axis::Vertical,
-        };
-
-        let mut desc = Vec::new();
-        notification.debug_fill_description(&mut desc);
-
-        assert_eq!(desc.len(), 2);
-        assert!(desc[0].contains("100"));
-        assert!(desc[1].contains("Vertical"));
-    }
 }

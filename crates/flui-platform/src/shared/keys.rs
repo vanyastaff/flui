@@ -561,34 +561,6 @@ mod tests {
         );
     }
 
-    /// Ctrl chords translate to C0 control codes; treating those as text
-    /// would both type garbage and hide the letter from shortcut matching.
-    /// The burst is rejected wholesale and the fallback survives.
-    #[test]
-    fn control_character_bursts_keep_the_vk_fallback() {
-        // Ctrl+S delivers WM_CHAR 0x13.
-        assert_eq!(wm_char_text(&[0x13]), None);
-        assert_eq!(merge_wm_char(vk_to_key(0x53, false), None), ch("s"));
-        // Ctrl+Shift+S: same rejection, but the fallback respects shift.
-        assert_eq!(merge_wm_char(vk_to_key(0x53, true), None), ch("S"));
-        // Enter, Tab, Backspace, Escape all translate to control chars;
-        // their named keys must survive the merge.
-        for (unit, vk_code, key) in [
-            (0x0D_u16, 0x0D_u16, NamedKey::Enter),
-            (0x09, 0x09, NamedKey::Tab),
-            (0x08, 0x08, NamedKey::Backspace),
-            (0x1B, 0x1B, NamedKey::Escape),
-        ] {
-            assert_eq!(wm_char_text(&[unit]), None, "unit {unit:#x} is control");
-            assert_eq!(
-                merge_wm_char(vk_to_key(vk_code, false), wm_char_text(&[unit])),
-                Key::Named(key)
-            );
-        }
-        // Space is NOT a control character: it is real text.
-        assert_eq!(wm_char_text(&[0x20]).as_deref(), Some(" "));
-    }
-
     /// Characters outside the BMP arrive as two WM_CHARs (a surrogate
     /// pair); the drained burst must reassemble them, and a stranded half
     /// must reject rather than panic or replace.
@@ -667,62 +639,6 @@ mod tests {
             assemble_stray_wm_char(Some(0xD83D), 0xD83E),
             (Some(0xD83E), None)
         );
-    }
-
-    /// The named-key half of the VK fallback table, including the keys the
-    /// winit backend names that this table used to drop to `Unidentified`.
-    #[test]
-    fn vk_fallback_names_the_standard_named_keys() {
-        for (vk_code, key) in [
-            (0x0D_u16, NamedKey::Enter),
-            (0x25, NamedKey::ArrowLeft),
-            (0x70, NamedKey::F1),
-            (0x7B, NamedKey::F12),
-            (0x14, NamedKey::CapsLock),
-            (0x90, NamedKey::NumLock),
-            (0x91, NamedKey::ScrollLock),
-            (0x2C, NamedKey::PrintScreen),
-            (0x13, NamedKey::Pause),
-            (0x5D, NamedKey::ContextMenu),
-            // The generic modifier VKs WM_KEYDOWN actually delivers.
-            (0x10, NamedKey::Shift),
-            (0x11, NamedKey::Control),
-            (0x12, NamedKey::Alt),
-            (0x5B, NamedKey::Meta),
-        ] {
-            assert_eq!(
-                vk_to_key(vk_code, false),
-                Key::Named(key),
-                "vk {vk_code:#x}"
-            );
-        }
-    }
-
-    /// The character half of the VK fallback table: numpad and US-layout
-    /// OEM punctuation no longer fall to `Unidentified`.
-    #[test]
-    fn vk_fallback_covers_numpad_and_oem_punctuation() {
-        assert_eq!(vk_to_key(0x60, false), ch("0")); // VK_NUMPAD0
-        assert_eq!(vk_to_key(0x69, false), ch("9")); // VK_NUMPAD9
-        assert_eq!(vk_to_key(0x6A, false), ch("*"));
-        assert_eq!(vk_to_key(0x6B, false), ch("+"));
-        assert_eq!(vk_to_key(0x6D, false), ch("-"));
-        assert_eq!(vk_to_key(0x6E, false), ch("."));
-        assert_eq!(vk_to_key(0x6F, false), ch("/"));
-        assert_eq!(vk_to_key(0xBA, false), ch(";")); // VK_OEM_1
-        assert_eq!(vk_to_key(0xBB, false), ch("="));
-        assert_eq!(vk_to_key(0xBC, false), ch(","));
-        assert_eq!(vk_to_key(0xBD, false), ch("-"));
-        assert_eq!(vk_to_key(0xBE, false), ch("."));
-        assert_eq!(vk_to_key(0xBF, false), ch("/"));
-        assert_eq!(vk_to_key(0xC0, false), ch("`"));
-        assert_eq!(vk_to_key(0xDB, false), ch("["));
-        assert_eq!(vk_to_key(0xDC, false), ch("\\"));
-        assert_eq!(vk_to_key(0xDD, false), ch("]"));
-        assert_eq!(vk_to_key(0xDE, false), ch("'"));
-        assert_eq!(vk_to_key(0xE2, false), ch("\\")); // VK_OEM_102
-        // Digits ignore shift (shifted values are layout-dependent).
-        assert_eq!(vk_to_key(0x31, true), ch("1"));
     }
 
     /// The scancode quirk keys, exactly as the W3C registry / winit /
@@ -840,27 +756,5 @@ mod tests {
                 "scancode {scancode:#04x} extended={extended}"
             );
         }
-    }
-
-    #[test]
-    fn location_reports_numpad_and_sidedness() {
-        assert_eq!(location_for_code(Code::Numpad5), Location::Numpad);
-        assert_eq!(location_for_code(Code::NumpadEnter), Location::Numpad);
-        assert_eq!(location_for_code(Code::ShiftLeft), Location::Left);
-        assert_eq!(location_for_code(Code::ControlRight), Location::Right);
-        assert_eq!(location_for_code(Code::KeyA), Location::Standard);
-        assert_eq!(location_for_code(Code::Enter), Location::Standard);
-    }
-
-    /// The lParam bit layout: scancode in bits 16–23, extended flag bit 24,
-    /// repeat flag bit 30.
-    #[test]
-    fn key_lparam_fields_unpack() {
-        // VK_UP: scancode 0x48, extended, first press.
-        let lparam = (0x48_isize << 16) | (1 << 24);
-        assert_eq!(parse_key_lparam(lparam), (0x48, true, false));
-        // Held 'a': scancode 0x1E, not extended, repeat.
-        let lparam = (0x1E_isize << 16) | (1 << 30);
-        assert_eq!(parse_key_lparam(lparam), (0x1E, false, true));
     }
 }

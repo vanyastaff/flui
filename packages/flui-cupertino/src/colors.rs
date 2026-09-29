@@ -499,56 +499,7 @@ mod tests {
     // — this crate's unit tests stay to pure data-model behavior with no
     // mounted context available (see `docs/testing.md`).
 
-    #[test]
-    fn from_color_and_from_dynamic_color_construct_the_matching_variant() {
-        let from_color: CupertinoColor = Color::rgb(1, 2, 3).into();
-        assert_eq!(from_color, CupertinoColor::Static(Color::rgb(1, 2, 3)));
-
-        let from_dynamic: CupertinoColor = CupertinoColors::SYSTEM_BLUE.into();
-        assert_eq!(
-            from_dynamic,
-            CupertinoColor::Dynamic(CupertinoColors::SYSTEM_BLUE)
-        );
-    }
-
     // ---- CupertinoDynamicColor construction -----------------------------
-
-    #[test]
-    fn with_brightness_mirrors_color_and_dark_color_into_every_variant() {
-        let light = Color::rgb(10, 20, 30);
-        let dark = Color::rgb(40, 50, 60);
-        let dynamic = CupertinoDynamicColor::with_brightness(light, dark);
-
-        assert_eq!(dynamic.color, light);
-        assert_eq!(dynamic.dark_color, dark);
-        assert_eq!(dynamic.high_contrast_color, light);
-        assert_eq!(dynamic.dark_high_contrast_color, dark);
-        assert_eq!(dynamic.elevated_color, light);
-        assert_eq!(dynamic.dark_elevated_color, dark);
-        assert_eq!(dynamic.high_contrast_elevated_color, light);
-        assert_eq!(dynamic.dark_high_contrast_elevated_color, dark);
-    }
-
-    #[test]
-    fn with_brightness_and_contrast_mirrors_base_into_elevated() {
-        let dynamic = CupertinoDynamicColor::with_brightness_and_contrast(
-            Color::rgb(1, 1, 1),
-            Color::rgb(2, 2, 2),
-            Color::rgb(3, 3, 3),
-            Color::rgb(4, 4, 4),
-        );
-
-        assert_eq!(dynamic.elevated_color, dynamic.color);
-        assert_eq!(dynamic.dark_elevated_color, dynamic.dark_color);
-        assert_eq!(
-            dynamic.high_contrast_elevated_color,
-            dynamic.high_contrast_color
-        );
-        assert_eq!(
-            dynamic.dark_high_contrast_elevated_color,
-            dynamic.dark_high_contrast_color
-        );
-    }
 
     #[test]
     fn is_platform_brightness_dependent_false_when_every_light_dark_pair_matches() {

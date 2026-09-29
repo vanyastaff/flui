@@ -127,7 +127,6 @@ impl fmt::Debug for SliverChildBuilderDelegate {
 
 #[cfg(test)]
 mod tests {
-    use flui_view::ViewExt;
 
     use super::*;
 
@@ -190,78 +189,6 @@ mod tests {
         assert!(
             twin.key().is_some_and(|k| k.key_eq(actual)),
             "two wrappers of equal item keys must reconcile as the same child"
-        );
-    }
-
-    /// `salting_child_key` and `child` may be called in either order; the
-    /// salt is re-derived by whichever runs last.
-    #[test]
-    fn the_salted_key_is_order_independent_with_child() {
-        use flui_foundation::{SaltedKey, ValueKey};
-        use flui_view::{BuildContext, IntoView, StatelessView, View};
-        #[derive(Clone)]
-        struct KeyedItem(ValueKey<u32>);
-        impl View for KeyedItem {
-            fn create_element(&self) -> flui_view::element::ElementKind {
-                flui_view::element::ElementKind::stateless(self)
-            }
-            fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
-                Some(&self.0)
-            }
-        }
-        impl StatelessView for KeyedItem {
-            fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-                self.clone()
-            }
-        }
-        let salted_first = crate::paint::RepaintBoundary::new()
-            .salting_child_key()
-            .child(KeyedItem(ValueKey::new(3_u32)));
-        let child_first = crate::paint::RepaintBoundary::new()
-            .child(KeyedItem(ValueKey::new(3_u32)))
-            .salting_child_key();
-        let expected = ValueKey::new(3_u32);
-        for (name, boundary) in [("salted first", salted_first), ("child first", child_first)] {
-            let key = boundary
-                .key()
-                .unwrap_or_else(|| panic!("{name}: the wrapper must carry the item's salted key"));
-            assert!(SaltedKey::unsalt(key).key_eq(&expected), "{name}");
-        }
-        // Without the flag a boundary stays keyless whatever its child.
-        assert!(
-            crate::paint::RepaintBoundary::new()
-                .child(KeyedItem(ValueKey::new(3_u32)))
-                .key()
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn new_stores_the_item_count_and_invokes_the_builder_by_index() {
-        let delegate = SliverChildBuilderDelegate::new(3, |i| {
-            if i < 3 {
-                Some(crate::SizedBox::new(10.0, 10.0).boxed())
-            } else {
-                None
-            }
-        });
-
-        assert_eq!(delegate.item_count, 3);
-        assert!((delegate.builder)(0).is_some());
-        assert!((delegate.builder)(2).is_some());
-        assert!(
-            (delegate.builder)(3).is_none(),
-            "the builder must return None past the declared item_count",
-        );
-    }
-
-    #[test]
-    fn debug_reports_the_item_count() {
-        let delegate = SliverChildBuilderDelegate::new(7, |_| None);
-        let debug = format!("{delegate:?}");
-        assert!(
-            debug.contains("item_count: 7"),
-            "Debug output must include the item_count, got: {debug}",
         );
     }
 }

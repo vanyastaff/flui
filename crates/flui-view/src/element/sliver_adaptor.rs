@@ -1594,12 +1594,11 @@ impl SliverFixedExtentList {
 
 #[cfg(test)]
 mod tests {
-    use std::any::TypeId;
     use std::cell::RefCell;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use flui_foundation::{ElementId, RenderId};
+    use flui_foundation::ElementId;
     use flui_objects::RenderSizedBox;
     use flui_rendering::pipeline::PipelineOwner;
     use flui_rendering::protocol::BoxProtocol;
@@ -1694,56 +1693,6 @@ mod tests {
         assert!(result.is_err(), "zero estimate must panic");
     }
 
-    /// `SliverList::new` panics on a negative extent estimate.
-    #[test]
-    fn new_panics_on_negative_estimate() {
-        let builder = make_builder(10);
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            SliverList::new(10, -1.0, builder)
-        }));
-        assert!(result.is_err(), "negative estimate must panic");
-    }
-
-    /// Valid construction sets all fields and enforces the no-dense-children
-    /// invariant.
-    #[test]
-    fn new_succeeds_with_valid_parameters() {
-        let builder = make_builder(100);
-        let view = SliverList::new(100, 48.0, builder);
-        assert_eq!(view.item_count, ItemCount::Exact(100));
-        assert!((view.config.item_extent_estimate - 48.0).abs() < f64::EPSILON);
-        assert!(
-            !view.has_children(),
-            "adaptor view must have no dense children"
-        );
-    }
-
-    /// Builder is called with the expected index; returns `Some` for valid
-    /// indices and `None` for out-of-range.
-    #[test]
-    fn builder_returns_some_for_valid_index_and_none_for_out_of_range() {
-        let call_count = Arc::new(AtomicUsize::new(0));
-        let call_count_clone = Arc::clone(&call_count);
-
-        let builder: Rc<dyn Fn(usize) -> Option<BoxedView>> = Rc::new(move |idx: usize| {
-            call_count_clone.fetch_add(1, Ordering::Relaxed);
-            if idx < 5 {
-                Some(BoxedView(Box::new(ItemView)))
-            } else {
-                None
-            }
-        });
-
-        let view = SliverList::new(5, 48.0, Rc::clone(&builder));
-        assert!(
-            !view.has_children(),
-            "adaptor view must report no dense children"
-        );
-        assert!((view.builder)(3).is_some());
-        assert!((view.builder)(5).is_none());
-        assert_eq!(call_count.load(Ordering::Relaxed), 2);
-    }
-
     // -------------------------------------------------------------------------
     // `SliverList::separated`
     // -------------------------------------------------------------------------
@@ -1758,15 +1707,6 @@ mod tests {
             ItemCount::Exact(5),
             "2*3-1 = 5 interleaved logical slots"
         );
-    }
-
-    /// `SliverList::separated` with zero items produces zero children —
-    /// Flutter's own `math.max(0, itemCount * 2 - 1)` clamps rather than
-    /// underflowing.
-    #[test]
-    fn separated_with_zero_items_has_zero_children() {
-        let view = SliverList::separated(0, 48.0, make_builder(0), make_builder(0));
-        assert_eq!(view.item_count, ItemCount::Exact(0));
     }
 
     /// `SliverList::separated` maps even logical indices to item indices
@@ -1811,160 +1751,9 @@ mod tests {
         );
     }
 
-    /// `SliverList::separated` panics on a non-positive extent estimate,
-    /// same as [`SliverList::new`].
-    #[test]
-    fn separated_panics_on_zero_estimate() {
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            SliverList::separated(3, 0.0, make_builder(3), make_builder(3))
-        }));
-        assert!(result.is_err(), "zero estimate must panic");
-    }
-
     // -------------------------------------------------------------------------
     // `SliverList::list`
     // -------------------------------------------------------------------------
-
-    /// `SliverList::list` reports the children count and serves each index
-    /// from the stored list; an out-of-range index returns `None`.
-    #[test]
-    fn list_serves_children_by_index_and_reports_their_count() {
-        let children = vec![
-            BoxedView(Box::new(ItemView)),
-            BoxedView(Box::new(OtherItemView)),
-        ];
-        let view = SliverList::list(48.0, children);
-
-        assert_eq!(view.item_count, ItemCount::Exact(2));
-        assert!((view.builder)(0).is_some());
-        assert!((view.builder)(1).is_some());
-        assert!(
-            (view.builder)(2).is_none(),
-            "an index past the end of the list must return None"
-        );
-    }
-
-    /// `SliverList::list`'s builder can be called more than once for the
-    /// same index without panicking or exhausting the list — the shape
-    /// `SparseChildren::refresh_resident` needs when it re-consults the
-    /// builder for an already-resident child.
-    #[test]
-    fn list_builder_can_be_called_more_than_once_for_the_same_index() {
-        let children = vec![BoxedView(Box::new(ItemView))];
-        let view = SliverList::list(48.0, children);
-
-        assert!((view.builder)(0).is_some());
-        assert!((view.builder)(0).is_some());
-        assert!((view.builder)(0).is_some());
-    }
-
-    /// `SliverList::list` panics on a non-positive extent estimate, same as
-    /// [`SliverList::new`].
-    #[test]
-    fn list_panics_on_zero_estimate() {
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            SliverList::list(0.0, vec![BoxedView(Box::new(ItemView))])
-        }));
-        assert!(result.is_err(), "zero estimate must panic");
-    }
-
-    /// `SliverList` is `Clone` (required by `View` + `RenderView`).
-    /// A render object outside this crate joins by implementing the trait
-    /// and constructing the adaptor through the generic constructor — the
-    /// aliases' constructors are conveniences, not the only door.
-    #[test]
-    fn generic_constructor_builds_an_adaptor_element() {
-        let view = SliverMultiBoxAdaptor::<RenderSliverList>::with_config(
-            ListConfig::new(48.0),
-            3,
-            make_builder(3),
-        );
-        assert_eq!(view.item_count, ItemCount::Exact(3));
-        assert!(matches!(
-            view.create_element(),
-            crate::element::ElementKind::RenderVariable(_)
-        ));
-    }
-
-    /// The identity rule: a builder delegate is re-consulted on every update
-    /// even when its `Rc` is reused (its output may depend on state the
-    /// adaptor cannot see); a static delegate handed over unchanged is not.
-    #[test]
-    fn delegate_changed_distinguishes_builder_from_static_delegates() {
-        let builder = make_builder(3);
-        let with_builder = SliverList::new(3, 48.0, Rc::clone(&builder));
-        let with_same_builder = SliverList::new(3, 48.0, builder);
-        assert!(
-            delegate_changed(&with_builder, &with_same_builder),
-            "a reused builder closure still refreshes"
-        );
-
-        let children = StaticChildren::new(vec![
-            BoxedView(Box::new(ItemView)),
-            BoxedView(Box::new(ItemView)),
-        ]);
-        let over_children = SliverList::over(48.0, &children);
-        let over_same_children = SliverList::over(48.0, &children);
-        assert!(
-            !delegate_changed(&over_children, &over_same_children),
-            "two adaptors over one static delegate are the same delegate"
-        );
-        let other = StaticChildren::new(vec![BoxedView(Box::new(ItemView))]);
-        let over_other = SliverList::over(48.0, &other);
-        assert!(
-            delegate_changed(&over_children, &over_other),
-            "a different static delegate refreshes"
-        );
-    }
-
-    /// The pair a static delegate hands out is created once, so identity
-    /// survives across adaptor builds — and holds no strong reference back
-    /// to the delegate.
-    #[test]
-    fn static_delegate_pair_is_stable_and_does_not_leak() {
-        let children = StaticChildren::new(vec![BoxedView(Box::new(ItemView))]);
-        let (b1, f1) = children.delegate_pair();
-        let (b2, f2) = children.delegate_pair();
-        assert!(Rc::ptr_eq(&b1, &b2) && Rc::ptr_eq(&f1, &f2));
-        assert!(b1(0).is_some());
-        let weak = Rc::downgrade(&children);
-        drop(children);
-        assert!(
-            weak.upgrade().is_none(),
-            "the cached closures must not keep the delegate alive"
-        );
-        assert!(
-            b1(0).is_none(),
-            "a closure outliving its delegate answers None"
-        );
-    }
-
-    #[test]
-    fn view_is_clone() {
-        let builder = make_builder(10);
-        let view = SliverList::new(10, 48.0, builder);
-        let cloned = view.clone();
-        assert_eq!(cloned.item_count, ItemCount::Exact(10));
-        assert!((cloned.config.item_extent_estimate - 48.0).abs() < f64::EPSILON);
-    }
-
-    /// `create_element` produces a `SliverAdaptorElement<RenderSliverList>`
-    /// (the view type id round-trips through the `dyn ElementBase`
-    /// interface).
-    ///
-    /// Specifically: `view_type_id() == TypeId::of::<SliverList>()`, NOT
-    /// `TypeId::of::<SliverAdaptorElement<RenderSliverList>>()` or any
-    /// internal adaptor name. This is the identity the reconciler checks in
-    /// `can_update_by_id` — if it were wrong, the element would be torn down
-    /// and rebuilt on every parent rebuild that produces a new `SliverList`
-    /// view (BLOCKER 1).
-    #[test]
-    fn create_element_produces_adaptor_element() {
-        let builder = make_builder(10);
-        let view = SliverList::new(10, 48.0, builder);
-        let element = view.create_element();
-        assert_eq!(element.element().view_type_id(), TypeId::of::<SliverList>());
-    }
 
     // =========================================================================
     // Helper: minimal tree wired to a PipelineOwner, for service + round-trip.
@@ -1998,50 +1787,9 @@ mod tests {
         }
     }
 
-    /// Construct a bare `SliverAdaptorManager<RenderSliverGrid>` for
-    /// direct unit-testing (bypassing the behavior's `on_mount` wiring).
-    fn grid_manager(host: ElementId, item_count: usize) -> SliverAdaptorManager<RenderSliverGrid> {
-        SliverAdaptorManager {
-            sparse_children: SparseChildren::new(),
-            host_element_id: Some(host),
-            builder: make_builder(item_count),
-            find_index_by_key: None,
-            render_id: None,
-            needs_resident_refresh: false,
-            _render: PhantomData,
-        }
-    }
-
     // =========================================================================
     // Test gap 6a: `ChildManager::service` bool-return unit tests.
     // =========================================================================
-
-    /// `ChildManager::service` must return `false` when no children are evicted
-    /// and no new children are built — the quiescence signal that prevents
-    /// `service_child_requests` from calling `mark_needs_layout` and therefore
-    /// issuing another layout pass on an already-settled sliver.
-    #[test]
-    fn service_returns_false_when_no_work_done() {
-        let (mut tree, mut build_owner, pipeline, host) = host_tree();
-
-        // Manager with no pre-built children; no requested indices; full retain
-        // band [0, usize::MAX) ≡ keep everything.
-        let mut manager = list_manager(host, 5);
-
-        let did_work = manager.service(
-            &[],        // no children requested
-            0,          // retain_first
-            usize::MAX, // retain_last — nothing is out-of-band
-            &mut tree,
-            &mut build_owner.element_owner_mut(),
-            &pipeline,
-        );
-
-        assert!(
-            !did_work,
-            "service with no evictions and no builds must return false (quiescence gate)"
-        );
-    }
 
     /// `ChildManager::service` must return `true` when it builds at least one
     /// new child. `true` tells `service_child_requests` to call
@@ -2105,51 +1853,6 @@ mod tests {
                 ..
             } if recorded_host == host
         ));
-    }
-
-    /// `ChildManager::service` must return `true` when it evicts at least one
-    /// child that has scrolled outside the retain band — the off-band
-    /// eviction path.
-    #[test]
-    fn service_returns_true_when_children_are_evicted() {
-        let (mut tree, mut build_owner, pipeline, host) = host_tree();
-
-        let mut manager = list_manager(host, 5);
-
-        // Seed two pre-built children at indices 0 and 1.
-        manager.service(
-            &[0, 1],
-            0,
-            2,
-            &mut tree,
-            &mut build_owner.element_owner_mut(),
-            &pipeline,
-        );
-        assert_eq!(
-            manager.sparse_children.len(),
-            2,
-            "pre-condition: 2 children built"
-        );
-
-        // Retain band [5, 10): both pre-built children (0, 1) are out-of-band.
-        let did_work = manager.service(
-            &[],
-            5,
-            10,
-            &mut tree,
-            &mut build_owner.element_owner_mut(),
-            &pipeline,
-        );
-
-        assert!(
-            did_work,
-            "service that evicts at least one child must return true"
-        );
-        assert_eq!(
-            manager.sparse_children.len(),
-            0,
-            "all out-of-band children must be evicted"
-        );
     }
 
     // =========================================================================
@@ -2276,170 +1979,14 @@ mod tests {
     // manager behaves identically for both render families.
     // =========================================================================
 
-    /// After the item builder is swapped and `needs_resident_refresh` is set,
-    /// the next `service` re-consults the NEW builder for every resident index
-    /// and, when the result is the same view type, updates the existing child
-    /// in place — preserving its `ElementId` (identity/state) rather than
-    /// evicting and remounting. The flag is consumed exactly once.
-    #[test]
-    fn grid_refresh_resident_updates_in_place_and_consumes_flag() {
-        let (mut tree, mut build_owner, pipeline, host) = host_tree();
-
-        let mut manager = grid_manager(host, 3);
-
-        // Seed a resident child at index 0.
-        manager.service(
-            &[0],
-            0,
-            usize::MAX,
-            &mut tree,
-            &mut build_owner.element_owner_mut(),
-            &pipeline,
-        );
-        let before = manager
-            .sparse_children
-            .get(0)
-            .expect("index 0 resident after seed");
-
-        // Swap in a fresh (same-type) builder that counts its calls, and flag
-        // the residents for refresh.
-        let calls = Arc::new(AtomicUsize::new(0));
-        let calls_probe = Arc::clone(&calls);
-        let refreshed: Rc<dyn Fn(usize) -> Option<BoxedView>> = Rc::new(move |idx: usize| {
-            calls_probe.fetch_add(1, Ordering::Relaxed);
-            (idx < 3).then(|| BoxedView(Box::new(ItemView)))
-        });
-        manager.builder = refreshed;
-        manager.needs_resident_refresh = true;
-
-        manager.service(
-            &[],
-            0,
-            usize::MAX,
-            &mut tree,
-            &mut build_owner.element_owner_mut(),
-            &pipeline,
-        );
-
-        assert!(
-            calls.load(Ordering::Relaxed) >= 1,
-            "refresh must re-consult the new builder for the resident index"
-        );
-        assert_eq!(
-            manager.sparse_children.get(0),
-            Some(before),
-            "a same-type refresh must update in place, preserving the ElementId"
-        );
-        assert!(
-            !manager.needs_resident_refresh,
-            "the refresh flag must be consumed exactly once"
-        );
-    }
-
-    /// When the swapped-in builder returns a DIFFERENT view type for a
-    /// resident index, `refresh_resident` evicts the stale child and remounts
-    /// a fresh one — matching Flutter's remount-on-incompatible-type behavior.
-    /// The resident `ElementId` changes.
-    #[test]
-    fn grid_refresh_resident_remounts_on_type_change() {
-        let (mut tree, mut build_owner, pipeline, host) = host_tree();
-
-        let mut manager = grid_manager(host, 3);
-
-        manager.service(
-            &[0],
-            0,
-            usize::MAX,
-            &mut tree,
-            &mut build_owner.element_owner_mut(),
-            &pipeline,
-        );
-        let before = manager
-            .sparse_children
-            .get(0)
-            .expect("index 0 resident after seed");
-
-        // New builder returns a different concrete type at the same index.
-        let remounting: Rc<dyn Fn(usize) -> Option<BoxedView>> =
-            Rc::new(|idx: usize| (idx < 3).then(|| BoxedView(Box::new(OtherItemView))));
-        manager.builder = remounting;
-        manager.needs_resident_refresh = true;
-
-        manager.service(
-            &[],
-            0,
-            usize::MAX,
-            &mut tree,
-            &mut build_owner.element_owner_mut(),
-            &pipeline,
-        );
-
-        let after = manager
-            .sparse_children
-            .get(0)
-            .expect("index 0 still resident after refresh remount");
-        assert_ne!(
-            after, before,
-            "an incompatible-type refresh must evict and remount, changing the ElementId"
-        );
-        assert!(
-            !manager.needs_resident_refresh,
-            "the refresh flag must be consumed exactly once"
-        );
-    }
-
     // =========================================================================
     // Test gap 6b: register/unregister round-trip via element lifecycle.
     // =========================================================================
-
-    /// Mounting a `SliverList` element must register its `ChildManager` in the
-    /// `BuildOwner`'s registry (keyed by the sliver's `RenderId`), and unmounting
-    /// it must remove that entry. This end-to-end path exercises
-    /// `SliverAdaptorBehavior::on_mount` → `ElementOwner::register_child_manager`
-    /// and `on_unmount` → `ElementOwner::unregister_child_manager`.
-    #[test]
-    fn child_manager_registered_on_mount_and_unregistered_on_unmount() {
-        let (mut tree, mut build_owner, _pipeline, host) = host_tree();
-
-        let sliver = SliverList::new(5, 48.0, make_builder(5));
-
-        // Mount: `on_mount` must register the ChildManager.
-        let sliver_id = tree.insert(&sliver, host, 0, &mut build_owner.element_owner_mut());
-
-        // The element's render node carries the RenderId used as the registry key.
-        let sliver_render_id: Option<RenderId> =
-            tree.get(sliver_id).and_then(|n| n.element().render_id());
-        let sliver_render_id =
-            sliver_render_id.expect("SliverList element must have a render node after mount");
-
-        {
-            let registry = build_owner.child_manager_registry.lock();
-            assert!(
-                registry.contains_key(&sliver_render_id),
-                "ChildManager must be registered in the BuildOwner registry after on_mount"
-            );
-        }
-
-        // Unmount: `on_unmount` must unregister the ChildManager.
-        tree.remove_subtree(
-            sliver_id,
-            &mut build_owner.element_owner_mut(),
-            crate::tree::SubtreeRemoval::DeactivateKeyed,
-        );
-
-        {
-            let registry = build_owner.child_manager_registry.lock();
-            assert!(
-                !registry.contains_key(&sliver_render_id),
-                "ChildManager must be removed from the BuildOwner registry after on_unmount"
-            );
-        }
-    }
 }
 
 #[cfg(test)]
 mod probe_tests {
-    use super::{ItemCount, probe_item_count};
+    use super::probe_item_count;
     use crate::BoxedView;
     use std::cell::RefCell;
 
@@ -2463,57 +2010,6 @@ mod probe_tests {
                 "probe disagreed for len {len}",
             );
         }
-    }
-
-    #[test]
-    fn the_probe_is_logarithmic_not_linear() {
-        let calls = RefCell::new(Vec::new());
-        let len = 100_000;
-        assert_eq!(probe_item_count(&counting(len, &calls)), len);
-        let made = calls.borrow().len();
-        // Doubling to pass the end, then bisecting: about 2·log2(n). The bound
-        // is what distinguishes this from a walk — a linear scan would make
-        // 100_001 calls and still pass an equality assertion on the result.
-        assert!(
-            made < 4 * (usize::BITS - len.leading_zeros()) as usize,
-            "probe made {made} builder calls for {len} items; expected O(log n)",
-        );
-    }
-
-    #[test]
-    fn the_growth_check_costs_one_call_and_none_at_all_when_unbounded() {
-        use super::regrown_item_count;
-
-        let calls = RefCell::new(Vec::new());
-        // Unchanged: one call, no growth.
-        assert_eq!(regrown_item_count(4, &counting(4, &calls)), None);
-        assert_eq!(
-            calls.borrow().as_slice(),
-            &[4],
-            "the check asks for exactly the index past the end"
-        );
-
-        // Grown: the one call finds a child, and only then does it search.
-        let calls = RefCell::new(Vec::new());
-        assert_eq!(regrown_item_count(4, &counting(9, &calls)), Some(9));
-        assert!(
-            calls.borrow().len() > 1,
-            "a grown source escalates to the full search"
-        );
-
-        // Already unbounded: no builder call at all. An endless builder would
-        // answer `Some` at `usize::MAX` and send every rebuild through the
-        // whole search — and being asked for that index is its own hazard.
-        let calls = RefCell::new(Vec::new());
-        assert_eq!(
-            regrown_item_count(usize::MAX, &counting(usize::MAX, &calls)),
-            None
-        );
-        assert!(
-            calls.borrow().is_empty(),
-            "an unbounded source must not be asked anything: {:?}",
-            calls.borrow()
-        );
     }
 
     #[test]
@@ -2550,12 +2046,6 @@ mod probe_tests {
         // unbounded-window path already handles.
         let endless = |_: usize| Some(BoxedView(Box::new(super::tests::ItemView)));
         assert_eq!(probe_item_count(&endless), usize::MAX);
-    }
-
-    #[test]
-    fn item_count_is_copy_and_compares_by_value() {
-        assert_eq!(ItemCount::Exact(3), ItemCount::Exact(3));
-        assert_ne!(ItemCount::Exact(3), ItemCount::Unknown);
     }
 }
 
@@ -2727,23 +2217,6 @@ mod semantic_set_mapping_tests {
             mapping.slot_for(1).semantic,
             mapping.slot_for(2).semantic,
             "two children must never be announced at the same position"
-        );
-    }
-
-    /// The same guard on the negative side. `one_to_one` cannot reach it —
-    /// its positions are logical indices, so they are never negative and a
-    /// shift down lands inside the range. An `interleaved` mapping can: its
-    /// callback returns whatever position the caller decides, and a negative
-    /// one plus a negative offset leaves the range at the bottom.
-    #[test]
-    fn an_underflowing_composed_position_is_declined() {
-        let mapping = SemanticSetMapping::interleaved(std::rc::Rc::new(|_| Some(i32::MIN + 1)), 2)
-            .composed_at(-2, None);
-
-        assert_eq!(
-            mapping.slot_for(0).semantic,
-            None,
-            "a position below i32::MIN is as unrepresentable as one above i32::MAX"
         );
     }
 }

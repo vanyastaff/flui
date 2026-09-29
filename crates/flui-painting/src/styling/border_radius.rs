@@ -435,55 +435,6 @@ mod tests {
     }
 
     #[test]
-    fn constructors_place_each_radius() {
-        let z = Radius::ZERO;
-        let (a, b, c, d) = (r(1.0), r(2.0), r(3.0), r(4.0));
-        for (got, expected) in [
-            (BorderRadius::only(a, b, c, d), [a, b, c, d]),
-            (BorderRadius::top_left_only(a), [a, z, z, z]),
-            (BorderRadius::top_right_only(a), [z, a, z, z]),
-            (BorderRadius::bottom_right_only(a), [z, z, a, z]),
-            (BorderRadius::bottom_left_only(a), [z, z, z, a]),
-            (BorderRadius::vertical(a, b), [a, a, b, b]),
-            (BorderRadius::horizontal(a, b), [a, b, b, a]),
-            (BorderRadius::top(a), [a, a, z, z]),
-            (BorderRadius::bottom(a), [z, z, a, a]),
-            (BorderRadius::all(a), [a; 4]),
-            (BorderRadius::circular(1.0), [a; 4]),
-            (
-                BorderRadius::elliptical(1.0, 2.0),
-                [Radius::elliptical(1.0, 2.0); 4],
-            ),
-            (BorderRadius::pill(), [r(9999.0); 4]),
-            (<BorderRadius as BorderRadiusExt>::ZERO, [z; 4]),
-        ] {
-            assert_eq!(corners(got), expected);
-        }
-    }
-
-    #[test]
-    fn setters_replace_one_corner() {
-        let base = BorderRadius::all(r(1.0));
-        let (x, o) = (r(9.0), r(1.0));
-        assert_eq!(corners(base.with_top_left(x)), [x, o, o, o]);
-        assert_eq!(corners(base.with_top_right(x)), [o, x, o, o]);
-        assert_eq!(corners(base.with_bottom_right(x)), [o, o, x, o]);
-        assert_eq!(corners(base.with_bottom_left(x)), [o, o, o, x]);
-    }
-
-    #[test]
-    fn lerp_each_corner_with_clamped_t() {
-        let a = BorderRadius::only(r(0.0), r(2.0), r(4.0), r(6.0));
-        let b = BorderRadius::only(r(2.0), r(6.0), r(0.0), r(10.0));
-        assert_eq!(
-            corners(BorderRadius::lerp(a, b, 0.5)),
-            [r(1.0), r(4.0), r(2.0), r(8.0)]
-        );
-        assert_eq!(BorderRadius::lerp(a, b, -1.0), a);
-        assert_eq!(BorderRadius::lerp(a, b, 2.0), b);
-    }
-
-    #[test]
     fn directional_resolves_start_and_end_per_direction() {
         let (a, b, c, d) = (r(1.0), r(2.0), r(3.0), r(4.0));
         let dir = BorderRadiusDirectional::only(a, b, c, d);

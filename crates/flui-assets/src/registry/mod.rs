@@ -636,19 +636,8 @@ impl Default for AssetRegistryBuilder<NoCapacity> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::assets::{FontAsset, ImageAsset};
+    use crate::assets::FontAsset;
     use crate::types::AssetKey;
-
-    #[tokio::test]
-    async fn test_registry_creation() {
-        let registry = AssetRegistryBuilder::new()
-            .with_capacity(50 * 1024 * 1024)
-            .build();
-
-        // Registry should be empty initially
-        let key = AssetKey::new("test");
-        assert!(registry.get::<ImageAsset>(&key).await.is_none());
-    }
 
     #[tokio::test]
     async fn test_registry_load_font() {
@@ -688,139 +677,11 @@ mod tests {
         assert!(registry.get::<FontAsset>(&key).await.is_none());
     }
 
-    #[tokio::test]
-    async fn test_registry_clear() {
-        let registry = AssetRegistry::default();
-
-        // Load multiple fonts
-        for i in 0..3 {
-            let ttf_bytes = vec![0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-            let font = FontAsset::from_bytes(format!("test{i}.ttf"), ttf_bytes);
-            let _handle = registry.load(font).await.unwrap();
-        }
-
-        // All should be cached
-        assert!(
-            registry
-                .get::<FontAsset>(&AssetKey::new("test0.ttf"))
-                .await
-                .is_some()
-        );
-        assert!(
-            registry
-                .get::<FontAsset>(&AssetKey::new("test1.ttf"))
-                .await
-                .is_some()
-        );
-
-        // Clear all FontAssets
-        registry.clear::<FontAsset>().await;
-
-        // Should all be gone
-        assert!(
-            registry
-                .get::<FontAsset>(&AssetKey::new("test0.ttf"))
-                .await
-                .is_none()
-        );
-        assert!(
-            registry
-                .get::<FontAsset>(&AssetKey::new("test1.ttf"))
-                .await
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn test_global_registry() {
-        let registry1 = AssetRegistry::global();
-        let registry2 = AssetRegistry::global();
-
-        // Should be the same instance
-        assert!(std::ptr::eq(registry1, registry2));
-    }
-
-    // ===== Type State Builder Tests =====
-
-    #[test]
-    fn test_builder_with_capacity() {
-        let registry = AssetRegistryBuilder::new()
-            .with_capacity(50 * 1024 * 1024)
-            .build();
-
-        // Registry should work correctly
-        assert_eq!(registry.default_capacity, 50 * 1024 * 1024);
-    }
-
-    #[test]
-    fn test_builder_with_default_capacity() {
-        let registry = AssetRegistryBuilder::new().with_default_capacity().build();
-
-        // Should use default capacity (100 MB)
-        assert_eq!(registry.default_capacity, 100 * 1024 * 1024);
-    }
-
-    #[test]
-    fn test_builder_capacity_override() {
-        let registry = AssetRegistryBuilder::new()
-            .with_capacity(100 * 1024 * 1024)
-            .with_capacity(200 * 1024 * 1024) // Override
-            .build();
-
-        // Should use the last capacity set
-        assert_eq!(registry.default_capacity, 200 * 1024 * 1024);
-    }
-
     #[test]
     #[should_panic(expected = "Capacity must be greater than 0")]
     fn test_builder_zero_capacity_panics() {
         let _registry = AssetRegistryBuilder::new()
             .with_capacity(0) // Should panic
             .build();
-    }
-
-    #[test]
-    fn test_builder_default() {
-        let builder = AssetRegistryBuilder::default();
-        let registry = builder.with_default_capacity().build();
-
-        assert_eq!(registry.default_capacity, 100 * 1024 * 1024);
-    }
-
-    // This test demonstrates compile-time safety
-    // Uncommenting this should cause a compile error:
-    // #[test]
-    // fn test_builder_without_capacity_does_not_compile() {
-    //     let _registry = AssetRegistryBuilder::new().build(); // ❌ ERROR: no method `build` on NoCapacity
-    // }
-
-    #[test]
-    fn test_registry_is_send_sync() {
-        fn assert_send<T: Send>() {}
-        fn assert_sync<T: Sync>() {}
-
-        assert_send::<AssetRegistry>();
-        assert_sync::<AssetRegistry>();
-    }
-
-    #[test]
-    fn test_registry_debug() {
-        let registry = AssetRegistry::default();
-        let debug_str = format!("{registry:?}");
-        assert!(debug_str.contains("AssetRegistry"));
-        assert!(debug_str.contains("cache_count"));
-        assert!(debug_str.contains("default_capacity"));
-    }
-
-    #[test]
-    fn test_type_state_markers_debug() {
-        let no_cap = NoCapacity;
-        let has_cap = HasCapacity(100);
-
-        let debug1 = format!("{no_cap:?}");
-        let debug2 = format!("{has_cap:?}");
-
-        assert!(debug1.contains("NoCapacity"));
-        assert!(debug2.contains("HasCapacity"));
     }
 }

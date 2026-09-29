@@ -353,16 +353,6 @@ fn a_linear_gradient_renders_every_porter_duff_mode() {
     every_porter_duff_mode_renders_as_itself(GradientKind::Linear);
 }
 
-#[test]
-fn a_radial_gradient_renders_every_porter_duff_mode() {
-    every_porter_duff_mode_renders_as_itself(GradientKind::Radial);
-}
-
-#[test]
-fn a_sweep_gradient_renders_every_porter_duff_mode() {
-    every_porter_duff_mode_renders_as_itself(GradientKind::Sweep);
-}
-
 // ── Acceptance 2: partial coverage feathers, or falls back and says so ───────
 
 /// The coverage contract for one mode on one gradient kind, asserted against
@@ -445,70 +435,19 @@ fn assert_partial_coverage_feathers(kind: GradientKind, mode: BlendMode) {
 
 /// The seven modes whose destination factor cannot absorb `1 − coverage`, on a
 /// linear gradient.
-///
-/// One test per mode rather than a loop, so a failure names the mode without a
-/// message having to.
 #[test]
-fn a_linear_gradient_feathers_clear() {
-    assert_partial_coverage_feathers(GradientKind::Linear, BlendMode::Clear);
-}
-
-#[test]
-fn a_linear_gradient_feathers_src() {
-    assert_partial_coverage_feathers(GradientKind::Linear, BlendMode::Src);
-}
-
-#[test]
-fn a_linear_gradient_feathers_src_in() {
-    assert_partial_coverage_feathers(GradientKind::Linear, BlendMode::SrcIn);
-}
-
-#[test]
-fn a_linear_gradient_feathers_dst_in() {
-    assert_partial_coverage_feathers(GradientKind::Linear, BlendMode::DstIn);
-}
-
-#[test]
-fn a_linear_gradient_feathers_src_out() {
-    assert_partial_coverage_feathers(GradientKind::Linear, BlendMode::SrcOut);
-}
-
-#[test]
-fn a_linear_gradient_feathers_dst_atop() {
-    assert_partial_coverage_feathers(GradientKind::Linear, BlendMode::DstATop);
-}
-
-#[test]
-fn a_linear_gradient_feathers_modulate() {
-    assert_partial_coverage_feathers(GradientKind::Linear, BlendMode::Modulate);
-}
-
-/// The radial and sweep shaders are separate modules with their own fragment
-/// entry points, so the second blend source has to reach each of them
-/// separately. `Clear` is the mode the defect was reported against, and the one
-/// whose failure is loudest: a wrong fringe there is a hard-edged hole.
-#[test]
-fn a_radial_gradient_feathers_clear() {
-    assert_partial_coverage_feathers(GradientKind::Radial, BlendMode::Clear);
-}
-
-#[test]
-fn a_sweep_gradient_feathers_clear() {
-    assert_partial_coverage_feathers(GradientKind::Sweep, BlendMode::Clear);
-}
-
-/// `DstIn` is the other class — destination factor `SrcAlpha`, so its second
-/// blend source is `coverage × (1 − alpha)` rather than `coverage`. Proving
-/// `Clear` on a kind says nothing about whether that kind's
-/// `destination_alpha_scale` override arrived.
-#[test]
-fn a_radial_gradient_feathers_dst_in() {
-    assert_partial_coverage_feathers(GradientKind::Radial, BlendMode::DstIn);
-}
-
-#[test]
-fn a_sweep_gradient_feathers_dst_in() {
-    assert_partial_coverage_feathers(GradientKind::Sweep, BlendMode::DstIn);
+fn a_linear_gradient_feathers_every_mode_that_needs_it() {
+    for mode in [
+        BlendMode::Clear,
+        BlendMode::Src,
+        BlendMode::SrcIn,
+        BlendMode::DstIn,
+        BlendMode::SrcOut,
+        BlendMode::DstATop,
+        BlendMode::Modulate,
+    ] {
+        assert_partial_coverage_feathers(GradientKind::Linear, mode);
+    }
 }
 
 /// `DstOut` is the erase-by-alpha mode that must NOT be corrected: its

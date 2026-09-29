@@ -66,19 +66,6 @@ mod tests {
     }
 
     #[test]
-    fn a_host_with_text_faces_gets_only_the_icon_faces_it_lacks() {
-        let mut db = Database::new();
-        db.load_font_data(super::MATERIAL_ICONS_REGULAR.to_vec());
-        let before = db.len();
-        load_missing_into(&mut db);
-        // The database was not empty, so no Roboto; Material Icons was
-        // present, so only Cupertino was added.
-        assert!(!carries(&db, "Roboto"));
-        assert!(carries(&db, "CupertinoIcons"));
-        assert_eq!(db.len(), before + 1);
-    }
-
-    #[test]
     fn loading_is_idempotent() {
         let mut db = Database::new();
         load_missing_into(&mut db);

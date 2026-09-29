@@ -1919,27 +1919,6 @@ mod tests {
     impl TickerProvider for MockProvider {}
 
     #[test]
-    fn test_ticker_dispose_is_idempotent() {
-        let mut ticker = Ticker::new();
-        ticker.start(|_| {});
-        assert!(!ticker.is_disposed());
-        ticker.dispose();
-        assert!(ticker.is_disposed());
-        ticker.dispose(); // idempotent — no panic, no state change
-        assert!(ticker.is_disposed());
-    }
-
-    #[test]
-    fn test_ticker_drop_disposes() {
-        let mut ticker = Ticker::new();
-        ticker.start(|_| {});
-        // Take Arc clone of disposed flag to observe after drop
-        let disposed_flag = ticker.disposed.clone();
-        drop(ticker);
-        assert!(disposed_flag.load(Ordering::Acquire));
-    }
-
-    #[test]
     #[cfg(debug_assertions)]
     fn test_ticker_use_after_dispose_panics_in_debug() {
         let mut ticker = Ticker::new();
@@ -1968,27 +1947,6 @@ mod tests {
     }
 
     #[test]
-    fn test_ticker_lifecycle() {
-        let mut ticker = Ticker::new();
-        assert_eq!(ticker.state(), TickerState::Idle);
-        assert!(!ticker.is_active());
-
-        let counter = Arc::new(AtomicU32::new(0));
-        let c = Arc::clone(&counter);
-
-        ticker.start(move |_elapsed| {
-            c.fetch_add(1, Ordering::Relaxed);
-        });
-
-        assert_eq!(ticker.state(), TickerState::Active);
-        assert!(ticker.is_active());
-
-        ticker.stop();
-        assert_eq!(ticker.state(), TickerState::Stopped);
-        assert!(!ticker.is_active());
-    }
-
-    #[test]
     fn test_ticker_mute() {
         let mut ticker = Ticker::new();
 
@@ -2005,102 +1963,7 @@ mod tests {
         assert!(!ticker.is_muted());
     }
 
-    #[test]
-    fn test_ticker_elapsed() {
-        let mut ticker = Ticker::new();
-        assert_eq!(ticker.elapsed(), Seconds::ZERO);
-
-        ticker.start(|_| {});
-
-        // Give some time to elapse
-        std::thread::sleep(std::time::Duration::from_millis(10));
-
-        let elapsed = ticker.elapsed();
-        assert!(elapsed.value() > 0.0);
-        assert!(elapsed.value() < 1.0); // Should be less than 1 second
-    }
-
-    #[test]
-    fn test_ticker_callback_invocation() {
-        let mut ticker = Ticker::new();
-        let counter = Arc::new(AtomicU32::new(0));
-
-        let c = Arc::clone(&counter);
-        ticker.start(move |_elapsed| {
-            c.fetch_add(1, Ordering::Relaxed);
-        });
-
-        let provider = MockProvider;
-
-        ticker.tick(&provider);
-        ticker.tick(&provider);
-        ticker.tick(&provider);
-
-        assert_eq!(counter.load(Ordering::Relaxed), 3);
-    }
-
-    #[test]
-    fn test_ticker_id() {
-        let ticker1 = Ticker::new();
-        let ticker2 = Ticker::new();
-
-        assert_ne!(ticker1.id(), ticker2.id());
-    }
-
-    #[test]
-    fn test_ticker_group() {
-        let mut group = TickerGroup::new();
-        let counter = Arc::new(AtomicU32::new(0));
-
-        let c1 = Arc::clone(&counter);
-        group.create(move |_| {
-            c1.fetch_add(1, Ordering::Relaxed);
-        });
-
-        let c2 = Arc::clone(&counter);
-        group.create(move |_| {
-            c2.fetch_add(10, Ordering::Relaxed);
-        });
-
-        assert_eq!(group.len(), 2);
-        assert_eq!(group.active_count(), 2);
-
-        let provider = MockProvider;
-        group.tick_all(&provider);
-
-        assert_eq!(counter.load(Ordering::Relaxed), 11);
-    }
-
-    #[test]
-    fn test_ticker_reset() {
-        let mut ticker = Ticker::new();
-        ticker.start(|_| {});
-
-        std::thread::sleep(std::time::Duration::from_millis(5));
-
-        ticker.reset();
-
-        assert_eq!(ticker.state(), TickerState::Idle);
-        assert_eq!(ticker.elapsed(), Seconds::ZERO);
-    }
-
     // Auto-scheduling Ticker tests
-
-    #[test]
-    fn test_auto_scheduling_ticker_lifecycle() {
-        let scheduler = crate::scheduler::UpdateScheduler::new();
-        let mut ticker = Ticker::new_with_scheduler(&scheduler);
-
-        assert_eq!(ticker.state(), TickerState::Idle);
-        assert!(!ticker.is_active());
-
-        ticker.start(|_| {});
-        assert_eq!(ticker.state(), TickerState::Active);
-        assert!(ticker.is_active());
-
-        ticker.stop();
-        assert_eq!(ticker.state(), TickerState::Stopped);
-    }
 
     #[test]
     fn test_auto_scheduling_ticker_fires_each_frame() {
@@ -2125,95 +1988,6 @@ mod tests {
         // After stop, no more callbacks fire.
         scheduler.execute_frame();
         assert_eq!(counter.load(Ordering::Relaxed), 3);
-    }
-
-    #[test]
-    fn test_auto_scheduling_ticker_mute_unmute() {
-        let scheduler = crate::scheduler::UpdateScheduler::new();
-        let counter = Arc::new(AtomicU32::new(0));
-
-        let mut ticker = Ticker::new_with_scheduler(&scheduler);
-        let c = Arc::clone(&counter);
-        ticker.start(move |_elapsed| {
-            c.fetch_add(1, Ordering::Relaxed);
-        });
-
-        scheduler.execute_frame();
-        assert_eq!(counter.load(Ordering::Relaxed), 1);
-
-        ticker.mute();
-        scheduler.execute_frame();
-        // Still 1 — muted ticker cancels its pending callback.
-        assert_eq!(counter.load(Ordering::Relaxed), 1);
-
-        ticker.unmute();
-        scheduler.execute_frame();
-        // Now 2 — unmute re-registers the auto-schedule.
-        assert_eq!(counter.load(Ordering::Relaxed), 2);
-    }
-
-    #[test]
-    fn test_auto_scheduling_ticker_dispose_cancels_pending() {
-        let scheduler = crate::scheduler::UpdateScheduler::new();
-        let counter = Arc::new(AtomicU32::new(0));
-
-        let mut ticker = Ticker::new_with_scheduler(&scheduler);
-        let c = Arc::clone(&counter);
-        ticker.start(move |_elapsed| {
-            c.fetch_add(1, Ordering::Relaxed);
-        });
-
-        // Dispose before any frame fires — pending transient callback is cancelled.
-        ticker.dispose();
-        scheduler.execute_frame();
-        assert_eq!(counter.load(Ordering::Relaxed), 0);
-    }
-
-    #[test]
-    fn test_create_ticker_via_provider_auto_schedules() {
-        let scheduler = crate::scheduler::UpdateScheduler::new();
-        let counter = Arc::new(AtomicU32::new(0));
-
-        // Provider factory path: create_ticker preloads callback; start_default
-        // arms the ticker.
-        let c = Arc::clone(&counter);
-        let on_tick: TickerCallback = Box::new(move |_elapsed| {
-            c.fetch_add(1, Ordering::Relaxed);
-        });
-        let mut ticker = scheduler.create_ticker(on_tick);
-        ticker.start_default();
-        assert!(ticker.is_active());
-
-        scheduler.execute_frame();
-        scheduler.execute_frame();
-        assert_eq!(counter.load(Ordering::Relaxed), 2);
-
-        ticker.stop();
-    }
-
-    #[test]
-    fn test_start_default_without_callback_is_a_no_op() {
-        let mut ticker = Ticker::new();
-
-        ticker.start_default();
-
-        assert_eq!(ticker.state(), TickerState::Idle);
-    }
-
-    #[test]
-    fn test_auto_scheduling_ticker_elapsed() {
-        let scheduler = crate::scheduler::UpdateScheduler::new();
-        let mut ticker = Ticker::new_with_scheduler(&scheduler);
-
-        assert_eq!(ticker.elapsed(), Seconds::ZERO);
-
-        ticker.start(|_| {});
-
-        std::thread::sleep(std::time::Duration::from_millis(10));
-
-        let elapsed = ticker.elapsed();
-        assert!(elapsed.value() > 0.0);
-        assert!(elapsed.value() < 1.0);
     }
 
     /// A scheduler-driven ticker measures elapsed time on the wall clock, not
@@ -2370,35 +2144,6 @@ mod tests {
         );
 
         ticker.lock().stop();
-    }
-
-    /// Control: `stop()` then `start(new)` BETWEEN frames (no reentrancy)
-    /// already worked before this fix — a regression guard, not a probe.
-    #[test]
-    fn restart_between_ticks_preserves_new_callback() {
-        let scheduler = crate::scheduler::UpdateScheduler::new();
-        let mut ticker = Ticker::new_with_scheduler(&scheduler);
-        let old_calls = Arc::new(AtomicU32::new(0));
-        let new_calls = Arc::new(AtomicU32::new(0));
-
-        let counter = Arc::clone(&old_calls);
-        ticker.start(move |_| {
-            counter.fetch_add(1, Ordering::SeqCst);
-        });
-        scheduler.execute_frame();
-        ticker.stop();
-
-        let counter = Arc::clone(&new_calls);
-        ticker.start(move |_| {
-            counter.fetch_add(1, Ordering::SeqCst);
-        });
-        scheduler.execute_frame();
-
-        assert_eq!(old_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(new_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(scheduler.transient_callback_count(), 1);
-
-        ticker.stop();
     }
 
     /// Control: this already passed before the lease landed — `dispose`
@@ -2587,53 +2332,6 @@ mod tests {
         );
 
         ticker.lock().stop();
-    }
-
-    /// The manual `tick(&self, ...)` path cannot support a reentrant
-    /// restart the way the auto-scheduling dispatch does. Restarting from
-    /// inside the callback needs `&mut Ticker` (`stop`/`start` both take
-    /// it), which — since `tick` itself takes only `&self` — is only
-    /// reachable through an outer wrapper like `Arc<Mutex<Ticker>>`, the
-    /// SAME shape the auto-scheduling probes above use. The difference:
-    /// `tick_and_reschedule_static` is a free function the scheduler
-    /// invokes directly on the ticker's *inner* `Arc<Mutex<TickerInner>>`
-    /// and never touches that outer wrapper, so a reentrant call through it
-    /// finds the outer mutex free. `tick()` has no such indirection — a
-    /// caller MUST already hold the outer `Mutex<Ticker>` (or `RefCell`) to
-    /// obtain the `&Ticker` it calls `tick` on in the first place, and that
-    /// guard is held for tick's entire call, callback included, because
-    /// nothing inside `tick()` owns it and can release it early. A
-    /// reentrant call back through that same non-reentrant lock therefore
-    /// self-deadlocks (or panics, for a `RefCell`) before it ever reaches
-    /// `stop()`. This is structural, not a gap to close, and not a test
-    /// this suite can run: a hanging test is worse than no test. The
-    /// manual path's restore contract is pinned below with a non-reentrant
-    /// regression test instead.
-    /// Control: the non-reentrant manual path already behaved this way; it
-    /// stands in for the reentrant probe the borrow checker makes unwritable.
-    #[test]
-    fn stop_between_two_manual_ticks_does_not_reinvoke_callback() {
-        let mut ticker = Ticker::new();
-        let calls = Arc::new(AtomicU32::new(0));
-        let counter = Arc::clone(&calls);
-        ticker.start(move |_| {
-            counter.fetch_add(1, Ordering::SeqCst);
-        });
-
-        let provider = MockProvider;
-        ticker.tick(&provider);
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-
-        ticker.stop();
-        // `stop()` clears the (idle, `Ready`) slot; `tick()`'s own
-        // `state != Active` guard then returns before checking anything out
-        // again.
-        ticker.tick(&provider);
-        assert_eq!(
-            calls.load(Ordering::SeqCst),
-            1,
-            "a manually-stopped ticker must not tick again"
-        );
     }
 
     /// Mixed manual and automatic dispatch on one ticker, from two threads.

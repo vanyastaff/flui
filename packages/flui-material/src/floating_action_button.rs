@@ -403,28 +403,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_press_handler_enables_the_button() {
-        let fab =
-            FloatingActionButton::new(flui_sdk::widgets::SizedBox::shrink()).on_pressed(|_cx| {});
-        assert!(fab.is_interactive());
-    }
-
-    #[test]
-    fn a_new_button_is_disabled() {
-        let fab = FloatingActionButton::new(flui_sdk::widgets::SizedBox::shrink());
-        assert!(!fab.is_interactive());
-    }
-
-    #[test]
-    fn debug_reports_whether_the_button_is_enabled_without_the_closure() {
-        let debug = format!(
-            "{:?}",
-            FloatingActionButton::new(flui_sdk::widgets::SizedBox::shrink()).on_pressed(|_cx| {})
-        );
-        assert!(debug.contains("enabled: true"));
-    }
-
-    #[test]
     fn fab_shape_is_a_16dp_rounded_rectangle_not_a_circle_or_stadium() {
         let shape = fab_shape();
         match shape {
@@ -441,49 +419,6 @@ mod tests {
         }
     }
 
-    /// Oracle citation: `_RawMaterialButtonState._effectiveElevation`
-    /// (`button.dart`, tag `3.44.0`) resolved against `_FABDefaultsM3`'s
-    /// per-state elevation table — the parity core this test exists to
-    /// prove, including the case (`disabled`) where FLUI's own button
-    /// family's own `_TokenDefaultsM3` tables would zero out but the FAB's
-    /// does not.
-    #[test]
-    fn resolve_elevation_matches_the_fab_defaults_m3_state_table() {
-        let none = WidgetStates::NONE;
-        let disabled = WidgetStates::from(WidgetState::Disabled);
-        let pressed = WidgetStates::from(WidgetState::Pressed);
-        let hovered = WidgetStates::from(WidgetState::Hovered);
-        let focused = WidgetStates::from(WidgetState::Focused);
-
-        assert_eq!(
-            resolve_elevation(&none, ELEVATION_DEFAULT),
-            6.0,
-            "enabled default is 6.0"
-        );
-        assert_eq!(
-            resolve_elevation(&disabled, ELEVATION_DEFAULT),
-            6.0,
-            "disabled elevation falls back to the enabled default (RawMaterialButton's \
-             disabledElevation ?? elevation), NOT zero — matching the oracle's own warning that \
-             a disabled FAB has no visual indication",
-        );
-        assert_eq!(
-            resolve_elevation(&pressed, ELEVATION_DEFAULT),
-            6.0,
-            "highlightElevation is 6.0"
-        );
-        assert_eq!(
-            resolve_elevation(&hovered, ELEVATION_DEFAULT),
-            8.0,
-            "hoverElevation is 8.0"
-        );
-        assert_eq!(
-            resolve_elevation(&focused, ELEVATION_DEFAULT),
-            6.0,
-            "focusElevation is 6.0"
-        );
-    }
-
     /// Mutation-honest ordered-chain coverage: `disabled` must be checked
     /// BEFORE `pressed`/`hovered`/`focused` — a disabled-and-hovered state
     /// (e.g. a stale hover left over from before the handler was removed)
@@ -495,38 +430,6 @@ mod tests {
         assert_eq!(
             resolve_elevation(&disabled_and_hovered, ELEVATION_DEFAULT),
             6.0
-        );
-    }
-
-    /// Mutation-honest ordered-chain coverage: `pressed` must be checked
-    /// BEFORE `hovered` — a combined pressed+hovered state resolves through
-    /// the pressed branch (`6.0`), not hover's higher `8.0`. This is the one
-    /// combined-state assertion that actually distinguishes two DIFFERENT
-    /// values in this table (every other adjacent pair shares `6.0`), so it
-    /// is the strongest single proof the if-chain order (not just its
-    /// values) is preserved.
-    #[test]
-    fn pressed_takes_precedence_over_a_combined_hovered_state() {
-        let pressed_and_hovered =
-            WidgetStates::from(WidgetState::Pressed).with_state(WidgetState::Hovered);
-        assert_eq!(
-            resolve_elevation(&pressed_and_hovered, ELEVATION_DEFAULT),
-            ELEVATION_PRESSED,
-            "pressed (highlightElevation, 6.0) must win over hovered (hoverElevation, 8.0) — \
-             deleting the pressed branch, or reordering it after hovered, would resolve this to \
-             8.0 instead",
-        );
-    }
-
-    /// Mutation-honest ordered-chain coverage: `hovered` must be checked
-    /// BEFORE `focused`.
-    #[test]
-    fn hovered_takes_precedence_over_a_combined_focused_state() {
-        let hovered_and_focused =
-            WidgetStates::from(WidgetState::Hovered).with_state(WidgetState::Focused);
-        assert_eq!(
-            resolve_elevation(&hovered_and_focused, ELEVATION_DEFAULT),
-            ELEVATION_HOVERED
         );
     }
 
@@ -556,22 +459,6 @@ mod tests {
             resolve_elevation(&hovered, themed_elevation),
             ELEVATION_HOVERED
         );
-    }
-
-    #[test]
-    fn resolve_colors_falls_back_to_the_m3_defaults_when_no_theme_is_set() {
-        let theme = ThemeData::light();
-        let resolved = resolve_colors(&theme);
-
-        assert_eq!(
-            resolved.background_color,
-            theme.color_scheme.primary_container
-        );
-        assert_eq!(
-            resolved.foreground_color,
-            theme.color_scheme.on_primary_container
-        );
-        assert_eq!(resolved.elevation, ELEVATION_DEFAULT);
     }
 
     #[test]

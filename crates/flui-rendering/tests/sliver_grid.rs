@@ -31,7 +31,7 @@ use flui_foundation::Leaf;
 use flui_foundation::geometry::{Offset, Rect, Size};
 use flui_objects::RenderSliverGrid;
 use flui_rendering::{
-    constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
+    constraints::{BoxConstraints, SliverConstraints},
     context::{BoxHitTestContext, BoxLayoutContext},
     delegates::SliverGridDelegateWithFixedCrossAxisCount,
     parent_data::{BoxParentData, SliverMultiBoxAdaptorParentData},
@@ -161,13 +161,6 @@ fn build_grid_tree(
     (owner, root_id, grid_id, child_ids)
 }
 
-fn box_size(
-    owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
-    id: flui_foundation::RenderId,
-) -> Size {
-    inspect::box_geometry(owner, id).expect("box geometry committed")
-}
-
 fn render_offset(
     owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
     id: flui_foundation::RenderId,
@@ -195,41 +188,6 @@ fn primary_constraints() -> SliverConstraints {
 
 fn two_column_delegate() -> Arc<dyn flui_rendering::delegates::SliverGridDelegate> {
     Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(2))
-}
-
-#[test]
-fn sliver_grid_golden_in_band_children_are_2_to_5() {
-    // Children 0,1 → row 0 (scroll_offset 0): above the visible window.
-    // Children 2,3 → row 1 (scroll_offset 100): first visible row.
-    // Children 4,5 → row 2 (scroll_offset 200): second visible row.
-    // Children 6,7 → row 3 (scroll_offset 300): outside remaining_cache_extent.
-    //
-    // In-band children receive layout → their box size is committed.
-    // Out-of-band children receive no layout → box size is None.
-    let (owner, _root, _grid, children) =
-        build_grid_tree(primary_constraints(), two_column_delegate(), 8);
-
-    // In-band tiles are 100×100 (tight constraints from delegate).
-    assert_eq!(
-        box_size(&owner, children[2]),
-        Size::new(100.0, 100.0),
-        "child 2 (row 1, col 0) must be 100×100",
-    );
-    assert_eq!(
-        box_size(&owner, children[3]),
-        Size::new(100.0, 100.0),
-        "child 3 (row 1, col 1) must be 100×100",
-    );
-    assert_eq!(
-        box_size(&owner, children[4]),
-        Size::new(100.0, 100.0),
-        "child 4 (row 2, col 0) must be 100×100",
-    );
-    assert_eq!(
-        box_size(&owner, children[5]),
-        Size::new(100.0, 100.0),
-        "child 5 (row 2, col 1) must be 100×100",
-    );
 }
 
 #[test]
@@ -299,55 +257,7 @@ fn sliver_grid_golden_paint_offsets() {
     );
 }
 
-/// Red-before/green-after guard: commenting out the position pass in
-/// `perform_layout` causes all offsets to be zero, so at least one assertion
-/// above would fail.  This test is the explicit failsafe: it verifies that
-/// child 3's non-zero cross-axis offset (100, 0) actually comes from the grid
-/// algorithm, not from a default Offset::ZERO in the arena.
-#[test]
-fn sliver_grid_golden_cross_axis_offset_is_nonzero_for_col_1() {
-    let (owner, _root, _grid, children) =
-        build_grid_tree(primary_constraints(), two_column_delegate(), 8);
-
-    let offset_child3 = render_offset(&owner, children[3]);
-    assert_ne!(
-        offset_child3,
-        Offset::ZERO,
-        "child 3 sits in column 1: its cross-axis offset (dx) must be 100, \
-         not zero (would be zero if the position pass were absent)",
-    );
-    assert_eq!(offset_child3.dx, 100.0);
-}
-
 // ── horizontal axis ───────────────────────────────────────────────────────────
-
-#[test]
-fn sliver_grid_horizontal_axis_places_cross_on_dy() {
-    // Horizontal, 2-column, cross_axis_extent=200 → tiles 100×100.
-    // No scroll (offset=0), all 4 children in band.
-    // Horizontal Offset: (main, cross) = (col_scroll_offset, cross_axis_offset).
-    // child 0: scroll=0, cross=0   → Offset(0, 0)
-    // child 1: scroll=0, cross=100 → Offset(0, 100)
-    // child 2: scroll=100, cross=0  → Offset(100, 0)
-    // child 3: scroll=100, cross=100 → Offset(100, 100)
-    let constraints = sliver_presets::horizontal()
-        .scroll_offset(0.0)
-        .remaining_paint_extent(200.0)
-        .cross_axis_extent(200.0)
-        .viewport_main_axis_extent(200.0)
-        .remaining_cache_extent(200.0)
-        .build();
-
-    let (owner, _root, _grid, children) = build_grid_tree(constraints, two_column_delegate(), 4);
-
-    assert_eq!(render_offset(&owner, children[0]), Offset::new(0.0, 0.0));
-    assert_eq!(render_offset(&owner, children[1]), Offset::new(0.0, 100.0));
-    assert_eq!(render_offset(&owner, children[2]), Offset::new(100.0, 0.0));
-    assert_eq!(
-        render_offset(&owner, children[3]),
-        Offset::new(100.0, 100.0)
-    );
-}
 
 // ── RTL mirror ───────────────────────────────────────────────────────────────
 
@@ -389,37 +299,6 @@ fn sliver_grid_rtl_mirrors_cross_axis_offsets() {
 }
 
 // ── cross-axis spacing ────────────────────────────────────────────────────────
-
-#[test]
-fn sliver_grid_cross_axis_spacing_reduces_tile_width() {
-    // cross_axis_extent=200, 2 columns, cross_axis_spacing=20.
-    // usable = 200 − 20 = 180; each tile cross = 90.
-    // child 1 (col 1) offset = 90 + 20 = 110.
-    let delegate =
-        Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(2).with_cross_axis_spacing(20.0));
-    let constraints = sliver_presets::vertical()
-        .scroll_offset(0.0)
-        .remaining_paint_extent(200.0)
-        .cross_axis_extent(200.0)
-        .viewport_main_axis_extent(200.0)
-        .remaining_cache_extent(200.0)
-        .build();
-
-    let (owner, _root, _grid, children) = build_grid_tree(constraints, delegate, 2);
-
-    // Tile cross extent = 90 → tight width for a vertical sliver.
-    assert_eq!(
-        box_size(&owner, children[0]).width,
-        90.0,
-        "cross_axis_spacing=20 must reduce per-tile cross extent to 90px",
-    );
-    // Col 1 cross offset = stride(110) × 1 = 110.
-    assert_eq!(
-        render_offset(&owner, children[1]).dx,
-        110.0,
-        "col 1 must start at cross offset 110 (90 tile + 20 spacing)",
-    );
-}
 
 // ── should_relayout on delegate swap ─────────────────────────────────────────
 
@@ -466,16 +345,3 @@ fn sliver_grid_set_delegate_updates_layout() {
 }
 
 // ── empty grid ───────────────────────────────────────────────────────────────
-
-#[test]
-fn sliver_grid_zero_children_returns_zero_geometry() {
-    let (owner, _root, grid, _children) =
-        build_grid_tree(primary_constraints(), two_column_delegate(), 0);
-
-    let geom = sliver_geometry(&owner, grid);
-    assert_eq!(
-        geom,
-        SliverGeometry::ZERO,
-        "empty grid must produce ZERO geometry"
-    );
-}

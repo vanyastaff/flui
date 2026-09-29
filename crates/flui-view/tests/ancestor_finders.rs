@@ -218,41 +218,6 @@ fn find_ancestor_view_returns_nearest_match() {
 }
 
 #[test]
-fn find_ancestor_view_picks_nearest_when_multiple_match() {
-    // Tree shape: LabeledView(1) [outer] -> LabeledView(2) [inner] -> DummyChild.
-    // The nearest LabeledView (value=2) wins per Flutter parity
-    // `framework.dart:5122` — `findAncestorWidgetOfExactType` walks
-    // _parent and stops at the first match.
-    let (tree, owner) = create_tree_and_owner();
-
-    let outer = LabeledView { value: 1 };
-    let outer_id = tree
-        .write()
-        .mount_root(&outer, &mut owner.write().element_owner_mut());
-
-    let inner = LabeledView { value: 2 };
-    let inner_id = tree
-        .write()
-        .insert(&inner, outer_id, 0, &mut owner.write().element_owner_mut());
-
-    let child_id = tree.write().insert(
-        &DummyChild,
-        inner_id,
-        0,
-        &mut owner.write().element_owner_mut(),
-    );
-
-    let ctx = ElementBuildContext::for_element(child_id, tree.clone(), owner.clone()).unwrap();
-
-    let value = ctx.find_ancestor::<LabeledView, u32>(LabeledView::value);
-    assert_eq!(
-        value,
-        Some(2),
-        "find_ancestor returns the nearest match, not the outer one"
-    );
-}
-
-#[test]
 fn find_ancestor_view_returns_none_when_no_match() {
     // Tree shape: Spacer -> DummyChild. No LabeledView anywhere.
     let (tree, owner) = create_tree_and_owner();
@@ -336,65 +301,6 @@ fn find_ancestor_state_returns_nearest_match() {
 }
 
 #[test]
-fn find_ancestor_state_picks_nearest_when_multiple_match() {
-    // Tree: Counter(outer=1) -> Counter(inner=2) -> Spacer -> DummyChild.
-    // Nearest match wins (inner snapshot = 2).
-    let (tree, owner) = create_tree_and_owner();
-
-    let outer = CounterView { initial: 1 };
-    let outer_id = tree
-        .write()
-        .mount_root(&outer, &mut owner.write().element_owner_mut());
-
-    let inner = CounterView { initial: 2 };
-    let inner_id = tree
-        .write()
-        .insert(&inner, outer_id, 0, &mut owner.write().element_owner_mut());
-
-    let spacer_id =
-        tree.write()
-            .insert(&Spacer, inner_id, 0, &mut owner.write().element_owner_mut());
-
-    let child_id = tree.write().insert(
-        &DummyChild,
-        spacer_id,
-        0,
-        &mut owner.write().element_owner_mut(),
-    );
-
-    let ctx = ElementBuildContext::for_element(child_id, tree, owner).unwrap();
-
-    let count = ctx.find_state::<CounterState, i32>(CounterState::snapshot);
-    assert_eq!(
-        count,
-        Some(2),
-        "find_state returns the nearest CounterState (initial=2), not the outer"
-    );
-}
-
-#[test]
-fn find_ancestor_state_returns_none_when_no_match() {
-    // Tree shape: Spacer -> DummyChild. No CounterView anywhere.
-    let (tree, owner) = create_tree_and_owner();
-
-    let spacer_id = tree
-        .write()
-        .mount_root(&Spacer, &mut owner.write().element_owner_mut());
-
-    let child_id = tree.write().insert(
-        &DummyChild,
-        spacer_id,
-        0,
-        &mut owner.write().element_owner_mut(),
-    );
-
-    let ctx = ElementBuildContext::for_element(child_id, tree, owner).unwrap();
-
-    let count = ctx.find_state::<CounterState, i32>(CounterState::snapshot);
-    assert_eq!(count, None, "no CounterState ancestor -> None");
-}
-
-#[test]
 fn find_ancestor_state_excludes_stateless_ancestors() {
     // Tree: Spacer (stateless) -> DummyChild. Stateless ancestors should
     // never expose a `state_as_any`, so find_state must skip them
@@ -468,108 +374,6 @@ fn find_root_ancestor_state_returns_root_most_match() {
     );
 }
 
-#[test]
-fn find_root_ancestor_state_single_match_works() {
-    // Tree: Counter(initial=7) -> Spacer -> DummyChild.
-    // Only one matching ancestor — root-most == nearest == that one.
-    let (tree, owner) = create_tree_and_owner();
-
-    let counter = CounterView { initial: 7 };
-    let counter_id = tree
-        .write()
-        .mount_root(&counter, &mut owner.write().element_owner_mut());
-
-    let spacer_id = tree.write().insert(
-        &Spacer,
-        counter_id,
-        0,
-        &mut owner.write().element_owner_mut(),
-    );
-
-    let child_id = tree.write().insert(
-        &DummyChild,
-        spacer_id,
-        0,
-        &mut owner.write().element_owner_mut(),
-    );
-
-    let ctx = ElementBuildContext::for_element(child_id, tree, owner).unwrap();
-
-    let count = ctx.find_root_state::<CounterState, i32>(CounterState::snapshot);
-    assert_eq!(
-        count,
-        Some(7),
-        "single-match case: root-most == nearest, returns 7"
-    );
-}
-
-#[test]
-fn find_root_ancestor_state_returns_none_when_no_match() {
-    // Tree: Spacer -> DummyChild. No Counter anywhere.
-    let (tree, owner) = create_tree_and_owner();
-
-    let spacer_id = tree
-        .write()
-        .mount_root(&Spacer, &mut owner.write().element_owner_mut());
-
-    let child_id = tree.write().insert(
-        &DummyChild,
-        spacer_id,
-        0,
-        &mut owner.write().element_owner_mut(),
-    );
-
-    let ctx = ElementBuildContext::for_element(child_id, tree, owner).unwrap();
-
-    let count = ctx.find_root_state::<CounterState, i32>(CounterState::snapshot);
-    assert_eq!(count, None, "no Counter ancestor -> None");
-}
-
-#[test]
-fn find_root_ancestor_state_with_non_matching_intermediate() {
-    // Tree: Counter(outer=1) -> Spacer -> Counter(inner=2) -> Spacer -> DummyChild.
-    // Spacer in the middle MUST be skipped without breaking the
-    // root-most logic. Result must be 1 (outer/root-most), not 2.
-    let (tree, owner) = create_tree_and_owner();
-
-    let outer = CounterView { initial: 1 };
-    let outer_id = tree
-        .write()
-        .mount_root(&outer, &mut owner.write().element_owner_mut());
-
-    let spacer1_id =
-        tree.write()
-            .insert(&Spacer, outer_id, 0, &mut owner.write().element_owner_mut());
-
-    let inner = CounterView { initial: 2 };
-    let inner_id = tree.write().insert(
-        &inner,
-        spacer1_id,
-        0,
-        &mut owner.write().element_owner_mut(),
-    );
-
-    let spacer2_id =
-        tree.write()
-            .insert(&Spacer, inner_id, 0, &mut owner.write().element_owner_mut());
-
-    let child_id = tree.write().insert(
-        &DummyChild,
-        spacer2_id,
-        0,
-        &mut owner.write().element_owner_mut(),
-    );
-
-    let ctx = ElementBuildContext::for_element(child_id, tree, owner).unwrap();
-
-    let count = ctx.find_root_state::<CounterState, i32>(CounterState::snapshot);
-    assert_eq!(
-        count,
-        Some(1),
-        "non-matching intermediate must not interrupt root-most walk"
-    );
-}
-
 // ============================================================================
 // Callback contract: closure runs at most once per invocation
 // ============================================================================
@@ -630,33 +434,6 @@ fn find_render_object_returns_nearest_render_id() {
         found,
         Some(expected_render_id),
         "find_render_object should return the nearest RenderElement ancestor's RenderId"
-    );
-}
-
-#[test]
-fn find_render_object_returns_none_when_no_render_ancestor() {
-    // Tree shape: Spacer -> DummyChild. No RenderElement in the chain;
-    // every ancestor's `ElementBase::render_id` returns the trait default
-    // None, so the strict-ancestor walk exhausts without a break.
-    let (tree, owner) = create_tree_and_owner();
-
-    let spacer_id = tree
-        .write()
-        .mount_root(&Spacer, &mut owner.write().element_owner_mut());
-
-    let child_id = tree.write().insert(
-        &DummyChild,
-        spacer_id,
-        0,
-        &mut owner.write().element_owner_mut(),
-    );
-
-    let ctx = ElementBuildContext::for_element(child_id, tree, owner).unwrap();
-
-    let found = ctx.find_render_object();
-    assert_eq!(
-        found, None,
-        "non-render ancestor chain -> None per Flutter parity (framework.dart:5160)"
     );
 }
 

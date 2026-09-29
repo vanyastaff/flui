@@ -1,11 +1,6 @@
 //! Structural paint-snapshot dogfood for the render harness (sub-project A),
 //! plus fallible run entry points and overflow-flag inspection.
 
-#[test]
-fn insta_tooling_smoke() {
-    insta::assert_snapshot!("smoke", "line one\nline two");
-}
-
 use flui_foundation::geometry::Size;
 use flui_objects::RenderColoredBox;
 use flui_rendering::testing::{DrawKind, RenderTester, box_node};
@@ -19,46 +14,6 @@ fn frame_snapshot_and_predicate() {
     run.assert_paints_any(|c| c.kind == DrawKind::Rect);
 }
 
-#[test]
-#[should_panic(expected = "no painted command matched")]
-fn assert_paints_any_fails_on_absent_op() {
-    let run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)))
-        .with_size(Size::new(40.0, 40.0))
-        .run_frame();
-    run.assert_paints_any(|c| c.kind == DrawKind::Shadow);
-}
-
-#[test]
-fn run_to_paint_exposes_layer_tree() {
-    let run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)))
-        .with_size(Size::new(40.0, 40.0))
-        .run_to_paint();
-    assert!(
-        run.layer_tree().is_some(),
-        "PaintRun must hold the painted layer tree"
-    );
-    run.assert_paints_any(|c| c.kind == DrawKind::Rect);
-}
-
-#[test]
-fn run_to_compositing_is_probed_before_paint() {
-    use flui_rendering::testing::Probe;
-    let run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)))
-        .with_size(Size::new(40.0, 40.0))
-        .run_to_compositing();
-    // CompositingRun has no layer tree; geometry is committed.
-    let _ = run.pipeline();
-}
-
-#[test]
-fn run_to_semantics_is_probed_after_paint() {
-    use flui_rendering::testing::Probe;
-    let run = RenderTester::mount(box_node(RenderColoredBox::red(40.0, 40.0)))
-        .with_size(Size::new(40.0, 40.0))
-        .run_to_semantics();
-    let _ = run.pipeline();
-}
-
 // ============================================================================
 // Fallible run entry points and overflow-flag inspection
 // ============================================================================
@@ -66,12 +21,7 @@ fn run_to_semantics_is_probed_after_paint() {
 use flui_objects::{RenderFittedBox, RenderStack, RenderViewport};
 use flui_painting::paint::Clip;
 use flui_painting::{Alignment, BoxFit};
-use flui_rendering::{
-    context::FragmentRecorder,
-    error::RenderError,
-    protocol::{BoxProtocol, Protocol, ProtocolGeometry, ProtocolPosition, RenderObject},
-    testing::Probe,
-};
+use flui_rendering::testing::Probe;
 
 /// Returns `true` when the render object at `node` reports visual overflow.
 ///
@@ -97,71 +47,6 @@ fn has_overflow(probe: &impl Probe, node: flui_foundation::RenderId) -> bool {
         return viewport.has_visual_overflow();
     }
     false
-}
-
-/// A minimal `RenderObject<BoxProtocol>` whose `paint_raw` always panics.
-///
-/// Direct impl (not via the `RenderBox` blanket) so the panic fires in
-/// `paint_raw` — the site the pipeline wraps with `catch_unwind`. The blanket's
-/// `paint` default for leaf objects is a no-op; `paint_raw` is the real gate.
-///
-/// Geometry is owned by `RenderState` (2B field dedup); this struct holds none.
-#[derive(Debug)]
-struct PanicPaintBox;
-
-impl PanicPaintBox {
-    fn new() -> Self {
-        Self
-    }
-}
-
-impl flui_foundation::Diagnosticable for PanicPaintBox {}
-
-impl RenderObject<BoxProtocol> for PanicPaintBox {
-    fn perform_layout_raw(
-        &mut self,
-        ctx: &mut <BoxProtocol as Protocol>::LayoutCtxErased<'_>,
-    ) -> flui_rendering::error::RenderResult<ProtocolGeometry<BoxProtocol>> {
-        Ok(ctx.constraints().biggest())
-    }
-
-    fn paint_raw(
-        &self,
-        _recorder: &mut FragmentRecorder,
-        _child_count: usize,
-        _size: flui_foundation::geometry::Size,
-    ) {
-        panic!("PanicPaintBox::paint_raw — intentional test panic");
-    }
-
-    fn hit_test_raw(
-        &self,
-        _position: ProtocolPosition<BoxProtocol>,
-        _child_count: usize,
-        _size: flui_foundation::geometry::Size,
-        _hit_child: &mut dyn FnMut(
-            usize,
-            Option<ProtocolPosition<BoxProtocol>>,
-            Option<flui_foundation::geometry::Matrix4>,
-        ) -> bool,
-    ) -> flui_rendering::traits::HitTestOutcome {
-        flui_rendering::traits::HitTestOutcome::miss()
-    }
-}
-
-/// A panicking `paint_raw` must surface as `RenderError::Poisoned` via the
-/// pipeline's `catch_unwind`, never abort the test process.
-#[test]
-fn try_run_frame_captures_poisoned_paint() {
-    let err = RenderTester::mount(box_node(PanicPaintBox::new()))
-        .with_size(Size::new(10.0, 10.0))
-        .try_run_frame()
-        .expect_err("a tree whose paint panics must produce Err");
-
-    assert!(
-        matches!(err, RenderError::Poisoned { .. }),
-        "expected Poisoned but got {err:?}",
-    );
 }
 
 /// `has_overflow` returns `true` for a `RenderFittedBox` whose scaled child

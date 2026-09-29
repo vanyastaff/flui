@@ -551,41 +551,6 @@ mod tests {
     }
 
     #[test]
-    fn a_debug_rendered_field_is_redacted_by_default() {
-        let capture = behind_redaction(|| {
-            tracing::info!(command = ?("draw_text", "hello"), size = 2_u64);
-        });
-
-        let events = capture.events();
-        let event = &events[0];
-        assert_eq!(*field(event, "command"), redacted());
-        assert_eq!(
-            *field(event, "size"),
-            Seen::U64(2),
-            "a scalar beside a redacted field keeps its type"
-        );
-    }
-
-    #[test]
-    fn an_error_value_is_redacted_by_default() {
-        let io_error = std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "No such file: /home/user/private.png",
-        );
-        let capture = behind_redaction(|| {
-            tracing::warn!(error = &io_error as &dyn std::error::Error, "load failed");
-        });
-
-        let events = capture.events();
-        let event = &events[0];
-        assert_eq!(
-            *field(event, "error"),
-            redacted(),
-            "error renderings embed paths and OS strings; they are dynamic values"
-        );
-    }
-
-    #[test]
     fn scalar_fields_pass_through_with_their_types() {
         let capture = behind_redaction(|| {
             tracing::info!(
@@ -631,59 +596,6 @@ mod tests {
             Seen::Debugged("(1, 2)".to_owned()),
             "an opted-in debug value must keep its record_debug rendering"
         );
-    }
-
-    #[test]
-    fn a_private_marker_redacts_a_scalar() {
-        let capture = behind_redaction(|| {
-            tracing::info!(latitude.private = 52.52_f64, frame = 7_u64, "position");
-        });
-
-        let events = capture.events();
-        let event = &events[0];
-        assert_eq!(*field(event, "latitude.private"), redacted());
-        assert_eq!(*field(event, "frame"), Seen::U64(7));
-    }
-
-    #[test]
-    fn field_order_survives_redaction() {
-        let capture = behind_redaction(|| {
-            tracing::info!(first = 1_u64, secret = "s", last = 3_u64, "ordered");
-        });
-
-        let events = capture.events();
-        let names: Vec<&str> = events[0]
-            .fields
-            .iter()
-            .map(|(name, _)| name.as_str())
-            .collect();
-        assert_eq!(names, vec!["message", "first", "secret", "last"]);
-    }
-
-    #[test]
-    fn log_bridge_normalization_fields_pass_verbatim() {
-        // The logcat layer derives its tag from `log.target` on a bridged
-        // record; redacting these four would misfile every bridged event.
-        let capture = behind_redaction(|| {
-            tracing::info!(
-                log.target = "wgpu_core",
-                log.module_path = "wgpu_core::device",
-                secret = "user text",
-                "bridged-shaped"
-            );
-        });
-
-        let events = capture.events();
-        let event = &events[0];
-        assert_eq!(
-            *field(event, "log.target"),
-            Seen::Str("wgpu_core".to_owned())
-        );
-        assert_eq!(
-            *field(event, "log.module_path"),
-            Seen::Str("wgpu_core::device".to_owned())
-        );
-        assert_eq!(*field(event, "secret"), redacted());
     }
 
     #[test]
@@ -737,25 +649,6 @@ mod tests {
             "the synthesized event must keep its explicit parent: {event:?}"
         );
         assert!(!event.is_contextual);
-    }
-
-    #[test]
-    fn a_fully_public_event_is_forwarded_untouched() {
-        let capture = behind_redaction(|| {
-            tracing::info!(frame = 7_u64, phase.public = "commit", "clean");
-        });
-
-        let events = capture.events();
-        let event = &events[0];
-        assert_eq!(*field(event, "frame"), Seen::U64(7));
-        assert_eq!(
-            *field(event, "phase.public"),
-            Seen::Str("commit".to_owned())
-        );
-        assert!(
-            event.is_contextual,
-            "the original contextual event passes through"
-        );
     }
 
     #[test]

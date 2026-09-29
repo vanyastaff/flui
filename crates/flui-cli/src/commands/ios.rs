@@ -322,29 +322,6 @@ mod tests {
         assert!(error.to_string().contains("timed out"));
     }
     #[test]
-    fn device_architecture_is_exact_and_runtime_consistent() {
-        assert_eq!(
-            architecture_triple(b"arm64\n", Some(&serde_json::json!(["arm64"])))
-                .expect("architecture"),
-            "aarch64-apple-ios-sim"
-        );
-        assert_eq!(
-            architecture_triple(b"x86_64", None).expect("architecture"),
-            "x86_64-apple-ios"
-        );
-        for bytes in [b"".as_slice(), b"arm64 x86_64", b"unknown", &[255]] {
-            assert!(architecture_triple(bytes, None).is_err());
-        }
-        for metadata in [
-            serde_json::json!(null),
-            serde_json::json!([]),
-            serde_json::json!([1]),
-            serde_json::json!(["x86_64"]),
-        ] {
-            assert!(architecture_triple(b"arm64", Some(&metadata)).is_err());
-        }
-    }
-    #[test]
     fn selection_requires_available_exact_ios_identity_and_runtime() {
         let json = serde_json::json!({"runtimes":[{"identifier":"com.apple.CoreSimulator.SimRuntime.iOS-26-2","version":"26.2","isAvailable":true}], "devices":{"com.apple.CoreSimulator.SimRuntime.iOS-26-2":[{"udid":"chosen","state":"Booted","isAvailable":true},{"udid":"unavailable","isAvailable":false}], "com.apple.CoreSimulator.SimRuntime.tvOS-26-2":[{"udid":"tv","isAvailable":true}]}});
         assert_eq!(

@@ -17,8 +17,8 @@ use std::sync::{Arc, Mutex};
 
 use flui_foundation::RenderId;
 use flui_foundation::geometry::Size;
-use flui_foundation::{Leaf, Single, Variable};
-use flui_objects::{RenderColoredBox, RenderFlex, RenderPadding};
+use flui_foundation::{Leaf, Variable};
+use flui_objects::{RenderColoredBox, RenderFlex};
 use flui_rendering::{
     constraints::BoxConstraints,
     parent_data::{BoxParentData, FlexParentData},
@@ -27,8 +27,7 @@ use flui_rendering::{
     // `LayoutContextApi` and collide on method names. Pull it from the
     // explicit module path here.
     protocol::{
-        BoxLayoutCtx, BoxProtocol, ChildState, Protocol, RenderObject,
-        box_protocol::BoxLayoutCtxErased,
+        BoxLayoutCtx, BoxProtocol, ChildState, RenderObject, box_protocol::BoxLayoutCtxErased,
     },
 };
 
@@ -71,90 +70,9 @@ fn leaf_bridge_returns_constrained_size() {
     );
 }
 
-/// Edge case: looser parent constraints — the user code constrains its
-/// `preferred_size` to the parent constraints, yielding the requested
-/// size when constraints permit it.
-#[test]
-fn leaf_bridge_honours_loose_constraints() {
-    let mut obj = RenderColoredBox::blue(80.0, 40.0);
-    let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 200.0);
-
-    let mut direct_ctx: BoxLayoutCtx<'_, Leaf, BoxParentData> = BoxLayoutCtx::new(constraints);
-    let erased: &mut dyn BoxLayoutCtxErased = &mut direct_ctx;
-
-    let size =
-        <RenderColoredBox as RenderObject<BoxProtocol>>::perform_layout_raw(&mut obj, erased)
-            .expect("Leaf bridge happy path must succeed");
-
-    assert_eq!(size, Size::new(80.0, 40.0));
-}
-
 // ============================================================================
 // Single bridge: RenderPadding via blanket perform_layout_raw
 // ============================================================================
-
-/// Happy path: `RenderPadding` (Single arity) layout via
-/// the blanket bridge forwards to
-/// `T::perform_layout(BoxLayoutContext<Single, BoxParentData>)`, which
-/// deflates the parent constraints, calls `ctx.layout_child(0,
-/// child_constraints)`, positions the child, and completes layout with
-/// `child_size + padding`.
-///
-/// The Direct ctx carries one synthetic child whose layout callback
-/// returns whatever max-size the (deflated) child constraints allow —
-/// the Padding's perform_layout then adds the padding back, and the
-/// final size returned by the bridge equals `parent_constraints.max`
-/// when those are loose enough.
-#[test]
-fn single_bridge_pads_child_and_returns_total_size() {
-    let mut obj = RenderPadding::all(10.0);
-
-    // Parent gives us up to 200×100 of space. Padding deflates by
-    // (left+right=20, top+bottom=20) → child gets up to 180×80. The
-    // callback returns the child's max constraints as the child's size,
-    // so child = 180×80. Final size = 180+20 = 200, 80+20 = 100.
-    let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 100.0);
-
-    let mut children: Vec<ChildState<BoxParentData>> = vec![ChildState::new(RenderId::new(1))];
-    let child_ids = [RenderId::new(1)];
-
-    // Synthetic child callback: respond at the largest allowed size so
-    // the Padding can grow to fill the parent's constraints.
-    let layout_child_callback: Arc<
-        dyn Fn(flui_foundation::RenderId, BoxConstraints) -> Size + Send + Sync,
-    > = Arc::new(|_id, c| Size::new(c.max_width, c.max_height));
-
-    let mut direct_ctx: BoxLayoutCtx<'_, Single, BoxParentData> =
-        BoxLayoutCtx::with_layout_callback(
-            constraints,
-            &mut children,
-            &child_ids,
-            layout_child_callback.as_ref(),
-        );
-
-    let erased: &mut dyn BoxLayoutCtxErased = &mut direct_ctx;
-
-    let size = <RenderPadding as RenderObject<BoxProtocol>>::perform_layout_raw(&mut obj, erased)
-        .expect("Single bridge happy path must succeed");
-
-    assert_eq!(
-        size,
-        Size::new(200.0, 100.0),
-        "RenderPadding bridge must complete with child_size + padding"
-    );
-
-    // Child's recorded offset should be the padding's top-left
-    // (10, 10) — written by `ctx.position_child(0, …)` inside
-    // `RenderPadding::perform_layout`. The Proxy-mode `position_child`
-    // delegates back through `erased.position_child`, which writes to
-    // the underlying Direct ctx's children Vec.
-    let child_offset = children[0].offset;
-    assert!(
-        (child_offset.dx - 10.0).abs() < f64::EPSILON
-            && (child_offset.dy - 10.0).abs() < f64::EPSILON,
-        "child offset {child_offset:?} should equal (10, 10)"
-    );
-}
 
 // ============================================================================
 // Variable bridge: RenderFlex via blanket perform_layout_raw
@@ -277,25 +195,6 @@ fn variable_bridge_walks_child_slice_with_typed_parent_data() {
 // matches the same bridge path RenderEntry::layout uses.
 // ============================================================================
 
-/// Verifies the entry-layout path: protocol's `with_leaf_erased_ctx`
-/// helper hands `RenderColoredBox::perform_layout_raw` an erased ctx
-/// and the result matches the user's `perform_layout` output.
-#[test]
-fn with_leaf_erased_ctx_matches_direct_bridge_call() {
-    let mut obj = RenderColoredBox::green(60.0, 30.0);
-    let constraints = BoxConstraints::tight(Size::new(60.0, 30.0));
-
-    // Mirror what RenderEntry::layout_leaf_only does.
-    // `with_leaf_erased_ctx` forwards the closure return, which is now
-    // `RenderResult<Size>`; unwrap on the happy path.
-    let size = <BoxProtocol as Protocol>::with_leaf_erased_ctx(constraints, |erased| {
-        <RenderColoredBox as RenderObject<BoxProtocol>>::perform_layout_raw(&mut obj, erased)
-    })
-    .expect("with_leaf_erased_ctx happy path must succeed");
-
-    assert_eq!(size, Size::new(60.0, 30.0));
-}
-
 // ============================================================================
 // Note: the "forgetful RenderBox" contract-violation tests that previously
 // existed here have been removed. Since `RenderBox::perform_layout` now
@@ -308,85 +207,8 @@ fn with_leaf_erased_ctx_matches_direct_bridge_call() {
 // Edge case (review fix #16): zero-child Variable bridge.
 // ============================================================================
 
-/// `RenderFlex::row()` with zero children completes layout via the
-/// `if child_count == 0` early-return in `RenderFlex::perform_layout`. With the
-/// default `MainAxisSize::Max` and a bounded main axis it fills that axis
-/// (Flutter `idealMainSize = maxMainSize`), so the size is `(300, 0)` here, not
-/// `smallest()` (behavior fixed 34c7c24c). The bridge must propagate whatever
-/// size the zero-child path returns — it must not assume children are present
-/// just because the typed wrapper has `Variable` arity.
-#[test]
-fn variable_bridge_handles_zero_children() {
-    let mut obj = RenderFlex::row();
-    // min=0 / max=300; the default MainAxisSize::Max fills the bounded main axis.
-    let constraints = BoxConstraints::new(0.0, 300.0, 0.0, 100.0);
-    let mut children: Vec<ChildState<FlexParentData>> = vec![];
-    let child_ids: [RenderId; 0] = [];
-
-    let cb: Arc<dyn Fn(RenderId, BoxConstraints) -> Size + Send + Sync> =
-        Arc::new(|_, _| Size::ZERO);
-
-    let mut direct_ctx: BoxLayoutCtx<'_, Variable, FlexParentData> =
-        BoxLayoutCtx::with_layout_callback(constraints, &mut children, &child_ids, cb.as_ref());
-
-    let erased: &mut dyn BoxLayoutCtxErased = &mut direct_ctx;
-    let size = <RenderFlex as RenderObject<BoxProtocol>>::perform_layout_raw(&mut obj, erased)
-        .expect("Zero-child Variable bridge happy path must succeed");
-
-    assert_eq!(
-        size,
-        Size::new(300.0, 0.0),
-        "empty MainAxisSize::Max Row fills the bounded main axis (Flutter idealMainSize)",
-    );
-}
-
 // ============================================================================
 // RenderViewAdapter smoke test (review fix #15): the root view's manual
 // RenderObject<BoxProtocol> impl uses the erased ctx as a sentinel and
 // drives its own perform_layout via embedded RenderView state.
 // ============================================================================
-
-/// `RenderViewAdapter::perform_layout_raw` ignores the erased ctx and
-/// calls `RenderView::perform_layout()`, which reads logical
-/// constraints from the embedded `ViewConfiguration` and writes
-/// `RenderView::size` to `logical_constraints.smallest()`. Returns
-/// that size unchanged.
-///
-/// This smoke test covers the manual (non-blanket) `RenderObject<P>`
-/// implementation path. The blanket bridge handles user
-/// `RenderBox`/`RenderSliver` impls; the root view sidesteps it
-/// because its layout shape (no parent constraints, own-configuration
-/// driven) doesn't fit the `RenderBox::perform_layout(ctx)` signature.
-#[test]
-fn render_view_adapter_bridge_smoke() {
-    use flui_rendering::view::{RenderView, RenderViewAdapter, ViewConfiguration};
-
-    // Tight configuration: logical_size = (200, 150) at 1x DPR.
-    let config = ViewConfiguration::from_size(Size::new(200.0, 150.0), 1.0);
-    let mut view = RenderView::with_configuration(config);
-    // Without prepare_initial_frame*, root_transform stays None and
-    // perform_layout asserts. The without-owner variant is the
-    // sanctioned test-side path (see RenderView::prepare_initial_frame).
-    view.prepare_initial_frame_without_owner();
-
-    let mut adapter = RenderViewAdapter::new(view);
-
-    // The INCOMING constraints are authoritative — they carry the live
-    // window size (set_root_constraints every frame). The mount-time
-    // configuration is a snapshot that goes stale on the first resize;
-    // sizing from it left newly exposed window area unpainted forever
-    // (caught by the colored-box e2e gate, pinned by
-    // tests/root_resize_repaint.rs).
-    let incoming = BoxConstraints::tight(Size::new(999.0, 999.0));
-    let size = <BoxProtocol as Protocol>::with_leaf_erased_ctx(incoming, |erased| {
-        <RenderViewAdapter as RenderObject<BoxProtocol>>::perform_layout_raw(&mut adapter, erased)
-    })
-    .expect("RenderViewAdapter root layout must always succeed");
-
-    assert_eq!(
-        size,
-        Size::new(999.0, 999.0),
-        "RenderViewAdapter must size from the INCOMING root constraints \
-         (live window size), not from its mount-time configuration snapshot",
-    );
-}

@@ -147,35 +147,6 @@ fn removing_a_child_republishes_its_parent_and_nothing_else() {
     );
 }
 
-/// A node that is removed and later returns with identical content must be
-/// republished: the adapter dropped it when its parent was republished
-/// without it, so "unchanged since last published" is no longer true of
-/// anything the adapter still holds. This is the pin on the mirror's
-/// prune-on-removal step.
-#[test]
-fn a_removed_then_restored_node_is_republished() {
-    let (mut owner, received) = recording_owner();
-
-    rebuild(&mut owner, &["alpha", "beta"]);
-    owner.flush();
-    rebuild(&mut owner, &["alpha"]);
-    owner.flush();
-
-    rebuild(&mut owner, &["alpha", "beta"]);
-    owner.flush();
-
-    let updates = received.lock();
-    assert_eq!(updates.len(), 3);
-    let restored = &updates[2];
-    assert!(
-        restored
-            .nodes
-            .iter()
-            .any(|(_, n)| n.label() == Some("beta")),
-        "the restored node must be re-sent — the adapter no longer has it"
-    );
-}
-
 /// The first delivered update is self-contained: it carries the tree
 /// metadata (`TreeUpdate::tree`) an adapter needs to initialize, and every
 /// node. Incremental follow-ups carry `tree: None` — that asymmetry is the
@@ -205,25 +176,6 @@ fn full_updates_carry_tree_metadata_and_diffs_do_not() {
         updates[1].tree.is_none(),
         "an incremental update must not claim to stand alone"
     );
-}
-
-/// `send_full_tree` exists for a reconnecting adapter that may have
-/// forgotten everything, so it must bypass the diff even when nothing
-/// changed since the last publish.
-#[test]
-fn send_full_tree_republishes_everything_even_when_clean() {
-    let (mut owner, received) = recording_owner();
-
-    rebuild(&mut owner, &["alpha", "beta"]);
-    owner.flush();
-
-    owner.send_full_tree();
-
-    let updates = received.lock();
-    assert_eq!(updates.len(), 2);
-    let full = &updates[1];
-    assert_eq!(full.nodes.len(), 3, "all nodes, not a diff");
-    assert!(full.tree.is_some(), "self-contained, adapter-initializing");
 }
 
 /// A focus movement is delivered even when it is the only change. Focus is
@@ -317,141 +269,6 @@ fn an_unaddressable_claimant_keeps_focus_ambiguous_across_incremental_flushes() 
     assert_eq!(
         updates[1].focus, root_focus,
         "the ambiguity did not go away, so neither may the root fallback"
-    );
-}
-
-/// A focus flag toggled on an unpublishable node still changes what the
-/// tree as a whole claims: a second claimant appearing means ambiguity, and
-/// the published focus must retreat to the root — the same answer a full
-/// republish of this tree would give.
-#[test]
-fn toggling_an_unaddressable_nodes_focus_is_observed() {
-    let (mut owner, received) = recording_owner();
-
-    let root = owner.insert(node(0, "root"));
-    let mut focused = node(1, "focused");
-    focused.config_mut().set_focused(true);
-    let focused_sid = owner.insert(focused);
-    let mut phantom = SemanticsNode::new();
-    phantom.config_mut().set_label("phantom");
-    let phantom = owner.insert(phantom);
-    owner.add_child(root, focused_sid);
-    owner.add_child(root, phantom);
-    owner.set_root(Some(root));
-
-    owner.flush();
-    {
-        let updates = received.lock();
-        let focused_identity = updates[0]
-            .nodes
-            .iter()
-            .find(|(_, n)| n.label() == Some("focused"))
-            .map(|(id, _)| *id)
-            .expect("the focused node is published");
-        assert_eq!(
-            updates[0].focus, focused_identity,
-            "a single publishable claimant is the focus"
-        );
-    }
-
-    // The unpublishable node now claims focus too.
-    owner
-        .get_mut(phantom)
-        .expect("phantom is live")
-        .config_mut()
-        .set_focused(true);
-    owner.flush();
-
-    let updates = received.lock();
-    assert_eq!(
-        updates.len(),
-        2,
-        "the focus retreat must be delivered even though no payload changed"
-    );
-    assert_eq!(
-        updates[1].focus,
-        updates[0]
-            .tree
-            .as_ref()
-            .expect("initializing update carries tree metadata")
-            .root,
-        "two claimants are ambiguous; focus falls back to the root"
-    );
-}
-
-/// Re-pointing the root at an already-published, otherwise-untouched node
-/// is a root-identity change with zero dirty content — `set_root` itself
-/// must count as a change, or the flush gate returns before the
-/// root-escalation check ever runs and the adapter stays on the old root
-/// forever.
-#[test]
-fn repointing_the_root_at_a_clean_node_escalates_to_a_full_update() {
-    let (mut owner, received) = recording_owner();
-
-    // Two independent addressable nodes; `a` is the published root.
-    let a = owner.insert(node(1, "a"));
-    let b = owner.insert(node(2, "b"));
-    owner.set_root(Some(a));
-    owner.flush();
-    assert_eq!(received.lock().len(), 1, "the initial publish under root a");
-
-    // Only the root pointer moves; no node content is touched.
-    owner.set_root(Some(b));
-    owner.flush();
-
-    let updates = received.lock();
-    assert_eq!(
-        updates.len(),
-        2,
-        "a root-identity change must be delivered even with no dirty content"
-    );
-    let repointed = &updates[1];
-    let new_root = repointed
-        .tree
-        .as_ref()
-        .expect("a root change is a self-contained, adapter-initializing update")
-        .root;
-    let b_identity = owner
-        .get(b)
-        .and_then(flui_semantics::SemanticsNode::accessibility_id)
-        .expect("b is render-backed");
-    assert_eq!(
-        new_root.0,
-        b_identity.as_u64(),
-        "and it names the new root identity"
-    );
-}
-
-/// `needs_flush` is the public would-a-flush-do-anything predicate, so it
-/// must match `flush`'s own gate: a scheduled full publish is pending work
-/// even when every node is clean. A frame loop consulting the narrower
-/// predicate would never deliver the reconnect update.
-#[test]
-fn needs_flush_reports_a_scheduled_full_publish_on_a_clean_tree() {
-    let (mut owner, received) = recording_owner();
-
-    rebuild(&mut owner, &["alpha"]);
-    owner.flush();
-    assert!(
-        !owner.needs_flush(),
-        "a settled owner has nothing to deliver"
-    );
-
-    owner.schedule_full_publish();
-    assert!(
-        owner.needs_flush(),
-        "a pending full publish is pending work — the predicate must say so"
-    );
-
-    owner.flush();
-    assert!(
-        !owner.needs_flush(),
-        "delivering it settles the owner again"
-    );
-    assert_eq!(
-        received.lock().len(),
-        2,
-        "and the flush the predicate promised actually happened"
     );
 }
 

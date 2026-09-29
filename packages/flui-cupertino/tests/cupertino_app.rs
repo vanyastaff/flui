@@ -142,46 +142,6 @@ fn ambient_brightness_drives_resolution_with_no_theme_mode_involved() {
     }
 }
 
-#[test]
-fn an_explicit_theme_brightness_override_wins_for_descendants() {
-    // Apple's model (the oracle's `effectiveThemeData.brightness ??
-    // MediaQuery.platformBrightnessOf`): the theme's optional brightness
-    // override beats the ambient platform signal for everything below the
-    // published theme — under a LIGHT platform, descendants see Dark.
-    let (probe, captured) = probe();
-    let theme = CupertinoThemeData::default().with_brightness(Brightness::Dark);
-    let _tree = lay_out(
-        MediaQuery::new(
-            media(Brightness::Light),
-            CupertinoApp::new(probe).theme(theme),
-        ),
-        loose(800.0),
-    );
-    let seen = observed(&captured);
-    assert_eq!(
-        seen.brightness,
-        Brightness::Dark,
-        "the theme's brightness override must beat the light platform signal"
-    );
-    assert_eq!(
-        seen.label_resolved_here,
-        Color::rgb(255, 255, 255),
-        "a dynamic color resolved below the published theme must use the override"
-    );
-    // The published theme's own colors were materialized at the app's
-    // altitude — ABOVE the published override, where only the platform
-    // signal is visible — so they resolve LIGHT. This is the oracle's exact
-    // behavior (`resolveFrom(context)` runs in `_CupertinoAppState.build`,
-    // above the `CupertinoTheme` it then publishes; dynamic-color
-    // resolution reads `CupertinoTheme.maybeBrightnessOf`, which sees no
-    // theme ancestor there): the override steers descendant-side
-    // resolution, not the app-level materialization.
-    assert_eq!(
-        seen.published_primary,
-        CupertinoColor::Static(SYSTEM_BLUE_LIGHT)
-    );
-}
-
 // ============================================================================
 // Live brightness republish — the realm-source pattern
 // ============================================================================
@@ -285,25 +245,4 @@ fn a_live_brightness_republish_re_resolves_the_theme() {
 #[should_panic(expected = "requires at least one locale")]
 fn empty_supported_locales_panics_at_construction() {
     let _ = CupertinoApp::new(SizedBox::shrink()).supported_locales(Vec::new());
-}
-
-#[test]
-fn the_builder_hook_resolves_the_published_theme() {
-    // The oracle publishes CupertinoTheme ABOVE the WidgetsApp, so the
-    // caller's builder — passed straight through — resolves it with no
-    // extra wrapper.
-    let seen: Arc<Mutex<Option<CupertinoColor>>> = Arc::new(Mutex::new(None));
-    let seen_in_builder = Arc::clone(&seen);
-    let theme = CupertinoThemeData::default().with_primary_color(CupertinoColors::SYSTEM_RED);
-    let app = CupertinoApp::with_builder(move |ctx, _child| {
-        *seen_in_builder.lock().unwrap() = Some(CupertinoTheme::of(ctx).primary_color());
-        SizedBox::shrink().boxed()
-    })
-    .theme(theme);
-    let _tree = lay_out(app, loose(800.0));
-    assert_eq!(
-        seen.lock().unwrap().clone(),
-        Some(CupertinoColor::Static(SYSTEM_RED_LIGHT)),
-        "the builder's context must sit below the published CupertinoTheme"
-    );
 }

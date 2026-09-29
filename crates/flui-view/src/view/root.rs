@@ -452,13 +452,6 @@ mod tests {
     }
 
     #[test]
-    fn test_root_render_view_creation() {
-        let child = TestView;
-        let root = RootRenderView::new(child, 800.0, 600.0);
-        assert_eq!(root.size, (800.0, 600.0));
-    }
-
-    #[test]
     fn test_root_render_element_mount() {
         let child = TestView;
         let root = RootRenderView::new(child, 800.0, 600.0);

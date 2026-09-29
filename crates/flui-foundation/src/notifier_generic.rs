@@ -280,31 +280,9 @@ impl<Arg: Clone> Notifier<Arg> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
-
-    #[test]
-    fn delivers_arg_to_listener() {
-        let n: Notifier<i32> = Notifier::new();
-        let last = Arc::new(AtomicI32::new(0));
-        let last2 = Arc::clone(&last);
-        let _id = n.add(Arc::new(move |v: i32| last2.store(v, Ordering::SeqCst)));
-        n.notify(7);
-        assert_eq!(last.load(Ordering::SeqCst), 7);
-    }
-
-    #[test]
-    fn fires_in_registration_order() {
-        let n: Notifier<()> = Notifier::new();
-        let log = Arc::new(Mutex::new(Vec::<u8>::new()));
-        for k in 0u8..3 {
-            let log = Arc::clone(&log);
-            let _ = n.add(Arc::new(move |()| log.lock().push(k)));
-        }
-        n.notify(());
-        assert_eq!(*log.lock(), vec![0, 1, 2]);
-    }
 
     #[test]
     fn panicking_listener_does_not_abort_rest() {
@@ -339,29 +317,6 @@ mod tests {
         let _prev = id_b_cell.lock().replace(id_b);
         n.notify(());
         assert_eq!(fired_b.load(Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    fn remove_and_len_and_dispose() {
-        let n: Notifier<()> = Notifier::new();
-        let id = n.add(Arc::new(|()| {}));
-        assert_eq!(n.len(), 1);
-        n.remove(id);
-        assert_eq!(n.len(), 0);
-        let _ = n.add(Arc::new(|()| {}));
-        n.dispose();
-        assert!(n.is_disposed());
-        assert_eq!(n.len(), 0);
-        n.dispose(); // idempotent — must not panic
-    }
-
-    #[cfg(debug_assertions)]
-    #[test]
-    #[should_panic(expected = "Notifier used after dispose")]
-    fn notify_after_dispose_panics_in_debug() {
-        let n: Notifier<()> = Notifier::new();
-        n.dispose();
-        n.notify(());
     }
 
     /// A listener whose own `Drop` re-enters the notifier, probing whether

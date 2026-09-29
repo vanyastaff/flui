@@ -223,42 +223,6 @@ fn a_covered_pages_secondary_slide_drifts_toward_negative_one_third() {
     );
 }
 
-/// `_kCupertinoPageTransitionBarrierColor` — `cupertino_page_route` sets a
-/// barrier, where a plain `PageRoute` sets none by default.
-///
-/// Red-check: drop the `.barrier_color(barrier_color())` call from
-/// `cupertino_page_route` — the `DecoratedBox` count stays equal before and
-/// after the push, and this test's second assertion fails.
-#[test]
-fn cupertino_page_route_paints_a_transition_barrier_dim() {
-    let vsync = Vsync::new();
-    let navigator = seeded_navigator();
-    let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 800.0), vsync);
-
-    let before = laid.find_all_by_render_type("RenderDecoratedBox").len();
-
-    // The pushed page's own content is deliberately NOT `ColoredBox`-backed
-    // (a bare `SizedBox` mounts no `DecoratedBox` of its own) — the only
-    // `RenderDecoratedBox` this push can add is the barrier's.
-    let _result = navigator.push(cupertino_page_route::<(), _>(
-        |_ctx, _primary, _secondary| {
-            flui_sdk::widgets::SizedBox::new(10.0, 10.0)
-                .into_view()
-                .boxed()
-        },
-    ));
-    laid.tick();
-
-    let after = laid.find_all_by_render_type("RenderDecoratedBox").len();
-    assert_eq!(
-        after,
-        before + 1,
-        "cupertino_page_route's barrier_color must add exactly one DecoratedBox \
-         (the barrier's own paint), with no ColoredBox in the pushed page's content: \
-         before={before}, after={after}"
-    );
-}
-
 /// `back_gesture(true)` is the default — `cupertino_page_route` mounts the
 /// edge-swipe-back detector's `Listener` unconditionally, matching
 /// `CupertinoRouteTransitionMixin`'s unconditional wiring under

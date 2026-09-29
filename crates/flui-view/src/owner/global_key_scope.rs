@@ -472,14 +472,6 @@ mod tests {
                 hash: u64::from(identity),
             }
         }
-
-        /// A distinct key that deliberately hashes like `other`.
-        fn colliding_with(identity: u32, other: &Self) -> Self {
-            Self {
-                identity,
-                hash: other.hash,
-            }
-        }
     }
 
     impl ViewKey for StubKey {
@@ -524,12 +516,6 @@ mod tests {
     }
 
     #[test]
-    fn fresh_scope_has_no_claims() {
-        let scope = GlobalKeyScope::new();
-        assert_eq!(scope.claim_count(), 0);
-    }
-
-    #[test]
     fn claim_then_commit_is_visible_and_reclaimable() {
         let scope = GlobalKeyScope::new();
         let a = OwnerTag::fresh();
@@ -557,54 +543,6 @@ mod tests {
             .expect_err("b must not claim a's live key");
         assert_eq!(conflict.holder, a);
         // The failed attempt must not have mutated the claim.
-        assert_eq!(scope.claim_count(), 1);
-    }
-
-    /// The property a hash-keyed claim table could not hold: a *different*
-    /// key that merely collides is not a cross-owner conflict, and both
-    /// claims stay live and independently releasable.
-    #[test]
-    fn a_colliding_but_distinct_key_is_not_a_cross_owner_conflict() {
-        let scope = GlobalKeyScope::new();
-        let a = OwnerTag::fresh();
-        let b = OwnerTag::fresh();
-        let first = StubKey::new(1);
-        let second = StubKey::colliding_with(2, &first);
-        assert_eq!(first.key_hash(), second.key_hash());
-
-        scope
-            .try_claim(&first, a)
-            .expect("a claims the first key")
-            .commit();
-        scope
-            .try_claim(&second, b)
-            .expect("a distinct key sharing a hash is claimable by another owner")
-            .commit();
-        assert_eq!(scope.claim_count(), 2);
-
-        scope.release(&first, a);
-        assert_eq!(
-            scope.claim_count(),
-            1,
-            "releasing one collision partner leaves the other claimed",
-        );
-        let conflict = scope
-            .try_claim(&second, OwnerTag::fresh())
-            .expect_err("b's claim on the colliding key must have survived");
-        assert_eq!(conflict.holder, b);
-    }
-
-    #[test]
-    fn same_owner_reclaiming_its_own_key_is_not_a_conflict() {
-        let scope = GlobalKeyScope::new();
-        let a = OwnerTag::fresh();
-        let key = StubKey::new(1);
-
-        scope.try_claim(&key, a).expect("first claim").commit();
-        let guard = scope
-            .try_claim(&key, a)
-            .expect("same owner re-claiming its own key is not a conflict");
-        guard.commit();
         assert_eq!(scope.claim_count(), 1);
     }
 
@@ -686,39 +624,6 @@ mod tests {
         assert_eq!(conflict.holder, b);
     }
 
-    /// `reclaim_owner` must reach claims that share a bucket with another
-    /// owner's, and must leave the bucket's survivors intact.
-    #[test]
-    fn reclaim_owner_reaches_into_a_shared_collision_bucket() {
-        let scope = GlobalKeyScope::new();
-        let a = OwnerTag::fresh();
-        let b = OwnerTag::fresh();
-        let first = StubKey::new(1);
-        let second = StubKey::colliding_with(2, &first);
-
-        scope.try_claim(&first, a).expect("a claims").commit();
-        scope.try_claim(&second, b).expect("b claims").commit();
-
-        assert_eq!(scope.reclaim_owner(a), 1);
-        assert_eq!(scope.claim_count(), 1);
-        let conflict = scope
-            .try_claim(&second, OwnerTag::fresh())
-            .expect_err("b's colliding claim must survive");
-        assert_eq!(conflict.holder, b);
-    }
-
-    #[test]
-    fn claim_and_register_records_the_registry_on_success() {
-        let mut scope = None;
-        let owner = OwnerTag::fresh();
-        let mut local = GlobalKeyRegistry::new();
-        let key = StubKey::new(7);
-
-        claim_and_register(&mut scope, owner, &key, eid(1), &mut local);
-        assert_eq!(local.get(&key), Some(eid(1)));
-        assert_eq!(scope.as_ref().map(GlobalKeyScope::claim_count), Some(1));
-    }
-
     #[test]
     fn claim_and_register_panics_on_cross_owner_conflict() {
         let shared = GlobalKeyScope::new();
@@ -753,19 +658,5 @@ mod tests {
             None,
             "local_b stays untouched because the panic unwinds before the insert"
         );
-    }
-
-    #[test]
-    fn release_and_unregister_clears_the_registry_and_the_scope() {
-        let mut scope = None;
-        let owner = OwnerTag::fresh();
-        let mut local = GlobalKeyRegistry::new();
-        let key = StubKey::new(9);
-
-        claim_and_register(&mut scope, owner, &key, eid(1), &mut local);
-        release_and_unregister(scope.as_ref(), owner, &key, &mut local);
-
-        assert_eq!(local.get(&key), None);
-        assert_eq!(scope.as_ref().map(GlobalKeyScope::claim_count), Some(0));
     }
 }

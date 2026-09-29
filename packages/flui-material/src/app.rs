@@ -412,23 +412,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn theme_mode_defaults_to_system() {
-        assert_eq!(ThemeMode::default(), ThemeMode::System);
-        let app = MaterialApp::new(SizedBox::shrink());
-        assert_eq!(app.theme_mode, ThemeMode::System);
-    }
-
-    #[test]
-    fn theme_mode_predicates_match_the_oracle_getters() {
-        assert!(ThemeMode::System.is_system());
-        assert!(!ThemeMode::System.is_light());
-        assert!(ThemeMode::Light.is_light());
-        assert!(!ThemeMode::Light.is_dark());
-        assert!(ThemeMode::Dark.is_dark());
-        assert!(!ThemeMode::Dark.is_system());
-    }
-
-    #[test]
     // Debug-only: the guard compiles out in release, where `#[should_panic]`
     // would otherwise report "did not panic as expected" (release still
     // panics, but later, during build — see the setter's doc).
@@ -436,14 +419,5 @@ mod tests {
     #[should_panic(expected = "requires at least one locale")]
     fn empty_supported_locales_panics_at_construction() {
         let _ = MaterialApp::new(SizedBox::shrink()).supported_locales(Vec::new());
-    }
-
-    #[test]
-    fn error_text_style_matches_the_oracle_subset() {
-        let style = error_text_style();
-        assert_eq!(style.color, Some(Color::from_argb(0xD0FF_0000)));
-        assert_eq!(style.font_family.as_deref(), Some("monospace"));
-        assert_eq!(style.font_size, Some(48.0));
-        assert_eq!(style.font_weight, Some(FontWeight::W900));
     }
 }

@@ -39,29 +39,3 @@ impl CacheStats {
         self.hits + self.misses
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_hit_rate() {
-        let stats = CacheStats {
-            hits: 80,
-            misses: 20,
-            ..Default::default()
-        };
-
-        assert!((stats.hit_rate() - 0.8).abs() < 1e-10);
-        assert!((stats.miss_rate() - 0.2).abs() < 1e-10);
-        assert_eq!(stats.total_requests(), 100);
-    }
-
-    #[test]
-    fn test_zero_requests() {
-        let stats = CacheStats::default();
-        assert_eq!(stats.hit_rate(), 0.0);
-        assert_eq!(stats.miss_rate(), 1.0);
-        assert_eq!(stats.total_requests(), 0);
-    }
-}

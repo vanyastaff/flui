@@ -5,7 +5,6 @@
 //! manifest); this compilation unit exercises the generated code against the
 //! real runtime types. `prelude::*` brings both the derive and the trait.
 
-use flui_view::FieldMask;
 use flui_view::prelude::*;
 
 #[derive(Clone, PartialEq, InheritedData)]
@@ -14,15 +13,6 @@ struct Data {
     scale: f64,
     // A raw identifier: the constant is `FIELD_TYPE`, not `FIELD_R#TYPE`.
     r#type: u8,
-}
-
-#[test]
-fn constants_are_declaration_order_bits() {
-    assert_eq!(Data::FIELD_SIZE, FieldMask::bit(0));
-    assert_eq!(Data::FIELD_SCALE, FieldMask::bit(1));
-    assert_eq!(Data::FIELD_TYPE, FieldMask::bit(2));
-    assert!(!Data::FIELD_SIZE.intersects(Data::FIELD_SCALE));
-    assert!(FieldMask::<Data>::ALL.intersects(Data::FIELD_TYPE));
 }
 
 #[test]

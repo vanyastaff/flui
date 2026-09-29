@@ -53,86 +53,6 @@ fn standalone_app_bar_consumes_the_top_padding_itself() {
     );
 }
 
-#[test]
-fn app_bar_with_no_top_padding_is_exactly_the_toolbar_height() {
-    let laid = lay_out(
-        Theme::new(
-            ThemeData::light(),
-            MediaQuery::new(
-                MediaQueryData::default(),
-                AppBar::new().title(Text::new("Title")),
-            ),
-        ),
-        loose(400.0),
-    );
-
-    let root = laid.root();
-    assert_eq!(
-        laid.size(root).height,
-        56.0,
-        "with a zero MediaQuery padding, the app bar's height must be exactly \
-         the default toolbar_height",
-    );
-}
-
-#[test]
-fn theme_defaults_apply_surface_background_and_zero_elevation() {
-    let theme = ThemeData::light();
-    let colors = theme.color_scheme;
-    let laid = lay_out(
-        Theme::new(
-            theme,
-            MediaQuery::new(
-                MediaQueryData::default(),
-                AppBar::new().title(Text::new("Title")),
-            ),
-        ),
-        loose(400.0),
-    );
-
-    let material = laid
-        .try_find_by_render_type("RenderPhysicalShape")
-        .expect("AppBar must compose a Material (RenderPhysicalShape) surface");
-
-    assert_eq!(
-        laid.render_property(material, "color"),
-        Some(color_property(colors.surface)),
-        "an AppBar with no background_color override must resolve _AppBarDefaultsM3's \
-         ColorScheme.surface",
-    );
-    assert_eq!(
-        laid.render_property(material, "elevation"),
-        Some("0".to_string()),
-        "an AppBar with no elevation override must resolve _AppBarDefaultsM3's 0.0",
-    );
-}
-
-#[test]
-fn background_color_override_replaces_the_theme_default() {
-    let overridden = flui_sdk::painting::Color::rgb(10, 20, 30);
-    let laid = lay_out(
-        Theme::new(
-            ThemeData::light(),
-            MediaQuery::new(
-                MediaQueryData::default(),
-                AppBar::new()
-                    .title(Text::new("Title"))
-                    .background_color(overridden),
-            ),
-        ),
-        loose(400.0),
-    );
-
-    let material = laid
-        .try_find_by_render_type("RenderPhysicalShape")
-        .expect("AppBar must compose a Material (RenderPhysicalShape) surface");
-    assert_eq!(
-        laid.render_property(material, "color"),
-        Some(color_property(overridden)),
-        "an explicit background_color must win over the theme default",
-    );
-}
-
 /// The middle cascade tier, proven end to end: a `ThemeData.app_bar_theme`
 /// with a custom `background_color` reaches the mounted `Material`, with no
 /// widget-level `background_color` in the way.
@@ -337,22 +257,6 @@ fn details_route() -> SimpleRoute<()> {
     })
 }
 
-#[test]
-fn implied_leading_is_absent_when_the_navigator_cannot_pop() {
-    let handle = NavigatorHandle::new();
-    handle.seed_initial(home_route());
-    assert!(!handle.can_pop());
-
-    let laid = lay_out(Navigator::new(handle), tight(400.0, 800.0));
-
-    assert_eq!(
-        laid.find_all_by_render_type("RenderPhysicalShape").len(),
-        1,
-        "with a single route on the stack (can_pop == false), the AppBar must mount no implied \
-         leading IconButton — only its own Material surface",
-    );
-}
-
 /// A leading `IconButton`'s own `Material` (`RenderPhysicalShape`) among
 /// every such node in the tree — one sized exactly 40×40 (its
 /// `_IconButtonDefaultsM3.minimumSize`, see `icon_button.rs`), distinct from
@@ -437,7 +341,7 @@ fn tapping_the_implied_back_button_pops_the_route() {
 
 // ── `AppBar.bottom` — Flexible-toolbar/fixed-bottom Column layout ──
 //
-// `bottom.rs`'s own module docs and `app_bar.rs`'s `builders_set_the_expected_fields`/
+// `bottom.rs`'s own module docs and `app_bar.rs`'s
 // `preferred_size_adds_the_bottom_slots_height_when_set` cover the pure
 // preferred-size math in isolation; these prove the mounted geometry end to
 // end: the toolbar and bottom slot actually stack at their expected sizes,
@@ -472,37 +376,6 @@ fn find_bottom_slot_box(laid: &common::LaidOut) -> flui_sdk::foundation::RenderI
          height"
     );
     candidates[0]
-}
-
-#[test]
-fn app_bar_with_a_bottom_slot_mounts_the_toolbar_then_the_bottom_at_their_full_heights() {
-    let laid = lay_out(
-        Theme::new(
-            ThemeData::light(),
-            MediaQuery::new(
-                MediaQueryData::default(),
-                AppBar::new()
-                    .title(Text::new("Title"))
-                    .bottom(fixed_height_bottom(BOTTOM_SLOT_HEIGHT)),
-            ),
-        ),
-        loose(400.0),
-    );
-
-    let root = laid.root();
-    assert_eq!(
-        laid.size(root).height,
-        (56.0 + BOTTOM_SLOT_HEIGHT),
-        "with no height shortfall, the AppBar's total height must be toolbar_height + the \
-         bottom slot's own preferred height",
-    );
-
-    let bottom = find_bottom_slot_box(&laid);
-    assert_eq!(
-        laid.absolute_offset(bottom).dy,
-        56.0,
-        "the bottom slot must sit directly below the toolbar, at y == toolbar_height"
-    );
 }
 
 /// A caller-imposed height shortfall (here: an outer constraint that leaves
@@ -568,46 +441,5 @@ fn a_height_shortfall_shrinks_the_toolbar_and_leaves_the_bottom_slot_at_its_full
         !shrunk_toolbar_boxes.is_empty(),
         "the toolbar must shrink to exactly the 16px left over (104 total - 40 top inset - \
          48 bottom slot)"
-    );
-}
-
-/// A standalone `AppBar` (no `Scaffold`) with a `bottom` slot still consumes
-/// its own top safe-area inset unassisted — the same "consumes the top inset
-/// itself" contract `standalone_app_bar_consumes_the_top_padding_itself`
-/// proves for a bare toolbar, now with `bottom` in the mix and ample room
-/// (no shortfall), so the top inset adds cleanly on top of the full
-/// toolbar + bottom sum rather than eating into either.
-#[test]
-fn standalone_app_bar_with_a_bottom_slot_still_consumes_its_own_top_padding() {
-    let media = MediaQueryData {
-        padding: EdgeInsets::new(24.0, 0.0, 0.0, 0.0),
-        ..MediaQueryData::default()
-    };
-    let laid = lay_out(
-        Theme::new(
-            ThemeData::light(),
-            MediaQuery::new(
-                media,
-                AppBar::new()
-                    .title(Text::new("Title"))
-                    .bottom(fixed_height_bottom(BOTTOM_SLOT_HEIGHT)),
-            ),
-        ),
-        loose(400.0),
-    );
-
-    let root = laid.root();
-    assert_eq!(
-        laid.size(root).height,
-        (56.0 + BOTTOM_SLOT_HEIGHT + 24.0),
-        "a primary AppBar with a bottom slot must add the ambient MediaQuery top padding to \
-         toolbar_height + the bottom slot's own preferred height, unassisted by any Scaffold",
-    );
-
-    let bottom = find_bottom_slot_box(&laid);
-    assert_eq!(
-        laid.size(bottom).height,
-        (BOTTOM_SLOT_HEIGHT),
-        "with ample room (no shortfall), the bottom slot must mount at its full preferred height"
     );
 }

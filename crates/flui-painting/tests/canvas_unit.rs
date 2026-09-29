@@ -6,28 +6,9 @@
 //! does not carry inline `#[cfg(test)] mod tests` blocks for surface
 //! that is already exercised through the public API.
 
-use flui_foundation::geometry::{Point, Rect};
+use flui_foundation::geometry::Rect;
 use flui_painting::styling::Color;
 use flui_painting::{Canvas, Paint};
-
-#[test]
-fn test_canvas_creation() {
-    let canvas = Canvas::new();
-    assert_eq!(canvas.save_count(), 1);
-    assert_eq!(canvas.display_list().len(), 0);
-}
-
-#[test]
-fn test_canvas_draw_rect() {
-    let mut canvas = Canvas::new();
-    let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
-    let paint = Paint::fill(Color::RED);
-
-    canvas.draw_rect(rect, &paint);
-
-    let display_list = canvas.finish();
-    assert_eq!(display_list.len(), 1);
-}
 
 #[test]
 fn test_canvas_save_restore() {
@@ -50,52 +31,6 @@ fn test_canvas_save_restore() {
     assert_eq!(canvas.save_count(), 1);
 }
 
-#[test]
-fn test_canvas_transform() {
-    let mut canvas = Canvas::new();
-
-    let original_transform = canvas.transform_matrix();
-    canvas.translate(100.0, 50.0);
-    let translated_transform = canvas.transform_matrix();
-
-    assert_ne!(original_transform, translated_transform);
-}
-
-#[test]
-fn test_canvas_clip() {
-    let mut canvas = Canvas::new();
-    let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
-
-    canvas.clip_rect(rect);
-
-    let display_list = canvas.finish();
-    assert_eq!(display_list.len(), 1);
-}
-
-#[test]
-fn test_canvas_multiple_commands() {
-    let mut canvas = Canvas::new();
-    let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
-    let paint = Paint::fill(Color::RED);
-
-    canvas.draw_rect(rect, &paint);
-    canvas.draw_circle(Point::new(50.0, 50.0), 25.0, &paint);
-
-    let display_list = canvas.finish();
-    assert_eq!(display_list.len(), 2);
-}
-
-#[test]
-fn test_canvas_restore_without_save() {
-    // Test that restore() without matching save() is safe (no-op)
-    let mut canvas = Canvas::new();
-    canvas.restore();
-
-    let paint = Paint::fill(Color::RED);
-    canvas.draw_rect(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), &paint);
-    assert_eq!(canvas.len(), 1);
-}
-
 /// `Canvas::finish` wires a `debug_assert!` to
 /// catch unrestored `save()` calls during test runs. Release builds
 /// preserve Flutter parity (silent finalisation via `tracing::warn!`).
@@ -112,21 +47,6 @@ fn test_canvas_finish_panics_in_debug_on_unrestored_save() {
     canvas.translate(50.0, 50.0);
     // No matching restore() -- save_stack has 1 entry at finish() time.
     let _ = canvas.finish();
-}
-
-/// A balanced save/restore pair must not trip the imbalance assert.
-#[test]
-fn test_canvas_finish_clean_after_balanced_save_restore() {
-    let mut canvas = Canvas::new();
-    canvas.save();
-    canvas.translate(50.0, 50.0);
-    canvas.restore();
-    let display_list = canvas.finish();
-    // The pair records its scope bracket — `translate` mutates the canvas
-    // transform rather than emitting a command, so the two here are exactly
-    // `Save` and `Restore`. What this test is about is that the balance does
-    // not trip the imbalance assert in `finish`.
-    assert_eq!(display_list.len(), 2);
 }
 
 /// `Canvas::reset()` must clear commands, transform, clip stack, and

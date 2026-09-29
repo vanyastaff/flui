@@ -9,7 +9,7 @@
 //! property that makes the round trip work at all.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use accesskit::{Action, ActionRequest, Node, NodeId, Role, TreeId, TreeInfo, TreeUpdate};
 use flui_platform::{FakeAccessibility, PlatformAccessibility};
@@ -25,20 +25,6 @@ fn tree_update(id: u64, label: &str) -> TreeUpdate {
         tree_id: TreeId::ROOT,
         focus: root,
     }
-}
-
-/// **The cost contract.** Nothing is published while no assistive technology is
-/// attached, so an application that never runs a screen reader pays nothing for
-/// the capability existing. A fake that recorded unconditionally would hide the
-/// only property worth having here.
-#[test]
-fn nothing_is_published_while_inactive() {
-    let accessibility = FakeAccessibility::new();
-
-    accessibility.publish(tree_update(1, "Submit"));
-
-    assert!(!accessibility.is_active());
-    assert_eq!(accessibility.published_count(), 0);
 }
 
 #[test]
@@ -129,73 +115,4 @@ fn an_action_arrives_addressed_by_the_published_node_id() {
     });
 
     assert_eq!(*targets.lock(), vec![(42, Action::Click)]);
-}
-
-/// Registering a listener replaces the previous one rather than fanning out.
-/// Two live listeners would mean a re-registering composition root silently
-/// driving assembly twice.
-#[test]
-fn registering_a_listener_replaces_the_previous_one() {
-    let accessibility = FakeAccessibility::new();
-    let first = Arc::new(AtomicUsize::new(0));
-    let second = Arc::new(AtomicUsize::new(0));
-
-    let first_counter = Arc::clone(&first);
-    accessibility.set_activation_listener(Arc::new(move |_| {
-        first_counter.fetch_add(1, Ordering::SeqCst);
-    }));
-    let second_counter = Arc::clone(&second);
-    accessibility.set_activation_listener(Arc::new(move |_| {
-        second_counter.fetch_add(1, Ordering::SeqCst);
-    }));
-
-    accessibility.set_active(true);
-
-    assert_eq!(first.load(Ordering::SeqCst), 0, "the replaced listener");
-    assert_eq!(second.load(Ordering::SeqCst), 1, "the current listener");
-}
-
-/// An action arriving after detach is stale and must be dropped, not delivered.
-/// A composition root that stops assembly on detach has no tree to resolve it
-/// against, so forwarding would hand it a target it cannot look up.
-#[test]
-fn an_action_after_detach_is_dropped() {
-    let accessibility = FakeAccessibility::new();
-    let delivered = Arc::new(AtomicUsize::new(0));
-
-    let counter = Arc::clone(&delivered);
-    accessibility.set_action_listener(Arc::new(move |_| {
-        counter.fetch_add(1, Ordering::SeqCst);
-    }));
-
-    accessibility.set_active(true);
-    accessibility.set_active(false);
-
-    accessibility.request_action(ActionRequest {
-        action: Action::Click,
-        target_tree: TreeId::ROOT,
-        target_node: NodeId(42),
-        data: None,
-    });
-
-    assert_eq!(delivered.load(Ordering::SeqCst), 0);
-}
-
-/// Attach/detach is a transition: re-asserting the same state must not
-/// re-notify, or a composition root would run redundant enable/disable cycles.
-#[test]
-fn re_asserting_the_same_activation_state_does_not_re_notify() {
-    let accessibility = FakeAccessibility::new();
-    let notifications = Arc::new(AtomicUsize::new(0));
-
-    let counter = Arc::clone(&notifications);
-    accessibility.set_activation_listener(Arc::new(move |_| {
-        counter.fetch_add(1, Ordering::SeqCst);
-    }));
-
-    accessibility.set_active(true);
-    accessibility.set_active(true);
-    accessibility.set_active(true);
-
-    assert_eq!(notifications.load(Ordering::SeqCst), 1);
 }

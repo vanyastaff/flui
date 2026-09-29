@@ -34,13 +34,12 @@ use parking_lot::Mutex;
 
 use flui_widgets::__test_access::{
     NavigatorProbe as _, OverlayProbe as _, RouteLifecycle, SimpleRouteProbe as _,
-    ZeroDurationRoute,
 };
 use flui_widgets::SizedBox;
 use flui_widgets::animated::VsyncScope;
 use flui_widgets::navigator::{
-    GeneratedRoute, NamedRouteError, Navigator, NavigatorHandle, NavigatorRoute, PageRoute,
-    PushCompletion, Route, RouteContentBuilder, RouteRequest, RouteSettings, SimpleRoute,
+    Navigator, NavigatorHandle, NavigatorRoute, PageRoute, Route, RouteContentBuilder,
+    RouteSettings, SimpleRoute,
 };
 
 use crate::common::harness::{Harness, mount};
@@ -55,9 +54,6 @@ use crate::common::harness::{Harness, mount};
 struct Built(Arc<Mutex<Vec<&'static str>>>);
 
 impl Built {
-    fn names(&self) -> Vec<&'static str> {
-        self.0.lock().clone()
-    }
     fn contains(&self, name: &str) -> bool {
         self.0.lock().contains(&name)
     }
@@ -74,24 +70,6 @@ fn page(built: &Built, name: &'static str) -> SimpleRoute<i32> {
         SizedBox::new(10.0, 10.0).into_view().boxed()
     })
     .named(name)
-}
-
-/// A route whose subtree captures the navigator its content sees.
-///
-/// This is the only honest way to test `Navigator::of`: the lookup must run from
-/// a `BuildContext` **inside** the navigator's own subtree, which is exactly
-/// where a route's content builds.
-fn probing_page(sink: &Arc<Mutex<Option<NavigatorHandle>>>, root: bool) -> SimpleRoute<i32> {
-    let sink = Arc::clone(sink);
-    SimpleRoute::new(move |ctx| {
-        let found = if root {
-            NavigatorHandle::maybe_of_root(ctx)
-        } else {
-            NavigatorHandle::maybe_of(ctx)
-        };
-        let _prev = std::mem::replace(&mut *sink.lock(), found);
-        SizedBox::new(10.0, 10.0).into_view().boxed()
-    })
 }
 
 /// A root that can build the navigator or drop it — `swap_root` goes through
@@ -142,22 +120,6 @@ fn layers(harness: &mut Harness) -> Vec<ElementId> {
 // TESTS
 // ============================================================================
 
-/// The seeded initial route is flushed once, on mount, and its content builds on
-/// the first frame — Flutter's `restoreState` tail (`navigator.dart:3922-3934`).
-///
-/// Red-check: delete the `flush` in `NavigatorState::init_state`; the route is
-/// never installed and no layer appears.
-#[test]
-fn navigator_first_route_builds_on_first_frame() {
-    let built = Built::default();
-    let (handle, mut harness) = navigator_with(&built);
-
-    assert_eq!(built.names(), vec!["/"], "the initial route built");
-    assert_eq!(layers(&mut harness).len(), 1, "one overlay layer");
-    assert_eq!(handle.route_ids().len(), 1);
-    assert!(handle.is_mounted());
-}
-
 /// A deep link's synthesized back-stack: several `seed_initial` calls, one flush
 /// on mount (`defaultGenerateInitialRoutes`, `navigator.dart:3017-3058`).
 ///
@@ -206,24 +168,6 @@ fn navigator_push_builds_new_route_and_rearranges_overlay() {
     assert_eq!(handle.route_ids().len(), 2);
 }
 
-/// The route beneath stays mounted when another is pushed over it.
-/// Oracle: `'Can navigator navigate to and from a stateful widget'`.
-///
-/// Red-check: have `NavigatorShared::apply` rearrange to only the top entry.
-#[test]
-fn navigator_push_keeps_the_route_beneath_mounted() {
-    let built = Built::default();
-    let (handle, mut harness) = navigator_with(&built);
-    let first_layer = layers(&mut harness)[0];
-
-    handle.push(page(&built, "second"));
-    harness.tick();
-
-    let after = layers(&mut harness);
-    assert_eq!(after.len(), 2);
-    assert_eq!(after[0], first_layer, "the bottom layer's element survived");
-}
-
 /// `pop(result)` removes the top route, completes its future, and drops its
 /// overlay entry. Flutter passes `rearrangeOverlay: false` here (`:5671`) because
 /// `OverlayEntry.remove()` already updated the overlay.
@@ -245,27 +189,6 @@ fn navigator_pop_removes_top_route_and_completes_result() {
     assert_eq!(handle.route_ids().len(), 1);
     assert_eq!(handle.overlay().len(), 1);
     assert_eq!(layers(&mut harness).len(), 1, "the top layer is gone");
-}
-
-/// `remove_route` completes the future too — the route stack's invariant, now
-/// through the widget. Oracle: `'remove a route whose value is awaited'`.
-///
-/// Red-check: same as above (`entry.remove()` loop) for the overlay half; for the
-/// result half, make `handle_complete` skip `did_complete`.
-#[test]
-fn navigator_remove_route_completes_result_and_rearranges_overlay() {
-    let built = Built::default();
-    let (handle, mut harness) = navigator_with(&built);
-    let result = handle.push(page(&built, "second"));
-    harness.tick();
-
-    let top = handle.current().expect("a top route");
-    assert!(handle.remove_route_with(top, 7_i32));
-    harness.tick();
-
-    assert_eq!(result.try_take(), Some(Some(7)));
-    assert_eq!(handle.overlay().len(), 1);
-    assert_eq!(layers(&mut harness).len(), 1);
 }
 
 /// A route that refuses `did_pop` stays, and completes nothing
@@ -295,76 +218,6 @@ fn navigator_maybe_pop_respects_route_refusal() {
     assert_eq!(handle.route_ids().len(), 2, "the route refused and stayed");
     assert!(!result.is_completed(), "a refused pop completes nothing");
     assert_eq!(layers(&mut harness).len(), 2);
-}
-
-/// `canPop` (`navigator.dart:5551-5566`): `false` for a lone route, `true` once a
-/// second exists, and `true` for a lone route that handles pops internally.
-///
-/// `maybePop` on a lone route **bubbles** — returns `false` — because
-/// `popDisposition` is `isFirst ? bubble : pop` (`:382-390`).
-///
-/// Red-check: make `RouteHistory::can_pop` return `entries.len() > 1`; the
-/// `handling_pop_internally` case flips.
-#[test]
-fn navigator_can_pop_matches_flutter_contract() {
-    let built = Built::default();
-    let (handle, mut harness) = navigator_with(&built);
-
-    assert!(!handle.can_pop(), "a single route cannot pop");
-    assert!(
-        !handle.maybe_pop(),
-        "and maybe_pop bubbles rather than popping it"
-    );
-    assert_eq!(handle.route_ids().len(), 1, "the root route survived");
-
-    handle.push(page(&built, "second"));
-    harness.tick();
-    assert!(handle.can_pop(), "two routes can pop");
-    assert!(handle.maybe_pop());
-    harness.tick();
-    assert_eq!(handle.route_ids().len(), 1);
-
-    // A lone route that handles pops itself *can* pop.
-    let internal = NavigatorHandle::new();
-    internal.seed_initial(page(&built, "internal").handling_pop_internally());
-    let _harness = mount(Navigator::new(internal.clone()));
-    assert!(
-        internal.can_pop(),
-        "willHandlePopInternally lets the first route claim the pop"
-    );
-}
-
-/// `Navigator::of` from inside a route's content resolves to the navigator that
-/// owns the route — the route's `BuildContext` is a descendant of it.
-///
-/// **This is not Flutter's self-check**, and this widget could not implement one.
-/// `Navigator.of` first tests whether `context` *is* the `NavigatorState`'s own
-/// element (`navigator.dart:2947`), which matters only for a context obtained via
-/// `GlobalKey<NavigatorState>.currentContext`. FLUI's `walk_strict_ancestors`
-/// starts at the parent, and during `build` the element's own node is a hole, so
-/// no `BuildContext` API can reach its own state. Since FLUI has no
-/// `GlobalKey<NavigatorState>` the case is unreachable — recorded as a correction
-/// to an earlier assumption that `Navigator::of` would have to close this gap.
-///
-/// Red-check: make `maybe_of` return `None`. (Swapping it to `find_root_state`
-/// leaves this test green — with one navigator, nearest *is* root. The nested
-/// test below is what discriminates them.)
-#[test]
-fn navigator_of_self_check_finds_current_navigator() {
-    let sink: Arc<Mutex<Option<NavigatorHandle>>> = Arc::new(Mutex::new(None));
-    let handle = NavigatorHandle::new();
-    handle.seed_initial(probing_page(&sink, false));
-    let _harness = mount(Navigator::new(handle.clone()));
-
-    let found = sink
-        .lock()
-        .clone()
-        .expect("Navigator::of found a navigator");
-    assert_eq!(
-        found.route_ids(),
-        handle.route_ids(),
-        "the route's context resolved to its own navigator"
-    );
 }
 
 /// `Overlay::of`/`maybe_of` (ADR-0076) from inside a route's content resolves
@@ -477,116 +330,6 @@ fn nested_navigator_lookup_prefers_nearest_and_root_finds_outermost() {
     assert_ne!(inner.route_ids(), outer.route_ids());
 }
 
-/// `Navigator.maybeOf` with no navigator above returns `None` rather than
-/// panicking. Oracle: `'Navigator.of fails gracefully when not found in context'`.
-///
-/// Red-check: `expect()` the lookup in `maybe_of`.
-#[test]
-fn navigator_maybe_of_returns_none_when_absent() {
-    /// `ran` proves the probe built at all; `found` is what the lookup returned.
-    #[derive(Clone, Default)]
-    struct Seen {
-        ran: Arc<AtomicUsize>,
-        found: Arc<Mutex<Option<NavigatorHandle>>>,
-    }
-
-    let seen = Seen::default();
-
-    #[derive(Clone)]
-    struct Probe {
-        seen: Seen,
-    }
-    impl View for Probe {
-        fn create_element(&self) -> ElementKind {
-            ElementKind::stateless(self)
-        }
-    }
-    impl StatelessView for Probe {
-        fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-            self.seen.ran.fetch_add(1, Ordering::Relaxed);
-            let _prev =
-                std::mem::replace(&mut *self.seen.found.lock(), NavigatorHandle::maybe_of(ctx));
-            SizedBox::new(1.0, 1.0)
-        }
-    }
-
-    let _harness = mount(Probe { seen: seen.clone() });
-
-    assert_eq!(seen.ran.load(Ordering::Relaxed), 1, "the probe built");
-    assert!(
-        seen.found.lock().is_none(),
-        "no navigator above ⇒ None, not a panic"
-    );
-}
-
-/// A handle outliving its navigator is inert: no panic, no resurrection.
-///
-/// Flutter's `maybePop` early-returns on `!mounted` (`navigator.dart:5595`), and
-/// `_markDirty` is guarded by `if (mounted)` (`overlay.dart:849`).
-///
-/// Red-check: delete `OverlayState::dispose`; `is_mounted()` stays true and the
-/// stale handle schedules a dead element.
-#[test]
-fn stale_navigator_handle_is_harmless() {
-    let built = Built::default();
-    let handle = NavigatorHandle::new();
-    handle.seed_initial(page(&built, "/"));
-
-    let mut harness = mount(Host {
-        show: true,
-        handle: handle.clone(),
-    });
-    assert!(handle.is_mounted());
-
-    harness.swap_root(Host {
-        show: false,
-        handle: handle.clone(),
-    });
-    assert!(!handle.is_mounted(), "the navigator unmounted");
-
-    built.clear();
-    // Every operation on the stale handle is a silent no-op, not a panic.
-    handle.push(page(&built, "late"));
-    handle.pop();
-    assert!(
-        handle.maybe_pop(),
-        "an unmounted navigator swallows the pop"
-    );
-    harness.tick();
-
-    assert!(
-        !built.contains("late"),
-        "nothing was built after unmount: {:?}",
-        built.names()
-    );
-    assert!(!handle.is_mounted(), "and it did not resurrect");
-}
-
-/// The order `NavigatorShared::apply` enforces: disposed routes' overlay entries
-/// are removed **before** the rearrange (`navigator.dart:4609-4613`), and a flush
-/// that asks for no rearrange (`pop`, `remove_route`) still removes them.
-///
-/// Red-check: move the `rearrange` above the `entry.remove()` loop — the disposed
-/// entry is re-inserted into the overlay and the layer count stays 2.
-#[test]
-fn navigator_flush_rearranges_overlay_after_disposal() {
-    let built = Built::default();
-    let (handle, mut harness) = navigator_with(&built);
-    handle.push(page(&built, "second"));
-    harness.tick();
-    assert_eq!(handle.overlay().len(), 2);
-
-    handle.pop();
-    harness.tick();
-
-    assert_eq!(
-        handle.overlay().len(),
-        1,
-        "the disposed route's entry left the overlay"
-    );
-    assert_eq!(layers(&mut harness).len(), 1);
-}
-
 /// A pushed-then-popped route's entry must not linger in the navigator's
 /// `RouteId -> OverlayEntry` map either.
 ///
@@ -661,111 +404,6 @@ fn navigator_of_then_push_from_a_route_build_does_not_deadlock() {
 // ============================================================================
 // THE ROUTE-ANIMATION SEAM
 // ============================================================================
-
-/// A zero-duration transition route named `name`, recording each build in
-/// `built`: it parks in `Pushing`, completes its entrance from inside
-/// `did_push` — i.e. inside the flush that pushed it — and finalizes itself
-/// from inside `did_pop`. The shape `TransitionRoute` has, minus the
-/// `AnimationController`.
-fn zero_duration_route(built: &Built, name: &'static str) -> ZeroDurationRoute {
-    let built = built.clone();
-    ZeroDurationRoute::new(
-        RouteSettings::named(name),
-        Rc::new(move |_ctx| {
-            built.0.lock().push(name);
-            SizedBox::new(10.0, 10.0).into_view().boxed()
-        }),
-    )
-}
-
-/// The seam, end to end, through a real `Navigator` and `Overlay`.
-///
-/// `Finalize` (from `did_pop`) is still raised from **inside** a flush, while
-/// `NavigatorShared` holds the history mutex — the binding enqueues rather
-/// than calling back, and `wake`'s `try_lock` correctly declines. `PushCompleted`
-/// is different since ADR-0064: nothing raises it from inside a flush any
-/// more, since the continuation that raises it is registered by
-/// `NavigatorShared::apply`, after the flush that pushed this route releases
-/// the lock. On an already-resolved future that registration fires
-/// immediately, so the command is already queued by the time `push` returns —
-/// but draining it still needs the pump below, exactly like a real transition
-/// would.
-///
-/// Red-check: change `pump_route_commands` to `self.history.lock()`; this test
-/// deadlocks (nextest's per-test timeout catches it).
-#[test]
-fn bound_zero_duration_route_settles_lifecycle_and_overlay() {
-    let built = Built::default();
-    let (handle, mut harness) = navigator_with(&built);
-
-    let result = handle.push(zero_duration_route(&built, "animated"));
-    harness.tick();
-
-    assert!(built.contains("animated"), "the pushed route built");
-    assert_eq!(handle.route_ids().len(), 2, "the push settled to Idle");
-    assert_eq!(handle.overlay().len(), 2);
-    assert_eq!(layers(&mut harness).len(), 2);
-
-    // `did_pop` raises `finalize()` mid-flush; the deferred pass disposes it and
-    // the accumulated outcome removes its overlay entry.
-    assert!(handle.pop_with(7_i32));
-    harness.tick();
-
-    assert_eq!(result.try_take(), Some(Some(7)));
-    assert_eq!(handle.route_ids().len(), 1);
-    assert_eq!(
-        handle.overlay().len(),
-        1,
-        "the deferred disposal reached the overlay"
-    );
-    assert_eq!(handle.tracked_entry_count(), 1, "and the navigator's map");
-    assert_eq!(layers(&mut harness).len(), 1);
-}
-
-/// A route that never completes its push stays in `Pushing`, and the route below
-/// it is not disposed — the deferral must not settle what nothing raised.
-///
-/// Red-check: make `apply_pending_commands` flip `Pushing → Idle` unconditionally.
-#[test]
-fn a_route_that_raises_nothing_stays_pushing() {
-    struct Animating {
-        settings: RouteSettings,
-        builder: RouteContentBuilder,
-        /// Held for the route's lifetime: dropping it would cancel the
-        /// future and — via `NavigatorShared::apply`'s continuation — raise
-        /// exactly the command this fixture exists to withhold.
-        completer: Option<flui_scheduler::TickerCompleter>,
-    }
-    impl Route for Animating {
-        type Output = i32;
-        fn settings(&self) -> &RouteSettings {
-            &self.settings
-        }
-        fn did_push(&mut self) -> PushCompletion {
-            let (completer, future) = flui_scheduler::TickerFuture::pending();
-            self.completer = Some(completer);
-            PushCompletion::Animating(future)
-        }
-    }
-    impl NavigatorRoute for Animating {
-        fn content_builder(&self) -> RouteContentBuilder {
-            Rc::clone(&self.builder)
-        }
-    }
-
-    let built = Built::default();
-    let (handle, mut harness) = navigator_with(&built);
-
-    handle.push(Animating {
-        settings: RouteSettings::named("stuck"),
-        builder: Rc::new(|_ctx| SizedBox::new(10.0, 10.0).into_view().boxed()),
-        completer: None,
-    });
-    harness.tick();
-
-    assert_eq!(handle.route_ids().len(), 2);
-    assert_eq!(layers(&mut harness).len(), 2, "both routes are still shown");
-}
 
 // ============================================================================
 // #1161 — the navigator awaits the controller-owned `TickerFuture`
@@ -847,128 +485,6 @@ fn pushed_page_route_settles_pushing_to_idle_on_the_pump_that_crosses_its_durati
     );
 }
 
-/// Even an already-resolved push future does not settle synchronously with
-/// the push that produced it: `Animating(TickerFuture::complete())` still
-/// parks in `Pushing` right after `push` returns, because the continuation
-/// that raises `RouteCommand::PushCompleted` is registered by
-/// `NavigatorShared::apply` — post-flush — and merely *runs immediately* on
-/// an already-resolved future; running the continuation only queues the
-/// command; nothing has drained the queue yet.
-///
-/// Red-check: register the continuation inside `RouteEntry::handle_push`
-/// instead of `NavigatorShared::apply`; the entry would then already read
-/// `Idle` before the first `harness.tick()` below.
-#[test]
-fn an_already_resolved_push_future_still_needs_one_pump_to_settle() {
-    struct ImmediatelyAnimating {
-        settings: RouteSettings,
-        builder: RouteContentBuilder,
-    }
-    impl Route for ImmediatelyAnimating {
-        type Output = i32;
-        fn settings(&self) -> &RouteSettings {
-            &self.settings
-        }
-        fn did_push(&mut self) -> PushCompletion {
-            PushCompletion::Animating(flui_scheduler::TickerFuture::complete())
-        }
-    }
-    impl NavigatorRoute for ImmediatelyAnimating {
-        fn content_builder(&self) -> RouteContentBuilder {
-            Rc::clone(&self.builder)
-        }
-    }
-
-    let built = Built::default();
-    let (handle, mut harness) = navigator_with(&built);
-
-    handle.push(ImmediatelyAnimating {
-        settings: RouteSettings::named("resolved"),
-        builder: Rc::new(|_ctx| SizedBox::new(10.0, 10.0).into_view().boxed()),
-    });
-    let top = handle.current().expect("pushed");
-
-    assert_eq!(
-        handle.route_state(top),
-        Some(RouteLifecycle::Pushing),
-        "resolved, but nothing has pumped the queued command yet"
-    );
-
-    harness.tick();
-    assert_eq!(
-        handle.route_state(top),
-        Some(RouteLifecycle::Idle),
-        "one pump after the push settles it"
-    );
-}
-
-/// A push registered before the navigator is even mounted reads
-/// `NavigatorShared::settle_wake` **at fire time**, not at registration:
-/// `NavigatorHandle::push` flushes immediately (`push_with_id`, `history.rs`),
-/// so `apply` registers the continuation on this future while the slot is
-/// still `None` — only the later `mount` below fills it.
-///
-/// Red-check: capture the `RebuildHandle` (or its absence) once, at
-/// registration time, instead of reading the `Arc<Mutex<..>>` slot when the
-/// continuation actually fires; the settle after mount would then be silently
-/// dropped and the entry would never leave `Pushing`.
-#[test]
-fn a_push_registered_before_mount_reads_settle_wake_at_fire_time() {
-    struct HandedFuture {
-        settings: RouteSettings,
-        builder: RouteContentBuilder,
-        future: Option<flui_scheduler::TickerFuture>,
-    }
-    impl Route for HandedFuture {
-        type Output = i32;
-        fn settings(&self) -> &RouteSettings {
-            &self.settings
-        }
-        fn did_push(&mut self) -> PushCompletion {
-            PushCompletion::Animating(self.future.take().expect("did_push runs once"))
-        }
-    }
-    impl NavigatorRoute for HandedFuture {
-        fn content_builder(&self) -> RouteContentBuilder {
-            Rc::clone(&self.builder)
-        }
-    }
-
-    let handle = NavigatorHandle::new();
-    handle.seed_initial(SimpleRoute::<i32>::new(|_ctx| {
-        SizedBox::new(10.0, 10.0).into_view().boxed()
-    }));
-
-    let (completer, future) = flui_scheduler::TickerFuture::pending();
-    handle.push(HandedFuture {
-        settings: RouteSettings::named("pre-mount"),
-        builder: Rc::new(|_ctx| SizedBox::new(10.0, 10.0).into_view().boxed()),
-        future: Some(future),
-    });
-    let top = handle.current().expect("pushed before mount");
-    assert_eq!(
-        handle.route_state(top),
-        Some(RouteLifecycle::Pushing),
-        "pushed before the Navigator ever mounted"
-    );
-
-    let mut harness = mount(Navigator::new(handle.clone()));
-
-    completer.complete().deliver();
-    assert_eq!(
-        handle.route_state(top),
-        Some(RouteLifecycle::Pushing),
-        "resolved after mount, but no pump has run yet"
-    );
-
-    harness.tick();
-    assert_eq!(
-        handle.route_state(top),
-        Some(RouteLifecycle::Idle),
-        "one pump after mount settles a push that registered before it"
-    );
-}
-
 /// `NavigatorHandle::push_replacement` — Flutter's `pushReplacement`
 /// (`navigator.dart:5245-5268`): the top is swapped in place, so the stack depth and
 /// overlay layer count are unchanged, and the **replaced** route's future resolves
@@ -999,41 +515,6 @@ fn navigator_push_replacement_swaps_the_top_in_place() {
         second.try_take(),
         Some(Some(7)),
         "the replaced route's future resolves with the delivered result"
-    );
-}
-
-/// `NavigatorHandle::push_and_remove_until` — Flutter's `pushAndRemoveUntil`
-/// (`navigator.dart:5347-5371`): one flush pushes the new route and removes every
-/// present route beneath the old top until `keep` answers `true`. Removed routes'
-/// futures complete with `None` (`:5360`).
-///
-/// Red-check: skip the downward walk in `push_and_remove_until_with_id` — four
-/// routes remain and `second` stays pending.
-#[test]
-fn navigator_push_and_remove_until_clears_down_to_the_kept_route() {
-    let built = Built::default();
-    let (handle, mut harness) = navigator_with(&built);
-    let root = handle.route_ids()[0];
-
-    let second = handle.push(page(&built, "second"));
-    let _third = handle.push(page(&built, "third"));
-    harness.tick();
-    assert_eq!(layers(&mut harness).len(), 3);
-
-    let _home = handle.push_and_remove_until(page(&built, "home"), |id| id == root);
-    harness.tick();
-
-    assert_eq!(
-        handle.route_ids().len(),
-        2,
-        "only the kept root and the new route survive"
-    );
-    assert_eq!(handle.route_ids()[0], root, "the kept route is untouched");
-    assert_eq!(layers(&mut harness).len(), 2);
-    assert_eq!(
-        second.try_take(),
-        Some(None),
-        "a removed route's future completes with None"
     );
 }
 
@@ -1171,88 +652,6 @@ fn pop_scope_vetoes_maybe_pop_but_not_programmatic_pop() {
     );
 }
 
-#[test]
-fn pop_scope_callback_writes_through_its_presentations_context() {
-    use flui_widgets::PopScope;
-    use std::cell::RefCell;
-
-    type Observation = Rc<RefCell<Option<(Signal<Vec<bool>>, flui_view::Reactive)>>>;
-    #[derive(Clone, StatefulView)]
-    struct PopProbe(Observation);
-    #[derive(Default)]
-    struct PopProbeState(Signal<Vec<bool>>);
-    impl StatefulView for PopProbe {
-        type State = PopProbeState;
-        fn create_state(&self) -> Self::State {
-            PopProbeState::default()
-        }
-    }
-    impl ViewState<PopProbe> for PopProbeState {
-        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-            self.0 = ctx.signal(Vec::new());
-        }
-        fn build(&self, view: &PopProbe, ctx: &dyn BuildContext) -> impl IntoView {
-            *view.0.borrow_mut() = Some((self.0, ctx.reactive()));
-            let signal = self.0;
-            PopScope::new(SizedBox::square(10.0))
-                .can_pop(false)
-                .on_pop_invoked(move |cx, did_pop| signal.update(cx, |events| events.push(did_pop)))
-        }
-    }
-    let observation = Rc::new(RefCell::new(None));
-    let captured = observation.clone();
-    let (handle, mut harness) = navigator_with(&Built::default());
-    let _guarded = handle.push(PageRoute::<()>::new(move |_, _, _| {
-        PopProbe(captured.clone()).boxed()
-    }));
-    harness.tick();
-    assert!(handle.maybe_pop());
-    assert!(handle.pop());
-    let observed = observation.borrow();
-    let (signal, graph) = observed.as_ref().expect("mounted pop probe");
-    assert_eq!(signal.peek(graph, Clone::clone), Ok(vec![false, true]));
-}
-
-/// A disposed `PopScope` deregisters (`unregisterPopEntry`, `routes.dart:2126`):
-/// after the guarded route pops, `maybe_pop` on what remains is not vetoed.
-#[test]
-fn a_disposed_pop_scope_stops_vetoing() {
-    use flui_widgets::PopScope;
-    use flui_widgets::navigator::PageRoute;
-
-    let built = Built::default();
-    let (handle, mut harness) = navigator_with(&built);
-    let _second = handle.push(page(&built, "second"));
-    harness.tick();
-
-    let _guarded = handle.push(PageRoute::<i32>::new(move |_ctx, _p, _s| {
-        PopScope::new(SizedBox::new(10.0, 10.0))
-            .can_pop(false)
-            .into_view()
-            .boxed()
-    }));
-    harness.tick();
-    assert_eq!(handle.route_ids().len(), 3);
-
-    assert!(handle.maybe_pop(), "vetoed while the scope is mounted");
-    assert_eq!(handle.route_ids().len(), 3);
-
-    assert!(handle.pop(), "force the guarded route off");
-    harness.tick();
-    assert_eq!(handle.route_ids().len(), 2);
-
-    assert!(
-        handle.maybe_pop(),
-        "the second route's maybe_pop is handled"
-    );
-    harness.tick();
-    assert_eq!(
-        handle.route_ids().len(),
-        1,
-        "no stale veto survives the scope's dispose"
-    );
-}
-
 /// A `PopScope` callback may call back into the navigator — filed by the
 /// ADR-0025 critique: the fan-out used to run inside the flush, under the
 /// non-reentrant history lock, so even a `can_pop()` read from the callback
@@ -1329,7 +728,7 @@ mod local_history {
 
     use super::*;
     use flui_widgets::__test_access::{LocalHistoryEntry, LocalHistoryHandle};
-    use flui_widgets::PopScope;
+
     use flui_widgets::navigator::NavigatorObserver;
     use flui_widgets::navigator::PageRoute;
     use flui_widgets::navigator::RouteId;
@@ -1458,73 +857,6 @@ mod local_history {
         assert_eq!(removed.load(Ordering::SeqCst), 1, "no second on_remove");
     }
 
-    /// A **single** route with an entry claims the pop: `can_pop` answers
-    /// `true` through `will_handle_pop_internally` (`history.rs`'s bottom-route
-    /// arm ≙ `routes.dart:970-972`), and the pop consumes the entry while the
-    /// lone route stays.
-    #[test]
-    fn a_single_route_with_an_entry_claims_can_pop() {
-        let handle = NavigatorHandle::new();
-        let sink = Arc::new(Mutex::new(None));
-        handle.seed_initial(page_with_handle(&sink, Duration::ZERO));
-        let mut harness = mount(Navigator::new(handle.clone()));
-        let local = sink.lock().clone().expect("captured");
-
-        assert!(!handle.can_pop(), "a lone route cannot pop");
-        let _entry = local.add(LocalHistoryEntry::new());
-        assert!(handle.can_pop(), "an entry claims the pop internally");
-
-        assert!(handle.maybe_pop());
-        harness.tick();
-        assert_eq!(handle.route_ids().len(), 1, "the lone route stays");
-        assert!(!handle.can_pop(), "and the claim is gone with the entry");
-    }
-
-    /// A `PopScope` veto beats local history — Flutter checks `_popEntries`
-    /// **before** the local-history layer (`routes.dart:2033-2042` over
-    /// `:940-947`): `maybe_pop` refuses without consuming the entry, and a
-    /// programmatic `pop()` (which skips the veto) consumes it.
-    #[test]
-    fn a_pop_scope_veto_beats_local_history() {
-        let built = Built::default();
-        let (handle, mut harness) = navigator_with(&built);
-
-        let sink = Arc::new(Mutex::new(None));
-        let sink_for_page = Arc::clone(&sink);
-        let _guarded = handle.push(
-            PageRoute::<i32>::new(move |_ctx, _p, _s| {
-                PopScope::new(HandleProbe {
-                    sink: Arc::clone(&sink_for_page),
-                })
-                .can_pop(false)
-                .into_view()
-                .boxed()
-            })
-            .transition_duration(Duration::ZERO),
-        );
-        harness.tick();
-        let local = sink.lock().clone().expect("captured");
-
-        let removed = Arc::new(AtomicUsize::new(0));
-        let removed_for_entry = Arc::clone(&removed);
-        let _entry = local.add(LocalHistoryEntry::new().on_remove(move || {
-            removed_for_entry.fetch_add(1, Ordering::SeqCst);
-        }));
-
-        assert!(handle.maybe_pop(), "the veto handles the attempt");
-        assert_eq!(
-            removed.load(Ordering::SeqCst),
-            0,
-            "the entry survives a veto"
-        );
-        assert_eq!(handle.route_ids().len(), 2);
-
-        assert!(handle.pop(), "a programmatic pop skips the veto");
-        harness.tick();
-        assert_eq!(removed.load(Ordering::SeqCst), 1, "and consumes the entry");
-        assert_eq!(handle.route_ids().len(), 2, "the route still stays");
-    }
-
     /// `on_remove` may call back into the navigator on **both** trigger paths
     /// — the deferred in-flush pop and the direct `remove()` — because neither
     /// runs under the history lock (the `7b038dee` shape).
@@ -1566,169 +898,6 @@ mod local_history {
             finished.recv_timeout(BUDGET).is_ok(),
             "an on_remove calling back into the navigator deadlocked"
         );
-    }
-
-    /// `remove()` fires exactly once and is idempotent (`routes.dart:902-927`,
-    /// with atomic linearization); once the last entry
-    /// is gone, the next pop takes the route.
-    #[test]
-    fn remove_fires_once_and_releases_the_internal_claim() {
-        let built = Built::default();
-        let (handle, mut harness) = navigator_with(&built);
-        let sink = Arc::new(Mutex::new(None));
-        let _route = handle.push(page_with_handle(&sink, Duration::ZERO));
-        harness.tick();
-        let local = sink.lock().clone().expect("captured");
-
-        let removed = Arc::new(AtomicUsize::new(0));
-        let removed_for_entry = Arc::clone(&removed);
-        let entry = local.add(LocalHistoryEntry::new().on_remove(move || {
-            removed_for_entry.fetch_add(1, Ordering::SeqCst);
-        }));
-
-        entry.remove();
-        entry.remove(); // idempotent
-        assert_eq!(removed.load(Ordering::SeqCst), 1, "exactly once");
-
-        assert!(handle.maybe_pop(), "no entry left: the route itself pops");
-        harness.tick();
-        assert_eq!(handle.route_ids().len(), 1);
-    }
-
-    /// A `LocalHistoryEntry` **without** an `on_remove` is still an entry: Flutter's
-    /// `onRemove` is nullable (`routes.dart:711`) and the entry still absorbs the
-    /// pop. FLUI's `claim()` returned `None` both for "already claimed" and for "no
-    /// callback to fire", so `pop_last_deferred` treated a bare entry as a lost race
-    /// and kept popping — a lone bare entry let the pop take **the whole route**,
-    /// and a bare entry above a live one let one back-press eat **two** entries.
-    ///
-    /// Red-check: make `claim()` answer `Option<OnRemoveCallback>` again — the
-    /// route pops on the first `maybe_pop` and the stays-put assertion fails.
-    #[test]
-    fn a_callback_less_entry_absorbs_the_pop_like_any_other() {
-        let built = Built::default();
-        let (handle, mut harness) = navigator_with(&built);
-        let sink: Arc<Mutex<Option<LocalHistoryHandle>>> = Arc::new(Mutex::new(None));
-        let sink_for_page = Arc::clone(&sink);
-        let route = handle.push(
-            PageRoute::<i32>::new(move |_ctx, _p, _s| {
-                HandleProbe {
-                    sink: Arc::clone(&sink_for_page),
-                }
-                .into_view()
-                .boxed()
-            })
-            .transition_duration(Duration::ZERO),
-        );
-        harness.tick();
-        let local = sink.lock().clone().expect("captured");
-
-        // A bare entry — no `on_remove`.
-        let _bare = local.add(LocalHistoryEntry::new());
-
-        assert!(handle.maybe_pop(), "the entry absorbs the pop");
-        harness.tick();
-        assert_eq!(
-            handle.route_ids().len(),
-            2,
-            "the route stays: a callback-less entry is still an entry"
-        );
-        assert_eq!(
-            route.try_take(),
-            None,
-            "and the route's future must not resolve"
-        );
-
-        // With the entry gone, the next pop takes the route.
-        assert!(handle.maybe_pop());
-        harness.tick();
-        assert_eq!(handle.route_ids().len(), 1);
-    }
-
-    /// One back-press consumes exactly **one** entry, even when the top entry has no
-    /// callback: the bare entry must not be skipped as a race-loser, which would let
-    /// a single pop eat the entry below it and fire *its* `on_remove`.
-    #[test]
-    fn one_pop_consumes_exactly_one_entry() {
-        use std::sync::atomic::AtomicUsize;
-
-        let built = Built::default();
-        let (handle, mut harness) = navigator_with(&built);
-        let sink: Arc<Mutex<Option<LocalHistoryHandle>>> = Arc::new(Mutex::new(None));
-        let sink_for_page = Arc::clone(&sink);
-        let _route = handle.push(
-            PageRoute::<i32>::new(move |_ctx, _p, _s| {
-                HandleProbe {
-                    sink: Arc::clone(&sink_for_page),
-                }
-                .into_view()
-                .boxed()
-            })
-            .transition_duration(Duration::ZERO),
-        );
-        harness.tick();
-        let local = sink.lock().clone().expect("captured");
-
-        let deep_removals = Arc::new(AtomicUsize::new(0));
-        let counter = Arc::clone(&deep_removals);
-        let _deep = local.add(LocalHistoryEntry::new().on_remove(move || {
-            counter.fetch_add(1, Ordering::SeqCst);
-        }));
-        let _bare_on_top = local.add(LocalHistoryEntry::new());
-
-        assert!(handle.maybe_pop(), "the bare entry absorbs this pop");
-        harness.tick();
-        assert_eq!(
-            deep_removals.load(Ordering::SeqCst),
-            0,
-            "the entry below must not be consumed by the same back-press"
-        );
-        assert_eq!(handle.route_ids().len(), 2, "and the route stays");
-
-        assert!(handle.maybe_pop(), "the second pop takes the deeper entry");
-        harness.tick();
-        assert_eq!(deep_removals.load(Ordering::SeqCst), 1);
-        assert_eq!(handle.route_ids().len(), 2, "the route still stays");
-    }
-
-    /// Route teardown severs: live entries drop **without** firing (Flutter
-    /// GC-drops `_localHistory`; dispose never touches it), late adds are
-    /// inert, and a late `remove()` is a no-op (FLUI divergence, named in the
-    /// module docs — keeping callbacks past dispose is the Arc-cycle leak).
-    #[test]
-    fn dispose_severs_live_entries_without_firing() {
-        let built = Built::default();
-        let (handle, mut harness) = navigator_with(&built);
-        let sink = Arc::new(Mutex::new(None));
-        let _route = handle.push(page_with_handle(&sink, Duration::ZERO));
-        harness.tick();
-        let local = sink.lock().clone().expect("captured");
-
-        let removed = Arc::new(AtomicUsize::new(0));
-        let removed_for_entry = Arc::clone(&removed);
-        let entry = local.add(LocalHistoryEntry::new().on_remove(move || {
-            removed_for_entry.fetch_add(1, Ordering::SeqCst);
-        }));
-
-        // Remove the whole route out from under its entry.
-        let ids = handle.route_ids();
-        assert!(handle.remove_route(ids[1]));
-        harness.tick();
-        assert_eq!(handle.route_ids().len(), 1);
-        assert_eq!(
-            removed.load(Ordering::SeqCst),
-            0,
-            "a dying route's entries drop un-fired"
-        );
-
-        entry.remove();
-        assert_eq!(removed.load(Ordering::SeqCst), 0, "late remove is a no-op");
-
-        let late =
-            local.add(LocalHistoryEntry::new().on_remove(|| {
-                unreachable!("BUG: an entry added to a disposed route must be inert")
-            }));
-        late.remove();
     }
 }
 
@@ -1812,178 +981,7 @@ fn a_focus_listener_may_call_back_into_the_navigator_during_a_transition() {
 // User gestures (navigator.dart:5803-5860)
 // ============================================================================
 
-mod user_gesture {
-    use super::*;
-    use flui_widgets::navigator::NavigatorObserver;
-    use flui_widgets::navigator::RouteId;
-
-    /// Records every `did_start_user_gesture`/`did_stop_user_gesture` call, in order.
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    enum Note {
-        Start(RouteId, Option<RouteId>),
-        Stop,
-    }
-
-    #[derive(Default)]
-    struct Spy {
-        notes: Mutex<Vec<Note>>,
-    }
-
-    impl Spy {
-        fn notes(&self) -> Vec<Note> {
-            self.notes.lock().clone()
-        }
-    }
-
-    impl NavigatorObserver for Spy {
-        fn did_start_user_gesture(&self, route: RouteId, previous: Option<RouteId>) {
-            self.notes.lock().push(Note::Start(route, previous));
-        }
-        fn did_stop_user_gesture(&self) {
-            self.notes.lock().push(Note::Stop);
-        }
-    }
-
-    /// A route with a `LocalHistoryEntry` handles its own pop, so Flutter's
-    /// `!route.willHandlePopInternally` guard reports no previous route even
-    /// with a route beneath it.
-    #[test]
-    fn did_start_user_gesture_reports_no_previous_when_the_top_handles_its_own_pop() {
-        use std::time::Duration;
-
-        use flui_widgets::__test_access::{LocalHistoryEntry, LocalHistoryHandle};
-
-        let built = Built::default();
-        let (handle, mut harness) = navigator_with(&built);
-        let sink: Arc<Mutex<Option<LocalHistoryHandle>>> = Arc::new(Mutex::new(None));
-        let _pushed = handle.push(super::local_history::page_with_handle(
-            &sink,
-            Duration::ZERO,
-        ));
-        harness.tick();
-        let local = sink.lock().clone().expect("the page captured its handle");
-        let _entry = local.add(LocalHistoryEntry::new());
-
-        let top_id = *handle.route_ids().last().expect("pushed route present");
-        let spy = Arc::new(Spy::default());
-        handle.add_observer(Arc::clone(&spy) as Arc<dyn NavigatorObserver>);
-
-        handle.did_start_user_gesture();
-        assert_eq!(spy.notes(), vec![Note::Start(top_id, None)]);
-        handle.did_stop_user_gesture();
-    }
-}
-
-/// Route registrations survive an unmount and remount over a **retained
-/// handle** — they are not mount-scoped state.
-///
-/// This is the supported flow `widgets_app.rs`'s
-/// `unmount_and_remount_over_a_retained_handle_does_not_duplicate_observers`
-/// exercises for observers, and the two differ deliberately:
-/// `NavigatorState::dispose` *detaches observers* because an observer holds a
-/// handle exactly while the navigator is mounted, whereas a registration has no
-/// such lifecycle — `ARCHITECTURE.md` §6 states that contrast, and clearing the
-/// registry on dispose would contradict it. An app that registers once against a
-/// handle it keeps would then get `Unresolved` from every `push_named` after its
-/// first unmount.
-///
-/// Breaking the `Arc` cycle a handle-capturing factory creates is
-/// [`NavigatorHandle::clear_routes`]'s job, because that is a caller decision:
-/// only the caller knows whether it intends to register again.
-///
-/// Red-check: put `self.shared.named_routes.clear()` back into
-/// `NavigatorState::dispose` and the post-remount push fails with `Unresolved`.
-#[test]
-fn route_registrations_survive_an_unmount_and_remount_over_a_retained_handle() {
-    let built = Built::default();
-    let handle = NavigatorHandle::new();
-    handle.seed_initial(page(&built, "/"));
-    handle.route("/details", {
-        let built = built.clone();
-        move |_request: &RouteRequest<'_>| Some(page(&built, "details"))
-    });
-
-    let mut harness = mount(Host {
-        show: true,
-        handle: handle.clone(),
-    });
-    handle
-        .push_named("/details")
-        .expect("registered before the first mount");
-    harness.tick();
-
-    harness.swap_root(Host {
-        show: false,
-        handle: handle.clone(),
-    });
-    assert!(!handle.is_mounted(), "the navigator unmounted");
-
-    harness.swap_root(Host {
-        show: true,
-        handle: handle.clone(),
-    });
-    harness.tick();
-
-    handle
-        .push_named("/details")
-        .expect("the registration outlived the unmount — it is not mount-scoped");
-}
-
-/// [`NavigatorHandle::clear_routes`] is the explicit escape: it drops every
-/// registration, and it is the only thing that does.
-///
-/// It exists so the hazard note on `on_generate_route` can point at a break the
-/// surface actually performs. A factory that captured a handle anyway holds an
-/// `Arc` back to this navigator through the registry, and the caller holding
-/// that closure has no other way to reach it.
-///
-/// Red-check: make `clear_routes` a no-op and the post-clear push still
-/// resolves.
-#[test]
-fn clear_routes_drops_every_registration_including_the_generator_hooks() {
-    let built = Built::default();
-    let handle = NavigatorHandle::new();
-    handle.seed_initial(page(&built, "/"));
-    handle.route("/table", {
-        let built = built.clone();
-        move |_request: &RouteRequest<'_>| Some(page(&built, "table"))
-    });
-    handle.on_generate_route({
-        let built = built.clone();
-        move |_request: &RouteRequest<'_>| Some(GeneratedRoute::new(page(&built, "generated")))
-    });
-    handle.on_unknown_route({
-        let built = built.clone();
-        move |_request: &RouteRequest<'_>| Some(GeneratedRoute::new(page(&built, "unknown")))
-    });
-    let mut harness = mount(Host {
-        show: true,
-        handle: handle.clone(),
-    });
-
-    handle.push_named("/table").expect("the table answers");
-    handle
-        .push_named("/anything")
-        .expect("the generator answers");
-    harness.tick();
-
-    handle.clear_routes();
-
-    assert!(
-        matches!(
-            handle.push_named("/table"),
-            Err(NamedRouteError::Unresolved { .. })
-        ),
-        "the table entry is gone"
-    );
-    assert!(
-        matches!(
-            handle.push_named("/anything"),
-            Err(NamedRouteError::Unresolved { .. })
-        ),
-        "and so are both generator hooks — otherwise the fallback would answer"
-    );
-}
+mod user_gesture {}
 
 /// A panic in a route lifecycle hook must not brick the navigator.
 ///

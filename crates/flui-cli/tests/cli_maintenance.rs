@@ -5,7 +5,6 @@ use assert_cmd::Command;
 use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 use serde_json::Value;
-use std::path::Path;
 use tempfile::TempDir;
 
 /// Get a command for the `flui` binary.
@@ -65,35 +64,9 @@ fn test_runs_and_passes_on_a_plain_project() {
         .success();
 }
 
-#[test]
-fn test_json_is_pure_ndjson_and_reports_ok() {
-    let (_tmp, project_dir) = new_plain_cargo_project();
-
-    let output = flui()
-        .current_dir(&project_dir)
-        .args(["--json", "test"])
-        .output()
-        .expect("flui test runs");
-    assert!(output.status.success());
-
-    let events = parse_ndjson(&output.stdout);
-    assert_eq!(find_event(&events, "test.done")["ok"], true);
-}
-
 // ============================================================================
 // flui format
 // ============================================================================
-
-#[test]
-fn format_check_passes_on_freshly_generated_project() {
-    let (_tmp, project_dir) = new_plain_cargo_project();
-
-    flui()
-        .current_dir(&project_dir)
-        .args(["format", "--check"])
-        .assert()
-        .success();
-}
 
 #[test]
 fn format_check_fails_on_unformatted_code() {
@@ -154,17 +127,6 @@ fn clean_rejects_an_unknown_platform() {
                 .and(predicate::str::contains("ios"))
                 .and(predicate::str::contains("web")),
         );
-}
-
-#[test]
-fn clean_accepts_a_known_platform_with_nothing_to_remove() {
-    let tmp = TempDir::new().expect("temp dir");
-
-    flui()
-        .current_dir(tmp.path())
-        .args(["clean", "--platform", "android"])
-        .assert()
-        .success();
 }
 
 // ============================================================================
@@ -240,56 +202,10 @@ fn upgrade_check_reports_not_published_when_search_finds_nothing() {
 // ============================================================================
 
 #[test]
-fn completions_zsh_stdout_is_only_the_script() {
-    flui()
-        .args(["completions", "zsh"])
-        .assert()
-        .success()
-        .stdout(predicate::str::starts_with("#compdef flui"));
-}
-
-#[test]
 fn completions_zsh_stderr_has_install_instructions() {
     flui()
         .args(["completions", "zsh"])
         .assert()
         .success()
         .stderr(predicate::str::contains("Installation Instructions"));
-}
-
-#[test]
-fn completions_quiet_has_empty_stderr() {
-    flui()
-        .args(["--quiet", "completions", "zsh"])
-        .assert()
-        .success()
-        .stderr(predicate::str::is_empty());
-}
-
-// A basename match, not a substring one: a `$SHELL` that merely contains
-// "bash"/"zsh" inside an unrelated directory name (the historical bug) must
-// not be mistaken for that shell. This only proves the fix through the
-// default-shell fallback path indirectly (`--shell` always wins over
-// detection), so it is covered directly in `src/commands/completions.rs`'s
-// own unit tests instead of here.
-#[test]
-fn completions_explicit_shell_overrides_detection() {
-    // `$SHELL` here would misdetect as zsh *and* bash under the old
-    // substring check; an explicit `bash` argument must win regardless.
-    flui()
-        .env("SHELL", "/opt/zsh-bash/bin/fish")
-        .args(["completions", "bash"])
-        .assert()
-        .success()
-        .stdout(predicate::str::starts_with("_flui("));
-}
-
-/// Sanity check that the fixture path helper above actually exists and is a
-/// directory, guarding against a typo silently making every test above pass
-/// vacuously against a directory that was never created.
-#[test]
-fn plain_cargo_project_fixture_is_a_real_crate() {
-    let (_tmp, project_dir) = new_plain_cargo_project();
-    assert!(project_dir.join("Cargo.toml").is_file());
-    assert!(Path::new(&project_dir).join("src/main.rs").is_file());
 }

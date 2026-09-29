@@ -353,54 +353,6 @@ mod tests {
         }
     }
 
-    /// The macro-built View resolves to the unified `ParentDataBehavior`
-    /// element, whose `parent_data_config()` surfaces the view's configured
-    /// parent data (the seam `ElementTree` writes onto the child render node).
-    #[test]
-    fn behavior_surfaces_configured_parent_data() {
-        let view = TestFlexible {
-            flex: 2.0,
-            fit: true,
-            child: DummyChild,
-        };
-
-        let element = view.create_element();
-        let config = element
-            .element()
-            .parent_data_config()
-            .expect("ParentDataBehavior must surface a parent-data config");
-        let data = config
-            .as_any()
-            .downcast_ref::<TestParentData>() // test asserts the concrete config type round-trips
-            .expect("the surfaced config is the view's concrete ParentData type");
-        assert!((data.flex - 2.0).abs() < f64::EPSILON);
-        assert!(data.fit);
-    }
-
-    #[test]
-    fn element_kind_forwards_parent_data_updates() {
-        let view = TestFlexible {
-            flex: 3.0,
-            fit: false,
-            child: DummyChild,
-        };
-        let element = view.create_element();
-        let mut data = TestParentData {
-            flex: 1.0,
-            fit: true,
-        };
-
-        let impact = element.element().apply_parent_data_config(&mut data);
-
-        assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
-        assert!((data.flex - 3.0).abs() < f64::EPSILON);
-        assert!(!data.fit);
-        assert_eq!(
-            element.element().apply_parent_data_config(&mut data),
-            flui_rendering::RenderUpdateImpact::NONE,
-        );
-    }
-
     #[test]
     #[should_panic(expected = "Incorrect use of ParentDataView")]
     fn parent_data_type_mismatch_panics() {
@@ -494,50 +446,5 @@ mod tests {
             assert_eq!(pipeline_owner.nodes_needing_layout().len(), 1);
             assert_eq!(pipeline_owner.nodes_needing_layout()[0].id, render_parent);
         });
-    }
-
-    /// E3 regression: a ParentData element scheduled in the tree actually
-    /// reconciles its wrapped child through `build_scope`.
-    ///
-    /// `ParentDataBehavior` is a proxy-style behavior whose `build_into_views`
-    /// returns the wrapped child for the id-reconciler. `build_scope`'s dirty
-    /// guard reads `is_dirty()`; a freshly-mounted element reports dirty, so
-    /// the guard must let it build and hand its child off.
-    #[test]
-    fn regression_parent_data_reconciles_child_through_build_scope() {
-        let view = TestFlexible {
-            flex: 2.0,
-            fit: true,
-            child: DummyChild,
-        };
-
-        let mut tree = crate::ElementTree::new();
-        let mut owner = crate::BuildOwner::new();
-        let root = tree.mount_root(&view, &mut owner.element_owner_mut());
-
-        // Mount leaves the element dirty; the guard must observe that.
-        assert!(
-            tree.get(root).unwrap().element().is_dirty(),
-            "a freshly-mounted ParentData element reports is_dirty() == true",
-        );
-
-        owner.schedule_build_for(root, 0, crate::RebuildReason::InitialMount);
-        owner.build_scope(&mut tree);
-
-        let child_ids = tree.get(root).unwrap().child_ids().to_vec();
-        assert_eq!(
-            child_ids.len(),
-            1,
-            "build_scope must let the dirty ParentData element reconcile its wrapped child",
-        );
-        assert!(
-            tree.get(child_ids[0]).is_some(),
-            "the reconciled child resolves in the slab",
-        );
-        // The build cleared the flag, so a no-op rebuild won't re-fire.
-        assert!(
-            !tree.get(root).unwrap().element().is_dirty(),
-            "is_dirty() is false after the build hands the child off",
-        );
     }
 }

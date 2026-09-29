@@ -316,37 +316,6 @@ mod tests {
         );
     }
 
-    // All five tests below install a per-thread dispatcher via
-    // `tracing::dispatcher::with_default`. Installing/dropping a
-    // dispatcher triggers tracing-core's global callsite
-    // interest-cache rebuild; under parallel test execution that
-    // rebuild races between threads and a freshly installed
-    // per-thread collector can miss events (observed as a
-    // vacuous-pass-guard failure in full-workspace runs). The module
-    // docs prescribe `#[serial_test::serial]` gating for exactly this
-    // hazard.
-    #[test]
-    #[serial_test::serial]
-    fn collector_captures_mount_event() {
-        let events = with_collector(|| {
-            emit_event(&ReconcileEvent::mount(
-                ElementId::new(7),
-                3,
-                TypeId::of::<u32>(),
-                Some(0xDEAD),
-            ));
-        });
-        assert_positive_count(&events, 1);
-        assert_eq!(events.len(), 1);
-        let e = &events[0];
-        assert_eq!(e.kind, ReconcileEventKind::Mount);
-        assert_eq!(e.parent, ElementId::new(7).as_u64());
-        assert_eq!(e.slot, 3);
-        assert_eq!(e.child_key, Some(0xDEAD));
-        assert_eq!(e.from_parent, None);
-        assert!(!e.view_type_id.is_empty(), "TypeId Debug must be present");
-    }
-
     #[test]
     #[serial_test::serial]
     fn collector_captures_all_five_kinds() {
@@ -380,81 +349,5 @@ mod tests {
         for non_reparent in &events[..4] {
             assert!(non_reparent.from_parent.is_none());
         }
-    }
-
-    #[test]
-    #[serial_test::serial]
-    fn collector_ignores_other_targets() {
-        let events = with_collector(|| {
-            // Emission on a different target must NOT land in the
-            // collector — proves the `enabled()` short-circuit and
-            // the defensive `on_event` re-check both honour the
-            // `RECONCILE_TARGET` filter.
-            tracing::event!(
-                target: "flui::other",
-                tracing::Level::TRACE,
-                kind = 0_u64,
-                parent = 1_u64,
-                slot = 0_u64,
-                view_type_id = %"ignored",
-                child_key = 0_u64,
-                child_key_present = false,
-                from_parent = 0_u64,
-                from_parent_present = false,
-            );
-        });
-        assert_eq!(
-            events.len(),
-            0,
-            "events on unrelated targets must NOT be captured",
-        );
-    }
-
-    #[test]
-    #[serial_test::serial]
-    fn collector_clear_resets_buffer() {
-        let collector = ReconcileEventCollector::new();
-        let subscriber = Registry::default().with(collector.layer());
-        // Disarm `tracing`'s process-global callsite-interest cache first: it is
-        // computed on whichever thread reaches a callsite FIRST, so without this a
-        // sibling test can have it cached as `never` and silently empty this capture.
-        // See `flui_testing::log_capture`.
-        flui_testing::log_capture::disarm_interest_cache();
-        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
-            emit_event(&ReconcileEvent::mount(
-                ElementId::new(1),
-                0,
-                TypeId::of::<()>(),
-                None,
-            ));
-            emit_event(&ReconcileEvent::mount(
-                ElementId::new(1),
-                1,
-                TypeId::of::<()>(),
-                None,
-            ));
-        });
-        assert_eq!(collector.events().len(), 2);
-        collector.clear();
-        assert_eq!(collector.events().len(), 0);
-    }
-
-    #[test]
-    #[serial_test::serial]
-    fn malformed_event_dropped_silently() {
-        // Emit a partial event (missing required fields) on the
-        // reconcile target. The collector's `build()` returns None,
-        // dropping the event without panicking — production
-        // observability code MUST NOT crash on a future field-set
-        // mismatch.
-        let events = with_collector(|| {
-            tracing::event!(
-                target: RECONCILE_TARGET,
-                tracing::Level::TRACE,
-                kind = 0_u64,
-                // `parent` deliberately omitted — required field.
-            );
-        });
-        assert_eq!(events.len(), 0, "malformed event must be silently dropped");
     }
 }

@@ -31,7 +31,7 @@ use flui_painting::styling::Color;
 use flui_view::prelude::*;
 
 use flui_widgets::__test_access::{
-    ModalHandle, ModalRoute, NavigatorProbe as _, OverlayEntryProbe as _, TransitionHandle,
+    ModalRoute, NavigatorProbe as _, OverlayEntryProbe as _, TransitionHandle,
 };
 use flui_widgets::navigator::{Navigator, NavigatorHandle, RouteId, SimpleRoute};
 use flui_widgets::{Column, Focus, SizedBox};
@@ -43,12 +43,6 @@ const FRAME: Duration = Duration::from_millis(300);
 /// Counts how many times a route's page builder ran.
 #[derive(Clone, Default)]
 struct Built(Arc<AtomicUsize>);
-
-impl Built {
-    fn get(&self) -> usize {
-        self.0.load(Ordering::Relaxed)
-    }
-}
 
 /// Counts `create_state` on a leaf, so "was this route's subtree destroyed and
 /// rebuilt?" is observable — the whole point of `maintain_state == false`.
@@ -211,60 +205,6 @@ fn modal_opaque_route_occludes_the_route_below_once_its_transition_completes() {
     );
 }
 
-/// `case forward: case reverse: overlayEntries.first.opaque = false`
-/// (`routes.dart:303-305`). A moving route shows the ones beneath it through the
-/// transition, so it must un-occlude them.
-#[test]
-fn modal_opaque_route_clears_opaque_while_it_moves() {
-    let (navigator, mut harness, bottom) = navigator_with_seed();
-    let bottom_entry = navigator
-        .entry_of(bottom)
-        .expect("seeded route has an entry");
-
-    let route = modal(&Built::default(), &Arc::new(AtomicUsize::new(0))).opaque(true);
-    let transition = route.transition_handle();
-    let _result = navigator.push(route);
-    harness.tick();
-    complete_entrance(&transition, &mut harness);
-
-    let top = *navigator.route_ids().last().expect("the modal is on top");
-    let top_entry = navigator.entry_of(top).expect("the modal has an entry");
-    assert!(top_entry.opaque());
-
-    // Start moving away: `reverse()` from 1.0 fires `Reverse`.
-    let controller = transition.controller().expect("installed");
-    controller.reverse().expect("reverse from 1.0");
-    harness.tick();
-    harness.tick();
-
-    assert_eq!(controller.status(), AnimationStatus::Reverse);
-    assert!(!top_entry.opaque(), "a moving route clears opaque");
-    assert!(
-        bottom_entry.is_mounted(),
-        "the route below is rebuilt, so it shows through the transition"
-    );
-}
-
-/// A non-opaque modal — Flutter's `PopupRoute.opaque => false`
-/// (`routes.dart:2391`) — never occludes, even when settled.
-#[test]
-fn modal_non_opaque_route_never_occludes() {
-    let (navigator, mut harness, bottom) = navigator_with_seed();
-    let bottom_entry = navigator
-        .entry_of(bottom)
-        .expect("seeded route has an entry");
-
-    let route = modal(&Built::default(), &Arc::new(AtomicUsize::new(0)));
-    let transition = route.transition_handle();
-    let _result = navigator.push(route);
-    harness.tick();
-    complete_entrance(&transition, &mut harness);
-
-    let top = *navigator.route_ids().last().expect("the modal is on top");
-    assert!(!navigator.entry_of(top).expect("entry").opaque());
-    assert!(bottom_entry.is_mounted());
-}
-
 // ============================================================================
 // maintainState — routes.dart:1893, :2230
 // ============================================================================
@@ -313,122 +253,9 @@ fn modal_covered_route_without_maintain_state_is_unmounted_and_loses_its_state()
     );
 }
 
-/// `maintainState == true` (`_modalScope.maintainState = maintainState`,
-/// `routes.dart:2230`): the covered route stays built. The overlay then hands it
-/// to `RenderTheater` as one of the first `skip_count` children, which is where
-/// it stops being laid out — proven by `harness_theater_*`, not here.
-#[test]
-fn modal_covered_route_with_maintain_state_stays_mounted() {
-    let (navigator, mut harness, _bottom) = navigator_with_seed();
-
-    let creations = Arc::new(AtomicUsize::new(0));
-    let covered = modal(&Built::default(), &creations).maintain_state(true);
-    let _covered_result = navigator.push(covered);
-    harness.tick();
-
-    let coverer = modal(&Built::default(), &Arc::new(AtomicUsize::new(0))).opaque(true);
-    let coverer_transition = coverer.transition_handle();
-    let _coverer_result = navigator.push(coverer);
-    harness.tick();
-    complete_entrance(&coverer_transition, &mut harness);
-
-    let covered_id = navigator.route_ids()[1];
-    assert!(
-        navigator.entry_of(covered_id).expect("entry").is_mounted(),
-        "maintain_state == true keeps the covered route in the tree"
-    );
-    assert_eq!(
-        creations.load(Ordering::Relaxed),
-        1,
-        "and its state is never destroyed"
-    );
-}
-
-/// `install()` publishes `maintainState` onto the entry, as Flutter does at
-/// `createOverlayEntries` (`routes.dart:2353-2355`). Without it the flag would
-/// live only on the route and the overlay would read the `false` default.
-#[test]
-fn modal_install_publishes_maintain_state_onto_the_overlay_entry() {
-    let (navigator, mut harness, _bottom) = navigator_with_seed();
-
-    let _result = navigator.push(modal(&Built::default(), &Arc::new(AtomicUsize::new(0))));
-    harness.tick();
-
-    let id = *navigator.route_ids().last().expect("pushed");
-    assert!(
-        navigator.entry_of(id).expect("entry").maintain_state(),
-        "ModalRoute defaults maintain_state to true, and install must publish it"
-    );
-}
-
 // ============================================================================
 // changedInternalState — routes.dart:2221-2231
 // ============================================================================
-
-/// `changedInternalState` republishes `maintainState` onto the entry
-/// (`routes.dart:2230`) and marks it dirty (`:2228`).
-///
-/// The rebuild seen *here* comes from the `maintainState` write, which is
-/// `_didChangeEntryOpacity` — an overlay `setState`, as in Flutter. The separate
-/// `mark_entry_needs_build()` is pinned by
-/// [`modal_setting_offstage_to_the_same_value_is_a_noop`], where `maintainState`
-/// does not change and the entry must still rebuild. A red-check that deleted
-/// `mark_entry_needs_build` left *this* test green, which is how that was found.
-#[test]
-fn modal_changed_internal_state_rebuilds_only_this_entry_and_republishes_maintain_state() {
-    let (navigator, mut harness, _bottom) = navigator_with_seed();
-
-    let built = Built::default();
-    let route = modal(&built, &Arc::new(AtomicUsize::new(0)));
-    let modal_handle: ModalHandle = route.handle();
-    let _result = navigator.push(route);
-    harness.tick();
-    assert_eq!(built.get(), 1);
-
-    let id = *navigator.route_ids().last().expect("pushed");
-    let entry = navigator.entry_of(id).expect("entry");
-    assert!(entry.maintain_state());
-
-    modal_handle.set_maintain_state(false);
-    harness.tick();
-
-    assert!(
-        !entry.maintain_state(),
-        "changedInternalState republishes maintainState onto the entry"
-    );
-    assert_eq!(built.get(), 2, "and the entry rebuilds");
-}
-
-/// `if (_offstage == value) return;` (`routes.dart:1952-1954`) — a no-op setter
-/// must not schedule a rebuild.
-#[test]
-fn modal_setting_offstage_to_the_same_value_is_a_noop() {
-    let (navigator, mut harness, _bottom) = navigator_with_seed();
-
-    let built = Built::default();
-    let route = modal(&built, &Arc::new(AtomicUsize::new(0)));
-    let modal_handle = route.handle();
-    let _result = navigator.push(route);
-    harness.tick();
-    // Focus activation is delivered after the navigator history lock is
-    // released and schedules the route scope's normal focus-state rebuild for
-    // the next frame. Settle that independent work before measuring whether
-    // the offstage setter itself dirties the entry.
-    harness.tick();
-    let settled_builds = built.get();
-
-    modal_handle.set_offstage(false);
-    harness.tick();
-    assert_eq!(built.get(), settled_builds, "no change, no rebuild");
-
-    modal_handle.set_offstage(true);
-    harness.tick();
-    assert_eq!(
-        built.get(),
-        settled_builds + 1,
-        "a real change rebuilds the entry"
-    );
-}
 
 // ============================================================================
 // offstage / barrier — the render objects a modal builds

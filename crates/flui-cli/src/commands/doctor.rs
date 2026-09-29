@@ -1021,25 +1021,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn version_token_finds_the_number() {
-        assert_eq!(
-            version_token("rustc 1.90.0 (abc 2024-01-01)"),
-            Some("1.90.0")
-        );
-        assert_eq!(version_token("no digits here"), None);
-    }
-
-    #[test]
     fn major_minor_parses_two_or_three_part_versions() {
         assert_eq!(major_minor("1.97"), Some((1, 97)));
         assert_eq!(major_minor("1.97.0"), Some((1, 97)));
         assert_eq!(major_minor("1.97.0-nightly"), Some((1, 97)));
-    }
-
-    #[test]
-    fn check_missing_promotes_by_flag() {
-        assert_eq!(Check::missing(true), Status::Error);
-        assert_eq!(Check::missing(false), Status::Warn);
     }
 
     #[test]

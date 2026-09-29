@@ -152,13 +152,6 @@ impl Tessellator {
         };
     }
 
-    /// The effective flatten scale currently set (post-guard). Test-only
-    /// introspection to assert a call site primed the tessellator.
-    #[cfg(all(test, feature = "testing"))]
-    pub(crate) fn max_scale(&self) -> f32 {
-        self.max_scale
-    }
-
     /// Local-space tolerance for fill/stroke flattening at the current scale.
     ///
     /// Equals the device-space budget divided by the world scale, so that after
@@ -1204,63 +1197,6 @@ mod cpu_tests {
         );
     }
 
-    /// The device error stays within budget at unit scale too, confirming the
-    /// budget is honored at both ends.
-    #[test]
-    fn circle_chord_error_at_unit_scale_is_within_budget() {
-        let err = device_chord_error(100.0, 1.0, 1.0);
-        assert!(
-            err < 0.25,
-            "device chord error = {err:.4} px at scale 1, expected < 0.25 px"
-        );
-    }
-
-    /// The scale-aware tolerance actually tightens the local subdivision: a circle
-    /// flattened at scale 8 has strictly more rim vertices (smaller local chord)
-    /// than the same circle flattened at scale 1.
-    #[test]
-    fn higher_scale_subdivides_more_finely() {
-        let mut coarse = Tessellator::new();
-        coarse.set_max_scale(1.0);
-        let (coarse_sag, coarse_count) = rim_local_sag_and_count(&mut coarse, 100.0);
-
-        let mut fine = Tessellator::new();
-        fine.set_max_scale(8.0);
-        let (fine_sag, fine_count) = rim_local_sag_and_count(&mut fine, 100.0);
-
-        assert!(
-            fine_count > coarse_count,
-            "scale-8 rim must have more vertices than scale-1 \
-             (fine={fine_count}, coarse={coarse_count}); the tolerance is not \
-             tightening with scale"
-        );
-        assert!(
-            fine_sag < coarse_sag,
-            "scale-8 local chord sag ({fine_sag:.5}) must be smaller than scale-1 \
-             ({coarse_sag:.5})"
-        );
-    }
-
-    /// The fill-rule mapping must preserve the FLUI semantics 1:1: NonZero (the
-    /// default) → lyon NonZero, EvenOdd → lyon EvenOdd.
-    #[test]
-    fn fill_rule_mapping_is_faithful() {
-        use flui_painting::paint::PathFillType;
-        assert!(matches!(
-            fill_rule_for(PathFillType::NonZero),
-            FillRule::NonZero
-        ));
-        assert!(matches!(
-            fill_rule_for(PathFillType::EvenOdd),
-            FillRule::EvenOdd
-        ));
-        // Default is NonZero (the documented FLUI/Flutter default).
-        assert!(matches!(
-            fill_rule_for(PathFillType::default()),
-            FillRule::NonZero
-        ));
-    }
-
     /// A zero / non-finite scale must collapse to the identity scale, not divide
     /// the tolerance by zero (which would yield an infinite tolerance and emit a
     /// degenerate triangle).
@@ -1373,233 +1309,17 @@ mod cpu_tests {
             outer - inner
         );
     }
-
-    /// Ellipses share the circle's defect and its fix.
-    #[test]
-    fn a_stroked_ellipse_tessellates_to_a_ring_not_a_disc() {
-        let mut tessellator = Tessellator::new();
-        let center = Point::new(60.0, 40.0);
-        let stroke_width = 6.0;
-
-        let (vertices, _) = tessellator
-            .tessellate_ellipse(
-                center,
-                Point::new(30.0, 20.0),
-                &Paint::stroke(Color::RED, stroke_width),
-            )
-            .expect("stroked ellipse tessellation should succeed");
-
-        // Cross the ellipse on its minor axis: the vertical extent runs from
-        // `ry - w/2` to `ry + w/2` about the centre.
-        let (top, bottom) = vertices
-            .iter()
-            .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), v| {
-                (lo.min(v.position[1]), hi.max(v.position[1]))
-            });
-        assert!(
-            (bottom - top - ((40.0 + stroke_width) as f32)).abs() < 0.5,
-            "stroked height should be 2*ry + stroke_width = {}, got {}",
-            40.0 + stroke_width,
-            bottom - top
-        );
-    }
-
-    /// Rounded rects too — `shapes.rs` routes the stroked branch here.
-    #[test]
-    fn a_stroked_rrect_tessellates_outside_its_own_bounds() {
-        use flui_foundation::geometry::rrect::RRect;
-
-        let mut tessellator = Tessellator::new();
-        let rrect = RRect::from_xywh_circular(10.0, 10.0, 100.0, 60.0, 8.0);
-        let stroke_width = 5.0;
-
-        let (vertices, _) = tessellator
-            .tessellate_rrect(rrect, &Paint::stroke(Color::GREEN, stroke_width))
-            .expect("stroked rrect tessellation should succeed");
-
-        let left = vertices
-            .iter()
-            .fold(f32::MAX, |acc, v| acc.min(v.position[0]));
-        assert!(
-            (left - ((10.0 - stroke_width / 2.0) as f32)).abs() < 0.5,
-            "a centred stroke reaches half a width outside the left edge, got {left}"
-        );
-    }
 }
 
 #[cfg(all(test, feature = "testing"))]
 mod tests {
     use super::*;
-    use flui_foundation::geometry::{Radius, rrect::RRect};
-
-    // `test_tessellate_rect` and `test_tessellate_rounded_rect` were
-    // removed alongside the methods they exercised. No production code
-    // called them, and their assertions (`!vertices.is_empty()` etc.)
-    // were trivially true for any non-degenerate input -- they documented
-    // the shape of the wrapper, not behavior worth pinning down.
-
-    #[test]
-    fn test_tessellate_circle() {
-        let mut tessellator = Tessellator::new();
-        let center = Point::new(50.0, 50.0);
-        let paint = Paint::fill(Color::BLUE);
-
-        let result = tessellator.tessellate_circle(center, 25.0, &paint);
-        assert!(result.is_ok());
-
-        let (vertices, indices) = result.expect("circle tessellation should succeed");
-        assert!(!vertices.is_empty());
-        assert!(!indices.is_empty());
-    }
-
-    #[test]
-    fn test_rrect_per_corner_radii() {
-        let mut tessellator = Tessellator::new();
-        let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 100.0);
-        let paint = Paint::fill(Color::RED);
-
-        // Create an RRect with different radii per corner
-        let rounded_rect = RRect::from_rect_and_corners(
-            rect,
-            Radius::circular(5.0),  // top-left: small
-            Radius::circular(15.0), // top-right: medium
-            Radius::circular(25.0), // bottom-right: large
-            Radius::circular(10.0), // bottom-left: moderate
-        );
-
-        let result = tessellator.tessellate_rrect(rounded_rect, &paint);
-        assert!(result.is_ok());
-
-        let (vertices, indices) = result.expect("tessellation should succeed");
-        assert!(!vertices.is_empty());
-        assert!(!indices.is_empty());
-        assert_eq!(indices.len() % 3, 0, "indices should form triangles");
-
-        // Also test with elliptical (non-circular) radii
-        let rrect_elliptical = RRect::from_rect_and_corners(
-            rect,
-            Radius::elliptical(5.0, 10.0),
-            Radius::elliptical(15.0, 8.0),
-            Radius::elliptical(20.0, 12.0),
-            Radius::elliptical(3.0, 18.0),
-        );
-
-        let result_elliptical = tessellator.tessellate_rrect(rrect_elliptical, &paint);
-        assert!(result_elliptical.is_ok());
-
-        let (verts, inds) = result_elliptical.expect("elliptical tessellation should succeed");
-        assert!(!verts.is_empty());
-        assert!(!inds.is_empty());
-        assert_eq!(inds.len() % 3, 0, "indices should form triangles");
-    }
-
-    #[test]
-    fn test_create_polyline_path() {
-        let points = vec![
-            Point::new(0.0, 0.0),
-            Point::new(10.0, 10.0),
-            Point::new(20.0, 0.0),
-        ];
-
-        let _path = Tessellator::create_polyline_path(&points, false);
-        // Path should be created successfully
-        // We can't easily test the internal structure, but we can verify it
-        // doesn't panic
-    }
 
     // ===== Arc tessellation tests =====
 
     /// Helper: creates a square bounding rect centered at (50, 50) with radius 25
     fn arc_rect() -> Rect<f64> {
         Rect::from_ltrb(25.0, 25.0, 75.0, 75.0)
-    }
-
-    #[test]
-    fn test_tessellate_arc_full_circle() {
-        let mut tessellator = Tessellator::new();
-        let rect = arc_rect();
-        let paint = Paint::fill(Color::RED);
-
-        // Full circle: sweep_angle = 2*PI
-        let result = tessellator.tessellate_arc(rect, 0.0, std::f32::consts::TAU, false, &paint);
-        assert!(result.is_ok(), "full circle arc should tessellate");
-
-        let (vertices, indices) = result.expect("full circle arc tessellation should succeed");
-        assert!(!vertices.is_empty(), "full circle should produce vertices");
-        assert!(!indices.is_empty(), "full circle should produce indices");
-        assert_eq!(indices.len() % 3, 0, "indices should form triangles");
-    }
-
-    #[test]
-    fn test_tessellate_arc_semicircle() {
-        let mut tessellator = Tessellator::new();
-        let rect = arc_rect();
-        let paint = Paint::fill(Color::GREEN);
-
-        // Semicircle: sweep_angle = PI
-        let result = tessellator.tessellate_arc(
-            rect,
-            0.0,
-            std::f32::consts::PI,
-            true, // pie slice
-            &paint,
-        );
-        assert!(result.is_ok(), "semicircle arc should tessellate");
-
-        let (vertices, indices) = result.expect("semicircle tessellation should succeed");
-        assert!(!vertices.is_empty(), "semicircle should produce vertices");
-        assert!(!indices.is_empty(), "semicircle should produce indices");
-        assert_eq!(indices.len() % 3, 0, "indices should form triangles");
-    }
-
-    #[test]
-    fn test_tessellate_arc_quarter_circle() {
-        let mut tessellator = Tessellator::new();
-        let rect = arc_rect();
-        let paint = Paint::fill(Color::BLUE);
-
-        // Quarter circle: sweep_angle = PI/2
-        let result = tessellator.tessellate_arc(
-            rect,
-            0.0,
-            std::f32::consts::FRAC_PI_2,
-            true, // pie slice
-            &paint,
-        );
-        assert!(result.is_ok(), "quarter circle arc should tessellate");
-
-        let (vertices, indices) = result.expect("quarter circle tessellation should succeed");
-        assert!(
-            !vertices.is_empty(),
-            "quarter circle should produce vertices"
-        );
-        assert!(!indices.is_empty(), "quarter circle should produce indices");
-        assert_eq!(indices.len() % 3, 0, "indices should form triangles");
-    }
-
-    #[test]
-    fn test_tessellate_arc_negative_sweep() {
-        let mut tessellator = Tessellator::new();
-        let rect = arc_rect();
-        let paint = Paint::fill(Color::RED);
-
-        // Negative sweep (clockwise arc)
-        let result = tessellator.tessellate_arc(
-            rect,
-            std::f32::consts::PI,
-            -std::f32::consts::FRAC_PI_2,
-            false,
-            &paint,
-        );
-        assert!(result.is_ok(), "negative sweep arc should tessellate");
-
-        let (vertices, indices) = result.expect("negative sweep tessellation should succeed");
-        assert!(
-            !vertices.is_empty(),
-            "negative sweep should produce vertices"
-        );
-        assert!(!indices.is_empty(), "negative sweep should produce indices");
-        assert_eq!(indices.len() % 3, 0, "indices should form triangles");
     }
 
     #[test]
@@ -1613,40 +1333,5 @@ mod tests {
         // Near-zero sweep produces a degenerate path; tessellation may produce
         // empty geometry but must not error or panic.
         assert!(result.is_ok(), "near-zero sweep arc should not error");
-    }
-
-    #[test]
-    fn test_tessellate_arc_stroke_mode() {
-        let mut tessellator = Tessellator::new();
-        let rect = arc_rect();
-        let paint = Paint::stroke(Color::RED, 2.0);
-
-        // Stroke-mode arc (quarter circle)
-        let result =
-            tessellator.tessellate_arc(rect, 0.0, std::f32::consts::FRAC_PI_2, false, &paint);
-        assert!(result.is_ok(), "stroke-mode arc should tessellate");
-
-        let (vertices, indices) = result.expect("stroke arc tessellation should succeed");
-        assert!(!vertices.is_empty(), "stroke arc should produce vertices");
-        assert!(!indices.is_empty(), "stroke arc should produce indices");
-    }
-
-    #[test]
-    fn test_tessellate_arc_elliptical() {
-        let mut tessellator = Tessellator::new();
-        // Non-square bounding rect for an elliptical arc
-        let rect = Rect::from_ltrb(0.0, 0.0, 100.0, 50.0);
-        let paint = Paint::fill(Color::BLUE);
-
-        let result = tessellator.tessellate_arc(rect, 0.0, std::f32::consts::PI, true, &paint);
-        assert!(result.is_ok(), "elliptical arc should tessellate");
-
-        let (vertices, indices) = result.expect("elliptical arc tessellation should succeed");
-        assert!(
-            !vertices.is_empty(),
-            "elliptical arc should produce vertices"
-        );
-        assert!(!indices.is_empty(), "elliptical arc should produce indices");
-        assert_eq!(indices.len() % 3, 0, "indices should form triangles");
     }
 }

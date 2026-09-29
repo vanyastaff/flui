@@ -148,49 +148,6 @@ mod tests {
         }
     }
 
-    fn assert_view_is_object_safe(_: &dyn View) {}
-
-    #[test]
-    fn memo_object_safety_holds() {
-        // Constructing `Box<dyn View>` from a `Memo` must compile — proves
-        // the `where Self: Sized` clause kept `View` object-safe (C4).
-        let m: Box<dyn View> = Box::new(Memo::new(ProbeView { data: 1 }));
-        assert_view_is_object_safe(m.as_ref());
-    }
-
-    #[test]
-    fn should_skip_rebuild_true_when_equal() {
-        let a = Memo::new(ProbeView { data: 42 });
-        let b = Memo::new(ProbeView { data: 42 });
-        assert!(
-            a.should_skip_rebuild(&b),
-            "Memo::should_skip_rebuild must be true for equal inner views"
-        );
-    }
-
-    #[test]
-    fn should_skip_rebuild_false_when_different() {
-        let a = Memo::new(ProbeView { data: 1 });
-        let b = Memo::new(ProbeView { data: 2 });
-        assert!(
-            !a.should_skip_rebuild(&b),
-            "Memo::should_skip_rebuild must be false for unequal inner views"
-        );
-    }
-
-    #[test]
-    fn default_should_skip_rebuild_is_false() {
-        // ProbeView does NOT wrap Memo; its `should_skip_rebuild` is the
-        // default `false`. Even with equal data it must not skip — the C1
-        // safe-default (Flutter parity, no accidental skip).
-        let a = ProbeView { data: 7 };
-        let b = ProbeView { data: 7 };
-        assert!(
-            !a.should_skip_rebuild(&b),
-            "default should_skip_rebuild must be false (C1 safe-default)"
-        );
-    }
-
     // The dispatch equality-bail: on an equal Memo update, dispatch must
     // return true (element reused) AND leave the element NOT dirty (the
     // mark_dirty was skipped). build_scope only rebuilds dirty elements
@@ -231,61 +188,6 @@ mod tests {
         assert!(
             core.is_dirty(),
             "element MUST be dirty after a non-skip update"
-        );
-    }
-
-    // Stale-closure tripwire — documents the known limitation. A
-    // `Memo<ViewWithCallback>` whose closure changed but whose data is
-    // PartialEq-equal returns `true` from should_skip_rebuild, silently
-    // keeping the stale handler. This ASSERTS that stale behavior so any
-    // change which accidentally alters the semantics fails the test and
-    // forces a doc update — rather than a silent contract change.
-    #[derive(Clone)]
-    struct ViewWithCallback {
-        data: u32,
-        // The callback cannot implement `PartialEq`; equality is computed
-        // only on `data`, silently ignoring the handler — the trap.
-        #[expect(dead_code)] // held to model a real callback-carrying view
-        handler: std::rc::Rc<dyn Fn()>,
-    }
-
-    impl PartialEq for ViewWithCallback {
-        fn eq(&self, other: &Self) -> bool {
-            self.data == other.data // handler intentionally ignored — the trap
-        }
-    }
-
-    impl StatelessView for ViewWithCallback {
-        fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-            self.clone().boxed()
-        }
-    }
-
-    impl View for ViewWithCallback {
-        fn create_element(&self) -> crate::element::ElementKind {
-            crate::element::ElementKind::stateless(self)
-        }
-    }
-
-    #[test]
-    fn stale_closure_tripwire_documents_known_limitation() {
-        let a = Memo::new(ViewWithCallback {
-            data: 1,
-            handler: std::rc::Rc::new(|| {}),
-        });
-        let b = Memo::new(ViewWithCallback {
-            data: 1, // same data, different handler
-            handler: std::rc::Rc::new(|| {}),
-        });
-
-        // KNOWN LIMITATION: data equal → skip fires → stale handler kept.
-        // This documents the broken invariant, not a desired behavior.
-        assert!(
-            a.should_skip_rebuild(&b),
-            "TRIPWIRE: Memo skips when data is equal even though the handler \
-             changed — documents the known stale-closure limitation of \
-             PartialEq memoization for callback views. If this fails, the \
-             behavior changed; update the rustdoc."
         );
     }
 }

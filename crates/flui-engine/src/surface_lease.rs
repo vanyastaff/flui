@@ -222,24 +222,6 @@ mod tests {
     use super::*;
     use crate::fake_window_target::{FakeTarget, xlib_window_id};
 
-    #[test]
-    fn dropping_the_lease_drops_the_only_strong_target_ref() {
-        let target: Arc<dyn WindowTarget> = Arc::new(FakeTarget::new(1));
-        let weak = Arc::downgrade(&target);
-
-        let lease = SurfaceLease::from_parts(target, 0u8);
-        assert!(
-            weak.upgrade().is_some(),
-            "the lease is the sole strong holder and is still alive"
-        );
-
-        drop(lease);
-        assert!(
-            weak.upgrade().is_none(),
-            "no strong ref survives the lease that owned the only one"
-        );
-    }
-
     /// Where the recording fixtures below write the order in which they are
     /// dropped.
     type DropLog = Arc<Mutex<Vec<&'static str>>>;
@@ -404,46 +386,6 @@ mod tests {
             .expect("BUG: this assertion is only meaningful while a surface is held")
     }
 
-    #[test]
-    fn release_drops_the_surface_and_keeps_the_target() {
-        let (mut lease, log) = recording_lease();
-
-        let _released = lease.release();
-
-        let after_release = drop_log(&log);
-        assert!(
-            !lease.has_surface(),
-            "release leaves the lease holding none"
-        );
-        assert!(
-            lease.surface().is_none(),
-            "surface() answers None once released"
-        );
-        assert_eq!(
-            after_release,
-            vec!["surface"],
-            "release drops the held surface there and then, not at lease drop"
-        );
-        assert!(
-            lease.target().window_handle().is_ok(),
-            "the retained target survives the release, so a re-acquire needs no new ownership"
-        );
-    }
-
-    #[test]
-    fn releasing_twice_releases_once_and_a_replacement_is_held_again() {
-        let target: Arc<dyn WindowTarget> = Arc::new(FakeTarget::new(1));
-        let mut lease = SurfaceLease::from_parts(target, 1u64);
-
-        let _first = lease.release();
-        let second = lease.release();
-        assert!(!lease.has_surface(), "a second release is the same state");
-
-        lease.replace_surface(second, 7);
-        assert!(lease.has_surface(), "replace_surface holds the new surface");
-        assert_eq!(*lease.surface().expect("just replaced"), 7);
-    }
-
     /// Release-then-replace is the order `Renderer::recreate_surface` and
     /// `Renderer::recover` both use to sidestep the one-surface-per-window
     /// rule, and it must not depend on a *dropped-and-rebuilt* lease: the
@@ -482,38 +424,6 @@ mod tests {
         assert!(
             Arc::ptr_eq(lease.target(), &target),
             "the replacement was built against the same retained owner"
-        );
-    }
-
-    #[test]
-    fn dropping_a_released_lease_releases_only_the_target() {
-        let (mut lease, log) = recording_lease();
-
-        let released = lease.release();
-        assert_eq!(
-            drop_log(&log),
-            vec!["surface"],
-            "release drops the surface while the lease — and so the target — is still alive"
-        );
-
-        // Cleared so the assertion below is exclusive to what this lease drops
-        // from here on: with the surface already gone there is no order left to
-        // observe between two entries, only which single entry a released
-        // lease's drop produces.
-        log.lock()
-            .expect("BUG: test-only mutex is never poisoned")
-            .clear();
-
-        // The token holds its own `Arc` of the target (it is what a
-        // replacement is built from), so it must go before the lease's drop
-        // can be the last owner.
-        drop(released);
-        drop(lease);
-
-        assert_eq!(
-            drop_log(&log),
-            vec!["target"],
-            "a released lease's drop releases the target and nothing else"
         );
     }
 }

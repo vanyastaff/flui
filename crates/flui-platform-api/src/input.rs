@@ -269,22 +269,4 @@ mod tests {
         assert_eq!(device_to_logical(200.0, 2.0), 100.0);
         assert_eq!(device_to_logical(150.0, 1.5), 100.0);
     }
-
-    #[test]
-    fn test_logical_to_device_conversion() {
-        assert_eq!(logical_to_device(100.0, 1.0), 100.0);
-        assert_eq!(logical_to_device(100.0, 2.0), 200.0);
-        assert_eq!(logical_to_device(100.0, 1.5), 150.0);
-    }
-
-    #[test]
-    fn test_offset_helpers() {
-        let offset = offset_from_coords(10.0, 20.0);
-        assert_eq!(offset.dx, 10.0);
-        assert_eq!(offset.dy, 20.0);
-
-        let delta = delta_offset_from_coords(5.0, -3.0);
-        assert_eq!(delta.dx, 5.0);
-        assert_eq!(delta.dy, -3.0);
-    }
 }

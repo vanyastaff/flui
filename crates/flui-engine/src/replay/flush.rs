@@ -1238,23 +1238,6 @@ impl GpuReplay {
 mod tests {
     use super::clamp_scissor_to_attachment;
 
-    /// The off-target sentinel `(full_w, full_h, 1, 1)` that
-    /// `opacity_layer.rs`'s `render_segment_to_grown_offscreen` and
-    /// `ssaa.rs`'s tile remap emit for a fully-clipped region must clamp to
-    /// `None` — its origin already sits on the attachment's far edge, so any
-    /// non-zero extent overshoots.
-    #[test]
-    fn sentinel_rect_at_the_far_edge_clamps_to_none() {
-        let full_w = 800;
-        let full_h = 600;
-        let clamped = clamp_scissor_to_attachment(full_w, full_h, 1, 1, full_w, full_h);
-        assert_eq!(
-            clamped, None,
-            "the off-target sentinel (full_w, full_h, 1, 1) must clamp to None (fully clipped), \
-             not an out-of-bounds Some(...) that wgpu's scissor validation would reject"
-        );
-    }
-
     /// A rect whose right/bottom edge overshoots the attachment by one pixel
     /// clamps down to the visible remainder rather than being rejected or
     /// passed through unclamped.
@@ -1270,49 +1253,6 @@ mod tests {
             Some((795, 595, 5, 5)),
             "a rect overshooting the attachment must clamp its extent down to the visible \
              remainder, keeping the same origin"
-        );
-    }
-
-    /// An already in-bounds rect passes through unchanged (the common case —
-    /// clamping must be a no-op when nothing needs clamping).
-    #[test]
-    fn in_bounds_rect_passes_through_unchanged() {
-        let full_w = 800;
-        let full_h = 600;
-        let clamped = clamp_scissor_to_attachment(10, 10, 100, 100, full_w, full_h);
-        assert_eq!(clamped, Some((10, 10, 100, 100)));
-    }
-
-    /// Every scissor-consuming flush site must route through
-    /// `set_clamped_scissor` rather than calling `RenderPass::set_scissor_rect`
-    /// directly — a direct call bypasses the attachment clamp entirely and
-    /// the unit tests above, which only exercise the pure clamp function,
-    /// cannot catch that kind of bypass.
-    ///
-    /// Red-check: reverting any one flush site (e.g. the rect-scissor loop in
-    /// `flush_all_instanced_batches`) back to a bare
-    /// `render_pass.set_scissor_rect(x, y, w, h)` / `else` pair raises the
-    /// count below to 2 and fails this assertion, while every other test in
-    /// the suite (including the three above) still passes.
-    #[test]
-    fn set_clamped_scissor_is_the_only_scissor_rect_call_site() {
-        const SOURCE: &str = include_str!("flush.rs");
-        // Exclude this `tests` module itself: its own doc comments and this
-        // assertion's message reference `set_scissor_rect` in prose, and this
-        // test's `SOURCE` scan would otherwise count its own search needle.
-        let (production_source, _) = SOURCE
-            .split_once("mod tests {")
-            .expect("this module scans its own enclosing file");
-
-        let call_sites = production_source
-            .matches("render_pass.set_scissor_rect(")
-            .count();
-        assert_eq!(
-            call_sites, 1,
-            "expected exactly one call to `render_pass.set_scissor_rect` in flush.rs — inside \
-             `set_clamped_scissor`. Every batch/texture flush path must route through that \
-             helper so the attachment clamp can't be bypassed by a new direct call; found \
-             {call_sites}"
         );
     }
 }

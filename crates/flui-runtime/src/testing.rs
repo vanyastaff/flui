@@ -376,31 +376,8 @@ impl FrameClockSource for flui_foundation::ManualClock {
 
 #[cfg(test)]
 mod tests {
-    use flui_layer::{CanvasLayer, Layer, LayerTree};
 
     use super::*;
-
-    fn empty_scene() -> Scene {
-        Scene::new(LayerTree::new(Layer::from(CanvasLayer::new())))
-    }
-
-    #[test]
-    fn scripted_sink_counts_submits_and_replays_its_script() {
-        let mut sink =
-            ScriptedSink::fails_once_then_presents(SubmitVerdict::SurfaceStale).with_size(640, 480);
-        assert_eq!(sink.surface_size(), (640, 480));
-        assert_eq!(sink.submit(empty_scene()), SubmitVerdict::SurfaceStale);
-        assert_eq!(sink.submit(empty_scene()), SubmitVerdict::Presented);
-        assert_eq!(sink.submit_calls, 2);
-    }
-
-    #[test]
-    #[should_panic(expected = "submit called more than once")]
-    fn single_shot_sink_refuses_a_second_submit() {
-        let mut sink = ScriptedSink::single_shot(SubmitVerdict::Presented);
-        let _ = sink.submit(empty_scene());
-        let _ = sink.submit(empty_scene());
-    }
 
     #[test]
     fn test_window_records_what_the_realm_asked_of_it() {

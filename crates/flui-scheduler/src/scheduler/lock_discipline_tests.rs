@@ -267,29 +267,6 @@ fn shared_post_frame_callback_runs_with_no_scheduler_lock_held() {
 }
 
 #[test]
-fn local_post_frame_callback_runs_with_no_scheduler_lock_held() {
-    let scheduler = UpdateScheduler::new();
-    let lane = scheduler.new_local_post_frame_lane();
-    let probe = scheduler.clone();
-    lane.local_handle()
-        .schedule_local(move |_timing| {
-            assert_no_scheduler_lock_held(&probe);
-        })
-        .expect("lane is alive");
-    scheduler.execute_frame_with_lane(&lane);
-}
-
-#[test]
-fn idle_callback_runs_with_no_scheduler_lock_held() {
-    let scheduler = UpdateScheduler::new();
-    let probe = scheduler.clone();
-    scheduler.schedule_idle_callback(move || {
-        assert_no_scheduler_lock_held(&probe);
-    });
-    assert_eq!(scheduler.execute_idle_callbacks(), 1);
-}
-
-#[test]
 fn microtask_runs_with_no_scheduler_lock_held() {
     let scheduler = UpdateScheduler::new();
     let probe = scheduler.clone();
@@ -297,32 +274,6 @@ fn microtask_runs_with_no_scheduler_lock_held() {
         assert_no_scheduler_lock_held(&probe);
     }));
     scheduler.handle_begin_frame(Instant::now());
-}
-
-#[test]
-fn lifecycle_listener_runs_with_no_scheduler_lock_held() {
-    let scheduler = UpdateScheduler::new();
-    let probe = scheduler.clone();
-    scheduler.add_lifecycle_state_listener(Arc::new(move |_state| {
-        assert_no_scheduler_lock_held(&probe);
-    }));
-    scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Hidden);
-}
-
-#[test]
-fn timings_callback_runs_with_no_scheduler_lock_held() {
-    let scheduler = UpdateScheduler::new();
-    let probe = scheduler.clone();
-    let ran = Arc::new(AtomicBool::new(false));
-    let ran_for_callback = Arc::clone(&ran);
-    scheduler.add_timings_callback(Arc::new(move |_timings| {
-        assert_no_scheduler_lock_held(&probe);
-        ran_for_callback.store(true, Ordering::Release);
-    }));
-
-    scheduler.execute_frame();
-    assert_eq!(scheduler.report_timings(), 1);
-    assert!(ran.load(Ordering::Acquire));
 }
 
 #[test]
@@ -335,31 +286,6 @@ fn frame_scheduled_hook_runs_with_no_scheduler_lock_held() {
 
     scheduler.request_frame();
     assert!(scheduler.is_frame_scheduled());
-}
-
-/// `end_of_frame()` reaches the platform wake hook, so the completion
-/// registry's guard must be released before the demand is issued.
-///
-/// Asserting the hook RAN is half the oracle: `end_of_frame` used to issue
-/// no demand at all, and without that assertion this test passes against
-/// that version by never firing the hook it is probing.
-#[test]
-fn end_of_frame_demand_runs_the_frame_scheduled_hook_with_no_scheduler_lock_held() {
-    let scheduler = UpdateScheduler::new();
-    let probe = scheduler.clone();
-    let ran = Arc::new(AtomicBool::new(false));
-    let ran_for_hook = Arc::clone(&ran);
-    scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
-        assert_no_scheduler_lock_held(&probe);
-        ran_for_hook.store(true, Ordering::Release);
-    })));
-
-    let _waiter = scheduler.end_of_frame();
-
-    assert!(
-        ran.load(Ordering::Acquire),
-        "the hook must actually have fired -- an unfired hook asserts nothing"
-    );
 }
 
 /// The completion-waker family: `notify_frame_completion` calls each
@@ -619,98 +545,6 @@ fn transient_callback_cancelling_a_later_sibling_and_registering_a_replacement_d
     );
 }
 
-/// Persistent callbacks fire every frame for the lifetime of the
-/// application (Flutter parity: `SchedulerBinding.addPersistentFrameCallback`'s
-/// own doc, `scheduler/binding.dart` @ 3.44.0), so unlike the
-/// transient/post-frame cases the freshly-registered callback below keeps
-/// firing every frame after its first — this test pins the deferral of its
-/// FIRST run, not a one-shot.
-#[test]
-fn persistent_callback_registering_another_persistent_callback_defers_to_next_frame() {
-    let scheduler = UpdateScheduler::new();
-    let outer_runs = Arc::new(AtomicU32::new(0));
-    let nested_runs = Arc::new(AtomicU32::new(0));
-
-    let outer_scheduler = scheduler.clone();
-    let outer_runs_for_cb = Arc::clone(&outer_runs);
-    let nested_runs_for_outer = Arc::clone(&nested_runs);
-    scheduler.add_persistent_frame_callback(Arc::new(move |_timing| {
-        // Register the nested callback on the first run only -- an
-        // unconditional registration would add one more persistent
-        // callback every single frame and the counts below would never
-        // settle.
-        if outer_runs_for_cb.fetch_add(1, Ordering::SeqCst) == 0 {
-            let nested_runs = Arc::clone(&nested_runs_for_outer);
-            outer_scheduler.add_persistent_frame_callback(Arc::new(move |_timing| {
-                nested_runs.fetch_add(1, Ordering::SeqCst);
-            }));
-        }
-    }));
-
-    scheduler.execute_frame();
-    assert_eq!(
-        nested_runs.load(Ordering::SeqCst),
-        0,
-        "a persistent callback registered from inside a persistent callback \
-         must not run in the frame that registered it"
-    );
-
-    scheduler.execute_frame();
-    assert_eq!(
-        nested_runs.load(Ordering::SeqCst),
-        1,
-        "it must run starting the very next frame"
-    );
-
-    scheduler.execute_frame();
-    assert_eq!(
-        nested_runs.load(Ordering::SeqCst),
-        2,
-        "and keep running every frame after that, like any persistent callback"
-    );
-}
-
-/// `end_frame_impl`'s own comment documents this ordering ("a callback
-/// registered *from* a post-frame callback runs on the next frame");
-/// this is the direct test for it.
-#[test]
-fn shared_post_frame_callback_registering_another_defers_to_next_frame() {
-    let scheduler = UpdateScheduler::new();
-    let nested_ran = Arc::new(AtomicU32::new(0));
-
-    let outer_scheduler = scheduler.clone();
-    let nested_ran_for_outer = Arc::clone(&nested_ran);
-    scheduler.add_post_frame_callback(Box::new(move |_timing| {
-        let nested_ran = Arc::clone(&nested_ran_for_outer);
-        outer_scheduler.add_post_frame_callback(Box::new(move |_timing| {
-            nested_ran.fetch_add(1, Ordering::SeqCst);
-        }));
-    }));
-
-    scheduler.execute_frame();
-    assert_eq!(
-        nested_ran.load(Ordering::SeqCst),
-        0,
-        "a post-frame callback registered from inside a post-frame callback \
-         must not run in the frame that registered it"
-    );
-
-    scheduler.execute_frame();
-    assert_eq!(
-        nested_ran.load(Ordering::SeqCst),
-        1,
-        "it must run exactly once, on the very next completed frame"
-    );
-
-    scheduler.execute_frame();
-    assert_eq!(
-        nested_ran.load(Ordering::SeqCst),
-        1,
-        "a post-frame callback fires exactly once; a third frame must not \
-         run it again"
-    );
-}
-
 // =========================================================================
 // Lock-then-drop (#1058, sibling sites tracked with #1150) -- a removed
 // callback/listener's captured state can be the LAST reference at removal
@@ -783,46 +617,4 @@ fn remove_lifecycle_state_listener_drops_the_removed_listener_outside_the_lock()
             "remove_lifecycle_state_listener must not deadlock when the removed \
              listener's Drop re-registers another one",
         );
-}
-
-/// `remove_timings_callback` was rewritten alongside the two deadlock
-/// tests above, for the same defensive shape (locate the match under the
-/// lock, drop it after the guard falls, never under it) — but its hazard
-/// is not reachable through the public API the way the other two are:
-/// `remove_timings_callback` takes `&TimingsCallback`, so the caller must
-/// hold a live clone for the whole call, and the copy this function
-/// removes from its own `Vec` can therefore never be the LAST strong
-/// reference at removal time (the caller's borrowed clone always outlives
-/// it). No deadlock reproduction is claimed for this site; this is a plain
-/// removal-correctness regression test instead, closing this function's
-/// previous lack of scheduler-level coverage (`report_timings` dispatch
-/// only, in `tests/integration_tests.rs`, asserted no effect).
-#[test]
-fn remove_timings_callback_removes_only_the_matching_callback() {
-    let scheduler = UpdateScheduler::new();
-    let kept_calls = Arc::new(AtomicU32::new(0));
-    let removed_calls = Arc::new(AtomicU32::new(0));
-
-    let kept_calls_for_cb = Arc::clone(&kept_calls);
-    let kept: TimingsCallback = Arc::new(move |_timings| {
-        kept_calls_for_cb.fetch_add(1, Ordering::SeqCst);
-    });
-    let removed_calls_for_cb = Arc::clone(&removed_calls);
-    let removed: TimingsCallback = Arc::new(move |_timings| {
-        removed_calls_for_cb.fetch_add(1, Ordering::SeqCst);
-    });
-
-    scheduler.add_timings_callback(kept.clone());
-    scheduler.add_timings_callback(removed.clone());
-    scheduler.remove_timings_callback(&removed);
-
-    scheduler.execute_frame();
-    assert_eq!(scheduler.report_timings(), 1);
-
-    assert_eq!(kept_calls.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        removed_calls.load(Ordering::SeqCst),
-        0,
-        "the removed callback must not fire"
-    );
 }

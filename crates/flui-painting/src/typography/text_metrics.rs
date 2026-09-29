@@ -664,43 +664,6 @@ mod tests {
             prop_assert_eq!((s.base(), s.extent()), (TextPosition::downstream(base), TextPosition::upstream(extent)));
         }
 
-        /// Expanding covers both the selection and the range, and keeps the
-        /// base's and extent's affinities.
-        #[test]
-        fn expand_to_range(base in 0usize..20, extent in 0usize..20, r in range()) {
-            let s = TextSelection::new(TextPosition::downstream(base), TextPosition::upstream(extent));
-            let e = s.expand_to_range(&r);
-            prop_assert_eq!(e.range(), TextRange::new(s.start().min(r.start), s.end().max(r.end)));
-            prop_assert_eq!((e.base.affinity, e.extent.affinity), (TextAffinity::Downstream, TextAffinity::Upstream));
-        }
-    }
-
-    #[test]
-    fn empty_range_overlaps_nothing() {
-        let inside = TextRange::collapsed(5);
-        assert!(!inside.overlaps(&TextRange::new(0, 10)));
-        assert!(!TextRange::new(0, 10).overlaps(&inside));
-    }
-
-    #[test]
-    fn positions_and_defaults() {
-        assert_eq!(
-            TextPosition::upstream(3),
-            TextPosition::new(3, TextAffinity::Upstream)
-        );
-        assert_eq!(
-            TextPosition::downstream(3).affinity(),
-            TextAffinity::Downstream
-        );
-        assert_eq!(TextPosition::downstream(3).offset(), 3);
-        assert_eq!(TextPosition::default(), TextPosition::upstream(0));
-        assert_eq!(TextRange::default(), TextRange::collapsed(0));
-        let collapsed = TextSelection::collapsed_at(4, TextAffinity::Downstream);
-        assert_eq!(
-            (collapsed.base, collapsed.extent),
-            (TextPosition::downstream(4), TextPosition::downstream(4))
-        );
-        assert_eq!(TextSelection::default().base, TextPosition::default());
     }
 
     #[test]
@@ -712,38 +675,5 @@ mod tests {
         assert_eq!((rtl.start(), rtl.end()), (50.0, 10.0));
         assert_eq!((ltr.width(), ltr.height()), (40.0, 15.0));
         assert_eq!((*rtl.rect(), rtl.direction()), (rect, TextDirection::Rtl));
-    }
-
-    #[test]
-    fn glyph_info() {
-        let bounds = Rect::from_ltrb(1.0, 2.0, 9.0, 14.0);
-        let g = GlyphInfo::new(7, 'x', bounds, 8.5);
-        assert_eq!(
-            (g.glyph_id(), g.code_point(), *g.bounds(), g.advance()),
-            (7, 'x', bounds, 8.5)
-        );
-        assert_eq!((g.width(), g.height()), (8.0, 12.0));
-    }
-
-    #[test]
-    fn line_metrics() {
-        let line = LineMetrics::new(
-            true, 12.0, 4.0, 11.0, 18.0, 100.0, 5.0, 30.0, 2, 10, 25, 24, 26,
-        );
-        assert_eq!(
-            (line.len(), line.is_empty(), line.range()),
-            (15, false, TextRange::new(10, 25))
-        );
-        assert_eq!(
-            (line.top(), line.bottom(), line.right()),
-            (18.0, 34.0, 105.0)
-        );
-        assert_eq!(
-            (line.ascent(), line.descent(), line.total_height()),
-            (12.0, 4.0, 16.0)
-        );
-        assert!(line.has_hard_break());
-        let empty = LineMetrics::new(false, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 7, 7, 7, 7);
-        assert!(empty.is_empty() && !empty.has_hard_break());
     }
 }

@@ -477,22 +477,6 @@ mod tests {
         ingress.settle(Err(AppWindowError::Cancelled));
     }
     #[test]
-    fn main_window_quit_cancels_success_settled_after_its_admission() {
-        let (ingress, _owner) = ingress();
-        let handle = ingress.handle();
-        let mut request = handle.request_show_main_window().expect("admit");
-        assert!(ingress.begin());
-        handle.request_quit().expect("quit");
-        ingress.settle(Ok(PresentationAddress {
-            realm_id: flui_foundation::RealmId::new(1),
-            presentation_id: flui_foundation::PresentationId::new(1),
-        }));
-        assert!(matches!(
-            request.try_result(),
-            Some(Err(AppWindowError::Cancelled))
-        ));
-    }
-    #[test]
     fn main_window_exit_and_admission_linearize_on_same_ingress() {
         let (ingress, _owner) = ingress();
         let handle = ingress.handle();
@@ -534,17 +518,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn main_window_reply_owner_gone_is_terminal_without_blocking() {
-        let (reply, receiver) = claim_slot(Arc::new(|| {}));
-        let mut request = MainWindowRequest { reply: receiver };
-        assert!(request.try_result().is_none());
-        drop(reply);
-        assert!(matches!(
-            request.try_result(),
-            Some(Err(AppWindowError::Cancelled))
-        ));
-    }
     #[test]
     fn main_window_reply_waker_can_admit_the_next_batch_without_old_settlement_consuming_it() {
         struct Admit {

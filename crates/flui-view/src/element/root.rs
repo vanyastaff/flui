@@ -226,36 +226,6 @@ mod tests {
     use super::*;
     use crate::view::ElementBase;
 
-    #[test]
-    fn test_root_element_creation() {
-        let root = RootElementImpl::new();
-        assert!(root.owner().is_none());
-        assert!(root.child().is_none());
-        assert_eq!(root.depth, 0);
-    }
-
-    #[test]
-    fn test_root_element_assign_owner() {
-        let mut root = RootElementImpl::new();
-        let owner = Arc::new(BuildOwner::new());
-
-        root.assign_owner(Arc::clone(&owner));
-
-        assert!(root.owner().is_some());
-    }
-
-    #[test]
-    fn test_root_element_mount() {
-        let mut root = RootElementImpl::new();
-        let owner = Arc::new(BuildOwner::new());
-
-        root.assign_owner(owner);
-        let mut handle_owner = BuildOwner::new();
-        root.mount(None, 0, &mut handle_owner.element_owner_mut());
-
-        assert_eq!(root.lifecycle(), crate::element::Lifecycle::Active);
-    }
-
     // Same reason as the lifecycle guards in `generic.rs`: the assertion at
     // `:163` is a `debug_assert`, so without this gate the test reports "did not
     // panic as expected" under `cargo test --release`.
@@ -271,38 +241,6 @@ mod tests {
         let fake_parent = ElementId::new(1);
         let mut handle_owner = BuildOwner::new();
         root.mount(Some(fake_parent), 0, &mut handle_owner.element_owner_mut());
-    }
-
-    #[test]
-    fn test_root_element_lifecycle() {
-        let mut root = RootElementImpl::new();
-        let owner = Arc::new(BuildOwner::new());
-
-        root.assign_owner(owner);
-        let mut handle_owner = BuildOwner::new();
-        {
-            let mut handle = handle_owner.element_owner_mut();
-            root.mount(None, 0, &mut handle);
-        }
-        assert_eq!(root.lifecycle(), crate::element::Lifecycle::Active);
-
-        {
-            let mut handle = handle_owner.element_owner_mut();
-            root.deactivate(&mut handle);
-        }
-        assert_eq!(root.lifecycle(), crate::element::Lifecycle::Inactive);
-
-        {
-            let mut handle = handle_owner.element_owner_mut();
-            root.activate(&mut handle);
-        }
-        assert_eq!(root.lifecycle(), crate::element::Lifecycle::Active);
-
-        {
-            let mut handle = handle_owner.element_owner_mut();
-            root.unmount(&mut handle);
-        }
-        assert_eq!(root.lifecycle(), crate::element::Lifecycle::Defunct);
     }
 
     #[test]

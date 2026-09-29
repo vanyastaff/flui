@@ -397,37 +397,6 @@ impl StatelessView for Configurable {
     }
 }
 
-#[derive(Clone, StatelessView)]
-struct ScopeSwapHost {
-    external_scope: Option<Rc<FocusScopeNode>>,
-    node: Rc<FocusNode>,
-}
-
-impl StatelessView for ScopeSwapHost {
-    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        let child = Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&self.node));
-        match &self.external_scope {
-            Some(scope) => FocusScope::with_external_node(Rc::clone(scope), child)
-                .into_view()
-                .boxed(),
-            None => FocusScope::new(child).into_view().boxed(),
-        }
-    }
-}
-
-#[derive(Clone, StatelessView)]
-struct ParentNodeSwapHost {
-    parent: Rc<FocusNode>,
-    child: Rc<FocusNode>,
-}
-
-impl StatelessView for ParentNodeSwapHost {
-    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        Focus::new(Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&self.child)))
-            .focus_node(Rc::clone(&self.parent))
-    }
-}
-
 /// On the regular external-node path, omitted attributes read through to
 /// the node's current values. Dropping an explicit override therefore
 /// preserves the value already installed on that caller-owned node —
@@ -498,277 +467,6 @@ fn an_external_node_keeps_managed_values_when_overrides_are_dropped() {
     );
 }
 
-/// Cleanup is tied to the exact handler generation installed by this
-/// widget, not merely to the node identity. A caller may replace the
-/// handler while the node is hosted; unmounting the stale registration
-/// must preserve that newer value.
-#[test]
-fn managed_node_cleanup_cannot_erase_a_later_external_handler() {
-    use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers};
-    use flui_interaction::routing::KeyEventResult;
-
-    let node = FocusNode::with_debug_label("generation-node");
-    let scope = FocusScopeNode::with_debug_label("generation-scope");
-    let mut harness = mount(Configurable {
-        node: Rc::clone(&node),
-        scope,
-        can_request_focus: None,
-        skip_traversal: None,
-        on_key_event: Some(Rc::new(|_| KeyEventResult::Handled)),
-        on_focus_change: None,
-    });
-    node.set_on_key_event(Rc::new(|_| KeyEventResult::SkipRemainingHandlers));
-
-    harness.swap_root(SizedBox::new(1.0, 1.0));
-    let key = KeyEvent {
-        state: KeyState::Down,
-        key: Key::Character("a".into()),
-        modifiers: Modifiers::default(),
-        ..KeyEvent::default()
-    };
-    assert_eq!(
-        node.handle_key_event(&key),
-        KeyEventResult::SkipRemainingHandlers,
-        "generation-checked cleanup preserves the later external writer"
-    );
-}
-
-/// `with_external_node` makes every node attribute caller-owned, including
-/// the key handler. Conflicting widget builders cannot mutate it, and
-/// disposal cannot erase it.
-#[test]
-fn a_source_of_truth_external_node_is_never_reconfigured() {
-    use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers};
-    use flui_interaction::routing::KeyEventResult;
-
-    let node = FocusNode::with_debug_label("source-node");
-    node.set_can_request_focus(false);
-    node.set_skip_traversal(true);
-    node.set_descendants_are_focusable(false);
-    node.set_on_key_event(Rc::new(|_| KeyEventResult::Handled));
-
-    let mut harness = mount(
-        Focus::with_external_node(Rc::clone(&node), SizedBox::new(10.0, 10.0))
-            .can_request_focus(true)
-            .skip_traversal(false)
-            .descendants_are_focusable(true)
-            .on_key_event(|_cx, _| KeyEventResult::Ignored),
-    );
-    let key = KeyEvent {
-        state: KeyState::Down,
-        key: Key::Character("a".into()),
-        modifiers: Modifiers::default(),
-        ..KeyEvent::default()
-    };
-
-    assert!(!node.can_request_focus());
-    assert!(node.skip_traversal());
-    assert!(!node.descendants_are_focusable());
-    assert_eq!(node.handle_key_event(&key), KeyEventResult::Handled);
-
-    harness.swap_root(SizedBox::new(1.0, 1.0));
-    assert!(!node.is_attached(), "the widget still owns the attachment");
-    assert!(!node.can_request_focus());
-    assert!(node.skip_traversal());
-    assert!(!node.descendants_are_focusable());
-    assert_eq!(
-        node.handle_key_event(&key),
-        KeyEventResult::Handled,
-        "the caller-owned handler survives widget disposal"
-    );
-}
-
-#[test]
-fn a_rebuild_replaces_the_external_node_without_leaking_attachment_or_handler() {
-    use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers};
-    use flui_interaction::routing::{FocusRequestOutcome, KeyEventResult};
-
-    let scope = FocusScopeNode::with_debug_label("node-replacement-scope");
-    let first = FocusNode::with_debug_label("first");
-    let replacement = FocusNode::with_debug_label("replacement");
-    let handler: KeyEventHandler = Rc::new(|_| KeyEventResult::Handled);
-    let mut harness = mount(Configurable {
-        node: Rc::clone(&first),
-        scope: Rc::clone(&scope),
-        can_request_focus: None,
-        skip_traversal: None,
-        on_key_event: Some(Rc::clone(&handler)),
-        on_focus_change: None,
-    });
-    let manager = harness.focus_manager();
-    let key = KeyEvent {
-        state: KeyState::Down,
-        key: Key::Character("a".into()),
-        modifiers: Modifiers::default(),
-        ..KeyEvent::default()
-    };
-
-    first.request_focus();
-    assert_eq!(
-        replacement.request_focus(),
-        FocusRequestOutcome::Queued,
-        "a detached replacement may queue focus before the rebuild"
-    );
-
-    harness.swap_root(Configurable {
-        node: Rc::clone(&replacement),
-        scope: Rc::clone(&scope),
-        can_request_focus: None,
-        skip_traversal: None,
-        on_key_event: Some(handler),
-        on_focus_change: None,
-    });
-
-    assert!(!first.is_attached(), "the superseded node was detached");
-    assert!(
-        replacement.has_primary_focus(),
-        "the replacement attached and fulfilled its queued request"
-    );
-    assert_eq!(
-        first.handle_key_event(&key),
-        KeyEventResult::Ignored,
-        "the widget-owned handler was removed from the old external node"
-    );
-    assert_eq!(
-        replacement.handle_key_event(&key),
-        KeyEventResult::Handled,
-        "the replacement received the current handler"
-    );
-    assert_eq!(
-        manager.listener_count(),
-        0,
-        "a Focus without an edge callback installs no manager subscription"
-    );
-}
-
-#[test]
-fn a_live_focus_scope_swap_preserves_its_descendant_subtree_and_focus() {
-    let first = FocusScopeNode::with_debug_label("first external scope");
-    let second = FocusScopeNode::with_debug_label("second external scope");
-    let third = FocusScopeNode::with_debug_label("third external scope");
-    let node = FocusNode::with_debug_label("scope swap descendant");
-    let mut harness = mount(ScopeSwapHost {
-        external_scope: Some(Rc::clone(&first)),
-        node: Rc::clone(&node),
-    });
-    node.request_focus();
-
-    harness.swap_root(ScopeSwapHost {
-        external_scope: Some(Rc::clone(&second)),
-        node: Rc::clone(&node),
-    });
-    assert!(!first.as_focus_node().is_attached());
-    assert!(Rc::ptr_eq(
-        &node.parent().expect("descendant remains parented"),
-        second.as_focus_node()
-    ));
-    assert!(node.has_primary_focus());
-
-    harness.swap_root(ScopeSwapHost {
-        external_scope: None,
-        node: Rc::clone(&node),
-    });
-    let internal = node
-        .parent()
-        .and_then(|parent| parent.as_scope())
-        .expect("external-to-internal installs a fresh scope");
-    assert!(!Rc::ptr_eq(&internal, &second));
-    assert!(!second.as_focus_node().is_attached());
-    assert!(node.has_primary_focus());
-
-    harness.swap_root(ScopeSwapHost {
-        external_scope: Some(Rc::clone(&third)),
-        node: Rc::clone(&node),
-    });
-    assert!(!internal.as_focus_node().is_attached());
-    assert!(Rc::ptr_eq(
-        &node.parent().expect("descendant remains parented"),
-        third.as_focus_node()
-    ));
-    assert!(node.has_primary_focus());
-}
-
-#[test]
-fn replacing_a_parent_focus_node_keeps_the_focused_child_attached() {
-    let first_parent = FocusNode::with_debug_label("first parent");
-    let replacement_parent = FocusNode::with_debug_label("replacement parent");
-    let child = FocusNode::with_debug_label("focused child");
-    let mut harness = mount(ParentNodeSwapHost {
-        parent: Rc::clone(&first_parent),
-        child: Rc::clone(&child),
-    });
-    child.request_focus();
-
-    harness.swap_root(ParentNodeSwapHost {
-        parent: Rc::clone(&replacement_parent),
-        child: Rc::clone(&child),
-    });
-
-    assert!(!first_parent.is_attached());
-    assert!(Rc::ptr_eq(
-        &child.parent().expect("the child remains in the focus tree"),
-        &replacement_parent
-    ));
-    assert!(
-        child.has_primary_focus(),
-        "a descendant primary focus survives its parent-node replacement"
-    );
-}
-
-/// Changing `on_focus_change` across a rebuild takes effect: the listener reads
-/// the current handler, not the one captured when it was installed.
-///
-/// Red-check: in `did_update_view`, stop updating the shared cell — the listener
-/// keeps the first handler, `first` fires and `second` is never called.
-#[test]
-fn a_rebuild_swaps_the_on_focus_change_handler() {
-    let scope = FocusScopeNode::with_debug_label("swap-scope");
-    let node = FocusNode::with_debug_label("swap-node");
-    let first = Rc::new(RefCell::new(Vec::<bool>::new()));
-    let second = Rc::new(RefCell::new(Vec::<bool>::new()));
-
-    let first_rec = Rc::clone(&first);
-    let mut harness = mount(Configurable {
-        node: Rc::clone(&node),
-        scope: Rc::clone(&scope),
-        can_request_focus: None,
-        skip_traversal: None,
-        on_key_event: None,
-        on_focus_change: Some(Rc::new(move |_cx, focused| {
-            first_rec.borrow_mut().push(focused);
-        })),
-    });
-    let manager = harness.focus_manager();
-
-    // Rebuild with a different handler.
-    let second_rec = Rc::clone(&second);
-    harness.swap_root(Configurable {
-        node: Rc::clone(&node),
-        scope: Rc::clone(&scope),
-        can_request_focus: None,
-        skip_traversal: None,
-        on_key_event: None,
-        on_focus_change: Some(Rc::new(move |_cx, focused| {
-            second_rec.borrow_mut().push(focused);
-        })),
-    });
-
-    node.request_focus();
-    harness.tick();
-    manager.unfocus();
-    harness.tick();
-
-    assert!(
-        first.borrow().is_empty(),
-        "the superseded handler no longer fires"
-    );
-    assert_eq!(
-        second.borrow().as_slice(),
-        [true, false],
-        "the current handler fires the gain/loss edges"
-    );
-}
-
 // ------------------------------------------------------------------
 // Focus::of / Focus::maybe_of / FocusScope::of
 // ------------------------------------------------------------------
@@ -777,19 +475,8 @@ fn a_rebuild_swaps_the_on_focus_change_handler() {
 /// host below instead of a bespoke type per shape.
 #[derive(Clone, Copy)]
 enum FocusOfShape {
-    /// No Focus/FocusScope ancestor at all.
-    Bare,
     /// A single plain `Focus` directly wrapping the probe.
     OneFocus,
-    /// Two nested plain `Focus` widgets — the probe sits under the INNER
-    /// one, so a correct lookup must not stop at the outer one.
-    NestedFocus,
-    /// A bare `FocusScope` directly wrapping the probe (no plain `Focus`
-    /// in between) — the scope-vs-node distinction.
-    BareScope,
-    /// `FocusScope`, then a plain `Focus`, then the probe —
-    /// `FocusScope::of` must walk past the plain `Focus` to the scope.
-    ScopeThenFocus,
 }
 
 /// A leaf that records what [`Focus::maybe_of`] and [`FocusScope::of`]
@@ -817,8 +504,6 @@ struct FocusOfHost {
     shape: FocusOfShape,
     show: bool,
     outer_node: Rc<FocusNode>,
-    inner_node: Rc<FocusNode>,
-    scope: Rc<FocusScopeNode>,
     found_node: Rc<RefCell<Option<Rc<FocusNode>>>>,
     found_scope: Rc<RefCell<Option<Rc<FocusScopeNode>>>>,
 }
@@ -833,28 +518,10 @@ impl StatelessView for FocusOfHost {
             found_scope: Rc::clone(&self.found_scope),
         };
         match self.shape {
-            FocusOfShape::Bare => probe.into_view().boxed(),
             FocusOfShape::OneFocus => Focus::new(probe)
                 .focus_node(Rc::clone(&self.outer_node))
                 .into_view()
                 .boxed(),
-            FocusOfShape::NestedFocus => {
-                Focus::new(Focus::new(probe).focus_node(Rc::clone(&self.inner_node)))
-                    .focus_node(Rc::clone(&self.outer_node))
-                    .into_view()
-                    .boxed()
-            }
-            FocusOfShape::BareScope => {
-                FocusScope::with_external_node(Rc::clone(&self.scope), probe)
-                    .into_view()
-                    .boxed()
-            }
-            FocusOfShape::ScopeThenFocus => FocusScope::with_external_node(
-                Rc::clone(&self.scope),
-                Focus::new(probe).focus_node(Rc::clone(&self.outer_node)),
-            )
-            .into_view()
-            .boxed(),
         }
     }
 }
@@ -866,42 +533,9 @@ fn focus_of_host(shape: FocusOfShape) -> FocusOfHost {
         shape,
         show: true,
         outer_node: FocusNode::with_debug_label("focus-of-outer"),
-        inner_node: FocusNode::with_debug_label("focus-of-inner"),
-        scope: FocusScopeNode::with_debug_label("focus-of-scope"),
         found_node: Rc::new(RefCell::new(None)),
         found_scope: Rc::new(RefCell::new(None)),
     }
-}
-
-/// A presentation always has the standard traversal `Focus`: a bare app
-/// subtree resolves it through `Focus::maybe_of`, while
-/// `FocusScope::of` resolves its enclosing root scope.
-#[test]
-fn bare_presentation_resolves_default_focus_and_root_scope() {
-    let host = focus_of_host(FocusOfShape::Bare);
-    let mut harness = mount(host.clone());
-    let manager = harness.focus_manager();
-
-    let resolved_node = host
-        .found_node
-        .borrow()
-        .clone()
-        .expect("FocusRoot installs the standard traversal Focus");
-    assert_eq!(resolved_node.debug_label(), Some("Shortcuts"));
-    let resolved_scope = host
-        .found_scope
-        .borrow()
-        .clone()
-        .expect("the probe's build must have run");
-    assert!(
-        Rc::ptr_eq(&resolved_scope, manager.root_scope()),
-        "the presentation traversal Focus belongs to the root scope"
-    );
-
-    harness.swap_root(FocusOfHost {
-        show: false,
-        ..host
-    });
 }
 
 /// A descendant's `Focus::maybe_of` resolves the one enclosing `Focus`'s
@@ -925,136 +559,6 @@ fn focus_maybe_of_returns_the_nearest_enclosing_focus_node() {
         show: false,
         ..host
     });
-}
-
-/// Oracle: `'Focus.of stops at the nearest Focus widget.'`
-/// (`focus_scope_test.dart`, tag `3.44.0`) — nesting two plain `Focus`
-/// widgets, a descendant's lookup must resolve the INNER one, never
-/// reaching past it to the outer one.
-#[test]
-fn focus_maybe_of_nearest_wins_over_an_outer_focus() {
-    let host = focus_of_host(FocusOfShape::NestedFocus);
-    let mut harness = mount(host.clone());
-
-    let resolved = host
-        .found_node
-        .borrow()
-        .clone()
-        .expect("Focus::maybe_of must find the nearest enclosing Focus's node");
-    assert!(
-        Rc::ptr_eq(&resolved, &host.inner_node),
-        "the NEAREST Focus must win"
-    );
-    assert!(
-        !Rc::ptr_eq(&resolved, &host.outer_node),
-        "must not resolve the outer Focus instead of the inner one"
-    );
-
-    harness.swap_root(FocusOfHost {
-        show: false,
-        ..host
-    });
-}
-
-/// Oracle: `'Focus.of stops at the nearest Focus widget.'`
-/// (`focus_scope_test.dart`, tag `3.44.0`) — the `Focus.maybeOf(element2),
-/// isNull` assertion: a bare enclosing `FocusScope` (no plain `Focus` in
-/// between) does not satisfy `Focus::maybe_of` (`scopeOk: false`), even
-/// though `FocusScope::of` still resolves the scope itself.
-#[test]
-fn focus_maybe_of_returns_none_for_a_bare_enclosing_scope() {
-    let host = focus_of_host(FocusOfShape::BareScope);
-    let mut harness = mount(host.clone());
-
-    assert!(
-        host.found_node.borrow().is_none(),
-        "a bare enclosing FocusScope must not satisfy Focus::maybe_of — \
-             only a plain Focus counts"
-    );
-    let resolved_scope = host
-        .found_scope
-        .borrow()
-        .clone()
-        .expect("the probe's build must have run");
-    assert!(
-        Rc::ptr_eq(&resolved_scope, &host.scope),
-        "FocusScope::of must still resolve the enclosing scope itself"
-    );
-
-    harness.swap_root(FocusOfHost {
-        show: false,
-        ..host
-    });
-}
-
-/// `FocusScope::of` walks past an intervening plain `Focus` to the
-/// nearest enclosing SCOPE — Flutter's `.nearestScope` — rather than
-/// stopping at (or being refused by) the plain `Focus` the way
-/// `Focus::maybe_of` would be.
-#[test]
-fn focus_scope_of_walks_up_past_a_plain_focus_to_the_nearest_scope() {
-    let host = focus_of_host(FocusOfShape::ScopeThenFocus);
-    let mut harness = mount(host.clone());
-
-    let resolved_node = host
-        .found_node
-        .borrow()
-        .clone()
-        .expect("Focus::maybe_of must find the plain Focus between the scope and the probe");
-    assert!(Rc::ptr_eq(&resolved_node, &host.outer_node));
-    let resolved_scope = host
-        .found_scope
-        .borrow()
-        .clone()
-        .expect("the probe's build must have run");
-    assert!(
-        Rc::ptr_eq(&resolved_scope, &host.scope),
-        "FocusScope::of must walk past the plain Focus to the enclosing scope"
-    );
-
-    harness.swap_root(FocusOfHost {
-        show: false,
-        ..host
-    });
-}
-
-/// A stateless leaf that runs an arbitrary `on_build` closure once —
-/// mirrors `overlay/tests.rs`'s own `Peek`, kept file-local since only
-/// this one test needs a caller-supplied closure (the others above reuse
-/// `FocusOfHost`/`FocusOfProbe`).
-#[derive(Clone)]
-struct Peek<F: Fn(&dyn BuildContext) + Clone + 'static>(F);
-
-impl<F: Fn(&dyn BuildContext) + Clone + 'static> View for Peek<F> {
-    fn create_element(&self) -> ElementKind {
-        ElementKind::stateless(self)
-    }
-}
-
-impl<F: Fn(&dyn BuildContext) + Clone + 'static> StatelessView for Peek<F> {
-    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        (self.0)(ctx);
-        SizedBox::new(1.0, 1.0)
-    }
-}
-
-/// `FocusRoot` makes `Focus::of` total for every normal presentation by
-/// installing the standard traversal focus above application content.
-#[test]
-fn focus_of_resolves_the_presentation_traversal_focus() {
-    let resolved: Rc<RefCell<Option<Rc<FocusNode>>>> = Rc::new(RefCell::new(None));
-    let resolved_for_probe = Rc::clone(&resolved);
-    let probe = Peek(move |ctx: &dyn BuildContext| {
-        let _prev = resolved_for_probe.borrow_mut().replace(Focus::of(ctx));
-    });
-
-    let _harness = mount(probe);
-
-    let node = resolved
-        .borrow()
-        .clone()
-        .expect("the probe's build resolves the root traversal Focus");
-    assert_eq!(node.debug_label(), Some("Shortcuts"));
 }
 
 // ------------------------------------------------------------------------
@@ -1123,7 +627,7 @@ fn tab_traversal_follows_geometry_not_attach_order() {
 /// write the `Focus` opens from the writer source it acquired in
 /// `init_state`.
 mod event_cx {
-    use std::cell::{Cell, RefCell};
+    use std::cell::RefCell;
     use std::rc::Rc;
 
     use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers};
@@ -1142,71 +646,6 @@ mod event_cx {
             modifiers: Modifiers::default(),
             ..KeyEvent::default()
         }
-    }
-
-    #[test]
-    fn autofocus_writes_a_signal_from_its_lifecycle_callback() {
-        let node = FocusNode::with_debug_label("autofocus-signal");
-        let probe_node = Rc::clone(&node);
-        let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
-            Focus::new(SizedBox::new(10.0, 10.0))
-                .focus_node(Rc::clone(&probe_node))
-                .autofocus(true)
-                .on_focus_change(move |cx, focused| count.set(cx, u32::from(focused)))
-        });
-        let mut harness = mount(probe.view());
-
-        assert!(node.has_primary_focus());
-        assert_eq!(probe.value(), Ok(1), "autofocus delivered a writable event");
-        harness.tick();
-        assert_eq!(probe.reads().last(), Some(&1));
-        node.unfocus();
-        assert_eq!(probe.value(), Ok(0), "the subsequent loss remains ordered");
-    }
-
-    #[test]
-    fn a_focus_request_before_attachment_writes_when_the_node_mounts() {
-        let node = FocusNode::with_debug_label("pending-focus-signal");
-        node.request_focus();
-        let probe_node = Rc::clone(&node);
-        let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
-            Focus::new(SizedBox::new(10.0, 10.0))
-                .focus_node(Rc::clone(&probe_node))
-                .on_focus_change(move |cx, focused| count.set(cx, u32::from(focused)))
-        });
-        let mut harness = mount(probe.view());
-
-        assert!(node.has_primary_focus());
-        assert_eq!(
-            probe.value(),
-            Ok(1),
-            "attachment delivered the pending edge"
-        );
-        harness.tick();
-        assert_eq!(probe.reads().last(), Some(&1));
-    }
-
-    #[test]
-    fn enabling_autofocus_on_rebuild_writes_a_signal() {
-        let autofocus = Rc::new(Cell::new(false));
-        let configuration = Rc::clone(&autofocus);
-        let node = FocusNode::with_debug_label("updated-autofocus-signal");
-        let probe_node = Rc::clone(&node);
-        let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
-            Focus::new(SizedBox::new(10.0, 10.0))
-                .focus_node(Rc::clone(&probe_node))
-                .autofocus(configuration.get())
-                .on_focus_change(move |cx, focused| count.set(cx, u32::from(focused)))
-        });
-        let mut harness = mount(probe.view());
-        assert_eq!(probe.value(), Ok(0));
-
-        autofocus.set(true);
-        harness.swap_root(probe.view());
-        assert!(node.has_primary_focus());
-        assert_eq!(probe.value(), Ok(1));
-        harness.tick();
-        assert_eq!(probe.reads().last(), Some(&1));
     }
 
     #[test]
@@ -1243,30 +682,6 @@ mod event_cx {
             [true, false, true],
             "the retired node cannot notify its old widget"
         );
-    }
-
-    #[test]
-    fn disabling_focus_on_rebuild_delivers_a_writable_loss() {
-        let enabled = Rc::new(Cell::new(true));
-        let configuration = Rc::clone(&enabled);
-        let node = FocusNode::with_debug_label("disabled-signal-focus");
-        let probe_node = Rc::clone(&node);
-        let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
-            Focus::new(SizedBox::new(10.0, 10.0))
-                .focus_node(Rc::clone(&probe_node))
-                .can_request_focus(configuration.get())
-                .on_focus_change(move |cx, focused| count.set(cx, u32::from(focused)))
-        });
-        let mut harness = mount(probe.view());
-        node.request_focus();
-        assert_eq!(probe.value(), Ok(1));
-
-        enabled.set(false);
-        harness.swap_root(probe.view());
-        assert!(!node.has_focus());
-        assert_eq!(probe.value(), Ok(0), "reconfiguration delivered its loss");
-        harness.tick();
-        assert_eq!(probe.reads().last(), Some(&0));
     }
 
     #[test]

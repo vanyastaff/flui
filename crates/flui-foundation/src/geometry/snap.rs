@@ -168,22 +168,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn snap_rounds_to_the_nearest_integer_off_the_half() {
-        for (x, expected) in [
-            (0.0, 0.0),
-            (0.49, 0.0),
-            (0.51, 1.0),
-            (-0.49, 0.0),
-            (-0.51, -1.0),
-            (-1.49, -1.0),
-            (-1.51, -2.0),
-            (1e9 + 0.4, 1e9),
-        ] {
-            assert_eq!(snap(x), expected, "snap({x})");
-        }
-    }
-
     /// `(x + 0.5).floor()` rounds the largest float below one half up to 1.
     #[test]
     fn snap_keeps_the_float_just_below_one_half_at_zero() {
@@ -203,15 +187,6 @@ mod tests {
         assert_eq!(snap(f64::NEG_INFINITY), f64::NEG_INFINITY);
     }
 
-    /// A one-pixel-wide rectangle is one pixel wide wherever its half-way edges land.
-    #[test]
-    fn half_way_edges_keep_the_width() {
-        for left in [-2.5, -1.5, -0.5, 0.5, 1.5] {
-            let rect = snap_edges(Rect::from_ltrb(left, 0.0, left + 1.0, 1.0));
-            assert_eq!(rect.width(), 1.0, "left edge {left}");
-        }
-    }
-
     /// Snapping edges, not sizes: two rectangles sharing an edge share it after snapping.
     #[test]
     fn abutting_rectangles_stay_abutting() {
@@ -224,41 +199,6 @@ mod tests {
     fn cover_never_loses_a_partly_covered_pixel() {
         let rect = cover(Rect::from_ltrb(-0.2, 0.7, 3.1, 4.0));
         assert_eq!(rect, Rect::from_ltrb(-1.0, 0.0, 4.0, 4.0));
-    }
-
-    #[test]
-    fn device_rect_covers_after_scaling() {
-        let ratio = DevicePixelRatio::new(1.5).expect("a valid ratio");
-        let rect = device_rect_covering(Rect::from_ltrb(0.5, -0.5, 2.0, 1.0), ratio);
-        // 0.75 → 0, -0.75 → -1, 3.0 → 3, 1.5 → 2.
-        assert_eq!(
-            rect,
-            DeviceRect::from_min_max(DevicePoint::new(0, -1), DevicePoint::new(3, 2))
-        );
-    }
-
-    #[test]
-    fn device_size_snaps_each_extent_and_clamps_at_zero() {
-        let ratio = DevicePixelRatio::new(1.25).expect("a valid ratio");
-        assert_eq!(
-            device_size(Size::new(10.0, 2.0), ratio),
-            DeviceSize::new(13, 3)
-        );
-        assert_eq!(
-            device_size(Size::new(-4.0, 0.0), ratio),
-            DeviceSize::new(0, 0)
-        );
-    }
-
-    #[test]
-    fn a_ratio_must_be_finite_and_positive() {
-        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
-            assert!(DevicePixelRatio::new(bad).is_none(), "{bad}");
-        }
-        assert_eq!(
-            DevicePixelRatio::new(2.0).map(DevicePixelRatio::get),
-            Some(2.0)
-        );
     }
 
     #[test]

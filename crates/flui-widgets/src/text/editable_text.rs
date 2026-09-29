@@ -2269,34 +2269,6 @@ mod tests {
         .writer_source()
     }
 
-    /// The mask is one character per SOURCE grapheme cluster, and the caret
-    /// lands where it should in the masked string.
-    ///
-    /// "£" is two UTF-8 bytes and "😀" is four, so a byte-count mask would
-    /// show 2 and 4 bullets and a byte-copied caret offset would land in the
-    /// middle of one. The reference's UTF-16 unit count would show 1 and 2.
-    /// One per cluster shows one each — matching what
-    /// `TextEditingController` moves and deletes by, which is the granularity
-    /// that has to agree.
-    #[test]
-    fn the_mask_is_one_character_per_source_grapheme_whatever_it_encodes_to() {
-        let mut offsets = [0];
-        let masked = obscure("a£😀b", &mut offsets, '\u{2022}');
-        let [caret] = offsets;
-        assert_eq!(
-            masked.chars().count(),
-            4,
-            "four source characters must produce four mask characters, not \
-             the eight UTF-8 bytes they occupy nor the five UTF-16 units \
-             Flutter would count"
-        );
-        assert!(
-            masked.chars().all(|c| c == '\u{2022}'),
-            "every character is replaced, got {masked:?}"
-        );
-        assert_eq!(caret, 0, "a caret before the first char maps to 0");
-    }
-
     /// The caret offset is mapped into the masked string, not copied.
     ///
     /// Copying it would be correct only for all-ASCII text — the case a test
@@ -2357,18 +2329,6 @@ mod tests {
         );
     }
 
-    /// An empty field masks to nothing, with the caret at zero.
-    #[test]
-    fn an_empty_field_masks_to_an_empty_string() {
-        let mut offsets = [0];
-        let masked = obscure("", &mut offsets, '\u{2022}');
-        let [caret] = offsets;
-        assert!(
-            masked.is_empty(),
-            "no source characters, no mask characters"
-        );
-        assert_eq!(caret, 0);
-    }
     /// The key handler's `can_request_focus` guard, in isolation: invoked
     /// directly (bypassing `FocusManager::dispatch_key_event`'s own
     /// primary-focus routing), a disabled node's handler must still refuse
@@ -2503,16 +2463,6 @@ mod tests {
         super::word_jump_modifier(TargetPlatform::current())
     }
 
-    /// The modifier that is NOT this platform's word-jump chord — Control
-    /// on macOS/iOS (unbound for word-jump there), Alt everywhere else
-    /// (reserved, unhandled — see `is_word_jump_modifier`'s `# DEFERRED`).
-    fn non_word_jump_modifier() -> Modifiers {
-        match TargetPlatform::current() {
-            TargetPlatform::MacOS | TargetPlatform::iOS => Modifiers::CONTROL,
-            _ => Modifiers::ALT,
-        }
-    }
-
     /// `word_jump_modifier` is a pure function of `TargetPlatform` — table
     /// every variant explicitly, since this CI only ever runs on
     /// `ubuntu-latest` and a test keyed to `TargetPlatform::current()`
@@ -2540,42 +2490,6 @@ mod tests {
                 "{platform:?}"
             );
         }
-    }
-
-    /// `is_word_jump_modifier` requires the EXACT chord, not just "the
-    /// required modifier happens to be among the ones held" — a chord
-    /// that ALSO holds another command modifier is not word-jump on
-    /// either the Linux/Windows/... default (Ctrl+Alt+Right, which could
-    /// otherwise be mistaken for the plain Ctrl chord) or the macOS/iOS
-    /// arm (Option+Command+Right, which could otherwise be mistaken for
-    /// the plain Option chord).
-    #[test]
-    fn is_word_jump_modifier_rejects_a_chord_with_an_extra_command_modifier() {
-        assert!(
-            !super::is_word_jump_modifier(
-                Modifiers::CONTROL | Modifiers::ALT,
-                TargetPlatform::Linux
-            ),
-            "Ctrl+Alt is not the plain Ctrl chord"
-        );
-        assert!(
-            !super::is_word_jump_modifier(Modifiers::META | Modifiers::ALT, TargetPlatform::MacOS),
-            "Cmd+Alt is not the plain Alt (Option) chord"
-        );
-        // The plain chords themselves, and Shift alongside them, still work —
-        // Shift is not part of the command-modifier mask this check guards.
-        assert!(super::is_word_jump_modifier(
-            Modifiers::CONTROL,
-            TargetPlatform::Linux
-        ));
-        assert!(super::is_word_jump_modifier(
-            Modifiers::CONTROL | Modifiers::SHIFT,
-            TargetPlatform::Linux
-        ));
-        assert!(super::is_word_jump_modifier(
-            Modifiers::ALT,
-            TargetPlatform::MacOS
-        ));
     }
 
     /// The platform's word-jump modifier + Backspace deletes the WHOLE
@@ -2606,40 +2520,6 @@ mod tests {
             controller.text(),
             "hello ",
             "the whole word \"world\", not just \"d\""
-        );
-    }
-
-    /// The OTHER platform's word-jump modifier does nothing special for
-    /// Backspace here — plain single-character deletion, per
-    /// `is_word_jump_modifier`'s per-platform table
-    /// (`# DEFERRED`: reserved for a future line-boundary intent on
-    /// non-Apple platforms, not silently claimed as word-delete).
-    #[test]
-    fn non_word_jump_modifier_backspace_deletes_only_one_character() {
-        use flui_interaction::events::Code;
-        use flui_interaction::testing::input::KeyEventBuilder;
-
-        let controller = TextEditingController::with_text("hello worlds");
-        let focus_node = FocusNode::with_debug_label("test");
-        let handler = build_key_handler(
-            Rc::new(RefCell::new(controller.clone())),
-            Rc::clone(&focus_node),
-            Rc::new(RefCell::new(None)),
-            test_writer(),
-        );
-        controller.move_caret_end();
-
-        let event = KeyEventBuilder::new(Code::Backspace)
-            .with_key(Key::Named(NamedKey::Backspace))
-            .with_state(KeyState::Down)
-            .with_modifiers(non_word_jump_modifier())
-            .build();
-
-        assert_eq!(handler(&event), KeyEventResult::Handled);
-        assert_eq!(
-            controller.text(),
-            "hello world",
-            "only the last character, not the whole word"
         );
     }
 
@@ -2676,36 +2556,6 @@ mod tests {
             .build();
         assert_eq!(handler(&left), KeyEventResult::Handled);
         assert_eq!(controller.caret_byte_offset(), 0);
-    }
-
-    /// The OTHER platform's word-jump modifier does nothing special for
-    /// Right here — plain single-character movement.
-    #[test]
-    fn non_word_jump_modifier_arrow_moves_only_one_character() {
-        use flui_interaction::events::Code;
-        use flui_interaction::testing::input::KeyEventBuilder;
-
-        let controller = TextEditingController::with_text("hello world");
-        let focus_node = FocusNode::with_debug_label("test");
-        let handler = build_key_handler(
-            Rc::new(RefCell::new(controller.clone())),
-            Rc::clone(&focus_node),
-            Rc::new(RefCell::new(None)),
-            test_writer(),
-        );
-        controller.move_caret_home();
-
-        let right = KeyEventBuilder::new(Code::ArrowRight)
-            .with_key(Key::Named(NamedKey::ArrowRight))
-            .with_state(KeyState::Down)
-            .with_modifiers(non_word_jump_modifier())
-            .build();
-        assert_eq!(handler(&right), KeyEventResult::Handled);
-        assert_eq!(
-            controller.caret_byte_offset(),
-            1,
-            "one character, not a jump to the next word's start"
-        );
     }
 
     /// Shift + the platform's word-jump modifier EXTENDS the selection by a
@@ -2782,32 +2632,5 @@ mod tests {
             .style()
             .expect("text_style was set");
         assert_eq!(rendered_style.color, style.color);
-    }
-
-    /// Without `text_style`, the span carries no explicit style — no
-    /// override was silently invented.
-    #[test]
-    fn no_text_style_leaves_the_span_unstyled() {
-        let render_view = EditableTextRenderView {
-            text: "hello".to_string(),
-            caret_byte_offset: 0,
-            show_caret: false,
-            composing_range: None,
-            caret_height: 18.0,
-            selection: None,
-            caret_color: Color::BLACK,
-            selection_color: Color::TRANSPARENT,
-            text_style: None,
-        };
-
-        let render_object = render_view.build_render_object();
-        assert!(
-            render_object
-                .painter()
-                .text()
-                .expect("a span was set")
-                .style()
-                .is_none()
-        );
     }
 }

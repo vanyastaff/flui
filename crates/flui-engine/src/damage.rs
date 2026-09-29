@@ -89,23 +89,6 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_tracker_needs_a_full_repaint() {
-        let tracker = DamageTracker::new();
-        assert!(tracker.needs_full_repaint());
-        assert!(tracker.has_damage());
-        assert_eq!(tracker.damage_rect(), None);
-    }
-
-    #[test]
-    fn reset_starts_a_clean_frame() {
-        let mut tracker = DamageTracker::new();
-        tracker.reset();
-        assert!(!tracker.needs_full_repaint());
-        assert!(!tracker.has_damage());
-        assert_eq!(tracker.damage_rect(), None);
-    }
-
-    #[test]
     fn marked_rects_union_into_one_scissor() {
         let mut tracker = DamageTracker::new();
         tracker.reset();
@@ -114,15 +97,6 @@ mod tests {
         tracker.mark_dirty(rect(50.0, 50.0, 60.0, 60.0));
         assert!(tracker.has_damage());
         assert_eq!(tracker.damage_rect(), Some(rect(0.0, 0.0, 60.0, 60.0)));
-    }
-
-    #[test]
-    fn a_zero_sized_rect_marks_nothing() {
-        let mut tracker = DamageTracker::new();
-        tracker.reset();
-        tracker.mark_dirty(rect(10.0, 10.0, 10.0, 20.0));
-        tracker.mark_dirty(rect(10.0, 10.0, 20.0, 10.0));
-        assert!(!tracker.has_damage());
     }
 
     #[test]

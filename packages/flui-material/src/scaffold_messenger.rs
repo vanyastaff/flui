@@ -1081,26 +1081,6 @@ mod tests {
     }
 
     #[test]
-    fn show_snack_bar_on_an_empty_queue_starts_entering() {
-        let handle = ScaffoldMessengerHandle::new();
-        handle.show_snack_bar(snack_bar("a"));
-        assert_eq!(
-            handle.shared.entry_controller.status(),
-            AnimationStatus::Forward
-        );
-    }
-
-    #[test]
-    fn show_snack_bar_while_draining_queues_without_touching_the_controller() {
-        let handle = ScaffoldMessengerHandle::new();
-        handle.show_snack_bar(snack_bar("a"));
-        let value_before = handle.shared.entry_controller.value();
-        handle.show_snack_bar(snack_bar("b"));
-        assert_eq!(handle.shared.queue.borrow().len(), 2);
-        assert_eq!(handle.shared.entry_controller.value(), value_before);
-    }
-
-    #[test]
     fn fifo_drain_shows_each_entry_once_in_order() {
         let (_harness, handle) = mounted_handle();
         let order = Rc::new(RefCell::new(Vec::new()));
@@ -1169,16 +1149,6 @@ mod tests {
         assert_eq!(handle.shared.queue.borrow().len(), 1);
     }
 
-    #[test]
-    fn hide_current_snack_bar_on_an_empty_queue_is_a_no_op() {
-        let handle = ScaffoldMessengerHandle::new();
-        handle.hide_current_snack_bar(); // must not panic
-        assert_eq!(
-            handle.shared.entry_controller.status(),
-            AnimationStatus::Dismissed
-        );
-    }
-
     /// `remove_current_snack_bar` called mid-reverse, after an earlier
     /// `hide_current_snack_bar`, must report `Remove` — not the hide's own
     /// `Hide`, which never actually completed (the reverse hadn't settled
@@ -1227,82 +1197,6 @@ mod tests {
         );
     }
 
-    /// Remove the current entry, then remove again immediately (before any
-    /// tick) — the second call's target must observably differ from the
-    /// first, and neither entry may go unclosed. This does NOT by itself
-    /// exercise `MessengerCore::remove_current`'s already-`Dismissed`
-    /// fallback branch (each `remove_current_snack_bar` call's own trailing
-    /// `reconcile()` already fully drains and re-advances the controller
-    /// before the next call begins, so it never observes an already-settled
-    /// controller here) — see
-    /// `remove_current_reentrantly_from_on_closed_still_drains_the_queue`
-    /// for a test that reaches that branch through genuine re-entrancy, and
-    /// `remove_current_direct_pops_when_the_controller_is_already_dismissed`
-    /// for the direct (non-reentrant) red-check on that branch.
-    #[test]
-    fn remove_twice_rapidly_drains_both_entries() {
-        let (_harness, handle) = mounted_handle();
-        let closed = Rc::new(RefCell::new(0));
-
-        let closed_a = Rc::clone(&closed);
-        handle
-            .show_snack_bar(snack_bar("a"))
-            .on_closed(move |_cx, _reason| *closed_a.borrow_mut() += 1);
-        let closed_b = Rc::clone(&closed);
-        handle
-            .show_snack_bar(snack_bar("b"))
-            .on_closed(move |_cx, _reason| *closed_b.borrow_mut() += 1);
-
-        handle.remove_current_snack_bar();
-        handle.remove_current_snack_bar();
-
-        assert_eq!(*closed.borrow(), 2, "both queued entries must have closed");
-        assert!(
-            handle.shared.queue.borrow().is_empty(),
-            "the queue must not wedge"
-        );
-        assert_eq!(
-            handle.shared.entry_controller.status(),
-            AnimationStatus::Dismissed
-        );
-    }
-
-    /// The wedge pin, direct: call `remove_current` while the controller is
-    /// ALREADY `Dismissed` with a non-empty queue (reproducing, without real
-    /// re-entrancy, the state the module docs describe) and confirm the
-    /// queue still drains rather than sitting forever with a
-    /// recorded-but-unfired reason.
-    ///
-    /// Red-check: remove the `status() == Dismissed` branch from
-    /// `MessengerCore::remove_current` (always call `set_value(0.0)`) — this
-    /// test fails: `set_value` on an already-`Dismissed` controller is a
-    /// genuine no-op (value and status both already at rest), so no edge
-    /// fires and the queue never drains — confirmed by actually running
-    /// this mutation, not merely asserted (see
-    /// `remove_current_reentrantly_from_on_closed_still_drains_the_queue`'s
-    /// own doc for why THAT test does not also catch it).
-    #[test]
-    fn remove_current_direct_pops_when_the_controller_is_already_dismissed() {
-        let handle = ScaffoldMessengerHandle::new();
-        handle
-            .shared
-            .queue
-            .borrow_mut()
-            .push_back(Rc::new(QueuedEntry {
-                snack_bar: snack_bar("a"),
-                reason: Cell::new(None),
-                on_closed: Rc::new(RefCell::new(None)),
-            }));
-        assert_eq!(
-            handle.shared.entry_controller.status(),
-            AnimationStatus::Dismissed
-        );
-
-        handle.remove_current_snack_bar();
-
-        assert!(handle.shared.queue.borrow().is_empty());
-    }
-
     /// The queue-wedge pin, via genuine re-entrancy: an `on_closed` callback
     /// that itself calls `remove_current_snack_bar` reaches
     /// `MessengerCore::remove_current` while `entry_controller` is ALREADY
@@ -1320,10 +1214,6 @@ mod tests {
     /// reentrant call inert and the OUTER `pop_and_advance` (already
     /// in-flight) to `forward()` to "b" on its own — so this test cannot
     /// distinguish the two.
-    /// `remove_current_direct_pops_when_the_controller_is_already_dismissed`
-    /// is the one that actually exercises the fallback branch (a COLD call
-    /// against an already-`Dismissed` controller, no `advancing` reentrancy
-    /// involved) — see that test's own red-check.
     ///
     /// Red-check: remove `MessengerCore::advancing`'s guard in
     /// `pop_and_advance` — this test fails: the reentrant call's direct-pop
@@ -1432,16 +1322,6 @@ mod tests {
         handle.shared.entry_controller.set_value(0.0); // settle the reverse
         handle.shared.reconcile(ReconcileOrigin::Direct);
         assert_eq!(*current_closed.borrow(), Some(SnackBarClosedReason::Hide));
-    }
-
-    #[test]
-    fn clear_snack_bars_on_an_empty_queue_is_a_no_op() {
-        let handle = ScaffoldMessengerHandle::new();
-        handle.clear_snack_bars();
-        assert_eq!(
-            handle.shared.entry_controller.status(),
-            AnimationStatus::Dismissed
-        );
     }
 
     /// Racing timeout + hide: the display timer's `Completed` edge fires

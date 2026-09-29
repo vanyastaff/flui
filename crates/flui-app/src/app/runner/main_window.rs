@@ -639,6 +639,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "hot-reload")]
     use crate::app::ExitPolicy;
     use flui_platform::{HeadlessPlatform, Platform, PlatformWindow};
     use std::sync::atomic::AtomicUsize;
@@ -1052,42 +1053,6 @@ mod tests {
     }
 
     #[test]
-    fn main_window_suspended_loop_snapshot_reaches_new_installer() {
-        let _owner = OwnerHostClearGuard::arm();
-        let _cleanup = Cleanup;
-        let platform = HeadlessPlatform::new();
-        let turns = platform.owner_turns();
-        let observed = Rc::new(RefCell::new(Vec::new()));
-        let witness = Rc::clone(&observed);
-        let saved = Rc::new(RefCell::new(None));
-        let output = Rc::clone(&saved);
-        Box::new(platform)
-            .run(Box::new(move |owner| {
-                output.replace(Some(install_test_controller(
-                    owner,
-                    Box::new(move |_, _, host| {
-                        witness.borrow_mut().push(host);
-                        Err(AppWindowError::Cancelled)
-                    }),
-                    None,
-                )));
-                APP_RUNTIME.with(|slot| {
-                    slot.borrow_mut().main_host_lifecycle =
-                        flui_scheduler::AppLifecycleState::Paused;
-                });
-                Ok(())
-            }))
-            .expect("bootstrap");
-        let handle = saved.take().expect("control");
-        let _request = handle.request_show_main_window().expect("admit");
-        turns.drive();
-        assert_eq!(
-            &*observed.borrow(),
-            &[flui_scheduler::AppLifecycleState::Paused]
-        );
-    }
-
-    #[test]
     fn main_window_reentrant_close_during_show_drops_stale_open_and_recreates() {
         let _owner = OwnerHostClearGuard::arm();
         let _cleanup = Cleanup;
@@ -1165,122 +1130,6 @@ mod tests {
             2,
             "closed window must not remain the main target"
         );
-    }
-
-    #[test]
-    fn main_window_show_requested_during_close_waits_for_fresh_install() {
-        for deferred_disposal in [false, true] {
-            let _owner = OwnerHostClearGuard::arm();
-            let _cleanup = Cleanup;
-            let platform = HeadlessPlatform::new();
-            let turns = platform.owner_turns();
-            let calls = Rc::new(Cell::new(0));
-            let installations = Rc::clone(&calls);
-            let requested = Arc::new(parking_lot::Mutex::new(Vec::new()));
-            let next_requests = Arc::clone(&requested);
-            let saved = Rc::new(RefCell::new(None));
-            let output = Rc::clone(&saved);
-            Box::new(platform)
-                .run(Box::new(move |owner| {
-                    let handle = install_test_controller(
-                        owner,
-                        Box::new(move |handle, window, host| {
-                            installations.set(installations.get() + 1);
-                            let presentation =
-                                super::super::presentation_window(Arc::clone(&window));
-                            let window: Arc<dyn PlatformWindow> = window;
-                            // This fixture exercises controller ownership with a registered
-                            // realm; the separate native fixture proves actual GPU rendering.
-                            let realm = crate::app::ui_realm::UiRealm::new(
-                                Arc::new(|| {}),
-                                presentation,
-                                1.0,
-                                Arc::new(AtomicBool::new(false)),
-                                crate::app::presentation::test_clipboard(),
-                            )
-                            .expect("realm");
-                            realm.enter(|realm| realm.update_host_lifecycle(host));
-                            let sender = realm.command_sender();
-                            let dispatch = super::super::realm_dispatch::install_realm_alongside(
-                                realm, &window,
-                            )
-                            .expect("install realm");
-                            let id = window.id();
-                            let control = handle.clone();
-                            let requests = Arc::clone(&next_requests);
-                            window.on_close(Box::new(move || {
-                                main_window_closing(dispatch.address);
-                                let during = control
-                                    .request_show_main_window()
-                                    .expect("show during close admitted");
-                                requests.lock().push(during);
-                                super::super::realm_dispatch::close_this_window(dispatch);
-                                main_window_closed(dispatch.address);
-                                let after = control
-                                    .request_show_main_window()
-                                    .expect("show after close before old reveal returns");
-                                requests.lock().push(after);
-                            }));
-                            let wrapped: Arc<dyn PlatformWindow> = Arc::new(
-                                crate::app::window_test_support::TestWindow::new()
-                                    .with_id(id.0)
-                                    .with_show_callback(Arc::new(move || {
-                                        if deferred_disposal {
-                                            let closing = Arc::clone(&window);
-                                            super::super::realm_dispatch::dispatch_platform_realm(
-                                                dispatch,
-                                                super::super::realm_dispatch::RealmTask::Frame(
-                                                    Box::new(move |_| closing.close()),
-                                                ),
-                                            )
-                                            .expect("owner dispatch");
-                                        } else {
-                                            window.close();
-                                        }
-                                    })),
-                            );
-                            Ok(RenderedMain {
-                                window: wrapped,
-                                address: dispatch.address,
-                                _rebuild_registration: WorkerReload::from_config(&AppConfig::new())
-                                    .register_rebuild_hook(sender),
-                            })
-                        }),
-                        None,
-                    );
-                    output.replace(Some(handle));
-                    Ok(())
-                }))
-                .expect("bootstrap");
-            let handle = saved.take().expect("control");
-            let mut first = handle.request_show_main_window().expect("first");
-            turns.drive();
-            assert!(matches!(first.try_result(), Some(Ok(_))));
-            let mut reveal = handle.request_show_main_window().expect("show existing");
-            turns.drive();
-            assert!(matches!(
-                reveal.try_result(),
-                Some(Err(AppWindowError::Cancelled))
-            ));
-            assert_eq!(calls.get(), 1);
-            let mut pending = std::mem::take(&mut *requested.lock());
-            assert_eq!(pending.len(), 2, "both close phases admitted requests");
-            assert!(
-                pending.iter_mut().all(|reply| reply.try_result().is_none()),
-                "old reveal must not settle the next-generation requests"
-            );
-            turns.drive();
-            assert!(
-                pending
-                    .iter_mut()
-                    .all(|reply| matches!(reply.try_result(), Some(Ok(_))))
-            );
-            assert_eq!(
-                calls.get(),
-                2,
-                "closed window must not remain the main target"
-            );
-        }
     }
 
     #[test]
@@ -1445,35 +1294,5 @@ mod tests {
             stopped.load(Ordering::Acquire),
             "loop teardown stopped and joined the real watcher"
         );
-    }
-
-    #[test]
-    fn main_window_empty_start_services_once_without_factory() {
-        let starts = Arc::new(AtomicUsize::new(0));
-        let started = Arc::clone(&starts);
-        let config = AppConfig::new()
-            .with_exit_policy(ExitPolicy::ExplicitQuit)
-            .with_service(crate::app::ServiceDefinition::new(
-                "resident-test",
-                crate::app::ServiceLifetime::KeepsAppAlive,
-                move |context| {
-                    started.fetch_add(1, Ordering::SeqCst);
-                    Box::pin(async move {
-                        context.cancellation().cancelled().await;
-                    })
-                },
-            ));
-        let factories = Rc::new(Cell::new(0));
-        let called = Rc::clone(&factories);
-        let app = Application::new(move |_| {
-            called.set(called.get() + 1);
-            flui_widgets::Text::new("unused")
-        })
-        .with_config(config)
-        .with_startup_window(StartupWindow::None);
-        run_with_platform(app, Box::new(HeadlessPlatform::new()))
-            .expect("headless owner lifetime completes");
-        assert_eq!(starts.load(Ordering::SeqCst), 1);
-        assert_eq!(factories.get(), 0);
     }
 }

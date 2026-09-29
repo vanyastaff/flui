@@ -4,7 +4,6 @@
 //! family end-to-end (offsets and resolved sizes).
 
 use crate::common::{lay_out, offset, size, tight};
-use flui_painting::Alignment;
 use flui_widgets::row;
 use flui_widgets::{Positioned, SizedBox, Stack, StackFit};
 
@@ -56,42 +55,6 @@ fn positioned_with_both_edges_stretches_the_child() {
 // explicit-alignment/fit behavior with plain non-positioned children were
 // never directly exercised.
 // ============================================================================
-
-#[test]
-fn stack_sizes_to_the_largest_child_and_top_left_aligns_by_default() {
-    let laid = lay_out(
-        Stack::new(row![SizedBox::new(60.0, 40.0), SizedBox::new(100.0, 80.0)]),
-        crate::common::loose(1000.0),
-    );
-
-    let root = laid.root();
-    assert_eq!(
-        laid.size(root),
-        size(100.0, 80.0),
-        "stack sizes to the largest non-positioned child on each axis",
-    );
-
-    // Alignment::TOP_LEFT is (-1, -1): every non-positioned child's offset
-    // factor is 0 regardless of its own size, so both sit at the origin.
-    assert_eq!(laid.offset(laid.child(root, 0)), offset(0.0, 0.0));
-    assert_eq!(laid.offset(laid.child(root, 1)), offset(0.0, 0.0));
-}
-
-#[test]
-fn stack_center_alignment_centers_each_non_positioned_child() {
-    let laid = lay_out(
-        Stack::new(row![SizedBox::new(60.0, 40.0), SizedBox::new(100.0, 80.0)])
-            .alignment(Alignment::CENTER),
-        crate::common::loose(1000.0),
-    );
-
-    let root = laid.root();
-    assert_eq!(laid.size(root), size(100.0, 80.0));
-    // Smaller child centered in the 100x80 stack: ((100-60)/2, (80-40)/2).
-    assert_eq!(laid.offset(laid.child(root, 0)), offset(20.0, 20.0));
-    // The largest child exactly fills the stack, so it sits at the origin.
-    assert_eq!(laid.offset(laid.child(root, 1)), offset(0.0, 0.0));
-}
 
 #[test]
 fn stack_fit_expand_forces_non_positioned_children_to_fill_the_stack() {

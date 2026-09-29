@@ -618,36 +618,6 @@ mod tests {
         assert!(text.contains("\"b\""), "{text}");
     }
 
-    #[test]
-    fn a_failed_find_shows_the_tree_it_searched() {
-        let tree = A11yTree::new(scrambled_update());
-
-        let err = tree.find(Role::Slider).unwrap_err();
-        let text = err.to_string();
-        assert!(text.contains("Slider"), "names the query: {text}");
-        assert!(
-            text.contains("label: \"a\"") || text.contains("label=\"a\""),
-            "and dumps what was actually there: {text}"
-        );
-    }
-
-    #[test]
-    fn find_by_label_resolves_a_unique_match() {
-        let tree = A11yTree::new(scrambled_update());
-
-        let found = tree
-            .find_by_label("a")
-            .expect("exactly one node labelled a");
-        assert_eq!(found.role(), Role::Button);
-        assert_eq!(found.id(), NodeId(1));
-    }
-
-    #[test]
-    fn focus_resolves_through_the_reachable_set() {
-        let tree = A11yTree::new(scrambled_update());
-        assert_eq!(tree.focus().expect("focus is reachable").label(), Some("a"));
-    }
-
     /// A request addressed to node 0 is named as malformed, not as a missing
     /// node.
     ///

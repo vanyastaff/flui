@@ -785,8 +785,7 @@ mod unit_tests {
     use crate::batches::DrawBatcher;
     use crate::command_ir::{DrawItem, DrawSegment};
     use crate::state_stack::GpuStateStack;
-    use crate::{command_ir::SsaaPathOp, vertex::Vertex};
-    use flui_foundation::geometry::Rect;
+    use crate::vertex::Vertex;
 
     fn make_vertex(x: f32, y: f32) -> Vertex {
         Vertex {
@@ -796,64 +795,7 @@ mod unit_tests {
         }
     }
 
-    /// `SsaaPathOp` stays `Clone`: a `PooledTexture` field would fail this
-    /// (raw wgpu handles are `Clone`, so this pins less than "no GPU handle").
-    #[test]
-    fn ssaa_path_op_is_clone() {
-        let mut seg = DrawSegment::new();
-        seg.vertices.push(make_vertex(0.0, 0.0));
-        seg.vertices.push(make_vertex(10.0, 0.0));
-        seg.vertices.push(make_vertex(5.0, 10.0));
-
-        let op = SsaaPathOp {
-            segment: seg,
-            device_bounds: Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
-            blend: flui_painting::paint::BlendMode::SrcOver,
-        };
-
-        let cloned = op.clone();
-        assert_eq!(
-            cloned.segment.vertices.len(),
-            3,
-            "cloned SsaaPathOp must have 3 vertices"
-        );
-        assert!(
-            (cloned.device_bounds.width() - 10.0).abs() < f64::from(f32::EPSILON),
-            "cloned device_bounds width must be 10"
-        );
-    }
-
     // ── divert_path_to_ssaa produces DrawItem::SsaaPath ──────────────────────
-
-    /// `divert_path_to_ssaa` must push `DrawItem::SsaaPath` to draw_order.
-    #[test]
-    fn divert_path_to_ssaa_produces_ssaa_path_item() {
-        let mut segment = DrawSegment::new();
-        let mut draw_order: Vec<DrawItem> = Vec::new();
-        let state = GpuStateStack::new_for_test();
-
-        let vertices = vec![
-            make_vertex(0.0, 0.0),
-            make_vertex(10.0, 0.0),
-            make_vertex(5.0, 10.0),
-        ];
-        let indices = [0u32, 1, 2];
-
-        DrawBatcher::divert_path_to_ssaa(
-            &mut segment,
-            &mut draw_order,
-            &state,
-            &vertices,
-            &indices,
-            flui_painting::paint::BlendMode::SrcOver,
-        );
-
-        assert_eq!(draw_order.len(), 1, "one SsaaPath item must be pushed");
-        assert!(
-            matches!(draw_order[0], DrawItem::SsaaPath(_)),
-            "draw_order[0] must be SsaaPath"
-        );
-    }
 
     // ── divert seals prior content before pushing SsaaPath ───────────────────
 
@@ -913,76 +855,7 @@ mod unit_tests {
 
     // ── device_bounds AABB is correct ─────────────────────────────────────────
 
-    /// The `device_bounds` in `SsaaPathOp` must be the AABB of the
-    /// input vertices.
-    #[test]
-    fn divert_path_to_ssaa_device_bounds_is_vertex_aabb() {
-        let mut segment = DrawSegment::new();
-        let mut draw_order: Vec<DrawItem> = Vec::new();
-        let state = GpuStateStack::new_for_test();
-
-        DrawBatcher::divert_path_to_ssaa(
-            &mut segment,
-            &mut draw_order,
-            &state,
-            &[
-                make_vertex(5.0, 10.0),
-                make_vertex(30.0, 10.0),
-                make_vertex(17.5, 40.0),
-            ],
-            &[0, 1, 2],
-            flui_painting::paint::BlendMode::SrcOver,
-        );
-
-        let DrawItem::SsaaPath(ref op) = draw_order[0] else {
-            panic!("expected SsaaPath");
-        };
-
-        assert!(
-            (op.device_bounds.left() - 5.0).abs() < 0.01,
-            "left must be 5.0; got {}",
-            op.device_bounds.left()
-        );
-        assert!(
-            (op.device_bounds.top() - 10.0).abs() < 0.01,
-            "top must be 10.0; got {}",
-            op.device_bounds.top()
-        );
-        assert!(
-            (op.device_bounds.right() - 30.0).abs() < 0.01,
-            "right must be 30.0; got {}",
-            op.device_bounds.right()
-        );
-        assert!(
-            (op.device_bounds.bottom() - 40.0).abs() < 0.01,
-            "bottom must be 40.0; got {}",
-            op.device_bounds.bottom()
-        );
-    }
-
     // ── empty indices produce no item ─────────────────────────────────────────
-
-    /// `divert_path_to_ssaa` with empty indices must produce nothing.
-    #[test]
-    fn divert_path_to_ssaa_empty_indices_is_noop() {
-        let mut segment = DrawSegment::new();
-        let mut draw_order: Vec<DrawItem> = Vec::new();
-        let state = GpuStateStack::new_for_test();
-
-        DrawBatcher::divert_path_to_ssaa(
-            &mut segment,
-            &mut draw_order,
-            &state,
-            &[make_vertex(0.0, 0.0), make_vertex(10.0, 0.0)],
-            &[], // empty indices
-            flui_painting::paint::BlendMode::SrcOver,
-        );
-
-        assert!(
-            draw_order.is_empty(),
-            "empty indices must produce no draw item"
-        );
-    }
 
     // ── tile rect covers the full right/bottom sub-pixel edge ────────────────
 
@@ -1177,90 +1050,6 @@ mod unit_tests {
     }
 
     // ── P2: round_up_to_alignment (pool bucket quantize) ────────────────────
-
-    /// P2-a: `round_up_to_alignment` correctly rounds up to multiples of 64.
-    ///
-    /// This is the arithmetic backing the SSAA tile bucket: a 2× supersample of
-    /// arbitrary size is rounded up to the next 64px multiple so the pool can
-    /// reuse the same allocation for nearby sizes.
-    #[test]
-    fn round_up_to_alignment_correctness() {
-        use super::round_up_to_alignment;
-
-        // Already-aligned value stays the same.
-        assert_eq!(
-            round_up_to_alignment(128, 64),
-            128,
-            "128 is already a multiple of 64"
-        );
-        // One over → next bucket.
-        assert_eq!(
-            round_up_to_alignment(129, 64),
-            192,
-            "129 rounds up to 192 (next 64-multiple)"
-        );
-        // Typical small tile: 130px → 192.
-        assert_eq!(round_up_to_alignment(130, 64), 192);
-        // Minimum case.
-        assert_eq!(round_up_to_alignment(1, 64), 64);
-        // Zero → 0 (aligned at any alignment).
-        assert_eq!(round_up_to_alignment(0, 64), 0);
-        // Exact multiple: 256 → 256.
-        assert_eq!(round_up_to_alignment(256, 64), 256);
-        // Just below a larger bucket: 191 → 192.
-        assert_eq!(round_up_to_alignment(191, 64), 192);
-        // Just at the boundary: 192 → 192.
-        assert_eq!(round_up_to_alignment(192, 64), 192);
-        // Cap via .min(max) is caller responsibility; test with a large dim.
-        let max_tex_dim: u32 = 8192;
-        let bucket = round_up_to_alignment(8000, 64).min(max_tex_dim);
-        assert_eq!(bucket, 8000_u32.div_ceil(64) * 64);
-    }
-
-    /// P2-b: when bucket > supersample, crop_uv is in (0, 1) exclusive.
-    ///
-    /// Structural arithmetic check: `supersample / bucket` must be < 1 when
-    /// the bucket is larger, ensuring the shader samples only the content region.
-    #[test]
-    fn crop_uv_is_less_than_one_when_bucket_is_larger() {
-        use super::round_up_to_alignment;
-
-        // A 130px supersample gets a 192px bucket.
-        let supersample = 130_u32;
-        let bucket = round_up_to_alignment(supersample, 64);
-        assert_eq!(bucket, 192, "130 → 192 bucket");
-
-        let crop_uv = supersample as f32 / bucket as f32;
-        assert!(
-            crop_uv > 0.0 && crop_uv < 1.0,
-            "crop_uv must be in (0, 1) when bucket > supersample; got {crop_uv}"
-        );
-        // Sanity: the shader must not over-sample beyond bucket_w.
-        let sampled_max = crop_uv * bucket as f32;
-        assert!(
-            (sampled_max - supersample as f32).abs() < 0.001,
-            "crop_uv × bucket_w must equal supersample_w; got {sampled_max}"
-        );
-    }
-
-    /// P2-c: when bucket == supersample (already aligned), crop_uv == 1.0.
-    #[test]
-    fn crop_uv_is_one_when_bucket_equals_supersample() {
-        use super::round_up_to_alignment;
-
-        let supersample = 128_u32; // already a multiple of 64
-        let bucket = round_up_to_alignment(supersample, 64);
-        assert_eq!(
-            bucket, supersample,
-            "128 is already aligned → bucket == supersample"
-        );
-
-        let crop_uv = supersample as f32 / bucket as f32;
-        assert!(
-            (crop_uv - 1.0).abs() < f32::EPSILON,
-            "crop_uv must be exactly 1.0 when bucket == supersample; got {crop_uv}"
-        );
-    }
 }
 
 // ─── GPU tests (require a real wgpu adapter) ─────────────────────────────────

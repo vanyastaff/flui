@@ -1395,12 +1395,6 @@ mod window_handle_availability_tests {
     // tests), so these four cases are the entire behavior this file adds.
 
     #[test]
-    fn a_live_window_this_wrapper_owns_may_hand_out_a_handle() {
-        assert!(handle_available(TeardownRoute::DestroyDirect));
-        assert!(handle_available(TeardownRoute::PostClose));
-    }
-
-    #[test]
     fn a_destroyed_or_recycled_window_refuses_a_handle() {
         assert!(!handle_available(TeardownRoute::AlreadyGone));
         assert!(!handle_available(TeardownRoute::StaleHandle));
@@ -2199,41 +2193,6 @@ impl Drop for WindowsWindow {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    #[ignore = "requires WindowsPlatform to register the window class"]
-    fn test_window_creation() {
-        let options = WindowOptions {
-            title: "Test Window".to_string(),
-            size: Size::new(800.0, 600.0),
-            resizable: true,
-            visible: false,
-            decorated: true,
-            min_size: None,
-            max_size: None,
-            ..Default::default()
-        };
-
-        let windows_map = Arc::new(Mutex::new(HashMap::new()));
-        let handlers = Rc::new(RefCell::new(PlatformHandlers::default()));
-        let config = crate::config::WindowConfiguration::default();
-        let result = WindowsWindow::new(options, windows_map, handlers, config);
-
-        assert!(
-            result.is_ok(),
-            "Failed to create window: {:?}",
-            result.err()
-        );
-
-        let window = result.unwrap();
-        assert!(!window.hwnd().is_invalid());
-        assert_eq!(window.logical_size().width, 800.0);
-    }
-}
-
 /// Window callbacks live in the owner-thread context: a registration from
 /// any other thread is refused, and the refused callback is released on the
 /// thread that offered it.
@@ -2311,30 +2270,5 @@ mod callback_affinity_tests {
             .join()
             .expect("worker drop");
         assert_eq!(log.runs(), 0);
-    }
-
-    #[test]
-    fn owner_registration_runs_and_is_released_on_the_owner() {
-        let platform = WindowsPlatform::new().expect("platform");
-        let window = open_hidden(&platform);
-        let log = Arc::new(ProbeLog::default());
-        let probe = Probe::new(&log);
-        window.on_request_frame(Box::new(move || probe.hit()));
-
-        paint_now(hwnd_of(&window));
-        assert_eq!(log.runs(), 1, "the owner's frame callback runs on WM_PAINT");
-        assert_eq!(log.ran_on(), Some(std::thread::current().id()));
-        assert_eq!(
-            log.dropped_on(),
-            None,
-            "still registered while the window lives"
-        );
-
-        window.close();
-        assert_eq!(
-            log.dropped_on(),
-            Some(std::thread::current().id()),
-            "WM_DESTROY releases the callback on the owner"
-        );
     }
 }

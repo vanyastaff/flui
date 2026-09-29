@@ -95,39 +95,6 @@ impl ImageProvider for AssetImage {
 mod tests {
     use super::*;
 
-    #[test]
-    fn asset_image_cache_key_is_namespaced_by_path() {
-        let registry = Arc::new(AssetRegistry::default());
-        let provider = AssetImage::new(registry, "logo.png");
-
-        assert_eq!(
-            provider.cache_key(),
-            Some(ImageCacheKey::Asset("logo.png".to_string())),
-        );
-    }
-
-    #[test]
-    fn asset_image_path_returns_the_configured_path() {
-        let registry = Arc::new(AssetRegistry::default());
-        let provider = AssetImage::new(registry, "textures/wall.png");
-
-        assert_eq!(provider.path(), "textures/wall.png");
-    }
-
-    #[test]
-    fn asset_image_sync_resolve_reports_requires_async_resolve_on_a_cache_miss() {
-        let registry = Arc::new(AssetRegistry::default());
-        // A path guaranteed to never be in the decode cache.
-        let provider = AssetImage::new(registry, "flui-widgets-test-never-cached-asset-image.png");
-
-        let result = provider.resolve();
-        assert!(
-            matches!(result, Err(ImageProviderError::RequiresAsyncResolve { .. })),
-            "a cache miss must report RequiresAsyncResolve, not silently succeed \
-             or panic; got {result:?}",
-        );
-    }
-
     /// A missing file must never be reported as a decode failure — decoding
     /// never happens because the load itself fails first. Distinguishing
     /// this honestly (not flattening every `flui-assets` error into

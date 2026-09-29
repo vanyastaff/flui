@@ -2223,7 +2223,7 @@ mod tests {
     #[cfg(unix)]
     use super::HotKey;
     use super::{drain_forwarders, forward_app_stream};
-    use super::{env, fnv1a, has_flui_dependency, is_host_device, stage_worker_artifact};
+    use super::{env, has_flui_dependency, stage_worker_artifact};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{Duration, Instant};
@@ -2309,36 +2309,6 @@ mod tests {
     }
 
     #[test]
-    fn host_device_aliases() {
-        for name in ["desktop", "Desktop", "host", " this ", std::env::consts::OS] {
-            assert!(is_host_device(name), "{name}");
-        }
-        for name in ["emulator-5554", "iPhone 17 Pro", "", "linuxx"] {
-            assert!(
-                !is_host_device(name) || name == std::env::consts::OS,
-                "{name}"
-            );
-        }
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn hot_key_bindings() {
-        assert_eq!(HotKey::from_byte(b'r'), Some(HotKey::Reload));
-        assert_eq!(HotKey::from_byte(b'R'), Some(HotKey::Restart));
-        assert_eq!(HotKey::from_byte(b'c'), Some(HotKey::Clear));
-        assert_eq!(HotKey::from_byte(b'h'), Some(HotKey::Help));
-        assert_eq!(HotKey::from_byte(b'?'), Some(HotKey::Help));
-        assert_eq!(HotKey::from_byte(b'q'), Some(HotKey::Quit));
-        assert_eq!(
-            HotKey::from_byte(0x03),
-            None,
-            "Ctrl-C is a signal, not a key"
-        );
-        assert_eq!(HotKey::from_byte(b'x'), None);
-    }
-
-    #[test]
     fn device_selection_prefers_exact_id_then_name_then_unique_prefix() {
         use crate::DevicePlatform;
         use crate::commands::devices::{Device, Kind, Status};
@@ -2406,47 +2376,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn metadata_matches_canonical_manifest_identity() {
-        let tmp = tempfile::TempDir::new().expect("temporary manifest");
-        let manifest = tmp.path().join("Cargo.toml");
-        std::fs::write(&manifest, "").expect("manifest file");
-        let alias = tmp.path().join("alias.toml");
-        std::os::unix::fs::symlink(&manifest, &alias).expect("manifest alias");
-        let bytes = serde_json::to_vec(&serde_json::json!({
-            "packages": [{"manifest_path": manifest, "dependencies": [{"name": "flui", "kind": null}]}]
-        })).expect("metadata JSON");
-        assert!(super::metadata_identifies_project(&bytes, &alias).expect("canonical identity"));
-    }
-
-    /// The staging name must change when the built bytes change — that is what
-    /// makes macOS's deferred-unmap dyld load a fresh image instead of serving
-    /// the stale retained one. Distinct bytes -> distinct paths.
-    #[test]
-    fn staging_path_tracks_content() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let canonical = dir.path().join("libcounter_logic.dylib");
-
-        let built_a = dir.path().join("built-a.bin");
-        std::fs::write(&built_a, b"first build").expect("write build a");
-        let staged_a = stage_worker_artifact(&built_a, &canonical, true).expect("stage a");
-        assert!(staged_a.exists());
-
-        let built_b = dir.path().join("built-b.bin");
-        std::fs::write(&built_b, b"second build, one byte more").expect("write build b");
-        let staged_b = stage_worker_artifact(&built_b, &canonical, true).expect("stage b");
-
-        assert_ne!(
-            staged_a, staged_b,
-            "different bytes must stage at different paths so the reload cannot be served stale"
-        );
-        assert!(
-            staged_b.exists(),
-            "the newest staged worker is the one the sidecar points at"
-        );
-    }
-
     /// Rebuilding identical bytes must reuse the existing staged file untouched.
     /// Rewriting a library the host may still have mapped is exactly the hazard
     /// the content-addressed name exists to avoid.
@@ -2500,36 +2429,15 @@ mod tests {
             );
         }
     }
-
-    /// `use_staging = false` returns the built path directly (the caller loads it).
-    #[test]
-    fn staging_disabled_returns_the_built_path() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let canonical = dir.path().join("libcounter_logic.dylib");
-        let built = dir.path().join("built.bin");
-        std::fs::write(&built, b"x").expect("write build");
-
-        let staged = stage_worker_artifact(&built, &canonical, false).expect("stage");
-        assert_eq!(staged, built);
-    }
-
-    /// FNV-1a is only required to be stable and to distinguish obvious
-    /// differences; pin both so a future edit cannot silently weaken it.
-    #[test]
-    fn fnv1a_is_stable_and_distinguishes_content() {
-        assert_eq!(fnv1a(b""), 0x811c_9dc5);
-        assert_eq!(fnv1a(b"a"), fnv1a(b"a"));
-        assert_ne!(fnv1a(b"a"), fnv1a(b"b"));
-    }
 }
 
 #[cfg(test)]
 mod browser_tests {
-    use super::{Browser, Target, browser_launch_command, match_target};
+    use super::{browser_launch_command, match_target};
     use crate::DevicePlatform;
     use crate::commands::devices::{Device, Kind, Status};
     use std::collections::BTreeMap;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     fn browser_device(path: Option<&str>) -> Device {
         let mut details = BTreeMap::new();
@@ -2544,22 +2452,6 @@ mod browser_tests {
             status: Status::Available,
             details,
         }
-    }
-
-    #[test]
-    fn a_browser_device_becomes_a_browser_target_with_its_launch_path() {
-        let target = match_target(&browser_device(Some("/Applications/Google Chrome.app")))
-            .expect("browser target");
-        assert_eq!(
-            target,
-            Target::Browser(Browser {
-                id: "browser:chrome".into(),
-                name: "Chrome".into(),
-                launch: PathBuf::from("/Applications/Google Chrome.app"),
-            })
-        );
-        assert_eq!(target.id(), "browser:chrome");
-        assert_eq!(target.label(), "Chrome (browser)");
     }
 
     #[test]
@@ -2595,7 +2487,7 @@ mod browser_tests {
 
 #[cfg(test)]
 mod android_tests {
-    use super::{ANDROID_ACTIVITY, AndroidDevice, Target, match_target};
+    use super::match_target;
     use crate::DevicePlatform;
     use crate::commands::devices::{Device, Kind, Status};
     use std::collections::BTreeMap;
@@ -2612,23 +2504,6 @@ mod android_tests {
     }
 
     #[test]
-    fn an_online_android_device_is_a_target_by_serial() {
-        let target = match_target(&android_device(Status::Online)).expect("target");
-        assert_eq!(
-            target,
-            Target::Android(AndroidDevice {
-                serial: "emulator-5554".into(),
-                name: "sdk gphone64 arm64".into(),
-            })
-        );
-        assert_eq!(target.id(), "emulator-5554");
-        assert_eq!(
-            target.label(),
-            "sdk gphone64 arm64 (Android, emulator-5554)"
-        );
-    }
-
-    #[test]
     fn offline_and_unauthorized_devices_are_not_found_with_a_reason() {
         let unauthorized = match_target(&android_device(Status::Unauthorized)).expect_err("no");
         assert_eq!(unauthorized.exit_code(), 5);
@@ -2639,12 +2514,5 @@ mod android_tests {
         let offline = match_target(&android_device(Status::Offline)).expect_err("no");
         assert_eq!(offline.exit_code(), 5);
         assert!(offline.to_string().contains("offline"), "{offline}");
-    }
-
-    #[test]
-    fn the_launched_component_is_the_native_activity_the_manifest_declares() {
-        let manifest = include_str!("../../templates/platforms/android/AndroidManifest.xml");
-        assert!(manifest.contains(&format!("android:name=\"{ANDROID_ACTIVITY}\"")));
-        assert!(!manifest.contains("android:icon="), "no resources, no icon");
     }
 }

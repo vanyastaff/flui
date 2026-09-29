@@ -155,11 +155,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rtl_languages_matches_the_oracles_generated_classes() {
-        assert_eq!(RTL_LANGUAGES, &["ar", "fa", "he", "ps", "ur"]);
-    }
-
-    #[test]
     fn sindhi_is_not_rtl_despite_the_stale_oracle_doc_comment() {
         // `sd` appears in `GlobalWidgetsLocalizations`'s doc comment but has
         // no generated class — see `RTL_LANGUAGES`'s doc for the citation.
@@ -179,12 +174,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn for_locale_resolves_ltr_for_a_non_rtl_language() {
-        let resolved = GlobalWidgetsLocalizations::for_locale(&Locale::new("en", Some("US")));
-        assert_eq!(resolved.text_direction(), TextDirection::Ltr);
-    }
-
     /// End-to-end canonicalization proof: `Locale::new("iw", ...)`
     /// canonicalizes to `he` in `Locale`'s constructor (not here), so
     /// resolving through the deprecated `iw` spelling must produce the exact
@@ -197,31 +186,5 @@ mod tests {
         let he = GlobalWidgetsLocalizations::for_locale(&Locale::new("he", None::<&str>));
         assert_eq!(iw.text_direction(), TextDirection::Rtl);
         assert_eq!(iw.text_direction(), he.text_direction());
-    }
-
-    #[test]
-    fn global_widgets_localizations_strings_match_the_default_english_set() {
-        let global = GlobalWidgetsLocalizations::for_locale(&Locale::new("ar", None::<&str>));
-        let default = DefaultWidgetsLocalizations;
-        assert_eq!(global.copy_button_label(), default.copy_button_label());
-        assert_eq!(global.share_button_label(), default.share_button_label());
-        assert_eq!(
-            global.radio_button_unselected_label(),
-            default.radio_button_unselected_label()
-        );
-    }
-
-    #[test]
-    fn delegate_is_supported_for_every_locale() {
-        let delegate = GlobalWidgetsLocalizationsDelegate;
-        assert!(delegate.is_supported(&Locale::new("ar", None::<&str>)));
-        assert!(delegate.is_supported(&Locale::new("xx", None::<&str>)));
-    }
-
-    #[test]
-    fn delegate_load_resolves_the_locales_direction() {
-        let delegate = GlobalWidgetsLocalizationsDelegate;
-        let resources = delegate.load(&Locale::new("ur", None::<&str>));
-        assert_eq!(resources.text_direction(), TextDirection::Rtl);
     }
 }

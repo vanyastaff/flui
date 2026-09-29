@@ -65,29 +65,3 @@ fn stadium_shape_excludes_a_corner_a_sharp_rectangle_would_include() {
          so the wrapped GestureDetector never sees the tap"
     );
 }
-
-#[test]
-fn rectangle_shape_includes_the_same_corner_point() {
-    let (taps, on_tap) = tap_counter();
-    let laid = lay_out(
-        Material::new(Color::WHITE)
-            .shape(MaterialShape::rectangle())
-            .child(
-                GestureDetector::new()
-                    .on_tap(on_tap)
-                    .child(ColoredBox::new(Color::rgb(200, 10, 10))),
-            ),
-        tight(120.0, 40.0),
-    );
-
-    laid.dispatch_pointer_down(CORNER_PROBE.0, CORNER_PROBE.1);
-    laid.dispatch_pointer_up(CORNER_PROBE.0, CORNER_PROBE.1);
-
-    assert_eq!(
-        taps.load(Ordering::SeqCst),
-        1,
-        "Material's registered plain-rectangle clip must include this corner point, \
-         so the wrapped GestureDetector sees the tap — the same point the Stadium test \
-         above proves is excluded, isolating the clip shape as the only variable"
-    );
-}

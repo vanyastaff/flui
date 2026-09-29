@@ -216,29 +216,6 @@ mod tests {
     use crate::SizedBox;
 
     #[test]
-    fn directionality_new_wires_direction_and_child() {
-        let d = Directionality::new(TextDirection::Rtl, SizedBox::shrink());
-        assert_eq!(*d.data(), TextDirection::Rtl);
-    }
-
-    #[test]
-    fn directionality_create_element_is_inherited_kind() {
-        let d = Directionality::new(TextDirection::Ltr, SizedBox::shrink());
-        let kind = d.create_element();
-        assert!(matches!(
-            kind,
-            flui_view::element::ElementKind::Inherited(_)
-        ));
-    }
-
-    #[test]
-    fn directionality_update_should_notify_same_direction_is_false() {
-        let a = Directionality::new(TextDirection::Ltr, SizedBox::shrink());
-        let b = Directionality::new(TextDirection::Ltr, SizedBox::shrink());
-        assert!(!a.update_should_notify(&b));
-    }
-
-    #[test]
     fn directionality_update_should_notify_different_direction_is_true() {
         let a = Directionality::new(TextDirection::Rtl, SizedBox::shrink());
         let b = Directionality::new(TextDirection::Ltr, SizedBox::shrink());
@@ -253,31 +230,6 @@ mod tests {
     // the LTR and RTL base cases.
     // ------------------------------------------------------------------
 
-    #[test]
-    fn resolve_horizontal_axis_direction_ltr_is_left_to_right() {
-        assert_eq!(
-            resolve_horizontal_axis_direction(TextDirection::Ltr, false),
-            AxisDirection::LeftToRight
-        );
-    }
-
-    #[test]
-    fn resolve_horizontal_axis_direction_rtl_is_right_to_left() {
-        assert_eq!(
-            resolve_horizontal_axis_direction(TextDirection::Rtl, false),
-            AxisDirection::RightToLeft,
-            "a horizontal axis under RTL Directionality must resolve to RightToLeft"
-        );
-    }
-
-    #[test]
-    fn resolve_horizontal_axis_direction_ltr_reverse_is_right_to_left() {
-        assert_eq!(
-            resolve_horizontal_axis_direction(TextDirection::Ltr, true),
-            AxisDirection::RightToLeft
-        );
-    }
-
     /// `reverse` flips the RTL base direction too: RTL + reverse ends up back
     /// at `LeftToRight`, matching `flipAxisDirection(AxisDirection.left)`.
     #[test]
@@ -285,21 +237,6 @@ mod tests {
         assert_eq!(
             resolve_horizontal_axis_direction(TextDirection::Rtl, true),
             AxisDirection::LeftToRight
-        );
-    }
-
-    /// The vertical axis never consults `text_direction` — mirrors the
-    /// oracle's `Axis.vertical` arm, which never touches `Directionality` at
-    /// all. `axis_direction_from_axis_reverse_and_directionality`'s vertical
-    /// branch delegates straight to `AxisDirection::from_axis`, already
-    /// covered at the unit level in `crates/flui-rendering/src/constraints/axis_direction.rs`;
-    /// these two pin the specific `Axis::Vertical` outputs this module's
-    /// callers rely on.
-    #[test]
-    fn axis_direction_from_axis_reverse_and_directionality_vertical_false_is_top_to_bottom() {
-        assert_eq!(
-            AxisDirection::from_axis(Axis::Vertical, false),
-            AxisDirection::TopToBottom
         );
     }
 

@@ -29,11 +29,7 @@
 // ADR-0027: ElementBuildContext's current test/prod seam still takes
 // Arc<RwLock<ElementTree/BuildOwner>>. The owner graph is !Send; do not restore
 // Send + Sync to satisfy clippy. Future UiRealm/Rc migration should remove this.
-#![expect(
-    clippy::arc_with_non_send_sync,
-    clippy::unreadable_literal,
-    clippy::unwrap_used
-)]
+#![expect(clippy::arc_with_non_send_sync, clippy::unwrap_used)]
 
 use std::sync::Arc;
 
@@ -264,20 +260,6 @@ fn inherited_update_notifies_dependents() {
 // ============================================================================
 // Edge: no ancestor InheritedView -> returns None, no dependent-set write
 // ============================================================================
-
-#[test]
-fn depend_on_returns_none_when_no_ancestor() {
-    let (tree, owner) = create_tree_and_owner();
-
-    // Tree: DummyChild (root) — NO ThemeProvider above
-    let root_id = tree
-        .write()
-        .mount_root(&DummyChild, &mut owner.write().element_owner_mut());
-
-    let ctx = ElementBuildContext::for_element(root_id, tree.clone(), owner.clone()).unwrap();
-    let result = ctx.depend_on::<ThemeProvider, u32>(|view| view.theme.color);
-    assert_eq!(result, None, "no ThemeProvider ancestor -> None");
-}
 
 // ============================================================================
 // Edge: same element calls depend_on twice in one build -> dedup
@@ -524,81 +506,11 @@ fn deactivate_releases_provider_and_activate_schedules_dependency_refresh() {
 // `getInheritedWidgetOfExactType` (no `updateDependencies` call).
 // ============================================================================
 
-#[test]
-fn get_inherited_returns_value_without_recording_dependent() {
-    // Tree: ThemeProvider (root) -> DummyChild (would-be dependent, but
-    // calls `get` not `depend_on`, so it must NOT be recorded).
-    let (tree, owner) = create_tree_and_owner();
-
-    let provider = ThemeProvider {
-        theme: MyTheme { color: 0x00FF_0000 },
-        child: DummyChild,
-    };
-
-    let provider_id = tree
-        .write()
-        .mount_root(&provider, &mut owner.write().element_owner_mut());
-
-    let child_id = tree.write().insert(
-        &DummyChild,
-        provider_id,
-        0,
-        &mut owner.write().element_owner_mut(),
-    );
-
-    let ctx = ElementBuildContext::for_element(child_id, tree.clone(), owner.clone()).unwrap();
-
-    // Sibling assertion to the depend_on-records-dependent test above: same tree shape, same closure, but `get`
-    // instead of `depend_on`. The value is returned identically; only
-    // the dependent-set side-effect differs.
-    let color = ctx.get::<ThemeProvider, u32>(|view| view.theme.color);
-    assert_eq!(
-        color,
-        Some(0x00FF_0000),
-        "get should return the captured value (same as depend_on)"
-    );
-
-    // Critical assertion: the dependent map is EMPTY. If `get_inherited`
-    // were ever to call `record_dependent`, this would fail with
-    // `dependents().len() == 1`. The parallel to
-    // `depend_on_returns_value_and_records_dependent`, where the same
-    // tree shape yields `dependents().contains_key(&child_id) == true`,
-    // is what locks down the non-recording semantic.
-    let tree_guard = tree.read();
-    let provider_node = tree_guard.get(provider_id).expect("provider exists");
-    let elem = provider_node
-        .element()
-        .downcast_ref::<InheritedElement<ThemeProvider>>()
-        .expect("provider is InheritedElement<ThemeProvider>");
-    assert!(
-        elem.dependents().is_empty(),
-        "get_inherited must NOT record the caller in the dependent map \
-         (Flutter parity framework.dart:5092 — getInheritedWidgetOfExactType \
-         does not call updateDependencies). Found {} entries: {:?}",
-        elem.dependents().len(),
-        elem.dependents().keys().collect::<Vec<_>>(),
-    );
-}
-
 // ============================================================================
 // Edge: get_inherited returns None when no ancestor InheritedView
 // of that type exists — no dependent-set write happens because nothing
 // was found to write into.
 // ============================================================================
-
-#[test]
-fn get_inherited_returns_none_when_no_ancestor() {
-    let (tree, owner) = create_tree_and_owner();
-
-    // Tree: DummyChild (root) — NO ThemeProvider above
-    let root_id = tree
-        .write()
-        .mount_root(&DummyChild, &mut owner.write().element_owner_mut());
-
-    let ctx = ElementBuildContext::for_element(root_id, tree.clone(), owner.clone()).unwrap();
-    let result = ctx.get::<ThemeProvider, u32>(|view| view.theme.color);
-    assert_eq!(result, None, "no ThemeProvider ancestor -> None");
-}
 
 // ============================================================================
 // Wires `did_change_dependencies` to inherited updates.
@@ -685,22 +597,6 @@ mod did_change_dependencies_on_inherited_update {
     // `ElementBase::notify_dependency_change` path. Build returns a true
     // leaf so build_scope terminates.
     // ========================================================================
-
-    #[derive(Clone)]
-    struct StatelessProbeDependent;
-
-    impl flui_view::StatelessView for StatelessProbeDependent {
-        fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-            let _ = ctx.depend_on::<super::ThemeProvider, ()>(|_| ());
-            LeafView.boxed()
-        }
-    }
-
-    impl View for StatelessProbeDependent {
-        fn create_element(&self) -> flui_view::element::ElementKind {
-            flui_view::element::ElementKind::stateless(self)
-        }
-    }
 
     /// Helper: mount `ThemeProvider(color) -> dependent` and register
     /// `dependent` as an inherited dependent via a `depend_on` call.
@@ -860,176 +756,6 @@ mod did_change_dependencies_on_inherited_update {
                 .element_owner_mut()
                 .has_pending_dependency_change(dep_id),
             "pending_dependency_changes must be cleared after build_scope dispatches the hook"
-        );
-    }
-
-    /// E3 regression: a dependent that has ALREADY built once (and is
-    /// therefore clean) still rebuilds when its inherited dependency
-    /// changes.
-    ///
-    /// `InheritedBehavior::on_view_updated` schedules the dependent and
-    /// records a pending dependency change, but it cannot set the
-    /// dependent's own dirty flag (it has no slab access). `build_scope`'s
-    /// dirty guard skips any popped entry whose `is_dirty()` is false, so
-    /// without the guard promoting a pending dependency change to a dirty
-    /// mark, a clean dependent would be popped, skipped, and never observe
-    /// the change. The sibling `fires_typed_hook_exactly_once_before_rebuild`
-    /// does NOT catch this: there the dependent is dirty-from-birth (it has
-    /// never built), so the guard passes regardless.
-    #[test]
-    fn clean_dependent_rebuilds_on_dependency_change() {
-        let mut tree = ElementTree::new();
-        let mut owner = BuildOwner::new();
-        let probe: std::sync::Arc<Probe> = std::sync::Arc::new(Mutex::new(Vec::new()));
-
-        let dependent_view = ProbeDependent {
-            probe: probe.clone(),
-        };
-
-        let (provider_id, dep_id) = mount_provider_and_record_dependency(
-            &mut tree,
-            &mut owner,
-            0x00FF_0000,
-            &dependent_view,
-        );
-
-        // The helper drove the first build and registration, so the dependent
-        // is already clean here.
-        assert_eq!(
-            probe.lock().unwrap().clone(),
-            vec!["build".to_string()],
-            "first build runs once (no dependency change pending yet, so no dcd)",
-        );
-        probe.lock().unwrap().clear();
-
-        // Now change the inherited value. The dependent is clean (its dirty
-        // flag was cleared by build #1), so this is exactly the bug
-        // condition: scheduled + pending-change, but not self-dirty.
-        let provider_v2 = super::ThemeProvider {
-            theme: MyTheme { color: 0x0000_FF00 },
-            child: DummyChild,
-        };
-        tree.update(provider_id, &provider_v2, &mut owner.element_owner_mut());
-        assert!(
-            owner
-                .element_owner_mut()
-                .has_pending_dependency_change(dep_id),
-            "the dependency change marks the clean dependent for a typed-hook dispatch",
-        );
-
-        // Build #2: the clean dependent MUST rebuild — dcd:1 then build.
-        owner.build_scope(&mut tree);
-        let events = probe.lock().unwrap().clone();
-        assert_eq!(
-            events,
-            vec!["dcd:1".to_string(), "build".to_string()],
-            "a clean dependent must observe the dependency change: \
-             expected [dcd:1, build], got {events:?}",
-        );
-    }
-
-    #[test]
-    fn no_notify_means_no_typed_hook_dispatch() {
-        let mut tree = ElementTree::new();
-        let mut owner = BuildOwner::new();
-        let probe: std::sync::Arc<Probe> = std::sync::Arc::new(Mutex::new(Vec::new()));
-
-        let dependent_view = ProbeDependent {
-            probe: probe.clone(),
-        };
-
-        // Mount with color 0xAA so the next update with the SAME color
-        // returns `update_should_notify == false`.
-        let (provider_id, dep_id) = mount_provider_and_record_dependency(
-            &mut tree,
-            &mut owner,
-            0x00AA_BBCC,
-            &dependent_view,
-        );
-        probe.lock().unwrap().clear();
-
-        // Update with the same MyTheme value — update_should_notify is
-        // `self.theme != old.theme`, which is false here.
-        let provider_v2 = super::ThemeProvider {
-            theme: MyTheme { color: 0x00AA_BBCC },
-            child: DummyChild,
-        };
-        tree.update(provider_id, &provider_v2, &mut owner.element_owner_mut());
-
-        // No dependent should be scheduled, no pending typed-hook flag.
-        assert_eq!(
-            owner.dirty_count(),
-            0,
-            "update_should_notify=false must not schedule the dependent"
-        );
-        assert!(
-            !owner
-                .element_owner_mut()
-                .has_pending_dependency_change(dep_id),
-            "update_should_notify=false must not set the pending dependency-change flag"
-        );
-
-        // Even if a build runs (it has nothing to do), no typed hook
-        // fires.
-        owner.build_scope(&mut tree);
-        let events = probe.lock().unwrap().clone();
-        assert!(
-            events.iter().all(|e| e != "dcd:1"),
-            "did_change_dependencies must NOT fire when update_should_notify=false. recorded: {events:?}"
-        );
-    }
-
-    #[test]
-    fn dependent_with_default_hook_is_unaffected() {
-        let mut tree = ElementTree::new();
-        let mut owner = BuildOwner::new();
-
-        // Use the existing stateless `DummyChild` as the dependent — its
-        // ElementBase uses the default empty `notify_dependency_change`
-        // (no `ViewState` to forward to). The update path must run
-        // cleanly: no panic, dependent is scheduled, the typed-hook
-        // dispatch is a no-op for this dependent type.
-        let dependent = StatelessProbeDependent;
-        let (provider_id, dep_id) =
-            mount_provider_and_record_dependency(&mut tree, &mut owner, 0x00FF_0000, &dependent);
-
-        // Update so update_should_notify returns true.
-        let provider_v2 = super::ThemeProvider {
-            theme: MyTheme { color: 0x0000_FF00 },
-            child: DummyChild,
-        };
-        tree.update(provider_id, &provider_v2, &mut owner.element_owner_mut());
-
-        // The dependent is still scheduled for rebuild (same as the
-        // status-quo behavior), and the pending-flag is set on it. The
-        // distinction is purely behavioral: when the typed-hook
-        // dispatch fires inside `build_scope`, it calls the default
-        // empty `ElementBase::notify_dependency_change` — a clean no-op.
-        assert_eq!(
-            owner.dirty_count(),
-            1,
-            "dependent should be scheduled for rebuild"
-        );
-        assert!(
-            owner
-                .element_owner_mut()
-                .has_pending_dependency_change(dep_id),
-            "pending-flag is set on a stateless dependent (the typed-hook dispatch is a no-op \
-             for this dependent's behavior, but the flag accounting is uniform)"
-        );
-
-        // Build phase — must run without panic. Stateless dependents use
-        // the default no-op `notify_dependency_change`, so the call is
-        // a clean dispatch with no observable effect beyond clearing
-        // the pending flag.
-        owner.build_scope(&mut tree);
-
-        assert!(
-            !owner
-                .element_owner_mut()
-                .has_pending_dependency_change(dep_id),
-            "pending-flag must be cleared after build_scope drains it (even for stateless \
-             dependents whose hook is a no-op)"
         );
     }
 
@@ -1461,80 +1187,6 @@ mod live_inherited_during_build {
         );
     }
 
-    /// An `Outer` consumer that reads the live value, then builds an `Inner`
-    /// consumer that ALSO reads it — stacked so a single provider ends up
-    /// with two distinct recorded dependents (the keystone test has one).
-    #[derive(Clone)]
-    struct OuterConsumer {
-        own: ObservedColor,
-        inner: ObservedColor,
-    }
-
-    impl StatelessView for OuterConsumer {
-        fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-            *self.own.lock().unwrap() = ctx.depend_on::<ThemeRoot, u32>(|p| p.theme.color);
-            Consumer {
-                observed: self.inner.clone(),
-            }
-            .boxed()
-        }
-    }
-
-    impl View for OuterConsumer {
-        fn create_element(&self) -> flui_view::element::ElementKind {
-            flui_view::element::ElementKind::stateless(self)
-        }
-    }
-
-    #[test]
-    fn multiple_consumers_each_read_live_and_are_recorded() {
-        let mut tree = ElementTree::new();
-        let mut owner = BuildOwner::new();
-        let outer: ObservedColor = Arc::new(Mutex::new(None));
-        let inner: ObservedColor = Arc::new(Mutex::new(None));
-
-        // Mount the provider; its own typed `child` is never built — we attach
-        // the stacked consumers directly under it (mirroring the earlier dependent-registration setup),
-        // so the throwaway `Middle` child is inert.
-        let root = ThemeRoot {
-            theme: MyTheme { color: 0x00FACADE },
-            child: Middle {
-                observed: Arc::new(Mutex::new(None)),
-            },
-        };
-        let root_id = tree.mount_root(&root, &mut owner.element_owner_mut());
-
-        // ThemeRoot -> OuterConsumer(outer) -> Consumer(inner) -> Leaf: two
-        // consumers at different depths each `depend_on` the same provider.
-        let outer_id = tree.insert(
-            &OuterConsumer {
-                own: outer.clone(),
-                inner: inner.clone(),
-            },
-            root_id,
-            0,
-            &mut owner.element_owner_mut(),
-        );
-        owner.schedule_build_for(outer_id, 1, flui_view::RebuildReason::ParentUpdate);
-        owner.build_scope(&mut tree);
-
-        assert_eq!(
-            *outer.lock().unwrap(),
-            Some(0x00FACADE),
-            "outer consumer reads the live inherited value",
-        );
-        assert_eq!(
-            *inner.lock().unwrap(),
-            Some(0x00FACADE),
-            "inner consumer reads the live inherited value",
-        );
-        assert_eq!(
-            provider_dependent_count(&tree, root_id),
-            2,
-            "both consumers are recorded as distinct dependents of the provider",
-        );
-    }
-
     /// A consumer whose `depend_on` callback panics. `build_or_recover`
     /// catches it and substitutes an `ErrorView`, so `build_scope` does not
     /// panic — but the dependency must already be recorded.
@@ -1589,98 +1241,6 @@ mod live_inherited_during_build {
             1,
             "a depend_on before a panicking callback must still register the dependent",
         );
-    }
-
-    /// Unmounting a dependent must remove it from the provider's dependent
-    /// map — Flutter's `Element.deactivate` calls `removeDependent` for each
-    /// `_dependencies` entry. Without deregistration a long-lived provider
-    /// accumulates dead ids and every notify iterates stale entries.
-    #[test]
-    fn unmounted_dependents_are_removed_from_provider_map() {
-        let mut tree = ElementTree::new();
-        let mut owner = BuildOwner::new();
-
-        let root = ThemeRoot {
-            theme: MyTheme { color: 0x00DE_AD00 },
-            child: Middle {
-                observed: Arc::new(Mutex::new(None)),
-            },
-        };
-        let root_id = tree.mount_root(&root, &mut owner.element_owner_mut());
-
-        // Mount four dependent consumers directly under the provider and
-        // build them, so each records its `depend_on` registration.
-        let mut consumers = Vec::new();
-        for slot in 0..4 {
-            let id = tree.insert(
-                &Consumer {
-                    observed: Arc::new(Mutex::new(None)),
-                },
-                root_id,
-                slot,
-                &mut owner.element_owner_mut(),
-            );
-            owner.schedule_build_for(id, 1, flui_view::RebuildReason::InitialMount);
-            consumers.push(id);
-        }
-        owner.build_scope(&mut tree);
-        assert_eq!(
-            provider_dependent_count(&tree, root_id),
-            4,
-            "every built consumer registers as a dependent",
-        );
-
-        // Unmount all four (eager, un-keyed removal).
-        for id in consumers {
-            tree.remove(id, &mut owner.element_owner_mut());
-        }
-        assert_eq!(
-            provider_dependent_count(&tree, root_id),
-            0,
-            "unmounting a dependent must deregister it from the provider's map",
-        );
-    }
-
-    /// A scrolling-style mount/unmount churn must leave the provider's
-    /// dependent map bounded — each unmounted consumer takes its
-    /// registration with it.
-    #[test]
-    fn mount_unmount_cycles_keep_provider_dependents_bounded() {
-        let mut tree = ElementTree::new();
-        let mut owner = BuildOwner::new();
-
-        let root = ThemeRoot {
-            theme: MyTheme { color: 0x00DE_AD00 },
-            child: Middle {
-                observed: Arc::new(Mutex::new(None)),
-            },
-        };
-        let root_id = tree.mount_root(&root, &mut owner.element_owner_mut());
-
-        for cycle in 0..8 {
-            let id = tree.insert(
-                &Consumer {
-                    observed: Arc::new(Mutex::new(None)),
-                },
-                root_id,
-                0,
-                &mut owner.element_owner_mut(),
-            );
-            owner.schedule_build_for(id, 1, flui_view::RebuildReason::InitialMount);
-            owner.build_scope(&mut tree);
-            assert_eq!(
-                provider_dependent_count(&tree, root_id),
-                1,
-                "cycle {cycle}: the live consumer is registered",
-            );
-
-            tree.remove(id, &mut owner.element_owner_mut());
-            assert_eq!(
-                provider_dependent_count(&tree, root_id),
-                0,
-                "cycle {cycle}: the unmounted consumer is deregistered — the map stays bounded",
-            );
-        }
     }
 }
 

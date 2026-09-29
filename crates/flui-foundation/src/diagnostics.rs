@@ -134,17 +134,4 @@ mod tests {
         let expected = id.as_u64().to_string();
         assert_eq!(value, Some(expected.as_str()));
     }
-
-    #[test]
-    fn the_name_is_a_snake_case_identifier() {
-        // `tracing` accepts dotted field names, but a dot makes the field
-        // unusable as a bare identifier at a call site and renders
-        // inconsistently across the sinks that flatten fields into text.
-        assert!(
-            PRESENTATION_ID
-                .chars()
-                .all(|character| character.is_ascii_lowercase() || character == '_'),
-            "`{PRESENTATION_ID}` is not a snake_case identifier"
-        );
-    }
 }

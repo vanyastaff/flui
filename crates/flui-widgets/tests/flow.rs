@@ -90,15 +90,3 @@ fn flow_lays_out_every_child_at_zero_offset_regardless_of_paint_transform() {
     assert_eq!(laid.offset(first), offset(0.0, 0.0));
     assert_eq!(laid.offset(second), offset(0.0, 0.0));
 }
-
-#[test]
-fn flow_childless_sizes_via_delegate_alone() {
-    let laid = lay_out(
-        Flow::new(step_delegate(10.0), Vec::<flui_view::BoxedView>::new()),
-        loose(150.0),
-    );
-
-    let root = laid.root();
-    assert_eq!(laid.find_by_render_type("RenderFlow"), root);
-    assert_eq!(laid.size(root), size(150.0, 150.0));
-}

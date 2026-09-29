@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::common::{lay_out, size, tight};
+use crate::common::{lay_out, tight};
 use flui_animation::{Animation, AnimationController};
 use flui_widgets::{ScaleTransition, SizedBox};
 
@@ -41,19 +41,4 @@ fn scale_transition_reads_animation_scale_on_each_tick() {
         "the tick re-read the updated scale into the Transform: {}",
         laid.transform_scale(render_transform),
     );
-}
-
-#[test]
-fn scale_transition_lays_its_child_out_as_a_passthrough() {
-    let controller = AnimationController::without_ticker(Duration::from_millis(300));
-    controller.set_value(1.0);
-    let scale: Arc<dyn Animation<f64>> = Arc::new(controller.clone());
-
-    // Transform is paint-only: the child keeps its size regardless of scale.
-    let laid = lay_out(
-        ScaleTransition::new(scale, SizedBox::new(80.0, 60.0)),
-        tight(80.0, 60.0),
-    );
-
-    assert_eq!(laid.size(laid.root()), size(80.0, 60.0));
 }

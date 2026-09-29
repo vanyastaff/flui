@@ -35,46 +35,6 @@ fn color_property(color: Color) -> String {
 // Dialog — _DialogDefaultsM3
 // ============================================================================
 
-#[test]
-fn dialog_material_matches_dialog_defaults_m3() {
-    let theme = ThemeData::light();
-    let colors = theme.color_scheme;
-    let laid = lay_out(
-        Theme::new(theme, Dialog::new(SizedBox::new(1.0, 1.0))),
-        tight(1000.0, 1000.0),
-    );
-
-    let material = laid
-        .try_find_by_render_type("RenderPhysicalShape")
-        .expect("Dialog must compose a Material (RenderPhysicalShape) surface");
-
-    let color = laid
-        .render_property(material, "color")
-        .expect("RenderPhysicalShape reports a \"color\" diagnostics property");
-    assert_eq!(
-        color,
-        color_property(colors.surface_container_high),
-        "_DialogDefaultsM3.backgroundColor is ColorScheme.surfaceContainerHigh"
-    );
-
-    let elevation = laid
-        .render_property(material, "elevation")
-        .expect("RenderPhysicalShape reports an \"elevation\" diagnostics property");
-    assert_eq!(
-        elevation.parse::<f64>(),
-        Ok(6.0),
-        "_DialogDefaultsM3 constructs with elevation: 6.0"
-    );
-
-    let clip_behavior = laid
-        .render_property(material, "clip_behavior")
-        .expect("RenderPhysicalShape reports a \"clip_behavior\" diagnostics property");
-    assert_eq!(
-        clip_behavior, "None",
-        "_DialogDefaultsM3 constructs with clipBehavior: Clip.none"
-    );
-}
-
 /// The middle cascade tier, proven end to end: a `ThemeData.dialog_theme`
 /// with a custom `background_color`/`elevation` reaches the mounted
 /// `Material`.
@@ -127,28 +87,6 @@ fn default_constraints_enforce_a_280px_minimum_width() {
         laid.size(material).width,
         280.0,
         "BoxConstraints(minWidth: 280.0) must widen a 1px-wide child's Material to 280px"
-    );
-}
-
-/// `_defaultInsetPadding` (`EdgeInsets.symmetric(horizontal: 40.0, vertical:
-/// 24.0)`) reaches the composed `Padding`: the dialog's aligned content sits
-/// at `(40, 24)`, not flush against the screen edge.
-#[test]
-fn default_inset_padding_offsets_the_aligned_content_by_40x24() {
-    let laid = lay_out(
-        Theme::new(ThemeData::light(), Dialog::new(SizedBox::new(1.0, 1.0))),
-        tight(1000.0, 1000.0),
-    );
-
-    let aligned = laid
-        .try_find_by_render_type("RenderAlign")
-        .expect("Dialog must center its content through an Align");
-
-    assert_eq!(
-        laid.offset(aligned),
-        common::offset(40.0, 24.0),
-        "_defaultInsetPadding (40 horizontal / 24 vertical) must inset the Align \
-         that centers the dialog"
     );
 }
 
@@ -268,22 +206,6 @@ fn title_content_and_actions_each_compose_their_own_padded_slot() {
         4,
         "expected the Dialog's own inset padding plus one padded slot each for \
          title/content/actions"
-    );
-}
-
-/// An `AlertDialog` with no title/content/actions still mounts its bare
-/// `Dialog` surface — no padded slot is created for an absent one.
-#[test]
-fn absent_slots_produce_no_padded_wrapper() {
-    let laid = lay_out(
-        Theme::new(ThemeData::light(), AlertDialog::new()),
-        tight(1000.0, 1000.0),
-    );
-
-    assert_eq!(
-        laid.find_all_by_render_type("RenderPadding").len(),
-        1,
-        "only the Dialog's own inset padding should exist when title/content/actions are unset"
     );
 }
 

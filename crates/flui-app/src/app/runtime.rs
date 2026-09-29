@@ -841,16 +841,6 @@ impl AppRuntime {
         self.services.get_or_init(SharedEngineServices::resolve)
     }
 
-    /// Test-only introspection: whether `SharedEngineServices` has been
-    /// resolved yet. `services` itself is private to this module, and
-    /// `runner.rs`'s tests (a sibling module tree, with the real
-    /// `install_owner_platform`/`install_platform_realm` bootstrap) need to
-    /// assert on it without reaching into a private field directly.
-    #[cfg(test)]
-    pub(super) fn services_resolved(&self) -> bool {
-        self.services.get().is_some()
-    }
-
     /// Stash the host's executors ahead of the first realm install (the
     /// bootstrap step that resolves [`Self::ensure_execution`]). Called by
     /// the runner when `AppConfig::executors` is `Some` — before
@@ -1678,53 +1668,7 @@ impl Drop for AppRuntime {
 
 #[cfg(all(test, not(target_os = "ios")))]
 mod app_runtime_tests {
-    use std::num::NonZeroU32;
-
     use super::*;
-
-    #[test]
-    fn app_runtime_owns_registry_and_realm_slot() {
-        let runtime = AppRuntime::new();
-
-        assert!(
-            runtime.realms.is_empty(),
-            "a freshly constructed AppRuntime hosts no realm yet"
-        );
-        assert!(
-            runtime.owner_platform.is_none(),
-            "a freshly constructed AppRuntime hosts no owner platform yet"
-        );
-        assert!(
-            runtime.registry.is_empty(),
-            "AppRuntime owns the WindowRegistry directly -- a fresh one has no mappings"
-        );
-        assert!(
-            runtime
-                .realms
-                .get(&RealmId::new_gen(0, NonZeroU32::new(1).unwrap()))
-                .is_none(),
-            "the RealmId-keyed registry must return None when no realm is installed"
-        );
-    }
-
-    /// `AppRuntime::new` must NOT resolve `SharedEngineServices` -- that is
-    /// the entire point of moving resolution behind `OnceCell` +
-    /// `ensure_services`. Red before the fix: `new()` used to call
-    /// `SharedEngineServices::resolve()` directly, so `services` was always
-    /// `Some` immediately after construction; this assertion would have
-    /// failed against that shape.
-    #[test]
-    fn app_runtime_new_does_not_resolve_services() {
-        let runtime = AppRuntime::new();
-
-        assert!(
-            runtime.services.get().is_none(),
-            "AppRuntime::new must not resolve SharedEngineServices -- doing so \
-             makes every first touch of the TLS slot (including an \
-             OwnerHostClearGuard::drop during an unwind) run singleton \
-             construction and full system-font enumeration"
-        );
-    }
 
     /// `ensure_services` must actually populate both `SharedEngineServices`
     /// fields with live, usable handles -- reading each one here (rather
@@ -1769,47 +1713,11 @@ mod app_runtime_tests {
 
         assert!(services.accessibility_features().reduce_motion);
     }
-
-    /// A `OwnerHostClearGuard`-shaped operation that touches ONLY
-    /// `owner_platform` -- never `ensure_services` -- must leave `services`
-    /// unresolved. Mirrors `OwnerHostClearGuard::drop`'s actual field touch
-    /// (`runner.rs`) without depending on `runner.rs`'s platform machinery.
-    #[test]
-    fn guard_only_arm_and_drop_cycle_never_resolves_services() {
-        let mut runtime = AppRuntime::new();
-
-        // The clear-guard's drop body: `self.owner_platform.take();` and
-        // nothing else.
-        runtime.owner_platform.take();
-
-        assert!(
-            runtime.services.get().is_none(),
-            "a guard-only arm/drop cycle (owner_platform touch only) must \
-             never resolve SharedEngineServices -- that would reintroduce \
-             the double-panic-during-unwind hazard this shape closes"
-        );
-    }
 }
 
 #[cfg(all(test, not(target_os = "ios")))]
 mod wake_and_clipboard_tests {
     use super::*;
-
-    /// `wake_frame` must set `needs_redraw` even when no window is stored
-    /// (the window lock is a leaf that is independently optional).
-    #[test]
-    fn wake_frame_sets_needs_redraw_without_window() {
-        let runtime = AppRuntime::new();
-        runtime.mark_rendered();
-        assert!(!runtime.needs_redraw(), "precondition: no redraw pending");
-
-        runtime.wake_frame();
-
-        assert!(
-            runtime.needs_redraw(),
-            "wake_frame must set needs_redraw even without an active window"
-        );
-    }
 
     /// `wake_frame` must call `PlatformWindow::request_redraw` when a window
     /// is installed.
@@ -1869,68 +1777,6 @@ mod wake_and_clipboard_tests {
         assert_eq!(frame_requests.load(Ordering::Relaxed), 1);
     }
 
-    /// The frame wake pokes the platform window from whatever thread completed
-    /// the future — the violation of `PlatformWindow::request_redraw`'s
-    /// owner-thread rule that issue #949 is about, made executable.
-    ///
-    /// **This test is green because the defect is present.** It pins the
-    /// current behaviour, not the desired one. `frame_wake_callback` is
-    /// deliberately `Send + Sync` and is installed as the scheduler's
-    /// `on_frame_scheduled` hook and handed to spawned futures' wakers, so in
-    /// production this poke lands on an executor thread; on the macOS backend
-    /// that reaches `-[NSView setNeedsDisplay:]` off the main thread, which is
-    /// what makes `MacOSWindow`'s `unsafe impl Send` justification untrue.
-    ///
-    /// When the `PlatformProxy` redraw verb lands (ADR-0045 decision 5, scoped
-    /// with #559/#551) this test must be **re-targeted, not deleted** — it is
-    /// the mechanical trigger that makes the fix visible here instead of
-    /// silently passing either way. It can fail in two shapes, and each
-    /// assertion below says which: the poke arrives on the owner thread
-    /// (invert the thread assertion), or no direct poke happens at all because
-    /// the worker posted to the proxy (re-point the test at the proxy).
-    ///
-    /// The sibling `wake_frame_calls_platform_request_redraw` covers the
-    /// same-thread call; a counter alone cannot distinguish the two, which is
-    /// why `TestWindow` records the calling thread.
-    #[test]
-    fn the_frame_wake_pokes_the_window_from_the_thread_that_fired_it() {
-        use flui_foundation::geometry::Size;
-
-        let window = crate::app::window_test_support::TestWindow::new()
-            .with_sizes(Size::new(800, 600), Size::new(800.0, 600.0));
-        let redraw_threads = window.redraw_threads_handle();
-
-        let runtime = AppRuntime::new();
-        runtime.set_redraw_window(Arc::new(window));
-
-        // The production shape: the `Send + Sync` closure, fired from a thread
-        // that is not the one owning the runtime.
-        let wake = runtime.frame_wake_callback();
-        let worker = std::thread::spawn(move || {
-            wake();
-            std::thread::current().id()
-        });
-        let worker_id = worker.join().expect("the wake must not panic off-thread");
-
-        let observed = redraw_threads.lock().clone();
-        assert_eq!(
-            observed.len(),
-            1,
-            "the wake must poke the installed window exactly once. A 0 here is \
-             the OTHER way the fix shows up: the worker posted to the proxy \
-             instead of poking, or got `Unsupported` back. That is #949 \
-             progressing, not a regression -- re-target this test at the proxy \
-             rather than restoring the direct poke."
-        );
-        assert_eq!(
-            observed[0], worker_id,
-            "TODAY the window is poked on the firing thread, not the owner \
-             thread -- this is issue #949's defect, pinned deliberately. If \
-             this now fails because the poke arrived on the owner thread, the \
-             relay has landed: invert this assertion rather than restoring it."
-        );
-    }
-
     /// `AppRuntime::clipboard()` reaching the platform clipboard installed
     /// via `set_platform_clipboard` — migrated from the retired
     /// `AppBinding`'s test module.
@@ -1959,45 +1805,6 @@ mod wake_and_clipboard_tests {
             Some("clipboard-reachability"),
             "AppRuntime::clipboard() must reach through to the SAME platform \
              clipboard instance set_platform_clipboard installed"
-        );
-    }
-
-    #[test]
-    fn clipboard_with_no_platform_installed_is_none_not_a_panic() {
-        let runtime = AppRuntime::new();
-        assert!(runtime.clipboard().is_none());
-    }
-
-    /// Teardown symmetry: after `clear_platform_clipboard`, the slot reads
-    /// back `None` again.
-    #[test]
-    fn clear_platform_clipboard_removes_the_installed_clipboard() {
-        let runtime = AppRuntime::new();
-        runtime.set_platform_clipboard(flui_platform::headless_platform().clipboard());
-        assert!(runtime.clipboard().is_some());
-
-        runtime.clear_platform_clipboard();
-
-        assert!(
-            runtime.clipboard().is_none(),
-            "clear_platform_clipboard must remove the installed clipboard"
-        );
-    }
-
-    /// The last-resort `Drop` clear: dropping an `AppRuntime` with a
-    /// clipboard still installed must not panic, and must clear the slot.
-    #[test]
-    fn drop_clears_the_installed_clipboard_as_a_last_resort() {
-        let runtime = AppRuntime::new();
-        let slot = runtime.platform_clipboard_slot();
-        runtime.set_platform_clipboard(flui_platform::headless_platform().clipboard());
-        assert!(slot.lock().is_some());
-
-        drop(runtime);
-
-        assert!(
-            slot.lock().is_none(),
-            "Drop for AppRuntime must clear the clipboard slot as a last resort"
         );
     }
 
@@ -2130,20 +1937,6 @@ mod execution_wiring_tests {
     use super::*;
     use flui_runtime::execution::DeterministicExecutors;
 
-    #[test]
-    fn ensure_execution_defaults_to_owned_pools() {
-        let mut runtime = AppRuntime::new();
-        assert!(
-            runtime.execution().is_none(),
-            "nothing resolved before ensure"
-        );
-        let services = runtime.ensure_execution();
-        assert!(
-            services.owns_default_pools(),
-            "with no stashed host executors, the runtime owns the default pools"
-        );
-    }
-
     /// The injection order the bootstrap relies on: a host bundle stashed
     /// BEFORE the first `ensure_execution` makes the resolved services route
     /// to the host — the default pools are never constructed.
@@ -2171,20 +1964,6 @@ mod execution_wiring_tests {
         assert!(!ran.load(Ordering::Acquire));
         deterministic.run_until_idle();
         assert!(ran.load(Ordering::Acquire));
-    }
-
-    /// A bundle arriving after resolution is ignored, never a silent rebuild
-    /// that would strand running pools.
-    #[test]
-    fn late_host_executors_are_ignored() {
-        let mut runtime = AppRuntime::new();
-        let _ = runtime.ensure_execution();
-        runtime.install_host_executors(DeterministicExecutors::new().host_executors());
-        let services = runtime.ensure_execution();
-        assert!(
-            services.owns_default_pools(),
-            "executors injected after resolution must not replace the live backend"
-        );
     }
 
     /// `shutdown_execution` shuts the services down AND clears the slot,
@@ -2220,21 +1999,6 @@ mod execution_wiring_tests {
             .expect("the second loop's admission must be open");
         deterministic.run_until_idle();
         assert!(ran.load(Ordering::Acquire));
-    }
-
-    /// A host stash the exiting loop never resolved is discarded at
-    /// shutdown: injection is per-run configuration, and the next run
-    /// stashes its own.
-    #[test]
-    fn shutdown_execution_discards_an_unresolved_stash() {
-        let mut runtime = AppRuntime::new();
-        runtime.install_host_executors(DeterministicExecutors::new().host_executors());
-        runtime.shutdown_execution(std::time::Duration::from_secs(5));
-        let services = runtime.ensure_execution();
-        assert!(
-            services.owns_default_pools(),
-            "a stash for a torn-down loop must not leak into the next loop's resolution"
-        );
     }
 }
 

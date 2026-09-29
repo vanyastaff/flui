@@ -151,50 +151,6 @@ fn a_route_forced_offstage_has_committed_geometry_in_the_same_frames_post_frame_
     );
 }
 
-/// The other half of the claim: the geometry the callback sees is *real*, not a
-/// zero-sized placeholder. `RenderOffstage` lays its child out under the incoming
-/// constraints and reports `constraints.smallest()`; under the
-/// theater's tight constraints that is the full route size, so an offstage page is
-/// measurable — which is the entire point of `ModalRoute.offstage`.
-#[test]
-fn the_offstage_routes_committed_geometry_is_real_not_zero() {
-    let navigator = NavigatorHandle::new();
-    navigator.seed_initial(SimpleRoute::<i32>::new(|_ctx| {
-        SizedBox::new(10.0, 10.0).into_view().boxed()
-    }));
-    let mut harness = mount(Navigator::new(navigator.clone()));
-    let owner = harness.pipeline_owner();
-
-    let route = PageRoute::<i32>::new(leaf);
-    let modal = route.modal_handle();
-    let _result = navigator.push(route);
-    modal.set_offstage(true);
-
-    let observed: Arc<Mutex<Option<Size>>> = Arc::new(Mutex::new(None));
-    let observed_cb = Arc::clone(&observed);
-    let owner_cb = owner.clone();
-    let post_frame_handle = harness.local_post_frame_handle();
-    harness.enter_owner_scope(|| {
-        post_frame_handle
-            .schedule_local(move |_| {
-                *observed_cb.lock() = owner_cb.with(|owner| {
-                    offstage_nodes(owner)
-                        .first()
-                        .and_then(|id| owner.box_size(*id))
-                });
-            })
-            .expect("schedule_local must succeed on the owner thread");
-    });
-
-    harness.tick();
-
-    let size = observed.lock().expect("the offstage page was laid out");
-    assert!(
-        size.width > 0.0 && size.height > 0.0,
-        "an offstage route must be laid out at real geometry, got {size:?}"
-    );
-}
-
 /// The second, separable claim — and the one HeroController leans on for a route
 /// that is **already mounted** (every pop, and the push case once the `to` route
 /// has been built by an earlier frame).

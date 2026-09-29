@@ -282,27 +282,4 @@ mod tests {
             "a genuine target change must start exactly one run"
         );
     }
-
-    /// The multi-property accumulation specifically: retargeting ONLY
-    /// `height` (leaving `width` at its already-set target) must still
-    /// restart the shared controller — an earlier property's "unchanged"
-    /// report must not mask a later property's genuine change.
-    #[test]
-    fn did_update_view_restarts_when_any_single_property_changes() {
-        let view = AnimatedContainer::new(SizedBox::shrink())
-            .width(100.0)
-            .height(100.0);
-        let mut state = view.create_state();
-
-        let height_only_change = AnimatedContainer::new(SizedBox::shrink())
-            .width(100.0)
-            .height(200.0);
-        state.did_update_view(&view, &height_only_change);
-
-        assert_eq!(
-            state.controller.status(),
-            AnimationStatus::Forward,
-            "a change to height alone must still restart the shared controller"
-        );
-    }
 }

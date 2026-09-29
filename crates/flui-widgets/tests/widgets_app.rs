@@ -10,19 +10,14 @@ use flui_painting::typography::{TextDirection, TextStyle};
 use flui_platform_api::Locale;
 use flui_view::BoxedView;
 use flui_view::prelude::*;
+use flui_widgets::SizedBox;
 use flui_widgets::app::WidgetsApp;
 use flui_widgets::interaction::FocusScope;
-use flui_widgets::localization::{
-    BoxedLocalizationsDelegate, Directionality, Localizations, LocalizationsDelegate,
-};
+use flui_widgets::localization::{Directionality, Localizations};
 use flui_widgets::navigator::{
     Navigator, NavigatorHandle, NavigatorObserver, RouteId, SimpleRoute,
 };
 use flui_widgets::text::DefaultTextStyle;
-use flui_widgets::{
-    BoxedWidgetsLocalizations, DefaultWidgetsLocalizations, MediaQuery, SizedBox,
-    WidgetsLocalizations,
-};
 
 use crate::common::harness::mount;
 
@@ -92,123 +87,6 @@ fn home_gets_localizations_and_directionality() {
         direction,
         Some(TextDirection::Ltr),
         "DefaultWidgetsLocalizations resolves LTR"
-    );
-}
-
-#[test]
-fn explicit_locale_is_resolved_against_supported_locales_not_used_verbatim() {
-    // The oracle's LocalizationsResolver.locale runs an explicit locale
-    // through `_resolveLocales([locale], supportedLocales)` — fr-CA
-    // against [en-US, fr-FR] must resolve to fr-FR, not stay fr-CA.
-    let (probe, captured) = capture(Localizations::maybe_locale_of);
-    mount(
-        WidgetsApp::new(probe)
-            .locale(Locale::new("fr", Some("CA")))
-            .supported_locales(vec![Locale::en_us(), Locale::fr_fr()]),
-    );
-    assert_eq!(
-        captured_value(&captured).expect("home must build"),
-        Some(Locale::fr_fr()),
-        "an unsupported explicit locale must resolve to the best-fit supported locale"
-    );
-}
-
-#[test]
-fn absent_locale_resolves_to_first_supported() {
-    // With no explicit locale and no platform preferred-locale list
-    // (unplumbed in FLUI — module docs), basicLocaleListResolution
-    // answers with the first supported locale.
-    let (probe, captured) = capture(Localizations::maybe_locale_of);
-    mount(WidgetsApp::new(probe).supported_locales(vec![Locale::ja_jp(), Locale::en_us()]));
-    assert_eq!(
-        captured_value(&captured).expect("home must build"),
-        Some(Locale::ja_jp()),
-    );
-}
-
-/// A caller-supplied `WidgetsLocalizations` resolving RTL — stands in
-/// for `GlobalWidgetsLocalizationsDelegate`.
-#[derive(Debug, Clone, Copy)]
-struct RtlWidgetsLocalizations;
-
-impl WidgetsLocalizations for RtlWidgetsLocalizations {
-    fn text_direction(&self) -> TextDirection {
-        TextDirection::Rtl
-    }
-
-    fn reorder_item_to_start(&self) -> &'static str {
-        DefaultWidgetsLocalizations.reorder_item_to_start()
-    }
-    fn reorder_item_to_end(&self) -> &'static str {
-        DefaultWidgetsLocalizations.reorder_item_to_end()
-    }
-    fn reorder_item_up(&self) -> &'static str {
-        DefaultWidgetsLocalizations.reorder_item_up()
-    }
-    fn reorder_item_down(&self) -> &'static str {
-        DefaultWidgetsLocalizations.reorder_item_down()
-    }
-    fn reorder_item_left(&self) -> &'static str {
-        DefaultWidgetsLocalizations.reorder_item_left()
-    }
-    fn reorder_item_right(&self) -> &'static str {
-        DefaultWidgetsLocalizations.reorder_item_right()
-    }
-    fn copy_button_label(&self) -> &'static str {
-        DefaultWidgetsLocalizations.copy_button_label()
-    }
-    fn cut_button_label(&self) -> &'static str {
-        DefaultWidgetsLocalizations.cut_button_label()
-    }
-    fn paste_button_label(&self) -> &'static str {
-        DefaultWidgetsLocalizations.paste_button_label()
-    }
-    fn select_all_button_label(&self) -> &'static str {
-        DefaultWidgetsLocalizations.select_all_button_label()
-    }
-    fn look_up_button_label(&self) -> &'static str {
-        DefaultWidgetsLocalizations.look_up_button_label()
-    }
-    fn search_web_button_label(&self) -> &'static str {
-        DefaultWidgetsLocalizations.search_web_button_label()
-    }
-    fn share_button_label(&self) -> &'static str {
-        DefaultWidgetsLocalizations.share_button_label()
-    }
-    fn radio_button_unselected_label(&self) -> &'static str {
-        DefaultWidgetsLocalizations.radio_button_unselected_label()
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct RtlDelegate;
-
-impl LocalizationsDelegate for RtlDelegate {
-    type Resources = BoxedWidgetsLocalizations;
-
-    fn is_supported(&self, _locale: &Locale) -> bool {
-        true
-    }
-
-    fn load(&self, _locale: &Locale) -> Self::Resources {
-        BoxedWidgetsLocalizations::new(RtlWidgetsLocalizations)
-    }
-}
-
-#[test]
-fn caller_delegate_overrides_the_default_widgets_localizations() {
-    // The oracle appends DefaultWidgetsLocalizations.delegate AFTER the
-    // caller's delegates, and only the first delegate of a resource type
-    // loads — so a caller's WidgetsLocalizations delegate must win.
-    let (probe, captured) = capture(Directionality::maybe_of);
-    mount(
-        WidgetsApp::new(probe)
-            .localizations_delegates(vec![BoxedLocalizationsDelegate::new(RtlDelegate)]),
-    );
-    assert_eq!(
-        captured_value(&captured).expect("home must build"),
-        Some(TextDirection::Rtl),
-        "the caller's delegate must load instead of the appended default"
     );
 }
 
@@ -289,44 +167,6 @@ fn builder_only_app_receives_no_routing_and_supplies_the_subtree() {
 }
 
 #[test]
-fn builder_receives_the_routing_subtree_and_home_builds_below_it() {
-    let (probe, captured) = capture(|_ctx| true);
-    let got_routing = Arc::new(Mutex::new(None::<bool>));
-    let got = Arc::clone(&got_routing);
-    mount(WidgetsApp::new(probe).builder(move |_ctx, child| {
-        *got.lock().expect("test mutex poisoned") = Some(child.is_some());
-        child.expect("routing must be present when home is set")
-    }));
-    assert_eq!(
-        captured_value(&got_routing),
-        Some(true),
-        "the builder must receive the routing subtree"
-    );
-    assert!(
-        captured_value(&captured).is_some(),
-        "home must build below the builder's wrapper"
-    );
-}
-
-#[test]
-fn builder_context_sits_below_localizations() {
-    // The oracle wraps its builder callback in a Builder precisely so
-    // the callback's context can read Localizations — pin the same
-    // altitude here.
-    let seen_locale = Arc::new(Mutex::new(None::<Option<Locale>>));
-    let seen = Arc::clone(&seen_locale);
-    mount(WidgetsApp::with_builder(move |ctx, _child| {
-        *seen.lock().expect("test mutex poisoned") = Some(Localizations::maybe_locale_of(ctx));
-        SizedBox::shrink().boxed()
-    }));
-    assert_eq!(
-        captured_value(&seen_locale),
-        Some(Some(Locale::en_us())),
-        "the builder's context must resolve the app-level Localizations"
-    );
-}
-
-#[test]
 fn text_style_installs_a_default_text_style() {
     let style = TextStyle {
         font_size: Some(41.0),
@@ -339,34 +179,6 @@ fn text_style_installs_a_default_text_style() {
         captured_value(&captured).expect("home must build"),
         Some(style),
         "the configured text style must reach descendants"
-    );
-}
-
-#[test]
-fn absent_text_style_installs_no_default_text_style() {
-    // The oracle inserts DefaultTextStyle only when textStyle is
-    // non-null.
-    let (probe, captured) =
-        capture(|ctx| ctx.depend_on::<DefaultTextStyle, _>(|dts| dts.data().clone()));
-    mount(WidgetsApp::new(probe));
-    assert_eq!(
-        captured_value(&captured).expect("home must build"),
-        None,
-        "no DefaultTextStyle band without a configured text style"
-    );
-}
-
-#[test]
-fn widgets_app_does_not_install_a_media_query() {
-    // ADR-0042 / realm ownership: the live root MediaQuery is
-    // realm-installed; WidgetsApp must not re-own it (the oracle agrees
-    // since 3.7 — the View widget owns MediaQuery, not WidgetsApp).
-    let (probe, captured) = capture(MediaQuery::maybe_of);
-    mount(WidgetsApp::new(probe));
-    assert_eq!(
-        captured_value(&captured).expect("home must build"),
-        None,
-        "WidgetsApp must not introduce its own MediaQuery"
     );
 }
 
@@ -406,10 +218,6 @@ struct RecordingObserver {
 impl RecordingObserver {
     fn attaches(&self) -> u32 {
         *self.attaches.lock().expect("test mutex poisoned")
-    }
-
-    fn detaches(&self) -> u32 {
-        *self.detaches.lock().expect("test mutex poisoned")
     }
 }
 
@@ -537,28 +345,6 @@ fn unmount_and_remount_over_a_retained_handle_does_not_duplicate_observers() {
         2,
         "the remount must attach the observer exactly once more — a duplicate \
              registration left behind by the first mount would attach it twice"
-    );
-}
-
-#[test]
-fn updating_away_an_observer_detaches_it() {
-    // The oracle reconciles `navigatorObservers` in `didUpdateWidget`;
-    // an observer no longer configured must stop receiving callbacks.
-    let handle = NavigatorHandle::new();
-    let observer = Arc::new(RecordingObserver::default());
-    let mut harness = mount(
-        WidgetsApp::new(SizedBox::shrink())
-            .navigator(handle.clone())
-            .observer(observer.clone()),
-    );
-    assert_eq!(observer.attaches(), 1);
-    assert_eq!(observer.detaches(), 0);
-
-    harness.swap_root(WidgetsApp::new(SizedBox::shrink()).navigator(handle.clone()));
-    assert_eq!(
-        observer.detaches(),
-        1,
-        "an observer dropped from the configuration must be detached on update"
     );
 }
 

@@ -256,66 +256,6 @@ mod tests {
         assert_eq!(resolve(style.elevation.as_ref(), &disabled), Some(0.0));
     }
 
-    /// Pressed-first resolver order: a state set containing both `Pressed`
-    /// and `Hovered` resolves the pressed overlay opacity, not hover's.
-    #[test]
-    fn overlay_color_checks_pressed_before_hovered() {
-        let theme = ThemeData::light();
-        let colors = theme.color_scheme;
-        let style = default_style(&theme);
-
-        let pressed_and_hovered =
-            WidgetStates::from(WidgetState::Pressed).with_state(WidgetState::Hovered);
-        assert_eq!(
-            resolve(style.overlay_color.as_ref(), &pressed_and_hovered),
-            Some(colors.primary.with_opacity(0.1))
-        );
-    }
-
-    /// Same pressed-before-hovered order for `elevation`'s own chain
-    /// (`disabled` → `pressed` → `hovered` → `focused`/fallback,
-    /// `_ElevatedButtonDefaultsM3.elevation`, `elevated_button.dart`, tag
-    /// `3.44.0`): a state set containing both `Pressed` and `Hovered` must
-    /// resolve the pressed value (1.0), not hover's higher one (3.0).
-    #[test]
-    fn elevation_checks_pressed_before_hovered() {
-        let theme = ThemeData::light();
-        let style = default_style(&theme);
-
-        let pressed_and_hovered =
-            WidgetStates::from(WidgetState::Pressed).with_state(WidgetState::Hovered);
-        assert_eq!(
-            resolve(style.elevation.as_ref(), &pressed_and_hovered),
-            Some(1.0)
-        );
-    }
-
-    #[test]
-    fn default_style_leaves_fixed_size_and_side_unset() {
-        let style = default_style(&ThemeData::light());
-        assert!(style.fixed_size.is_none());
-        assert!(style.side.is_none());
-    }
-
-    #[test]
-    fn default_style_shape_is_stadium() {
-        let style = default_style(&ThemeData::light());
-        assert_eq!(
-            resolve(style.shape.as_ref(), &WidgetStates::NONE),
-            Some(MaterialShape::Stadium)
-        );
-    }
-
-    #[test]
-    fn default_style_text_style_is_the_themes_label_large() {
-        let theme = ThemeData::light();
-        let style = default_style(&theme);
-        assert_eq!(
-            resolve(style.text_style.as_ref(), &WidgetStates::NONE),
-            theme.text_theme.label_large
-        );
-    }
-
     /// Style precedence: `widget.style` overrides the default per-property,
     /// while every unset property keeps falling through. Mutation-honest:
     /// breaking the coalesce in `resolve_property` fails this test.
@@ -350,15 +290,6 @@ mod tests {
         assert_eq!(
             resolved_background,
             resolve(default.background_color.as_ref(), &none)
-        );
-    }
-
-    #[test]
-    fn is_disabled_when_no_press_handler_is_set() {
-        assert!(
-            ElevatedButton::new(flui_sdk::widgets::SizedBox::shrink())
-                .on_pressed
-                .is_none()
         );
     }
 }

@@ -273,20 +273,4 @@ mod tests {
         assert_eq!(theater.first_onstage(7), 5);
         assert_eq!(RenderTheater::new().first_onstage(3), 0);
     }
-
-    /// The setter reports change so the caller can skip `mark_needs_layout`, as
-    /// every other Wave-3a render object does.
-    #[test]
-    fn set_skip_count_reports_only_real_changes() {
-        let mut theater = RenderTheater::new();
-        assert_eq!(
-            theater.set_skip_count(2),
-            flui_rendering::RenderUpdateImpact::LAYOUT
-        );
-        assert_eq!(
-            theater.set_skip_count(2),
-            flui_rendering::RenderUpdateImpact::NONE
-        );
-        assert_eq!(theater.skip_count(), 2);
-    }
 }

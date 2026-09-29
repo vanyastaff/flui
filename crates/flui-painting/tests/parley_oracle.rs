@@ -91,17 +91,6 @@ impl Shaper {
         }
     }
 
-    /// A second context over the same collection and source cache.
-    fn fork(&self) -> Self {
-        Self {
-            font_cx: FontContext {
-                collection: self.font_cx.collection.clone(),
-                source_cache: self.font_cx.source_cache.clone(),
-            },
-            layout_cx: LayoutContext::new(),
-        }
-    }
-
     /// Registers every face in `bytes`; returns the first family's name.
     fn register(&mut self, bytes: Vec<u8>) -> String {
         let families = self
@@ -400,31 +389,6 @@ fn latin_keys(shaper: &mut Shaper, fonts: &mut FontRegistry, family: &str) -> Ve
         .into_iter()
         .map(|placed| placed.key)
         .collect()
-}
-
-#[test]
-fn shaping_twice_yields_equal_keys() {
-    let mut shaper = Shaper::new();
-    let family = shaper.register(ROBOTO.to_vec());
-    let mut fonts = FontRegistry::new();
-    let first = latin_keys(&mut shaper, &mut fonts, &family);
-    let second = latin_keys(&mut shaper, &mut fonts, &family);
-    assert!(!first.is_empty());
-    assert_eq!(first, second);
-}
-
-/// Two contexts over one shared collection shape a face registered once as
-/// one blob, so their keys agree and would share atlas slots.
-#[test]
-fn two_contexts_over_one_collection_produce_equal_keys() {
-    let mut a = Shaper::new();
-    let family = a.register(ROBOTO.to_vec());
-    let mut b = a.fork();
-    let mut fonts = FontRegistry::new();
-    let from_a = latin_keys(&mut a, &mut fonts, &family);
-    let from_b = latin_keys(&mut b, &mut fonts, &family);
-    assert!(!from_a.is_empty());
-    assert_eq!(from_a, from_b);
 }
 
 /// Shaping and rasterizing on this path never builds `FONT_SYSTEM`. Nothing

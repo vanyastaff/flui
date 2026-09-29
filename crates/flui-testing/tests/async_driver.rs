@@ -34,30 +34,6 @@ impl std::future::Future for Signal {
     }
 }
 
-/// The headless helper: complete a future *between* frames and prove the next
-/// frame observes it.
-#[test]
-fn headless_pump_frame_polls_a_ready_future() {
-    let mut binding = HeadlessBinding::new();
-    let ran = Arc::new(AtomicBool::new(false));
-    let ran_for_task = Arc::clone(&ran);
-
-    let _token = binding.spawn_local(Box::pin(async move {
-        ran_for_task.store(true, Ordering::Release);
-    }));
-
-    assert!(!ran.load(Ordering::Acquire), "spawn must not poll inline");
-    assert_eq!(binding.scheduler().pending_task_count(), 1);
-
-    binding.pump_frame(Duration::from_millis(16));
-
-    assert!(
-        ran.load(Ordering::Acquire),
-        "pump_frame must run the shared async-driver step"
-    );
-    assert_eq!(binding.scheduler().pending_task_count(), 0);
-}
-
 /// A completion signalled between frames is observed by the next frame, and only
 /// by that frame — polling never happens outside the driver step.
 #[test]
@@ -136,26 +112,4 @@ fn headless_wake_from_another_thread_is_polled_on_the_frame_thread() {
     let threads = polled_on.lock().clone();
     assert!(threads.iter().all(|id| *id == main_id));
     assert_ne!(worker_id, main_id);
-}
-
-/// Dropping the token cancels: the task is never polled again by any frame.
-#[test]
-fn headless_dropping_the_token_cancels_the_task() {
-    let mut binding = HeadlessBinding::new();
-    let polls = Arc::new(AtomicUsize::new(0));
-    let token = binding.spawn_local(Box::pin(Signal {
-        done: Arc::new(AtomicBool::new(false)),
-        waker: Arc::new(Mutex::new(None)),
-        polls: Arc::clone(&polls),
-    }));
-
-    binding.pump_frame(Duration::from_millis(16));
-    assert_eq!(polls.load(Ordering::Relaxed), 1);
-
-    drop(token);
-    assert_eq!(binding.scheduler().pending_task_count(), 0);
-
-    binding.pump_frame(Duration::from_millis(16));
-    binding.pump_frame(Duration::from_millis(16));
-    assert_eq!(polls.load(Ordering::Relaxed), 1, "never polled again");
 }

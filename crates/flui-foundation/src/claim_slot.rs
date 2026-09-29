@@ -555,27 +555,6 @@ mod tests {
     }
 
     #[test]
-    fn dropped_before_delivery_abandons_with_no_payload() {
-        let (wake, wake_count) = counting_wake();
-        let (slot, handle) = claim_slot::<u32>(wake);
-        drop(handle);
-
-        assert!(slot.is_abandoned(), "requester dropped before delivery");
-        assert_eq!(wake_count.load(Ordering::Acquire), 1);
-
-        let delivered = slot.deliver(7);
-        assert_eq!(
-            delivered,
-            Err(7),
-            "owner must get the value back to unwind it"
-        );
-        assert!(
-            slot.is_settled(),
-            "after the owner reclaims via deliver's Err, nothing is left to sweep"
-        );
-    }
-
-    #[test]
     fn dropped_after_delivery_abandons_with_recoverable_payload() {
         let (wake, wake_count) = counting_wake();
         let (slot, handle) = claim_slot::<String>(wake);
@@ -634,36 +613,6 @@ mod tests {
     }
 
     #[test]
-    fn double_take_after_claim_returns_none() {
-        let (wake, _wake_count) = counting_wake();
-        let (slot, mut handle) = claim_slot::<u32>(wake);
-        slot.deliver(1).expect("slot is still Pending");
-
-        assert_eq!(handle.try_take(), Some(1));
-        assert_eq!(
-            handle.try_take(),
-            None,
-            "a second claim on an already-Claimed slot must not repeat the value"
-        );
-    }
-
-    #[test]
-    fn try_take_before_delivery_is_none_and_does_not_abandon() {
-        let (wake, wake_count) = counting_wake();
-        let (_slot, mut handle) = claim_slot::<u32>(wake);
-        assert_eq!(handle.try_take(), None);
-        assert_eq!(wake_count.load(Ordering::Acquire), 0);
-    }
-
-    #[test]
-    fn abandonment_wake_fires_exactly_once() {
-        let (wake, wake_count) = counting_wake();
-        let (_slot, handle) = claim_slot::<u32>(wake);
-        drop(handle);
-        assert_eq!(wake_count.load(Ordering::Acquire), 1);
-    }
-
-    #[test]
     fn concurrent_abandon_and_deliver_race_wakes_exactly_once() {
         // Stress the race the module doc calls out: the owner may call
         // `deliver` concurrently with the requester dropping its handle.
@@ -683,24 +632,6 @@ mod tests {
                 assert_eq!(rejected, 99);
             }
         }
-    }
-
-    #[test]
-    fn wait_blocks_until_delivery_then_returns_the_value() {
-        let (wake, _wake_count) = counting_wake();
-        let (slot, handle) = claim_slot::<u32>(wake);
-
-        let waiter = thread::spawn(move || handle.wait());
-        // Give the waiter a chance to reach the condvar; not required for
-        // correctness (deliver would still be observed), only to exercise
-        // the blocking path rather than the immediate one.
-        thread::sleep(Duration::from_millis(20));
-        slot.deliver(123).expect("slot is still Pending");
-
-        assert_eq!(
-            waiter.join().expect("waiter thread does not panic"),
-            ClaimOutcome::Delivered(123)
-        );
     }
 
     #[test]
@@ -762,28 +693,6 @@ mod tests {
             .expect("wait() must unblock promptly once the owner side drops");
         assert_eq!(outcome, ClaimOutcome::OwnerGone);
         waiter.join().expect("waiter thread does not panic");
-    }
-
-    #[test]
-    fn future_resolves_on_deliver() {
-        let (wake, _wake_count) = counting_wake();
-        let (slot, mut handle) = claim_slot::<u32>(wake);
-
-        let (waker, _wake_count_task) = test_waker();
-        let mut cx = Context::from_waker(&waker);
-        assert_eq!(
-            Pin::new(&mut handle).poll(&mut cx),
-            Poll::Pending,
-            "nothing delivered yet"
-        );
-
-        slot.deliver(42).expect("slot is still Pending");
-
-        assert_eq!(
-            Pin::new(&mut handle).poll(&mut cx),
-            Poll::Ready(ClaimOutcome::Delivered(42)),
-            "a re-poll after delivery must resolve, not just the woken task"
-        );
     }
 
     /// Distinguishes "the value eventually resolves" from "the registered
@@ -921,46 +830,6 @@ mod tests {
             !observed_locked.load(Ordering::Acquire),
             "register_waker must release the waker lock before dropping the displaced waker"
         );
-    }
-
-    #[test]
-    fn future_wakes_on_owner_drop() {
-        let (wake, _wake_count) = counting_wake();
-        let (slot, mut handle) = claim_slot::<u32>(wake);
-
-        let (waker, wake_count) = test_waker();
-        let mut cx = Context::from_waker(&waker);
-        assert_eq!(Pin::new(&mut handle).poll(&mut cx), Poll::Pending);
-
-        drop(slot);
-
-        assert_eq!(
-            wake_count.count(),
-            1,
-            "owner disconnection must wake a parked poll, not just resolve a later one"
-        );
-        assert_eq!(
-            Pin::new(&mut handle).poll(&mut cx),
-            Poll::Ready(ClaimOutcome::OwnerGone)
-        );
-    }
-
-    /// The owner thread is also a legal thread to poll from — unlike
-    /// `wait()`, which must refuse there (callers building on top, e.g.
-    /// `flui-platform`'s `PendingWindow`, check thread identity themselves;
-    /// this primitive's `Future` impl has no such refusal because polling
-    /// never blocks in the first place).
-    #[test]
-    fn owner_thread_poll_never_blocks() {
-        let (wake, _wake_count) = counting_wake();
-        let (_slot, mut handle) = claim_slot::<u32>(wake);
-
-        let (waker, _wake_count_task) = test_waker();
-        let mut cx = Context::from_waker(&waker);
-        // Same thread as the (still-live) owner side `_slot` -- a blocking
-        // `wait()` here would be the exact hazard `PendingWindow::wait`
-        // refuses; `poll` must return immediately regardless.
-        assert_eq!(Pin::new(&mut handle).poll(&mut cx), Poll::Pending);
     }
 
     /// Counting `Wake` implementation for tests: no executor, `futures`

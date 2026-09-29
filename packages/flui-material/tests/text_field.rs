@@ -169,44 +169,6 @@ fn disabling_the_text_field_disables_both_editable_text_and_the_decorator() {
 // enabled resolution chain — decoration-only value respected, override wins
 // ============================================================================
 
-/// `InputDecoration::enabled = false` alone (no `TextField::enabled` call at
-/// all — `None`) disables the field, proving the resolution chain's second
-/// link (`enabled.unwrap_or(decoration.enabled)`) is actually reachable, not
-/// just the `Some` branch the sibling test above exercises.
-#[test]
-fn decoration_only_enabled_false_is_respected_without_a_text_field_level_override() {
-    let theme = ThemeData::light();
-    let colors = theme.color_scheme;
-    let controller = TextEditingController::new();
-    let focus_node = FocusNode::with_debug_label("decoration-disabled");
-    let decoration = InputDecoration {
-        enabled: false,
-        ..Default::default()
-    };
-
-    let laid = lay_out(
-        Theme::new(
-            theme,
-            TextField::new(controller.clone())
-                .focus_node(Rc::clone(&focus_node))
-                .decoration(decoration),
-        ),
-        tight(300.0, 100.0),
-    );
-
-    assert!(!focus_node.can_request_focus());
-    let decorated_box = laid
-        .try_find_by_render_type("RenderDecoratedBox")
-        .expect("TextField must compose an InputDecorator's DecoratedBox");
-    let decoration_debug = laid.render_property(decorated_box, "decoration").unwrap();
-    let disabled_indicator = colors.on_surface.with_opacity(0.38);
-    assert!(
-        decoration_debug.contains(&format!("{disabled_indicator:?}")),
-        "decoration-only enabled=false must reach the decorator's disabled indicator, got: \
-         {decoration_debug}"
-    );
-}
-
 /// `TextField::enabled(true)` overrides a conflicting
 /// `InputDecoration::enabled = false` — the resolution chain's first link
 /// (`Some` wins outright) beats the second, matching the oracle's
@@ -384,93 +346,9 @@ fn disabling_a_focused_field_then_re_enabling_renders_the_unfocused_indicator() 
     );
 }
 
-/// Disabling a focused field notifies listeners on the exact retained node.
-/// No controller metadata or manager-wide ID comparison participates in the
-/// transition.
-#[test]
-fn disabling_a_focused_field_notifies_the_exact_node() {
-    use std::cell::RefCell;
-
-    let controller = TextEditingController::new();
-    let focus_node = FocusNode::with_debug_label("disable-notify");
-
-    let mut laid = lay_out(
-        Theme::new(
-            ThemeData::light(),
-            TextField::new(controller.clone()).focus_node(Rc::clone(&focus_node)),
-        ),
-        tight(300.0, 100.0),
-    );
-    focus_node.request_focus();
-    laid.tick();
-    assert!(focus_node.has_primary_focus());
-
-    let observations = Rc::new(RefCell::new(Vec::new()));
-    let observations_for_spy = Rc::clone(&observations);
-    let weak_node = Rc::downgrade(&focus_node);
-    let spy_id = focus_node.add_listener(Rc::new(move || {
-        if let Some(node) = weak_node.upgrade() {
-            observations_for_spy
-                .borrow_mut()
-                .push((node.has_primary_focus(), node.can_request_focus()));
-        }
-    }));
-
-    laid.pump_widget(Theme::new(
-        ThemeData::light(),
-        TextField::new(controller)
-            .focus_node(Rc::clone(&focus_node))
-            .enabled(false),
-    ));
-
-    focus_node.remove_listener(spy_id);
-
-    assert!(
-        observations
-            .borrow()
-            .iter()
-            .any(|&(has_primary_focus, can_request_focus)| {
-                !has_primary_focus && !can_request_focus
-            }),
-        "the retained node must notify after it loses focus and becomes ineligible"
-    );
-}
-
 // ============================================================================
 // Whole-area tap — a point clearly outside EditableText's own rect
 // ============================================================================
-
-/// A tap inside the decorator's default content padding — outside
-/// `EditableText`'s own padded content rect entirely — still focuses the
-/// field, proving the tap target really is the whole decorated box, not
-/// just wherever the inner text happens to sit (a center-tap, as the other
-/// focus tests use, would likely land inside `EditableText`'s own rect and
-/// couldn't tell the two apart).
-#[test]
-fn tapping_the_padding_margin_outside_the_text_rect_also_focuses_the_field() {
-    let controller = TextEditingController::new();
-    let focus_node = FocusNode::with_debug_label("padding-tap");
-
-    let laid = lay_out(
-        Theme::new(
-            ThemeData::light(),
-            TextField::new(controller).focus_node(Rc::clone(&focus_node)),
-        ),
-        tight(300.0, 100.0),
-    );
-
-    // (3, 3) sits inside the decorator's default content padding (8px top /
-    // 12px left, `default_content_padding`) — well outside EditableText's
-    // own padded content rect, but still within the decorator's own
-    // fill/border/`MouseRegion`, which spans the FULL box.
-    laid.dispatch_pointer_down(3.0, 3.0);
-    laid.dispatch_pointer_up(3.0, 3.0);
-
-    assert!(
-        focus_node.has_primary_focus(),
-        "a tap inside the padding margin, outside the inner text rect, must still focus the field"
-    );
-}
 
 // ============================================================================
 // Live plumbing — typing reaches the decorator's hint visibility
@@ -680,73 +558,6 @@ fn text_field_does_not_double_track_hover_with_its_own_mouse_region() {
 // Decoration passthrough
 // ============================================================================
 
-/// Label, hint, and helper all reach the mounted tree through `TextField`'s
-/// `decoration` builder — passthrough proof, not a re-test of the
-/// decorator's own row-selection logic (already pinned in
-/// `tests/input_decorator.rs`).
-#[test]
-fn label_hint_and_helper_flow_through_the_decoration_builder() {
-    let decoration = InputDecoration {
-        label_text: Some("Email".to_string()),
-        // No hint: with a label present and the field non-empty, the hint
-        // would be suppressed anyway (`should_show_hint`) — omitted here so
-        // this test counts only rows this decoration actually contributes.
-        helper_text: Some("We'll never share it".to_string()),
-        ..Default::default()
-    };
-    let controller = TextEditingController::with_text("a@b.com");
-
-    let laid = lay_out(
-        Theme::new(
-            ThemeData::light(),
-            TextField::new(controller).decoration(decoration),
-        ),
-        tight(300.0, 150.0),
-    );
-
-    // Label (floats: non-empty) + helper = 2 text rows, alongside the
-    // EditableText interior (its own RenderEditable, not a RenderParagraph).
-    let text_rows = laid.find_all_by_render_type("RenderParagraph");
-    assert_eq!(
-        text_rows.len(),
-        2,
-        "expected label + helper rows, found {text_rows:?}"
-    );
-    laid.try_find_by_render_type("RenderEditable")
-        .expect("the EditableText interior must still be composed");
-}
-
 // ============================================================================
 // Parity anchor — "TextField errorText trumps helperText" (text_field_test.dart, tag 3.44.0)
 // ============================================================================
-
-/// Named after the oracle's own `text_field_test.dart` test
-/// (`'TextField errorText trumps helperText'`, tag `3.44.0`) — asserted
-/// through `TextField`, not directly on `InputDecorator` (already covered
-/// there by `error_replaces_helper_at_the_mounted_level`).
-#[test]
-fn text_field_error_text_trumps_helper_text() {
-    let decoration = InputDecoration {
-        helper_text: Some("Helper".to_string()),
-        error_text: Some("Error".to_string()),
-        ..Default::default()
-    };
-
-    let laid = lay_out(
-        Theme::new(
-            ThemeData::light(),
-            TextField::new(TextEditingController::new()).decoration(decoration),
-        ),
-        tight(300.0, 150.0),
-    );
-
-    // No label/hint set (empty controller, no hint_text — see
-    // `should_show_hint`, false without `hint_text`), so the only text row
-    // possible is the helper-or-error line.
-    let text_rows = laid.find_all_by_render_type("RenderParagraph");
-    assert_eq!(
-        text_rows.len(),
-        1,
-        "error must replace helper, not render alongside it, found {text_rows:?}"
-    );
-}

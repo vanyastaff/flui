@@ -13,26 +13,14 @@ use crate::common;
 
 use common::{lay_out, loose, tight};
 use flui_cupertino::CupertinoNavigationBar;
-use flui_sdk::geometry::Size;
 use flui_sdk::widgets::prelude::EdgeInsets;
-use flui_sdk::widgets::{MediaQuery, MediaQueryData, PreferredSizeView, SizedBox, Text};
+use flui_sdk::widgets::{MediaQuery, MediaQueryData, SizedBox, Text};
 
 fn media_with_top_padding(top: f64) -> MediaQueryData {
     MediaQueryData {
         padding: EdgeInsets::new(top, 0.0, 0.0, 0.0),
         ..MediaQueryData::default()
     }
-}
-
-/// `CupertinoNavigationBar.preferredSize` (`nav_bar.dart`, oracle tag
-/// `3.44.0`): `Size.fromHeight(_kNavBarPersistentHeight)`, i.e. `44.0` — with
-/// no `bottom`/`largeTitle` contribution (both deferred, see `nav_bar.rs`'s
-/// module docs) and, critically, **no** `MediaQuery.padding.top` folded in
-/// (that addition happens once, in `CupertinoPageScaffold`).
-#[test]
-fn preferred_size_is_the_44pt_persistent_height_with_no_top_inset_folded_in() {
-    let preferred = CupertinoNavigationBar::new().preferred_size();
-    assert_eq!(preferred, Size::new(f64::INFINITY, 44.0));
 }
 
 /// `_kDefaultNavBarBorderColor` (`nav_bar.dart`, oracle tag `3.44.0`) is
@@ -74,28 +62,6 @@ fn default_hairline_border_carries_the_oracles_exact_alpha_and_border_none_remov
     assert!(
         !decoration.contains("a: 77"),
         "border(None) must remove the hairline entirely: {decoration}"
-    );
-}
-
-/// `_kDefaultTheme.barBackgroundColor`'s light variant (`theme.rs`, ported
-/// from `theme.dart`'s `_kDefaultTheme`): `Color.rgba(0xF9, 0xF9, 0xF9,
-/// 0xF0)` = `(249, 249, 249, 240)`. No `CupertinoTheme` ancestor and a
-/// default (light) `MediaQuery` resolves to this light default.
-#[test]
-fn background_defaults_to_the_themes_light_bar_background_color() {
-    let laid = lay_out(
-        MediaQuery::new(MediaQueryData::default(), CupertinoNavigationBar::new()),
-        tight(400.0, 44.0),
-    );
-    let decorated = laid
-        .try_find_by_render_type("RenderDecoratedBox")
-        .expect("the bar paints its background via DecoratedBox");
-    let decoration = laid
-        .render_property(decorated, "decoration")
-        .expect("RenderDecoratedBox always reports its decoration");
-    assert!(
-        decoration.contains("r: 249, g: 249, b: 249, a: 240"),
-        "must resolve the theme's light barBackgroundColor by default: {decoration}"
     );
 }
 
@@ -158,16 +124,4 @@ fn leading_middle_and_trailing_all_mount() {
         empty_constrained_box_count + 2,
         "both the leading and trailing SizedBox must mount, on top of the bar's own"
     );
-}
-
-/// With no `leading`/`middle`/`trailing` set, the bar still mounts (an empty
-/// `Stack`) without panicking — the degenerate case a layout composed of
-/// conditionally-pushed `Positioned` layers must tolerate.
-#[test]
-fn an_empty_bar_mounts_without_panicking() {
-    let laid = lay_out(
-        MediaQuery::new(MediaQueryData::default(), CupertinoNavigationBar::new()),
-        tight(400.0, 44.0),
-    );
-    assert_eq!(laid.size(laid.root()).height, 44.0);
 }

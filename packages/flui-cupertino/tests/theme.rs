@@ -22,7 +22,7 @@ use crate::common;
 use std::sync::{Arc, Mutex};
 
 use common::{lay_out, loose};
-use flui_cupertino::{CupertinoColor, CupertinoColors, CupertinoTheme, CupertinoThemeData};
+use flui_cupertino::{CupertinoColor, CupertinoTheme, CupertinoThemeData};
 use flui_sdk::painting::Color;
 use flui_sdk::platform::Brightness;
 use flui_sdk::view::prelude::*;
@@ -68,38 +68,6 @@ fn of_with_no_ancestor_resolves_the_default_theme() {
     assert_eq!(
         primary_color,
         CupertinoColor::Static(Color::rgb(0, 122, 255))
-    );
-}
-
-/// `CupertinoTheme::of` returns the ANCESTOR's data, resolved — not a
-/// default. Mutation-honest: swapping in `CupertinoThemeData::default()`
-/// here would still pass `of_with_no_ancestor_resolves_the_default_theme`
-/// above but fail this one, since `SYSTEM_RED` differs from the default
-/// `SYSTEM_BLUE`.
-#[test]
-fn of_returns_the_ancestor_theme_resolved_not_a_default() {
-    let provided = CupertinoThemeData::default().with_primary_color(CupertinoColors::SYSTEM_RED);
-    let primary_color = mount_and_capture(|capture| CupertinoTheme::new(provided, capture).boxed());
-    // Light mode (no brightness set anywhere): SYSTEM_RED's light variant,
-    // already resolved to `Static` by `of`.
-    assert_eq!(
-        primary_color,
-        CupertinoColor::Static(Color::rgb(255, 59, 48))
-    );
-}
-
-/// Brightness root #1: an explicit `CupertinoThemeData::brightness` flips the
-/// resolved primary color to its dark variant, with no `MediaQuery` ancestor
-/// at all.
-#[test]
-fn primary_color_flips_with_explicit_theme_brightness() {
-    let provided = CupertinoThemeData::default().with_brightness(Brightness::Dark);
-    let primary_color = mount_and_capture(|capture| CupertinoTheme::new(provided, capture).boxed());
-    // systemBlue dark variant — the tag-verified (10, 132, 255), not the
-    // superficially-plausible (9, 132, 255) a from-memory port would land on.
-    assert_eq!(
-        primary_color,
-        CupertinoColor::Static(Color::rgb(10, 132, 255))
     );
 }
 

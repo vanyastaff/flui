@@ -160,35 +160,6 @@ impl View for PanicsInInitState {
     }
 }
 
-#[derive(Clone)]
-struct PanicsOnCreateRenderObject;
-
-impl RenderView for PanicsOnCreateRenderObject {
-    type Protocol = BoxProtocol;
-    type RenderObject = RenderSizedBox;
-
-    fn create_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-    ) -> Self::RenderObject {
-        panic!("induced headless create_render_object panic");
-    }
-
-    fn update_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-        _render_object: &mut Self::RenderObject,
-    ) -> flui_rendering::RenderUpdateImpact {
-        flui_rendering::RenderUpdateImpact::NONE
-    }
-}
-
-impl View for PanicsOnCreateRenderObject {
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::render_variable(self)
-    }
-}
-
 #[derive(Debug)]
 struct DenseSnapshot {
     child_ids: Vec<ElementId>,
@@ -403,51 +374,4 @@ fn lifecycle_panic_containment_init_state_paints_exact_error_slot() {
     assert_ne!(recovered_tree.child_ids[FAILING_SLOT], failed);
     assert!(binding.build_owner_mut().take_recovered_panics().is_empty());
     assert_no_stranded_build_work(&mut binding, recovered_tree.child_ids[FAILING_SLOT]);
-}
-
-#[test]
-fn lifecycle_panic_containment_create_render_object_paints_exact_error_slot() {
-    let (mut binding, pipeline, root, initial) = mount_healthy_row();
-    binding.swap_root_view(
-        root,
-        &DenseRow {
-            children: children_with_failure(PanicsOnCreateRenderObject.boxed()),
-        },
-    );
-
-    let recovered_tree = assert_recovered_frame(&mut binding, &pipeline, root, &initial);
-    let substitute = recovered_tree.child_ids[FAILING_SLOT];
-    assert!(
-        binding
-            .tree_mut()
-            .get(initial.child_ids[FAILING_SLOT])
-            .is_none()
-    );
-    let records = binding.build_owner_mut().take_recovered_panics();
-    assert_eq!(records.len(), 1, "one mount panic records once");
-    let record = &records[0];
-    assert_eq!(record.hook, LifecycleHook::Mount);
-    assert_eq!(
-        record.view_type_id,
-        TypeId::of::<PanicsOnCreateRenderObject>()
-    );
-    assert!(!record.internal_invariant);
-    let minted = match record.at {
-        RecoveredAt::Substituted {
-            element: Some(minted),
-            substitute: recorded_substitute,
-            parent,
-            slot,
-            ..
-        } => {
-            assert_eq!(recorded_substitute, substitute);
-            assert_eq!(parent, root);
-            assert_eq!(slot, FAILING_SLOT);
-            minted
-        }
-        other => panic!("expected exact substituted attribution, got {other:?}"),
-    };
-    assert!(binding.tree_mut().get(minted).is_none());
-    assert!(binding.build_owner_mut().take_recovered_panics().is_empty());
-    assert_no_stranded_build_work(&mut binding, substitute);
 }

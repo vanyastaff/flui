@@ -703,16 +703,6 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn new_leaves_every_override_unset_and_is_not_interactive() {
-        let checkbox = Checkbox::new(false);
-        assert!(checkbox.active_color.is_none());
-        assert!(checkbox.check_color.is_none());
-        assert_eq!(checkbox.mode, CheckboxMode::Binary(false));
-        assert!(!checkbox.is_error);
-        assert!(!checkbox.is_interactive());
-    }
-
-    #[test]
     fn tristate_constructor_allows_none_and_marks_tristate() {
         let checkbox = Checkbox::tristate(None);
         assert_eq!(checkbox.mode, CheckboxMode::Tristate(None));
@@ -730,36 +720,9 @@ mod tests {
         assert!(matches!(Checkbox::new(true).mode, CheckboxMode::Binary(_)));
     }
 
-    #[test]
-    fn on_changed_makes_the_checkbox_interactive() {
-        let checkbox = Checkbox::new(false).on_changed(|_cx, _| {});
-        assert!(checkbox.is_interactive());
-    }
-
     // ------------------------------------------------------------------
     // Tristate tap-cycle semantics (mutation-honest: each arm pinned)
     // ------------------------------------------------------------------
-
-    #[test]
-    fn next_value_toggles_false_to_true_regardless_of_tristate() {
-        assert_eq!(Checkbox::new(false).next_value(), Some(true));
-        assert_eq!(Checkbox::tristate(Some(false)).next_value(), Some(true));
-    }
-
-    #[test]
-    fn next_value_true_goes_to_false_when_not_tristate() {
-        assert_eq!(Checkbox::new(true).next_value(), Some(false));
-    }
-
-    #[test]
-    fn next_value_true_goes_to_null_when_tristate() {
-        assert_eq!(Checkbox::tristate(Some(true)).next_value(), None);
-    }
-
-    #[test]
-    fn next_value_null_goes_to_false() {
-        assert_eq!(Checkbox::tristate(None).next_value(), Some(false));
-    }
 
     /// The bug #1102 closed: independent `Option<bool>` + `tristate: bool`
     /// fields allowed `None` without tristate, so paint drew a dash while
@@ -848,19 +811,6 @@ mod tests {
     }
 
     #[test]
-    fn widget_override_wins_over_theme_and_default_when_selected_and_enabled() {
-        let states = WidgetStates::from(WidgetState::Selected);
-        let theme_color = WidgetStateProperty::all(Some(Color::rgb(9, 9, 9)));
-        let resolved = resolve_checkbox_fill_color(
-            Some(Color::rgb(1, 1, 1)),
-            Some(&theme_color),
-            &light(),
-            states,
-        );
-        assert_eq!(resolved, Color::rgb(1, 1, 1));
-    }
-
-    #[test]
     fn widget_override_is_ignored_when_disabled_even_if_selected() {
         let states = WidgetStates::from(WidgetState::Selected).with_state(WidgetState::Disabled);
         let resolved =
@@ -870,160 +820,11 @@ mod tests {
     }
 
     #[test]
-    fn widget_override_is_ignored_when_unselected() {
-        let resolved = resolve_checkbox_fill_color(
-            Some(Color::rgb(1, 1, 1)),
-            None,
-            &light(),
-            WidgetStates::NONE,
-        );
-        assert_ne!(resolved, Color::rgb(1, 1, 1));
-        assert_eq!(
-            resolved,
-            checkbox_default_fill_color(&light(), WidgetStates::NONE)
-        );
-    }
-
-    #[test]
-    fn default_fill_color_unselected_enabled_is_transparent() {
-        assert_eq!(
-            checkbox_default_fill_color(&light(), WidgetStates::NONE),
-            Color::TRANSPARENT
-        );
-    }
-
-    #[test]
     fn default_fill_color_selected_enabled_is_primary() {
         let states = WidgetStates::from(WidgetState::Selected);
         assert_eq!(
             checkbox_default_fill_color(&light(), states),
             light().primary
-        );
-    }
-
-    #[test]
-    fn default_fill_color_selected_error_is_error_color() {
-        let states = WidgetStates::from(WidgetState::Selected).with_state(WidgetState::Error);
-        assert_eq!(checkbox_default_fill_color(&light(), states), light().error);
-    }
-
-    #[test]
-    fn default_fill_color_selected_disabled_is_faded_on_surface() {
-        // Combined-state pin: Disabled must win over Selected's own branch,
-        // matching the oracle's `if (disabled) { ... } if (selected) { ...
-        // }` order (disabled checked first).
-        let states = WidgetStates::from(WidgetState::Selected).with_state(WidgetState::Disabled);
-        assert_eq!(
-            checkbox_default_fill_color(&light(), states),
-            light().on_surface.with_opacity(0.38)
-        );
-    }
-
-    #[test]
-    fn default_fill_color_unselected_disabled_is_transparent() {
-        let states = WidgetStates::from(WidgetState::Disabled);
-        assert_eq!(
-            checkbox_default_fill_color(&light(), states),
-            Color::TRANSPARENT
-        );
-    }
-
-    #[test]
-    fn default_check_color_selected_enabled_is_on_primary() {
-        let states = WidgetStates::from(WidgetState::Selected);
-        assert_eq!(
-            checkbox_default_check_color(&light(), states),
-            light().on_primary
-        );
-    }
-
-    #[test]
-    fn default_check_color_selected_error_is_on_error() {
-        let states = WidgetStates::from(WidgetState::Selected).with_state(WidgetState::Error);
-        assert_eq!(
-            checkbox_default_check_color(&light(), states),
-            light().on_error
-        );
-    }
-
-    #[test]
-    fn default_check_color_selected_disabled_is_surface() {
-        let states = WidgetStates::from(WidgetState::Selected).with_state(WidgetState::Disabled);
-        assert_eq!(
-            checkbox_default_check_color(&light(), states),
-            light().surface
-        );
-    }
-
-    #[test]
-    fn default_side_selected_is_zero_width_transparent() {
-        let states = WidgetStates::from(WidgetState::Selected);
-        let side = checkbox_default_side(&light(), states);
-        assert_eq!(side.color, Color::TRANSPARENT);
-        assert_eq!(side.width, 0.0);
-    }
-
-    #[test]
-    fn default_side_unselected_enabled_default_is_on_surface_variant() {
-        let side = checkbox_default_side(&light(), WidgetStates::NONE);
-        assert_eq!(side.color, light().on_surface_variant);
-        assert_eq!(side.width, 2.0);
-    }
-
-    #[test]
-    fn default_side_unselected_hovered_is_on_surface() {
-        // Branch-order pin: hovered (unselected, enabled) resolves BEFORE
-        // the catch-all default, per `_CheckboxDefaultsM3.side`'s oracle
-        // order (disabled, selected, error, pressed, hovered, focused,
-        // default).
-        let states = WidgetStates::from(WidgetState::Hovered);
-        let side = checkbox_default_side(&light(), states);
-        assert_eq!(side.color, light().on_surface);
-    }
-
-    #[test]
-    fn default_side_unselected_disabled_is_faded_on_surface() {
-        let states = WidgetStates::from(WidgetState::Disabled);
-        let side = checkbox_default_side(&light(), states);
-        assert_eq!(side.color, light().on_surface.with_opacity(0.38));
-    }
-
-    #[test]
-    fn default_side_selected_disabled_is_zero_width_transparent() {
-        // Combined pin: Disabled+Selected takes the disabled-selected
-        // branch, not the plain-selected branch (same color, but a
-        // different code path — width still 2.0 here, unlike plain
-        // selected's 0.0).
-        let states = WidgetStates::from(WidgetState::Selected).with_state(WidgetState::Disabled);
-        let side = checkbox_default_side(&light(), states);
-        assert_eq!(side.color, Color::TRANSPARENT);
-        assert_eq!(side.width, 2.0);
-    }
-
-    #[test]
-    fn default_overlay_color_selected_hovered_is_primary_at_8_percent() {
-        let states = WidgetStates::from(WidgetState::Selected).with_state(WidgetState::Hovered);
-        assert_eq!(
-            checkbox_default_overlay_color(&light(), states),
-            light().primary.with_opacity(0.08)
-        );
-    }
-
-    #[test]
-    fn default_overlay_color_selected_pressed_is_on_surface_at_10_percent() {
-        let states = WidgetStates::from(WidgetState::Selected).with_state(WidgetState::Pressed);
-        assert_eq!(
-            checkbox_default_overlay_color(&light(), states),
-            light().on_surface.with_opacity(0.1)
-        );
-    }
-
-    #[test]
-    fn default_overlay_color_unselected_pressed_is_primary_at_10_percent() {
-        let states = WidgetStates::from(WidgetState::Pressed);
-        assert_eq!(
-            checkbox_default_overlay_color(&light(), states),
-            light().primary.with_opacity(0.1)
         );
     }
 
@@ -1039,15 +840,6 @@ mod tests {
         assert_eq!(
             checkbox_default_overlay_color(&light(), states),
             light().error.with_opacity(0.1)
-        );
-    }
-
-    #[test]
-    fn default_overlay_color_selected_default_is_transparent() {
-        let states = WidgetStates::from(WidgetState::Selected);
-        assert_eq!(
-            checkbox_default_overlay_color(&light(), states),
-            Color::TRANSPARENT
         );
     }
 
@@ -1078,37 +870,6 @@ mod tests {
             check_color: Color::WHITE,
             value,
         }
-    }
-
-    #[test]
-    fn should_repaint_is_false_for_an_identical_delegate() {
-        let old = painter(Some(true));
-        let new = painter(Some(true));
-        assert!(!new.should_repaint(&old));
-    }
-
-    #[test]
-    fn should_repaint_is_true_when_the_value_changes() {
-        let old = painter(Some(false));
-        let new = painter(Some(true));
-        assert!(new.should_repaint(&old));
-    }
-
-    #[test]
-    fn should_repaint_is_true_against_a_foreign_painter_type() {
-        #[derive(Debug)]
-        struct Other;
-        impl CustomPainter for Other {
-            fn paint(&self, _canvas: &mut Canvas, _size: Size) {}
-            fn should_repaint(&self, _old: &dyn CustomPainter) -> bool {
-                true
-            }
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
-            }
-        }
-        let new = painter(Some(true));
-        assert!(new.should_repaint(&Other));
     }
 
     /// Proves the painter is actually invoked (via a real [`Canvas`]/

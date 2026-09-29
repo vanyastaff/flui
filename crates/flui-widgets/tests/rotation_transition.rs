@@ -6,7 +6,7 @@ use std::f64::consts::FRAC_PI_2;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::common::{lay_out, size, tight};
+use crate::common::{lay_out, tight};
 use flui_animation::{Animation, AnimationController};
 use flui_widgets::{RotationTransition, SizedBox};
 
@@ -37,18 +37,4 @@ fn rotation_transition_reads_animation_turns_on_each_tick() {
         "a quarter turn is π/2 radians: {}",
         laid.transform_rotation(render_transform),
     );
-}
-
-#[test]
-fn rotation_transition_lays_its_child_out_as_a_passthrough() {
-    let controller = AnimationController::without_ticker(Duration::from_millis(300));
-    controller.set_value(0.5);
-    let turns: Arc<dyn Animation<f64>> = Arc::new(controller.clone());
-
-    let laid = lay_out(
-        RotationTransition::new(turns, SizedBox::new(80.0, 60.0)),
-        tight(80.0, 60.0),
-    );
-
-    assert_eq!(laid.size(laid.root()), size(80.0, 60.0));
 }

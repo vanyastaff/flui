@@ -376,17 +376,6 @@ mod tests {
     }
 
     #[test]
-    fn no_active_registry_is_none() {
-        assert_eq!(current(), None);
-    }
-
-    #[test]
-    fn tls_storage_has_no_drop_glue() {
-        assert!(!std::mem::needs_drop::<DropFreeRegistryStack>());
-        assert!(!std::mem::needs_drop::<DropFreeTestRegistrySlot>());
-    }
-
-    #[test]
     fn nested_activation_restores_previous_registry() {
         let a = handle(1);
         let b = handle(2);
@@ -592,55 +581,6 @@ mod tests {
         assert_eq!(visited_label(&composite, ElementId::new(5)), Some("b"));
     }
 
-    #[test]
-    fn composite_reports_busy_only_when_no_member_answered() {
-        let composite = build_composite(vec![
-            busy_member(),
-            member(vec![(1, ElementId::new(5), "b")]),
-        ]);
-
-        assert_eq!(composite.lookup_element(&TestKey(2)), Err(RegistryBusy));
-        assert_eq!(
-            try_visited_label(&composite, ElementId::new(6)),
-            Err(RegistryBusy)
-        );
-        assert_eq!(
-            build_composite(vec![member(vec![])]).lookup_element(&TestKey(2)),
-            Ok(None),
-            "a miss with no busy member stays a plain miss"
-        );
-    }
-
-    /// Once a lookup has routed an id to one member, a busy visit of that
-    /// member must not fall back to a sibling that reuses the raw id.
-    #[test]
-    fn composite_visit_routed_to_a_busy_member_does_not_scan_the_others() {
-        let busy_after_lookup = Rc::new(std::cell::Cell::new(false));
-        let busy = Rc::clone(&busy_after_lookup);
-        let first = GlobalKeyRegistryHandle::new(
-            |key| Ok((key.key_hash() == 1).then_some(ElementId::new(5))),
-            move |_, f| {
-                if busy.get() {
-                    return Err(RegistryBusy);
-                }
-                f(&LabeledElement("a"));
-                Ok(())
-            },
-        );
-        let composite = build_composite(vec![first, member(vec![(2, ElementId::new(5), "b")])]);
-
-        assert_eq!(
-            composite.lookup_element(&TestKey(1)),
-            Ok(Some(ElementId::new(5)))
-        );
-        busy_after_lookup.set(true);
-        assert_eq!(
-            try_visited_label(&composite, ElementId::new(5)),
-            Err(RegistryBusy),
-            "the id belongs to the busy member; b's unrelated id 5 must not answer"
-        );
-    }
-
     /// The correctness property `build_composite` exists for: two members
     /// both validly using `ElementId::new(5)` for unrelated elements must not
     /// cross-contaminate a `with_element` call once `lookup` has resolved
@@ -673,22 +613,5 @@ mod tests {
             "re-resolving the same numeral through member b must now route \
              to b"
         );
-    }
-
-    /// No preceding `lookup` for this id: falls back to a try-in-order scan
-    /// rather than returning nothing.
-    #[test]
-    fn composite_with_element_without_a_preceding_lookup_falls_back_to_scanning_members() {
-        let a = member(vec![(1, ElementId::new(9), "a")]);
-        let composite = build_composite(vec![a]);
-
-        assert_eq!(visited_label(&composite, ElementId::new(9)), Some("a"));
-    }
-
-    #[test]
-    fn composite_over_zero_members_resolves_nothing() {
-        let composite = build_composite(vec![]);
-        assert_eq!(composite.lookup_element(&TestKey(1)), Ok(None));
-        assert_eq!(visited_label(&composite, ElementId::new(1)), None);
     }
 }

@@ -342,6 +342,3 @@ impl GeometryError {
 
 /// Result type alias for geometry operations.
 pub type GeometryResult<T> = Result<T, GeometryError>;
-
-#[cfg(test)]
-mod tests {}

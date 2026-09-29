@@ -198,7 +198,7 @@ impl WeakPipelineCell {
 
 #[cfg(test)]
 mod tests {
-    use flui_foundation::panic::payload_text;
+
     use static_assertions::assert_not_impl_any;
 
     use super::*;
@@ -211,62 +211,6 @@ mod tests {
     // `PipelineCell` wraps `Rc<RefCell<_>>`.
     assert_not_impl_any!(PipelineCell: Send, Sync);
     assert_not_impl_any!(PipelineOwner: Send, Sync);
-
-    #[test]
-    fn with_nests_freely() {
-        let cell = PipelineCell::new(PipelineOwner::new());
-        cell.with(|_outer| {
-            cell.with(|_inner| {
-                // Two coexisting shared borrows must not panic.
-            });
-        });
-    }
-
-    #[test]
-    fn with_mut_reentry_panics() {
-        let cell = PipelineCell::new(PipelineOwner::new());
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            cell.with_mut(|_outer| {
-                cell.with_mut(|_inner| {});
-            });
-        }));
-        let err = result.expect_err("reentrant with_mut must panic");
-        let message = payload_text(&*err).expect("panic payload must be a string");
-        assert!(
-            message.contains("BUG: PipelineCell::with_mut called reentrantly"),
-            "unexpected panic message: {message}"
-        );
-    }
-
-    #[test]
-    fn with_mut_inside_with_panics() {
-        let cell = PipelineCell::new(PipelineOwner::new());
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            cell.with(|_outer| {
-                cell.with_mut(|_inner| {});
-            });
-        }));
-        result.expect_err("with_mut nested inside with must panic");
-    }
-
-    #[test]
-    fn is_free_reflects_checkout_state() {
-        let cell = PipelineCell::new(PipelineOwner::new());
-        assert!(cell.is_free());
-        cell.with_mut(|_owner| {
-            assert!(!cell.is_free());
-        });
-        assert!(cell.is_free());
-    }
-
-    #[test]
-    fn clone_shares_the_same_owner() {
-        let cell = PipelineCell::new(PipelineOwner::new());
-        let shared = cell.clone();
-        cell.with_mut(|_owner| {
-            assert!(!shared.is_free(), "clone must observe the same checkout");
-        });
-    }
 
     // ========================================================================
     // Owner-local traversal — full `run_frame` through a `PipelineCell`

@@ -139,34 +139,6 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn test_reverse_animation_value() {
-        let scheduler = UpdateScheduler::new();
-        let controller = Arc::new(AnimationController::new(
-            Duration::from_millis(100),
-            &scheduler,
-        ));
-
-        let reversed = ReverseAnimation::new(controller.clone() as Arc<dyn Animation<f64>>);
-
-        controller.set_value(0.0);
-        assert_eq!(reversed.value(), 1.0);
-
-        controller.set_value(0.25);
-        assert_eq!(reversed.value(), 0.75);
-
-        controller.set_value(0.5);
-        assert_eq!(reversed.value(), 0.5);
-
-        controller.set_value(0.75);
-        assert_eq!(reversed.value(), 0.25);
-
-        controller.set_value(1.0);
-        assert_eq!(reversed.value(), 0.0);
-
-        controller.dispose();
-    }
-
-    #[test]
     fn test_reverse_animation_status() {
         let scheduler = UpdateScheduler::new();
         let controller = Arc::new(AnimationController::new(

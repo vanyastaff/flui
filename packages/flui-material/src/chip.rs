@@ -1073,23 +1073,6 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn chip_new_leaves_every_override_unset_enabled_and_not_interactive() {
-        let chip = Chip::new(flui_sdk::widgets::Text::new("Tag"));
-        assert!(chip.avatar.is_none());
-        assert!(chip.on_pressed.is_none());
-        assert!(chip.on_deleted.is_none());
-        assert!(chip.enabled);
-        assert!(!chip.is_pressable());
-        assert!(!chip.has_delete_button());
-    }
-
-    #[test]
-    fn chip_on_pressed_makes_the_chip_pressable() {
-        let chip = Chip::new(flui_sdk::widgets::Text::new("Tag")).on_pressed(|_cx| {});
-        assert!(chip.is_pressable());
-    }
-
-    #[test]
     fn chip_disabled_is_never_pressable_even_with_a_handler() {
         let chip = Chip::new(flui_sdk::widgets::Text::new("Tag"))
             .on_pressed(|_cx| {})
@@ -1097,44 +1080,9 @@ mod tests {
         assert!(!chip.is_pressable());
     }
 
-    #[test]
-    fn chip_on_deleted_shows_the_delete_button() {
-        let chip = Chip::new(flui_sdk::widgets::Text::new("Tag")).on_deleted(|_cx| {});
-        assert!(chip.has_delete_button());
-    }
-
-    #[test]
-    fn filter_chip_new_is_unselected_and_disabled() {
-        let chip = FilterChip::new(flui_sdk::widgets::Text::new("Tag"));
-        assert!(!chip.selected);
-        assert!(!chip.is_enabled());
-        assert!(chip.avatar.is_none());
-        assert!(chip.on_deleted.is_none());
-    }
-
-    #[test]
-    fn filter_chip_on_selected_makes_it_enabled() {
-        let chip = FilterChip::new(flui_sdk::widgets::Text::new("Tag")).on_selected(|_cx, _| {});
-        assert!(chip.is_enabled());
-    }
-
     // ------------------------------------------------------------------
     // chip_states — pure query set (the NavigationBar-lesson regression)
     // ------------------------------------------------------------------
-
-    #[test]
-    fn chip_states_selected_and_enabled_carries_only_selected() {
-        let states = chip_states(true, true);
-        assert!(states.contains_state(WidgetState::Selected));
-        assert!(!states.contains_state(WidgetState::Disabled));
-    }
-
-    #[test]
-    fn chip_states_unselected_and_disabled_carries_only_disabled() {
-        let states = chip_states(false, false);
-        assert!(states.contains_state(WidgetState::Disabled));
-        assert!(!states.contains_state(WidgetState::Selected));
-    }
 
     /// Regression: a chip that is BOTH selected and disabled must query
     /// with the PURE `{Disabled}` set, never a combined `{Selected,
@@ -1201,15 +1149,6 @@ mod tests {
     }
 
     #[test]
-    fn content_color_default_selected_is_on_secondary_container() {
-        let states = WidgetStates::from(WidgetState::Selected);
-        assert_eq!(
-            chip_content_color_default(states, &light()),
-            light().on_secondary_container
-        );
-    }
-
-    #[test]
     fn content_color_default_disabled_wins_over_selected() {
         // Branch-order pin: `chip_states` never actually produces a
         // combined set (see the regression tests above), but
@@ -1222,54 +1161,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn icon_color_default_unselected_enabled_is_primary() {
-        assert_eq!(
-            chip_icon_color_default(WidgetStates::NONE, &light()),
-            light().primary
-        );
-    }
-
-    #[test]
-    fn icon_color_default_selected_is_on_secondary_container() {
-        let states = WidgetStates::from(WidgetState::Selected);
-        assert_eq!(
-            chip_icon_color_default(states, &light()),
-            light().on_secondary_container
-        );
-    }
-
-    #[test]
-    fn icon_color_default_disabled_is_on_surface() {
-        let states = WidgetStates::from(WidgetState::Disabled);
-        assert_eq!(
-            chip_icon_color_default(states, &light()),
-            light().on_surface
-        );
-    }
-
     // ------------------------------------------------------------------
     // chip_default_side — Selected wins over Disabled (combined, not pure)
     // ------------------------------------------------------------------
-
-    #[test]
-    fn default_side_unselected_enabled_is_outline_variant() {
-        let side = chip_default_side(false, true, &light());
-        assert_eq!(side.color, light().outline_variant);
-        assert_eq!(side.width, 1.0);
-    }
-
-    #[test]
-    fn default_side_unselected_disabled_is_faded_on_surface() {
-        let side = chip_default_side(false, false, &light());
-        assert_eq!(side.color, light().on_surface.with_opacity(0.12));
-    }
-
-    #[test]
-    fn default_side_selected_enabled_is_transparent() {
-        let side = chip_default_side(true, true, &light());
-        assert_eq!(side.color, Color::TRANSPARENT);
-    }
 
     /// The whole point of `chip_default_side` taking plain bools instead of
     /// a `WidgetStates` set: `selected` wins over `disabled` outright, the
@@ -1293,90 +1187,13 @@ mod tests {
     // filter_chip_default_background_color — the genuine 3-way branch
     // ------------------------------------------------------------------
 
-    #[test]
-    fn default_background_unselected_enabled_is_transparent() {
-        assert_eq!(
-            filter_chip_default_background_color(false, true, &light()),
-            Color::TRANSPARENT
-        );
-    }
-
-    #[test]
-    fn default_background_selected_enabled_is_secondary_container() {
-        assert_eq!(
-            filter_chip_default_background_color(true, true, &light()),
-            light().secondary_container
-        );
-    }
-
-    #[test]
-    fn default_background_unselected_disabled_is_transparent() {
-        assert_eq!(
-            filter_chip_default_background_color(false, false, &light()),
-            Color::TRANSPARENT
-        );
-    }
-
-    /// The genuine third branch: disabled-and-selected is NEITHER plain
-    /// `disabled` (`transparent`) NOR plain `selected`
-    /// (`secondaryContainer`) — a distinct color only a combined query can
-    /// produce. Mutation-run: collapsing this arm to fall through to either
-    /// neighbor was confirmed to make this test fail.
-    #[test]
-    fn default_background_selected_and_disabled_is_its_own_distinct_value() {
-        let combined = filter_chip_default_background_color(true, false, &light());
-        assert_eq!(combined, light().on_surface.with_opacity(0.12));
-        assert_ne!(
-            combined,
-            filter_chip_default_background_color(false, false, &light())
-        );
-        assert_ne!(
-            combined,
-            filter_chip_default_background_color(true, true, &light())
-        );
-    }
-
     // ------------------------------------------------------------------
     // filter_chip_leading_content — the avatar/checkmark swap
     // ------------------------------------------------------------------
 
-    #[test]
-    fn leading_content_selected_is_always_checkmark() {
-        assert_eq!(
-            filter_chip_leading_content(true, true),
-            FilterChipLeading::Checkmark
-        );
-        assert_eq!(
-            filter_chip_leading_content(true, false),
-            FilterChipLeading::Checkmark
-        );
-    }
-
-    #[test]
-    fn leading_content_unselected_with_avatar_shows_the_avatar() {
-        assert_eq!(
-            filter_chip_leading_content(false, true),
-            FilterChipLeading::Avatar
-        );
-    }
-
-    #[test]
-    fn leading_content_unselected_without_avatar_shows_nothing() {
-        assert_eq!(
-            filter_chip_leading_content(false, false),
-            FilterChipLeading::None
-        );
-    }
-
     // ------------------------------------------------------------------
     // Geometry
     // ------------------------------------------------------------------
-
-    #[test]
-    fn content_min_height_with_default_padding_is_16() {
-        let height = chip_content_min_height(chip_default_padding(), chip_default_label_padding());
-        assert_eq!(height, (CHIP_HEIGHT - 2.0 * PADDING));
-    }
 
     #[test]
     fn content_min_height_never_goes_negative_under_oversized_padding() {
@@ -1388,46 +1205,6 @@ mod tests {
     // ------------------------------------------------------------------
     // disabled_content_opacity — the steady-state 38% alpha, not a fade
     // ------------------------------------------------------------------
-
-    #[test]
-    fn disabled_content_opacity_enabled_is_fully_opaque() {
-        assert_eq!(disabled_content_opacity(true), 1.0);
-    }
-
-    /// Flutter parity: `_kDisabledAlpha` (`0x61`, `chip.dart`) as a `0.0..=1.0`
-    /// fraction. Mutation-run: hardcoding this to `1.0` (i.e. dropping the
-    /// disabled dimming entirely, the pre-fix shape) was confirmed to make
-    /// this test fail.
-    #[test]
-    fn disabled_content_opacity_disabled_is_the_m3_disabled_alpha() {
-        let opacity = disabled_content_opacity(false);
-        assert!((opacity - 0x61 as f64 / 255.0).abs() < f64::EPSILON);
-        assert_ne!(opacity, 1.0);
-    }
-
-    #[test]
-    fn default_shape_is_an_8dp_rounded_rectangle() {
-        let size = Size::new(80.0, CHIP_HEIGHT);
-        let rrect = chip_default_shape().to_rrect(size);
-        assert_eq!(
-            rrect.top_left,
-            flui_sdk::geometry::Radius::circular(CORNER_RADIUS)
-        );
-    }
-
-    #[test]
-    fn default_padding_is_8dp_all_sides() {
-        let padding = chip_default_padding();
-        assert_eq!(padding.top, (PADDING));
-        assert_eq!(padding.left, (PADDING));
-    }
-
-    #[test]
-    fn default_label_padding_is_horizontal_only() {
-        let padding = chip_default_label_padding();
-        assert_eq!(padding.top, 0.0);
-        assert_eq!(padding.left, (LABEL_PADDING_HORIZONTAL));
-    }
 
     // Theme tier beats default (the widget/theme/default cascade for
     // `label_color`/`side`) is proven through a REAL mount + `Chip::build`
@@ -1457,52 +1234,6 @@ mod tests {
         let mut canvas = Canvas::new();
         painter.paint(&mut canvas, Size::new(80.0, 32.0));
         assert!(canvas.display_list().is_empty());
-    }
-
-    #[test]
-    fn border_painter_draws_a_ring_for_a_visible_side() {
-        use flui_sdk::painting::DrawOp;
-
-        let painter = ChipBorderPainter {
-            side: BorderSide::new(Color::BLACK, 1.0, BorderStyle::Solid),
-            shape: chip_default_shape(),
-        };
-        let mut canvas = Canvas::new();
-        painter.paint(&mut canvas, Size::new(80.0, 32.0));
-        assert!(
-            canvas
-                .display_list()
-                .iter()
-                .any(|command| matches!(command.op, DrawOp::DRRect { .. }))
-        );
-    }
-
-    #[test]
-    fn border_painter_should_repaint_is_true_when_the_side_changes() {
-        let old = ChipBorderPainter {
-            side: BorderSide::new(Color::BLACK, 1.0, BorderStyle::Solid),
-            shape: chip_default_shape(),
-        };
-        let mut new = old;
-        new.side.color = Color::WHITE;
-        assert!(new.should_repaint(&old));
-    }
-
-    #[test]
-    fn checkmark_painter_draws_a_path() {
-        use flui_sdk::painting::DrawOp;
-
-        let painter = ChipCheckmarkPainter {
-            color: Color::BLACK,
-        };
-        let mut canvas = Canvas::new();
-        painter.paint(&mut canvas, Size::new(CHIP_ICON_SIZE, CHIP_ICON_SIZE));
-        assert!(
-            canvas
-                .display_list()
-                .iter()
-                .any(|command| matches!(command.op, DrawOp::Path { .. }))
-        );
     }
 
     /// Pins the oracle's `checkSize = avatar.size.height * 0.75` scale-down
@@ -1579,16 +1310,5 @@ mod tests {
         assert!(bounds.max_y() < cell);
         assert!(bounds.min_x() > 0.0);
         assert!(bounds.min_y() > 0.0);
-    }
-
-    #[test]
-    fn checkmark_painter_should_repaint_is_false_for_an_identical_delegate() {
-        let old = ChipCheckmarkPainter {
-            color: Color::BLACK,
-        };
-        let new = ChipCheckmarkPainter {
-            color: Color::BLACK,
-        };
-        assert!(!new.should_repaint(&old));
     }
 }

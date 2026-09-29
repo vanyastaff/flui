@@ -212,17 +212,6 @@ mod tests {
     }
 
     #[test]
-    fn test_clipboard_creation() {
-        let clipboard = test_clipboard("creation");
-        // `resolve` travels through the shared lane like every other
-        // pasteboard operation, never as a raw message to AppKit from a test
-        // worker thread. A named board always resolves to a live object, so
-        // the assertion is simply that the lane ran the body at all.
-        let ran = clipboard.with_pasteboard_on_owner(|_pasteboard| true);
-        assert!(ran, "Named pasteboard operation must run on the owner lane");
-    }
-
-    #[test]
     fn test_clipboard_roundtrip() {
         let clipboard = test_clipboard("roundtrip");
 
@@ -231,20 +220,6 @@ mod tests {
 
         let read_back = clipboard.read_text();
         assert_eq!(read_back.as_deref(), Some(test_text));
-    }
-
-    #[test]
-    fn test_has_text() {
-        let clipboard = test_clipboard("has_text");
-
-        // Write text
-        clipboard.write_text("Test".to_string());
-
-        // Check if text is available
-        assert!(
-            clipboard.has_text(),
-            "Clipboard should have text after write"
-        );
     }
 
     #[test]

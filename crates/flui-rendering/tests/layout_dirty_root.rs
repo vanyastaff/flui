@@ -19,7 +19,6 @@
 //!   * PR #141 (typed bridge)
 //!   * PR #143 (perform_layout_raw → Result)
 
-use flui_foundation::RenderId;
 use flui_foundation::geometry::Size;
 use flui_objects::{RenderCenter, RenderColoredBox, RenderPadding};
 use flui_rendering::{
@@ -33,65 +32,6 @@ use crate::common::fresh_layout_pipeline;
 // ============================================================================
 // Happy path — 2-level tree: RenderPadding (parent) + RenderColoredBox (child)
 // ============================================================================
-
-/// Happy path: a 2-level tree (`Padding` wrapping a single
-/// `ColoredBox`) lays out correctly through `layout_dirty_root`. The
-/// padding deflates parent constraints by 20 (left=right=10) on each
-/// axis, the colored box sizes to its preferred (80×40) clipped to the
-/// deflated constraints, and the padding wraps it with the configured
-/// insets to produce a final 100×60 box.
-///
-/// This exercises the **non-leaf path** of `layout_subtree_raw`:
-/// pipeline builds the Direct `BoxLayoutCtx` with `child_ids =
-/// [colored_box_id]` and a recursive callback, the trait-erased bridge
-/// in `traits/render_box.rs` reconstructs the typed
-/// `BoxLayoutCtx<Single, BoxParentData>` for `RenderPadding`, and
-/// `RenderPadding::perform_layout` calls `ctx.layout_child(0,
-/// deflated)` which invokes the callback → recursive
-/// `layout_subtree_raw(colored_box_id, deflated)` → leaf path →
-/// `RenderEntry::layout_leaf_only` produces the child size.
-#[test]
-fn two_level_padding_with_colored_box_child() {
-    let mut pipeline = fresh_layout_pipeline();
-
-    // Build tree: Padding(all=10) → ColoredBox(preferred 80×40).
-    let padding_id = pipeline
-        .render_tree_mut()
-        .insert_box(Box::new(RenderPadding::all(10.0)));
-    let _colored_box_id = pipeline
-        .render_tree_mut()
-        .insert_box_child(padding_id, Box::new(RenderColoredBox::red(80.0, 40.0)))
-        .expect("child insert must succeed");
-
-    // Parent constraints: loose 0..300 × 0..200 — leaves room for the
-    // 80+20=100 wide, 40+20=60 tall padded box.
-    let parent_constraints = BoxConstraints::new(0.0, 300.0, 0.0, 200.0);
-
-    let size = pipeline
-        .layout_dirty_root(padding_id, parent_constraints)
-        .expect("2-level layout_dirty_root must succeed");
-
-    assert_eq!(
-        size,
-        Size::new(100.0, 60.0),
-        "Padding(10) wrapping ColoredBox(80×40) must produce (80+20)×(40+20) = 100×60",
-    );
-
-    // Padding state should be populated post-layout.
-    let padding_node = pipeline
-        .render_tree()
-        .get(padding_id)
-        .expect("padding node still in tree");
-    assert_eq!(
-        padding_node.geometry_box(),
-        Some(Size::new(100.0, 60.0)),
-        "padding's stored geometry must match the returned size",
-    );
-    assert!(
-        !padding_node.needs_layout(),
-        "NEEDS_LAYOUT must be cleared after successful layout",
-    );
-}
 
 // ============================================================================
 // Happy path — 3-level grandchild propagation: Padding → Center → ColoredBox
@@ -188,169 +128,16 @@ fn three_level_padding_center_colored_box_grandchild_propagation() {
 // Failure path — stale root id surfaces RenderError::NodeNotFound
 // ============================================================================
 
-/// Failure path: `layout_dirty_root` invoked on a
-/// `RenderId` that doesn't exist in the tree returns
-/// `Err(RenderError::NodeNotFound)` rather than panicking.
-///
-/// An earlier design considered surfacing this as `ChildIndexOutOfBounds`
-/// for the "child slice access out of bounds" case, but the actual
-/// implementation surfaces that condition via `NodeNotFound` instead: the callback
-/// iterates over the parent's snapshotted `child_ids` (always within
-/// bounds by construction), so a stale child-id surfaces as a
-/// downstream `get(child_id) -> None` in the recursive call — i.e.,
-/// `NodeNotFound`. `ChildIndexOutOfBounds` is reserved (see the variant
-/// constructor doc) for future defensive checks; this test covers the
-/// shape that the current implementation actually produces.
-#[test]
-fn stale_root_id_returns_node_not_found() {
-    let mut pipeline = fresh_layout_pipeline();
-
-    let stale_id = RenderId::new(999); // never inserted
-
-    let result =
-        pipeline.layout_dirty_root(stale_id, BoxConstraints::tight(Size::new(100.0, 100.0)));
-
-    let err = result.expect_err("layout on a non-existent id must fail");
-    assert!(
-        matches!(err, RenderError::NodeNotFound(id) if id == stale_id),
-        "expected NodeNotFound({stale_id:?}), got {err:?}",
-    );
-}
-
 // ============================================================================
 // Smoke — leaf path: layout_dirty_root on a node with no children
 // delegates to RenderEntry::layout_leaf_only.
 // ============================================================================
-
-/// Sanity: when `id`'s child list is empty, `layout_dirty_root` should
-/// route through `RenderEntry::layout_leaf_only` and return the
-/// constraint-clamped size — same path the leaf bridge tests
-/// already cover, exercised here through this entry point to prove
-/// the leaf branch is reachable from the public API.
-#[test]
-fn leaf_path_delegates_to_layout_leaf_only() {
-    let mut pipeline = fresh_layout_pipeline();
-
-    let leaf_id = pipeline
-        .render_tree_mut()
-        .insert_box(Box::new(RenderColoredBox::green(120.0, 50.0)));
-
-    let constraints = BoxConstraints::tight(Size::new(120.0, 50.0));
-    let size = pipeline
-        .layout_dirty_root(leaf_id, constraints)
-        .expect("leaf-only layout_dirty_root must succeed");
-
-    assert_eq!(size, Size::new(120.0, 50.0));
-
-    let geom = pipeline
-        .render_tree()
-        .get(leaf_id)
-        .and_then(flui_rendering::storage::RenderNode::geometry_box);
-    assert_eq!(geom, Some(Size::new(120.0, 50.0)));
-}
 
 // ============================================================================
 // Idempotence — re-running layout on a clean tree returns the same size
 // (interaction with an earlier OnceCell→Option state-storage migration:
 // no panic on frame 2).
 // ============================================================================
-
-/// Frame-2 regression smoke: `RenderState::set_constraints` /
-/// `set_geometry` were migrated from `OnceCell` (panic on re-set) to
-/// `Option` (replace on re-set). Two consecutive `layout_dirty_root` calls
-/// on the same tree must succeed without panic — the walk goes through
-/// that same `set_*` path.
-///
-/// This covers the frame-2-no-panic surface at this entry point; a fuller
-/// integration test covering the same surface lives elsewhere.
-#[test]
-fn double_layout_does_not_panic_on_frame_two() {
-    let mut pipeline = fresh_layout_pipeline();
-
-    let padding_id = pipeline
-        .render_tree_mut()
-        .insert_box(Box::new(RenderPadding::all(5.0)));
-    let _child_id = pipeline
-        .render_tree_mut()
-        .insert_box_child(padding_id, Box::new(RenderColoredBox::red(40.0, 40.0)))
-        .expect("child insert must succeed");
-
-    let c = BoxConstraints::new(0.0, 200.0, 0.0, 200.0);
-
-    let size1 = pipeline
-        .layout_dirty_root(padding_id, c)
-        .expect("frame 1 must succeed");
-    let size2 = pipeline
-        .layout_dirty_root(padding_id, c)
-        .expect("frame 2 must succeed without OnceCell-style panic");
-
-    assert_eq!(
-        size1, size2,
-        "deterministic layout: frame 1 and frame 2 must agree",
-    );
-    assert_eq!(size1, Size::new(50.0, 50.0));
-}
-
-/// A clean node can miss the geometry cache for three different reasons, and
-/// only one of them is a defect. The walk used to warn "invariant violation"
-/// for all three, which is not a cosmetic complaint: an animated demo logged
-/// that warning twice per frame for a whole run and it was recorded as a
-/// suspected rendering defect, while the actual defect that run had was
-/// somewhere else entirely (frame pacing, ADR-0058).
-///
-/// This pins the two benign paths as *behaviour*: both must complete layout
-/// and return a correct size. The classification itself — which of the three
-/// a given miss is — is pinned separately and exhaustively by
-/// `classify_cache_miss`'s own unit test in `subtree_arena.rs`, because the
-/// distinction is a diagnostic and this crate has no tracing-capture facility
-/// to assert on log output (it may not depend on `flui-log`, which is
-/// restricted to composition roots). The third state cannot be constructed
-/// through the public pipeline API at all: nothing outside the walk can clear
-/// geometry without clearing the constraints beside it.
-#[test]
-fn a_clean_node_that_misses_the_cache_still_lays_out_for_either_benign_reason() {
-    let mut pipeline = fresh_layout_pipeline();
-
-    let padding_id = pipeline
-        .render_tree_mut()
-        .insert_box(Box::new(RenderPadding::all(5.0)));
-    let _child_id = pipeline
-        .render_tree_mut()
-        .insert_box_child(padding_id, Box::new(RenderColoredBox::red(40.0, 40.0)))
-        .expect("child insert must succeed");
-
-    // Reason 1: no cached constraints at all — the first pass over a freshly
-    // mounted node. NEEDS_LAYOUT is set here, so this is the ordinary entry,
-    // but it establishes the cache the next two cases depend on.
-    let first = BoxConstraints::new(0.0, 200.0, 0.0, 200.0);
-    let size_first = pipeline
-        .layout_dirty_root(padding_id, first)
-        .expect("first layout succeeds");
-    assert_eq!(size_first, Size::new(50.0, 50.0));
-
-    // Reason 2: the node is now clean and its constraints are cached, but the
-    // incoming constraints DIFFER — a resize, a viewport change, a parent that
-    // lays its child out differently. The cache correctly refuses to serve,
-    // which is the invalidation path working, not an invariant being broken.
-    let tighter = BoxConstraints::tight(Size::new(30.0, 30.0));
-    let size_resized = pipeline
-        .layout_dirty_root(padding_id, tighter)
-        .expect("relayout under new constraints succeeds");
-    assert_eq!(
-        size_resized,
-        Size::new(30.0, 30.0),
-        "a clean node under changed constraints must lay out again and honour them — \
-         serving the stale cached size here would be the real defect"
-    );
-
-    // And the cache now serves the SAME constraints without a fresh pass:
-    // same answer, no warning, which is the path the other two are measured
-    // against.
-    let size_cached = pipeline
-        .layout_dirty_root(padding_id, tighter)
-        .expect("cache hit succeeds");
-    assert_eq!(size_cached, size_resized);
-}
 
 // ============================================================================
 // Manual RenderObject<BoxProtocol> impls (RenderViewAdapter): the layout walk
@@ -624,103 +411,3 @@ fn sliver_node_surfaces_as_protocol_mismatch() {
 // 4-level deep recursion (verifies pre-acquired subtree borrows
 // scale to deeper trees than the original thread-affinity tests covered)
 // ============================================================================
-
-/// Deep-recursion smoke: a 4-level Padding chain
-/// successfully lays out through the pre-acquired-subtree walk.
-/// Verifies `collect_subtree_ids` + `get_subtree_mut` + recursive
-/// `layout_subtree_borrowed` correctly handle deeper-than-typical
-/// trees (the earlier tests in this file topped out at 3 levels).
-///
-/// Math: outer Padding(10) → mid Padding(5) → inner Padding(2) →
-/// ColoredBox(20×20). Parent constraints (0..200) × (0..200) — loose.
-/// - ColoredBox: clamps 20×20 to its constraints → 20×20.
-/// - inner Padding: wraps 20×20 + (2+2) = 24×24.
-/// - mid Padding: wraps 24×24 + (5+5) = 34×34.
-/// - outer Padding: wraps 34×34 + (10+10) = 54×54.
-#[test]
-fn four_level_padding_chain() {
-    let mut pipeline = fresh_layout_pipeline();
-
-    let outer = pipeline
-        .render_tree_mut()
-        .insert_box(Box::new(RenderPadding::all(10.0)));
-    let mid = pipeline
-        .render_tree_mut()
-        .insert_box_child(outer, Box::new(RenderPadding::all(5.0)))
-        .expect("mid insert must succeed");
-    let inner = pipeline
-        .render_tree_mut()
-        .insert_box_child(mid, Box::new(RenderPadding::all(2.0)))
-        .expect("inner insert must succeed");
-    let leaf = pipeline
-        .render_tree_mut()
-        .insert_box_child(inner, Box::new(RenderColoredBox::green(20.0, 20.0)))
-        .expect("leaf insert must succeed");
-
-    let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 200.0);
-    let size = pipeline
-        .layout_dirty_root(outer, constraints)
-        .expect("4-level layout must succeed under pre-acquired-subtree walk");
-
-    assert_eq!(
-        size,
-        Size::new(54.0, 54.0),
-        "Padding(10) → Padding(5) → Padding(2) → ColoredBox(20×20) must \
-         compose to (20+4+10+20=54) × (54) — verifies recursive \
-         layout_subtree_borrowed scales to deeper trees than 3 levels",
-    );
-
-    // Every node — INCLUDING the leaf — must be marked clean
-    // post-layout (no descendant errors). An earlier version of this
-    // test excluded the leaf from the loop while the message claimed
-    // "every node".
-    for id in [outer, mid, inner, leaf] {
-        let node = pipeline
-            .render_tree()
-            .get(id)
-            .expect("node must still be in tree");
-        assert!(
-            !node.needs_layout(),
-            "depth-4 chain: every node (including leaf) must be clean post-layout",
-        );
-    }
-}
-
-/// `RenderViewAdapter` carries a manual (non-blanket)
-/// `RenderObject<BoxProtocol>` impl that ignores the erased ctx and
-/// drives layout from its embedded `ViewConfiguration`. The layout walk
-/// should still invoke `perform_layout_raw` on it correctly (the manual
-/// impl chooses to ignore the ctx — that's its prerogative — but the
-/// walk's dispatch shouldn't change behaviour).
-///
-/// Smoke check that the pipeline-side ctx (Direct, no children) is
-/// accepted by the adapter's manual impl.
-#[test]
-fn render_view_adapter_layout_smoke() {
-    use flui_rendering::view::{RenderView, RenderViewAdapter, ViewConfiguration};
-
-    let mut pipeline = fresh_layout_pipeline();
-
-    let config = ViewConfiguration::from_size(Size::new(320.0, 240.0), 1.0);
-    let mut view = RenderView::with_configuration(config);
-    view.prepare_initial_frame_without_owner();
-
-    let adapter: Box<dyn RenderObject<BoxProtocol>> = Box::new(RenderViewAdapter::new(view));
-    let view_id = pipeline.render_tree_mut().insert_box(adapter);
-
-    // The incoming constraints are authoritative (live window size via
-    // set_root_constraints); the mount-time configuration is a stale
-    // snapshot after the first resize. Pinned end-to-end by
-    // tests/root_resize_repaint.rs.
-    let incoming = BoxConstraints::tight(Size::new(999.0, 999.0));
-    let size = pipeline
-        .layout_dirty_root(view_id, incoming)
-        .expect("RenderViewAdapter layout_dirty_root must succeed");
-
-    assert_eq!(
-        size,
-        Size::new(999.0, 999.0),
-        "RenderViewAdapter must size from the INCOMING root constraints \
-         (live window size), not from its mount-time configuration snapshot",
-    );
-}

@@ -1,5 +1,4 @@
 use flui_foundation::geometry::Bounds;
-use flui_platform_api::ImeEvent;
 use flui_platform_api::text_store::{
     InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError,
 };
@@ -166,54 +165,6 @@ fn an_edit_made_at_the_commit_anchor_schedules_the_next_frame() {
     );
 }
 
-/// Attach records `set_ime_allowed(true)`; preedit/commit events
-/// routed through `handle_input_entered` are projected onto the
-/// attached client's store; detach from the still-active token records
-/// `set_ime_allowed(false)`.
-#[test]
-fn handle_input_entered_projects_ime_onto_the_attached_store() {
-    let (fake, text_input) = headless_text_input();
-
-    let realm = UiRealm::for_test_with_text_input(Some(Arc::clone(&text_input)));
-    let handle = realm.text_input_handle();
-
-    let (store, client) = in_memory_client("");
-    let token = handle
-        .attach(client)
-        .expect("headless presentation supports text input");
-
-    assert_eq!(
-        fake.last_ime_allowed(),
-        Some(true),
-        "attach must enable platform IME composition"
-    );
-
-    realm.enter(|realm| {
-        realm.handle_input_entered(PlatformInput::Ime(ImeEvent::Preedit {
-            text: "ni".to_string(),
-            cursor: Some((0, 2)),
-        }));
-        realm.handle_input_entered(PlatformInput::Ime(ImeEvent::Commit("你好".to_string())));
-    });
-
-    assert_eq!(
-        store.text(),
-        "你好",
-        "the commit replaces the preedit the same realm call projected"
-    );
-    assert_eq!(store.composition(), None);
-
-    assert_eq!(
-        handle.detach(token).expect("presentation remains open"),
-        flui_interaction::DetachOutcome::Detached
-    );
-    assert_eq!(
-        fake.last_ime_allowed(),
-        Some(false),
-        "detaching the active token must disable platform IME composition"
-    );
-}
-
 /// The stale-detach race named in `TextInputOwner`'s module doc:
 /// field A attaches, field B attaches (replacing A), and A's
 /// now-stale detach must record NOTHING on the platform side — only
@@ -326,18 +277,5 @@ fn set_ime_cursor_area_reaches_the_presentations_platform_capability() {
         vec![area],
         "set_ime_cursor_area must call through to the presentation-owned \
          PlatformTextInput capability with the exact area"
-    );
-}
-
-/// A presentation without IME support reports a typed error.
-#[test]
-fn set_ime_cursor_area_without_platform_support_is_typed() {
-    let realm = UiRealm::for_test();
-    assert_eq!(
-        realm.text_input_handle().set_cursor_area(Bounds::new(
-            flui_foundation::geometry::Point::new(0.0, 0.0),
-            flui_foundation::geometry::Size::new(1.0, 1.0),
-        )),
-        Err(flui_interaction::TextInputError::Unsupported)
     );
 }

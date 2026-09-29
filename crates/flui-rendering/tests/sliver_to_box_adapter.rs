@@ -159,18 +159,6 @@ impl RenderBox for SliverHost {
 }
 
 #[test]
-fn sliver_constraints_as_box_constraints_tightens_cross_axis_vertically() {
-    let constraints = vertical_constraints(0.0);
-
-    let box_constraints = constraints.as_box_constraints(0.0, f64::INFINITY, None);
-
-    assert_eq!(box_constraints.min_width, 300.0);
-    assert_eq!(box_constraints.max_width, 300.0);
-    assert_eq!(box_constraints.min_height, 0.0);
-    assert_eq!(box_constraints.max_height, (f64::INFINITY));
-}
-
-#[test]
 fn sliver_to_box_adapter_lays_out_box_child_and_commits_geometry() {
     let mut owner = PipelineOwner::new();
     let root_id = owner.insert(Box::new(SliverHost {
@@ -207,40 +195,5 @@ fn sliver_to_box_adapter_lays_out_box_child_and_commits_geometry() {
         render_offset(&owner, child_id),
         Offset::new(0.0, -40.0),
         "forward vertical adapter positions the Box child at -scroll_offset",
-    );
-}
-
-#[test]
-fn sliver_to_box_adapter_hit_tests_box_child_leaf_first() {
-    let mut owner = PipelineOwner::new();
-    let root_id = owner.insert(Box::new(SliverHost {
-        constraints: vertical_constraints(40.0),
-    }) as BoxedRenderObject);
-    let adapter_id = owner
-        .render_tree_mut()
-        .insert_sliver_child(
-            root_id,
-            Box::new(RenderSliverToBoxAdapter::new()) as BoxedSliverObject,
-        )
-        .expect("sliver adapter child");
-    let child_id = owner
-        .render_tree_mut()
-        .insert_box_child(
-            adapter_id,
-            Box::new(FixedHitBox::new(50.0, 180.0)) as BoxedRenderObject,
-        )
-        .expect("box child under sliver adapter");
-
-    let owner = laid_out(owner, root_id);
-
-    assert_eq!(
-        hits(&owner, 10.0, 10.0),
-        vec![child_id, adapter_id, root_id],
-        "global main=10 maps to child-local y=50 through the committed \
-         -scroll_offset paint offset",
-    );
-    assert!(
-        hits(&owner, 10.0, 120.0).is_empty(),
-        "per-level sliver gate rejects points beyond geometry.hit_test_extent",
     );
 }

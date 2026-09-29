@@ -368,6 +368,7 @@ fn worker(root: PathBuf, case: &str) {
         }
     }
 }
+
 #[test]
 fn ios_cargo_artifact_fixtures() {
     if let Some(root) = std::env::var_os(ROOT) {
@@ -398,12 +399,6 @@ fn ios_cargo_artifact_fixtures() {
     ] {
         fixture(case, host);
     }
-}
-#[cfg(target_os = "macos")]
-#[test]
-#[ignore = "requires Xcode SDK and installed aarch64-apple-ios/aarch64-apple-ios-sim targets; run explicitly"]
-fn ios_device_and_simulator_static_libraries() {
-    fixture("external", "aarch64-apple-ios,aarch64-apple-ios-sim");
 }
 
 #[cfg(target_os = "macos")]

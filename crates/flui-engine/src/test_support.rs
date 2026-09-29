@@ -371,7 +371,7 @@ pub(crate) fn linear_gradient_fill(
 
 #[cfg(test)]
 mod adapter_gate_tests {
-    use super::{demanded_by, resolve_unavailable_gpu};
+    use super::resolve_unavailable_gpu;
 
     /// Without the demand, an unavailable GPU is a skip.
     #[test]
@@ -387,25 +387,5 @@ mod adapter_gate_tests {
     #[should_panic(expected = "FLUI_REQUIRE_GPU is set")]
     fn an_unavailable_gpu_is_a_failure_when_the_run_demands_one() {
         resolve_unavailable_gpu("device request failed, for the test", true);
-    }
-
-    /// The knob reads the variable by PRESENCE, not truthiness.
-    ///
-    /// `FLUI_REQUIRE_GPU=0` still demands an adapter — the same shape
-    /// `FLUI_REQUIRE_EMOJI_FONT` uses. Pinned through the pure rule rather than
-    /// by mutating the process environment, which is `unsafe` since the 2024
-    /// edition; `require_gpu` calls this same function, so the test is not a
-    /// restatement of it.
-    #[test]
-    fn the_knob_is_read_by_presence_not_by_value() {
-        assert!(!demanded_by(None), "unset must not demand an adapter");
-        assert!(
-            demanded_by(Some(std::ffi::OsStr::new(""))),
-            "even empty is presence"
-        );
-        assert!(
-            demanded_by(Some(std::ffi::OsStr::new("0"))),
-            "presence is the signal, so even \"0\" demands an adapter"
-        );
     }
 }

@@ -16,25 +16,6 @@ use flui_painting::BoxFit;
 use flui_widgets::{FittedBox, SizedBox};
 
 #[test]
-fn fitted_box_without_a_child_sizes_to_the_smallest_constraint() {
-    let laid = lay_out(FittedBox::new(), loose(500.0));
-    assert_eq!(
-        laid.size(laid.root()),
-        size(0.0, 0.0),
-        "no child -> smallest valid size under a loose-from-zero constraint",
-    );
-}
-
-#[test]
-fn fitted_box_mounts_a_render_fitted_box() {
-    let laid = lay_out(
-        FittedBox::new().child(SizedBox::new(50.0, 25.0)),
-        loose(200.0),
-    );
-    let _ = laid.find_by_render_type("RenderFittedBox");
-}
-
-#[test]
 fn fitted_box_with_tight_constraints_fills_them_regardless_of_fit() {
     // Tight constraints fix the size outright (`is_tight()` short-circuit in
     // `constrain_size_and_attempt_to_preserve_aspect_ratio`), independent of

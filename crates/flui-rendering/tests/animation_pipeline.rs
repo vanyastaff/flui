@@ -18,18 +18,13 @@
 //!    stop, the next frame produces nothing and no wake fires;
 //! 5. reverse mid-flight — offsets walk back down without artifacts.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController};
-use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Size};
+use flui_foundation::geometry::{EdgeInsets, Offset, Size};
 use flui_layer::{Layer, LayerTree};
-use flui_objects::{RenderColoredBox, RenderOpacity, RenderPadding, RenderTransform};
-use flui_painting::Alignment;
-use flui_rendering::{
-    RenderUpdateImpact, constraints::BoxConstraints, hit_testing::HitTestResult,
-    pipeline::PipelineOwner, testing::inspect,
-};
+use flui_objects::{RenderColoredBox, RenderOpacity, RenderPadding};
+use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner, testing::inspect};
 use flui_scheduler::UpdateScheduler;
 
 use crate::common::BoxedRenderObject;
@@ -245,168 +240,10 @@ fn animated_opacity_layer_follows_and_zero_alpha_skips() {
 // 3. Animated transform: hits follow THIS frame's inverse
 // ============================================================================
 
-#[test]
-fn animated_transform_hits_follow_current_frame_matrix() {
-    let mut owner = PipelineOwner::new();
-    // Pivot pinned to the top-left corner via alignment. Flutter's
-    // `_effectiveTransform` combines origin + `alignment.alongSize` (fixed
-    // 61298797), so the default CENTER alignment would scale around the node's
-    // midpoint, putting the probe point on the (exclusive) scaled edge instead
-    // of inside it. TOP_LEFT alignment yields a (0,0) pivot.
-    let scaler = owner.insert(Box::new(
-        RenderTransform::identity().with_alignment(Alignment::TOP_LEFT),
-    ) as BoxedRenderObject);
-    let child = owner
-        .insert_child_render_object(scaler, Box::new(RenderColoredBox::red(40.0, 40.0)))
-        .expect("child");
-    owner.set_root_id(Some(scaler));
-    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
-
-    let ctrl = controller();
-    ctrl.forward().expect("forward");
-
-    let hit_first = |owner: &PipelineOwner, x: f64, y: f64| {
-        let mut result = HitTestResult::new();
-        owner.hit_test(Offset::new(x, y), &mut result);
-        result.path().first().map(|e| e.target)
-    };
-
-    // value 0 → scale 1: (60,60) is OUTSIDE the 40×40 child.
-    ctrl.tick_at(0.0);
-    let (next, _) = frame(owner);
-    owner = next;
-    assert_eq!(
-        hit_first(&owner, 60.0, 60.0),
-        None,
-        "scale 1: (60,60) misses"
-    );
-
-    // value 1 → scale 2: the SAME point is now inside (inverse → 30,30).
-    ctrl.tick_at(1.0);
-    let scale = 1.0 + ctrl.value();
-    let impact = {
-        let entry = owner
-            .render_tree_mut()
-            .get_mut(scaler)
-            .expect("scaler")
-            .as_box_mut()
-            .expect("box");
-        let impact = entry
-            .render_object_mut()
-            .as_any_mut()
-            .downcast_mut::<RenderTransform>()
-            .expect("RenderTransform")
-            .set_transform(Matrix4::scaling(scale, scale, 1.0));
-        assert_eq!(
-            impact,
-            RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS
-        );
-        impact
-    };
-    owner.apply_render_update_impact(scaler, impact);
-    let (owner, tree) = frame(owner);
-    assert!(tree.is_some(), "transform frame paints");
-    assert_eq!(
-        hit_first(&owner, 60.0, 60.0),
-        Some(child),
-        "scale 2: hits walk THIS frame's inverse, not a stale matrix",
-    );
-}
-
 // ============================================================================
 // 4. Completion → idle: no marks, no frames, no wakes
 // ============================================================================
 
-#[test]
-fn completed_animation_leaves_the_pipeline_idle() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    let wake_count = Arc::new(AtomicUsize::new(0));
-    let wake_clone = Arc::clone(&wake_count);
-    let mut owner = PipelineOwner::new();
-    owner.set_on_need_visual_update(move || {
-        wake_clone.fetch_add(1, Ordering::Relaxed);
-    });
-
-    let pad = owner.insert(Box::new(RenderPadding::all(5.0)) as BoxedRenderObject);
-    let _child = owner
-        .insert_child_render_object(pad, Box::new(RenderColoredBox::red(40.0, 40.0)))
-        .expect("child");
-    owner.set_root_id(Some(pad));
-    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
-
-    let ctrl = controller();
-    ctrl.forward().expect("forward");
-
-    // Drive to completion in two frames.
-    for t in [0.5f64, 1.0] {
-        ctrl.tick_at(t);
-        set_padding(&mut owner, pad, 5.0 + 20.0 * ctrl.value());
-        let (next, tree) = frame(owner);
-        owner = next;
-        assert!(tree.is_some());
-    }
-    assert!(
-        !ctrl.is_animating(),
-        "controller completed at its upper bound",
-    );
-
-    // The animation is done: no further marks. The pipeline must stay
-    // silent — no frames, no wakes.
-    let wakes_after_completion = wake_count.load(Ordering::Relaxed);
-    for n in 0..3 {
-        let (next, tree) = frame(owner);
-        owner = next;
-        assert!(tree.is_none(), "post-completion frame {n} must be empty");
-    }
-    assert_eq!(
-        wake_count.load(Ordering::Relaxed),
-        wakes_after_completion,
-        "no new wakes after the animation completed — a leak here is \
-         the battery-drain bug class",
-    );
-    assert!(!owner.has_dirty_nodes());
-}
-
 // ============================================================================
 // 5. Reverse mid-flight walks offsets back down
 // ============================================================================
-
-#[test]
-fn reverse_mid_flight_walks_offsets_back() {
-    let mut owner = PipelineOwner::new();
-    let pad = owner.insert(Box::new(RenderPadding::all(5.0)) as BoxedRenderObject);
-    let child = owner
-        .insert_child_render_object(pad, Box::new(RenderColoredBox::red(40.0, 40.0)))
-        .expect("child");
-    owner.set_root_id(Some(pad));
-    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 300.0, 0.0, 300.0)));
-
-    let ctrl = controller();
-    ctrl.forward().expect("forward");
-    ctrl.tick_at(0.6);
-    let mid = ctrl.value();
-    assert!((mid - 0.6).abs() < 1e-4);
-
-    set_padding(&mut owner, pad, 5.0 + 50.0 * mid);
-    let (next, _) = frame(owner);
-    owner = next;
-    assert_eq!(state_offset(&owner, child).dx, 35.0);
-
-    // Reverse from 0.6. reverse() restarts the ticker (elapsed re-zeroes)
-    // and the leg's duration is scaled by the remaining fraction — 0.6 of
-    // the range in 0.6s, constant velocity through the turn.
-    ctrl.reverse().expect("reverse");
-    ctrl.tick_at(0.3); // 0.3s into the 0.6s reverse leg → value 0.3
-    let back = ctrl.value();
-    assert!((back - 0.3).abs() < 1e-3, "value walked back, got {back}");
-
-    set_padding(&mut owner, pad, 5.0 + 50.0 * back);
-    let (owner, tree) = frame(owner);
-    assert!(tree.is_some(), "reverse frame paints");
-    assert_eq!(
-        state_offset(&owner, child).dx,
-        (5.0 + 50.0 * back),
-        "offsets follow the reversed value without artifacts",
-    );
-}

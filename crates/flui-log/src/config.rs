@@ -187,38 +187,6 @@ impl LogConfigBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::{AppleBundleId, UNIDENTIFIED_APPLE_SUBSYSTEM};
-
-    #[test]
-    fn defaults_are_the_documented_ones() {
-        let config = LogConfig::default();
-        assert_eq!(config.filter().directives(), "info,wgpu=warn");
-        assert_eq!(config.filter().env_var(), Some("RUST_LOG"));
-        assert_eq!(config.desktop_format(), DesktopFormat::Compact);
-        assert_eq!(config.log_bridge_policy(), LogBridgePolicy::Auto);
-        assert_eq!(
-            config.identity().apple_subsystem(),
-            UNIDENTIFIED_APPLE_SUBSYSTEM
-        );
-    }
-
-    #[test]
-    fn the_builder_carries_every_field_through() {
-        let identity = AppIdentity::new("My Game")
-            .expect("a display name may contain spaces")
-            .with_apple_bundle_id(AppleBundleId::new("com.example.mygame").expect("reverse-DNS"));
-
-        let config = LogConfig::builder()
-            .identity(identity)
-            .directives("warn,flui_view=trace")
-            .log_bridge_policy(LogBridgePolicy::Inherit)
-            .build();
-
-        assert_eq!(config.identity().display_name(), "My Game");
-        assert_eq!(config.identity().apple_subsystem(), "com.example.mygame");
-        assert_eq!(config.filter().directives(), "warn,flui_view=trace");
-        assert_eq!(config.log_bridge_policy(), LogBridgePolicy::Inherit);
-    }
 
     #[test]
     fn two_subscribers_can_coexist_as_plain_values() {

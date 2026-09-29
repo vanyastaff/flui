@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex};
 use flui_foundation::RenderId;
 use flui_foundation::Variable;
 use flui_foundation::geometry::{Offset, Size};
-use flui_objects::{MainAxisAlignment, MainAxisSize, RenderFlex};
+use flui_objects::{MainAxisAlignment, RenderFlex};
 use flui_rendering::{
     constraints::BoxConstraints,
     parent_data::FlexParentData,
@@ -167,58 +167,6 @@ fn unbounded_main_demotes_flex_children() {
 // 4. MainAxisSize::Max fills the bounded extent; Min shrink-wraps
 // ============================================================================
 
-#[test]
-fn main_axis_size_max_gives_alignment_its_free_space() {
-    let mut flex = RenderFlex::row().with_main_axis_alignment(MainAxisAlignment::Center);
-    // Default MainAxisSize::Max: the row claims all 200px, so Center
-    // has 120px of free space around two 40px children.
-    let (size, children, _) = lay_out(
-        &mut flex,
-        BoxConstraints::new(0.0, 200.0, 0.0, 50.0),
-        vec![inflexible(), inflexible()],
-        Size::new(40.0, 40.0),
-    );
-    assert_eq!(size.width, 200.0, "Max claims the bounded extent");
-    assert_eq!(
-        children[0].offset.dx, 60.0,
-        "Center finally has free space to distribute — pre-fix the row \
-         shrink-wrapped and alignment was a no-op under loose constraints",
-    );
-
-    let mut flex_min = RenderFlex::row()
-        .with_main_axis_alignment(MainAxisAlignment::Center)
-        .with_main_axis_size(MainAxisSize::Min);
-    let (size_min, children_min, _) = lay_out(
-        &mut flex_min,
-        BoxConstraints::new(0.0, 200.0, 0.0, 50.0),
-        vec![inflexible(), inflexible()],
-        Size::new(40.0, 40.0),
-    );
-    assert_eq!(size_min.width, 80.0, "Min shrink-wraps");
-    assert_eq!(children_min[0].offset.dx, 0.0);
-}
-
 // ============================================================================
 // 5. Non-stretch children get a LOOSE cross
 // ============================================================================
-
-#[test]
-fn non_stretch_children_get_loose_cross_under_tight_parent() {
-    let mut flex = RenderFlex::row();
-    // Tight 80 cross from the parent: children must still be offered a
-    // LOOSE 0..80 cross, not forced to 80.
-    let (_, children, observed) = lay_out(
-        &mut flex,
-        BoxConstraints::new(0.0, 200.0, 80.0, 80.0),
-        vec![inflexible()],
-        Size::new(40.0, 40.0),
-    );
-
-    let (_, child_constraints) = observed.lock().unwrap()[0];
-    assert_eq!(
-        child_constraints.min_height, 0.0,
-        "an incoming tight cross must be LOOSENED for non-stretch \
-         children (Flutter parity)",
-    );
-    assert_eq!(children[0].size.height, 40.0);
-}

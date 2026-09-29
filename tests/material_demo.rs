@@ -30,11 +30,11 @@ mod tree;
 
 use std::cell::Cell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Offset, Size};
-use flui_interaction::events::{PointerType, make_down_event, make_move_event, make_up_event};
+use flui_interaction::events::{PointerType, make_down_event, make_up_event};
 use flui_material::back_button::back_arrow_icon_data;
 use flui_material::{Theme, ThemeData};
 use flui_rendering::constraints::BoxConstraints;
@@ -185,29 +185,6 @@ impl MountedDemo {
         );
     }
 
-    /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-down,
-    /// advancing the gesture clock first so the drag recognizer's first
-    /// velocity-tracker sample gets a fresh timestamp (see
-    /// [`advance_gesture_clock`]).
-    fn drag_down(&self, x: f64, y: f64) {
-        advance_gesture_clock();
-        self.dispatch_pointer(make_down_event(offset(x, y), PointerType::Mouse));
-    }
-
-    /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-move,
-    /// advancing the gesture clock first (see [`advance_gesture_clock`]).
-    fn drag_move(&self, x: f64, y: f64) {
-        advance_gesture_clock();
-        self.dispatch_pointer(make_move_event(offset(x, y), PointerType::Mouse));
-    }
-
-    /// Hit-test at root-local `(x, y)` and dispatch a synthetic pointer-up —
-    /// pairs with [`drag_down`](Self::drag_down)/[`drag_move`](Self::drag_move)
-    /// to complete a drag gesture.
-    fn drag_up(&self, x: f64, y: f64) {
-        self.dispatch_pointer(make_up_event(offset(x, y), PointerType::Mouse));
-    }
-
     /// The unique `RenderParagraph` node whose plain-text content is `text`.
     fn find_text(&self, text: &str) -> Option<RenderId> {
         self.pipeline_owner.with(|owner| {
@@ -303,24 +280,6 @@ impl MountedDemo {
             .expect("render node should have box geometry after layout")
     }
 
-    /// The nearest node at or above `id` whose laid-out box equals `size`.
-    ///
-    /// Text is useful for locating a component semantically, but its render
-    /// paragraph sits inside the component's centered content. Walking to the
-    /// enclosing box lets geometry assertions target the component itself.
-    fn nearest_ancestor_with_size(&self, id: RenderId, size: Size) -> Option<RenderId> {
-        self.pipeline_owner.with(|owner| {
-            let render_tree = owner.render_tree();
-            let mut current = id;
-            loop {
-                if inspect::box_geometry(owner, current) == Some(size) {
-                    return Some(current);
-                }
-                current = render_tree.parent(current)?;
-            }
-        })
-    }
-
     /// The screen-space (root-local) top-left of `id`, by summing paint
     /// offsets up the render-tree ancestry — every node between the root and
     /// `id` in this tree only translates (no scale/rotation), so a plain sum
@@ -352,23 +311,6 @@ fn offset(x: f64, y: f64) -> Offset {
     Offset::new(x, y)
 }
 
-/// Spin until `Instant::now()` returns a value strictly greater than the one
-/// returned by the immediately preceding call.
-///
-/// Mirrors `tests/vertical_slice_demo.rs`'s identical helper (unreachable
-/// from here — see the module doc). `DragGestureRecognizer::handle_move`
-/// timestamps every velocity-tracker sample with `Instant::now()`; two
-/// dispatches landing in the same OS timer tick make the least-squares
-/// velocity fit singular (NaN). Calling this before each down/move dispatch
-/// that should count toward velocity guarantees consecutive samples get
-/// strictly increasing timestamps.
-fn advance_gesture_clock() {
-    let t0 = Instant::now();
-    while Instant::now() == t0 {
-        std::hint::spin_loop();
-    }
-}
-
 /// The app bar action's glyph text, computed from the same [`tree::settings_icon_data`]
 /// the mounted tree itself draws — so this test locates the real rendered
 /// node rather than guessing its position.
@@ -376,14 +318,6 @@ fn settings_glyph_text() -> String {
     tree::settings_icon_data()
         .code_point_string()
         .expect("the settings glyph's codepoint must be a valid Unicode scalar value")
-}
-
-/// The app bar action's glyph text for [`tree::tabs_icon_data`] — same
-/// reasoning as [`settings_glyph_text`].
-fn tabs_glyph_text() -> String {
-    tree::tabs_icon_data()
-        .code_point_string()
-        .expect("the tabs glyph's codepoint must be a valid Unicode scalar value")
 }
 
 /// The implied `BackButton`'s glyph text, computed from
@@ -424,108 +358,10 @@ fn push_form_route(demo: &mut MountedDemo) {
 // (1) Scaffold slots present: AppBar at the top, FAB at the endFloat position
 // ============================================================================
 
-#[test]
-fn scaffold_mounts_with_app_bar_at_top_and_fab_at_the_end_float_position() {
-    let demo = MountedDemo::mount();
-
-    let title = demo
-        .find_text(tree::APP_TITLE)
-        .expect("the app bar's title must render");
-    let title_position = demo.absolute_position(title);
-    assert!(
-        title_position.dy < flui_material::app_bar::DEFAULT_TOOLBAR_HEIGHT,
-        "the app bar's title must sit within the toolbar's own height band, got y={}",
-        title_position.dy,
-    );
-
-    let fab_glyph = demo
-        .find_text(tree::FAB_LABEL)
-        .expect("the FAB's '+' label must render");
-    let fab_size = Size::new(
-        flui_material::floating_action_button::FAB_SIZE,
-        flui_material::floating_action_button::FAB_SIZE,
-    );
-    let fab = demo
-        .nearest_ancestor_with_size(fab_glyph, fab_size)
-        .expect("the FAB label must be centered inside its 56×56 button box");
-    let fab_position = demo.absolute_position(fab);
-
-    // `FloatingActionButtonLocation.endFloat`: 16px from the trailing and
-    // bottom edges (`scaffold.rs`'s `FLOATING_ACTION_BUTTON_MARGIN`), with no
-    // `MediaQuery` padding/view-insets in this mount (`MediaQueryData::default()`)
-    // — see `scaffold.rs`'s `ScaffoldLayoutDelegate::perform_layout` for the
-    // exact formula this pins.
-    const FAB_MARGIN: f64 = 16.0;
-    let expected_x = ROOT_WIDTH - FAB_MARGIN - (flui_material::floating_action_button::FAB_SIZE);
-    let expected_y = ROOT_HEIGHT - FAB_MARGIN - (flui_material::floating_action_button::FAB_SIZE);
-    assert!(
-        (fab_position.dx - expected_x).abs() < 1.0,
-        "the FAB must float {FAB_MARGIN}px from the trailing edge, expected x={expected_x}, got \
-         x={}",
-        fab_position.dx,
-    );
-    assert!(
-        (fab_position.dy - expected_y).abs() < 1.0,
-        "the FAB must float {FAB_MARGIN}px from the bottom edge, expected y={expected_y}, got \
-         y={}",
-        fab_position.dy,
-    );
-}
-
 // ============================================================================
 // (2) Tapping the FAB opens the dialog; the page beneath becomes
 //     un-hit-testable while the dialog's barrier covers it
 // ============================================================================
-
-#[test]
-fn tapping_the_fab_opens_the_dialog_and_hides_the_page_beneath_from_hit_testing() {
-    let mut demo = MountedDemo::mount();
-
-    // Capture the settings action's position BEFORE the dialog covers it —
-    // the home route stays mounted, laid out, and painted underneath a
-    // `PopupRoute` (`opaque: false`), so its last committed geometry is
-    // exactly what a real finger would still see baked into the (now stale,
-    // un-hit-testable) screen.
-    let settings_glyph = settings_glyph_text();
-    let settings_button = demo
-        .find_text(&settings_glyph)
-        .expect("the app bar's settings action must render before the dialog opens");
-    let settings_position = demo.absolute_position(settings_button);
-
-    let fab = demo
-        .find_text(tree::FAB_LABEL)
-        .expect("the FAB must render");
-    demo.tap_node(fab);
-    demo.pump(Duration::ZERO);
-
-    assert!(
-        demo.find_text(tree::ADD_DIALOG_TITLE).is_some(),
-        "the AlertDialog's title must render once the FAB opens it"
-    );
-    assert!(
-        demo.find_text(tree::CANCEL_LABEL).is_some() && demo.find_text(tree::ADD_LABEL).is_some(),
-        "the dialog's Cancel/Add actions must render"
-    );
-
-    // A tap at the settings action's old screen position must not reach it:
-    // `show_dialog`'s barrier sits on top of the whole screen and is
-    // `barrier_dismissible: true`, so the tap is consumed by the barrier
-    // itself (popping the dialog) rather than falling through to the covered
-    // home route beneath it — proof the home route is genuinely
-    // un-hit-testable, not merely that this one tap happened to miss it.
-    demo.tap(settings_position.dx + 1.0, settings_position.dy + 1.0);
-    demo.pump(Duration::ZERO);
-    assert!(
-        demo.find_text(tree::SETTINGS_ROUTE_TITLE).is_none(),
-        "a tap that lands on the covered home route's settings action must not reach it — the \
-         dialog's barrier must have absorbed it instead of pushing the settings route"
-    );
-    assert!(
-        demo.find_text(tree::ADD_DIALOG_TITLE).is_none(),
-        "the dismissible barrier itself must have popped the dialog on that tap, confirming the \
-         barrier (not the home route beneath it) is what caught the pointer"
-    );
-}
 
 // ============================================================================
 // (3) Dialog "Add" appends an item; the home route's state survives the
@@ -589,145 +425,13 @@ fn dialog_add_appends_an_item_and_preserves_home_state() {
 //      auto-dismisses after its own display duration
 // ============================================================================
 
-#[test]
-fn adding_an_item_shows_a_snack_bar_that_auto_dismisses() {
-    let mut demo = MountedDemo::mount();
-
-    let fab = demo
-        .find_text(tree::FAB_LABEL)
-        .expect("the FAB must render");
-    demo.tap_node(fab);
-    demo.pump(Duration::ZERO);
-    assert!(
-        demo.find_text(tree::ADD_DIALOG_TITLE).is_some(),
-        "the FAB must still open the Add-item dialog with the ScaffoldMessenger mounted above it"
-    );
-
-    let add_button = demo
-        .find_text(tree::ADD_LABEL)
-        .expect("the dialog's Add action must render");
-    demo.tap_node(add_button);
-    demo.pump(Duration::ZERO);
-
-    assert!(
-        demo.find_text(tree::ADD_DIALOG_TITLE).is_none(),
-        "the dialog must still close on Add"
-    );
-
-    // Pumped in small (one simulated frame each) steps rather than a few
-    // large jumps: the entrance -> display-timer -> exit sequence spawns a
-    // fresh controller mid-sequence (`ScaffoldMessengerHandle`'s display
-    // timer starts only once the entrance controller's own `Completed`
-    // status is observed), so a single huge `pump` would not give that
-    // freshly-registered controller its fair share of the elapsed time —
-    // matching `packages/flui-material/tests/snack_bar.rs`'s own
-    // frame-stepped `pump_ms` helper.
-    let frame = Duration::from_millis(16);
-    let pump_ms = |demo: &mut MountedDemo, millis: u64| {
-        let frames = (millis / frame.as_millis() as u64) + 2;
-        for _ in 0..frames {
-            demo.pump(frame);
-        }
-    };
-
-    // Carry the 250ms entrance past its end. (The snack bar's content
-    // mounts immediately, at `heightFactor: 0` — `find_text` sees it
-    // regardless of animated height, so the meaningful assertion is that
-    // it survives well past the entrance, not that it's absent before it.)
-    pump_ms(&mut demo, 250);
-    assert!(
-        demo.find_text(tree::SNACK_BAR_ADDED_MESSAGE).is_some(),
-        "the snack bar must be shown once its entrance animation completes"
-    );
-
-    // Comfortably before its 4s default display duration elapses: still shown.
-    pump_ms(&mut demo, 2000);
-    assert!(
-        demo.find_text(tree::SNACK_BAR_ADDED_MESSAGE).is_some(),
-        "the snack bar must still be visible well before its display duration elapses"
-    );
-
-    // Past the 4s display duration plus the 250ms exit reverse: gone.
-    pump_ms(&mut demo, 2500);
-    assert!(
-        demo.find_text(tree::SNACK_BAR_ADDED_MESSAGE).is_none(),
-        "the snack bar must have auto-dismissed once its display duration elapsed"
-    );
-}
-
 // ============================================================================
 // (4) Dialog "Cancel" dismisses without appending
 // ============================================================================
 
-#[test]
-fn dialog_cancel_dismisses_without_appending() {
-    let mut demo = MountedDemo::mount();
-
-    let fab = demo
-        .find_text(tree::FAB_LABEL)
-        .expect("the FAB must render");
-    demo.tap_node(fab);
-    demo.pump(Duration::ZERO);
-    assert!(demo.find_text(tree::ADD_DIALOG_TITLE).is_some());
-
-    let cancel_button = demo
-        .find_text(tree::CANCEL_LABEL)
-        .expect("the dialog's Cancel action must render");
-    demo.tap_node(cancel_button);
-    demo.pump(Duration::ZERO);
-
-    assert!(
-        demo.find_text(tree::ADD_DIALOG_TITLE).is_none(),
-        "the dialog must be gone once Cancel pops it"
-    );
-    assert!(
-        demo.find_text("Item 20").is_none(),
-        "Cancel must not append any item"
-    );
-    assert!(
-        demo.find_text("Item 0").is_some(),
-        "the original items must be untouched"
-    );
-}
-
 // ============================================================================
 // (5) Tapping a Card updates the selected-item display
 // ============================================================================
-
-#[test]
-fn tapping_a_card_updates_the_selected_item_display() {
-    let mut demo = MountedDemo::mount();
-
-    assert!(
-        demo.find_text("Selected: none").is_some(),
-        "no card is selected before any tap"
-    );
-
-    let item = demo
-        .find_text("Item 3")
-        .expect("the third card's label must render");
-    demo.tap_node(item);
-    demo.pump(Duration::ZERO);
-
-    assert!(
-        demo.find_text("Selected: none").is_none(),
-        "the stale 'Selected: none' text must be gone after the tap rebuilds it"
-    );
-    assert!(
-        demo.find_text("Selected: Item 3").is_some(),
-        "tapping 'Item 3' must update the selected-item display to name it"
-    );
-
-    // A second, different card keeps the display live — proves the home
-    // route's state survives across rebuilds rather than resetting.
-    let other_item = demo
-        .find_text("Item 7")
-        .expect("the seventh card's label must render");
-    demo.tap_node(other_item);
-    demo.pump(Duration::ZERO);
-    assert!(demo.find_text("Selected: Item 7").is_some());
-    assert!(demo.find_text("Selected: Item 3").is_none());
-}
 
 // ============================================================================
 // (6) The app bar action pushes route 2; the implied BackButton pops back
@@ -797,225 +501,9 @@ fn app_bar_action_pushes_settings_and_back_button_pops_with_home_state_intact() 
 // (7) Dragging inside the list scrolls it
 // ============================================================================
 
-/// Real per-move drag threshold for `GestureDetector`'s pan recognizer
-/// (`DragAxis::Free`) — see `tests/vertical_slice_demo.rs`'s identical
-/// constant/comment for why 18px (the touch default), not the mouse default,
-/// is the operative slop even though these events dispatch as
-/// `PointerType::Mouse`.
-const DRAG_SLOP: f64 = 18.0;
-
-#[test]
-fn dragging_inside_the_list_scrolls_its_items() {
-    let mut demo = MountedDemo::mount();
-
-    let item0 = demo
-        .find_text("Item 0")
-        .expect("the first card's label must render");
-    let offset_before = demo.absolute_position(item0);
-
-    // A drag anchor safely inside the list body: below the app bar (56px)
-    // and the "Selected: …" row, above the FAB.
-    let anchor_x = ROOT_WIDTH / 2.0;
-    let anchor_y = ROOT_HEIGHT / 2.0;
-
-    const SLOP_CROSSING_DELTA: f64 = DRAG_SLOP + 7.0; // 25.0, safely > 18.0
-    const UPDATE_DELTA_1: f64 = 20.0;
-    const UPDATE_DELTA_2: f64 = 25.0;
-    let expected_scroll_delta = UPDATE_DELTA_1 + UPDATE_DELTA_2;
-
-    demo.drag_down(anchor_x, anchor_y);
-    demo.drag_move(anchor_x, anchor_y - SLOP_CROSSING_DELTA);
-    demo.drag_move(anchor_x, anchor_y - SLOP_CROSSING_DELTA - UPDATE_DELTA_1);
-    demo.drag_move(
-        anchor_x,
-        anchor_y - SLOP_CROSSING_DELTA - UPDATE_DELTA_1 - UPDATE_DELTA_2,
-    );
-    demo.drag_up(
-        anchor_x,
-        anchor_y - SLOP_CROSSING_DELTA - UPDATE_DELTA_1 - UPDATE_DELTA_2,
-    );
-    demo.pump(Duration::ZERO);
-
-    let offset_after = demo.absolute_position(item0);
-    // A `Viewport` translates its sliver content by `-offset` along the
-    // scroll axis, so an increasing offset must move content UP (a smaller
-    // `dy`) — matching `Scrollable`'s own pan-update wiring and
-    // `tests/vertical_slice_demo.rs`'s identical list-drag test.
-    let moved_up_by = offset_before.dy - offset_after.dy;
-
-    assert!(
-        (moved_up_by - expected_scroll_delta).abs() < 1.0,
-        "dragging up {expected_scroll_delta}px worth of post-slop deltas must move item 0's \
-         paint position up by the same amount (the slop-crossing move's delta is swallowed): \
-         before={offset_before:?}, after={offset_after:?}, moved_up_by={moved_up_by}"
-    );
-}
-
 // ============================================================================
 // (8) Tabs route — TabBarView + AppBar.bottom
 // ============================================================================
-
-/// Pushes [`tree::tabs_route`] from the home route's app bar action and
-/// returns once the tabs route's title has rendered — the shared setup
-/// every test below starts from.
-fn push_tabs_route(demo: &mut MountedDemo) {
-    let tabs_glyph = tabs_glyph_text();
-    let tabs_button = demo
-        .find_text(&tabs_glyph)
-        .expect("the app bar's tabs action must render");
-    demo.tap_node(tabs_button);
-    demo.pump(Duration::ZERO);
-
-    assert!(
-        demo.find_text(tree::TABS_ROUTE_TITLE).is_some(),
-        "the tabs route's app bar title must render once pushed"
-    );
-}
-
-/// Taps a tab's own label text in the mounted `TabBar` — every test below
-/// needs this at least once, so it's factored out rather than copy-pasted
-/// three times.
-fn tap_tab(demo: &mut MountedDemo, tab_label: &str) {
-    let label = demo
-        .find_text(tab_label)
-        .unwrap_or_else(|| panic!("tab label {tab_label:?} must render in the mounted TabBar"));
-    demo.tap_node(label);
-    demo.pump(Duration::ZERO);
-}
-
-/// A tab tap switches the visible child: on mount, tab 0
-/// ([`tree::OVERVIEW_TAB_LABEL`])'s content is showing and neither other
-/// tab's is; tapping tab 1 ([`tree::COUNTER_TAB_LABEL`]) swaps which one is.
-#[test]
-fn tapping_a_tab_switches_the_visible_child() {
-    let mut demo = MountedDemo::mount();
-    push_tabs_route(&mut demo);
-
-    assert!(
-        demo.find_text(tree::OVERVIEW_TAB_TEXT).is_some(),
-        "tab 0 (Overview) is the controller's initial index — its content must be built and \
-         showing on mount"
-    );
-    assert!(
-        demo.find_text(&format!("{}0", tree::COUNTER_LABEL_PREFIX))
-            .is_none(),
-        "the Counter tab must not be showing before it's ever tapped"
-    );
-
-    tap_tab(&mut demo, tree::COUNTER_TAB_LABEL);
-
-    assert!(
-        demo.find_text(&format!("{}0", tree::COUNTER_LABEL_PREFIX))
-            .is_some(),
-        "tapping the Counter tab must switch the visible child to its content"
-    );
-}
-
-/// The Counter tab's count survives switching away to another tab and back —
-/// `TabBarView`'s `Offstage` keep-alive retention, not a rebuild that resets
-/// local state. Flutter parity target: `TabBarView`'s own "state survives a
-/// tab switch" contract (see `tab_bar_view.rs`'s module docs for the
-/// composed mechanism this substrate uses instead of a real `PageView`).
-#[test]
-fn the_counters_state_survives_switching_away_and_back() {
-    let mut demo = MountedDemo::mount();
-    push_tabs_route(&mut demo);
-
-    tap_tab(&mut demo, tree::COUNTER_TAB_LABEL);
-    let increment = demo
-        .find_text(tree::COUNTER_INCREMENT_LABEL)
-        .expect("the Counter tab's Increment button must render once visited");
-    // The tap position is captured ONCE, up front, and reused for every
-    // subsequent tap — re-resolving `absolute_position` off a `RenderId`
-    // AFTER a rebuild it triggered is unreliable (the node's parent chain
-    // can read back detached until the next full relayout), the same
-    // fixed-position-computed-once pattern
-    // `tests/vertical_slice_demo.rs`'s `tapping_the_plus_button_updates_the_rendered_counter_text`
-    // already established for its own repeatedly-tapped counter button.
-    let tap_at = demo.absolute_position(increment);
-    demo.tap(tap_at.dx + 1.0, tap_at.dy + 1.0);
-    demo.pump(Duration::ZERO);
-    demo.tap(tap_at.dx + 1.0, tap_at.dy + 1.0);
-    demo.pump(Duration::ZERO);
-    demo.tap(tap_at.dx + 1.0, tap_at.dy + 1.0);
-    demo.pump(Duration::ZERO);
-
-    assert!(
-        demo.find_text(&format!("{}3", tree::COUNTER_LABEL_PREFIX))
-            .is_some(),
-        "three taps on Increment must bring the count to 3"
-    );
-
-    // Switch away to Overview, then back to Counter. `TabBarView`'s
-    // `Offstage` keep-alive retention (see `tab_bar_view.rs`'s module docs)
-    // means the Counter tab's `RenderParagraph` stays in the tree the whole
-    // time — merely unpainted while inactive, not torn down — so a
-    // "must not be found while inactive" assertion here would test the
-    // wrong thing (`find_text` has no visibility/offstage awareness; that
-    // half of the contract is `packages/flui-material/tests/tab_bar_view.rs`'s
-    // `default_tab_controller_ancestor_drives_the_active_child_through_offstage`
-    // via the `RenderOffstage` diagnostics flag directly). The genuinely
-    // observable retention proof at this level is that the count reads 3
-    // again after the round trip, not 0 — a reset here is exactly what a
-    // regression to index-keyed (rebuild-from-scratch) tab elements would
-    // produce.
-    tap_tab(&mut demo, tree::OVERVIEW_TAB_LABEL);
-    tap_tab(&mut demo, tree::COUNTER_TAB_LABEL);
-
-    assert!(
-        demo.find_text(&format!("{}3", tree::COUNTER_LABEL_PREFIX))
-            .is_some(),
-        "the count must still read 3 after switching away and back — retention, not a reset"
-    );
-}
-
-/// The About tab (index 2) is never built until it's actually visited —
-/// `TabBarView`'s lazy-build contract, proven end to end through the real
-/// `TabBar`'s tap dispatch (not just `TabBarView` mounted directly, as
-/// `packages/flui-material/tests/tab_bar_view.rs`'s own
-/// `a_tab_is_not_built_until_it_becomes_active` already covers in
-/// isolation).
-#[test]
-fn the_about_tab_is_not_built_until_visited() {
-    let mut demo = MountedDemo::mount();
-    push_tabs_route(&mut demo);
-
-    assert!(
-        demo.find_text(tree::ABOUT_TAB_TEXT).is_none(),
-        "the About tab's content must not be built before it's ever visited"
-    );
-
-    tap_tab(&mut demo, tree::ABOUT_TAB_LABEL);
-
-    assert!(
-        demo.find_text(tree::ABOUT_TAB_TEXT).is_some(),
-        "the About tab's content must be built once it's visited"
-    );
-}
-
-/// With the `TabBar` mounted as `AppBar.bottom`, the app bar's total height
-/// is `toolbar_height (56) + the TabBar's own preferred height (48, three
-/// plain-text tabs: `TAB_HEIGHT` 46 + `indicator_weight` 2)` — the same
-/// `toolbar_height + bottom_height` math `packages/flui-material/tests/app_bar.rs`
-/// pins in isolation, now proven reachable through the full sample-app tree
-/// (real `Theme`/`MediaQuery` ancestors, a real `Navigator`-pushed route).
-#[test]
-fn the_app_bar_height_is_toolbar_plus_the_mounted_tab_bars_height() {
-    let mut demo = MountedDemo::mount();
-    push_tabs_route(&mut demo);
-
-    const EXPECTED_HEIGHT: f64 = 56.0 + 48.0;
-    let matches = demo
-        .find_all_by_render_type("RenderConstrainedBox")
-        .into_iter()
-        .filter(|&id| demo.size(id).height == EXPECTED_HEIGHT)
-        .count();
-    assert!(
-        matches > 0,
-        "expected at least one RenderConstrainedBox sized to toolbar_height + TabBar height \
-         ({EXPECTED_HEIGHT}px) once the tabs route is mounted"
-    );
-}
 
 // ============================================================================
 // (9) Form route — validated `TextField`, and async load/error/retry/cancel
@@ -1229,11 +717,9 @@ fn navigating_away_mid_load_cancels_the_fetch_and_resets_on_return() {
 // ============================================================================
 
 /// `MaterialDemoApp` (the thin `StatelessView` `flui_app::run_app` entry
-/// point) is exercised at runtime only by `examples/material_demo/main.rs`,
-/// not this headless test — the acceptance tests above mount
-/// `MaterialDemoRoot` directly (see `MountedDemo::mount`'s doc). Referencing
-/// it here keeps both `#[path]` consumers of `tree.rs` compiling the same
-/// symbol set, so a signature change that breaks the example's entry point
+/// point) is exercised at runtime only by `examples/material_demo/main.rs`.
+/// Referencing it here keeps both `#[path]` consumers of `tree.rs` compiling the
+/// same symbol set, so a signature change that breaks the example's entry point
 /// fails `cargo test` too, not only `cargo build --example`.
 #[test]
 fn demo_app_entry_point_constructs() {

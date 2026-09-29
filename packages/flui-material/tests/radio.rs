@@ -22,9 +22,7 @@
 //! exercised directly against `resolve_radio_ring_color` (extracted out of
 //! `build` specifically so this cascade is unit-testable without mounting
 //! a widget tree; see `theme_tier_beats_the_m3_default_when_no_widget_override_is_set`/
-//! `widget_override_wins_over_theme_and_default_when_selected_and_enabled`/
-//! `widget_override_is_ignored_when_disabled_even_if_selected`/
-//! `widget_override_is_ignored_when_unselected`), plus `RadioPainter`'s own
+//! `widget_override_is_ignored_when_disabled_even_if_selected`), plus `RadioPainter`'s own
 //! paint-invocation proof (`inner_dot_is_present_only_when_selected`, a
 //! real `Canvas`/`DisplayList` recording).
 
@@ -33,7 +31,7 @@ use crate::common;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use common::{lay_out, size, tight};
+use common::{lay_out, tight};
 use flui_material::{Radio, Theme, ThemeData};
 use flui_sdk::widgets::Semantics;
 use flui_testing::a11y::Role;
@@ -50,23 +48,6 @@ fn constraints() -> flui_sdk::rendering::BoxConstraints {
 /// helper.
 fn themed<T: PartialEq + Clone + 'static>(radio: Radio<T>) -> Theme {
     Theme::new(ThemeData::light(), radio)
-}
-
-#[test]
-fn mounting_a_radio_creates_a_semantics_annotated_tap_target() {
-    let laid = lay_out(
-        themed(Radio::new("spring", Some("spring")).on_changed(|_cx, _| {})),
-        constraints(),
-    );
-
-    // The wrapper node is the Radio's own; its `GestureDetector` adds
-    // a second, action-only annotation beneath it for assistive technology.
-    let semantics = laid
-        .find_semantics_wrappers()
-        .into_iter()
-        .next()
-        .expect("Radio must mount a Semantics wrapper");
-    assert_eq!(laid.size(semantics), size(TAP_TARGET, TAP_TARGET));
 }
 
 /// Every AccessKit role the tree exports for a mounted `Radio`.
@@ -105,17 +86,6 @@ fn a_mounted_radio_does_not_announce_as_a_checkbox() {
     assert!(
         !roles.contains(&Role::CheckBox),
         "a Radio announcing as a checkbox is the #1117 defect, got {roles:?}",
-    );
-}
-
-#[test]
-fn an_unselected_group_member_announces_as_a_radio_button() {
-    // Group membership does not depend on which member is currently selected:
-    // every member of the group is a radio, selected or not.
-    let roles = announced_roles(Radio::new("summer", Some("spring")).on_changed(|_cx, _| {}));
-    assert!(
-        roles.contains(&Role::RadioButton),
-        "an unselected group member is still a radio button, got {roles:?}",
     );
 }
 

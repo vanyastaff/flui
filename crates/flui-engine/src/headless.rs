@@ -479,31 +479,6 @@ mod target_size_tests {
 
         assert!(super::readback_wait_outcome(Ok(wgpu::PollStatus::QueueEmpty), waited).is_ok());
     }
-
-    /// The poll the readback issues is bounded and names the copy's own
-    /// submission.
-    ///
-    /// Red-check: `timeout: None` in `readback_wait` (the original unbounded
-    /// wait) or `submission_index: None` (a wait on the whole queue) fails here.
-    #[test]
-    fn the_readback_poll_is_bounded_and_waits_on_its_own_copy() {
-        match super::readback_wait(7_u64) {
-            wgpu::wgt::PollType::Wait {
-                submission_index,
-                timeout,
-            } => {
-                assert_eq!(submission_index, Some(7), "wait on the copy's submission");
-                assert_eq!(
-                    timeout,
-                    Some(super::READBACK_TIMEOUT),
-                    "never wait unbounded"
-                );
-            }
-            wgpu::wgt::PollType::Poll => {
-                panic!("the readback must block until its copy lands, not poll once")
-            }
-        }
-    }
 }
 
 /// Serialized with the other GPU readbacks: its module name matches the

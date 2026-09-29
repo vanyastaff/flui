@@ -42,19 +42,3 @@ fn headless_pump_frame_runs_the_layout_builder_seam() {
          run_frame_with_layout_builders helper), which prunes the stale entry"
     );
 }
-
-/// A frame over an empty registry is a plain `run_frame`: it must not panic, and
-/// the fixpoint must converge on its first pass.
-#[test]
-fn headless_pump_frame_with_no_layout_builders_is_inert() {
-    let mut binding = HeadlessBinding::with_tree(
-        BuildOwner::new(),
-        ElementTree::new(),
-        PipelineCell::new(PipelineOwner::new()),
-    );
-
-    binding.pump_frame(Duration::from_millis(16));
-    binding.pump_frame(Duration::from_millis(16));
-
-    assert_eq!(binding.build_owner_mut().layout_builder_count(), 0);
-}

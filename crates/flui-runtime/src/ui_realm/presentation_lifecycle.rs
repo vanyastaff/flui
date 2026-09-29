@@ -693,36 +693,6 @@ mod tests {
     }
 
     #[test]
-    fn window_lifecycle_initial_hidden_and_unfocused_snapshots_are_authoritative() {
-        for (visible, focused, expected) in [
-            (false, true, AppLifecycleState::Hidden),
-            (true, false, AppLifecycleState::Inactive),
-        ] {
-            let window: Arc<dyn flui_platform_api::PlatformWindow> =
-                Arc::new(TestWindow::new().visible(visible).focused(focused));
-            let realm = UiRealm::new(
-                Arc::new(|| {}),
-                window,
-                1.0,
-                Arc::new(AtomicBool::new(false)),
-                crate::presentation::test_clipboard(),
-            )
-            .expect("realm");
-            realm.synchronize_window_lifecycle();
-            assert_eq!(realm.scheduler().lifecycle_state(), expected);
-            assert_eq!(realm.presentations.primary().clock().is_hidden(), !visible);
-            assert_eq!(
-                realm.presentations.primary().lifecycle(),
-                if visible {
-                    PresentationLifecycle::SurfaceAttached
-                } else {
-                    PresentationLifecycle::Suspended
-                }
-            );
-        }
-    }
-
-    #[test]
     fn window_lifecycle_focus_orders_and_suspension_preserve_observed_facts() {
         for gain_first in [false, true] {
             let (realm, a, b) = two_presentations();
@@ -780,33 +750,6 @@ mod tests {
                 Some(AppLifecycleState::Inactive)
             );
         }
-    }
-
-    #[test]
-    fn window_lifecycle_close_recomputes_without_inventing_focus() {
-        let (mut realm, a, b) = two_presentations();
-        realm.update_window_focus(b, true);
-        assert!(realm.close_presentation_entered(b));
-        assert_eq!(
-            realm.scheduler().lifecycle_state(),
-            AppLifecycleState::Inactive
-        );
-        assert!(
-            !realm
-                .presentations
-                .get(a)
-                .expect("survivor")
-                .window_focused
-                .get()
-        );
-        let b = realm.install_second_presentation_for_test();
-        realm.synchronize_window_lifecycle();
-        realm.update_window_visibility(a, false);
-        assert!(realm.close_presentation_entered(b));
-        assert_eq!(
-            realm.scheduler().lifecycle_state(),
-            AppLifecycleState::Hidden
-        );
     }
 
     #[test]

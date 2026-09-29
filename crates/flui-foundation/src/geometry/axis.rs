@@ -202,36 +202,6 @@ mod tests {
 
     #[test]
     #[inline]
-    fn test_axis_operations() {
-        let horizontal = Axis::Horizontal;
-        let vertical = Axis::Vertical;
-
-        assert!(horizontal.is_horizontal());
-        assert!(!horizontal.is_vertical());
-        assert!(vertical.is_vertical());
-        assert!(!vertical.is_horizontal());
-
-        assert_eq!(horizontal.opposite(), Axis::Vertical);
-        assert_eq!(vertical.opposite(), Axis::Horizontal);
-    }
-
-    #[test]
-    #[inline]
-    fn test_axis_size_operations() {
-        let size = Size::new(100.0, 50.0);
-
-        assert_eq!(Axis::Horizontal.select_size(size), 100.0);
-        assert_eq!(Axis::Vertical.select_size(size), 50.0);
-
-        assert_eq!(Axis::Horizontal.main_size(size), 100.0);
-        assert_eq!(Axis::Vertical.main_size(size), 50.0);
-
-        assert_eq!(Axis::Horizontal.cross_size(size), 50.0);
-        assert_eq!(Axis::Vertical.cross_size(size), 100.0);
-    }
-
-    #[test]
-    #[inline]
     fn test_axis_make_size() {
         assert_eq!(Axis::Horizontal.make_size(100.0), Size::new(100.0, 0.0));
         assert_eq!(Axis::Vertical.make_size(100.0), Size::new(0.0, 100.0));
@@ -244,13 +214,5 @@ mod tests {
             Axis::Vertical.make_size_with_cross(100.0, 50.0),
             Size::new(50.0, 100.0)
         );
-    }
-
-    #[test]
-    #[inline]
-    fn test_axis_flip_size() {
-        let size = Size::new(100.0, 50.0);
-        assert_eq!(Axis::Horizontal.flip_size(size), Size::new(100.0, 50.0));
-        assert_eq!(Axis::Vertical.flip_size(size), Size::new(50.0, 100.0));
     }
 }

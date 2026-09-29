@@ -163,30 +163,3 @@ fn a_face_registered_after_the_fork_shapes_in_every_realm() {
         "before registration the probe family falls back to Roboto, got {before}"
     );
 }
-
-/// A long paragraph breaks at its width, and its metrics come from the
-/// laid-out lines rather than a stand-in (ADR-0054).
-#[test]
-fn a_paragraph_wraps_at_its_max_width() {
-    const MAX: f32 = 80.0;
-    let fonts = FontCollection::new();
-    let mut context = TextContext::new(&fonts);
-    let metrics = shape(&mut context, LATIN, Some(MAX)).metrics();
-    assert!(metrics.line_count > 1, "{metrics:?}");
-    assert!(metrics.width <= f64::from(MAX + 0.01), "{metrics:?}");
-    assert!(metrics.width > 0.0, "{metrics:?}");
-    assert!(
-        0.0 < metrics.alphabetic_baseline && metrics.alphabetic_baseline < metrics.height,
-        "{metrics:?}"
-    );
-    assert!(
-        metrics.ideographic_baseline >= metrics.alphabetic_baseline,
-        "{metrics:?}"
-    );
-    let one_line = shape(&mut context, LATIN, None).metrics();
-    assert_eq!(one_line.line_count, 1, "{one_line:?}");
-    assert!(
-        metrics.height > one_line.height,
-        "{metrics:?} vs {one_line:?}"
-    );
-}

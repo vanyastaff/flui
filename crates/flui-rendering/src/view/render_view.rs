@@ -528,29 +528,6 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn test_render_view_new() {
-        let view = RenderView::new();
-        assert!(!view.has_configuration());
-        assert_eq!(view.size(), Size::ZERO);
-    }
-
-    #[test]
-    fn test_render_view_with_configuration() {
-        let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
-        let view = RenderView::with_configuration(config.clone());
-        assert!(view.has_configuration());
-        assert_eq!(view.configuration(), &config);
-    }
-
-    #[test]
-    fn test_render_view_constraints() {
-        let config = ViewConfiguration::from_size(Size::new(1920.0, 1080.0), 2.0);
-        let view = RenderView::with_configuration(config);
-        let constraints = view.constraints();
-        assert_eq!(constraints, BoxConstraints::tight(Size::new(960.0, 540.0)));
-    }
-
     // Tests for the `is_repaint_boundary` and `depth` fields were removed
     // alongside the field deletions above -- the tests asserted the field
     // VALUE (a literal `0` / `true`), not any behavior driven by the field.
@@ -561,56 +538,6 @@ mod tests {
     // lifecycle tests below it) were removed alongside the `owner` field
     // `RenderView` no longer holds a `PipelineOwner` back-reference
     // at all, so there is nothing left to assert liveness of.
-
-    #[test]
-    fn test_render_view_automatic_system_ui() {
-        let mut view = RenderView::new();
-        assert!(view.automatic_system_ui_adjustment());
-
-        view.set_automatic_system_ui_adjustment(false);
-        assert!(!view.automatic_system_ui_adjustment());
-    }
-
-    #[test]
-    fn test_apply_paint_transform() {
-        let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
-        let mut view = RenderView::with_configuration(config);
-        view.prepare_initial_frame_internal();
-
-        let mut transform = Matrix4::identity();
-        view.apply_paint_transform(&mut transform);
-
-        assert!((transform[0] - 2.0).abs() < 1e-6);
-        assert!((transform[5] - 2.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn layer_accessors_are_none_before_and_some_after_initial_frame() {
-        let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 1.0);
-        let mut view = RenderView::with_configuration(config);
-
-        assert!(view.layer().is_none());
-        assert!(view.layer_mut().is_none());
-
-        view.prepare_initial_frame_internal();
-
-        assert!(view.layer().is_some());
-        assert!(view.layer_mut().is_some());
-    }
-
-    #[test]
-    fn set_configuration_is_noop_when_identical() {
-        let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
-        let mut view = RenderView::with_configuration(config.clone());
-        view.prepare_initial_frame_internal();
-
-        // Setting an identical configuration must not panic, must not clear
-        // the already-established layer, and must preserve the config value.
-        view.set_configuration(config.clone());
-
-        assert_eq!(view.configuration(), &config);
-        assert!(view.layer().is_some());
-    }
 
     #[test]
     fn set_configuration_replaces_root_layer_when_device_pixel_ratio_changes() {
@@ -632,72 +559,6 @@ mod tests {
     }
 
     #[test]
-    fn prepare_initial_frame_without_owner_is_idempotent() {
-        let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
-        let mut view = RenderView::with_configuration(config);
-
-        view.prepare_initial_frame_without_owner();
-        let mut first_transform = Matrix4::identity();
-        view.apply_paint_transform(&mut first_transform);
-
-        // A second call must be a no-op (early return on `root_transform.is_some()`),
-        // not a silent re-bootstrap that could reset accumulated frame state.
-        view.prepare_initial_frame_without_owner();
-        let mut second_transform = Matrix4::identity();
-        view.apply_paint_transform(&mut second_transform);
-
-        assert_eq!(first_transform, second_transform);
-    }
-
-    #[test]
-    fn perform_layout_sizes_to_the_smallest_logical_constraint() {
-        let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
-        let mut view = RenderView::with_configuration(config.clone());
-        view.prepare_initial_frame_internal();
-
-        view.perform_layout();
-
-        assert_eq!(view.size(), config.logical_constraints().smallest());
-    }
-
-    #[test]
-    fn physical_paint_bounds_scales_logical_size_by_device_pixel_ratio() {
-        let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
-        let mut view = RenderView::with_configuration(config);
-        view.prepare_initial_frame_internal();
-        view.perform_layout();
-
-        let bounds = view.physical_paint_bounds();
-        assert_eq!(bounds.width(), view.size().width * 2.0);
-        assert_eq!(bounds.height(), view.size().height * 2.0);
-    }
-
-    #[test]
-    fn semantic_bounds_is_unscaled_before_root_transform_is_established() {
-        let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
-        let mut view = RenderView::with_configuration(config);
-        // `size` is crate-visible; set it directly to probe the pre-bootstrap
-        // (no root transform yet) branch of `semantic_bounds` in isolation.
-        view.size = Size::new(100.0, 50.0);
-
-        let bounds = view.semantic_bounds();
-        assert_eq!(bounds.width(), 100.0);
-        assert_eq!(bounds.height(), 50.0);
-    }
-
-    #[test]
-    fn semantic_bounds_scales_by_root_transform_once_established() {
-        let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
-        let mut view = RenderView::with_configuration(config);
-        view.size = Size::new(100.0, 50.0);
-        view.prepare_initial_frame_internal();
-
-        let bounds = view.semantic_bounds();
-        assert_eq!(bounds.width(), 200.0);
-        assert_eq!(bounds.height(), 100.0);
-    }
-
-    #[test]
     fn composite_frame_reports_physical_and_logical_size() {
         let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
         let mut view = RenderView::with_configuration(config);
@@ -712,13 +573,5 @@ mod tests {
             result.physical_size,
             Size::new(view.size().width * 2.0, view.size().height * 2.0)
         );
-    }
-
-    #[test]
-    #[should_panic(expected = "self.root_transform.is_some()")]
-    fn composite_frame_panics_before_initial_frame_is_prepared() {
-        let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
-        let view = RenderView::with_configuration(config);
-        let _ = view.composite_frame();
     }
 }

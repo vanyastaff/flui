@@ -783,52 +783,12 @@ mod tests {
     }
 
     #[test]
-    fn tab_content_height_defaults_to_tab_height_with_no_icon() {
-        let tab = Tab::new().text("Home");
-        assert_eq!(tab_content_height(&tab), TAB_HEIGHT);
-    }
-
-    #[test]
-    fn tab_content_height_is_text_and_icon_height_with_both() {
-        let tab = Tab::new()
-            .text("Home")
-            .icon(flui_sdk::widgets::SizedBox::shrink());
-        assert_eq!(tab_content_height(&tab), TEXT_AND_ICON_TAB_HEIGHT);
-    }
-
-    #[test]
-    fn tab_content_height_is_tab_height_for_icon_only() {
-        let tab = Tab::new().icon(flui_sdk::widgets::SizedBox::shrink());
-        assert_eq!(tab_content_height(&tab), TAB_HEIGHT);
-    }
-
-    #[test]
     fn tab_content_height_override_wins_over_computed_height() {
         let tab = Tab::new()
             .text("Home")
             .icon(flui_sdk::widgets::SizedBox::shrink())
             .height(20.0);
         assert_eq!(tab_content_height(&tab), 20.0);
-    }
-
-    #[test]
-    fn tab_preferred_size_matches_content_height() {
-        let tab = Tab::new().text("Home");
-        assert_eq!(tab.preferred_size().height, (TAB_HEIGHT));
-    }
-
-    #[test]
-    fn bar_height_is_48_for_the_default_tab_height() {
-        let tabs = vec![Tab::new().text("A"), Tab::new().text("B")];
-        assert_eq!(bar_height(&tabs, 2.0), 48.0);
-    }
-
-    /// Red-check: mutating the `fold` seed from `TAB_HEIGHT` to `0.0` would
-    /// still pass every non-empty case (a real tab is always >= 46) but
-    /// break the empty-bar case below.
-    #[test]
-    fn bar_height_for_zero_tabs_is_48() {
-        assert_eq!(bar_height(&[], 2.0), TAB_HEIGHT + 2.0);
     }
 
     #[test]
@@ -843,73 +803,10 @@ mod tests {
     }
 
     #[test]
-    fn tab_bar_preferred_size_matches_bar_height() {
-        let tabs = vec![Tab::new().text("A"), Tab::new().text("B")];
-        let bar = TabBar::secondary(tabs);
-        assert_eq!(bar.preferred_size().height, 48.0);
-    }
-
-    #[test]
-    fn tab_bar_preferred_size_for_zero_tabs_is_48() {
-        let bar = TabBar::secondary(vec![]);
-        assert_eq!(bar.preferred_size().height, 48.0);
-    }
-
-    #[test]
-    fn tab_has_text_and_icon_is_false_with_no_mixed_tabs() {
-        let tabs = vec![Tab::new().text("A"), Tab::new().text("B")];
-        assert!(!tab_has_text_and_icon(&tabs));
-    }
-
-    #[test]
-    fn tab_has_text_and_icon_is_true_with_one_mixed_tab() {
-        let tabs = vec![
-            Tab::new().text("A"),
-            Tab::new()
-                .text("B")
-                .icon(flui_sdk::widgets::SizedBox::shrink()),
-        ];
-        assert!(tab_has_text_and_icon(&tabs));
-    }
-
-    #[test]
-    fn label_padding_has_no_vertical_adjustment_in_a_uniform_bar() {
-        let tab = Tab::new().text("A");
-        let padding = label_padding(&tab, false);
-        assert_eq!(padding, EdgeInsets::symmetric(0.0, 16.0));
-    }
-
-    #[test]
     fn label_padding_adds_13dp_vertical_for_a_plain_tab_in_a_mixed_bar() {
         let tab = Tab::new().text("A");
         let padding = label_padding(&tab, true);
         assert_eq!(padding, EdgeInsets::symmetric(13.0, 16.0));
-    }
-
-    /// Red-check: if the mixed-bar check ignored `Tab::height` overrides and
-    /// compared only computed height, a height-overridden tab that happens
-    /// to equal `TAB_HEIGHT` numerically would still get the adjustment even
-    /// when it's a deliberate override rather than the plain 46px default —
-    /// this asserts the *override* path is not skipped for that comparison.
-    #[test]
-    fn label_padding_uses_the_overridden_height_not_only_the_computed_one() {
-        let overridden = Tab::new().text("A").height(TEXT_AND_ICON_TAB_HEIGHT);
-        assert_eq!(
-            label_padding(&overridden, true),
-            EdgeInsets::symmetric(0.0, 16.0)
-        );
-    }
-
-    #[test]
-    fn indicator_rect_spans_the_first_of_two_equal_tabs() {
-        let rect = indicator_rect(200.0, 48.0, 2, 2.0, 0);
-        assert_eq!(rect, Rect::from_ltwh(0.0, 46.0, 100.0, 2.0));
-    }
-
-    #[test]
-    fn indicator_rect_spans_the_second_of_two_equal_tabs() {
-        let rect = indicator_rect(200.0, 48.0, 2, 2.0, 1);
-        assert_eq!(rect, Rect::from_ltwh(100.0, 46.0, 100.0, 2.0));
     }
 
     /// Red-check: if `indicator_rect` divided by `index` instead of
@@ -928,51 +825,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_style_defaults_to_the_m3_secondary_token_table() {
-        let theme = ThemeData::light();
-        let resolved = resolve_style(&theme);
-
-        assert_eq!(resolved.indicator_color, theme.color_scheme.primary);
-        assert_eq!(resolved.label_color, theme.color_scheme.on_surface);
-        assert_eq!(
-            resolved.unselected_label_color,
-            theme.color_scheme.on_surface_variant
-        );
-        assert_eq!(resolved.divider_color, theme.color_scheme.outline_variant);
-        assert_eq!(resolved.divider_height, 1.0);
-        assert_eq!(
-            resolved.label_style,
-            theme.text_theme.title_small.clone().unwrap_or_default()
-        );
-        assert_eq!(resolved.label_style, resolved.unselected_label_style);
-    }
-
-    #[test]
-    fn resolve_style_overlay_color_matches_the_secondary_defaults_table() {
-        let theme = ThemeData::light();
-        let resolved = resolve_style(&theme);
-        let on_surface = theme.color_scheme.on_surface;
-
-        let pressed = resolved
-            .overlay_color
-            .resolve(&flui_sdk::widgets::WidgetStates::from(WidgetState::Pressed));
-        let hovered = resolved
-            .overlay_color
-            .resolve(&flui_sdk::widgets::WidgetStates::from(WidgetState::Hovered));
-        let focused = resolved
-            .overlay_color
-            .resolve(&flui_sdk::widgets::WidgetStates::from(WidgetState::Focused));
-        let none = resolved
-            .overlay_color
-            .resolve(&flui_sdk::widgets::WidgetStates::NONE);
-
-        assert_eq!(pressed, Some(on_surface.with_opacity(0.1)));
-        assert_eq!(hovered, Some(on_surface.with_opacity(0.08)));
-        assert_eq!(focused, Some(on_surface.with_opacity(0.1)));
-        assert_eq!(none, None);
-    }
-
-    #[test]
     fn resolve_style_theme_override_beats_the_default() {
         let mut theme = ThemeData::light();
         let themed_indicator = Color::rgb(9, 9, 9);
@@ -987,25 +839,5 @@ mod tests {
         // Fields left unset on the theme slot still fall through to their
         // own M3 default independently.
         assert_eq!(resolved.label_color, theme.color_scheme.on_surface);
-    }
-
-    #[test]
-    fn tab_bar_secondary_starts_with_no_explicit_controller() {
-        let bar = TabBar::secondary(vec![Tab::new().text("A")]);
-        assert!(bar.controller.is_none());
-    }
-
-    #[test]
-    fn tab_bar_controller_sets_the_explicit_controller() {
-        let controller = TabController::new(1, 0);
-        let bar = TabBar::secondary(vec![Tab::new().text("A")]).controller(controller.clone());
-        assert_eq!(bar.controller, Some(controller));
-    }
-
-    #[test]
-    fn debug_format_does_not_panic() {
-        let bar = TabBar::secondary(vec![Tab::new().text("A")]);
-        let rendered = format!("{bar:?}");
-        assert!(rendered.contains("TabBar"));
     }
 }

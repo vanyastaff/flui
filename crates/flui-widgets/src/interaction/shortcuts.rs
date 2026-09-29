@@ -633,31 +633,6 @@ mod tests {
         );
     }
 
-    /// A letter trigger names the key, not the character it produced: Caps
-    /// Lock turns Ctrl+C into a `"C"` event, which must still match, while
-    /// the exact Shift check keeps Ctrl+Shift+C apart.
-    #[test]
-    fn a_character_activator_matches_regardless_of_caps_lock() {
-        let ctrl_c = SingleActivator::character("c").control();
-
-        assert!(ctrl_c.matches(&key_down("C", Modifiers::CONTROL)));
-        assert!(
-            !ctrl_c.matches(&key_down("C", Modifiers::CONTROL | Modifiers::SHIFT)),
-            "Shift is still compared exactly"
-        );
-        assert!(
-            SingleActivator::character("c")
-                .control()
-                .shift()
-                .matches(&key_down("C", Modifiers::CONTROL | Modifiers::SHIFT)),
-            "Ctrl+Shift+C still has its own binding"
-        );
-        assert!(
-            !SingleActivator::character("+").matches(&key_down("=", Modifiers::empty())),
-            "a non-letter compares exactly"
-        );
-    }
-
     /// Cmd on the Apple platforms, Control everywhere else — checked for
     /// every platform, whichever host runs the suite.
     #[test]

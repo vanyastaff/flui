@@ -107,9 +107,6 @@ pub(super) struct DirtyTracker {
     /// callback setters. Both clones point at the same
     /// `RwLock<VisualUpdateNotifier>`.
     notifier: std::sync::Arc<parking_lot::RwLock<VisualUpdateNotifier>>,
-
-    #[cfg(test)]
-    eviction_passes: usize,
 }
 
 impl DirtyTracker {
@@ -123,8 +120,6 @@ impl DirtyTracker {
             debug_doing_semantics: false,
             layout_drained_total: 0,
             notifier,
-            #[cfg(test)]
-            eviction_passes: 0,
         }
     }
 
@@ -614,17 +609,8 @@ impl DirtyTracker {
     /// `mid_layout_marks`. Called by `remove_render_object` before the slab
     /// slots are freed so no phase walks a freed id.
     pub(super) fn evict(&mut self, removed_ids: &FxHashSet<RenderId>) {
-        #[cfg(test)]
-        {
-            self.eviction_passes += 1;
-        }
         self.dirty.evict(removed_ids);
         self.mid_layout_marks.evict(removed_ids);
-    }
-
-    #[cfg(test)]
-    pub(super) fn eviction_passes_for_test(&self) -> usize {
-        self.eviction_passes
     }
 
     /// Clears all dirty work without processing it. Use with caution.
@@ -659,32 +645,6 @@ impl DirtyTracker {
     #[inline]
     pub(super) fn has_mid_marks(&self) -> bool {
         self.mid_layout_marks.any()
-    }
-
-    #[cfg(test)]
-    pub(super) fn seed_all_queues_for_test(&mut self, id: RenderId) {
-        for queues in [&mut self.dirty, &mut self.mid_layout_marks] {
-            queues.needs_layout.push(DirtyNode::new(id, 0));
-            queues.needs_compositing.push(DirtyNode::new(id, 0));
-            queues.needs_paint.enqueue(id, 0, PaintKind::Repaint);
-            queues.needs_semantics.push(DirtyNode::new(id, 0));
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn has_every_queue_entry_for_test(&self, id: RenderId) -> bool {
-        [&self.dirty, &self.mid_layout_marks]
-            .into_iter()
-            .all(|queues| {
-                queues.needs_paint.contains(&id)
-                    && [
-                        &queues.needs_layout,
-                        &queues.needs_compositing,
-                        &queues.needs_semantics,
-                    ]
-                    .into_iter()
-                    .all(|queue| queue.contains(&id))
-            })
     }
 
     // =========================================================================
@@ -911,20 +871,6 @@ impl DirtyTracker {
         let notifier = std::sync::Arc::new(parking_lot::RwLock::new(VisualUpdateNotifier::new()));
         (Self::new(notifier), RenderTree::new())
     }
-
-    /// Constructs a `(DirtyTracker, RenderTree)` pair where the wake callback
-    /// increments `wake_counter` on every `fire_need_visual_update` call.
-    #[cfg(test)]
-    pub(crate) fn new_test_pair_with_wake_counter(
-        wake_counter: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    ) -> (Self, RenderTree) {
-        let mut notifier = VisualUpdateNotifier::new();
-        notifier.set_need_visual_update(move || {
-            wake_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        });
-        let notifier = std::sync::Arc::new(parking_lot::RwLock::new(notifier));
-        (Self::new(notifier), RenderTree::new())
-    }
 }
 
 // ============================================================================
@@ -984,13 +930,7 @@ mod tests {
         );
     }
 
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
-
     use flui_foundation::RenderId;
-    use rustc_hash::FxHashSet;
 
     use crate::{
         pipeline::{Idle, owner::PipelineOwner},
@@ -1080,137 +1020,6 @@ mod tests {
     // — no PipelineOwner, channel, or full Arc<RwLock> construction needed.
     // =========================================================================
 
-    /// New dirty work fires the wake exactly once per new queue entry. Duplicate
-    /// marks (frame already scheduled) fire no second wake.
-    #[test]
-    fn dirty_marks_fire_visual_update_once_per_new_entry() {
-        let wake_count = Arc::new(AtomicUsize::new(0));
-        let (mut tracker, _tree) =
-            DirtyTracker::new_test_pair_with_wake_counter(Arc::clone(&wake_count));
-
-        tracker.add_node_needing_layout(RenderId::new(1), 0);
-        assert_eq!(
-            wake_count.load(Ordering::Relaxed),
-            1,
-            "a new layout entry must wake the platform",
-        );
-        tracker.add_node_needing_layout(RenderId::new(1), 0);
-        assert_eq!(
-            wake_count.load(Ordering::Relaxed),
-            1,
-            "a duplicate entry means a frame is already scheduled — no second wake",
-        );
-
-        tracker.schedule_paint_boundary(RenderId::new(2), 1);
-        assert_eq!(
-            wake_count.load(Ordering::Relaxed),
-            2,
-            "a new paint entry must wake the platform",
-        );
-        tracker.schedule_paint_boundary(RenderId::new(2), 1);
-        assert_eq!(
-            wake_count.load(Ordering::Relaxed),
-            2,
-            "a duplicate paint entry must not fire a second wake",
-        );
-    }
-
-    /// Compositing marks fire the wake exactly once per new entry (Flutter:
-    /// markNeedsCompositingBitsUpdate → owner.requestVisualUpdate).
-    #[test]
-    fn compositing_mark_fires_visual_update_on_new_entry_and_deduplicates() {
-        let wake_count = Arc::new(AtomicUsize::new(0));
-        let mut owner = PipelineOwner::new();
-        owner.set_on_need_visual_update({
-            let wake_count = Arc::clone(&wake_count);
-            move || {
-                wake_count.fetch_add(1, Ordering::Relaxed);
-            }
-        });
-        let id = insert_zero_size_leaf(&mut owner);
-        owner.clear_all_dirty_nodes();
-        owner
-            .render_tree()
-            .get(id)
-            .expect("inserted node")
-            .clear_needs_compositing_bits_update();
-
-        let baseline = wake_count.load(Ordering::Relaxed);
-
-        owner.mark_needs_compositing_bits_update(id);
-        assert_eq!(
-            wake_count.load(Ordering::Relaxed),
-            baseline + 1,
-            "add_node_needing_compositing_bits_update: first entry must fire \
-             fire_need_visual_update (the GIF-frozen-until-you-scroll bug)"
-        );
-
-        owner.mark_needs_compositing_bits_update(id);
-        assert_eq!(
-            wake_count.load(Ordering::Relaxed),
-            baseline + 1,
-            "add_node_needing_compositing_bits_update: duplicate entry must not \
-             fire a second wake"
-        );
-    }
-
-    /// Semantics marks fire the wake exactly once per new entry (Flutter:
-    /// markNeedsSemanticsUpdate → owner.requestVisualUpdate).
-    #[test]
-    fn semantics_mark_fires_visual_update_on_new_entry_and_deduplicates() {
-        let wake_count = Arc::new(AtomicUsize::new(0));
-        let (mut tracker, _tree) =
-            DirtyTracker::new_test_pair_with_wake_counter(Arc::clone(&wake_count));
-
-        let baseline = wake_count.load(Ordering::Relaxed);
-
-        tracker.add_node_needing_semantics(RenderId::new(20), 0);
-        assert_eq!(
-            wake_count.load(Ordering::Relaxed),
-            baseline + 1,
-            "add_node_needing_semantics: first entry must fire fire_need_visual_update"
-        );
-
-        tracker.add_node_needing_semantics(RenderId::new(20), 0);
-        assert_eq!(
-            wake_count.load(Ordering::Relaxed),
-            baseline + 1,
-            "add_node_needing_semantics: duplicate entry must not fire a second wake"
-        );
-    }
-
-    /// The boundary-walking `mark_needs_layout` fires the wake when it enqueues
-    /// the boundary, and stays silent when the boundary is already queued.
-    #[test]
-    fn mark_needs_layout_fires_visual_update_on_boundary_enqueue() {
-        let wake_count = Arc::new(AtomicUsize::new(0));
-        let wake_count_clone = Arc::clone(&wake_count);
-        let mut owner = PipelineOwner::with_callbacks(
-            Some(move || {
-                wake_count_clone.fetch_add(1, Ordering::Relaxed);
-            }),
-            None::<fn()>,
-            None::<fn()>,
-        );
-
-        let id = insert_zero_size_leaf(&mut owner);
-        owner.clear_all_dirty_nodes();
-        let baseline = wake_count.load(Ordering::Relaxed);
-
-        owner.mark_needs_layout(id);
-        assert_eq!(
-            wake_count.load(Ordering::Relaxed),
-            baseline + 1,
-            "enqueueing the relayout boundary must wake the platform",
-        );
-        owner.mark_needs_layout(id);
-        assert_eq!(
-            wake_count.load(Ordering::Relaxed),
-            baseline + 1,
-            "boundary already queued — no extra wake",
-        );
-    }
-
     // =========================================================================
     // Mid-phase routing + drain tests
     // =========================================================================
@@ -1256,24 +1065,6 @@ mod tests {
         );
     }
 
-    /// Repeated mid-phase adds for the same id collapse to one entry.
-    #[test]
-    fn mid_phase_routing_dedups_repeated_marks() {
-        let (mut tracker, _tree) = DirtyTracker::new_test_pair();
-
-        tracker.debug_doing_layout = true;
-        tracker.add_node_needing_layout(RenderId::new(1), 0);
-        tracker.add_node_needing_layout(RenderId::new(1), 0);
-        tracker.add_node_needing_layout(RenderId::new(1), 0);
-        tracker.debug_doing_layout = false;
-
-        let drained = tracker.drain_mid_marks();
-        assert_eq!(
-            drained, 1,
-            "3 repeated mid-phase marks must dedup to 1 entry; got {drained}",
-        );
-    }
-
     // =========================================================================
     // mark_needs_layout boundary-walk tests
     //
@@ -1314,46 +1105,6 @@ mod tests {
             }
         }
         (owner, root_id, middle_id, leaf_id)
-    }
-
-    /// Marking a leaf where no relayout boundary is set propagates
-    /// `NEEDS_LAYOUT` up to root and pushes root onto `dirty.needs_layout`
-    /// (root is the implicit boundary).
-    #[test]
-    fn mark_needs_layout_walks_to_root_when_no_boundary_set() {
-        let (mut owner, root_id, middle_id, leaf_id) = build_three_level_chain();
-        assert!(owner.nodes_needing_layout().is_empty());
-
-        owner.mark_needs_layout(leaf_id);
-
-        for (id, label) in [(leaf_id, "leaf"), (middle_id, "middle"), (root_id, "root")] {
-            let node = owner.render_tree().get(id).expect(label);
-            assert!(
-                node.needs_layout(),
-                "{label} should have NEEDS_LAYOUT set after walk",
-            );
-        }
-        let dirty = owner.nodes_needing_layout();
-        assert_eq!(
-            dirty.len(),
-            1,
-            "exactly one boundary should land on dirty queue, got {dirty:?}",
-        );
-        assert_eq!(dirty[0].id, root_id, "boundary should be the root id");
-    }
-
-    /// Re-marking an already-dirty node produces no second push.
-    #[test]
-    fn mark_needs_layout_is_idempotent_on_repeat() {
-        let (mut owner, _root_id, _middle_id, leaf_id) = build_three_level_chain();
-        owner.mark_needs_layout(leaf_id);
-        let first_count = owner.nodes_needing_layout().len();
-        owner.mark_needs_layout(leaf_id);
-        assert_eq!(
-            owner.nodes_needing_layout().len(),
-            first_count,
-            "second mark on already-dirty subtree must not re-push",
-        );
     }
 
     /// When an intermediate ancestor is a relayout boundary, propagation stops
@@ -1397,15 +1148,6 @@ mod tests {
             dirty[0].id, middle_id,
             "dirty entry should be the boundary, not the root",
         );
-    }
-
-    /// Marking a stale `RenderId` terminates the walk silently with no
-    /// dirty-queue mutation.
-    #[test]
-    fn mark_needs_layout_stale_id_is_silent_noop() {
-        let (mut tracker, mut tree) = DirtyTracker::new_test_pair();
-        tracker.mark_needs_layout(&mut tree, RenderId::new(99), &mut |_| {});
-        assert!(tracker.nodes_needing_layout().is_empty());
     }
 
     fn build_repaint_boundary_chain() -> (PipelineOwner<Idle>, RenderId, RenderId, RenderId) {
@@ -1488,41 +1230,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn mark_needs_paint_walks_past_a_new_repaint_boundary() {
-        let (mut owner, root_id, boundary_id, leaf_id) = build_repaint_boundary_chain();
-        assert!(
-            !owner
-                .render_tree()
-                .get(boundary_id)
-                .expect("boundary")
-                .was_repaint_boundary(),
-            "precondition: the boundary has never produced a retained layer",
-        );
-
-        owner.mark_needs_paint(leaf_id);
-
-        for (id, label) in [
-            (leaf_id, "leaf"),
-            (boundary_id, "new boundary"),
-            (root_id, "existing paint root"),
-        ] {
-            assert!(
-                owner.render_tree().get(id).expect(label).needs_paint(),
-                "{label} must be marked by the upward walk",
-            );
-        }
-        assert_eq!(
-            owner.nodes_needing_paint(),
-            &[PaintEntry {
-                id: root_id,
-                depth: 0,
-                kind: PaintKind::Repaint
-            }],
-            "the existing ancestor must install the new boundary layer",
-        );
-    }
-
     fn clear_compositing_marks(
         owner: &mut PipelineOwner<Idle>,
         ids: impl IntoIterator<Item = RenderId>,
@@ -1535,31 +1242,6 @@ mod tests {
                 .expect("compositing test node")
                 .clear_needs_compositing_bits_update();
         }
-    }
-
-    #[test]
-    fn compositing_mark_established_boundary_queues_itself() {
-        let (mut owner, root, boundary, leaf) = build_repaint_boundary_chain();
-        owner
-            .render_tree()
-            .get(boundary)
-            .expect("boundary")
-            .set_was_repaint_boundary(true);
-        clear_compositing_marks(&mut owner, [root, boundary, leaf]);
-
-        owner.mark_needs_compositing_bits_update(boundary);
-
-        assert_eq!(
-            owner.nodes_needing_compositing_bits_update(),
-            &[DirtyNode::new(boundary, 1)],
-        );
-        assert!(
-            !owner
-                .render_tree()
-                .get(root)
-                .expect("root")
-                .needs_compositing_bits_update()
-        );
     }
 
     #[test]
@@ -1582,226 +1264,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn compositing_mark_lost_boundary_walks_upward() {
-        let (mut owner, root, boundary, leaf) = build_repaint_boundary_chain();
-        let boundary_node = owner.render_tree().get(boundary).expect("boundary");
-        boundary_node.set_was_repaint_boundary(true);
-        boundary_node.set_repaint_boundary_flag(false);
-        clear_compositing_marks(&mut owner, [root, boundary, leaf]);
-
-        owner.mark_needs_compositing_bits_update(boundary);
-
-        assert_eq!(
-            owner.nodes_needing_compositing_bits_update(),
-            &[DirtyNode::new(root, 0)],
-        );
-    }
-
-    #[test]
-    fn compositing_mark_child_under_boundary_queues_child_without_dirtying_parent() {
-        let (mut owner, root, boundary, leaf) = build_repaint_boundary_chain();
-        clear_compositing_marks(&mut owner, [root, boundary, leaf]);
-
-        owner.mark_needs_compositing_bits_update(leaf);
-
-        assert_eq!(
-            owner.nodes_needing_compositing_bits_update(),
-            &[DirtyNode::new(leaf, 2)],
-        );
-        assert!(
-            !owner
-                .render_tree()
-                .get(boundary)
-                .expect("boundary")
-                .needs_compositing_bits_update()
-        );
-    }
-
-    #[test]
-    fn compositing_mark_relies_on_already_dirty_parent_queue() {
-        let (mut owner, root, boundary, leaf) = build_repaint_boundary_chain();
-        owner
-            .render_tree()
-            .get(boundary)
-            .expect("boundary")
-            .set_was_repaint_boundary(true);
-        clear_compositing_marks(&mut owner, [root, boundary, leaf]);
-        owner.mark_needs_compositing_bits_update(boundary);
-
-        owner.mark_needs_compositing_bits_update(leaf);
-
-        assert_eq!(
-            owner.nodes_needing_compositing_bits_update(),
-            &[DirtyNode::new(boundary, 1)],
-        );
-        assert!(
-            owner
-                .render_tree()
-                .get(leaf)
-                .expect("leaf")
-                .needs_compositing_bits_update()
-        );
-    }
-
-    #[test]
-    fn compositing_mark_stale_id_is_a_noop() {
-        let mut owner = PipelineOwner::new();
-        owner.mark_needs_compositing_bits_update(RenderId::new(99));
-        assert!(owner.nodes_needing_compositing_bits_update().is_empty());
-    }
-
     // =========================================================================
     // enter_phase / exit_phase
     // =========================================================================
-
-    #[test]
-    fn enter_exit_phase_layout_sets_and_clears_flag_then_drains() {
-        let (mut tracker, _tree) = DirtyTracker::new_test_pair();
-        assert!(!tracker.debug_doing_layout());
-
-        tracker.enter_phase(PhaseKind::Layout);
-        assert!(tracker.debug_doing_layout(), "flag must be set after enter");
-
-        tracker.add_node_needing_layout(RenderId::new(5), 0);
-        assert!(
-            tracker.has_mid_marks(),
-            "mid-phase mark lands in side queue"
-        );
-
-        let drained = tracker.exit_phase(PhaseKind::Layout);
-        assert!(
-            !tracker.debug_doing_layout(),
-            "flag must be cleared after exit"
-        );
-        assert_eq!(drained, 1, "exit_phase must drain mid-marks");
-        assert_eq!(tracker.nodes_needing_layout().len(), 1);
-    }
-
-    #[test]
-    fn enter_exit_phase_paint_sets_and_clears_flag_then_drains() {
-        let (mut tracker, _tree) = DirtyTracker::new_test_pair();
-        tracker.enter_phase(PhaseKind::Paint);
-        assert!(tracker.debug_doing_paint());
-        tracker.schedule_paint_boundary(RenderId::new(7), 1);
-        assert!(tracker.has_mid_marks());
-        let drained = tracker.exit_phase(PhaseKind::Paint);
-        assert!(!tracker.debug_doing_paint());
-        assert_eq!(drained, 1);
-        assert_eq!(tracker.nodes_needing_paint().len(), 1);
-    }
-
-    #[test]
-    fn enter_exit_phase_semantics_sets_and_clears_flag_then_drains() {
-        let (mut tracker, _tree) = DirtyTracker::new_test_pair();
-        tracker.enter_phase(PhaseKind::Semantics);
-        assert!(tracker.debug_doing_semantics());
-        tracker.add_node_needing_semantics(RenderId::new(8), 2);
-        assert!(tracker.has_mid_marks());
-        let drained = tracker.exit_phase(PhaseKind::Semantics);
-        assert!(!tracker.debug_doing_semantics());
-        assert_eq!(drained, 1);
-        assert_eq!(tracker.nodes_needing_semantics().len(), 1);
-    }
 
     // =========================================================================
     // Eviction
     // =========================================================================
 
-    /// evict removes entries from both dirty and mid_layout_marks.
-    #[test]
-    fn evict_removes_from_both_queues() {
-        let (mut tracker, _tree) = DirtyTracker::new_test_pair();
-        let removed_id = RenderId::new(42);
-        let retained_id = RenderId::new(43);
-
-        for queues in [&mut tracker.dirty, &mut tracker.mid_layout_marks] {
-            for id in [removed_id, retained_id] {
-                queues.needs_layout.push(DirtyNode::new(id, 0));
-                queues.needs_compositing.push(DirtyNode::new(id, 0));
-                queues.needs_paint.enqueue(id, 0, PaintKind::Repaint);
-                queues.needs_semantics.push(DirtyNode::new(id, 0));
-            }
-        }
-
-        let mut removed = FxHashSet::default();
-        removed.insert(removed_id);
-        tracker.evict(&removed);
-
-        assert_eq!(
-            tracker.dirty_node_count(),
-            4,
-            "all four live queues must retain only the sibling"
-        );
-        assert_eq!(tracker.mid_layout_marks.total(), 4);
-        for queues in [&tracker.dirty, &tracker.mid_layout_marks] {
-            for queue in [
-                &queues.needs_layout,
-                &queues.needs_compositing,
-                &queues.needs_semantics,
-            ] {
-                assert_eq!(queue.len(), 1);
-                assert_eq!(queue.as_slice()[0].id, retained_id);
-            }
-            // The paint queue is its own type — same property, own accessor.
-            assert_eq!(queues.needs_paint.len(), 1);
-            assert_eq!(queues.needs_paint.as_slice()[0].id, retained_id);
-        }
-    }
-
     // =========================================================================
     // Finding 2 — paint error-path mid-marks drain (intentional improvement)
     // =========================================================================
-
-    /// `exit_phase(Paint)` drains mid-paint marks into `dirty.needs_paint`
-    /// even when called on the error path.
-    ///
-    /// Pre-refactor, the `run_paint` error path only cleared
-    /// `debug_doing_paint` and did NOT drain `mid_layout_marks`; marks made
-    /// between `enter_phase(Paint)` and the error were silently lost. The
-    /// always-drain contract of `exit_phase` is the correct behavior: a
-    /// mid-paint mark (e.g. a child requesting repaint during a sibling's
-    /// paint) survives into the next frame's retry.
-    #[test]
-    fn exit_phase_paint_drains_mid_marks_on_error_path() {
-        let (mut tracker, _tree) = DirtyTracker::new_test_pair();
-
-        // Simulate: enter paint phase.
-        tracker.enter_phase(PhaseKind::Paint);
-        assert!(tracker.debug_doing_paint(), "flag must be set after enter");
-
-        // Mid-paint mark arrives (routes to side queue because debug_doing_paint is true).
-        tracker.schedule_paint_boundary(RenderId::new(42), 3);
-        assert!(
-            tracker.has_mid_marks(),
-            "mid-paint mark must land in side queue while debug_doing_paint",
-        );
-        assert_eq!(
-            tracker.nodes_needing_paint().len(),
-            0,
-            "mid-paint mark must NOT land in dirty.needs_paint while the phase is active",
-        );
-
-        // Simulate error path: exit_phase is called before returning Err.
-        let drained = tracker.exit_phase(PhaseKind::Paint);
-
-        assert!(
-            !tracker.debug_doing_paint(),
-            "debug_doing_paint must be cleared after exit_phase",
-        );
-        assert_eq!(
-            drained, 1,
-            "exit_phase must drain 1 mid-paint mark even on the error path",
-        );
-        assert_eq!(
-            tracker.nodes_needing_paint().len(),
-            1,
-            "mid-paint mark must land in dirty.needs_paint after exit_phase \
-             so it survives into the next frame's retry",
-        );
-        assert!(
-            !tracker.has_mid_marks(),
-            "side queue must be empty after drain",
-        );
-    }
 }

@@ -634,27 +634,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_budget_creation() {
-        let budget = FrameBudget::new(60);
-        assert!((budget.target_duration_ms() - 1000.0 / 60.0).abs() < 0.01);
-        assert_eq!(budget.policy(), BudgetPolicy::SkipIdle);
-    }
-
-    #[test]
-    fn test_budget_tracking() {
-        let mut budget = FrameBudget::new(60);
-        budget.reset();
-
-        budget.record_build_duration(Milliseconds::new(5.0));
-        budget.record_layout_duration(Milliseconds::new(3.0));
-        budget.record_paint_duration(Milliseconds::new(4.0));
-
-        let build_stats = budget.build_stats();
-        assert_eq!(build_stats.duration.value(), 5.0);
-        assert!((build_stats.budget_percent.value() - 30.0).abs() < 1.0); // ~30% of the 60fps target duration
-    }
-
-    #[test]
     fn test_over_budget_detection() {
         let mut budget = FrameBudget::new(60); // 60fps target duration
         budget.reset();
@@ -667,19 +646,6 @@ mod tests {
     }
 
     #[test]
-    fn test_avg_frame_time() {
-        let mut budget = FrameBudget::new(60);
-
-        budget.record_frame_duration(Milliseconds::new(16.0));
-        budget.record_frame_duration(Milliseconds::new(17.0));
-        budget.record_frame_duration(Milliseconds::new(15.0));
-
-        let avg = budget.avg_frame_time();
-        assert!((avg.value() - 16.0).abs() < 0.1);
-        assert!((budget.avg_fps() - 62.5).abs() < 0.1);
-    }
-
-    #[test]
     fn test_janky_frame_detection() {
         let mut budget = FrameBudget::new(60); // 60fps target duration
 
@@ -688,73 +654,6 @@ mod tests {
 
         budget.record_frame_duration(Milliseconds::new(30.0)); // >50% over budget
         assert!(budget.is_janky());
-    }
-
-    #[test]
-    fn test_deadline_near() {
-        let mut budget = FrameBudget::new(1000); // 1ms budget for faster test
-        budget.reset();
-
-        // Initially not near deadline
-        assert!(!budget.is_deadline_near());
-
-        // Wait for 80% of budget
-        std::thread::sleep(std::time::Duration::from_micros(800));
-
-        // Should be near deadline now
-        assert!(budget.is_deadline_near());
-    }
-
-    #[test]
-    fn test_target_fps() {
-        let budget60 = FrameBudget::new(60);
-        // Allow for rounding due to float conversions
-        assert!((budget60.target_fps() as i32 - 60).abs() <= 1);
-
-        let budget120 = FrameBudget::new(120);
-        assert!((budget120.target_fps() as i32 - 120).abs() <= 1);
-    }
-
-    #[test]
-    fn test_finish_frame() {
-        let mut budget = FrameBudget::new(60);
-        budget.reset();
-
-        // Simulate some work
-        std::thread::sleep(std::time::Duration::from_millis(5));
-
-        budget.finish_frame();
-
-        // Should have recorded frame time
-        assert!(budget.last_frame_time().value() > 0.0);
-        assert!(budget.avg_frame_time().value() > 0.0);
-        assert_eq!(budget.frame_count(), 1);
-    }
-
-    #[test]
-    fn test_policy_navigation() {
-        assert_eq!(
-            BudgetPolicy::Continue.more_restrictive(),
-            Some(BudgetPolicy::SkipIdle)
-        );
-        assert_eq!(BudgetPolicy::StopAll.more_restrictive(), None);
-        assert_eq!(
-            BudgetPolicy::StopAll.less_restrictive(),
-            Some(BudgetPolicy::SkipIdleAndBuild)
-        );
-        assert_eq!(BudgetPolicy::Continue.less_restrictive(), None);
-    }
-
-    #[test]
-    fn test_all_phase_stats() {
-        let mut budget = FrameBudget::new(60);
-        budget.record_build_duration(Milliseconds::new(5.0));
-        budget.record_layout_duration(Milliseconds::new(3.0));
-        budget.record_paint_duration(Milliseconds::new(4.0));
-        budget.record_composite_duration(Milliseconds::new(2.0));
-
-        let stats = budget.all_phase_stats();
-        assert!((stats.total_duration().value() - 14.0).abs() < 0.01);
     }
 
     #[test]

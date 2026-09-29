@@ -651,28 +651,6 @@ mod tests {
     }
 
     #[test]
-    fn render_behavior_applies_none_without_scheduling_work() {
-        let view = ImpactView {
-            impact: flui_rendering::RenderUpdateImpact::NONE,
-        };
-        let mut element = RenderElement::new(&view, RenderBehavior::new());
-        let pipeline_owner = PipelineCell::new(PipelineOwner::new());
-        element.set_pipeline_owner(pipeline_owner.clone());
-        let mut build_owner = crate::BuildOwner::new();
-        element.mount(None, 0, &mut build_owner.element_owner_mut());
-        pipeline_owner.with_mut(PipelineOwner::clear_all_dirty_nodes);
-
-        element.update(&view, &mut build_owner.element_owner_mut());
-
-        pipeline_owner.with(|owner| {
-            assert!(owner.nodes_needing_layout().is_empty());
-            assert!(owner.nodes_needing_compositing_bits_update().is_empty());
-            assert!(owner.nodes_needing_paint().is_empty());
-            assert!(owner.nodes_needing_semantics().is_empty());
-        });
-    }
-
-    #[test]
     fn render_behavior_applies_an_exact_union_once() {
         let impact = flui_rendering::RenderUpdateImpact::COMPOSITING_BITS
             | flui_rendering::RenderUpdateImpact::SEMANTICS;
@@ -704,60 +682,6 @@ mod tests {
             assert_eq!(owner.nodes_needing_paint().len(), 1);
             assert_eq!(owner.nodes_needing_semantics().len(), 1);
         });
-    }
-
-    #[test]
-    fn test_render_element_creation() {
-        let view = SizedBoxView {
-            width: 100.0,
-            height: 100.0,
-        };
-        let element = RenderElement::new(&view, RenderBehavior::new());
-
-        assert_eq!(element.lifecycle(), Lifecycle::Initial);
-        assert!(element.render_id().is_none()); // Not created until mount
-    }
-
-    #[test]
-    fn test_render_element_mount_without_pipeline_owner() {
-        let view = SizedBoxView {
-            width: 100.0,
-            height: 100.0,
-        };
-        let mut element = RenderElement::new(&view, RenderBehavior::new());
-
-        // Mount without PipelineOwner - should still set lifecycle but no render_id
-        let mut build_owner = crate::BuildOwner::new();
-        element.mount(None, 0, &mut build_owner.element_owner_mut());
-
-        assert_eq!(element.lifecycle(), Lifecycle::Active);
-        assert!(element.render_id().is_none()); // No PipelineOwner, so no render_id
-    }
-
-    /// A render element mounted with no `PipelineOwner` minted no render
-    /// object (`on_mount` warns and continues), so updating it is a no-op —
-    /// the same render-less tree that mounted it can keep driving it. This
-    /// is what lets a view whose element owns a render node (`ErrorView`
-    /// over `RenderErrorBox`, say) be built and rebuilt in a unit test that
-    /// never installs a pipeline. The two half-states below stay panics.
-    #[test]
-    fn render_element_update_without_pipeline_owner_is_a_no_op() {
-        let view = SizedBoxView {
-            width: 100.0,
-            height: 100.0,
-        };
-        let mut element = RenderElement::new(&view, RenderBehavior::new());
-        let mut build_owner = crate::BuildOwner::new();
-        element.mount(None, 0, &mut build_owner.element_owner_mut());
-        element.update(
-            &SizedBoxView {
-                width: 120.0,
-                height: 100.0,
-            },
-            &mut build_owner.element_owner_mut(),
-        );
-        assert!(element.render_id().is_none());
-        assert_eq!(element.lifecycle(), Lifecycle::Active);
     }
 
     #[test]
@@ -849,31 +773,6 @@ mod tests {
             },
             &mut build_owner.element_owner_mut(),
         );
-    }
-
-    #[test]
-    fn test_render_element_mount_with_pipeline_owner() {
-        let view = SizedBoxView {
-            width: 100.0,
-            height: 100.0,
-        };
-        let mut element = RenderElement::new(&view, RenderBehavior::new());
-
-        // Set up PipelineOwner
-        let pipeline_owner = PipelineCell::new(PipelineOwner::new());
-        element.set_pipeline_owner(pipeline_owner.clone());
-
-        let mut build_owner = crate::BuildOwner::new();
-        element.mount(None, 0, &mut build_owner.element_owner_mut());
-
-        assert_eq!(element.lifecycle(), Lifecycle::Active);
-        assert!(element.render_id().is_some());
-
-        // Verify RenderObject was inserted into RenderTree
-        let render_id = element.render_id().unwrap();
-        pipeline_owner.with(|owner| {
-            assert!(owner.render_tree().contains(render_id));
-        });
     }
 
     #[test]

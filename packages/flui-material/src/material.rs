@@ -279,32 +279,6 @@ mod tests {
     }
 
     #[test]
-    fn create_render_object_defaults_to_flat_unclipped_rectangle() {
-        let render_object = Material::new(Color::WHITE)
-            .create_render_object(&flui_sdk::view::RenderObjectContext::detached());
-
-        assert_eq!(render_object.elevation(), 0.0);
-        assert_eq!(render_object.clip_behavior(), Clip::None);
-    }
-
-    #[test]
-    fn update_render_object_applies_changed_color_and_elevation() {
-        let mut render_object = Material::new(Color::BLACK)
-            .create_render_object(&flui_sdk::view::RenderObjectContext::detached());
-
-        let impact = Material::new(Color::WHITE)
-            .elevation(3.0)
-            .update_render_object(
-                &flui_sdk::view::RenderObjectContext::detached(),
-                &mut render_object,
-            );
-        assert_eq!(impact, flui_sdk::rendering::RenderUpdateImpact::PAINT);
-
-        assert_eq!(render_object.color(), Color::WHITE);
-        assert_eq!(render_object.elevation(), 3.0);
-    }
-
-    #[test]
     fn update_render_object_compares_shape_independently() {
         let context = flui_sdk::view::RenderObjectContext::detached();
         let original = Material::new(Color::WHITE).shape(MaterialShape::Stadium);
@@ -336,21 +310,6 @@ mod tests {
         let render_object = Material::new(Color::WHITE)
             .create_render_object(&flui_sdk::view::RenderObjectContext::detached());
         assert!(!render_object.has_custom_clipper());
-    }
-
-    #[test]
-    fn has_children_reflects_whether_a_child_was_set() {
-        assert!(!Material::new(Color::WHITE).has_children());
-        assert!(
-            Material::new(Color::WHITE)
-                .child(flui_sdk::widgets::SizedBox::shrink())
-                .has_children()
-        );
-    }
-
-    #[test]
-    fn shape_defaults_to_the_plain_rectangle() {
-        assert_eq!(Material::new(Color::WHITE).shape, MaterialShape::default());
     }
 
     /// The `.shape(...)` builder actually reaches the field

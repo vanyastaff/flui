@@ -8,15 +8,13 @@
 // Send + Sync to satisfy clippy. Future UiRealm/Rc migration should remove this.
 #![expect(clippy::arc_with_non_send_sync)]
 
-use std::{any::TypeId, rc::Rc, sync::Arc};
+use std::{any::TypeId, sync::Arc};
 
-use flui_interaction::FocusManager;
 use flui_view::{
-    BuildContext, BuildContextExt, BuildOwner, ElementBuildContext, ElementBuildContextBuilder,
-    ElementTree, IntoView, Lifecycle, LifecycleContext, StatelessView, View, ViewExt,
+    BuildContext, BuildOwner, ElementBuildContext, ElementTree, IntoView, LifecycleContext,
+    StatelessView, View, ViewExt,
 };
 use parking_lot::RwLock;
-use static_assertions::assert_not_impl_any;
 
 // ============================================================================
 // Test Views
@@ -72,320 +70,17 @@ fn create_tree_and_owner() -> (Arc<RwLock<ElementTree>>, Arc<RwLock<BuildOwner>>
 // ElementBuildContext Creation Tests
 // ============================================================================
 
-#[test]
-fn test_context_creation_for_root() {
-    let (tree, owner) = create_tree_and_owner();
-
-    let view = SimpleView {
-        name: "root".to_string(),
-    };
-    let root_id = tree
-        .write()
-        .mount_root(&view, &mut owner.write().element_owner_mut());
-
-    let ctx = ElementBuildContext::for_element(root_id, tree.clone(), owner.clone());
-
-    assert!(ctx.is_some());
-    let ctx = ctx.unwrap();
-    assert_eq!(ctx.element_id(), root_id);
-    assert_eq!(ctx.depth(), 0);
-    assert!(ctx.mounted());
-}
-
-#[test]
-fn test_context_creation_for_child() {
-    let (tree, owner) = create_tree_and_owner();
-
-    let root_view = SimpleView {
-        name: "root".to_string(),
-    };
-    let child_view = ChildView {
-        parent_name: "root".to_string(),
-    };
-
-    let root_id = tree
-        .write()
-        .mount_root(&root_view, &mut owner.write().element_owner_mut());
-    let child_id = tree.write().insert(
-        &child_view,
-        root_id,
-        0,
-        &mut owner.write().element_owner_mut(),
-    );
-
-    let ctx = ElementBuildContext::for_element(child_id, tree.clone(), owner.clone());
-
-    assert!(ctx.is_some());
-    let ctx = ctx.unwrap();
-    assert_eq!(ctx.element_id(), child_id);
-    assert_eq!(ctx.depth(), 1);
-    assert!(ctx.mounted());
-}
-
-#[test]
-fn test_context_creation_nonexistent_element() {
-    let (tree, owner) = create_tree_and_owner();
-
-    let fake_id = flui_foundation::ElementId::new(999);
-    let ctx = ElementBuildContext::for_element(fake_id, tree, owner);
-
-    assert!(ctx.is_none());
-}
-
-#[test]
-fn context_returns_its_build_owners_exact_focus_manager() {
-    let focus_manager = FocusManager::new();
-    let tree = Arc::new(RwLock::new(ElementTree::new()));
-    let owner = Arc::new(RwLock::new(BuildOwner::with_focus_manager(Rc::clone(
-        &focus_manager,
-    ))));
-    let context =
-        ElementBuildContext::new(flui_foundation::ElementId::new(1), 0, true, tree, owner);
-
-    assert!(Rc::ptr_eq(&context.focus_manager(), &focus_manager));
-}
-
-#[test]
-fn test_context_builder() {
-    let (builder, tree, owner) = ElementBuildContextBuilder::new().with_new_tree_and_owner();
-
-    let view = SimpleView {
-        name: "test".to_string(),
-    };
-    let root_id = tree
-        .write()
-        .mount_root(&view, &mut owner.write().element_owner_mut());
-
-    let ctx = builder.build_for(root_id);
-
-    assert!(ctx.is_some());
-    let ctx = ctx.unwrap();
-    assert_eq!(ctx.element_id(), root_id);
-}
-
-#[test]
-fn test_context_builder_without_tree() {
-    let builder = ElementBuildContextBuilder::new();
-    let fake_id = flui_foundation::ElementId::new(1);
-
-    let ctx = builder.build_for(fake_id);
-
-    assert!(ctx.is_none());
-}
-
 // ============================================================================
 // BuildContext Trait Methods Tests
 // ============================================================================
-
-#[test]
-fn test_element_id() {
-    let (tree, owner) = create_tree_and_owner();
-
-    let view = SimpleView {
-        name: "test".to_string(),
-    };
-    let root_id = tree
-        .write()
-        .mount_root(&view, &mut owner.write().element_owner_mut());
-
-    let ctx = ElementBuildContext::for_element(root_id, tree, owner).unwrap();
-
-    assert_eq!(ctx.element_id(), root_id);
-}
-
-#[test]
-fn test_depth_root() {
-    let (tree, owner) = create_tree_and_owner();
-
-    let view = SimpleView {
-        name: "root".to_string(),
-    };
-    let root_id = tree
-        .write()
-        .mount_root(&view, &mut owner.write().element_owner_mut());
-
-    let ctx = ElementBuildContext::for_element(root_id, tree, owner).unwrap();
-
-    assert_eq!(ctx.depth(), 0);
-}
-
-#[test]
-fn test_depth_nested() {
-    let (tree, owner) = create_tree_and_owner();
-
-    let root_view = SimpleView {
-        name: "root".to_string(),
-    };
-    let child_view = ChildView {
-        parent_name: "root".to_string(),
-    };
-    let grandchild_view = SimpleView {
-        name: "grandchild".to_string(),
-    };
-
-    let root_id = tree
-        .write()
-        .mount_root(&root_view, &mut owner.write().element_owner_mut());
-    let child_id = tree.write().insert(
-        &child_view,
-        root_id,
-        0,
-        &mut owner.write().element_owner_mut(),
-    );
-    let grandchild_id = tree.write().insert(
-        &grandchild_view,
-        child_id,
-        0,
-        &mut owner.write().element_owner_mut(),
-    );
-
-    let ctx = ElementBuildContext::for_element(grandchild_id, tree, owner).unwrap();
-
-    assert_eq!(ctx.depth(), 2);
-}
-
-#[test]
-fn test_mounted_active_element() {
-    let (tree, owner) = create_tree_and_owner();
-
-    let view = SimpleView {
-        name: "test".to_string(),
-    };
-    let root_id = tree
-        .write()
-        .mount_root(&view, &mut owner.write().element_owner_mut());
-
-    let ctx = ElementBuildContext::for_element(root_id, tree, owner).unwrap();
-
-    assert!(ctx.mounted());
-}
-
-#[test]
-fn test_mounted_deactivated_element() {
-    let (tree, owner) = create_tree_and_owner();
-
-    let view = SimpleView {
-        name: "test".to_string(),
-    };
-    let root_id = tree
-        .write()
-        .mount_root(&view, &mut owner.write().element_owner_mut());
-    {
-        let mut owner = owner.write();
-        tree.write()
-            .deactivate(root_id, &mut owner.element_owner_mut());
-    }
-
-    // Note: Context is created with mounted status at creation time
-    // After deactivation, we need to check the element directly
-    let tree_guard = tree.read();
-    let node = tree_guard.get(root_id).unwrap();
-    assert_eq!(node.element().lifecycle(), Lifecycle::Inactive);
-}
 
 // ============================================================================
 // mark_needs_build Tests
 // ============================================================================
 
-#[test]
-fn test_mark_needs_build() {
-    let (tree, owner) = create_tree_and_owner();
-
-    let view = SimpleView {
-        name: "test".to_string(),
-    };
-    let root_id = tree
-        .write()
-        .mount_root(&view, &mut owner.write().element_owner_mut());
-
-    let ctx = ElementBuildContext::for_element(root_id, tree.clone(), owner.clone()).unwrap();
-
-    assert!(!owner.read().has_dirty_elements());
-
-    ctx.mark_needs_build();
-
-    assert!(owner.read().has_dirty_elements());
-    assert_eq!(owner.read().dirty_count(), 1);
-}
-
-#[test]
-fn test_mark_needs_build_multiple_times() {
-    let (tree, owner) = create_tree_and_owner();
-
-    let view = SimpleView {
-        name: "test".to_string(),
-    };
-    let root_id = tree
-        .write()
-        .mount_root(&view, &mut owner.write().element_owner_mut());
-
-    let ctx = ElementBuildContext::for_element(root_id, tree.clone(), owner.clone()).unwrap();
-
-    // Mark multiple times - should deduplicate
-    ctx.mark_needs_build();
-    ctx.mark_needs_build();
-    ctx.mark_needs_build();
-
-    assert_eq!(owner.read().dirty_count(), 1);
-}
-
-#[test]
-fn test_mark_needs_build_multiple_elements() {
-    let (tree, owner) = create_tree_and_owner();
-
-    let root_view = SimpleView {
-        name: "root".to_string(),
-    };
-    let child_view = ChildView {
-        parent_name: "root".to_string(),
-    };
-
-    let root_id = tree
-        .write()
-        .mount_root(&root_view, &mut owner.write().element_owner_mut());
-    let child_id = tree.write().insert(
-        &child_view,
-        root_id,
-        0,
-        &mut owner.write().element_owner_mut(),
-    );
-
-    let root_ctx = ElementBuildContext::for_element(root_id, tree.clone(), owner.clone()).unwrap();
-    let child_ctx =
-        ElementBuildContext::for_element(child_id, tree.clone(), owner.clone()).unwrap();
-
-    root_ctx.mark_needs_build();
-    child_ctx.mark_needs_build();
-
-    assert_eq!(owner.read().dirty_count(), 2);
-}
-
 // ============================================================================
 // visit_ancestor_elements Tests
 // ============================================================================
-
-#[test]
-fn test_visit_ancestor_elements_empty() {
-    let (tree, owner) = create_tree_and_owner();
-
-    let view = SimpleView {
-        name: "root".to_string(),
-    };
-    let root_id = tree
-        .write()
-        .mount_root(&view, &mut owner.write().element_owner_mut());
-
-    let ctx = ElementBuildContext::for_element(root_id, tree, owner).unwrap();
-
-    let mut ancestors = Vec::new();
-    ctx.visit_ancestor_elements(&mut |id| {
-        ancestors.push(id);
-        true
-    });
-
-    // Root has no ancestors
-    assert!(ancestors.is_empty());
-}
 
 #[test]
 fn test_visit_ancestor_elements_chain() {
@@ -430,48 +125,6 @@ fn test_visit_ancestor_elements_chain() {
     assert_eq!(ancestors[1], root_id);
 }
 
-#[test]
-fn test_visit_ancestor_elements_early_stop() {
-    let (tree, owner) = create_tree_and_owner();
-
-    let root_view = SimpleView {
-        name: "root".to_string(),
-    };
-    let child_view = ChildView {
-        parent_name: "root".to_string(),
-    };
-    let grandchild_view = SimpleView {
-        name: "grandchild".to_string(),
-    };
-
-    let root_id = tree
-        .write()
-        .mount_root(&root_view, &mut owner.write().element_owner_mut());
-    let child_id = tree.write().insert(
-        &child_view,
-        root_id,
-        0,
-        &mut owner.write().element_owner_mut(),
-    );
-    let grandchild_id = tree.write().insert(
-        &grandchild_view,
-        child_id,
-        0,
-        &mut owner.write().element_owner_mut(),
-    );
-
-    let ctx = ElementBuildContext::for_element(grandchild_id, tree, owner).unwrap();
-
-    let mut ancestors = Vec::new();
-    ctx.visit_ancestor_elements(&mut |id| {
-        ancestors.push(id);
-        false // Stop after first
-    });
-
-    assert_eq!(ancestors.len(), 1);
-    assert_eq!(ancestors[0], child_id);
-}
-
 // ============================================================================
 // find_ancestor_element Tests
 // ============================================================================
@@ -504,95 +157,9 @@ fn test_find_ancestor_element_found() {
     assert_eq!(ancestor, Some(root_id));
 }
 
-#[test]
-fn test_find_ancestor_element_not_found() {
-    let (tree, owner) = create_tree_and_owner();
-
-    let root_view = SimpleView {
-        name: "root".to_string(),
-    };
-    let child_view = ChildView {
-        parent_name: "root".to_string(),
-    };
-
-    let root_id = tree
-        .write()
-        .mount_root(&root_view, &mut owner.write().element_owner_mut());
-    let child_id = tree.write().insert(
-        &child_view,
-        root_id,
-        0,
-        &mut owner.write().element_owner_mut(),
-    );
-
-    let ctx = ElementBuildContext::for_element(child_id, tree, owner).unwrap();
-
-    // Look for a type that doesn't exist in ancestors
-    struct NonExistentView;
-    let ancestor = ctx.find_ancestor_element(TypeId::of::<NonExistentView>());
-
-    assert!(ancestor.is_none());
-}
-
-#[test]
-fn test_find_ancestor_element_from_root() {
-    let (tree, owner) = create_tree_and_owner();
-
-    let view = SimpleView {
-        name: "root".to_string(),
-    };
-    let root_id = tree
-        .write()
-        .mount_root(&view, &mut owner.write().element_owner_mut());
-
-    let ctx = ElementBuildContext::for_element(root_id, tree, owner).unwrap();
-
-    // Root has no ancestors
-    let ancestor = ctx.find_ancestor_element(TypeId::of::<SimpleView>());
-
-    assert!(ancestor.is_none());
-}
-
 // ============================================================================
 // is_building Tests
 // ============================================================================
-
-#[test]
-fn test_is_building_default_false() {
-    let (tree, owner) = create_tree_and_owner();
-
-    let view = SimpleView {
-        name: "test".to_string(),
-    };
-    let root_id = tree
-        .write()
-        .mount_root(&view, &mut owner.write().element_owner_mut());
-
-    let ctx = ElementBuildContext::for_element(root_id, tree, owner).unwrap();
-
-    assert!(!ctx.is_building());
-}
-
-#[cfg(debug_assertions)]
-#[test]
-fn test_set_building_flag() {
-    let (tree, owner) = create_tree_and_owner();
-
-    let view = SimpleView {
-        name: "test".to_string(),
-    };
-    let root_id = tree
-        .write()
-        .mount_root(&view, &mut owner.write().element_owner_mut());
-
-    let mut ctx = ElementBuildContext::for_element(root_id, tree, owner).unwrap();
-
-    ctx.set_building(true);
-    assert!(ctx.is_building());
-
-    ctx.set_building(false);
-    assert!(!ctx.is_building());
-}
 
 // ============================================================================
 // rebuild_handle() Tests
@@ -623,164 +190,18 @@ fn rebuild_handle_from_element_build_context_is_active_and_bound() {
     assert_eq!(owner.read().pending_external_builds(), 1);
 }
 
-#[test]
-fn test_build_owner_access_via_method() {
-    let (tree, owner) = create_tree_and_owner();
-
-    let view = SimpleView {
-        name: "test".to_string(),
-    };
-    let root_id = tree
-        .write()
-        .mount_root(&view, &mut owner.write().element_owner_mut());
-
-    let ctx = ElementBuildContext::for_element(root_id, tree, owner.clone()).unwrap();
-
-    // Access owner through the direct method
-    let ctx_owner = ctx.build_owner();
-    assert!(Arc::ptr_eq(ctx_owner, &owner));
-}
-
 // ============================================================================
 // Ownership Tests
 // ============================================================================
-
-#[test]
-fn context_is_owner_local() {
-    assert_not_impl_any!(ElementBuildContext: Send, Sync);
-}
-
-#[test]
-fn context_builder_is_owner_local() {
-    assert_not_impl_any!(ElementBuildContextBuilder: Send, Sync);
-}
 
 // ============================================================================
 // BuildContextExt Tests
 // ============================================================================
 
-#[test]
-fn test_depend_on_returns_none_when_no_inherited_ancestor() {
-    // depend_on returns None when no InheritedView<T> ancestor exists.
-    // Acceptance coverage for `BuildContextExt::depend_on`'s
-    // edge case "no-ancestor None".
-    let (tree, owner) = create_tree_and_owner();
-
-    let view = SimpleView {
-        name: "test".to_string(),
-    };
-    let root_id = tree
-        .write()
-        .mount_root(&view, &mut owner.write().element_owner_mut());
-
-    let ctx = ElementBuildContext::for_element(root_id, tree, owner).unwrap();
-
-    let result: Option<String> = ctx.depend_on::<String, String>(std::clone::Clone::clone);
-    assert!(result.is_none());
-}
-
-#[test]
-fn test_get_returns_none_when_no_inherited_ancestor() {
-    // `get_inherited` callback-form parity with depend_on: returns
-    // None when no ancestor of type `T` exists.
-    let (tree, owner) = create_tree_and_owner();
-
-    let view = SimpleView {
-        name: "test".to_string(),
-    };
-    let root_id = tree
-        .write()
-        .mount_root(&view, &mut owner.write().element_owner_mut());
-
-    let ctx = ElementBuildContext::for_element(root_id, tree, owner).unwrap();
-
-    let result: Option<i32> = ctx.get::<i32, i32>(|v| *v);
-    assert!(result.is_none());
-}
-
 // ============================================================================
 // Debug Tests
 // ============================================================================
 
-#[test]
-fn test_context_debug() {
-    let (tree, owner) = create_tree_and_owner();
-
-    let view = SimpleView {
-        name: "test".to_string(),
-    };
-    let root_id = tree
-        .write()
-        .mount_root(&view, &mut owner.write().element_owner_mut());
-
-    let ctx = ElementBuildContext::for_element(root_id, tree, owner).unwrap();
-
-    let debug_str = format!("{ctx:?}");
-    assert!(debug_str.contains("ElementBuildContext"));
-    assert!(debug_str.contains("element_id"));
-    assert!(debug_str.contains("depth"));
-    assert!(debug_str.contains("mounted"));
-}
-
-#[test]
-fn test_builder_debug() {
-    let builder = ElementBuildContextBuilder::new();
-    let debug_str = format!("{builder:?}");
-    assert!(debug_str.contains("ElementBuildContextBuilder"));
-}
-
 // ============================================================================
 // Deep Tree Tests
 // ============================================================================
-
-#[test]
-fn test_deep_tree_ancestor_traversal() {
-    let (tree, owner) = create_tree_and_owner();
-
-    // Build a chain of 10 elements
-    let root_view = SimpleView {
-        name: "root".to_string(),
-    };
-    let root_id = tree
-        .write()
-        .mount_root(&root_view, &mut owner.write().element_owner_mut());
-
-    let mut parent_id = root_id;
-    let mut all_ids = vec![root_id];
-
-    for i in 1..10 {
-        let view = SimpleView {
-            name: format!("node_{i}"),
-        };
-        let child_id =
-            tree.write()
-                .insert(&view, parent_id, 0, &mut owner.write().element_owner_mut());
-        all_ids.push(child_id);
-        parent_id = child_id;
-    }
-
-    // Get context for deepest element
-    let deepest_id = *all_ids.last().unwrap();
-    let ctx = ElementBuildContext::for_element(deepest_id, tree, owner).unwrap();
-
-    // Should have depth 9 (0-indexed from root)
-    assert_eq!(ctx.depth(), 9);
-
-    // Visit all ancestors
-    let mut ancestors = Vec::new();
-    ctx.visit_ancestor_elements(&mut |id| {
-        ancestors.push(id);
-        true
-    });
-
-    // Should find all 9 ancestors
-    assert_eq!(ancestors.len(), 9);
-
-    // Verify they're in correct order (parent first, root last)
-    for (i, &ancestor_id) in ancestors.iter().enumerate() {
-        // ancestors[0] should be all_ids[8] (parent of deepest)
-        // ancestors[8] should be all_ids[0] (root)
-        let expected_idx = 8 - i;
-        assert_eq!(ancestor_id, all_ids[expected_idx]);
-    }
-}

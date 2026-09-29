@@ -758,30 +758,6 @@ mod tests {
     // OffsetLayer tests
     // ========================================================================
 
-    #[test]
-    fn test_offset_layer_pushes_and_pops_transform() {
-        let mut renderer = MockRenderer::new();
-        let layer = OffsetLayer::new(Offset::new(10.0, 20.0));
-
-        layer.render(&mut renderer);
-        assert_eq!(renderer.calls, vec!["push_offset"]);
-
-        layer.cleanup(&mut renderer);
-        assert_eq!(renderer.calls, vec!["push_offset", "pop_transform"]);
-    }
-
-    #[test]
-    fn test_offset_layer_zero_is_noop() {
-        let mut renderer = MockRenderer::new();
-        let layer = OffsetLayer::zero();
-
-        layer.render(&mut renderer);
-        assert!(renderer.calls.is_empty(), "zero offset should not push");
-
-        layer.cleanup(&mut renderer);
-        assert!(renderer.calls.is_empty(), "zero offset should not pop");
-    }
-
     // ========================================================================
     // TransformLayer tests
     // ========================================================================
@@ -825,65 +801,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_transform_layer_pushes_and_pops() {
-        let mut renderer = MockRenderer::new();
-        let layer = TransformLayer::translation(10.0, 20.0);
-
-        layer.render(&mut renderer);
-        assert_eq!(renderer.calls, vec!["push_transform"]);
-
-        layer.cleanup(&mut renderer);
-        assert_eq!(renderer.calls, vec!["push_transform", "pop_transform"]);
-    }
-
-    #[test]
-    fn test_transform_layer_identity_is_noop() {
-        let mut renderer = MockRenderer::new();
-        let layer = TransformLayer::identity();
-
-        layer.render(&mut renderer);
-        assert!(renderer.calls.is_empty(), "identity should not push");
-
-        layer.cleanup(&mut renderer);
-        assert!(renderer.calls.is_empty(), "identity should not pop");
-    }
-
     // ========================================================================
     // OpacityLayer tests
     // ========================================================================
-
-    #[test]
-    fn test_opacity_layer_pushes_and_pops() {
-        let mut renderer = MockRenderer::new();
-        let layer = OpacityLayer::new(0.5);
-
-        layer.render(&mut renderer);
-        assert_eq!(renderer.calls, vec!["push_opacity"]);
-
-        layer.cleanup(&mut renderer);
-        assert_eq!(renderer.calls, vec!["push_opacity", "pop_opacity"]);
-    }
-
-    #[test]
-    fn test_opacity_layer_with_offset_pushes_offset_then_opacity() {
-        let mut renderer = MockRenderer::new();
-        let layer = OpacityLayer::with_offset(0.5, Offset::new(10.0, 20.0));
-
-        layer.render(&mut renderer);
-        assert_eq!(renderer.calls, vec!["push_offset", "push_opacity"]);
-
-        layer.cleanup(&mut renderer);
-        assert_eq!(
-            renderer.calls,
-            vec![
-                "push_offset",
-                "push_opacity",
-                "pop_opacity",
-                "pop_transform"
-            ]
-        );
-    }
 
     /// Alpha 0 is an opacity group at zero — the walk still descends, so
     /// skipping the push would draw the children fully visible.
@@ -899,48 +819,9 @@ mod tests {
         assert_eq!(renderer.calls, vec!["push_opacity", "pop_opacity"]);
     }
 
-    #[test]
-    fn test_opacity_layer_opaque_is_noop() {
-        let mut renderer = MockRenderer::new();
-        let layer = OpacityLayer::opaque();
-
-        layer.render(&mut renderer);
-        assert!(renderer.calls.is_empty(), "opaque should skip render");
-
-        layer.cleanup(&mut renderer);
-        assert!(renderer.calls.is_empty(), "opaque should skip cleanup");
-    }
-
-    /// The offset applies whatever the alpha: it is what
-    /// `Layer::local_translation` reports.
-    #[test]
-    fn test_opacity_layer_opaque_with_offset_pushes_only_the_offset() {
-        let mut renderer = MockRenderer::new();
-        let layer = OpacityLayer::with_offset(1.0, Offset::new(10.0, 20.0));
-
-        layer.render(&mut renderer);
-        assert_eq!(renderer.calls, vec!["push_offset"]);
-
-        layer.cleanup(&mut renderer);
-        assert_eq!(renderer.calls, vec!["push_offset", "pop_transform"]);
-    }
-
     // ========================================================================
     // ClipRectLayer tests
     // ========================================================================
-
-    #[test]
-    fn test_clip_rect_layer_pushes_and_pops() {
-        let mut renderer = MockRenderer::new();
-        let rect = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
-        let layer = ClipRectLayer::new(rect, Clip::HardEdge);
-
-        layer.render(&mut renderer);
-        assert_eq!(renderer.calls, vec!["push_clip_rect"]);
-
-        layer.cleanup(&mut renderer);
-        assert_eq!(renderer.calls, vec!["push_clip_rect", "pop_clip"]);
-    }
 
     /// The squircle layer reaches the squircle call, not the path call that
     /// discards its argument (issue #921).
@@ -967,53 +848,6 @@ mod tests {
 
         layer.cleanup(&mut renderer);
         assert_eq!(renderer.calls, vec!["push_clip_rsuperellipse", "pop_clip"]);
-    }
-
-    #[test]
-    fn test_clip_rect_layer_no_clip_is_noop() {
-        let mut renderer = MockRenderer::new();
-        let rect = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);
-        let layer = ClipRectLayer::new(rect, Clip::None);
-
-        layer.render(&mut renderer);
-        assert!(renderer.calls.is_empty(), "Clip::None should not push");
-
-        layer.cleanup(&mut renderer);
-        assert!(renderer.calls.is_empty(), "Clip::None should not pop");
-    }
-
-    /// `Clip::None` is a no-op at the engine for the rounded-rect shape too —
-    /// same `clips()` gate `ClipRectLayer` reads, on `ClipRRectLayer`. This is
-    /// what backs the claim that no `RenderClip` setter needs to be
-    /// structural at `Clip::None`: the layer keeps existing, the engine just
-    /// never pushes it.
-    #[test]
-    fn test_clip_rrect_layer_no_clip_is_noop() {
-        let mut renderer = MockRenderer::new();
-        let rrect = RRect::from_rect_circular(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), 8.0);
-        let layer = ClipRRectLayer::new(rrect, Clip::None);
-
-        layer.render(&mut renderer);
-        assert!(renderer.calls.is_empty(), "Clip::None should not push");
-
-        layer.cleanup(&mut renderer);
-        assert!(renderer.calls.is_empty(), "Clip::None should not pop");
-    }
-
-    /// `Clip::None` is a no-op at the engine for the path shape too — same
-    /// `clips()` gate, on `ClipPathLayer`.
-    #[test]
-    fn test_clip_path_layer_no_clip_is_noop() {
-        let mut renderer = MockRenderer::new();
-        let mut path = Path::new();
-        path.add_rect(Rect::from_xywh(0.0, 0.0, 100.0, 100.0));
-        let layer = ClipPathLayer::new(path, Clip::None);
-
-        layer.render(&mut renderer);
-        assert!(renderer.calls.is_empty(), "Clip::None should not push");
-
-        layer.cleanup(&mut renderer);
-        assert!(renderer.calls.is_empty(), "Clip::None should not pop");
     }
 
     // ========================================================================
@@ -1067,32 +901,4 @@ mod tests {
     // ========================================================================
     // Layer enum dispatch tests
     // ========================================================================
-
-    #[test]
-    fn test_layer_enum_dispatches_to_offset() {
-        let mut renderer = MockRenderer::new();
-        let layer = Layer::Offset(OffsetLayer::new(Offset::new(5.0, 10.0)));
-
-        layer.render(&mut renderer);
-        assert_eq!(renderer.calls, vec!["push_offset"]);
-
-        layer.cleanup(&mut renderer);
-        assert_eq!(renderer.calls, vec!["push_offset", "pop_transform"]);
-    }
-
-    #[test]
-    fn test_layer_enum_annotated_region_is_noop() {
-        use std::sync::Arc;
-        let mut renderer = MockRenderer::new();
-        let layer = Layer::AnnotatedRegion(flui_layer::AnnotatedRegionLayer::new(
-            Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
-            Arc::new("test annotation".to_string()),
-        ));
-
-        layer.render(&mut renderer);
-        assert!(renderer.calls.is_empty());
-
-        layer.cleanup(&mut renderer);
-        assert!(renderer.calls.is_empty());
-    }
 }

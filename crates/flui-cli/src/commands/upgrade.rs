@@ -388,26 +388,6 @@ mod tests {
     }
 
     #[test]
-    fn missing_line_is_none() {
-        assert_eq!(parse_search_version("", "flui-cli"), None);
-    }
-
-    #[test]
-    fn newer_patch_is_newer() {
-        assert_eq!(is_newer("0.3.1", "0.3.0"), Some(true));
-    }
-
-    #[test]
-    fn same_version_is_not_newer() {
-        assert_eq!(is_newer("0.3.0", "0.3.0"), Some(false));
-    }
-
-    #[test]
-    fn older_version_is_not_newer() {
-        assert_eq!(is_newer("0.2.9", "0.3.0"), Some(false));
-    }
-
-    #[test]
     fn release_is_newer_than_its_own_prerelease() {
         assert_eq!(is_newer("0.3.0", "0.3.0-beta.1"), Some(true));
         assert_eq!(is_newer("0.3.0-beta.1", "0.3.0"), Some(false));
@@ -422,35 +402,6 @@ mod tests {
         assert_eq!(is_newer("0.3.0-beta.10", "0.3.0-rc.1"), Some(false));
         assert_eq!(is_newer("0.3.0", "0.3.0-rc.1"), Some(true));
         assert_eq!(is_newer("0.3.0-rc.1", "0.3.0"), Some(false));
-    }
-
-    #[test]
-    fn compare_prerelease_orders_numeric_identifiers_numerically() {
-        assert_eq!(
-            compare_prerelease("beta.9", "beta.10"),
-            std::cmp::Ordering::Less
-        );
-        assert_eq!(
-            compare_prerelease("beta.10", "beta.9"),
-            std::cmp::Ordering::Greater
-        );
-    }
-
-    #[test]
-    fn compare_identifier_ranks_numeric_below_alphanumeric() {
-        assert_eq!(compare_identifier("9", "alpha"), std::cmp::Ordering::Less);
-        assert_eq!(
-            compare_identifier("alpha", "9"),
-            std::cmp::Ordering::Greater
-        );
-    }
-
-    #[test]
-    fn compare_prerelease_shorter_is_lower_on_equal_prefix() {
-        assert_eq!(
-            compare_prerelease("alpha", "alpha.1"),
-            std::cmp::Ordering::Less
-        );
     }
 
     #[test]

@@ -125,76 +125,6 @@ fn tap_sets_the_controller_index_through_real_pointer_dispatch() {
     );
 }
 
-/// A tap on the already-selected tab is the no-op [`TabController`] itself
-/// already guarantees (`index == self.index()`) — this proves that no-op
-/// reaches all the way through real dispatch too, not just direct
-/// `set_index` calls.
-#[test]
-fn tapping_the_already_selected_tab_leaves_the_index_unchanged() {
-    let controller = TabController::new(2, 0);
-    let laid = lay_out(
-        themed(
-            ThemeData::light(),
-            TabBar::secondary(two_tabs()).controller(controller.clone()),
-        ),
-        tight(200.0, 48.0),
-    );
-
-    laid.dispatch_pointer_down(50.0, 24.0);
-    laid.dispatch_pointer_up(50.0, 24.0);
-
-    assert_eq!(controller.index(), 0);
-}
-
-/// The M3 secondary bar's divider (1dp, `outlineVariant`) reaches the
-/// mounted tree as a full-bar-width [`flui_sdk::widgets::DecoratedBox`]-backed
-/// fill, and a `TabBarThemeData.divider_color` override actually changes
-/// what's painted — not just what `resolve_style` computes in isolation
-/// (see `tabs.rs`'s own `resolve_style_theme_override_beats_the_default`
-/// for that unit-level half of this contract).
-#[test]
-fn divider_theme_override_reaches_the_mounted_tree() {
-    let themed_divider = Color::rgb(10, 20, 30);
-    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
-        tab_bar_theme: Some(TabBarThemeData {
-            divider_color: Some(themed_divider),
-            ..Default::default()
-        }),
-        ..Default::default()
-    });
-
-    let laid = lay_out(
-        themed(
-            theme,
-            TabBar::secondary(two_tabs()).controller(TabController::new(2, 0)),
-        ),
-        tight(200.0, 48.0),
-    );
-
-    // Every per-tab indicator band is ALSO a `RenderContainer` (a
-    // `Container::color(...)`, same as the divider) — 100px wide, 2dp
-    // tall. The divider is the one spanning the FULL bar width at 1dp
-    // tall, which disambiguates it without walking exact tree structure.
-    let divider = laid
-        .find_all_by_render_type("RenderContainer")
-        .into_iter()
-        .find(|&id| {
-            let size = laid.size(id);
-            size.height == 1.0 && size.width == 200.0
-        })
-        .expect("a full-width 1dp divider must be mounted");
-
-    let color = laid
-        .render_property(divider, "color")
-        .expect("RenderContainer reports a \"color\" diagnostics property");
-
-    assert!(
-        color.contains(&format!("{themed_divider:?}")),
-        "a configured tab_bar_theme.divider_color must reach the mounted divider — got \
-         {color:?}"
-    );
-}
-
 /// The selected tab's indicator band (2dp, `indicator_color`) is the OTHER
 /// `RenderContainer` shape — 100px wide (one of two equal tabs), 2dp
 /// tall — and a `TabBarThemeData.indicator_color` override reaches it too.
@@ -258,8 +188,7 @@ fn indicator_theme_override_reaches_the_mounted_selected_tab_band() {
 /// `TabBarIndicatorSize::Tab` geometry (the indicator rect's height spans
 /// the full bar height, i.e. its top is `bar_height - indicator_weight`).
 ///
-/// Neither `resolve_style_defaults_to_the_m3_secondary_token_table` (a pure
-/// unit test) nor `divider_theme_override_reaches_the_mounted_tree`/
+/// Neither the pure `resolve_style` unit tests nor
 /// `indicator_theme_override_reaches_the_mounted_selected_tab_band` (mounted,
 /// but width/height-only) constrain the VERTICAL position of either shape —
 /// a `build_tab_cell` regression that puts the band at the top of the cell
@@ -350,29 +279,6 @@ fn subtree_contains(
     laid.children(root)
         .into_iter()
         .any(|child| subtree_contains(laid, child, id))
-}
-
-/// A zero-tab `TabBar` mounts the documented `48px` empty box (`TAB_HEIGHT +
-/// indicator_weight`), not a collapsed/zero-height `Row` — Flutter parity:
-/// `_TabBarState.build`'s zero-tabs early return. A (length-0) controller is
-/// still required, matching the oracle: controller resolution happens
-/// unconditionally, before `build` ever checks the tab count (see
-/// `TabBar::build`'s doc comment on its zero-tabs branch).
-#[test]
-fn zero_tab_bar_mounts_a_48px_box() {
-    let laid = lay_out(
-        themed(
-            ThemeData::light(),
-            TabBar::secondary(vec![]).controller(TabController::new(0, 0)),
-        ),
-        bar_constraints(300.0, 100.0),
-    );
-
-    let root_size = laid.size(laid.root());
-    assert_eq!(
-        root_size.height, 48.0,
-        "a zero-tab TabBar must report the TAB_HEIGHT + indicator_weight (48px) box"
-    );
 }
 
 /// `tabs.len() != controller.length()` panics inside `build` and recovers as

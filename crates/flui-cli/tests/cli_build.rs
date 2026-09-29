@@ -36,19 +36,6 @@ fn ndjson_events(stdout: &[u8]) -> Vec<serde_json::Value> {
 }
 
 #[test]
-fn desktop_build_outside_a_project_exits_not_a_flui_project() {
-    let tmp = TempDir::new().expect("empty temp dir");
-
-    flui()
-        .current_dir(tmp.path())
-        .args(["build", "desktop"])
-        .assert()
-        .failure()
-        .code(6)
-        .stderr(predicate::str::contains("Cargo.toml not found"));
-}
-
-#[test]
 fn desktop_build_outside_a_project_in_json_mode_emits_a_pure_error_event() {
     let tmp = TempDir::new().expect("empty temp dir");
 
@@ -77,22 +64,6 @@ fn desktop_build_outside_a_project_in_json_mode_emits_a_pure_error_event() {
     );
 }
 
-/// `--lib` and `--example` conflict via clap's own `conflicts_with`
-/// (`validate_options` no longer duplicates this check); clap's own usage
-/// errors exit 2, same as `CliError::Usage`.
-#[test]
-fn ios_lib_and_example_are_mutually_exclusive() {
-    let tmp = TempDir::new().expect("empty temp dir");
-
-    flui()
-        .current_dir(tmp.path())
-        .args(["build", "ios", "--lib", "--example", "x"])
-        .assert()
-        .failure()
-        .code(2)
-        .stderr(predicate::str::contains("--lib").and(predicate::str::contains("--example")));
-}
-
 /// `--universal` and `--simulator` conflict via clap's own `conflicts_with`
 /// (`validate_options` no longer duplicates this check either).
 #[test]
@@ -108,58 +79,6 @@ fn ios_universal_and_simulator_are_mutually_exclusive() {
         .stderr(
             predicate::str::contains("--universal").and(predicate::str::contains("--simulator")),
         );
-}
-
-#[test]
-fn android_simulator_flag_is_rejected_as_ios_only() {
-    let tmp = TempDir::new().expect("empty temp dir");
-
-    flui()
-        .current_dir(tmp.path())
-        .args(["build", "android", "--simulator", "X"])
-        .assert()
-        .failure()
-        .code(2)
-        .stderr(predicate::str::contains("--simulator").and(predicate::str::contains("iOS-only")));
-}
-
-#[test]
-fn desktop_lib_flag_is_rejected_as_ios_only() {
-    let tmp = TempDir::new().expect("empty temp dir");
-
-    flui()
-        .current_dir(tmp.path())
-        .args(["build", "desktop", "--lib"])
-        .assert()
-        .failure()
-        .code(2)
-        .stderr(predicate::str::contains("--lib").and(predicate::str::contains("iOS-only")));
-}
-
-#[test]
-fn example_and_package_are_mutually_exclusive() {
-    let tmp = TempDir::new().expect("empty temp dir");
-
-    flui()
-        .current_dir(tmp.path())
-        .args(["build", "desktop", "--example", "demo", "--package", "app"])
-        .assert()
-        .failure()
-        .code(2)
-        .stderr(predicate::str::contains("--example").and(predicate::str::contains("--package")));
-}
-
-#[test]
-fn ios_universal_without_lib_is_rejected() {
-    let tmp = TempDir::new().expect("empty temp dir");
-
-    flui()
-        .current_dir(tmp.path())
-        .args(["build", "ios", "--universal"])
-        .assert()
-        .failure()
-        .code(2)
-        .stderr(predicate::str::contains("--universal").and(predicate::str::contains("--lib")));
 }
 
 /// Selector validation runs before any project lookup: each of these

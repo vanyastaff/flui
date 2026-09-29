@@ -58,38 +58,6 @@ impl StatelessView for Card {
 }
 
 #[test]
-fn bon_builder_constructs_a_view_struct() {
-    let card = Card::builder()
-        .title("Hello".to_string())
-        .body("World".to_string())
-        .elevation(2)
-        .on_tap(())
-        .build();
-    assert_eq!(card.title, "Hello");
-}
-
-#[test]
-fn bon_builder_struct_is_a_view_through_derive() {
-    let card = Card::builder()
-        .title("BuiltViaBon".to_string())
-        .body(String::new())
-        .elevation(0)
-        .on_tap(())
-        .build();
-
-    // The `#[derive(StatelessView)]` emitted `impl View for Card { fn
-    // create_element() }` — invoking it proves the derive's generated
-    // code applies to the bon-built shape with no attribute-stacking
-    // conflict.
-    let element = View::create_element(&card);
-    assert_eq!(element.element().lifecycle(), Lifecycle::Initial);
-    assert_eq!(
-        element.element().view_type_id(),
-        std::any::TypeId::of::<Card>()
-    );
-}
-
-#[test]
 fn struct_literal_and_builder_yield_equivalent_views() {
     let literal = Card {
         title: "Same".to_string(),

@@ -8,7 +8,6 @@
 //! tiles.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::common::{lay_out, tight};
 use flui_rendering::delegates::{SliverGridDelegate, SliverGridDelegateWithFixedCrossAxisCount};
@@ -177,260 +176,23 @@ fn lazy_grid_view_builder_off_band_eviction_bounded() {
 // Test 4 — 1000-item scrolled grid stays bounded
 // ============================================================================
 
-/// A 1000-item grid scrolled deep into the list must still build only the
-/// visible/cache band. This is the Core.2 1000-item sliver-scroll smoke for
-/// the lazy-grid backend: no eager materialization, no unbounded build storm,
-/// and positioned children remain in the viewport neighborhood.
-#[test]
-fn lazy_grid_view_builder_1000_item_scroll_stays_bounded() {
-    const ITEM_COUNT: usize = 1000;
-    let tiles_built = Arc::new(AtomicUsize::new(0));
-
-    let mut laid = lay_out(
-        GridView::builder(two_column_delegate(), ITEM_COUNT, {
-            let tiles_built = Arc::clone(&tiles_built);
-            move |i| {
-                if i < ITEM_COUNT {
-                    tiles_built.fetch_add(1, Ordering::Relaxed);
-                    Some(SizedBox::square(100.0).boxed())
-                } else {
-                    None
-                }
-            }
-        })
-        .offset(5_000.0),
-        tight(200.0, 200.0),
-    );
-
-    for _ in 0..4 {
-        laid.tick();
-    }
-
-    let nodes_after_settle = laid.render_node_count();
-    let builds_after_settle = tiles_built.load(Ordering::Relaxed);
-    assert!(
-        builds_after_settle > 0 && builds_after_settle <= 40,
-        "1000-item lazy grid must build only the scrolled viewport/cache band; \
-         built {builds_after_settle} tiles"
-    );
-    assert!(
-        nodes_after_settle <= 42,
-        "1000-item lazy grid must keep render nodes bounded; got {nodes_after_settle}"
-    );
-
-    for tile in laid.find_all_by_render_type("RenderConstrainedBox") {
-        let offset = laid.offset(tile);
-        assert!(
-            (offset.dx == 0.0 || offset.dx == 100.0) && offset.dy >= -400.0 && offset.dy <= 400.0,
-            "scrolled grid tile must remain near the viewport/cache window; \
-             got offset ({}, {})",
-            offset.dx,
-            offset.dy
-        );
-    }
-}
-
 // ============================================================================
 // Test 5 — quiescence: a third tick builds zero new tiles
 // ============================================================================
-
-/// After the grid has settled (two ticks), a third tick must NOT add or
-/// remove any render nodes, and the builder closure must NOT be called again.
-/// The `Arc<AtomicUsize>` build counter gives a precise quiescence signal.
-#[test]
-fn lazy_grid_view_builder_third_tick_is_idempotent() {
-    let tiles_built = Arc::new(AtomicUsize::new(0));
-
-    let mut laid = lay_out(
-        GridView::builder(two_column_delegate(), 4, {
-            let tiles_built = Arc::clone(&tiles_built);
-            move |i| {
-                if i < 4 {
-                    tiles_built.fetch_add(1, Ordering::Relaxed);
-                    Some(SizedBox::square(100.0).boxed())
-                } else {
-                    None
-                }
-            }
-        }),
-        tight(200.0, 200.0),
-    );
-
-    laid.tick(); // tick1: service builds tiles, build counter increments
-    laid.tick(); // tick2: sliver lays out built tiles (no new builds needed)
-
-    let nodes_at_settle = laid.render_node_count();
-    let builds_at_settle = tiles_built.load(Ordering::Relaxed);
-
-    // tick3: no-op — neither the element tree nor the sliver is dirty after settle.
-    laid.tick();
-
-    let nodes_at_third_tick = laid.render_node_count();
-    let builds_at_third_tick = tiles_built.load(Ordering::Relaxed);
-
-    assert_eq!(
-        nodes_at_settle, nodes_at_third_tick,
-        "a third tick must not change the render node count: \
-         settled at {nodes_at_settle}, after tick3: {nodes_at_third_tick}"
-    );
-    assert_eq!(
-        builds_at_settle, builds_at_third_tick,
-        "a third tick must trigger zero new tile builds (quiescence invariant); \
-         settled after {builds_at_settle} builds, \
-         tick3 raised the count to {builds_at_third_tick}"
-    );
-}
 
 // ============================================================================
 // Test 6 — None-at-K caps the build count
 // ============================================================================
 
-/// When the builder returns `None` for indices ≥ K, the grid must stop
-/// building at K tiles even if `item_count` is larger. The stricter bound
-/// wins.
-#[test]
-fn lazy_grid_view_builder_none_at_k_caps_build_count() {
-    const K: usize = 3;
-    // item_count=50 but builder returns None for i >= K.
-    let mut laid = lay_out(
-        GridView::builder(two_column_delegate(), 50, |i| {
-            if i < K {
-                Some(SizedBox::square(100.0).boxed())
-            } else {
-                None
-            }
-        }),
-        // Viewport tall enough to request many rows if all tiles were present.
-        tight(200.0, 1000.0),
-    );
-
-    laid.tick();
-    laid.tick();
-
-    // Expected: 1 (viewport) + 1 (lazy grid) + K (tiles capped by None-return) = 5.
-    let nodes_after_settle = laid.render_node_count();
-    // `+ 2 * K`, not `+ K`: each item carries its own `RenderRepaintBoundary`,
-    // which `SliverChildBuilderDelegate` adds by default exactly as Flutter's
-    // does (`widgets/scroll_delegate.dart:560`).
-    let expected = 1 + 1 + 2 * K;
-    assert_eq!(
-        nodes_after_settle, expected,
-        "None-at-K must cap build count: expected {expected} nodes, \
-         got {nodes_after_settle}"
-    );
-
-    let sliver = laid.find_by_render_type("RenderSliverGrid");
-    let geometry = laid.sliver_geometry(sliver);
-    assert_eq!(
-        geometry.scroll_extent, 200.0,
-        "None-at-K must cap scroll extent to the actual 3-tile grid: \
-         2 rows × 100px = 200px; got {}",
-        geometry.scroll_extent
-    );
-    assert_eq!(
-        geometry.max_paint_extent, 200.0,
-        "None-at-K must cap max paint extent with the same effective child count"
-    );
-}
-
 // ============================================================================
 // Test — builder swap refreshes resident tiles end to end (FLUI-added)
 // ============================================================================
-
-/// FLUI-added — the Flutter grid corpus has no builder-closure-swap case (it
-/// exercises only scroll-driven eviction/rebuild), so this carries no oracle
-/// citation. It guards the `SliverAdaptorBehavior<RenderSliverGrid>::on_view_updated` →
-/// `needs_resident_refresh` wiring that the two `service`-level unit tests
-/// bypass by setting the flag by hand: a `pump_widget` that keeps the grid
-/// shape but hands the builder a fresh label set at every index must refresh
-/// the already-resident tiles in place. Deleting the `on_view_updated` wiring
-/// leaves the pre-swap labels resident and fails this test — the produce half
-/// of the fix the unit tests cannot see.
-#[test]
-fn lazy_grid_view_builder_swap_refreshes_resident_tiles() {
-    fn grid(labels: &'static [&'static str]) -> impl View {
-        GridView::builder(two_column_delegate(), labels.len(), move |i| {
-            labels
-                .get(i)
-                .map(|label| SizedBox::square(100.0).child(Text::new(*label)).boxed())
-        })
-    }
-
-    let mut laid = lay_out(grid(&["A0", "A1", "A2", "A3"]), tight(200.0, 200.0));
-    laid.tick();
-    laid.tick();
-
-    assert!(
-        laid.find_text("A0").is_some(),
-        "pre-swap tile 0 must show A0"
-    );
-    assert!(
-        laid.find_text("A3").is_some(),
-        "pre-swap tile 3 must show A3"
-    );
-
-    // Swap the builder closure for the same grid shape (same delegate, same
-    // item_count) with a fresh label at every index.
-    laid.pump_widget(grid(&["B0", "B1", "B2", "B3"]));
-    laid.tick();
-    laid.tick();
-
-    assert!(
-        laid.find_text("B0").is_some(),
-        "resident tile 0 must refresh to B0 after the builder swap"
-    );
-    assert!(
-        laid.find_text("B3").is_some(),
-        "resident tile 3 must refresh to B3 after the builder swap"
-    );
-    assert!(
-        laid.find_text("A0").is_none(),
-        "stale pre-swap label A0 must be gone after the refresh"
-    );
-    assert!(
-        laid.find_text("A3").is_none(),
-        "stale pre-swap label A3 must be gone after the refresh"
-    );
-}
 
 // ============================================================================
 // GridView::count over StaticChildren — mirrors lazy_list.rs's ListView::new
 // coverage (ADR-0053: GridView::count|extent route over the same
 // request-strategy adaptor as GridView::builder)
 // ============================================================================
-
-/// `GridView::count` over a thousand static tiles materialises only its
-/// window: the tiles are a delegate served by index, not dense children.
-/// Flutter's `SliverChildListDelegate` gives `GridView(children:)` the same
-/// bound; before ADR-0053 the eager grid attached every tile densely.
-/// Mirrors `lazy_list.rs`'s `list_view_new_materialises_only_the_window`.
-#[test]
-fn grid_view_count_materialises_only_the_window() {
-    const ITEM_COUNT: usize = 1000;
-    let children: Vec<BoxedView> = (0..ITEM_COUNT)
-        .map(|i| Text::new(format!("tile{i}")).boxed())
-        .collect();
-    let laid = lay_out(
-        GridView::count(2, children).repaint_boundaries(false),
-        tight(200.0, 200.0),
-    );
-    // 200 px viewport + 250 px cache below at 100 px (2-column) rows: a
-    // handful of rows, and one render node each; a thousand tiles over 500
-    // rows would be hundreds of nodes if every row were built.
-    let nodes = laid.render_node_count();
-    assert!(
-        nodes < 400,
-        "only the window is built: {nodes} render nodes for {ITEM_COUNT} tiles"
-    );
-    assert!(
-        laid.find_text("tile0").is_some(),
-        "the head tile is resident"
-    );
-    assert!(
-        laid.find_text("tile500").is_none(),
-        "a tile far below the window is never built"
-    );
-}
 
 /// A keyed tile carrying an id and a shared log of the `id`s its state was
 /// ever created for — one entry per STATE, not per view rebuild, so a

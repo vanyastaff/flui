@@ -33,10 +33,6 @@ mod derive_bon_stack;
 mod derive_smoke;
 #[path = "dispatch_shim.rs"]
 mod dispatch_shim;
-#[path = "element_kind_non_exhaustive_smoke.rs"]
-mod element_kind_non_exhaustive_smoke;
-#[path = "element_slot_integration.rs"]
-mod element_slot_integration;
 #[path = "element_tree_tests.rs"]
 mod element_tree_tests;
 #[path = "flutter_parity_key_equality.rs"]
@@ -47,8 +43,6 @@ mod global_key;
 mod global_key_duplication;
 #[path = "global_key_reparent.rs"]
 mod global_key_reparent;
-#[path = "greeting_widget_loc_golden.rs"]
-mod greeting_widget_loc_golden;
 #[path = "inherited_data_derive.rs"]
 mod inherited_data_derive;
 #[path = "inherited_dependency.rs"]

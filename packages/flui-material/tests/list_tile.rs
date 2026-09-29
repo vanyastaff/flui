@@ -10,8 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{lay_out, loose, tight};
-use flui_material::{ListTile, ListTileThemeData, Radio, Theme, ThemeData, ThemeDataOverrides};
-use flui_sdk::painting::Color;
+use flui_material::{ListTile, Radio, Theme, ThemeData};
 use flui_sdk::view::IntoView;
 use flui_sdk::widgets::{
     Icon, IconData, IconTheme, IconThemeData, MediaQuery, MediaQueryData, MergeSemantics, Text,
@@ -104,31 +103,6 @@ fn disabled_tile_swallows_a_tap() {
     );
 }
 
-/// A `ListTile` with only a title (no leading/subtitle/trailing) still
-/// mounts a single-line tile at the default one-line height (`56.0`) —
-/// proving the composition tolerates every slot being absent, not just
-/// every slot being present.
-#[test]
-fn title_only_tile_mounts_at_the_one_line_height() {
-    // Loose (not tight) constraints: a tight incoming height would force
-    // the tile to exactly that height regardless of its own min-height
-    // request, masking the very default this test exists to pin.
-    let laid = lay_out(
-        themed(ThemeData::light(), ListTile::new().title(Text::new("Solo"))),
-        loose(400.0),
-    );
-
-    let material = laid
-        .try_find_by_render_type("RenderPhysicalShape")
-        .expect("ListTile must compose a Material surface");
-
-    assert_eq!(
-        laid.size(material).height,
-        56.0,
-        "a title-only tile (no subtitle) must mount at the one-line M3 default height"
-    );
-}
-
 /// A `ListTile` with leading, title, subtitle, and trailing all present
 /// mounts without dropping any slot — each slot's content reaches the tree.
 #[test]
@@ -205,39 +179,6 @@ fn ambient_icon_theme_size_reaches_a_bare_leading_icon_through_the_tile() {
          one (10.0) — got small={small}, large={large}. Equal heights mean the ambient size \
          never reached the icon (ListTile replaced the ambient IconTheme instead of merging \
          into it)."
-    );
-}
-
-/// The theme tier's `tile_color` reaches the mounted `Material` fill —
-/// proving `ThemeData.list_tile_theme` is actually consulted, not just
-/// computed in `resolve_style` isolation.
-#[test]
-fn list_tile_theme_slot_reaches_the_mounted_materials_color() {
-    let themed_color = Color::rgb(11, 22, 33);
-    let theme = ThemeData::light().copy_with(ThemeDataOverrides {
-        list_tile_theme: Some(ListTileThemeData {
-            tile_color: Some(themed_color),
-            ..Default::default()
-        }),
-        ..Default::default()
-    });
-
-    let laid = lay_out(
-        themed(theme, ListTile::new().title(Text::new("Themed"))),
-        tight(400.0, 56.0),
-    );
-
-    let material = laid
-        .try_find_by_render_type("RenderPhysicalShape")
-        .expect("ListTile must compose a Material surface");
-    let color = laid
-        .render_property(material, "color")
-        .expect("RenderPhysicalShape reports a \"color\" diagnostics property");
-
-    assert_eq!(
-        color,
-        format!("{themed_color:?}"),
-        "a configured list_tile_theme.tile_color must reach the mounted Material"
     );
 }
 

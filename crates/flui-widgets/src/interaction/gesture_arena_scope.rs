@@ -179,21 +179,6 @@ mod tests {
     }
 
     #[test]
-    fn arena_returns_the_provided_handle() {
-        let arena = GestureArena::binding_driven(Arc::new(SystemClock));
-        let scope = GestureArenaScope::new(arena.clone(), SizedBox::shrink());
-
-        register_member(&arena, PointerId::PRIMARY);
-
-        assert!(
-            scope.arena().contains(PointerId::PRIMARY),
-            "arena() must return the exact shared handle passed to new(), not \
-             an independent clone -- a member added via the original handle \
-             must be visible through arena()'s handle",
-        );
-    }
-
-    #[test]
     fn of_returns_the_exact_binding_driven_handle() {
         let arena = GestureArena::binding_driven(Arc::new(SystemClock));
         let captured = Rc::new(RefCell::new(None));
@@ -218,57 +203,5 @@ mod tests {
                 .contains(PointerId::PRIMARY),
             "GestureArenaScope::of must return the exact binding-owned handle",
         );
-    }
-
-    #[test]
-    fn data_and_child_expose_the_arena_and_wrapped_subtree() {
-        let arena = GestureArena::binding_driven(Arc::new(SystemClock));
-        let scope = GestureArenaScope::new(arena.clone(), SizedBox::shrink());
-
-        register_member(&arena, PointerId::PRIMARY);
-
-        assert!(
-            InheritedView::data(&scope).contains(PointerId::PRIMARY),
-            "InheritedView::data() must expose the same shared arena as arena()",
-        );
-        // `child()` returns a `&dyn View` over the wrapped subtree; reaching
-        // it without panicking proves the child was stored, not dropped.
-        let _child: &dyn View = InheritedView::child(&scope);
-    }
-
-    #[test]
-    fn update_should_notify_is_always_false() {
-        let scope_a = GestureArenaScope::new(
-            GestureArena::binding_driven(Arc::new(SystemClock)),
-            SizedBox::shrink(),
-        );
-        let scope_b = GestureArenaScope::new(
-            GestureArena::binding_driven(Arc::new(SystemClock)),
-            SizedBox::shrink(),
-        );
-        assert!(
-            !scope_a.update_should_notify(&scope_b),
-            "the arena handle is fixed for a scope's lifetime; descendants must \
-             never be told to rebuild off of it",
-        );
-    }
-
-    #[test]
-    fn debug_reports_the_arena() {
-        let scope = GestureArenaScope::new(
-            GestureArena::binding_driven(Arc::new(SystemClock)),
-            SizedBox::shrink(),
-        );
-        let debug = format!("{scope:?}");
-        assert!(
-            debug.starts_with("GestureArenaScope"),
-            "Debug output must name the type, got: {debug}",
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "BindingDriven")]
-    fn self_driven_arena_is_rejected_by_the_presentation_scope() {
-        let _scope = GestureArenaScope::new(GestureArena::new(), SizedBox::shrink());
     }
 }

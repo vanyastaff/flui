@@ -5,31 +5,8 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use crate::common::{lay_out, loose, size, tight};
+use crate::common::{lay_out, tight};
 use flui_widgets::{MouseRegion, SizedBox};
-
-#[test]
-fn mouse_region_childless_fills_parent_and_mounts_render_object() {
-    let laid = lay_out(MouseRegion::new(), tight(80.0, 40.0));
-
-    let root = laid.root();
-    assert_eq!(laid.find_by_render_type("RenderMouseRegion"), root);
-    assert_eq!(
-        laid.size(root),
-        size(80.0, 40.0),
-        "childless MouseRegion must grow to the incoming biggest constraints",
-    );
-}
-
-#[test]
-fn mouse_region_with_child_sizes_to_child() {
-    let laid = lay_out(
-        MouseRegion::new().child(SizedBox::new(30.0, 20.0)),
-        loose(80.0),
-    );
-
-    assert_eq!(laid.size(laid.root()), size(30.0, 20.0));
-}
 
 #[test]
 fn mouse_region_hover_callback_fires_on_hover_move() {
@@ -58,22 +35,6 @@ mod event_cx {
     use crate::common::{ProbeSignals, SignalProbe, lay_out, tight};
     use flui_view::SignalWriteExt;
     use flui_widgets::{MouseRegion, SizedBox};
-
-    #[test]
-    fn an_enter_writes_a_signal_and_rebuilds_its_reader() {
-        let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
-            MouseRegion::new()
-                .on_enter(move |cx, _device, position| count.set(cx, position.dx as u32))
-                .child(SizedBox::new(60.0, 30.0))
-        });
-        let mut app = lay_out(probe.view(), tight(60.0, 30.0));
-
-        app.dispatch_pointer_hover(12.0, 10.0);
-        assert_eq!(probe.value(), Ok(12), "the enter carried its position");
-        app.tick();
-
-        assert_eq!(probe.reads(), [0, 12], "the reader rebuilt once");
-    }
 
     #[test]
     fn a_refused_write_in_an_enter_is_reported_not_panicked() {

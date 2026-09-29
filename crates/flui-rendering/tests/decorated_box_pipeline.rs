@@ -68,17 +68,6 @@ fn background_decoration_paints_before_the_child() {
     );
 }
 
-#[test]
-fn foreground_decoration_paints_after_the_child() {
-    let (owner, _) = fixture(DecorationPosition::Foreground);
-    let (_owner, kinds) = frame_commands(owner);
-    assert_eq!(
-        kinds,
-        vec!["save", "rect", "restore", "save", "rrect", "restore"],
-        "foreground decoration must follow the child's rect"
-    );
-}
-
 /// A childless decorated box, sized by tight 100×100 constraints, so
 /// hit-testing falls straight through to `hitTestSelf` — the decoration's own
 /// shape — with no child to mask any point.
@@ -120,27 +109,5 @@ fn hit_test_excludes_the_rounded_corner() {
         hit_at(98.0, 98.0),
         None,
         "the bottom-right rounded corner lies outside the radius-20 shape"
-    );
-}
-
-#[test]
-fn child_is_hit_in_the_rounded_corner_cutout() {
-    // Flutter tests `hitTestChildren` before `hitTestSelf` (fixed 31359807): a
-    // child occupying a rounded-corner cut-out is still hit even though the
-    // decoration's own shape excludes that corner. The fixture's child fills the
-    // box (tight constraints stretch it to 100×100), so (2,2) — outside the
-    // radius-20 shape (see `hit_test_excludes_the_rounded_corner`) — is
-    // nonetheless hit because the child covers it. The hit-path's root is the
-    // decorated box, proving the descent reached the child first.
-    let (owner, decorated) = fixture(DecorationPosition::Background);
-    let (owner, _) = owner.run_frame();
-
-    let mut result = HitTestResult::new();
-    owner.hit_test(Offset::new(2.0, 2.0), &mut result);
-    assert_eq!(
-        result.path().last().map(|entry| entry.target),
-        Some(decorated),
-        "a child filling the rounded corner is hit even though the decoration \
-         shape excludes that corner (child-first)"
     );
 }

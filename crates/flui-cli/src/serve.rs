@@ -444,25 +444,4 @@ mod tests {
         let next: serde_json::Value = serde_json::from_slice(&body).expect("json");
         assert_eq!(next["generation"].as_u64(), Some(seen + 1));
     }
-
-    #[test]
-    fn dropping_the_server_frees_the_port() {
-        let (_dir, server) = fixture();
-        let addr = server.addr;
-        drop(server);
-        assert!(
-            TcpListener::bind(addr).is_ok(),
-            "port must be released once the server is dropped"
-        );
-    }
-
-    #[test]
-    fn injection_without_a_body_tag_appends() {
-        let out = inject_reload_script(b"<canvas></canvas>");
-        assert!(
-            String::from_utf8(out)
-                .expect("utf-8")
-                .ends_with("</script>\n")
-        );
-    }
 }

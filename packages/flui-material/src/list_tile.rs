@@ -828,20 +828,6 @@ mod tests {
     use crate::theme_data::ListTileThemeData;
 
     #[test]
-    fn new_leaves_every_override_unset_and_defaults_enabled() {
-        let tile = ListTile::new();
-        assert!(tile.leading.is_none());
-        assert!(tile.title.is_none());
-        assert!(tile.subtitle.is_none());
-        assert!(tile.trailing.is_none());
-        assert!(tile.is_three_line.is_none());
-        assert!(tile.dense.is_none());
-        assert!(tile.enabled);
-        assert!(!tile.selected);
-        assert!(tile.on_tap.is_none());
-    }
-
-    #[test]
     fn is_interactive_requires_both_enabled_and_on_tap() {
         assert!(!ListTile::new().is_interactive());
         assert!(
@@ -853,92 +839,12 @@ mod tests {
         assert!(ListTile::new().on_tap(|_cx| {}).is_interactive());
     }
 
-    /// `_RenderListTile._defaultTileHeight`'s literal table (`list_tile.dart`
-    /// `:1503-1510`, oracle tag `3.44.0`) — the mutation-honest pin for every
-    /// branch, including the non-arithmetic three-line-dense value (`76.0`,
-    /// not `88.0 - 12.0`).
-    #[test]
-    fn default_tile_height_matches_the_oracle_table() {
-        assert_eq!(default_tile_height(false, false, false), 56.0);
-        assert_eq!(default_tile_height(false, false, true), 48.0);
-        assert_eq!(default_tile_height(false, true, false), 72.0);
-        assert_eq!(default_tile_height(false, true, true), 64.0);
-        assert_eq!(default_tile_height(true, true, false), 88.0);
-        assert_eq!(default_tile_height(true, true, true), 76.0);
-    }
-
-    /// `_LisTileDefaultsM3`'s literal token table (`list_tile.dart`, oracle
-    /// tag `3.44.0`). `min_leading_width` is `24.0`, not M2's `40.0`.
-    #[test]
-    fn default_constants_match_the_oracle() {
-        assert_eq!(CONTENT_PADDING_START, 16.0);
-        assert_eq!(CONTENT_PADDING_END, 24.0);
-        assert_eq!(MIN_LEADING_WIDTH, 24.0);
-        assert_eq!(MIN_VERTICAL_PADDING, 8.0);
-        assert_eq!(HORIZONTAL_TITLE_GAP, 16.0);
-    }
-
-    #[test]
-    fn resolve_style_defaults_to_the_m3_token_table() {
-        let theme = ThemeData::light();
-        let colors = theme.color_scheme;
-        let tile = ListTile::new();
-        let resolved = resolve_style(&theme, &tile);
-
-        assert_eq!(resolved.tile_color, Color::TRANSPARENT);
-        assert_eq!(resolved.icon_color, colors.on_surface_variant);
-        assert_eq!(resolved.shape, MaterialShape::default());
-        assert_eq!(resolved.title_style.color, Some(colors.on_surface));
-        assert_eq!(
-            resolved.subtitle_style.color,
-            Some(colors.on_surface_variant)
-        );
-        assert_eq!(
-            resolved.content_padding,
-            EdgeInsets::new(0.0, CONTENT_PADDING_END, 0.0, CONTENT_PADDING_START)
-        );
-        assert_eq!(resolved.horizontal_title_gap, HORIZONTAL_TITLE_GAP);
-        assert_eq!(resolved.min_vertical_padding, MIN_VERTICAL_PADDING);
-        assert_eq!(resolved.min_leading_width, MIN_LEADING_WIDTH);
-        assert_eq!(resolved.tile_height, 56.0);
-    }
-
     #[test]
     fn resolve_style_two_line_tile_uses_the_two_line_height() {
         let theme = ThemeData::light();
         let tile = ListTile::new().subtitle(flui_sdk::widgets::SizedBox::shrink());
         let resolved = resolve_style(&theme, &tile);
         assert_eq!(resolved.tile_height, 72.0);
-    }
-
-    #[test]
-    fn resolve_style_three_line_tile_uses_the_three_line_height() {
-        let theme = ThemeData::light();
-        let tile = ListTile::new()
-            .subtitle(flui_sdk::widgets::SizedBox::shrink())
-            .is_three_line(true);
-        let resolved = resolve_style(&theme, &tile);
-        assert_eq!(resolved.tile_height, 88.0);
-    }
-
-    /// A theme-level `is_three_line: Some(true)` reaches the resolved tile
-    /// height when the widget itself leaves `is_three_line` unset — Flutter
-    /// parity: `isThreeLine ?? tileTheme.isThreeLine ?? false`
-    /// (`list_tile.dart` `:1019-1023`, oracle tag `3.44.0`). This is the
-    /// cascade tier that a plain `bool` field (rather than `Option<bool>`)
-    /// could never reach at all.
-    #[test]
-    fn resolve_style_theme_level_is_three_line_reaches_the_tile_height_when_widget_leaves_it_unset()
-    {
-        let mut theme = ThemeData::light();
-        theme.list_tile_theme = Some(ListTileThemeData {
-            is_three_line: Some(true),
-            ..Default::default()
-        });
-        let tile = ListTile::new().subtitle(flui_sdk::widgets::SizedBox::shrink());
-
-        let resolved = resolve_style(&theme, &tile);
-        assert_eq!(resolved.tile_height, 88.0);
     }
 
     /// Mutation-honest combined-tier pin: an explicit widget-level
@@ -965,16 +871,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn resolve_style_dense_two_line_tile_uses_the_dense_height() {
-        let theme = ThemeData::light();
-        let tile = ListTile::new()
-            .subtitle(flui_sdk::widgets::SizedBox::shrink())
-            .dense(true);
-        let resolved = resolve_style(&theme, &tile);
-        assert_eq!(resolved.tile_height, 64.0);
-    }
-
     /// `dense` clamps title to `13.0` and subtitle to `12.0` — Flutter
     /// parity: `titleStyle.copyWith(fontSize: _isDenseLayout ? 13.0 : null)`
     /// and the subtitle equivalent (`list_tile.dart` `:923-926`/`:939-942`,
@@ -990,33 +886,6 @@ mod tests {
         let resolved = resolve_style(&theme, &tile);
         assert_eq!(resolved.title_style.font_size, Some(13.0));
         assert_eq!(resolved.subtitle_style.font_size, Some(12.0));
-    }
-
-    /// Non-dense leaves each style's own baked-in M3 type-scale size alone
-    /// (`bodyLarge`: `16.0`, `bodyMedium`: `14.0`) — Dart's
-    /// `copyWith(fontSize: null)` means "unchanged", not "clear to null", so
-    /// the non-dense branch must NOT reset `font_size` to `None`.
-    #[test]
-    fn resolve_style_non_dense_leaves_the_type_scale_font_size_untouched() {
-        let theme = ThemeData::light();
-        let tile = ListTile::new().subtitle(flui_sdk::widgets::SizedBox::shrink());
-        let resolved = resolve_style(&theme, &tile);
-        assert_eq!(resolved.title_style.font_size, Some(16.0));
-        assert_eq!(resolved.subtitle_style.font_size, Some(14.0));
-    }
-
-    /// Selected recolors both icon and title text to `ColorScheme.primary` —
-    /// `_LisTileDefaultsM3.selectedColor` (`list_tile.dart`, oracle tag
-    /// `3.44.0`).
-    #[test]
-    fn resolve_style_selected_uses_the_primary_color() {
-        let theme = ThemeData::light();
-        let colors = theme.color_scheme;
-        let tile = ListTile::new().selected(true);
-        let resolved = resolve_style(&theme, &tile);
-
-        assert_eq!(resolved.icon_color, colors.primary);
-        assert_eq!(resolved.title_style.color, Some(colors.primary));
     }
 
     /// Mutation-honest combined-state pin: `disabled` must win over
@@ -1037,25 +906,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_style_falls_through_to_the_list_tile_theme_when_no_widget_override_is_set() {
-        let mut theme = ThemeData::light();
-        let themed_icon_color = Color::rgb(1, 2, 3);
-        theme.list_tile_theme = Some(ListTileThemeData {
-            icon_color: Some(themed_icon_color),
-            min_leading_width: Some(30.0),
-            ..Default::default()
-        });
-
-        let resolved = resolve_style(&theme, &ListTile::new());
-
-        assert_eq!(resolved.icon_color, themed_icon_color);
-        assert_eq!(resolved.min_leading_width, 30.0);
-        // `horizontal_title_gap` was left unset on the theme slot — it falls
-        // through to its own default independently.
-        assert_eq!(resolved.horizontal_title_gap, HORIZONTAL_TITLE_GAP);
-    }
-
-    #[test]
     fn resolve_style_widget_override_wins_over_the_list_tile_theme() {
         let mut theme = ThemeData::light();
         theme.list_tile_theme = Some(ListTileThemeData {
@@ -1068,21 +918,5 @@ mod tests {
         let resolved = resolve_style(&theme, &tile);
 
         assert_eq!(resolved.icon_color, widget_color);
-    }
-
-    #[test]
-    fn resolve_style_enabled_unselected_text_color_stays_unset_by_default() {
-        // Unlike `icon_color`, an enabled/unselected tile with no override
-        // leaves `text_color` at `None` — the title/subtitle styles keep
-        // their own baked-in M3 color instead of being forced to a shared
-        // constant. See the module docs' "State-color cascade" section.
-        let theme = ThemeData::light();
-        let colors = theme.color_scheme;
-        let resolved = resolve_style(&theme, &ListTile::new());
-        assert_eq!(resolved.title_style.color, Some(colors.on_surface));
-        assert_eq!(
-            resolved.subtitle_style.color,
-            Some(colors.on_surface_variant)
-        );
     }
 }

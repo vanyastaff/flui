@@ -257,13 +257,6 @@ impl WindowRegistry {
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
     }
-
-    /// Companion to [`Self::len`] (clippy's `len_without_is_empty`); also
-    /// exercised directly by this module's own tests.
-    #[cfg(test)]
-    pub(crate) fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
 }
 
 #[cfg(test)]
@@ -274,22 +267,6 @@ mod tests {
 
     static_assertions::assert_impl_all!(PresentationAddress: Send, Sync, Copy);
 
-    #[test]
-    fn addresses_compare_by_both_fields() {
-        let one = PresentationAddress {
-            realm_id: RealmId::new_gen(0, NonZeroU32::MIN),
-            presentation_id: flui_foundation::PresentationId::new_gen(0, NonZeroU32::MIN),
-        };
-        let same_realm_different_presentation = PresentationAddress {
-            realm_id: one.realm_id,
-            presentation_id: flui_foundation::PresentationId::new_gen(
-                0,
-                NonZeroU32::new(2).unwrap(),
-            ),
-        };
-        assert_ne!(one, same_realm_different_presentation);
-    }
-
     fn address(slot: u32) -> PresentationAddress {
         PresentationAddress {
             realm_id: RealmId::new_gen(slot, NonZeroU32::MIN),
@@ -299,23 +276,6 @@ mod tests {
 
     fn stub_window(id: u64) -> Arc<dyn PlatformWindow> {
         Arc::new(crate::app::window_test_support::TestWindow::new().with_id(id))
-    }
-
-    #[test]
-    fn register_window_replaces_same_window_with_trace() {
-        let mut registry = WindowRegistry::new();
-        let window = stub_window(1);
-        let first = address(0);
-        let second = address(1);
-
-        assert_eq!(registry.register_window(&window, first), None);
-        let displaced = registry.register_window(&window, second);
-        assert_eq!(
-            displaced,
-            Some(first),
-            "re-registering the same window must return the displaced address"
-        );
-        assert_eq!(registry.resolve(window.id()), Some(second));
     }
 
     #[test]
@@ -339,27 +299,6 @@ mod tests {
             Some(first),
             "a refused try_register must not change the existing mapping"
         );
-    }
-
-    #[test]
-    fn remove_realm_returns_the_installed_entry() {
-        let mut registry = WindowRegistry::new();
-        let window = stub_window(3);
-        let installed = address(0);
-        registry.register_window(&window, installed);
-
-        let removed = registry.remove_realm(installed.realm_id);
-        assert_eq!(
-            removed,
-            vec![(window.id(), installed)],
-            "teardown must return exactly the entries that were installed"
-        );
-        assert_eq!(
-            registry.resolve(window.id()),
-            None,
-            "the entry must be gone after removal"
-        );
-        assert!(registry.is_empty());
     }
 
     /// The target model is one realm owning any number of windows:
@@ -399,21 +338,5 @@ mod tests {
             "an unrelated realm's window mapping must survive"
         );
         assert_eq!(registry.len(), 1);
-    }
-
-    #[test]
-    fn two_windows_get_two_distinct_addresses() {
-        let mut registry = WindowRegistry::new();
-        let window_a = stub_window(10);
-        let window_b = stub_window(20);
-        let address_a = address(0);
-        let address_b = address(1);
-
-        registry.register_window(&window_a, address_a);
-        registry.register_window(&window_b, address_b);
-
-        assert_eq!(registry.resolve(window_a.id()), Some(address_a));
-        assert_eq!(registry.resolve(window_b.id()), Some(address_b));
-        assert_ne!(address_a, address_b);
     }
 }

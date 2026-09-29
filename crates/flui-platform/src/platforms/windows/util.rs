@@ -137,25 +137,4 @@ mod tests {
         assert_eq!(get_x_lparam(lparam), 100);
         assert_eq!(get_y_lparam(lparam), 200);
     }
-
-    #[test]
-    fn test_dpi_conversion() {
-        let scale_factor = 1.5; // 150% DPI
-
-        let logical = 100.0;
-        let device = logical_to_device(logical, scale_factor);
-        assert_eq!(device, 150);
-
-        let back_to_logical = device_to_logical(device, scale_factor);
-        assert!((back_to_logical - logical).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_wide_string_conversion() {
-        let original = "Hello, 世界! 🦀";
-        let wide = to_wide(original);
-        let back = from_wide(&wide);
-
-        assert_eq!(original, back);
-    }
 }

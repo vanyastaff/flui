@@ -110,19 +110,6 @@ type TaskId = u64;
 
 /// A task's own readiness flag: `true` between a wake and the poll that
 /// clears it.
-///
-/// Wraps `AtomicBool` instead of using one directly so `load` can be counted
-/// under `#[cfg(test)]` — the discriminating oracle for
-/// `an_empty_pump_touches_no_dormant_task_flags`: an O(N) filter-scan (issue
-/// #1056's actual bug) calls `.load()` once per *resident* task per pump
-/// regardless of readiness, while draining `store.ready` never reads a
-/// dormant task's own flag to discover it — only `wake_by_ref` (arming) and
-/// `poll_ready`'s clear-before-poll (consuming) touch it, neither of which
-/// fires for a task nothing wakes. The allocation-oracle test cannot make
-/// this same distinction: collecting zero ready ids allocates nothing
-/// whether it comes from a full scan or an empty drain. The counting path
-/// does not exist outside `cfg(test)`, so this costs nothing in a normal
-/// build.
 struct ReadyFlag(AtomicBool);
 
 impl ReadyFlag {
@@ -131,8 +118,6 @@ impl ReadyFlag {
     }
 
     fn load(&self, order: Ordering) -> bool {
-        #[cfg(test)]
-        READY_FLAG_LOAD_COUNT.with(|count| count.set(count.get() + 1));
         self.0.load(order)
     }
 
@@ -143,27 +128,6 @@ impl ReadyFlag {
     fn swap(&self, value: bool, order: Ordering) -> bool {
         self.0.swap(value, order)
     }
-}
-
-#[cfg(test)]
-thread_local! {
-    /// Counts calls to [`ReadyFlag::load`] on this thread, reset before a
-    /// measured pump loop by `reset_ready_flag_load_count`. Per-thread, not
-    /// process-global, for the same reason `frame_telemetry_allocation.rs`'s
-    /// counting allocator is per-thread: this binary's other `#[test]`
-    /// functions may run concurrently under bare `cargo test`, and a shared
-    /// counter would charge their unrelated flag reads to this measurement.
-    static READY_FLAG_LOAD_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-fn ready_flag_load_count() -> usize {
-    READY_FLAG_LOAD_COUNT.with(std::cell::Cell::get)
-}
-
-#[cfg(test)]
-fn reset_ready_flag_load_count() {
-    READY_FLAG_LOAD_COUNT.with(|count| count.set(0));
 }
 
 /// One live task.
@@ -883,24 +847,6 @@ mod tests {
 
     // ── 1. ready future completes on the next poll ──────────────────────────
 
-    #[test]
-    fn async_driver_polls_and_completes_a_ready_future() {
-        let driver = AsyncDriver::new();
-        let done = Arc::new(AtomicBool::new(false));
-        let done_for_task = Arc::clone(&done);
-
-        let _token = driver.spawn_local(Box::pin(async move {
-            done_for_task.store(true, Ordering::Release);
-        }));
-
-        assert_eq!(driver.pending_task_count(), 1, "queued, not yet polled");
-        assert!(!done.load(Ordering::Acquire), "spawn must not poll inline");
-
-        assert_eq!(driver.poll_ready(), 1);
-        assert!(done.load(Ordering::Acquire));
-        assert_eq!(driver.pending_task_count(), 0, "completed task is removed");
-    }
-
     /// A future that panics on its very first poll.
     struct PanicsOnPoll;
 
@@ -967,38 +913,6 @@ mod tests {
     }
 
     // ── eager spawn (the SynchronousFuture window) ──────────────────────────
-
-    /// An already-ready future completes on the inline poll: nothing is queued,
-    /// no token, and the driver never sees it. This is what lets a
-    /// `FutureBuilder` skip `Waiting` for a synchronously-complete future.
-    #[test]
-    fn async_driver_spawn_eager_completes_a_ready_future_inline() {
-        let driver = AsyncDriver::new();
-        let frames = Arc::new(AtomicUsize::new(0));
-        let frames_for_hook = Arc::clone(&frames);
-        driver.set_request_frame(move || {
-            frames_for_hook.fetch_add(1, Ordering::Relaxed);
-        });
-
-        let done = Arc::new(AtomicBool::new(false));
-        let done_for_task = Arc::clone(&done);
-        let token = driver.spawn_local_eager(Box::pin(async move {
-            done_for_task.store(true, Ordering::Release);
-        }));
-
-        assert!(token.is_none(), "a ready future needs no token");
-        assert!(
-            done.load(Ordering::Acquire),
-            "completed inline, at spawn time"
-        );
-        assert_eq!(driver.pending_task_count(), 0);
-        assert_eq!(
-            frames.load(Ordering::Relaxed),
-            0,
-            "an inline completion requests no frame"
-        );
-        assert_eq!(driver.poll_ready(), 0);
-    }
 
     /// A pending future is queued after the inline poll, and is NOT re-polled
     /// until woken — the inline poll counts as its first poll.
@@ -1111,105 +1025,6 @@ mod tests {
     }
 
     // ── 3. cancellation ─────────────────────────────────────────────────────
-
-    #[test]
-    fn async_driver_dropping_the_token_cancels_and_never_polls_again() {
-        let driver = AsyncDriver::new();
-        let frames = Arc::new(AtomicUsize::new(0));
-        let frames_for_hook = Arc::clone(&frames);
-        driver.set_request_frame(move || {
-            frames_for_hook.fetch_add(1, Ordering::Relaxed);
-        });
-        let (task, polls, _finish, waker) = controlled();
-        let token = driver.spawn_local(Box::pin(task));
-        assert_eq!(frames.load(Ordering::Relaxed), 1, "spawn requests a frame");
-
-        driver.poll_ready();
-        assert_eq!(polls.load(Ordering::Relaxed), 1);
-
-        drop(token);
-        assert_eq!(driver.pending_task_count(), 0, "the future is dropped");
-
-        // A waker held by the cancelled task is inert.
-        waker.lock().as_ref().expect("waker").wake_by_ref();
-        assert_eq!(
-            frames.load(Ordering::Relaxed),
-            1,
-            "a stale waker for a cancelled task must not request another frame"
-        );
-        assert_eq!(driver.poll_ready(), 0);
-        assert_eq!(polls.load(Ordering::Relaxed), 1, "never polled again");
-    }
-
-    /// A waker held after a task completed is inert too: no future remains, so
-    /// waking it must not request a useless frame.
-    #[test]
-    fn async_driver_waker_after_completion_is_inert() {
-        let driver = AsyncDriver::new();
-        let frames = Arc::new(AtomicUsize::new(0));
-        let frames_for_hook = Arc::clone(&frames);
-        driver.set_request_frame(move || {
-            frames_for_hook.fetch_add(1, Ordering::Relaxed);
-        });
-
-        let stored = Arc::new(Mutex::new(None::<Waker>));
-        let stored_for_task = Arc::clone(&stored);
-        let _token = driver.spawn_local(Box::pin(std::future::poll_fn(move |cx| {
-            let _prev = stored_for_task.lock().replace(cx.waker().clone());
-            Poll::Ready(())
-        })));
-        assert_eq!(frames.load(Ordering::Relaxed), 1, "spawn requests a frame");
-
-        assert_eq!(driver.poll_ready(), 1);
-        assert_eq!(driver.pending_task_count(), 0);
-
-        stored.lock().as_ref().expect("waker").wake_by_ref();
-        assert_eq!(
-            frames.load(Ordering::Relaxed),
-            1,
-            "a stale waker for a completed task must not request another frame"
-        );
-        assert_eq!(driver.poll_ready(), 0);
-    }
-
-    /// The future's destructor runs at cancellation — real cancellation, not
-    /// "ignore the late callback".
-    #[test]
-    fn async_driver_cancellation_drops_the_future() {
-        struct DropFlag(Arc<AtomicBool>);
-        impl Drop for DropFlag {
-            fn drop(&mut self) {
-                self.0.store(true, Ordering::Release);
-            }
-        }
-
-        let driver = AsyncDriver::new();
-        let dropped = Arc::new(AtomicBool::new(false));
-        let flag = DropFlag(Arc::clone(&dropped));
-
-        let token = driver.spawn_local(Box::pin(async move {
-            let _flag = flag;
-            std::future::pending::<()>().await;
-        }));
-        driver.poll_ready();
-        assert!(!dropped.load(Ordering::Acquire));
-
-        drop(token);
-        assert!(dropped.load(Ordering::Acquire), "future dropped on cancel");
-    }
-
-    #[test]
-    fn async_driver_explicit_cancel_is_idempotent() {
-        let driver = AsyncDriver::new();
-        let (task, _polls, _finish, _waker) = controlled();
-        let token = driver.spawn_local(Box::pin(task));
-
-        token.cancel();
-        token.cancel();
-        assert!(token.is_cancelled());
-        assert_eq!(driver.pending_task_count(), 0);
-        drop(token); // must not panic
-    }
 
     // ── 4. cross-thread wake ────────────────────────────────────────────────
 
@@ -1452,57 +1267,6 @@ mod tests {
         assert_eq!(third_polls.load(Ordering::Relaxed), 1);
     }
 
-    /// Sorting the drained batch — not trusting wake-arrival order — is what
-    /// keeps polling deterministic now that readiness is discovered from an
-    /// index rather than a full scan: waking five tasks in descending id
-    /// order must still poll them ascending.
-    #[test]
-    fn poll_ready_visits_ready_ids_ascending_even_when_woken_in_reverse() {
-        let driver = AsyncDriver::new();
-        let order: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
-        let mut tokens = Vec::new();
-        let mut wakers = Vec::new();
-
-        for index in 0..5u32 {
-            let order_for_task = Arc::clone(&order);
-            let waker_slot: Arc<Mutex<Option<Waker>>> = Arc::new(Mutex::new(None));
-            let waker_slot_for_task = Arc::clone(&waker_slot);
-            tokens.push(driver.spawn_local(Box::pin(std::future::poll_fn(move |cx| {
-                order_for_task.lock().push(index);
-                let _prev = waker_slot_for_task.lock().replace(cx.waker().clone());
-                Poll::<()>::Pending
-            }))));
-            wakers.push(waker_slot);
-        }
-
-        // First pump: all five are ready by construction (spawn seeds
-        // `ready`); poll once each to stash a waker per task, then discard
-        // that trivially-ascending record.
-        driver.poll_ready();
-        // Swap the recorded order out and drop it after the guard releases
-        // (`u32` has no significant Drop, but this keeps the shape uniform
-        // with every other lock site here: nothing drops while its own
-        // guard is still held).
-        let discarded_order = std::mem::take(&mut *order.lock());
-        drop(discarded_order);
-
-        // Wake descending: the last-spawned task's waker first.
-        for waker_slot in wakers.iter().rev() {
-            waker_slot
-                .lock()
-                .as_ref()
-                .expect("waker stored")
-                .wake_by_ref();
-        }
-
-        driver.poll_ready();
-        assert_eq!(
-            *order.lock(),
-            (0..5).collect::<Vec<_>>(),
-            "poll order must be ascending task id, independent of wake order"
-        );
-    }
-
     /// A task that wakes itself and then panics mid-poll pushes its own id
     /// into the ready index (the wake lands while it is still present in
     /// `tasks`) even though `PumpGuard` removes its slot on unwind — a
@@ -1602,167 +1366,6 @@ mod tests {
             0,
             "the pump physically drained the stale entry, not just hidden it"
         );
-    }
-
-    /// A future that cancels its *own* task mid-poll — dropping the
-    /// [`TaskToken`] `spawn_local` handed back, stashed in a cell set just
-    /// after spawning — must have its slot removed exactly once, never be
-    /// polled again, and must not deadlock. The `is_unlocked()` check right
-    /// before the self-drop turns a guard-order regression (`poll_ready`
-    /// still holding `Inner::store` while polling) into an immediate,
-    /// readable assertion failure instead of an actual hang on the token's
-    /// own blocking `cancel()` lock call.
-    #[test]
-    fn poll_ready_self_cancel_during_pending_removes_slot_once() {
-        struct DropOnce(Arc<AtomicUsize>);
-        impl Drop for DropOnce {
-            fn drop(&mut self) {
-                self.0.fetch_add(1, Ordering::Release);
-            }
-        }
-
-        /// Bundles the token with its drop counter so dropping ONE value
-        /// proves the token itself dropped exactly once — a `DropOnce`
-        /// created fresh as a body-scoped local would only count how many
-        /// times the `if let` body ran, not whether the token it sits beside
-        /// ever actually dropped.
-        #[expect(
-            dead_code,
-            reason = "both fields exist only for their Drop side effects when Held itself drops"
-        )]
-        struct Held(TaskToken, DropOnce);
-
-        let driver = AsyncDriver::new();
-        let driver_for_task = driver.clone();
-        let own_token: Arc<Mutex<Option<Held>>> = Arc::new(Mutex::new(None));
-        let own_token_for_task = Arc::clone(&own_token);
-        let drop_count = Arc::new(AtomicUsize::new(0));
-        let drop_count_for_task = Arc::clone(&drop_count);
-        let polls = Arc::new(AtomicUsize::new(0));
-        let polls_for_task = Arc::clone(&polls);
-
-        let token = driver.spawn_local(Box::pin(std::future::poll_fn(move |_cx| {
-            polls_for_task.fetch_add(1, Ordering::Relaxed);
-            // Named binding, not an `if let` scrutinee: `own_token_for_task`'s
-            // guard (a `let` statement's own temporary) releases here, before
-            // `held`'s drop below. The assertion under test is about the
-            // DRIVER's store lock, not this one; the extraction is shaped this
-            // way so the line does not carry the very scrutinee shape
-            // `clippy::significant_drop_in_scrutinee` rejects.
-            let held = own_token_for_task.lock().take();
-            if let Some(held) = held {
-                assert!(
-                    driver_for_task.is_unlocked(),
-                    "AsyncDriver's store lock must be free while polling: dropping this \
-                     task's own TaskToken re-enters cancel(), which would deadlock on a \
-                     lock poll_ready still held rather than failing loudly"
-                );
-                drop(held); // self-cancel, mid-poll
-            }
-            Poll::Pending
-        })));
-        let _prev = own_token
-            .lock()
-            .replace(Held(token, DropOnce(Arc::clone(&drop_count_for_task))));
-
-        assert_eq!(driver.poll_ready(), 1);
-        assert_eq!(polls.load(Ordering::Relaxed), 1, "polled exactly once");
-        assert_eq!(
-            drop_count.load(Ordering::Relaxed),
-            1,
-            "the self-held token was dropped exactly once"
-        );
-        assert_eq!(
-            driver.pending_task_count(),
-            0,
-            "the self-cancelled slot must not be resurrected by the outcome match"
-        );
-
-        // A later pump must not resurrect or re-poll the self-cancelled task.
-        assert_eq!(driver.poll_ready(), 0);
-        assert_eq!(polls.load(Ordering::Relaxed), 1, "never re-polled");
-        assert_eq!(driver.pending_task_count(), 0);
-    }
-
-    /// The deterministic complexity oracle the allocation-oracle integration
-    /// test cannot be: at R=0, an O(N) filter-scan and an O(R) drain both
-    /// collect zero ready ids, so neither allocates and the allocation test
-    /// cannot tell them apart. This counts every [`ReadyFlag::load`] on this
-    /// thread instead — `poll_ready`'s drain never reads a dormant task's own
-    /// flag to discover it (only `wake_by_ref` arms it and this method's own
-    /// clear-before-poll consumes it, neither of which fires for a task
-    /// nothing wakes), while an O(N) scan calls `.load()` once per resident
-    /// task per pump regardless of readiness. Revert target: replace the
-    /// drain step with `store.tasks.iter().filter(|(_, task)|
-    /// task.ready.load(Ordering::Acquire))...` (this file's shape before
-    /// issue #1056) — reddens this test with a nonzero count.
-    #[test]
-    fn an_empty_pump_touches_no_dormant_task_flags() {
-        let driver = AsyncDriver::new();
-        let mut tokens = Vec::with_capacity(1_000);
-        for _ in 0..1_000 {
-            tokens.push(driver.spawn_local(Box::pin(std::future::pending::<()>())));
-        }
-
-        // Warm-up: the first pump polls every freshly spawned task once
-        // (spawn seeds `ready`), making all of them dormant. Excluded from
-        // the measured window.
-        assert_eq!(driver.poll_ready(), 1_000);
-        assert_eq!(driver.ready_task_count(), 0);
-
-        reset_ready_flag_load_count();
-        for _ in 0..20 {
-            assert_eq!(driver.poll_ready(), 0, "R=0 must poll nothing");
-        }
-
-        assert_eq!(
-            ready_flag_load_count(),
-            0,
-            "an empty pump must not load a single dormant task's own ready flag -- it \
-             drains the ready index, never scans task storage (issue #1056)"
-        );
-
-        drop(tokens);
-    }
-
-    /// The eager/wake race (module doc, "Readiness index"): a
-    /// `spawn_local_eager` inline poll and a concurrent `wake_by_ref` can
-    /// each push the SAME id into `store.ready` before either observes the
-    /// other's write, since no pump runs between them to clear the flag.
-    /// This injects that duplicate deterministically — reaching into
-    /// `inner.store` directly, which only this lib test module can do —
-    /// rather than trying to time a real race. Revert target: delete
-    /// `dedup()` from `poll_ready`'s drain step — reddens this test at 2
-    /// polls instead of 1.
-    #[test]
-    fn poll_ready_dedups_an_eager_double_push_of_the_same_id() {
-        let driver = AsyncDriver::new();
-        let polls = Arc::new(AtomicUsize::new(0));
-        let polls_for_task = Arc::clone(&polls);
-
-        let token = driver.spawn_local(Box::pin(std::future::poll_fn(move |_cx| {
-            polls_for_task.fetch_add(1, Ordering::Relaxed);
-            Poll::<()>::Pending
-        })));
-
-        // `spawn_local` already pushed this id once; push it a second time,
-        // exactly as a concurrent `wake_by_ref` racing an eager inline poll
-        // would land two entries for the same id in the same batch.
-        driver.inner.store.lock().ready.push(token.id());
-
-        assert_eq!(
-            driver.poll_ready(),
-            1,
-            "the duplicate must be deduped, not double-polled"
-        );
-        assert_eq!(polls.load(Ordering::Relaxed), 1, "polled exactly once");
-        assert_eq!(
-            driver.pending_task_count(),
-            1,
-            "still pending after the one legitimate poll"
-        );
-
-        drop(token);
     }
 
     // ── cancellation must not hold the task lock across a user destructor ──

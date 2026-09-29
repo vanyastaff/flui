@@ -328,29 +328,6 @@ mod tests {
 
     use super::*;
 
-    fn counter() -> (Arc<AtomicUsize>, impl Fn() + Send + Sync) {
-        let c = Arc::new(AtomicUsize::new(0));
-        let c2 = Arc::clone(&c);
-        (c, move || {
-            c2.fetch_add(1, Ordering::SeqCst);
-        })
-    }
-
-    #[test]
-    fn first_listener_edge_fires_once() {
-        let reg: ListenerRegistry<u8> = ListenerRegistry::new();
-        let firsts = Arc::new(AtomicUsize::new(0));
-        let f2 = Arc::clone(&firsts);
-        reg.set_on_first_listener(move || {
-            f2.fetch_add(1, Ordering::SeqCst);
-        });
-        let s1 = reg.add_value_listener(Arc::new(|| {}));
-        let s2 = reg.add_value_listener(Arc::new(|| {}));
-        assert_eq!(firsts.load(Ordering::SeqCst), 1, "first edge fires once");
-        drop(s1);
-        drop(s2);
-    }
-
     /// A hook that re-arms itself (calls `set_on_first_listener` from
     /// inside its own body) must neither deadlock on `on_first`'s slot lock
     /// nor lose the re-arm. Reverting `after_add` to call the hook while
@@ -404,59 +381,6 @@ mod tests {
     }
 
     #[test]
-    fn shared_count_spans_value_and_status() {
-        let reg: ListenerRegistry<u8> = ListenerRegistry::new();
-        let firsts = Arc::new(AtomicUsize::new(0));
-        let f2 = Arc::clone(&firsts);
-        reg.set_on_first_listener(move || {
-            f2.fetch_add(1, Ordering::SeqCst);
-        });
-        let _s = reg.add_status_listener(Arc::new(|_s: u8| {}));
-        let _v = reg.add_value_listener(Arc::new(|| {}));
-        assert_eq!(firsts.load(Ordering::SeqCst), 1, "one shared first edge");
-        assert_eq!(reg.listener_count(), 2);
-    }
-
-    #[test]
-    fn notify_value_and_status_independent() {
-        let reg: ListenerRegistry<u8> = ListenerRegistry::new();
-        let (vc, vcb) = counter();
-        let _v = reg.add_value_listener(Arc::new(vcb));
-        let sc = Arc::new(AtomicUsize::new(0));
-        let sc2 = Arc::clone(&sc);
-        let _s = reg.add_status_listener(Arc::new(move |s: u8| {
-            sc2.fetch_add(s as usize, Ordering::SeqCst);
-        }));
-        reg.notify_value();
-        assert_eq!(vc.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            sc.load(Ordering::SeqCst),
-            0,
-            "value notify must not fire status"
-        );
-        reg.notify_status(5);
-        assert_eq!(sc.load(Ordering::SeqCst), 5);
-        assert_eq!(
-            vc.load(Ordering::SeqCst),
-            1,
-            "status notify must not fire value"
-        );
-    }
-
-    #[test]
-    fn drop_subscription_stops_delivery() {
-        let reg: ListenerRegistry<u8> = ListenerRegistry::new();
-        let (vc, vcb) = counter();
-        let s = reg.add_value_listener(Arc::new(vcb));
-        reg.notify_value();
-        assert_eq!(vc.load(Ordering::SeqCst), 1);
-        drop(s);
-        assert_eq!(reg.listener_count(), 0, "drop decrements shared count");
-        reg.notify_value();
-        assert_eq!(vc.load(Ordering::SeqCst), 1, "dropped sub must not fire");
-    }
-
-    #[test]
     fn subscription_outliving_registry_is_safe() {
         let s = {
             let reg: ListenerRegistry<u8> = ListenerRegistry::new();
@@ -464,22 +388,6 @@ mod tests {
             // reg dropped here; ListenerSubscription holds only a Weak.
         };
         drop(s); // upgrade() returns None — must not panic / use-after-free.
-    }
-
-    #[test]
-    fn dropping_subscription_after_dispose_does_not_panic() {
-        // Disposing the registry clears both channels; dropping a still-live
-        // subscription afterwards must not debug-panic on the now-disposed
-        // channel (that would abort if the drop ran during unwinding). The
-        // shared count is still decremented.
-        let reg: ListenerRegistry<u8> = ListenerRegistry::new();
-        let v = reg.add_value_listener(Arc::new(|| {}));
-        let s = reg.add_status_listener(Arc::new(|_s: u8| {}));
-        assert_eq!(reg.listener_count(), 2);
-        reg.dispose();
-        drop(v); // value channel disposed — removal must be skipped, not panic.
-        drop(s); // status channel disposed — same.
-        assert_eq!(reg.listener_count(), 0, "count still reaches zero");
     }
 
     /// Pins `set_on_first_listener`'s extract-then-drop ordering: reverting

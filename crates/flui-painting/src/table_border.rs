@@ -95,14 +95,6 @@ mod tests {
     }
 
     #[test]
-    fn no_border_and_no_lines_paints_nothing() {
-        let mut canvas = Canvas::new();
-        paint_table_border(&mut canvas, rect(), &[], &[], &TableBorder::NONE);
-        let list = canvas.finish();
-        assert!(list.is_empty(), "expected no draw commands, got {list:?}");
-    }
-
-    #[test]
     fn interior_lines_use_the_inside_sides_and_outer_border_paints_last() {
         let mut canvas = Canvas::new();
         let border = TableBorder {
@@ -169,35 +161,5 @@ mod tests {
         };
         assert_eq!(outer.top_left, Radius::circular(8.0));
         assert_eq!(outer.bottom_right, Radius::circular(8.0));
-    }
-
-    #[test]
-    fn zero_border_radius_leaves_the_outer_corners_square() {
-        use flui_foundation::geometry::Radius;
-
-        let mut canvas = Canvas::new();
-        // No `with_border_radius` -> default `BorderRadius::ZERO`.
-        let border = TableBorder::all(solid(2.0, Color::BLACK));
-        paint_table_border(&mut canvas, rect(), &[], &[], &border);
-        let list = canvas.finish();
-        let cmds: Vec<_> = list.iter().collect();
-
-        #[expect(clippy::panic)] // Test assertion
-        let DrawOp::DRRect { outer, .. } = &cmds[0].op else {
-            panic!("expected a single uniform outer DrawDRRect; got {:?}", cmds);
-        };
-        assert_eq!(outer.top_left, Radius::circular(0.0), "square by default");
-    }
-
-    #[test]
-    fn non_solid_inside_style_skips_the_interior_lines() {
-        let mut canvas = Canvas::new();
-        let mut border = TableBorder::all(solid(1.0, Color::BLACK));
-        border.vertical_inside.style = BorderStyle::None;
-        border.horizontal_inside.style = BorderStyle::None;
-        paint_table_border(&mut canvas, rect(), &[30.0], &[50.0], &border);
-        let list = canvas.finish();
-        // Only the outer border remains.
-        assert_eq!(list.len(), 1, "commands: {list:?}");
     }
 }

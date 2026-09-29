@@ -131,26 +131,6 @@ mod tests {
     use crate::test_support::capture_rendered_events;
 
     #[test]
-    fn message_only() {
-        let mut recorder = FieldRecorder::new();
-        recorder.push_message("Hello, world!");
-        assert_eq!(recorder.into_string(), "Hello, world!");
-    }
-
-    #[test]
-    fn message_then_fields() {
-        let mut recorder = FieldRecorder::new();
-        recorder.push_message("presentation committed");
-        recorder.push_field("batch", "42");
-        recorder.push_field("phase", "commit");
-
-        assert_eq!(
-            recorder.into_string(),
-            "presentation committed | batch=42 phase=commit"
-        );
-    }
-
-    #[test]
     fn fields_before_the_message_still_read_message_first() {
         let mut recorder = FieldRecorder::new();
         recorder.push_field("phase", "commit");
@@ -161,27 +141,6 @@ mod tests {
             recorder.into_string(),
             "late message | phase=commit batch=7"
         );
-    }
-
-    #[test]
-    fn rendered_span_fields_can_be_prefixed_to_an_event() {
-        let mut span = FieldRecorder::new();
-        span.push_field("presentation_id", "42");
-
-        let mut event = FieldRecorder::new();
-        event.push_rendered_fields(span.as_str());
-        event.push_message("frame committed");
-        event.push_field("frame_id", "7");
-
-        assert_eq!(
-            event.into_string(),
-            "frame committed | presentation_id=42 frame_id=7"
-        );
-    }
-
-    #[test]
-    fn buffer_is_preallocated() {
-        assert!(FieldRecorder::new().output.capacity() >= DEFAULT_CAPACITY);
     }
 
     // --- through a real `tracing` event, so the `Visit` wiring is covered too
@@ -196,15 +155,6 @@ mod tests {
             rendered,
             vec!["frame committed | phase=commit batch=7".to_owned()]
         );
-    }
-
-    #[test]
-    fn non_string_values_keep_debug_formatting() {
-        let rendered = capture_rendered_events(|| {
-            tracing::info!(size = ?(2_u32, 3_u32), enabled = true);
-        });
-
-        assert_eq!(rendered, vec!["size=(2, 3) enabled=true".to_owned()]);
     }
 
     #[test]

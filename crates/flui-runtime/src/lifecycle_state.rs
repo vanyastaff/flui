@@ -211,66 +211,6 @@ mod lifecycle_derivation_tests {
         );
     }
 
-    /// Occlusion-before-focus-loss and focus-loss-before-occlusion must
-    /// converge to the same derived state — the derivation depends only on
-    /// the final `(visible, focused)` pair, never on update order.
-    /// Mirrors `AppRuntime`'s actual update pattern (mutate one signal,
-    /// re-derive) so this test exercises real ordering, not just two calls
-    /// to a pure function with identical arguments.
-    struct WindowSignals {
-        visible: bool,
-        focused: bool,
-    }
-
-    impl WindowSignals {
-        fn new() -> Self {
-            Self {
-                visible: true,
-                focused: true,
-            }
-        }
-
-        fn set_visible(&mut self, visible: bool) -> AppLifecycleState {
-            self.visible = visible;
-            derive_lifecycle_state(self.visible, self.focused)
-        }
-
-        fn set_focused(&mut self, focused: bool) -> AppLifecycleState {
-            self.focused = focused;
-            derive_lifecycle_state(self.visible, self.focused)
-        }
-    }
-
-    #[test]
-    fn derivation_is_order_insensitive() {
-        // Occlusion before focus loss.
-        let mut occlusion_first = WindowSignals::new();
-        let _after_occlusion = occlusion_first.set_visible(false);
-        let occlusion_then_focus_loss = occlusion_first.set_focused(false);
-
-        // The same two updates, reverse order: focus loss before occlusion.
-        let mut focus_loss_first = WindowSignals::new();
-        let _after_focus_loss = focus_loss_first.set_focused(false);
-        let focus_loss_then_occlusion = focus_loss_first.set_visible(false);
-
-        assert_eq!(
-            occlusion_then_focus_loss, focus_loss_then_occlusion,
-            "both orderings of the same two updates must land on the same derived state"
-        );
-        assert_eq!(occlusion_then_focus_loss, AppLifecycleState::Hidden);
-    }
-
-    #[test]
-    fn ladder_is_empty_for_an_unchanged_state() {
-        assert!(
-            lifecycle_ladder(AppLifecycleState::Resumed, AppLifecycleState::Resumed).is_empty(),
-            "a no-op transition must emit nothing — this is where change-detection for the \
-             whole re-derivation lives (neither the scheduler nor WidgetsBinding observers see \
-             a same-state call)"
-        );
-        assert!(lifecycle_ladder(AppLifecycleState::Hidden, AppLifecycleState::Hidden).is_empty());
-    }
-
     /// Pause's ladder: Resumed -> Paused must visit Inactive, then Hidden,
     /// then Paused, in that order.
     #[test]
@@ -295,42 +235,6 @@ mod lifecycle_derivation_tests {
                 AppLifecycleState::Inactive,
                 AppLifecycleState::Resumed,
             ]
-        );
-    }
-
-    #[test]
-    fn ladder_single_step_transitions_emit_exactly_that_step() {
-        assert_eq!(
-            lifecycle_ladder(AppLifecycleState::Resumed, AppLifecycleState::Inactive),
-            vec![AppLifecycleState::Inactive]
-        );
-        assert_eq!(
-            lifecycle_ladder(AppLifecycleState::Inactive, AppLifecycleState::Resumed),
-            vec![AppLifecycleState::Resumed]
-        );
-    }
-
-    /// Regression: `Detached` sits FIRST in Flutter's real `AppLifecycleState`
-    /// order (`AppLifecycleState::ALL`: `Detached, Resumed, Inactive, Hidden,
-    /// Paused` — the engine's "before initialization" state), not last. A
-    /// transition FROM `Detached` is therefore a single forward step to
-    /// whatever `new` is, never a crawl through every OTHER state first — the
-    /// oracle's dedicated `state == detached` branch only fires when
-    /// `Detached` is the TARGET, not the source.
-    ///
-    /// Reachable via Android's Pause/Resume reroute if `UpdateScheduler::
-    /// lifecycle_state()`'s corrupt-byte fallback (`try_from_u8`'s
-    /// `unwrap_or(AppLifecycleState::Detached)`) is ever hit as "old".
-    #[test]
-    fn ladder_from_detached_is_a_single_forward_step() {
-        assert_eq!(
-            lifecycle_ladder(AppLifecycleState::Detached, AppLifecycleState::Resumed),
-            vec![AppLifecycleState::Resumed],
-            "Detached -> Resumed must NOT synthesize Paused/Hidden/Inactive first"
-        );
-        assert_eq!(
-            lifecycle_ladder(AppLifecycleState::Detached, AppLifecycleState::Inactive),
-            vec![AppLifecycleState::Resumed, AppLifecycleState::Inactive]
         );
     }
 

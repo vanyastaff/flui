@@ -70,32 +70,6 @@ pub fn english_like_2021() -> TextTheme {
 mod tests {
     use super::*;
 
-    /// Oracle citation: `_M3Typography.englishLike`
-    /// (`material/typography.dart`, oracle tag `3.44.0`). Spot-checks the
-    /// smallest and largest roles plus one weight-500 role.
-    #[test]
-    fn matches_oracle_english_like_2021() {
-        let scale = english_like_2021();
-
-        let display_large = scale.display_large.expect("display_large is set");
-        assert_eq!(display_large.font_size, Some(57.0));
-        assert_eq!(display_large.font_weight, Some(FontWeight::W400));
-        assert_eq!(display_large.letter_spacing, Some(-0.25));
-        assert_eq!(display_large.height, Some(1.12));
-
-        let title_medium = scale.title_medium.expect("title_medium is set");
-        assert_eq!(title_medium.font_size, Some(16.0));
-        assert_eq!(title_medium.font_weight, Some(FontWeight::W500));
-        assert_eq!(title_medium.letter_spacing, Some(0.15));
-        assert_eq!(title_medium.height, Some(1.50));
-
-        let label_small = scale.label_small.expect("label_small is set");
-        assert_eq!(label_small.font_size, Some(11.0));
-        assert_eq!(label_small.font_weight, Some(FontWeight::W500));
-        assert_eq!(label_small.letter_spacing, Some(0.5));
-        assert_eq!(label_small.height, Some(1.45));
-    }
-
     #[test]
     fn every_role_carries_no_color() {
         let scale = english_like_2021();

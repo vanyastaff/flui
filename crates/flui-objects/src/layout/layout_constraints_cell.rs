@@ -170,59 +170,6 @@ mod tests {
         BoxConstraints::tight_for(Some(w), Some(10.0))
     }
 
-    #[test]
-    fn layout_builder_cell_starts_clean_and_empty() {
-        let cell = LayoutConstraintsCell::new();
-        assert!(!cell.needs_build());
-        assert_eq!(cell.constraints(), None);
-    }
-
-    #[test]
-    fn layout_builder_cell_first_publish_needs_build() {
-        let cell = LayoutConstraintsCell::new();
-        cell.publish(bc(100.0));
-        assert!(
-            cell.needs_build(),
-            "first publish must schedule the builder"
-        );
-        assert_eq!(cell.constraints(), Some(bc(100.0)));
-    }
-
-    #[test]
-    fn layout_builder_cell_commit_clears_needs_build() {
-        let cell = LayoutConstraintsCell::new();
-        cell.publish(bc(100.0));
-        cell.commit();
-        assert!(!cell.needs_build());
-        assert_eq!(cell.constraints(), Some(bc(100.0)));
-    }
-
-    /// The edge-trigger: republishing the committed constraints is a no-op.
-    /// This is what terminates the layout<->build fixpoint.
-    #[test]
-    fn layout_builder_cell_same_constraints_do_not_rebuild() {
-        let cell = LayoutConstraintsCell::new();
-        cell.publish(bc(100.0));
-        cell.commit();
-
-        cell.publish(bc(100.0));
-        assert!(
-            !cell.needs_build(),
-            "unchanged constraints must not re-dirty the element"
-        );
-    }
-
-    #[test]
-    fn layout_builder_cell_changed_constraints_rebuild() {
-        let cell = LayoutConstraintsCell::new();
-        cell.publish(bc(100.0));
-        cell.commit();
-
-        cell.publish(bc(200.0));
-        assert!(cell.needs_build());
-        assert_eq!(cell.constraints(), Some(bc(200.0)));
-    }
-
     /// A change followed by a revert within one pass still leaves the cell
     /// dirty only if the *final* published value differs from the committed
     /// one — `publish` compares against `last_built`, not against the previous

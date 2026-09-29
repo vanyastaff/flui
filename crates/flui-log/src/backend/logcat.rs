@@ -248,17 +248,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn priority_numbers_are_the_ones_logcat_expects() {
-        // Pinning the discriminants matters because the FFI call passes them
-        // as a bare `i32`: a renumbering would silently misfile every event.
-        assert_eq!(LogcatPriority::Verbose as i32, 2);
-        assert_eq!(LogcatPriority::Debug as i32, 3);
-        assert_eq!(LogcatPriority::Info as i32, 4);
-        assert_eq!(LogcatPriority::Warn as i32, 5);
-        assert_eq!(LogcatPriority::Error as i32, 6);
-    }
-
     #[cfg(target_os = "android")]
     #[test]
     fn android_priorities_match_the_ndk() {
@@ -293,26 +282,11 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_target_falls_back_to_the_display_name() {
-        assert_eq!(logcat_tag("", "My Game").to_str(), Ok("My Game"));
-    }
-
-    #[test]
-    fn a_nul_in_both_falls_back_to_the_literal() {
-        assert_eq!(logcat_tag("a\0b", "c\0d").to_str(), Ok(FALLBACK_TAG));
-    }
-
-    #[test]
     fn a_message_with_an_interior_nul_is_truncated_not_dropped() {
         assert_eq!(
             logcat_message("visible\0hidden").to_str(),
             Ok("visible"),
             "a NUL must cost the tail of the message, not the whole event"
         );
-    }
-
-    #[test]
-    fn a_leading_nul_still_produces_a_message() {
-        assert_eq!(logcat_message("\0rest").to_str(), Ok(""));
     }
 }

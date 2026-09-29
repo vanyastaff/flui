@@ -340,8 +340,6 @@ x11 = []
 workspace = true
 
 [dev-dependencies]
-# Paint values for the tests and examples that draw.
-flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 # Application-side error handling in tests/examples only — never a normal
 # dependency again: no `anyhow` token may appear in this crate's public API.
 anyhow = { workspace = true }

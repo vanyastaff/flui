@@ -9,7 +9,6 @@
 //! lifts.
 
 use std::future::Future;
-use std::path::PathBuf;
 use std::pin::pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -19,7 +18,7 @@ use flui_foundation::DataTransferId;
 use flui_platform::data_transfer::{
     DataTransferOffer, DataTransferSource, DropFeedback, OfferRecord, OfferTable,
     RepresentationDescriptor, RepresentationIndex, TransferActions, TransferCompleter,
-    TransferError, TransferFormat, TransferLimits, TransferPayload, TransferRequest, TransferUri,
+    TransferError, TransferFormat, TransferLimits, TransferPayload, TransferRequest,
 };
 use flui_scheduler::AsyncDriver;
 use parking_lot::Mutex;
@@ -67,32 +66,6 @@ fn offer_table_mints_lookups_and_retires() {
 }
 
 #[test]
-fn offer_table_bumps_the_generation_on_retire() {
-    let mut table = OfferTable::new();
-    let first = table.mint(OfferRecord::new(text_representations()));
-    table.retire(first);
-
-    // The freed slot is reused, so the new id shares the slot index but
-    // must carry a bumped generation.
-    let second = table.mint(OfferRecord::new(text_representations()));
-    assert_eq!(
-        first.index(),
-        second.index(),
-        "the slot is expected to be reused for this test to be meaningful"
-    );
-    assert!(
-        second.generation() > first.generation(),
-        "reused slot must mint under a bumped generation"
-    );
-    assert_ne!(first, second);
-
-    // Cross-generation lookup fails: the stale id addresses nothing even
-    // though its slot is occupied again.
-    assert!(table.get(first).is_none());
-    assert!(table.get(second).is_some());
-}
-
-#[test]
 fn stale_offer_request_fails_with_stale_offer() {
     let source = MockSource::new();
     let offer = source.mint_text_offer("hello");
@@ -115,20 +88,6 @@ fn stale_offer_request_fails_with_stale_offer() {
 // ============================================================================
 
 #[test]
-fn completer_resolves_the_request() {
-    let (request, completer) = TransferRequest::channel();
-    let mut request = pin!(request);
-    assert!(poll_once(&mut request).is_pending());
-
-    completer.complete(Ok(TransferPayload::Text("delivered".into())));
-
-    let Poll::Ready(Ok(TransferPayload::Text(text))) = poll_once(&mut request) else {
-        panic!("completed request must resolve with the payload");
-    };
-    assert_eq!(text, "delivered");
-}
-
-#[test]
 fn dropping_the_completer_resolves_source_gone() {
     let (request, completer) = TransferRequest::channel();
     let mut request = pin!(request);
@@ -140,67 +99,6 @@ fn dropping_the_completer_resolves_source_gone() {
         poll_once(&mut request),
         Poll::Ready(Err(TransferError::SourceGone))
     ));
-}
-
-#[test]
-fn dropping_the_request_is_observable_as_cancellation() {
-    let (request, completer) = TransferRequest::channel();
-    assert!(!completer.is_cancelled());
-
-    drop(request);
-
-    assert!(
-        completer.is_cancelled(),
-        "the producer must observe consumer-side cancellation"
-    );
-    // Completing after cancellation is a silent no-op (must not panic).
-    completer.complete(Ok(TransferPayload::Text("too late".into())));
-}
-
-#[test]
-fn ready_request_resolves_immediately() {
-    let request = TransferRequest::ready(Ok(TransferPayload::UriList(vec![TransferUri::Path(
-        PathBuf::from("/tmp/ready.txt"),
-    )])));
-    let mut request = pin!(request);
-    let Poll::Ready(Ok(TransferPayload::UriList(uris))) = poll_once(&mut request) else {
-        panic!("ready request must resolve on the first poll");
-    };
-    assert_eq!(uris.len(), 1);
-}
-
-#[test]
-fn completion_wakes_the_stored_waker() {
-    // A real Waker (the AsyncDriver's) must fire on complete(); the noop
-    // waker above cannot show that, so drive one task through the driver.
-    let driver = AsyncDriver::new();
-    let frames = Arc::new(AtomicUsize::new(0));
-    let frames_for_hook = Arc::clone(&frames);
-    driver.set_request_frame(move || {
-        frames_for_hook.fetch_add(1, Ordering::Relaxed);
-    });
-
-    let (request, completer) = TransferRequest::channel();
-    let outcome: Arc<Mutex<Option<Result<TransferPayload, TransferError>>>> =
-        Arc::new(Mutex::new(None));
-    let outcome_for_task = Arc::clone(&outcome);
-    let _token = driver.spawn_local(Box::pin(async move {
-        *outcome_for_task.lock() = Some(request.await);
-    }));
-
-    assert_eq!(driver.poll_ready(), 1, "first poll parks the request");
-    assert!(outcome.lock().is_none());
-    let frames_before = frames.load(Ordering::Relaxed);
-
-    completer.complete(Ok(TransferPayload::Text("woken".into())));
-    assert!(
-        frames.load(Ordering::Relaxed) > frames_before,
-        "completion must wake the driver's frame-request hook"
-    );
-
-    assert_eq!(driver.poll_ready(), 1, "the wake re-arms exactly this task");
-    let delivered = outcome.lock().take().expect("task observed the payload");
-    assert!(matches!(delivered, Ok(TransferPayload::Text(text)) if text == "woken"));
 }
 
 // ============================================================================

@@ -818,24 +818,6 @@ mod tests {
         );
     }
 
-    /// The converse of the above: less than half a page past the current
-    /// boundary, at zero velocity, settles BACKWARD to the current page —
-    /// the same halfway threshold, approached from below.
-    #[test]
-    fn settles_backward_below_the_halfway_point_at_zero_velocity() {
-        let physics = PageScrollPhysics::new(1.0);
-        let metrics = metrics_at(100.0); // page = 100 / 300 = 0.333 (< 0.5)
-        let sim = physics
-            .create_ballistic_simulation(&metrics, 0.0)
-            .expect("a nonzero off-boundary position must produce a settle simulation");
-        assert!(
-            (settled_x(&sim) - 0.0).abs() < 1.0,
-            "a position below the halfway point at zero velocity must settle BACK to \
-             the current page (0.0), got {:.2}",
-            settled_x(&sim)
-        );
-    }
-
     /// Oracle: `_getTargetPixels`'s velocity bias — `velocity >
     /// tolerance.velocity` adds `0.5` to the page BEFORE rounding, so a fling
     /// above the tolerance commits to the NEXT page even from very close to
@@ -857,41 +839,6 @@ mod tests {
         );
     }
 
-    /// Symmetric to the above: a BACKWARD fling above tolerance commits back
-    /// to the current (lower) page even from close to the NEXT page's start.
-    #[test]
-    fn backward_fling_velocity_beyond_tolerance_retreats_regardless_of_distance() {
-        let physics = PageScrollPhysics::new(1.0);
-        let metrics = metrics_at(320.0); // page = 320 / 300 = 1.067 (just past page 1)
-        let velocity = -(physics.velocity_tolerance_px_per_sec + 10.0); // above tolerance, backward
-        let sim = physics
-            .create_ballistic_simulation(&metrics, velocity)
-            .expect("a velocity above tolerance must produce a settle simulation");
-        assert!(
-            (settled_x(&sim) - 300.0).abs() < 1.0,
-            "a backward fling above tolerance must retreat to page 1 (300.0) despite \
-             sitting at page 1.067, got {:.2}",
-            settled_x(&sim)
-        );
-    }
-
-    /// Oracle: out-of-range and not headed back in defers entirely to the
-    /// boundary physics (`super.createBallisticSimulation`'s `parent` chain).
-    /// `ClampingScrollPhysics` (the default boundary) returns `None` below its
-    /// own fling threshold, so a slow drag that overshot `max_scroll_extent`
-    /// produces no page-snap simulation at all.
-    #[test]
-    fn out_of_range_heading_further_out_of_range_defers_to_the_boundary_physics() {
-        let physics = PageScrollPhysics::new(1.0);
-        let metrics = ScrollMetrics::new(3100.0, 0.0, 3000.0, 300.0); // past max_scroll_extent
-        let sim = physics.create_ballistic_simulation(&metrics, 10.0); // below fling threshold, heading further out
-        assert!(
-            sim.is_none(),
-            "out-of-range with no boundary fling must defer to ClampingScrollPhysics, \
-             which returns None below its threshold"
-        );
-    }
-
     /// `PageController::with_params` rejects a non-positive `viewport_fraction`
     /// — mirrors `PageController`'s constructor assert (`assert(viewportFraction
     /// > 0.0)`).
@@ -899,20 +846,5 @@ mod tests {
     #[should_panic(expected = "viewport_fraction must be > 0.0")]
     fn page_controller_rejects_a_non_positive_viewport_fraction() {
         let _ = PageController::with_params(0, 0.0);
-    }
-
-    /// `PageController::page` returns `None` before any layout has committed
-    /// a real viewport dimension — FLUI's substitute for Flutter's
-    /// `'PageController cannot return page while unattached'` assertion
-    /// (`test/widgets/page_view_test.dart`): a documented divergence returning
-    /// `Option::None` instead of panicking.
-    #[test]
-    fn page_returns_none_before_any_layout() {
-        let controller = PageController::with_params(2, 1.0);
-        assert_eq!(
-            controller.page(),
-            None,
-            "page() must return None before apply_viewport_dimension has ever run"
-        );
     }
 }

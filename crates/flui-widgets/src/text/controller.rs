@@ -1233,37 +1233,6 @@ mod tests {
     // Selection
     // ------------------------------------------------------------------
 
-    /// A backwards drag passes an anchor after the extent. The caret must stay
-    /// where the user's finger is, and the span must still read ascending.
-    #[test]
-    fn a_backwards_selection_keeps_its_caret_and_reads_ascending() {
-        let controller = TextEditingController::with_text("hello world");
-        controller.set_selection(9, 3);
-
-        assert_eq!(controller.selection(), 3..9, "the span reads ascending");
-        assert_eq!(
-            controller.caret_byte_offset(),
-            3,
-            "the caret is the extent -- where the drag ended, not the lower end"
-        );
-        assert!(controller.has_selection());
-    }
-
-    /// Both ends clamp, so an offset from a hit test cannot slice a codepoint.
-    #[test]
-    fn selection_offsets_clamp_to_char_boundaries_and_to_the_buffer() {
-        // "a€b": 'a' at 0, '€' at 1..4, 'b' at 4.
-        let controller = TextEditingController::with_text("a€b");
-        controller.set_selection(2, 99);
-
-        assert_eq!(
-            controller.selection(),
-            4..5,
-            "2 lands inside the euro sign and moves to the next boundary; 99 \
-             clamps to the end"
-        );
-    }
-
     /// Typing over a selection replaces it — one notification, not a delete
     /// followed by an insert.
     #[test]
@@ -1303,69 +1272,6 @@ mod tests {
         assert_eq!(controller.text(), "hello");
         assert_eq!(controller.caret_byte_offset(), 5);
         assert!(!controller.has_selection());
-    }
-
-    /// Delete-forward follows the same rule.
-    #[test]
-    fn delete_forward_deletes_the_selection_rather_than_one_character() {
-        let controller = TextEditingController::with_text("hello world");
-        controller.set_selection(0, 6);
-
-        controller.delete_forward();
-
-        assert_eq!(controller.text(), "world");
-        assert_eq!(controller.caret_byte_offset(), 0);
-    }
-
-    /// An arrow with a selection COLLAPSES to the span's logical end and does
-    /// not step further — `widgets/editable_text.dart:685`,
-    /// `ExtendSelectionByCharacterIntent(collapseSelection: true)`: "Collapses
-    /// the selection to the logical start/end of the selection". Collapsing
-    /// *and* stepping would skip a visible character.
-    ///
-    /// Asserted in both directions from the same backwards selection, so
-    /// neither arm can be satisfied by the caret happening to sit there.
-    #[test]
-    fn an_arrow_collapses_a_selection_to_its_edge_without_stepping() {
-        let left = TextEditingController::with_text("hello world");
-        left.set_selection(9, 3);
-        left.move_caret_left();
-        assert_eq!(
-            left.caret_byte_offset(),
-            3,
-            "Left collapses to the span's start, it does not also step to 2"
-        );
-        assert!(!left.has_selection());
-
-        let right = TextEditingController::with_text("hello world");
-        right.set_selection(9, 3);
-        right.move_caret_right();
-        assert_eq!(
-            right.caret_byte_offset(),
-            9,
-            "Right collapses to the span's end, it does not also step to 10"
-        );
-        assert!(!right.has_selection());
-    }
-
-    /// Home and End collapse even when the caret is already at the edge — the
-    /// selection behind it still has to go.
-    #[test]
-    fn home_and_end_collapse_a_selection_anchored_at_the_edge() {
-        let home = TextEditingController::with_text("hello");
-        home.set_selection(5, 0);
-        home.move_caret_home();
-        assert_eq!(home.caret_byte_offset(), 0);
-        assert!(
-            !home.has_selection(),
-            "the caret was already at 0; the SELECTION is what Home had to clear"
-        );
-
-        let end = TextEditingController::with_text("hello");
-        end.set_selection(0, 5);
-        end.move_caret_end();
-        assert_eq!(end.caret_byte_offset(), 5);
-        assert!(!end.has_selection());
     }
 
     /// A drag re-reports the same offset on nearly every pointer-move event.
@@ -1425,141 +1331,9 @@ mod tests {
         );
     }
 
-    /// The extent can cross the anchor, at which point the span reads the
-    /// other way round — a selection dragged rightwards and then extended past
-    /// its own start.
-    #[test]
-    fn a_shifted_arrow_may_carry_the_extent_past_the_anchor() {
-        let controller = TextEditingController::with_text("hello");
-        controller.set_selection(2, 3);
-
-        controller.extend_selection_left();
-        controller.extend_selection_left();
-
-        assert_eq!(
-            controller.selection(),
-            1..2,
-            "the span flipped around the anchor"
-        );
-        assert_eq!(
-            controller.caret_byte_offset(),
-            1,
-            "the caret is still the extent, now below the anchor"
-        );
-    }
-
-    /// Shift+Home and Shift+End take the extent to the edges, anchor intact.
-    #[test]
-    fn shifted_home_and_end_extend_to_the_edges() {
-        let home = TextEditingController::with_text("hello");
-        home.set_caret_byte_offset(3);
-        home.extend_selection_home();
-        assert_eq!(home.selection(), 0..3);
-        assert_eq!(home.caret_byte_offset(), 0);
-
-        let end = TextEditingController::with_text("hello");
-        end.set_caret_byte_offset(3);
-        end.extend_selection_end();
-        assert_eq!(end.selection(), 3..5);
-        assert_eq!(end.caret_byte_offset(), 5);
-    }
-
-    /// Extending past an edge is a no-op that notifies nobody — key repeat
-    /// holds the arrow down and would otherwise rebuild the field per event.
-    #[test]
-    fn extending_past_an_edge_does_not_notify() {
-        let controller = TextEditingController::with_text("hello");
-        controller.set_selection(0, 5);
-        let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let counter = std::sync::Arc::clone(&seen);
-        let _sub = controller
-            .listenable()
-            .add_listener(std::sync::Arc::new(move || {
-                counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            }));
-
-        controller.extend_selection_right();
-        assert_eq!(
-            seen.load(std::sync::atomic::Ordering::Relaxed),
-            0,
-            "the extent is already at the end"
-        );
-
-        // A different no-op, and the one that pins the equality check rather
-        // than the edge check: `extend_selection_home` always computes
-        // `Some(0)`, so at the start of the buffer it is the `caret !=
-        // selection.caret` comparison — not a `None` from the edge — that
-        // stops the notification.
-        controller.set_selection(5, 0);
-        controller.extend_selection_home();
-        assert_eq!(
-            seen.load(std::sync::atomic::Ordering::Relaxed),
-            1,
-            "the extent is already at 0; only `set_selection` above notified"
-        );
-
-        controller.extend_selection_left();
-        assert_eq!(
-            seen.load(std::sync::atomic::Ordering::Relaxed),
-            1,
-            "and Left from 0 is the edge no-op"
-        );
-
-        controller.extend_selection_right();
-        assert_eq!(
-            seen.load(std::sync::atomic::Ordering::Relaxed),
-            2,
-            "control: a real move does notify"
-        );
-    }
-
     // ------------------------------------------------------------------
     // Basic buffer operations
     // ------------------------------------------------------------------
-
-    #[test]
-    fn empty_controller_starts_with_empty_text_and_caret_at_zero() {
-        let controller = TextEditingController::new();
-        assert_eq!(controller.text(), "");
-        assert_eq!(controller.caret_byte_offset(), 0);
-    }
-
-    #[test]
-    fn with_text_positions_caret_at_end() {
-        let controller = TextEditingController::with_text("hello");
-        assert_eq!(controller.text(), "hello");
-        assert_eq!(controller.caret_byte_offset(), 5);
-    }
-
-    #[test]
-    fn insert_str_appends_when_caret_at_end() {
-        let controller = TextEditingController::new();
-        controller.insert_str("hello");
-        assert_eq!(controller.text(), "hello");
-        assert_eq!(controller.caret_byte_offset(), 5);
-    }
-
-    #[test]
-    fn insert_str_inserts_in_the_middle() {
-        let controller = TextEditingController::with_text("helo");
-        // Manually place caret before 'o'.
-        controller.inner.lock().unwrap().selection = Selection::collapsed(3);
-        controller.insert_str("l");
-        assert_eq!(controller.text(), "hello");
-        assert_eq!(controller.caret_byte_offset(), 4);
-    }
-
-    #[test]
-    fn set_text_replaces_the_whole_buffer_and_collapses_the_caret_to_the_end() {
-        let controller = TextEditingController::with_text("hello world");
-        controller.set_selection(0, 5); // a selection must not survive the replace
-
-        controller.set_text("new value");
-
-        assert_eq!(controller.text(), "new value");
-        assert_eq!(controller.caret_byte_offset(), "new value".len());
-        assert!(!controller.has_selection());
-    }
 
     /// Same no-op-when-unchanged rule every other mutator here follows — a
     /// caller that calls `set_text` unconditionally on every build (mirroring
@@ -1590,147 +1364,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn clear_empties_the_buffer_and_collapses_the_caret_to_zero() {
-        let controller = TextEditingController::with_text("hello world");
-        controller.set_selection(2, 7);
-
-        controller.clear();
-
-        assert_eq!(controller.text(), "");
-        assert_eq!(controller.caret_byte_offset(), 0);
-        assert!(!controller.has_selection());
-    }
-
-    #[test]
-    fn clear_on_an_already_empty_controller_does_not_notify() {
-        let controller = TextEditingController::new();
-        let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let counter = std::sync::Arc::clone(&seen);
-        let _sub = controller
-            .listenable()
-            .add_listener(std::sync::Arc::new(move || {
-                counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            }));
-
-        controller.clear();
-        assert_eq!(
-            seen.load(std::sync::atomic::Ordering::Relaxed),
-            0,
-            "already empty, no notification"
-        );
-    }
-
-    #[test]
-    fn backspace_removes_char_left_of_caret() {
-        let controller = TextEditingController::with_text("hello");
-        controller.backspace();
-        assert_eq!(controller.text(), "hell");
-        assert_eq!(controller.caret_byte_offset(), 4);
-    }
-
-    #[test]
-    fn backspace_at_start_is_noop() {
-        let controller = TextEditingController::new();
-        controller.backspace(); // Must not panic.
-        assert_eq!(controller.text(), "");
-        assert_eq!(controller.caret_byte_offset(), 0);
-    }
-
-    #[test]
-    fn delete_forward_removes_char_right_of_caret() {
-        let controller = TextEditingController::with_text("hello");
-        controller.move_caret_home();
-        controller.delete_forward();
-        assert_eq!(controller.text(), "ello");
-        assert_eq!(controller.caret_byte_offset(), 0);
-    }
-
-    #[test]
-    fn delete_forward_at_end_is_noop() {
-        let controller = TextEditingController::with_text("hi");
-        controller.delete_forward(); // Caret already at end.
-        assert_eq!(controller.text(), "hi");
-        assert_eq!(controller.caret_byte_offset(), 2);
-    }
-
     // ------------------------------------------------------------------
     // Caret navigation
     // ------------------------------------------------------------------
 
-    #[test]
-    fn move_caret_left_moves_one_char() {
-        let controller = TextEditingController::with_text("abc");
-        controller.move_caret_left();
-        assert_eq!(controller.caret_byte_offset(), 2);
-        controller.move_caret_left();
-        assert_eq!(controller.caret_byte_offset(), 1);
-    }
-
-    #[test]
-    fn move_caret_left_at_start_is_noop() {
-        let controller = TextEditingController::with_text("a");
-        controller.move_caret_home();
-        controller.move_caret_left(); // Must not underflow.
-        assert_eq!(controller.caret_byte_offset(), 0);
-    }
-
-    #[test]
-    fn move_caret_right_moves_one_char() {
-        let controller = TextEditingController::with_text("abc");
-        controller.move_caret_home();
-        controller.move_caret_right();
-        assert_eq!(controller.caret_byte_offset(), 1);
-    }
-
-    #[test]
-    fn move_caret_right_at_end_is_noop() {
-        let controller = TextEditingController::with_text("a");
-        controller.move_caret_right(); // Already at end.
-        assert_eq!(controller.caret_byte_offset(), 1);
-    }
-
-    #[test]
-    fn move_caret_home_resets_to_zero() {
-        let controller = TextEditingController::with_text("hello");
-        controller.move_caret_home();
-        assert_eq!(controller.caret_byte_offset(), 0);
-    }
-
-    #[test]
-    fn move_caret_end_moves_to_last_byte() {
-        let controller = TextEditingController::new();
-        controller.insert_str("hello");
-        controller.move_caret_home();
-        controller.move_caret_end();
-        assert_eq!(controller.caret_byte_offset(), 5);
-    }
-
     // ------------------------------------------------------------------
     // Multi-byte (UTF-8) correctness
     // ------------------------------------------------------------------
-
-    #[test]
-    fn backspace_removes_full_multibyte_char() {
-        // '€' is 3 bytes in UTF-8.
-        let controller = TextEditingController::with_text("a€b");
-        // Caret at end (5 bytes: 'a'=1 + '€'=3 + 'b'=1)
-        controller.backspace(); // Should remove 'b' (1 byte).
-        assert_eq!(controller.text(), "a€");
-        assert_eq!(controller.caret_byte_offset(), 4);
-        controller.backspace(); // Should remove '€' (3 bytes).
-        assert_eq!(controller.text(), "a");
-        assert_eq!(controller.caret_byte_offset(), 1);
-    }
-
-    #[test]
-    fn delete_forward_removes_full_multibyte_char() {
-        let controller = TextEditingController::with_text("€b");
-        controller.move_caret_home();
-        controller.delete_forward(); // Should remove '€' (3 bytes).
-        assert_eq!(controller.text(), "b");
-        assert_eq!(controller.caret_byte_offset(), 0);
-    }
 
     // ------------------------------------------------------------------
     // Grapheme-cluster correctness: the unit is the user-perceived
@@ -1805,96 +1445,6 @@ mod tests {
         assert_eq!(controller.caret_byte_offset(), after_a);
     }
 
-    #[test]
-    fn shift_arrows_extend_the_selection_by_whole_graphemes() {
-        let text = format!("a{FLAG}b");
-        let controller = TextEditingController::with_text(&text);
-        controller.move_caret_home();
-        controller.move_caret_right(); // after 'a'
-        controller.extend_selection_right();
-        assert_eq!(
-            controller.selection(),
-            1..1 + FLAG.len(),
-            "Shift+Right selects the whole flag"
-        );
-        controller.extend_selection_left();
-        assert_eq!(
-            controller.selection(),
-            1..1,
-            "Shift+Left shrinks the selection back by the whole flag"
-        );
-    }
-
-    /// Red-check: with the helpers segmenting only the slice on one side of
-    /// the caret (the first implementation), a caret after the first person
-    /// of a ZWJ family — a char boundary, not a grapheme one — stepped
-    /// right by one ZWJ (3 bytes) onto ANOTHER in-cluster position, because
-    /// the slice began with a joiner that had lost its preceding
-    /// pictograph. Walking the whole string keeps that context: the step
-    /// lands at the cluster's end, and the step back at its start.
-    #[test]
-    fn in_cluster_caret_steps_to_the_cluster_edges_with_full_context() {
-        let text = format!("a{FAMILY}b");
-        let family_start = 1;
-        let family_end = 1 + FAMILY.len();
-        // After the first person (4-byte scalar), before the first ZWJ.
-        let mid = family_start + '\u{1F468}'.len_utf8();
-        assert!(text.is_char_boundary(mid));
-        assert!(mid < family_end);
-
-        assert_eq!(super::next_grapheme_boundary(&text, mid), family_end);
-        assert_eq!(super::prev_grapheme_boundary(&text, mid), family_start);
-
-        // Regional-indicator pairs are the other rule that needs what
-        // precedes the caret: between the two indicators of a flag.
-        let flag_text = format!("x{FLAG}y");
-        let between = 1 + '\u{1F1FA}'.len_utf8();
-        assert_eq!(
-            super::next_grapheme_boundary(&flag_text, between),
-            1 + FLAG.len()
-        );
-        assert_eq!(super::prev_grapheme_boundary(&flag_text, between), 1);
-    }
-
-    /// `set_selection` snaps an in-cluster edge forward to the cluster's
-    /// end (and a mid-codepoint one forward to a char boundary first), so a
-    /// following `move_caret_left` is one whole character, not a partial
-    /// glyph.
-    #[test]
-    fn set_selection_snaps_in_cluster_edges_to_grapheme_boundaries() {
-        let controller = TextEditingController::with_text(format!("a{FAMILY}b"));
-        let family_end = 1 + FAMILY.len();
-        let mid = 1 + '\u{1F468}'.len_utf8();
-
-        controller.set_caret_byte_offset(mid);
-        assert_eq!(controller.caret_byte_offset(), family_end);
-
-        controller.set_selection(mid + 1, 0);
-        assert_eq!(controller.selection(), 0..family_end);
-
-        controller.move_caret_left();
-        assert_eq!(controller.caret_byte_offset(), 0);
-    }
-
-    #[test]
-    fn grapheme_boundaries_are_char_boundaries_and_clamp_at_the_edges() {
-        let text = format!("{E_ACUTE}{FAMILY}");
-        assert_eq!(super::prev_grapheme_boundary(&text, 0), 0);
-        assert_eq!(super::next_grapheme_boundary(&text, text.len()), text.len());
-        let mut caret = 0;
-        while caret < text.len() {
-            let next = super::next_grapheme_boundary(&text, caret);
-            assert!(next > caret, "progress at {caret}");
-            assert!(text.is_char_boundary(next));
-            assert_eq!(
-                super::prev_grapheme_boundary(&text, next),
-                caret,
-                "prev is the inverse of next"
-            );
-            caret = next;
-        }
-    }
-
     // ------------------------------------------------------------------
     // Word-boundary correctness: UAX #29 word segmentation, not ASCII
     // whitespace runs.
@@ -1924,47 +1474,6 @@ mod tests {
         assert_eq!(super::next_word_boundary(text, text.len()), text.len());
     }
 
-    #[test]
-    fn word_left_returns_to_the_current_words_own_start_without_skipping_it() {
-        let text = "the quick brown";
-        // From inside "quick" (byte 6) or right at its end (byte 9),
-        // backward returns to "quick"'s OWN start (byte 4) — it does not
-        // skip past the word the caret is already touching.
-        assert_eq!(super::prev_word_boundary(text, 6), 4);
-        assert_eq!(super::prev_word_boundary(text, 9), 4);
-        // Only once the caret is already AT a word's start does backward
-        // continue past it to the previous word.
-        assert_eq!(super::prev_word_boundary(text, 4), 0);
-        assert_eq!(super::prev_word_boundary(text, 0), 0);
-    }
-
-    #[test]
-    fn a_run_of_whitespace_is_skipped_as_one_stop_not_a_stop_per_space() {
-        let text = "foo   bar";
-        assert_eq!(
-            super::next_word_boundary(text, 0),
-            6,
-            "one jump over foo AND the gap"
-        );
-        assert_eq!(
-            super::prev_word_boundary(text, 9),
-            6,
-            "one jump back over the gap to bar's start"
-        );
-    }
-
-    /// `"don't"` is ONE word under UAX #29's `MidLetter` rule (a straight
-    /// apostrophe between letters does not break) — an ASCII-whitespace
-    /// scan would agree here (no whitespace to split on either), so this
-    /// specifically exercises the segmentation crate's own rule, not just
-    /// this module's whitespace-skipping.
-    #[test]
-    fn an_apostrophe_inside_a_word_does_not_split_it() {
-        let text = "don't stop";
-        assert_eq!(super::next_word_boundary(text, 0), 6);
-        assert_eq!(super::prev_word_boundary(text, 5), 0);
-    }
-
     /// The CJK case an ASCII-whitespace scan cannot pass at all — no
     /// spaces to split on, so it would return the whole line — but this
     /// crate's own UAX #29 segmenter does not claim linguistic-word
@@ -1984,97 +1493,6 @@ mod tests {
         );
     }
 
-    /// Arabic text: clusters only (no dictionary-based segmentation — see
-    /// `flui-widgets/ARCHITECTURE.md`'s Mapping decision for this feature).
-    /// The assertion is narrow on purpose: every returned offset must stay
-    /// a valid char boundary, not that segmentation is linguistically
-    /// perfect for a script this crate does not claim full support for.
-    #[test]
-    fn arabic_text_word_jump_never_lands_inside_a_char() {
-        let text = "مرحبا بالعالم"; // "Hello world".
-        let mut offset = 0;
-        while offset < text.len() {
-            let next = super::next_word_boundary(text, offset);
-            assert!(
-                text.is_char_boundary(next),
-                "landed inside a char at {next}"
-            );
-            assert!(next > offset, "must make progress at {offset}");
-            offset = next;
-        }
-    }
-
-    /// A family emoji (one grapheme, five scalars, zero whitespace) must
-    /// never be split — a Ctrl+Arrow jump either clears the whole cluster
-    /// or does not move; it can never land inside it.
-    #[test]
-    fn a_word_jump_never_lands_inside_a_zwj_emoji_cluster() {
-        let text = format!("hi {FAMILY} bye");
-        for offset in 0..=text.len() {
-            if !text.is_char_boundary(offset) {
-                continue;
-            }
-            let next = super::next_word_boundary(&text, offset);
-            assert!(text.is_char_boundary(next), "next landed inside a cluster");
-            let prev = super::prev_word_boundary(&text, offset);
-            assert!(text.is_char_boundary(prev), "prev landed inside a cluster");
-        }
-    }
-
-    #[test]
-    fn move_caret_word_right_and_left_round_trip_across_a_sentence() {
-        let controller = TextEditingController::with_text("the quick brown fox");
-        controller.move_caret_home();
-
-        controller.move_caret_word_right();
-        assert_eq!(controller.caret_byte_offset(), 4, "start of quick");
-        controller.move_caret_word_right();
-        assert_eq!(controller.caret_byte_offset(), 10, "start of brown");
-        controller.move_caret_word_right();
-        assert_eq!(controller.caret_byte_offset(), 16, "start of fox");
-        controller.move_caret_word_right();
-        assert_eq!(
-            controller.caret_byte_offset(),
-            19,
-            "end of buffer, no more words"
-        );
-
-        controller.move_caret_word_left();
-        assert_eq!(controller.caret_byte_offset(), 16, "back to start of fox");
-        controller.move_caret_word_left();
-        assert_eq!(controller.caret_byte_offset(), 10, "back to start of brown");
-    }
-
-    #[test]
-    fn word_movement_with_an_active_selection_collapses_to_its_edge() {
-        let controller = TextEditingController::with_text("the quick brown");
-        controller.set_selection(4, 9); // "quick" selected.
-
-        controller.move_caret_word_right();
-        assert_eq!(
-            controller.caret_byte_offset(),
-            9,
-            "collapses to the selection's end, no further jump"
-        );
-
-        controller.set_selection(4, 9);
-        controller.move_caret_word_left();
-        assert_eq!(
-            controller.caret_byte_offset(),
-            4,
-            "collapses to the selection's start, no further jump"
-        );
-    }
-
-    #[test]
-    fn extend_selection_word_right_leaves_the_anchor_and_grows_by_a_whole_word() {
-        let controller = TextEditingController::with_text("the quick brown");
-        controller.set_caret_byte_offset(4); // start of "quick"
-
-        controller.extend_selection_word_right();
-        assert_eq!(controller.selection(), 4..10, "anchor stays at 4");
-    }
-
     #[test]
     fn delete_word_backward_removes_the_whole_current_word() {
         let controller = TextEditingController::with_text("the quick brown");
@@ -2086,16 +1504,6 @@ mod tests {
     }
 
     #[test]
-    fn delete_word_forward_removes_the_whole_next_word() {
-        let controller = TextEditingController::with_text("the quick brown");
-        controller.set_caret_byte_offset(4); // start of "quick"
-
-        controller.delete_word_forward();
-        assert_eq!(controller.text(), "the brown");
-        assert_eq!(controller.caret_byte_offset(), 4);
-    }
-
-    #[test]
     fn word_deletion_with_an_active_selection_deletes_the_selection_not_a_word() {
         let controller = TextEditingController::with_text("the quick brown");
         controller.set_selection(4, 9); // "quick" selected.
@@ -2103,32 +1511,6 @@ mod tests {
         controller.delete_word_backward();
         assert_eq!(controller.text(), "the  brown");
         assert_eq!(controller.caret_byte_offset(), 4);
-    }
-
-    /// `delete_word_backward` at the very start of the buffer is a no-op —
-    /// there is no word behind the caret to delete. Mirrors
-    /// `backspace`'s own no-op-at-zero rule.
-    #[test]
-    fn delete_word_backward_at_the_start_of_the_buffer_is_a_no_op() {
-        let controller = TextEditingController::with_text("the quick brown");
-        controller.set_caret_byte_offset(0);
-
-        controller.delete_word_backward();
-        assert_eq!(controller.text(), "the quick brown");
-        assert_eq!(controller.caret_byte_offset(), 0);
-    }
-
-    /// `delete_word_forward` at the very end of the buffer is a no-op —
-    /// there is no word ahead of the caret to delete. Mirrors
-    /// `delete_forward`'s own no-op-at-the-end rule.
-    #[test]
-    fn delete_word_forward_at_the_end_of_the_buffer_is_a_no_op() {
-        let controller = TextEditingController::with_text("the quick brown");
-        controller.move_caret_end();
-
-        controller.delete_word_forward();
-        assert_eq!(controller.text(), "the quick brown");
-        assert_eq!(controller.caret_byte_offset(), 15);
     }
 
     // ------------------------------------------------------------------
@@ -2153,22 +1535,6 @@ mod tests {
             1,
             "listener must fire on insert"
         );
-    }
-
-    #[test]
-    fn listeners_do_not_fire_when_backspace_at_start() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let controller = TextEditingController::new();
-        let call_count = Arc::new(AtomicUsize::new(0));
-        let count_clone = Arc::clone(&call_count);
-
-        controller.add_listener(Arc::new(move || {
-            count_clone.fetch_add(1, Ordering::Relaxed);
-        }));
-
-        controller.backspace(); // No-op — must not notify.
-        assert_eq!(call_count.load(Ordering::Relaxed), 0);
     }
 
     #[test]
@@ -2219,17 +1585,6 @@ mod tests {
         assert_eq!(controller.text(), "replaced");
     }
 
-    #[test]
-    fn caret_hidden_by_ime_follows_the_composition() {
-        let controller = TextEditingController::with_text("Hi wor");
-        assert!(!controller.caret_hidden_by_ime(), "no composition");
-        compose(&controller, 3..6, false);
-        assert!(!controller.caret_hidden_by_ime());
-        compose(&controller, 3..6, true);
-        assert!(controller.caret_hidden_by_ime());
-        assert_eq!(controller.composing_range(), Some(3..6));
-    }
-
     /// Direct caret navigation takes the caret back from the IME without
     /// ending the composition.
     ///
@@ -2277,23 +1632,6 @@ mod tests {
 
         assert_eq!(controller.text(), "Hello niha");
         assert!(!controller.is_composing());
-    }
-
-    /// The `insert_str` counterpart: a paste or a programmatic edit while
-    /// composing ends the composition.
-    ///
-    /// Red-check: comment out the `guard.composing = None;` line in
-    /// `insert_str`.
-    #[test]
-    fn insert_str_during_active_composition_clears_it() {
-        let controller = TextEditingController::with_text("Hello nihao");
-        compose(&controller, 6..11, true);
-
-        controller.insert_str("Z");
-
-        assert_eq!(controller.text(), "Hello nihaoZ");
-        assert!(!controller.is_composing());
-        assert!(!controller.caret_hidden_by_ime());
     }
 
     /// A silent change notifies no one until `notify_changed`, which

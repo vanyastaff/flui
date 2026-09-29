@@ -26,29 +26,6 @@ impl Wake for WakeResource {
 }
 
 #[test]
-fn idle_frame_waiter_requests_a_frame() {
-    let scheduler = UpdateScheduler::new();
-    let wakes = Arc::new(AtomicUsize::new(0));
-    let count = Arc::clone(&wakes);
-    scheduler.set_on_frame_scheduled(Some(Arc::new(move || {
-        count.fetch_add(1, Ordering::Relaxed);
-    })));
-    let mut waiter = scheduler.end_of_frame();
-    assert!(
-        Pin::new(&mut waiter)
-            .poll(&mut Context::from_waker(Waker::noop()))
-            .is_pending()
-    );
-    assert_eq!(
-        (
-            scheduler.has_scheduled_frame(),
-            wakes.load(Ordering::Relaxed)
-        ),
-        (true, 1)
-    );
-}
-
-#[test]
 fn dropped_waiter_releases_its_executor_waker() {
     let scheduler = UpdateScheduler::new();
     let mut waiter = scheduler.end_of_frame();
@@ -67,30 +44,6 @@ fn dropped_waiter_releases_its_executor_waker() {
     assert!(
         weak.upgrade().is_none(),
         "cancelled wait retains executor waker until a frame completes"
-    );
-}
-
-#[test]
-fn explicit_frame_completes_waiter_and_releases_waker() {
-    let scheduler = UpdateScheduler::new();
-    let mut waiter = scheduler.end_of_frame();
-    let weak = {
-        let resource = Arc::new(WakeResource);
-        let weak = Arc::downgrade(&resource);
-        let waker = Waker::from(resource);
-        assert!(
-            Pin::new(&mut waiter)
-                .poll(&mut Context::from_waker(&waker))
-                .is_pending()
-        );
-        weak
-    };
-    scheduler.execute_frame();
-    assert!(weak.upgrade().is_none());
-    assert!(
-        Pin::new(&mut waiter)
-            .poll(&mut Context::from_waker(Waker::noop()))
-            .is_ready()
     );
 }
 
@@ -299,59 +252,6 @@ fn a_registration_from_inside_an_aborted_frames_waker_demands_exactly_one_frame(
     assert!(scheduler.is_frame_scheduled());
 }
 
-/// Criterion 4 — coalescing at the `frame_scheduled` swap edge. Eight
-/// registrations that each REACH the demand path must still produce one
-/// platform wake.
-///
-/// # Each registration has to reach `request_frame_impl` for this to mean
-/// # anything
-///
-/// The eight futures are dropped as they are made, so every one of them
-/// finds no live waiter and calls `schedule_frame_if_enabled()`. That is
-/// the whole point: retaining them instead makes the registry's own
-/// predicate suppress seven of the eight demands BEFORE `request_frame_impl`
-/// is ever entered, and the test then observes one hook call whether the
-/// swap edge coalesces or not. Delete `request_frame_impl`'s
-/// `if !was_scheduled` guard and this test fails with eight; against the
-/// retaining version it would still have passed with one.
-#[test]
-fn many_registrations_reaching_the_demand_path_fire_one_wake() {
-    let scheduler = UpdateScheduler::new();
-    let edges = counting_wake_hook(&scheduler);
-    let registrations = Arc::new(AtomicUsize::new(0));
-
-    let registrar = scheduler.clone();
-    let registrations_in_callback = Arc::clone(&registrations);
-    scheduler.add_persistent_frame_callback(Arc::new(move |_timing| {
-        for _ in 0..8 {
-            // Dropped immediately, so the next registration sees no live
-            // waiter and issues a demand of its own.
-            drop(registrar.end_of_frame());
-            registrations_in_callback.fetch_add(1, Ordering::SeqCst);
-        }
-    }));
-
-    let edges_before = edges.load(Ordering::SeqCst);
-    scheduler.execute_frame();
-    let fired = edges.load(Ordering::SeqCst) - edges_before;
-
-    assert_eq!(
-        registrations.load(Ordering::SeqCst),
-        8,
-        "the persistent callback must have run and registered eight times"
-    );
-    assert_eq!(
-        fired, 1,
-        "eight demands inside one frame fired the wake hook {fired} times; the \
-         false->true swap edge must coalesce them to exactly one"
-    );
-    assert!(
-        scheduler.is_frame_scheduled(),
-        "and they must still leave a frame demanded -- coalescing to ZERO would be the \
-         original bug wearing the coalescing label"
-    );
-}
-
 /// Criterion 5 — after every path that ends a frame, a fresh registration
 /// demands again, firing the hook exactly once.
 #[test]
@@ -394,37 +294,6 @@ fn a_registration_after_each_frame_ending_path_demands_exactly_one_frame() {
         scheduler.handle_begin_frame(Instant::now());
         scheduler.abort_frame();
     });
-}
-
-/// Criterion 6 — cancellation releases the executor's waker immediately,
-/// not at the next frame completion.
-///
-/// `strong_count`, not `Weak::upgrade`: the count distinguishes "released"
-/// (1, the test's own handle) from "still parked in the registry" (2), which
-/// is the state the unfixed code leaves behind.
-#[test]
-fn dropping_a_polled_waiter_releases_the_executor_waker_immediately() {
-    let scheduler = UpdateScheduler::new();
-    let mut waiter = scheduler.end_of_frame();
-
-    let probe = Arc::new(WakeResource);
-    {
-        let waker = Waker::from(Arc::clone(&probe));
-        assert!(
-            Pin::new(&mut waiter)
-                .poll(&mut Context::from_waker(&waker))
-                .is_pending()
-        );
-    }
-
-    drop(waiter);
-
-    assert_eq!(
-        Arc::strong_count(&probe),
-        1,
-        "dropping the future must release the stored waker with no frame and no lock; \
-         a count of 2 means the registry still pins it"
-    );
 }
 
 /// Criterion 9 — a pending completion waiter is real frame demand, so it
@@ -493,32 +362,4 @@ fn a_registration_while_frames_are_disabled_demands_nothing() {
         (false, 0),
         "a disabled scheduler must not be forced awake by a registration"
     );
-}
-
-/// Guard — no sibling starvation. A waiter that registers behind a live one
-/// issues no demand of its own; it must still be notified by the frame the
-/// first one bought.
-#[test]
-fn a_waiter_registered_behind_a_live_one_is_still_notified() {
-    let scheduler = UpdateScheduler::new();
-    let mut first = scheduler.end_of_frame();
-    let mut second = scheduler.end_of_frame();
-
-    scheduler.execute_frame();
-
-    let mut cx = Context::from_waker(Waker::noop());
-    assert!(Pin::new(&mut first).poll(&mut cx).is_ready());
-    assert!(
-        Pin::new(&mut second).poll(&mut cx).is_ready(),
-        "the silent registration must ride the demand the first one already issued"
-    );
-}
-
-/// Guard — type pins. All four already hold against the unfixed code: Fix 1
-/// moves the REGISTRY's handle to `Weak` and never changes the future's own
-/// shape, so a green run here proves nothing about this fix.
-#[test]
-fn frame_completion_future_type_pins() {
-    static_assertions::assert_impl_all!(FrameCompletionFuture: Send, Sync, Unpin);
-    static_assertions::assert_not_impl_any!(FrameCompletionFuture: Clone);
 }

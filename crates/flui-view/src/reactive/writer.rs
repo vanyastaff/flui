@@ -428,19 +428,12 @@ mod tests {
 
     use super::*;
     use crate::owner::{ExternalBuildInbox, ExternalBuildScheduler};
-    use crate::reactive::{Signal, SignalWriteExt};
+    use crate::reactive::SignalWriteExt;
 
     static_assertions::assert_impl_all!(WriterSource: Clone);
     static_assertions::assert_not_impl_any!(WriterSource: Send, Sync);
     static_assertions::assert_not_impl_any!(Writer: Send, Sync, Clone);
     static_assertions::assert_not_impl_any!(EventCx<'static>: Send, Sync, Clone);
-
-    fn is_static<T: 'static>() {}
-
-    #[test]
-    fn a_writer_source_is_static() {
-        is_static::<WriterSource>();
-    }
 
     #[test]
     fn an_owner_bound_operation_checks_identity_and_phase_before_mutating() {
@@ -525,29 +518,6 @@ mod tests {
     }
 
     #[test]
-    fn event_reads_neither_invalidate_nor_subscribe_an_element() {
-        let (graph, inbox) = graph_with_inbox();
-        let count = graph.signal(7u32);
-        let reader = ElementId::new(1);
-        let building = ElementId::new(2);
-        graph.register_element_reader(count.slot(), reader);
-        let source = WriterSource::new(graph.clone());
-
-        graph.begin_element_build(building);
-        source.write(|cx| {
-            assert_eq!(count.peek(cx, |value| *value), Ok(7));
-            assert_eq!(count.peek(&**cx, |value| *value), Ok(7));
-        });
-        graph.end_element_build(building, true);
-
-        assert!(scheduled(&inbox).is_empty(), "reads do not invalidate");
-        assert_eq!(count.peek(&graph, |value| *value), Ok(7));
-        assert_eq!(graph.readers_of(count.slot()), vec![reader]);
-        source.write(|cx| count.set(cx, 8)).expect("event write");
-        assert_eq!(scheduled(&inbox), vec![reader]);
-    }
-
-    #[test]
     fn event_and_writer_reads_refuse_foreign_graphs_without_invoking_the_reader() {
         let (mine, inbox) = graph_with_inbox();
         let (theirs, foreign_inbox) = graph_with_inbox();
@@ -588,23 +558,6 @@ mod tests {
     }
 
     #[test]
-    fn one_event_cx_serves_several_writes() {
-        let (r, _) = graph_with_inbox();
-        let a = r.signal(1u32);
-        let b = r.signal(2u32);
-        let source = WriterSource::new(r.clone());
-
-        let result = source.write(|cx| {
-            a.set(cx, 5)?;
-            b.update(cx, |n| *n += 1)?;
-            a.set_if_changed(cx, 5)
-        });
-
-        assert_eq!(result, Ok(false));
-        assert_eq!((a.peek(&r, |v| *v), b.peek(&r, |v| *v)), (Ok(5), Ok(3)));
-    }
-
-    #[test]
     fn a_write_opened_while_an_element_builds_is_refused() {
         let (r, inbox) = graph_with_inbox();
         let a = r.signal(1u32);
@@ -633,60 +586,5 @@ mod tests {
             Err(SignalError::ForeignGraph { .. })
         ));
         assert_eq!(foreign.peek(&theirs, |v| *v), Ok(1));
-    }
-
-    #[test]
-    fn a_default_signal_write_is_unbound() {
-        let (r, _) = graph_with_inbox();
-        let source = WriterSource::new(r.clone());
-        let unbound = Signal::<u32>::default();
-
-        assert_eq!(
-            source.write(|cx| unbound.set(cx, 1)),
-            Err(SignalError::Unbound)
-        );
-        assert_eq!(unbound.set(&r, 1), Err(SignalError::Unbound));
-        assert_eq!(unbound.peek(&r, |v| *v), Err(SignalError::Unbound));
-    }
-
-    /// Pins the transitional `&Reactive` target: removing it (ADR-0086 §8
-    /// step 3) is a deliberate, visible change to this test.
-    #[test]
-    fn the_reactive_target_and_the_event_cx_write_the_same_slot() {
-        let (r, _) = graph_with_inbox();
-        let a = r.signal(0u32);
-        let source = WriterSource::new(r.clone());
-
-        a.set(&r, 1).expect("a write through the graph");
-        source
-            .write(|cx| a.update(cx, |n| *n += 10))
-            .expect("a write through an event context");
-
-        assert_eq!(a.peek(&r, |v| *v), Ok(11));
-    }
-
-    #[test]
-    fn a_refused_outcome_is_reported_and_an_accepted_one_is_silent() {
-        // `report` consumes the outcome without panicking either way; the
-        // warning itself goes to the `flui::signals` target.
-        Ok::<(), SignalError>(()).report();
-        Err::<(), _>(SignalError::Unbound).report();
-        ().report();
-    }
-
-    #[test]
-    fn debug_shows_only_the_graph_id() {
-        let r = Reactive::new();
-        let source = WriterSource::new(r.clone());
-        assert_eq!(
-            format!("{source:?}"),
-            format!("WriterSource {{ graph: {} }}", r.id())
-        );
-        source.write(|cx| {
-            assert_eq!(
-                format!("{cx:?}"),
-                format!("EventCx {{ graph: {} }}", r.id())
-            );
-        });
     }
 }

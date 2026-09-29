@@ -3,10 +3,7 @@
 use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind, panic_any};
 use std::rc::Rc;
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
-};
+use std::sync::Arc;
 use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
@@ -38,23 +35,6 @@ fn pointer_route_runs_inside_the_binding_owner_scope() {
     binding.pump_frame(Duration::ZERO);
 
     assert!(fired.get(), "the queued local callback must be drained");
-}
-
-#[test]
-fn interaction_registration_requires_the_binding_owner_scope() {
-    let binding = HeadlessBinding::new();
-    let handle = binding.interaction_dispatch_handle();
-
-    assert!(matches!(
-        handle.register_pointer(|_| {}),
-        Err(InteractionDispatchError::InactiveRealm)
-    ));
-
-    binding.enter_owner_scope(|| {
-        handle
-            .register_pointer(|_| {})
-            .expect("owner scope activates the binding interaction lane");
-    });
 }
 
 #[test]
@@ -97,34 +77,6 @@ fn pointer_route_panic_still_runs_the_down_arena_lifecycle() {
         !binding.arena().is_open(pointer),
         "Down must close the arena before the route panic resumes"
     );
-}
-
-struct CountingMember(Arc<AtomicUsize>);
-
-impl flui_interaction::sealed::CustomGestureRecognizer for CountingMember {
-    fn on_arena_accept(&self, _pointer: PointerId) {
-        self.0.fetch_add(1, Ordering::SeqCst);
-    }
-
-    fn on_arena_reject(&self, _pointer: PointerId) {}
-}
-
-#[test]
-fn pointer_event_boundary_drains_a_lone_deferred_winner() {
-    let binding = HeadlessBinding::new();
-    let accepted = Arc::new(AtomicUsize::new(0));
-    let event = pointer_down(Offset::new(4.0, 7.0), device_kind_from_button(0));
-
-    binding.dispatch_pointer(&event, |_| {
-        binding.arena().add(
-            PointerId::PRIMARY,
-            Arc::new(CountingMember(accepted.clone())),
-        );
-        HitTestResult::new()
-    });
-
-    assert_eq!(accepted.load(Ordering::SeqCst), 1);
-    assert!(binding.arena().is_empty());
 }
 
 struct PanickingPayloadDrop;

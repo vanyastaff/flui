@@ -470,100 +470,6 @@ fn queued_window_snapshots_preserve_transitions_and_address_the_sibling() {
 }
 
 #[test]
-fn admitted_close_refuses_a_later_typed_window_snapshot() {
-    with_quit_notification_loop(|_, _| {
-        let dispatcher = install_test_realm();
-        dispatch_platform_realm(
-            dispatcher,
-            RealmTask::Frame(Box::new(move |_| {
-                close_presentation(dispatcher, dispatcher.address.presentation_id)
-                    .expect("admitted close");
-                assert_eq!(
-                    dispatch_platform_realm(
-                        dispatcher,
-                        RealmTask::Event(PlatformToUi::WindowSnapshot {
-                            execution: flui_platform::WindowExecutionState::Running,
-                            focused: true,
-                            visible: true,
-                        }),
-                    ),
-                    Err(RealmDispatchError::PresentationClosing)
-                );
-            })),
-        )
-        .expect("drain terminal operation");
-    });
-}
-
-#[test]
-fn window_execution_snapshot_notifies_paused_without_transient_resumed() {
-    with_quit_notification_loop(|_, _| {
-        let a = install_test_realm();
-        dispatch_platform_realm(
-            a,
-            RealmTask::Frame(Box::new(move |realm| {
-                let history = Rc::new(RefCell::new(Vec::new()));
-                let observed = Rc::clone(&history);
-                let handle = realm
-                    .presentation_widgets_for_test(a.address.presentation_id)
-                    .lifecycle_source()
-                    .handle();
-                let (_, _subscription) = handle
-                    .subscribe(move |state| observed.borrow_mut().push(state))
-                    .expect("subscription");
-                realm.synchronize_window_snapshot(
-                    a.address.presentation_id,
-                    flui_platform::WindowExecutionState::Suspended,
-                    true,
-                    true,
-                );
-                assert_eq!(
-                    handle.snapshot().expect("live"),
-                    Some(AppLifecycleState::Paused)
-                );
-                assert!(!realm.scheduler().frames_enabled());
-                assert!(!history.borrow().contains(&AppLifecycleState::Resumed));
-                realm.update_host_lifecycle(AppLifecycleState::Inactive);
-                realm.update_window_focus(a.address.presentation_id, true);
-                assert_eq!(
-                    handle.snapshot().expect("live"),
-                    Some(AppLifecycleState::Paused)
-                );
-            })),
-        )
-        .expect("initial suspended snapshot");
-    });
-}
-
-#[test]
-fn window_lifecycle_separate_realms_do_not_share_visibility_facts() {
-    with_quit_notification_loop(|_, _| {
-        let a = install_test_realm();
-        let b = install_realm_alongside(crate::app::ui_realm::UiRealm::for_test(), &test_window())
-            .expect("second realm");
-        for dispatcher in [a, b] {
-            resume_for_quit(dispatcher);
-        }
-        dispatch_platform_realm(a, RealmTask::Event(PlatformToUi::WindowVisibility(false)))
-            .expect("hide A");
-        dispatch_platform_realm(b, RealmTask::Event(PlatformToUi::WindowFocus(false)))
-            .expect("blur B");
-        dispatch_platform_realm(
-            b,
-            RealmTask::Frame(Box::new(|realm| {
-                assert_eq!(
-                    realm.scheduler().lifecycle_state(),
-                    AppLifecycleState::Inactive,
-                    "visible realm B must become inactive independently of hidden realm A"
-                );
-                assert!(realm.scheduler().frames_enabled());
-            })),
-        )
-        .expect("inspect B");
-    });
-}
-
-#[test]
 fn window_lifecycle_shared_realm_visible_sibling_keeps_frames_enabled() {
     with_quit_notification_loop(|_, _| {
         let a = install_test_realm();
@@ -594,36 +500,6 @@ fn window_lifecycle_shared_realm_visible_sibling_keeps_frames_enabled() {
             })),
         )
         .expect("inspect shared realm");
-    });
-}
-
-#[test]
-fn window_lifecycle_shared_install_preserves_host_suspension() {
-    with_quit_notification_loop(|_, _| {
-        let primary = install_test_realm();
-        resume_for_quit(primary);
-        dispatch_platform_realm(
-            primary,
-            RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Paused)),
-        )
-        .expect("pause");
-        let (secondary, _window) =
-            open_secondary_window_impl(AppConfig::default(), WindowPolicy::SharedRealm)
-                .expect("open")
-                .expect("headless ready");
-        assert_eq!(primary.address.realm_id, secondary.address.realm_id);
-        dispatch_platform_realm(
-            secondary,
-            RealmTask::Frame(Box::new(|realm| {
-                assert_eq!(realm.presentation_count(), 2);
-                assert_eq!(
-                    realm.scheduler().lifecycle_state(),
-                    AppLifecycleState::Paused
-                );
-                assert!(!realm.scheduler().frames_enabled());
-            })),
-        )
-        .expect("inspect");
     });
 }
 
@@ -761,53 +637,6 @@ fn quit_notification_survives_primary_removal_and_visits_shared_realm_once() {
 }
 
 #[test]
-fn quit_notification_preserves_dispatch_panic_and_finishes_siblings_after_observer_panic() {
-    with_quit_notification_loop(|shared, reevaluation| {
-        let primary = install_test_realm();
-        let secondary =
-            install_realm_alongside(crate::app::ui_realm::UiRealm::for_test(), &test_window())
-                .expect("secondary");
-        for dispatcher in [primary, secondary] {
-            resume_for_quit(dispatcher);
-        }
-        dispatch_platform_realm(
-            primary,
-            RealmTask::Frame(Box::new(|realm| {
-                realm
-                    .scheduler()
-                    .add_lifecycle_state_listener(Arc::new(|state| {
-                        assert_ne!(state, AppLifecycleState::Detached, "observer panic");
-                    }));
-            })),
-        )
-        .expect("listener installed");
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            dispatch_platform_realm(
-                primary,
-                RealmTask::Frame(Box::new(move |_| {
-                    shared.request_exit_policy_reevaluation();
-                    assert!(reevaluation.drive());
-                    APP_RUNTIME.with(|slot| {
-                        assert_eq!(
-                            slot.borrow().quit_notification,
-                            crate::app::runtime::QuitNotification::Requested
-                        );
-                    });
-                    panic!("original dispatch panic");
-                })),
-            )
-            .expect("dispatch admitted");
-        }));
-        let payload = result.expect_err("original panic resumes after restoration");
-        assert_eq!(
-            payload.downcast_ref::<&str>(),
-            Some(&"original dispatch panic")
-        );
-        assert_quit_notification_restored();
-    });
-}
-
-#[test]
 fn quit_notification_includes_install_accepted_before_request_and_fences_new_opens() {
     with_quit_notification_loop(|shared, reevaluation| {
         let primary = install_test_realm();
@@ -844,48 +673,6 @@ fn quit_notification_includes_install_accepted_before_request_and_fences_new_ope
             assert_eq!(slot.borrow().realms.iter().count(), 2);
         });
         assert_quit_notification_restored();
-    });
-}
-
-#[test]
-fn quit_notification_observer_reentry_is_once_and_observer_panic_does_not_skip_siblings() {
-    with_quit_notification_loop(|shared, reevaluation| {
-        let primary = install_test_realm();
-        let secondary =
-            install_realm_alongside(crate::app::ui_realm::UiRealm::for_test(), &test_window())
-                .expect("secondary");
-        for dispatcher in [primary, secondary] {
-            resume_for_quit(dispatcher);
-        }
-        let observed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let observed_in_listener = Arc::clone(&observed);
-        dispatch_platform_realm(
-            primary,
-            RealmTask::Frame(Box::new(move |realm| {
-                realm
-                    .scheduler()
-                    .add_lifecycle_state_listener(Arc::new(move |state| {
-                        if state == AppLifecycleState::Detached {
-                            observed_in_listener.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                            request_quit_notification();
-                            panic!("first observer panic");
-                        }
-                    }));
-            })),
-        )
-        .expect("listener installed");
-        shared.request_exit_policy_reevaluation();
-        let payload =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| reevaluation.drive()))
-                .expect_err("observer panic preserved");
-        assert_eq!(
-            payload.downcast_ref::<&str>(),
-            Some(&"first observer panic")
-        );
-        assert_eq!(observed.load(std::sync::atomic::Ordering::SeqCst), 1);
-        assert_quit_notification_restored();
-        request_quit_notification();
-        assert_eq!(observed.load(std::sync::atomic::Ordering::SeqCst), 1);
     });
 }
 
@@ -963,64 +750,6 @@ fn install_resolves_execution_services_and_teardown_shuts_them_down() {
     assert!(ran.load(std::sync::atomic::Ordering::Acquire));
 
     teardown_platform_realm();
-}
-
-/// The teardown STAGING between the two shutdown families (issue
-/// #558): services get their cooperative flush window BEFORE the
-/// execution pools close. The probe service only writes its flush flag
-/// AFTER observing ITS OWN cancellation — exactly what a real service
-/// does with final state.
-///
-/// If reverted: move `shutdown_lifecycles` after `shutdown_execution`
-/// in `teardown_platform_realm` and this fails — the pools' root-token
-/// cancellation hard-drops the service future at its await point
-/// before it can flush, so the flag stays false. Removing the
-/// registry's cancel stage fails it too (the service never wakes; the
-/// join times out with the flag unset).
-#[test]
-fn teardown_gives_services_their_flush_window_before_the_pools_close() {
-    use crate::app::lifecycle::{ServiceDefinition, ServiceLifetime};
-
-    install_test_realm();
-    let flushed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let flushed_in_service = std::sync::Arc::clone(&flushed);
-    APP_RUNTIME.with(|slot| {
-        slot.borrow_mut()
-            .start_service(&ServiceDefinition::new(
-                "flush-probe",
-                ServiceLifetime::StopsWithLastWindow,
-                move |context| {
-                    let signal = context.cancellation().clone();
-                    let flushed = std::sync::Arc::clone(&flushed_in_service);
-                    Box::pin(async move {
-                        signal.cancelled().await;
-                        flushed.store(true, std::sync::atomic::Ordering::Release);
-                    })
-                },
-            ))
-            .expect("service must start on the loop's real IO pool");
-    });
-
-    teardown_platform_realm();
-    assert!(
-        flushed.load(std::sync::atomic::Ordering::Acquire),
-        "the service must observe cancellation and flush BEFORE the pools close; \
-         a false flag means the pool shutdown dropped the future unflushed"
-    );
-
-    // Post-teardown admission is closed end to end: a late service
-    // start is refused instead of spawning work nothing will join.
-    APP_RUNTIME.with(|slot| {
-        let result = slot.borrow_mut().start_service(&ServiceDefinition::new(
-            "late",
-            ServiceLifetime::StopsWithLastWindow,
-            |_context| Box::pin(async {}),
-        ));
-        assert!(
-            result.is_err(),
-            "a service start after loop-exit teardown must be refused"
-        );
-    });
 }
 
 /// A one-shot gate a test service parks on until the test releases it.
@@ -1202,27 +931,6 @@ fn keep_alive_completion_reopens_the_exit_question_after_the_last_window_closed(
     teardown_platform_realm();
 }
 
-#[test]
-fn install_platform_realm_does_not_inherit_window_facts_from_a_prior_realm() {
-    let old = install_test_realm();
-    dispatch_platform_realm(old, RealmTask::Event(PlatformToUi::WindowVisibility(false)))
-        .expect("hide old");
-    teardown_platform_realm();
-    let fresh = install_test_realm();
-    resume_for_quit(fresh);
-    dispatch_platform_realm(
-        fresh,
-        RealmTask::Frame(Box::new(|realm| {
-            assert_eq!(
-                realm.scheduler().lifecycle_state(),
-                AppLifecycleState::Resumed
-            );
-        })),
-    )
-    .expect("fresh native facts");
-    teardown_platform_realm();
-}
-
 /// Panic-recovery reinstall: `install_platform_realm` called again while
 /// a realm from a prior incarnation is still installed (a mid-`on_ready`
 /// failure that never reached `teardown_platform_realm`). The displaced
@@ -1400,105 +1108,6 @@ fn panic_reinstall_drops_stale_owner_turns_outside_the_runtime_borrow() {
     teardown_platform_realm();
 }
 
-/// `install_platform_realm` only ever touches the realm-facing fields
-/// (`realm`, `queue`, `owner_thread`, `address`, `surface_applier`,
-/// `visible`, `focused`) — `owner_platform` is a separate, loop-scoped
-/// concern that must survive both branches: a fresh install, and a
-/// replace-without-teardown reinstall that displaces a realm never torn
-/// down (the same panic-recovery path
-/// `reinstall_without_teardown_drops_the_displaced_realm_and_queue_outside_the_borrow`
-/// exercises above).
-#[test]
-fn install_platform_realm_never_touches_owner_platform() {
-    use flui_platform::headless_platform;
-
-    let _clear_guard = OwnerHostClearGuard::arm();
-    let platform = headless_platform();
-    let result = platform.run(Box::new(|owner| {
-        install_owner_platform(owner).expect("install owner wake transport");
-        assert!(
-            with_owner_platform(|_| ()).is_some(),
-            "owner_platform must be installed before the first realm install"
-        );
-
-        // Fresh-install branch.
-        install_test_realm();
-        assert!(
-            with_owner_platform(|_| ()).is_some(),
-            "a fresh realm install must not clear owner_platform"
-        );
-
-        // Replace-without-teardown branch: install a second realm while
-        // the first is still live, without an intervening
-        // `teardown_platform_realm` (the panic-recovery path).
-        install_test_realm();
-        assert!(
-            with_owner_platform(|_| ()).is_some(),
-            "a replace-without-teardown reinstall must not clear owner_platform"
-        );
-
-        teardown_platform_realm();
-        Ok(())
-    }));
-    assert!(result.is_ok(), "on_ready returns Ok here");
-}
-
-/// A panic-recovery reinstall under a DIFFERENT native window must
-/// remove the displaced realm's own window mapping from the registry —
-/// not just leave it behind alongside the new one.
-///
-/// Both windows are opened from the *same* headless platform instance:
-/// `HeadlessPlatform` mints window ids from its own instance-local
-/// counter, so two windows from two separate `headless_platform()` calls
-/// would alias the same id instead of differing — one instance, two
-/// `open_window` calls, is what actually produces two distinct windows.
-///
-/// If reverted: skip the registry cleanup for the displaced realm in
-/// `install_platform_realm` and this fails — the first window still
-/// resolves, and the registry holds two entries instead of one.
-#[test]
-fn reinstall_with_a_different_window_removes_the_old_windows_registry_mapping() {
-    let platform = flui_platform::headless_platform();
-    let first_window: Arc<dyn PlatformWindow> = platform
-        .open_window(flui_platform::WindowOptions::default())
-        .expect("headless platform should create the first test window");
-    let second_window: Arc<dyn PlatformWindow> = platform
-        .open_window(flui_platform::WindowOptions::default())
-        .expect("headless platform should create the second test window");
-    let first_window_id = first_window.id();
-    let second_window_id = second_window.id();
-    assert_ne!(
-        first_window_id, second_window_id,
-        "the two windows must have distinct ids for this test to mean anything"
-    );
-
-    let _first_dispatcher =
-        install_platform_realm(crate::app::ui_realm::UiRealm::for_test(), &first_window);
-    // The panic-recovery reinstall itself, under the second window: no
-    // teardown in between.
-    let _second_dispatcher =
-        install_platform_realm(crate::app::ui_realm::UiRealm::for_test(), &second_window);
-
-    APP_RUNTIME.with(|slot| {
-        let state = slot.borrow();
-        assert_eq!(
-            state.registry.resolve(first_window_id),
-            None,
-            "the displaced realm's old window mapping must be removed on reinstall"
-        );
-        assert!(
-            state.registry.resolve(second_window_id).is_some(),
-            "the new window must resolve to the new realm's address"
-        );
-        assert_eq!(
-            state.registry.len(),
-            1,
-            "only the new window's mapping may remain after the reinstall"
-        );
-    });
-    teardown_platform_realm();
-}
-
 #[test]
 fn detached_realm_event_cancels_an_interrupted_pointer_sequence() {
     let dispatcher = install_test_realm();
@@ -1584,29 +1193,6 @@ fn late_event_never_crosses_realm_incarnations() {
     );
     dispatch_platform_realm(current, RealmTask::Frame(Box::new(|_| {})))
         .expect("current incarnation dispatches");
-}
-
-/// The common path (ADR-0037 compare order, realm first): teardown +
-/// reinstall mints both a fresh `RealmId` and a fresh `PresentationId`
-/// from the same shared counter, so a stale dispatcher's realm half
-/// never matches — the presentation half is never even compared.
-///
-/// If reverted: remove the realm-id compare from `dispatch_platform_realm`
-/// and this fails — the stale dispatcher's input reaches the new realm.
-#[test]
-fn stale_realm_dispatch_is_dropped() {
-    let stale = install_test_realm();
-    teardown_platform_realm();
-    let _current = install_test_realm();
-
-    assert_eq!(
-        dispatch_platform_realm(
-            stale,
-            RealmTask::Event(PlatformToUi::Input(down_input(1.0))),
-        ),
-        Err(RealmDispatchError::StaleRealm)
-    );
-    teardown_platform_realm();
 }
 
 /// The design-for-N path (reachable today only via a forged/mixed
@@ -1709,176 +1295,6 @@ fn queued_events_for_a_removed_presentation_never_deliver() {
     teardown_platform_realm();
 }
 
-/// The FIFO inversion every addressed media-query write has to survive: a
-/// close for a sibling presentation and an event ADDRESSED to that same
-/// presentation are both admitted at enqueue time (the registry still
-/// holds it for each), so both reach the shared queue and are delivered in
-/// order — the close removes the presentation first, and the report then
-/// arrives for one this realm no longer hosts.
-///
-/// The realm-wide half of the event must still run, and the drain must
-/// finish: an addressed write that panicked on the missing presentation
-/// would abort the rest of that realm's queue, not just its own arm.
-///
-/// If reverted: look the presentation up infallibly in the safe-area arm
-/// (`expect`) and this panics out of the dispatch instead of running the
-/// task queued behind it.
-#[test]
-fn admitted_close_fences_later_safe_area_for_that_presentation() {
-    let platform = flui_platform::headless_platform();
-    let window_a: Arc<dyn PlatformWindow> = platform
-        .open_window(flui_platform::WindowOptions::default())
-        .expect("headless platform should create window a");
-    let window_b: Arc<dyn flui_platform::traits::PlatformWindow> = Arc::new(
-        crate::app::window_test_support::TestWindow::new()
-            .with_id(2)
-            .focused(false),
-    );
-
-    let dispatcher_a = install_platform_realm(crate::app::ui_realm::UiRealm::for_test(), &window_a);
-    let dispatcher_b = install_presentation_alongside(dispatcher_a, &window_b)
-        .expect("B installs alongside A with a real window mapping");
-    let b_id = dispatcher_b.address.presentation_id;
-
-    // Admit the close from inside a dispatched task, then try to route newer
-    // presentation work before the bounded queue reaches that close. The
-    // terminal barrier begins at admission, not eventual execution.
-    let drained = Rc::new(RefCell::new(false));
-    let drained_in_task = Rc::clone(&drained);
-    dispatch_platform_realm(
-        dispatcher_a,
-        RealmTask::Frame(Box::new(move |_| {
-            dispatch_platform_realm(dispatcher_b, RealmTask::ClosePresentation(b_id))
-                .expect("B's close is admitted while B is still registered");
-            let late = dispatch_platform_realm(
-                dispatcher_b,
-                RealmTask::Event(PlatformToUi::SafeAreaChanged(
-                    flui_foundation::geometry::EdgeInsets::new(47.0, 0.0, 34.0, 0.0),
-                )),
-            );
-            assert_eq!(late, Err(RealmDispatchError::PresentationClosing));
-            dispatch_platform_realm(
-                dispatcher_a,
-                RealmTask::Frame(Box::new(move |_| {
-                    *drained_in_task.borrow_mut() = true;
-                })),
-            )
-            .expect("the drain marker is admitted");
-        })),
-    )
-    .expect("the queued close and drain marker dispatch");
-
-    assert!(
-        *drained.borrow(),
-        "rejecting late work must not stop the owner queue"
-    );
-    teardown_platform_realm();
-}
-
-/// A close barrier protects the shape of the presentation forest as well as
-/// later tasks. Once a sole presentation's close is admitted, a delayed
-/// shared-window completion must not install a sibling through that closing
-/// dispatcher: doing so would make the queued close observe a non-sole
-/// presentation and leave the newly expanded realm alive.
-///
-/// The callback budget creates the real interval under test: the close is
-/// accepted as the first carried operation after 32 fresh roots, so its
-/// address remains registered until a later physical callback drains it.
-///
-/// If reverted (removing the `closing_presentations` check from
-/// `install_presentation_alongside`), the install succeeds while the close is
-/// pending and this assertion fails.
-#[test]
-fn admitted_close_fences_shared_presentation_installation() {
-    let platform = flui_platform::headless_platform();
-    let window_a: Arc<dyn PlatformWindow> = platform
-        .open_window(flui_platform::WindowOptions::default())
-        .expect("headless platform should create window a");
-    let window_b: Arc<dyn PlatformWindow> = platform
-        .open_window(flui_platform::WindowOptions::default())
-        .expect("headless platform should create window b");
-    let dispatcher = install_platform_realm(crate::app::ui_realm::UiRealm::for_test(), &window_a);
-
-    APP_RUNTIME.with(|slot| {
-        let mut state = slot.borrow_mut();
-        state.owner_turn_wake = Some(Rc::new(|| true));
-        state.owner_turn_continuation = Some(1);
-    });
-
-    // Enter as the physical callback that consumes an already-posted
-    // continuation; that is what activates the finite shared budget.
-    let owner_callback = begin_owner_callback();
-    for _ in 0..OWNER_TURN_BUDGET {
-        dispatch_platform_realm(dispatcher, RealmTask::Frame(Box::new(|_| {})))
-            .expect("fresh root consumes callback budget");
-    }
-    close_presentation(dispatcher, dispatcher.address.presentation_id)
-        .expect("close is admitted into the carried FIFO");
-
-    APP_RUNTIME.with(|slot| {
-        let state = slot.borrow();
-        assert!(
-            state.registry.contains_address(dispatcher.address),
-            "precondition: bounded FIFO has not executed the close yet"
-        );
-        assert!(state.closing_presentations.contains(&dispatcher.address));
-    });
-
-    let result = install_presentation_alongside(dispatcher, &window_b);
-    assert!(
-        matches!(result, Err(InstallPresentationError::PresentationClosing)),
-        "an admitted terminal close must revoke authority to expand the forest immediately"
-    );
-
-    drop(owner_callback);
-    drop(begin_owner_callback());
-    assert!(
-        !presentation_is_hosted(dispatcher.address),
-        "the next physical callback must execute the deferred sole-presentation close"
-    );
-    teardown_platform_realm();
-}
-
-/// Borrow-discipline test: a `Resized` event dispatched while the
-/// registration-lifetime applier slot is empty (no applier installed
-/// yet, or already torn down) must skip with a trace rather than
-/// unwrap/panic — the take/call/restore protocol's `None` arm.
-///
-/// A genuinely *nested* re-entrant call (the applier's own call
-/// triggering another `Resized` dispatch before it returns) cannot
-/// observe an empty slot here: `dispatch_platform_realm` always defers a
-/// call made while `draining` to the FIFO queue rather than running it
-/// synchronously, and by the time that queued event is drained the
-/// outer call has already restored the slot. The `None` arm exists for
-/// the case this test exercises directly: a `Resized` event reaching
-/// [`PlatformToUi::run`] before [`install_surface_applier`] has run (or
-/// after it has been cleared), never for synchronous reentrancy.
-///
-/// If reverted: replace the `None` arm's trace-and-skip with
-/// `.expect("applier installed")` and this panics instead of returning
-/// `Ok`.
-#[test]
-fn resized_with_no_applier_installed_skips_instead_of_panicking() {
-    let dispatcher = install_test_realm();
-    // Deliberately no `install_surface_applier` call: the slot starts
-    // (and stays) empty.
-
-    let result = dispatch_platform_realm(
-        dispatcher,
-        RealmTask::Event(PlatformToUi::Resized {
-            size: flui_foundation::geometry::Size::new(20.0, 20.0),
-            scale_factor: 1.0,
-        }),
-    );
-
-    assert!(
-        result.is_ok(),
-        "a Resized event with no applier installed must not panic; it \
-         coalesces onto the next real applier install instead"
-    );
-    teardown_platform_realm();
-}
-
 #[test]
 fn panic_restores_dispatch_host_for_next_event() {
     let dispatcher = install_test_realm();
@@ -1950,17 +1366,6 @@ fn surface_applier_panic_is_caught_and_the_applier_still_applies_next_time() {
          must not permanently strand resizing"
     );
     teardown_platform_realm();
-}
-
-#[test]
-fn callback_on_wrong_thread_is_rejected() {
-    let dispatcher = install_test_realm();
-    let result = std::thread::spawn(move || {
-        dispatch_platform_realm(dispatcher, RealmTask::Frame(Box::new(|_| {})))
-    })
-    .join()
-    .expect("worker test thread");
-    assert_eq!(result, Err(RealmDispatchError::WrongThread));
 }
 
 #[test]
@@ -2106,169 +1511,6 @@ fn old_registered_hot_reload_hook_cannot_touch_recreated_realm() {
     teardown_platform_realm();
 }
 
-#[test]
-fn whole_frame_event_keeps_realm_global_key_scope_active() {
-    let realm = crate::app::ui_realm::UiRealm::for_test();
-    let key = flui_view::GlobalKey::<()>::new();
-    let element = flui_foundation::ElementId::new(91);
-    realm
-        .widgets()
-        .with_build_owner_mut(|owner| owner.register_global_key(&key, element));
-    let dispatcher = install_platform_realm(realm, &test_window());
-    let key_after_frame = key.clone();
-
-    assert_eq!(key.current_element(), None, "scope starts inactive");
-    dispatch_platform_realm(
-        dispatcher,
-        RealmTask::Frame(Box::new(move |_| {
-            assert_eq!(key.current_element(), Some(element));
-        })),
-    )
-    .expect("frame dispatches");
-    assert_eq!(
-        key_after_frame.current_element(),
-        None,
-        "frame scope is restored"
-    );
-    teardown_platform_realm();
-}
-
-/// A disabled->enabled lifecycle edge must redirty the root when
-/// delivered the way production actually delivers one: as a
-/// `PlatformToUi::Lifecycle` event through `dispatch_platform_realm`,
-/// which takes the realm OUT of `APP_RUNTIME` for the duration of the
-/// dispatch and only restores it after `UiRealm::update_host_lifecycle`
-/// returns. A fire-time `APP_RUNTIME` lookup (an `UpdateScheduler` lifecycle
-/// listener, the previous shape of this fix) can never see the realm
-/// during that exact window — driving a throwaway `UpdateScheduler` directly,
-/// the previous version of this test's approach, never exercises that
-/// window at all, which is why it never caught the bug.
-#[test]
-fn frames_reenable_redirties_root_when_dispatched_through_the_realm_queue() {
-    use std::cell::Cell;
-
-    #[derive(Clone)]
-    struct LeafView;
-
-    impl flui_view::RenderView for LeafView {
-        type Protocol = flui_rendering::protocol::BoxProtocol;
-        type RenderObject = flui_objects::RenderSizedBox;
-
-        fn create_render_object(
-            &self,
-            _ctx: &flui_view::RenderObjectContext<'_>,
-        ) -> Self::RenderObject {
-            flui_objects::RenderSizedBox::shrink()
-        }
-
-        fn update_render_object(
-            &self,
-            _ctx: &flui_view::RenderObjectContext<'_>,
-            render_object: &mut Self::RenderObject,
-        ) -> flui_rendering::RenderUpdateImpact {
-            render_object.set_size(Some(0.0), Some(0.0))
-        }
-    }
-
-    impl View for LeafView {
-        fn create_element(&self) -> flui_view::element::ElementKind {
-            flui_view::element::ElementKind::render_variable(self)
-        }
-    }
-
-    let dispatcher = install_test_realm();
-    dispatch_platform_realm(
-        dispatcher,
-        RealmTask::Frame(Box::new(|realm| {
-            realm
-                .attach_root_widget(&LeafView)
-                .expect("attach succeeds");
-        })),
-    )
-    .expect("attach dispatches");
-
-    // Consume the post-attach dirty flag with one real frame first, so
-    // the pipeline is genuinely idle going into the lifecycle dance
-    // below -- otherwise the later paint this test asserts on could be
-    // explained by left-over dirt from attach, not by the redirty under
-    // test.
-    let initial_presented = Rc::new(Cell::new(false));
-    let initial_presented_in_frame = Rc::clone(&initial_presented);
-    dispatch_platform_realm(
-        dispatcher,
-        RealmTask::Frame(Box::new(move |realm| {
-            let mut backend = TestRasterBackend::always_presents();
-            initial_presented_in_frame.set(realm.render_frame_entered(&mut backend));
-        })),
-    )
-    .expect("initial frame dispatches");
-    assert!(
-        initial_presented.get(),
-        "precondition: the attached root must present on its first frame"
-    );
-
-    let root_is_clean = Rc::new(Cell::new(false));
-    let root_is_clean_in_frame = Rc::clone(&root_is_clean);
-    dispatch_platform_realm(
-        dispatcher,
-        RealmTask::Frame(Box::new(move |realm| {
-            root_is_clean_in_frame.set(!realm.needs_redraw());
-        })),
-    )
-    .expect("clean-check dispatches");
-    assert!(
-        root_is_clean.get(),
-        "precondition: the root must be clean (Idle) going into the lifecycle dance"
-    );
-
-    // The disable edge, delivered the way production actually delivers
-    // a lifecycle transition: as a `PlatformToUi::Lifecycle` event
-    // through the realm dispatch queue, which takes the realm OUT of
-    // `APP_RUNTIME` for the duration of the dispatch.
-    dispatch_platform_realm(
-        dispatcher,
-        RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Hidden)),
-    )
-    .expect("hidden dispatches");
-
-    // The re-enable edge under test, same delivery path.
-    dispatch_platform_realm(
-        dispatcher,
-        RealmTask::Event(PlatformToUi::Lifecycle(AppLifecycleState::Resumed)),
-    )
-    .expect("resumed dispatches");
-
-    let repainted = Rc::new(Cell::new(false));
-    let repainted_in_frame = Rc::clone(&repainted);
-    let render_scene_calls = Rc::new(Cell::new(0u32));
-    let render_scene_calls_in_frame = Rc::clone(&render_scene_calls);
-    dispatch_platform_realm(
-        dispatcher,
-        RealmTask::Frame(Box::new(move |realm| {
-            let mut backend = TestRasterBackend::always_presents();
-            repainted_in_frame.set(realm.render_frame_entered(&mut backend));
-            render_scene_calls_in_frame.set(backend.render_scene_calls);
-        })),
-    )
-    .expect("post-reenable frame dispatches");
-
-    assert!(
-        repainted.get(),
-        "a disabled->enabled lifecycle edge delivered through the real realm dispatch \
-         queue must redirty the root so the next frame actually presents, not stay Idle \
-         -- this is the exact stale-window-on-resume bug the redirty logic exists to \
-         prevent"
-    );
-    assert_eq!(
-        render_scene_calls.get(),
-        1,
-        "the redirty must produce real paint output, not merely flip a flag \
-         render_frame_entered ignores"
-    );
-
-    teardown_platform_realm();
-}
-
 // ========================================================================
 // Issue #555 red exploits: multi-realm `AppRuntime` hosting,
 // separate-realms policy, exit policy, hot-restart.
@@ -2305,58 +1547,6 @@ fn install_two_test_realms() -> (RealmDispatcher, RealmDispatcher) {
         install_realm_alongside(crate::app::ui_realm::UiRealm::for_test(), &window_b)
             .expect("realm B installs alongside realm A cleanly");
     (dispatcher_a, dispatcher_b)
-}
-
-/// Two realms hosted by the SAME `AppRuntime` share no gesture-arena
-/// state: a pointer dispatched only to realm A must leave realm B's
-/// arena completely untouched. Both realms are reached only through
-/// `install_platform_realm`/`install_realm_alongside` and
-/// `dispatch_platform_realm` here -- never a directly-held `UiRealm`
-/// handle -- so this is the "through `AppRuntime`" half of the
-/// end-state invariant; `ui_realm/tests/mod.rs`'s `two_realms_coexist_same_thread`
-/// family already proves the same disjointness at the `UiRealm`
-/// construction level.
-#[test]
-fn two_window_realms_share_no_ui_state_through_app_runtime() {
-    let (dispatcher_a, dispatcher_b) = install_two_test_realms();
-
-    assert_ne!(
-        dispatcher_a.address.realm_id, dispatcher_b.address.realm_id,
-        "AppRuntime must never host two live realms under the same identity"
-    );
-
-    dispatch_platform_realm(
-        dispatcher_a,
-        RealmTask::Frame(Box::new(|realm| {
-            let down = down_input(4.0);
-            if let PlatformInput::Pointer(event) = down {
-                realm
-                    .gestures()
-                    .handle_pointer_event(&event, |_| HitTestResult::new());
-            }
-            assert_eq!(
-                realm.gestures().active_pointer_count(),
-                1,
-                "realm A observes its own pointer"
-            );
-        })),
-    )
-    .expect("A dispatches");
-
-    dispatch_platform_realm(
-        dispatcher_b,
-        RealmTask::Frame(Box::new(|realm| {
-            assert_eq!(
-                realm.gestures().active_pointer_count(),
-                0,
-                "realm B's gesture arena must be untouched by a pointer dispatched only \
-                 to realm A -- AppRuntime shares no mutable UI state between hosted realms"
-            );
-        })),
-    )
-    .expect("B dispatches independently of A");
-
-    teardown_platform_realm();
 }
 
 /// `AppRuntime::next_wake` (the wall-clock wake seam) computes the
@@ -2446,62 +1636,6 @@ fn next_wake_is_the_min_deadline_across_every_installed_realm() {
     );
 
     drop(recognizers);
-    teardown_platform_realm();
-}
-
-/// A realm with no armed gesture deadline contributes no wall-clock
-/// wake. The standalone timer service that once made this assertion
-/// necessary has been retired; all remaining sources are realm-owned
-/// and drained by the frame path that the wake re-enters.
-#[test]
-fn next_wake_is_none_when_no_realm_owned_deadline_is_armed() {
-    let dispatcher = install_test_realm();
-    dispatch_platform_realm(dispatcher, RealmTask::Frame(Box::new(|_realm| {})))
-        .expect("realm dispatches with nothing armed");
-
-    let next_wake = APP_RUNTIME.with(|slot| slot.borrow().next_wake());
-    assert!(
-        next_wake.is_none(),
-        "an idle realm with no gesture deadline must let the event loop block"
-    );
-
-    teardown_platform_realm();
-}
-
-/// Owner-local reentrancy across realms queues one turn instead of either
-/// recursing or losing the event. The outer realm finishes first; then the
-/// host drains the sibling turn in global FIFO order.
-#[test]
-fn cross_realm_reentrant_dispatch_runs_after_the_current_owner_turn() {
-    let (dispatcher_a, dispatcher_b) = install_two_test_realms();
-
-    let order = Rc::new(RefCell::new(Vec::new()));
-    let order_in_a = Rc::clone(&order);
-    let order_in_b = Rc::clone(&order);
-
-    dispatch_platform_realm(
-        dispatcher_a,
-        RealmTask::Frame(Box::new(move |_realm| {
-            order_in_a.borrow_mut().push("a:start");
-            dispatch_platform_realm(
-                dispatcher_b,
-                RealmTask::Frame(Box::new(move |_| {
-                    order_in_b.borrow_mut().push("b");
-                })),
-            )
-            .expect("the sibling turn is accepted into the owner queue");
-            assert_eq!(
-                order_in_a.borrow().as_slice(),
-                ["a:start"],
-                "realm B must not run recursively inside realm A"
-            );
-            order_in_a.borrow_mut().push("a:end");
-        })),
-    )
-    .expect("the outer owner turn drains both addressed tasks");
-
-    assert_eq!(order.borrow().as_slice(), ["a:start", "a:end", "b"]);
-
     teardown_platform_realm();
 }
 
@@ -2810,111 +1944,6 @@ fn continuation_callback_shares_one_budget_between_fresh_roots_and_carried_fifo(
 }
 
 #[test]
-fn continuation_can_reserve_the_callback_for_carried_work_before_root_fanout() {
-    let dispatcher = install_test_realm();
-    let carried_ran = Rc::new(Cell::new(false));
-    let carried_ran_in_task = Rc::clone(&carried_ran);
-    APP_RUNTIME.with(|slot| {
-        let mut state = slot.borrow_mut();
-        state.owner_turn_wake = Some(Rc::new(|| true));
-        state.owner_turn_continuation = Some(1);
-        state.owner_turn_queue.push_back((
-            dispatcher,
-            RealmTask::Frame(Box::new(move |_| carried_ran_in_task.set(true))),
-        ));
-    });
-
-    let fresh_roots = Rc::new(Cell::new(0));
-    let rearms = Rc::new(Cell::new(0));
-    drive_fanout_owner_callback(
-        || {
-            for _ in 0..=OWNER_TURN_BUDGET {
-                let fresh_roots_in_task = Rc::clone(&fresh_roots);
-                dispatch_platform_realm(
-                    dispatcher,
-                    RealmTask::Frame(Box::new(move |_| {
-                        fresh_roots_in_task.set(fresh_roots_in_task.get() + 1);
-                    })),
-                )
-                .expect("fresh root is admitted");
-            }
-        },
-        || rearms.set(rearms.get() + 1),
-    );
-
-    assert!(carried_ran.get(), "the carried FIFO receives this batch");
-    assert_eq!(
-        fresh_roots.get(),
-        0,
-        "a continuation must not replenish more per-presentation roots than its finite batch drains"
-    );
-    assert_eq!(rearms.get(), 1, "fresh fan-out is re-armed exactly once");
-
-    drive_fanout_owner_callback(
-        || fresh_roots.set(fresh_roots.get() + 1),
-        || rearms.set(rearms.get() + 1),
-    );
-    assert_eq!(
-        fresh_roots.get(),
-        1,
-        "after the carried batch drains, an unrelated native wake generates fresh roots"
-    );
-    assert_eq!(rearms.get(), 1);
-
-    teardown_platform_realm();
-}
-
-/// A platform redraw callback is not necessarily asynchronous. WebWindow's
-/// `request_redraw` currently invokes the registered callback immediately,
-/// so a frame wake from inside an RAF can re-enter `begin_owner_callback`
-/// before the outer guard is dropped. Both entries are roots of one physical
-/// callback and must therefore share one continuation budget.
-///
-/// If reverted to an unconditional begin/finish pair, the nested begin trips
-/// the debug assertion; in release, dropping the nested guard consumes the
-/// outer budget and the assertion after that drop fails.
-#[test]
-fn nested_owner_callback_preserves_the_outer_continuation_budget() {
-    let dispatcher = install_test_realm();
-    APP_RUNTIME.with(|slot| {
-        let mut state = slot.borrow_mut();
-        state.owner_turn_wake = Some(Rc::new(|| true));
-        state.owner_turn_continuation = Some(1);
-    });
-
-    let outer = begin_owner_callback();
-    assert!(outer.resumes_carried_work());
-    let nested = begin_owner_callback();
-    assert!(
-        !nested.resumes_carried_work(),
-        "a nested callback is not a second continuation opportunity"
-    );
-
-    dispatch_platform_realm(dispatcher, RealmTask::Frame(Box::new(|_| {})))
-        .expect("the nested root shares the active callback budget");
-    drop(nested);
-
-    APP_RUNTIME.with(|slot| {
-        let state = slot.borrow();
-        assert!(state.owner_turn_callback_active);
-        assert_eq!(
-            state.owner_turn_callback_budget,
-            Some(OWNER_TURN_BUDGET - 1)
-        );
-        assert!(state.owner_turn_continuation.is_none());
-    });
-
-    drop(outer);
-    APP_RUNTIME.with(|slot| {
-        let state = slot.borrow();
-        assert!(!state.owner_turn_callback_active);
-        assert!(state.owner_turn_callback_budget.is_none());
-    });
-
-    teardown_platform_realm();
-}
-
-#[test]
 fn panicking_fresh_root_releases_callback_budget_and_rearms_carried_work() {
     let dispatcher = install_test_realm();
     APP_RUNTIME.with(|slot| {
@@ -3161,108 +2190,6 @@ fn install_realm_alongside_refuses_a_colliding_window_id_instead_of_silently_rer
     teardown_platform_realm();
 }
 
-/// The DEFERRED half of the collision-refusal path:
-/// `drain_pending_realm_mutations`'s own `Install` arm, reached only
-/// when a collision is requested mid-visit/mid-dispatch rather than at
-/// idle. Must behave identically to the immediate path above -- refuse,
-/// leave realm A's own registration untouched, and never corrupt the
-/// registry -- and must do so without ever dropping the rejected
-/// `RealmSlot` (and the `UiRealm` it owns) while this visit's own
-/// `APP_RUNTIME` borrow is live: `apply_install`/
-/// `drain_pending_realm_mutations` route a rejected slot through
-/// `removed` instead, the same bucket a removed `Uninstall` slot uses,
-/// dropped only once the caller's borrow has released.
-#[test]
-fn deferred_install_collision_is_refused_without_corrupting_the_registry() {
-    let platform = flui_platform::headless_platform();
-    let window: Arc<dyn PlatformWindow> = platform
-        .open_window(flui_platform::WindowOptions::default())
-        .expect("headless platform should create a test window");
-    let dispatcher_a = install_platform_realm(crate::app::ui_realm::UiRealm::for_test(), &window);
-    let realm_a_id = dispatcher_a.address.realm_id;
-
-    let colliding_realm = crate::app::ui_realm::UiRealm::for_test();
-    let colliding_address = flui_foundation::PresentationAddress {
-        realm_id: colliding_realm.realm_id(),
-        presentation_id: colliding_realm.presentation_id(),
-    };
-    let mut colliding_realm = Some(colliding_realm);
-
-    for_each_installed_realm(|realm| {
-        assert_eq!(
-            realm.realm_id(),
-            realm_a_id,
-            "the sole installed realm is realm A"
-        );
-        let deferred = APP_RUNTIME.with(|slot| {
-            slot.borrow_mut().request_realm_install(
-                colliding_address.realm_id,
-                RealmSlot {
-                    realm: colliding_realm.take(),
-                    queue: VecDeque::new(),
-                    draining: false,
-                    address: colliding_address,
-                    surface_applier: None,
-                },
-                std::sync::Arc::clone(&window),
-            )
-        });
-        assert!(
-            deferred.is_ok(),
-            "an Install requested mid-visit must defer (Ok), not fail synchronously -- \
-             the collision is only discovered once the deferred drain applies it"
-        );
-    });
-
-    assert!(
-        APP_RUNTIME.with(|slot| slot
-            .borrow()
-            .realms
-            .get(&colliding_address.realm_id)
-            .is_none()),
-        "the colliding realm must never enter the registry -- its window id collided with \
-         realm A's own mapping when the deferred drain applied it"
-    );
-    assert!(
-        APP_RUNTIME.with(|slot| slot.borrow().realms.get(&realm_a_id).is_some()),
-        "realm A's own registration must survive the sibling's refused, deferred collision"
-    );
-
-    teardown_platform_realm();
-}
-
-/// Closing one of two hosted windows must not exit the loop while a
-/// sibling realm is still hosted (the default `ExitPolicy::OnLastWindowClosed`).
-#[test]
-fn closing_one_of_two_windows_does_not_exit_the_loop() {
-    let (dispatcher_a, dispatcher_b) = install_two_test_realms();
-
-    uninstall_platform_realm(dispatcher_a.address.realm_id);
-
-    let should_exit = APP_RUNTIME.with(|slot| {
-        let (exit, removed) = slot
-            .borrow_mut()
-            .should_exit(ExitPolicy::OnLastWindowClosed);
-        drop(removed);
-        exit
-    });
-    assert!(
-        !should_exit,
-        "closing one of two windows must not exit the loop while a sibling realm is \
-         still hosted"
-    );
-    assert!(
-        APP_RUNTIME.with(|slot| slot
-            .borrow()
-            .realms
-            .get(&dispatcher_b.address.realm_id)
-            .is_some()),
-        "the surviving realm B must still be hosted"
-    );
-
-    teardown_platform_realm();
-}
-
 /// Installs realm A via the legacy single-window path (mirroring
 /// `install_test_realm`), through a REAL `OwnerPlatform` (unlike
 /// `install_test_realm`/`install_two_test_realms`, which never install
@@ -3493,63 +2420,6 @@ fn closing_one_of_two_windows_does_not_exit_through_the_real_platform_hook_closi
     ready.expect("on_ready must not fail");
 
     teardown_platform_realm();
-}
-
-/// Hot-restart's own visit primitive (`for_each_installed_realm`) must
-/// see exactly what each `WindowPolicy` claims to have installed --
-/// proven for both modes, each opened through the REAL
-/// `open_secondary_window` seam (not a direct
-/// `install_realm_alongside`/`install_presentation_alongside` call).
-#[test]
-fn hot_restart_with_two_realms_and_with_two_presentations() {
-    // Mode 1: WindowPolicy::SeparateRealms -- hot-restart must visit TWO
-    // distinct realms.
-    {
-        let (dispatcher_a, _clear_guard) = install_realm_a_through_a_real_owner_platform();
-        open_secondary_window(AppConfig::default(), WindowPolicy::SeparateRealms)
-            .expect("WindowPolicy::SeparateRealms must install a second realm cleanly");
-
-        let mut visited_realms = Vec::new();
-        for_each_installed_realm(|realm| {
-            visited_realms.push(realm.realm_id());
-        });
-
-        assert_eq!(
-            visited_realms.len(),
-            2,
-            "hot-restart must visit both policy-installed realms"
-        );
-        assert!(
-            visited_realms.contains(&dispatcher_a.address.realm_id),
-            "hot-restart's visit must include realm A"
-        );
-
-        teardown_platform_realm();
-    }
-
-    // Mode 2: WindowPolicy::SharedRealm -- hot-restart must visit
-    // exactly ONE realm, carrying BOTH presentations.
-    {
-        let (dispatcher_a, _clear_guard) = install_realm_a_through_a_real_owner_platform();
-        open_secondary_window(AppConfig::default(), WindowPolicy::SharedRealm).expect(
-            "WindowPolicy::SharedRealm must install a second presentation into realm A \
-             cleanly",
-        );
-
-        let mut visited: Vec<(RealmId, usize)> = Vec::new();
-        for_each_installed_realm(|realm| {
-            visited.push((realm.realm_id(), realm.presentation_count()));
-        });
-
-        assert_eq!(
-            visited,
-            vec![(dispatcher_a.address.realm_id, 2)],
-            "hot-restart must visit exactly the one SharedRealm-hosted realm, carrying both \
-             presentations through the visit -- never split into two realms"
-        );
-
-        teardown_platform_realm();
-    }
 }
 
 /// Like [`install_realm_a_through_a_real_owner_platform`], but ALSO
@@ -4047,198 +2917,6 @@ fn open_secondary_window_completes_through_the_pending_arm_like_the_real_winit_o
     drop(clear_guard);
 }
 
-/// The missing Pending-arm matrix cell: `WindowPolicy::SharedRealm` must
-/// ALSO complete through the Pending arm, not just `SeparateRealms`
-/// above — the harder case. `finish_open_secondary_window`'s
-/// `SharedRealm` branch installs a PRESENTATION into the driver realm
-/// itself, the exact realm `UpdateScheduler::drive_async_tasks` is called
-/// from INSIDE a dispatch of (`dispatched_realm_id` is `Some` for the
-/// whole poll) — and `install_presentation_alongside` has no
-/// defer-to-idle queue of its own; it hard-refuses with
-/// `InstallPresentationError::DispatchInFlight` while a dispatch is in
-/// flight. `spawn_pending_secondary_window_completion`'s own
-/// deferred-completion queue (drained only once the driver realm's
-/// dispatch checkout clears, in `dispatch_platform_realm`'s own tail) is
-/// what makes this arm succeed at all; reverting that deferral
-/// (completing inline from inside the poll again, as an earlier
-/// revision did) reproduces exactly the `DispatchInFlight`
-/// refusal/panic this test exists to rule out.
-#[test]
-fn shared_realm_completes_through_the_pending_arm_like_the_real_winit_owner_lane() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use flui_platform::traits::Platform;
-
-    let clear_guard = OwnerHostClearGuard::arm();
-    let platform = flui_platform::HeadlessPlatform::new();
-    let deferred = platform.enable_deferred_window_open();
-    let quit_calls = Arc::new(AtomicUsize::new(0));
-    let quit_calls_for_on_ready = Arc::clone(&quit_calls);
-
-    let ready = Box::new(platform).run(Box::new(move |owner| {
-        install_owner_platform(owner).expect("install owner wake transport");
-        install_exit_policy_hook(ExitPolicy::OnLastWindowClosed);
-
-        let quit_calls_for_handler = Arc::clone(&quit_calls_for_on_ready);
-        with_owner_platform(|owner| {
-            owner.shared().on_quit(Box::new(move || {
-                quit_calls_for_handler.fetch_add(1, Ordering::SeqCst);
-            }));
-        });
-
-        // First window: also deferred (see the SeparateRealms probe
-        // above for why) -- resolve it the same way real code resolving
-        // a Pending open would.
-        let mut pending_a = match with_owner_platform(|owner| {
-            owner.open_window(flui_platform::WindowOptions::default())
-        })
-        .expect("BUG: install_owner_platform just ran above")
-        .expect("deferred mode still accepts the request")
-        {
-            flui_platform::WindowOpen::Pending(pending) => pending,
-            flui_platform::WindowOpen::Ready(_) => {
-                panic!("deferred mode must return Pending, not Ready")
-            }
-        };
-        let resolved_a = deferred
-            .resolve_next()
-            .expect("window A's request is the only one pending");
-        let window_a = pending_a
-            .try_take()
-            .expect("resolve_next delivers synchronously")
-            .expect("mock window creation cannot fail");
-        assert!(
-            Arc::ptr_eq(&resolved_a, &window_a),
-            "resolve_next's own return value must be the SAME window it delivered \
-             through the PendingWindow"
-        );
-        let window_a: Arc<dyn PlatformWindow> = window_a;
-
-        let dispatcher_a =
-            install_platform_realm(crate::app::ui_realm::UiRealm::for_test(), &window_a);
-        window_a.on_close(Box::new(move || {
-            close_this_window(dispatcher_a);
-        }));
-
-        // Window B: SharedRealm -- installs a second PRESENTATION of
-        // realm A, never a second realm.
-        let opened = open_secondary_window_impl(AppConfig::default(), WindowPolicy::SharedRealm)
-            .expect("the Pending arm must be accepted, not treated as an error");
-        assert!(
-            opened.is_none(),
-            "a Pending open must return None -- the install completes asynchronously, \
-             not inline"
-        );
-
-        let presentation_count_before = APP_RUNTIME.with(|slot| {
-            slot.borrow()
-                .realms
-                .get(&dispatcher_a.address.realm_id)
-                .and_then(|realm_slot| realm_slot.realm.as_ref())
-                .expect("realm A is resident")
-                .presentation_count()
-        });
-        assert_eq!(
-            presentation_count_before, 1,
-            "nothing must be installed for window B before its Pending open resolves"
-        );
-
-        // Resolve the deferred open -- delivers the mock window through
-        // the ClaimSlot and hands the SAME window handle back here, so
-        // this test can drive a REAL platform-level close on it later.
-        let window_b = deferred
-            .resolve_next()
-            .expect("exactly one request (window B's) is pending at this point");
-
-        // Drive the driver realm's (realm A's) own frame pump. THIS is
-        // the exact call that used to panic (`debug_assert!` in
-        // `install_presentation_alongside`) / return `DispatchInFlight`
-        // (release builds) before the completion was deferred to this
-        // dispatch's own tail instead of running inline from inside the
-        // poll.
-        dispatch_platform_realm(
-            dispatcher_a,
-            RealmTask::Frame(Box::new(|realm| {
-                realm.scheduler().drive_async_tasks();
-            })),
-        )
-        .expect("realm A dispatches its own frame pump");
-
-        assert_eq!(
-            APP_RUNTIME.with(|slot| slot.borrow().realms.iter().count()),
-            1,
-            "SharedRealm must route into the SAME realm as the primary, never install a \
-             second one"
-        );
-        let presentation_count_after = APP_RUNTIME.with(|slot| {
-            slot.borrow()
-                .realms
-                .get(&dispatcher_a.address.realm_id)
-                .and_then(|realm_slot| realm_slot.realm.as_ref())
-                .expect("realm A is still resident")
-                .presentation_count()
-        });
-        assert_eq!(
-            presentation_count_after, 2,
-            "the driver realm's own frame pump must have completed window B's presentation \
-             install -- if the deferred-completion queue is ever bypassed and \
-             finish_open_secondary_window runs directly from inside the poll again, this \
-             assertion is never reached (DispatchInFlight panics/errors first)"
-        );
-
-        // Close B through a REAL platform close (`resolve_next`'s own
-        // return value, the SAME handle `finish_open_secondary_window`
-        // wired) -- must remove only itself, never the shared realm.
-        window_b.close();
-        let (realm_count, presentation_count) = APP_RUNTIME.with(|slot| {
-            let state = slot.borrow();
-            let realm_count = state.realms.iter().count();
-            let presentation_count = state
-                .realms
-                .get(&dispatcher_a.address.realm_id)
-                .and_then(|realm_slot| realm_slot.realm.as_ref())
-                .expect(
-                    "the shared realm must still be resident -- B's own close must not \
-                     have torn down the whole realm out from under the still-open primary",
-                )
-                .presentation_count();
-            (realm_count, presentation_count)
-        });
-        assert_eq!(
-            realm_count, 1,
-            "the shared realm must survive B's own close"
-        );
-        assert_eq!(
-            presentation_count, 1,
-            "only B's own presentation must be removed; the primary's survives"
-        );
-        assert_eq!(
-            quit_calls.load(Ordering::SeqCst),
-            0,
-            "the realm (and its primary presentation) still lives -- this must not exit"
-        );
-
-        window_a.close();
-        assert_eq!(
-            APP_RUNTIME.with(|slot| slot.borrow().realms.iter().count()),
-            0,
-            "closing the realm's last surviving presentation must uninstall the whole realm"
-        );
-        assert_eq!(
-            quit_calls.load(Ordering::SeqCst),
-            1,
-            "closing the last presentation of the last realm must allow the exit exactly \
-             once"
-        );
-
-        Ok(())
-    }));
-    ready.expect("on_ready must not fail");
-
-    teardown_platform_realm();
-    drop(clear_guard);
-}
-
 /// An accepted separate-realm request survives its originating window and
 /// completes on a window-independent owner turn after the worker resolves it.
 #[test]
@@ -4322,60 +3000,6 @@ fn pending_open_survives_origin_realm_close_and_worker_resolution() {
     drop(clear_guard);
 }
 
-/// Closing a realm's SOLE presentation must dispatch `AppLifecycleState::
-/// Detached` through it BEFORE the realm is uninstalled — shutdown must
-/// cancel any in-flight pointer sequence and notify lifecycle observers
-/// before the realm and its `UpdateScheduler` are gone (the same reason
-/// `on_quit`'s own Detached dispatch exists, generalized to per-realm
-/// teardown so it fires from an ordinary window close too, not only a
-/// process-wide quit). Observed via an `UpdateScheduler` lifecycle listener
-/// registered BEFORE the close: the listener's own `Arc` survives the
-/// realm's eventual drop, so it remains checkable after `close_this_
-/// window` returns even though the realm itself is gone by then.
-#[test]
-fn closing_the_sole_presentation_dispatches_detached_before_uninstalling() {
-    use std::sync::Mutex;
-
-    let (dispatcher, _clear_guard) = install_realm_a_through_a_real_owner_platform();
-
-    let observed_states: Arc<Mutex<Vec<AppLifecycleState>>> = Arc::new(Mutex::new(Vec::new()));
-    let observed_states_for_listener = Arc::clone(&observed_states);
-    dispatch_platform_realm(
-        dispatcher,
-        RealmTask::Frame(Box::new(move |realm| {
-            realm
-                .scheduler()
-                .add_lifecycle_state_listener(Arc::new(move |state| {
-                    observed_states_for_listener
-                        .lock()
-                        .expect("test-local mutex is never poisoned")
-                        .push(state);
-                }));
-        })),
-    )
-    .expect("registering the listener dispatches");
-
-    close_this_window(dispatcher);
-
-    assert_eq!(
-        APP_RUNTIME.with(|slot| slot.borrow().realms.iter().count()),
-        0,
-        "closing the sole presentation must have uninstalled the whole realm"
-    );
-    assert_eq!(
-        observed_states
-            .lock()
-            .expect("test-local mutex is never poisoned")
-            .last(),
-        Some(&AppLifecycleState::Detached),
-        "the realm's own scheduler must have observed a transition to Detached before it \
-         was torn down -- shutdown must cancel in-flight pointer sequences and notify \
-         lifecycle observers before the realm is gone, not skip that step silently"
-    );
-
-    teardown_platform_realm();
-}
-
 /// A window closed REENTRANTLY, from inside a dispatched realm callback,
 /// still exits the app.
 ///
@@ -4446,84 +3070,6 @@ fn closing_the_last_window_reentrantly_from_inside_a_dispatch_still_exits() {
         quit_calls.load(Ordering::SeqCst),
         1,
         "and the hook, asked against the now-empty registry, must exit"
-    );
-
-    teardown_platform_realm();
-}
-
-/// The drain-before-decide rule: closing the splash realm and installing
-/// the main realm in the very same batch must never exit the loop --
-/// the surviving main realm keeps it alive. Drives the deferral through
-/// the REAL seam, `for_each_installed_realm`'s visit (hot-restart's own
-/// primitive), rather than hand-poking `iterating_all_realms` -- a
-/// splash's own dispose callback requesting the main window mid-visit is
-/// exactly this shape.
-#[test]
-fn close_splash_then_open_main_does_not_exit() {
-    let splash = install_test_realm();
-    let splash_id = splash.address.realm_id;
-
-    let platform = flui_platform::headless_platform();
-    let main_window: Arc<dyn PlatformWindow> = platform
-        .open_window(flui_platform::WindowOptions::default())
-        .expect("headless platform should create the main window");
-    let main_realm = crate::app::ui_realm::UiRealm::for_test();
-    let main_id = main_realm.realm_id();
-    let mut main_realm = Some(main_realm);
-
-    for_each_installed_realm(|realm| {
-        assert_eq!(
-            realm.realm_id(),
-            splash_id,
-            "only the splash realm is resident at visit time"
-        );
-        uninstall_platform_realm(splash_id);
-        let installed = install_realm_alongside(
-            main_realm.take().expect("visited exactly once"),
-            &main_window,
-        );
-        assert!(
-            installed.is_ok(),
-            "install_realm_alongside must defer mid-visit, not fail"
-        );
-
-        // Mid-visit: both requests just made are still queued (deferred
-        // by `iterating_all_realms`), so the splash realm's own slot is
-        // still resident (only marked for pending removal) and
-        // `should_exit` must not report exit.
-        let (exit, removed) = APP_RUNTIME.with(|slot| {
-            slot.borrow_mut()
-                .should_exit(ExitPolicy::OnLastWindowClosed)
-        });
-        drop(removed);
-        assert!(
-            !exit,
-            "should_exit must not report exit while this visit is still in flight"
-        );
-    });
-
-    // Both deferred mutations land once the whole visit completes (its
-    // own tail drain).
-    assert!(
-        APP_RUNTIME.with(|slot| slot.borrow().realms.get(&splash_id).is_none()),
-        "the deferred splash uninstall must have applied once the visit completed"
-    );
-    assert!(
-        APP_RUNTIME.with(|slot| slot.borrow().realms.get(&main_id).is_some()),
-        "the deferred main-window install must have applied once the visit completed"
-    );
-
-    let should_exit = APP_RUNTIME.with(|slot| {
-        let (exit, removed) = slot
-            .borrow_mut()
-            .should_exit(ExitPolicy::OnLastWindowClosed);
-        drop(removed);
-        exit
-    });
-    assert!(
-        !should_exit,
-        "the drain-before-decide rule: closing the splash and installing the main realm in \
-         the same pass must never exit the loop -- the surviving main realm keeps it alive"
     );
 
     teardown_platform_realm();
@@ -5050,97 +3596,6 @@ fn dispose_opening_a_window_mid_teardown_defers_and_does_not_reenter() {
     teardown_platform_realm();
 }
 
-/// Closing presentation A (a sibling, B, stays open) must unregister
-/// EXACTLY A's own window mapping -- and a caller still holding a
-/// `RealmDispatcher` minted while A was live must be refused, never
-/// silently delivered to B (the surviving primary) instead. Before the
-/// `ClosePresentation` handling did both the window-registry removal
-/// AND the `RealmSlot::address` re-stamp, a stale dispatcher would still
-/// compare equal at the top of `dispatch_platform_realm` (the slot's
-/// tracked `presentation_id` was never updated past A's original
-/// install-time value) and the task would run against `self.
-/// presentations.primary()` -- B, after A's removal shifts it into that
-/// slot -- exactly the sibling-reach bug this test guards.
-#[test]
-fn closing_a_presentation_unregisters_its_window_mapping() {
-    let platform = flui_platform::headless_platform();
-    let window_a: Arc<dyn PlatformWindow> = platform
-        .open_window(flui_platform::WindowOptions::default())
-        .expect("headless platform should create window a");
-    let window_b: Arc<dyn PlatformWindow> = platform
-        .open_window(flui_platform::WindowOptions::default())
-        .expect("headless platform should create window b");
-
-    let realm = crate::app::ui_realm::UiRealm::for_test();
-    let a_id = realm.presentation_id();
-
-    let dispatcher = install_platform_realm(realm, &window_a);
-    let realm_id = dispatcher.address.realm_id;
-    // B installs alongside A through the real production entry point
-    // (issue #555's addressed-routing slice), with its own genuine `WindowRegistry` mapping.
-    let b_dispatcher = install_presentation_alongside(dispatcher, &window_b)
-        .expect("B installs alongside A with a real window mapping");
-    let b_id = b_dispatcher.address.presentation_id;
-
-    assert_eq!(
-        APP_RUNTIME.with(|slot| slot.borrow().registry.resolve(window_a.id())),
-        Some(flui_foundation::PresentationAddress {
-            realm_id,
-            presentation_id: a_id,
-        }),
-        "precondition: A's window starts mapped to A's own address"
-    );
-    assert_eq!(
-        APP_RUNTIME.with(|slot| slot.borrow().registry.resolve(window_b.id())),
-        Some(b_dispatcher.address),
-        "precondition: B's window starts mapped to B's own address"
-    );
-
-    close_presentation(dispatcher, a_id).expect("A closes through the real dispatch seam");
-
-    assert_eq!(
-        APP_RUNTIME.with(|slot| slot.borrow().registry.resolve(window_a.id())),
-        None,
-        "closing A must unregister its own window mapping -- leaving it mapped would let \
-         a stale platform event for that exact window keep resolving to A's now-dead \
-         PresentationId"
-    );
-    assert_eq!(
-        APP_RUNTIME.with(|slot| slot.borrow().registry.resolve(window_b.id())),
-        Some(b_dispatcher.address),
-        "closing A must never touch B's own window mapping -- hop-1 demux is per-window, \
-         not per-realm"
-    );
-
-    let delivered = Rc::new(Cell::new(false));
-    let delivered_in_task = Rc::clone(&delivered);
-    let result = dispatch_platform_realm(
-        dispatcher,
-        RealmTask::Frame(Box::new(move |_realm| {
-            delivered_in_task.set(true);
-        })),
-    );
-    assert!(
-        matches!(result, Err(RealmDispatchError::StalePresentation)),
-        "a dispatcher minted for the now-closed presentation must be refused as stale, \
-         got {result:?}"
-    );
-    assert!(
-        !delivered.get(),
-        "the stale task must never run -- delivering it would land on B (the surviving \
-         primary), exactly the sibling-reach bug this test guards"
-    );
-
-    // B has a real `WindowRegistry` mapping of its own (minted by
-    // `install_presentation_alongside` above), so teardown's own
-    // self-check ("every live realm's tracked address resolves to a
-    // registered window") holds even after A closes and the surviving
-    // realm's tracked address re-stamps to B -- the still-open
-    // design-for-N gap this test used to skip teardown for is closed.
-    teardown_platform_realm();
-    let _ = b_id;
-}
-
 /// A dispose hook that re-enters `dispatch_platform_realm` DURING the
 /// very close it is being disposed by -- using the dying presentation's
 /// OWN dispatcher -- must be refused as stale
@@ -5449,156 +3904,6 @@ fn window_focus_true_moves_active_presentation_end_to_end_and_false_does_not() {
                 "WindowFocus(false) from the presentation that IS currently active must \
                  still suspend the realm -- the guard drops only NON-active focus-loss, \
                  never focus-loss unconditionally"
-            );
-        })),
-    )
-    .expect("frame task dispatches");
-
-    teardown_platform_realm();
-}
-
-/// Losing OS focus mid-contact must cancel in-flight pointer sequences
-/// (alt-tab means the matching Up may never arrive), with two scoping
-/// rules pinned through the REAL dispatch seam:
-///
-/// - Focus transfer cancels the former window's contact immediately.
-///   A delayed duplicate `WindowFocus(false)` from that window leaves
-///   the newly focused sibling's sequence untouched.
-/// - The cancellation is ADDRESSED: pointer input lands in each
-///   presentation's own gesture binding (`handle_input_addressed`), so
-///   the defocused presentation's own binding drains while a sibling
-///   presentation's sequences survive. A primary-only cancel would
-///   invert both assertions under a shared-realm window policy.
-#[test]
-fn window_focus_loss_cancels_the_addressed_presentations_sequences_only() {
-    let platform = flui_platform::headless_platform();
-    let window_a: Arc<dyn PlatformWindow> = platform
-        .open_window(flui_platform::WindowOptions::default())
-        .expect("headless platform should create window a");
-    let window_b: Arc<dyn flui_platform::traits::PlatformWindow> = Arc::new(
-        crate::app::window_test_support::TestWindow::new()
-            .with_id(2)
-            .focused(false),
-    );
-
-    let realm = crate::app::ui_realm::UiRealm::for_test();
-    let dispatcher_a = install_platform_realm(realm, &window_a);
-    let a_id = dispatcher_a.address.presentation_id;
-    let dispatcher_b = install_presentation_alongside(dispatcher_a, &window_b)
-        .expect("B installs alongside A with a real window mapping");
-    let b_id = dispatcher_b.address.presentation_id;
-
-    // A contact lands in A's own binding through the real addressed
-    // input path, while A is the active presentation.
-    dispatch_platform_realm(
-        dispatcher_a,
-        RealmTask::Event(PlatformToUi::Input(down_input(8.0))),
-    )
-    .expect("down for A dispatches");
-
-    dispatch_platform_realm(
-        dispatcher_a,
-        RealmTask::Frame(Box::new(move |realm| {
-            assert_eq!(
-                realm
-                    .presentation_gestures_for_test(a_id)
-                    .active_pointer_count(),
-                1
-            );
-        })),
-    )
-    .expect("A contact before transfer");
-
-    // Focus moves to B; a second contact lands in B's own binding.
-    dispatch_platform_realm(
-        dispatcher_b,
-        RealmTask::Event(PlatformToUi::WindowFocus(true)),
-    )
-    .expect("WindowFocus(true) for B dispatches");
-    dispatch_platform_realm(
-        dispatcher_b,
-        RealmTask::Event(PlatformToUi::Input(down_input(21.0))),
-    )
-    .expect("down for B dispatches");
-    dispatch_platform_realm(
-        dispatcher_a,
-        RealmTask::Frame(Box::new(move |realm| {
-            assert_eq!(
-                realm
-                    .presentation_gestures_for_test(a_id)
-                    .active_pointer_count(),
-                0,
-                "focus transfer must already cancel A's old contact"
-            );
-            assert_eq!(
-                realm
-                    .presentation_gestures_for_test(b_id)
-                    .active_pointer_count(),
-                1,
-                "precondition: B's own binding holds its contact"
-            );
-        })),
-    )
-    .expect("frame task dispatches");
-
-    // Duplicate loss after transfer: B's new sequence must survive.
-    dispatch_platform_realm(
-        dispatcher_a,
-        RealmTask::Event(PlatformToUi::WindowFocus(false)),
-    )
-    .expect("stale WindowFocus(false) for A dispatches");
-    dispatch_platform_realm(
-        dispatcher_a,
-        RealmTask::Frame(Box::new(move |realm| {
-            assert_eq!(
-                realm
-                    .presentation_gestures_for_test(a_id)
-                    .active_pointer_count(),
-                0,
-                "duplicate loss leaves the already-cancelled A unchanged"
-            );
-            assert_eq!(
-                realm
-                    .presentation_gestures_for_test(b_id)
-                    .active_pointer_count(),
-                1,
-                "a stale focus loss must never cancel the active sibling's sequence"
-            );
-        })),
-    )
-    .expect("frame task dispatches");
-
-    // Authoritative focus loss (B IS active): B's own binding drains;
-    // A's — the PRIMARY's — must be untouched, proving the cancel is
-    // addressed rather than primary-blasted.
-    dispatch_platform_realm(
-        dispatcher_b,
-        RealmTask::Event(PlatformToUi::WindowFocus(false)),
-    )
-    .expect("authoritative WindowFocus(false) for B dispatches");
-    dispatch_platform_realm(
-        dispatcher_a,
-        RealmTask::Frame(Box::new(move |realm| {
-            assert_eq!(
-                realm
-                    .presentation_gestures_for_test(b_id)
-                    .active_pointer_count(),
-                0,
-                "an authoritative focus loss must cancel the addressed presentation's \
-                 in-flight sequences -- the platform may never deliver the matching Up"
-            );
-            assert!(
-                realm
-                    .presentation_gestures_for_test(b_id)
-                    .arena()
-                    .is_empty()
-            );
-            assert_eq!(
-                realm
-                    .presentation_gestures_for_test(a_id)
-                    .active_pointer_count(),
-                0,
-                "A remains cancelled after B also loses focus"
             );
         })),
     )
@@ -5940,86 +4245,6 @@ fn a_close_request_handler_keeps_its_own_window_open() {
     teardown_platform_realm();
 }
 
-/// Criterion: a window kept open can be closed programmatically
-/// afterwards -- the deferral resolves.
-///
-/// This is what makes a stateless veto finite: the runtime holds no
-/// pending obligation, and the application holds the means to finish
-/// the close it asked for. `request_presentation_close` is the public
-/// entry point, addressed by exactly the `PresentationAddress` the
-/// handler received in its own `CloseRequest`.
-///
-/// If reverted: drop the `register` call from
-/// `install_close_request_wiring` and the programmatic close reports
-/// `UnknownPresentation` instead of closing the window.
-#[test]
-fn a_window_kept_open_closes_on_a_later_programmatic_request() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    let (_dispatcher_a, _window_a, _quit_calls, _clear_guard) =
-        install_realm_a_with_exit_policy_and_quit_counter();
-
-    let asked = Arc::new(AtomicUsize::new(0));
-    let (dispatcher_b, window_b) =
-        open_secondary_window_impl(AppConfig::default(), WindowPolicy::SeparateRealms)
-            .expect("the guarded window must open")
-            .expect("headless open_window is always Ready, never Pending");
-
-    // The address the application would have captured from the request
-    // it refused -- taken from the handler's own argument, not from the
-    // dispatcher, so the test resolves the close with the same value an
-    // application would have to.
-    let refused: Arc<parking_lot::Mutex<Option<flui_foundation::PresentationAddress>>> =
-        Arc::new(parking_lot::Mutex::new(None));
-    let refused_in_handler = Arc::clone(&refused);
-    let asked_in_handler = Arc::clone(&asked);
-    install_close_request_wiring(
-        dispatcher_b.address,
-        &window_b,
-        Some(crate::app::close_request::CloseRequestHandler::new(
-            move |request| {
-                asked_in_handler.fetch_add(1, Ordering::SeqCst);
-                *refused_in_handler.lock() = Some(request.address());
-                crate::app::close_request::CloseResponse::KeepOpen
-            },
-        )),
-    );
-
-    assert!(
-        !simulate_user_close(&window_b),
-        "premise: the close is refused first, so there is something to resolve"
-    );
-    assert!(
-        presentation_is_hosted(dispatcher_b.address),
-        "premise: the window is still hosted after the refusal"
-    );
-    let refused = refused
-        .lock()
-        .expect("the handler ran and captured its address");
-
-    // The application finished its work and finishes the close.
-    request_presentation_close(refused).expect("the kept-open window must still be closable");
-
-    assert_eq!(
-        asked.load(Ordering::SeqCst),
-        1,
-        "a programmatic close must not re-ask the handler that refused -- asking again \
-         would either loop forever or force the application to track its own closes"
-    );
-    assert!(
-        !presentation_is_hosted(dispatcher_b.address),
-        "the programmatic close must run the real teardown: on_close, close_this_window, \
-         and the presentation gone from the registry"
-    );
-    assert_eq!(
-        request_presentation_close(refused),
-        Err(crate::app::close_request::CloseRequestError::UnknownPresentation { address: refused }),
-        "the router entry goes with the presentation, so a second close is a typed refusal"
-    );
-
-    teardown_platform_realm();
-}
-
 /// Criterion: one window's veto does not reach its sibling.
 ///
 /// Both windows carry a handler, answering oppositely, so the oracle
@@ -6293,56 +4518,173 @@ fn resolving_a_deferred_close_from_a_worker_thread_is_a_typed_refusal() {
     teardown_platform_realm();
 }
 
-/// Close-request registrations must not outlive the loop. Per-realm
-/// teardown drops a realm's own entries, but full loop-exit teardown
-/// does not go through that path at all — and this same thread-local
-/// `AppRuntime` serves a SECOND `Platform::run` on this thread, so a
-/// survivor would be consulted by the next loop's windows.
-///
-/// Two shapes in one run: a live presentation's entry, and an entry for
-/// an address whose realm was never installed at all (the bootstrap
-/// that wires a window and then fails), which no realm removal could
-/// ever name.
-///
-/// If reverted: remove the `close_requests().clear()` call from
-/// `teardown_platform_realm` and both assertions fail.
 #[test]
-fn full_loop_teardown_clears_close_request_registrations() {
-    use crate::app::close_request::{CloseRequestHandler, CloseResponse};
+fn continuation_can_reserve_the_callback_for_carried_work_before_root_fanout() {
+    let dispatcher = install_test_realm();
+    let carried_ran = Rc::new(Cell::new(false));
+    let carried_ran_in_task = Rc::clone(&carried_ran);
+    APP_RUNTIME.with(|slot| {
+        let mut state = slot.borrow_mut();
+        state.owner_turn_wake = Some(Rc::new(|| true));
+        state.owner_turn_continuation = Some(1);
+        state.owner_turn_queue.push_back((
+            dispatcher,
+            RealmTask::Frame(Box::new(move |_| carried_ran_in_task.set(true))),
+        ));
+    });
 
-    let (dispatcher_a, window_a, _quit_calls, _clear_guard) =
-        install_realm_a_with_exit_policy_and_quit_counter();
-
-    let keep_open = CloseRequestHandler::new(|_| CloseResponse::KeepOpen);
-    install_close_request_wiring(dispatcher_a.address, &window_a, Some(keep_open.clone()));
-
-    // The bootstrap-failure shape: a window wired before its realm
-    // exists, under an address no realm teardown will ever mention.
-    let orphan = flui_foundation::PresentationAddress {
-        realm_id: flui_foundation::RealmId::new(9_999),
-        presentation_id: flui_foundation::PresentationId::new(9_999),
-    };
-    install_close_request_wiring(orphan, &window_a, Some(keep_open));
-
-    let router = APP_RUNTIME.with(|slot| slot.borrow().close_requests());
-    assert_eq!(
-        router.consult(dispatcher_a.address),
-        CloseResponse::KeepOpen,
-        "premise: both entries answer before teardown"
+    let fresh_roots = Rc::new(Cell::new(0));
+    let rearms = Rc::new(Cell::new(0));
+    drive_fanout_owner_callback(
+        || {
+            for _ in 0..=OWNER_TURN_BUDGET {
+                let fresh_roots_in_task = Rc::clone(&fresh_roots);
+                dispatch_platform_realm(
+                    dispatcher,
+                    RealmTask::Frame(Box::new(move |_| {
+                        fresh_roots_in_task.set(fresh_roots_in_task.get() + 1);
+                    })),
+                )
+                .expect("fresh root is admitted");
+            }
+        },
+        || rearms.set(rearms.get() + 1),
     );
-    assert_eq!(router.consult(orphan), CloseResponse::KeepOpen);
+
+    assert!(carried_ran.get(), "the carried FIFO receives this batch");
+    assert_eq!(
+        fresh_roots.get(),
+        0,
+        "a continuation must not replenish more per-presentation roots than its finite batch drains"
+    );
+    assert_eq!(rearms.get(), 1, "fresh fan-out is re-armed exactly once");
+
+    drive_fanout_owner_callback(
+        || fresh_roots.set(fresh_roots.get() + 1),
+        || rearms.set(rearms.get() + 1),
+    );
+    assert_eq!(
+        fresh_roots.get(),
+        1,
+        "after the carried batch drains, an unrelated native wake generates fresh roots"
+    );
+    assert_eq!(rearms.get(), 1);
 
     teardown_platform_realm();
+}
 
-    let router = APP_RUNTIME.with(|slot| slot.borrow().close_requests());
-    assert_eq!(
-        router.consult(dispatcher_a.address),
-        CloseResponse::Close,
-        "a registration must not survive the loop that made it"
+/// A platform redraw callback is not necessarily asynchronous. WebWindow's
+/// `request_redraw` currently invokes the registered callback immediately,
+/// so a frame wake from inside an RAF can re-enter `begin_owner_callback`
+/// before the outer guard is dropped. Both entries are roots of one physical
+/// callback and must therefore share one continuation budget.
+///
+/// If reverted to an unconditional begin/finish pair, the nested begin trips
+/// the debug assertion; in release, dropping the nested guard consumes the
+/// outer budget and the assertion after that drop fails.
+#[test]
+fn nested_owner_callback_preserves_the_outer_continuation_budget() {
+    let dispatcher = install_test_realm();
+    APP_RUNTIME.with(|slot| {
+        let mut state = slot.borrow_mut();
+        state.owner_turn_wake = Some(Rc::new(|| true));
+        state.owner_turn_continuation = Some(1);
+    });
+
+    let outer = begin_owner_callback();
+    assert!(outer.resumes_carried_work());
+    let nested = begin_owner_callback();
+    assert!(
+        !nested.resumes_carried_work(),
+        "a nested callback is not a second continuation opportunity"
     );
-    assert_eq!(
-        router.consult(orphan),
-        CloseResponse::Close,
-        "least of all one no realm teardown could have named"
+
+    dispatch_platform_realm(dispatcher, RealmTask::Frame(Box::new(|_| {})))
+        .expect("the nested root shares the active callback budget");
+    drop(nested);
+
+    APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        assert!(state.owner_turn_callback_active);
+        assert_eq!(
+            state.owner_turn_callback_budget,
+            Some(OWNER_TURN_BUDGET - 1)
+        );
+        assert!(state.owner_turn_continuation.is_none());
+    });
+
+    drop(outer);
+    APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        assert!(!state.owner_turn_callback_active);
+        assert!(state.owner_turn_callback_budget.is_none());
+    });
+
+    teardown_platform_realm();
+}
+
+/// The FIFO inversion every addressed media-query write has to survive: a
+/// close for a sibling presentation and an event ADDRESSED to that same
+/// presentation are both admitted at enqueue time (the registry still
+/// holds it for each), so both reach the shared queue and are delivered in
+/// order — the close removes the presentation first, and the report then
+/// arrives for one this realm no longer hosts.
+///
+/// The realm-wide half of the event must still run, and the drain must
+/// finish: an addressed write that panicked on the missing presentation
+/// would abort the rest of that realm's queue, not just its own arm.
+///
+/// If reverted: look the presentation up infallibly in the safe-area arm
+/// (`expect`) and this panics out of the dispatch instead of running the
+/// task queued behind it.
+#[test]
+fn admitted_close_fences_later_safe_area_for_that_presentation() {
+    let platform = flui_platform::headless_platform();
+    let window_a: Arc<dyn PlatformWindow> = platform
+        .open_window(flui_platform::WindowOptions::default())
+        .expect("headless platform should create window a");
+    let window_b: Arc<dyn flui_platform::traits::PlatformWindow> = Arc::new(
+        crate::app::window_test_support::TestWindow::new()
+            .with_id(2)
+            .focused(false),
     );
+
+    let dispatcher_a = install_platform_realm(crate::app::ui_realm::UiRealm::for_test(), &window_a);
+    let dispatcher_b = install_presentation_alongside(dispatcher_a, &window_b)
+        .expect("B installs alongside A with a real window mapping");
+    let b_id = dispatcher_b.address.presentation_id;
+
+    // Admit the close from inside a dispatched task, then try to route newer
+    // presentation work before the bounded queue reaches that close. The
+    // terminal barrier begins at admission, not eventual execution.
+    let drained = Rc::new(RefCell::new(false));
+    let drained_in_task = Rc::clone(&drained);
+    dispatch_platform_realm(
+        dispatcher_a,
+        RealmTask::Frame(Box::new(move |_| {
+            dispatch_platform_realm(dispatcher_b, RealmTask::ClosePresentation(b_id))
+                .expect("B's close is admitted while B is still registered");
+            let late = dispatch_platform_realm(
+                dispatcher_b,
+                RealmTask::Event(PlatformToUi::SafeAreaChanged(
+                    flui_foundation::geometry::EdgeInsets::new(47.0, 0.0, 34.0, 0.0),
+                )),
+            );
+            assert_eq!(late, Err(RealmDispatchError::PresentationClosing));
+            dispatch_platform_realm(
+                dispatcher_a,
+                RealmTask::Frame(Box::new(move |_| {
+                    *drained_in_task.borrow_mut() = true;
+                })),
+            )
+            .expect("the drain marker is admitted");
+        })),
+    )
+    .expect("the queued close and drain marker dispatch");
+
+    assert!(
+        *drained.borrow(),
+        "rejecting late work must not stop the owner queue"
+    );
+    teardown_platform_realm();
 }

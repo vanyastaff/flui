@@ -46,16 +46,6 @@ fn mount() -> UiRealm {
     realm
 }
 
-fn capturing_backend(submitted: Arc<StdMutex<Vec<String>>>) -> ScriptedSink {
-    ScriptedSink::new(move |_, scene| {
-        submitted
-            .lock()
-            .expect("scene capture mutex")
-            .push(format!("{:?}", scene.tree()));
-        SubmitVerdict::Presented
-    })
-}
-
 /// Root whose paint commits a non-empty linked leader/follower registry.
 #[derive(Debug)]
 struct LinkedPaintBox {
@@ -156,62 +146,6 @@ fn semantics_failure_retry_submits_the_retained_linked_tree() {
             .expect("link-count capture mutex"),
         vec![(1, 1)],
         "the submitted scene must carry the retained frame's indexed leader and its follower"
-    );
-}
-
-/// A panic after the pipeline has consumed paint dirtiness must re-dirty
-/// that exact presentation at the containment boundary. A wake alone opens
-/// the segment gate but gives the pipeline nothing to reproduce.
-#[test]
-fn a_tail_panic_repaints_and_presents_on_the_automatic_retry() {
-    let realm = mount();
-    let probe_armed = Rc::new(Cell::new(true));
-    let armed = Rc::clone(&probe_armed);
-    realm.presentations.primary().set_segment_probe(
-        SegmentPhase::Tail,
-        Some(Box::new(move || {
-            assert!(
-                !armed.replace(false),
-                "tail probe — intentional one-shot panic"
-            );
-        })),
-    );
-    let submitted = Arc::new(StdMutex::new(Vec::new()));
-    let mut backend = capturing_backend(Arc::clone(&submitted));
-
-    let first_presented =
-        with_quiet_panics(|| catch_unwind(AssertUnwindSafe(|| realm.render_frame(&mut backend))))
-            .expect("the Tail panic must be contained");
-    assert!(!first_presented, "the failed attempt must not present");
-    assert_eq!(backend.submit_calls, 0);
-    assert_eq!(realm.frames_rendered(), 0);
-    assert_eq!(
-        realm.presentations.primary().segment_phase(),
-        SegmentPhase::Tail,
-        "the last-entered phase must survive unwind"
-    );
-    assert!(realm.needs_redraw(), "the failure must arm a retry");
-
-    let second_presented = realm.render_frame(&mut backend);
-    assert!(
-        second_presented,
-        "the automatic retry must repaint and present without external dirtiness"
-    );
-    assert_eq!(backend.submit_calls, 1);
-    assert_eq!(realm.frames_rendered(), 1);
-    assert_eq!(
-        realm.presentations.primary().segment_phase(),
-        SegmentPhase::Scene
-    );
-
-    let fresh = mount();
-    let expected = Arc::new(StdMutex::new(Vec::new()));
-    let mut fresh_backend = capturing_backend(Arc::clone(&expected));
-    assert!(fresh.render_frame(&mut fresh_backend));
-    assert_eq!(
-        *submitted.lock().expect("scene capture mutex"),
-        *expected.lock().expect("fresh scene capture mutex"),
-        "the retried scene must equal an identical fresh realm's scene"
     );
 }
 

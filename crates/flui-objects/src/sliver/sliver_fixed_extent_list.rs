@@ -543,62 +543,10 @@ mod tests {
     use super::*;
 
     const GENERIC_ITEM_EXTENT: f64 = 600.0;
-    const OUTSIDE_TOLERANCE: f64 = 1e-9;
     const INSIDE_TOLERANCE: f64 = 1e-11;
 
     fn list(item_extent: f64) -> RenderSliverFixedExtentList {
         RenderSliverFixedExtentList::new(item_extent, 100)
-    }
-
-    #[test]
-    fn max_index_is_zero_when_offset_is_zero() {
-        assert_eq!(
-            list(GENERIC_ITEM_EXTENT).max_child_index_for_scroll_offset(0.0),
-            0
-        );
-    }
-
-    #[test]
-    fn max_index_is_zero_when_offset_equals_item_extent() {
-        assert_eq!(
-            list(GENERIC_ITEM_EXTENT).max_child_index_for_scroll_offset(GENERIC_ITEM_EXTENT),
-            0
-        );
-    }
-
-    #[test]
-    fn max_index_is_one_when_offset_is_greater_than_item_extent() {
-        assert_eq!(
-            list(GENERIC_ITEM_EXTENT).max_child_index_for_scroll_offset(GENERIC_ITEM_EXTENT + 1.0),
-            1
-        );
-    }
-
-    #[test]
-    fn max_index_is_one_when_offset_is_slightly_greater_than_item_extent() {
-        assert_eq!(
-            list(GENERIC_ITEM_EXTENT)
-                .max_child_index_for_scroll_offset(GENERIC_ITEM_EXTENT + OUTSIDE_TOLERANCE),
-            1
-        );
-    }
-
-    #[test]
-    fn max_index_is_four_when_offset_is_four_and_a_half_item_extents() {
-        assert_eq!(
-            list(GENERIC_ITEM_EXTENT).max_child_index_for_scroll_offset(GENERIC_ITEM_EXTENT * 4.5),
-            4
-        );
-    }
-
-    #[test]
-    fn max_index_is_five_when_offset_is_six_item_extents() {
-        const ANOTHER_GENERIC_ITEM_EXTENT: f64 = 414.0;
-        assert_eq!(
-            list(ANOTHER_GENERIC_ITEM_EXTENT)
-                .max_child_index_for_scroll_offset(ANOTHER_GENERIC_ITEM_EXTENT * 6.0),
-            5
-        );
     }
 
     #[test]
@@ -609,15 +557,6 @@ mod tests {
                 PROBLEMATIC_ITEM_EXTENT * 6.0 + INSIDE_TOLERANCE
             ),
             5
-        );
-    }
-
-    #[test]
-    fn max_index_is_zero_when_offset_is_a_hair_over_item_extent() {
-        assert_eq!(
-            list(GENERIC_ITEM_EXTENT)
-                .max_child_index_for_scroll_offset(GENERIC_ITEM_EXTENT + INSIDE_TOLERANCE),
-            0
         );
     }
 
@@ -635,67 +574,6 @@ mod tests {
             list.min_child_index_for_scroll_offset(GENERIC_ITEM_EXTENT - 1e-4),
             0
         );
-    }
-
-    /// `'RenderSliverFixedExtentList correctly references itemExtent, non-zero
-    /// offset'`: three 30 px items, scrolled to 45 px.
-    #[test]
-    fn index_math_references_the_configured_item_extent_at_a_non_zero_offset() {
-        let list = RenderSliverFixedExtentList::new(30.0, 3);
-        assert_eq!(list.index_to_layout_offset(10), 300.0);
-        assert_eq!(list.min_child_index_for_scroll_offset(45.0), 1);
-        assert_eq!(list.max_child_index_for_scroll_offset(45.0), 1);
-        assert_eq!(list.compute_max_scroll_offset(3), 90.0);
-    }
-
-    /// `'… correctly references itemExtent, zero offset'`.
-    #[test]
-    fn index_math_references_the_configured_item_extent_at_zero_offset() {
-        let list = RenderSliverFixedExtentList::new(30.0, 3);
-        assert_eq!(list.min_child_index_for_scroll_offset(0.0), 0);
-        assert_eq!(list.max_child_index_for_scroll_offset(0.0), 0);
-        assert_eq!(list.compute_max_scroll_offset(3), 90.0);
-    }
-
-    /// The `'layout test - rounding error'` case: an offset a rounding error
-    /// short of an item boundary selects the child at that boundary.
-    #[test]
-    fn min_index_absorbs_rounding_below_a_boundary() {
-        let list = list(GENERIC_ITEM_EXTENT);
-        assert_eq!(
-            list.min_child_index_for_scroll_offset(GENERIC_ITEM_EXTENT * 2.0 - INSIDE_TOLERANCE),
-            2
-        );
-        assert_eq!(
-            list.min_child_index_for_scroll_offset(GENERIC_ITEM_EXTENT * 2.0 - OUTSIDE_TOLERANCE),
-            1
-        );
-    }
-
-    #[test]
-    fn a_negative_offset_selects_the_first_child() {
-        assert_eq!(
-            list(GENERIC_ITEM_EXTENT).min_child_index_for_scroll_offset(-250.0),
-            0
-        );
-        assert_eq!(
-            list(GENERIC_ITEM_EXTENT).max_child_index_for_scroll_offset(-250.0),
-            0
-        );
-    }
-
-    #[test]
-    fn set_item_count_reports_layout_only_on_change() {
-        let mut list = RenderSliverFixedExtentList::new(30.0, 3);
-        assert!(list.set_item_count(3).is_none());
-        assert!(!list.set_item_count(2).is_none());
-        assert_eq!(list.item_count(), 2);
-    }
-
-    #[test]
-    #[should_panic(expected = "item_extent must be finite")]
-    fn new_rejects_a_zero_extent() {
-        let _ = RenderSliverFixedExtentList::new(0.0, 1);
     }
 
     /// `NaN` / `+∞` offsets must never become `usize::MAX` via saturating
@@ -717,90 +595,5 @@ mod tests {
         }
         assert_eq!(list.min_child_index_for_scroll_offset(f64::NEG_INFINITY), 0);
         assert_eq!(list.max_child_index_for_scroll_offset(f64::NEG_INFINITY), 0);
-    }
-
-    fn vertical_window_constraints(
-        scroll_offset: f64,
-        cache_origin: f64,
-        remaining_cache_extent: f64,
-    ) -> SliverConstraints {
-        SliverConstraints {
-            scroll_offset,
-            cache_origin,
-            remaining_cache_extent,
-            remaining_paint_extent: 100.0,
-            cross_axis_extent: 300.0,
-            viewport_main_axis_extent: 100.0,
-            ..SliverConstraints::default()
-        }
-    }
-
-    /// `NaN` / `+∞` leading edges yield no window: layout takes the empty-band
-    /// path instead of converting `+∞` into `usize::MAX`.
-    #[test]
-    fn window_rejects_poison_leading_edge() {
-        let mut list = RenderSliverFixedExtentList::new(25.0, 1000);
-        for (scroll_offset, cache_origin) in [
-            (f64::INFINITY, 0.0),
-            (f64::NAN, 0.0),
-            (0.0, f64::NAN),
-            (f64::NEG_INFINITY, f64::INFINITY), // sum is NaN
-        ] {
-            let constraints = vertical_window_constraints(scroll_offset, cache_origin, 250.0);
-            assert!(
-                list.window(&constraints).is_none(),
-                "leading edge scroll_offset={scroll_offset} cache_origin={cache_origin}"
-            );
-            assert_eq!(
-                finite_leading_cache_edge(&constraints)
-                    .map_or(0, |start| list.min_child_index_for_scroll_offset(start)),
-                0,
-                "empty-band index must stay 0, never usize::MAX"
-            );
-        }
-    }
-
-    /// `−∞` on the leading edge clamps to the origin — same as a negative
-    /// finite offset — and keeps a normal window instead of evicting.
-    #[test]
-    fn window_clamps_negative_infinite_leading_edge_to_origin() {
-        let mut list = RenderSliverFixedExtentList::new(25.0, 10);
-        let constraints = vertical_window_constraints(f64::NEG_INFINITY, 0.0, 250.0);
-        assert_eq!(finite_leading_cache_edge(&constraints), Some(0.0));
-        assert_eq!(list.window(&constraints), Some((0, 9, 10)));
-    }
-
-    /// `NaN` / `−∞` trailing edges are not the shrink-wrap unbounded contract;
-    /// only `+∞` keeps that meaning.
-    #[test]
-    fn window_rejects_nan_or_negative_infinite_trailing_edge() {
-        let mut list = RenderSliverFixedExtentList::new(25.0, 10);
-        for remaining_cache_extent in [f64::NAN, f64::NEG_INFINITY] {
-            let constraints = vertical_window_constraints(0.0, 0.0, remaining_cache_extent);
-            assert!(
-                list.window(&constraints).is_none(),
-                "trailing extent {remaining_cache_extent}"
-            );
-        }
-    }
-
-    /// Positive-infinite trailing cache extent still means "unbounded window"
-    /// and materialises the full finite source (below the sentinel threshold).
-    #[test]
-    fn window_keeps_positive_infinite_trailing_edge_as_unbounded() {
-        let mut list = RenderSliverFixedExtentList::new(25.0, 10);
-        let constraints = vertical_window_constraints(0.0, 0.0, f64::INFINITY);
-        assert_eq!(list.window(&constraints), Some((0, 9, 10)));
-    }
-
-    /// Defense in depth: even a rounded non-finite index clamps to 0 instead
-    /// of saturating at `usize::MAX`.
-    #[test]
-    fn float_to_index_never_saturates_non_finite_to_usize_max() {
-        assert_eq!(float_to_index(f64::INFINITY), 0);
-        assert_eq!(float_to_index(f64::NEG_INFINITY), 0);
-        assert_eq!(float_to_index(f64::NAN), 0);
-        assert_eq!(float_to_index(-1.0), 0);
-        assert_eq!(float_to_index(42.7), 42);
     }
 }

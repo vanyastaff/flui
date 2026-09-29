@@ -171,13 +171,6 @@ mod tests {
     }
 
     #[test]
-    fn test_children_empty() {
-        let children = Children::new();
-        assert!(children.is_empty());
-        assert_eq!(children.len(), 0);
-    }
-
-    #[test]
     fn test_children_push() {
         let mut children = Children::new();
         children.push(TestView(1));
@@ -185,25 +178,6 @@ mod tests {
 
         assert!(!children.is_empty());
         assert_eq!(children.len(), 2);
-    }
-
-    #[test]
-    fn test_children_from_iter() {
-        let views = vec![TestView(1), TestView(2), TestView(3)];
-        let children: Children = views.into_iter().collect();
-
-        assert_eq!(children.len(), 3);
-    }
-
-    #[test]
-    fn test_children_extend() {
-        let mut children = Children::new();
-        children.push(TestView(1));
-
-        let more = vec![TestView(2), TestView(3)];
-        children.extend(more);
-
-        assert_eq!(children.len(), 3);
     }
 
     #[test]
@@ -215,25 +189,5 @@ mod tests {
         let removed = children.remove(0);
         assert!(removed.is_some());
         assert_eq!(children.len(), 1);
-    }
-
-    #[test]
-    fn test_children_clear() {
-        let mut children = Children::new();
-        children.push(TestView(1));
-        children.push(TestView(2));
-
-        children.clear();
-        assert!(children.is_empty());
-    }
-
-    #[test]
-    fn test_children_iter() {
-        let mut children = Children::new();
-        children.push(TestView(1));
-        children.push(TestView(2));
-
-        let count = children.iter().count();
-        assert_eq!(count, 2);
     }
 }

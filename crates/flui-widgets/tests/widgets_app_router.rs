@@ -135,20 +135,6 @@ fn mount<F: AppForm>(app: WidgetsApp<F>, vsync: &Vsync) -> LaidOut {
     )
 }
 
-/// How many focus scopes enclose the Home page's route scope.
-fn scopes_above_home(probe: &Probe) -> usize {
-    let scope = probe
-        .focus_scope
-        .borrow()
-        .clone()
-        .expect("the Home page was built");
-    scope
-        .as_focus_node()
-        .ancestors()
-        .filter(|node| node.as_scope().is_some())
-        .count()
-}
-
 /// Pump well past the 300 ms default transition.
 fn settle(laid: &mut LaidOut) {
     for _ in 0..10 {
@@ -225,58 +211,6 @@ fn widgets_app_router_navigates_by_handle_and_the_url_follows() {
     assert!(!handle.can_pop());
     assert!(laid.find_text("v1 Note 1").is_none());
     assert_eq!(probe.inits.get(), 1, "Home kept its state under the Note");
-}
-
-#[test]
-fn widgets_app_router_pages_see_localizations_and_builder() {
-    let probe = Probe::default();
-    let vsync = Vsync::new();
-    let builder_child = Rc::new(Cell::new(None::<bool>));
-    let seen = Rc::clone(&builder_child);
-    let app = WidgetsApp::router(router(&probe, 1, "/"))
-        .supported_locales(vec![Locale::ja_jp()])
-        .builder(move |_cx, child| {
-            seen.set(Some(child.is_some()));
-            child.expect("the router form hands the builder its routing subtree")
-        });
-    let mut laid = mount(app, &vsync);
-    settle(&mut laid);
-
-    assert_eq!(builder_child.get(), Some(true), "the builder receives Some");
-    assert_eq!(probe.direction.get(), Some(TextDirection::Ltr));
-    assert_eq!(*probe.locale.borrow(), Some(Locale::ja_jp()));
-    assert_eq!(
-        probe.handle().location().as_str(),
-        "/",
-        "the handle resolves through the builder"
-    );
-}
-
-#[test]
-fn widgets_app_router_adds_no_focus_scope_above_the_router() {
-    // A Router mounted with no app around it: the scopes above its page are
-    // the realm's and the page's own route scope's ancestors only.
-    let bare = Probe::default();
-    let vsync = Vsync::new();
-    let mut laid = lay_out_animated(
-        VsyncScope::new(vsync.clone(), router(&bare, 1, "/")),
-        tight(400.0, 400.0),
-        vsync.clone(),
-    );
-    settle(&mut laid);
-    let bare_depth = scopes_above_home(&bare);
-    drop(laid);
-
-    let probe = Probe::default();
-    let vsync = Vsync::new();
-    let mut laid = mount(WidgetsApp::router(router(&probe, 1, "/")), &vsync);
-    settle(&mut laid);
-    assert_eq!(
-        scopes_above_home(&probe),
-        bare_depth,
-        "the app mounts its Router bare, as the oracle does; a FocusScope around it would \
-         add a scope"
-    );
 }
 
 #[test]

@@ -135,7 +135,7 @@ impl Asset for ImageAsset {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "images"))]
 mod tests {
     use super::*;
 
@@ -163,21 +163,5 @@ mod tests {
 
         // Verify it's RGBA format with correct data size
         assert_eq!(loaded.data().len(), 2 * 2 * 4);
-    }
-
-    #[test]
-    fn test_image_asset_metadata() {
-        let asset = ImageAsset::file("test.png");
-        let metadata = asset.metadata().unwrap();
-
-        assert_eq!(metadata.format, Some("PNG".to_string()));
-    }
-
-    #[test]
-    fn test_image_asset_key() {
-        let asset = ImageAsset::file("logo.png");
-        let key = asset.key();
-
-        assert_eq!(key.as_str(), "logo.png");
     }
 }

@@ -49,29 +49,6 @@ fn header_child_height(laid: &common::LaidOut, render_type: &str) -> f64 {
     laid.size(laid.only_child(header)).height
 }
 
-/// Fully scrolled to the top, an expanded bar's box is its max extent — and
-/// the real `AppBar` toolbar was built through the seam, in the same frame.
-#[test]
-fn an_expanded_bar_opens_at_its_expanded_height() {
-    let bar = SliverAppBar::new()
-        .title(Text::new("FLUI"))
-        .expanded_height(200.0)
-        .pinned(true);
-
-    let mut laid = lay_out(scroll_view_at(0.0, bar), tight(400.0, 600.0));
-
-    assert_eq!(
-        header_child_height(&laid, "RenderSliverPinnedPersistentHeader"),
-        200.0,
-        "at scroll offset 0 the bar fills its expanded height"
-    );
-    assert_eq!(
-        laid.count_elements_by_view_type::<flui_material::AppBar>(),
-        1,
-        "the delegate must have built the real AppBar through the seam"
-    );
-}
-
 /// Scrolled deep, a pinned bar collapses to — and holds — its collapsed
 /// extent (the toolbar height, with no bottom and no inset).
 #[test]

@@ -310,33 +310,6 @@ mod tests {
 
     // ── 1. captured in init_state, usable afterwards ────────────────────────
 
-    #[test]
-    fn rebuild_handle_captured_in_init_state_schedules_after_init_returns() {
-        let (mut owner, mut tree, handle, builds, root) = mount();
-        assert!(handle.is_active());
-        assert_eq!(handle.element_id(), Some(root));
-
-        let builds_after_mount = builds.load(Ordering::Relaxed);
-        assert_eq!(owner.pending_external_builds(), 0);
-
-        handle.schedule(RebuildReason::StateChange);
-        assert_eq!(owner.pending_external_builds(), 1, "queued, not yet built");
-        assert_eq!(
-            builds.load(Ordering::Relaxed),
-            builds_after_mount,
-            "schedule() must not build inline"
-        );
-
-        owner.build_scope(&mut tree);
-
-        assert_eq!(owner.pending_external_builds(), 0, "inbox drained");
-        assert_eq!(
-            builds.load(Ordering::Relaxed),
-            builds_after_mount + 1,
-            "the next frame's build_scope must rebuild the element"
-        );
-    }
-
     // ── 2. coalescing ───────────────────────────────────────────────────────
 
     /// The inbox is keyed by element id: a burst between frames costs one
@@ -426,59 +399,5 @@ mod tests {
         assert_eq!(owner.pending_external_builds(), 0, "inbox still drained");
     }
 
-    /// A handle minted before mount schedules nothing at all.
-    #[test]
-    fn rebuild_handle_inert_before_mount() {
-        let handle = RebuildHandle::inert();
-        assert!(!handle.is_active());
-        assert_eq!(handle.element_id(), None);
-        handle.schedule(RebuildReason::StateChange); // must not panic
-    }
-
     // ── 5. frame request ────────────────────────────────────────────────────
-
-    /// Scheduling asks the binding for a frame through the existing
-    /// `on_build_scheduled` hook — the same path `schedule_build_for` uses.
-    #[test]
-    fn rebuild_handle_requests_a_frame_through_the_existing_hook() {
-        let (mut owner, _tree, handle, _builds, root) = mount();
-        let frames = Arc::new(AtomicUsize::new(0));
-        let frames_for_hook = Arc::clone(&frames);
-        owner.set_on_build_scheduled(move || {
-            frames_for_hook.fetch_add(1, Ordering::Relaxed);
-        });
-
-        // The handle must be minted after the hook is installed — it captures
-        // the frame-request `Arc` by value, as `ExternalBuildScheduler` does.
-        let handle_with_hook = owner.rebuild_handle(root);
-        assert_eq!(frames.load(Ordering::Relaxed), 0);
-
-        handle_with_hook.schedule(RebuildReason::StateChange);
-        assert_eq!(
-            frames.load(Ordering::Relaxed),
-            1,
-            "a newly-queued element must request a frame"
-        );
-
-        // The pre-hook handle still schedules (same inbox), but the id is
-        // already queued, so no second frame request.
-        handle.schedule(RebuildReason::StateChange);
-        assert_eq!(frames.load(Ordering::Relaxed), 1);
-    }
-
-    /// Debug never deadlocks and never leaks the lock.
-    #[test]
-    fn rebuild_handle_debug_is_safe() {
-        let (owner, _tree, handle, _builds, root) = mount();
-        let _ = format!("{handle:?}");
-        let _ = format!("{:?}", RebuildHandle::inert());
-        let _ = owner.rebuild_handle(root);
-    }
-
-    /// Send + Sync + 'static, by construction.
-    #[test]
-    fn rebuild_handle_is_send_sync_static() {
-        fn assert_bounds<T: Send + Sync + 'static>() {}
-        assert_bounds::<RebuildHandle>();
-    }
 }

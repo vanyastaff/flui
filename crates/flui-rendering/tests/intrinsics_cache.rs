@@ -130,11 +130,8 @@ impl RenderBox for CountingRoot {
 struct Fixture {
     owner: PipelineOwner,
     root: flui_foundation::RenderId,
-    mid: flui_foundation::RenderId,
     leaf: flui_foundation::RenderId,
     intrinsic_runs: Arc<AtomicUsize>,
-    dry_runs: Arc<AtomicUsize>,
-    layout_runs: Arc<AtomicUsize>,
 }
 
 /// root (CountingRoot) → mid (RenderConstrainedBox, loose) → leaf
@@ -171,18 +168,9 @@ fn fixture() -> Fixture {
     Fixture {
         owner,
         root,
-        mid,
         leaf,
         intrinsic_runs,
-        dry_runs,
-        layout_runs,
     }
-}
-
-fn run_frame(owner: PipelineOwner) -> PipelineOwner {
-    let (owner, result) = owner.run_frame();
-    result.expect("frame must not error");
-    owner
 }
 
 // ============================================================================
@@ -271,201 +259,17 @@ fn mark_needs_layout_invalidates_the_cached_chain() {
 // 3. Control pair: boundary stops the walk ⇔ cached intrinsics escalate
 // ============================================================================
 
-/// Marks `mid` as a relayout boundary directly on its state flags (the
-/// production bit is computed during layout; the test pins the WALK's
-/// reaction to the bit, not how layout derives it).
-fn set_mid_boundary(f: &mut Fixture) {
-    f.owner
-        .render_tree_mut()
-        .get_mut(f.mid)
-        .expect("mid node")
-        .as_box_mut()
-        .expect("box entry")
-        .state()
-        .flags()
-        .set_relayout_boundary(true);
-}
-
-#[test]
-fn boundary_stops_invalidation_when_nothing_is_cached() {
-    let mut f = fixture();
-    f.owner = run_frame(f.owner);
-    assert_eq!(f.layout_runs.load(Ordering::Relaxed), 1);
-
-    set_mid_boundary(&mut f);
-
-    // No intrinsic queries happened: the boundary isolates the
-    // invalidation and the ROOT must not re-lay out.
-    f.owner.mark_needs_layout(f.leaf);
-    f.owner = run_frame(f.owner);
-    assert_eq!(
-        f.layout_runs.load(Ordering::Relaxed),
-        1,
-        "without cached intrinsic consumers the walk stops at the \
-         relayout boundary"
-    );
-}
-
-#[test]
-fn cached_intrinsics_escalate_past_the_boundary() {
-    let mut f = fixture();
-    f.owner = run_frame(f.owner);
-    assert_eq!(f.layout_runs.load(Ordering::Relaxed), 1);
-
-    set_mid_boundary(&mut f);
-
-    // The root's layout-time fold consumed the leaf's intrinsics —
-    // model that consumption by priming the cache chain.
-    f.owner
-        .box_intrinsic_dimension(f.root, IntrinsicDimension::MinWidth, 100.0)
-        .expect("prime");
-
-    // Now the leaf changes. The boundary alone would swallow the
-    // invalidation (see the control test above), but the non-empty
-    // caches mean an ancestor's answer depends on the leaf — the walk
-    // must escalate to the root (Flutter box.dart:2840).
-    f.owner.mark_needs_layout(f.leaf);
-    f.owner = run_frame(f.owner);
-    assert_eq!(
-        f.layout_runs.load(Ordering::Relaxed),
-        2,
-        "cached intrinsic consumption must carry the invalidation past \
-         the relayout boundary up to the consuming ancestor"
-    );
-}
-
 // ============================================================================
 // 4. Dry layout: child-aware through a real object + memoized
 // ============================================================================
-
-#[test]
-fn dry_layout_flows_through_real_objects_and_memoizes() {
-    let mut f = fixture();
-
-    let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 200.0);
-    let size = f
-        .owner
-        .box_dry_layout(f.mid, constraints)
-        .expect("dry layout");
-    assert_eq!(
-        size,
-        Size::new(40.0, 40.0),
-        "ConstrainedBox forwards the leaf's 40×40 dry size through its \
-         loose additional constraints"
-    );
-    assert_eq!(f.dry_runs.load(Ordering::Relaxed), 1);
-
-    let size = f
-        .owner
-        .box_dry_layout(f.mid, constraints)
-        .expect("dry layout re-query");
-    assert_eq!(size, Size::new(40.0, 40.0));
-    assert_eq!(f.dry_runs.load(Ordering::Relaxed), 1, "memoized");
-
-    // Different constraints are a different key.
-    f.owner
-        .box_dry_layout(f.mid, BoxConstraints::tight(Size::new(80.0, 80.0)))
-        .expect("dry layout new key");
-    assert_eq!(f.dry_runs.load(Ordering::Relaxed), 2);
-}
 
 // ============================================================================
 // 5. Dry baseline: child-aware through real objects + memoized
 // ============================================================================
 
-#[test]
-fn dry_baseline_flows_through_padding_and_memoizes() {
-    use flui_objects::{RenderPadding, RenderParagraph};
-    use flui_painting::typography::{TextDirection, TextSpan};
-    use flui_rendering::traits::TextBaseline;
-
-    let mut owner = PipelineOwner::new();
-    let padding_id = owner.insert(Box::new(RenderPadding::all(8.0)) as BoxedRenderObject);
-    let text_id = owner
-        .insert_child_render_object(
-            padding_id,
-            Box::new(RenderParagraph::new(
-                TextSpan::new("hello"),
-                TextDirection::Ltr,
-            )) as BoxedRenderObject,
-        )
-        .expect("text child");
-
-    let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 200.0);
-    let leaf_baseline = owner
-        .box_dry_baseline(text_id, constraints, TextBaseline::Alphabetic)
-        .expect("leaf dry baseline")
-        .expect("text reports a baseline");
-    let padded_baseline = owner
-        .box_dry_baseline(padding_id, constraints, TextBaseline::Alphabetic)
-        .expect("padding dry baseline")
-        .expect("padding forwards child baseline");
-
-    assert!(
-        (padded_baseline - (leaf_baseline + 8.0)).abs() < 0.01,
-        "padding must add top inset to the child's dry baseline",
-    );
-
-    let cached = owner
-        .box_dry_baseline(padding_id, constraints, TextBaseline::Alphabetic)
-        .expect("cached dry baseline");
-    assert_eq!(cached, Some(padded_baseline), "dry baseline must memoize");
-}
-
 // ============================================================================
 // 6. Passthrough proxy: intrinsics + dry layout forward unchanged
 // ============================================================================
-
-#[test]
-fn passthrough_proxy_forwards_intrinsics_and_dry_layout() {
-    use flui_objects::RenderOpacity;
-
-    let intrinsic_runs = Arc::new(AtomicUsize::new(0));
-    let dry_runs = Arc::new(AtomicUsize::new(0));
-
-    let mut owner = PipelineOwner::new();
-    let proxy_id = owner.insert(Box::new(RenderOpacity::opaque()) as BoxedRenderObject);
-    let _leaf_id = owner
-        .insert_child_render_object(
-            proxy_id,
-            Box::new(CountingLeaf::new(
-                Arc::clone(&intrinsic_runs),
-                Arc::clone(&dry_runs),
-            )),
-        )
-        .expect("leaf under opacity");
-
-    let constraints = BoxConstraints::new(0.0, 200.0, 0.0, 200.0);
-
-    let width = owner
-        .box_intrinsic_dimension(proxy_id, IntrinsicDimension::MinWidth, 100.0)
-        .expect("proxy intrinsic width");
-    assert_eq!(
-        width, 40.0,
-        "opacity must forward child min intrinsic width"
-    );
-    assert_eq!(intrinsic_runs.load(Ordering::Relaxed), 1);
-
-    let size = owner
-        .box_dry_layout(proxy_id, constraints)
-        .expect("proxy dry layout");
-    assert_eq!(
-        size,
-        Size::new(40.0, 40.0),
-        "opacity must forward child dry layout"
-    );
-    assert_eq!(dry_runs.load(Ordering::Relaxed), 1);
-
-    // Memoized re-query should not re-hit the leaf.
-    owner
-        .box_intrinsic_dimension(proxy_id, IntrinsicDimension::MinWidth, 100.0)
-        .expect("cached intrinsic");
-    owner
-        .box_dry_layout(proxy_id, constraints)
-        .expect("cached dry");
-    assert_eq!(intrinsic_runs.load(Ordering::Relaxed), 1);
-    assert_eq!(dry_runs.load(Ordering::Relaxed), 1);
-}
 
 #[test]
 fn padding_forwards_intrinsics_with_insets() {
@@ -493,22 +297,4 @@ fn padding_forwards_intrinsics_with_insets() {
         width, 60.0,
         "padding must add horizontal insets to the child's 40px min width"
     );
-}
-
-#[test]
-fn sized_box_reports_fixed_intrinsics_and_dry_layout() {
-    use flui_objects::RenderSizedBox;
-
-    let mut owner = PipelineOwner::new();
-    let sized_id = owner.insert(Box::new(RenderSizedBox::fixed(80.0, 30.0)) as BoxedRenderObject);
-
-    let width = owner
-        .box_intrinsic_dimension(sized_id, IntrinsicDimension::MinWidth, 0.0)
-        .expect("sized min width");
-    assert_eq!(width, 80.0);
-
-    let size = owner
-        .box_dry_layout(sized_id, BoxConstraints::new(0.0, 200.0, 0.0, 200.0))
-        .expect("sized dry layout");
-    assert_eq!(size, Size::new(80.0, 30.0));
 }

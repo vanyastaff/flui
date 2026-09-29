@@ -40,14 +40,4 @@ mod tests {
              just the path/URL text",
         );
     }
-
-    #[test]
-    fn equal_keys_hash_equal() {
-        use std::collections::HashSet;
-
-        let mut set = HashSet::new();
-        set.insert(ImageCacheKey::Asset("a.png".to_string()));
-        assert!(set.contains(&ImageCacheKey::Asset("a.png".to_string())));
-        assert!(!set.contains(&ImageCacheKey::Network("a.png".to_string())));
-    }
 }

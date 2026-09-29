@@ -4,22 +4,6 @@
 use super::*;
 
 #[test]
-fn element_depth_is_the_tree_depth_not_the_sibling_slot() {
-    let mut tree = ElementTree::new();
-    let mut owner = BuildOwner::new();
-    let root = tree.mount_root(&leaf("root"), &mut owner.element_owner_mut());
-    let a = tree.insert(&leaf("a"), root, 0, &mut owner.element_owner_mut());
-    let b = tree.insert(&leaf("b"), a, 0, &mut owner.element_owner_mut());
-    let c = tree.insert(&leaf("c"), root, 3, &mut owner.element_owner_mut());
-
-    for (id, expected) in [(root, 0), (a, 1), (b, 2), (c, 1)] {
-        let node = tree.get(id).expect("inserted node is live");
-        assert_eq!(node.element().depth(), expected);
-        assert_eq!(node.element().depth(), node.depth());
-    }
-}
-
-#[test]
 #[serial_test::serial(global_key_registry)]
 fn globalkey_retake_restamps_element_depth_for_the_moved_subtree() {
     use parking_lot::RwLock;

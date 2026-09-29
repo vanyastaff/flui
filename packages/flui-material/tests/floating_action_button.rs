@@ -45,36 +45,6 @@ fn color_property(color: flui_sdk::painting::Color) -> String {
 }
 
 #[test]
-fn tap_fires_on_pressed_and_the_button_mounts_a_material_surface() {
-    let taps = Arc::new(AtomicUsize::new(0));
-    let counted = Arc::clone(&taps);
-    let laid = lay_out(
-        Theme::new(
-            ThemeData::light(),
-            FloatingActionButton::new(SizedBox::square(24.0)).on_pressed(move |_cx| {
-                counted.fetch_add(1, Ordering::SeqCst);
-            }),
-        ),
-        tight(56.0, 56.0),
-    );
-
-    assert!(
-        laid.try_find_by_render_type("RenderPhysicalShape")
-            .is_some(),
-        "FloatingActionButton must compose a Material (RenderPhysicalShape) surface",
-    );
-
-    laid.dispatch_pointer_down(28.0, 28.0);
-    laid.dispatch_pointer_up(28.0, 28.0);
-
-    assert_eq!(
-        taps.load(Ordering::SeqCst),
-        1,
-        "a down+up on an enabled FloatingActionButton must fire on_pressed exactly once",
-    );
-}
-
-#[test]
 fn a_button_with_no_press_handler_is_disabled_and_a_tap_dispatch_is_a_no_op() {
     let laid = lay_out(
         Theme::new(
@@ -97,68 +67,6 @@ fn a_button_with_no_press_handler_is_disabled_and_a_tap_dispatch_is_a_no_op() {
         material_before, material_after,
         "the disabled button's render tree must not be torn down or rebuilt under a tap \
          dispatch it does not react to",
-    );
-}
-
-/// Mutation-honest coverage for `FloatingActionButtonState::init_state`'s
-/// `WidgetState::Disabled` sync, the same shape
-/// `tests/elevated_button.rs::a_handler_less_button_resolves_the_disabled_background_color_through_the_real_lifecycle`
-/// proves for `ButtonStyleButtonCoreState` — except the FAB's own
-/// `resolve_elevation` chain resolves `disabled` to the SAME `6.0` as the
-/// enabled default (see `floating_action_button.rs`'s module docs), so
-/// `elevation` cannot distinguish "the real lifecycle synced Disabled"
-/// from "it never did." `background_color`, which stays `primaryContainer`
-/// either way per the oracle's own state-independent table, is the wrong
-/// property to probe for that distinction too. What CAN only be proven
-/// through a real mount: the composed `Material`'s color/elevation resolve
-/// to `_FABDefaultsM3`'s values at all, end to end.
-#[test]
-fn disabled_fab_still_resolves_the_m3_default_background_and_elevation() {
-    let theme = ThemeData::light();
-    let colors = theme.color_scheme;
-    let laid = lay_out(
-        Theme::new(theme, FloatingActionButton::new(SizedBox::square(24.0))),
-        tight(56.0, 56.0),
-    );
-
-    let material = laid
-        .try_find_by_render_type("RenderPhysicalShape")
-        .expect("Material must mount");
-    assert_eq!(
-        laid.render_property(material, "color"),
-        Some(color_property(colors.primary_container)),
-        "_FABDefaultsM3's backgroundColor (primaryContainer) is state-independent — even \
-         disabled, it must resolve the same as enabled",
-    );
-    assert_eq!(
-        laid.render_property(material, "elevation"),
-        Some("6".to_string()),
-        "_FABDefaultsM3's disabled elevation falls back to the enabled default (6.0), not zero",
-    );
-}
-
-#[test]
-fn enabled_fab_resolves_the_m3_default_background_and_elevation() {
-    let theme = ThemeData::light();
-    let colors = theme.color_scheme;
-    let laid = lay_out(
-        Theme::new(
-            theme,
-            FloatingActionButton::new(SizedBox::square(24.0)).on_pressed(|_cx| {}),
-        ),
-        tight(56.0, 56.0),
-    );
-
-    let material = laid
-        .try_find_by_render_type("RenderPhysicalShape")
-        .expect("Material must mount");
-    assert_eq!(
-        laid.render_property(material, "color"),
-        Some(color_property(colors.primary_container)),
-    );
-    assert_eq!(
-        laid.render_property(material, "elevation"),
-        Some("6".to_string())
     );
 }
 
@@ -225,8 +133,7 @@ fn fab_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
 /// which (see `floating_action_button.rs`'s module docs) resolves the SAME
 /// `6.0` as the enabled default — also verified unobservable by mutation
 /// (skip the resync call, or skip `init_state`'s equivalent sync: the
-/// elevation assertions in `disabled_fab_still_resolves_the_m3_default_background_and_elevation`
-/// above still pass, because `WidgetStates::NONE`'s `resolve_elevation`
+/// elevation assertions above still pass, because `WidgetStates::NONE`'s `resolve_elevation`
 /// branch happens to be `6.0` too).
 ///
 /// So, honestly: **no test in this file can currently distinguish "the

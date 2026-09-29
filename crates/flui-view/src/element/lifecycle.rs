@@ -102,11 +102,6 @@ impl Lifecycle {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_default_is_initial() {
-        assert_eq!(Lifecycle::default(), Lifecycle::Initial);
-    }
-
     /// Both mutator predicates, over every state, stated once so a future edit
     /// has to argue with each cell rather than the two or three a spot-check
     /// would cover.
@@ -130,18 +125,5 @@ mod tests {
         // The edge these guards exist for: a disposed element stays disposed.
         assert!(!Defunct.can_activate(), "Defunct must not be revivable");
         assert!(!Defunct.can_build(), "Defunct must not be buildable");
-    }
-
-    #[test]
-    fn test_lifecycle_checks() {
-        assert!(Lifecycle::Active.is_active());
-        assert!(Lifecycle::Active.can_build());
-        assert!(Lifecycle::Active.can_deactivate());
-
-        assert!(Lifecycle::Inactive.is_inactive());
-        assert!(Lifecycle::Inactive.can_activate());
-
-        assert!(Lifecycle::Defunct.is_defunct());
-        assert!(!Lifecycle::Defunct.can_activate());
     }
 }

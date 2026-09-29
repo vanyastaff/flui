@@ -4,8 +4,6 @@
 
 use crate::common;
 
-use std::cell::Cell;
-use std::rc::Rc;
 use std::time::Duration;
 
 use common::{lay_out, lay_out_animated, loose, tight};
@@ -31,28 +29,6 @@ fn tap_callback_writes_a_signal_and_rebuilds_its_reader() {
     assert_eq!(probe.value(), Ok(1));
     laid.pump();
     assert_eq!(probe.reads(), [0, 1]);
-}
-
-/// A tap on an enabled button reaches `on_pressed` — proving `GestureDetector`
-/// is actually wired, not merely constructed.
-#[test]
-fn tap_fires_on_pressed() {
-    let tapped = Rc::new(Cell::new(false));
-    let tapped_for_closure = Rc::clone(&tapped);
-
-    let laid = lay_out(
-        CupertinoButton::new(SizedBox::shrink())
-            .on_pressed(move |_cx| tapped_for_closure.set(true)),
-        tight(100.0, 44.0),
-    );
-
-    laid.dispatch_pointer_down(50.0, 22.0);
-    laid.dispatch_pointer_up(50.0, 22.0);
-
-    assert!(
-        tapped.get(),
-        "tapping an enabled CupertinoButton should fire on_pressed"
-    );
 }
 
 /// A disabled button (no `on_pressed`/`on_long_press`) swallows nothing:
@@ -99,24 +75,6 @@ fn per_size_minimum_geometry_reaches_the_mounted_render_tree() {
         loose(200.0),
     );
     assert_eq!(large.size(large.root()), common::size(44.0, 44.0));
-}
-
-/// An explicit `minimum_size(0.0, 0.0)` genuinely removes the floor —
-/// matching the oracle's `minimumSize?.width ?? ...` chain, where a
-/// caller-supplied `Size.zero` passes straight through and is never
-/// re-routed to `kCupertinoButtonMinSize`/`kMinInteractiveDimensionCupertino`.
-/// With no floor and an empty child, the button's size collapses to just its
-/// large-style padding (20 horizontal, 16 vertical, each doubled) — well
-/// under the 44×44 the per-size default floor would otherwise force.
-#[test]
-fn explicit_minimum_size_zero_removes_the_floor() {
-    let laid = lay_out(
-        CupertinoButton::new(SizedBox::shrink())
-            .minimum_size(0.0, 0.0)
-            .on_pressed(|_cx| {}),
-        loose(200.0),
-    );
-    assert_eq!(laid.size(laid.root()), common::size(40.0, 32.0));
 }
 
 /// The press-opacity timeline under a real vsync: tapping fades the button

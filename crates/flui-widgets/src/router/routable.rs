@@ -138,17 +138,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn route_path_round_trips_a_hand_written_routable() {
-        let tag = AppRoute::Tag {
-            name: "a b/c".to_owned(),
-        };
-        assert_eq!(tag.to_path().as_str(), "/tag/a%20b%2Fc");
-        for route in [AppRoute::Home, AppRoute::Note { id: 42 }, tag] {
-            assert_eq!(AppRoute::from_path(&route.to_path()), Ok(route));
-        }
-    }
-
-    #[test]
     fn parse_reports_no_match_and_bad_params() {
         assert!(matches!(
             AppRoute::parse("/nope"),

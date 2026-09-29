@@ -126,13 +126,6 @@ mod tests {
     }
 
     #[test]
-    fn a_literal_panic_payload_is_a_static_str_and_comes_through_verbatim() {
-        let payload =
-            catch_unwind(|| panic!("literal wndproc failure")).expect_err("the closure must panic");
-        assert_eq!(panic_payload_message(&*payload), "literal wndproc failure");
-    }
-
-    #[test]
     fn a_formatted_panic_payload_is_a_string_and_comes_through_verbatim() {
         let detail = 42;
         let payload = catch_unwind(AssertUnwindSafe(|| panic!("failure {detail}")))

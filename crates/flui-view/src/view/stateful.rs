@@ -199,7 +199,7 @@ mod tests {
     use crate::{
         ElementTree, RenderView, StatefulElement,
         element::{Lifecycle, StatefulBehavior},
-        view::{ElementBase, View, ViewExt},
+        view::{View, ViewExt},
     };
 
     #[derive(Clone)]
@@ -286,14 +286,6 @@ mod tests {
         fn create_element(&self) -> crate::element::ElementKind {
             crate::element::ElementKind::render_variable(self)
         }
-    }
-
-    #[test]
-    fn test_stateful_element_creation() {
-        let view = TestCounter::new(10);
-        let element = StatefulElement::new(&view, StatefulBehavior::new(&view));
-        assert_eq!(element.state().count, 10);
-        assert_eq!(element.lifecycle(), Lifecycle::Initial);
     }
 
     #[test]

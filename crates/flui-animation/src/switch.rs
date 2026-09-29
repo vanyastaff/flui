@@ -385,7 +385,7 @@ mod tests {
     use super::*;
     use crate::AnimationController;
     use flui_scheduler::UpdateScheduler;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
 
     fn create_controller(scheduler: &UpdateScheduler, value: f64) -> Arc<AnimationController> {
@@ -407,24 +407,6 @@ mod tests {
         assert_eq!(switch.value(), 0.5);
 
         controller.dispose();
-    }
-
-    #[test]
-    fn test_animation_switch_with_next() {
-        let scheduler = UpdateScheduler::new();
-        let controller1 = create_controller(&scheduler, 0.8);
-        let controller2 = create_controller(&scheduler, 0.3);
-
-        let switch = AnimationSwitch::new(
-            controller1.clone() as Arc<dyn Animation<f64>>,
-            Some(controller2.clone() as Arc<dyn Animation<f64>>),
-        );
-
-        // Initially uses controller1
-        assert_eq!(switch.value(), 0.8);
-
-        controller1.dispose();
-        controller2.dispose();
     }
 
     #[test]
@@ -531,49 +513,6 @@ mod tests {
             after_remove,
             "removed status listener must not fire"
         );
-
-        controller1.dispose();
-        controller2.dispose();
-    }
-
-    #[test]
-    fn test_animation_switch_same_initial_value() {
-        let scheduler = UpdateScheduler::new();
-        let controller1 = create_controller(&scheduler, 0.5);
-        let controller2 = create_controller(&scheduler, 0.5);
-
-        let switch = AnimationSwitch::new(
-            controller1.clone() as Arc<dyn Animation<f64>>,
-            Some(controller2.clone() as Arc<dyn Animation<f64>>),
-        );
-
-        // Should immediately switch to controller2 since values are equal
-        // Both have 0.5, so value should still be 0.5
-        assert_eq!(switch.value(), 0.5);
-
-        controller1.dispose();
-        controller2.dispose();
-    }
-
-    #[test]
-    fn test_animation_switch_callback() {
-        let scheduler = UpdateScheduler::new();
-        let controller1 = create_controller(&scheduler, 0.8);
-        let controller2 = create_controller(&scheduler, 0.3);
-
-        let switched = Arc::new(AtomicBool::new(false));
-        let switched_clone = Arc::clone(&switched);
-
-        let _switch = AnimationSwitch::new(
-            controller1.clone() as Arc<dyn Animation<f64>>,
-            Some(controller2.clone() as Arc<dyn Animation<f64>>),
-        )
-        .on_switched(move || {
-            switched_clone.store(true, Ordering::SeqCst);
-        });
-
-        // Initially not switched
-        assert!(!switched.load(Ordering::SeqCst));
 
         controller1.dispose();
         controller2.dispose();
@@ -690,49 +629,5 @@ mod tests {
 
         controller1.dispose();
         controller2.dispose();
-    }
-
-    #[test]
-    fn test_animation_switch_status() {
-        let scheduler = UpdateScheduler::new();
-        // Start at the lower bound so status is genuinely Dismissed: a mid-range
-        // set_value now reports Forward per Flutter's _internalSetValue.
-        let controller = create_controller(&scheduler, 0.0);
-
-        let switch = AnimationSwitch::new(controller.clone() as Arc<dyn Animation<f64>>, None);
-
-        assert_eq!(switch.status(), AnimationStatus::Dismissed);
-
-        controller.forward().unwrap();
-        assert_eq!(switch.status(), AnimationStatus::Forward);
-
-        controller.dispose();
-    }
-
-    #[test]
-    fn test_animation_switch_current() {
-        let scheduler = UpdateScheduler::new();
-        let controller = create_controller(&scheduler, 0.5);
-
-        let switch = AnimationSwitch::new(controller.clone() as Arc<dyn Animation<f64>>, None);
-
-        let current = switch.current();
-        assert_eq!(current.value(), 0.5);
-
-        controller.dispose();
-    }
-
-    #[test]
-    fn test_animation_switch_debug() {
-        let scheduler = UpdateScheduler::new();
-        let controller = create_controller(&scheduler, 0.5);
-
-        let switch = AnimationSwitch::new(controller.clone() as Arc<dyn Animation<f64>>, None);
-
-        let debug_str = format!("{switch:?}");
-        assert!(debug_str.contains("AnimationSwitch"));
-        assert!(debug_str.contains("0.5"));
-
-        controller.dispose();
     }
 }

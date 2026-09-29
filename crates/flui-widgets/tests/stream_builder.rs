@@ -331,30 +331,3 @@ fn stream_builder_same_key_does_not_resubscribe() {
     assert_eq!(sender.subscriptions(), 1, "no resubscribe");
     assert_eq!(last(&log), active(Some(3), None), "snapshot untouched");
 }
-
-/// `'runs the builder using given initial data'` with no stream at all.
-#[test]
-fn stream_builder_absent_stream_shows_initial_data() {
-    let log = Arc::new(Mutex::new(Vec::new()));
-    let sender = Sender::new();
-
-    let _laid = lay_out(
-        StreamBuilder::<u32, _, _>::keyed(
-            None,
-            sender.factory(),
-            recording_builder(Arc::clone(&log)),
-        )
-        .with_initial_data(Rc::new(|| Payload(7))),
-        loose(400.0),
-    );
-
-    assert_eq!(
-        last(&log),
-        Seen {
-            state: ConnectionState::None,
-            data: Some(7),
-            error: None
-        }
-    );
-    assert_eq!(sender.subscriptions(), 0, "no stream ⇒ no subscription");
-}

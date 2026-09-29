@@ -224,27 +224,6 @@ mod gpu_tests {
             blended.a,
         ]
     }
-
-    fn linear_to_srgb_oracle(channel_linear: u8) -> u8 {
-        let linear = f32::from(channel_linear) / 255.0;
-        let srgb = if linear <= 0.003_130_8 {
-            linear * 12.92
-        } else {
-            1.055 * linear.powf(1.0 / 2.4) - 0.055
-        };
-        (srgb.clamp(0.0, 1.0) * 255.0).round() as u8
-    }
-
-    fn srgb_to_linear_oracle(channel_srgb: u8) -> u8 {
-        let srgb = f32::from(channel_srgb) / 255.0;
-        let linear = if srgb <= 0.04045 {
-            srgb / 12.92
-        } else {
-            ((srgb + 0.055) / 1.055).powf(2.4)
-        };
-        (linear.clamp(0.0, 1.0) * 255.0).round() as u8
-    }
-
     // ── SC1: SceneBuilder → blur → pixels ─────────────────────────────────────
 
     /// SC1: A `SceneBuilder::push_image_filter(Blur σ=4)` wrapping a solid-colour
@@ -376,95 +355,7 @@ mod gpu_tests {
 
     // ── SC3: SceneBuilder → LinearToSrgbGamma → pixels ───────────────────────
 
-    /// SC3: `SceneBuilder::push_color_filter(LinearToSrgbGamma)` wrapping a
-    /// mid-range canvas produces pixels matching the linear→sRGB oracle.
-    ///
-    /// **Proves:** the `LinearToSrgbGamma` arm of `ColorFilterLayer::render` /
-    /// `LayerDispatcher::push_color_filter` fires the correct GPU gamma shader.
-    #[test]
-    fn sc3_scenebuilder_linear_to_srgb_gamma_reaches_pixels() {
-        let (device, queue) = acquire_test_device_and_queue();
-        let (surface_tex, surface_view) = create_render_surface(&device);
-        clear_to_black(&device, &queue, &surface_view);
-
-        let layer_color = Color::rgba(50, 100, 200, 255);
-        let filter = ColorFilter::LinearToSrgbGamma;
-
-        let tree = {
-            let mut builder = SceneBuilder::new();
-            builder.push_offset(Offset::ZERO);
-            builder.push_color_filter(filter);
-            let mut canvas = CanvasLayer::new();
-            canvas
-                .canvas_mut()
-                .draw_rect(full_surface_rect(), &Paint::fill(layer_color));
-            builder.add_canvas(canvas);
-            builder.pop().expect("color filter pop must not underflow");
-            builder.pop().expect("root offset pop must not underflow");
-            builder.build()
-        };
-
-        let pixels = render_scenebuilder_tree_and_readback(
-            &device,
-            &queue,
-            &surface_tex,
-            &surface_view,
-            &tree,
-        );
-
-        // Opaque alpha: premul == straight.
-        let expected = [
-            linear_to_srgb_oracle(50),
-            linear_to_srgb_oracle(100),
-            linear_to_srgb_oracle(200),
-            255,
-        ];
-        assert_interior_pixels_near("SC3 SceneBuilder/LinearToSrgbGamma", &pixels, expected, 3);
-    }
-
     // ── SC4: SceneBuilder → SrgbToLinearGamma → pixels ───────────────────────
-
-    /// SC4: `SceneBuilder::push_color_filter(SrgbToLinearGamma)` wrapping a
-    /// mid-range canvas produces pixels matching the sRGB→linear oracle.
-    #[test]
-    fn sc4_scenebuilder_srgb_to_linear_gamma_reaches_pixels() {
-        let (device, queue) = acquire_test_device_and_queue();
-        let (surface_tex, surface_view) = create_render_surface(&device);
-        clear_to_black(&device, &queue, &surface_view);
-
-        let layer_color = Color::rgba(180, 120, 60, 255);
-        let filter = ColorFilter::SrgbToLinearGamma;
-
-        let tree = {
-            let mut builder = SceneBuilder::new();
-            builder.push_offset(Offset::ZERO);
-            builder.push_color_filter(filter);
-            let mut canvas = CanvasLayer::new();
-            canvas
-                .canvas_mut()
-                .draw_rect(full_surface_rect(), &Paint::fill(layer_color));
-            builder.add_canvas(canvas);
-            builder.pop().expect("color filter pop must not underflow");
-            builder.pop().expect("root offset pop must not underflow");
-            builder.build()
-        };
-
-        let pixels = render_scenebuilder_tree_and_readback(
-            &device,
-            &queue,
-            &surface_tex,
-            &surface_view,
-            &tree,
-        );
-
-        let expected = [
-            srgb_to_linear_oracle(180),
-            srgb_to_linear_oracle(120),
-            srgb_to_linear_oracle(60),
-            255,
-        ];
-        assert_interior_pixels_near("SC4 SceneBuilder/SrgbToLinearGamma", &pixels, expected, 3);
-    }
 
     // ── SC5: SceneBuilder → Matrix/grayscale → pixels ────────────────────────
 

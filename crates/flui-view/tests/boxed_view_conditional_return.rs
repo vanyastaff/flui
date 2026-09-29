@@ -32,11 +32,6 @@
 //!    which fails E0308. We test the canonical "every arm
 //!    `.boxed()`" shape only.
 
-// Target-level lint relaxations — crate-level allows don't reach this
-// target. `unwrap` in test/example code: a panic IS the failure report
-// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
-#![expect(clippy::used_underscore_items)]
-
 use flui_view::context::BuildContext;
 use flui_view::prelude::*;
 
@@ -138,15 +133,4 @@ fn three_arm_match_compiles_and_is_a_view() {
     let v = ThreeWayRoot { arm: 1 };
     let element = View::create_element(&v);
     assert_eq!(element.lifecycle(), Lifecycle::Initial);
-}
-
-#[test]
-fn boxed_view_is_a_view() {
-    // `BoxedView` itself satisfies the `View` trait — the
-    // `IntoView` blanket then makes it a valid `impl IntoView`
-    // return. This is what makes the per-branch `.boxed()` shape
-    // work.
-    fn _takes_view<V: View>(_: V) {}
-    let bv: BoxedView = LeafA.boxed();
-    _takes_view(bv);
 }

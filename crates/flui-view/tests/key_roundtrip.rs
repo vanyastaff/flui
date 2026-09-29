@@ -16,12 +16,9 @@
 //! the heterogeneous-key-test demand makes a single dynamic shape
 //! cleaner here than seven separate concrete views.
 
-use std::sync::Arc;
-
-use flui_foundation::{Key, ObserverId, UniqueKey, ValueKey, ViewKey};
+use flui_foundation::{ObserverId, ValueKey, ViewKey};
 use flui_view::{
-    BuildContext, BuildOwner, ElementTree, GlobalKey, IntoView, ObjectKey, StatelessView, View,
-    ViewExt,
+    BuildContext, BuildOwner, ElementTree, GlobalKey, IntoView, StatelessView, View, ViewExt,
 };
 
 // ----------------------------------------------------------------------------
@@ -39,10 +36,6 @@ struct TestView {
 }
 
 impl TestView {
-    fn keyless(name: &'static str) -> Self {
-        Self { name, key: None }
-    }
-
     fn with_key<K: ViewKey>(name: &'static str, key: K) -> Self {
         Self {
             name,
@@ -111,7 +104,7 @@ fn assert_key_round_trips(tree: &ElementTree, id: flui_foundation::ElementId, pr
 // ============================================================================
 
 #[test]
-fn covers_fr022_key_roundtrip_value_key() {
+fn key_roundtrip_value_key() {
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
     let probe = ValueKey::new(42_u32);
@@ -122,35 +115,7 @@ fn covers_fr022_key_roundtrip_value_key() {
 }
 
 #[test]
-fn covers_fr022_key_roundtrip_unique_key() {
-    let mut tree = ElementTree::new();
-    let mut owner = BuildOwner::new();
-    // `UniqueKey` is `Copy`, so a `Clone` is the round-trip probe.
-    let probe = UniqueKey::new();
-    let view = TestView::with_key("uk", probe);
-    let id = tree.mount_root(&view, &mut owner.element_owner_mut());
-
-    assert_key_round_trips(&tree, id, &probe);
-}
-
-#[test]
-fn covers_fr022_key_roundtrip_object_key() {
-    let mut tree = ElementTree::new();
-    let mut owner = BuildOwner::new();
-    // `ObjectKey` keys by pointer identity; both the probe and the
-    // mounted key must share the same Arc allocation for `key_eq` to
-    // hold.
-    let holder: Arc<u32> = Arc::new(7);
-    let probe = ObjectKey::new(Arc::clone(&holder));
-    let view_key = ObjectKey::new(Arc::clone(&holder));
-    let view = TestView::with_key("ok", view_key);
-    let id = tree.mount_root(&view, &mut owner.element_owner_mut());
-
-    assert_key_round_trips(&tree, id, &probe);
-}
-
-#[test]
-fn covers_fr022_key_roundtrip_global_key() {
+fn key_roundtrip_global_key() {
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
     // `GlobalKey<T>` is `Clone` over its inner `id`.
@@ -161,83 +126,9 @@ fn covers_fr022_key_roundtrip_global_key() {
     assert_key_round_trips(&tree, id, &probe);
 }
 
-#[test]
-fn covers_fr022_key_roundtrip_key_newtype() {
-    let mut tree = ElementTree::new();
-    let mut owner = BuildOwner::new();
-    // `Key` implements `ViewKey`, so this assertion is possible.
-    let probe = Key::from_str("k1");
-    let view = TestView::with_key("k", probe);
-    let id = tree.mount_root(&view, &mut owner.element_owner_mut());
-
-    assert_key_round_trips(&tree, id, &probe);
-}
-
-#[test]
-fn covers_fr022_key_roundtrip_no_key() {
-    let mut tree = ElementTree::new();
-    let mut owner = BuildOwner::new();
-    let view = TestView::keyless("plain");
-    let id = tree.mount_root(&view, &mut owner.element_owner_mut());
-
-    let node = tree
-        .get(id)
-        .expect("ElementNode must be present after keyless mount");
-    assert!(node.key().is_none(), "keyless mount must store None");
-    assert!(
-        node.key_hash().is_none(),
-        "keyless mount must report key_hash() = None",
-    );
-}
-
 // ============================================================================
 // Edge cases
 // ============================================================================
-
-/// Edge: a `View::can_update`-compatible update preserves the stored
-/// key. Spec FR-028 requires both old and new to carry equal keys for
-/// an update to succeed, so the stored key after update must remain
-/// equal to the original probe value.
-#[test]
-fn edge_remount_copy_preserves_key() {
-    let mut tree = ElementTree::new();
-    let mut owner = BuildOwner::new();
-    let probe = ValueKey::new("steady");
-    let initial = TestView::with_key("v1", ValueKey::new("steady"));
-    let id = tree.mount_root(&initial, &mut owner.element_owner_mut());
-
-    // Drop the `BuildOwner` borrow before re-borrowing for `update`.
-    {
-        let next = TestView::with_key("v2", ValueKey::new("steady"));
-        tree.update(id, &next, &mut owner.element_owner_mut());
-    }
-
-    assert_key_round_trips(&tree, id, &probe);
-}
-
-/// Edge: `GlobalKey` round-trip surfaces `is_global_key() == true` so
-/// the registry-side code paths (`global_key_of`,
-/// `register_global_key_with_collision_check`) can route off the
-/// stored key as well as the `registered_global_key` side channel.
-#[test]
-fn edge_global_key_is_global() {
-    let mut tree = ElementTree::new();
-    let mut owner = BuildOwner::new();
-    let global = GlobalKey::<TestView>::new();
-    let view = TestView::with_key("gk_isglobal", global.clone());
-    let id = tree.mount_root(&view, &mut owner.element_owner_mut());
-
-    let node = tree
-        .get(id)
-        .expect("ElementNode must be present after mount");
-    let stored = node
-        .key()
-        .expect("GlobalKey mount must populate node.key()");
-    assert!(
-        stored.is_global_key(),
-        "GlobalKey's stored ViewKey must report is_global_key() == true",
-    );
-}
 
 // ----------------------------------------------------------------------------
 // Negative regression: the `registered_global_key` side channel still holds

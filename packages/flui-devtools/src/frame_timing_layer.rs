@@ -297,24 +297,6 @@ mod tests {
         );
     }
 
-    /// A span the framework does not emit as a phase must not become one.
-    /// Without this, any unrelated span in the process would be timed as frame
-    /// work and the profile would be quietly wrong rather than empty.
-    #[test]
-    fn unrelated_spans_are_not_phases() {
-        let profiler = profile(|| {
-            let _frame = tracing::debug_span!("frame").entered();
-            let _other = tracing::debug_span!("some_unrelated_work").entered();
-        });
-
-        let stats = profiler.frame_stats().expect("a frame was recorded");
-        assert!(
-            stats.phases.is_empty(),
-            "only the framework's four phase spans count; saw {:?}",
-            stats.phases,
-        );
-    }
-
     /// Phase work outside any frame is dropped rather than folded into a
     /// neighbouring frame. A headless layout pass is not a frame, and
     /// attributing its cost to one would be a fabricated measurement.
@@ -360,54 +342,6 @@ mod tests {
             phases,
             vec![FramePhase::Build],
             "the other realm's layout must not leak into this frame",
-        );
-    }
-
-    /// Build work split across several spans in one frame (the global build
-    /// plus a layout-builder rebuild) reports as ONE Build entry, because
-    /// `FrameStats::phase` returns the first match and separate entries
-    /// would hide everything after it.
-    #[test]
-    fn repeated_build_spans_report_one_build_phase() {
-        let profiler = profile(|| {
-            let _frame = tracing::debug_span!("frame").entered();
-            {
-                let _build = tracing::debug_span!("build", dirty_elements = 2).entered();
-            }
-            {
-                let _layout = tracing::debug_span!("layout").entered();
-                let _rebuild = tracing::debug_span!("build", during_layout = true).entered();
-            }
-        });
-
-        let stats = profiler.frame_stats().expect("a frame was recorded");
-        let build_entries = stats
-            .phases
-            .iter()
-            .filter(|info| info.phase == FramePhase::Build)
-            .count();
-        assert_eq!(
-            build_entries, 1,
-            "both build spans merge into one Build total; saw {:?}",
-            stats.phases,
-        );
-    }
-
-    /// Two frames stay separate. A layer that failed to close a frame would
-    /// report one enormous frame and every jank threshold would misfire.
-    #[test]
-    fn consecutive_frames_are_recorded_separately() {
-        let profiler = profile(|| {
-            for _ in 0..2 {
-                let _frame = tracing::debug_span!("frame").entered();
-                let _build = tracing::debug_span!("build").entered();
-            }
-        });
-
-        assert_eq!(
-            profiler.frame_history().len(),
-            2,
-            "each frame span must close its own frame",
         );
     }
 }

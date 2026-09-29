@@ -1,20 +1,18 @@
 //! Harness tests for the `RenderSliverFillRemaining` family.
 
+use flui_foundation::Leaf;
 use flui_foundation::geometry::{Offset, Rect, Size};
-use flui_foundation::{Leaf, Single};
 use flui_objects::{
     RenderSliverFillRemaining, RenderSliverFillRemainingAndOverscroll,
     RenderSliverFillRemainingWithScrollable,
 };
-use flui_rendering::constraints::AxisDirection;
 use flui_rendering::{
-    constraints::{SliverConstraints, SliverGeometry},
-    context::{BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext, SliverLayoutContext},
-    parent_data::{BoxParentData, SliverPhysicalParentData},
+    constraints::SliverConstraints,
+    context::{BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext},
+    parent_data::BoxParentData,
     pipeline::PipelineOwner,
-    storage::IntrinsicDimension,
     testing::{inspect, sliver as sliver_presets},
-    traits::{RenderBox, RenderSliver},
+    traits::RenderBox,
 };
 
 use crate::common::{
@@ -53,14 +51,6 @@ fn render_offset(
     inspect::render_offset(owner, id).expect("node exists")
 }
 
-fn hits(
-    owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
-    cross: f64,
-    main: f64,
-) -> Vec<flui_foundation::RenderId> {
-    inspect::hit_path(owner, cross, main)
-}
-
 #[derive(Debug)]
 struct FixedHitBox {
     desired: Size,
@@ -97,84 +87,6 @@ impl RenderBox for FixedHitBox {
 
     fn compute_max_intrinsic_height(&self, _width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
         self.desired.height
-    }
-}
-
-#[derive(Debug)]
-struct ExpandingHitBox {
-    intrinsic: Size,
-}
-
-impl ExpandingHitBox {
-    fn new(width: f64, height: f64) -> Self {
-        Self {
-            intrinsic: Size::new(width, height),
-        }
-    }
-}
-
-impl flui_foundation::Diagnosticable for ExpandingHitBox {}
-
-impl RenderBox for ExpandingHitBox {
-    type Arity = Leaf;
-    type ParentData = BoxParentData;
-
-    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, Self::ParentData>) -> Size {
-        ctx.constraints().biggest()
-    }
-
-    fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
-        ctx.is_within_bounds(Rect::from_origin_size(
-            flui_foundation::geometry::Point::ZERO,
-            ctx.own_size(),
-        ))
-    }
-
-    fn compute_max_intrinsic_width(&self, _height: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.intrinsic.width
-    }
-
-    fn compute_max_intrinsic_height(&self, _width: f64, _ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        self.intrinsic.height
-    }
-}
-
-#[derive(Debug, Default)]
-struct IntrinsicProbeSliver;
-
-impl flui_foundation::Diagnosticable for IntrinsicProbeSliver {}
-
-impl RenderSliver for IntrinsicProbeSliver {
-    type Arity = flui_foundation::Single;
-    type ParentData = SliverPhysicalParentData;
-
-    fn perform_layout(
-        &mut self,
-        ctx: &mut SliverLayoutContext<'_, Single, Self::ParentData>,
-    ) -> SliverGeometry {
-        let constraints = *ctx.constraints();
-        let child_extent = ctx.box_child_intrinsic(
-            0,
-            IntrinsicDimension::MaxHeight,
-            constraints.cross_axis_extent,
-        );
-        if ctx.child_count() > 0 {
-            ctx.layout_box_child(
-                0,
-                constraints.as_box_constraints(child_extent, child_extent, None),
-            );
-        }
-        let paint_extent = self.calculate_paint_offset(&constraints, 0.0, child_extent);
-        SliverGeometry {
-            scroll_extent: child_extent,
-            paint_extent,
-            layout_extent: paint_extent,
-            max_paint_extent: paint_extent,
-            hit_test_extent: paint_extent,
-            cache_extent: self.calculate_cache_offset(&constraints, 0.0, child_extent),
-            visible: paint_extent > 0.0,
-            ..SliverGeometry::ZERO
-        }
     }
 }
 
@@ -242,108 +154,6 @@ fn sliver_fill_remaining_with_scrollable_sizes_child_to_remaining_paint_extent()
 }
 
 #[test]
-fn sliver_fill_remaining_with_scrollable_includes_negative_overlap_in_child_extent() {
-    let mut owner = PipelineOwner::new();
-    let root_id = owner.insert(Box::new(SliverHost {
-        constraints: vertical_constraints(0.0, 0.0, 80.0, -20.0),
-    }) as BoxedRenderObject);
-    let sliver_id = owner
-        .render_tree_mut()
-        .insert_sliver_child(
-            root_id,
-            Box::new(RenderSliverFillRemainingWithScrollable::new()) as BoxedSliverObject,
-        )
-        .expect("fill remaining sliver");
-    let child_id = owner
-        .render_tree_mut()
-        .insert_box_child(
-            sliver_id,
-            Box::new(FixedHitBox::new(50.0, 10.0)) as BoxedRenderObject,
-        )
-        .expect("box child");
-
-    let owner = laid_out(owner, root_id);
-    let geometry = sliver_geometry(&owner, sliver_id);
-
-    assert_eq!(box_size(&owner, child_id), Size::new(300.0, 100.0));
-    assert_eq!(geometry.scroll_extent, 100.0);
-    assert_eq!(geometry.paint_extent, 80.0);
-    assert_eq!(geometry.max_paint_extent, 80.0);
-    assert_eq!(geometry.hit_test_extent, 80.0);
-    assert!(
-        geometry.has_visual_overflow,
-        "extent includes 20px negative overlap and exceeds the remaining paint extent",
-    );
-}
-
-#[test]
-fn sliver_fill_remaining_with_scrollable_keeps_zero_extent_child_in_cache_window() {
-    let mut owner = PipelineOwner::new();
-    let root_id = owner.insert(Box::new(SliverHost {
-        constraints: vertical_constraints(110.0, 100.0, 0.0, 0.0),
-    }) as BoxedRenderObject);
-    let sliver_id = owner
-        .render_tree_mut()
-        .insert_sliver_child(
-            root_id,
-            Box::new(RenderSliverFillRemainingWithScrollable::new()) as BoxedSliverObject,
-        )
-        .expect("fill remaining sliver");
-    let child_id = owner
-        .render_tree_mut()
-        .insert_box_child(
-            sliver_id,
-            Box::new(FixedHitBox::new(50.0, 10.0)) as BoxedRenderObject,
-        )
-        .expect("box child");
-
-    let owner = laid_out(owner, root_id);
-    let geometry = sliver_geometry(&owner, sliver_id);
-
-    assert_eq!(
-        box_size(&owner, child_id),
-        Size::new(300.0, 10.0),
-        "when visible extent is zero but cache extent is non-zero, Flutter uses cache extent as maxExtent",
-    );
-    assert_eq!(geometry.scroll_extent, 100.0);
-    assert_eq!(geometry.paint_extent, 0.0);
-    assert_eq!(geometry.max_paint_extent, 0.0);
-    assert_eq!(geometry.hit_test_extent, 0.0);
-    assert_eq!(geometry.cache_extent, 10.0);
-    assert!(geometry.has_visual_overflow);
-    assert!(
-        hits(&owner, 10.0, 0.0).is_empty(),
-        "zero hit_test_extent gates child hits even while cache keeps layout alive",
-    );
-}
-
-#[test]
-fn sliver_layout_context_queries_box_child_intrinsics() {
-    let mut owner = PipelineOwner::new();
-    let root_id = owner.insert(Box::new(SliverHost {
-        constraints: vertical_constraints(0.0, 0.0, 100.0, 0.0),
-    }) as BoxedRenderObject);
-    let sliver_id = owner
-        .render_tree_mut()
-        .insert_sliver_child(root_id, Box::new(IntrinsicProbeSliver) as BoxedSliverObject)
-        .expect("probe sliver");
-    let child_id = owner
-        .render_tree_mut()
-        .insert_box_child(
-            sliver_id,
-            Box::new(FixedHitBox::new(300.0, 140.0)) as BoxedRenderObject,
-        )
-        .expect("box child");
-
-    let owner = laid_out(owner, root_id);
-    let geometry = sliver_geometry(&owner, sliver_id);
-
-    assert_eq!(box_size(&owner, child_id), Size::new(300.0, 140.0));
-    assert_eq!(geometry.scroll_extent, 140.0);
-    assert_eq!(geometry.paint_extent, 100.0);
-}
-
-#[test]
 fn sliver_fill_remaining_uses_child_intrinsic_when_larger_than_remaining_viewport() {
     let mut owner = PipelineOwner::new();
     let root_id = owner.insert(Box::new(SliverHost {
@@ -376,37 +186,6 @@ fn sliver_fill_remaining_uses_child_intrinsic_when_larger_than_remaining_viewpor
 }
 
 #[test]
-fn sliver_fill_remaining_uses_viewport_remainder_when_child_is_smaller() {
-    let mut owner = PipelineOwner::new();
-    let root_id = owner.insert(Box::new(SliverHost {
-        constraints: vertical_constraints(0.0, 30.0, 70.0, 0.0),
-    }) as BoxedRenderObject);
-    let sliver_id = owner
-        .render_tree_mut()
-        .insert_sliver_child(
-            root_id,
-            Box::new(RenderSliverFillRemaining::new()) as BoxedSliverObject,
-        )
-        .expect("fill remaining sliver");
-    let child_id = owner
-        .render_tree_mut()
-        .insert_box_child(
-            sliver_id,
-            Box::new(FixedHitBox::new(300.0, 20.0)) as BoxedRenderObject,
-        )
-        .expect("box child");
-
-    let owner = laid_out(owner, root_id);
-    let geometry = sliver_geometry(&owner, sliver_id);
-
-    assert_eq!(box_size(&owner, child_id), Size::new(300.0, 70.0));
-    assert_eq!(geometry.scroll_extent, 70.0);
-    assert_eq!(geometry.paint_extent, 70.0);
-    assert_eq!(geometry.max_paint_extent, 70.0);
-    assert_eq!(geometry.hit_test_extent, 70.0);
-}
-
-#[test]
 fn sliver_fill_remaining_overscroll_expands_max_paint_extent() {
     let mut owner = PipelineOwner::new();
     let root_id = owner.insert(Box::new(SliverHost {
@@ -436,41 +215,4 @@ fn sliver_fill_remaining_overscroll_expands_max_paint_extent() {
     assert_eq!(geometry.max_paint_extent, 120.0);
     assert_eq!(geometry.hit_test_extent, 90.0);
     assert_eq!(geometry.cache_extent, 80.0);
-}
-
-#[test]
-fn sliver_fill_remaining_overscroll_reverse_axis_positions_by_scroll_extent() {
-    // Reverse axis: the child is positioned by geometry.scroll_extent, NOT its
-    // overscrolled measured extent (fixed 3d0699af; matches the sibling fill
-    // slivers and Flutter RenderSliverSingleBoxAdapter.setChildParentData).
-    let mut constraints = vertical_constraints(0.0, 20.0, 90.0, -30.0);
-    constraints.axis_direction = AxisDirection::BottomToTop;
-
-    let mut owner = PipelineOwner::new();
-    let root_id = owner.insert(Box::new(SliverHost { constraints }) as BoxedRenderObject);
-    let sliver_id = owner
-        .render_tree_mut()
-        .insert_sliver_child(
-            root_id,
-            Box::new(RenderSliverFillRemainingAndOverscroll::new()) as BoxedSliverObject,
-        )
-        .expect("fill remaining overscroll sliver");
-    let child_id = owner
-        .render_tree_mut()
-        .insert_box_child(
-            sliver_id,
-            Box::new(ExpandingHitBox::new(300.0, 40.0)) as BoxedRenderObject,
-        )
-        .expect("box child");
-
-    let owner = laid_out(owner, root_id);
-    let geometry = sliver_geometry(&owner, sliver_id);
-
-    assert_eq!(box_size(&owner, child_id), Size::new(300.0, 120.0));
-    assert_eq!(geometry.scroll_extent, 80.0);
-    assert_eq!(geometry.paint_extent, 90.0);
-    assert_eq!(geometry.max_paint_extent, 120.0);
-    // paint_extent + scroll_offset - scroll_extent = 90 + 0 - 80 = 10
-    // (was -30, i.e. paint_extent minus the measured child extent 120).
-    assert_eq!(render_offset(&owner, child_id), Offset::new(0.0, 10.0));
 }

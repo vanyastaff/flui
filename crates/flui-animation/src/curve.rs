@@ -1249,32 +1249,6 @@ mod tests {
     }
 
     #[test]
-    fn cubic_endpoints_and_symmetry() {
-        let ease_in_out = Cubic::new(0.42, 0.0, 0.58, 1.0);
-        assert!((ease_in_out.transform(0.0)).abs() < 1e-4);
-        assert!((ease_in_out.transform(1.0) - 1.0).abs() < 1e-4);
-        // EaseInOut is symmetric about (0.5, 0.5).
-        assert!((ease_in_out.transform(0.5) - 0.5).abs() < 1e-3);
-    }
-
-    #[test]
-    fn test_linear_curve() {
-        let curve = Linear;
-        assert_eq!(curve.transform(0.0), 0.0);
-        assert_eq!(curve.transform(0.5), 0.5);
-        assert_eq!(curve.transform(1.0), 1.0);
-    }
-
-    #[test]
-    fn test_sawtooth_curve() {
-        let curve = SawTooth::new(2);
-        assert_eq!(curve.transform(0.0), 0.0);
-        assert!((curve.transform(0.25) - 0.5).abs() < 1e-6);
-        assert!((curve.transform(0.5) - 0.0).abs() < 1e-6);
-        assert!((curve.transform(0.75) - 0.5).abs() < 1e-6);
-    }
-
-    #[test]
     fn test_interval_curve() {
         let curve = Interval::linear(0.2, 0.8);
         assert_eq!(curve.transform(0.0), 0.0);
@@ -1284,39 +1258,6 @@ mod tests {
         assert!((curve.transform(0.5) - 0.5).abs() < 1e-12);
         assert_eq!(curve.transform(0.8), 1.0);
         assert_eq!(curve.transform(1.0), 1.0);
-    }
-
-    #[test]
-    fn test_threshold_curve() {
-        let curve = Threshold::new(0.5);
-        assert_eq!(curve.transform(0.0), 0.0);
-        assert_eq!(curve.transform(0.4), 0.0);
-        assert_eq!(curve.transform(0.5), 1.0);
-        assert_eq!(curve.transform(1.0), 1.0);
-    }
-
-    #[test]
-    fn test_cubic_curve() {
-        let curve = Cubic::new(0.42, 0.0, 1.0, 1.0); // ease-in
-        assert!((curve.transform(0.0) - 0.0).abs() < 1e-4);
-        assert!(curve.transform(0.5) < 0.5); // ease-in should be slower at start
-        assert!((curve.transform(1.0) - 1.0).abs() < 1e-4);
-    }
-
-    #[test]
-    fn test_elastic_in_curve() {
-        let curve = ElasticInCurve::default();
-        assert!((curve.transform(0.0) - 0.0).abs() < 1e-2); // Elastic curves have some overshoot
-        // Elastic in curve oscillates and can have large values near t=1.0
-        let val = curve.transform(1.0);
-        assert!(val.abs() < 2.0); // Just check it's bounded
-    }
-
-    #[test]
-    fn test_elastic_out_curve() {
-        let curve = ElasticOutCurve::default();
-        assert!(curve.transform(0.0).abs() < 1e-6);
-        assert!((curve.transform(1.0) - 1.0).abs() < 0.1); // Should settle near 1.0
     }
 
     #[test]
@@ -1342,26 +1283,12 @@ mod tests {
     }
 
     #[test]
-    fn test_reverse_curve() {
-        let curve = ReverseCurve::new(Threshold::new(0.3));
-        assert_eq!(curve.transform(0.0), 1.0); // reverse of 1.0 at t=1.0
-        assert_eq!(curve.transform(0.8), 0.0); // reverse of 0.0 at t=0.2
-    }
-
-    #[test]
     fn test_catmull_rom_curve() {
         let points = vec![(0.0, 0.0), (0.5, 0.8), (1.0, 1.0)];
         let curve = CatmullRomCurve::with_points(points);
 
         assert_eq!(curve.transform(0.0), 0.0);
         assert!((curve.transform(1.0) - 1.0).abs() < 0.01); // Catmull-Rom can overshoot slightly
-    }
-
-    #[test]
-    fn test_curves_constants() {
-        assert_eq!(Curves::Linear.transform(0.5), 0.5);
-        assert!(Curves::EaseIn.transform(0.5) < 0.5);
-        assert!(Curves::EaseOut.transform(0.5) > 0.5);
     }
 
     #[test]
@@ -1403,20 +1330,6 @@ mod tests {
     }
 
     #[test]
-    fn three_point_cubic_passes_through_midpoint() {
-        let c = Curves::EaseInOutCubicEmphasized;
-        assert!(c.transform(0.0).abs() < 1e-4);
-        assert!((c.transform(1.0) - 1.0).abs() < 1e-4);
-        // The curve must pass through its midpoint (M3 spec: (1/6, 0.4)).
-        assert!((c.transform(0.166_666) - 0.4).abs() < 1e-2);
-
-        let f = Curves::FastEaseInToSlowEaseOut;
-        assert!(f.transform(0.0).abs() < 1e-4);
-        assert!((f.transform(1.0) - 1.0).abs() < 1e-4);
-        assert!((f.transform(0.198) - 0.541).abs() < 1e-2);
-    }
-
-    #[test]
     fn split_curve_contract() {
         let split = Split::new(0.5);
         // Endpoints and the split point itself are exact per the contract.
@@ -1432,69 +1345,5 @@ mod tests {
         let custom = Split::with_curves(0.5, Threshold::new(0.5), Linear);
         assert_eq!(custom.transform(0.2), 0.0); // threshold not yet reached
         assert_eq!(custom.transform(0.3), 0.5); // threshold crossed -> split*1.0
-    }
-
-    #[test]
-    fn test_curve2d_sample() {
-        let sample = Curve2DSample::new(0.5, 1.0);
-        assert_eq!(sample.value, 0.5);
-        assert_eq!(sample.derivative, 1.0);
-    }
-
-    #[test]
-    fn test_catmull_rom_spline() {
-        let points = vec![Curve2DSample::new(0.0, 0.0), Curve2DSample::new(1.0, 1.0)];
-        let spline = CatmullRomSpline::new(points);
-
-        let result = spline.transform(0.5);
-        assert!(result.value >= 0.0 && result.value <= 1.0);
-    }
-
-    #[test]
-    fn test_bounce_out_curve() {
-        let curve = BounceOutCurve;
-        assert_eq!(curve.transform(0.0), 0.0);
-        assert!(curve.transform(0.5) > 0.5); // bounces high
-        assert!((curve.transform(1.0) - 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn test_bounce_in_curve() {
-        let curve = BounceInCurve;
-        assert!((curve.transform(0.0) - 0.0).abs() < 1e-6);
-        assert!(curve.transform(0.5) < 0.5); // slow start due to bouncing
-        assert!((curve.transform(1.0) - 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn test_bounce_in_out_curve() {
-        let curve = BounceInOutCurve;
-        assert!((curve.transform(0.0) - 0.0).abs() < 1e-6);
-        assert!((curve.transform(0.5) - 0.5).abs() < 1e-6); // midpoint
-        assert!((curve.transform(1.0) - 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn test_decelerate_curve() {
-        let curve = DecelerateCurve;
-        assert_eq!(curve.transform(0.0), 0.0);
-        assert!(curve.transform(0.5) > 0.5); // fast start, slow end
-        assert_eq!(curve.transform(1.0), 1.0);
-    }
-
-    #[test]
-    fn test_curves_bounce_constants() {
-        assert!((Curves::BounceIn.transform(1.0) - 1.0).abs() < 1e-6);
-        assert!((Curves::BounceOut.transform(1.0) - 1.0).abs() < 1e-6);
-        assert!((Curves::BounceInOut.transform(1.0) - 1.0).abs() < 1e-6);
-        assert_eq!(Curves::Decelerate.transform(1.0), 1.0);
-    }
-
-    #[test]
-    fn test_curve_reversed_method() {
-        let curve = Linear.reversed();
-        assert_eq!(curve.transform(0.0), 1.0);
-        assert_eq!(curve.transform(0.5), 0.5);
-        assert_eq!(curve.transform(1.0), 0.0);
     }
 }

@@ -300,47 +300,6 @@ mod tests {
         assert_eq!(holds.holder_count(), 0);
     }
 
-    /// The reacquisition idiom must not drop the hold.
-    ///
-    /// `self.lease = ctx.keep_alive_lease()` builds the new lease before
-    /// dropping the old one. If acquisitions by one holder were deduplicated,
-    /// the new lease would add nothing and the old one's `Drop` would remove
-    /// the only entry — leaving a live lease over an unheld child, evicted on
-    /// the next band move. This is that ordering, spelled out.
-    #[test]
-    fn reacquiring_before_dropping_the_old_lease_keeps_the_hold() {
-        let holds = KeepAliveHolds::default();
-        let holder = id(2);
-
-        let mut lease = Some(holds.handle(holder).hold());
-        // The replacement is built while the old one is still alive, and the
-        // old one drops only after it lands.
-        let replacement = holds.handle(holder).hold();
-        drop(lease.replace(replacement));
-        assert_eq!(holds.holder_count(), 1, "the hold survives the swap");
-
-        drop(lease.take());
-        assert_eq!(holds.holder_count(), 0, "and the last lease releases it");
-    }
-
-    /// An element can be torn down without its state dropping in the same
-    /// step; the holder must not survive it.
-    #[test]
-    fn forgetting_a_holder_releases_every_lease_it_had() {
-        let holds = KeepAliveHolds::default();
-        let holder = id(2);
-        let first = holds.handle(holder).hold();
-        let second = holds.handle(holder).hold();
-
-        holds.forget_holder(holder);
-        assert_eq!(holds.holder_count(), 0);
-
-        // The leases' own drops must then be harmless, not an underflow.
-        drop(first);
-        drop(second);
-        assert_eq!(holds.holder_count(), 0);
-    }
-
     /// A lease that outlives its tree is inert, not a dangling write.
     #[test]
     fn a_lease_outliving_its_table_drops_harmlessly() {

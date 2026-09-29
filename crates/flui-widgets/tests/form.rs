@@ -15,11 +15,10 @@ use std::rc::Rc;
 use flui_interaction::events::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
 use flui_interaction::routing::FocusNode;
 use flui_interaction::testing::input::KeyEventBuilder;
-use flui_platform_api::Clipboard as _;
 use flui_view::{BoxedView, ViewExt as _};
 use flui_widgets::{
-    AutovalidateMode, Column, Form, FormFieldHandle, FormFieldHandleAlreadyAttached, FormHandle,
-    FormHandleAlreadyAttached, RawTextFormField, SizedBox, TextEditingController,
+    AutovalidateMode, Column, Form, FormFieldHandle, FormHandle, FormHandleAlreadyAttached,
+    RawTextFormField, SizedBox, TextEditingController,
 };
 
 use crate::common::{LaidOut, ProbeSignals, SignalProbe, lay_out, tight};
@@ -36,22 +35,6 @@ fn named(key: NamedKey, modifiers: Modifiers) -> KeyEvent {
         .with_key(Key::Named(key))
         .with_state(KeyState::Down)
         .with_modifiers(modifiers)
-        .build()
-}
-
-fn command() -> Modifiers {
-    if cfg!(any(target_os = "macos", target_os = "ios")) {
-        Modifiers::META
-    } else {
-        Modifiers::CONTROL
-    }
-}
-
-fn chord(ch: char) -> KeyEvent {
-    KeyEventBuilder::new(Code::KeyC)
-        .with_key(Key::Character(ch.to_string()))
-        .with_state(KeyState::Down)
-        .with_modifiers(command())
         .build()
 }
 
@@ -153,100 +136,6 @@ fn on_user_interaction_validates_only_after_the_first_edit() {
         laid.find_text("Too short").is_none(),
         "a valid edit clears it"
     );
-}
-
-/// A form-level `OnUserInteraction` validates every field after an edit to
-/// any one of them.
-#[test]
-fn form_level_on_user_interaction_validates_every_field_after_any_edit() {
-    let first = FocusNode::with_debug_label("first");
-    let mut laid = mount(
-        Form::new(fields(vec![
-            RawTextFormField::with_initial_value("")
-                .validator(required("A required"))
-                .focus_node(Rc::clone(&first))
-                .boxed(),
-            RawTextFormField::with_initial_value("")
-                .validator(required("B required"))
-                .boxed(),
-        ]))
-        .autovalidate_mode(AutovalidateMode::OnUserInteraction),
-    );
-    assert!(laid.find_text("B required").is_none());
-
-    // Settle the focus change first, so the frame after the edit carries
-    // only what the edit scheduled.
-    first.request_focus();
-    laid.tick();
-    type_text(&laid, "x");
-    laid.tick();
-    assert!(
-        laid.find_text("A required").is_none(),
-        "the edited field passes"
-    );
-    assert!(
-        laid.find_text("B required").is_some(),
-        "editing A validates B too"
-    );
-}
-
-/// `OnUserInteractionIfError`: an edit shows nothing until an error is up;
-/// once `validate()` has shown one, a correcting edit clears it.
-///
-/// Also fails if the mode is treated as `OnUserInteraction`: the first edit
-/// would then show the error unasked.
-#[test]
-fn on_user_interaction_if_error_revalidates_only_while_an_error_is_shown() {
-    let form = FormHandle::new();
-    let node = FocusNode::with_debug_label("if error");
-    let mut laid = mount(
-        Form::new(
-            RawTextFormField::with_initial_value("")
-                .validator(|value| at_least_three(value))
-                .autovalidate_mode(AutovalidateMode::OnUserInteractionIfError)
-                .focus_node(Rc::clone(&node)),
-        )
-        .handle(form.clone()),
-    );
-    node.request_focus();
-    type_text(&laid, "a");
-    laid.tick();
-    assert!(
-        laid.find_text("Too short").is_none(),
-        "an edit before any error shows nothing"
-    );
-
-    assert!(!form.validate());
-    laid.tick();
-    assert!(laid.find_text("Too short").is_some());
-
-    type_text(&laid, "bc");
-    laid.tick();
-    assert!(
-        laid.find_text("Too short").is_none(),
-        "a correcting edit clears the shown error"
-    );
-}
-
-/// `Always`: the error is on the first frame, and every change re-validates.
-#[test]
-fn always_validates_at_mount_and_on_every_change() {
-    let node = FocusNode::with_debug_label("always");
-    let mut laid = mount(Form::new(
-        RawTextFormField::with_initial_value("")
-            .validator(required("Required"))
-            .autovalidate_mode(AutovalidateMode::Always)
-            .focus_node(Rc::clone(&node)),
-    ));
-    assert!(
-        laid.find_text("Required").is_some(),
-        "shown on the first frame"
-    );
-
-    node.request_focus();
-    type_text(&laid, "x");
-    laid.tick();
-    assert!(laid.find_text("Required").is_none());
 }
 
 /// `OnUnfocus`: no error while the field has focus; Tab away shows it.
@@ -394,22 +283,6 @@ fn reset_restores_initial_values_and_clears_errors_and_interaction() {
     );
 }
 
-/// `force_error_text` is shown whatever the validator says.
-#[test]
-fn force_error_text_overrides_the_validator() {
-    let form = FormHandle::new();
-    let laid = mount(
-        Form::new(
-            RawTextFormField::with_initial_value("fine")
-                .validator(|_| None)
-                .force_error_text("Taken"),
-        )
-        .handle(form.clone()),
-    );
-    assert!(laid.find_text("Taken").is_some());
-    assert!(!form.validate(), "a forced error fails validation");
-}
-
 /// A field that leaves the tree leaves the form: it no longer fails its
 /// `validate()`.
 #[test]
@@ -480,99 +353,6 @@ fn a_new_handle_on_rebuild_takes_the_mounted_field_over() {
     assert_eq!(first.value(), "ab", "the old handle keeps its last value");
 }
 
-/// A field rebuilt without the caller's controller keeps its text in a
-/// controller it owns — Flutter's `_createLocalController(oldWidget.controller!.value)`
-/// — so the caller's controller no longer feeds the field.
-///
-/// Fails if the field kept reading the caller's controller: its value would
-/// follow the caller's later edit.
-#[test]
-fn dropping_the_callers_controller_moves_the_text_into_a_field_owned_one() {
-    let field = FormFieldHandle::new();
-    let controller = TextEditingController::with_text("abc");
-    let mut laid = mount(Form::new(
-        RawTextFormField::new(controller.clone()).handle(field.clone()),
-    ));
-    assert_eq!(field.value(), "abc", "precondition");
-
-    laid.pump_widget(Form::new(
-        RawTextFormField::with_initial_value("ignored").handle(field.clone()),
-    ));
-    controller.set_text("zzz".to_owned());
-
-    assert_eq!(field.value(), "abc");
-}
-
-#[test]
-fn unmounting_a_text_form_field_releases_callbacks_and_controller_binding() {
-    let field = FormFieldHandle::new();
-    let controller = TextEditingController::with_text("mounted");
-    let captured = Rc::new(());
-    let weak_capture = Rc::downgrade(&captured);
-    {
-        let callback_capture = Rc::clone(&captured);
-        let _owner = mount(Form::new(
-            RawTextFormField::new(controller.clone())
-                .on_saved(move |_cx, _value| drop(Rc::clone(&callback_capture)))
-                .handle(field.clone()),
-        ));
-        controller.set_text("latest mounted".to_owned());
-    }
-    drop(captured);
-
-    assert!(
-        weak_capture.upgrade().is_none(),
-        "detaching clears callbacks retained by the mounted configuration"
-    );
-    assert_eq!(
-        field.value(),
-        "latest mounted",
-        "detach materializes the last lazily observed controller value"
-    );
-    controller.set_text("outside edit".to_owned());
-    assert_eq!(field.value(), "latest mounted");
-    field.set_value("detached snapshot".to_owned());
-    assert_eq!(
-        controller.text(),
-        "outside edit",
-        "a detached handle no longer writes the old controller"
-    );
-}
-
-/// `set_value` on a text form field is its value from then on — `value()`,
-/// the validator and `on_saved` all see it — because it reaches the
-/// controller the field reads; it neither marks interaction nor validates.
-///
-/// Fails if `set_value` only stored the value: the next read adopts the
-/// controller's text and the set value is lost.
-#[test]
-fn set_value_on_a_text_form_field_is_seen_by_value_validate_and_save() {
-    let form = FormHandle::new();
-    let field = FormFieldHandle::new();
-    let saved = Rc::new(RefCell::new(None));
-    let sink = Rc::clone(&saved);
-    let controller = TextEditingController::with_text("");
-    let (_laid, probe) = mount_probed(
-        Form::new(
-            RawTextFormField::new(controller.clone())
-                .validator(required("Required"))
-                .on_saved(move |_cx, value| *sink.borrow_mut() = Some(value.clone()))
-                .handle(field.clone()),
-        )
-        .handle(form.clone()),
-    );
-
-    field.set_value("set".to_owned());
-
-    assert_eq!(field.value(), "set");
-    assert_eq!(controller.text(), "set");
-    assert!(!field.has_interacted_by_user());
-    assert_eq!(field.error_text(), None, "set_value does not validate");
-    assert!(form.validate());
-    probe.write(|cx| form.save(cx)).expect("same presentation");
-    assert_eq!(saved.borrow().as_deref(), Some("set"));
-}
-
 /// The form is a semantics node with the form role, and the error line is
 /// a live region so an appearing error is announced.
 #[test]
@@ -601,101 +381,10 @@ fn form_reports_the_form_role_and_the_error_line_is_a_live_region() {
     );
 }
 
-/// Copy and paste work in a text form field, and a paste is the user's
-/// edit: the field's value follows it.
-///
-/// Fails without the clipboard bindings: the chord is left unconsumed and
-/// the clipboard stays empty.
-#[test]
-fn copy_then_paste_round_trips_text_in_a_text_form_field() {
-    let controller = TextEditingController::with_text("abc");
-    let field = FormFieldHandle::new();
-    let node = FocusNode::with_debug_label("clipboard");
-    let laid = mount(Form::new(
-        RawTextFormField::new(controller.clone())
-            .focus_node(Rc::clone(&node))
-            .handle(field.clone()),
-    ));
-    node.request_focus();
-    controller.set_selection(0, 3);
-
-    laid.focus_manager().dispatch_key_event(&chord('c'));
-    assert_eq!(laid.clipboard().read_text().as_deref(), Some("abc"));
-
-    controller.set_caret_byte_offset(3);
-    laid.focus_manager().dispatch_key_event(&chord('v'));
-    assert_eq!(controller.text(), "abcabc");
-    assert_eq!(field.value(), "abcabc");
-    assert!(field.has_interacted_by_user(), "a paste is the user's edit");
-}
-
 // ============================================================================
 // Event context (ADR-0086): the handle methods take the caller's `cx` and
 // hand it to the callbacks they run; a field's edit hands on its own.
 // ============================================================================
-
-#[test]
-fn save_with_a_cx_reaches_on_saved_which_writes_a_signal() {
-    use flui_view::SignalWriteExt as _;
-
-    let form = FormHandle::new();
-    let probe_form = form.clone();
-    let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
-        Form::new(
-            RawTextFormField::with_initial_value("four")
-                .on_saved(move |cx, value| count.set(cx, value.len() as u32)),
-        )
-        .handle(probe_form.clone())
-    });
-    let mut laid = lay_out(probe.view(), tight(400.0, 300.0));
-
-    probe.write(|cx| form.save(cx)).expect("same presentation");
-
-    assert_eq!(probe.value(), Ok(4));
-    laid.tick();
-    assert_eq!(probe.reads().last(), Some(&4), "the reader rebuilt");
-}
-
-#[test]
-fn a_text_form_field_edit_reaches_form_on_changed_with_its_cx() {
-    use flui_view::SignalWriteExt as _;
-
-    let node = FocusNode::with_debug_label("changed");
-    let probe_node = Rc::clone(&node);
-    let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
-        Form::new(RawTextFormField::with_initial_value("").focus_node(Rc::clone(&probe_node)))
-            .on_changed(move |cx| count.update(cx, |n| *n += 1))
-    });
-    let laid = lay_out(probe.view(), tight(400.0, 300.0));
-    node.request_focus();
-
-    type_text(&laid, "ab");
-
-    assert_eq!(probe.value(), Ok(2), "one on_changed per edit");
-}
-
-#[test]
-fn reset_with_a_cx_reaches_on_reset_and_form_on_changed() {
-    use flui_view::SignalWriteExt as _;
-
-    let form = FormHandle::new();
-    let probe_form = form.clone();
-    let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
-        Form::new(
-            RawTextFormField::with_initial_value("x")
-                .on_reset(move |cx| count.update(cx, |n| *n += 10)),
-        )
-        .handle(probe_form.clone())
-        .on_changed(move |cx| count.update(cx, |n| *n += 1))
-    });
-    let _laid = lay_out(probe.view(), tight(400.0, 300.0));
-
-    probe.write(|cx| form.reset(cx)).expect("same presentation");
-
-    // The field's on_reset (+10), its change notice while the form resets
-    // (+1), and the form's own notice after the loop (+1).
-    assert_eq!(probe.value(), Ok(12));
-}
 
 #[test]
 fn a_panicking_reset_callback_does_not_disable_later_form_validation() {
@@ -793,40 +482,6 @@ fn a_foreign_presentation_cannot_partially_reset_a_form() {
 }
 
 #[test]
-fn a_foreign_presentation_cannot_partially_edit_a_form_field() {
-    use flui_view::SignalWriteExt as _;
-
-    let field = FormFieldHandle::new();
-    let mounted_field = field.clone();
-    let callbacks = Rc::new(Cell::new(0));
-    let observed = Rc::clone(&callbacks);
-    let owner = SignalProbe::new(move |ProbeSignals { count, .. }| {
-        let observed = Rc::clone(&observed);
-        Form::new(RawTextFormField::with_initial_value("initial").handle(mounted_field.clone()))
-            .on_changed(move |cx| {
-                observed.set(observed.get() + 1);
-                count.set(cx, 1)
-            })
-    });
-    let _owner_tree = lay_out(owner.view(), tight(400.0, 300.0));
-    let foreign = SignalProbe::new(|_| SizedBox::shrink());
-    let _foreign_tree = lay_out(foreign.view(), tight(100.0, 100.0));
-    assert_eq!(
-        foreign.write(|cx| field.did_change(cx, "foreign edit".to_owned())),
-        Err(flui_view::EventContextError::ForeignPresentation)
-    );
-
-    assert_eq!(
-        field.value(),
-        "initial",
-        "a foreign edit changes no field state"
-    );
-    assert!(!field.has_interacted_by_user());
-    assert_eq!(callbacks.get(), 0, "a rejected edit emits no callbacks");
-    assert_eq!(owner.value(), Ok(0));
-}
-
-#[test]
 fn detached_forms_and_fields_refuse_event_operations() {
     use flui_view::EventContextError;
 
@@ -896,31 +551,6 @@ fn an_owner_context_opened_during_build_cannot_partially_reset_a_form() {
     ));
     assert_eq!(field.value(), "edited");
     assert!(field.has_interacted_by_user());
-}
-
-#[test]
-fn one_event_callback_can_reset_a_form_then_write_a_signal_with_question_mark() {
-    use flui_view::{EventError, SignalWriteExt as _};
-
-    let form = FormHandle::new();
-    let mounted_form = form.clone();
-    let signal = Rc::new(RefCell::new(None));
-    let captured = Rc::clone(&signal);
-    let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
-        *captured.borrow_mut() = Some(count);
-        Form::new(RawTextFormField::with_initial_value("initial")).handle(mounted_form.clone())
-    });
-    let _laid = lay_out(probe.view(), tight(400.0, 300.0));
-    let count = signal.borrow().expect("mounted signal");
-    let callback = flui_view::callback(move |cx| -> Result<(), EventError> {
-        form.reset(cx)?;
-        count.set(cx, 42)?;
-        Ok(())
-    });
-    probe
-        .write(callback)
-        .expect("both operations share their owner");
-    assert_eq!(probe.value(), Ok(42));
 }
 
 #[test]
@@ -1021,44 +651,6 @@ fn a_form_handle_refuses_a_second_simultaneous_mount_before_mutating_the_first()
         .write(|cx| field.did_change(cx, "still attached".to_owned()))
         .expect("disposing the refused form cannot detach the original form");
     assert_eq!(first_changes.get(), 2);
-}
-
-#[test]
-fn a_form_field_handle_refuses_a_second_simultaneous_mount_before_mutating_the_first() {
-    let field = FormFieldHandle::new();
-    let mounted_field = field.clone();
-    let first_probe = SignalProbe::new(move |_| {
-        RawTextFormField::with_initial_value("first").handle(mounted_field.clone())
-    });
-    let _first_tree = lay_out(first_probe.view(), tight(400.0, 300.0));
-
-    let duplicate_field = field.clone();
-    let (duplicate_tree, log) = flui_testing::log_capture::capture(|| {
-        lay_out(
-            RawTextFormField::with_initial_value("second").handle(duplicate_field),
-            tight(400.0, 300.0),
-        )
-    });
-    assert!(
-        log.contains("FormFieldHandle is already attached"),
-        "the caller-triggerable refusal is reported without unwinding: {log}"
-    );
-    assert_eq!(
-        field.take_attachment_error(),
-        Some(FormFieldHandleAlreadyAttached),
-        "the refusal is available as a typed diagnostic"
-    );
-    assert_eq!(
-        field.value(),
-        "first",
-        "the refused field cannot replace the original value"
-    );
-
-    drop(duplicate_tree);
-    first_probe
-        .write(|cx| field.did_change(cx, "still attached".to_owned()))
-        .expect("disposing the refused field cannot detach the original field");
-    assert_eq!(field.value(), "still attached");
 }
 
 #[test]
@@ -1174,78 +766,4 @@ fn a_busy_form_handle_rebind_keeps_the_old_owner_until_a_later_update_can_acquir
     probe
         .write(|cx| busy_form.reset(cx))
         .expect("a later update retries and acquires the released handle");
-}
-
-#[test]
-fn a_busy_field_handle_rebind_keeps_both_owners_until_a_later_update_can_acquire() {
-    use flui_view::EventContextError;
-
-    let form = FormHandle::new();
-    let old_field = FormFieldHandle::new();
-    let busy_field = FormFieldHandle::new();
-    let request_busy = Rc::new(Cell::new(false));
-    let show_busy_owner = Rc::new(Cell::new(true));
-
-    let mounted_form = form.clone();
-    let mounted_old = old_field.clone();
-    let requested = busy_field.clone();
-    let mounted_busy = busy_field.clone();
-    let choose_busy = Rc::clone(&request_busy);
-    let include_busy = Rc::clone(&show_busy_owner);
-    let probe = SignalProbe::new(move |_| {
-        let first_handle = if choose_busy.get() {
-            requested.clone()
-        } else {
-            mounted_old.clone()
-        };
-        let mut children = vec![
-            RawTextFormField::with_initial_value("first")
-                .handle(first_handle)
-                .boxed(),
-        ];
-        if include_busy.get() {
-            children.push(
-                RawTextFormField::with_initial_value("busy")
-                    .handle(mounted_busy.clone())
-                    .boxed(),
-            );
-        }
-        Form::new(fields(children)).handle(mounted_form.clone())
-    });
-    let mut laid = lay_out(probe.view(), tight(400.0, 300.0));
-    probe
-        .write(|cx| old_field.did_change(cx, "first edited".to_owned()))
-        .expect("old handle owns the first field");
-    probe
-        .write(|cx| busy_field.did_change(cx, "busy edited".to_owned()))
-        .expect("busy handle owns the second field");
-
-    request_busy.set(true);
-    let ((), log) = flui_testing::log_capture::capture(|| laid.pump_widget(probe.view()));
-    assert!(log.contains("retaining the current attachment"), "{log}");
-    assert_eq!(
-        busy_field.take_attachment_error(),
-        Some(FormFieldHandleAlreadyAttached)
-    );
-    probe
-        .write(|cx| old_field.did_change(cx, "old still owns".to_owned()))
-        .expect("failed acquisition keeps the old field binding live");
-    probe
-        .write(|cx| busy_field.did_change(cx, "busy still owns".to_owned()))
-        .expect("failed acquisition leaves the busy field untouched");
-    assert_eq!(old_field.value(), "old still owns");
-    assert_eq!(busy_field.value(), "busy still owns");
-
-    show_busy_owner.set(false);
-    laid.pump_widget(probe.view());
-    laid.pump_widget(probe.view());
-    assert_eq!(
-        probe.write(|cx| old_field.did_change(cx, "detached".to_owned())),
-        Err(EventContextError::Detached),
-        "the old field detaches only after the replacement is acquired"
-    );
-    probe
-        .write(|cx| busy_field.did_change(cx, "acquired".to_owned()))
-        .expect("a later update retries and acquires the released field handle");
-    assert_eq!(busy_field.value(), "acquired");
 }

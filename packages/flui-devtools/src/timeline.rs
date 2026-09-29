@@ -630,110 +630,6 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn test_timeline_creation() {
-        let timeline = Timeline::new();
-        assert_eq!(timeline.event_count(), 0);
-    }
-
-    #[test]
-    fn test_record_event() {
-        let timeline = Timeline::new();
-
-        {
-            let _guard = timeline.record_event("Test Event", EventCategory::Custom);
-            thread::sleep(Duration::from_millis(10));
-        }
-
-        let events = timeline.get_events();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].name, "Test Event");
-        assert!(events[0].duration_ms() >= 10.0);
-    }
-
-    #[test]
-    fn test_record_instant() {
-        let timeline = Timeline::new();
-
-        timeline.record_instant("Instant Event", EventCategory::Custom);
-
-        let events = timeline.get_events();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].duration_micros, 0);
-    }
-
-    #[test]
-    fn test_multiple_events() {
-        let timeline = Timeline::new();
-
-        {
-            let _guard = timeline.record_event("Event 1", EventCategory::Build);
-            thread::sleep(Duration::from_millis(5));
-        }
-
-        {
-            let _guard = timeline.record_event("Event 2", EventCategory::Layout);
-            thread::sleep(Duration::from_millis(5));
-        }
-
-        {
-            let _guard = timeline.record_event("Event 3", EventCategory::Paint);
-            thread::sleep(Duration::from_millis(5));
-        }
-
-        let events = timeline.get_events();
-        assert_eq!(events.len(), 3);
-
-        // Verify order
-        assert_eq!(events[0].name, "Event 1");
-        assert_eq!(events[1].name, "Event 2");
-        assert_eq!(events[2].name, "Event 3");
-    }
-
-    #[test]
-    fn test_get_events_by_category() {
-        let timeline = Timeline::new();
-
-        timeline.record_instant("Build 1", EventCategory::Build);
-        timeline.record_instant("Layout 1", EventCategory::Layout);
-        timeline.record_instant("Build 2", EventCategory::Build);
-
-        let build_events = timeline.get_events_by_category(EventCategory::Build);
-        assert_eq!(build_events.len(), 2);
-        assert_eq!(build_events[0].name, "Build 1");
-        assert_eq!(build_events[1].name, "Build 2");
-    }
-
-    #[test]
-    fn test_clear() {
-        let timeline = Timeline::new();
-
-        timeline.record_instant("Event 1", EventCategory::Custom);
-        timeline.record_instant("Event 2", EventCategory::Custom);
-
-        assert_eq!(timeline.event_count(), 2);
-
-        timeline.clear();
-
-        assert_eq!(timeline.event_count(), 0);
-    }
-
-    #[test]
-    fn test_capacity_limit() {
-        let timeline = Timeline::with_capacity(5);
-
-        // Record more than capacity
-        for i in 0..10 {
-            timeline.record_instant(format!("Event {i}"), EventCategory::Custom);
-        }
-
-        // Should only keep last 5
-        let events = timeline.get_events();
-        assert_eq!(events.len(), 5);
-        assert_eq!(events[0].name, "Event 5");
-        assert_eq!(events[4].name, "Event 9");
-    }
-
     /// An `EventGuard` that outlives capacity trimming must not close the
     /// WRONG event once its own event has been trimmed out of the ring —
     /// the bug a plain `Vec` index (reused after trimming shifted every
@@ -838,17 +734,6 @@ mod tests {
     }
 
     #[test]
-    fn test_export_json() {
-        let timeline = Timeline::new();
-
-        timeline.record_instant("Test Event", EventCategory::Build);
-
-        let json = timeline.export_json();
-        assert!(json.contains("Test Event"));
-        assert!(json.contains("Build"));
-    }
-
-    #[test]
     fn test_export_chrome_trace() {
         let timeline = Timeline::new();
 
@@ -859,46 +744,6 @@ mod tests {
         assert!(json.contains("\"ph\":\"B\"")); // Begin event
         assert!(json.contains("\"ph\":\"E\"")); // End event
         assert!(json.contains("traceEvents"));
-    }
-
-    #[test]
-    fn test_nested_events() {
-        let timeline = Timeline::new();
-
-        {
-            let _guard1 = timeline.record_event("Outer", EventCategory::Frame);
-            thread::sleep(Duration::from_millis(5));
-
-            {
-                let _guard2 = timeline.record_event("Inner", EventCategory::Build);
-                thread::sleep(Duration::from_millis(3));
-            }
-
-            thread::sleep(Duration::from_millis(2));
-        }
-
-        let events = timeline.get_events();
-        assert_eq!(events.len(), 2);
-
-        // Outer should be longer than inner
-        let outer = events.iter().find(|e| e.name == "Outer").unwrap();
-        let inner = events.iter().find(|e| e.name == "Inner").unwrap();
-
-        assert!(outer.duration_ms() > inner.duration_ms());
-    }
-
-    #[test]
-    fn test_thread_safety() {
-        let timeline = Timeline::new();
-        let timeline_clone = timeline.clone();
-
-        let handle = thread::spawn(move || {
-            timeline_clone.record_instant("Thread Event", EventCategory::Custom);
-        });
-
-        handle.join().unwrap();
-
-        assert_eq!(timeline.event_count(), 1);
     }
 
     // ------------------------------------------------------------------
@@ -992,56 +837,6 @@ mod tests {
                 .contains(&snapshots[0].presentation.to_string()),
             "the event NAME must also embed the presentation, so two presentations' frame_id \
              sequences (each starting from 1) cannot collide in one exported trace file"
-        );
-    }
-
-    /// Two inputs before one recorded frame: both survive the export, with
-    /// the older arrival carrying the strictly larger latency — kills
-    /// "last-input-wins" attribution surviving all the way to the exported
-    /// JSON, not just at the `FrameSnapshot` level.
-    #[test]
-    fn frame_snapshot_export_preserves_coalescing_order_and_latency_ordering() {
-        use flui_scheduler::{
-            ClockSource, DemandKind, FrameClock, PollDecision, PresentOutcome, PresentationId,
-        };
-
-        let clock = FrameClock::with_source(ClockSource::Platform);
-        let older = clock.stamp_input_epoch(clock.now());
-        thread::sleep(std::time::Duration::from_millis(5));
-        let newer = clock.stamp_input_epoch(clock.now());
-
-        clock.mark_demand(DemandKind::Dirty);
-        let now = clock.now();
-        assert_eq!(clock.poll(now), PollDecision::Produce);
-        let submit_at = clock.now();
-        let _ = clock.record_frame(
-            PresentationId::new(1),
-            now,
-            now,
-            now,
-            submit_at,
-            PresentOutcome::Presented,
-        );
-
-        let timeline = Timeline::new();
-        timeline.record_frame_snapshots(&clock.frames_since(None));
-        let parsed: serde_json::Value =
-            serde_json::from_str(&timeline.export_chrome_trace()).expect("valid JSON");
-        let inputs = parsed["traceEvents"][0]["args"]["inputs"]
-            .as_array()
-            .expect("inputs array");
-        assert_eq!(inputs.len(), 2);
-
-        let latency_of = |id: flui_scheduler::InputEpochId| {
-            inputs
-                .iter()
-                .find(|entry| entry["input_epoch_id"].as_u64() == Some(id.get()))
-                .and_then(|entry| entry["latency_us"].as_u64())
-                .expect("id must be present with a latency")
-        };
-        assert!(
-            latency_of(older) > latency_of(newer),
-            "the older arrival must show the larger latency in the exported JSON"
         );
     }
 

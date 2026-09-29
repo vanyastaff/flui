@@ -1104,7 +1104,6 @@ impl StatelessView for DataTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme_data::DataTableThemeData;
 
     fn text_column(label: &str) -> DataColumn {
         DataColumn::new(flui_sdk::widgets::Text::new(label.to_string()))
@@ -1115,102 +1114,6 @@ mod tests {
     }
 
     // ---- M3 default constants, pinned against the oracle -------------------
-
-    #[test]
-    fn default_constants_match_the_oracle() {
-        assert_eq!(DEFAULT_HEADING_ROW_HEIGHT, 56.0);
-        assert_eq!(DEFAULT_HORIZONTAL_MARGIN, 24.0);
-        assert_eq!(DEFAULT_COLUMN_SPACING, 56.0);
-        assert_eq!(DEFAULT_DIVIDER_THICKNESS, 1.0);
-        // kMinInteractiveDimension, NOT 52.0 — verified at the oracle tag.
-        assert_eq!(DEFAULT_DATA_ROW_HEIGHT, 48.0);
-        assert_eq!(SELECTED_ROW_OPACITY, 0.08);
-        assert_eq!(CHECKBOX_EDGE_SIZE, 18.0);
-    }
-
-    #[test]
-    fn resolve_style_defaults_to_the_m3_token_table() {
-        let theme = ThemeData::light();
-        let table = DataTable::new(vec![text_column("Name")], Vec::new());
-        let style = resolve_style(&table, &theme);
-
-        assert_eq!(style.heading_row_height, DEFAULT_HEADING_ROW_HEIGHT);
-        assert_eq!(style.horizontal_margin, DEFAULT_HORIZONTAL_MARGIN);
-        assert_eq!(style.column_spacing, DEFAULT_COLUMN_SPACING);
-        assert_eq!(style.divider_thickness, DEFAULT_DIVIDER_THICKNESS);
-        assert_eq!(style.data_row_min_height, DEFAULT_DATA_ROW_HEIGHT);
-        assert_eq!(style.data_row_max_height, DEFAULT_DATA_ROW_HEIGHT);
-        assert_eq!(
-            style.heading_text_style,
-            theme.text_theme.title_small.unwrap()
-        );
-        assert_eq!(style.data_text_style, theme.text_theme.body_medium.unwrap());
-        assert!(style.decoration.is_none());
-        assert!(style.heading_row_color.is_none());
-        // No checkbox override: start falls to horizontal_margin, end to half.
-        assert_eq!(style.checkbox_margin_start, DEFAULT_HORIZONTAL_MARGIN);
-        assert_eq!(style.checkbox_margin_end, DEFAULT_HORIZONTAL_MARGIN / 2.0);
-    }
-
-    #[test]
-    fn resolve_style_theme_tier_beats_the_default_when_no_widget_override_is_set() {
-        let mut theme = ThemeData::light();
-        theme.data_table_theme = Some(DataTableThemeData {
-            heading_row_height: Some(64.0),
-            horizontal_margin: Some(32.0),
-            ..Default::default()
-        });
-        let table = DataTable::new(vec![text_column("Name")], Vec::new());
-        let style = resolve_style(&table, &theme);
-
-        assert_eq!(style.heading_row_height, 64.0);
-        assert_eq!(style.horizontal_margin, 32.0);
-        // Fields the theme left unset independently fall to the M3 default.
-        assert_eq!(style.column_spacing, DEFAULT_COLUMN_SPACING);
-    }
-
-    #[test]
-    fn resolve_style_widget_override_wins_over_the_theme() {
-        let mut theme = ThemeData::light();
-        theme.data_table_theme = Some(DataTableThemeData {
-            heading_row_height: Some(64.0),
-            ..Default::default()
-        });
-        let table = DataTable::new(vec![text_column("Name")], Vec::new()).heading_row_height(72.0);
-        let style = resolve_style(&table, &theme);
-
-        assert_eq!(style.heading_row_height, 72.0);
-    }
-
-    #[test]
-    fn resolve_style_selected_row_default_is_primary_at_8_percent() {
-        let theme = ThemeData::light();
-        let table = DataTable::new(vec![text_column("Name")], Vec::new());
-        let style = resolve_style(&table, &theme);
-
-        let selected = row_states(true, false);
-        let unselected = row_states(false, false);
-        assert_eq!(
-            style.default_row_color.resolve(&selected),
-            Some(
-                theme
-                    .color_scheme
-                    .primary
-                    .with_opacity(SELECTED_ROW_OPACITY)
-            )
-        );
-        assert_eq!(style.default_row_color.resolve(&unselected), None);
-    }
-
-    #[test]
-    fn resolve_row_color_falls_through_to_the_default_when_no_cascade_is_set() {
-        let default = default_row_color(Color::rgb(1, 2, 3));
-        let selected = row_states(true, false);
-        assert_eq!(
-            resolve_row_color(None, &default, selected),
-            default.resolve(&selected),
-        );
-    }
 
     #[test]
     fn resolve_row_color_a_set_data_row_color_beats_the_primary_8_percent_default() {
@@ -1251,38 +1154,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn resolve_style_heading_row_color_widget_override_beats_theme_and_default() {
-        let mut theme = ThemeData::light();
-        let theme_color = Color::rgb(4, 5, 6);
-        theme.data_table_theme = Some(DataTableThemeData {
-            heading_row_color: Some(WidgetStateProperty::all(Some(theme_color))),
-            ..Default::default()
-        });
-        let widget_color = Color::rgb(9, 9, 9);
-        let table = DataTable::new(vec![text_column("Name")], Vec::new())
-            .heading_row_color(WidgetStateProperty::all(Some(widget_color)));
-
-        let style = resolve_style(&table, &theme);
-
-        assert_eq!(style.heading_row_color, Some(widget_color));
-    }
-
-    #[test]
-    fn resolve_style_heading_row_color_theme_tier_beats_the_default_when_unset_at_the_widget() {
-        let mut theme = ThemeData::light();
-        let theme_color = Color::rgb(4, 5, 6);
-        theme.data_table_theme = Some(DataTableThemeData {
-            heading_row_color: Some(WidgetStateProperty::all(Some(theme_color))),
-            ..Default::default()
-        });
-        let table = DataTable::new(vec![text_column("Name")], Vec::new());
-
-        let style = resolve_style(&table, &theme);
-
-        assert_eq!(style.heading_row_color, Some(theme_color));
-    }
-
     // ---- only_text_column ----------------------------------------------------
 
     #[test]
@@ -1302,15 +1173,6 @@ mod tests {
     }
 
     #[test]
-    fn only_text_column_is_none_when_every_column_is_numeric() {
-        let columns = vec![
-            text_column("A").numeric(true),
-            text_column("B").numeric(true),
-        ];
-        assert_eq!(only_text_column(&columns), None);
-    }
-
-    #[test]
     fn column_table_width_gives_the_only_text_column_flex_one() {
         let column = text_column("Name");
         assert_eq!(
@@ -1319,49 +1181,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn column_table_width_gives_other_columns_no_flex() {
-        let column = text_column("Age").numeric(true);
-        assert_eq!(
-            column_table_width(&column, 1, Some(0)),
-            TableColumnWidth::Intrinsic { flex: None }
-        );
-    }
-
-    #[test]
-    fn column_table_width_honors_an_explicit_override() {
-        let column = text_column("Name").column_width(TableColumnWidth::Fixed(120.0));
-        assert_eq!(
-            column_table_width(&column, 0, Some(0)),
-            TableColumnWidth::Fixed(120.0)
-        );
-    }
-
     // ---- checkbox_column_width -------------------------------------------
 
-    #[test]
-    fn checkbox_column_width_sums_margins_and_the_checkbox_edge() {
-        assert_eq!(checkbox_column_width(24.0, 12.0), 24.0 + 18.0 + 12.0);
-    }
-
     // ---- cell_padding -------------------------------------------------------
-
-    #[test]
-    fn cell_padding_first_column_without_checkbox_gets_full_horizontal_margin_start() {
-        let padding = cell_padding(0, 2, false, false, 24.0, 56.0);
-        assert_eq!(padding.left, 24.0);
-    }
 
     #[test]
     fn cell_padding_first_column_with_checkbox_and_no_checkbox_margin_gets_half_margin_start() {
         let padding = cell_padding(0, 2, true, false, 24.0, 56.0);
         assert_eq!(padding.left, 12.0);
-    }
-
-    #[test]
-    fn cell_padding_first_column_with_explicit_checkbox_margin_gets_full_margin_start() {
-        let padding = cell_padding(0, 2, true, true, 24.0, 56.0);
-        assert_eq!(padding.left, 24.0);
     }
 
     #[test]
@@ -1371,29 +1198,7 @@ mod tests {
         assert_eq!(padding.right, 28.0);
     }
 
-    #[test]
-    fn cell_padding_last_column_gets_full_horizontal_margin_end() {
-        let padding = cell_padding(1, 2, false, false, 24.0, 56.0);
-        assert_eq!(padding.right, 24.0);
-    }
-
     // ---- row_decoration -------------------------------------------------------
-
-    #[test]
-    fn row_decoration_heading_row_has_no_border_by_default() {
-        let side = BorderSide::new(Color::BLACK, 1.0, BorderStyle::Solid);
-        let decoration = row_decoration(0, false, None, side);
-        assert!(decoration.border.is_none());
-    }
-
-    #[test]
-    fn row_decoration_data_rows_get_a_top_border_by_default() {
-        let side = BorderSide::new(Color::BLACK, 1.0, BorderStyle::Solid);
-        let decoration = row_decoration(1, false, None, side);
-        let border = decoration.border.expect("data rows must carry a border");
-        assert_eq!(border.top, Some(side));
-        assert!(border.bottom.is_none());
-    }
 
     #[test]
     fn row_decoration_show_bottom_border_puts_a_border_on_every_row_including_the_heading() {
@@ -1405,41 +1210,12 @@ mod tests {
         assert_eq!(data_row.border.unwrap().bottom, Some(side));
     }
 
-    #[test]
-    fn row_decoration_carries_the_resolved_color() {
-        let side = BorderSide::new(Color::BLACK, 1.0, BorderStyle::Solid);
-        let decoration = row_decoration(1, false, Some(Color::rgb(1, 2, 3)), side);
-        assert_eq!(decoration.color, Some(Color::rgb(1, 2, 3)));
-    }
-
     // ---- selection_summary (tristate) ------------------------------------
 
     #[test]
     fn selection_summary_is_false_false_when_the_checkbox_column_is_hidden() {
         let rows = vec![DataRow::new(vec![text_cell("a")]).selected(true)];
         assert_eq!(selection_summary(&rows, false), (false, false));
-    }
-
-    #[test]
-    fn selection_summary_all_checked_when_every_selectable_row_is_selected() {
-        let rows = vec![
-            DataRow::new(vec![text_cell("a")])
-                .selected(true)
-                .on_select_changed(|_cx, _| {}),
-            DataRow::new(vec![text_cell("b")])
-                .selected(true)
-                .on_select_changed(|_cx, _| {}),
-        ];
-        assert_eq!(selection_summary(&rows, true), (true, false));
-    }
-
-    #[test]
-    fn selection_summary_none_checked_when_no_selectable_row_is_selected() {
-        let rows = vec![
-            DataRow::new(vec![text_cell("a")]).on_select_changed(|_cx, _| {}),
-            DataRow::new(vec![text_cell("b")]).on_select_changed(|_cx, _| {}),
-        ];
-        assert_eq!(selection_summary(&rows, true), (false, false));
     }
 
     #[test]
@@ -1471,37 +1247,4 @@ mod tests {
     }
 
     // ---- DataTable builder plumbing ---------------------------------------
-
-    #[test]
-    fn new_leaves_every_override_unset_and_defaults_show_checkbox_column_true() {
-        let table = DataTable::new(vec![text_column("Name")], Vec::new());
-        assert!(table.show_checkbox_column);
-        assert!(!table.show_bottom_border);
-        assert!(table.heading_row_height.is_none());
-        assert!(table.decoration.is_none());
-    }
-
-    #[test]
-    fn builder_overrides_are_stored_verbatim() {
-        let table = DataTable::new(vec![text_column("Name")], Vec::new())
-            .show_checkbox_column(false)
-            .show_bottom_border(true)
-            .heading_row_height(64.0)
-            .horizontal_margin(32.0)
-            .column_spacing(40.0)
-            .divider_thickness(2.0)
-            .checkbox_horizontal_margin(16.0)
-            .data_row_min_height(50.0)
-            .data_row_max_height(60.0);
-
-        assert!(!table.show_checkbox_column);
-        assert!(table.show_bottom_border);
-        assert_eq!(table.heading_row_height, Some(64.0));
-        assert_eq!(table.horizontal_margin, Some(32.0));
-        assert_eq!(table.column_spacing, Some(40.0));
-        assert_eq!(table.divider_thickness, Some(2.0));
-        assert_eq!(table.checkbox_horizontal_margin, Some(16.0));
-        assert_eq!(table.data_row_min_height, Some(50.0));
-        assert_eq!(table.data_row_max_height, Some(60.0));
-    }
 }

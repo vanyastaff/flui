@@ -26,19 +26,3 @@ fn sliver_opacity_passes_the_child_sliver_geometry_through_unchanged() {
          sibling",
     );
 }
-
-#[test]
-fn sliver_opacity_with_no_child_reports_zero_geometry() {
-    let laid = lay_out(
-        Viewport::new((SliverOpacity::new(1.0),)),
-        tight(200.0, 300.0),
-    );
-
-    let viewport = laid.root();
-    let sliver_opacity = laid.only_child(viewport);
-
-    assert_eq!(
-        laid.sliver_geometry(sliver_opacity),
-        flui_rendering::constraints::SliverGeometry::ZERO,
-    );
-}

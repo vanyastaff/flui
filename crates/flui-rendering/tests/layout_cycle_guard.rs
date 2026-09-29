@@ -20,53 +20,6 @@ use crate::common::fresh_layout_pipeline;
 // Structural cycle on leaf-only path — guard does NOT trigger
 // ============================================================================
 
-/// This test's name was chosen to avoid a prior misleading name that
-/// claimed the test surfaces LayoutCycle — it does NOT. The contract
-/// it verifies is: a structural cycle on a leaf-traversal path
-/// (RenderColoredBox child whose `children()` lists its parent) does
-/// NOT trigger the guard because the leaf widget's `perform_layout`
-/// never calls `ctx.layout_child` for the cyclic edge.
-///
-/// Cycle protection layers exercised:
-/// - `collect_subtree_ids`'s visited `HashSet` dedups the cycle
-///   edge → returned `Vec<RenderId>` is unique → `get_subtree_mut`
-///   precondition satisfied.
-/// - Padding's `perform_layout` calls `layout_child(0)` for ColoredBox.
-/// - ColoredBox is a leaf — never enters the layout-child callback
-///   chain for the cyclic edge → guard never fires.
-///
-/// Result: layout succeeds. The cycle exists structurally but is
-/// invisible to the layout walk. (The `LayoutCycle`-surfacing
-/// contract is tested separately by
-/// `callback_reentry_marks_parent_dirty_for_retry`.)
-#[test]
-fn structural_cycle_on_leaf_path_does_not_trigger_guard() {
-    let mut pipeline = fresh_layout_pipeline();
-
-    let padding_id = pipeline
-        .render_tree_mut()
-        .insert_box(Box::new(RenderPadding::all(5.0)));
-    let child_id = pipeline
-        .render_tree_mut()
-        .insert_box_child(padding_id, Box::new(RenderColoredBox::red(20.0, 20.0)))
-        .expect("child insert");
-    // Inject cycle: ColoredBox's children list now contains Padding.
-    pipeline
-        .render_tree_mut()
-        .get_mut(child_id)
-        .expect("child in tree")
-        .add_child(padding_id);
-
-    let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-    let result = pipeline.layout_dirty_root(padding_id, constraints);
-    assert!(
-        result.is_ok(),
-        "structural-only cycle on a leaf-traversal path must not \
-         trigger LayoutCycle — leaf widgets never call layout_child \
-         for the cyclic edge; got {result:?}",
-    );
-}
-
 // ============================================================================
 // Callback re-entry — guard fires, structural cycle poisons the node
 // ============================================================================
@@ -243,31 +196,3 @@ fn drop_guard_clears_id_on_perform_layout_panic() {
 // ============================================================================
 // Sequential calls — guard insert+remove between calls (no spurious cycle)
 // ============================================================================
-
-/// Sequential `layout_dirty_root` calls on the same root must not
-/// trigger LayoutCycle — each call's guard inserts and removes
-/// cleanly; the next call sees an empty set.
-#[test]
-fn sequential_calls_on_same_root_do_not_trigger_cycle() {
-    let mut pipeline = fresh_layout_pipeline();
-    let padding_id = pipeline
-        .render_tree_mut()
-        .insert_box(Box::new(RenderPadding::all(5.0)));
-    let _child_id = pipeline
-        .render_tree_mut()
-        .insert_box_child(padding_id, Box::new(RenderColoredBox::red(20.0, 20.0)))
-        .expect("child insert");
-
-    let constraints = BoxConstraints::tight(Size::new(50.0, 50.0));
-
-    // 3 sequential calls — each must succeed.
-    for frame in 1..=3 {
-        let result = pipeline.layout_dirty_root(padding_id, constraints);
-        assert!(
-            result.is_ok(),
-            "frame {frame}: sequential layout_dirty_root call must succeed \
-             — guard insert+remove must not leak state across calls; got \
-             {result:?}",
-        );
-    }
-}

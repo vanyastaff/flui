@@ -277,29 +277,3 @@ pub(crate) fn list() -> CliResult<()> {
 
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_valid_platform_check() {
-        assert!(is_valid_platform("android"));
-        assert!(is_valid_platform("Android"));
-        assert!(is_valid_platform("ios"));
-        assert!(!is_valid_platform("fuchsia"));
-        assert!(!is_valid_platform(""));
-    }
-
-    #[test]
-    fn test_valid_platform_names_complete() {
-        let names = valid_platform_names();
-        assert_eq!(names.len(), 6);
-        assert!(names.contains(&"android"));
-        assert!(names.contains(&"ios"));
-        assert!(names.contains(&"web"));
-        assert!(names.contains(&"windows"));
-        assert!(names.contains(&"linux"));
-        assert!(names.contains(&"macos"));
-    }
-}

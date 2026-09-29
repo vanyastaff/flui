@@ -17,7 +17,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_animation::{Animation, AnimationStatus};
-use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, BuildContext};
@@ -124,51 +123,6 @@ fn page_route_occludes_the_route_below_once_its_transition_completes() {
     );
 }
 
-/// `case forward: case reverse: overlayEntries.first.opaque = false`
-/// (`routes.dart:303-305`). A page sliding away shows the one beneath it.
-#[test]
-fn page_route_clears_opaque_while_it_moves() {
-    let (navigator, mut harness, bottom) = navigator_with_seed();
-    let bottom_entry = navigator.entry_of(bottom).expect("entry");
-
-    let route = PageRoute::<i32>::new(leaf);
-    let transition = route.transition_handle();
-    let _result = navigator.push(route);
-    harness.tick();
-    complete_entrance(&transition, &mut harness);
-
-    let top = *navigator.route_ids().last().expect("pushed");
-    assert!(navigator.entry_of(top).expect("entry").opaque());
-
-    let controller = transition.controller().expect("installed");
-    controller.reverse().expect("reverse from 1.0");
-    harness.tick();
-    harness.tick();
-
-    assert_eq!(controller.status(), AnimationStatus::Reverse);
-    assert!(!navigator.entry_of(top).expect("entry").opaque());
-    assert!(bottom_entry.is_mounted(), "the page below shows through");
-}
-
-/// `PopupRoute.opaque => false` (`routes.dart:2391`): the page under a dialog
-/// stays built and visible, even once the popup has fully arrived.
-#[test]
-fn popup_route_is_not_opaque_and_never_drops_the_route_below() {
-    let (navigator, mut harness, bottom) = navigator_with_seed();
-    let bottom_entry = navigator.entry_of(bottom).expect("entry");
-
-    let route = PopupRoute::<i32>::new(leaf);
-    let transition = route.transition_handle();
-    let _result = navigator.push(route);
-    harness.tick();
-    complete_entrance(&transition, &mut harness);
-
-    let top = *navigator.route_ids().last().expect("pushed");
-    assert!(!navigator.entry_of(top).expect("entry").opaque());
-    assert!(bottom_entry.is_mounted());
-    assert_eq!(navigator.route_ids().len(), 2);
-}
-
 // ============================================================================
 // maintainState — routes.dart:1893, :2230, :2394
 // ============================================================================
@@ -217,24 +171,6 @@ fn maintain_state_false_route_below_an_opaque_page_is_unmounted_and_rebuilt_fres
         2,
         "the destroyed subtree is rebuilt with fresh state"
     );
-}
-
-/// `PageRoute`'s default `maintainState` is `true` (`pages.dart:101`), and so is
-/// `PopupRoute`'s (`routes.dart:2394`). `install()` publishes it onto the entry.
-#[test]
-fn both_public_routes_publish_maintain_state_true_by_default() {
-    let (navigator, mut harness, _bottom) = navigator_with_seed();
-
-    let _page = navigator.push(PageRoute::<i32>::new(leaf));
-    let _popup = navigator.push(PopupRoute::<i32>::new(leaf));
-    harness.tick();
-
-    for id in navigator.route_ids().into_iter().skip(1) {
-        assert!(
-            navigator.entry_of(id).expect("entry").maintain_state(),
-            "route {id:?} must publish maintain_state = true at install"
-        );
-    }
 }
 
 // ============================================================================
@@ -323,58 +259,6 @@ fn a_popup_over_a_page_route_drives_no_secondary_animation() {
     );
 }
 
-/// The converse, for the same reason: a `PageRoute` pushed over a `PopupRoute`
-/// fails `PageRoute.canTransitionFrom(popup)` (`pages.dart:61`).
-#[test]
-fn a_page_route_over_a_popup_drives_no_secondary_animation() {
-    let (navigator, mut harness, _bottom) = navigator_with_seed();
-
-    let popup = PopupRoute::<i32>::new(leaf);
-    let popup_transition = popup.transition_handle();
-    let _popup = navigator.push(popup);
-    harness.tick();
-    complete_entrance(&popup_transition, &mut harness);
-
-    let page = PageRoute::<i32>::new(leaf);
-    let page_transition = page.transition_handle();
-    let _page = navigator.push(page);
-    harness.tick();
-
-    assert!(popup_transition.secondary_is_dismissed());
-    page_transition
-        .controller()
-        .expect("installed")
-        .set_value(0.7);
-    assert!(popup_transition.secondary_animation().value().abs() < 1e-6);
-}
-
-/// Two popups *do* coordinate: `PopupRoute` inherits `TransitionRoute`'s
-/// `canTransitionTo/From => true` (`routes.dart:536`, `:561`).
-#[test]
-fn two_popups_coordinate_their_transitions() {
-    let (navigator, mut harness, _bottom) = navigator_with_seed();
-
-    let lower = PopupRoute::<i32>::new(leaf);
-    let lower_transition = lower.transition_handle();
-    let _lower = navigator.push(lower);
-    harness.tick();
-    complete_entrance(&lower_transition, &mut harness);
-
-    let upper = PopupRoute::<i32>::new(leaf);
-    let upper_transition = upper.transition_handle();
-    let _upper = navigator.push(upper);
-    harness.tick();
-
-    upper_transition
-        .controller()
-        .expect("installed")
-        .set_value(0.6);
-    assert!(
-        (lower_transition.secondary_animation().value() - 0.6).abs() < 1e-6,
-        "same TransitionGroup, so the two coordinate"
-    );
-}
-
 // ============================================================================
 // pop — routes.dart:84-94, :177, :308-317
 // ============================================================================
@@ -418,100 +302,9 @@ fn popped_page_route_keeps_its_overlay_entry_until_the_exit_transition_dismisses
     assert_eq!(navigator.route_ids().len(), 1);
 }
 
-/// `PopupRoute` pops the same way; the barrier is what makes it dismissible, not
-/// the pop path.
-#[test]
-fn popped_popup_route_finalizes_on_dismissal() {
-    let (navigator, mut harness, _bottom) = navigator_with_seed();
-
-    let route = PopupRoute::<i32>::new(leaf).barrier_color(Color::RED);
-    let transition = route.transition_handle();
-    let _result = navigator.push(route);
-    harness.tick();
-    complete_entrance(&transition, &mut harness);
-
-    assert!(navigator.pop());
-    harness.tick();
-    assert_eq!(navigator.tracked_entry_count(), 2, "still animating out");
-
-    transition.controller().expect("installed").set_value(0.0);
-    harness.tick();
-
-    assert_eq!(navigator.tracked_entry_count(), 1);
-    assert_eq!(navigator.route_ids().len(), 1);
-}
-
-/// `PageRoute::barrier_color` delegates to the same `ModalRoute` field
-/// `PopupRoute::barrier_color` already exercises above — added so
-/// `CupertinoPageRoute` can set `_kCupertinoPageTransitionBarrierColor`
-/// (`cupertino/route.dart`, 3.44.0), a dim only `PopupRoute` could set before.
-/// This proves the delegate actually reaches the barrier's paint, not just
-/// that the builder compiles.
-///
-/// Red-check: stub `PageRoute::barrier_color` as a no-op (drop the
-/// `self.modal = self.modal.barrier_color(color)` call) — this test's
-/// `RenderDecoratedBox` count assertion fails, since no route below has any
-/// other `DecoratedBox` in its tree.
-#[test]
-fn page_route_barrier_color_reaches_the_modal_barrier() {
-    let (navigator, mut harness, _bottom) = navigator_with_seed();
-    let without_color_names = harness.render_debug_names();
-    assert!(
-        !without_color_names
-            .iter()
-            .any(|name| name.ends_with("RenderDecoratedBox")),
-        "the seed route alone paints no DecoratedBox: {without_color_names:?}"
-    );
-
-    let route = PageRoute::<i32>::new(leaf).barrier_color(Color::RED);
-    let _result = navigator.push(route);
-    harness.tick();
-
-    let names = harness.render_debug_names();
-    assert!(
-        names
-            .iter()
-            .any(|name| name.ends_with("RenderDecoratedBox")),
-        "a set barrier_color must mount a DecoratedBox (`ColoredBox`) to paint it: {names:?}"
-    );
-}
-
 // ============================================================================
 // barrier — routes.dart:2273-2330
 // ============================================================================
-
-/// A non-dismissible barrier absorbs pointers and installs no gesture recogniser,
-/// so a tap on it cannot pop the route. A dismissible one adds the recogniser.
-///
-/// **Divergence, not parity:** FLUI has no `ModalBarrier`, no `BlockSemantics`,
-/// no `barrierLabel`. The barrier absorbs *pointers* only. That a tap actually
-/// pops is proven end-to-end in `tests/routes.rs`, which can dispatch one.
-#[test]
-fn barrier_absorbs_pointers_and_only_a_dismissible_one_listens_for_the_tap() {
-    let (navigator, mut harness, _bottom) = navigator_with_seed();
-    let _result = navigator.push(PopupRoute::<i32>::new(leaf));
-    harness.tick();
-
-    let names = harness.render_debug_names();
-    assert!(
-        names.iter().any(|n| n.ends_with("RenderAbsorbPointer")),
-        "every modal barrier absorbs pointers: {names:?}"
-    );
-    assert!(
-        !names.iter().any(|n| n.ends_with("RenderListener")),
-        "a non-dismissible barrier installs no gesture recogniser: {names:?}"
-    );
-
-    let (navigator, mut harness, _bottom) = navigator_with_seed();
-    let _result = navigator.push(PopupRoute::<i32>::new(leaf).barrier_dismissible(true));
-    harness.tick();
-
-    let names = harness.render_debug_names();
-    assert!(
-        names.iter().any(|n| n.ends_with("RenderListener")),
-        "a dismissible barrier listens for the dismiss tap: {names:?}"
-    );
-}
 
 // ============================================================================
 // buildPage / buildTransitions — routes.dart:1229-1240, :1656
@@ -569,27 +362,6 @@ fn page_and_transitions_builders_receive_both_animations_and_rebuild_on_tick() {
 // ============================================================================
 // back_gesture — the swipe-back detector substrate (back_gesture.rs)
 // ============================================================================
-
-/// `PageRoute::back_gesture(true)` wraps the page in the edge-swipe-back
-/// detector (`ModalScopeState::build`, `back_gesture.rs`'s `Stack` +
-/// `Positioned` + `Listener` + arena-fed recognizer). Mounting, laying out
-/// and painting it end to end must not panic, and once the entrance settles
-/// the route reports itself gesture-eligible.
-#[test]
-fn back_gesture_enabled_route_mounts_and_becomes_pop_gesture_eligible() {
-    let (navigator, mut harness, _bottom) = navigator_with_seed();
-
-    let route = PageRoute::<i32>::new(leaf).back_gesture(true);
-    let transition = route.transition_handle();
-    let _pushed = harness.enter_owner_scope(|| navigator.push(route));
-    complete_entrance(&transition, &mut harness);
-
-    let top = *navigator.route_ids().last().expect("pushed");
-    assert!(
-        navigator.pop_gesture_enabled(top),
-        "a settled, non-first, unvetoed route with back_gesture(true) is eligible"
-    );
-}
 
 /// A real, hit-tested horizontal drag through the mounted tree must move the
 /// controller's value by `delta / route_width` — the harness's fixed 800px

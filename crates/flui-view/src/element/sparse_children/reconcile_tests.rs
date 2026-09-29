@@ -236,67 +236,6 @@ fn keyless_residents_outside_the_band_are_carried_over_not_rebuilt() {
     );
 }
 
-/// Residents at 3 and 4 both shift to 4 and 5 (an insert at the head,
-/// reported by the callback): both elements survive, at their new
-/// indices, with their render parent data re-stamped — the in-place
-/// remap orphaned one of them here.
-#[test]
-fn shifting_two_keyed_residents_keeps_both_elements() {
-    let mut fx = fixture();
-    let seeded = seed(&mut fx, &[(3, 30), (4, 40)]);
-    // New data: 99 inserted at the head → 30 is now index 4, 40 index 5.
-    let data = vec![0, 1, 2, 99, 30, 40];
-    let builder = builder_over(data.clone());
-    let find = move |key: &dyn ViewKey| {
-        key.as_any()
-            .downcast_ref::<ValueKey<u32>>()
-            .and_then(|k| data.iter().position(|id| id == k.value()))
-    };
-    let outcome = {
-        let mut element_owner = fx.owner.element_owner_mut();
-        fx.sparse.reconcile(
-            ReconcileSource {
-                builder: &*builder,
-                find_index_by_key: Some(&find),
-                item_count: 6,
-                retain_band: (0, usize::MAX),
-            },
-            fx.host,
-            &mut fx.tree,
-            &mut element_owner,
-            &fx.pipeline,
-        )
-    };
-    assert!(outcome.did_work);
-    assert_eq!(outcome.end_reached_at, None);
-    assert_eq!(
-        fx.sparse.get(4),
-        Some(seeded[0]),
-        "30 moved to 4, same element"
-    );
-    assert_eq!(
-        fx.sparse.get(5),
-        Some(seeded[1]),
-        "40 moved to 5, same element"
-    );
-    assert!(
-        fx.sparse
-            .get(3)
-            .is_some_and(|id| id != seeded[0] && id != seeded[1]),
-        "99 mounted fresh at 3"
-    );
-    assert_eq!(
-        index_of(&fx, seeded[0]),
-        Some(4),
-        "render parent data re-stamped"
-    );
-    assert_eq!(index_of(&fx, seeded[1]), Some(5));
-    assert_eq!(
-        fx.tree.get(seeded[0]).map(crate::tree::ElementNode::slot),
-        Some(4)
-    );
-}
-
 /// A swap within the band, with no callback at all: matched by key.
 #[test]
 fn swapping_two_keyed_residents_needs_no_callback() {

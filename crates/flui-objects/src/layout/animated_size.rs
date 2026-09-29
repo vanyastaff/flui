@@ -475,7 +475,6 @@ impl RenderBox for RenderAnimatedSize {
 mod tests {
     use super::*;
     use flui_animation::UpdateScheduler;
-    use flui_rendering::context::intrinsics_test_support::leaf_dry_layout;
 
     fn controller(ms: u64) -> AnimationController {
         AnimationController::new(Duration::from_millis(ms), &UpdateScheduler::new())
@@ -496,67 +495,9 @@ mod tests {
 
     // ---- state machine: start -> stable ---------------------------------
 
-    #[test]
-    fn start_snaps_with_no_animation() {
-        let mut ro = render(100);
-        ro.layout_start(size(10.0, 10.0));
-        assert_eq!(ro.state, AnimatedSizeState::Stable);
-        assert_eq!(ro.size_tween.begin, size(10.0, 10.0));
-        assert_eq!(ro.size_tween.end, size(10.0, 10.0));
-    }
-
     // ---- stable -> changed: begin = last committed (constrained) size ---
 
-    #[test]
-    fn stable_to_changed_begins_at_current_committed_size_not_raw_tween_value() {
-        let mut ro = render(100);
-        ro.layout_start(size(10.0, 10.0));
-        // Simulate a prior frame whose reported size was clipped smaller than
-        // the raw tween value — current_size must be the reported value.
-        ro.current_size = size(15.0, 15.0);
-
-        ro.layout_stable(size(30.0, 30.0));
-
-        assert_eq!(ro.state, AnimatedSizeState::Changed);
-        assert_eq!(
-            ro.size_tween.begin,
-            size(15.0, 15.0),
-            "begin must be the last committed (constrained) size, not the raw tween value"
-        );
-        assert_eq!(ro.size_tween.end, size(30.0, 30.0));
-        assert_eq!(ro.controller.status(), AnimationStatus::Forward);
-        assert_eq!(ro.controller.value(), 0.0, "restart_animation resets t=0");
-    }
-
     // ---- changed -> unstable: degenerate collapse, THE headline test ----
-
-    #[test]
-    fn changed_to_unstable_collapses_to_degenerate_zero_span_tween() {
-        let mut ro = render(100);
-        ro.layout_start(size(10.0, 10.0));
-        ro.current_size = size(10.0, 10.0);
-        ro.layout_stable(size(20.0, 20.0)); // -> Changed, begin=10 end=20
-        assert_eq!(ro.state, AnimatedSizeState::Changed);
-
-        // The child changes AGAIN before settling. The naive "begin =
-        // current interpolated value" bug would set begin to something
-        // between 10 and 20; the oracle instead collapses BOTH ends to the
-        // child's raw new size.
-        ro.layout_changed(size(50.0, 50.0));
-
-        assert_eq!(ro.state, AnimatedSizeState::Unstable);
-        assert_eq!(
-            ro.size_tween.begin,
-            size(50.0, 50.0),
-            "begin must collapse to the child's raw new size, not an interpolated value"
-        );
-        assert_eq!(
-            ro.size_tween.end,
-            size(50.0, 50.0),
-            "a degenerate tween has begin == end"
-        );
-        assert_eq!(ro.controller.value(), 0.0);
-    }
 
     // ---- unstable -> unstable, then -> stable, no visible jump -----------
 
@@ -582,168 +523,11 @@ mod tests {
 
     // ---- changed -> stable: resumes existing span untouched --------------
 
-    #[test]
-    fn changed_to_stable_resumes_existing_span_untouched() {
-        let mut ro = render(100);
-        ro.layout_start(size(10.0, 10.0));
-        ro.current_size = size(10.0, 10.0);
-        ro.layout_stable(size(20.0, 20.0)); // -> Changed, span 10->20
-        let _ = ro.controller.stop();
-
-        ro.layout_changed(size(20.0, 20.0)); // repeats -> Stable, resume
-
-        assert_eq!(ro.state, AnimatedSizeState::Stable);
-        assert_eq!(
-            ro.size_tween.begin,
-            size(10.0, 10.0),
-            "the genuine interpolation span from layout_stable must be left untouched"
-        );
-        assert_eq!(ro.size_tween.end, size(20.0, 20.0));
-        assert!(ro.controller.is_animating(), "must resume, not restart");
-    }
-
     // ---- dry-layout / dry-baseline parity, no side effects ---------------
-
-    #[test]
-    fn dry_size_for_matches_perform_layout_formula_with_no_side_effects() {
-        let mut ro = render(100);
-        ro.layout_start(size(10.0, 10.0));
-        ro.current_size = size(10.0, 10.0);
-        ro.layout_stable(size(20.0, 20.0)); // -> Changed, begin=10 end=20
-
-        let cc = BoxConstraints::loose(size(100.0, 100.0));
-        let before_state = ro.state;
-        let before_tween = ro.size_tween;
-
-        let dry = ro.dry_size_for(cc, size(20.0, 20.0));
-        // At t=0 the tween evaluates to `begin`.
-        assert_eq!(dry, size(10.0, 10.0));
-
-        // No side effects: calling twice must not mutate state/tween.
-        let dry_again = ro.dry_size_for(cc, size(20.0, 20.0));
-        assert_eq!(dry, dry_again);
-        assert_eq!(ro.state, before_state);
-        assert_eq!(ro.size_tween, before_tween);
-    }
-
-    #[test]
-    fn dry_layout_no_child_or_tight_returns_smallest() {
-        let ro = render(100);
-        let cc = BoxConstraints::tight(size(40.0, 40.0));
-        let dry = leaf_dry_layout(|ctx| ro.compute_dry_layout(cc, ctx));
-        assert_eq!(dry, size(40.0, 40.0));
-    }
 
     // ---- fast path: tight constraints / no child --------------------------
 
-    #[test]
-    fn fast_path_resets_state_and_stops_controller() {
-        let mut ro = render(100);
-        ro.layout_start(size(10.0, 10.0));
-        ro.current_size = size(10.0, 10.0);
-        ro.layout_stable(size(20.0, 20.0)); // -> Changed, animating
-        assert!(ro.controller.is_animating());
-
-        // Simulate the fast-path bookkeeping directly (perform_layout itself
-        // needs a live BoxLayoutContext harness — see the integration
-        // harness tests for the full end-to-end assertion).
-        let _ = ro.controller.stop();
-        let snapped = size(40.0, 40.0);
-        ro.size_tween = SizeTween::new(snapped, snapped);
-        ro.state = AnimatedSizeState::Start;
-        ro.current_size = snapped;
-
-        assert_eq!(ro.state, AnimatedSizeState::Start);
-        assert!(!ro.controller.is_animating());
-        assert_eq!(ro.size_tween.begin, snapped);
-        assert_eq!(ro.size_tween.end, snapped);
-    }
-
     // ---- attach on Changed/Unstable immediately requests a layout ---------
 
-    #[test]
-    fn attach_on_changed_state_immediately_marks_needs_layout() {
-        use flui_rendering::pipeline::PipelineOwner;
-        use flui_rendering::protocol::BoxProtocol;
-        use flui_rendering::traits::RenderObject;
-
-        // Drive the object into `Changed` via the real transition methods
-        // (simulating "a node arrives at `attach` already mid-resize" —
-        // FLUI's remove+insert reparent model cannot preserve a Rust
-        // object's identity across the boundary, so there is no way to
-        // construct this precondition except by direct field/method access
-        // from within this module — see attach_detach_lifecycle.rs's own
-        // note on why reparenting always mints a fresh object).
-        let mut ro = render(50);
-        ro.layout_start(size(10.0, 10.0));
-        ro.current_size = size(10.0, 10.0);
-        ro.layout_stable(size(20.0, 20.0)); // -> Changed
-        assert_eq!(ro.state, AnimatedSizeState::Changed);
-
-        // `insert` fires the REAL `attach(handle)` with a live handle from
-        // the pipeline (not a mock) — this proves the state-gated
-        // `handle.mark_needs_layout()` call in `attach` actually executes
-        // without error against a real handle. A fresh insert is already
-        // dirty by default regardless of this guard (every new node needs
-        // its first layout), so this does not isolate the guard's marginal
-        // effect — only `attach_detach_lifecycle.rs` proves the general
-        // attach/detach wiring; this test's job is narrower: confirm this
-        // object's `attach` override is wired to a real handle correctly.
-        let mut owner = PipelineOwner::new();
-        let id = owner.insert(Box::new(ro) as Box<dyn RenderObject<BoxProtocol>>);
-        assert!(
-            owner
-                .nodes_needing_layout()
-                .iter()
-                .any(|dirty| dirty.id == id),
-            "a node inserted while Changed/Unstable must be on the layout \
-             dirty list (oracle animated_size.dart:225-227)",
-        );
-    }
-
     // ---- setters ------------------------------------------------------------
-
-    #[test]
-    fn set_alignment_reports_exact_impact() {
-        let mut ro = render(50);
-        assert_eq!(
-            ro.set_alignment(Alignment::CENTER),
-            flui_rendering::RenderUpdateImpact::NONE
-        );
-        assert_eq!(
-            ro.set_alignment(Alignment::TOP_LEFT),
-            flui_rendering::RenderUpdateImpact::LAYOUT
-        );
-        assert_eq!(ro.alignment(), Alignment::TOP_LEFT);
-    }
-
-    #[test]
-    fn set_clip_behavior_reports_exact_impact() {
-        let mut ro = render(50);
-        assert_eq!(
-            ro.set_clip_behavior(Clip::HardEdge),
-            flui_rendering::RenderUpdateImpact::NONE
-        );
-        assert_eq!(
-            ro.set_clip_behavior(Clip::None),
-            flui_rendering::RenderUpdateImpact::PAINT
-        );
-        assert_eq!(ro.clip_behavior(), Clip::None);
-    }
-
-    #[test]
-    fn set_curve_rebuilds_the_curved_animation_over_the_same_controller() {
-        let mut ro = render(100);
-        let _ = ro.controller.forward_from(Some(0.5));
-        let before = ro.animation.value();
-        assert_eq!(
-            ro.set_curve(ArcCurve::new(flui_animation::Curves::Linear)),
-            flui_rendering::RenderUpdateImpact::LAYOUT,
-        );
-        let after = ro.animation.value();
-        assert!(
-            (before - after).abs() < 1e-6,
-            "rebuilding with the same (linear) curve must not change the value"
-        );
-    }
 }

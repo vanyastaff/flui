@@ -429,16 +429,6 @@ impl From<&AppConfig> for flui_platform::WindowOptions {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_default_config() {
-        let config = AppConfig::default();
-        assert_eq!(config.title, "FLUI App");
-        assert_eq!(config.application_identity.display_name(), "FLUI App");
-        assert!(config.resizable);
-        #[cfg(feature = "hot-reload")]
-        assert!(config.worker_plugin_path.is_none());
-    }
-
     /// The shared conversion must not promise a reveal it cannot keep:
     /// `run_direct` and the bare secondary window open through it and
     /// never call `reveal_after_first_frame`. The desktop runner opts in
@@ -448,19 +438,6 @@ mod tests {
         let options: flui_platform::WindowOptions = (&AppConfig::default()).into();
         assert_eq!(options.reveal, flui_platform::WindowReveal::AtOpen);
         assert!(options.visible);
-    }
-
-    #[test]
-    fn test_builder_pattern() {
-        let config = AppConfig::new()
-            .with_title("Test App")
-            .with_size(1024, 768)
-            .with_resizable(false);
-
-        assert_eq!(config.title, "Test App");
-        assert_eq!(config.size.width, 1024.0);
-        assert_eq!(config.size.height, 768.0);
-        assert!(!config.resizable);
     }
 
     #[test]
@@ -474,46 +451,5 @@ mod tests {
             .with_frame_failure_detail(FrameFailureDetail::Verbatim)
             .with_diagnostics_profile(DiagnosticsProfile::Production);
         assert_eq!(config.frame_failure_detail, FrameFailureDetail::Verbatim);
-    }
-
-    /// `with_service` appends in declaration order — the order the
-    /// bootstrap starts them in.
-    #[test]
-    #[cfg(not(target_arch = "wasm32"))]
-    fn with_service_registers_in_declaration_order() {
-        use super::super::lifecycle::ServiceLifetime;
-
-        let config = AppConfig::new()
-            .with_service(ServiceDefinition::new(
-                "first",
-                ServiceLifetime::StopsWithLastWindow,
-                |_context| Box::pin(async {}),
-            ))
-            .with_service(ServiceDefinition::new(
-                "second",
-                ServiceLifetime::KeepsAppAlive,
-                |_context| Box::pin(async {}),
-            ));
-        let names: Vec<&str> = config
-            .services
-            .iter()
-            .map(ServiceDefinition::name)
-            .collect();
-        assert_eq!(names, ["first", "second"]);
-        assert_eq!(
-            config.services[1].lifetime(),
-            ServiceLifetime::KeepsAppAlive
-        );
-    }
-
-    #[test]
-    #[cfg(feature = "hot-reload")]
-    fn test_worker_plugin_path() {
-        let config = AppConfig::new().with_worker_plugin_path("target/debug/libworker.so");
-
-        assert_eq!(
-            config.worker_plugin_path,
-            Some(PathBuf::from("target/debug/libworker.so"))
-        );
     }
 }

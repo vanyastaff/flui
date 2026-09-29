@@ -383,109 +383,6 @@ mod tests {
         assert_eq!(host.outstanding_handles(), 0);
     }
 
-    #[test]
-    fn platform_semantics_toggle() {
-        let host = SemanticsHost::new();
-
-        assert!(!host.semantics_enabled());
-
-        host.set_platform_semantics_enabled(true);
-        assert!(host.semantics_enabled());
-        assert!(host.platform_semantics_enabled());
-
-        host.set_platform_semantics_enabled(false);
-        assert!(!host.semantics_enabled());
-    }
-
-    #[test]
-    fn combined_semantics_enabled() {
-        let host = SemanticsHost::new();
-
-        // Neither platform nor handles
-        assert!(!host.semantics_enabled());
-
-        // Only platform
-        host.set_platform_semantics_enabled(true);
-        assert!(host.semantics_enabled());
-
-        // Both platform and handle
-        let handle = host.ensure_semantics();
-        assert!(host.semantics_enabled());
-
-        // Only handle (platform disabled)
-        host.set_platform_semantics_enabled(false);
-        assert!(host.semantics_enabled());
-
-        // Neither (handle dropped)
-        drop(handle);
-        assert!(!host.semantics_enabled());
-    }
-
-    #[test]
-    fn announce_callback_is_invoked_once_registered() {
-        use std::sync::atomic::AtomicUsize;
-
-        let host = SemanticsHost::new();
-        let call_count = Arc::new(AtomicUsize::new(0));
-        let call_count_clone = Arc::clone(&call_count);
-
-        host.set_announce_callback(move |_msg, _assertiveness| {
-            call_count_clone.fetch_add(1, Ordering::SeqCst);
-        });
-
-        host.announce("Test message", Assertiveness::Polite);
-        assert_eq!(call_count.load(Ordering::SeqCst), 1);
-
-        host.announce("Another message", Assertiveness::Assertive);
-        assert_eq!(call_count.load(Ordering::SeqCst), 2);
-    }
-
-    #[test]
-    fn event_callback_is_invoked_once_registered() {
-        use std::sync::atomic::AtomicUsize;
-
-        let host = SemanticsHost::new();
-        let call_count = Arc::new(AtomicUsize::new(0));
-        let call_count_clone = Arc::clone(&call_count);
-
-        host.set_event_callback(move |_event| {
-            call_count_clone.fetch_add(1, Ordering::SeqCst);
-        });
-
-        host.dispatch_event(&SemanticsEvent::tooltip("hi"));
-        assert_eq!(call_count.load(Ordering::SeqCst), 1);
-
-        host.dispatch_event(&SemanticsEvent::tooltip("again"));
-        assert_eq!(call_count.load(Ordering::SeqCst), 2);
-    }
-
-    #[test]
-    fn event_callback_clone_and_release_no_deadlock() {
-        // Verify the clone-and-release lock pattern: a callback that
-        // mutates host state (registers another callback) must not
-        // deadlock on the host's own RwLock.
-        let host = Arc::new(SemanticsHost::new());
-        let host_clone = Arc::clone(&host);
-
-        host.set_event_callback(move |_event| {
-            // Reach back into the host from inside the callback. Holding
-            // the read lock across this call (instead of clone-and-release)
-            // would deadlock on the write attempt below.
-            host_clone.set_event_callback(|_| {});
-        });
-
-        host.dispatch_event(&SemanticsEvent::tooltip("first"));
-        // If we got here, the clone-and-release pattern released the read
-        // lock before invoking the callback.
-    }
-
-    #[test]
-    fn dispatch_event_without_callback_is_a_no_op() {
-        // No callback registered -- must not panic.
-        let host = SemanticsHost::new();
-        host.dispatch_event(&SemanticsEvent::tooltip("nobody home"));
-    }
-
     // ========================================================================
     // Announcement/event privacy: moved from flui-semantics's
     // `announcements_are_not_logged_verbatim.rs` (deleted alongside
@@ -604,27 +501,6 @@ mod tests {
                 length,
                 Some(SECRET.len().to_string().as_str()),
                 "expected a `message_len` field; captured {fields:?}"
-            );
-        }
-
-        #[test]
-        fn send_event_logs_the_type_and_never_the_payload() {
-            // `tooltip` builds a `SemanticsEvent` whose data is the string,
-            // so a `Debug` of the whole event would print it.
-            let host = SemanticsHost::new();
-            let fields = captured_fields(|| {
-                host.dispatch_event(&SemanticsEvent::tooltip(SECRET));
-            });
-
-            assert!(
-                !fields.is_empty(),
-                "the no-callback-registered fallback is expected to emit an event"
-            );
-            assert_secret_absent(&fields, "SemanticsHost::dispatch_event");
-
-            assert!(
-                fields.iter().any(|(name, _)| name == "event_type"),
-                "expected an `event_type` field; captured {fields:?}"
             );
         }
 

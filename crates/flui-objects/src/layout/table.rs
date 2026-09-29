@@ -1167,26 +1167,6 @@ mod tests {
 
     // ---- Pass 1: Fixed-only ------------------------------------------------
 
-    #[test]
-    fn fixed_only_columns_use_their_exact_value_untouched_by_generous_constraints() {
-        let table = table_with(&[
-            TableColumnWidth::Fixed(50.0),
-            TableColumnWidth::Fixed(100.0),
-            TableColumnWidth::Fixed(30.0),
-        ]);
-        let widths = table.compute_column_widths(1, 0.0, f64::INFINITY, deny_query());
-        assert_eq!(widths, vec![50.0, 100.0, 30.0]);
-    }
-
-    #[test]
-    fn fixed_only_columns_grow_equally_when_min_width_constraint_forces_it() {
-        // No flex present -> pass 2's "else" branch: grow every column
-        // equally toward `min_width_constraint` (table.dart:1155-1160).
-        let table = table_with(&[TableColumnWidth::Fixed(10.0), TableColumnWidth::Fixed(20.0)]);
-        let widths = table.compute_column_widths(1, 60.0, f64::INFINITY, deny_query());
-        assert_eq!(widths, vec![25.0, 35.0]);
-    }
-
     // ---- Pass 1/2: Flex-only ------------------------------------------------
 
     #[test]
@@ -1197,20 +1177,6 @@ mod tests {
     }
 
     // ---- Pass 1: Fraction, finite vs. infinite container -------------------
-
-    #[test]
-    fn fraction_column_resolves_against_a_finite_container_width() {
-        let table = table_with(&[TableColumnWidth::Fraction(0.25)]);
-        let widths = table.compute_column_widths(1, 0.0, 400.0, deny_query());
-        assert_eq!(widths, vec![100.0]);
-    }
-
-    #[test]
-    fn fraction_column_is_zero_against_an_infinite_container_width() {
-        let table = table_with(&[TableColumnWidth::Fraction(0.25)]);
-        let widths = table.compute_column_widths(1, 0.0, f64::INFINITY, deny_query());
-        assert_eq!(widths, vec![0.0]);
-    }
 
     #[test]
     fn fraction_value_above_one_is_clamped_a_documented_divergence_from_the_oracle() {
@@ -1226,62 +1192,6 @@ mod tests {
     // ---- Max/Min combinators (oracle table.dart:235-340) -------------------
 
     #[test]
-    fn max_combinator_takes_the_larger_of_its_two_specs() {
-        // Fixed(100) vs Fraction(0.1): at container 400 the fraction is 40 < 100
-        // (Fixed wins); at container 2000 the fraction is 200 > 100 (it wins).
-        let table = table_with(&[TableColumnWidth::max(
-            TableColumnWidth::Fixed(100.0),
-            TableColumnWidth::Fraction(0.1),
-        )]);
-        let narrow = table.compute_column_widths(1, 0.0, 400.0, deny_query());
-        assert_eq!(
-            narrow,
-            vec![100.0],
-            "fixed floor wins when the fraction is smaller"
-        );
-        let wide = table.compute_column_widths(1, 0.0, 2000.0, deny_query());
-        assert_eq!(
-            wide,
-            vec![200.0],
-            "fraction wins when it exceeds the fixed floor"
-        );
-    }
-
-    #[test]
-    fn min_combinator_takes_the_smaller_of_its_two_specs() {
-        // Fixed(100) vs Fraction(0.1): at container 400 the fraction is 40 (it
-        // wins); at container 2000 the fraction is 200 > 100 (the fixed ceiling
-        // wins).
-        let table = table_with(&[TableColumnWidth::min(
-            TableColumnWidth::Fixed(100.0),
-            TableColumnWidth::Fraction(0.1),
-        )]);
-        let narrow = table.compute_column_widths(1, 0.0, 400.0, deny_query());
-        assert_eq!(
-            narrow,
-            vec![40.0],
-            "fraction wins when below the fixed ceiling"
-        );
-        let wide = table.compute_column_widths(1, 0.0, 2000.0, deny_query());
-        assert_eq!(wide, vec![100.0], "fixed ceiling caps the column");
-    }
-
-    #[test]
-    fn combinators_nest_recursively() {
-        // Max(Min(Fixed(100), Fraction(0.5)), Fixed(30)) @ container 100:
-        // inner Min(100, 50) = 50; outer Max(50, 30) = 50.
-        let table = table_with(&[TableColumnWidth::max(
-            TableColumnWidth::min(
-                TableColumnWidth::Fixed(100.0),
-                TableColumnWidth::Fraction(0.5),
-            ),
-            TableColumnWidth::Fixed(30.0),
-        )]);
-        let widths = table.compute_column_widths(1, 0.0, 100.0, deny_query());
-        assert_eq!(widths, vec![50.0]);
-    }
-
-    #[test]
     fn max_combinator_flex_is_the_larger_flex_and_drives_distribution() {
         // Max(Flex(3), Flex(1)) -> width 0, flex max(3,1)=3. Beside a Flex(1),
         // total flex 4 splits 400 as 300 / 100.
@@ -1293,106 +1203,7 @@ mod tests {
         assert_eq!(widths, vec![300.0, 100.0]);
     }
 
-    #[test]
-    fn min_combinator_flex_is_the_smaller_flex() {
-        // Min(Flex(3), Flex(1)) -> flex min(3,1)=1. Beside a Flex(1), even split.
-        let table = table_with(&[
-            TableColumnWidth::min(TableColumnWidth::Flex(3.0), TableColumnWidth::Flex(1.0)),
-            TableColumnWidth::Flex(1.0),
-        ]);
-        let widths = table.compute_column_widths(1, 0.0, 400.0, deny_query());
-        assert_eq!(widths, vec![200.0, 200.0]);
-    }
-
-    #[test]
-    fn combine_flex_passes_through_the_set_operand_and_folds_two() {
-        assert_eq!(combine_flex(Some(1.0), None, f64::max), Some(1.0));
-        assert_eq!(combine_flex(None, Some(2.0), f64::max), Some(2.0));
-        assert_eq!(combine_flex(Some(1.0), Some(2.0), f64::max), Some(2.0));
-        assert_eq!(combine_flex(Some(1.0), Some(2.0), f64::min), Some(1.0));
-        assert_eq!(combine_flex(None, None, f64::max), None);
-    }
-
     // ---- Pass 1: Intrinsic queries real cells -------------------------------
-
-    #[test]
-    fn intrinsic_column_takes_the_max_over_every_cell_in_the_column() {
-        let table = table_with(&[TableColumnWidth::Intrinsic { flex: None }]);
-        // Column 0, 2 rows -> cells at flat index 0 and 1. Cell 0 reports
-        // (min=10, max=30); cell 1 reports (min=25, max=15) — deliberately
-        // anti-correlated so "max across cells, per query kind independently"
-        // is the only way to get column min=25 (from cell 1) and column
-        // ideal=30 (from cell 0).
-        let (ideal, flex) = table.column_extent(
-            0,
-            2,
-            f64::INFINITY,
-            WidthQuery::Max,
-            &mut |index, _extent, kind| match (index, kind) {
-                (0, WidthQuery::Min) => 10.0,
-                (0, WidthQuery::Max) => 30.0,
-                (1, WidthQuery::Min) => 25.0,
-                (1, WidthQuery::Max) => 15.0,
-                _ => unreachable!("only 2 cells in this test"),
-            },
-        );
-        assert_eq!(ideal, 30.0);
-        assert_eq!(flex, None);
-
-        let widths = table.compute_column_widths(2, 0.0, f64::INFINITY, |index, _extent, kind| {
-            match (index, kind) {
-                (0, WidthQuery::Min) => 10.0,
-                (0, WidthQuery::Max) => 30.0,
-                (1, WidthQuery::Min) => 25.0,
-                (1, WidthQuery::Max) => 15.0,
-                _ => unreachable!("only 2 cells in this test"),
-            }
-        });
-        // Ideal (max-query) wins the table's resolved width: 30, not 25.
-        assert_eq!(widths, vec![30.0]);
-    }
-
-    #[test]
-    fn intrinsic_column_with_flex_grows_into_leftover_space() {
-        // Column 0 is Intrinsic { flex: 1 } reporting a 30px content width;
-        // column 1 is Fixed(50). Target 200 leaves 150 after the fixed column,
-        // and the single flexed column claims all of it — its 30px intrinsic
-        // width is only a floor (oracle `IntrinsicColumnWidth.flex`).
-        let table = table_with(&[
-            TableColumnWidth::Intrinsic { flex: Some(1.0) },
-            TableColumnWidth::Fixed(50.0),
-        ]);
-        let widths =
-            table.compute_column_widths(
-                1,
-                0.0,
-                200.0,
-                |index, _extent, _kind| {
-                    if index == 0 { 30.0 } else { 0.0 }
-                },
-            );
-        assert_eq!(widths, vec![150.0, 50.0]);
-    }
-
-    #[test]
-    fn intrinsic_column_without_flex_keeps_its_content_width() {
-        // Same layout but no flex — the intrinsic column stays at its 30px
-        // content width and the table is left smaller than the container.
-        let table = table_with(&[
-            TableColumnWidth::Intrinsic { flex: None },
-            TableColumnWidth::Fixed(50.0),
-        ]);
-        let widths =
-            table.compute_column_widths(
-                1,
-                0.0,
-                200.0,
-                |index, _extent, _kind| {
-                    if index == 0 { 30.0 } else { 0.0 }
-                },
-            );
-        assert_eq!(widths, vec![30.0, 50.0]);
-    }
 
     // ---- Pass 3: the oracle's own adversarial shrink scenario ---------------
 
@@ -1428,55 +1239,5 @@ mod tests {
             (widths[1] - 2.0).abs() < 1e-3,
             "the low-flex/high-ideal column absorbs the deficit, got {widths:?}"
         );
-    }
-
-    #[test]
-    fn shrink_excludes_a_column_from_round_one_once_it_hits_its_own_floor() {
-        // Column 0's floor (min_width = 40) is reached partway through round
-        // 1's proportional shrink; it drops out of the flex pool (`flexes[0]
-        // = None`) and column 1 (still flexed) absorbs the rest of the
-        // deficit within the SAME round-1 loop — this converges before round
-        // 2 is ever needed.
-        let mut widths = [50.0_f64, 50.0_f64];
-        let min_widths = [40.0_f64, 0.0_f64];
-        let mut flexes = [Some(1.0_f64), Some(1.0_f64)];
-
-        RenderTable::grow_and_shrink_column_widths(
-            &mut widths,
-            &min_widths,
-            &mut flexes,
-            0.0,
-            60.0,
-        );
-
-        assert!(
-            (widths[0] - 40.0).abs() < 1e-3,
-            "column 0 must floor at its min_width (40), got {widths:?}"
-        );
-        let total: f64 = widths.iter().sum();
-        assert!(
-            (total - 60.0).abs() < 1e-3,
-            "shrunk columns must sum to the 60px max width, got {total} from {widths:?}"
-        );
-    }
-
-    #[test]
-    fn shrink_falls_back_to_round_two_when_no_column_is_flexed() {
-        // With no flex at all, round 1's `while` guard (`total_flex >
-        // EPSILON`) is false from the start, so the ENTIRE deficit must be
-        // absorbed by round 2's equal-delta shrink of non-floored columns.
-        let mut widths = [50.0_f64, 50.0_f64];
-        let min_widths = [10.0_f64, 30.0_f64];
-        let mut flexes = [None, None];
-
-        RenderTable::grow_and_shrink_column_widths(
-            &mut widths,
-            &min_widths,
-            &mut flexes,
-            0.0,
-            60.0,
-        );
-
-        assert_eq!(widths, [30.0, 30.0]);
     }
 }

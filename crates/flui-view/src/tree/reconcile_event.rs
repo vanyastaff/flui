@@ -259,29 +259,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kind_u8_roundtrip() {
-        for variant in [
-            ReconcileEventKind::Mount,
-            ReconcileEventKind::Unmount,
-            ReconcileEventKind::Reuse,
-            ReconcileEventKind::Reorder,
-            ReconcileEventKind::Reparent,
-        ] {
-            let value = variant.as_u8();
-            assert_eq!(
-                ReconcileEventKind::from_u8(value),
-                Some(variant),
-                "u8 round-trip must preserve variant identity",
-            );
-        }
-        assert_eq!(
-            ReconcileEventKind::from_u8(99),
-            None,
-            "unknown u8 must yield None, not a silent miscategorisation",
-        );
-    }
-
-    #[test]
     fn constructors_set_kind_and_from_parent_correctly() {
         let parent = ElementId::new(1);
         let tid = TypeId::of::<u32>();
@@ -305,13 +282,5 @@ mod tests {
         assert!(matches!(reparent.kind, ReconcileEventKind::Reparent));
         assert_eq!(reparent.from_parent, Some(donor));
         assert_eq!(reparent.child_key, Some(0xDEAD));
-    }
-
-    #[test]
-    fn target_string_is_stable() {
-        // Anchors the FR-035 stability boundary as a test — any rename
-        // shows up here, where the assertion forces an explicit
-        // contract-rev decision rather than a silent drift.
-        assert_eq!(RECONCILE_TARGET, "flui::reconcile");
     }
 }

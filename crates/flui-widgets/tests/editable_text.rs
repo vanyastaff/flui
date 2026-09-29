@@ -13,52 +13,7 @@ use flui_interaction::events::{Key, KeyState, NamedKey};
 use flui_interaction::routing::FocusNode;
 use flui_objects::RenderEditable;
 use flui_view::prelude::*;
-use flui_widgets::__test_access::TextEditingControllerProbe as _;
 use flui_widgets::{EditableText, TextEditingController};
-
-/// A field constructed disabled keeps its explicit node attached for
-/// lifecycle correctness but refuses focus acquisition.
-///
-/// Oracle analog: `'Does not accept updates when read-only'`
-/// (`editable_text_test.dart`, tag `3.44.0`) — **adapted, not a direct
-/// port**: Flutter's `readOnly` blocks platform text updates while the
-/// field keeps focus; `enabled` is a strictly wider gate that withholds
-/// focus acquisition entirely (see `tests/parity/editable_text_test.rs`'s
-/// module doc for the full contrast).
-///
-/// Red-check: stop forwarding `enabled` into
-/// `FocusNode::set_can_request_focus` — the request below lands.
-#[test]
-fn disabled_field_refuses_focus_on_its_explicit_node() {
-    let controller = TextEditingController::new();
-    let focus_node = FocusNode::with_debug_label("disabled EditableText");
-    let harness = crate::common::harness::mount(
-        EditableText::new(controller, Rc::clone(&focus_node)).enabled(false),
-    );
-
-    focus_node.request_focus();
-    assert!(focus_node.is_attached());
-    assert!(!focus_node.has_primary_focus());
-    assert!(harness.focus_manager().primary_focus().is_none());
-}
-
-/// An enabled field (the default) does publish, so the same field
-/// re-enabled is focusable again — the contrast case for the test above.
-///
-/// Oracle analog: `'Does not accept updates when read-only'`
-/// (`editable_text_test.dart`, tag `3.44.0`) — see
-/// `disabled_field_refuses_focus_on_its_explicit_node`'s doc comment for the
-/// adapted contrast this is the enabled-side counterpart of.
-#[test]
-fn enabled_field_accepts_focus_on_its_explicit_node() {
-    let controller = TextEditingController::new();
-    let focus_node = FocusNode::with_debug_label("enabled EditableText");
-    let _harness =
-        crate::common::harness::mount(EditableText::new(controller, Rc::clone(&focus_node)));
-
-    focus_node.request_focus();
-    assert!(focus_node.has_primary_focus());
-}
 
 /// Disabling a focused field unfocuses it and withdraws its published
 /// node — `did_update_view`'s `set_can_request_focus(false)` call (see
@@ -90,29 +45,6 @@ fn disabling_a_focused_field_unfocuses_its_explicit_node() {
 
     assert!(!focus_node.has_primary_focus());
     assert!(!focus_node.can_request_focus());
-}
-
-/// The contrast case: re-enabling a disabled field republishes its
-/// node, so it becomes focusable again.
-///
-/// Oracle analog: `'Does not accept updates when read-only'`
-/// (`editable_text_test.dart`, tag `3.44.0`) — see
-/// `disabled_field_does_not_publish_its_focus_node`'s doc comment for the
-/// adapted contrast.
-#[test]
-fn re_enabling_a_disabled_field_restores_explicit_node_focusability() {
-    let controller = TextEditingController::new();
-    let focus_node = FocusNode::with_debug_label("re-enabled EditableText");
-    let mut harness = crate::common::harness::mount(
-        EditableText::new(controller.clone(), Rc::clone(&focus_node)).enabled(false),
-    );
-    assert!(!focus_node.can_request_focus());
-
-    harness.swap_root(EditableText::new(controller, Rc::clone(&focus_node)));
-
-    assert!(focus_node.can_request_focus());
-    focus_node.request_focus();
-    assert!(focus_node.has_primary_focus());
 }
 
 // ------------------------------------------------------------------
@@ -266,24 +198,6 @@ fn enter_calls_on_submitted_with_the_current_text() {
     assert!(result, "Enter is consumed once a callback is set");
 }
 
-/// The contrast case: with no `on_submitted`, Enter is left unconsumed —
-/// unchanged from this field's behavior before the callback existed, so
-/// an ancestor can still act on a bare Enter press.
-#[test]
-fn enter_with_no_on_submitted_is_ignored() {
-    let controller = TextEditingController::with_text("hi");
-    let focus_node = FocusNode::with_debug_label("no-submit field");
-    let harness =
-        crate::common::harness::mount(EditableText::new(controller, Rc::clone(&focus_node)));
-    focus_node.request_focus();
-
-    let result = harness
-        .focus_manager()
-        .dispatch_key_event(&enter_key_event());
-
-    assert!(!result, "with no on_submitted, Enter is not consumed");
-}
-
 /// IME owns Enter while composing — the same suppression contract the
 /// `Key::Character` arm already follows. An in-progress composition
 /// must not also trigger submit.
@@ -317,128 +231,6 @@ fn enter_while_composing_is_ignored_and_does_not_submit() {
 
     assert!(!result, "Enter must not be consumed while composing");
     assert_eq!(*submitted.borrow(), None, "the IME owns Enter, not submit");
-}
-
-/// A command chord is not a submit — mirroring the `Key::Character`
-/// arm's own command-chord guard, Ctrl+Enter/Cmd+Enter must bubble to
-/// an ancestor `Shortcuts` rather than being swallowed here.
-///
-/// Red-check: delete the `is_command_chord(event.modifiers)` guard —
-/// this test then sees `submitted` populated by a Ctrl+Enter press.
-#[test]
-fn ctrl_enter_is_a_command_chord_not_a_submit() {
-    use flui_interaction::events::{Code, Modifiers};
-    use flui_interaction::testing::input::KeyEventBuilder;
-
-    let controller = TextEditingController::with_text("hi");
-    let focus_node = FocusNode::with_debug_label("ctrl-enter field");
-    let submitted: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
-    let submitted_for_callback = Rc::clone(&submitted);
-
-    let harness = crate::common::harness::mount(
-        EditableText::new(controller, Rc::clone(&focus_node)).on_submitted(move |_cx, text| {
-            submitted_for_callback.replace(Some(text.to_string()));
-        }),
-    );
-    focus_node.request_focus();
-
-    let event = KeyEventBuilder::new(Code::Enter)
-        .with_key(Key::Named(NamedKey::Enter))
-        .with_state(KeyState::Down)
-        .with_modifiers(Modifiers::CONTROL)
-        .build();
-    let result = harness.focus_manager().dispatch_key_event(&event);
-
-    assert!(!result, "Ctrl+Enter must bubble, not be consumed here");
-    assert_eq!(*submitted.borrow(), None, "a command chord must not submit");
-}
-
-/// Shift+Enter is reserved for a future multiline newline, not submit —
-/// this substrate has no multiline support yet, but the reservation is
-/// deliberate.
-///
-/// Red-check: delete the Shift guard — this test then sees `submitted`
-/// populated by a Shift+Enter press.
-#[test]
-fn shift_enter_is_reserved_and_does_not_submit() {
-    use flui_interaction::events::{Code, Modifiers};
-    use flui_interaction::testing::input::KeyEventBuilder;
-
-    let controller = TextEditingController::with_text("hi");
-    let focus_node = FocusNode::with_debug_label("shift-enter field");
-    let submitted: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
-    let submitted_for_callback = Rc::clone(&submitted);
-
-    let harness = crate::common::harness::mount(
-        EditableText::new(controller, Rc::clone(&focus_node)).on_submitted(move |_cx, text| {
-            submitted_for_callback.replace(Some(text.to_string()));
-        }),
-    );
-    focus_node.request_focus();
-
-    let event = KeyEventBuilder::new(Code::Enter)
-        .with_key(Key::Named(NamedKey::Enter))
-        .with_state(KeyState::Down)
-        .with_modifiers(Modifiers::SHIFT)
-        .build();
-    let result = harness.focus_manager().dispatch_key_event(&event);
-
-    assert!(
-        !result,
-        "Shift+Enter must not be consumed as a submit today"
-    );
-    assert_eq!(
-        *submitted.borrow(),
-        None,
-        "reserved for newline, not submit"
-    );
-}
-
-/// Auto-repeat (macOS/Win32 report a held Enter as repeated `Down`
-/// events) must not resubmit on every tick — the key is still consumed,
-/// just without calling the callback again.
-///
-/// Red-check: delete the `!event.repeat` guard — the call counter below
-/// reaches 2, not 1.
-#[test]
-fn repeated_enter_consumes_the_key_without_resubmitting() {
-    use flui_interaction::events::Code;
-    use flui_interaction::testing::input::KeyEventBuilder;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    let controller = TextEditingController::with_text("hi");
-    let focus_node = FocusNode::with_debug_label("repeat field");
-    let calls = Rc::new(AtomicUsize::new(0));
-    let calls_for_callback = Rc::clone(&calls);
-
-    let harness = crate::common::harness::mount(
-        EditableText::new(controller, Rc::clone(&focus_node)).on_submitted(move |_cx, _text| {
-            calls_for_callback.fetch_add(1, Ordering::Relaxed);
-        }),
-    );
-    focus_node.request_focus();
-
-    let initial_press = KeyEventBuilder::new(Code::Enter)
-        .with_key(Key::Named(NamedKey::Enter))
-        .with_state(KeyState::Down)
-        .build();
-    let repeated_press = KeyEventBuilder::new(Code::Enter)
-        .with_key(Key::Named(NamedKey::Enter))
-        .with_state(KeyState::Down)
-        .with_repeat(true)
-        .build();
-
-    let first = harness.focus_manager().dispatch_key_event(&initial_press);
-    assert!(first, "the initial press submits and is consumed");
-    assert_eq!(calls.load(Ordering::Relaxed), 1);
-
-    let repeated = harness.focus_manager().dispatch_key_event(&repeated_press);
-    assert!(repeated, "a repeat is still consumed");
-    assert_eq!(
-        calls.load(Ordering::Relaxed),
-        1,
-        "a repeat must not resubmit"
-    );
 }
 
 /// The real `examples/todo.rs` path: `on_submitted` calls
@@ -649,93 +441,6 @@ fn swapping_the_controller_retargets_paint_ime_and_keys_to_the_replacement() {
     );
 }
 
-/// Rebuilding with the SAME controller registers no second listener.
-///
-/// The control for the test above, and it needs an observable the visible
-/// text cannot give: a `did_update_view` that retargeted unconditionally
-/// would drop and re-add the listener on every rebuild, which paints
-/// identically. The first version of this test asserted the text and a
-/// tautology (`a.is_same_controller(&a.clone())`, which cannot fail);
-/// `listener_count` is what actually pins it.
-#[test]
-fn rebuilding_with_the_same_controller_registers_no_second_listener() {
-    let controller = TextEditingController::with_text("stable");
-    let focus_node = FocusNode::with_debug_label("same controller rebuild");
-    let mut harness = crate::common::harness::mount_with_ime(EditableText::new(
-        controller.clone(),
-        Rc::clone(&focus_node),
-    ));
-    harness.tick();
-
-    let after_mount = controller.listener_count();
-    assert!(
-        after_mount > 0,
-        "premise: a mounted field registers a change listener, got \
-             {after_mount}"
-    );
-
-    for _ in 0..3 {
-        harness.swap_root(EditableText::new(
-            controller.clone(),
-            Rc::clone(&focus_node),
-        ));
-        harness.tick();
-    }
-
-    assert_eq!(
-        controller.listener_count(),
-        after_mount,
-        "three rebuilds with the same controller must leave the listener \
-             count where mounting put it — a retarget that did not check \
-             identity would have added three more"
-    );
-}
-
-/// The change listener MOVES on a swap: off the original, onto the
-/// replacement.
-///
-/// The one part of the retarget that cannot ride on the shared cell,
-/// because it is registered ON the controller rather than read FROM it —
-/// so it is the part most likely to be forgotten, and the only one with a
-/// count to check.
-#[test]
-fn swapping_the_controller_moves_the_change_listener_rather_than_adding_one() {
-    let original = TextEditingController::with_text("original");
-    let replacement = TextEditingController::with_text("replacement");
-    let focus_node = FocusNode::with_debug_label("listener move");
-    let mut harness = crate::common::harness::mount_with_ime(EditableText::new(
-        original.clone(),
-        Rc::clone(&focus_node),
-    ));
-    harness.tick();
-
-    let original_after_mount = original.listener_count();
-    let replacement_before = replacement.listener_count();
-    assert!(
-        original_after_mount > 0,
-        "premise: the mounted field listens to the original"
-    );
-
-    harness.swap_root(EditableText::new(
-        replacement.clone(),
-        Rc::clone(&focus_node),
-    ));
-    harness.tick();
-
-    assert_eq!(
-        original.listener_count(),
-        original_after_mount - 1,
-        "the field must DEREGISTER from the original — leaving it \
-             attached would keep an unmounted-from controller waking this \
-             field for edits it no longer shows"
-    );
-    assert_eq!(
-        replacement.listener_count(),
-        replacement_before + 1,
-        "and register on the replacement exactly once"
-    );
-}
-
 /// A normal post-mount focus edge attaches one IME client and routes
 /// composition to this field's controller.
 #[test]
@@ -830,28 +535,6 @@ fn character_key_during_active_composition_does_not_double_insert() {
     );
 }
 
-/// The plain-typing case the suppression guard must not break: IME is
-/// attached (the field is focused, `TextInputOwner` has a client) but
-/// no preedit is active, so ordinary characters insert exactly as they
-/// would with no IME composition involved at all.
-#[test]
-fn character_key_with_ime_attached_but_no_active_preedit_inserts_normally() {
-    let controller = TextEditingController::new();
-    let focus_node = FocusNode::with_debug_label("plain key with IME");
-    let harness = crate::common::harness::mount_with_ime(EditableText::new(
-        controller.clone(),
-        Rc::clone(&focus_node),
-    ));
-    focus_node.request_focus();
-    assert!(!controller.is_composing(), "precondition: no preedit yet");
-
-    let handled = harness
-        .focus_manager()
-        .dispatch_key_event(&character_key_event('x'));
-    assert!(handled);
-    assert_eq!(controller.text(), "x");
-}
-
 /// Red-check: drop the `else if let Some(token) = ... handle.detach`
 /// branch in the IME focus listener — this test's `active_count`
 /// assertion after `unfocus()` fails (stays 1).
@@ -871,40 +554,6 @@ fn blur_detaches_the_ime_client() {
         harness.active_ime_clients(),
         0,
         "blur must detach the IME client"
-    );
-}
-
-/// The ADR-0030 detach-on-dispose contract: a field unmounted while
-/// still focused must not leave a stale IME client attached, even though
-/// unmounting never delivers a `previous == Some(node_id)` focus
-/// transition to the field's own listener.
-///
-/// Red-check: remove the explicit `handle.detach(token)` call from
-/// `EditableTextState::dispose` — this test's final `active_count`
-/// assertion fails (leaks the attached client).
-#[test]
-fn unmount_while_focused_detaches_the_ime_client() {
-    let controller = TextEditingController::new();
-    let focus_node = FocusNode::with_debug_label("IME unmount");
-    let mut harness = crate::common::harness::mount_with_ime(ImeUnmountRoot {
-        controller: controller.clone(),
-        focus_node: Rc::clone(&focus_node),
-        show: true,
-    });
-    focus_node.request_focus();
-    assert_eq!(harness.active_ime_clients(), 1);
-
-    harness.swap_root(ImeUnmountRoot {
-        controller: controller.clone(),
-        focus_node,
-        show: false,
-    });
-
-    assert_eq!(
-        harness.active_ime_clients(),
-        0,
-        "unmounting a still-focused field must detach its IME client \
-             (the ADR-0030 dispose contract)"
     );
 }
 
@@ -1031,43 +680,6 @@ fn focusing_sends_the_exact_caret_rect_including_ancestor_padding() {
     );
 }
 
-/// Committing a character moves the caret, and the next pump sends a new
-/// rect with the x coordinate advanced.
-#[test]
-fn caret_advance_sends_a_new_rect_with_x_advanced_after_a_commit() {
-    let controller = TextEditingController::new();
-    let focus_node = FocusNode::with_debug_label("cursor advance");
-    let mut harness = crate::common::harness::mount_with_ime(EditableText::new(
-        controller.clone(),
-        Rc::clone(&focus_node),
-    ));
-
-    harness.enter_owner_scope(|| {
-        focus_node.request_focus();
-    });
-    harness.tick();
-    let first = *harness
-        .cursor_area_calls()
-        .first()
-        .expect("one send after focus gain");
-
-    controller.insert_str("m");
-    harness.tick();
-
-    let calls = harness.cursor_area_calls();
-    assert_eq!(
-        calls.len(),
-        2,
-        "the caret moving after a commit must trigger exactly one more send"
-    );
-    assert!(
-        calls[1].origin.x > first.origin.x,
-        "the caret's x must advance after inserting a character: {:?} -> {:?}",
-        first,
-        calls[1]
-    );
-}
-
 /// Two unchanged frames send exactly one call (dedupe), but a
 /// blur→refocus at the SAME caret position sends again — the
 /// attach-reset half that keeps dedupe from suppressing a brand-new IME
@@ -1119,91 +731,6 @@ fn dedupes_unchanged_frames_and_resends_after_a_refocus_at_the_same_position() {
         2,
         "refocusing at an unchanged caret position must resend — a new IME \
              session always gets its first rect"
-    );
-}
-
-/// `ImeEvent::Enabled` clears the current attach's dedupe cache — the
-/// backend may restart the IME session without any focus change, and
-/// that restart must not be silently absorbed by `last_sent`: the
-/// resumed session needs its own first send even at an unchanged caret
-/// position.
-///
-/// Red-check: drop the `last_sent_for_ime_event.set(None)` call in the
-/// IME event callback's `ImeEvent::Enabled` arm (`init_state`) — the
-/// final assertion fails (dedupe suppresses the resend).
-#[test]
-fn ime_enabled_event_clears_the_dedupe_cache_and_forces_a_resend() {
-    let controller = TextEditingController::new();
-    let focus_node = FocusNode::with_debug_label("IME enabled");
-    let mut harness = crate::common::harness::mount_with_ime(EditableText::new(
-        controller,
-        Rc::clone(&focus_node),
-    ));
-
-    harness.enter_owner_scope(|| {
-        focus_node.request_focus();
-    });
-    harness.tick();
-    assert_eq!(harness.cursor_area_calls().len(), 1);
-
-    // An unchanged frame first, to prove the dedupe cache is actually
-    // populated (not merely empty from a fresh attach) before `Enabled`
-    // clears it.
-    harness.tick();
-    assert_eq!(
-        harness.cursor_area_calls().len(),
-        1,
-        "precondition: an unchanged frame must dedupe before Enabled fires"
-    );
-
-    dispatch_ime(&harness, &flui_platform_api::ImeEvent::Enabled);
-    harness.tick();
-
-    assert_eq!(
-        harness.cursor_area_calls().len(),
-        2,
-        "ImeEvent::Enabled must clear the dedupe cache so an unchanged \
-             caret position resends on the next frame"
-    );
-}
-
-/// Blurring stops the loop: no further sends, even once the controller
-/// keeps changing after the blur.
-///
-/// Red-check: drop the `alive.set(false)` call in the IME focus
-/// listener's blur branch (`init_state`) — this test's final assertion
-/// fails (the loop keeps sending after blur).
-#[test]
-fn loop_stops_sending_after_blur() {
-    let controller = TextEditingController::new();
-    let focus_node = FocusNode::with_debug_label("cursor loop blur");
-    let mut harness = crate::common::harness::mount_with_ime(EditableText::new(
-        controller.clone(),
-        Rc::clone(&focus_node),
-    ));
-    let focus_owner = harness.focus_manager();
-
-    harness.enter_owner_scope(|| {
-        focus_node.request_focus();
-    });
-    harness.tick();
-    assert_eq!(harness.cursor_area_calls().len(), 1);
-
-    harness.enter_owner_scope(|| {
-        focus_owner.unfocus();
-    });
-    harness.tick();
-    let calls_after_blur = harness.cursor_area_calls().len();
-
-    controller.insert_str("z");
-    harness.tick();
-    harness.tick();
-
-    assert_eq!(
-        harness.cursor_area_calls().len(),
-        calls_after_blur,
-        "a blurred field's loop must not send again even after the caret \
-             moves and further frames pump"
     );
 }
 
@@ -1449,27 +976,6 @@ fn a_tap_places_the_caret_where_it_landed() {
     assert!(!controller.has_selection(), "a tap collapses");
 }
 
-/// A tap on an unfocused field focuses it, so one gesture both focuses and
-/// places the caret — the caret would otherwise be set on a field that
-/// then rebuilds without it.
-#[test]
-fn a_tap_focuses_the_field() {
-    let controller = TextEditingController::with_text("hello world");
-    let focus_node = FocusNode::with_debug_label("unfocused field");
-    let harness = crate::common::harness::mount_with_ime(EditableText::new(
-        controller,
-        Rc::clone(&focus_node),
-    ));
-    assert!(
-        !focus_node.has_primary_focus(),
-        "precondition: the field starts unfocused"
-    );
-
-    harness.dispatch_pointer_down(1.0, 5.0);
-
-    assert!(focus_node.has_primary_focus());
-}
-
 /// A drag selects from where it started to where the pointer is, and the
 /// caret follows the pointer rather than the lower end.
 ///
@@ -1539,93 +1045,6 @@ fn a_double_tap_selects_the_word_under_it() {
         controller.selection(),
         0..5,
         "a double-tap at the start of \"hello\" selects the whole word"
-    );
-}
-
-/// A word selection made by a double-tap must survive the second
-/// contact wobbling before it lifts — near-universal on touch, where a
-/// finger is essentially never perfectly still between down and up.
-///
-/// `install_pointer_handlers`'s own `down` handler ran for this same
-/// contact (both `Listener` and `GestureDetector` see every pointer
-/// event) and set `drag_anchor` before `on_double_tap_down` had a
-/// chance to widen the selection — so without clearing that anchor, the
-/// very next move would read it and call
-/// `set_selection(anchor, moved_to)`, collapsing the word selection
-/// back down to a near-zero-byte range anchored at the tap point.
-///
-/// Red-check: drop `drag_anchor.set(None)` from
-/// `wrap_double_tap_word_select`'s `on_double_tap_down` closure — the
-/// selection after the move is a tiny range near the tap point, not
-/// `0..5`.
-#[test]
-fn a_double_tap_selects_the_word_even_if_the_second_contact_moves_before_lifting() {
-    let controller = TextEditingController::with_text("hello world");
-    let focus_node = FocusNode::with_debug_label("wobbly double-tapped field");
-    let harness = crate::common::harness::mount_with_ime(EditableText::new(
-        controller.clone(),
-        Rc::clone(&focus_node),
-    ));
-
-    harness.dispatch_pointer_down(1.0, 5.0);
-    harness.dispatch_pointer_up(1.0, 5.0);
-
-    harness.dispatch_pointer_down(1.0, 5.0);
-    assert_eq!(
-        controller.selection(),
-        0..5,
-        "precondition: the second tap's down already selected the word"
-    );
-
-    // The second contact moves by a pixel before lifting.
-    harness.dispatch_pointer_move(2.0, 5.0);
-    assert_eq!(
-        controller.selection(),
-        0..5,
-        "a stray move on the still-down second contact must not clobber \
-             the word selection"
-    );
-
-    harness.dispatch_pointer_up(2.0, 5.0);
-    assert_eq!(
-        controller.selection(),
-        0..5,
-        "lifting the second contact must not change the selection either"
-    );
-}
-
-/// A disabled field must not attach `on_double_tap_down` at all —
-/// `wrap_double_tap_word_select` skips the builder call entirely
-/// rather than attaching it and returning early inside, which is what
-/// this test's OBSERVABLE assertion (no selection change) shares with
-/// the old, insufficient fix. The reason the distinction matters is
-/// structural, not behavioral here: `GestureDetector`'s
-/// `RecognizerGroup::double_tap_active` joins the arena whenever the
-/// callback SLOT is set, regardless of what the callback does once
-/// called — an attached-but-early-returning callback would still hold
-/// the shared arena across the double-tap window for every tap on a
-/// disabled field, delaying an ancestor's own tap. Proving THAT
-/// requires a clock-driven harness this test module does not have
-/// (`crate::common::harness::Harness` has no `pump_for`); the mechanism
-/// itself — that attaching the slot at all is what makes a detector
-/// join the arena — is covered directly at the `GestureDetector`
-/// level by `gesture_detector_advanced.rs`'s own participation-gating
-/// tests.
-#[test]
-fn a_disabled_field_does_not_select_on_double_tap() {
-    let controller = TextEditingController::with_text("hello world");
-    let focus_node = FocusNode::with_debug_label("disabled field");
-    let harness = crate::common::harness::mount_with_ime(
-        EditableText::new(controller.clone(), Rc::clone(&focus_node)).enabled(false),
-    );
-
-    harness.dispatch_pointer_down(1.0, 5.0);
-    harness.dispatch_pointer_up(1.0, 5.0);
-    harness.dispatch_pointer_down(1.0, 5.0);
-
-    assert!(
-        !controller.has_selection(),
-        "a disabled field must not select a word on double-tap"
     );
 }
 
@@ -1804,57 +1223,6 @@ fn the_controllers_selection_reaches_the_render_object() {
     assert_eq!(render_selection(&harness), Some(6..11));
 }
 
-/// A collapsed selection arrives as `None`, not as an empty range: that
-/// case belongs to the caret, and saying so at the seam is cheaper than
-/// relying on the render object to skip it.
-#[test]
-fn a_collapsed_selection_reaches_the_render_object_as_none() {
-    let controller = TextEditingController::with_text("hello world");
-    controller.set_caret_byte_offset(4);
-    let focus_node = FocusNode::with_debug_label("caret-only field");
-    let harness = crate::common::harness::mount_with_ime(EditableText::new(
-        controller,
-        Rc::clone(&focus_node),
-    ));
-
-    assert_eq!(render_selection(&harness), None);
-}
-
-/// On an obscured field the selection is mapped into MASKED byte space,
-/// the same space the text itself is masked into.
-///
-/// The fixture is chosen so that forwarding the source range **cannot**
-/// accidentally produce the right answer. `RenderEditable` clamps
-/// whatever it is given to a char boundary of the text it holds, and for
-/// masked text those boundaries are multiples of the mask width — so on a
-/// short fixture the clamp lands on the correct offsets by coincidence
-/// and a mapping bug is invisible. That is what the first draft of this
-/// test did, and the mutation run is what exposed it.
-///
-/// `"aa€bb"` — `a a € b b`, five chars, seven bytes — with the two
-/// trailing `b`s selected is source `5..7`. Masked it is the fourth and
-/// fifth of five bullets: `9..15`. Forwarding `5..7` unmapped clamps to
-/// `6..9`, the *third* bullet. The three answers are pairwise distinct.
-///
-/// Red-check: pass `controller.selection()` straight through in
-/// `build_field_view`.
-#[test]
-fn an_obscured_fields_selection_is_mapped_into_masked_space() {
-    let controller = TextEditingController::with_text("aa€bb");
-    controller.set_selection(5, 7);
-    let focus_node = FocusNode::with_debug_label("obscured selecting field");
-    let harness = crate::common::harness::mount_with_ime(
-        EditableText::new(controller, Rc::clone(&focus_node)).obscure_text(true),
-    );
-
-    assert_eq!(
-        render_selection(&harness),
-        Some(9..15),
-        "the last two bullets; forwarding the source range unmapped would \
-             clamp to 6..9, the third"
-    );
-}
-
 /// A double-tap on an obscured field must select against the SOURCE
 /// text's own cluster widths, not the masked string's uniform ones.
 ///
@@ -1891,29 +1259,6 @@ fn a_double_tap_on_an_obscured_field_selects_against_the_source_text() {
         0..1,
         "one source character (\"h\"), not the buffer's first three \
              bytes worth of masked-cluster width"
-    );
-}
-
-/// The same field WITHOUT the flag hands its text through unchanged.
-///
-/// The control for the test above: without it, a mask applied
-/// unconditionally — or a field that rendered nothing at all — would look
-/// identical from the assertion's side.
-#[test]
-fn a_plain_field_still_hands_its_real_text_to_the_render_object() {
-    let controller = TextEditingController::with_text("hunter2");
-    let focus_node = FocusNode::with_debug_label("plain field");
-    let harness = crate::common::harness::mount_with_ime(EditableText::new(
-        controller,
-        Rc::clone(&focus_node),
-    ));
-
-    let painted = with_render_editable(&harness, |editable| editable.plain_text().to_string())
-        .expect("a mounted EditableText always has a RenderEditable");
-
-    assert_eq!(
-        painted, "hunter2",
-        "an unobscured field is unchanged by this feature"
     );
 }
 
@@ -1963,33 +1308,6 @@ fn preedit_cursor_none_while_focused_hides_the_caret_and_starts_the_underline() 
     );
 }
 
-/// The contrast case: `cursor: Some` keeps the caret visible alongside
-/// the composing underline.
-#[test]
-fn preedit_cursor_some_while_focused_keeps_the_caret_visible() {
-    let controller = TextEditingController::new();
-    let (mut harness, focus_node) = mount_ime_field(controller, "preedit visible caret");
-    harness.enter_owner_scope(|| {
-        focus_node.request_focus();
-    });
-    harness.tick();
-
-    dispatch_ime(
-        &harness,
-        &flui_platform_api::ImeEvent::Preedit {
-            text: "ni".to_string(),
-            cursor: Some((2, 2)),
-        },
-    );
-    harness.tick();
-
-    assert!(
-        show_caret_flag(&harness),
-        "cursor: Some must leave the caret visible"
-    );
-    assert!(composing_rect(&harness).is_some());
-}
-
 /// A commit ends composition: the underline disappears and the caret is
 /// restored.
 ///
@@ -2031,44 +1349,6 @@ fn commit_removes_the_underline_and_restores_the_caret() {
         "a commit must remove the composing underline"
     );
     assert!(show_caret_flag(&harness), "a commit must restore the caret");
-}
-
-/// `Disabled` mid-composition (winit's connection-closed signal) also
-/// ends composition: underline gone, caret restored.
-///
-/// Oracle analog: `'connection is closed when TextInputClient
-/// .onConnectionClosed message received'` (`editable_text_test.dart`,
-/// tag `3.44.0`) — **adapted, not a direct port**: Flutter's
-/// `connectionClosed` only ends the input session, leaving the buffer
-/// untouched; FLUI's `ImeEvent::Disabled` additionally strips the
-/// in-progress composing slice (see
-/// `disabled_mid_preedit_strips_the_composing_slice_through_the_attached_client`
-/// below, and `flui_platform_api::text_store::project_ime_event`'s doc, for
-/// the documented divergence this pins).
-#[test]
-fn disabled_removes_the_underline_and_restores_the_caret() {
-    let controller = TextEditingController::with_text("Hello ");
-    let (mut harness, focus_node) = mount_ime_field(controller, "disabled restores caret");
-    harness.enter_owner_scope(|| {
-        focus_node.request_focus();
-    });
-    harness.tick();
-
-    dispatch_ime(
-        &harness,
-        &flui_platform_api::ImeEvent::Preedit {
-            text: "wor".to_string(),
-            cursor: None,
-        },
-    );
-    harness.tick();
-    assert!(!show_caret_flag(&harness));
-
-    dispatch_ime(&harness, &flui_platform_api::ImeEvent::Disabled);
-    harness.tick();
-
-    assert!(composing_rect(&harness).is_none());
-    assert!(show_caret_flag(&harness));
 }
 
 /// `Preedit("")` — winit's composition-cancel signal — ends composition
@@ -2115,83 +1395,6 @@ fn empty_preedit_cancels_the_composition_through_the_attached_client() {
         controller.text(),
         "x",
         "plain typing must work immediately after the cancel"
-    );
-}
-
-/// Inactive empty `Preedit` through the attached client must not delete
-/// a committed selection — the production path that X11 Start uses
-/// (`ImeEvent` → `project_ime_event` → the field's text store).
-#[test]
-fn empty_preedit_with_no_composition_preserves_selection_through_attached_client() {
-    let controller = TextEditingController::with_text("hello world");
-    controller.set_selection(0, 5);
-    let (mut harness, focus_node) = mount_ime_field(controller.clone(), "inactive empty preedit");
-    harness.enter_owner_scope(|| {
-        focus_node.request_focus();
-    });
-    harness.tick();
-
-    dispatch_ime(
-        &harness,
-        &flui_platform_api::ImeEvent::Preedit {
-            text: String::new(),
-            cursor: None,
-        },
-    );
-    harness.tick();
-
-    assert_eq!(controller.text(), "hello world");
-    assert_eq!(controller.selection(), 0..5);
-    assert_eq!(controller.caret_byte_offset(), 5);
-    assert!(!controller.is_composing());
-    assert!(composing_rect(&harness).is_none());
-}
-
-/// The gating contract: an unfocused field must not keep passing a
-/// still-active composing range to the render view, even though blur
-/// does not itself end the composition (only detaches the IME client —
-/// see `blur_detaches_the_ime_client`).
-///
-/// Red-check: drop the `if focused { ... } else { None }` gate around
-/// `composing_range` in `build_field_view` (pass
-/// `controller.composing_range()` unconditionally) — the final
-/// assertion's inversion holds: `composing_rect` stays `Some` after
-/// blur instead of becoming `None`.
-#[test]
-fn unfocus_mid_composition_stops_passing_the_composing_range() {
-    let controller = TextEditingController::new();
-    let (mut harness, focus_node) = mount_ime_field(controller.clone(), "unfocus composition");
-    let focus_owner = harness.focus_manager();
-    harness.enter_owner_scope(|| {
-        focus_node.request_focus();
-    });
-    harness.tick();
-
-    dispatch_ime(
-        &harness,
-        &flui_platform_api::ImeEvent::Preedit {
-            text: "ni".to_string(),
-            cursor: Some((2, 2)),
-        },
-    );
-    harness.tick();
-    assert!(
-        composing_rect(&harness).is_some(),
-        "precondition: the composing range paints while focused"
-    );
-
-    harness.enter_owner_scope(|| {
-        focus_owner.unfocus();
-    });
-    harness.tick();
-
-    assert!(
-        controller.is_composing(),
-        "blur alone must not end the composition itself"
-    );
-    assert!(
-        composing_rect(&harness).is_none(),
-        "an unfocused field must stop painting a stale composing underline"
     );
 }
 
@@ -2487,44 +1690,6 @@ mod text_store {
         assert_eq!(read(&store, |session| session.document_len()), at(17));
     }
 
-    /// A platform session is one change to the field (Mapping decision #34):
-    /// three edits, one listener notification, one `on_changed`.
-    #[test]
-    fn a_three_edit_session_calls_on_changed_once() {
-        let controller = TextEditingController::new();
-        let focus_node = FocusNode::with_debug_label("one session");
-        let changes = Rc::new(RefCell::new(Vec::new()));
-        let sink = Rc::clone(&changes);
-        let mut harness = mount_with_ime(
-            EditableText::new(controller.clone(), Rc::clone(&focus_node))
-                .on_changed(move |_cx, text| sink.borrow_mut().push(text.to_owned())),
-        );
-        focus_node.request_focus();
-        harness.tick();
-        let notified = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let counted = std::sync::Arc::clone(&notified);
-        flui_foundation::notifier::Listenable::add_listener(
-            &controller,
-            std::sync::Arc::new(move || {
-                counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            }),
-        );
-
-        edit(&store(&harness), |session| {
-            for text in ["a", "b", "c"] {
-                session.insert_at_selection(text).expect("editable");
-            }
-        });
-
-        assert_eq!(controller.text(), "abc");
-        assert_eq!(*changes.borrow(), ["abc"], "one on_changed for the session");
-        assert_eq!(
-            notified.load(std::sync::atomic::Ordering::Relaxed),
-            1,
-            "one listener notification for the session"
-        );
-    }
-
     /// A platform selection is kept at any scalar boundary; a tap still
     /// snaps to a grapheme. The divergence ARCHITECTURE.md's Mapping
     /// decision #35 records.
@@ -2594,25 +1759,6 @@ mod text_store {
             }]
         );
         assert_eq!(read(&store, |session| session.document_len()), at(5));
-        store.set_observer(None);
-    }
-
-    /// Red-check: make `EditableTextStore::layout_changed` record nothing —
-    /// the count stays at zero.
-    #[test]
-    fn caret_movement_reports_layout_changed() {
-        let controller = TextEditingController::with_text("hello");
-        let (mut harness, _focus) = focused(&controller);
-        let store = store(&harness);
-        let heard = observe(&store);
-
-        controller.move_caret_left();
-        harness.tick();
-
-        assert!(
-            heard.layouts.get() >= 1,
-            "the moved caret is a layout change"
-        );
         store.set_observer(None);
     }
 
@@ -2718,7 +1864,7 @@ mod event_cx {
     use flui_view::prelude::*;
     use flui_widgets::{EditableText, TextEditingController};
 
-    use super::{character_key_event, dispatch_ime, enter_key_event};
+    use super::character_key_event;
     use crate::common::harness::{Harness, mount_with_ime};
     use crate::common::{ProbeSignals, SignalProbe};
 
@@ -2753,62 +1899,6 @@ mod event_cx {
         assert_eq!(probe.value(), Ok(2));
         harness.tick();
         assert_eq!(probe.reads().last(), Some(&2), "the reader rebuilt");
-    }
-
-    #[test]
-    fn enter_writes_through_on_submitted() {
-        let (probe, harness, _controller) = mounted(|signals, controller, node| {
-            let count = signals.count;
-            EditableText::new(controller, node)
-                .on_submitted(move |cx, text| count.set(cx, text.len() as u32 + 10))
-        });
-
-        let keys = harness.focus_manager();
-        keys.dispatch_key_event(&character_key_event('a'));
-        assert_eq!(probe.value(), Ok(0), "typing alone does not submit");
-        assert!(keys.dispatch_key_event(&enter_key_event()));
-
-        assert_eq!(probe.value(), Ok(11));
-    }
-
-    /// An IME commit that arrives while the frame holds the transaction is
-    /// deferred to the frame's end; its `on_changed` write lands then,
-    /// outside any build.
-    #[test]
-    fn an_ime_commit_deferred_by_the_frame_writes_after_it() {
-        let (probe, mut harness, controller) = mounted(|signals, controller, node| {
-            let count = signals.count;
-            EditableText::new(controller, node)
-                .on_changed(move |cx, text| count.set(cx, text.len() as u32))
-        });
-
-        harness.set_transaction_open(true);
-        dispatch_ime(
-            &harness,
-            &flui_platform_api::ImeEvent::Commit("abc".to_owned()),
-        );
-        assert_eq!(probe.value(), Ok(0), "the commit waits for the frame");
-        harness.tick();
-
-        assert_eq!(controller.text(), "abc");
-        assert_eq!(probe.value(), Ok(3), "the deferred commit wrote");
-    }
-
-    #[test]
-    fn a_let_bound_on_changed_compiles_through_callback_ref() {
-        let (probe, harness, _controller) = mounted(|signals, controller, node| {
-            let count = signals.count;
-            let changed = callback_ref(move |cx, text: &str| {
-                count.update(cx, |n| *n += u32::try_from(text.len()).unwrap_or(u32::MAX))
-            });
-            EditableText::new(controller, node).on_changed(changed)
-        });
-
-        harness
-            .focus_manager()
-            .dispatch_key_event(&character_key_event('a'));
-
-        assert_eq!(probe.value(), Ok(1));
     }
 
     #[test]

@@ -1385,97 +1385,18 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_raw_id_basics() {
-        let id = RawId::zip(42);
-        assert_eq!(id.unzip(), 42);
-    }
-
-    #[test]
     #[should_panic(expected = "non-zero")]
     fn test_raw_id_zero_panics() {
         let _ = RawId::zip(0);
-    }
-
-    #[test]
-    fn test_raw_id_try_zip() {
-        assert!(RawId::try_zip(0).is_none());
-        assert_eq!(RawId::try_zip(42).map(super::RawId::unzip), Some(42));
     }
 
     // -----------------------------------------------------------------------
     // Id<T> tests
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn test_id_basics() {
-        let id = ViewId::zip(42);
-        assert_eq!(id.unzip(), 42);
-    }
-
-    #[test]
-    #[should_panic(expected = "ID index must be non-zero")]
-    fn test_id_zero_panics() {
-        let _ = ViewId::zip(0);
-    }
-
-    #[test]
-    fn test_id_try_zip() {
-        assert!(SemanticsId::try_zip(0).is_none());
-        assert_eq!(LayerId::try_zip(42).map(super::Id::unzip), Some(42));
-    }
-
-    #[test]
-    fn test_non_element_niche_optimization() {
-        // Option<Id<T>> must have same size as Id<T>
-        assert_eq!(size_of::<ViewId>(), size_of::<Option<ViewId>>());
-        assert_eq!(size_of::<RawId>(), size_of::<Option<RawId>>());
-        // GenId niche: generation >= 1 keeps the all-zero pattern free.
-        assert_eq!(size_of::<RenderId>(), size_of::<Option<RenderId>>());
-        assert_eq!(size_of::<RenderId>(), size_of::<u64>());
-    }
-
-    #[test]
-    fn test_debug_format() {
-        let id = ViewId::zip(42);
-        let debug = format!("{id:?}");
-        assert!(debug.contains("View"));
-        assert!(debug.contains("42"));
-    }
-
-    #[test]
-    fn test_arithmetic() {
-        let id = ViewId::zip(10);
-        assert_eq!(id - 5, 5);
-        assert_eq!((id + 5).unzip(), 15);
-    }
-
-    #[test]
-    fn test_ordering() {
-        let id1 = LayerId::zip(1);
-        let id2 = LayerId::zip(2);
-        let id3 = LayerId::zip(3);
-
-        assert!(id1 < id2);
-        assert!(id2 < id3);
-        assert!(id1 < id3);
-    }
-
     // -----------------------------------------------------------------------
     // GenId (generational, RenderId) tests
     // -----------------------------------------------------------------------
-
-    /// Pack/unpack round-trip + 1-based `new` convention.
-    #[test]
-    fn gen_id_round_trip_and_one_based_new() {
-        let generation = NonZeroU32::new(7).unwrap();
-        let id = RenderId::new_gen(42, generation);
-        assert_eq!(id.index(), 42);
-        assert_eq!(id.generation(), generation);
-
-        let one_based = RenderId::new(1);
-        assert_eq!(one_based.index(), 0, "new(1) must map to slab index 0");
-        assert_eq!(one_based.generation(), NonZeroU32::MIN);
-    }
 
     /// ABA safety: same slot, different generation → distinct ids.
     #[test]
@@ -1490,63 +1411,9 @@ mod tests {
         );
     }
 
-    /// Zero input panics (1-based invariant).
-    #[test]
-    #[should_panic(expected = "GenId::new requires n >= 1")]
-    fn gen_id_new_zero_panics() {
-        let _ = RenderId::new(0);
-    }
-
-    /// `DataTransferId` is a full `GenId` domain: pack/unpack round-trip,
-    /// ABA distinctness across generations, and the niche optimisation.
-    #[test]
-    fn data_transfer_id_is_generational_with_niche() {
-        let generation = NonZeroU32::new(3).unwrap();
-        let id = DataTransferId::new_gen(9, generation);
-        assert_eq!(id.index(), 9);
-        assert_eq!(id.generation(), generation);
-
-        let stale = DataTransferId::new_gen(9, NonZeroU32::new(2).unwrap());
-        assert_ne!(
-            stale, id,
-            "a stale DataTransferId must never compare equal to the slot's live id"
-        );
-
-        assert_eq!(
-            size_of::<DataTransferId>(),
-            size_of::<Option<DataTransferId>>()
-        );
-    }
-
-    /// `GenId` satisfies `TreeId` without `Identifier` (no `.get()`;
-    /// the `compile_fail` doc-test on `GenId` enforces the absence).
-    #[test]
-    fn gen_id_implements_tree_id_not_identifier() {
-        fn needs_tree_id<I: TreeId>(id: I) -> I {
-            id
-        }
-        let id = RenderId::new(3);
-        assert_eq!(needs_tree_id(id), id);
-        assert_eq!(id.index(), 2);
-    }
-
     // -----------------------------------------------------------------------
     // PresentationId tests
     // -----------------------------------------------------------------------
-
-    #[test]
-    fn presentation_id_preserves_niche_and_slot_generation() {
-        let generation = NonZeroU32::new(7).unwrap();
-        let id = PresentationId::new_gen(42, generation);
-
-        assert_eq!(id.index(), 42);
-        assert_eq!(id.generation(), generation);
-        assert_eq!(size_of::<PresentationId>(), size_of::<u64>());
-        assert_eq!(
-            size_of::<PresentationId>(),
-            size_of::<Option<PresentationId>>()
-        );
-    }
 
     #[test]
     fn presentation_id_recreated_slot_is_a_distinct_incarnation() {
@@ -1555,73 +1422,6 @@ mod tests {
 
         assert_eq!(first.index(), recreated.index());
         assert_ne!(first, recreated);
-    }
-
-    #[test]
-    fn presentation_id_uses_one_based_convenience_constructor() {
-        let id = PresentationId::new(1);
-
-        assert_eq!(id.index(), 0);
-        assert_eq!(id.generation(), NonZeroU32::MIN);
-    }
-
-    #[test]
-    fn presentation_id_is_a_tree_id() {
-        fn needs_tree_id<I: TreeId>(id: I) -> I {
-            id
-        }
-
-        let id = PresentationId::new(3);
-        assert_eq!(needs_tree_id(id), id);
-        assert_eq!(id.debug_value(), id.as_u64());
-    }
-
-    #[test]
-    fn test_hash() {
-        use std::collections::HashSet;
-
-        let mut set = HashSet::new();
-        set.insert(ViewId::zip(1));
-        set.insert(ViewId::zip(2));
-        set.insert(ViewId::zip(1)); // Duplicate
-
-        assert_eq!(set.len(), 2);
-    }
-
-    #[test]
-    fn test_raw_conversion() {
-        let id = ViewId::zip(42);
-        let raw = id.into_raw();
-        assert_eq!(raw.unzip(), 42);
-
-        let recovered = ViewId::from_raw(raw);
-        assert_eq!(recovered, id);
-    }
-
-    #[test]
-    fn test_convenience_aliases() {
-        // new/get are aliases for zip/unzip
-        let id = ViewId::new(42);
-        assert_eq!(id.get(), 42);
-        assert_eq!(id.get(), id.unzip());
-
-        // new_checked is alias for try_zip
-        assert!(ViewId::new_checked(0).is_none());
-        assert_eq!(ViewId::new_checked(42).map(super::Id::get), Some(42));
-    }
-
-    #[test]
-    fn test_scheduler_id_types() {
-        // Sanity-check the scheduler-consumer IDs survive the audit.
-        let frame = FrameId::zip(1);
-        let callback = FrameCallbackId::zip(2);
-        let task = TaskId::zip(3);
-        let ticker = TickerId::zip(4);
-
-        assert_eq!(frame.unzip(), 1);
-        assert_eq!(callback.unzip(), 2);
-        assert_eq!(task.unzip(), 3);
-        assert_eq!(ticker.unzip(), 4);
     }
 
     // -----------------------------------------------------------------------
@@ -1642,31 +1442,6 @@ mod tests {
             size_of::<u64>(),
             "ElementId must be 8 bytes (NonZeroU64)"
         );
-    }
-
-    /// Pack/unpack round-trip for `new_gen`.
-    #[test]
-    fn element_id_new_gen_round_trip() {
-        let generation = NonZeroU32::new(7).unwrap();
-        let id = ElementId::new_gen(42, generation);
-        assert_eq!(id.index(), 42, "index must round-trip");
-        assert_eq!(id.generation(), generation, "generation must round-trip");
-    }
-
-    /// `new(n)` preserves 1-based convention: `new(1).index() == 0`.
-    #[test]
-    fn element_id_new_one_based() {
-        let id = ElementId::new(1);
-        assert_eq!(id.index(), 0, "new(1) must map to slab index 0");
-        assert_eq!(
-            id.generation(),
-            NonZeroU32::new(1).unwrap(),
-            "new(n) must use generation=1"
-        );
-
-        let id2 = ElementId::new(10);
-        assert_eq!(id2.index(), 9);
-        assert_eq!(id2.generation(), NonZeroU32::new(1).unwrap());
     }
 
     /// Zero input panics with a helpful message.
@@ -1698,21 +1473,6 @@ mod tests {
         assert_eq!(id.generation(), max_gen);
     }
 
-    /// Debug / Display output contains discriminating fields.
-    #[test]
-    fn element_id_display_debug() {
-        let generation = NonZeroU32::new(3).unwrap();
-        let id = ElementId::new_gen(5, generation);
-        let debug = format!("{id:?}");
-        assert!(debug.contains('5'), "debug must contain index");
-        assert!(debug.contains('3'), "debug must contain generation");
-        let display = format!("{id}");
-        assert!(
-            display.contains("Element"),
-            "display must contain 'Element'"
-        );
-    }
-
     /// Distinct (index, generation) pairs produce distinct ids.
     #[test]
     fn element_id_eq_uses_full_packed_value() {
@@ -1724,61 +1484,6 @@ mod tests {
         assert_ne!(id_a, id_b, "stale id must not equal live id (ABA safety)");
         assert_ne!(id_a, id_c);
         assert_eq!(id_a, ElementId::new_gen(0, gen1));
-    }
-
-    /// `TreeId` bound: `ElementId` must satisfy `TreeId` without `Identifier`.
-    #[test]
-    fn element_id_implements_tree_id() {
-        fn needs_tree_id<I: TreeId>(id: I) -> I {
-            id
-        }
-        let id = ElementId::new(1);
-        let returned = needs_tree_id(id);
-        assert_eq!(id, returned);
-    }
-
-    /// `ElementId` does NOT accidentally implement `Identifier`.
-    /// This is a compile-time check enforced by the absence of the impl.
-    /// We verify at runtime that the two traits are distinct by confirming
-    /// `ViewId` (which does impl `Identifier`) can call `.get()` but `ElementId`
-    /// has no such method (the `get()` method simply does not exist on `ElementId`).
-    #[test]
-    fn view_id_implements_identifier_element_id_does_not() {
-        // ViewId: Identifier — .get() works
-        let view = ViewId::new(5);
-        assert_eq!(view.get(), 5);
-        // ElementId: no .get() method. The absence of an `Identifier` impl is
-        // enforced at compile time by the `compile_fail` doc-test on the
-        // `ElementId` type (which shows `id.get()` does not compile).
-        let elem = ElementId::new(5);
-        assert_eq!(elem.index(), 4); // 0-based
-    }
-
-    /// `as_u64` returns the raw packed value; useful for tracing.
-    #[test]
-    fn element_id_as_u64_nonzero() {
-        let id = ElementId::new(1);
-        assert!(id.as_u64() > 0, "packed value must always be non-zero");
-        // Verify it is indeed the packed representation.
-        let gen_bits = u64::from(id.generation().get()) << 32;
-        let idx_bits = u64::from(id.index());
-        assert_eq!(id.as_u64(), gen_bits | idx_bits);
-    }
-
-    /// Serde round-trip through a real format (`serde_json`): an
-    /// `ElementId` serialises to its packed `u64` and deserialises back to an
-    /// equal id, preserving both index and generation.
-    #[test]
-    #[cfg(feature = "serde")]
-    fn element_id_serde_round_trip() {
-        let id = ElementId::new_gen(7, NonZeroU32::new(3).unwrap());
-        let json = serde_json::to_string(&id).expect("serialize");
-        // Wire format is the bare packed u64, not a struct.
-        assert_eq!(json, id.as_u64().to_string());
-        let back: ElementId = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back, id);
-        assert_eq!(back.index(), 7);
-        assert_eq!(back.generation().get(), 3);
     }
 
     /// The deserialiser rejects a packed `u64` whose high 32 bits

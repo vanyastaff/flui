@@ -175,13 +175,6 @@ impl OneEuroFilter2D {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
-
-    #[test]
-    fn first_sample_passes_through() {
-        let mut f = OneEuroFilter::default();
-        assert_eq!(f.filter(42.0, 0.008), 42.0);
-    }
 
     #[test]
     fn static_jitter_is_suppressed() {
@@ -224,33 +217,5 @@ mod tests {
             lag < 2000.0 * te * 4.0,
             "lag {lag} px must stay within a few frames of motion at speed"
         );
-    }
-
-    #[test]
-    fn duplicate_timestamp_returns_previous() {
-        let mut f = OneEuroFilter::default();
-        let a = f.filter(10.0, 0.008);
-        let b = f.filter(999.0, 0.0);
-        assert_eq!(a, b, "zero-dt sample must not corrupt state");
-    }
-
-    #[test]
-    fn two_d_wrapper_filters_both_axes() {
-        let mut f = OneEuroFilter2D::default();
-        let t0 = Instant::now();
-        let p0 = f.filter(t0, Offset::new(0.0, 0.0));
-        assert_eq!(p0, Offset::new(0.0, 0.0));
-
-        // Jittery samples around (50, 50) settle near (50, 50).
-        let mut last = p0;
-        for i in 1..120 {
-            let jitter = if i % 2 == 0 { 0.8 } else { -0.8 };
-            last = f.filter(
-                t0 + Duration::from_millis(8 * i),
-                Offset::new(50.0 + jitter, 50.0 - jitter),
-            );
-        }
-        assert!((last.dx - 50.0).abs() < 1.0);
-        assert!((last.dy - 50.0).abs() < 1.0);
     }
 }

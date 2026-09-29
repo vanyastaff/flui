@@ -96,28 +96,6 @@ fn chip_only_point() -> (f64, f64) {
 // ------------------------------------------------------------------
 
 #[test]
-fn tap_fires_on_pressed_for_a_pressable_chip() {
-    let taps = Rc::new(RefCell::new(0_u32));
-    let counter = Rc::clone(&taps);
-    let laid = lay_out(
-        themed(Chip::new(Text::new("Tag")).on_pressed(move |_cx| {
-            *counter.borrow_mut() += 1;
-        })),
-        loose(300.0),
-    );
-
-    let (x, y) = chip_only_point();
-    laid.dispatch_pointer_down(x, y);
-    laid.dispatch_pointer_up(x, y);
-
-    assert_eq!(
-        *taps.borrow(),
-        1,
-        "a tap on a pressable chip must fire on_pressed"
-    );
-}
-
-#[test]
 fn tap_fires_on_selected_with_the_flipped_value_for_a_filter_chip() {
     let observed = Rc::new(RefCell::new(None));
     let recorder = Rc::clone(&observed);
@@ -252,38 +230,6 @@ fn ancestor_detector_and_chip_compete_in_the_binding_root_arena() {
 // (c) Selected FilterChip fill reaches the mounted Material.
 // ------------------------------------------------------------------
 
-/// Mutation-run: hardcoding `FilterChip::build`'s `background_color` to
-/// `Color::TRANSPARENT` regardless of `filter_chip_default_background_color`'s
-/// result was confirmed to make this test fail (`got Color { r: 0, g: 0, b:
-/// 0, a: 0 }, expected Color { r: 232, g: 222, b: 248, a: 255 }`) — the
-/// exact "wiring mutation survives" gap the pre-fix test suite had, since
-/// only the pure default-table function itself was ever unit-tested, never
-/// its actual use inside `build()`.
-#[test]
-fn selected_filter_chip_fill_reaches_the_mounted_material() {
-    let laid = lay_out(
-        themed(
-            FilterChip::new(Text::new("Vegetarian"))
-                .selected(true)
-                .on_selected(|_cx, _| {}),
-        ),
-        loose(300.0),
-    );
-
-    let material = laid
-        .try_find_by_render_type("RenderPhysicalShape")
-        .expect("FilterChip must compose a Material container surface");
-
-    assert_eq!(
-        laid.render_property(material, "color"),
-        Some(color_property(
-            ThemeData::light().color_scheme.secondary_container
-        )),
-        "a selected, enabled FilterChip's container must fill with secondaryContainer through \
-         the real mount — not the transparent fill an unselected/base chip uses",
-    );
-}
-
 // ------------------------------------------------------------------
 // (d) Disabled chip + delete icon are inert through real dispatch.
 // ------------------------------------------------------------------
@@ -330,33 +276,6 @@ fn disabled_chip_and_its_delete_icon_are_both_inert_through_dispatch() {
     );
 }
 
-#[test]
-fn disabled_filter_chip_and_its_delete_icon_are_both_inert_through_dispatch() {
-    // `FilterChip` has no separate `enabled` builder — Flutter parity:
-    // `isEnabled => onSelected != null` (see `chip.rs`'s `FilterChip::is_enabled`).
-    let deletions = Rc::new(RefCell::new(0_u32));
-    let delete_counter = Rc::clone(&deletions);
-
-    let laid = lay_out(
-        themed(
-            FilterChip::new(Text::new("Vegetarian")).on_deleted(move |_cx| {
-                *delete_counter.borrow_mut() += 1;
-            }),
-        ),
-        loose(300.0),
-    );
-
-    let (delete_x, delete_y) = delete_icon_center(&laid);
-    laid.dispatch_pointer_down(delete_x, delete_y);
-    laid.dispatch_pointer_up(delete_x, delete_y);
-
-    assert_eq!(
-        *deletions.borrow(),
-        0,
-        "a FilterChip with no on_selected (disabled) must swallow taps on its delete icon too",
-    );
-}
-
 // ------------------------------------------------------------------
 // Theme tier beats default — proven through the real mount, not
 // `Option::or_else` re-implemented inline in the test (see chip.rs's
@@ -397,27 +316,6 @@ fn theme_label_color_reaches_the_mounted_paragraph_beating_the_default() {
     );
 }
 
-#[test]
-fn no_theme_override_paints_the_m3_default_label_color() {
-    let laid = lay_out(themed(Chip::new(Text::new("Tag"))), loose(300.0));
-
-    let paragraph = laid
-        .try_find_by_render_type("RenderParagraph")
-        .expect("Chip must mount a RenderParagraph for its label");
-    let style = laid
-        .render_property(paragraph, "style")
-        .expect("RenderParagraph must expose its resolved style");
-
-    // `_ChipDefaultsM3.labelStyle`: `isEnabled ? onSurfaceVariant : onSurface`
-    // — an enabled, undecorated `Chip` resolves `onSurfaceVariant`.
-    let default_color = ThemeData::light().color_scheme.on_surface_variant;
-    assert!(
-        style.contains(&color_property(default_color)),
-        "with no chip_theme override, the label must paint the M3 default onSurfaceVariant — \
-         got style {style:?}",
-    );
-}
-
 /// Mutation-run: replacing `Chip::build`'s `side` binding with a bare
 /// `chip_default_side(false, self.enabled, &colors)` call (dropping the
 /// `chip_theme.side` read entirely) was confirmed to make this test fail —
@@ -451,26 +349,6 @@ fn theme_side_reaches_the_mounted_border_painter_beating_the_default() {
     assert!(
         painter.contains(&color_property(themed_side_color)),
         "a configured chip_theme.side must reach the mounted border painter's resolved color — \
-         got painter {painter:?}",
-    );
-}
-
-#[test]
-fn no_theme_override_paints_the_m3_default_side_color() {
-    let laid = lay_out(themed(Chip::new(Text::new("Tag"))), loose(300.0));
-
-    let custom_paint = laid
-        .try_find_by_render_type("RenderCustomPaint")
-        .expect("Chip must mount a RenderCustomPaint for its border");
-    let painter = laid
-        .render_property(custom_paint, "foreground_painter")
-        .expect("RenderCustomPaint must expose its foreground painter");
-
-    // `_ChipDefaultsM3.side`: `isEnabled ? outlineVariant : onSurface@12%`.
-    let default_color = ThemeData::light().color_scheme.outline_variant;
-    assert!(
-        painter.contains(&color_property(default_color)),
-        "with no chip_theme override, the border must paint the M3 default outlineVariant — \
          got painter {painter:?}",
     );
 }

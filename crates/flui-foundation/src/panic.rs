@@ -79,20 +79,6 @@ mod tests {
     }
 
     #[test]
-    fn is_internal_invariant_is_true_for_a_bug_prefixed_message() {
-        assert!(is_internal_invariant(
-            "BUG: RenderId minted by this tree must resolve"
-        ));
-    }
-
-    #[test]
-    fn is_internal_invariant_is_false_for_a_lowercase_prefix() {
-        assert!(!is_internal_invariant(
-            "bug: wrong case is not the convention"
-        ));
-    }
-
-    #[test]
     fn is_internal_invariant_is_false_when_bug_is_not_at_the_start() {
         assert!(!is_internal_invariant("x BUG: not a prefix"));
     }

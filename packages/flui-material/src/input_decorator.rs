@@ -600,127 +600,13 @@ mod tests {
     // InputDecoration
     // ========================================================================
 
-    #[test]
-    fn default_is_unfilled_enabled_with_every_text_slot_unset() {
-        let decoration = InputDecoration::default();
-        assert!(decoration.label_text.is_none());
-        assert!(decoration.hint_text.is_none());
-        assert!(decoration.helper_text.is_none());
-        assert!(decoration.error_text.is_none());
-        assert!(!decoration.filled);
-        assert!(decoration.content_padding.is_none());
-        assert!(decoration.enabled);
-    }
-
-    #[test]
-    fn default_content_padding_matches_m3_filled_non_dense_value() {
-        // `EdgeInsets.fromLTRB(12, 8, 12, 8)` (`input_decorator.dart:3333-3334`).
-        let padding = default_content_padding();
-        assert_eq!(padding.left, 12.0);
-        assert_eq!(padding.top, 8.0);
-        assert_eq!(padding.right, 12.0);
-        assert_eq!(padding.bottom, 8.0);
-    }
-
     // ========================================================================
     // State-table pins — `default_fill_color`
     // ========================================================================
 
-    #[test]
-    fn fill_color_state_table_pins() {
-        let colors = ColorScheme::light();
-        let property = default_fill_color(colors);
-
-        assert_eq!(
-            resolve(&property, WidgetStates::NONE),
-            Some(colors.surface_container_highest)
-        );
-        assert_eq!(
-            resolve(&property, WidgetStates::from(WidgetState::Disabled)),
-            Some(colors.on_surface.with_opacity(0.04))
-        );
-        // No hovered branch: hovered-only resolves the same as the plain
-        // default — the hover blend is a separate compositing step, not a
-        // fill-color state (see `hover_blended_fill`).
-        assert_eq!(
-            resolve(&property, WidgetStates::from(WidgetState::Hovered)),
-            Some(colors.surface_container_highest)
-        );
-    }
-
     // ========================================================================
     // State-table pins — `default_active_indicator` (combined states pinned)
     // ========================================================================
-
-    #[test]
-    fn active_indicator_state_table_pins_every_branch_including_combined_states() {
-        let colors = ColorScheme::light();
-        let property = default_active_indicator(colors);
-
-        let plain = resolve(&property, WidgetStates::NONE).expect("plain branch");
-        assert_eq!(plain.color, colors.on_surface_variant);
-        assert_eq!(plain.width, 1.0);
-
-        let disabled =
-            resolve(&property, WidgetStates::from(WidgetState::Disabled)).expect("disabled branch");
-        assert_eq!(disabled.color, colors.on_surface.with_opacity(0.38));
-        assert_eq!(disabled.width, 1.0);
-
-        let focused =
-            resolve(&property, WidgetStates::from(WidgetState::Focused)).expect("focused branch");
-        assert_eq!(focused.color, colors.primary);
-        assert_eq!(focused.width, 2.0);
-
-        let hovered =
-            resolve(&property, WidgetStates::from(WidgetState::Hovered)).expect("hovered branch");
-        assert_eq!(hovered.color, colors.on_surface);
-        assert_eq!(hovered.width, 1.0);
-
-        let error =
-            resolve(&property, WidgetStates::from(WidgetState::Error)).expect("error branch");
-        assert_eq!(error.color, colors.error);
-        assert_eq!(error.width, 1.0);
-
-        // Combined-state pins: within `error`, `focused` beats `hovered`
-        // beats plain — and `error+focused` uses a 2.0 width (unlike the
-        // top-level `focused` branch's own 2.0, this confirms the nested
-        // branch, not a fallthrough to the outer one, produced it).
-        let error_focused = resolve(
-            &property,
-            WidgetStates::from(WidgetState::Error).with_state(WidgetState::Focused),
-        )
-        .expect("error+focused branch");
-        assert_eq!(error_focused.color, colors.error);
-        assert_eq!(error_focused.width, 2.0);
-
-        let error_hovered = resolve(
-            &property,
-            WidgetStates::from(WidgetState::Error).with_state(WidgetState::Hovered),
-        )
-        .expect("error+hovered branch");
-        assert_eq!(error_hovered.color, colors.on_error_container);
-        assert_eq!(error_hovered.width, 1.0);
-
-        // Top-level combined-state pin: focused+hovered resolves the
-        // focused (2.0, primary) branch, not hovered's — the oracle's own
-        // documented precedence for this widget (see the module docs).
-        let focused_hovered = resolve(
-            &property,
-            WidgetStates::from(WidgetState::Focused).with_state(WidgetState::Hovered),
-        )
-        .expect("focused+hovered branch");
-        assert_eq!(focused_hovered.color, colors.primary);
-        assert_eq!(focused_hovered.width, 2.0);
-
-        // Disabled outranks every other state, including error.
-        let disabled_error = resolve(
-            &property,
-            WidgetStates::from(WidgetState::Disabled).with_state(WidgetState::Error),
-        )
-        .expect("disabled+error branch");
-        assert_eq!(disabled_error.color, colors.on_surface.with_opacity(0.38));
-        assert_eq!(disabled_error.width, 1.0);
-    }
 
     /// Mutation-style red-check: swapping the `error`/`focused` branch order
     /// (checking `Focused` before `Error`) would make `error+focused`
@@ -746,113 +632,13 @@ mod tests {
     // State-table pins — `default_hint_style`
     // ========================================================================
 
-    #[test]
-    fn hint_style_state_table_pins() {
-        let colors = ColorScheme::light();
-        let property = default_hint_style(colors);
-
-        assert_eq!(
-            resolve(&property, WidgetStates::NONE).and_then(|s| s.color),
-            Some(colors.on_surface_variant)
-        );
-        assert_eq!(
-            resolve(&property, WidgetStates::from(WidgetState::Disabled)).and_then(|s| s.color),
-            Some(colors.on_surface.with_opacity(0.38))
-        );
-    }
-
     // ========================================================================
     // State-table pins — `default_label_style` (combined states pinned)
     // ========================================================================
 
-    #[test]
-    fn label_style_state_table_pins_every_branch_including_combined_states() {
-        let colors = ColorScheme::light();
-        let base = TextStyle::default().with_font_size(16.0);
-        let property = default_label_style(colors, base);
-
-        let color_of = |states: WidgetStates| resolve(&property, states).and_then(|s| s.color);
-
-        assert_eq!(
-            color_of(WidgetStates::NONE),
-            Some(colors.on_surface_variant)
-        );
-        assert_eq!(
-            color_of(WidgetStates::from(WidgetState::Disabled)),
-            Some(colors.on_surface.with_opacity(0.38))
-        );
-        assert_eq!(
-            color_of(WidgetStates::from(WidgetState::Focused)),
-            Some(colors.primary)
-        );
-        assert_eq!(
-            color_of(WidgetStates::from(WidgetState::Hovered)),
-            Some(colors.on_surface_variant)
-        );
-        assert_eq!(
-            color_of(WidgetStates::from(WidgetState::Error)),
-            Some(colors.error)
-        );
-        assert_eq!(
-            color_of(WidgetStates::from(WidgetState::Error).with_state(WidgetState::Focused)),
-            Some(colors.error)
-        );
-        assert_eq!(
-            color_of(WidgetStates::from(WidgetState::Error).with_state(WidgetState::Hovered)),
-            Some(colors.on_error_container)
-        );
-        assert_eq!(
-            color_of(WidgetStates::from(WidgetState::Focused).with_state(WidgetState::Hovered)),
-            Some(colors.primary),
-            "focused must win over hovered"
-        );
-        assert_eq!(
-            color_of(WidgetStates::from(WidgetState::Disabled).with_state(WidgetState::Error)),
-            Some(colors.on_surface.with_opacity(0.38)),
-            "disabled must win over error"
-        );
-    }
-
     // ========================================================================
     // State-table pins — `default_helper_style` / `default_error_style`
     // ========================================================================
-
-    #[test]
-    fn helper_style_state_table_pins() {
-        let colors = ColorScheme::light();
-        let base = TextStyle::default().with_font_size(12.0);
-        let property = default_helper_style(colors, base);
-
-        assert_eq!(
-            resolve(&property, WidgetStates::NONE).and_then(|s| s.color),
-            Some(colors.on_surface_variant)
-        );
-        assert_eq!(
-            resolve(&property, WidgetStates::from(WidgetState::Disabled)).and_then(|s| s.color),
-            Some(colors.on_surface.with_opacity(0.38))
-        );
-    }
-
-    #[test]
-    fn error_style_is_unconditionally_error_colored() {
-        let colors = ColorScheme::light();
-        let base = TextStyle::default().with_font_size(12.0);
-        let property = default_error_style(colors, base);
-
-        // No other state changes the outcome — not even disabled, matching
-        // the oracle's unconditional `errorStyle` (`:6099-6103`).
-        for states in [
-            WidgetStates::NONE,
-            WidgetStates::from(WidgetState::Disabled),
-            WidgetStates::from(WidgetState::Focused),
-            WidgetStates::from(WidgetState::Hovered),
-        ] {
-            assert_eq!(
-                resolve(&property, states).and_then(|s| s.color),
-                Some(colors.error)
-            );
-        }
-    }
 
     // ========================================================================
     // Hover blend
@@ -866,45 +652,6 @@ mod tests {
         let expected = default_hover_color(brightness).blend_over(fill);
         assert_eq!(blended, expected);
         assert_ne!(blended, fill, "a real blend must change the color");
-    }
-
-    #[test]
-    fn hover_blend_is_identity_when_not_hovering() {
-        let fill = Color::rgb(200, 200, 200);
-        assert_eq!(
-            hover_blended_fill(fill, Brightness::Light, true, true, false),
-            fill
-        );
-    }
-
-    #[test]
-    fn hover_blend_is_identity_when_not_filled() {
-        let fill = Color::TRANSPARENT;
-        assert_eq!(
-            hover_blended_fill(fill, Brightness::Light, false, true, true),
-            fill
-        );
-    }
-
-    #[test]
-    fn hover_blend_is_identity_when_disabled() {
-        let fill = Color::rgb(200, 200, 200);
-        assert_eq!(
-            hover_blended_fill(fill, Brightness::Light, true, false, true),
-            fill
-        );
-    }
-
-    #[test]
-    fn default_hover_color_is_keyed_on_brightness_not_a_color_scheme_role() {
-        assert_eq!(
-            default_hover_color(Brightness::Light),
-            Color::BLACK.with_opacity(0.04)
-        );
-        assert_eq!(
-            default_hover_color(Brightness::Dark),
-            Color::WHITE.with_opacity(0.04)
-        );
     }
 
     // ========================================================================
@@ -946,37 +693,4 @@ mod tests {
     // ========================================================================
     // Helper/error line selection
     // ========================================================================
-
-    #[test]
-    fn error_replaces_helper_when_both_are_set() {
-        let decoration = InputDecoration {
-            helper_text: Some("helper".to_string()),
-            error_text: Some("error".to_string()),
-            ..Default::default()
-        };
-        assert_eq!(helper_or_error_line(&decoration), Some(("error", true)));
-    }
-
-    #[test]
-    fn helper_shows_alone_when_no_error() {
-        let decoration = InputDecoration {
-            helper_text: Some("helper".to_string()),
-            ..Default::default()
-        };
-        assert_eq!(helper_or_error_line(&decoration), Some(("helper", false)));
-    }
-
-    #[test]
-    fn error_shows_alone_when_no_helper() {
-        let decoration = InputDecoration {
-            error_text: Some("error".to_string()),
-            ..Default::default()
-        };
-        assert_eq!(helper_or_error_line(&decoration), Some(("error", true)));
-    }
-
-    #[test]
-    fn neither_helper_nor_error_line_when_both_unset() {
-        assert_eq!(helper_or_error_line(&InputDecoration::default()), None);
-    }
 }

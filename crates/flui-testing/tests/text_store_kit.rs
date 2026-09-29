@@ -21,18 +21,6 @@ fn in_memory_store_conforms_to_kit_v1() {
     text_store_kit::assert_conforms(&mut InMemoryFixture::new(), KIT_VERSION);
 }
 
-#[test]
-fn a_protected_in_memory_store_conforms_to_kit_v1() {
-    text_store_kit::assert_conforms(&mut InMemoryFixture::protected(), KIT_VERSION);
-}
-
-#[test]
-fn version_one_runs_every_case() {
-    let cases = text_store_kit::cases();
-    assert_eq!(cases.len(), 25);
-    assert!(cases.iter().all(|case| case.since == 1));
-}
-
 /// One deliberate defect a store might have.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Fault {

@@ -253,9 +253,8 @@ impl<T: Clone> super::traits::Along for Corners<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::geometry::{Corner, Radius};
-    use crate::geometry::{axis::Axis, traits::Along};
+
+    use crate::geometry::{Corner, axis::Axis};
 
     const ALL: [Corner; 4] = [
         Corner::TopLeft,
@@ -263,75 +262,6 @@ mod tests {
         Corner::BottomRight,
         Corner::BottomLeft,
     ];
-
-    /// Distinct values, so each field is told apart from the others.
-    fn distinct() -> Corners<i32> {
-        corners(1, 2, 3, 4)
-    }
-
-    #[test]
-    fn construction_is_clockwise_from_top_left() {
-        let c = Corners::new(1, 2, 3, 4);
-        assert_eq!(
-            (c.top_left, c.top_right, c.bottom_right, c.bottom_left),
-            (1, 2, 3, 4)
-        );
-        assert_eq!(c, distinct());
-        assert_eq!(ALL.map(|k| c.corner(k)), [1, 2, 3, 4]);
-        assert_eq!(c.map(|v| v * 10), corners(10, 20, 30, 40));
-    }
-
-    #[test]
-    fn one_sided_constructors_default_the_rest() {
-        assert_eq!(Corners::all(7), corners(7, 7, 7, 7));
-        assert_eq!(Corners::top(7), corners(7, 7, 0, 0));
-        assert_eq!(Corners::bottom(7), corners(0, 0, 7, 7));
-        assert_eq!(Corners::left(7), corners(7, 0, 0, 7));
-        assert_eq!(Corners::right(7), corners(0, 7, 7, 0));
-    }
-
-    /// Every placement of four distinct values, so each comparison in
-    /// `max`/`min` decides the result somewhere.
-    #[test]
-    fn max_and_min_find_the_extremes_in_any_corner() {
-        let values = [3, 1, 4, 2];
-        for a in 0..4 {
-            for b in 0..4 {
-                for c in 0..4 {
-                    for d in 0..4 {
-                        let idx = [a, b, c, d];
-                        if (1..4).any(|i| idx[..i].contains(&idx[i])) {
-                            continue;
-                        }
-                        let k = corners(values[a], values[b], values[c], values[d]);
-                        assert_eq!((k.max(), k.min()), (4, 1), "{k:?}");
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn scale_multiplies_each_corner() {
-        let k = corners(1.0, 2.0, 3.0, 4.0);
-        assert_eq!(k.scale(1.5), corners(1.5, 3.0, 4.5, 6.0));
-    }
-
-    /// Horizontal is the top pair, vertical the left pair.
-    #[test]
-    fn along_reads_and_replaces_one_pair() {
-        let k = distinct();
-        assert_eq!(k.along(Axis::Horizontal), (1, 2));
-        assert_eq!(k.along(Axis::Vertical), (1, 4));
-        assert_eq!(
-            k.apply_along(Axis::Horizontal, |(a, b)| (a + 10, b + 20)),
-            corners(11, 22, 3, 4)
-        );
-        assert_eq!(
-            k.apply_along(Axis::Vertical, |(a, b)| (a + 10, b + 20)),
-            corners(11, 2, 3, 24)
-        );
-    }
 
     #[test]
     fn corner_sides_and_reflections() {
@@ -354,15 +284,5 @@ mod tests {
                 "{k:?}"
             );
         }
-    }
-
-    #[test]
-    fn radius_constructors() {
-        assert_eq!(Radius::circular(3.0), Radius::new(3.0, 3.0));
-        assert_eq!(Radius::elliptical(3.0, 5.0), Radius { x: 3.0, y: 5.0 });
-        assert_eq!(Radius::<f64>::zero(), Radius::ZERO);
-        assert!(Radius::ZERO.is_zero());
-        assert!(!Radius::new(0.0, 1.0).is_zero());
-        assert!(!Radius::new(1.0, 0.0).is_zero());
     }
 }

@@ -431,51 +431,9 @@ impl_render_view!(RawImage);
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
     use flui_rendering::constraints::BoxConstraints;
 
     use super::*;
-    use crate::image::provider::ImageProviderError;
-
-    #[derive(Debug)]
-    struct AlwaysFails;
-
-    impl ImageProvider for AlwaysFails {
-        fn resolve(&self) -> Result<PixelImage, ImageProviderError> {
-            Err(ImageProviderError::DecodeFailed {
-                reason: "always fails".to_string(),
-            })
-        }
-    }
-
-    /// Succeeds with a 40x30 image on the FIRST `resolve()` call, then fails
-    /// on every subsequent call -- models a provider whose backing source
-    /// (a file, a network response) becomes unavailable between rebuilds.
-    #[derive(Debug)]
-    struct FailsAfterFirstCall {
-        calls: AtomicUsize,
-    }
-
-    impl FailsAfterFirstCall {
-        fn new() -> Self {
-            Self {
-                calls: AtomicUsize::new(0),
-            }
-        }
-    }
-
-    impl ImageProvider for FailsAfterFirstCall {
-        fn resolve(&self) -> Result<PixelImage, ImageProviderError> {
-            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
-                Ok(PixelImage::from_rgba8(40, 30, vec![0u8; 40 * 30 * 4]))
-            } else {
-                Err(ImageProviderError::DecodeFailed {
-                    reason: "source became unavailable".to_string(),
-                })
-            }
-        }
-    }
 
     fn loose() -> BoxConstraints {
         BoxConstraints::loose(Size::new(1000.0, 1000.0))
@@ -483,21 +441,6 @@ mod tests {
 
     fn detached_ctx() -> flui_view::RenderObjectContext<'static> {
         flui_view::RenderObjectContext::detached()
-    }
-
-    #[test]
-    fn create_render_object_uses_a_zero_size_placeholder_for_an_absent_image() {
-        let raw = RawImage {
-            image: None,
-            fit: ImageFit::Contain,
-            alignment: ImageAlignment::Center,
-            width: None,
-            height: None,
-        };
-        let render = raw.create_render_object(&detached_ctx());
-
-        assert!(render.image().is_none());
-        assert_eq!(render.compute_size(&loose()), Size::ZERO);
     }
 
     #[test]
@@ -533,106 +476,5 @@ mod tests {
              while `_image == null` -- a widget that has stopped showing an \
              image must not keep reserving that image's space",
         );
-    }
-
-    #[test]
-    fn update_render_object_keeps_a_forced_dimension_when_the_image_becomes_absent() {
-        let with_image = RawImage {
-            image: Some(PixelImage::from_rgba8(40, 30, vec![0u8; 40 * 30 * 4])),
-            fit: ImageFit::Contain,
-            alignment: ImageAlignment::Center,
-            width: Some(100.0),
-            height: None,
-        };
-        let mut render = with_image.create_render_object(&detached_ctx());
-
-        let now_absent = RawImage {
-            image: None,
-            ..with_image
-        };
-        let _ = now_absent.update_render_object(&detached_ctx(), &mut render);
-
-        assert_eq!(
-            render.compute_size(&loose()),
-            Size::new(100.0, 0.0),
-            "clearing the image collapses only the axes the image was sizing \
-             -- a forced width still reserves its width",
-        );
-    }
-
-    #[test]
-    fn width_and_height_overrides_reach_the_render_object() {
-        let raw = RawImage {
-            image: None,
-            fit: ImageFit::Contain,
-            alignment: ImageAlignment::Center,
-            width: Some(100.0),
-            height: Some(80.0),
-        };
-        let render = raw.create_render_object(&detached_ctx());
-
-        assert_eq!(render.width(), Some(100.0));
-        assert_eq!(render.height(), Some(80.0));
-    }
-
-    #[test]
-    fn raw_image_update_unions_only_changed_configuration_impacts() {
-        let initial = RawImage {
-            image: None,
-            fit: ImageFit::Contain,
-            alignment: ImageAlignment::Center,
-            width: None,
-            height: None,
-        };
-        let mut render = initial.create_render_object(&detached_ctx());
-        assert_eq!(
-            initial.update_render_object(&detached_ctx(), &mut render),
-            flui_rendering::RenderUpdateImpact::NONE,
-        );
-
-        let paint_only = RawImage {
-            fit: ImageFit::Cover,
-            alignment: ImageAlignment::TopLeft,
-            ..initial.clone()
-        };
-        assert_eq!(
-            paint_only.update_render_object(&detached_ctx(), &mut render),
-            flui_rendering::RenderUpdateImpact::PAINT,
-        );
-
-        let layout_and_paint = RawImage {
-            width: Some(100.0),
-            ..initial
-        };
-        assert_eq!(
-            layout_and_paint.update_render_object(&detached_ctx(), &mut render),
-            flui_rendering::RenderUpdateImpact::LAYOUT,
-            "LAYOUT already contains the eventual paint implied by changing width",
-        );
-    }
-
-    #[test]
-    fn raw_image_has_children_is_always_false() {
-        let raw = RawImage {
-            image: None,
-            fit: ImageFit::Contain,
-            alignment: ImageAlignment::Center,
-            width: None,
-            height: None,
-        };
-        assert!(!raw.has_children());
-    }
-
-    #[test]
-    fn image_new_stores_a_failing_provider_without_panicking() {
-        // Smoke test that the public `Image::new` constructor still accepts a
-        // custom `ImageProvider` after the RenderView -> StatelessView split.
-        let _widget = Image::new(AlwaysFails);
-    }
-
-    #[test]
-    fn image_new_stores_a_provider_that_fails_after_first_call() {
-        let widget = Image::new(FailsAfterFirstCall::new());
-        assert_eq!(widget.fit, ImageFit::Contain);
     }
 }

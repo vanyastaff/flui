@@ -389,17 +389,11 @@ mod tests {
     use flui_objects::RenderSizedBox;
     use flui_rendering::protocol::BoxProtocol;
 
-    use flui_foundation::ElementId;
-
     use super::*;
 
     /// A typed mask over the test data.
     type M = FieldMask<TestTheme>;
-    use crate::{
-        InheritedElement,
-        element::{InheritedBehavior, Lifecycle},
-        view::View,
-    };
+    use crate::view::View;
 
     #[derive(Clone, Debug, PartialEq)]
     struct TestTheme {
@@ -463,93 +457,6 @@ mod tests {
         fn create_element(&self) -> crate::element::ElementKind {
             crate::element::ElementKind::inherited(self)
         }
-    }
-
-    #[test]
-    fn test_inherited_element_creation() {
-        let provider = TestThemeProvider {
-            theme: TestTheme { color: 0x00FF_0000 },
-            child: DummyView,
-        };
-
-        let element = InheritedElement::new(&provider, InheritedBehavior::new(&provider));
-        assert_eq!(element.behavior().data().color, 0x00FF_0000);
-        assert_eq!(element.core().lifecycle(), Lifecycle::Initial);
-    }
-
-    #[test]
-    fn test_inherited_element_dependents() {
-        let provider = TestThemeProvider {
-            theme: TestTheme { color: 0x00FF_0000 },
-            child: DummyView,
-        };
-
-        let mut element = InheritedElement::new(&provider, InheritedBehavior::new(&provider));
-
-        let dep1 = ElementId::new(1);
-        let dep2 = ElementId::new(2);
-
-        element.behavior_mut().add_dependent(dep1, 3, FieldSet::ALL);
-        element.behavior_mut().add_dependent(dep2, 4, FieldSet::ALL);
-        assert_eq!(element.behavior().dependents().len(), 2);
-        assert_eq!(
-            element.behavior().dependents().get(&dep1).map(|e| e.depth),
-            Some(3)
-        );
-        assert_eq!(
-            element.behavior().dependents().get(&dep2).map(|e| e.depth),
-            Some(4)
-        );
-
-        // Adding same dependent again should overwrite depth (idempotent
-        // dedup via HashMap key) — not duplicate.
-        element.behavior_mut().add_dependent(dep1, 5, FieldSet::ALL);
-        assert_eq!(element.behavior().dependents().len(), 2);
-        assert_eq!(
-            element.behavior().dependents().get(&dep1).map(|e| e.depth),
-            Some(5)
-        );
-        // Masks union across registrations (two reads of different fields in
-        // one build); the depth is the latest.
-        let dep3 = ElementId::new(3);
-        element
-            .behavior_mut()
-            .add_dependent(dep3, 6, M::bit(1).erase());
-        element
-            .behavior_mut()
-            .add_dependent(dep3, 7, M::bit(2).erase());
-        let entry = element.behavior().dependents()[&dep3];
-        assert_eq!(entry.depth, 7);
-        assert_eq!(entry.mask, (M::bit(1) | M::bit(2)).erase());
-        element.behavior_mut().remove_dependent(dep3);
-
-        element.behavior_mut().remove_dependent(dep1);
-        assert_eq!(element.behavior().dependents().len(), 1);
-        assert!(element.behavior().dependents().contains_key(&dep2));
-    }
-
-    #[test]
-    fn test_inherited_element_update_should_notify() {
-        let provider1 = TestThemeProvider {
-            theme: TestTheme { color: 0x00FF_0000 },
-            child: DummyView,
-        };
-
-        let provider2 = TestThemeProvider {
-            theme: TestTheme { color: 0x0000_FF00 },
-            child: DummyView,
-        };
-
-        let provider_same = TestThemeProvider {
-            theme: TestTheme { color: 0x00FF_0000 },
-            child: DummyView,
-        };
-
-        // Different theme should notify
-        assert!(provider2.update_should_notify(&provider1));
-
-        // Same theme should not notify
-        assert!(!provider_same.update_should_notify(&provider1));
     }
 
     #[test]

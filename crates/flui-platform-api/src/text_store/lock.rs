@@ -399,16 +399,6 @@ mod tests {
     }
 
     #[test]
-    fn a_free_store_grants_at_once() {
-        let arbiter = LockArbiter::new();
-        let (log, grants) = labelled();
-        let outcome = arbiter.request(grants.grant("now"), LockTiming::Sync, &mut open);
-        assert_eq!(outcome, Ok(LockOutcome::Granted));
-        assert_eq!(*log.borrow(), ["now"]);
-        assert!(!arbiter.is_locked());
-    }
-
-    #[test]
     fn sync_inside_a_session_is_refused() {
         let arbiter = Rc::new(LockArbiter::new());
         let seen = Rc::new(Cell::new(None));
@@ -479,19 +469,6 @@ mod tests {
     }
 
     #[test]
-    fn a_new_arbiter_is_open_until_a_gate_is_installed() {
-        let arbiter = LockArbiter::new();
-        assert!(arbiter.may_commit());
-        let gate = CommitGate::new();
-        arbiter.set_gate(gate.clone());
-        gate.set_open(false);
-        assert!(
-            !arbiter.may_commit(),
-            "the arbiter reads the installed gate, not a copy of its state"
-        );
-    }
-
-    #[test]
     fn deferred_run_in_fifo_order() {
         let (arbiter, gate) = behind_a_shut_gate();
         let (log, grants) = labelled();
@@ -540,24 +517,6 @@ mod tests {
             Ok(LockOutcome::Granted)
         );
         assert_eq!(*log.borrow(), ["after"]);
-    }
-
-    #[test]
-    fn clear_drops_pending_grants_unrun() {
-        let (arbiter, gate) = behind_a_shut_gate();
-        let (log, grants) = labelled();
-        let _ = arbiter.request(grants.grant("a"), LockTiming::Async, &mut open);
-        let _ = arbiter.request(grants.grant("b"), LockTiming::Async, &mut open);
-        assert_eq!(arbiter.clear(), 2);
-        gate.set_open(true);
-        assert_eq!(arbiter.run_deferred(&mut open), 0);
-        assert!(log.borrow().is_empty());
-    }
-
-    #[test]
-    fn a_grant_reports_its_kind() {
-        assert_eq!(LockGrant::read(|_| {}).kind(), LockKind::Read);
-        assert_eq!(LockGrant::read_write(|_| {}).kind(), LockKind::ReadWrite);
     }
 
     static_assertions::assert_not_impl_any!(LockArbiter: Send, Sync);

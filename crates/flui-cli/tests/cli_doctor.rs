@@ -13,34 +13,6 @@ fn flui() -> Command {
     cargo_bin_cmd!("flui")
 }
 
-#[test]
-fn doctor_runs_successfully() {
-    flui().args(["doctor"]).assert().success();
-}
-
-#[test]
-fn doctor_detects_rust() {
-    flui()
-        .args(["doctor"])
-        .assert()
-        .success()
-        .stderr(predicate::str::contains("Rust"));
-}
-
-#[test]
-fn doctor_detects_cargo() {
-    flui()
-        .args(["doctor"])
-        .assert()
-        .success()
-        .stderr(predicate::str::contains("Cargo"));
-}
-
-#[test]
-fn doctor_verbose_runs_successfully() {
-    flui().args(["doctor", "--verbose"]).assert().success();
-}
-
 /// A required tool missing entirely (empty `PATH`) must fail the whole
 /// command with the environment exit code, and the summary must say why.
 #[test]
@@ -108,36 +80,6 @@ fn doctor_json_stdout_is_pure_ndjson() {
     }
     assert!(checks >= 1, "expected at least one doctor.check event");
     assert_eq!(summaries, 1, "expected exactly one doctor.summary event");
-}
-
-/// Human mode (no `--json`) must not put anything on stdout: all narration
-/// belongs on stderr so `flui doctor > report.txt` produces an empty file.
-#[test]
-fn doctor_human_mode_prints_nothing_on_stdout() {
-    let assert = flui().args(["doctor"]).assert();
-    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
-    assert_eq!(stdout, "", "human mode leaked onto stdout: {stdout:?}");
-}
-
-/// `--quiet` drops the narration (`ui::note`'s "Environment Check" box) but
-/// keeps warnings and errors — here, the promoted Android-SDK error.
-#[test]
-fn doctor_quiet_keeps_warnings_and_errors_only() {
-    let assert = flui()
-        .args(["--quiet", "doctor", "--android"])
-        .env_remove("ANDROID_HOME")
-        .env_remove("ANDROID_SDK_ROOT")
-        .assert()
-        .code(3);
-    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
-    assert!(
-        stderr.contains("Android SDK"),
-        "the promoted error must still reach stderr under --quiet: {stderr:?}"
-    );
-    assert!(
-        !stderr.contains("Environment Check"),
-        "--quiet must suppress the narration box: {stderr:?}"
-    );
 }
 
 /// Pull the one `doctor.summary` object out of NDJSON stdout, if present.

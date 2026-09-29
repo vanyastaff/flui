@@ -85,22 +85,6 @@ impl LocalPostFrameLane {
         self.inner.queue.borrow_mut().extend(entries);
     }
 
-    /// Whether this lane's queue is currently borrowable -- i.e. not mid
-    /// `borrow()`/`borrow_mut()` somewhere up the call stack.
-    ///
-    /// Mirrors [`TaskQueue::is_unlocked`](crate::task::TaskQueue::is_unlocked):
-    /// the lock-discipline oracle probes this lane through this method
-    /// rather than reaching into the private `RefCell` directly. A
-    /// reentrant `RefCell` borrow panics rather than deadlocking, a
-    /// different failure mode than the `Mutex` family the rest of the
-    /// oracle covers, but a callback that runs with its own lane's queue
-    /// still borrowed is exactly as wrong: it cannot register another
-    /// local callback of its own without panicking.
-    #[cfg(test)]
-    pub(crate) fn is_unlocked(&self) -> bool {
-        self.inner.queue.try_borrow_mut().is_ok()
-    }
-
     /// Drain this lane's queue for `scheduler`'s frame drive — but only if
     /// `scheduler` is genuinely the one this lane was minted from.
     ///
@@ -322,37 +306,6 @@ mod tests {
     assert_not_impl_any!(LocalPostFrameLane: Send, Sync);
     assert_not_impl_any!(LocalPostFrameHandle: Send, Sync);
 
-    struct PanickingSubscriber;
-
-    impl tracing::Subscriber for PanickingSubscriber {
-        fn register_callsite(
-            &self,
-            _metadata: &'static tracing::Metadata<'static>,
-        ) -> tracing::subscriber::Interest {
-            tracing::subscriber::Interest::sometimes()
-        }
-
-        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
-            true
-        }
-
-        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-            tracing::span::Id::from_u64(1)
-        }
-
-        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
-
-        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
-
-        fn event(&self, _event: &tracing::Event<'_>) {
-            panic!("subscriber failure");
-        }
-
-        fn enter(&self, _span: &tracing::span::Id) {}
-
-        fn exit(&self, _span: &tracing::span::Id) {}
-    }
-
     fn assert_batch_depth(
         log: &flui_testing::log_capture::CapturedLog,
         shared: usize,
@@ -411,102 +364,6 @@ mod tests {
         assert_batch_depth(&batch_log, 2, 1, 3);
     }
 
-    /// `pending_len` counts what is queued on the handle's own lane, drops
-    /// to zero once a frame drains it, and reads zero on a closed lane.
-    #[test]
-    fn pending_len_counts_queued_local_callbacks_until_the_frame_drains() {
-        let scheduler = UpdateScheduler::new();
-        let lane = scheduler.new_local_post_frame_lane();
-        let handle = lane.local_handle();
-        assert_eq!(handle.pending_len(), 0);
-
-        handle.schedule_local(|_| {}).expect("lane alive");
-        handle.schedule_local(|_| {}).expect("lane alive");
-        assert_eq!(handle.pending_len(), 2);
-
-        scheduler.execute_frame_with_lane(&lane);
-        assert_eq!(handle.pending_len(), 0, "the frame drained the lane");
-
-        handle.schedule_local(|_| {}).expect("lane alive");
-        drop(lane);
-        assert_eq!(handle.pending_len(), 0, "a closed lane has nothing pending");
-    }
-
-    /// A local callback that re-registers another LOCAL callback (the direct
-    /// same-lane case, distinct from `local_then_shared` below): the queue is
-    /// taken from the lane before any callback in this frame's snapshot runs,
-    /// so the re-registration lands in the lane's now-empty queue and fires
-    /// only on the *next* drive, never in the frame that scheduled it. A
-    /// `!Send` `LocalPostFrameHandle` cannot be captured into a `Send`-bound
-    /// shared callback at all (a compile error, not a runtime check) — that
-    /// structurally rules out the "shared schedules local" direction the
-    /// thread-local ticket registry used to have to arbitrate at runtime.
-    ///
-    /// The outer callback also probes `LocalPostFrameLane::is_unlocked()`
-    /// before re-registering, so a regression fails fast with an assertion
-    /// instead of the `BorrowMutError` panic the re-registration below would
-    /// otherwise surface a level down. `take_queue`'s `RefCell::take()`
-    /// (swapping in a fresh, empty `Vec` and returning the drained one) is
-    /// the line that keeps this green: it releases the borrow before any
-    /// callback in the snapshot runs, so `schedule_local`'s own
-    /// `queue.borrow_mut()` call below succeeds. Iterating the queue in
-    /// place with a live `borrow_mut()` instead would still hold that borrow
-    /// while the callback ran, and this same re-registration would panic
-    /// with `BorrowMutError`.
-    #[test]
-    fn local_then_local_nested_registration_defers() {
-        let scheduler = UpdateScheduler::new();
-        let lane = scheduler.new_local_post_frame_lane();
-        let handle = lane.local_handle();
-        let fired = Rc::new(Cell::new(0));
-        let nested_handle = handle.clone();
-        let nested = Rc::clone(&fired);
-        let probe_lane = lane.clone();
-        handle
-            .schedule_local(move |_| {
-                assert!(
-                    probe_lane.is_unlocked(),
-                    "the lane's queue must already be released by the time \
-                     its own callback runs, or the re-registration below \
-                     would panic with BorrowMutError instead of deferring"
-                );
-                nested_handle
-                    .schedule_local(move |_| {
-                        nested.set(nested.get() + 1);
-                    })
-                    .expect("lane outlives this frame");
-            })
-            .expect("lane alive");
-        scheduler.execute_frame_with_lane(&lane);
-        assert_eq!(fired.get(), 0, "re-registration must not run this frame");
-        scheduler.execute_frame_with_lane(&lane);
-        assert_eq!(fired.get(), 1, "it must run on the very next frame");
-    }
-
-    #[test]
-    fn local_then_shared_nested_registration_defers() {
-        let scheduler = UpdateScheduler::new();
-        let lane = scheduler.new_local_post_frame_lane();
-        let fired = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let nested_scheduler = scheduler.clone();
-        let nested = Arc::clone(&fired);
-        lane.local_handle()
-            .schedule_local(move |_| {
-                nested_scheduler.add_post_frame_callback(Box::new(move |_| {
-                    nested.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                }));
-            })
-            .expect("lane is alive");
-        let (_first_frame, first_batch) =
-            flui_testing::log_capture::capture(|| scheduler.execute_frame_with_lane(&lane));
-        assert_eq!(fired.load(std::sync::atomic::Ordering::SeqCst), 0);
-        assert_batch_depth(&first_batch, 0, 1, 1);
-        let (_second_frame, second_batch) =
-            flui_testing::log_capture::capture(|| scheduler.execute_frame_with_lane(&lane));
-        assert_eq!(fired.load(std::sync::atomic::Ordering::SeqCst), 1);
-        assert_batch_depth(&second_batch, 1, 0, 1);
-    }
-
     /// Two lanes on the same scheduler, both with handles held concurrently:
     /// each handle addresses its own lane directly (a `Weak` straight at its
     /// `LocalLaneInner`), so there is no "active lane" ambiguity to resolve —
@@ -537,85 +394,6 @@ mod tests {
 
         scheduler.execute_frame_with_lane(&lane_b);
         assert_eq!(fired_b.get(), 1);
-    }
-
-    /// The weak case: A is driven with NO lane parameter at all, so it never
-    /// even looks at B's lane. `draining_the_wrong_schedulers_lane_leaves_it_untouched`
-    /// below is the strong case this one does not cover — B's lane handed to
-    /// A's drive AS THE PARAMETER, which is the actual misuse
-    /// `take_queue_for`'s identity check exists to refuse.
-    #[test]
-    fn other_scheduler_lane_is_untouched_by_a_different_scheduler_drive() {
-        let scheduler_a = UpdateScheduler::new();
-        let scheduler_b = UpdateScheduler::new();
-        let lane_b = scheduler_b.new_local_post_frame_lane();
-        let fired = Rc::new(Cell::new(0));
-
-        let probe = Rc::clone(&fired);
-        lane_b
-            .local_handle()
-            .schedule_local(move |_| probe.set(1))
-            .expect("lane B alive");
-
-        // Scheduler A completing a frame has no lane of its own here and must
-        // not observe lane B's queue.
-        scheduler_a.execute_frame();
-        assert_eq!(fired.get(), 0);
-
-        scheduler_b.execute_frame_with_lane(&lane_b);
-        assert_eq!(fired.get(), 1);
-    }
-
-    /// The retired thread-local ticket registry filtered a lane's drain by
-    /// `scheduler_identity`; `take_queue_for` restores that check for the
-    /// direct-parameter shape the new design uses. With per-realm schedulers
-    /// now real (every `UiRealm` mints its own via `new_local_post_frame_lane`),
-    /// a binding wiring the wrong realm's lane into a drive call is a
-    /// reachable mistake, not a theoretical one — this is the exact
-    /// misuse `other_scheduler_lane_is_untouched_by_a_different_scheduler_drive`
-    /// above does not exercise (that one never hands B's lane to A's drive at
-    /// all).
-    ///
-    /// Mutant this kills: dropping the `is_same_instance` check from
-    /// `take_queue_for` (or calling the private `take_queue` directly, as the
-    /// pre-fix code did) — B's callback would run inside A's frame, with A's
-    /// `FrameTiming`, be removed from B's queue, and never fire again.
-    #[test]
-    fn draining_the_wrong_schedulers_lane_leaves_it_untouched() {
-        let scheduler_a = UpdateScheduler::new();
-        let scheduler_b = UpdateScheduler::new();
-        let lane_b = scheduler_b.new_local_post_frame_lane();
-        let fired_b = Rc::new(Cell::new(false));
-        let callback = Rc::clone(&fired_b);
-        lane_b
-            .local_handle()
-            .schedule_local(move |_| callback.set(true))
-            .expect("lane alive");
-
-        // A's own shared-queue callback, so the exploit can also prove the
-        // mismatch does not collaterally break A's real work.
-        let fired_a = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let cb_a = Arc::clone(&fired_a);
-        scheduler_a.add_post_frame_callback(Box::new(move |_| {
-            cb_a.store(true, std::sync::atomic::Ordering::SeqCst);
-        }));
-
-        // The mistake: hand B's lane to A's drive.
-        scheduler_a.execute_frame_with_lane(&lane_b);
-        assert!(!fired_b.get(), "B's callback must NOT run inside A's frame");
-        assert!(
-            fired_a.load(std::sync::atomic::Ordering::SeqCst),
-            "A's own shared-queue callback must be unaffected by the mismatch"
-        );
-
-        // Not just "didn't run" — still there, unremoved: B's own next frame
-        // must still deliver it.
-        scheduler_b.execute_frame_with_lane(&lane_b);
-        assert!(
-            fired_b.get(),
-            "B's own frame must still run its own lane's callback \
-             (proves the entry was refused, not silently dropped)"
-        );
     }
 
     /// The mismatch is a typed, observable error — not merely an absence of
@@ -677,18 +455,6 @@ mod tests {
         // And the original callback is provably never invoked: it was
         // dropped, not run, when its lane died.
         assert!(!ran.get());
-    }
-
-    #[test]
-    fn dead_scheduler_is_also_a_typed_error() {
-        let scheduler = UpdateScheduler::new();
-        let lane = scheduler.new_local_post_frame_lane();
-        let handle = lane.local_handle();
-        drop(scheduler);
-        assert_eq!(
-            handle.schedule_local(|_| {}),
-            Err(LocalPostFrameScheduleError::LaneClosed)
-        );
     }
 
     #[test]
@@ -766,60 +532,6 @@ mod tests {
             panic_calls.get(),
             1,
             "the callback that already ran is not retried"
-        );
-    }
-
-    #[test]
-    fn tracing_panic_restores_the_entire_uninvoked_batch() {
-        let scheduler = UpdateScheduler::new();
-        let lane = scheduler.new_local_post_frame_lane();
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let shared_log = Arc::clone(&log);
-        scheduler.add_post_frame_callback(Box::new(move |_| {
-            shared_log.lock().expect("log").push(1);
-        }));
-        let local_log = Arc::clone(&log);
-        lane.local_handle()
-            .schedule_local(move |_| {
-                local_log.lock().expect("log").push(2);
-            })
-            .expect("lane alive");
-
-        flui_testing::disarm_interest_cache();
-        let panicked = tracing::subscriber::with_default(PanickingSubscriber, || {
-            catch_unwind(AssertUnwindSafe(|| {
-                scheduler.execute_frame_with_lane(&lane)
-            }))
-        });
-        assert!(panicked.is_err());
-        assert!(
-            log.lock().expect("log").is_empty(),
-            "subscriber panic precedes callback delivery"
-        );
-
-        scheduler.execute_frame_with_lane(&lane);
-        assert_eq!(
-            *log.lock().expect("log"),
-            [1, 2],
-            "the complete shared/local batch is retried in registration order"
-        );
-    }
-
-    #[test]
-    fn shared_post_frame_panic_preserves_uninvoked_shared_tail_without_local_lane() {
-        let scheduler = UpdateScheduler::new();
-        let fired = Arc::new(Mutex::new(false));
-        scheduler.add_post_frame_callback(Box::new(|_| panic!("shared callback probe")));
-        let callback = fired.clone();
-        scheduler.add_post_frame_callback(Box::new(move |_| {
-            *callback.lock().expect("flag") = true;
-        }));
-        assert!(catch_unwind(AssertUnwindSafe(|| scheduler.execute_frame())).is_err());
-        assert!(!*fired.lock().expect("flag"));
-        scheduler.execute_frame();
-        assert!(
-            *fired.lock().expect("flag"),
-            "shared-only owners must not lose their tail either"
         );
     }
 

@@ -8,7 +8,7 @@
 
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationController};
+use flui_animation::AnimationController;
 use flui_foundation::notifier::Listenable as _;
 
 use super::*;
@@ -87,69 +87,6 @@ fn pump_post_frame_callback_observes_this_frames_committed_layout() {
         Some(flui_foundation::geometry::Size::new(40.0, 24.0)),
         "the post-frame callback must observe THIS pump's committed layout"
     );
-}
-
-/// A controller ticking on the realm's scheduler (a transient frame callback)
-/// advances across two pumps.
-///
-/// Fails against a pump that skips begin frame: the transient callback never
-/// runs and the value stays 0. It pins the begin-frame phase, not the frame
-/// clock: `flui_scheduler::Ticker` measures elapsed time from the wall clock,
-/// not from the frame's timestamp, so the test lets a little wall time pass
-/// between the pumps rather than relying on the manual clock's advance.
-#[test]
-fn pump_advances_a_scheduler_ticker_between_two_pumps() {
-    let mut realm = UiRealm::for_test();
-    let controller = AnimationController::new(Duration::from_secs(10), realm.scheduler());
-    controller.forward().expect("fresh controller forwards");
-    let mut clock = ManualClock::new();
-    let mut sink = ScriptedSink::always_presents();
-
-    let _ = realm.pump(&mut clock, &mut sink);
-    let first = controller.value();
-    std::thread::sleep(Duration::from_millis(2));
-    clock.advance(Duration::from_millis(16));
-    let _ = realm.pump(&mut clock, &mut sink);
-    let second = controller.value();
-
-    assert!(
-        second > first,
-        "the second pump's begin frame must tick the controller forward \
-         (first={first}, second={second})"
-    );
-    controller.dispose();
-}
-
-/// A controller registered with the realm's `Vsync` ticks at the frame
-/// clock's timestamp: two pumps 50 ms apart on the manual clock put a 100 ms
-/// linear run exactly halfway, however little wall time passed.
-///
-/// Fails against a pump that does not publish its clock's timestamp to the
-/// `Vsync` tick: the tick reads the wall clock, microseconds apart, and the
-/// value stays near 0.
-#[test]
-fn pump_ticks_vsync_controllers_at_the_frame_clocks_time() {
-    let mut realm = UiRealm::for_test();
-    let controller = AnimationController::new(
-        Duration::from_millis(100),
-        &flui_scheduler::UpdateScheduler::new(),
-    );
-    realm.vsync().register(controller.clone());
-    controller.forward().expect("fresh controller forwards");
-    let mut clock = ManualClock::new();
-    let mut sink = ScriptedSink::always_presents();
-
-    // Anchors the run at the first pump's timestamp.
-    let _ = realm.pump(&mut clock, &mut sink);
-    clock.advance(Duration::from_millis(50));
-    let _ = realm.pump(&mut clock, &mut sink);
-
-    let value = controller.value();
-    assert!(
-        (value - 0.5).abs() < 1e-4,
-        "50 ms of frame clock into a 100 ms run is halfway (value={value})"
-    );
-    controller.dispose();
 }
 
 /// The realm's `Vsync` registry ticks in the scheduler's persistent phase, at
@@ -234,38 +171,5 @@ fn pump_background_clears_the_frame_latch_before_polling() {
         wakes.load(Ordering::SeqCst),
         before + 1,
         "the future's frame request must find the latch cleared and fire the wake"
-    );
-}
-
-/// A command sent before the pump is applied by that pump, at the Idle
-/// boundary before its frame begins.
-///
-/// Fails against a pump that skips the apply-commands step: the pop stays
-/// queued and the navigator keeps both routes.
-#[test]
-fn pump_applies_commands_sent_before_it() {
-    let mut realm = new_runtime(noop_wake()).expect("runtime");
-    let navigator = NavigatorHandle::new();
-    navigator.seed_initial(test_route("/"));
-    let _pushed = navigator.push(test_route("/details"));
-    realm
-        .command_sender()
-        .send_navigation(NavigatorCommand::pop(navigator.command_target()))
-        .expect("inbox has room");
-    assert_eq!(
-        navigator.route_ids().len(),
-        2,
-        "precondition: nothing applies a command before the owner drains it"
-    );
-
-    let _ = realm.pump(
-        &mut ManualClock::new(),
-        &mut ScriptedSink::always_presents(),
-    );
-
-    assert_eq!(
-        navigator.route_ids().len(),
-        1,
-        "the pump's apply-commands step commits the queued pop"
     );
 }

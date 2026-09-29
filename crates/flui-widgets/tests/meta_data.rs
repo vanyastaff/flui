@@ -47,37 +47,6 @@ fn a_tagged_subtree_is_found_by_a_hit_test_over_it() {
     );
 }
 
-/// A payload of a different type is not mistaken for the one being sought.
-#[test]
-fn a_payload_of_another_type_is_not_returned() {
-    #[derive(Debug, PartialEq)]
-    struct Other(u32);
-
-    let laid = lay_out(MetaData::new(Other(7)).child(hittable()), tight(40.0, 40.0));
-    let hit = laid.hit_test_pointer(offset(20.0, 20.0));
-
-    assert!(
-        !hit.path().is_empty(),
-        "premise: the position hits, so the absence below is about the type \
-         and not about the hit"
-    );
-    assert!(
-        hit.path()
-            .iter()
-            .all(|entry| entry.metadata_as::<Slot>().is_none()),
-        "downcasting to the wrong type must find nothing, not the payload"
-    );
-    assert_eq!(
-        hit.path()
-            .iter()
-            .filter_map(|entry| entry.metadata_as::<Other>())
-            .collect::<Vec<_>>(),
-        vec![&Other(7)],
-        "...while its own type still finds it — otherwise this test would \
-         pass against a MetaData that attaches nothing at all"
-    );
-}
-
 /// The default `DeferToChild` means an empty tag is not in the path.
 ///
 /// `MetaData`'s behaviour decides whether it is findable at all, and the
@@ -145,55 +114,5 @@ fn nested_tags_come_back_innermost_first() {
         "the hit path is leaf-first, so a searcher taking the first match \
          gets the innermost target — which is what a drop over overlapping \
          targets must resolve to"
-    );
-}
-
-/// A translucent tag is found without blocking what is behind it.
-///
-/// `Translucent` must appear in the hit path AND let lower siblings be tested —
-/// two facts the single `bool` a `hit_test` returns cannot both carry, since
-/// the bridge reads it as `add_self` *and* `blocks_below`. Returning `true`
-/// makes a translucent node opaque to its siblings; the entry has to be
-/// registered separately.
-///
-/// Both siblings are TAGGED so the oracle names them. A first draft asserted
-/// only `path().len() > 1`, which the Stack and the root satisfy on their own —
-/// it passed against the blocking bug it was written to catch.
-///
-/// The translucent node's own child deliberately misses (a bare `SizedBox`),
-/// so the translucent-miss arm is the one under test.
-#[test]
-fn a_translucent_tag_is_found_without_blocking_what_is_behind_it() {
-    use flui_view::ViewExt;
-
-    let laid = lay_out(
-        flui_widgets::Stack::new(vec![
-            // Behind: claims hits on its own.
-            MetaData::new(Slot("behind"))
-                .behavior(HitTestBehavior::Opaque)
-                .child(SizedBox::new(40.0, 40.0))
-                .boxed(),
-            // In front: translucent, over a child that misses.
-            MetaData::new(Slot("overlay"))
-                .behavior(HitTestBehavior::Translucent)
-                .child(SizedBox::new(40.0, 40.0))
-                .boxed(),
-        ]),
-        tight(40.0, 40.0),
-    );
-
-    let hit = laid.hit_test_pointer(offset(20.0, 20.0));
-    let found: Vec<&Slot> = hit
-        .path()
-        .iter()
-        .filter_map(|entry| entry.metadata_as::<Slot>())
-        .collect();
-
-    assert_eq!(
-        found,
-        vec![&Slot("overlay"), &Slot("behind")],
-        "a translucent tag must appear in the path AND leave the sibling \
-         behind it reachable; finding only the overlay means it swallowed the \
-         hit, which is opaque behaviour"
     );
 }

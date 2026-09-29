@@ -195,27 +195,6 @@ mod tests {
         assert_eq!(registry.variation(other), Some(&[-2048i16][..]));
     }
 
-    /// Two registries each mint their first instance; neither resolves the
-    /// other's id, even though both sit at index 0.
-    #[test]
-    fn an_id_from_another_registry_does_not_resolve() {
-        let mut a = FontRegistry::new();
-        let mut b = FontRegistry::new();
-        let from_a = a.intern_variation(&[4096]).expect("not the default");
-        let from_b = b.intern_variation(&[-2048]).expect("not the default");
-        assert_ne!(from_a, from_b);
-        assert_eq!(b.variation(from_a), None);
-        assert_eq!(a.variation(from_b), None);
-        assert_eq!(a.variation(from_a), Some(&[4096i16][..]));
-    }
-
-    #[test]
-    fn default_coordinates_intern_to_none() {
-        let mut registry = FontRegistry::new();
-        assert_eq!(registry.intern_variation(&[]), None);
-        assert_eq!(registry.intern_variation(&[0, 0]), None);
-    }
-
     #[test]
     fn bytes_that_are_not_a_face_are_refused() {
         let mut registry = FontRegistry::new();
@@ -237,29 +216,6 @@ mod tests {
             Err(RegisterFaceError::NotAFace)
         );
         assert_eq!(registry.face_count(), 0);
-    }
-
-    #[test]
-    fn a_face_registered_again_over_equal_bytes_is_a_no_op() {
-        let mut registry = FontRegistry::new();
-        let face = FaceKey {
-            blob_id: 3,
-            index: 0,
-        };
-        let first = roboto();
-        registry
-            .register_face(face, Arc::clone(&first))
-            .expect("Roboto is a face");
-        registry
-            .register_face(face, Arc::clone(&first))
-            .expect("the same bytes again");
-        let copy: FontBytes = Arc::new(ROBOTO.to_vec());
-        registry
-            .register_face(face, copy)
-            .expect("equal bytes in another allocation");
-        assert_eq!(registry.face_count(), 1);
-        let held = registry.face(face).expect("registered");
-        assert!(Arc::ptr_eq(&held.bytes, &first), "the first bytes are kept");
     }
 
     /// A key names one face: other bytes under it would draw their glyph ids

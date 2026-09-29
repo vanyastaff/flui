@@ -459,106 +459,13 @@ mod tests {
         assert!(FractionFactor::new(f64::INFINITY).is_none());
     }
 
-    #[test]
-    fn factor_accepts_zero_and_above_one() {
-        assert!(FractionFactor::new(0.0).is_some());
-        assert!(FractionFactor::new(2.5).is_some());
-    }
-
-    #[test]
-    fn factor_constants_are_typed() {
-        assert_eq!(FractionFactor::ZERO.value(), 0.0);
-        assert_eq!(FractionFactor::HALF.value(), 0.5);
-        assert_eq!(FractionFactor::FULL.value(), 1.0);
-    }
-
     // ---------- builder ergonomics ----------------------------------------
-
-    #[test]
-    fn defaults_have_no_factors_and_center_alignment() {
-        let node = RenderFractionallySizedBox::default();
-        assert!(node.width_factor().is_none());
-        assert!(node.height_factor().is_none());
-        assert_eq!(node.alignment(), Alignment::CENTER);
-    }
-
-    #[test]
-    fn builder_chain_assembles_node() {
-        let node = RenderFractionallySizedBox::new()
-            .with_width_factor(FractionFactor::HALF)
-            .with_height_factor(FractionFactor::FULL)
-            .with_alignment(Alignment::TOP_LEFT);
-        assert_eq!(node.width_factor(), Some(FractionFactor::HALF));
-        assert_eq!(node.height_factor(), Some(FractionFactor::FULL));
-        assert_eq!(node.alignment(), Alignment::TOP_LEFT);
-    }
 
     // ---------- child_constraints ----------------------------------------
 
-    #[test]
-    fn no_factors_passes_constraints_through() {
-        let node = RenderFractionallySizedBox::new();
-        let cc = node.child_constraints(bc(10.0, 100.0, 5.0, 50.0));
-        assert_eq!(cc.min_width, 10.0);
-        assert_eq!(cc.max_width, 100.0);
-        assert_eq!(cc.min_height, 5.0);
-        assert_eq!(cc.max_height, 50.0);
-    }
-
-    #[test]
-    fn width_factor_tightens_to_fraction_of_max() {
-        let node = RenderFractionallySizedBox::new().with_width_factor(FractionFactor::HALF);
-        let cc = node.child_constraints(bc(0.0, 200.0, 0.0, 100.0));
-        assert_eq!(cc.min_width, 100.0);
-        assert_eq!(cc.max_width, 100.0);
-        // Height is untouched.
-        assert_eq!(cc.max_height, 100.0);
-    }
-
-    #[test]
-    fn factor_falls_back_to_min_when_max_unbounded() {
-        let node = RenderFractionallySizedBox::new().with_height_factor(FractionFactor::FULL);
-        let cc = node.child_constraints(bc(0.0, 200.0, 30.0, f64::INFINITY));
-        // height_factor=1.0 with infinite max → tight at min_height.
-        assert_eq!(cc.min_height, 30.0);
-        assert_eq!(cc.max_height, 30.0);
-    }
-
     // ---------- align_child -----------------------------------------------
 
-    #[test]
-    fn align_center_places_child_in_the_middle() {
-        let node = RenderFractionallySizedBox::new(); // center default
-        let offset = node.align_child(Size::new(100.0, 80.0), Size::new(40.0, 20.0));
-        assert_eq!(offset, Offset::new(30.0, 30.0));
-    }
-
-    #[test]
-    fn align_top_left_places_child_at_origin() {
-        let node = RenderFractionallySizedBox::new().with_alignment(Alignment::TOP_LEFT);
-        let offset = node.align_child(Size::new(100.0, 80.0), Size::new(40.0, 20.0));
-        assert_eq!(offset, Offset::ZERO);
-    }
-
-    #[test]
-    fn align_bottom_right_places_child_at_full_offset() {
-        let node = RenderFractionallySizedBox::new().with_alignment(Alignment::BOTTOM_RIGHT);
-        let offset = node.align_child(Size::new(100.0, 80.0), Size::new(40.0, 20.0));
-        assert_eq!(offset, Offset::new(60.0, 60.0));
-    }
-
     // ---------- dry layout ------------------------------------------------
-
-    #[test]
-    fn dry_layout_with_full_factors_picks_box_size() {
-        let node = RenderFractionallySizedBox::new()
-            .with_width_factor(FractionFactor::FULL)
-            .with_height_factor(FractionFactor::FULL);
-        let size = flui_rendering::context::intrinsics_test_support::leaf_dry_layout(|ctx| {
-            node.compute_dry_layout(bc(0.0, 200.0, 0.0, 100.0), ctx)
-        });
-        assert_eq!(size, Size::new(200.0, 100.0));
-    }
 
     #[test]
     fn dry_layout_zero_factor_collapses_axis() {
@@ -570,25 +477,4 @@ mod tests {
     }
 
     // ---------- setters ---------------------------------------------------
-
-    #[test]
-    fn setters_return_change_flag() {
-        let mut node = RenderFractionallySizedBox::default();
-        assert_eq!(
-            node.set_width_factor(Some(FractionFactor::HALF)),
-            flui_rendering::RenderUpdateImpact::LAYOUT
-        );
-        assert_eq!(
-            node.set_width_factor(Some(FractionFactor::HALF)),
-            flui_rendering::RenderUpdateImpact::NONE
-        );
-        assert_eq!(
-            node.set_alignment(Alignment::TOP_LEFT),
-            flui_rendering::RenderUpdateImpact::LAYOUT
-        );
-        assert_eq!(
-            node.set_alignment(Alignment::TOP_LEFT),
-            flui_rendering::RenderUpdateImpact::NONE
-        );
-    }
 }

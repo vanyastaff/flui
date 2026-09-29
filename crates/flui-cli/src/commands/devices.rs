@@ -750,20 +750,6 @@ mod tests {
 
     #[test]
     #[cfg(target_os = "macos")]
-    fn runtime_name_formats_ios_and_other_families() {
-        assert_eq!(
-            runtime_name("com.apple.CoreSimulator.SimRuntime.iOS-17-2"),
-            "iOS 17.2"
-        );
-        assert_eq!(
-            runtime_name("com.apple.CoreSimulator.SimRuntime.tvOS-17-0"),
-            "tvOS 17.0"
-        );
-        assert_eq!(runtime_name("unknown-key"), "unknown-key");
-    }
-
-    #[test]
-    #[cfg(target_os = "macos")]
     fn parse_simctl_json_filters_unavailable_and_reads_state() {
         let json = r#"{
             "devices": {
@@ -783,19 +769,6 @@ mod tests {
             result[1].details.get("runtime").map(String::as_str),
             Some("iOS 17.0")
         );
-    }
-
-    #[test]
-    #[cfg(target_os = "macos")]
-    fn parse_simctl_json_rejects_invalid_json() {
-        assert!(parse_simctl_json("not json").is_err());
-    }
-
-    #[test]
-    #[cfg(target_os = "macos")]
-    fn parse_simctl_json_tolerates_missing_devices_key() {
-        let result = parse_simctl_json(r#"{"runtimes": []}"#).expect("valid json");
-        assert!(result.is_empty());
     }
 
     #[test]

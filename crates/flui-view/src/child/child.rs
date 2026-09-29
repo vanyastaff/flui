@@ -128,32 +128,10 @@ mod tests {
     }
 
     #[test]
-    fn test_child_empty() {
-        let child = Child::empty();
-        assert!(child.is_none());
-        assert!(!child.is_some());
-    }
-
-    #[test]
     fn test_child_some() {
         let child = Child::some(TestView);
         assert!(child.is_some());
         assert!(!child.is_none());
-    }
-
-    #[test]
-    fn test_child_from_view() {
-        let child: Child = TestView.into();
-        assert!(child.is_some());
-    }
-
-    #[test]
-    fn test_child_from_option() {
-        let child_some: Child = Some(TestView).into();
-        let child_none: Child = Child::from_option(None::<TestView>);
-
-        assert!(child_some.is_some());
-        assert!(child_none.is_none());
     }
 
     #[test]

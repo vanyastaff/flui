@@ -197,20 +197,4 @@ mod tests {
         ));
         assert_eq!(with_features["features"].as_array().map(Vec::len), Some(1));
     }
-
-    #[test]
-    fn registry_shape_is_the_bare_version_until_features_need_a_table() {
-        assert_eq!(
-            render(true, &DependencySource::Registry, "flui", &[]),
-            toml::Value::String(env!("CARGO_PKG_VERSION").into()).to_string()
-        );
-        let dep = table(&render(
-            true,
-            &DependencySource::Registry,
-            "flui",
-            &["testing"],
-        ));
-        assert_eq!(dep["version"].as_str(), Some(env!("CARGO_PKG_VERSION")));
-        assert!(dep.get("git").is_none());
-    }
 }

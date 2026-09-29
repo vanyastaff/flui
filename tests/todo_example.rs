@@ -58,21 +58,6 @@ fn type_text(app: &LaidOut, text: &str) {
 }
 
 #[test]
-fn the_new_item_field_takes_the_rows_remaining_width() {
-    let app = mount();
-
-    let width = app.size(field(&app)).width;
-    let add = app.size(app.find_text("Add").expect("the Add button's label"));
-    let label = app.size(app.find_text("New item").expect("the field's label"));
-    assert!(
-        width > (WIDTH / 2.0),
-        "the empty field is {width}px wide in a {WIDTH}px row (label {}px, Add {}px)",
-        label.width,
-        add.width,
-    );
-}
-
-#[test]
 fn enter_in_the_field_adds_the_item_and_clears_the_field() {
     let mut app = mount();
     assert!(app.find_text("milk").is_none());

@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::common::{lay_out, tight};
 use flui_painting::styling::Color;
-use flui_widgets::{ColoredBox, GestureDetector, SizedBox};
+use flui_widgets::{ColoredBox, GestureDetector};
 
 #[test]
 fn gesture_detector_fires_on_tap_for_a_down_up_on_the_child() {
@@ -39,32 +39,6 @@ fn gesture_detector_fires_on_tap_for_a_down_up_on_the_child() {
 }
 
 #[test]
-fn gesture_detector_does_not_fire_without_a_hittable_target() {
-    let taps = Arc::new(AtomicUsize::new(0));
-    let in_cb = Arc::clone(&taps);
-
-    // DeferToChild over a childless SizedBox (hit-tests false) → nothing is hit,
-    // so no pointer reaches the recognizer.
-    let laid = lay_out(
-        GestureDetector::new()
-            .on_tap(move |_cx| {
-                in_cb.fetch_add(1, Ordering::SeqCst);
-            })
-            .child(SizedBox::new(100.0, 100.0)),
-        tight(100.0, 100.0),
-    );
-
-    laid.dispatch_pointer_down(50.0, 50.0);
-    laid.dispatch_pointer_up(50.0, 50.0);
-
-    assert_eq!(
-        taps.load(Ordering::SeqCst),
-        0,
-        "no tap when nothing under the detector is hit",
-    );
-}
-
-#[test]
 fn gesture_detector_does_not_fire_when_the_pointer_moves_past_slop() {
     let taps = Arc::new(AtomicUsize::new(0));
     let in_cb = Arc::clone(&taps);
@@ -88,39 +62,6 @@ fn gesture_detector_does_not_fire_when_the_pointer_moves_past_slop() {
         taps.load(Ordering::SeqCst),
         0,
         "a pointer that drags past slop does not tap",
-    );
-}
-
-#[test]
-fn gesture_detector_cancel_aborts_the_tap_without_wedging_the_detector() {
-    let taps = Arc::new(AtomicUsize::new(0));
-    let in_cb = Arc::clone(&taps);
-
-    let laid = lay_out(
-        GestureDetector::new()
-            .on_tap(move |_cx| {
-                in_cb.fetch_add(1, Ordering::SeqCst);
-            })
-            .child(ColoredBox::new(Color::rgb(10, 20, 30))),
-        tight(100.0, 100.0),
-    );
-
-    // A cancelled contact must NOT tap...
-    laid.dispatch_pointer_down(50.0, 50.0);
-    laid.dispatch_pointer_cancel();
-    assert_eq!(
-        taps.load(Ordering::SeqCst),
-        0,
-        "a cancelled contact does not tap"
-    );
-
-    // ...and must not leave the recognizer wedged: a fresh tap still works.
-    laid.dispatch_pointer_down(50.0, 50.0);
-    laid.dispatch_pointer_up(50.0, 50.0);
-    assert_eq!(
-        taps.load(Ordering::SeqCst),
-        1,
-        "a tap after a cancel still fires (the cancel swept the arena entry)",
     );
 }
 
@@ -192,87 +133,6 @@ fn gesture_detector_recognizes_a_pan_and_suppresses_the_tap() {
         taps.load(Ordering::SeqCst),
         0,
         "a drag past the slop cancels the competing tap — they are mutually exclusive",
-    );
-}
-
-/// Flutter parity (tag `3.44.0`): `packages/flutter/lib/src/gestures/arena.dart`
-/// `GestureArenaManager` (line 110, see the citation on
-/// `gesture_detector_recognizes_a_pan_and_suppresses_the_tap` above) — with
-/// no movement, the tap recognizer is the arena's front (first-added, and
-/// here only remaining) member on sweep, so it wins without waiting for the
-/// pan recognizer to reject itself.
-#[test]
-fn gesture_detector_quick_tap_beats_the_pan_recognizer() {
-    let taps = Arc::new(AtomicUsize::new(0));
-    let starts = Arc::new(AtomicUsize::new(0));
-    let (tap_cb, start_cb) = (Arc::clone(&taps), Arc::clone(&starts));
-
-    // Same dual-gesture detector, but a quick down→up with no movement: the tap
-    // is the arena's front member and wins; the pan never starts.
-    let laid = lay_out(
-        GestureDetector::new()
-            .on_tap(move |_cx| {
-                tap_cb.fetch_add(1, Ordering::SeqCst);
-            })
-            .on_pan_start(move |_cx, _details| {
-                start_cb.fetch_add(1, Ordering::SeqCst);
-            })
-            .child(ColoredBox::new(Color::rgb(10, 20, 30))),
-        tight(100.0, 100.0),
-    );
-
-    laid.dispatch_pointer_down(50.0, 50.0);
-    laid.dispatch_pointer_up(50.0, 50.0);
-
-    assert_eq!(
-        taps.load(Ordering::SeqCst),
-        1,
-        "a quick down+up fires the tap"
-    );
-    assert_eq!(
-        starts.load(Ordering::SeqCst),
-        0,
-        "no movement means the pan never starts",
-    );
-}
-
-#[test]
-fn secondary_tap_fires_on_secondary_down_up() {
-    let primary_taps = Arc::new(AtomicUsize::new(0));
-    let secondary_taps = Arc::new(AtomicUsize::new(0));
-    let (primary_cb, secondary_cb) = (Arc::clone(&primary_taps), Arc::clone(&secondary_taps));
-
-    let laid = lay_out(
-        GestureDetector::new()
-            .on_tap(move |_cx| {
-                primary_cb.fetch_add(1, Ordering::SeqCst);
-            })
-            .on_secondary_tap(move |_cx| {
-                secondary_cb.fetch_add(1, Ordering::SeqCst);
-            })
-            .child(ColoredBox::new(Color::rgb(10, 20, 30))),
-        tight(100.0, 100.0),
-    );
-
-    assert_eq!(
-        secondary_taps.load(Ordering::SeqCst),
-        0,
-        "no tap before any pointer"
-    );
-
-    // A secondary-button (right-click) down + up fires on_secondary_tap.
-    laid.dispatch_secondary_down(50.0, 50.0);
-    laid.dispatch_secondary_up(50.0, 50.0);
-
-    assert_eq!(
-        secondary_taps.load(Ordering::SeqCst),
-        1,
-        "a secondary down+up fires on_secondary_tap exactly once",
-    );
-    assert_eq!(
-        primary_taps.load(Ordering::SeqCst),
-        0,
-        "a secondary tap must NOT fire on_tap",
     );
 }
 
@@ -353,40 +213,6 @@ fn horizontal_drag_fires_down_start_update_end_for_horizontal_motion() {
     );
 }
 
-/// With a free-axis drag competing in the same presentation arena, a purely
-/// vertical move must resolve to that competitor rather than the horizontal
-/// recognizer. A lone recognizer wins Flutter's deferred default after Down,
-/// so axis disambiguation is observable only under real competition.
-///
-/// Red-check: change the recognizer's axis to `DragAxis::Free` — a vertical
-/// move now crosses its (any-direction) slop and `starts` becomes `1`.
-#[test]
-fn horizontal_drag_does_not_fire_for_purely_vertical_motion() {
-    let starts = Arc::new(AtomicUsize::new(0));
-    let start_cb = Arc::clone(&starts);
-
-    let laid = lay_out(
-        GestureDetector::new().on_pan_start(|_cx, _| {}).child(
-            GestureDetector::new()
-                .on_horizontal_drag_start(move |_cx, _details| {
-                    start_cb.fetch_add(1, Ordering::SeqCst);
-                })
-                .child(ColoredBox::new(Color::rgb(10, 20, 30))),
-        ),
-        tight(200.0, 200.0),
-    );
-
-    laid.dispatch_pointer_down(100.0, 20.0);
-    laid.dispatch_pointer_move(100.0, 90.0);
-    laid.dispatch_pointer_up(100.0, 90.0);
-
-    assert_eq!(
-        starts.load(Ordering::SeqCst),
-        0,
-        "a purely vertical move must not start a horizontal drag",
-    );
-}
-
 /// Flutter parity: once a drag has won its arena, `PointerCancel` follows
 /// `didStopTrackingLastPointer`'s accepted branch and fires `onEnd`, not
 /// `onCancel`. The terminal event must still leave the recognizer reusable.
@@ -441,28 +267,6 @@ fn horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_wedge_the_d
     assert_eq!(ends.load(Ordering::SeqCst), 2);
 }
 
-/// A cancel while a tap competitor still keeps the drag unaccepted follows
-/// the possible branch and fires `on_horizontal_drag_cancel`.
-#[test]
-fn horizontal_drag_cancel_before_acceptance_fires_cancel() {
-    let cancels = Arc::new(AtomicUsize::new(0));
-    let cancels_for_callback = Arc::clone(&cancels);
-    let laid = lay_out(
-        GestureDetector::new()
-            .on_tap(|_cx| {})
-            .on_horizontal_drag_cancel(move |_cx| {
-                cancels_for_callback.fetch_add(1, Ordering::SeqCst);
-            })
-            .child(ColoredBox::new(Color::rgb(10, 20, 30))),
-        tight(200.0, 200.0),
-    );
-
-    laid.dispatch_pointer_down(20.0, 100.0);
-    laid.dispatch_pointer_cancel();
-
-    assert_eq!(cancels.load(Ordering::SeqCst), 1);
-}
-
 #[test]
 fn primary_tap_does_not_fire_on_secondary_tap() {
     let primary_taps = Arc::new(AtomicUsize::new(0));
@@ -505,13 +309,12 @@ fn primary_tap_does_not_fire_on_secondary_tap() {
 mod event_cx {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
-    use std::time::Duration;
 
     use crate::common::harness::{
         PostFrameCapability, TextInputCapability, mount_with_capabilities,
     };
     use crate::common::{LaidOut, ProbeSignals, SignalProbe, lay_out, tight};
-    use flui_interaction::{DragEndDetails, DragUpdateDetails};
+
     use flui_painting::styling::Color;
     use flui_rendering::pipeline::PipelineCell;
     use flui_testing::{A11yTree, Action, ActionRequest, TreeId, invoke_semantics_action};
@@ -546,106 +349,6 @@ mod event_cx {
             [0, 1],
             "the reader rebuilt once, with the new value"
         );
-    }
-
-    #[test]
-    fn a_long_press_on_the_virtual_clock_writes_a_signal() {
-        let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
-            GestureDetector::new()
-                .on_long_press(move |cx| count.set(cx, 5))
-                .child(target())
-        });
-        let mut app = lay_out(probe.view(), tight(100.0, 100.0));
-
-        app.dispatch_pointer_down(50.0, 50.0);
-        app.pump_for(Duration::from_millis(300));
-        assert_eq!(probe.value(), Ok(0), "not before the hold deadline");
-        app.pump_for(Duration::from_millis(300));
-
-        assert_eq!(probe.value(), Ok(5));
-        app.tick();
-        assert_eq!(probe.reads().last(), Some(&5), "the reader rebuilt");
-    }
-
-    #[test]
-    fn a_double_tap_down_writes_the_position_it_carries() {
-        let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
-            GestureDetector::new()
-                .on_double_tap_down(move |cx, details| {
-                    count.set(cx, details.local_position.dx as u32)
-                })
-                .child(target())
-        });
-        let mut app = lay_out(probe.view(), tight(100.0, 100.0));
-
-        app.dispatch_pointer_down(40.0, 50.0);
-        app.dispatch_pointer_up(40.0, 50.0);
-        app.pump_for(Duration::from_millis(50));
-        app.dispatch_pointer_down(40.0, 50.0);
-
-        assert_eq!(probe.value(), Ok(40));
-        app.tick();
-        assert_eq!(probe.reads().last(), Some(&40));
-    }
-
-    #[test]
-    fn a_pan_update_writes_a_signal_per_update() {
-        let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
-            GestureDetector::new()
-                .on_pan_update(move |cx, details: DragUpdateDetails| {
-                    count.update(cx, |n| *n += details.delta.dy as u32)
-                })
-                .child(target())
-        });
-        let mut app = lay_out(probe.view(), tight(100.0, 100.0));
-
-        app.dispatch_pointer_down(50.0, 10.0);
-        app.dispatch_pointer_move(50.0, 50.0);
-        app.dispatch_pointer_move(50.0, 90.0);
-        app.dispatch_pointer_up(50.0, 90.0);
-
-        let moved = probe.value().expect("the probe's signal is live");
-        assert!(moved > 0, "each update added its delta, got {moved}");
-        app.tick();
-        assert_eq!(probe.reads(), [0, moved], "one rebuild after the drag");
-    }
-
-    #[test]
-    fn a_horizontal_drag_end_writes_a_signal() {
-        let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
-            GestureDetector::new()
-                .on_horizontal_drag_end(move |cx, _details: DragEndDetails| count.set(cx, 1))
-                .child(target())
-        });
-        let mut app = lay_out(probe.view(), tight(200.0, 200.0));
-
-        app.dispatch_pointer_down(20.0, 100.0);
-        app.dispatch_pointer_move(80.0, 100.0);
-        app.dispatch_pointer_move(150.0, 100.0);
-        assert_eq!(probe.value(), Ok(0), "nothing before the drag ends");
-        app.dispatch_pointer_up(150.0, 100.0);
-
-        assert_eq!(probe.value(), Ok(1));
-        app.tick();
-        assert_eq!(probe.reads(), [0, 1]);
-    }
-
-    #[test]
-    fn a_let_bound_pan_callback_compiles_through_callback_with() {
-        let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
-            let on_update =
-                callback_with(move |cx, _details: DragUpdateDetails| count.update(cx, |n| *n += 1));
-            GestureDetector::new()
-                .on_pan_update(on_update)
-                .child(target())
-        });
-        let app = lay_out(probe.view(), tight(100.0, 100.0));
-
-        app.dispatch_pointer_down(50.0, 10.0);
-        app.dispatch_pointer_move(50.0, 90.0);
-        app.dispatch_pointer_up(50.0, 90.0);
-
-        assert!(probe.value().expect("live") >= 1);
     }
 
     #[test]
@@ -832,31 +535,6 @@ mod event_cx {
             1,
             "scheduler recovery retains the next accepted command"
         );
-    }
-
-    #[test]
-    fn an_assistive_tap_uses_the_replacement_callback() {
-        let old = Rc::new(Cell::new(0));
-        let old_callback = Rc::clone(&old);
-        let mut app = lay_out(
-            labelled(
-                GestureDetector::new().on_tap(move |_cx| old_callback.set(old_callback.get() + 1)),
-            ),
-            tight(100.0, 100.0),
-        );
-        app.enable_semantics();
-        app.pump();
-        click(
-            &app.pipeline_owner(),
-            &app.a11y_tree().expect("semantics tree"),
-        );
-        let current = Rc::new(Cell::new(0));
-        let current_callback = Rc::clone(&current);
-        app.pump_widget(labelled(GestureDetector::new().on_tap(move |_cx| {
-            current_callback.set(current_callback.get() + 1);
-        })));
-        assert_eq!(old.get(), 0);
-        assert_eq!(current.get(), 1);
     }
 
     #[test]

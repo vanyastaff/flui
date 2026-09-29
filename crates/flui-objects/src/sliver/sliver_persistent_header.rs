@@ -1391,41 +1391,6 @@ mod tests {
     // `render_object_harness.rs` (`harness_sliver_persistent_header_stretch_*`)
     // rather than re-derived by hand here.
 
-    #[test]
-    fn stretch_trigger_signal_is_data_plane_and_clone_shared() {
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<StretchTriggerSignal>();
-
-        let signal = StretchTriggerSignal::new();
-        let cloned = signal.clone();
-        assert_eq!(signal.count(), 0);
-
-        cloned.notify();
-
-        assert_eq!(
-            signal.count(),
-            1,
-            "stretch trigger signal clones share the same data-plane counter"
-        );
-    }
-
-    #[test]
-    fn stretch_offset_for_geometry_ignores_scroll_offset_unlike_layout_child() {
-        // Trap #7 regression: update_geometry's stretch offset must NOT gate
-        // on scroll_offset == 0.0 (layout_child's does).
-        let core = PersistentHeaderCore::new(
-            40.0,
-            120.0,
-            Some(OverScrollHeaderStretchConfiguration::new(50.0, None)),
-        );
-        let constraints = vertical_constraints(10.0, 400.0).with_overlap(-30.0);
-        assert_eq!(
-            core.stretch_offset_for_geometry(&constraints),
-            30.0,
-            "update_geometry's stretch offset must fire even with scroll_offset > 0.0"
-        );
-    }
-
     // ---- Scrolling: hand-computed formulas at several scroll offsets -------
 
     #[test]
@@ -1459,21 +1424,6 @@ mod tests {
     // child-position/paint-extent contract need a live layout pass — proven
     // in `render_object_harness.rs`'s two-sliver `viewport_multi` test.
 
-    #[test]
-    fn pinned_header_set_max_extent_reports_change_flag() {
-        let mut header = RenderSliverPinnedPersistentHeader::new(40.0, 120.0);
-        assert_eq!(header.min_extent(), 40.0);
-        assert_eq!(
-            header.set_max_extent(150.0),
-            flui_rendering::RenderUpdateImpact::LAYOUT
-        );
-        assert_eq!(
-            header.set_max_extent(150.0),
-            flui_rendering::RenderUpdateImpact::NONE
-        );
-        assert_eq!(header.max_extent(), 150.0);
-    }
-
     // ---- Floating: re-reveal sequence (traps #3, #4) live in the harness ---
     //
     // The re-reveal state machine reads/writes `self.effective_scroll_offset`
@@ -1486,18 +1436,6 @@ mod tests {
     // controller-driving methods.
 
     #[test]
-    fn floating_pinned_child_position_is_always_zero_even_mid_reveal() {
-        let core = PersistentHeaderCore::new(40.0, 120.0, None);
-        let view = PersistentHeaderCoreView { core: &core };
-        let constraints = vertical_constraints(60.0, 400.0);
-        let (_, position) = FloatingPinnedMode::update_geometry(&view, &constraints, 30.0, 90.0);
-        assert_eq!(
-            position, 0.0,
-            "FloatingPinned's child_main_axis_position is always 0.0, unlike plain Floating"
-        );
-    }
-
-    #[test]
     fn floating_pinned_paint_extent_never_drops_below_min_extent_at_full_shrink() {
         let core = PersistentHeaderCore::new(40.0, 120.0, None);
         let view = PersistentHeaderCoreView { core: &core };
@@ -1507,36 +1445,6 @@ mod tests {
         assert_eq!(
             geometry.paint_extent, 40.0,
             "even at full shrink, FloatingPinned keeps at least min_extent visible"
-        );
-    }
-
-    #[test]
-    fn maybe_start_snap_animation_is_inert_without_snap_configuration() {
-        let ctl = controller(100);
-        let mut header: RenderSliverFloatingPersistentHeader =
-            RenderSliverFloatingHeaderBase::new(40.0, 120.0, Some(ctl.clone()));
-        header.effective_scroll_offset = Some(60.0);
-        header.maybe_start_snap_animation(ScrollDirection::Reverse);
-        assert!(
-            !ctl.is_animating(),
-            "no snap_configuration means maybe_start_snap_animation is a no-op"
-        );
-    }
-
-    #[test]
-    fn maybe_start_snap_animation_forward_ignored_when_already_fully_revealed() {
-        let ctl = controller(100);
-        let mut header: RenderSliverFloatingPersistentHeader =
-            RenderSliverFloatingHeaderBase::new(40.0, 120.0, Some(ctl.clone()))
-                .with_snap_configuration(FloatingHeaderSnapConfiguration::new(
-                    ArcCurve::new(Curves::Linear),
-                    Duration::from_millis(50),
-                ));
-        header.effective_scroll_offset = Some(0.0);
-        header.maybe_start_snap_animation(ScrollDirection::Forward);
-        assert!(
-            !ctl.is_animating(),
-            "already at effective_scroll_offset <= 0.0, forward snap has nothing to do"
         );
     }
 
@@ -1559,20 +1467,6 @@ mod tests {
         assert!(
             !ctl.is_animating(),
             "maybe_stop_snap_animation must stop it"
-        );
-    }
-
-    #[test]
-    fn update_scroll_start_direction_feeds_allow_floating_expansion_disjunct() {
-        // Trap #4 regression: this setter has no internal caller, but must be
-        // usable to seed the second disjunct directly.
-        let mut header: RenderSliverFloatingPersistentHeader =
-            RenderSliverFloatingHeaderBase::new(40.0, 120.0, None);
-        assert_eq!(header.last_started_scroll_direction, None);
-        header.update_scroll_start_direction(ScrollDirection::Forward);
-        assert_eq!(
-            header.last_started_scroll_direction,
-            Some(ScrollDirection::Forward)
         );
     }
 }

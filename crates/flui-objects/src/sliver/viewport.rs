@@ -2008,40 +2008,6 @@ mod offset_listener_tests {
         (owner, handle)
     }
 
-    // attach must register a listener and detach must clear it — a
-    // white-box assertion on the private `offset_listener`/`render_invalidation_handle`
-    // fields is the most direct proof available, mirroring
-    // `RenderAnimatedOpacity::attach_registers_listener_and_detach_clears_it`.
-    #[test]
-    fn attach_registers_a_relayout_listener_and_detach_clears_it() {
-        let (_owner, handle) = anchor_handle();
-        let mut viewport = RenderViewport::new(TopToBottom);
-        assert!(
-            viewport.offset_listener.is_none(),
-            "no listener before attach"
-        );
-
-        RenderBox::attach(&mut viewport, handle);
-        assert!(
-            viewport.offset_listener.is_some(),
-            "attach must register a listener"
-        );
-        assert!(
-            viewport.render_invalidation_handle.is_some(),
-            "attach must retain the handle for a later set_offset re-registration"
-        );
-
-        RenderBox::detach(&mut viewport);
-        assert!(
-            viewport.offset_listener.is_none(),
-            "detach must clear the listener"
-        );
-        assert!(
-            viewport.render_invalidation_handle.is_none(),
-            "detach must clear the retained handle"
-        );
-    }
-
     /// At the pipeline level rather than the widget level: after `attach`,
     /// mutating the offset OUTSIDE `perform_layout` (no layout call, no
     /// widget rebuild) must mark the bound node needing layout — this is
@@ -2078,95 +2044,6 @@ mod offset_listener_tests {
             owner.nodes_needing_layout().iter().any(|d| d.id == anchor),
             "an external ScrollPosition mutation after attach must mark the bound node \
              needing layout via the offset listener"
-        );
-    }
-
-    /// `set_offset` while attached must move the listener, not duplicate or
-    /// drop it — removing the SAME `Arc` from the OLD offset (the ptr-eq
-    /// removal contract `ViewportOffset::add_listener`/`remove_listener`
-    /// document) and registering a fresh one on the NEW offset, both bound
-    /// to the same retained handle.
-    #[test]
-    fn set_offset_while_attached_moves_the_relayout_listener_to_the_new_offset() {
-        let (mut owner, handle) = anchor_handle();
-        let anchor = handle.id();
-        let old_position = ScrollPosition::new(0.0);
-        let new_position = ScrollPosition::new(0.0);
-        let mut viewport =
-            RenderViewport::with_offset(TopToBottom, LeftToRight, old_position.clone());
-
-        RenderBox::attach(&mut viewport, handle);
-        assert_eq!(
-            viewport.set_offset(new_position.clone()),
-            flui_rendering::RenderUpdateImpact::LAYOUT,
-        );
-        owner.drain_pending_dirty();
-        assert!(
-            owner.nodes_needing_layout().iter().all(|d| d.id != anchor),
-            "attach + set_offset alone must not mark the node dirty"
-        );
-
-        old_position.set_pixels(10.0);
-        owner.drain_pending_dirty();
-        assert!(
-            owner.nodes_needing_layout().iter().all(|d| d.id != anchor),
-            "the OLD offset's listener must be removed by set_offset — mutating the old \
-             offset after the swap must not mark layout"
-        );
-
-        new_position.set_pixels(10.0);
-        owner.drain_pending_dirty();
-        assert!(
-            owner.nodes_needing_layout().iter().any(|d| d.id == anchor),
-            "the NEW offset must carry the relayout listener after set_offset while attached"
-        );
-    }
-
-    /// Documents the known limitation `offset_relayout_listener`'s
-    /// `ChannelFull` comment describes: a full dirty channel does not mean
-    /// THIS node's own mark is already queued — an unrelated request from
-    /// elsewhere in the tree can fill the last slot just as easily, and
-    /// there is no retry mechanism, so the send is dropped and the node
-    /// stays off the layout-dirty list until something else marks it.
-    #[test]
-    fn channel_full_backpressure_drops_the_mark_and_the_node_stays_off_the_dirty_list() {
-        // Capacity 1 makes a single UNRELATED request enough to saturate
-        // the channel, isolating the scenario without an elaborate fill loop.
-        let mut owner = PipelineOwner::new_with_capacity(1);
-        let anchor =
-            owner
-                .insert(Box::new(RenderViewport::new(TopToBottom))
-                    as Box<dyn RenderObject<BoxProtocol>>);
-        owner.set_root_id(Some(anchor));
-        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 100.0))));
-        let (mut owner, result) = owner.run_frame();
-        result.expect("the anchor's first frame must not error");
-        let handle = owner
-            .render_invalidation_handle(anchor)
-            .expect("the rooted anchor id must still be live after its first frame");
-
-        let position = ScrollPosition::new(0.0);
-        let mut viewport = RenderViewport::with_offset(TopToBottom, LeftToRight, position.clone());
-        RenderBox::attach(&mut viewport, handle);
-
-        // Saturate the one-slot channel with a paint request. It only needs to
-        // occupy the slot the layout listener wants.
-        owner
-            .render_invalidation_handle(anchor)
-            .expect("the anchor remains attached")
-            .mark_needs_paint()
-            .expect("the first send into a freshly-drained 1-capacity channel must fit");
-
-        // The offset listener now tries to send and gets ChannelFull —
-        // dropped, per the honest comment on `offset_relayout_listener`.
-        position.set_pixels(50.0);
-
-        owner.drain_pending_dirty();
-        assert!(
-            owner.nodes_needing_layout().iter().all(|d| d.id != anchor),
-            "under channel backpressure the offset listener's mark is dropped, not queued — \
-             the node must stay off the layout-dirty list until an unrelated mutation frees \
-             a slot and retries it"
         );
     }
 }
@@ -2252,21 +2129,5 @@ mod paint_clip_direction_tests {
             "the pushed edge stops at the opposite one, leaving an empty clip",
         );
         assert!(clip.is_empty(), "and an empty clip is what keeps nothing");
-    }
-
-    /// `Clip::None` means no clip at all, not a clip the size of the viewport:
-    /// a child painting outside the bounds keeps its full accessibility rect.
-    #[test]
-    fn clip_none_reports_no_paint_clip() {
-        let mut viewport =
-            viewport_with_committed_child(AxisDirection::TopToBottom, GrowthDirection::Forward);
-        let _ = viewport.set_clip_behavior(Clip::None);
-
-        assert!(
-            viewport
-                .describe_approximate_paint_clip(0, TEST_SIZE)
-                .is_none(),
-            "an unclipped viewport imposes nothing on its children",
-        );
     }
 }

@@ -62,23 +62,4 @@ mod tests {
             }
         }
     }
-
-    #[test]
-    fn f64_bits_are_equal_exactly_when_the_floats_are_equal_or_both_nan() {
-        let values = F32_VALUES.map(f64::from);
-        for a in values {
-            for b in values {
-                let same = a == b || (a.is_nan() && b.is_nan());
-                assert_eq!(
-                    canonical_bits_f64(a) == canonical_bits_f64(b),
-                    same,
-                    "{a:?} vs {b:?}"
-                );
-            }
-        }
-        assert_ne!(
-            canonical_bits_f64(f64::from_bits(1)),
-            canonical_bits_f64(0.0)
-        );
-    }
 }

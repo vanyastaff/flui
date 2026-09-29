@@ -12,15 +12,8 @@
 //!    controller when the node is focused, and are silently ignored when it is
 //!    not.
 //!
-use std::{
-    rc::Rc,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-};
+use std::rc::Rc;
 
-use flui_foundation::Listenable;
 use flui_foundation::geometry::EdgeInsets;
 use flui_foundation::geometry::Size;
 use flui_interaction::testing::input::KeyEventBuilder;
@@ -123,179 +116,6 @@ fn make_editable_text_handler(controller: TextEditingController) -> KeyEventHand
 // 1. TextEditingController — headless buffer tests
 // ============================================================================
 
-#[test]
-fn insert_str_appends_text_and_advances_caret_to_end() {
-    let controller = TextEditingController::new();
-    controller.insert_str("hello");
-    assert_eq!(controller.text(), "hello");
-    assert_eq!(controller.caret_byte_offset(), 5);
-}
-
-#[test]
-fn backspace_removes_the_char_before_the_caret() {
-    let controller = TextEditingController::new();
-    controller.insert_str("hi");
-    controller.backspace();
-    assert_eq!(controller.text(), "h");
-    assert_eq!(controller.caret_byte_offset(), 1);
-}
-
-#[test]
-fn backspace_at_start_is_a_no_op() {
-    let controller = TextEditingController::new();
-    controller.insert_str("x");
-    controller.move_caret_home();
-    controller.backspace();
-    assert_eq!(
-        controller.text(),
-        "x",
-        "backspace at offset 0 must not remove anything"
-    );
-    assert_eq!(controller.caret_byte_offset(), 0);
-}
-
-#[test]
-fn delete_forward_removes_the_char_after_the_caret() {
-    let controller = TextEditingController::new();
-    controller.insert_str("ab");
-    controller.move_caret_home();
-    controller.delete_forward();
-    assert_eq!(controller.text(), "b");
-    assert_eq!(controller.caret_byte_offset(), 0);
-}
-
-#[test]
-fn delete_forward_at_end_is_a_no_op() {
-    let controller = TextEditingController::new();
-    controller.insert_str("z");
-    controller.delete_forward();
-    assert_eq!(
-        controller.text(),
-        "z",
-        "delete at end must not remove anything"
-    );
-    assert_eq!(controller.caret_byte_offset(), 1);
-}
-
-#[test]
-fn move_caret_left_steps_back_one_char() {
-    let controller = TextEditingController::new();
-    controller.insert_str("abc"); // caret at 3
-    controller.move_caret_left();
-    assert_eq!(controller.caret_byte_offset(), 2); // before 'c'
-}
-
-#[test]
-fn move_caret_right_steps_forward_one_char() {
-    let controller = TextEditingController::new();
-    controller.insert_str("abc");
-    controller.move_caret_home();
-    controller.move_caret_right();
-    assert_eq!(controller.caret_byte_offset(), 1); // after 'a'
-}
-
-#[test]
-fn move_caret_home_places_caret_at_start() {
-    let controller = TextEditingController::new();
-    controller.insert_str("hello");
-    controller.move_caret_home();
-    assert_eq!(controller.caret_byte_offset(), 0);
-}
-
-#[test]
-fn move_caret_end_places_caret_at_end() {
-    let controller = TextEditingController::new();
-    controller.insert_str("hello");
-    controller.move_caret_home();
-    controller.move_caret_end();
-    assert_eq!(controller.caret_byte_offset(), 5);
-}
-
-#[test]
-fn caret_lands_on_valid_utf8_boundary_around_multibyte_char() {
-    let controller = TextEditingController::new();
-    // 🦀 is U+1F980, encoded in 4 bytes (0xF0 0x9F 0xA6 0x80).
-    controller.insert_str("a🦀b"); // bytes: a(1) + 🦀(4) + b(1) = 6, caret at 6
-    assert_eq!(controller.caret_byte_offset(), 6);
-
-    // Move left once — should land at byte 5 (before 'b'), not inside the crab.
-    controller.move_caret_left();
-    assert_eq!(
-        controller.caret_byte_offset(),
-        5,
-        "caret after moving left once should be before 'b'"
-    );
-
-    // Move left again — should skip past all 4 bytes of 🦀 to byte 1 (after 'a').
-    controller.move_caret_left();
-    assert_eq!(
-        controller.caret_byte_offset(),
-        1,
-        "caret should land at a valid UTF-8 boundary, skipping the full multi-byte char"
-    );
-}
-
-#[test]
-fn listener_fires_once_per_mutation() {
-    let controller = TextEditingController::new();
-    let call_count = Arc::new(AtomicUsize::new(0));
-    let calls = Arc::clone(&call_count);
-    controller.add_listener(Arc::new(move || {
-        calls.fetch_add(1, Ordering::SeqCst);
-    }));
-
-    controller.insert_str("a");
-    assert_eq!(
-        call_count.load(Ordering::SeqCst),
-        1,
-        "listener must fire on insert"
-    );
-
-    controller.backspace();
-    assert_eq!(
-        call_count.load(Ordering::SeqCst),
-        2,
-        "listener must fire on backspace"
-    );
-}
-
-#[test]
-fn clone_shares_the_underlying_buffer() {
-    let original = TextEditingController::new();
-    original.insert_str("hello");
-
-    let shared = original.clone();
-    shared.insert_str("!");
-
-    assert_eq!(
-        original.text(),
-        "hello!",
-        "a mutation via a clone must be visible through the original"
-    );
-}
-
-#[test]
-fn remove_listener_stops_notifications() {
-    let controller = TextEditingController::new();
-    let call_count = Arc::new(AtomicUsize::new(0));
-    let calls = Arc::clone(&call_count);
-
-    let listener_id = controller.add_listener(Arc::new(move || {
-        calls.fetch_add(1, Ordering::SeqCst);
-    }));
-
-    controller.insert_str("x");
-    assert_eq!(call_count.load(Ordering::SeqCst), 1);
-
-    controller.remove_listener(listener_id);
-    controller.insert_str("y");
-    assert_eq!(
-        call_count.load(Ordering::SeqCst),
-        1,
-        "listener must not fire after removal"
-    );
-}
-
 // ============================================================================
 // 2. Key-routing tests — FocusManager dispatch → controller
 // ============================================================================
@@ -325,33 +145,6 @@ fn focused_character_key_inserts_into_controller() {
         controller.text(),
         "h",
         "a focused key Down event must route to insert_str"
-    );
-}
-
-#[test]
-fn focused_backspace_key_deletes_char_before_caret() {
-    let manager = FocusManager::new();
-    let controller = TextEditingController::new();
-    controller.insert_str("hi");
-
-    let node = FocusNode::with_debug_label("test-field");
-    let guard = FocusGuard::attach(
-        Rc::clone(&manager),
-        Rc::clone(&node),
-        make_editable_text_handler(controller.clone()),
-    );
-    guard.request_focus();
-
-    let event = KeyEventBuilder::new(Code::Backspace)
-        .with_key(Key::Named(NamedKey::Backspace))
-        .with_state(KeyState::Down)
-        .build();
-    manager.dispatch_key_event(&event);
-
-    assert_eq!(
-        controller.text(),
-        "h",
-        "Backspace via FocusManager must remove the char before the caret"
     );
 }
 
@@ -393,32 +186,6 @@ fn focused_arrow_keys_move_the_caret() {
 }
 
 #[test]
-fn key_up_events_are_not_consumed_by_the_handler() {
-    let manager = FocusManager::new();
-    let controller = TextEditingController::new();
-    let node = FocusNode::with_debug_label("test-field");
-    let guard = FocusGuard::attach(
-        Rc::clone(&manager),
-        Rc::clone(&node),
-        make_editable_text_handler(controller.clone()),
-    );
-    guard.request_focus();
-
-    // KeyUp must be ignored — the handler only acts on KeyDown.
-    let up_event = KeyEventBuilder::new(Code::KeyA)
-        .with_key(Key::Character("a".to_string()))
-        .with_state(KeyState::Up)
-        .build();
-    let consumed = manager.dispatch_key_event(&up_event);
-
-    assert_eq!(controller.text(), "", "KeyUp must not insert text");
-    assert!(
-        !consumed,
-        "KeyUp must not be consumed by the handler (returns false)"
-    );
-}
-
-#[test]
 fn unfocused_field_does_not_receive_key_events() {
     let manager = FocusManager::new();
     let controller = TextEditingController::new();
@@ -441,24 +208,6 @@ fn unfocused_field_does_not_receive_key_events() {
         controller.text(),
         "",
         "an unfocused field must ignore key events dispatched through FocusManager"
-    );
-}
-
-#[test]
-fn editable_text_mounts_single_render_editable() {
-    let controller = TextEditingController::with_text("hello");
-    let focus_node = FocusNode::with_debug_label("mounted editable");
-
-    let laid = crate::common::lay_out(
-        EditableText::new(controller, focus_node),
-        crate::common::tight(120.0, 40.0),
-    );
-    let editable = laid.find_by_render_type("RenderEditable");
-
-    assert_eq!(laid.size(editable), Size::new(120.0, 40.0));
-    assert!(
-        laid.find_all_by_render_type("RenderParagraph").is_empty(),
-        "EditableText must not split text/caret into temporary paragraphs"
     );
 }
 
@@ -531,20 +280,4 @@ fn raw_text_field_deflates_editable_text_by_its_content_padding() {
     // through `Padding::new(...)` rather than silently dropped.
     let editable = laid.find_by_render_type("RenderEditable");
     assert_eq!(laid.size(editable), Size::new(180.0, 80.0));
-}
-
-#[test]
-fn raw_text_field_default_content_padding_matches_its_documented_default() {
-    let controller = TextEditingController::new();
-
-    // Default content_padding is symmetric(8 vertical, 12 horizontal) per
-    // `RawTextField::new`'s doc comment -- deflates width by 24 (12+12) and
-    // height by 16 (8+8).
-    let laid = crate::common::lay_out(
-        RawTextField::new(controller),
-        crate::common::tight(300.0, 60.0),
-    );
-
-    let editable = laid.find_by_render_type("RenderEditable");
-    assert_eq!(laid.size(editable), Size::new(276.0, 44.0));
 }

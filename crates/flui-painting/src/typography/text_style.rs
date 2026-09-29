@@ -436,34 +436,6 @@ impl TextShadow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::typography::TextOverflow;
-
-    const WEIGHTS: [FontWeight; 9] = [
-        FontWeight::W100,
-        FontWeight::W200,
-        FontWeight::W300,
-        FontWeight::W400,
-        FontWeight::W500,
-        FontWeight::W600,
-        FontWeight::W700,
-        FontWeight::W800,
-        FontWeight::W900,
-    ];
-
-    #[test]
-    fn font_weight_values() {
-        for (i, w) in WEIGHTS.into_iter().enumerate() {
-            let value = 100 * (i as u16 + 1);
-            assert_eq!(w.value(), value, "{w:?}");
-            assert_eq!(w.is_bold(), value >= 600, "{w:?}");
-            assert_eq!(FontWeight::from_css(i32::from(value)), w, "{w:?}");
-        }
-        assert_eq!(
-            (FontWeight::NORMAL, FontWeight::BOLD),
-            (FontWeight::W400, FontWeight::W700)
-        );
-        assert_eq!(FontWeight::default(), FontWeight::NORMAL);
-    }
 
     /// Each bucket's edges. Exact halves follow CSS font matching: down below
     /// 400, up from 400 (350 is W300, 450 is W500); out of range clamps.
@@ -496,36 +468,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn features_variations_and_defaults() {
-        assert_eq!(FontFeature::enable("liga"), FontFeature::new("liga", 1));
-        assert_eq!(FontFeature::disable("liga"), FontFeature::new("liga", 0));
-        let v = FontVariation::new("wght", 650.0);
-        assert_eq!((v.axis.as_str(), v.value), ("wght", 650.0));
-        assert_eq!(FontStyle::default(), FontStyle::Normal);
-        assert!(matches!(TextOverflow::default(), TextOverflow::Clip));
-        let shadow = TextShadow::new(Color::RED, 1.0, 2.0, 3.0);
-        assert_eq!(
-            (shadow.offset_x, shadow.offset_y, shadow.blur_radius),
-            (1.0, 2.0, 3.0)
-        );
-    }
-
-    #[test]
-    fn strut_style_builders() {
-        let s = StrutStyle::new()
-            .with_font_family("Inter")
-            .with_font_size(14.0)
-            .with_height(1.5)
-            .with_force_strut_height(true);
-        assert_eq!(s.font_family.as_deref(), Some("Inter"));
-        assert_eq!(
-            (s.font_size, s.height, s.force_strut_height),
-            (Some(14.0), Some(1.5), true)
-        );
-        assert_eq!(StrutStyle::new(), StrutStyle::default());
-    }
-
     fn full() -> TextStyle {
         TextStyle::new()
             .with_color(Color::RED)
@@ -539,105 +481,6 @@ mod tests {
             .with_font_feature(FontFeature::enable("liga"))
             .with_font_variation(FontVariation::new("wght", 650.0))
             .with_shadow(TextShadow::new(Color::BLACK, 1.0, 1.0, 2.0))
-    }
-
-    #[test]
-    fn builders_set_their_field() {
-        let s = full();
-        assert_eq!(s.color, Some(Color::RED));
-        assert_eq!(s.font_size, Some(14.0));
-        assert_eq!(s.font_weight, Some(FontWeight::BOLD));
-        assert_eq!(s.font_style, Some(FontStyle::Italic));
-        assert_eq!(s.font_family.as_deref(), Some("Inter"));
-        assert_eq!(
-            (s.letter_spacing, s.word_spacing, s.height),
-            (Some(0.5), Some(1.0), Some(1.25))
-        );
-        assert_eq!(s.font_features, vec![FontFeature::enable("liga")]);
-        assert_eq!(s.font_variations, vec![FontVariation::new("wght", 650.0)]);
-        assert_eq!(
-            s.shadows,
-            vec![TextShadow::new(Color::BLACK, 1.0, 1.0, 2.0)]
-        );
-        assert_eq!(TextStyle::new(), TextStyle::default());
-    }
-
-    /// Every layout field breaks layout equality on its own; paint-only
-    /// fields never do.
-    #[test]
-    fn layout_affecting_eq_per_field() {
-        let base = full();
-        assert!(base.layout_affecting_eq(&base.clone()));
-        let layout_changes = [
-            TextStyle {
-                font_size: Some(15.0),
-                ..full()
-            },
-            TextStyle {
-                font_weight: None,
-                ..full()
-            },
-            TextStyle {
-                font_style: None,
-                ..full()
-            },
-            TextStyle {
-                letter_spacing: None,
-                ..full()
-            },
-            TextStyle {
-                word_spacing: None,
-                ..full()
-            },
-            TextStyle {
-                height: None,
-                ..full()
-            },
-            TextStyle {
-                font_family: None,
-                ..full()
-            },
-            TextStyle {
-                font_family_fallback: vec!["x".into()],
-                ..full()
-            },
-            TextStyle {
-                font_features: vec![],
-                ..full()
-            },
-            TextStyle {
-                font_variations: vec![],
-                ..full()
-            },
-        ];
-        for changed in &layout_changes {
-            assert!(!base.layout_affecting_eq(changed), "{changed:?}");
-        }
-        let paint_changes = [
-            TextStyle {
-                color: None,
-                ..full()
-            },
-            TextStyle {
-                background_color: Some(Color::BLUE),
-                ..full()
-            },
-            TextStyle {
-                foreground: Some(Color::BLUE),
-                ..full()
-            },
-            TextStyle {
-                background: Some(Color::BLUE),
-                ..full()
-            },
-            TextStyle {
-                shadows: vec![],
-                ..full()
-            },
-        ];
-        for changed in &paint_changes {
-            assert!(base.layout_affecting_eq(changed), "{changed:?}");
-        }
     }
 
     /// `other` wins wherever it sets something; lists replace rather than

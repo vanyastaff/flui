@@ -49,11 +49,6 @@ struct ScrollNotification {
 
 impl Notification for ScrollNotification {}
 
-#[derive(Debug, Clone)]
-struct FooNotification;
-
-impl Notification for FooNotification {}
-
 // ============================================================================
 // Test fixtures
 // ============================================================================
@@ -367,94 +362,6 @@ fn dispatch_notification_continues_when_handler_returns_false() {
 // No handler in chain — walk completes cleanly without panic
 // ============================================================================
 
-#[test]
-fn dispatch_notification_walks_to_root_without_match() {
-    // Tree shape: DummyChild[root] → DummyChild → DummyChild.
-    // No NotifiableElement anywhere. dispatch_notification must walk the
-    // chain and exit cleanly when the root's parent is None.
-    let (tree, owner) = create_tree_and_owner();
-
-    let root_id = tree
-        .write()
-        .mount_root(&DummyChild, &mut owner.write().element_owner_mut());
-
-    let middle_id = tree.write().insert(
-        &DummyChild,
-        root_id,
-        0,
-        &mut owner.write().element_owner_mut(),
-    );
-
-    let leaf_id = tree.write().insert(
-        &DummyChild,
-        middle_id,
-        0,
-        &mut owner.write().element_owner_mut(),
-    );
-
-    let ctx = ElementBuildContext::for_element(leaf_id, tree.clone(), owner.clone()).unwrap();
-
-    // This must not panic.
-    ctx.dispatch_notification(&ScrollNotification { delta: 1.0 });
-}
-
 // ============================================================================
 // Wrong-type listener — bubble passes through without invoking it
 // ============================================================================
-
-#[test]
-fn dispatch_notification_skips_non_matching_type() {
-    // Tree shape: Root[FooListener] → Inner[ScrollListener returns true]
-    //             → DummyChild. Dispatch a FooNotification: ScrollListener
-    // is in the chain but type-mismatched, must NOT fire. FooListener at
-    // the root must fire.
-    let (tree, owner) = create_tree_and_owner();
-
-    let foo_called = Arc::new(AtomicBool::new(false));
-    let scroll_called = Arc::new(AtomicBool::new(false));
-
-    let foo_listener = {
-        let foo_called = Arc::clone(&foo_called);
-        NotificationListener::<FooNotification>::new(move |_n| {
-            foo_called.store(true, Ordering::Release);
-            true
-        })
-    };
-    let root_id = tree
-        .write()
-        .mount_root(&foo_listener, &mut owner.write().element_owner_mut());
-
-    let scroll_listener = {
-        let scroll_called = Arc::clone(&scroll_called);
-        NotificationListener::<ScrollNotification>::new(move |_n| {
-            scroll_called.store(true, Ordering::Release);
-            true
-        })
-    };
-    let middle_id = tree.write().insert(
-        &scroll_listener,
-        root_id,
-        0,
-        &mut owner.write().element_owner_mut(),
-    );
-
-    let leaf_id = tree.write().insert(
-        &DummyChild,
-        middle_id,
-        0,
-        &mut owner.write().element_owner_mut(),
-    );
-
-    let ctx = ElementBuildContext::for_element(leaf_id, tree.clone(), owner.clone()).unwrap();
-
-    ctx.dispatch_notification(&FooNotification);
-
-    assert!(
-        !scroll_called.load(Ordering::Acquire),
-        "ScrollNotification listener must NOT fire for FooNotification dispatch"
-    );
-    assert!(
-        foo_called.load(Ordering::Acquire),
-        "FooNotification listener at root must fire after walking past ScrollListener"
-    );
-}

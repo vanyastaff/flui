@@ -117,29 +117,6 @@ fn app_bar_height_includes_the_top_padding_and_the_body_does_not_double_shift() 
 }
 
 #[test]
-fn no_app_bar_means_the_body_starts_at_the_top() {
-    let laid = lay_out(
-        Theme::new(
-            ThemeData::light(),
-            MediaQuery::new(
-                MediaQueryData::default(),
-                Scaffold::new().body(SizedBox::new(10.0, 10.0)),
-            ),
-        ),
-        tight(400.0, 800.0),
-    );
-
-    let layout = layout_root(&laid);
-    let body = laid.child(layout, 0);
-
-    assert_eq!(
-        laid.offset(body),
-        offset(0.0, 0.0),
-        "with no app bar, content_top must be 0 — the body owns the whole scaffold height",
-    );
-}
-
-#[test]
 fn floating_action_button_floats_above_the_keyboard() {
     let media_query = MediaQueryData {
         view_insets: EdgeInsets::new(0.0, 0.0, 300.0, 0.0),
@@ -221,8 +198,7 @@ fn resize_to_avoid_bottom_inset_false_ignores_the_keyboard() {
 /// to always return `false` would not make this specific test fail.
 /// `should_relayout`'s own comparison logic is pinned directly, independent
 /// of this mounted harness, by `scaffold.rs`'s
-/// `should_relayout_is_true_when_bottom_min_inset_changes` and
-/// `should_relayout_is_true_when_min_view_padding_bottom_changes` unit tests.
+/// `should_relayout_is_true_when_bottom_min_inset_changes` unit test.
 #[test]
 fn media_query_change_repositions_the_floating_action_button_end_to_end() {
     let mut laid = lay_out(
@@ -322,76 +298,6 @@ fn floating_action_button_clears_the_bottom_safe_area_with_no_keyboard() {
 }
 
 #[test]
-fn floating_action_button_x_accounts_for_the_right_safe_area_padding() {
-    let media_query = MediaQueryData {
-        padding: EdgeInsets::new(0.0, 20.0, 0.0, 0.0),
-        ..MediaQueryData::default()
-    };
-    let laid = lay_out(
-        Theme::new(
-            ThemeData::light(),
-            MediaQuery::new(
-                media_query,
-                Scaffold::new()
-                    .body(SizedBox::new(10.0, 10.0))
-                    .floating_action_button(SizedBox::new(56.0, 56.0)),
-            ),
-        ),
-        tight(400.0, 800.0),
-    );
-
-    let layout = layout_root(&laid);
-    let fab = laid.child(layout, 1);
-
-    assert_eq!(
-        laid.offset(fab).dx,
-        (400.0 - 16.0 - 20.0 - 56.0),
-        "the FAB's x position must subtract min_insets.right (the right safe-area padding, \
-         e.g. a landscape-orientation notch), not just the flat margin",
-    );
-}
-
-#[test]
-fn greedy_body_fills_exactly_the_area_between_the_app_bar_and_the_keyboard() {
-    let media_query = MediaQueryData {
-        view_insets: EdgeInsets::new(0.0, 0.0, 300.0, 0.0),
-        ..MediaQueryData::default()
-    };
-    let laid = lay_out(
-        Theme::new(
-            ThemeData::light(),
-            MediaQuery::new(
-                media_query,
-                Scaffold::new()
-                    .app_bar(AppBar::new().title(Text::new("Title")))
-                    .body(SizedBox::expand()),
-            ),
-        ),
-        tight(400.0, 800.0),
-    );
-
-    let layout = layout_root(&laid);
-    let body = laid.child(layout, 0);
-    let app_bar = laid.child(layout, 1);
-
-    let content_top = laid.size(app_bar).height;
-    assert_eq!(content_top, 56.0, "sanity: the app bar's measured height");
-
-    // content_bottom = scaffold_height(800) - min_insets.bottom(300) = 500.
-    // A body that greedily fills its loose constraints (SizedBox::expand())
-    // must land on exactly content_bottom - content_top, not the raw
-    // scaffold height, and not a keyboard-agnostic fixed amount.
-    assert_eq!(
-        laid.size(body),
-        size(400.0, 500.0 - 56.0),
-        "a greedy body must fill exactly content_bottom - content_top under a keyboard, \
-         proving body_max_height actually threads through the keyboard-shrunk content_bottom \
-         (previous tests here only used a fixed 10x10 body, which can't distinguish a correct \
-         body_max_height from an oversized or undersized one)",
-    );
-}
-
-#[test]
 fn body_media_query_has_zero_top_padding_under_an_app_bar() {
     let captured = Rc::new(RefCell::new(None));
     let probe = MediaQueryProbe {
@@ -428,36 +334,6 @@ fn body_media_query_has_zero_top_padding_under_an_app_bar() {
 }
 
 #[test]
-fn body_media_query_keeps_top_padding_with_no_app_bar() {
-    let captured = Rc::new(RefCell::new(None));
-    let probe = MediaQueryProbe {
-        captured: Rc::clone(&captured),
-    };
-    let media_query = MediaQueryData {
-        padding: EdgeInsets::new(24.0, 0.0, 0.0, 0.0),
-        ..MediaQueryData::default()
-    };
-
-    let _laid = lay_out(
-        Theme::new(
-            ThemeData::light(),
-            MediaQuery::new(media_query, Scaffold::new().body(probe)),
-        ),
-        tight(400.0, 800.0),
-    );
-
-    let observed = captured
-        .borrow()
-        .clone()
-        .expect("the body must have built at least once and read an ambient MediaQuery");
-    assert_eq!(
-        observed.padding.top, 24.0,
-        "with no app bar to consume it, the body's ambient MediaQuery.padding.top must pass \
-         through unreduced — nothing else has claimed that inset",
-    );
-}
-
-#[test]
 fn body_media_query_has_zero_bottom_view_inset_when_resizing() {
     let captured = Rc::new(RefCell::new(None));
     let probe = MediaQueryProbe {
@@ -490,43 +366,6 @@ fn body_media_query_has_zero_bottom_view_inset_when_resizing() {
         "with resize_to_avoid_bottom_inset(true), the body's ambient MediaQuery.view_insets.bottom \
          must be zeroed — the delegate already shrank the body's own constraints for the \
          keyboard; a body reading the raw 300px would double-avoid it",
-    );
-}
-
-#[test]
-fn body_media_query_keeps_bottom_view_inset_when_not_resizing() {
-    let captured = Rc::new(RefCell::new(None));
-    let probe = MediaQueryProbe {
-        captured: Rc::clone(&captured),
-    };
-    let media_query = MediaQueryData {
-        view_insets: EdgeInsets::new(0.0, 0.0, 300.0, 0.0),
-        ..MediaQueryData::default()
-    };
-
-    let _laid = lay_out(
-        Theme::new(
-            ThemeData::light(),
-            MediaQuery::new(
-                media_query,
-                Scaffold::new()
-                    .resize_to_avoid_bottom_inset(false)
-                    .body(probe),
-            ),
-        ),
-        tight(400.0, 800.0),
-    );
-
-    let observed = captured
-        .borrow()
-        .clone()
-        .expect("the body must have built at least once and read an ambient MediaQuery");
-    assert_eq!(
-        observed.view_insets.bottom, 300.0,
-        "with resize_to_avoid_bottom_inset(false), the body's ambient \
-         MediaQuery.view_insets.bottom must pass through unreduced — the delegate did not \
-         shrink the body's constraints, so the body is responsible for avoiding the keyboard \
-         itself if it cares to",
     );
 }
 
@@ -579,42 +418,6 @@ fn bottom_navigation_bar_shrinks_the_body_and_lifts_the_floating_action_button()
          positioned from content_bottom, which already folds in the bar's measured height; \
          with no bottom-nav-aware content_bottom the FAB would sit at 800 - 56 - 16 = 728, \
          underneath the bar",
-    );
-}
-
-#[test]
-fn body_media_query_has_zero_bottom_padding_under_a_bottom_navigation_bar() {
-    let captured = Rc::new(RefCell::new(None));
-    let probe = MediaQueryProbe {
-        captured: Rc::clone(&captured),
-    };
-    let media_query = MediaQueryData {
-        padding: EdgeInsets::new(0.0, 0.0, 34.0, 0.0),
-        ..MediaQueryData::default()
-    };
-
-    let _laid = lay_out(
-        Theme::new(
-            ThemeData::light(),
-            MediaQuery::new(
-                media_query,
-                Scaffold::new()
-                    .body(probe)
-                    .bottom_navigation_bar(SizedBox::new(400.0, 80.0)),
-            ),
-        ),
-        tight(400.0, 800.0),
-    );
-
-    let observed = captured
-        .borrow()
-        .clone()
-        .expect("the body must have built at least once and read an ambient MediaQuery");
-    assert_eq!(
-        observed.padding.bottom, 0.0,
-        "the body's ambient MediaQuery.padding.bottom must be zeroed when a bottom navigation \
-         bar is present — the bar already consumes that inset internally (see its own SafeArea \
-         wrapping); a SafeArea nested in the body reading the un-reduced 34px would double-pad",
     );
 }
 

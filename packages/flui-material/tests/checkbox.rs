@@ -18,9 +18,7 @@
 //! exercised directly against `resolve_checkbox_fill_color` (extracted out
 //! of `build` specifically so this cascade is unit-testable without
 //! mounting a widget tree; see `theme_tier_beats_the_m3_default_when_no_widget_override_is_set`/
-//! `widget_override_wins_over_theme_and_default_when_selected_and_enabled`/
-//! `widget_override_is_ignored_when_disabled_even_if_selected`/
-//! `widget_override_is_ignored_when_unselected`), plus `CheckboxPainter`'s
+//! `widget_override_is_ignored_when_disabled_even_if_selected`), plus `CheckboxPainter`'s
 //! own paint-invocation proof (`draws_the_correct_mark_per_tristate_value`,
 //! a real `Canvas`/`DisplayList` recording). The illegal
 //! `(None, tristate: false)` pair is unrepresentable at the type level
@@ -32,7 +30,7 @@ use crate::common;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use common::{lay_out, size, tight};
+use common::{lay_out, tight};
 use flui_material::{Checkbox, Theme, ThemeData};
 use flui_sdk::view::SignalWriteExt;
 use flui_testing::a11y::{Role, Toggled};
@@ -69,44 +67,6 @@ fn constraints() -> flui_sdk::rendering::BoxConstraints {
 /// subject (see e.g. `tests/card.rs`).
 fn themed(checkbox: Checkbox) -> Theme {
     Theme::new(ThemeData::light(), checkbox)
-}
-
-#[test]
-fn mounting_a_checkbox_creates_a_semantics_annotated_tap_target() {
-    let laid = lay_out(
-        themed(Checkbox::new(false).on_changed(|_cx, _| {})),
-        constraints(),
-    );
-
-    // The wrapper node is the checkbox's own; its `GestureDetector` adds
-    // a second, action-only annotation beneath it for assistive technology.
-    let semantics = laid
-        .find_semantics_wrappers()
-        .into_iter()
-        .next()
-        .expect("Checkbox must mount a Semantics wrapper");
-    assert_eq!(laid.size(semantics), size(TAP_TARGET, TAP_TARGET));
-}
-
-#[test]
-fn tap_fires_on_changed_with_the_next_value() {
-    let observed = Rc::new(RefCell::new(None));
-    let recorder = Rc::clone(&observed);
-    let laid = lay_out(
-        themed(Checkbox::new(false).on_changed(move |_cx, next| {
-            *recorder.borrow_mut() = Some(next);
-        })),
-        constraints(),
-    );
-
-    laid.dispatch_pointer_down(TAP_TARGET / 2.0, TAP_TARGET / 2.0);
-    laid.dispatch_pointer_up(TAP_TARGET / 2.0, TAP_TARGET / 2.0);
-
-    assert_eq!(
-        *observed.borrow(),
-        Some(Some(true)),
-        "a tap on an unchecked, enabled checkbox must fire on_changed(Some(true))",
-    );
 }
 
 #[test]

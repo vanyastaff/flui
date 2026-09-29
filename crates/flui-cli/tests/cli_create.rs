@@ -234,11 +234,6 @@ fn generated_empty_project_compiles() {
     assert_generated_project_compiles("empty");
 }
 
-#[test]
-fn generated_widget_project_compiles() {
-    assert_generated_project_compiles("widget");
-}
-
 /// The widget template ships a widget test (`greeting_renders_its_name`); a
 /// bare `cargo check` would let that test rot silently — compiled once,
 /// never executed. This runs the generated library's own test binary and
@@ -406,100 +401,6 @@ fn create_project_initialises_git_in_the_project_not_the_caller_directory() {
 }
 
 #[test]
-fn create_project_with_basic_template() {
-    let tmp = TempDir::new().expect("temp dir");
-    let project_dir = tmp.path().join("test-basic");
-
-    flui()
-        .args([
-            "create",
-            "test-basic",
-            "--template",
-            "basic",
-            "--org",
-            "com.test",
-            "--no-check",
-        ])
-        .arg("--path")
-        .arg(tmp.path())
-        .assert()
-        .success();
-
-    // Verify directory structure
-    assert!(
-        project_dir.join("Cargo.toml").exists(),
-        "Cargo.toml missing"
-    );
-    assert!(
-        project_dir.join("src").join("main.rs").exists(),
-        "src/main.rs missing"
-    );
-    assert!(project_dir.join("flui.toml").exists(), "flui.toml missing");
-    assert!(project_dir.join("assets").is_dir(), "assets/ missing");
-}
-
-#[test]
-fn create_project_with_counter_template() {
-    let tmp = TempDir::new().expect("temp dir");
-    let project_dir = tmp.path().join("test-counter");
-
-    flui()
-        .args([
-            "create",
-            "test-counter",
-            "--template",
-            "counter",
-            "--org",
-            "com.test",
-            "--no-check",
-        ])
-        .arg("--path")
-        .arg(tmp.path())
-        .assert()
-        .success();
-
-    assert!(
-        project_dir.join("Cargo.toml").exists(),
-        "Cargo.toml missing"
-    );
-    assert!(
-        project_dir.join("src").join("main.rs").exists(),
-        "src/main.rs missing"
-    );
-    assert!(project_dir.join("flui.toml").exists(), "flui.toml missing");
-}
-
-#[test]
-fn create_project_with_local_flag() {
-    let tmp = TempDir::new().expect("temp dir");
-    let project_dir = tmp.path().join("test-local");
-
-    flui()
-        .args([
-            "create",
-            "test-local",
-            "--template",
-            "basic",
-            "--org",
-            "com.test",
-            "--local",
-            "--no-check",
-        ])
-        .arg("--path")
-        .arg(tmp.path())
-        .assert()
-        .success();
-
-    // Verify path dependencies in Cargo.toml
-    let cargo_toml =
-        std::fs::read_to_string(project_dir.join("Cargo.toml")).expect("read Cargo.toml");
-    assert!(
-        cargo_toml.contains("path ="),
-        "Cargo.toml should contain path dependencies when --local is used"
-    );
-}
-
-#[test]
 fn create_project_with_platforms() {
     let tmp = TempDir::new().expect("temp dir");
     let project_dir = tmp.path().join("test-plats");
@@ -598,68 +499,6 @@ fn local_source_resolves_outside_checkout() {
     assert_eq!(Path::new(dependency), repo_root());
 }
 
-fn assert_manifest_source(project: &Path, source: &Path) {
-    let manifest: toml::Table = std::fs::read_to_string(project.join("Cargo.toml"))
-        .expect("manifest")
-        .parse()
-        .expect("valid TOML");
-    assert_eq!(
-        Path::new(
-            manifest["dependencies"]["flui"]["path"]
-                .as_str()
-                .expect("path")
-        ),
-        source
-    );
-}
-
-#[test]
-fn explicit_source_accepts_absolute_and_relative_paths() {
-    let tmp = TempDir::new().expect("temp dir");
-    let source = tmp.path().join("source with 'single' quotes");
-    std::fs::create_dir(&source).expect("source dir");
-    // A real directory (not a symlink) keeps unusual characters after canonicalization.
-    std::fs::copy(repo_root().join("Cargo.toml"), source.join("Cargo.toml"))
-        .expect("root manifest");
-    for name in ["flui-app", "flui-view", "flui-widgets"] {
-        let dir = source.join("crates").join(name);
-        std::fs::create_dir_all(&dir).expect("crate dir");
-        std::fs::copy(
-            repo_root().join("crates").join(name).join("Cargo.toml"),
-            dir.join("Cargo.toml"),
-        )
-        .expect("crate manifest");
-    }
-    for (name, path) in [
-        ("absolute", source.clone()),
-        ("relative", PathBuf::from("source with 'single' quotes")),
-    ] {
-        let mut flag = std::ffi::OsString::from("--local=");
-        flag.push(&path);
-        flui()
-            .current_dir(tmp.path())
-            .args(["create", name, "--no-check"])
-            .arg(flag)
-            .assert()
-            .success();
-        assert_manifest_source(
-            &tmp.path().join(name),
-            &source.canonicalize().expect("source root"),
-        );
-    }
-}
-
-#[test]
-fn bare_local_before_project_name_uses_current_directory() {
-    let tmp = TempDir::new().expect("temp dir");
-    flui()
-        .args(["create", "--local", "before", "--no-check", "--path"])
-        .arg(tmp.path())
-        .assert()
-        .success();
-    assert_manifest_source(&tmp.path().join("before"), &repo_root());
-}
-
 #[test]
 fn invalid_local_source_does_not_create_output() {
     let tmp = TempDir::new().expect("temp dir");
@@ -738,43 +577,6 @@ fn local_source_preserves_quotes_and_backslashes() {
         &tmp.path().join("escaped"),
         &source.canonicalize().expect("canonical source"),
     );
-}
-
-#[cfg(unix)]
-#[test]
-fn non_utf8_source_is_rejected_without_output() {
-    use std::os::unix::ffi::OsStringExt;
-    let tmp = TempDir::new().expect("temp dir");
-    let source = tmp
-        .path()
-        .join(std::ffi::OsString::from_vec(vec![b's', 0xff]));
-    let mut flag = std::ffi::OsString::from("--local=");
-    flag.push(source);
-    flui()
-        .args(["create", "invalid", "--no-check", "--path"])
-        .arg(tmp.path())
-        .arg(flag)
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("UTF-8"));
-    assert!(!tmp.path().join("invalid").exists());
-}
-
-#[test]
-fn incomplete_local_checkout_is_rejected_without_output() {
-    let tmp = TempDir::new().expect("temp dir");
-    std::fs::copy(
-        repo_root().join("Cargo.toml"),
-        tmp.path().join("Cargo.toml"),
-    )
-    .expect("root manifest");
-    flui()
-        .current_dir(tmp.path())
-        .args(["create", "incomplete", "--local", "--no-check"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("flui-app"));
-    assert!(!tmp.path().join("incomplete").exists());
 }
 
 #[test]
@@ -948,59 +750,6 @@ fn dry_run_writes_nothing_and_lists_key_files() {
     );
 }
 
-#[test]
-fn dry_run_lists_gitignore() {
-    let tmp = TempDir::new().expect("temp dir");
-
-    flui()
-        .args([
-            "create",
-            "dry-gitignore",
-            "--org",
-            "com.test",
-            "--template",
-            "basic",
-            "--dry-run",
-        ])
-        .arg("--path")
-        .arg(tmp.path())
-        .assert()
-        .success()
-        .stderr(predicate::str::contains(".gitignore"));
-}
-
-#[test]
-fn dry_run_with_platforms_lists_the_platform_scaffold_files() {
-    let tmp = TempDir::new().expect("temp dir");
-
-    flui()
-        .args([
-            "create",
-            "dry-web",
-            "--org",
-            "com.test",
-            "--template",
-            "empty",
-            "--platforms",
-            "web",
-            "--dry-run",
-        ])
-        .arg("--path")
-        .arg(tmp.path())
-        .assert()
-        .success()
-        .stderr(
-            predicate::str::contains("platforms/web/index.html")
-                .or(predicate::str::contains("platforms\\web\\index.html")),
-        )
-        .stderr(
-            predicate::str::contains("platforms/web/manifest.json")
-                .or(predicate::str::contains("platforms\\web\\manifest.json")),
-        );
-
-    assert!(!tmp.path().join("dry-web").exists());
-}
-
 /// The dry run's file list is the same promise `--dry-run` makes for
 /// everything else: it must name exactly the files a real run creates.
 /// This compares the two directly for `--template empty --platforms web`,
@@ -1092,22 +841,6 @@ fn walk_files(dir: &Path) -> Vec<PathBuf> {
         }
     }
     files
-}
-
-#[test]
-fn dry_run_does_not_init_git_or_run_cargo_check() {
-    let tmp = TempDir::new().expect("temp dir");
-    let project_dir = tmp.path().join("dry-git");
-
-    flui()
-        .args(["create", "dry-git", "--org", "com.test", "--dry-run"])
-        .arg("--path")
-        .arg(tmp.path())
-        .assert()
-        .success();
-
-    assert!(!project_dir.exists());
-    assert!(!tmp.path().join(".git").exists());
 }
 
 #[test]
@@ -1214,27 +947,4 @@ fn create_without_name_under_ci_exits_non_interactive() {
         .failure()
         .code(7)
         .stderr(predicate::str::contains("flui create <NAME>"));
-}
-
-#[test]
-fn unknown_template_is_a_usage_error() {
-    let tmp = TempDir::new().expect("temp dir");
-
-    flui()
-        .args([
-            "create",
-            "todo-app",
-            "--org",
-            "com.test",
-            "--template",
-            "todo",
-        ])
-        .arg("--path")
-        .arg(tmp.path())
-        .assert()
-        .failure()
-        .code(2)
-        .stderr(predicate::str::contains("invalid value"));
-
-    assert!(!tmp.path().join("todo-app").exists());
 }

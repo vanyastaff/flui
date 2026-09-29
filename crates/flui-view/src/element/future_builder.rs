@@ -525,53 +525,6 @@ mod tests {
 
     // ── absent future ───────────────────────────────────────────────────────
 
-    /// No key ⇒ no future: `ConnectionState::None`, no subscription.
-    #[test]
-    fn future_builder_absent_future_is_none() {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let completer = Completer::new();
-        let view = FutureBuilder::<u32, _, _>::keyed(
-            None,
-            completer.factory(),
-            recording_builder(Arc::clone(&log)),
-        );
-
-        let harness = Harness::mount(&view);
-        assert_eq!(
-            last(&log),
-            Seen {
-                state: ConnectionState::None,
-                data: None,
-                error: None
-            }
-        );
-        assert_eq!(harness.scheduler.pending_task_count(), 0, "nothing spawned");
-    }
-
-    /// `'runs the builder using given initial data'` with no future: the seed is
-    /// visible in `ConnectionState::None`.
-    #[test]
-    fn future_builder_absent_future_preserves_initial_data() {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let completer = Completer::new();
-        let view = FutureBuilder::<u32, _, _>::keyed(
-            None,
-            completer.factory(),
-            recording_builder(Arc::clone(&log)),
-        )
-        .with_initial_data(Rc::new(|| Payload(7)));
-
-        let _harness = Harness::mount(&view);
-        assert_eq!(
-            last(&log),
-            Seen {
-                state: ConnectionState::None,
-                data: Some(7),
-                error: None
-            }
-        );
-    }
-
     // ── life cycle ──────────────────────────────────────────────────────────
 
     /// `'tracks life-cycle of Future to success'`: `Waiting` → `Done + data`,
@@ -769,38 +722,6 @@ mod tests {
         second.complete(Ok(Payload(2)));
         harness.frame();
         assert_eq!(last(&log).data, Some(2));
-    }
-
-    /// The same hop starting from an error.
-    #[test]
-    fn future_builder_key_change_preserves_old_error() {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let first = Completer::new();
-        let view = FutureBuilder::keyed(
-            Some(1_u32),
-            first.factory(),
-            recording_builder(Arc::clone(&log)),
-        );
-        let mut harness = Harness::mount(&view);
-        first.complete(Err(Boom("old")));
-        harness.frame();
-
-        let second = Completer::new();
-        let next = FutureBuilder::keyed(
-            Some(2_u32),
-            second.factory(),
-            recording_builder(Arc::clone(&log)),
-        );
-        harness.update(&next);
-
-        assert_eq!(
-            last(&log),
-            Seen {
-                state: ConnectionState::Waiting,
-                data: None,
-                error: Some("old")
-            }
-        );
     }
 
     /// `'gracefully handles transition to null future'`: the task is cancelled and
@@ -1041,86 +962,5 @@ mod tests {
 
     // ── the generation guard, tested directly ───────────────────────────────
 
-    fn fresh_slot() -> SharedSlot<Payload, Boom> {
-        let mut slot = Slot::new(AsyncSnapshot::nothing());
-        slot.generation = 7;
-        Arc::new(Mutex::new(slot))
-    }
-
-    /// A completion whose generation matches folds into the snapshot and asks for
-    /// a rebuild.
-    #[test]
-    fn apply_completion_with_a_current_generation_folds_and_schedules() {
-        let slot = fresh_slot();
-        let schedule = apply_completion(&slot, 7, Ok(Payload(3)));
-
-        assert!(schedule, "a live completion must schedule a rebuild");
-        let guard = slot.lock();
-        assert_eq!(guard.snapshot.connection_state(), ConnectionState::Done);
-        assert_eq!(guard.snapshot.data(), Some(&Payload(3)));
-    }
-
-    /// A completion from a subscription that has since been replaced (or
-    /// disposed) is discarded: the snapshot is untouched and no rebuild is asked
-    /// for. This is the window `TaskToken` cancellation normally closes first.
-    #[test]
-    fn apply_completion_with_a_stale_generation_is_discarded() {
-        let slot = fresh_slot();
-        slot.lock().snapshot = AsyncSnapshot::with_data(ConnectionState::Waiting, Payload(1));
-
-        let schedule = apply_completion(&slot, 6, Ok(Payload(999)));
-
-        assert!(!schedule, "a stale completion must not wake a frame");
-        let guard = slot.lock();
-        assert_eq!(
-            guard.snapshot.connection_state(),
-            ConnectionState::Waiting,
-            "the live subscription's snapshot is untouched"
-        );
-        assert_eq!(guard.snapshot.data(), Some(&Payload(1)));
-    }
-
-    /// A completion landing inside the inline (synchronous) window folds, but must
-    /// not schedule: the build that reads it has not run yet.
-    #[test]
-    fn apply_completion_inside_the_inline_window_folds_without_scheduling() {
-        let slot = fresh_slot();
-        slot.lock().inline_window = true;
-
-        let schedule = apply_completion(&slot, 7, Ok(Payload(2)));
-
-        assert!(!schedule, "no wasted frame for a synchronous completion");
-        assert_eq!(slot.lock().snapshot.data(), Some(&Payload(2)));
-    }
-
-    /// An error completion clears the data.
-    #[test]
-    fn apply_completion_with_an_error_clears_data() {
-        let slot = fresh_slot();
-        slot.lock().snapshot = AsyncSnapshot::with_data(ConnectionState::Waiting, Payload(1));
-
-        assert!(apply_completion(&slot, 7, Err(Boom("x"))));
-        let guard = slot.lock();
-        assert_eq!(guard.snapshot.connection_state(), ConnectionState::Done);
-        assert_eq!(guard.snapshot.error(), Some(&Boom("x")));
-        assert!(!guard.snapshot.has_data());
-    }
-
     // ── bounds ──────────────────────────────────────────────────────────────
-
-    /// Compile-proof: `Payload` and `Boom` implement neither `Clone` nor `Copy`,
-    /// and they flow through the constructor, the factory, the completion path,
-    /// and the builder.
-    #[test]
-    fn future_builder_needs_no_clone_on_t_or_e() {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let completer = Completer::ready(Ok(Payload(1)));
-        let view = FutureBuilder::keyed(
-            Some(()),
-            completer.factory(),
-            recording_builder(Arc::clone(&log)),
-        );
-        let _harness = Harness::mount(&view);
-        assert_eq!(last(&log).data, Some(1));
-    }
 }

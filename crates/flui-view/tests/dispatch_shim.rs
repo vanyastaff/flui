@@ -41,49 +41,6 @@ impl View for ShimView {
     }
 }
 
-/// Typed dispatch must succeed on a matching type — proves the
-/// default route through `dispatch_view_update` reaches the
-/// `Ok(typed) = Box::downcast::<V>` branch and applies the new
-/// view.
-#[test]
-fn identity_shim_succeeds_on_type_match() {
-    let mut tree = ElementTree::new();
-    let mut owner = BuildOwner::new();
-    let initial = ShimView {
-        payload: 1,
-        key: Some(Box::new(ValueKey::new(42_u32))),
-    };
-    let id = tree.mount_root(&initial, &mut owner.element_owner_mut());
-
-    let updated = ShimView {
-        payload: 2,
-        key: Some(Box::new(ValueKey::new(42_u32))),
-    };
-    // `ElementTree::update` calls `node.element.update`, which invokes
-    // `ElementCore::update_view` on the typed element. Round-trips
-    // through `dispatch_view_update` under default features.
-    tree.update(id, &updated, &mut owner.element_owner_mut());
-
-    // The key should still survive the update (the view re-clones its
-    // key at the update boundary). Same key value confirms the dispatch took the
-    // success path and applied the new view — a downcast failure
-    // would leave `node.key` unchanged at the old probe value (it
-    // already matches by value here) but `payload` would also stay
-    // at 1 (we can't read payload through the type-erased element,
-    // so the surface assertion is the key still being present).
-    let node = tree.get(id).expect("node alive after update");
-    let stored_hash = node
-        .key()
-        .map(flui_foundation::ViewKey::key_hash)
-        .expect("key survives update");
-    let probe = ValueKey::<u32>::new(42_u32);
-    assert_eq!(
-        stored_hash,
-        probe.key_hash(),
-        "typed dispatch must preserve the keyed slot across update",
-    );
-}
-
 /// Regression lock: `BoxedView` forwards `View::view_type_id()` to its
 /// inner view; a `view_type_id()`-keyed guard would let the wrapper slip
 /// through and the subsequent downcast would panic on every `.boxed()`

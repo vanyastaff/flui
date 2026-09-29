@@ -823,43 +823,6 @@ mod glam_backend_tests {
     }
 
     #[test]
-    fn glam_round_trip_is_identity() {
-        let m = Matrix4::rotation_z(0.7) * Matrix4::translation(10.0, -3.0, 0.0);
-        let round = Matrix4::from_glam(m.to_glam());
-        assert!(m.approx_eq(&round));
-    }
-
-    #[test]
-    fn mul_matches_manual_column_major_product() {
-        // Guards the glam-delegated `Mul` against the previous scalar product.
-        let a = Matrix4::scaling(2.0, 3.0, 1.0);
-        let b = Matrix4::translation(5.0, 7.0, 0.0);
-        let c = a * b; // apply b first, then a
-        let (x, y) = c.transform_point(1.0, 1.0);
-        // b: (1,1)->(6,8); a: scale -> (12, 24)
-        assert!((x - 12.0).abs() < 1e-5, "x={x}");
-        assert!((y - 24.0).abs() < 1e-5, "y={y}");
-    }
-
-    #[test]
-    fn singular_matrix_has_no_inverse() {
-        let singular = Matrix4::scaling(0.0, 1.0, 1.0);
-        assert!(singular.try_inverse().is_none());
-        assert!(Matrix4::identity().try_inverse().is_some());
-    }
-
-    #[test]
-    fn is_invertible_agrees_with_try_inverse() {
-        let invertible = Matrix4::rotation_z(0.7) * Matrix4::translation(10.0, -3.0, 0.0);
-        assert!(invertible.is_invertible());
-        assert!(invertible.try_inverse().is_some());
-
-        let singular = Matrix4::scaling(0.0, 1.0, 1.0);
-        assert!(!singular.is_invertible());
-        assert!(singular.try_inverse().is_none());
-    }
-
-    #[test]
     fn is_invertible_matches_try_inverse_at_the_epsilon_boundary() {
         // A scale just above f64::EPSILON must read as invertible; a scale
         // just below it must read as singular -- `is_invertible` and

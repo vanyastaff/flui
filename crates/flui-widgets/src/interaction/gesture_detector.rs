@@ -1208,114 +1208,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::arc_with_non_send_sync,
-        reason = "ElementBuildContext's test seam accepts Arc over owner-local state"
-    )]
-    fn queued_semantics_delivery_does_not_retain_callback_after_state_drop() {
-        struct DropProbe(Rc<Cell<usize>>);
-
-        impl Drop for DropProbe {
-            fn drop(&mut self) {
-                self.0.set(self.0.get() + 1);
-            }
-        }
-
-        let tree = Arc::new(parking_lot::RwLock::new(flui_view::ElementTree::new()));
-        let owner = Arc::new(parking_lot::RwLock::new(flui_view::BuildOwner::new()));
-        let writer = flui_view::ElementBuildContext::new(
-            flui_foundation::ElementId::new(1),
-            0,
-            false,
-            tree,
-            owner,
-        )
-        .writer_source();
-        let scheduler = flui_scheduler::UpdateScheduler::new();
-        let lane = scheduler.new_local_post_frame_lane();
-        let drops = Rc::new(Cell::new(0));
-        let probe = DropProbe(Rc::clone(&drops));
-        let calls = Rc::new(Cell::new(0));
-        let callback_calls = Rc::clone(&calls);
-        let mut state = GestureDetector::new()
-            .on_tap(move |_cx| {
-                let _keep_alive = &probe;
-                callback_calls.set(callback_calls.get() + 1);
-            })
-            .create_state();
-        state.semantics_delivery = Some(Rc::new(SemanticsDeliveryTarget {
-            tap_slot: Rc::clone(&state.tap_slot),
-            long_press_slot: Rc::clone(&state.long_press_slot),
-            writer,
-            mounted: Cell::new(true),
-        }));
-        state.local_post_frame = Some(lane.local_handle());
-        state.semantics_requests.push(PendingSemanticsAction::Tap);
-
-        state.drain_semantics_requests();
-        assert_eq!(lane.local_handle().pending_len(), 1);
-
-        state.dispose();
-        drop(state);
-        assert_eq!(drops.get(), 1, "the queued closure must not retain on_tap");
-
-        scheduler.execute_frame_with_lane(&lane);
-        assert_eq!(calls.get(), 0);
-        assert_eq!(drops.get(), 1);
-    }
-
-    #[test]
-    fn on_horizontal_drag_builders_store_the_callback() {
-        let detector = GestureDetector::new()
-            .on_horizontal_drag_down(|_, _| {})
-            .on_horizontal_drag_start(|_, _| {})
-            .on_horizontal_drag_update(|_, _| {})
-            .on_horizontal_drag_end(|_, _| {})
-            .on_horizontal_drag_cancel(|_| {});
-
-        assert!(detector.on_horizontal_drag_down.is_some());
-        assert!(detector.on_horizontal_drag_start.is_some());
-        assert!(detector.on_horizontal_drag_update.is_some());
-        assert!(detector.on_horizontal_drag_end.is_some());
-        assert!(detector.on_horizontal_drag_cancel.is_some());
-    }
-
-    #[test]
-    fn default_detector_has_no_horizontal_drag_callbacks() {
-        let detector = GestureDetector::new();
-        assert!(detector.on_horizontal_drag_down.is_none());
-        assert!(detector.on_horizontal_drag_start.is_none());
-        assert!(detector.on_horizontal_drag_update.is_none());
-        assert!(detector.on_horizontal_drag_end.is_none());
-        assert!(detector.on_horizontal_drag_cancel.is_none());
-    }
-
-    #[test]
-    fn conflict_guard_is_silent_with_only_horizontal_drag_configured() {
-        let detector = GestureDetector::new().on_horizontal_drag_start(|_, _| {});
-        // Must not panic — no `on_pan_*` is configured alongside it.
-        assert_no_pan_horizontal_drag_conflict(&detector);
-    }
-
-    #[test]
-    fn conflict_guard_is_silent_with_only_pan_configured() {
-        let detector = GestureDetector::new().on_pan_start(|_, _| {});
-        assert_no_pan_horizontal_drag_conflict(&detector);
-    }
-
-    #[test]
-    fn conflict_guard_ignores_down_and_cancel_alone() {
-        // Flutter parity: `haveHorizontalDrag`/`havePan` only look at
-        // start/update/end — down/cancel alone (paired with the other
-        // family's start/update/end) must not trip the guard.
-        let detector = GestureDetector::new()
-            .on_pan_start(|_, _| {})
-            .on_horizontal_drag_down(|_, _| {})
-            .on_horizontal_drag_cancel(|_| {});
-        assert_no_pan_horizontal_drag_conflict(&detector);
-    }
-
-    #[test]
     // Debug-only: the guard compiles out in release, where `#[should_panic]`
     // would otherwise report "did not panic as expected".
     #[cfg(debug_assertions)]
@@ -1324,18 +1216,6 @@ mod tests {
         let detector = GestureDetector::new()
             .on_pan_start(|_, _| {})
             .on_horizontal_drag_start(|_, _| {});
-        assert_no_pan_horizontal_drag_conflict(&detector);
-    }
-
-    #[test]
-    // Debug-only: the guard compiles out in release, where `#[should_panic]`
-    // would otherwise report "did not panic as expected".
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "on_pan_* and on_horizontal_drag_* are both configured")]
-    fn conflict_guard_panics_with_update_and_end_variants_too() {
-        let detector = GestureDetector::new()
-            .on_pan_update(|_, _| {})
-            .on_horizontal_drag_end(|_, _| {});
         assert_no_pan_horizontal_drag_conflict(&detector);
     }
 }

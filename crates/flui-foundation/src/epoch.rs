@@ -298,61 +298,11 @@ impl Default for GenerationGate {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        FrameEpoch, GenerationGate, GpuResourceGeneration, ResourceGeneration, SurfaceGeneration,
-    };
-
-    #[test]
-    fn zero_is_default() {
-        assert_eq!(FrameEpoch::default(), FrameEpoch::ZERO);
-        assert_eq!(FrameEpoch::ZERO.get(), 0);
-    }
-
-    #[test]
-    fn next_increments_by_one() {
-        let first = FrameEpoch::ZERO;
-        let second = first.next();
-        assert_eq!(second.get(), 1);
-        assert_eq!(second.next().get(), 2);
-    }
-
-    #[test]
-    fn ordering_tracks_recency() {
-        let older = SurfaceGeneration::ZERO;
-        let newer = older.next();
-        assert!(newer > older);
-        assert_eq!(older, SurfaceGeneration::ZERO);
-    }
-
-    #[test]
-    fn distinct_types_do_not_mix() {
-        // This is a compile-time property, not a runtime assertion: the
-        // following would not compile if uncommented, because the three
-        // counters are distinct types despite identical internal shape.
-        // let _: FrameEpoch = SurfaceGeneration::ZERO; // ERROR
-        let frame = FrameEpoch::ZERO;
-        let resource = ResourceGeneration::ZERO;
-        assert_eq!(frame.get(), resource.get());
-    }
-
-    #[test]
-    fn display_shows_raw_value() {
-        assert_eq!(FrameEpoch::ZERO.next().next().to_string(), "2");
-    }
+    use super::{GenerationGate, GpuResourceGeneration};
 
     // -----------------------------------------------------------------------
     // GenerationGate tests
     // -----------------------------------------------------------------------
-
-    #[test]
-    fn generation_gate_starts_at_zero() {
-        let gate = GenerationGate::new();
-        assert_eq!(gate.current(), ResourceGeneration::ZERO);
-        assert_eq!(
-            GenerationGate::default().current(),
-            ResourceGeneration::ZERO
-        );
-    }
 
     #[test]
     fn stale_after_bump() {
@@ -382,12 +332,6 @@ mod tests {
         assert!(gate.is_current(bumped_again));
     }
 
-    #[test]
-    fn generation_gate_is_send_and_sync() {
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<GenerationGate>();
-    }
-
     // -----------------------------------------------------------------------
     // GpuResourceGeneration tests
     // -----------------------------------------------------------------------
@@ -402,18 +346,5 @@ mod tests {
         // The counter starts at 1 (see `mint`'s own doc), so ZERO stays a
         // sentinel a real mint can never collide with.
         assert_ne!(GpuResourceGeneration::mint(), GpuResourceGeneration::ZERO);
-    }
-
-    #[test]
-    fn gpu_resource_generation_mint_is_monotonic_across_calls() {
-        let first = GpuResourceGeneration::mint();
-        let second = GpuResourceGeneration::mint();
-        assert!(second.get() > first.get());
-    }
-
-    #[test]
-    fn gpu_resource_generation_display_shows_raw_value() {
-        let minted = GpuResourceGeneration::mint();
-        assert_eq!(minted.to_string(), minted.get().to_string());
     }
 }

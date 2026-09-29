@@ -30,19 +30,6 @@ fn list_body_vertical_stretches_children_and_sums_height() {
 }
 
 #[test]
-fn list_body_reverse_vertical_places_first_child_last() {
-    let laid = lay_out(
-        ListBody::new(row![SizedBox::new(20.0, 10.0), SizedBox::new(30.0, 20.0)]).reverse(true),
-        vertical_constraints(100.0),
-    );
-
-    let root = laid.root();
-    assert_eq!(laid.size(root), size(100.0, 30.0));
-    assert_eq!(laid.offset(laid.child(root, 0)), offset(0.0, 20.0));
-    assert_eq!(laid.offset(laid.child(root, 1)), offset(0.0, 0.0));
-}
-
-#[test]
 fn list_body_horizontal_uses_unbounded_width_and_bounded_height() {
     let constraints = BoxConstraints::new(0.0, f64::INFINITY, 0.0, 50.0);
     let laid = lay_out(

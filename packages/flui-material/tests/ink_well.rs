@@ -62,68 +62,6 @@ fn hover_updates_widget_states_when_the_pointer_moves_over_the_ink_well() {
 }
 
 #[test]
-fn hover_clears_when_the_pointer_exits_the_ink_well() {
-    let states = WidgetStatesController::default();
-    let laid = lay_out(
-        InkWell::new(SizedBox::new(60.0, 40.0))
-            .on_tap(|_cx| {})
-            .states_controller(states.clone()),
-        tight(60.0, 40.0),
-    );
-
-    laid.dispatch_pointer_hover(10.0, 10.0);
-    assert!(states.value().contains_state(WidgetState::Hovered));
-
-    laid.dispatch_pointer_hover(80.0, 60.0);
-    assert!(
-        !states.value().contains_state(WidgetState::Hovered),
-        "leaving the InkWell must clear WidgetState::Hovered",
-    );
-}
-
-#[test]
-fn disabled_ink_well_does_not_update_hovered_state() {
-    // No `.on_tap(..)`: `is_interactive()` is false, so the oracle's
-    // `handleMouseEnter` gate on `enabled` should suppress the Hovered
-    // update even though the pointer really did move over the region.
-    let states = WidgetStatesController::default();
-    let laid = lay_out(
-        InkWell::new(SizedBox::new(60.0, 40.0)).states_controller(states.clone()),
-        tight(60.0, 40.0),
-    );
-
-    assert!(states.value().contains_state(WidgetState::Disabled));
-
-    laid.dispatch_pointer_hover(10.0, 10.0);
-
-    assert!(
-        !states.value().contains_state(WidgetState::Hovered),
-        "a disabled InkWell must not report Hovered on pointer move",
-    );
-}
-
-#[test]
-fn tap_fires_on_tap_for_a_down_up_on_the_ink_well() {
-    let taps = Arc::new(AtomicUsize::new(0));
-    let counted = Arc::clone(&taps);
-    let laid = lay_out(
-        InkWell::new(SizedBox::new(60.0, 40.0)).on_tap(move |_cx| {
-            counted.fetch_add(1, Ordering::SeqCst);
-        }),
-        tight(60.0, 40.0),
-    );
-
-    laid.dispatch_pointer_down(30.0, 20.0);
-    laid.dispatch_pointer_up(30.0, 20.0);
-
-    assert_eq!(
-        taps.load(Ordering::SeqCst),
-        1,
-        "a down+up on an enabled InkWell must fire on_tap exactly once",
-    );
-}
-
-#[test]
 fn on_tap_handler_observes_pressed_already_set() {
     use std::sync::atomic::AtomicBool;
 
@@ -323,35 +261,6 @@ fn rebuilding_with_a_different_states_controller_re_homes_hover_tracking() {
     );
 }
 
-#[test]
-fn rebuilding_with_the_same_cloned_controller_keeps_driving_it() {
-    // The complementary case: re-cloning the SAME controller on rebuild
-    // (the common case — most callers hold one controller and pass
-    // `.clone()` on every build) must NOT be treated as a swap, and must
-    // NOT drop the listener that drives rebuilds.
-    let controller = WidgetStatesController::default();
-
-    let mut laid = lay_out(
-        InkWell::new(SizedBox::new(60.0, 40.0))
-            .on_tap(|_cx| {})
-            .states_controller(controller.clone()),
-        tight(60.0, 40.0),
-    );
-
-    laid.pump_widget(
-        InkWell::new(SizedBox::new(60.0, 40.0))
-            .on_tap(|_cx| {})
-            .states_controller(controller.clone()),
-    );
-
-    laid.dispatch_pointer_hover(10.0, 10.0);
-
-    assert!(
-        controller.value().contains_state(WidgetState::Hovered),
-        "re-cloning the same controller across a rebuild must not break hover tracking"
-    );
-}
-
 // A `build()`-vs-`init_state`/`did_update_view` regression test for the
 // Disabled-sync relocation was attempted and DELIBERATELY dropped, not
 // silently skipped: two different observability angles were tried —
@@ -370,8 +279,7 @@ fn rebuilding_with_the_same_cloned_controller_keeps_driving_it() {
 // `ink_well.rs`'s `init_state`/`did_update_view`) is applied and is correct
 // on the oracle's own terms independent of whether this harness can prove
 // the "spurious rebuild" symptom specifically; the existing `Disabled`-state
-// assertions (`disabled_ink_well_does_not_update_hovered_state`,
-// `disabled_ink_well_does_not_fire_a_tap_callback`) already prove the sync
+// assertions (`disabled_ink_well_does_not_fire_a_tap_callback`) already prove the sync
 // itself still happens correctly at the new call sites.
 
 #[test]

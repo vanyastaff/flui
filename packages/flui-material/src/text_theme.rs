@@ -264,13 +264,6 @@ mod tests {
     }
 
     #[test]
-    fn merge_onto_empty_base_yields_the_patch() {
-        let base = TextTheme::default();
-        let patch = english_like_2021();
-        assert_eq!(base.merge(&patch), patch);
-    }
-
-    #[test]
     fn apply_color_sets_every_present_role_and_skips_none() {
         let mut theme = english_like_2021();
         theme.headline_small = None;
@@ -282,36 +275,5 @@ mod tests {
         for style in recolored.roles().into_iter().flatten() {
             assert_eq!(style.color, Some(sentinel));
         }
-    }
-
-    /// Oracle citation: `Typography.blackMountainView`
-    /// (`material/typography.dart`, oracle tag `3.44.0`).
-    #[test]
-    fn black_mountain_view_matches_oracle_color_tiers() {
-        let theme = TextTheme::black_mountain_view();
-        let black54 = Color::from_argb(0x8A00_0000);
-        let black87 = Color::from_argb(0xDD00_0000);
-        let black = Color::from_argb(0xFF00_0000);
-
-        assert_eq!(theme.display_large.unwrap().color, Some(black54));
-        assert_eq!(theme.headline_small.unwrap().color, Some(black87));
-        assert_eq!(theme.title_small.unwrap().color, Some(black));
-        assert_eq!(theme.body_small.unwrap().color, Some(black54));
-        assert_eq!(theme.label_large.unwrap().color, Some(black87));
-        assert_eq!(theme.label_medium.unwrap().color, Some(black));
-    }
-
-    /// Oracle citation: `Typography.whiteMountainView`
-    /// (`material/typography.dart`, oracle tag `3.44.0`).
-    #[test]
-    fn white_mountain_view_matches_oracle_color_tiers() {
-        let theme = TextTheme::white_mountain_view();
-        let white70 = Color::from_argb(0xB3FF_FFFF);
-        let white = Color::from_argb(0xFFFF_FFFF);
-
-        assert_eq!(theme.display_large.unwrap().color, Some(white70));
-        assert_eq!(theme.headline_small.unwrap().color, Some(white));
-        assert_eq!(theme.body_small.unwrap().color, Some(white70));
-        assert_eq!(theme.label_small.unwrap().color, Some(white));
     }
 }

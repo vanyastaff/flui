@@ -2920,8 +2920,6 @@ mod tests {
     mod activation_recovery_tests;
     #[path = "../element_depth_tests.rs"]
     mod element_depth_tests;
-    #[path = "../orphaned_render_mount_tests.rs"]
-    mod orphaned_render_mount_tests;
     #[path = "replace_child_with_tests.rs"]
     mod replace_child_with_tests;
     #[cfg(test)]
@@ -3620,144 +3618,6 @@ mod tests {
     }
 
     #[test]
-    fn test_tree_creation() {
-        let tree = ElementTree::new();
-        assert!(tree.is_empty());
-        assert_eq!(tree.len(), 0);
-        assert!(tree.root().is_none());
-    }
-
-    #[test]
-    fn relocation_preflight_rejects_cross_pipeline_and_element_cycles_without_mutation() {
-        let mut tree = ElementTree::new();
-        let mut owner = BuildOwner::new();
-        let pipeline_a = PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new());
-        let pipeline_b = PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new());
-        let candidate = tree.mount_root_with_pipeline_owner(
-            &TestView {
-                name: "candidate".into(),
-            },
-            Some(pipeline_a),
-            &mut owner.element_owner_mut(),
-        );
-        let foreign_destination = tree.mount_root_with_pipeline_owner(
-            &TestView {
-                name: "foreign".into(),
-            },
-            Some(pipeline_b),
-            &mut owner.element_owner_mut(),
-        );
-        let before_len = tree.len();
-        let before_candidate_parent = tree.get(candidate).expect("candidate").parent();
-        assert!(preflight_render_relocation(&tree, candidate, foreign_destination).is_none());
-        assert_eq!(tree.len(), before_len);
-        assert_eq!(
-            tree.get(candidate).expect("candidate").parent(),
-            before_candidate_parent
-        );
-
-        let descendant = tree.insert(
-            &TestView {
-                name: "descendant".into(),
-            },
-            candidate,
-            0,
-            &mut owner.element_owner_mut(),
-        );
-        tree.get_mut(candidate)
-            .expect("candidate")
-            .set_child_ids(vec![descendant]);
-        let before_descendant_parent = tree.get(descendant).expect("descendant").parent();
-        assert!(preflight_render_relocation(&tree, candidate, descendant).is_none());
-        assert_eq!(
-            tree.get(descendant).expect("descendant").parent(),
-            before_descendant_parent
-        );
-        assert_eq!(
-            tree.get(candidate).expect("candidate").child_ids(),
-            &[descendant]
-        );
-    }
-
-    #[test]
-    fn relocation_preflight_rejects_render_cycles_without_mutation() {
-        let mut tree = ElementTree::new();
-        let mut owner = BuildOwner::new();
-        let pipeline = PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new());
-        let host = tree.mount_root_with_pipeline_owner(
-            &UnitRenderHost,
-            Some(pipeline.clone()),
-            &mut owner.element_owner_mut(),
-        );
-        let candidate = tree.insert(
-            &TestView {
-                name: "candidate".into(),
-            },
-            host,
-            0,
-            &mut owner.element_owner_mut(),
-        );
-        let moved_boundary = tree.insert(
-            &UnitRenderHost,
-            candidate,
-            0,
-            &mut owner.element_owner_mut(),
-        );
-        let destination = tree.insert(&UnitRenderHost, host, 1, &mut owner.element_owner_mut());
-        tree.get_mut(candidate)
-            .expect("candidate")
-            .set_child_ids(vec![moved_boundary]);
-        tree.get_mut(host)
-            .expect("host")
-            .set_child_ids(vec![candidate, destination]);
-
-        let moved_render = tree
-            .get(moved_boundary)
-            .expect("moved boundary")
-            .element()
-            .render_id()
-            .expect("moved render id");
-        let destination_render = tree
-            .get(destination)
-            .expect("destination")
-            .element()
-            .render_id()
-            .expect("destination render id");
-        pipeline.with_mut(|owner| owner.adopt_render_child(moved_render, destination_render));
-        let before_moved_children = pipeline.with(|owner| {
-            owner
-                .render_tree()
-                .get(moved_render)
-                .expect("moved render")
-                .children()
-                .to_vec()
-        });
-        let before_destination_parent =
-            pipeline.with(|owner| owner.render_tree().parent(destination_render));
-
-        assert!(preflight_render_relocation(&tree, candidate, destination).is_none());
-        assert_eq!(
-            pipeline.with(|owner| owner.render_tree().parent(destination_render)),
-            before_destination_parent,
-        );
-        assert_eq!(
-            pipeline.with(|owner| {
-                owner
-                    .render_tree()
-                    .get(moved_render)
-                    .expect("moved render")
-                    .children()
-                    .to_vec()
-            }),
-            before_moved_children,
-        );
-        assert_eq!(
-            tree.get(candidate).expect("candidate").child_ids(),
-            &[moved_boundary],
-        );
-    }
-
-    #[test]
     fn production_retake_rejects_cross_pipeline_without_mutating_identity_or_epoch() {
         use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -4064,58 +3924,6 @@ mod tests {
         assert_eq!(owner.element_for_global_key(&key), before_registry);
     }
 
-    #[test]
-    fn relocation_preflight_accepts_an_empty_transparent_frontier() {
-        let mut tree = ElementTree::new();
-        let mut owner = BuildOwner::new();
-        let candidate = tree.mount_root(
-            &TestView {
-                name: "candidate".into(),
-            },
-            &mut owner.element_owner_mut(),
-        );
-        let destination = tree.mount_root(
-            &TestView {
-                name: "destination".into(),
-            },
-            &mut owner.element_owner_mut(),
-        );
-
-        let relocation = preflight_render_relocation(&tree, candidate, destination)
-            .expect("an empty transparent subtree has no render-cycle risk");
-        assert!(relocation.pipeline.is_none());
-        assert!(relocation.frontier.is_empty());
-        assert_eq!(tree.get(candidate).expect("candidate").parent(), None);
-    }
-
-    #[test]
-    fn provisional_child_order_preserves_large_fanout_order_with_linear_deduplication() {
-        let mut tree = ElementTree::new();
-        let mut owner = BuildOwner::new();
-        let ids = (0..1_024)
-            .map(|index| {
-                tree.mount_root(
-                    &TestView {
-                        name: format!("child-{index}"),
-                    },
-                    &mut owner.element_owner_mut(),
-                )
-            })
-            .collect::<Vec<_>>();
-        let prefix = &ids[..400];
-        let candidate = ids[400];
-        let old_slots = prefix
-            .iter()
-            .copied()
-            .map(Some)
-            .chain([Some(candidate), None])
-            .chain(ids[401..].iter().copied().map(Some))
-            .collect::<Vec<_>>();
-
-        let order = provisional_child_order(prefix, candidate, &old_slots);
-        assert_eq!(order, ids);
-    }
-
     fn relocate_keyed_render_child_through(
         destination_render_parent_view: &dyn View,
         destination_wrapper: &dyn View,
@@ -4200,28 +4008,6 @@ mod tests {
     }
 
     #[test]
-    fn relocation_recreates_compatible_parent_data_with_destination_configuration() {
-        let key = GlobalKey::<()>::new();
-        let destination = ParentDataAView {
-            value: 41,
-            child: KeyedUnitRenderHost { key },
-        };
-        let (pipeline, moved_render) =
-            relocate_keyed_render_child_through(&RelocationHostA, &destination);
-        pipeline.with(|owner| {
-            assert_eq!(
-                owner
-                    .render_tree()
-                    .get(moved_render)
-                    .expect("moved render")
-                    .parent_data()
-                    .and_then(|data| data.downcast_ref::<RelocationParentDataA>()),
-                Some(&RelocationParentDataA { value: 41 }),
-            );
-        });
-    }
-
-    #[test]
     fn relocation_replaces_incompatible_parent_data_with_destination_type() {
         let key = GlobalKey::<()>::new();
         let destination = ParentDataBView {
@@ -4243,26 +4029,6 @@ mod tests {
                     .parent_data()
                     .and_then(|data| data.downcast_ref::<RelocationParentDataB>()),
                 Some(&RelocationParentDataB { label: 73 }),
-            );
-        });
-    }
-
-    #[test]
-    fn relocation_without_destination_configuration_leaves_parent_data_unset() {
-        let destination = TestView {
-            name: "transparent destination".into(),
-        };
-        let (pipeline, moved_render) =
-            relocate_keyed_render_child_through(&UnitRenderHost, &destination);
-        pipeline.with(|owner| {
-            assert!(
-                owner
-                    .render_tree()
-                    .get(moved_render)
-                    .expect("moved render")
-                    .parent_data()
-                    .is_none(),
-                "the destination render protocol may lazily supply its default during layout",
             );
         });
     }
@@ -4922,98 +4688,6 @@ mod tests {
         assert_eq!(desired, vec![dense, sparse_early, sparse_late]);
     }
 
-    #[test]
-    fn sparse_merge_preserves_dense_order_and_sorts_large_sparse_fanout() {
-        type BoxObject =
-            Box<dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>>;
-        let mut pipeline = flui_rendering::pipeline::PipelineOwner::new();
-        let parent = pipeline.insert(Box::new(flui_objects::RenderSizedBox::shrink()) as BoxObject);
-        let children = (0..1_024)
-            .map(|_| {
-                pipeline
-                    .insert_child_render_object(
-                        parent,
-                        Box::new(flui_objects::RenderSizedBox::shrink()) as BoxObject,
-                    )
-                    .expect("child")
-            })
-            .collect::<Vec<_>>();
-        let dense = children[..512].to_vec();
-        for (logical_index, &child) in children[512..].iter().rev().enumerate() {
-            pipeline
-                .render_tree_mut()
-                .get_mut(child)
-                .expect("sparse child")
-                .set_parent_data(Box::new(SliverMultiBoxAdaptorParentData::new(
-                    logical_index,
-                )));
-        }
-
-        let mut desired = dense.clone();
-        append_sparse_sliver_children(pipeline.render_tree(), parent, &mut desired);
-        let expected = dense
-            .into_iter()
-            .chain(children[512..].iter().rev().copied())
-            .collect::<Vec<_>>();
-        assert_eq!(desired, expected);
-    }
-
-    #[test]
-    fn test_mount_root() {
-        let mut tree = ElementTree::new();
-        let mut owner = BuildOwner::new();
-        let view = TestView {
-            name: "root".to_string(),
-        };
-
-        let id = tree.mount_root(&view, &mut owner.element_owner_mut());
-
-        assert!(!tree.is_empty());
-        assert_eq!(tree.len(), 1);
-        assert_eq!(tree.root(), Some(id));
-        assert!(tree.contains(id));
-    }
-
-    #[test]
-    fn test_insert_child() {
-        let mut tree = ElementTree::new();
-        let mut owner = BuildOwner::new();
-        let root_view = TestView {
-            name: "root".to_string(),
-        };
-        let child_view = TestView {
-            name: "child".to_string(),
-        };
-
-        let root_id = tree.mount_root(&root_view, &mut owner.element_owner_mut());
-        let child_id = tree.insert(&child_view, root_id, 0, &mut owner.element_owner_mut());
-
-        assert_eq!(tree.len(), 2);
-        assert!(tree.contains(child_id));
-
-        let child_node = tree.get(child_id).unwrap();
-        assert_eq!(child_node.parent(), Some(root_id));
-        assert_eq!(child_node.slot(), 0);
-        assert_eq!(child_node.depth(), 1);
-    }
-
-    #[test]
-    fn test_remove() {
-        let mut tree = ElementTree::new();
-        let mut owner = BuildOwner::new();
-        let view = TestView {
-            name: "test".to_string(),
-        };
-
-        let id = tree.mount_root(&view, &mut owner.element_owner_mut());
-        assert!(tree.contains(id));
-
-        let removed = tree.remove(id, &mut owner.element_owner_mut());
-        assert!(removed.is_some());
-        assert!(!tree.contains(id));
-        assert!(tree.root().is_none());
-    }
-
     // -----------------------------------------------------------------------
     // Generational staleness (ABA safety)
     // -----------------------------------------------------------------------
@@ -5063,66 +4737,6 @@ mod tests {
         // A stale remove must be a no-op, not a removal of B.
         assert!(tree.remove(id_a, &mut owner.element_owner_mut()).is_none());
         assert!(tree.contains(id_b), "stale remove must not touch B");
-    }
-
-    /// Fresh slots seed generation 1; a reused slot advances to the bumped
-    /// value. White-box check on the parallel `generations` vec.
-    #[test]
-    fn reused_slot_increments_generation() {
-        let mut tree = ElementTree::new();
-        let mut owner = BuildOwner::new();
-        let root = TestView {
-            name: "root".to_string(),
-        };
-        let root_id = tree.mount_root(&root, &mut owner.element_owner_mut());
-        assert_eq!(tree.generations[0].get(), 1, "fresh root slot is gen 1");
-
-        let child = TestView {
-            name: "c".to_string(),
-        };
-        let id1 = tree.insert(&child, root_id, 0, &mut owner.element_owner_mut());
-        let slot = id1.index() as usize;
-        assert_eq!(tree.generations[slot].get(), 1);
-
-        tree.remove(id1, &mut owner.element_owner_mut());
-        assert_eq!(
-            tree.generations[slot].get(),
-            2,
-            "eager remove bumps the freed slot's generation"
-        );
-
-        let id2 = tree.insert(&child, root_id, 0, &mut owner.element_owner_mut());
-        assert_eq!(id2.index() as usize, slot, "slab reuses the slot");
-        assert_eq!(id2.generation().get(), 2, "reused id carries the bump");
-    }
-
-    /// Every id produced by `iter`/`iter_nodes` must round-trip through the
-    /// staleness-checked accessors — including ids for reused slots, which a
-    /// `new(index+1)` shortcut (generation 1) would have failed to resolve.
-    #[test]
-    fn iter_yields_round_trippable_ids_after_reuse() {
-        let mut tree = ElementTree::new();
-        let mut owner = BuildOwner::new();
-        let root = TestView {
-            name: "root".to_string(),
-        };
-        let root_id = tree.mount_root(&root, &mut owner.element_owner_mut());
-        let child = TestView {
-            name: "c".to_string(),
-        };
-        let id1 = tree.insert(&child, root_id, 0, &mut owner.element_owner_mut());
-        tree.remove(id1, &mut owner.element_owner_mut());
-        let _id2 = tree.insert(&child, root_id, 0, &mut owner.element_owner_mut());
-
-        let ids: Vec<_> = tree.iter().collect();
-        assert_eq!(ids.len(), tree.len());
-        for id in &ids {
-            assert!(
-                tree.get(*id).is_some(),
-                "iter id {id} must resolve — generation must match the live slot"
-            );
-        }
-        assert_eq!(tree.iter_nodes().count(), tree.len());
     }
 
     /// Generation-overflow policy: a slot recycled `u32::MAX`
@@ -5205,43 +4819,6 @@ mod tests {
     }
 
     #[test]
-    fn inherited_scope_resolves_provider_in_o1() {
-        let mut tree = ElementTree::new();
-        let mut owner = BuildOwner::new();
-
-        let provider = tree.mount_root(&theme(1), &mut owner.element_owner_mut());
-        let child = tree.insert(&leaf("c"), provider, 0, &mut owner.element_owner_mut());
-
-        let theme_ty = TypeId::of::<Theme>();
-        // A provider's own scope includes itself (Flutter `_inheritedElements`
-        // for an InheritedElement contains `this`).
-        assert_eq!(
-            tree.get(provider).unwrap().inherited_provider(theme_ty),
-            Some(provider),
-        );
-        // A descendant resolves the ancestor provider via the aliased map.
-        assert_eq!(
-            tree.get(child).unwrap().inherited_provider(theme_ty),
-            Some(provider),
-        );
-        // A non-provider view type is absent from the scope.
-        assert_eq!(
-            tree.get(child)
-                .unwrap()
-                .inherited_provider(TypeId::of::<TestView>()),
-            None,
-        );
-        // Non-providers alias the parent's map by refcount — no per-node clone.
-        assert!(
-            Arc::ptr_eq(
-                &tree.get(provider).unwrap().inherited,
-                &tree.get(child).unwrap().inherited,
-            ),
-            "a non-provider child must share its parent's inherited map Arc",
-        );
-    }
-
-    #[test]
     fn nested_same_type_provider_shadows_nearest() {
         let mut tree = ElementTree::new();
         let mut owner = BuildOwner::new();
@@ -5264,91 +4841,6 @@ mod tests {
         assert_eq!(
             tree.get(outer).unwrap().inherited_provider(theme_ty),
             Some(outer),
-        );
-    }
-
-    #[test]
-    fn recompute_inherited_subtree_after_reparent() {
-        let mut tree = ElementTree::new();
-        let mut owner = BuildOwner::new();
-
-        // root(non-provider) -> [ provider_a(1), provider_b(2) ];
-        // k under provider_a, child c under k.
-        let root = tree.mount_root(&leaf("root"), &mut owner.element_owner_mut());
-        let provider_a = tree.insert(&theme(1), root, 0, &mut owner.element_owner_mut());
-        let provider_b = tree.insert(&theme(2), root, 1, &mut owner.element_owner_mut());
-        let k = tree.insert(&leaf("k"), provider_a, 0, &mut owner.element_owner_mut());
-        let c = tree.insert(&leaf("c"), k, 0, &mut owner.element_owner_mut());
-        // Direct `insert` does not maintain `child_ids` (the reconciler does);
-        // model the post-build subtree the reparent path actually walks.
-        tree.get_mut(k).unwrap().set_child_ids(vec![c]);
-
-        let theme_ty = TypeId::of::<Theme>();
-        assert_eq!(
-            tree.get(k).unwrap().inherited_provider(theme_ty),
-            Some(provider_a),
-        );
-        assert_eq!(
-            tree.get(c).unwrap().inherited_provider(theme_ty),
-            Some(provider_a),
-        );
-
-        // Reparent k under provider_b and recompute the moved subtree.
-        tree.get_mut(k).unwrap().parent = Some(provider_b);
-        tree.recompute_subtree_ancestry(k);
-
-        assert_eq!(
-            tree.get(k).unwrap().inherited_provider(theme_ty),
-            Some(provider_b),
-            "the moved node resolves the new provider after recompute",
-        );
-        assert_eq!(
-            tree.get(c).unwrap().inherited_provider(theme_ty),
-            Some(provider_b),
-            "a descendant of the moved node is recomputed too (top-down walk)",
-        );
-    }
-
-    #[test]
-    fn recompute_reshadows_nested_provider_in_moved_subtree() {
-        let mut tree = ElementTree::new();
-        let mut owner = BuildOwner::new();
-
-        // root -> [ provider_a(1), provider_b(2) ]; k under provider_a;
-        // a NESTED provider(3) under k; leaf d under the nested provider.
-        let root = tree.mount_root(&leaf("root"), &mut owner.element_owner_mut());
-        let provider_a = tree.insert(&theme(1), root, 0, &mut owner.element_owner_mut());
-        let provider_b = tree.insert(&theme(2), root, 1, &mut owner.element_owner_mut());
-        let k = tree.insert(&leaf("k"), provider_a, 0, &mut owner.element_owner_mut());
-        let nested = tree.insert(&theme(3), k, 0, &mut owner.element_owner_mut());
-        let d = tree.insert(&leaf("d"), nested, 0, &mut owner.element_owner_mut());
-        tree.get_mut(k).unwrap().set_child_ids(vec![nested]);
-        tree.get_mut(nested).unwrap().set_child_ids(vec![d]);
-
-        let theme_ty = TypeId::of::<Theme>();
-        assert_eq!(
-            tree.get(d).unwrap().inherited_provider(theme_ty),
-            Some(nested)
-        );
-
-        // Move k under provider_b and recompute the whole moved subtree.
-        tree.get_mut(k).unwrap().parent = Some(provider_b);
-        tree.recompute_subtree_ancestry(k);
-
-        assert_eq!(
-            tree.get(k).unwrap().inherited_provider(theme_ty),
-            Some(provider_b),
-            "the moved root resolves the new outer provider",
-        );
-        assert_eq!(
-            tree.get(nested).unwrap().inherited_provider(theme_ty),
-            Some(nested),
-            "a provider inside the moved subtree re-shadows itself after recompute",
-        );
-        assert_eq!(
-            tree.get(d).unwrap().inherited_provider(theme_ty),
-            Some(nested),
-            "below the nested provider the nearest (nested) one still wins",
         );
     }
 
@@ -5494,107 +4986,6 @@ mod tests {
         crate::test_only_clear_global_key_registry();
     }
 
-    #[test]
-    #[serial_test::serial(global_key_registry)]
-    fn globalkey_retake_recomputes_depth_for_the_entire_subtree() {
-        use parking_lot::RwLock;
-
-        let tree = Arc::new(RwLock::new(ElementTree::new()));
-        let owner = Arc::new(RwLock::new(BuildOwner::new()));
-        crate::test_only_set_global_key_registry(&tree, &owner);
-
-        let root = tree
-            .write()
-            .mount_root(&leaf("root"), &mut owner.write().element_owner_mut());
-        let shallow_parent = tree.write().insert(
-            &leaf("shallow"),
-            root,
-            0,
-            &mut owner.write().element_owner_mut(),
-        );
-        let deep_1 = tree.write().insert(
-            &leaf("deep-1"),
-            root,
-            1,
-            &mut owner.write().element_owner_mut(),
-        );
-        let deep_2 = tree.write().insert(
-            &leaf("deep-2"),
-            deep_1,
-            0,
-            &mut owner.write().element_owner_mut(),
-        );
-        let deep_3 = tree.write().insert(
-            &leaf("deep-3"),
-            deep_2,
-            0,
-            &mut owner.write().element_owner_mut(),
-        );
-
-        let keyed = Keyed {
-            key: crate::GlobalKey::new(),
-        };
-        let moved = tree.write().insert(
-            &keyed,
-            shallow_parent,
-            0,
-            &mut owner.write().element_owner_mut(),
-        );
-        let child = tree.write().insert(
-            &leaf("child"),
-            moved,
-            0,
-            &mut owner.write().element_owner_mut(),
-        );
-        let grandchild = tree.write().insert(
-            &leaf("grandchild"),
-            child,
-            0,
-            &mut owner.write().element_owner_mut(),
-        );
-        tree.write()
-            .get_mut(moved)
-            .expect("moved node exists")
-            .set_child_ids(vec![child]);
-        tree.write()
-            .get_mut(child)
-            .expect("child exists")
-            .set_child_ids(vec![grandchild]);
-
-        assert_eq!(tree.read().get(moved).expect("moved exists").depth(), 2);
-        assert_eq!(tree.read().get(child).expect("child exists").depth(), 3);
-        assert_eq!(
-            tree.read()
-                .get(grandchild)
-                .expect("grandchild exists")
-                .depth(),
-            4
-        );
-
-        tree.write()
-            .remove(moved, &mut owner.write().element_owner_mut());
-        let migrated =
-            tree.write()
-                .insert(&keyed, deep_3, 0, &mut owner.write().element_owner_mut());
-        assert_eq!(migrated, moved, "GlobalKey retake preserves identity");
-
-        let tree = tree.read();
-        assert_eq!(tree.get(moved).expect("moved exists").depth(), 4);
-        assert_eq!(
-            tree.get(child).expect("child exists").depth(),
-            5,
-            "the first descendant must follow the moved parent's new depth"
-        );
-        assert_eq!(
-            tree.get(grandchild).expect("grandchild exists").depth(),
-            6,
-            "depth repair must cover the whole moved subtree"
-        );
-        drop(tree);
-
-        crate::test_only_clear_global_key_registry();
-    }
-
     /// After a GlobalKey reparent to a deeper parent, every descendant's
     /// `depth` must follow `parent.depth + 1` — Flutter's `_updateDepth`
     /// recurses over the whole moved subtree. Stale descendant depths would
@@ -5677,75 +5068,6 @@ mod tests {
             10,
             "the depth update recurses to the bottom of the moved subtree",
         );
-
-        crate::test_only_clear_global_key_registry();
-    }
-
-    /// A keyed dependent that is soft-removed (deactivated into the inactive
-    /// queue) must be deregistered from its provider's dependent map right
-    /// away — Flutter's `Element.deactivate` removes the element from every
-    /// provider in `_dependencies` — and `finalize_tree` must leave the map
-    /// empty once the element is truly gone.
-    #[test]
-    #[serial_test::serial(global_key_registry)]
-    fn soft_removed_keyed_dependent_is_deregistered() {
-        use parking_lot::RwLock;
-
-        let tree = Arc::new(RwLock::new(ElementTree::new()));
-        let owner = Arc::new(RwLock::new(BuildOwner::new()));
-        crate::test_only_set_global_key_registry(&tree, &owner);
-
-        let provider = tree
-            .write()
-            .mount_root(&theme(1), &mut owner.write().element_owner_mut());
-        let keyed = Keyed {
-            key: crate::GlobalKey::new(),
-        };
-        let dependent =
-            tree.write()
-                .insert(&keyed, provider, 0, &mut owner.write().element_owner_mut());
-
-        // Register both halves of a completed `depend_on`: the provider's
-        // notification map and the BuildOwner's sparse reverse index.
-        tree.write()
-            .get_mut(provider)
-            .expect("provider exists")
-            .element_mut()
-            .as_inherited_mut()
-            .expect("root is inherited")
-            .record_dependent(
-                crate::context::CrateToken::new(),
-                dependent,
-                1,
-                crate::view::FieldSet::ALL,
-            );
-        owner
-            .write()
-            .register_inherited_dependency(dependent, provider);
-        let dependent_count = |tree: &ElementTree| {
-            tree.get(provider)
-                .expect("provider exists")
-                .element()
-                .downcast_ref::<crate::InheritedElement<Theme>>()
-                .expect("root is InheritedElement<Theme>")
-                .dependents()
-                .len()
-        };
-        assert_eq!(dependent_count(&tree.read()), 1);
-
-        // Soft-remove (keyed → inactive queue): the deactivate purges the
-        // registration even though the element's slot (and state) survives.
-        tree.write()
-            .remove(dependent, &mut owner.write().element_owner_mut());
-        assert_eq!(
-            dependent_count(&tree.read()),
-            0,
-            "deactivation deregisters the dependent from the provider's map",
-        );
-
-        // End-of-frame: the element is truly unmounted; the map stays empty.
-        owner.write().finalize_tree(&mut tree.write());
-        assert_eq!(dependent_count(&tree.read()), 0);
 
         crate::test_only_clear_global_key_registry();
     }

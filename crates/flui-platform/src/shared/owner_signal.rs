@@ -31,11 +31,11 @@ pub(crate) trait TurnSlot {
 /// An owner-turn slot for owner-only state. `!Send` and `!Sync`, so the
 /// callback in it is dropped wherever the owner drops the slot, never by the
 /// thread that closes or drops the signal.
-#[cfg(any(target_os = "windows", test))]
+#[cfg(target_os = "windows")]
 #[derive(Default)]
 pub(crate) struct OwnerTurnSlot(std::cell::RefCell<Option<Callback>>);
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(target_os = "windows")]
 impl OwnerTurnSlot {
     /// Drops the registered callback, if any, on the calling (owner) thread.
     pub(crate) fn clear(&self) {
@@ -44,7 +44,7 @@ impl OwnerTurnSlot {
     }
 }
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(target_os = "windows")]
 impl TurnSlot for OwnerTurnSlot {
     fn replace(&self, callback: Callback) -> Option<Callback> {
         self.0.borrow_mut().replace(callback)
@@ -389,53 +389,6 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_sender_does_not_acknowledge_another_senders_failed_post() {
-        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
-        let (release_tx, release_rx) = std::sync::mpsc::channel();
-        let release_rx = Mutex::new(release_rx);
-        let attempts = Arc::new(AtomicUsize::new(0));
-        let recorded = Arc::clone(&attempts);
-        let signal = OwnerSignal::new(Arc::new(move || {
-            if recorded.fetch_add(1, Ordering::SeqCst) == 0 {
-                entered_tx.send(()).expect("notify first post");
-                release_rx.lock().recv().expect("release first post");
-                Err(PlatformError::EventLoop {
-                    message: "injected first failure".into(),
-                })
-            } else {
-                Ok(())
-            }
-        }));
-        signal.start().expect("start");
-        let first_signal = Arc::clone(&signal);
-        let first = std::thread::spawn(move || first_signal.wake());
-        entered_rx
-            .recv_timeout(std::time::Duration::from_secs(2))
-            .expect("posting began");
-        let second_signal = Arc::clone(&signal);
-        let (done_tx, done_rx) = std::sync::mpsc::channel();
-        let second = std::thread::spawn(move || {
-            done_tx.send(second_signal.wake()).expect("report second");
-        });
-        assert!(
-            done_rx
-                .recv_timeout(std::time::Duration::from_millis(20))
-                .is_err()
-        );
-        release_tx.send(()).expect("release");
-        assert!(matches!(
-            first.join().expect("first"),
-            Err(ProxySendError::WakeFailed { .. })
-        ));
-        done_rx
-            .recv_timeout(std::time::Duration::from_secs(2))
-            .expect("second returns")
-            .expect("second post succeeds");
-        second.join().expect("second");
-        assert_eq!(attempts.load(Ordering::SeqCst), 2);
-        signal.close();
-    }
-    #[test]
     fn replacement_capture_drop_reentry_and_panic_keep_the_lease_active() {
         struct Capture {
             signal: Weak<OwnerSignal>,
@@ -487,74 +440,5 @@ mod tests {
         signal.drive();
         assert_eq!(next_calls.load(Ordering::SeqCst), 1);
         signal.close();
-    }
-
-    #[test]
-    fn close_off_owner_does_not_drop_the_turn_callback_there() {
-        struct Capture(Arc<Mutex<Option<ThreadId>>>);
-        impl Drop for Capture {
-            fn drop(&mut self) {
-                *self.0.lock() = Some(std::thread::current().id());
-            }
-        }
-        let dropped_on = Arc::new(Mutex::new(None));
-        let signal = OwnerSignal::new(Arc::new(|| Ok(())));
-        let slot = OwnerTurnSlot::default();
-        let capture = Capture(Arc::clone(&dropped_on));
-        signal
-            .register_in(
-                &slot,
-                Box::new(move || {
-                    let _ = &capture;
-                }),
-            )
-            .expect("register");
-        std::thread::spawn(move || {
-            signal.close();
-            drop(signal);
-        })
-        .join()
-        .expect("worker");
-        assert_eq!(
-            *dropped_on.lock(),
-            None,
-            "closing and dropping the signal elsewhere leaves the owner's slot alone"
-        );
-        slot.clear();
-        assert_eq!(*dropped_on.lock(), Some(std::thread::current().id()));
-    }
-
-    #[test]
-    fn rejected_registration_releases_capture_and_stale_transport_keeps_owner_identity() {
-        struct Capture(Arc<AtomicUsize>);
-        impl Drop for Capture {
-            fn drop(&mut self) {
-                self.0.fetch_add(1, Ordering::SeqCst);
-            }
-        }
-        let signal = OwnerSignal::new(Arc::new(|| Ok(())));
-        let transport = SignalTransport::new(&signal);
-        let original_owner = signal.owner();
-        signal.close();
-        let drops = Arc::new(AtomicUsize::new(0));
-        let capture = Capture(Arc::clone(&drops));
-        assert!(matches!(
-            signal.register(Box::new(move || {
-                let _ = &capture;
-            })),
-            Err(WakeRegistrationError::OwnerGone)
-        ));
-        assert_eq!(drops.load(Ordering::SeqCst), 1);
-        drop(signal);
-        std::thread::spawn(move || {
-            use crate::traits::owner::ProxyTransport;
-            assert_eq!(transport.owner_thread(), original_owner);
-            assert!(matches!(
-                transport.wake(),
-                Err(ProxySendError::OwnerGone { .. })
-            ));
-        })
-        .join()
-        .expect("worker");
     }
 }

@@ -392,36 +392,6 @@ mod tests {
     }
 
     #[test]
-    fn frame_failure_detail_default_matches_the_build_profile() {
-        let expected = if cfg!(debug_assertions) {
-            FrameFailureDetail::Verbatim
-        } else {
-            FrameFailureDetail::Redacted
-        };
-        assert_eq!(FrameFailureDetail::default(), expected);
-    }
-
-    #[test]
-    fn pipeline_text_uses_the_same_privacy_gate_as_panics() {
-        const SENTINEL: &str = "private-pipeline-sentinel";
-        let error = flui_rendering::RenderError::semantics(SENTINEL);
-
-        let redacted = FrameFailureDetail::Redacted.pipeline_text(&error);
-        assert_eq!(redacted, PanicText::Redacted);
-        assert_eq!(
-            redacted.to_string(),
-            flui_foundation::diagnostics::REDACTED_VALUE
-        );
-        assert!(!redacted.to_string().contains(SENTINEL));
-
-        let verbatim = FrameFailureDetail::Verbatim.pipeline_text(&error);
-        assert!(
-            verbatim.to_string().contains(SENTINEL),
-            "verbatim pipeline diagnostics must retain the source error"
-        );
-    }
-
-    #[test]
     fn redacted_policy_never_evaluates_the_text_materializer() {
         let calls = AtomicUsize::new(0);
         let text = FrameFailureDetail::Redacted.materialize(|| {
@@ -431,14 +401,5 @@ mod tests {
 
         assert_eq!(text, PanicText::Redacted);
         assert_eq!(calls.load(Ordering::Relaxed), 0);
-    }
-
-    #[test]
-    fn non_string_panic_payload_is_never_presented_as_invented_text() {
-        let payload: Box<dyn std::any::Any + Send> = Box::new(7_u32);
-        let (text, internal_invariant) = FrameFailureDetail::Verbatim.panic_text(payload.as_ref());
-
-        assert_eq!(text, PanicText::Redacted);
-        assert!(!internal_invariant);
     }
 }

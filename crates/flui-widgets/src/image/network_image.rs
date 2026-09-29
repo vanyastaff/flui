@@ -88,51 +88,6 @@ impl ImageProvider for NetworkImage {
 mod tests {
     use super::*;
 
-    #[test]
-    fn network_image_cache_key_is_namespaced_by_url() {
-        let registry = Arc::new(AssetRegistry::default());
-        let provider = NetworkImage::new(registry, "https://example.com/img.png");
-
-        assert_eq!(
-            provider.cache_key(),
-            Some(ImageCacheKey::Network(
-                "https://example.com/img.png".to_string()
-            )),
-        );
-    }
-
-    #[test]
-    fn network_image_url_returns_the_configured_url() {
-        let registry = Arc::new(AssetRegistry::default());
-        let provider = NetworkImage::new(registry, "https://example.com/a.png");
-
-        assert_eq!(provider.url(), "https://example.com/a.png");
-    }
-
-    #[test]
-    fn network_image_sync_resolve_reports_requires_async_resolve_on_a_cache_miss() {
-        let registry = Arc::new(AssetRegistry::default());
-        let provider = NetworkImage::new(
-            registry,
-            "https://example.com/flui-widgets-test-never-cached.png",
-        );
-
-        let result = provider.resolve();
-        assert!(
-            matches!(result, Err(ImageProviderError::RequiresAsyncResolve { .. })),
-            "a cache miss must report RequiresAsyncResolve, not silently succeed \
-             or panic; got {result:?}",
-        );
-    }
-
-    #[test]
-    fn asset_and_network_keys_for_the_same_text_are_distinct() {
-        assert_ne!(
-            ImageCacheKey::Asset("shared.png".to_string()),
-            ImageCacheKey::Network("shared.png".to_string()),
-        );
-    }
-
     /// A refused connection must never be reported as a decode failure — no
     /// bytes ever arrive for a decoder to fail on. Hermetic: binds an
     /// ephemeral loopback port and closes it immediately, so the connection

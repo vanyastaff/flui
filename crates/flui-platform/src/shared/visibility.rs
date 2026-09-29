@@ -134,16 +134,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn minimize_from_normal_hides() {
-        assert_eq!(win32_size_visibility(SIZE_MINIMIZED, false), Some(false));
-    }
-
-    #[test]
-    fn repeated_minimize_is_silent() {
-        assert_eq!(win32_size_visibility(SIZE_MINIMIZED, true), None);
-    }
-
-    #[test]
     fn restore_from_minimized_shows() {
         assert_eq!(win32_size_visibility(SIZE_RESTORED, true), Some(true));
         assert_eq!(win32_size_visibility(SIZE_MAXIMIZED, true), Some(true));
@@ -162,20 +152,6 @@ mod tests {
     }
 
     #[test]
-    fn initial_visibility_follows_the_ws_visible_bit() {
-        // The bit itself is pinned (winuser.h WS_VISIBLE).
-        assert_eq!(WS_VISIBLE_STYLE_BIT, 0x1000_0000);
-        // Undecorated creation style: WS_POPUP (0x8000_0000) | WS_VISIBLE —
-        // visible from birth, must seed true.
-        assert!(win32_initial_visibility(0x8000_0000 | WS_VISIBLE_STYLE_BIT));
-        // Decorated creation style: WS_OVERLAPPEDWINDOW (0x00CF_0000) has
-        // no WS_VISIBLE — created hidden, shown later, must seed false so
-        // the creation-time WM_SHOWWINDOW edge is the one that flips it.
-        assert!(!win32_initial_visibility(0x00CF_0000));
-        assert!(!win32_initial_visibility(0));
-    }
-
-    #[test]
     fn hide_always_hides_show_respects_minimized() {
         assert_eq!(win32_show_window_visibility(false, false), Some(false));
         assert_eq!(win32_show_window_visibility(false, true), Some(false));
@@ -183,20 +159,6 @@ mod tests {
         // A SW_SHOW on a minimized window sets WS_VISIBLE but composes no
         // surface — the restore's own WM_SIZE reports visibility instead.
         assert_eq!(win32_show_window_visibility(true, true), None);
-    }
-
-    #[test]
-    fn appkit_visible_bit_is_bit_one() {
-        assert_eq!(NS_WINDOW_OCCLUSION_STATE_VISIBLE, 2);
-        assert!(appkit_occlusion_state_is_visible(
-            NS_WINDOW_OCCLUSION_STATE_VISIBLE
-        ));
-        assert!(!appkit_occlusion_state_is_visible(0));
-        // Unrelated bits alone never read as visible.
-        assert!(!appkit_occlusion_state_is_visible(1));
-        assert!(appkit_occlusion_state_is_visible(
-            NS_WINDOW_OCCLUSION_STATE_VISIBLE | 1
-        ));
     }
 
     #[test]

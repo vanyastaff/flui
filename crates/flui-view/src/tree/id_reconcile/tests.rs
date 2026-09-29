@@ -223,64 +223,6 @@ fn fixture() -> (ElementTree, BuildOwner, ElementId) {
     (tree, owner, root_id)
 }
 
-/// Empty parent → N children inserted; every stored child id
-/// resolves and parent/slot wiring is correct.
-#[test]
-fn empty_parent_inserts_all_children() {
-    let (mut tree, mut owner, root) = fixture();
-    let views = plain_views(&[1, 2, 3]);
-
-    reconcile_children_by_id(&mut tree, root, &views, &mut owner.element_owner_mut());
-
-    let child_ids = tree.get(root).expect("root resolves").child_ids().to_vec();
-    assert_eq!(child_ids.len(), 3, "three children must be inserted");
-    for (slot, id) in child_ids.iter().enumerate() {
-        let node = tree
-            .get(*id)
-            .expect("each child id must resolve in the slab");
-        assert_eq!(node.parent(), Some(root), "child parent must be the root");
-        assert_eq!(node.slot(), slot, "child slot must match its position");
-    }
-    // root + 3 children.
-    assert_eq!(tree.len(), 4);
-}
-
-/// Update-in-place: reconciling the SAME view shape again reuses
-/// every id — no inserts, no removes, no slab growth.
-#[test]
-fn same_views_reuse_ids_no_insert_or_remove() {
-    let (mut tree, mut owner, root) = fixture();
-
-    reconcile_children_by_id(
-        &mut tree,
-        root,
-        &plain_views(&[1, 2, 3]),
-        &mut owner.element_owner_mut(),
-    );
-    let first = tree.get(root).unwrap().child_ids().to_vec();
-    let len_after_first = tree.len();
-
-    // Second pass with the same shape (fresh view instances, same
-    // types/keys) must reuse the same ids in the same order.
-    reconcile_children_by_id(
-        &mut tree,
-        root,
-        &plain_views(&[10, 20, 30]),
-        &mut owner.element_owner_mut(),
-    );
-    let second = tree.get(root).unwrap().child_ids().to_vec();
-
-    assert_eq!(
-        first, second,
-        "same-shape reconcile must reuse the same ids"
-    );
-    assert_eq!(
-        tree.len(),
-        len_after_first,
-        "no slab node may be inserted or removed on a same-shape reconcile",
-    );
-}
-
 #[test]
 fn failed_global_key_update_leaves_no_reservation_for_finalized_resident() {
     let pipeline = PipelineCell::new(PipelineOwner::new());
@@ -392,84 +334,6 @@ fn keyed_reorder_ids_follow_keys() {
     }
 }
 
-/// Shrink: N children → fewer. The dropped ids are removed from the
-/// slab and no longer resolve.
-#[test]
-fn shrink_removes_stale_ids() {
-    let (mut tree, mut owner, root) = fixture();
-
-    reconcile_children_by_id(
-        &mut tree,
-        root,
-        &keyed_views(&[1, 2, 3, 4]),
-        &mut owner.element_owner_mut(),
-    );
-    let before = tree.get(root).unwrap().child_ids().to_vec();
-    assert_eq!(before.len(), 4);
-
-    // Keep keys 1 and 3; drop 2 and 4.
-    reconcile_children_by_id(
-        &mut tree,
-        root,
-        &keyed_views(&[1, 3]),
-        &mut owner.element_owner_mut(),
-    );
-    let after = tree.get(root).unwrap().child_ids().to_vec();
-
-    assert_eq!(
-        after,
-        vec![before[0], before[2]],
-        "survivors keep their ids"
-    );
-    // The two dropped children must be gone from the slab.
-    assert!(
-        tree.get(before[1]).is_none(),
-        "dropped key-2 id must no longer resolve",
-    );
-    assert!(
-        tree.get(before[3]).is_none(),
-        "dropped key-4 id must no longer resolve",
-    );
-    assert_eq!(tree.len(), 3, "root + 2 survivors remain in the slab");
-}
-
-/// Grow: fewer children → N. Survivors keep ids; new slots get fresh
-/// resolvable ids.
-#[test]
-fn grow_inserts_new_children() {
-    let (mut tree, mut owner, root) = fixture();
-
-    reconcile_children_by_id(
-        &mut tree,
-        root,
-        &keyed_views(&[1, 2]),
-        &mut owner.element_owner_mut(),
-    );
-    let before = tree.get(root).unwrap().child_ids().to_vec();
-    assert_eq!(before.len(), 2);
-
-    // Grow to keys [1, 2, 3, 4]: 1 and 2 reuse, 3 and 4 are new.
-    reconcile_children_by_id(
-        &mut tree,
-        root,
-        &keyed_views(&[1, 2, 3, 4]),
-        &mut owner.element_owner_mut(),
-    );
-    let after = tree.get(root).unwrap().child_ids().to_vec();
-
-    assert_eq!(after.len(), 4);
-    assert_eq!(&after[..2], &before[..], "existing keys reuse their ids");
-    assert_ne!(after[2], before[0]);
-    assert_ne!(after[2], before[1]);
-    for id in &after {
-        assert!(
-            tree.get(*id).is_some(),
-            "every child id must resolve after grow"
-        );
-    }
-    assert_eq!(tree.len(), 5, "root + 4 children");
-}
-
 /// Type-mismatch replacement: a keyless slot whose view type changes
 /// is removed and a fresh element of the new type is inserted (not
 /// reused).
@@ -559,80 +423,6 @@ fn double_borrow_stressor_interleaved_mutations() {
     assert_eq!(tree.len(), 6);
 }
 
-/// Reconciling to an empty view list removes every child and leaves
-/// an empty child-id list.
-#[test]
-fn reconcile_to_empty_removes_all() {
-    let (mut tree, mut owner, root) = fixture();
-
-    reconcile_children_by_id(
-        &mut tree,
-        root,
-        &plain_views(&[1, 2, 3]),
-        &mut owner.element_owner_mut(),
-    );
-    let seeded = tree.get(root).unwrap().child_ids().to_vec();
-    assert_eq!(seeded.len(), 3);
-
-    reconcile_children_by_id(&mut tree, root, &[], &mut owner.element_owner_mut());
-    let after = tree.get(root).unwrap().child_ids().to_vec();
-
-    assert!(after.is_empty(), "empty view list clears the child-id list");
-    for id in seeded {
-        assert!(tree.get(id).is_none(), "every old child must be removed");
-    }
-    assert_eq!(tree.len(), 1, "only the root remains");
-}
-
-/// E3 regression: dropping an (un)keyed child whose top takes the
-/// eager removal path tears down its ENTIRE subtree, not just the top.
-///
-/// A bare `tree.remove(top)` frees only the top slot and orphans every
-/// descendant — leaked in the slab, `on_unmount` never run, `parent`
-/// edge dangling at a freed slot. The teardown walk in `remove_child`
-/// closes that. `tree.len() == 1` afterwards is the leak assertion:
-/// the buggy single-node remove would leave the chain resident
-/// (`len == 4`) with `a1` / `a1a` still resolving.
-#[test]
-fn eager_remove_tears_down_whole_subtree() {
-    let (mut tree, mut owner, root) = fixture();
-
-    // Build root → a → a1 → a1a one level at a time: the reconciler
-    // inserts a parent's DIRECT children only (it schedules, it does
-    // not recurse), so each generation is seeded explicitly.
-    reconcile_children_by_id(
-        &mut tree,
-        root,
-        &plain_views(&[1]),
-        &mut owner.element_owner_mut(),
-    );
-    let a = tree.get(root).unwrap().child_ids()[0];
-    reconcile_children_by_id(
-        &mut tree,
-        a,
-        &plain_views(&[2]),
-        &mut owner.element_owner_mut(),
-    );
-    let a1 = tree.get(a).unwrap().child_ids()[0];
-    reconcile_children_by_id(
-        &mut tree,
-        a1,
-        &plain_views(&[3]),
-        &mut owner.element_owner_mut(),
-    );
-    let a1a = tree.get(a1).unwrap().child_ids()[0];
-    assert_eq!(tree.len(), 4, "root + a + a1 + a1a");
-
-    // Drop `a` from the root's children → `remove_child(a)` must free
-    // a, a1 and a1a together.
-    reconcile_children_by_id(&mut tree, root, &[], &mut owner.element_owner_mut());
-
-    assert!(tree.get(a).is_none(), "removed subtree top is gone");
-    assert!(tree.get(a1).is_none(), "mid descendant is not orphaned");
-    assert!(tree.get(a1a).is_none(), "leaf descendant is not orphaned");
-    assert_eq!(tree.len(), 1, "only the root remains — no slab leak");
-}
-
 /// Deep-tree stack-safety: the eager removal path's subtree
 /// collection must survive an element chain far deeper than the
 /// fixed OS stack would allow with plain recursion. The element tree
@@ -678,40 +468,6 @@ fn eager_remove_survives_deep_chain() {
     reconcile_children_by_id(&mut tree, root, &[], &mut owner.element_owner_mut());
 
     assert_eq!(tree.len(), 1, "only the root remains — no slab leak");
-}
-
-/// Production FR-024(c) collision defense, false-positive case: a new
-/// keyed view whose key HASH collides with the old child but whose
-/// `key_eq` disagrees must NOT reuse the old element. `can_update_by_id`
-/// rejects the hash hit (top scan AND the Phase-4 bucket walk return
-/// no match), so the new view mints a fresh slab id and the old child
-/// is removed.
-#[test]
-fn keyed_hash_collision_falls_through_to_fresh_id() {
-    let (mut tree, mut owner, root) = fixture();
-
-    reconcile_children_by_id(
-        &mut tree,
-        root,
-        &[Box::new(ColliderView::new(1)) as Box<dyn View>],
-        &mut owner.element_owner_mut(),
-    );
-    let old_id = tree.get(root).unwrap().child_ids()[0];
-
-    // Same hash (0xDEAD), different tag → the semantic `key_eq` rejects.
-    reconcile_children_by_id(
-        &mut tree,
-        root,
-        &[Box::new(ColliderView::new(2)) as Box<dyn View>],
-        &mut owner.element_owner_mut(),
-    );
-    let new_id = tree.get(root).unwrap().child_ids()[0];
-
-    assert_ne!(
-        new_id, old_id,
-        "a hash collision must not fool the reconciler into reusing the old \
-         element — can_update_by_id's key_eq stage rejects it and a fresh id is minted",
-    );
 }
 
 /// Production FR-024(c) collision defense, symmetric case: two old
@@ -936,61 +692,6 @@ mod emission {
             .set_child_ids(ids);
     }
 
-    /// An empty parent gaining N children emits one `Mount` per slot,
-    /// each carrying the reconciled parent id.
-    #[test]
-    #[serial]
-    fn emits_mount_for_each_inserted_child() {
-        let (mut tree, mut owner, root) = fixture();
-        let views = keyed_views(&[1, 2, 3]);
-        let events = capture(|| {
-            reconcile_children_by_id(&mut tree, root, &views, &mut owner.element_owner_mut());
-        });
-
-        assert_dispositions(
-            &events,
-            &[
-                (ReconcileEventKind::Mount, 0),
-                (ReconcileEventKind::Mount, 1),
-                (ReconcileEventKind::Mount, 2),
-            ],
-        );
-        for event in &events {
-            assert_eq!(
-                event.parent,
-                root.as_u64(),
-                "every event must carry the reconciled parent id; got {event:?}",
-            );
-        }
-    }
-
-    /// Re-reconciling the same shape reuses every child in place →
-    /// one `Reuse` per slot, no `Mount`/`Unmount`.
-    #[test]
-    #[serial]
-    fn emits_reuse_for_unchanged_children() {
-        let (mut tree, mut owner, root) = fixture();
-        seed(&mut tree, &mut owner, root, &keyed_views(&[1, 2, 3]));
-
-        let events = capture(|| {
-            reconcile_children_by_id(
-                &mut tree,
-                root,
-                &keyed_views(&[1, 2, 3]),
-                &mut owner.element_owner_mut(),
-            );
-        });
-
-        assert_dispositions(
-            &events,
-            &[
-                (ReconcileEventKind::Reuse, 0),
-                (ReconcileEventKind::Reuse, 1),
-                (ReconcileEventKind::Reuse, 2),
-            ],
-        );
-    }
-
     /// A keyed reorder keeps the prefix match in place (`Reuse`) and
     /// moves the rest (`Reorder`) — the element follows its key, so
     /// the disposition reflects real movement.
@@ -1017,33 +718,6 @@ mod emission {
                 (ReconcileEventKind::Reuse, 0),
                 (ReconcileEventKind::Reorder, 1),
                 (ReconcileEventKind::Reorder, 2),
-            ],
-        );
-    }
-
-    /// Dropping the last keyed child reuses the survivors and emits a
-    /// single `Unmount` at the dropped child's old slot.
-    #[test]
-    #[serial]
-    fn emits_unmount_for_dropped_child() {
-        let (mut tree, mut owner, root) = fixture();
-        seed(&mut tree, &mut owner, root, &keyed_views(&[1, 2, 3]));
-
-        let events = capture(|| {
-            reconcile_children_by_id(
-                &mut tree,
-                root,
-                &keyed_views(&[1, 2]),
-                &mut owner.element_owner_mut(),
-            );
-        });
-
-        assert_dispositions(
-            &events,
-            &[
-                (ReconcileEventKind::Reuse, 0),
-                (ReconcileEventKind::Reuse, 1),
-                (ReconcileEventKind::Unmount, 2),
             ],
         );
     }

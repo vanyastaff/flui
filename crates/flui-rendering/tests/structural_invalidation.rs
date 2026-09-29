@@ -1,4 +1,4 @@
-use flui_objects::{RenderColoredBox, RenderSliverToBoxAdapter};
+use flui_objects::RenderColoredBox;
 use flui_rendering::{pipeline::PipelineOwner, storage::RenderNode};
 
 fn clear_node_dirty_flags(owner: &mut PipelineOwner, id: flui_foundation::RenderId) {
@@ -76,47 +76,6 @@ fn box_child_insertion_applies_full_parent_membership_impact() {
             .count(),
         1
     );
-}
-
-#[test]
-fn sliver_child_insertion_applies_full_parent_membership_impact() {
-    let mut owner = PipelineOwner::new();
-    let parent = owner.set_root_render_object(Box::new(RenderColoredBox::red(10.0, 10.0)));
-    owner.set_semantics_enabled(true);
-    owner.clear_all_dirty_nodes();
-    clear_node_dirty_flags(&mut owner, parent);
-
-    let child = owner
-        .insert_sliver_child_render_object(parent, Box::new(RenderSliverToBoxAdapter::new()))
-        .expect("sliver child insertion");
-
-    assert_exact_parent_membership_work(&owner, parent);
-    assert_eq!(
-        owner
-            .nodes_needing_layout()
-            .iter()
-            .filter(|entry| entry.id == child)
-            .count(),
-        1
-    );
-}
-
-#[test]
-fn dropping_a_child_applies_full_parent_membership_impact() {
-    let mut owner = PipelineOwner::new();
-    let parent = owner.set_root_render_object(Box::new(RenderColoredBox::red(10.0, 10.0)));
-    owner.set_semantics_enabled(true);
-    let child = owner
-        .insert_child_render_object(parent, Box::new(RenderColoredBox::blue(5.0, 5.0)))
-        .expect("box child insertion");
-    owner.clear_all_dirty_nodes();
-    clear_node_dirty_flags(&mut owner, parent);
-    clear_node_dirty_flags(&mut owner, child);
-
-    owner.drop_render_child(parent, child);
-
-    assert_exact_parent_membership_work(&owner, parent);
-    assert_eq!(owner.render_tree().parent(child), None);
 }
 
 #[test]

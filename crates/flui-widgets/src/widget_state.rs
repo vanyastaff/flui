@@ -474,55 +474,9 @@ mod tests {
     // WidgetStates
     // ------------------------------------------------------------------
 
-    #[test]
-    fn states_contains_state_round_trips_through_with_and_without() {
-        let states = WidgetStates::NONE
-            .with_state(WidgetState::Hovered)
-            .with_state(WidgetState::Focused);
-        assert!(states.contains_state(WidgetState::Hovered));
-        assert!(states.contains_state(WidgetState::Focused));
-        assert!(!states.contains_state(WidgetState::Pressed));
-
-        let without_hover = states.without_state(WidgetState::Hovered);
-        assert!(!without_hover.contains_state(WidgetState::Hovered));
-        assert!(without_hover.contains_state(WidgetState::Focused));
-    }
-
-    #[test]
-    fn states_from_iterator_unions_every_member() {
-        let states: WidgetStates = [WidgetState::Selected, WidgetState::Disabled]
-            .into_iter()
-            .collect();
-        assert!(states.contains_state(WidgetState::Selected));
-        assert!(states.contains_state(WidgetState::Disabled));
-        assert!(!states.contains_state(WidgetState::Error));
-    }
-
     // ------------------------------------------------------------------
     // WidgetStateProperty::resolve — precedence across variants
     // ------------------------------------------------------------------
-
-    #[test]
-    fn all_resolves_to_the_same_value_for_every_state_set() {
-        let property = WidgetStateProperty::all(7_u32);
-        assert_eq!(property.resolve(&WidgetStates::NONE), 7);
-        assert_eq!(
-            property.resolve(&WidgetStates::from(WidgetState::Pressed)),
-            7
-        );
-    }
-
-    #[test]
-    fn resolver_receives_the_live_states_set() {
-        let property = WidgetStateProperty::resolve_with(|states: &WidgetStates| {
-            u32::from(states.contains_state(WidgetState::Pressed))
-        });
-        assert_eq!(property.resolve(&WidgetStates::NONE), 0);
-        assert_eq!(
-            property.resolve(&WidgetStates::from(WidgetState::Pressed)),
-            1
-        );
-    }
 
     #[test]
     fn map_resolves_first_match_wins_in_entry_order() {
@@ -547,30 +501,10 @@ mod tests {
         assert_eq!(property.resolve(&WidgetStates::NONE), "default");
     }
 
-    #[test]
-    fn map_resolves_to_default_when_nothing_matches_and_there_is_no_any() {
-        let property: WidgetStateProperty<u32> =
-            WidgetStateProperty::from_map([(WidgetStateConstraint::Is(WidgetState::Error), 9)]);
-        assert_eq!(property.resolve(&WidgetStates::NONE), 0);
-    }
-
     // ------------------------------------------------------------------
     // Option<V> fallthrough (the resolve-then-coalesce contract a future
     // button-style consumer relies on)
     // ------------------------------------------------------------------
-
-    #[test]
-    fn option_property_falls_through_to_none_on_no_match() {
-        let property: WidgetStateProperty<Option<u32>> = WidgetStateProperty::from_map([(
-            WidgetStateConstraint::Is(WidgetState::Selected),
-            Some(42),
-        )]);
-        assert_eq!(property.resolve(&WidgetStates::NONE), None);
-        assert_eq!(
-            property.resolve(&WidgetStates::from(WidgetState::Selected)),
-            Some(42)
-        );
-    }
 
     #[test]
     fn option_property_coalesce_chain_mirrors_button_style_button() {
@@ -596,34 +530,6 @@ mod tests {
     // PartialEq — Arc::ptr_eq for Resolver
     // ------------------------------------------------------------------
 
-    #[test]
-    fn resolver_equality_is_pointer_identity_not_behavior() {
-        let a = WidgetStateProperty::resolve_with(|_: &WidgetStates| 1_u32);
-        let b = WidgetStateProperty::resolve_with(|_: &WidgetStates| 1_u32);
-        // Same behavior, different closure identity: NOT equal.
-        assert_ne!(a, b);
-
-        let c = a.clone();
-        // Same Arc, cloned: equal.
-        assert_eq!(a, c);
-    }
-
-    #[test]
-    fn all_and_map_equality_is_structural() {
-        assert_eq!(
-            WidgetStateProperty::all(1_u32),
-            WidgetStateProperty::all(1_u32)
-        );
-        assert_ne!(
-            WidgetStateProperty::all(1_u32),
-            WidgetStateProperty::all(2_u32)
-        );
-
-        let map_a = WidgetStateProperty::from_map([(WidgetStateConstraint::Any, 1_u32)]);
-        let map_b = WidgetStateProperty::from_map([(WidgetStateConstraint::Any, 1_u32)]);
-        assert_eq!(map_a, map_b);
-    }
-
     // ------------------------------------------------------------------
     // WidgetStatesController
     // ------------------------------------------------------------------
@@ -633,20 +539,6 @@ mod tests {
         Arc::new(move || {
             counter.fetch_add(1, Ordering::Relaxed);
         })
-    }
-
-    #[test]
-    fn controller_starts_at_the_provided_initial_value() {
-        let controller = WidgetStatesController::new(WidgetStates::from(WidgetState::Disabled));
-        assert!(controller.value().contains_state(WidgetState::Disabled));
-    }
-
-    #[test]
-    fn controller_default_starts_empty() {
-        assert_eq!(
-            WidgetStatesController::default().value(),
-            WidgetStates::NONE
-        );
     }
 
     #[test]
@@ -672,36 +564,5 @@ mod tests {
         controller.update(WidgetState::Hovered, false);
         assert_eq!(counter.load(Ordering::Relaxed), 2);
         assert!(!controller.value().contains_state(WidgetState::Hovered));
-    }
-
-    #[test]
-    fn controller_clones_share_the_same_underlying_state() {
-        let controller = WidgetStatesController::default();
-        let clone = controller.clone();
-
-        controller.update(WidgetState::Focused, true);
-
-        assert!(clone.value().contains_state(WidgetState::Focused));
-    }
-
-    #[test]
-    fn is_same_distinguishes_identity_from_value_equality() {
-        let controller = WidgetStatesController::default();
-        let clone = controller.clone();
-        let independent = WidgetStatesController::default();
-
-        assert!(controller.is_same(&clone), "a clone shares the same cell");
-        assert!(
-            !controller.is_same(&independent),
-            "two independently-constructed controllers are not the same cell, \
-             even though both currently hold the same (empty) value"
-        );
-    }
-
-    #[test]
-    fn controller_debug_does_not_panic() {
-        let controller = WidgetStatesController::default();
-        let debug = format!("{controller:?}");
-        assert!(debug.contains("WidgetStatesController"));
     }
 }

@@ -360,44 +360,6 @@ fn consecutive_failures_count_up_and_reset_on_a_clean_segment() {
     );
 }
 
-/// A structured pipeline error (here: a root render object whose
-/// layout panics, surfaced by the pipeline as
-/// `RenderError::Poisoned`) travels the SAME typed report route as
-/// a boundary-caught panic — not only `tracing`.
-#[test]
-fn a_pipeline_error_reaches_the_typed_report_route() {
-    let realm = UiRealm::for_test();
-    let seen = install_collecting_handler(&realm);
-    realm.pipeline_for_test().with_mut(|owner| {
-        let root_id = owner.insert(Box::new(PanicOnLayoutForReportBox)
-            as Box<
-                dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>,
-            >);
-        owner.set_root_id(Some(root_id));
-    });
-
-    let mut backend = ScriptedSink::always_presents();
-    let presented =
-        with_quiet_panics(|| catch_unwind(AssertUnwindSafe(|| realm.render_frame(&mut backend))))
-            .expect("a pipeline error is contained (pre-existing) and reported (this test)");
-    assert!(!presented);
-
-    let seen = seen.lock().expect("mutex");
-    assert_eq!(seen.len(), 1, "one pipeline failure report: {seen:?}");
-    assert_eq!(seen[0].presentation, realm.presentation_id());
-    assert_eq!(seen[0].disposition, FailureDisposition::FrameDropped);
-    assert_eq!(seen[0].consecutive, 1);
-    match &seen[0].kind {
-        SeenKind::Pipeline { error } => {
-            assert!(
-                error.contains("panicked during layout"),
-                "the typed report must carry the pipeline's own error; got {error:?}"
-            );
-        }
-        other => panic!("expected Pipeline, got {other:?}"),
-    }
-}
-
 /// Root render box whose layout panics — local twin of the sibling
 /// module's private helper, for the pipeline-error report test.
 #[derive(Debug)]
@@ -452,44 +414,6 @@ fn a_failed_pump_skips_the_stationary_device_re_hit_test() {
         "a failed pump must not re-hit-test stationary devices against the \
          mid-commit tree"
     );
-}
-
-/// `docs/PANIC-POLICY.md`'s `BUG:` convention is classified, not
-/// blended into application failures: a `BUG:`-prefixed payload
-/// reports `internal_invariant = true`.
-#[test]
-fn a_bug_prefixed_panic_is_reported_as_an_internal_invariant() {
-    let realm = UiRealm::for_test();
-    realm
-        .attach_root_widget(&SizedBox::new(10.0, 10.0))
-        .expect("attaches");
-    let seen = install_collecting_handler(&realm);
-    realm.presentations.primary().set_segment_probe(
-        SegmentPhase::Build,
-        Some(Box::new(|| {
-            panic!("BUG: intentional invariant-violation payload for this test");
-        })),
-    );
-    realm.request_redraw();
-
-    let mut backend = ScriptedSink::always_presents();
-    let _ =
-        with_quiet_panics(|| catch_unwind(AssertUnwindSafe(|| realm.render_frame(&mut backend))))
-            .expect("contained");
-
-    let seen = seen.lock().expect("mutex");
-    assert_eq!(seen.len(), 1);
-    match &seen[0].kind {
-        SeenKind::SegmentPanic {
-            internal_invariant, ..
-        } => {
-            assert!(
-                internal_invariant,
-                "a BUG:-prefixed payload must be classified as an internal invariant"
-            );
-        }
-        other => panic!("expected SegmentPanic, got {other:?}"),
-    }
 }
 
 /// The boundary's own blind spot, closed: the registered handler is

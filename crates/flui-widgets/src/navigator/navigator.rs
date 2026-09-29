@@ -1077,17 +1077,6 @@ impl NavigatorHandle {
         self.shared.user_gesture_in_progress()
     }
 
-    /// Flutter's `userGestureInProgressNotifier` (`ValueNotifier<bool>`,
-    /// `navigator.dart:5819`): fires on the 0→1 and 1→0 transitions of
-    /// [`user_gesture_in_progress`](Self::user_gesture_in_progress), with no
-    /// navigator lock held. Test-facing: production code reaches the same
-    /// notifier only through [`user_gesture_signal`](Self::user_gesture_signal)'s
-    /// Send+Sync-safe bundle.
-    #[cfg(test)]
-    pub(crate) fn user_gesture_in_progress_notifier(&self) -> ChangeNotifier {
-        self.shared.user_gesture_in_progress_notifier.clone()
-    }
-
     /// A Send+Sync-safe snapshot of this navigator's user-gesture state — the
     /// live count and its notifier, bundled — for a data-plane animation
     /// listener that cannot hold this owner-affine handle. `HeroFlight` uses

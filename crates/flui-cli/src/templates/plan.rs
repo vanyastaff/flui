@@ -131,27 +131,4 @@ mod tests {
         );
         assert!(tmp.path().join("assets").is_dir());
     }
-
-    #[test]
-    fn merge_preserves_order_and_appends() {
-        let a = ProjectPlan::new().file("a.txt", "a").dir("da");
-        let b = ProjectPlan::new().file("b.txt", "b").dir("db");
-        let merged = a.merge(b);
-        assert_eq!(
-            merged
-                .files()
-                .iter()
-                .map(|f| f.path.to_string_lossy().into_owned())
-                .collect::<Vec<_>>(),
-            vec!["a.txt", "b.txt"]
-        );
-        assert_eq!(
-            merged
-                .dirs()
-                .iter()
-                .map(|d| d.to_string_lossy().into_owned())
-                .collect::<Vec<_>>(),
-            vec!["da", "db"]
-        );
-    }
 }

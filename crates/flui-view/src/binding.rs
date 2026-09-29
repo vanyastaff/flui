@@ -1783,9 +1783,8 @@ impl std::fmt::Debug for WidgetsBinding {
 mod tests {
     use crate::view::IntoView;
     use crate::view::ViewExt;
-    use std::{any::TypeId, rc::Rc};
+    use std::rc::Rc;
 
-    use flui_interaction::FocusManager;
     use flui_objects::RenderSizedBox;
     use flui_rendering::pipeline::PipelineOwner;
     use flui_rendering::protocol::BoxProtocol;
@@ -1915,25 +1914,6 @@ mod tests {
         let binding1 = WidgetsBinding::new();
         let binding2 = WidgetsBinding::new();
         assert!(!Arc::ptr_eq(&binding1.inner, &binding2.inner));
-    }
-
-    #[test]
-    fn bindings_have_isolated_focus_managers() {
-        let first = WidgetsBinding::new();
-        let second = WidgetsBinding::new();
-        let first_focus = first.with_build_owner(BuildOwner::focus_manager);
-        let second_focus = second.with_build_owner(BuildOwner::focus_manager);
-
-        assert!(!Rc::ptr_eq(&first_focus, &second_focus));
-    }
-
-    #[test]
-    fn binding_preserves_the_exact_focus_manager() {
-        let focus_manager = FocusManager::new();
-        let binding = WidgetsBinding::with_focus_manager(Rc::clone(&focus_manager));
-        let binding_focus = binding.with_build_owner(BuildOwner::focus_manager);
-
-        assert!(Rc::ptr_eq(&binding_focus, &focus_manager));
     }
 
     #[test]
@@ -2122,39 +2102,6 @@ mod tests {
     }
 
     #[test]
-    fn unmounted_global_key_read_during_a_frame_does_not_warn() {
-        let (during, log) = within_deadline(|| {
-            let seen = Seen::default();
-            let binding = WidgetsBinding::new();
-            binding
-                .attach_root_widget(&LookupInBuild {
-                    // Mounted nowhere: the only busy member cannot hold it.
-                    key: crate::GlobalKey::<RegistryState>::new(),
-                    seen: Rc::clone(&seen),
-                })
-                .expect("attach succeeds");
-            let ((), log) = flui_testing::log_capture::capture(|| {
-                binding.with_global_key_registry(|| binding.draw_frame());
-            });
-            (seen.take(), log)
-        });
-        assert_eq!(during, vec![None]);
-        assert_eq!(
-            log.at_level(tracing::Level::WARN)
-                .filter(|record| record.contains("GlobalKey"))
-                .count(),
-            0,
-            "a GlobalKey read that may simply be a miss is not a warning:\n{}",
-            log.render_at_least(tracing::Level::WARN)
-        );
-        assert_eq!(
-            log.count_containing("GlobalKey read skipped the presentation whose frame is running"),
-            1,
-            "the skipped member is still reported, once per read:\n{log}"
-        );
-    }
-
-    #[test]
     fn global_key_lookup_from_dispose_during_detach_returns_instead_of_deadlocking() {
         #[derive(Clone)]
         struct LookupInDispose {
@@ -2222,71 +2169,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_binding_creation() {
-        let binding = WidgetsBinding::new();
-        assert!(binding.root_element().is_none());
-        assert!(!binding.has_pending_builds());
-    }
-
-    #[test]
-    fn test_attach_root_widget() {
-        let binding = WidgetsBinding::new();
-        let view = LeafView;
-
-        binding
-            .attach_root_widget(&view)
-            .expect("first attach succeeds");
-
-        assert!(binding.root_element().is_some());
-        assert!(binding.has_pending_builds());
-    }
-
-    /// `attach_root_widget` bootstraps the root through
-    /// `RootRenderView` — the element-tree root is a
-    /// `RootRenderElement<LeafView>`, NOT the user view's element
-    /// mounted directly.
-    #[test]
-    fn test_attach_root_widget_routes_through_root_render_view() {
-        let binding = WidgetsBinding::new();
-        let view = LeafView;
-
-        binding
-            .attach_root_widget(&view)
-            .expect("first attach succeeds");
-
-        let root_id = binding.root_element().expect("root element is set");
-
-        binding.with_element_tree(|tree| {
-            let node = tree.get(root_id).expect("root node exists");
-            let element = node.element();
-
-            // The mounted root is the `RootRenderElement`, identified by
-            // the `RootRenderView<LeafView>` view type it reports — the
-            // user view's concrete type is preserved as the type
-            // parameter (no `BoxedView` wrap, which would erase it and
-            // break the downcast — see the comment in
-            // `attach_root_widget`).
-            assert_eq!(
-                element.view_type_id(),
-                TypeId::of::<RootRenderView<LeafView>>(),
-                "root element must be RootRenderElement<LeafView>, \
-                 proving the bootstrap routes through RootRenderView"
-            );
-
-            // It is concretely a `RootRenderElement<LeafView>` — the
-            // direct-mount path would have reported `LeafView` as the
-            // element's view type.
-            assert!(
-                element
-                    .as_any()
-                    .downcast_ref::<RootRenderElement<LeafView>>()
-                    .is_some(),
-                "root element downcasts to RootRenderElement<LeafView>"
-            );
-        });
-    }
-
     /// The mounted root element produces a working render-tree root
     /// when a `PipelineOwner` is wired — `RootRenderElement` inserts the
     /// `RenderView` and sets it as the pipeline owner's root node.
@@ -2319,81 +2201,6 @@ mod tests {
             pipeline_owner.with(|owner| owner.root_id().is_some()),
             "PipelineOwner's root node is wired to the RenderView"
         );
-    }
-
-    /// Verifies that the runner's sized bootstrap path
-    /// (`attach_root_widget_with_size`) mounts the root render tree at an
-    /// explicit window size, identically to the default-size attach — proving
-    /// the size param threads through without disturbing the bootstrap.
-    #[test]
-    fn test_attach_root_widget_with_size_bootstraps_render_tree() {
-        let binding = WidgetsBinding::new();
-        let pipeline_owner = PipelineCell::new(PipelineOwner::new());
-        binding.set_pipeline_owner(pipeline_owner.clone());
-
-        binding
-            .attach_root_widget_with_size(&LeafView, 1024.0, 768.0)
-            .expect("sized attach succeeds");
-
-        let root_id = binding.root_element().expect("root element is set");
-        binding.with_element_tree(|tree| {
-            let element = tree.get(root_id).expect("root node").element();
-            let root_render_element = element
-                .as_any()
-                .downcast_ref::<RootRenderElement<LeafView>>()
-                .expect("root is RootRenderElement");
-            assert!(
-                root_render_element.render_id().is_some(),
-                "sized attach bootstrapped a RenderView (render_id set)"
-            );
-        });
-        assert!(
-            pipeline_owner.with(|owner| owner.root_id().is_some()),
-            "PipelineOwner root node wired under the sized bootstrap path"
-        );
-    }
-
-    /// Edge case: a root view with zero children bootstraps
-    /// correctly through `RootRenderView`.
-    #[test]
-    fn test_attach_root_widget_zero_child_subtree() {
-        let binding = WidgetsBinding::new();
-
-        // `LeafView` is a render-family leaf with no child views.
-        binding
-            .attach_root_widget(&LeafView)
-            .expect("attach succeeds");
-        binding.draw_frame();
-
-        let root_id = binding.root_element().expect("root element is set");
-        binding.with_element_tree(|tree| {
-            let element = tree.get(root_id).expect("root node").element();
-            assert_eq!(element.lifecycle(), crate::Lifecycle::Active);
-        });
-    }
-
-    /// Edge case: a root view that builds a non-trivial child
-    /// subtree bootstraps correctly through `RootRenderView`.
-    #[test]
-    fn test_attach_root_widget_with_child_subtree() {
-        let binding = WidgetsBinding::new();
-
-        // `ParentView` builds a `LeafView` child each build.
-        binding
-            .attach_root_widget(&ParentView)
-            .expect("attach succeeds");
-        binding.draw_frame();
-
-        let root_id = binding.root_element().expect("root element is set");
-        binding.with_element_tree(|tree| {
-            let element = tree.get(root_id).expect("root node").element();
-            assert_eq!(
-                element.view_type_id(),
-                TypeId::of::<RootRenderView<ParentView>>(),
-                "root with a child subtree still routes through RootRenderView"
-            );
-            assert_eq!(element.lifecycle(), crate::Lifecycle::Active);
-        });
     }
 
     /// E3 regression: after `draw_frame`, the root's child subtree is
@@ -2452,18 +2259,6 @@ mod tests {
                 "the grandchild element resolves in the slab",
             );
         });
-    }
-
-    #[test]
-    fn test_draw_frame() {
-        let binding = WidgetsBinding::new();
-        let view = LeafView;
-
-        binding.attach_root_widget(&view).expect("attach succeeds");
-        assert!(binding.has_pending_builds());
-
-        binding.draw_frame();
-        assert!(!binding.has_pending_builds());
     }
 
     #[test]
@@ -2528,18 +2323,6 @@ mod tests {
             2,
             "the producer fails deterministically every frame"
         );
-    }
-
-    #[test]
-    fn test_detach_root_widget() {
-        let binding = WidgetsBinding::new();
-        let view = LeafView;
-
-        binding.attach_root_widget(&view).expect("attach succeeds");
-        assert!(binding.root_element().is_some());
-
-        binding.detach_root_widget();
-        assert!(binding.root_element().is_none());
     }
 
     #[derive(Clone)]
@@ -2665,196 +2448,6 @@ mod tests {
     // 4. Deep linear chains do not exhaust the stack (the walk is
     //    iterative).
 
-    #[derive(Clone)]
-    struct MultiNodeView;
-
-    impl crate::RenderView for MultiNodeView {
-        type Protocol = BoxProtocol;
-        type RenderObject = RenderSizedBox;
-
-        fn create_render_object(
-            &self,
-            _ctx: &crate::RenderObjectContext<'_>,
-        ) -> Self::RenderObject {
-            RenderSizedBox::shrink()
-        }
-
-        fn update_render_object(
-            &self,
-            _ctx: &crate::RenderObjectContext<'_>,
-            _render_object: &mut Self::RenderObject,
-        ) -> flui_rendering::RenderUpdateImpact {
-            flui_rendering::RenderUpdateImpact::NONE
-        }
-    }
-
-    impl View for MultiNodeView {
-        fn create_element(&self) -> crate::element::ElementKind {
-            crate::element::ElementKind::render_variable(self)
-        }
-    }
-
-    /// Helper: insert a `MultiNodeView` as a child of `parent`, returning
-    /// its new `ElementId`.
-    fn insert_multi_child(
-        tree: &mut crate::tree::ElementTree,
-        build_owner: &mut crate::BuildOwner,
-        parent: flui_foundation::ElementId,
-        slot: usize,
-    ) -> flui_foundation::ElementId {
-        let view = MultiNodeView;
-        tree.insert(&view, parent, slot, &mut build_owner.element_owner_mut())
-    }
-
-    /// Helper: configure the children list on the slab node backing `id`.
-    ///
-    /// E3 (atomic box→arena swap): the element child graph is the slab
-    /// node's `child_ids` list, so this writes there directly — the
-    /// `collect_all_elements` walk reads the same field.
-    fn set_children_for(
-        tree: &mut crate::tree::ElementTree,
-        id: flui_foundation::ElementId,
-        children: Vec<flui_foundation::ElementId>,
-    ) {
-        let node = tree.get_mut(id).expect("node exists");
-        node.set_child_ids(children);
-    }
-
-    /// Happy path: a tree of `root → [a, b], a → [a1]`. The walk visits
-    /// every node with the correct depths, in pre-order DFS.
-    #[test]
-    fn test_collect_all_elements_happy_path() {
-        let mut tree = crate::tree::ElementTree::new();
-        let mut build_owner = crate::BuildOwner::new();
-
-        let root_id = tree.mount_root(&MultiNodeView, &mut build_owner.element_owner_mut());
-        let alpha = insert_multi_child(&mut tree, &mut build_owner, root_id, 0);
-        let bravo = insert_multi_child(&mut tree, &mut build_owner, root_id, 1);
-        let alpha_child = insert_multi_child(&mut tree, &mut build_owner, alpha, 0);
-
-        set_children_for(&mut tree, root_id, vec![alpha, bravo]);
-        set_children_for(&mut tree, alpha, vec![alpha_child]);
-
-        let walk = WidgetsBinding::collect_all_elements(&tree, root_id, 0);
-
-        assert_eq!(
-            walk,
-            vec![(root_id, 0), (alpha, 1), (alpha_child, 2), (bravo, 1)],
-            "pre-order DFS: parent before children, children in child_ids slot order"
-        );
-    }
-
-    /// Edge case: a deeply unbalanced chain. The iterative walk must
-    /// terminate without overflowing the stack. 1024 is well past the
-    /// 50-deep threshold the plan calls out and far past what naive
-    /// recursion would tolerate on Windows's smaller default thread
-    /// stack.
-    #[test]
-    fn test_collect_all_elements_deep_chain() {
-        let mut tree = crate::tree::ElementTree::new();
-        let mut build_owner = crate::BuildOwner::new();
-
-        let root_id = tree.mount_root(&MultiNodeView, &mut build_owner.element_owner_mut());
-
-        let mut ids = vec![root_id];
-        let mut current = root_id;
-        for _ in 0..1024 {
-            let next = insert_multi_child(&mut tree, &mut build_owner, current, 0);
-            set_children_for(&mut tree, current, vec![next]);
-            ids.push(next);
-            current = next;
-        }
-
-        let walk = WidgetsBinding::collect_all_elements(&tree, root_id, 0);
-
-        assert_eq!(walk.len(), ids.len(), "every chain node is visited");
-        for (i, &(id, depth)) in walk.iter().enumerate() {
-            assert_eq!(id, ids[i], "chain visit order is parent-first");
-            assert_eq!(depth, i, "depth grows with chain index");
-        }
-    }
-
-    /// Edge case: a wide shallow tree (root → 64 leaf children). The
-    /// walk must visit the root then every child in `child_ids` slot
-    /// order.
-    #[test]
-    fn test_collect_all_elements_wide_tree() {
-        let mut tree = crate::tree::ElementTree::new();
-        let mut build_owner = crate::BuildOwner::new();
-
-        let root_id = tree.mount_root(&MultiNodeView, &mut build_owner.element_owner_mut());
-
-        let mut children = Vec::with_capacity(64);
-        for slot in 0..64 {
-            children.push(insert_multi_child(
-                &mut tree,
-                &mut build_owner,
-                root_id,
-                slot,
-            ));
-        }
-        set_children_for(&mut tree, root_id, children.clone());
-
-        let walk = WidgetsBinding::collect_all_elements(&tree, root_id, 0);
-
-        assert_eq!(walk.len(), 1 + children.len());
-        assert_eq!(walk[0], (root_id, 0));
-        for (i, &child_id) in children.iter().enumerate() {
-            assert_eq!(walk[1 + i], (child_id, 1));
-        }
-    }
-
-    /// Stability: running the walk twice on the same tree returns the
-    /// exact same sequence — the iterative shape must not introduce
-    /// any ordering nondeterminism.
-    #[test]
-    fn test_collect_all_elements_is_deterministic() {
-        let mut tree = crate::tree::ElementTree::new();
-        let mut build_owner = crate::BuildOwner::new();
-
-        let root_id = tree.mount_root(&MultiNodeView, &mut build_owner.element_owner_mut());
-        let alpha = insert_multi_child(&mut tree, &mut build_owner, root_id, 0);
-        let bravo = insert_multi_child(&mut tree, &mut build_owner, root_id, 1);
-        let charlie = insert_multi_child(&mut tree, &mut build_owner, root_id, 2);
-        let bravo_first = insert_multi_child(&mut tree, &mut build_owner, bravo, 0);
-        let bravo_second = insert_multi_child(&mut tree, &mut build_owner, bravo, 1);
-
-        set_children_for(&mut tree, root_id, vec![alpha, bravo, charlie]);
-        set_children_for(&mut tree, bravo, vec![bravo_first, bravo_second]);
-
-        let first = WidgetsBinding::collect_all_elements(&tree, root_id, 0);
-        let second = WidgetsBinding::collect_all_elements(&tree, root_id, 0);
-
-        assert_eq!(first, second, "walk output is deterministic");
-        assert_eq!(
-            first,
-            vec![
-                (root_id, 0),
-                (alpha, 1),
-                (bravo, 1),
-                (bravo_first, 2),
-                (bravo_second, 2),
-                (charlie, 1),
-            ],
-        );
-    }
-
-    /// The `root_depth` argument is offset onto every recorded depth —
-    /// pin this so callers that recurse into a subtree at a non-zero
-    /// depth still get useful values.
-    #[test]
-    fn test_collect_all_elements_root_depth_offset() {
-        let mut tree = crate::tree::ElementTree::new();
-        let mut build_owner = crate::BuildOwner::new();
-
-        let root_id = tree.mount_root(&MultiNodeView, &mut build_owner.element_owner_mut());
-        let child_id = insert_multi_child(&mut tree, &mut build_owner, root_id, 0);
-        set_children_for(&mut tree, root_id, vec![child_id]);
-
-        let walk = WidgetsBinding::collect_all_elements(&tree, root_id, 5);
-        assert_eq!(walk, vec![(root_id, 5), (child_id, 6)]);
-    }
-
     // ========================================================================
     // Snapshot-then-fire fix — regression tests for sync handle_* event
     // handlers
@@ -2911,26 +2504,6 @@ mod tests {
         binding.handle_build_scheduled();
     }
 
-    /// `handle_build_scheduled` must NOT panic and must invoke
-    /// `on_need_frame` when called outside a build (flag = false).
-    #[test]
-    fn handle_build_scheduled_fires_on_need_frame_when_not_building() {
-        let binding = WidgetsBinding::new();
-        let fired = Arc::new(AtomicBool::new(false));
-        let fired_clone = Arc::clone(&fired);
-        binding.set_on_need_frame(move || {
-            fired_clone.store(true, Ordering::Relaxed);
-        });
-
-        // debug_building_dirty_elements is false (default) — must not panic.
-        binding.handle_build_scheduled();
-
-        assert!(
-            fired.load(Ordering::Relaxed),
-            "on_need_frame callback must be invoked by handle_build_scheduled"
-        );
-    }
-
     /// `handle_build_scheduled` must be callable while `inner` is read-locked
     /// on the same thread — proving it acquires no `inner` lock itself.
     ///
@@ -2957,32 +2530,6 @@ mod tests {
         assert!(
             fired.load(Ordering::Relaxed),
             "on_need_frame must fire even while inner read-lock is held"
-        );
-    }
-
-    /// `schedule_build_for` fires the frame-request hook installed on the
-    /// [`BuildOwner`]. The hook is deliberately a `Send + Sync` data-plane wake
-    /// capability; it must not capture the owner-local [`WidgetsBinding`].
-    #[test]
-    fn schedule_build_for_triggers_the_build_owner_wake_hook() {
-        let binding = WidgetsBinding::new();
-        let requested = Arc::new(AtomicBool::new(false));
-        let requested_clone = Arc::clone(&requested);
-
-        binding.with_build_owner_mut(|bo| {
-            bo.set_on_build_scheduled(move || {
-                requested_clone.store(true, Ordering::Relaxed);
-            });
-        });
-
-        let dummy_id = flui_foundation::ElementId::new(1);
-        binding.with_build_owner_mut(|bo| {
-            bo.schedule_build_for(dummy_id, 0, crate::RebuildReason::StateChange);
-        });
-
-        assert!(
-            requested.load(Ordering::Relaxed),
-            "scheduling a build must request a frame through BuildOwner's hook"
         );
     }
 

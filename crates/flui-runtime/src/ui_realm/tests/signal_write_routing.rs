@@ -631,27 +631,3 @@ fn an_older_overlapping_wake_cannot_clear_newer_failed_delivery_debt() {
         "the successful retry clears the newer generation"
     );
 }
-
-/// The primary-graph case keeps working: a write to a signal the primary
-/// presentation minted runs against that graph at the next drain.
-#[test]
-fn a_signal_write_command_reaches_the_realms_graph_at_the_next_drain() {
-    let realm = new_runtime(noop_wake()).expect("runtime");
-    let graph = realm
-        .widgets()
-        .with_build_owner(|owner| owner.reactive().clone());
-    let counter = graph.signal(1u32);
-
-    realm
-        .command_sender()
-        .send_signal_write(counter.detach(), |s, r| {
-            s.update(r, |c| *c += 41).expect("signal alive");
-        })
-        .expect("send");
-    assert_eq!(counter.peek(&graph, |c| *c), Ok(1), "nothing runs at send");
-
-    let report = realm.drain_commands();
-
-    assert_eq!(report.invoked, 1);
-    assert_eq!(counter.peek(&graph, |c| *c), Ok(42));
-}

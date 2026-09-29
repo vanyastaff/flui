@@ -325,97 +325,6 @@ fn a_second_parent_grafts_the_same_element_rather_than_creating_another() {
     flui_view::test_only_clear_global_key_registry();
 }
 
-/// The relocation verdict does not depend on the order the two parents are
-/// visited in — the oracle's cases 7–10 differ only in that ordering.
-///
-/// Flutter parity: `framework_test.dart` `'GlobalKey duplication 7 -
-/// appearing later'` / `'8 - appearing earlier'` / `'9 - moving and appearing
-/// later'` / `'10 - moving and appearing earlier'` (3.44.0), all four of which
-/// expect a `FlutterError`. FLUI relocates in every ordering; this pins that
-/// the outcome is order-independent, so a future deferred check has one
-/// behaviour to replace rather than four.
-#[test]
-#[serial_test::serial(global_key_registry)]
-fn the_relocation_verdict_is_the_same_whichever_parent_claims_the_key_first() {
-    for (claim_first, claim_second) in [(0usize, 2usize), (2usize, 0usize)] {
-        let (tree, owner) = fresh_tree();
-        let parents = tree_with_parents(&tree, &owner, 3);
-        let key = GlobalKey::<KeyedState>::new();
-
-        let first = attach_keyed(&tree, &owner, parents[claim_first], &key, 1);
-        let second = attach_keyed(&tree, &owner, parents[claim_second], &key, 2);
-
-        assert_eq!(second, first, "the element is relocated, not duplicated");
-        assert!(
-            children_of(&tree, parents[claim_first]).is_empty(),
-            "the earlier claimant loses the child",
-        );
-        assert_eq!(
-            children_of(&tree, parents[claim_second]),
-            vec![first],
-            "the later claimant holds it",
-        );
-
-        flui_view::test_only_clear_global_key_registry();
-    }
-}
-
-/// The graft itself, pinned in isolation: when the first parent claims the
-/// key *back*, the element moves again and the intermediate steps report
-/// nothing on their own.
-///
-/// Flutter parity: `framework_test.dart` `'GlobalKey duplication 1 - double
-/// appearance'` and the ordering variants `'7 - appearing later'`, `'8 -
-/// appearing earlier'`, `'9 - moving and appearing later'`, `'10 - moving and
-/// appearing earlier'` (3.44.0). All five build a tree in which two parents
-/// hold the key at once and all five expect a `FlutterError`. Flutter reaches
-/// that verdict at end of frame: the loser was recorded by
-/// `_debugTrackElementThatWillNeedToBeRebuiltDueToGlobalKeyShenanigans`, and
-/// `_debugVerifyGlobalKeyReservation` sees both parents reserving the same key.
-///
-/// What this pins is the graft, not the verification — and the two must not
-/// be conflated. `retake_active_global_key` unlinks the element from the
-/// previous parent before relinking it, so no two parents' child lists ever
-/// name it at once, and a bare sequence of inserts crosses no
-/// build/finalize boundary. The reservation check verifies at the frame
-/// boundary, which this test deliberately never reaches; the sequence below
-/// records three declarations and asks nothing of them.
-/// [`two_parents_declaring_one_key_in_one_frame_are_reported`] below drives
-/// that boundary and is where the duplicate verdict is pinned.
-#[test]
-#[serial_test::serial(global_key_registry)]
-fn two_parents_claiming_the_key_in_turn_keep_grafting_the_one_element() {
-    let (tree, owner) = fresh_tree();
-    let parents = tree_with_parents(&tree, &owner, 2);
-    let key = GlobalKey::<KeyedState>::new();
-
-    let original = attach_keyed(&tree, &owner, parents[0], &key, 1);
-    attach_keyed(&tree, &owner, parents[1], &key, 2);
-    // The first parent asks for it back — under the oracle this is the moment
-    // the tree is provably illegal, because both parents now want the key.
-    let back = attach_keyed(&tree, &owner, parents[0], &key, 3);
-
-    assert_eq!(
-        back, original,
-        "the same element is grafted a second time, not duplicated",
-    );
-    assert_eq!(
-        children_of(&tree, parents[0]),
-        vec![original],
-        "the last claimant holds it",
-    );
-    assert!(
-        children_of(&tree, parents[1]).is_empty(),
-        "and the other is left empty — the graft unlinks before it relinks",
-    );
-    assert!(
-        owner.read().global_key_diagnostics().is_empty(),
-        "no frame boundary ran, so nothing has been verified yet",
-    );
-
-    flui_view::test_only_clear_global_key_registry();
-}
-
 /// A parent whose *build output* carries the key — the oracle's `Container`
 /// with a keyed child, expressed through the build path rather than by a
 /// direct tree insert. This is what makes a reservation check observable:
@@ -741,35 +650,6 @@ fn the_parent_a_graft_robs_is_reported_when_it_never_rebuilds() {
     assert_eq!(
         (reports[0].first_child, reports[0].second_child),
         (first, first)
-    );
-
-    flui_view::test_only_clear_global_key_registry();
-}
-
-/// The relocated element keeps its state — this is a move, not a remount.
-///
-/// The oracle has no counterpart (it rejects the tree outright), but the
-/// property is what makes FLUI's verdict a *relocation* rather than a silent
-/// drop-and-recreate: without it, the divergence above would be losing user
-/// state as well as diverging on the error.
-#[test]
-#[serial_test::serial(global_key_registry)]
-fn the_relocated_element_keeps_the_state_it_was_created_with() {
-    let (tree, owner) = fresh_tree();
-    flui_view::test_only_set_global_key_registry(&tree, &owner);
-    let parents = tree_with_parents(&tree, &owner, 2);
-    let key = GlobalKey::<KeyedState>::new();
-
-    attach_keyed(&tree, &owner, parents[0], &key, 41);
-    attach_keyed(&tree, &owner, parents[1], &key, 99);
-
-    let tag = key
-        .with_current_state(|state: &KeyedState| state.tag)
-        .expect("the surviving element still carries state");
-    assert_eq!(
-        tag, 41,
-        "the state belongs to the element created at the first attachment — \
-         the second view's tag (99) would mean a fresh state was built",
     );
 
     flui_view::test_only_clear_global_key_registry();

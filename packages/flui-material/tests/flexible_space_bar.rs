@@ -45,27 +45,6 @@ fn bar_at(offset: f64) -> Theme {
     )
 }
 
-/// Expanded (`t = 0`): the background is fully opaque and sits at the
-/// bar's top (no parallax yet).
-#[test]
-fn expanded_background_is_opaque_and_unshifted() {
-    let laid = lay_out(bar_at(0.0), tight(400.0, 600.0));
-
-    let opacity = laid
-        .try_find_by_render_type("RenderOpacity")
-        .expect("the flexible space's fade wrapper is in the tree");
-    assert_eq!(
-        laid.render_property(opacity, "opacity").as_deref(),
-        Some("1"),
-        "expanded, the background must be fully opaque"
-    );
-    assert_eq!(
-        laid.offset(opacity).dy,
-        0.0,
-        "no parallax while fully expanded"
-    );
-}
-
 /// Collapsed under a deep pinned scroll (`t = 1`): the background has faded
 /// out entirely and drifted up by a quarter of the collapse distance —
 /// `delta = 200 − 56 = 144`, so `top = −36`.

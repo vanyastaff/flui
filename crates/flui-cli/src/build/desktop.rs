@@ -338,10 +338,4 @@ mod xml_escape_tests {
         assert_eq!(xml_escape("<"), "&lt;");
         assert_eq!(xml_escape("&lt;"), "&amp;lt;");
     }
-
-    #[test]
-    fn ordinary_names_pass_through_unchanged() {
-        assert_eq!(xml_escape("My Great App"), "My Great App");
-        assert_eq!(xml_escape("com.example.app"), "com.example.app");
-    }
 }

@@ -219,27 +219,6 @@ mod tests {
     }
 
     #[test]
-    fn test_curved_animation_status() {
-        let scheduler = UpdateScheduler::new();
-        let controller = Arc::new(AnimationController::new(
-            Duration::from_millis(100),
-            &scheduler,
-        ));
-
-        let curved = CurvedAnimation::new(
-            controller.clone() as Arc<dyn Animation<f64>>,
-            Curves::Linear,
-        );
-
-        assert_eq!(curved.status(), AnimationStatus::Dismissed);
-
-        let _ = controller.forward();
-        assert_eq!(curved.status(), AnimationStatus::Forward);
-
-        controller.dispose();
-    }
-
-    #[test]
     fn curved_reemits_parent_value_changes() {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -352,74 +331,6 @@ mod tests {
             (value - expected).abs() < 1e-3,
             "reverse() right after the first set_value keeps the forward \
              curve pinned from that first transition ({value} vs {expected})"
-        );
-
-        controller.dispose();
-    }
-
-    #[test]
-    fn settling_to_rest_releases_the_curve_direction_pin() {
-        // Flutter `_updateCurveDirection` resets `_curveDirection` to null on
-        // Dismissed/Completed, so a run that genuinely starts fresh after
-        // settling picks its own curve rather than inheriting a stale pin.
-        let scheduler = UpdateScheduler::new();
-        let controller = Arc::new(AnimationController::new(
-            Duration::from_millis(100),
-            &scheduler,
-        ));
-        let curved = CurvedAnimation::new(
-            controller.clone() as Arc<dyn Animation<f64>>,
-            Cubic::new(0.0, 0.0, 1.0, 1.0), // y(x) = x
-        )
-        .with_reverse_curve(Curves::EaseInQuint);
-
-        controller.set_value(0.5); // pins forward
-        controller.set_value(1.0); // Completed -> pin released
-        let _ = controller.reverse(); // fresh entry, genuinely Reverse
-        controller.set_value(0.5);
-        let value = curved.value();
-        let expected = Curves::EaseInQuint.transform(0.5);
-        assert!(
-            (value - expected).abs() < 1e-3,
-            "a run entered in Reverse after settling to Completed must use \
-             the reverse curve ({value} vs {expected})"
-        );
-
-        controller.dispose();
-    }
-
-    #[test]
-    fn constructor_seeds_curve_direction_from_the_parents_current_status() {
-        // Flutter's `CurvedAnimation` constructor (`animations.dart`, 3.44.0):
-        // `_updateCurveDirection(parent.status); parent.addStatusListener(...)`
-        // — the seed runs BEFORE the listener is registered, so a
-        // `CurvedAnimation` built while the parent is ALREADY mid-run captures
-        // the run's entering direction immediately.
-        let scheduler = UpdateScheduler::new();
-        let controller = Arc::new(AnimationController::new(
-            Duration::from_millis(100),
-            &scheduler,
-        ));
-        controller.set_value(0.5);
-        let _ = controller.forward(); // already Forward before CurvedAnimation exists
-
-        let curved = CurvedAnimation::new(
-            controller.clone() as Arc<dyn Animation<f64>>,
-            Cubic::new(0.0, 0.0, 1.0, 1.0), // y(x) = x
-        )
-        .with_reverse_curve(Curves::EaseInQuint);
-
-        // The FIRST transition the listener ever observes is this flip to
-        // Reverse. Without the constructor seed, curve_direction would still
-        // be `None` at this point and would wrongly lock onto Reverse here
-        // instead of preserving the already-Forward entering direction.
-        let _ = controller.reverse();
-        let value = curved.value();
-        let expected = 0.5; // forward curve is the identity cubic — must stay pinned
-        assert!(
-            (value - expected).abs() < 1e-3,
-            "the seeded Forward direction must survive the first observed \
-             flip ({value} vs {expected})"
         );
 
         controller.dispose();

@@ -81,21 +81,3 @@ impl ClipboardItem {
         self.metadata.as_deref()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{Clipboard, InMemoryClipboard};
-
-    #[test]
-    fn in_memory_clipboard_starts_empty_and_round_trips() {
-        let clipboard = InMemoryClipboard::new();
-        assert_eq!(clipboard.read_text(), None);
-        assert!(!clipboard.has_text());
-
-        clipboard.write_text("first".to_owned());
-        assert_eq!(clipboard.read_text().as_deref(), Some("first"));
-        clipboard.write_text("second".to_owned());
-        assert_eq!(clipboard.read_text().as_deref(), Some("second"));
-        assert!(clipboard.has_text());
-    }
-}

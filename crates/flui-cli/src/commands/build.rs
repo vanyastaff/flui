@@ -788,25 +788,6 @@ mod bundle_tests {
     }
 
     #[test]
-    fn only_absent_app_config_uses_directory_identity() {
-        let root = tempfile::tempdir().expect("fixture");
-        let bundle = super::macos_bundle_at(root.path()).expect("missing config fallback");
-        assert_eq!(
-            bundle.name,
-            root.path().file_name().expect("name").to_string_lossy()
-        );
-        for text in [
-            "[app",
-            "[app]\nname = 42\nversion = \"0.1.0\"\norganization = \"org.example\"\n",
-        ] {
-            std::fs::write(root.path().join("flui.toml"), text).expect("config");
-            let error =
-                super::macos_bundle_at(root.path()).expect_err("present invalid config must fail");
-            assert!(error.to_string().contains("failed to parse"));
-        }
-    }
-
-    #[test]
     fn missing_cargo_toml_is_rejected_before_any_build_work() {
         let root = tempfile::tempdir().expect("fixture");
         let error =

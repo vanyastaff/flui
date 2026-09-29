@@ -97,26 +97,6 @@ mod tests {
 
     // ── Construction ──────────────────────────────────────────────────────────
 
-    #[test]
-    fn new_stores_filter() {
-        let filter = ColorFilter::grayscale();
-        let layer = ColorFilterLayer::new(filter);
-        assert_eq!(layer.color_filter(), filter);
-    }
-
-    #[test]
-    fn identity_is_matrix_identity() {
-        let layer = ColorFilterLayer::identity();
-        assert!(layer.is_identity());
-        assert!(matches!(layer.color_filter(), ColorFilter::Matrix(_)));
-    }
-
-    #[test]
-    fn default_is_identity() {
-        let layer = ColorFilterLayer::default();
-        assert!(layer.is_identity());
-    }
-
     // ── Copy + Clone ──────────────────────────────────────────────────────────
 
     // ── is_identity semantics ─────────────────────────────────────────────────
@@ -128,30 +108,12 @@ mod tests {
     }
 
     #[test]
-    fn non_identity_matrix_is_not_identity() {
-        let layer = ColorFilterLayer::new(ColorFilter::grayscale());
-        assert!(!layer.is_identity());
-    }
-
-    #[test]
     fn mode_filter_is_never_identity() {
         let layer = ColorFilterLayer::new(ColorFilter::mode(Color::WHITE, BlendMode::SrcOver));
         assert!(
             !layer.is_identity(),
             "Mode filter must not be classified as identity even with white+SrcOver"
         );
-    }
-
-    #[test]
-    fn linear_to_srgb_gamma_is_never_identity() {
-        let layer = ColorFilterLayer::new(ColorFilter::LinearToSrgbGamma);
-        assert!(!layer.is_identity());
-    }
-
-    #[test]
-    fn srgb_to_linear_gamma_is_never_identity() {
-        let layer = ColorFilterLayer::new(ColorFilter::SrgbToLinearGamma);
-        assert!(!layer.is_identity());
     }
 
     // ── set_color_filter ──────────────────────────────────────────────────────

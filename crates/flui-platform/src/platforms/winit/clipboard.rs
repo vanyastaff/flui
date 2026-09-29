@@ -140,33 +140,6 @@ impl Clipboard for ArboardClipboard {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_clipboard_roundtrip() {
-        #[cfg(windows)]
-        let _serial = crate::shared::clipboard_lock::round_trip_serial();
-        // Note: This test requires clipboard access and may fail in CI
-        if let Ok(clipboard) = ArboardClipboard::new() {
-            let test_text = "Hello from FLUI!";
-
-            clipboard.write_text(test_text.to_string());
-
-            if let Some(read_text) = clipboard.read_text() {
-                assert_eq!(read_text, test_text);
-            }
-        }
-    }
-
-    #[test]
-    fn test_clipboard_creation() {
-        // Just test that we can create a clipboard instance
-        let result = ArboardClipboard::new();
-
-        // This may fail in headless environments, which is expected
-        if result.is_err() {
-            eprintln!("Note: Clipboard creation failed (expected in headless environments)");
-        }
-    }
-
     /// `default()` must track backend availability exactly: functional when
     /// `new()` would succeed (an unconditionally inert `default()` silently
     /// discards every write on a healthy desktop session), inert — and

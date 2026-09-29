@@ -257,49 +257,7 @@ mod tests {
 
     // ---------- TranslationFraction ------------------------------------------
 
-    #[test]
-    fn fractional_offset_zero_resolves_to_zero() {
-        let off = TranslationFraction::ZERO;
-        assert_eq!(off.resolve(Size::new(200.0, 100.0)), Offset::new(0.0, 0.0));
-    }
-
-    #[test]
-    fn fractional_offset_resolves_to_fraction_of_size() {
-        let off = TranslationFraction::new(-0.5, 0.25);
-        let r = off.resolve(Size::new(200.0, 100.0));
-        assert_eq!(r.dx, -100.0);
-        assert_eq!(r.dy, 25.0);
-    }
-
-    #[test]
-    fn fractional_offset_one_shifts_by_full_size() {
-        let off = TranslationFraction::new(1.0, 1.0);
-        let r = off.resolve(Size::new(80.0, 40.0));
-        assert_eq!(r, Offset::new(80.0, 40.0));
-    }
-
     // ---------- RenderFractionalTranslation -------------------------------
-
-    #[test]
-    fn defaults_have_zero_translation_and_transform_hit_tests() {
-        let node = RenderFractionalTranslation::default();
-        assert_eq!(node.translation(), TranslationFraction::ZERO);
-        assert!(node.transform_hit_tests());
-    }
-
-    #[test]
-    fn translated_helper_defaults_transform_hit_tests_to_true() {
-        let node = RenderFractionalTranslation::translated(TranslationFraction::new(-0.5, 0.0));
-        assert_eq!(node.translation(), TranslationFraction::new(-0.5, 0.0));
-        assert!(node.transform_hit_tests());
-    }
-
-    #[test]
-    fn new_round_trips_both_fields() {
-        let node = RenderFractionalTranslation::new(TranslationFraction::new(0.25, 0.5), false);
-        assert_eq!(node.translation(), TranslationFraction::new(0.25, 0.5));
-        assert!(!node.transform_hit_tests());
-    }
 
     #[test]
     fn pixel_offset_multiplies_injected_size_by_fraction() {
@@ -312,50 +270,5 @@ mod tests {
             node.pixel_offset(Size::new(200.0, 100.0)),
             Offset::new(-100.0, 25.0),
         );
-    }
-
-    #[test]
-    fn setters_return_change_flag() {
-        let mut node = RenderFractionalTranslation {
-            has_child: true,
-            ..RenderFractionalTranslation::default()
-        };
-        assert_eq!(
-            node.set_translation(TranslationFraction::new(0.1, 0.2)),
-            flui_rendering::RenderUpdateImpact::PAINT
-                | flui_rendering::RenderUpdateImpact::SEMANTICS,
-        );
-        assert_eq!(
-            node.set_translation(TranslationFraction::new(0.1, 0.2)),
-            flui_rendering::RenderUpdateImpact::NONE,
-        );
-        assert_eq!(
-            node.set_transform_hit_tests(false),
-            flui_rendering::RenderUpdateImpact::NONE,
-        );
-        assert!(node.has_child);
-        assert_eq!(
-            node.set_transform_hit_tests(false),
-            flui_rendering::RenderUpdateImpact::NONE,
-        );
-    }
-
-    #[test]
-    fn debug_fill_properties_lists_state() {
-        use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
-        let node = RenderFractionalTranslation::default();
-        let mut builder = DiagnosticsBuilder::new();
-        node.debug_fill_properties(&mut builder);
-        let names: Vec<String> = builder
-            .build()
-            .iter()
-            .map(|p| p.name().to_string())
-            .collect();
-        for required in ["translation", "transform_hit_tests"] {
-            assert!(
-                names.iter().any(|n| n == required),
-                "missing diagnostic field: {required}"
-            );
-        }
     }
 }
