@@ -46,6 +46,16 @@ use crate::{
 /// straight to a PNG without a channel swizzle.
 const CAPTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
+#[cfg(test)]
+thread_local! {
+    /// `wgpu::Instance`s this thread's captures created. `wgpu::Adapter`'s
+    /// equality cannot tell whether two renderers share an instance (an adapter
+    /// from a fresh instance compares equal), so the twin test counts instead.
+    /// Per thread, so tests running in parallel threads under `cargo test`
+    /// cannot move each other's count.
+    static INSTANCES_CREATED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// A windowless renderer that turns a [`LayerTree`] into raw RGBA8 pixels.
 ///
 /// Construct once (device creation is the expensive step), then call
@@ -106,6 +116,8 @@ impl HeadlessRenderer {
     /// Acquires the capture device, requesting whichever of `wanted_features`
     /// the adapter actually offers.
     async fn acquire(wanted_features: wgpu::Features) -> EngineResult<Self> {
+        #[cfg(test)]
+        INSTANCES_CREATED.with(|created| created.set(created.get() + 1));
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = instance
             .request_adapter(&crate::adapter::trusted_adapter_options(
@@ -325,16 +337,12 @@ impl HeadlessRenderer {
                 depth_or_array_layers: 1,
             },
         );
-        self.queue.submit(std::iter::once(encoder.finish()));
+        let copied = self.queue.submit(std::iter::once(encoder.finish()));
 
         staging.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-        readback_wait_outcome(
-            self.device.poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: Some(READBACK_TIMEOUT),
-            }),
-            READBACK_TIMEOUT,
-        )?;
+        // Wait for THIS copy, not the whole queue: the renderer is `&self`, so
+        // another thread's slow capture must not run this one out of time.
+        readback_wait_outcome(self.device.poll(readback_wait(copied)), READBACK_TIMEOUT)?;
 
         let mapped = staging.slice(..).get_mapped_range().expect(
             "BUG: readback staging buffer must be mapped — the poll above waited for the \
@@ -365,9 +373,21 @@ impl HeadlessRenderer {
 /// process that never returns.
 const READBACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// The readback's poll: wait for `submission` (the copy the capture just
+/// submitted), at most [`READBACK_TIMEOUT`].
+///
+/// Generic over the index (`wgpu::PollType` is this enum at
+/// `wgpu::SubmissionIndex`) so a test can inspect the wait without a device.
+const fn readback_wait<T>(submission: T) -> wgpu::wgt::PollType<T> {
+    wgpu::wgt::PollType::Wait {
+        submission_index: Some(submission),
+        timeout: Some(READBACK_TIMEOUT),
+    }
+}
+
 /// The readback wait's outcome as the capture's result: a wait that ran out
 /// is [`EngineError::ReadbackTimedOut`]; a wrong submission index cannot
-/// happen, because the wait names none.
+/// happen, because the index is the one the copy's own submit returned.
 fn readback_wait_outcome(
     polled: Result<wgpu::PollStatus, wgpu::PollError>,
     waited: std::time::Duration,
@@ -376,8 +396,8 @@ fn readback_wait_outcome(
         Ok(_) => Ok(()),
         Err(wgpu::PollError::Timeout) => Err(EngineError::ReadbackTimedOut { waited }),
         Err(wgpu::PollError::WrongSubmissionIndex(requested, completed)) => unreachable!(
-            "BUG: the readback waits on no submission index, yet wgpu reported index \
-             {requested} (last completed {completed})"
+            "BUG: the readback waits on the index its own submit returned, yet wgpu \
+             reported index {requested} (last completed {completed}) as never submitted"
         ),
     }
 }
@@ -459,6 +479,31 @@ mod target_size_tests {
 
         assert!(super::readback_wait_outcome(Ok(wgpu::PollStatus::QueueEmpty), waited).is_ok());
     }
+
+    /// The poll the readback issues is bounded and names the copy's own
+    /// submission.
+    ///
+    /// Red-check: `timeout: None` in `readback_wait` (the original unbounded
+    /// wait) or `submission_index: None` (a wait on the whole queue) fails here.
+    #[test]
+    fn the_readback_poll_is_bounded_and_waits_on_its_own_copy() {
+        match super::readback_wait(7_u64) {
+            wgpu::wgt::PollType::Wait {
+                submission_index,
+                timeout,
+            } => {
+                assert_eq!(submission_index, Some(7), "wait on the copy's submission");
+                assert_eq!(
+                    timeout,
+                    Some(super::READBACK_TIMEOUT),
+                    "never wait unbounded"
+                );
+            }
+            wgpu::wgt::PollType::Poll => {
+                panic!("the readback must block until its copy lands, not poll once")
+            }
+        }
+    }
 }
 
 /// Serialized with the other GPU readbacks: its module name matches the
@@ -476,16 +521,31 @@ mod twin_readback_tests {
     /// the test after ten minutes. Twelve cycles make a regression near-certain
     /// to show there.
     ///
+    /// The instance count is the deterministic half: the hang only shows on
+    /// some hosts and some runs, but a twin built from a fresh instance makes
+    /// the pair cost two instances every time. (`wgpu::Adapter` equality cannot
+    /// say this: an adapter from a fresh instance compares equal.)
+    ///
     /// Red-check: build the twin with `HeadlessRenderer::acquire` (a fresh
     /// instance) instead of from the first renderer's adapter.
     #[test]
     fn twin_renderers_tear_down_without_blocking() {
+        let instances = || super::INSTANCES_CREATED.with(std::cell::Cell::get);
         for _ in 0..12 {
+            let before = instances();
             let Some(renderer) = crate::test_support::renderer_or_skip() else {
                 return;
             };
             let twin = pollster::block_on(renderer.without_dual_source_blending())
                 .expect("an adapter that answered once must answer again with fewer features");
+            let created = instances() - before;
+            if created != 1 {
+                // Leaked, not dropped: dropping two instances' devices is the
+                // teardown that blocks, and the failure should report at once.
+                std::mem::forget(twin);
+                std::mem::forget(renderer);
+                panic!("a renderer and its twin must share one wgpu::Instance; created {created}");
+            }
             let tree = LayerTree::default();
             for capture in [&renderer, &twin] {
                 let pixels = capture
