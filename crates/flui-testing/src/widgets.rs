@@ -997,7 +997,8 @@ impl LaidOut {
     /// # Panics
     ///
     /// Panics if `id` is stale, foreign, or a sliver node (box intrinsics are
-    /// undefined there) — see [`PipelineOwner::box_intrinsic_dimension`].
+    /// undefined there) — see
+    /// [`PipelineOwner::box_intrinsic_dimension`](flui_rendering::pipeline::PipelineOwner::box_intrinsic_dimension).
     pub fn intrinsic_dimension(
         &self,
         id: RenderId,
