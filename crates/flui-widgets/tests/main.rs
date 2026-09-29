@@ -45,6 +45,8 @@ mod decorated_box;
 mod directionality;
 #[path = "directionality_dependency.rs"]
 mod directionality_dependency;
+#[path = "draggable_events.rs"]
+mod draggable_events;
 #[path = "editable_text.rs"]
 mod editable_text;
 #[path = "editable_text_clipboard.rs"]
@@ -138,6 +140,8 @@ mod overflow_box;
 mod overlay;
 #[path = "page_route.rs"]
 mod page_route;
+#[path = "page_view_events.rs"]
+mod page_view_events;
 #[path = "parent_data_ancestry.rs"]
 mod parent_data_ancestry;
 #[path = "post_frame_handle.rs"]
