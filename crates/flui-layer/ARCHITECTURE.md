@@ -136,7 +136,7 @@ pass keeps while the boundary is clean and mints otherwise (`flui-rendering`'s
 frozen tree once with an explicit stack, recording per stamp its token, its placement (the
 accumulated transform and the effect layers above it, compared with `Layer::same_effect`) and its
 own region in surface pixels (its subtree minus nested boundaries' subtrees, from each picture's
-`DisplayList::damage_extent`, mapped with its isotropic shadow spread scaled by the transform's
+`DisplayList::damage_extent` and each shader mask's whole bounds, mapped with its isotropic shadow spread scaled by the transform's
 largest stretch, and clipped; content under an image filter or a perspective transform takes the
 clip). A changed token or placement damages the old and new regions, as does a kept boundary whose
 paint order changed relative to the other kept ones (those outside a longest increasing run of

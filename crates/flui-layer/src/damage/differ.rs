@@ -296,6 +296,11 @@ impl Frame {
                     ctx.volatile = true;
                     Some(DamageExtent::rect(overlay.bounds()))
                 }
+                // The masked result composites over the mask's whole bounds
+                // with the mask's blend mode: under a destination-replacing
+                // mode (Src, Clear, DstIn...) the pixels it changes reach the
+                // whole rect, not just the children's ink.
+                Layer::ShaderMask(mask) => Some(DamageExtent::rect(mask.bounds())),
                 Layer::BackdropFilter(backdrop) => {
                     let bounds = DamageExtent::rect(backdrop.bounds());
                     if let Some(rect) = place(bounds, &ctx, full) {

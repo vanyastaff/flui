@@ -418,6 +418,37 @@ fn a_paint_order_swap_of_overlapping_siblings_damages_their_overlap() {
     );
 }
 
+/// A shader mask composites over its whole bounds with its blend mode, so
+/// under `Src` it replaces every pixel there, not only its children's ink: a
+/// boundary holding one damages the mask's bounds.
+#[test]
+fn a_shader_mask_damages_its_whole_bounds() {
+    let root = ContentToken::mint();
+    let build = |token: &ContentToken| {
+        let mut frame = Frame::new(1.0, &root);
+        let parent = frame.root();
+        let node = LayerNode::new(Layer::from(OffsetLayer::new(Offset::new(100.0, 100.0))))
+            .with_boundary(id(2), token.clone());
+        let boundary = frame.tree.push_child(parent, node);
+        let mask = frame.push(
+            boundary,
+            crate::ShaderMaskLayer::new(
+                flui_painting::paint::Shader::solid(Color::WHITE),
+                BlendMode::Src,
+                Rect::from_xywh(0.0, 0.0, 80.0, 60.0),
+            ),
+        );
+        frame.push(mask, picture(Rect::from_xywh(0.0, 0.0, 10.0, 10.0)));
+        frame.scene()
+    };
+    let mut differ = LayerDiffer::default();
+    differ.diff(&build(&ContentToken::mint()), SURFACE);
+    assert_eq!(
+        partial(differ.diff(&build(&ContentToken::mint()), SURFACE)),
+        covering(100.0, 100.0, 180.0, 160.0)
+    );
+}
+
 /// A picture that draws an external texture (`Canvas::draw_texture`) keeps
 /// its boundary's token while the texture's producer replaces the content
 /// behind the same id: the texture's rect is damaged on every frame, the

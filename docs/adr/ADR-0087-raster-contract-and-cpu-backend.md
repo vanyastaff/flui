@@ -215,6 +215,7 @@ platform-contract and frame-transaction changes (ADR-0082, ADR-0083); ordering i
   `size_change_is_full`, `textures_and_overlays_are_damaged_every_frame`,
   `a_pictures_texture_draw_is_damaged_every_frame`,
   `a_paint_order_swap_of_overlapping_siblings_damages_their_overlap`,
+  `a_shader_mask_damages_its_whole_bounds`,
   `a_shadow_under_a_non_uniform_scale_damages_its_blur_on_both_axes`,
   `a_leader_move_damages_its_follower`, `damage_meeting_a_backdrop_includes_the_backdrop`,
   `damage_disjoint_from_a_backdrop_does_not_expand`, `damage_over_threshold_is_full`,
@@ -238,6 +239,8 @@ platform-contract and frame-transaction changes (ADR-0082, ADR-0083); ordering i
   `overlapping_boundaries_that_swap_order_repaint_the_overlap`,
   `a_removed_atlas_sprite_leaves_nothing_at_its_destination`,
   `removed_fill_style_lines_and_points_leave_nothing`,
+  `a_removed_translated_src_save_layer_leaves_nothing_behind`,
+  `a_removed_clear_shader_mask_leaves_nothing_behind`,
   `a_damage_edge_through_an_advanced_blend_matches_a_full_frame`,
   `a_frame_outside_the_protocol_is_followed_by_a_full_one`), which drive the same
   `FrameProtocol` the windowed renderer runs; `damage::tests::plan_frame_table`; and the

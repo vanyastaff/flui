@@ -1118,3 +1118,148 @@ fn removed_fill_style_lines_and_points_leave_nothing() {
     let stale = mismatches(&partial, &full, 0);
     assert!(stale.is_empty(), "stale pixels at {stale:?}");
 }
+
+/// A full-surface green picture, standing for whatever a frame paints under
+/// the content a test adds and removes.
+fn green_background(canvas: &mut Canvas) {
+    canvas.draw_rect(
+        Rect::from_xywh(0.0, 0.0, f64::from(SIDE), f64::from(SIDE)),
+        &Paint::fill(GREEN_COLOR),
+    );
+}
+
+const GREEN_COLOR: Color = Color::rgba(0, 255, 0, 255);
+
+/// A `Src` save layer recorded under a translation leaves nothing behind
+/// when removed: its content lands at the translated position, the backdrop
+/// elsewhere (inside its bounds, mapped or not) is untouched, and the
+/// damage, which covers the mapped bounds, covers every pixel it changed.
+#[test]
+fn a_removed_translated_src_save_layer_leaves_nothing_behind() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let (root, background, card) = (
+        ContentToken::mint(),
+        ContentToken::mint(),
+        ContentToken::mint(),
+    );
+    let layered = |canvas: &mut Canvas| {
+        canvas.translate(4.0, 0.0);
+        canvas.save_layer(
+            Some(Rect::from_xywh(0.0, 0.0, 32.0, 32.0)),
+            &Paint::fill(Color::WHITE).with_blend_mode(BlendMode::Src),
+        );
+        canvas.draw_rect(
+            Rect::from_xywh(0.0, 0.0, 16.0, 16.0),
+            &Paint::fill(Color::RED),
+        );
+        canvas.restore();
+    };
+    let backdrop = Boundary {
+        id: 3,
+        token: &background,
+        at: Offset::ZERO,
+        paint: &green_background,
+    };
+    let before = scene(
+        &root,
+        &[
+            backdrop,
+            Boundary {
+                id: 2,
+                token: &card,
+                at: Offset::new(40.0, 40.0),
+                paint: &layered,
+            },
+        ],
+        None,
+    );
+    let after = scene(&root, &[backdrop], None);
+
+    let drawn = full_frame_pixels(&renderer, &before);
+    assert_eq!(
+        px(&drawn, 50, 46),
+        RED,
+        "the layer's content lands at its translated position"
+    );
+    for (x, y) in [(10, 10), (70, 66), (100, 100)] {
+        assert_eq!(
+            px(&drawn, x, y),
+            GREEN,
+            "the backdrop outside the layer's content is untouched at ({x}, {y})"
+        );
+    }
+
+    let (partial, full) = partial_and_full(&renderer, &before, &after);
+    let stale = mismatches(&partial, &full, 0);
+    assert!(stale.is_empty(), "stale pixels at {stale:?}");
+}
+
+/// A removed shader mask under a destination-replacing `Clear` blend leaves
+/// nothing behind: the boundary's damage covers the mask's whole bounds,
+/// which contain every pixel its composite can replace.
+#[test]
+fn a_removed_clear_shader_mask_leaves_nothing_behind() {
+    use flui_layer::ShaderMaskLayer;
+    use flui_painting::paint::Shader;
+
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let (root, background, card) = (
+        ContentToken::mint(),
+        ContentToken::mint(),
+        ContentToken::mint(),
+    );
+    let build = |masked: bool| {
+        let mut tree = LayerTree::new(
+            LayerNode::new(Layer::from(TransformLayer::new(Matrix4::IDENTITY)))
+                .with_boundary(id(1), root.clone()),
+        );
+        let root_id = tree.root();
+        let backdrop = tree.push_child(
+            root_id,
+            LayerNode::new(Layer::from(OffsetLayer::new(Offset::ZERO)))
+                .with_boundary(id(3), background.clone()),
+        );
+        let mut canvas = Canvas::new();
+        green_background(&mut canvas);
+        tree.push_child(backdrop, Layer::from(PictureLayer::new(canvas.finish())));
+        if masked {
+            let boundary = tree.push_child(
+                root_id,
+                LayerNode::new(Layer::from(OffsetLayer::new(Offset::new(20.0, 20.0))))
+                    .with_boundary(id(2), card.clone()),
+            );
+            let mask = tree.push_child(
+                boundary,
+                Layer::from(ShaderMaskLayer::new(
+                    Shader::solid(Color::WHITE),
+                    BlendMode::Clear,
+                    Rect::from_xywh(0.0, 0.0, 60.0, 60.0),
+                )),
+            );
+            let mut canvas = Canvas::new();
+            canvas.draw_rect(
+                Rect::from_xywh(0.0, 0.0, 16.0, 16.0),
+                &Paint::fill(Color::RED),
+            );
+            tree.push_child(mask, Layer::from(PictureLayer::new(canvas.finish())));
+        }
+        Scene::new(tree)
+    };
+    let before = build(true);
+    let after = build(false);
+
+    let drawn = full_frame_pixels(&renderer, &before);
+    assert_eq!(
+        px(&drawn, 24, 24),
+        [0, 0, 0, 0],
+        "precondition: the Clear mask replaced the backdrop under its child"
+    );
+
+    let (partial, full) = partial_and_full(&renderer, &before, &after);
+    let stale = mismatches(&partial, &full, 0);
+    assert!(stale.is_empty(), "stale pixels at {stale:?}");
+}
