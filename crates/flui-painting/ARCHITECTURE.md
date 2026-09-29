@@ -597,12 +597,9 @@ face the two agree: `tests/parley_metrics_oracle.rs` pins equal width and
 height and the same device baseline for the bundled Roboto at 13–32 px,
 default and 1.5 line height, scales 1–2 (its cosmic side registers Roboto,
 because the cosmic-text path loads the bundled Roboto only on a host with no
-fonts). Two painting tests are ignored under `parley-layout`, each naming this
-decision in its `ignore` reason:
-`painted_span_contributes_its_laid_out_box_to_display_list_bounds` (paint
-bounds from cosmic-text, size from Parley) and
-`register_font_invalidates_a_laid_out_painter` (registration on the process
-font system).
+fonts). `register_font_invalidates_a_laid_out_painter` is ignored under
+`parley-layout`, naming this decision in its `ignore` reason: registration
+reaches the process font system, not the collection Parley measures on.
 
 ---
 

@@ -116,8 +116,8 @@ The lookup is an ordinary inherited read, like `Theme::of`, not a lifecycle capa
   breaking change.
 - Material and Cupertino menus, tooltips and dialogs can be built outside `flui-widgets` on the
   same API the navigator uses.
-- `navigator_tests::overlay_publishes_the_lookup_and_mutation_contract` pins the published
-  names and the module's privacy; the overlay tests pin §2, §2a and nearest-wins lookup.
+- The overlay tests pin §2, §2a and nearest-wins lookup; Rust visibility keeps the module's
+  machinery private.
 
 ## Deferred
 

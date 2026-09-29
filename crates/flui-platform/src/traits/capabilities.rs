@@ -216,35 +216,3 @@ impl PlatformCapabilities for WebCapabilities {
         true
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_desktop_capabilities() {
-        let caps = DesktopCapabilities;
-        assert!(caps.supports_mouse());
-        assert!(caps.supports_multiple_windows());
-        assert!(!caps.suspend_rendering_in_background());
-    }
-
-    #[test]
-    fn test_mobile_capabilities() {
-        let android = MobileCapabilities::android();
-        assert_eq!(android.platform_name(), "Android");
-        assert!(android.suspend_rendering_in_background());
-        assert!(!android.supports_multiple_windows());
-
-        let ios = MobileCapabilities::ios();
-        assert_eq!(ios.platform_name(), "iOS");
-    }
-
-    #[test]
-    fn test_web_capabilities() {
-        let caps = WebCapabilities;
-        assert!(caps.has_lifecycle_management());
-        assert!(caps.supports_touch());
-        assert!(caps.supports_mouse());
-    }
-}

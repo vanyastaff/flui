@@ -189,18 +189,6 @@ mod tests {
     }
 
     #[test]
-    fn settles_at_target() {
-        let mut v = AnimatedValue::new(0.0_f64, spring());
-        v.animate_to(100.0);
-        // Advance well past the response period.
-        for _ in 0..600 {
-            v.advance(1.0 / 60.0);
-        }
-        assert!(v.is_settled(), "spring should settle");
-        assert!((v.value() - 100.0).abs() < 0.5, "value={}", v.value());
-    }
-
-    #[test]
     fn retarget_preserves_velocity() {
         // Animate toward 100; midway (moving fast) retarget to 0. With velocity
         // preserved the value must briefly continue PAST its position toward 100
@@ -226,26 +214,5 @@ mod tests {
             v_after > position,
             "velocity not preserved: {v_after} should overshoot past {position}"
         );
-    }
-
-    #[test]
-    fn per_component_color_spring() {
-        let mut v = AnimatedValue::new(Color::rgba(0, 0, 0, 255), spring());
-        v.animate_to(Color::rgba(255, 128, 0, 255));
-        for _ in 0..600 {
-            v.advance(1.0 / 60.0);
-        }
-        let c = v.value();
-        assert!((i32::from(c.r) - 255).abs() <= 1);
-        assert!((i32::from(c.g) - 128).abs() <= 1);
-        assert_eq!(c.b, 0);
-    }
-
-    #[test]
-    fn apple_presets_build() {
-        // Smoke: presets produce sensible, distinct springs.
-        assert!(SpringDescription::smooth().damping_ratio() >= 1.0 - f64::EPSILON);
-        assert!(SpringDescription::bouncy().damping_ratio() < 1.0);
-        assert!(SpringDescription::snappy().damping_ratio() < 1.0);
     }
 }

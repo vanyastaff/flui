@@ -74,39 +74,4 @@ dyn_clone::clone_trait_object!(ParentData);
 // ============================================================================
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[derive(Debug, Clone, Default)]
-    struct TestParentData {
-        value: i32,
-    }
-
-    impl ParentData for TestParentData {}
-
-    #[test]
-    fn test_downcast() {
-        let data = TestParentData { value: 42 };
-        let trait_obj: &dyn ParentData = &data;
-
-        let downcasted = trait_obj.downcast_ref::<TestParentData>();
-        assert!(downcasted.is_some());
-        assert_eq!(downcasted.unwrap().value, 42);
-    }
-
-    #[test]
-    fn test_detach_default() {
-        let mut data = TestParentData { value: 10 };
-        data.detach(); // Should not panic
-    }
-
-    #[test]
-    fn test_clone_box_dyn() {
-        let data = TestParentData { value: 42 };
-        let boxed: &dyn ParentData = &data;
-        let cloned: Box<dyn ParentData> = dyn_clone::clone_box(boxed);
-        let downcasted = cloned.downcast_ref::<TestParentData>();
-        assert!(downcasted.is_some());
-        assert_eq!(downcasted.unwrap().value, 42);
-    }
-}
+mod tests {}

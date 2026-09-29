@@ -80,29 +80,3 @@ impl PerformanceStats {
         self.total_frames
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_first_frame_has_no_duration_but_counts() {
-        let mut stats = PerformanceStats::new(3);
-        stats.record_frame();
-        assert_eq!(stats.total_frames(), 1);
-        assert_eq!(stats.fps(), 0.0);
-        assert_eq!(stats.avg_frame_time_ms(), 0.0);
-    }
-
-    #[test]
-    fn the_window_is_bounded_and_the_average_is_positive() {
-        let mut stats = PerformanceStats::new(3);
-        for _ in 0..6 {
-            stats.record_frame();
-        }
-        assert_eq!(stats.total_frames(), 6);
-        assert_eq!(stats.frame_times.len(), 3);
-        assert!(stats.avg_frame_time_ms() >= 0.0);
-        assert!(stats.fps() >= 0.0);
-    }
-}

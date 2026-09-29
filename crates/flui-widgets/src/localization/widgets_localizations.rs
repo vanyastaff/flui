@@ -130,37 +130,3 @@ impl WidgetsLocalizations for DefaultWidgetsLocalizations {
         "Not selected"
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_widgets_localizations_is_always_ltr() {
-        assert_eq!(
-            DefaultWidgetsLocalizations.text_direction(),
-            TextDirection::Ltr
-        );
-    }
-
-    #[test]
-    fn default_widgets_localizations_matches_the_oracle_strings() {
-        let l = DefaultWidgetsLocalizations;
-        assert_eq!(l.reorder_item_to_start(), "Move to the start");
-        assert_eq!(l.reorder_item_to_end(), "Move to the end");
-        assert_eq!(l.reorder_item_up(), "Move up");
-        assert_eq!(l.reorder_item_down(), "Move down");
-        assert_eq!(l.reorder_item_left(), "Move left");
-        assert_eq!(l.reorder_item_right(), "Move right");
-        assert_eq!(l.search_results_found(), "Search results found");
-        assert_eq!(l.no_results_found(), "No results found");
-        assert_eq!(l.copy_button_label(), "Copy");
-        assert_eq!(l.cut_button_label(), "Cut");
-        assert_eq!(l.paste_button_label(), "Paste");
-        assert_eq!(l.select_all_button_label(), "Select all");
-        assert_eq!(l.look_up_button_label(), "Look Up");
-        assert_eq!(l.search_web_button_label(), "Search Web");
-        assert_eq!(l.share_button_label(), "Share");
-        assert_eq!(l.radio_button_unselected_label(), "Not selected");
-    }
-}

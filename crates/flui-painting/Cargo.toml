@@ -53,10 +53,8 @@ swash = { workspace = true, optional = true }
 parley = { workspace = true, optional = true }
 
 [dev-dependencies]
-serde_json = { workspace = true }
 # Colour property tests and the compile-fail suite.
 proptest = "1.5"
-rstest = { workspace = true }
 trybuild = { workspace = true }
 criterion = { workspace = true }
 # Self dev-dependency that turns the off-by-default `testing` feature on for

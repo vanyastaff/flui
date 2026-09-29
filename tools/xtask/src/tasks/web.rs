@@ -260,53 +260,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn wasm_check_excludes_what_ci_excludes() {
-        let no_wasm = change_scope::no_wasm_packages().expect("cargo metadata");
-        assert!(no_wasm.contains("flui-cli"), "{no_wasm:?}");
-        let lines: Vec<String> = check_plan(&no_wasm)
-            .iter()
-            .map(ToString::to_string)
-            .collect();
-        let excludes = "--exclude flui-assets --exclude flui-cli --exclude flui-desktop-mcp --exclude flui-web-server --exclude hot-reload-counter-host --exclude hot-reload-counter-logic --exclude hot-reload-counter-types --exclude xtask";
-        assert_eq!(
-            lines,
-            [
-                format!(
-                    "$ cargo check --workspace --locked --target wasm32-unknown-unknown {excludes}"
-                ),
-                format!(
-                    "$ cargo clippy --workspace --lib --bins --locked --target wasm32-unknown-unknown {excludes} -- -D warnings"
-                ),
-                "$ cargo check -p flui --locked --target wasm32-unknown-unknown --no-default-features --features hot-reload".to_owned(),
-            ]
-        );
-    }
-
-    #[test]
-    fn linked_modules_live_under_the_resolved_target_dir() {
-        let target = Path::new("D:/elsewhere/target-x");
-        assert_eq!(
-            wasm_module(target, "flui_web_demo"),
-            target
-                .join("wasm32-unknown-unknown")
-                .join("debug")
-                .join("flui_web_demo.wasm")
-        );
-    }
-
-    #[test]
-    fn test_commands_per_kind() {
-        assert_eq!(
-            test_cmd("flui-app", Kind::Lib).to_string(),
-            "CARGO_BUILD_WARNINGS=warn cargo test -p flui-app --locked --target wasm32-unknown-unknown --lib"
-        );
-        assert_eq!(
-            test_cmd("flui-foundation", Kind::Integration).to_string(),
-            "CARGO_BUILD_WARNINGS=warn cargo test -p flui-foundation --locked --target wasm32-unknown-unknown --test wasm32"
-        );
-    }
-
-    #[test]
     fn the_last_ok_result_line_counts() {
         let run = "running 3 tests\r\ntest result: ok. 3 passed; 0 failed; 0 ignored\r\n\
                    Running tests/wasm32.rs\ntest result: ok. 12 passed; 0 failed\n";

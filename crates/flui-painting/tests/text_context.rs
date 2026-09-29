@@ -11,9 +11,12 @@ use std::thread;
 use std::time::Instant;
 
 use flui_painting::parley_text::{ParagraphLayout, ParagraphSpec};
-use flui_painting::text_layout::font_system_initialized;
+use flui_painting::testing::font_collection_holders;
 use flui_painting::typography::{FontWeight, TextDirection, TextStyle};
 use flui_painting::{FontCollection, TextContext, TextLayoutResult};
+
+#[path = "support/cases.rs"]
+mod cases;
 
 const PROBE_MONO: &[u8] = include_bytes!("../assets/fonts/probe-mono-100.ttf");
 /// Every word is narrower than the widths the tests break at, so no line
@@ -61,7 +64,6 @@ const _: () = assert_send::<TextContext>();
 /// shows they really ran at once; that neither waited on the other rests on
 /// the structure (no lock in the API, the crate's `disallowed_types` lint),
 /// not on a timing measurement.
-#[test]
 fn two_realms_shape_in_parallel() {
     const SHAPES: usize = 200;
     let fonts = FontCollection::new();
@@ -104,27 +106,10 @@ fn two_realms_shape_in_parallel() {
     );
 }
 
-/// Building contexts, shaping and registering a face never build the
-/// cosmic-text path's process font system.
-#[test]
-fn the_parley_path_never_builds_the_process_font_system() {
-    let fonts = FontCollection::new();
-    let mut a = TextContext::new(&fonts);
-    let mut b = TextContext::new(&fonts);
-    shape(&mut a, LATIN, Some(120.0));
-    fonts
-        .register_font(PROBE_MONO)
-        .expect("the probe face loads");
-    shape(&mut b, LATIN, None);
-    shape(&mut a, "", None);
-    assert!(!font_system_initialized());
-}
-
 /// A face registered on the collection after two contexts were built shapes
 /// in both. The probe face maps only the space and `A`, each one em wide, so
 /// four `A`s in it are exactly four em; Roboto, the fallback a context that
 /// never saw the face shapes with, draws a narrower `A`.
-#[test]
 fn a_face_registered_after_the_fork_shapes_in_every_realm() {
     const SIZE: f32 = 20.0;
     let fonts = FontCollection::new();
@@ -165,29 +150,39 @@ fn a_face_registered_after_the_fork_shapes_in_every_realm() {
     );
 }
 
-/// A long paragraph breaks at its width, and its metrics come from the
-/// laid-out lines rather than a stand-in (ADR-0054).
-#[test]
-fn a_paragraph_wraps_at_its_max_width() {
-    const MAX: f32 = 80.0;
+/// A clone is the same collection and a new one is not; every clone and
+/// every context built from it counts as a holder until it drops; bytes with
+/// no face are refused.
+fn collection_handles_are_shared_and_counted() {
     let fonts = FontCollection::new();
-    let mut context = TextContext::new(&fonts);
-    let metrics = shape(&mut context, LATIN, Some(MAX)).metrics();
-    assert!(metrics.line_count > 1, "{metrics:?}");
-    assert!(metrics.width <= f64::from(MAX + 0.01), "{metrics:?}");
-    assert!(metrics.width > 0.0, "{metrics:?}");
-    assert!(
-        0.0 < metrics.alphabetic_baseline && metrics.alphabetic_baseline < metrics.height,
-        "{metrics:?}"
-    );
-    assert!(
-        metrics.ideographic_baseline >= metrics.alphabetic_baseline,
-        "{metrics:?}"
-    );
-    let one_line = shape(&mut context, LATIN, None).metrics();
-    assert_eq!(one_line.line_count, 1, "{one_line:?}");
-    assert!(
-        metrics.height > one_line.height,
-        "{metrics:?} vs {one_line:?}"
+    assert!(FontCollection::ptr_eq(&fonts, &fonts.clone()));
+    assert!(!FontCollection::ptr_eq(&fonts, &FontCollection::new()));
+
+    assert_eq!(font_collection_holders(&fonts), 1);
+    let context = TextContext::new(&fonts);
+    assert!(FontCollection::ptr_eq(context.fonts(), &fonts));
+    assert_eq!(font_collection_holders(&fonts), 2);
+    drop(context);
+    assert_eq!(font_collection_holders(&fonts), 1);
+
+    assert!(fonts.register_font(b"not a font").is_err());
+    assert!(fonts.register_font(&[]).is_err());
+}
+
+#[test]
+fn text_context_contract() {
+    cases::run_cases(
+        "text_context",
+        &[
+            (
+                "collection_handles_are_shared_and_counted",
+                collection_handles_are_shared_and_counted,
+            ),
+            ("two_realms_shape_in_parallel", two_realms_shape_in_parallel),
+            (
+                "a_face_registered_after_the_fork_shapes_in_every_realm",
+                a_face_registered_after_the_fork_shapes_in_every_realm,
+            ),
+        ],
     );
 }

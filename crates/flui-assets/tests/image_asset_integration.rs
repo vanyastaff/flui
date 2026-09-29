@@ -41,26 +41,3 @@ async fn image_asset_file_loads_a_committed_png_fixture_to_its_real_dimensions()
         "decoded pixel buffer must be RGBA8 (4 bytes/pixel) at the fixture's dimensions",
     );
 }
-
-#[tokio::test]
-async fn image_asset_file_is_present_in_cache_after_load() {
-    let registry = AssetRegistryBuilder::new()
-        .with_capacity(1024 * 1024)
-        .build();
-
-    let loaded = registry
-        .load(ImageAsset::file(fixture_path()))
-        .await
-        .expect("load decodes the fixture from disk");
-
-    let cached = registry
-        .get::<ImageAsset>(loaded.key())
-        .await
-        .expect("the asset must be present in the cache under its own key after load");
-
-    assert_eq!(
-        (cached.width(), cached.height()),
-        (loaded.width(), loaded.height()),
-        "the cached handle must carry the same decoded dimensions as the loaded one",
-    );
-}

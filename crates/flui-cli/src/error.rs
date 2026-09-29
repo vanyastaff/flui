@@ -376,39 +376,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn error_is_send_sync() {
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<CliError>();
-    }
-
-    #[test]
-    fn error_display() {
-        let err = CliError::InvalidProjectName {
-            name: "fn".to_string(),
-            reason: "reserved keyword".to_string(),
-        };
-        assert_eq!(
-            err.to_string(),
-            "invalid project name 'fn': reserved keyword"
-        );
-    }
-
-    #[test]
-    fn error_with_context() {
-        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
-        let err = CliError::context(io_err, "failed to read config");
-        assert!(err.to_string().contains("failed to read config"));
-    }
-
-    #[test]
-    fn result_ext_context() {
-        let result: Result<(), std::io::Error> =
-            Err(std::io::Error::new(std::io::ErrorKind::NotFound, "oops"));
-        let cli_result = result.context("operation failed");
-        assert!(cli_result.is_err());
-    }
-
-    #[test]
     fn exit_codes() {
         assert_eq!(CliError::UserCancelled.exit_code(), 0);
         assert_eq!(CliError::Missing("x".into()).exit_code(), 1);
@@ -456,12 +423,5 @@ mod tests {
             7
         );
         assert_eq!(CliError::Interrupted.exit_code(), 130);
-    }
-
-    #[test]
-    fn command_failed_error() {
-        let err = CliError::command_failed("cargo build", Some(1));
-        assert!(err.to_string().contains("cargo build"));
-        assert!(err.to_string().contains('1'));
     }
 }

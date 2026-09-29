@@ -70,18 +70,3 @@ pub(crate) fn next_identity() -> (RealmId, PresentationId) {
         PresentationId::new_gen(0, generation),
     )
 }
-
-#[cfg(test)]
-mod identity_tests {
-    use super::*;
-
-    #[test]
-    fn next_identity_mints_distinct_generations() {
-        let (realm_a, _) = next_identity();
-        let (realm_b, _) = next_identity();
-        assert_ne!(
-            realm_a, realm_b,
-            "every mint must produce a fresh generation, never repeating"
-        );
-    }
-}

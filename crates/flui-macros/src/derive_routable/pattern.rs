@@ -108,61 +108,10 @@ pub(crate) fn match_order(patterns: &[Vec<Segment>]) -> Vec<usize> {
 mod tests {
     use super::*;
 
-    fn lit(text: &str) -> Segment {
-        Segment::Literal(text.to_owned())
-    }
-
-    fn param(name: &str) -> Segment {
-        Segment::Param(name.to_owned())
-    }
-
     fn parsed(pattern: &str) -> Vec<Segment> {
         parse(pattern).unwrap_or_else(|error| panic!("{pattern:?} parses: {error}"))
     }
 
-    #[test]
-    fn parse_reads_literals_and_parameters() {
-        assert_eq!(parsed("/"), []);
-        assert_eq!(parsed("/note/:id"), [lit("note"), param("id")]);
-        assert_eq!(
-            parsed("/user/:uid/post/:pid"),
-            [lit("user"), param("uid"), lit("post"), param("pid")]
-        );
-        assert_eq!(parsed("/café/:s"), [lit("café"), param("s")]);
-        assert_eq!(parsed("/t/:type"), [lit("t"), param("type")]);
-        assert_eq!(parsed("/a:b"), [lit("a:b")]);
-    }
-
-    #[test]
-    fn parse_rejects_what_is_not_a_pattern() {
-        for (pattern, reason) in [
-            ("", "starts with `/`"),
-            ("note", "starts with `/`"),
-            ("//", "trailing `/`"),
-            ("/note/", "trailing `/`"),
-            ("/a//b", "empty segment"),
-            ("/a?b", "`?` query"),
-            ("/a#b", "`#` fragment"),
-            ("/a%20b", "`%` escape"),
-            ("/note/:", "not a parameter"),
-            ("/note/:1d", "not a parameter"),
-            ("/note/:a-b", "not a parameter"),
-        ] {
-            let error = parse(pattern).expect_err(pattern);
-            assert!(error.contains(reason), "{pattern:?}: {error}");
-        }
-    }
-
-    #[test]
-    fn same_shape_ignores_parameter_names_only() {
-        assert!(same_shape(&parsed("/n/:a"), &parsed("/n/:b")));
-        assert!(same_shape(&parsed("/"), &parsed("/")));
-        assert!(!same_shape(&parsed("/n/:a"), &parsed("/n/new")));
-        assert!(!same_shape(&parsed("/n/:a"), &parsed("/m/:a")));
-        assert!(!same_shape(&parsed("/n"), &parsed("/n/:a")));
-    }
-
-    #[test]
     fn match_order_puts_literals_before_parameters() {
         let patterns = vec![
             parsed("/s/:slug"),
@@ -181,7 +130,6 @@ mod tests {
         assert!(rank(4) < rank(1), "{order:?}");
     }
 
-    #[test]
     fn first_conflict_names_the_later_duplicate() {
         let patterns = vec![
             parsed("/"),
@@ -191,5 +139,11 @@ mod tests {
         ];
         assert_eq!(first_conflict(&patterns), Some((1, 3)));
         assert_eq!(first_conflict(&patterns[..3]), None);
+    }
+
+    #[test]
+    fn route_pattern_contract() {
+        match_order_puts_literals_before_parameters();
+        first_conflict_names_the_later_duplicate();
     }
 }

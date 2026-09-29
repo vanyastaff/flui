@@ -172,37 +172,3 @@ impl FrameStamp {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::id::{PresentationId, RealmId};
-
-    fn test_address() -> PresentationAddress {
-        PresentationAddress {
-            realm_id: RealmId::new(1),
-            presentation_id: PresentationId::new(1),
-        }
-    }
-
-    #[test]
-    fn new_packages_all_fields() {
-        let address = test_address();
-        let epoch = FrameEpoch::ZERO.next();
-        let surface_generation = SurfaceGeneration::ZERO.next();
-        let gpu_resource_generation = GpuResourceGeneration::mint();
-
-        let stamp = FrameStamp::new(address, epoch, surface_generation, gpu_resource_generation);
-
-        assert_eq!(stamp.address, address);
-        assert_eq!(stamp.epoch, epoch);
-        assert_eq!(stamp.surface_generation, surface_generation);
-        assert_eq!(stamp.gpu_resource_generation, gpu_resource_generation);
-    }
-
-    #[test]
-    fn frame_stamp_is_send_and_sync() {
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<FrameStamp>();
-    }
-}

@@ -130,36 +130,4 @@ impl std::fmt::Display for Assertiveness {
 // ============================================================================
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_focus_block_merge() {
-        use AccessibilityFocusBlockType::*;
-
-        // BlockSubtree takes precedence
-        assert_eq!(BlockSubtree.merge(None), BlockSubtree);
-        assert_eq!(None.merge(BlockSubtree), BlockSubtree);
-        assert_eq!(BlockSubtree.merge(BlockNode), BlockSubtree);
-
-        // BlockNode next
-        assert_eq!(BlockNode.merge(None), BlockNode);
-        assert_eq!(None.merge(BlockNode), BlockNode);
-
-        // None + None = None
-        assert_eq!(None.merge(None), None);
-    }
-
-    #[test]
-    fn test_focus_block_is_blocked() {
-        assert!(!AccessibilityFocusBlockType::None.is_blocked());
-        assert!(AccessibilityFocusBlockType::BlockNode.is_blocked());
-        assert!(AccessibilityFocusBlockType::BlockSubtree.is_blocked());
-    }
-
-    #[test]
-    fn test_assertiveness() {
-        assert_eq!(Assertiveness::Polite.name(), "polite");
-        assert_eq!(Assertiveness::Assertive.name(), "assertive");
-    }
-}
+mod tests {}

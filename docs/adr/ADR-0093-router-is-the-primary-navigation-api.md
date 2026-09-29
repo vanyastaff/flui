@@ -322,7 +322,6 @@ Landed with step two:
   types, so the switch remounts the shell and disposes its navigator),
   `widgets_app_router_adds_no_focus_scope_above_the_router`, and the compile-fail case
   `router_app_takes_no_navigator` in `crates/flui-widgets/tests/routable_ui.rs`.
-  `tests/two_screens_example.rs` drives the example.
 
 Still to land, each with its step:
 

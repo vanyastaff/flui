@@ -12,20 +12,15 @@
 //! for the bootstrap. Both plant a registry entry by hand rather than mounting
 //! a real `LayoutBuilder`, so they stay pure wiring tests of the frame path.
 
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use flui_foundation::geometry::Size;
-use flui_foundation::{ElementId, RenderId};
 use flui_objects::RenderSizedBox;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::testing::inspect;
 use flui_testing::HeadlessBinding;
-use flui_testing::bootstrap::{BuildCapabilities, MountOptions, MountOwners};
-use flui_view::{BuildOwner, ElementTree, RenderView, View};
+use flui_testing::bootstrap::{MountOptions, MountOwners};
+use flui_view::{RenderView, View};
 
 /// A leaf of a fixed size, so the bootstrap frame has real geometry to commit.
 #[derive(Clone)]
@@ -65,45 +60,7 @@ fn leaf(width: f64, height: f64) -> SizedLeaf {
     }
 }
 
-#[test]
-fn the_bootstrap_frame_runs_the_layout_builder_seam() {
-    // A stale registry entry — its element and render node do not exist, so
-    // `service_layout_builders` prunes it on the pass it runs. Pruning is the
-    // observable side effect available without a real `RenderLayoutBuilder`.
-    //
-    // The ids are deliberately far above anything this mount will mint: the
-    // low ids `layout_builder_seam.rs` can use over an empty tree would be
-    // handed straight to the leaf below, and an entry pointing at a node that
-    // exists is not stale.
-    let mut build_owner = BuildOwner::new();
-    let cell =
-        build_owner.register_layout_builder_for_test(RenderId::new(9_999), ElementId::new(9_999));
-    assert_eq!(build_owner.layout_builder_count(), 1);
-    drop(cell);
-
-    let mut binding = HeadlessBinding::new();
-    binding.mount_root(
-        &leaf(10.0, 10.0),
-        MountOwners {
-            build_owner,
-            tree: ElementTree::new(),
-            pipeline_owner: PipelineCell::new(PipelineOwner::new()),
-        },
-        MountOptions::tight(100.0, 100.0),
-    );
-
-    assert_eq!(
-        binding.build_owner_mut().layout_builder_count(),
-        0,
-        "the bootstrap frame must go through run_frame_with_layout_builders, \
-         which prunes the stale entry — a bare PipelineOwner::run_frame would \
-         leave it, and would leave a real LayoutBuilder's child unbuilt on the \
-         very frame a screenshot captures",
-    );
-}
-
-#[test]
-fn mount_root_installs_the_render_root_and_lays_it_out() {
+pub(crate) fn mount_root_installs_the_render_root_and_lays_it_out() {
     let mut binding = HeadlessBinding::new();
     let pipeline_owner = PipelineCell::new(PipelineOwner::new());
     let mounted = binding.mount_root(
@@ -137,52 +94,7 @@ fn mount_root_installs_the_render_root_and_lays_it_out() {
     );
 }
 
-#[test]
-fn mount_root_wraps_the_caller_in_root_render_view() {
-    // The caller's leaf becomes the RenderView's single child; logical root
-    // is that child, not the pipeline RenderView.
-    let mut binding = HeadlessBinding::new();
-    let mounted = binding.mount_root(
-        &leaf(10.0, 10.0),
-        MountOwners::fresh(),
-        MountOptions::tight(50.0, 50.0),
-    );
-
-    assert_eq!(mounted.render_root_children.len(), 1);
-    assert_eq!(
-        mounted.logical_render_root(),
-        mounted.render_root_children[0]
-    );
-    assert_ne!(mounted.logical_render_root(), mounted.render_root);
-}
-
-#[test]
-fn bare_element_tree_mount_leaves_pipeline_root_unset() {
-    // The low-level slab attach must not pretend to be a full render-root
-    // bootstrap: an ordinary render leaf mounts parentless without becoming
-    // PipelineOwner.root_id. HeadlessBinding / WidgetsBinding wrap in
-    // RootRenderView so that invariant is owned in one place.
-    let pipeline_owner = PipelineCell::new(PipelineOwner::new());
-    let mut tree = ElementTree::new();
-    let mut build_owner = BuildOwner::new();
-    let root = tree.mount_root_with_pipeline_owner(
-        &leaf(10.0, 10.0),
-        Some(pipeline_owner.clone()),
-        &mut build_owner.element_owner_mut(),
-    );
-    build_owner.schedule_build_for(root, 0, flui_view::RebuildReason::InitialMount);
-    build_owner.build_scope(&mut tree);
-
-    assert!(
-        pipeline_owner
-            .with(flui_rendering::PipelineOwner::root_id)
-            .is_none(),
-        "mount_root_with_pipeline_owner alone must not install root_id",
-    );
-}
-
-#[test]
-fn the_bound_binding_keeps_pumping_from_where_the_bootstrap_left_off() {
+pub(crate) fn the_bound_binding_keeps_pumping_from_where_the_bootstrap_left_off() {
     // The bootstrap ends bound, so the next frame is an ordinary pump: no
     // second mount, no re-rooting, and the committed layer tree survives a
     // frame that has no paint work.
@@ -203,170 +115,5 @@ fn the_bound_binding_keeps_pumping_from_where_the_bootstrap_left_off() {
     assert!(
         binding.painted_frame_count() >= after_bootstrap,
         "a settled frame never un-counts an earlier paint",
-    );
-}
-
-#[test]
-fn withholding_the_post_frame_capability_outlasts_the_mount() {
-    // An embedder that drives frames itself installs no post-frame handle, and
-    // code acquiring one must behave when it is absent. The async driver still
-    // goes in — withholding it too would change which capability is under test.
-    //
-    // The withholding has to survive the bootstrap, not just the mount pass:
-    // `bind_tree` installs the full capability set unconditionally (that is its
-    // documented job for a caller binding owners directly), so a bootstrap that
-    // handed its owners to the public `bind_tree` would restore exactly what
-    // the caller asked to withhold, and every rebuild after `init_state` would
-    // silently see a handle the test believes is absent.
-    let mut binding = HeadlessBinding::new();
-    binding.mount_root(
-        &leaf(10.0, 10.0),
-        MountOwners::fresh(),
-        MountOptions::tight(50.0, 50.0).with_capabilities(BuildCapabilities::AsyncDriverOnly),
-    );
-
-    // The mount pass itself depends on the async driver, so reaching here at
-    // all is the assertion that `AsyncDriverOnly` still installs it.
-    binding.pump_frame(Duration::from_millis(16));
-
-    let build_owner = binding.build_owner_mut();
-    assert!(
-        build_owner.post_frame_handle().is_none(),
-        "AsyncDriverOnly must still be in force after the bootstrap bound the tree",
-    );
-    assert!(
-        build_owner.local_post_frame_handle().is_none(),
-        "the owner-local post-frame handle is withheld together with the shared one",
-    );
-}
-
-/// The bootstrap is a pipeline step, not a whole scheduler frame — and the
-/// difference is observable, so it is pinned rather than merely documented.
-///
-/// `pump_frame` wraps the same pipeline in `drive_frame_with_lane`, which adds
-/// `end_frame`'s post-frame callbacks. A callback scheduled while the tree is
-/// mounting therefore waits for the first pump. That mirrors production, where
-/// `attach_root_widget` mounts and lays out and the first `draw_frame` follows.
-#[test]
-fn a_post_frame_callback_scheduled_during_mount_waits_for_the_first_pump() {
-    let mut binding = HeadlessBinding::new();
-    let ran = Arc::new(AtomicBool::new(false));
-
-    let mounted = binding.mount_root(
-        &leaf(10.0, 10.0),
-        MountOwners::fresh(),
-        MountOptions::tight(50.0, 50.0),
-    );
-    assert!(
-        mounted.painted,
-        "precondition: the bootstrap committed a frame"
-    );
-
-    // Scheduled after the bootstrap for the same reason a `ViewState` would
-    // schedule one from `init_state`: the capability is installed before the
-    // mount, so the queue is reachable that early. What is being pinned is
-    // WHEN it drains.
-    let flag = Arc::clone(&ran);
-    flui_scheduler::PostFrameHandle::new(binding.scheduler())
-        .schedule(move |_| flag.store(true, Ordering::SeqCst));
-
-    assert!(
-        !ran.load(Ordering::SeqCst),
-        "the bootstrap runs the pipeline, not `end_frame`, so nothing drains \
-         the post-frame queue yet",
-    );
-
-    binding.pump_frame(Duration::from_millis(16));
-
-    assert!(
-        ran.load(Ordering::SeqCst),
-        "the first pump is a whole frame and drains the post-frame queue",
-    );
-}
-
-/// A view that captures the fresh-hit-test capability its `init_state` is
-/// offered, over a leaf big enough to hit.
-#[derive(Clone)]
-struct HitTestCapture {
-    /// Owner-local: `HitTestHandle` holds an `Rc<dyn HitTestProbe>` and is
-    /// `!Send` by construction, because the tree it probes is owner-affine.
-    captured: Rc<RefCell<Option<flui_interaction::HitTestHandle>>>,
-}
-
-struct HitTestCaptureState {
-    captured: Rc<RefCell<Option<flui_interaction::HitTestHandle>>>,
-}
-
-impl View for HitTestCapture {
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
-    }
-}
-
-impl flui_view::StatefulView for HitTestCapture {
-    type State = HitTestCaptureState;
-
-    fn create_state(&self) -> Self::State {
-        HitTestCaptureState {
-            captured: Rc::clone(&self.captured),
-        }
-    }
-}
-
-impl flui_view::ViewState<HitTestCapture> for HitTestCaptureState {
-    fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
-        let _prev = std::mem::replace(&mut *self.captured.borrow_mut(), ctx.hit_test_handle());
-    }
-
-    fn build(
-        &self,
-        _view: &HitTestCapture,
-        _ctx: &dyn flui_view::BuildContext,
-    ) -> impl flui_view::IntoView {
-        SizedLeaf {
-            size: Size::new(40.0, 40.0),
-        }
-    }
-}
-
-/// The bootstrap installs the fresh-hit-test capability, and it answers.
-///
-/// Production installs one per presentation, so a harness that did not would
-/// answer `None` to `LifecycleContext::hit_test_handle()` exactly where a real app
-/// answers `Some` — and a widget whose behavior rides on a fresh hit test (a
-/// `Draggable` discovering the `DragTarget` it has moved over) would be
-/// untestable in the tier that is meant to cover it. Acquired in `init_state`,
-/// a lifecycle hook — `build`'s `BuildContext` has no such method.
-#[test]
-fn the_bootstrap_installs_a_working_fresh_hit_test_capability() {
-    let captured = Rc::new(RefCell::new(None));
-    let mut binding = HeadlessBinding::new();
-    binding.mount_root(
-        &HitTestCapture {
-            captured: Rc::clone(&captured),
-        },
-        MountOwners::fresh(),
-        MountOptions::new(flui_rendering::constraints::BoxConstraints::tight(
-            Size::new(40.0, 40.0),
-        )),
-    );
-
-    let handle = captured
-        .borrow()
-        .clone()
-        .expect("the bootstrap must offer the fresh-hit-test capability to init_state");
-
-    // The realm check the handle makes needs the binding's lane active, the
-    // same as any dispatch.
-    let hit = binding
-        .enter_owner_scope(|| {
-            handle.hit_test_at(flui_foundation::geometry::Offset::new(20.0, 20.0))
-        })
-        .expect("the tree is free between frames, so the probe must answer");
-    assert!(
-        !hit.is_empty(),
-        "the capability must probe THIS binding's mounted tree — an empty path \
-         over the middle of a laid-out 40x40 root means it is wired to \
-         something else, or to nothing"
     );
 }

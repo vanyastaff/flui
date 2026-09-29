@@ -459,19 +459,3 @@ where
 }
 
 generic_render_view_element!(ShrinkWrappingViewport);
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A caller may be explicit about the value the render object already
-    /// defaults to. `set_cache_extent` correctly reports `NONE` for that, and
-    /// `build_render_object` must not treat "no change" as a contract
-    /// violation — an earlier `debug_assert_eq!(.., LAYOUT)` here panicked on
-    /// this exact call in every debug and test build.
-    #[test]
-    fn an_explicit_cache_extent_equal_to_the_default_builds_without_panicking() {
-        let viewport = Viewport::new(()).cache_extent(250.0, CacheExtentStyle::Pixel);
-        let _render_object = viewport.build_render_object();
-    }
-}

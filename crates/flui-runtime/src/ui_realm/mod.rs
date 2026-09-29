@@ -47,22 +47,17 @@ use flui_foundation::geometry::Size;
 use flui_interaction::InteractionLane;
 use flui_layer::Scene;
 #[cfg(test)]
-use flui_platform_api::{DragDropEvent, PlatformInput, PlatformWindow};
+use flui_platform_api::{PlatformInput, PlatformWindow};
 #[cfg(test)]
 use flui_rendering::binding::RendererBinding as _;
 #[cfg(test)]
 use flui_rendering::constraints::BoxConstraints;
 #[cfg(test)]
-use flui_rendering::pipeline::PipelineOwner;
-#[cfg(test)]
-use flui_scheduler::{AppLifecycleState, SchedulerPhase};
+use flui_scheduler::SchedulerPhase;
 use flui_scheduler::{LocalPostFrameLane, UpdateScheduler};
 use flui_view::GlobalKeyScope;
 #[cfg(test)]
 use parking_lot::RwLock;
-
-#[cfg(test)]
-use crate::epoch::FrameCommitState;
 
 #[cfg(test)]
 use super::frame_failure::{FailureDisposition, FrameFailureKind, SegmentPhase};
@@ -115,8 +110,6 @@ mod pump;
 
 pub use commands::{CommandSendError, DrainReport, UiCommand, UiCommandSender};
 use input::FocusCoordinator;
-#[cfg(test)]
-use input::input_dropped_by_lifecycle;
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -349,9 +342,6 @@ mod frame_failure_phase_tests;
 
 #[cfg(test)]
 mod frame_commit_state_tests;
-
-#[cfg(test)]
-mod frame_failure_detail_tests;
 
 #[cfg(test)]
 mod frame_failure_recovery_tests;

@@ -194,10 +194,7 @@ the trybuild `compile_fail` suites (`flui-engine`, `flui-rendering`,
 `flui-painting`, `flui-view`'s `trybuild_ui`), the
 `flui-cli` template tests (`cli_create::generated_*`), and every
 `flui::facade_consumer` test. Locally, with their build caches cold, most take
-one to five minutes; the other ~9,700 tests are quick. Tests that spawn a
-`cargo` only for a trivial crate (`flui-cli`'s `cli_maintenance`, which runs
-`cargo new` and tests an empty project in seconds) are deliberately left out
-of the group. `.config/nextest.toml`
+one to five minutes; the rest are quick. `.config/nextest.toml`
 names them with one filter, in the override that puts them in the nextest
 test group `nested-cargo`; `cargo nextest show-config test-groups` lists the
 group's members. Selecting by group needs nextest 0.9.133 or newer (the
@@ -514,6 +511,12 @@ The constitution requires `///` doc comments on every public item and `//!` over
   declares it once, as `mod common;` in `tests/main.rs`, and each suite imports it
   with `use crate::common;`: a `mod common;` inside every `#[path]`-loaded suite
   would load the same file once per suite, which `clippy::duplicate_mod` rejects.
+- **A family of scenarios is one table test.** `flui-view`, `flui-runtime`, `flui-app`,
+  `flui-scheduler` and `flui-testing` run related scenarios (a failure-recovery matrix, a
+  realm-isolation family) as rows of a single `#[test]` through a small `run_table`
+  helper: each row is a named `fn()`, every row runs even after one fails, and the panic
+  lists the failing row names. The rows keep their own assertions; the table keeps the
+  set small enough that a refactor touches a table, not a hundred tests.
 - **Property-based tests** use [`proptest`](https://docs.rs/proptest) for layout algorithms and geometric operations.
 - **Demo composition tests** live in `tests/demo_layer_snapshots.rs`: each demo mounts headless and its committed `LayerTree` is compared, as structured text, against an `insta` snapshot. See [Demo composition snapshots](#demo-composition-snapshots) below for the run/review workflow and why they are structural rather than pixels.
 - **No mocking frameworks.** Use trait-based test doubles. The `HeadlessPlatform` backend is the canonical test surface for platform-dependent code.
@@ -607,7 +610,6 @@ Pair with `AnimationController::tick_at(t)` inside `simulate` for
 production-faithful animation tests. Assert per frame via `Probe` (`offset`,
 `box_geometry`, `picture_bounds`, `property`) and layer helpers
 (`opacity_alpha`, `has_picture_layer`). See
-`crates/flui-rendering/tests/harness_animation.rs` and
 `crates/flui-rendering/tests/animation_pipeline.rs`.
 
 ## Headless frames and widget trees

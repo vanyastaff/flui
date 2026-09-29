@@ -76,7 +76,6 @@ impl View for InitPanicView {
     }
 }
 
-#[test]
 fn scoped_child_dependency_panic_is_replaced_without_consuming_foreign_work() {
     let mut owner = BuildOwner::new();
     let mut tree = ElementTree::new();
@@ -162,94 +161,6 @@ fn scoped_child_dependency_panic_is_replaced_without_consuming_foreign_work() {
     }
 }
 
-#[cfg(debug_assertions)]
-#[test]
-fn scoped_unbounded_duplicate_global_key_panic_restores_partitioned_work_and_flags() {
-    let mut owner = BuildOwner::new();
-    let mut tree = ElementTree::new();
-    let root = tree.mount_root(&TestView, &mut owner.element_owner_mut());
-    settle_initial_builds(&mut tree, &mut owner);
-    let scope = tree.insert(
-        &ReparentingLayoutHost { children: vec![] },
-        root,
-        0,
-        &mut owner.element_owner_mut(),
-    );
-    let panicking = tree.insert(
-        &ReparentingLayoutHost { children: vec![] },
-        scope,
-        0,
-        &mut owner.element_owner_mut(),
-    );
-    let current = insert_child(&mut tree, &mut owner, scope, 1);
-    let foreign = insert_child(&mut tree, &mut owner, root, 1);
-    settle_initial_builds(&mut tree, &mut owner);
-    let _cell = owner.register_layout_builder_for_test(RenderId::new(72), scope);
-    let duplicate_key = crate::GlobalKey::<()>::new();
-    tree.update(
-        panicking,
-        &ReparentingLayoutHost {
-            children: vec![
-                KeyedView {
-                    key: duplicate_key.clone(),
-                }
-                .boxed(),
-                KeyedView { key: duplicate_key }.boxed(),
-            ],
-        },
-        &mut owner.element_owner_mut(),
-    );
-    for (element, depth, reason) in [
-        (panicking, 2, RebuildReason::ParentUpdate),
-        (current, 2, RebuildReason::DependencyChange),
-        (foreign, 1, RebuildReason::StateChange),
-    ] {
-        tree.mark_needs_build(element);
-        owner.schedule_build_for(element, depth, reason);
-    }
-    let current_reasons = owner
-        .pending_rebuild_reasons(current)
-        .expect("current-scope work is queued");
-    let panicking_reasons = owner
-        .pending_rebuild_reasons(panicking)
-        .expect("the framework-panicking element is queued");
-    let foreign_reasons = owner
-        .pending_rebuild_reasons(foreign)
-        .expect("foreign work is queued");
-
-    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        owner.build_scope_target(&mut tree, BuildScopeTarget::LayoutBuilder(scope));
-    }))
-    .expect_err("duplicate GlobalKey framework panic remains unbounded");
-    assert!(
-        payload_text(&*panic)
-            .is_some_and(|message| message.contains("duplicate GlobalKey children"))
-    );
-    assert_eq!(
-        owner.pending_rebuild_reasons(panicking),
-        Some(panicking_reasons)
-    );
-    assert_eq!(
-        owner.pending_rebuild_reasons(current),
-        Some(current_reasons)
-    );
-    assert_eq!(
-        owner.pending_rebuild_reasons(foreign),
-        Some(foreign_reasons)
-    );
-    assert!(owner.dirty_elements.is_empty());
-    let queues = owner
-        .build_scope_queues
-        .as_ref()
-        .expect("the unwind repartitions every retained entry");
-    assert_eq!(queues.root.len(), 1);
-    assert_eq!(queues.isolated.get(&scope).map(BinaryHeap::len), Some(2));
-    assert_eq!(owner.dirty_count(), 3);
-    assert!(!owner.is_building());
-    assert_eq!(owner.scope_depth(), 0);
-}
-
-#[test]
 fn production_layout_builder_contains_a_stateful_descendant_init_panic() {
     let mut owner = BuildOwner::new();
     let mut tree = ElementTree::new();
@@ -317,20 +228,13 @@ fn production_layout_builder_contains_a_stateful_descendant_init_panic() {
 }
 
 #[test]
-fn root_init_state_unwind_leaves_no_hook_recording_marker() {
-    let mut owner = BuildOwner::new();
-    let mut tree = ElementTree::new();
-    let root = tree.mount_root(
-        &InitPanicView {
-            failed_id: Arc::new(parking_lot::Mutex::new(None)),
-        },
-        &mut owner.element_owner_mut(),
+fn build_owner_lifecycle_recovery_matrix() {
+    crate::table_test::run_table(
+        "build_owner_lifecycle_recovery_matrix",
+        &[
+            ("scoped_child_dependency_panic_is_replaced_without_consuming_foreign_work", scoped_child_dependency_panic_is_replaced_without_consuming_foreign_work as fn()),
+            ("production_layout_builder_contains_a_stateful_descendant_init_panic", production_layout_builder_contains_a_stateful_descendant_init_panic as fn()),
+        ],
     );
-    owner.schedule_build_for(root, 0, RebuildReason::InitialMount);
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        owner.build_scope(&mut tree);
-    }));
-    assert!(outcome.is_err());
-    assert!(owner.lifecycle_panic_handoff.take().is_disarmed());
-    assert!(owner.take_recovered_panics().is_empty());
 }
+

@@ -6,28 +6,27 @@
 //! `autotests = false` + `[[test]]` in `Cargo.toml`), so file-relative
 //! paths keep working unchanged.
 //!
+//! Each contract family is one table test: the modules expose plain row
+//! functions and the tests below run them, naming every failing row.
+//!
 //! Convention (mirrors `flui-view/tests/main.rs`): tests that WRITE
 //! process-global state get their own [[test]] target instead. None of
 //! flui-painting's integration tests do — the crate's only process-global
 //! is the lazily initialized `FONT_SYSTEM` `OnceLock` (benign once-init,
 //! never replaced or reset by tests).
 
-#[path = "canvas_transform.rs"]
-mod canvas_transform;
-#[path = "canvas_unit.rs"]
-mod canvas_unit;
+#[path = "support/cases.rs"]
+mod cases;
 #[path = "color_blend.rs"]
 mod color_blend;
-#[path = "color_operations.rs"]
-mod color_operations;
 #[path = "color_property.rs"]
 mod color_property;
 #[path = "compile_fail.rs"]
 mod compile_fail;
 #[path = "decoration_unit.rs"]
 mod decoration_unit;
-#[path = "display_list_unit.rs"]
-mod display_list_unit;
+#[path = "recording.rs"]
+mod recording;
 #[path = "rich_text_example.rs"]
 mod rich_text_example;
 #[path = "text_layout_pipeline.rs"]
@@ -38,5 +37,139 @@ mod text_layout_unit;
 mod text_overflow_unit;
 #[path = "text_painter_unit.rs"]
 mod text_painter_unit;
-#[path = "thread_safety.rs"]
-mod thread_safety;
+
+use cases::run_cases;
+
+#[test]
+fn color_contract() {
+    run_cases(
+        "color",
+        &[
+            (
+                "hex_roundtrips_and_porter_duff_modes_mirror",
+                color_property::hex_roundtrips_and_porter_duff_modes_mirror,
+            ),
+            (
+                "blend_over_matches_flutter_alpha_blend",
+                color_blend::blend_over_matches_flutter_alpha_blend,
+            ),
+            (
+                "lerp_multi_stop_brackets_and_clamps",
+                color_property::lerp_multi_stop_brackets_and_clamps,
+            ),
+        ],
+    );
+}
+
+#[test]
+fn recording_contract() {
+    run_cases(
+        "recording",
+        &[
+            (
+                "save_restore_tracks_the_save_count",
+                recording::save_restore_tracks_the_save_count,
+            ),
+            #[cfg(debug_assertions)]
+            (
+                "finish_panics_in_debug_on_unrestored_save",
+                recording::finish_panics_in_debug_on_unrestored_save,
+            ),
+            (
+                "isolated_append_preserves_bounds_and_scopes_the_run",
+                recording::isolated_append_preserves_bounds_and_scopes_the_run,
+            ),
+            (
+                "interning_shares_arc_for_identical_paints",
+                recording::interning_shares_arc_for_identical_paints,
+            ),
+            (
+                "a_finished_display_list_is_sendable_to_another_thread",
+                recording::a_finished_display_list_is_sendable_to_another_thread,
+            ),
+        ],
+    );
+}
+
+#[test]
+fn decoration_contract() {
+    run_cases(
+        "decoration",
+        &[
+            (
+                "flutter_paint_order_shadow_background_border",
+                decoration_unit::flutter_paint_order_shadow_background_border,
+            ),
+            (
+                "hit_test_respects_rounded_corners",
+                decoration_unit::hit_test_respects_rounded_corners,
+            ),
+            (
+                "circle_uniform_border_is_a_stroked_circle_not_a_drrect",
+                decoration_unit::circle_uniform_border_is_a_stroked_circle_not_a_drrect,
+            ),
+        ],
+    );
+}
+
+#[test]
+fn text_contract() {
+    run_cases(
+        "text",
+        &[
+            (
+                "caret_position",
+                text_layout_unit::test_text_layout_caret_position,
+            ),
+            (
+                "two_space_run_word_boundary",
+                text_layout_unit::get_word_boundary_two_space_run_boundary_matrix,
+            ),
+            (
+                "styled_text_pipeline",
+                text_layout_pipeline::full_pipeline_with_styled_text,
+            ),
+            (
+                "wide_ellipsis_floors_min_intrinsic_width",
+                text_painter_unit::wide_ellipsis_floors_min_intrinsic_width,
+            ),
+            (
+                "truncated_paragraph_paints_what_it_measured",
+                text_overflow_unit::a_truncated_paragraph_paints_exactly_the_lines_it_measured,
+            ),
+            (
+                "root_recolor_keeps_the_shaped_buffer",
+                text_overflow_unit::root_recolor_keeps_the_shaped_buffer_and_span_recolor_reshapes_once,
+            ),
+            (
+                "bidirectional_text_lays_out",
+                rich_text_example::example_bidirectional_text,
+            ),
+        ],
+    );
+}
+
+/// A painter measures through the context it is lent, and its cache answers
+/// only for the fonts that measured it (ADR-0092 §10 step 3a).
+#[cfg(feature = "parley")]
+#[test]
+fn text_context_contract() {
+    use text_painter_unit::parley_measurement as pm;
+    run_cases(
+        "text_context",
+        &[
+            (
+                "measurement_follows_the_context_it_is_given",
+                pm::measurement_follows_the_context_it_is_given,
+            ),
+            (
+                "intrinsic_widths_follow_the_context_they_are_asked_through",
+                pm::intrinsic_widths_follow_the_context_they_are_asked_through,
+            ),
+            (
+                "a_registration_on_the_collection_invalidates_the_painter_cache",
+                pm::a_registration_on_the_collection_invalidates_the_painter_cache,
+            ),
+        ],
+    );
+}

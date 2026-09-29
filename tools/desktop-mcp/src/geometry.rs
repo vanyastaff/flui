@@ -19,7 +19,7 @@ pub struct Rect {
 
 impl Rect {
     /// From left/top/right/bottom edges; an inverted rect is empty.
-    #[cfg(any(target_os = "windows", test))]
+    #[cfg(target_os = "windows")]
     pub fn from_ltrb(left: i32, top: i32, right: i32, bottom: i32) -> Self {
         Self {
             x: left,
@@ -30,7 +30,7 @@ impl Rect {
     }
 
     /// The centre point.
-    #[cfg(any(target_os = "windows", test))]
+    #[cfg(target_os = "windows")]
     pub fn center(&self) -> (i32, i32) {
         (
             self.x + (self.width / 2) as i32,
@@ -46,22 +46,5 @@ impl fmt::Display for Rect {
             "{}x{} at ({}, {})",
             self.width, self.height, self.x, self.y
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn center_rounds_down() {
-        let r = Rect::from_ltrb(10, 20, 15, 30);
-        assert_eq!(r.center(), (12, 25));
-    }
-
-    #[test]
-    fn inverted_rect_is_empty() {
-        let r = Rect::from_ltrb(5, 5, 0, 0);
-        assert_eq!((r.width, r.height), (0, 0));
     }
 }

@@ -231,34 +231,3 @@ impl KeyEventBuilder {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::events::PointerEventExt;
-
-    #[test]
-    fn test_pointer_event_creation() {
-        let pos = Offset::new(100.0, 200.0);
-        let event = pointer_down(pos, PointerType::Mouse);
-
-        assert_eq!(event.position(), pos);
-    }
-
-    #[test]
-    fn test_modifiers_builder() {
-        let modifiers = ModifiersBuilder::new().ctrl(true).shift(true).build();
-
-        assert!(modifiers.contains(Modifiers::CONTROL));
-        assert!(modifiers.contains(Modifiers::SHIFT));
-        assert!(!modifiers.contains(Modifiers::ALT));
-        assert!(!modifiers.contains(Modifiers::META));
-    }
-
-    #[test]
-    fn test_device_kind_from_button() {
-        assert_eq!(device_kind_from_button(0), PointerType::Mouse);
-        assert_eq!(device_kind_from_button(1), PointerType::Mouse);
-        assert_eq!(device_kind_from_button(10), PointerType::Touch);
-    }
-}

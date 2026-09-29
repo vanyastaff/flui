@@ -1,5 +1,5 @@
-//! Each test builds a small crate in memory, declares its layers, and checks
-//! the identities of what the rule reports; the last one reads the real
+//! Each case builds a small crate in memory, declares its layers, and checks
+//! the identities of what the rule reports; the last case reads the real
 //! flui-widgets tree.
 
 use std::collections::BTreeSet;
@@ -39,7 +39,6 @@ fn set(expected: &[(&str, &str, &'static str)]) -> BTreeSet<Identity> {
 const TWO: &str = r#"layers = [["low"], ["high"]]"#;
 const TWO_LIB: (&str, &str) = ("lib.rs", "pub mod low;\npub mod high;\n");
 
-#[test]
 fn a_use_of_a_higher_module_is_refused() {
     let found = findings(
         TWO,
@@ -62,37 +61,6 @@ fn a_use_of_a_higher_module_is_refused() {
     );
 }
 
-#[test]
-fn a_use_of_a_lower_module_is_allowed() {
-    assert_eq!(
-        identities(
-            TWO,
-            &[
-                TWO_LIB,
-                ("low.rs", "pub struct Low;\n"),
-                ("high.rs", "use crate::low::Low;\nuse super::low;\n"),
-            ],
-        ),
-        set(&[])
-    );
-}
-
-#[test]
-fn peers_in_one_layer_may_not_import_each_other() {
-    assert_eq!(
-        identities(
-            r#"layers = [["a", "b"]]"#,
-            &[
-                ("lib.rs", "pub mod a;\npub mod b;\n"),
-                ("a.rs", "pub struct A;\n"),
-                ("b.rs", "use crate::a::A;\n"),
-            ],
-        ),
-        set(&[("b", "a", "refused")])
-    );
-}
-
-#[test]
 fn the_wildcard_layer_leaves_its_members_unchecked_among_themselves() {
     // the flui-view shape: one module below everything else
     let lib = (
@@ -142,7 +110,6 @@ fn the_wildcard_layer_leaves_its_members_unchecked_among_themselves() {
     );
 }
 
-#[test]
 fn a_path_through_a_root_reexport_counts_as_its_source_module() {
     let found = identities(
         r#"layers = [["text"], ["interaction"]]"#,
@@ -164,7 +131,6 @@ fn a_path_through_a_root_reexport_counts_as_its_source_module() {
     assert_eq!(found, set(&[("text", "interaction", "refused")]));
 }
 
-#[test]
 fn a_path_through_a_transparent_module_counts_as_its_source() {
     let toml = r#"
 layers = [["anchored_box", "scroll"], ["navigator"]]
@@ -201,7 +167,6 @@ transparent = ["__private"]
     );
 }
 
-#[test]
 fn a_plain_path_in_a_transparent_module_follows_the_relays_own_use() {
     let found = identities(
         r#"
@@ -250,36 +215,6 @@ transparent = ["__private"]
     );
 }
 
-#[test]
-fn an_expression_or_type_path_without_a_use_is_an_edge() {
-    assert_eq!(
-        identities(
-            r#"layers = [["text", "field"], ["interaction"]]"#,
-            &[
-                (
-                    "lib.rs",
-                    "pub mod text;\npub mod field;\npub mod interaction;\n"
-                ),
-                ("interaction.rs", "pub struct Listener;\n"),
-                // the editable_text.rs shapes: a field type, a constructor call
-                (
-                    "field.rs",
-                    "pub struct S { field: crate::interaction::Listener }\n",
-                ),
-                (
-                    "text.rs",
-                    "pub fn f() { let _ = crate::interaction::Listener::new(); }\n",
-                ),
-            ],
-        ),
-        set(&[
-            ("field", "interaction", "refused"),
-            ("text", "interaction", "refused"),
-        ])
-    );
-}
-
-#[test]
 fn super_paths_that_leave_the_top_level_module_are_edges() {
     assert_eq!(
         identities(
@@ -324,51 +259,6 @@ fn super_paths_that_leave_the_top_level_module_are_edges() {
     );
 }
 
-#[test]
-fn a_path_inside_a_macro_invocation_is_an_edge() {
-    assert_eq!(
-        identities(
-            TWO,
-            &[
-                TWO_LIB,
-                (
-                    "low.rs",
-                    "pub fn f() { let _ = vec![Some((crate::high::High::new(), 1))]; \
-                     println!(\"{}\", self.x); }\n",
-                ),
-                ("high.rs", "pub struct High;\n"),
-            ],
-        ),
-        set(&[("low", "high", "refused")])
-    );
-}
-
-#[test]
-fn a_crate_path_in_a_macro_rules_body_is_an_edge_of_the_defining_module() {
-    let found = findings(
-        TWO,
-        &[
-            TWO_LIB,
-            (
-                "low.rs",
-                "macro_rules! make { ($ty:ident) => { $crate::high::$ty::new() }; }\n",
-            ),
-            ("high.rs", "pub struct High;\n"),
-        ],
-    );
-    assert_eq!(
-        found.iter().map(Finding::identity).collect::<BTreeSet<_>>(),
-        set(&[("low", "high", "refused")])
-    );
-    // the site reads as written, `$crate` and all
-    let message = found[0].to_string();
-    assert!(
-        message.contains("c/src/low.rs:1 `$crate::high`"),
-        "{message}"
-    );
-}
-
-#[test]
 fn a_macro_export_macro_belongs_to_the_module_that_defines_it() {
     // the support.rs shape: exported at the root, re-exported by the module
     // and by a seam, named through all three paths
@@ -409,28 +299,6 @@ transparent = ["__private"]
     );
 }
 
-#[test]
-fn an_extern_crate_self_alias_is_a_crate_path() {
-    assert_eq!(
-        identities(
-            TWO,
-            &[
-                (
-                    "lib.rs",
-                    "extern crate self as flui_view;\npub mod low;\npub mod high;\n"
-                ),
-                (
-                    "low.rs",
-                    "pub fn f() -> flui_view::high::High { flui_view::high::High }\n",
-                ),
-                ("high.rs", "pub struct High;\n"),
-            ],
-        ),
-        set(&[("low", "high", "refused")])
-    );
-}
-
-#[test]
 fn a_leading_colon_alias_path_is_a_crate_path() {
     let run = |lib_extra: &str, low: &str| {
         let lib =
@@ -464,36 +332,6 @@ fn a_leading_colon_alias_path_is_a_crate_path() {
     );
 }
 
-#[test]
-fn cfg_test_code_is_exempt() {
-    assert_eq!(
-        identities(
-            TWO,
-            &[
-                TWO_LIB,
-                (
-                    "low.rs",
-                    "pub struct Low;\n\
-                     #[cfg(test)]\nmod tests { use crate::high::High; }\n\
-                     #[cfg(all(test, feature = \"images\"))]\n\
-                     fn fixture() -> crate::high::High { crate::high::High }\n\
-                     impl Low {\n    #[cfg(test)]\n    fn probe(&self) -> crate::high::High { crate::high::High }\n}\n\
-                     #[cfg(test)]\nmod mounted;\n\
-                     mod file_level;\n",
-                ),
-                ("low/mounted.rs", "use crate::high::High;\n"),
-                (
-                    "low/file_level.rs",
-                    "#![cfg(test)]\nuse crate::high::High;\n"
-                ),
-                ("high.rs", "pub struct High;\n"),
-            ],
-        ),
-        set(&[])
-    );
-}
-
-#[test]
 fn a_top_level_module_file_under_inner_cfg_test_is_no_module() {
     assert_eq!(
         identities(
@@ -509,7 +347,6 @@ fn a_top_level_module_file_under_inner_cfg_test_is_no_module() {
     );
 }
 
-#[test]
 fn cfg_any_test_or_feature_code_is_checked() {
     assert_eq!(
         identities(
@@ -543,105 +380,6 @@ fn cfg_any_test_or_feature_code_is_checked() {
     );
 }
 
-#[test]
-fn a_restricted_visibility_path_is_not_an_edge() {
-    assert_eq!(
-        identities(
-            TWO,
-            &[
-                TWO_LIB,
-                (
-                    "low.rs",
-                    "pub(in crate::high) fn f() {}\npub(super) struct S;\n"
-                ),
-                ("high.rs", "pub struct High;\n"),
-            ],
-        ),
-        set(&[])
-    );
-}
-
-#[test]
-fn doc_links_and_string_literals_are_not_edges() {
-    assert_eq!(
-        identities(
-            TWO,
-            &[
-                TWO_LIB,
-                (
-                    "low.rs",
-                    "//! See [`crate::high::High`].\n\
-                     /// Links [`crate::high::High`].\n\
-                     #[doc = \"crate::high::High\"]\n\
-                     pub const KEY: &str = \"flui_widgets::high::High\";\n\
-                     pub fn f() { let _ = format!(\"crate::high::{}\", 1); }\n",
-                ),
-                ("high.rs", "pub struct High;\n"),
-            ],
-        ),
-        set(&[])
-    );
-}
-
-#[test]
-fn an_undeclared_top_level_module_is_reported() {
-    assert_eq!(
-        identities(
-            r#"layers = [["low"]]"#,
-            &[
-                (
-                    "lib.rs",
-                    "pub mod low;\nmod extra;\n#[cfg(test)]\nmod tests;\n"
-                ),
-                ("low.rs", ""),
-                ("extra.rs", ""),
-                ("tests.rs", ""),
-            ],
-        ),
-        set(&[("extra", "", "undeclared")])
-    );
-}
-
-#[test]
-fn a_declared_name_that_is_not_a_module_is_reported() {
-    assert_eq!(
-        identities(
-            r#"layers = [["low", "gone", "low::deep"], ["tests"]]"#,
-            &[
-                ("lib.rs", "pub mod low;\n#[cfg(test)]\nmod tests;\n"),
-                ("low.rs", "mod deep;\n"),
-                ("low/deep.rs", ""),
-                ("tests.rs", ""),
-            ],
-        ),
-        set(&[
-            ("gone", "", "unknown"),
-            ("low::deep", "", "nested"),
-            // a test-only module is not a node
-            ("tests", "", "unknown"),
-        ])
-    );
-}
-
-#[test]
-fn a_module_declared_twice_is_reported() {
-    assert_eq!(
-        identities(
-            r#"
-layers = [["low"], ["low"], ["relay"]]
-transparent = ["relay"]
-"#,
-            &[
-                ("lib.rs", "pub mod low;\npub mod relay;\n"),
-                ("low.rs", ""),
-                ("relay.rs", ""),
-            ],
-        ),
-        set(&[("low", "", "duplicate"), ("relay", "", "duplicate")])
-    );
-}
-
-#[test]
 fn an_unattributable_crate_path_is_reported() {
     let lib = (
         "lib.rs",
@@ -692,33 +430,6 @@ fn an_unattributable_crate_path_is_reported() {
     );
 }
 
-#[test]
-fn a_transparent_module_with_an_item_is_reported() {
-    let found = findings(
-        r#"
-layers = [["low"]]
-transparent = ["prelude", "seam"]
-"#,
-        &[
-            (
-                "lib.rs",
-                "pub mod low;\npub mod seam;\npub mod prelude { pub use crate::low::Low; }\n",
-            ),
-            ("low.rs", "pub struct Low;\n"),
-            ("seam.rs", "pub use crate::low::Low;\npub fn stray() {}\n"),
-        ],
-    );
-    assert_eq!(
-        found.iter().map(Finding::identity).collect::<BTreeSet<_>>(),
-        set(&[("seam", "", "relay item")])
-    );
-    assert!(
-        found[0].to_string().contains("c/src/seam.rs:2 `fn`"),
-        "{}",
-        found[0]
-    );
-}
-
 /// `low` imports `high` (refused) and `high` imports `low` (allowed), under
 /// the given `exceptions` entries.
 fn with_exceptions(exceptions: &str) -> BTreeSet<Identity> {
@@ -732,17 +443,6 @@ fn with_exceptions(exceptions: &str) -> BTreeSet<Identity> {
     )
 }
 
-#[test]
-fn an_exception_admits_one_refused_edge() {
-    assert_eq!(
-        with_exceptions(
-            r#"{ from = "low", to = "high", exit = "ADR-0001", since = "2026-09-26", reason = "r" }"#
-        ),
-        set(&[])
-    );
-}
-
-#[test]
 fn a_stale_exception_is_reported() {
     // an edge the layers allow
     assert_eq!(
@@ -772,7 +472,6 @@ fn a_stale_exception_is_reported() {
     );
 }
 
-#[test]
 fn an_exception_with_a_missing_adr_or_bad_date_is_reported() {
     let entry = |exit: &str, since: &str| {
         format!(
@@ -812,7 +511,6 @@ fn an_exception_with_a_missing_adr_or_bad_date_is_reported() {
     );
 }
 
-#[test]
 fn a_malformed_declaration_is_an_error() {
     for (toml, needle) in [
         ("transparent = []", "needs `layers`"),
@@ -831,7 +529,6 @@ fn a_malformed_declaration_is_an_error() {
     }
 }
 
-#[test]
 fn a_missing_module_file_or_a_parse_error_stops_the_scan() {
     let sources = Sources::default().with("c/src/lib.rs", "pub mod gone;\n");
     let error = source::scan(&sources, "c/src/lib.rs").expect_err("no file");
@@ -846,25 +543,6 @@ fn a_missing_module_file_or_a_parse_error_stops_the_scan() {
     assert!(format!("{error:#}").contains("c/src/bad.rs:1"), "{error:#}");
 }
 
-#[test]
-fn the_self_test_reports_exactly_the_planted_findings() {
-    let (missed, extra) = super::self_test_diff().expect("the planted crates scan");
-    assert!(
-        missed.is_empty() && extra.is_empty(),
-        "missed {missed:#?}, false positives {extra:#?}"
-    );
-}
-
-#[test]
-fn the_self_test_counts_a_repeated_finding() {
-    let refused = || ("low".to_owned(), "high".to_owned(), "refused");
-    let (missed, extra) = super::multiset_diff(vec![refused()], vec![refused(), refused()]);
-    assert_eq!((missed, extra), (vec![], vec![refused()]));
-    let (missed, extra) = super::multiset_diff(vec![refused(), refused()], vec![refused()]);
-    assert_eq!((missed, extra), (vec![refused()], vec![]));
-}
-
-#[test]
 fn a_planted_import_in_the_real_widgets_tree_is_refused() {
     let root = util::repo_root();
     let manifest: toml::Table = toml::from_str(
@@ -913,5 +591,78 @@ fn a_planted_import_in_the_real_widgets_tree_is_refused() {
         after.difference(&before).cloned().collect::<BTreeSet<_>>(),
         refused,
         "before: {before:#?}"
+    );
+}
+
+#[test]
+fn module_dag_contract() {
+    crate::table_test::run_table(
+        "module_dag_contract",
+        &[
+            (
+                "a_use_of_a_higher_module_is_refused",
+                a_use_of_a_higher_module_is_refused as fn(),
+            ),
+            (
+                "the_wildcard_layer_leaves_its_members_unchecked_among_themselves",
+                the_wildcard_layer_leaves_its_members_unchecked_among_themselves as fn(),
+            ),
+            (
+                "a_path_through_a_root_reexport_counts_as_its_source_module",
+                a_path_through_a_root_reexport_counts_as_its_source_module as fn(),
+            ),
+            (
+                "a_path_through_a_transparent_module_counts_as_its_source",
+                a_path_through_a_transparent_module_counts_as_its_source as fn(),
+            ),
+            (
+                "a_plain_path_in_a_transparent_module_follows_the_relays_own_use",
+                a_plain_path_in_a_transparent_module_follows_the_relays_own_use as fn(),
+            ),
+            (
+                "super_paths_that_leave_the_top_level_module_are_edges",
+                super_paths_that_leave_the_top_level_module_are_edges as fn(),
+            ),
+            (
+                "a_macro_export_macro_belongs_to_the_module_that_defines_it",
+                a_macro_export_macro_belongs_to_the_module_that_defines_it as fn(),
+            ),
+            (
+                "a_leading_colon_alias_path_is_a_crate_path",
+                a_leading_colon_alias_path_is_a_crate_path as fn(),
+            ),
+            (
+                "a_top_level_module_file_under_inner_cfg_test_is_no_module",
+                a_top_level_module_file_under_inner_cfg_test_is_no_module as fn(),
+            ),
+            (
+                "cfg_any_test_or_feature_code_is_checked",
+                cfg_any_test_or_feature_code_is_checked as fn(),
+            ),
+            (
+                "an_unattributable_crate_path_is_reported",
+                an_unattributable_crate_path_is_reported as fn(),
+            ),
+            (
+                "a_stale_exception_is_reported",
+                a_stale_exception_is_reported as fn(),
+            ),
+            (
+                "an_exception_with_a_missing_adr_or_bad_date_is_reported",
+                an_exception_with_a_missing_adr_or_bad_date_is_reported as fn(),
+            ),
+            (
+                "a_malformed_declaration_is_an_error",
+                a_malformed_declaration_is_an_error as fn(),
+            ),
+            (
+                "a_missing_module_file_or_a_parse_error_stops_the_scan",
+                a_missing_module_file_or_a_parse_error_stops_the_scan as fn(),
+            ),
+            (
+                "a_planted_import_in_the_real_widgets_tree_is_refused",
+                a_planted_import_in_the_real_widgets_tree_is_refused as fn(),
+            ),
+        ],
     );
 }

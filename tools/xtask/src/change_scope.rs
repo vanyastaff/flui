@@ -266,7 +266,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn github_format_is_one_line_per_key() {
         let out = render(&sample(), 3, Format::Github);
         let expected = "lane=fast\nmode=packages\nheavy_required=false\nreason=changed: flui-material; plus 2 dependents\n\
@@ -283,7 +282,6 @@ mod tests {
         assert!(render(&multi, 3, Format::Github).contains("reason=a b\n"));
     }
 
-    #[test]
     fn shell_format_quotes_like_shlex() {
         let out = render(&sample(), 3, Format::Shell);
         assert!(
@@ -312,18 +310,19 @@ mod tests {
     }
 
     #[test]
-    fn human_format_summarises() {
-        assert_eq!(
-            render(&sample(), 3, Format::Human),
-            "lane: fast, mode: packages  (changed: flui-material; plus 2 dependents)\npackages (3): flui flui-material flui-web-counter\n"
-        );
-        let mut heavy = sample();
-        heavy.lane = lane_args::Lane::Wide;
-        heavy.heavy_required = true;
-        heavy.packages.clear();
-        assert_eq!(
-            render(&heavy, 0, Format::Human),
-            "lane: wide, mode: packages  [wide lane required]  (changed: flui-material; plus 2 dependents)\n"
+    fn render_contract() {
+        crate::table_test::run_table(
+            "render_contract",
+            &[
+                (
+                    "github_format_is_one_line_per_key",
+                    github_format_is_one_line_per_key as fn(),
+                ),
+                (
+                    "shell_format_quotes_like_shlex",
+                    shell_format_quotes_like_shlex as fn(),
+                ),
+            ],
         );
     }
 

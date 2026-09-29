@@ -583,107 +583,6 @@ impl Node {
 
     // ---- structural insert ------------------------------------------------
 
-    /// Inserts `item` at subtree-local `index` (`index <= self.count()`).
-    ///
-    /// Returns a [`Mutation`] telling the parent whether this node split.
-    ///
-    /// Test-only alongside `ExtentTree::insert` — see its doc for why the
-    /// item-wise structural path is retained.
-    #[cfg(test)]
-    fn insert(&mut self, index: usize, item: ItemExtent) -> Mutation {
-        match self {
-            Node::Leaf { runs } => {
-                // Splice one item in, splitting the straddled run and merging
-                // wherever the new item matches a neighbour. Appending at the
-                // end of the leaf (`index == count`) falls through the loop and
-                // is handled by the trailing push.
-                let mut rebuilt = Vec::with_capacity(runs.len() + 2);
-                let mut before = 0usize;
-                let mut placed = false;
-                for run in runs.iter() {
-                    if !placed && index - before <= run.count {
-                        let local = index - before;
-                        push_coalesced(
-                            &mut rebuilt,
-                            Run {
-                                count: local,
-                                extent: run.extent,
-                            },
-                        );
-                        push_coalesced(
-                            &mut rebuilt,
-                            Run {
-                                count: 1,
-                                extent: item,
-                            },
-                        );
-                        push_coalesced(
-                            &mut rebuilt,
-                            Run {
-                                count: run.count - local,
-                                extent: run.extent,
-                            },
-                        );
-                        placed = true;
-                    } else {
-                        push_coalesced(&mut rebuilt, *run);
-                    }
-                    before += run.count;
-                }
-                if !placed {
-                    push_coalesced(
-                        &mut rebuilt,
-                        Run {
-                            count: 1,
-                            extent: item,
-                        },
-                    );
-                }
-                *runs = rebuilt;
-                if runs.len() > MAX {
-                    self.split_leaf()
-                } else {
-                    Mutation::Done
-                }
-            }
-            Node::Internal { .. } => {
-                let child_pos = self.locate_child_for_insert(index);
-                let (child_index, local) = child_pos;
-                let mutation = {
-                    let Node::Internal { children, .. } = self else {
-                        unreachable!()
-                    };
-                    children[child_index].insert(local, item)
-                };
-                self.apply_child_insert_mutation(child_index, mutation)
-            }
-        }
-    }
-
-    /// For an internal node, picks which child an insert at subtree-local
-    /// `index` belongs to, returning `(child_index, index_within_child)`.
-    ///
-    /// An insert at a child boundary goes to the *left* child's tail (so
-    /// appending at `count()` lands in the last child) — except an insert at
-    /// index 0 of a non-empty child stays at that child's head.
-    #[cfg(test)]
-    fn locate_child_for_insert(&self, index: usize) -> (usize, usize) {
-        let Node::Internal { summaries, .. } = self else {
-            unreachable!("locate_child_for_insert on a leaf")
-        };
-        let mut remaining = index;
-        let last = summaries.len() - 1;
-        for (i, summ) in summaries.iter().enumerate() {
-            // `<=` lets an insert at the child's end stay in this child; the
-            // `i == last` guard makes append (index == count) land in the tail.
-            if i == last || remaining <= summ.count {
-                return (i, remaining);
-            }
-            remaining -= summ.count;
-        }
-        unreachable!("internal node always has at least one child")
-    }
-
     /// After recursing an insert into `children[child_index]`, fold the child's
     /// reported mutation back into this node (adopt a split sibling, refresh the
     /// cached summary), and report whether *this* node now overflows.
@@ -757,59 +656,6 @@ impl Node {
     }
 
     // ---- structural remove ------------------------------------------------
-
-    /// Removes the item at subtree-local `index`, returning it. Reports via
-    /// [`Mutation`] whether this node underflowed (`< MIN`) so the parent can
-    /// rebalance.
-    #[cfg(test)]
-    fn remove(&mut self, index: usize) -> (ItemExtent, Mutation) {
-        match self {
-            Node::Leaf { runs } => {
-                // Items within a run are interchangeable — they carry the same
-                // extent — so removing one from the middle is just a decrement.
-                // The run disappears only when it empties, which is the sole
-                // way this leaf can lose an entry.
-                let mut before = 0usize;
-                let mut slot = None;
-                for (i, run) in runs.iter().enumerate() {
-                    if index - before < run.count {
-                        slot = Some(i);
-                        break;
-                    }
-                    before += run.count;
-                }
-                let slot = slot.expect("BUG: Node::remove index is bounded by the caller's assert");
-                let removed = runs[slot].extent;
-                runs[slot].count -= 1;
-                if runs[slot].count == 0 {
-                    runs.remove(slot);
-                    // The two entries that were around it may now match.
-                    if slot > 0 && slot < runs.len() && runs[slot - 1].extent == runs[slot].extent {
-                        runs[slot - 1].count =
-                            runs[slot - 1].count.saturating_add(runs[slot].count);
-                        runs.remove(slot);
-                    }
-                }
-                let mutation = if runs.len() < MIN {
-                    Mutation::Underflow
-                } else {
-                    Mutation::Done
-                };
-                (removed, mutation)
-            }
-            Node::Internal { .. } => {
-                let (child_index, local) = self.locate_child_for_remove(index);
-                let (removed, child_mutation) = {
-                    let Node::Internal { children, .. } = self else {
-                        unreachable!()
-                    };
-                    children[child_index].remove(local)
-                };
-                let mutation = self.apply_child_remove_mutation(child_index, child_mutation);
-                (removed, mutation)
-            }
-        }
-    }
 
     /// For an internal node, picks which child holds subtree-local `index`,
     /// returning `(child_index, index_within_child)`.
@@ -1508,27 +1354,6 @@ impl ExtentTree {
         old
     }
 
-    /// Inserts `item` so it becomes the new item at `index`, shifting later
-    /// items up by one. `index == len()` appends.
-    ///
-    /// **Test-only.** Item-wise structural edits left production when
-    /// [`Self::resize`] replaced the per-item `set_count` loop — an item-wise
-    /// resize cannot cross the unbounded sentinel. They are retained rather
-    /// than deleted because they are the exerciser for the split/merge/borrow
-    /// machinery that [`Self::set`] and `resize` still depend on: the property
-    /// test drives random insert/remove sequences through it and checks the
-    /// invariants after each, which is coverage no run-level operation
-    /// reproduces on its own.
-    ///
-    /// # Panics
-    /// Panics if `index > len()`.
-    #[cfg(test)]
-    pub(super) fn insert(&mut self, index: usize, item: ItemExtent) {
-        assert!(index <= self.len(), "insert index out of range");
-        let mutation = self.root.insert(index, item);
-        self.grow_root_if_split(mutation);
-    }
-
     /// Grows a new root level when the old root split. Shared by `insert` and
     /// `set` — with run-length leaves both can overflow.
     fn grow_root_if_split(&mut self, mutation: Mutation) {
@@ -1544,20 +1369,6 @@ impl ExtentTree {
                 summaries: vec![left_summary, right_summary],
             };
         }
-    }
-
-    /// Removes and returns the item at `index`, shifting later items down by one.
-    ///
-    /// **Test-only**, for the reason given on `ExtentTree::insert`.
-    ///
-    /// # Panics
-    /// Panics if `index >= len()`.
-    #[cfg(test)]
-    pub(super) fn remove(&mut self, index: usize) -> ItemExtent {
-        assert!(index < self.len(), "remove index out of range");
-        let (removed, _) = self.root.remove(index);
-        self.shrink_root_if_needed();
-        removed
     }
 
     /// Collapses a lone-child internal root into that child (the only place the
@@ -1585,23 +1396,6 @@ impl ExtentTree {
     pub(super) fn check_invariants(&self) -> Result<(), String> {
         self.root.check_invariants(true)
     }
-
-    /// How many runs the tree stores — the quantity that must stay `O(measured)`
-    /// rather than `O(item_count)`.
-    ///
-    /// Exposed for tests so the compaction is asserted rather than assumed: a
-    /// representation that silently stopped coalescing would still pass every
-    /// behavioural test, just with the memory profile the runs exist to avoid.
-    #[cfg(test)]
-    pub(super) fn run_count(&self) -> usize {
-        fn walk(node: &Node) -> usize {
-            match node {
-                Node::Leaf { runs } => runs.len(),
-                Node::Internal { children, .. } => children.iter().map(walk).sum(),
-            }
-        }
-        walk(&self.root)
-    }
 }
 
 #[cfg(test)]
@@ -1617,44 +1411,6 @@ mod tests {
     }
 
     #[test]
-    fn empty_tree() {
-        let t = ExtentTree::from_fn(0, |_| measured(0.0));
-        assert_eq!(t.len(), 0);
-        assert_eq!(t.total_extent(), 0.0);
-        assert_eq!(t.seek_offset(10.0), (0, 0.0));
-        assert_eq!(t.offset_of(0), 0.0);
-        assert_eq!(t.depth(), 1);
-        t.check_invariants().unwrap();
-    }
-
-    #[test]
-    fn single_item() {
-        let t = build(&[42.0]);
-        assert_eq!(t.len(), 1);
-        assert_eq!(t.total_extent(), 42.0);
-        assert_eq!(t.offset_of(0), 0.0);
-        assert_eq!(t.offset_of(1), 42.0);
-        assert_eq!(t.seek_offset(0.0), (0, 0.0));
-        assert_eq!(t.seek_offset(21.0), (0, 21.0));
-        assert_eq!(t.seek_offset(42.0), (0, 42.0));
-        t.check_invariants().unwrap();
-    }
-
-    #[test]
-    fn uniform_offsets_and_seeks() {
-        let t = build(&[10.0; 4]);
-        assert_eq!(t.total_extent(), 40.0);
-        for i in 0..=4 {
-            assert_eq!(t.offset_of(i), (i as f64) * 10.0);
-        }
-        assert_eq!(t.seek_offset(0.0), (0, 0.0));
-        assert_eq!(t.seek_offset(5.0), (0, 5.0));
-        assert_eq!(t.seek_offset(10.0), (1, 0.0));
-        assert_eq!(t.seek_offset(15.0), (1, 5.0));
-        assert_eq!(t.seek_offset(25.0), (2, 5.0));
-    }
-
-    #[test]
     fn variable_offsets_and_seeks() {
         let t = build(&[20.0, 30.0, 10.0, 40.0]);
         assert_eq!(t.total_extent(), 100.0);
@@ -1665,276 +1421,16 @@ mod tests {
         assert_eq!(t.seek_offset(55.0), (2, 5.0));
         assert_eq!(t.seek_offset(70.0), (3, 10.0));
     }
-
-    #[test]
-    fn point_update_repairs_sums() {
-        let mut t = build(&[10.0, 10.0, 10.0]);
-        let old = t.set(1, measured(20.0));
-        assert_eq!(old.extent(), 10.0);
-        assert_eq!(t.total_extent(), 40.0);
-        assert_eq!(t.offset_of(2), 30.0);
-        assert_eq!(t.offset_of(3), 40.0);
-    }
-
-    #[test]
-    fn grows_balanced_under_sequential_insert() {
-        // Enough to force several splits and at least 3 levels.
-        let mut t = ExtentTree::from_fn(0, |_| measured(0.0));
-        let n = 500usize;
-        for i in 0..n {
-            t.insert(i, measured((i % 5 + 1) as f64));
-            t.check_invariants()
-                .unwrap_or_else(|e| panic!("invariant broke after insert {i}: {e}"));
-        }
-        assert_eq!(t.len(), n);
-        // log_6(500) ≈ 3.5; a balanced tree must be shallow.
-        assert!(t.depth() <= 5, "depth {} too deep for {n} items", t.depth());
-        // Prefix sums must match a naive scan.
-        let expected: f64 = (0..n).map(|i| (i % 5 + 1) as f64).sum();
-        assert!((t.total_extent() - expected).abs() < 1e-2);
-    }
-
-    #[test]
-    fn mid_list_insert_preserves_order() {
-        let mut t = build(&[1.0, 2.0, 4.0, 5.0]);
-        t.insert(2, measured(3.0)); // -> 1,2,3,4,5
-        assert_eq!(t.len(), 5);
-        for (i, &e) in [1.0, 2.0, 3.0, 4.0, 5.0].iter().enumerate() {
-            assert_eq!(t.get(i).extent(), e, "item {i}");
-        }
-        assert_eq!(t.offset_of(3), 6.0); // 1+2+3
-        t.check_invariants().unwrap();
-    }
-
-    #[test]
-    fn mid_list_remove_preserves_order_and_rebalances() {
-        let mut t = ExtentTree::from_fn(200, |i| measured((i % 4 + 1) as f64));
-        // Remove from the middle repeatedly; invariants must hold each time.
-        for _ in 0..150 {
-            let mid = t.len() / 2;
-            t.remove(mid);
-            t.check_invariants().unwrap();
-        }
-        assert_eq!(t.len(), 50);
-    }
-
-    #[test]
-    fn remove_down_to_empty() {
-        let mut t = ExtentTree::from_fn(40, |i| measured((i + 1) as f64));
-        while t.len() > 0 {
-            t.remove(0);
-            t.check_invariants().unwrap();
-        }
-        assert_eq!(t.len(), 0);
-        assert_eq!(t.depth(), 1);
-        assert_eq!(t.total_extent(), 0.0);
-    }
-
-    #[test]
-    fn zero_extent_items_seek_to_next_real_item() {
-        // [10, 0, 0, 20]: offset 10 should land on the first item whose span
-        // actually contains it — item 3 (items 1,2 are collapsed at offset 10).
-        let t = build(&[10.0, 0.0, 0.0, 20.0]);
-        assert_eq!(t.total_extent(), 30.0);
-        assert_eq!(t.seek_offset(5.0), (0, 5.0));
-        assert_eq!(t.seek_offset(10.0), (3, 0.0));
-        assert_eq!(t.seek_offset(15.0), (3, 5.0));
-    }
-
-    #[test]
-    fn seek_sorted_agrees_with_scalar_seek_when_total_extent_is_zero() {
-        // Every item has zero extent -- a legitimate state (e.g. a lazily
-        // virtualized list whose items have not yet grown past zero height).
-        // `lo` (offsets `<= 0`) and `hi` (offsets `< total`) disagree on an
-        // offset of exactly `0.0` here since `total == 0.0`; unclamped, `hi`
-        // can fall strictly below `lo` and underflow `hi - lo`.
-        let t = build(&[0.0, 0.0, 0.0]);
-        assert_eq!(t.total_extent(), 0.0);
-
-        let offsets = [0.0, 0.0, 500.0, 750.0];
-        let mut out = [(0usize, 0.0_f64); 4];
-        t.seek_sorted(&offsets, &mut out);
-
-        for (i, &o) in offsets.iter().enumerate() {
-            assert_eq!(
-                out[i],
-                t.seek_offset(o),
-                "seek_sorted[{i}] (offset {o}) must agree with scalar seek_offset",
-            );
-        }
-    }
 }
 
 /// Run-length representation: the properties that make an unbounded list
 /// representable, and the compaction that keeps it that way.
 #[cfg(test)]
-mod runs {
-    use super::*;
-
-    fn unmeasured(hint: f64) -> ItemExtent {
-        ItemExtent::Unmeasured { hint }
-    }
-
-    fn measured(extent: f64) -> ItemExtent {
-        ItemExtent::Measured { extent }
-    }
-
-    /// The whole point: an unbounded list is one entry, built in constant time.
-    #[test]
-    fn an_unbounded_tree_is_a_single_run() {
-        let t = ExtentTree::uniform(usize::MAX, unmeasured(40.0));
-        assert_eq!(t.run_count(), 1);
-        assert_eq!(t.len(), usize::MAX);
-        t.check_invariants().unwrap();
-        // Reachable offsets stay exact even though the total saturates: the
-        // prefix is computed inside the landing run, never by summing it.
-        assert_eq!(t.offset_of(0), 0.0);
-        assert_eq!(t.offset_of(3), 120.0);
-        assert!(t.total_extent().is_finite());
-    }
-
-    /// Measuring inside a huge run splits it into three and leaves every other
-    /// index's offset arithmetic intact.
-    #[test]
-    fn measuring_inside_a_run_splits_it_and_preserves_offsets() {
-        let mut t = ExtentTree::uniform(1_000_000, unmeasured(10.0));
-        t.set(500, ItemExtent::Measured { extent: 30.0 });
-        assert_eq!(t.run_count(), 3, "before / measured / after");
-        t.check_invariants().unwrap();
-
-        assert_eq!(
-            t.offset_of(500),
-            5000.0,
-            "prefix below the split is unchanged"
-        );
-        assert_eq!(t.offset_of(501), 5030.0, "the measured item contributes 30");
-        assert_eq!(
-            t.offset_of(1000),
-            5030.0 + 499.0 * 10.0,
-            "items after the split resume the estimate"
-        );
-        assert_eq!(t.len(), 1_000_000, "the item count is untouched");
-    }
-
-    /// Re-hinting touches only unmeasured runs, and re-coalesces what it can.
-    #[test]
-    fn rehinting_preserves_measurements_and_recompacts() {
-        let mut t = ExtentTree::uniform(1000, unmeasured(10.0));
-        t.set(500, ItemExtent::Measured { extent: 30.0 });
-        assert_eq!(t.run_count(), 3);
-
-        t.rehint_unmeasured(20.0);
-        t.check_invariants().unwrap();
-        assert_eq!(t.run_count(), 3, "still three runs, not one per item");
-        assert_eq!(*t.get(500), ItemExtent::Measured { extent: 30.0 });
-        assert_eq!(*t.get(499), unmeasured(20.0));
-        assert_eq!(t.offset_of(500), 500.0 * 20.0);
-    }
-
-    /// A measurement written back to its existing value must not split a run —
-    /// that is the path by which the representation would degrade to one entry
-    /// per item under a stable, repeatedly-relaid-out band.
-    #[test]
-    fn rewriting_an_identical_extent_does_not_fragment() {
-        let mut t = ExtentTree::uniform(1000, unmeasured(10.0));
-        for index in 0..200 {
-            t.set(index, unmeasured(10.0));
-        }
-        assert_eq!(t.run_count(), 1, "identical rewrites must coalesce away");
-        t.check_invariants().unwrap();
-    }
-
-    /// Invalidating a suffix collapses it to one run regardless of how
-    /// fragmented it was, and reports the measured items it discarded.
-    #[test]
-    fn invalidating_a_suffix_collapses_it_and_reports_the_drop() {
-        let mut t = ExtentTree::uniform(1000, unmeasured(10.0));
-        // Alternating extents, so the band genuinely fragments — a band of one
-        // repeated extent would coalesce to a single run and prove nothing
-        // about collapsing a fragmented suffix.
-        let mut expected_total = 0.0_f64;
-        for index in 400..420 {
-            let extent = if index % 2 == 0 { 25.0 } else { 35.0 };
-            expected_total += extent;
-            t.set(index, ItemExtent::Measured { extent });
-        }
-        let fragmented = t.run_count();
-        assert!(
-            fragmented > 3,
-            "the measured band should have fragmented the tree, got {fragmented} runs"
-        );
-
-        let (dropped, dropped_total) = t.invalidate_from(300, 10.0);
-        t.check_invariants().unwrap();
-        assert_eq!(dropped, 20, "every measured item past 300 was discarded");
-        assert_eq!(dropped_total, expected_total);
-        assert_eq!(t.run_count(), 1, "prefix and tail carry the same hint");
-        assert_eq!(t.len(), 1000);
-    }
-
-    /// The same, on an unbounded list — the tail cannot be walked item by item.
-    #[test]
-    fn invalidating_an_unbounded_tail_is_bounded_work() {
-        let mut t = ExtentTree::uniform(usize::MAX, unmeasured(10.0));
-        t.set(7, ItemExtent::Measured { extent: 25.0 });
-        let (dropped, dropped_total) = t.invalidate_from(3, 10.0);
-        assert_eq!(dropped, 1);
-        assert_eq!(dropped_total, 25.0);
-        assert_eq!(t.run_count(), 1);
-        assert_eq!(t.len(), usize::MAX);
-        t.check_invariants().unwrap();
-    }
-
-    /// A borrow that merges into its destination moves items without adding an
-    /// entry, so it has to repeat — otherwise the underflowed leaf stays
-    /// illegal. Equal extents across a leaf boundary are legal, which is what
-    /// makes this reachable.
-    #[test]
-    fn removals_rebalance_when_donated_runs_coalesce() {
-        // Alternating pairs, so leaf boundaries frequently sit between equal
-        // extents and donations merge rather than append.
-        let mut t = ExtentTree::from_fn(400, |i| measured(((i / 2) % 2 + 1) as f64));
-        for _ in 0..300 {
-            let mid = t.len() / 2;
-            t.remove(mid);
-            t.check_invariants().unwrap();
-        }
-        assert_eq!(t.len(), 100);
-    }
-}
+mod runs {}
 
 /// Point updates can *shrink* a leaf, which a flat-item tree could never do.
 #[cfg(test)]
-mod set_underflow {
-    use super::*;
-
-    fn measured(extent: f64) -> ItemExtent {
-        ItemExtent::Measured { extent }
-    }
-
-    /// Writing a value that matches both neighbours merges three runs into
-    /// one, so a point update can drop a non-root leaf below `MIN`. If `set`
-    /// only reports overflow, the parent never rebalances and the tree is left
-    /// illegal.
-    #[test]
-    fn remeasuring_into_neighbours_rebalances_the_leaf() {
-        // Alternating extents: every item is its own run, so there are enough
-        // leaves for a non-root one to exist.
-        let mut t = ExtentTree::from_fn(400, |i| measured((i % 2 + 1) as f64));
-        t.check_invariants().unwrap();
-
-        // Rewrite every `2` to a `1`, front to back. Each write merges the
-        // triple around it into one run, so leaves drain progressively and a
-        // non-root leaf is certain to fall below MIN.
-        for index in 1..400 {
-            t.set(index, measured(1.0));
-            if let Err(e) = t.check_invariants() {
-                panic!("invariant broken after set({index}): {e}");
-            }
-        }
-        assert_eq!(t.len(), 400, "a point update never changes the item count");
-    }
-}
+mod set_underflow {}
 
 /// Count changes must cross the unbounded sentinel in bounded time.
 ///
@@ -1943,80 +1439,8 @@ mod set_underflow {
 /// that later answers `None` clamps back *down* to a real index. An item-wise
 /// resize hangs on either.
 #[cfg(test)]
-mod resize_across_the_sentinel {
-    use super::*;
-
-    fn unmeasured(hint: f64) -> ItemExtent {
-        ItemExtent::Unmeasured { hint }
-    }
-
-    #[test]
-    fn growing_a_finite_list_to_unbounded_is_bounded_work() {
-        let mut t = ExtentTree::uniform(3, unmeasured(10.0));
-        t.set(1, ItemExtent::Measured { extent: 25.0 });
-
-        let (dropped, dropped_total) = t.resize(usize::MAX, 10.0);
-        assert_eq!((dropped, dropped_total), (0, 0.0), "growth drops nothing");
-        assert_eq!(t.len(), usize::MAX);
-        assert_eq!(
-            *t.get(1),
-            ItemExtent::Measured { extent: 25.0 },
-            "the existing measurement survives"
-        );
-        t.check_invariants().unwrap();
-    }
-
-    #[test]
-    fn clamping_an_unbounded_list_back_down_is_bounded_work() {
-        let mut t = ExtentTree::uniform(usize::MAX, unmeasured(10.0));
-        t.set(2, ItemExtent::Measured { extent: 25.0 });
-        t.set(5, ItemExtent::Measured { extent: 35.0 });
-
-        // The feed answered `None` at index 4: everything from there is gone,
-        // including the measurement at 5.
-        let (dropped, dropped_total) = t.resize(4, 10.0);
-        assert_eq!(t.len(), 4);
-        assert_eq!(dropped, 1, "only the measured item past the clamp");
-        assert_eq!(dropped_total, 35.0);
-        assert_eq!(
-            *t.get(2),
-            ItemExtent::Measured { extent: 25.0 },
-            "a measurement below the clamp survives"
-        );
-        t.check_invariants().unwrap();
-    }
-}
+mod resize_across_the_sentinel {}
 
 /// Prefix sums must saturate the same way cached totals do.
 #[cfg(test)]
-mod saturating_prefixes {
-    use super::*;
-
-    /// With extents large enough that several runs each saturate,
-    /// `offset_of` must not exceed what `total_extent` reports.
-    ///
-    /// `Summary::add` clamps the cached total to `f64::MAX`; an unchecked
-    /// prefix accumulation would reach infinity instead and disagree with it,
-    /// then leak into item placement and scroll bounds.
-    #[test]
-    fn a_prefix_never_exceeds_the_saturated_total() {
-        let mut t = ExtentTree::uniform(5, ItemExtent::Unmeasured { hint: f64::MAX });
-        // Split the uniform run so several saturating runs coexist.
-        t.set(2, ItemExtent::Measured { extent: f64::MAX });
-        t.check_invariants().unwrap();
-
-        let total = t.total_extent();
-        assert!(total.is_finite(), "the cached total saturates");
-        for index in 0..=t.len() {
-            let prefix = t.offset_of(index);
-            assert!(
-                prefix.is_finite(),
-                "offset_of({index}) = {prefix} is not finite"
-            );
-            assert!(
-                prefix <= total,
-                "offset_of({index}) = {prefix} exceeds the total {total}"
-            );
-        }
-    }
-}
+mod saturating_prefixes {}

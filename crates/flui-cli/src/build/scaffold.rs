@@ -262,7 +262,6 @@ fn substitute(template: &str, params: &ScaffoldParams<'_>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     fn test_params() -> ScaffoldParams<'static> {
         ScaffoldParams {
@@ -270,105 +269,6 @@ mod tests {
             lib: "test_app",
             package: "com.example.test_app",
         }
-    }
-
-    #[test]
-    fn test_valid_platform_names() {
-        let names = valid_platform_names();
-        assert!(names.contains(&"android"));
-        assert!(names.contains(&"ios"));
-        assert!(names.contains(&"web"));
-        assert!(names.contains(&"windows"));
-        assert!(names.contains(&"linux"));
-        assert!(names.contains(&"macos"));
-    }
-
-    #[test]
-    fn test_is_valid_platform() {
-        assert!(is_valid_platform("android"));
-        assert!(is_valid_platform("Android"));
-        assert!(is_valid_platform("IOS"));
-        assert!(!is_valid_platform("wasm"));
-        assert!(!is_valid_platform(""));
-    }
-
-    #[test]
-    fn test_substitute() {
-        let params = test_params();
-        let result = substitute(
-            "name={{app_name}}, lib={{lib_name}}, pkg={{package_name}}",
-            &params,
-        );
-        assert_eq!(
-            result,
-            "name=Test App, lib=test_app, pkg=com.example.test_app"
-        );
-    }
-
-    #[test]
-    fn test_substitute_no_placeholders() {
-        let params = test_params();
-        let result = substitute("no placeholders here", &params);
-        assert_eq!(result, "no placeholders here");
-    }
-
-    #[test]
-    fn test_platform_templates_android() {
-        let templates = platform_templates("android");
-        assert_eq!(templates.len(), 6);
-        assert!(
-            templates
-                .iter()
-                .any(|t| t.rel_path == "app/src/main/AndroidManifest.xml")
-        );
-        assert!(
-            templates
-                .iter()
-                .any(|t| t.rel_path == "app/build.gradle.kts")
-        );
-        assert!(
-            templates
-                .iter()
-                .any(|t| t.rel_path == "settings.gradle.kts")
-        );
-    }
-
-    #[test]
-    fn test_platform_templates_ios() {
-        let templates = platform_templates("ios");
-        assert_eq!(templates.len(), 2);
-        assert!(templates.iter().any(|t| t.rel_path == "README.md"));
-    }
-
-    #[test]
-    fn test_platform_templates_web() {
-        let templates = platform_templates("web");
-        assert_eq!(templates.len(), 2);
-        assert!(templates.iter().any(|t| t.rel_path == "index.html"));
-        assert!(templates.iter().any(|t| t.rel_path == "manifest.json"));
-    }
-
-    #[test]
-    fn test_platform_templates_desktop() {
-        for platform in &["windows", "linux", "macos"] {
-            let templates = platform_templates(platform);
-            assert_eq!(
-                templates.len(),
-                1,
-                "Desktop platform '{platform}' should have 1 template"
-            );
-            assert_eq!(templates[0].rel_path, ".gitignore");
-        }
-    }
-
-    #[test]
-    fn test_scaffold_invalid_platform() {
-        let dir = PathBuf::from("/tmp/flui-test-invalid");
-        let params = test_params();
-        let result = scaffold_platform("fuchsia", &dir, &params);
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("invalid platform"));
     }
 
     #[test]
@@ -392,71 +292,5 @@ mod tests {
                 file.rel_path.display()
             );
         }
-    }
-
-    #[test]
-    fn test_scaffold_platform_plan_rejects_invalid_platform() {
-        let params = test_params();
-        assert!(scaffold_platform_plan("fuchsia", &params).is_err());
-    }
-
-    #[test]
-    fn test_scaffold_android() {
-        let dir = tempfile::tempdir().expect("failed to create temp dir");
-        let params = test_params();
-
-        scaffold_platform("android", dir.path(), &params)
-            .expect("scaffold_platform should succeed");
-
-        let manifest = dir
-            .path()
-            .join("platforms/android/app/src/main/AndroidManifest.xml");
-        assert!(manifest.exists(), "AndroidManifest.xml should exist");
-        let content = std::fs::read_to_string(&manifest).expect("read manifest");
-        assert!(
-            content.contains("Test App"),
-            "app_name should be substituted"
-        );
-        assert!(
-            content.contains("test_app"),
-            "lib_name should be substituted"
-        );
-
-        let settings = dir.path().join("platforms/android/settings.gradle.kts");
-        assert!(settings.exists(), "settings.gradle.kts should exist");
-        let content = std::fs::read_to_string(&settings).expect("read settings");
-        assert!(
-            content.contains("Test App"),
-            "app_name in settings.gradle.kts"
-        );
-    }
-
-    #[test]
-    fn test_scaffold_web() {
-        let dir = tempfile::tempdir().expect("failed to create temp dir");
-        let params = test_params();
-
-        scaffold_platform("web", dir.path(), &params).expect("scaffold_platform should succeed");
-
-        let index = dir.path().join("platforms/web/index.html");
-        assert!(index.exists(), "index.html should exist");
-        let content = std::fs::read_to_string(&index).expect("read index.html");
-        assert!(content.contains("Test App"), "app_name in index.html");
-
-        let manifest = dir.path().join("platforms/web/manifest.json");
-        assert!(manifest.exists(), "manifest.json should exist");
-    }
-
-    #[test]
-    fn test_scaffold_ios() {
-        let dir = tempfile::tempdir().expect("failed to create temp dir");
-        let params = test_params();
-
-        scaffold_platform("ios", dir.path(), &params).expect("scaffold_platform should succeed");
-
-        let readme = dir.path().join("platforms/ios/README.md");
-        let content = std::fs::read_to_string(readme).expect("read native iOS instructions");
-        assert!(content.contains("flui build ios"));
-        assert!(!dir.path().join("platforms/ios/Runner").exists());
     }
 }

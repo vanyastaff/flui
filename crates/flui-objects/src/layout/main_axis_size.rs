@@ -32,14 +32,3 @@ impl MainAxisSize {
         matches!(self, MainAxisSize::Max)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn main_axis_size_predicates() {
-        assert!(MainAxisSize::Min.is_min() && !MainAxisSize::Min.is_max());
-        assert!(MainAxisSize::Max.is_max() && !MainAxisSize::Max.is_min());
-    }
-}

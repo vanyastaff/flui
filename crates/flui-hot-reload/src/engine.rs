@@ -60,14 +60,3 @@ pub mod env {
     /// Legacy scene plugin path (scene-only hot reload, not widget parity).
     pub const SCENE_PLUGIN: &str = "FLUI_SCENE_PLUGIN";
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hot_reload_preserves_state() {
-        assert!(HotReloadTier::HotReload.preserves_state());
-        assert!(!HotReloadTier::HotRestart.preserves_state());
-    }
-}

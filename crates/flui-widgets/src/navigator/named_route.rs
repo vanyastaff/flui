@@ -740,22 +740,11 @@ struct Registrations {
     table: HashMap<String, RegisteredRoute>,
     generate: Option<RouteFactory>,
     unknown: Option<RouteFactory>,
-    /// Re-registrations that changed a name's `Output` type. Counted in full;
-    /// only the first is warned about.
-    conflicts_seen: usize,
-    /// The latch itself. Set under the lock in the same step that decides
-    /// whether to warn, so the two cannot drift.
-    ///
-    /// It guards the **counter**, not the warning: a re-entrant registration
-    /// could never deliver a second event (`tracing` drops re-entrant dispatch
-    /// on one thread), but latching after the emit would let it count itself
-    /// first, and `warns_emitted` is the oracle the warn-once test rests on.
-    /// Measured both ways in
-    /// `a_subscriber_that_re_registers_while_handling_the_warning_cannot_skew_the_latch`.
+    /// Whether a re-registration that changed a name's `Output` type has
+    /// already been warned about; only the first is. Set under the lock in the
+    /// same step that decides whether to warn, so a `tracing` subscriber that
+    /// re-enters registration during the warn cannot observe a stale value.
     warn_latched: bool,
-    /// Warnings emitted — incremented in the same locked step that commits the
-    /// latch, so this counts exactly the emissions the latch authorised.
-    warns_emitted: usize,
 }
 
 /// One table entry: the factory, plus what the route it builds delivers.
@@ -814,20 +803,9 @@ impl RouteRegistry {
             );
             match &previous {
                 Some(previous) if previous.output != output => {
-                    registrations.conflicts_seen += 1;
-                    // Decide and latch in one step, under this guard. Setting
-                    // the flag after the emit — outside the lock — would let a
-                    // `tracing` subscriber that re-enters registration during
-                    // the warn observe a stale value and count itself first:
-                    // `warns_emitted` reads 2 for one delivered event. It could
-                    // not produce a second *warning* — that is unreachable — so
-                    // this guards the counter, and the counter is what the
-                    // warn-once test asserts on. Not dead code.
+                    // Decide and latch in one step, under this guard.
                     let first = !registrations.warn_latched;
                     registrations.warn_latched = true;
-                    if first {
-                        registrations.warns_emitted += 1;
-                    }
                     first.then_some(previous.output_name)
                 }
                 _ => None,
@@ -840,11 +818,6 @@ impl RouteRegistry {
         // Emitted with the registry lock released, like every other call out of
         // this module: a `tracing` subscriber is user code too, and may register
         // routes from inside this call.
-        //
-        // A second *event* is not what the latch prevents — `tracing` drops
-        // re-entrant dispatch on the same thread, so a re-entrant registration
-        // cannot deliver one whatever this code does. What the latch prevents is
-        // that re-entrant call counting itself as first.
         if let Some(previous_output) = displaced {
             tracing::warn!(
                 route = %name,
@@ -884,25 +857,6 @@ impl RouteRegistry {
             )
         };
         drop(dropped);
-    }
-
-    /// Re-registrations that changed a name's `Output`. Test-facing.
-    #[cfg(test)]
-    pub(super) fn conflicts_seen(&self) -> usize {
-        self.registrations.lock().conflicts_seen
-    }
-
-    /// Conflict warnings emitted. Committed **atomically with the decision to
-    /// warn**, under the registry lock — not alongside the `tracing::warn!`,
-    /// which is deliberately emitted after the guard drops. So this cannot
-    /// over-report, but it is a record of the decision rather than proof of the
-    /// emission: what pins the warn itself is the capture-based test
-    /// (`the_conflict_warning_is_emitted_once_and_names_both_result_types`),
-    /// which fails when the `tracing::warn!` is deleted while every assertion
-    /// on this counter still passes.
-    #[cfg(test)]
-    pub(super) fn warns_emitted(&self) -> usize {
-        self.registrations.lock().warns_emitted
     }
 
     /// Install the catch-all generator — Flutter's `Navigator.onGenerateRoute`.

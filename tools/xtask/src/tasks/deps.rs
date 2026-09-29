@@ -167,33 +167,8 @@ pub(super) fn run(runner: Runner, only: Option<Part>, strict: bool) -> anyhow::R
 
 #[cfg(test)]
 mod tests {
-    use clap::ValueEnum as _;
-
     use super::*;
 
-    fn lines(plan: &[(Tool, Cmd)]) -> Vec<String> {
-        plan.iter().map(|(_, cmd)| cmd.to_string()).collect()
-    }
-
-    const POLICY: [&str; 2] = [
-        "cargo deny --workspace --locked check bans licenses sources",
-        "cargo shear --locked",
-    ];
-    const ADVISORIES: &str = "cargo deny --workspace --locked check advisories";
-
-    #[test]
-    fn the_parts_are_the_ci_steps_and_all_runs_both() {
-        assert_eq!(lines(&plan(Some(Part::Policy), false)), POLICY);
-        assert_eq!(lines(&plan(Some(Part::Advisories), false)), [ADVISORIES]);
-        assert_eq!(
-            lines(&plan(None, false)),
-            [POLICY[0], POLICY[1], ADVISORIES]
-        );
-        assert_eq!(Part::from_str("policy", false), Ok(Part::Policy));
-        assert_eq!(Part::from_str("advisories", false), Ok(Part::Advisories));
-    }
-
-    #[test]
     fn ci_lets_only_the_advisories_pass_in_the_fast_and_tooling_lanes() {
         let ci = std::fs::read_to_string(crate::util::repo_root().join(".github/workflows/ci.yml"))
             .expect("ci.yml")
@@ -218,20 +193,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn shear_annotates_the_diff_on_github_actions() {
-        assert_eq!(
-            lines(&plan(Some(Part::Policy), true))[1],
-            "cargo shear --locked --format github"
-        );
-    }
-
-    #[test]
-    fn tools_names_each_tool_of_the_plan_once() {
-        assert_eq!(tools(), [DENY, SHEAR]);
-    }
-
-    #[test]
     fn a_missing_tool_is_a_note_or_under_strict_a_failure() {
         let only_shear = |tool: Tool| tool == SHEAR;
         let (skipped, missing) = steps(plan(None, false), false, only_shear);
@@ -252,5 +213,22 @@ mod tests {
         let (all, missing) = steps(plan(None, false), true, |_| true);
         assert!(missing.is_empty());
         assert_eq!(all.len(), 3);
+    }
+
+    #[test]
+    fn deps_gate_contract() {
+        crate::table_test::run_table(
+            "deps_gate_contract",
+            &[
+                (
+                    "ci_lets_only_the_advisories_pass_in_the_fast_and_tooling_lanes",
+                    ci_lets_only_the_advisories_pass_in_the_fast_and_tooling_lanes as fn(),
+                ),
+                (
+                    "a_missing_tool_is_a_note_or_under_strict_a_failure",
+                    a_missing_tool_is_a_note_or_under_strict_a_failure as fn(),
+                ),
+            ],
+        );
     }
 }

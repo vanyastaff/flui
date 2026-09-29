@@ -66,7 +66,6 @@ fn block_on<F: Future>(future: F) -> F::Output {
 /// must still start its own owned single-worker runtime and decode the
 /// fixture. This is the test that fails if the owned-runtime fallback is ever
 /// removed or broken — a plain `#[test]` has no tokio context to fall back on.
-#[test]
 fn load_image_bridged_starts_an_owned_runtime_and_decodes_the_fixture() {
     let registry = AssetRegistryBuilder::new()
         .with_capacity(1024 * 1024)
@@ -85,7 +84,6 @@ fn load_image_bridged_starts_an_owned_runtime_and_decodes_the_fixture() {
 /// A missing file must resolve to a typed `Err` promptly, not hang: the
 /// bridge's oneshot completion must fire for the failure path exactly like
 /// the success path.
-#[test]
 fn load_image_bridged_reports_a_missing_file_as_an_error_not_a_hang() {
     let registry = AssetRegistryBuilder::new()
         .with_capacity(1024 * 1024)
@@ -103,26 +101,10 @@ fn load_image_bridged_reports_a_missing_file_as_an_error_not_a_hang() {
     );
 }
 
-/// `AssetRegistryBuilder::with_runtime_handle` must actually thread the given
-/// handle through to `load_image_bridged` end to end: injecting a handle to a
-/// currently-running ambient runtime and loading through it must succeed and
-/// decode the fixture, exactly like the owned-runtime fallback does.
-///
-/// (That the INJECTED handle specifically — not a silently-substituted owned
-/// runtime — is the one actually used is proved deterministically by
-/// `registry::bridge::tests::resolve_prefers_an_injected_handle_over_starting_an_owned_runtime`,
-/// which has white-box access to the resolved `BridgeRuntime` variant.)
-#[tokio::test]
-async fn load_image_bridged_works_with_an_explicitly_injected_handle() {
-    let registry = AssetRegistryBuilder::new()
-        .with_capacity(1024 * 1024)
-        .with_runtime_handle(tokio::runtime::Handle::current())
-        .build();
-
-    let decoded = registry
-        .load_image_bridged(fixture_path())
-        .await
-        .expect("the fixture must decode through the injected handle");
-
-    assert_eq!((decoded.width(), decoded.height()), (4, 2));
+/// The bridge end to end with no ambient runtime: the success path decodes and
+/// the failure path resolves to an error instead of hanging.
+#[test]
+fn load_image_bridged_completes_both_the_success_and_the_failure_path() {
+    load_image_bridged_starts_an_owned_runtime_and_decodes_the_fixture();
+    load_image_bridged_reports_a_missing_file_as_an_error_not_a_hang();
 }

@@ -542,7 +542,6 @@ mod tests {
             .lane
     }
 
-    #[test]
     fn whole_workspace_pr_takes_the_wide_lane() {
         // the lane machinery is a workspace-wide input: every Linux job runs,
         // not the whole workspace serially in fast-lane
@@ -561,7 +560,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn heavy_triggers_on_a_pr_take_the_wide_lane_not_full() {
         for path in ["Cargo.lock", ".github/workflows/ci.yml", "deny.toml"] {
             assert_eq!(pr_lane(&[path], false), Lane::Wide, "{path}");
@@ -569,7 +567,6 @@ mod tests {
         }
     }
 
-    #[test]
     fn events_pick_their_lane() {
         use Event::{MergeGroup, PullRequest, Push, Schedule, WorkflowDispatch};
         for mode in [Mode::Docs, Mode::None, Mode::Packages, Mode::Full] {
@@ -642,7 +639,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn fast_lane_builds_the_test_scope_and_filters() {
         let a = args(&["packages/flui-material/src/lib.rs"]);
         assert_eq!(a.lane, Lane::Fast);
@@ -659,7 +655,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn platform_only_scope_has_no_test_args() {
         let only_platform = Scope {
             mode: Mode::Packages,
@@ -675,7 +670,6 @@ mod tests {
         assert!(a.platform, "its own leg runs it");
     }
 
-    #[test]
     fn a_standalone_crate_runs_the_tooling_lane() {
         let a = args(&["tools/text-spike/src/main.rs"]);
         assert_eq!(
@@ -684,7 +678,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn a_changed_manifest_gets_the_per_feature_pass() {
         // the package itself for its changed manifest, and the facade, whose
         // edge to it only exists under the `material` feature
@@ -694,7 +687,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn cfg_gated_backends_get_their_targets() {
         let a = args(&["crates/flui-platform/src/lib.rs"]);
         assert_eq!(
@@ -714,7 +706,6 @@ mod tests {
         assert!(a.cross_desktop_mcp);
     }
 
-    #[test]
     fn wasm_scope_skips_packages_that_cannot_target_wasm() {
         let no_wasm = no_wasm_packages(repo().workspace().expect("cargo metadata"));
         assert!(no_wasm.contains("flui-cli")); // from its manifest, not restated
@@ -724,7 +715,6 @@ mod tests {
         assert!(a.wasm_args.contains("-p flui-platform"));
     }
 
-    #[test]
     fn per_feature_pass_covers_feature_gated_dependents() {
         // flui-widgets reaches flui-assets only through its optional
         // `asset-images` edge: a source-only flui-assets change must compile
@@ -735,7 +725,6 @@ mod tests {
         assert!(!a.heavy_required);
     }
 
-    #[test]
     fn a_design_system_change_gets_the_facades_per_feature_pass() {
         // the facade turns no feature on by default, so its edge to
         // flui-material only exists under `material`: a Material change must
@@ -746,7 +735,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn many_feature_gated_dependents_take_the_wide_lane() {
         let a = args(&["crates/flui-layer/src/lib.rs"]);
         assert!(a.heavy_required);
@@ -754,7 +742,6 @@ mod tests {
         assert!(a.reason.contains("feature-matrix"));
     }
 
-    #[test]
     fn ios_leg_when_flui_app_or_the_facade_is_in_scope() {
         assert!(args(&["crates/flui-view/src/lib.rs"]).cross_ios);
         // the facade gates code on iOS too
@@ -762,7 +749,6 @@ mod tests {
         assert!(!args(&["crates/flui-cli/src/main.rs"]).cross_ios);
     }
 
-    #[test]
     fn doctests_cover_the_scopes_library_packages() {
         let a = args(&["packages/flui-material/src/lib.rs"]);
         // flui-sdk is in scope through its dev-dependency on the facade
@@ -782,7 +768,6 @@ mod tests {
         assert_eq!(args(&["docs/x.md"]).doctest_args, "");
     }
 
-    #[test]
     fn rustdoc_covers_the_scope_with_its_testing_features() {
         let a = args(&["packages/flui-material/src/lib.rs"]);
         assert!(a.doc_args.starts_with("-p flui -p flui-material"));
@@ -792,7 +777,6 @@ mod tests {
         assert_eq!(args(&["docs/x.md"]).doc_args, "");
     }
 
-    #[test]
     fn rustdoc_and_doctests_name_the_facades_catalogs_when_it_is_in_scope() {
         // neither catalog is a default feature: without them the Material-gated
         // half of the facade is neither documented nor doctested
@@ -820,7 +804,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn a_binary_only_scope_gets_no_lib_flag() {
         // cargo rejects `--lib` when no selected package has a library, which
         // a change touching only xtask (a binary) would otherwise hit
@@ -838,7 +821,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn the_wide_lane_selects_the_whole_workspace() {
         let a =
             lane_args(repo(), &Scope::whole_workspace(), Event::Push, false).expect("lane args");
@@ -882,7 +864,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn nothing_compiles_for_tooling_or_docs() {
         for files in [&["typos.toml"][..], &["docs/x.md"][..]] {
             let a = args(files);
@@ -905,5 +886,87 @@ mod tests {
         }
         assert_eq!(args(&["typos.toml"]).lane, Lane::Tooling);
         assert_eq!(args(&["docs/x.md"]).lane, Lane::Docs);
+    }
+
+    #[test]
+    fn lane_args_contract() {
+        crate::table_test::run_table(
+            "lane_args_contract",
+            &[
+                (
+                    "whole_workspace_pr_takes_the_wide_lane",
+                    whole_workspace_pr_takes_the_wide_lane as fn(),
+                ),
+                (
+                    "heavy_triggers_on_a_pr_take_the_wide_lane_not_full",
+                    heavy_triggers_on_a_pr_take_the_wide_lane_not_full as fn(),
+                ),
+                ("events_pick_their_lane", events_pick_their_lane as fn()),
+                (
+                    "fast_lane_builds_the_test_scope_and_filters",
+                    fast_lane_builds_the_test_scope_and_filters as fn(),
+                ),
+                (
+                    "platform_only_scope_has_no_test_args",
+                    platform_only_scope_has_no_test_args as fn(),
+                ),
+                (
+                    "a_standalone_crate_runs_the_tooling_lane",
+                    a_standalone_crate_runs_the_tooling_lane as fn(),
+                ),
+                (
+                    "a_changed_manifest_gets_the_per_feature_pass",
+                    a_changed_manifest_gets_the_per_feature_pass as fn(),
+                ),
+                (
+                    "cfg_gated_backends_get_their_targets",
+                    cfg_gated_backends_get_their_targets as fn(),
+                ),
+                (
+                    "wasm_scope_skips_packages_that_cannot_target_wasm",
+                    wasm_scope_skips_packages_that_cannot_target_wasm as fn(),
+                ),
+                (
+                    "per_feature_pass_covers_feature_gated_dependents",
+                    per_feature_pass_covers_feature_gated_dependents as fn(),
+                ),
+                (
+                    "many_feature_gated_dependents_take_the_wide_lane",
+                    many_feature_gated_dependents_take_the_wide_lane as fn(),
+                ),
+                (
+                    "a_design_system_change_gets_the_facades_per_feature_pass",
+                    a_design_system_change_gets_the_facades_per_feature_pass as fn(),
+                ),
+                (
+                    "rustdoc_and_doctests_name_the_facades_catalogs_when_it_is_in_scope",
+                    rustdoc_and_doctests_name_the_facades_catalogs_when_it_is_in_scope as fn(),
+                ),
+                (
+                    "ios_leg_when_flui_app_or_the_facade_is_in_scope",
+                    ios_leg_when_flui_app_or_the_facade_is_in_scope as fn(),
+                ),
+                (
+                    "doctests_cover_the_scopes_library_packages",
+                    doctests_cover_the_scopes_library_packages as fn(),
+                ),
+                (
+                    "rustdoc_covers_the_scope_with_its_testing_features",
+                    rustdoc_covers_the_scope_with_its_testing_features as fn(),
+                ),
+                (
+                    "a_binary_only_scope_gets_no_lib_flag",
+                    a_binary_only_scope_gets_no_lib_flag as fn(),
+                ),
+                (
+                    "the_wide_lane_selects_the_whole_workspace",
+                    the_wide_lane_selects_the_whole_workspace as fn(),
+                ),
+                (
+                    "nothing_compiles_for_tooling_or_docs",
+                    nothing_compiles_for_tooling_or_docs as fn(),
+                ),
+            ],
+        );
     }
 }

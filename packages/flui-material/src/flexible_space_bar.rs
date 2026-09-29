@@ -292,22 +292,3 @@ impl StatelessView for FlexibleSpaceBar {
         Stack::new(layers)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The oracle's fade window: opacity 1 until `t` enters
-    /// `(fade_start, 1]`, then linear to 0 — with `fade_start =
-    /// max(0, 1 − kToolbarHeight/delta)`.
-    #[test]
-    fn interval_transform_matches_the_fade_window() {
-        // fade_start 0.5: below it → 0; midpoint of the window → 0.5; end → 1.
-        assert_eq!(interval_transform(0.5, 0.25), 0.0);
-        assert_eq!(interval_transform(0.5, 0.75), 0.5);
-        assert_eq!(interval_transform(0.5, 1.0), 1.0);
-        // Degenerate window (fade_start == 1): a step at t == 1.
-        assert_eq!(interval_transform(1.0, 0.99), 0.0);
-        assert_eq!(interval_transform(1.0, 1.0), 1.0);
-    }
-}

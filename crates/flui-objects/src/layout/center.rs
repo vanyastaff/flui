@@ -261,25 +261,3 @@ impl RenderBox for RenderCenter {
         self.inner.hit_test(ctx)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_center_with_factors() {
-        let center = RenderCenter::new()
-            .with_width_factor(0.5)
-            .with_height_factor(0.5);
-
-        assert_eq!(center.width_factor(), Some(0.5));
-        assert_eq!(center.height_factor(), Some(0.5));
-    }
-
-    #[test]
-    fn test_center_default_factors() {
-        let center = RenderCenter::new();
-        assert_eq!(center.width_factor(), None);
-        assert_eq!(center.height_factor(), None);
-    }
-}

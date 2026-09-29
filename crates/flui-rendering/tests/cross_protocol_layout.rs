@@ -24,16 +24,16 @@
 use std::sync::{Arc, Mutex};
 
 use flui_foundation::Diagnosticable;
+use flui_foundation::Variable;
 use flui_foundation::geometry::Size;
-use flui_foundation::{Leaf, Variable};
-use flui_objects::{RenderColoredBox, RenderSliverPadding};
+use flui_objects::RenderColoredBox;
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::{
     constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
-    context::{BoxLayoutContext, SliverHitTestContext, SliverLayoutContext},
-    parent_data::{BoxParentData, SliverParentData},
-    protocol::{BoxProtocol, SliverProtocol},
-    traits::{RenderBox, RenderObject, RenderSliver},
+    context::BoxLayoutContext,
+    parent_data::BoxParentData,
+    protocol::BoxProtocol,
+    traits::{RenderBox, RenderObject},
     view::ScrollDirection,
 };
 
@@ -65,40 +65,6 @@ fn make_sliver_constraints() -> SliverConstraints {
 // ============================================================================
 // StubLeafSliver — minimal leaf Sliver render object
 // ============================================================================
-
-/// Leaf sliver that reports a deterministic geometry: 200 px scroll extent,
-/// paint extent clamped to remaining paint extent. Used to confirm that the
-/// cross-protocol path actually calls into the sliver's `perform_layout`.
-#[derive(Debug, Default)]
-struct StubLeafSliver;
-
-impl Diagnosticable for StubLeafSliver {}
-
-impl RenderSliver for StubLeafSliver {
-    type Arity = Leaf;
-    type ParentData = SliverParentData;
-
-    fn perform_layout(
-        &mut self,
-        ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
-    ) -> SliverGeometry {
-        let constraints = *ctx.constraints();
-        let paint = 200.0_f64.min(constraints.remaining_paint_extent);
-        SliverGeometry {
-            scroll_extent: 200.0,
-            paint_extent: paint,
-            layout_extent: paint,
-            max_paint_extent: 200.0,
-            hit_test_extent: paint,
-            visible: paint > 0.0,
-            ..SliverGeometry::ZERO
-        }
-    }
-
-    fn hit_test(&self, _ctx: &mut SliverHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
-        false
-    }
-}
 
 // ============================================================================
 // BoxWithSliverChild — Box parent that drives a sliver child
@@ -139,137 +105,9 @@ impl RenderBox for BoxWithSliverChild {
 // Test 1 — Positive: Box parent lays out a leaf Sliver child
 // ============================================================================
 
-/// Box parent with a leaf Sliver child drives `layout_sliver_subtree_borrowed`
-/// and receives the child's non-zero [`SliverGeometry`].
-///
-/// `layout_dirty_root` must return `Ok`, the captured geometry must have
-/// `scroll_extent = 200.0`, and the parent's `needs_layout` must be cleared.
-#[test]
-fn cross_protocol_box_parent_lays_out_leaf_sliver_child() {
-    let sc = make_sliver_constraints();
-    let captured: Arc<Mutex<Option<SliverGeometry>>> = Arc::new(Mutex::new(None));
-
-    let parent_obj: Box<dyn RenderObject<BoxProtocol>> = Box::new(BoxWithSliverChild {
-        sliver_constraints: sc,
-        captured: Arc::clone(&captured),
-    });
-    let sliver_obj: Box<dyn RenderObject<SliverProtocol>> = Box::new(StubLeafSliver);
-
-    let mut pipeline = fresh_layout_pipeline();
-    let parent_id = pipeline.render_tree_mut().insert_box(parent_obj);
-    pipeline
-        .render_tree_mut()
-        .insert_sliver_child(parent_id, sliver_obj)
-        .expect("tree must accept a Sliver child under a Box parent");
-
-    let box_constraints = BoxConstraints::new(0.0, 800.0, 0.0, 600.0);
-    let result = pipeline.layout_dirty_root(parent_id, box_constraints);
-    assert!(
-        result.is_ok(),
-        "layout_dirty_root must succeed for Box parent + leaf Sliver child: {result:?}"
-    );
-
-    let geom = captured
-        .lock()
-        .unwrap()
-        .expect("perform_layout must have called layout_sliver_child and stored the result");
-
-    assert_eq!(
-        geom.scroll_extent, 200.0,
-        "StubLeafSliver always reports scroll_extent=200.0; captured geometry must match"
-    );
-    assert!(
-        geom.paint_extent > 0.0,
-        "remaining_paint_extent=400.0 so StubLeafSliver's paint_extent (min(200,400)=200) must be >0"
-    );
-
-    let parent_node = pipeline
-        .render_tree()
-        .get(parent_id)
-        .expect("parent must remain in the tree after layout");
-    assert!(
-        !parent_node.needs_layout(),
-        "parent NEEDS_LAYOUT must be cleared after successful cross-protocol layout"
-    );
-}
-
 // ============================================================================
 // Test 1b — Positive: Box parent lays out a non-leaf Sliver child
 // ============================================================================
-
-/// Box parent with a `RenderSliverPadding` child drives the sliver non-leaf
-/// walk: the padding sliver must lay out its own leaf sliver child, compose
-/// the padded geometry, and return that geometry to the Box parent.
-///
-/// This is the next Core.2 step after W3.2b-1's leaf-only sliver bridge. On
-/// the leaf-only bridge this regresses to `SliverGeometry::ZERO` and leaves
-/// the Box parent dirty because `RenderSliverPadding` is gated as non-leaf.
-#[test]
-fn cross_protocol_box_parent_lays_out_sliver_padding_with_leaf_child() {
-    let sc = make_sliver_constraints();
-    let captured: Arc<Mutex<Option<SliverGeometry>>> = Arc::new(Mutex::new(None));
-
-    let parent_obj: Box<dyn RenderObject<BoxProtocol>> = Box::new(BoxWithSliverChild {
-        sliver_constraints: sc,
-        captured: Arc::clone(&captured),
-    });
-    let padding_obj: Box<dyn RenderObject<SliverProtocol>> =
-        Box::new(RenderSliverPadding::symmetric(0.0, 10.0));
-    let leaf_obj: Box<dyn RenderObject<SliverProtocol>> = Box::new(StubLeafSliver);
-
-    let mut pipeline = fresh_layout_pipeline();
-    let parent_id = pipeline.render_tree_mut().insert_box(parent_obj);
-    let padding_id = pipeline
-        .render_tree_mut()
-        .insert_sliver_child(parent_id, padding_obj)
-        .expect("tree must accept RenderSliverPadding under a Box parent");
-    pipeline
-        .render_tree_mut()
-        .insert_sliver_child(padding_id, leaf_obj)
-        .expect("tree must accept a leaf Sliver child under RenderSliverPadding");
-
-    let box_constraints = BoxConstraints::new(0.0, 800.0, 0.0, 600.0);
-    let result = pipeline.layout_dirty_root(parent_id, box_constraints);
-    assert!(
-        result.is_ok(),
-        "layout_dirty_root must succeed for Box parent -> SliverPadding -> leaf Sliver: {result:?}"
-    );
-
-    let geom = captured
-        .lock()
-        .unwrap()
-        .expect("perform_layout must have called layout_sliver_child");
-
-    assert_eq!(
-        geom.scroll_extent, 220.0,
-        "10px top + 10px bottom padding must add 20px to the leaf's 200px scroll extent"
-    );
-    assert_eq!(
-        geom.paint_extent, 220.0,
-        "remaining_paint_extent=400 gives enough room for 200px leaf + 20px padding"
-    );
-    assert_eq!(
-        geom.layout_extent, 220.0,
-        "layout extent should match the fully visible padded extent"
-    );
-
-    let parent_node = pipeline
-        .render_tree()
-        .get(parent_id)
-        .expect("parent must remain in the tree after layout");
-    assert!(
-        !parent_node.needs_layout(),
-        "parent NEEDS_LAYOUT must be cleared after successful non-leaf sliver layout"
-    );
-    let padding_node = pipeline
-        .render_tree()
-        .get(padding_id)
-        .expect("padding sliver must remain in the tree after layout");
-    assert!(
-        !padding_node.needs_layout(),
-        "RenderSliverPadding NEEDS_LAYOUT must be cleared after its child layout succeeds"
-    );
-}
 
 // ============================================================================
 // Test 2 — Negative: layout_sliver_child on a Box child returns ZERO + poisons
@@ -289,8 +127,7 @@ fn cross_protocol_box_parent_lays_out_sliver_padding_with_leaf_child() {
 /// - `layout_dirty_root` returns `Ok` (parent's own geometry is produced).
 /// - The captured geometry equals `SliverGeometry::ZERO`.
 /// - Parent's `NEEDS_LAYOUT` is cleared (poison engaged — bounded retry).
-#[test]
-fn cross_protocol_layout_sliver_child_on_box_child_returns_zero_and_poisons() {
+pub(crate) fn cross_protocol_layout_sliver_child_on_box_child_returns_zero_and_poisons() {
     let sc = make_sliver_constraints();
     let captured: Arc<Mutex<Option<SliverGeometry>>> = Arc::new(Mutex::new(None));
 

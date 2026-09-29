@@ -26,7 +26,7 @@ All types re-export flat from the crate root: `flui_objects::RenderPadding`.
   (layout math, edge cases, hit-test order) of its Flutter counterpart;
   divergences are documented at the item.
 - **Harness-tested.** Every exported object appears in the render-object
-  test catalog (`RENDER_OBJECT_TYPES`) with `harness_*` tests exercising the
+  test catalog (`RENDER_OBJECT_TYPES`) with a `harness_*` row in a family table test exercising the
   real pipeline — the catalog completeness is CI-enforced.
 - **Authoring-surface proof.** 83 objects compiling from outside
   `flui-rendering` prove the engine's custom-object authoring API is complete.

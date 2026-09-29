@@ -18,6 +18,8 @@ mod os;
 mod params;
 mod process;
 mod server;
+#[cfg(test)]
+mod test_rows;
 mod worker;
 
 use std::sync::Arc;

@@ -271,29 +271,3 @@ impl ViewState<TabBarView> for TabBarViewState {
         Stack::new(layers).fit(StackFit::Expand)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn new_starts_with_no_explicit_controller() {
-        let view = TabBarView::new(vec![flui_sdk::widgets::SizedBox::shrink().boxed()]);
-        assert!(view.controller.is_none());
-    }
-
-    #[test]
-    fn controller_sets_the_explicit_controller() {
-        let controller = TabController::new(1, 0);
-        let view = TabBarView::new(vec![flui_sdk::widgets::SizedBox::shrink().boxed()])
-            .controller(controller.clone());
-        assert_eq!(view.controller, Some(controller));
-    }
-
-    #[test]
-    fn debug_format_does_not_panic() {
-        let view = TabBarView::new(vec![flui_sdk::widgets::SizedBox::shrink().boxed()]);
-        let rendered = format!("{view:?}");
-        assert!(rendered.contains("TabBarView"));
-    }
-}

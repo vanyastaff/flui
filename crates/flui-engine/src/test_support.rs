@@ -85,17 +85,6 @@ pub(crate) fn try_test_device_and_queue(
     }
 }
 
-/// Device-only variant for construction tests that never submit work.
-#[cfg(feature = "testing")]
-pub(crate) fn test_device(label: &str) -> wgpu::Device {
-    let (device, _queue) = request_device(
-        &request_test_adapter()
-            .expect("a GPU adapter must be available on a GPU-enabled test host"),
-        label,
-    );
-    device
-}
-
 /// Creates a 2D single-sample render target with the given usage set.
 #[cfg(feature = "testing")]
 pub(crate) fn create_target(
@@ -343,69 +332,32 @@ pub(crate) fn renderer_or_skip() -> Option<crate::headless::HeadlessRenderer> {
     }
 }
 
-/// A fill paint carrying a two-stop linear gradient across `rect`, with the
-/// endpoints given in rect-local pixels (the origin is `rect`'s top-left).
-///
-/// The wire form of a gradient is a shader on an ordinary fill
-/// (`DrawOp::Rect` + `Paint::shader`), so a test that wants a gradient rect
-/// records exactly what a `BoxDecoration` would.
-#[cfg(feature = "testing")]
-pub(crate) fn linear_gradient_fill(
-    rect: flui_foundation::geometry::Rect<f64>,
-    local_start: glam::Vec2,
-    local_end: glam::Vec2,
-    colors: Vec<flui_painting::styling::Color>,
-) -> flui_painting::Paint {
-    use flui_foundation::geometry::Offset;
-    let at = |p: glam::Vec2| Offset::new(rect.left() + f64::from(p.x), rect.top() + f64::from(p.y));
-    flui_painting::Paint::fill(flui_painting::styling::Color::TRANSPARENT).with_shader(
-        flui_painting::Shader::linear_gradient(
-            at(local_start),
-            at(local_end),
-            colors,
-            None,
-            flui_painting::paint::TileMode::Clamp,
-        ),
-    )
-}
-
 #[cfg(test)]
 mod adapter_gate_tests {
-    use super::{demanded_by, resolve_unavailable_gpu};
+    use super::resolve_unavailable_gpu;
 
-    /// Without the demand, an unavailable GPU is a skip.
+    /// Without the demand, an unavailable GPU is a skip; with it, the same
+    /// absence is a failure — the whole point of the knob.
+    ///
+    /// The failure is asserted on the panic MESSAGE, not merely that a panic
+    /// happened, so a future panic added for an unrelated reason cannot make
+    /// this pass.
     #[test]
-    fn an_unavailable_gpu_is_a_skip_when_nothing_demands_one() {
+    fn an_unavailable_gpu_is_a_skip_unless_the_run_demands_one() {
         resolve_unavailable_gpu("device request failed, for the test", false);
-    }
 
-    /// With it, the same absence is a failure — the whole point of the knob.
-    ///
-    /// Asserted on the panic MESSAGE, not merely that a panic happened, so a
-    /// future panic added for an unrelated reason cannot make this pass.
-    #[test]
-    #[should_panic(expected = "FLUI_REQUIRE_GPU is set")]
-    fn an_unavailable_gpu_is_a_failure_when_the_run_demands_one() {
-        resolve_unavailable_gpu("device request failed, for the test", true);
-    }
-
-    /// The knob reads the variable by PRESENCE, not truthiness.
-    ///
-    /// `FLUI_REQUIRE_GPU=0` still demands an adapter — the same shape
-    /// `FLUI_REQUIRE_EMOJI_FONT` uses. Pinned through the pure rule rather than
-    /// by mutating the process environment, which is `unsafe` since the 2024
-    /// edition; `require_gpu` calls this same function, so the test is not a
-    /// restatement of it.
-    #[test]
-    fn the_knob_is_read_by_presence_not_by_value() {
-        assert!(!demanded_by(None), "unset must not demand an adapter");
+        let payload = std::panic::catch_unwind(|| {
+            resolve_unavailable_gpu("device request failed, for the test", true);
+        })
+        .expect_err("a demanded GPU that is unavailable must fail");
+        let message = payload
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| payload.downcast_ref::<&str>().copied())
+            .expect("the panic carries a message");
         assert!(
-            demanded_by(Some(std::ffi::OsStr::new(""))),
-            "even empty is presence"
-        );
-        assert!(
-            demanded_by(Some(std::ffi::OsStr::new("0"))),
-            "presence is the signal, so even \"0\" demands an adapter"
+            message.contains("FLUI_REQUIRE_GPU is set"),
+            "unexpected panic message: {message}"
         );
     }
 }
