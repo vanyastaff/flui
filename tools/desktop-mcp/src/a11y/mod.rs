@@ -655,6 +655,59 @@ mod tests {
         }
     }
 
+    /// The node this server serializes is flui-protocol's `Node`: its JSON
+    /// reads back as one and writes out unchanged, and both outlines agree,
+    /// so an in-process backend built on the protocol type answers in the
+    /// same shape.
+    #[test]
+    fn the_desktop_node_is_a_protocol_node() {
+        let mut field = tests_node();
+        field.value = Some("draft".into());
+        field.automation_id = Some("query".into());
+        field.class_name = Some("Edit".into());
+        field.rect = Some(Rect {
+            x: -4,
+            y: 10,
+            width: 120,
+            height: 24,
+        });
+        field.focused = true;
+        field.focusable = true;
+        field.actions = vec![ActionName::SetValue, ActionName::Focus];
+        let mut check = node("e2", Role::CheckBox, "Remember", Vec::new());
+        check.checked = Some(Checked::Mixed);
+        check.disabled = true;
+        let mut tree = node("e3", Role::TreeItem, "Folder", Vec::new());
+        tree.expanded = Some(false);
+        tree.selected = Some(true);
+        tree.omitted_children = Some(4);
+        tree.children_unread = true;
+        let mut gone = node("e4", Role::Unknown, "", Vec::new());
+        gone.gone = true;
+        let mut root = node(
+            "e5",
+            Role::Window,
+            "Counter",
+            vec![field, check, tree, gone],
+        );
+        root.window = Some("w3".into());
+        // Backend-private fields stay out of the wire.
+        root.unmatchable = true;
+        root.has_text_value = true;
+        root.native_window = Some(9);
+        let roots = vec![root];
+
+        let wire = serde_json::to_value(&roots).expect("desktop nodes serialize");
+        let protocol: Vec<flui_protocol::Node> =
+            serde_json::from_value(wire.clone()).expect("a desktop node reads as a protocol node");
+        assert_eq!(
+            serde_json::to_value(&protocol).ok(),
+            Some(wire),
+            "the protocol node writes the same JSON back"
+        );
+        assert_eq!(flui_protocol::outline(&protocol), outline(&roots));
+    }
+
     #[test]
     fn only_a_clipped_searched_property_makes_a_node_unmatchable() {
         let cut = format!("{}…", "x".repeat(CLIPPED_CHARS));
