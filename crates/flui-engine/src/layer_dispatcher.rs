@@ -958,6 +958,14 @@ impl CommandRenderer for LayerDispatcher<'_> {
         total_frames: u64,
         diagnostic_line: Option<&str>,
     ) {
+        // The readouts sit at fixed offsets from the top-left corner, so an
+        // overlay narrower or shorter than they are would draw past its
+        // bounds. The bounds are all the damage producer repaints for it each
+        // frame, so the ink stays inside them.
+        self.painter.save();
+        self.painter
+            .clip_rect(bounds, flui_painting::paint::Clip::HardEdge);
+
         // Semi-transparent dark background (MangoHud style)
         let bg_color = Color::rgba(10, 10, 15, 200);
         let bg_paint = Paint::fill(bg_color);
@@ -1027,6 +1035,7 @@ impl CommandRenderer for LayerDispatcher<'_> {
                 .draw_text(line, Point::new(x, y), 9.0, &Paint::fill(diagnostic_color));
         }
 
+        self.painter.restore();
         let _ = total_frames;
     }
 }

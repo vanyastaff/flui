@@ -29,3 +29,5 @@
 - **`flui-engine`**: `Renderer::render_scene` is now the entry point for frames outside a raster
   owner (direct mode, a hot-reload plugin's scene): it always renders in full and makes the next
   frame full too. `RasterBackend::render_scene` renders the damage the owner applied.
+- **`flui-engine`**: the performance overlay clips its readouts to its bounds; an overlay
+  narrower or shorter than its text no longer draws past them.

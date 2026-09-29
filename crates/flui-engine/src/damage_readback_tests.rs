@@ -1559,3 +1559,125 @@ fn a_change_in_a_shrunk_blurs_halo_matches_a_full_frame() {
     let stale = mismatches(&partial, &full, 2);
     assert!(stale.is_empty(), "stale pixels at {stale:?}");
 }
+
+/// An unchanged layer that composites over the whole viewport (an opacity
+/// layer whose blend changes what a transparent source covers, a colour
+/// filter that paints transparent pixels) matches a full frame when an
+/// unrelated boundary elsewhere changes. The layer's child is recorded under
+/// the damage scissor but its result composites over the viewport, so a
+/// partial frame would composite a truncated input over retained pixels
+/// that already hold its result, and over a later sibling it would wipe.
+#[test]
+fn a_change_beside_a_viewport_compositing_layer_matches_a_full_frame() {
+    use flui_layer::{ColorFilterLayer, OpacityLayer};
+    use flui_painting::paint::ColorFilter;
+
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let (root, background, card, later, moving) = (
+        ContentToken::mint(),
+        ContentToken::mint(),
+        ContentToken::mint(),
+        ContentToken::mint(),
+        ContentToken::mint(),
+    );
+    let effects = [
+        (
+            "opacity Src",
+            Layer::from(OpacityLayer::with_blend(0.5, Offset::ZERO, BlendMode::Src)),
+        ),
+        (
+            "opacity Clear",
+            Layer::from(OpacityLayer::with_blend(
+                1.0,
+                Offset::ZERO,
+                BlendMode::Clear,
+            )),
+        ),
+        (
+            "color filter SrcOver",
+            Layer::from(ColorFilterLayer::new(ColorFilter::Mode {
+                color: Color::rgba(255, 0, 255, 128),
+                blend_mode: BlendMode::SrcOver,
+            })),
+        ),
+        (
+            "color filter Src",
+            Layer::from(ColorFilterLayer::new(ColorFilter::Mode {
+                color: Color::rgba(255, 0, 255, 128),
+                blend_mode: BlendMode::Src,
+            })),
+        ),
+    ];
+    for (name, effect) in effects {
+        let build = |at: Offset<f64>| {
+            backdrop_scene(&root, &background, &green_background, &|tree, root_id| {
+                let boundary = tree.push_child(
+                    root_id,
+                    LayerNode::new(Layer::from(OffsetLayer::new(Offset::new(40.0, 40.0))))
+                        .with_boundary(id(2), card.clone()),
+                );
+                let layer = tree.push_child(boundary, effect.clone());
+                tree.push_child(
+                    layer,
+                    rect_picture(Rect::from_xywh(0.0, 0.0, 16.0, 16.0), Color::RED),
+                );
+                let after = tree.push_child(
+                    root_id,
+                    LayerNode::new(Layer::from(OffsetLayer::new(Offset::new(90.0, 90.0))))
+                        .with_boundary(id(5), later.clone()),
+                );
+                tree.push_child(
+                    after,
+                    rect_picture(Rect::from_xywh(0.0, 0.0, 16.0, 16.0), Color::BLUE),
+                );
+                let mover = tree.push_child(
+                    root_id,
+                    LayerNode::new(Layer::from(OffsetLayer::new(at)))
+                        .with_boundary(id(4), moving.clone()),
+                );
+                tree.push_child(
+                    mover,
+                    rect_picture(Rect::from_xywh(0.0, 0.0, 4.0, 4.0), Color::BLUE),
+                );
+            })
+        };
+        let (before, after) = (
+            build(Offset::new(10.0, 100.0)),
+            build(Offset::new(10.0, 104.0)),
+        );
+        let (partial, full) =
+            damaged_and_full(&renderer, &before, &after, |plan| plan != FramePlan::Skip);
+        let stale = mismatches(&partial, &full, 0);
+        assert!(stale.is_empty(), "{name}: stale pixels at {stale:?}");
+    }
+}
+
+/// A performance overlay narrower than its readouts shows the same pixels
+/// after its numbers change as a full frame does: its ink stays inside the
+/// bounds its damage covers, rather than leaving the previous frame's
+/// numbers standing past them.
+#[test]
+fn a_changed_undersized_performance_overlay_matches_a_full_frame() {
+    use flui_layer::PerformanceOverlayLayer;
+
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let (root, background) = (ContentToken::mint(), ContentToken::mint());
+    let build = |fps: f64, frame_time_ms: f64| {
+        backdrop_scene(&root, &background, &green_background, &|tree, root_id| {
+            // The labels start 8 px in, the values 50 px in: a 30 px wide
+            // overlay leaves the values outside its bounds.
+            let mut overlay =
+                PerformanceOverlayLayer::all_stats(Rect::from_xywh(10.0, 10.0, 30.0, 40.0));
+            overlay.update_stats(fps, frame_time_ms, 1);
+            tree.push_child(root_id, Layer::from(overlay));
+        })
+    };
+    let (before, after) = (build(10.0, 88.8), build(99.0, 11.1));
+    let (partial, full) = partial_and_full(&renderer, &before, &after);
+    let stale = mismatches(&partial, &full, 0);
+    assert!(stale.is_empty(), "stale pixels at {stale:?}");
+}
