@@ -337,8 +337,10 @@ What is deferred, each with its reason:
   follow (Implementation status).
 - **Memory.** Layout values double in size. Paths in `f64` are about twice their current
   memory, and so is the display list until narrowing moves to record time (§2).
-- **Code size.** About 5–6k lines of value code remain, across foundation and painting, in place
-  of 33.8k.
+- **Code size.** The target is about 5–6k lines of value code across foundation and painting,
+  in place of 33.8k. As shipped, `flui_foundation::geometry` is 14.7k lines and painting's value
+  modules 15.6k, tests included (`cat … | wc -l`); the pruning in Implementation status is what
+  closes the gap.
 - **Dependencies.** No upstream crate enters a Stable signature. Foundation gains `glam`, and
   painting gains `kurbo`.
 
