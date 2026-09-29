@@ -584,7 +584,10 @@ mod tests {
             [Lane::Docs, Lane::Tooling, Lane::Fast, Lane::Wide]
         );
         // feature-gated edges into many dependents need feature-matrix
-        assert_eq!(pr_lane(&["crates/flui-layer/src/lib.rs"], false), Lane::Wide);
+        assert_eq!(
+            pr_lane(&["crates/flui-layer/src/lib.rs"], false),
+            Lane::Wide
+        );
         let a = plan_args(
             repo(),
             &scope(&["crates/flui-layer/src/lib.rs"]),
