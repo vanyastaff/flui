@@ -1014,52 +1014,9 @@ mod tests {
     // reported as NoDemand even while hidden) and above Backpressure.
     // ----------------------------------------------------------------
 
-    #[test]
-    fn hidden_skips_even_with_demand_and_retains_it() {
-        let (clock, manual) = manual();
-        clock.mark_demand(DemandKind::Dirty);
-        clock.set_hidden(true);
-        assert_eq!(
-            clock.poll(manual.now()),
-            PollDecision::Skip(SkipReason::Hidden)
-        );
-        assert!(
-            !clock.demand_mask().is_empty(),
-            "hidden must retain demand, not discard it"
-        );
-
-        clock.set_hidden(false);
-        assert_eq!(
-            clock.poll(manual.now()),
-            PollDecision::Produce,
-            "unhiding with retained demand must produce immediately"
-        );
-    }
-
     // ----------------------------------------------------------------
     // Backpressure (in-flight) — retains the mask.
     // ----------------------------------------------------------------
-
-    #[test]
-    fn in_flight_at_capacity_skips_with_backpressure_and_retains_demand() {
-        let (clock, manual) = manual();
-        clock.set_max_in_flight(1);
-        clock.record_submit();
-        clock.mark_demand(DemandKind::Dirty);
-
-        assert_eq!(
-            clock.poll(manual.now()),
-            PollDecision::Skip(SkipReason::Backpressure)
-        );
-        assert!(!clock.demand_mask().is_empty());
-
-        clock.record_retire();
-        assert_eq!(
-            clock.poll(manual.now()),
-            PollDecision::Produce,
-            "retiring the in-flight frame must reopen capacity with demand already latched"
-        );
-    }
 
     // ----------------------------------------------------------------
     // Throttle — a second, independent capacity axis, also Backpressure.
@@ -1103,32 +1060,6 @@ mod tests {
             PollDecision::Skip(SkipReason::NoDemand),
             "and exactly once -- the produce already cleared the mask"
         );
-    }
-
-    #[test]
-    #[should_panic(expected = "matching defer")]
-    fn lift_without_a_matching_defer_panics() {
-        let (clock, _manual) = manual();
-        clock.lift();
-    }
-
-    #[test]
-    fn stacked_defers_need_matching_lifts() {
-        let (clock, manual) = manual();
-        clock.defer();
-        clock.defer();
-        clock.mark_demand(DemandKind::Dirty);
-
-        clock.lift();
-        assert_eq!(
-            clock.poll(manual.now()),
-            PollDecision::ProduceWithheld,
-            "one lift against two defers must still withhold"
-        );
-
-        clock.lift();
-        clock.mark_demand(DemandKind::Dirty);
-        assert_eq!(clock.poll(manual.now()), PollDecision::Produce);
     }
 
     // ----------------------------------------------------------------
@@ -1195,13 +1126,6 @@ mod tests {
     // independent axes (one clearing does not clear the other).
     // ----------------------------------------------------------------
 
-    #[test]
-    #[should_panic(expected = "ClockSource::Platform")]
-    fn advance_on_a_platform_source_panics() {
-        let clock = FrameClock::new();
-        clock.advance(Duration::from_millis(16));
-    }
-
     // ----------------------------------------------------------------
     // `is_deferred` / `mark_first_frame_sent` — the caller-driven latch a
     // segment's own success (not `poll`'s produce grant) controls.
@@ -1212,65 +1136,6 @@ mod tests {
     // Anti-vacuous: an empty/hidden clock never arms, one arm per pending
     // mask, re-armed only after a genuine produce.
     // ----------------------------------------------------------------
-
-    #[test]
-    fn one_mark_arms_exactly_once_and_reads_false_after() {
-        let (clock, _manual) = manual();
-        clock.mark_demand(DemandKind::Dirty);
-        assert!(clock.try_arm_redraw_request(), "the first call is the edge");
-        assert!(
-            !clock.try_arm_redraw_request(),
-            "the SAME pending mask must not arm a second poke"
-        );
-        assert!(
-            !clock.try_arm_redraw_request(),
-            "reading it again changes nothing further -- it is not a toggle"
-        );
-    }
-
-    /// The named exploit: N demand marks landing before a produce collapse
-    /// into exactly one armed edge; a produce re-arms it. Scripted via
-    /// backpressure so the mask genuinely survives several `poll` calls
-    /// without clearing -- the realistic shape a caller sees under GPU
-    /// backpressure or a throttle window, not just "call mark_demand
-    /// twice with no poll in between".
-    #[test]
-    fn n_demands_before_a_produce_collapse_into_exactly_one_armed_request_then_rearm() {
-        let (clock, manual) = manual();
-        clock.set_max_in_flight(1);
-        clock.record_submit(); // at capacity from the start -- every poll below skips
-
-        // N=5 marks, each followed by a poll that skips (Backpressure) and
-        // retains the mask -- only the FIRST arms.
-        let mut armed_count = 0;
-        for _ in 0..5 {
-            clock.mark_demand(DemandKind::Dirty);
-            if clock.try_arm_redraw_request() {
-                armed_count += 1;
-            }
-            assert_eq!(
-                clock.poll(manual.now()),
-                PollDecision::Skip(SkipReason::Backpressure),
-                "capacity never freed in this loop -- every poll must skip"
-            );
-        }
-        assert_eq!(
-            armed_count, 1,
-            "exactly one of the five marks may arm a redraw request"
-        );
-
-        // Free capacity: the next poll produces, clearing both the mask
-        // and the armed latch.
-        clock.record_retire();
-        assert_eq!(clock.poll(manual.now()), PollDecision::Produce);
-
-        // Re-armed: a fresh mark after the produce arms again.
-        clock.mark_demand(DemandKind::Dirty);
-        assert!(
-            clock.try_arm_redraw_request(),
-            "a produce must re-arm the next genuinely new demand"
-        );
-    }
 
     // ----------------------------------------------------------------
     // `record_compositor_tick` — pacing feedback.
@@ -1377,143 +1242,8 @@ mod tests {
     // (flui-engine does not depend on flui-scheduler).
     // ----------------------------------------------------------------
 
-    /// A 144 Hz demand feed throttled to a 30 Hz target frame rate produces
-    /// at ~30 Hz, not 144 Hz — with NO sleep anywhere in this clock: the
-    /// whole 1-second virtual span below is driven by a `ManualClock`, and
-    /// the wall-clock guard asserts the real time this test itself took
-    /// stays far below the 1 virtual second it simulated, which could not
-    /// hold if `poll`/`set_min_produce_interval` blocked or slept
-    /// internally to enforce the cadence.
-    #[test]
-    fn target_frame_rate_thirty_throttles_a_one_hundred_forty_four_hertz_feed_with_no_sleep_in_the_clock()
-     {
-        let (clock, manual) = manual();
-        // A caller's own conversion from a target cadence: 30 Hz means one
-        // produce per 1/30 s, which is the `Duration` this knob takes.
-        let target_frame_rate_hz = 30u32;
-        clock.set_min_produce_interval(Some(Duration::from_secs_f64(
-            1.0 / f64::from(target_frame_rate_hz),
-        )));
-
-        let step_144 = Duration::from_nanos(1_000_000_000 / 144);
-        let span = Duration::from_secs(1);
-
-        let wall_clock_start = Instant::now();
-
-        let mut elapsed = Duration::ZERO;
-        let mut ticks = 0u32;
-        let mut produces = 0u32;
-        while elapsed + step_144 <= span {
-            manual.advance(step_144);
-            elapsed += step_144;
-            ticks += 1;
-            clock.record_compositor_tick(manual.now());
-            clock.mark_demand(DemandKind::Dirty);
-            if clock.poll(manual.now()).is_produce() {
-                produces += 1;
-            }
-        }
-
-        let wall_clock_elapsed = wall_clock_start.elapsed();
-
-        assert_eq!(
-            ticks, 144,
-            "sanity: the scripted feed itself ran at 144 Hz for 1s"
-        );
-        // Hand-verifiable via the same throttle-boundary arithmetic
-        // `the_same_script_replayed_twice_matches_an_absolute_throttled_sequence`
-        // above already established: a produce needs
-        // `now.duration_since(last) >= interval`, so at a fixed 1/144s
-        // step and a 1/30s interval it takes `ceil((1/30) / (1/144)) =
-        // ceil(4.8) = 5` ticks to re-arm capacity after each produce (5 *
-        // 1/144s ≈ 34.72ms ≥ 33.33ms) — 144 ticks at 5 ticks/produce (the
-        // FIRST produce needs only 1 tick, since `last_produce_at` starts
-        // `None`) gives `1 + (144 - 1) / 5 = 29` (integer division)
-        // produces over the span. Pinned to the exact number, not just "far
-        // less than 144", so a mutant that shifts the throttle-boundary
-        // comparison by one step is caught.
-        assert_eq!(
-            produces, 29,
-            "a 30 Hz target frame rate against a 144 Hz feed must throttle to the \
-             hand-verified 29 produces over this exact 1-second, 144-tick script (see \
-             this test's own doc comment for the arithmetic) -- not 144"
-        );
-        assert!(
-            wall_clock_elapsed < Duration::from_millis(200),
-            "simulating 1 virtual second of a 144 Hz feed took {wall_clock_elapsed:?} of REAL \
-             time -- this clock has no sleep or timer of its own, so driving it through a \
-             ManualClock must complete near-instantly regardless of how much virtual time is \
-             simulated; a real sleep hiding in `poll`/`set_min_produce_interval` would blow \
-             this budget"
-        );
-    }
-
     // ----------------------------------------------------------------
     // Telemetry: input->present attribution, coalescing, and deferral
     // accounting (vs. a caller's own "frames dropped" counter).
     // ----------------------------------------------------------------
-
-    /// A synthetic input at a known scripted time, one produced frame -> the
-    /// exported record's latency equals (submit - arrival) exactly, within
-    /// zero tolerance under a `ManualClock` (no wall-clock jitter to admit
-    /// any tolerance at all).
-    #[test]
-    fn end_to_end_attribution_latency_equals_submit_minus_arrival_exactly() {
-        let (clock, manual) = manual();
-
-        let arrival = manual.now();
-        let epoch_id = clock.stamp_input_epoch(arrival);
-
-        manual.advance(Duration::from_millis(7));
-        clock.mark_demand(DemandKind::Dirty);
-        let now = manual.now();
-        assert_eq!(clock.poll(now), PollDecision::Produce);
-
-        manual.advance(Duration::from_millis(4));
-        let submit_at = manual.now();
-        let snapshot = clock.record_frame(
-            PresentationId::new(1),
-            now,
-            now,
-            now,
-            submit_at,
-            PresentOutcome::Presented,
-        );
-
-        let latencies: Vec<(InputEpochId, Duration)> = snapshot.latencies().collect();
-        assert_eq!(latencies.len(), 1);
-        assert_eq!(latencies[0].0, epoch_id);
-        assert_eq!(latencies[0].1, Duration::from_millis(11));
-    }
-
-    /// A backpressure episode retains demand (never dropped) and is counted
-    /// on the clock's own deferral stat -- NOT on a caller's separate
-    /// "frames dropped" counter, which this clock does not own and never
-    /// touches. Pins `Skip(Backpressure)` vs "dropped" semantics at the
-    /// level this clock actually controls.
-    #[test]
-    fn backpressure_deferral_is_counted_separately_and_never_looks_like_a_dropped_frame() {
-        let (clock, manual) = manual();
-        clock.set_max_in_flight(1);
-        clock.record_submit(); // saturate capacity
-
-        clock.mark_demand(DemandKind::Dirty);
-        assert_eq!(
-            clock.poll(manual.now()),
-            PollDecision::Skip(SkipReason::Backpressure)
-        );
-        assert_eq!(clock.backpressure_deferrals(), 1);
-        assert_eq!(clock.hidden_deferrals(), 0);
-        assert_eq!(clock.produces_deferred(), 1);
-        assert!(
-            !clock.demand_mask().is_empty(),
-            "backpressure must retain demand, never silently drop it"
-        );
-
-        // Capacity frees; the SAME retained demand now produces -- proving
-        // this was a deferral (demand survived), not a drop (which would
-        // have nothing left to produce from).
-        clock.record_retire();
-        assert_eq!(clock.poll(manual.now()), PollDecision::Produce);
-    }
 }

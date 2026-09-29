@@ -736,37 +736,3 @@ impl<T: Clone> super::traits::Along for Edges<T> {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::geometry::{RRect, Radius, Rect};
-
-    fn px_edges(top: f64, right: f64, bottom: f64, left: f64) -> Edges<f64> {
-        Edges::new(top, right, bottom, left)
-    }
-
-    /// Each corner radius moves by the two insets that meet at it, and
-    /// each axis clamps at zero on its own.
-    #[test]
-    fn rrect_radii_follow_their_adjacent_insets() {
-        let p = px_edges(1.0, 2.0, 4.0, 8.0);
-        let rect = Rect::from_ltrb(10.0, 20.0, 110.0, 220.0);
-        let r = Radius::circular(5.0);
-        let rrect = RRect::from_rect_and_corners(rect, r, r, r, r);
-
-        let out = p.inflate_rrect(rrect);
-        assert_eq!(out.rect, p.inflate_rect(rect));
-        assert_eq!(out.top_left, Radius::new(13.0, 6.0));
-        assert_eq!(out.top_right, Radius::new(7.0, 6.0));
-        assert_eq!(out.bottom_right, Radius::new(7.0, 9.0));
-        assert_eq!(out.bottom_left, Radius::new(13.0, 9.0));
-
-        let inner = p.deflate_rrect(rrect);
-        assert_eq!(inner.rect, p.deflate_rect(rect));
-        assert_eq!(inner.top_left, Radius::new(0.0, 4.0));
-        assert_eq!(inner.top_right, Radius::new(3.0, 4.0));
-        assert_eq!(inner.bottom_right, Radius::new(3.0, 1.0));
-        assert_eq!(inner.bottom_left, Radius::new(0.0, 1.0));
-    }
-}

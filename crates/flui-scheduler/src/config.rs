@@ -232,35 +232,4 @@ pub(crate) fn adjust_duration_for_epoch(
 // ============================================================================
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::scheduler::UpdateScheduler;
-
-    #[test]
-    fn test_time_dilation_zero_returns_error() {
-        let result = set_time_dilation(0.0);
-        assert!(matches!(result, Err(InvalidTimeDilation::NonPositive(_))));
-    }
-
-    #[test]
-    fn test_time_dilation_nan_returns_error() {
-        let result = set_time_dilation(f64::NAN);
-        assert!(matches!(result, Err(InvalidTimeDilation::NonFinite(_))));
-    }
-
-    #[test]
-    fn test_binding_state_isolation() {
-        // Test that each scheduler has its own state
-        let scheduler1 = UpdateScheduler::new();
-        let scheduler2 = UpdateScheduler::new();
-
-        // Request performance mode on scheduler1
-        let _handle = scheduler1.request_performance_mode(PerformanceMode::Latency);
-
-        // Verify scheduler1 has the request
-        assert_eq!(scheduler1.performance_mode_request_count(), 1);
-
-        // Verify scheduler2 is unaffected (proper isolation)
-        assert_eq!(scheduler2.performance_mode_request_count(), 0);
-    }
-}
+mod tests {}

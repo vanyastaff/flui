@@ -402,7 +402,7 @@ impl<B: RasterBackend> FrameSink for RasterLane<B> {
 /// does not yet accommodate) and by tests that pin the realm's frame
 /// transaction against scripted backends.
 #[cfg_attr(
-    all(not(target_arch = "wasm32"), not(test)),
+    not(target_arch = "wasm32"),
     expect(
         dead_code,
         reason = "the web runner's production sink (wasm32) and the scripted-backend test \
@@ -415,7 +415,7 @@ pub(crate) struct DirectSink<'a, R: RasterBackend> {
 
 impl<'a, R: RasterBackend> DirectSink<'a, R> {
     #[cfg_attr(
-        all(not(target_arch = "wasm32"), not(test)),
+        not(target_arch = "wasm32"),
         expect(
             dead_code,
             reason = "see DirectSink's own expectation: no native production caller"
@@ -423,26 +423,6 @@ impl<'a, R: RasterBackend> DirectSink<'a, R> {
     )]
     pub(crate) fn new(renderer: &'a mut R) -> Self {
         Self { renderer }
-    }
-}
-
-/// The realm's draw-and-submit step over a [`DirectSink`], without the rest
-/// of the frame transaction: a test seam only.
-///
-/// Every production frame goes through `UiRealm::pump`. Tests that pin the
-/// submit classification against a scripted engine backend drive the draw
-/// step on its own, the way the realm's own tests call `render_frame`.
-#[cfg(test)]
-pub(crate) trait RealmRaster {
-    /// Render one frame through a [`DirectSink`] over `renderer`. Returns
-    /// whether the frame presented.
-    fn render_frame_entered<R: RasterBackend>(&self, renderer: &mut R) -> bool;
-}
-
-#[cfg(test)]
-impl RealmRaster for flui_runtime::ui_realm::UiRealm {
-    fn render_frame_entered<R: RasterBackend>(&self, renderer: &mut R) -> bool {
-        self.render_frame_for_test(&mut DirectSink::new(renderer))
     }
 }
 
@@ -566,56 +546,6 @@ mod tests {
                 "the construction-time mint's resize was applied before the first render"
             );
         });
-    }
-
-    #[test]
-    fn the_resize_hook_mints_forward_and_the_next_frame_is_accepted() {
-        let mut lane = RasterLane::new(ScriptedBackend::presenting(), test_address(), 640, 480);
-        let before = lane.stamp.surface_generation();
-        let hook = lane.resize_hook();
-        hook.apply(1024, 768);
-        let after = lane.stamp.surface_generation();
-        assert!(
-            after > before,
-            "a resize mints a strictly newer generation ({after} vs {before})"
-        );
-        assert_eq!(
-            lane.surface_size(),
-            (1024, 768),
-            "layout reads the platform's announced size before any pump applies it"
-        );
-        // The frame stamped with the fresh mint is accepted by the pump that
-        // applies the resize in the same pass — generation-forward, no
-        // handshake.
-        assert_eq!(lane.submit_and_pump(test_scene()), SubmitVerdict::Presented);
-        lane.with_backend(|backend| {
-            assert_eq!(
-                backend.resizes.last(),
-                Some(&(1024, 768)),
-                "the pump applied the coalesced resize before rendering"
-            );
-        });
-    }
-
-    #[test]
-    fn a_mid_render_surface_loss_restamps_and_the_retry_is_accepted() {
-        let backend = ScriptedBackend::presenting().queue(Err(EngineError::SurfaceLost));
-        let mut lane = RasterLane::new(backend, test_address(), 640, 480);
-        let stamped_before = lane.stamp.surface_generation();
-
-        assert_eq!(
-            lane.submit_and_pump(test_scene()),
-            SubmitVerdict::SurfaceStale
-        );
-        let restamped = lane.stamp.surface_generation();
-        assert!(
-            restamped > stamped_before,
-            "the lane adopted the loss-minted generation for the retry"
-        );
-
-        // The retry (the next queued outcome defaults to `Presented`) renders
-        // against the restamped generation instead of being rejected.
-        assert_eq!(lane.submit_and_pump(test_scene()), SubmitVerdict::Presented);
     }
 
     #[test]

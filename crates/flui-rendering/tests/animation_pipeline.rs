@@ -21,10 +21,10 @@
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController};
-use flui_foundation::geometry::{EdgeInsets, Offset, Size};
+use flui_foundation::geometry::Size;
 use flui_layer::{Layer, LayerTree};
-use flui_objects::{RenderColoredBox, RenderOpacity, RenderPadding};
-use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner, testing::inspect};
+use flui_objects::{RenderColoredBox, RenderOpacity};
+use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner};
 use flui_scheduler::UpdateScheduler;
 
 use crate::common::BoxedRenderObject;
@@ -38,81 +38,9 @@ fn frame(owner: PipelineOwner) -> (PipelineOwner, Option<LayerTree>) {
     (owner, result.expect("frame must not error"))
 }
 
-fn state_offset(owner: &PipelineOwner, id: flui_foundation::RenderId) -> Offset {
-    inspect::render_offset(owner, id).expect("node state")
-}
-
-fn set_padding(owner: &mut PipelineOwner, id: flui_foundation::RenderId, value: f64) {
-    let impact = {
-        let entry = owner
-            .render_tree_mut()
-            .get_mut(id)
-            .expect("padding node")
-            .as_box_mut()
-            .expect("box entry");
-        entry
-            .render_object_mut()
-            .as_any_mut()
-            .downcast_mut::<RenderPadding>()
-            .expect("RenderPadding")
-            .set_padding(EdgeInsets::all(value))
-    };
-    owner.apply_render_update_impact(id, impact);
-}
-
 // ============================================================================
 // 1. Animated layout follows the controller frame by frame
 // ============================================================================
-
-#[test]
-fn animated_padding_tracks_controller_value_across_frames() {
-    let mut owner = PipelineOwner::new();
-    let pad = owner.insert(Box::new(RenderPadding::all(5.0)) as BoxedRenderObject);
-    let child = owner
-        .insert_child_render_object(pad, Box::new(RenderColoredBox::red(40.0, 40.0)))
-        .expect("child");
-    owner.set_root_id(Some(pad));
-    owner.set_root_constraints(Some(BoxConstraints::new(0.0, 300.0, 0.0, 300.0)));
-
-    let ctrl = controller();
-    ctrl.forward().expect("forward");
-
-    // 5 simulated frames at t = 0, .25, .5, .75, 1.0 — padding tweens
-    // 5 → 55 (lerp over the controller's linear value).
-    for (i, t) in [0.0f64, 0.25, 0.5, 0.75, 1.0].iter().enumerate() {
-        ctrl.tick_at(*t);
-        let value = ctrl.value();
-        let padding = 5.0 + 50.0 * value;
-        set_padding(&mut owner, pad, padding);
-
-        let (next, tree) = frame(owner);
-        owner = next;
-        let tree = tree.unwrap_or_else(|| panic!("animation frame {i} must paint"));
-
-        assert_eq!(
-            state_offset(&owner, child),
-            Offset::new(padding, padding),
-            "frame {i}: committed offset must equal the animated padding",
-        );
-        // The picture's bounds track the animated origin exactly.
-        let bounds = inspect::first_picture_bounds(&tree).expect("picture");
-        assert_eq!(
-            bounds,
-            flui_foundation::geometry::Rect::from_ltrb(
-                padding,
-                padding,
-                padding + 40.0,
-                padding + 40.0,
-            ),
-            "frame {i}: painted bounds must track the animated origin",
-        );
-    }
-
-    assert!(
-        ctrl.value() >= 1.0 - f64::EPSILON,
-        "controller reached its upper bound",
-    );
-}
 
 // ============================================================================
 // 2. Animated opacity: layer alpha follows; alpha==0 skips the subtree

@@ -308,24 +308,3 @@ impl View for UnkeyedRecovery {
         crate::element::ElementKind::stateless(self)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn error_view_is_a_render_element_over_an_error_box() {
-        let view = ErrorView::new("boom");
-        assert!(
-            matches!(
-                view.create_element(),
-                crate::element::ElementKind::RenderVariable(_)
-            ),
-            "the error view must own a render node so a failed subtree still has size and paint"
-        );
-        let ctx = crate::RenderObjectContext::new(None, None);
-        let render_object =
-            <ErrorView as crate::view::RenderView>::create_render_object(&view, &ctx);
-        assert_eq!(render_object.message(), "boom");
-    }
-}

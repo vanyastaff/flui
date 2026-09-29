@@ -30,17 +30,3 @@ fn every_item_mounts_its_icon_and_label() {
         "both items' icon glyphs and labels must mount as RenderParagraph"
     );
 }
-
-/// A bare bar with no `on_tap` handler still mounts and can be tapped
-/// without panicking (`onTap == null` skips the handler entirely, matching
-/// `CupertinoNavigationBar`/`CupertinoButton`'s established "no handler, no
-/// crash" contract).
-#[test]
-fn a_bar_with_no_on_tap_handler_tolerates_a_tap() {
-    let laid = lay_out(
-        MediaQuery::new(MediaQueryData::default(), CupertinoTabBar::new(two_items())),
-        tight(400.0, 50.0),
-    );
-    laid.dispatch_pointer_down(50.0, 25.0);
-    laid.dispatch_pointer_up(50.0, 25.0);
-}

@@ -127,28 +127,6 @@ impl PolynomialFit {
 // Solve entry points
 // ============================================================================
 
-/// Weighted least-squares polynomial fit of a single right-hand side.
-///
-/// `x`, `y`, and `w` are equal-length slices of data points (positions, values,
-/// weights); `degree` is the polynomial degree. Returns `None` if the data is
-/// insufficient (a degree-`d` fit needs `d + 1` points, i.e. `degree + 1 > len`),
-/// linearly dependent, or numerically singular.
-///
-/// Single-RHS entry point — used by the solver's own tests. Production callers
-/// fit the x and y pointer coordinates together via [`solve_two`], which shares
-/// the QR factorization.
-#[cfg(test)]
-// Math-style names (x, y, w, q, r, m, n) mirror Flutter's lsq_solver.dart.
-#[expect(clippy::many_single_char_names)]
-pub(crate) fn solve_one(x: &[f64], y: &[f64], w: &[f64], degree: usize) -> Option<PolynomialFit> {
-    debug_assert_eq!(x.len(), y.len(), "x and y must have the same length");
-    debug_assert_eq!(x.len(), w.len(), "x and w must have the same length");
-    let mut q = [0.0_f64; SCRATCH_N * SCRATCH_M];
-    let mut r = [0.0_f64; SCRATCH_N * SCRATCH_N];
-    let (m, n) = factorize(x, w, degree, &mut q, &mut r)?;
-    solve_rhs(x, y, w, &q, &r, m, n)
-}
-
 /// Factorize the weighted Vandermonde design matrix built from sample positions
 /// `x` and weights `w` into its Gram-Schmidt QR form, writing `Q` (n×m) into `q`
 /// and `R` (n×n, upper-triangular) into `r`. Returns `(m, n)` on success, or
@@ -327,37 +305,6 @@ pub(crate) fn solve_two(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn quadratic_fit_perfect() {
-        // y = 1 + 2t + 3t²
-        let xs = [-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0];
-        let y: Vec<f64> = xs.iter().map(|&t| 1.0 + 2.0 * t + 3.0 * t * t).collect();
-        let w = vec![1.0; xs.len()];
-        let fit = solve_one(&xs, &y, &w, 2).expect("fits");
-        assert!((fit.coefficients[0] - 1.0).abs() < 1e-6);
-        assert!((fit.coefficients[1] - 2.0).abs() < 1e-6);
-        assert!((fit.coefficients[2] - 3.0).abs() < 1e-6);
-        assert!((fit.confidence - 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn linear_fit_noisy() {
-        // y ≈ 0 + 100t with noise — fit should approximate the slope.
-        let x = vec![-100.0, -75.0, -50.0, -25.0, 0.0];
-        let y = vec![-10000.0, -7400.0, -5050.0, -2480.0, 50.0];
-        let w = vec![1.0; x.len()];
-        let fit = solve_one(&x, &y, &w, 1).expect("fits");
-        // Velocity ≈ 100 px/unit
-        assert!(
-            (fit.coefficients[1] - 100.0).abs() < 1.0,
-            "got slope {}",
-            fit.coefficients[1]
-        );
-        // Confidence should be high (close to 1.0) for ~linear data
-        assert!(fit.confidence > 0.99);
-    }
 
     proptest::proptest! {}
 }

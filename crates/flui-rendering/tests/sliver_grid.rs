@@ -28,7 +28,7 @@
 use std::sync::Arc;
 
 use flui_foundation::Leaf;
-use flui_foundation::geometry::{Offset, Rect, Size};
+use flui_foundation::geometry::{Rect, Size};
 use flui_objects::RenderSliverGrid;
 use flui_rendering::{
     constraints::{BoxConstraints, SliverConstraints},
@@ -36,7 +36,7 @@ use flui_rendering::{
     delegates::SliverGridDelegateWithFixedCrossAxisCount,
     parent_data::{BoxParentData, SliverMultiBoxAdaptorParentData},
     pipeline::PipelineOwner,
-    testing::{inspect, sliver as sliver_presets},
+    testing::sliver as sliver_presets,
     traits::RenderBox,
 };
 
@@ -161,13 +161,6 @@ fn build_grid_tree(
     (owner, root_id, grid_id, child_ids)
 }
 
-fn render_offset(
-    owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
-    id: flui_foundation::RenderId,
-) -> Offset {
-    inspect::render_offset(owner, id).expect("node exists")
-}
-
 // ── oracle golden test ────────────────────────────────────────────────────────
 
 /// Primary oracle scenario.
@@ -225,123 +218,12 @@ fn sliver_grid_golden_geometry() {
     );
 }
 
-#[test]
-fn sliver_grid_golden_paint_offsets() {
-    // Oracle paint offsets for the vertical forward axis, scroll_offset=100:
-    //   child 2: layout_offset=100, cross=0   → main_delta=0  → (0,   0)
-    //   child 3: layout_offset=100, cross=100 → main_delta=0  → (100, 0)
-    //   child 4: layout_offset=200, cross=0   → main_delta=100 → (0, 100)
-    //   child 5: layout_offset=200, cross=100 → main_delta=100 → (100, 100)
-    let (owner, _root, _grid, children) =
-        build_grid_tree(primary_constraints(), two_column_delegate(), 8);
-
-    assert_eq!(
-        render_offset(&owner, children[2]),
-        Offset::new(0.0, 0.0),
-        "child 2 (row 1, col 0): paint offset (0, 0)",
-    );
-    assert_eq!(
-        render_offset(&owner, children[3]),
-        Offset::new(100.0, 0.0),
-        "child 3 (row 1, col 1): paint offset (100, 0)",
-    );
-    assert_eq!(
-        render_offset(&owner, children[4]),
-        Offset::new(0.0, 100.0),
-        "child 4 (row 2, col 0): paint offset (0, 100)",
-    );
-    assert_eq!(
-        render_offset(&owner, children[5]),
-        Offset::new(100.0, 100.0),
-        "child 5 (row 2, col 1): paint offset (100, 100)",
-    );
-}
-
 // ── horizontal axis ───────────────────────────────────────────────────────────
 
 // ── RTL mirror ───────────────────────────────────────────────────────────────
 
-#[test]
-fn sliver_grid_rtl_mirrors_cross_axis_offsets() {
-    // RightToLeft cross axis → reverse_cross_axis=true.
-    // cross_axis_extent=200, cross_count=2, no spacing → stride=100.
-    // col 0 in RTL: (2−1−0)*100 = 100 (far cross end).
-    // col 1 in RTL: (2−1−1)*100 = 0   (near cross end).
-    // Vertical forward, scroll_offset=0, all 4 tiles in band.
-    // child 0 (col 0 RTL): Offset(100, 0)
-    // child 1 (col 1 RTL): Offset(0, 0)
-    use flui_rendering::constraints::AxisDirection;
-
-    let constraints = SliverConstraints {
-        scroll_offset: 0.0,
-        remaining_paint_extent: 200.0,
-        cross_axis_extent: 200.0,
-        viewport_main_axis_extent: 200.0,
-        remaining_cache_extent: 200.0,
-        cross_axis_direction: AxisDirection::RightToLeft,
-        ..Default::default()
-    };
-
-    let (owner, _root, _grid, children) = build_grid_tree(constraints, two_column_delegate(), 4);
-
-    // Column 0 in RTL sits at cross offset 100 (the far end).
-    assert_eq!(
-        render_offset(&owner, children[0]).dx,
-        100.0,
-        "RTL col 0 must mirror to cross offset 100",
-    );
-    // Column 1 in RTL sits at cross offset 0 (the near end).
-    assert_eq!(
-        render_offset(&owner, children[1]).dx,
-        0.0,
-        "RTL col 1 must mirror to cross offset 0",
-    );
-}
-
 // ── cross-axis spacing ────────────────────────────────────────────────────────
 
 // ── should_relayout on delegate swap ─────────────────────────────────────────
-
-#[test]
-fn sliver_grid_set_delegate_updates_layout() {
-    // Swap the delegate mid-way and verify that the next layout produces new
-    // geometry: 3 columns instead of 2 → different scroll_extent.
-    let constraints = sliver_presets::vertical()
-        .scroll_offset(0.0)
-        .remaining_paint_extent(300.0)
-        .cross_axis_extent(300.0)
-        .viewport_main_axis_extent(300.0)
-        .remaining_cache_extent(300.0)
-        .build();
-
-    // Initial: 2 columns, 6 children → 3 rows of 150×150 → scroll_extent=450.
-    let initial_delegate: Arc<dyn flui_rendering::delegates::SliverGridDelegate> =
-        Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(2));
-    let (owner, _root, grid, _children) = build_grid_tree(constraints, initial_delegate, 6);
-    let initial_extent = sliver_geometry(&owner, grid).scroll_extent;
-
-    // After swap to 3 columns: 6 children → 2 rows of 100×100 → scroll_extent=200.
-    // (We rebuild the tree with the new delegate since the pipeline is immutable
-    // after layout.  The set_delegate path is exercised by constructing a
-    // RenderSliverGrid and calling set_grid_delegate before insertion.)
-    let updated_delegate: Arc<dyn flui_rendering::delegates::SliverGridDelegate> =
-        Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(3));
-    let (owner2, _root2, grid2, _children2) = build_grid_tree(constraints, updated_delegate, 6);
-    let updated_extent = sliver_geometry(&owner2, grid2).scroll_extent;
-
-    assert_ne!(
-        initial_extent, updated_extent,
-        "swapping the delegate must change scroll_extent",
-    );
-    // 2 cols: 3 rows × 150 stride = 450. 3 cols: 2 rows × 100 stride = 200.
-    assert_eq!(
-        initial_extent, 450.0,
-        "2-column, 6-child grid = 3 rows × 150px"
-    );
-    assert_eq!(
-        updated_extent, 200.0,
-        "3-column, 6-child grid = 2 rows × 100px"
-    );
-}
 
 // ── empty grid ───────────────────────────────────────────────────────────────

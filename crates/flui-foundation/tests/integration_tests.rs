@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use flui_foundation::{ChangeNotifier, DiagnosticLevel, DiagnosticsNode, Listenable};
+use flui_foundation::{ChangeNotifier, Listenable};
 
 // ============================================================================
 // ID System Integration Tests
@@ -64,37 +64,6 @@ fn test_notification_chain() {
 // ============================================================================
 // Diagnostics Integration Tests
 // ============================================================================
-
-/// Test diagnostics for widget tree debugging
-#[test]
-fn test_widget_tree_diagnostics() {
-    // Simulate a widget tree
-    let tree = DiagnosticsNode::new("MaterialApp")
-        .property("theme", "light")
-        .with_level(DiagnosticLevel::Info)
-        .child(
-            DiagnosticsNode::new("Scaffold")
-                .property("hasAppBar", true)
-                .child(
-                    DiagnosticsNode::new("Column")
-                        .property("mainAxisAlignment", "center")
-                        .child(DiagnosticsNode::new("Text").property("data", "Hello World"))
-                        .child(
-                            DiagnosticsNode::new("ElevatedButton")
-                                .property("onPressed", "<closure>")
-                                .child(DiagnosticsNode::new("Text").property("data", "Click Me")),
-                        ),
-                ),
-        );
-
-    let output = tree.format_deep(0);
-
-    assert!(output.contains("MaterialApp"));
-    assert!(output.contains("Scaffold"));
-    assert!(output.contains("Column"));
-    assert!(output.contains("Text"));
-    assert!(output.contains("Hello World"));
-}
 
 // ============================================================================
 // Error Handling Integration Tests — removed

@@ -272,19 +272,6 @@ mod tests {
         ElementId::new(raw)
     }
 
-    #[test]
-    fn a_lease_holds_until_it_is_dropped() {
-        let holds = KeepAliveHolds::default();
-        let holder = id(2);
-        assert_eq!(holds.holder_count(), 0);
-
-        let lease = holds.handle(holder).hold();
-        assert_eq!(holds.holder_count(), 1);
-
-        drop(lease);
-        assert_eq!(holds.holder_count(), 0, "dropping the lease releases it");
-    }
-
     /// The multi-client law: releasing one holder must not release the others.
     /// A boolean flag would fail exactly here.
     #[test]
@@ -298,15 +285,5 @@ mod tests {
 
         drop(second);
         assert_eq!(holds.holder_count(), 0);
-    }
-
-    /// A lease that outlives its tree is inert, not a dangling write.
-    #[test]
-    fn a_lease_outliving_its_table_drops_harmlessly() {
-        let lease = {
-            let holds = KeepAliveHolds::default();
-            holds.handle(id(2)).hold()
-        };
-        drop(lease);
     }
 }

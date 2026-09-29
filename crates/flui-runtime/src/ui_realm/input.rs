@@ -176,24 +176,6 @@ impl UiRealm {
     // Input dispatch (moved from the retired `AppBinding`)
     // ========================================================================
 
-    /// [`Self::handle_input_addressed`], addressed to this realm's primary —
-    /// the pre-addressed-routing shape, kept for every existing single-presentation
-    /// test (production dispatch, `runner.rs`'s `PlatformToUi::run`, calls
-    /// `handle_input_addressed` directly with the real stamped id).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "production input dispatch calls handle_input_addressed directly with the \
-                      real stamped presentation id (PlatformToUi::run); this primary-only \
-                      convenience is exercised only by tests that never address a specific \
-                      presentation"
-        )
-    )]
-    pub(crate) fn handle_input_entered(&self, input: PlatformInput) {
-        self.handle_input_addressed(self.presentations.primary().id(), input);
-    }
-
     /// Handle a platform input event while this realm is already entered,
     /// addressed to exactly one presentation this realm hosts (issue #555
     /// the addressed-routing slice).

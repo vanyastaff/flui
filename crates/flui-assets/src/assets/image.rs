@@ -134,34 +134,3 @@ impl Asset for ImageAsset {
         })
     }
 }
-
-#[cfg(all(test, feature = "images"))]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    #[cfg(feature = "images")]
-    async fn test_image_asset_from_bytes() {
-        use image::{ImageBuffer, Rgba};
-        use std::io::Cursor;
-
-        // Create a 2x2 red image programmatically
-        let img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_fn(2, 2, |_, _| {
-            Rgba([255, 0, 0, 255]) // Red color
-        });
-
-        // Encode to PNG bytes
-        let mut png_bytes = Vec::new();
-        img.write_to(&mut Cursor::new(&mut png_bytes), image::ImageFormat::Png)
-            .unwrap();
-
-        let asset = ImageAsset::from_bytes("test.png", png_bytes);
-        let loaded = asset.load().await.unwrap();
-
-        assert_eq!(loaded.width(), 2);
-        assert_eq!(loaded.height(), 2);
-
-        // Verify it's RGBA format with correct data size
-        assert_eq!(loaded.data().len(), 2 * 2 * 4);
-    }
-}

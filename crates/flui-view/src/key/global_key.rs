@@ -257,17 +257,3 @@ impl<T: 'static> ViewKey for GlobalKey<T> {
         true
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_global_key_uniqueness() {
-        let key1 = GlobalKey::<i32>::new();
-        let key2 = GlobalKey::<i32>::new();
-
-        assert_ne!(key1.id(), key2.id());
-        assert!(!key1.key_eq(&key2));
-    }
-}

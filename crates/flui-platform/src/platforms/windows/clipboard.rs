@@ -453,24 +453,4 @@ mod tests {
             "a NULL-owner OpenClipboard on another thread succeeded while a FLUI session held the clipboard"
         );
     }
-
-    #[test]
-    #[ignore = "flaky: the clipboard can be modified by other processes"]
-    fn test_clipboard_roundtrip() {
-        let _serial = crate::shared::clipboard_lock::round_trip_serial();
-        // Note: This test requires clipboard access and may fail in CI
-        let clipboard = WindowsClipboard::new();
-
-        let test_text = "Hello from FLUI Windows!";
-        clipboard.write_text(test_text.to_string());
-
-        // Small delay to ensure clipboard is updated
-        std::thread::sleep(std::time::Duration::from_millis(10));
-
-        if let Some(read_text) = clipboard.read_text() {
-            assert_eq!(read_text, test_text, "Clipboard roundtrip failed");
-        } else {
-            eprintln!("Note: Failed to read clipboard (may be expected in CI)");
-        }
-    }
 }

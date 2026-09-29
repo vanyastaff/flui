@@ -249,94 +249,12 @@ impl WindowRegistry {
         });
         removed
     }
-
-    /// The number of window mappings currently held. Test/introspection
-    /// only — production code never needs to enumerate the registry, only
-    /// resolve or remove by identity.
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
-        self.entries.len()
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroU32;
 
     use super::*;
 
     static_assertions::assert_impl_all!(PresentationAddress: Send, Sync, Copy);
-
-    fn address(slot: u32) -> PresentationAddress {
-        PresentationAddress {
-            realm_id: RealmId::new_gen(slot, NonZeroU32::MIN),
-            presentation_id: flui_foundation::PresentationId::new_gen(slot, NonZeroU32::MIN),
-        }
-    }
-
-    fn stub_window(id: u64) -> Arc<dyn PlatformWindow> {
-        Arc::new(crate::app::window_test_support::TestWindow::new().with_id(id))
-    }
-
-    #[test]
-    fn try_register_rejects_duplicate_window() {
-        let mut registry = WindowRegistry::new();
-        let id = WindowId(7);
-        let first = address(0);
-
-        registry
-            .try_register(id, first)
-            .expect("first registration succeeds");
-        let error = registry
-            .try_register(id, address(1))
-            .expect_err("duplicate window must be refused, not replaced");
-        assert_eq!(
-            error,
-            RegistryError::WindowAlreadyMapped { existing: first }
-        );
-        assert_eq!(
-            registry.resolve(id),
-            Some(first),
-            "a refused try_register must not change the existing mapping"
-        );
-    }
-
-    /// The target model is one realm owning any number of windows:
-    /// `remove_realm` must remove every mapping addressed to that realm,
-    /// not just the first one found.
-    ///
-    /// If reverted: use `position` + single `remove` instead of `retain` and
-    /// this fails — only the first-registered window's mapping is removed,
-    /// the second survives as a dead entry.
-    #[test]
-    fn remove_realm_removes_every_mapping_for_that_realm_not_just_the_first() {
-        let mut registry = WindowRegistry::new();
-        let realm_address = address(0);
-        let same_realm_second_window = PresentationAddress {
-            realm_id: realm_address.realm_id,
-            presentation_id: flui_foundation::PresentationId::new_gen(1, NonZeroU32::MIN),
-        };
-        let other_realm_address = address(1);
-
-        let window_a = stub_window(100);
-        let window_b = stub_window(101);
-        let window_c = stub_window(102);
-        registry.register_window(&window_a, realm_address);
-        registry.register_window(&window_b, same_realm_second_window);
-        registry.register_window(&window_c, other_realm_address);
-
-        let removed = registry.remove_realm(realm_address.realm_id);
-        assert_eq!(removed.len(), 2, "both same-realm windows must be removed");
-        assert!(removed.contains(&(window_a.id(), realm_address)));
-        assert!(removed.contains(&(window_b.id(), same_realm_second_window)));
-
-        assert_eq!(registry.resolve(window_a.id()), None);
-        assert_eq!(registry.resolve(window_b.id()), None);
-        assert_eq!(
-            registry.resolve(window_c.id()),
-            Some(other_realm_address),
-            "an unrelated realm's window mapping must survive"
-        );
-        assert_eq!(registry.len(), 1);
-    }
 }

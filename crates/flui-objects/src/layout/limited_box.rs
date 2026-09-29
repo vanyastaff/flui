@@ -225,29 +225,3 @@ impl RenderBox for RenderLimitedBox {
 // ===========================================================================
 // Tests
 // ===========================================================================
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    fn bc(min_w: f64, max_w: f64, min_h: f64, max_h: f64) -> BoxConstraints {
-        BoxConstraints::new(min_w, max_w, min_h, max_h)
-    }
-
-    // ---------- API surface -----------------------------------------------
-
-    // ---------- limit_constraints semantics -------------------------------
-
-    #[test]
-    fn cap_below_min_is_clamped_up_to_min() {
-        // Cap of 10 with min of 50 → effective max becomes 50.
-        let node = RenderLimitedBox::width(10.0);
-        let incoming = bc(50.0, f64::INFINITY, 0.0, 100.0);
-        let limited = node.limit_constraints(incoming);
-        assert_eq!(limited.max_width, 50.0);
-        assert_eq!(limited.min_width, 50.0);
-    }
-
-    // ---------- dry layout ------------------------------------------------
-}

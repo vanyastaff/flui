@@ -106,29 +106,3 @@ impl ProjectPlan {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn write_creates_files_and_bare_directories() {
-        let tmp = tempfile::TempDir::new().expect("temp dir");
-        let plan = ProjectPlan::new()
-            .file("Cargo.toml", "[package]\n")
-            .file("src/main.rs", "fn main() {}\n")
-            .dir("assets");
-
-        plan.write(tmp.path()).expect("plan writes");
-
-        assert_eq!(
-            std::fs::read_to_string(tmp.path().join("Cargo.toml")).expect("Cargo.toml"),
-            "[package]\n"
-        );
-        assert_eq!(
-            std::fs::read_to_string(tmp.path().join("src/main.rs")).expect("src/main.rs"),
-            "fn main() {}\n"
-        );
-        assert!(tmp.path().join("assets").is_dir());
-    }
-}

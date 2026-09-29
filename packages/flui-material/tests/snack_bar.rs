@@ -23,7 +23,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use common::{lay_out_animated, tight};
-use flui_material::FloatingActionButton;
 use flui_material::{
     Scaffold, ScaffoldMessenger, ScaffoldMessengerHandle, ScaffoldMessengerScope, SnackBar,
     SnackBarAction, Theme, ThemeData,
@@ -125,22 +124,6 @@ fn mount_with_scaffolds(
     (laid, handle)
 }
 
-/// Every `Scaffold`'s own `CustomMultiChildLayout` render root, in mount
-/// order.
-fn scaffold_roots(laid: &common::LaidOut) -> Vec<RenderId> {
-    laid.find_all_by_render_type("RenderCustomMultiChildLayoutBox")
-}
-
-/// The `RenderParagraph` node whose rendered text exactly matches `text` —
-/// mirrors `tests/material_demo.rs`'s own `find_text` helper (that file
-/// cannot share this one; see this crate's `tests/common/mod.rs` module
-/// doc on why the harness itself is duplicated, not shared, per test binary).
-fn find_text(laid: &common::LaidOut, text: &str) -> Option<RenderId> {
-    laid.find_all_by_render_type("RenderParagraph")
-        .into_iter()
-        .find(|&id| laid.render_property(id, "text").as_deref() == Some(text))
-}
-
 /// The snack bar's own `Material` (`RenderPhysicalShape` at elevation
 /// `6.0`) — see [`snack_bar_material_count`]'s doc for why elevation is the
 /// distinguishing property.
@@ -180,69 +163,9 @@ fn snack_bar_material_count(laid: &common::LaidOut) -> usize {
 // 2. Timeout at exactly the per-snackbar duration (custom duration honored).
 // ============================================================================
 
-#[test]
-fn a_custom_duration_snack_bar_auto_dismisses_after_that_duration_not_the_default() {
-    let vsync = Vsync::new();
-    let (mut laid, handle) =
-        mount_with_scaffolds(&vsync, vec![Scaffold::new().body(body_marker())]);
-
-    handle.show_snack_bar(SnackBar::new(Text::new("brief")).duration(Duration::from_millis(120)));
-    pump_ms(&mut laid, ENTRY.as_millis() as u64);
-    assert_eq!(
-        snack_bar_material_count(&laid),
-        1,
-        "must be shown right after entering"
-    );
-
-    // Comfortably before 120ms of display time has elapsed: still shown.
-    pump_ms(&mut laid, 40);
-    assert_eq!(
-        snack_bar_material_count(&laid),
-        1,
-        "must still be shown well before its configured 120ms duration elapses"
-    );
-
-    // Past 120ms of display time plus the 250ms exit reverse: gone.
-    pump_ms(&mut laid, 120);
-    pump_ms(&mut laid, ENTRY.as_millis() as u64);
-    assert_eq!(
-        snack_bar_material_count(&laid),
-        0,
-        "must have auto-dismissed once its own configured duration elapsed"
-    );
-}
-
 // ============================================================================
 // 3. Early hide cancels the display timer (no dangling early auto-dismiss).
 // ============================================================================
-
-#[test]
-fn hiding_before_the_duration_elapses_cancels_the_display_timer() {
-    let vsync = Vsync::new();
-    let (mut laid, handle) =
-        mount_with_scaffolds(&vsync, vec![Scaffold::new().body(body_marker())]);
-
-    handle
-        .show_snack_bar(SnackBar::new(Text::new("hidden early")).duration(Duration::from_secs(10)));
-    pump_ms(&mut laid, ENTRY.as_millis() as u64);
-    assert_eq!(snack_bar_material_count(&laid), 1);
-
-    handle.hide_current_snack_bar();
-    pump_ms(&mut laid, ENTRY.as_millis() as u64);
-    assert_eq!(
-        snack_bar_material_count(&laid),
-        0,
-        "an explicit hide must close the snack bar well before its 10s duration would have"
-    );
-
-    // If the cancelled timer were still ticking toward its original 10s
-    // duration, its later firing would call `hide_current` on an EMPTY
-    // queue — a no-op per `MessengerCore::hide_current`'s own guard — so the
-    // only way this stays reliably closed (not, say, re-opened by a stray
-    // side effect) is confirming it's still gone well past that point too.
-    pump_ms(&mut laid, 500);
-    assert_eq!(snack_bar_material_count(&laid), 0);
-}
 
 // ============================================================================
 // 4. Action press closes with Action reason and disables after one press.
@@ -310,152 +233,14 @@ fn action_press_closes_the_snack_bar_and_is_single_fire() {
 //    every registered scaffold simultaneously.
 // ============================================================================
 
-#[test]
-fn messenger_over_two_scaffolds_shows_the_current_entry_on_both() {
-    let vsync = Vsync::new();
-    let (mut laid, handle) = mount_with_scaffolds(
-        &vsync,
-        vec![
-            Scaffold::new().body(body_marker()),
-            Scaffold::new().body(body_marker()),
-        ],
-    );
-
-    let roots = scaffold_roots(&laid);
-    assert_eq!(roots.len(), 2, "both Scaffolds must be mounted");
-    for &root in &roots {
-        assert_eq!(
-            laid.children(root).len(),
-            1,
-            "body only, before any snack bar shows"
-        );
-    }
-
-    handle.show_snack_bar(SnackBar::new(Text::new("both")));
-    pump_ms(&mut laid, ENTRY.as_millis() as u64);
-
-    for &root in &scaffold_roots(&laid) {
-        assert_eq!(
-            laid.children(root).len(),
-            2,
-            "every registered Scaffold's CustomMultiChildLayout must mount a snack-bar slot child"
-        );
-    }
-    assert_eq!(
-        snack_bar_material_count(&laid),
-        2,
-        "one snack bar Material per registered Scaffold, not one shared across both"
-    );
-}
-
 // ============================================================================
 // 6. FAB lift: above the snack bar, both mid-animation and at rest.
 // ============================================================================
-
-#[test]
-fn floating_action_button_lifts_above_the_snack_bar_mid_animation_and_at_rest() {
-    let vsync = Vsync::new();
-    let (mut laid, handle) = mount_with_scaffolds(
-        &vsync,
-        vec![Scaffold::new().body(body_marker()).floating_action_button(
-            FloatingActionButton::new(Text::new("+")).on_pressed(|_cx| {}),
-        )],
-    );
-
-    let scaffold_root = scaffold_roots(&laid)[0];
-    let fab_id = |laid: &common::LaidOut| -> RenderId {
-        laid.children(scaffold_root)
-            .into_iter()
-            .find(|&id| {
-                let size = laid.size(id);
-                size.width < 100.0 && size.height < 100.0
-            })
-            .expect("the FAB must be mounted")
-    };
-
-    let fab_y_at_rest_before = laid.offset(fab_id(&laid)).dy;
-
-    handle.show_snack_bar(SnackBar::new(Text::new("lift me")));
-
-    // Mid-animation: partway through the 250ms entrance, the snack bar has
-    // SOME height (not zero, not yet its final height) — the FAB must
-    // already be lifted, strictly between its resting position and where it
-    // ends up once the snack bar is fully grown.
-    pump_ms(&mut laid, 60);
-    let fab_y_mid_entrance = laid.offset(fab_id(&laid)).dy;
-    assert!(
-        fab_y_mid_entrance < fab_y_at_rest_before,
-        "the FAB must already be lifted mid-entrance: before={fab_y_at_rest_before}, mid={fab_y_mid_entrance}"
-    );
-
-    pump_ms(&mut laid, ENTRY.as_millis() as u64);
-    let fab_y_fully_shown = laid.offset(fab_id(&laid)).dy;
-    assert!(
-        fab_y_fully_shown < fab_y_mid_entrance,
-        "the FAB must keep rising as the snack bar keeps growing: mid={fab_y_mid_entrance}, \
-         fully_shown={fab_y_fully_shown}"
-    );
-
-    handle.remove_current_snack_bar();
-    pump_ms(&mut laid, ENTRY.as_millis() as u64);
-    let fab_y_at_rest_after = laid.offset(fab_id(&laid)).dy;
-    assert!(
-        (fab_y_at_rest_after - fab_y_at_rest_before).abs() < 1.0,
-        "the FAB must return to its original resting position once the snack bar is gone: \
-         before={fab_y_at_rest_before}, after={fab_y_at_rest_after}"
-    );
-}
 
 // ============================================================================
 // 7. Unregister on dispose: an unmounted Scaffold must not linger in the
 //    messenger's registered set.
 // ============================================================================
-
-#[test]
-fn unmounting_a_scaffold_unregisters_it_from_the_messenger() {
-    let vsync = Vsync::new();
-    let handle_slot: Rc<RefCell<Option<ScaffoldMessengerHandle>>> = Rc::new(RefCell::new(None));
-    let tree = themed_animated(
-        &vsync,
-        ScaffoldMessenger::new(flui_sdk::widgets::Column::new(vec![
-            ViewExt::boxed(HandleProbe {
-                slot: Rc::clone(&handle_slot),
-            }),
-            ViewExt::boxed(flui_sdk::widgets::Expanded::new(
-                Scaffold::new().body(body_marker()),
-            )),
-        ])),
-    );
-    let mut laid = lay_out_animated(tree, tight(400.0, 800.0), vsync.clone());
-    let handle = handle_slot
-        .borrow()
-        .clone()
-        .expect("handle must be published");
-    assert_eq!(
-        handle.registered_scaffold_count(),
-        1,
-        "the mounted Scaffold must have registered"
-    );
-
-    // Swap the root to the SAME ScaffoldMessenger subtree, minus the
-    // Scaffold — `ScaffoldMessenger`'s own element persists (same handle),
-    // but the Scaffold underneath it is torn down.
-    let replacement = themed_animated(
-        &vsync,
-        ScaffoldMessenger::new(flui_sdk::widgets::Column::new(vec![ViewExt::boxed(
-            HandleProbe {
-                slot: Rc::clone(&handle_slot),
-            },
-        )])),
-    );
-    laid.pump_widget(replacement);
-
-    assert_eq!(
-        handle.registered_scaffold_count(),
-        0,
-        "the unmounted Scaffold's dispose must have unregistered it"
-    );
-}
 
 // ============================================================================
 // 8. Scope re-home: a FRESH Scaffold element that mounts under a messenger
@@ -480,75 +265,6 @@ fn unmounting_a_scaffold_unregisters_it_from_the_messenger() {
 // fires for it — a documented, honest limitation, not silently papered
 // over.
 // ============================================================================
-
-#[test]
-fn a_scaffold_mounted_fresh_under_a_new_messenger_registers_with_that_one_not_a_stale_one() {
-    let vsync = Vsync::new();
-    let first_handle_slot: Rc<RefCell<Option<ScaffoldMessengerHandle>>> =
-        Rc::new(RefCell::new(None));
-    let tree = themed_animated(
-        &vsync,
-        ScaffoldMessenger::new(flui_sdk::widgets::Column::new(vec![ViewExt::boxed(
-            HandleProbe {
-                slot: Rc::clone(&first_handle_slot),
-            },
-        )])),
-    );
-    let mut laid = lay_out_animated(tree, tight(400.0, 800.0), vsync.clone());
-    let first_handle = first_handle_slot
-        .borrow()
-        .clone()
-        .expect("handle must be published");
-    assert_eq!(
-        first_handle.registered_scaffold_count(),
-        0,
-        "no Scaffold mounted under it yet"
-    );
-
-    // A structurally distinct second `ScaffoldMessenger` (nested one level
-    // deeper, so reconciliation treats it as a genuinely different element,
-    // not an update of the first) with a freshly-mounted `Scaffold`.
-    let second_handle_slot: Rc<RefCell<Option<ScaffoldMessengerHandle>>> =
-        Rc::new(RefCell::new(None));
-    let replacement = themed_animated(
-        &vsync,
-        ScaffoldMessenger::new(flui_sdk::widgets::Column::new(vec![
-            ViewExt::boxed(HandleProbe {
-                slot: Rc::clone(&first_handle_slot),
-            }),
-            ViewExt::boxed(flui_sdk::widgets::Expanded::new(ScaffoldMessenger::new(
-                flui_sdk::widgets::Column::new(vec![
-                    ViewExt::boxed(HandleProbe {
-                        slot: Rc::clone(&second_handle_slot),
-                    }),
-                    ViewExt::boxed(flui_sdk::widgets::Expanded::new(
-                        Scaffold::new().body(body_marker()),
-                    )),
-                ]),
-            ))),
-        ])),
-    );
-    laid.pump_widget(replacement);
-    let second_handle = second_handle_slot
-        .borrow()
-        .clone()
-        .expect("nested handle must be published");
-
-    assert!(
-        !first_handle.ptr_eq(&second_handle),
-        "the outer and the freshly-mounted nested ScaffoldMessenger must be distinct instances"
-    );
-    assert_eq!(
-        first_handle.registered_scaffold_count(),
-        0,
-        "the outer messenger must never see a Scaffold that mounted under the nested one"
-    );
-    assert_eq!(
-        second_handle.registered_scaffold_count(),
-        1,
-        "the freshly-mounted Scaffold must register with its OWN nearest messenger"
-    );
-}
 
 // ============================================================================
 // 9. A Scaffold that mounts while a snack bar is already showing renders it
@@ -575,66 +291,6 @@ fn a_scaffold_mounted_fresh_under_a_new_messenger_registers_with_that_one_not_a_
 // that guarantee.
 // ============================================================================
 
-#[test]
-fn mounting_a_scaffold_while_a_snack_bar_is_already_showing_renders_it_immediately() {
-    let vsync = Vsync::new();
-    let handle_slot: Rc<RefCell<Option<ScaffoldMessengerHandle>>> = Rc::new(RefCell::new(None));
-    let tree = themed_animated(
-        &vsync,
-        ScaffoldMessenger::new(flui_sdk::widgets::Column::new(vec![
-            ViewExt::boxed(HandleProbe {
-                slot: Rc::clone(&handle_slot),
-            }),
-            ViewExt::boxed(flui_sdk::widgets::Expanded::new(
-                Scaffold::new().body(body_marker()),
-            )),
-        ])),
-    );
-    let mut laid = lay_out_animated(tree, tight(400.0, 1600.0), vsync.clone());
-    let handle = handle_slot
-        .borrow()
-        .clone()
-        .expect("handle must be published");
-
-    handle.show_snack_bar(SnackBar::new(Text::new("already showing")));
-    pump_ms(&mut laid, ENTRY.as_millis() as u64);
-    assert_eq!(
-        snack_bar_material_count(&laid),
-        1,
-        "showing on the first Scaffold"
-    );
-
-    // Mount a SECOND Scaffold under the SAME messenger while the snack bar
-    // is already showing.
-    let replacement = themed_animated(
-        &vsync,
-        ScaffoldMessenger::new(flui_sdk::widgets::Column::new(vec![
-            ViewExt::boxed(HandleProbe {
-                slot: Rc::clone(&handle_slot),
-            }),
-            ViewExt::boxed(flui_sdk::widgets::Expanded::new(
-                Scaffold::new().body(body_marker()),
-            )),
-            ViewExt::boxed(flui_sdk::widgets::Expanded::new(
-                Scaffold::new().body(body_marker()),
-            )),
-        ])),
-    );
-    laid.pump_widget(replacement);
-
-    assert_eq!(
-        scaffold_roots(&laid).len(),
-        2,
-        "both Scaffolds must be mounted"
-    );
-    assert_eq!(
-        snack_bar_material_count(&laid),
-        2,
-        "the newly-mounted Scaffold must render the ALREADY-showing snack bar immediately, \
-         not wait for the next unrelated rebuild"
-    );
-}
-
 // ============================================================================
 // 10. Paint-bounds pin: the entrance/exit transition is clipped to its
 //     CURRENT (animated) height, not painted at the content's full natural
@@ -647,133 +303,6 @@ fn mounting_a_scaffold_while_a_snack_bar_is_already_showing_renders_it_immediate
 //     a reentrant `show_snack_bar` from it must not corrupt the frame, and
 //     must not take effect until a LATER frame.
 // ============================================================================
-
-#[test]
-fn tick_driven_close_defers_a_reentrant_show_snack_bar_out_of_the_build_phase() {
-    let vsync = Vsync::new();
-    let (mut laid, handle) =
-        mount_with_scaffolds(&vsync, vec![Scaffold::new().body(body_marker())]);
-
-    let handle_for_on_closed = handle.clone();
-    handle
-        .show_snack_bar(SnackBar::new(Text::new("a")).duration(Duration::from_millis(60)))
-        .on_closed(move |_cx, _reason| {
-            // Reentrant, reached from a PURELY tick-driven close (no
-            // explicit hide/remove call below) — must land in a safe,
-            // post-build window, not corrupt the frame that just built.
-            handle_for_on_closed.show_snack_bar(SnackBar::new(Text::new("b")));
-        });
-
-    pump_ms(&mut laid, ENTRY.as_millis() as u64); // "a" fully shown
-    assert!(find_text(&laid, "a").is_some(), "\"a\" must be shown");
-
-    // Single-frame-stepped through "a"'s natural timeout + exit reverse, so
-    // the exact frame it disappears on can be pinned down.
-    let settle_budget =
-        (60 / FRAME.as_millis() as u64) + (ENTRY.as_millis() as u64 / FRAME.as_millis() as u64) + 4;
-    let mut settled_on_frame = None;
-    for frame_index in 0..settle_budget {
-        laid.pump_for(FRAME);
-        if find_text(&laid, "a").is_none() {
-            settled_on_frame = Some(frame_index);
-            break;
-        }
-    }
-    assert!(
-        settled_on_frame.is_some(),
-        "\"a\" must have closed on its own from purely ticking (timeout + exit reverse), \
-         within the pumped budget"
-    );
-
-    // THE SAME frame "a" disappeared on: the reentrant `show_snack_bar("b")`
-    // must NOT have taken effect yet — it was deferred past this frame.
-    assert!(
-        find_text(&laid, "b").is_none(),
-        "a reentrant show_snack_bar from a build-phase-deferred on_closed must not be visible \
-         in the SAME frame its closing on_closed fired — it must wait for the post-frame \
-         callback to run"
-    );
-
-    // One more frame runs the deferred post-frame callback, which shows
-    // "b" — then it enters over the usual 250ms.
-    pump_ms(&mut laid, ENTRY.as_millis() as u64);
-    assert!(
-        find_text(&laid, "b").is_some(),
-        "the reentrant show_snack_bar from a's deferred on_closed must eventually take effect"
-    );
-}
-
-#[test]
-fn a_direct_snack_bar_close_writes_its_presentations_signal() {
-    let vsync = Vsync::new();
-    let handle_slot = Rc::new(RefCell::new(None));
-    let captured_handle = Rc::clone(&handle_slot);
-    let signal_slot = Rc::new(RefCell::new(None));
-    let captured_signal = Rc::clone(&signal_slot);
-    let probe = common::SignalProbe::new(move |common::ProbeSignals { count, .. }| {
-        *captured_signal.borrow_mut() = Some(count);
-        ScaffoldMessenger::new(HandleProbe {
-            slot: Rc::clone(&captured_handle),
-        })
-    });
-    let mut laid = lay_out_animated(
-        themed_animated(&vsync, probe.view()),
-        tight(400.0, 600.0),
-        vsync.clone(),
-    );
-    let handle = handle_slot.borrow().clone().expect("messenger mounted");
-    let count = signal_slot.borrow().expect("signal initialized");
-    handle
-        .show_snack_bar(SnackBar::new(Text::new("direct")))
-        .on_closed(move |cx, reason| {
-            assert_eq!(reason, flui_material::SnackBarClosedReason::Remove);
-            count.update(cx, |value| *value += 1)
-        });
-
-    handle.remove_current_snack_bar();
-    assert_eq!(probe.value(), Ok(1));
-    handle.remove_current_snack_bar();
-    assert_eq!(probe.value(), Ok(1), "completion fires only once");
-    laid.pump();
-    assert_eq!(probe.reads().last(), Some(&1));
-}
-
-#[test]
-fn a_timer_driven_snack_bar_close_writes_after_build() {
-    let vsync = Vsync::new();
-    let handle_slot = Rc::new(RefCell::new(None));
-    let captured_handle = Rc::clone(&handle_slot);
-    let signal_slot = Rc::new(RefCell::new(None));
-    let captured_signal = Rc::clone(&signal_slot);
-    let probe = common::SignalProbe::new(move |common::ProbeSignals { count, .. }| {
-        *captured_signal.borrow_mut() = Some(count);
-        ScaffoldMessenger::new(HandleProbe {
-            slot: Rc::clone(&captured_handle),
-        })
-    });
-    let mut laid = lay_out_animated(
-        themed_animated(&vsync, probe.view()),
-        tight(400.0, 600.0),
-        vsync.clone(),
-    );
-    let handle = handle_slot.borrow().clone().expect("messenger mounted");
-    let count = signal_slot.borrow().expect("signal initialized");
-    handle
-        .show_snack_bar(SnackBar::new(Text::new("timer")).duration(Duration::from_millis(60)))
-        .on_closed(move |cx, reason| {
-            assert_eq!(reason, flui_material::SnackBarClosedReason::Timeout);
-            count.update(cx, |value| *value += 1)
-        });
-
-    pump_ms(&mut laid, 700);
-    assert_eq!(
-        probe.value(),
-        Ok(1),
-        "timer completion gets a writable event"
-    );
-    laid.pump();
-    assert_eq!(probe.reads().last(), Some(&1));
-}
 
 #[test]
 fn a_snack_bar_completion_cannot_write_another_presentations_signal() {

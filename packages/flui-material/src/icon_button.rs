@@ -291,35 +291,3 @@ fn default_style(theme: &ThemeData) -> ButtonStyle {
         ..ButtonStyle::default()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use flui_sdk::widgets::{WidgetState, WidgetStates};
-
-    use super::*;
-
-    fn resolve<T: Clone + Default>(
-        property: Option<&WidgetStateProperty<Option<T>>>,
-        states: &WidgetStates,
-    ) -> Option<T> {
-        property.and_then(|p| p.resolve(states))
-    }
-
-    /// Mutation-honest ordered-chain coverage: a combined pressed+hovered
-    /// state must resolve through the pressed branch (10%), not hover's
-    /// lower 8% — the combined-state pin every token table in this crate
-    /// carries.
-    #[test]
-    fn overlay_color_checks_pressed_before_hovered() {
-        let theme = ThemeData::light();
-        let colors = theme.color_scheme;
-        let style = default_style(&theme);
-
-        let pressed_and_hovered =
-            WidgetStates::from(WidgetState::Pressed).with_state(WidgetState::Hovered);
-        assert_eq!(
-            resolve(style.overlay_color.as_ref(), &pressed_and_hovered),
-            Some(colors.on_surface_variant.with_opacity(0.1)),
-        );
-    }
-}

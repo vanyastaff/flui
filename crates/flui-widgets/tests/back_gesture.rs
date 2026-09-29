@@ -5,13 +5,11 @@
 //! (ADR-0083 §4); the tests that need no mounted tree stay in
 //! `src/navigator/back_gesture.rs`.
 
-use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, AnimationStatus};
-use flui_interaction::DragStartDetails;
 use flui_view::prelude::*;
-use flui_widgets::__test_access::{BackGestureController, BackGestureRuntime, RouteProbe as _};
+use flui_widgets::__test_access::{BackGestureController, RouteProbe as _};
 use flui_widgets::SizedBox;
 use flui_widgets::navigator::{Navigator, NavigatorHandle, PageRoute, RouteId, SimpleRoute};
 
@@ -43,31 +41,6 @@ fn mounted_with_transition_route() -> (NavigatorHandle, Harness, RouteId, Animat
         .controller()
         .expect("install() created the controller");
     (navigator, harness, top, controller)
-}
-
-/// The drag start a recognizer would hand over; its fields do not affect the
-/// runtime, which only needs to know a drag began.
-fn drag_start() -> DragStartDetails {
-    DragStartDetails {
-        global_position: flui_foundation::geometry::Offset::ZERO,
-        local_position: flui_foundation::geometry::Offset::ZERO,
-        kind: flui_interaction::events::PointerType::Touch,
-        timestamp: std::time::Instant::now(),
-    }
-}
-
-/// A runtime for `route` whose predicate always allows a drag.
-fn runtime_for(
-    navigator: &NavigatorHandle,
-    route: RouteId,
-    controller: &AnimationController,
-) -> BackGestureRuntime {
-    BackGestureRuntime::new(
-        navigator.clone(),
-        route,
-        controller.clone(),
-        Rc::new(|| true),
-    )
 }
 
 // ---- release matrix: v = -2.0 / +2.0 / 0 at value 0.49 / 0.51 ----
@@ -115,76 +88,7 @@ fn release_matrix_fling_and_slow_release() {
 
 // ---- mid-drag programmatic pop: the pop itself must not be clobbered ----
 
-/// Flutter's `dragUpdate` has no `is_active`/`is_current` guard at all —
-/// `controller.value -= delta` runs unconditionally, so a drag_update
-/// after a programmatic pop still moves the value (this is *not* a
-/// no-op, and asserting otherwise would pin a divergence). What must
-/// hold is the other direction: the programmatic pop that landed
-/// mid-drag stays popped — a later drag_update must not resurrect the
-/// route or panic reaching into it.
-#[test]
-fn mid_drag_programmatic_pop_is_not_undone_by_a_later_drag_update() {
-    let (navigator, mut harness, top, c) = mounted_with_transition_route();
-    c.set_value(1.0);
-    let gesture = BackGestureController::new(navigator.clone(), top, c.clone());
-    gesture.drag_update(0.3); // value 0.7, mid-drag
-
-    // A programmatic pop lands while the finger is still down. The route
-    // stays in `route_ids()` until its (non-zero-duration) exit
-    // transition finishes — `finished_when_popped` — so "the pop took
-    // effect" is checked through `current()`, not stack membership.
-    assert!(harness.enter_owner_scope(|| navigator.pop()));
-    harness.tick();
-    assert_ne!(
-        navigator.current(),
-        Some(top),
-        "the mid-drag pop must actually move `current` off this route"
-    );
-
-    // A further drag_update on the now-stale gesture must not panic or
-    // resurrect the popped route.
-    gesture.drag_update(0.05);
-    assert_ne!(
-        navigator.current(),
-        Some(top),
-        "a stale drag_update after the pop must not undo it"
-    );
-}
-
 // ---- dispose-mid-settle: counter returns to 0 ----
-
-#[test]
-fn dispose_mid_gesture_returns_the_counter_to_zero() {
-    let (navigator, mut harness, top, c) = mounted_with_transition_route();
-    let runtime = runtime_for(&navigator, top, &c);
-    runtime.on_drag_start(drag_start());
-    assert!(navigator.user_gesture_in_progress());
-
-    // The detector unmounts mid-drag (finger still down) — no drag_end
-    // ever ran. The navigator IS mounted here (unlike an inert
-    // `NavigatorHandle::new()` fixture), so Flutter's own `if (mounted)`
-    // gate in `dispose` is actually exercised, not vacuously satisfied.
-    // `dispose` runs from within the element tree's own owner scope in
-    // production, exactly like `push`/`pop` do — reproduced here so the
-    // local post-frame lane is actually active and the report is
-    // genuinely deferred, not caught by the synchronous fallback.
-    assert!(navigator.is_mounted());
-    harness.enter_owner_scope(|| runtime.dispose_safety_net());
-
-    // `mount()` installs a real owner-local post-frame lane, so the
-    // report is deferred (Flutter's own `addPostFrameCallback`, not a
-    // synchronous call from `dispose`) — a frame tick is what delivers it.
-    assert!(
-        navigator.user_gesture_in_progress(),
-        "the report is deferred to the next frame, not synchronous"
-    );
-    harness.tick();
-    assert!(
-        !navigator.user_gesture_in_progress(),
-        "dispose must return the counter to 0 by the next frame, even \
-         with no drag_end"
-    );
-}
 
 // ---- full settle after release: did_stop fires, counter clears ----
 

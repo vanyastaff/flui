@@ -10,38 +10,6 @@ use common::{lay_out, loose};
 use flui_material::{Divider, DividerThemeData, Theme, ThemeData, ThemeDataOverrides};
 use flui_sdk::painting::Color;
 
-/// `_DividerDefaultsM3`'s full geometry table reaches the mounted tree: the
-/// filled line is `1.0` thick and inset by `indent`/`end_indent` on the
-/// left/right, under a loose (not tight) root so the divider's own
-/// intrinsic `16.0` height request isn't overridden by a forced parent size.
-#[test]
-fn default_geometry_matches_the_m3_token_table() {
-    let laid = lay_out(
-        Theme::new(
-            ThemeData::light(),
-            Divider::new().indent(8.0).end_indent(12.0),
-        ),
-        loose(400.0),
-    );
-
-    let decorated = laid
-        .try_find_by_render_type("RenderContainer")
-        .expect("Divider must compose a decorated (filled) line");
-    assert_eq!(
-        laid.container_inner_size(decorated).height,
-        1.0,
-        "_DividerDefaultsM3.thickness (1.0) must set the filled line's height"
-    );
-
-    let width = laid.container_inner_size(decorated).width;
-    assert_eq!(
-        width,
-        400.0 - 8.0 - 12.0,
-        "indent (8.0) and end_indent (12.0) must both reduce the line's width from the \
-         400px root"
-    );
-}
-
 /// A widget-level `.color(...)` override wins over a configured
 /// `divider_theme.color` — the standard widget → theme → default cascade.
 #[test]

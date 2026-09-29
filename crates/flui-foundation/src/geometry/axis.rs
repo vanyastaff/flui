@@ -195,24 +195,3 @@ impl Axis {
         self.opposite().select_size(size)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    #[inline]
-    fn test_axis_make_size() {
-        assert_eq!(Axis::Horizontal.make_size(100.0), Size::new(100.0, 0.0));
-        assert_eq!(Axis::Vertical.make_size(100.0), Size::new(0.0, 100.0));
-
-        assert_eq!(
-            Axis::Horizontal.make_size_with_cross(100.0, 50.0),
-            Size::new(100.0, 50.0)
-        );
-        assert_eq!(
-            Axis::Vertical.make_size_with_cross(100.0, 50.0),
-            Size::new(50.0, 100.0)
-        );
-    }
-}

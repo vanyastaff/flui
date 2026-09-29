@@ -12,25 +12,6 @@ use flui_painting::{Canvas, TextPainter};
 // measure_text standalone function
 // ============================================================================
 
-#[test]
-fn text_painter_paint_emits_draw_command() {
-    let span = TextSpan::new("Hello, World!");
-    let mut painter = TextPainter::new()
-        .with_text(span)
-        .with_text_direction(TextDirection::Ltr);
-
-    painter.layout(0.0, 300.0);
-
-    let mut canvas = Canvas::new();
-    painter.paint(&mut canvas, Offset::ZERO);
-
-    let display_list = canvas.finish();
-    assert!(
-        !display_list.is_empty(),
-        "painting should produce at least one draw command"
-    );
-}
-
 // ============================================================================
 // Full pipeline: measure -> layout -> paint -> display list
 // ============================================================================

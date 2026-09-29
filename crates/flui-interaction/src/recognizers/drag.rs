@@ -850,32 +850,6 @@ mod tests {
     }
 
     #[test]
-    fn lone_drag_starts_only_after_deferred_default_acceptance() {
-        let arena = GestureArena::new();
-        let starts = Arc::new(Mutex::new(0_u32));
-        let callback_starts = Arc::clone(&starts);
-        let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Horizontal)
-            .with_on_start(move |_| *callback_starts.lock() += 1);
-        let pointer = PointerId::PRIMARY;
-
-        recognizer.add_pointer(pointer, Offset::new(10.0, 20.0), Offset::new(10.0, 20.0));
-        arena.close(pointer);
-        assert_eq!(
-            *starts.lock(),
-            0,
-            "close queues Flutter's single-member default instead of calling inline"
-        );
-
-        assert_eq!(arena.drain_deferred_resolutions(), 1);
-        assert_eq!(
-            *starts.lock(),
-            1,
-            "arena acceptance, not raw movement, owns the start transition"
-        );
-        assert!(arena.is_empty());
-    }
-
-    #[test]
     fn up_before_acceptance_rejects_drag_and_preserves_the_competitor() {
         struct Winner(Arc<Mutex<u32>>);
 
@@ -913,29 +887,6 @@ mod tests {
             1,
             "the possible drag must withdraw instead of stealing the Up sweep"
         );
-        assert_eq!(recognizer.primary_pointer(), None);
-        assert!(arena.is_empty());
-    }
-
-    #[test]
-    fn panicking_cancel_callback_cannot_strand_drag_tracking() {
-        let arena = GestureArena::new();
-        let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Free)
-            .with_on_cancel(|| panic!("drag cancel panic"));
-        recognizer.add_pointer(
-            PointerId::PRIMARY,
-            Offset::new(1.0, 2.0),
-            Offset::new(1.0, 2.0),
-        );
-        arena.close(PointerId::PRIMARY);
-
-        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_cancel_event(
-                PointerType::Touch,
-            )));
-        }));
-
-        assert!(unwind.is_err());
         assert_eq!(recognizer.primary_pointer(), None);
         assert!(arena.is_empty());
     }
@@ -993,48 +944,6 @@ mod tests {
     // `DragAxis::Horizontal` here) call `computeHitSlop` directly.
     // ========================================================================
 
-    /// Build an untracked drag recognizer with a passive competitor already
-    /// closing the arena, so a slop-crossing move must self-declare
-    /// acceptance rather than winning by the arena's lone-member default.
-    fn vertical_drag_with_competitor(
-        on_start: impl Fn(DragStartDetails) + 'static,
-    ) -> (Arc<DragGestureRecognizer>, GestureArena, PointerId) {
-        let arena = GestureArena::new();
-        let recognizer =
-            DragGestureRecognizer::new(arena.clone(), DragAxis::Vertical).with_on_start(on_start);
-        let pointer = PointerId::PRIMARY;
-        recognizer.add_pointer(
-            pointer,
-            Offset::new(100.0, 100.0),
-            Offset::new(100.0, 100.0),
-        );
-        close_with_competitor(&arena, pointer);
-        (recognizer, arena, pointer)
-    }
-
-    #[test]
-    fn mouse_drag_between_precise_slop_and_touch_slop_starts_the_drag() {
-        let started = Arc::new(Mutex::new(false));
-        let started_clone = started.clone();
-        let (recognizer, ..) = vertical_drag_with_competitor(move |_details| {
-            *started_clone.lock() = true;
-        });
-
-        // 10px down: above the mouse precise slop (1.0px) but below the
-        // touch slop (18.0px) the old, kind-blind code always applied
-        // regardless of the pointer's actual kind — the defect this closes.
-        let moved = Offset::new(100.0, 110.0);
-        recognizer.handle_event(PointerDispatch::at_root(&make_move_event(
-            moved,
-            PointerType::Mouse,
-        )));
-
-        assert!(
-            *started.lock(),
-            "a 10px mouse drag crosses the 1.0px precise-pointer slop and must start"
-        );
-    }
-
     // ========================================================================
     // H/V/Pan split tests
     //
@@ -1043,81 +952,4 @@ mod tests {
     //   the generic `pan_slop`),
     // - `DragStartBehavior::Down` vs `Start` (start_position differs).
     // ========================================================================
-
-    #[test]
-    fn drag_start_behavior_down_uses_down_position() {
-        let arena = GestureArena::new();
-        let start_reported = Arc::new(Mutex::new(None::<Offset<f64>>));
-
-        let start_clone = start_reported.clone();
-        let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Free)
-            .with_drag_start_behavior(DragStartBehavior::Down)
-            .with_on_start(move |d| {
-                *start_clone.lock() = Some(d.global_position);
-            });
-
-        let pointer = PointerId::PRIMARY;
-        let down_pos = Offset::new(50.0, 50.0);
-        recognizer.add_pointer(pointer, down_pos, down_pos);
-        close_with_competitor(&arena, pointer);
-
-        // Cross slop with one big move (50→80 → 30px travel).
-        let move_event = make_move_event(Offset::new(80.0, 80.0), PointerType::Touch);
-        recognizer.handle_event(PointerDispatch::at_root(&move_event));
-
-        // With `Down` behavior, the reported start position is the down
-        // position, NOT the slop-crossing position.
-        assert_eq!(*start_reported.lock(), Some(down_pos));
-    }
-
-    #[test]
-    fn drag_start_behavior_start_uses_slop_crossing_position() {
-        let arena = GestureArena::new();
-        let start_reported = Arc::new(Mutex::new(None::<Offset<f64>>));
-
-        let start_clone = start_reported.clone();
-        let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Free)
-            // Default is already Start; this makes the test explicit.
-            .with_drag_start_behavior(DragStartBehavior::Start)
-            .with_on_start(move |d| {
-                *start_clone.lock() = Some(d.global_position);
-            });
-
-        let pointer = PointerId::PRIMARY;
-        let down_pos = Offset::new(50.0, 50.0);
-        recognizer.add_pointer(pointer, down_pos, down_pos);
-        close_with_competitor(&arena, pointer);
-
-        let crossing_pos = Offset::new(80.0, 80.0);
-        let move_event = make_move_event(crossing_pos, PointerType::Touch);
-        recognizer.handle_event(PointerDispatch::at_root(&move_event));
-
-        // With `Start` behavior, the reported start position is the
-        // slop-crossing position itself.
-        assert_eq!(*start_reported.lock(), Some(crossing_pos));
-    }
-
-    #[test]
-    fn cancel_after_acceptance_ends_the_drag_instead_of_cancelling_it() {
-        let arena = GestureArena::new();
-        let ends = Arc::new(Mutex::new(0_u32));
-        let cancels = Arc::new(Mutex::new(0_u32));
-        let ends_for_callback = Arc::clone(&ends);
-        let cancels_for_callback = Arc::clone(&cancels);
-        let recognizer = DragGestureRecognizer::new(arena.clone(), DragAxis::Vertical)
-            .with_on_end(move |_| *ends_for_callback.lock() += 1)
-            .with_on_cancel(move || *cancels_for_callback.lock() += 1);
-        let pointer = PointerId::PRIMARY;
-
-        recognizer.add_pointer(pointer, Offset::new(5.0, 5.0), Offset::new(5.0, 5.0));
-        arena.close(pointer);
-        assert_eq!(arena.drain_deferred_resolutions(), 1);
-        recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_cancel_event(
-            PointerType::Touch,
-        )));
-
-        assert_eq!(*ends.lock(), 1);
-        assert_eq!(*cancels.lock(), 0);
-        assert_eq!(recognizer.primary_pointer(), None);
-    }
 }

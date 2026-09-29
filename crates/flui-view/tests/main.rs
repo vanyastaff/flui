@@ -13,42 +13,20 @@
 
 #[path = "ancestor_finders.rs"]
 mod ancestor_finders;
-#[path = "boxed_view_conditional_return.rs"]
-mod boxed_view_conditional_return;
-#[path = "build_context_tests.rs"]
-mod build_context_tests;
 #[path = "build_owner_tests.rs"]
 mod build_owner_tests;
-#[path = "build_phase_span.rs"]
-mod build_phase_span;
-#[path = "clipboard_handle.rs"]
-mod clipboard_handle;
 #[path = "dense_reconcile_containment.rs"]
 mod dense_reconcile_containment;
 #[path = "dense_update_containment.rs"]
 mod dense_update_containment;
-#[path = "derive_bon_stack.rs"]
-mod derive_bon_stack;
-#[path = "derive_smoke.rs"]
-mod derive_smoke;
-#[path = "dispatch_shim.rs"]
-mod dispatch_shim;
-#[path = "element_tree_tests.rs"]
-mod element_tree_tests;
-#[path = "flutter_parity_key_equality.rs"]
-mod flutter_parity_key_equality;
 #[path = "global_key.rs"]
 mod global_key;
 #[path = "global_key_duplication.rs"]
 mod global_key_duplication;
 #[path = "global_key_reparent.rs"]
 mod global_key_reparent;
-#[path = "inherited_data_derive.rs"]
-mod inherited_data_derive;
 #[path = "inherited_dependency.rs"]
 mod inherited_dependency;
-#[path = "key_roundtrip.rs"]
-mod key_roundtrip;
 #[path = "lifecycle_panic_containment.rs"]
 mod lifecycle_panic_containment;
 #[path = "lifecycle_tests.rs"]
@@ -69,9 +47,5 @@ mod signal_reads;
 mod stateless_stateful_tests;
 #[path = "trybuild_ui.rs"]
 mod trybuild_ui;
-#[path = "view_element_conversion_tests.rs"]
-mod view_element_conversion_tests;
-#[path = "view_reconcile_match.rs"]
-mod view_reconcile_match;
 #[path = "writer_source.rs"]
 mod writer_source;

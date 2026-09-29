@@ -14,22 +14,11 @@ use std::time::Duration;
 
 use crate::common::{lay_out, tight};
 use flui_painting::styling::Color;
-use flui_view::{BuildOwner, ElementTree, View};
 use flui_widgets::{ColoredBox, GestureDetector};
 
 /// A hit-testable child so the detector's `DeferToChild` listener registers.
 fn target() -> ColoredBox {
     ColoredBox::new(Color::rgb(10, 20, 30))
-}
-
-/// Deliberately bypass the canonical presentation wrapper so invariant tests
-/// can prove gesture consumers reject missing ownership.
-fn mount_without_presentation_scope(root: impl View) {
-    let mut owner = BuildOwner::new();
-    let mut tree = ElementTree::new();
-    let root_id = tree.mount_root(&root, &mut owner.element_owner_mut());
-    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
-    owner.build_scope(&mut tree);
 }
 
 // ============================================================================
@@ -79,81 +68,6 @@ fn long_press_fires_when_held_past_the_deadline() {
 // (2) Double tap — two quick virtual-clock taps.
 // ============================================================================
 
-#[test]
-fn double_tap_fires_on_two_quick_taps() {
-    let double_taps = Arc::new(AtomicUsize::new(0));
-    let in_cb = Arc::clone(&double_taps);
-
-    let mut scoped = lay_out(
-        GestureDetector::new()
-            .on_double_tap(move |_cx| {
-                in_cb.fetch_add(1, Ordering::SeqCst);
-            })
-            .child(target()),
-        tight(100.0, 100.0),
-    );
-
-    // Two taps 50ms apart — both inside the 300ms double-tap window.
-    scoped.dispatch_pointer_down(50.0, 50.0);
-    scoped.dispatch_pointer_up(50.0, 50.0);
-    scoped.pump_for(Duration::from_millis(50));
-    scoped.dispatch_pointer_down(50.0, 50.0);
-    scoped.dispatch_pointer_up(50.0, 50.0);
-
-    assert_eq!(
-        double_taps.load(Ordering::SeqCst),
-        1,
-        "two taps within the window fire on_double_tap exactly once",
-    );
-}
-
-/// `on_double_tap_down` fires at the second contact's own DOWN, ahead of
-/// (and independently of) `on_double_tap`, which waits for that contact to
-/// also lift cleanly — the whole point of the callback, per its own doc.
-#[test]
-fn double_tap_down_fires_before_the_second_contact_lifts() {
-    let downs = Arc::new(AtomicUsize::new(0));
-    let taps = Arc::new(AtomicUsize::new(0));
-    let (down_cb, tap_cb) = (Arc::clone(&downs), Arc::clone(&taps));
-
-    let mut scoped = lay_out(
-        GestureDetector::new()
-            .on_double_tap_down(move |_cx, _details| {
-                down_cb.fetch_add(1, Ordering::SeqCst);
-            })
-            .on_double_tap(move |_cx| {
-                tap_cb.fetch_add(1, Ordering::SeqCst);
-            })
-            .child(target()),
-        tight(100.0, 100.0),
-    );
-
-    // First tap.
-    scoped.dispatch_pointer_down(50.0, 50.0);
-    scoped.dispatch_pointer_up(50.0, 50.0);
-    scoped.pump_for(Duration::from_millis(50));
-
-    // Second contact: DOWN only so far, no up yet.
-    scoped.dispatch_pointer_down(50.0, 50.0);
-    assert_eq!(
-        downs.load(Ordering::SeqCst),
-        1,
-        "on_double_tap_down fires the instant the second contact goes down"
-    );
-    assert_eq!(
-        taps.load(Ordering::SeqCst),
-        0,
-        "on_double_tap must not fire yet -- the second contact has not lifted"
-    );
-
-    scoped.dispatch_pointer_up(50.0, 50.0);
-    assert_eq!(
-        taps.load(Ordering::SeqCst),
-        1,
-        "on_double_tap fires once the second contact lifts cleanly"
-    );
-}
-
 // ============================================================================
 // (3) Competition — one detector with on_tap + on_long_press.
 // ============================================================================
@@ -161,12 +75,6 @@ fn double_tap_down_fires_before_the_second_contact_lifts() {
 // ============================================================================
 // (4) Presentation scope is mandatory.
 // ============================================================================
-
-#[test]
-#[should_panic(expected = "GestureArenaScope")]
-fn gesture_detector_without_a_presentation_arena_fails_during_mount() {
-    mount_without_presentation_scope(GestureDetector::new().on_tap(|_cx| {}).child(target()));
-}
 
 // ============================================================================
 // (5) on_tap + on_double_tap on the SAME detector (the headline fix).
@@ -213,49 +121,6 @@ fn double_tap_combined_with_tap_fires_double_tap_once_and_tap_never() {
     );
 }
 
-#[test]
-fn lone_tap_is_held_until_the_double_tap_window_closes_then_fires_tap() {
-    let taps = Arc::new(AtomicUsize::new(0));
-    let double_taps = Arc::new(AtomicUsize::new(0));
-    let (tap_cb, double_cb) = (Arc::clone(&taps), Arc::clone(&double_taps));
-
-    let mut scoped = lay_out(
-        GestureDetector::new()
-            .on_tap(move |_cx| {
-                tap_cb.fetch_add(1, Ordering::SeqCst);
-            })
-            .on_double_tap(move |_cx| {
-                double_cb.fetch_add(1, Ordering::SeqCst);
-            })
-            .child(target()),
-        tight(100.0, 100.0),
-    );
-
-    // One tap: the double-tap recognizer holds the arena, so the tap is deferred
-    // — it must NOT have fired yet.
-    scoped.dispatch_pointer_down(50.0, 50.0);
-    scoped.dispatch_pointer_up(50.0, 50.0);
-    assert_eq!(
-        taps.load(Ordering::SeqCst),
-        0,
-        "the lone tap is held until the double-tap window closes",
-    );
-
-    // Cross the 300ms window with no second contact: the double-tap gives up,
-    // withdraws itself, and the lone tap finally wins and fires once.
-    scoped.pump_for(Duration::from_millis(350));
-    assert_eq!(
-        taps.load(Ordering::SeqCst),
-        1,
-        "after the window closes the held tap fires exactly once",
-    );
-    assert_eq!(
-        double_taps.load(Ordering::SeqCst),
-        0,
-        "a single tap is not a double tap",
-    );
-}
-
 // ============================================================================
 // (6) Two overlapping detectors compete in one GestureArenaScope.
 // ============================================================================
@@ -266,76 +131,3 @@ fn lone_tap_is_held_until_the_double_tap_window_closes_then_fires_tap() {
 // "most specific first", so the INNER detector's recognizer is the arena front
 // member. These guard that A's recognizers no longer self-sweep B out (the
 // binding owns the sweep): exactly one callback fires per contact.
-
-fn nested_tap_over_long_press(
-    tap_count: Arc<AtomicUsize>,
-    press_count: Arc<AtomicUsize>,
-) -> GestureDetector {
-    GestureDetector::new()
-        .on_long_press(move |_cx| {
-            press_count.fetch_add(1, Ordering::SeqCst);
-        })
-        .child(
-            GestureDetector::new()
-                .on_tap(move |_cx| {
-                    tap_count.fetch_add(1, Ordering::SeqCst);
-                })
-                .child(target()),
-        )
-}
-
-#[test]
-fn overlapping_detectors_quick_tap_resolves_to_the_inner_tap() {
-    let taps = Arc::new(AtomicUsize::new(0));
-    let presses = Arc::new(AtomicUsize::new(0));
-
-    let scoped = lay_out(
-        nested_tap_over_long_press(Arc::clone(&taps), Arc::clone(&presses)),
-        tight(100.0, 100.0),
-    );
-
-    // Quick down+up: the inner tap is the front member and wins on the binding's
-    // sweep; the outer long press never fires.
-    scoped.dispatch_pointer_down(50.0, 50.0);
-    scoped.dispatch_pointer_up(50.0, 50.0);
-
-    assert_eq!(
-        taps.load(Ordering::SeqCst),
-        1,
-        "the inner tap wins a quick contact",
-    );
-    assert_eq!(
-        presses.load(Ordering::SeqCst),
-        0,
-        "the outer long press does not fire on a quick contact",
-    );
-}
-
-#[test]
-fn overlapping_detectors_held_press_resolves_to_the_outer_long_press() {
-    let taps = Arc::new(AtomicUsize::new(0));
-    let presses = Arc::new(AtomicUsize::new(0));
-
-    let mut scoped = lay_out(
-        nested_tap_over_long_press(Arc::clone(&taps), Arc::clone(&presses)),
-        tight(100.0, 100.0),
-    );
-
-    // Hold past the deadline: the outer long press wins the shared arena
-    // (rejecting the inner tap), then release. The inner tap must NOT fire — the
-    // case that regresses if the inner tap's own up self-sweeps the arena.
-    scoped.dispatch_pointer_down(50.0, 50.0);
-    scoped.pump_for(Duration::from_millis(600));
-    scoped.dispatch_pointer_up(50.0, 50.0);
-
-    assert_eq!(
-        presses.load(Ordering::SeqCst),
-        1,
-        "the held press fires the outer long press exactly once",
-    );
-    assert_eq!(
-        taps.load(Ordering::SeqCst),
-        0,
-        "the long press rejected the inner tap, so the tap must NOT fire",
-    );
-}

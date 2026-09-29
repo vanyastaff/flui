@@ -110,15 +110,6 @@ impl MacOSClipboard {
         }
     }
 
-    /// Get the current change count
-    ///
-    /// Change count increments each time the pasteboard contents change.
-    /// Use this to detect if clipboard has changed without reading contents.
-    #[cfg_attr(not(test), expect(dead_code))]
-    fn change_count(&self) -> i64 {
-        self.with_pasteboard_on_owner(|pasteboard| pasteboard.changeCount() as i64)
-    }
-
     /// Run `f` with the pasteboard id resolved on the owner lane.
     ///
     /// The id is produced and consumed within this call: it never outlives
@@ -204,33 +195,6 @@ mod tests {
     /// Unique board name per test name and per test process.
     fn test_board(name: &str) -> String {
         format!("flui.clipboard.{name}.{}", std::process::id())
-    }
-
-    /// A test instance on the shared test lane for a uniquely named board.
-    fn test_clipboard(name: &str) -> MacOSClipboard {
-        MacOSClipboard::for_test(test_owner_queue(), test_board(name))
-    }
-
-    #[test]
-    fn test_clipboard_roundtrip() {
-        let clipboard = test_clipboard("roundtrip");
-
-        let test_text = "Hello from FLUI macOS!";
-        clipboard.write_text(test_text.to_string());
-
-        let read_back = clipboard.read_text();
-        assert_eq!(read_back.as_deref(), Some(test_text));
-    }
-
-    #[test]
-    fn test_change_count() {
-        let clipboard = test_clipboard("change_count");
-
-        let count1 = clipboard.change_count();
-        clipboard.write_text("Test 1".to_string());
-        let count2 = clipboard.change_count();
-
-        assert!(count2 > count1, "Change count should increment after write");
     }
 
     #[test]

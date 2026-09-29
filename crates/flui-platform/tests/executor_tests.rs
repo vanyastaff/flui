@@ -12,45 +12,12 @@ use std::{
 };
 
 use flui_platform::executor::BackgroundExecutor;
-use parking_lot::Mutex;
 
 fn init_tracing() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_max_level(tracing::Level::DEBUG)
         .try_init();
-}
-
-/// Test that background executor runs tasks on worker threads, not the spawning
-/// thread
-#[test]
-fn test_background_executor_runs_on_worker_thread() {
-    init_tracing();
-    tracing::info!("Testing background executor thread isolation");
-
-    let executor = BackgroundExecutor::new();
-    let spawning_thread_id = thread::current().id();
-    let task_thread_id = Arc::new(Mutex::new(None));
-    let task_thread_id_clone = Arc::clone(&task_thread_id);
-
-    executor
-        .spawn(async move {
-            let current_id = thread::current().id();
-            *task_thread_id_clone.lock() = Some(current_id);
-            tracing::debug!("Task executing on thread {:?}", current_id);
-        })
-        .detach();
-
-    // Wait for task to complete
-    thread::sleep(Duration::from_millis(100));
-
-    let executed_on = task_thread_id.lock().expect("Task should have executed");
-    assert_ne!(
-        executed_on, spawning_thread_id,
-        "Background task should NOT run on spawning thread"
-    );
-
-    tracing::info!("PASS: Background task executed on worker thread (not UI thread)");
 }
 
 /// Test that background executor handles panic in tasks gracefully

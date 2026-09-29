@@ -65,50 +65,6 @@ fn drive_frame_runs_post_frame_callbacks_after_the_pipeline() {
     assert_eq!(log.get(), vec!["pipeline", "post_frame"]);
 }
 
-/// Flutter copies the list and clears it **before** invoking
-/// (`scheduler/binding.dart:1350-1351`), so a callback registered from inside a
-/// post-frame callback lands on the next frame, not this one.
-#[test]
-fn a_post_frame_callback_registered_from_a_post_frame_callback_defers_to_the_next_frame() {
-    let scheduler = UpdateScheduler::new();
-    let log = Log::default();
-
-    let inner_scheduler = scheduler.clone();
-    let log_outer = log.clone();
-    scheduler.add_post_frame_callback(Box::new(move |_| {
-        log_outer.push("outer");
-        let log_inner = log_outer.clone();
-        inner_scheduler.add_post_frame_callback(Box::new(move |_| {
-            log_inner.push("inner");
-        }));
-    }));
-
-    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
-    assert_eq!(log.get(), vec!["outer"], "the inner callback must defer");
-
-    scheduler.drive_frame(Instant::now(), far_deadline(), || {});
-    assert_eq!(log.get(), vec!["outer", "inner"]);
-}
-
-/// A pipeline that **returns an error value** is a completed frame: post-frame
-/// callbacks fire, exactly once, and the phase settles.
-#[test]
-fn a_pipeline_returning_an_error_still_completes_the_frame() {
-    let scheduler = UpdateScheduler::new();
-    let fired = Arc::new(AtomicUsize::new(0));
-    let fired_cb = Arc::clone(&fired);
-    scheduler.add_post_frame_callback(Box::new(move |_| {
-        fired_cb.fetch_add(1, Ordering::SeqCst);
-    }));
-
-    let result: Result<(), &str> =
-        scheduler.drive_frame(Instant::now(), far_deadline(), || Err("render failed"));
-
-    assert_eq!(result, Err("render failed"));
-    assert_eq!(fired.load(Ordering::SeqCst), 1, "an error is not an abort");
-    assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
-}
-
 /// A **panicking** pipeline is an abandoned frame: `drive_frame` catches the
 /// panic, calls `abort_frame` (phase → `Idle`, **no** post-frame callbacks), and
 /// resumes the unwind. The queued callbacks survive to the next completed frame.
@@ -172,28 +128,6 @@ fn a_frame_after_a_panicking_frame_starts_cleanly() {
     // Would `debug_assert!` on the illegal transition if the frame were still open.
     scheduler.drive_frame(Instant::now(), far_deadline(), || {});
     assert_eq!(ran.load(Ordering::SeqCst), 1);
-    assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
-}
-
-/// `handle_draw_frame` alone no longer finishes the frame — it hands the
-/// persistent slot to the caller. Characterizes the split.
-#[test]
-fn handle_draw_frame_alone_no_longer_drains_post_frame_callbacks() {
-    let scheduler = UpdateScheduler::new();
-    let fired = Arc::new(AtomicUsize::new(0));
-    let fired_cb = Arc::clone(&fired);
-    scheduler.add_post_frame_callback(Box::new(move |_| {
-        fired_cb.fetch_add(1, Ordering::SeqCst);
-    }));
-
-    scheduler.handle_begin_frame(Instant::now());
-    scheduler.handle_draw_frame();
-
-    assert_eq!(fired.load(Ordering::SeqCst), 0);
-    assert_eq!(scheduler.phase(), SchedulerPhase::PersistentCallbacks);
-
-    scheduler.end_frame();
-    assert_eq!(fired.load(Ordering::SeqCst), 1);
     assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
 }
 

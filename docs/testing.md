@@ -191,10 +191,7 @@ the trybuild `compile_fail` suites (`flui-engine`, `flui-rendering`,
 `flui-painting`, `flui-view`'s `trybuild_ui`), the
 `flui-cli` template tests (`cli_create::generated_*`), and every
 `flui::facade_consumer` test. Locally, with their build caches cold, most take
-one to five minutes; the other ~9,700 tests are quick. Tests that spawn a
-`cargo` only for a trivial crate (`flui-cli`'s `cli_maintenance`, which runs
-`cargo new` and tests an empty project in seconds) are deliberately left out
-of the group. `.config/nextest.toml`
+one to five minutes; the rest are quick. `.config/nextest.toml`
 names them with one filter, in the override that puts them in the nextest
 test group `nested-cargo`; `cargo nextest show-config test-groups` lists the
 group's members. Selecting by group needs nextest 0.9.133 or newer (the
@@ -604,7 +601,6 @@ Pair with `AnimationController::tick_at(t)` inside `simulate` for
 production-faithful animation tests. Assert per frame via `Probe` (`offset`,
 `box_geometry`, `picture_bounds`, `property`) and layer helpers
 (`opacity_alpha`, `has_picture_layer`). See
-`crates/flui-rendering/tests/harness_animation.rs` and
 `crates/flui-rendering/tests/animation_pipeline.rs`.
 
 ## Headless frames and widget trees

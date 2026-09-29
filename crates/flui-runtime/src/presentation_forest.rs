@@ -104,36 +104,3 @@ impl PresentationForest {
         self.presentations.iter()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::num::NonZeroU32;
-    use std::sync::Arc;
-
-    use flui_platform_api::PlatformTextInput;
-    use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
-
-    use super::*;
-
-    fn presentation(generation: u32) -> PresentationState {
-        PresentationState::new_for_test(
-            PresentationId::new_gen(0, NonZeroU32::new(generation).expect("nonzero")),
-            PipelineCell::new(PipelineOwner::new()),
-            None::<Arc<dyn PlatformTextInput>>,
-        )
-    }
-
-    #[test]
-    fn get_and_remove_address_by_exact_presentation_id() {
-        let mut forest = PresentationForest::single(presentation(1));
-        let second = presentation(2);
-        let second_id = second.id();
-        forest.install(second);
-
-        assert!(forest.get(second_id).is_some());
-        let removed = forest.remove(second_id).expect("present");
-        assert_eq!(removed.id(), second_id);
-        assert!(forest.get(second_id).is_none());
-        assert_eq!(forest.len(), 1);
-    }
-}

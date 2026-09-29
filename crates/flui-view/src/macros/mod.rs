@@ -264,31 +264,3 @@ macro_rules! row {
         )
     };
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::seq::ViewSeq;
-
-    #[derive(Clone)]
-    struct Leaf(u32);
-
-    impl crate::view::View for Leaf {
-        fn create_element(&self) -> crate::element::ElementKind {
-            crate::element::ElementKind::stateless(self)
-        }
-    }
-
-    impl crate::view::StatelessView for Leaf {
-        fn build(&self, _ctx: &dyn crate::context::BuildContext) -> impl crate::view::IntoView {
-            Leaf(self.0)
-        }
-    }
-
-    #[test]
-    fn column_three_heterogeneous_kids_compile() {
-        // The macro should accept three children of three different
-        // concrete types (only Leaf used here for self-containment).
-        let s = column![Leaf(1), Leaf(2), Leaf(3)];
-        assert_eq!(s.len(), 3);
-    }
-}

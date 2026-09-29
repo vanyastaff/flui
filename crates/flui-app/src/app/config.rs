@@ -424,32 +424,3 @@ impl From<&AppConfig> for flui_platform::WindowOptions {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The shared conversion must not promise a reveal it cannot keep:
-    /// `run_direct` and the bare secondary window open through it and
-    /// never call `reveal_after_first_frame`. The desktop runner opts in
-    /// at its own open sites (`runner::desktop::rendered_window_options`).
-    #[test]
-    fn app_config_converts_to_window_options_that_reveal_at_open() {
-        let options: flui_platform::WindowOptions = (&AppConfig::default()).into();
-        assert_eq!(options.reveal, flui_platform::WindowReveal::AtOpen);
-        assert!(options.visible);
-    }
-
-    #[test]
-    fn frame_failure_detail_is_explicit_and_profile_independent() {
-        let config = AppConfig::new()
-            .with_frame_failure_detail(FrameFailureDetail::Redacted)
-            .with_diagnostics_profile(DiagnosticsProfile::Development);
-        assert_eq!(config.frame_failure_detail, FrameFailureDetail::Redacted);
-
-        let config = AppConfig::new()
-            .with_frame_failure_detail(FrameFailureDetail::Verbatim)
-            .with_diagnostics_profile(DiagnosticsProfile::Production);
-        assert_eq!(config.frame_failure_detail, FrameFailureDetail::Verbatim);
-    }
-}

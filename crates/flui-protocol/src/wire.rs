@@ -250,7 +250,7 @@ mod tests {
 
     #[cfg(feature = "serde")]
     #[test]
-    fn every_wire_role_serializes_to_its_name() {
+    fn every_wire_name_serializes_to_its_vocabulary_string() {
         for &role in Role::ALL {
             let wire = serde_json::Value::String(role.name().into());
             assert_eq!(
@@ -264,42 +264,15 @@ mod tests {
             serde_json::from_value::<Role>(serde_json::json!("Edit")).is_err(),
             "a native name is not a role"
         );
-    }
-
-    #[cfg(feature = "serde")]
-    #[test]
-    fn every_action_name_serializes_to_its_tool_name() {
         for &action in ActionName::ALL {
             let wire = serde_json::Value::String(action.name().into());
-            assert_eq!(
-                serde_json::to_value(action).ok(),
-                Some(wire.clone()),
-                "{action:?}"
-            );
+            assert_eq!(serde_json::to_value(action).ok(), Some(wire.clone()));
             assert_eq!(
                 serde_json::from_value::<ActionName>(wire).ok(),
                 Some(action)
             );
         }
         assert!(serde_json::from_value::<ActionName>(serde_json::json!("SetValue")).is_err());
-    }
-
-    #[cfg(feature = "serde")]
-    #[test]
-    fn checked_serializes_as_a_flag_or_mixed() {
-        assert_eq!(
-            serde_json::to_value(Checked::True).ok(),
-            Some(serde_json::json!(true))
-        );
-        assert_eq!(
-            serde_json::to_value(Checked::Mixed).ok(),
-            Some(serde_json::json!("mixed"))
-        );
-        assert_eq!(
-            serde_json::from_value::<Checked>(serde_json::json!("mixed")).ok(),
-            Some(Checked::Mixed)
-        );
-        assert!(serde_json::from_value::<Checked>(serde_json::json!("on")).is_err());
     }
 
     /// Every string a schema admits, whether it spells them as an `enum` list

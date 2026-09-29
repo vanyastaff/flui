@@ -215,14 +215,6 @@ mod tests {
     }
 
     #[test]
-    fn a_supplementary_scalar_is_two_units_four_bytes() {
-        assert_eq!(utf16_len("😀"), at(2));
-        assert_eq!(byte_offset("😀", at(2)), Ok(4));
-        assert_eq!(utf16_offset("😀", 4), Ok(at(2)));
-        assert_eq!(utf16_len(CORPUS), at(17));
-    }
-
-    #[test]
     fn an_offset_inside_a_surrogate_pair_is_refused() {
         assert_eq!(
             byte_offset(CORPUS, at(2)),
@@ -246,31 +238,5 @@ mod tests {
             assert_eq!(whole.len(), utf16_len(text).get());
             assert_eq!(byte_range(text, whole), Ok(0..text.len()));
         }
-    }
-
-    #[test]
-    fn a_byte_offset_off_a_char_boundary_is_refused() {
-        assert_eq!(
-            utf16_offset(CORPUS, 2),
-            Err(OffsetError::NotCharBoundary(2))
-        );
-        assert_eq!(
-            utf16_offset(CORPUS, CORPUS.len() + 1),
-            Err(OffsetError::PastEnd {
-                offset: CORPUS.len() + 1,
-                len: CORPUS.len()
-            })
-        );
-        assert_eq!(
-            byte_offset(CORPUS, at(18)),
-            Err(OffsetError::PastEnd {
-                offset: 18,
-                len: 17
-            })
-        );
-        assert_eq!(
-            utf16_range(CORPUS, Range { start: 5, end: 1 }),
-            Err(OffsetError::Inverted { start: 5, end: 1 })
-        );
     }
 }

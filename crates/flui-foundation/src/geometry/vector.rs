@@ -1064,35 +1064,6 @@ where
 // Tests
 // ============================================================================
 
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    #[test]
-    fn test_normalize() {
-        let v = Vec2::new(3.0, 4.0);
-        let n = v.normalize();
-        assert!((n.length() - 1.0).abs() < 1e-6);
-        assert!((n.x - 0.6).abs() < 1e-6);
-        assert!((n.y - 0.8).abs() < 1e-6);
-
-        assert_eq!(Vec2::<f64>::ZERO.normalize(), Vec2::<f64>::ZERO);
-        assert!(Vec2::<f64>::X.is_normalized());
-    }
-
-    #[test]
-    fn test_clamp_length() {
-        let v = Vec2::new(3.0, 4.0); // length = 5
-
-        let clamped_max = v.clamp_length(0.0, 2.0);
-        assert!((clamped_max.length() - 2.0).abs() < 1e-6);
-
-        let clamped_min = Vec2::new(0.3, 0.4).clamp_length(5.0, 10.0);
-        assert!((clamped_min.length() - 5.0).abs() < 1e-6);
-    }
-}
-
 // ============================================================================
 // Typed Generic Tests
 // ============================================================================

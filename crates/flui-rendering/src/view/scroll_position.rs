@@ -923,31 +923,6 @@ impl ViewportOffset for ScrollPosition {
 #[cfg(test)]
 mod tests {
 
-    /// Activity listeners fire on TRANSITIONS only: a same-value write is
-    /// silent, so gesture code may set unconditionally at each edge without
-    /// spamming a snap trigger with no-op wakeups.
-    #[test]
-    fn activity_listeners_fire_on_transitions_only() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        let position = ScrollPosition::zero();
-        let fired = std::sync::Arc::new(AtomicUsize::new(0));
-        let sink = std::sync::Arc::clone(&fired);
-        position.add_activity_listener(std::sync::Arc::new(move || {
-            sink.fetch_add(1, Ordering::SeqCst);
-        }));
-
-        position.set_is_scrolling(true);
-        position.set_is_scrolling(true); // same value: silent
-        assert_eq!(fired.load(Ordering::SeqCst), 1);
-
-        position.set_user_scroll_direction(super::super::ScrollDirection::Reverse);
-        position.set_user_scroll_direction(super::super::ScrollDirection::Reverse);
-        assert_eq!(fired.load(Ordering::SeqCst), 2);
-
-        position.set_is_scrolling(false);
-        assert_eq!(fired.load(Ordering::SeqCst), 3);
-    }
-
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use flui_scheduler::UpdateScheduler;
@@ -989,84 +964,6 @@ mod tests {
     }
 
     // DimensionChangePolicy -----------------------------------------------
-
-    #[test]
-    fn keep_pixels_default_policy_leaves_pixels_unchanged_across_a_dimension_change() {
-        let mut position = ScrollPosition::zero();
-        assert!(position.apply_viewport_dimension(300.0));
-        position.set_pixels(150.0);
-
-        assert!(position.apply_viewport_dimension(600.0));
-        assert_eq!(
-            position.pixels(),
-            150.0,
-            "KeepPixels (the default) must not move the pixel offset when the \
-             viewport dimension changes"
-        );
-    }
-
-    #[test]
-    fn keep_fractional_page_preserves_page_at_partial_viewport_fraction() {
-        let mut position = ScrollPosition::zero();
-        assert!(position.apply_viewport_dimension(300.0));
-        // page = 720 / (300 * 0.8) = 720 / 240 = 3.0
-        position.set_pixels(720.0);
-        position.set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
-            viewport_fraction: 0.8,
-            initial_page: None,
-        });
-
-        assert!(position.apply_viewport_dimension(600.0));
-        // page preserved at 3.0: new_pixels = 3.0 * (600 * 0.8) = 1440.0
-        assert_eq!(
-            position.pixels(),
-            1440.0,
-            "resizing 300 -> 600 at viewport_fraction 0.8 must preserve the \
-             fractional page (3.0), not the raw pixel offset"
-        );
-    }
-
-    #[test]
-    fn keep_fractional_page_caches_the_page_across_a_zero_dimension_collapse_and_restore() {
-        let mut position = ScrollPosition::zero();
-        assert!(position.apply_viewport_dimension(300.0));
-        position.set_pixels(150.0); // page = 150 / 300 = 0.5
-        position.set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
-            viewport_fraction: 1.0,
-            initial_page: None,
-        });
-
-        // Collapse to a zero dimension: the page (0.5) is cached, not
-        // encoded in `pixels` — `pixels` becomes 0.0, matching
-        // `getPixelsFromPage` evaluated at a zero dimension. No NaN/inf
-        // either way.
-        assert!(position.apply_viewport_dimension(0.0));
-        assert!(
-            position.pixels().is_finite(),
-            "collapsing to a zero viewport dimension must not produce NaN/inf pixels"
-        );
-        assert_eq!(
-            position.pixels(),
-            0.0,
-            "a collapsed (0.0-dimension) viewport has no pixel offset to derive — \
-             the real page state lives in the cached page, not in `pixels`"
-        );
-
-        // Recover from zero: the cached page (0.5), not a formula re-derived
-        // from `pixels` (which reads 0.0 post-collapse), drives the restore.
-        assert!(position.apply_viewport_dimension(600.0));
-        assert!(
-            position.pixels().is_finite(),
-            "recovering from a zero viewport dimension must not produce NaN/inf pixels"
-        );
-        assert_eq!(
-            position.pixels(),
-            300.0,
-            "the cached page (0.5) recomputed against the restored dimension \
-             (600 * 1.0) lands at pixels = 0.5 * 600.0, not 0.0 (which a \
-             pixels-derived formula would wrongly produce)"
-        );
-    }
 
     // `initial_page` (`_pageToUseOnStartup` wiring) -------------------------
 

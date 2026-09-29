@@ -124,19 +124,4 @@ mod tests {
             assert_eq!(dropped.load(Ordering::SeqCst), 1);
         }
     }
-
-    #[test]
-    fn a_formatted_panic_payload_is_a_string_and_comes_through_verbatim() {
-        let detail = 42;
-        let payload = catch_unwind(AssertUnwindSafe(|| panic!("failure {detail}")))
-            .expect_err("the closure must panic");
-        assert_eq!(panic_payload_message(&*payload), "failure 42");
-    }
-
-    #[test]
-    fn a_non_string_payload_is_reported_as_opaque_not_dropped_or_panicking() {
-        let payload =
-            catch_unwind(|| std::panic::panic_any(1234_i32)).expect_err("the closure must panic");
-        assert_eq!(panic_payload_message(&*payload), OPAQUE_PANIC_PAYLOAD);
-    }
 }

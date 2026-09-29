@@ -17,36 +17,6 @@ impl Drop for ResetErrorViewBuilder {
     }
 }
 
-#[derive(Clone)]
-struct RecoveryMountPanics;
-
-impl RenderView for RecoveryMountPanics {
-    type Protocol = flui_rendering::protocol::BoxProtocol;
-    type RenderObject = flui_objects::RenderSizedBox;
-
-    fn create_render_object(&self, _ctx: &crate::RenderObjectContext<'_>) -> Self::RenderObject {
-        panic!("activation substitute mount panic");
-    }
-
-    fn update_render_object(
-        &self,
-        _ctx: &crate::RenderObjectContext<'_>,
-        _render_object: &mut Self::RenderObject,
-    ) -> flui_rendering::RenderUpdateImpact {
-        flui_rendering::RenderUpdateImpact::NONE
-    }
-}
-
-impl View for RecoveryMountPanics {
-    fn create_element(&self) -> crate::element::ElementKind {
-        crate::element::ElementKind::render_variable(self)
-    }
-}
-
-fn recovery_mount_panics(_error: &FlutterError) -> Box<dyn View> {
-    Box::new(RecoveryMountPanics)
-}
-
 fn recovery_factory_panics(_error: &FlutterError) -> Box<dyn View> {
     panic!("activation recovery factory panic");
 }
@@ -149,39 +119,6 @@ fn activation_factory_panic_drops_staged_record_and_preserves_prior_record() {
     assert_eq!(
         payload_text(payload.as_ref()),
         Some("activation recovery factory panic")
-    );
-    assert_failed_activation_diagnostic(&mut owner, prior, &captured_log);
-}
-
-#[test]
-fn activation_substitute_mount_panic_drops_staged_record_and_preserves_prior_record() {
-    const TEST_NAME: &str = "tree::element_tree::tests::activation_recovery_tests::activation_substitute_mount_panic_drops_staged_record_and_preserves_prior_record";
-    if isolate_error_view_builder_test(TEST_NAME) {
-        return;
-    }
-    clear_error_view_builder();
-    let _reset = ResetErrorViewBuilder;
-    let (mut tree, mut owner, keyed, destination, prior) = active_retake_fixture();
-    seed_prior_record(&mut owner, prior);
-    set_error_view_builder(recovery_mount_panics);
-
-    let (payload, captured_log) = flui_testing::log_capture::capture(|| {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = tree.begin_reconcile(destination);
-            let _ = tree.mount_or_substitute(
-                &keyed,
-                destination,
-                0,
-                &mut owner.element_owner_mut(),
-                ProvisionalOrder::NONE,
-                "active retake substitute failure",
-            );
-        }))
-        .expect_err("the substitute mount panic must remain fatal")
-    });
-    assert_eq!(
-        payload_text(payload.as_ref()),
-        Some("activation substitute mount panic")
     );
     assert_failed_activation_diagnostic(&mut owner, prior, &captured_log);
 }

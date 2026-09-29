@@ -8,55 +8,28 @@ mod common;
 mod absorb_pointer;
 #[path = "actions.rs"]
 mod actions;
-mod anchored_box;
-#[path = "animated_builder_swap.rs"]
-mod animated_builder_swap;
 #[path = "animated_size.rs"]
 mod animated_size;
 #[path = "back_gesture.rs"]
 mod back_gesture;
-#[path = "baseline.rs"]
-mod baseline;
 #[path = "binding_animation.rs"]
 mod binding_animation;
-#[path = "box_extras.rs"]
-mod box_extras;
 #[path = "child_type_swap.rs"]
 mod child_type_swap;
-#[path = "clip.rs"]
-mod clip;
 #[path = "component_child_ordering.rs"]
 mod component_child_ordering;
 #[path = "composition.rs"]
 mod composition;
-#[path = "container.rs"]
-mod container;
 #[path = "custom_multi_child_layout.rs"]
 mod custom_multi_child_layout;
-#[path = "custom_paint.rs"]
-mod custom_paint;
-#[path = "custom_single_child_layout.rs"]
-mod custom_single_child_layout;
-#[path = "decorated_box.rs"]
-mod decorated_box;
-#[path = "directionality.rs"]
-mod directionality;
 #[path = "directionality_dependency.rs"]
 mod directionality_dependency;
 #[path = "editable_text.rs"]
 mod editable_text;
 #[path = "editable_text_clipboard.rs"]
 mod editable_text_clipboard;
-#[path = "fade_transition.rs"]
-mod fade_transition;
-#[path = "fitted_box.rs"]
-mod fitted_box;
-#[path = "flex.rs"]
-mod flex;
 #[path = "flex_parent_data.rs"]
 mod flex_parent_data;
-#[path = "flow.rs"]
-mod flow;
 #[path = "focus.rs"]
 mod focus;
 #[path = "form.rs"]
@@ -81,103 +54,57 @@ mod hero_public;
 mod hero_seam;
 #[path = "hot_reload_state.rs"]
 mod hot_reload_state;
-#[path = "image.rs"]
-mod image;
 #[path = "implicit_animations.rs"]
 mod implicit_animations;
-#[path = "indexed_stack.rs"]
-mod indexed_stack;
-#[path = "inherited_app.rs"]
-mod inherited_app;
-#[path = "intrinsic_and_overflow.rs"]
-mod intrinsic_and_overflow;
 #[path = "layer_inspection.rs"]
 mod layer_inspection;
-#[path = "layout.rs"]
-mod layout;
 #[path = "layout_builder.rs"]
 mod layout_builder;
 #[path = "lazy_grid.rs"]
 mod lazy_grid;
 #[path = "lazy_list.rs"]
 mod lazy_list;
-#[path = "list_body.rs"]
-mod list_body;
 #[path = "listener.rs"]
 mod listener;
 #[path = "localizations.rs"]
 mod localizations;
 #[path = "media_query_fields.rs"]
 mod media_query_fields;
-#[path = "meta_data.rs"]
-mod meta_data;
 #[path = "modal_route.rs"]
 mod modal_route;
-#[path = "modifiers.rs"]
-mod modifiers;
-#[path = "mouse_region.rs"]
-mod mouse_region;
 #[path = "navigator.rs"]
 mod navigator;
 #[path = "navigator_public.rs"]
 mod navigator_public;
-#[path = "offstage_measurement.rs"]
-mod offstage_measurement;
-#[path = "offstage_proxy.rs"]
-mod offstage_proxy;
 /// Issue #536: an `Opacity` rebuild reaches the composited layer.
-#[path = "opacity_layer_update.rs"]
-mod opacity_layer_update;
-#[path = "overflow_box.rs"]
-mod overflow_box;
 #[path = "overlay.rs"]
 mod overlay;
 #[path = "page_route.rs"]
 mod page_route;
 #[path = "parent_data_ancestry.rs"]
 mod parent_data_ancestry;
-#[path = "post_frame_handle.rs"]
-mod post_frame_handle;
 #[path = "raw_button.rs"]
 mod raw_button;
-#[path = "rich_text.rs"]
-mod rich_text;
-#[path = "rotation_transition.rs"]
-mod rotation_transition;
 #[path = "routable_derive.rs"]
 mod routable_derive;
 #[path = "router.rs"]
 mod router;
-#[path = "routes.rs"]
-mod routes;
-#[path = "safe_area.rs"]
-mod safe_area;
-#[path = "scale_transition.rs"]
-mod scale_transition;
 #[path = "scroll.rs"]
 mod scroll;
 #[path = "semantics.rs"]
 mod semantics;
 #[path = "shortcuts.rs"]
 mod shortcuts;
-#[path = "shrink_wrapping_viewport.rs"]
-mod shrink_wrapping_viewport;
 #[path = "signals.rs"]
 mod signals;
 #[path = "signals_legal_shapes.rs"]
 mod signals_legal_shapes;
 #[path = "slide_transition.rs"]
 mod slide_transition;
-#[path = "sliver_opacity.rs"]
-mod sliver_opacity;
 #[path = "sliver_persistent_header.rs"]
 mod sliver_persistent_header;
-#[path = "spacer.rs"]
-mod spacer;
 #[path = "stack_positioned.rs"]
 mod stack_positioned;
-#[path = "stateful.rs"]
-mod stateful;
 #[path = "stream_builder.rs"]
 mod stream_builder;
 #[path = "table.rs"]
@@ -190,8 +117,6 @@ mod text_field;
 mod text_field_widget;
 #[path = "text_store_kit.rs"]
 mod text_store_kit;
-#[path = "ticker_mode.rs"]
-mod ticker_mode;
 #[path = "transition_route.rs"]
 mod transition_route;
 #[path = "visibility.rs"]

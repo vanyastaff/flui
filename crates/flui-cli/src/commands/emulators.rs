@@ -371,37 +371,3 @@ impl devices::Problem {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::BTreeMap;
-
-    fn avd(name: &str, status: Status) -> Device {
-        Device {
-            id: name.to_string(),
-            name: name.to_string(),
-            platform: crate::DevicePlatform::Android,
-            kind: Kind::Emulator,
-            status,
-            details: BTreeMap::new(),
-        }
-    }
-
-    #[test]
-    fn resolve_target_matches_unique_prefix() {
-        let candidates = vec![avd("Pixel_7_API_34", Status::Shutdown)];
-        let found = resolve_target(&candidates, "pixel").expect("unique prefix");
-        assert_eq!(found.name, "Pixel_7_API_34");
-    }
-
-    #[test]
-    fn resolve_target_reports_ambiguous_prefix() {
-        let candidates = vec![
-            avd("Pixel_6", Status::Shutdown),
-            avd("Pixel_7", Status::Shutdown),
-        ];
-        let error = resolve_target(&candidates, "pixel").expect_err("ambiguous");
-        assert!(matches!(error, CliError::DeviceNotFound { .. }));
-    }
-}

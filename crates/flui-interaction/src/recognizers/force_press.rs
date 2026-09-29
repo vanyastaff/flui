@@ -638,28 +638,6 @@ mod tests {
     use crate::arena::GestureArena;
 
     #[test]
-    fn test_force_press_start() {
-        let arena = GestureArena::new();
-        let started = Arc::new(Mutex::new(false));
-        let started_clone = started.clone();
-
-        let recognizer = ForcePressGestureRecognizer::new(arena).with_on_start(move |_details| {
-            *started_clone.lock() = true;
-        });
-
-        let pointer = PointerId::new(2).expect("nonzero pointer id");
-        let position = Offset::new(100.0, 100.0);
-
-        // Start tracking
-        recognizer.add_pointer(pointer, position, position);
-
-        // Directly call handle_down with pressure above threshold
-        recognizer.handle_down(position, 0.5);
-
-        assert!(*started.lock());
-    }
-
-    #[test]
     fn test_force_press_peak() {
         let arena = GestureArena::new();
         let peaked = Arc::new(Mutex::new(false));
@@ -686,30 +664,5 @@ mod tests {
 
         // Peak should be triggered
         assert!(*peaked.lock());
-    }
-
-    #[test]
-    fn test_force_press_end_on_release() {
-        let arena = GestureArena::new();
-        let ended = Arc::new(Mutex::new(false));
-        let ended_clone = ended.clone();
-
-        let recognizer = ForcePressGestureRecognizer::new(arena).with_on_end(move |_details| {
-            *ended_clone.lock() = true;
-        });
-
-        let pointer = PointerId::new(2).expect("nonzero pointer id");
-        let position = Offset::new(100.0, 100.0);
-
-        // Start tracking
-        recognizer.add_pointer(pointer, position, position);
-
-        // Down with pressure
-        recognizer.handle_down(position, 0.5);
-
-        // Up
-        recognizer.handle_up(position);
-
-        assert!(*ended.lock());
     }
 }

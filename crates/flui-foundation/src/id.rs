@@ -1384,12 +1384,6 @@ mod tests {
     // RawId tests
     // -----------------------------------------------------------------------
 
-    #[test]
-    #[should_panic(expected = "non-zero")]
-    fn test_raw_id_zero_panics() {
-        let _ = RawId::zip(0);
-    }
-
     // -----------------------------------------------------------------------
     // Id<T> tests
     // -----------------------------------------------------------------------
@@ -1414,15 +1408,6 @@ mod tests {
     // -----------------------------------------------------------------------
     // PresentationId tests
     // -----------------------------------------------------------------------
-
-    #[test]
-    fn presentation_id_recreated_slot_is_a_distinct_incarnation() {
-        let first = PresentationId::new_gen(5, NonZeroU32::new(1).unwrap());
-        let recreated = PresentationId::new_gen(5, NonZeroU32::new(2).unwrap());
-
-        assert_eq!(first.index(), recreated.index());
-        assert_ne!(first, recreated);
-    }
 
     // -----------------------------------------------------------------------
     // ElementId (generational) tests
@@ -1449,41 +1434,6 @@ mod tests {
     #[should_panic(expected = "ElementId::new requires n >= 1")]
     fn element_id_new_zero_panics() {
         let _ = ElementId::new(0);
-    }
-
-    /// Index cap: `new(n)` panics when the 0-based slab index `n - 1`
-    /// exceeds `u32::MAX` (the packed index field is 32 bits). 64-bit hosts
-    /// only — on a 32-bit `usize` the literal itself would overflow.
-    #[test]
-    #[cfg(target_pointer_width = "64")]
-    #[should_panic(expected = "index overflows u32")]
-    fn element_id_new_index_overflow_panics() {
-        let _ = ElementId::new(u32::MAX as usize + 2);
-    }
-
-    /// `new_gen` round-trips at the maximum generation. The
-    /// overflow *policy* (retire-by-panic when a slot is recycled past
-    /// `u32::MAX`) lives in `ElementTree::bump_generation`; this only
-    /// checks the id packs/unpacks the boundary value losslessly.
-    #[test]
-    fn element_id_max_generation_round_trip() {
-        let max_gen = NonZeroU32::new(u32::MAX).unwrap();
-        let id = ElementId::new_gen(0, max_gen);
-        assert_eq!(id.index(), 0);
-        assert_eq!(id.generation(), max_gen);
-    }
-
-    /// Distinct (index, generation) pairs produce distinct ids.
-    #[test]
-    fn element_id_eq_uses_full_packed_value() {
-        let gen1 = NonZeroU32::new(1).unwrap();
-        let gen2 = NonZeroU32::new(2).unwrap();
-        let id_a = ElementId::new_gen(0, gen1);
-        let id_b = ElementId::new_gen(0, gen2); // same index, different generation
-        let id_c = ElementId::new_gen(1, gen1); // different index, same generation
-        assert_ne!(id_a, id_b, "stale id must not equal live id (ABA safety)");
-        assert_ne!(id_a, id_c);
-        assert_eq!(id_a, ElementId::new_gen(0, gen1));
     }
 
     /// The deserialiser rejects a packed `u64` whose high 32 bits

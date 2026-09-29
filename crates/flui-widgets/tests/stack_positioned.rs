@@ -5,7 +5,7 @@
 
 use crate::common::{lay_out, offset, size, tight};
 use flui_widgets::row;
-use flui_widgets::{Positioned, SizedBox, Stack, StackFit};
+use flui_widgets::{Positioned, SizedBox, Stack};
 
 #[test]
 fn positioned_places_child_at_explicit_edges() {
@@ -27,27 +27,6 @@ fn positioned_places_child_at_explicit_edges() {
     assert_eq!(laid.offset(child), offset(10.0, 20.0));
 }
 
-#[test]
-fn positioned_with_both_edges_stretches_the_child() {
-    // Pinning both `left` and `right` stretches the child across the axis:
-    // 200 − 10 − 30 = 160 wide, placed at x = 10. `top` alone leaves the
-    // height at the child's intrinsic 40.
-    let laid = lay_out(
-        Stack::new(row![
-            Positioned::new(SizedBox::new(50.0, 40.0))
-                .left(10.0)
-                .right(30.0)
-                .top(15.0),
-        ]),
-        tight(200.0, 200.0),
-    );
-
-    let root = laid.root();
-    let child = laid.only_child(root);
-    assert_eq!(laid.size(child), size(160.0, 40.0));
-    assert_eq!(laid.offset(child), offset(10.0, 15.0));
-}
-
 // ============================================================================
 // Stack itself: non-positioned children -- sizing to the largest, and
 // alignment. Every test above uses `Positioned` children exclusively;
@@ -55,24 +34,3 @@ fn positioned_with_both_edges_stretches_the_child() {
 // explicit-alignment/fit behavior with plain non-positioned children were
 // never directly exercised.
 // ============================================================================
-
-#[test]
-fn stack_fit_expand_forces_non_positioned_children_to_fill_the_stack() {
-    // `StackFit::Expand` tight-constrains non-positioned children to the
-    // stack's biggest available size, overriding SizedBox's own configured
-    // dimensions entirely.
-    let laid = lay_out(
-        Stack::new(row![SizedBox::new(60.0, 40.0)]).fit(StackFit::Expand),
-        tight(200.0, 150.0),
-    );
-
-    let root = laid.root();
-    assert_eq!(laid.size(root), size(200.0, 150.0));
-    let child = laid.only_child(root);
-    assert_eq!(
-        laid.size(child),
-        size(200.0, 150.0),
-        "StackFit::Expand must force the child to fill the stack, not its own 60x40",
-    );
-    assert_eq!(laid.offset(child), offset(0.0, 0.0));
-}

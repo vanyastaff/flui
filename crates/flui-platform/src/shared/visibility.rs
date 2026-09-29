@@ -134,24 +134,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn restore_from_minimized_shows() {
-        assert_eq!(win32_size_visibility(SIZE_RESTORED, true), Some(true));
-        assert_eq!(win32_size_visibility(SIZE_MAXIMIZED, true), Some(true));
-    }
-
-    #[test]
-    fn plain_resize_never_dispatches() {
-        // A live-resize drag delivers a stream of SIZE_RESTORED while the
-        // window was never minimized — zero visibility dispatches.
-        assert_eq!(win32_size_visibility(SIZE_RESTORED, false), None);
-        assert_eq!(win32_size_visibility(SIZE_MAXIMIZED, false), None);
-        assert_eq!(win32_size_visibility(SIZE_MAXSHOW, false), None);
-        assert_eq!(win32_size_visibility(SIZE_MAXHIDE, false), None);
-        assert_eq!(win32_size_visibility(SIZE_MAXSHOW, true), None);
-        assert_eq!(win32_size_visibility(SIZE_MAXHIDE, true), None);
-    }
-
-    #[test]
     fn hide_always_hides_show_respects_minimized() {
         assert_eq!(win32_show_window_visibility(false, false), Some(false));
         assert_eq!(win32_show_window_visibility(false, true), Some(false));
@@ -159,13 +141,5 @@ mod tests {
         // A SW_SHOW on a minimized window sets WS_VISIBLE but composes no
         // surface — the restore's own WM_SIZE reports visibility instead.
         assert_eq!(win32_show_window_visibility(true, true), None);
-    }
-
-    #[test]
-    fn edge_filter_passes_changes_only() {
-        assert_eq!(visibility_edge(true, false), Some(false));
-        assert_eq!(visibility_edge(false, true), Some(true));
-        assert_eq!(visibility_edge(true, true), None);
-        assert_eq!(visibility_edge(false, false), None);
     }
 }

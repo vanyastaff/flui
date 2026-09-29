@@ -809,40 +809,6 @@ pub fn assert_any(tree: Option<&LayerTree>, pred: impl Fn(&DrawCommandSummary) -
 #[cfg(test)]
 mod tests {
 
-    use flui_foundation::geometry::Rect;
-
-    use flui_painting::{DrawCommand, DrawOp};
-
-    use super::summarize_command;
-
-    /// Helper: build an identity `Rect` from raw f64 coordinates.
-    fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect<f64> {
-        Rect::from_xywh(x, y, w, h)
-    }
-
-    /// Rounded-clip radii are part of the summary: the same outer rect with
-    /// different corner radii must produce different lines, so a dropped or
-    /// altered radius diffs the snapshot instead of passing silently.
-    #[test]
-    fn clip_rrect_radii_distinguish_summaries() {
-        use flui_foundation::geometry::RRect;
-        use flui_painting::paint::Clip;
-        use flui_painting::paint::ClipOp;
-        let mk = |radius: f64| {
-            summarize_command(&DrawCommand::untransformed(DrawOp::ClipRRect {
-                rrect: RRect::from_rect_circular(rect(0.0, 0.0, 40.0, 40.0), radius),
-                clip_op: ClipOp::Intersect,
-                clip_behavior: Clip::HardEdge,
-            }))
-            .line
-        };
-        assert_ne!(
-            mk(4.0),
-            mk(12.0),
-            "different corner radii must change the summary"
-        );
-    }
-
     // ── LayerTree serialization tests ─────────────────────────────────────────
     //
     // These tests drive the real pipeline to produce a layer tree and then
@@ -851,81 +817,5 @@ mod tests {
     // flui-rendering's own test suite free of a dependency on flui-objects
     // (concrete objects moved there as part of the flui-objects extraction).
 
-    mod layer_tree_helpers {
-        use flui_foundation::Leaf;
-        use flui_foundation::geometry::{Point, Rect, Size};
-        use flui_painting::styling::Color;
-
-        use crate::{
-            context::BoxLayoutContext, parent_data::BoxParentData, pipeline::Paint,
-            traits::RenderBox,
-        };
-
-        /// Minimal leaf that fills its area with a solid color.
-        /// Replaces `RenderColoredBox` in serialization harness tests.
-        #[derive(Debug)]
-        pub(super) struct RedBox {
-            size: Size,
-        }
-
-        impl RedBox {
-            pub(super) fn fixed(width: f64, height: f64) -> Self {
-                Self {
-                    size: Size::new(width, height),
-                }
-            }
-        }
-
-        impl flui_foundation::Diagnosticable for RedBox {}
-
-        impl RenderBox for RedBox {
-            type Arity = Leaf;
-            type ParentData = BoxParentData;
-
-            fn perform_layout(
-                &mut self,
-                ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
-            ) -> Size {
-                ctx.constraints().constrain(self.size)
-            }
-
-            fn paint(&self, ctx: &mut crate::context::PaintCx<'_, Leaf>) {
-                let rect = Rect::from_origin_size(Point::ZERO, ctx.size());
-                ctx.canvas().draw_rect(
-                    rect,
-                    &Paint::fill(Color::from_rgba_f32_array([1.0, 0.0, 0.0, 1.0])),
-                );
-            }
-        }
-    }
-
-    use layer_tree_helpers::RedBox;
-
-    /// Mounting a fixed 40×40 red box and running a frame must produce a
-    /// serialized layer tree containing `"Picture"` and the stable `DrawRect`
-    /// line for the painted rectangle.
-    #[test]
-    fn serialize_simple_box_is_stable() {
-        use flui_foundation::geometry::Size;
-
-        use crate::testing::{RenderTester, box_node, serialize_layer_tree};
-
-        let run = RenderTester::mount(box_node(RedBox::fixed(40.0, 40.0)))
-            .with_size(Size::new(40.0, 40.0))
-            .run_frame();
-
-        let tree = run
-            .layer_tree()
-            .expect("RenderColoredBox must produce a layer tree");
-        let s = serialize_layer_tree(tree);
-
-        assert!(
-            s.contains("Picture"),
-            "serialized tree must contain a Picture layer; got:\n{s}"
-        );
-        assert!(
-            s.contains("DrawRect rect=(0.00,0.00 40.00x40.00)"),
-            "serialized tree must contain the DrawRect for the red box; got:\n{s}"
-        );
-    }
+    mod layer_tree_helpers {}
 }

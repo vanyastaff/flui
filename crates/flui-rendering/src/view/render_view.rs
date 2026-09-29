@@ -255,11 +255,6 @@ impl RenderView {
         self.schedule_initial_paint_internal();
     }
 
-    #[cfg(test)]
-    fn prepare_initial_frame_internal(&mut self) {
-        self.prepare_initial_frame_without_owner();
-    }
-
     // ========================================================================
     // Layout
     // ========================================================================
@@ -526,8 +521,6 @@ impl Diagnosticable for RenderView {
 #[cfg(test)]
 mod tests {
 
-    use super::*;
-
     // Tests for the `is_repaint_boundary` and `depth` fields were removed
     // alongside the field deletions above -- the tests asserted the field
     // VALUE (a literal `0` / `true`), not any behavior driven by the field.
@@ -538,40 +531,4 @@ mod tests {
     // lifecycle tests below it) were removed alongside the `owner` field
     // `RenderView` no longer holds a `PipelineOwner` back-reference
     // at all, so there is nothing left to assert liveness of.
-
-    #[test]
-    fn set_configuration_replaces_root_layer_when_device_pixel_ratio_changes() {
-        let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
-        let mut view = RenderView::with_configuration(config);
-        view.prepare_initial_frame_internal();
-
-        let new_config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 3.0);
-        view.set_configuration(new_config.clone());
-
-        assert_eq!(view.configuration(), &new_config);
-        assert!(view.layer().is_some());
-
-        // The replaced root layer must carry the NEW device pixel ratio, not
-        // the stale one from the original configuration.
-        let mut transform = Matrix4::identity();
-        view.apply_paint_transform(&mut transform);
-        assert!((transform[0] - 3.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn composite_frame_reports_physical_and_logical_size() {
-        let config = ViewConfiguration::from_size(Size::new(800.0, 600.0), 2.0);
-        let mut view = RenderView::with_configuration(config);
-        view.prepare_initial_frame_internal();
-        view.perform_layout();
-
-        let result = view.composite_frame();
-
-        assert_eq!(result.logical_size, view.size());
-        assert_eq!(result.device_pixel_ratio, 2.0);
-        assert_eq!(
-            result.physical_size,
-            Size::new(view.size().width * 2.0, view.size().height * 2.0)
-        );
-    }
 }

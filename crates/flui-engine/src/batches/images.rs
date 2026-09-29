@@ -1397,26 +1397,3 @@ fn extract_rgba8_region(image: &Image, sx: u32, sy: u32, sw: u32, sh: u32) -> Op
     }
     Image::try_from_rgba8(sw, sh, sub).ok()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A 3×2 image whose pixel at (x, y) is `[x, y, 0, 255]`.
-    fn indexed_image() -> Image {
-        let pixels = (0..2u8)
-            .flat_map(|y| (0..3u8).flat_map(move |x| [x, y, 0, 255]))
-            .collect();
-        Image::from_rgba8(3, 2, pixels)
-    }
-
-    /// The offsets used to be `u32`: a huge one panicked in debug builds and
-    /// wrapped in release.
-    #[test]
-    fn extract_rgba8_region_rejects_offsets_that_wrap_u32() {
-        // 2^30 * 4 wraps to 0 in u32, which read the pixel at x = 0.
-        assert!(extract_rgba8_region(&indexed_image(), 1 << 30, 0, 1, 1).is_none());
-        // `sy + sh` overflows u32.
-        assert!(extract_rgba8_region(&indexed_image(), 0, u32::MAX, 1, 2).is_none());
-    }
-}

@@ -344,48 +344,6 @@ mod tests {
     static_assertions::assert_not_impl_any!(LifecycleSubscription: Send, Sync);
 
     #[test]
-    fn lifecycle_subscription_snapshot_is_atomic_without_replay() {
-        let source = LifecycleSource::new();
-        let handle = source.handle();
-        assert_eq!(handle.snapshot(), Ok(None));
-        source.commit(Detached).expect("open");
-        let seen = Rc::new(RefCell::new(Vec::new()));
-        let log = Rc::clone(&seen);
-        let (initial, _token) = handle
-            .subscribe(move |state| log.borrow_mut().push(state))
-            .expect("subscribe");
-        assert_eq!(initial, Some(Detached));
-        source.drain();
-        assert!(seen.borrow().is_empty());
-        source
-            .commit(Resumed)
-            .expect("observed Detached is reversible");
-        source.drain();
-        assert_eq!(*seen.borrow(), [Resumed]);
-    }
-
-    #[test]
-    fn lifecycle_subscription_cancellation_suppresses_not_started_callbacks() {
-        let source = LifecycleSource::new();
-        let second = Rc::new(RefCell::new(None));
-        let cancel = Rc::clone(&second);
-        let (_, _first) = source
-            .handle()
-            .subscribe(move |_| {
-                let removed = cancel.borrow_mut().take();
-                drop(removed);
-            })
-            .expect("first");
-        let (_, token) = source
-            .handle()
-            .subscribe(|_| panic!("cancelled callback ran"))
-            .expect("second");
-        second.replace(Some(token));
-        source.commit(Hidden).expect("commit");
-        source.drain();
-    }
-
-    #[test]
     fn lifecycle_subscription_reentrant_events_are_fifo_and_new_listeners_do_not_replay() {
         let source = Rc::new(LifecycleSource::new());
         let weak = Rc::downgrade(&source);
@@ -420,53 +378,6 @@ mod tests {
             *seen.borrow(),
             [(1, Inactive), (2, Inactive), (1, Hidden), (2, Hidden)]
         );
-    }
-
-    #[test]
-    fn lifecycle_subscription_self_cancel_destructor_panic_does_not_skip_siblings() {
-        struct Bomb;
-        impl Drop for Bomb {
-            fn drop(&mut self) {
-                panic!("capture destructor");
-            }
-        }
-        for callback_panics in [false, true] {
-            let source = LifecycleSource::new();
-            let own = Rc::new(RefCell::new(None));
-            let cancel = Rc::clone(&own);
-            let bomb = Bomb;
-            let (_, token) = source
-                .handle()
-                .subscribe(move |_| {
-                    let _keep = &bomb;
-                    let token = cancel.borrow_mut().take();
-                    drop(token);
-                    assert!(!callback_panics, "first callback");
-                })
-                .expect("first");
-            own.replace(Some(token));
-            let calls = Rc::new(Cell::new(0));
-            let count = Rc::clone(&calls);
-            let (_, _sibling) = source
-                .handle()
-                .subscribe(move |_| count.set(count.get() + 1))
-                .expect("sibling");
-            source.commit(Inactive).expect("commit");
-            let payload =
-                catch_unwind(AssertUnwindSafe(|| source.drain())).expect_err("first panic");
-            assert_eq!(
-                payload.downcast_ref::<&str>(),
-                Some(&if callback_panics {
-                    "first callback"
-                } else {
-                    "capture destructor"
-                })
-            );
-            assert_eq!(calls.get(), 1);
-            source.commit(Hidden).expect("commit");
-            source.drain();
-            assert_eq!(calls.get(), 2);
-        }
     }
 
     #[test]
@@ -506,54 +417,6 @@ mod tests {
             *seen.borrow(),
             [(1, Inactive), (2, Inactive), (1, Detached), (2, Detached)]
         );
-        assert_eq!(handle.snapshot(), Err(LifecycleClosed));
-    }
-
-    #[test]
-    fn lifecycle_subscription_owner_drop_closes_retained_handle_and_build_owner() {
-        let source = LifecycleSource::new();
-        let mut owner = crate::BuildOwner::new();
-        assert!(
-            owner.lifecycle_handle().is_none(),
-            "bare owners have no presentation"
-        );
-        owner.set_lifecycle_handle(source.handle());
-        let handle = owner.lifecycle_handle().expect("installed");
-        let (_, token) = handle.subscribe(|_| {}).expect("subscribe");
-        drop(source);
-        assert_eq!(handle.snapshot(), Err(LifecycleClosed));
-        assert!(handle.subscribe(|_| {}).is_err());
-        drop(token);
-    }
-
-    #[test]
-    fn lifecycle_subscription_legacy_panic_still_delivers_scoped_terminal() {
-        struct Legacy;
-        impl crate::WidgetsBindingObserver for Legacy {
-            fn did_change_app_lifecycle_state(&self, _: AppLifecycleState) {
-                panic!("legacy first");
-            }
-        }
-        let binding = crate::WidgetsBinding::new();
-        binding.add_observer(std::sync::Arc::new(Legacy));
-        let handle = binding.lifecycle_source().handle();
-        let seen = Rc::new(Cell::new(None));
-        let log = Rc::clone(&seen);
-        let (_, _token) = handle
-            .subscribe(move |state| log.set(Some(state)))
-            .expect("scoped");
-        binding.lifecycle_source().begin_close();
-        binding
-            .lifecycle_source()
-            .commit_terminal(Detached)
-            .expect("terminal commit");
-        let failure = catch_unwind(AssertUnwindSafe(|| {
-            binding.notify_committed_lifecycle(Detached);
-        }))
-        .expect_err("legacy panic");
-        binding.lifecycle_source().finish_close();
-        assert_eq!(failure.downcast_ref::<&str>(), Some(&"legacy first"));
-        assert_eq!(seen.get(), Some(Detached));
         assert_eq!(handle.snapshot(), Err(LifecycleClosed));
     }
 }

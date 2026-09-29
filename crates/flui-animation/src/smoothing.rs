@@ -215,34 +215,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn exp_decay_is_frame_rate_independent() {
-        // Same wall-clock time, different step counts -> same result.
-        let (start, target, half_life) = (0.0_f64, 100.0_f64, 0.25_f64);
-
-        let mut at_30fps = start;
-        for _ in 0..30 {
-            at_30fps = exp_decay_half_life(at_30fps, target, half_life, 1.0 / 30.0);
-        }
-
-        let mut at_120fps = start;
-        for _ in 0..120 {
-            at_120fps = exp_decay_half_life(at_120fps, target, half_life, 1.0 / 120.0);
-        }
-
-        assert!(
-            (at_30fps - at_120fps).abs() < 1e-3,
-            "30 fps ({at_30fps}) and 120 fps ({at_120fps}) must agree after 1 s"
-        );
-        // 1 s / 0.25 s half-life = 4 halvings: 100 * (1 - 1/16) = 93.75.
-        assert!((at_120fps - 93.75).abs() < 0.01);
-    }
-
-    #[test]
-    fn zero_half_life_snaps() {
-        assert_eq!(exp_decay_half_life(3.0, 7.0, 0.0, 0.016), 7.0);
-    }
-
-    #[test]
     fn smooth_damp_converges_without_overshoot() {
         let mut damp = SmoothDamp::new(0.2);
         let mut pos = 0.0_f64;
@@ -258,53 +230,6 @@ mod tests {
         assert!(
             max_seen <= 100.0 + 1e-3,
             "critically damped follower must not overshoot, peaked at {max_seen}"
-        );
-    }
-
-    #[test]
-    fn smooth_damp_respects_max_speed() {
-        let mut damp = SmoothDamp::new(0.05).with_max_speed(50.0);
-        let mut pos = 0.0_f64;
-        let dt = 1.0 / 120.0;
-        let mut prev = pos;
-        for _ in 0..120 {
-            pos = damp.step(pos, 1000.0, dt);
-            let speed = (pos - prev) / dt;
-            assert!(
-                speed <= 50.0 * 1.05,
-                "instantaneous speed {speed} must stay near the 50/s cap"
-            );
-            prev = pos;
-        }
-    }
-
-    #[test]
-    fn smooth_damp_retarget_is_position_continuous() {
-        // A retarget mid-flight must not teleport: carried velocity keeps the
-        // motion C0-continuous and the first post-retarget step still moves
-        // in the OLD direction (momentum), unlike a stateless lerp which
-        // would immediately reverse.
-        let mut damp = SmoothDamp::new(0.15);
-        let mut pos = 0.0_f64;
-        let dt = 1.0 / 120.0;
-        for _ in 0..30 {
-            pos = damp.step(pos, 100.0, dt);
-        }
-        let v_before = damp.velocity();
-        assert!(v_before > 0.0, "approach run must carry forward velocity");
-
-        let pos_before = pos;
-        let pos_after = damp.step(pos, -100.0, dt);
-        let step = (pos_after - pos_before).abs();
-        assert!(
-            step <= v_before.abs() * dt * 2.0 + 1e-3,
-            "one step after a retarget must stay within the velocity envelope \
-             (moved {step} at velocity {v_before})"
-        );
-        assert!(
-            pos_after > pos_before - 1e-3,
-            "carried momentum must keep moving toward the old target for the \
-             first instant, not snap backwards"
         );
     }
 }

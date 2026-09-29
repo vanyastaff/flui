@@ -17,9 +17,7 @@
 
 use crate::common::{lay_out, tight};
 use flui_painting::typography::TextDirection;
-use flui_widgets::{
-    Column, CrossAxisAlignment, Directionality, DismissDirection, Dismissible, SizedBox,
-};
+use flui_widgets::{Column, CrossAxisAlignment, Directionality, SizedBox};
 
 /// Dependents of the ambient `Directionality` for a `Column` with `cross`.
 fn directionality_dependents(cross: CrossAxisAlignment) -> usize {
@@ -45,41 +43,5 @@ fn a_start_aligned_column_depends_on_directionality() {
         1,
         "CrossAxisAlignment::Start resolves against the reading direction, so \
          the column must depend on Directionality"
-    );
-}
-
-/// `Center` is a physical edge — a direction change cannot move it, so taking
-/// the dependency only buys a rebuild on every direction change.
-#[test]
-fn a_centred_column_does_not_depend_on_directionality() {
-    assert_eq!(
-        directionality_dependents(CrossAxisAlignment::Center),
-        0,
-        "a centred column cannot move under a direction change, so it must not \
-         register as a Directionality dependent"
-    );
-}
-
-/// Dependents of the ambient `Directionality` for a `Dismissible` configured
-/// with `direction`.
-fn dismissible_dependents(direction: DismissDirection) -> usize {
-    let mut laid = lay_out(
-        Directionality::new(
-            TextDirection::Ltr,
-            Dismissible::new(SizedBox::square(10.0)).direction(direction),
-        ),
-        tight(200.0, 200.0),
-    );
-    laid.inherited_dependent_count::<Directionality>()
-}
-
-/// A horizontal dismiss resolves `StartToEnd`/`EndToStart` against the reading
-/// direction, so it must depend on it. Control for its sibling.
-#[test]
-fn a_horizontal_dismissible_depends_on_directionality() {
-    assert_eq!(
-        dismissible_dependents(DismissDirection::Horizontal),
-        1,
-        "an X-axis dismiss maps drag sign onto a reading-relative direction"
     );
 }

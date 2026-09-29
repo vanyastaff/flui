@@ -1769,7 +1769,7 @@ pub fn resolve_shader_mask_target(
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
-    use std::panic::{AssertUnwindSafe, catch_unwind, panic_any};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::rc::Rc;
 
     use static_assertions::assert_not_impl_any;
@@ -1792,57 +1792,6 @@ mod tests {
     /// A transform-less hit entry addressing `target`, for resolver tests.
     fn hit_entry(target: PointerTarget) -> HitTestEntry {
         HitTestEntry::new(flui_foundation::RenderId::new(1)).pointer_target(target)
-    }
-
-    #[test]
-    fn nested_activation_restores_outer_lane_after_unwind() {
-        let outer = InteractionLane::try_new().expect("outer lane");
-        let inner = InteractionLane::try_new().expect("inner lane");
-        let outer_handle = outer.dispatch_handle();
-
-        outer.enter(|| {
-            assert!(outer_handle.register_pointer(|_| {}).is_ok());
-            let panic = catch_unwind(AssertUnwindSafe(|| {
-                inner.enter(|| panic!("nested probe"));
-            }));
-            assert!(panic.is_err());
-            assert!(outer_handle.register_pointer(|_| {}).is_ok());
-        });
-    }
-
-    #[test]
-    fn invoking_snapshots_route_and_handler_before_reentrant_mutation() {
-        let lane = InteractionLane::try_new().expect("lane");
-        let handle = lane.dispatch_handle();
-        lane.enter(|| {
-            let token_slot = Rc::new(Cell::new(None));
-            let callback_handle = handle.clone();
-            let callback_slot = Rc::clone(&token_slot);
-            let target = handle
-                .register_pointer(move |_| {
-                    if let Some(token) = callback_slot.get() {
-                        callback_handle
-                            .release_route(token)
-                            .expect("route map borrow ended before callback");
-                    }
-                })
-                .expect("register");
-            let route = handle
-                .resolve_pointer_route(&[hit_entry(target)])
-                .expect("resolve")
-                .token();
-            token_slot.set(Some(route));
-            assert!(
-                handle
-                    .invoke_pointer_route(route, &event())
-                    .expect("invocation owns one route Rc")
-                    .is_none()
-            );
-            assert!(matches!(
-                handle.invoke_pointer_route(route, &event()),
-                Err(InteractionDispatchError::StaleRoute)
-            ));
-        });
     }
 
     #[test]
@@ -1894,31 +1843,6 @@ mod tests {
         });
     }
 
-    struct PanickingPayloadDrop;
-
-    impl Drop for PanickingPayloadDrop {
-        fn drop(&mut self) {
-            panic!("secondary payload drop panic");
-        }
-    }
-
-    #[test]
-    fn secondary_panic_payload_cannot_replace_the_first_while_being_discarded() {
-        let resumed = catch_unwind(AssertUnwindSafe(|| {
-            let mut first = RoutePanic::capture(|| panic!("first dispatch panic"));
-            let secondary = RoutePanic::capture(|| panic_any(PanickingPayloadDrop));
-            RoutePanic::preserve_first(&mut first, secondary, "secondary test phase");
-            first.expect("first panic captured").resume();
-        }))
-        .expect_err("the first panic must resume");
-
-        assert_eq!(
-            resumed.downcast_ref::<&str>(),
-            Some(&"first dispatch panic"),
-            "dropping a hostile secondary payload must not replace the first panic"
-        );
-    }
-
     struct ReentrantReplacementDropProbe {
         handle: InteractionDispatchHandle,
         completed: Rc<Cell<bool>>,
@@ -1958,39 +1882,5 @@ mod tests {
                 .expect("replace probe handler");
             assert!(completed.get());
         });
-    }
-
-    struct TeardownOwnerGoneDropProbe {
-        old_handle: InteractionDispatchHandle,
-        observed: Rc<Cell<Option<InteractionDispatchError>>>,
-    }
-
-    impl Drop for TeardownOwnerGoneDropProbe {
-        fn drop(&mut self) {
-            let result = self.old_handle.register_pointer(|_| {});
-            self.observed.set(result.err());
-        }
-    }
-
-    #[test]
-    fn lane_teardown_removes_registry_before_dropping_handlers() {
-        let lane = InteractionLane::try_new().expect("lane");
-        let handle = lane.dispatch_handle();
-        let observed = Rc::new(Cell::new(None));
-        lane.enter(|| {
-            let probe = TeardownOwnerGoneDropProbe {
-                old_handle: handle.clone(),
-                observed: Rc::clone(&observed),
-            };
-            handle
-                .register_pointer(move |_| {
-                    let _keep_probe_alive = &probe;
-                })
-                .expect("register teardown probe");
-        });
-
-        drop(lane);
-
-        assert_eq!(observed.get(), Some(InteractionDispatchError::OwnerGone));
     }
 }

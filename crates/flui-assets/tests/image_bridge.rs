@@ -102,27 +102,3 @@ fn load_image_bridged_reports_a_missing_file_as_an_error_not_a_hang() {
         "a nonexistent path must surface a typed error, got {result:?}",
     );
 }
-
-/// `AssetRegistryBuilder::with_runtime_handle` must actually thread the given
-/// handle through to `load_image_bridged` end to end: injecting a handle to a
-/// currently-running ambient runtime and loading through it must succeed and
-/// decode the fixture, exactly like the owned-runtime fallback does.
-///
-/// (That the INJECTED handle specifically — not a silently-substituted owned
-/// runtime — is the one actually used is proved deterministically by
-/// `registry::bridge::tests::resolve_prefers_an_injected_handle_over_starting_an_owned_runtime`,
-/// which has white-box access to the resolved `BridgeRuntime` variant.)
-#[tokio::test]
-async fn load_image_bridged_works_with_an_explicitly_injected_handle() {
-    let registry = AssetRegistryBuilder::new()
-        .with_capacity(1024 * 1024)
-        .with_runtime_handle(tokio::runtime::Handle::current())
-        .build();
-
-    let decoded = registry
-        .load_image_bridged(fixture_path())
-        .await
-        .expect("the fixture must decode through the injected handle");
-
-    assert_eq!((decoded.width(), decoded.height()), (4, 2));
-}

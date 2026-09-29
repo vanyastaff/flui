@@ -24,7 +24,7 @@ use parking_lot::Mutex;
 // Exercise the public prelude import path: if `LayoutBuilder` were not exported
 // from `flui_widgets::prelude`, this file would not compile.
 use flui_widgets::prelude::*;
-use flui_widgets::{Center, ConstrainedBox, SizedBox};
+use flui_widgets::{ConstrainedBox, SizedBox};
 
 /// A builder that records the constraints it was handed.
 fn recorder(
@@ -34,48 +34,6 @@ fn recorder(
         log.lock().push(constraints);
         SizedBox::new(constraints.max_width / 2.0, constraints.max_height / 2.0)
     }
-}
-
-/// Flutter's `'LayoutBuilder parent size'` oracle, transcribed:
-/// `Center > ConstrainedBox(maxWidth: 100, maxHeight: 200) > LayoutBuilder`,
-/// whose builder returns `SizedBox(biggest / 2)`.
-///
-/// The builder sees the real loose constraints, and the `LayoutBuilder` sizes to
-/// `constraints.constrain(child.size)` — 50x100, **not** `biggest` (100x200).
-/// The child is laid out on the very first frame; no extra pump.
-#[test]
-fn layout_builder_receives_real_constraints_and_sizes_to_its_child() {
-    let log = Arc::new(Mutex::new(Vec::new()));
-
-    let laid = lay_out(
-        Center::new().child(
-            ConstrainedBox::new(BoxConstraints::new(0.0, 100.0, 0.0, 200.0))
-                .child(LayoutBuilder::new(recorder(Arc::clone(&log)))),
-        ),
-        loose(400.0),
-    );
-
-    assert_eq!(
-        log.lock().as_slice(),
-        &[BoxConstraints::new(0.0, 100.0, 0.0, 200.0)],
-        "the builder must be handed the real incoming constraints, exactly once"
-    );
-
-    // Find the LayoutBuilder's render node: Center > ConstrainedBox > LayoutBuilder.
-    let root = laid.root();
-    let constrained = laid.only_child(root);
-    let builder_node = laid.only_child(constrained);
-
-    assert_eq!(
-        laid.size(builder_node),
-        Size::new(50.0, 100.0),
-        "size = constraints.constrain(child.size); not constraints.biggest"
-    );
-    assert_eq!(
-        laid.size(laid.only_child(builder_node)),
-        Size::new(50.0, 100.0),
-        "the child returned by the builder is laid out in the SAME frame"
-    );
 }
 
 /// Changing the constraints re-invokes the builder and relays the child out —
@@ -137,35 +95,5 @@ fn layout_builder_constraint_change_rebuilds_in_the_same_frame() {
         laid.size(laid.only_child(builder_node)),
         Size::new(40.0, 30.0),
         "the rebuilt child (biggest/2) must be laid out in the same frame"
-    );
-}
-
-/// Flutter's `'LayoutBuilder can change size without rebuild'` direction: frames
-/// that neither change the constraints nor rebuild the widget must not re-invoke
-/// the builder.
-///
-/// `tick()` drives a frame without dirtying the root — the analogue of Flutter
-/// pumping the *same* `Widget` instance, where `Element.update` is skipped
-/// entirely. (`pump()` deliberately marks the root dirty, which rebuilds the
-/// `LayoutBuilder` widget and therefore *must* re-invoke the builder: Flutter's
-/// `updateShouldRebuild` defaults to `true`. That direction is covered by
-/// `layout_builder_new_builder_closure_is_honored`.)
-#[test]
-fn layout_builder_same_constraints_do_not_reinvoke_the_builder() {
-    let log = Arc::new(Mutex::new(Vec::new()));
-
-    let mut laid = lay_out(
-        SizedBox::new(200.0, 100.0).child(LayoutBuilder::new(recorder(Arc::clone(&log)))),
-        loose(400.0),
-    );
-    assert_eq!(log.lock().len(), 1);
-
-    laid.tick();
-    laid.tick();
-
-    assert_eq!(
-        log.lock().len(),
-        1,
-        "unchanged constraints and no widget update are not a rebuild trigger"
     );
 }

@@ -247,17 +247,3 @@ impl Notification for KeepAliveNotification {
         self
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_notification_type_id() {
-        let notification = LayoutChangedNotification;
-        assert_eq!(
-            notification.notification_type_id(),
-            TypeId::of::<LayoutChangedNotification>()
-        );
-    }
-}

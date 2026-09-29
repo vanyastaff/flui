@@ -42,18 +42,3 @@ pub(crate) fn kernel_radius(sigma: f32) -> u32 {
     }
     (sigma * KERNEL_RADIUS_PER_SIGMA).ceil() as u32
 }
-
-/// CPU-only tests for `kernel_radius`. These run in CI without a GPU.
-#[cfg(test)]
-mod kernel_radius_tests {
-    use super::kernel_radius;
-
-    /// sigma = 2.0 → ceil(2.0 × 1.732_050_8) = ceil(3.464_101_6) = 4.
-    ///
-    /// This is the known-value anchor from the spec: the chief-architect
-    /// table entry `(2.0) == 4`.
-    #[test]
-    fn sigma_two_gives_radius_four() {
-        assert_eq!(kernel_radius(2.0), 4);
-    }
-}

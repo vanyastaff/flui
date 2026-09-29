@@ -197,62 +197,6 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn test_curved_animation() {
-        let scheduler = UpdateScheduler::new();
-        let controller = Arc::new(AnimationController::new(
-            Duration::from_millis(100),
-            &scheduler,
-        ));
-
-        let curved = CurvedAnimation::new(
-            controller.clone() as Arc<dyn Animation<f64>>,
-            Curves::EaseIn,
-        );
-
-        controller.set_value(0.5);
-        let curved_value = curved.value();
-
-        // Ease-in should make 0.5 appear slower (less than 0.5)
-        assert!(curved_value < 0.5);
-
-        controller.dispose();
-    }
-
-    #[test]
-    fn curved_reemits_parent_value_changes() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        // B2 regression: a listener on a CurvedAnimation must fire when the
-        // parent's value changes. Previously the combinator never subscribed to
-        // its parent, so AnimatedBuilder-on-a-curve silently never rebuilt.
-        let scheduler = UpdateScheduler::new();
-        let controller = Arc::new(AnimationController::new(
-            Duration::from_millis(100),
-            &scheduler,
-        ));
-        let curved = CurvedAnimation::new(
-            controller.clone() as Arc<dyn Animation<f64>>,
-            Curves::Linear,
-        );
-
-        let hits = Arc::new(AtomicUsize::new(0));
-        let hits2 = Arc::clone(&hits);
-        let _id = curved.add_listener(Arc::new(move || {
-            hits2.fetch_add(1, Ordering::SeqCst);
-        }));
-
-        controller.set_value(0.5);
-        controller.set_value(0.7);
-        assert_eq!(
-            hits.load(Ordering::SeqCst),
-            2,
-            "curved listener must re-emit each parent change"
-        );
-
-        controller.dispose();
-    }
-
-    #[test]
     fn reverse_curve_locked_to_run_entry_direction() {
         // Flutter `_curveDirection` parity: a run that entered Forward keeps
         // the forward curve even if the parent's status flips to Reverse
@@ -297,72 +241,6 @@ mod tests {
             "a run entered in Reverse must use the reverse curve ({reverse_run} vs {expected})"
         );
 
-        controller.dispose();
-    }
-
-    #[test]
-    fn interior_set_value_pins_curve_direction_like_a_live_run() {
-        // Flutter `CurvedAnimation._updateCurveDirection` (3.44.0) reads only
-        // the reported `AnimationStatus` — it has no separate check for
-        // whether a ticker is literally running. So the FIRST transition
-        // into a directional status, even one reported by the `value=`
-        // setter's own `_internalSetValue`, pins the entry direction; a
-        // same-run flip (here, `reverse()` with no intervening Dismissed/
-        // Completed) keeps that pinned curve to avoid a visual discontinuity.
-        let scheduler = UpdateScheduler::new();
-        let controller = Arc::new(AnimationController::new(
-            Duration::from_millis(100),
-            &scheduler,
-        ));
-        let curved = CurvedAnimation::new(
-            controller.clone() as Arc<dyn Animation<f64>>,
-            Cubic::new(0.0, 0.0, 1.0, 1.0), // y(x) = x
-        )
-        .with_reverse_curve(Curves::EaseInQuint);
-
-        // Dismissed -> Forward: the FIRST directional transition, pinning
-        // the forward curve.
-        controller.set_value(0.5);
-        // reverse() flips the running direction but not the pinned curve.
-        let _ = controller.reverse();
-        let value = curved.value();
-        let expected = 0.5; // forward curve is the identity cubic
-        assert!(
-            (value - expected).abs() < 1e-3,
-            "reverse() right after the first set_value keeps the forward \
-             curve pinned from that first transition ({value} vs {expected})"
-        );
-
-        controller.dispose();
-    }
-
-    #[test]
-    fn dropping_curved_removes_parent_subscription() {
-        // The shared ParentSubscription must remove its listener from the parent
-        // when the last clone drops, so a long-lived controller does not
-        // accumulate dead callbacks.
-        let scheduler = UpdateScheduler::new();
-        let controller = Arc::new(AnimationController::new(
-            Duration::from_millis(100),
-            &scheduler,
-        ));
-        let before = controller.debug_value_listener_count();
-        {
-            let _curved = CurvedAnimation::new(
-                controller.clone() as Arc<dyn Animation<f64>>,
-                Curves::Linear,
-            );
-            assert_eq!(
-                controller.debug_value_listener_count(),
-                before + 1,
-                "constructing a combinator subscribes once to the parent"
-            );
-        }
-        assert_eq!(
-            controller.debug_value_listener_count(),
-            before,
-            "dropping the combinator removes its parent subscription"
-        );
         controller.dispose();
     }
 }

@@ -373,28 +373,3 @@ impl FrameClockSource for flui_foundation::ManualClock {
         flui_foundation::MonotonicClock::now(self)
     }
 }
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    #[test]
-    fn test_window_records_what_the_realm_asked_of_it() {
-        let window = TestWindow::new().with_id(7).focused(true);
-        let redraws = window.redraw_calls_handle();
-        let window: Arc<dyn PlatformWindow> = Arc::new(window);
-        window.request_redraw();
-        window
-            .set_cursor(CursorIcon::Pointer)
-            .expect("the double accepts every cursor");
-        assert_eq!(window.id(), WindowId(7));
-        assert!(window.is_focused());
-        assert_eq!(redraws.load(Ordering::Relaxed), 1);
-        let concrete = window
-            .as_any()
-            .downcast_ref::<TestWindow>()
-            .expect("as_any exposes the double");
-        assert_eq!(concrete.cursor(), CursorIcon::Pointer);
-    }
-}

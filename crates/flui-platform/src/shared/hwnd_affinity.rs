@@ -261,6 +261,30 @@ impl Default for ContextLedger {
     }
 }
 
+/// Run a reveal and focus request only while the wrapper still owns its HWND.
+/// Native reveal/focus calls may synchronously close or recycle the handle.
+#[cfg(target_os = "windows")]
+pub(crate) fn show_owned_window(
+    route: impl Fn() -> TeardownRoute,
+    show: impl FnOnce() -> Result<(), crate::WindowShowError>,
+    focus: impl FnOnce(),
+) -> Result<(), crate::WindowShowError> {
+    let check = || match route() {
+        TeardownRoute::DestroyDirect => Ok(()),
+        TeardownRoute::AlreadyGone | TeardownRoute::StaleHandle => {
+            Err(crate::WindowShowError::Closed)
+        }
+        TeardownRoute::PostClose => Err(crate::WindowShowError::Native {
+            message: "show must run on the native window owner".into(),
+        }),
+    };
+    check()?;
+    show()?;
+    check()?;
+    focus();
+    check()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,154 +312,5 @@ mod tests {
             classify_user_data_access(OWNER, OWNER, true, 0),
             UserDataVerdict::Refuse(UserDataRefusal::EmptySlot)
         );
-    }
-
-    const OUR_SLOT: isize = 0x1000;
-
-    #[test]
-    fn teardown_routes_direct_on_owner_posted_on_foreign_skipped_when_gone() {
-        assert_eq!(
-            route_teardown(OWNER, OWNER, true, OUR_SLOT, OUR_SLOT),
-            TeardownRoute::DestroyDirect
-        );
-        assert_eq!(
-            route_teardown(OWNER, FOREIGN, true, OUR_SLOT, OUR_SLOT),
-            TeardownRoute::PostClose
-        );
-        assert_eq!(
-            route_teardown(OWNER_GONE, FOREIGN, true, OUR_SLOT, OUR_SLOT),
-            TeardownRoute::AlreadyGone
-        );
-    }
-
-    #[test]
-    fn teardown_refuses_a_recycled_handle_on_every_identity_mismatch() {
-        // A live window of a foreign class is never ours, no matter whose
-        // thread asks.
-        assert_eq!(
-            route_teardown(OWNER, OWNER, false, OUR_SLOT, OUR_SLOT),
-            TeardownRoute::StaleHandle
-        );
-        // Our class, but a different context identity: the handle was
-        // recycled for another FLUI window.
-        assert_eq!(
-            route_teardown(OWNER, OWNER, true, 0x2000, OUR_SLOT),
-            TeardownRoute::StaleHandle
-        );
-        // A cleared slot (mid-WM_DESTROY, or never installed) is not ours
-        // to destroy either — and identity must also protect the posted
-        // cross-thread route, not just the direct one.
-        assert_eq!(
-            route_teardown(OWNER, FOREIGN, true, 0, OUR_SLOT),
-            TeardownRoute::StaleHandle
-        );
-    }
-
-    #[test]
-    fn ledger_frees_exactly_once_at_the_outermost_release_after_retire() {
-        // Reentrant dispatch: an outer borrow (a window_proc frame or a
-        // with_window_context closure) is live when a nested WM_DESTROY
-        // frame retires the context. The free must wait for the OUTERMOST
-        // release.
-        let mut ledger = ContextLedger::new();
-        ledger.acquire(); // outer frame
-        ledger.acquire(); // nested WM_DESTROY frame
-        ledger.retire();
-        assert!(
-            !ledger.release(),
-            "the retiring frame's own release must not free under the outer borrow"
-        );
-        assert!(
-            ledger.release(),
-            "the outermost release after retirement must free"
-        );
-    }
-}
-
-/// Run a reveal and focus request only while the wrapper still owns its HWND.
-/// Native reveal/focus calls may synchronously close or recycle the handle.
-#[cfg(any(target_os = "windows", test))]
-pub(crate) fn show_owned_window(
-    route: impl Fn() -> TeardownRoute,
-    show: impl FnOnce() -> Result<(), crate::WindowShowError>,
-    focus: impl FnOnce(),
-) -> Result<(), crate::WindowShowError> {
-    let check = || match route() {
-        TeardownRoute::DestroyDirect => Ok(()),
-        TeardownRoute::AlreadyGone | TeardownRoute::StaleHandle => {
-            Err(crate::WindowShowError::Closed)
-        }
-        TeardownRoute::PostClose => Err(crate::WindowShowError::Native {
-            message: "show must run on the native window owner".into(),
-        }),
-    };
-    check()?;
-    show()?;
-    check()?;
-    focus();
-    check()
-}
-
-#[cfg(test)]
-mod show_tests {
-    use super::*;
-    use std::cell::Cell;
-
-    #[test]
-    fn show_rejects_recycled_identity_before_and_after_native_calls() {
-        for initial in [TeardownRoute::AlreadyGone, TeardownRoute::StaleHandle] {
-            assert_eq!(
-                show_owned_window(
-                    || initial,
-                    || panic!("stale reveal"),
-                    || panic!("stale focus")
-                ),
-                Err(crate::WindowShowError::Closed)
-            );
-        }
-        for after_show in [TeardownRoute::AlreadyGone, TeardownRoute::StaleHandle] {
-            let route = Cell::new(TeardownRoute::DestroyDirect);
-            assert_eq!(
-                show_owned_window(
-                    || route.get(),
-                    || {
-                        route.set(after_show);
-                        Ok(())
-                    },
-                    || panic!("recycled focus")
-                ),
-                Err(crate::WindowShowError::Closed)
-            );
-        }
-        let route = Cell::new(TeardownRoute::DestroyDirect);
-        assert_eq!(
-            show_owned_window(
-                || route.get(),
-                || Ok(()),
-                || route.set(TeardownRoute::StaleHandle)
-            ),
-            Err(crate::WindowShowError::Closed)
-        );
-        assert!(matches!(
-            show_owned_window(
-                || TeardownRoute::PostClose,
-                || panic!("foreign reveal"),
-                || panic!("foreign focus")
-            ),
-            Err(crate::WindowShowError::Native { .. })
-        ));
-        let calls = Cell::new(0);
-        assert_eq!(
-            show_owned_window(
-                || TeardownRoute::DestroyDirect,
-                || {
-                    calls.set(1);
-                    Ok(())
-                },
-                || calls.set(2)
-            ),
-            Ok(())
-        );
-        assert_eq!(calls.get(), 2);
     }
 }

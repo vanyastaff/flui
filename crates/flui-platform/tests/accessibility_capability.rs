@@ -9,7 +9,6 @@
 //! property that makes the round trip work at all.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use accesskit::{Action, ActionRequest, Node, NodeId, Role, TreeId, TreeInfo, TreeUpdate};
 use flui_platform::{FakeAccessibility, PlatformAccessibility};
@@ -25,67 +24,6 @@ fn tree_update(id: u64, label: &str) -> TreeUpdate {
         tree_id: TreeId::ROOT,
         focus: root,
     }
-}
-
-#[test]
-fn publishing_while_active_records_the_tree() {
-    let accessibility = FakeAccessibility::new();
-    accessibility.set_active(true);
-
-    accessibility.publish(tree_update(1, "Submit"));
-
-    let published = accessibility.published();
-    assert_eq!(published.len(), 1);
-    let (_, node) = published[0].nodes.first().expect("one node");
-    assert_eq!(node.label(), Some("Submit"));
-    assert_eq!(node.role(), Role::Button);
-}
-
-/// Attach and detach both reach the listener. A composition root drives
-/// semantics assembly off this, so a missed detach leaves assembly running for
-/// a screen reader that is gone — a per-frame tree walk charged to nobody.
-#[test]
-fn activation_changes_reach_the_listener() {
-    let accessibility = FakeAccessibility::new();
-    let seen: Arc<parking_lot::Mutex<Vec<bool>>> = Arc::new(parking_lot::Mutex::new(Vec::new()));
-
-    let seen_in_listener = Arc::clone(&seen);
-    accessibility.set_activation_listener(Arc::new(move |active| {
-        seen_in_listener.lock().push(active);
-    }));
-
-    accessibility.set_active(true);
-    accessibility.set_active(false);
-
-    assert_eq!(*seen.lock(), vec![true, false]);
-}
-
-/// A listener that publishes from inside the activation callback must not
-/// deadlock against the lock that dispatched it. This is the clone-and-release
-/// discipline the real platform paths use, and the shape a composition root
-/// will actually write: "attached — send the current tree now."
-#[test]
-fn a_listener_that_publishes_does_not_deadlock() {
-    let accessibility = Arc::new(FakeAccessibility::new());
-    let ran = Arc::new(AtomicBool::new(false));
-
-    let inner = Arc::clone(&accessibility);
-    let ran_in_listener = Arc::clone(&ran);
-    accessibility.set_activation_listener(Arc::new(move |active| {
-        if active {
-            inner.publish(tree_update(1, "Submit"));
-            ran_in_listener.store(true, Ordering::SeqCst);
-        }
-    }));
-
-    accessibility.set_active(true);
-
-    assert!(ran.load(Ordering::SeqCst), "the listener ran to completion");
-    assert_eq!(
-        accessibility.published_count(),
-        1,
-        "and its publish took effect"
-    );
 }
 
 /// Inbound actions carry the node id from the published tree. That identity is

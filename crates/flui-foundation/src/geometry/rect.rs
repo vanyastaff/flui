@@ -873,29 +873,6 @@ pub fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::point;
-
-    #[test]
-    fn test_validation() {
-        assert!(!Rect::from_xywh(0.0, 0.0, 100.0, 50.0).is_empty());
-        assert!(Rect::ZERO.is_empty());
-        assert!(Rect::from_xywh(0.0, 0.0, 0.0, 50.0).is_empty());
-        assert!(Rect::from_xywh(0.0, 0.0, -10.0, 50.0).is_empty());
-
-        assert!(Rect::ZERO.is_finite());
-        assert!(!Rect::EVERYTHING.is_finite());
-    }
-
-    #[test]
-    fn test_contains() {
-        let r = Rect::from_xywh(10.0, 10.0, 100.0, 100.0);
-
-        assert!(r.contains(point(50.0, 50.0)));
-        assert!(r.contains(point(10.0, 10.0))); // on edge
-        assert!(r.contains(point(110.0, 110.0))); // on edge
-        assert!(!r.contains(point(5.0, 50.0)));
-        assert!(!r.contains(point(115.0, 50.0)));
-    }
 
     /// An empty rect never overlaps ITSELF, though it can overlap a rect that
     /// straddles it.

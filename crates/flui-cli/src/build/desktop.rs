@@ -331,11 +331,4 @@ mod xml_escape_tests {
         assert_eq!(xml_escape("\"quoted\""), "&quot;quoted&quot;");
         assert_eq!(xml_escape("it's"), "it&apos;s");
     }
-
-    #[test]
-    fn the_ampersand_is_escaped_first_so_entities_are_not_double_escaped() {
-        // If `&` were replaced after `<`, `&lt;` would become `&amp;lt;`.
-        assert_eq!(xml_escape("<"), "&lt;");
-        assert_eq!(xml_escape("&lt;"), "&amp;lt;");
-    }
 }

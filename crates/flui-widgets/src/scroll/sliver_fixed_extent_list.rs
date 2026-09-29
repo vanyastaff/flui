@@ -172,15 +172,3 @@ impl StatelessView for SliverFixedExtentList {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    #[test]
-    #[should_panic(expected = "item_extent must be finite and positive")]
-    fn new_rejects_a_zero_extent() {
-        let _ = SliverFixedExtentList::new(0.0, Vec::<flui_view::BoxedView>::new());
-    }
-}

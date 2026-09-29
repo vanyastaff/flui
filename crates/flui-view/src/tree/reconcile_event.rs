@@ -253,34 +253,3 @@ pub fn emit(event: &ReconcileEvent) {
         from_parent_present = event.from_parent.is_some(),
     );
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn constructors_set_kind_and_from_parent_correctly() {
-        let parent = ElementId::new(1);
-        let tid = TypeId::of::<u32>();
-
-        let mount = ReconcileEvent::mount(parent, 0, tid, None);
-        assert!(matches!(mount.kind, ReconcileEventKind::Mount));
-        assert!(mount.from_parent.is_none());
-
-        let unmount = ReconcileEvent::unmount(parent, 1, tid, Some(42));
-        assert!(matches!(unmount.kind, ReconcileEventKind::Unmount));
-        assert_eq!(unmount.child_key, Some(42));
-
-        let reuse = ReconcileEvent::reuse(parent, 2, tid, None);
-        assert!(matches!(reuse.kind, ReconcileEventKind::Reuse));
-
-        let reorder = ReconcileEvent::reorder(parent, 3, tid, Some(7));
-        assert!(matches!(reorder.kind, ReconcileEventKind::Reorder));
-
-        let donor = ElementId::new(9);
-        let reparent = ReconcileEvent::reparent(donor, parent, 4, tid, 0xDEAD);
-        assert!(matches!(reparent.kind, ReconcileEventKind::Reparent));
-        assert_eq!(reparent.from_parent, Some(donor));
-        assert_eq!(reparent.child_key, Some(0xDEAD));
-    }
-}

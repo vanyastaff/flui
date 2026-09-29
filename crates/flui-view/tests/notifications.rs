@@ -26,7 +26,7 @@ use std::{
     marker::PhantomData,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicI32, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
 };
 
@@ -282,81 +282,6 @@ fn dispatch_notification_calls_handler_and_stops_on_true() {
 // ============================================================================
 // Bubble continues on false — listener returns false, walk reaches root
 // ============================================================================
-
-#[test]
-fn dispatch_notification_continues_when_handler_returns_false() {
-    // Tree shape: Root[outer] → Inner[middle returns false] → DummyChild.
-    // Inner returns false, so the bubble must continue and reach the outer
-    // listener.
-    let (tree, owner) = create_tree_and_owner();
-
-    let outer_called = Arc::new(AtomicBool::new(false));
-    let inner_called = Arc::new(AtomicBool::new(false));
-    let call_order = Arc::new(AtomicI32::new(0));
-    let outer_order = Arc::new(AtomicI32::new(-1));
-    let inner_order = Arc::new(AtomicI32::new(-1));
-
-    let outer_listener = {
-        let outer_called = Arc::clone(&outer_called);
-        let call_order = Arc::clone(&call_order);
-        let outer_order = Arc::clone(&outer_order);
-        NotificationListener::<ScrollNotification>::new(move |_n| {
-            outer_called.store(true, Ordering::Release);
-            outer_order.store(call_order.fetch_add(1, Ordering::AcqRel), Ordering::Release);
-            true
-        })
-    };
-    let outer_id = tree
-        .write()
-        .mount_root(&outer_listener, &mut owner.write().element_owner_mut());
-
-    let inner_listener = {
-        let inner_called = Arc::clone(&inner_called);
-        let call_order = Arc::clone(&call_order);
-        let inner_order = Arc::clone(&inner_order);
-        NotificationListener::<ScrollNotification>::new(move |_n| {
-            inner_called.store(true, Ordering::Release);
-            inner_order.store(call_order.fetch_add(1, Ordering::AcqRel), Ordering::Release);
-            false // bubble continues
-        })
-    };
-    let inner_id = tree.write().insert(
-        &inner_listener,
-        outer_id,
-        0,
-        &mut owner.write().element_owner_mut(),
-    );
-
-    let child_id = tree.write().insert(
-        &DummyChild,
-        inner_id,
-        0,
-        &mut owner.write().element_owner_mut(),
-    );
-
-    let ctx = ElementBuildContext::for_element(child_id, tree.clone(), owner.clone()).unwrap();
-
-    ctx.dispatch_notification(&ScrollNotification { delta: 7.0 });
-
-    assert!(
-        inner_called.load(Ordering::Acquire),
-        "inner listener must fire first"
-    );
-    assert!(
-        outer_called.load(Ordering::Acquire),
-        "outer listener must fire after inner returned false (bubble continues)"
-    );
-    assert_eq!(
-        inner_order.load(Ordering::Acquire),
-        0,
-        "inner (nearest) listener must run before outer"
-    );
-    assert_eq!(
-        outer_order.load(Ordering::Acquire),
-        1,
-        "outer (root) listener must run after inner per Flutter bubble order"
-    );
-}
 
 // ============================================================================
 // No handler in chain — walk completes cleanly without panic

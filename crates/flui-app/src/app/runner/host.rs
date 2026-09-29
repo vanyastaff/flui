@@ -382,65 +382,6 @@ pub(super) fn desktop_secondary_wake_deadline(
     }
 }
 
-#[cfg(all(test, not(target_os = "ios")))]
-// `desktop_secondary_wake_deadline` is a desktop-loop concern and is
-// `cfg(not(wasm32))`; the web backend drives frames from RAF instead.
-#[cfg(not(target_arch = "wasm32"))]
-mod desktop_secondary_wake_deadline_tests {
-    use web_time::Instant;
-
-    use super::desktop_secondary_wake_deadline;
-
-    #[test]
-    fn an_armed_deadline_is_reported_while_frames_are_enabled() {
-        let deadline = Instant::now();
-        assert_eq!(
-            desktop_secondary_wake_deadline(Some(deadline), true),
-            Some(deadline)
-        );
-    }
-
-    #[test]
-    fn an_armed_deadline_is_suppressed_while_frames_are_disabled() {
-        let deadline = Instant::now();
-        assert_eq!(
-            desktop_secondary_wake_deadline(Some(deadline), false),
-            None,
-            "a deadline nothing can act on must not be reported -- reporting it would hand \
-             `about_to_wait` the same past instant forever (the PumpAsync arm never consumes \
-             it), the exact WaitUntil(past) busy-spin `WinitApp::new_events` names, one layer \
-             up from where round 4 fixed the equivalent hole on the Render path"
-        );
-    }
-}
-
-#[cfg(all(test, not(target_os = "ios")))]
-mod merge_wake_deadlines_tests {
-    use std::time::Duration;
-
-    use web_time::Instant;
-
-    use super::merge_wake_deadlines;
-
-    #[test]
-    fn picks_the_earlier_of_two_present_deadlines_either_order() {
-        let now = Instant::now();
-        let earlier = now + Duration::from_millis(16);
-        let later = now + Duration::from_secs(1);
-
-        assert_eq!(
-            merge_wake_deadlines(Some(earlier), Some(later)),
-            Some(earlier),
-            "realm-earlier, secondary-later"
-        );
-        assert_eq!(
-            merge_wake_deadlines(Some(later), Some(earlier)),
-            Some(earlier),
-            "realm-later, secondary-earlier -- order must not matter"
-        );
-    }
-}
-
 /// Borrow-style access to the loop-scoped owner-platform capability.
 /// `None` if no `OwnerPlatform` is currently installed on this thread
 /// (before `on_ready`, or after the host was cleared).

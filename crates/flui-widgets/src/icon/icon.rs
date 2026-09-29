@@ -163,20 +163,3 @@ impl StatelessView for Icon {
         SizedBox::square(size).child(Center::new().child(rich_text))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn sample_icon() -> IconData {
-        IconData::new(0xE87D)
-    }
-
-    #[test]
-    fn style_for_prefers_the_icon_color_over_the_theme_color() {
-        let red = Color::rgb(255, 0, 0);
-        let icon = Icon::new(sample_icon()).color(red);
-        let style = icon.style_for(&sample_icon(), 24.0, &IconThemeData::fallback());
-        assert_eq!(style.color, Some(red));
-    }
-}

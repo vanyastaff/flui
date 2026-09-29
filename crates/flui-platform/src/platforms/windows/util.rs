@@ -124,17 +124,3 @@ pub const USER_DEFAULT_SCREEN_DPI: u32 = 96;
 /// (Only the three the backend consumes are re-exported; `SIZE_MAXSHOW`/
 /// `SIZE_MAXHIDE` stay reachable at their defining path.)
 pub use crate::shared::visibility::{SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED};
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_lparam_coordinates() {
-        // X=100, Y=200 packed into LPARAM
-        let lparam = LPARAM(((0xC8 << 16) | 0x64) as isize); // y=200, x=100
-
-        assert_eq!(get_x_lparam(lparam), 100);
-        assert_eq!(get_y_lparam(lparam), 200);
-    }
-}

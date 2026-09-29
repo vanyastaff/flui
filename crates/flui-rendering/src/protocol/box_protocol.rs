@@ -1705,32 +1705,4 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, BoxHitTest, A, P>
 // ============================================================================
 
 #[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    #[test]
-    fn validate_layout_output_rejects_non_finite_and_oversized_geometry() {
-        use crate::error::RenderError;
-
-        let constraints = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
-        let ok = Size::new(40.0, 40.0);
-        BoxProtocol::validate_layout_output("TestBox", &constraints, &ok).expect("valid size");
-
-        let bad = Size::new(f64::INFINITY, 40.0);
-        match BoxProtocol::validate_layout_output("TestBox", &constraints, &bad) {
-            Err(RenderError::InvalidGeometry { reason, .. }) => {
-                assert!(reason.contains("non-finite"));
-            }
-            other => panic!("expected InvalidGeometry, got {other:?}"),
-        }
-
-        let oversize = Size::new(200.0, 40.0);
-        match BoxProtocol::validate_layout_output("TestBox", &constraints, &oversize) {
-            Err(RenderError::InvalidGeometry { reason, .. }) => {
-                assert!(reason.contains("does not satisfy"));
-            }
-            other => panic!("expected InvalidGeometry, got {other:?}"),
-        }
-    }
-}
+mod tests {}

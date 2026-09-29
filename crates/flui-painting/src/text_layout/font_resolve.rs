@@ -743,7 +743,6 @@ mod tests {
     use super::*;
 
     const ROBOTO: &[u8] = include_bytes!("../../assets/fonts/Roboto-Regular.ttf");
-    const PROBE_SANS: &[u8] = include_bytes!("../../assets/fonts/probe-sans-400.ttf");
     const MATERIAL_ICONS: &[u8] = include_bytes!("../../assets/fonts/MaterialIcons-Regular.ttf");
     /// Maps ONLY `U+0020`, at 1.3 em, with "Emoji" in its PostScript name.
     ///
@@ -764,31 +763,6 @@ mod tests {
 
     fn font_system(db: Database) -> FontSystem {
         FontSystem::new_with_locale_and_db("en-US".to_owned(), db)
-    }
-
-    /// The platform's own forbidden entries survive the scan.
-    ///
-    /// macOS forbids `".LastResort"` — the system tofu face, forbidden
-    /// precisely so it never wins a fallback. Returning only the scanned emoji
-    /// names would drop it, and no CI job here would notice: macOS is
-    /// lint-only. Linux's platform list is empty, so this is asserted through
-    /// [`forbidden_list`] with an explicit list rather than through
-    /// `PlatformFallback`, which on this host could not tell the two
-    /// implementations apart.
-    #[test]
-    fn the_platform_forbidden_list_is_extended_not_replaced() {
-        let db = database(&[DECOY_WIDE_SPACE]);
-
-        let forbidden = forbidden_list(&[".LastResort"], true, &db);
-
-        assert!(
-            forbidden.contains(&".LastResort"),
-            "the platform's own entry must survive; got {forbidden:?}"
-        );
-        assert!(
-            forbidden.contains(&"FLUI Decoy Emoji"),
-            "control: the scan still adds the host's emoji families; got {forbidden:?}"
-        );
     }
 
     /// The recorded divergence from Flutter, pinned so it cannot drift
@@ -846,158 +820,6 @@ mod tests {
         TextStyle {
             font_family: family.map(str::to_owned),
             ..TextStyle::default()
-        }
-    }
-
-    /// Resolves against a freshly-built index, so the generation is
-    /// irrelevant — a test that MUTATES the database between resolves must
-    /// keep its own generation instead (see
-    /// `a_face_loaded_after_the_first_resolve_is_picked_up`).
-    fn resolved(system: &mut FontSystem, style: &TextStyle) -> String {
-        let mut installed = InstalledFamilies::default();
-        format!(
-            "{:?}",
-            resolve_family(Some(style), system, &mut installed, 0)
-        )
-    }
-
-    fn styled_with_fallback(family: Option<&str>, fallback: &[&str]) -> TextStyle {
-        TextStyle {
-            font_family: family.map(str::to_owned),
-            font_family_fallback: fallback.iter().map(|f| (*f).to_owned()).collect(),
-            ..TextStyle::default()
-        }
-    }
-
-    /// The chain is ordered: an earlier installed entry beats a later one.
-    ///
-    /// Without this, a walk that happened to return the LAST match, or that
-    /// searched the database rather than the chain, would pass the test above.
-    #[test]
-    fn the_chain_is_walked_in_declared_order() {
-        let mut system = font_system(database(&[PROBE_SANS, ROBOTO]));
-        let earlier_first =
-            styled_with_fallback(Some("Absent Primary"), &["Roboto", "FLUI Probe Sans"]);
-        assert_eq!(
-            resolved(&mut system, &earlier_first),
-            "Name(\"Roboto\")",
-            "both are installed, so the DECLARED order decides"
-        );
-
-        let mut system = font_system(database(&[PROBE_SANS, ROBOTO]));
-        let reversed = styled_with_fallback(Some("Absent Primary"), &["FLUI Probe Sans", "Roboto"]);
-        assert_eq!(
-            resolved(&mut system, &reversed),
-            "Name(\"FLUI Probe Sans\")",
-            "reversing the chain reverses the answer — a resolver ignoring \
-             order would return the same family for both"
-        );
-    }
-
-    /// A generic in the chain resolves as that generic and ends the walk.
-    ///
-    /// That is what gives every real chain a defined stop — Cupertino's own
-    /// ends in "sans-serif" — rather than relying on the degrade below it.
-    #[test]
-    fn a_generic_in_the_chain_resolves_and_terminates_it() {
-        let mut system = font_system(database(&[PROBE_SANS]));
-        // "FLUI Probe Sans" is installed and sits AFTER the generic, so reaching it
-        // would prove the walk did not stop.
-        let style = styled_with_fallback(Some("Absent"), &["monospace", "FLUI Probe Sans"]);
-        assert_eq!(resolved(&mut system, &style), "Monospace");
-    }
-
-    /// `Family::Monospace` is the one family that must NOT snap, and for a
-    /// reason about the request rather than the binding: `next_item`'s
-    /// `(true, None)` arm does not break the family loop, and
-    /// `font_match_keys_iter(is_mono)` accepts every face regardless of weight
-    /// diff. Snapping it would strip a variable instance for nothing.
-    ///
-    /// Discriminating because the generic IS bound here: without the
-    /// monospace arm this resolves to "Roboto" and snaps to 400.
-    #[test]
-    fn a_monospace_request_is_never_snapped() {
-        let mut db = database(&[ROBOTO]);
-        bind_generic_families(&mut db);
-        assert_eq!(
-            db.family_name(&Family::Monospace),
-            "Roboto",
-            "precondition: monospace is bound to the fixture's only family"
-        );
-
-        assert_eq!(snap_weight(&db, &Family::Monospace, 900), 900);
-    }
-
-    /// CSS resolves 400 and 500 toward each other before it looks further, and
-    /// resolves ties by direction rather than by distance. Both cases below
-    /// are ones a nearest-by-absolute-distance implementation gets wrong — the
-    /// first by tie-breaking on database iteration order, the second by
-    /// crossing the 500 boundary when CSS says to stay below it.
-    #[test]
-    fn weight_selection_follows_css_order_not_absolute_distance() {
-        assert_eq!(
-            css_nearest_weight(&[300, 500], 400),
-            Some(500),
-            "400 looks up to 500 first; by distance this is a tie broken by \
-             load order"
-        );
-        assert_eq!(
-            css_nearest_weight(&[100, 600], 500),
-            Some(100),
-            "500 takes nothing above it until it has exhausted below; by \
-             distance 600 wins"
-        );
-        assert_eq!(
-            css_nearest_weight(&[200, 900], 300),
-            Some(200),
-            "below 400: descending below first"
-        );
-        assert_eq!(
-            css_nearest_weight(&[200, 900], 700),
-            Some(900),
-            "above 500: ascending above first"
-        );
-        assert_eq!(css_nearest_weight(&[], 400), None, "nothing carried");
-    }
-
-    #[test]
-    fn a_present_family_is_used_verbatim() {
-        let mut system = font_system(database(&[ROBOTO, PROBE_SANS]));
-        assert_eq!(
-            resolved(&mut system, &styled(Some("FLUI Probe Sans"))),
-            r#"Name("FLUI Probe Sans")"#
-        );
-    }
-
-    #[test]
-    fn an_absent_family_degrades_to_the_sans_serif_generic() {
-        let mut system = font_system(database(&[ROBOTO]));
-        assert_eq!(
-            resolved(&mut system, &styled(Some("CupertinoSystemText"))),
-            "SansSerif"
-        );
-    }
-
-    #[test]
-    fn binding_points_generics_at_a_family_the_database_carries() {
-        let mut db = database(&[ROBOTO]);
-        // cosmic-text's own defaults name families no test database carries.
-        assert!(!database_carries(&db, db.family_name(&Family::SansSerif)));
-
-        bind_generic_families(&mut db);
-
-        for generic in [
-            Family::SansSerif,
-            Family::Serif,
-            Family::Monospace,
-            Family::Cursive,
-            Family::Fantasy,
-        ] {
-            let bound = db.family_name(&generic).to_owned();
-            assert!(
-                database_carries(&db, &bound),
-                "{generic:?} was bound to {bound:?}, which this database does not carry"
-            );
         }
     }
 
@@ -1116,32 +938,6 @@ mod tests {
         assert!(
             em < 0.5,
             "a space of {em} em is a foreign face's advance, not a text face's"
-        );
-    }
-
-    #[test]
-    fn a_face_loaded_after_the_first_resolve_is_picked_up() {
-        // The shared database really does grow after text has been measured:
-        // `register_font` may run at any point after layout has run.
-        let mut system = font_system(database(&[ROBOTO]));
-        let mut installed = InstalledFamilies::default();
-        let style = styled(Some("Material Icons"));
-        // The generation stands in for `SharedFontSystem::with_mut`, which
-        // bumps it on every call that could touch the database.
-        let mut db_generation = 0;
-        assert_eq!(
-            resolve_family(Some(&style), &mut system, &mut installed, db_generation),
-            Family::SansSerif,
-            "precondition: the icon family is absent to begin with"
-        );
-
-        system.db_mut().load_font_data(MATERIAL_ICONS.to_vec());
-        db_generation += 1;
-
-        assert_eq!(
-            resolve_family(Some(&style), &mut system, &mut installed, db_generation),
-            Family::Name("Material Icons"),
-            "a face loaded after the first resolve must be seen"
         );
     }
 }

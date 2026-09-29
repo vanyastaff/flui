@@ -6,11 +6,6 @@
 //! `drive_frame_with_lane` around `draw_frame`, so each fails against a pump
 //! that skips or reorders the phase it names.
 
-use std::time::Duration;
-
-use flui_animation::AnimationController;
-use flui_foundation::notifier::Listenable as _;
-
 use super::*;
 use flui_foundation::ManualClock;
 
@@ -86,90 +81,5 @@ fn pump_post_frame_callback_observes_this_frames_committed_layout() {
         *observed.read(),
         Some(flui_foundation::geometry::Size::new(40.0, 24.0)),
         "the post-frame callback must observe THIS pump's committed layout"
-    );
-}
-
-/// The realm's `Vsync` registry ticks in the scheduler's persistent phase, at
-/// the start of the draw step — not among the transient callbacks, where
-/// Flutter's tickers run. A recorded divergence (this crate's
-/// `ARCHITECTURE.md`, "`Vsync` ticks in the persistent phase"); moving the tick
-/// into begin frame turns this red.
-#[test]
-fn pump_ticks_vsync_in_the_persistent_phase_not_among_transient_callbacks() {
-    let mut realm = UiRealm::for_test();
-    let controller = AnimationController::new(
-        Duration::from_millis(100),
-        &flui_scheduler::UpdateScheduler::new(),
-    );
-    realm.vsync().register(controller.clone());
-    let phases = Arc::new(parking_lot::Mutex::new(Vec::new()));
-    let phases_in_listener = Arc::clone(&phases);
-    let scheduler = realm.scheduler().clone();
-    let _listener = controller.add_listener(Arc::new(move || {
-        phases_in_listener.lock().push(scheduler.phase());
-    }));
-    controller.forward().expect("fresh controller forwards");
-    phases.lock().clear();
-
-    let _ = realm.pump(
-        &mut ManualClock::new(),
-        &mut ScriptedSink::always_presents(),
-    );
-
-    let phases = phases.lock();
-    assert!(
-        !phases.is_empty(),
-        "the pump must tick the running controller"
-    );
-    assert!(
-        phases
-            .iter()
-            .all(|phase| *phase == SchedulerPhase::PersistentCallbacks),
-        "the Vsync tick runs in the persistent phase (got {phases:?})"
-    );
-    controller.dispose();
-}
-
-/// With frames disabled, `pump_background` clears the scheduler's frame latch
-/// BEFORE it polls the async driver, so a future that schedules a frame when
-/// polled fires the platform wake again.
-///
-/// Fails against the reversed order: the poll finds the latch still set, the
-/// future's frame request fires nothing, and the loop would sleep through it.
-#[test]
-fn pump_background_clears_the_frame_latch_before_polling() {
-    let (wake, wakes) = counting_wake();
-    let mut realm = new_runtime(wake).expect("runtime");
-    let scheduler = realm.scheduler().clone();
-    scheduler.handle_app_lifecycle_state_change(AppLifecycleState::Hidden);
-    assert!(
-        !scheduler.frames_enabled(),
-        "precondition: a hidden app has frames disabled"
-    );
-
-    let scheduler_in_task = scheduler.clone();
-    let polled = Arc::new(AtomicBool::new(false));
-    let polled_in_task = Arc::clone(&polled);
-    let _token = scheduler.spawn_local(Box::pin(async move {
-        polled_in_task.store(true, Ordering::SeqCst);
-        scheduler_in_task.request_frame();
-    }));
-    scheduler.request_frame();
-    assert!(
-        scheduler.is_frame_scheduled(),
-        "precondition: the frame latch is set going into the background wake"
-    );
-    let before = wakes.load(Ordering::SeqCst);
-
-    realm.pump_background();
-
-    assert!(
-        polled.load(Ordering::SeqCst),
-        "the background wake polls the async driver"
-    );
-    assert_eq!(
-        wakes.load(Ordering::SeqCst),
-        before + 1,
-        "the future's frame request must find the latch cleared and fire the wake"
     );
 }

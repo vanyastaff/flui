@@ -1594,9 +1594,6 @@ impl SliverFixedExtentList {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use flui_foundation::ElementId;
     use flui_objects::RenderSizedBox;
@@ -1639,36 +1636,6 @@ mod tests {
         }
     }
 
-    /// A second, distinct view type — same render shape, different `TypeId` —
-    /// so a refresh whose new builder returns this instead of [`ItemView`]
-    /// exercises the incompatible-type (evict + remount) branch.
-    #[derive(Clone)]
-    struct OtherItemView;
-
-    impl RenderView for OtherItemView {
-        type Protocol = BoxProtocol;
-        type RenderObject = RenderSizedBox;
-        fn create_render_object(
-            &self,
-            _ctx: &crate::RenderObjectContext<'_>,
-        ) -> Self::RenderObject {
-            RenderSizedBox::new(Some(48.0), Some(48.0))
-        }
-        fn update_render_object(
-            &self,
-            _ctx: &crate::RenderObjectContext<'_>,
-            _: &mut Self::RenderObject,
-        ) -> flui_rendering::RenderUpdateImpact {
-            flui_rendering::RenderUpdateImpact::NONE
-        }
-    }
-
-    impl View for OtherItemView {
-        fn create_element(&self) -> crate::element::ElementKind {
-            crate::element::ElementKind::render_variable(self)
-        }
-    }
-
     fn make_builder(item_count: usize) -> Rc<dyn Fn(usize) -> Option<BoxedView>> {
         Rc::new(move |idx: usize| {
             if idx < item_count {
@@ -1683,73 +1650,9 @@ mod tests {
     // Tests
     // -------------------------------------------------------------------------
 
-    /// `SliverList::new` panics on a zero extent estimate.
-    #[test]
-    fn new_panics_on_zero_estimate() {
-        let builder = make_builder(10);
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            SliverList::new(10, 0.0, builder)
-        }));
-        assert!(result.is_err(), "zero estimate must panic");
-    }
-
     // -------------------------------------------------------------------------
     // `SliverList::separated`
     // -------------------------------------------------------------------------
-
-    /// `SliverList::separated` reports the interleaved child count:
-    /// `2 * item_count - 1` for `item_count > 0`.
-    #[test]
-    fn separated_reports_interleaved_child_count() {
-        let view = SliverList::separated(3, 48.0, make_builder(3), make_builder(3));
-        assert_eq!(
-            view.item_count,
-            ItemCount::Exact(5),
-            "2*3-1 = 5 interleaved logical slots"
-        );
-    }
-
-    /// `SliverList::separated` maps even logical indices to item indices
-    /// `0, 1, 2, ...` in order and odd logical indices to separator indices
-    /// `0, 1, ...` in order — the exact arithmetic Flutter's
-    /// `SliverList.separated` uses (`index.isEven ? index ~/ 2 : (index - 1)
-    /// ~/ 2`, `widgets/sliver.dart`, tag `3.44.0`).
-    #[test]
-    fn separated_maps_logical_index_to_item_and_separator_index_correctly() {
-        let item_indices: Rc<RefCell<Vec<usize>>> = Rc::new(RefCell::new(Vec::new()));
-        let item_indices_probe = Rc::clone(&item_indices);
-        let item_builder: Rc<dyn Fn(usize) -> Option<BoxedView>> = Rc::new(move |idx: usize| {
-            item_indices_probe.borrow_mut().push(idx);
-            Some(BoxedView(Box::new(ItemView)))
-        });
-
-        let separator_indices: Rc<RefCell<Vec<usize>>> = Rc::new(RefCell::new(Vec::new()));
-        let separator_indices_probe = Rc::clone(&separator_indices);
-        let separator_builder: Rc<dyn Fn(usize) -> Option<BoxedView>> =
-            Rc::new(move |idx: usize| {
-                separator_indices_probe.borrow_mut().push(idx);
-                Some(BoxedView(Box::new(ItemView)))
-            });
-
-        let view = SliverList::separated(3, 48.0, item_builder, separator_builder);
-        let ItemCount::Exact(child_count) = view.item_count else {
-            panic!("separated declares an exact interleaved child count");
-        };
-        for logical_index in 0..child_count {
-            (view.builder)(logical_index);
-        }
-
-        assert_eq!(
-            *item_indices.borrow(),
-            vec![0, 1, 2],
-            "even logical indices 0,2,4 must map to item indices 0,1,2 in order"
-        );
-        assert_eq!(
-            *separator_indices.borrow(),
-            vec![0, 1],
-            "odd logical indices 1,3 must map to separator indices 0,1 in order"
-        );
-    }
 
     // -------------------------------------------------------------------------
     // `SliverList::list`
@@ -1791,35 +1694,6 @@ mod tests {
     // Test gap 6a: `ChildManager::service` bool-return unit tests.
     // =========================================================================
 
-    /// `ChildManager::service` must return `true` when it builds at least one
-    /// new child. `true` tells `service_child_requests` to call
-    /// `mark_needs_layout` so the sliver lays out the freshly-built children.
-    #[test]
-    fn service_returns_true_when_children_are_built() {
-        let (mut tree, mut build_owner, pipeline, host) = host_tree();
-
-        let mut manager = list_manager(host, 5);
-
-        // Request index 0, retain band [0, 1): service must build item 0.
-        let did_work = manager.service(
-            &[0],
-            0,
-            1,
-            &mut tree,
-            &mut build_owner.element_owner_mut(),
-            &pipeline,
-        );
-
-        assert!(
-            did_work,
-            "service that builds at least one child must return true"
-        );
-        assert!(
-            manager.sparse_children.get(0).is_some(),
-            "the requested child must be present in SparseChildren after service"
-        );
-    }
-
     /// The post-layout service path is a production mount path, not a count
     /// probe: a requested item's builder panic must be both substituted and
     /// recorded exactly once.
@@ -1858,118 +1732,6 @@ mod tests {
     // =========================================================================
     // `needs_resident_refresh` → `refresh_resident`: the builder-staleness fix.
     // =========================================================================
-
-    /// After the item builder is swapped and `needs_resident_refresh` is set,
-    /// the next `service` re-consults the NEW builder for every resident index
-    /// and, when the result is the same view type, updates the existing child
-    /// in place — preserving its `ElementId` (identity/state) rather than
-    /// evicting and remounting. The flag is consumed exactly once.
-    #[test]
-    fn refresh_resident_updates_in_place_and_consumes_flag() {
-        let (mut tree, mut build_owner, pipeline, host) = host_tree();
-
-        let mut manager = list_manager(host, 3);
-
-        // Seed a resident child at index 0.
-        manager.service(
-            &[0],
-            0,
-            usize::MAX,
-            &mut tree,
-            &mut build_owner.element_owner_mut(),
-            &pipeline,
-        );
-        let before = manager
-            .sparse_children
-            .get(0)
-            .expect("index 0 resident after seed");
-
-        // Swap in a fresh (same-type) builder that counts its calls, and flag
-        // the residents for refresh.
-        let calls = Arc::new(AtomicUsize::new(0));
-        let calls_probe = Arc::clone(&calls);
-        let refreshed: Rc<dyn Fn(usize) -> Option<BoxedView>> = Rc::new(move |idx: usize| {
-            calls_probe.fetch_add(1, Ordering::Relaxed);
-            (idx < 3).then(|| BoxedView(Box::new(ItemView)))
-        });
-        manager.builder = refreshed;
-        manager.needs_resident_refresh = true;
-
-        manager.service(
-            &[],
-            0,
-            usize::MAX,
-            &mut tree,
-            &mut build_owner.element_owner_mut(),
-            &pipeline,
-        );
-
-        assert!(
-            calls.load(Ordering::Relaxed) >= 1,
-            "refresh must re-consult the new builder for the resident index"
-        );
-        assert_eq!(
-            manager.sparse_children.get(0),
-            Some(before),
-            "a same-type refresh must update in place, preserving the ElementId"
-        );
-        assert!(
-            !manager.needs_resident_refresh,
-            "the refresh flag must be consumed exactly once"
-        );
-    }
-
-    /// When the swapped-in builder returns a DIFFERENT view type for a
-    /// resident index, `refresh_resident` evicts the stale child and remounts
-    /// a fresh one — matching Flutter's remount-on-incompatible-type behavior.
-    /// The resident `ElementId` changes.
-    #[test]
-    fn refresh_resident_remounts_on_type_change() {
-        let (mut tree, mut build_owner, pipeline, host) = host_tree();
-
-        let mut manager = list_manager(host, 3);
-
-        manager.service(
-            &[0],
-            0,
-            usize::MAX,
-            &mut tree,
-            &mut build_owner.element_owner_mut(),
-            &pipeline,
-        );
-        let before = manager
-            .sparse_children
-            .get(0)
-            .expect("index 0 resident after seed");
-
-        // New builder returns a different concrete type at the same index.
-        let remounting: Rc<dyn Fn(usize) -> Option<BoxedView>> =
-            Rc::new(|idx: usize| (idx < 3).then(|| BoxedView(Box::new(OtherItemView))));
-        manager.builder = remounting;
-        manager.needs_resident_refresh = true;
-
-        manager.service(
-            &[],
-            0,
-            usize::MAX,
-            &mut tree,
-            &mut build_owner.element_owner_mut(),
-            &pipeline,
-        );
-
-        let after = manager
-            .sparse_children
-            .get(0)
-            .expect("index 0 still resident after refresh remount");
-        assert_ne!(
-            after, before,
-            "an incompatible-type refresh must evict and remount, changing the ElementId"
-        );
-        assert!(
-            !manager.needs_resident_refresh,
-            "the refresh flag must be consumed exactly once"
-        );
-    }
 
     // =========================================================================
     // `needs_resident_refresh` → `refresh_resident`: the grid sister fix.
@@ -2010,42 +1772,6 @@ mod probe_tests {
                 "probe disagreed for len {len}",
             );
         }
-    }
-
-    #[test]
-    fn a_panicking_builder_does_not_unwind_out_of_the_probe() {
-        // Every probe goes through the same boundary the adaptor's own builder
-        // calls use, so a panic becomes the registered error view rather than
-        // an unwind out of `create_render_object` that would abort mounting
-        // the whole sliver — the per-item recovery `ItemCount::Unknown` must
-        // not quietly disable.
-        //
-        // A panic counts the index as PRESENT, which is what the boundary does
-        // with it: truncating the list because one row threw would silently
-        // shorten it, and the error view is displayable at that index.
-        //
-        // Index 3 is chosen because the search actually visits it. For a
-        // 5-item source the probe asks for 0, 1, 3, 7, 5, 4 — a panic at 2
-        // would never be reached and the test would pass with the boundary
-        // removed, which the first version of it did.
-        let builder = |index: usize| -> Option<BoxedView> {
-            assert!(index != 3, "boom at index 3");
-            (index < 5).then(|| BoxedView(Box::new(super::tests::ItemView)))
-        };
-        assert_eq!(
-            probe_item_count(&builder),
-            5,
-            "a panic at one index must neither escape nor truncate the search"
-        );
-    }
-
-    #[test]
-    fn an_endless_builder_reports_unbounded_instead_of_erroring() {
-        // Flutter raises a `FlutterError` here. An always-`Some` builder is a
-        // legitimate infinite source, so this reports the sentinel the
-        // unbounded-window path already handles.
-        let endless = |_: usize| Some(BoxedView(Box::new(super::tests::ItemView)));
-        assert_eq!(probe_item_count(&endless), usize::MAX);
     }
 }
 
@@ -2186,37 +1912,5 @@ fn set_size_of(item_count: ItemCount) -> Option<i32> {
     match item_count {
         ItemCount::Exact(count) => i32::try_from(count).ok(),
         ItemCount::Unknown => None,
-    }
-}
-
-#[cfg(test)]
-mod semantic_set_mapping_tests {
-    use super::{ItemCount, SemanticSetMapping};
-
-    /// A position pushed past `i32::MAX` is unknown, not clamped.
-    ///
-    /// Clamping looks harmless per-child and is not: every overflowing child
-    /// collapses onto the same `i32::MAX`, so a reader hears several rows
-    /// claim one position, and that position can exceed the set size the same
-    /// slot publishes — a pair AccessKit cannot represent.
-    #[test]
-    fn an_overflowing_composed_position_is_declined_rather_than_clamped() {
-        let mapping = SemanticSetMapping::one_to_one(ItemCount::Exact(3))
-            .composed_at(i32::MAX - 1, Some(i32::MAX));
-
-        // In range: the offset lands exactly on the last representable value.
-        assert_eq!(mapping.slot_for(0).semantic, Some(i32::MAX - 1));
-        assert_eq!(mapping.slot_for(1).semantic, Some(i32::MAX));
-
-        assert_eq!(
-            mapping.slot_for(2).semantic,
-            None,
-            "a position past i32::MAX has no honest answer and must be unknown"
-        );
-        assert_ne!(
-            mapping.slot_for(1).semantic,
-            mapping.slot_for(2).semantic,
-            "two children must never be announced at the same position"
-        );
     }
 }

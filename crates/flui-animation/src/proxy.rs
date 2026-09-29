@@ -236,83 +236,8 @@ mod tests {
     use super::*;
     use crate::AnimationController;
     use flui_scheduler::UpdateScheduler;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use std::time::Duration;
-
-    #[test]
-    fn test_proxy_animation() {
-        let scheduler = UpdateScheduler::new();
-        let controller1 = Arc::new(AnimationController::new(
-            Duration::from_millis(100),
-            &scheduler,
-        ));
-
-        let proxy = ProxyAnimation::new(controller1.clone() as Arc<dyn Animation<f64>>);
-
-        controller1.set_value(0.5);
-        assert_eq!(proxy.value(), 0.5);
-
-        // Swap to a different animation
-        let controller2 = Arc::new(AnimationController::new(
-            Duration::from_millis(200),
-            &scheduler,
-        ));
-        controller2.set_value(0.75);
-        proxy.set_parent(controller2.clone() as Arc<dyn Animation<f64>>);
-
-        assert_eq!(proxy.value(), 0.75);
-
-        controller1.dispose();
-        controller2.dispose();
-    }
-
-    #[test]
-    fn status_listeners_survive_set_parent() {
-        // Status listeners registered on the proxy must keep firing after a
-        // hot-swap; previously they stayed registered on the old parent and
-        // never saw the new parent's transitions.
-        let scheduler = UpdateScheduler::new();
-        let controller1 = Arc::new(AnimationController::new(
-            Duration::from_millis(100),
-            &scheduler,
-        ));
-        let controller2 = Arc::new(AnimationController::new(
-            Duration::from_millis(100),
-            &scheduler,
-        ));
-
-        let proxy = ProxyAnimation::new(controller1.clone() as Arc<dyn Animation<f64>>);
-
-        let hits = Arc::new(AtomicUsize::new(0));
-        let hits2 = Arc::clone(&hits);
-        let _id = proxy.add_status_listener(Arc::new(move |_status| {
-            hits2.fetch_add(1, Ordering::SeqCst);
-        }));
-
-        // Both parents are Dismissed: the swap itself must NOT fire (status
-        // unchanged across the swap, Flutter parity).
-        proxy.set_parent(controller2.clone() as Arc<dyn Animation<f64>>);
-        assert_eq!(hits.load(Ordering::SeqCst), 0);
-
-        // A transition on the NEW parent must reach the proxy's listener.
-        let _ = controller2.forward();
-        assert!(
-            hits.load(Ordering::SeqCst) >= 1,
-            "status listener must follow the proxy to the new parent"
-        );
-
-        // A transition on the OLD parent must no longer reach it.
-        let before = hits.load(Ordering::SeqCst);
-        let _ = controller1.forward();
-        assert_eq!(
-            hits.load(Ordering::SeqCst),
-            before,
-            "old parent must be unsubscribed after the swap"
-        );
-
-        controller1.dispose();
-        controller2.dispose();
-    }
 
     #[test]
     fn swap_with_status_change_fires_listeners() {

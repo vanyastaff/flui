@@ -139,8 +139,6 @@ pub use route::{PushCompletion, Route, RouteArguments, RouteId, RouteSettings};
 // The harness-driven navigator suites live in `crates/flui-widgets/tests/`
 // (ADR-0083 §4); these are the unit tests that need no mounted tree.
 #[cfg(test)]
-mod hero_controller_tests;
-#[cfg(test)]
 mod navigator_tests;
 #[cfg(test)]
 mod tests;

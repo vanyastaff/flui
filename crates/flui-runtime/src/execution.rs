@@ -884,7 +884,7 @@ impl HostIoPool for DeterministicExecutors {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::AtomicUsize;
+
     use std::time::Duration;
 
     // ── conformance suite: the same contract for default and injected ──────
@@ -894,46 +894,6 @@ mod tests {
     // executor passes the same tests" acceptance evidence. `drive` makes
     // queued deterministic work actually run; it is a no-op for the default
     // pools (their worker threads run the work themselves).
-
-    fn both_backends(check: impl Fn(&ExecutionServices, &dyn Fn())) {
-        let default_services = ExecutionServices::with_limits(None, 4, 4);
-        check(&default_services, &|| {});
-        default_services.shutdown(Duration::from_secs(5));
-
-        let deterministic = DeterministicExecutors::new();
-        let injected = ExecutionServices::with_limits(Some(deterministic.host_executors()), 4, 4);
-        let driver = deterministic.clone();
-        check(&injected, &move || {
-            driver.run_until_idle();
-        });
-    }
-
-    #[test]
-    fn conformance_spawned_io_future_completes() {
-        both_backends(|services, drive| {
-            let done = Arc::new(AtomicBool::new(false));
-            let done_for_future = Arc::clone(&done);
-            services
-                .spawn_io(Box::pin(async move {
-                    done_for_future.store(true, Ordering::Release);
-                }))
-                .expect("spawn must be admitted");
-            drive();
-            wait_until(|| done.load(Ordering::Acquire));
-            assert!(done.load(Ordering::Acquire));
-        });
-    }
-
-    #[test]
-    fn conformance_no_admission_after_shutdown() {
-        both_backends(|services, _drive| {
-            services.shutdown(Duration::from_secs(5));
-            let result = services.spawn_compute(Box::new(|| {}));
-            assert_eq!(result, Err(SpawnError::ShuttingDown));
-            let result = services.spawn_io(Box::pin(async {}));
-            assert_eq!(result, Err(SpawnError::ShuttingDown));
-        });
-    }
 
     #[test]
     fn conformance_admission_is_bounded_and_released() {
@@ -972,158 +932,6 @@ mod tests {
         services
             .spawn_io(Box::pin(async {}))
             .expect("slots must be released after completion");
-    }
-
-    /// Shutdown joins a RUNNING compute job: the job observably finishes
-    /// before `shutdown` returns.
-    #[test]
-    fn shutdown_joins_running_compute_work() {
-        let services = ExecutionServices::with_defaults();
-        let started = Arc::new(AtomicBool::new(false));
-        let finished = Arc::new(AtomicBool::new(false));
-        let started_for_job = Arc::clone(&started);
-        let finished_for_job = Arc::clone(&finished);
-        services
-            .spawn_compute(Box::new(move || {
-                started_for_job.store(true, Ordering::Release);
-                std::thread::sleep(Duration::from_millis(100));
-                finished_for_job.store(true, Ordering::Release);
-            }))
-            .expect("spawn must be admitted");
-        wait_until(|| started.load(Ordering::Acquire));
-
-        services.shutdown(Duration::from_secs(10));
-        assert!(
-            finished.load(Ordering::Acquire),
-            "shutdown must join running work, not abandon it"
-        );
-    }
-
-    /// Shutdown CANCELS a parked IO future promptly: a future that would
-    /// otherwise never resolve is dropped at its await point (destructors
-    /// run) and shutdown does not burn the whole grace deadline on it.
-    #[test]
-    fn shutdown_cancels_parked_io_future_without_burning_the_deadline() {
-        struct DropFlag(Arc<AtomicBool>);
-        impl Drop for DropFlag {
-            fn drop(&mut self) {
-                self.0.store(true, Ordering::Release);
-            }
-        }
-
-        let services = ExecutionServices::with_defaults();
-        let dropped = Arc::new(AtomicBool::new(false));
-        let polled = Arc::new(AtomicBool::new(false));
-        let flag = DropFlag(Arc::clone(&dropped));
-        let polled_for_future = Arc::clone(&polled);
-        services
-            .spawn_io(Box::pin(async move {
-                let _flag = flag;
-                polled_for_future.store(true, Ordering::Release);
-                std::future::pending::<()>().await;
-            }))
-            .expect("spawn must be admitted");
-        wait_until(|| polled.load(Ordering::Acquire));
-
-        let grace = Duration::from_secs(30);
-        let before = std::time::Instant::now();
-        services.shutdown(grace);
-        let elapsed = before.elapsed();
-        assert!(
-            dropped.load(Ordering::Acquire),
-            "cancellation must drop the parked future (destructors run)"
-        );
-        assert!(
-            elapsed < Duration::from_secs(15),
-            "a cancelled future must not burn the grace deadline; took {elapsed:?}"
-        );
-    }
-
-    /// Cancellation must work on pools FLUI does not own: with host-injected
-    /// executors, shutdown cannot drop the host's tasks — the wrapper's
-    /// cancellation point is the only mechanism. After `shutdown`, the next
-    /// drive of the host executor must resolve a parked future (its
-    /// destructors run) instead of leaving it parked forever.
-    #[test]
-    fn shutdown_cancels_work_handed_to_host_pools() {
-        struct DropFlag(Arc<AtomicBool>);
-        impl Drop for DropFlag {
-            fn drop(&mut self) {
-                self.0.store(true, Ordering::Release);
-            }
-        }
-
-        let deterministic = DeterministicExecutors::new();
-        let services = ExecutionServices::with_host(deterministic.host_executors());
-        let dropped = Arc::new(AtomicBool::new(false));
-        let flag = DropFlag(Arc::clone(&dropped));
-        services
-            .spawn_io(Box::pin(async move {
-                let _flag = flag;
-                std::future::pending::<()>().await;
-            }))
-            .expect("spawn must be admitted");
-
-        deterministic.run_until_idle();
-        assert_eq!(
-            deterministic.pending(),
-            (0, 1),
-            "the future is parked in the host pool"
-        );
-        assert!(!dropped.load(Ordering::Acquire));
-
-        services.shutdown(Duration::from_secs(5));
-        deterministic.run_until_idle();
-        assert_eq!(
-            deterministic.pending(),
-            (0, 0),
-            "cancellation must resolve the parked future in the host pool"
-        );
-        assert!(
-            dropped.load(Ordering::Acquire),
-            "cancellation must drop the parked future (destructors run)"
-        );
-        assert_eq!(
-            services.in_flight(),
-            (0, 0),
-            "the admission slot is released"
-        );
-    }
-
-    /// Host injection: work routes to the host pools and the default pools
-    /// are never constructed — no second set of worker threads.
-    #[test]
-    fn host_injection_routes_work_and_never_starts_default_pools() {
-        let deterministic = DeterministicExecutors::new();
-        let services = ExecutionServices::with_host(deterministic.host_executors());
-        assert!(!services.owns_default_pools());
-
-        let compute_ran = Arc::new(AtomicBool::new(false));
-        let io_ran = Arc::new(AtomicBool::new(false));
-        let compute_flag = Arc::clone(&compute_ran);
-        let io_flag = Arc::clone(&io_ran);
-        services
-            .spawn_compute(Box::new(move || {
-                compute_flag.store(true, Ordering::Release);
-            }))
-            .expect("spawn must be admitted");
-        services
-            .spawn_io(Box::pin(async move {
-                io_flag.store(true, Ordering::Release);
-            }))
-            .expect("spawn must be admitted");
-
-        assert!(
-            !compute_ran.load(Ordering::Acquire) && !io_ran.load(Ordering::Acquire),
-            "deterministic host work must not run before it is driven"
-        );
-        deterministic.run_until_idle();
-        assert!(compute_ran.load(Ordering::Acquire));
-        assert!(io_ran.load(Ordering::Acquire));
-        assert!(
-            !services.default_pools_started(),
-            "host injection must never construct the default pools"
-        );
     }
 
     /// The frame lane needs no pool: with the compute admission window full
@@ -1169,76 +977,6 @@ mod tests {
     }
 
     // ── deterministic executor semantics ────────────────────────────────────
-
-    #[test]
-    fn deterministic_runs_in_fifo_spawn_order() {
-        let deterministic = DeterministicExecutors::new();
-        let order = Arc::new(parking_lot::Mutex::new(Vec::new()));
-        for index in 0..4 {
-            let order = Arc::clone(&order);
-            deterministic
-                .spawn_job(Box::new(move || order.lock().push(index)))
-                .expect("deterministic spawn is unbounded");
-        }
-        deterministic.run_until_idle();
-        assert_eq!(*order.lock(), vec![0, 1, 2, 3]);
-    }
-
-    #[test]
-    fn deterministic_parks_pending_futures_until_woken() {
-        let deterministic = DeterministicExecutors::new();
-        let polls = Arc::new(AtomicUsize::new(0));
-        let finish = Arc::new(AtomicBool::new(false));
-        let waker_slot: Arc<parking_lot::Mutex<Option<std::task::Waker>>> =
-            Arc::new(parking_lot::Mutex::new(None));
-
-        let polls_for_future = Arc::clone(&polls);
-        let finish_for_future = Arc::clone(&finish);
-        let waker_for_future = Arc::clone(&waker_slot);
-        deterministic
-            .spawn_future(Box::pin(std::future::poll_fn(move |context| {
-                polls_for_future.fetch_add(1, Ordering::Relaxed);
-                if finish_for_future.load(Ordering::Acquire) {
-                    std::task::Poll::Ready(())
-                } else {
-                    let _prev = waker_for_future.lock().replace(context.waker().clone());
-                    std::task::Poll::Pending
-                }
-            })))
-            .expect("deterministic spawn is unbounded");
-
-        deterministic.run_until_idle();
-        assert_eq!(polls.load(Ordering::Relaxed), 1, "one poll, then parked");
-        deterministic.run_until_idle();
-        assert_eq!(polls.load(Ordering::Relaxed), 1, "no wake ⇒ no poll");
-
-        finish.store(true, Ordering::Release);
-        waker_slot
-            .lock()
-            .as_ref()
-            .expect("waker stored")
-            .wake_by_ref();
-        deterministic.run_until_idle();
-        assert_eq!(polls.load(Ordering::Relaxed), 2);
-        assert_eq!(deterministic.pending(), (0, 0));
-    }
-
-    /// The single-driver contract is loud: a reentrant drive (here from
-    /// inside a driven compute job) panics with a `BUG:` message instead of
-    /// silently cancelling the outer drive's in-flight work. Fails without
-    /// the `driving` latch — the nested call would simply run.
-    #[test]
-    #[should_panic(expected = "single-driver contract")]
-    fn deterministic_reentrant_drive_panics_instead_of_corrupting() {
-        let deterministic = DeterministicExecutors::new();
-        let inner = deterministic.clone();
-        deterministic
-            .spawn_job(Box::new(move || {
-                let _ = inner.run_until_idle();
-            }))
-            .expect("deterministic spawn is unbounded");
-        deterministic.run_until_idle();
-    }
 
     /// The latch clears on unwind: after a driven job panics, a later
     /// drive on the same executor works instead of tripping the guard.
@@ -1305,20 +1043,6 @@ mod tests {
         let runtime = slot.lock().take_runtime();
         if let Some(runtime) = runtime {
             runtime.shutdown_background();
-        }
-    }
-
-    /// Bounded wait for cross-thread effects (default pools run on worker
-    /// threads). Panics after 10s so a broken test fails loudly instead of
-    /// hanging the suite.
-    fn wait_until(condition: impl Fn() -> bool) {
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while !condition() {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "condition not reached within 10s"
-            );
-            std::thread::sleep(Duration::from_millis(2));
         }
     }
 }

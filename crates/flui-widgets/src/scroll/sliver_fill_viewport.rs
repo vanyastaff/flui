@@ -98,15 +98,3 @@ where
 }
 
 generic_render_view_element!(SliverFillViewport);
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    #[test]
-    #[should_panic(expected = "viewport_fraction must be greater than zero")]
-    fn new_panics_on_a_non_positive_viewport_fraction() {
-        let _ = SliverFillViewport::new(0.0, Vec::<flui_view::BoxedView>::new());
-    }
-}

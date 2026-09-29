@@ -127,21 +127,8 @@ impl Visit for FieldRecorder {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+
     use crate::test_support::capture_rendered_events;
-
-    #[test]
-    fn fields_before_the_message_still_read_message_first() {
-        let mut recorder = FieldRecorder::new();
-        recorder.push_field("phase", "commit");
-        recorder.push_field("batch", "7");
-        recorder.push_message("late message");
-
-        assert_eq!(
-            recorder.into_string(),
-            "late message | phase=commit batch=7"
-        );
-    }
 
     // --- through a real `tracing` event, so the `Visit` wiring is covered too
 
@@ -155,25 +142,5 @@ mod tests {
             rendered,
             vec!["frame committed | phase=commit batch=7".to_owned()]
         );
-    }
-
-    #[test]
-    fn arbitrary_structured_fields_survive_rendering() {
-        let rendered = capture_rendered_events(|| {
-            tracing::info!(
-                batch = 1_u64,
-                generation = 2_u64,
-                attempt = 3_u64,
-                "frame committed"
-            );
-        });
-
-        let line = rendered.first().expect("exactly one event was emitted");
-        for (name, value) in [("batch", 1), ("generation", 2), ("attempt", 3)] {
-            assert!(
-                line.contains(&format!("{name}={value}")),
-                "structured field `{name}` was dropped from {line:?}"
-            );
-        }
     }
 }

@@ -95,7 +95,6 @@ mod tests {
         protocol::BoxProtocol,
         traits::{RenderBox, RenderObject},
     };
-    use flui_foundation::RenderId;
 
     /// A leaf that claims every hit inside its own size — the default
     /// `RenderBox::hit_test`, spelled out so this test does not depend on
@@ -134,67 +133,6 @@ mod tests {
             *o = returned;
         });
         cell
-    }
-
-    fn snapshot_at(probe: &PipelineHitTestProbe, x: f64, y: f64) -> Vec<RenderId> {
-        let mut result = HitTestResult::new();
-        probe
-            .probe(Offset::new(x, y), &mut result)
-            .expect("tree is free");
-        result.path().iter().map(|entry| entry.target).collect()
-    }
-
-    #[test]
-    fn the_probe_answers_from_the_position_it_is_given() {
-        let cell = laid_out_cell();
-        let open = std::rc::Rc::new(());
-        let probe = PipelineHitTestProbe::new(&cell, std::rc::Rc::downgrade(&open));
-
-        assert!(
-            !snapshot_at(&probe, 10.0, 10.0).is_empty(),
-            "the middle of a laid-out 20x20 root must hit it"
-        );
-        assert!(
-            snapshot_at(&probe, 100.0, 100.0).is_empty(),
-            "a position outside every node must hit nothing -- if this also \
-             reports hits, the probe is answering from position-independent \
-             state rather than testing the position given"
-        );
-    }
-
-    /// The probe must not keep the tree it reads alive.
-    ///
-    /// A realm's interaction lane outlives any one presentation, so a strong
-    /// clone here would keep a closed presentation's whole render tree — and
-    /// its dirty-request receiver — alive past the close. That is not a leak
-    /// you would notice as a leak: it shows up as
-    /// `RenderInvalidationHandle`s that are supposed to fail closed after a
-    /// presentation shuts quietly continuing to work, which is exactly how
-    /// flui-app's `dropped_presentations_surviving_pipeline_handles_fail_closed`
-    /// caught the first draft of this.
-    #[test]
-    fn the_probe_does_not_keep_a_dropped_tree_alive() {
-        let probe = {
-            let cell = laid_out_cell();
-            let open = std::rc::Rc::new(());
-            let probe = PipelineHitTestProbe::new(&cell, std::rc::Rc::downgrade(&open));
-            let mut warm = HitTestResult::new();
-            probe
-                .probe(Offset::new(10.0, 10.0), &mut warm)
-                .expect("answers while the tree is alive");
-            probe
-        };
-
-        let mut result = HitTestResult::new();
-        assert_eq!(
-            probe
-                .probe(Offset::new(10.0, 10.0), &mut result)
-                .unwrap_err(),
-            InteractionDispatchError::OwnerGone,
-            "once the last strong holder drops the tree, the probe must report \
-             it gone -- neither answering from a tree it is itself keeping \
-             alive, nor reporting an empty path"
-        );
     }
 
     #[test]

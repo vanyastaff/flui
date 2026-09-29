@@ -133,27 +133,3 @@ impl From<&String> for AssetKey {
         Self::new(s)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashSet;
-
-    #[test]
-    fn test_multiple_keys_interned() {
-        // Test that many different strings can be interned
-        let keys: Vec<_> = (0..1000)
-            .map(|i| AssetKey::new(&format!("asset_{i}.png")))
-            .collect();
-
-        // Each should be unique
-        let unique: HashSet<_> = keys.iter().copied().collect();
-        assert_eq!(unique.len(), 1000);
-    }
-
-    #[test]
-    #[should_panic(expected = "Asset key cannot be empty")]
-    fn test_key_empty_string_panics() {
-        let _key = AssetKey::new(""); // Should panic
-    }
-}

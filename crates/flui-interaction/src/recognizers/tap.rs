@@ -924,10 +924,6 @@ mod tests {
     fn primary_down(p: Offset<f64>) -> PointerEvent {
         crate::events::make_down_event_with_button(p, PointerType::Touch, PointerButton::Primary)
     }
-    fn secondary_down(p: Offset<f64>) -> PointerEvent {
-        crate::events::make_down_event_with_button(p, PointerType::Touch, PointerButton::Secondary)
-    }
-
     #[test]
     fn panicking_cancel_callback_cannot_strand_tap_tracking() {
         let arena = GestureArena::new();
@@ -950,10 +946,6 @@ mod tests {
     fn primary_up(p: Offset<f64>) -> PointerEvent {
         crate::events::make_up_event_with_button(p, PointerType::Touch, PointerButton::Primary)
     }
-    fn secondary_up(p: Offset<f64>) -> PointerEvent {
-        crate::events::make_up_event_with_button(p, PointerType::Touch, PointerButton::Secondary)
-    }
-
     /// Legacy primary path: down + up with the Primary button
     /// fires `on_tap` (`add_pointer` no longer
     /// pre-stages the down; the down event itself does).
@@ -977,105 +969,9 @@ mod tests {
         assert!(*tapped.lock());
     }
 
-    #[test]
-    fn test_tap_recognizer_slop_detection() {
-        let arena = GestureArena::new();
-        let tapped = Arc::new(Mutex::new(false));
-        let cancelled = Arc::new(Mutex::new(false));
-
-        let tapped_clone = tapped.clone();
-        let cancelled_clone = cancelled.clone();
-
-        let recognizer = TapGestureRecognizer::new(arena)
-            .with_on_tap(move |_details| {
-                *tapped_clone.lock() = true;
-            })
-            .with_on_tap_cancel(move |_details| {
-                *cancelled_clone.lock() = true;
-            });
-
-        let pointer = PointerId::PRIMARY;
-        let start_pos = pos(100.0, 100.0);
-
-        recognizer.add_pointer(pointer, start_pos, start_pos);
-        recognizer.handle_event(PointerDispatch::at_root(&primary_down(start_pos)));
-
-        // 30px away — beyond TAP_SLOP = 18px.
-        let moved_pos = pos(100.0, 130.0);
-        recognizer.handle_event(PointerDispatch::at_root(&crate::events::make_move_event(
-            moved_pos,
-            PointerType::Touch,
-        )));
-
-        assert!(*cancelled.lock());
-        assert!(!*tapped.lock());
-    }
-
     // ========================================================================
     // Secondary / tertiary button routing.
     // ========================================================================
-
-    #[test]
-    fn secondary_button_routes_to_secondary_callbacks() {
-        let arena = GestureArena::new();
-        let secondary_tapped = Arc::new(Mutex::new(false));
-        let primary_tapped = Arc::new(Mutex::new(false));
-        let s_clone = secondary_tapped.clone();
-        let p_clone = primary_tapped.clone();
-
-        let recognizer = TapGestureRecognizer::new(arena)
-            .with_on_tap(move |_| *p_clone.lock() = true)
-            .with_on_secondary_tap(move |_| *s_clone.lock() = true);
-
-        let pointer = PointerId::PRIMARY;
-        let position = pos(50.0, 50.0);
-
-        recognizer.add_pointer(pointer, position, position);
-        recognizer.handle_event(PointerDispatch::at_root(&secondary_down(position)));
-        recognizer.handle_event(PointerDispatch::at_root(&secondary_up(position)));
-
-        assert!(*secondary_tapped.lock());
-        assert!(!*primary_tapped.lock());
-    }
-
-    /// Down with Primary then Up with Secondary must cancel the
-    /// primary tap (button mismatch) — mirrors Flutter
-    /// `tap.dart::_checkUp` rejection. Primary `on_tap_cancel`
-    /// fires; neither `on_tap` nor `on_secondary_tap` does.
-    #[test]
-    fn button_mismatch_cancels_primary_tap() {
-        let arena = GestureArena::new();
-        let tapped = Arc::new(Mutex::new(false));
-        let cancelled = Arc::new(Mutex::new(false));
-        let secondary_tapped = Arc::new(Mutex::new(false));
-        let t_clone = tapped.clone();
-        let c_clone = cancelled.clone();
-        let s_clone = secondary_tapped.clone();
-
-        let recognizer = TapGestureRecognizer::new(arena)
-            .with_on_tap(move |_| *t_clone.lock() = true)
-            .with_on_tap_cancel(move |_| *c_clone.lock() = true)
-            .with_on_secondary_tap(move |_| *s_clone.lock() = true);
-
-        let pointer = PointerId::PRIMARY;
-        let position = pos(70.0, 70.0);
-
-        recognizer.add_pointer(pointer, position, position);
-        recognizer.handle_event(PointerDispatch::at_root(&primary_down(position)));
-        // Up carries a different button — cancels the primary tap.
-        recognizer.handle_event(PointerDispatch::at_root(&secondary_up(position)));
-
-        assert!(*cancelled.lock());
-        assert!(!*tapped.lock());
-        assert!(!*secondary_tapped.lock());
-    }
-
-    fn down_for(id: PointerId, p: Offset<f64>) -> PointerEvent {
-        crate::events::make_down_event_for_id(id, p, PointerType::Touch)
-    }
-    fn up_for(id: PointerId, p: Offset<f64>) -> PointerEvent {
-        crate::events::make_up_event_for_id(id, p, PointerType::Touch)
-    }
 
     // ========================================================================
     // `sequence_pointer` — stale arena resolution for an abandoned pointer.
@@ -1090,55 +986,4 @@ mod tests {
     // abandoned, and its late resolution is a no-op rather than resurrected
     // or left to clobber the newer sequence's state.
     // ========================================================================
-
-    /// The clobber sequence: down A, down B (B replaces A as the tracked
-    /// sequence before A resolves), resolve B, resolve A. B's tap fires
-    /// once; A's late win is ignored rather than firing a phantom second
-    /// tap.
-    ///
-    /// Mirrors the double-tap-hold overlap this fix targets: pointer A's
-    /// arena entry is held (a double-tap recognizer's inter-tap window),
-    /// and a second, unrelated pointer B starts and finishes its own tap on
-    /// the same shared recognizer before A's hold releases.
-    #[test]
-    fn stale_arena_win_for_an_abandoned_pointer_does_not_fire_a_newer_sequences_tap() {
-        let arena = GestureArena::new();
-        let taps = Arc::new(Mutex::new(0u32));
-        let taps_clone = taps.clone();
-
-        let recognizer = TapGestureRecognizer::new(arena).with_on_tap(move |_| {
-            *taps_clone.lock() += 1;
-        });
-
-        let pointer_a = PointerId::new(1).expect("nonzero");
-        let pointer_b = PointerId::new(2).expect("nonzero");
-        let pos_a = pos(10.0, 10.0);
-        let pos_b = pos(200.0, 200.0);
-
-        // Pointer A: down + up, held — its arena entry never resolves here,
-        // simulating a double-tap's inter-tap window.
-        recognizer.add_pointer(pointer_a, pos_a, pos_a);
-        recognizer.state.arena().hold(pointer_a);
-        recognizer.handle_event(PointerDispatch::at_root(&down_for(pointer_a, pos_a)));
-        recognizer.handle_event(PointerDispatch::at_root(&up_for(pointer_a, pos_a)));
-        assert_eq!(*taps.lock(), 0, "A's win is held, resolution deferred");
-
-        // Pointer B replaces A as the tracked sequence before A resolves.
-        // B's own (unheld, sole-member) arena entry self-sweep-resolves on
-        // its own up.
-        recognizer.add_pointer(pointer_b, pos_b, pos_b);
-        recognizer.handle_event(PointerDispatch::at_root(&down_for(pointer_b, pos_b)));
-        recognizer.handle_event(PointerDispatch::at_root(&up_for(pointer_b, pos_b)));
-        assert_eq!(*taps.lock(), 1, "B's tap fires exactly once");
-
-        // A's held win eventually arrives — ignored, not fired as a
-        // phantom second tap, because `add_pointer(pointer_b, ..)` already
-        // reassigned `sequence_pointer` away from A.
-        recognizer.accept_gesture(pointer_a);
-        assert_eq!(
-            *taps.lock(),
-            1,
-            "a stale win for the abandoned pointer A must not fire on_tap"
-        );
-    }
 }

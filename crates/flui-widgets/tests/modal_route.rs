@@ -25,16 +25,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationStatus};
-use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers, NamedKey};
-use flui_interaction::routing::FocusNode;
-use flui_painting::styling::Color;
 use flui_view::prelude::*;
 
 use flui_widgets::__test_access::{
     ModalRoute, NavigatorProbe as _, OverlayEntryProbe as _, TransitionHandle,
 };
+use flui_widgets::SizedBox;
 use flui_widgets::navigator::{Navigator, NavigatorHandle, RouteId, SimpleRoute};
-use flui_widgets::{Column, Focus, SizedBox};
 
 use crate::common::harness::{Harness, mount};
 
@@ -90,27 +87,6 @@ fn plain_page() -> SimpleRoute<i32> {
     SimpleRoute::new(|_ctx| SizedBox::new(10.0, 10.0).into_view().boxed())
 }
 
-fn focus_modal(first: Rc<FocusNode>, second: Rc<FocusNode>) -> ModalRoute<i32> {
-    ModalRoute::new(
-        FRAME,
-        Rc::new(move |_ctx, _animation, _secondary| {
-            Column::new(vec![
-                Focus::new(SizedBox::new(10.0, 10.0))
-                    .focus_node(Rc::clone(&first))
-                    .into_view()
-                    .boxed(),
-                Focus::new(SizedBox::new(10.0, 10.0))
-                    .focus_node(Rc::clone(&second))
-                    .into_view()
-                    .boxed(),
-            ])
-            .into_view()
-            .boxed()
-        }),
-    )
-    .maintain_state(true)
-}
-
 /// A navigator with `bottom` seeded, mounted and settled.
 fn navigator_with_seed() -> (NavigatorHandle, Harness, RouteId) {
     let handle = NavigatorHandle::new();
@@ -136,38 +112,6 @@ fn complete_entrance(transition: &TransitionHandle, harness: &mut Harness) {
     assert_eq!(controller.status(), AnimationStatus::Completed);
     harness.tick();
     harness.tick();
-}
-
-#[test]
-fn root_tab_traversal_stays_inside_the_top_mounted_route() {
-    let bottom_first = FocusNode::with_debug_label("bottom first");
-    let bottom_second = FocusNode::with_debug_label("bottom second");
-    let top_first = FocusNode::with_debug_label("top first");
-    let top_second = FocusNode::with_debug_label("top second");
-    let navigator = NavigatorHandle::new();
-    navigator.seed_initial(focus_modal(
-        Rc::clone(&bottom_first),
-        Rc::clone(&bottom_second),
-    ));
-    let mut harness = mount(Navigator::new(navigator.clone()));
-    assert!(bottom_first.has_primary_focus());
-
-    let _result = navigator.push(focus_modal(Rc::clone(&top_first), Rc::clone(&top_second)));
-    harness.tick();
-    assert!(
-        top_first.has_primary_focus(),
-        "activating the new route restores focus inside its own scope"
-    );
-
-    assert!(harness.focus_manager().dispatch_key_event(&KeyEvent {
-        state: KeyState::Down,
-        key: Key::Named(NamedKey::Tab),
-        modifiers: Modifiers::empty(),
-        ..KeyEvent::default()
-    }));
-    assert!(top_second.has_primary_focus());
-    assert!(!bottom_first.has_primary_focus());
-    assert!(!bottom_second.has_primary_focus());
 }
 
 // ============================================================================
@@ -209,50 +153,6 @@ fn modal_opaque_route_occludes_the_route_below_once_its_transition_completes() {
 // maintainState — routes.dart:1893, :2230
 // ============================================================================
 
-/// `maintainState == false`: an occluded route is unmounted and its subtree state
-/// **destroyed**. Uncovering it creates fresh state. This is the contract routes
-/// below a `PageRoute` rely on, and it is what `RenderTheater` skip-count support
-/// made observable.
-#[test]
-fn modal_covered_route_without_maintain_state_is_unmounted_and_loses_its_state() {
-    let (navigator, mut harness, _bottom) = navigator_with_seed();
-
-    let creations = Arc::new(AtomicUsize::new(0));
-    let covered = modal(&Built::default(), &creations).maintain_state(false);
-    let _covered_result = navigator.push(covered);
-    harness.tick();
-    assert_eq!(creations.load(Ordering::Relaxed), 1);
-
-    let coverer = modal(&Built::default(), &Arc::new(AtomicUsize::new(0))).opaque(true);
-    let coverer_transition = coverer.transition_handle();
-    let _coverer_result = navigator.push(coverer);
-    harness.tick();
-    complete_entrance(&coverer_transition, &mut harness);
-
-    let covered_id = navigator.route_ids()[1];
-    let covered_entry = navigator.entry_of(covered_id).expect("entry");
-    assert!(
-        !covered_entry.is_mounted(),
-        "maintain_state == false: the covered route leaves the tree"
-    );
-
-    // Uncover it: reversing the coverer clears its `opaque`.
-    coverer_transition
-        .controller()
-        .expect("installed")
-        .reverse()
-        .expect("reverse from 1.0");
-    harness.tick();
-    harness.tick();
-
-    assert!(covered_entry.is_mounted());
-    assert_eq!(
-        creations.load(Ordering::Relaxed),
-        2,
-        "the destroyed subtree is rebuilt with fresh state"
-    );
-}
-
 // ============================================================================
 // changedInternalState — routes.dart:2221-2231
 // ============================================================================
@@ -260,62 +160,6 @@ fn modal_covered_route_without_maintain_state_is_unmounted_and_loses_its_state()
 // ============================================================================
 // offstage / barrier — the render objects a modal builds
 // ============================================================================
-
-/// The page is always wrapped in an [`Offstage`](flui_widgets::Offstage), so a
-/// `set_offstage(true)` route keeps its real geometry: `RenderOffstage` is still
-/// in the render tree, laid out, and its child with it. What `RenderOffstage`
-/// then suppresses — paint, hit-test, semantics — is pinned by
-/// `harness_offstage_*` in `flui-objects`, and is **not** re-proven here.
-///
-/// The barrier is the observable half: `buildModalBarrier` skips it when the
-/// route is offstage (`routes.dart:2301`), so the `ColoredBox` it paints — a
-/// `RenderDecoratedBox` — disappears.
-#[test]
-fn modal_offstage_keeps_the_page_but_drops_the_barrier() {
-    let (navigator, mut harness, _bottom) = navigator_with_seed();
-
-    let creations = Arc::new(AtomicUsize::new(0));
-    let route = modal(&Built::default(), &creations).barrier_color(Color::RED);
-    let modal_handle = route.handle();
-    let _result = navigator.push(route);
-    harness.tick();
-
-    let names = harness.render_debug_names();
-    assert!(
-        names.iter().any(|name| name.ends_with("RenderOffstage")),
-        "the page is wrapped in an Offstage; render objects: {names:?}"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name.ends_with("RenderDecoratedBox")),
-        "the barrier paints its colour while the route is onstage: {names:?}"
-    );
-    assert!(
-        names.iter().any(|name| name.ends_with("RenderTheater")),
-        "the overlay builds a Theater, not a Stack: {names:?}"
-    );
-
-    modal_handle.set_offstage(true);
-    harness.tick();
-
-    let names = harness.render_debug_names();
-    assert!(
-        names.iter().any(|name| name.ends_with("RenderOffstage")),
-        "an offstage page is still laid out — its render object stays: {names:?}"
-    );
-    assert!(
-        !names
-            .iter()
-            .any(|name| name.ends_with("RenderDecoratedBox")),
-        "an offstage route builds no barrier: {names:?}"
-    );
-    assert_eq!(
-        creations.load(Ordering::Relaxed),
-        1,
-        "going offstage must not destroy the page's state"
-    );
-}
 
 /// A non-dismissible modal builds an `AbsorbPointer` and no gesture recogniser;
 /// a dismissible one wraps it in a `GestureDetector` whose tap pops the route

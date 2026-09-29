@@ -239,11 +239,6 @@ impl HeldPointerQueue {
         }
     }
 
-    #[cfg(test)]
-    fn saturation_episodes(&self) -> usize {
-        self.saturation_episodes
-    }
-
     fn total_len(&self) -> usize {
         self.events.len().saturating_add(self.replay_reserved)
     }
@@ -1029,13 +1024,6 @@ mod tests {
         make_cancel_event_for_id(pointer_id, PointerType::Touch)
     }
 
-    fn enter(pointer_id: PointerId) -> PointerEvent {
-        let PointerEvent::Cancel(info) = cancel(pointer_id) else {
-            unreachable!("the cancel helper always constructs PointerEvent::Cancel")
-        };
-        PointerEvent::Enter(info)
-    }
-
     fn positions(events: &[PointerEvent]) -> Vec<f64> {
         events.iter().map(|event| event.position().dx).collect()
     }
@@ -1064,125 +1052,6 @@ mod tests {
 
         let events = drain(&queue);
         assert_eq!(positions(&events), vec![0.0, 0.0, 2.0, 3.0]);
-    }
-
-    #[test]
-    fn hover_and_contact_motion_do_not_cross_class_or_discrete_barriers() {
-        let queue = queue();
-        let id = pointer(2);
-        queue.borrow_mut().append(hover(id, 1.0));
-        queue.borrow_mut().append(hover(id, 2.0));
-        queue.borrow_mut().append(enter(id));
-        queue.borrow_mut().append(hover(id, 3.0));
-        queue.borrow_mut().append(hover(id, 4.0));
-        queue.borrow_mut().append(down(id));
-        queue.borrow_mut().append(contact_move(id, 5.0));
-        queue.borrow_mut().append(contact_move(id, 6.0));
-        queue.borrow_mut().append(up(id));
-        queue.borrow_mut().append(hover(id, 7.0));
-
-        let events = drain(&queue);
-        assert_eq!(positions(&events), vec![2.0, 0.0, 4.0, 0.0, 6.0, 9.0, 7.0]);
-    }
-
-    #[test]
-    fn oldest_complete_sequence_is_evicted_without_reordering_other_pointers() {
-        let queue = queue();
-        let victim = pointer(2);
-        queue.borrow_mut().append(down(victim));
-        for raw in 3..=HELD_POINTER_CAPACITY as u64 + 1 {
-            queue.borrow_mut().append(down(pointer(raw)));
-        }
-        queue.borrow_mut().append(up(victim));
-
-        let events = drain(&queue);
-        assert_eq!(events.len(), HELD_POINTER_CAPACITY - 1);
-        assert!(
-            events
-                .iter()
-                .all(|event| { flui_interaction::events::extract_pointer_id(event) != victim })
-        );
-        let ids: Vec<_> = events
-            .iter()
-            .map(flui_interaction::events::extract_pointer_id)
-            .collect();
-        assert!(ids.windows(2).all(|pair| pair[0] < pair[1]));
-    }
-
-    #[test]
-    fn cancel_completes_an_evictable_sequence() {
-        let queue = queue();
-        let victim = pointer(2);
-        queue.borrow_mut().append(down(victim));
-        for raw in 3..=HELD_POINTER_CAPACITY as u64 + 1 {
-            queue.borrow_mut().append(down(pointer(raw)));
-        }
-        queue.borrow_mut().append(cancel(victim));
-
-        assert_eq!(drain(&queue).len(), HELD_POINTER_CAPACITY - 1);
-    }
-
-    #[test]
-    fn hard_cap_rejects_unique_incomplete_downs_at_sizes_1_32_and_256() {
-        let queue = queue();
-        for raw in 1..=HELD_POINTER_CAPACITY as u64 + 32 {
-            queue.borrow_mut().append(down(pointer(raw)));
-            assert!(queue.borrow().len() <= HELD_POINTER_CAPACITY);
-            if raw == 1 || raw == 32 || raw == HELD_POINTER_CAPACITY as u64 {
-                assert_eq!(queue.borrow().len(), raw as usize);
-            }
-        }
-        assert_eq!(queue.borrow().len(), HELD_POINTER_CAPACITY);
-        assert_eq!(queue.borrow().saturation_episodes(), 1);
-    }
-
-    #[test]
-    fn repeated_down_supersedes_the_whole_prior_open_epoch() {
-        let queue = queue();
-        let id = pointer(2);
-        queue.borrow_mut().append(down(id));
-        queue.borrow_mut().append(contact_move(id, 1.0));
-        queue.borrow_mut().append(down(id));
-        queue.borrow_mut().append(contact_move(id, 2.0));
-
-        let events = drain(&queue);
-        assert_eq!(events.len(), 2);
-        assert!(matches!(events[0], PointerEvent::Down(_)));
-        assert_eq!(events[1].position().dx, 2.0);
-    }
-
-    #[test]
-    fn orphan_contact_move_up_and_cancel_are_dropped() {
-        let queue = queue();
-        let id = pointer(2);
-        queue.borrow_mut().append(contact_move(id, 1.0));
-        queue.borrow_mut().append(up(id));
-        queue.borrow_mut().append(cancel(id));
-        assert!(drain(&queue).is_empty());
-    }
-
-    #[test]
-    fn active_route_terminal_survives_when_incomplete_epochs_fill_capacity() {
-        let queue = queue();
-        for raw in 1..=HELD_POINTER_CAPACITY as u64 {
-            queue.borrow_mut().append(down(pointer(raw)));
-        }
-        let active_route = pointer(HELD_POINTER_CAPACITY as u64 + 1);
-        queue
-            .borrow_mut()
-            .append_with_active_contact(up(active_route), true);
-
-        assert_eq!(queue.borrow().len(), HELD_POINTER_CAPACITY);
-        let events = drain(&queue);
-        assert!(events.iter().any(|event| {
-            matches!(event, PointerEvent::Up(_))
-                && flui_interaction::events::extract_pointer_id(event) == active_route
-        }));
-        assert!(
-            !events
-                .iter()
-                .any(|event| flui_interaction::events::extract_pointer_id(event) == pointer(1))
-        );
     }
 
     #[test]

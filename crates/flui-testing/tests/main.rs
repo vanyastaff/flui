@@ -15,8 +15,7 @@
 //! They are process-wide by necessity — `tracing`'s per-callsite interest cache
 //! is — but they hold no state, receive no events, and never occupy the global
 //! default subscriber slot, so nothing here can observe another module's
-//! capture. The test that DOES claim that slot lives in its own target,
-//! `log_capture_global_subscriber.rs`.
+//! capture.
 
 #[path = "a11y_query.rs"]
 mod a11y_query;

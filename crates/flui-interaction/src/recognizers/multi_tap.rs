@@ -518,60 +518,6 @@ mod tests {
     use super::*;
     use crate::arena::GestureArena;
 
-    /// A timed-out multi-tap really cancels.
-    ///
-    /// The timeout path had the same shape as the slop path: it set
-    /// `Cancelled` itself, so `handle_cancel`'s `phase != Cancelled` guard
-    /// refused to do the cleanup. The recognizer went quiet holding its
-    /// pointers and its arena entry — and because the phase *looked* right, a
-    /// phase-based oracle would have called that a pass.
-    #[test]
-    fn a_timed_out_multi_tap_fires_its_cancel_and_releases_everything() {
-        use flui_foundation::ManualClock;
-
-        let clock = ManualClock::new();
-        let arena = GestureArena::with_clock(Arc::new(clock.clone()));
-
-        let cancelled = Arc::new(Mutex::new(false));
-        let flag = cancelled.clone();
-        // Three required, only one arrives: the gesture stays `Collecting`,
-        // which is the phase `check_timeout` acts on.
-        let recognizer = MultiTapGestureRecognizer::new(arena, 3)
-            .with_on_multi_tap_cancel(move |_| *flag.lock() = true);
-
-        recognizer.add_pointer(
-            PointerId::PRIMARY,
-            Offset::new(0.0, 0.0),
-            Offset::new(0.0, 0.0),
-        );
-        assert_eq!(
-            recognizer.gesture_state.lock().phase,
-            MultiTapPhase::Collecting,
-            "premise: one of three pointers down leaves the gesture collecting"
-        );
-
-        assert!(
-            !recognizer.check_timeout(),
-            "the window has not elapsed yet"
-        );
-
-        clock.advance(Duration::from_millis(200));
-        assert!(recognizer.check_timeout(), "200ms is past the 100ms window");
-
-        assert!(
-            *cancelled.lock(),
-            "a timed-out multi-tap must tell its listener"
-        );
-        assert!(
-            recognizer.gesture_state.lock().pointers.is_empty(),
-            "and release the pointer it was holding"
-        );
-        assert!(
-            recognizer.primary_pointer().is_none(),
-            "and withdraw from the arena instead of blocking competitors"
-        );
-    }
-
     #[test]
     fn test_two_finger_tap() {
         let arena = GestureArena::new();

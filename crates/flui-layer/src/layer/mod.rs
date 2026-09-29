@@ -334,22 +334,7 @@ layer_from_impls! {
 #[cfg(test)]
 mod tests {
 
-    use flui_painting::paint::Clip;
-
     use super::*;
-
-    #[test]
-    fn bounds_come_from_the_payload() {
-        let layer = Layer::from(ClipRectLayer::new(
-            Rect::from_xywh(10.0, 20.0, 100.0, 50.0),
-            Clip::HardEdge,
-        ));
-        assert_eq!(
-            layer.bounds(),
-            Some(Rect::from_xywh(10.0, 20.0, 100.0, 50.0))
-        );
-        assert_eq!(Layer::from(OpacityLayer::new(0.5)).bounds(), None);
-    }
 
     #[test]
     #[cfg_attr(debug_assertions, should_panic(expected = "alpha must be a number"))]

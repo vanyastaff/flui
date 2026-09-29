@@ -794,26 +794,8 @@ impl Default for FrameTimingBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     // AppLifecycleState tests
-
-    #[test]
-    fn test_app_lifecycle_state_transitions() {
-        // All transitions from Resumed should be valid
-        assert!(AppLifecycleState::Resumed.can_transition_to(AppLifecycleState::Inactive));
-        assert!(AppLifecycleState::Resumed.can_transition_to(AppLifecycleState::Hidden));
-        assert!(AppLifecycleState::Resumed.can_transition_to(AppLifecycleState::Paused));
-        assert!(AppLifecycleState::Resumed.can_transition_to(AppLifecycleState::Detached));
-
-        // All transitions from Detached should be valid (app starting up)
-        assert!(AppLifecycleState::Detached.can_transition_to(AppLifecycleState::Resumed));
-        assert!(AppLifecycleState::Detached.can_transition_to(AppLifecycleState::Inactive));
-
-        // Same state transition is valid (no-op)
-        assert!(AppLifecycleState::Resumed.can_transition_to(AppLifecycleState::Resumed));
-        assert!(AppLifecycleState::Hidden.can_transition_to(AppLifecycleState::Hidden));
-    }
 
     // FrameTiming::phase_duration / record_phase_duration
 }

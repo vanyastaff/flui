@@ -18,8 +18,6 @@ pub(crate) mod hot_reload;
 pub(crate) mod lifecycle;
 pub(crate) mod logging;
 pub(crate) mod raster_lane;
-#[cfg(test)]
-pub(crate) mod raster_test_support;
 pub mod runner;
 pub(crate) mod runtime;
 pub(crate) mod window_registry;

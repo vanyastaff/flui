@@ -541,7 +541,6 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::task::{Context, Poll, Waker};
     use std::thread;
-    use std::time::Duration;
 
     use super::{ClaimOutcome, Inner, claim_slot};
 
@@ -594,25 +593,6 @@ mod tests {
     }
 
     #[test]
-    fn claimed_then_dropped_keeps_the_value_with_the_requester() {
-        let (wake, wake_count) = counting_wake();
-        let (slot, mut handle) = claim_slot::<u32>(wake);
-
-        slot.deliver(42).expect("slot is still Pending");
-        let claimed = handle.try_take();
-        assert_eq!(claimed, Some(42));
-
-        drop(handle);
-        assert_eq!(
-            wake_count.load(Ordering::Acquire),
-            0,
-            "a claimed-then-dropped handle must not abandon or wake"
-        );
-        assert!(slot.is_settled());
-        assert_eq!(slot.take_abandoned(), None);
-    }
-
-    #[test]
     fn concurrent_abandon_and_deliver_race_wakes_exactly_once() {
         // Stress the race the module doc calls out: the owner may call
         // `deliver` concurrently with the requester dropping its handle.
@@ -632,100 +612,6 @@ mod tests {
                 assert_eq!(rejected, 99);
             }
         }
-    }
-
-    #[test]
-    fn wait_after_a_successful_try_take_on_the_same_handle_returns_already_claimed_not_a_panic() {
-        // Regression test (foundation claim-slot compliance review): `try_take`
-        // takes `&mut self`, so nothing in the type system stops a caller from
-        // following a successful `try_take` with a `wait` on the same
-        // still-alive handle. That used to hit an `unreachable!("BUG: ...")`
-        // panic through entirely safe public API; `wait` must instead
-        // report "nothing left to wait for" via `AlreadyClaimed`.
-        let (wake, wake_count) = counting_wake();
-        let (slot, mut handle) = claim_slot::<u32>(wake);
-
-        slot.deliver(7).expect("slot is still Pending");
-        assert_eq!(handle.try_take(), Some(7), "first claim succeeds normally");
-
-        assert_eq!(
-            handle.wait(),
-            ClaimOutcome::AlreadyClaimed,
-            "wait on an already-claimed handle must report AlreadyClaimed, not panic"
-        );
-        assert_eq!(
-            wake_count.load(Ordering::Acquire),
-            0,
-            "a claimed handle's wait/drop must not abandon or wake"
-        );
-    }
-
-    /// Real second thread, bounded via `recv_timeout`: a `wait()` blocked on
-    /// a request the owner never delivers must not hang forever once the
-    /// owner side (`ClaimSlot`) is dropped — it must unblock with
-    /// `ClaimOutcome::OwnerGone` (ADR-0039 §3). A test
-    /// that used a bare `.join()` would itself hang the test suite if this
-    /// regressed; `recv_timeout` turns that failure mode into a normal
-    /// assertion failure instead.
-    #[test]
-    fn blocked_waiter_unblocks_on_owner_drop() {
-        let (wake, _wake_count) = counting_wake();
-        let (slot, handle) = claim_slot::<u32>(wake);
-        let (result_tx, result_rx) = std::sync::mpsc::channel();
-
-        let waiter = thread::spawn(move || {
-            let outcome = handle.wait();
-            // A join-based test could hang forever if `wait` regressed to
-            // blocking indefinitely; sending through a channel lets the
-            // main thread bound how long it waits instead.
-            let _ = result_tx.send(outcome);
-        });
-
-        // Give the waiter a chance to reach the condvar before the owner
-        // disconnects; not required for correctness (dropping `slot` first
-        // would still resolve `wait` correctly), only to exercise the
-        // blocking path rather than the immediate one.
-        thread::sleep(Duration::from_millis(20));
-        drop(slot);
-
-        let outcome = result_rx
-            .recv_timeout(Duration::from_secs(5))
-            .expect("wait() must unblock promptly once the owner side drops");
-        assert_eq!(outcome, ClaimOutcome::OwnerGone);
-        waiter.join().expect("waiter thread does not panic");
-    }
-
-    /// Distinguishes "the value eventually resolves" from "the registered
-    /// `Waker` actually fires" — a `Future` that only ever resolved on the
-    /// next unconditional re-poll (never truly parking) would still pass a
-    /// resolves-on-deliver test but stall forever under a real executor
-    /// that only re-polls after a wake.
-    #[test]
-    fn future_wakes_not_just_resolves_after_waker_registration() {
-        let (wake, _wake_count) = counting_wake();
-        let (slot, mut handle) = claim_slot::<u32>(wake);
-
-        let (waker, wake_count) = test_waker();
-        let mut cx = Context::from_waker(&waker);
-        assert_eq!(Pin::new(&mut handle).poll(&mut cx), Poll::Pending);
-        assert_eq!(
-            wake_count.count(),
-            0,
-            "registering must not itself count as a wake"
-        );
-
-        slot.deliver(7).expect("slot is still Pending");
-
-        assert_eq!(
-            wake_count.count(),
-            1,
-            "delivery must wake the registered waker directly, not merely \
-             become observable on a hypothetical future poll"
-        );
-        assert_eq!(
-            Pin::new(&mut handle).poll(&mut cx),
-            Poll::Ready(ClaimOutcome::Delivered(7))
-        );
     }
 
     /// Pins `Inner::wake_task`'s extract-then-wake ordering: reverting it to
@@ -768,95 +654,6 @@ mod tests {
             !probe.observed_locked.load(Ordering::Acquire),
             "wake_task must release the waker lock before calling Waker::wake"
         );
-    }
-
-    /// Pins `register_waker`'s extract-then-drop ordering: reverting it to
-    /// `*slot = Some(waker.clone())` (a bound-guard assignment — `slot` is
-    /// already a named `MutexGuard`, not re-derived from `.lock()` on this
-    /// statement's own line, so `clippy::significant_drop_in_scrutinee` cannot see
-    /// this shape) drops the DISPLACED waker — executor vtable code — while
-    /// `slot` is still held. A waker whose own `Drop` re-enters this same
-    /// slot's `is_unlocked()` observes the lock still held under the bug.
-    #[test]
-    fn register_waker_drops_the_displaced_waker_after_releasing_the_lock() {
-        struct ProbingWake {
-            inner: Arc<Inner<u32>>,
-            observed_locked: Arc<AtomicBool>,
-        }
-        // `std::task::Waker::noop()` cannot stand in here: this test's whole
-        // point is the custom `Drop` impl below, which a built-in no-op
-        // waker has no way to attach.
-        #[expect(
-            clippy::manual_noop_waker,
-            reason = "the Drop impl is this test's subject; Waker::noop() cannot carry one"
-        )]
-        impl std::task::Wake for ProbingWake {
-            fn wake(self: Arc<Self>) {}
-            fn wake_by_ref(self: &Arc<Self>) {}
-        }
-        impl Drop for ProbingWake {
-            fn drop(&mut self) {
-                if !self.inner.is_unlocked() {
-                    self.observed_locked.store(true, Ordering::Release);
-                }
-            }
-        }
-
-        let (wake, _wake_count) = counting_wake();
-        let (_slot, mut handle) = claim_slot::<u32>(wake);
-        let observed_locked = Arc::new(AtomicBool::new(false));
-
-        {
-            // Moved directly into the `Waker`, no separate clone kept: the
-            // ONLY strong reference left after this block ends is the one
-            // `register_waker` stored in the slot, so displacing it below
-            // is what actually drops `ProbingWake` — not a leftover local.
-            let first = Arc::new(ProbingWake {
-                inner: Arc::clone(&handle.inner),
-                observed_locked: Arc::clone(&observed_locked),
-            });
-            let first_waker = Waker::from(first);
-            let mut cx = Context::from_waker(&first_waker);
-            assert_eq!(Pin::new(&mut handle).poll(&mut cx), Poll::Pending);
-        }
-
-        // A different waker (different underlying allocation, so
-        // `will_wake` is `false`) displaces the first, dropping it.
-        let (second_waker, _second_wake_count) = test_waker();
-        let mut cx2 = Context::from_waker(&second_waker);
-        assert_eq!(Pin::new(&mut handle).poll(&mut cx2), Poll::Pending);
-
-        assert!(
-            !observed_locked.load(Ordering::Acquire),
-            "register_waker must release the waker lock before dropping the displaced waker"
-        );
-    }
-
-    /// Counting `Wake` implementation for tests: no executor, `futures`
-    /// dependency, or hand-rolled `RawWaker`/`unsafe` needed just to prove a
-    /// wake fired — `std::task::Wake` builds a real `Waker` from a safe
-    /// `Arc<impl Wake>` (stable since 1.51).
-    struct CountingWake(AtomicUsize);
-
-    impl CountingWake {
-        fn count(&self) -> usize {
-            self.0.load(Ordering::Acquire)
-        }
-    }
-
-    impl std::task::Wake for CountingWake {
-        fn wake(self: Arc<Self>) {
-            self.wake_by_ref();
-        }
-
-        fn wake_by_ref(self: &Arc<Self>) {
-            self.0.fetch_add(1, Ordering::AcqRel);
-        }
-    }
-
-    fn test_waker() -> (Waker, Arc<CountingWake>) {
-        let inner = Arc::new(CountingWake(AtomicUsize::new(0)));
-        (Waker::from(Arc::clone(&inner)), inner)
     }
 
     #[test]

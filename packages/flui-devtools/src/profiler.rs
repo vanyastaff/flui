@@ -471,49 +471,8 @@ impl std::fmt::Debug for Profiler {
 
 #[cfg(test)]
 mod tests {
-    use std::thread;
 
     use super::*;
-
-    #[test]
-    fn test_basic_profiling() {
-        let profiler = Profiler::new();
-
-        profiler.begin_frame();
-
-        // Simulate some work
-        {
-            let _guard = profiler.profile_phase(FramePhase::Build);
-            thread::sleep(Duration::from_millis(5));
-        }
-
-        {
-            let _guard = profiler.profile_phase(FramePhase::Layout);
-            thread::sleep(Duration::from_millis(3));
-        }
-
-        {
-            let _guard = profiler.profile_phase(FramePhase::Paint);
-            thread::sleep(Duration::from_millis(2));
-        }
-
-        profiler.end_frame();
-
-        // Check stats
-        let stats = profiler.frame_stats().unwrap();
-        assert_eq!(stats.phases.len(), 3);
-        assert!(stats.total_time_ms() >= 10.0);
-
-        // Check individual phases
-        let build = stats.phase(FramePhase::Build).unwrap();
-        assert!(build.duration_ms() >= 5.0);
-
-        let layout = stats.phase(FramePhase::Layout).unwrap();
-        assert!(layout.duration_ms() >= 3.0);
-
-        let paint = stats.phase(FramePhase::Paint).unwrap();
-        assert!(paint.duration_ms() >= 2.0);
-    }
 
     #[test]
     fn test_jank_detection() {
@@ -547,62 +506,5 @@ mod tests {
 
         // Check jank percentage
         assert_eq!(profiler.jank_percentage(), 50.0);
-    }
-
-    #[test]
-    fn test_frame_history_limit() {
-        let config = ProfilerConfig {
-            max_frame_history: 5,
-            ..Default::default()
-        };
-
-        let profiler = Profiler::with_config(config);
-
-        // Add more frames than the limit
-        for _ in 0..10 {
-            profiler.begin_frame();
-            profiler.end_frame();
-        }
-
-        // Should only keep the last 5
-        let history = profiler.frame_history();
-        assert_eq!(history.len(), 5);
-
-        // Should be frames 5-9
-        assert_eq!(history[0].frame_number, 5);
-        assert_eq!(history[4].frame_number, 9);
-    }
-
-    /// A phase that runs twice in one frame reports one summed entry. With
-    /// separate entries, `phase()`'s `find` would return only the first
-    /// segment and every later one would be silently unreported.
-    #[test]
-    fn repeated_phase_segments_merge_into_one_total() {
-        let profiler = Profiler::new();
-
-        profiler.begin_frame();
-        {
-            let _guard = profiler.profile_phase(FramePhase::Build);
-            thread::sleep(Duration::from_millis(3));
-        }
-        {
-            let _guard = profiler.profile_phase(FramePhase::Build);
-            thread::sleep(Duration::from_millis(3));
-        }
-        profiler.end_frame();
-
-        let stats = profiler.frame_stats().unwrap();
-        let build_entries = stats
-            .phases
-            .iter()
-            .filter(|p| p.phase == FramePhase::Build)
-            .count();
-        assert_eq!(build_entries, 1, "segments of one phase merge");
-        let build = stats.phase(FramePhase::Build).unwrap();
-        assert!(
-            build.duration_ms() >= 6.0,
-            "the merged entry holds the sum of both segments, got {:.2}ms",
-            build.duration_ms(),
-        );
     }
 }

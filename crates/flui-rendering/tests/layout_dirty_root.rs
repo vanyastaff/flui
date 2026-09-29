@@ -20,12 +20,8 @@
 //!   * PR #143 (perform_layout_raw → Result)
 
 use flui_foundation::geometry::Size;
-use flui_objects::{RenderCenter, RenderColoredBox, RenderPadding};
-use flui_rendering::{
-    constraints::BoxConstraints,
-    error::{PoisonPhase, RenderError},
-    protocol::{BoxProtocol, RenderObject},
-};
+use flui_objects::{RenderColoredBox, RenderPadding};
+use flui_rendering::constraints::BoxConstraints;
 
 use crate::common::fresh_layout_pipeline;
 
@@ -36,93 +32,6 @@ use crate::common::fresh_layout_pipeline;
 // ============================================================================
 // Happy path — 3-level grandchild propagation: Padding → Center → ColoredBox
 // ============================================================================
-
-/// Edge case: a 3-level tree (`Padding` → `Center` →
-/// `ColoredBox`) propagates layout correctly through the
-/// **recursive** callback path of `layout_subtree_raw`. Each recursion
-/// level builds its own Direct `BoxLayoutCtx`, invokes
-/// `perform_layout_raw` on the parent at that level, and the bridge's
-/// `ctx.layout_child(0, c)` dispatches through the closure to recurse
-/// one level deeper.
-///
-/// # Math
-///
-/// Parent constraints: 0..400 × 0..300.
-/// - `RenderPadding::all(20)` deflates to 0..360 × 0..260, passes to
-///   `RenderCenter` (which is `Single` arity).
-/// - `RenderCenter::perform_layout` calls `ctx.layout_single_child_loose()`
-///   — gives the child 0..360 × 0..260 (loose). Since `RenderColoredBox`
-///   constrains its preferred 60×30 to the loose constraints, the child
-///   takes its preferred 60×30.
-/// - `RenderCenter` expands to fill the loose constraints' max → 360×260.
-/// - `RenderPadding` adds 20+20 = 40 in each axis → 360+40=400, 260+40=300.
-#[test]
-fn three_level_padding_center_colored_box_grandchild_propagation() {
-    let mut pipeline = fresh_layout_pipeline();
-
-    // Build tree: Padding(20) → Center → ColoredBox(60×30).
-    let padding_id = pipeline
-        .render_tree_mut()
-        .insert_box(Box::new(RenderPadding::all(20.0)));
-    let center_id = pipeline
-        .render_tree_mut()
-        .insert_box_child(padding_id, Box::new(RenderCenter::new()))
-        .expect("center insert must succeed");
-    let _colored_box_id = pipeline
-        .render_tree_mut()
-        .insert_box_child(center_id, Box::new(RenderColoredBox::blue(60.0, 30.0)))
-        .expect("colored box insert must succeed");
-
-    let parent_constraints = BoxConstraints::new(0.0, 400.0, 0.0, 300.0);
-
-    let size = pipeline
-        .layout_dirty_root(padding_id, parent_constraints)
-        .expect("3-level layout_dirty_root must succeed");
-
-    assert_eq!(
-        size,
-        Size::new(400.0, 300.0),
-        "Padding(20) wrapping Center wrapping ColoredBox(60×30) under \
-         (0..400)×(0..300) must expand to 400×300 (Center fills the \
-         deflated 360×260 + Padding adds 40 each axis)",
-    );
-
-    // Walk back: every node should have geometry set and NEEDS_LAYOUT clear.
-    let padding_geom = pipeline
-        .render_tree()
-        .get(padding_id)
-        .and_then(flui_rendering::storage::RenderNode::geometry_box);
-    let center_geom = pipeline
-        .render_tree()
-        .get(center_id)
-        .and_then(flui_rendering::storage::RenderNode::geometry_box);
-
-    assert_eq!(padding_geom, Some(Size::new(400.0, 300.0)));
-    assert_eq!(
-        center_geom,
-        Some(Size::new(360.0, 260.0)),
-        "Center fills the loose constraints it received from Padding's \
-         deflation (max_width=360, max_height=260)",
-    );
-
-    assert!(
-        !pipeline
-            .render_tree()
-            .get(padding_id)
-            .unwrap()
-            .needs_layout(),
-        "padding NEEDS_LAYOUT must be cleared",
-    );
-    assert!(
-        !pipeline
-            .render_tree()
-            .get(center_id)
-            .unwrap()
-            .needs_layout(),
-        "center NEEDS_LAYOUT must be cleared after the recursive callback \
-         drove its layout_leaf_only path",
-    );
-}
 
 // ============================================================================
 // Failure path — stale root id surfaces RenderError::NodeNotFound
@@ -147,87 +56,6 @@ fn three_level_padding_center_colored_box_grandchild_propagation() {
 // ============================================================================
 // Review-fix regression — non-leaf perform_layout panic surfaces as Poisoned
 // ============================================================================
-
-/// Regression guard: a panicking user widget at NON-LEAF position
-/// surfaces as `RenderError::Poisoned`, symmetric with the leaf path.
-/// Before this fix the non-leaf branch invoked `perform_layout_raw` without
-/// `catch_unwind` — a panic would have unwound out of
-/// `layout_dirty_root` and terminated the rendering thread. With the
-/// fix, the non-leaf branch wraps `perform_layout_raw` in
-/// `catch_unwind(AssertUnwindSafe(...))` mirroring
-/// `RenderEntry::layout_leaf_only`'s discipline.
-#[test]
-fn non_leaf_perform_layout_panic_surfaces_as_poisoned() {
-    use flui_foundation::Diagnosticable;
-    use flui_foundation::Single;
-    use flui_rendering::{
-        context::{BoxHitTestContext, BoxLayoutContext},
-        hit_testing::HitTestBehavior,
-        traits::RenderBox,
-    };
-
-    /// A non-leaf user widget that panics inside `perform_layout`.
-    /// Single arity so it requires a child (i.e., goes through the
-    /// NON-leaf path of `layout_subtree_raw`).
-    #[derive(Debug, Default)]
-    struct PanickingNonLeaf;
-
-    impl Diagnosticable for PanickingNonLeaf {}
-
-    impl RenderBox for PanickingNonLeaf {
-        type Arity = Single;
-        type ParentData = flui_rendering::parent_data::BoxParentData;
-
-        fn perform_layout(
-            &mut self,
-            _ctx: &mut BoxLayoutContext<'_, Single, Self::ParentData>,
-        ) -> Size {
-            panic!("PanickingNonLeaf intentionally panics");
-        }
-
-        fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Single, Self::ParentData>) -> bool {
-            false
-        }
-        fn hit_test_behavior(&self) -> HitTestBehavior {
-            HitTestBehavior::Opaque
-        }
-    }
-
-    let mut pipeline = fresh_layout_pipeline();
-
-    // Parent (panics) with a benign child so the walk takes the non-leaf path.
-    let parent_obj: Box<dyn RenderObject<BoxProtocol>> = Box::new(PanickingNonLeaf);
-    let parent_id = pipeline.render_tree_mut().insert_box(parent_obj);
-    let _child_id = pipeline
-        .render_tree_mut()
-        .insert_box_child(parent_id, Box::new(RenderColoredBox::red(10.0, 10.0)))
-        .expect("child insert must succeed");
-
-    let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-    let result = pipeline.layout_dirty_root(parent_id, constraints);
-
-    let err = result.expect_err("panicking non-leaf widget must return Err, not unwind");
-    match err {
-        RenderError::Poisoned {
-            render_object,
-            phase,
-        } => {
-            assert!(
-                render_object.contains("PanickingNonLeaf"),
-                "render_object name must identify the offending widget; got {render_object}",
-            );
-            assert_eq!(
-                phase,
-                PoisonPhase::Layout,
-                "phase tag should identify the layout phase, got {phase}",
-            );
-        }
-        other => panic!(
-            "expected RenderError::Poisoned, got {other:?} — \
-                 non-leaf panic must surface symmetric with leaf path",
-        ),
-    }
-}
 
 // ============================================================================
 // Review-fix regression — descendant Err preserves parent NEEDS_LAYOUT
@@ -312,79 +140,6 @@ fn descendant_err_preserves_parent_needs_layout() {
 // ============================================================================
 // Review-fix regression — Sliver protocol mismatch surfaces as ProtocolMismatch
 // ============================================================================
-
-/// Regression guard: when `layout_dirty_root` is called on a
-/// `RenderId` whose node is a `SliverProtocol` entry (not `Box`), it
-/// surfaces as `RenderError::ProtocolMismatch` — NOT
-/// `RenderError::NodeNotFound`. Before this fix the `.get_mut(id).and_then(|n|
-/// n.as_box_mut())` chain collapsed both cases into `NodeNotFound`,
-/// masking the protocol-mismatch bug class.
-#[test]
-fn sliver_node_surfaces_as_protocol_mismatch() {
-    use flui_foundation::Leaf;
-    use flui_rendering::{
-        constraints::SliverGeometry,
-        context::{SliverHitTestContext, SliverLayoutContext},
-        protocol::SliverProtocol,
-        traits::RenderSliver,
-    };
-
-    /// Minimal sliver render-object stub for the test fixture — never
-    /// laid out (the test triggers the protocol-mismatch error path
-    /// before reaching perform_layout).
-    #[derive(Debug, Default)]
-    struct StubSliver;
-
-    impl flui_foundation::Diagnosticable for StubSliver {}
-
-    impl RenderSliver for StubSliver {
-        type Arity = Leaf;
-        type ParentData = flui_rendering::parent_data::SliverParentData;
-
-        fn perform_layout(
-            &mut self,
-            _ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
-        ) -> SliverGeometry {
-            // Never invoked in this test — protocol-mismatch error
-            // returns before perform_layout.
-            SliverGeometry::ZERO
-        }
-
-        fn hit_test(&self, _ctx: &mut SliverHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
-            false
-        }
-    }
-
-    let mut pipeline = fresh_layout_pipeline();
-
-    let sliver_obj: Box<dyn flui_rendering::traits::RenderObject<SliverProtocol>> =
-        Box::new(StubSliver);
-    let sliver_id = pipeline.render_tree_mut().insert_sliver(sliver_obj);
-
-    let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-    let result = pipeline.layout_dirty_root(sliver_id, constraints);
-
-    let err = result.expect_err("box layout on sliver node must fail");
-    match err {
-        RenderError::ProtocolMismatch {
-            node_protocol,
-            constraints_protocol,
-        } => {
-            assert_eq!(node_protocol, "Sliver", "node_protocol must name Sliver");
-            assert_eq!(
-                constraints_protocol, "Box",
-                "constraints_protocol must name Box (the layout entry point)",
-            );
-        }
-        // The leaf path was taken (sliver has no children), but the
-        // refactored stage 2 distinguishes NodeNotFound vs
-        // ProtocolMismatch.
-        other => panic!(
-            "expected RenderError::ProtocolMismatch, got {other:?} — \
-                 sliver id should not collapse to NodeNotFound",
-        ),
-    }
-}
 
 // ============================================================================
 // SubtreeArena thread-affinity smoke

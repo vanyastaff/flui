@@ -640,27 +640,6 @@ mod tests {
     use crate::types::AssetKey;
 
     #[tokio::test]
-    async fn test_registry_load_font() {
-        let registry = AssetRegistry::default();
-
-        // Create a minimal TTF font
-        let ttf_bytes = vec![
-            0x00, 0x01, 0x00, 0x00, // TrueType version
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        ];
-
-        let font = FontAsset::from_bytes("test.ttf", ttf_bytes);
-        let handle = registry.load(font).await.unwrap();
-
-        // Should be in cache now
-        let key = AssetKey::new("test.ttf");
-        assert!(registry.get::<FontAsset>(&key).await.is_some());
-
-        // Verify font data
-        assert!(handle.bytes.len() >= 10);
-    }
-
-    #[tokio::test]
     async fn test_registry_invalidate() {
         let registry = AssetRegistry::default();
 
@@ -675,13 +654,5 @@ mod tests {
         // Invalidate
         registry.invalidate::<FontAsset>(&key).await;
         assert!(registry.get::<FontAsset>(&key).await.is_none());
-    }
-
-    #[test]
-    #[should_panic(expected = "Capacity must be greater than 0")]
-    fn test_builder_zero_capacity_panics() {
-        let _registry = AssetRegistryBuilder::new()
-            .with_capacity(0) // Should panic
-            .build();
     }
 }

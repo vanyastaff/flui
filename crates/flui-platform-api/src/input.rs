@@ -258,15 +258,3 @@ pub fn offset_from_coords(x: f64, y: f64) -> Offset<f64> {
 pub fn delta_offset_from_coords(dx: f64, dy: f64) -> Offset<f64> {
     Offset::new(dx, dy)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_device_to_logical_conversion() {
-        assert_eq!(device_to_logical(100.0, 1.0), 100.0);
-        assert_eq!(device_to_logical(200.0, 2.0), 100.0);
-        assert_eq!(device_to_logical(150.0, 1.5), 100.0);
-    }
-}

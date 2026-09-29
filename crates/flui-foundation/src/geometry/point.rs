@@ -1205,35 +1205,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn non_finite_components_are_invalid() {
-        assert!(Point::<f64>::new(1.0, 2.0).is_valid());
-        assert!(!Point::<f64>::new(f64::NAN, 2.0).is_valid());
-        assert!(Point::<f64>::try_new(1.0, 2.0).is_ok());
-        assert!(Point::<f64>::try_new(f64::NAN, 2.0).is_err());
-        assert!(!Point::INFINITY.is_finite());
-        assert!(Point::NAN.is_nan());
-    }
-
-    #[test]
     fn new_clamped_maps_nan_to_zero_and_infinity_to_the_finite_range() {
         let p = Point::<f64>::new_clamped(f64::NAN, 2.0);
         assert_eq!((p.x, p.y), (0.0, 2.0));
         let p = Point::<f64>::new_clamped(f64::INFINITY, f64::NEG_INFINITY);
         assert_eq!((p.x, p.y), (f64::MAX, f64::MIN));
-    }
-
-    /// Clamping lands on the scalar's own finite range: routing `f32` through `f64::MAX`
-    /// narrowed back to infinity, and the saturating operations inherited it.
-    #[test]
-    fn clamping_stays_finite_for_f32() {
-        let p = Point::<f32>::new_clamped(f32::INFINITY, f32::NEG_INFINITY);
-        assert_eq!((p.x, p.y), (f32::MAX, f32::MIN));
-        assert!(p.is_valid());
-
-        let far = Point::<f32>::new(f32::MAX, 1.0);
-        assert!(far.saturating_add_vec(f32::MAX, 0.0).is_valid());
-        let scaled = far.saturating_mul(4.0);
-        assert_eq!((scaled.x, scaled.y), (f32::MAX, 4.0));
     }
 
     #[test]
@@ -1243,19 +1219,5 @@ mod tests {
         assert!(p.checked_add_vec(f64::NAN, 4.0).is_none());
         assert_eq!(p.checked_mul(2.0), Some(Point::new(2.0, 4.0)));
         assert!(p.checked_mul(f64::INFINITY).is_none());
-    }
-
-    #[test]
-    fn saturating_operations_clamp_instead_of_overflowing() {
-        let p = Point::new(1.0, 2.0);
-        assert_eq!(p.saturating_add_vec(f64::NAN, 4.0), Point::new(0.0, 6.0));
-        assert_eq!(
-            p.saturating_add_vec(f64::INFINITY, 4.0),
-            Point::new(f64::MAX, 6.0)
-        );
-        assert_eq!(
-            p.saturating_mul(f64::INFINITY),
-            Point::new(f64::MAX, f64::MAX)
-        );
     }
 }

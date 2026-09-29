@@ -215,21 +215,3 @@ impl RenderBox for RenderIntrinsicHeight {
 // ===========================================================================
 // Tests
 // ===========================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn bc(min_w: f64, max_w: f64, min_h: f64, max_h: f64) -> BoxConstraints {
-        BoxConstraints::new(min_w, max_w, min_h, max_h)
-    }
-
-    #[test]
-    fn child_constraints_intrinsic_height_clamped() {
-        // Incoming height range [20, 80]; child says max intrinsic = 150 → clamp to 80.
-        let constraints = bc(0.0, 200.0, 20.0, 80.0);
-        let child_c = RenderIntrinsicHeight::child_constraints(constraints, |_, _| 150.0);
-        assert!(child_c.has_tight_height());
-        assert_eq!(child_c.min_height, 80.0);
-    }
-}

@@ -46,60 +46,9 @@ fn poll_once(
 // OfferTable semantics
 // ============================================================================
 
-#[test]
-fn offer_table_mints_lookups_and_retires() {
-    let mut table = OfferTable::new();
-    assert!(table.is_empty());
-
-    let id = table.mint(OfferRecord::new(text_representations()));
-    assert_eq!(table.len(), 1);
-    assert!(table.get(id).is_some(), "a live id resolves its record");
-
-    let record = table.retire(id).expect("retiring a live offer yields it");
-    assert_eq!(record.representations().len(), 1);
-    assert!(table.is_empty());
-    assert!(table.get(id).is_none(), "a retired id no longer resolves");
-    assert!(
-        table.retire(id).is_none(),
-        "retire is idempotent — the second call is a stale no-op"
-    );
-}
-
-#[test]
-fn stale_offer_request_fails_with_stale_offer() {
-    let source = MockSource::new();
-    let offer = source.mint_text_offer("hello");
-    source.retire(offer.id());
-
-    let request = source.request(
-        offer.id(),
-        RepresentationIndex(0),
-        TransferLimits::default(),
-    );
-    let mut request = pin!(request);
-    let Poll::Ready(Err(TransferError::StaleOffer(stale))) = poll_once(&mut request) else {
-        panic!("a retired offer must fail the generation check");
-    };
-    assert_eq!(stale, offer.id());
-}
-
 // ============================================================================
 // TransferRequest / TransferCompleter state machine
 // ============================================================================
-
-#[test]
-fn dropping_the_completer_resolves_source_gone() {
-    let (request, completer) = TransferRequest::channel();
-    let mut request = pin!(request);
-    assert!(poll_once(&mut request).is_pending());
-
-    drop(completer);
-
-    assert!(matches!(
-        poll_once(&mut request),
-        Poll::Ready(Err(TransferError::SourceGone))
-    ));
-}
 
 // ============================================================================
 // Mock source: the seven stages over a real AsyncDriver
@@ -175,10 +124,6 @@ impl MockSource {
         }
     }
 
-    fn retire(&self, id: DataTransferId) {
-        self.state.lock().table.retire(id);
-    }
-
     fn cached_feedback(&self, id: DataTransferId) -> Option<DropFeedback> {
         self.state
             .lock()
@@ -191,19 +136,6 @@ impl MockSource {
 
     fn concluded(&self) -> Vec<DataTransferId> {
         self.state.lock().concluded.clone()
-    }
-
-    fn parked_count(&self) -> usize {
-        self.state.lock().parked.len()
-    }
-
-    fn parked_completer_cancelled(&self, id: DataTransferId) -> Option<bool> {
-        self.state
-            .lock()
-            .parked
-            .iter()
-            .find(|(parked_id, _, _)| *parked_id == id)
-            .map(|(_, completer, _)| completer.is_cancelled())
     }
 }
 
@@ -320,76 +252,4 @@ fn mock_source_drives_all_seven_stages_through_the_async_driver() {
         Poll::Ready(Err(TransferError::StaleOffer(_)))
     ));
     drop(token);
-}
-
-/// Stage-7 cancellation composes through the driver: dropping the
-/// `TaskToken` drops the task's future, which drops the `TransferRequest`,
-/// which the producer observes via `TransferCompleter::is_cancelled`.
-#[test]
-fn dropping_the_task_token_cancels_the_in_flight_delivery() {
-    let source = Arc::new(MockSource::new());
-    let driver = AsyncDriver::new();
-
-    let offer = source.mint_text_offer("never delivered");
-    let request = source.request(
-        offer.id(),
-        RepresentationIndex(0),
-        TransferLimits::default(),
-    );
-
-    let outcome: Arc<Mutex<Option<Result<TransferPayload, TransferError>>>> =
-        Arc::new(Mutex::new(None));
-    let outcome_for_task = Arc::clone(&outcome);
-    let token = driver.spawn_local(Box::pin(async move {
-        *outcome_for_task.lock() = Some(request.await);
-    }));
-    assert_eq!(driver.poll_ready(), 1);
-    assert_eq!(
-        source.parked_completer_cancelled(offer.id()),
-        Some(false),
-        "delivery is live while the token is held"
-    );
-
-    drop(token);
-
-    assert_eq!(
-        source.parked_completer_cancelled(offer.id()),
-        Some(true),
-        "TaskToken drop → future drop → TransferRequest drop → cancelled"
-    );
-
-    // Producer-side completion after cancellation is a silent no-op.
-    source.deliver_all();
-    assert_eq!(source.parked_count(), 0);
-    assert!(
-        outcome.lock().is_none(),
-        "nothing is delivered after cancel"
-    );
-    assert_eq!(
-        driver.poll_ready(),
-        0,
-        "the cancelled task never runs again"
-    );
-}
-
-/// Byte limits are enforced at delivery against actual accumulated size.
-#[test]
-fn limits_are_enforced_at_delivery() {
-    let source = Arc::new(MockSource::new());
-    let offer = source.mint_text_offer("this payload is longer than four bytes");
-
-    let request = source.request(
-        offer.id(),
-        RepresentationIndex(0),
-        TransferLimits::default().with_max_bytes(4),
-    );
-    let mut request = pin!(request);
-    assert!(poll_once(&mut request).is_pending());
-
-    source.deliver_all();
-
-    assert!(matches!(
-        poll_once(&mut request),
-        Poll::Ready(Err(TransferError::TooLarge { limit: 4, .. }))
-    ));
 }

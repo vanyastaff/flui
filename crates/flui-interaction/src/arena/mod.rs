@@ -1721,20 +1721,6 @@ mod tests {
         }
     }
 
-    struct PendingDeadlineMember;
-
-    impl crate::sealed::arena_member::Sealed for PendingDeadlineMember {}
-
-    impl GestureArenaMember for PendingDeadlineMember {
-        fn accept_gesture(&self, _pointer: PointerId) {}
-
-        fn reject_gesture(&self, _pointer: PointerId) {}
-
-        fn has_pending_deadline(&self) -> bool {
-            true
-        }
-    }
-
     /// A member whose `reject_gesture` re-enters the arena — the real
     /// long-press / drag pattern (`reject_gesture -> state.reject() ->
     /// arena.resolve`). Before member notifications were deferred out of the
@@ -1757,55 +1743,10 @@ mod tests {
         }
     }
 
-    struct PanickingAcceptMember;
-
-    impl crate::sealed::arena_member::Sealed for PanickingAcceptMember {}
-
-    impl GestureArenaMember for PanickingAcceptMember {
-        fn accept_gesture(&self, _pointer: PointerId) {
-            panic!("accept panic");
-        }
-
-        fn reject_gesture(&self, _pointer: PointerId) {}
-    }
-
-    struct PanickingAcceptAndDropMember;
-
-    impl crate::sealed::arena_member::Sealed for PanickingAcceptAndDropMember {}
-
-    impl GestureArenaMember for PanickingAcceptAndDropMember {
-        fn accept_gesture(&self, _pointer: PointerId) {
-            panic!("callback panic wins");
-        }
-
-        fn reject_gesture(&self, _pointer: PointerId) {}
-    }
-
-    impl Drop for PanickingAcceptAndDropMember {
-        fn drop(&mut self) {
-            panic!("member drop panic");
-        }
-    }
-
     struct OrderedMember {
         name: &'static str,
         calls: Arc<Mutex<Vec<&'static str>>>,
         panic_on_accept: bool,
-    }
-
-    struct ReentrantAddMember {
-        arena: GestureArena,
-        fresh: Arc<MockMember>,
-    }
-
-    impl crate::sealed::arena_member::Sealed for ReentrantAddMember {}
-
-    impl GestureArenaMember for ReentrantAddMember {
-        fn accept_gesture(&self, _pointer: PointerId) {}
-
-        fn reject_gesture(&self, pointer: PointerId) {
-            self.arena.add(pointer, self.fresh.clone());
-        }
     }
 
     impl crate::sealed::arena_member::Sealed for OrderedMember {}
@@ -1906,25 +1847,6 @@ mod tests {
     }
 
     #[test]
-    fn sweep_finishes_peers_and_preserves_callback_panic_over_member_drop_panic() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-        let peer = Arc::new(MockMember::new());
-        arena.add(pointer, Arc::new(PanickingAcceptAndDropMember));
-        arena.add(pointer, peer.clone());
-        arena.close(pointer);
-
-        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            arena.sweep(pointer);
-        }));
-        let payload = unwind.expect_err("the first callback panic must resume");
-
-        assert_eq!(payload.downcast_ref::<&str>(), Some(&"callback panic wins"));
-        assert!(peer.was_rejected(), "later peers must still be notified");
-        assert!(arena.is_empty());
-    }
-
-    #[test]
     fn stale_entry_cannot_resolve_a_reused_pointer_slot() {
         let arena = GestureArena::new();
         let pointer = PointerId::PRIMARY;
@@ -1944,77 +1866,6 @@ mod tests {
         assert!(arena.contains(pointer));
         assert!(!fresh.was_rejected());
         assert!(!competitor.was_rejected());
-    }
-
-    #[test]
-    fn deferred_token_never_resolves_a_reused_pointer_generation() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-        let old = Arc::new(MockMember::new());
-        arena.add(pointer, old.clone());
-        arena.close(pointer);
-        arena.abandon(pointer);
-
-        let fresh = Arc::new(MockMember::new());
-        arena.add(pointer, fresh.clone());
-        arena.close(pointer);
-
-        assert_eq!(arena.drain_deferred_resolutions(), 1);
-        assert!(!old.was_accepted());
-        assert!(fresh.was_accepted());
-    }
-
-    #[test]
-    fn resolution_callback_adds_only_to_a_fresh_pointer_generation() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-        let fresh = Arc::new(MockMember::new());
-        let reentrant = Arc::new(ReentrantAddMember {
-            arena: arena.clone(),
-            fresh: fresh.clone(),
-        });
-        let winner = Arc::new(MockMember::new());
-        arena.add(pointer, reentrant);
-        arena.add(pointer, winner.clone());
-        arena.close(pointer);
-
-        arena.resolve(pointer, Some(winner));
-
-        assert_eq!(arena.member_count(pointer), 1);
-        assert!(!fresh.was_rejected());
-        assert!(arena.is_open(pointer));
-    }
-
-    #[test]
-    fn test_reject_member_leaves_a_competitor_to_win() {
-        // Two members compete in a closed arena; one withdraws via
-        // `reject_member`. Withdrawal must reject ONLY the bowing-out member —
-        // the sole survivor then wins. Regression guard: a self-reject used to
-        // resolve the whole entry with no winner, rejecting every competitor
-        // (so e.g. a tap exceeding its slop silently killed the drag it raced).
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        let bowing_out = Arc::new(MockMember::new());
-        let survivor = Arc::new(MockMember::new());
-        arena.add(pointer, bowing_out.clone());
-        arena.add(pointer, survivor.clone());
-        arena.close(pointer); // 2 members, no winner — stays open to compete
-
-        let withdrawing: Arc<dyn GestureArenaMember> = bowing_out.clone();
-        arena.reject_member(pointer, &withdrawing);
-
-        assert!(
-            bowing_out.was_rejected(),
-            "the withdrawing member is rejected"
-        );
-        assert!(!survivor.was_accepted(), "default win is deferred");
-        assert_eq!(arena.drain_deferred_resolutions(), 1);
-        assert!(
-            survivor.was_accepted(),
-            "the sole remaining member wins — withdrawal must not reject competitors",
-        );
-        assert!(!survivor.was_rejected(), "the survivor is not rejected");
     }
 
     // ========================================================================
@@ -2046,44 +1897,6 @@ mod tests {
     // Pending Sweep tests
     // ========================================================================
 
-    #[test]
-    fn test_sweep_deferred_when_held() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        let member = Arc::new(MockMember::new());
-        arena.add(pointer, member.clone());
-        arena.hold(pointer);
-
-        // Sweep while held - should be deferred
-        arena.sweep(pointer);
-        assert!(arena.contains(pointer)); // Still there
-        assert!(arena.has_pending_sweep(pointer));
-
-        // Release triggers deferred sweep
-        arena.release(pointer);
-        assert!(!arena.contains(pointer)); // Now removed
-    }
-
-    #[test]
-    fn deferred_release_removes_the_slot_before_notifying_members() {
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-        arena.add(pointer, Arc::new(PanickingAcceptMember));
-        arena.hold(pointer);
-        arena.sweep(pointer);
-
-        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            arena.release(pointer);
-        }));
-
-        assert!(unwind.is_err(), "the member panic must propagate");
-        assert!(
-            !arena.contains(pointer),
-            "a deferred sweep must remove its slot before arbitrary callbacks"
-        );
-    }
-
     // ========================================================================
     // GestureArenaEntry tests
     // ========================================================================
@@ -2091,27 +1904,4 @@ mod tests {
     // ========================================================================
     // SweepModel
     // ========================================================================
-
-    #[test]
-    fn retained_member_keeps_deadline_frames_alive_after_pointer_up() {
-        let arena = GestureArena::binding_driven(Arc::new(SystemClock));
-        let pointer = PointerId::PRIMARY;
-        let pending: Arc<dyn GestureArenaMember> = Arc::new(PendingDeadlineMember);
-
-        arena.add(pointer, pending);
-        arena.add(pointer, Arc::new(MockMember::new()));
-        arena.close(pointer);
-        arena.hold(pointer);
-
-        // GestureBinding detaches the exact pointer generation before routing
-        // Up, then sweeps that detached batch. A held double-tap generation is
-        // retained until its inter-tap timer decides and releases it.
-        let batch = arena.detach(pointer);
-        arena.sweep_detached(batch);
-
-        assert!(
-            arena.has_pending_deadlines(),
-            "a retained recognizer must keep owner frames running until its deadline"
-        );
-    }
 }

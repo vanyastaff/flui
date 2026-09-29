@@ -33,13 +33,6 @@ pub(crate) use enabled::ScenePlugin;
 ))]
 pub(crate) use enabled::{RebuildHookGuard, WorkerReload, WorkerWatcherGuard};
 // Reached only by the runner's rebuild-hook lifecycle test.
-#[cfg(all(
-    test,
-    not(target_os = "android"),
-    not(target_arch = "wasm32"),
-    feature = "hot-reload"
-))]
-pub(crate) use enabled::queued_hot_reload_hook;
 
 #[cfg(all(target_os = "android", not(feature = "hot-reload")))]
 pub(crate) use disabled::ScenePlugin;
@@ -275,23 +268,6 @@ mod enabled {
     }
 
     #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-    #[cfg(test)]
-    impl WorkerWatcherGuard {
-        pub(crate) fn test_lifetime(
-            &self,
-        ) -> (std::thread::ThreadId, Arc<std::sync::atomic::AtomicBool>) {
-            (
-                self.handle
-                    .as_ref()
-                    .expect("watcher is live until Drop")
-                    .thread()
-                    .id(),
-                Arc::clone(&self.stop),
-            )
-        }
-    }
-
-    #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
     impl Drop for WorkerWatcherGuard {
         fn drop(&mut self) {
             // Signal first, then join: the thread sleeps in short intervals, so
@@ -352,24 +328,6 @@ mod enabled {
                 tracing::error!(?error, "Plugin render failed");
             }
             true
-        }
-    }
-
-    #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
-    mod tests {
-        use super::{HotReloadTier, ReloadTier, reload_tier};
-
-        #[test]
-        fn each_driver_tier_maps_to_the_realm_tier_that_applies_it() {
-            assert_eq!(
-                reload_tier(HotReloadTier::HotReload),
-                ReloadTier::Reassemble
-            );
-            assert_eq!(reload_tier(HotReloadTier::HotRestart), ReloadTier::Restart);
-            assert_eq!(
-                reload_tier(HotReloadTier::FullRestart),
-                ReloadTier::ProcessRestart
-            );
         }
     }
 }

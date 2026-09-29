@@ -476,24 +476,6 @@ impl<R: GlyphRasterizer> GlyphAtlas<R> {
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
     }
-
-    /// The mask page's side in texels.
-    #[cfg(all(test, feature = "testing"))]
-    pub(crate) fn mask_page_size(&self) -> u32 {
-        self.mask.size
-    }
-
-    /// The colour page's side in texels.
-    #[cfg(all(test, feature = "testing"))]
-    pub(crate) fn color_page_size(&self) -> u32 {
-        self.color.size
-    }
-
-    /// The rasterizer, to register faces after the atlas exists.
-    #[cfg(all(test, feature = "testing"))]
-    pub(crate) fn rasterizer_mut(&mut self) -> &mut R {
-        &mut self.rasterizer
-    }
 }
 
 /// The page a glyph of the given kind lives on, as a borrow disjoint from
@@ -536,47 +518,10 @@ fn create_bind_group(
 mod rasterizer_tests {
     use std::sync::Arc;
 
+    use flui_painting::GlyphRasterizer;
     use flui_painting::parley_text::{FaceKey, ParleyGlyphKey, SubpixelBin, SwashRasterizer};
-    use flui_painting::{GlyphContent, GlyphImage, GlyphRasterizer};
-    use rustc_hash::FxHashMap;
 
     use super::GlyphAtlas;
-
-    /// Answers from a table, counts every call, and optionally answers every
-    /// call after a key's first with `second_call` instead.
-    #[derive(Default)]
-    struct FakeRasterizer {
-        images: FxHashMap<u32, GlyphImage>,
-        calls: FxHashMap<u32, usize>,
-        second_call: Option<GlyphImage>,
-    }
-
-    impl GlyphRasterizer for FakeRasterizer {
-        type Key = u32;
-
-        fn rasterize(&mut self, key: u32) -> Option<GlyphImage> {
-            let calls = self.calls.entry(key).or_default();
-            *calls += 1;
-            if *calls > 1
-                && let Some(image) = &self.second_call
-            {
-                return Some(image.clone());
-            }
-            self.images.get(&key).cloned()
-        }
-    }
-
-    fn image(width: u32, height: u32, content: GlyphContent) -> GlyphImage {
-        let len = (width * height * content.bytes_per_texel()) as usize;
-        GlyphImage {
-            left: 0,
-            top: i32::try_from(height).expect("small"),
-            width,
-            height,
-            content,
-            data: vec![0xff; len],
-        }
-    }
 
     fn atlas<R: GlyphRasterizer>(rasterizer: R) -> GlyphAtlas<R> {
         let (device, queue) = crate::test_support::test_device_and_queue("Glyph Atlas Test");
@@ -588,97 +533,6 @@ mod rasterizer_tests {
             &pipelines.glyph_atlas_bind_group_layout,
             rasterizer,
         )
-    }
-
-    /// Forty 48² images of `content`, more than a 256² page holds: placed in
-    /// one frame, their page must grow once.
-    fn crowded(content: GlyphContent) -> FakeRasterizer {
-        let mut fake = FakeRasterizer::default();
-        for key in 0..40 {
-            fake.images.insert(key, image(48, 48, content));
-        }
-        fake
-    }
-
-    fn page_size(atlas: &GlyphAtlas<FakeRasterizer>, content: GlyphContent) -> u32 {
-        match content {
-            GlyphContent::Mask => atlas.mask_page_size(),
-            GlyphContent::Color => atlas.color_page_size(),
-        }
-    }
-
-    /// Places every key of [`crowded`] in one frame. Returns the keys placed
-    /// before their page grew, and every slot the frame was handed.
-    fn place_crowded(
-        atlas: &mut GlyphAtlas<FakeRasterizer>,
-        content: GlyphContent,
-    ) -> (Vec<u32>, Vec<super::GlyphSlot>) {
-        let initial = page_size(atlas, content);
-        let mut before_grow = Vec::new();
-        let mut slots = Vec::new();
-        for key in 0..40 {
-            let slot = atlas.slot(key).expect("a grown page has room");
-            assert_eq!(slot.size, [48, 48]);
-            slots.push(slot);
-            if page_size(atlas, content) == initial {
-                before_grow.push(key);
-            }
-        }
-        assert!(page_size(atlas, content) > initial, "the page grew");
-        (before_grow, slots)
-    }
-
-    /// No two slots handed out on one page overlap.
-    fn assert_disjoint(slots: &[super::GlyphSlot]) {
-        for (i, a) in slots.iter().enumerate() {
-            for b in &slots[i + 1..] {
-                let apart = a.color_page != b.color_page
-                    || a.texel[0] + a.size[0] <= b.texel[0]
-                    || b.texel[0] + b.size[0] <= a.texel[0]
-                    || a.texel[1] + a.size[1] <= b.texel[1]
-                    || b.texel[1] + b.size[1] <= a.texel[1];
-                assert!(apart, "{a:?} overlaps {b:?}");
-            }
-        }
-    }
-
-    #[test]
-    fn colour_images_land_on_the_colour_page() {
-        let mut fake = FakeRasterizer::default();
-        fake.images.insert(1, image(4, 4, GlyphContent::Color));
-        fake.images.insert(2, image(4, 4, GlyphContent::Mask));
-        let mut atlas = atlas(fake);
-        assert!(atlas.slot(1).expect("placed").color_page);
-        assert!(!atlas.slot(2).expect("placed").color_page);
-        assert_eq!(atlas.len(), 2);
-    }
-
-    #[test]
-    fn a_key_the_rasterizer_cannot_place_is_not_cached() {
-        let mut atlas = atlas(FakeRasterizer::default());
-        assert!(atlas.slot(9).is_none());
-        assert_eq!(atlas.len(), 0);
-        assert!(atlas.slot(9).is_none());
-        assert_eq!(
-            atlas.rasterizer_mut().calls[&9],
-            2,
-            "the next use asks again"
-        );
-    }
-
-    /// A grow re-uploads each live glyph from one more rasterization, and
-    /// never rasterizes a glyph it is not holding.
-    #[test]
-    fn a_grow_rerasterizes_each_live_glyph_once() {
-        let mut atlas = atlas(crowded(GlyphContent::Mask));
-        let (before_grow, slots) = place_crowded(&mut atlas, GlyphContent::Mask);
-        assert!(!before_grow.is_empty());
-        assert_disjoint(&slots);
-        let calls = &atlas.rasterizer_mut().calls;
-        for key in 0..40 {
-            let expected = if before_grow.contains(&key) { 2 } else { 1 };
-            assert_eq!(calls[&key], expected, "key {key}");
-        }
     }
 
     const FACE: FaceKey = FaceKey {

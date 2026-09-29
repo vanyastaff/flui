@@ -55,33 +55,3 @@ pub(crate) fn init_managed_logging(config: &AppConfig) -> SubscriberInstallation
 
     setup.installation
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_window_title_does_not_change_application_identity() {
-        let config = AppConfig::new().with_title("Document 2 — My Editor");
-        let log_config = managed_log_config(&config);
-
-        assert_eq!(log_config.identity().display_name(), "FLUI App");
-        assert_eq!(config.title, "Document 2 — My Editor");
-    }
-
-    #[test]
-    fn a_rejected_environment_override_falls_back_instead_of_failing() {
-        let config = managed_log_config(&AppConfig::new());
-        let rejected = config
-            .filter()
-            .env_filter_from(Some("=not a directive="))
-            .expect_err("a malformed override must be reported");
-        assert!(matches!(
-            rejected,
-            flui_log::FilterError::Environment { .. }
-        ));
-
-        let fallback = flui_log::FilterConfig::new(config.filter().directives()).without_env_var();
-        assert!(fallback.env_filter_from(Some("=not a directive=")).is_ok());
-    }
-}

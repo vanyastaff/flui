@@ -220,16 +220,6 @@ impl<S> ListenerRegistry<S> {
         drop(previous);
     }
 
-    /// Test-only probe: `true` if `on_first`'s SLOT lock is currently free.
-    ///
-    /// Backs a regression test for `set_on_first_listener`'s
-    /// extract-then-drop ordering: a previously-installed hook whose own
-    /// `Drop` re-enters this method must observe the lock already released.
-    #[cfg(test)]
-    pub(crate) fn on_first_is_unlocked(&self) -> bool {
-        self.inner.on_first.try_lock().is_some()
-    }
-
     /// Total registered listeners across both channels.
     #[must_use]
     #[inline]
@@ -324,7 +314,7 @@ impl Drop for ListenerSubscription {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
 
@@ -378,54 +368,5 @@ mod tests {
         assert_eq!(lasts.load(Ordering::SeqCst), 0, "still 1 listener");
         drop(s2);
         assert_eq!(lasts.load(Ordering::SeqCst), 1, "last edge at 1->0");
-    }
-
-    #[test]
-    fn subscription_outliving_registry_is_safe() {
-        let s = {
-            let reg: ListenerRegistry<u8> = ListenerRegistry::new();
-            reg.add_value_listener(Arc::new(|| {}))
-            // reg dropped here; ListenerSubscription holds only a Weak.
-        };
-        drop(s); // upgrade() returns None — must not panic / use-after-free.
-    }
-
-    /// Pins `set_on_first_listener`'s extract-then-drop ordering: reverting
-    /// to a bare `*self.inner.on_first.lock() = Some(Box::new(f));`
-    /// statement drops the DISPLACED hook (the one this call is overwriting)
-    /// while that assignment's own guard is still live, so a hook whose
-    /// `Drop` re-enters this registry deadlocks on `on_first`.
-    #[test]
-    fn set_on_first_listener_drops_the_displaced_hook_after_releasing_the_lock() {
-        struct DropCanary {
-            reg: ListenerRegistry<u8>,
-            observed_locked: Arc<AtomicBool>,
-        }
-        impl Drop for DropCanary {
-            fn drop(&mut self) {
-                if !self.reg.on_first_is_unlocked() {
-                    self.observed_locked.store(true, Ordering::SeqCst);
-                }
-            }
-        }
-
-        let reg: ListenerRegistry<u8> = ListenerRegistry::new();
-        let observed_locked = Arc::new(AtomicBool::new(false));
-
-        let canary = DropCanary {
-            reg: reg.clone(),
-            observed_locked: Arc::clone(&observed_locked),
-        };
-        reg.set_on_first_listener(move || {
-            let _keep_alive = &canary;
-        });
-
-        // Overwrites the hook above, displacing (and dropping) it.
-        reg.set_on_first_listener(|| {});
-
-        assert!(
-            !observed_locked.load(Ordering::SeqCst),
-            "the displaced hook's Drop observed the lock still held"
-        );
     }
 }

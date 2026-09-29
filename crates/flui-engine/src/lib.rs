@@ -369,10 +369,9 @@ pub(crate) mod layer_walk;
 // readback_dump is shared test-support for every GPU readback/oracle test in
 // this module: when `FLUI_READBACK_DUMP_DIR` is set, each local readback
 // helper dumps the actual frame as a PNG there (the CI GPU job uploads
-// `<dir>/**/*.png` as an artifact on oracle failure). Compiled for all test
-// builds — not just `testing` — so its no-GPU unit tests run on
-// every host; with the env var unset every entry point is a no-op.
-#[cfg(test)]
+// `<dir>/**/*.png` as an artifact on oracle failure). With the env var
+// unset every entry point is a no-op.
+#[cfg(all(test, feature = "testing"))]
 mod readback_dump;
 
 // test_support is the other half of the shared scaffolding: adapter/device
@@ -419,27 +418,11 @@ mod gradient_blend_readback_tests;
 #[cfg(all(test, feature = "testing"))]
 mod aa_oracle_tests;
 
-#[cfg(all(test, feature = "testing"))]
-mod deterministic_replay_tests;
-
 // layer_blend_tests contains both cfg(test) unit tests and
 // cfg(all(test, feature = "testing")) GPU tests.
 // Include the file whenever test compilation is active.
 #[cfg(test)]
 mod layer_blend_tests;
-
-// GPU acceptance tests for shape-level advanced blend (rect/rrect
-// tessellated path → DrawItem::AdvancedShape); the CPU-side unit tests are
-// inline in batches/mod.rs.
-#[cfg(all(test, feature = "testing"))]
-mod shape_blend_tests;
-
-// gradient_image_blend_tests holds the GPU acceptance tests for advanced
-// (dst-read) blend on gradients and images — the `dispatch_shader_rect` and
-// `draw_image*` paths. Gradient-diversion unit tests are inline in
-// batches/mod.rs.
-#[cfg(all(test, feature = "testing"))]
-mod gradient_image_blend_tests;
 
 // color_matrix_filter_tests contains GPU readback tests for the
 // color-matrix filter pass (identity, swap-R↔B, translucent premul roundtrip,
@@ -447,50 +430,13 @@ mod gradient_image_blend_tests;
 #[cfg(all(test, feature = "testing"))]
 mod color_matrix_filter_tests;
 
-// morphology_filter_tests contains M1-M6 GPU readback tests for the
-// morphology filter pass (identity, dilate border expand, erode border contract,
-// premul-direct discriminator, decal boundary, grown_bounds wiring).
+// GPU readback of the morphology filter pass.
 #[cfg(all(test, feature = "testing"))]
 mod morphology_filter_tests;
 
-// mode_filter_tests contains MO1-MO6 GPU readback tests for the
-// ColorFilter::Mode blend pass (Modulate identity, Multiply opaque, SrcOver
-// translucent premul-bracket, Screen separable, Hue non-separable,
-// Luminosity translucent).
-#[cfg(all(test, feature = "testing"))]
-mod mode_filter_tests;
-
-// gamma_filter_tests contains GA1-GA6 GPU readback tests for the gamma
-// transfer filter pass (SrgbToLinear known value, LinearToSrgb inverse,
-// translucent alpha unchanged, round-trip ≈ identity, black/white boundary).
-#[cfg(all(test, feature = "testing"))]
-mod gamma_filter_tests;
-
-// blur_filter_tests contains B1-B5 GPU readback tests for the Gaussian blur
-// filter pass (no-dark-halo premul discriminator, anisotropy, oracle match,
-// zero-sigma identity, grown_bounds halo extent).
+// GPU readback of the Gaussian blur filter pass against the CPU oracle.
 #[cfg(all(test, feature = "testing"))]
 mod blur_filter_tests;
-
-// compose_filter_tests contains C1-C5 acceptance tests for ImageFilter::Compose
-// flatten + Chain execution: order-matters discriminator (C1), nesting structure
-// (C2), deep-chain heap-spill (C3), cumulative bounds (C4), degenerate cases (C5).
-#[cfg(all(test, feature = "testing"))]
-mod compose_filter_tests;
-
-// color_filter_producer_tests contains P1-P4 GPU readback acceptance tests for
-// the T1 producer-path change: LayerDispatcher::push_color_filter(&ColorFilter) dispatch
-// for Mode (P1), LinearToSrgbGamma (P2), SrgbToLinearGamma (P3), and Matrix (P4).
-// These tests would fail to compile on main (old &ColorMatrix signature).
-#[cfg(all(test, feature = "testing"))]
-mod color_filter_producer_tests;
-
-// scenebuilder_filter_chain_tests contains SC1-SC5 GPU readback acceptance tests
-// for T2′ of `gpu-filters-consumer-chain`: SceneBuilder→LayerTree→LayerRender→
-// LayerDispatcher→GPU pixel closure for image-filter blur (SC1), Mode/Multiply (SC2),
-// LinearToSrgbGamma (SC3), SrgbToLinearGamma (SC4), and Matrix/grayscale (SC5).
-#[cfg(all(test, feature = "testing"))]
-mod scenebuilder_filter_chain_tests;
 
 // ============================================================================
 // RE-EXPORTS (convenience)

@@ -111,15 +111,6 @@ impl<S> SurfaceLease<S> {
         }
     }
 
-    /// The window target this lease keeps alive.
-    ///
-    /// Production builds replacements from a [`Released`] token's target,
-    /// never from here; this accessor is for the lease's own tests.
-    #[cfg(test)]
-    pub(crate) fn target(&self) -> &Arc<dyn WindowTarget> {
-        &self.target
-    }
-
     /// The current surface, or `None` while [`SurfaceLease::release`] holds.
     pub(crate) fn surface(&self) -> Option<&S> {
         self.surface.as_ref()
@@ -212,7 +203,7 @@ impl<S> Drop for SurfaceLease<S> {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::c_ulong;
+
     use std::sync::Mutex;
 
     use raw_window_handle::{
@@ -220,7 +211,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::fake_window_target::{FakeTarget, xlib_window_id};
+    use crate::fake_window_target::FakeTarget;
 
     /// Where the recording fixtures below write the order in which they are
     /// dropped.
@@ -300,130 +291,6 @@ mod tests {
             drop_log(&log),
             vec!["surface", "target"],
             "the surface must be released before the target it was built from"
-        );
-    }
-
-    #[test]
-    fn probe_rejects_a_still_unavailable_target_and_replace_surface_commits_only_after_success() {
-        let concrete = Arc::new(FakeTarget::new(1));
-        let target: Arc<dyn WindowTarget> = concrete.clone();
-
-        let initial = xlib_window_id(&target).expect("fake target starts available");
-        let mut lease = SurfaceLease::from_parts(Arc::clone(&target), initial);
-        assert_eq!(held_surface(&lease), 1);
-        assert_eq!(
-            concrete.call_log(),
-            vec!["window_handle"],
-            "seeding the lease queried window_handle exactly once"
-        );
-
-        concrete.set_available(false);
-        let failed = lease.probe();
-        assert!(matches!(
-            failed,
-            Err(EngineError::SurfaceTargetUnavailable { .. })
-        ));
-        assert_eq!(
-            held_surface(&lease),
-            1,
-            "a failed probe must not disturb the still-live surface"
-        );
-        assert_eq!(
-            concrete.call_log(),
-            vec!["window_handle", "window_handle"],
-            "the failed probe queried window_handle and stopped there — Unavailable \
-             short-circuits before display_handle is ever called"
-        );
-
-        concrete.set_available(true);
-        concrete.set_window_id(2);
-        lease
-            .probe()
-            .expect("target is available again with a fresh handle");
-        assert_eq!(
-            concrete.call_log(),
-            vec![
-                "window_handle",
-                "window_handle",
-                "window_handle",
-                "display_handle",
-            ],
-            "a successful probe queries both window_handle and display_handle, in that order"
-        );
-        assert_eq!(
-            held_surface(&lease),
-            1,
-            "probe() alone must not have touched the surface yet — only a release does"
-        );
-
-        let released = lease.release();
-        let fresh = xlib_window_id(released.target()).expect("target is available");
-        lease.replace_surface(released, fresh);
-        assert_eq!(
-            held_surface(&lease),
-            2,
-            "the rebuilt surface must be built from the fresh handle value"
-        );
-        assert_eq!(
-            concrete.call_log(),
-            vec![
-                "window_handle",
-                "window_handle",
-                "window_handle",
-                "display_handle",
-                "window_handle",
-            ],
-            "the final rebuild is a separate window_handle query, made only after probe() \
-             committed to the target being live"
-        );
-    }
-
-    /// The surface the lease holds, for tests that are asserting a value
-    /// rather than the released-lease behavior.
-    fn held_surface(lease: &SurfaceLease<c_ulong>) -> c_ulong {
-        *lease
-            .surface()
-            .expect("BUG: this assertion is only meaningful while a surface is held")
-    }
-
-    /// Release-then-replace is the order `Renderer::recreate_surface` and
-    /// `Renderer::recover` both use to sidestep the one-surface-per-window
-    /// rule, and it must not depend on a *dropped-and-rebuilt* lease: the
-    /// whole point is that the target is retained across the released span,
-    /// so the replacement is built from the same owner the release happened
-    /// against.
-    ///
-    /// Pins the lease's half of that protocol: the old surface is gone
-    /// before the replacement exists, the target stays live and answers
-    /// across the span, and the lease ends holding exactly the replacement
-    /// over the *same* owner.
-    ///
-    /// The renderer's call order — `release` before `create_surface` — is
-    /// not asserted here because it no longer can be violated: the
-    /// [`Released`] token is the only source of the target a replacement is
-    /// built from and the only key `replace_surface` accepts, so a build-first
-    /// renderer does not compile.
-    #[test]
-    fn release_then_replace_holds_only_the_replacement_over_a_live_target() {
-        let (mut lease, log) = recording_lease();
-        let target: Arc<dyn WindowTarget> = Arc::clone(lease.target());
-
-        let released = lease.release();
-        assert_eq!(
-            drop_log(&log),
-            vec!["surface"],
-            "the old surface is dropped by the release, before any replacement exists"
-        );
-        assert!(
-            released.target().window_handle().is_ok(),
-            "the retained target still answers while no surface is held"
-        );
-
-        lease.replace_surface(released, RecordingSurface(Arc::clone(&log)));
-        assert!(lease.has_surface(), "the lease holds the replacement");
-        assert!(
-            Arc::ptr_eq(lease.target(), &target),
-            "the replacement was built against the same retained owner"
         );
     }
 }

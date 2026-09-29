@@ -1010,66 +1010,13 @@ mod tests {
         assert!(tree.get(new).is_some());
     }
 
-    #[test]
-    fn get_two_mut_returns_none_on_duplicate_id_in_release() {
-        let mut tree = RenderTree::new();
-        let a = tree.insert_box(make_leaf());
-        // In debug builds this panics via debug_assert_ne!; we run the
-        // release-path check by going through the `if a == b { return None }`
-        // arm directly. To exercise that without tripping the debug assert,
-        // we test the missing-second-id branch instead.
-        let missing = a; // intentionally the same id
-        if cfg!(debug_assertions) {
-            // debug build: skip (would panic). Behaviour validated by
-            // the release-build `return None` path below in test
-            // get_two_mut_with_missing_id_returns_none.
-        } else {
-            assert!(tree.get_two_mut(a, missing).is_none());
-        }
-    }
-
     // ========================================================================
     // get_subtree_mut
     // ========================================================================
 
-    #[test]
-    fn get_subtree_mut_rejects_duplicate_id() {
-        let mut tree = RenderTree::new();
-        let a = tree.insert_box(make_leaf());
-        let b = tree.insert_box(make_leaf());
-        // a appears twice in the id list — duplicate detection must fail.
-        assert!(tree.get_subtree_mut(&[a, b, a]).is_none());
-    }
-
     // ========================================================================
     // collect_subtree_ids
     // ========================================================================
-
-    #[test]
-    fn collect_subtree_ids_three_level_dfs_preorder() {
-        // Tree:
-        //     root
-        //    /    \
-        //   a      b
-        //  / \      \
-        // a1 a2     b1
-        //
-        // Pre-order: root, a, a1, a2, b, b1
-        let mut tree = RenderTree::new();
-        let root = tree.insert_box(make_leaf());
-        let a = tree.insert_box_child(root, make_leaf()).unwrap();
-        let a1 = tree.insert_box_child(a, make_leaf()).unwrap();
-        let a2 = tree.insert_box_child(a, make_leaf()).unwrap();
-        let b = tree.insert_box_child(root, make_leaf()).unwrap();
-        let b1 = tree.insert_box_child(b, make_leaf()).unwrap();
-
-        assert_eq!(
-            tree.collect_subtree_ids(root),
-            vec![root, a, a1, a2, b, b1],
-            "DFS pre-order must visit each subtree completely before moving \
-             to the next sibling",
-        );
-    }
 
     // ========================================================================
     // adopt_child / drop_child

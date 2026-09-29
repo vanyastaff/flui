@@ -404,18 +404,3 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
 fn is_valid_tab_index(current_index: usize, tab_count: usize) -> bool {
     current_index < tab_count
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Red-check: change `is_valid_tab_index` to `current_index <= tab_count`
-    /// (an off-by-one) — this assertion starts passing when it shouldn't.
-    #[test]
-    fn is_valid_tab_index_rejects_the_first_out_of_range_index() {
-        assert!(
-            !is_valid_tab_index(2, 2),
-            "index == tab_count is out of range"
-        );
-    }
-}

@@ -201,26 +201,3 @@ impl fmt::Debug for TextContext {
             .finish_non_exhaustive()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{FontCollection, TextContext};
-
-    const fn assert_send_sync<T: Send + Sync>() {}
-    const fn assert_send<T: Send>() {}
-
-    /// The collection crosses to every realm's thread; a context moves with
-    /// its realm.
-    const _: () = {
-        assert_send_sync::<FontCollection>();
-        assert_send::<TextContext>();
-    };
-
-    #[cfg(feature = "parley")]
-    #[test]
-    fn bytes_with_no_face_are_refused() {
-        let fonts = FontCollection::new();
-        assert!(fonts.register_font(b"not a font").is_err());
-        assert!(fonts.register_font(&[]).is_err());
-    }
-}

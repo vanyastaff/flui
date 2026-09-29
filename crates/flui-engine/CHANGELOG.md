@@ -50,8 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `seal_text_tail`, `EngineError::{TextPrepare, TextRender}` and their
   constructors, the `glyphon` dependency. The engine names no cosmic-text
   type (`the_engine_does_not_shape` checks source and manifest).
-- Fixed on the way: a rounded clip now clips text
-  (`text_is_clipped_by_a_rounded_clip`); mid-tone text colour lands as
+- Fixed on the way: a rounded clip now clips text; mid-tone text colour lands as
   recorded on the gamma-space target (`glyph_colour_lands_as_recorded` —
   glyphon converted it to linear); text inside a filter input or advanced
   shape renders with its segment rather than over everything.

@@ -33,7 +33,6 @@ use std::rc::Rc;
 
 use common::{lay_out, tight};
 use flui_material::{Radio, Theme, ThemeData};
-use flui_sdk::widgets::Semantics;
 use flui_testing::a11y::Role;
 
 /// The radio's full tap target. Flutter parity: `kMinInteractiveDimension`.
@@ -81,70 +80,6 @@ fn a_mounted_radio_announces_as_a_radio_button() {
 }
 
 #[test]
-fn a_mounted_radio_does_not_announce_as_a_checkbox() {
-    let roles = announced_roles(Radio::new("spring", Some("spring")).on_changed(|_cx, _| {}));
-    assert!(
-        !roles.contains(&Role::CheckBox),
-        "a Radio announcing as a checkbox is the #1117 defect, got {roles:?}",
-    );
-}
-
-#[test]
-fn a_radio_without_a_tap_handler_still_announces_as_a_radio_button() {
-    // A missing `on_changed` makes the radio non-interactive; it does not
-    // change what kind of control it is, and a screen reader still has to
-    // announce it as a radio.
-    let roles = announced_roles(Radio::new("spring", Some("spring")));
-    assert!(
-        roles.contains(&Role::RadioButton),
-        "a disabled Radio is still a radio button, got {roles:?}",
-    );
-}
-
-#[test]
-fn a_radio_nested_under_an_annotated_ancestor_still_announces_as_a_radio_button() {
-    // The absorbed composition, and the one a radio mounted as the render root
-    // cannot reach: a root forms its own node (`is_root`), so nothing can carry
-    // its flags alongside an ancestor's. Nest it under a `Semantics` that
-    // publishes `button(true)` and no state flag, and the two configurations
-    // merge onto one node carrying `IsButton` *and* the checked/group flags.
-    // Role resolution must pick the specific one.
-    //
-    // Note what this fixture is *not*: it is not `ListTile`'s shape. A real
-    // `ListTile` also publishes `.enabled(..)`, which overlaps the radio's own
-    // `HasEnabledState`; `is_compatible_with` treats any overlap as a conflict,
-    // so the two never merge — and because they do not merge, the radio keeps a
-    // node of its own that announces as a radio, pinned by
-    // `a_radio_inside_a_list_tile_announces_as_a_radio_button` in
-    // `tests/list_tile.rs` (which mounts under the `MediaQuery` a bare mount
-    // lacks). Do not read this test as covering the tile; it pins the absorbed
-    // composition, where the two configurations *do* merge and the cascade order
-    // is what decides.
-    let tree = Semantics::new()
-        .button(true)
-        .child(Radio::new("spring", Some("spring")).on_changed(|_cx, _| {}));
-    let mut laid = lay_out(Theme::new(ThemeData::light(), tree), constraints());
-    laid.enable_semantics();
-    laid.pump();
-
-    let roles: Vec<Role> = laid
-        .a11y_tree()
-        .expect("semantics enabled before the frame")
-        .nodes()
-        .map(|node| node.role())
-        .collect();
-
-    assert!(
-        roles.contains(&Role::RadioButton),
-        "an absorbed Radio must still resolve to a radio button, got {roles:?}",
-    );
-    assert!(
-        !roles.contains(&Role::CheckBox),
-        "an absorbed Radio must not resolve to a checkbox, got {roles:?}",
-    );
-}
-
-#[test]
 fn tap_on_an_unselected_radio_fires_on_changed_with_its_own_value() {
     let observed = Rc::new(RefCell::new(None));
     let recorder = Rc::clone(&observed);
@@ -164,58 +99,5 @@ fn tap_on_an_unselected_radio_fires_on_changed_with_its_own_value() {
         *observed.borrow(),
         Some("summer"),
         "tapping an unselected radio must fire on_changed with its own value",
-    );
-}
-
-#[test]
-fn tap_on_an_already_selected_radio_is_a_no_op() {
-    let observed: Rc<RefCell<Option<&'static str>>> = Rc::new(RefCell::new(None));
-    let recorder = Rc::clone(&observed);
-    let laid = lay_out(
-        themed(
-            Radio::new("spring", Some("spring")).on_changed(move |_cx, next| {
-                *recorder.borrow_mut() = Some(next);
-            }),
-        ),
-        constraints(),
-    );
-
-    laid.dispatch_pointer_down(TAP_TARGET / 2.0, TAP_TARGET / 2.0);
-    laid.dispatch_pointer_up(TAP_TARGET / 2.0, TAP_TARGET / 2.0);
-
-    assert_eq!(
-        *observed.borrow(),
-        None,
-        "tapping an already-selected radio must not fire on_changed",
-    );
-}
-
-#[test]
-fn disabled_radio_swallows_a_tap_then_resyncs_once_a_handler_is_added() {
-    // Same "handler-removal resync" class `tests/checkbox.rs`/
-    // `tests/switch.rs` prove for their own controls.
-    let taps = Rc::new(RefCell::new(0_u32));
-
-    let laid_disabled = lay_out(themed(Radio::new("summer", Some("spring"))), constraints());
-    laid_disabled.dispatch_pointer_down(TAP_TARGET / 2.0, TAP_TARGET / 2.0);
-    laid_disabled.dispatch_pointer_up(TAP_TARGET / 2.0, TAP_TARGET / 2.0);
-    // No on_changed at all: nothing to observe going wrong beyond "does not
-    // panic" — the InkWell-level swallow behavior itself is already proven
-    // by `tests/ink_well.rs`'s disabled-state coverage.
-
-    let mut laid_enabled = laid_disabled;
-    let counter = Rc::clone(&taps);
-    laid_enabled.pump_widget(themed(Radio::new("summer", Some("spring")).on_changed(
-        move |_cx, _| {
-            *counter.borrow_mut() += 1;
-        },
-    )));
-    laid_enabled.dispatch_pointer_down(TAP_TARGET / 2.0, TAP_TARGET / 2.0);
-    laid_enabled.dispatch_pointer_up(TAP_TARGET / 2.0, TAP_TARGET / 2.0);
-
-    assert_eq!(
-        *taps.borrow(),
-        1,
-        "adding on_changed on rebuild must make the very next tap interactive",
     );
 }

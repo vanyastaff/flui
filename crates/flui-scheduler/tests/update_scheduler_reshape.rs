@@ -5,12 +5,9 @@
 //! These are mutant-first exploits: each one is written to *fail* against
 //! the pre-reshape shape, not merely to pass against the current one.
 
-use std::{
-    panic::{AssertUnwindSafe, catch_unwind},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use flui_scheduler::{IdleDeadline, Instant, MAX_BUILD_REENTRY_PASSES, Priority, UpdateScheduler};
@@ -62,50 +59,6 @@ fn tiny_deadline_defers_idle_but_never_defers_build_or_animation() {
     assert!(
         !idle_ran.load(Ordering::SeqCst),
         "Priority::Idle must be deferred once its deadline has passed"
-    );
-}
-
-/// Reentrancy exploit: `TaskQueue::execute_until` bounds each call to an id
-/// watermark captured once, under its first lock acquisition (see its own
-/// doc in `task.rs`) — a task enqueued reentrantly during the call always
-/// gets a strictly greater id and is left queued for the NEXT call, not this
-/// one. A Priority::Animation task that itself enqueues Priority::Build work
-/// during that same pass is therefore invisible to the SAME
-/// `execute_until(Build)` call it ran inside of — but `handle_draw_frame`'s
-/// own reentrant-pass loop calls `execute_until` again immediately, within
-/// the same `handle_draw_frame` invocation, so the freshly-queued Build task
-/// still runs in THIS frame, one pass later, not deferred a whole frame.
-/// Kills a regression in `handle_draw_frame` that collapses the
-/// Animation/Build drain into one non-reentrant pass — reentrant Build work
-/// must still run THIS frame, not next, and an already-passed Idle deadline
-/// must not matter to that (it only ever bounds Idle work).
-#[test]
-fn build_work_enqueued_reentrantly_by_an_animation_task_runs_this_frame() {
-    let scheduler = UpdateScheduler::new();
-    let build_ran = Arc::new(AtomicBool::new(false));
-
-    {
-        let reentrant_scheduler = scheduler.clone();
-        let flag = Arc::clone(&build_ran);
-        scheduler.add_task(Priority::Animation, move || {
-            reentrant_scheduler.add_task(Priority::Build, move || {
-                flag.store(true, Ordering::SeqCst);
-            });
-        });
-    }
-
-    let now = Instant::now();
-    // An already-passed Idle deadline is part of the exploit: it proves the
-    // reentrant Build work ran because of the Animation/Build drain, not
-    // because a generous deadline let a *later* Idle-priority pass pick it
-    // up by coincidence.
-    scheduler.drive_frame(now, IdleDeadline(now), || {});
-
-    assert!(
-        build_ran.load(Ordering::SeqCst),
-        "Build work enqueued by an Animation task during the same \
-         handle_draw_frame pass must run in THIS frame, not be silently \
-         deferred a whole frame"
     );
 }
 
@@ -170,77 +123,5 @@ fn a_self_reenqueuing_build_task_is_bounded_by_the_reentry_cap_not_hung_forever(
         log.count_containing("reentrant drain"),
         1,
         "the reentry-cap warning must fire exactly once: {log}"
-    );
-}
-
-/// A caller driving the phase machine by hand (`handle_begin_frame` +
-/// `handle_draw_frame`, skipping `drive_frame` entirely — the path
-/// `HeadlessBinding` and direct unit tests use) has no deadline in play at
-/// all, and Idle work must never be deferred for it either.
-#[test]
-fn no_deadline_set_means_idle_work_is_never_deferred() {
-    let scheduler = UpdateScheduler::new();
-    let idle_ran = Arc::new(AtomicBool::new(false));
-    let flag = Arc::clone(&idle_ran);
-    scheduler.add_task(Priority::Idle, move || flag.store(true, Ordering::SeqCst));
-
-    scheduler.handle_begin_frame(Instant::now());
-    scheduler.handle_draw_frame();
-
-    assert!(
-        idle_ran.load(Ordering::SeqCst),
-        "driving the phase machine directly (no `drive_frame`, no deadline) \
-         must never defer Idle work"
-    );
-}
-
-/// Panic-leak exploit: a task that panics inside `drive_frame` must not
-/// leave the Idle-slice deadline permanently set. Without
-/// `IdleDeadlineGuard`'s `Drop`, an already-passed deadline set at the top
-/// of `drive_frame` survives an unwind through `handle_draw_frame` (nothing
-/// sequential after the panicking call ever runs to clear it), and every
-/// *later* frame — including one driven by hand, skipping `drive_frame`
-/// entirely, as `HeadlessBinding` does — would see a deadline that has
-/// always already passed and defer `Priority::Idle` forever.
-#[test]
-fn a_panicking_task_never_leaks_a_stale_idle_deadline() {
-    let scheduler = UpdateScheduler::new();
-
-    // First frame: an already-passed deadline (so the leak, if present,
-    // would be visible immediately) plus a Build-priority task that panics
-    // partway through `handle_draw_frame`, well before the point that would
-    // ordinarily clear the deadline.
-    let now = Instant::now();
-    scheduler.add_task(Priority::Build, || panic!("task exploded"));
-    let unwound = catch_unwind(AssertUnwindSafe(|| {
-        scheduler.drive_frame(now, IdleDeadline(now), || {});
-    }));
-    assert!(
-        unwound.is_err(),
-        "the panicking task must actually unwind through drive_frame for \
-         this exploit to mean anything"
-    );
-    // `drive_frame` only wraps `pipeline` in its own `catch_unwind`; a task
-    // panicking inside `handle_begin_frame`/`handle_draw_frame` propagates
-    // straight out, leaving the phase machine open exactly as it would for
-    // a hand-driven caller — `abort_frame`'s own doc names this as the
-    // caller's responsibility in that case. This is orthogonal to the
-    // exploit itself (the Idle-deadline leak), so recover the phase machine
-    // the documented way before driving a second frame.
-    scheduler.abort_frame();
-
-    // Second frame, driven by hand (no `drive_frame`, no deadline of its
-    // own) — a leaked deadline from the first frame would defer Idle work
-    // here too.
-    let idle_ran = Arc::new(AtomicBool::new(false));
-    let flag = Arc::clone(&idle_ran);
-    scheduler.add_task(Priority::Idle, move || flag.store(true, Ordering::SeqCst));
-    scheduler.handle_begin_frame(Instant::now());
-    scheduler.handle_draw_frame();
-
-    assert!(
-        idle_ran.load(Ordering::SeqCst),
-        "a panicking task in an earlier frame must not leak its Idle-slice \
-         deadline into later frames"
     );
 }

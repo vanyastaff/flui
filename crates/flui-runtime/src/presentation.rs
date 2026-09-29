@@ -179,21 +179,6 @@ pub(crate) fn test_platform_window(
     )
 }
 
-/// A realm-backed test window whose accessibility capability is the given
-/// recording fake — for tests exercising the platform-accessibility wire
-/// ([`PresentationState::wire_platform_accessibility`]) end-to-end while
-/// keeping a typed handle on the fake to drive activation and actions.
-#[cfg(test)]
-pub(crate) fn test_platform_window_with_accessibility(
-    accessibility: Arc<flui_platform::FakeAccessibility>,
-) -> PresentationWindow {
-    use crate::testing::TestWindow;
-    PresentationWindow::new(
-        Arc::new(TestWindow::new().focused(true)),
-        Some(accessibility),
-    )
-}
-
 /// Lifecycle of the owner-thread half of a presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PresentationLifecycle {
@@ -916,27 +901,6 @@ impl PresentationState {
         self.text_input.handle()
     }
 
-    /// This presentation's semantics enablement gate and platform
-    /// accessibility delivery — the per-window home the retired
-    /// `SemanticsBinding` singleton's enablement/announce/event state moved
-    /// into. `Self::new` reads the underlying flag directly (before `self`
-    /// exists to call this wrapper through) to wire the renderer's
-    /// semantics-enabled fan-out; announce/event delivery itself still has
-    /// no production caller (future platform-embedder wiring).
-    #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "this accessor's one production caller moved inline into \
-                      Self::new's own assembly; kept for tests and any future \
-                      external caller"
-        )
-    )]
-    pub(crate) fn semantics_host(&self) -> &SemanticsHost {
-        &self.semantics
-    }
-
     // ========================================================================
     // Window access, haptics (moved from the retired `AppBinding`)
     // ========================================================================
@@ -1205,13 +1169,6 @@ impl PresentationState {
                 since: presented_revision.next(),
             }
         }
-    }
-
-    /// Current `(tree, presented)` revisions. Test-only transition oracle.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn revision_pair(&self) -> (TreeRevision, TreeRevision) {
-        (self.tree_revision.get(), self.presented_revision.get())
     }
 
     /// Install (or clear) the segment fault-injection probe. See
@@ -1577,201 +1534,5 @@ mod tests {
         presentation.close();
         presentation.close();
         assert_eq!(presentation.lifecycle(), PresentationLifecycle::Closed);
-    }
-
-    /// If reverted: remove the lifecycle check from `dispatch_semantics_action`
-    /// and this fails with `Ok(())` instead (the request would resolve
-    /// against a node id that happens not to exist, which is a different,
-    /// pre-existing refusal path — `PresentationClosed` must fire first).
-    #[test]
-    fn semantics_action_after_close_is_refused() {
-        use flui_semantics::{AccessibilityNodeId, SemanticsAction};
-
-        let presentation = presentation();
-        presentation.close();
-
-        let request = SemanticsActionRequest::new(
-            AccessibilityNodeId::from(flui_foundation::RenderId::new(1)),
-            SemanticsAction::Tap,
-        );
-        assert_eq!(
-            presentation.dispatch_semantics_action(request),
-            Err(SemanticsActionError::PresentationClosed)
-        );
-    }
-
-    #[test]
-    fn semantics_host_is_exclusive_to_this_presentation() {
-        let a = presentation();
-        let b = presentation();
-
-        assert!(!a.semantics_host().semantics_enabled());
-        assert!(!b.semantics_host().semantics_enabled());
-
-        let handle = a.semantics_host().ensure_semantics();
-        assert!(a.semantics_host().semantics_enabled());
-        assert!(
-            !b.semantics_host().semantics_enabled(),
-            "a's SemanticsHandle must not enable b's independently-owned SemanticsHost"
-        );
-
-        drop(handle);
-        assert!(!a.semantics_host().semantics_enabled());
-    }
-
-    // ========================================================================
-    // Haptics — migrated from the retired `AppBinding`'s test module
-    // (`binding.rs`, deleted alongside it).
-    // ========================================================================
-    mod haptics_capability {
-        use super::*;
-
-        fn headless_window_with_haptics() -> (
-            Arc<dyn PlatformWindow>,
-            Arc<dyn flui_platform::traits::PlatformHaptics>,
-        ) {
-            let platform = flui_platform::headless_platform();
-            let window = platform
-                .open_window(flui_platform::traits::WindowOptions::default())
-                .expect("headless platform always opens a window");
-            let haptics = window
-                .haptics()
-                .expect("headless backend supports PlatformHaptics");
-            (window, haptics)
-        }
-
-        fn fake_haptics(
-            haptics: &Arc<dyn flui_platform::traits::PlatformHaptics>,
-        ) -> &flui_platform::FakeHaptics {
-            haptics
-                .as_any()
-                .downcast_ref::<flui_platform::FakeHaptics>()
-                .expect("the headless backend's PlatformHaptics is a FakeHaptics")
-        }
-
-        /// Real-path proof: `perform_haptic_feedback` reads the
-        /// presentation's window and calls through to its `PlatformHaptics`.
-        #[test]
-        fn perform_haptic_feedback_reaches_the_active_windows_platform_capability() {
-            let (window, haptics) = headless_window_with_haptics();
-            let fake = fake_haptics(&haptics);
-
-            // `PresentationState.window` is a `Weak` (the platform owns the
-            // strong `Arc` in production); this test's own `window` binding
-            // is what keeps it alive here, so pass a clone rather than
-            // moving the only strong reference in.
-            let presentation = PresentationState::new_for_test_with_window(
-                PresentationId::new_gen(0, NonZeroU32::MIN),
-                PipelineCell::new(PipelineOwner::new()),
-                Arc::clone(&window),
-            );
-
-            presentation.perform_haptic_feedback(HapticFeedback::SelectionClick);
-
-            assert_eq!(
-                fake.calls(),
-                vec![HapticFeedback::SelectionClick],
-                "perform_haptic_feedback must call through to the window's \
-                 PlatformHaptics::perform"
-            );
-        }
-    }
-
-    // ========================================================================
-    // Performance overlay — migrated from the retired `AppBinding`'s test
-    // module.
-    // ========================================================================
-    mod performance_overlay_wiring {
-        use flui_layer::{CanvasLayer, Layer};
-
-        use super::*;
-
-        fn tree_with_root() -> (LayerTree, flui_layer::LayerId) {
-            let tree = LayerTree::new(Layer::from(CanvasLayer::new()));
-            let root = tree.root();
-            (tree, root)
-        }
-
-        #[test]
-        fn overlay_on_appends_a_linked_overlay_layer_to_the_root() {
-            let presentation = presentation();
-            presentation.set_performance_overlay(true);
-            let (mut tree, root) = tree_with_root();
-
-            presentation.attach_performance_overlay(&mut tree);
-
-            assert_eq!(tree.len(), 2, "exactly one overlay layer is added");
-            let children = tree.get(root).expect("root node").children();
-            let overlay_id = *children.last().expect("overlay is the root's last child");
-            assert!(
-                tree.get_layer(overlay_id)
-                    .expect("overlay layer")
-                    .as_performance_overlay()
-                    .is_some(),
-                "the appended layer is the performance overlay"
-            );
-            assert_eq!(
-                tree.get(overlay_id).expect("overlay node").parent(),
-                Some(root),
-                "the overlay's parent side must be linked too, not just the root's child list"
-            );
-        }
-
-        #[test]
-        fn overlay_line_surfaces_tail_quality_and_keeps_deferrals_distinct_from_drops() {
-            let presentation = presentation();
-            let clock = presentation.clock();
-            let now = Instant::now();
-
-            clock.set_hidden(true);
-            clock.mark_demand(flui_scheduler::DemandKind::Host);
-            assert!(matches!(
-                clock.poll(now),
-                flui_scheduler::PollDecision::Skip(flui_scheduler::SkipReason::Hidden)
-            ));
-            clock.set_hidden(false);
-            assert!(matches!(
-                clock.poll(now),
-                flui_scheduler::PollDecision::Produce
-            ));
-
-            for _ in 0..=flui_scheduler::MAX_COALESCED_INPUT_EPOCHS {
-                clock.stamp_input_epoch(now);
-            }
-            clock.record_frame(
-                presentation.id(),
-                now,
-                now,
-                now,
-                now + Duration::from_millis(8),
-                flui_scheduler::PresentOutcome::Presented,
-            );
-            presentation.record_frame_dropped();
-            presentation.set_performance_overlay(true);
-
-            let (mut tree, _) = tree_with_root();
-            presentation.attach_performance_overlay(&mut tree);
-            let overlay_id = *tree_root_children(&tree).last().expect("overlay present");
-            let line = tree
-                .get_layer(overlay_id)
-                .expect("overlay layer")
-                .as_performance_overlay()
-                .expect("performance overlay variant")
-                .diagnostic_line()
-                .expect("runtime telemetry line");
-
-            assert!(line.contains("present_p99=8.0ms"), "line was {line:?}");
-            assert!(line.contains("deferred=1"), "line was {line:?}");
-            assert!(line.contains("dropped=1"), "line was {line:?}");
-            assert!(
-                line.contains("input_truncated=true"),
-                "an overflow-biased input tail must be labelled: {line:?}"
-            );
-        }
-
-        fn tree_root_children(tree: &LayerTree) -> Vec<flui_layer::LayerId> {
-            let root = tree.root();
-            tree.get(root).expect("root node").children().to_vec()
-        }
     }
 }

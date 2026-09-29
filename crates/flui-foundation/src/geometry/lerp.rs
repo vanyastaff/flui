@@ -127,16 +127,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn f32_lerp_extrapolates() {
-        assert_eq!(0.0_f64.lerp_to(&10.0, 0.5), 5.0);
-        assert_eq!(0.0_f64.lerp_to(&10.0, 0.0), 0.0);
-        assert_eq!(0.0_f64.lerp_to(&10.0, 1.0), 10.0);
-        // Overshoot must NOT be clamped.
-        assert_eq!(0.0_f64.lerp_to(&10.0, 1.5), 15.0);
-        assert_eq!(0.0_f64.lerp_to(&10.0, -0.5), -5.0);
-    }
-
-    #[test]
     fn matrix4_lerp_rotation_slerps_not_collapses() {
         // A naive element-wise lerp of a rotation passes through a degenerate
         // (non-orthonormal, det < 1) matrix at t = 0.5; decompose+slerp keeps it

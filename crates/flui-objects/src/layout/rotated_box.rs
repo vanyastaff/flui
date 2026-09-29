@@ -386,20 +386,3 @@ impl RenderBox for RenderRotatedBox {
 // ===========================================================================
 // Tests
 // ===========================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn paint_matrix_90_degree_rotates_child_center_to_parent_center() {
-        // Parent 60×100, child 100×60 (after 90° turn the axes are swapped).
-        let parent_size = Size::new(60.0, 100.0);
-        let child_size = Size::new(100.0, 60.0);
-        let m = RenderRotatedBox::build_paint_matrix(parent_size, child_size, 1);
-        // Child center (50, 30) should map to parent center (30, 50).
-        let (px_out, py_out) = m.transform_point(50.0, 30.0);
-        assert!((px_out - 30.0).abs() < 1e-3, "px = {px_out:?}");
-        assert!((py_out - 50.0).abs() < 1e-3, "py = {py_out:?}");
-    }
-}

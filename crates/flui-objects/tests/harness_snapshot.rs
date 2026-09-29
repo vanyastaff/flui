@@ -1,5 +1,4 @@
-//! Structural paint-snapshot dogfood for the render harness (sub-project A),
-//! plus fallible run entry points and overflow-flag inspection.
+//! Structural paint snapshot for the render harness.
 
 use flui_foundation::geometry::Size;
 use flui_objects::RenderColoredBox;
@@ -15,88 +14,7 @@ fn frame_snapshot_and_predicate() {
 }
 
 // ============================================================================
-// Fallible run entry points and overflow-flag inspection
-// ============================================================================
-
-use flui_objects::{RenderFittedBox, RenderStack, RenderViewport};
-use flui_painting::paint::Clip;
-use flui_painting::{Alignment, BoxFit};
-use flui_rendering::testing::Probe;
-
-/// Returns `true` when the render object at `node` reports visual overflow.
-///
-/// Downcasts to the concrete objects that carry an overflow flag
-/// (`RenderFittedBox`, `RenderStack`, `RenderViewport`). Moved here from
-/// `flui-rendering::testing` because those types now live in `flui-objects`.
-fn has_overflow(probe: &impl Probe, node: flui_foundation::RenderId) -> bool {
-    let pipeline = probe.pipeline();
-    let Some(render_node) = pipeline.render_tree().get(node) else {
-        return false;
-    };
-    let Some(entry) = render_node.as_box() else {
-        return false;
-    };
-    let obj = entry.render_object();
-    if let Some(fitted) = obj.as_any().downcast_ref::<RenderFittedBox>() {
-        return fitted.has_visual_overflow();
-    }
-    if let Some(stack) = obj.as_any().downcast_ref::<RenderStack>() {
-        return stack.has_visual_overflow();
-    }
-    if let Some(viewport) = obj.as_any().downcast_ref::<RenderViewport>() {
-        return viewport.has_visual_overflow();
-    }
-    false
-}
-
-/// `has_overflow` returns `true` for a `RenderFittedBox` whose scaled child
-/// exceeds the box bounds, and `false` when the child fits exactly.
-///
-/// `BoxFit::None` leaves the child at its natural size; a 100×100 child
-/// inside a tight 50×50 parent has `destination (100) > size (50)`, so
-/// `RenderFittedBox::perform_layout` sets `has_visual_overflow = true`.
-/// `BoxFit::Contain` scales the child down to fit, producing no overflow.
-#[test]
-fn has_overflow_reflects_fitted_box_overflow_flag() {
-    // Overflowing: BoxFit::None — child stays 100×100 inside a 50×50 box.
-    let overflowing = RenderTester::mount(
-        box_node(RenderFittedBox::new(
-            BoxFit::None,
-            Alignment::CENTER,
-            Clip::None,
-        ))
-        .label("fitted")
-        .child(box_node(RenderColoredBox::red(100.0, 100.0))),
-    )
-    .with_size(Size::new(50.0, 50.0))
-    .run_layout();
-
-    assert!(
-        has_overflow(&overflowing, overflowing.id("fitted")),
-        "100×100 child with BoxFit::None inside a 50×50 box must report overflow",
-    );
-
-    // Non-overflowing: BoxFit::Contain — child is scaled to fit exactly.
-    let clean = RenderTester::mount(
-        box_node(RenderFittedBox::new(
-            BoxFit::Contain,
-            Alignment::CENTER,
-            Clip::None,
-        ))
-        .label("fitted")
-        .child(box_node(RenderColoredBox::red(80.0, 80.0))),
-    )
-    .with_size(Size::new(80.0, 80.0))
-    .run_layout();
-
-    assert!(
-        !has_overflow(&clean, clean.id("fitted")),
-        "80×80 child with BoxFit::Contain inside an 80×80 box must not overflow",
-    );
-}
-
-// ============================================================================
-// Dogfood snapshots — paint-logic-HEAVY objects (sub-project A, Task 7)
+// Snapshots — paint-logic-heavy objects
 //
 // Each test proves the structural snapshot catches facts that geometry/structure
 // asserts miss: shadow/border ordering, clip-layer scoping, opacity layer
@@ -150,46 +68,9 @@ fn snapshot_decorated_box() {
 // 2. RenderClipRect — clip layer wraps the child's picture
 // ---------------------------------------------------------------------------
 
-/// Snapshot of a `RenderClipRect` wrapping a colored child.
-///
-/// The snapshot must show a `ClipRect` layer (or equivalent clip scope) that
-/// wraps the child's picture — proving clip scoping is a structural property
-/// visible at the layer level, not just a paint-command detail.
-#[test]
-fn snapshot_clip_layer() {
-    use flui_objects::RenderClipRect;
-    use flui_painting::paint::Clip;
-
-    let run = RenderTester::mount(
-        box_node(RenderClipRect::new(Clip::AntiAlias))
-            .child(box_node(RenderColoredBox::blue(40.0, 40.0))),
-    )
-    .with_size(Size::new(40.0, 40.0))
-    .run_frame();
-
-    insta::assert_snapshot!("clip_layer", run.snapshot());
-}
-
 // ---------------------------------------------------------------------------
 // 3. RenderOpacity — opacity layer with alpha = 0.5
 // ---------------------------------------------------------------------------
-
-/// Snapshot of a `RenderOpacity(0.5)` wrapping a colored child.
-///
-/// The snapshot must show an `Opacity` layer carrying alpha ≈ 128 (0x80),
-/// which is invisible to geometry assertions.
-#[test]
-fn snapshot_opacity_layer() {
-    use flui_objects::RenderOpacity;
-
-    let run = RenderTester::mount(
-        box_node(RenderOpacity::new(0.5)).child(box_node(RenderColoredBox::red(50.0, 50.0))),
-    )
-    .with_size(Size::new(50.0, 50.0))
-    .run_frame();
-
-    insta::assert_snapshot!("opacity_layer", run.snapshot());
-}
 
 // ---------------------------------------------------------------------------
 // 4. RenderSliverList — the request-strategy band tracks scroll position

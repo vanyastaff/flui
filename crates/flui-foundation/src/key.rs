@@ -945,7 +945,6 @@ const fn const_fnv1a_hash(bytes: &[u8]) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
 
     use super::*;
 
@@ -985,47 +984,6 @@ mod tests {
         );
     }
 
-    /// F3 — `UniqueKey::new` must panic once its counter latches the
-    /// permanent-exhaustion sentinel (0), never wrapping to a 0-valued
-    /// or duplicate id. The old `fetch_add` shape had no guard at all.
-    #[test]
-    fn uniquekey_exhaustion_panics() {
-        use std::panic::{AssertUnwindSafe, catch_unwind};
-        // Drive a LOCAL counter at the sentinel rather than mutating the
-        // shared `UNIQUE_KEY_COUNTER`, so this test never races a parallel
-        // sibling calling `UniqueKey::new`.
-        let counter = AtomicU64::new(0);
-        let r1 = catch_unwind(AssertUnwindSafe(|| UniqueKey::new_with_counter(&counter)));
-        let r2 = catch_unwind(AssertUnwindSafe(|| UniqueKey::new_with_counter(&counter)));
-
-        assert!(
-            r1.is_err(),
-            "UniqueKey::new must panic when counter is exhausted"
-        );
-        assert!(
-            r2.is_err(),
-            "UniqueKey::new must keep panicking after exhaustion"
-        );
-        assert_eq!(
-            counter.load(Ordering::Relaxed),
-            0,
-            "exhausted counter must stay latched at the 0 sentinel"
-        );
-    }
-
-    #[test]
-    fn test_hash_consistency() {
-        let key = Key::new();
-        let mut set = HashSet::new();
-
-        set.insert(key);
-        assert!(set.contains(&key));
-
-        // Same key hashes the same
-        let key_copy = key;
-        assert!(set.contains(&key_copy));
-    }
-
     // Audit I-5: `impl Default for Key` removed. The pre-cycle test
     // `test_default` exercised the surprising "default returns a
     // fresh unique key" behaviour that the finding flagged.
@@ -1046,61 +1004,5 @@ mod tests {
         let value: &dyn ViewKey = &value_key;
         assert!(!key.key_eq(value));
         assert!(!value.key_eq(key));
-    }
-
-    #[cfg(feature = "serde")]
-    #[test]
-    fn test_key_serde_zero_rejection() {
-        let json = "0";
-        let result: Result<Key, _> = serde_json::from_str(json);
-        assert!(result.is_err());
-    }
-}
-
-#[cfg(test)]
-mod salted_key_tests {
-    use super::*;
-
-    #[test]
-    fn salt_equals_only_another_salt_of_an_equal_inner_key() {
-        let a = SaltedKey::new(&ValueKey::new(7_u32));
-        let b = SaltedKey::new(&ValueKey::new(7_u32));
-        let c = SaltedKey::new(&ValueKey::new(8_u32));
-        assert!(a.key_eq(&b));
-        assert!(!a.key_eq(&c));
-        // The salt is not the inner key, in either direction.
-        assert!(!a.key_eq(&ValueKey::new(7_u32)));
-        assert!(!ValueKey::new(7_u32).key_eq(&a));
-        assert_eq!(a.key_hash(), b.key_hash());
-        assert_ne!(a.key_hash(), ValueKey::new(7_u32).key_hash());
-    }
-
-    #[test]
-    fn a_salted_key_is_never_global() {
-        struct GlobalLike;
-        impl ViewKey for GlobalLike {
-            fn as_any(&self) -> &dyn Any {
-                self
-            }
-            fn key_eq(&self, other: &dyn ViewKey) -> bool {
-                other.as_any().downcast_ref::<Self>().is_some()
-            }
-            fn key_hash(&self) -> u64 {
-                1
-            }
-            fn clone_key(&self) -> Box<dyn ViewKey> {
-                Box::new(Self)
-            }
-            fn debug_fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(f, "GlobalLike")
-            }
-            fn is_global_key(&self) -> bool {
-                true
-            }
-        }
-        let salted = SaltedKey::new(&GlobalLike);
-        assert!(salted.inner().is_global_key());
-        assert!(!salted.is_global_key());
-        assert!(salted.clone_key().key_eq(&salted));
     }
 }

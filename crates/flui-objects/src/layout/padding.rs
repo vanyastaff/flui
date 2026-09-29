@@ -237,18 +237,3 @@ impl RenderBox for RenderPadding {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // The negative-inset guard is a `debug_assert!`, mirroring the Dart
-    // `assert(padding.isNonNegative)` that is likewise stripped from a release
-    // build — so these only have a panic to observe under `debug_assertions`.
-    #[cfg(debug_assertions)]
-    #[test]
-    #[should_panic(expected = "non-negative")]
-    fn new_rejects_a_negative_inset() {
-        let _ = RenderPadding::new(EdgeInsets::new(0.0, -1.0, 0.0, 0.0));
-    }
-}

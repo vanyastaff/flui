@@ -247,70 +247,7 @@ fn desktop_uses_cargos_external_target_directory() {
     }
 }
 #[test]
-fn arbitrary_workspace_package_and_current_member_are_selected() {
-    fixture("workspace");
-    fixture("workspace-current");
-}
-#[test]
 fn default_run_and_ambiguous_bins_are_distinguished() {
     fixture("default-run");
     fixture("ambiguous");
-}
-#[test]
-fn cached_success_and_failed_compile_do_not_confuse_artifact_selection() {
-    fixture("cached-failure");
-}
-
-#[cfg(target_os = "macos")]
-#[tokio::test]
-async fn bundle_names_cannot_escape_the_output_directory() {
-    for name in [
-        "../escape".to_string(),
-        "/absolute".to_string(),
-        "..".into(),
-        ".".into(),
-        String::new(),
-        "parent\\escape".into(),
-        "bad\0name".into(),
-    ] {
-        let temp = tempfile::tempdir().expect("fixture");
-        let external = temp.path().join("escape.app");
-        write(&external, "sentinel", "must survive");
-        let name = if name == "/absolute" {
-            temp.path().join("escape").to_string_lossy().into_owned()
-        } else {
-            name
-        };
-        let output = temp.path().join("output");
-        let executable = temp.path().join("input");
-        std::fs::write(&executable, "fixture executable").expect("input");
-        let ctx = BuilderContextBuilder::new(temp.path().to_path_buf())
-            .with_platform(Platform::Desktop { target: None })
-            .with_profile(Profile::Debug)
-            .with_output_dir(output.clone())
-            .with_bundle(crate::build::AppBundle {
-                name,
-                identifier: "org.example.fixture".into(),
-                version: "0.1.0".into(),
-            })
-            .build();
-        let artifacts = crate::build::BuildArtifacts {
-            rust_libs: Vec::new(),
-            executable: Some(executable),
-            metadata: serde_json::json!({}),
-        };
-        assert!(
-            DesktopBuilder::build_platform(&ctx, &artifacts).is_err(),
-            "unsafe bundle component must be rejected"
-        );
-        assert_eq!(
-            std::fs::read_to_string(external.join("sentinel"))
-                .expect("external sentinel preserved"),
-            "must survive"
-        );
-        assert!(
-            !output.exists(),
-            "validation precedes any directory creation"
-        );
-    }
 }

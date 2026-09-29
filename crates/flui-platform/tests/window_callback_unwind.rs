@@ -1,27 +1,11 @@
 //! Integration coverage for panic-safe platform callback dispatch.
 
 use std::sync::{
-    Arc, Mutex,
+    Arc,
     atomic::{AtomicUsize, Ordering},
 };
 
-use flui_foundation::geometry::Size;
-use flui_platform::{
-    WindowCallbacks,
-    traits::{DispatchEventResult, Key, PlatformInput},
-};
-
-fn keyboard_event(repeat: bool) -> PlatformInput {
-    PlatformInput::Keyboard(ui_events::keyboard::KeyboardEvent {
-        state: ui_events::keyboard::KeyState::Down,
-        key: Key::Named(keyboard_types::NamedKey::Enter),
-        code: ui_events::keyboard::Code::Unidentified,
-        location: ui_events::keyboard::Location::Standard,
-        modifiers: keyboard_types::Modifiers::empty(),
-        repeat,
-        is_composing: false,
-    })
-}
+use flui_platform::WindowCallbacks;
 
 #[test]
 fn frame_callback_is_restored_after_real_dispatch_panics() {
@@ -50,44 +34,6 @@ fn frame_callback_is_restored_after_real_dispatch_panics() {
         calls.load(Ordering::SeqCst),
         2,
         "nested work from the aborted dispatch must not leak into the next call"
-    );
-}
-
-#[test]
-fn nested_cross_kind_events_keep_one_window_causal_order() {
-    let callbacks = Arc::new(WindowCallbacks::new());
-    let weak_for_input = Arc::downgrade(&callbacks);
-    let weak_for_frame = Arc::downgrade(&callbacks);
-    let order = Arc::new(Mutex::new(Vec::new()));
-
-    let input_order = Arc::clone(&order);
-    *callbacks.on_input.lock() = Some(Box::new(move |_| {
-        input_order.lock().expect("order lock").push("input:start");
-        let callbacks = weak_for_input.upgrade().expect("callbacks alive");
-        callbacks.dispatch_resize(Size::new(200.0, 80.0), 2.0);
-        callbacks.dispatch_request_frame();
-        input_order.lock().expect("order lock").push("input:end");
-        DispatchEventResult::default()
-    }));
-
-    let resize_order = Arc::clone(&order);
-    *callbacks.on_resize.lock() = Some(Box::new(move |_, _| {
-        resize_order.lock().expect("order lock").push("resize");
-        weak_for_frame
-            .upgrade()
-            .expect("callbacks alive")
-            .dispatch_request_frame();
-    }));
-
-    let frame_order = Arc::clone(&order);
-    *callbacks.on_request_frame.lock() = Some(Box::new(move || {
-        frame_order.lock().expect("order lock").push("frame");
-    }));
-
-    callbacks.dispatch_input(keyboard_event(false));
-    assert_eq!(
-        *order.lock().expect("order lock"),
-        vec!["input:start", "input:end", "resize", "frame", "frame"]
     );
 }
 

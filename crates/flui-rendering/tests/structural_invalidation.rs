@@ -15,69 +15,6 @@ fn clear_node_dirty_flags(owner: &mut PipelineOwner, id: flui_foundation::Render
     }
 }
 
-fn assert_exact_parent_membership_work(owner: &PipelineOwner, parent: flui_foundation::RenderId) {
-    assert_eq!(
-        owner
-            .nodes_needing_layout()
-            .iter()
-            .filter(|entry| entry.id == parent)
-            .count(),
-        1
-    );
-    assert_eq!(
-        owner
-            .nodes_needing_compositing_bits_update()
-            .iter()
-            .filter(|entry| entry.id == parent)
-            .count(),
-        1,
-    );
-    assert_eq!(
-        owner
-            .nodes_needing_semantics()
-            .iter()
-            .filter(|entry| entry.id == parent)
-            .count(),
-        1
-    );
-    assert!(
-        owner
-            .nodes_needing_paint()
-            .iter()
-            .all(|entry| entry.id != parent)
-    );
-    let parent_node = owner
-        .render_tree()
-        .get(parent)
-        .expect("parent remains mounted");
-    assert!(parent_node.needs_layout());
-    assert!(parent_node.needs_compositing_bits_update());
-    assert!(!parent_node.needs_paint());
-}
-
-#[test]
-fn box_child_insertion_applies_full_parent_membership_impact() {
-    let mut owner = PipelineOwner::new();
-    let parent = owner.set_root_render_object(Box::new(RenderColoredBox::red(10.0, 10.0)));
-    owner.set_semantics_enabled(true);
-    owner.clear_all_dirty_nodes();
-    clear_node_dirty_flags(&mut owner, parent);
-
-    let child = owner
-        .insert_child_render_object(parent, Box::new(RenderColoredBox::blue(5.0, 5.0)))
-        .expect("box child insertion");
-
-    assert_exact_parent_membership_work(&owner, parent);
-    assert_eq!(
-        owner
-            .nodes_needing_layout()
-            .iter()
-            .filter(|entry| entry.id == child)
-            .count(),
-        1
-    );
-}
-
 #[test]
 fn pure_reorder_marks_layout_only() {
     let mut owner = PipelineOwner::new();

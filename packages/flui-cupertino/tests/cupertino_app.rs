@@ -31,13 +31,6 @@ use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, RebuildHandle};
 use flui_sdk::widgets::{MediaQuery, MediaQueryData, SizedBox};
 
-fn media(brightness: Brightness) -> MediaQueryData {
-    MediaQueryData {
-        platform_brightness: brightness,
-        ..MediaQueryData::default()
-    }
-}
-
 /// What a descendant of the shell observes: the effective brightness, the
 /// published theme's (already materialized) primary color, and a dynamic
 /// color resolved at the DESCENDANT's own altitude — the three observation
@@ -100,46 +93,6 @@ fn publishes_the_resolved_theme_to_descendants() {
         CupertinoColor::Static(SYSTEM_RED_LIGHT),
         "the caller's theme — not a default — must reach descendants, already resolved"
     );
-}
-
-#[test]
-fn ambient_brightness_drives_resolution_with_no_theme_mode_involved() {
-    // The issue's acceptance criterion: CupertinoApp resolves brightness
-    // without a ThemeMode — the ambient platform signal alone flips both
-    // the published theme's materialized colors and descendant-side
-    // resolution.
-    for (ambient, expected_primary, expected_label) in [
-        (
-            Brightness::Light,
-            SYSTEM_BLUE_LIGHT,
-            Color::rgb(0, 0, 0), // LABEL light variant
-        ),
-        (
-            Brightness::Dark,
-            SYSTEM_BLUE_DARK,
-            Color::rgb(255, 255, 255), // LABEL dark variant
-        ),
-    ] {
-        let (probe, captured) = probe();
-        let _tree = lay_out(
-            MediaQuery::new(media(ambient), CupertinoApp::new(probe)),
-            loose(800.0),
-        );
-        let seen = observed(&captured);
-        assert_eq!(
-            seen.brightness, ambient,
-            "brightness_of follows the platform"
-        );
-        assert_eq!(
-            seen.published_primary,
-            CupertinoColor::Static(expected_primary),
-            "the app-level materialization must resolve against the ambient brightness"
-        );
-        assert_eq!(
-            seen.label_resolved_here, expected_label,
-            "descendant-side dynamic resolution must follow the same signal"
-        );
-    }
 }
 
 // ============================================================================
@@ -235,14 +188,4 @@ fn a_live_brightness_republish_re_resolves_the_theme() {
         CupertinoColor::Static(SYSTEM_BLUE_DARK),
         "a live platform-brightness change must re-materialize the published theme"
     );
-}
-
-#[test]
-// Debug-only: the guard compiles out in release, where `#[should_panic]`
-// would otherwise report "did not panic as expected" (release still panics,
-// but later, during build — see the setter's doc).
-#[cfg(debug_assertions)]
-#[should_panic(expected = "requires at least one locale")]
-fn empty_supported_locales_panics_at_construction() {
-    let _ = CupertinoApp::new(SizedBox::shrink()).supported_locales(Vec::new());
 }

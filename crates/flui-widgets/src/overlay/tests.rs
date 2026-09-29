@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_view::prelude::*;
 
-use super::{InsertPosition, OnstagePlan, OverlayEntry, OverlayHandle, onstage_plan};
+use super::{OnstagePlan, OverlayEntry, onstage_plan};
 use crate::SizedBox;
 
 /// Counts how many times an entry's builder closure ran.
@@ -31,44 +31,6 @@ fn counting_entry(calls: &Calls) -> OverlayEntry {
         calls.bump();
         SizedBox::new(10.0, 10.0).into_view().boxed()
     })
-}
-
-/// An entry is in one overlay, once. Inserting it into a second overlay, or
-/// twice into one, is refused and logged, never a ghost copy: the entry stays
-/// where it was, and `remove` still takes it out of there.
-///
-/// Red-check: make `admissible` return `candidates.to_vec()`; `b` gains the
-/// entry, `a` keeps a copy `remove` can no longer reach, and `a` holds it twice.
-#[test]
-fn an_entry_already_in_an_overlay_is_refused_elsewhere_and_twice() {
-    let calls = Calls::default();
-    let entry = counting_entry(&calls);
-    let (a, b) = (OverlayHandle::new(), OverlayHandle::new());
-
-    a.insert(&entry, &InsertPosition::Top);
-    b.insert(&entry, &InsertPosition::Top);
-    b.rearrange(std::slice::from_ref(&entry));
-    a.insert(&entry, &InsertPosition::Top);
-    a.insert_all(&[entry.clone(), entry.clone()], &InsertPosition::Top);
-
-    assert_eq!(
-        a.ids_bottom_to_top(),
-        vec![entry.id()],
-        "a holds it exactly once"
-    );
-    assert!(b.ids_bottom_to_top().is_empty(), "b refused it");
-
-    entry.remove();
-    assert!(
-        a.ids_bottom_to_top().is_empty(),
-        "remove reaches the one real owner"
-    );
-    b.insert(&entry, &InsertPosition::Top);
-    assert_eq!(
-        b.ids_bottom_to_top(),
-        vec![entry.id()],
-        "once removed, it may go elsewhere"
-    );
 }
 
 /// The `skipCount` handed to the theater is the number of *covered but

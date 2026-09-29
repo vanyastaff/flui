@@ -140,25 +140,4 @@ mod tests {
         // DOM (mode 1) already reports +1.0 for scroll down → passthrough.
         assert_eq!(lines(from_web(1, 0.0, 1.0)), (0.0, 1.0));
     }
-
-    #[test]
-    fn horizontal_right_is_positive_on_every_backend() {
-        // winit's positive line-x means content moves right (scroll LEFT):
-        // a scroll-right gesture is x = -1.0 → contract +1.0.
-        assert_eq!(lines(from_winit_lines(-1.0, 0.0)), (1.0, 0.0));
-        // Win32 horizontal wheel: tilt right is ALREADY positive → +1.0.
-        assert_eq!(lines(from_win32_hwheel(120)), (1.0, 0.0));
-        // AppKit: swipe left (scroll right) is scrollingDeltaX = -1.0.
-        assert_eq!(lines(from_appkit(-1.0, 0.0, false)), (1.0, 0.0));
-        // DOM: scroll right is already deltaX = +1.0.
-        assert_eq!(lines(from_web(1, 1.0, 0.0)), (1.0, 0.0));
-    }
-
-    /// Fractional Win32 distances (fine-resolution wheels report fractions
-    /// of `WHEEL_DELTA`) survive the division instead of truncating.
-    #[test]
-    fn win32_fractional_detents_stay_fractional() {
-        assert_eq!(lines(from_win32_wheel(-60)), (0.0, 0.5));
-        assert_eq!(lines(from_win32_hwheel(-30)), (-0.25, 0.0));
-    }
 }

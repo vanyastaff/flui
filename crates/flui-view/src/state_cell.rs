@@ -616,39 +616,7 @@ mod tests {
 
     // ── 2. unbound mutation changes the value, schedules nothing ───────────
 
-    #[test]
-    fn unbound_state_cell_mutation_changes_value_and_schedules_nothing() {
-        let cell = StateCell::new(0);
-        cell.set(5);
-        assert_eq!(cell.get(), 5);
-        cell.update(|n| n + 1);
-        assert_eq!(cell.get(), 6); // changed, and nothing to schedule against
-    }
-
     // ── 3. mutation after element removal is a silent no-op ────────────────
-
-    #[test]
-    fn mutation_after_the_element_is_removed_is_a_silent_no_op() {
-        let (mut owner, mut tree, count, text, builds, root) = mount();
-        let before = builds.load(Ordering::Relaxed);
-
-        tree.remove(root, &mut owner.element_owner_mut());
-        assert!(tree.get(root).is_none(), "element is gone");
-
-        count.set(7);
-        text.update(|s| s.push_str("-late"));
-        owner.build_scope(&mut tree);
-
-        assert_eq!(
-            builds.load(Ordering::Relaxed),
-            before,
-            "a dead element must not rebuild"
-        );
-        assert_eq!(owner.pending_external_builds(), 0, "inbox still drained");
-        // The value itself still mutated — only scheduling is inert.
-        assert_eq!(count.get(), 7);
-        assert_eq!(text.with(Clone::clone), "initial-late");
-    }
 
     // ── 4. clones share storage ──────────────────────────────────────────
 

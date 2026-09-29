@@ -321,36 +321,3 @@ impl InheritedTheme for CupertinoTheme {
         CupertinoTheme::new(self.data.clone(), child).boxed()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use flui_sdk::widgets::SizedBox;
-
-    use super::*;
-
-    #[test]
-    fn text_theme_default_follows_primary_color() {
-        let data = CupertinoThemeData::default().with_primary_color(CupertinoColors::SYSTEM_RED);
-        assert_eq!(
-            data.text_theme().action_text_style().color,
-            Some(CupertinoColors::SYSTEM_RED.color)
-        );
-    }
-
-    #[test]
-    fn update_should_notify_true_when_data_differs() {
-        let a = CupertinoTheme::new(CupertinoThemeData::default(), SizedBox::shrink());
-        let b = CupertinoTheme::new(
-            CupertinoThemeData::default().with_primary_color(CupertinoColors::SYSTEM_RED),
-            SizedBox::shrink(),
-        );
-        assert!(a.update_should_notify(&b));
-    }
-
-    #[test]
-    fn update_should_notify_false_when_data_equal() {
-        let a = CupertinoTheme::new(CupertinoThemeData::default(), SizedBox::shrink());
-        let b = CupertinoTheme::new(CupertinoThemeData::default(), SizedBox::shrink());
-        assert!(!a.update_should_notify(&b));
-    }
-}

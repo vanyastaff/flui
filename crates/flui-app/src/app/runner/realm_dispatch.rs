@@ -162,7 +162,7 @@ pub(in crate::app) enum PlatformToUi {
     /// it directly to pin the addressed-write contract (a report for a
     /// presentation closed before delivery is dropped, not a panic).
     #[cfg_attr(
-        not(any(test, target_os = "ios")),
+        not(target_os = "ios"),
         expect(
             dead_code,
             reason = "safe-area reports are produced only by the UIKit runner"
@@ -894,41 +894,6 @@ pub(super) fn install_presentation_alongside(
     })
 }
 
-/// Uninstalls exactly one realm — tearing down a whole [`WindowPolicy::
-/// SeparateRealms`]/`SharedRealm` group at once, unconditionally, regardless
-/// of how many presentations it still hosts — without disturbing any other
-/// hosted realm. Requests the removal through [`crate::app::runtime::AppRuntime::
-/// request_realm_uninstall`], so a request arriving mid-dispatch or
-/// mid-hot-restart-visit defers to loop idle instead of mutating the
-/// registry another operation is still walking.
-///
-/// No production embedder call site: an ordinary window closing always goes
-/// through [`close_this_window`]/[`close_presentation`] instead, which
-/// reduces to exactly this same effect only when the closing presentation is
-/// its realm's sole one — calling this directly from a window's own close
-/// handler would tear down an entire `SharedRealm` group out from under a
-/// still-open sibling window, which is precisely the bug a prior revision of
-/// this function's own caller had. Exercised directly by this module's own
-/// tests (which construct scenarios `close_this_window` cannot, e.g. forcibly
-/// tearing down a realm that still hosts more than one presentation, to pin
-/// this function's own "whole group, unconditionally" contract in isolation).
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no production embedder call site -- an ordinary window close goes through \
-                  close_this_window/close_presentation instead, which reduces to this same \
-                  effect only for a realm's sole presentation; exercised by this module's own \
-                  tests"
-    )
-)]
-fn uninstall_platform_realm(realm_id: RealmId) {
-    let removed = APP_RUNTIME.with(|slot| slot.borrow_mut().request_realm_uninstall(realm_id));
-    // Destructors may re-enter platform/framework code — drop only after the
-    // TLS borrow above has released.
-    drop(removed);
-}
-
 /// Requests that one presentation be closed and removed from `dispatcher`'s
 /// realm — a single window closing out of a realm that hosts more than one,
 /// without tearing down the realm itself (contrast [`uninstall_platform_realm`],
@@ -1169,7 +1134,7 @@ fn request_owner_turn_continuation() {
 #[must_use = "the guard finishes the physical owner callback, including during unwind"]
 pub(super) struct OwnerCallbackGuard {
     #[cfg_attr(
-        all(not(test), not(target_os = "ios")),
+        not(target_os = "ios"),
         expect(
             dead_code,
             reason = "only the iOS owner wake synthesizes one root per retained presentation"
@@ -1187,7 +1152,7 @@ impl OwnerCallbackGuard {
     /// presentation can use this to avoid replenishing the deferred FIFO
     /// faster than its finite continuation batch can drain it.
     #[cfg_attr(
-        all(not(test), not(target_os = "ios")),
+        not(target_os = "ios"),
         expect(
             dead_code,
             reason = "only the iOS owner wake synthesizes one root per retained presentation"
@@ -1249,7 +1214,7 @@ pub(super) fn begin_owner_callback() -> OwnerCallbackGuard {
 /// ordinary wake; `rearm_fresh_roots` records one later ordinary opportunity
 /// when a coalescing native signal may have combined both causes.
 #[cfg_attr(
-    all(not(test), not(target_os = "ios")),
+    not(target_os = "ios"),
     expect(
         dead_code,
         reason = "only the iOS owner wake fans one callback out across presentations"

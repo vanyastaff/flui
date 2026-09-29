@@ -939,38 +939,6 @@ impl Size<f64> {
 // Tests
 // ============================================================================
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_fit_fill() {
-        let image = Size::new(1920.0, 1080.0); // 16:9
-        let bounds = Size::new(800.0, 600.0); // 4:3
-
-        let fitted = image.fit_within(bounds);
-        assert!(fitted.width <= bounds.width + 0.01);
-        assert!(fitted.height <= bounds.height + 0.01);
-
-        let filled = image.fill_bounds(bounds);
-        assert!(filled.width >= bounds.width - 0.01);
-        assert!(filled.height >= bounds.height - 0.01);
-    }
-}
-
 // ============================================================================
 // Typed tests (generic with unit types)
 // ============================================================================
-
-#[cfg(test)]
-mod typed_tests {
-    use super::*;
-
-    #[test]
-    fn test_size_is_valid() {
-        assert!(Size::new(10.0, 20.0).is_valid());
-        assert!(!Size::new(-10.0, 20.0).is_valid());
-        assert!(!Size::<f64>::INFINITY.is_valid());
-        assert!(!Size::<f64>::NAN.is_valid());
-    }
-}

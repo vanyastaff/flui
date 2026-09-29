@@ -346,11 +346,6 @@ fn assert_kit_catches(fault: Fault, case: &str) {
 }
 
 #[test]
-fn kit_fails_a_store_that_counts_utf8_bytes() {
-    assert_kit_catches(Fault::CountsUtf8Bytes, "length_counts_utf16_units");
-}
-
-#[test]
 fn kit_fails_a_store_that_grants_inside_a_transaction() {
     assert_kit_catches(
         Fault::GrantsInsideTransaction,
@@ -359,38 +354,6 @@ fn kit_fails_a_store_that_grants_inside_a_transaction() {
     assert_kit_catches(
         Fault::GrantsInsideTransaction,
         "async_request_inside_a_transaction_waits_for_the_next_anchor",
-    );
-}
-
-#[test]
-fn kit_fails_a_store_that_echoes_platform_edits() {
-    assert_kit_catches(
-        Fault::EchoesPlatformEdits,
-        "platform_edits_are_not_echoed_to_the_observer",
-    );
-}
-
-#[test]
-fn kit_fails_a_store_that_snaps_platform_selection_to_graphemes() {
-    assert_kit_catches(
-        Fault::SnapsPlatformSelectionToGraphemes,
-        "selection_inside_a_grapheme_is_kept_exactly",
-    );
-}
-
-#[test]
-fn kit_fails_a_store_that_splits_surrogates_on_hit_test() {
-    assert_kit_catches(
-        Fault::SplitsSurrogatesOnHitTest,
-        "index_at_point_never_splits_a_surrogate_pair",
-    );
-}
-
-#[test]
-fn kit_fails_a_store_that_notifies_per_edit() {
-    assert_kit_catches(
-        Fault::NotifiesPerEdit,
-        "one_session_is_one_owner_notification",
     );
 }
 

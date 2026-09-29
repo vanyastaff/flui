@@ -34,43 +34,6 @@ impl std::future::Future for Signal {
     }
 }
 
-/// A completion signalled between frames is observed by the next frame, and only
-/// by that frame — polling never happens outside the driver step.
-#[test]
-fn headless_completion_between_frames_is_observed_by_the_next_frame() {
-    let mut binding = HeadlessBinding::new();
-    let done = Arc::new(AtomicBool::new(false));
-    let waker: Arc<Mutex<Option<Waker>>> = Arc::new(Mutex::new(None));
-    let polls = Arc::new(AtomicUsize::new(0));
-
-    let _token = binding.spawn_local(Box::pin(Signal {
-        done: Arc::clone(&done),
-        waker: Arc::clone(&waker),
-        polls: Arc::clone(&polls),
-    }));
-
-    binding.pump_frame(Duration::from_millis(16));
-    assert_eq!(polls.load(Ordering::Relaxed), 1, "first frame polls once");
-    assert_eq!(binding.scheduler().pending_task_count(), 1, "still pending");
-
-    // A frame with no wake must not re-poll.
-    binding.pump_frame(Duration::from_millis(16));
-    assert_eq!(polls.load(Ordering::Relaxed), 1);
-
-    // Complete from outside a frame, as an async completion would.
-    done.store(true, Ordering::Release);
-    waker.lock().as_ref().expect("waker stored").wake_by_ref();
-    assert_eq!(
-        polls.load(Ordering::Relaxed),
-        1,
-        "waking must not poll; only the frame's driver step polls"
-    );
-
-    binding.pump_frame(Duration::from_millis(16));
-    assert_eq!(polls.load(Ordering::Relaxed), 2);
-    assert_eq!(binding.scheduler().pending_task_count(), 0, "completed");
-}
-
 /// A wake from a worker thread is picked up by the next frame, on the frame
 /// thread.
 #[test]

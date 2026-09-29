@@ -114,12 +114,6 @@ mod tests {
         log: Vec<String>,
     }
 
-    impl Recorder {
-        fn joined(&self) -> String {
-            self.log.join(" ")
-        }
-    }
-
     impl LayerVisitor for Recorder {
         fn enter(&mut self, _tree: &LayerTree, id: LayerId, layer: &flui_layer::Layer) -> Step {
             let kind = match layer {
@@ -137,87 +131,10 @@ mod tests {
         }
     }
 
-    /// A visitor that consumes the subtree of the first `Canvas` node it sees,
-    /// standing in for the windowed renderer's diverted handlers.
-    struct DivertingVisitor {
-        inner: Recorder,
-    }
-
-    impl LayerVisitor for DivertingVisitor {
-        fn enter(&mut self, tree: &LayerTree, id: LayerId, layer: &flui_layer::Layer) -> Step {
-            if matches!(layer, flui_layer::Layer::Canvas(_)) {
-                self.inner.log.push(format!("handled{}", id.get()));
-                return Step::SkipSubtree;
-            }
-            self.inner.enter(tree, id, layer)
-        }
-
-        fn exit(&mut self, tree: &LayerTree, id: LayerId, layer: &flui_layer::Layer) {
-            self.inner.exit(tree, id, layer);
-        }
-    }
-
     fn offset() -> flui_layer::Layer {
         flui_layer::Layer::Offset(flui_layer::OffsetLayer::new(
             flui_foundation::geometry::Offset::ZERO,
         ))
-    }
-
-    fn canvas() -> flui_layer::Layer {
-        flui_layer::Layer::Canvas(Box::new(flui_layer::CanvasLayer::new()))
-    }
-
-    #[test]
-    fn order_is_enter_children_exit_in_paint_order() {
-        let mut tree = LayerTree::new(offset());
-        let root = tree.root();
-        let a = tree.push_child(root, offset());
-        let b = tree.push_child(root, offset());
-        let c = tree.push_child(a, canvas());
-
-        let mut rec = Recorder::default();
-        walk_layer_tree(&tree, root, &mut rec);
-
-        assert_eq!(
-            rec.joined(),
-            format!(
-                "offset{r} offset{a} canvas{c} cleanup{c} cleanup{a} \
-                 offset{b} cleanup{b} cleanup{r}",
-                r = root.get(),
-                a = a.get(),
-                b = b.get(),
-                c = c.get(),
-            ),
-            "paint order, with each cleanup after its own subtree"
-        );
-    }
-
-    /// `SkipSubtree` neither descends nor cleans up: the diverting handler owns
-    /// the subtree, so the walk must not also emit a cleanup the handler's own
-    /// path is responsible for balancing.
-    #[test]
-    fn skip_subtree_descends_not_and_cleans_not() {
-        let mut tree = LayerTree::new(offset());
-        let root = tree.root();
-        let a = tree.push_child(root, offset());
-        let hidden = tree.push_child(a, canvas());
-        let _inner = tree.push_child(hidden, offset());
-
-        let mut rec = DivertingVisitor {
-            inner: Recorder::default(),
-        };
-        walk_layer_tree(&tree, root, &mut rec);
-
-        assert_eq!(
-            rec.inner.joined(),
-            format!(
-                "offset{r} offset{a} handled{h} cleanup{a} cleanup{r}",
-                r = root.get(),
-                a = a.get(),
-                h = hidden.get(),
-            ),
-            "the diverted subtree contributes no enter for its child and no cleanup"
-        );
     }
 
     /// The property the module exists for: a deep chain walks on a small

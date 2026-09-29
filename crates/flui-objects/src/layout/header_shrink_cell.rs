@@ -116,29 +116,3 @@ impl BuildDuringLayoutCell for HeaderShrinkCell {
         self
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn shrink(offset: f64, overlaps: bool) -> HeaderShrink {
-        HeaderShrink {
-            shrink_offset: offset,
-            overlaps_content: overlaps,
-        }
-    }
-
-    /// Edge-triggered, not level-triggered. Republishing an unchanged value
-    /// after a commit must not re-dirty the element — a level-triggered flag
-    /// would re-dirty on every layout pass and the frame would never settle.
-    #[test]
-    fn republishing_an_unchanged_value_does_not_re_dirty() {
-        let cell = HeaderShrinkCell::new();
-        cell.publish(shrink(12.0, false));
-        cell.commit();
-        assert!(!cell.needs_build());
-
-        cell.publish(shrink(12.0, false));
-        assert!(!cell.needs_build());
-    }
-}

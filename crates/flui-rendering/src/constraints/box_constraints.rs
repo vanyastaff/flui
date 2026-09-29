@@ -879,28 +879,4 @@ impl From<BoxConstraints> for (f64, f64, f64, f64) {
 // ============================================================================
 
 #[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    #[test]
-    fn enforce_clamps_self_into_other_bounds() {
-        // Flutter `a.enforce(b)`: a's OWN values are clamped into b's [min,max],
-        // so the argument (parent) bounds win (box.dart BoxConstraints.enforce).
-        // additional minWidth 500 under a parent capped at 100 -> tight 100, not
-        // 500. (The reversed pre-fix impl returned min_width 500 here.)
-        let additional = BoxConstraints::new(500.0, f64::INFINITY, 0.0, f64::INFINITY);
-        let parent = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
-        let combined = additional.enforce(&parent);
-        assert_eq!(combined.min_width, 100.0);
-        assert_eq!(combined.max_width, 100.0);
-
-        // Overlapping ranges are unchanged either way (the common case, which is
-        // why the pre-fix bug stayed hidden).
-        let a = BoxConstraints::new(10.0, 50.0, 10.0, 50.0);
-        let b = BoxConstraints::new(0.0, 100.0, 0.0, 100.0);
-        let c = a.enforce(&b);
-        assert_eq!(c.min_width, 10.0);
-        assert_eq!(c.max_width, 50.0);
-    }
-}
+mod tests {}

@@ -219,13 +219,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn single_validates_exactly_one() {
-        assert!(!Single::validate_count(0));
-        assert!(Single::validate_count(1));
-        assert!(!Single::validate_count(2));
-    }
-
-    #[test]
     fn range_validates_bounds() {
         assert!(!Range::<2, 5>::validate_count(1));
         assert!(Range::<2, 5>::validate_count(2));

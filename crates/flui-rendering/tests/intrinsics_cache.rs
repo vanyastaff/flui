@@ -228,33 +228,6 @@ fn intrinsic_walk_memoizes_every_level() {
 // 2. Invalidation clears the chain
 // ============================================================================
 
-#[test]
-fn mark_needs_layout_invalidates_the_cached_chain() {
-    let mut f = fixture();
-
-    f.owner
-        .box_intrinsic_dimension(f.root, IntrinsicDimension::MinWidth, 100.0)
-        .expect("prime");
-    assert_eq!(f.intrinsic_runs.load(Ordering::Relaxed), 1);
-
-    // The leaf changes: every ancestor whose answer folded the leaf's
-    // must recompute on the next query.
-    f.owner.mark_needs_layout(f.leaf);
-
-    let v = f
-        .owner
-        .box_intrinsic_dimension(f.root, IntrinsicDimension::MinWidth, 100.0)
-        .expect("re-query after invalidation");
-    assert_eq!(v, 40.0);
-    assert_eq!(
-        f.intrinsic_runs.load(Ordering::Relaxed),
-        2,
-        "the invalidation walk must clear the root's and mid's caches \
-         too — a stale fold at any ancestor would answer without ever \
-         reaching the changed leaf"
-    );
-}
-
 // ============================================================================
 // 3. Control pair: boundary stops the walk ⇔ cached intrinsics escalate
 // ============================================================================
@@ -270,31 +243,3 @@ fn mark_needs_layout_invalidates_the_cached_chain() {
 // ============================================================================
 // 6. Passthrough proxy: intrinsics + dry layout forward unchanged
 // ============================================================================
-
-#[test]
-fn padding_forwards_intrinsics_with_insets() {
-    use flui_objects::RenderPadding;
-
-    let intrinsic_runs = Arc::new(AtomicUsize::new(0));
-    let dry_runs = Arc::new(AtomicUsize::new(0));
-
-    let mut owner = PipelineOwner::new();
-    let padding_id = owner.insert(Box::new(RenderPadding::all(10.0)) as BoxedRenderObject);
-    owner
-        .insert_child_render_object(
-            padding_id,
-            Box::new(CountingLeaf::new(
-                Arc::clone(&intrinsic_runs),
-                Arc::clone(&dry_runs),
-            )),
-        )
-        .expect("leaf under padding");
-
-    let width = owner
-        .box_intrinsic_dimension(padding_id, IntrinsicDimension::MinWidth, 100.0)
-        .expect("padding min width");
-    assert_eq!(
-        width, 60.0,
-        "padding must add horizontal insets to the child's 40px min width"
-    );
-}

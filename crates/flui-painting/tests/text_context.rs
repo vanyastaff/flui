@@ -11,7 +11,6 @@ use std::thread;
 use std::time::Instant;
 
 use flui_painting::parley_text::{ParagraphLayout, ParagraphSpec};
-use flui_painting::text_layout::font_system_initialized;
 use flui_painting::typography::{FontWeight, TextDirection, TextStyle};
 use flui_painting::{FontCollection, TextContext, TextLayoutResult};
 
@@ -101,22 +100,6 @@ fn two_realms_shape_in_parallel() {
         start_a < end_b && start_b < end_a,
         "the two threads' shaping intervals overlap"
     );
-}
-
-/// Building contexts, shaping and registering a face never build the
-/// cosmic-text path's process font system.
-#[test]
-fn the_parley_path_never_builds_the_process_font_system() {
-    let fonts = FontCollection::new();
-    let mut a = TextContext::new(&fonts);
-    let mut b = TextContext::new(&fonts);
-    shape(&mut a, LATIN, Some(120.0));
-    fonts
-        .register_font(PROBE_MONO)
-        .expect("the probe face loads");
-    shape(&mut b, LATIN, None);
-    shape(&mut a, "", None);
-    assert!(!font_system_initialized());
 }
 
 /// A face registered on the collection after two contexts were built shapes

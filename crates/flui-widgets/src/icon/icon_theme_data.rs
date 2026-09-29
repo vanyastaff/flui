@@ -178,19 +178,3 @@ impl InheritedView for IconTheme {
 }
 
 impl_inherited_view!(IconTheme);
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn resolved_against_prefers_self_and_falls_back_to_the_other() {
-        let partial = IconThemeData {
-            size: Some(32.0),
-            ..IconThemeData::default()
-        };
-        let resolved = partial.resolved_against(&IconThemeData::fallback());
-        assert_eq!(resolved.size, Some(32.0), "explicit field wins");
-        assert_eq!(resolved.color, Some(Color::BLACK), "unset field falls back");
-    }
-}

@@ -45,8 +45,6 @@ ui-events = { workspace = true }
 [dev-dependencies]
 # Pins that the lock arbiter and the reference store are owner-thread only.
 static_assertions = { workspace = true }
-# `Locale` tag round-trips.
-proptest = "1.5"
 serde_json = { workspace = true }
 
 [features]

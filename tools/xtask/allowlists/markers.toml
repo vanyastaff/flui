@@ -42,7 +42,7 @@ count = 1
 [[allow]]
 path = "crates/flui-engine/src/aa_oracle_tests.rs"
 class = "pr-label"
-count = 5
+count = 3
 
 [[allow]]
 path = "crates/flui-engine/src/advanced_blend/mod.rs"
@@ -52,7 +52,7 @@ count = 3
 [[allow]]
 path = "crates/flui-engine/src/batches/paths.rs"
 class = "pr-label"
-count = 3
+count = 2
 
 [[allow]]
 path = "crates/flui-engine/src/batches/shapes.rs"
@@ -70,11 +70,6 @@ class = "phase-letter"
 count = 2
 
 [[allow]]
-path = "crates/flui-engine/src/deterministic_replay_tests.rs"
-class = "slice"
-count = 4
-
-[[allow]]
 path = "crates/flui-engine/src/instancing.rs"
 class = "pr-label"
 count = 2
@@ -82,7 +77,7 @@ count = 2
 [[allow]]
 path = "crates/flui-engine/src/layer_blend_tests.rs"
 class = "pr-label"
-count = 4
+count = 1
 
 [[allow]]
 path = "crates/flui-engine/src/layer_offscreen.rs"
@@ -102,12 +97,12 @@ count = 2
 [[allow]]
 path = "crates/flui-engine/src/pipeline_cache.rs"
 class = "pr-label"
-count = 3
+count = 1
 
 [[allow]]
 path = "crates/flui-engine/src/pipeline_cache.rs"
 class = "tracker-h"
-count = 3
+count = 1
 
 [[allow]]
 path = "crates/flui-engine/src/renderer.rs"
@@ -130,11 +125,6 @@ class = "pr-label"
 count = 1
 
 [[allow]]
-path = "crates/flui-engine/src/shape_blend_tests.rs"
-class = "pr-label"
-count = 1
-
-[[allow]]
 path = "crates/flui-engine/src/ssaa.rs"
 class = "phase-letter"
 count = 1
@@ -143,11 +133,6 @@ count = 1
 path = "crates/flui-engine/src/ssaa.rs"
 class = "pr-label"
 count = 4
-
-[[allow]]
-path = "crates/flui-engine/src/ssaa.rs"
-class = "tracker-h"
-count = 3
 
 [[allow]]
 path = "crates/flui-foundation/src/lib.rs"
@@ -320,11 +305,6 @@ class = "pr-label"
 count = 1
 
 [[allow]]
-path = "crates/flui-view/tests/derive_bon_stack.rs"
-class = "spec-task"
-count = 2
-
-[[allow]]
 path = "crates/flui-view/tests/error_view_recovery.rs"
 class = "tracker-h"
 count = 1
@@ -336,11 +316,6 @@ count = 1
 
 [[allow]]
 path = "crates/flui-widgets/src/lib.rs"
-class = "wave"
-count = 1
-
-[[allow]]
-path = "crates/flui-widgets/tests/navigator_public.rs"
 class = "wave"
 count = 1
 

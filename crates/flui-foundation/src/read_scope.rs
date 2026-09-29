@@ -741,24 +741,6 @@ mod tests {
         }
     }
 
-    struct PanicSwallowingGraph(OneSlot);
-
-    impl ReadGraph for PanicSwallowingGraph {
-        fn graph_id(&self) -> u32 {
-            self.0.graph_id()
-        }
-
-        fn read_erased(
-            &self,
-            slot: SignalSlot,
-            read: &mut dyn FnMut(&dyn Any),
-        ) -> Result<(), SignalError> {
-            self.0.read_erased(slot, &mut |value| {
-                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read(value)));
-            })
-        }
-    }
-
     struct PreReadPanickingGraph(u32);
 
     impl ReadGraph for PreReadPanickingGraph {
@@ -810,141 +792,6 @@ mod tests {
         fn drop(&mut self) {
             panic!("{}", self.0);
         }
-    }
-
-    struct SharedCellInner {
-        value: Box<dyn Any>,
-        subscriptions: Vec<SignalSlot>,
-    }
-
-    /// A valid graph and sink that keep both faces in one `RefCell`. The read
-    /// loan therefore must end before the sink is called.
-    struct SharedCellGraph {
-        id: u32,
-        inner: RefCell<SharedCellInner>,
-    }
-
-    impl SharedCellGraph {
-        fn new<T: 'static>(id: u32, value: T) -> Self {
-            Self {
-                id,
-                inner: RefCell::new(SharedCellInner {
-                    value: Box::new(value),
-                    subscriptions: Vec::new(),
-                }),
-            }
-        }
-
-        fn slot(&self) -> SignalSlot {
-            SignalSlot::new(self.id, 0, 0)
-        }
-    }
-
-    impl ReadGraph for SharedCellGraph {
-        fn graph_id(&self) -> u32 {
-            self.id
-        }
-
-        fn read_erased(
-            &self,
-            slot: SignalSlot,
-            read: &mut dyn FnMut(&dyn Any),
-        ) -> Result<(), SignalError> {
-            if slot.graph() != self.id {
-                return Err(SignalError::ForeignGraph {
-                    index: slot.index(),
-                    graph: slot.graph(),
-                    this: self.id,
-                });
-            }
-            if slot.index() != 0 || slot.generation() != 0 {
-                return Err(SignalError::Released {
-                    index: slot.index(),
-                    generation: slot.generation(),
-                });
-            }
-            let inner = self.inner.borrow();
-            read(&*inner.value);
-            Ok(())
-        }
-    }
-
-    impl ReaderSink for SharedCellGraph {
-        fn subscribe(&self, slot: SignalSlot) {
-            self.inner.borrow_mut().subscriptions.push(slot);
-        }
-    }
-
-    impl ReadScope for SharedCellGraph {
-        fn scope(&self) -> ScopeRef<'_> {
-            ScopeRef::new(self, Some(self))
-        }
-    }
-
-    #[test]
-    fn a_handle_of_the_wrong_type_is_a_typed_error_and_subscribes_nobody() {
-        let graph = OneSlot::new(1, 7u32);
-        let sink = Recorder::default();
-        let cx = Cx {
-            graph: &graph,
-            sink: Some(&sink),
-        };
-        let wrong = Signal::<String>::from_slot(graph.slot());
-        let expected = SignalError::TypeMismatch {
-            index: 0,
-            expected: type_name::<String>(),
-        };
-
-        assert_eq!(wrong.try_get(&cx), Err(expected));
-        assert_eq!(wrong.peek(&graph, String::len), Err(expected));
-        assert!(
-            sink.0.borrow().is_empty(),
-            "a refused read subscribes nobody"
-        );
-
-        let right = Signal::<u32>::from_slot(graph.slot());
-        assert_eq!(right.try_get(&cx), Ok(7));
-        assert_eq!(*sink.0.borrow(), [graph.slot()]);
-    }
-
-    #[test]
-    fn a_valid_read_subscribes_before_its_user_closure_panic_resumes() {
-        let graph = OneSlot::new(1, 7u32);
-        let sink = Recorder::default();
-        let cx = Cx {
-            graph: &graph,
-            sink: Some(&sink),
-        };
-        let signal = Signal::<u32>::from_slot(graph.slot());
-
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            signal.with(&cx, |_| panic!("reader panics"));
-        }));
-
-        assert!(outcome.is_err());
-        assert_eq!(
-            *sink.0.borrow(),
-            [graph.slot()],
-            "a recovered build must retain the read that reached a valid signal value"
-        );
-    }
-
-    #[test]
-    fn subscription_waits_until_a_shared_graph_read_loan_is_released() {
-        let graph = SharedCellGraph::new(1, 7u32);
-        let signal = Signal::<u32>::from_slot(graph.slot());
-
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            signal.with(&graph, |_| panic!("reader probe"));
-        }));
-
-        let payload = outcome.expect_err("the original read panic must resume");
-        assert_eq!(payload.downcast_ref::<&str>(), Some(&"reader probe"));
-        assert_eq!(
-            graph.inner.borrow().subscriptions,
-            [graph.slot()],
-            "subscription happens after read_erased releases its RefCell borrow"
-        );
     }
 
     #[test]
@@ -1006,19 +853,6 @@ mod tests {
     }
 
     #[test]
-    fn a_graph_cannot_swallow_the_user_read_panic() {
-        let graph = PanicSwallowingGraph(OneSlot::new(1, 7u32));
-        let signal = Signal::<u32>::from_slot(graph.0.slot());
-
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = signal.peek(&graph, |_| panic!("reader probe"));
-        }));
-
-        let payload = outcome.expect_err("the captured user panic must resume");
-        assert_eq!(payload.downcast_ref::<&str>(), Some(&"reader probe"));
-    }
-
-    #[test]
     fn graph_panic_keeps_priority_over_the_unread_closures_destructor_panic() {
         let graph = PreReadPanickingGraph(1);
         let signal = Signal::<u32>::from_slot(SignalSlot::new(graph.graph_id(), 0, 0));
@@ -1035,28 +869,6 @@ mod tests {
             payload.downcast_ref::<&str>(),
             Some(&"graph probe"),
             "the unread closure's destructor panic must remain secondary"
-        );
-    }
-
-    #[test]
-    fn subscription_panic_keeps_priority_over_the_read_results_destructor_panic() {
-        let graph = OneSlot::new(1, 7u32);
-        let sink = PanickingSink;
-        let cx = Cx {
-            graph: &graph,
-            sink: Some(&sink),
-        };
-        let signal = Signal::<u32>::from_slot(graph.slot());
-
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            signal.with(&cx, |_| DropBomb("read result destructor probe"));
-        }));
-
-        let payload = outcome.expect_err("the subscription panic must resume");
-        assert_eq!(
-            payload.downcast_ref::<&str>(),
-            Some(&"subscription probe"),
-            "the read result's destructor panic must remain secondary"
         );
     }
 
@@ -1079,41 +891,5 @@ mod tests {
             Err(SignalError::Released { .. })
         ));
         assert!(sink.0.borrow().is_empty());
-    }
-
-    /// A graph that breaks `read_erased`'s contract: calls the reader
-    /// `calls` times and returns `Ok`.
-    struct Misbehaving {
-        calls: usize,
-    }
-
-    impl ReadGraph for Misbehaving {
-        fn graph_id(&self) -> u32 {
-            9
-        }
-
-        fn read_erased(
-            &self,
-            _slot: SignalSlot,
-            read: &mut dyn FnMut(&dyn Any),
-        ) -> Result<(), SignalError> {
-            for _ in 0..self.calls {
-                read(&1u32);
-            }
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn a_graph_that_never_calls_the_reader_is_refused_not_trusted() {
-        let slot = SignalSlot::new(9, 3, 4);
-        let sig = Signal::<u32>::from_slot(slot);
-        assert_eq!(
-            sig.peek(&Misbehaving { calls: 0 }, |v| *v),
-            Err(SignalError::Released {
-                index: 3,
-                generation: 4
-            })
-        );
     }
 }

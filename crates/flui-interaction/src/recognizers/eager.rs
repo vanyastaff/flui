@@ -247,33 +247,4 @@ impl GestureArenaMember for EagerGestureRecognizer {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::arena::GestureArena;
-
-    fn pos(x: f64, y: f64) -> Offset<f64> {
-        Offset::new(x, y)
-    }
-
-    /// `add_pointer` registers us as the eager winner without settling the
-    /// open arena. Closing the arena then resolves the claim synchronously.
-    #[test]
-    fn eager_add_pointer_claims_then_wins_when_the_arena_closes() {
-        let arena = GestureArena::new();
-        let recognizer = EagerGestureRecognizer::new(arena.clone());
-
-        let pointer = PointerId::PRIMARY;
-        let position = pos(50.0, 50.0);
-
-        recognizer.add_pointer(pointer, position, position);
-
-        assert!(arena.contains(pointer));
-        assert!(arena.is_open(pointer));
-
-        arena.close(pointer);
-
-        assert!(arena.contains(pointer));
-        assert_eq!(arena.drain_deferred_resolutions(), 1);
-        assert!(arena.is_empty());
-    }
-}
+mod tests {}

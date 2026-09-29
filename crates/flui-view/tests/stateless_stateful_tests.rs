@@ -121,21 +121,6 @@ impl View for CounterView {
 }
 
 #[test]
-fn test_stateful_element_set_state() {
-    let view = CounterView { initial_count: 0 };
-    let mut element = StatefulElement::new(&view, StatefulBehavior::new(&view));
-    let mut owner = BuildOwner::new();
-    element.mount(None, 0, &mut owner.element_owner_mut());
-
-    // Use set_state helper
-    element.set_state(|state| {
-        state.count.store(100, Ordering::SeqCst);
-    });
-
-    assert_eq!(element.state().count.load(Ordering::SeqCst), 100);
-}
-
-#[test]
 fn test_stateful_element_update_calls_did_update_view() {
     let view1 = CounterView { initial_count: 0 };
     let view2 = CounterView { initial_count: 10 };

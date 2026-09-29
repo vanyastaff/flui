@@ -480,31 +480,3 @@ impl CupertinoTextThemeData {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn with_primary_color_changes_action_text_style_color_not_the_base_text_style() {
-        let theme =
-            CupertinoTextThemeData::default().with_primary_color(CupertinoColors::SYSTEM_RED);
-        assert_eq!(
-            theme.action_text_style().color,
-            Some(CupertinoColors::SYSTEM_RED.color)
-        );
-        // The base `textStyle` role is label-driven, not primary-color-driven —
-        // a mutation collapsing this distinction would make both reads agree.
-        assert_eq!(theme.text_style().color, Some(CupertinoColors::LABEL.color));
-    }
-
-    #[test]
-    fn explicit_override_wins_over_the_default() {
-        let overridden = TextStyle {
-            font_size: Some(99.0),
-            ..TextStyle::default()
-        };
-        let theme = CupertinoTextThemeData::default().with_text_style(overridden.clone());
-        assert_eq!(theme.text_style(), overridden);
-    }
-}

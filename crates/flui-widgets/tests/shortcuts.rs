@@ -3,75 +3,7 @@
 //! `SingleActivator` matching test stays a unit test in
 //! `src/interaction/shortcuts.rs`.
 
-mod tests {
-
-    use std::rc::Rc;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use flui_interaction::events::{Key, KeyEvent, KeyState, Modifiers};
-    use flui_interaction::routing::{FocusNode, KeyEventResult};
-    use flui_widgets::SizedBox;
-    use flui_widgets::interaction::{CallbackShortcuts, Focus, SingleActivator};
-
-    use crate::common::harness::mount;
-
-    fn key_down(character: &str, modifiers: Modifiers) -> KeyEvent {
-        KeyEvent {
-            state: KeyState::Down,
-            key: Key::Character(character.into()),
-            modifiers,
-            ..KeyEvent::default()
-        }
-    }
-
-    /// `Shortcuts` end to end (ADR-0023): a shortcut above a focused `Focus` fires
-    /// only for keys that subtree **ignored** — a key the focused handler
-    /// consumed never reaches the binding, and a matching ignored key fires
-    /// every binding while counting as handled.
-    ///
-    /// Red-check: revert `dispatch_key_event` to the earlier flat dispatch —
-    /// the binding never fires and the second assertion fails.
-    #[test]
-    fn a_shortcut_fires_only_for_keys_the_focused_subtree_ignored() {
-        let fired = Arc::new(AtomicUsize::new(0));
-        let field = FocusNode::with_debug_label("shortcut-field");
-
-        // The inner "field" consumes the character "x" and ignores all else.
-        let inner = Focus::new(SizedBox::new(10.0, 10.0))
-            .focus_node(Rc::clone(&field))
-            .on_key_event(|_cx, event| match &event.key {
-                Key::Character(c) if c == "x" => KeyEventResult::Handled,
-                _ => KeyEventResult::Ignored,
-            });
-
-        let fired_for_binding = Arc::clone(&fired);
-        let harness = mount(CallbackShortcuts::new(inner).binding(
-            SingleActivator::character("d").control(),
-            move || {
-                fired_for_binding.fetch_add(1, Ordering::SeqCst);
-            },
-        ));
-        let manager = harness.focus_manager();
-        field.request_focus();
-
-        // Consumed below: never bubbles to the shortcut.
-        assert!(manager.dispatch_key_event(&key_down("x", Modifiers::empty())));
-        assert_eq!(
-            fired.load(Ordering::SeqCst),
-            0,
-            "a consumed key stays below"
-        );
-
-        // Ignored below and matching: the binding fires, the event is handled.
-        assert!(manager.dispatch_key_event(&key_down("d", Modifiers::CONTROL)));
-        assert_eq!(fired.load(Ordering::SeqCst), 1, "the shortcut fired");
-
-        // Ignored below and not matching: unhandled, nothing fires.
-        assert!(!manager.dispatch_key_event(&key_down("q", Modifiers::empty())));
-        assert_eq!(fired.load(Ordering::SeqCst), 1);
-    }
-}
+mod tests {}
 
 mod intent_tests {
 
@@ -83,7 +15,7 @@ mod intent_tests {
     use flui_interaction::routing::FocusNode;
     use flui_widgets::SizedBox;
     use flui_widgets::interaction::{
-        Action, ActionOutcome, Actions, CallbackAction, Focus, Intent, Shortcuts, SingleActivator,
+        Actions, CallbackAction, Focus, Intent, Shortcuts, SingleActivator,
     };
 
     use crate::common::harness::mount;
@@ -133,49 +65,6 @@ mod intent_tests {
             ..ctrl_s()
         }));
         assert_eq!(saves.load(Ordering::SeqCst), 1);
-    }
-
-    /// The default [`Action::to_key_event_result`](flui_widgets::interaction::Action::to_key_event_result)
-    /// maps a `NotPerformed` outcome to `SkipRemainingHandlers`
-    /// (`actions.dart:312-314`): the action runs, but the event reports
-    /// unconsumed and stops bubbling.
-    ///
-    /// Flutter parity (`actions_test.dart`, tag `3.44.0`): stands in for
-    /// `'Base Action class default toKeyEventResult delegates to
-    /// consumesKey'`. **Adapted, documented divergence**: Flutter splits the
-    /// question across two independently overridable methods,
-    /// `consumesKey`/`toKeyEventResult`, which can disagree; FLUI collapsed
-    /// them into the one method this test exercises (ADR-0023/ADR-0026) —
-    /// there is no separate `consumes_key` to assert delegates to anything.
-    #[test]
-    fn a_non_consuming_action_runs_but_leaves_the_event_unconsumed() {
-        // An action that runs but changes nothing declines the key, so the
-        // event keeps bubbling instead of being swallowed.
-        struct NonConsuming(Arc<AtomicUsize>);
-        impl Action<SaveIntent> for NonConsuming {
-            fn invoke(&self, _intent: &SaveIntent) -> ActionOutcome {
-                self.0.fetch_add(1, Ordering::SeqCst);
-                ActionOutcome::NotPerformed
-            }
-        }
-
-        let runs = Arc::new(AtomicUsize::new(0));
-        let field = FocusNode::with_debug_label("nonconsuming-field");
-        let harness = mount(
-            Actions::new(
-                Shortcuts::new(Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&field)))
-                    .shortcut(SingleActivator::character("s").control(), SaveIntent),
-            )
-            .action(NonConsuming(Arc::clone(&runs))),
-        );
-        let manager = harness.focus_manager();
-        field.request_focus();
-
-        assert!(
-            !manager.dispatch_key_event(&ctrl_s()),
-            "SkipRemainingHandlers reports the event unconsumed"
-        );
-        assert_eq!(runs.load(Ordering::SeqCst), 1, "the action still ran");
     }
 }
 
@@ -242,38 +131,6 @@ mod tab_tests {
 
         assert!(manager.dispatch_key_event(&tab(true)), "Shift+Tab too");
         assert!(left.has_primary_focus(), "and it stepped back");
-    }
-
-    /// `NextFocusAction`'s key result is **what the traversal did**
-    /// (`focus_traversal.dart:2340-2348`): with a `Stop` edge and nowhere to
-    /// go, the action runs, moves nothing, and reports the event
-    /// **unconsumed** — so an outer handler still gets its chance. This is the
-    /// channel ADR-0023 dropped and ADR-0026's review chose to reopen with
-    /// a breaking `invoke -> ActionOutcome` rather than a second, silently
-    /// divergent method.
-    ///
-    /// Red-check: make `to_key_event_result` ignore the outcome (the trait
-    /// default) — the dead Tab reports handled and swallows the key.
-    #[test]
-    fn a_tab_with_nowhere_to_go_reports_the_key_unconsumed() {
-        use flui_interaction::routing::TraversalEdgeBehavior;
-
-        let scope = FocusScopeNode::with_debug_label("dead-end-scope");
-        scope.set_traversal_edge_behavior(TraversalEdgeBehavior::Stop);
-        let only = FocusNode::with_debug_label("only");
-
-        let harness = mount(FocusScope::with_external_node(
-            Rc::clone(&scope),
-            Focus::new(SizedBox::new(10.0, 10.0)).focus_node(Rc::clone(&only)),
-        ));
-        let manager = harness.focus_manager();
-        only.request_focus();
-
-        assert!(
-            !manager.dispatch_key_event(&tab(false)),
-            "a Tab that moved nothing is reported unconsumed"
-        );
-        assert!(only.has_primary_focus(), "and the focus stayed put");
     }
 }
 

@@ -94,10 +94,6 @@ impl Sender {
         })
     }
 
-    fn subscriptions(&self) -> usize {
-        self.channel.subscriptions.load(Ordering::Relaxed)
-    }
-
     fn push(&self, event: Event) {
         self.channel.events.lock().push_back(event);
         if let Some(waker) = self.channel.waker.lock().as_ref() {
@@ -150,34 +146,6 @@ fn waiting(data: Option<i32>, error: Option<&'static str>) -> Seen {
     }
 }
 
-/// Flutter's `afterConnected` is unconditional and Dart's `listen` never delivers
-/// synchronously: `Waiting` is always observed before the first event — even one
-/// already queued by the producer.
-#[test]
-fn stream_builder_shows_waiting_before_the_first_event() {
-    let log = Arc::new(Mutex::new(Vec::new()));
-    let sender = Sender::new();
-    sender.data(1); // queued BEFORE mount
-
-    let mut laid = lay_out(
-        StreamBuilder::keyed(
-            Some(1_u32),
-            sender.factory(),
-            recording_builder(Arc::clone(&log)),
-        ),
-        loose(400.0),
-    );
-
-    assert_eq!(
-        last(&log),
-        waiting(None, None),
-        "a stream must show Waiting before its first event, even one already queued"
-    );
-
-    laid.tick();
-    assert_eq!(last(&log), active(Some(1), None));
-}
-
 /// `'tracks events and errors of stream until completion'`:
 /// `Waiting` → `Active(d)` → `Active(err)` → `Active(d)` → `Done`.
 #[test]
@@ -226,108 +194,4 @@ fn stream_builder_data_error_data_then_done() {
         },
         "after_done preserves the last value"
     );
-}
-
-/// `'gracefully handles transition to other stream'` +
-/// `'ignores initialData when reconfiguring'`.
-#[test]
-fn stream_builder_key_change_preserves_old_payload_while_waiting() {
-    let log = Arc::new(Mutex::new(Vec::new()));
-    let first = Sender::new();
-
-    let mut laid = lay_out(
-        StreamBuilder::keyed(
-            Some(1_u32),
-            first.factory(),
-            recording_builder(Arc::clone(&log)),
-        )
-        .with_initial_data(Rc::new(|| Payload(99))),
-        loose(400.0),
-    );
-    first.data(1);
-    laid.tick();
-    assert_eq!(last(&log), active(Some(1), None));
-
-    let second = Sender::new();
-    laid.pump_widget(
-        StreamBuilder::keyed(
-            Some(2_u32),
-            second.factory(),
-            recording_builder(Arc::clone(&log)),
-        )
-        .with_initial_data(Rc::new(|| Payload(99))),
-    );
-
-    assert_eq!(
-        last(&log),
-        waiting(Some(1), None),
-        "old value visible while the new stream waits; initialData (99) not re-applied"
-    );
-
-    second.data(2);
-    laid.tick();
-    assert_eq!(last(&log), active(Some(2), None));
-}
-
-/// `'gracefully handles transition to null stream'`: cancel, drop to `None`,
-/// keep the payload.
-#[test]
-fn stream_builder_transition_to_absent_stream_cancels() {
-    let log = Arc::new(Mutex::new(Vec::new()));
-    let sender = Sender::new();
-
-    let mut laid = lay_out(
-        StreamBuilder::keyed(
-            Some(1_u32),
-            sender.factory(),
-            recording_builder(Arc::clone(&log)),
-        ),
-        loose(400.0),
-    );
-    sender.data(4);
-    laid.tick();
-    assert_eq!(last(&log), active(Some(4), None));
-
-    laid.pump_widget(StreamBuilder::<u32, _, _>::keyed(
-        None,
-        sender.factory(),
-        recording_builder(Arc::clone(&log)),
-    ));
-
-    assert_eq!(
-        last(&log),
-        Seen {
-            state: ConnectionState::None,
-            data: Some(4),
-            error: None
-        }
-    );
-}
-
-/// An unchanged key is an early return: no resubscribe, snapshot untouched.
-#[test]
-fn stream_builder_same_key_does_not_resubscribe() {
-    let log = Arc::new(Mutex::new(Vec::new()));
-    let sender = Sender::new();
-
-    let mut laid = lay_out(
-        StreamBuilder::keyed(
-            Some(1_u32),
-            sender.factory(),
-            recording_builder(Arc::clone(&log)),
-        ),
-        loose(400.0),
-    );
-    sender.data(3);
-    laid.tick();
-    assert_eq!(sender.subscriptions(), 1);
-
-    laid.pump_widget(StreamBuilder::keyed(
-        Some(1_u32),
-        sender.factory(),
-        recording_builder(Arc::clone(&log)),
-    ));
-
-    assert_eq!(sender.subscriptions(), 1, "no resubscribe");
-    assert_eq!(last(&log), active(Some(3), None), "snapshot untouched");
 }

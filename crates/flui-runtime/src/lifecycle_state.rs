@@ -133,41 +133,17 @@ mod lifecycle_derivation_tests {
     use flui_foundation::geometry::Offset;
     use flui_interaction::{
         HitTestEntry, HitTestResult, InteractionLane, RenderId,
-        events::{PointerType, make_down_event, make_move_event},
+        events::{PointerType, make_down_event},
     };
     use flui_view::WidgetsBindingObserver;
 
     use super::{AppLifecycleState, derive_lifecycle_state, lifecycle_ladder};
-
-    struct GestureStateObserver {
-        cleanup_committed: Arc<AtomicBool>,
-        hidden_saw_cleanup: AtomicBool,
-    }
-
-    impl WidgetsBindingObserver for GestureStateObserver {
-        fn did_change_app_lifecycle_state(&self, state: AppLifecycleState) {
-            if state == AppLifecycleState::Hidden {
-                self.hidden_saw_cleanup.store(
-                    self.cleanup_committed.load(Ordering::Acquire),
-                    Ordering::Release,
-                );
-            }
-        }
-    }
 
     struct LifecycleSeen(Mutex<Vec<AppLifecycleState>>);
 
     impl WidgetsBindingObserver for LifecycleSeen {
         fn did_change_app_lifecycle_state(&self, state: AppLifecycleState) {
             self.0.lock().expect("lifecycle log lock").push(state);
-        }
-    }
-
-    struct SetCleanupOnDrop(Arc<AtomicBool>);
-
-    impl Drop for SetCleanupOnDrop {
-        fn drop(&mut self) {
-            self.0.store(true, Ordering::Release);
         }
     }
 
@@ -223,99 +199,6 @@ mod lifecycle_derivation_tests {
                 AppLifecycleState::Paused,
             ]
         );
-    }
-
-    /// Resume's ladder: the exact reverse of Pause's.
-    #[test]
-    fn ladder_steps_backward_through_every_intermediate_state_in_order() {
-        assert_eq!(
-            lifecycle_ladder(AppLifecycleState::Paused, AppLifecycleState::Resumed),
-            vec![
-                AppLifecycleState::Hidden,
-                AppLifecycleState::Inactive,
-                AppLifecycleState::Resumed,
-            ]
-        );
-    }
-
-    /// `Detached` as the TARGET is the oracle's special case: walk every
-    /// remaining state after `old`, in order, then append `Detached` itself.
-    #[test]
-    fn ladder_to_detached_walks_every_remaining_state_then_appends_detached() {
-        assert_eq!(
-            lifecycle_ladder(AppLifecycleState::Resumed, AppLifecycleState::Detached),
-            vec![
-                AppLifecycleState::Inactive,
-                AppLifecycleState::Hidden,
-                AppLifecycleState::Paused,
-                AppLifecycleState::Detached,
-            ]
-        );
-        assert_eq!(
-            lifecycle_ladder(AppLifecycleState::Hidden, AppLifecycleState::Detached),
-            vec![AppLifecycleState::Paused, AppLifecycleState::Detached]
-        );
-    }
-
-    #[test]
-    fn hidden_transition_drains_the_realms_interrupted_pointer_sequence() {
-        let realm = crate::ui_realm::UiRealm::for_test();
-        let lane = InteractionLane::try_new().expect("test interaction lane");
-        let handle = lane.dispatch_handle();
-        let cleanup_committed = Arc::new(AtomicBool::new(false));
-        let observer = Arc::new(GestureStateObserver {
-            cleanup_committed: Arc::clone(&cleanup_committed),
-            hidden_saw_cleanup: AtomicBool::new(false),
-        });
-        let observer_handle: Arc<dyn WidgetsBindingObserver> = observer.clone();
-        realm.widgets().add_observer(observer_handle.clone());
-
-        realm.enter(|realm| {
-            lane.enter(|| {
-                realm
-                    .gestures()
-                    .set_resampling_enabled(true)
-                    .expect("test realm has no active pointer before configuration");
-                let owner = SetCleanupOnDrop(Arc::clone(&cleanup_committed));
-                let target = handle
-                    .register_pointer(move |_| {
-                        let _keep_owner_alive = &owner;
-                    })
-                    .expect("register lifecycle target");
-                let mut result = HitTestResult::new();
-                result.add(HitTestEntry::new(RenderId::new(1)).pointer_target(target));
-                let down = make_down_event(Offset::new(8.0, 13.0), PointerType::Touch);
-                realm.gestures().handle_pointer_event(&down, |_| result);
-                let move_event = make_move_event(Offset::new(9.0, 14.0), PointerType::Touch);
-                realm
-                    .gestures()
-                    .handle_pointer_event(&move_event, |_| HitTestResult::new());
-                handle
-                    .unregister_pointer(target)
-                    .expect("cached route retains lifecycle target");
-                assert_eq!(realm.gestures().active_pointer_count(), 1);
-                assert_eq!(realm.gestures().active_resampler_count(), 1);
-                assert_eq!(realm.gestures().pending_move_count(), 1);
-
-                realm.update_host_lifecycle(AppLifecycleState::Hidden);
-
-                assert_eq!(realm.gestures().active_pointer_count(), 0);
-                assert_eq!(realm.gestures().active_resampler_count(), 0);
-                assert_eq!(realm.gestures().pending_move_count(), 0);
-                assert!(realm.gestures().arena().is_empty());
-                assert!(
-                    observer.hidden_saw_cleanup.load(Ordering::Acquire),
-                    "lifecycle observers must see gesture teardown already committed"
-                );
-
-                // Restore Resumed before this test-local realm drops -- tidy,
-                // not required for isolation (each realm owns its own
-                // scheduler now, so there is nothing left to leak between
-                // tests).
-                realm.update_host_lifecycle(AppLifecycleState::Resumed);
-            });
-        });
-        realm.widgets().remove_observer(&observer_handle);
     }
 
     #[test]

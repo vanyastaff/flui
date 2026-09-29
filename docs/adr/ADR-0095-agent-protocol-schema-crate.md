@@ -154,10 +154,9 @@ recorded by one is a valid golden file for the other.
 For the accepted part:
 
 - `cargo nextest run -p flui-protocol --all-features`:
-  `every_role_is_listed_once_and_valued_by_its_index`,
-  `every_action_is_one_distinct_unreserved_bit`, `the_advertised_action_names_are_adr_0080s`,
-  `every_wire_role_serializes_to_its_name`, `every_action_name_serializes_to_its_tool_name`,
-  `the_role_schema_lists_every_wire_name` and `checked_serializes_as_a_flag_or_mixed`. The
+  `the_advertised_action_names_are_adr_0080s`,
+  `every_wire_name_serializes_to_its_vocabulary_string` and
+  `the_role_schema_lists_every_wire_name`. The
   serde and schemars tests compile only with those features.
 - `cargo nextest run -p flui-semantics`: `every_role_but_none_maps_to_an_accesskit_role` (the
   pin for the mapping now that `explicit_role` ends in a wildcard) and

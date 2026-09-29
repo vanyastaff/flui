@@ -925,20 +925,6 @@ impl NavigatorHandle {
         }
     }
 
-    /// Re-registrations that changed a name's `Output` type, and the conflict
-    /// warnings actually emitted. Test-facing: `warns_emitted` is incremented in
-    /// the same block that calls `tracing::warn!`, so asserting on it asserts on
-    /// the warn rather than on a parallel predicate.
-    #[cfg(test)]
-    pub(crate) fn route_conflicts_seen(&self) -> usize {
-        self.shared.named_routes.conflicts_seen()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn route_conflict_warns(&self) -> usize {
-        self.shared.named_routes.warns_emitted()
-    }
-
     /// How many attached observers drive hero flights — the auto-default plus any
     /// hand-attached `HeroController`s. Test-facing: pins that automatic attach adds
     /// exactly one, and that a manual controller suppresses it. Read through

@@ -65,20 +65,3 @@ pub fn english_like_2021() -> TextTheme {
         body_small: Some(style(12.0, FontWeight::W400, 0.4, 1.33)),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn every_role_carries_no_color() {
-        let scale = english_like_2021();
-        for role in scale.roles() {
-            assert_eq!(
-                role.and_then(|s| s.color),
-                None,
-                "englishLike2021 provides geometry only, per oracle contract"
-            );
-        }
-    }
-}

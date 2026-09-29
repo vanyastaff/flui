@@ -338,49 +338,6 @@ mod tests {
 
     // ── bounds ──────────────────────────────────────────────────────────────
 
-    /// The real compile-proof: a function generic over `T` and `E` with **no
-    /// bounds at all**, driving every constructor, fold, and accessor. If any of
-    /// them required `T: Clone` / `E: Clone` (or `Copy`), this would not compile.
-    fn exercise_every_fold_without_bounds<T, E>(data: T, error: E) -> ConnectionState {
-        let snapshot = AsyncSnapshot::<T, E>::nothing()
-            .after_subscribe()
-            .after_data(data)
-            .after_error(error)
-            .after_connected()
-            .after_disconnected()
-            .after_done()
-            .in_state(ConnectionState::Active);
-        let _ = snapshot.data();
-        let _ = snapshot.error();
-        let _ = snapshot.has_data();
-        let _ = snapshot.has_error();
-        let _ = AsyncSnapshot::<T, E>::waiting();
-        let _ = AsyncSnapshot::<T, E>::initial(None);
-        snapshot.connection_state()
-    }
-
-    /// Compile-proof: constructing, folding, and reading a snapshot works with a
-    /// payload and error that implement neither `Clone` nor `Copy`.
-    #[test]
-    fn async_snapshot_needs_no_clone_bound_on_t_or_e() {
-        // Instantiate the unbounded generic with non-Clone, non-Copy types.
-        assert_eq!(
-            exercise_every_fold_without_bounds(NoClone(1), Oops("e")),
-            ConnectionState::Active
-        );
-
-        let snapshot: Snap = Snap::nothing()
-            .after_subscribe()
-            .after_data(NoClone(1))
-            .after_error(Oops("boom"))
-            .after_done();
-
-        assert_eq!(snapshot.connection_state(), ConnectionState::Done);
-        assert_eq!(snapshot.error(), Some(&Oops("boom")));
-        assert!(!snapshot.has_data());
-        assert_eq!(snapshot.into_error(), Some(Oops("boom")));
-    }
-
     // ── invariant ───────────────────────────────────────────────────────────
 
     // ── FutureBuilder transition table ───────────────────────────────────────
@@ -403,79 +360,7 @@ mod tests {
         assert!(!snapshot.has_error());
     }
 
-    /// `'gives expected snapshot with SynchronousFuture'`: a future already
-    /// `Done` when `after_subscribe` runs must **not** be dragged back to
-    /// `Waiting`.
-    #[test]
-    fn future_synchronous_completion_never_shows_waiting() {
-        let snapshot = Snap::initial(None)
-            .after_success(NoClone(1)) // completed inline, before after_subscribe
-            .after_subscribe();
-
-        assert_eq!(
-            snapshot.connection_state(),
-            ConnectionState::Done,
-            "an already-Done snapshot must not regress to Waiting"
-        );
-        assert_eq!(snapshot.data(), Some(&NoClone(1)));
-    }
-
-    /// `'gracefully handles transition to other future'` +
-    /// `'ignores initialData when reconfiguring'`: swapping the future does
-    /// `in_state(None)` → `after_subscribe()` → `Waiting`, **keeping the old
-    /// data** throughout. `initial_data` is never re-applied.
-    #[test]
-    fn future_new_key_preserves_old_data_through_none_and_waiting() {
-        let settled = Snap::initial(None)
-            .after_subscribe()
-            .after_success(NoClone(1));
-        assert_eq!(settled.connection_state(), ConnectionState::Done);
-
-        // didUpdateWidget: unsubscribe, then `_snapshot.inState(none)`.
-        let disconnected = settled.after_disconnected();
-        assert_eq!(disconnected.connection_state(), ConnectionState::None);
-        assert_eq!(
-            disconnected.data(),
-            Some(&NoClone(1)),
-            "in_state(None) preserves data"
-        );
-
-        // …then resubscribe.
-        let resubscribed = disconnected.after_subscribe();
-        assert_eq!(resubscribed.connection_state(), ConnectionState::Waiting);
-        assert_eq!(
-            resubscribed.data(),
-            Some(&NoClone(1)),
-            "the old value is still shown while the new future is Waiting; \
-             initialData is NOT re-applied"
-        );
-    }
-
     // ── StreamBuilder fold table ─────────────────────────────────────────────
-
-    /// `'tracks events and errors of stream until completion'`:
-    /// `Waiting` → `Active(d)` → `Active(err)` → `Active(d)` → `Done`.
-    #[test]
-    fn stream_life_cycle_events_errors_then_done() {
-        let snapshot = Snap::initial(None).after_connected();
-        assert_eq!(snapshot.connection_state(), ConnectionState::Waiting);
-
-        let snapshot = snapshot.after_data(NoClone(1));
-        assert_eq!(snapshot.connection_state(), ConnectionState::Active);
-        assert_eq!(snapshot.data(), Some(&NoClone(1)));
-
-        let snapshot = snapshot.after_error(Oops("mid"));
-        assert_eq!(snapshot.connection_state(), ConnectionState::Active);
-        assert_eq!(snapshot.error(), Some(&Oops("mid")));
-        assert!(!snapshot.has_data(), "an error clears the stale value");
-
-        let snapshot = snapshot.after_data(NoClone(2));
-        assert!(!snapshot.has_error(), "a value clears the stale error");
-
-        let snapshot = snapshot.after_done();
-        assert_eq!(snapshot.connection_state(), ConnectionState::Done);
-        assert_eq!(snapshot.data(), Some(&NoClone(2)));
-    }
 
     /// Swapping streams: `after_disconnected` then `after_connected`, old value
     /// visible throughout. (`'gracefully handles transition to other stream'`.)

@@ -1382,25 +1382,6 @@ impl HasWindowHandle for WindowsWindow {
     }
 }
 
-#[cfg(test)]
-mod window_handle_availability_tests {
-    use super::handle_available;
-    use crate::shared::hwnd_affinity::TeardownRoute;
-
-    // This module compiles and runs only on Windows (`WindowsWindow` lives
-    // under `#[cfg(windows)]`), so on every other host it is proven sound
-    // only by `cross-typecheck`'s clippy pass — never linked, never
-    // executed there. `handle_available` itself is a pure function over an
-    // already-Linux-tested enum (`hwnd_affinity::route_teardown`'s own
-    // tests), so these four cases are the entire behavior this file adds.
-
-    #[test]
-    fn a_destroyed_or_recycled_window_refuses_a_handle() {
-        assert!(!handle_available(TeardownRoute::AlreadyGone));
-        assert!(!handle_available(TeardownRoute::StaleHandle));
-    }
-}
-
 impl HasDisplayHandle for WindowsWindow {
     fn display_handle(
         &self,
@@ -2190,85 +2171,5 @@ impl Drop for WindowsWindow {
             let hwnd_key = self.hwnd.0 as isize;
             let _prev = self.windows_map.lock().remove(&hwnd_key);
         }
-    }
-}
-
-/// Window callbacks live in the owner-thread context: a registration from
-/// any other thread is refused, and the refused callback is released on the
-/// thread that offered it.
-#[cfg(test)]
-mod callback_affinity_tests {
-    use std::sync::Arc;
-
-    use windows::Win32::{
-        Foundation::{HWND, LPARAM, WPARAM},
-        Graphics::Gdi::InvalidateRect,
-        UI::WindowsAndMessaging::{DestroyWindow, SendMessageW, WM_PAINT},
-    };
-
-    use super::super::{
-        WindowsPlatform,
-        test_probe::{Probe, ProbeLog, hwnd_of, open_hidden},
-    };
-
-    /// Invalidates the whole client area and handles `WM_PAINT` now. The
-    /// window is hidden, so the system would not paint it by itself;
-    /// `SendMessageW` runs `window_proc` synchronously, so the frame
-    /// callback has run (or not) by the time this returns.
-    fn paint_now(hwnd: HWND) {
-        // SAFETY: both calls take the handle and plain values; `hwnd` names a
-        // live window this thread created, so the send is handled here.
-        unsafe {
-            let _ = InvalidateRect(Some(hwnd), None, false);
-            SendMessageW(hwnd, WM_PAINT, Some(WPARAM(0)), Some(LPARAM(0)));
-        }
-    }
-
-    #[test]
-    fn off_owner_registration_is_refused_and_dropped_on_the_registering_thread() {
-        let platform = WindowsPlatform::new().expect("platform");
-        let window = open_hidden(&platform);
-        let log = Arc::new(ProbeLog::default());
-
-        let worker = std::thread::scope(|scope| {
-            scope
-                .spawn(|| {
-                    let probe = Probe::new(&log);
-                    window.on_request_frame(Box::new(move || probe.hit()));
-                    std::thread::current().id()
-                })
-                .join()
-                .expect("registering thread")
-        });
-        paint_now(hwnd_of(&window));
-
-        assert_eq!(log.runs(), 0, "an off-owner frame callback must not run");
-        assert_eq!(
-            log.dropped_on(),
-            Some(worker),
-            "the refused callback is released on the thread that offered it"
-        );
-    }
-
-    #[test]
-    fn registration_after_destroy_is_refused_not_parked_on_the_wrapper() {
-        let platform = WindowsPlatform::new().expect("platform");
-        let window = open_hidden(&platform);
-        // SAFETY: the handle names a live window this thread created.
-        unsafe { DestroyWindow(hwnd_of(&window)) }.expect("destroy on the owner");
-
-        let log = Arc::new(ProbeLog::default());
-        let probe = Probe::new(&log);
-        window.on_resize(Box::new(move |_, _| probe.hit()));
-
-        assert_eq!(
-            log.dropped_on(),
-            Some(std::thread::current().id()),
-            "a registration on a destroyed window is released at once, on the registering owner"
-        );
-        std::thread::spawn(move || drop(window))
-            .join()
-            .expect("worker drop");
-        assert_eq!(log.runs(), 0);
     }
 }

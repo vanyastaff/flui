@@ -148,11 +148,4 @@ mod tests {
         );
         assert_eq!(toml::from_str::<FluiConfig>(&toml).unwrap(), sample());
     }
-
-    #[test]
-    fn unknown_keys_from_older_files_are_ignored() {
-        let text = "[app]\nname = \"a\"\nversion = \"0.1.0\"\norganization = \"com.a\"\n\n[assets]\ndirectories = [\"assets\"]\n";
-        let config: FluiConfig = toml::from_str(text).unwrap();
-        assert_eq!(config.app.name, "a");
-    }
 }

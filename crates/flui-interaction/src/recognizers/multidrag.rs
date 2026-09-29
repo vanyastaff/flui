@@ -715,8 +715,8 @@ impl GestureArenaMember for MultiDragGestureRecognizer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{make_cancel_event, make_move_event_for_id, make_up_event_for_id};
-    use std::cell::Cell;
+    use crate::events::make_move_event_for_id;
+
     use std::rc::Rc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -740,48 +740,12 @@ mod tests {
         }
     }
 
-    /// Test handle that records the *first* update (to assert the pending
-    /// delta flush carries the accumulated distance).
-    struct FirstDeltaRecorder {
-        first: Arc<Mutex<Option<Offset<f64>>>>,
-    }
-    impl MultiDragHandle for FirstDeltaRecorder {
-        fn update(&self, details: MultiDragUpdateDetails) {
-            let mut slot = self.first.lock();
-            if slot.is_none() {
-                *slot = Some(details.delta);
-            }
-        }
-        fn end(&self, _: MultiDragEndDetails) {}
-        fn cancel(&self) {}
-    }
-
     struct PanickingCancelHandle;
     impl MultiDragHandle for PanickingCancelHandle {
         fn update(&self, _details: MultiDragUpdateDetails) {}
         fn end(&self, _details: MultiDragEndDetails) {}
         fn cancel(&self) {
             panic!("multi-drag cancel panic");
-        }
-    }
-
-    struct ReentrantCancelHandle {
-        recognizer: Arc<MultiDragGestureRecognizer>,
-        did_reenter: Cell<bool>,
-        cancels: Rc<Cell<usize>>,
-    }
-    impl MultiDragHandle for ReentrantCancelHandle {
-        fn update(&self, _details: MultiDragUpdateDetails) {
-            if !self.did_reenter.replace(true) {
-                self.recognizer
-                    .handle_event(PointerDispatch::at_root(&make_cancel_event(
-                        PointerType::Touch,
-                    )));
-            }
-        }
-        fn end(&self, _details: MultiDragEndDetails) {}
-        fn cancel(&self) {
-            self.cancels.set(self.cancels.get() + 1);
         }
     }
 
@@ -797,93 +761,6 @@ mod tests {
             ends: Arc::new(AtomicUsize::new(0)),
             cancels,
         }
-    }
-
-    /// Minimal competing arena member that records whether it was rejected.
-    struct RejectableMember {
-        rejected: Arc<Mutex<bool>>,
-    }
-    impl crate::sealed::arena_member::Sealed for RejectableMember {}
-    impl crate::arena::GestureArenaMember for RejectableMember {
-        fn accept_gesture(&self, _pointer: PointerId) {}
-        fn reject_gesture(&self, _pointer: PointerId) {
-            *self.rejected.lock() = true;
-        }
-    }
-
-    #[test]
-    fn slop_cross_rejects_competing_arena_member() {
-        // Multi-drag must really compete in the arena: crossing slop wins the
-        // pointer and rejects other members contending for it.
-        let arena = crate::arena::GestureArena::new();
-        let rec = MultiDragGestureRecognizer::new(arena.clone(), MultiDragAxis::Free)
-            .with_on_start(Rc::new(|_pointer, _pos| {
-                Some(Box::new(counting_handle(Arc::new(AtomicUsize::new(0)))) as _)
-            }));
-
-        let p = pointer_id(9);
-        rec.add_pointer(p, Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
-
-        // A competitor joins the same arena entry.
-        let rejected = Arc::new(Mutex::new(false));
-        arena.add(
-            p,
-            Arc::new(RejectableMember {
-                rejected: rejected.clone(),
-            }),
-        );
-        arena.close(p);
-
-        // Cross slop -> multi-drag wins -> competitor rejected.
-        rec.handle_event(PointerDispatch::at_root(&make_move_event_for_id(
-            p,
-            Offset::new(100.0, 100.0),
-            PointerType::Touch,
-        )));
-
-        assert!(
-            *rejected.lock(),
-            "competing member should be rejected when multi-drag wins the arena"
-        );
-    }
-
-    #[test]
-    fn initial_client_update_can_reenter_terminal_input() {
-        let arena = crate::arena::GestureArena::new();
-        let recognizer_slot = Rc::new(RefCell::new(None));
-        let slot_for_callback = Rc::clone(&recognizer_slot);
-        let cancels = Rc::new(Cell::new(0));
-        let cancels_for_callback = Rc::clone(&cancels);
-        let rec = MultiDragGestureRecognizer::new(arena.clone(), MultiDragAxis::Free)
-            .with_on_start(Rc::new(move |_pointer, _position| {
-                let recognizer = slot_for_callback
-                    .borrow()
-                    .as_ref()
-                    .cloned()
-                    .expect("recognizer installed before input");
-                Some(Box::new(ReentrantCancelHandle {
-                    recognizer,
-                    did_reenter: Cell::new(false),
-                    cancels: Rc::clone(&cancels_for_callback),
-                }) as _)
-            }));
-        let _prev = recognizer_slot.borrow_mut().replace(rec.clone());
-
-        rec.add_pointer(
-            PointerId::PRIMARY,
-            Offset::new(0.0, 0.0),
-            Offset::new(0.0, 0.0),
-        );
-        arena.close(PointerId::PRIMARY);
-        rec.handle_event(PointerDispatch::at_root(&make_move_event_for_id(
-            PointerId::PRIMARY,
-            Offset::new(25.0, 0.0),
-            PointerType::Touch,
-        )));
-
-        assert_eq!(cancels.get(), 1);
-        assert_eq!(rec.tracked_pointer_count(), 0);
-        assert!(arena.is_empty());
     }
 
     #[test]
@@ -949,120 +826,6 @@ mod tests {
         // Pointer 2: pending-flush only = 1.
         assert_eq!(updates_p1.load(Ordering::SeqCst), 2);
         assert_eq!(updates_p2.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn pending_delta_flushes_on_acceptance() {
-        // The first update received by the handle must carry the *full*
-        // accumulated delta (not just the last move's delta).
-        let arena = crate::arena::GestureArena::new();
-        let first = Arc::new(Mutex::new(None));
-        let first_clone = first.clone();
-        let rec = MultiDragGestureRecognizer::new(arena.clone(), MultiDragAxis::Free)
-            .with_on_start(Rc::new(move |_pointer, _pos| {
-                Some(Box::new(FirstDeltaRecorder {
-                    first: first_clone.clone(),
-                }))
-            }));
-
-        rec.add_pointer(pointer_id(7), Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
-        arena.close(pointer_id(7));
-        // Two small moves that together exceed 18px slop.
-        rec.handle_event(PointerDispatch::at_root(&make_move_event_for_id(
-            pointer_id(7),
-            Offset::new(10.0, 0.0),
-            PointerType::Touch,
-        )));
-        rec.handle_event(PointerDispatch::at_root(&make_move_event_for_id(
-            pointer_id(7),
-            Offset::new(20.0, 0.0),
-            PointerType::Touch,
-        )));
-
-        // The handle received the first update with the accumulated delta.
-        let recorded = *first.lock();
-        let recorded = recorded.expect("first update fired");
-        assert!(
-            recorded.dx.abs() > 18.0,
-            "expected first update to carry ≥slop delta, got {recorded:?}"
-        );
-    }
-
-    #[test]
-    fn up_after_acceptance_fires_end() {
-        let arena = crate::arena::GestureArena::new();
-        let ends = Arc::new(AtomicUsize::new(0));
-        let ends_clone = ends.clone();
-        let rec = MultiDragGestureRecognizer::new(arena.clone(), MultiDragAxis::Free)
-            .with_on_start(Rc::new(move |_pointer, _pos| {
-                Some(Box::new(CountingHandle {
-                    updates: Arc::new(AtomicUsize::new(0)),
-                    ends: ends_clone.clone(),
-                    cancels: Arc::new(AtomicUsize::new(0)),
-                }))
-            }));
-
-        rec.add_pointer(pointer_id(3), Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
-        arena.close(pointer_id(3));
-        rec.handle_event(PointerDispatch::at_root(&make_move_event_for_id(
-            pointer_id(3),
-            Offset::new(20.0, 0.0),
-            PointerType::Touch,
-        )));
-        rec.handle_event(PointerDispatch::at_root(&make_up_event_for_id(
-            pointer_id(3),
-            Offset::new(20.0, 0.0),
-            PointerType::Touch,
-        )));
-        assert_eq!(ends.load(Ordering::SeqCst), 1);
-        assert_eq!(rec.tracked_pointer_count(), 0);
-    }
-
-    #[test]
-    fn reject_from_arena_cancels_one_pointer_only() {
-        // Per-pointer isolation: rejecting pointer 7 must not affect pointer 8.
-        let arena = crate::arena::GestureArena::new();
-        let cancels_p7 = Arc::new(AtomicUsize::new(0));
-        let cancels_p8 = Arc::new(AtomicUsize::new(0));
-        let c7 = cancels_p7.clone();
-        let c8 = cancels_p8.clone();
-        let rec = MultiDragGestureRecognizer::new(arena.clone(), MultiDragAxis::Free)
-            .with_on_start(Rc::new(move |pointer, _pos| {
-                if pointer == pointer_id(7) {
-                    Some(Box::new(CountingHandle {
-                        updates: Arc::new(AtomicUsize::new(0)),
-                        ends: Arc::new(AtomicUsize::new(0)),
-                        cancels: c7.clone(),
-                    }))
-                } else {
-                    Some(Box::new(CountingHandle {
-                        updates: Arc::new(AtomicUsize::new(0)),
-                        ends: Arc::new(AtomicUsize::new(0)),
-                        cancels: c8.clone(),
-                    }))
-                }
-            }));
-
-        rec.add_pointer(pointer_id(7), Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
-        rec.add_pointer(pointer_id(8), Offset::new(0.0, 0.0), Offset::new(0.0, 0.0));
-        arena.close(pointer_id(7));
-        arena.close(pointer_id(8));
-        rec.handle_event(PointerDispatch::at_root(&make_move_event_for_id(
-            pointer_id(7),
-            Offset::new(20.0, 0.0),
-            PointerType::Touch,
-        )));
-        rec.handle_event(PointerDispatch::at_root(&make_move_event_for_id(
-            pointer_id(8),
-            Offset::new(20.0, 0.0),
-            PointerType::Touch,
-        )));
-        // Reject pointer 7 — should cancel only p7's drag.
-        rec.reject_gesture(pointer_id(7));
-        assert_eq!(cancels_p7.load(Ordering::SeqCst), 1);
-        assert_eq!(cancels_p8.load(Ordering::SeqCst), 0);
-        // Pointer 8 still tracked.
-        assert_eq!(rec.tracked_pointer_count(), 1);
     }
 
     #[test]

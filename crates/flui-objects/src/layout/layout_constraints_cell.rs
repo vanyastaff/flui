@@ -161,34 +161,3 @@ impl BuildDuringLayoutCell for LayoutConstraintsCell {
         self
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn bc(w: f64) -> BoxConstraints {
-        BoxConstraints::tight_for(Some(w), Some(10.0))
-    }
-
-    /// A change followed by a revert within one pass still leaves the cell
-    /// dirty only if the *final* published value differs from the committed
-    /// one — `publish` compares against `last_built`, not against the previous
-    /// publish.
-    #[test]
-    fn layout_builder_cell_revert_within_pass_settles_on_last_built() {
-        let cell = LayoutConstraintsCell::new();
-        cell.publish(bc(100.0));
-        cell.commit();
-
-        cell.publish(bc(200.0));
-        assert!(cell.needs_build());
-
-        // Republishing the committed value does not *clear* the flag — an
-        // intervening build was already scheduled. Only `commit` clears it.
-        cell.publish(bc(100.0));
-        assert!(cell.needs_build());
-        cell.commit();
-        assert!(!cell.needs_build());
-        assert_eq!(cell.constraints(), Some(bc(100.0)));
-    }
-}

@@ -44,9 +44,6 @@ mod floating_action_button;
 #[path = "icon_button.rs"]
 mod icon_button;
 
-#[path = "inherited_theme.rs"]
-mod inherited_theme;
-
 #[path = "ink_well.rs"]
 mod ink_well;
 
@@ -97,8 +94,8 @@ mod text_field;
 
 #[path = "text_form_field.rs"]
 mod text_form_field;
-#[path = "theme_fields.rs"]
-mod theme_fields;
-
 #[path = "theme.rs"]
 mod theme;
+
+#[path = "theme_fields.rs"]
+mod theme_fields;

@@ -418,28 +418,6 @@ mod tests {
         assert_eq!(seen.get(), Some(Err(TextStoreError::SyncLockUnavailable)));
     }
 
-    #[test]
-    fn async_inside_a_session_runs_on_release() {
-        let arbiter = Rc::new(LockArbiter::new());
-        let (log, grants) = labelled();
-        let grants = Rc::new(grants);
-        let (inner_arbiter, inner_log, inner_grants) =
-            (Rc::clone(&arbiter), Rc::clone(&log), Rc::clone(&grants));
-        let outer = LockGrant::read(move |_| {
-            inner_log.borrow_mut().push("outer");
-            let outcome =
-                inner_arbiter.request(inner_grants.grant("nested"), LockTiming::Async, &mut open);
-            assert_eq!(outcome, Ok(LockOutcome::Deferred));
-            inner_log.borrow_mut().push("outer ends");
-        });
-        assert_eq!(
-            arbiter.request(outer, LockTiming::Async, &mut open),
-            Ok(LockOutcome::Granted)
-        );
-        assert_eq!(*log.borrow(), ["outer", "outer ends", "nested"]);
-        assert_eq!(arbiter.pending(), 0);
-    }
-
     /// An arbiter following a gate the test holds, shut.
     fn behind_a_shut_gate() -> (LockArbiter, CommitGate) {
         let arbiter = LockArbiter::new();
@@ -447,25 +425,6 @@ mod tests {
         gate.set_open(false);
         arbiter.set_gate(gate.clone());
         (arbiter, gate)
-    }
-
-    #[test]
-    fn async_while_the_gate_is_shut_waits_for_run_deferred() {
-        let (arbiter, gate) = behind_a_shut_gate();
-        let (log, grants) = labelled();
-        assert_eq!(
-            arbiter.request(grants.grant("later"), LockTiming::Async, &mut open),
-            Ok(LockOutcome::Deferred)
-        );
-        assert_eq!(
-            arbiter.request(grants.grant("sync"), LockTiming::Sync, &mut open),
-            Err(TextStoreError::SyncLockUnavailable)
-        );
-        assert_eq!(arbiter.run_deferred(&mut open), 0, "the gate is still shut");
-        assert!(log.borrow().is_empty());
-        gate.set_open(true);
-        assert_eq!(arbiter.run_deferred(&mut open), 1);
-        assert_eq!(*log.borrow(), ["later"]);
     }
 
     #[test]

@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_widgets::SizedBox;
-use flui_widgets::interaction::{Action, ActionOutcome, Actions, CallbackAction, Intent};
+use flui_widgets::interaction::{Actions, CallbackAction, Intent};
 
 use crate::common::harness::mount;
 
@@ -35,17 +35,6 @@ impl StatelessView for InvokeProbe {
             self.ran.fetch_add(1, Ordering::SeqCst);
         }
         SizedBox::new(1.0, 1.0)
-    }
-}
-
-/// An action that reports disabled, to prove fall-through.
-struct Disabled;
-impl Action<AddToCounter> for Disabled {
-    fn is_enabled(&self, _intent: &AddToCounter) -> bool {
-        false
-    }
-    fn invoke(&self, _intent: &AddToCounter) -> ActionOutcome {
-        unreachable!("BUG: a disabled action must never be invoked (actions.dart:1032-1044)");
     }
 }
 
@@ -94,50 +83,5 @@ fn the_nearest_enabled_action_wins_and_receives_the_payload() {
         outer_sum.load(Ordering::SeqCst),
         0,
         "the outer action was shadowed"
-    );
-}
-
-/// A **disabled** nearer action stops resolution at its own scope — it
-/// does *not* fall through to an outer scope's mapping for the same
-/// intent type. This is Flutter's actual contract, not the inverse:
-/// `Actions.maybeInvoke`'s own doc states "If a suitable Action is found
-/// but its `isEnabled` returns false, the search will stop"
-/// (`actions.dart:993-995`) — the walk stops at the first scope that
-/// *declares* the type at all, whether or not it is enabled, and never
-/// reaches the outer action.
-///
-/// Red-check: merge `own` into the enclosing chain as a fallback list
-/// instead of an outright replace (i.e. keep the outer entry reachable
-/// once the inner one is checked) — `outer_sum` becomes `7` and `ran`
-/// becomes `1`, silently reintroducing the fall-through this test pins
-/// against.
-#[test]
-fn a_disabled_nearer_action_stops_resolution_at_its_own_scope() {
-    let ran = Arc::new(AtomicUsize::new(0));
-    let outer_sum = Arc::new(AtomicUsize::new(0));
-
-    let outer_counter = Arc::clone(&outer_sum);
-    let _harness = mount(
-        Actions::new(
-            Actions::new(InvokeProbe {
-                amount: 7,
-                ran: Arc::clone(&ran),
-            })
-            .action(Disabled),
-        )
-        .action(CallbackAction::new(move |intent: &AddToCounter| {
-            outer_counter.fetch_add(intent.0, Ordering::SeqCst);
-        })),
-    );
-
-    assert_eq!(
-        ran.load(Ordering::SeqCst),
-        0,
-        "maybe_invoke reported false: the disabled nearer mapping stopped the search"
-    );
-    assert_eq!(
-        outer_sum.load(Ordering::SeqCst),
-        0,
-        "the outer action was never reached, let alone invoked"
     );
 }

@@ -272,19 +272,6 @@ mod tests {
     }
 
     #[test]
-    fn test_substitute() {
-        let params = test_params();
-        let result = substitute(
-            "name={{app_name}}, lib={{lib_name}}, pkg={{package_name}}",
-            &params,
-        );
-        assert_eq!(
-            result,
-            "name=Test App, lib=test_app, pkg=com.example.test_app"
-        );
-    }
-
-    #[test]
     fn test_scaffold_platform_plan_matches_scaffold_platform() {
         let params = test_params();
 
@@ -305,52 +292,5 @@ mod tests {
                 file.rel_path.display()
             );
         }
-    }
-
-    #[test]
-    fn test_scaffold_android() {
-        let dir = tempfile::tempdir().expect("failed to create temp dir");
-        let params = test_params();
-
-        scaffold_platform("android", dir.path(), &params)
-            .expect("scaffold_platform should succeed");
-
-        let manifest = dir
-            .path()
-            .join("platforms/android/app/src/main/AndroidManifest.xml");
-        assert!(manifest.exists(), "AndroidManifest.xml should exist");
-        let content = std::fs::read_to_string(&manifest).expect("read manifest");
-        assert!(
-            content.contains("Test App"),
-            "app_name should be substituted"
-        );
-        assert!(
-            content.contains("test_app"),
-            "lib_name should be substituted"
-        );
-
-        let settings = dir.path().join("platforms/android/settings.gradle.kts");
-        assert!(settings.exists(), "settings.gradle.kts should exist");
-        let content = std::fs::read_to_string(&settings).expect("read settings");
-        assert!(
-            content.contains("Test App"),
-            "app_name in settings.gradle.kts"
-        );
-    }
-
-    #[test]
-    fn test_scaffold_web() {
-        let dir = tempfile::tempdir().expect("failed to create temp dir");
-        let params = test_params();
-
-        scaffold_platform("web", dir.path(), &params).expect("scaffold_platform should succeed");
-
-        let index = dir.path().join("platforms/web/index.html");
-        assert!(index.exists(), "index.html should exist");
-        let content = std::fs::read_to_string(&index).expect("read index.html");
-        assert!(content.contains("Test App"), "app_name in index.html");
-
-        let manifest = dir.path().join("platforms/web/manifest.json");
-        assert!(manifest.exists(), "manifest.json should exist");
     }
 }

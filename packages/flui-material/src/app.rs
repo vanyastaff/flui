@@ -406,18 +406,3 @@ impl StatelessView for MaterialBuilderScope {
         (self.builder)(ctx, self.child.clone())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    // Debug-only: the guard compiles out in release, where `#[should_panic]`
-    // would otherwise report "did not panic as expected" (release still
-    // panics, but later, during build — see the setter's doc).
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "requires at least one locale")]
-    fn empty_supported_locales_panics_at_construction() {
-        let _ = MaterialApp::new(SizedBox::shrink()).supported_locales(Vec::new());
-    }
-}

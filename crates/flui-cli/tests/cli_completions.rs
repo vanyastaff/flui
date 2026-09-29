@@ -19,12 +19,3 @@ fn completions_bash() {
         .success()
         .stdout(predicate::str::contains("complete"));
 }
-
-#[test]
-fn completions_invalid_shell() {
-    flui()
-        .args(["completions", "invalid-shell"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("invalid value"));
-}

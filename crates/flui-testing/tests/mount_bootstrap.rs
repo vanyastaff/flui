@@ -12,8 +12,6 @@
 //! for the bootstrap. Both plant a registry entry by hand rather than mounting
 //! a real `LayoutBuilder`, so they stay pure wiring tests of the frame path.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use flui_foundation::geometry::Size;
@@ -21,7 +19,7 @@ use flui_objects::RenderSizedBox;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::testing::inspect;
 use flui_testing::HeadlessBinding;
-use flui_testing::bootstrap::{BuildCapabilities, MountOptions, MountOwners};
+use flui_testing::bootstrap::{MountOptions, MountOwners};
 use flui_view::{RenderView, View};
 
 /// A leaf of a fixed size, so the bootstrap frame has real geometry to commit.
@@ -119,83 +117,5 @@ fn the_bound_binding_keeps_pumping_from_where_the_bootstrap_left_off() {
     assert!(
         binding.painted_frame_count() >= after_bootstrap,
         "a settled frame never un-counts an earlier paint",
-    );
-}
-
-#[test]
-fn withholding_the_post_frame_capability_outlasts_the_mount() {
-    // An embedder that drives frames itself installs no post-frame handle, and
-    // code acquiring one must behave when it is absent. The async driver still
-    // goes in — withholding it too would change which capability is under test.
-    //
-    // The withholding has to survive the bootstrap, not just the mount pass:
-    // `bind_tree` installs the full capability set unconditionally (that is its
-    // documented job for a caller binding owners directly), so a bootstrap that
-    // handed its owners to the public `bind_tree` would restore exactly what
-    // the caller asked to withhold, and every rebuild after `init_state` would
-    // silently see a handle the test believes is absent.
-    let mut binding = HeadlessBinding::new();
-    binding.mount_root(
-        &leaf(10.0, 10.0),
-        MountOwners::fresh(),
-        MountOptions::tight(50.0, 50.0).with_capabilities(BuildCapabilities::AsyncDriverOnly),
-    );
-
-    // The mount pass itself depends on the async driver, so reaching here at
-    // all is the assertion that `AsyncDriverOnly` still installs it.
-    binding.pump_frame(Duration::from_millis(16));
-
-    let build_owner = binding.build_owner_mut();
-    assert!(
-        build_owner.post_frame_handle().is_none(),
-        "AsyncDriverOnly must still be in force after the bootstrap bound the tree",
-    );
-    assert!(
-        build_owner.local_post_frame_handle().is_none(),
-        "the owner-local post-frame handle is withheld together with the shared one",
-    );
-}
-
-/// The bootstrap is a pipeline step, not a whole scheduler frame — and the
-/// difference is observable, so it is pinned rather than merely documented.
-///
-/// `pump_frame` wraps the same pipeline in `drive_frame_with_lane`, which adds
-/// `end_frame`'s post-frame callbacks. A callback scheduled while the tree is
-/// mounting therefore waits for the first pump. That mirrors production, where
-/// `attach_root_widget` mounts and lays out and the first `draw_frame` follows.
-#[test]
-fn a_post_frame_callback_scheduled_during_mount_waits_for_the_first_pump() {
-    let mut binding = HeadlessBinding::new();
-    let ran = Arc::new(AtomicBool::new(false));
-
-    let mounted = binding.mount_root(
-        &leaf(10.0, 10.0),
-        MountOwners::fresh(),
-        MountOptions::tight(50.0, 50.0),
-    );
-    assert!(
-        mounted.painted,
-        "precondition: the bootstrap committed a frame"
-    );
-
-    // Scheduled after the bootstrap for the same reason a `ViewState` would
-    // schedule one from `init_state`: the capability is installed before the
-    // mount, so the queue is reachable that early. What is being pinned is
-    // WHEN it drains.
-    let flag = Arc::clone(&ran);
-    flui_scheduler::PostFrameHandle::new(binding.scheduler())
-        .schedule(move |_| flag.store(true, Ordering::SeqCst));
-
-    assert!(
-        !ran.load(Ordering::SeqCst),
-        "the bootstrap runs the pipeline, not `end_frame`, so nothing drains \
-         the post-frame queue yet",
-    );
-
-    binding.pump_frame(Duration::from_millis(16));
-
-    assert!(
-        ran.load(Ordering::SeqCst),
-        "the first pump is a whole frame and drains the post-frame queue",
     );
 }

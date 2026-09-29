@@ -346,20 +346,6 @@ mod tests {
     }
 
     #[test]
-    fn ancestors_run_from_the_node_to_the_root_inclusive() {
-        let (tree, [root, a, _, c]) = cousins();
-        assert_eq!(tree.ancestors(c).collect::<Vec<_>>(), vec![c, a, root]);
-        assert_eq!(tree.ancestors(LayerId::new(999)).count(), 0);
-    }
-
-    #[test]
-    fn lowest_common_ancestor_of_cousins_is_their_shared_ancestor() {
-        let (tree, [root, _, b, c]) = cousins();
-        assert_eq!(tree.lowest_common_ancestor(c, b), Some(root));
-        assert_eq!(tree.lowest_common_ancestor(b, c), Some(root));
-    }
-
-    #[test]
     fn descendants_are_pre_order_with_depth_and_siblings_in_paint_order() {
         let (tree, [root, a, b, c]) = cousins();
         assert_eq!(

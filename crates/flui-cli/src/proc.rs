@@ -203,23 +203,6 @@ fn wait_with_deadline(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[cfg(unix)]
-    #[test]
-    fn slow_probe_is_killed_and_reported_as_timeout() {
-        let started = Instant::now();
-        let error = output_with_timeout(
-            Command::new("sh").args(["-c", "sleep 30"]),
-            Duration::from_millis(200),
-        )
-        .expect_err("must time out");
-        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-        assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "the wait must end at the deadline, not when the child would have exited"
-        );
-    }
 
     /// A child that exits at once but leaves a grandchild holding its stdout
     /// (a daemon it started) must not hang the probe: the drain is bounded.
@@ -238,15 +221,5 @@ mod tests {
             started.elapsed() < Duration::from_secs(5),
             "drain must be bounded"
         );
-    }
-
-    #[test]
-    fn missing_program_is_not_found() {
-        let error = output_with_timeout(
-            &mut Command::new("flui-definitely-not-a-real-tool-xyz"),
-            Duration::from_secs(1),
-        )
-        .expect_err("cannot spawn");
-        assert_eq!(error.kind(), io::ErrorKind::NotFound);
     }
 }

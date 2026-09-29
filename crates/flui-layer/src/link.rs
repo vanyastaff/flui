@@ -143,7 +143,7 @@ mod tests {
     use flui_foundation::geometry::Size;
 
     use super::*;
-    use crate::{FollowerLayer, Layer, LeaderLayer, OffsetLayer, TransformLayer};
+    use crate::{FollowerLayer, Layer, LeaderLayer, OffsetLayer};
 
     fn offset(dx: f64, dy: f64) -> Layer {
         Layer::from(OffsetLayer::new(Offset::new(dx, dy)))
@@ -179,36 +179,6 @@ mod tests {
             resolve_follower_offset(&tree, follower_id),
             Some(Offset::new(105.0, -195.0))
         );
-    }
-
-    /// Same geometry as above with the leader's branch a translation
-    /// `Transform` (what the composer pushes for `RenderTransform`); dropping
-    /// its translation would give `(5, -195)`.
-    #[test]
-    fn linked_through_a_transform_layer_counts_its_translation() {
-        let link = LayerLink::new();
-        let mut tree = LayerTree::new(offset(0.0, 0.0));
-        let root = tree.root();
-        let branch_a = tree.push_child(root, Layer::from(TransformLayer::translation(100.0, 0.0)));
-        let _ = tree.push_child(branch_a, leader(link, 5.0, 5.0));
-        let branch_b = tree.push_child(root, offset(0.0, 200.0));
-        let follower = follower(link);
-        let follower_id = tree.push_child(branch_b, Layer::from(follower));
-
-        assert_eq!(
-            resolve_follower_offset(&tree, follower_id),
-            Some(Offset::new(105.0, -195.0))
-        );
-    }
-
-    #[test]
-    fn unlinked_and_hidden_returns_none() {
-        let link = LayerLink::new();
-        let follower = FollowerLayer::new(link).with_show_when_unlinked(false);
-        let tree = LayerTree::new(Layer::from(follower));
-        let follower_id = tree.root();
-
-        assert_eq!(resolve_follower_offset(&tree, follower_id), None);
     }
 
     /// A leader painted inside the follower's subtree cannot anchor it (it

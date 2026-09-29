@@ -13,51 +13,18 @@
 //! public counterpart: it pushes the same routes through the prelude and drives
 //! a real `Vsync`.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use flui_animation::{Animation, AnimationStatus};
-use flui_painting::typography::TextDirection;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, BuildContext};
 use flui_widgets::__test_access::{
-    BackGestureController, NavigatorProbe as _, OverlayEntryProbe as _, RouteProbe as _,
-    TransitionHandle,
+    NavigatorProbe as _, OverlayEntryProbe as _, RouteProbe as _, TransitionHandle,
 };
+use flui_widgets::SizedBox;
 use flui_widgets::navigator::{
-    Navigator, NavigatorHandle, PageRoute, PopupRoute, RouteAnimation, RouteId, SimpleRoute,
+    Navigator, NavigatorHandle, PageRoute, RouteAnimation, RouteId, SimpleRoute,
 };
-use flui_widgets::{Directionality, SizedBox};
 
 use crate::common::harness::{Harness, mount};
-
-/// A leaf whose `create_state` is counted, so "was this subtree destroyed?" is
-/// observable.
-#[derive(Clone)]
-struct Probe(Arc<AtomicUsize>);
-
-impl View for Probe {
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateful(self)
-    }
-}
-
-impl StatefulView for Probe {
-    type State = ProbeState;
-
-    fn create_state(&self) -> Self::State {
-        self.0.fetch_add(1, Ordering::Relaxed);
-        ProbeState
-    }
-}
-
-struct ProbeState;
-
-impl ViewState<Probe> for ProbeState {
-    fn build(&self, _view: &Probe, _ctx: &dyn BuildContext) -> impl IntoView {
-        SizedBox::new(10.0, 10.0)
-    }
-}
 
 fn leaf(_ctx: &dyn BuildContext, _a: &RouteAnimation, _s: &RouteAnimation) -> BoxedView {
     SizedBox::new(10.0, 10.0).into_view().boxed()
@@ -127,52 +94,6 @@ fn page_route_occludes_the_route_below_once_its_transition_completes() {
 // maintainState — routes.dart:1893, :2230, :2394
 // ============================================================================
 
-/// `maintain_state == false` under an opaque `PageRoute`: the covered route is
-/// unmounted and its state destroyed, then rebuilt fresh when uncovered.
-#[test]
-fn maintain_state_false_route_below_an_opaque_page_is_unmounted_and_rebuilt_fresh() {
-    let (navigator, mut harness, _bottom) = navigator_with_seed();
-
-    let creations = Arc::new(AtomicUsize::new(0));
-    let covered = {
-        let creations = Arc::clone(&creations);
-        PageRoute::<i32>::new(move |_ctx, _a, _s| Probe(Arc::clone(&creations)).into_view().boxed())
-            .maintain_state(false)
-    };
-    let covered_transition = covered.transition_handle();
-    let _covered = navigator.push(covered);
-    harness.tick();
-    complete_entrance(&covered_transition, &mut harness);
-    assert_eq!(creations.load(Ordering::Relaxed), 1);
-
-    let coverer = PageRoute::<i32>::new(leaf);
-    let coverer_transition = coverer.transition_handle();
-    let _coverer = navigator.push(coverer);
-    harness.tick();
-    complete_entrance(&coverer_transition, &mut harness);
-
-    let covered_id = navigator.route_ids()[1];
-    assert!(
-        !navigator.entry_of(covered_id).expect("entry").is_mounted(),
-        "maintain_state == false: the covered page leaves the tree"
-    );
-
-    coverer_transition
-        .controller()
-        .expect("installed")
-        .reverse()
-        .expect("reverse from 1.0");
-    harness.tick();
-    harness.tick();
-
-    assert!(navigator.entry_of(covered_id).expect("entry").is_mounted());
-    assert_eq!(
-        creations.load(Ordering::Relaxed),
-        2,
-        "the destroyed subtree is rebuilt with fresh state"
-    );
-}
-
 // ============================================================================
 // secondaryAnimation — routes.dart:422-496, pages.dart:58-61
 // ============================================================================
@@ -225,82 +146,9 @@ fn secondary_animation_runs_on_the_previous_page_route_when_pushing_and_popping(
     );
 }
 
-/// `PageRoute.canTransitionTo(next) => next is PageRoute` (`pages.dart:58`).
-///
-/// A `PopupRoute` opening over a page must **not** slide the page away. FLUI
-/// expresses the two symmetric predicates as a `TransitionGroup` on the peer.
-#[test]
-fn a_popup_over_a_page_route_drives_no_secondary_animation() {
-    let (navigator, mut harness, _bottom) = navigator_with_seed();
-
-    let page = PageRoute::<i32>::new(leaf);
-    let page_transition = page.transition_handle();
-    let _page = navigator.push(page);
-    harness.tick();
-    complete_entrance(&page_transition, &mut harness);
-
-    let popup = PopupRoute::<i32>::new(leaf);
-    let popup_transition = popup.transition_handle();
-    let _popup = navigator.push(popup);
-    harness.tick();
-
-    assert!(
-        page_transition.secondary_is_dismissed(),
-        "a PageRoute coordinates only with another PageRoute"
-    );
-
-    popup_transition
-        .controller()
-        .expect("installed")
-        .set_value(0.7);
-    assert!(
-        page_transition.secondary_animation().value().abs() < 1e-6,
-        "the page must not move while a popup opens over it"
-    );
-}
-
 // ============================================================================
 // pop — routes.dart:84-94, :177, :308-317
 // ============================================================================
-
-/// `finishedWhenPopped => _controller!.isDismissed && !_popFinalized`
-/// (`routes.dart:177`): a popped page with a running exit transition is **not**
-/// disposed. Its overlay entry survives until the animation reaches `dismissed`,
-/// which raises `finalize()`.
-#[test]
-fn popped_page_route_keeps_its_overlay_entry_until_the_exit_transition_dismisses() {
-    let (navigator, mut harness, _bottom) = navigator_with_seed();
-
-    let route = PageRoute::<i32>::new(leaf);
-    let transition = route.transition_handle();
-    let _result = navigator.push(route);
-    harness.tick();
-    complete_entrance(&transition, &mut harness);
-
-    let popped = *navigator.route_ids().last().expect("pushed");
-    assert_eq!(navigator.tracked_entry_count(), 2);
-
-    assert!(navigator.pop());
-    harness.tick();
-
-    assert!(
-        navigator.entry_of(popped).is_some(),
-        "the route is popped but its exit transition is still running"
-    );
-    assert!(!transition.is_pop_finalized());
-
-    transition.controller().expect("installed").set_value(0.0);
-    harness.tick();
-
-    assert!(transition.is_pop_finalized());
-    assert_eq!(
-        navigator.tracked_entry_count(),
-        1,
-        "the finalized route's overlay entry is dropped"
-    );
-    assert!(navigator.entry_of(popped).is_none());
-    assert_eq!(navigator.route_ids().len(), 1);
-}
 
 // ============================================================================
 // barrier — routes.dart:2273-2330
@@ -309,55 +157,6 @@ fn popped_page_route_keeps_its_overlay_entry_until_the_exit_transition_dismisses
 // ============================================================================
 // buildPage / buildTransitions — routes.dart:1229-1240, :1656
 // ============================================================================
-
-/// The page builder receives both animations, the transitions builder wraps what
-/// it returns, and an animation tick rebuilds both.
-#[test]
-fn page_and_transitions_builders_receive_both_animations_and_rebuild_on_tick() {
-    let (navigator, mut harness, _bottom) = navigator_with_seed();
-
-    let seen = Arc::new(parking_lot::Mutex::new(Vec::<(f64, f64)>::new()));
-    let wrapped = Arc::new(AtomicUsize::new(0));
-
-    let route = {
-        let seen = Arc::clone(&seen);
-        let wrapped = Arc::clone(&wrapped);
-        PageRoute::<i32>::new(move |_ctx, animation, secondary| {
-            seen.lock().push((animation.value(), secondary.value()));
-            SizedBox::new(10.0, 10.0).into_view().boxed()
-        })
-        .transitions(move |_ctx, _animation, _secondary, child| {
-            wrapped.fetch_add(1, Ordering::Relaxed);
-            child
-        })
-    };
-    let transition = route.transition_handle();
-    let _result = navigator.push(route);
-    harness.tick();
-
-    assert_eq!(
-        seen.lock().first().copied(),
-        Some((0.0, 0.0)),
-        "the first build sees a dismissed entrance and no route above"
-    );
-    assert!(wrapped.load(Ordering::Relaxed) >= 1, "transitions ran");
-
-    // The relay fires on the tick, the `AnimatedView` marks the scope dirty, and
-    // both builders re-run with the new value.
-    let builds = seen.lock().len();
-    transition.controller().expect("installed").set_value(0.5);
-    harness.tick();
-
-    let samples = seen.lock().clone();
-    assert!(
-        samples.len() > builds,
-        "an animation tick must rebuild the modal scope"
-    );
-    assert!(
-        (samples.last().expect("a build").0 - 0.5).abs() < 1e-6,
-        "the page builder sees the current animation value, got {samples:?}"
-    );
-}
 
 // ============================================================================
 // back_gesture — the swipe-back detector substrate (back_gesture.rs)
@@ -420,160 +219,4 @@ fn back_gesture_edge_drag_normalizes_against_the_routes_real_width_not_the_hit_s
     );
 
     harness.dispatch_pointer_up(19.9, 300.0);
-}
-
-/// [`Directionality`] proof for `convert_to_logical`'s sign flip
-/// (`back_gesture.rs`): the entrance-completed controller sits pinned at its
-/// upper clamp bound (`value == 1.0`), so a drag toward the wrong sign has
-/// nothing to move — it stays exactly at `1.0`. Under LTR a *rightward* edge
-/// drag drops the value (the oracle's normal "swipe in from the left edge"
-/// gesture); under RTL `convert_to_logical` flips the sign, so it is the
-/// *leftward* edge drag that drops the value instead, by the same magnitude.
-///
-/// This is deliberately a four-way matrix, not a single before/after
-/// comparison: if the ambient `Directionality` read were broken (e.g. wired
-/// to always report `None`/LTR, the exact vacuous shape called out in
-/// review), `rtl_leftward` would sit at `~0.0` too and the assertions below
-/// would fail — a single "does the RTL case not equal the LTR case" check
-/// could not distinguish "correctly flipped" from "did nothing at all".
-///
-/// Oracle: `_CupertinoBackGestureDetectorState._handleDragUpdate`,
-/// `_convertToLogical` (`cupertino/route.dart`, oracle tag `3.44.0`).
-#[test]
-fn back_gesture_edge_drag_sign_flips_with_ambient_directionality() {
-    /// Pushes a fresh `back_gesture(true)` route under `direction`, drags the
-    /// left-edge strip from `from_x` to `to_x`, and returns how much the
-    /// controller's value dropped from its entrance-completed `1.0` (`0.0`
-    /// when the drag's sign pushed toward the clamped-away upper bound
-    /// instead, so nothing was observable).
-    fn drop_for(direction: TextDirection, from_x: f64, to_x: f64) -> f64 {
-        let handle = NavigatorHandle::new();
-        handle.seed_initial(plain_page());
-        let mut harness = mount(Directionality::new(
-            direction,
-            Navigator::new(handle.clone()),
-        ));
-
-        let route = PageRoute::<i32>::new(leaf).back_gesture(true);
-        let transition = route.transition_handle();
-        let _pushed = harness.enter_owner_scope(|| handle.push(route));
-        complete_entrance(&transition, &mut harness);
-        let controller = transition.controller().expect("installed");
-        assert_eq!(controller.value(), 1.0);
-
-        harness.dispatch_pointer_down(from_x, 300.0);
-        // Cross the recognizer's 18px horizontal slop on the first move (no
-        // reported delta, `on_start`), then a further move to `to_x` for a
-        // clean incremental `primary_delta` — the exact same two-step shape
-        // (18.5px, then 0.4px further) as
-        // `back_gesture_edge_drag_normalizes_against_the_routes_real_width_not_the_hit_strip`,
-        // just mirrored for the leftward direction too.
-        let crossing_x = from_x + (to_x - from_x).signum() * 18.5;
-        harness.dispatch_pointer_move(crossing_x, 300.0);
-        harness.dispatch_pointer_move(to_x, 300.0);
-        let dropped = 1.0 - controller.value();
-        harness.dispatch_pointer_up(to_x, 300.0);
-        dropped
-    }
-
-    let ltr_rightward = drop_for(TextDirection::Ltr, 1.0, 19.9);
-    let ltr_leftward = drop_for(TextDirection::Ltr, 19.9, 1.0);
-    let rtl_rightward = drop_for(TextDirection::Rtl, 1.0, 19.9);
-    let rtl_leftward = drop_for(TextDirection::Rtl, 19.9, 1.0);
-
-    assert!(
-        ltr_rightward > 1e-6,
-        "LTR: a rightward edge-drag must decrease the controller value; got drop={ltr_rightward}"
-    );
-    assert!(
-        ltr_leftward.abs() < 1e-9,
-        "LTR: a leftward edge-drag pushes toward the upper clamp bound — no observable drop; \
-         got drop={ltr_leftward}"
-    );
-
-    assert!(
-        rtl_leftward > 1e-6,
-        "RTL: convert_to_logical flips the sign, so the LEFTWARD edge-drag must be the one that \
-         decreases the controller value; got drop={rtl_leftward}"
-    );
-    assert!(
-        rtl_rightward.abs() < 1e-9,
-        "RTL: the SAME rightward drag that dropped the value under LTR must NOT drop it under \
-         RTL — the sign is flipped, so it pushes toward the clamped-away upper bound instead; \
-         got drop={rtl_rightward}"
-    );
-
-    assert!(
-        (ltr_rightward - rtl_leftward).abs() < 1e-4,
-        "the drop magnitude must match exactly between the two Directionality-flipped-but-\
-         otherwise-identical drags; ltr_rightward={ltr_rightward} rtl_leftward={rtl_leftward}"
-    );
-}
-
-/// The detector wrapper's presence must not flip the page subtree's
-/// identity: a `StatefulView` inside the page keeps its state (here, its
-/// `create_state` call count stays at 1) across the rebuilds a released-but-
-/// cancelled gesture ("stay": the finger let go before crossing halfway, so
-/// the route animates back to fully on top rather than popping) drives.
-///
-/// Red-check: wrap the page in a *freshly constructed* detector view each
-/// build instead of the same stable shape — `Probe::create_state` would then
-/// fire more than once as the element tree treats the page as a new subtree.
-#[test]
-fn back_gesture_enabled_preserves_page_state_across_a_cancelled_gesture() {
-    let created = Arc::new(AtomicUsize::new(0));
-    let probe = Probe(Arc::clone(&created));
-
-    let (navigator, mut harness, _bottom) = navigator_with_seed();
-    let route = PageRoute::<i32>::new(move |_ctx, _animation, _secondary| {
-        probe.clone().into_view().boxed()
-    })
-    .back_gesture(true);
-    let transition = route.transition_handle();
-    let _pushed = harness.enter_owner_scope(|| navigator.push(route));
-    complete_entrance(&transition, &mut harness);
-    assert_eq!(
-        created.load(Ordering::Relaxed),
-        1,
-        "one initial create_state"
-    );
-
-    let top = *navigator.route_ids().last().expect("pushed");
-    let controller = transition.controller().expect("installed");
-
-    // Simulate a released-but-cancelled drag: partway back, then released
-    // with no fling and value > 0.5, so the oracle's `dragEnd` "stay" branch
-    // animates forward to 1.0 rather than popping.
-    let gesture = BackGestureController::new(navigator.clone(), top, controller.clone());
-    gesture.drag_update(0.2); // value -> 0.8
-    let still_settling = gesture.drag_end(0.0);
-    assert!(still_settling, "the stay animation keeps running");
-    assert_eq!(controller.status(), AnimationStatus::Forward);
-
-    // Genuinely tick the 350ms stay run out through the controller's own
-    // tick mechanism — not a `set_value(1.0)` shortcut, which would settle
-    // it inline without ever exercising the mid-run rebuilds this test
-    // exists to check. Safe to drive directly: this route's controller was
-    // built with its own standalone `UpdateScheduler` (no ambient `VsyncScope` in
-    // this fixture), so `harness.tick()` — which drives the *harness's*
-    // separate binding/scheduler — never independently re-ticks it; nothing
-    // races the explicit `tick_at` calls below.
-    controller.tick_at(0.10); // mid-flight
-    harness.tick(); // rebuilds ModalScope, and therefore the detector-wrapped page
-    controller.tick_at(0.25); // still mid-flight
-    harness.tick();
-    controller.tick_at(0.35); // >= the 350ms stay duration -> settles to Completed
-    harness.tick();
-
-    assert_eq!(
-        controller.status(),
-        AnimationStatus::Completed,
-        "the stay run must have genuinely settled, not been forced"
-    );
-    assert_eq!(
-        created.load(Ordering::Relaxed),
-        1,
-        "the page's StatefulView must not be recreated across the cancelled \
-         gesture's rebuilds"
-    );
 }

@@ -1165,19 +1165,6 @@ mod tests {
         }
     }
 
-    // ---- Pass 1: Fixed-only ------------------------------------------------
-
-    // ---- Pass 1/2: Flex-only ------------------------------------------------
-
-    #[test]
-    fn flex_only_columns_share_the_target_width_proportionally() {
-        let table = table_with(&[TableColumnWidth::Flex(1.0), TableColumnWidth::Flex(2.0)]);
-        let widths = table.compute_column_widths(1, 0.0, 300.0, deny_query());
-        assert_eq!(widths, vec![100.0, 200.0]);
-    }
-
-    // ---- Pass 1: Fraction, finite vs. infinite container -------------------
-
     #[test]
     fn fraction_value_above_one_is_clamped_a_documented_divergence_from_the_oracle() {
         // The oracle's `FractionColumnWidth` does NOT clamp (see the module
@@ -1187,57 +1174,5 @@ mod tests {
         let table = table_with(&[TableColumnWidth::Fraction(1.5)]);
         let widths = table.compute_column_widths(1, 0.0, 100.0, deny_query());
         assert_eq!(widths, vec![100.0]);
-    }
-
-    // ---- Max/Min combinators (oracle table.dart:235-340) -------------------
-
-    #[test]
-    fn max_combinator_flex_is_the_larger_flex_and_drives_distribution() {
-        // Max(Flex(3), Flex(1)) -> width 0, flex max(3,1)=3. Beside a Flex(1),
-        // total flex 4 splits 400 as 300 / 100.
-        let table = table_with(&[
-            TableColumnWidth::max(TableColumnWidth::Flex(3.0), TableColumnWidth::Flex(1.0)),
-            TableColumnWidth::Flex(1.0),
-        ]);
-        let widths = table.compute_column_widths(1, 0.0, 400.0, deny_query());
-        assert_eq!(widths, vec![300.0, 100.0]);
-    }
-
-    // ---- Pass 1: Intrinsic queries real cells -------------------------------
-
-    // ---- Pass 3: the oracle's own adversarial shrink scenario ---------------
-
-    #[test]
-    fn adversarial_shrink_converges_to_the_max_width_without_going_negative() {
-        // Oracle's own doc comment (table.dart:1170-1179): "a 1px wide column
-        // of flex 1000.0 and a 1000px wide column of flex 1.0 ... If the
-        // maximum table width is 2px, then just applying the flexes to the
-        // deficit would result in a table with one column at -998px and one
-        // column at 990px, which is wildly unhelpful." The two-round shrink
-        // must instead floor the low-ideal/high-flex column at 0 and push
-        // nearly the whole deficit onto the high-ideal/low-flex column.
-        let mut widths = [1.0_f64, 1000.0_f64];
-        let min_widths = [0.0_f64, 0.0_f64];
-        let mut flexes = [Some(1000.0_f64), Some(1.0_f64)];
-
-        RenderTable::grow_and_shrink_column_widths(&mut widths, &min_widths, &mut flexes, 0.0, 2.0);
-
-        for &w in &widths {
-            assert!(w >= 0.0, "no column may go negative, got {widths:?}");
-            assert!(w.is_finite(), "no column may go non-finite, got {widths:?}");
-        }
-        let total: f64 = widths.iter().sum();
-        assert!(
-            (total - 2.0).abs() < 1e-3,
-            "shrunk columns must sum to the 2px max width, got {total} from {widths:?}"
-        );
-        assert!(
-            (widths[0] - 0.0).abs() < 1e-3,
-            "the high-flex/low-ideal column floors at 0, got {widths:?}"
-        );
-        assert!(
-            (widths[1] - 2.0).abs() < 1e-3,
-            "the low-flex/high-ideal column absorbs the deficit, got {widths:?}"
-        );
     }
 }

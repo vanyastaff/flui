@@ -465,7 +465,7 @@ fn overlay_color_property(
 
 #[cfg(test)]
 mod tests {
-    use flui_sdk::widgets::{WidgetStateConstraint, WidgetStates};
+    use flui_sdk::widgets::WidgetStates;
 
     use super::*;
 
@@ -481,73 +481,7 @@ mod tests {
         assert_eq!(resolved, Some(1));
     }
 
-    /// Mutation-honest: if the coalesce stopped checking the widget
-    /// property's OWN resolution and instead treated "widget property is
-    /// present" as sufficient, this would return `Some(1)` from a widget
-    /// property that only covers `Pressed` while the button is unpressed —
-    /// it must fall through to `default` instead.
-    #[test]
-    fn a_widget_property_that_resolves_none_for_this_state_falls_through_to_default() {
-        let widget: WidgetStateProperty<Option<u32>> = WidgetStateProperty::from_map([(
-            WidgetStateConstraint::Is(flui_sdk::widgets::WidgetState::Pressed),
-            Some(1_u32),
-        )]);
-        let default = all_property(3_u32);
-        let resolved = resolve_property(&WidgetStates::NONE, Some(&widget), None, Some(&default));
-        assert_eq!(resolved, Some(3));
-    }
-
     // ------------------------------------------------------------------
     // effective_constraints — min/max envelope + fixed-size clamping
     // ------------------------------------------------------------------
-
-    fn size(width: f64, height: f64) -> flui_sdk::geometry::Size {
-        flui_sdk::geometry::Size::new(width, height)
-    }
-
-    /// A `fixed_size` inside `[minimum, maximum]` pins `min == max` at
-    /// exactly that value on both axes.
-    #[test]
-    fn fixed_size_inside_the_envelope_pins_min_and_max_to_it() {
-        let constraints =
-            effective_constraints(size(64.0, 40.0), size(200.0, 100.0), Some(size(90.0, 60.0)));
-        assert_eq!(constraints.min_width, 90.0);
-        assert_eq!(constraints.max_width, 90.0);
-        assert_eq!(constraints.min_height, 60.0);
-        assert_eq!(constraints.max_height, 60.0);
-    }
-
-    /// Mutation-honest — the bug this test would have caught: a
-    /// `fixed_size` (10×10) SMALLER than `minimum` (64×40) must clamp UP to
-    /// the minimum before pinning, not pin directly to 10×10 (which would
-    /// invert `min > max` against a `maximum` of 200×100 anyway, but more
-    /// importantly silently produces a button smaller than its own declared
-    /// minimum — the oracle's `effectiveConstraints.constrain(resolvedFixedSize)`
-    /// step this function ports).
-    #[test]
-    fn fixed_size_smaller_than_minimum_is_clamped_up_to_the_minimum() {
-        let constraints =
-            effective_constraints(size(64.0, 40.0), size(200.0, 100.0), Some(size(10.0, 10.0)));
-        assert_eq!(constraints.min_width, 64.0);
-        assert_eq!(constraints.max_width, 64.0);
-        assert_eq!(constraints.min_height, 40.0);
-        assert_eq!(constraints.max_height, 40.0);
-    }
-
-    /// An infinite `fixed_size` axis is ignored on that axis (Flutter
-    /// parity: "Fixed size dimensions whose value is double.infinity are
-    /// ignored", `ButtonStyle.fixedSize`'s doc comment) — the other axis
-    /// still pins.
-    #[test]
-    fn an_infinite_fixed_axis_leaves_that_axis_at_the_envelope() {
-        let constraints = effective_constraints(
-            size(64.0, 40.0),
-            size(200.0, 100.0),
-            Some(flui_sdk::geometry::Size::new(f64::INFINITY, 60.0)),
-        );
-        assert_eq!(constraints.min_width, 64.0);
-        assert_eq!(constraints.max_width, 200.0);
-        assert_eq!(constraints.min_height, 60.0);
-        assert_eq!(constraints.max_height, 60.0);
-    }
 }

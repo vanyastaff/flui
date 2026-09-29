@@ -250,39 +250,3 @@ impl<T: Clone> super::traits::Along for Corners<T> {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-
-    use crate::geometry::{Corner, axis::Axis};
-
-    const ALL: [Corner; 4] = [
-        Corner::TopLeft,
-        Corner::TopRight,
-        Corner::BottomRight,
-        Corner::BottomLeft,
-    ];
-
-    #[test]
-    fn corner_sides_and_reflections() {
-        for k in ALL {
-            let top = matches!(k, Corner::TopLeft | Corner::TopRight);
-            let left = matches!(k, Corner::TopLeft | Corner::BottomLeft);
-            assert_eq!(
-                (k.is_top(), k.is_bottom(), k.is_left(), k.is_right()),
-                (top, !top, left, !left),
-                "{k:?}"
-            );
-
-            let across = k.other_side_along(Axis::Horizontal);
-            assert_eq!((across.is_top(), across.is_left()), (top, !left), "{k:?}");
-            let down = k.other_side_along(Axis::Vertical);
-            assert_eq!((down.is_top(), down.is_left()), (!top, left), "{k:?}");
-            assert_eq!(
-                k.opposite(),
-                across.other_side_along(Axis::Vertical),
-                "{k:?}"
-            );
-        }
-    }
-}

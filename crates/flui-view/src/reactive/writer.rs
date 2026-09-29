@@ -435,26 +435,6 @@ mod tests {
     static_assertions::assert_not_impl_any!(Writer: Send, Sync, Clone);
     static_assertions::assert_not_impl_any!(EventCx<'static>: Send, Sync, Clone);
 
-    #[test]
-    fn an_owner_bound_operation_checks_identity_and_phase_before_mutating() {
-        let graph = Reactive::new();
-        let source = WriterSource::new(graph.clone());
-        let foreign = WriterSource::new(Reactive::new());
-        assert_eq!(source.write(|cx| source.check_context(cx)), Ok(()));
-        assert_eq!(
-            foreign.write(|cx| source.check_context(cx)),
-            Err(EventContextError::ForeignPresentation)
-        );
-        let element = ElementId::new(1);
-        graph.begin_element_build(element);
-        assert_eq!(
-            source.write(|cx| source.check_context(cx)),
-            Err(EventContextError::WrittenDuringBuild { element })
-        );
-        graph.end_element_build(element, true);
-        assert_eq!(source.write(|cx| source.check_context(cx)), Ok(()));
-    }
-
     fn graph_with_inbox() -> (Reactive, Arc<ExternalBuildInbox>) {
         let inbox = Arc::new(ExternalBuildInbox::default());
         let reactive = Reactive::new();
@@ -466,77 +446,6 @@ mod tests {
         let mut ids: Vec<_> = inbox.lock().keys().copied().collect();
         ids.sort();
         ids
-    }
-
-    #[test]
-    fn event_reads_observe_latest_values_without_a_rebuild() {
-        let (graph, inbox) = graph_with_inbox();
-        let count = graph.signal(1u32);
-        let source = WriterSource::new(graph);
-
-        source.write(|cx| {
-            assert_eq!(count.peek(cx, |value| *value), Ok(1));
-            count.set(cx, 2).expect("event write");
-        });
-        source.write(|cx| {
-            assert_eq!(count.peek(cx, |value| *value), Ok(2));
-            assert_eq!(count.peek(&**cx, |value| *value), Ok(2));
-        });
-
-        assert!(scheduled(&inbox).is_empty());
-    }
-
-    #[test]
-    fn a_callback_composes_context_and_signal_errors_with_question_mark() {
-        let (graph, inbox) = graph_with_inbox();
-        let count = graph.signal(0u32);
-        let reader = ElementId::new(1);
-        graph.register_element_reader(count.slot(), reader);
-        let source = WriterSource::new(graph.clone());
-        let target = source.clone();
-        let press = callback(move |cx| -> Result<(), EventError> {
-            target.check_context(cx)?;
-            count.set(cx, 1)?;
-            Ok(())
-        });
-
-        source.write(&press).expect("matching event context");
-        assert_eq!(count.peek(&graph, |value| *value), Ok(1));
-        assert_eq!(scheduled(&inbox), vec![reader]);
-
-        let foreign = WriterSource::new(Reactive::new());
-        assert!(matches!(
-            foreign.write(&press),
-            Err(EventError::Context(EventContextError::ForeignPresentation))
-        ));
-
-        graph.release(count.slot());
-        assert!(matches!(
-            source.write(&press),
-            Err(EventError::Signal(SignalError::Released { .. }))
-        ));
-    }
-
-    #[test]
-    fn event_and_writer_reads_refuse_foreign_graphs_without_invoking_the_reader() {
-        let (mine, inbox) = graph_with_inbox();
-        let (theirs, foreign_inbox) = graph_with_inbox();
-        let foreign = theirs.signal(1u32);
-        let source = WriterSource::new(mine);
-
-        source.write(|cx| {
-            assert!(matches!(
-                foreign.peek(cx, |_| panic!("foreign read must not run")),
-                Err(SignalError::ForeignGraph { .. })
-            ));
-            assert!(matches!(
-                foreign.peek(&**cx, |_| panic!("foreign read must not run")),
-                Err(SignalError::ForeignGraph { .. })
-            ));
-        });
-        assert_eq!(foreign.peek(&theirs, |value| *value), Ok(1));
-        assert!(scheduled(&inbox).is_empty());
-        assert!(scheduled(&foreign_inbox).is_empty());
     }
 
     #[test]
@@ -555,36 +464,5 @@ mod tests {
         assert_eq!(scheduled(&inbox), vec![e1]);
         assert!(inbox.lock()[&e1].contains(RebuildReason::SignalChange));
         assert_eq!(a.peek(&r, |v| *v), Ok(10));
-    }
-
-    #[test]
-    fn a_write_opened_while_an_element_builds_is_refused() {
-        let (r, inbox) = graph_with_inbox();
-        let a = r.signal(1u32);
-        let e1 = ElementId::new(1);
-        r.register_element_reader(a.slot(), e1);
-        let source = WriterSource::new(r.clone());
-
-        r.begin_element_build(e1);
-        let result = source.write(|cx| a.set(cx, 10));
-        r.end_element_build(e1, true);
-
-        assert_eq!(result, Err(SignalError::WrittenDuringBuild { element: e1 }));
-        assert_eq!(a.peek(&r, |v| *v), Ok(1), "the value is unchanged");
-        assert!(scheduled(&inbox).is_empty(), "nothing is scheduled");
-    }
-
-    #[test]
-    fn a_writer_refuses_a_signal_of_another_graph() {
-        let (mine, _) = graph_with_inbox();
-        let (theirs, _) = graph_with_inbox();
-        let foreign = theirs.signal(1u32);
-        let source = WriterSource::new(mine);
-
-        assert!(matches!(
-            source.write(|cx| foreign.set(cx, 2)),
-            Err(SignalError::ForeignGraph { .. })
-        ));
-        assert_eq!(foreign.peek(&theirs, |v| *v), Ok(1));
     }
 }

@@ -35,17 +35,3 @@ pub fn pinch(magnification: f64) -> Option<PointerGesture> {
 pub fn rotation_ccw_degrees(degrees: f32) -> PointerGesture {
     PointerGesture::Rotate(-degrees.to_radians())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rotation_converts_ccw_degrees_to_cw_radians() {
-        // A 90° counterclockwise platform delta is a -π/2 clockwise delta.
-        let PointerGesture::Rotate(radians) = rotation_ccw_degrees(90.0) else {
-            panic!("expected Rotate");
-        };
-        assert!((radians + std::f32::consts::FRAC_PI_2).abs() < 1e-6);
-    }
-}

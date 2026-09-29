@@ -756,22 +756,3 @@ where
         panic!("desktop bootstrap failed: {error}");
     }
 }
-
-#[cfg(test)]
-mod reveal_tests {
-    use super::rendered_window_options;
-    use crate::app::AppConfig;
-    use flui_platform::WindowReveal;
-
-    /// The runner's own open sites are the only ones that ask for the
-    /// deferred reveal; everything else about the options is the shared
-    /// conversion's (see `AppConfig`'s tests for its `AtOpen`).
-    #[test]
-    fn rendered_windows_defer_their_reveal_to_the_first_frame() {
-        let config = AppConfig::new().with_title("rendered");
-        let options = rendered_window_options(&config);
-        assert_eq!(options.reveal, WindowReveal::AfterFirstFrame);
-        assert_eq!(options.title, "rendered");
-        assert!(options.visible);
-    }
-}

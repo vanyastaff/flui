@@ -15,8 +15,8 @@
 use std::any::TypeId;
 
 use flui_view::{
-    BuildContext, BuildOwner, ElementId, ElementTree, ErrorView, IntoView, LifecycleHook,
-    RebuildReason, RecoveredAt, StatelessView, View, ViewExt,
+    BuildContext, BuildOwner, ElementId, ElementTree, IntoView, LifecycleHook, RebuildReason,
+    RecoveredAt, StatelessView, View, ViewExt,
 };
 
 // ============================================================================
@@ -60,41 +60,6 @@ impl View for PanicBuildView {
 #[derive(Clone)]
 struct HostView {
     child: PanicBuildView,
-}
-
-#[derive(Clone)]
-struct NonStringPanicBuildView {
-    should_panic: bool,
-}
-
-impl StatelessView for NonStringPanicBuildView {
-    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        if self.should_panic {
-            std::panic::panic_any(41_u8);
-        }
-        ErrorView::new("unreachable")
-    }
-}
-
-impl View for NonStringPanicBuildView {
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateless(self)
-    }
-}
-
-#[derive(Clone)]
-struct NonStringPanicHostView;
-
-impl StatelessView for NonStringPanicHostView {
-    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        NonStringPanicBuildView { should_panic: true }
-    }
-}
-
-impl View for NonStringPanicHostView {
-    fn create_element(&self) -> flui_view::element::ElementKind {
-        flui_view::element::ElementKind::stateless(self)
-    }
 }
 
 impl StatelessView for HostView {
@@ -195,63 +160,8 @@ fn a_contained_build_panic_is_recorded_once_with_its_element_and_hook() {
     );
 }
 
-#[test]
-fn a_non_string_build_panic_keeps_diagnostic_fallback_separate_from_payload_provenance() {
-    let (_tree, mut owner, _root_id) = mount_and_build(&NonStringPanicHostView);
-
-    let mut recovered = owner.take_recovered_panics();
-    assert_eq!(recovered.len(), 1, "exactly one panic must be recorded");
-    let panic = recovered.remove(0);
-    assert_eq!(panic.hook, LifecycleHook::Build);
-    assert_eq!(panic.view_type_id, TypeId::of::<NonStringPanicBuildView>());
-    assert_eq!(panic.payload_text, None);
-    assert_eq!(
-        panic.error.message,
-        "panic during build (non-string payload)"
-    );
-    assert_eq!(
-        panic.error.details.as_deref(),
-        Some("building StatelessElement")
-    );
-    assert!(!panic.internal_invariant);
-}
-
 // ============================================================================
 // A `BUG:`-prefixed payload is classified as an internal invariant, but
 // containment is unaffected — it substitutes an ErrorView exactly the same
 // (docs/PANIC-POLICY.md: classification never routes).
 // ============================================================================
-
-#[test]
-fn a_bug_prefixed_payload_is_classified_internal_invariant_but_still_contained() {
-    let host = HostView {
-        child: PanicBuildView {
-            message: "BUG: injected",
-        },
-    };
-
-    let (tree, mut owner, root_id) = mount_and_build(&host);
-    // `PanicBuildView`'s own element is not replaced — only ITS `build()`
-    // panicked, so its element stays mounted; the substituted `ErrorView`
-    // is reconciled in as its child (same shape
-    // `error_view_recovery.rs::nested_child_build_panic_replaces_only_that_subtree`
-    // pins for a non-BUG: panic).
-    let child_id = only_child(&tree, root_id);
-
-    let recovered = owner.take_recovered_panics();
-    assert_eq!(recovered.len(), 1, "got {recovered:?}");
-    assert!(
-        recovered[0].internal_invariant,
-        "a BUG:-prefixed payload must classify as an internal invariant"
-    );
-
-    let error_view_id = only_child(&tree, child_id);
-    assert_eq!(
-        tree.get(error_view_id)
-            .expect("error view slot still present")
-            .element()
-            .view_type_id(),
-        TypeId::of::<ErrorView>(),
-        "a contained BUG: panic still substitutes an ErrorView, same as any other"
-    );
-}

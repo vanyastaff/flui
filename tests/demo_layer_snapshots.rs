@@ -163,40 +163,27 @@ fn snapshot_of<V: IntoView + 'static>(root_view: V, min_commands: usize) -> Stri
     serialize_layer_tree(layer_tree)
 }
 
-/// `snapshot_test!(test, "snapshot-name", root_view, min_draw_commands)`.
+/// `snapshot_tests!(("snapshot-name", root_view, min_draw_commands), ..)`.
 ///
 /// The floor is a collapse guard, not a measurement: it sits roughly half way
 /// below what the demo paints today, so a tree that stops rendering fails with
 /// a count instead of being accepted into the snapshot as an intended change,
 /// while an ordinary edit that adds or removes a few commands never trips it.
-macro_rules! snapshot_test {
-    ($test_name:ident, $snapshot:literal, $root:expr, $min_commands:expr) => {
+/// The two single-command demos are the exception: their floor IS their content.
+macro_rules! snapshot_tests {
+    ($(($snapshot:literal, $root:expr, $min_commands:expr)),+ $(,)?) => {
         #[test]
-        fn $test_name() {
-            insta::assert_snapshot!($snapshot, snapshot_of($root, $min_commands));
+        fn demo_layer_trees_match_their_committed_snapshots() {
+            $(insta::assert_snapshot!($snapshot, snapshot_of($root, $min_commands));)+
         }
     };
 }
 
-snapshot_test!(
-    material_demo,
-    "material",
-    material_demo::MaterialDemoApp,
-    30
+snapshot_tests!(
+    ("material", material_demo::MaterialDemoApp, 30),
+    ("cupertino", cupertino_demo::CupertinoDemoApp, 8),
+    ("vertical-slice", vertical_slice_demo::DemoApp, 15),
+    ("gallery", widgets_gallery::Gallery, 5),
+    ("colored-box", colored_box_app::App, 1),
+    ("text", text_app::App, 1),
 );
-snapshot_test!(
-    cupertino_demo,
-    "cupertino",
-    cupertino_demo::CupertinoDemoApp,
-    8
-);
-snapshot_test!(
-    vertical_slice_demo,
-    "vertical-slice",
-    vertical_slice_demo::DemoApp,
-    15
-);
-snapshot_test!(widgets_gallery, "gallery", widgets_gallery::Gallery, 5);
-// The two single-command demos: their floor IS their content.
-snapshot_test!(colored_box, "colored-box", colored_box_app::App, 1);
-snapshot_test!(text, "text", text_app::App, 1);

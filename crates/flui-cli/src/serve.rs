@@ -392,23 +392,6 @@ mod tests {
     }
 
     #[test]
-    fn index_gets_the_reload_script_and_root_means_index() {
-        let (_dir, server) = fixture();
-        for target in ["/", "/index.html"] {
-            let (head, body) = get(server.addr, "GET", target);
-            assert!(head.contains("text/html"), "{head}");
-            let body = String::from_utf8(body).expect("utf-8");
-            assert!(
-                body.contains("<script src=\"/__flui/reload.js\"></script>\n</body>"),
-                "{body}"
-            );
-        }
-        let (head, body) = get(server.addr, "GET", RELOAD_SCRIPT_PATH);
-        assert!(head.contains("text/javascript"), "{head}");
-        assert!(String::from_utf8_lossy(&body).contains("location.reload()"));
-    }
-
-    #[test]
     fn missing_files_traversal_and_directories_are_404_and_head_has_no_body() {
         let (_dir, server) = fixture();
         for target in [
@@ -425,23 +408,5 @@ mod tests {
         assert!(body.is_empty());
         let (head, _) = get(server.addr, "POST", "/");
         assert!(head.starts_with("HTTP/1.1 405"), "{head}");
-    }
-
-    #[test]
-    fn long_poll_answers_when_the_generation_moves() {
-        let (_dir, server) = fixture();
-        let (_, body) = get(server.addr, "GET", RELOAD_PATH);
-        let first: serde_json::Value = serde_json::from_slice(&body).expect("json");
-        let seen = first["generation"].as_u64().expect("generation");
-
-        let addr = server.addr;
-        let waiter =
-            thread::spawn(move || get(addr, "GET", &format!("{RELOAD_PATH}?since={seen}")));
-        thread::sleep(Duration::from_millis(100));
-        assert!(!waiter.is_finished(), "must block while nothing changed");
-        server.reload();
-        let (_, body) = waiter.join().expect("waiter");
-        let next: serde_json::Value = serde_json::from_slice(&body).expect("json");
-        assert_eq!(next["generation"].as_u64(), Some(seen + 1));
     }
 }

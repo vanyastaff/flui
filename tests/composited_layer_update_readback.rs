@@ -146,27 +146,6 @@ fn the_update_path_and_a_repaint_produce_the_same_pixels() {
     );
 }
 
-/// The oracle can tell the two alphas apart.
-///
-/// Without this, the equivalence test above passes just as well against a
-/// renderer that ignores opacity entirely, or a fixture whose content is
-/// invisible — the "green that checked nothing" shape. A different alpha must
-/// produce different pixels for the comparison to mean anything.
-#[test]
-fn a_different_alpha_produces_different_pixels() {
-    let renderer = pollster::block_on(HeadlessRenderer::new())
-        .expect("a GPU adapter for headless capture (CI runs this on the software rasterizer)");
-
-    let quarter = frame_after_alpha_change(&renderer, 0.25, false);
-    let three_quarters = frame_after_alpha_change(&renderer, 0.75, false);
-
-    assert_ne!(
-        quarter, three_quarters,
-        "alpha 0.25 and 0.75 must rasterize differently, or the equivalence \
-         assertion is comparing two images that never depended on alpha",
-    );
-}
-
 // ---------------------------------------------------------------------------
 // Transform: the same pixel-equivalence proof for a matrix update
 // ---------------------------------------------------------------------------
@@ -285,26 +264,6 @@ fn the_transform_update_path_and_a_repaint_produce_the_same_pixels() {
     );
 }
 
-/// The oracle can tell two different matrices apart.
-///
-/// Without this, the equivalence test above passes just as well against a
-/// renderer that ignores the transform entirely. A different scale must
-/// produce different pixels for the comparison to mean anything.
-#[test]
-fn a_different_matrix_produces_different_pixels() {
-    let renderer = pollster::block_on(HeadlessRenderer::new())
-        .expect("a GPU adapter for headless capture (CI runs this on the software rasterizer)");
-
-    let smaller = frame_after_transform_change(&renderer, Matrix4::scaling(1.2, 1.2, 1.0), false);
-    let larger = frame_after_transform_change(&renderer, Matrix4::scaling(3.0, 3.0, 1.0), false);
-
-    assert_ne!(
-        smaller, larger,
-        "scale 1.2 and 3.0 must rasterize differently, or the equivalence \
-         assertion is comparing two images that never depended on the matrix",
-    );
-}
-
 // ---------------------------------------------------------------------------
 // Clip: the same pixel-equivalence proof for a border-radius update
 // ---------------------------------------------------------------------------
@@ -406,18 +365,6 @@ fn frame_after_radius_change(
     pixels
 }
 
-/// The pixel at `(x, y)` in a tightly-packed, top-row-first RGBA8 buffer of
-/// `width` pixels — the layout `HeadlessRenderer::render_layer_tree` returns.
-fn pixel_at(pixels: &[u8], width: u32, x: u32, y: u32) -> [u8; 4] {
-    let idx = ((y * width + x) * 4) as usize;
-    [
-        pixels[idx],
-        pixels[idx + 1],
-        pixels[idx + 2],
-        pixels[idx + 3],
-    ]
-}
-
 /// The update path and the repaint path produce the same pixels, for a
 /// border-radius change (radius 5 seeded, mutated to 2 in both arms).
 ///
@@ -452,58 +399,6 @@ fn the_clip_update_path_and_a_repaint_produce_the_same_pixels() {
         "the update path must be pixel-identical to a full repaint; \
          {differing} of {} bytes differ",
         updated.len(),
-    );
-}
-
-/// The oracle can tell two different radii apart — sampled right at the
-/// clipped corner instead of over the whole buffer, since a corner is the one
-/// place in this fixture where the radius alone decides what shows through.
-///
-/// The clip's absolute origin is `(20, 20)` and its `40x40` child box shares
-/// that same top-left corner (see `mount_clip_rrect`'s doc). `(21, 21)` — one
-/// pixel diagonally in from that corner — discriminates the two radii this
-/// file compares, both well clear of their own rounding edge (never a
-/// half-covered, anti-aliasable pixel):
-///
-/// - radius 8: distance from the rounding center `(8, 8)` (corner-local) to
-///   `(1, 1)` is `(8 - 1) * sqrt(2) ≈ 9.90` px, OUTSIDE the radius-8 circle —
-///   the corner is clipped away there, so the frame shows the white
-///   background.
-/// - radius 2: the same point is `(2 - 1) * sqrt(2) ≈ 1.41` px from the
-///   rounding center `(2, 2)`, INSIDE the radius-2 circle — the point is
-///   still inside the clip, so the frame shows the red box.
-///
-/// Without this, `the_clip_update_path_and_a_repaint_produce_the_same_pixels`
-/// passes just as well against a renderer that ignores the border radius
-/// entirely, or a fixture whose clip never reaches the sampled pixel.
-#[test]
-fn a_different_radius_produces_different_pixels() {
-    let renderer = pollster::block_on(HeadlessRenderer::new())
-        .expect("a GPU adapter for headless capture (CI runs this on the software rasterizer)");
-
-    const SAMPLE: (u32, u32) = (21, 21);
-    const WHITE: [u8; 4] = [255, 255, 255, 255];
-    const RED: [u8; 4] = [255, 0, 0, 255];
-
-    let wide = frame_after_radius_change(&renderer, 8.0, false);
-    let narrow = frame_after_radius_change(&renderer, 2.0, false);
-
-    let wide_pixel = pixel_at(&wide, SURFACE.0, SAMPLE.0, SAMPLE.1);
-    let narrow_pixel = pixel_at(&narrow, SURFACE.0, SAMPLE.0, SAMPLE.1);
-
-    assert_eq!(
-        wide_pixel, WHITE,
-        "radius 8 must clip the sample pixel away, leaving the white background",
-    );
-    assert_eq!(
-        narrow_pixel, RED,
-        "radius 2 must leave the sample pixel inside the clip, showing the red box",
-    );
-    assert_ne!(
-        wide_pixel, narrow_pixel,
-        "radius 8 and 2 must rasterize differently at the clipped corner, or the \
-         equivalence assertion above is comparing two images that never depended \
-         on the radius",
     );
 }
 

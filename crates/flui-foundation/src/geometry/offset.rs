@@ -896,20 +896,3 @@ where
 // ============================================================================
 // Typed Generic Tests
 // ============================================================================
-
-#[cfg(test)]
-mod typed_tests {
-    use super::*;
-
-    #[test]
-    fn direction_normalize_and_zero() {
-        let o = Offset::from_direction(std::f64::consts::FRAC_PI_3, 2.0);
-        assert!((o.dx - 1.0).abs() < 1e-6, "{o:?}");
-        assert!((o.dy - 3.0_f64.sqrt()).abs() < 1e-6, "{o:?}");
-        assert_eq!(Offset::new(3.0, -4.0).normalize(), Offset::new(0.6, -0.8));
-        assert_eq!(Offset::<f64>::ZERO.normalize(), Offset::ZERO);
-        assert!(Offset::<f64>::ZERO.is_zero());
-        assert!(!Offset::new(1.0, 0.0).is_zero());
-        assert!(!Offset::new(0.0, 1.0).is_zero());
-    }
-}

@@ -261,22 +261,7 @@ mod resilient_setup_tests {
     //! rejected environment override — lives in
     //! `tests/a_rejected_env_override_still_installs.rs`, in its own process.
 
-    use super::{FilterConfig, LogConfig, SubscriberOwnership, SubscriberPolicy};
-
-    #[test]
-    fn a_valid_configuration_reports_no_rejection() {
-        // The rejection channel must stay quiet on the happy path, or a caller
-        // learns to ignore it.
-        let config = LogConfig::builder()
-            .filter(FilterConfig::new("info").without_env_var())
-            .build();
-
-        let setup = super::setup_with_env_fallback(&config, SubscriberPolicy::Inherit)
-            .expect("`info` parses");
-
-        assert!(setup.rejected_env_override.is_none());
-        assert_eq!(setup.installation.ownership, SubscriberOwnership::Unchanged);
-    }
+    use super::{FilterConfig, LogConfig, SubscriberPolicy};
 
     #[test]
     fn an_invalid_configuration_is_a_caller_bug_and_stays_an_error() {

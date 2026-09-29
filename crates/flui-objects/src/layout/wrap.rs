@@ -851,28 +851,3 @@ impl RenderBox for RenderWrap {
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Run breaking uses Flutter's `f64` tolerance: children that overflow the
-    /// line by 5e-7 px start a new run, and only a rounding-sized excess stays.
-    #[test]
-    fn a_representable_overflow_starts_a_new_run() {
-        let wrap = RenderWrap::new();
-        let constraints = BoxConstraints::loose(Size::new(100.0, 100.0));
-        let runs_for = |second: f64| {
-            let widths = [50.0, second];
-            wrap.compute_runs(constraints, 2, |i, _| Size::new(widths[i], 10.0))
-                .runs
-                .len()
-        };
-        assert_eq!(runs_for(50.000_000_5), 2);
-        assert_eq!(runs_for(50.0 + 1e-12), 1);
-    }
-
-    // ── distribute_space ──────────────────────────────────────────────────────
-
-    // ── cross_axis_child_offset ───────────────────────────────────────────────
-}

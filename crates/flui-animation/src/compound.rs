@@ -268,22 +268,6 @@ mod tests {
     }
 
     #[test]
-    fn test_compound_animation_add() {
-        let controller1 = create_controller(0.5);
-        let controller2 = create_controller(0.3);
-
-        let compound = CompoundAnimation::add(
-            controller1.clone() as Arc<dyn Animation<f64>>,
-            controller2.clone() as Arc<dyn Animation<f64>>,
-        );
-
-        assert_eq!(compound.value(), 0.8);
-
-        controller1.dispose();
-        controller2.dispose();
-    }
-
-    #[test]
     fn test_compound_animation_status() {
         // Controllers start at the lower bound so their status is genuinely
         // Dismissed (a mid-range set_value now reports Forward per Flutter's

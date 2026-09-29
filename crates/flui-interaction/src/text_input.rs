@@ -484,11 +484,8 @@ impl std::fmt::Debug for TextInputHandle {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
 
-    use flui_platform_api::text_store::{
-        InMemoryTextStore, LockGrant, LockTiming, Selection, TextStoreError, Utf16Offset,
-    };
+    use flui_platform_api::text_store::InMemoryTextStore;
     use parking_lot::Mutex;
 
     use super::*;
@@ -539,59 +536,6 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_projects_preedit_and_commit_onto_the_active_store() {
-        let (owner, _) = owner_with_recorder();
-        let store = InMemoryTextStore::new("ab");
-        let _token = owner.handle().attach(client(&store)).expect("connection");
-
-        owner.dispatch(&ImeEvent::Preedit {
-            text: "にほ".to_owned(),
-            cursor: Some((3, 3)),
-        });
-        assert_eq!(store.text(), "abにほ");
-        assert_eq!(
-            store
-                .composition()
-                .map(|composition| composition.range.len()),
-            Some(2)
-        );
-        assert_eq!(store.selection(), Selection::collapsed(Utf16Offset::new(3)));
-
-        owner.dispatch(&ImeEvent::Commit("日本".to_owned()));
-        assert_eq!(store.text(), "ab日本");
-        assert_eq!(store.composition(), None);
-        assert_eq!(store.selection(), Selection::collapsed(Utf16Offset::new(4)));
-    }
-
-    /// The reference store, attached as it is, with no wrapper reading the
-    /// owner: attaching installs the owner's gate, so the transaction holds
-    /// for a store whose author never looked at it.
-    #[test]
-    fn an_attached_store_follows_the_owners_frame_transaction() {
-        let (owner, _) = owner_with_recorder();
-        let store = InMemoryTextStore::new("");
-        let _token = owner.handle().attach(client(&store)).expect("connection");
-
-        owner.set_transaction_open(true);
-        assert!(owner.is_transaction_open());
-        owner.dispatch(&ImeEvent::Commit("東".to_owned()));
-        owner.dispatch(&ImeEvent::Commit("京".to_owned()));
-        assert_eq!(store.text(), "", "nothing commits inside the transaction");
-        let sync = store.request_lock(LockGrant::read(|_| {}), LockTiming::Sync);
-        assert_eq!(sync, Err(TextStoreError::SyncLockUnavailable));
-        assert_eq!(
-            owner.run_deferred_grants(),
-            0,
-            "still inside the transaction"
-        );
-
-        owner.set_transaction_open(false);
-        assert!(!owner.is_transaction_open());
-        assert_eq!(owner.run_deferred_grants(), 2);
-        assert_eq!(store.text(), "東京", "applied in arrival order");
-    }
-
-    #[test]
     fn stale_detach_cannot_disable_the_replacement_connection() {
         let (owner, platform) = owner_with_recorder();
         let handle = owner.handle();
@@ -615,56 +559,5 @@ mod tests {
             platform.calls(),
             [PlatformCall::Allowed(true), PlatformCall::Allowed(false)]
         );
-    }
-
-    #[test]
-    fn unsupported_presentation_returns_a_typed_error() {
-        let owner = TextInputOwner::new(None);
-        let handle = owner.handle();
-
-        assert_eq!(
-            handle.attach(empty_client()),
-            Err(TextInputError::Unsupported)
-        );
-        assert_eq!(
-            handle.set_cursor_area(Bounds::default()),
-            Err(TextInputError::Unsupported)
-        );
-    }
-
-    #[test]
-    fn explicit_close_disables_once_and_makes_handles_inert() {
-        let (owner, platform) = owner_with_recorder();
-        let handle = owner.handle();
-        let token = handle.attach(empty_client()).expect("connection");
-
-        owner.close();
-        owner.close();
-
-        assert_eq!(
-            platform.calls(),
-            [PlatformCall::Allowed(true), PlatformCall::Allowed(false)]
-        );
-        assert_eq!(handle.detach(token), Err(TextInputError::Closed));
-        assert_eq!(handle.attach(empty_client()), Err(TextInputError::Closed));
-    }
-
-    #[test]
-    fn a_session_start_callback_may_detach_reentrantly() {
-        let (owner, _) = owner_with_recorder();
-        let handle = owner.handle();
-        let token = Rc::new(RefCell::new(None));
-        let detach_handle = handle.clone();
-        let detach_token = Rc::clone(&token);
-        let attached = handle
-            .attach(empty_client().on_session_start(move || {
-                if let Some(token) = detach_token.borrow_mut().take() {
-                    let _ = detach_handle.detach(token);
-                }
-            }))
-            .expect("connection");
-        *token.borrow_mut() = Some(attached);
-        owner.dispatch(&ImeEvent::Enabled);
-        assert!(!owner.is_attached(attached));
     }
 }

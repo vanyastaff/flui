@@ -12,14 +12,10 @@
 //! is the lazily initialized `FONT_SYSTEM` `OnceLock` (benign once-init,
 //! never replaced or reset by tests).
 
-#[path = "canvas_transform.rs"]
-mod canvas_transform;
 #[path = "canvas_unit.rs"]
 mod canvas_unit;
 #[path = "color_blend.rs"]
 mod color_blend;
-#[path = "color_operations.rs"]
-mod color_operations;
 #[path = "color_property.rs"]
 mod color_property;
 #[path = "compile_fail.rs"]

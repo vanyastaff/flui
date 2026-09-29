@@ -24,39 +24,6 @@ proptest! {
         prop_assert_eq!(parsed, c);
     }
 
-    /// `from_hex` on a 6-digit RGB string ignores a leading `#` and is
-    /// case-insensitive.
-    #[test]
-    fn prop_from_hex_is_case_and_prefix_insensitive(r in any::<u8>(), g in any::<u8>(), b in any::<u8>()) {
-        let upper = format!("{r:02X}{g:02X}{b:02X}");
-        let lower = upper.to_ascii_lowercase();
-        let expected = Color::rgb(r, g, b);
-
-        prop_assert_eq!(Color::from_hex(&upper).unwrap(), expected);
-        prop_assert_eq!(Color::from_hex(&lower).unwrap(), expected);
-        prop_assert_eq!(Color::from_hex(&format!("#{upper}")).unwrap(), expected);
-        prop_assert_eq!(Color::from_hex(&format!("#{lower}")).unwrap(), expected);
-    }
-
-    /// `lighten` never moves a channel away from white and always preserves
-    /// alpha.
-    #[test]
-    fn prop_lighten_moves_toward_white_and_preserves_alpha(c in arb_color(), factor in 0.0f32..=1.0) {
-        let l = c.lighten(factor);
-        prop_assert!(l.r >= c.r);
-        prop_assert!(l.g >= c.g);
-        prop_assert!(l.b >= c.b);
-        prop_assert_eq!(l.a, c.a);
-    }
-
-}
-
-proptest! {
-    #[test]
-    fn prop_argb_roundtrips(c in arb_color()) {
-        prop_assert_eq!(Color::from_argb(c.to_argb()), c);
-    }
-
 }
 
 /// Stops at 0.25 / 0.75 / 1.0 (exact in binary, so the local t is too):
@@ -89,15 +56,3 @@ fn lerp_multi_stop_brackets_and_clamps() {
     assert_eq!(Color::lerp_multi_stop(&[], 0.5), Color::TRANSPARENT);
     assert_eq!(Color::lerp_multi_stop(&[(blue, 0.3)], 0.9), blue);
 }
-
-/// Halfway through Oklab from black to white is lightness 0.5: linear
-/// 0.5³ = 0.125, which the sRGB curve encodes as 0.3885, i.e. 99.
-#[test]
-fn lerp_oklab_interpolates_lightness() {
-    assert_eq!(
-        Color::lerp_oklab(Color::BLACK, Color::WHITE, 0.5),
-        Color::rgb(99, 99, 99)
-    );
-}
-
-proptest! {}

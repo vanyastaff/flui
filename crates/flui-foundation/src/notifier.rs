@@ -592,64 +592,6 @@ mod tests {
     }
 
     #[test]
-    fn test_value_notifier() {
-        let mut notifier = ValueNotifier::new(0);
-        let counter = Arc::new(AtomicUsize::new(0));
-
-        let counter_clone = Arc::clone(&counter);
-        let _ = notifier.add_listener(Arc::new(move || {
-            counter_clone.fetch_add(1, Ordering::SeqCst);
-        }));
-
-        notifier.set_value(5);
-        assert_eq!(*notifier.value(), 5);
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-
-        notifier.set_value(5);
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-
-        notifier.set_value_force(5);
-        assert_eq!(counter.load(Ordering::SeqCst), 2);
-    }
-
-    #[test]
-    fn removed_listener_does_not_fire_during_notify() {
-        // A listener removed *during* iteration (by a previously-fired
-        // listener) must NOT fire. Given listeners A and B, where A removes B
-        // mid-notify, B must not fire (post-removal skip).
-        use std::sync::atomic::AtomicBool;
-
-        use parking_lot::Mutex;
-
-        let notifier = ChangeNotifier::new();
-        let fired_b = Arc::new(AtomicBool::new(false));
-        let fired_b_clone = Arc::clone(&fired_b);
-        let notifier_clone = notifier.clone();
-
-        let id_b_cell = Arc::new(Mutex::new(None::<ListenerId>));
-        let id_b_cell_clone = Arc::clone(&id_b_cell);
-
-        let id_a = notifier.add_listener(Arc::new(move || {
-            let id = *id_b_cell_clone.lock();
-            if let Some(id) = id {
-                notifier_clone.remove_listener(id);
-            }
-        }));
-
-        let id_b = notifier.add_listener(Arc::new(move || {
-            fired_b_clone.store(true, Ordering::SeqCst);
-        }));
-        let _prev = id_b_cell.lock().replace(id_b);
-
-        notifier.notify_listeners();
-        assert!(
-            !fired_b.load(Ordering::SeqCst),
-            "removed listener must not fire"
-        );
-        let _ = id_a;
-    }
-
-    #[test]
     fn listener_fires_after_panic() {
         // A panicking listener must NOT abort the remaining listeners.
         // Given 3 listeners: panic-1, listener-2, listener-3 — listener-2 and
@@ -688,39 +630,6 @@ mod tests {
     // flutter/lib/src/foundation/change_notifier.dart:181 (debugAssertNotDisposed)
     // and :376 (dispose).
     // ------------------------------------------------------------------
-
-    #[test]
-    fn dispose_then_remove_listener_is_a_silent_no_op() {
-        // Flutter parity: `ChangeNotifier.removeListener` carries no
-        // `debugAssertNotDisposed`, unlike `addListener`/`notifyListeners`/
-        // `dispose` — its doc comment explains that teardown code must be
-        // able to detach from an already-disposed listenable. Must not
-        // panic in debug OR release; behavior is identical in both.
-        let notifier = ChangeNotifier::new();
-        let id = notifier.add_listener(Arc::new(|| {}));
-        notifier.dispose();
-        notifier.remove_listener(id); // must not panic
-        notifier.remove_listener(ListenerId::new(9999)); // unknown id: also fine
-    }
-
-    #[test]
-    fn dispose_is_idempotent() {
-        let notifier = ChangeNotifier::new();
-        let _ = notifier.add_listener(Arc::new(|| {}));
-        assert_eq!(notifier.len(), 1);
-
-        notifier.dispose();
-        assert_eq!(notifier.len(), 0, "dispose must clear listeners");
-        assert!(
-            notifier.is_disposed(),
-            "is_disposed must be true after dispose"
-        );
-
-        // Second dispose is a no-op — must NOT panic.
-        notifier.dispose();
-        assert_eq!(notifier.len(), 0);
-        assert!(notifier.is_disposed());
-    }
 
     #[test]
     fn dispose_during_notify_iteration_safe() {

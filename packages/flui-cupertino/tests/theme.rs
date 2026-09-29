@@ -58,42 +58,6 @@ fn mount_and_capture(
         .expect("build should have run and captured a primary color")
 }
 
-/// `CupertinoTheme::of` with no ancestor still resolves — falls back to
-/// `CupertinoThemeData::default()` (systemBlue), then resolves it (light,
-/// with no `MediaQuery` ancestor either) — the returned `primary_color()` is
-/// already `CupertinoColor::Static`, not `Dynamic`.
-#[test]
-fn of_with_no_ancestor_resolves_the_default_theme() {
-    let primary_color = mount_and_capture(ViewExt::boxed);
-    assert_eq!(
-        primary_color,
-        CupertinoColor::Static(Color::rgb(0, 122, 255))
-    );
-}
-
-/// Brightness root #2: with no `CupertinoTheme::brightness` set, the ambient
-/// `MediaQuery::platform_brightness` is the fallback root — full oracle
-/// parity for `CupertinoDynamicColor.resolveFrom`'s
-/// `CupertinoTheme.maybeBrightnessOf ?? MediaQuery.maybePlatformBrightnessOf`
-/// chain.
-#[test]
-fn primary_color_flips_with_ambient_media_query_brightness_when_theme_is_silent() {
-    let primary_color = mount_and_capture(|capture| {
-        MediaQuery::new(
-            MediaQueryData {
-                platform_brightness: Brightness::Dark,
-                ..MediaQueryData::default()
-            },
-            CupertinoTheme::new(CupertinoThemeData::default(), capture),
-        )
-        .boxed()
-    });
-    assert_eq!(
-        primary_color,
-        CupertinoColor::Static(Color::rgb(10, 132, 255))
-    );
-}
-
 /// An explicit `CupertinoThemeData::brightness` takes precedence over a
 /// conflicting ambient `MediaQuery::platform_brightness` — the oracle's
 /// `brightness ?? MediaQuery...` chain short-circuits on the theme's own

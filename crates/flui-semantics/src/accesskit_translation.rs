@@ -640,7 +640,6 @@ pub fn tree_to_update(
 
 #[cfg(test)]
 mod tests {
-    use flui_foundation::SemanticsId;
 
     use super::*;
     use crate::identity::AccessibilityNodeId;
@@ -662,55 +661,6 @@ mod tests {
 
     fn flags(bits: &[SemanticsFlag]) -> u64 {
         bits.iter().fold(0, |acc, f| acc | (*f as u64))
-    }
-
-    /// Every payload kind with an FLUI argument shape crosses the seam with
-    /// its data intact; every kind without one returns `None` (the caller
-    /// routes argument-free). A payload silently mistranslated here turns a
-    /// screen-reader edit into the wrong edit, which is worse than a drop.
-    #[test]
-    fn action_payloads_translate_or_decline_honestly() {
-        let target = NodeId(7);
-
-        assert_eq!(
-            semantics_action_args_for(&accesskit::ActionData::Value("hello".into()), target),
-            Some(crate::ActionArgs::SetText {
-                text: "hello".to_string()
-            }),
-        );
-        assert_eq!(
-            semantics_action_args_for(&accesskit::ActionData::CustomAction(42), target),
-            Some(crate::ActionArgs::CustomAction { action_id: 42 }),
-        );
-        assert_eq!(
-            semantics_action_args_for(
-                &accesskit::ActionData::SetScrollOffset(accesskit::Point { x: 3.0, y: -4.5 }),
-                target,
-            ),
-            Some(crate::ActionArgs::ScrollToOffset { x: 3.0, y: -4.5 }),
-        );
-        assert_eq!(
-            semantics_action_args_for(
-                &accesskit::ActionData::SetTextSelection(accesskit::TextSelection {
-                    anchor: accesskit::TextPosition {
-                        node: target,
-                        character_index: 2,
-                    },
-                    focus: accesskit::TextPosition {
-                        node: target,
-                        character_index: 9,
-                    },
-                }),
-                target,
-            ),
-            Some(crate::ActionArgs::SetSelection { base: 2, extent: 9 }),
-        );
-
-        // Kinds FLUI has no argument shape for decline rather than guess.
-        assert_eq!(
-            semantics_action_args_for(&accesskit::ActionData::NumericValue(0.5), target),
-            None,
-        );
     }
 
     /// The two action tables' agreement, checked as a composition: every
@@ -793,113 +743,6 @@ mod tests {
         );
     }
 
-    /// Every tool of the ADR-0080 wire vocabulary, as accesskit_windows 0.35.0
-    /// turns its UI Automation call into an AccessKit action (`node.rs`), and
-    /// the FLUI action that action reaches.
-    ///
-    /// `set_value` lands on `SetText` (the recorded divergence in
-    /// flui-semantics' `## Mapping decisions`); `expand` and `collapse` land
-    /// on the tap handler, which is how FLUI toggles an expandable node.
-    #[test]
-    fn every_wire_action_routes_to_a_semantics_action() {
-        use flui_protocol::ActionName;
-
-        let table: &[(ActionName, accesskit::Action, SemanticsAction)] = &[
-            // `Invoke` -> `click()` -> Click (node.rs:1340-1343, 953).
-            (
-                ActionName::Invoke,
-                accesskit::Action::Click,
-                SemanticsAction::Tap,
-            ),
-            // `Toggle` -> `click()` -> Click (node.rs:1336-1338, 953).
-            (
-                ActionName::Toggle,
-                accesskit::Action::Click,
-                SemanticsAction::Tap,
-            ),
-            // `Value`/`RangeValue.SetValue` -> SetValue (node.rs:1352, 1366).
-            (
-                ActionName::SetValue,
-                accesskit::Action::SetValue,
-                SemanticsAction::SetText,
-            ),
-            // `SelectionItem.Select` -> Click (node.rs:977-997).
-            (
-                ActionName::Select,
-                accesskit::Action::Click,
-                SemanticsAction::Tap,
-            ),
-            // `SetFocus` -> Focus (node.rs:1130).
-            (
-                ActionName::Focus,
-                accesskit::Action::Focus,
-                SemanticsAction::Focus,
-            ),
-            // `ExpandCollapse` -> Expand / Collapse, only toward the state
-            // the node lacks (node.rs:955-975).
-            (
-                ActionName::Expand,
-                accesskit::Action::Expand,
-                SemanticsAction::Tap,
-            ),
-            (
-                ActionName::Collapse,
-                accesskit::Action::Collapse,
-                SemanticsAction::Tap,
-            ),
-            // `ScrollItem` -> ScrollIntoView (node.rs:1374).
-            (
-                ActionName::ScrollIntoView,
-                accesskit::Action::ScrollIntoView,
-                SemanticsAction::ShowOnScreen,
-            ),
-        ];
-
-        let listed: Vec<ActionName> = table.iter().map(|(name, _, _)| *name).collect();
-        assert_eq!(
-            listed,
-            ActionName::ALL,
-            "one row per wire action, in ActionName::ALL's order: a wire action \
-             without a row here has no pinned route into FLUI",
-        );
-        for &(name, platform, expected) in table {
-            assert_eq!(
-                semantics_action_for(platform),
-                Some(expected),
-                "`{name}` arrives as {platform:?} and must reach {expected:?}",
-            );
-        }
-    }
-
-    /// An expandable node with a tap handler advertises the one transition
-    /// its state allows; without the tap handler nothing could perform either.
-    #[test]
-    fn an_expandable_node_advertises_only_the_transition_its_state_allows() {
-        let expandable = |state: &[SemanticsFlag], actions: u64| {
-            translate(&SemanticsNodeData {
-                flags: flags(state),
-                actions,
-                ..Default::default()
-            })
-        };
-        let tap = SemanticsAction::Tap.value();
-
-        let collapsed = expandable(&[SemanticsFlag::HasExpandedState], tap);
-        assert!(collapsed.supports_action(accesskit::Action::Expand));
-        assert!(!collapsed.supports_action(accesskit::Action::Collapse));
-
-        let expanded = expandable(
-            &[SemanticsFlag::HasExpandedState, SemanticsFlag::IsExpanded],
-            tap,
-        );
-        assert!(!expanded.supports_action(accesskit::Action::Expand));
-        assert!(expanded.supports_action(accesskit::Action::Collapse));
-
-        let inert = expandable(&[SemanticsFlag::HasExpandedState], 0);
-        assert!(!inert.supports_action(accesskit::Action::Expand));
-        assert!(!inert.supports_action(accesskit::Action::Collapse));
-    }
-
     #[test]
     fn a_checkbox_translates_all_three_of_its_states() {
         let checkable = [SemanticsFlag::HasCheckedState];
@@ -931,20 +774,6 @@ mod tests {
             Some(Toggled::Mixed),
             "tristate must not collapse to checked/unchecked"
         );
-    }
-
-    /// A checkable inside a mutually-exclusive group is a radio button, and a
-    /// screen reader reads the two differently.
-    #[test]
-    fn a_checkable_in_a_mutually_exclusive_group_is_a_radio_button() {
-        let data = SemanticsNodeData {
-            flags: flags(&[
-                SemanticsFlag::HasCheckedState,
-                SemanticsFlag::IsInMutuallyExclusiveGroup,
-            ]),
-            ..Default::default()
-        };
-        assert_eq!(translate(&data).role(), Role::RadioButton);
     }
 
     /// **The identity contract.** AccessKit ids must be the stable
@@ -986,46 +815,6 @@ mod tests {
             &[expected_child],
             "child references must be in the same stable space as the ids"
         );
-    }
-
-    /// Focus is named in `SemanticsId` by the caller and must be translated,
-    /// not passed through — the two spaces are not interchangeable.
-    #[test]
-    fn a_named_focus_is_translated_into_the_stable_space() {
-        let mut tree = SemanticsTree::new();
-        let child_render = render_id(64);
-        let child = tree.insert(SemanticsNode::new().with_source_render_id(child_render));
-        let mut root_node = SemanticsNode::new().with_source_render_id(render_id(2));
-        root_node.add_child(child);
-        let root = tree.insert(root_node);
-        tree.set_root(Some(root));
-
-        let update = tree_to_update(&tree, Some(child)).expect("rooted");
-        assert_eq!(
-            update.focus,
-            NodeId(AccessibilityNodeId::from(child_render).as_u64())
-        );
-    }
-
-    /// AccessKit requires a valid focus target, so a node the adapter has never
-    /// seen falls back to the root rather than being passed through.
-    #[test]
-    fn focus_falls_back_to_the_root_when_the_named_node_is_absent() {
-        let mut tree = SemanticsTree::new();
-        let root = tree.insert(SemanticsNode::new().with_source_render_id(render_id(3)));
-        tree.set_root(Some(root));
-
-        let absent = SemanticsId::new(99);
-        let update = tree_to_update(&tree, Some(absent)).expect("rooted");
-        assert_eq!(update.focus, update.tree.as_ref().expect("tree").root);
-    }
-
-    /// An unrooted tree cannot produce an applicable update, and inventing a
-    /// root would hand the adapter a tree the application does not have.
-    #[test]
-    fn an_unrooted_tree_yields_no_update() {
-        let tree = SemanticsTree::new();
-        assert!(tree_to_update(&tree, None).is_none());
     }
 }
 

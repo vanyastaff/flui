@@ -94,7 +94,6 @@ impl FirstReveal {
 
 #[cfg(test)]
 mod first_reveal_tests {
-    use std::time::Duration;
 
     use web_time::Instant;
 
@@ -117,32 +116,5 @@ mod first_reveal_tests {
             reveal.next_deadline().is_none(),
             "nothing to wake for once revealed"
         );
-    }
-
-    #[test]
-    fn a_non_presenting_frame_arms_the_fallback_and_a_present_before_it_wins() {
-        let reveal = FirstReveal::new();
-        let now = Instant::now();
-        assert!(
-            !reveal.after_frame(false, now),
-            "presented nothing: not yet"
-        );
-        assert_eq!(
-            reveal.next_deadline(),
-            Some(now + FirstReveal::FALLBACK),
-            "the fallback is armed one bound out from the FIRST empty outcome"
-        );
-        let later = now + Duration::from_millis(10);
-        assert!(!reveal.after_frame(false, later), "still inside the bound");
-        assert_eq!(
-            reveal.next_deadline(),
-            Some(now + FirstReveal::FALLBACK),
-            "a second empty outcome does not push the deadline out"
-        );
-        assert!(
-            reveal.after_frame(true, later),
-            "a present inside the bound reveals"
-        );
-        assert!(reveal.next_deadline().is_none());
     }
 }

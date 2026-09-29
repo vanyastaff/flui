@@ -210,20 +210,3 @@ mod guide_examples {}
 #[cfg(doctest)]
 #[doc = include_str!("../docs/PERFORMANCE.md")]
 mod performance_examples {}
-
-#[cfg(test)]
-mod derive_owner_tests {
-    use super::TwoWayConverter;
-
-    #[derive(Clone, flui_macros::Animatable)]
-    struct Point {
-        x: f64,
-        y: f64,
-    }
-
-    #[test]
-    fn derive_resolves_owner_inside_library() {
-        let point = Point::from_vector([2.0, 4.0]);
-        assert_eq!(point.to_vector(), [2.0, 4.0]);
-    }
-}

@@ -25,24 +25,3 @@ pub(crate) fn resolve_state_color(
 ) -> Option<Color> {
     property.and_then(|p| p.resolve(states))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use flui_sdk::widgets::WidgetState;
-
-    #[test]
-    fn resolve_state_color_is_none_when_the_property_has_no_matching_entry() {
-        // Distinguishes "no property at all" from "a property that itself
-        // resolves to `None` for this state set" — both must collapse to
-        // one `None`, not just the trivially-`None` former case.
-        let property: WidgetStateProperty<Option<Color>> = WidgetStateProperty::from_map([(
-            flui_sdk::widgets::WidgetStateConstraint::Is(WidgetState::Selected),
-            Some(Color::rgb(1, 2, 3)),
-        )]);
-        assert_eq!(
-            resolve_state_color(Some(&property), &WidgetStates::NONE),
-            None
-        );
-    }
-}

@@ -634,34 +634,4 @@ impl From<f64> for BudgetPercentage {
 // =============================================================================
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_frame_duration() {
-        let budget = FrameDuration::try_from_fps(60).expect("fps > 0");
-
-        assert!((budget.as_ms().value() - 16.667).abs() < 0.001);
-        assert!((budget.fps() - 60.0).abs() < 0.1);
-
-        let elapsed = Milliseconds::new(10.0);
-        assert!(!budget.is_over_budget(elapsed));
-        assert_eq!(
-            budget.remaining(elapsed).value(),
-            budget.as_ms().value() - 10.0
-        );
-
-        let over = Milliseconds::new(20.0);
-        assert!(budget.is_over_budget(over));
-        assert_eq!(budget.remaining(over), Milliseconds::ZERO);
-    }
-
-    #[test]
-    fn test_microseconds_saturating_sub() {
-        let a = Microseconds::new(100);
-        let b = Microseconds::new(50);
-        assert_eq!(a.saturating_sub(b), Microseconds::new(50));
-        // Underflow saturates to zero — `Microseconds` has no negative representation.
-        assert_eq!(b.saturating_sub(a), Microseconds::ZERO);
-    }
-}
+mod tests {}

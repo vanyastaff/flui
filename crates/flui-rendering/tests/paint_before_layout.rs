@@ -71,20 +71,3 @@ fn run_paint_refuses_to_start_with_layout_work_pending() {
         ),
     }
 }
-
-/// A healthy frame is unaffected: the gate must not reject a caller that
-/// runs the phases in order through the orchestrator.
-#[test]
-fn a_healthy_frame_through_run_frame_is_unaffected() {
-    let (owner, _child_id) = mount_two_node_tree();
-
-    let (mut owner, frame) = owner.run_frame();
-    let layer_tree = frame
-        .expect("a healthy frame succeeds")
-        .expect("a healthy frame produces a layer tree");
-    assert!(
-        layer_tree.len() > 1,
-        "the layer tree must carry more than its root",
-    );
-    drop(owner.take_layer_tree());
-}

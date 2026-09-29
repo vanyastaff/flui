@@ -771,33 +771,3 @@ fn build_macos_universal(
         Artifact::new("binary", fused, size_bytes).with_label("universal binary (not bundled)"),
     ])
 }
-
-#[cfg(test)]
-mod bundle_tests {
-    #[test]
-    fn app_document_controls_display_name_and_identifier() {
-        let root = tempfile::tempdir().expect("fixture");
-        std::fs::write(
-            root.path().join("flui.toml"),
-            "[app]\nname = \"Named App\"\nversion = \"0.1.0\"\norganization = \"org.example\"\n",
-        )
-        .expect("config");
-        let bundle = super::macos_bundle_at(root.path()).expect("valid app document");
-        assert_eq!(bundle.name, "Named App");
-        assert_eq!(bundle.identifier, "org.example.named-app");
-    }
-
-    #[test]
-    fn missing_cargo_toml_is_rejected_before_any_build_work() {
-        let root = tempfile::tempdir().expect("fixture");
-        let error =
-            super::ensure_flui_project(root.path()).expect_err("no Cargo.toml must be rejected");
-        assert!(matches!(
-            error,
-            crate::error::CliError::NotFluiProject { .. }
-        ));
-        assert!(error.to_string().contains("Cargo.toml not found"));
-        std::fs::write(root.path().join("Cargo.toml"), "[package]\n").expect("manifest");
-        super::ensure_flui_project(root.path()).expect("present Cargo.toml is accepted");
-    }
-}

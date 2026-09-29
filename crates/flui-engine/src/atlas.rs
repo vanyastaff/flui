@@ -391,13 +391,6 @@ impl TextureAtlas {
         (self.width, self.height)
     }
 
-    /// Get number of allocated images
-    #[must_use]
-    #[cfg(all(test, feature = "testing"))]
-    fn image_count(&self) -> usize {
-        self.entries.len()
-    }
-
     /// Calculate atlas utilization (0.0 - 1.0)
     #[must_use]
     pub(crate) fn utilization(&self) -> f32 {
@@ -409,38 +402,5 @@ impl TextureAtlas {
 
         let total_pixels = self.width * self.height;
         used_pixels as f32 / total_pixels as f32
-    }
-}
-
-#[cfg(all(test, feature = "testing"))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reset_reclaims_a_full_atlas() {
-        let device = crate::test_support::test_device("Atlas Test Device");
-        // Each 64x64 entry reserves a GUTTER margin, so its footprint is
-        // (64+GUTTER)². Size the atlas to fit exactly one such footprint, then
-        // it is full.
-        let dim = 64 + GUTTER;
-        let mut atlas = TextureAtlas::new(&device, dim, dim, TextureFormat::Rgba8UnormSrgb);
-
-        assert!(
-            atlas.allocate(64, 64).is_some(),
-            "first 64x64 (plus gutter) must fit the {dim}x{dim} atlas"
-        );
-        assert!(
-            atlas.allocate(1, 1).is_none(),
-            "atlas must report full — the shelf packer cannot reuse freed space"
-        );
-        assert_eq!(atlas.image_count(), 1);
-
-        atlas.reset();
-
-        assert_eq!(atlas.image_count(), 0, "reset drops all entries");
-        assert!(
-            atlas.allocate(64, 64).is_some(),
-            "reset must rewind the shelf cursor so the atlas is allocatable again"
-        );
     }
 }

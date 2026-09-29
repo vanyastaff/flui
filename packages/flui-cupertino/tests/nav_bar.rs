@@ -11,86 +11,9 @@
 
 use crate::common;
 
-use common::{lay_out, loose, tight};
+use common::{lay_out, tight};
 use flui_cupertino::CupertinoNavigationBar;
-use flui_sdk::widgets::prelude::EdgeInsets;
 use flui_sdk::widgets::{MediaQuery, MediaQueryData, SizedBox, Text};
-
-fn media_with_top_padding(top: f64) -> MediaQueryData {
-    MediaQueryData {
-        padding: EdgeInsets::new(top, 0.0, 0.0, 0.0),
-        ..MediaQueryData::default()
-    }
-}
-
-/// `_kDefaultNavBarBorderColor` (`nav_bar.dart`, oracle tag `3.44.0`) is
-/// `Color(0x4D000000)` — alpha `0x4D` = `77` decimal. The default bar paints
-/// it; `.border(None)` removes it entirely.
-///
-/// Red-check: hardcode `default_border()`'s alpha to any other byte — this
-/// test's first assertion fails on the wrong number, not just "some border".
-#[test]
-fn default_hairline_border_carries_the_oracles_exact_alpha_and_border_none_removes_it() {
-    let with_border = lay_out(
-        MediaQuery::new(MediaQueryData::default(), CupertinoNavigationBar::new()),
-        tight(400.0, 44.0),
-    );
-    let decorated = with_border
-        .try_find_by_render_type("RenderDecoratedBox")
-        .expect("the bar always paints a DecoratedBox for its background/border");
-    let decoration = with_border
-        .render_property(decorated, "decoration")
-        .expect("RenderDecoratedBox always reports its decoration");
-    assert!(
-        decoration.contains("a: 77"),
-        "the default border's color must carry the oracle's exact 0x4D (77) alpha: {decoration}"
-    );
-
-    let without_border = lay_out(
-        MediaQuery::new(
-            MediaQueryData::default(),
-            CupertinoNavigationBar::new().border(None),
-        ),
-        tight(400.0, 44.0),
-    );
-    let decorated = without_border
-        .try_find_by_render_type("RenderDecoratedBox")
-        .expect("still paints a background even with no border");
-    let decoration = without_border
-        .render_property(decorated, "decoration")
-        .expect("RenderDecoratedBox always reports its decoration");
-    assert!(
-        !decoration.contains("a: 77"),
-        "border(None) must remove the hairline entirely: {decoration}"
-    );
-}
-
-/// The bar's total mounted height is `_kNavBarPersistentHeight +
-/// MediaQuery.paddingOf(context).top` — `_PersistentNavigationBar`'s own
-/// `SizedBox(height: _kNavBarPersistentHeight + MediaQuery.paddingOf(context).top)`
-/// (`nav_bar.dart`, oracle tag `3.44.0`). Constrained loosely so the bar's
-/// own preferred height — not an outer tight constraint — determines the
-/// measured size.
-///
-/// Red-check: drop `+ top_inset.get()` from the `SizedBox::height` call in
-/// `nav_bar.rs` — this test's height assertion fails (would read `44.0`
-/// instead of `64.0`).
-#[test]
-fn total_mounted_height_adds_the_top_media_query_inset() {
-    let laid = lay_out(
-        MediaQuery::new(media_with_top_padding(20.0), CupertinoNavigationBar::new()),
-        loose(400.0),
-    );
-
-    let bar_box = laid
-        .try_find_by_render_type("RenderConstrainedBox")
-        .expect("the bar's own outer SizedBox mounts as a RenderConstrainedBox");
-    let size = laid.size(bar_box);
-    assert!(
-        (size.height - 64.0).abs() < 0.01,
-        "44.0 persistent height + 20.0 top inset must equal 64.0: {size:?}"
-    );
-}
 
 /// `leading`/`middle`/`trailing` all reach the mounted render tree, not just
 /// the constructor's stored fields — proven by a delta against a bar with

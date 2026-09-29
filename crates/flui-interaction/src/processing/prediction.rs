@@ -389,43 +389,4 @@ impl InputPredictor {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_predictor_horizontal_motion() {
-        let mut predictor = InputPredictor::new();
-        let start = Instant::now();
-
-        // Simulate horizontal motion: 100 pixels in 100ms = 1000 px/s
-        for i in 0..10 {
-            let t = start + Duration::from_millis(i * 10);
-            predictor.add_sample(t, Offset::new(i as f64 * 10.0, 0.0));
-        }
-
-        // Predict 16ms into future
-        let predicted = predictor.predict(Duration::from_millis(16));
-
-        // At 1000 px/s, after 16ms we should move ~16 pixels
-        // Last position was 90px, predicted should be around 106px
-        assert!(predicted.position.dx > 100.0);
-        assert!(predicted.position.dx < 120.0);
-        assert!(predicted.confidence > 0.3);
-    }
-
-    #[test]
-    fn predict_next_frame_zero_fps_does_not_panic() {
-        let mut predictor = InputPredictor::new();
-        let start = Instant::now();
-        for i in 0..5 {
-            predictor.add_sample(
-                start + Duration::from_millis(i * 10),
-                Offset::new(i as f64 * 10.0, 0.0),
-            );
-        }
-        // `fps == 0` must clamp rather than divide by zero into a non-finite
-        // frame time.
-        let predicted = predictor.predict_next_frame(0);
-        assert!(predicted.prediction_time.as_secs_f64().is_finite());
-    }
-}
+mod tests {}

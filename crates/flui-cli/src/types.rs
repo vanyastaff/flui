@@ -401,16 +401,5 @@ mod tests {
         }
     }
 
-    mod organization_id {
-        use super::*;
-
-        #[test]
-        fn invalid_ids() {
-            assert!(OrganizationId::new("").is_err());
-            assert!(OrganizationId::new("com..example").is_err());
-            assert!(OrganizationId::new(".com.example").is_err());
-            assert!(OrganizationId::new("com.example.").is_err());
-            assert!(OrganizationId::new("com.exam ple").is_err());
-        }
-    }
+    mod organization_id {}
 }

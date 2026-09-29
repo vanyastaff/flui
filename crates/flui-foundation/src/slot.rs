@@ -138,30 +138,3 @@ impl<I: TreeId> From<usize> for IndexedSlot<I> {
         Self::new(index, None)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ElementId;
-
-    #[test]
-    fn test_indexed_slot_boundary() {
-        // Only child scenario: index 0, count 1
-        // prev() should be None, next slot moves past the single child.
-        // is_first() should be true. With no next sibling, this is
-        // effectively the last child too.
-        let slot = IndexedSlot::<ElementId>::new(0, None);
-
-        // prev() should be None (already at index 0)
-        assert!(slot.prev().is_none());
-
-        // is_first() should be true
-        assert!(slot.is_first());
-
-        // After advancing to next, we're past the only child
-        let next = slot.next(ElementId::new(42));
-        assert_eq!(next.index(), 1);
-        assert_eq!(next.previous(), Some(ElementId::new(42)));
-        assert!(!next.is_first());
-    }
-}

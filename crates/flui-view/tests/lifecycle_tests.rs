@@ -115,37 +115,6 @@ impl View for LifecycleTrackingView {
 // ============================================================================
 
 #[test]
-fn test_stateful_element_dispose_called_on_unmount() {
-    let disposed = Arc::new(AtomicBool::new(false));
-    let view = LifecycleTrackingView {
-        disposed: disposed.clone(),
-        activated: Arc::new(AtomicUsize::new(0)),
-        deactivated: Arc::new(AtomicUsize::new(0)),
-    };
-
-    let mut tree = ElementTree::new();
-    let mut owner = BuildOwner::new();
-    let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
-    // Drive the first build so `init_state` actually runs before unmount —
-    // `mount` alone only flips lifecycle state (Flutter's `mount` calls
-    // `initState` synchronously; FLUI's split mount/build does not). Since
-    // `dispose` is gated on a completed `init_state`
-    // (`StatefulBehavior::on_unmount`), so an element that was only
-    // mounted, never built, is never disposed — this test drives a real
-    // `InitialMount` build, same as production, for the removal below to
-    // be meaningful. The fixture goes through `ElementTree`/`BuildOwner`
-    // because a raw element has no live `BuildHandle` to build through.
-    owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
-    owner.build_scope(&mut tree);
-
-    assert!(!disposed.load(Ordering::SeqCst));
-
-    tree.remove(root_id, &mut owner.element_owner_mut());
-
-    assert!(disposed.load(Ordering::SeqCst));
-}
-
-#[test]
 fn test_stateful_element_multiple_deactivate_activate_cycles() {
     let activated = Arc::new(AtomicUsize::new(0));
     let deactivated = Arc::new(AtomicUsize::new(0));

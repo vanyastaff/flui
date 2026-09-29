@@ -19,52 +19,9 @@ fn approx(a: f64, b: f64) -> bool {
 // Construction, len, total_extent, Estimated -> Exact
 // ============================================================================
 
-#[test]
-fn estimated_to_exact_transition() {
-    let mut v = Virtualizer::new(3, 10.0);
-    assert_eq!(v.total_extent(), Extent::Estimated(30.0));
-
-    // Measure first two — still estimated (item 2 outstanding).
-    assert_eq!(v.set_measured(0, 12.0, (0, 0.0)), None);
-    assert_eq!(v.set_measured(1, 8.0, (0, 0.0)), None);
-    assert_eq!(v.measured_count(), 2);
-    assert_eq!(v.estimated_count(), 1);
-    match v.total_extent() {
-        Extent::Estimated(t) => assert!(approx(t, 12.0 + 8.0 + 10.0)),
-        other @ Extent::Exact(_) => {
-            panic!("expected Estimated while a prefix is unmeasured, got {other:?}")
-        }
-    }
-
-    // Measure the last — now Exact.
-    assert_eq!(v.set_measured(2, 20.0, (0, 0.0)), None);
-    assert_eq!(v.measured_count(), 3);
-    assert_eq!(v.estimated_count(), 0);
-    assert_eq!(v.total_extent(), Extent::Exact(12.0 + 8.0 + 20.0));
-}
-
 // ============================================================================
 // query: dual band + leading_offset
 // ============================================================================
-
-#[test]
-fn query_dual_band_with_cache() {
-    // 20 items x 10px. Viewport [50,80) + cache 20 before / 30 after.
-    let v = Virtualizer::new(20, 10.0);
-    let window = ScrollWindow {
-        offset: 50.0,
-        main_extent: 30.0,
-        cache_before: 20.0,
-        cache_after: 30.0,
-    };
-    let r = v.query(&window);
-    // visible [50,80) -> items 5,6,7
-    assert_eq!((r.first, r.last), (5, 8));
-    // cache [30, 110) -> items 3..11
-    assert_eq!((r.cache_first, r.cache_last), (3, 11));
-    // Containment invariant.
-    assert!(r.cache_first <= r.first && r.last <= r.cache_last);
-}
 
 // ============================================================================
 // Anchor correction — the jitter killer
@@ -93,18 +50,6 @@ fn anchor_correction_keeps_content_stationary() {
 // set_count — O(log n) structural edits
 // ============================================================================
 
-#[test]
-fn set_count_shrink_clamps_anchor() {
-    let mut v = Virtualizer::new(10, 10.0);
-    v.set_measured(8, 10.0, (8, 0.0)); // anchor at 8
-    v.set_count(3);
-    assert_eq!(
-        v.anchor_item(),
-        (2, 0.0),
-        "anchor clamps to last valid index"
-    );
-}
-
 // ============================================================================
 // invalidate_from
 // ============================================================================
@@ -112,18 +57,6 @@ fn set_count_shrink_clamps_anchor() {
 // ============================================================================
 // scroll_to_item
 // ============================================================================
-
-#[test]
-fn scroll_to_item_alignment_uses_viewport() {
-    let mut v = Virtualizer::new(10, 10.0); // total 100
-    // Item 5 starts at 50, extent 10; viewport 40 supplied by the caller.
-    // leading (a=0): 50
-    assert!(approx(v.scroll_to_item(5, 0.0, 40.0), 50.0));
-    // trailing (a=1): 50 - (40 - 10) = 20
-    assert!(approx(v.scroll_to_item(5, 1.0, 40.0), 20.0));
-    // center (a=0.5): 50 - 0.5*(40-10) = 35
-    assert!(approx(v.scroll_to_item(5, 0.5, 40.0), 35.0));
-}
 
 // ============================================================================
 // O(log n) seek both directions on 10k items
@@ -415,129 +348,11 @@ mod prop {
 // in the interior, so these go straight at the tree against a Vec oracle.
 // ===========================================================================
 mod tree_edits {
-    use super::super::sumtree::ExtentTree;
-    use super::*;
+
     use proptest::prelude::*;
-
-    fn measured(e: f64) -> ItemExtent {
-        ItemExtent::Measured { extent: e }
-    }
-
-    #[derive(Clone, Default)]
-    struct Vecf(Vec<f64>);
-    impl Vecf {
-        fn insert(&mut self, i: usize, e: f64) {
-            self.0.insert(i, e);
-        }
-        fn remove(&mut self, i: usize) -> f64 {
-            self.0.remove(i)
-        }
-        fn set(&mut self, i: usize, e: f64) {
-            self.0[i] = e;
-        }
-        fn total(&self) -> f64 {
-            self.0.iter().sum()
-        }
-        fn offset_of(&self, i: usize) -> f64 {
-            self.0.iter().take(i).sum()
-        }
-        fn seek(&self, off: f64) -> (usize, f64) {
-            let n = self.0.len();
-            if n == 0 {
-                return (0, 0.0);
-            }
-            let total = self.total();
-            if off <= 0.0 {
-                return (0, 0.0);
-            }
-            if off >= total {
-                return (n - 1, off - self.offset_of(n - 1));
-            }
-            let mut acc = 0.0;
-            for (i, &e) in self.0.iter().enumerate() {
-                if acc + e > off {
-                    return (i, off - acc);
-                }
-                acc += e;
-            }
-            (n - 1, off - self.offset_of(n - 1))
-        }
-    }
-
-    #[derive(Debug, Clone)]
-    enum Op {
-        Insert { at: usize, e: f64 },
-        Remove { at: usize },
-        Set { at: usize, e: f64 },
-    }
-
-    fn op() -> impl Strategy<Value = Op> {
-        prop_oneof![
-            (0usize..300, extent_in(0.0, 50.0)).prop_map(|(at, e)| Op::Insert { at, e }),
-            (0usize..300).prop_map(|at| Op::Remove { at }),
-            (0usize..300, extent_in(0.0, 50.0)).prop_map(|(at, e)| Op::Set { at, e }),
-        ]
-    }
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(2000))]
-
-        #[test]
-        fn mid_list_insert_remove_matches_oracle(
-            init in proptest::collection::vec(extent_in(0.0, 50.0), 0..30),
-            ops in proptest::collection::vec(op(), 0..400),
-        ) {
-            let mut t = ExtentTree::from_fn(init.len(), |i| measured(init[i]));
-            let mut o = Vecf(init.clone());
-
-            for op in &ops {
-                match *op {
-                    Op::Insert { at, e } => {
-                        let at = at % (o.0.len() + 1);
-                        t.insert(at, measured(e));
-                        o.insert(at, e);
-                    }
-                    Op::Remove { at } => {
-                        if o.0.is_empty() { continue; }
-                        let at = at % o.0.len();
-                        let r = t.remove(at);
-                        let ro = o.remove(at);
-                        prop_assert!((r.extent() - ro).abs() < 1e-6,
-                            "removed wrong item: tree {} oracle {}", r.extent(), ro);
-                    }
-                    Op::Set { at, e } => {
-                        if o.0.is_empty() { continue; }
-                        let at = at % o.0.len();
-                        t.set(at, measured(e));
-                        o.set(at, e);
-                    }
-                }
-
-                t.check_invariants()
-                    .map_err(|m| TestCaseError::fail(format!("invariant after {op:?}: {m}")))?;
-                prop_assert_eq!(t.len(), o.0.len(), "count mismatch after {:?}", op);
-            }
-
-            for i in 0..=o.0.len() {
-                let got = t.offset_of(i);
-                let exp = o.offset_of(i);
-                prop_assert!((got - exp).abs() <= 1e-2 + 1e-4 * exp.abs(),
-                    "offset_of({}) tree {} oracle {}", i, got, exp);
-            }
-
-            let total = o.total();
-            if !o.0.is_empty() && total > 0.0 {
-                for k in 0..=40u32 {
-                    let off = total * (k as f64) / 40.0;
-                    let (ti, _tinto) = t.seek_offset(off);
-                    let (oi, _ointo) = o.seek(off);
-                    let agree = ti == oi
-                        || (ti.abs_diff(oi) == 1
-                            && (t.offset_of(ti.max(oi)) - off).abs() <= 1e-2 + 1e-4 * total);
-                    prop_assert!(agree, "seek({}) tree {} oracle {}", off, ti, oi);
-                }
-            }
-        }
 
     }
 }

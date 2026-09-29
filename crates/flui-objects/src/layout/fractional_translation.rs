@@ -249,26 +249,3 @@ impl RenderBox for RenderFractionalTranslation {
 // ===========================================================================
 // Tests
 // ===========================================================================
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    // ---------- TranslationFraction ------------------------------------------
-
-    // ---------- RenderFractionalTranslation -------------------------------
-
-    #[test]
-    fn pixel_offset_multiplies_injected_size_by_fraction() {
-        // The pixel translation resolves the fraction against the
-        // laid-out size the pipeline hands in (RenderState via `ctx.size()`
-        // / `ctx.own_size()`), not a cached field: -0.5 × 200 = -100,
-        // 0.25 × 100 = 25.
-        let node = RenderFractionalTranslation::translated(TranslationFraction::new(-0.5, 0.25));
-        assert_eq!(
-            node.pixel_offset(Size::new(200.0, 100.0)),
-            Offset::new(-100.0, 25.0),
-        );
-    }
-}

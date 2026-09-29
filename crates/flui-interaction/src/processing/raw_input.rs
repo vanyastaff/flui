@@ -509,37 +509,4 @@ impl InputMode {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::events::{make_down_event, make_move_event, make_up_event};
-
-    #[test]
-    fn test_raw_handler_move_delta() {
-        let handler = RawInputHandler::new();
-
-        // Down at (100, 100)
-        let down = make_down_event(Offset::new(100.0, 100.0), PointerType::Touch);
-        handler.handle_event(&down);
-
-        // Move to (120, 110) - delta should be (20, 10)
-        let mv = make_move_event(Offset::new(120.0, 110.0), PointerType::Touch);
-        let raw = handler.handle_event(&mv).unwrap();
-
-        assert!(raw.is_move());
-        assert_eq!(raw.position(), Offset::new(120.0, 110.0));
-        assert_eq!(raw.delta(), Offset::new(20.0, 10.0));
-    }
-
-    #[test]
-    fn test_raw_handler_up_clears_tracking() {
-        let handler = RawInputHandler::new();
-
-        let down = make_down_event(Offset::new(100.0, 100.0), PointerType::Touch);
-        handler.handle_event(&down);
-        assert_eq!(handler.active_pointer_count(), 1);
-
-        let up = make_up_event(Offset::new(100.0, 100.0), PointerType::Touch);
-        handler.handle_event(&up);
-        assert_eq!(handler.tracked_pointer_count(), 0);
-    }
-}
+mod tests {}

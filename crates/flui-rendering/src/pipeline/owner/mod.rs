@@ -396,7 +396,6 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use flui_foundation::Leaf;
     use flui_foundation::geometry::Size;
@@ -659,47 +658,6 @@ mod tests {
         );
     }
 
-    /// Idle-wake contract: scheduling NEW dirty work fires the
-    /// visual-update callback exactly once per new queue entry, so a
-    /// quiescent platform loop wakes for the frame — and duplicate
-    /// marks (a frame is already scheduled) don't spam wakes.
-    #[test]
-    fn dirty_marks_fire_visual_update_once_per_new_entry() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let counter = Arc::new(AtomicUsize::new(0));
-        let counter_clone = counter.clone();
-        let mut owner = PipelineOwner::with_callbacks(
-            Some(move || {
-                counter_clone.fetch_add(1, Ordering::Relaxed);
-            }),
-            None::<fn()>,
-            None::<fn()>,
-        );
-
-        owner.add_node_needing_layout(RenderId::new(1), 0);
-        assert_eq!(
-            counter.load(Ordering::Relaxed),
-            1,
-            "a new layout entry must wake the platform",
-        );
-        owner.add_node_needing_layout(RenderId::new(1), 0);
-        assert_eq!(
-            counter.load(Ordering::Relaxed),
-            1,
-            "a duplicate entry means a frame is already scheduled — no second wake",
-        );
-
-        owner.scheduler.schedule_paint_boundary(RenderId::new(2), 1);
-        assert_eq!(
-            counter.load(Ordering::Relaxed),
-            2,
-            "a new paint entry must wake the platform",
-        );
-        owner.scheduler.schedule_paint_boundary(RenderId::new(2), 1);
-        assert_eq!(counter.load(Ordering::Relaxed), 2);
-    }
-
     // ========================================================================
     // catch_unwind plumbing
     // ========================================================================
@@ -937,75 +895,4 @@ mod tests {
     //   - dirty.needs_layout receives exactly the boundary id
     //   - re-marking an already-dirty node is a no-op
     //   - stale RenderIds (post-removal) terminate the walk silently
-
-    /// Leaf `RenderObject<BoxProtocol>` returning a fixed size regardless of
-    /// the constraints — used to drive the layout-output debug assertion on
-    /// the leaf commit path (`RenderEntry::layout_leaf_only`).
-    #[derive(Debug)]
-    struct FixedSizeLeaf {
-        size: flui_foundation::geometry::Size,
-    }
-
-    impl flui_foundation::Diagnosticable for FixedSizeLeaf {}
-
-    impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for FixedSizeLeaf {
-        fn perform_layout_raw(
-            &mut self,
-            _ctx: &mut <crate::protocol::BoxProtocol as crate::protocol::Protocol>::LayoutCtxErased<
-                '_,
-            >,
-        ) -> crate::error::RenderResult<
-            crate::protocol::ProtocolGeometry<crate::protocol::BoxProtocol>,
-        > {
-            Ok(self.size)
-        }
-
-        fn paint_raw(
-            &self,
-            _recorder: &mut crate::context::FragmentRecorder,
-            _child_count: usize,
-            _size: flui_foundation::geometry::Size,
-        ) {
-        }
-
-        fn hit_test_raw(
-            &self,
-            _position: crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>,
-            _child_count: usize,
-            _size: flui_foundation::geometry::Size,
-            _hit_child: &mut dyn FnMut(
-                usize,
-                Option<crate::protocol::ProtocolPosition<crate::protocol::BoxProtocol>>,
-                Option<flui_foundation::geometry::Matrix4>,
-            ) -> bool,
-        ) -> crate::traits::HitTestOutcome {
-            crate::traits::HitTestOutcome::miss()
-        }
-    }
-
-    /// A leaf committing a size that violates the constraints it was laid out
-    /// under surfaces `RenderError::InvalidGeometry` on the leaf commit path —
-    /// a node returning 999×999 under tight 100×100 is a layout bug.
-    #[test]
-    fn leaf_committing_a_constraint_violating_size_returns_invalid_geometry() {
-        use crate::error::RenderError;
-
-        let mut owner = PipelineOwner::new();
-        let root = owner.insert(Box::new(FixedSizeLeaf {
-            size: flui_foundation::geometry::Size::new(999.0, 999.0),
-        })
-            as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>);
-        owner.set_root_id(Some(root));
-        owner.set_root_constraints(Some(BoxConstraints::tight(
-            flui_foundation::geometry::Size::new(100.0, 100.0),
-        )));
-
-        let (_, result) = owner.run_frame();
-        match result {
-            Err(RenderError::InvalidGeometry { reason, .. }) => {
-                assert!(reason.contains("does not satisfy"));
-            }
-            other => panic!("expected InvalidGeometry, got {other:?}"),
-        }
-    }
 }

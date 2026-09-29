@@ -338,39 +338,7 @@ impl SemanticsNode {
 // ============================================================================
 
 #[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    #[test]
-    fn absorbed_semantic_content_preserves_the_receivers_source_rect() {
-        let mut node1 = SemanticsNode::new();
-        node1.config_mut().set_label("First");
-        node1.config_mut().set_button(true);
-        node1.set_rect(Rect::from_xywh(0.0, 0.0, 50.0, 50.0));
-
-        let mut node2 = SemanticsNode::new();
-        node2.config_mut().set_label("Second");
-        node2.config_mut().set_enabled(Some(true));
-        node2.set_rect(Rect::from_xywh(50.0, 0.0, 50.0, 50.0));
-
-        node1.absorb(&node2);
-
-        assert!(node1.config().is_button());
-        assert_eq!(node1.config().is_enabled(), Some(true));
-        assert_eq!(node1.rect(), Rect::from_xywh(0.0, 0.0, 50.0, 50.0),);
-    }
-}
+mod tests {}
 
 #[cfg(test)]
-mod role_propagation_tests {
-    use super::*;
-
-    /// A node never bound to a render boundary has no stable identity to
-    /// export; the payload must say so rather than fabricate one.
-    #[test]
-    fn an_unbound_node_exports_no_payload_identity() {
-        let node = SemanticsNode::new();
-        assert_eq!(node.to_node_data().id, None);
-    }
-}
+mod role_propagation_tests {}

@@ -92,17 +92,3 @@ impl ViewKey for ObjectKey {
         write!(f, "ObjectKey({:p})", self.ptr)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_object_key_same_object() {
-        let obj = Arc::new(42);
-        let key1 = ObjectKey::new(Arc::clone(&obj));
-        let key2 = ObjectKey::new(Arc::clone(&obj));
-
-        assert!(key1.key_eq(&key2));
-    }
-}

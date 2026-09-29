@@ -40,5 +40,5 @@ pub(crate) use handlers::LifecycleEvent;
 pub(crate) use handlers::impl_window_callback_setters;
 pub use handlers::{PlatformHandlers, WindowCallbacks};
 
-#[cfg(any(target_os = "ios", all(test, target_os = "macos")))]
+#[cfg(target_os = "ios")]
 pub(crate) mod apple_scene_error;

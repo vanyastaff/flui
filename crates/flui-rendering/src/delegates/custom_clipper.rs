@@ -109,35 +109,4 @@ impl CustomClipper<Rect> for RectClipper {
 }
 
 #[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    #[derive(Debug)]
-    struct InsetClipper {
-        inset: f64,
-    }
-
-    impl CustomClipper<Rect> for InsetClipper {
-        fn get_clip(&self, size: Size) -> Rect {
-            Rect::from_ltrb(
-                self.inset,
-                self.inset,
-                size.width - self.inset,
-                size.height - self.inset,
-            )
-        }
-
-        fn should_reclip(&self, old_clipper: &dyn CustomClipper<Rect>) -> bool {
-            if let Some(old) = old_clipper.as_any().downcast_ref::<Self>() {
-                self.inset != old.inset
-            } else {
-                true
-            }
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
-        }
-    }
-}
+mod tests {}

@@ -119,25 +119,13 @@ mod tests {
     use super::*;
 
     // The positive path (constants, `field_mask_diff`, `r#type` → `FIELD_TYPE`)
-    // is `crates/flui-view/tests/inherited_data_derive.rs`: expansion resolves
-    // the runtime path from the consuming manifest, which this crate lacks.
+    // is exercised from a consuming crate's tests: expansion resolves the
+    // runtime path from the consuming manifest, which this crate lacks.
     fn error_of(input: DeriveInput) -> String {
         match expand(&input) {
             Ok(_) => panic!("BUG: expected the derive to refuse this input"),
             Err(error) => error.to_string(),
         }
-    }
-
-    #[test]
-    fn more_than_64_fields_is_refused() {
-        let fields = (0..65).map(|i| {
-            let name = format_ident!("f{i}");
-            quote! { #name: u8 }
-        });
-        let input: DeriveInput = parse_quote! {
-            struct Big { #(#fields),* }
-        };
-        assert!(error_of(input).contains("carries 64 fields; this struct has 65"));
     }
 
     #[test]

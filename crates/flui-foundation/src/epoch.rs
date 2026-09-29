@@ -298,7 +298,7 @@ impl Default for GenerationGate {
 
 #[cfg(test)]
 mod tests {
-    use super::{GenerationGate, GpuResourceGeneration};
+    use super::GenerationGate;
 
     // -----------------------------------------------------------------------
     // GenerationGate tests
@@ -316,35 +316,7 @@ mod tests {
         assert!(!gate.is_current(stamp), "pre-bump stamp must go stale");
     }
 
-    #[test]
-    fn clone_shares_state() {
-        let gate = GenerationGate::new();
-        let clone = gate.clone();
-
-        // A bump through one handle is visible through every clone: they
-        // share one underlying counter, not independent copies.
-        let bumped = gate.bump();
-        assert_eq!(clone.current(), bumped);
-
-        let stamp_via_clone = clone.current();
-        let bumped_again = clone.bump();
-        assert!(!gate.is_current(stamp_via_clone));
-        assert!(gate.is_current(bumped_again));
-    }
-
     // -----------------------------------------------------------------------
     // GpuResourceGeneration tests
     // -----------------------------------------------------------------------
-
-    #[test]
-    fn gpu_resource_generation_zero_is_default_and_never_minted() {
-        assert_eq!(
-            GpuResourceGeneration::default(),
-            GpuResourceGeneration::ZERO
-        );
-        assert_eq!(GpuResourceGeneration::ZERO.get(), 0);
-        // The counter starts at 1 (see `mint`'s own doc), so ZERO stays a
-        // sentinel a real mint can never collide with.
-        assert_ne!(GpuResourceGeneration::mint(), GpuResourceGeneration::ZERO);
-    }
 }

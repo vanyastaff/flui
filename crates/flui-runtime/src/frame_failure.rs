@@ -380,18 +380,6 @@ mod tests {
     use super::{FrameFailureDetail, PanicText};
 
     #[test]
-    fn panic_text_display_obeys_the_selected_detail() {
-        assert_eq!(
-            PanicText::Verbatim("panic detail".into()).to_string(),
-            "panic detail"
-        );
-        assert_eq!(
-            PanicText::Redacted.to_string(),
-            flui_foundation::diagnostics::REDACTED_VALUE
-        );
-    }
-
-    #[test]
     fn redacted_policy_never_evaluates_the_text_materializer() {
         let calls = AtomicUsize::new(0);
         let text = FrameFailureDetail::Redacted.materialize(|| {

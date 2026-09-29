@@ -85,17 +85,6 @@ pub(crate) fn try_test_device_and_queue(
     }
 }
 
-/// Device-only variant for construction tests that never submit work.
-#[cfg(feature = "testing")]
-pub(crate) fn test_device(label: &str) -> wgpu::Device {
-    let (device, _queue) = request_device(
-        &request_test_adapter()
-            .expect("a GPU adapter must be available on a GPU-enabled test host"),
-        label,
-    );
-    device
-}
-
 /// Creates a 2D single-sample render target with the given usage set.
 #[cfg(feature = "testing")]
 pub(crate) fn create_target(
@@ -341,32 +330,6 @@ pub(crate) fn renderer_or_skip() -> Option<crate::headless::HeadlessRenderer> {
             None
         }
     }
-}
-
-/// A fill paint carrying a two-stop linear gradient across `rect`, with the
-/// endpoints given in rect-local pixels (the origin is `rect`'s top-left).
-///
-/// The wire form of a gradient is a shader on an ordinary fill
-/// (`DrawOp::Rect` + `Paint::shader`), so a test that wants a gradient rect
-/// records exactly what a `BoxDecoration` would.
-#[cfg(feature = "testing")]
-pub(crate) fn linear_gradient_fill(
-    rect: flui_foundation::geometry::Rect<f64>,
-    local_start: glam::Vec2,
-    local_end: glam::Vec2,
-    colors: Vec<flui_painting::styling::Color>,
-) -> flui_painting::Paint {
-    use flui_foundation::geometry::Offset;
-    let at = |p: glam::Vec2| Offset::new(rect.left() + f64::from(p.x), rect.top() + f64::from(p.y));
-    flui_painting::Paint::fill(flui_painting::styling::Color::TRANSPARENT).with_shader(
-        flui_painting::Shader::linear_gradient(
-            at(local_start),
-            at(local_end),
-            colors,
-            None,
-            flui_painting::paint::TileMode::Clamp,
-        ),
-    )
 }
 
 #[cfg(test)]

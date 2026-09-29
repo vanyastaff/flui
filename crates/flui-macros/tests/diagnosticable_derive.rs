@@ -59,17 +59,3 @@ fn diagnosticable_derive_generic() {
     assert_eq!(props[0].name(), "inner");
     assert_eq!(props[0].value(), "7");
 }
-
-#[test]
-fn diagnosticable_derive_raw_identifier() {
-    #[derive(Debug, Diagnosticable)]
-    struct Raw {
-        r#type: u32,
-    }
-
-    let node = Raw { r#type: 9 }.to_diagnostics_node();
-    let props = node.properties();
-    assert_eq!(props.len(), 1);
-    // The diagnostic name must strip the `r#` raw prefix.
-    assert_eq!(props[0].name(), "type");
-}

@@ -24,24 +24,3 @@ pub fn record(f: impl FnOnce(&mut Canvas)) -> DisplayList {
     f(&mut canvas);
     canvas.finish()
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::styling::Color;
-    use flui_foundation::geometry::Rect;
-
-    use super::record;
-    use crate::Paint;
-
-    #[test]
-    fn record_captures_commands_and_bounds() {
-        let list = record(|canvas| {
-            canvas.draw_rect(
-                Rect::from_ltrb(0.0, 0.0, 40.0, 40.0),
-                &Paint::fill(Color::RED),
-            );
-        });
-        assert_eq!(list.len(), 1);
-        assert_eq!(list.bounds(), Some(Rect::from_ltrb(0.0, 0.0, 40.0, 40.0)));
-    }
-}

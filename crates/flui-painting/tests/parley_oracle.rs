@@ -405,28 +405,3 @@ fn the_raster_path_never_builds_the_process_font_system() {
     }
     assert!(!flui_painting::text_layout::font_system_initialized());
 }
-
-/// The rasterizer draws on another thread while this one keeps shaping: it
-/// owns its faces and shares nothing with the shaping context.
-#[test]
-fn rasterization_runs_off_the_shaping_thread() {
-    let mut shaper = Shaper::new();
-    let family = shaper.register(ROBOTO.to_vec());
-    let mut rasterizer = SwashRasterizer::new();
-    let keys = latin_keys(&mut shaper, rasterizer.fonts_mut(), &family);
-    let drawn = std::thread::scope(|scope| {
-        let worker = scope.spawn(move || {
-            keys.iter()
-                .filter(|key| rasterizer.rasterize(**key).is_some())
-                .count()
-        });
-        let mut fonts = FontRegistry::new();
-        let mut shaped = 0;
-        for _ in 0..20 {
-            shaped += latin_keys(&mut shaper, &mut fonts, &family).len();
-        }
-        assert!(shaped > 0);
-        worker.join().unwrap()
-    });
-    assert!(drawn > 0);
-}

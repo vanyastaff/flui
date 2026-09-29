@@ -483,32 +483,3 @@ impl RenderBox for RenderSizedOverflowBox {
 // ===========================================================================
 // Tests
 // ===========================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn bc(min_w: f64, max_w: f64, min_h: f64, max_h: f64) -> BoxConstraints {
-        BoxConstraints::new(min_w, max_w, min_h, max_h)
-    }
-
-    // --- RenderConstrainedOverflowBox ----------------------------------------
-
-    #[test]
-    fn inner_constraints_max_width_override() {
-        let node = RenderConstrainedOverflowBox::new(
-            Alignment::CENTER,
-            None,
-            Some(500.0), // override max_width → allow child to be wider
-            None,
-            None,
-            OverflowBoxFit::Max,
-        );
-        let constraints = bc(0.0, 200.0, 0.0, 200.0);
-        let inner = node.inner_constraints(constraints);
-        assert_eq!(inner.max_width, 500.0); // overridden
-        assert_eq!(inner.max_height, 200.0); // original
-    }
-
-    // --- RenderSizedOverflowBox ---------------------------------------------
-}

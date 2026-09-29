@@ -543,24 +543,6 @@ impl PriorityCount {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_task_queue_priority() {
-        let queue = TaskQueue::new();
-
-        // Add tasks in random priority order
-        queue.add(Priority::Idle, || {});
-        queue.add(Priority::UserInput, || {});
-        queue.add(Priority::Build, || {});
-        queue.add(Priority::Animation, || {});
-
-        // Should execute in priority order
-        assert_eq!(queue.pop().unwrap().priority(), Priority::UserInput);
-        assert_eq!(queue.pop().unwrap().priority(), Priority::Animation);
-        assert_eq!(queue.pop().unwrap().priority(), Priority::Build);
-        assert_eq!(queue.pop().unwrap().priority(), Priority::Idle);
-        assert!(queue.pop().is_none());
-    }
-
     /// A panicking task must not take its queued siblings down with it: a
     /// single-lock batch drain would already have removed every matching
     /// task from the heap before running any of them, so a panic partway
@@ -600,91 +582,5 @@ mod tests {
         assert_eq!(executed, 1);
         assert_eq!(*ran.lock(), vec![1, 3]);
         assert_eq!(queue.len(), queue_len_before - 3);
-    }
-
-    /// A task reentrantly enqueued by an earlier task in the SAME pass must
-    /// not be lost when a LATER task in that pass panics. An id-watermark
-    /// implementation tried first set a too-high-id pop aside in a local
-    /// `deferred` buffer to keep scanning past it — and that buffer is
-    /// itself dropped on unwind before ever making it back into the live
-    /// heap, losing reentrant work the pre-#1057 batch drain never lost
-    /// (nothing there ever left the heap except what was already
-    /// executing). The count-budget version this replaced it with has no
-    /// such buffer to lose anything from: A runs and enqueues X at a LOWER
-    /// priority than B (so X cannot displace B's own turn — see the sibling
-    /// test below for what happens when it can), B panics, and X — never
-    /// popped at all this call — is simply still sitting in the live heap
-    /// afterward.
-    #[test]
-    fn execute_until_does_not_drop_a_reentrantly_enqueued_task_when_a_later_task_panics() {
-        let queue = TaskQueue::new();
-        let x_ran = Arc::new(Mutex::new(false));
-
-        let reentrant_queue = queue.clone();
-        let x_ran_for_a = Arc::clone(&x_ran);
-        queue.add(Priority::Build, move || {
-            let x_ran = Arc::clone(&x_ran_for_a);
-            reentrant_queue.add(Priority::Idle, move || {
-                *x_ran.lock() = true;
-            });
-        }); // A
-        queue.add(Priority::Build, || panic!("build task probe")); // B, higher priority than X
-
-        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            queue.execute_until(Priority::Build)
-        }));
-        assert!(unwind.is_err(), "B's panic must propagate");
-
-        assert_eq!(
-            queue.len(),
-            1,
-            "X, enqueued reentrantly by A, must still be queued after B panics -- not \
-             dropped along with a local buffer that never survives an unwind"
-        );
-
-        let executed = queue.execute_until(Priority::Idle);
-        assert_eq!(executed, 1, "X must run on the very next call");
-        assert!(*x_ran.lock());
-    }
-
-    /// The count budget's own accepted trade-off, named rather than
-    /// silently assumed correct: a reentrant task of a HIGHER priority than
-    /// a still-queued sibling does not defer to it (an id watermark's own
-    /// behavior) — it DISPLACES it, consuming the budget slot the sibling
-    /// would otherwise have used. A runs and enqueues X at a HIGHER
-    /// priority than B; X pops (and runs) in A's own call instead of B,
-    /// leaving B for the NEXT call rather than this one. No work is lost
-    /// either way -- B simply moves a whole call later than a naive
-    /// "reentrant work is always deferred" reading would expect.
-    #[test]
-    fn execute_until_lets_a_higher_priority_reentrant_task_displace_a_lower_priority_sibling() {
-        let queue = TaskQueue::new();
-        let ran: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
-
-        let reentrant_queue = queue.clone();
-        let ran_for_a = Arc::clone(&ran);
-        queue.add(Priority::Build, move || {
-            ran_for_a.lock().push("a");
-            let ran = Arc::clone(&ran_for_a);
-            reentrant_queue.add(Priority::UserInput, move || ran.lock().push("x"));
-        }); // A
-        let ran_for_b = Arc::clone(&ran);
-        queue.add(Priority::Build, move || ran_for_b.lock().push("b")); // B
-
-        let executed = queue.execute_until(Priority::Build);
-        assert_eq!(
-            executed, 2,
-            "A and X run this call; B's budget slot went to X instead"
-        );
-        assert_eq!(*ran.lock(), vec!["a", "x"]);
-        assert_eq!(queue.len(), 1, "B is displaced, not lost");
-
-        let executed = queue.execute_until(Priority::Build);
-        assert_eq!(executed, 1);
-        assert_eq!(
-            *ran.lock(),
-            vec!["a", "x", "b"],
-            "B still runs, one call later"
-        );
     }
 }

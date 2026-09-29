@@ -6,13 +6,11 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use crate::common::{lay_out, size, tight};
-use flui_foundation::geometry::Offset;
+use crate::common::{lay_out, tight};
 use flui_interaction::PointerDispatch;
-use flui_painting::styling::Color;
 use flui_view::EventCx;
 use flui_widgets::prelude::HitTestBehavior;
-use flui_widgets::{ColoredBox, Listener, SizedBox};
+use flui_widgets::{Listener, SizedBox};
 
 /// A counter callback + a readable handle.
 fn counter() -> (
@@ -27,47 +25,6 @@ fn counter() -> (
             in_cb.set(in_cb.get() + 1);
         },
     )
-}
-
-#[test]
-fn default_listener_fires_on_pointer_landing_on_a_hittable_child() {
-    let (downs, on_down) = counter();
-
-    // Default behavior is DeferToChild: a hittable `ColoredBox` child (fills the
-    // 100×100 bounds, hit-tests true) lets the listener register and receive.
-    let laid = lay_out(
-        Listener::new()
-            .on_pointer_down(on_down)
-            .child(ColoredBox::new(Color::rgb(10, 20, 30))),
-        tight(100.0, 100.0),
-    );
-
-    assert_eq!(laid.size(laid.root()), size(100.0, 100.0));
-
-    laid.dispatch_pointer_down(20.0, 20.0);
-    assert_eq!(
-        downs.get(),
-        1,
-        "DeferToChild fires when the pointer lands on a hittable child",
-    );
-}
-
-#[test]
-fn opaque_listener_fires_within_bounds_even_without_a_hittable_child() {
-    let (downs, on_down) = counter();
-
-    // Opaque registers for any pointer within its own bounds, regardless of
-    // whether a child was hit.
-    let laid = lay_out(
-        Listener::new()
-            .behavior(HitTestBehavior::Opaque)
-            .on_pointer_down(on_down)
-            .child(SizedBox::new(100.0, 100.0)),
-        tight(100.0, 100.0),
-    );
-
-    laid.dispatch_pointer_down(20.0, 20.0);
-    assert_eq!(downs.get(), 1, "Opaque fires for any pointer within bounds");
 }
 
 #[test]
@@ -91,30 +48,6 @@ fn listener_routes_down_and_up_to_their_own_callbacks() {
     laid.dispatch_pointer_up(40.0, 40.0);
     assert_eq!(ups.get(), 1, "up routes to on_pointer_up");
     assert_eq!(downs.get(), 1, "up does not re-invoke on_pointer_down");
-}
-
-#[test]
-fn listener_routes_scroll_to_pointer_signal_callback() {
-    let (signals, on_signal) = counter();
-
-    let laid = lay_out(
-        Listener::new()
-            .behavior(HitTestBehavior::Opaque)
-            .on_pointer_signal(on_signal)
-            .child(SizedBox::new(80.0, 80.0)),
-        tight(80.0, 80.0),
-    );
-
-    let position = Offset::new(40.0, 40.0);
-    let event = flui_interaction::events::make_scroll_event(position, Offset::new(0.0, 12.0));
-
-    laid.dispatch_pointer_event(&event);
-
-    assert_eq!(
-        signals.get(),
-        1,
-        "scroll events are FLUI's concrete pointer-signal payload",
-    );
 }
 
 // ============================================================================

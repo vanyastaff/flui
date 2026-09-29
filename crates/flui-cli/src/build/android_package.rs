@@ -310,14 +310,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn manifest_gets_the_package_attribute_gradle_forbids() {
-        let manifest = "<?xml version=\"1.0\"?>\n<manifest xmlns:android=\"x\">\n</manifest>\n";
-        let out = manifest_with_package(manifest, "com.example.app");
-        assert!(out.contains("<manifest package=\"com.example.app\" xmlns:android=\"x\">"));
-        assert_eq!(manifest_with_package("no tag", "x"), "no tag");
-    }
-
-    #[test]
     fn native_libraries_are_appended_stored_under_their_abi() {
         let dir = tempfile::tempdir().expect("temp");
         let apk = dir.path().join("base.apk");

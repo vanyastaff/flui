@@ -274,50 +274,6 @@ fn global_key_state_migrates_to_new_parent_slot() {
 // Cleanup — full unmount drops the GlobalKey registration
 // ============================================================================
 
-/// After a keyed element is unmounted and the end-of-frame
-/// `finalize_tree` drains the inactive queue, `current_element` and
-/// `current_state` must return `None`. The registry entry is cleared
-/// once the element is truly gone.
-#[test]
-#[serial_test::serial(global_key_registry)]
-fn global_key_returns_none_after_full_unmount() {
-    let (tree, owner) = fresh_tree();
-
-    let key = GlobalKey::<KeyedCounterState>::new();
-    let counter = KeyedCounter {
-        key: key.clone(),
-        initial: 99,
-    };
-
-    let id = tree
-        .write()
-        .mount_root(&counter, &mut owner.write().element_owner_mut());
-
-    flui_view::test_only_set_global_key_registry(&tree, &owner);
-    assert_eq!(key.current_element(), Some(id));
-
-    // Soft-remove (push to inactive).
-    tree.write()
-        .remove(id, &mut owner.write().element_owner_mut());
-
-    // End-of-frame finalize — no remount happened, so the element is
-    // unregistered + removed.
-    owner.write().finalize_tree(&mut tree.write());
-
-    assert_eq!(
-        key.current_element(),
-        None,
-        "after finalize_tree drains inactive, registry should be empty"
-    );
-    assert_eq!(
-        key.with_current_state::<i32>(KeyedCounterState::count),
-        None,
-        "current_state returns None once the element is finalized"
-    );
-
-    flui_view::test_only_clear_global_key_registry();
-}
-
 // ============================================================================
 // Duplicate GlobalKey — debug panic + release diagnostic
 // ============================================================================

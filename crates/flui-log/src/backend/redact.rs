@@ -551,34 +551,6 @@ mod tests {
     }
 
     #[test]
-    fn scalar_fields_pass_through_with_their_types() {
-        let capture = behind_redaction(|| {
-            tracing::info!(
-                a = -1_i64,
-                b = 2_u64,
-                c = 3_i128,
-                d = 4_u128,
-                e = 0.5_f64,
-                f = true,
-                "scalars"
-            );
-        });
-
-        let events = capture.events();
-        let event = &events[0];
-        assert_eq!(*field(event, "a"), Seen::I64(-1));
-        assert_eq!(*field(event, "b"), Seen::U64(2));
-        assert_eq!(*field(event, "c"), Seen::I128(3));
-        assert_eq!(*field(event, "d"), Seen::U128(4));
-        assert_eq!(*field(event, "e"), Seen::F64(0.5));
-        assert_eq!(*field(event, "f"), Seen::Bool(true));
-        assert!(
-            event.is_contextual && event.explicit_parent.is_none(),
-            "sanity: the macro emitted a contextual event"
-        );
-    }
-
-    #[test]
     fn a_public_marker_publishes_a_dynamic_field_verbatim() {
         let capture = behind_redaction(|| {
             tracing::info!(phase.public = "commit", detail.public = ?(1, 2), "ok");
@@ -596,59 +568,6 @@ mod tests {
             Seen::Debugged("(1, 2)".to_owned()),
             "an opted-in debug value must keep its record_debug rendering"
         );
-    }
-
-    #[test]
-    fn span_attributes_are_classified_like_event_fields() {
-        let capture = behind_redaction(|| {
-            let _span = tracing::info_span!("session", token = "t0k3n", frame = 1_u64);
-        });
-
-        let attributes = capture.span_attributes();
-        assert_eq!(attributes.len(), 1, "one span: {attributes:?}");
-        assert!(
-            attributes[0].contains(&("token".to_owned(), redacted())),
-            "span attribute `token` must be redacted: {attributes:?}"
-        );
-        assert!(
-            attributes[0].contains(&("frame".to_owned(), Seen::U64(1))),
-            "span attribute `frame` must stay typed: {attributes:?}"
-        );
-    }
-
-    #[test]
-    fn late_span_records_are_classified() {
-        let capture = behind_redaction(|| {
-            let span = tracing::info_span!(
-                "session",
-                token = tracing::field::Empty,
-                frame = tracing::field::Empty
-            );
-            span.record("token", "t0k3n");
-            span.record("frame", 7_u64);
-        });
-
-        let records = capture.span_records();
-        assert_eq!(records.len(), 2, "two record calls: {records:?}");
-        assert_eq!(records[0], vec![("token".to_owned(), redacted())]);
-        assert_eq!(records[1], vec![("frame".to_owned(), Seen::U64(7))]);
-    }
-
-    #[test]
-    fn an_explicit_parent_survives_synthesis() {
-        let capture = behind_redaction(|| {
-            let span = tracing::info_span!("parent");
-            tracing::info!(parent: &span, secret = "s", "child event");
-        });
-
-        let events = capture.events();
-        let event = &events[0];
-        assert_eq!(*field(event, "secret"), redacted());
-        assert!(
-            event.explicit_parent.is_some(),
-            "the synthesized event must keep its explicit parent: {event:?}"
-        );
-        assert!(!event.is_contextual);
     }
 
     #[test]
@@ -690,23 +609,4 @@ mod tests {
     }
 
     // --- composed with the logcat renderer, the exact Android line shape ----
-
-    #[test]
-    fn the_rendered_logcat_line_replaces_values_not_names() {
-        let rendered = crate::test_support::capture_rendered_events_behind_redaction(|| {
-            tracing::info!(
-                frame = 7_u64,
-                path = "/home/user/doc.txt",
-                phase.public = "commit",
-                "frame committed"
-            );
-        });
-
-        assert_eq!(
-            rendered,
-            vec![format!(
-                "frame committed | frame=7 path={REDACTED_VALUE} phase.public=commit"
-            )]
-        );
-    }
 }

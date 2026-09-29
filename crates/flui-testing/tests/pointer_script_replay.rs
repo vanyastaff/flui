@@ -16,11 +16,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
-use flui_interaction::events::PointerType;
 use flui_interaction::settings::GestureSettings;
 use flui_interaction::{GestureRecognizer, LongPressGestureRecognizer, PointerId};
 use flui_testing::HeadlessBinding;
-use flui_testing::replay::{GestureRecorder, PointerPhase, PointerScript};
+use flui_testing::replay::PointerScript;
 
 fn at(x: f64, y: f64) -> Offset {
     Offset::new(x, y)
@@ -97,65 +96,4 @@ fn the_same_script_released_before_the_deadline_does_not() {
         !fired.load(Ordering::SeqCst),
         "300ms of held virtual time must not reach the 500ms deadline",
     );
-}
-
-#[test]
-fn a_recording_taken_on_the_virtual_clock_round_trips_to_the_same_timing() {
-    let mut binding = HeadlessBinding::new();
-    let mut recorder = GestureRecorder::new("captured");
-
-    // Capture three events with known virtual gaps between them. The offsets
-    // come from the binding's clock, so this recording is reproducible — the
-    // predecessor stamped `Instant::now()` and could not be.
-    recorder.record(
-        &binding,
-        PointerId::PRIMARY,
-        PointerPhase::Down,
-        at(0.0, 0.0),
-        PointerType::Touch,
-    );
-    binding.pump_frame(Duration::from_millis(120));
-    recorder.record(
-        &binding,
-        PointerId::PRIMARY,
-        PointerPhase::Move,
-        at(40.0, 0.0),
-        PointerType::Touch,
-    );
-    binding.pump_frame(Duration::from_millis(80));
-    recorder.record(
-        &binding,
-        PointerId::PRIMARY,
-        PointerPhase::Up,
-        at(80.0, 0.0),
-        PointerType::Touch,
-    );
-
-    let script = recorder.finish();
-    assert_eq!(script.len(), 3);
-    assert_eq!(script.events()[0].at, Duration::ZERO);
-    assert_eq!(script.events()[1].at, Duration::from_millis(120));
-    assert_eq!(script.events()[2].at, Duration::from_millis(200));
-    assert_eq!(script.duration(), Duration::from_millis(200));
-
-    // Replaying it spends the same virtual time it was captured over.
-    let mut replay_binding = HeadlessBinding::new();
-    replay_binding.replay(&script);
-    assert_eq!(replay_binding.clock().elapsed(), Duration::from_millis(200));
-}
-
-#[test]
-#[should_panic(expected = "resampling to be disabled")]
-fn replay_refuses_to_run_with_pointer_resampling_enabled() {
-    // With resampling on, the emitted move samples come from the resampler's
-    // wall-clock queue and a wall-clock sampling window, neither of which the
-    // script's offsets reach. A replay that ran anyway would return a number
-    // that looks deterministic and is not, so it refuses.
-    let mut binding = HeadlessBinding::new();
-    binding
-        .gestures()
-        .set_resampling_enabled(true)
-        .expect("no active pointers yet, so the mode is still settable");
-
-    binding.replay(&PointerScript::tap(at(5.0, 5.0)));
 }

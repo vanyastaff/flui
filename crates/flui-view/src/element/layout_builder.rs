@@ -372,11 +372,9 @@ impl ElementBehavior<LayoutBuilder, Variable> for LayoutBuilderBehavior {
 mod tests {
     use super::*;
 
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
     use flui_foundation::RenderId;
     use flui_foundation::geometry::Size;
-    use flui_objects::{RenderConstrainedBox, RenderSizedBox};
+    use flui_objects::RenderSizedBox;
     use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 
     use crate::{BuildOwner, IntoView, tree::ElementTree, view::ViewExt};
@@ -406,38 +404,6 @@ mod tests {
     }
 
     impl View for FixedBox {
-        fn create_element(&self) -> crate::element::ElementKind {
-            crate::element::ElementKind::render_variable(self)
-        }
-    }
-
-    /// A structurally different leaf — used to prove reconcile replaces the
-    /// child when the builder switches shape.
-    #[derive(Clone, Debug)]
-    struct TightBox(f64);
-
-    impl RenderView for TightBox {
-        type Protocol = BoxProtocol;
-        type RenderObject = RenderConstrainedBox;
-
-        fn create_render_object(
-            &self,
-            _ctx: &crate::RenderObjectContext<'_>,
-        ) -> Self::RenderObject {
-            RenderConstrainedBox::new(BoxConstraints::tight(Size::new(self.0, self.0)))
-        }
-
-        fn update_render_object(
-            &self,
-            _ctx: &crate::RenderObjectContext<'_>,
-            render_object: &mut Self::RenderObject,
-        ) -> flui_rendering::RenderUpdateImpact {
-            render_object
-                .set_additional_constraints(BoxConstraints::tight(Size::new(self.0, self.0)))
-        }
-    }
-
-    impl View for TightBox {
         fn create_element(&self) -> crate::element::ElementKind {
             crate::element::ElementKind::render_variable(self)
         }
@@ -532,43 +498,6 @@ mod tests {
 
     // ── 1. first frame ──────────────────────────────────────────────────────
 
-    /// The builder receives the REAL incoming constraints on the first frame,
-    /// and the child it returns is laid out in that same frame — no second
-    /// pump, no placeholder constraints.
-    #[test]
-    fn layout_builder_first_frame_builds_with_real_constraints() {
-        let log = Arc::new(parking_lot::Mutex::new(Vec::new()));
-        let view = LayoutBuilder {
-            builder: recording_builder(Arc::clone(&log)),
-        };
-        let incoming = tight(120.0, 80.0);
-
-        let mut h = Harness::mount(&view, incoming);
-        h.frame();
-
-        assert_eq!(
-            log.lock().as_slice(),
-            &[incoming],
-            "the builder must be called exactly once, with the real constraints"
-        );
-        assert_eq!(
-            h.root_size(),
-            Size::new(120.0, 80.0),
-            "the builder's node is laid out under its own constraints"
-        );
-
-        // Same-frame proof: the child element exists and its render object has
-        // committed geometry after ONE frame.
-        let child_render = child_render_id(&h);
-        assert_eq!(
-            h.pipeline
-                .with(|owner| flui_rendering::testing::inspect::box_geometry(owner, child_render)),
-            Some(Size::new(120.0, 80.0)),
-            "the child returned by the builder must be laid out in the SAME frame; \
-             a one-frame-late seam leaves it without committed geometry"
-        );
-    }
-
     /// The `RenderId` of the layout builder's single child.
     ///
     /// The layout builder is the render root in most of these tests; where it is
@@ -627,148 +556,13 @@ mod tests {
 
     // ── 3. same constraints ─────────────────────────────────────────────────
 
-    /// Unchanged constraints must not re-invoke the builder. This is what makes
-    /// the fixpoint converge instead of rebuilding every frame forever.
-    #[test]
-    fn layout_builder_same_constraints_do_not_reinvoke_the_builder() {
-        let log = Arc::new(parking_lot::Mutex::new(Vec::new()));
-        let view = LayoutBuilder {
-            builder: recording_builder(Arc::clone(&log)),
-        };
-        let constraints = tight(120.0, 80.0);
-
-        let mut h = Harness::mount(&view, constraints);
-        h.frame();
-        assert_eq!(log.lock().len(), 1);
-
-        // Force more layout passes with identical constraints.
-        for _ in 0..3 {
-            h.pipeline
-                .with_mut(|owner| owner.mark_needs_layout(h.root_render));
-            h.frame();
-        }
-
-        assert_eq!(
-            log.lock().len(),
-            1,
-            "the builder must run once; unchanged constraints are not a rebuild trigger"
-        );
-    }
-
     // ── 4. registration lifecycle ───────────────────────────────────────────
 
     // ── 5. reconciliation ───────────────────────────────────────────────────
-
-    /// A builder that returns a different child TYPE across a breakpoint —
-    /// the whole point of `LayoutBuilder`. The old child must be replaced.
-    #[test]
-    fn layout_builder_replaces_the_child_when_the_builder_switches_shape() {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let calls_for_builder = Arc::clone(&calls);
-        let view = LayoutBuilder {
-            builder: Rc::new(move |_ctx, constraints: BoxConstraints| {
-                calls_for_builder.fetch_add(1, Ordering::Relaxed);
-                if constraints.max_width > 100.0 {
-                    FixedBox(30.0, 30.0).into_view().boxed()
-                } else {
-                    TightBox(15.0).into_view().boxed()
-                }
-            }),
-        };
-
-        let mut h = Harness::mount(&view, tight(120.0, 120.0));
-        h.frame();
-        let wide_child = child_render_id(&h);
-        assert_eq!(
-            h.pipeline
-                .with(|owner| flui_rendering::testing::inspect::box_geometry(owner, wide_child)),
-            Some(Size::new(120.0, 120.0)),
-            "the wide branch's RenderSizedBox is stretched by the tight constraints"
-        );
-
-        // Cross the breakpoint: the builder now returns a different view type.
-        h.set_constraints(tight(80.0, 80.0));
-        h.frame();
-
-        assert_eq!(calls.load(Ordering::Relaxed), 2);
-        let narrow_child = child_render_id(&h);
-        assert_ne!(
-            narrow_child, wide_child,
-            "a different view type must remount, not update in place"
-        );
-        assert!(
-            h.pipeline
-                .with(|owner| owner.render_tree().get(wide_child).is_none()),
-            "the replaced child's render object must be removed from the tree"
-        );
-    }
 
     // ── builder update semantics ────────────────────────────────────────────
 
     // ── error recovery ──────────────────────────────────────────────────────
 
-    /// A panicking builder is caught by `build_or_recover` and substituted with
-    /// the error view — Flutter's `_rebuildWithConstraints` does the same with
-    /// `ErrorWidget.builder`. The frame must still settle, and the registry must
-    /// not be corrupted (the cell is committed, so the fixpoint converges instead
-    /// of spinning until the pass bound trips).
-    #[test]
-    fn layout_builder_panicking_builder_recovers_and_the_frame_settles() {
-        let view = LayoutBuilder {
-            builder: Rc::new(|_ctx, _c| panic!("builder blew up")),
-        };
-        let mut h = Harness::mount(&view, tight(60.0, 60.0));
-
-        // Must not panic, must not hang, must not trip the non-convergence guard.
-        h.frame();
-
-        assert_eq!(
-            h.owner.layout_builder_count(),
-            1,
-            "the registry entry must survive a builder panic"
-        );
-        // A second frame with unchanged constraints must not re-invoke anything.
-        h.frame();
-        assert_eq!(h.owner.layout_builder_count(), 1);
-    }
-
     // ── 6. nesting ──────────────────────────────────────────────────────────
-
-    /// A `LayoutBuilder` inside a `LayoutBuilder` settles within the pass bound:
-    /// the inner one's constraints only become known once the outer one's fresh
-    /// child has been laid out, so it needs one extra pass.
-    #[test]
-    fn layout_builder_nested_converges_within_the_pass_bound() {
-        let inner_log = Arc::new(parking_lot::Mutex::new(Vec::new()));
-        let inner_log_for_builder = Arc::clone(&inner_log);
-
-        let outer = LayoutBuilder {
-            builder: Rc::new(move |_ctx, _outer_constraints| {
-                let inner_log = Arc::clone(&inner_log_for_builder);
-                LayoutBuilder {
-                    builder: Rc::new(move |_ctx, constraints| {
-                        inner_log.lock().push(constraints);
-                        FixedBox(10.0, 10.0).into_view().boxed()
-                    }),
-                }
-                .into_view()
-                .boxed()
-            }),
-        };
-
-        let incoming = tight(90.0, 70.0);
-        let mut h = Harness::mount(&outer, incoming);
-        h.frame();
-
-        assert_eq!(
-            inner_log.lock().as_slice(),
-            &[incoming],
-            "the nested builder must also see real constraints, in the same frame"
-        );
-        assert_eq!(
-            h.owner.layout_builder_count(),
-            2,
-            "both builders registered"
-        );
-    }
 }

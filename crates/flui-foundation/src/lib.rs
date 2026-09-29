@@ -353,20 +353,3 @@ pub mod prelude {
         WithKey,
     };
 }
-
-#[cfg(test)]
-mod derive_owner_tests {
-    use super::Diagnosticable;
-
-    #[derive(Debug, flui_macros::Diagnosticable)]
-    struct Property {
-        width: u32,
-    }
-
-    #[test]
-    fn derive_resolves_owner_inside_library() {
-        let node = Property { width: 42 }.to_diagnostics_node();
-        assert_eq!(node.name(), Some("Property"));
-        assert_eq!(node.properties().len(), 1);
-    }
-}

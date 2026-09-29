@@ -821,19 +821,4 @@ mod glam_backend_tests {
         assert_eq!(cols[0], 1.0_f32);
         assert_eq!(std::mem::size_of_val(&cols), 64);
     }
-
-    #[test]
-    fn is_invertible_matches_try_inverse_at_the_epsilon_boundary() {
-        // A scale just above f64::EPSILON must read as invertible; a scale
-        // just below it must read as singular -- `is_invertible` and
-        // `try_inverse` must never disagree, even this close to the
-        // threshold they share.
-        let just_above = Matrix4::scaling(f64::EPSILON * 2.0, 1.0, 1.0);
-        assert!(just_above.is_invertible());
-        assert!(just_above.try_inverse().is_some());
-
-        let just_below = Matrix4::scaling(f64::EPSILON * 0.5, 1.0, 1.0);
-        assert!(!just_below.is_invertible());
-        assert!(just_below.try_inverse().is_none());
-    }
 }

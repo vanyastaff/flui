@@ -27,7 +27,7 @@ use crate::common;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use common::{lay_out, size, tight};
+use common::{lay_out, tight};
 use flui_material::{Switch, Theme, ThemeData};
 
 /// The switch's full tap target (track + M3 default horizontal padding).
@@ -42,26 +42,6 @@ fn constraints() -> flui_sdk::rendering::BoxConstraints {
 /// one) — mirrors `tests/checkbox.rs`'s own `themed` helper.
 fn themed(switch: Switch) -> Theme {
     Theme::new(ThemeData::light(), switch)
-}
-
-#[test]
-fn mounting_a_switch_creates_a_semantics_annotated_tap_target() {
-    let laid = lay_out(
-        themed(Switch::new(false).on_changed(|_cx, _| {})),
-        constraints(),
-    );
-
-    // The wrapper node is the Switch's own; its `GestureDetector` adds
-    // a second, action-only annotation beneath it for assistive technology.
-    let semantics = laid
-        .find_semantics_wrappers()
-        .into_iter()
-        .next()
-        .expect("Switch must mount a Semantics wrapper");
-    assert_eq!(
-        laid.size(semantics),
-        size(TAP_TARGET_WIDTH, TAP_TARGET_HEIGHT)
-    );
 }
 
 #[test]

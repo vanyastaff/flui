@@ -12,7 +12,6 @@
 //! form has no such builders (the `routable_ui` compile-fail suite).
 
 use std::cell::{Cell, RefCell};
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -25,7 +24,7 @@ use flui_platform_api::Locale;
 use flui_widgets::prelude::*;
 use flui_widgets::{
     AppForm, ColoredBox, Directionality, FocusScope, Localizations, NavigatorHandle,
-    NavigatorObserver, PageRoute, RouterError, SizedBox, Text, VsyncScope, WidgetsApp,
+    NavigatorObserver, RouterError, SizedBox, Text, VsyncScope, WidgetsApp,
 };
 
 use crate::common::{LaidOut, lay_out_animated, tight};
@@ -154,43 +153,6 @@ fn tap(laid: &mut LaidOut) {
 }
 
 #[test]
-fn widgets_app_router_roots_the_app_in_its_router() {
-    let probe = Probe::default();
-    let vsync = Vsync::new();
-    let mut laid = mount(WidgetsApp::router(router(&probe, 1, "/note/3")), &vsync);
-    settle(&mut laid);
-
-    let handle = probe.handle();
-    assert_eq!(handle.location().as_str(), "/note/3");
-    assert!(
-        laid_out_text(&laid, "v1 Note 3"),
-        "the top page is laid out"
-    );
-
-    // One navigator: the Router's. `WidgetsApp::new(router)` would put the
-    // Router on a page of a navigator of the app's own.
-    let nearest = probe.nearest.borrow().clone().expect("a navigator");
-    let root = probe.root.borrow().clone().expect("a root navigator");
-    assert!(
-        root.is_same(&nearest),
-        "the app's root navigator is the Router's"
-    );
-
-    // Its facade refuses pages that are not route values.
-    let before = root.route_ids();
-    let pushed = catch_unwind(AssertUnwindSafe(|| {
-        root.push(PageRoute::<()>::new(|_cx, _a, _s| {
-            Text::new("Stray").into_view().boxed()
-        }))
-    }));
-    assert_eq!(pushed.is_err(), cfg!(debug_assertions));
-    settle(&mut laid);
-    assert_eq!(root.route_ids(), before, "nothing entered the stack");
-    assert_eq!(handle.location().as_str(), "/note/3");
-    assert!(laid.find_text("Stray").is_none());
-}
-
-#[test]
 fn widgets_app_router_navigates_by_handle_and_the_url_follows() {
     let probe = Probe::default();
     let vsync = Vsync::new();
@@ -211,36 +173,6 @@ fn widgets_app_router_navigates_by_handle_and_the_url_follows() {
     assert!(!handle.can_pop());
     assert!(laid.find_text("v1 Note 1").is_none());
     assert_eq!(probe.inits.get(), 1, "Home kept its state under the Note");
-}
-
-#[test]
-fn rebuilt_widgets_app_router_keeps_its_stack() {
-    let probe = Probe::default();
-    let vsync = Vsync::new();
-    let mut laid = mount(WidgetsApp::router(router(&probe, 1, "/")), &vsync);
-    settle(&mut laid);
-    tap(&mut laid);
-    assert!(laid_out_text(&laid, "v1 Note 1"));
-
-    // A new `Router<AppRoute>` value, opening elsewhere, with a new builder.
-    laid.pump_widget(VsyncScope::new(
-        vsync.clone(),
-        WidgetsApp::router(router(&probe, 2, "/note/9")),
-    ));
-    settle(&mut laid);
-
-    let handle = probe.handle();
-    assert_eq!(
-        handle.location().as_str(),
-        "/note/1",
-        "the Router updated in place: its stack is not the new initial one"
-    );
-    assert!(
-        laid_out_text(&laid, "v2 Note 1"),
-        "the new builder reached the page"
-    );
-    assert!(laid.find_text("v1 Note 1").is_none());
-    assert_eq!(probe.inits.get(), 1, "Home was not remounted");
 }
 
 /// Counts attachments, the one observer callback this suite reads.

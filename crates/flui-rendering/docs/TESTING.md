@@ -17,7 +17,7 @@ The module is **off by default** so it never lands in release builds.
 ```bash
 cargo test -p flui-rendering
 cargo test -p flui-objects --test render_object_harness
-cargo test -p flui-rendering --test rendering_it harness_animation
+cargo test -p flui-rendering --test rendering_it animation_pipeline
 ```
 
 ## Design
@@ -258,7 +258,7 @@ assert!((run.opacity_alpha().unwrap() - 0.5).abs() < 0.01);
 
 ### `AnimationController` integration
 
-See [`tests/harness_animation.rs`](../tests/harness_animation.rs): call
+See [`tests/animation_pipeline.rs`](../tests/animation_pipeline.rs): call
 `ctrl.tick_at(t)` then `run.advance_layout` and assert `offset` /
 `picture_bounds` each frame. Finish with `run.pump_idle_frames(2)` to prove
 the pipeline settles.

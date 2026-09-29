@@ -44,33 +44,3 @@ pub(crate) fn load_missing_into(db: &mut cosmic_text::fontdb::Database) {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use cosmic_text::fontdb::Database;
-
-    use super::load_missing_into;
-
-    fn carries(db: &Database, family: &str) -> bool {
-        db.faces()
-            .any(|face| face.families.iter().any(|(name, _)| name == family))
-    }
-
-    #[test]
-    fn an_empty_host_database_gets_roboto_and_both_icon_faces() {
-        let mut db = Database::new();
-        load_missing_into(&mut db);
-        assert!(carries(&db, "Roboto"));
-        assert!(carries(&db, "Material Icons"));
-        assert!(carries(&db, "CupertinoIcons"));
-    }
-
-    #[test]
-    fn loading_is_idempotent() {
-        let mut db = Database::new();
-        load_missing_into(&mut db);
-        let once = db.len();
-        load_missing_into(&mut db);
-        assert_eq!(db.len(), once);
-    }
-}

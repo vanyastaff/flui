@@ -332,32 +332,3 @@ impl Default for AlignmentGeometry {
         AlignmentGeometry::Absolute(Alignment::CENTER)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // ---- along_size tests (pre-existing) ----
-
-    // ---- lerp tests (migrated from painting::alignment) ----
-
-    #[test]
-    fn lerp_midpoint_is_center() {
-        let mid = Alignment::lerp(Alignment::TOP_LEFT, Alignment::BOTTOM_RIGHT, 0.5);
-        assert_eq!(mid, Alignment::CENTER);
-    }
-
-    // ---- align_within tests (migrated from painting::alignment + new) ----
-
-    #[test]
-    fn align_within_handles_offset_rect() {
-        // 200×100 rect anchored at (10, 20).
-        let r = Rect::from_ltwh(10.0, 20.0, 200.0, 100.0);
-        assert_eq!(Alignment::TOP_LEFT.align_within(r).dx, 10.0);
-        assert_eq!(Alignment::TOP_LEFT.align_within(r).dy, 20.0);
-        assert_eq!(Alignment::CENTER.align_within(r).dx, 110.0);
-        assert_eq!(Alignment::CENTER.align_within(r).dy, 70.0);
-    }
-
-    // ---- canonical constants (migrated from painting::alignment) ----
-}

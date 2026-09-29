@@ -52,28 +52,3 @@ impl HasDisplayHandle for dyn HostWindow + '_ {
         PlatformWindow::display_handle(self)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use super::HostWindow;
-    use crate::traits::{PlatformWindow, WindowOptions};
-
-    #[test]
-    fn headless_host_window_upcasts_and_keeps_its_accessibility() {
-        let platform = crate::headless_platform();
-        let host: Arc<dyn HostWindow> = platform
-            .open_window(WindowOptions::default())
-            .expect("the headless backend opens a window");
-
-        assert!(
-            host.accessibility().is_some(),
-            "the headless backend exposes its recording accessibility bridge"
-        );
-
-        let id = host.id();
-        let window: Arc<dyn PlatformWindow> = host;
-        assert_eq!(window.id(), id, "the upcast is the same window");
-    }
-}

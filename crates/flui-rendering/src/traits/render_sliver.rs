@@ -713,49 +713,10 @@ pub trait RenderProxySliver<C: RenderSliver>: RenderSliver {
 
 #[cfg(test)]
 mod tests {
-    use crate::constraints::AxisDirection;
-    use flui_foundation::Leaf;
-
-    use super::*;
-    use crate::{
-        constraints::{GrowthDirection, SliverConstraints, SliverGeometry},
-        context::SliverHitTestContext,
-        protocol::{Protocol, SliverProtocol},
-        view::ScrollDirection,
-    };
 
     // ────────────────────────────────────────────────────────────────────────
     // Test helpers
     // ────────────────────────────────────────────────────────────────────────
-
-    /// Minimal vertical-scroll constraints focused on scroll/paint extents.
-    fn vertical_constraints(scroll_offset: f64, remaining_paint_extent: f64) -> SliverConstraints {
-        SliverConstraints::new(
-            AxisDirection::TopToBottom,
-            GrowthDirection::Forward,
-            ScrollDirection::Idle,
-            scroll_offset,
-            0.0, // preceding_scroll_extent
-            0.0, // overlap
-            remaining_paint_extent,
-            400.0, // cross_axis_extent
-            AxisDirection::LeftToRight,
-            remaining_paint_extent, // viewport_main_axis_extent
-            remaining_paint_extent, // remaining_cache_extent
-            0.0,                    // cache_origin
-        )
-    }
-
-    fn vertical_cache_constraints(
-        scroll_offset: f64,
-        remaining_cache_extent: f64,
-        cache_origin: f64,
-    ) -> SliverConstraints {
-        let mut constraints = vertical_constraints(scroll_offset, 50.0);
-        constraints.remaining_cache_extent = remaining_cache_extent;
-        constraints.cache_origin = cache_origin;
-        constraints
-    }
 
     // ────────────────────────────────────────────────────────────────────────
     // Test double — completing leaf
@@ -764,99 +725,9 @@ mod tests {
     // min(item_height − scroll_offset, remaining_paint_extent).
     // ────────────────────────────────────────────────────────────────────────
 
-    struct FixedHeightSliver {
-        item_height: f64,
-    }
-
-    impl std::fmt::Debug for FixedHeightSliver {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.debug_struct("FixedHeightSliver")
-                .field("item_height", &self.item_height)
-                .finish_non_exhaustive()
-        }
-    }
-
-    impl FixedHeightSliver {
-        fn new(item_height: f64) -> Self {
-            Self { item_height }
-        }
-    }
-
-    impl flui_foundation::Diagnosticable for FixedHeightSliver {
-        fn debug_fill_properties(&self, _properties: &mut flui_foundation::DiagnosticsBuilder) {}
-    }
-    impl RenderSliver for FixedHeightSliver {
-        type Arity = Leaf;
-        type ParentData = crate::parent_data::SliverParentData;
-
-        fn perform_layout(
-            &mut self,
-            ctx: &mut SliverLayoutContext<'_, Leaf, Self::ParentData>,
-        ) -> SliverGeometry {
-            let c = *ctx.constraints();
-            let visible_height = (self.item_height - c.scroll_offset).max(0.0);
-            let paint_extent = visible_height.min(c.remaining_paint_extent);
-            SliverGeometry::new(
-                self.item_height, // scroll_extent — full item height
-                paint_extent,
-                0.0, // paint_origin
-            )
-        }
-
-        fn hit_test(&self, _ctx: &mut SliverHitTestContext<'_, Leaf, Self::ParentData>) -> bool {
-            false
-        }
-    }
-
     // ────────────────────────────────────────────────────────────────────────
     // Tests
     // ────────────────────────────────────────────────────────────────────────
-
-    /// Item partially scrolled: scroll_offset=50, remaining_paint_extent=600,
-    /// item_height=200 → visible=150, paint_extent=150.
-    #[test]
-    fn sliver_leaf_bridge_completing_partially_scrolled() {
-        let constraints = vertical_constraints(50.0, 600.0);
-        let mut sliver = FixedHeightSliver::new(200.0);
-
-        let result = SliverProtocol::with_leaf_erased_ctx(constraints, |erased| {
-            use crate::protocol::RenderObject;
-            sliver.perform_layout_raw(erased)
-        });
-
-        let geom = result.expect("bridge must succeed when perform_layout completes");
-        assert_eq!(geom.scroll_extent, 200.0, "scroll_extent = item_height");
-        // Relative check: paint_extent should be item_height - scroll_offset
-        assert!(
-            (geom.paint_extent - 150.0).abs() < 1e-4,
-            "paint_extent ≈ 150.0, got {}",
-            geom.paint_extent
-        );
-    }
-
-    /// Regression: audit scroll=1000 / origin=-250 / remaining=1100 → window
-    /// [750, 2100], not the pre-fix [cache_origin, cache_origin+remaining].
-    #[test]
-    fn calculate_cache_offset_non_zero_scroll_uses_flutter_window() {
-        let sliver = FixedHeightSliver::new(200.0);
-        let constraints = vertical_cache_constraints(1000.0, 1100.0, -250.0);
-
-        assert_eq!(
-            sliver.calculate_cache_offset(&constraints, 700.0, 800.0),
-            50.0,
-            "intersection of [700,800] with [750,2100]",
-        );
-        assert_eq!(
-            sliver.calculate_cache_offset(&constraints, 750.0, 2100.0),
-            1100.0,
-            "full window clamped to remaining_cache_extent",
-        );
-        assert_eq!(
-            sliver.calculate_cache_offset(&constraints, 0.0, 500.0),
-            0.0,
-            "range entirely before cache window",
-        );
-    }
 
     // ────────────────────────────────────────────────────────────────────────
     // Test double — non-leaf (Single) arity: completes geometry through

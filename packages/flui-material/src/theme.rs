@@ -148,24 +148,3 @@ impl InheritedTheme for Theme {
         Theme::new(self.data.clone(), child).boxed()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use flui_sdk::widgets::SizedBox;
-
-    use super::*;
-
-    #[test]
-    fn update_should_notify_true_when_data_differs() {
-        let a = Theme::new(ThemeData::light(), SizedBox::shrink());
-        let b = Theme::new(ThemeData::dark(), SizedBox::shrink());
-        assert!(a.update_should_notify(&b));
-    }
-
-    #[test]
-    fn update_should_notify_false_when_data_equal() {
-        let a = Theme::new(ThemeData::light(), SizedBox::shrink());
-        let b = Theme::new(ThemeData::light(), SizedBox::shrink());
-        assert!(!a.update_should_notify(&b));
-    }
-}

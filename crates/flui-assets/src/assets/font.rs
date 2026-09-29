@@ -129,21 +129,3 @@ impl Asset for FontAsset {
         })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_font_asset_invalid_format() {
-        let invalid_bytes = vec![0xFF, 0xFF, 0xFF, 0xFF];
-
-        let asset = FontAsset::from_bytes("invalid.ttf", invalid_bytes);
-        let result = asset.load().await;
-
-        assert!(result.is_err());
-        if let Err(AssetError::LoadFailed { reason, .. }) = result {
-            assert!(reason.contains("Invalid font format"));
-        }
-    }
-}

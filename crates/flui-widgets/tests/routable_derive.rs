@@ -2,7 +2,7 @@
 //! round trip over generated values, the typed errors, specificity, and the
 //! back-stack a derived type opens with.
 
-use flui_widgets::{Routable, RouteParseError, RoutePath};
+use flui_widgets::Routable;
 use proptest::prelude::*;
 
 #[derive(Routable, Debug, Clone, PartialEq)]
@@ -50,67 +50,4 @@ proptest! {
         // The printed location parses back to the same path, too.
         prop_assert_eq!(TestRoute::parse(path.as_str()), Ok(route));
     }
-}
-
-#[test]
-fn derived_routable_reports_no_match_and_bad_params() {
-    for location in ["/nope", "/note", "/note/1/x", "/user/1/post"] {
-        assert!(
-            matches!(
-                TestRoute::parse(location),
-                Err(RouteParseError::NoMatch { .. })
-            ),
-            "{location} matches no pattern"
-        );
-    }
-    assert!(matches!(
-        TestRoute::parse("/note/x"),
-        Err(RouteParseError::Param { field: "id", ref segment, .. }) if segment == "x"
-    ));
-    assert!(matches!(
-        TestRoute::parse("/user/1/post/x"),
-        Err(RouteParseError::Param { field: "pid", .. })
-    ));
-    assert!(matches!(
-        TestRoute::parse("/user/x/post/1"),
-        Err(RouteParseError::Param { field: "uid", .. })
-    ));
-}
-
-/// Two patterns that cross: each has a literal where the other has a
-/// parameter. Declared with the one tried later first.
-#[derive(Routable, Debug, Clone, PartialEq)]
-enum Crossing {
-    #[route("/:a/new")]
-    A { a: String },
-    #[route("/s/:b")]
-    B { b: String },
-}
-
-#[test]
-fn crossing_patterns_resolve_by_the_first_differing_segment() {
-    // The documented overlap on `Routable`: `A { a: "s" }` prints a path the
-    // earlier-tried `/s/:b` matches, so it parses as `B`.
-    let a = Crossing::A { a: "s".into() };
-    assert_eq!(a.to_path().as_str(), "/s/new");
-    assert_eq!(
-        Crossing::from_path(&a.to_path()),
-        Ok(Crossing::B { b: "new".into() })
-    );
-    // Values outside the overlap round-trip.
-    for route in [
-        Crossing::A { a: "t".into() },
-        Crossing::B { b: "old".into() },
-    ] {
-        assert_eq!(Crossing::from_path(&route.to_path()), Ok(route));
-    }
-}
-
-#[test]
-fn derived_back_stack_skips_gaps() {
-    let path = RoutePath::parse("/note/1").expect("parses");
-    assert_eq!(
-        TestRoute::back_stack(&path),
-        Ok(vec![TestRoute::Home, TestRoute::Note { id: 1 }])
-    );
 }

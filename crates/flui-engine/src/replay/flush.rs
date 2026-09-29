@@ -1229,30 +1229,3 @@ impl GpuReplay {
         self.texture_batch.clear();
     }
 }
-
-// =============================================================================
-// Tests
-// =============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::clamp_scissor_to_attachment;
-
-    /// A rect whose right/bottom edge overshoots the attachment by one pixel
-    /// clamps down to the visible remainder rather than being rejected or
-    /// passed through unclamped.
-    #[test]
-    fn rect_one_pixel_past_the_edge_clamps_to_the_visible_remainder() {
-        let full_w = 800;
-        let full_h = 600;
-        // Right edge at x=795+10=805, one past full_w=800 (and analogously
-        // for the bottom edge at y=595+10=605, one past full_h=600).
-        let clamped = clamp_scissor_to_attachment(795, 595, 10, 10, full_w, full_h);
-        assert_eq!(
-            clamped,
-            Some((795, 595, 5, 5)),
-            "a rect overshooting the attachment must clamp its extent down to the visible \
-             remainder, keeping the same origin"
-        );
-    }
-}

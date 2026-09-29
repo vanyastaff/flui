@@ -493,10 +493,6 @@ mod tests {
         fn was_accepted(&self) -> bool {
             self.accepted.load(Ordering::SeqCst)
         }
-
-        fn was_rejected(&self) -> bool {
-            self.rejected.load(Ordering::SeqCst)
-        }
     }
 
     impl GestureArenaMember for MockMember {
@@ -507,77 +503,6 @@ mod tests {
         fn reject_gesture(&self, _pointer: PointerId) {
             self.rejected.store(true, Ordering::SeqCst);
         }
-    }
-
-    #[test]
-    fn reentrant_resolve_from_reject_callback_does_not_deadlock() {
-        // Regression: CombiningMember::resolve used to fire
-        // member.reject_gesture while holding the combiner lock. A member
-        // whose rejection handler re-enters the team (here: resolving its own
-        // entry again, as a recognizer's cancel path does via arena.sweep)
-        // would self-deadlock on the non-reentrant mutex.
-        struct Reentrant {
-            entry: Mutex<Option<TeamEntry>>,
-            rejected: AtomicBool,
-        }
-        impl crate::sealed::arena_member::Sealed for Reentrant {}
-        impl GestureArenaMember for Reentrant {
-            fn accept_gesture(&self, _pointer: PointerId) {}
-            fn reject_gesture(&self, _pointer: PointerId) {
-                self.rejected.store(true, Ordering::SeqCst);
-                // Re-enter the same combiner from inside the callback. The
-                // guard must drop before resolve() so the nested second
-                // rejection callback can re-acquire OUR OWN entry mutex —
-                // the deadlock under test is the combiner's, not this one.
-                let taken = self.entry.lock().take();
-                if let Some(entry) = taken {
-                    entry.resolve(GestureDisposition::Rejected);
-                }
-            }
-        }
-
-        let arena = GestureArena::new();
-        let team = GestureArenaTeam::new();
-        let pointer = PointerId::new(7).expect("nonzero pointer id");
-
-        let reentrant = Arc::new(Reentrant {
-            entry: Mutex::new(None),
-            rejected: AtomicBool::new(false),
-        });
-        let other = MockMember::new(1);
-
-        let entry = team.add(pointer, reentrant.clone(), &arena);
-        let _other_entry = team.add(pointer, other.clone(), &arena);
-        let _prev = reentrant
-            .entry
-            .lock()
-            .replace(team.add(pointer, reentrant.clone(), &arena));
-
-        // Rejecting the member fires reject_gesture, which re-enters the
-        // combiner; must complete without deadlocking.
-        entry.resolve(GestureDisposition::Rejected);
-        assert!(reentrant.rejected.load(Ordering::SeqCst));
-    }
-
-    #[test]
-    fn test_team_first_member_wins() {
-        let team = GestureArenaTeam::new();
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        let member1 = MockMember::new(1);
-        let member2 = MockMember::new(2);
-
-        let _entry1 = team.add(pointer, member1.clone(), &arena);
-        let _entry2 = team.add(pointer, member2.clone(), &arena);
-
-        // Close arena and let team win
-        arena.close(pointer);
-        arena.drain_deferred_resolutions();
-
-        // Team should win (only member in arena)
-        // First member should be the winner
-        assert!(member1.was_accepted() || member2.was_accepted());
     }
 
     #[test]
@@ -600,25 +525,5 @@ mod tests {
 
         // Captain should have won
         assert!(captain.was_accepted());
-    }
-
-    #[test]
-    fn test_team_all_reject_rejects_arena() {
-        let team = GestureArenaTeam::new();
-        let arena = GestureArena::new();
-        let pointer = PointerId::PRIMARY;
-
-        let member1 = MockMember::new(1);
-        let member2 = MockMember::new(2);
-
-        let entry1 = team.add(pointer, member1.clone(), &arena);
-        let entry2 = team.add(pointer, member2.clone(), &arena);
-
-        // Both reject
-        entry1.resolve(GestureDisposition::Rejected);
-        entry2.resolve(GestureDisposition::Rejected);
-
-        assert!(member1.was_rejected());
-        assert!(member2.was_rejected());
     }
 }

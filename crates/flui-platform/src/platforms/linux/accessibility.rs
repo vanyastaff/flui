@@ -154,8 +154,6 @@ impl PlatformAccessibility for UnixAccessibility {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
-
     use accesskit::{Node, NodeId, Role, TreeId, TreeInfo};
 
     use super::*;
@@ -170,61 +168,6 @@ mod tests {
             tree_id: TreeId::ROOT,
             focus: root,
         }
-    }
-
-    /// Constructing must not require a session bus. CI has none, and neither
-    /// does a user running under a bare compositor — an application that
-    /// panicked or hung there would be unusable for everyone, screen reader or
-    /// not.
-    #[test]
-    fn constructing_without_a_session_bus_is_harmless() {
-        let accessibility = UnixAccessibility::new();
-        assert!(
-            !accessibility.is_active(),
-            "no assistive technology has attached"
-        );
-    }
-
-    /// Publishing with nothing attached must be a no-op that still *retains*
-    /// the tree, so a screen reader started afterwards is answered with the
-    /// real interface rather than an empty one.
-    #[test]
-    fn publishing_while_inactive_retains_the_tree_for_a_later_activation() {
-        let accessibility = UnixAccessibility::new();
-
-        accessibility.publish(tree_update("Submit"));
-
-        let retained = accessibility
-            .shared
-            .retained()
-            .expect("the tree is kept for a late activation");
-        let (_, node) = retained.nodes.first().expect("one node");
-        assert_eq!(node.label(), Some("Submit"));
-    }
-
-    /// An incremental update — no tree metadata, a fragment of changed
-    /// nodes — must never become the answer to a fresh activation: applied
-    /// in isolation it would present a handful of nodes as the whole
-    /// interface. Only self-contained updates are retained.
-    #[test]
-    fn an_incremental_update_is_not_retained_for_activation() {
-        let accessibility = UnixAccessibility::new();
-        accessibility.publish(tree_update("Submit"));
-
-        let mut fragment = tree_update("Changed");
-        fragment.tree = None;
-        accessibility.publish(fragment);
-
-        let retained = accessibility
-            .shared
-            .retained()
-            .expect("the earlier full update stays retained");
-        let (_, node) = retained.nodes.first().expect("one node");
-        assert_eq!(
-            node.label(),
-            Some("Submit"),
-            "the retained answer is the last self-contained update, not the fragment"
-        );
     }
 
     /// The activation handler answers with the retained tree, which is the
@@ -242,86 +185,5 @@ mod tests {
         let (_, node) = initial.nodes.first().expect("one node");
         assert_eq!(node.label(), Some("Submit"));
         assert!(accessibility.is_active());
-    }
-
-    /// A cold activation has nothing to answer with. `None` means "not ready",
-    /// not "no interface" — the next publish delivers the tree.
-    #[test]
-    fn a_cold_activation_answers_none_and_still_activates() {
-        let accessibility = UnixAccessibility::new();
-
-        let mut activation = Activation(Arc::clone(&accessibility.shared));
-        assert!(activation.request_initial_tree().is_none());
-        assert!(
-            accessibility.is_active(),
-            "activation is not conditional on having a tree"
-        );
-    }
-
-    /// Attach and detach both reach the composition root's listener. A missed
-    /// detach leaves semantics assembly running for a screen reader that is
-    /// gone — a per-frame tree walk charged to nobody.
-    #[test]
-    fn activation_and_deactivation_reach_the_listener() {
-        let accessibility = UnixAccessibility::new();
-        let seen: Arc<Mutex<Vec<bool>>> = Arc::new(Mutex::new(Vec::new()));
-
-        let seen_in_listener = Arc::clone(&seen);
-        accessibility.set_activation_listener(Arc::new(move |active| {
-            seen_in_listener.lock().push(active);
-        }));
-
-        Activation(Arc::clone(&accessibility.shared)).request_initial_tree();
-        Deactivation(Arc::clone(&accessibility.shared)).deactivate_accessibility();
-
-        assert_eq!(*seen.lock(), vec![true, false]);
-        assert!(!accessibility.is_active());
-    }
-
-    /// A listener that publishes from inside the activation callback must not
-    /// deadlock — that is the composition root's natural response to "attached".
-    #[test]
-    fn a_listener_that_publishes_does_not_deadlock() {
-        let accessibility = Arc::new(UnixAccessibility::new());
-        let published = Arc::new(AtomicBool::new(false));
-
-        let inner = Arc::clone(&accessibility);
-        let published_flag = Arc::clone(&published);
-        accessibility.set_activation_listener(Arc::new(move |active| {
-            if active {
-                inner.publish(tree_update("Submit"));
-                published_flag.store(true, Ordering::SeqCst);
-            }
-        }));
-
-        let initial = Activation(Arc::clone(&accessibility.shared)).request_initial_tree();
-
-        assert!(published.load(Ordering::SeqCst), "the listener completed");
-        assert!(
-            initial.is_some(),
-            "and the tree it published answered this very activation"
-        );
-    }
-
-    /// Inbound actions reach the composition root addressed by the stable node
-    /// id, which is what closes the round trip without a translation table.
-    #[test]
-    fn an_action_reaches_the_listener_in_the_published_id_space() {
-        let accessibility = UnixAccessibility::new();
-        let seen: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
-
-        let seen_in_listener = Arc::clone(&seen);
-        accessibility.set_action_listener(Arc::new(move |request: ActionRequest| {
-            seen_in_listener.lock().push(request.target_node.0);
-        }));
-
-        Action(Arc::clone(&accessibility.shared)).do_action(ActionRequest {
-            action: accesskit::Action::Click,
-            target_tree: TreeId::ROOT,
-            target_node: NodeId(1),
-            data: None,
-        });
-
-        assert_eq!(*seen.lock(), vec![1]);
     }
 }

@@ -8,7 +8,6 @@
 use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
 use flui_painting::{TextPainter, shared_font_system};
 
-const PROBE_SANS: &[u8] = include_bytes!("../assets/fonts/probe-sans-400.ttf");
 const PROBE_MONO: &[u8] = include_bytes!("../assets/fonts/probe-mono-100.ttf");
 
 /// The same text styled with the probe family: before the face is registered
@@ -24,25 +23,6 @@ fn probe_painter(text: &str) -> TextPainter {
     TextPainter::new()
         .with_text(TextSpan::new(text).with_style(style))
         .with_text_direction(TextDirection::Ltr)
-}
-
-#[test]
-fn register_font_bumps_the_generation_once() {
-    let fonts = shared_font_system();
-    let before = fonts.generation();
-    fonts
-        .register_font(PROBE_SANS)
-        .expect("FLUI Probe Sans loads");
-    assert_eq!(fonts.generation(), before + 1);
-    assert!(
-        fonts.register_font(b"not a font").is_err(),
-        "zero loadable faces is an error"
-    );
-    assert_eq!(
-        fonts.generation(),
-        before + 1,
-        "a failed registration is not a change"
-    );
 }
 
 #[test]

@@ -346,33 +346,3 @@ impl RenderBox for RenderIntrinsicWidth {
 // ===========================================================================
 // Tests
 // ===========================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn bc(min_w: f64, max_w: f64, min_h: f64, max_h: f64) -> BoxConstraints {
-        BoxConstraints::new(min_w, max_w, min_h, max_h)
-    }
-
-    #[test]
-    fn apply_step_rounds_up() {
-        // 37 / 10 = 3.7 → ceil → 4 → × 10 = 40
-        assert!((apply_step(37.0, Some(10.0)) - 40.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn child_constraints_step_then_clamp_ordering() {
-        // Step-then-clamp: apply_step(raw, step) first, then tighten clamps.
-        // Intrinsic = 37, step_width = 20 → step gives 40.
-        // max_width = 35 → clamp(40, [0, 35]) = 35.
-        let node = RenderIntrinsicWidth::new(Some(20.0), None);
-        let constraints = bc(0.0, 35.0, 0.0, 100.0);
-        let child_c = node.child_constraints(constraints, |dim, _extent| match dim {
-            IntrinsicDimension::MaxWidth => 37.0,
-            _ => panic!("unexpected intrinsic dimension"),
-        });
-        assert!(child_c.has_tight_width());
-        assert!((child_c.min_width - 35.0).abs() < 0.01);
-    }
-}

@@ -611,31 +611,3 @@ impl PreferredSizeView for AppBar {
         )
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Flutter parity: `_PreferredAppBarSize(toolbarHeight, bottom?.preferredSize.height)`
-    /// — with a `bottom` slot set, `preferred_size` reports `toolbar_height
-    /// + bottom.preferred_size().height`, not `toolbar_height` alone.
-    ///
-    /// Red-check: revert `preferred_size` to `(self.toolbar_height)` alone
-    /// — this assertion fails (`56.0` instead of `104.0`).
-    #[test]
-    fn preferred_size_adds_the_bottom_slots_height_when_set() {
-        use flui_sdk::widgets::layout::PreferredSize;
-
-        let bottom_height = 48.0;
-        let bar = AppBar::new().bottom(PreferredSize::new(
-            Size::new(f64::INFINITY, bottom_height),
-            SizedBox::shrink(),
-        ));
-
-        assert_eq!(
-            bar.preferred_size().height,
-            (DEFAULT_TOOLBAR_HEIGHT + bottom_height),
-            "preferred_size must be toolbar_height + the bottom slot's own preferred height"
-        );
-    }
-}

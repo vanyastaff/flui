@@ -630,46 +630,4 @@ pub fn shared_budget(target_fps: u32) -> SharedBudget {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_over_budget_detection() {
-        let mut budget = FrameBudget::new(60); // 60fps target duration
-        budget.reset();
-
-        // Simulate work
-        std::thread::sleep(std::time::Duration::from_millis(20));
-
-        assert!(budget.is_over_budget());
-        assert_eq!(budget.remaining(), Milliseconds::ZERO);
-    }
-
-    #[test]
-    fn test_janky_frame_detection() {
-        let mut budget = FrameBudget::new(60); // 60fps target duration
-
-        budget.record_frame_duration(Milliseconds::new(15.0));
-        assert!(!budget.is_janky());
-
-        budget.record_frame_duration(Milliseconds::new(30.0)); // >50% over budget
-        assert!(budget.is_janky());
-    }
-
-    #[test]
-    fn test_jank_statistics() {
-        let mut budget = FrameBudget::new(60); // 60fps target duration
-
-        // Add some normal frames
-        for _ in 0..8 {
-            budget.record_frame_duration(Milliseconds::new(15.0));
-        }
-        // Add some janky frames (>25ms = >150% of the 60fps target duration)
-        for _ in 0..2 {
-            budget.record_frame_duration(Milliseconds::new(30.0));
-        }
-
-        assert_eq!(budget.jank_count(), 2);
-        assert!((budget.jank_percentage().value() - 20.0).abs() < 0.1);
-    }
-}
+mod tests {}

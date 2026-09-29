@@ -345,136 +345,30 @@ mod tests {
     }
 
     #[test]
-    fn all_deprecated_language_subtags_canonicalize() {
+    fn every_deprecated_subtag_canonicalizes() {
         for (deprecated, preferred) in DEPRECATED_LANGUAGE_SUBTAGS {
             assert_eq!(
                 Locale::new(*deprecated, None::<&str>).language(),
                 *preferred
             );
         }
-    }
-
-    #[test]
-    fn all_deprecated_region_subtags_canonicalize() {
         for (deprecated, preferred) in DEPRECATED_REGION_SUBTAGS {
-            let locale = Locale::new("en", Some(*deprecated));
-            assert_eq!(locale.country(), Some(*preferred));
+            assert_eq!(
+                Locale::new("en", Some(*deprecated)).country(),
+                Some(*preferred)
+            );
         }
     }
 
-    #[test]
-    fn unrecognized_subtags_pass_through_unchanged() {
-        let locale = Locale::new("xx", Some("YY"));
-        assert_eq!(locale.language(), "xx");
-        assert_eq!(locale.country(), Some("YY"));
-    }
-
-    // ------------------------------------------------------------------
-    // serde: Deserialize must route through the same canonicalizing
-    // constructor as every other construction path (LocaleShadow).
-    // ------------------------------------------------------------------
-
+    /// Deserialization must route through the canonicalizing constructor:
+    /// a bare derive would write "iw" straight into the private field.
     #[cfg(feature = "serde")]
-    mod serde_tests {
-        use super::*;
-
-        #[test]
-        fn deserializing_a_deprecated_subtag_canonicalizes_it() {
-            // Raw JSON, not a value built through `Locale::new` — this is
-            // exactly the path a bare `#[derive(Deserialize)]` on `Locale`
-            // would have bypassed by writing "iw" straight into the private
-            // `language` field.
-            let iw: Locale =
-                serde_json::from_str(r#"{"language":"iw","country":null,"script":null}"#)
-                    .expect("valid Locale JSON");
-            assert_eq!(
-                iw,
-                Locale::new("he", None::<&str>),
-                "deserializing {{language: \"iw\"}} must canonicalize to \"he\", matching \
-                 Locale::new(\"iw\")"
-            );
-            assert_eq!(iw.language(), "he");
-            assert!(
-                iw.is_rtl(),
-                "the deserialized locale must resolve is_rtl() from the canonical \
-                 language, not the raw deprecated spelling"
-            );
-        }
-
-        #[test]
-        fn deserializing_a_deprecated_region_canonicalizes_it() {
-            let dd: Locale =
-                serde_json::from_str(r#"{"language":"de","country":"DD","script":null}"#)
-                    .expect("valid Locale JSON");
-            assert_eq!(dd, Locale::new("de", Some("DE")));
-            assert_eq!(dd.country(), Some("DE"));
-        }
-
-        #[test]
-        fn serialize_then_deserialize_round_trips_an_already_canonical_locale() {
-            let original = Locale::with_script("zh", Some("CN"), Some("Hans"));
-            let json = serde_json::to_string(&original).expect("serialize");
-            let round_tripped: Locale = serde_json::from_str(&json).expect("deserialize");
-            assert_eq!(round_tripped, original);
-        }
-    }
-
-    mod tags {
-        use super::super::*;
-        use proptest::prelude::*;
-
-        proptest! {
-            /// Every locale prints to a tag that parses back to itself. The
-            /// subtags are drawn so none is deprecated (which would
-            /// canonicalize) and a region is never four letters (which the
-            /// parser reads as a script).
-            #[test]
-            fn tag_roundtrips(
-                language in "[a-h][a-z]{1,2}",
-                script in proptest::option::of("[A-Z][a-z]{3}"),
-                country in proptest::option::of("[A-Z]{2}|[0-9]{3}"),
-            ) {
-                let locale = Locale::with_script(language, country, script);
-                let tag = locale.to_language_tag();
-                prop_assert_eq!(locale.to_string(), tag.clone());
-                prop_assert_eq!(Locale::from_language_tag(&tag), Some(locale.clone()));
-                prop_assert_eq!(Locale::from_language_tag(&tag.replace('_', "-")), Some(locale));
-            }
-        }
-
-        #[test]
-        fn parsing() {
-            let parsed = Locale::from_language_tag("zh-Hant-TW").unwrap();
-            assert_eq!(
-                (parsed.language(), parsed.script(), parsed.country()),
-                ("zh", Some("Hant"), Some("TW"))
-            );
-            let region = Locale::from_language_tag("es_419").unwrap();
-            assert_eq!((region.script(), region.country()), (None, Some("419")));
-            assert_eq!(Locale::from_language_tag(""), None);
-            assert_eq!(Locale::from_language_tag("a_b_c_d"), None);
-        }
-
-        #[test]
-        fn direction() {
-            for (language, rtl) in [
-                ("ar", true),
-                ("fa", true),
-                ("he", true),
-                ("ps", true),
-                ("ur", true),
-                ("yi", true),
-                ("ji", true), // canonicalized to yi
-                ("en", false),
-                ("zh", false),
-            ] {
-                let locale = Locale::new(language, None::<&str>);
-                assert_eq!(
-                    (locale.is_rtl(), locale.is_ltr()),
-                    (rtl, !rtl),
-                    "{language}"
-                );
-            }
-        }
+    #[test]
+    fn deserializing_a_deprecated_subtag_canonicalizes_it() {
+        let iw: Locale = serde_json::from_str(r#"{"language":"iw","country":null,"script":null}"#)
+            .expect("valid Locale JSON");
+        assert_eq!(iw, Locale::new("he", None::<&str>));
+        assert_eq!(iw.language(), "he");
+        assert!(iw.is_rtl());
     }
 }

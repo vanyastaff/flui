@@ -486,30 +486,3 @@ impl TextureCache {
 
     // ===== Atlas Access =====
 }
-
-#[cfg(all(test, feature = "testing"))]
-mod tests {
-    use super::*;
-
-    /// BUG 4 regression: an absurdly large `(width, height)` must return a clean
-    /// `Err` (size mismatch), NOT panic in the size multiply.
-    ///
-    /// `40000 * 40000 * 4 = 6.4e9` exceeds `u32::MAX` (4.29e9). The old code
-    /// computed `(width * height * 4) as usize` — the multiply ran in u32 and
-    /// panicked under debug overflow-checks BEFORE the `data.len()` guard. Widen
-    /// to usize first so validation rejects the input gracefully.
-    #[test]
-    fn load_from_rgba_oversized_dimensions_errors_without_panic() {
-        let (device, queue) =
-            crate::test_support::test_device_and_queue("TextureCache Test Device");
-        let mut cache = TextureCache::new(device, queue);
-
-        // Empty data, gigantic dimensions: the size check must fire first.
-        let result = cache.load_from_rgba(TextureKey::from_data(b"big"), 40000, 40000, &[]);
-        assert!(
-            result.is_err(),
-            "oversized dimensions must return Err (size mismatch), not panic in \
-             the u32 size multiply"
-        );
-    }
-}

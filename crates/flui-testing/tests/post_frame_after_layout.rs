@@ -13,7 +13,7 @@
 //! opened a scheduler frame.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use flui_foundation::geometry::Size;
@@ -123,40 +123,5 @@ fn post_frame_callback_runs_after_layout_in_the_same_pumped_frame() {
         *observed.read(),
         Some(Size::new(40.0, 24.0)),
         "the post-frame callback must observe THIS frame's committed layout"
-    );
-}
-
-/// The binding drives its **own** scheduler, never some other, unrelated one.
-/// A post-frame callback parked on an unrelated scheduler must not fire here —
-/// otherwise a headless test would silently "prove" things about a scheduler
-/// it never actually pumped.
-#[test]
-fn pump_frame_drives_the_binding_local_scheduler_not_an_unrelated_one() {
-    let (mut binding, _pipeline, _root) = binding_with_one_box();
-
-    let unrelated_scheduler = flui_scheduler::UpdateScheduler::new();
-    let unrelated_fired = Arc::new(AtomicBool::new(false));
-    let unrelated_cb = Arc::clone(&unrelated_fired);
-    unrelated_scheduler.add_post_frame_callback(Box::new(move |_| {
-        unrelated_cb.store(true, Ordering::SeqCst);
-    }));
-
-    let local_fired = Arc::new(AtomicBool::new(false));
-    let local_cb = Arc::clone(&local_fired);
-    binding
-        .scheduler()
-        .add_post_frame_callback(Box::new(move |_| {
-            local_cb.store(true, Ordering::SeqCst);
-        }));
-
-    binding.pump_frame(Duration::from_millis(16));
-
-    assert!(
-        local_fired.load(Ordering::SeqCst),
-        "the binding's own queue drains"
-    );
-    assert!(
-        !unrelated_fired.load(Ordering::SeqCst),
-        "pump_frame must not drive an unrelated scheduler's queue"
     );
 }

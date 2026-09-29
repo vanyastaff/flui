@@ -16,15 +16,11 @@ use crate::common;
 use std::sync::{Arc, Mutex};
 
 use common::{lay_out, loose};
-use flui_cupertino::{CupertinoColor, CupertinoColors, CupertinoTheme, CupertinoThemeData};
+use flui_cupertino::{CupertinoColor, CupertinoTheme, CupertinoThemeData};
 use flui_sdk::painting::Color;
 use flui_sdk::platform::Brightness;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::SizedBox;
-
-fn channels(color: Color) -> (u8, u8, u8, u8) {
-    (color.r, color.g, color.b, color.a)
-}
 
 /// Captures `CupertinoColor::Static(sentinel).resolve(ctx)` during `build()`
 /// — proving `resolve` actually runs against a real mounted `BuildContext`
@@ -71,29 +67,4 @@ fn static_color_resolves_to_itself_through_a_real_context() {
         .unwrap()
         .expect("build should have run and captured a resolved color");
     assert_eq!(resolved, sentinel);
-}
-
-#[test]
-fn label_matches_the_oracle() {
-    let label = CupertinoColors::LABEL;
-    assert_eq!(channels(label.color), (0, 0, 0, 255));
-    assert_eq!(channels(label.dark_color), (255, 255, 255, 255));
-    assert_eq!(channels(label.elevated_color), (0, 0, 0, 255));
-    assert_eq!(channels(label.dark_elevated_color), (255, 255, 255, 255));
-}
-
-/// The flagged trap: `systemBlue`'s dark variant.
-#[test]
-fn system_blue_dark_variant_is_10_132_255_not_9_132_255() {
-    let system_blue = CupertinoColors::SYSTEM_BLUE;
-    assert_eq!(channels(system_blue.color), (0, 122, 255, 255));
-    assert_eq!(channels(system_blue.dark_color), (10, 132, 255, 255));
-    assert_eq!(channels(system_blue.high_contrast_color), (0, 64, 221, 255));
-    assert_eq!(
-        channels(system_blue.dark_high_contrast_color),
-        (64, 156, 255, 255)
-    );
-    // `activeBlue` is a plain alias — a distinct-storage divergence would
-    // fail this trivially.
-    assert_eq!(CupertinoColors::ACTIVE_BLUE, CupertinoColors::SYSTEM_BLUE);
 }

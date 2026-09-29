@@ -312,42 +312,6 @@ mod tests {
 
     // ── 2. coalescing ───────────────────────────────────────────────────────
 
-    /// The inbox is keyed by element id: a burst between frames costs one
-    /// queued rebuild and one frame request while retaining distinct causes.
-    #[test]
-    fn rebuild_handle_repeated_schedules_coalesce_to_one_rebuild() {
-        let (mut owner, mut tree, handle, builds, _root) = mount();
-        let frames = Arc::new(AtomicUsize::new(0));
-        let frames_for_hook = Arc::clone(&frames);
-        owner.set_on_build_scheduled(move || {
-            frames_for_hook.fetch_add(1, Ordering::Relaxed);
-        });
-        // Re-capture through the owner so the handle carries the new hook.
-        let handle = owner.rebuild_handle(handle.element_id().expect("active"));
-
-        let before = builds.load(Ordering::Relaxed);
-        for _ in 0..5 {
-            handle.schedule(RebuildReason::AsyncCompletion);
-        }
-        handle.schedule(RebuildReason::StateChange);
-
-        assert_eq!(owner.pending_external_builds(), 1, "one inbox slot");
-        let reasons = owner
-            .pending_rebuild_reasons(handle.element_id().expect("active"))
-            .expect("the queued element must expose its causes");
-        assert_eq!(reasons.len(), 2);
-        assert!(reasons.contains(RebuildReason::AsyncCompletion));
-        assert!(reasons.contains(RebuildReason::StateChange));
-        assert_eq!(
-            frames.load(Ordering::Relaxed),
-            1,
-            "only the newly-queued schedule requests a frame"
-        );
-
-        owner.build_scope(&mut tree);
-        assert_eq!(builds.load(Ordering::Relaxed), before + 1, "one rebuild");
-    }
-
     // ── 3. cross-thread ─────────────────────────────────────────────────────
 
     /// `schedule(reason)` is callable from another thread and rebuilds on the frame

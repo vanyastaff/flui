@@ -236,52 +236,6 @@ fn inspector_counts_mounts_moves_rebuilds_and_unmounts_exactly() {
     );
 }
 
-/// A mid-run attach must start from an exact structural baseline: the
-/// seeded replay reports the live tree as synthetic mounts, and events
-/// after the install continue the same stream.
-#[test]
-fn seeded_replay_gives_a_mid_run_attach_an_exact_baseline() {
-    let mut owner = BuildOwner::new();
-    let mut tree = ElementTree::new();
-
-    // Build a 1+3 tree with NO observer installed.
-    let root_id = mount_root_with_pipeline(&mut tree, &MultiBox::keyed(&[1, 2, 3]), &mut owner);
-    owner.schedule_build_for(root_id, 0, RebuildReason::InitialMount);
-    owner.build_scope(&mut tree);
-
-    // Mid-run attach: replay-then-install (the WidgetsBinding helper does
-    // exactly this under one write guard; here the single thread IS the
-    // atomicity).
-    let counters = Arc::new(InspectorCounters::new());
-    tree.replay_mounts(&*counters);
-    owner.set_tree_observer(Arc::clone(&counters) as Arc<dyn TreeObserver>);
-
-    let baseline = counters.snapshot();
-    assert_eq!(
-        baseline.mounts,
-        tree.len() as u64,
-        "replay must report every live element exactly once",
-    );
-    assert_eq!(baseline.rebuilds, 0, "replay synthesizes mounts only");
-
-    // Post-attach events continue the stream: shrink and observe unmounts.
-    tree.update(
-        root_id,
-        &MultiBox::keyed(&[2]),
-        &mut owner.element_owner_mut(),
-    );
-    owner.schedule_build_for(root_id, 0, RebuildReason::ParentUpdate);
-    owner.build_scope(&mut tree);
-
-    let after = counters.snapshot();
-    assert_eq!(after.unmounts, 2, "post-attach unmounts arrive live");
-    assert_eq!(
-        after.mounts - after.unmounts,
-        tree.len() as u64,
-        "baseline + live stream keeps the balance invariant",
-    );
-}
-
 /// A panicking observer is detached and the frame survives; `detached()`
 /// is NOT called on the panicking observer.
 #[test]

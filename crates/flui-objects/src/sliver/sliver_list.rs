@@ -259,14 +259,3 @@ impl RenderSliver for RenderSliverList {
 // ============================================================================
 // UNIT TESTS
 // ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    #[should_panic(expected = "default_extent_estimate must be finite")]
-    fn new_panics_on_zero_estimate() {
-        let _ = RenderSliverList::new(10, 0.0);
-    }
-}

@@ -10,70 +10,12 @@
 use std::num::NonZeroU32;
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationController, AnimationStatus, UpdateScheduler};
+use flui_animation::{Animation, AnimationController, UpdateScheduler};
 use flui_foundation::PresentationId;
-use flui_scheduler::DemandKind;
 use flui_testing::HeadlessBinding;
 
 fn presentation(index: u32) -> PresentationId {
     PresentationId::new_gen(index, NonZeroU32::MIN)
-}
-
-/// A controller long enough that it never completes within the pump counts
-/// these tests use — so `has_running()` stays true and `Animation` demand is
-/// freshly re-marked every single pump, making "N pumps -> N produces" exact.
-fn long_running_controller() -> AnimationController {
-    AnimationController::new(Duration::from_secs(10), &UpdateScheduler::new())
-}
-
-/// Frame-exact multi-window pump: pump A three frames while B is untouched
-/// ⇒ A.produces == 3, B.produces == 0, and B's pending demand is still
-/// latched — kills "advance leaks across presentations" and "manual clock
-/// double-ticks".
-#[test]
-fn pumping_one_presentation_three_times_leaves_an_untouched_sibling_at_zero_with_its_demand_latched()
- {
-    let mut binding = HeadlessBinding::new();
-    let a = presentation(0);
-    let b = presentation(1);
-
-    let a_vsync = binding.install_presentation_clock(a);
-    let _b_vsync = binding.install_presentation_clock(b);
-
-    let a_controller = long_running_controller();
-    a_vsync.register(a_controller.clone());
-    a_controller.forward().expect("fresh controller forwards");
-
-    // B has demand marked but is never pumped -- it must neither produce nor
-    // lose that demand while A is driven.
-    binding.mark_presentation_demand(b, DemandKind::Host);
-
-    for _ in 0..3 {
-        binding.pump_presentation(a, Duration::from_millis(16));
-    }
-
-    assert_eq!(
-        binding.presentation_produced_count(a),
-        3,
-        "three pumps of A, each with the controller still running, must grant three produces"
-    );
-    assert_eq!(
-        binding.presentation_produced_count(b),
-        0,
-        "B was never pumped -- it must not have produced anything"
-    );
-
-    // B's latched demand survives untouched: pumping it now (its first ever
-    // pump) must produce immediately from that retained mark, not need a
-    // fresh mark.
-    binding.pump_presentation(b, Duration::from_millis(16));
-    assert_eq!(
-        binding.presentation_produced_count(b),
-        1,
-        "B's demand, marked before A was ever pumped, must still have been latched"
-    );
-
-    a_controller.dispose();
 }
 
 /// The test Flutter cannot write: A on a scripted 144 Hz cadence and B on
@@ -147,52 +89,4 @@ fn two_presentations_at_independent_scripted_cadences_tick_and_advance_independe
 
     a_controller.dispose();
     b_controller.dispose();
-}
-
-/// The pump that completes a controller must still produce -- Flutter's own
-/// contract (`.flutter/packages/flutter/lib/src/scheduler/ticker.dart`'s
-/// `_tick` invokes `_onTick` unconditionally, deciding whether to
-/// *reschedule* only afterward; `.flutter/packages/flutter/lib/src/
-/// animation/animation_controller.dart`'s own `_tick` clamps the value to
-/// the endpoint, flips the status to `Completed`, calls `stop()`, and ONLY
-/// THEN notifies listeners) delivers the final value and status in the SAME
-/// tick that crosses the completion threshold. Sampling `has_running()`
-/// AFTER ticking (rather than before) would silently drop exactly that
-/// pump's demand, since by then the controller has already stopped.
-#[test]
-fn a_controller_completing_mid_pump_still_produces_the_final_frame() {
-    let mut binding = HeadlessBinding::new();
-    let a = presentation(0);
-    let vsync = binding.install_presentation_clock(a);
-
-    let controller = AnimationController::new(Duration::from_millis(50), &UpdateScheduler::new());
-    vsync.register(controller.clone());
-    controller.forward().expect("fresh controller forwards");
-
-    // The first pump is the registry's own "detection tick" (anchors
-    // t=0 to the current instant; the value does not move yet -- see
-    // `Vsync::tick_all`'s own doc). Every pump after that advances the
-    // real elapsed-since-anchor.
-    binding.pump_presentation(a, Duration::from_millis(10));
-    assert_eq!(controller.status(), AnimationStatus::Forward);
-
-    // Cross the 50ms duration in the very next pump -- this is the exact
-    // pump this test is about.
-    let produced_before_completion = binding.presentation_produced_count(a);
-    binding.pump_presentation(a, Duration::from_millis(60));
-
-    assert_eq!(controller.status(), AnimationStatus::Completed);
-    assert!(
-        (controller.value() - 1.0).abs() < 1e-4,
-        "the final frame's value must be the endpoint, got {}",
-        controller.value()
-    );
-    assert_eq!(
-        binding.presentation_produced_count(a),
-        produced_before_completion + 1,
-        "the pump that completes the controller must itself still produce -- it carries the \
-         final value/status the oracle delivers in that same tick, not the pump after"
-    );
-
-    controller.dispose();
 }

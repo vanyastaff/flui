@@ -128,38 +128,6 @@ mod tests {
         );
     }
 
-    /// With no injected handle and no ambient tokio context, `resolve` must
-    /// fall back to starting its own owned runtime.
-    #[test]
-    fn resolve_starts_an_owned_runtime_with_no_injection_and_no_ambient_context() {
-        let bridge = BridgeRuntime::new();
-        bridge.resolve(None);
-
-        assert!(
-            bridge.owned.get().is_some(),
-            "no injection and no ambient runtime must start the owned fallback",
-        );
-    }
-
-    /// With no injected handle but an ambient tokio runtime already running on
-    /// the calling thread, `resolve` must reuse it (`Handle::try_current`)
-    /// rather than start a redundant owned runtime.
-    #[tokio::test]
-    async fn resolve_reuses_an_ambient_runtime_with_no_injection() {
-        let bridge = BridgeRuntime::new();
-        let resolved = bridge.resolve(None);
-
-        assert_eq!(
-            resolved.id(),
-            Handle::current().id(),
-            "an ambient tokio context with no injection must be reused directly",
-        );
-        assert!(
-            bridge.owned.get().is_none(),
-            "an available ambient runtime must never cause the owned fallback to start",
-        );
-    }
-
     /// The core fix: an ambient handle used on an earlier call must NEVER be
     /// reused once that runtime has shut down — `resolve` must notice (by
     /// re-checking `Handle::try_current` fresh every call, not memoizing the

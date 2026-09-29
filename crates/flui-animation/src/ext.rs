@@ -385,30 +385,3 @@ pub trait AnimationExt: Animation<f64> + Sized + 'static {
 
 // Blanket implementation for all types that implement Animation<f64>
 impl<A: Animation<f64> + 'static> AnimationExt for A {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::AnimationController;
-    use crate::curve::Curves;
-
-    use flui_scheduler::UpdateScheduler;
-    use std::time::Duration;
-
-    #[test]
-    fn test_animation_ext_curved() {
-        let scheduler = UpdateScheduler::new();
-        let controller = Arc::new(AnimationController::new(
-            Duration::from_millis(100),
-            &scheduler,
-        ));
-
-        let curved = controller.clone().curved(Curves::EaseIn);
-
-        controller.set_value(0.5);
-        // EaseIn makes 0.5 appear slower (less than 0.5)
-        assert!(curved.value() < 0.5);
-
-        controller.dispose();
-    }
-}

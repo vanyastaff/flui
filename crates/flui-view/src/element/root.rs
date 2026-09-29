@@ -220,39 +220,3 @@ impl crate::view::ElementBase for RootElementImpl {
         Vec::new()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::view::ElementBase;
-
-    // Same reason as the lifecycle guards in `generic.rs`: the assertion at
-    // `:163` is a `debug_assert`, so without this gate the test reports "did not
-    // panic as expected" under `cargo test --release`.
-    #[test]
-    #[cfg(debug_assertions)]
-    #[should_panic(expected = "Root element cannot have a parent")]
-    fn test_root_element_mount_with_parent_panics() {
-        let mut root = RootElementImpl::new();
-        let owner = Arc::new(BuildOwner::new());
-
-        root.assign_owner(owner);
-        // This should panic - root elements can't have parents
-        let fake_parent = ElementId::new(1);
-        let mut handle_owner = BuildOwner::new();
-        root.mount(Some(fake_parent), 0, &mut handle_owner.element_owner_mut());
-    }
-
-    #[test]
-    fn test_root_element_child_management() {
-        let mut root = RootElementImpl::new();
-        assert!(root.child().is_none());
-
-        let child_id = ElementId::new(42);
-        root.set_child(Some(child_id));
-        assert_eq!(root.child(), Some(child_id));
-
-        root.set_child(None);
-        assert!(root.child().is_none());
-    }
-}

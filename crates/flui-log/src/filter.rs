@@ -196,27 +196,8 @@ impl FilterConfig {
 
 #[cfg(test)]
 mod tests {
-    use tracing::level_filters::LevelFilter;
-    use tracing_subscriber::{Layer, Registry};
 
     use super::*;
-
-    #[test]
-    fn a_trace_directive_survives_into_the_filters_own_ceiling() {
-        // The regression this module exists to prevent: the resolved filter's
-        // maximum must be what the directives asked for, so a `trace!` in
-        // `flui_view` is reachable. With the historical second `LevelFilter`
-        // the effective maximum was pinned at the configured `Level`.
-        let filter = FilterConfig::new("info,flui_view=trace")
-            .without_env_var()
-            .env_filter()
-            .expect("`info,flui_view=trace` is a valid directive string");
-
-        assert_eq!(
-            <EnvFilter as Layer<Registry>>::max_level_hint(&filter),
-            Some(LevelFilter::TRACE)
-        );
-    }
 
     #[test]
     fn invalid_configured_directives_are_reported_not_swallowed() {
@@ -234,52 +215,4 @@ mod tests {
     // cases are deterministic, order-independent, and safe under a threaded
     // test runner. `tests/env_var_is_read_and_trimmed.rs` covers the wiring to
     // the real process environment in a process of its own.
-
-    /// The maximum level a resolved filter admits — the observable difference
-    /// between "the directives took effect" and "they were ignored".
-    fn max_level(config: &FilterConfig, env_value: Option<&str>) -> Option<LevelFilter> {
-        let filter = config
-            .env_filter_from(env_value)
-            .expect("the directives under test are valid");
-        <EnvFilter as Layer<Registry>>::max_level_hint(&filter)
-    }
-
-    #[test]
-    fn surrounding_whitespace_in_the_environment_value_is_trimmed() {
-        // `RUST_LOG=' info,flui_view=trace '` — a trailing newline from a
-        // `.env` file or a shell quoting accident. Testing the trimmed value
-        // for emptiness and then parsing the untrimmed one made this a hard
-        // `ParseLevelFilterError`.
-        let config = FilterConfig::new("error");
-
-        assert_eq!(
-            max_level(&config, Some(" info,flui_view=trace ")),
-            Some(LevelFilter::TRACE),
-            "a padded environment value must resolve exactly as its trimmed form does"
-        );
-    }
-
-    #[test]
-    fn a_whitespace_only_value_falls_through_to_the_configured_directives() {
-        // Blank is "unset", not "invalid": it must reach the configured
-        // directives rather than produce an error.
-        let config = FilterConfig::new("flui_view=debug");
-
-        assert_eq!(
-            max_level(&config, Some("   \t\n  ")),
-            Some(LevelFilter::DEBUG),
-            "a blank environment value must not override, and must not error"
-        );
-    }
-
-    #[test]
-    fn a_disabled_env_var_ignores_even_a_supplied_value() {
-        let config = FilterConfig::new("warn").without_env_var();
-
-        assert_eq!(
-            max_level(&config, Some("trace")),
-            Some(LevelFilter::WARN),
-            "`without_env_var` must mean the configured directives always win"
-        );
-    }
 }

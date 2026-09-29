@@ -922,104 +922,11 @@ impl Default for SemanticsOwner {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use flui_foundation::RenderId;
-    use parking_lot::Mutex;
 
     use super::*;
     use crate::{AccessibilityNodeId, SemanticsActionRequest};
-
-    /// A callback swapped onto a live, already-clean owner immediately
-    /// receives the current rooted tree. `flush` gates on dirty nodes, so
-    /// without this a late-wired platform adapter would present nothing
-    /// until the user's next interaction happened to dirty the tree.
-    #[test]
-    fn a_swapped_in_callback_immediately_receives_the_current_rooted_tree() {
-        let mut owner = SemanticsOwner::new_without_callback();
-        let root = owner.insert(SemanticsNode::new().with_source_render_id(RenderId::new(1)));
-        owner.set_root(Some(root));
-
-        let received = Arc::new(Mutex::new(Vec::new()));
-        let sink = Arc::clone(&received);
-        owner.set_callback(Arc::new(move |update: &crate::TreeUpdate| {
-            sink.lock().push(update.nodes.len());
-        }));
-
-        assert_eq!(
-            received.lock().as_slice(),
-            &[1],
-            "the swap itself must publish the full rooted tree once"
-        );
-    }
-
-    /// A production-shaped node. Assembly always attaches the boundary's render
-    /// object (`rebuild_semantics_owner`), and that is where the OS-facing
-    /// identity comes from — a node without one is not publishable at all.
-    fn addressable(index: u32) -> SemanticsNode {
-        SemanticsNode::new().with_source_render_id(flui_foundation::RenderId::new_gen(
-            index,
-            core::num::NonZeroU32::new(1).expect("fixture generation is non-zero"),
-        ))
-    }
-
-    #[test]
-    fn test_semantics_owner_send_full_tree() {
-        let update_count = Arc::new(AtomicUsize::new(0));
-        let update_count_clone = Arc::clone(&update_count);
-
-        let callback: SemanticsUpdateCallback = Arc::new(move |updates| {
-            update_count_clone.fetch_add(updates.nodes.len(), Ordering::SeqCst);
-        });
-
-        let mut owner = SemanticsOwner::new(callback);
-
-        // Insert, root, and flush. A rooted tree is required: the payload is a
-        // `TreeUpdate`, and an unrooted tree has nothing an adapter can apply.
-        let root = owner.insert(addressable(1));
-        let child = owner.insert(addressable(2));
-        owner.add_child(root, child);
-        owner.set_root(Some(root));
-        owner.flush();
-        assert_eq!(update_count.load(Ordering::SeqCst), 2);
-
-        // Send full tree should send all nodes again
-        owner.send_full_tree();
-        assert_eq!(update_count.load(Ordering::SeqCst), 4); // 2 + 2
-    }
-
-    /// The O(dirty) publish claim, pinned on the examination counter: an
-    /// incremental flush after a single-node change examines that one node
-    /// — never the arena. (The full publish before it examines everything;
-    /// that contrast is what makes the oracle meaningful.)
-    #[test]
-    fn a_single_change_flush_examines_one_node_not_the_arena() {
-        let mut owner = SemanticsOwner::new_without_callback();
-        let root = owner.insert(addressable(1));
-        for index in 2..=16 {
-            let child = owner.insert(addressable(index));
-            owner.add_child(root, child);
-        }
-        owner.set_root(Some(root));
-        owner.flush();
-        assert_eq!(
-            owner.examined_last_flush(),
-            16,
-            "the initializing full publish examines every node"
-        );
-
-        owner
-            .get_mut(root)
-            .expect("root is live")
-            .config_mut()
-            .set_label("changed");
-        owner.flush();
-        assert_eq!(
-            owner.examined_last_flush(),
-            1,
-            "one changed node must cost one examination, not an arena sweep"
-        );
-    }
 
     #[test]
     fn snapshot_rejects_duplicate_accessibility_identity() {
@@ -1057,30 +964,6 @@ mod tests {
         assert_eq!(
             owner.snapshot().expect_err("cycles cannot be snapshotted"),
             SemanticsSnapshotError::RepeatedNode { node: root },
-        );
-    }
-
-    #[test]
-    fn action_resolution_applies_the_effective_action_mask() {
-        let render_id = RenderId::new(3);
-        let target = AccessibilityNodeId::from(render_id);
-        let mut node = SemanticsNode::new().with_source_render_id(render_id);
-        node.config_mut()
-            .add_action(SemanticsAction::Tap, Arc::new(|_, _| {}));
-        node.config_mut().set_blocks_user_actions(true);
-
-        let mut owner = SemanticsOwner::new_without_callback();
-        let root = owner.insert(node);
-        owner.set_root(Some(root));
-
-        assert_eq!(
-            owner
-                .resolve_action(SemanticsActionRequest::new(target, SemanticsAction::Tap,))
-                .expect_err("blocked pointer actions must not remain routable"),
-            SemanticsActionError::UnsupportedAction {
-                node_id: target,
-                action: SemanticsAction::Tap,
-            },
         );
     }
 

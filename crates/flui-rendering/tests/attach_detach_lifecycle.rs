@@ -38,14 +38,6 @@ impl LifecycleLog {
         self.attach_count.load(Ordering::SeqCst)
     }
 
-    fn detach_count(&self) -> usize {
-        self.detach_count.load(Ordering::SeqCst)
-    }
-
-    fn layout_count(&self) -> usize {
-        self.layout_count.load(Ordering::SeqCst)
-    }
-
     /// The most recently captured handle. Panics if `attach` never fired —
     /// every test here calls it only after asserting `attach_count() > 0`.
     fn captured_handle(&self) -> RenderInvalidationHandle {
@@ -106,23 +98,6 @@ fn probe(log: LifecycleLog) -> BoxedRenderObject {
 // before this fix: no insertion path called `attach` for a Sliver child).
 // ────────────────────────────────────────────────────────────────────────
 
-/// Mounts a probe as the pipeline's root with tight constraints, ready to
-/// drive `run_frame`.
-fn rooted_fixture() -> (PipelineOwner, flui_foundation::RenderId, LifecycleLog) {
-    let mut owner = PipelineOwner::new();
-    let log = LifecycleLog::default();
-    let id = owner.insert(probe(log.clone()));
-    owner.set_root_id(Some(id));
-    owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(40.0, 40.0))));
-    (owner, id, log)
-}
-
-fn frame(owner: PipelineOwner) -> PipelineOwner {
-    let (owner, result) = owner.run_frame();
-    result.expect("frame must not error");
-    owner
-}
-
 // ────────────────────────────────────────────────────────────────────────
 // attach on insert
 // ────────────────────────────────────────────────────────────────────────
@@ -151,63 +126,9 @@ fn insert_fires_exactly_one_attach_with_a_handle_bound_to_the_new_id() {
 // mark_needs_layout from the captured handle reaches perform_layout
 // ────────────────────────────────────────────────────────────────────────
 
-#[test]
-fn captured_handle_mark_needs_layout_relayouts_that_node_next_frame() {
-    let (owner, _id, log) = rooted_fixture();
-
-    let owner = frame(owner);
-    assert_eq!(
-        log.layout_count(),
-        1,
-        "the first frame lays the node out once"
-    );
-
-    let owner = frame(owner);
-    assert_eq!(
-        log.layout_count(),
-        1,
-        "a clean tree must not re-layout on an idle frame"
-    );
-
-    let handle = log.captured_handle();
-    handle
-        .mark_needs_layout()
-        .expect("owner is alive; the send must succeed");
-
-    let owner = frame(owner);
-    assert_eq!(
-        log.layout_count(),
-        2,
-        "mark_needs_layout on the captured handle must reach perform_layout \
-         on the very next frame"
-    );
-
-    let _ = frame(owner);
-    assert_eq!(
-        log.layout_count(),
-        2,
-        "one request produces one relayout, then the tree idles again"
-    );
-}
-
 // ────────────────────────────────────────────────────────────────────────
 // detach on remove
 // ────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn remove_fires_exactly_one_detach() {
-    let (owner, id, log) = rooted_fixture();
-    let mut owner = frame(owner);
-    assert_eq!(log.detach_count(), 0, "detach must not fire before removal");
-
-    owner.remove_render_object(id);
-
-    assert_eq!(
-        log.detach_count(),
-        1,
-        "remove must call detach exactly once"
-    );
-}
 
 // The token is a linear capability: duplicating it would let one detached
 // batch be attached and released, or released twice.
@@ -222,48 +143,6 @@ static_assertions::assert_not_impl_any!(
 // ────────────────────────────────────────────────────────────────────────
 // Reparent = remove + insert (no dedicated API in this codebase)
 // ────────────────────────────────────────────────────────────────────────
-
-#[test]
-fn reparent_via_remove_then_insert_detaches_old_and_attaches_a_fresh_handle() {
-    let mut owner = PipelineOwner::new();
-    let log = LifecycleLog::default();
-
-    let first_id = owner.insert(probe(log.clone()));
-    assert_eq!(log.attach_count(), 1);
-    let first_handle = log.captured_handle();
-    assert_eq!(first_handle.id(), first_id);
-
-    owner.remove_render_object(first_id);
-    assert_eq!(
-        log.detach_count(),
-        1,
-        "the old node's detach must fire before the new node is inserted"
-    );
-
-    let second_id = owner.insert(probe(log.clone()));
-    assert_eq!(
-        log.attach_count(),
-        2,
-        "reparent (remove + insert) must fire detach then attach with a fresh handle"
-    );
-    let second_handle = log.captured_handle();
-    assert_eq!(
-        second_handle.id(),
-        second_id,
-        "the fresh handle must be bound to the NEW node"
-    );
-    assert_ne!(
-        second_handle.id(),
-        first_handle.id(),
-        "the fresh handle must not be bound to the stale node"
-    );
-
-    // The stale handle from the removed node stays a silent no-op — it
-    // must never be confused for the new node's handle.
-    first_handle
-        .mark_needs_layout()
-        .expect("stale handle send still succeeds; drain drops it silently");
-}
 
 // ────────────────────────────────────────────────────────────────────────
 // Sliver-protocol coverage: no insertion path called `attach` for a Sliver

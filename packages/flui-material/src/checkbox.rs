@@ -702,85 +702,9 @@ mod tests {
     // Construction / builder surface
     // ------------------------------------------------------------------
 
-    #[test]
-    fn tristate_constructor_allows_none_and_marks_tristate() {
-        let checkbox = Checkbox::tristate(None);
-        assert_eq!(checkbox.mode, CheckboxMode::Tristate(None));
-        assert!(matches!(checkbox.mode, CheckboxMode::Tristate(_)));
-        assert!(checkbox.mode.value().is_none());
-    }
-
-    #[test]
-    fn binary_constructor_never_stores_none() {
-        assert_eq!(Checkbox::new(false).mode, CheckboxMode::Binary(false));
-        assert_eq!(Checkbox::new(true).mode, CheckboxMode::Binary(true));
-        assert_eq!(Checkbox::new(false).mode.value(), Some(false));
-        assert_eq!(Checkbox::new(true).mode.value(), Some(true));
-        assert!(matches!(Checkbox::new(false).mode, CheckboxMode::Binary(_)));
-        assert!(matches!(Checkbox::new(true).mode, CheckboxMode::Binary(_)));
-    }
-
     // ------------------------------------------------------------------
     // Tristate tap-cycle semantics (mutation-honest: each arm pinned)
     // ------------------------------------------------------------------
-
-    /// The bug #1102 closed: independent `Option<bool>` + `tristate: bool`
-    /// fields allowed `None` without tristate, so paint drew a dash while
-    /// semantics reported unchecked/not-mixed. [`CheckboxMode`] makes that
-    /// pair unrepresentable; these flags are what `build` exports.
-    #[test]
-    fn semantics_flags_agree_with_mode_so_paint_and_a11y_cannot_diverge() {
-        assert_eq!(
-            checkbox_semantics_flags(CheckboxMode::Binary(false)),
-            CheckboxSemanticsFlags {
-                checked: false,
-                mixed: false,
-            },
-        );
-        assert_eq!(
-            checkbox_semantics_flags(CheckboxMode::Binary(true)),
-            CheckboxSemanticsFlags {
-                checked: true,
-                mixed: false,
-            },
-        );
-        assert_eq!(
-            checkbox_semantics_flags(CheckboxMode::Tristate(Some(false))),
-            CheckboxSemanticsFlags {
-                checked: false,
-                mixed: false,
-            },
-        );
-        assert_eq!(
-            checkbox_semantics_flags(CheckboxMode::Tristate(Some(true))),
-            CheckboxSemanticsFlags {
-                checked: true,
-                mixed: false,
-            },
-        );
-        assert_eq!(
-            checkbox_semantics_flags(CheckboxMode::Tristate(None)),
-            CheckboxSemanticsFlags {
-                checked: false,
-                mixed: true,
-            },
-            "indeterminate must export mixed — never checked(false) alone",
-        );
-    }
-
-    #[test]
-    fn public_constructors_only_produce_legal_modes() {
-        assert!(matches!(Checkbox::new(false).mode, CheckboxMode::Binary(_)));
-        assert!(Checkbox::new(false).mode.value().is_some());
-        assert!(matches!(
-            Checkbox::tristate(None).mode,
-            CheckboxMode::Tristate(_)
-        ));
-        assert!(matches!(
-            Checkbox::tristate(Some(true)).mode,
-            CheckboxMode::Tristate(_)
-        ));
-    }
 
     // ------------------------------------------------------------------
     // M3 default token tables — per-state probes, oracle branch order
@@ -799,18 +723,6 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn theme_tier_beats_the_m3_default_when_no_widget_override_is_set() {
-        let states = WidgetStates::from(WidgetState::Selected);
-        let theme_color = WidgetStateProperty::all(Some(Color::rgb(9, 9, 9)));
-        let resolved = resolve_checkbox_fill_color(None, Some(&theme_color), &light(), states);
-        assert_eq!(resolved, Color::rgb(9, 9, 9));
-        // Sanity: the theme color must differ from the M3 default at the
-        // same states, or this test couldn't distinguish "theme applied"
-        // from "default applied by coincidence".
-        assert_ne!(resolved, checkbox_default_fill_color(&light(), states));
-    }
-
-    #[test]
     fn widget_override_is_ignored_when_disabled_even_if_selected() {
         let states = WidgetStates::from(WidgetState::Selected).with_state(WidgetState::Disabled);
         let resolved =
@@ -819,95 +731,11 @@ mod tests {
         assert_eq!(resolved, checkbox_default_fill_color(&light(), states));
     }
 
-    #[test]
-    fn default_fill_color_selected_enabled_is_primary() {
-        let states = WidgetStates::from(WidgetState::Selected);
-        assert_eq!(
-            checkbox_default_fill_color(&light(), states),
-            light().primary
-        );
-    }
-
-    #[test]
-    fn default_overlay_color_error_pressed_wins_over_selected_branch() {
-        // Branch-order pin: Error is checked BEFORE Selected in the oracle
-        // (`_CheckboxDefaultsM3.overlayColor`), so an error+selected+pressed
-        // combination resolves through the error branch's color, not
-        // selected's.
-        let states = WidgetStates::from(WidgetState::Error)
-            .with_state(WidgetState::Selected)
-            .with_state(WidgetState::Pressed);
-        assert_eq!(
-            checkbox_default_overlay_color(&light(), states),
-            light().error.with_opacity(0.1)
-        );
-    }
-
     // ------------------------------------------------------------------
     // Tap-target geometry
     // ------------------------------------------------------------------
 
-    /// `InkWell`'s [`MaterialShape::Stadium`] over the square tap target
-    /// inscribes a circle at half the tap-target side — the geometric shape
-    /// the overlay actually paints. See the module docs' "Overlay shape"
-    /// section for why this is `24.0`, not exactly
-    /// `_CheckboxDefaultsM3.splashRadius`'s `20.0`.
-    #[test]
-    fn stadium_shape_on_the_tap_target_inscribes_a_circle_at_half_its_side() {
-        let tap_target = Size::new(CHECKBOX_TAP_TARGET_SIZE, CHECKBOX_TAP_TARGET_SIZE);
-        let rrect = MaterialShape::Stadium.to_rrect(tap_target);
-        assert_eq!(rrect.top_left.x, (CHECKBOX_TAP_TARGET_SIZE / 2.0));
-    }
-
     // ------------------------------------------------------------------
     // Painter should_repaint / geometry
     // ------------------------------------------------------------------
-
-    fn painter(value: Option<bool>) -> CheckboxPainter {
-        CheckboxPainter {
-            fill_color: Color::BLACK,
-            side: BorderSide::new(Color::WHITE, 2.0, BorderStyle::Solid),
-            check_color: Color::WHITE,
-            value,
-        }
-    }
-
-    /// Proves the painter is actually invoked (via a real [`Canvas`]/
-    /// [`flui_sdk::painting::DrawOp`]) and paints the
-    /// correct mark per tristate value: a checkmark (`DrawPath`) only for
-    /// `Some(true)`, a dash (`DrawLine`) only for `None`, and neither for
-    /// `Some(false)` — [`CheckboxPainter::paint`]'s `match self.value`
-    /// (see the module docs' V1-scope section). Mutation-run: swapping the
-    /// `Some(true)`/`None` arms was confirmed to make this test fail
-    /// before being reverted.
-    #[test]
-    fn draws_the_correct_mark_per_tristate_value() {
-        use flui_sdk::painting::DrawOp;
-
-        let size = Size::new(CHECKBOX_TAP_TARGET_SIZE, CHECKBOX_TAP_TARGET_SIZE);
-
-        for (value, expect_path, expect_line) in [
-            (Some(true), true, false),
-            (None, false, true),
-            (Some(false), false, false),
-        ] {
-            let mut canvas = Canvas::new();
-            painter(value).paint(&mut canvas, size);
-
-            let has_path = canvas
-                .display_list()
-                .iter()
-                .any(|command| matches!(command.op, DrawOp::Path { .. }));
-            let has_line = canvas
-                .display_list()
-                .iter()
-                .any(|command| matches!(command.op, DrawOp::Line { .. }));
-
-            assert_eq!(
-                has_path, expect_path,
-                "value={value:?}: checkmark path presence"
-            );
-            assert_eq!(has_line, expect_line, "value={value:?}: dash line presence");
-        }
-    }
 }

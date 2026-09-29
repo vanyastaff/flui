@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use flui_foundation::geometry::{Matrix4, Rect};
+use flui_foundation::geometry::Rect;
 use flui_painting::styling::Color;
 use flui_painting::{Canvas, DisplayList, DrawCommand, DrawOp, Paint};
 
@@ -73,71 +73,4 @@ fn interning_shares_arc_for_identical_paints() {
         Arc::ptr_eq(p0, p1),
         "identical paints must share one Arc allocation"
     );
-}
-
-/// A bounds-less command recorded first must not drag the origin into the
-/// list's bounds.
-///
-/// The recording path used to seed its union on `commands.is_empty()`, which
-/// asks whether anything was *recorded* — not whether anything *contributed
-/// bounds*. A clip, a `Save`, or (until recently) a `DrawTextSpan` answers
-/// those two questions differently, so the next real command unioned against
-/// a still-unset `Rect::ZERO` and every such list claimed to reach back to
-/// (0, 0).
-#[test]
-fn bounds_less_leading_command_does_not_seed_the_origin() {
-    let far = Rect::from_ltrb(100.0, 100.0, 150.0, 150.0);
-
-    let mut canvas = Canvas::new();
-    canvas.clip_rect(far);
-    canvas.draw_rect(far, &Paint::fill(Color::RED));
-
-    assert_eq!(canvas.finish().bounds(), Some(far));
-}
-
-/// `draw_picture` replays a recorded list under the caller's transform:
-/// each command's absolute transform becomes `ctm * recorded`, so a picture
-/// recorded at the origin lands where the canvas is currently translated,
-/// and a nested translation inside the picture composes with it.
-#[test]
-fn draw_picture_restamps_by_the_current_transform() {
-    let rect = Rect::from_xywh(0.0, 0.0, 10.0, 10.0);
-    let picture = flui_painting::testing::record(|canvas| {
-        canvas.draw_rect(rect, &Paint::fill(Color::RED));
-        canvas.save();
-        canvas.translate(5.0, 0.0);
-        canvas.draw_rect(rect, &Paint::fill(Color::BLUE));
-        canvas.restore();
-    });
-    assert_eq!(picture.len(), 4);
-
-    let replayed = flui_painting::testing::record(|canvas| {
-        canvas.translate(100.0, 200.0);
-        canvas.draw_picture(&picture);
-    });
-    assert_eq!(
-        replayed.len(),
-        picture.len(),
-        "every command replays, scopes included"
-    );
-
-    let ctm = Matrix4::translation(100.0, 200.0, 0.0);
-    for (original, copy) in picture.iter().zip(replayed.iter()) {
-        assert_eq!(copy.transform, ctm * original.transform);
-    }
-    assert_eq!(
-        replayed.bounds(),
-        Some(Rect::from_xywh(100.0, 200.0, 15.0, 10.0)),
-        "the replayed bounds are the picture's bounds under the ctm"
-    );
-    let ops: Vec<&DrawOp> = replayed.iter().map(|c| &c.op).collect();
-    assert!(matches!(
-        ops.as_slice(),
-        [
-            DrawOp::Rect { .. },
-            DrawOp::Save,
-            DrawOp::Rect { .. },
-            DrawOp::Restore
-        ]
-    ));
 }

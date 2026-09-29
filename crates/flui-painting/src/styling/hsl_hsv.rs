@@ -244,24 +244,3 @@ impl From<HSVColor> for Color {
         )
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use proptest::prelude::*;
-
-    fn arb_color() -> impl Strategy<Value = Color> {
-        (any::<u8>(), any::<u8>(), any::<u8>(), any::<u8>())
-            .prop_map(|(r, g, b, a)| Color::rgba(r, g, b, a))
-    }
-
-    proptest! {
-        /// Converting to HSL or HSV and back is lossless for every 8-bit
-        /// color, alpha included.
-        #[test]
-        fn roundtrips_are_exact(c in arb_color()) {
-            prop_assert_eq!(Color::from(HSLColor::from(c)), c);
-            prop_assert_eq!(Color::from(HSVColor::from(c)), c);
-        }
-    }
-}

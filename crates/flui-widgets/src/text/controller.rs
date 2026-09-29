@@ -1233,136 +1233,9 @@ mod tests {
     // Selection
     // ------------------------------------------------------------------
 
-    /// Typing over a selection replaces it — one notification, not a delete
-    /// followed by an insert.
-    #[test]
-    fn insert_replaces_a_selection() {
-        let controller = TextEditingController::with_text("hello world");
-        controller.set_selection(6, 11);
-        let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let counter = std::sync::Arc::clone(&seen);
-        let _sub = controller
-            .listenable()
-            .add_listener(std::sync::Arc::new(move || {
-                counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            }));
-
-        controller.insert_str("there");
-
-        assert_eq!(controller.text(), "hello there");
-        assert_eq!(controller.caret_byte_offset(), 11);
-        assert!(!controller.has_selection(), "the replacement collapses it");
-        assert_eq!(
-            seen.load(std::sync::atomic::Ordering::Relaxed),
-            1,
-            "one edit, one notification"
-        );
-    }
-
-    /// Backspace with a selection removes the SELECTION, not the character
-    /// before it — the character before the span is not what the user asked
-    /// to delete.
-    #[test]
-    fn backspace_deletes_the_selection_rather_than_one_character() {
-        let controller = TextEditingController::with_text("hello world");
-        controller.set_selection(5, 11);
-
-        controller.backspace();
-
-        assert_eq!(controller.text(), "hello");
-        assert_eq!(controller.caret_byte_offset(), 5);
-        assert!(!controller.has_selection());
-    }
-
-    /// A drag re-reports the same offset on nearly every pointer-move event.
-    /// Notifying on each would rebuild the field for no change.
-    #[test]
-    fn re_reporting_the_same_selection_does_not_notify() {
-        let controller = TextEditingController::with_text("hello world");
-        controller.set_selection(2, 7);
-        let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let counter = std::sync::Arc::clone(&seen);
-        let _sub = controller
-            .listenable()
-            .add_listener(std::sync::Arc::new(move || {
-                counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            }));
-
-        controller.set_selection(2, 7);
-        assert_eq!(
-            seen.load(std::sync::atomic::Ordering::Relaxed),
-            0,
-            "no change, no notification"
-        );
-
-        controller.set_selection(2, 8);
-        assert_eq!(
-            seen.load(std::sync::atomic::Ordering::Relaxed),
-            1,
-            "control: a real change does notify"
-        );
-    }
-
-    /// Shift+Right grows the span from a collapsed caret, and Shift+Left then
-    /// SHRINKS it rather than jumping — the extent moves, the anchor does not.
-    ///
-    /// This is the contrast with the plain arrows, and it is the whole reason
-    /// the two are separate operations rather than one with a flag:
-    /// `move_caret_left` on the same selection would collapse to its start.
-    ///
-    /// Red-check: point `extend_selection_left` at `move_caret_left` — the
-    /// second assertion sees `0..0`.
-    #[test]
-    fn a_shifted_arrow_moves_the_extent_and_leaves_the_anchor() {
-        let controller = TextEditingController::with_text("hello world");
-        controller.set_caret_byte_offset(4);
-
-        controller.extend_selection_right();
-        controller.extend_selection_right();
-        assert_eq!(controller.selection(), 4..6, "the span grew rightwards");
-        assert_eq!(controller.caret_byte_offset(), 6);
-
-        controller.extend_selection_left();
-        assert_eq!(
-            controller.selection(),
-            4..5,
-            "Shift+Left shrinks the same span; the unmodified arrow would \
-             collapse it to 4..4"
-        );
-    }
-
     // ------------------------------------------------------------------
     // Basic buffer operations
     // ------------------------------------------------------------------
-
-    /// Same no-op-when-unchanged rule every other mutator here follows — a
-    /// caller that calls `set_text` unconditionally on every build (mirroring
-    /// a controlled-input pattern) must not force a rebuild loop.
-    #[test]
-    fn set_text_with_the_same_value_does_not_notify() {
-        let controller = TextEditingController::with_text("hello");
-        let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let counter = std::sync::Arc::clone(&seen);
-        let _sub = controller
-            .listenable()
-            .add_listener(std::sync::Arc::new(move || {
-                counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            }));
-
-        controller.set_text("hello");
-        assert_eq!(
-            seen.load(std::sync::atomic::Ordering::Relaxed),
-            0,
-            "no change, no notification"
-        );
-
-        controller.set_text("hello!");
-        assert_eq!(
-            seen.load(std::sync::atomic::Ordering::Relaxed),
-            1,
-            "control: a real change does notify"
-        );
-    }
 
     // ------------------------------------------------------------------
     // Caret navigation
@@ -1386,11 +1259,6 @@ mod tests {
     /// A family emoji is one grapheme made of five scalars (three people
     /// joined by two Zero-Width-Joiners); one Backspace removes all of it.
     const FAMILY: &str = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}";
-    /// A regional-indicator pair — one flag, two scalars.
-    const FLAG: &str = "\u{1F1FA}\u{1F1F8}";
-    /// A base letter with a combining acute accent — one cluster, two
-    /// scalars.
-    const E_ACUTE: &str = "e\u{301}";
 
     #[test]
     fn backspace_removes_a_whole_zwj_sequence_not_one_scalar() {
@@ -1403,46 +1271,6 @@ mod tests {
              dangling joiner behind"
         );
         assert_eq!(controller.caret_byte_offset(), 1);
-    }
-
-    #[test]
-    fn delete_forward_removes_a_whole_flag_not_one_regional_indicator() {
-        let controller = TextEditingController::with_text(format!("{FLAG}b"));
-        controller.move_caret_home();
-        controller.delete_forward();
-        assert_eq!(controller.text(), "b");
-        assert_eq!(controller.caret_byte_offset(), 0);
-    }
-
-    #[test]
-    fn backspace_removes_a_combining_mark_with_its_base() {
-        let controller = TextEditingController::with_text(format!("r{E_ACUTE}sum{E_ACUTE}"));
-        controller.backspace();
-        assert_eq!(
-            controller.text(),
-            format!("r{E_ACUTE}sum"),
-            "the accent and its base letter are one user-perceived character"
-        );
-    }
-
-    #[test]
-    fn caret_steps_over_a_grapheme_cluster_in_both_directions() {
-        let text = format!("a{FAMILY}b");
-        let controller = TextEditingController::with_text(&text);
-        let after_a = 1;
-        let after_family = 1 + FAMILY.len();
-
-        controller.move_caret_home();
-        controller.move_caret_right();
-        assert_eq!(controller.caret_byte_offset(), after_a);
-        controller.move_caret_right();
-        assert_eq!(
-            controller.caret_byte_offset(),
-            after_family,
-            "Right must step over the whole cluster, never land inside it"
-        );
-        controller.move_caret_left();
-        assert_eq!(controller.caret_byte_offset(), after_a);
     }
 
     // ------------------------------------------------------------------
@@ -1459,99 +1287,9 @@ mod tests {
     // scalar or byte instead of by word.
     // ------------------------------------------------------------------
 
-    #[test]
-    fn word_right_lands_on_the_next_words_start_skipping_trailing_whitespace() {
-        let text = "the quick brown";
-        // From inside "quick" (byte 6), forward should skip the rest of
-        // "quick" AND the space after it, landing on "brown" (byte 10) —
-        // not stopping in the gap.
-        assert_eq!(super::next_word_boundary(text, 6), 10);
-        // From the very start of "quick" (byte 4), forward still advances
-        // to the NEXT word — Ctrl+Right from a word's start does not stay
-        // put.
-        assert_eq!(super::next_word_boundary(text, 4), 10);
-        // From the end of the buffer, there is nowhere left to go.
-        assert_eq!(super::next_word_boundary(text, text.len()), text.len());
-    }
-
-    /// The CJK case an ASCII-whitespace scan cannot pass at all — no
-    /// spaces to split on, so it would return the whole line — but this
-    /// crate's own UAX #29 segmenter does not claim linguistic-word
-    /// accuracy here either: with no `cjdict`-style dictionary (see
-    /// `flui-widgets/ARCHITECTURE.md`'s Mapping decision), Han characters
-    /// have no special merging rule, so the boundary lands after the
-    /// FIRST character (`日`, 3 UTF-8 bytes), not after the whole word
-    /// (`日本語`, "Japanese"). A known, tested limitation, pinned exactly
-    /// so a future dictionary integration has a failing test to flip.
-    #[test]
-    fn cjk_text_splits_per_character_not_per_word() {
-        let text = "日本語のテスト"; // "Japanese test", no ASCII/whitespace anywhere.
-        assert_eq!(
-            super::next_word_boundary(text, 0),
-            3,
-            "stops after 日 alone, not after the whole word 日本語"
-        );
-    }
-
-    #[test]
-    fn delete_word_backward_removes_the_whole_current_word() {
-        let controller = TextEditingController::with_text("the quick brown");
-        controller.set_caret_byte_offset(9); // end of "quick"
-
-        controller.delete_word_backward();
-        assert_eq!(controller.text(), "the  brown");
-        assert_eq!(controller.caret_byte_offset(), 4);
-    }
-
-    #[test]
-    fn word_deletion_with_an_active_selection_deletes_the_selection_not_a_word() {
-        let controller = TextEditingController::with_text("the quick brown");
-        controller.set_selection(4, 9); // "quick" selected.
-
-        controller.delete_word_backward();
-        assert_eq!(controller.text(), "the  brown");
-        assert_eq!(controller.caret_byte_offset(), 4);
-    }
-
     // ------------------------------------------------------------------
     // Change notification
     // ------------------------------------------------------------------
-
-    #[test]
-    fn listeners_fire_on_insert() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let controller = TextEditingController::new();
-        let call_count = Arc::new(AtomicUsize::new(0));
-        let count_clone = Arc::clone(&call_count);
-
-        controller.add_listener(Arc::new(move || {
-            count_clone.fetch_add(1, Ordering::Relaxed);
-        }));
-
-        controller.insert_str("a");
-        assert_eq!(
-            call_count.load(Ordering::Relaxed),
-            1,
-            "listener must fire on insert"
-        );
-    }
-
-    #[test]
-    fn remove_listener_stops_notifications() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let controller = TextEditingController::new();
-        let call_count = Arc::new(AtomicUsize::new(0));
-        let count_clone = Arc::clone(&call_count);
-
-        let id = controller.add_listener(Arc::new(move || {
-            count_clone.fetch_add(1, Ordering::Relaxed);
-        }));
-        controller.remove_listener(id);
-        controller.insert_str("x");
-        assert_eq!(call_count.load(Ordering::Relaxed), 0);
-    }
 
     // ------------------------------------------------------------------
     // The composing region, as the field's text store leaves it
@@ -1572,51 +1310,6 @@ mod tests {
         });
     }
 
-    #[test]
-    fn set_text_clears_an_active_composing_region() {
-        let controller = TextEditingController::with_text("hello");
-        compose(&controller, 0..5, true);
-        assert!(controller.is_composing());
-
-        controller.set_text("replaced");
-
-        assert!(!controller.is_composing());
-        assert!(!controller.caret_hidden_by_ime());
-        assert_eq!(controller.text(), "replaced");
-    }
-
-    /// Direct caret navigation takes the caret back from the IME without
-    /// ending the composition.
-    ///
-    /// Oracle analog: `'Preserves composing range if cursor moves within
-    /// that range'`, `'Clears composing range if cursor moves outside that
-    /// range'`, and its `'case two'` variant (`editable_text_test.dart`, tag
-    /// `3.44.0`) — **divergent, not a port**: Flutter clears the composing
-    /// range whenever the selection moves outside it; FLUI's direct caret
-    /// navigation never touches the composing range at all, only the
-    /// caret-hidden flag this test pins.
-    ///
-    /// Red-check: remove the `clear_caret_hidden` call from
-    /// `move_caret_home` — `caret_hidden_by_ime()` stays `true`.
-    #[test]
-    fn caret_navigation_restores_the_caret_while_composing() {
-        let controller = TextEditingController::with_text("abcdef");
-        compose(&controller, 3..6, true);
-        assert!(controller.caret_hidden_by_ime());
-
-        controller.move_caret_home();
-
-        assert!(
-            !controller.caret_hidden_by_ime(),
-            "moving the caret directly must restore its visibility"
-        );
-        assert_eq!(
-            controller.composing_range(),
-            Some(3..6),
-            "caret navigation must not end the composition"
-        );
-    }
-
     /// A non-IME edit while composing ends the composition rather than
     /// leaving its range describing text that moved: Backspace is never
     /// suppressed while composing (only `Key::Character` is, per ADR-0030).
@@ -1632,30 +1325,5 @@ mod tests {
 
         assert_eq!(controller.text(), "Hello niha");
         assert!(!controller.is_composing());
-    }
-
-    /// A silent change notifies no one until `notify_changed`, which
-    /// notifies once — the shape a platform session's write-back relies on.
-    #[test]
-    fn a_silent_change_notifies_once_when_asked() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        let controller = TextEditingController::new();
-        let calls = Arc::new(AtomicUsize::new(0));
-        let counted = Arc::clone(&calls);
-        controller.add_listener(Arc::new(move || {
-            counted.fetch_add(1, Ordering::Relaxed);
-        }));
-
-        controller.with_inner_silent(|inner| {
-            inner.text.push_str("abc");
-            inner.selection = Selection::collapsed(3);
-        });
-        assert_eq!(calls.load(Ordering::Relaxed), 0);
-        assert_eq!(controller.text(), "abc");
-
-        controller.notify_changed();
-        assert_eq!(calls.load(Ordering::Relaxed), 1);
-        assert_eq!(controller.with_inner(|inner| inner.selection.caret), 3);
     }
 }

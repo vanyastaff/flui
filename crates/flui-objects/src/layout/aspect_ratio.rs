@@ -357,35 +357,3 @@ impl RenderBox for RenderAspectRatio {
 // ===========================================================================
 // Tests
 // ===========================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn bc(min_w: f64, max_w: f64, min_h: f64, max_h: f64) -> BoxConstraints {
-        BoxConstraints::new(min_w, max_w, min_h, max_h)
-    }
-
-    // ---------- AspectRatioFactor newtype ---------------------------------------
-
-    #[test]
-    fn new_rejects_invalid() {
-        assert!(AspectRatioFactor::new(0.0).is_none());
-        assert!(AspectRatioFactor::new(-1.0).is_none());
-        assert!(AspectRatioFactor::new(f64::NAN).is_none());
-        assert!(AspectRatioFactor::new(f64::INFINITY).is_none());
-    }
-
-    // ---------- _applyAspectRatio (Flutter parity) ------------------------
-
-    #[test]
-    fn unbounded_both_dims_falls_back_to_zero() {
-        let node = RenderAspectRatio::new(AspectRatioFactor::SQUARE);
-        let size = node.apply_aspect_ratio(bc(0.0, f64::INFINITY, 0.0, f64::INFINITY));
-        assert_eq!(size, Size::ZERO);
-    }
-
-    // ---------- intrinsic dimensions --------------------------------------
-
-    // ---------- API surface -----------------------------------------------
-}

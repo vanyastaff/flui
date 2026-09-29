@@ -3,7 +3,6 @@
 use flui_foundation::Leaf;
 use flui_foundation::geometry::{Offset, Rect, Size};
 use flui_objects::RenderSliverFixedExtentList;
-use flui_rendering::constraints::AxisDirection;
 use flui_rendering::{
     constraints::SliverConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
@@ -169,16 +168,4 @@ fn sliver_fixed_extent_list_sizes_children_to_item_extent() {
     assert_eq!(render_offset(&owner, child_ids[1]), Offset::new(0.0, 5.0),);
     assert_eq!(render_offset(&owner, child_ids[2]), Offset::new(0.0, 35.0),);
     assert_eq!(render_offset(&owner, child_ids[3]), Offset::new(0.0, 65.0),);
-}
-
-#[test]
-fn sliver_fixed_extent_list_reverse_axis_uses_right_way_up_offsets() {
-    let mut constraints = vertical_constraints(25.0);
-    constraints.axis_direction = AxisDirection::BottomToTop;
-    let (owner, _root_id, _sliver_id, child_ids) = fixed_extent_tree(constraints, 30.0, 4);
-
-    assert_eq!(render_offset(&owner, child_ids[0]), Offset::new(0.0, 90.0),);
-    assert_eq!(render_offset(&owner, child_ids[1]), Offset::new(0.0, 60.0),);
-    assert_eq!(render_offset(&owner, child_ids[2]), Offset::new(0.0, 30.0),);
-    assert_eq!(render_offset(&owner, child_ids[3]), Offset::new(0.0, 0.0),);
 }

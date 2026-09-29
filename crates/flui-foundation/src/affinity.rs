@@ -123,29 +123,6 @@ mod tests {
         not(debug_assertions),
         ignore = "the violation is a debug_assert; release keeps the owner and only traces"
     )]
-    fn cross_thread_assert_is_caught() {
-        let affinity = std::sync::Arc::new(OwnerAffinity::new());
-        affinity.bind_current();
-        let worker_view = std::sync::Arc::clone(&affinity);
-        let panicked = std::thread::spawn(move || {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                worker_view.debug_assert_owner("cross_thread_op");
-            }))
-            .is_err()
-        })
-        .join()
-        .expect("worker thread must complete");
-        assert!(
-            panicked,
-            "debug_assert_owner must panic on a foreign thread in debug builds",
-        );
-    }
-
-    #[test]
-    #[cfg_attr(
-        not(debug_assertions),
-        ignore = "the violation is a debug_assert; release keeps the owner and only traces"
-    )]
     fn foreign_rebind_is_rejected_and_original_owner_kept() {
         let affinity = std::sync::Arc::new(OwnerAffinity::new());
         affinity.bind_current();

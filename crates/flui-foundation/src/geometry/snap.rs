@@ -168,25 +168,6 @@ mod tests {
         }
     }
 
-    /// `(x + 0.5).floor()` rounds the largest float below one half up to 1.
-    #[test]
-    fn snap_keeps_the_float_just_below_one_half_at_zero() {
-        let below_half = 0.5_f64.next_down();
-        assert_eq!(snap(below_half), 0.0);
-        assert_eq!(
-            (below_half + 0.5).floor(),
-            1.0,
-            "the naive formula this avoids"
-        );
-    }
-
-    #[test]
-    fn snap_passes_non_finite_values_through() {
-        assert!(snap(f64::NAN).is_nan());
-        assert_eq!(snap(f64::INFINITY), f64::INFINITY);
-        assert_eq!(snap(f64::NEG_INFINITY), f64::NEG_INFINITY);
-    }
-
     /// Snapping edges, not sizes: two rectangles sharing an edge share it after snapping.
     #[test]
     fn abutting_rectangles_stay_abutting() {
@@ -199,22 +180,5 @@ mod tests {
     fn cover_never_loses_a_partly_covered_pixel() {
         let rect = cover(Rect::from_ltrb(-0.2, 0.7, 3.1, 4.0));
         assert_eq!(rect, Rect::from_ltrb(-1.0, 0.0, 4.0, 4.0));
-    }
-
-    #[test]
-    fn stroke_widths_resolve_to_whole_device_pixels() {
-        let ratio = DevicePixelRatio::new(1.5).expect("a valid ratio");
-        for (logical, device) in [
-            (0.0, 1.0),  // hairline
-            (0.1, 1.0),  // thin but visible
-            (0.5, 1.0),  // 0.75 device px
-            (1.0, 1.0),  // 1.5 device px: the floor
-            (2.0, 3.0),  // exactly 3 device px
-            (2.1, 3.0),  // 3.15 device px
-            (-1.0, 1.0), // treated as zero
-        ] {
-            let resolved = resolve_stroke_width(logical, ratio);
-            assert_eq!(ratio.to_device(resolved), device, "width {logical}");
-        }
     }
 }

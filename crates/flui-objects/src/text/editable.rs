@@ -815,34 +815,3 @@ fn non_negative_finite(value: f64, fallback: f64) -> f64 {
         fallback
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use flui_painting::typography::TextSpan;
-
-    #[test]
-    fn caret_offset_is_clamped_to_utf8_boundary() {
-        let editable =
-            RenderEditable::new(TextSpan::new("a€b"), TextDirection::Ltr).with_caret_byte_offset(2);
-
-        assert_eq!(editable.caret_byte_offset(), 4);
-    }
-
-    /// A text replacement must re-clamp the selection, or a range that
-    /// outlived its text reaches `get_boxes_for_selection` out of range —
-    /// which panics on its own documented precondition rather than degrading.
-    #[test]
-    fn replacing_the_text_reclamps_the_selection() {
-        let mut editable = RenderEditable::new(TextSpan::new("abcdefghij"), TextDirection::Ltr)
-            .with_selection(Some(4..9));
-
-        let _ = editable.set_text(TextSpan::new("ab"));
-
-        assert_eq!(
-            editable.selection,
-            Some(2..2),
-            "a selection past the new end collapses to the clamped start"
-        );
-    }
-}

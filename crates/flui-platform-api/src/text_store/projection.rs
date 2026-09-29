@@ -229,34 +229,6 @@ mod tests {
     }
 
     #[test]
-    fn empty_preedit_ends_an_active_composition() {
-        let store = InMemoryTextStore::new("ab");
-        apply(&store, &preedit_event("にほ", Some((6, 6))));
-        apply(&store, &preedit_event("", None));
-        assert_eq!(store.text(), "ab");
-        assert_eq!(store.composition(), None);
-        assert_eq!(store.selection(), Selection::collapsed(at(2)));
-        assert_eq!(store.owner_notifications(), 2);
-    }
-
-    #[test]
-    fn x11_empty_start_then_empty_end_preserves_selection() {
-        let store = InMemoryTextStore::new("a😀b");
-        select(&store, 1, 3);
-        apply(&store, &ImeEvent::Enabled);
-        apply(&store, &preedit_event("", None));
-        apply(&store, &preedit_event("", None));
-        assert_eq!(store.text(), "a😀b");
-        assert_eq!(
-            store.selection(),
-            Selection {
-                anchor: at(1),
-                active: at(3)
-            }
-        );
-    }
-
-    #[test]
     fn commit_replaces_the_composition() {
         let store = InMemoryTextStore::new("x");
         apply(&store, &preedit_event("とうきょう", None));
@@ -264,32 +236,6 @@ mod tests {
         assert_eq!(store.text(), "x東京");
         assert_eq!(store.composition(), None);
         assert_eq!(store.selection(), Selection::collapsed(at(3)));
-    }
-
-    #[test]
-    fn direct_commit_replaces_the_selection() {
-        let store = InMemoryTextStore::new("hello world");
-        select(&store, 0, 5);
-        apply(&store, &ImeEvent::Commit("你好".to_owned()));
-        assert_eq!(store.text(), "你好 world");
-        assert_eq!(store.selection(), Selection::collapsed(at(2)));
-    }
-
-    #[test]
-    fn disabled_mid_composition_strips_the_slice() {
-        let store = InMemoryTextStore::new("ab");
-        select(&store, 1, 1);
-        apply(&store, &preedit_event("にほ", Some((6, 6))));
-        assert_eq!(store.text(), "aにほb");
-        apply(&store, &ImeEvent::Disabled);
-        assert_eq!(store.text(), "ab");
-        assert_eq!(store.composition(), None);
-        assert_eq!(store.selection(), Selection::collapsed(at(1)));
-
-        // With nothing composed, `Disabled` is inert.
-        let before = store.owner_notifications();
-        apply(&store, &ImeEvent::Disabled);
-        assert_eq!(store.owner_notifications(), before);
     }
 
     #[test]

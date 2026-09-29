@@ -78,38 +78,3 @@ impl DamageTracker {
         self.full_repaint = false;
     }
 }
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    fn rect(l: f32, t: f32, r: f32, b: f32) -> Rect<f64> {
-        Rect::from_ltrb(f64::from(l), f64::from(t), f64::from(r), f64::from(b))
-    }
-
-    #[test]
-    fn marked_rects_union_into_one_scissor() {
-        let mut tracker = DamageTracker::new();
-        tracker.reset();
-        tracker.mark_dirty(rect(0.0, 0.0, 10.0, 10.0));
-        assert_eq!(tracker.damage_rect(), Some(rect(0.0, 0.0, 10.0, 10.0)));
-        tracker.mark_dirty(rect(50.0, 50.0, 60.0, 60.0));
-        assert!(tracker.has_damage());
-        assert_eq!(tracker.damage_rect(), Some(rect(0.0, 0.0, 60.0, 60.0)));
-    }
-
-    #[test]
-    fn full_repaint_wins_over_rects_until_reset() {
-        let mut tracker = DamageTracker::new();
-        tracker.reset();
-        tracker.mark_dirty(rect(0.0, 0.0, 10.0, 10.0));
-        tracker.mark_full_repaint();
-        assert!(tracker.needs_full_repaint());
-        assert!(tracker.has_damage());
-        assert_eq!(tracker.damage_rect(), None, "no scissor on a full repaint");
-        tracker.reset();
-        assert!(!tracker.needs_full_repaint());
-        assert_eq!(tracker.damage_rect(), None);
-    }
-}

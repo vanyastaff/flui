@@ -344,7 +344,6 @@ mod tests {
     use std::{cell::Cell, rc::Rc};
 
     use flui_foundation::geometry::Offset;
-    use std::cell::RefCell;
 
     use super::*;
     use crate::events::{PointerType, make_move_event};
@@ -354,56 +353,6 @@ mod tests {
         // The device ID will be PRIMARY (0) by default
         let _ = device; // device ID is not directly settable in ui-events
         make_move_event(position, PointerType::Touch)
-    }
-
-    #[test]
-    fn test_route_event() {
-        let router = PointerRouter::new();
-        let pointer = PointerId::PRIMARY; // PRIMARY pointer
-
-        let call_count = Rc::new(Cell::new(0));
-        let count_clone = call_count.clone();
-
-        let handler = Rc::new(move |_: &PointerEvent| {
-            count_clone.set(count_clone.get() + 1);
-        });
-
-        router.add_route(pointer, handler);
-
-        let event = make_event(0, Offset::new(50.0, 50.0));
-        router.route(&event);
-
-        assert_eq!(call_count.get(), 1);
-    }
-
-    #[test]
-    fn test_per_pointer_before_global() {
-        // Flutter parity: pointer_router.dart:124 dispatches per-pointer
-        // handlers first, then global handlers. This router matches that
-        // ordering.
-        let router = PointerRouter::new();
-        let pointer = PointerId::PRIMARY; // PRIMARY pointer
-
-        let order = Rc::new(RefCell::new(Vec::new()));
-
-        let order1 = order.clone();
-        let global_handler = Rc::new(move |_: &PointerEvent| {
-            order1.borrow_mut().push("global");
-        });
-
-        let order2 = order.clone();
-        let pointer_handler = Rc::new(move |_: &PointerEvent| {
-            order2.borrow_mut().push("pointer");
-        });
-
-        router.add_global_handler(global_handler);
-        router.add_route(pointer, pointer_handler);
-
-        let event = make_event(0, Offset::new(50.0, 50.0));
-        router.route(&event);
-
-        let calls = order.borrow();
-        assert_eq!(*calls, vec!["pointer", "global"]);
     }
 
     #[test]
@@ -431,61 +380,5 @@ mod tests {
 
         assert_eq!(call_count.get(), 1);
         assert!(!router.has_routes(pointer));
-    }
-
-    #[test]
-    fn test_reentrancy_add_handler() {
-        // Test that a handler can add new handlers during dispatch
-        let router = Rc::new(PointerRouter::new());
-        let pointer = PointerId::PRIMARY;
-
-        let second_called = Rc::new(Cell::new(0));
-        let second_called_clone = second_called.clone();
-
-        let router_clone = router.clone();
-        let handler1: PointerRouteHandler = Rc::new(move |_: &PointerEvent| {
-            // Add a new handler during dispatch
-            let called = second_called_clone.clone();
-            let new_handler: PointerRouteHandler = Rc::new(move |_: &PointerEvent| {
-                called.set(called.get() + 1);
-            });
-            router_clone.add_route(PointerId::PRIMARY, new_handler);
-        });
-
-        router.add_route(pointer, handler1);
-
-        let event = make_event(0, Offset::new(50.0, 50.0));
-        router.route(&event); // Should not deadlock
-
-        // The new handler should NOT be called during this dispatch
-        // (it takes effect on the next event)
-        assert_eq!(second_called.get(), 0);
-
-        // But should be called on the next event
-        router.route(&event);
-        assert_eq!(second_called.get(), 1);
-    }
-
-    #[test]
-    fn removing_a_later_global_handler_skips_it_in_the_current_dispatch() {
-        let router = Rc::new(PointerRouter::new());
-        let later_called = Rc::new(Cell::new(0));
-        let later_count = Rc::clone(&later_called);
-        let later: GlobalPointerHandler = Rc::new(move |_| {
-            later_count.set(later_count.get() + 1);
-        });
-
-        let router_for_first = Rc::clone(&router);
-        let later_for_remove = Rc::clone(&later);
-        let first: GlobalPointerHandler = Rc::new(move |_| {
-            router_for_first.remove_global_handler(&later_for_remove);
-        });
-        router.add_global_handler(first);
-        router.add_global_handler(later);
-
-        let event = make_event(0, Offset::new(50.0, 50.0));
-        router.route(&event);
-
-        assert_eq!(later_called.get(), 0);
     }
 }

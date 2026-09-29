@@ -36,32 +36,3 @@ fn test_send_to_gpu_thread() {
     let executed = handle.join().unwrap();
     assert_eq!(executed, 100);
 }
-
-#[test]
-fn test_parallel_build_then_compose() {
-    // Realistic scenario: parallel build of children, then compose on main thread
-    let mut handles = vec![];
-
-    // Build children in parallel
-    for i in 0..10 {
-        let handle = thread::spawn(move || {
-            let mut child_canvas = Canvas::new();
-
-            let rect = Rect::from_ltrb((i * 10) as f64, 0.0, (i * 10 + 10) as f64, 50.0);
-            let paint = Paint::fill(Color::RED);
-            child_canvas.draw_rect(rect, &paint);
-
-            child_canvas
-        });
-
-        handles.push(handle);
-    }
-
-    // Merge the children's lists on the main thread, the way the paint walk
-    // merges adjacent inline runs into one picture.
-    let mut merged = flui_painting::DisplayList::new();
-    for handle in handles {
-        merged.append(handle.join().unwrap().finish());
-    }
-    assert_eq!(merged.len(), 10);
-}

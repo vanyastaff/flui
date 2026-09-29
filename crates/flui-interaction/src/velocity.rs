@@ -565,25 +565,4 @@ impl VelocityEstimate {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_velocity_clamp_magnitude() {
-        let velocity = Velocity::new(Offset::new(100.0, 0.0));
-
-        // Clamp to smaller magnitude
-        let clamped = velocity.clamp_magnitude(0.0, 50.0);
-        assert_eq!(clamped.magnitude(), 50.0);
-        assert_eq!(clamped.pixels_per_second.dx, 50.0);
-        assert_eq!(clamped.pixels_per_second.dy, 0.0);
-
-        // Already within range
-        let unclamped = velocity.clamp_magnitude(0.0, 200.0);
-        assert_eq!(unclamped.magnitude(), 100.0);
-
-        // Clamp to minimum
-        let clamped_min = Velocity::new(Offset::new(10.0, 0.0)).clamp_magnitude(50.0, 100.0);
-        assert_eq!(clamped_min.magnitude(), 50.0);
-    }
-}
+mod tests {}

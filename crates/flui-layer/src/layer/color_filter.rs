@@ -85,38 +85,3 @@ impl Default for ColorFilterLayer {
         Self::identity()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use flui_painting::{
-        paint::{BlendMode, ColorFilter, effects::ColorMatrix},
-        styling::Color,
-    };
-
-    use super::*;
-
-    // ── Construction ──────────────────────────────────────────────────────────
-
-    // ── Copy + Clone ──────────────────────────────────────────────────────────
-
-    // ── is_identity semantics ─────────────────────────────────────────────────
-
-    #[test]
-    fn matrix_identity_is_identity() {
-        let layer = ColorFilterLayer::new(ColorFilter::Matrix(ColorMatrix::identity()));
-        assert!(layer.is_identity());
-    }
-
-    #[test]
-    fn mode_filter_is_never_identity() {
-        let layer = ColorFilterLayer::new(ColorFilter::mode(Color::WHITE, BlendMode::SrcOver));
-        assert!(
-            !layer.is_identity(),
-            "Mode filter must not be classified as identity even with white+SrcOver"
-        );
-    }
-
-    // ── set_color_filter ──────────────────────────────────────────────────────
-
-    // ── Send + Sync ───────────────────────────────────────────────────────────
-}

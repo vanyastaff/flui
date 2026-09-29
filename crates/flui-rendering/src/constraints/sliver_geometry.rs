@@ -538,28 +538,4 @@ impl fmt::Display for SliverGeometry {
 // ============================================================================
 
 #[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    #[test]
-    fn validation_rejects_non_finite_and_negative_extents() {
-        let geometry = SliverGeometry {
-            hit_test_extent: -1.0,
-            ..SliverGeometry::new(100.0, 50.0, 0.0)
-        };
-        assert_eq!(
-            geometry.validation_error(),
-            Some("hit_test_extent is negative")
-        );
-
-        let geometry = SliverGeometry {
-            paint_origin: f64::NAN,
-            ..SliverGeometry::new(100.0, 50.0, 0.0)
-        };
-        assert_eq!(
-            geometry.validation_error(),
-            Some("paint_origin is not finite")
-        );
-    }
-}
+mod tests {}

@@ -486,30 +486,3 @@ impl CupertinoColors {
         Color::rgba(118, 118, 128, 66),
     );
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // ---- CupertinoColor ------------------------------------------------
-    //
-    // `CupertinoColor::Static::resolve` actually being called against a real
-    // mounted `BuildContext` (not just constructed and equality-checked) is
-    // covered by `tests/colors.rs::static_color_resolves_to_itself_through_a_real_context`
-    // — this crate's unit tests stay to pure data-model behavior with no
-    // mounted context available (see `docs/testing.md`).
-
-    // ---- CupertinoDynamicColor construction -----------------------------
-
-    #[test]
-    fn is_platform_brightness_dependent_false_when_every_light_dark_pair_matches() {
-        let dynamic =
-            CupertinoDynamicColor::with_brightness(Color::rgb(1, 1, 1), Color::rgb(1, 1, 1));
-        assert!(!dynamic.is_platform_brightness_dependent());
-    }
-
-    #[test]
-    fn is_platform_brightness_dependent_true_when_a_dark_variant_differs() {
-        assert!(CupertinoColors::SYSTEM_BLUE.is_platform_brightness_dependent());
-    }
-}

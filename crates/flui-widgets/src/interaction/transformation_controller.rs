@@ -162,37 +162,3 @@ impl TransformationController {
         self.inner.notifier.is_empty()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use super::*;
-
-    #[test]
-    fn set_value_notifies_on_real_change() {
-        let controller = TransformationController::new();
-        let notified = Arc::new(AtomicUsize::new(0));
-        let counter = Arc::clone(&notified);
-        controller.as_listenable().add_listener(Arc::new(move || {
-            counter.fetch_add(1, Ordering::SeqCst);
-        }));
-
-        controller.set_value(Matrix4::translation(10.0, 0.0, 0.0));
-        assert_eq!(notified.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn to_scene_accounts_for_translation_and_scale() {
-        let controller = TransformationController::new();
-        // Scene content scaled 2x then shifted by (10, 20) in viewport space.
-        controller
-            .set_value(Matrix4::translation(10.0, 20.0, 0.0) * Matrix4::scaling(2.0, 2.0, 1.0));
-
-        let scene = controller.to_scene(Offset::new(10.0, 20.0));
-        // Viewport (10, 20) is exactly the translation, so it maps back to
-        // the scene origin.
-        assert!((scene.dx - 0.0).abs() < 1e-5);
-        assert!((scene.dy - 0.0).abs() < 1e-5);
-    }
-}

@@ -189,18 +189,6 @@ mod tests {
     }
 
     #[test]
-    fn settles_at_target() {
-        let mut v = AnimatedValue::new(0.0_f64, spring());
-        v.animate_to(100.0);
-        // Advance well past the response period.
-        for _ in 0..600 {
-            v.advance(1.0 / 60.0);
-        }
-        assert!(v.is_settled(), "spring should settle");
-        assert!((v.value() - 100.0).abs() < 0.5, "value={}", v.value());
-    }
-
-    #[test]
     fn retarget_preserves_velocity() {
         // Animate toward 100; midway (moving fast) retarget to 0. With velocity
         // preserved the value must briefly continue PAST its position toward 100

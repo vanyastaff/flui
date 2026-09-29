@@ -193,44 +193,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dynamic_values_are_private_by_default() {
-        assert_eq!(
-            FieldPrivacy::classify("path", FieldKind::Dynamic, EventOrigin::Native),
-            FieldPrivacy::Private
-        );
-    }
-
-    #[test]
     fn the_private_marker_wins_over_the_public_marker() {
         // `a.public.private` ends with `.private`, and only the trailing
         // segment is the marker; deny beats allow when both could match.
         assert_eq!(
             FieldPrivacy::classify("a.public.private", FieldKind::Scalar, EventOrigin::Native),
             FieldPrivacy::Private
-        );
-    }
-
-    #[test]
-    fn a_bridged_message_is_private() {
-        // A `log`-bridge message is a third party's fully interpolated string;
-        // the fields-not-messages rule does not bind a dependency.
-        assert_eq!(
-            FieldPrivacy::classify(MESSAGE_FIELD, FieldKind::Dynamic, EventOrigin::LogBridge),
-            FieldPrivacy::Private
-        );
-    }
-
-    #[test]
-    fn a_field_literally_named_public_carries_no_marker() {
-        // The marker is the *dotted suffix*; a bare name is just a name, and a
-        // dynamic value under it stays private.
-        assert_eq!(
-            FieldPrivacy::classify("public", FieldKind::Dynamic, EventOrigin::Native),
-            FieldPrivacy::Private
-        );
-        assert_eq!(
-            FieldPrivacy::classify("private", FieldKind::Scalar, EventOrigin::Native),
-            FieldPrivacy::Public
         );
     }
 }

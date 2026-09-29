@@ -2291,7 +2291,6 @@ dependencies = [
  "cursor-icon",
  "flui-foundation",
  "parking_lot",
- "proptest",
  "raw-window-handle",
  "serde",
  "serde_json",

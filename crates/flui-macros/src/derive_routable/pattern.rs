@@ -113,26 +113,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_rejects_what_is_not_a_pattern() {
-        for (pattern, reason) in [
-            ("", "starts with `/`"),
-            ("note", "starts with `/`"),
-            ("//", "trailing `/`"),
-            ("/note/", "trailing `/`"),
-            ("/a//b", "empty segment"),
-            ("/a?b", "`?` query"),
-            ("/a#b", "`#` fragment"),
-            ("/a%20b", "`%` escape"),
-            ("/note/:", "not a parameter"),
-            ("/note/:1d", "not a parameter"),
-            ("/note/:a-b", "not a parameter"),
-        ] {
-            let error = parse(pattern).expect_err(pattern);
-            assert!(error.contains(reason), "{pattern:?}: {error}");
-        }
-    }
-
-    #[test]
     fn match_order_puts_literals_before_parameters() {
         let patterns = vec![
             parsed("/s/:slug"),

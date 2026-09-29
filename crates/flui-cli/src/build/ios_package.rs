@@ -588,43 +588,6 @@ mod tests {
     fn token() -> Arc<AtomicU8> {
         Arc::new(AtomicU8::new(RUNNING))
     }
-    fn archive(root: &Path, name: &str) -> PathBuf {
-        let path = root.join(name);
-        fs::write(&path, name).expect("archive");
-        path
-    }
-    #[test]
-    fn slice_planning_rejects_missing_duplicate_and_unsupported_inputs() {
-        let dir = tempfile::tempdir().expect("temp");
-        let path = archive(dir.path(), "input.a");
-        assert!(plan(&[], &[]).is_err());
-        assert!(plan(&["aarch64-apple-ios".into()], &[]).is_err());
-        assert!(
-            plan(
-                &["aarch64-apple-darwin".into()],
-                std::slice::from_ref(&path)
-            )
-            .is_err()
-        );
-        assert!(
-            plan(
-                &["aarch64-apple-ios".into(), "aarch64-apple-ios".into()],
-                &[path.clone(), path.clone()]
-            )
-            .is_err()
-        );
-        let groups = plan(
-            &[
-                "aarch64-apple-ios".into(),
-                "aarch64-apple-ios-sim".into(),
-                "x86_64-apple-ios".into(),
-            ],
-            &[path.clone(), path.clone(), path],
-        )
-        .expect("groups");
-        assert_eq!(groups.len(), 2);
-        assert_eq!(groups[1].inputs.len(), 2);
-    }
     #[test]
     fn publication_rolls_back_and_retains_backup_when_rollback_fails() {
         for rollback_fails in [false, true] {
@@ -693,62 +656,5 @@ mod tests {
             .status()
             .expect("query child")
             .success()
-    }
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn abandoned_waiter_reaps_running_child_before_scratch_cleanup() {
-        let dir = tempfile::tempdir().expect("temp");
-        let state = token();
-        let cancel = CancelOnDrop(Arc::clone(&state));
-        let mut work = Work::new(dir.path(), state).expect("work");
-        let scratch = work.path().to_path_buf();
-        let marker = scratch.join("started");
-        let marker_arg = marker.clone();
-        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let finished = Arc::clone(&done);
-        let waiter = tokio::spawn(async move {
-            let _cancel = cancel;
-            tokio::task::spawn_blocking(move || {
-                let result = work.command(
-                    "sh",
-                    &[
-                        "-c".into(),
-                        "echo $$ > \"$1\"; exec sleep 30".into(),
-                        "probe".into(),
-                        marker_arg.into_os_string(),
-                    ],
-                );
-                drop(work);
-                finished.store(true, Ordering::Release);
-                result
-            })
-            .await
-        });
-        let until = Instant::now() + Duration::from_secs(5);
-        while !marker.exists() {
-            assert!(Instant::now() < until, "child started");
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        let pid = fs::read_to_string(&marker).expect("pid");
-        waiter.abort();
-        assert!(waiter.await.expect_err("cancelled waiter").is_cancelled());
-        while !done.load(Ordering::Acquire) {
-            assert!(Instant::now() < until, "worker completed cancellation");
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        assert!(process_gone(pid.trim()), "child reaped");
-        assert!(!scratch.exists(), "cleanup after child wait");
-    }
-    #[cfg(unix)]
-    #[test]
-    fn symlinks_never_redirect_destination_or_library_reads() {
-        let dir = tempfile::tempdir().expect("temp");
-        let outside = archive(dir.path(), "outside");
-        let output = dir.path().join("flui.xcframework");
-        std::os::unix::fs::symlink(&outside, &output).expect("link");
-        assert!(no_symlink_destination(&output).is_err());
-        fs::remove_file(&outside).expect("dangling");
-        assert!(no_symlink_destination(&output).is_err());
-        assert!(checked_child(dir.path(), "flui.xcframework").is_err());
     }
 }

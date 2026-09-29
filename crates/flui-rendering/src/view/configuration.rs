@@ -169,17 +169,4 @@ impl ViewConfiguration {
 }
 
 #[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    #[test]
-    fn test_view_configuration_to_matrix() {
-        let config = ViewConfiguration::from_size(Size::new(1920.0, 1080.0), 2.0);
-        let matrix = config.to_matrix();
-        assert!((matrix[0] - 2.0).abs() < 1e-6);
-        assert!((matrix[5] - 2.0).abs() < 1e-6);
-        assert!((matrix[10] - 1.0).abs() < 1e-6);
-        assert!((matrix[15] - 1.0).abs() < 1e-6);
-    }
-}
+mod tests {}

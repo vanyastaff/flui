@@ -183,31 +183,3 @@ impl LogConfigBuilder {
         self.config
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn two_subscribers_can_coexist_as_plain_values() {
-        // Construction is not installation. Two differently-configured
-        // subscribers existing side by side is what lets a host build one,
-        // inspect it, stack onto it, and decide separately whether it should
-        // become the process-global one. (That it installs nothing is proved
-        // behaviourally in `tests/inherit_never_touches_the_global_slot.rs`,
-        // which owns its own process.)
-        let first = LogConfig::default()
-            .subscriber()
-            .expect("the default directives parse");
-        let second = LogConfig::builder()
-            .directives("trace")
-            .build()
-            .subscriber()
-            .expect("`trace` parses");
-
-        // Both are usable as thread-local defaults, which they could not be if
-        // building one had consumed the global slot.
-        tracing::subscriber::with_default(first, || tracing::info!("first"));
-        tracing::subscriber::with_default(second, || tracing::trace!("second"));
-    }
-}

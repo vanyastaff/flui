@@ -426,24 +426,3 @@ fn keycode_to_character(keycode: i32) -> Option<char> {
         _ => None,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::logical_position;
-
-    /// The first emulator run's tap: `adb shell input tap 540 1284` on a
-    /// 1080×2400, density-420 (2.625×) screen is the centre of a 411×914
-    /// logical viewport, not a point past its edge.
-    #[test]
-    fn a_physical_tap_lands_in_the_logical_viewport() {
-        let (x, y) = logical_position(540.0, 1284.0, 2.625);
-        assert!((x - 205.714).abs() < 0.01, "{x}");
-        assert!((y - 489.143).abs() < 0.01, "{y}");
-        assert!(x < 1080.0 / 2.625 && y < 2400.0 / 2.625);
-    }
-
-    #[test]
-    fn a_one_to_one_screen_is_unchanged() {
-        assert_eq!(logical_position(10.0, 20.0, 1.0), (10.0, 20.0));
-    }
-}

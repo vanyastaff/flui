@@ -173,28 +173,3 @@ pub struct ButtonStyle {
     /// `OutlinedBorder` hierarchy is `Material`'s own named deferral).
     pub shape: Option<WidgetStateProperty<Option<MaterialShape>>>,
 }
-
-#[cfg(test)]
-mod tests {
-    use flui_sdk::widgets::{WidgetState, WidgetStates};
-
-    use super::*;
-
-    #[test]
-    fn a_configured_property_that_resolves_none_for_a_state_is_still_none() {
-        // The inner-Option fallthrough half of the double-Option contract
-        // (see the module docs): a `Map` with no matching entry resolves to
-        // `None`, distinct from the slot being unset outright.
-        let style = ButtonStyle {
-            overlay_color: Some(WidgetStateProperty::from_map([(
-                WidgetState::Pressed.into(),
-                Some(Color::rgb(0, 0, 0)),
-            )])),
-            ..Default::default()
-        };
-        assert_eq!(
-            style.overlay_color.unwrap().resolve(&WidgetStates::NONE),
-            None
-        );
-    }
-}

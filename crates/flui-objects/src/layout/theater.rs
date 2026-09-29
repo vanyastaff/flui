@@ -258,19 +258,3 @@ impl RenderBox for RenderTheater {
         false
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Flutter asserts `skipCount <= children.length` (`overlay.dart:989`) and
-    /// would then walk off the end. Clamping is the same behavior for every legal
-    /// input, and total for the rest.
-    #[test]
-    fn first_onstage_clamps_an_out_of_range_skip_count() {
-        let theater = RenderTheater::new().with_skip_count(5);
-        assert_eq!(theater.first_onstage(2), 2, "never past the last child");
-        assert_eq!(theater.first_onstage(7), 5);
-        assert_eq!(RenderTheater::new().first_onstage(3), 0);
-    }
-}

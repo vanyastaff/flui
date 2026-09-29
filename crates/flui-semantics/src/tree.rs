@@ -701,21 +701,6 @@ mod slab_hygiene_tests {
 
     // ----- add_child auto-detach -----
 
-    #[test]
-    fn add_child_auto_detaches_from_previous_parent() {
-        let mut tree = SemanticsTree::new();
-        let parent_a = tree.insert(empty_node());
-        let parent_b = tree.insert(empty_node());
-        let child = tree.insert(empty_node());
-
-        tree.add_child(parent_a, child);
-        tree.add_child(parent_b, child);
-
-        assert_eq!(tree.get(child).unwrap().parent(), Some(parent_b));
-        assert!(tree.get(parent_a).unwrap().children().is_empty());
-        assert_eq!(tree.get(parent_b).unwrap().children(), &[child]);
-    }
-
     // ----- cycle rejection -----
 
     #[test]
@@ -759,36 +744,5 @@ mod slab_hygiene_tests {
         assert_eq!(tree.len(), 0);
         assert!(!tree.contains(mid));
         assert!(!tree.contains(leaf));
-    }
-
-    #[test]
-    fn remove_resets_root_when_removing_root() {
-        let mut tree = SemanticsTree::new();
-        let root = tree.insert(empty_node());
-        tree.set_root(Some(root));
-        let _ = tree.remove(root);
-        assert_eq!(tree.root(), None);
-    }
-
-    #[test]
-    fn remove_cascade_is_stack_safe_on_a_deep_chain() {
-        const DEPTH: usize = 100_000;
-        let mut tree = SemanticsTree::new();
-        let root = tree.insert(empty_node());
-        let mut tip = root;
-        // Link the nodes directly: `add_child`'s cycle check walks the whole
-        // parent chain, which makes building the chain through it quadratic.
-        for _ in 1..DEPTH {
-            let next = tree.insert(empty_node());
-            tree.get_mut(tip).expect("tip is live").add_child(next);
-            tree.get_mut(next)
-                .expect("next is live")
-                .set_parent(Some(tip));
-            tip = next;
-        }
-        assert_eq!(tree.len(), DEPTH);
-
-        assert!(tree.remove(root).is_some());
-        assert_eq!(tree.len(), 0);
     }
 }

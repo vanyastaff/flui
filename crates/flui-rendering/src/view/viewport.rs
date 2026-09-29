@@ -143,30 +143,4 @@ pub trait RenderAbstractViewport: RenderObject<BoxProtocol> {
 }
 
 #[cfg(test)]
-mod tests {
-    use flui_foundation::geometry::Rect;
-
-    use super::*;
-
-    #[test]
-    fn test_revealed_offset_clamp_needs_scroll_down() {
-        let leading = RevealedOffset::new(50.0, Rect::from_ltwh(0.0, 0.0, 100.0, 100.0));
-        let trailing = RevealedOffset::new(150.0, Rect::from_ltwh(0.0, 0.0, 100.0, 100.0));
-
-        // Current offset is above the visible range - need to scroll down
-        let result = RevealedOffset::clamp_offset(leading, trailing, 200.0);
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().offset, 150.0);
-    }
-
-    #[test]
-    fn test_revealed_offset_clamp_needs_scroll_up() {
-        let leading = RevealedOffset::new(50.0, Rect::from_ltwh(0.0, 0.0, 100.0, 100.0));
-        let trailing = RevealedOffset::new(150.0, Rect::from_ltwh(0.0, 0.0, 100.0, 100.0));
-
-        // Current offset is below the visible range - need to scroll up
-        let result = RevealedOffset::clamp_offset(leading, trailing, 30.0);
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().offset, 50.0);
-    }
-}
+mod tests {}

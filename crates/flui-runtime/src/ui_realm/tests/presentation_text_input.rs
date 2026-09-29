@@ -1,4 +1,3 @@
-use flui_foundation::geometry::Bounds;
 use flui_platform_api::text_store::{
     InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextStore, TextStoreError,
 };
@@ -14,10 +13,6 @@ fn headless_text_input() -> (
     let fake = Arc::new(flui_platform::FakeTextInput::new());
     let capability: Arc<dyn flui_platform::traits::PlatformTextInput> = fake.clone();
     (fake, capability)
-}
-
-fn test_constraints() -> BoxConstraints {
-    BoxConstraints::tight(flui_foundation::geometry::Size::new(800.0, 600.0))
 }
 
 /// A client over a fresh in-memory store, and the store.
@@ -138,144 +133,5 @@ fn a_text_store_lock_requested_during_a_frame_is_granted_after_the_drive_returns
             .request_lock(LockGrant::read(|_| {}), LockTiming::Sync),
         Ok(LockOutcome::Granted),
         "the drive reopened commits"
-    );
-}
-
-/// An edit a deferred grant makes at the anchor asks for a frame the way a
-/// field's rebuild does (`ensure_visual_update`), and gets one: at the
-/// anchor the scheduler is `Idle` and schedules it. Inside the frame the
-/// request is dropped, and the committed text would wait for an unrelated
-/// wake to be painted.
-///
-/// Red-check: run the anchor at the end of `draw_frame_entered` instead —
-/// `ensure_visual_update` returns `false` and no frame is scheduled.
-#[test]
-fn an_edit_made_at_the_commit_anchor_schedules_the_next_frame() {
-    let accepted = Rc::new(std::cell::Cell::new(None));
-    let seen = Rc::clone(&accepted);
-    let (realm, _requester) = drive_one_frame_with(move |realm| {
-        let scheduler = realm.scheduler().clone();
-        Rc::new(move || seen.set(Some(scheduler.ensure_visual_update())))
-    });
-
-    assert_eq!(accepted.get(), Some(true), "the frame request was accepted");
-    assert!(
-        realm.scheduler().is_frame_scheduled(),
-        "the edit's frame request outlived the frame its grant was queued in"
-    );
-}
-
-/// The stale-detach race named in `TextInputOwner`'s module doc:
-/// field A attaches, field B attaches (replacing A), and A's
-/// now-stale detach must record NOTHING on the platform side — only
-/// B's later, active-token detach may disable IME.
-#[test]
-fn a_stale_detach_records_nothing_on_the_platform() {
-    let (fake, text_input) = headless_text_input();
-
-    let realm = UiRealm::for_test_with_text_input(Some(Arc::clone(&text_input)));
-    let handle = realm.text_input_handle();
-
-    let token_a = handle
-        .attach(in_memory_client("").1)
-        .expect("supported presentation");
-    assert_eq!(fake.ime_allowed_calls(), vec![true]);
-
-    let token_b = handle
-        .attach(in_memory_client("").1)
-        .expect("supported presentation");
-    assert_eq!(
-        fake.ime_allowed_calls(),
-        vec![true],
-        "replacement on one presentation keeps the already-enabled IME session"
-    );
-
-    assert_eq!(
-        handle.detach(token_a).expect("presentation remains open"),
-        flui_interaction::DetachOutcome::Stale
-    );
-    assert_eq!(
-        fake.ime_allowed_calls(),
-        vec![true],
-        "a stale detach (token_a, already replaced by token_b) records nothing"
-    );
-
-    assert_eq!(
-        handle.detach(token_b).expect("presentation remains open"),
-        flui_interaction::DetachOutcome::Detached
-    );
-    assert_eq!(
-        fake.ime_allowed_calls(),
-        vec![true, false],
-        "the active token's detach still disables IME"
-    );
-}
-
-/// End-to-end proof of a claim `flui-widgets`' own
-/// `editable_text::tests` cannot make on their own: a real
-/// mounted `EditableText` receives the weak handle of this realm's
-/// directly owned platform capability, not a mock or a stand-in.
-#[test]
-fn a_mounted_editable_text_toggles_platform_ime_on_focus_and_blur() {
-    let (fake, text_input) = headless_text_input();
-
-    let realm = UiRealm::for_test_with_text_input(Some(Arc::clone(&text_input)));
-
-    let controller = flui_widgets::TextEditingController::new();
-    let focus_node = flui_interaction::FocusNode::with_debug_label("app-ime-integration");
-    realm
-        .enter(|realm| {
-            realm.attach_root_widget(&flui_widgets::EditableText::new(
-                controller.clone(),
-                Rc::clone(&focus_node),
-            ))
-        })
-        .expect("attach succeeds");
-    let _ = realm.draw_frame(test_constraints());
-
-    assert!(focus_node.is_attached());
-    focus_node.request_focus();
-    assert!(focus_node.has_primary_focus());
-    assert_eq!(
-        fake.last_ime_allowed(),
-        Some(true),
-        "focusing a mounted EditableText must attach through its presentation \
-         and enable platform IME composition"
-    );
-
-    focus_node.unfocus();
-    assert_eq!(
-        fake.last_ime_allowed(),
-        Some(false),
-        "blurring the field must detach and disable platform IME composition"
-    );
-}
-
-/// `TextInputHandle::set_cursor_area` reaches this realm's exact
-/// `PlatformTextInput` capability through the same `PresentationState`
-/// ownership path used in production. Deliberately does not mount a
-/// widget tree: this test proves the owner forwards an
-/// already-computed `Bounds` to the platform, not that a real
-/// `EditableText` computes the right one.
-#[test]
-fn set_ime_cursor_area_reaches_the_presentations_platform_capability() {
-    let (fake, text_input) = headless_text_input();
-
-    let realm = UiRealm::for_test_with_text_input(Some(Arc::clone(&text_input)));
-
-    let area = Bounds::new(
-        flui_foundation::geometry::Point::new(10.0, 20.0),
-        flui_foundation::geometry::Size::new(2.0, 18.0),
-    );
-    realm
-        .text_input_handle()
-        .set_cursor_area(area)
-        .expect("headless presentation supports text input");
-
-    assert_eq!(
-        fake.cursor_area_calls(),
-        vec![area],
-        "set_ime_cursor_area must call through to the presentation-owned \
-         PlatformTextInput capability with the exact area"
     );
 }

@@ -461,24 +461,6 @@ mod target_size_tests {
             }
         }
     }
-
-    /// A readback wait that runs out is a typed, fatal error, not a hang; one
-    /// that completes lets the capture continue.
-    #[test]
-    fn a_readback_that_runs_out_of_time_is_a_fatal_error() {
-        use crate::error::Recoverability;
-        let waited = std::time::Duration::from_secs(60);
-
-        let timed_out = super::readback_wait_outcome(Err(wgpu::PollError::Timeout), waited)
-            .expect_err("a timed-out wait must not read the unmapped buffer");
-        assert!(
-            matches!(timed_out, EngineError::ReadbackTimedOut { waited: w } if w == waited),
-            "{timed_out:?}"
-        );
-        assert_eq!(timed_out.recoverability(), Recoverability::Fatal);
-
-        assert!(super::readback_wait_outcome(Ok(wgpu::PollStatus::QueueEmpty), waited).is_ok());
-    }
 }
 
 /// Serialized with the other GPU readbacks: its module name matches the

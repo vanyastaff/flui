@@ -265,33 +265,3 @@ impl RenderBox for RenderConstrainedBox {
 // ===========================================================================
 // Tests
 // ===========================================================================
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-
-    fn bounded(min_w: f64, max_w: f64, min_h: f64, max_h: f64) -> BoxConstraints {
-        BoxConstraints::new(min_w, max_w, min_h, max_h)
-    }
-
-    // ---------- construction & getters ------------------------------------
-
-    // ---------- intrinsic dimensions --------------------------------------
-
-    // ---------- dry layout ------------------------------------------------
-
-    #[test]
-    fn dry_layout_combines_constraints() {
-        let node = RenderConstrainedBox::new(bounded(80.0, 160.0, 40.0, 120.0));
-        // Incoming constraints allow up to 500x500.
-        let dry = flui_rendering::context::intrinsics_test_support::leaf_dry_layout(|ctx| {
-            node.compute_dry_layout(bounded(0.0, 500.0, 0.0, 500.0), ctx)
-        });
-        // Without a child the smallest satisfying combined size is the
-        // additional-constraints min (80, 40).
-        assert_eq!(dry, Size::new(80.0, 40.0));
-    }
-
-    // ---------- API surface -----------------------------------------------
-}

@@ -141,9 +141,7 @@ impl DrawBatcher {
         // refuses to seal a segment that already carries stops, because
         // skipping the seal HERE does not stop a backward transition between
         // two other kinds from splitting this segment anyway.
-        // `a_kind_seal_never_splits_gradient_bearing_content` (batches/mod.rs)
-        // and `two_gradients_separated_by_a_rect_keep_their_own_colours`
-        // (shape_blend_tests) are the guards.
+        // The gradient readback suite guards this.
 
         let Some(stop_offset) = reserve_gradient_stops(segment, GradientKind::Linear, stops) else {
             return;
@@ -224,9 +222,7 @@ impl DrawBatcher {
         // refuses to seal a segment that already carries stops, because
         // skipping the seal HERE does not stop a backward transition between
         // two other kinds from splitting this segment anyway.
-        // `a_kind_seal_never_splits_gradient_bearing_content` (batches/mod.rs)
-        // and `two_gradients_separated_by_a_rect_keep_their_own_colours`
-        // (shape_blend_tests) are the guards.
+        // The gradient readback suite guards this.
 
         let Some(stop_offset) = reserve_gradient_stops(segment, GradientKind::Radial, stops) else {
             return;
@@ -309,9 +305,7 @@ impl DrawBatcher {
         // refuses to seal a segment that already carries stops, because
         // skipping the seal HERE does not stop a backward transition between
         // two other kinds from splitting this segment anyway.
-        // `a_kind_seal_never_splits_gradient_bearing_content` (batches/mod.rs)
-        // and `two_gradients_separated_by_a_rect_keep_their_own_colours`
-        // (shape_blend_tests) are the guards.
+        // The gradient readback suite guards this.
 
         let Some(stop_offset) = reserve_gradient_stops(segment, GradientKind::Sweep, stops) else {
             return;

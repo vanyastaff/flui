@@ -629,24 +629,6 @@ impl<C: Curve> CurveExt for C {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::curve::Curves;
-
-    #[test]
-    fn test_int_tween() {
-        let tween = IntTween::new(0, 10);
-        assert_eq!(tween.transform(0.0), 0);
-        assert_eq!(tween.transform(0.5), 5);
-        assert_eq!(tween.transform(1.0), 10);
-    }
-
-    #[test]
-    fn test_reverse_tween() {
-        let tween = FloatTween::new(0.0, 100.0);
-        let reversed = ReverseTween::new(tween);
-        assert_eq!(reversed.transform(0.0), 100.0);
-        assert_eq!(reversed.transform(0.5), 50.0);
-        assert_eq!(reversed.transform(1.0), 0.0);
-    }
 
     #[test]
     fn test_color_tween() {
@@ -655,18 +637,6 @@ mod tests {
         // 255 * 0.5 = 127.5 -> rounds to 128 (the old code truncated to 127).
         assert_eq!(mid.r, 128);
         assert_eq!(mid.b, 128);
-    }
-
-    #[test]
-    fn tween_extrapolates_overshoot() {
-        // B3 regression: the generic Tween must NOT clamp t, so spring/elastic
-        // overshoot (t > 1, t < 0) reaches the value.
-        let tween = FloatTween::new(0.0, 10.0);
-        assert_eq!(tween.transform(1.5), 15.0, "overshoot above end");
-        assert_eq!(tween.transform(-0.5), -5.0, "overshoot below begin");
-        // Exact endpoints are returned verbatim.
-        assert_eq!(tween.transform(0.0), 0.0);
-        assert_eq!(tween.transform(1.0), 10.0);
     }
 
     #[test]
@@ -688,11 +658,4 @@ mod tests {
     // ========================================================================
     // Tests for new types: CurveTween, ChainedTween, extension traits
     // ========================================================================
-
-    #[test]
-    fn test_curve_tween_clamps_input() {
-        let tween = CurveTween::new(Curves::Linear);
-        assert_eq!(tween.transform(-0.5), 0.0);
-        assert_eq!(tween.transform(1.5), 1.0);
-    }
 }

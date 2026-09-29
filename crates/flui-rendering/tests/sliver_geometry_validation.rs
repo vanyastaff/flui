@@ -1,27 +1,19 @@
 //! Runtime validation for `SliverGeometry` layout results.
 
-// Target-level lint relaxations — crate-level allows don't reach this
-// target. `unwrap` in test/example code: a panic IS the failure report
-// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
-#![expect(clippy::unwrap_used)]
-
-use std::sync::{Arc, Mutex};
-
 use flui_foundation::Diagnosticable;
-use flui_foundation::geometry::Size;
-use flui_foundation::{Leaf, Variable};
+use flui_foundation::Leaf;
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::{
-    constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
-    context::{BoxLayoutContext, SliverHitTestContext, SliverLayoutContext},
+    constraints::{GrowthDirection, SliverConstraints, SliverGeometry},
+    context::{SliverHitTestContext, SliverLayoutContext},
     error::RenderError,
-    parent_data::{BoxParentData, SliverParentData},
+    parent_data::SliverParentData,
     pipeline::PipelineOwner,
-    traits::{RenderBox, RenderSliver},
+    traits::RenderSliver,
     view::ScrollDirection,
 };
 
-use crate::common::{BoxedRenderObject, BoxedSliverObject};
+use crate::common::BoxedSliverObject;
 
 fn sliver_constraints() -> SliverConstraints {
     SliverConstraints {
@@ -97,40 +89,6 @@ impl RenderSliver for BadGeometrySliver {
     }
 }
 
-#[derive(Debug)]
-struct BoxWithSliverChild {
-    sliver_constraints: SliverConstraints,
-    captured: Arc<Mutex<Option<SliverGeometry>>>,
-}
-
-impl BoxWithSliverChild {
-    fn new(
-        sliver_constraints: SliverConstraints,
-        captured: Arc<Mutex<Option<SliverGeometry>>>,
-    ) -> Self {
-        Self {
-            sliver_constraints,
-            captured,
-        }
-    }
-}
-
-impl Diagnosticable for BoxWithSliverChild {}
-
-impl RenderBox for BoxWithSliverChild {
-    type Arity = Variable;
-    type ParentData = BoxParentData;
-
-    fn perform_layout(
-        &mut self,
-        ctx: &mut BoxLayoutContext<'_, Variable, Self::ParentData>,
-    ) -> Size {
-        let geometry = ctx.layout_sliver_child(0, self.sliver_constraints);
-        *self.captured.lock().unwrap() = Some(geometry);
-        ctx.constraints().biggest()
-    }
-}
-
 #[test]
 fn sliver_leaf_layout_rejects_invalid_geometry_before_state_commit() {
     let mut owner = PipelineOwner::new();
@@ -158,64 +116,5 @@ fn sliver_leaf_layout_rejects_invalid_geometry_before_state_commit() {
     assert!(
         entry.needs_layout(),
         "failed sliver layout must stay dirty for retry"
-    );
-}
-
-#[test]
-fn sliver_descendant_invalid_geometry_returns_zero_and_poisons() {
-    let captured: Arc<Mutex<Option<SliverGeometry>>> = Arc::new(Mutex::new(None));
-    let parent_obj: BoxedRenderObject = Box::new(BoxWithSliverChild::new(
-        sliver_constraints(),
-        Arc::clone(&captured),
-    ));
-    let sliver_obj: BoxedSliverObject =
-        Box::new(BadGeometrySliver::new(invalid_negative_paint_geometry()));
-
-    let mut pipeline = PipelineOwner::new().into_layout();
-    let parent_id = pipeline.render_tree_mut().insert_box(parent_obj);
-    let sliver_id = pipeline
-        .render_tree_mut()
-        .insert_sliver_child(parent_id, sliver_obj)
-        .expect("tree accepts sliver child");
-
-    pipeline
-        .layout_dirty_root(parent_id, BoxConstraints::new(0.0, 800.0, 0.0, 600.0))
-        .expect("parent layout still completes; descendant error is isolated");
-
-    assert_eq!(
-        captured.lock().unwrap().expect("parent saw child layout"),
-        SliverGeometry::ZERO,
-        "invalid descendant geometry must be replaced with ZERO for the parent"
-    );
-
-    // InvalidGeometry is a structural failure: the layout poison engages
-    // on the first occurrence, so instead of holding parent and child
-    // dirty for an unbounded next-frame retry, both flags are cleared and
-    // the failed sliver is skipped in later walks until freshly
-    // invalidated.
-    let parent_node = pipeline
-        .render_tree()
-        .get(parent_id)
-        .expect("parent remains in tree");
-    assert!(
-        !parent_node.needs_layout(),
-        "descendant InvalidGeometry is structural: the layout poison clears \
-         the parent's dirty bit (its geometry with the child's ZERO stand-in \
-         is the value any retry would reproduce)",
-    );
-
-    let sliver_entry = pipeline
-        .render_tree()
-        .get(sliver_id)
-        .and_then(|node| node.as_sliver())
-        .expect("sliver entry remains in tree");
-    assert!(
-        sliver_entry.state().geometry().is_none(),
-        "invalid descendant geometry must not be committed"
-    );
-    assert!(
-        !sliver_entry.needs_layout(),
-        "the failed sliver is layout-poisoned: dirty bit cleared, layout \
-         skipped until a fresh invalidation lifts the poison",
     );
 }

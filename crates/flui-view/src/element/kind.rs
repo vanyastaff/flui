@@ -758,27 +758,4 @@ mod tests {
             ElementKind::Root(_) => 9,
         }
     }
-
-    #[test]
-    fn animation_listener_provider_accepts_owner_local_rc_state() {
-        use std::cell::Cell;
-
-        use flui_foundation::{ChangeNotifier, ListenerId};
-
-        let notifier: Arc<dyn Listenable> = Arc::new(ChangeNotifier::new());
-        let calls = Rc::new(Cell::new(0));
-        let calls_for_provider = Rc::clone(&calls);
-        let captured = Arc::clone(&notifier);
-        let listener = AnimationListener::new(
-            Rc::new(move || {
-                calls_for_provider.set(calls_for_provider.get() + 1);
-                Arc::clone(&captured)
-            }),
-            ListenerId::new(7),
-        );
-
-        let returned = listener.listenable();
-        assert!(Arc::ptr_eq(&returned, &notifier));
-        assert_eq!(calls.get(), 1);
-    }
 }

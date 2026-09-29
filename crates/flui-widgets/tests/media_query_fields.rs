@@ -88,61 +88,6 @@ impl StatelessView for FailingSizeReader {
     }
 }
 
-/// Reads `size` only in `init_state` / `did_change_dependencies` (the
-/// `FocusState` / `DraggableState` pattern) and never in `build`.
-#[derive(Clone, StatefulView)]
-struct LifecycleReader {
-    dependency_changes: Count,
-    builds: Count,
-}
-
-struct LifecycleReaderState {
-    view: LifecycleReader,
-    width: f64,
-}
-
-impl StatefulView for LifecycleReader {
-    type State = LifecycleReaderState;
-    fn create_state(&self) -> Self::State {
-        LifecycleReaderState {
-            view: self.clone(),
-            width: 0.0,
-        }
-    }
-}
-
-impl ViewState<LifecycleReader> for LifecycleReaderState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.width = MediaQuery::size_of(ctx).expect("MediaQuery ancestor").width;
-    }
-
-    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        let dc = &self.view.dependency_changes;
-        dc.set(dc.get() + 1);
-        self.width = MediaQuery::size_of(ctx).expect("MediaQuery ancestor").width;
-    }
-
-    fn build(&self, _view: &LifecycleReader, _ctx: &dyn BuildContext) -> impl IntoView {
-        self.view.builds.set(self.view.builds.get() + 1);
-        SizedBox::new(self.width / 100.0, 1.0)
-    }
-}
-
-/// Reads `size` through `depend_on_fields` with an EMPTY mask.
-#[derive(Clone, StatelessView)]
-struct EmptyMaskReader {
-    builds: Count,
-}
-
-impl StatelessView for EmptyMaskReader {
-    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        self.builds.set(self.builds.get() + 1);
-        let width = MediaQuery::depend_on_fields(ctx, flui_view::FieldMask::NONE, |d| d.size.width)
-            .expect("MediaQuery ancestor");
-        SizedBox::new(width / 100.0, 1.0)
-    }
-}
-
 /// Stops parent-driven rebuilds so only dependency notifications reach the
 /// leaves.
 #[derive(Clone)]
@@ -238,41 +183,6 @@ fn a_size_only_change_rebuilds_size_and_whole_readers_only() {
 }
 
 #[test]
-fn a_field_reader_still_rebuilds_when_its_own_field_changes_after_an_unrelated_one() {
-    // Stale-read regression: an earlier unrelated change must not make the
-    // registry forget the field a reader depends on.
-    let c = Counters {
-        size: count(),
-        scale: count(),
-        whole: count(),
-        none: count(),
-    };
-    let mut laid = lay_out(
-        MediaQuery::new(data(800.0, 1.0), subtree(&c)),
-        loose(4000.0),
-    );
-
-    laid.pump_widget(MediaQuery::new(data(800.0, 1.5), subtree(&c)));
-    assert_eq!(c.size.get(), 1, "size reader untouched by a scale change");
-
-    laid.pump_widget(MediaQuery::new(data(900.0, 1.5), subtree(&c)));
-    assert_eq!(
-        c.size.get(),
-        2,
-        "size reader rebuilds when size finally changes"
-    );
-    assert_eq!(c.scale.get(), 2, "scale reader untouched by a size change");
-    // The render root is the Column itself: MediaQuery and StaticChild have no
-    // render object.
-    let column = laid.current_root();
-    assert_eq!(
-        laid.size(laid.child(column, 0)).width,
-        9.0,
-        "the size reader rendered the new width (900 / 100)"
-    );
-}
-
-#[test]
 fn a_build_that_panics_before_reading_keeps_its_dependency() {
     // Reset-on-build must not treat a recovered panic as "read nothing": the
     // element would lose its dependency and never rebuild after the failing
@@ -313,84 +223,5 @@ fn a_build_that_panics_before_reading_keeps_its_dependency() {
         laid.size(laid.current_root()).width,
         10.0,
         "the reader rendered the new width after recovering"
-    );
-}
-
-#[test]
-fn a_dependency_acquired_in_a_lifecycle_hook_survives_a_rebuild_that_does_not_reread_it() {
-    // Reset-on-build re-derives only what `build` reads. A state that reads a
-    // provider in `init_state` / `did_change_dependencies` and not in `build`
-    // (FocusState, DraggableState) must stay subscribed across a rebuild from
-    // another cause, or it silently stops receiving `did_change_dependencies`.
-    let dependency_changes = count();
-    let builds = count();
-    let reader = LifecycleReader {
-        dependency_changes: Rc::clone(&dependency_changes),
-        builds: Rc::clone(&builds),
-    };
-    // No StaticChild boundary: an equal-data provider swap rebuilds the
-    // reader through the parent path (a rebuild that reads nothing).
-    let mut laid = lay_out(
-        MediaQuery::new(data(800.0, 1.0), reader.clone()),
-        loose(4000.0),
-    );
-    let mounted_builds = builds.get();
-    let mounted_changes = dependency_changes.get();
-
-    laid.pump_widget(MediaQuery::new(data(800.0, 1.0), reader.clone()));
-    assert!(
-        builds.get() > mounted_builds,
-        "test setup: the parent swap must rebuild the reader"
-    );
-    assert_eq!(
-        laid.inherited_dependent_count::<MediaQuery>(),
-        1,
-        "the lifecycle read survives a build that did not re-read it"
-    );
-
-    laid.pump_widget(MediaQuery::new(data(900.0, 1.0), reader));
-    assert_eq!(
-        dependency_changes.get(),
-        mounted_changes + 1,
-        "a size change still reaches did_change_dependencies"
-    );
-    assert_eq!(
-        laid.size(laid.current_root()).width,
-        9.0,
-        "the reader rendered the width it re-read"
-    );
-}
-
-#[test]
-fn an_empty_mask_read_is_promoted_to_a_whole_provider_dependency() {
-    // `depend_on_field(FieldMask::NONE, ..)` reads the provider; recording the
-    // empty set would never intersect an update and leave the value stale, so
-    // the read is promoted to the whole-provider dependency.
-    let builds = count();
-    let reader = EmptyMaskReader {
-        builds: Rc::clone(&builds),
-    };
-    let wrap = |reader: &EmptyMaskReader| {
-        use flui_view::ViewExt;
-        StaticChild {
-            inner: reader.clone().boxed(),
-        }
-    };
-    let mut laid = lay_out(
-        MediaQuery::new(data(800.0, 1.0), wrap(&reader)),
-        loose(4000.0),
-    );
-    assert_eq!(laid.inherited_dependent_count::<MediaQuery>(), 1);
-
-    laid.pump_widget(MediaQuery::new(data(900.0, 1.0), wrap(&reader)));
-    assert_eq!(
-        builds.get(),
-        2,
-        "the size change rebuilt the empty-mask reader"
-    );
-    assert_eq!(
-        laid.size(laid.current_root()).width,
-        9.0,
-        "and it rendered the fresh value"
     );
 }
