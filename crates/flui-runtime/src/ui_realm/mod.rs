@@ -176,6 +176,12 @@ pub struct UiRealm {
     /// every frame this realm produces shares one monotonically-increasing
     /// origin instead of drifting between the Vsync tick and elsewhere.
     start: web_time::Instant,
+    /// Where this realm reads time (ADR-0083 §4): its frame-time origin
+    /// above, every presentation's gesture arena and [`FrameClock`] produce
+    /// gate. Retained so a later-assembled presentation reads the same one.
+    ///
+    /// [`FrameClock`]: flui_scheduler::FrameClock
+    clock: flui_scheduler::ClockSource,
     /// The timestamp of the frame [`Self::pump`] is running, published for
     /// the frame's duration so `now_secs` (the `Vsync` tick) reads the frame
     /// clock instead of the wall clock. `None` outside a pump; a drop guard

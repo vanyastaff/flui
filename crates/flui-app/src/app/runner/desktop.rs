@@ -129,6 +129,7 @@ where
         scale_factor,
         runtime_needs_redraw_handle(),
         super::host::runtime_clipboard(),
+        flui_scheduler::ClockSource::Platform,
     ) {
         Ok(realm) => realm,
         Err(e) => {

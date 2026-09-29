@@ -978,6 +978,7 @@ fn finish_open_secondary_window(
                 scale_factor,
                 runtime_needs_redraw_handle(),
                 super::host::runtime_clipboard(),
+                flui_scheduler::ClockSource::Platform,
             )
             .map_err(mount_error)?;
             ui_realm.set_frame_failure_detail(frame_failure_detail);

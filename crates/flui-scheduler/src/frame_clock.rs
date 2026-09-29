@@ -247,6 +247,18 @@ pub enum ClockSource {
     Manual(ManualClock),
 }
 
+/// A clock source is itself a clock: whatever reads time through it (a
+/// presentation's [`FrameClock`], a realm's gesture arena and frame-time
+/// origin) observes the one timeline it names.
+impl MonotonicClock for ClockSource {
+    fn now(&self) -> Instant {
+        match self {
+            Self::Platform => Instant::now(),
+            Self::Manual(clock) => clock.now(),
+        }
+    }
+}
+
 /// The per-presentation physical-time policy state machine.
 ///
 /// Pure and platform-free: it owns no window, no GPU handle, no element
@@ -360,10 +372,7 @@ impl FrameClock {
     /// gates observe the identical instant.
     #[must_use]
     pub fn now(&self) -> Instant {
-        match &self.source {
-            ClockSource::Platform => Instant::now(),
-            ClockSource::Manual(clock) => clock.now(),
-        }
+        MonotonicClock::now(&self.source)
     }
 
     /// Move a [`ClockSource::Manual`] clock forward by `dt`.

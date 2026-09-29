@@ -269,3 +269,108 @@ fn pump_applies_commands_sent_before_it() {
         "the pump's apply-commands step commits the queued pop"
     );
 }
+
+/// A realm on its own manual-clock source over a headless test window.
+fn manual_clock_realm(clock: &ManualClock) -> UiRealm {
+    UiRealm::new(
+        noop_wake(),
+        test_window(),
+        1.0,
+        Arc::new(AtomicBool::new(false)),
+        crate::presentation::test_clipboard(),
+        flui_scheduler::ClockSource::Manual(clock.clone()),
+    )
+    .expect("runtime")
+}
+
+/// A long-press recognizer on the realm's gesture arena fires once the
+/// realm's manual clock passes its deadline, with no wall time elapsed.
+///
+/// Fails against a realm whose arena reads the wall clock: 600 ms of manual
+/// time is microseconds of wall time, the 500 ms deadline has not passed when
+/// the pump polls it, and the callback never runs.
+#[test]
+fn a_realm_on_a_manual_clock_fires_gesture_deadlines_on_that_clock() {
+    use flui_interaction::settings::GestureSettings;
+    use flui_interaction::{GestureRecognizer as _, LongPressGestureRecognizer, PointerId};
+
+    let mut clock = ManualClock::new();
+    let mut realm = manual_clock_realm(&clock);
+    let fired = Arc::new(AtomicBool::new(false));
+    let fired_in_callback = Arc::clone(&fired);
+    let recognizer = LongPressGestureRecognizer::with_settings(
+        realm.gestures().arena().clone(),
+        GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(500)),
+    )
+    .with_on_long_press_start(move |_details| fired_in_callback.store(true, Ordering::SeqCst));
+    let position = flui_foundation::geometry::Offset::new(10.0, 10.0);
+    recognizer.add_pointer(
+        PointerId::new(1).expect("pointer ids start at one"),
+        position,
+        position,
+    );
+
+    let mut sink = ScriptedSink::always_presents();
+    clock.advance(Duration::from_millis(300));
+    let _ = realm.pump(&mut clock, &mut sink);
+    assert!(
+        !fired.load(Ordering::SeqCst),
+        "300 ms of manual time has not reached the 500 ms deadline"
+    );
+
+    clock.advance(Duration::from_millis(300));
+    let _ = realm.pump(&mut clock, &mut sink);
+    assert!(
+        fired.load(Ordering::SeqCst),
+        "the pump polls the arena's deadlines on the realm's manual clock"
+    );
+}
+
+/// A presentation's minimum produce interval is measured on the realm's
+/// manual clock: a second demanded pump inside the interval is withheld, and
+/// one after the manual clock crosses it produces, with no wall time spent.
+///
+/// Fails against a presentation whose `FrameClock` reads the wall clock: the
+/// second pump, microseconds of wall time after the first, stays withheld
+/// even after the manual clock has moved past the interval.
+#[test]
+fn a_manual_clock_realm_gates_its_min_produce_interval_on_that_clock() {
+    let mut clock = ManualClock::new();
+    let mut realm = manual_clock_realm(&clock);
+    realm
+        .presentations
+        .primary()
+        .clock()
+        .set_min_produce_interval(Some(Duration::from_millis(100)));
+    let mut sink = ScriptedSink::always_presents();
+
+    realm.request_redraw();
+    let _ = realm.pump(&mut clock, &mut sink);
+    assert_eq!(
+        realm_produced(&realm),
+        1,
+        "the first demanded pump produces"
+    );
+
+    clock.advance(Duration::from_millis(40));
+    realm.request_redraw();
+    let _ = realm.pump(&mut clock, &mut sink);
+    assert_eq!(
+        realm_produced(&realm),
+        1,
+        "40 ms of manual time is inside the 100 ms interval: the frame is withheld"
+    );
+
+    clock.advance(Duration::from_millis(80));
+    realm.request_redraw();
+    let _ = realm.pump(&mut clock, &mut sink);
+    assert_eq!(
+        realm_produced(&realm),
+        2,
+        "120 ms of manual time is past the interval: the frame is produced"
+    );
+}
+
+fn realm_produced(realm: &UiRealm) -> u64 {
+    realm.presentations.primary().clock().produced_count()
+}

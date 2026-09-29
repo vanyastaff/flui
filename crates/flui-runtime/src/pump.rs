@@ -39,6 +39,24 @@ impl FrameClockSource for SampledClock {
     }
 }
 
+/// The workspace's one virtual clock, [`flui_foundation::ManualClock`], is
+/// also a pump's frame clock: a test advances it by hand, so a pump's frame
+/// timestamp — and every `Vsync` controller ticked at it — is a value the
+/// test controls rather than whatever the wall clock read. It is the clock
+/// `flui-testing`'s headless binding already drives its gesture-arena
+/// deadlines from, so a driver that pumps a realm off the same handle keeps
+/// the frame timestamp and those deadlines on one timeline (clones share it).
+///
+/// A realm built on [`flui_scheduler::ClockSource::Manual`] with a clone of
+/// the same clock measures frame time from that clock's reading at
+/// construction, so its frame timestamps, gesture deadlines and produce gate
+/// all sit on the one timeline the test advances.
+impl FrameClockSource for flui_foundation::ManualClock {
+    fn frame_time(&mut self) -> web_time::Instant {
+        flui_foundation::MonotonicClock::now(self)
+    }
+}
+
 /// What one pump did.
 ///
 /// Fields stay private behind accessors so later facts can be added without

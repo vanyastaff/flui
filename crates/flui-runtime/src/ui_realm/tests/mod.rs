@@ -47,6 +47,7 @@ fn new_runtime(wake: Arc<dyn Fn() + Send + Sync>) -> Result<UiRealm, UiRealmErro
         1.0,
         Arc::new(AtomicBool::new(false)),
         crate::presentation::test_clipboard(),
+        flui_scheduler::ClockSource::Platform,
     )
 }
 
@@ -61,6 +62,7 @@ fn new_runtime_with_capacity(
         1.0,
         Arc::new(AtomicBool::new(false)),
         crate::presentation::test_clipboard(),
+        flui_scheduler::ClockSource::Platform,
     )
 }
 
@@ -275,6 +277,7 @@ fn platform_action_request_routes_through_the_wire_to_the_handler() {
         1.0,
         Arc::new(AtomicBool::new(false)),
         crate::presentation::test_clipboard(),
+        flui_scheduler::ClockSource::Platform,
     )
     .expect("realm");
 
@@ -331,6 +334,7 @@ fn platform_action_payload_reaches_the_handler_with_its_arguments() {
         1.0,
         Arc::new(AtomicBool::new(false)),
         crate::presentation::test_clipboard(),
+        flui_scheduler::ClockSource::Platform,
     )
     .expect("realm");
 
@@ -386,6 +390,7 @@ fn unroutable_platform_action_requests_are_dropped_at_the_listener() {
         1.0,
         Arc::new(AtomicBool::new(false)),
         crate::presentation::test_clipboard(),
+        flui_scheduler::ClockSource::Platform,
     )
     .expect("realm");
 
@@ -447,6 +452,7 @@ fn at_activation_drives_semantics_assembly_through_the_frame_reconcile() {
         1.0,
         Arc::new(AtomicBool::new(false)),
         crate::presentation::test_clipboard(),
+        flui_scheduler::ClockSource::Platform,
     )
     .expect("realm");
     let pipeline = realm.pipeline_for_test();
@@ -504,6 +510,7 @@ fn at_activation_requests_a_full_republish_and_the_reconcile_consumes_it() {
         1.0,
         Arc::new(AtomicBool::new(false)),
         crate::presentation::test_clipboard(),
+        flui_scheduler::ClockSource::Platform,
     )
     .expect("realm");
     let host_flag = realm
@@ -557,6 +564,7 @@ fn closing_the_presentation_withdraws_from_the_platform_bridge() {
         1.0,
         Arc::new(AtomicBool::new(false)),
         crate::presentation::test_clipboard(),
+        flui_scheduler::ClockSource::Platform,
     )
     .expect("realm");
     let flag = realm
@@ -1009,6 +1017,7 @@ fn a_redraw_request_fires_the_platform_wake() {
         1.0,
         Arc::new(AtomicBool::new(false)),
         crate::presentation::test_clipboard(),
+        flui_scheduler::ClockSource::Platform,
     )
     .expect("test realm construction");
 

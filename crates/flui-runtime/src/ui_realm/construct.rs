@@ -18,7 +18,7 @@ use flui_platform_api::Clipboard;
 #[cfg(any(test, feature = "test-support"))]
 use flui_platform_api::PlatformTextInput;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
-use flui_scheduler::AppLifecycleState;
+use flui_scheduler::{AppLifecycleState, ClockSource};
 use flui_view::GlobalKeyScope;
 use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
@@ -47,6 +47,15 @@ impl UiRealm {
     /// production it is `AppRuntime::clipboard()`, installed before any realm
     /// is built.
     ///
+    /// `clock` is where the realm reads time: its frame-time origin, every
+    /// presentation's gesture-arena deadlines and its [`FrameClock`]'s
+    /// produce gate all read this one source. A host passes
+    /// [`ClockSource::Platform`]; a headless test driver passes the
+    /// [`ClockSource::Manual`] clock it advances by hand, so those three
+    /// share the driver's timeline instead of the wall clock.
+    ///
+    /// [`FrameClock`]: flui_scheduler::FrameClock
+    ///
     /// # Errors
     ///
     /// [`UiRealmError::InteractionLane`] if the owner-local interaction lane
@@ -57,6 +66,7 @@ impl UiRealm {
         device_pixel_ratio: f64,
         needs_redraw: Arc<AtomicBool>,
         clipboard: Arc<dyn Clipboard>,
+        clock: ClockSource,
     ) -> Result<Self, UiRealmError> {
         Self::with_capacity(
             DEFAULT_COMMAND_CAPACITY,
@@ -65,6 +75,7 @@ impl UiRealm {
             device_pixel_ratio,
             needs_redraw,
             clipboard,
+            clock,
         )
     }
 
@@ -86,10 +97,11 @@ impl UiRealm {
         device_pixel_ratio: f64,
         needs_redraw: Arc<AtomicBool>,
         clipboard: Arc<dyn Clipboard>,
+        clock: ClockSource,
     ) -> Result<Self, UiRealmError> {
         assert!(capacity > 0, "UiRealm inbox capacity must be non-zero");
         let identity = crate::realm_services::next_identity();
-        let services = RealmServices::construct(clipboard);
+        let services = RealmServices::construct(clipboard, clock);
         Self::construct(
             capacity,
             wake,
@@ -141,6 +153,7 @@ impl UiRealm {
             async_driver,
             scheduler,
             clipboard,
+            clock,
         } = services;
 
         // The realm's scheduler fires the SAME platform wake its presentation
@@ -185,9 +198,13 @@ impl UiRealm {
                     wake: Arc::clone(&wake),
                 },
                 clipboard: Arc::clone(&clipboard),
+                clock: &clock,
             },
         );
 
+        // The frame-time origin reads the realm's clock, so a manual clock's
+        // frame timestamps measure from the same timeline they advance on.
+        let start = flui_foundation::MonotonicClock::now(&clock);
         Ok(Self {
             realm_id,
             local_post_frame,
@@ -196,7 +213,8 @@ impl UiRealm {
             presentations: PresentationForest::single(presentation),
             focus_coordinator: FocusCoordinator::new(presentation_id),
             host_lifecycle: Cell::new(HostLifecycle::Observed(AppLifecycleState::Resumed)),
-            start: web_time::Instant::now(),
+            start,
+            clock,
             frame_time: Cell::new(None),
             needs_redraw,
             wake: Arc::clone(&wake),
@@ -257,7 +275,7 @@ impl UiRealm {
             identity,
             window,
             None,
-            RealmServices::construct(crate::presentation::test_clipboard()),
+            RealmServices::construct(crate::presentation::test_clipboard(), ClockSource::Platform),
             needs_redraw,
         )
         .expect("test UiRealm should create an interaction lane")
