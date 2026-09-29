@@ -11,7 +11,8 @@ fn flui() -> Command {
     cargo_bin_cmd!("flui")
 }
 
-pub fn completions_bash() {
+#[test]
+fn completions_bash() {
     flui()
         .args(["completions", "bash"])
         .assert()

@@ -227,12 +227,24 @@ fn run_generated_counter_tests(cargo: &str, project: &Path, target: &Path) {
     );
 }
 
-/// Every template generates a project that compiles and names only the
-/// packages its source uses.
-pub fn generated_projects_compile() {
-    for template in ["basic", "counter", "empty", "widget"] {
-        assert_generated_project_compiles(template);
-    }
+#[test]
+fn generated_basic_project_compiles() {
+    assert_generated_project_compiles("basic");
+}
+
+#[test]
+fn generated_counter_project_compiles() {
+    assert_generated_project_compiles("counter");
+}
+
+#[test]
+fn generated_empty_project_compiles() {
+    assert_generated_project_compiles("empty");
+}
+
+#[test]
+fn generated_widget_project_compiles() {
+    assert_generated_project_compiles("widget");
 }
 
 /// The widget template ships a widget test (`greeting_renders_its_name`); a
@@ -240,7 +252,8 @@ pub fn generated_projects_compile() {
 /// never executed. This runs the generated library's own test binary and
 /// requires that test to actually execute and pass, the same way
 /// `run_generated_counter_tests` does for the counter template.
-pub fn generated_widget_project_test_passes() {
+#[test]
+fn generated_widget_project_test_passes() {
     let root = repo_root();
     let target = workspace_target_dir(&root);
     let name = "flui-tmpl-check-widget-test";
@@ -294,7 +307,8 @@ pub fn generated_widget_project_test_passes() {
     );
 }
 
-pub fn create_project_default_template_is_counter() {
+#[test]
+fn create_project_default_template_is_counter() {
     let tmp = TempDir::new().expect("temp dir");
     let project_dir = tmp.path().join("test-default");
 
@@ -309,7 +323,8 @@ pub fn create_project_default_template_is_counter() {
     assert!(project_dir.join("src").join("main.rs").exists());
 }
 
-pub fn all_templates_depend_on_the_public_facade_only() {
+#[test]
+fn all_templates_depend_on_the_public_facade_only() {
     let tmp = TempDir::new().expect("temp dir");
     for (name, template, hot_reload) in [
         ("basic", "basic", false),
@@ -403,7 +418,8 @@ fn dependency_identities(dependencies: &toml::Table) -> Vec<&str> {
     packages
 }
 
-pub fn dry_run_writes_nothing_and_lists_key_files() {
+#[test]
+fn dry_run_writes_nothing_and_lists_key_files() {
     let tmp = TempDir::new().expect("temp dir");
     let project_dir = tmp.path().join("dry-app");
 
@@ -432,7 +448,8 @@ pub fn dry_run_writes_nothing_and_lists_key_files() {
     );
 }
 
-pub fn json_create_stdout_is_pure_ndjson_ending_in_create_done() {
+#[test]
+fn json_create_stdout_is_pure_ndjson_ending_in_create_done() {
     let tmp = TempDir::new().expect("temp dir");
 
     let output = flui()

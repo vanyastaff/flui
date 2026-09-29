@@ -25,7 +25,8 @@ fn ndjson_events(stdout: &[u8]) -> Vec<serde_json::Value> {
         .collect()
 }
 
-pub fn devices_json_reports_at_least_the_host_desktop() {
+#[test]
+fn devices_json_reports_at_least_the_host_desktop() {
     let assert = flui().args(["devices", "--json"]).assert().success();
     let events = ndjson_events(&assert.get_output().stdout);
 

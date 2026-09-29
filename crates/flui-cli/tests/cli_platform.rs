@@ -25,7 +25,8 @@ fn project_with_android_configured() -> TempDir {
     tmp
 }
 
-pub fn platform_remove_with_yes_skips_the_prompt_and_updates_the_config() {
+#[test]
+fn platform_remove_with_yes_skips_the_prompt_and_updates_the_config() {
     let tmp = project_with_android_configured();
 
     flui()
