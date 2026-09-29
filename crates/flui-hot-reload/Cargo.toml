@@ -21,12 +21,7 @@ exclude = ["/ARCHITECTURE.md"]
 
 [features]
 default = []
-app-plugin = [
-    "dep:flui-foundation",
-    "dep:flui-view",
-    "dep:flui-rendering",
-    "dep:parking_lot",
-]
+app-plugin = ["dep:flui-foundation", "dep:flui-view", "dep:flui-rendering", "dep:parking_lot"]
 # `WorkerReloadHook` and `ScenePluginHook`, the `DevReloadHook`s a `flui-app`
 # host installs (ADR-0094 §1). Off by default: the hook trait comes through
 # `flui-sdk`, which brings the widget catalog, and a scene plugin or worker
