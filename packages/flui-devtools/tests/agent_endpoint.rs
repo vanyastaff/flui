@@ -588,6 +588,58 @@ fn detach_closes_the_endpoint() {
     );
 }
 
+fn a_client_that_stops_reading_does_not_hold_up_detach() {
+    let address = Address::new();
+    let mut owner = Owner::new(AgentServer::new(address.endpoint()));
+    let at = address.address.clone();
+    owner.drive(move |owner| {
+        let mut client = Client::hello(&at);
+        client.only_window();
+        // Ask and never read, until the server has stopped reading too: its
+        // replies fill the connection and it is stuck writing one.
+        let cap = Instant::now() + Duration::from_secs(20);
+        let mut refused_since: Option<Instant> = None;
+        let mut id = 1_000_u64;
+        let mut pending = Vec::new();
+        while refused_since.is_none_or(|since| since.elapsed() < Duration::from_millis(300)) {
+            assert!(Instant::now() < cap, "the server never stopped reading");
+            if pending.is_empty() {
+                pending = format!(
+                    "{{\"id\":{id},\"op\":\"windows\"}}
+"
+                )
+                .into_bytes();
+                id += 1;
+            }
+            match (&client.stream).write(&pending) {
+                Ok(count) if count > 0 => {
+                    pending.drain(..count);
+                    refused_since = None;
+                }
+                Ok(_) => {
+                    refused_since.get_or_insert_with(Instant::now);
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    refused_since.get_or_insert_with(Instant::now);
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => panic!("the connection failed: {error}"),
+            }
+        }
+        let started = Instant::now();
+        owner.ask(Command::Detach);
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "detach waited {:?} on a session stuck writing",
+            started.elapsed()
+        );
+        // Not reconnected here: on Windows the pipe keeps the unread replies
+        // until this client reads or leaves, and a connect to the name waits.
+        drop(client);
+    });
+}
+
 fn a_bind_failure_leaves_the_realm_running() {
     // The endpoint is taken by another server, serving no window.
     let address = Address::new();
@@ -765,6 +817,10 @@ fn the_endpoint_contains_every_failure() {
             a_closed_window_answers_gone_and_leaves_the_list,
         ),
         ("detach_closes_the_endpoint", detach_closes_the_endpoint),
+        (
+            "a_client_that_stops_reading_does_not_hold_up_detach",
+            a_client_that_stops_reading_does_not_hold_up_detach,
+        ),
         (
             "a_bind_failure_leaves_the_realm_running",
             a_bind_failure_leaves_the_realm_running,

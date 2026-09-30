@@ -44,14 +44,14 @@ pub(super) fn serve(stream: Stream, shared: &Shared) {
         return;
     }
     let welcome = json!({ "hello": { "protocol": PROTOCOL_VERSION.to_string() } });
-    if connection.write_line(&welcome).is_err() {
+    if connection.write_line(&welcome, shared).is_err() {
         return;
     }
     loop {
         match connection.next_line(None, shared) {
             Next::Line(line) => {
                 let reply = handle(&line, shared);
-                if connection.write_line(&reply).is_err() {
+                if connection.write_line(&reply, shared).is_err() {
                     return;
                 }
             }
@@ -62,7 +62,7 @@ pub(super) fn serve(stream: Stream, shared: &Shared) {
                     format!("a request line is longer than {MAX_LINE} bytes"),
                 );
                 if connection
-                    .write_line(&error_reply(Value::Null, &fault, None))
+                    .write_line(&error_reply(Value::Null, &fault, None), shared)
                     .is_ok()
                 {
                     connection.linger(shared);
@@ -172,7 +172,10 @@ impl Connection {
         }
     }
 
-    fn write_line(&mut self, value: &Value) -> io::Result<()> {
+    /// Write `value` as one line. Gives up when the server stops, so a
+    /// client that stops reading never holds up a detach, and after
+    /// [`WRITE_TIMEOUT`].
+    fn write_line(&mut self, value: &Value, shared: &Shared) -> io::Result<()> {
         let mut bytes = serde_json::to_vec(value).map_err(io::Error::other)?;
         bytes.push(b'\n');
         let deadline = Instant::now() + WRITE_TIMEOUT;
@@ -190,6 +193,9 @@ impl Connection {
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
                 Err(error) => return Err(error),
+            }
+            if shared.stop.load(Ordering::SeqCst) {
+                return Err(io::ErrorKind::ConnectionAborted.into());
             }
             if Instant::now() >= deadline {
                 return Err(io::ErrorKind::TimedOut.into());
