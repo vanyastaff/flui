@@ -21,8 +21,9 @@ into.
   re-entrant layout walk's `unsafe` is confined to one SAFETY-audited arena
   module (`pipeline/owner/subtree_arena.rs`), machine-checked by a miri CI
   job.
-- **Storage** — slab-backed `RenderTree` with 1-based `NonZeroUsize`
-  `RenderId`s (the workspace-wide ID offset pattern).
+- **Storage** — slab-backed `RenderTree` keyed by generational `RenderId`s
+  (the 0-based slot plus a generation, so a stale id cannot address a reused
+  slot).
 - **Virtualization** — protocol-agnostic windowing math backing the lazy
   sliver family.
 - **Testing harness** (`testing` feature) — `RenderTester`/`Probe` build real

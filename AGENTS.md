@@ -149,7 +149,7 @@ memory-limited: one compiling worker, a shared `CARGO_TARGET_DIR`; a docs-only c
 |------|-------------|
 | Presentation capabilities (`rebuild_handle`, `writer_source`, `post_frame_handle`, `focus_manager`, `text_input_handle`, `keep_alive_*`, `pipeline_owner`, `async_driver`, …) are acquired only in `init_state`/`did_change_dependencies` | type system: they live on `LifecycleContext`, which only those hooks receive (ADR-0078) |
 | Signals are read in `build`, never written or created there | run-time guard in `flui-view::reactive` (ADR-0074) |
-| **ID offset** — slab indices are 0-based; public IDs (`ViewId`, `ElementId`, `RenderId`, `LayerId`, `SemanticsId`) are 1-based `NonZeroUsize`: insert `slab_index + 1`, look up `id.get() - 1` | `NonZeroUsize` + ID newtypes |
+| **ID offset** — slab indices are 0-based. Plain slab-backed IDs (`ViewId`, `LayerId`, `SemanticsId`) are 1-based `NonZeroUsize`: insert `slab_index + 1`, look up `id.get() - 1`. Generational keys (`ElementId`, `RenderId`, `RealmId`) pack the 0-based slot and a non-zero generation: mint with `new_gen(slab_index, generation)`, read `.index()` | `NonZeroUsize` / `NonZeroU64` + ID newtypes |
 | No lock guard held across an `if let`/`match` arm | `clippy::significant_drop_in_scrutinee` |
 | No `todo!`/`unimplemented!`/`dbg!` in production (linux/ios/android init stubs carry an `#[expect]`) | clippy `todo`/`unimplemented`/`dbg_macro` |
 | No `println!`/`eprintln!` in `flui-foundation`/`flui-macros` | clippy `print_stdout`/`print_stderr` |
