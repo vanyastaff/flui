@@ -111,7 +111,7 @@ pub use a11y::{
 pub use bootstrap::{BuildCapabilities, MountOptions, MountOwners, Mounted};
 pub use fonts::pin_font_faces;
 pub use log_capture::{CapturedLog, CapturedRecord, capture, disarm_interest_cache};
-pub use realm::{HeadlessRealm, HeadlessSink, HeadlessWindow};
+pub use realm::{HeadlessDevAgent, HeadlessRealm, HeadlessSink, HeadlessWindow};
 pub use replay::{GestureRecorder, PointerPhase, PointerScript, ScriptedPointer};
 
 use std::collections::HashMap;

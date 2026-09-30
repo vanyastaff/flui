@@ -11,9 +11,11 @@ use crate::app::{
     AppConfig, AppRunError, Application, StartupWindow,
     application::WindowErrorObserver,
     application_control::{AppHandle, AppWindowError, Ingress, contain},
+    dev_agent::DevAgent,
     hot_reload::{WorkerReload, WorkerWatcherGuard},
 };
 use flui_platform::{PendingWindow, PlatformProxy, WindowOpen, traits::HostWindow};
+use flui_runtime::dev_agent::DevAgentAttachment;
 use flui_view::View;
 use std::{
     cell::RefCell,
@@ -50,11 +52,16 @@ pub(in crate::app) struct MainController {
     error: Option<WindowErrorObserver>,
     fatal: Rc<RefCell<Option<AppRunError>>>,
     watcher: Option<WorkerWatcherGuard>,
+    /// The loop's development agent attachment; dropping it detaches the
+    /// hook.
+    agent: Option<DevAgentAttachment>,
 }
 impl Drop for MainController {
     fn drop(&mut self) {
         let watcher = self.watcher.take();
         contain(|| drop(watcher));
+        let agent = self.agent.take();
+        contain(|| drop(agent));
         let installer = self.installer.take();
         contain(|| drop(installer));
         let observer = self.error.take();
@@ -552,6 +559,7 @@ where
         });
         let reload = WorkerReload::from_config(&config);
         let watcher = reload.spawn_watcher(runtime_wake_callback());
+        let agent = config.dev_agent.as_ref().and_then(DevAgent::attach);
         let installer_config = config.clone();
         let identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
         let factory_identity = Arc::clone(&identity);
@@ -587,6 +595,7 @@ where
                 error: window_error,
                 fatal: recorded,
                 watcher,
+                agent,
             });
         });
         for service in &config.services {
@@ -671,6 +680,7 @@ mod tests {
                 error: observer,
                 fatal: Rc::new(RefCell::new(None)),
                 watcher: None,
+                agent: None,
             });
         });
         install_platform_quit_hook();
@@ -768,6 +778,10 @@ mod tests {
                     "main_window_reload_hook_stays_attached_across_failed_reopens_and_detaches_with_loop",
                     main_window_reload_hook_stays_attached_across_failed_reopens_and_detaches_with_loop as fn(),
                 ),
+                (
+                    "main_window_agent_hook_stays_attached_across_failed_reopens_and_detaches_with_loop",
+                    main_window_agent_hook_stays_attached_across_failed_reopens_and_detaches_with_loop as fn(),
+                ),
             ],
         );
     }
@@ -843,6 +857,89 @@ mod tests {
         assert_eq!(
             counts.get(),
             (1, 1),
+            "loop teardown detached the hook exactly once"
+        );
+    }
+
+    /// The loop's development agent hook is attached once, when the loop
+    /// starts, stays attached while main-window opens fail and are retried,
+    /// and is detached exactly once, when the loop ends.
+    ///
+    /// The factory panics before GPU setup, so no window is ever vended here:
+    /// the zero hand-over count pins only that a failed open hands nothing
+    /// over, not the vend-then-hand-over order after a committed install,
+    /// which runs after GPU setup and no headless test reaches.
+    fn main_window_agent_hook_stays_attached_across_failed_reopens_and_detaches_with_loop() {
+        #[derive(Default)]
+        struct Counts {
+            attaches: AtomicUsize,
+            detaches: AtomicUsize,
+            opened: AtomicUsize,
+        }
+        impl Counts {
+            fn get(&self) -> (usize, usize, usize) {
+                (
+                    self.attaches.load(Ordering::SeqCst),
+                    self.detaches.load(Ordering::SeqCst),
+                    self.opened.load(Ordering::SeqCst),
+                )
+            }
+        }
+        struct Counting(Arc<Counts>);
+        impl flui_view::dev_agent::DevAgentHook for Counting {
+            fn attach(&mut self) -> bool {
+                self.0.attaches.fetch_add(1, Ordering::SeqCst);
+                true
+            }
+            fn detach(&mut self) {
+                self.0.detaches.fetch_add(1, Ordering::SeqCst);
+            }
+            fn window_opened(&mut self, _window: flui_view::dev_agent::AgentWindow) {
+                self.0.opened.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let counts = Arc::new(Counts::default());
+        let observed = Arc::clone(&counts);
+        let app = Application::new(|_| -> flui_widgets::Text {
+            panic!("factory failure before GPU setup");
+        })
+        .with_startup_window(StartupWindow::None)
+        .with_config(
+            AppConfig::new()
+                .with_exit_policy(ExitPolicy::ExplicitQuit)
+                .with_dev_agent(Counting(Arc::clone(&counts))),
+        )
+        .on_ready(move |handle| {
+            assert_eq!(observed.get(), (1, 0, 0), "attached when the loop starts");
+            assert!(
+                APP_RUNTIME.with(|slot| slot
+                    .borrow()
+                    .main_controller
+                    .as_ref()
+                    .expect("controller installed")
+                    .agent
+                    .is_some()),
+                "the loop holds the attachment"
+            );
+            for _ in 0..2 {
+                let mut request = handle.request_show_main_window().expect("admit retry");
+                drive_main_window();
+                assert!(matches!(
+                    request.try_result(),
+                    Some(Err(AppWindowError::FactoryPanicked { .. }))
+                ));
+                assert_eq!(
+                    observed.get(),
+                    (1, 0, 0),
+                    "a failed open neither re-attaches, detaches nor hands a window over"
+                );
+            }
+        });
+        run_with_platform(app, Box::new(HeadlessPlatform::new())).expect("ordinary owner teardown");
+        assert_eq!(
+            counts.get(),
+            (1, 1, 0),
             "loop teardown detached the hook exactly once"
         );
     }
