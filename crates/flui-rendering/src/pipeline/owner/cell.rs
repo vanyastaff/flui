@@ -29,7 +29,7 @@ use super::PipelineOwner;
 /// ```should_panic
 /// use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 ///
-/// let cell = PipelineCell::new(PipelineOwner::new());
+/// let cell = PipelineCell::new(PipelineOwner::new(flui_rendering::TextContextHandle::standalone()));
 /// cell.with_mut(|_owner| {
 ///     // Reentrant with_mut on the same cell -- panics:
 ///     // "BUG: PipelineCell::with_mut called reentrantly -- ..."
@@ -65,7 +65,7 @@ impl PipelineCell {
     /// ```
     /// use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
     ///
-    /// let cell = PipelineCell::new(PipelineOwner::new());
+    /// let cell = PipelineCell::new(PipelineOwner::new(flui_rendering::TextContextHandle::standalone()));
     /// let dpr = cell.with(PipelineOwner::device_pixel_ratio);
     /// assert_eq!(dpr, 1.0, "a fresh PipelineOwner defaults to 1x");
     ///
@@ -136,7 +136,7 @@ impl PipelineCell {
     /// ```
     /// use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
     ///
-    /// let cell = PipelineCell::new(PipelineOwner::new());
+    /// let cell = PipelineCell::new(PipelineOwner::new(flui_rendering::TextContextHandle::standalone()));
     /// assert!(cell.is_free());
     ///
     /// cell.with_mut(|_owner| {

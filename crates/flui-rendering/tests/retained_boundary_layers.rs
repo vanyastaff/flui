@@ -43,7 +43,7 @@ fn spec(n: usize) -> TreeNode {
 }
 
 fn mount(n: usize) -> (PipelineOwner<flui_rendering::pipeline::Idle>, TreeIds) {
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let (root_id, registry) = tree::mount(&mut owner, spec(n));
     owner.set_root_id(Some(root_id));
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
@@ -172,7 +172,7 @@ pub(crate) fn the_content_of_a_clean_boundary_is_not_repainted() {
     let dirty_paints = Arc::new(AtomicUsize::new(0));
     let clean_paints = Arc::new(AtomicUsize::new(0));
 
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let (root_id, registry) = tree::mount(
         &mut owner,
         box_node(RenderFlex::row())
@@ -294,7 +294,7 @@ fn mount_opacity_under_boundary(
     Arc<AtomicUsize>,
 ) {
     let painted = Arc::new(AtomicUsize::new(0));
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let (root_id, registry) = tree::mount(
         &mut owner,
         box_node(RenderFlex::row())
@@ -418,7 +418,7 @@ pub(crate) fn a_failed_pass_does_not_downgrade_a_real_repaint_to_an_update() {
 
     let armed = Arc::new(AtomicBool::new(false));
     let painted = Arc::new(AtomicUsize::new(0));
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let (root_id, registry) = tree::mount(
         &mut owner,
         box_node(RenderFlex::row())

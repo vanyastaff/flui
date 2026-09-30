@@ -28,7 +28,7 @@ pub fn root_constraints() -> BoxConstraints {
 /// Construction goes through the same `flui_rendering::testing` builder the
 /// integration tests use, so benches measure the genuine production contract.
 fn mount_layout(spec: TreeNode) -> PipelineOwner<Layout> {
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let (root_id, _registry) = tree::mount(&mut owner, spec);
     owner.set_root_id(Some(root_id));
     owner.set_root_constraints(Some(root_constraints()));
@@ -160,7 +160,7 @@ pub fn build_boundary_tree_painted_once(n: usize) -> (PipelineOwner<PaintPhase>,
         box_node(RenderRepaintBoundary::new()).child(leaf)
     }));
 
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let (root_id, registry) = tree::mount(&mut owner, spec);
     owner.set_root_id(Some(root_id));
     owner.set_root_constraints(Some(root_constraints()));
@@ -237,7 +237,7 @@ pub fn build_effect_tree(
         box_node(RenderRepaintBoundary::new()).child(box_node(RenderColoredBox::red(1.0, 1.0))),
     ]);
 
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let (root_id, registry) = tree::mount(&mut owner, spec);
     owner.set_root_id(Some(root_id));
     owner.set_root_constraints(Some(root_constraints()));

@@ -30,7 +30,9 @@ fn active_retake_fixture() -> (
 ) {
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    let pipeline = PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new());
+    let pipeline = PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new(
+        flui_rendering::TextContextHandle::standalone(),
+    ));
     let root = tree.mount_root_with_pipeline_owner(
         &UnitRenderHost,
         Some(pipeline),

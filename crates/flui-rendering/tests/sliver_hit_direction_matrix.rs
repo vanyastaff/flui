@@ -170,7 +170,7 @@ pub(crate) fn sliver_hit_direction_matrix_through_box_host() {
     ];
 
     for (axis, growth, hit_position, miss_position) in cases {
-        let mut owner = PipelineOwner::new();
+        let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
         let host_id = owner.insert(Box::new(SliverHitHost {
             constraints: sliver_hit_constraints(axis, growth),
         }) as BoxedRenderObject);

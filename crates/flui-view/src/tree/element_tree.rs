@@ -3145,7 +3145,9 @@ mod tests {
             Box<dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>>;
         let mut tree = ElementTree::new();
         let mut owner = BuildOwner::new();
-        let pipeline = PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new());
+        let pipeline = PipelineCell::new(flui_rendering::pipeline::PipelineOwner::new(
+            flui_rendering::TextContextHandle::standalone(),
+        ));
         let root = tree.mount_root_with_pipeline_owner(
             &UnitRenderHost,
             Some(pipeline.clone()),

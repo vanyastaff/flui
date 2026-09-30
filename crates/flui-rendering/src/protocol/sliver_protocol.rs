@@ -92,7 +92,7 @@ impl Protocol for SliverProtocol {
     /// hands an erased `&mut dyn SliverLayoutCtxErased` view to `f`.
     fn with_leaf_erased_ctx<R>(
         constraints: SliverConstraints,
-        _text: Option<crate::pipeline::TextSource<'_>>,
+        _text: crate::pipeline::TextSource<'_>,
         f: impl FnOnce(&mut Self::LayoutCtxErased<'_>) -> R,
     ) -> R {
         let mut typed =

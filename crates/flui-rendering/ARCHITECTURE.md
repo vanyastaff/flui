@@ -1059,8 +1059,12 @@ need the downstream engine to write into the upstream owner; the logic lives onc
 ### Layout contexts lend the realm's text context, one measurement at a time
 
 **Rule.** A `PipelineOwner` holds the realm's `TextContextHandle`
-(`Rc<RefCell<flui_painting::TextContext>>`), installed once by the runtime through
-`set_text_context` before the first layout (ADR-0092 §10 step 3). The layout walk passes the
+(`Rc<RefCell<flui_painting::TextContext>>`), a constructor argument: `PipelineOwner::new` and
+`new_with_capacity` take it, and there is no `Default` (ADR-0092 §10 step 3). A pipeline with no
+realm behind it (a hot-reload plugin image, a test) passes `TextContextHandle::standalone`, a
+context over a collection of its own. A frame driver that moves the owner out of its slot for a
+typestate transition calls `take_idle`, whose placeholder shares the handle, so the slot a
+transition that unwinds leaves still measures through it. The layout walk passes the
 cell to every box node it lays out or measures — leaves through `layout_leaf_only`, parents
 through `ErasedBoxLayoutCtx`, box intrinsics asked by a box or a sliver parent — and the
 intrinsic, dry-layout and dry-baseline query walks pass it to `intrinsic_raw`,
@@ -1070,10 +1074,9 @@ intrinsic, dry-layout and dry-baseline query walks pass it to `intrinsic_raw`,
 lay out a child or query one while it holds the loan. The raw methods and
 `BoxLayoutCtxErased::text_source` carry the cell as a `TextSource`, a `Copy` token whose cell
 only this crate can borrow, so a direct `RenderObject` implementation passes it on but cannot
-hold a loan across a child query. A pipeline that was never given a
-handle builds a private context on first use; a context built by hand (a test helper, a
-leaf-only layout) lends one of its own. Slivers get no text accessor: nothing that measures
-text is a sliver.
+hold a loan across a child query. Nothing builds a context implicitly: every layout, intrinsic
+and dry-query context is constructed with a `TextSource`, and `layout_leaf_only` takes one.
+Slivers get no text accessor: nothing that measures text is a sliver.
 
 **Divergence.** Flutter has no such channel: `TextPainter` reaches the engine-wide font
 collection ambiently. FLUI's realm owns its text context, so the context has to reach the
@@ -1089,7 +1092,8 @@ not re-entrant). A `RefMut` drops on unwind, so a panicking layout releases the 
 walk's `catch_unwind` turns it into `Poisoned`. Locked by
 `a_layout_that_panics_while_holding_the_text_context_releases_it`,
 `intrinsic_and_dry_queries_measure_through_the_pipelines_context` and
-`a_pipeline_without_a_handle_measures_on_its_own_context` (`tests/text_context.rs`).
+`a_taken_pipeline_leaves_an_owner_that_measures_through_the_same_context`
+(`tests/text_context.rs`), and the `compile_fail` doctests on `PipelineOwner::new`.
 
 
 ## Thread safety

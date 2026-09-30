@@ -102,7 +102,7 @@ pub(crate) fn viewport_lays_out_forward_slivers_and_applies_content_dimensions()
         ScrollableViewportOffset::new(40.0),
     );
 
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let root_id = owner.insert(Box::new(viewport));
     let first_id = owner
         .render_tree_mut()
@@ -227,7 +227,7 @@ pub(crate) fn viewport_positions_first_sliver_for_axis_and_growth_matrix() {
             );
         }
 
-        let mut owner = PipelineOwner::new();
+        let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
         let root_id = owner.insert(Box::new(viewport));
         let sliver_id = owner
             .render_tree_mut()

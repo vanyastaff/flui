@@ -82,7 +82,9 @@ fn register_ready_scope(
 fn no_scope_fixture(dirty_count: usize) -> Fixture {
     let mut owner = BuildOwner::new();
     let mut tree = ElementTree::new();
-    let pipeline = PipelineCell::new(PipelineOwner::new());
+    let pipeline = PipelineCell::new(PipelineOwner::new(
+        flui_rendering::TextContextHandle::standalone(),
+    ));
     let root = tree.mount_root(&Leaf, &mut owner.element_owner_mut());
     owner.build_scope(&mut tree);
     for slot in 0..dirty_count {

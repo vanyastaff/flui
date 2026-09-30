@@ -62,7 +62,9 @@ fn leaf(width: f64, height: f64) -> SizedLeaf {
 
 pub(crate) fn mount_root_installs_the_render_root_and_lays_it_out() {
     let mut binding = HeadlessBinding::new();
-    let pipeline_owner = PipelineCell::new(PipelineOwner::new());
+    let pipeline_owner = PipelineCell::new(PipelineOwner::new(
+        flui_rendering::TextContextHandle::standalone(),
+    ));
     let mounted = binding.mount_root(
         &leaf(40.0, 25.0),
         MountOwners::with_pipeline_owner(pipeline_owner.clone()),

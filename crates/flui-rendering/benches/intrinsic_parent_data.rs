@@ -126,7 +126,7 @@ fn build_intrinsic_bench_tree(child_count: usize) -> PipelineOwner<Layout> {
     let spec = box_node(IntrinsicQueryingDriver)
         .child(box_node(RenderFlex::row()).children(flex_children));
 
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let (root_id, _) = tree::mount(&mut owner, spec);
     owner.set_root_id(Some(root_id));
     owner.set_root_constraints(Some(bench_constraints()));

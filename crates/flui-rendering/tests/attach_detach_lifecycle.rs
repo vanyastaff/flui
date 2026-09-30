@@ -103,7 +103,7 @@ fn probe(log: LifecycleLog) -> BoxedRenderObject {
 // ────────────────────────────────────────────────────────────────────────
 
 pub(crate) fn insert_fires_exactly_one_attach_with_a_handle_bound_to_the_new_id() {
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let log = LifecycleLog::default();
 
     let id = owner.insert(probe(log.clone()));
