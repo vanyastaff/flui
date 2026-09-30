@@ -19,11 +19,11 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-flui_assets = "0.1"
+flui-assets = { git = "https://github.com/vanyastaff/flui" }
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
 
-# Optional features
-flui_assets = { version = "0.1", features = ["images"] }
+# Optional features: replace the line above with
+# flui-assets = { git = "https://github.com/vanyastaff/flui", features = ["images"] }
 ```
 
 ### Your First Asset
@@ -171,7 +171,7 @@ Requires `images` feature flag:
 
 ```toml
 [dependencies]
-flui_assets = { version = "0.1", features = ["images"] }
+flui-assets = { git = "https://github.com/vanyastaff/flui", features = ["images"] }
 ```
 
 ```rust
@@ -228,7 +228,7 @@ impl Asset for ConfigAsset {
     async fn load(&self) -> Result<ConfigData, AssetError> {
         let content = tokio::fs::read_to_string(&self.path)
             .await
-            .map_err(|e| AssetError::Io(e))?;
+            .map_err(AssetError::from)?;
 
         Ok(ConfigData { content })
     }
@@ -409,8 +409,8 @@ match registry.load(font).await {
     Err(AssetError::Io(e)) => {
         eprintln!("I/O error: {}", e);
     }
-    Err(AssetError::InvalidFormat(msg)) => {
-        eprintln!("Invalid format: {}", msg);
+    Err(AssetError::InvalidData { path, reason }) => {
+        eprintln!("Invalid data in {}: {}", path, reason);
     }
     Err(AssetError::NotFound { path }) => {
         eprintln!("Not found: {}", path);
@@ -510,7 +510,7 @@ async fn load_font_with_fallback(
 ```rust
 // Define convenient type aliases
 type FontHandle = AssetHandle<FontData, AssetKey>;
-type ImageHandle = AssetHandle<ImageData, AssetKey>;
+type ImageHandle = AssetHandle<Image, AssetKey>; // `flui_assets::Image`
 
 fn process_font(font: FontHandle) {
     // ...
@@ -582,13 +582,13 @@ fn process_font(font: FontHandle) {
 
 ```toml
 # Single feature
-flui_assets = { version = "0.1", features = ["images"] }
+flui-assets = { git = "https://github.com/vanyastaff/flui", features = ["images"] }
 
 # Multiple features
-flui_assets = { version = "0.1", features = ["images", "network"] }
+flui-assets = { git = "https://github.com/vanyastaff/flui", features = ["images", "network"] }
 
 # All features
-flui_assets = { version = "0.1", features = ["full"] }
+flui-assets = { git = "https://github.com/vanyastaff/flui", features = ["full"] }
 ```
 
 ## Examples
@@ -682,14 +682,20 @@ impl Asset for GameConfigAsset {
     async fn load(&self) -> Result<GameConfig, AssetError> {
         let content = tokio::fs::read_to_string(&self.path)
             .await
-            .map_err(|e| AssetError::Io(e))?;
+            .map_err(AssetError::from)?;
 
         let config: GameConfig = serde_json::from_str(&content)
-            .map_err(|e| AssetError::InvalidFormat(e.to_string()))?;
+            .map_err(|e| AssetError::InvalidData {
+                path: self.path.clone(),
+                reason: e.to_string(),
+            })?;
 
         // Validate
         if config.title.is_empty() {
-            return Err(AssetError::InvalidFormat("Title cannot be empty".into()));
+            return Err(AssetError::InvalidData {
+                path: self.path.clone(),
+                reason: "title cannot be empty".into(),
+            });
         }
 
         Ok(config)
@@ -709,4 +715,4 @@ impl Asset for GameConfigAsset {
 - Read [ARCHITECTURE.md](ARCHITECTURE.md) for system internals
 - Read [PATTERNS.md](PATTERNS.md) for design patterns
 - Read [PERFORMANCE.md](PERFORMANCE.md) for optimization tips
-- Check [API documentation](https://docs.rs/flui_assets) for complete reference
+- Run `cargo doc -p flui-assets --open` for the complete API reference

@@ -119,11 +119,11 @@ offset the renderer applies at the follower's tree position.
 
 ```toml
 [dev-dependencies]
-flui-layer = { version = "0.2", features = ["testing"] }
+flui-layer = { git = "https://github.com/vanyastaff/flui", features = ["testing"] }
 ```
 
-This crate isn't published to crates.io yet; until the first release, depend
-on it via a git tag or path — see the [flui facade's README](../../README.md).
+This crate isn't published to crates.io; depend on it via git or path — see
+the [flui facade's README](../../README.md).
 
 ## Design
 

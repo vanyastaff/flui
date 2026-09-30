@@ -94,12 +94,15 @@ High-level gesture detection with arena-based conflict resolution.
 ```rust
 use flui_interaction::prelude::*;
 
-// Create recognizer
-let tap = TapGestureRecognizer::new();
-tap.on_tap(|| println!("Tapped!"));
+// Recognizers compete in one shared arena; `new` returns an `Arc<Self>`
+// and each `with_on_*` builder consumes and returns it.
+let arena = GestureArena::new();
+let tap = TapGestureRecognizer::new(arena.clone())
+    .with_on_tap(|details| println!("Tapped at {:?}", details.global_position));
 
-// Handle events
-tap.add_pointer(pointer_id, event);
+// At runtime `GestureBinding` feeds it: `add_pointer` on pointer down,
+// `handle_event` for the rest of the sequence.
+tap.add_pointer(pointer_id, local_position, global_position);
 ```
 
 ---
@@ -149,11 +152,11 @@ match event {
 Single tap detection.
 
 ```rust
-let tap = TapGestureRecognizer::new();
-tap.on_tap_down(|details| { /* pointer down */ });
-tap.on_tap_up(|details| { /* pointer up, tap confirmed */ });
-tap.on_tap(|| { /* complete tap */ });
-tap.on_tap_cancel(|| { /* tap cancelled */ });
+let tap = TapGestureRecognizer::new(arena.clone())
+    .with_on_tap_down(|details| { /* pointer down */ })
+    .with_on_tap_up(|details| { /* pointer up, tap confirmed */ })
+    .with_on_tap(|details| { /* complete tap */ })
+    .with_on_tap_cancel(|details| { /* tap cancelled */ });
 ```
 
 ### DoubleTapGestureRecognizer
@@ -161,9 +164,9 @@ tap.on_tap_cancel(|| { /* tap cancelled */ });
 Two taps in quick succession.
 
 ```rust
-let double_tap = DoubleTapGestureRecognizer::new();
-double_tap.on_double_tap(|| println!("Double tapped!"));
-double_tap.on_double_tap_down(|details| { /* first tap */ });
+let double_tap = DoubleTapGestureRecognizer::new(arena.clone())
+    .with_on_double_tap(|details| println!("Double tapped!"))
+    .with_on_double_tap_down(|details| { /* second pointer down */ });
 ```
 
 ### LongPressGestureRecognizer
@@ -171,10 +174,10 @@ double_tap.on_double_tap_down(|details| { /* first tap */ });
 Press and hold.
 
 ```rust
-let long_press = LongPressGestureRecognizer::new();
-long_press.on_long_press_start(|details| { /* hold started */ });
-long_press.on_long_press_move_update(|details| { /* moved while holding */ });
-long_press.on_long_press_end(|details| { /* released */ });
+let long_press = LongPressGestureRecognizer::new(arena.clone())
+    .with_on_long_press_start(|details| { /* hold started */ })
+    .with_on_long_press_move_update(|details| { /* moved while holding */ })
+    .with_on_long_press_end(|details| { /* released */ });
 ```
 
 ### DragGestureRecognizer
@@ -182,13 +185,14 @@ long_press.on_long_press_end(|details| { /* released */ });
 Pan/drag gestures.
 
 ```rust
-let drag = DragGestureRecognizer::new();
-drag.on_drag_start(|details| { /* drag started */ });
-drag.on_drag_update(|details| {
-    let delta = details.delta;
-    let velocity = details.velocity;
-});
-drag.on_drag_end(|details| { /* drag ended */ });
+let drag = DragGestureRecognizer::new(arena.clone(), DragAxis::Free)
+    .with_on_start(|details| { /* drag started */ })
+    .with_on_update(|details| {
+        let delta = details.delta;
+    })
+    .with_on_end(|details| {
+        let velocity = details.velocity;
+    });
 ```
 
 ### ScaleGestureRecognizer
@@ -196,14 +200,14 @@ drag.on_drag_end(|details| { /* drag ended */ });
 Pinch-to-zoom and rotation.
 
 ```rust
-let scale = ScaleGestureRecognizer::new();
-scale.on_scale_start(|details| { /* scale started */ });
-scale.on_scale_update(|details| {
-    let scale = details.scale;
-    let rotation = details.rotation;
-    let focal_point = details.focal_point;
-});
-scale.on_scale_end(|details| { /* scale ended */ });
+let scale = ScaleGestureRecognizer::new(arena.clone())
+    .with_on_scale_start(|details| { /* scale started */ })
+    .with_on_scale_update(|details| {
+        let scale = details.scale;
+        let rotation = details.rotation;
+        let focal_point = details.focal_point;
+    })
+    .with_on_scale_end(|details| { /* scale ended */ });
 ```
 
 ### ForcePressGestureRecognizer
@@ -211,11 +215,11 @@ scale.on_scale_end(|details| { /* scale ended */ });
 Pressure-sensitive input (3D Touch, Force Touch).
 
 ```rust
-let force = ForcePressGestureRecognizer::new();
-force.on_force_press_start(|details| { /* force threshold reached */ });
-force.on_force_press_peak(|details| { /* max pressure */ });
-force.on_force_press_update(|details| { /* pressure changed */ });
-force.on_force_press_end(|details| { /* released */ });
+let force = ForcePressGestureRecognizer::new(arena.clone())
+    .with_on_start(|details| { /* force threshold reached */ })
+    .with_on_peak(|details| { /* max pressure */ })
+    .with_on_update(|details| { /* pressure changed */ })
+    .with_on_end(|details| { /* released */ });
 ```
 
 ---
@@ -225,13 +229,17 @@ force.on_force_press_end(|details| { /* released */ });
 Resolves conflicts when multiple recognizers compete for the same pointer.
 
 ```rust
-use flui_interaction::{GestureArena, GestureDisposition};
+use flui_interaction::prelude::*;
 
+// Recognizers built on clones of one arena share it.
 let arena = GestureArena::new();
+let tap = TapGestureRecognizer::new(arena.clone());
+let drag = DragGestureRecognizer::new(arena.clone(), DragAxis::Free);
 
-// Recognizers join arena
-arena.add(pointer_id, tap_recognizer);
-arena.add(pointer_id, drag_recognizer);
+// Each recognizer joins the pointer's arena entry from `add_pointer`
+// (`GestureArena::add` underneath).
+tap.add_pointer(pointer_id, position, global_position);
+drag.add_pointer(pointer_id, position, global_position);
 
 // Arena resolves winner based on:
 // 1. First to accept wins
@@ -270,14 +278,14 @@ turned into a forced first-member win.
 Estimates pointer velocity for fling gestures.
 
 ```rust
-use flui_interaction::VelocityTracker;
+use flui_interaction::{PointerDeviceKind, VelocityTracker};
 
-let mut tracker = VelocityTracker::new();
+let mut tracker = VelocityTracker::with_kind(PointerDeviceKind::Touch);
 tracker.add_position(timestamp, position);
 // ... more positions ...
 
-let velocity = tracker.velocity();
-// velocity.x, velocity.y in logical pixels per second
+let velocity = tracker.get_velocity();
+// logical pixels per second
 ```
 
 ### PointerEventResampler
@@ -287,11 +295,11 @@ Synchronizes pointer events with frame timing.
 ```rust
 use flui_interaction::PointerEventResampler;
 
-let mut resampler = PointerEventResampler::new();
+let resampler = PointerEventResampler::new(pointer_id);
 resampler.add_event(event);
 
-// At frame time
-let resampled = resampler.sample(frame_timestamp);
+// At frame time: emit events interpolated for this sampling window
+resampler.sample(sample_time, next_sample_time, |event| dispatch(event));
 ```
 
 ### InputPredictor
@@ -304,7 +312,7 @@ use flui_interaction::InputPredictor;
 let mut predictor = InputPredictor::new();
 predictor.add_sample(timestamp, position);
 
-let predicted = predictor.predict(future_timestamp);
+let predicted = predictor.predict(time_ahead); // a `Duration`
 ```
 
 ---
@@ -361,15 +369,15 @@ let focus = FocusNodeId::new(42);
 ```rust
 use flui_interaction::GestureSettings;
 
-let settings = GestureSettings {
-    touch_slop: 18.0,           // Movement before drag starts
-    pan_slop: 36.0,             // Movement for pan gesture
-    double_tap_timeout: 300,     // ms between double tap
-    long_press_timeout: 500,     // ms to trigger long press
-    min_fling_velocity: 50.0,    // Minimum fling velocity
-    max_fling_velocity: 8000.0,  // Maximum fling velocity
-    ..Default::default()
-};
+use std::time::Duration;
+
+let settings = GestureSettings::default()
+    .with_touch_slop(18.0)                                 // Movement before drag starts
+    .with_pan_slop(36.0)                                   // Movement for pan gesture
+    .with_double_tap_timeout(Duration::from_millis(300))   // Between double-tap contacts
+    .with_long_press_timeout(Duration::from_millis(500))   // To trigger long press
+    .with_min_fling_velocity(50.0)
+    .with_max_fling_velocity(8000.0);
 ```
 
 ---
