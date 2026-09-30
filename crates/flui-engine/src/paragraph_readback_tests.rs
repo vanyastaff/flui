@@ -438,6 +438,54 @@ fn a_2x_baseline_row(renderer: &crate::headless::HeadlessRenderer) {
     );
 }
 
+/// A selection of the second line's `cd` in `"ab\ncd"`, filled from
+/// `get_boxes_for_selection` under the text as a field paints its highlight,
+/// colours line 2 over `cd` and leaves line 1 alone. The cosmic-text caret
+/// layout matched its per-line glyph offsets against whole-text offsets and
+/// gave this range no box at all.
+fn selection_highlights_the_second_line(renderer: &crate::headless::HeadlessRenderer) {
+    let fonts = FontCollection::new();
+    let painter = laid_out(
+        &fonts,
+        "ab\ncd",
+        black(32.0),
+        TextDirection::Ltr,
+        f64::from(WIDE.0) - 16.0,
+    );
+    let boxes = painter.get_boxes_for_selection(3, 5);
+    assert_eq!(boxes.len(), 1, "one box for `cd`: {boxes:?}");
+    let highlight = boxes[0].rect;
+    let mut canvas = Canvas::new();
+    let blue = flui_painting::Paint::fill(Color::rgba(0, 0, 255, 255));
+    canvas.draw_rect(highlight.translate_offset(ORIGIN), &blue);
+    painter.paint(&mut canvas, ORIGIN);
+    let mut builder = SceneBuilder::new();
+    builder.add_picture(canvas.finish());
+    let pixels = renderer
+        .render_layer_tree(&builder.build(), WIDE)
+        .expect("the headless capture path rasterizes a paragraph");
+
+    let columns = ORIGIN.dx + highlight.left() + 1.0..ORIGIN.dx + highlight.right() - 1.0;
+    assert!(
+        !ink_in(&pixels, band(&painter, 1), columns, saturated).is_empty(),
+        "line 2 is highlighted over `cd` ({highlight:?})"
+    );
+    assert!(
+        ink_in(&pixels, band(&painter, 0), everywhere(), saturated).is_empty(),
+        "line 1 is not highlighted"
+    );
+    assert!(
+        ink_in(
+            &pixels,
+            band(&painter, 1),
+            ORIGIN.dx + highlight.right() + 2.0..f64::from(WIDE.0),
+            saturated
+        )
+        .is_empty(),
+        "nothing is highlighted past `cd`"
+    );
+}
+
 /// Parley's runs read back as laid out: hard breaks, synthesis, fallback
 /// faces, right alignment and the device baseline, each sampled where Parley
 /// paint and the cosmic-text paint it replaced differ.
@@ -447,7 +495,7 @@ fn parley_runs_read_back() {
         return;
     };
     type Row = (&'static str, fn(&crate::headless::HeadlessRenderer));
-    let rows: [Row; 7] = [
+    let rows: [Row; 8] = [
         (
             "latin_breaks_at_a_line_separator",
             latin_breaks_at_a_line_separator,
@@ -467,6 +515,10 @@ fn parley_runs_read_back() {
         ),
         ("crlf_puts_b_on_line_two", crlf_puts_b_on_line_two),
         ("a_2x_baseline_row", a_2x_baseline_row),
+        (
+            "selection_highlights_the_second_line",
+            selection_highlights_the_second_line,
+        ),
     ];
     let failed: Vec<&str> = rows
         .iter()

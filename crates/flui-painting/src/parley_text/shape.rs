@@ -60,17 +60,32 @@ pub struct ParagraphSpec<'a> {
 }
 
 /// A shaped, line-broken paragraph.
+///
+/// Measurement, paint and the caret queries (`caret`, `position_at`,
+/// `boxes`, `line_metrics`, `word_boundary`) all read this one layout.
 pub struct ParagraphLayout {
-    layout: Layout<SpanBrush>,
-    text: String,
+    pub(super) layout: Layout<SpanBrush>,
+    /// The text the layout holds, an appended ellipsis included.
+    pub(super) text: String,
     spans: Vec<SpanInfo>,
-    line_height: f32,
+    pub(super) line_height: f32,
     max_lines: Option<usize>,
     direction: TextDirection,
     /// Whether an ellipsis replaced dropped lines; the layout itself then
     /// holds only the kept ones.
     ellipsized: bool,
+    /// Where the kept text ends: before an appended ellipsis, or at the end
+    /// of the last kept line (its hard break left out) when lines are
+    /// dropped. Caret and hit queries never reach past it.
+    pub(super) kept_text: usize,
 }
+
+// A painter keeps its layout in its cache, and a render object holding the
+// painter moves between threads.
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<ParagraphLayout>();
+};
 
 /// What a span was shaped with, for [`ShapedParagraph::describe_spans`].
 #[derive(Clone, Debug)]
@@ -85,7 +100,7 @@ struct SpanInfo {
 
 impl ParagraphLayout {
     /// How many lines the paragraph keeps.
-    fn kept(&self) -> usize {
+    pub(super) fn kept(&self) -> usize {
         self.max_lines
             .map_or(self.layout.len(), |max| max.min(self.layout.len()))
     }
@@ -125,7 +140,7 @@ impl ParagraphLayout {
     }
 
     /// The width and height of the kept lines.
-    fn kept_extent(&self) -> (f32, f32) {
+    pub(super) fn kept_extent(&self) -> (f32, f32) {
         let kept = self.kept();
         if kept < self.layout.len() {
             // The layout's own width and height cover every line; a
@@ -184,7 +199,7 @@ impl ParagraphLayout {
         for line in self.layout.lines().take(self.kept()) {
             let line_metrics = line.metrics();
             baselines.push(line_metrics.baseline);
-            let shift = self.line_start(line_metrics, box_width) - line_metrics.offset;
+            let shift = self.line_shift(line_metrics, box_width);
             for item in line.items() {
                 let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
                     continue;
@@ -249,11 +264,19 @@ impl ParagraphLayout {
         }
     }
 
+    /// How far paint moves `line` from where Parley aligned it: to
+    /// [`Self::line_start`] from Parley's own offset. Paint shifts every
+    /// glyph by it, and the caret queries every cluster edge, so carets sit
+    /// on the painted glyphs.
+    pub(super) fn line_shift(&self, line: &parley::layout::LineMetrics, box_width: f32) -> f32 {
+        self.line_start(line, box_width) - line.offset
+    }
+
     /// Where `line`'s first glyph run starts in a box `box_width` wide:
     /// Parley's rule for its alignment, with the box in place of the width
     /// the line was broken at, so a line of a paragraph broken at 300 px
     /// that is 120 px wide right-aligns to 120, not to 300.
-    fn line_start(&self, line: &parley::layout::LineMetrics, box_width: f32) -> f32 {
+    pub(super) fn line_start(&self, line: &parley::layout::LineMetrics, box_width: f32) -> f32 {
         // An RTL line hangs its trailing whitespace off its left end.
         let hang = if self.layout.is_rtl() {
             -line.trailing_whitespace
@@ -431,7 +454,7 @@ struct Shaped {
 }
 
 /// The characters Parley ends a line at.
-fn is_hard_break(c: char) -> bool {
+pub(super) fn is_hard_break(c: char) -> bool {
     matches!(
         c,
         '\n' | '\r' | '\u{000B}' | '\u{000C}' | '\u{2028}' | '\u{2029}'
@@ -449,12 +472,24 @@ impl TextContext {
         let max_lines = paragraph.max_lines.filter(|&lines| lines > 0);
         let mut shaped = self.shape_spans(paragraph, paragraph.spans);
         let mut ellipsized = false;
+        let mut kept_text = shaped.text.len();
         if let (Some(max_lines), Some(ellipsis)) =
             (max_lines, paragraph.ellipsis.filter(|e| !e.is_empty()))
             && shaped.layout.len() > max_lines
         {
             shaped = self.ellipsize(paragraph, &shaped, max_lines, ellipsis);
             ellipsized = true;
+            kept_text = shaped.text.len() - ellipsis.len();
+        } else if let Some(max_lines) = max_lines
+            && let Some(last) = shaped.layout.get(max_lines - 1)
+            && shaped.layout.len() > max_lines
+        {
+            kept_text = last.text_range().end;
+            while let Some(c) = shaped.text[..kept_text].chars().next_back()
+                && is_hard_break(c)
+            {
+                kept_text -= c.len_utf8();
+            }
         }
         ParagraphLayout {
             layout: shaped.layout,
@@ -464,6 +499,7 @@ impl TextContext {
             max_lines,
             direction: paragraph.direction,
             ellipsized,
+            kept_text,
         }
     }
 

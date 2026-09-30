@@ -168,6 +168,35 @@ fn collection_handles_are_shared_and_counted() {
     assert!(fonts.register_font(&[]).is_err());
 }
 
+/// A laid-out painter answers every caret, selection, hit-test, line and
+/// word query from the layout that measured it, so none of them builds the
+/// process font system.
+fn caret_queries_never_build_the_process_font_system() {
+    use flui_foundation::geometry::Offset;
+    use flui_painting::TextPainter;
+    use flui_painting::typography::{TextPosition, TextSpan};
+
+    let mut context = TextContext::new(&FontCollection::new());
+    let mut painter = TextPainter::new()
+        .with_text(TextSpan::new("one two\nthree"))
+        .with_text_direction(TextDirection::Ltr);
+    painter.layout(&mut context, 0.0, 200.0);
+    let caret = painter.get_offset_for_caret(TextPosition::downstream(9));
+    let hit = painter.get_position_for_offset(Offset::new(5.0, caret.dy + 1.0));
+    assert!(!painter.get_boxes_for_selection(0, 9).is_empty());
+    assert_eq!(painter.get_line_metrics().len(), 2);
+    let word = painter.get_word_boundary(TextPosition::downstream(1));
+    assert_eq!((word.start, word.end), (0, 3));
+    assert!(
+        hit.offset >= 8,
+        "a hit on the second line answers it, got {hit:?}"
+    );
+    assert!(
+        !flui_painting::text_layout::font_system_initialized(),
+        "a caret query built the process font system"
+    );
+}
+
 #[test]
 fn text_context_contract() {
     cases::run_cases(
@@ -181,6 +210,10 @@ fn text_context_contract() {
             (
                 "a_face_registered_after_the_fork_shapes_in_every_realm",
                 a_face_registered_after_the_fork_shapes_in_every_realm,
+            ),
+            (
+                "caret_queries_never_build_the_process_font_system",
+                caret_queries_never_build_the_process_font_system,
             ),
         ],
     );

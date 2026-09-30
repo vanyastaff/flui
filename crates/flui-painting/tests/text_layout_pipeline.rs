@@ -1,8 +1,5 @@
-//! Integration tests for the TextLayout pipeline wiring.
-//!
-//! Validates that cosmic-text TextLayout is properly connected to TextPainter
-//! and produces correct DrawCommand entries on Canvas. This covers the full
-//! measurement -> layout -> paint pipeline.
+//! The text pipeline end to end: a styled span measured by `TextPainter`
+//! records a paragraph on the canvas.
 
 use flui_foundation::geometry::Offset;
 use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};

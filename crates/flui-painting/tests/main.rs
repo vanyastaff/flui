@@ -15,6 +15,8 @@
 //! is the lazily initialized `FONT_SYSTEM` `OnceLock` (benign once-init,
 //! never replaced or reset by tests).
 
+#[path = "caret_contract.rs"]
+mod caret_contract;
 #[path = "support/cases.rs"]
 mod cases;
 #[path = "color_blend.rs"]
@@ -33,8 +35,6 @@ mod recording;
 mod rich_text_example;
 #[path = "text_layout_pipeline.rs"]
 mod text_layout_pipeline;
-#[path = "text_layout_unit.rs"]
-mod text_layout_unit;
 #[path = "text_overflow_unit.rs"]
 mod text_overflow_unit;
 #[path = "text_painter_unit.rs"]
@@ -188,14 +188,6 @@ fn text_contract() {
         "text",
         &[
             (
-                "caret_position",
-                text_layout_unit::test_text_layout_caret_position,
-            ),
-            (
-                "two_space_run_word_boundary",
-                text_layout_unit::get_word_boundary_two_space_run_boundary_matrix,
-            ),
-            (
                 "styled_text_pipeline",
                 text_layout_pipeline::full_pipeline_with_styled_text,
             ),
@@ -222,6 +214,63 @@ fn text_contract() {
             (
                 "bidirectional_text_lays_out",
                 rich_text_example::example_bidirectional_text,
+            ),
+        ],
+    );
+}
+
+/// Carets, selection boxes, hit-testing and word boundaries read the layout
+/// that measured and painted (ADR-0092 §10 step 5).
+#[test]
+fn caret_contract() {
+    use caret_contract as cc;
+    run_cases(
+        "caret",
+        &[
+            ("caret_position", cc::caret_position),
+            (
+                "two_space_run_word_boundary",
+                cc::two_space_run_word_boundary,
+            ),
+            (
+                "a_combining_mark_is_one_hit_target",
+                cc::a_combining_mark_is_one_hit_target,
+            ),
+            (
+                "a_zwj_family_is_one_hit_target",
+                cc::a_zwj_family_is_one_hit_target,
+            ),
+            (
+                "rtl_paragraph_carets_run_right_to_left",
+                cc::rtl_paragraph_carets_run_right_to_left,
+            ),
+            (
+                "mixed_bidi_boxes_carry_their_run_direction",
+                cc::mixed_bidi_boxes_carry_their_run_direction,
+            ),
+            (
+                "a_trailing_newline_puts_the_caret_on_the_empty_line",
+                cc::a_trailing_newline_puts_the_caret_on_the_empty_line,
+            ),
+            (
+                "crlf_is_one_break_for_carets",
+                cc::crlf_is_one_break_for_carets,
+            ),
+            (
+                "multi_line_selection_boxes_follow_their_line",
+                cc::multi_line_selection_boxes_follow_their_line,
+            ),
+            (
+                "carets_sit_on_the_painted_glyphs",
+                cc::carets_sit_on_the_painted_glyphs,
+            ),
+            (
+                "a_soft_wrap_caret_follows_its_affinity",
+                cc::a_soft_wrap_caret_follows_its_affinity,
+            ),
+            (
+                "truncated_carets_stay_in_kept_lines",
+                cc::truncated_carets_stay_in_kept_lines,
             ),
         ],
     );

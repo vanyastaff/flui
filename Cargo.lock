@@ -2136,6 +2136,7 @@ dependencies = [
  "criterion",
  "flui-foundation",
  "flui-painting",
+ "icu_segmenter",
  "kurbo",
  "parking_lot",
  "parley",
@@ -2146,7 +2147,6 @@ dependencies = [
  "tracing",
  "trybuild",
  "unicode-script",
- "unicode-segmentation",
 ]
 
 [[package]]

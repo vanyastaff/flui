@@ -1,13 +1,12 @@
-//! Text shaping and layout over cosmic-text, and the Parley path's
-//! per-realm text context.
+//! The app's fonts and the per-realm text context Parley shapes through.
 //!
 //! - `context` — [`FontCollection`], the app's add-only font collection, and
 //!   [`TextContext`], the per-realm service built from it (ADR-0092 §2–§3).
-//! - `fallback_chain` — the fallback order both shapers walk past a style's
-//!   family.
-//! - `font_resolve` — picking a family the host actually carries.
-//! - `layout` — the process-wide font system, `TextLayout` (shape, truncate,
-//!   caret/hit-test/line queries), and the style → `Attrs` mapping.
+//! - `fallback_chain` — the host's fallback order, which a collection fed
+//!   from the host walks past a style's family.
+//! - `font_resolve` — picking a family the collection actually holds.
+//! - `layout` — the process-wide font system: host discovery, the generic
+//!   bindings and the fallback lists a host-fed collection is built from.
 
 use flui_foundation::geometry::Size;
 
@@ -19,7 +18,7 @@ pub(crate) mod layout;
 pub(crate) use context::FontsKey;
 pub use context::{FontCollection, TextContext};
 pub(crate) use layout::paint_color;
-pub use layout::{ResolvedFont, Shaper, SharedFontSystem, TextLayout, shared_font_system};
+pub use layout::{SharedFontSystem, shared_font_system};
 // Test-support only: pinning the process-wide font system is irreversible, so
 // it stays off the shipped surface. See its docs.
 #[cfg(any(test, feature = "testing"))]
@@ -40,10 +39,8 @@ pub struct TextLayoutResult {
     pub alphabetic_baseline: f64,
     /// Distance to the ideographic baseline from top.
     ///
-    /// Derived from the first line's descent edge (`line_top +
-    /// line_height`) — the closest shaper-derived bound until per-font
-    /// ideographic metrics are plumbed (cosmic-text does not expose
-    /// them per run).
+    /// The first line's bottom edge: Parley reports no per-font ideographic
+    /// baseline.
     pub ideographic_baseline: f64,
     /// Whether the layout was truncated to a maximum line count.
     pub truncated: bool,

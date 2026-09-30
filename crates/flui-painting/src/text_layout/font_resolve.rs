@@ -50,23 +50,19 @@
 //!   the Cupertino path, whose roles all name `CupertinoSystemText` — a family
 //!   the platform aliases to San Francisco and that exists nowhere else.
 //!
-//! * The requested **weight**, snapped to one the resolved family can serve
-//!   ([`snap_weight`]). Not snapping was tried first, on the reasoning that
-//!   `Database::query` already applies CSS font matching and that a snap
-//!   strips the requested instance off a variable face. The first half is
-//!   true and irrelevant — `query` picks the best face *within* a family,
-//!   while the abandonment happens a layer up, in
-//!   `FontFallbackIter::default_font_match_key`, whose filter drops every
-//!   face whose weight differs and is not a variable match, and whose empty
-//!   result makes `next_item` leave the family entirely. The second half is
-//!   why [`family_accepts_weight`] probes the variable axis first and only
-//!   snaps when no face — static or variable — can serve the request.
+//! Nothing shapes on the process font system any more: the rule it resolved
+//! families by now serves the collection ([`resolve_family_name`]), and its
+//! cosmic-text side (`resolve_family`) is kept for the test that pins the
+//! two sides agree.
 
+#[cfg(test)]
 use std::collections::HashSet;
 
 use crate::typography::TextStyle;
+#[cfg(test)]
+use cosmic_text::FontSystem;
 use cosmic_text::fontdb::{self, Database, Family};
-use cosmic_text::{Fallback as _, FontSystem, PlatformFallback};
+use cosmic_text::{Fallback as _, PlatformFallback};
 
 /// Maps a family name written in a [`TextStyle`] to a CSS generic, if it names
 /// one.
@@ -111,6 +107,7 @@ fn database_carries(db: &Database, family: &str) -> bool {
 ///
 /// Average and worst case O(faces), the same scan `bind_generic_families`
 /// would do anyway — the saving is the cache, not the scan.
+#[cfg(test)]
 fn generics_need_rebinding(db: &Database) -> bool {
     [
         Family::SansSerif,
@@ -366,160 +363,6 @@ impl cosmic_text::Fallback for EmojiForbiddenFallback {
     }
 }
 
-/// Whether any face in `family` is one cosmic-text would accept at `weight`.
-///
-/// Mirrors the filter in `FontFallbackIter::default_font_match_key`
-/// (`font/fallback/mod.rs`) exactly:
-/// `font_weight_diff == 0 || variable_weight_match`. When that filter finds
-/// nothing, `next_item`'s `(false, None)` arm logs "No default font match"
-/// and `break`s out of the family loop — cosmic-text abandons the family and
-/// takes a `common_fallback()` family that happens to own the exact weight, so
-/// a `Roboto` run at W600 renders in Noto Sans SemiBold on a host with the
-/// full Noto weight set (issue #929).
-///
-/// # There is no monospace term here, and there was one
-///
-/// An earlier revision accepted any face with `face.monospaced == true`,
-/// citing this same function. That citation was wrong:
-/// `default_font_match_key`'s filter has no mono term at all. The `|| is_mono`
-/// that does exist lives in `next_item`'s `font_match_keys_iter`, and
-/// `is_mono` there is `default_families[i] == &Family::Monospace` — a property
-/// of the **request**, never of the face. The consequence was measured: a
-/// `Fira Code` request at W900 answered "acceptable", was not snapped, and
-/// then shaped in Noto Sans. [`snap_weight`] handles the real mono rule where
-/// it belongs, on the request.
-///
-/// # Uncertainty resolves the way cosmic-text resolves it
-///
-/// A face whose data will not parse is *not* a variable match — cosmic-text's
-/// `variable_weight_match` compares against `Some(Some(true))`, so every other
-/// outcome is `false`. This mirrors that. An earlier revision erred the other
-/// way, to avoid stripping a variable instance; that reasoning does not hold,
-/// because a face whose data will not parse cannot be instanced by
-/// `FontSystem::get_font` either. Predicting "the family is fine" for a face
-/// cosmic-text will discard is precisely the failure this function exists to
-/// prevent.
-///
-/// # What pins each arm
-///
-/// No shipped font asset discriminates either arm — `Roboto-Regular`,
-/// `FLUI Probe Sans` and `MaterialIcons-Regular` are all single-weight,
-/// non-monospaced, static faces, so both arms could be deleted without
-/// turning the suite red. The generated fixtures exist for exactly this:
-/// `probe-mono-{100,600}.ttf` is one monospaced family at two weights, and
-/// `probe-variable-wght.ttf` carries an `fvar` `wght` axis over a
-/// `usWeightClass` of 400 (see `tools/decoy-face/generate.py`). No test
-/// resolves against them yet.
-fn family_accepts_weight(db: &Database, family: &str, weight: u16) -> bool {
-    db.faces()
-        .filter(|face| face.families.iter().any(|(name, _)| name == family))
-        .any(|face| face.weight.0 == weight || variable_weight_covers(db, face.id, weight))
-}
-
-/// Whether `id` is a variable face whose `wght` axis covers `weight`.
-///
-/// Uses the `skrifa` re-export cosmic-text already exposes, so no new
-/// dependency — the same route [`can_render_latin`] takes.
-///
-/// Every uncertain outcome answers `false`, because that is what cosmic-text
-/// answers: `FontMatchKey::new` computes `variable_weight_match` as
-/// `db.with_face_data(..) == Some(Some(true))`, so an unreadable face, an
-/// absent `wght` axis and a face missing from the database are all "not a
-/// variable match" there. See [`family_accepts_weight`] for why mirroring that
-/// direction — rather than erring toward "acceptable" — is the correct one.
-fn variable_weight_covers(db: &Database, id: fontdb::ID, weight: u16) -> bool {
-    use cosmic_text::skrifa::{self, MetadataProvider as _};
-
-    db.with_face_data(id, |data, index| {
-        let font = skrifa::FontRef::from_index(data, index).ok()?;
-        let wght = font.axes().get_by_tag(skrifa::Tag::new(b"wght"))?;
-        let weight = f32::from(weight);
-        Some(wght.min_value() <= weight && weight <= wght.max_value())
-    }) == Some(Some(true))
-}
-
-/// The weight to actually request for `family`, given the style asked for
-/// `requested`.
-///
-/// Unchanged whenever the family can serve the request. When it cannot, the
-/// weight the family DOES carry that CSS font matching would pick — which is
-/// what keeps cosmic-text from discarding the family altogether (issue #929).
-///
-/// # Generics are probed, not skipped
-///
-/// An earlier revision returned early for every non-`Name` family, on the
-/// reasoning that "a generic is resolved by cosmic-text against a family this
-/// layer did not choose". That was wrong twice over:
-/// [`bind_generic_families`] in this very module is what chose it, and
-/// `Database::family_name` reads it back — the same call cosmic-text itself
-/// makes at the top of `default_font_match_key`. The measured consequence was
-/// that the snap never ran on the busiest path there is: every Material
-/// `title_*` and `label_*` style is W500 with **no** family, so it resolves to
-/// `Family::SansSerif` and skipped the probe entirely.
-///
-/// `Family::Monospace` is probed like the rest. A monospace request is never
-/// abandoned outright (`next_item`'s `(true, None)` arm does not `break` the
-/// family loop), but at a weight the bound family lacks it moves on to another
-/// monospaced face that has it: with the generics bound to the bundled Roboto
-/// Regular, a bold "monospace" painted in the host's mono bold while the
-/// collection measured it in Roboto (painting mapping decision 16). The probe
-/// accepts a variable face first, so no instance is stripped for nothing.
-pub(crate) fn snap_weight(db: &Database, family: &Family<'_>, requested: u16) -> u16 {
-    // Resolves `Family::Name(n)` to `n` and every generic to its bound name.
-    let name = db.family_name(family);
-    if family_accepts_weight(db, name, requested) {
-        return requested;
-    }
-    let mut carried: Vec<u16> = db
-        .faces()
-        .filter(|face| face.families.iter().any(|(fam, _)| fam == name))
-        .map(|face| face.weight.0)
-        .collect();
-    if carried.is_empty() {
-        return requested;
-    }
-    carried.sort_unstable();
-    carried.dedup();
-    // A family carrying 100 and 600 at a W500 request is the case where CSS
-    // order (100) and nearest-by-distance (600) disagree; no test drives it.
-    css_nearest_weight(&carried, requested).unwrap_or(requested)
-}
-
-/// The weight CSS font matching picks from `carried` for a `requested` the
-/// family does not have, per CSS Fonts 4 §"Matching font styles".
-///
-/// `carried` must be sorted ascending and deduplicated.
-///
-/// Ordering by absolute distance — the obvious implementation, and the one
-/// this replaces — is both non-deterministic and wrong. Non-deterministic
-/// because `min_by_key` keeps the first minimum in iteration order, so a
-/// family carrying 400 and 600 answers a W500 request differently depending on
-/// which face the database loaded first. Wrong because CSS does not resolve by
-/// distance: 500 resolves DOWN to 400 before it looks up, and 400 resolves UP
-/// to 500 before it looks down, so the two adjacent text weights prefer each
-/// other rather than tying.
-fn css_nearest_weight(carried: &[u16], requested: u16) -> Option<u16> {
-    let below = || carried.iter().rev().find(|w| **w < requested).copied();
-    let above = || carried.iter().find(|w| **w > requested).copied();
-
-    if requested < 400 {
-        // Below in descending order, then above in ascending order.
-        below().or_else(above)
-    } else if requested > 500 {
-        // Above in ascending order, then below in descending order.
-        above().or_else(below)
-    } else {
-        // 400..=500: weights at or above the target up to 500 first, then
-        // below in descending order, then everything above 500.
-        carried
-            .iter()
-            .find(|w| **w > requested && **w <= 500)
-            .copied()
-            .or_else(below)
-            .or_else(above)
-    }
-}
-
 /// The family a generic should point at: the first candidate `db` carries that
 /// matches `want_monospace` **and can render Latin text**, else any such
 /// family in the database.
@@ -586,6 +429,7 @@ fn pick_family(db: &Database, want_monospace: bool) -> Option<String> {
 /// resolution three times per `TextPainter::layout` (main plus both
 /// intrinsics) and again, uncached, from `dry_size`, `dry_baseline` and
 /// `intrinsic_height`.
+#[cfg(test)]
 #[derive(Debug, Default)]
 pub(crate) struct InstalledFamilies {
     names: HashSet<Box<str>>,
@@ -600,6 +444,7 @@ pub(crate) struct InstalledFamilies {
     reported_absent: HashSet<Box<str>>,
 }
 
+#[cfg(test)]
 impl InstalledFamilies {
     /// Brings the set — and the generic family bindings — up to date with the
     /// font database, if it has gained or lost faces since the last build.
@@ -676,6 +521,7 @@ impl InstalledFamilies {
 ///
 /// Average and worst case O(1) once `installed` is in sync, O(faces) on the
 /// call that observes a database change.
+#[cfg(test)]
 pub(crate) fn resolve_family<'a>(
     style: Option<&'a TextStyle>,
     font_system: &mut FontSystem,
