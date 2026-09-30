@@ -212,6 +212,7 @@ impl UiRealm {
                 },
                 clipboard: Arc::clone(&clipboard),
                 clock: &clock,
+                text: text.clone(),
             },
         );
 
@@ -308,10 +309,10 @@ impl UiRealm {
     }
 
     /// Test-only: this realm's text context, so a test can check which font
-    /// collection it was built from.
+    /// collection it was built from and which pipelines lend it.
     #[cfg(any(test, feature = "test-support"))]
     #[must_use]
-    pub fn text_context_for_test(&self) -> &flui_painting::TextContext {
+    pub fn text_context_for_test(&self) -> &flui_rendering::TextContextHandle {
         &self.text
     }
 

@@ -33,7 +33,7 @@ use flui_painting::paint::{BlendMode, ImageFilter};
 ///     Rect::from_xywh(0.0, 0.0, 400.0, 300.0),
 /// );
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BackdropFilterLayer {
     /// Image filter to apply to backdrop
     filter: ImageFilter,

@@ -217,7 +217,7 @@ stays in `flui-scheduler` (returned at `build_context.rs:406`), `GlobalKeyScope`
 |---|---|---|
 | `stable` | `flui`, `flui-platform-api`, `flui-protocol` (Evolving until H3) | Semver on the measured transitive closure of public types, gated by `cargo-semver-checks` from H3. |
 | `evolving` | `flui-sdk` | `0.N`, bumped on every release train, published by the same run; no promise across trains. |
-| `internal` | every other core crate | Exact train pins; may change in any release. `#[doc(hidden)] pub mod __runtime` replaces the `runtime-internals` feature (`crates/flui-view/Cargo.toml:118`, enabled by `crates/flui-app/Cargo.toml:90`). |
+| `internal` | every other core crate | Exact train pins; may change in any release. A seam the composition roots need is an always-compiled `#[doc(hidden)] pub mod __runtime` (`flui_view::__runtime`), never a feature; the facade and `flui-sdk` shadow it in their `view` modules. |
 | `official` | `packages/*` | Same train, same publish run, built on `flui-sdk`. |
 | `tool` | `flui-cli`, `tools/*` | `flui-cli` versions on its own; `tools/*` are `publish = false` and never a dependency. |
 
@@ -318,7 +318,7 @@ created, and the other names are unchecked
 
 1. **Features are additive**, and every optional dependency sits behind a `dep:` feature. A
    feature with zero `cfg` sites fails `cargo xtask workspace`.
-2. **A feature is never a visibility switch.** `runtime-internals` becomes
+2. **A feature is never a visibility switch.** Cross-crate internals live in
    `#[doc(hidden)] pub mod __runtime`. Experimental API is `#[cfg(flui_unstable)]`, set through
    `RUSTFLAGS=--cfg flui_unstable`, because a Cargo feature leaks through feature unification
    (owner decision 2).
@@ -459,7 +459,9 @@ packages, same run).
   as "passes ≤ N, target 1".
 - **Layer identity is retained:** every repaint boundary is an `Arc` subtree keyed by `RenderId`.
   `LayerNode` already carries `render_id: Option<RenderId>` (`crates/flui-layer/src/tree/layer_tree.rs:38`);
-  grafting is O(1) and damage becomes a pointer diff.
+  grafting is O(1). Damage is not a pointer diff: an outer boundary re-records its inline pictures
+  whenever a nested one is dirty, so their `Arc`s change on most frames; the test is a
+  paint-certified `ContentToken` on the boundary stamp (ADR-0087 §3 as amended).
 
 ### 8.2 Realms and threads
 
@@ -829,9 +831,10 @@ push-only shape; decision D10, owner decision 8.
 - On by default: the Windows and macOS adapters are unconditional, AT-SPI is on and removable;
   `accesskit_android` and `accesskit_ios` arrive in H1; a `tree_id` per window.
 - Enabling is a realm capability: a ref-counted semantics handle shared by assistive technology,
-  agents and devtools. Today that handle has no production caller
-  (`crates/flui-runtime/src/semantics_host.rs:34-42`), so an agent sees the tree only while a
-  screen reader is running.
+  agents and devtools. A presentation collects semantics while its platform has asked for them
+  or any handle is held (`SemanticsHost::semantics_enabled`); `UiRealm::semantics_agent` takes
+  a handle for as long as any clone of the agent lives, so an agent reads the tree without a
+  screen reader running, and collection stops when the last agent drops.
 - **FLUI owns its vocabulary.** `SemanticsRole` (33 roles plus flags) and `SemanticsAction` become
   `#[non_exhaustive]` and move to `flui-protocol`; names follow AccessKit or ARIA where the concept
   exists, as guidance rather than a 1:1 contract. The outgoing mapping is pinned by a test over a

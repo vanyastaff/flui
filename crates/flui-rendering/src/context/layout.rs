@@ -206,6 +206,21 @@ where
         crate::protocol::box_protocol::BoxLayoutCtxErased::descendant_layout_degraded(&self.inner)
     }
 
+    /// The text context to measure with: the realm's, lent through the
+    /// pipeline for as long as the returned [`TextCx`](crate::TextCx)
+    /// lives, or one of this context's own when the pipeline has none.
+    ///
+    /// Taken from `&mut self`, so a render object cannot lay out a child
+    /// while it holds the loan.
+    ///
+    /// # Panics
+    ///
+    /// If the realm's context is already lent, which only a measurement that
+    /// re-enters another could cause.
+    pub fn text(&mut self) -> crate::TextCx<'_> {
+        self.inner.text()
+    }
+
     // ════════════════════════════════════════════════════════════════════════
     // BOX CONSTRAINT HELPERS
     // ════════════════════════════════════════════════════════════════════════

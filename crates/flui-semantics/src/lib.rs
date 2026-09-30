@@ -64,6 +64,7 @@
 // ============================================================================
 
 pub mod accessibility;
+pub mod agent;
 // Private: the curated entry point is re-exported below. Publishing the module
 // would enrol its internal helpers (`to_node`, `resolve_role`) in the crate's
 // contract, and a translation detail is not something a consumer should pin.
@@ -95,6 +96,10 @@ pub use accessibility::AccessibilityFeatures;
 // RE-EXPORTS - AccessKit Translation
 // ============================================================================
 pub use accesskit_translation::{semantics_action_args_for, semantics_action_for, tree_to_update};
+// ============================================================================
+// RE-EXPORTS - Agent read and act (ADR-0095)
+// ============================================================================
+pub use agent::{Placement, WireActionError, WireReadError};
 // `SemanticsUpdateCallback` names `TreeUpdate` in its signature, so a consumer
 // implementing that callback must be able to name it without adding accesskit
 // itself at a version that must match ours. `NodeId` comes along because

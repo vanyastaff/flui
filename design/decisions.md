@@ -233,7 +233,8 @@ first, and `RasterOwner` stays in `flui-engine` through H0.
 
 **Decision.** Each repaint boundary is an `Arc` subtree keyed by `RenderId`; a differ over
 retained trees yields `DamageRegion::Partial` with a `Full` fallback. The contract closes before
-H3; the work follows D1 and D2.
+H3; the work follows D1 and D2. What the differ compares is a paint-certified `ContentToken` on
+each boundary stamp, not the `Arc` pointer (ADR-0087 §3 as amended).
 
 **Alternatives rejected.** Damage as the first breaking change in H0.
 
@@ -320,8 +321,9 @@ internal boundary is a visibility switch that is always on.
 **Alternatives rejected.** An `unstable` feature (the same unification problem).
 
 **Evidence.** `crates/flui-app/Cargo.toml:90`; `crates/flui-view/Cargo.toml:118`. Verification
-did not challenge this decision; ADR-0081 §4 owns it, and the migration plan schedules the
-replacement as its own step, which also removes the feature's allowlist entry.
+did not challenge this decision; ADR-0081 §4 owns it. The facade and `flui-sdk` re-export
+`flui-view` as a glob module that shadows `__runtime`, so the seam is not reachable through
+`flui::view` or `flui_sdk::view`.
 
 ### D12. Text shapes per realm over Parley
 

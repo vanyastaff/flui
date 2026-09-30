@@ -23,6 +23,8 @@ mod color_blend;
 mod color_property;
 #[path = "compile_fail.rs"]
 mod compile_fail;
+#[path = "damage_extent.rs"]
+mod damage_extent;
 #[path = "decoration_unit.rs"]
 mod decoration_unit;
 #[path = "recording.rs"]
@@ -92,6 +94,43 @@ fn recording_contract() {
 }
 
 #[test]
+fn damage_extent_contract() {
+    run_cases(
+        "damage_extent",
+        &[
+            (
+                "a_color_fill_makes_the_extent_unbounded",
+                damage_extent::a_color_fill_makes_the_extent_unbounded,
+            ),
+            (
+                "paragraph_extent_covers_every_rasterized_glyph",
+                damage_extent::paragraph_extent_covers_every_rasterized_glyph,
+            ),
+            (
+                "stroke_and_shadow_extents_cover_their_outsets",
+                damage_extent::stroke_and_shadow_extents_cover_their_outsets,
+            ),
+            (
+                "shadow_extent_spreads_by_the_largest_scale_on_both_axes",
+                damage_extent::shadow_extent_spreads_by_the_largest_scale_on_both_axes,
+            ),
+            (
+                "fill_style_lines_and_points_reach_their_stroke_width",
+                damage_extent::fill_style_lines_and_points_reach_their_stroke_width,
+            ),
+            (
+                "atlas_extent_covers_the_sprite_destination",
+                damage_extent::atlas_extent_covers_the_sprite_destination,
+            ),
+            (
+                "transparent_source_and_transparent_black_predicates",
+                damage_extent::transparent_source_and_transparent_black_predicates,
+            ),
+        ],
+    );
+}
+
+#[test]
 fn decoration_contract() {
     run_cases(
         "decoration",
@@ -144,6 +183,31 @@ fn text_contract() {
             (
                 "bidirectional_text_lays_out",
                 rich_text_example::example_bidirectional_text,
+            ),
+        ],
+    );
+}
+
+/// A painter measures through the context it is lent, and its cache answers
+/// only for the fonts that measured it (ADR-0092 §10 step 3a).
+#[cfg(feature = "parley")]
+#[test]
+fn text_context_contract() {
+    use text_painter_unit::parley_measurement as pm;
+    run_cases(
+        "text_context",
+        &[
+            (
+                "measurement_follows_the_context_it_is_given",
+                pm::measurement_follows_the_context_it_is_given,
+            ),
+            (
+                "intrinsic_widths_follow_the_context_they_are_asked_through",
+                pm::intrinsic_widths_follow_the_context_they_are_asked_through,
+            ),
+            (
+                "a_registration_on_the_collection_invalidates_the_painter_cache",
+                pm::a_registration_on_the_collection_invalidates_the_painter_cache,
             ),
         ],
     );

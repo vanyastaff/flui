@@ -34,7 +34,10 @@ use flui_semantics::{
     AccessibilityNodeId, SemanticsActionError, SemanticsActionRequest, semantics_action_args_for,
     semantics_action_for,
 };
-use flui_view::{GlobalKeyScope, WidgetsBinding, binding::FramePhaseMarker};
+use flui_view::{
+    __runtime::{BindingRuntime as _, FramePhaseMarker},
+    GlobalKeyScope, WidgetsBinding,
+};
 use web_time::{Duration, Instant};
 
 use crate::epoch::{FrameCommitState, TreeRevision};
@@ -91,6 +94,9 @@ pub(crate) struct RealmCapabilities<'a> {
     /// Where the realm reads time: this presentation's gesture arena and
     /// [`FrameClock`] read the same source as the realm's frame clock.
     pub(crate) clock: &'a ClockSource,
+    /// The realm's text context, installed on the presentation's pipeline so
+    /// its layout measures text through the realm (ADR-0092 §10 step 3).
+    pub(crate) text: flui_rendering::TextContextHandle,
 }
 
 /// A fresh in-memory clipboard — the one the headless platform hands out —
@@ -568,6 +574,9 @@ impl PresentationState {
             window,
             accessibility,
         } = window.into();
+        // The one place a presentation's pipeline gets the realm's text
+        // context, before anything can lay it out.
+        pipeline.with_mut(|owner| owner.set_text_context(capabilities.text));
         let gestures = Self::build_gestures(id, &window, capabilities.clock);
         let frame_clock = FrameClock::with_source(capabilities.clock.clone());
         let alive = Rc::new(());
@@ -909,6 +918,17 @@ impl PresentationState {
     )]
     pub(crate) fn text_input_handle(&self) -> TextInputHandle {
         self.text_input.handle()
+    }
+
+    /// This presentation's semantics enablement gate and platform
+    /// accessibility delivery — the per-window home the retired
+    /// `SemanticsBinding` singleton's enablement/announce/event state moved
+    /// into. `UiRealm::semantics_agent` acquires its enablement handle
+    /// here; announce/event delivery itself still has no production caller
+    /// (future platform-embedder wiring).
+    #[must_use]
+    pub(crate) fn semantics_host(&self) -> &SemanticsHost {
+        &self.semantics
     }
 
     // ========================================================================

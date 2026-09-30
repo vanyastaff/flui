@@ -12,6 +12,7 @@ use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
 use crate::{
     constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry},
     parent_data::{BoxParentData, ParentData},
+    pipeline::{TextCx, TextSlot},
     protocol::{
         capabilities::{HitTestCapability, HitTestContextApi, LayoutCapability, LayoutContextApi},
         protocol::{Protocol, sealed},
@@ -201,9 +202,11 @@ impl Protocol for BoxProtocol {
     /// helper.
     fn with_leaf_erased_ctx<R>(
         constraints: BoxConstraints,
+        text: Option<crate::pipeline::TextSource<'_>>,
         f: impl FnOnce(&mut Self::LayoutCtxErased<'_>) -> R,
     ) -> R {
-        let mut typed = BoxLayoutCtx::<flui_foundation::Leaf, BoxParentData>::new(constraints);
+        let mut typed = BoxLayoutCtx::<flui_foundation::Leaf, BoxParentData>::new(constraints)
+            .with_text_source(text);
         // Protocol-layout-erasure — sanctioned erased layout-context boundary
         let erased: &mut dyn BoxLayoutCtxErased = &mut typed;
         f(erased)
@@ -427,6 +430,9 @@ type ProxyChildSizeCache = Vec<Option<Size>>;
 ///    [`ParentData`].
 pub struct BoxLayoutCtx<'ctx, A: Arity, P: ParentData + Default> {
     storage: BoxLayoutCtxStorage<'ctx, P>,
+    /// The text context this context lends: the pipeline's (Direct), or,
+    /// when the erased context has none (Proxy), one of its own.
+    text: TextSlot<'ctx>,
     _phantom: std::marker::PhantomData<A>,
 }
 
@@ -490,6 +496,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
                 child_ids: None,
                 layout_child_callback: None,
             },
+            text: TextSlot::default(),
             _phantom: std::marker::PhantomData,
         }
     }
@@ -506,6 +513,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
                 child_ids: None,
                 layout_child_callback: None,
             },
+            text: TextSlot::default(),
             _phantom: std::marker::PhantomData,
         }
     }
@@ -529,6 +537,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
                 child_ids: Some(child_ids),
                 layout_child_callback: Some(layout_child_callback),
             },
+            text: TextSlot::default(),
             _phantom: std::marker::PhantomData,
         }
     }
@@ -592,8 +601,35 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
                 child_sizes: vec![None; child_count],
                 erased,
             },
+            text: TextSlot::default(),
             _phantom: std::marker::PhantomData,
         }
+    }
+
+    /// Lends `text` to the render object this context lays out; `None`
+    /// leaves it a context of its own, built on first use.
+    #[must_use]
+    pub(crate) fn with_text_source(
+        mut self,
+        text: Option<crate::pipeline::TextSource<'ctx>>,
+    ) -> Self {
+        self.text = TextSlot::new(text);
+        self
+    }
+
+    /// The text context to measure with: the realm's, lent through the
+    /// pipeline, for as long as the returned [`TextCx`] lives.
+    ///
+    /// # Panics
+    ///
+    /// If the realm's context is already lent, which only a measurement that
+    /// re-enters another could cause.
+    pub fn text(&mut self) -> TextCx<'_> {
+        let source = match &self.storage {
+            BoxLayoutCtxStorage::Direct { .. } => None,
+            BoxLayoutCtxStorage::Proxy { erased, .. } => erased.text_source(),
+        };
+        self.text.lend_from(source)
     }
 
     /// Distance from the top of child `index` to its first baseline of
@@ -807,6 +843,12 @@ pub trait BoxLayoutCtxErased {
     /// Box constraints from parent. Cheap copy (`BoxConstraints` is `Copy`).
     fn constraints(&self) -> BoxConstraints;
 
+    /// The realm's text context, when the pipeline that built this context
+    /// has one; the typed view lends it through `BoxLayoutCtx::text`.
+    fn text_source(&self) -> Option<crate::pipeline::TextSource<'_>> {
+        None
+    }
+
     /// Number of children visible to this context.
     fn child_count(&self) -> usize;
 
@@ -960,6 +1002,14 @@ pub trait BoxLayoutCtxErased {
 }
 
 impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, A, P> {
+    #[inline]
+    fn text_source(&self) -> Option<crate::pipeline::TextSource<'_>> {
+        match &self.storage {
+            BoxLayoutCtxStorage::Direct { .. } => self.text.source(),
+            BoxLayoutCtxStorage::Proxy { erased, .. } => erased.text_source(),
+        }
+    }
+
     #[inline]
     fn descendant_layout_degraded(&self) -> bool {
         match &self.storage {
@@ -1251,6 +1301,8 @@ pub struct ErasedBoxLayoutCtx<'ctx> {
     /// `box_intrinsic_query_borrowed` — the same pre-acquired subtree pool
     /// already used for the Sliver→Box intrinsic path.
     intrinsics_child_callback: Option<BoxChildIntrinsicCallback<'ctx>>,
+    /// The realm's text context, lent to the node this context lays out.
+    text: Option<crate::pipeline::TextSource<'ctx>>,
 }
 
 impl std::fmt::Debug for ErasedBoxLayoutCtx<'_> {
@@ -1277,6 +1329,9 @@ impl<'ctx> ErasedBoxLayoutCtx<'ctx> {
     /// Wired to `box_intrinsic_query_borrowed` by `layout_dirty_root` so that
     /// `RenderIntrinsicWidth` / `RenderIntrinsicHeight` can measure their child
     /// from within the layout walk.
+    ///
+    /// `text` is the realm's text context the node measures with; `None`
+    /// leaves the node's typed view a context of its own.
     pub fn new(
         constraints: BoxConstraints,
         children: &'ctx mut Vec<ErasedChildState>,
@@ -1286,6 +1341,7 @@ impl<'ctx> ErasedBoxLayoutCtx<'ctx> {
         sliver_layout_child_callback: Option<SliverLayoutChildCallback<'ctx>>,
         intrinsics_child_callback: Option<BoxChildIntrinsicCallback<'ctx>>,
         degradation: Option<DegradationProbe<'ctx>>,
+        text: Option<crate::pipeline::TextSource<'ctx>>,
     ) -> Self {
         Self {
             constraints,
@@ -1296,6 +1352,7 @@ impl<'ctx> ErasedBoxLayoutCtx<'ctx> {
             actual_baseline_callback,
             sliver_layout_child_callback,
             intrinsics_child_callback,
+            text,
         }
     }
 }
@@ -1303,6 +1360,10 @@ impl<'ctx> ErasedBoxLayoutCtx<'ctx> {
 impl BoxLayoutCtxErased for ErasedBoxLayoutCtx<'_> {
     fn constraints(&self) -> BoxConstraints {
         self.constraints
+    }
+
+    fn text_source(&self) -> Option<crate::pipeline::TextSource<'_>> {
+        self.text
     }
 
     fn descendant_layout_degraded(&self) -> bool {

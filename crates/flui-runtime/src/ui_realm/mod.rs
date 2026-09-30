@@ -99,6 +99,7 @@ const DEFAULT_COMMAND_CAPACITY: usize = 256;
 /// after the bound does not depend on this counter ever being reset by hand.
 const MAX_NOT_SHOWN_RETRIES: u32 = 128;
 
+mod agent;
 mod attach;
 mod commands;
 mod construct;
@@ -108,6 +109,7 @@ mod input;
 mod presentations;
 mod pump;
 
+pub use agent::{AgentError, AgentReply, SemanticsAgent};
 pub use commands::{CommandSendError, DrainReport, UiCommand, UiCommandSender};
 use input::FocusCoordinator;
 
@@ -205,9 +207,11 @@ pub struct UiRealm {
     /// The realm's owner-thread text service (ADR-0092 §3): a `TextContext`
     /// over the app's font collection, built in
     /// [`RealmServices::construct`](crate::realm_services::RealmServices::construct).
-    /// One per realm, never per presentation; it drops with the realm. Layout
-    /// borrows it once text measures through it (ADR-0092 §10 step 3).
-    text: flui_painting::TextContext,
+    /// One per realm, never per presentation: each presentation's pipeline
+    /// holds a clone of this handle and lends the context to its layout,
+    /// intrinsic and dry queries (ADR-0092 §10 step 3). It drops with the
+    /// realm and its presentations.
+    text: flui_rendering::TextContextHandle,
     /// Test-only injectable clock, stored as the f64 bits in a u64 atomic
     /// (rather than an `Option<f64>`/`Cell<f64>`) so [`Self::now_secs`] can
     /// read it with a single relaxed load; `0u64` is the "not set" sentinel
@@ -252,7 +256,7 @@ impl std::fmt::Debug for UiRealm {
             .field("realm_id", &self.realm_id)
             .field("presentation_id", &self.presentations.primary().id())
             .field("presentation_count", &self.presentations.len())
-            .field("fonts", self.text.fonts())
+            .field("text", &self.text)
             .field("pending_commands", &self.rx.len())
             .field(
                 "redraw_pending",

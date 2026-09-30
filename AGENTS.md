@@ -69,8 +69,8 @@ declares its tier and layer in `[package.metadata.flui]` (checked by `cargo xtas
 - **Official packages** (`packages/`, ADR-0088) — `flui-material`, `flui-cupertino` and
   `flui-devtools`, built on `flui-sdk` alone, as a third-party package would be;
   `flui-hot-reload` is an official package still under `crates/`; `flui-app` reaches it only
-  through the `DevReloadHook` (ADR-0094 §1), and it moves once `runtime-internals` becomes a
-  hidden module and ADR-0088 settles the plugin ABI's SDK items.
+  through the `DevReloadHook` (ADR-0094 §1), and it moves once ADR-0088 settles its plugin
+  half, which names `flui_view::__runtime` and the pipeline types the SDK does not carry.
 - **Composition roots** — `flui-app` (per-window `UiRealm`s, the run loop), `flui-cli`, and
   the facade.
 

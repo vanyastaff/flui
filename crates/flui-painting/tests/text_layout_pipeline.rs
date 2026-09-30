@@ -8,6 +8,11 @@ use flui_foundation::geometry::Offset;
 use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
 use flui_painting::{Canvas, TextPainter};
 
+/// A text context over a fresh collection, lent to each measurement.
+fn text_cx() -> flui_painting::TextContext {
+    flui_painting::TextContext::new(&flui_painting::FontCollection::new())
+}
+
 // ============================================================================
 // measure_text standalone function
 // ============================================================================
@@ -27,7 +32,7 @@ pub(crate) fn full_pipeline_with_styled_text() {
         .with_text(span)
         .with_text_direction(TextDirection::Ltr);
 
-    painter.layout(0.0, 400.0);
+    painter.layout(&mut text_cx(), 0.0, 400.0);
     assert!(painter.width() > 0.0);
 
     let mut canvas = Canvas::new();

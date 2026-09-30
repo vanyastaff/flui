@@ -119,6 +119,12 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// Unique identifier for this pipeline owner.
     id: u64,
 
+    /// The realm's text context, lent to every measurement in this
+    /// pipeline's layout, intrinsic and dry queries (ADR-0092 §10 step 3).
+    /// Installed by the runtime through [`Self::set_text_context`]; a
+    /// pipeline never given one builds a private context on first use.
+    text: Option<crate::pipeline::TextContextHandle>,
+
     /// Allocation identity binding linear relocation tokens to this owner.
     /// Pointer identity is sufficient; unlike a numeric id it cannot collide
     /// or require process-global token bookkeeping.
@@ -217,6 +223,17 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// generational, so a recycled slab slot carries a new generation and
     /// misses the map.
     retained_boundaries: FxHashMap<RenderId, paint::RetainedSubtree>,
+
+    /// The root boundary's committed content token, with the root it belongs
+    /// to.
+    ///
+    /// Every other boundary keeps its token in its retained capture, so the
+    /// token dies with the capture on every eviction path. The root is never
+    /// captured (it has no parent to graft it), so its token lives here:
+    /// kept on a frame that did not queue the root, replaced on one that did
+    /// (see `run_paint` and `flui-rendering`'s `ARCHITECTURE.md`, "Paint
+    /// certifies a boundary's content token").
+    root_content: Option<(RenderId, flui_layer::ContentToken)>,
 
     /// `RenderId`s of `Layer::Follower` nodes correlated during the last
     /// paint phase that resolved to `None` (unlinked with
@@ -328,6 +345,7 @@ where
 {
     PipelineOwner {
         id: from.id,
+        text: from.text,
         relocation_owner_seal: from.relocation_owner_seal,
         render_tree: from.render_tree,
         root_id: from.root_id,
@@ -341,6 +359,7 @@ where
         last_layer_tree: from.last_layer_tree,
         last_follower_offsets: from.last_follower_offsets,
         retained_boundaries: from.retained_boundaries,
+        root_content: from.root_content,
         last_hidden_follower_ids: from.last_hidden_follower_ids,
         device_pixel_ratio: from.device_pixel_ratio,
         dirty_sender: from.dirty_sender,
@@ -904,7 +923,8 @@ mod tests {
             RenderEntry::<crate::protocol::BoxProtocol>::new(Box::new(PanickingLayoutBox::new())
                 as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>);
 
-        let result = entry.layout_leaf_only(crate::constraints::BoxConstraints::tight(Size::ZERO));
+        let result =
+            entry.layout_leaf_only(crate::constraints::BoxConstraints::tight(Size::ZERO), None);
 
         std::panic::set_hook(prev);
 

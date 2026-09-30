@@ -14,6 +14,7 @@ use crate::testing::parent_data::ParentDataSeed;
 use crate::storage::RenderTree;
 
 use crate::pipeline::{
+    PipelinePhase, TextContextHandle,
     handle::DirtySender,
     notifier::VisualUpdateNotifier,
     phase::{Idle, Layout},
@@ -39,6 +40,7 @@ impl PipelineOwner<Idle> {
             DirtySender::new_pair(dirty_channel_capacity, std::sync::Arc::clone(&notifier));
         let scheduler = DirtyTracker::new(std::sync::Arc::clone(&notifier));
         Self {
+            text: None,
             id: PIPELINE_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
             relocation_owner_seal: std::rc::Rc::new(super::relocation::RelocationOwnerSeal),
             render_tree: RenderTree::new(),
@@ -53,6 +55,7 @@ impl PipelineOwner<Idle> {
             last_layer_tree: None,
             last_follower_offsets: FxHashMap::default(),
             retained_boundaries: FxHashMap::default(),
+            root_content: None,
             last_hidden_follower_ids: FxHashSet::default(),
             device_pixel_ratio: 1.0,
             dirty_sender,
@@ -66,6 +69,20 @@ impl PipelineOwner<Idle> {
             counters: super::PipelineCounters::default(),
             _phase: PhantomData,
         }
+    }
+
+    /// Lends the realm's text context to every measurement this pipeline
+    /// makes: layout, intrinsics, dry layout and dry baselines.
+    ///
+    /// Installed once, before the first layout: a node whose constraints are
+    /// cached skips its `perform_layout`, so text laid out on another
+    /// context would not measure again on this one.
+    pub fn set_text_context(&mut self, text: TextContextHandle) {
+        debug_assert_eq!(
+            self.counters.layout_passes, 0,
+            "set_text_context: install the realm's text context before the first layout"
+        );
+        self.text = Some(text);
     }
 
     /// Records harness parent metadata for `child_id`, cloned into the
@@ -116,6 +133,7 @@ impl PipelineOwner<Idle> {
         );
         let scheduler = DirtyTracker::new(std::sync::Arc::clone(&notifier));
         Self {
+            text: None,
             id: PIPELINE_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
             relocation_owner_seal: std::rc::Rc::new(super::relocation::RelocationOwnerSeal),
             render_tree: RenderTree::new(),
@@ -130,6 +148,7 @@ impl PipelineOwner<Idle> {
             last_layer_tree: None,
             last_follower_offsets: FxHashMap::default(),
             retained_boundaries: FxHashMap::default(),
+            root_content: None,
             last_hidden_follower_ids: FxHashSet::default(),
             device_pixel_ratio: 1.0,
             dirty_sender,
@@ -241,5 +260,29 @@ impl PipelineOwner<Idle> {
             owner.counters.frames_produced += 1;
         }
         (owner.finish(), Ok(layer_tree))
+    }
+}
+
+impl<Phase: PipelinePhase> PipelineOwner<Phase> {
+    /// The text context this pipeline lends, building a private one the
+    /// first time a pipeline that was never given the realm's is asked.
+    pub(crate) fn text_handle(&mut self) -> TextContextHandle {
+        self.text
+            .get_or_insert_with(|| {
+                tracing::debug!(
+                    pipeline = self.id,
+                    "no realm text context installed; measuring on a private one"
+                );
+                TextContextHandle::new(crate::pipeline::private_context())
+            })
+            .clone()
+    }
+
+    /// The text context installed on this pipeline, if any, so a test can
+    /// tell whose context its layout measures with.
+    #[cfg(any(test, feature = "testing"))]
+    #[must_use]
+    pub fn text_context_for_test(&self) -> Option<&TextContextHandle> {
+        self.text.as_ref()
     }
 }

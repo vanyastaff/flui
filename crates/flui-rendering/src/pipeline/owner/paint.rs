@@ -5,9 +5,9 @@ use std::sync::Arc;
 use flui_foundation::geometry::Offset;
 use flui_foundation::{LayerId, RenderId};
 use flui_layer::{
-    BackdropFilterLayer, ClipPathLayer, ClipRRectLayer, ClipRectLayer, FollowerLayer, Layer,
-    LayerNode, LayerTree, LeaderLayer, OffsetLayer, OpacityLayer, PictureLayer, ShaderMaskLayer,
-    TransformLayer,
+    BackdropFilterLayer, BoundaryStamp, ClipPathLayer, ClipRRectLayer, ClipRectLayer, ContentToken,
+    FollowerLayer, Layer, LayerNode, LayerTree, LeaderLayer, OffsetLayer, OpacityLayer,
+    PictureLayer, ShaderMaskLayer, TransformLayer,
 };
 use flui_painting::DisplayList;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -165,7 +165,21 @@ impl PipelineOwner<PaintPhase> {
                 })
                 .collect();
 
-            let mut composer = FragmentComposer::new(self.device_pixel_ratio, root_boundary);
+            // The root's content version: kept while the root is not queued
+            // (every paint change under it that no nested boundary absorbs
+            // queues the root, since `mark_needs_paint` stops at the nearest
+            // boundary), minted otherwise. Committed with the frame below; an
+            // errored frame drops a minted token, and the retry, finding the
+            // root still queued, mints again.
+            let root_stamp = root_boundary.map(|id| {
+                let kept = (!dirty_ids.contains(&id))
+                    .then_some(self.root_content.as_ref())
+                    .flatten()
+                    .filter(|(committed, _)| *committed == id)
+                    .map(|(_, token)| token.clone());
+                (id, kept.unwrap_or_else(ContentToken::mint))
+            });
+            let mut composer = FragmentComposer::new(self.device_pixel_ratio, root_stamp.clone());
             match self.paint_subtree(
                 &mut composer,
                 root_id,
@@ -184,6 +198,7 @@ impl PipelineOwner<PaintPhase> {
                         counts,
                     ) = composer.finish();
                     reached = visited;
+                    self.root_content = root_stamp;
                     self.counters.nodes_painted += counts.nodes_painted;
                     self.counters.layers_produced += counts.layers_produced;
                     self.counters.layers_reused += counts.layers_reused;
@@ -230,11 +245,17 @@ impl PipelineOwner<PaintPhase> {
                     }
 
                     let mut served: FxHashSet<RenderId> =
-                        layer_patches.iter().map(|(id, _)| *id).collect();
-                    for (boundary_id, patches) in layer_patches {
+                        layer_patches.iter().map(|(id, _, _)| *id).collect();
+                    for (boundary_id, content, patches) in layer_patches {
                         let Some(subtree) = self.retained_boundaries.get_mut(&boundary_id) else {
                             continue;
                         };
+                        // The token the frame stamped: a grafted boundary that
+                        // was queued (for a layer update) minted one, and the
+                        // capture must carry it, or the next frame that grafts
+                        // it would report the pre-patch version as changed
+                        // again.
+                        subtree.content = content;
                         for (index, layer) in patches {
                             if let Some(node) = subtree.nodes.get_mut(index) {
                                 node.layer = layer;
@@ -797,12 +818,31 @@ impl PipelineOwner<PaintPhase> {
                     let child_is_boundary = child_node.is_repaint_boundary();
 
                     if child_is_boundary {
+                        // The boundary's content version, certified here
+                        // (`flui-rendering`'s ARCHITECTURE.md, "Paint
+                        // certifies a boundary's content token"): kept only
+                        // while the boundary is absent from the FULL queue —
+                        // so a layer update counts as a change — and still has
+                        // a retained capture to vouch for what it painted
+                        // last. Everything else mints. Decided before the
+                        // push because the stamp sits on the layer pushed
+                        // next, and it holds whichever way the boundary is
+                        // served below: a graft replays exactly the
+                        // certified content, and a boundary re-descended only
+                        // because something nested in it is dirty repaints
+                        // its own region unchanged (paint is a pure function
+                        // of state the queue tracks).
+                        let content = (!dirty_set.contains(&child_id))
+                            .then(|| self.retained_boundaries.get(&child_id))
+                            .flatten()
+                            .map_or_else(ContentToken::mint, |subtree| subtree.content.clone());
                         // Boundary children rebase to ZERO under their
                         // own OffsetLayer so a future offset-only move
                         // is a layer-property update, not a repaint.
                         let boundary_root = composer.push_boundary_layer(
                             Layer::Offset(OffsetLayer::new(origin + child_offset)),
                             child_id,
+                            content.clone(),
                         );
 
                         // Reuse the previous frame's output when this boundary
@@ -909,7 +949,7 @@ impl PipelineOwner<PaintPhase> {
                             // cache at the old value, and a later frame that
                             // grafts it for an unrelated reason would silently
                             // revert the property for good.
-                            composer.layer_patches.push((child_id, patches));
+                            composer.layer_patches.push((child_id, content, patches));
                         } else {
                             composer.open_capture();
                             // The result is held rather than propagated with
@@ -936,10 +976,11 @@ impl PipelineOwner<PaintPhase> {
                             // `None` evicts: a subtree that GAINED a
                             // Leader/Follower must not be served its
                             // pre-link form. See `capture`.
-                            let captured = composer.capture(boundary_root).map(|mut subtree| {
-                                subtree.nested_boundaries = nested_boundaries;
-                                subtree
-                            });
+                            let captured =
+                                composer.capture(boundary_root, content).map(|mut subtree| {
+                                    subtree.nested_boundaries = nested_boundaries;
+                                    subtree
+                                });
                             composer.retained_captures.push((child_id, captured));
                         }
                         composer.pop_layer();
@@ -985,6 +1026,10 @@ impl PipelineOwner<PaintPhase> {
 #[derive(Clone, Debug)]
 pub(super) struct RetainedSubtree {
     nodes: Vec<RetainedNode>,
+    /// The content version the boundary was stamped with when this capture
+    /// was taken or last served — what a later frame keeps while the
+    /// boundary stays clean.
+    content: ContentToken,
     /// Every repaint boundary nested anywhere inside this capture.
     ///
     /// A nested boundary's layers are flattened into this subtree, so replaying
@@ -1059,8 +1104,9 @@ struct RetainedNode {
     layer: Layer,
     parent: Option<usize>,
     /// The stamp a captured node carried, so a nested boundary survives its
-    /// enclosing boundary's reuse — see `graft`.
-    render_id: Option<RenderId>,
+    /// enclosing boundary's reuse with its identity and its content version —
+    /// see `graft`.
+    boundary: Option<BoundaryStamp>,
 }
 
 /// The layers a node pushes for its OWN effects, in push order (outermost
@@ -1147,7 +1193,7 @@ struct FragmentComposer {
     /// with, and a later frame that grafts it for an unrelated reason would
     /// revert the property permanently — the failure a two-frame test cannot
     /// see.
-    layer_patches: Vec<(RenderId, Vec<(usize, Layer)>)>,
+    layer_patches: Vec<(RenderId, ContentToken, Vec<(usize, Layer)>)>,
     /// Nodes whose pending-update flag this pass's patches serve, cleared by
     /// `run_paint` on the commit path only — see [`LayerPatch::consumed`].
     consumed_updates: Vec<RenderId>,
@@ -1178,8 +1224,9 @@ impl FragmentComposer {
     /// reached by `push_boundary_layer`: that fires from the PARENT's child
     /// loop, and the root has no parent. Without it the tree carries a
     /// boundary nothing can identify -- the worst shape for anything pairing
-    /// boundaries across frames, which is what `render_id` exists for.
-    fn new(device_pixel_ratio: f64, root_boundary: Option<RenderId>) -> Self {
+    /// boundaries across frames, which is what the stamp exists for. It
+    /// carries the root's content token, certified by `run_paint`.
+    fn new(device_pixel_ratio: f64, root_boundary: Option<(RenderId, ContentToken)>) -> Self {
         let root_layer = if (device_pixel_ratio - 1.0).abs() < f64::EPSILON {
             Layer::Offset(OffsetLayer::zero())
         } else {
@@ -1193,7 +1240,7 @@ impl FragmentComposer {
         };
         let root_node = LayerNode::new(root_layer);
         let tree = LayerTree::new(match root_boundary {
-            Some(id) => root_node.with_render_id(id),
+            Some((id, content)) => root_node.with_boundary(id, content),
             None => root_node,
         });
         Self {
@@ -1261,9 +1308,11 @@ impl FragmentComposer {
     /// builds a fresh `LayerTree` with fresh slab indices, so `LayerId` pairs
     /// nothing, and damage has to come from comparing layer trees rather than
     /// from which render objects repainted (ADR-0061 — the ones that always
-    /// repaint cover the screen). The other half of that comparison —
-    /// constant-time "is this content unchanged" — already exists, since
-    /// `PictureLayer` shares its `DisplayList` behind an `Arc`.
+    /// repaint cover the screen). The other half of that comparison — "is
+    /// this content unchanged" — is `content`, the token the paint walk
+    /// certified for this boundary. Picture `Arc`s cannot answer it: an
+    /// enclosing boundary re-records its inline pictures whenever something
+    /// nested in it is dirty.
     ///
     /// **Exactly one layer per boundary carries the stamp**, and it is this
     /// one: the `OffsetLayer` a boundary child rebases under, which is also
@@ -1271,8 +1320,13 @@ impl FragmentComposer {
     /// effect layers or a fragment's structural pushes as well would put
     /// several layers under one id and make pairing ambiguous — so those go
     /// through [`Self::push_layer`] and stay unstamped.
-    fn push_boundary_layer(&mut self, layer: Layer, boundary_id: RenderId) -> LayerId {
-        self.push_layer_node(LayerNode::new(layer).with_render_id(boundary_id))
+    fn push_boundary_layer(
+        &mut self,
+        layer: Layer,
+        boundary_id: RenderId,
+        content: ContentToken,
+    ) -> LayerId {
+        self.push_layer_node(LayerNode::new(layer).with_boundary(boundary_id, content))
     }
 
     fn push_layer_node(&mut self, node: LayerNode) -> LayerId {
@@ -1331,7 +1385,7 @@ impl FragmentComposer {
         )
     }
 
-    fn capture(&self, root: LayerId) -> Option<RetainedSubtree> {
+    fn capture(&self, root: LayerId, content: ContentToken) -> Option<RetainedSubtree> {
         let mut nodes: Vec<RetainedNode> = Vec::new();
         // `effect_owner` is maintained incrementally by `record_effect_layer`,
         // so this walk answers "is this layer somebody's effect layer" in O(1)
@@ -1379,7 +1433,7 @@ impl FragmentComposer {
             nodes.push(RetainedNode {
                 layer: layer.clone(),
                 parent,
-                render_id: node.render_id(),
+                boundary: node.boundary().cloned(),
             });
             for &child in node.children().iter().rev() {
                 stack.push((child, Some(index)));
@@ -1387,6 +1441,7 @@ impl FragmentComposer {
         }
         Some(RetainedSubtree {
             nodes,
+            content,
             nested_boundaries: Vec::new(),
             effect_slots,
         })
@@ -1415,11 +1470,11 @@ impl FragmentComposer {
         let mut minted: Vec<LayerId> = Vec::with_capacity(retained.nodes.len());
         for (index, node) in retained.nodes.iter().enumerate() {
             // Built as a whole `LayerNode` rather than inserted-then-mutated:
-            // `offset` and `render_id` are construction-time fields with no
+            // `offset` and the boundary stamp are construction-time fields with no
             // setters, which is also the shape that keeps a disposed node from
             // being resurrected by a stray mutation.
             //
-            // The `render_id` carry is load-bearing for NESTED boundaries and
+            // The stamp carry is load-bearing for NESTED boundaries and
             // for them only. A top-level boundary's stamp sits on the
             // `OffsetLayer` its parent pushes, which is above the capture root
             // and re-created by that parent's own paint every frame. A nested
@@ -1444,8 +1499,8 @@ impl FragmentComposer {
                 node.layer.clone()
             };
             let mut layer_node = flui_layer::LayerNode::new(layer);
-            if let Some(render_id) = node.render_id {
-                layer_node = layer_node.with_render_id(render_id);
+            if let Some(stamp) = &node.boundary {
+                layer_node = layer_node.with_boundary(stamp.render_id(), stamp.content().clone());
             }
             let parent = node.parent.map_or(root, |i| minted[i]);
             let id = self.tree.push_child(parent, layer_node);
@@ -1472,7 +1527,7 @@ impl FragmentComposer {
         LayerTree,
         Vec<(RenderId, LayerId)>,
         Vec<(RenderId, Option<RetainedSubtree>)>,
-        Vec<(RenderId, Vec<(usize, Layer)>)>,
+        Vec<(RenderId, ContentToken, Vec<(usize, Layer)>)>,
         Vec<RenderId>,
         FxHashSet<RenderId>,
         PaintCounts,

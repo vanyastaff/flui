@@ -35,7 +35,7 @@ Flutter carry an ADR; crate-local shapes are recorded under
 | Offscreen effects | `offscreen/`, `effects_pipeline.rs`, `blur/`, `mode/`, `gamma/`, `color_matrix/`, `morphology/`, `advanced_blend/`, `ssaa.rs` | Shader masks, backdrop filters, colour filters, dst-read blends, supersampled path AA — each a format-matched pipeline over pooled textures |
 | GPU resources | `texture_pool.rs`, `texture_cache.rs`, `buffer_pool.rs`, `uniform_pool.rs`, `path_cache.rs`, `external_texture_registry.rs`, `resources.rs`, `atlas.rs`, `glyph_atlas.rs`, `tessellator.rs` | Pooling, caching, the glyph atlas (rasterised-glyph pages the glyph pipeline samples), and the one adapter over an external crate (`lyon` for tessellation) |
 | Raster protocol | `raster.rs`, `raster_owner.rs`, `frame_timing.rs` | `RasterBackend`; the mailbox/ack channel a threaded raster lane uses (ADR-0045); frame timers |
-| Damage | `damage.rs` | The per-frame dirty-rect accumulator behind `render_scene`'s scissor (ADR-0061) |
+| Damage | `damage.rs`, `retained_target.rs`, `frame_protocol.rs` | The dirty-rect accumulator behind `render_scene`'s scissor (ADR-0061), `plan_frame` (where a frame renders), `begin_partial` (the scissored clear), the retained target a partial frame repaints into (ADR-0087 §4), and `FrameProtocol`, the plan-to-GPU sequence the renderer and the readback capture share |
 | Test support | `test_support.rs`, `readback_dump.rs`, `fake_window_target.rs`, `blend_oracle.rs`, `*_tests.rs` | Device acquisition, staged readback, the CPU blender oracle, and the readback suites (`cfg(test)`, most under the `testing` feature) |
 
 `wgsl_bindgen` generates the uniform-layout wrappers for the filter shaders
@@ -54,8 +54,12 @@ shader modules directly from static WGSL; subsequent draws reuse the pipelines.
 Scene (flui-layer)                one tree per frame, frozen for the raster side
     │
     ▼
-Renderer::render_scene            acquires the surface texture, applies damage,
-    │                             walks the tree (layer_walk, explicit stack)
+Renderer::render_frame            plans the frame from its damage (skip, direct,
+    │                             or into the retained target), acquires the
+    │                             surface texture, clears (in full, or inside the
+    │                             damage scissor), walks the tree (layer_walk,
+    │                             explicit stack); a retained frame is blitted
+    │                             to the surface texture at the end
     ▼
 LayerRender for Layer             one arm per Layer variant; the three diverted
     │                             handlers (BackdropFilter, ShaderMask, Follower)
@@ -367,7 +371,8 @@ minimised to zero is a pause, not a new surface epoch.
 
 ### 13. Frame failure does not leak painter state
 
-`render_scene_content` returns `EngineResult`; on the error path the painter's
+The swapchain frame's content step (`FrameSteps::content`) returns
+`EngineResult`; on the error path the painter's
 end-of-frame maintenance still runs before the error propagates, so the next
 frame starts from balanced stacks rather than the failed frame's leftovers.
 A `WakeGuard` in `raster_owner` does the same for the threaded lane: a panic
@@ -464,6 +469,63 @@ from zero. Flutter has no single rule to follow here (Impeller and Skia each
 round per call site). Content quads are not yet snapped; see Open items.
 Locked by `a_hard_rect_clip_keeps_the_pixels_whose_centres_are_inside`
 (`src/state_stack.rs`).
+
+### 18. Partial frames render into a retained target and blit — [ADR-0087 §4](../../docs/adr/ADR-0087-raster-contract-and-cpu-backend.md)
+
+Damage arrives as `flui_layer::DamageRegion` on each `SceneSnapshot`, from the
+host's `LayerDiffer`; `RasterOwner::pump` hands it to the backend before the
+freshness checks, so a frame rejected on a stale generation still leaves its
+debt, a superseded frame's region is folded into the frame that replaced it,
+and a failed render marks the next frame full. The tracker forgets its debt
+only after a present.
+
+wgpu does not expose a swapchain image's age, so pixels outside a scissor on
+a freshly acquired image come from an arbitrary older frame. A partial frame
+therefore never renders into the swapchain: `damage::plan_frame` sends it
+into `RetainedTarget`, a surface-format texture holding the last frame, which
+is blitted whole onto the swapchain. A full frame renders directly and
+leaves the target invalid; the first partial frame after it renders in full
+into the target (the warm-up), and only later ones are scissored. On a
+surface without `COPY_SRC` every frame goes through the target, which
+replaces the pooled intermediate that path used to take. The target is
+allocated by the first frame that needs it (`width × height × 4` bytes: 8.3 MB
+at 1920×1080), invalid from `begin` to `commit`, invalidated by a resize,
+a reconfigure or a surface recreation, and dropped by `release_surface` and
+by recovery (its device is gone).
+
+A partial frame clears its damage with an opaque fill inside the scissor
+(`damage::begin_partial`) before the content, not with the full clear pass,
+which would wipe the retained pixels. The advanced-shape straddle self-heal
+stays: with the correct previous frame outside the damage, it bounds a
+straddling shape's out-of-damage slice to one frame. The full clear and the
+partial clear paint one constant, `frame_protocol::BACKGROUND`.
+
+Only frames a `RasterOwner` retires render damage: `RasterBackend::render_scene`
+calls `Renderer::render_frame`. The public `Renderer::render_scene` is the
+entry point for a frame no producer accounted for (direct mode, a hot-reload
+plugin's scene): it renders in full, invalidates the target and makes the
+next frame full, because the owner's differ compares against scenes it
+submitted and would otherwise scissor over pixels it never saw.
+
+Flutter's `flow` `DiffContext` (flutter/flutter 3.44.0,
+`engine/src/flutter/flow/diff_context.cc`) pairs layers by their unique id,
+combines the frame's damage with the embedder's accumulated per-buffer damage
+(buffer age) in `ComputeDamage`, and aligns the result to the embedder's
+clip alignment in `AlignRect`. FLUI has no buffer age, so it keeps one
+retained target instead; it rounds outward with a 1 px anti-aliasing margin
+(`DamageRect::covering`) rather than aligning to tiles; and a frame with
+nothing damaged does not present (`PresentDisposition::NoDamage`).
+
+Measured by `render_throughput`'s `damage_retained_target` group (1920×1080,
+translucent full-surface layers, 128 px damage, one desktop adapter): full
+direct 343 µs / 1.07 ms / 3.39 ms at 4 / 16 / 64 layers against partial plus
+blit 340 µs / 262 µs / 301 µs; the blit alone 144 µs. The blit's bandwidth on
+tile-based mobile GPUs is not measured. Locked by `damage_readback_tests.rs`
+(through the crate-private `RetainedCapture`, which runs the renderer's own
+`FrameProtocol` and `record_frame_content`; only the clear, the content
+submission and the blit are its own), `damage::tests::plan_frame_table` and
+the `raster_owner` damage tests. The windowed path itself runs only on a
+developer machine: CI has no surface.
 
 ---
 

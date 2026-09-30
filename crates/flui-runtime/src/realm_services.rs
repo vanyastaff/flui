@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use flui_foundation::{PresentationId, RealmId};
 use flui_painting::{FontCollection, TextContext};
 use flui_platform_api::Clipboard;
+use flui_rendering::TextContextHandle;
 use flui_scheduler::{AsyncDriver, ClockSource, LocalPostFrameLane, UpdateScheduler};
 
 /// What [`UiRealm`](crate::ui_realm::UiRealm)'s constructors need to wire it
@@ -26,8 +27,10 @@ pub(crate) struct RealmServices {
     /// presentation's gesture arena and frame clock.
     pub(crate) clock: ClockSource,
     /// The realm's text service (ADR-0092 §3): one per realm, built from the
-    /// app's [`FontCollection`] and dropped with the realm.
-    pub(crate) text: TextContext,
+    /// app's [`FontCollection`] and dropped with the realm. Every
+    /// presentation's pipeline holds a clone of the handle and lends the
+    /// context to its layout (ADR-0092 §10 step 3).
+    pub(crate) text: TextContextHandle,
 }
 
 impl RealmServices {
@@ -55,7 +58,7 @@ impl RealmServices {
             scheduler,
             clipboard,
             clock,
-            text: TextContext::new(fonts),
+            text: TextContextHandle::new(TextContext::new(fonts)),
         }
     }
 }

@@ -34,6 +34,10 @@ flui-protocol = { workspace = true }
 # semantics tree into the shape platform adapters and UI-testing harnesses
 # both consume.
 accesskit = { workspace = true }
+# The tree model every AccessKit adapter reads through: the agent read
+# (`agent`) projects the published tree with the adapters' own filter and
+# pattern predicates rather than a copy of them.
+accesskit_consumer = { workspace = true }
 
 # Slab storage for O(1) access
 slab = "0.4"
@@ -58,7 +62,10 @@ workspace = true
 
 [dev-dependencies]
 criterion = { workspace = true }
+# A read tree round-trips through JSON in the agent tests.
+flui-protocol = { workspace = true, features = ["serde"] }
 parking_lot = "0.12"
+serde_json = { workspace = true }
 
 # Cost of a semantics-enabled frame as a function of tree size — the number the
 # pipeline's scalability work has to beat.

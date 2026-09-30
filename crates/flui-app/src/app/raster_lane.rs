@@ -63,7 +63,7 @@ use flui_engine::{FrameDropReason, PumpOutcome, RasterAck, RasterHandle, RasterO
 use flui_foundation::{FrameEpoch, FrameStamp, GpuResourceGeneration, PresentationAddress};
 use flui_layer::Scene;
 #[cfg(not(target_arch = "wasm32"))]
-use flui_layer::{DamageRegion, SceneSnapshot};
+use flui_layer::{DamageMode, LayerDiffer, SceneSnapshot};
 use flui_runtime::sink::{FrameSink, SubmitVerdict};
 #[cfg(not(target_arch = "wasm32"))]
 use parking_lot::Mutex;
@@ -158,6 +158,31 @@ impl RasterResizeHook {
     }
 }
 
+/// The environment variable that switches damage production off for every
+/// presentation the process opens: `FLUI_DAMAGE=off` sends every frame as
+/// `Full`, retains nothing and never renders a partial frame (ADR-0087 §3).
+/// It is the fallback for stale pixels in the field, read once per lane, and
+/// stays until an `AppConfig` switch carries the same choice per app.
+#[cfg(not(target_arch = "wasm32"))]
+const DAMAGE_ENV: &str = "FLUI_DAMAGE";
+
+/// The damage mode [`DAMAGE_ENV`]'s value selects: `off` (any case) turns
+/// damage off; unset, empty or `on` keeps the default; anything else keeps
+/// the default and says so, since a typo must not silently disable the
+/// fallback someone reached for.
+#[cfg(not(target_arch = "wasm32"))]
+fn damage_mode_from(value: Option<&str>) -> DamageMode {
+    match value.map(str::trim) {
+        None | Some("") => DamageMode::default(),
+        Some(value) if value.eq_ignore_ascii_case("off") => DamageMode::Off,
+        Some(value) if value.eq_ignore_ascii_case("on") => DamageMode::default(),
+        Some(value) => {
+            tracing::warn!(value, "{DAMAGE_ENV} takes `on` or `off`; damage stays on");
+            DamageMode::default()
+        }
+    }
+}
+
 /// The inline raster lane: a [`RasterOwner`] pumped synchronously on the
 /// owner thread, plus the stamp state that keeps its frames fresh.
 ///
@@ -174,6 +199,12 @@ pub(crate) struct RasterLane<B: RasterBackend> {
     address: PresentationAddress,
     epoch: FrameEpoch,
     stamp: Arc<LaneStamp>,
+    /// Compares each submitted scene with the one submitted before it and
+    /// stamps the frame's damage (ADR-0087 §3). Relative to the last
+    /// SUBMITTED scene: a frame the owner rejects or a submit supersedes
+    /// still hands its damage to the backend, which keeps it until a frame
+    /// presents.
+    damage: LayerDiffer,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -199,7 +230,7 @@ impl<B: RasterBackend> RasterLane<B> {
                 physical_size: (width, height),
             }),
         });
-        Self {
+        let mut lane = Self {
             owner,
             handle,
             ack_rx,
@@ -207,7 +238,17 @@ impl<B: RasterBackend> RasterLane<B> {
             address,
             epoch: FrameEpoch::ZERO,
             stamp,
-        }
+            damage: LayerDiffer::default(),
+        };
+        lane.set_damage_mode(damage_mode_from(std::env::var(DAMAGE_ENV).ok().as_deref()));
+        lane
+    }
+
+    /// Switches damage production on or off for this presentation.
+    /// [`DamageMode::Off`] retains nothing and sends every frame as `Full`,
+    /// at the per-frame cost of having no differ.
+    pub(crate) fn set_damage_mode(&mut self, mode: DamageMode) {
+        self.damage.set_mode(mode);
     }
 
     /// The resize entry point for the platform's surface applier.
@@ -288,7 +329,8 @@ impl<B: RasterBackend> RasterLane<B> {
             // axis's own doc defines, not a bypass of the check.
             GpuResourceGeneration::ZERO,
         );
-        let snapshot = SceneSnapshot::new(stamp, DamageRegion::Full, scene);
+        let damage = self.damage.diff(&scene, self.stamp.physical_size());
+        let snapshot = SceneSnapshot::new(stamp, damage, scene);
         if let Err(error) = self.handle.submit(snapshot) {
             // Inline, the owner lives in this very struct, so
             // `OwnerGone`/`ShuttingDown` can only mean teardown is already
@@ -432,6 +474,8 @@ impl<R: RasterBackend> FrameSink for DirectSink<'_, R> {
     }
 
     fn submit(&mut self, scene: Scene) -> SubmitVerdict {
+        // Every frame is full on this path: it holds no differ, so the web
+        // runner repaints in full until it moves onto the lane.
         self.renderer.mark_full_repaint();
         match self.renderer.render_scene(&scene) {
             Ok(PresentDisposition::Presented) => SubmitVerdict::Presented,
@@ -530,6 +574,158 @@ mod tests {
         }
     }
 
+    /// A backend that records the damage it is handed and, like the wgpu
+    /// renderer, presents only when something is owed.
+    #[derive(Default)]
+    struct DamageRecordingBackend {
+        dirty: Vec<flui_foundation::geometry::Rect<f64>>,
+        full: u32,
+        owed: bool,
+        renders: u32,
+    }
+
+    impl RasterBackend for DamageRecordingBackend {
+        fn render_scene(&mut self, _scene: &Scene) -> Result<PresentDisposition, EngineError> {
+            self.renders += 1;
+            if std::mem::take(&mut self.owed) {
+                Ok(PresentDisposition::Presented)
+            } else {
+                Ok(PresentDisposition::NoDamage)
+            }
+        }
+        fn resize(&mut self, _width: u32, _height: u32) {
+            self.owed = true;
+        }
+        fn is_device_lost(&self) -> bool {
+            false
+        }
+        fn mark_dirty(&mut self, rect: flui_foundation::geometry::Rect<f64>) {
+            self.dirty.push(rect);
+            self.owed = true;
+        }
+        fn mark_full_repaint(&mut self) {
+            self.full += 1;
+            self.owed = true;
+        }
+        fn has_damage(&self) -> bool {
+            self.owed
+        }
+        fn size(&self) -> (u32, u32) {
+            (640, 480)
+        }
+        fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
+            Ok(())
+        }
+    }
+
+    /// A stamped root with one stamped boundary at `at`, 10x10.
+    fn stamped_scene(
+        root: &flui_layer::ContentToken,
+        child: &flui_layer::ContentToken,
+        at: flui_foundation::geometry::Offset<f64>,
+    ) -> Scene {
+        use flui_layer::{LayerNode, OffsetLayer, PictureLayer};
+        let mut tree = flui_layer::LayerTree::new(
+            LayerNode::new(Layer::from(OffsetLayer::zero()))
+                .with_boundary(flui_foundation::RenderId::new(1), root.clone()),
+        );
+        let root_id = tree.root();
+        let boundary = tree.push_child(
+            root_id,
+            LayerNode::new(Layer::from(OffsetLayer::new(at)))
+                .with_boundary(flui_foundation::RenderId::new(2), child.clone()),
+        );
+        let mut canvas = flui_painting::Canvas::new();
+        canvas.draw_rect(
+            flui_foundation::geometry::Rect::from_xywh(0.0, 0.0, 10.0, 10.0),
+            &flui_painting::Paint::fill(flui_painting::styling::Color::RED),
+        );
+        tree.push_child(boundary, Layer::from(PictureLayer::new(canvas.finish())));
+        Scene::new(tree)
+    }
+
+    fn a_changed_boundary_reaches_the_backend_as_a_dirty_rect() {
+        let mut lane = RasterLane::new(DamageRecordingBackend::default(), test_address(), 640, 480);
+        let root = flui_layer::ContentToken::mint();
+        let at = flui_foundation::geometry::Offset::new(100.0, 50.0);
+        assert_eq!(
+            lane.submit_and_pump(stamped_scene(&root, &flui_layer::ContentToken::mint(), at)),
+            SubmitVerdict::Presented
+        );
+        assert_eq!(
+            lane.submit_and_pump(stamped_scene(&root, &flui_layer::ContentToken::mint(), at)),
+            SubmitVerdict::Presented
+        );
+        lane.with_backend(|backend| {
+            assert_eq!(backend.full, 1, "only the first frame is full");
+            let expected = flui_layer::DamageRect::covering(
+                flui_foundation::geometry::Rect::from_xywh(100.0, 50.0, 10.0, 10.0),
+                (640, 480),
+            )
+            .expect("on the surface")
+            .to_rect();
+            assert_eq!(backend.dirty, vec![expected]);
+        });
+    }
+
+    /// An unchanged scene owes the screen nothing, so the frame does not
+    /// present and the loop may park.
+    fn an_identical_scene_does_not_present() {
+        let mut lane = RasterLane::new(DamageRecordingBackend::default(), test_address(), 640, 480);
+        let (root, child) = (
+            flui_layer::ContentToken::mint(),
+            flui_layer::ContentToken::mint(),
+        );
+        let at = flui_foundation::geometry::Offset::new(100.0, 50.0);
+        assert_eq!(
+            lane.submit_and_pump(stamped_scene(&root, &child, at)),
+            SubmitVerdict::Presented
+        );
+        assert_eq!(
+            lane.submit_and_pump(stamped_scene(&root, &child, at)),
+            SubmitVerdict::NoPresent
+        );
+    }
+
+    /// `FLUI_DAMAGE` is the field fallback: `off` in any case turns damage
+    /// off, and nothing else does, a typo included.
+    fn the_damage_variable_selects_the_mode() {
+        for off in ["off", "OFF", " Off "] {
+            assert_eq!(damage_mode_from(Some(off)), DamageMode::Off, "{off:?}");
+        }
+        for on in [
+            None,
+            Some(""),
+            Some("on"),
+            Some("ON"),
+            Some("of"),
+            Some("0"),
+        ] {
+            assert_eq!(damage_mode_from(on), DamageMode::default(), "{on:?}");
+        }
+    }
+
+    fn damage_off_sends_every_frame_full_and_retains_nothing() {
+        let mut lane = RasterLane::new(DamageRecordingBackend::default(), test_address(), 640, 480);
+        lane.set_damage_mode(DamageMode::Off);
+        let (root, child) = (
+            flui_layer::ContentToken::mint(),
+            flui_layer::ContentToken::mint(),
+        );
+        let at = flui_foundation::geometry::Offset::new(100.0, 50.0);
+        for _ in 0..3 {
+            assert_eq!(
+                lane.submit_and_pump(stamped_scene(&root, &child, at)),
+                SubmitVerdict::Presented
+            );
+            assert_eq!(lane.damage.retained_boundaries(), 0);
+        }
+        lane.with_backend(|backend| {
+            assert_eq!(backend.full, 3);
+            assert!(backend.dirty.is_empty());
+        });
+    }
+
     fn a_presented_frame_classifies_presented_and_renders_through_the_mailbox() {
         let mut lane = RasterLane::new(ScriptedBackend::presenting(), test_address(), 640, 480);
         let verdict = lane.submit_and_pump(test_scene());
@@ -589,6 +785,31 @@ mod tests {
                 (
                     "a_device_loss_classifies_device_lost_and_recovery_reminting_unblocks",
                     a_device_loss_classifies_device_lost_and_recovery_reminting_unblocks as fn(),
+                ),
+            ],
+        );
+    }
+
+    #[test]
+    fn raster_lane_damage_matrix() {
+        crate::table_test::run_table(
+            "raster_lane_damage_matrix",
+            &[
+                (
+                    "a_changed_boundary_reaches_the_backend_as_a_dirty_rect",
+                    a_changed_boundary_reaches_the_backend_as_a_dirty_rect as fn(),
+                ),
+                (
+                    "an_identical_scene_does_not_present",
+                    an_identical_scene_does_not_present as fn(),
+                ),
+                (
+                    "the_damage_variable_selects_the_mode",
+                    the_damage_variable_selects_the_mode as fn(),
+                ),
+                (
+                    "damage_off_sends_every_frame_full_and_retains_nothing",
+                    damage_off_sends_every_frame_full_and_retains_nothing as fn(),
                 ),
             ],
         );

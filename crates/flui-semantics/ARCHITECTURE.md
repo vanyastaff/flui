@@ -345,9 +345,13 @@ emits them.
 changes only when FLUI publishes the next tree update, and the request is queued to the realm
 without waiting for a frame. Two `Expand` requests before the next frame, or an `Expand`
 right after a pointer tap that has not been published yet, each pass that check and each run
-the tap handler, so the node can end collapsed after an expand. Nothing FLUI-side checks the
-direction: the request reaching the realm is a plain `Tap`. The discrete actions below would
-close this, because the handler would receive the requested direction instead of a toggle.
+the tap handler, so the node can end collapsed after an expand. The request reaching the realm
+is a plain `Tap`. The in-process agent path checks the direction against the owner's committed
+tree (mapping decision 7), which has the same lag: that tree also changes only at the next
+frame, and a `GestureDetector` runs a semantics tap only in the frame after the request, so two
+`expand`s sent before the effect is published both pass there too. The discrete actions below
+would close this, because the handler would receive the requested direction instead of a
+toggle.
 
 **Divergence.** Flutter's `dart:ui` has discrete `SemanticsAction.expand` (`1 << 24`) and
 `collapse` (`1 << 25`) (`engine/src/flutter/lib/ui/semantics.dart`, checked on 2026-09-26).
@@ -379,3 +383,47 @@ without an arm would silently fall back to the flag cascade.
 **Test.** `roles_and_checkbox_states_translate_to_accesskit` walks `SemanticsRole::ALL`, and
 asserts that exactly `DragHandle` and `HotKey` map to `GenericContainer`; deleting the
 `Form` arm makes it fail with `form maps to no AccessKit role`.
+
+### 7. The in-process wire read projects the published AccessKit node; roles fold to what UIA reports
+
+**Rule.** `SemanticsOwner::read_wire` (`src/agent.rs`) answers an agent with ADR-0080 wire
+nodes projected from `to_accesskit_tree_update`, the update the platform adapter is handed,
+read through `accesskit_consumer`: `common_filter` decides which nodes appear (a hidden node
+drops its subtree, a `GenericContainer` is lifted into its parent, a focused node is kept), a
+static text is named by its value, and the actions follow UI Automation's pattern predicates
+(`is_invocable`; `Toggle` for a toggled node that is not a selection item; `SelectionItem` as
+`accesskit_windows` 0.35 offers it). `set_value`, `expand`, `collapse`, `scroll_into_view` and
+`focus` are listed only when the node carries the AccessKit action that performs them, and a
+password field's value is never read. `wire_role` folds each AccessKit role to the wire role
+the desktop server reads for it on Windows: the control type `accesskit_windows` 0.35 gives it,
+through the desktop server's control-type table, with its ARIA restorations (cells, rows,
+headers, a switch) and its `IsPassword`/`IsDialog` refinements. `native_role` keeps the AccessKit
+name. `resolve_wire_action` refuses an action the node does not advertise *now*, so `expand` on
+an expanded node is `action_unsupported`.
+
+**Why.** One derivation for both backends: the desktop server reads the same AccessKit node
+through UI Automation, so a second cascade over FLUI's flags would drift from what the OS
+reports. The fold targets UIA rather than AccessKit's full role set because the wire
+vocabulary is the desktop server's, and ADR-0095 §4 compares the two backends after
+normalization. The direction check does not close mapping decision 5's double-toggle race: it
+reads the last committed tree, which lags the request as the adapter's copy does.
+
+**Divergence.** Not a Flutter behaviour: Flutter has no agent read. The rectangles are
+surface-relative physical pixels, reported as `surface_rect` with no screen `rect`: the realm
+knows no window position, and a client that reads `rect` as screen pixels must find none rather
+than a misplaced one. `AlertDialog` and `Dialog` read as `dialog` (UIA's `Window` with `IsDialog`),
+and a `Keyboard` key or `TabPanel` as `pane`, as the desktop server would report them.
+
+**Test.** `src/agent/tests.rs`: `every_role_but_the_documented_ones_reads_as_a_wire_role`
+(ADR-0095 "Mapping pinned"; `none`, `drag_handle` and `hot_key` are the documented exceptions),
+`every_role_bearing_flag_reads_as_the_role_uia_reports`,
+`wire_role_matches_the_windows_adapter_for_every_role_flui_publishes` (transcribed from the
+adapter and desktop sources, and checked to cover every role FLUI publishes),
+`the_role_fold_was_transcribed_from_the_locked_windows_adapter` (fails when `Cargo.lock` moves
+`accesskit_windows` off the release the fold was transcribed from),
+`generic_containers_are_lifted_and_hidden_subtrees_dropped`,
+`advertised_actions_follow_the_uia_patterns`, `expand_on_an_expanded_node_is_action_unsupported`,
+`set_value_reaches_set_text_with_its_text`, `a_disabled_node_refuses_with_disabled`,
+`read_honours_max_depth_and_max_nodes_and_says_truncated` and
+`a_read_tree_round_trips_through_json`. `every_wire_action_routes_to_a_semantics_action` pins
+`semantics_action_for_wire` to the Windows adapter's route row by row.

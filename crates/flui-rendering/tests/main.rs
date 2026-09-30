@@ -35,6 +35,9 @@ mod layout_poison;
 #[path = "retained_boundary_layers.rs"]
 mod retained_boundary_layers;
 
+#[path = "boundary_content_tokens.rs"]
+mod boundary_content_tokens;
+
 #[path = "paint_before_layout.rs"]
 mod paint_before_layout;
 #[path = "paint_fragment_snapshot.rs"]
@@ -61,5 +64,7 @@ mod sliver_hit_direction_matrix;
 mod sliver_to_box_adapter;
 #[path = "structural_invalidation.rs"]
 mod structural_invalidation;
+#[path = "text_context.rs"]
+mod text_context;
 #[path = "transform_to.rs"]
 mod transform_to;

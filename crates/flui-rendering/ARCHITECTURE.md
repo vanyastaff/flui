@@ -772,6 +772,38 @@ directly, this stops holding and captures would need invalidating on device
 loss. The property is not enforced by anything today beyond the layer types
 themselves.
 
+### Paint certifies a boundary's content token
+
+**Rule:** a repaint boundary's stamped layer carries a `flui_layer::ContentToken`
+next to its `RenderId`, and the damage differ (`flui_layer::LayerDiffer`,
+ADR-0087 §3) treats an unchanged token as "this boundary's own pixels did not
+change". Something has to vouch for that.
+
+**Choice:** the paint walk does, with the same fact the graft already rests on
+(absence from the paint queue means unchanged content). At each boundary child,
+before its layer is pushed, the boundary keeps the token of its retained
+capture when it is absent from the FULL queue (a composited-layer update counts,
+since a patched graft changes pixels) and has a capture; otherwise it mints a
+new token. The capture stores its token (`RetainedSubtree::content`), so every
+eviction path drops the token with it, and a graft that served a layer update
+writes the new token back with its patches. The root is never captured, so its
+token lives in `PipelineOwner::root_content` under the same rule. Minted tokens
+commit with the frame; an errored frame drops them, and the retry, still
+queued, mints again. Nested boundaries keep their stamp (token included)
+through an enclosing boundary's graft.
+
+**Why not pointer identity of the pictures:** `run_paint` always descends from
+the root, and an outer boundary refuses reuse while anything nested in it is
+dirty, re-recording its inline pictures. Their `Arc`s change on every such
+frame although the content did not, so `Arc::ptr_eq` would report the root
+changed on every real frame (`an_outer_boundary_redescended_for_a_nested_repaint_keeps_its_token`
+pins the re-recording as well as the kept token).
+
+**Accepted trade-off:** a clean node that paints differently breaks this rule
+exactly as it already breaks grafting. A boundary whose capture was refused
+(it holds a leader or follower) mints every frame and is always damaged.
+Tests: `tests/boundary_content_tokens.rs`.
+
 ### Layout marks semantics once per walk, at the dirty root
 
 **Rule:** Flutter pairs `performLayout()` with `markNeedsSemanticsUpdate()` in *both* of
@@ -1036,6 +1068,41 @@ computed twice (engine for pixels, rendering for hit-test) because a single comp
 need the downstream engine to write into the upstream owner; the logic lives once in
 `resolve_follower_offset`. Translation only, like the render path.
 
+### Layout contexts lend the realm's text context, one measurement at a time
+
+**Rule.** A `PipelineOwner` holds the realm's `TextContextHandle`
+(`Rc<RefCell<flui_painting::TextContext>>`), installed once by the runtime through
+`set_text_context` before the first layout (ADR-0092 §10 step 3). The layout walk passes the
+cell to every box node it lays out or measures — leaves through `layout_leaf_only`, parents
+through `ErasedBoxLayoutCtx`, box intrinsics asked by a box or a sliver parent — and the
+intrinsic, dry-layout and dry-baseline query walks pass it to `intrinsic_raw`,
+`dry_layout_raw` and `dry_baseline_raw`. A render object sees only a `TextCx`, a scoped
+`&mut TextContext` taken from `&mut` context (`BoxLayoutContext::text`,
+`BoxIntrinsicsCtx::text`, `BoxDryLayoutCtx::text`, `BoxDryBaselineCtx::text`), so it cannot
+lay out a child or query one while it holds the loan. The raw methods and
+`BoxLayoutCtxErased::text_source` carry the cell as a `TextSource`, a `Copy` token whose cell
+only this crate can borrow, so a direct `RenderObject` implementation passes it on but cannot
+hold a loan across a child query. A pipeline that was never given a
+handle builds a private context on first use; a context built by hand (a test helper, a
+leaf-only layout) lends one of its own. Slivers get no text accessor: nothing that measures
+text is a sliver.
+
+**Divergence.** Flutter has no such channel: `TextPainter` reaches the engine-wide font
+collection ambiently. FLUI's realm owns its text context, so the context has to reach the
+render object through the pipeline that lays it out.
+
+**Alternatives.** Threading `&mut TextContext` down from the realm would change
+`PipelineOwner::run_frame`, `run_layout` and every binding and harness that drives them, and
+the realm reaches its presentations through `&self`. A lock would put contention on every
+measurement. The `RefCell` sits between the realm and its pipelines, borrowed once per
+measurement on the owner thread; a second borrow at the same time is a `BUG:` panic, which
+only a measurement that synchronously drives another could cause (a `PipelineCell` checkout is
+not re-entrant). A `RefMut` drops on unwind, so a panicking layout releases the loan before the
+walk's `catch_unwind` turns it into `Poisoned`. Locked by
+`a_layout_that_panics_while_holding_the_text_context_releases_it`,
+`intrinsic_and_dry_queries_measure_through_the_pipelines_context` and
+`a_pipeline_without_a_handle_measures_on_its_own_context` (`tests/text_context.rs`).
+
 
 ## Thread safety
 
@@ -1051,6 +1118,7 @@ need the downstream engine to write into the upstream owner; the logic lives onc
 | `PipelineOwner` parent/back-references throughout [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs) | `Arc<RwLock<PipelineOwner>>`, `Weak<RwLock<PipelineOwner>>` | Shared infrastructure | Soundness-rewrite precedent ([core-crates-hardening Task 7](../../docs/plans/2026-03-31-core-crates-hardening.md)). |
 | `RenderTree::nodes` (`src/storage/tree.rs:59`) | `Slab<RenderNode>` | Auto-derived Send+Sync | No `unsafe impl` needed after U2. |
 | Viewport listener list (`ScrollableViewportOffset::listeners`, `src/view/viewport_offset.rs`) | `RwLock<Vec<…>>` | Listener registry | Off layout/paint hot path. `FixedViewportOffset`'s former listener list was deleted as speculative API (a fixed offset never notifies). |
+| `PipelineOwner::text` (`src/pipeline/text_context.rs`) | `Rc<RefCell<TextContext>>` | Owner-thread shared infrastructure | The realm's text context, shared by its presentations' pipelines. Borrowed once per measurement, never across a child's layout; `!Send`, like the owner. See "Layout contexts lend the realm's text context". |
 
 Two rows left this table because their sites left the crate: the mouse tracker
 lives in `flui-interaction` (`src/routing/mouse_tracker.rs`) and the render-view

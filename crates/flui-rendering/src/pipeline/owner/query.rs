@@ -4,7 +4,10 @@
 //! OUT of its slot while its own computation runs, making re-entry through
 //! a cyclic child link detectable rather than UB.
 
+use std::cell::RefCell;
+
 use flui_foundation::RenderId;
+use flui_painting::TextContext;
 #[cfg(any(test, feature = "testing"))]
 use rustc_hash::FxHashMap;
 
@@ -54,13 +57,14 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ) -> crate::error::RenderResult<f64> {
         #[cfg(any(test, feature = "testing"))]
         let parent_data_seeds = self.parent_data_seeds.clone();
+        let text = self.text_handle();
         let Self {
             render_tree,
             layout_poison,
             ..
         } = self;
         let mut slots = acquire_query_slots(render_tree, id)?;
-        let mut cx = QueryPoisonCx::new(layout_poison);
+        let mut cx = QueryPoisonCx::new(layout_poison, text.cell());
         let result = intrinsic_query(
             &mut slots,
             &mut cx,
@@ -102,13 +106,14 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ) -> crate::error::RenderResult<flui_foundation::geometry::Size> {
         #[cfg(any(test, feature = "testing"))]
         let parent_data_seeds = self.parent_data_seeds.clone();
+        let text = self.text_handle();
         let Self {
             render_tree,
             layout_poison,
             ..
         } = self;
         let mut slots = acquire_query_slots(render_tree, id)?;
-        let mut cx = QueryPoisonCx::new(layout_poison);
+        let mut cx = QueryPoisonCx::new(layout_poison, text.cell());
         let result = dry_layout_query(
             &mut slots,
             &mut cx,
@@ -145,13 +150,14 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ) -> crate::error::RenderResult<Option<f64>> {
         #[cfg(any(test, feature = "testing"))]
         let parent_data_seeds = self.parent_data_seeds.clone();
+        let text = self.text_handle();
         let Self {
             render_tree,
             layout_poison,
             ..
         } = self;
         let mut slots = acquire_query_slots(render_tree, id)?;
-        let mut cx = QueryPoisonCx::new(layout_poison);
+        let mut cx = QueryPoisonCx::new(layout_poison, text.cell());
         let result = dry_baseline_query(
             &mut slots,
             &mut cx,
@@ -229,6 +235,8 @@ pub(super) struct QuerySlot<'a> {
 /// walk's borrows are released.
 pub(super) struct QueryPoisonCx<'a> {
     poison: &'a LayoutPoison,
+    /// The realm's text context, lent to every node the query measures.
+    text: &'a RefCell<TextContext>,
     failures: Vec<(
         RenderId,
         RenderId,
@@ -239,9 +247,10 @@ pub(super) struct QueryPoisonCx<'a> {
 }
 
 impl<'a> QueryPoisonCx<'a> {
-    fn new(poison: &'a LayoutPoison) -> Self {
+    fn new(poison: &'a LayoutPoison, text: &'a RefCell<TextContext>) -> Self {
         Self {
             poison,
+            text,
             failures: Vec::new(),
             successes: Vec::new(),
         }
@@ -465,6 +474,7 @@ fn intrinsic_query_impl(
         let mut child_err: Option<crate::error::RenderError> = None;
         let value = {
             let child_err = &mut child_err;
+            let text = cx.text;
             let mut child_query =
                 |index: usize, dim: crate::storage::IntrinsicDimension, ext: f64| -> f64 {
                     let Some(&child_id) = children.get(index) else {
@@ -494,6 +504,7 @@ fn intrinsic_query_impl(
                 children.len(),
                 &child_parent_data_refs,
                 &mut child_query,
+                Some(crate::pipeline::TextSource::new(text)),
             )
         };
         if let Some(err) = child_err {
@@ -572,6 +583,7 @@ fn dry_layout_query_impl(
         let mut child_err: Option<crate::error::RenderError> = None;
         let value = {
             let child_err = &mut child_err;
+            let text = cx.text;
             let mut child_query = |index: usize,
                                    request: crate::context::DryLayoutChildRequest|
              -> crate::context::DryLayoutChildResponse {
@@ -630,6 +642,7 @@ fn dry_layout_query_impl(
                 children.len(),
                 &child_parent_data_refs,
                 &mut child_query,
+                Some(crate::pipeline::TextSource::new(text)),
             )
         };
         if let Some(err) = child_err {
@@ -712,6 +725,7 @@ fn dry_baseline_query_impl(
         let mut child_err: Option<crate::error::RenderError> = None;
         let value = {
             let child_err = &mut child_err;
+            let text = cx.text;
             let mut child_query = |index: usize,
                                    request: crate::context::DryBaselineChildRequest|
              -> crate::context::DryBaselineChildResponse {
@@ -773,6 +787,7 @@ fn dry_baseline_query_impl(
                 children.len(),
                 &child_parent_data_refs,
                 &mut child_query,
+                Some(crate::pipeline::TextSource::new(text)),
             )
         };
         if let Some(err) = child_err {

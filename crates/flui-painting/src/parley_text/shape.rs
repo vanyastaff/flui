@@ -30,7 +30,8 @@ pub struct ParagraphSpec<'a> {
     pub font_size: f32,
     /// The width lines break at; `None` breaks only at hard breaks.
     pub max_width: Option<f32>,
-    /// The line height in logical pixels; `None` is `1.2 × font_size`.
+    /// The line height in logical pixels; `None` is `1.2 ×` each run's own
+    /// font size, so a larger span grows its line box.
     pub line_height: Option<f32>,
     /// The edge lines align to: `Ltr` aligns left, `Rtl` aligns right.
     ///
@@ -39,6 +40,11 @@ pub struct ParagraphSpec<'a> {
     /// so Latin-first text under `Rtl` is still ordered as an LTR paragraph
     /// (flui-painting `ARCHITECTURE.md`, mapping decision 12).
     pub direction: TextDirection,
+    /// The lines the paragraph keeps; `None` keeps every line. Lines past
+    /// it are still shaped, but the metrics stop at it and report
+    /// `truncated`. No ellipsis is shaped into the last kept line
+    /// (flui-painting `ARCHITECTURE.md`, mapping decision 15).
+    pub max_lines: Option<usize>,
 }
 
 /// A shaped, line-broken paragraph.
@@ -46,6 +52,7 @@ pub struct ParagraphLayout {
     layout: Layout<SpanBrush>,
     text: String,
     line_height: f32,
+    max_lines: Option<usize>,
 }
 
 impl ParagraphLayout {
@@ -73,16 +80,47 @@ impl ParagraphLayout {
             };
         };
         let line = first.metrics();
-        let width = self.layout.width();
+        let kept = self
+            .max_lines
+            .map_or(self.layout.len(), |max| max.min(self.layout.len()));
+        let (width, height) = if kept < self.layout.len() {
+            // The layout's own width and height cover every line; a
+            // truncated paragraph measures only the lines it keeps, with
+            // Parley's rule (trailing whitespace excluded from the width).
+            self.layout
+                .lines()
+                .take(kept)
+                .fold((0.0_f32, 0.0_f32), |(width, height), line| {
+                    let metrics = line.metrics();
+                    let extent =
+                        metrics.inline_min_coord + metrics.advance - metrics.trailing_whitespace;
+                    (width.max(extent), height + metrics.line_height)
+                })
+        } else {
+            (self.layout.width(), self.layout.height())
+        };
         TextLayoutResult {
             width: f64::from(width),
-            height: f64::from(self.layout.height()),
-            line_count: self.layout.len().max(1),
+            height: f64::from(height),
+            line_count: kept.max(1),
             max_line_width: f64::from(width),
             alphabetic_baseline: f64::from(line.baseline),
             ideographic_baseline: f64::from(line.block_max_coord),
-            truncated: false,
+            truncated: kept < self.layout.len(),
         }
+    }
+
+    /// The paragraph's narrowest and widest widths: `(min, max)`, where min
+    /// takes every soft break (the widest unbreakable run) and max takes
+    /// none (the single-line width). Independent of the width it was broken
+    /// at and of `max_lines`.
+    #[must_use]
+    pub fn content_widths(&self) -> (f64, f64) {
+        if self.text.is_empty() {
+            return (0.0, 0.0);
+        }
+        let widths = self.layout.calculate_content_widths();
+        (f64::from(widths.min), f64::from(widths.max))
     }
 }
 
@@ -114,12 +152,25 @@ impl TextContext {
             .collect();
         let line_height = paragraph.line_height.unwrap_or(paragraph.font_size * 1.2);
 
+        // Unquantized: the layout is in logical pixels, and Parley's
+        // quantization would round ascent, descent and the leading halves to
+        // whole logical pixels, which at a device scale other than 1 is not
+        // the device grid. Metrics stay exact, as on the cosmic-text path, and
+        // a baseline reaches the device grid once, when it is painted
+        // (`(line_y * scale).round()`); `tests/parley_metrics_oracle.rs` pins
+        // the agreement.
         let mut builder = self
             .layout_cx
-            .ranged_builder(&mut self.font_cx, &text, 1.0, true);
+            .ranged_builder(&mut self.font_cx, &text, 1.0, false);
         builder.push_default(family(None));
         builder.push_default(StyleProperty::FontSize(paragraph.font_size));
-        builder.push_default(StyleProperty::LineHeight(LineHeight::Absolute(line_height)));
+        // No explicit height is 1.2 em of each run's own size, so a larger
+        // span grows its line box, as on the cosmic-text path; an explicit
+        // height is one absolute line box for the paragraph.
+        builder.push_default(StyleProperty::LineHeight(match paragraph.line_height {
+            Some(height) => LineHeight::Absolute(height),
+            None => LineHeight::FontSizeRelative(1.2),
+        }));
         if let Some(style) = paragraph.default_style {
             for property in properties(style) {
                 builder.push_default(property);
@@ -146,6 +197,7 @@ impl TextContext {
             layout,
             text,
             line_height,
+            max_lines: paragraph.max_lines,
         }
     }
 }
@@ -199,4 +251,140 @@ fn properties(style: &TextStyle) -> Vec<StyleProperty<'static, SpanBrush>> {
         properties.push(StyleProperty::Brush(SpanBrush(Some(color))));
     }
     properties
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::typography::{TextDirection, TextStyle};
+
+    use super::{ParagraphLayout, ParagraphSpec};
+    use crate::text_layout::{FontCollection, TextContext};
+
+    const WIDTH: f32 = 400.0;
+
+    fn shaped(text: &str, direction: TextDirection) -> ParagraphLayout {
+        let spans: Vec<(String, Option<TextStyle>)> = vec![(text.to_owned(), None)];
+        TextContext::new(&FontCollection::new()).shape(&ParagraphSpec {
+            spans: &spans,
+            default_style: None,
+            font_size: 16.0,
+            max_width: Some(WIDTH),
+            line_height: None,
+            direction,
+            max_lines: None,
+        })
+    }
+
+    fn first_line_offset(paragraph: &ParagraphLayout) -> f32 {
+        paragraph
+            .layout
+            .get(0)
+            .expect("BUG: non-empty text lays out at least one line")
+            .metrics()
+            .offset
+    }
+
+    /// `Rtl` pushes a line to the right edge and nothing more: Parley 0.11
+    /// resolves the base direction from the first strong character, so a
+    /// Latin-first paragraph stays LTR under `Rtl` and a Hebrew-first one is
+    /// RTL under `Ltr`. SkParagraph would order the first as an RTL
+    /// paragraph; this pins the divergence until the base direction can be
+    /// set (ADR-0092 §10 step 5).
+    #[test]
+    fn rtl_aligns_lines_right_without_setting_the_base_direction() {
+        let ltr = shaped("abc 123 !", TextDirection::Ltr);
+        let rtl = shaped("abc 123 !", TextDirection::Rtl);
+
+        assert!(
+            first_line_offset(&ltr).abs() < f32::EPSILON,
+            "an Ltr line starts at the left edge, got {}",
+            first_line_offset(&ltr)
+        );
+        assert!(
+            first_line_offset(&rtl) > 0.0,
+            "an Rtl line is pushed toward the right edge, got {}",
+            first_line_offset(&rtl)
+        );
+        assert!(
+            !rtl.layout.is_rtl(),
+            "Latin-first text keeps an LTR base direction under Rtl"
+        );
+        assert!(
+            shaped("\u{05E9}\u{05DC}\u{05D5}\u{05DD} abc", TextDirection::Ltr)
+                .layout
+                .is_rtl(),
+            "Hebrew-first text takes an RTL base direction under Ltr"
+        );
+    }
+
+    fn wrapped(max_lines: Option<usize>) -> ParagraphLayout {
+        let spans: Vec<(String, Option<TextStyle>)> = vec![(
+            "one two three four five six seven eight nine ten".to_owned(),
+            None,
+        )];
+        TextContext::new(&FontCollection::new()).shape(&ParagraphSpec {
+            spans: &spans,
+            default_style: None,
+            font_size: 16.0,
+            max_width: Some(60.0),
+            line_height: Some(20.0),
+            direction: TextDirection::Ltr,
+            max_lines,
+        })
+    }
+
+    /// `max_lines` stops the metrics at the kept lines: the height covers
+    /// only them and `truncated` says lines were dropped. Without it the
+    /// same paragraph reports every line.
+    #[test]
+    fn max_lines_truncates_parley_metrics() {
+        let full = wrapped(None).metrics();
+        assert!(
+            full.line_count > 2,
+            "the probe must wrap past two lines, got {}",
+            full.line_count
+        );
+        assert!(!full.truncated);
+
+        let kept = wrapped(Some(2)).metrics();
+        assert_eq!(kept.line_count, 2);
+        assert!(kept.truncated, "dropping lines reports truncation");
+        assert!(
+            (kept.height - 40.0).abs() < 1e-3,
+            "two 20 px lines, got {}",
+            kept.height
+        );
+        assert!(kept.height < full.height);
+        assert!(kept.width <= 60.0 + 1e-3);
+
+        let exact = wrapped(Some(full.line_count)).metrics();
+        assert!(!exact.truncated, "keeping every line is no truncation");
+        assert!((exact.height - full.height).abs() < 1e-3);
+    }
+
+    /// The content widths are the widest word and the single-line width,
+    /// whatever width the paragraph was broken at.
+    #[test]
+    fn content_widths_bound_every_break_width() {
+        let paragraph = wrapped(None);
+        let (min, max) = paragraph.content_widths();
+        assert!(min > 0.0 && min < max, "min {min}, max {max}");
+        let spans: Vec<(String, Option<TextStyle>)> = vec![("seven".to_owned(), None)];
+        let seven = TextContext::new(&FontCollection::new())
+            .shape(&ParagraphSpec {
+                spans: &spans,
+                default_style: None,
+                font_size: 16.0,
+                max_width: None,
+                line_height: None,
+                direction: TextDirection::Ltr,
+                max_lines: None,
+            })
+            .metrics()
+            .width;
+        assert!(
+            min >= seven - 1e-3,
+            "min {min} covers the word 'seven' ({seven})"
+        );
+    }
 }
