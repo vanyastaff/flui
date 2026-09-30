@@ -95,7 +95,6 @@ entry in [open questions](open-questions.md). Decisions already taken are indexe
 | M | The web backend justifies `unsafe impl`s with "SAFETY: WASM is single-threaded" (`crates/flui-platform/src/platforms/web/platform.rs:47`, also `clipboard.rs:24`, `executor.rs:13`). That is unsound once wasm threads are enabled | Confirmed | [platform_layer][m-plat] | Issue; forbid `target_feature = "atomics"` or fix the types |
 | L | `crates/flui-platform/src/lib.rs:296,299` rates Windows "Production 10/10" and Android "Stub 2/10", while `docs/BETA.md` calls Windows experimental | Confirmed | [platform_layer][m-plat] | Doc fix |
 | L | `GestureSettings` does not read the OS double-click time or drag slop | *Map claim* | [interaction_semantics][m-inter] | Issue |
-| L | `examples/android_*` are outside the workspace and CI does not build them | *Map claim* | [workspace_topology][m-ws] | Issue |
 
 ### 2.4 Workspace, tooling and process
 

@@ -218,7 +218,7 @@ The host calls `HotReloadDriver::poll()` in its frame loop; when the `.so` mtime
 ## Android Scene Workflow
 
 ```bash
-flui run --scene --scene-crate flui-android-scene --package com.example.app --target arm64-v8a
+flui run --scene --scene-crate <scene-crate> --package com.example.app --target arm64-v8a
 ```
 
 1. CLI watches scene crate `src/` (layer 1).

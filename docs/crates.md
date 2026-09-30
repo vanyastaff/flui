@@ -123,9 +123,6 @@ Empty since [ADR-0081](adr/ADR-0081-workspace-tiers-and-reach-facts.md) deleted 
 | `examples/desktop_scene` | ✅ ACTIVE | Hot-reload-aware desktop scene plugin |
 | `examples/web_demo` | ✅ ACTIVE (manual build) | Web/WASM platform demo (`cdylib`) |
 | `examples/painting_demo` | ✅ ACTIVE (manual build) | Web/WASM painting + engine demo (`cdylib`) |
-| `examples/android_app` | ⛔ Excluded from workspace | Widget-based hot-reloadable Android plugin (requires NDK) |
-| `examples/android_demo` | ⛔ Excluded from workspace | Android GPU demo (requires NDK) |
-| `examples/android_scene` | ⛔ Excluded from workspace | Hot-reloadable Android scene plugin (requires NDK) |
 | `tools/web-server` | ✅ ACTIVE | Built-in web dev server (wasm-pack + HTTP serve) |
 | `tools/desktop-mcp` | ✅ ACTIVE | MCP server that drives desktop apps from the outside (windows, screenshots, UI Automation, real input) for agent testing |
 | `tools/device-checks` | ✅ ACTIVE (scripts, not a crate) | The macOS and iOS device-check scripts `cargo xtask device` runs; the Windows gates live in `tools/xtask/src/device/` |

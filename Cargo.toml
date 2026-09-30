@@ -42,12 +42,6 @@ members = [
     "packages/flui-devtools",  # Profiler / timeline / inspector counters
 
     # === Examples (platform-specific) ===
-    # NOTE: Android examples are excluded from workspace.members because they
-    # require Android NDK toolchain. Build them with:
-    #   cargo ndk -t arm64-v8a build -p flui-android-demo
-    # "examples/android_demo",      # Android GPU demo (cdylib)
-    # "examples/android_scene",     # Hot-reloadable scene plugin (cdylib)
-    # "examples/android_app",       # Widget-based hot-reloadable plugin (cdylib)
     "examples/desktop_scene",                # Hot-reloadable scene plugin for desktop — loaded via HotReloadDriver
     "examples/hot_reload_counter/types",
     "examples/hot_reload_counter/logic",
