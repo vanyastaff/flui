@@ -15,23 +15,20 @@
 //! The app's collection is fed from the host
 //! ([`FontCollection::with_host_faces`]): the faces the process font system
 //! discovered, its generic families and its fallback order, so the Parley
-//! path measures text in the face cosmic-text paints it with (ADR-0092 §7).
-//! It keeps that font system as its paint side: a face registered on the
-//! collection is loaded there too, so measurement and paint gain it
+//! path shapes text in the face cosmic-text places its carets in (ADR-0092 §7).
+//! It keeps that font system as its caret side: a face registered on the
+//! collection is loaded there too, so measurement, paint and carets gain it
 //! together. [`FontCollection::new`] holds the bundled faces alone and has no
-//! paint side.
-//!
-//! The types exist in every build so their shape does not depend on features;
-//! without `parley` they hold nothing and shape nothing.
+//! caret side; without `bundled-fonts` it starts empty, text shapes with no
+//! face until one is registered, and the first registered family that can set
+//! Latin text becomes every generic family ([`FontCollection::register_font`]).
 
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
 use super::layout::{HostFaces, SharedFontSystem};
-
 use crate::error::RegisterFontError;
-#[cfg(feature = "parley")]
 use crate::parley_text::SpanBrush;
 
 /// The app's font collection: shared, add-only, passed explicitly.
@@ -46,27 +43,28 @@ struct FontCollectionInner {
     /// Bumped once per registration that added a face; a measurement
     /// cached against an older value is stale.
     generation: AtomicU64,
-    /// The process font system paint shapes with, for a collection fed from
-    /// it: a registration loads the face there too. `None` for a collection
-    /// that measures alone ([`FontCollection::new`]).
-    paint: Option<SharedFontSystem>,
+    /// The process font system the caret layout shapes with, for a
+    /// collection fed from it: a registration loads the face there too, so
+    /// carets sit on the glyphs measurement and paint shaped. `None` for a
+    /// collection that measures and paints alone ([`FontCollection::new`]).
+    carets: Option<SharedFontSystem>,
     /// fontique's collection in shared mode. It never scans the host itself:
     /// host faces come from the process font system's discovery.
-    #[cfg(feature = "parley")]
     collection: parley::fontique::Collection,
     /// One source cache shared by every context built from the collection.
-    #[cfg(feature = "parley")]
     source_cache: parley::fontique::SourceCache,
 }
 
 impl FontCollection {
     /// A new collection.
     ///
-    /// With `parley` and `bundled-fonts` it holds the embedded Roboto,
-    /// Material Icons and Cupertino Icons faces, and binds the generic
-    /// families (sans-serif, serif, monospace, system-ui) to Roboto, so text
-    /// shapes the same on every host. Without `parley` it is an empty handle
-    /// and loads nothing.
+    /// With `bundled-fonts` it holds the embedded Roboto, Material Icons and
+    /// Cupertino Icons faces, and binds the generic families (sans-serif,
+    /// serif, monospace, cursive, fantasy, system-ui) to Roboto, so text shapes the same on
+    /// every host. Without `bundled-fonts` it starts empty: text measures
+    /// with no face until one is registered, and the first registered family
+    /// that can set Latin text then serves as every generic family
+    /// ([`FontCollection::register_font`]).
     #[must_use]
     pub fn new() -> Self {
         Self(Arc::new(FontCollectionInner::build(None, None)))
@@ -79,23 +77,21 @@ impl FontCollection {
     /// `fonts` was built with.
     ///
     /// Text measured on it resolves the family the process font system
-    /// paints with, and falls back in the same order past it (ADR-0092 §7).
+    /// places carets in, and falls back in the same order past it (ADR-0092 §7).
     /// The app's composition root builds one per app, before the first
     /// frame; it reads the font files again, outside `fonts`' lock, so it
     /// costs a second scan of the host's fonts. A file that cannot be read is
-    /// skipped. Without `parley` it holds nothing, as `new` does, and takes
-    /// no snapshot of `fonts`.
+    /// skipped.
     ///
-    /// `fonts` becomes the collection's paint side: every face
+    /// `fonts` becomes the collection's caret side: every face
     /// [`Self::register_font`] adds is loaded into `fonts` as well.
     #[must_use]
     pub fn with_host_faces(fonts: &SharedFontSystem) -> Self {
         fonts.count_host_feed();
-        #[cfg(feature = "parley")]
-        let inner = FontCollectionInner::build(Some(&fonts.host_faces()), Some(fonts.clone()));
-        #[cfg(not(feature = "parley"))]
-        let inner = FontCollectionInner::build(None, Some(fonts.clone()));
-        Self(Arc::new(inner))
+        Self(Arc::new(FontCollectionInner::build(
+            Some(&fonts.host_faces()),
+            Some(fonts.clone()),
+        )))
     }
 
     /// Whether `a` and `b` are the same collection.
@@ -133,24 +129,36 @@ impl FontCollection {
     }
 
     /// Whether the collection holds a family named `family`.
-    #[cfg(all(feature = "parley", any(test, feature = "testing")))]
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn holds(&self, family: &str) -> bool {
         self.0.collection.clone().family_id(family).is_some()
     }
 
-    /// Adds every face in `font_bytes` to the collection, and to its paint
+    /// Adds every face in `font_bytes` to the collection, and to its caret
     /// side when it has one.
     ///
     /// Visible to every [`TextContext`] built from this collection, including
-    /// ones built before the call: each sees it at its next shape. On a
-    /// collection built by [`Self::with_host_faces`] the face is loaded into
-    /// that font system as well, so glyphs paint in the face the text was
-    /// measured in. [`Self::generation`] rises by one, which is how a
+    /// ones built before the call: each measures and paints with it from its
+    /// next shape. On a collection built by [`Self::with_host_faces`] the face
+    /// is loaded into that font system as well, so carets and selection sit
+    /// on the glyphs that painted. This is the one registration door: a face
+    /// loaded on the process font system alone reaches carets only.
+    /// [`Self::generation`] rises by one, which is how a
     /// pipeline learns that text it laid out may measure differently now.
     ///
     /// Registration goes through a local clone of fontique's collection,
     /// whose shared mode propagates the change; FLUI adds no lock. Faces are
     /// never removed.
+    ///
+    /// A generic family bound to nothing is bound to the first family the
+    /// bytes hold that can set Latin text (a face of it maps the space and a
+    /// basic Latin letter), so text that names no family (or a generic)
+    /// measures in it rather than in no face. An icon font maps no space, so
+    /// it binds nothing and a text face registered after it still takes the
+    /// generics. Only a collection built without `bundled-fonts` and without
+    /// a host feed has an unbound generic; a bound one is never moved. Two
+    /// registrations racing on an unbound generic each bind a family they
+    /// registered, and the later write stays.
     ///
     /// # Errors
     ///
@@ -161,52 +169,46 @@ impl FontCollection {
         // Checked before fontique sees the bytes: its registration bumps the
         // shared version even when it finds no face, which would make every
         // context deep-copy the collection for nothing.
-        #[cfg(feature = "parley")]
         if ::swash::FontRef::from_index(font_bytes, 0).is_none() {
             return Err(RegisterFontError);
         }
-        #[cfg(feature = "parley")]
         let blob = parley::fontique::Blob::new(Arc::new(font_bytes.to_vec()));
-        // The measuring side's verdict before the paint side loads anything:
-        // paint never drops a face, so one it kept and measurement lacks
-        // would split the two for good. A scratch collection takes no shared
-        // lock and bumps no version; the shared registration below reads the
-        // same bytes the same way.
-        #[cfg(feature = "parley")]
-        if self.0.paint.is_some() && !measures_a_family(&blob) {
+        // The collection's verdict before the caret side loads anything: the
+        // caret side never drops a face, so one it kept and the collection
+        // lacks would split the two for good. A scratch collection takes no
+        // shared lock and bumps no version; the shared registration below
+        // reads the same bytes the same way.
+        if self.0.carets.is_some() && !measures_a_family(&blob) {
             return Err(RegisterFontError);
         }
-        match &self.0.paint {
+        if let Some(carets) = &self.0.carets {
             // fontdb's verdict: an error here means nothing was added
             // anywhere.
-            Some(paint) => paint.add_face(font_bytes)?,
-            // Nothing holds faces: a scratch database is the only judge of
-            // the bytes.
-            #[cfg(not(feature = "parley"))]
-            None => {
-                if !paints_a_face(font_bytes) {
-                    return Err(RegisterFontError);
-                }
-            }
-            #[cfg(feature = "parley")]
-            None => {}
+            carets.add_face(font_bytes)?;
         }
-        #[cfg(feature = "parley")]
-        {
-            let mut collection = self.0.collection.clone();
-            if collection.register_fonts(blob, None).is_empty() {
-                // Reached only without a paint side: with one, the scratch
-                // check above found a family in these bytes.
-                return Err(RegisterFontError);
-            }
+        let mut collection = self.0.collection.clone();
+        let families = collection.register_fonts(blob, None);
+        if families.is_empty() {
+            // Reached only without a caret side: with one, the scratch check
+            // above found a family in these bytes.
+            return Err(RegisterFontError);
+        }
+        let text_family = families.iter().find_map(|(family, faces)| {
+            faces
+                .iter()
+                .any(|face| sets_latin_text(font_bytes, face.index()))
+                .then_some(*family)
+        });
+        if let Some(family) = text_family {
+            bind_unbound_generics(&mut collection, family);
         }
         self.0.generation.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
 
     /// Whether [`Self::register_font`] would accept `font_bytes` on a
-    /// collection fed from the host: both the paint side and the measuring
-    /// side find a face in them. Changes nothing anywhere.
+    /// collection fed from the host: both the caret side and the collection
+    /// find a face in them. Changes nothing anywhere.
     ///
     /// For a caller that must answer for bytes before it has a collection
     /// to register them on, such as the app holding a registration made
@@ -216,13 +218,12 @@ impl FontCollection {
     ///
     /// [`RegisterFontError`] if either side finds no face in the bytes.
     pub fn check_font(font_bytes: &[u8]) -> Result<(), RegisterFontError> {
-        #[cfg(feature = "parley")]
         if ::swash::FontRef::from_index(font_bytes, 0).is_none()
             || !measures_a_family(&parley::fontique::Blob::new(Arc::new(font_bytes.to_vec())))
         {
             return Err(RegisterFontError);
         }
-        if paints_a_face(font_bytes) {
+        if fontdb_finds_a_face(font_bytes) {
             Ok(())
         } else {
             Err(RegisterFontError)
@@ -230,17 +231,33 @@ impl FontCollection {
     }
 }
 
-/// Whether fontdb, which the paint side loads faces with, finds a face in
+/// Whether fontdb, which the caret side loads faces with, finds a face in
 /// `font_bytes`, asked of a scratch database.
-fn paints_a_face(font_bytes: &[u8]) -> bool {
+fn fontdb_finds_a_face(font_bytes: &[u8]) -> bool {
     let mut scratch = cosmic_text::fontdb::Database::new();
     scratch.load_font_data(font_bytes.to_vec());
     !scratch.is_empty()
 }
 
+/// Whether the face at `index` in `font_bytes` can set Latin text: it maps
+/// the space and at least one basic Latin letter. An icon font fails the
+/// first (Material Icons maps lowercase letters for its ligatures, but no
+/// space), so it never becomes a generic family.
+fn sets_latin_text(font_bytes: &[u8], index: u32) -> bool {
+    let Ok(index) = usize::try_from(index) else {
+        return false;
+    };
+    ::swash::FontRef::from_index(font_bytes, index).is_some_and(|font| {
+        let charmap = font.charmap();
+        charmap.map(' ') != 0
+            && ('A'..='Z')
+                .chain('a'..='z')
+                .any(|letter| charmap.map(letter) != 0)
+    })
+}
+
 /// Whether fontique finds a family in `blob`, asked of a scratch collection
 /// that shares nothing.
-#[cfg(feature = "parley")]
 fn measures_a_family(blob: &parley::fontique::Blob<u8>) -> bool {
     let mut scratch = parley::fontique::Collection::new(parley::fontique::CollectionOptions {
         shared: false,
@@ -277,19 +294,10 @@ impl fmt::Debug for FontsKey {
 }
 
 impl FontCollectionInner {
-    #[cfg(not(feature = "parley"))]
-    fn build(_host: Option<&HostFaces>, paint: Option<SharedFontSystem>) -> Self {
-        Self {
-            generation: AtomicU64::new(0),
-            paint,
-        }
-    }
-
     /// Builds the collection unshared, so no step takes fontique's shared
     /// mutex, and shares it last: it starts at generation zero whatever it
     /// holds.
-    #[cfg(feature = "parley")]
-    fn build(host: Option<&HostFaces>, paint: Option<SharedFontSystem>) -> Self {
+    fn build(host: Option<&HostFaces>, carets: Option<SharedFontSystem>) -> Self {
         use parley::fontique::{Collection, CollectionOptions, SourceCache};
 
         let mut collection = Collection::new(CollectionOptions {
@@ -304,7 +312,7 @@ impl FontCollectionInner {
         collection.make_shared();
         Self {
             generation: AtomicU64::new(0),
-            paint,
+            carets,
             collection,
             source_cache: SourceCache::new_shared(),
         }
@@ -316,7 +324,6 @@ impl FontCollectionInner {
 /// A source any of whose families the collection already holds is left out,
 /// so a host copy never joins a bundled family. Generics bind only to a
 /// family the collection then holds; one that is absent keeps its binding.
-#[cfg(feature = "parley")]
 #[tracing::instrument(skip_all, fields(sources = host.sources.len()))]
 fn feed_host_faces(collection: &mut parley::fontique::Collection, host: &HostFaces) {
     use std::collections::HashSet;
@@ -364,17 +371,43 @@ fn feed_host_faces(collection: &mut parley::fontique::Collection, host: &HostFac
     tracing::debug!(files, "fed the host's faces into the font collection");
 }
 
+/// Every generic family a style can name, `system-ui` included.
+const GENERICS: [parley::fontique::GenericFamily; 6] = {
+    use parley::fontique::GenericFamily;
+    [
+        GenericFamily::SansSerif,
+        GenericFamily::Serif,
+        GenericFamily::Monospace,
+        GenericFamily::Cursive,
+        GenericFamily::Fantasy,
+        GenericFamily::SystemUi,
+    ]
+};
+
+/// Binds `family` to every generic family of `collection` that is bound to
+/// nothing.
+fn bind_unbound_generics(
+    collection: &mut parley::fontique::Collection,
+    family: parley::fontique::FamilyId,
+) {
+    for generic in GENERICS {
+        if collection.generic_families(generic).next().is_none() {
+            collection.set_generic_families(generic, std::iter::once(family));
+        }
+    }
+}
+
 /// Registers the embedded faces, binds every generic family to Roboto and
 /// makes Roboto every script's fallback.
 ///
 /// fontique has no last resort past a style's families and its script's
 /// fallbacks, so without the fallback a glyph the style's family lacks (a
-/// Cyrillic letter in an icon font) would measure as `.notdef`, where
-/// cosmic-text paints it in Roboto. A host feed replaces the fallbacks with
+/// Cyrillic letter in an icon font) would measure and paint as `.notdef`,
+/// where cosmic-text shapes it in Roboto. A host feed replaces the fallbacks with
 /// the host's order (`install_into`).
-#[cfg(all(feature = "parley", feature = "bundled-fonts"))]
+#[cfg(feature = "bundled-fonts")]
 fn bind_bundled_faces(collection: &mut parley::fontique::Collection) {
-    use parley::fontique::{Blob, FallbackKey, GenericFamily};
+    use parley::fontique::{Blob, FallbackKey};
 
     use crate::fonts::{CUPERTINO_ICONS, MATERIAL_ICONS_REGULAR, ROBOTO_REGULAR};
 
@@ -386,12 +419,7 @@ fn bind_bundled_faces(collection: &mut parley::fontique::Collection) {
         .collect();
     register(MATERIAL_ICONS_REGULAR);
     register(CUPERTINO_ICONS);
-    for generic in [
-        GenericFamily::SansSerif,
-        GenericFamily::Serif,
-        GenericFamily::Monospace,
-        GenericFamily::SystemUi,
-    ] {
+    for generic in GENERICS {
         collection.set_generic_families(generic, roboto.iter().copied());
     }
     for script in super::fallback_chain::fontique_scripts() {
@@ -425,9 +453,7 @@ pub struct TextContext {
     /// through `testing::text_context_lends`.
     #[cfg(any(test, feature = "testing"))]
     lent: u64,
-    #[cfg(feature = "parley")]
     pub(crate) font_cx: parley::FontContext,
-    #[cfg(feature = "parley")]
     pub(crate) layout_cx: parley::LayoutContext<SpanBrush>,
 }
 
@@ -440,12 +466,10 @@ impl TextContext {
             fonts: fonts.clone(),
             #[cfg(any(test, feature = "testing"))]
             lent: 0,
-            #[cfg(feature = "parley")]
             font_cx: parley::FontContext {
                 collection: fonts.0.collection.clone(),
                 source_cache: fonts.0.source_cache.clone(),
             },
-            #[cfg(feature = "parley")]
             layout_cx: parley::LayoutContext::new(),
         }
     }
@@ -485,7 +509,7 @@ impl fmt::Debug for TextContext {
     }
 }
 
-#[cfg(all(test, feature = "parley"))]
+#[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
@@ -493,9 +517,122 @@ mod tests {
 
     use super::super::fallback_chain::FallbackChain;
     use super::super::layout::{HostData, HostFaces, HostSource};
-    use super::FontCollectionInner;
+    use super::{FontCollection, FontCollectionInner, TextContext};
+    use crate::parley_text::ParagraphSpec;
+    use crate::typography::{TextDirection, TextStyle};
 
     const ROBOTO: &[u8] = include_bytes!("../../assets/fonts/Roboto-Regular.ttf");
+    const PROBE_MONO: &[u8] = include_bytes!("../../assets/fonts/probe-mono-100.ttf");
+
+    /// A collection holding no face and binding no generic: what
+    /// `FontCollection::new` builds without `bundled-fonts`, which this
+    /// crate's own tests always enable.
+    fn unbundled() -> FontCollection {
+        use parley::fontique::{Collection, CollectionOptions, SourceCache};
+
+        let mut collection = Collection::new(CollectionOptions {
+            shared: false,
+            system_fonts: false,
+        });
+        collection.make_shared();
+        FontCollection(Arc::new(FontCollectionInner {
+            generation: std::sync::atomic::AtomicU64::new(0),
+            carets: None,
+            collection,
+            source_cache: SourceCache::new_shared(),
+        }))
+    }
+
+    /// On a collection that starts with no face, text naming no family
+    /// measures in the first registered family that can set Latin text: it
+    /// measures nothing before the registration and four of the probe's
+    /// one-em `A`s after it. An icon font registered first binds nothing, so
+    /// Roboto registered after it still takes the generics and unstyled
+    /// `home` measures in Roboto, not as the icon font's ligature. Fails if
+    /// registration leaves the generics unbound, or binds them to whichever
+    /// family came first.
+    mod unbound_generics {
+        use super::{
+            FontCollection, PROBE_MONO, ParagraphSpec, ROBOTO, TextContext, TextDirection,
+            TextStyle, unbundled,
+        };
+
+        const MATERIAL_ICONS: &[u8] =
+            include_bytes!("../../assets/fonts/MaterialIcons-Regular.ttf");
+
+        fn width(fonts: &FontCollection, text: &str) -> f64 {
+            let spans: Vec<(String, Option<TextStyle>)> = vec![(text.to_owned(), None)];
+            TextContext::new(fonts)
+                .shape(&ParagraphSpec {
+                    spans: &spans,
+                    default_style: None,
+                    font_size: 20.0,
+                    max_width: None,
+                    line_height: None,
+                    direction: TextDirection::Ltr,
+                    max_lines: None,
+                    ellipsis: None,
+                })
+                .metrics()
+                .width
+        }
+
+        fn a_registered_text_family_serves_the_generics() {
+            let fonts = unbundled();
+            assert!(
+                width(&fonts, "AAAA").abs() < 1e-3,
+                "no face measures nothing, got {}",
+                width(&fonts, "AAAA")
+            );
+
+            fonts
+                .register_font(PROBE_MONO)
+                .expect("the probe face loads");
+            assert!(
+                (width(&fonts, "AAAA") - 80.0).abs() < 1e-3,
+                "unstyled text measures in the probe, got {}",
+                width(&fonts, "AAAA")
+            );
+        }
+
+        fn an_icon_font_registered_first_leaves_the_generics_to_a_text_face() {
+            let fonts = unbundled();
+            fonts
+                .register_font(MATERIAL_ICONS)
+                .expect("the icon face loads");
+            fonts.register_font(ROBOTO).expect("Roboto loads");
+            let roboto_only = unbundled();
+            roboto_only.register_font(ROBOTO).expect("Roboto loads");
+            let (got, roboto) = (width(&fonts, "home"), width(&roboto_only, "home"));
+            assert!(
+                roboto > 1.0 && (got - roboto).abs() < 1e-3,
+                "unstyled text measures in Roboto ({roboto}), not the icon font, got {got}"
+            );
+        }
+
+        #[test]
+        fn unbound_generics() {
+            let cases: &[(&str, fn())] = &[
+                (
+                    "a_registered_text_family_serves_the_generics",
+                    a_registered_text_family_serves_the_generics,
+                ),
+                (
+                    "an_icon_font_registered_first_leaves_the_generics_to_a_text_face",
+                    an_icon_font_registered_first_leaves_the_generics_to_a_text_face,
+                ),
+            ];
+            let failed: Vec<&str> = cases
+                .iter()
+                .filter(|(_, case)| std::panic::catch_unwind(*case).is_err())
+                .map(|(name, _)| *name)
+                .collect();
+            assert!(
+                failed.is_empty(),
+                "unbound_generics: failing cases: {failed:?}"
+            );
+        }
+    }
 
     struct CommonIsRoboto;
 
@@ -568,30 +705,116 @@ mod tests {
         );
     }
 
-    /// Registration on a collection pairs measurement with paint. Driven on
-    /// a font system of the test's own (`SharedFontSystem::pinned`), so no
-    /// row touches the process-wide one.
+    /// Keys stay equal across a source-cache prune while a registry holds
+    /// the face's blob (ADR-0092 §5): fontique keeps a file-backed blob only
+    /// weakly, so without a holder a prune drops it, the next shape loads
+    /// the file again under a new blob id, and every key naming the old id
+    /// changes. The arm without a registry shows the prune does that here.
+    #[test]
+    fn a_held_blob_keeps_its_keys_across_a_prune() {
+        use parley::fontique::{Collection, CollectionOptions, SourceCache};
+
+        use crate::glyphs::{FaceKey, FontRegistry};
+
+        // One file and one collection per arm, so neither arm's blob is
+        // reachable from the other's source cache.
+        let collection_over = |arm: &str| {
+            let path = std::env::temp_dir().join(format!(
+                "flui-prune-roboto-{arm}-{}-{:?}.ttf",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            std::fs::write(&path, ROBOTO).expect("the temp dir is writable");
+            let mut collection = Collection::new(CollectionOptions {
+                shared: false,
+                system_fonts: false,
+            });
+            collection.load_fonts_from_paths([path.as_path()]);
+            collection.make_shared();
+            let fonts = FontCollection(Arc::new(FontCollectionInner {
+                generation: std::sync::atomic::AtomicU64::new(0),
+                carets: None,
+                collection,
+                source_cache: SourceCache::new_shared(),
+            }));
+            (fonts, path)
+        };
+        let style = TextStyle {
+            font_family: Some("Roboto".to_owned()),
+            ..TextStyle::default()
+        };
+        let spans: Vec<(String, Option<TextStyle>)> = vec![("Hamburg".to_owned(), Some(style))];
+        let face = |cx: &mut TextContext, registry: Option<&mut FontRegistry>| -> FaceKey {
+            let paragraph = cx
+                .shape(&ParagraphSpec {
+                    spans: &spans,
+                    default_style: None,
+                    font_size: 16.0,
+                    max_width: None,
+                    line_height: None,
+                    direction: TextDirection::Ltr,
+                    max_lines: None,
+                    ellipsis: None,
+                })
+                .to_shaped(None);
+            let run = paragraph.runs().next().expect("Roboto shapes a run");
+            if let Some(registry) = registry {
+                registry.prepare_run(&run).expect("Roboto registers");
+            }
+            run.face().key()
+        };
+        let pruned = |cx: &mut TextContext| cx.font_cx.source_cache.prune(0, true);
+
+        let (fonts, path) = collection_over("held");
+        let mut cx = TextContext::new(&fonts);
+        let mut registry = FontRegistry::new();
+        let held = face(&mut cx, Some(&mut registry));
+        pruned(&mut cx);
+        let again = face(&mut cx, None);
+        let _ = std::fs::remove_file(&path);
+
+        let (fonts, path) = collection_over("control");
+        let mut control = TextContext::new(&fonts);
+        let first = face(&mut control, None);
+        pruned(&mut control);
+        let reloaded = face(&mut control, None);
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            held, again,
+            "a blob the registry holds keeps its id, so its keys stay equal"
+        );
+        assert!(registry.contains_face(held));
+        assert_ne!(
+            first, reloaded,
+            "precondition: without a holder the prune reloads the file under a new id"
+        );
+    }
+
+    /// Registration on a collection pairs measurement and paint with carets.
+    /// Driven on a font system of the test's own (`SharedFontSystem::pinned`),
+    /// so no row touches the process-wide one.
     mod registration_contract {
         use super::super::super::layout::{SharedFontSystem, font_system_initialized};
         use super::super::FontCollection;
-        use super::ROBOTO;
+        use super::{PROBE_MONO, ROBOTO};
 
-        const PROBE_MONO: &[u8] = include_bytes!("../../assets/fonts/probe-mono-100.ttf");
         const PROBE: &str = "FLUI Probe Mono";
 
-        fn paint_side() -> SharedFontSystem {
+        fn caret_side() -> SharedFontSystem {
             SharedFontSystem::pinned(&[ROBOTO], "Roboto")
         }
 
         /// A face registered on a collection fed from a font system reaches
-        /// both: the collection measures with it and the font system paints
-        /// with it, and each generation rises by one. Fails if the collection
-        /// keeps no paint side, or registers on one side only.
-        fn a_registration_reaches_the_paint_side_and_the_collection() {
-            let paint = paint_side();
-            let fonts = FontCollection::with_host_faces(&paint);
-            let (paint_before, fonts_before) = (paint.generation(), fonts.generation());
-            assert!(!paint.family_names().iter().any(|name| name == PROBE));
+        /// both: the collection measures and paints with it and the font
+        /// system lays carets out with it, and each generation rises by one.
+        /// Fails if the collection keeps no caret side, or registers on one
+        /// side only.
+        fn a_registration_reaches_the_caret_side_and_the_collection() {
+            let carets = caret_side();
+            let fonts = FontCollection::with_host_faces(&carets);
+            let (carets_before, fonts_before) = (carets.generation(), fonts.generation());
+            assert!(!carets.family_names().iter().any(|name| name == PROBE));
             assert!(!fonts.holds(PROBE));
 
             assert_eq!(
@@ -601,11 +824,11 @@ mod tests {
             );
 
             assert!(
-                paint.family_names().iter().any(|name| name == PROBE),
-                "the paint side holds the face"
+                carets.family_names().iter().any(|name| name == PROBE),
+                "the caret side holds the face"
             );
             assert!(fonts.holds(PROBE), "the collection holds the face");
-            assert_eq!(paint.generation(), paint_before + 1);
+            assert_eq!(carets.generation(), carets_before + 1);
             assert_eq!(fonts.generation(), fonts_before + 1);
         }
 
@@ -613,15 +836,15 @@ mod tests {
         /// refused registration bumps a generation, which would lay out every
         /// realm's text again for nothing.
         fn bytes_with_no_face_move_neither_side() {
-            let paint = paint_side();
-            let fonts = FontCollection::with_host_faces(&paint);
-            let (paint_before, fonts_before) = (paint.generation(), fonts.generation());
+            let carets = caret_side();
+            let fonts = FontCollection::with_host_faces(&carets);
+            let (carets_before, fonts_before) = (carets.generation(), fonts.generation());
 
             for bytes in [&b"not a font"[..], &[]] {
                 assert!(fonts.register_font(bytes).is_err());
             }
 
-            assert_eq!(paint.generation(), paint_before);
+            assert_eq!(carets.generation(), carets_before);
             assert_eq!(fonts.generation(), fonts_before);
         }
 
@@ -641,29 +864,30 @@ mod tests {
             bytes
         }
 
-        /// Bytes the paint side would load but the measuring side finds no
-        /// family in are refused before either side changes. Fails if the
-        /// paint side loads them first: it would paint a face measurement
-        /// never gains, for good.
-        fn bytes_only_the_paint_side_reads_move_neither_side() {
-            let paint = paint_side();
-            let fonts = FontCollection::with_host_faces(&paint);
-            let (paint_before, fonts_before) = (paint.generation(), fonts.generation());
+        /// Bytes the caret side would load but the collection finds no family
+        /// in are refused before either side changes. Fails if the caret side
+        /// loads them first: it would place carets in a face measurement and
+        /// paint never gain, for good.
+        fn bytes_only_the_caret_side_reads_move_neither_side() {
+            let carets = caret_side();
+            let fonts = FontCollection::with_host_faces(&carets);
+            let (carets_before, fonts_before) = (carets.generation(), fonts.generation());
 
             assert!(fonts.register_font(&probe_without_cmap()).is_err());
 
             assert!(
-                !paint.family_names().iter().any(|name| name == PROBE),
-                "the paint side did not load the face"
+                !carets.family_names().iter().any(|name| name == PROBE),
+                "the caret side did not load the face"
             );
-            assert_eq!(paint.generation(), paint_before);
+            assert_eq!(carets.generation(), carets_before);
             assert_eq!(fonts.generation(), fonts_before);
         }
 
         /// A collection built without a font system registers for
-        /// measurement alone and never reaches the process-wide font system.
+        /// measurement and paint alone and never reaches the process-wide
+        /// font system.
         /// Fails if `FontCollection::new` pairs with it.
-        fn a_bundled_only_collection_registers_for_measurement_alone() {
+        fn a_bundled_only_collection_registers_without_a_caret_side() {
             let fonts = FontCollection::new();
 
             assert_eq!(
@@ -676,7 +900,7 @@ mod tests {
             assert_eq!(fonts.generation(), 1);
             assert!(
                 !font_system_initialized(),
-                "a collection with no paint side does not build the process font system"
+                "a collection with no caret side does not build the process font system"
             );
         }
 
@@ -684,20 +908,20 @@ mod tests {
         fn registration_contract() {
             let cases: &[(&str, fn())] = &[
                 (
-                    "a_registration_reaches_the_paint_side_and_the_collection",
-                    a_registration_reaches_the_paint_side_and_the_collection,
+                    "a_registration_reaches_the_caret_side_and_the_collection",
+                    a_registration_reaches_the_caret_side_and_the_collection,
                 ),
                 (
                     "bytes_with_no_face_move_neither_side",
                     bytes_with_no_face_move_neither_side,
                 ),
                 (
-                    "bytes_only_the_paint_side_reads_move_neither_side",
-                    bytes_only_the_paint_side_reads_move_neither_side,
+                    "bytes_only_the_caret_side_reads_move_neither_side",
+                    bytes_only_the_caret_side_reads_move_neither_side,
                 ),
                 (
-                    "a_bundled_only_collection_registers_for_measurement_alone",
-                    a_bundled_only_collection_registers_for_measurement_alone,
+                    "a_bundled_only_collection_registers_without_a_caret_side",
+                    a_bundled_only_collection_registers_without_a_caret_side,
                 ),
             ];
             let failed: Vec<&str> = cases

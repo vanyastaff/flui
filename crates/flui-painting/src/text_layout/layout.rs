@@ -10,15 +10,12 @@
 
 use std::sync::{Arc, OnceLock};
 
-use crate::{
-    styling::Color,
-    typography::{
-        FontStyle, LineMetrics, TextAffinity, TextBox, TextDirection, TextPosition, TextRange,
-        TextStyle,
-    },
+use crate::typography::{
+    FontStyle, LineMetrics, TextAffinity, TextBox, TextDirection, TextPosition, TextRange,
+    TextStyle,
 };
 use cosmic_text::fontdb::Family;
-use cosmic_text::{Attrs, Buffer, FontSystem, Metrics, Shaping, Style, SwashCache, Weight};
+use cosmic_text::{Attrs, Buffer, FontSystem, Metrics, Shaping, Style, Weight};
 use flui_foundation::geometry::{Offset, Rect};
 use parking_lot::Mutex;
 use unicode_segmentation::UnicodeSegmentation;
@@ -28,7 +25,6 @@ use crate::error::RegisterFontError;
 use super::TextLayoutResult;
 use super::fallback_chain::{ChainFallback, FallbackChain};
 use super::font_resolve::{self, InstalledFamilies};
-use super::glyphs::{GlyphContent, GlyphImage, GlyphKey, GlyphRasterizer, PlacedGlyph};
 
 /// The font database and the derived index that describes it, kept together so
 /// the index cannot be consulted about a database it was not built from.
@@ -41,11 +37,6 @@ use super::glyphs::{GlyphContent, GlyphImage, GlyphKey, GlyphRasterizer, PlacedG
 pub(super) struct FontState {
     pub(super) system: FontSystem,
     installed_families: InstalledFamilies,
-    /// The swash scaler context [`SharedFontSystem::rasterize`] draws with.
-    /// Kept beside the database because a scaler reads face data the lock
-    /// guards; its own memo tables are unused — the engine's atlas is the
-    /// cache.
-    scaler: SwashCache,
     /// Bumped by [`SharedFontSystem::add_face`], the one door through
     /// which the database changes after construction. Counting mutations
     /// rather than faces means an index keyed on it can never describe a
@@ -54,10 +45,6 @@ pub(super) struct FontState {
     db_generation: u64,
     /// The fallback lists `system` was built with, shared with every
     /// collection fed from this font system (`SharedFontSystem::host_faces`).
-    #[cfg_attr(
-        not(feature = "parley"),
-        expect(dead_code, reason = "only the Parley path's collection reads it")
-    )]
     chain: Arc<FallbackChain>,
     /// How many collections were built from the host
     /// ([`SharedFontSystem::count_host_feed`]): one per app.
@@ -69,7 +56,6 @@ impl FontState {
         Self {
             system,
             installed_families: InstalledFamilies::default(),
-            scaler: SwashCache::new(),
             db_generation: 0,
             chain,
             host_feeds: 0,
@@ -143,12 +129,10 @@ static FONT_SYSTEM: OnceLock<Arc<Mutex<FontState>>> = OnceLock::new();
 
 /// Gets or initializes the process-wide font system as a shared handle.
 ///
-/// Held in an `Arc` (per ADR-0016) so the render engine's glyph pipeline
-/// can shape against the *same* `FontSystem` this module measures with:
-/// a font registered through
-/// [`SharedFontSystem::register_font`]
-/// becomes visible to both measurement and rendering, closing the historic
-/// two-`FontSystem` gap where a registered face could measure but not paint.
+/// Held in an `Arc` (per ADR-0016) so every handle reaches the *same*
+/// `FontSystem`. Only the caret layout shapes on it: `TextPainter` measures
+/// and paints on Parley through the realm's `TextContext` (ADR-0092 §10
+/// step 4).
 fn font_system_arc() -> &'static Arc<Mutex<FontState>> {
     FONT_SYSTEM.get_or_init(|| {
         tracing::debug!("Initializing global FontSystem");
@@ -163,10 +147,15 @@ fn font_system_arc() -> &'static Arc<Mutex<FontState>> {
         // flag and its GPOS/GSUB scripts, never from the generic names, so
         // binding afterwards changes nothing it froze.
         let mut discovered = FontSystem::new();
-        // The embedded faces go in before the generics are bound, so an
-        // empty host binds sans-serif to Roboto rather than to nothing.
+        // The embedded faces go in, and the generics point at Roboto, before
+        // the host's generics are bound: Parley measures in Roboto, so paint
+        // must use it too (mapping decision 16), and the binding below keeps
+        // a generic that already names a carried family.
         #[cfg(feature = "bundled-fonts")]
-        crate::fonts::load_missing_into(discovered.db_mut());
+        {
+            crate::fonts::install_bundled(discovered.db_mut());
+            crate::fonts::bind_generics_to_bundled(discovered.db_mut());
+        }
         font_resolve::bind_generic_families(discovered.db_mut());
         // Then rebuild once around the host's own emoji faces. Binding the
         // generics closes the fall-through for styles that name *no* family;
@@ -305,11 +294,11 @@ pub fn font_system_initialized() -> bool {
 
 /// The process-wide font system, as a shared handle.
 ///
-/// The render engine's glyph pipeline shapes against the exact same faces
-/// this module measures with (ADR-0016): a font registered through the
-/// app's collection fed from it
+/// The caret layout shapes on it, and the app's collection is fed from its
+/// host faces: a font registered through that collection
 /// ([`FontCollection::register_font`](super::FontCollection::register_font))
-/// is visible to both.
+/// is loaded here too, so carets sit on the glyphs measurement and paint
+/// shaped.
 pub fn shared_font_system() -> SharedFontSystem {
     SharedFontSystem(Arc::clone(font_system_arc()))
 }
@@ -364,8 +353,8 @@ pub(super) fn metrics_from_shaped_buffer(
     }
 }
 
-/// A cheaply-cloneable handle to the process-wide [`FontSystem`] the
-/// framework shapes and measures text with.
+/// A cheaply-cloneable handle to the process-wide [`FontSystem`] the caret
+/// layout shapes with, and the host faces the app's collection is fed from.
 ///
 /// cosmic-text's `FontSystem` needs `&mut` access to shape and owns a large
 /// font database plus shaping caches, so it cannot be snapshotted or handed
@@ -375,7 +364,7 @@ pub(super) fn metrics_from_shaped_buffer(
 /// clone it to give another subsystem access to the *same* faces, so a font
 /// registered through the collection fed from it
 /// ([`FontCollection::register_font`](super::FontCollection::register_font))
-/// is visible to both measurement and rendering.
+/// is visible to measurement, paint and carets alike.
 #[derive(Clone)]
 pub struct SharedFontSystem(Arc<Mutex<FontState>>);
 
@@ -383,7 +372,7 @@ impl SharedFontSystem {
     /// A font system of its own, built from `faces` alone as
     /// [`init_font_system_with_faces`] builds the process one, for a test
     /// that must not touch the process-wide font system.
-    #[cfg(all(test, feature = "parley"))]
+    #[cfg(test)]
     pub(crate) fn pinned(faces: &[&[u8]], default_family: &str) -> Self {
         Self(Arc::new(Mutex::new(pinned_font_state(
             faces,
@@ -406,42 +395,6 @@ impl SharedFontSystem {
         f(&mut Shaper { state: &mut state })
     }
 
-    /// Rasterises one glyph under the font lock.
-    ///
-    /// The bitmap for `key` as the shaper placed it — hinted, at the key's
-    /// size and subpixel bin, synthesised italic/bold where the key says so.
-    /// `None` when the key's face is not in the database, which cannot
-    /// happen for a key this crate produced (faces are never removed); an
-    /// atlas does not place such a glyph and asks again on its next use (the
-    /// [`GlyphRasterizer`] contract). Colour bitmaps (emoji) come back as
-    /// [`GlyphContent::Color`]; everything else as a coverage mask.
-    ///
-    /// Not cached here: the caller's atlas is the cache, and a second copy
-    /// under the lock would pin every bitmap ever drawn for the life of the
-    /// process.
-    #[must_use]
-    pub fn rasterize(&self, key: GlyphKey) -> Option<GlyphImage> {
-        let mut state = self.0.lock();
-        let FontState { system, scaler, .. } = &mut *state;
-        let image = scaler.get_image_uncached(system, key.0)?;
-        let content = match image.content {
-            cosmic_text::SwashContent::Color => GlyphContent::Color,
-            // Subpixel (LCD) masks are not produced — the scaler is asked for
-            // `Format::Alpha` — so this arm is a mask by construction.
-            cosmic_text::SwashContent::Mask | cosmic_text::SwashContent::SubpixelMask => {
-                GlyphContent::Mask
-            }
-        };
-        Some(GlyphImage {
-            left: image.placement.left,
-            top: image.placement.top,
-            width: image.placement.width,
-            height: image.placement.height,
-            content,
-            data: image.data,
-        })
-    }
-
     /// The number of times the font database has changed since the font
     /// system was built. A cache of shaped text keys on it: a face registered
     /// after the cache was filled changes what the same text shapes to.
@@ -451,12 +404,13 @@ impl SharedFontSystem {
     }
 
     /// Loads every face in `font_bytes` into this font system alone, for a
-    /// test of the paint side.
+    /// test of the caret layout.
     ///
     /// Test door only: an app registers through its
     /// [`FontCollection`](super::FontCollection), which loads the face here
     /// and into the collection its text is measured on, and tells every realm
-    /// to lay its text out again. A face loaded here reaches paint alone.
+    /// to lay its text out again. A face loaded here reaches carets alone:
+    /// measurement and paint shape on the collection and do not see it.
     ///
     /// # Errors
     ///
@@ -470,11 +424,12 @@ impl SharedFontSystem {
     ///
     /// The one mutation of the database, and append-only: a face is never
     /// removed, so a font id recorded anywhere stays valid for the life of
-    /// the process. The face is visible to the engine's glyph pipeline and to
-    /// the cosmic-text layout from the next shape onward, and
-    /// [`Self::generation`] advances so shaped-text caches refill. Reached
-    /// through [`FontCollection::register_font`](super::FontCollection::register_font),
-    /// which also tells the pipelines what to lay out again.
+    /// the process. The face is visible to the caret layout from the next
+    /// shape onward, and [`Self::generation`] advances so a `TextPainter`
+    /// drops its caret layout at its next `layout()`. Reached through
+    /// [`FontCollection::register_font`](super::FontCollection::register_font),
+    /// which loads the face for measurement and paint as well and tells the
+    /// pipelines what to lay out again.
     ///
     /// # Errors
     ///
@@ -501,7 +456,6 @@ impl SharedFontSystem {
     /// in-memory font's data (shared, not copied), every source's family
     /// names, the five generic families' names and the fallback chain.
     /// Parsing the files again is the caller's work, outside the lock.
-    #[cfg(feature = "parley")]
     pub(crate) fn host_faces(&self) -> HostFaces {
         use cosmic_text::fontdb::Source;
         use std::collections::HashMap;
@@ -607,8 +561,8 @@ impl SharedFontSystem {
     /// sans-serif generic's family, the chain's list for the character's
     /// script, or the chain's common list. cosmic-text's last resort, the
     /// walk over every other face, is left out, since the Parley path has
-    /// none (flui-painting `ARCHITECTURE.md`, mapping decision 16).
-    #[cfg(all(feature = "parley", any(test, feature = "testing")))]
+    /// none (flui-painting `ARCHITECTURE.md`, mapping decision 17).
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn chain_covers(&self, text: &str) -> bool {
         use unicode_script::UnicodeScript as _;
 
@@ -646,13 +600,6 @@ fn face_maps(
 
 /// The faces a process font system holds, taken by
 /// `SharedFontSystem::host_faces` for a collection to be fed from.
-#[cfg_attr(
-    not(feature = "parley"),
-    expect(
-        dead_code,
-        reason = "only the Parley path's collection reads the faces"
-    )
-)]
 pub(crate) struct HostFaces {
     /// Every font source, in the order the database first names it.
     pub(crate) sources: Vec<HostSource>,
@@ -671,41 +618,17 @@ pub(crate) struct HostFaces {
 }
 
 /// One font file or in-memory font, and every family name its faces carry.
-#[cfg_attr(
-    not(feature = "parley"),
-    expect(
-        dead_code,
-        reason = "only the Parley path's collection reads the faces"
-    )
-)]
 pub(crate) struct HostSource {
     pub(crate) data: HostData,
     pub(crate) families: Vec<String>,
 }
 
 /// Where a [`HostSource`]'s bytes are.
-#[cfg_attr(
-    not(feature = "parley"),
-    expect(
-        dead_code,
-        reason = "only the Parley path's collection reads the faces"
-    )
-)]
 pub(crate) enum HostData {
     /// A file, which the collection maps itself.
     Path(std::path::PathBuf),
     /// Bytes the font system holds: a registered or embedded font.
     Blob(Arc<dyn AsRef<[u8]> + Send + Sync>),
-}
-
-/// The cosmic-text path's rasterizer: the engine's default atlas draws
-/// through this, under the font lock ([`SharedFontSystem::rasterize`]).
-impl GlyphRasterizer for SharedFontSystem {
-    type Key = GlyphKey;
-
-    fn rasterize(&mut self, key: GlyphKey) -> Option<GlyphImage> {
-        SharedFontSystem::rasterize(self, key)
-    }
 }
 
 /// One lock acquisition of the shared font system: resolves fonts and
@@ -789,78 +712,6 @@ pub struct TextLayout {
     direction: TextDirection,
     /// Whether `with_overflow` truncated the text to a max line count.
     truncated: bool,
-    /// Every glyph's ink, relative to the layout's origin; `None` when a
-    /// face gives no bounds to take it from. See [`Self::ink_bounds`].
-    ink: Option<Rect<f64>>,
-}
-
-/// The tangent of the 14° skew cosmic-text's rasterizer applies to a glyph
-/// it synthesises an italic for (`CacheKeyFlags::FAKE_ITALIC`), rounded up.
-const FAKE_ITALIC_SLANT: f32 = 0.25;
-
-/// What a glyph's bitmap may add around its outline's bounds: the snap of
-/// its origin to a pixel, hinting, and the coverage of partly covered edge
-/// pixels, in logical pixels.
-const GLYPH_INK_MARGIN: f32 = 2.0;
-
-/// A box covering the ink of every glyph `buffer` places, relative to its
-/// origin; `None` when a glyph's face is missing or its `head` table has no
-/// bounds.
-///
-/// A glyph's outline lies within its face's `head` bounds (the union of every
-/// glyph in the face), scaled to the glyph's size and placed at its pen
-/// position on the baseline. A synthesised italic is widened by the skew its
-/// rasterizer applies, and every glyph by [`GLYPH_INK_MARGIN`] plus a
-/// twentieth of an em for a variable face's instance reaching past its
-/// default one's bounds.
-fn glyph_ink_bounds(buffer: &Buffer, font_system: &mut FontSystem) -> Option<Rect<f64>> {
-    let mut faces: std::collections::HashMap<
-        (cosmic_text::fontdb::ID, cosmic_text::fontdb::Weight),
-        Option<[f32; 4]>,
-    > = std::collections::HashMap::new();
-    let mut ink: Option<Rect<f64>> = None;
-    for run in buffer.layout_runs() {
-        for glyph in run.glyphs {
-            let em_bounds = *faces
-                .entry((glyph.font_id, glyph.font_weight))
-                .or_insert_with(|| {
-                    let font = font_system.get_font(glyph.font_id, glyph.font_weight)?;
-                    let metrics = font.metrics();
-                    let units = f32::from(metrics.units_per_em);
-                    let bounds = metrics.bounds?;
-                    (units > 0.0).then(|| {
-                        [
-                            bounds.x_min / units,
-                            bounds.y_min / units,
-                            bounds.x_max / units,
-                            bounds.y_max / units,
-                        ]
-                    })
-                });
-            let [x_min, y_min, x_max, y_max] = em_bounds?;
-            let size = glyph.font_size;
-            let pen = glyph.x + size * glyph.x_offset;
-            let baseline = run.line_y + glyph.y - size * glyph.y_offset;
-            let slant = if glyph
-                .cache_key_flags
-                .contains(cosmic_text::CacheKeyFlags::FAKE_ITALIC)
-            {
-                FAKE_ITALIC_SLANT * y_max.abs().max(y_min.abs()) * size
-            } else {
-                0.0
-            };
-            let margin = GLYPH_INK_MARGIN + 0.05 * size;
-            let rect = Rect::from_ltrb(
-                f64::from(pen + x_min * size - slant - margin),
-                f64::from(baseline - y_max * size - margin),
-                f64::from(pen + x_max * size + slant + margin),
-                f64::from(baseline - y_min * size + margin),
-            );
-            ink = Some(ink.map_or(rect, |ink| ink.union(&rect)));
-        }
-    }
-    // A layout with no glyph draws no ink.
-    Some(ink.unwrap_or(Rect::from_ltrb(0.0, 0.0, 0.0, 0.0)))
 }
 
 /// Converts FLUI `TextStyle` to cosmic-text `Attrs`.
@@ -1076,7 +927,6 @@ impl TextLayout {
                 line_height,
                 direction,
                 truncated: false,
-                ink: None,
             };
             let font_system = shaper.font_system();
             this.shape_runs(font_system);
@@ -1085,7 +935,6 @@ impl TextLayout {
             {
                 this.enforce_max_lines(font_system, max_lines, ellipsis, max_width);
             }
-            this.ink = glyph_ink_bounds(&this.buffer, font_system);
             this
         })
     }
@@ -1219,85 +1068,6 @@ impl TextLayout {
     #[must_use]
     pub fn text(&self) -> &str {
         &self.text
-    }
-
-    /// One line per shaped run naming what reached the shaper — family,
-    /// weight, style, metrics, and a span colour where one was baked in — so
-    /// a snapshot that prints it moves when a span is restyled.
-    #[must_use]
-    pub fn describe_runs(&self) -> Vec<String> {
-        self.runs
-            .iter()
-            .map(|run| {
-                let attrs = run.attrs.as_attrs();
-                let mut parts = vec![
-                    format!("len={}", run.text.len()),
-                    format!("family={:?}", attrs.family),
-                    format!("weight={}", attrs.weight.0),
-                    format!("style={:?}", attrs.style),
-                ];
-                if let Some(metrics) = attrs.metrics_opt {
-                    parts.push(format!("size={:.2}", Metrics::from(metrics).font_size));
-                }
-                if let Some(color) = attrs.color_opt {
-                    parts.push(format!(
-                        "color=#{:02x}{:02x}{:02x}{:02x}",
-                        color.r(),
-                        color.g(),
-                        color.b(),
-                        color.a()
-                    ));
-                }
-                parts.join(" ")
-            })
-            .collect()
-    }
-
-    /// Every glyph of the paragraph placed in device pixels, for a
-    /// rasteriser.
-    ///
-    /// `origin` is the paragraph's top-left in device pixels and `scale` the
-    /// device-pixel ratio the paragraph is drawn under: glyphs are placed at
-    /// `origin + glyph_position * scale`, snapped to a pixel with the
-    /// fractional remainder folded into the key's subpixel bin, and the key
-    /// names a bitmap rasterised at `font_size * scale` — so a 2× display
-    /// gets a 2× raster rather than an upscaled 1× one.
-    ///
-    /// `y` is the baseline row; [`PlacedGlyph`] says how the bitmap's
-    /// bearings apply. Runs come in layout order, top to bottom.
-    pub fn placed_glyphs(
-        &self,
-        origin: (f32, f32),
-        scale: f32,
-    ) -> impl Iterator<Item = PlacedGlyph> + '_ {
-        self.buffer.layout_runs().flat_map(move |run| {
-            let baseline = (run.line_y * scale).round() as i32;
-            run.glyphs.iter().map(move |glyph| {
-                let physical = glyph.physical(origin, scale);
-                PlacedGlyph {
-                    key: GlyphKey(physical.cache_key),
-                    x: physical.x,
-                    y: baseline + physical.y,
-                    color: glyph
-                        .color_opt
-                        .map(|c| Color::rgba(c.r(), c.g(), c.b(), c.a())),
-                }
-            })
-        })
-    }
-
-    /// A box covering every pixel the paragraph's glyphs can ink, relative
-    /// to the layout's origin, or `None` when a face gives no bounds to take
-    /// it from.
-    ///
-    /// The laid-out box is where lines sit, not where glyphs end: under a
-    /// line height tighter than the face's ascent and descent, or for a
-    /// swash, an italic overhang or a stacked mark, the ink reaches past it.
-    /// A damage extent is built from this, since a rect that misses a
-    /// glyph's pixel leaves it stale on a partial repaint.
-    #[must_use]
-    pub(crate) fn ink_bounds(&self) -> Option<Rect<f64>> {
-        self.ink
     }
 
     /// Returns the computed metrics for this layout.

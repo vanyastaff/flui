@@ -54,26 +54,63 @@ pub(crate) fn a_color_fill_makes_the_extent_unbounded() {
 /// Every glyph bitmap the rasterizer produces for a paragraph lies inside
 /// the list's damage extent, however far the ink reaches past the laid-out
 /// box: under a line height a third of the font size, the glyphs' ascenders
-/// and descenders stand well outside the line box.
+/// and descenders stand well outside the line box; a synthetic bold grows
+/// each outline and a synthetic oblique leans it; a trailing break adds an
+/// empty line; CJK and emoji faces come from the host.
 ///
 /// The oracle is the rasterizer itself: each glyph's bitmap placed as the
-/// engine places it (`TextLayout::placed_glyphs` plus the bitmap's bearings),
-/// not a restatement of how the extent is computed.
+/// engine places it (`ShapedRun::placed_glyphs` plus the bitmap's bearings,
+/// drawn by a `SwashRasterizer`), not a restatement of how the extent is
+/// computed.
 pub(crate) fn paragraph_extent_covers_every_rasterized_glyph() {
     use flui_foundation::geometry::Offset;
-    use flui_painting::TextPainter;
-    use flui_painting::typography::{TextDirection, TextSpan, TextStyle};
+    use flui_painting::glyphs::SwashRasterizer;
+    use flui_painting::typography::{FontStyle, FontWeight, TextDirection, TextSpan, TextStyle};
+    use flui_painting::{FontCollection, GlyphRasterizer, TextPainter};
 
-    for (text, line_height) in [("Hello, FLUI!", None), ("Hgjpqy|", Some(0.3))] {
-        let mut style = TextStyle::new().with_font_size(40.0);
-        if let Some(height) = line_height {
-            style = style.with_height(height);
+    let bundled = FontCollection::new();
+    let host = FontCollection::with_host_faces(&flui_painting::shared_font_system());
+    let size = TextStyle::new().with_font_size(40.0);
+    let rows: [(&str, &str, TextStyle, bool); 6] = [
+        ("latin", "Hello, FLUI!", size.clone(), false),
+        (
+            "tight_line_height",
+            "Hgjpqy|",
+            size.clone().with_height(0.3),
+            false,
+        ),
+        (
+            "synthetic_bold",
+            "Hamburg",
+            TextStyle {
+                font_weight: Some(FontWeight::W700),
+                ..size.clone()
+            },
+            false,
+        ),
+        (
+            "synthetic_italic",
+            "Hamburg",
+            TextStyle {
+                font_style: Some(FontStyle::Italic),
+                ..size.clone()
+            },
+            false,
+        ),
+        ("multi_line", "Hg\nqy\n", size.clone(), false),
+        ("cjk_and_emoji", "你好 😀", size, true),
+    ];
+    for (name, text, style, on_host) in rows {
+        if on_host && !flui_painting::testing::host_chain_covers(text) {
+            println!("{name}: skipped, no host face covers {text:?}");
+            continue;
         }
+        let tight = style.height.is_some();
         let mut painter = TextPainter::new()
             .with_text(TextSpan::new(text).with_style(style))
             .with_text_direction(TextDirection::Ltr);
         painter.layout(
-            &mut flui_painting::TextContext::new(&flui_painting::FontCollection::new()),
+            &mut flui_painting::TextContext::new(if on_host { &host } else { &bundled }),
             0.0,
             f64::INFINITY,
         );
@@ -83,40 +120,47 @@ pub(crate) fn paragraph_extent_covers_every_rasterized_glyph() {
         let list = canvas.finish();
         let extent = bounded(&list);
 
-        let (layout, offset) = list
+        let (paragraph, offset) = list
             .iter()
             .find_map(|command| match &command.op {
-                DrawOp::Paragraph { layout, offset, .. } => Some((layout.clone(), *offset)),
+                DrawOp::Paragraph {
+                    paragraph, offset, ..
+                } => Some((paragraph.clone(), *offset)),
                 _ => None,
             })
             .expect("the painter records a paragraph");
-        let fonts = flui_painting::shared_font_system();
+        let mut rasterizer = SwashRasterizer::new();
         let mut glyphs = 0;
         let mut past_box = false;
         let layout_box = list.bounds().expect("a painted span has bounds");
-        for glyph in layout.placed_glyphs((offset.dx as f32, offset.dy as f32), 1.0) {
-            let Some(image) = fonts.rasterize(glyph.key) else {
-                continue;
-            };
-            if image.width == 0 || image.height == 0 {
-                continue;
+        for run in paragraph.runs() {
+            let key = rasterizer
+                .fonts_mut()
+                .prepare_run(&run)
+                .expect("a shaped face registers");
+            for glyph in run.placed_glyphs(key, (offset.dx as f32, offset.dy as f32), 1.0) {
+                let Some(image) = rasterizer.rasterize(glyph.key) else {
+                    continue;
+                };
+                if image.width == 0 || image.height == 0 {
+                    continue;
+                }
+                glyphs += 1;
+                let ink = Rect::from_xywh(
+                    f64::from(glyph.x + image.left),
+                    f64::from(glyph.y - image.top),
+                    f64::from(image.width),
+                    f64::from(image.height),
+                );
+                past_box |= !layout_box.contains_rect(&ink);
+                assert!(
+                    extent.contains_rect(&ink),
+                    "{name}: glyph ink {ink:?} escapes the damage extent {extent:?}"
+                );
             }
-            glyphs += 1;
-            let ink = Rect::from_xywh(
-                f64::from(glyph.x + image.left),
-                f64::from(glyph.y - image.top),
-                f64::from(image.width),
-                f64::from(image.height),
-            );
-            past_box |= !layout_box.contains_rect(&ink);
-            assert!(
-                extent.contains_rect(&ink),
-                "{text:?} (line height {line_height:?}): glyph ink {ink:?} escapes the \
-                 damage extent {extent:?}"
-            );
         }
-        assert!(glyphs > 0, "precondition: {text:?} rasterizes glyphs");
-        if line_height.is_some() {
+        assert!(glyphs > 0, "precondition: {name} rasterizes glyphs");
+        if tight {
             assert!(
                 past_box,
                 "precondition: under a tight line height the ink leaves the layout box \

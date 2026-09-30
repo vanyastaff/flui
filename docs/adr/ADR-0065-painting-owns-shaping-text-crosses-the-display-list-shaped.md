@@ -87,6 +87,13 @@ recolour is `Invalidation::Layout` and shapes once at the next layout
 `WgpuPainter::draw_text` (the hand-driven painter's plain-text
 convenience) shapes through `TextLayout` and records a paragraph.
 
+**Amended by ADR-0092 §10 step 4.** The paragraph on the wire is an
+`Arc<ShapedParagraph>` built from the Parley layout that measured it, not an
+`Arc<TextLayout>`; painted-as-measured still holds by identity. The engine's
+public `draw_text` is gone: the performance overlay's labels are shaped through
+flui-painting's `TextContext`, and a hand-driven painter shapes a paragraph
+itself and calls `draw_paragraph`.
+
 ## Consequences
 
 - `max_lines`, the ellipsis, per-span styling: painted as measured, by
@@ -134,7 +141,7 @@ convenience) shapes through `TextLayout` and records a paragraph.
 
 ## Replacement tests
 
-Part 1: `register_font_invalidates_a_laid_out_painter`
+Part 1: `a_face_registered_on_the_collection_reaches_measurement_paint_and_carets`
 (`crates/flui-painting/tests/font_registration.rs`). That shaping leaves the
 generation alone, that a registration moves it exactly once, and that an
 empty host database receives Roboto and both icon faces:

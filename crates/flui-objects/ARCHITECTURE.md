@@ -125,8 +125,8 @@ real element tree and checks preserved render IDs and child state.
 `compute_dry_layout` and `compute_dry_baseline`. The context is the realm's
 `TextContext`, lent by the pipeline (flui-rendering's "Layout contexts lend the
 realm's text context"), so a paragraph measures with its own realm's fonts
-rather than an ambient collection (ADR-0092 §10 step 3; flui-painting mapping decision 14). The default
-build measures on cosmic-text and the numbers are unchanged; every
+rather than an ambient collection (ADR-0092 §10 step 3; flui-painting mapping decision 14), and
+paints the runs of the layout that measured (step 4). Every
 `harness_*` test for both objects runs through the lent context. flui-runtime's
 `two_realms_measure_text_through_their_own_contexts` shows the loan reaches a
 realm's context through a mounted `Text`.

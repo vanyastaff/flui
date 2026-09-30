@@ -28,13 +28,13 @@ pub enum FontRegistrationError {
     RuntimeBusy,
 }
 
-/// Registers every face in `font_bytes` with the app, for measurement and
-/// paint alike.
+/// Registers every face in `font_bytes` with the app, for measurement, paint
+/// and carets alike.
 ///
 /// Call on the thread that runs the app, before it starts or while it runs
 /// (from a widget callback, for example). The face is added to the app's
-/// font collection and to the process font system glyphs are painted from,
-/// and every realm lays out again, on its next frame, each piece of text it
+/// font collection, which measures and paints text, and to the process font
+/// system carets are laid out in, and every realm lays out again, on its next frame, each piece of text it
 /// had measured; text laid out later measures with the face from the start.
 /// A realm is told on its own owner turn, so a call made from inside one
 /// realm's callback reaches that realm after the callback returns.

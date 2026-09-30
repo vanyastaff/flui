@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use crate::{
     command_ir::{DrawItem, DrawSegment, ImageFilterPass, PendingOffscreenTexture},
-    glyph_atlas::GlyphAtlas,
+    glyph_atlas::{GlyphAtlas, TextAtlas},
     layer_compositor::LayerCompositor,
     pipeline_set::PipelineSet,
     replay::GpuReplay,
@@ -70,7 +70,10 @@ pub struct WgpuPainter {
     // ===== Text =====
     /// The rasterised-glyph cache paragraphs are recorded against and the
     /// glyph pipeline samples.
-    glyph_atlas: GlyphAtlas,
+    glyph_atlas: TextAtlas,
+    /// Shapes the performance overlay's labels (`draw_label`); built on the
+    /// first one, so a painter that draws no overlay holds no fonts.
+    labels: Option<flui_painting::TextContext>,
 
     // ===== GPU Draw-State Stack =====
     /// Owns the four parallel transform/scissor/SDF-clip stacks and their
@@ -157,14 +160,14 @@ impl WgpuPainter {
         // ===== Replay / GPU plumbing (viewport buffer/bind-group, unit quad, sampler) =====
         let replay = GpuReplay::new(&device, &pipelines, size.0, size.1);
 
-        // Glyph bitmaps come from the font system flui-painting measures
-        // with (ADR-0016); the atlas receives the handle explicitly rather
-        // than reaching for it itself.
+        // Glyph bitmaps come from swash over the faces each paragraph's
+        // runs carry (ADR-0092 §5): the atlas owns its rasterizer and the
+        // registry of faces it has drawn, and shares no font state.
         let glyph_atlas = GlyphAtlas::new(
             Arc::clone(&device),
             Arc::clone(&queue),
             &pipelines.glyph_atlas_bind_group_layout,
-            flui_painting::shared_font_system(),
+            flui_painting::glyphs::SwashRasterizer::new(),
         );
 
         // ===== Resource managers =====
@@ -180,6 +183,7 @@ impl WgpuPainter {
             replay,
             batcher: crate::batches::DrawBatcher::new(),
             glyph_atlas,
+            labels: None,
             state: GpuStateStack::new(),
             compositor: LayerCompositor::new(),
             current_segment: DrawSegment::new(),

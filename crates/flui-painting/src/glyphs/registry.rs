@@ -5,10 +5,20 @@ use std::hash::{BuildHasher, Hasher, RandomState};
 use std::sync::Arc;
 
 use super::key::{FaceKey, VariationId};
+use crate::display_list::ShapedRun;
 use crate::error::RegisterFaceError;
 
 /// A font file's bytes, shared with whoever else holds them.
 pub type FontBytes = Arc<dyn AsRef<[u8]> + Send + Sync>;
+
+/// What a run's glyph keys share, resolved against one registry: the face
+/// and the interned variation instance. [`FontRegistry::prepare_run`] makes
+/// it; [`ShapedRun::placed_glyphs`] keys each glyph with it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RunKey {
+    pub(crate) face: FaceKey,
+    pub(crate) variation: Option<VariationId>,
+}
 
 /// The faces and variation instances keys name, kept alive by the raster
 /// side.
@@ -108,6 +118,26 @@ impl FontRegistry {
             },
         );
         Ok(())
+    }
+
+    /// Registers the face `run` is shaped in, unless it is already, and
+    /// interns its variation coordinates: what every glyph key of the run
+    /// shares. One hash lookup per run once the face is held.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::register_face`]: the run's blob holds no face at its index,
+    /// or another blob was registered under the same key.
+    pub fn prepare_run(&mut self, run: &ShapedRun<'_>) -> Result<RunKey, RegisterFaceError> {
+        let face = run.face();
+        let key = face.key();
+        if !self.faces.contains_key(&key) {
+            self.register_face(key, face.blob().bytes().clone())?;
+        }
+        Ok(RunKey {
+            face: key,
+            variation: self.intern_variation(run.coords()),
+        })
     }
 
     /// Whether `face` is registered.

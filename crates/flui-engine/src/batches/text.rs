@@ -1,28 +1,29 @@
 //! Paragraph recording: shaped glyphs → atlas slots → glyph instances.
 //!
-//! A paragraph reaches the batcher already shaped ([`TextLayout`], ADR-0065);
-//! recording it is placing each glyph in device pixels, fetching (or
-//! rasterising) its bitmap through the [`GlyphAtlas`], and pushing one quad
+//! A paragraph reaches the batcher already shaped ([`ShapedParagraph`],
+//! ADR-0065, ADR-0092 §4); recording it is handing each run's face to the
+//! atlas's rasterizer, placing each glyph in device pixels, fetching (or
+//! rasterising) its bitmap through the [`TextAtlas`], and pushing one quad
 //! per inked glyph into the segment's glyph batch — with the paint state
 //! every other batch gets: the layer opacity, the active scissor run, and
 //! the SDF clip, so a rounded clip rounds text exactly as it rounds the
 //! rect behind it.
 
 use flui_foundation::geometry::Point;
-use flui_painting::TextLayout;
+use flui_painting::ShapedParagraph;
 use flui_painting::styling::Color;
 
 use super::DrawBatcher;
 use crate::{
     command_ir::{DrawItem, DrawSegment, Phase},
-    glyph_atlas::GlyphAtlas,
+    glyph_atlas::TextAtlas,
     instancing::GlyphInstance,
     state_stack::GpuStateStack,
 };
 
 impl DrawBatcher {
-    /// Records `layout` with its top-left at `position` (local pixels) under
-    /// the painter's current state.
+    /// Records `paragraph` with its top-left at `position` (local pixels)
+    /// under the painter's current state.
     ///
     /// Glyphs are rasterised at `font_size × max_scale` and cached under
     /// it, so a 2× display gets a 2× raster. Under a uniform CTM (the
@@ -34,8 +35,11 @@ impl DrawBatcher {
     /// resampled into the transformed shape rather than drawn upright at the
     /// larger axis's size.
     ///
-    /// `color` paints every glyph the layout did not colour itself; a span
-    /// colour on the glyph wins. Both are scaled by `opacity`.
+    /// `color` paints every glyph whose run carries no span colour; a span
+    /// colour wins. Both are scaled by `opacity`.
+    ///
+    /// A run whose face the rasterizer cannot register (its blob holds no
+    /// face at the run's index) is not drawn; the rest of the paragraph is.
     ///
     /// Glyphs whose quad lies entirely outside the active scissor are not
     /// recorded; a fully clipped paragraph costs its placement walk and
@@ -48,9 +52,9 @@ impl DrawBatcher {
         segment: &mut DrawSegment,
         draw_order: &mut Vec<DrawItem>,
         state: &GpuStateStack,
-        atlas: &mut GlyphAtlas,
+        atlas: &mut TextAtlas,
         opacity: f32,
-        layout: &TextLayout,
+        paragraph: &ShapedParagraph,
         position: Point<f64>,
         color: Color,
     ) {
@@ -72,51 +76,57 @@ impl DrawBatcher {
             Placement::Uniform => (origin.x, origin.y),
             Placement::Affine { .. } => (0.0, 0.0),
         };
+        let raster_origin = (raster_origin.0 as f32, raster_origin.1 as f32);
         let mut began = false;
 
-        for glyph in layout.placed_glyphs(
-            {
-                let (a, b) = raster_origin;
-                (a as f32, b as f32)
-            },
-            scale,
-        ) {
-            let Some(slot) = atlas.slot(glyph.key) else {
-                continue;
+        for run in paragraph.runs() {
+            // The face first, in a statement of its own: the placement below
+            // borrows the atlas for each glyph's slot.
+            let key = match atlas.rasterizer_mut().fonts_mut().prepare_run(&run) {
+                Ok(key) => key,
+                Err(error) => {
+                    tracing::warn!(?error, face = ?run.face().key(), "a run's face is not drawn");
+                    continue;
+                }
             };
-            if slot.is_empty() {
-                continue;
-            }
-            let x = glyph.x + slot.left;
-            let y = glyph.y - slot.top;
-            let (w, h) = (slot.size[0] as i32, slot.size[1] as i32);
-            if matches!(placement, Placement::Uniform) && outside_scissor(scissor, x, y, w, h) {
-                continue;
-            }
+            for glyph in run.placed_glyphs(key, raster_origin, scale) {
+                let Some(slot) = atlas.slot(glyph.key) else {
+                    continue;
+                };
+                if slot.is_empty() {
+                    continue;
+                }
+                let x = glyph.x + slot.left;
+                let y = glyph.y - slot.top;
+                let (w, h) = (slot.size[0] as i32, slot.size[1] as i32);
+                if matches!(placement, Placement::Uniform) && outside_scissor(scissor, x, y, w, h) {
+                    continue;
+                }
 
-            let mut fill = glyph.color.unwrap_or(color);
-            if opacity < 1.0 {
-                fill = Color::rgba(fill.r, fill.g, fill.b, (f32::from(fill.a) * opacity) as u8);
-            }
-            let mut instance = GlyphInstance::new(
-                [x as f32, y as f32, w as f32, h as f32],
-                slot.texel,
-                slot.color_page,
-                fill,
-            );
-            if let Placement::Affine { linear, origin } = placement {
-                instance = instance.with_affine(linear, origin);
-            }
-            let instance = state.apply_active_clip(instance);
+                let mut fill = glyph.color.unwrap_or(color);
+                if opacity < 1.0 {
+                    fill = Color::rgba(fill.r, fill.g, fill.b, (f32::from(fill.a) * opacity) as u8);
+                }
+                let mut instance = GlyphInstance::new(
+                    [x as f32, y as f32, w as f32, h as f32],
+                    slot.texel,
+                    slot.color_page,
+                    fill,
+                );
+                if let Placement::Affine { linear, origin } = placement {
+                    instance = instance.with_affine(linear, origin);
+                }
+                let instance = state.apply_active_clip(instance);
 
-            if !began {
-                // One seal decision per paragraph: every glyph of it lands in
-                // the same segment, in record order.
-                Self::begin_phase(segment, draw_order, Phase::Glyph);
-                began = true;
+                if !began {
+                    // One seal decision per paragraph: every glyph of it lands in
+                    // the same segment, in record order.
+                    Self::begin_phase(segment, draw_order, Phase::Glyph);
+                    began = true;
+                }
+                let _ = segment.glyph_batch.add(instance);
+                DrawSegment::push_scissor_region(&mut segment.glyph_scissors, scissor);
             }
-            let _ = segment.glyph_batch.add(instance);
-            DrawSegment::push_scissor_region(&mut segment.glyph_scissors, scissor);
         }
     }
 }

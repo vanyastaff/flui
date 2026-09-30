@@ -17,6 +17,12 @@
 
 use crate::{Canvas, DisplayList, FontCollection, TextContext};
 
+/// The FLUI Probe Mono face at weight 100: a generated family no host
+/// carries, which maps `A` one em wide. A consumer's tests register it on a
+/// collection to tell which collection measured a paragraph; it ships inside
+/// this package, so they build from a published archive too.
+pub const PROBE_MONO_100: &[u8] = include_bytes!("../../assets/fonts/probe-mono-100.ttf");
+
 /// Records drawing commands into a fresh [`DisplayList`]: runs `f` against
 /// a new [`Canvas`] and finishes it.
 pub fn record(f: impl FnOnce(&mut Canvas)) -> DisplayList {
@@ -43,8 +49,7 @@ pub fn text_context_lends(text: &TextContext) -> u64 {
 }
 
 /// How many collections were built from the process font system's host
-/// faces ([`FontCollection::with_host_faces`]) in this process, whether or
-/// not the build had the Parley path to feed them into. A composition root's
+/// faces ([`FontCollection::with_host_faces`]) in this process. A composition root's
 /// tests use it to show the feed runs once per app, not per realm.
 #[must_use]
 pub fn host_face_feeds() -> u64 {
@@ -65,7 +70,6 @@ pub fn host_covers(text: &str) -> bool {
 /// A test comparing Parley measurement with paint on host faces skips text
 /// only cosmic-text's last resort reaches, which the Parley path does not
 /// have.
-#[cfg(feature = "parley")]
 #[must_use]
 pub fn host_chain_covers(text: &str) -> bool {
     crate::shared_font_system().chain_covers(text)
@@ -78,7 +82,7 @@ pub fn host_sans_serif_family() -> String {
 }
 
 /// The family names the process font system's faces carry first, each once:
-/// the names a style resolves against on the paint side.
+/// the names a style resolves against on the caret side.
 #[must_use]
 pub fn host_family_names() -> Vec<String> {
     crate::shared_font_system().family_names()
@@ -86,16 +90,7 @@ pub fn host_family_names() -> Vec<String> {
 
 /// Whether `fonts` holds a family named `family`: the check the Parley
 /// path's family rule makes against the collection.
-#[cfg(feature = "parley")]
 #[must_use]
 pub fn collection_holds(fonts: &FontCollection, family: &str) -> bool {
     fonts.holds(family)
-}
-
-/// Makes `painter` measure on Parley through the context it is given,
-/// whatever the build's default, so the Parley measurement runs under
-/// `parley` alone (flui-painting `ARCHITECTURE.md`, mapping decision 15).
-#[cfg(feature = "parley")]
-pub fn measure_with_parley(painter: &mut crate::TextPainter) {
-    painter.pin_parley_measurement();
 }

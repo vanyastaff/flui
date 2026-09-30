@@ -403,10 +403,13 @@ no root re-export.
 ### 16. Text is a glyph batch of the segment; the engine owns the atlas
 
 glyphon is gone ([ADR-0067](../../docs/adr/ADR-0067-engine-owned-glyph-atlas.md)).
-A paragraph is recorded by `DrawBatcher::draw_paragraph`: each glyph the
-layout places (`TextLayout::placed_glyphs`, an opaque `GlyphKey` per glyph)
-is looked up in `GlyphAtlas`, rasterised on first use through
-`SharedFontSystem::rasterize`, and pushed as a `GlyphInstance` into
+A paragraph arrives as the `ShapedParagraph` its recorder measured
+(ADR-0092 §4) and is recorded by `DrawBatcher::draw_paragraph`: each run's
+face goes into the atlas rasterizer's registry (`FontRegistry::prepare_run`;
+a run whose blob holds no face is warned and skipped), each glyph the run
+places (`ShapedRun::placed_glyphs`, a `GlyphKey` per glyph) is looked up in
+the atlas, rasterised on first use through `SwashRasterizer`, and pushed as a
+`GlyphInstance` into
 `DrawSegment::glyph_batch` under the same scissor run, SDF clip, and layer
 opacity every other instance gets. `Phase::Glyph` is the last phase, and
 `flush_segment` draws the batch either at the end of the instanced pass
@@ -418,16 +421,20 @@ one render pass per text-bearing segment, and the sRGB→linear colour
 conversion glyphon applied to text on a gamma-space target
 (`glyph_colour_lands_as_recorded`). A rotated or anisotropic CTM reaches
 the glyphs: each quad carries the CTM's linear part over the raster scale.
-The engine names no
-cosmic-text type
-(`the_engine_does_not_shape`); `etagere` stays behind `glyph_atlas.rs` the
-way `lyon` stays behind `tessellator.rs`.
+The engine names no shaper and depends on none: no cosmic-text, Parley,
+fontique, skrifa or swash type or crate (`the_engine_does_not_shape`); the
+performance overlay's labels, which no recorder shapes, go through
+flui-painting's `TextContext` (`WgpuPainter::draw_label`). `etagere` stays
+behind `glyph_atlas.rs` the way `lyon` stays behind `tessellator.rs`.
 
-`GlyphAtlas<R: GlyphRasterizer = SharedFontSystem>` is generic over where
-bitmaps come from: it hashes `R::Key` and owns `R`, taking it by `&mut` on a
-miss and on a grow. Production names the default; `flui_painting`'s
-`SwashRasterizer` (behind its `parley` feature, a dev-dependency here) is the
-rasterizer ADR-0092 §10 step 4 switches to. Because a rasterizer is a seam,
+`GlyphAtlas<R: GlyphRasterizer>` is generic over where bitmaps come from: it
+hashes `R::Key` and owns `R`, taking it by `&mut` on a miss and on a grow. The
+painter's is a `TextAtlas`, `GlyphAtlas<SwashRasterizer>`: the rasterizer owns
+the registry of every face a paragraph drawn through it named, so a key stays
+valid while the atlas lives, and rasterization takes no lock and shares no
+font state with any realm. `parley_runs_read_back` reads back what paint now
+draws: hard breaks, synthetic bold, host fallback faces, right alignment and
+the device baseline. Because a rasterizer is a seam,
 the atlas guards the upload rather than trusting it: an image whose data
 length is not `width × height × bytes_per_texel` is not placed (warned), and
 a grow re-uploads a re-rasterized glyph only if it has the size and content

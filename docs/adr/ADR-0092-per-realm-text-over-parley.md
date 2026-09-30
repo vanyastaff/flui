@@ -12,11 +12,17 @@
   `PipelineOwner` is built with a `TextContextHandle`, nothing in layout, intrinsics or dry
   queries builds a context of its own, and the hot-reload plugin pipeline measures over its own
   image's collection. Its registration half landed too: a face registered on the collection is
-  loaded into the process font system as well, and every pipeline that measured text on it lays
-  that text out again at its next frame (§2). §7's host-face feed
+  loaded into the process font system as well (for carets), and every pipeline that measured
+  text on it lays that text out again at its next frame, so the face reaches measurement, paint
+  and carets together (§2). §7's host-face feed
   landed ahead of step 4 as step 3c: the app's collection holds the faces, generic families and
   fallback order of the process font system, fed synchronously before the first frame
-  (asynchronously once step 3b's event exists). A passed gate is evidence, not shipped
+  (asynchronously once step 3b's event exists). §10 step 4 landed on top of it, 4a and 4b
+  together as the owner decided: Parley measures in the default build and paint draws the
+  runs of the layout that measured (`DrawOp::Paragraph` carries a `ShapedParagraph`, the
+  engine's atlas rasterizes through `SwashRasterizer`); the `parley` and `parley-layout`
+  features are gone; the line-break gate is closed by that decision; carets and selection stay
+  on cosmic-text until step 5. A passed gate is evidence, not shipped
   behaviour: the record is accepted section by section as the text migration lands §§1–7, and
   gates 2–8 bind those changes. The three supersessions below take effect together, when §§1–5
   are accepted; a section accepted before then supersedes nothing.
@@ -26,8 +32,11 @@
   measurement behind `parley-layout`; a pipeline is built with its context, and the hot-reload
   plugin image is a realm of its own for text); 2026-09-30 (§7: the host's faces come from the
   process font system's discovery, with one family rule and one fallback order for both
-  shapers; §10 step 3c); 2026-09-30 (§2 and §10 step 3b: the collection-changed event is the
-  collection's generation, read by each pipeline at its next frame)
+  shapers; §10 step 3c; §10 step 4 split into 4a and 4b, and 4a's face-agreement gate
+  decided: host faces first; then 4a and 4b land together, §4's blob table is per paragraph,
+  and variation interning and the subpixel bin move to the raster side); 2026-09-30 (§2 and
+  §10 step 3b: the collection-changed event is the collection's generation, read by each
+  pipeline at its next frame)
 - **Supersedes (when §§1–5 are accepted):** [ADR-0077](ADR-0077-migrate-to-parley.md)
   (absorbed: its direction, its preconditions and its "If later Rejected" branch are carried
   here)
@@ -62,7 +71,7 @@ Text is one process-wide, locked object today.
   services (`crates/flui-app/src/app/runtime.rs:148`), so the full scan sits before the first
   frame.
 - The glyph key is cosmic-text's own: `pub struct GlyphKey(pub(super) cosmic_text::CacheKey)`
-  (`crates/flui-painting/src/text_layout/glyphs.rs:23`), stable only because the process-wide
+  (flui-painting's `text_layout/glyphs.rs:23`, removed at §10 step 4), stable only because the process-wide
   database is append-only.
 - The display list carries the shaper's layout: `DrawOp::Paragraph { layout: Arc<TextLayout>, … }`
   (`crates/flui-painting/src/display_list/command.rs:167-174`), where `TextLayout` wraps
@@ -221,12 +230,23 @@ so the engine and any second raster backend
 dependency. "Painted as measured" (ADR-0065) still holds by identity: the runs are produced from
 the same `Layout` that measured the paragraph.
 
-Open for the migration:
+Settled by §10 step 4:
 
-- The run cannot carry `parley::FontData`. The raster side needs the blob bytes through a
-  FLUI-owned blob handle, for example a `FontBlob` id plus a per-frame table of the blobs a frame
-  references first. The migration settles the shape, and the engine-names-no-shaper test pins it.
-- The prototype did not show neutrality (Context).
+- The run does not carry `parley::FontData`. Each `ShapedParagraph` holds its own table of
+  FLUI-owned `FontBlob`s (the font bytes behind a shared handle, and the blob id keys name
+  them by), and a run names its face by an index into it. The table is per paragraph, not per
+  frame: a retained layer replays a picture recorded frames earlier, so a table built from the
+  blobs this frame's recorders named would miss a replayed paragraph's faces. A paragraph that
+  carries its faces is complete by construction, for one shared handle per distinct face per
+  paragraph, and the handle keeps fontique's weakly cached blob, and so its id, alive.
+- A run carries its normalized variation coordinates raw; the raster side's registry interns
+  them (`FontRegistry::prepare_run`), because a `VariationId` means nothing to another
+  registry.
+- A glyph carries its id and logical position; the subpixel bin, device row and raster size
+  are computed when it is placed (`ShapedRun::placed_glyphs`), because they depend on the
+  device transform, which only the replay knows.
+- `the_engine_does_not_shape` pins that the engine names no shaper, in its source and its
+  manifest.
 
 ### 5. Glyph keys carry font identity; rasterization is a raster-side trait
 
@@ -245,8 +265,9 @@ A `GlyphRasterizer` trait turns a key, resolved against its own font registry, i
 parameter. `rasterize` returning `None` means "not placed", which is how the atlas already
 treats `slot() == None`, not "draws nothing". The rasterizer is **swash, driven directly**, with
 swash's per-font cache key made once per face: `FontRef::from_index` mints a new one per call
-and would rebuild hinting state per glyph. The atlas needs a way to feed new faces to the
-rasterizer it owns once built; that door is open, with §4's blob handle.
+and would rebuild hinting state per glyph. The atlas feeds each run's face to the rasterizer
+it owns before placing the run's glyphs (`GlyphAtlas::rasterizer_mut`,
+`FontRegistry::prepare_run`), from §4's blob handle.
 
 The rasterizer is owned by the raster side and runs outside shaping; the atlas belongs to the
 `GpuContext` and is single-owned on the raster thread
@@ -354,7 +375,7 @@ that wires what it adds.
      offers `register_font` and no removal. `TextContext`, built from it, owns Parley's
      `FontContext` and `LayoutContext` and shapes a paragraph through `&mut`. Both types exist in
      every build, so a realm's constructor has one signature with or without `parley`; shaping
-     and registration sit behind the `parley` feature, off by default.
+     and registration sat behind the `parley` feature until step 4a folded it.
    - (2b) The runtime's shared engine services hold the collection, and each realm owns a
      `TextContext` built from the collection passed to `UiRealm::new`.
    - The cosmic-text path is unchanged, and `FONT_SYSTEM` and `shared_font_system()` stay until
@@ -394,8 +415,8 @@ that wires what it adds.
      `parley` on for CI's `test` and `fast-lane` jobs, and if `parley` switched measurement, CI
      would measure every text-size test with Parley while the build that ships measures with
      cosmic-text. `parley` compiles the Parley measurement and its tests pin a painter to it.
-     Under `parley-layout` size, baselines and intrinsics come from Parley while glyphs and
-     carets still come from cosmic-text, until steps 4 and 5 (flui-painting `ARCHITECTURE.md`,
+     Under `parley-layout` size, baselines and intrinsics came from Parley while glyphs and
+     carets still came from cosmic-text, until step 4a (flui-painting `ARCHITECTURE.md`,
      mapping decisions 14 and 15).
    - (3b) Registering raises a font-collection-changed event on every realm, which marks
      text render objects for layout (ADR-0065's named gap). The app's door is
@@ -406,13 +427,14 @@ that wires what it adds.
      loan was made for, and its drain before each frame compares the collection's generation
      with the last one it applied: on a change it marks every recorded node for layout and
      paint. `SharedFontSystem::register_font` is no longer a public door (a `testing` one
-     remains). This meets the precondition step 4's move of measurement waits on: a face
-     registered after start reaches measurement and paint alike. The app's fonts belong to the
+     remains, and reaches carets alone). This meets the precondition step 4's move of
+     measurement waits on: a face registered after start reaches measurement, paint and carets
+     alike. The app's fonts belong to the
      thread that runs it: a registration made before that thread builds its first realm is
      checked (`FontCollection::check_font`) and held, and lands on both sides when the
      collection is built, so a call on a thread that never runs the app changes neither side.
-     The collection judges bytes before the paint side loads them, so no refusal leaves a face
-     on one side only.
+     The collection judges bytes before the caret side (the process font system) loads them, so
+     no refusal leaves a face on one side only.
    - (3b) Every pipeline is built with a text context: `PipelineOwner::new` and
      `new_with_capacity` take a `TextContextHandle`, `PipelineOwner` has no `Default`, and a
      layout, intrinsic or dry-query context takes a `TextSource`, so no path builds a context
@@ -441,9 +463,9 @@ that wires what it adds.
    - *Acceptance (3b, pipelines):* a pipeline constructor without a context does not compile; an
      owner taken out of its slot leaves one that measures through the same context; a plugin
      pipeline measures through the context it is mounted with and lays its root out at each
-     frame's surface size. The default build still measures
-     with cosmic-text through `FONT_SYSTEM`, and `parley-layout` still shapes for paint there,
-     until steps 4 and 5.
+     frame's surface size. The default build still measured
+     with cosmic-text through `FONT_SYSTEM`, and `parley-layout` still shaped for paint there,
+     until step 4a.
    - (3c) Host faces in the collection, ahead of step 4, so that text the bundled faces do not
      cover (CJK, emoji, a family chain such as Cupertino's `-apple-system`, `system-ui`,
      `Segoe UI`) measures in the face it paints with once Parley measures by default. flui-app's
@@ -451,35 +473,100 @@ that wires what it adds.
      process font system (§7): its faces, generics and fallback order; the family rule is shared
      with `shape.rs`. Standalone contexts, test bootstraps and the hot-reload plugin keep
      `FontCollection::new()`, the bundled faces alone, so they stay deterministic. This is the
-     measurement/paint face agreement step 4's gate asks for.
+     measurement/paint face agreement step 4a's gate asks for.
    - *Acceptance (3c):* on the host's faces, Parley's measured width and height equal the painted
      cosmic-text layout's within 0.05 px for Latin at 400 and 700, monospace, Cupertino's chain
      at 400 and 600, CJK, emoji and mixed text, at 16 and 32 px, and fail on a bundled-only
      collection; every family the process font system carries is in the collection; each
-     script's fallback families and the emoji generic follow the paint side's lists in order,
+     script's fallback families and the emoji generic follow the caret side's lists in order,
      with the sans-serif family last; a family spelled in another case than the fonts name it
      resolves alike on both sides; on a bundled-only collection a glyph the named family lacks
      measures in Roboto;
      the runtime feeds once per app, not per realm; a font file that cannot be read is skipped
      and the feed completes. `cargo xtask globals` is unchanged.
-4. **Neutral shaped runs on the display list.**
-   - `DrawOp::Paragraph` carries flui-painting's `ShapedParagraph`: runs naming a FLUI-owned
-     font blob id, face index, size, interned variation and synthesis, with glyph id, position,
-     subpixel bin and span colour. It replaces `Arc<TextLayout>`
-     (`display_list/command.rs:167-174`). Runs are produced from the same shaped layout that
-     measured, so "painted as measured" still holds.
-   - A per-frame table carries the blobs a frame names first, which is the door §5 leaves open.
-     The engine's atlas becomes `GlyphAtlas<SwashRasterizer>`, the `parley` feature folds into
-     the default build, and the atlas's default parameter goes.
-   - `TextPainter` measures on Parley in the default build and the `parley-layout` feature is
-     removed, so the runs painted come from the layout that measured. Folding `parley` alone
-     would leave measurement on cosmic-text while paint moves to Parley runs.
-   - *Acceptance:* the text readback suite passes unmodified; `the_engine_does_not_shape` is
-     extended so the engine's manifest names no parley, fontique, skrifa, swash or cosmic-text.
-     Glyph baselines round as today (`(run.line_y * scale).round()`), pinned against today's
-     output (gate 8, second half). A registry test: a source-cache prune while the registry
-     holds the blob keeps keys equal, and fails without the registry. `DrawCommand` stays within
-     its size budget: **Unasserted:** no test pins this.
+4. **Parley measures by default (4a); neutral shaped runs on the display list (4b).** Two
+   halves, planned to land separately as step 3's did; the owner decided on 2026-09-30 that
+   they land together, so one Parley layout measures and paints and the hard-break divergence
+   between the two shapers never ships. Both halves have landed.
+   - (4a) `TextPainter` measures size, baselines and intrinsics on Parley through the lent
+     `TextContext` in the default build. A cosmic-text `TextLayout` is still built, on the
+     first caret query, for carets and selection until step 5; flui-painting
+     `ARCHITECTURE.md`, mapping decision 15, records what differs meanwhile.
+   - (4a) The `parley` and `parley-layout` features are removed: Parley, swash and the raster
+     side are in the default build, and nothing selects cosmic-text measurement. The host-face
+     feed (step 3c) is therefore unconditional too.
+   - (4a) With `bundled-fonts`, the process font system installs the bundled Roboto, Material
+     Icons and CupertinoIcons in place of any host face of those names (the collection measures
+     those families in the bundled faces alone), binds its generic families to Roboto, as the
+     collection does, and
+     snaps a weight the family lacks to one it has, so the caret layout, on cosmic-text until
+     step 5, lays default-family and generic text out in the face it was measured in (mapping
+     decision 16); paint draws the measured Parley runs (4b), a bold Roboto lacks synthesized
+     rather than snapped (mapping decision 18). The fed collection
+     binds its generics to the families the process font system binds them to, so both sides
+     name Roboto.
+   - (4a) Merge gate. Face agreement, decided by the owner on 2026-09-30: host faces go into
+     the collection first (step 3c), rather than accepting that non-Latin and named host
+     families measure in Roboto or with no face while they paint in host faces, or landing 4a
+     with 4b. With 3c merged, the cases that diverged measure what they paint on the Windows
+     development host at 16 px: Cupertino's chain 161.16 px (was 163.29 measured against
+     161.16 painted), a style naming `Segoe UI` 161.16 px (was the same pair),
+     `你好世界 emoji 😀` 133.27 px (was 82.77 against 133.27), `你好世界` 64.00 px, `😀`
+     21.97 px, and Latin in the default family, bold and monospace 163.29 px, each measured and
+     painted alike, within the 0.05 px of `host_faces_oracle`, whose rows run on CI's Linux host
+     too. That half of the gate is closed. The other half, the ordering, is met: the registration
+     half of step 3b (the font-collection-changed event, and `register_font` moving to the
+     collection) merged first, so a face registered at run time through the one door reaches
+     measurement, paint and carets on the next frame.
+   - (4a) Merge gate, line breaks: closed by the owner on 2026-09-30, by landing 4a with 4b,
+     and `"A\n"` is two lines, as Parley lays it out. CR LF breaks once, as the owner decided
+     on 2026-09-30: `"A\r\nB"` is two lines and `"A\r\n"` two, like `"A\n"`. Parley alone
+     breaks at the CR and again at the LF, so the painter hands it each CR that directly
+     precedes an LF as a space, the CR's one byte, which keeps every byte offset into the
+     layout valid for the text it was given. What was measured before the decision: soft wrapping agrees: Parley shapes
+     with `OverflowWrap::BreakWord`, so an overlong word breaks between glyphs as cosmic-text's
+     `Wrap::WordOrGlyph` breaks it. Over ten paragraphs (Latin, Cyrillic, Arabic, CJK, emoji,
+     URLs) at 12, 14 and 17 px and every width from 2 to 398 px in 3 px steps, 668 of 3990
+     measured a height other than the one painted without it and 30 with it, all 30 at 2 px,
+     narrower than a space. Hard breaks do not agree: the two shapers break at different
+     characters and read a trailing break differently (mapping decision 15 lists them), and
+     no setting of either shaper aligns them. With paint on Parley that difference moves
+     to the caret layout until step 5 (mapping decision 15).
+   - *Acceptance (4a):* measurement is Parley's in the default build, at the painter
+     (`text_context_contract`, and a face registered on the collection reaches measurement,
+     paint and carets at the next layout,
+     `a_face_registered_on_the_collection_reaches_measurement_paint_and_carets`) and at the realm (a face registered on one realm's collection sizes
+     that realm's paragraph); measured and painted metrics agree on the bundled Roboto, named,
+     as the default family and as the monospace generic, regular and bold, and a host face named
+     "Roboto", "Material Icons" or "CupertinoIcons" does not replace the bundled one; on the host's faces they agree for every row of
+     `measured_width_equals_painted_width_on_host_faces`, a family the host names exactly among
+     them; the `wasm32` lane, `cargo xtask deps` and `cargo xtask reach` are green.
+   - (4b) `DrawOp::Paragraph` carries flui-painting's `Arc<ShapedParagraph>`: a face table of
+     FLUI-owned font blobs (§4), and runs naming a face in it, a size, raw variation
+     coordinates and synthesis, with glyph ids, logical positions and span colour. It replaces
+     `Arc<TextLayout>`. The paragraph is built from the shaped layout that measured, so
+     "painted as measured" holds by identity; the ellipsis is shaped into it on Parley. Within
+     its box each line is aligned by the paragraph's direction (flui-painting `ARCHITECTURE.md`,
+     mapping decision 18, which lists how paint now differs from the cosmic-text paint it
+     replaces: synthetic bold, hard breaks, per-cluster fallback, right alignment).
+   - (4b) The engine's atlas is `GlyphAtlas<SwashRasterizer>`, and the atlas's default
+     parameter is gone. Recording a paragraph registers each run's face in the rasterizer's
+     registry and places the run's glyphs; the engine no longer takes `FONT_SYSTEM`'s lock to
+     rasterize. `WgpuPainter::draw_text` is gone; the performance overlay's labels are shaped
+     through flui-painting's `TextContext`.
+   - (4b) The cosmic-text paint path is removed: `TextLayout::placed_glyphs` and its ink
+     bounds, `SharedFontSystem::rasterize` and its `GlyphRasterizer` impl, and the cosmic
+     `GlyphKey`, whose name `ParleyGlyphKey` takes.
+   - (4b) No rollback for measurement or paint: with the features and the cosmic-text paint
+     path removed, no flag brings cosmic-text measurement or paint back, and a paint regression
+     found after this step is fixed forward. The rollback step 5 keeps covers carets and
+     selection only.
+   - *Acceptance:* the `DrawOp` payload is one `Arc`; the text readback suite passes
+     unmodified; `the_engine_does_not_shape` is extended so the engine's manifest names no
+     parley, fontique, skrifa, swash or cosmic-text. Glyph baselines round as today
+     (`(run.line_y * scale).round()`), pinned against today's output (gate 8, second half). A
+     registry test: a source-cache prune while the registry holds the blob keeps keys equal, and
+     fails without the registry.
 5. **Paragraph and editable text on Parley.**
    - `TextLayout` shapes one Parley `Layout` per paragraph on the realm's `TextContext`.
      Carets, selection and hit-testing come from clusters.
@@ -491,15 +578,18 @@ that wires what it adds.
      `system` feature question is settled: `fontique/system` reaches `windows`, which tier S
      forbids, and needs fontconfig headers on Linux, so it is not used. Host discovery is
      fontdb's, which the collection is fed from (step 3c); no reach grant is needed.
-   - The cosmic-text path stays behind a flag for one release as the rollback.
+   - The cosmic-text caret layout stays behind a flag for one release as the rollback for
+     carets and selection; measurement and paint have had none since step 4.
    - *Acceptance:* gates 2–7. The existing selection and offset↔cursor tests pass unchanged for
      LTR, RTL and mixed bidi. The `complex-scripts` decision is recorded.
 6. **cosmic-text removed; `FONT_SYSTEM` leaves.**
    - cosmic-text, `unicode-segmentation` and `unicode-script` leave the workspace. Host
      discovery stays fontdb's, which becomes a direct dependency, and FLUI owns the per-platform
      fallback tables `FallbackChain` reads from cosmic-text today.
-   - `FONT_SYSTEM`, `shared_font_system()`, `SharedFontSystem`, `Shaper`, the cosmic `GlyphKey`
-     and `pub use cosmic_text::fontdb::Family` go, and the rollback flag is removed.
+   - `FONT_SYSTEM`, `shared_font_system()`, `SharedFontSystem`, `Shaper`, `TextLayout`, the
+     process-side Roboto binding (flui-painting mapping decision 16) and
+     `pub use cosmic_text::fontdb::Family` go, and the rollback flag is removed; the cosmic
+     `GlyphKey` and `SharedFontSystem::rasterize` already went at step 4.
    - *Acceptance:* `cargo tree -i cosmic-text` is empty; the globals allowlist is shorter by
      `text_layout::layout::FONT_SYSTEM`; the `disallowed_types` `#[expect]` in
      `text_layout/layout.rs` is gone; §§1–5 are accepted and the back-links in Consequences are
@@ -555,11 +645,12 @@ that wires what it adds.
 ## Verification
 
 The gate 1 prototype exists on `spike/parley_atlas` (not merged). The raster seam and the
-per-realm text context (§10 step 2, both halves) with its tests exist, and so does layout
-measuring through the realm's context (§10 step 3a); the rest do not exist yet.
+per-realm text context (§10 step 2, both halves) with its tests exist, and so do layout
+measuring through the realm's context (§10 step 3a) and paint drawing its runs (§10 step 4);
+the rest do not exist yet.
 
-- The raster seam, `ParleyGlyphKey`, `FontRegistry` and `SwashRasterizer` exist behind
-  flui-painting's `parley` feature, with the oracle (`crates/flui-painting/tests/parley_oracle.rs`).
+- The raster seam, `GlyphKey`, `FontRegistry` and `SwashRasterizer` (`flui_painting::glyphs`),
+  with the oracle (`crates/flui-painting/tests/parley_oracle.rs`).
 - The gate 1 prototype and its oracle glyph tests, with the glifo/skrifa choice recorded.
 - `FontCollection` and `TextContext` exist, with `crates/flui-painting/tests/text_context.rs`:
   `two_realms_shape_in_parallel` (two contexts over one collection shape on two threads whose
@@ -581,7 +672,7 @@ measuring through the realm's context (§10 step 3a); the rest do not exist yet.
   `crates/flui-runtime/src/ui_realm/tests/text_context.rs`,
   `two_realms_measure_text_through_their_own_contexts` and
   `every_presentation_pipeline_holds_the_realms_text_context`; in
-  `crates/flui-painting/tests/text_painter_unit.rs` (under `parley`),
+  `crates/flui-painting/tests/text_painter_unit.rs`,
   `measurement_follows_the_context_it_is_given` and
   `a_registration_on_the_collection_invalidates_the_painter_cache`; in
   `crates/flui-rendering/tests/text_context.rs`,
@@ -594,7 +685,7 @@ measuring through the realm's context (§10 step 3a); the rest do not exist yet.
   `a_plugin_pipeline_measures_through_the_context_it_is_given`, and in
   `plugin_pipeline_layout.rs`, `a_plugin_pipeline_lays_out_at_the_size_of_each_frame`.
 - The host's faces in the collection (§10 step 3c): in
-  `crates/flui-painting/tests/host_faces_oracle.rs` (`parley`),
+  `crates/flui-painting/tests/host_faces_oracle.rs`,
   `measured_width_equals_painted_width_on_host_faces` and
   `every_family_the_process_font_system_carries_resolves_in_the_collection`; in
   `crates/flui-painting/src/text_layout/fallback_chain.rs`,
@@ -617,19 +708,46 @@ measuring through the realm's context (§10 step 3a); the rest do not exist yet.
   `bytes_with_no_face_are_refused_and_notify_nothing` and
   `a_registration_from_inside_a_realm_task_reaches_that_realm_after_it_returns`.
 - A registry test: a source-cache prune while the registry holds the blob keeps keys equal, and
-  the test fails without the registry.
+  an arm without the registry shows the keys change
+  (`a_held_blob_keeps_its_keys_across_a_prune`, `crates/flui-painting/src/text_layout/context.rs`).
 - A same-key-twice test: rasterizing one key twice yields equal bitmaps. **Unasserted:** no
   test pins this.
 - A baseline test against today's rounding, measurement side:
-  `crates/flui-painting/tests/parley_metrics_oracle.rs` (`parley`) measures the bundled Roboto
+  `crates/flui-painting/tests/parley_metrics_oracle.rs` measures the bundled Roboto
   on both paths at 13, 14, 16, 18 and 32 px, default and 1.5 line height, and finds equal width
   and height and the same device baseline, `(baseline * scale).round()`, at scales 1, 1.25,
   1.5 and 2. It holds because Parley's layout is unquantized: quantized, Parley rounds ascent,
   descent and the leading halves to whole logical pixels, and seven of the forty cases landed
   on another device row (16 px at 1.5 line height: 17 against 17.47, so 34 against 35 at
-  scale 2). The glyph side waits for step 4.
+  scale 2). The glyph side (step 4): the same test compares the device row the painted runs
+  place the first baseline on (`ShapedRun::placed_glyphs`) with cosmic-text's, and
+  `a_2x_baseline_row` reads it back.
 - `the_engine_does_not_shape` ([ADR-0067](ADR-0067-engine-owned-glyph-atlas.md)) extended so the
-  engine's manifest names no Parley, fontique, skrifa or cosmic-text crate.
+  engine's source and manifest name no Parley, fontique, skrifa, swash or cosmic-text crate.
 - The process-global state gate ([ADR-0097](ADR-0097-no-process-global-state-gate.md)) with
   `FONT_SYSTEM` removed from its allowlist.
 - A first-frame test that renders bundled text before the system scan completes.
+- Parley measures in the default build (§10 step 4a): the rows of `text_context_contract`
+  (`crates/flui-painting/tests/main.rs`); in `crates/flui-painting/tests/font_registration.rs`,
+  `a_face_registered_on_the_collection_reaches_measurement_paint_and_carets`; in
+  `crates/flui-runtime/src/ui_realm/tests/text_context.rs`,
+  `a_realm_measures_text_with_the_faces_of_its_own_collection`; the default-family, monospace
+  and bold rows of `parley_metrics_round_to_todays_baseline`, which fail without flui-painting's
+  mapping decision 16 (the bold monospace rows also without the monospace weight snap);
+  `a_host_copy_does_not_replace_a_bundled_face` (`crates/flui-painting/src/fonts.rs`); every row
+  of `measured_lines_are_painted_lines` (`crates/flui-painting/tests/parley_metrics_oracle.rs`)
+  and `an_empty_paragraph_measures_a_line_of_its_style`; and,
+  for the merge gate's face agreement, every row of
+  `measured_width_equals_painted_width_on_host_faces`
+  (`crates/flui-painting/tests/host_faces_oracle.rs`), which fails on a bundled-only collection.
+- Paint draws the runs of the layout that measured (§10 step 4b): the hard-break rows of
+  `measured_lines_are_painted_lines` (`a_trailing_newline_is_a_line`, `crlf_breaks`,
+  `a_line_separator_breaks`, `a_paragraph_separator_breaks`, `next_line_does_not_break`);
+  `truncated_paragraph_paints_what_it_measured` (`crates/flui-painting/tests/text_overflow_unit.rs`),
+  whose ellipsis line inks within the measured width; the synthetic bold, oblique, multi-line
+  and host-face rows of `paragraph_extent_covers_every_rasterized_glyph`
+  (`crates/flui-painting/tests/damage_extent.rs`); and the readback table
+  `parley_runs_read_back` (`crates/flui-engine/src/paragraph_readback_tests.rs`):
+  `latin_breaks_at_a_line_separator`, `synthetic_bold_inks_more_than_regular`,
+  `cjk_breaks_at_a_line_separator`, `colour_emoji_on_line_two`,
+  `arabic_rtl_right_aligns_each_line`, `crlf_puts_b_on_line_two` and `a_2x_baseline_row`.

@@ -4,8 +4,7 @@ use thiserror::Error;
 
 /// Why [`FontRegistry::register_face`] refused a face.
 ///
-/// [`FontRegistry::register_face`]: crate::parley_text::FontRegistry::register_face
-#[cfg(feature = "parley")]
+/// [`FontRegistry::register_face`]: crate::glyphs::FontRegistry::register_face
 #[derive(Error, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegisterFaceError {
     /// The bytes hold no face at the key's index.

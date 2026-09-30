@@ -22,7 +22,8 @@ use std::sync::Arc;
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use flui_engine::WgpuPainter;
 use flui_foundation::geometry::{Point, Rect};
-use flui_painting::{Paint, TextLayout};
+use flui_painting::parley_text::ParagraphSpec;
+use flui_painting::{FontCollection, Paint, ShapedParagraph, TextContext};
 use flui_painting::{styling::Color, typography::TextDirection};
 
 #[cfg(target_os = "windows")]
@@ -78,26 +79,33 @@ fn row_text(row: usize, salt: usize) -> String {
     )
 }
 
-fn shape(text: &str) -> Arc<TextLayout> {
-    Arc::new(TextLayout::new(
-        text,
-        None,
-        f64::from(FONT_SIZE),
-        Some(f64::from(WIDTH as f32 - 32.0)),
-        None,
-        TextDirection::Ltr,
-    ))
+fn shape(text_cx: &mut TextContext, text: &str) -> Arc<ShapedParagraph> {
+    let spans = [(text.to_owned(), None)];
+    Arc::new(
+        text_cx
+            .shape(&ParagraphSpec {
+                spans: &spans,
+                default_style: None,
+                font_size: FONT_SIZE,
+                max_width: Some(WIDTH as f32 - 32.0),
+                line_height: None,
+                direction: TextDirection::Ltr,
+                max_lines: None,
+                ellipsis: None,
+            })
+            .to_shaped(None),
+    )
 }
 
 /// Number of glyphs across `layouts`, for the throughput denominator.
-fn glyph_count(layouts: &[Arc<TextLayout>]) -> u64 {
+fn glyph_count(layouts: &[Arc<ShapedParagraph>]) -> u64 {
     layouts
         .iter()
         .map(|l| l.text().chars().filter(|c| !c.is_whitespace()).count() as u64)
         .sum()
 }
 
-fn record_frame(painter: &mut WgpuPainter, layouts: &[Arc<TextLayout>]) {
+fn record_frame(painter: &mut WgpuPainter, layouts: &[Arc<ShapedParagraph>]) {
     let background = Paint::fill(Color::rgb(245, 245, 245));
     let stripe = Paint::fill(Color::rgb(230, 230, 230));
     painter.draw_rect(
@@ -168,7 +176,10 @@ fn text_throughput(c: &mut Criterion) {
         (WIDTH, HEIGHT),
     );
 
-    let steady: Vec<Arc<TextLayout>> = (0..ROWS).map(|row| shape(&row_text(row, 0))).collect();
+    let mut text_cx = TextContext::new(&FontCollection::new());
+    let steady: Vec<Arc<ShapedParagraph>> = (0..ROWS)
+        .map(|row| shape(&mut text_cx, &row_text(row, 0)))
+        .collect();
     let glyphs = glyph_count(&steady);
 
     // Warm the pipelines and the atlas with the steady scene.
@@ -195,7 +206,7 @@ fn text_throughput(c: &mut Criterion) {
             || {
                 salt += 1;
                 (0..ROWS)
-                    .map(|row| shape(&row_text(row, salt * 131 + row)))
+                    .map(|row| shape(&mut text_cx, &row_text(row, salt * 131 + row)))
                     .collect::<Vec<_>>()
             },
             |layouts| {

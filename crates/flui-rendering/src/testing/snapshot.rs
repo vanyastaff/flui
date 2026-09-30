@@ -397,25 +397,25 @@ fn summarize_op(op: &DrawOp) -> DrawCommandSummary {
 
         // ── Text ─────────────────────────────────────────────────────────────
         DrawOp::Paragraph {
-            layout,
+            paragraph,
             offset,
             color,
         } => {
-            // The text, the root colour, and what reached the shaper per run.
+            // The text, the root colour, and what reached the shaper per span.
             // Glyph geometry is deliberately absent, but the shaped styles are
             // NOT optional detail: a regression that recolours, re-weights, or
             // resizes a span moves no other field in this summary, so
             // omitting them makes such a change invisible to every snapshot.
-            let runs = layout.describe_runs();
+            let runs = paragraph.describe_spans();
             DrawCommandSummary {
                 kind: DrawKind::Text,
                 line: format!(
                     "Paragraph offset=({},{}) {:?} {} lines={} runs=[{}]",
                     f(offset.dx),
                     f(offset.dy),
-                    layout.text(),
+                    paragraph.text(),
                     hex_color(*color),
-                    layout.metrics().line_count,
+                    paragraph.line_count(),
                     runs.join(", "),
                 ),
             }

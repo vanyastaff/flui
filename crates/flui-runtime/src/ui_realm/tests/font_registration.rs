@@ -85,7 +85,7 @@ fn painted_widths(scene: &flui_layer::Scene) -> Vec<f64> {
                 .picture()
                 .iter()
                 .filter_map(|command| match &command.op {
-                    DrawOp::Paragraph { layout, .. } => Some(layout.metrics().width),
+                    DrawOp::Paragraph { paragraph, .. } => Some(paragraph.size().width),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
@@ -146,8 +146,8 @@ fn a_face_registered_after_start_re_lays_out_text_in_every_realm_on_the_next_fra
 }
 
 /// A face registered before a realm exists measures on that realm's first
-/// frame. Fails if the collection's registration does not reach the font
-/// system the text is laid out and painted with.
+/// frame. Fails if the registration does not reach the collection the text
+/// is laid out and painted with.
 fn a_face_registered_before_the_realm_is_built_measures_on_its_first_frame() {
     use flui_painting::typography::FontWeight;
 

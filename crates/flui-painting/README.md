@@ -24,10 +24,11 @@ let list = canvas.finish(); // Save, DrawRect, Restore
 - `DisplayList` / `DrawCommand` — the recorded commands with their transform
   baked in; the closed vocabulary `flui-engine` matches exhaustively.
 - `TextPainter` / `TextLayout` — lay an inline span out against a width
-  constraint, query caret / hit-test / lines, paint it. Shaping goes through
-  the process-wide font system that the engine shares
-  (`shared_font_system()`), so a face an app registers (`flui::register_font`,
-  through the app's `FontCollection`) measures and paints alike.
+  constraint, query caret / hit-test / lines, paint it. Measurement and paint
+  shape on Parley through the realm's `TextContext`; carets still shape on the
+  process-wide font system (`shared_font_system()`). A face an app registers
+  (`flui::register_font`, through the app's `FontCollection`) reaches all
+  three alike.
 - `paint_box_decoration`, `paint_table_border` — the
   decoration painters.
 

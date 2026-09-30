@@ -24,11 +24,11 @@ use crate::{
 use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, Rect};
 
 use super::Canvas;
+use crate::display_list::ShapedParagraph;
 use crate::display_list::{
     BlendMode, ColorFilter, DisplayList, DrawCommand, DrawOp, FilterQuality, ImageRepeat, Paint,
     PointMode, TextureId,
 };
-use crate::text_layout::TextLayout;
 
 impl Canvas {
     // ===== Drawing Primitives =====
@@ -88,13 +88,18 @@ impl Canvas {
 
     /// Draws a shaped paragraph with its top-left at `offset`.
     ///
-    /// `layout` is the very layout the caller measured (`TextPainter::paint`
-    /// hands over its cache's `Arc`), so line breaks, truncation, and the
-    /// ellipsis paint exactly as they were laid out. `color` paints every
-    /// glyph without a span colour of its own.
-    pub fn draw_paragraph(&mut self, layout: &Arc<TextLayout>, offset: Offset<f64>, color: Color) {
+    /// `paragraph` is the very paragraph the caller measured
+    /// (`TextPainter::paint` hands over its cache's `Arc`), so line breaks,
+    /// truncation, and the ellipsis paint exactly as they were laid out.
+    /// `color` paints every glyph without a span colour of its own.
+    pub fn draw_paragraph(
+        &mut self,
+        paragraph: &Arc<ShapedParagraph>,
+        offset: Offset<f64>,
+        color: Color,
+    ) {
         self.record(DrawOp::Paragraph {
-            layout: Arc::clone(layout),
+            paragraph: Arc::clone(paragraph),
             offset,
             color,
         });

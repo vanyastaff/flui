@@ -3,8 +3,9 @@
 `flui-painting` is two things under one name: the recorder that turns a
 render object's (or a `CustomPaint` painter's) drawing into a
 [`DisplayList`](src/display_list/mod.rs), and the text stack that shapes an
-inline span through cosmic-text and answers layout queries on the result.
-Nothing is rasterised here — `flui-engine` replays the list.
+inline span on Parley, answers layout queries on the result and hands the
+engine a rasterizer for its glyphs. Nothing is rasterised here — `flui-engine`
+replays the list.
 
 The paint, style and text values (`paint`, `styling`, `typography`, plus
 `Alignment`, `BoxFit` and `TextBaseline`) are owned here too (ADR-0098 §8), and
@@ -18,11 +19,11 @@ Design decisions are recorded under [Mapping decisions](#mapping-decisions).
 | Concern | Files | What lives there |
 |---|---|---|
 | Recorder | `canvas/{mod,state,transform,clipping,drawing,scoped}.rs` | `Canvas`: the `dart:ui` surface, save/restore, transforms, clips, `draw_*`, and the `with_*` helpers that pair a save with its restore |
-| Wire vocabulary | `display_list/{mod,command,command_ops}.rs` | `DisplayList` (commands + cached bounds), `DrawCommand` (the closed enum `flui-engine` matches exhaustively), `DrawCommand::bounds` |
-| Text | `text_layout/{layout,font_resolve}.rs`, `text_painter/{mod,measure,paint,baseline}.rs` | The process-wide font system and `SharedFontSystem`, `TextLayout` (shape, truncate, caret/hit-test/line queries), family resolution against the host, `TextPainter` |
-| Per-realm text context | `text_layout/context.rs` (every build; shaping and registration behind `parley`) | `FontCollection` (the app's shared, add-only fontique collection) and `TextContext` (one realm's Parley font and layout contexts over it, used through `&mut`); constructed by the runtime, one context per realm; shaping has no production caller until ADR-0092 §10 step 3 |
-| Parley shaping | `parley_text/shape.rs` (`parley` feature) | `TextContext::shape`: a `ParagraphSpec` (styled spans, width, line height, direction) to a `ParagraphLayout` whose `metrics()` read the laid-out lines |
-| Parley raster side | `parley_text/{key,registry,swash}.rs` (`parley` feature) | `ParleyGlyphKey` (a face named by font blob), `FontRegistry` (faces and interned variation instances), `SwashRasterizer`; no production caller until ADR-0092 §10 step 4 |
+| Wire vocabulary | `display_list/{mod,command,command_ops,paragraph}.rs` | `DisplayList` (commands + cached bounds), `DrawCommand` (the closed enum `flui-engine` matches exhaustively), `DrawCommand::bounds`, `ShapedParagraph` (the shaped text `DrawOp::Paragraph` carries, decision 18) |
+| Text | `text_layout/{layout,font_resolve}.rs`, `text_painter/{mod,measure,paint,baseline}.rs` | `TextPainter`; the process-wide font system and `SharedFontSystem`, `TextLayout` (the caret, hit-test and line queries until ADR-0092 §10 step 5), family resolution against the host |
+| Per-realm text context | `text_layout/context.rs` | `FontCollection` (the app's shared, add-only fontique collection) and `TextContext` (one realm's Parley font and layout contexts over it, used through `&mut`); constructed by the runtime, one context per realm; every `TextPainter` measurement shapes on it |
+| Parley shaping | `parley_text/shape.rs` | `TextContext::shape`: a `ParagraphSpec` (styled spans, width, line height, direction, `max_lines`, ellipsis) to a `ParagraphLayout` whose `metrics()` read the laid-out lines and whose `to_shaped()` is the paragraph paint records |
+| Raster side | `glyphs/{mod,key,registry,swash}.rs` | `GlyphKey` (a face named by font blob), `FontRegistry` (faces and interned variation instances), `SwashRasterizer` (the engine's atlas draws through it), `GlyphRasterizer`, `PlacedGlyph`, `GlyphImage` |
 | Paint values | `paint/{style,path,shader,effects,image,clipping,blend_mode,canvas}.rs` | `Paint`, `Path` (with its shape hint), shaders, filters, images, clip and blend modes: the vocabulary the recorder records |
 | Style values | `styling/*.rs`, `lerp_impls.rs` | `Color` (straight-alpha sRGB, premultiplied `lerp`), borders, radii, decorations, gradients, shadows |
 | Text values | `typography/*.rs` | `TextStyle`, spans, alignment, decoration, metrics |
@@ -61,79 +62,77 @@ stack is a silent no-op for the same reason.
 
 ## Text
 
-`TextLayout::from_spans` shapes a paragraph through the process-wide font
-system: family and weight are resolved against the host database first
-(decision 8), the buffer is shaped, and `max_lines`/`ellipsis` truncation
-RE-SHAPES the kept prefix so size, line metrics, and glyphs agree.
-`TextPainter` is the facade over it that `RenderParagraph`
-drives; its intrinsic-width probes shape without truncation (decision 9).
+`TextPainter` is the facade `RenderParagraph` drives. Every measurement takes
+the `TextContext` it shapes through: `layout`, the four intrinsics, `dry_size`
+and `dry_baseline` each take `&mut TextContext`, and a render object lends its
+realm's (decision 14). `layout` shapes the paragraph once on Parley
+(`TextContext::shape`: a `ParagraphSpec` with the painter's spans, scale,
+width, `max_lines` and ellipsis), reads size and baselines from the
+`ParagraphLayout`'s `metrics()`, and turns the same layout into the
+`ShapedParagraph` it paints (`ParagraphLayout::to_shaped`). Intrinsic widths
+come from a second shape without truncation (`content_widths`, decision 9).
+The painter's cache keys on the context's collection and its
+`FontCollection::generation`, so a layout from another realm's collection, or
+from before a registration, shapes again. The app's collection is fed from the
+process font system's faces, generics and fallback order, and both shapers
+resolve a family by one rule (decision 17).
 
-Every `TextPainter` measurement takes the `TextContext` it measures through:
-`layout`, the four intrinsics, `dry_size` and `dry_baseline` each take
-`&mut TextContext`, and a render object lends its realm's (decision 14). The
-default build measures on cosmic-text as above and only counts the loan. Under
-`parley-layout`, size, baselines and intrinsics come from Parley shaping on
-that context (`ParagraphSpec` with the painter's spans, scale and
-`max_lines`; intrinsic widths from `ParagraphLayout::content_widths`), while
-the cosmic-text `TextLayout` is still built for paint, carets and selection
-until ADR-0092 §10 step 5 (decision 15). `parley` alone compiles that path
-without choosing it, because the workspace test scope turns `parley` on and
-must still test the build that ships; its tests pin a painter to Parley
-through `testing::measure_with_parley`. The painter's cache keys on the
-context's collection and its `FontCollection::generation`, so a layout from
-another realm's collection, or from before a registration, measures again.
-The app's collection is fed from the process font system's faces, generics
-and fallback order, and both shapers resolve a family by one rule (decision
-16), so Parley measures a paragraph in the faces cosmic-text paints it with.
-`TextPainter::paint` records `DrawCommand::Paragraph { layout, offset,
-color }` with the very `Arc<TextLayout>` its cache holds (ADR-0065): the
-engine rasterises what was measured and shapes nothing. The root colour
-rides on the command; a span's own colour is baked into the layout, so a
-span recolour is a layout change and a root recolour is not.
+`TextPainter::paint` records `DrawOp::Paragraph { paragraph, offset, color }`
+with the very `Arc<ShapedParagraph>` its cache holds (ADR-0065, ADR-0092 §4):
+the engine rasterises those runs and shapes nothing. The root colour rides on
+the command; a span's own colour is carried by its runs, so a span recolour is
+a layout change and a root recolour is not. A `ShapedParagraph` names no
+shaper: its text, size, baselines and ink bounds, a face table of
+`FontBlob`s (the font bytes and the blob id keys name them by), and runs of
+glyph ids and logical positions with each run's face, size, variation
+coordinates, synthesis and colour (decision 18). Truncation keeps the lines
+the metrics keep; an ellipsis is shaped into the last kept line, text dropped
+from its end until the line and the ellipsis fit the width.
 
-The font system is a `OnceLock<Arc<Mutex<FontState>>>`, an ambient residual
-(a process-global the runtime still reaches); `AppRuntime` installs it at realm
-install so first use is not whichever text measurement runs first.
-`SharedFontSystem` is the handle the engine's glyph atlas rasterises from
-(ADR-0016), so a face registered on the app's collection measures and
-paints alike. It has three public doors: `shape(|Shaper| …)` resolves and
-shapes under one acquisition and never bumps the generation;
-`generation()` is what every shaped-text cache keys on (ADR-0065);
-`rasterize(GlyphKey)` returns one glyph's bitmap for the engine's atlas
-(ADR-0067). The one mutation, append-only and bumping the generation, is
-crate-internal (`add_face`): an app registers through
-`FontCollection::register_font` on a collection built by `with_host_faces`,
-which loads the face here and into the collection (decision 11). The
-`testing` feature keeps `SharedFontSystem::register_font` as a paint-only
-door for tests. The embedded baseline
-faces (`fonts.rs`, `bundled-fonts`) are installed at construction, so a
-headless test measures an `Icon` in the face the app paints.
+Carets, selection, word boundaries, line metrics and hit-testing still read a
+cosmic-text `TextLayout` (`TextLayout::from_spans`, shaped through the
+process-wide font system, family and weight resolved against the host
+database first, decision 8), built on the first such query and kept while the
+process font system's generation is unchanged (decision 15). Plain `Text`
+never builds one. The font system is a `OnceLock<Arc<Mutex<FontState>>>`, an
+ambient residual (a process-global the runtime still reaches); `AppRuntime`
+installs it at realm install. `SharedFontSystem` has two public doors:
+`shape(|Shaper| …)` resolves and shapes under one acquisition and never bumps
+the generation; `generation()` is what the caret layout keys on. The one
+mutation, append-only and bumping the generation, is crate-internal
+(`add_face`): an app registers through `FontCollection::register_font` on a
+collection built by `with_host_faces`, which loads the face into the
+collection (measurement and paint) and here (carets) alike (decision 11). The
+`testing` feature keeps `SharedFontSystem::register_font` as a caret-only
+door for tests. The collection is fed from its discovery (decision 17). The
+embedded baseline faces (`fonts.rs`, `bundled-fonts`) are installed at
+construction.
 
-What crosses to the engine is `TextLayout::placed_glyphs(origin, scale)` —
-an iterator of `PlacedGlyph { key: GlyphKey, x, y, color }` in device
-pixels — and the `GlyphImage` that `rasterize` returns for a key. The shaped
-`cosmic_text::Buffer` never leaves this crate, and `GlyphKey` is opaque:
-the one cosmic-text type on the public surface is `Family`, carried by
-`ResolvedFont`.
-
-The engine's atlas draws through the `GlyphRasterizer` trait (`glyphs.rs`):
-a key type plus `rasterize(&mut self, key)`, deterministic per key, with
-`None` for a key the rasterizer cannot draw (the atlas does not place it and
-asks again next use). `SharedFontSystem` implements it with `GlyphKey`, and
-is the engine's default. `parley_text::SwashRasterizer` implements it with
-`ParleyGlyphKey`, the key ADR-0092 §5 names: blob id and face index, glyph
-id, exact size bits, an interned variation instance, a horizontal
+The raster side is `glyphs` (ADR-0092 §5). What crosses to the engine is the
+`ShapedParagraph`; the engine's atlas registers each run's face in its
+`FontRegistry` (`FontRegistry::prepare_run`, which also interns the run's
+variation coordinates) and places the run's glyphs with
+`ShapedRun::placed_glyphs(key, origin, scale)`: `PlacedGlyph { key: GlyphKey,
+x, y, color }` in device pixels, the pen split into a whole column and a
+quarter-pixel bin, the baseline row `round(baseline × scale)`, as cosmic-text
+placed glyphs. The atlas draws through the `GlyphRasterizer` trait: a key type
+plus `rasterize(&mut self, key)`, deterministic per key, with `None` for a key
+the rasterizer cannot draw (the atlas does not place it and asks again next
+use). `SwashRasterizer` implements it with `GlyphKey`: blob id and face index,
+glyph id, exact size bits, an interned variation instance, a horizontal
 quarter-pixel bin, hinting and synthesis. A `VariationId` carries the random
 identity of the `FontRegistry` that minted it, so a rasterizer over another
-registry refuses it instead of drawing its own instance at the same index. It drives the same swash scaler
-as the cosmic-text path with the same sources, format and offsets, so for
-the same face bytes, glyph, size and bin the two draw identical bitmaps;
-`tests/parley_oracle.rs` checks that bit for bit on Parley-shaped Latin,
-Cyrillic and Greek (Roboto) and icon glyphs (Material Icons), on vendored
-faces only so the result does not depend on the host. Complex scripts and
-colour emoji have no vendored face and are not compared there. The key has no vertical bin because
-cosmic-text truncates a glyph's row before binning, so its vertical bin is
-always zero.
+registry refuses it instead of drawing its own instance at the same index. It
+drives swash with the sources, format and offsets cosmic-text's rasterizer
+used, so for the same face bytes, glyph, size and bin the two draw identical
+bitmaps; `tests/parley_oracle.rs` checks that bit for bit on Parley-shaped
+Latin, Cyrillic and Greek (Roboto) and icon glyphs (Material Icons), on
+vendored faces only so the result does not depend on the host. Complex scripts
+and colour emoji have no vendored face and are not compared there. The key has
+no vertical bin because the placement truncates a glyph's row before binning,
+so its vertical bin is always zero. A registry holds every blob a key names,
+so a key stays valid after fontique's source cache drops the file
+(`a_held_blob_keeps_its_keys_across_a_prune`, `src/text_layout/context.rs`).
 
 ---
 
@@ -141,9 +140,9 @@ always zero.
 
 `#![forbid(unsafe_code)]`. Every type is plain `Send + Sync` value data;
 `Canvas` and `TextPainter` are mutated through `&mut self` by one owner.
-The one lock is the cosmic-text path's font system, never nested with another
-lock in this crate, and never held across a call into another crate except the
-engine's `with_mut` closure, which takes no painting lock. The crate's
+The one lock is the cosmic-text path's font system, which carets, selection
+and host discovery still take, never nested with another lock in this crate;
+neither measurement, paint nor rasterization takes it. The crate's
 `clippy.toml` disallows `Mutex` and `RwLock`; that font system is the one
 `#[expect]`ed site (`text_layout/layout.rs`), and it leaves at ADR-0092 §10
 step 6.
@@ -158,7 +157,9 @@ under that mutex once, on its next shape; otherwise a shape costs one atomic
 load (ADR-0092 §3 cites the fontique lines). `SwashRasterizer` takes no lock
 either: it owns its `FontRegistry` and scaler, is `Send`, and is used through
 `&mut` by whoever owns the atlas, so it can rasterize on another thread while
-shaping continues.
+shaping continues. A `ShapedParagraph` is immutable and `Send + Sync`; its
+`FontBlob`s share the font bytes with fontique's cache and the registries that
+hold them.
 
 ---
 
@@ -405,8 +406,10 @@ with the ellipsis as a lower bound when truncation can leave only that glyph str
 
 **Accepted trade-off:** `max_lines` does not shrink min/max intrinsic *width* below the
 shaped content (or the ellipsis floor). Parents that need truncated size use dry layout /
-committed layout. The ellipsis floor is locked by `wide_ellipsis_floors_min_intrinsic_width`
-(`tests/text_painter_unit.rs`). For `max_lines` without an ellipsis, and for the `RenderParagraph`
+committed layout. The ellipsis floor is the width of the ellipsis-only paragraph truncation
+can keep, shaped in the first run's style as `ellipsize` shapes it; locked by
+`wide_ellipsis_floors_min_intrinsic_width` and
+`a_rich_span_ellipsis_floors_min_intrinsic_width` (`tests/text_painter_unit.rs`). For `max_lines` without an ellipsis, and for the `RenderParagraph`
 intrinsics: **Unasserted:** no test pins this.
 
 ### 10. Synthetic bold uses an interpolated stroke width
@@ -434,10 +437,13 @@ total at every size), a candidate once Skia's per-platform output is
 measured; no fake bold, as cosmic-text does — rejected, a bold style on a
 regular-only face would draw regular.
 
-**Accepted trade-off:** only `parley_text` applies it; the cosmic-text path
-keeps drawing no fake bold until ADR-0092 §10 step 5 moves paragraphs to
-Parley, which checks the strength against Skia's source per platform and
-against paragraph output. **Unasserted:** no test pins this.
+**Accepted trade-off:** since paint draws Parley's runs (decision 18), bold on
+a face with no bold weight paints emboldened: default-family, "Roboto" and
+generic bold on the bundled Roboto Regular (decision 16), which cosmic-text
+painted as Regular. The strength is not yet checked against Skia's source per
+platform. Locked by `synthetic_bold_adds_the_interpolated_width` (width gain at
+9, 20, 36 and 144 px) and `synthetic_bold_inks_more_than_regular` (a
+readback, `flui-engine`).
 
 ### 11. The font collection is app-scoped and passed explicitly; each realm shapes through its own context
 
@@ -448,7 +454,7 @@ before the registration. The collection offers no removal. This crate provides
 both types; the runtime constructs them (the app's shared engine services hold
 the collection, and each realm owns a context built in its constructor,
 ADR-0092 §10 step 2). Layout, intrinsic and dry queries measure through the
-realm's context (step 3, decision 14); it shapes under `parley-layout`.
+realm's context (step 3, decision 14); layout measures on it (step 4a).
 
 **Why:** FLUI runs several realms on their own threads (ADR-0027, ADR-0091).
 An ambient collection behind one lock makes every realm's shaping wait on the
@@ -465,14 +471,15 @@ rather than holding a FLUI lock; both are accepted because registration is
 rare. Until ADR-0092 §10 step 6 the bundled faces sit in both this collection
 and the cosmic-text font system, and so does every registered face: the
 collection is the one registration door, and one built by `with_host_faces`
-keeps that font system as its paint side and loads each face there first. The
-collection judges the bytes on a scratch fontique collection before the paint
+keeps that font system as its caret side and loads each face there first, so
+one registration reaches measurement, paint and carets at the next layout. The
+collection judges the bytes on a scratch fontique collection before the caret
 side loads anything, so bytes one side reads and the other does not (a face
 with no `cmap`: fontdb loads it, fontique finds no family) change neither.
 `FontCollection::check_font` gives the same verdict with no collection at
 all, for the app to answer a registration made before its first window.
 `FontCollection::new` has
-no paint side and never touches the process font system. Locked by
+no caret side and never touches the process font system. Locked by
 `two_realms_shape_in_parallel` and
 `a_face_registered_after_the_fork_shapes_in_every_realm`
 (`tests/text_context.rs`), and `registration_contract`
@@ -494,11 +501,12 @@ of `Rtl` that can be honoured today.
 **Accepted trade-off:** a right-to-left paragraph whose text starts with Latin
 or neutrals lays out its runs in the wrong order until the base direction can
 be set; that belongs to ADR-0092 §10 step 5, where editable text moves to
-Parley and its acceptance covers LTR, RTL and mixed bidi. Under
-`parley-layout`, `TextPainter` measures through `ParagraphSpec`, so an `Rtl`
-paragraph's measured size is that of the wrongly ordered runs; line widths do
-not depend on run order, so only a line break that falls differently shows.
-The default build does not shape through `ParagraphSpec`. Locked by
+Parley and its acceptance covers LTR, RTL and mixed bidi. The painted runs
+come from the layout that measured, so measurement and paint agree; the caret
+layout is cosmic-text's (decision 15), shaped separately: line widths do not
+depend on run order, so only a line break that falls differently shows, and
+then the caret layout's line count can differ from the painted one. This is a
+divergence of the default build from Flutter's. Locked by
 `rtl_aligns_lines_right_without_setting_the_base_direction`
 (`src/parley_text/shape.rs`).
 
@@ -530,47 +538,142 @@ two realms' layouts apart (ADR-0092 §3). Keying the cache on the collection
 closes the case a single ambient collection never had: one painter measured
 through two collections.
 
-**Accepted trade-off:** the default build still measures on the process font
-system, so the context is lent and counted but not shaped on until ADR-0092
-§10 step 4 makes Parley measurement the default and removes `parley-layout`,
-together with folding `parley` into the default build. Locked by
-`measurement_follows_the_context_it_is_given` and
+**Accepted trade-off:** every signature that measures names the context, even
+where only one realm exists. The context is shaped on in every build (ADR-0092
+§10 step 4a). Locked by `measurement_follows_the_context_it_is_given`,
+`intrinsic_widths_follow_the_context_they_are_asked_through` and
 `a_registration_on_the_collection_invalidates_the_painter_cache`
-(`tests/text_painter_unit.rs`, under `parley`).
+(`tests/text_painter_unit.rs`, rows of `text_context_contract`), and at the
+realm level by `a_realm_measures_text_with_the_faces_of_its_own_collection`
+(`crates/flui-runtime/src/ui_realm/tests/text_context.rs`).
 
-### 15. Under `parley-layout`, measurement and paint use different shapers
+### 15. Carets and selection use a different shaper until ADR-0092 §10 step 5
 
-**Rule:** with `parley-layout`, size, baselines and intrinsic widths come from
-Parley on the realm's context; glyphs, carets, selection and hit-testing still
-come from the cosmic-text `TextLayout` the painter builds beside it. Parley
-metrics are unquantized, as cosmic-text's are, so a baseline reaches the
-device grid once, when painted (`(line_y * scale).round()`). The ellipsis is
-not shaped into the last kept line: `max_lines` stops the metrics at the kept
-lines, and the ellipsis only floors the intrinsic widths. Parley's width
-excludes trailing whitespace; cosmic-text's includes it.
+**Rule:** size, baselines, intrinsic widths and the painted glyphs come from
+one Parley layout on the realm's context; line metrics, carets, selection,
+word boundaries and hit-testing still come from a cosmic-text `TextLayout` of
+the same spans, built on the first such query. Parley metrics are
+unquantized, as cosmic-text's are, so a baseline reaches the device grid once,
+when its glyphs are placed (`round(baseline × scale)`). Parley's width
+excludes trailing whitespace; cosmic-text's includes it, and so does
+Flutter's max intrinsic width (recalled, not checked against a clone).
 
-**Why:** painted-as-measured returns when `DrawOp::Paragraph` carries runs
-from the same Parley layout (ADR-0092 §10 step 4) and carets come from its
-clusters (step 5). Until then measurement can move to the realm's context
-without a paint path, behind a feature that is off everywhere.
+The painter hands both shapers inputs they read alike:
 
-**Accepted trade-off:** under `parley-layout`, a face the two shapers resolve
-differently measures and paints in different faces; over the app's collection,
-fed from the host (decision 16), that is only the residue decision 16 lists,
-while a bundled-only collection (`FontCollection::new()`) measures every
-family it lacks, and every glyph a family it holds lacks, in Roboto. A truncated paragraph's
-painted ellipsis can overhang its measured width, and a face registered
-through `SharedFontSystem::register_font` reaches paint but not measurement
-(ADR-0092 §10 step 3b routes registration through the collection). On the same
-face the two agree: `tests/parley_metrics_oracle.rs` pins equal width and
-height and the same device baseline for the bundled Roboto at 13–32 px,
-default and 1.5 line height, scales 1–2 (its cosmic side registers Roboto,
-because the cosmic-text path loads the bundled Roboto only on a host with no
-fonts). `register_font_invalidates_a_laid_out_painter` is ignored under
-`parley-layout`, naming this decision in its `ignore` reason: registration
-reaches the process font system, not the collection Parley measures on.
+- a word wider than the line breaks between its glyphs: Parley shapes with
+  `OverflowWrap::BreakWord`, cosmic-text's buffers wrap `WordOrGlyph`.
+  `BreakWord` rather than `Anywhere`, so the min-content width stays the
+  widest word;
+- every styled run carries an explicit size, the default 14 px where no
+  ancestor sets one, because cosmic-text applies a run's letter spacing and
+  line height only at a size the run carries while Parley applies them at the
+  inherited one (`effective_style`);
+- `max_lines` of zero is no limit (`TextPainter::set_max_lines`,
+  `ParagraphSpec::max_lines`), as cosmic-text always read it.
 
-### 16. The collection mirrors the process font system's faces, generics and fallback order
+An empty paragraph measures one line of its style from the font: the line box
+and the baseline a line of text in that style has (13.19 px at 14 px Roboto),
+where cosmic-text put that baseline mid-line (8.40 px), which left an empty
+`Text` in a baseline-aligned row off its neighbours' baseline. An empty span
+shapes no run, so the root's style, scaled as a run's is, is the Parley
+paragraph's default style: its family, weight and line height shape the empty
+line as they would a line of text.
+
+**Why:** carets and selection move to Parley's clusters with gate 3's LTR,
+RTL and mixed-bidi tests (ADR-0092 §10 step 5); until then the caret queries
+keep the layout they were tested on.
+
+**Accepted trade-off:** where the two shapers read a paragraph differently,
+the caret layout and the painted glyphs disagree:
+
+- Hard breaks (decision 18): after a trailing `\n` or U+2029 the painted
+  paragraph has an empty last line, and the caret sits at the end of the line
+  before it instead of on it; after U+2028 or a lone `\r` the painted text
+  continues on a line the caret layout does not have, and at U+0085 or
+  U+001C–U+001E the caret layout breaks where paint does not. An editable
+  paragraph's caret and selection can then be a line away from its glyphs.
+- A caret after trailing whitespace in `EditableText` can sit past the
+  measured width, because the caret layout counts the whitespace.
+- A face the two shapers resolve differently shapes the carets in another
+  face. Over the app's collection, fed from the host (decision 17), that is
+  only the residue decision 17 lists. A bundled-only collection
+  (`FontCollection::new()`, standalone contexts and the hot-reload plugin)
+  measures and paints every family it lacks, and every glyph a family it holds
+  lacks, in Roboto.
+- A face loaded on the process font system alone (the `testing` door
+  `SharedFontSystem::register_font`) reaches the caret layout but neither
+  measurement nor paint; an app registers through its collection, which
+  reaches all three (decision 11).
+- A line narrower than a space's advance (2 px at 12–17 px) takes each space
+  of a glyph-broken paragraph onto a line of its own in the caret layout and
+  hangs it on Parley (`"ab cd"` at 0 px: 4 lines painted, 5 in the caret
+  layout).
+- An `Rtl` paragraph's lines can break differently in the two (decision 12).
+- A truncated paragraph's caret layout drops text by cosmic-text's rule, one
+  character at a time until its ellipsis fits, which can keep a character
+  more or less than the painted line.
+
+On the same face the two agree: `parley_metrics_round_to_todays_baseline`
+(`tests/parley_metrics_oracle.rs`) pins equal width and height between the
+measurement and the cosmic-text layout, and the device row the painted runs
+put the first baseline on against cosmic-text's, for the bundled Roboto by
+name, as the default family and as the monospace generic (decision 16), at
+13–32 px, default and 1.5 line height, scales 1–2.
+`measured_lines_are_painted_lines` pins that the measured height is the
+painted paragraph's for wrapped paragraphs, an overlong word, hard breaks,
+spacing and height set without a size, and zero `max_lines`;
+`an_empty_paragraph_measures_a_line_of_its_style` (`text_contract`,
+`tests/main.rs`) pins the empty paragraph;
+`measured_width_equals_painted_width_on_host_faces`
+(`tests/host_faces_oracle.rs`) pins the caret layout's size against the
+measurement on the host's faces.
+`a_face_registered_on_the_collection_reaches_measurement_paint_and_carets`
+(`tests/font_registration.rs`) pins that one registration moves all three.
+
+### 16. With `bundled-fonts`, the process font system's generic families bind to Roboto
+
+**Rule:** with `bundled-fonts`, the process font system installs the bundled
+Roboto on every host, in place of any host face named "Roboto", and binds
+sans-serif, serif, cursive, fantasy and monospace to it before the host
+generics are bound (`fonts::bind_generics_to_bundled`), as every
+`FontCollection` does; the app's collection, fed from the host, binds its
+generics to the families the process font system binds them to, so Roboto
+there too (decision 17). In the caret layout, a weight Roboto lacks snaps to
+the Regular it has, the monospace generic included (`font_resolve::snap_weight`).
+Text whose style names no family, names "Roboto" or names a generic is
+measured, painted and given carets in the bundled Roboto Regular on every host;
+paint synthesizes a bold weight on it instead of snapping (decisions 10 and 18).
+
+**Flutter:** the default family is the platform's (Segoe UI on Windows, the
+system font on Apple platforms, Roboto on Android). Recalled, not checked
+against a clone.
+
+**Why:** every collection binds its generics to the bundled Roboto, the
+standalone and bundled-only ones included, and carets are shaped on the
+process font system until ADR-0092 §10 step 5. Bound to a host face, default
+text would be measured and painted in Roboto on a bundled-only collection and
+its carets placed in Segoe UI, Arial or DejaVu. The host-fed collection (decision 17) would agree with either
+binding; default text stays the same face on every host.
+
+**Accepted trade-off:** on every desktop host:
+
+- default text is Roboto; an app that wants the host's face names the family,
+  which the fed collection measures in that face (decision 17);
+- a bold weight in the default family, in "Roboto" or in a generic paints as
+  Regular synthetically emboldened, because only Regular is bundled
+  (decision 10); a medium weight paints as Regular. Parley measures those runs
+  with Regular's advances;
+- `monospace` is the proportional Roboto, so `RenderErrorBox` and
+  `flui-material`'s error style lose their fixed pitch.
+
+Locked by the default-family, monospace and bold rows of
+`parley_metrics_round_to_todays_baseline` (`tests/parley_metrics_oracle.rs`),
+which fail without the binding (the bold monospace rows also without the
+monospace snap), and by `a_host_copy_does_not_replace_a_bundled_face`
+(`src/fonts.rs`), which fails when a host Roboto, Material Icons or
+CupertinoIcons keeps its place.
+
+### 17. The collection mirrors the process font system's faces, generics and fallback order
 
 **Rule:** the app's `FontCollection` is built with
 `FontCollection::with_host_faces` over the process font system, once per app
@@ -578,7 +681,8 @@ reaches the process font system, not the collection Parley measures on.
 face the process font system holds whose family it does not already hold, read
 from the same files (or shared from the same in-memory fonts). Its generic
 families name the families the process font system binds them to, system-ui
-naming sans-serif's. Both shapers resolve a style's family by one rule,
+naming sans-serif's: with `bundled-fonts`, Roboto (decision 16). Both
+shapers resolve a style's family by one rule,
 `resolve_family_name` (decision 8's rule, over the families each side holds),
 and Parley is handed that one family. A side holds a family only when spelled
 exactly as its fonts name it: fontdb matches exactly, so the Parley side
@@ -591,8 +695,9 @@ families, and the common list as the emoji generic. `FontCollection::new()`
 stays bundled-only, for standalone contexts, tests and the hot-reload plugin,
 and falls back to Roboto for every script.
 
-**Why:** measurement (Parley over the collection) and paint (cosmic-text over
-the process font system) must pick the same face for the same text. Over a
+**Why:** measurement and paint (Parley over the collection) and the caret
+layout (cosmic-text over the process font system, decision 15) must pick the
+same face for the same text. Over a
 bundled-only collection, text the bundled faces do not cover measured in
 another face than it painted in: `你好世界 emoji 😀` at 16 px measured 82.77 px
 and painted 134.01 px on Windows, and Cupertino's chain, which the host
@@ -607,8 +712,9 @@ ADR-0092 §10 step 6, so it mirrors one into the other instead.
 
 - cosmic-text's last resort, any face not forbidden, has no Parley
   counterpart beyond the trailing sans-serif family: a character neither the
-  script's list, the common list nor that family covers measures as notdef and
-  paints in whatever face that walk finds. The oracle skips such text.
+  script's list, the common list nor that family covers measures and paints as
+  notdef, while the caret layout shapes it in whatever face that walk finds.
+  The oracle skips such text.
 - Family names match exactly on both sides, where CSS matches them without
   regard to case: a style must spell a family as the fonts name it.
 - Parley appends the Han fallback to every cluster's fallback families
@@ -619,18 +725,19 @@ ADR-0092 §10 step 6, so it mirrors one into the other instead.
 - Only each script's default key is set, with no locale: the Parley path
   passes none. A change that passes one must set locale keys too.
 - Android's platform common list is empty, so the collection falls back to the
-  sans-serif family alone there while paint still walks its last resort;
+  sans-serif family alone there while the caret layout still walks its last
+  resort;
   unverified, since Android is clippy-only here.
 - Two scans decide what is carried: a file that disappears between them is
-  carried on the paint side and absent from the collection, and a family name
+  carried on the caret side and absent from the collection, and a family name
   fontdb records in another language only (fontique keeps the English or first
-  name) resolves on the paint side alone.
+  name) resolves on the caret side alone.
 - A host copy of a bundled family (Roboto, Material Icons, CupertinoIcons) is
-  not fed, so one family never mixes two copies. The process font system loads
-  the bundled Roboto only when the host has no faces at all, and an icon face
-  only when the host lacks that family; a host that installs one of them paints
-  it with its own copy and measures it with the bundled one until the process
-  font system prefers the bundled faces too.
+  not fed, so one family never mixes two copies. With `bundled-fonts` the
+  process font system replaces every host face of those families with the
+  bundled one (`fonts::install_bundled`), so both sides measure and paint the
+  bundled copy; an app that wants a host's own icon font registers it under
+  another family name.
 - The feed reads the host's font files a second time before the first frame
   (about 35 ms over 76 families on the Windows development host), until
   ADR-0092 §10 step 3b's event lets it run off the owner thread.
@@ -639,9 +746,9 @@ ADR-0092 §10 step 6, so it mirrors one into the other instead.
 
 Locked by `measured_width_equals_painted_width_on_host_faces` and
 `every_family_the_process_font_system_carries_resolves_in_the_collection`
-(`tests/host_faces_oracle.rs`, under `parley`, host-dependent: a row whose
-text only cosmic-text's last resort reaches is skipped, the Latin rows, a
-mis-cased family among them, never are),
+(`tests/host_faces_oracle.rs`, host-dependent: a row whose text only
+cosmic-text's last resort reaches is skipped, the Latin rows, a mis-cased
+family and a family the host names exactly among them, never are),
 `fontique_fallbacks_follow_the_paint_chain_in_order`,
 `the_sans_serif_family_ends_every_script_fallback` and
 `the_emoji_generic_is_the_common_list` (`src/text_layout/fallback_chain.rs`),
@@ -651,6 +758,78 @@ the row `the_collection_resolves_the_family_the_font_system_does` of
 `family_resolution_contract` (`src/text_layout/font_resolve.rs`), and
 `a_missing_path_is_skipped_and_the_feed_completes`
 (`src/text_layout/context.rs`).
+
+### 18. Text crosses the display list as `ShapedParagraph`, with its own face table
+
+**Rule:** `DrawOp::Paragraph` carries an `Arc<ShapedParagraph>` built from the
+Parley layout that measured the paragraph. Each run names its face by an
+index into the paragraph's own table of `FontFace`s, each a `FontBlob` (the
+font bytes, shared, and the blob id a `GlyphKey` names them by) and a face
+index. Glyphs are ids with logical positions; the subpixel bin, the device row
+and the raster size are computed at placement (`ShapedRun::placed_glyphs`),
+under the transform the paragraph is replayed with. Variation coordinates
+travel raw and are interned by the raster side's registry
+(`FontRegistry::prepare_run`), whose `VariationId`s mean nothing to another
+registry. Within its box each line starts at the left edge under `Ltr` and
+ends at the right edge under `Rtl`; the box is as wide as the measured width,
+and the paint offset places it within the width it was laid out at.
+
+**Why:** a retained layer replays a picture recorded frames earlier, so a
+table of the blobs this frame's recorders named would miss a replayed
+paragraph's faces; a paragraph that carries its faces is complete by
+construction, for the cost of one shared handle per distinct face per
+paragraph. Holding the handle also keeps fontique's weakly cached blob, and so
+its id, alive while any paragraph or registry names it. The bin and the device
+row depend on the device transform, which only the replay knows. Parley aligns
+a line within the width it was broken at; the painter's box is the measured
+width, so lines are re-aligned in it, or an `Rtl` paragraph would be shifted
+twice.
+
+**Accepted trade-off:** paint follows Parley where it differs from the
+cosmic-text paint it replaced:
+
+- Synthetic bold reaches paint (decision 10): bold on the bundled Roboto,
+  which has only Regular, paints emboldened, where cosmic-text painted
+  Regular (`synthetic_bold_inks_more_than_regular`).
+- Hard breaks are Parley's: a trailing `\n` or U+2029 adds an empty line
+  (`"A\n"` is two lines, the owner's choice; `a_trailing_newline_is_a_line`);
+  U+2028 and `\r` break (`a_line_separator_breaks`,
+  `latin_breaks_at_a_line_separator`, `cjk_breaks_at_a_line_separator`,
+  `colour_emoji_on_line_two`); CR LF breaks once, as `\n` does, so
+  `"A\r\nB"` is two lines: Parley would break at the CR and again at the LF,
+  so the painter hands it a CR directly before an LF as a space, the CR's
+  one byte, and every byte offset into the layout still indexes the text
+  (`crlf_breaks`, `crlf_puts_b_on_line_two`; the owner's decision, ADR-0092
+  §10 step 4);
+  U+0085 does not break (`next_line_does_not_break`).
+- Fallback is per cluster over the collection's fallback families, where
+  cosmic-text walked per word, so a mixed-script run can pick another face.
+- An `Rtl` line ends at its box's right edge
+  (`arabic_rtl_right_aligns_each_line`).
+- Snapshots print the requested weight, not the weight cosmic-text snapped
+  to: a W500 or W700 run on the bundled Roboto reads `weight=500` or
+  `weight=700`.
+- The ellipsis is shaped on Parley and measured: text is dropped until the
+  last kept line with the ellipsis fits the width, so the painted line no
+  longer overhangs the measured width
+  (`truncated_paragraph_paints_what_it_measured`, `tests/text_overflow_unit.rs`).
+
+The raster side's registry is append-only and keys a face by its blob's id,
+not its bytes: every `FontCollection` build and every `register_font` wraps
+the bytes in a new blob, so registering the same file again, or building a
+second collection over the bundled faces (the performance overlay's
+`WgpuPainter::draw_label` builds its own), adds one more face to each
+painter's registry and rasterizes its glyphs again under new keys; neither is
+released while the painter lives. The growth is bounded by how often an app
+registers or builds a collection, not by frames.
+
+The ink bounds a damage extent is built from grow by the synthetic bold and
+oblique the rasterizer applies (`paragraph_extent_covers_every_rasterized_glyph`,
+`tests/damage_extent.rs`, whose oracle is the rasterizer itself). The baseline
+rule is pinned against cosmic-text's rows by
+`parley_metrics_round_to_todays_baseline` and read back by
+`a_2x_baseline_row`; the readback rows are `parley_runs_read_back`
+(`flui-engine`, `paragraph_readback_tests.rs`).
 
 ---
 

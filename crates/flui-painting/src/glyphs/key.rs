@@ -146,7 +146,7 @@ impl Synthesis {
 /// cosmic-text path truncates a glyph's row before binning, so its vertical
 /// bin is always zero, and this key keeps that.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct ParleyGlyphKey {
+pub struct GlyphKey {
     face: FaceKey,
     glyph_id: u16,
     size_bits: u32,
@@ -156,7 +156,7 @@ pub struct ParleyGlyphKey {
     synthesis: Synthesis,
 }
 
-impl ParleyGlyphKey {
+impl GlyphKey {
     /// Hinted, default instance, no synthesis. `size` is in device pixels and
     /// kept exactly (bit equality); `-0.0` is stored as `0.0`.
     #[must_use]

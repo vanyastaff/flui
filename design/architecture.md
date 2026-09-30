@@ -718,7 +718,7 @@ acceptance, ADR-0016 and ADR-0059; decision D12.
   subpixel bin) and a `GlyphRasterizer` trait, instead of `Paragraph { layout: Arc<TextLayout> }`
   (`crates/flui-painting/src/display_list/command.rs:167-174`). Glyph keys carry the font blob's
   identity instead of cosmic-text's process-global key
-  (`crates/flui-painting/src/text_layout/glyphs.rs:23`).
+  (flui-painting's `text_layout/glyphs.rs:23`, until ADR-0092 §10 step 4 removed it).
 - The atlas lives on the `GpuContext` and rasterisation happens on the raster side.
 - ICU4X is the one Unicode source. The system font scan is asynchronous: bundled fonts are
   available in the first frame, system fonts arrive as a realm event.

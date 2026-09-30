@@ -1,25 +1,31 @@
-//! What a rasteriser reads off a shaped paragraph: placed glyphs keyed for an
-//! atlas, and the bitmap one key rasterises to.
+//! The raster side of text (ADR-0092 §5): the key that names one glyph
+//! bitmap, the registry that keeps the faces keys name alive, the rasterizer
+//! that draws them, and what an atlas reads off a paragraph.
 //!
-//! The engine draws text from these two types and nothing else — the shaped
-//! buffer never leaves this crate. A [`GlyphKey`] is opaque: the engine's
-//! atlas hashes it and hands it back to [`SharedFontSystem::rasterize`]; what
-//! it encodes (face, glyph index, size, weight, subpixel bin, synthesis
-//! flags) is this crate's business.
+//! The engine draws text from these types and a
+//! [`ShapedParagraph`](crate::display_list::ShapedParagraph), and nothing
+//! else: no shaper type crosses. A [`GlyphKey`] names its face by font blob
+//! id and face index, never by a process table; a [`FontRegistry`] holds the
+//! blob for as long as a key may name it.
 //!
-//! [`SharedFontSystem::rasterize`]: super::SharedFontSystem::rasterize
+//! - `key` — [`GlyphKey`] and its parts.
+//! - `registry` — [`FontRegistry`]: faces and interned variation instances.
+//! - `swash` — [`SwashRasterizer`], swash's scaler with the sources, format
+//!   and offsets cosmic-text's rasterizer drew with.
+//!
+//! Everything here is owned and used through `&mut`: no `static`, no lock.
+
+mod key;
+mod registry;
+mod swash;
+
+pub use crate::error::RegisterFaceError;
+pub use key::{FaceKey, GlyphKey, SubpixelBin, Synthesis, VariationId};
+pub use registry::{FontBytes, FontRegistry, RunKey};
+pub use swash::SwashRasterizer;
+pub(crate) use swash::fake_bold_width;
 
 use crate::styling::Color;
-
-/// Identifies one rasterised glyph bitmap.
-///
-/// Two glyphs with equal keys rasterise to identical bitmaps, so an atlas
-/// keyed on this shares them. A key stays valid for the life of the process:
-/// the font database is append-only
-/// ([`FontCollection::register_font`](super::FontCollection::register_font)
-/// adds and nothing removes), so the face it names is never removed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct GlyphKey(pub(super) cosmic_text::CacheKey);
 
 /// One glyph of a paragraph, placed in device pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

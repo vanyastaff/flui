@@ -10,8 +10,8 @@
 //! `hot_reload.rs`, `config.rs`) are untouched — they remain until the
 //! change that retires each singleton they reach for.
 //! `flui-engine/src/wgpu/text.rs`'s ambient reach for painting has since
-//! closed: `GlyphAtlas::new` takes an injected `SharedFontSystem`
-//! parameter instead of calling `PaintingBinding::instance()` itself. This
+//! closed: the engine's glyph atlas owns a `SwashRasterizer` over the faces
+//! each paragraph carries, instead of calling `PaintingBinding::instance()`. This
 //! is not a forwarding shim: no old API is preserved-but-deprecated here,
 //! and no ambient access point this change does not touch is claimed as
 //! closed.
@@ -70,8 +70,8 @@ use flui_runtime::execution::{ExecutionServices, HostExecutors};
 /// [`FontCollection`] (ADR-0092 §2), which every realm builds its own
 /// `TextContext` from. It initializes the shared font system through
 /// [`flui_painting::shared_font_system`] and feeds the collection from it
-/// ([`FontCollection::with_host_faces`], ADR-0092 §7), so text measures in
-/// the face it paints with. "Per owner thread" is per app while
+/// ([`FontCollection::with_host_faces`], ADR-0092 §7), so text measures and
+/// paints in the host's faces, and its carets are shaped in the same ones. "Per owner thread" is per app while
 /// ADR-0091 fixes one owner thread per process. Semantics state belongs
 /// to each presentation's `SemanticsHost`; scheduling belongs to each realm
 /// (see `flui_runtime`'s `RealmServices::construct`). The retired `SemanticsBinding`
@@ -114,22 +114,22 @@ impl SharedEngineServices {
         // the CONSTRUCTING owner of the free-standing `FONT_SYSTEM`
         // `OnceLock` slot (`flui-painting/src/text_layout/layout.rs`):
         // initialize it explicitly, here, at a known point, rather than
-        // leaving it to whichever text-measurement call happens to run
-        // first on this thread. The read path stays ambient on layout hot
-        // paths: this is a known exclusion, not closed here -- injecting the
-        // font system into every `perform_layout` text-measurement call is a
-        // separate, larger follow-up.
+        // leaving it to whichever text layout happens to shape first on this
+        // thread. Measurement does not read it: layout, intrinsics and dry
+        // queries measure on each realm's `TextContext` over `fonts` below,
+        // and paint draws that layout's runs. The caret layout still shapes
+        // on it, ambiently, until ADR-0092 §10 step 5.
         //
         // The collection is fed from that font system's discovery here, on
         // the owner thread before the first frame: text measured before a
         // later feed would stay measured in other faces until something
         // re-laid it out. A face registered later goes through the collection
         // (`AppRuntime::register_font`), which re-lays out what it changes.
-        let paint = flui_painting::shared_font_system();
+        let carets = flui_painting::shared_font_system();
 
         Self {
             accessibility_features: RwLock::new(AccessibilityFeatures::default()),
-            fonts: FontCollection::with_host_faces(&paint),
+            fonts: FontCollection::with_host_faces(&carets),
         }
     }
 }
@@ -146,8 +146,8 @@ struct FontRegistrations {
     digests: HashSet<FontDigest>,
     /// Fonts accepted before this thread resolved its services, registered
     /// on the collection when it is built. On a thread that never builds a
-    /// realm they stay here: neither paint nor measurement ever gains them,
-    /// so the two cannot disagree.
+    /// realm they stay here: neither the collection nor the caret layout
+    /// ever gains them, so the two cannot disagree.
     pending: Vec<Vec<u8>>,
 }
 
@@ -890,12 +890,13 @@ impl AppRuntime {
     }
 
     /// Registers `font_bytes` on the app's font collection, which loads the
-    /// face into the process font system paint shapes with too.
+    /// face into the process font system the caret layout shapes with too.
     ///
     /// Before this thread has built a realm, the bytes are checked and held,
     /// and registered when the first realm resolves the services: a thread
     /// that never runs the app never scans the host's fonts for them, and
-    /// never loads a face into paint that no measurement of the app gains.
+    /// never loads a face into the caret layout that no measurement of the
+    /// app gains.
     /// Returns whether the collection gained the face now, so that the
     /// realms must be told.
     ///

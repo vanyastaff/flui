@@ -1,14 +1,14 @@
 //! The glyph atlas: rasterised glyph bitmaps packed into two GPU pages.
 //!
 //! The engine does not shape text and does not rasterise it either: a
-//! paragraph arrives as an [`flui_painting::TextLayout`] the recorder shaped
-//! against the shared font system (ADR-0065), and every glyph bitmap comes
-//! from the atlas's [`GlyphRasterizer`], keyed by the opaque key the layout
-//! places (ADR-0067). By default that is the cosmic-text font system,
-//! [`SharedFontSystem`], keyed by [`flui_painting::GlyphKey`]; ADR-0092 §10
-//! moves it to the Parley path's rasterizer. What the engine owns is the
-//! cache: where each bitmap sits, how long it stays, and the bind group the
-//! glyph pipeline samples it through.
+//! paragraph arrives as a [`flui_painting::ShapedParagraph`] the recorder
+//! shaped and measured (ADR-0065, ADR-0092 §4), and every glyph bitmap comes
+//! from the atlas's [`GlyphRasterizer`], keyed by the key each run places
+//! (ADR-0067). The engine's atlas is a [`TextAtlas`]: swash drawing the faces
+//! the paragraphs' runs carry, which the atlas's own registry keeps alive, so
+//! rasterization takes no lock and shares no state with any realm. What the
+//! engine owns is the cache: where each bitmap sits, how long it stays, and
+//! the bind group the glyph pipeline samples it through.
 //!
 //! A rasterizer is trusted to be deterministic, but not to the point of a
 //! GPU validation panic: an image whose data does not match its size is not
@@ -36,7 +36,8 @@
 use std::sync::Arc;
 
 use etagere::{AllocId, BucketedAtlasAllocator, size2};
-use flui_painting::{GlyphContent, GlyphImage, GlyphRasterizer, SharedFontSystem};
+use flui_painting::glyphs::SwashRasterizer;
+use flui_painting::{GlyphContent, GlyphImage, GlyphRasterizer};
 use rustc_hash::FxHashMap;
 
 /// Where a glyph's bitmap sits in the atlas, and how it hangs off its origin.
@@ -283,15 +284,18 @@ fn create_page_texture(
     })
 }
 
+/// The atlas paragraphs are recorded against: swash over the faces their
+/// runs carry.
+pub(crate) type TextAtlas = GlyphAtlas<SwashRasterizer>;
+
 /// The rasterised-glyph cache the glyph pipeline samples.
 ///
-/// Generic over where bitmaps come from; the default is the cosmic-text font
-/// system the paragraphs were shaped against.
-pub(crate) struct GlyphAtlas<R: GlyphRasterizer = SharedFontSystem> {
+/// Generic over where bitmaps come from: the engine's is a [`TextAtlas`],
+/// the tests' a scripted rasterizer.
+pub(crate) struct GlyphAtlas<R: GlyphRasterizer> {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
-    /// Where bitmaps come from. Owned by the atlas and taken by `&mut`; the
-    /// default's font database is never mutated here.
+    /// Where bitmaps come from. Owned by the atlas and taken by `&mut`.
     rasterizer: R,
     mask: Page,
     color: Page,
@@ -336,6 +340,12 @@ impl<R: GlyphRasterizer> GlyphAtlas<R> {
             frame: 0,
             reported_full: false,
         }
+    }
+
+    /// The rasterizer, so a recorder can hand it the faces a run names
+    /// before asking for the run's glyphs.
+    pub(crate) fn rasterizer_mut(&mut self) -> &mut R {
+        &mut self.rasterizer
     }
 
     /// The bind group the glyph pipeline samples the two pages through.
@@ -519,7 +529,7 @@ mod rasterizer_tests {
     use std::sync::Arc;
 
     use flui_painting::GlyphRasterizer;
-    use flui_painting::parley_text::{FaceKey, ParleyGlyphKey, SubpixelBin, SwashRasterizer};
+    use flui_painting::glyphs::{FaceKey, GlyphKey, SubpixelBin, SwashRasterizer};
 
     use super::GlyphAtlas;
 
@@ -549,8 +559,8 @@ mod rasterizer_tests {
         rasterizer
     }
 
-    fn key(glyph_id: u16, size: f32) -> ParleyGlyphKey {
-        ParleyGlyphKey::new(FACE, glyph_id, size, SubpixelBin::Zero)
+    fn key(glyph_id: u16, size: f32) -> GlyphKey {
+        GlyphKey::new(FACE, glyph_id, size, SubpixelBin::Zero)
     }
 
     #[test]

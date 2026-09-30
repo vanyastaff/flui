@@ -1,11 +1,11 @@
 ### Added
 
 - **`flui::register_font`** and **`FontRegistrationError`** (`flui_app::register_font`): registers
-  a font's faces with the app, before it starts or while it runs, for measurement and paint
-  alike; every realm lays its text out again on its next frame. The same bytes registered twice
+  a font's faces with the app, before it starts or while it runs, for measurement, paint and
+  carets alike; every realm lays its text out again on its next frame. The same bytes registered twice
   are refused (`AlreadyRegistered`). A registration made before the app's first window is
   checked and held until the window builds the app's font collection; one made on a thread that
-  never runs the app changes neither paint nor measurement, so register on the app's thread
+  never runs the app changes neither carets nor measurement, so register on the app's thread
   ([ADR-0092](/docs/adr/ADR-0092-per-realm-text-over-parley.md) §2).
 - **`FontCollection::generation`** (`flui-painting`): how many registrations added a face.
 - **`FontCollection::check_font`** (`flui-painting`): whether a collection fed from the host
@@ -19,7 +19,7 @@
 
 - `FontCollection::register_font` exists in every build, not only under `parley`. On a
   collection built by `FontCollection::with_host_faces` it loads the face into that process font
-  system too, so the face paints as it measures. Bytes either side finds no face in (a face
+  system too, so carets are laid out in the face that measures and paints. Bytes either side finds no face in (a face
   with no `cmap` table, which fontdb loads and fontique does not) are refused before either side
   changes.
 - `PipelineOwner::drain_pending_dirty` applies a font collection change after the dirty
@@ -28,7 +28,7 @@
 ### Removed
 
 - `SharedFontSystem::register_font` from the default build; it remains under the `testing`
-  feature as a paint-only door for tests. Migrate `shared_font_system().register_font(&bytes)?`
+  feature as a caret-only door for tests. Migrate `shared_font_system().register_font(&bytes)?`
   to `flui::register_font(&bytes)?`.
 
 ### Fixed

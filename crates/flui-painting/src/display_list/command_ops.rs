@@ -230,10 +230,12 @@ impl DrawOp {
                 rect: path.compute_bounds(),
                 spread: *elevation * SHADOW_REACH,
             }),
-            DrawOp::Paragraph { layout, offset, .. } => {
-                let size = layout.metrics().size();
+            DrawOp::Paragraph {
+                paragraph, offset, ..
+            } => {
+                let size = paragraph.size();
                 let layout_box = Rect::from_xywh(offset.dx, offset.dy, size.width, size.height);
-                match layout.ink_bounds() {
+                match paragraph.ink_bounds() {
                     Some(ink) => bounded(layout_box.union(&ink.translate_offset(*offset))),
                     None => Some(DamageExtent::Unbounded),
                 }
@@ -344,8 +346,10 @@ impl DrawOp {
             // object reports. A text op that contributed nothing here would
             // silently drop visible text from every bounds computation built
             // on this.
-            DrawOp::Paragraph { layout, offset, .. } => {
-                let size = layout.metrics().size();
+            DrawOp::Paragraph {
+                paragraph, offset, ..
+            } => {
+                let size = paragraph.size();
                 Some(Rect::from_xywh(
                     offset.dx,
                     offset.dy,

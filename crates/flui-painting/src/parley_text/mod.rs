@@ -1,31 +1,19 @@
-//! The Parley path (ADR-0092): paragraph shaping on a realm's
-//! [`TextContext`](crate::TextContext), and the raster side (§5) — a glyph
-//! key that names its face by font blob, the registry that keeps those faces
-//! alive, and a swash rasterizer that draws the keys.
+//! Paragraph shaping on a realm's [`TextContext`](crate::TextContext)
+//! (ADR-0092 §1).
 //!
-//! Layout reaches this module through `TextPainter` under `parley-layout`
-//! (ADR-0092 §10 step 3): size, baselines and intrinsics come from
-//! [`ParagraphLayout`]. Shaped runs join the display list, with the engine's
-//! atlas on [`SwashRasterizer`], in step 4. It holds no `static` and takes
-//! no lock; every object is owned and used through `&mut`.
+//! `TextPainter` measures every paragraph here and paints the same layout:
+//! size, baselines and intrinsics come from [`ParagraphLayout`], and
+//! [`ParagraphLayout::to_shaped`] turns it into the
+//! [`ShapedParagraph`](crate::display_list::ShapedParagraph) the display list
+//! carries. It holds no `static` and takes no lock; every object is owned and
+//! used through `&mut`. The raster side is [`crate::glyphs`].
 //!
 //! - `shape` — [`ParagraphSpec`] in, [`ParagraphLayout`] out, through
 //!   `TextContext::shape`.
-//! - `key` — [`ParleyGlyphKey`] and its parts.
-//! - `registry` — [`FontRegistry`]: faces and interned variation instances.
-//! - `swash` — [`SwashRasterizer`], bit-identical to the cosmic-text path's
-//!   scaler for the same face, glyph, size and bin.
 
-mod key;
-mod registry;
 mod shape;
-mod swash;
 
-pub use crate::error::RegisterFaceError;
-pub use key::{FaceKey, ParleyGlyphKey, SubpixelBin, Synthesis, VariationId};
-pub use registry::{FontBytes, FontRegistry};
 pub(crate) use shape::SpanBrush;
 #[cfg(test)]
 pub(crate) use shape::holds_exactly;
 pub use shape::{ParagraphLayout, ParagraphSpec};
-pub use swash::SwashRasterizer;
