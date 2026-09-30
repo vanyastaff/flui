@@ -1,5 +1,4 @@
 use crate::BuildTarget;
-use crate::build::output::prepare_output_dir;
 use crate::build::platform::BuildUnit as CargoBuildUnit;
 use crate::build::{
     AndroidBuilder, AppBundle, BuilderContextBuilder, DesktopBuilder, IosBuilder, Platform,
@@ -345,7 +344,7 @@ fn build_android(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
 
     let ctx = builder.build();
 
-    prepare_output_dir(&ctx)?;
+    std::fs::create_dir_all(&ctx.output_dir)?;
 
     ui::emit("build.phase", &serde_json::json!({ "name": "validate" }));
     spinner.start("Validating Android environment...");
@@ -420,7 +419,6 @@ fn build_ios(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<
         builder = builder.with_output_dir(out.clone());
     }
     let ctx = builder.build();
-    prepare_output_dir(&ctx)?;
 
     ui::emit("build.phase", &serde_json::json!({ "name": "validate" }));
     spinner.start("Validating iOS environment...");
@@ -483,7 +481,7 @@ fn build_web(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<Vec<
 
     let ctx = builder.build();
 
-    prepare_output_dir(&ctx)?;
+    std::fs::create_dir_all(&ctx.output_dir)?;
 
     ui::emit("build.phase", &serde_json::json!({ "name": "validate" }));
     spinner.start("Validating Web environment...");
@@ -544,7 +542,7 @@ fn build_desktop(options: &BuildOptions, output: Option<&PathBuf>) -> CliResult<
 
     let ctx = builder.build();
 
-    prepare_output_dir(&ctx)?;
+    std::fs::create_dir_all(&ctx.output_dir)?;
 
     let spinner = ui::spinner();
     spinner.start("Building Desktop binary...");
@@ -621,7 +619,7 @@ fn build_specific_platform(
 
     let ctx = builder.build();
 
-    prepare_output_dir(&ctx)?;
+    std::fs::create_dir_all(&ctx.output_dir)?;
 
     let spinner = ui::spinner();
     spinner.start(format!("Building for target: {target_triple}..."));
@@ -700,7 +698,7 @@ fn build_macos_universal(
     }
     let ctx = builder.build();
     let output_dir = ctx.output_dir.clone();
-    prepare_output_dir(&ctx)?;
+    std::fs::create_dir_all(&output_dir)?;
     let scratch = output_dir.join(".slices");
 
     let mut slice_paths = Vec::new();

@@ -92,7 +92,7 @@ it. Inside the FLUI checkout, generate against the local source instead:
 | `flui test` | `cargo test` with `--unit`, `--integration`, `--release`, and harness args after `--`. |
 | `flui analyze` | `cargo clippy --workspace --all-targets -D warnings` (`--pedantic`, `--fix`). |
 | `flui format` | `cargo fmt --all` (`--check` exits 4 when unformatted). |
-| `flui clean` | Cargo artifacts and each `--output` directory a build created; `--platform <android\|ios\|web\|desktop>` cleans one platform's outputs instead, and `--deep` adds what platform build tools write in `platforms/`. |
+| `flui clean` | Cargo artifacts and every platform's build output; `--platform <android\|ios\|web\|desktop>` cleans one platform's output instead, and `--deep` adds what platform build tools write in `platforms/`. A directory given to `flui build --output` is yours to clean. |
 | `flui doctor` | Environment checks with fix hints; `--fix` installs missing `rustup` targets. |
 | `flui devices` | Desktop, Android (`adb`), iOS simulators and browsers, with the ids `--device` takes. |
 | `flui emulators list|launch` | List and start Android AVDs and iOS simulators. |

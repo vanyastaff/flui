@@ -3,8 +3,9 @@
 - Build outputs (APK, `.app`, web page) go to `<target-dir>/flui-out/<project>/<platform>/`, where
   `<target-dir>` is the one cargo reports (following `CARGO_TARGET_DIR`, `build.target-dir` and an
   enclosing workspace) and `<project>` is the package in the project directory, instead of
-  `<project>/target/flui-out/<platform>/`. `cargo clean` removes
-  them, and projects sharing a target-dir keep apart.
+  `<project>/target/flui-out/<platform>/`. `cargo clean` removes them, and members of one
+  workspace keep apart; same-named projects sharing a target-dir share them, as their same-named
+  binaries do.
 
 ### Fixed
 
@@ -21,18 +22,10 @@
 - The web `index.html` and `manifest.json` no longer reference a favicon and icons the scaffold
   never writes.
 - `flui clean --platform <android|ios|web|desktop>` (`desktop` is new, one output directory for
-  every desktop target) removes the build's output in
-  `<target-dir>/flui-out/<project>/<platform>/`, and each `--output` directory a build created (or found empty): the
-  build leaves a `.flui-out` marker there naming the platform and project, a directory that held
-  anything before the first build into it is never removed, and a build refuses a directory whose
-  marker names another platform or project, or that lies inside the output root. The record of
-  claimed directories lives in the project's `.flui/` (ignored by the generated `.gitignore`), so
-  `cargo clean` and a renamed package keep it. For web it removed `platforms/web/pkg/`, which no build writes.
-  `flui clean` without `--platform` removes every platform's `--output` directories too, before
-  `cargo clean` removes the record of them; `--deep` still adds what the platform build tools write
-  in `platforms/`. The record of those directories is only an index: losing or damaging it
-  never fails a build or a clean, and the next build
-  into a claimed directory records it again.
-  A directory `flui clean` cannot remove (an executable still running on Windows) no longer stops
-  it: the rest, the other platforms and `cargo clean` still run, the failed claim is kept for the
-  next clean, and the first failure is the command's error.
+  every desktop target) removes the build's output in `<target-dir>/flui-out/<project>/<platform>/`;
+  for web it removed `platforms/web/pkg/`, which no build writes. `flui clean` without
+  `--platform` removes every platform's default output before `cargo clean`, and `--deep` adds
+  what the platform build tools write in `platforms/`. An `--output` directory is the user's to
+  clean. A directory `flui clean` cannot remove or inspect (an executable still running on
+  Windows) no longer stops it: the rest, the other platforms and `cargo clean` still run, and the
+  first failure is the command's error.

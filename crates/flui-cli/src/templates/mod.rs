@@ -43,9 +43,6 @@ const GITIGNORE_TEMPLATE: &str = r"# Build artifacts (each platforms/<name>/.git
 # platform's build writes there)
 /target
 
-# FLUI's record of the --output directories builds created
-/.flui/
-
 # IDE
 .vscode/
 .idea/
