@@ -633,9 +633,11 @@ mod tests {
             let tables = usize::from(u16::from_be_bytes([bytes[4], bytes[5]]));
             let record = (0..tables)
                 .map(|table| 12 + table * 16)
-                .find(|&record| &bytes[record..record + 4] == b"cmap")
-                .expect("the probe face has a cmap table");
-            bytes[record] = b'z';
+                .find(|&record| &bytes[record..record + 4] == b"cmap");
+            assert!(record.is_some(), "the probe face has a cmap table");
+            if let Some(record) = record {
+                bytes[record] = b'z';
+            }
             bytes
         }
 
