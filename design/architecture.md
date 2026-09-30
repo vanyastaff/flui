@@ -243,7 +243,7 @@ inline test modules are large.
 | flui-scheduler | 2, 20.6k | S / internal | Keep, lighten | An owner-local core with a `Send` waker instead of the mutexes inside the scheduler. `AsyncDriver` and `Spawner` stay here as `!Send` types. `TIME_DILATION` (`crates/flui-scheduler/src/config.rs:43`) becomes a property of each presentation's clock. |
 | flui-painting | 2, 7.0k | S / internal | Keep | `FONT_SYSTEM` (`crates/flui-painting/src/text_layout/layout.rs:124`) becomes an injected per-realm `TextContext` ([ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md)). |
 | flui-interaction | 2, 40.3k | S / internal | Keep | Depends on `flui-platform-api` instead of `flui-platform`. The gesture arena keeps its shape ([ADR-0086](../docs/adr/ADR-0086-signal-writes-through-event-context.md)). |
-| flui-assets | 2, 5.1k | S / internal | Keep, detach from the runtime | Delete `AssetRegistry::global()` (`crates/flui-assets/src/registry/mod.rs:83`) and its own tokio runtime (`crates/flui-assets/src/registry/bridge.rs:66`). |
+| flui-assets | 2, 5.1k | S / internal | Keep, detach from the runtime | Delete its own tokio runtime (`BridgeRuntime`, `crates/flui-assets/src/registry/bridge.rs`); `AssetRegistry::global()` is already deleted. |
 | flui-log | 2, 3.7k | S / internal | Keep | Linked only by composition roots; merging it into the app closes no exit criterion. |
 | flui-layer | 3, 5.0k | R / internal | Keep, grow | Takes the GPU-free lowering, `LayerStateStack`, `RasterBackend` (`crates/flui-engine/src/raster.rs:100`), `PresentDisposition` (`raster.rs:54`) and a wgpu-free `RasterError`; stable layer identity, a differ, `DamageRegion::Partial`, `Layer::External`. |
 | flui-semantics | 3, 10.9k | S / internal | Keep | Action targets run on the owner lane; the role and action vocabulary moves to `flui-protocol` (§11.3). |
@@ -572,7 +572,6 @@ The known entries, each with its exit:
 | `REQUEST_REBUILD` | `crates/flui-hot-reload/src/dispatch.rs:24` | Subsecond runtime hook ([ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md)). |
 | `REGISTRY_STACK` | `crates/flui-view/src/key/registry.rs:204` | Realm-owned GlobalKey scope ([ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md) removes its `ManuallyDrop` form). |
 | `NAVIGATOR_COMMAND_TARGETS` | `crates/flui-widgets/src/navigator/navigator.rs:91` | Router handle from `init_state` ([ADR-0093](../docs/adr/ADR-0093-router-is-the-primary-navigation-api.md)). |
-| `AssetRegistry::global` | `crates/flui-assets/src/registry/mod.rs:83` | Realm image-cache handle ([ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md)). |
 
 The list above is not the allowlist. The allowlist is the `[package.metadata.flui] globals` key
 of each crate manifest, seeded by the scan itself in the change that added the gate; it can only
