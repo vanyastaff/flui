@@ -10,12 +10,15 @@ use std::fmt;
 
 use crate::styling::Color;
 use crate::typography::{FontStyle, TextDirection, TextStyle};
+use cosmic_text::fontdb::Family;
+use parley::fontique::Collection;
 use parley::style::{
     FontFamily, FontFamilyName, FontStyle as ParleyFontStyle, FontWeight, GenericFamily,
     LineHeight, StyleProperty,
 };
 use parley::{Alignment, AlignmentOptions, Layout};
 
+use crate::text_layout::font_resolve::resolve_family_name;
 use crate::text_layout::{TextContext, TextLayoutResult, paint_color};
 
 /// What one paragraph is shaped from.
@@ -159,10 +162,33 @@ impl TextContext {
         // a baseline reaches the device grid once, when it is painted
         // (`(line_y * scale).round()`); `tests/parley_metrics_oracle.rs` pins
         // the agreement.
+        // Families are resolved against the collection before the builder
+        // borrows it: the same rule the process font system resolves with.
+        let collection = &mut self.font_cx.collection;
+        let default_family = family(collection, None);
+        let default_properties = paragraph
+            .default_style
+            .map(|style| properties(collection, style))
+            .unwrap_or_default();
+        let mut start = 0;
+        let span_properties: Vec<_> = paragraph
+            .spans
+            .iter()
+            .map(|(span, style)| {
+                let range = start..start + span.len();
+                start = range.end;
+                let properties = style
+                    .as_ref()
+                    .map(|style| properties(collection, style))
+                    .unwrap_or_default();
+                (range, properties)
+            })
+            .collect();
+
         let mut builder = self
             .layout_cx
             .ranged_builder(&mut self.font_cx, &text, 1.0, false);
-        builder.push_default(family(None));
+        builder.push_default(default_family);
         builder.push_default(StyleProperty::FontSize(paragraph.font_size));
         // No explicit height is 1.2 em of each run's own size, so a larger
         // span grows its line box, as on the cosmic-text path; an explicit
@@ -171,19 +197,12 @@ impl TextContext {
             Some(height) => LineHeight::Absolute(height),
             None => LineHeight::FontSizeRelative(1.2),
         }));
-        if let Some(style) = paragraph.default_style {
-            for property in properties(style) {
-                builder.push_default(property);
-            }
+        for property in default_properties {
+            builder.push_default(property);
         }
-        let mut start = 0;
-        for (span, style) in paragraph.spans {
-            let range = start..start + span.len();
-            start = range.end;
-            if let Some(style) = style {
-                for property in properties(style) {
-                    builder.push(property, range.clone());
-                }
+        for (range, properties) in span_properties {
+            for property in properties {
+                builder.push(property, range.clone());
             }
         }
         let mut layout = builder.build(&text);
@@ -202,17 +221,26 @@ impl TextContext {
     }
 }
 
-/// The family list a style asks for: its family, its fallbacks, then
-/// sans-serif, so a family the collection lacks shapes in the default face.
-fn family(style: Option<&TextStyle>) -> StyleProperty<'static, SpanBrush> {
-    let named = style
-        .into_iter()
-        .flat_map(|style| style.font_family.iter().chain(&style.font_family_fallback))
-        .map(|name| FontFamilyName::Named(Cow::Owned(name.clone())));
-    let families: Vec<_> = named
-        .chain([FontFamilyName::Generic(GenericFamily::SansSerif)])
-        .collect();
-    StyleProperty::FontFamily(FontFamily::List(Cow::Owned(families)))
+/// The one family a style is shaped with: FLUI's family rule
+/// (`resolve_family_name`) over the families `collection` holds, the rule
+/// the process font system resolves with over its own database. Nothing
+/// follows it in the list: past that family, Parley walks the collection's
+/// fallback families, which mirror the process font system's fallback order
+/// in a collection fed from the host (`FontCollection::with_host_faces`).
+fn family(
+    collection: &mut Collection,
+    style: Option<&TextStyle>,
+) -> StyleProperty<'static, SpanBrush> {
+    let family = resolve_family_name(style, |name| collection.family_id(name).is_some());
+    let name = match family {
+        Family::Name(name) => FontFamilyName::Named(Cow::Owned(name.to_owned())),
+        Family::Serif => FontFamilyName::Generic(GenericFamily::Serif),
+        Family::SansSerif => FontFamilyName::Generic(GenericFamily::SansSerif),
+        Family::Cursive => FontFamilyName::Generic(GenericFamily::Cursive),
+        Family::Fantasy => FontFamilyName::Generic(GenericFamily::Fantasy),
+        Family::Monospace => FontFamilyName::Generic(GenericFamily::Monospace),
+    };
+    StyleProperty::FontFamily(FontFamily::Single(name))
 }
 
 /// The Parley properties `style` sets; a field left unset adds nothing.
@@ -220,10 +248,13 @@ fn family(style: Option<&TextStyle>) -> StyleProperty<'static, SpanBrush> {
     clippy::cast_possible_truncation,
     reason = "f64 style values narrow to Parley's f32 layout space"
 )]
-fn properties(style: &TextStyle) -> Vec<StyleProperty<'static, SpanBrush>> {
+fn properties(
+    collection: &mut Collection,
+    style: &TextStyle,
+) -> Vec<StyleProperty<'static, SpanBrush>> {
     let mut properties = Vec::new();
     if style.font_family.is_some() {
-        properties.push(family(Some(style)));
+        properties.push(family(collection, Some(style)));
     }
     if let Some(weight) = style.font_weight {
         properties.push(StyleProperty::FontWeight(FontWeight::new(f32::from(

@@ -42,6 +42,37 @@ pub fn text_context_lends(text: &TextContext) -> u64 {
     text.lends()
 }
 
+/// How many collections were fed from the process font system's host faces
+/// ([`FontCollection::with_host_faces`]) in this process. A composition
+/// root's tests use it to show the feed runs once per app, not per realm.
+#[must_use]
+pub fn host_face_feeds() -> u64 {
+    crate::shared_font_system().host_feeds()
+}
+
+/// Whether the process font system holds a face mapping each character of
+/// `text` that is not whitespace. A test comparing measurement with paint on
+/// host faces skips text no host face can draw.
+#[must_use]
+pub fn host_covers(text: &str) -> bool {
+    crate::shared_font_system().covers(text)
+}
+
+/// The family names the process font system's faces carry first, each once:
+/// the names a style resolves against on the paint side.
+#[must_use]
+pub fn host_family_names() -> Vec<String> {
+    crate::shared_font_system().family_names()
+}
+
+/// Whether `fonts` holds a family named `family`: the check the Parley
+/// path's family rule makes against the collection.
+#[cfg(feature = "parley")]
+#[must_use]
+pub fn collection_holds(fonts: &FontCollection, family: &str) -> bool {
+    fonts.holds(family)
+}
+
 /// Makes `painter` measure on Parley through the context it is given,
 /// whatever the build's default, so the Parley measurement runs under
 /// `parley` alone (flui-painting `ARCHITECTURE.md`, mapping decision 15).
