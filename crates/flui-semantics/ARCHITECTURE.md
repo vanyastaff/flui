@@ -15,9 +15,7 @@ shape.
 
 ### 1. Role resolution is a single-valued specificity cascade, and checkable state outranks the broad `IsButton`
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — the reference's
-observable behavior is the floor; where a contract can be improved, improve it
-and record what is better. The precedence below is a rule FLUI has to invent,
+**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — FLUI diverges wherever the result is better, and a test pins the behavior it ships. The precedence below is a rule FLUI has to invent,
 because the shape it exports into has no equivalent of the reference's.
 
 **Oracle:** Flutter publishes a semantics node as a *set* of
@@ -197,9 +195,7 @@ label and action are the recorded gaps.
 
 ### 2. `IsButton` outranks `IsLink` and `IsTextField`, and the reference's corpus is not silent about it
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — a divergence from the
-reference is kept only by decision, recorded where a reader will find it, with a
-test that replaces the reference's coverage.
+**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — FLUI diverges wherever the result is better, and a test pins the behavior it ships.
 
 **The divergence.** The cascade in mapping decision 1 leaves `IsLink`,
 `IsTextField`, `IsSlider`, `IsImage` and `IsHeader` *below* `IsButton`, so a node

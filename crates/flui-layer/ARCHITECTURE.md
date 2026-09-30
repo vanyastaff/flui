@@ -1,8 +1,8 @@
 # flui-layer Architecture
 
 The per-crate record for `flui-layer`: the
-Flutter → Rust mapping, every divergence from `layer.dart` with the reason and the test that
-replaces the Flutter one, the thread-safety surface, and what is deliberately not here.
+Flutter → Rust mapping, the notable differences from `layer.dart` with the reason and the test
+that pins each, the thread-safety surface, and what is deliberately not here.
 
 The behavioural reference is `.flutter/packages/flutter/lib/src/rendering/layer.dart` at the
 pinned tag (`git -C .flutter describe --tags` must print `3.44.0`). Citations below name symbols,

@@ -151,9 +151,7 @@ is stricter than Flutter's post-frame debug tab-count check.
 
 ### `Radio` publishes its group membership, and the role cascade has to prefer it
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — a behavior the
-reference handles is dropped only by decision, recorded where a reader will find
-it.
+**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — FLUI diverges wherever the result is better, and a test pins the behavior it ships.
 
 **Oracle:** `material/radio.dart` builds its UI through
 `RawRadio<T>` (`radio.dart:553`), and `RawRadio` is where the accessibility

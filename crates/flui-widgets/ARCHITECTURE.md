@@ -122,9 +122,7 @@ find one with `rg <name> tests/`.
 
 ### 1. `DragTarget` publishes a shared `DragTargetSlot`, not its `State`
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — behavior is the
-floor, structure is designed for Rust; every divergence names what is better,
-replaces the oracle's test, and drops no edge case by accident.
+**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — FLUI diverges wherever the result is better, and a test pins the behavior it ships.
 
 **Oracle:** `widgets/drag_target.dart`. `_DragTargetState.build` wraps its
 child in `MetaData(metaData: this)`, and `_DragAvatar._getDragTargets` walks
@@ -281,9 +279,7 @@ pointer was never over.
 
 ### 4. Named routes split into six untyped entry points and two typed ones, and a request that cannot be served is a typed error
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — behavior is the
-floor, and a divergence names what is better, replaces the oracle's test, and
-drops no edge case by accident. Gated as [ADR-0024](../../docs/adr/ADR-0024-named-routes-seam.md) §7.3.
+**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — FLUI diverges wherever the result is better, and a test pins the behavior it ships. Gated as [ADR-0024](../../docs/adr/ADR-0024-named-routes-seam.md) §7.3.
 
 **Oracle:** `widgets/navigator.dart`, `NavigatorState._routeNamed` and the four
 `*Named` methods. Flutter asserts (debug-only) when `onGenerateRoute` is absent
@@ -691,9 +687,7 @@ settings object it was handed.
 
 ### 9. A route factory is handed the request only — the navigator accessor is withdrawn
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — the reference's
-observable behavior is the floor; where a contract can be improved, improve it
-and record what is better.
+**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — FLUI diverges wherever the result is better, and a test pins the behavior it ships.
 
 **Oracle:** `widgets/navigator.dart`, the `RouteFactory` typedef —
 `Route<dynamic>? Function(RouteSettings)`. A Dart factory that needs to navigate
@@ -860,9 +854,7 @@ clean `Err`.
 
 ### 11. A route's `settings` are write-only, so the factory relays values instead — recorded, with its trigger
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — a behavior the
-reference handles is dropped only by decision, recorded where a reader will find
-it.
+**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — FLUI diverges wherever the result is better, and a test pins the behavior it ships.
 
 **Oracle:** every Flutter route factory ends
 `MaterialPageRoute(settings: settings)`, relaying the request's name *and*
@@ -1327,9 +1319,7 @@ queued command is drained.
 
 ### 17. `Semantics` action builders take `Send + Sync` handlers, so the caller hoists the `Arc` where the reference's closure captures a `State` field
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — the reference's
-observable behavior is the floor; where a contract is better, improve it and
-record what is. This file's own scope note puts a callback bound here rather
+**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — FLUI diverges wherever the result is better, and a test pins the behavior it ships. This file's own scope note puts a callback bound here rather
 than in an ADR: it is local to this crate.
 
 **Oracle:** `Semantics(onTap: …, onSetText: …)` (`src/semantics/semantics.dart`,

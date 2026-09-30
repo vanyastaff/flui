@@ -10,7 +10,7 @@ The reference is `dart:ui`'s `Canvas`/`Paint`/`Path` vocabulary and
 Flutter's `TextPainter`; the paint, style and text values (`paint`, `styling`, `typography`, plus
 `Alignment`, `BoxFit` and `TextBaseline`) are owned here too (ADR-0098 §8), and
 geometry comes from `flui_foundation::geometry`.
-Divergences from Flutter are recorded under [Mapping decisions](#mapping-decisions).
+[Mapping decisions](#mapping-decisions) explains the notable choices.
 
 ---
 
@@ -206,8 +206,7 @@ for a caller that wants to check.
 
 ### 6. The zero-area background guard sits on the FILL, not on a caller
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — behaviour is the floor, and an
-improvement over the reference owes a named record plus a replacement test.
+**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — FLUI diverges wherever the result is better, and a test pins the behavior it ships.
 
 **Choice:** `paint_box_decoration` records no background — colour or gradient — when either
 dimension of its rect is exactly zero. Border, shadow and image passes stay outside the guard.
@@ -295,8 +294,7 @@ snapshots untouched while making the opt-out visible to any test reading those l
 
 ### 8. A style's font family is resolved against the host before it reaches the shaper
 
-**Rule:** Design stance ("Flutter is a reference, not a spec") — a behavioural divergence from the reference is recorded with the
-test that replaces the reference's own coverage.
+**Rule:** Design stance ("Flutter is a reference, not a spec") — FLUI diverges wherever the result is better, and a test pins the behavior it ships.
 
 **Choice:** [`src/text_layout/font_resolve.rs`](src/text_layout/font_resolve.rs) picks the family a
 `TextStyle` is shaped with, instead of handing `style.font_family` to cosmic-text unchanged. A named
@@ -401,8 +399,8 @@ reverted; that was verified, not assumed.
 
 **Rule:** Design stance ("Flutter is a reference, not a spec") — Flutter is not a clean oracle for this edge
 ([flutter/flutter#13512](https://github.com/flutter/flutter/issues/13512) still open; pinned
-`text_painter_test.dart` skips the intrinsic/`maxLines` block). Record the FLUI contract and
-replace the skipped reference with a FLUI test.
+`text_painter_test.dart` skips the intrinsic/`maxLines` block), so a FLUI test pins the
+contract.
 
 **Choice:** [`TextPainter`](src/text_painter/measure.rs) min/max intrinsic width probes
 (`layout()` cache fill and the uncached getters) shape with

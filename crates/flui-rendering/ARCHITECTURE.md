@@ -825,8 +825,7 @@ passes with the change reverted, which the first draft did.
 
 ### The hit-test path is driver-owned; the protocol carries no result accumulator
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — a contract may be improved, and an
-improvement owes a record plus a replacement test. This is that record.
+**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — FLUI diverges wherever the result is better, and a test pins the behavior it ships.
 
 **Choice:** `HitTestCapability::Result` and `::Entry` are vocabulary only. There is no
 `ctx.result()`, `result_mut()`, `add_hit(entry)` or `add_self(id)`: the driver
@@ -869,7 +868,7 @@ of how the dead path was found.
 
 ### Lazy-sliver scroll correction keeps the first visible item stationary
 
-**Rule:** Design stance ("Flutter is a reference, not a spec": improve a Flutter contract where it can be improved, record it, replace the oracle); [ADR-0051](../../docs/adr/ADR-0051-anchor-stationary-scroll-correction.md).
+**Rule:** Design stance ("Flutter is a reference, not a spec": FLUI diverges wherever the result is better, and a test pins the behavior it ships); [ADR-0051](../../docs/adr/ADR-0051-anchor-stationary-scroll-correction.md).
 
 **Choice:** `Virtualizer::set_measured` / `adapt_default_estimate` report the offset delta of the anchor (the first visible item) whenever an extent above it changes; the consumer sliver accumulates the deltas and emits them as `SliverGeometry::scroll_offset_correction` at the end of the pass, in either scroll direction. The viewport applies the correction and re-runs layout in the same pass, so the anchor never moves on screen.
 
