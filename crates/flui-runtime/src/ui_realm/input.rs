@@ -188,14 +188,14 @@ impl UiRealm {
     ///
     /// Pointer/IME/drag-drop events go to the ADDRESSED presentation's own
     /// gesture/text-input state — never a sibling's, and never falling
-    /// through to the primary when the addressed id is missing
-    /// (`input_stamped_for_b_never_reaches_as_arena`,
-    /// `ime_event_addressed_to_b_does_not_reach_as_session`,
-    /// `input_addressed_to_a_closed_or_unknown_presentation_drops_traced_
-    /// never_falls_through`). Keyboard is the one exception: it always
-    /// goes to the focus coordinator's currently ACTIVE presentation
-    /// instead of the stamped one — see `FocusCoordinator`'s own doc for
-    /// why (`keyboard_routes_to_active_presentation_only`).
+    /// through to the primary when the addressed id is missing (pointer:
+    /// `input_stamped_for_b_never_reaches_as_arena`). Keyboard is the one
+    /// exception: it always goes to the focus coordinator's currently
+    /// ACTIVE presentation instead of the stamped one — see
+    /// `FocusCoordinator`'s own doc for why
+    /// (`panicking_keyboard_dispatch_keeps_priority_over_a_panicking_wake`
+    /// stamps a key for the primary and observes the active sibling's
+    /// handler run).
     ///
     /// `input_dropped_by_lifecycle` gates every kind next, against the
     /// RESOLVED target's own lifecycle (not necessarily `presentation_id`'s,

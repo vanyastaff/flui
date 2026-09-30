@@ -460,8 +460,7 @@ fn resolve_navigation_destination_label_style(
 /// ordered `[Is(Selected), Is(Disabled), Any]` resolve the SELECTED entry
 /// for a disabled destination (first-match-wins still matches `Is(Selected)`
 /// against the combined set), instead of the disabled entry the pure-set
-/// query guarantees — see
-/// `theme_disabled_and_selected_resolves_the_disabled_entry_not_the_selected_one`.
+/// query guarantees.
 fn navigation_destination_states(selected: bool, enabled: bool) -> WidgetStates {
     if !enabled {
         WidgetStates::from(WidgetState::Disabled)

@@ -1,9 +1,7 @@
-//! The font system's three doors: shaping never moves the database
-//! generation, `register_font` moves it exactly once per call, and a laid-out
-//! `TextPainter` re-lays-out once a face has been registered.
+//! A laid-out `TextPainter` re-lays-out once a face has been registered.
 //!
-//! Its own test target: these tests append to the process-wide font database,
-//! which the `painting_it` binary's tests deliberately never do.
+//! Its own test target: it appends to the process-wide font database, which
+//! the `painting_it` binary's tests deliberately never do.
 
 use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
 use flui_painting::{TextPainter, shared_font_system};

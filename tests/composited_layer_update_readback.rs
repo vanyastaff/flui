@@ -269,10 +269,9 @@ fn the_transform_update_path_and_a_repaint_produce_the_same_pixels() {
 /// Root row → [boundary → padding → clip → coloured leaf, boundary → leaf].
 ///
 /// Mirrors `mount`/`mount_transform` above, substituting `RenderClipRRect` for
-/// `RenderOpacity`/`RenderTransform`. Unlike those two, this fixture's proof
-/// needs a KNOWN, non-zero absolute position — the pixel test below samples
-/// right at the clipped corner — so `RenderPadding::all(20.0)` sits between
-/// the boundary and the clip. `RenderFlex::row()` defaults both axes to
+/// `RenderOpacity`/`RenderTransform`. Unlike those two, this fixture puts the
+/// clip at a KNOWN, non-zero absolute position: `RenderPadding::all(20.0)`
+/// sits between the boundary and the clip. `RenderFlex::row()` defaults both axes to
 /// `Start`, so the first row child sits flush at the row's own origin, which
 /// is the root's `(0, 0)`; nothing between the row and the padding adds an
 /// offset of its own (`RenderRepaintBoundary` is a plain pass-through proxy),
@@ -280,9 +279,9 @@ fn the_transform_update_path_and_a_repaint_produce_the_same_pixels() {
 /// `RenderClipRRect` is itself a pass-through proxy (`forward_single_child_box_layout!`),
 /// so it adopts the `40x40` coloured box's size unchanged — the box's
 /// top-left corner is therefore also at `(20, 20)`. `Clip::HardEdge` (not
-/// `AntiAlias`) is deliberate: see `a_different_radius_produces_different_pixels`'s
-/// doc for why the sample point never actually needed it, and why hard-edge
-/// is still the safer fixture choice.
+/// `AntiAlias`) is deliberate: a hard edge leaves no half-covered pixel whose
+/// coverage could differ between the two arms for reasons other than the
+/// radius.
 fn mount_clip_rrect(radius: f64) -> (PipelineOwner, flui_foundation::RenderId) {
     let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let (root_id, registry) = tree::mount(

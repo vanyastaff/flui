@@ -18,12 +18,10 @@ pub(crate) fn test_text_layout_caret_position() {
     assert!(end_offset.dx >= mid_offset.dx);
 }
 
-/// A multi-space run is still one segment regardless of where inside or
-/// at which edge of it `offset` falls — the whitespace-run test
-/// ([`get_word_boundary_selects_a_whole_whitespace_run`]) already covers
-/// the interior; this pins both edges too, against a two-space run
-/// specifically (the three-space one that test already used could not
-/// distinguish "the whole run" from "a two-space sub-range").
+/// A multi-space run is one segment: an offset inside it selects the whole
+/// run, and an offset at either edge selects the adjacent word. Pinned
+/// against a two-space run specifically, since a three-space run could not
+/// distinguish "the whole run" from "a two-space sub-range".
 pub(crate) fn get_word_boundary_two_space_run_boundary_matrix() {
     use flui_painting::TextLayout;
     use flui_painting::typography::{TextAffinity, TextDirection, TextPosition};

@@ -19,20 +19,13 @@ fn two_column_delegate() -> Arc<dyn SliverGridDelegate> {
 }
 
 // ============================================================================
-// Test 1 — basic settle: only the visible window is built
-// ============================================================================
-
-// ============================================================================
-// Test 2 — 2-D positions
+// 2-D positions
 // ============================================================================
 
 /// A 2-column 200 px-wide grid with square 100×100 tiles must place tiles at
-/// (0, 0), (100, 0), (0, 100), (100, 100) — the same positions
-/// `crates/flui-objects/tests/render_object_harness.rs`'s
-/// `harness_render_sliver_grid_pre_seeded_tiles_lay_out_correctly` pins at the
-/// render-object level, proving the delegate-windowed geometry is unchanged
-/// when the children arrive through the element tree instead of being
-/// pre-seeded directly.
+/// (0, 0), (100, 0), (0, 100), (100, 100), proving the delegate-windowed
+/// geometry holds when the children arrive through the element tree instead
+/// of being pre-seeded directly.
 ///
 /// Tiles are located by render type rather than by walking
 /// `RenderSliverGrid`'s child list: the lazy backend's `ChildManager`
@@ -83,29 +76,3 @@ pub(crate) fn lazy_grid_view_builder_places_tiles_at_oracle_positions() {
          (col0/row0, col1/row0, col0/row1, col1/row1)"
     );
 }
-
-// ============================================================================
-// Test 3 — disposal on scroll: built set shifts, count bounded, ABA-safe
-// ============================================================================
-
-// ============================================================================
-// Test 4 — 1000-item scrolled grid stays bounded
-// ============================================================================
-
-// ============================================================================
-// Test 5 — quiescence: a third tick builds zero new tiles
-// ============================================================================
-
-// ============================================================================
-// Test 6 — None-at-K caps the build count
-// ============================================================================
-
-// ============================================================================
-// Test — builder swap refreshes resident tiles end to end (FLUI-added)
-// ============================================================================
-
-// ============================================================================
-// GridView::count over StaticChildren — mirrors lazy_list.rs's ListView::new
-// coverage (ADR-0053: GridView::count|extent route over the same
-// request-strategy adaptor as GridView::builder)
-// ============================================================================

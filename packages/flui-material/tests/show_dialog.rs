@@ -1,7 +1,6 @@
 //! `show_dialog` end-to-end coverage — a real [`NavigatorHandle`] mounted
-//! under a [`Theme`], pumped through a real [`Vsync`] clock, matching
-//! `flui-widgets`' own `tests/routes.rs` harness for `PopupRoute` (the
-//! machinery `show_dialog` is built on).
+//! under a [`Theme`], pumped through a real [`Vsync`] clock, driving the
+//! `PopupRoute` machinery `show_dialog` is built on.
 
 use crate::common;
 
@@ -20,9 +19,9 @@ use flui_sdk::widgets::{
     ColoredBox, GestureDetector, Navigator, NavigatorHandle, SimpleRoute, Text, VsyncScope,
 };
 
-/// `PopupRoute`'s framework-default transition — matching
-/// `flui-widgets/tests/routes.rs`'s own constant exactly, since `show_dialog`
-/// pushes the same `PopupRoute` machinery those tests already pump.
+/// `PopupRoute`'s framework-default transition (300 ms, the default every
+/// `flui-widgets` route builder picks), since `show_dialog` pushes a
+/// `PopupRoute`.
 const TRANSITION: Duration = Duration::from_millis(300);
 /// The per-pump virtual-time step.
 const FRAME: Duration = Duration::from_millis(50);
@@ -30,12 +29,10 @@ const FRAME: Duration = Duration::from_millis(50);
 /// file's tests to settle a *second* transition (a barrier-tap pop's reverse
 /// run) within the same per-phase budget: one whole `TRANSITION / FRAME`,
 /// plus one frame because the first pump after a controller starts only
-/// anchors `t = 0` (a ticker's first tick delivers elapsed 0 — the same
-/// `+ 1` `flui-widgets/tests/routes.rs`'s `PUMPS` documents for this
-/// identical 300ms/50ms pair), plus one more frame for the reverse
-/// transition's post-completion route removal to land. Asserted below rather
-/// than merely hoped: changing either duration keeps this budget correct
-/// instead of silently under-pumping.
+/// anchors `t = 0` (a ticker's first tick delivers elapsed 0), plus one more
+/// frame for the reverse transition's post-completion route removal to land.
+/// Asserted below rather than merely hoped: changing either duration keeps
+/// this budget correct instead of silently under-pumping.
 const PUMPS: usize = (TRANSITION.as_millis() / FRAME.as_millis()) as usize + 2;
 
 const _: () = assert!(

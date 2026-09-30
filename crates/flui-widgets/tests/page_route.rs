@@ -8,9 +8,7 @@
 //! code.
 //!
 //! These drive the animation by hand, through the temporary test-access probe
-//! `RouteProbe::transition_handle()` (ADR-0083 §4). `tests/routes.rs` is the
-//! public counterpart: it pushes the same routes through the prelude and drives
-//! a real `Vsync`.
+//! `RouteProbe::transition_handle()` (ADR-0083 §4).
 
 use flui_animation::{Animation, AnimationStatus};
 use flui_view::prelude::*;
@@ -161,7 +159,7 @@ pub(crate) fn secondary_animation_runs_on_the_previous_page_route_when_pushing_a
 
 /// A real, hit-tested horizontal drag through the mounted tree must move the
 /// controller's value by `delta / route_width` — the harness's fixed 800px
-/// screen (`testing/harness.rs`), which the route's page fills
+/// screen, which the route's page fills
 /// (`Stack(fit: expand)`) — never by `delta / BACK_GESTURE_WIDTH` (20px).
 /// This is exactly the path that would have caught
 /// `BackGestureRuntime::normalized_width` never reading the route's real

@@ -28,7 +28,7 @@
 //! check, expressed as ownership rather than as a flag.
 //!
 //! This preserves both invariants: `RouteHistory` never learns about the
-//! navigator (so `route_stack_flush_is_pure_data` stays green), and the
+//! navigator (so the route stack stays pure data), and the
 //! `BUG: flush_history_updates re-entered` assert stays reachable for a genuinely
 //! recursive `flush()` — which is what it was always guarding.
 //!

@@ -436,11 +436,12 @@ assert!(has_overflow(&run, run.id("fitted")));   // 100×100 child in 50×50 box
 
 The same file's `scrolling_lazy_sliver_request_band_tracks_scroll_position_and_stays_bounded`
 (a row of `family_sliver_lists`, not a snapshot) proves `RenderSliverList`'s render-side windowing math tracks scroll
-position and stays bounded; the paint-layer claim it replaces (bounded materialization end to
-end, through a real `ChildManager`) is covered by
+position and stays bounded. Through a real `ChildManager`,
 [`flui-widgets/tests/lazy_list.rs`](../../flui-widgets/tests/lazy_list.rs)
-(`lazy_list_view_builder_convergence_stabilizes`,
-`lazy_list_view_builder_off_band_eviction_bounded`).
+(`lazy_list_view_builder_stateful_items_init_and_dispose_with_the_band`) checks sampled items
+initializing as they enter the band and disposing as they leave it, and an item beyond the band
+staying unbuilt; a bound on how many items are resident end to end is **Unasserted:** no test
+pins this.
 
 ## See also
 

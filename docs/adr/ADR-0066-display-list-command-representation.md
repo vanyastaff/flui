@@ -57,8 +57,8 @@ paths are `Arc`s).
 
 ### The op has a budget
 
-`size_of::<DrawOp>() ≤ 128` and `size_of::<DrawCommand>() ≤ 192`, enforced by a
-size test. The fattest variant is `ImageFiltered`,
+`size_of::<DrawOp>() ≤ 128` and `size_of::<DrawCommand>() ≤ 192`.
+**Unasserted:** no test pins this. The fattest variant is `ImageFiltered`,
 whose inline `ColorFilter::Matrix` is 80 bytes; a variant that would exceed
 the budget boxes its payload. `Path` is `Arc<Vec<PathCommand>>` with
 `Arc::make_mut` on every mutator (32 bytes; a clone is a refcount bump;

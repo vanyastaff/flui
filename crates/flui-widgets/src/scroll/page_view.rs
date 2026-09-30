@@ -802,25 +802,3 @@ impl ViewState<PageView> for PageViewState {
         }
     }
 }
-
-// ============================================================================
-// Tests
-// ============================================================================
-//
-// `PageScrollPhysics::create_ballistic_simulation` is tested here at the pure
-// function level (metrics + velocity in, a `Simulation` out) rather than only
-// through a gesture-driven `PageView` in the `parity` integration corpus.
-// Reason: this crate's headless test harness timestamps synthetic pointer
-// samples off the binding's own virtual clock, advanced by a fixed
-// `POINTER_SAMPLE_INTERVAL` per sample rather than any position input the
-// test chose deliberately — so a synthetic drag's *measured* release
-// velocity is whatever falls out of the pixel deltas a test happened to
-// pick, not a value chosen to land on either side of
-// `PageScrollPhysics::velocity_tolerance_px_per_sec` (20.0). A gesture-driven
-// settle test therefore can't isolate "distance-only rounding" from
-// "velocity-biased" behavior deterministically — exactly the halfway-vs-fling
-// distinction these tests exist to pin. The `parity` corpus still proves the
-// full gesture → physics → spring → settle pipeline wires up correctly (see
-// `a_full_drag_and_release_settles_the_page_view_through_the_real_gesture_and_spring_pipeline`
-// there) — it just doesn't isolate the halfway threshold, which needs exact
-// control over velocity that only a direct physics call can provide.

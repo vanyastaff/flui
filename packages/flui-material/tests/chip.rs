@@ -11,12 +11,9 @@
 //! `chip.rs`'s own module docs make without previously proving it — that
 //! the delete icon's small nested `InkWell` and the chip's own outer
 //! `InkWell` route a tap to exactly one of them, never both, depending on
-//! where the pointer lands. That claim rests on the same "most specific
-//! first" nested-detector resolution
-//! `crates/flui-widgets/tests/gesture_detector_advanced.rs`'s
-//! `overlapping_detectors_quick_tap_resolves_to_the_inner_tap` establishes
-//! for a tap-vs-long-press pair; this file is the first place it is proven
-//! for two plain, same-gesture-type taps at genuinely disjoint (not fully
+//! where the pointer lands. That claim rests on the gesture arena's "most
+//! specific first" nested-detector resolution; this file proves it for two
+//! plain, same-gesture-type taps at genuinely disjoint (not fully
 //! overlapping) sub-regions.
 //!
 //! **Not covered here** (see `chip.rs`'s own unit tests instead, since

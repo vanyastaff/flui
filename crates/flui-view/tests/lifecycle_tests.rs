@@ -126,7 +126,10 @@ pub(crate) fn test_stateful_element_multiple_deactivate_activate_cycles() {
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
     let root_id = tree.mount_root(&view, &mut owner.element_owner_mut());
-    // See `test_stateful_element_activate_callback`'s comment.
+    // Drive the first build so `init_state` runs before the first
+    // `deactivate`/`activate`: `StatefulBehavior::on_activate` is gated on a
+    // completed `init_state`, so a mounted but never-built element never runs
+    // its `activate` callback.
     owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
 

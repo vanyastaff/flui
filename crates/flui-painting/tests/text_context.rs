@@ -1,10 +1,8 @@
 //! Per-realm text contexts over one shared font collection (ADR-0092 §2–§3).
 //!
 //! Two contexts built from one [`FontCollection`] shape on two threads at
-//! once, see a face registered after they were built, and never build the
-//! cosmic-text path's process font system. Its own binary: nothing else in it
-//! touches that font system, so the check holds under nextest and
-//! `cargo test` alike.
+//! once and see a face registered after they were built. Its own binary:
+//! nothing else in it touches the cosmic-text path's process font system.
 
 use std::sync::Barrier;
 use std::thread;

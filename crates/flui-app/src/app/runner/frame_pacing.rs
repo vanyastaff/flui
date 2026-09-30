@@ -420,21 +420,18 @@ impl FallbackWake {
 /// covered here without one. Coverage map for the four invariants the
 /// frame-pacing ADR calls out:
 ///
-/// - **Wake coalescing** (N `wake_frame` calls -> one draw): a
-///   PRE-EXISTING invariant, unchanged by this diff — pinned by
-///   `ui_realm::tests::redraw_requests_coalesce_to_one_flag_and_one_wake`.
-/// - **Idle = zero frames**: a PRE-EXISTING invariant (the dirty gate
-///   itself predates this diff; only its migration onto `wake_action` is
-///   new) — pinned by
+/// - **Idle = zero frames**: pinned by
 ///   `idle_wake_with_no_dirty_work_and_no_scheduled_frame_skips`
 ///   below.
-/// - **No-present fallback bound**: pinned by
-///   `the_fallback_bounds_repeating_no_present_wakes_without_sleeping_on_the_loop`
-///   (ADR-0058's non-blocking deadline, replacing the old fixed sleep).
-/// - **Ticker keeps the gate open**: the fallback's AND condition — pinned
-///   by `pending_work_arms_the_fallback_like_any_other_open_gate`
-///   (this module) and, at the binding layer, by
-///   `binding::tests::vsync_continuation_keeps_gate_open_while_running_and_closes_on_settle`.
+/// - **Ticker keeps the gate open**, and a pending fallback defers a
+///   ticker-only wake but never dirty work: pinned by
+///   `a_pending_fallback_defers_a_ticker_only_wake_but_never_dirty_work`.
+/// - **No-present fallback deadline** (ADR-0058's non-blocking deadline):
+///   `the_fallback_deadline_is_anchored_to_the_last_present` pins where
+///   the deadline sits; no test bounds the pipeline passes over repeated
+///   no-present wakes.
+/// - **Wake coalescing** (N `wake_frame` calls -> one draw) and the
+///   pending-work leg of `keeps_frame_gate_open` have no test here.
 #[cfg(all(
     test,
     not(target_os = "android"),

@@ -18,14 +18,15 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use crate::processing::lsq_solver::{PolynomialFit, solve_one};
+//! use crate::processing::lsq_solver::{PolynomialFit, solve_two};
 //!
-//! // Fit a quadratic (degree=2) to (t, y) with weights w.
-//! let x = vec![-100.0, -50.0, 0.0];       // time in ms
-//! let y = vec![0.0, 50.0, 100.0];         // position in px
+//! // Fit a quadratic (degree=2) to (t, x) and (t, y) with weights w.
+//! let t = vec![-100.0, -50.0, 0.0];       // time in ms
+//! let x = vec![0.0, 50.0, 100.0];         // position in px
+//! let y = vec![0.0, 10.0, 20.0];
 //! let w = vec![0.6, 0.8, 1.0];            // weights (recent = higher)
 //!
-//! let fit: Option<PolynomialFit> = solve_one(&x, &y, &w, 2);
+//! let (fit, _): (Option<PolynomialFit>, _) = solve_two(&t, &w, &x, &y, 2);
 //! if let Some(fit) = fit {
 //!     // Coefficients are [a₀, a₁, a₂] for y = a₀ + a₁·t + a₂·t².
 //!     // Velocity at t=0 is a₁.
@@ -277,8 +278,7 @@ fn solve_rhs(
 /// Fit two right-hand sides (e.g. the x and y pointer coordinates) that share
 /// the same sample times `x` and weights `w`. The QR factorization — the
 /// dominant O(n²·m) cost — is computed once and reused for both, halving the
-/// factorization work versus two independent `solve_one` calls. (`solve_one`
-/// is `#[cfg(test)]`, so it is not an intra-doc link here.)
+/// factorization work versus two independent solves.
 // Math-style names (x, w, q, r, m, n) follow the standard QR notation.
 #[expect(clippy::many_single_char_names)]
 pub(crate) fn solve_two(

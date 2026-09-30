@@ -17,8 +17,7 @@
 //! `'static` [`NavigatorHandle`] out of the state *inside* the callback and does
 //! nothing else there; every mutation runs after the borrow is released. Navigator
 //! and Overlay couple through an `Arc`, not through the tree — so no
-//! `GlobalKey<OverlayState>` is needed, and `navigator_uses_no_global_key`
-//! keeps it that way.
+//! `GlobalKey<OverlayState>` is needed.
 //!
 //! # Not implemented, and not claimed
 //!
@@ -242,11 +241,9 @@ impl NavigatorShared {
         //    the pop observation is only queued there and delivered afterwards.
         //
         //    Note what this order does NOT do. FLUI permits navigating
-        //    from a callback fired here, deliberately (see
-        //    `pop_scope_callbacks_may_call_back_into_the_navigator`), which makes
-        //    the resulting "effect observed before its cause" sequence reachable
-        //    — pinned by
-        //    `a_pop_scope_callback_that_navigates_is_observed_before_the_pop_that_caused_it`.
+        //    from a callback fired here, deliberately (ARCHITECTURE.md mapping
+        //    decision 13), which makes the resulting "effect observed before its
+        //    cause" sequence reachable.
         //
         //    With **no lock held**: these are user callbacks, they may call
         //    straight back into this navigator, and even a `can_pop()` read
@@ -2071,8 +2068,7 @@ impl NavigatorHandle {
     /// replacement; replacing whatever is on top *now* would then replace the
     /// factory's route rather than the caller's. FLUI captures the route to
     /// replace **before** resolving, so it replaces the one the caller
-    /// meant. Pinned by
-    /// `push_replacement_named_replaces_the_route_that_was_current_when_it_was_called`.
+    /// meant.
     ///
     /// # Errors
     ///
@@ -2169,8 +2165,7 @@ impl NavigatorHandle {
     /// **before** this operation's own dismissal — an ordering that pop-first
     /// cannot produce, because it has already popped. The departing route is then
     /// buried, and is removed by id rather than popped (`did_remove`, not
-    /// `did_pop`). Pinned by
-    /// `a_re_entrant_factory_is_observed_before_the_pop_it_precedes`.
+    /// `did_pop`).
     ///
     /// When no factory navigates — every ordinary call — the pop and the push
     /// are the same two calls in the same order and the stream is identical.

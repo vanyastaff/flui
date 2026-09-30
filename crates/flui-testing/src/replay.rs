@@ -263,8 +263,7 @@ impl PointerScript {
     /// recogniser never *receives* routed events — only a hit-test result
     /// naming it delivers those, which is a mounted tree's job. What the replay
     /// suite pins instead is that the gap is genuinely spent in virtual time
-    /// (`replay_spends_exactly_the_scripts_duration_of_virtual_time`, and the
-    /// long-press pair, which flip on the clock alone).
+    /// (the long-press pair, which flip on the clock alone).
     #[must_use]
     pub fn double_tap(position: Offset<f64>, gap: Duration) -> Self {
         let second = Duration::from_millis(50) + gap;

@@ -5,10 +5,9 @@
 //! the observer queues, and the pop-result channel. The central
 //! observation is that all of it is a pure function over route entries —
 //! the flush never touches the element tree, and its only tree-visible effect
-//! is the overlay rearrange at the very end, which the `Navigator` view performs. So this layer is testable with no element tree, no
-//! build owner, no render pipeline, and no overlay, and
-//! `route_stack_flush_is_pure_data` enforces that mechanically rather than on
-//! trust.
+//! is the overlay rearrange at the very end, which the `Navigator` view
+//! performs. So this layer is testable with no element tree, no build owner, no
+//! render pipeline, and no overlay.
 //!
 //! The `Navigator` view, `NavigatorState` and the owned
 //! `NavigatorHandle` sit on top: the `navigator` and `overlay_route` modules are the

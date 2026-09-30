@@ -204,8 +204,7 @@ pub enum PaintKind {
 ///
 /// Deliberately NOT `DirtyNode` with an extra field: that type serves the
 /// layout, compositing and semantics queues too, where `PaintKind` would be
-/// meaningless — and it is held to two words by `dirty_node_is_two_usize`,
-/// which a `SmallVec` payload would break.
+/// meaningless — and it is two words, which a `SmallVec` payload would break.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaintEntry {
     /// The queued render object.

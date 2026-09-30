@@ -4,19 +4,15 @@
 //! files in the workspace; splitting it stops it from dominating
 //! `controller.rs`'s own line count and lets an editor/reviewer open
 //! "the tests" and "the implementation" as two separate, right-sized files.
-//! `ticker_completer_resolution_never_bypasses_the_finish_chokepoint`'s own
-//! `include_str!("controller.rs")` still reads the (now test-free)
-//! production file directly, so its production-vs-test-code split logic is
-//! no longer needed there.
 
 use super::*;
 use flui_scheduler::UpdateScheduler;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-// Several tests assert exact per-tick progress, and `time_dilation_scales_progress`
-// mutates the *global* `time_dilation`. Serialize all controller tests so the
-// dilation mutation can never corrupt a sibling's progress assertions under a
-// parallel `cargo test` run.
+// Several tests assert exact per-tick progress, which the process-global
+// `time_dilation` scales. Serialize all controller tests so a dilation change
+// can never corrupt a sibling's progress assertions under a parallel
+// `cargo test` run.
 static SERIAL: Mutex<()> = Mutex::new(());
 
 fn serial() -> parking_lot::MutexGuard<'static, ()> {
@@ -275,9 +271,8 @@ fn repeat_consumes_all_cycles_in_one_long_frame() {
     c.dispose();
 }
 
-/// The `min == max` equality case, distinct from `repeat_with_rejects_inverted_range`'s
-/// `min > max`. A degenerate `min == max` range is rejected too; the
-/// mapping entry gives the rationale.
+/// The `min == max` equality case. A degenerate `min == max` range is
+/// rejected; the mapping entry gives the rationale.
 fn repeat_with_rejects_equal_min_and_max() {
     let _serial = serial();
     let c = controller(100);
@@ -442,10 +437,6 @@ fn repeat_with_zero_period_settles_synchronously_at_the_call() {
 
 /// `velocity()` on a reverse leg is SIGNED (negative while the
 /// value falls) — see `docs/ARCHITECTURE.md`'s "Repeat sampling" mapping entry, (g).
-/// Previously uncited/untested: the mapping entry's citation of
-/// `reverse_mid_flight_keeps_full_range_velocity` as this behavior's
-/// "sibling repeat coverage" named a test that has no `.velocity()`
-/// call at all.
 fn repeat_reverse_leg_velocity_is_negative() {
     let _serial = serial();
     let c = controller(100);
@@ -498,8 +489,7 @@ fn animate_to_curved_eases_through_the_given_curve() {
 
 /// Order pin for a zero-duration displacement: the new run's status must
 /// still be observed BEFORE the displaced run's cancellation, exactly
-/// like a real-duration displacement
-/// (`a_new_runs_status_listener_fires_before_the_displaced_runs_cancellation`).
+/// like a real-duration displacement.
 fn a_zero_duration_run_cancels_the_displaced_run_after_its_own_status_is_observable() {
     let _serial = serial();
     let scheduler = UpdateScheduler::new();

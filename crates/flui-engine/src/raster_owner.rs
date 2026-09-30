@@ -430,11 +430,8 @@ struct MailboxState {
     /// surface-lost mint site, called from [`RasterOwner::pump`]). Neither
     /// site keeps a private counter of its own; see ADR-0045 decision 4's
     /// own worked example for the false-accept defect two independent
-    /// counters would produce, and
-    /// `single_counter_rejects_a_frame_stamped_before_a_post_loss_resize`'s
-    /// own doc (in this module's test suite) for the regression this single
-    /// counter is *not* enough to prevent on its own — see
-    /// [`Self::pending_resize`]'s doc for the other half of that fix.
+    /// counters would produce. A single counter is *not* enough on its own —
+    /// see [`Self::pending_resize`]'s doc for the other half of that fix.
     current_surface_generation: SurfaceGeneration,
     /// Set by [`RasterHandle::shutdown`]; refuses further submits and tells
     /// the next pump with an empty mailbox to signal shutdown-complete
@@ -877,9 +874,8 @@ impl RasterHandle {
     /// walk `current_surface_generation` **backwards** — a false accept
     /// reached through regression rather than duplication. `pump` instead
     /// re-reads the counter fresh, in the same lock acquisition that drains
-    /// the pending command — see `MailboxState::pending_resize`'s doc and
-    /// `single_counter_rejects_a_frame_stamped_before_a_post_loss_resize`'s
-    /// sibling regression test for the exact interleaving this closes.
+    /// the pending command — see `MailboxState::pending_resize`'s doc for the
+    /// exact interleaving this closes.
     ///
     /// One consequence: [`SurfaceState::required_generation`] is NOT updated
     /// by this call either, for the same reason — it reflects "the
@@ -1575,9 +1571,7 @@ impl<B: RasterBackend> RasterOwner<B> {
                 // bumping a private copy — the fix that makes a resize
                 // issued right after this never re-mint a value this call
                 // already consumed (see ADR-0045 decision 4's own worked
-                // false-accept example, and this module's
-                // `single_counter_rejects_a_frame_stamped_before_a_post_loss_resize`
-                // test). Every frame the consumer has already stamped
+                // false-accept example). Every frame the consumer has already stamped
                 // against the old generation (including any submitted
                 // before it observes this ack) is rejected by the
                 // proactive check in `pump` until the consumer catches up.
@@ -2429,25 +2423,4 @@ mod tests {
         submit_after_shutdown_fails_typed();
         stalled_capacity_then_released_wakes_with_no_external_trigger();
     }
-
-    // -----------------------------------------------------------------------
-    // Threaded harness: the counter must survive genuine, unsynchronized
-    // submit/pump concurrency -- never underflow (a `fetch_sub` wrap on a
-    // `u32`), never strand above zero once everything has drained through
-    // shutdown. Same shape as
-    // `superseded_ack_never_observed_after_presented_ack_for_its_supersessor`
-    // above: no sleeps, repeated many times to give a scheduling-dependent
-    // regression a real chance to surface.
-    // -----------------------------------------------------------------------
-
-    // -----------------------------------------------------------------------
-    // ADR-0045 decision 4: one SurfaceGeneration counter per lane, owned by
-    // the mailbox. The tests below distinguish the two failure modes the
-    // ADR names by name — a false accept (a stale frame wrongly matched
-    // against a post-reconfigure generation) and permanent starvation (the
-    // two mint sites drifting apart so nothing ever matches again) — plus
-    // the ZERO-rejection/attached gate, the second (GpuResourceGeneration)
-    // freshness axis, and the liveness property a safety oracle alone
-    // cannot catch.
-    // -----------------------------------------------------------------------
 }

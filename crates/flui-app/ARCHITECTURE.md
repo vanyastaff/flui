@@ -13,10 +13,8 @@ the dispatch layer moves there too.
   `flui_runtime::sink::FrameSink` and names no engine type. This crate's two
   sinks are `RasterLane<B>` (the desktop, Android and iOS runners, ADR-0045)
   and `DirectSink` (the web runner). `DirectSink` alone maps `EngineError`s to
-  `SubmitVerdict`s for the web runner (pinned by
-  `direct_sink_classifies_each_engine_outcome`); the realm's own tests script
-  verdicts and never reach it. `raster_lane::RealmRaster` renders a realm's
-  draw step over a `DirectSink` for this crate's tests only.
+  `SubmitVerdict`s for the web runner; the realm's own tests script verdicts
+  and never reach it.
 - **A runner's frame is gate → pump → pacing.** Each runner's frame wake is a
   `RealmTask::Pump`: one `UiRealm::enter` holds the owner-inbox drain
   (`UiRealm::drain_owner_inbox`), the pre-frame runner work and the wake gate
@@ -31,9 +29,7 @@ the dispatch layer moves there too.
   pump's begin frame and its post-frame attempt after the post-frame
   callbacks; only `mark_primary_needs_full_repaint` touches the tree, and it
   lands before the pipeline that repaints. The pump's frame timestamp is the
-  wake's own `now`. Pinned by the `device_recovery_tests`, among them
-  `the_recovery_wrapper_runs_the_whole_frame_transaction`, which fails if the
-  wrapper draws without begin or end frame.
+  wake's own `now`.
 - **The raster lane is held for the whole pump.** The lane (the renderer slot
   on web) is the pump's sink, so its lock now spans the transaction, begin
   frame and end frame included, not just the draw step: transient callbacks,
@@ -56,8 +52,7 @@ the dispatch layer moves there too.
   `wasm-test` compile it; nothing on this host runs it.
 - **A window reaches a realm with its bridge.** `runner::presentation_window`
   reads a host window's accessibility bridge once and pairs it with the
-  window in a `PresentationWindow` (pinned by
-  `a_realm_built_from_a_host_window_publishes_through_its_accessibility`).
+  window in a `PresentationWindow`.
 
 ## Mapping decisions
 
@@ -77,10 +72,8 @@ only the latest value, is not a replacement for this part of the queue.
 Existing `VecDeque` storage and incarnation/close admission remain sufficient;
 no new channel or scheduling abstraction is needed for these events.
 
-`queued_window_snapshots_preserve_transitions_and_address_the_sibling` drives
-the production FIFO with suspension followed by resumption and observes both on
-the addressed sibling. `admitted_close_refuses_a_later_typed_window_snapshot`
-pins terminal admission. This preserves the existing lifecycle behavior.
+**Unasserted:** no test pins this. This preserves the existing lifecycle
+behavior.
 
 This narrows the arbitrary-operation surface but does not complete ADR-0083's
 closed owner vocabulary or bound lossless queue memory. Backend frame pumps still

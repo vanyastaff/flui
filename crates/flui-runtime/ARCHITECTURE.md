@@ -61,9 +61,10 @@ host.
   `GlobalKey` registry composite over all the realm's presentations for the
   whole dynamic extent of the call, closing included. A binding whose own
   lock is held reports itself busy and the composite skips it (`flui-view`'s
-  `key::registry`), so no entry needs to exclude a presentation (pinned by
-  `closing_presentations_own_key_resolves_while_it_detaches` and
-  `drawer_style_state_read_during_the_realm_frame_does_not_deadlock`).
+  `key::registry`), so no entry needs to exclude a presentation.
+  `state_read_across_presentations_during_a_segment_resolves` pins a read of a
+  live sibling's key; a closing presentation's keys are **Unasserted:** no test
+  pins this.
 - **A failed presentation segment is contained to that presentation.**
   `draw_frame_entered` runs each presentation's segment under its own
   `catch_unwind` (ADR-0048); a panic or structured pipeline error is
@@ -152,8 +153,8 @@ host.
 - **The frame sink is the host's, the verdict is the realm's.** A host
   implements `sink::FrameSink`; the realm reads its `SubmitVerdict` and
   classifies retry, device loss and not-shown (ADR-0068). The trait stays
-  object-safe: `UiRealm::pump` drives it as `&mut dyn FrameSink` (pinned by
-  `sink::tests::a_host_sink_is_driven_through_dyn_frame_sink`).
+  object-safe: `UiRealm::pump` drives it as `&mut dyn FrameSink`, so the
+  compiler holds object safety at that signature.
   `SubmitVerdict` stays exhaustive, never `#[non_exhaustive]`: a new variant
   must make the compiler name the realm's match site and every host's
   mapping, and a wildcard arm would swallow it (pinned by the enum's
@@ -195,8 +196,8 @@ singleton), and its host is not the only thing that drives
 frames: a test driver pumps the same realm on a virtual clock. The runtime
 therefore lives in its own crate that names no host type, and the hosts depend
 on it. Semantics enablement follows: `SemanticsHost` is one per presentation,
-so two windows never share an enablement count or a platform callback. Pinned by
-`presentation::tests::semantics_host_is_exclusive_to_this_presentation`.
+so two windows never share an enablement count or a platform callback.
+**Unasserted:** no test pins this.
 
 ### The owner host is scheduling state, not a fourth physical owner
 
@@ -226,7 +227,9 @@ or a lost device arms a retry and keeps the frame's input epochs, a frame that
 rendered but could not be shown is retained rather than counted as done, and a
 frame with nothing to present falls back to no-present pacing (ADR-0068). The
 verdict is a crate contract. Pinned by `flui-app`'s raster-lane classification tests, for
-example `app::raster_lane::tests::a_withheld_frame_is_not_collapsed_into_no_present`.
+example `app::raster_lane::tests::a_device_loss_classifies_device_lost_and_recovery_reminting_unblocks`,
+and on the realm side by `surface_lost_keeps_needs_redraw_armed_for_a_retry` and
+`the_withheld_retry_is_bounded_and_then_parks`.
 
 ### `Vsync` controllers tick at the frame's timestamp
 
@@ -236,8 +239,7 @@ duration, relative to the realm's start), so a controller advances by frame
 time, not by whenever the tick happened to read the wall clock. A frame
 driven outside a pump (a bare `draw_frame`/`render_frame` in a test) falls
 back to the wall clock, and a test can still override it with
-`set_now_secs_for_test`. Pinned by
-`pump_ticks_vsync_controllers_at_the_frame_clocks_time`.
+`set_now_secs_for_test`. **Unasserted:** no test pins this.
 
 This covers the realm's `Vsync` registry only. A controller built on the
 scheduler (`AnimationController::new(d, realm.scheduler())`) is ticked by a
@@ -245,8 +247,7 @@ scheduler (`AnimationController::new(d, realm.scheduler())`) is ticked by a
 measures elapsed time on the wall clock, so a pump driven on a manual clock
 does not advance it. That behaviour is recorded and pinned in
 `flui-scheduler`'s `ARCHITECTURE.md` ("A ticker's elapsed time is wall-clock
-time, not the frame timestamp"); `pump_advances_a_scheduler_ticker_between_two_pumps`
-therefore lets real time pass between its pumps.
+time, not the frame timestamp").
 
 ### `Vsync` ticks in the persistent phase, not among the transient callbacks
 
@@ -261,7 +262,7 @@ disjoint (a controller registered with a scheduler ticks in begin frame, one
 registered with `Vsync` ticks here), so no controller advances twice, and the
 tick still precedes every presentation's build, which is the ordering the
 segment relies on. Moving the tick into begin frame is a separate change.
-Pinned by `pump_ticks_vsync_in_the_persistent_phase_not_among_transient_callbacks`.
+**Unasserted:** no test pins this.
 
 ### Addressed dispatch retains redraw demand across unwind
 

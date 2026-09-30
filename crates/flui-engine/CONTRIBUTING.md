@@ -40,7 +40,7 @@ cargo nextest run -p flui-engine --features testing --lib
 ```
 
 The `testing` feature gates an entire body of code — the readback
-suite and the deterministic-replay tests — that the default workspace pass
+suite — that the default workspace pass
 never compiles. This is the single most common way to ship a broken change
 here: you edit a GPU path, the default suite stays green because it never
 compiled that file, and CI goes red. **Always run the second command for any

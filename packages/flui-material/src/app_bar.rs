@@ -115,9 +115,7 @@
 //! common case (one route showing an `AppBar` at a time, which is what an
 //! `Overlay`-based navigator is for) this is unobservable; it only differs
 //! when multiple routes carrying their own `AppBar` are simultaneously
-//! mounted (see `tests/app_bar.rs`'s
-//! `implied_leading_appears_once_the_navigator_can_pop` for exactly that
-//! case, documented rather than hidden).
+//! mounted, where every one of them shows the implied leading.
 //!
 //! ## The leading slot is a fixed `LEADING_WIDTH`, not the leading widget's own intrinsic size
 //!

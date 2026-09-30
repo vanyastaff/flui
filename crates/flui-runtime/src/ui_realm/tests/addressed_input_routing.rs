@@ -162,14 +162,7 @@ pub(crate) fn panicking_keyboard_dispatch_keeps_priority_over_a_panicking_wake()
 
 // This module can only exercise `UiRealm`'s own write side
 // (`notify_presentation_focus_gained`) directly -- the production
-// `WindowFocus(false)`-never-moves-active guard actually lives in
-// `runner.rs`'s `PlatformToUi::run` (the `if focused` check around
-// the call to `notify_presentation_focus_gained`), which a direct
-// `UiRealm`-level test cannot reach or mutate. See
-// `realm_dispatch_tests::window_focus_true_moves_active_
-// presentation_end_to_end_and_false_does_not` (`runner.rs`) for the
-// real end-to-end proof, driven through `dispatch_platform_realm`
-// with genuine `RealmTask::Event(PlatformToUi::WindowFocus(_))`
-// tasks -- a vacuous direct-call version of this test (set B active,
-// assert B active, assert B active again with no operation between)
-// used to live here and was replaced for exactly that reason.
+// `WindowFocus(false)`-never-moves-active guard lives in the runner's
+// `PlatformToUi::run` (the `if focused` check around the call to
+// `notify_presentation_focus_gained`), which a direct `UiRealm`-level
+// test cannot reach or mutate.

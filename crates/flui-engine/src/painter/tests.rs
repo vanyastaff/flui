@@ -20,9 +20,8 @@ const READBACK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 /// Render `draw` into a `size`×`size` UNorm target cleared to `clear`, then
 /// return the tightly-packed RGBA bytes (`size*size*4`, row stride
-/// `size*4`). Use [`pixel_at`] to sample an individual texel. Unlike
-/// [`render_and_read_center`] this exposes every pixel so edge/column
-/// sampling (e.g. atlas-bleed checks) is possible.
+/// `size*4`). Use [`pixel_at`] to sample an individual texel. Every pixel is
+/// exposed so edge/column sampling (e.g. atlas-bleed checks) is possible.
 fn render_to_rgba(
     device: &Arc<wgpu::Device>,
     queue: &Arc<wgpu::Queue>,

@@ -1,8 +1,5 @@
 //! `Tab`/`TabBar`/`DefaultTabController` widget-level mount/interaction
-//! coverage — complements `tabs.rs`'s/`tab_controller.rs`'s own unit tests
-//! (M3 secondary default token-table probes, the pure `TabController`
-//! state-machine, `bar_height`/`label_padding`/`indicator_rect` geometry)
-//! with end-to-end mount proof: a real pointer down+up reaches
+//! coverage, as end-to-end mount proof: a real pointer down+up reaches
 //! [`TabController::set_index`] through [`InkWell`]'s dispatch, the divider
 //! and its theme override actually reach the mounted render tree (not just
 //! `resolve_style` computed in isolation), a zero-tab bar mounts the
@@ -58,12 +55,9 @@ pub fn tap_sets_the_controller_index_through_real_pointer_dispatch() {
 }
 
 /// A `DefaultTabController` whose `length` shrinks while its last tab is
-/// selected re-creates the controller with a clamped index (see
-/// `tab_controller.rs`'s own
-/// `recreate_for_length_change_clamps_an_out_of_range_index_to_the_last_tab`
-/// for the pure-function proof) — end to end, through a real root swap:
-/// mounting does not panic, and a subsequent tap still dispatches correctly
-/// through the re-created controller.
+/// selected re-creates the controller with a clamped index — end to end,
+/// through a real root swap: mounting does not panic, and a subsequent tap
+/// still dispatches correctly through the re-created controller.
 pub fn default_tab_controller_survives_a_length_shrink_past_the_selected_index() {
     let three_tabs = vec![
         Tab::new().text("One"),

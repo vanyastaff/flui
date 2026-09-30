@@ -28,9 +28,7 @@
 //! - **Not a listenable, no separate `dispose()`.** `OverlayEntry`
 //!   is a cheap `Arc`-backed handle with no listener list and
 //!   no disposal step of its own; dropping every clone is enough. A second
-//!   `remove()` is inert rather than panicking, pinned by
-//!   `crates/flui-widgets/tests/overlay.rs`'s
-//!   `removed_entry_cannot_reinsert_or_rebuild_silently`.
+//!   `remove()` is inert rather than panicking.
 //!
 //! [`Overlay`]: super::Overlay
 //! [`RebuildHandle`]: flui_view::RebuildHandle

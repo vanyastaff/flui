@@ -115,7 +115,7 @@ another at 144 Hz, a background one frozen), and raster scheduling (GPU backpres
 A UI tree cannot be handed to a worker, workers receive owned inputs and return results
 instead of writing into the tree, and cross-thread interaction exists only through sanctioned
 capabilities. Negative bounds are pinned by `assert_not_impl_any!` or `compile_fail` tests;
-positive ones by `assert_send`/`assert_sync` tests. A render object reaches its owner only
+positive ones by `assert_impl_all!` assertions. A render object reaches its owner only
 through an attachment-scoped `RenderInvalidationHandle`, never a stored `PipelineCell`, which
 would close an `Rc` cycle.
 

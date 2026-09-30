@@ -1,8 +1,7 @@
 //! `Material` widget-level coverage — proves the shape actually reaches
 //! paint/hit-test through the real owner-lane path-clip registration, not
 //! just that `MaterialShape::to_path` computes the right geometry in
-//! isolation (that unit-level geometry is covered by `shape.rs`'s own
-//! tests and `material.rs`'s `configured_shape_field_is_shape_sensitive_at_the_paint_size`).
+//! isolation.
 //!
 //! `RenderPhysicalModelBase::hit_test` always tests the resolved clip shape
 //! before testing the child (`crates/flui-objects/src/proxy/physical_model.rs`

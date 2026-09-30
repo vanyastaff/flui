@@ -174,7 +174,7 @@
 //!   but has not yet actually completed (settled to `Dismissed`). So a
 //!   `remove_current_snack_bar()` call arriving mid-reverse (after an
 //!   earlier `hide_current_snack_bar()`) must report `Remove`, not the
-//!   hide's own `Hide` — see `hide_then_remove_mid_reverse_reports_remove`.
+//!   hide's own `Hide`.
 //!
 //! Both a provisional (hide/timeout) and a completed (remove/action) call
 //! only ever *record* a reason on the entry — see the previous section for

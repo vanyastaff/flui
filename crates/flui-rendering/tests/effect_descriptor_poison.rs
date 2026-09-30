@@ -21,14 +21,10 @@ use flui_rendering::{
     testing::{box_node, edit_render_object, inspect::first_opacity_alpha, tree},
 };
 
-/// A `Single`-arity proxy whose `paint_effects` panics while `armed`. Shared
-/// by every test in this module that poisons through a descriptor build
-/// (as opposed to [`a_panicking_path_clipper_poisons_the_frame_on_both_arms`],
-/// which poisons through a walk-resolved clip instead).
+/// A `Single`-arity proxy whose `paint_effects` panics while `armed`, for
+/// tests that poison through a descriptor build.
 ///
-/// `skip_paint` gates the walk out before `paint_effects` runs at all
-/// ([`a_node_gated_out_by_skip_paint_never_builds_its_descriptor`]); every
-/// other test leaves it `false`.
+/// `skip_paint` gates the walk out before `paint_effects` runs at all.
 #[derive(Debug)]
 struct PoisonedDescriptor {
     armed: Arc<AtomicBool>,

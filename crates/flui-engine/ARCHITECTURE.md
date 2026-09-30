@@ -98,9 +98,8 @@ replay, never stored at record. `DrawSegment` derives `Clone` and the derive
 is what bars a `PooledTexture` field (it is `!Clone`, returning its slot on
 `Drop`). That is all the derive proves — wgpu 30's own handles are `Clone`
 ref-counts — so "the IR holds no GPU handle" is a reading of `command_ir`'s
-field types, not a compiler theorem. The deterministic-replay test records
-one scene and replays it to two independent targets, asserting byte-identical
-pixels; that is the runtime evidence that replay is a pure function of the IR.
+field types, not a compiler theorem, and no test checks that replay is a pure
+function of the IR.
 
 `WgpuPainter` is a coordinator, not a recorder: it holds `GpuStateStack`
 (transform / scissor / SDF-clip stacks), `LayerCompositor` (save-layer

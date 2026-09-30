@@ -91,5 +91,6 @@ focusable until they hold the focus. Arrow-key directional traversal and `Escape
   `find_semantics_wrappers` leaves out the focus-state annotation the way it leaves out a
   `GestureDetector`'s actions-only one.
 - Each behavior has a test that fails without it: `activation_tests` in `shortcuts.rs`, the
-  `InkWell` Enter tests, `the_root_stays_visible_when_the_focus_moves_into_the_tree`, and the
+  `InkWell` Enter tests, `generic_containers_are_lifted_and_hidden_subtrees_dropped` (the
+  window root is published as a `Window`, which AccessKit's filter keeps), and the
   live `cargo xtask device windows-input`.

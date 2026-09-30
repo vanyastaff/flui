@@ -198,8 +198,7 @@ impl TransitionInner {
 
 /// A route whose entrance and exit are animated.
 ///
-/// Private: `TransitionRoute` is not exported, and `transition_route_is_not_exported`
-/// keeps it that way until its sign-off gate.
+/// Private: `TransitionRoute` is not exported until its sign-off gate.
 pub struct TransitionRoute<T> {
     settings: RouteSettings,
     builder: RouteContentBuilder,
@@ -318,8 +317,8 @@ impl<T> TransitionRoute<T> {
     /// The controller is created in `install()`, so a caller cannot hold it up
     /// front; the handle resolves it lazily. Test-facing: a unit test drives
     /// the transition by hand through this handle (`set_value`) rather than
-    /// awaiting the `TickerFuture` `did_push` returns, since driving real
-    /// elapsed time through a `Vsync` is what `tests/routes.rs` is for.
+    /// awaiting the `TickerFuture` `did_push` returns; awaiting it needs real
+    /// elapsed time driven through a `Vsync`.
     #[must_use]
     pub fn handle(&self) -> TransitionHandle {
         TransitionHandle {
@@ -375,9 +374,9 @@ impl<T> TransitionRoute<T> {
         // **Not** `Animation::is_animating`, which for an `AnimationController` is
         // *overridden* to mean "the ticker is running", and stays true after a
         // controller has settled at `Completed`. Using the override here makes a
-        // settled route look like a moving train and forces a spurious hop —
-        // caught by `a_stale_train_does_not_clobber_a_newer_parent`. The
-        // controller's override is a separate, recorded divergence.
+        // settled route look like a moving train and forces a spurious hop,
+        // letting a stale train clobber a newer parent. The controller's
+        // override is a separate, recorded divergence.
         let is_moving = matches!(
             next_animation.status(),
             AnimationStatus::Forward | AnimationStatus::Reverse

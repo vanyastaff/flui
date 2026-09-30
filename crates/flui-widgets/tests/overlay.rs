@@ -16,8 +16,7 @@
 //! (`insert`/`rearrange`/`InsertPosition`, ADR-0076) are public. The entry
 //! list is read back through the temporary test-access probe
 //! `flui_widgets::__test_access::OverlayProbe` (ADR-0083 §4). The private
-//! onstage plan and `OverlayScope`'s notification predicate keep unit tests in
-//! `src/overlay/tests.rs`.
+//! onstage plan keeps a unit test in `src/overlay/tests.rs`.
 
 // ADR-0027: these tests capture owner-local handles in shared cells. The
 // library carries the same lint expectation; an integration test is a

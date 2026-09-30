@@ -5,9 +5,7 @@
 //! structurally cannot: whether a widget forced a clip, a transform, or an
 //! opacity layer into the output, and how many. Upstream's widget tests lean on
 //! this constantly (`tester.layers`, and the `getLayers()` container-chain walk
-//! `fitted_box_test.dart` defines locally); five files in
-//! `tests/parity/` currently list cases as out of scope naming the absence of
-//! exactly this capability.
+//! `fitted_box_test.dart` defines locally).
 //!
 //! The pipeline always produced the tree — `HeadlessBinding::pump_frame` simply
 //! dropped it on the floor, because headlessly there is no compositor to hand it

@@ -14,8 +14,8 @@
 //!   success fully clears the failure record;
 //! - a poisoned node's stand-in geometry is its LAST COMMITTED size when it
 //!   once succeeded, and exactly `Size::ZERO` when it never did — never a
-//!   value the node would produce if re-attempted right now. See the
-//!   retention/control pair near the end of this file.
+//!   value the node would produce if re-attempted right now. The retention
+//!   half is pinned near the end of this file.
 
 use std::sync::{
     Arc, Mutex,
@@ -273,7 +273,7 @@ pub(crate) fn single_transient_failure_does_not_poison() {
 
 // ============================================================================
 // Retention: a poisoned node's stand-in is its last committed size, not a
-// fake recovery to zero — and its control, a node that never committed
+// fake recovery to zero
 // ============================================================================
 
 /// A leaf whose layout panics on demand, driven entirely through shared
@@ -338,7 +338,7 @@ impl RenderObject<BoxProtocol> for RetainingLeaf {
 ///
 /// `Probe::box_geometry` panics instead of returning `None` on a node that
 /// never committed, and has no `geometry_degraded` counterpart — both are
-/// exactly what the retention/control pair below needs to read, so they go
+/// exactly what the retention test below needs to read, so they go
 /// through the node directly instead.
 fn node(run: &FrameRun, id: RenderId) -> &RenderNode {
     run.owner()
@@ -349,8 +349,7 @@ fn node(run: &FrameRun, id: RenderId) -> &RenderNode {
 
 /// A poisoned leaf's stand-in geometry is its own LAST COMMITTED size, not a
 /// fresh recomputation and not a collapse to zero — the retention half of
-/// the contract; [`a_leaf_that_never_committed_stands_in_with_zero`] below
-/// is its control, pinning the opposite answer from the identical oracle.
+/// the contract.
 ///
 /// Tree: `RenderPadding(5) → RenderPadding(5) → RetainingLeaf`, root
 /// constraints LOOSE (0..200 × 0..200) so the leaf's size is never derivable

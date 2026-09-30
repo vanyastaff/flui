@@ -193,9 +193,9 @@ either.
 
 - **Platform selection is exact.** A selection the platform sets is kept at any scalar
   boundary, including inside a grapheme cluster (TSF and AppKit address scalars); a tap or an
-  arrow key still snaps to graphemes, as the controller always has. Pinned by the kit's `selection_inside_a_grapheme_is_kept_exactly` and
-  `platform_selection_inside_a_grapheme_is_exact_while_a_tap_still_snaps`
-  (`flui-widgets/ARCHITECTURE.md` Mapping decision #35).
+  arrow key still snaps to graphemes, as the controller always has. The platform half is pinned
+  by the kit's `selection_inside_a_grapheme_is_kept_exactly` (`flui-widgets/ARCHITECTURE.md`
+  Mapping decision #35); the tap and arrow-key snapping is **Unasserted:** no test pins this.
 - **Obscured means protected.** An obscured field reports `status().protected`: text reads
   return `Protected`, while edits, selection and geometry (through the mask) work. Pinned by
   `obscured_editable_text_conforms_to_kit_v1`.
@@ -269,15 +269,13 @@ In place:
 - §2: `text_store::projection::tests` (preedit, cursor mapping and clamping, `cursor: None`,
   empty preedit with and without a composition, X11 start/end, commit, direct commit,
   `Disabled`, and a push event while commits are closed applying in order at the next anchor);
-  `flui-interaction` `dispatch_projects_preedit_and_commit_onto_the_active_store`,
-  `enabled_runs_on_session_start_and_edits_nothing`,
-  `an_attached_store_follows_the_owners_frame_transaction` (the reference store, unwrapped),
-  `a_grant_queued_by_a_replaced_or_detached_client_runs_at_the_anchor`; `flui-app`
-  `handle_input_entered_projects_ime_onto_the_attached_store`,
+  `flui-widgets` `focus_gain_attaches_an_ime_client_and_routes_preedit_to_the_controller` (an
+  IME event the realm receives is projected onto the attached store) and
+  `typing_after_a_deferred_commit_lands_after_the_commit` (an attached store follows the
+  owner's frame transaction); `flui-runtime`
   `a_text_store_lock_requested_during_a_frame_is_granted_after_the_drive_returns` (the grant
-  runs in `Idle`), `an_edit_made_at_the_commit_anchor_schedules_the_next_frame`, and
-  `runner_frame_ordering`'s scan that every runner drives frames through `UiRealm::drive_frame`;
-  the existing `EditableText` IME tests, now through the projection.
+  runs in `Idle`); `flui-app` `runner_frame_ordering`'s scan that every runner drives frames
+  through `UiRealm::drive_frame`; the existing `EditableText` IME tests, now through the projection.
 - §4: `flui-testing` `tests/text_store_kit.rs` (`in_memory_store_conforms_to_kit_v1` and one
   `kit_fails_a_store_that_…` test per fault, including a store that ignores the commit gate it
   is handed and one that notifies inside a transaction); `flui-widgets` `tests/text_store_kit.rs`

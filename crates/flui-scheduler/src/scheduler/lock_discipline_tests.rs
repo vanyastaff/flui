@@ -1,5 +1,4 @@
-//! Scheduler lock-discipline, reentrant-registration, and lock-then-drop
-//! tests (issue #1058).
+//! Scheduler lock-discipline tests (issue #1058).
 //!
 //! Split out of `scheduler.rs`'s inline `tests` module: `scheduler.rs` is a
 //! ~3.6k-line file with a ~1.4k-line inline test module, and this family --
@@ -43,8 +42,7 @@ use super::*;
 /// of a field destructure here.
 ///
 /// `callbacks.cancelled` and `LocalPostFrameLane`'s owner-local queue are
-/// covered by their own standalone tests instead of being folded into this
-/// destructure -- neither is a `Mutex`, but each is still a real
+/// not probed here. Neither is a `Mutex`, but each is still a real
 /// reentrancy hazard with its own different failure mode, not a lesser
 /// one: `DashMap` (6.2.1) is a SHARDED `RwLock`, not lock-free --
 /// `contains_key`/`get`/`get_mut` release their shard's lock immediately
@@ -53,18 +51,11 @@ use super::*;
 /// family above (`entry()` holds its shard write-locked for its entire
 /// life, vacant or occupied, regardless of whether the caller binds the
 /// payload to a name); a reentrant `RefCell` borrow panics rather than
-/// deadlocking, a third failure mode again.
-/// [`cancelled_dashmap_not_locked_on_reentrant_cancel_of_a_settled_id`]
-/// probes the running callback's own key with `try_get_mut` (a `try_write`
-/// attempt, so it fails on ANY existing holder, reader or writer) BEFORE
-/// making any other call into the map -- DashMap 6.2.1 has no all-shards
-/// "is anything locked" API, so this is a completeness pin on the one key
-/// a reentrant dispatch actually touches, not an exhaustive per-shard
-/// sweep. `LocalPostFrameLane::is_unlocked` is asserted directly inside
-/// `post_frame.rs`'s `local_then_local_nested_registration_defers`, since
-/// a lane is never a field of `SchedulerInner` for this destructure to see
-/// in the first place -- each `new_local_post_frame_lane()` call hands the
-/// caller its own, held separately from the scheduler's own storage.
+/// deadlocking, a third failure mode again. DashMap 6.2.1 has no
+/// all-shards "is anything locked" API to assert here, and a lane is never
+/// a field of `SchedulerInner` for this destructure to see in the first
+/// place -- each `new_local_post_frame_lane()` call hands the caller its
+/// own, held separately from the scheduler's own storage.
 fn assert_no_scheduler_lock_held(scheduler: &UpdateScheduler) {
     // Destructured without `..` on purpose: a `Mutex` added directly to
     // `SchedulerInner` (beside the owned sub-objects) must fail to compile
@@ -285,22 +276,3 @@ fn callbacks_run_with_no_scheduler_lock_held() {
         ],
     );
 }
-
-// =========================================================================
-// Reentrant registration (#1058) -- a callback that registers another
-// callback of its own family from inside itself must have the new one
-// deferred to the next frame, run exactly once (or every frame, for
-// persistent), never lost and never run early.
-// =========================================================================
-
-// =========================================================================
-// Lock-then-drop (#1058, sibling sites tracked with #1150) -- a removed
-// callback/listener's captured state can be the LAST reference at removal
-// time (these two are addressed by opaque `CallbackId`, not a live handle
-// the caller must keep, so nothing else clones the stored value). Dropping
-// it while the owning `Mutex` is still held deadlocks a capture whose own
-// `Drop` re-enters the scheduler. Each test below runs the removal on a
-// spawned thread and bounds the wait so a regression fails fast instead of
-// hanging the run; the test thread holds no scheduler-locking value across
-// the wait.
-// =========================================================================

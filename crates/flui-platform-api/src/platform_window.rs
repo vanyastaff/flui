@@ -215,8 +215,8 @@ pub trait PlatformWindow: Send + Sync {
     ///
     /// - `flui_app`'s frame wake handle — **unconditional**. It is installed as
     ///   the scheduler's `on_frame_scheduled` hook and handed to async wakers,
-    ///   so it fires on whatever thread completed the future. Pinned by
-    ///   `the_frame_wake_pokes_the_window_from_the_thread_that_fired_it`.
+    ///   so it fires on whatever thread completed the future. No test pins
+    ///   it.
     /// - `flui_app`'s AccessKit activation listener — **conditional**, and so
     ///   not reachable in a default build: it exists only under the non-default
     ///   `a11y` feature, and fires only once an assistive technology attaches to

@@ -5,10 +5,8 @@
 //!
 //! This is `flui-assets`' half of the Business.1 roadmap item ("confirm ...
 //! asset image ... loading"). It does **not** prove anything about the
-//! `Image` *widget* — `flui-widgets` has no dependency on `flui-assets` (see
-//! `crates/flui-widgets/tests/image.rs`'s
-//! `image_file_provider_decodes_a_committed_png_fixture_to_its_real_dimensions`
-//! for the widget's own, independent decode path). `docs/ROADMAP.md`'s
+//! `Image` *widget* — `flui-widgets` has no dependency on `flui-assets`, and
+//! `Image::file` decodes through its own, independent path. `docs/ROADMAP.md`'s
 //! Business.1 entry records that gap explicitly.
 #![cfg(feature = "images")]
 

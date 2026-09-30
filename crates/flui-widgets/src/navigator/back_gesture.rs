@@ -362,8 +362,7 @@ impl BackGestureRuntime {
     ///    the race between the pop's own settle and this detector's final
     ///    rebuild before `poll_settle` ever got to observe
     ///    `!controller.is_animating()`. Checking only `self.gesture` misses
-    ///    this case entirely and leaks the count forever — caught by
-    ///    `dispose_while_awaiting_settle_after_release_returns_the_counter_to_zero`.
+    ///    this case entirely and leaks the count forever.
     ///
     /// Either owes the same deferred `did_stop_user_gesture`. The two cases
     /// are kept as two flags (`gesture`/`awaiting_settle`) so

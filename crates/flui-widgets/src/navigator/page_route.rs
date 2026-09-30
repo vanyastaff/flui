@@ -290,8 +290,7 @@ impl<T: Send + Clone + 'static> PageRoute<T> {
     /// whether to wrap the page in the detector, and flipping it after the
     /// route is live would change the page subtree's identity out from under
     /// any `StatefulView` inside it, discarding its state (a cancelled
-    /// mid-gesture drag must not do this — see
-    /// `back_gesture_enabled_preserves_page_state_across_a_cancelled_gesture`).
+    /// mid-gesture drag must not do this).
     #[must_use]
     pub fn back_gesture(mut self, enabled: bool) -> Self {
         self.modal = self.modal.back_gesture(enabled);
@@ -310,9 +309,8 @@ impl<T: Send + Clone + 'static> PageRoute<T> {
 
     /// The animation handle, for driving a transition by hand. Test-facing: a
     /// test drives the transition with `set_value` through this handle
-    /// rather than awaiting the `TickerFuture` `did_push` returns; the real
-    /// awaited-clock coverage lives in `tests/routes.rs`, which drives a real
-    /// `Vsync` instead. Read through `crate::__test_access::RouteProbe`.
+    /// rather than awaiting the `TickerFuture` `did_push` returns, which needs a
+    /// real `Vsync`. Read through `crate::__test_access::RouteProbe`.
     pub(crate) fn transition_handle(&self) -> super::transition_route::TransitionHandle {
         self.modal.transition_handle()
     }
