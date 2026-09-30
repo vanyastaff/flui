@@ -206,10 +206,10 @@ and requeues nothing, so the stale capture is grafted and the update is gone for
 now evicts the capture alongside the flag, which also closes the pre-existing detached-subtree
 case it had only been warning about.
 
-**Replacement tests:** `a_child_dropped_from_a_later_layout_pass_stops_painting`,
-`…_stops_being_hit`, and `a_skipped_boundary_repaints_rather_than_grafting_a_stale_capture`
-(`crates/flui-rendering/tests/placed_generation_gate.rs`), each verified red with its own change
-reverted. Both need **two frames**: a child never laid out at all has size zero
+**Replacement tests:** none now. `a_child_dropped_from_a_later_layout_pass_stops_painting`,
+`…_stops_being_hit`, and `a_skipped_boundary_repaints_rather_than_grafting_a_stale_capture` were
+each verified red with its own change reverted, and were removed with the white-box tests. A
+test for the gate needs **two frames**: a child never laid out at all has size zero
 and paints nothing regardless, so a single-frame version passes with the gate removed — which the
 first draft did. `FrameRun::run_frame_again` is added for it.
 
@@ -785,13 +785,12 @@ adds its own entry.
 - *Keep the API and document the trap* — rejected; the deleted method's own module already
   documented it in passing ("dead in production") and that stopped nobody.
 
-**Replacement coverage:** `register_self_hit_entry` is exercised end-to-end by the widget-level
-hit-test ports that dispatch through a real pipeline — the `Transform`, `ClipPath`, `ClipRect`,
-`Wrap` and viewport-order cases in `crates/flui-widgets/tests/parity/`, each asserting a tap
-reaches or misses a specific child. The deleted tests asserted a write landed in a structure
+**Replacement coverage:** none now. `register_self_hit_entry` was exercised end-to-end by the
+widget-level hit-test ports that dispatched through a real pipeline — the `Transform`,
+`ClipPath`, `ClipRect`, `Wrap` and viewport-order cases, each asserting a tap reached or missed a
+specific child — and those were removed with the parity suite. The deleted tests asserted a write landed in a structure
 nobody read, so they were removed rather than adapted: they could not fail for a reason a user
-would notice. `crates/flui-widgets/tests/parity/render_viewport_test.rs` carries the debug trail
-of how the dead path was found.
+would notice.
 
 ### Lazy-sliver scroll correction keeps the first visible item stationary
 
@@ -823,7 +822,7 @@ of how the dead path was found.
 - `OnceCell<Box<dyn>>` — rejected. `OnceCell::get()` returns `&T`; the trait still has `&mut self` methods that need mutation, so the lock would have to come back under another name.
 - Arity-keyed enum dispatch — rejected. The trait is open-set via the blanket `impl<T: RenderBox + Diagnosticable> RenderObject<P> for T` (see [`src/traits/render_box.rs`](src/traits/render_box.rs)). Closing it to a known enum would force every user-defined render object into a derive-macro discipline and break the widget extensibility story.
 - `RenderObjectId` indirection (render object lives in a separate slab keyed by ID) — considered. Adds one extra indirection per access and doubles the lifecycle invariants (insert/delete across two slabs). Equivalent soundness-wise but more moving parts than necessary.
-- Inner-mutability split (immutable `Arc<dyn>` config + all mutation moved to `RenderState`) — considered. Largest API change of all the options; would force every concrete render object in `src/objects/` to be refactored. Filed as future work.
+- Inner-mutability split (immutable `Arc<dyn>` config + all mutation moved to `RenderState`) — considered. Largest API change of all the options; would force every concrete render object in `flui-objects` to be refactored. Filed as future work.
 
 **Accepted trade-off:** the layout and update paths must hold `&mut RenderTree` for the duration of the phase. Multi-child layout requires the `get_many_mut` primitive. The borrow checker, not a lock, enforces single-writer-per-frame — single-threaded with debug asserts, in place of the previous `RwLock`-based shape.
 
@@ -1024,8 +1023,8 @@ walk's `catch_unwind` turns it into `Poisoned`. Locked by
 | Site | Primitive | Category | Notes |
 |---|---|---|---|
 | `RenderEntry<P>::render_object` (`src/storage/entry.rs`) | plain `Box<dyn RenderObject<P>>` | Owned by value | Mutable access via `&mut self` from `&mut RenderTree`. The previous `RwLock<Box<dyn>>` was the canonical refusal-trigger violation; removed by the U2 exemplar refactor. |
-| `RenderState<P>::flags` (`src/storage/state.rs`) | `AtomicRenderFlags` (wrapping `AtomicU32`) | Lock-free atomics | Bit-level dirty flags + boundary bits. `Acquire/Release` ordering. The new `WAS_REPAINT_BOUNDARY` bit lives here. |
-| `RenderState<P>::geometry`, `constraints` (`src/storage/state.rs`) | `Option<ProtocolGeometry<P>>` / `Option<ProtocolConstraints<P>>` | Mutable via `&mut self` | Set and cleared via `&mut RenderState` during layout; no lock required. |
+| `RenderState<P>::flags` (`src/storage/state/mod.rs`) | `AtomicRenderFlags` (wrapping `AtomicU32`) | Lock-free atomics | Bit-level dirty flags + boundary bits. `Acquire/Release` ordering. The new `WAS_REPAINT_BOUNDARY` bit lives here. |
+| `RenderState<P>::geometry`, `constraints` (`src/storage/state/mod.rs`) | `Option<ProtocolGeometry<P>>` / `Option<ProtocolConstraints<P>>` | Mutable via `&mut self` | Set and cleared via `&mut RenderState` during layout; no lock required. |
 | `RenderState<P>::offset` (`src/storage/state/offset.rs`) | `OffsetCell` | `Cell` (single-threaded tree) | Paint position. |
 | `RenderTree::owner` (`src/storage/tree.rs:65`) | `Option<Arc<RwLock<PipelineOwner>>>` | Shared infrastructure | Allowed: locks may guard shared infrastructure. Off the per-node hot path. |
 | `PipelineOwner` parent/back-references throughout [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs) | `Arc<RwLock<PipelineOwner>>`, `Weak<RwLock<PipelineOwner>>` | Shared infrastructure | Soundness-rewrite precedent ([core-crates-hardening Task 7](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-core-crates-hardening.md)). |
@@ -1034,8 +1033,8 @@ walk's `catch_unwind` turns it into `Poisoned`. Locked by
 | `PipelineOwner::text` (`src/pipeline/text_context.rs`) | `Rc<RefCell<TextContext>>` | Owner-thread shared infrastructure | The realm's text context, shared by its presentations' pipelines. Borrowed once per measurement, never across a child's layout; `!Send`, like the owner. See "Layout contexts lend the realm's text context". |
 
 Two rows left this table because their sites left the crate: the mouse tracker
-lives in `flui-interaction` (`src/routing/mouse_tracker.rs`) and the render-view
-error builder in `flui-view` (`src/view/error.rs`); each is accounted for in its
+lives in `flui-interaction` (`crates/flui-interaction/src/routing/mouse_tracker.rs`) and
+the render-view error builder in `flui-view` (`crates/flui-view/src/view/error.rs`); each is accounted for in its
 owning crate.
 
 `NodePtr` in `src/pipeline/owner/subtree_arena.rs` is a plain raw-pointer newtype for the disjoint-subtree-borrow substrate ([`SubtreeArena`]) — `!Send + !Sync` by the language default, no manual impl. Confinement to the constructing thread is structural (`SubtreeArena` itself is `!Send + !Sync`, pinned by `static_assertions::assert_not_impl_any!`); there is no runtime thread check (`check_thread` and the pointer's former `unsafe impl Send/Sync` were both deleted once `PipelineCell`/dropped `Send + Sync` bounds made confinement type-enforced). Re-entrancy primitives `RenderTree::get_two_mut` and `get_parent_and_children_mut` (both in `src/storage/tree.rs`) are implemented and shipped; their unsafe is local to each function with unit-testable disjoint-keys invariants.
@@ -1096,7 +1095,7 @@ The forwarding wrappers left over from the previous lock-based API are deleted; 
 | `semantics_nodes_updated` | `run_semantics`, from `SemanticsOwner::flush`'s return | nodes in the delivered accessibility update; 0 when the diff is empty |
 | `frames_produced` | `run_frame` | frames that committed a layer tree |
 
-The composer's counts are folded into the owner only on `run_paint`'s commit path, so a paint pass that fails partway adds nothing. Every field is a plain integer (a `Cell` on the `!Send` layout arena): no atomics, no locks. `tests/phase_counters.rs` pins the counting rules on small trees.
+The composer's counts are folded into the owner only on `run_paint`'s commit path, so a paint pass that fails partway adds nothing. Every field is a plain integer (a `Cell` on the `!Send` layout arena): no atomics, no locks. `perf_counters_are_live_on_a_full_reassemble` (`crates/flui-widgets/tests/perf.rs`) checks that the counters move on a real frame; no test pins the per-rule counts.
 
 ### Criterion frame benchmarks (deferred -- needs workload generator)
 

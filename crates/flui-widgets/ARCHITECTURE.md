@@ -166,10 +166,9 @@ structural:
 - `DragTarget` tags itself `HitTestBehavior::Translucent`.
   Making it configurable stays a named deferral.
 
-**Tests:** the whole `DragTargetSlot` protocol group in
-`tests/parity/draggable_test.rs` (group 2), plus the live-discovery group
-(group 4) which pins the enter/move/leave/drop ordering for nested and
-overlapping targets.
+**Tests:** none now. The `DragTargetSlot` protocol tests and the live-discovery
+tests that pinned the enter/move/leave/drop ordering for nested and
+overlapping targets were removed with the parity suite.
 
 ### 2. `DragTargetDetails` carries a target-local position as well as a global one
 
@@ -249,16 +248,13 @@ recognizers' internal position plumbing — a change of its own size.
   tree's *current* transform. A frame that moves or scales the `Listener`
   between two moves therefore has the drag convert a stale local point through
   a fresh matrix, and the probe lands off the pointer until the contact ends.
-  The value that fixes this now exists and is proven correct at the dispatch
-  boundary — `a_mid_contact_transform_change_does_not_move_the_reported_global_position`
-  in `tests/parity/pointer_local_position_test.rs` pins it — but it stops at
-  the `Listener`, one layer above where this widget reads its position. Not
+  The value that fixes this now exists at the dispatch boundary, but it stops
+  at the `Listener`, one layer above where this widget reads its position. Not
   worked around.
 
-**Tests:** group 4 of `tests/parity/draggable_test.rs` drives real
-pointer input across a tree where the draggable and the targets are at
-different offsets, so a local-position implementation enters targets the
-pointer was never over.
+**Tests:** none now. The live-discovery tests that drove real pointer input
+across a tree where the draggable and the targets sit at different offsets
+were removed with the parity suite.
 
 ### 4. Named routes split into six untyped entry points and two typed ones, and a request that cannot be served is a typed error
 

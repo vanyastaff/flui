@@ -9,8 +9,8 @@ use anyhow::bail;
 
 use super::exec::{Cmd, Runner, installed, parsed};
 use crate::{
-    change_scope, changelog, docs_links, file_length, fonts, globals, markers, module_dag, perf,
-    toolchain, wgsl, workspace,
+    change_scope, changelog, docs_links, docs_paths, file_length, fonts, globals, markers,
+    module_dag, perf, toolchain, wgsl, workspace,
 };
 
 /// A formatter or linter that is a binary of its own, not a cargo step.
@@ -100,7 +100,7 @@ type InProcess = fn(&[&str]) -> anyhow::Result<ExitCode>;
 /// This crate's own checks, in the order they run: each `cargo xtask`
 /// command line and the command it names. lychee is skippable like
 /// [`TOOLS`], so `--strict` reaches `docs-links` too.
-fn in_process(strict: bool) -> [(&'static str, InProcess); 21] {
+fn in_process(strict: bool) -> [(&'static str, InProcess); 22] {
     [
         (
             if strict {
@@ -110,6 +110,7 @@ fn in_process(strict: bool) -> [(&'static str, InProcess); 21] {
             },
             |args| docs_links::docs_links(&parsed(args)?),
         ),
+        ("docs-paths", |args| docs_paths::docs_paths(&parsed(args)?)),
         ("workspace --self-test", |args| {
             workspace::workspace(&parsed(args)?)
         }),
@@ -174,6 +175,7 @@ mod tests {
             lines(false),
             [
                 "docs-links",
+                "docs-paths",
                 "workspace --self-test",
                 "workspace",
                 "reach --self-test",
