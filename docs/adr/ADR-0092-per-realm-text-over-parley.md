@@ -554,9 +554,9 @@ measuring through the realm's context (§10 step 3a); the rest do not exist yet.
   `dropping_a_realm_releases_its_text_context` and `a_second_presentation_adds_no_text_context`;
   in flui-app, `separate_realm_windows_shape_over_the_runtimes_font_collection` (through
   `build_runtime_realm`, the one call every runner site builds its realm with) and
-  `font_collection_is_the_one_the_services_own` (repeated calls on one runtime return the
-  same collection; that two runtimes hold different ones is **Unasserted:** no test pins
-  this).
+  `the_runtime_feeds_host_faces_once_for_every_realm` (repeated calls on one runtime return the
+  collection the services own, fed with the host's faces once; that two runtimes hold different
+  ones is **Unasserted:** no test pins this).
 - Layout measures through the realm's context (§10 step 3a): in
   `crates/flui-runtime/src/ui_realm/tests/text_context.rs`,
   `two_realms_measure_text_through_their_own_contexts` and
