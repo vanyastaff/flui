@@ -99,8 +99,7 @@ document.
   `RebuildReason::SignalChange`; equality is opt-in (`set_if_changed`). `cx.signal(..)`
   from `init_state` creates a slot released with the element. Writes and creations inside
   `build` are refused at run time (`SignalError::{WrittenDuringBuild, CreatedDuringBuild}`,
-  with a `tracing::warn!`) and flagged at review time by refusal trigger 24
-  (`scripts/check-signal-write-scope.sh`, advisory; its accepted fixture is compiled code).
+  with a `tracing::warn!`).
   Read/write closures never hold the graph borrowed (`SignalError::Reentrant` instead of a
   `RefCell` panic); stale handles are `SignalError::Released` through `try_get`/`try_with`.
   `HeadlessBinding::reactive()`, `UiCommand::SignalWrite` + `SignalSender`. FOUNDATIONS C1
@@ -124,7 +123,8 @@ document.
 - **Rebuild and relayout telemetry**: `BuildOwner::last_frame_build_report()` (elements
   rebuilt by the last `build_scope`, split by `RebuildReason`) and
   `PipelineOwner::layout_roots_total()` (monotonic count of drained layout roots).
-  `just bench-signals` measures `setState` against signals on one widget tree with them
+  `cargo bench -p flui-widgets --bench signals_rebuilds` measures `setState` against
+  signals on one widget tree with them
   (ADR-0074 §8.1).
 - **`flui run --device <android serial>` and a Gradle-less `flui build
   android`** (`flui-cli`, `flui`, `flui-app`). The facade re-exports
@@ -222,12 +222,10 @@ document.
 - **MSRV 1.97 → 1.98**, and the policy changed with it: pre-1.0 the MSRV now
   tracks the latest stable release (bumped within a week of each new stable)
   rather than only when a stabilization is actually used; post-1.0 it will
-  follow N-2. A new gate, `scripts/check-toolchain-consistency.sh` (wired
-  into `just gate` and the `checks` CI job as `toolchain-consistency-check`),
-  checks that `Cargo.toml`, `clippy.toml`, the `msrv` CI job, all five
-  `flui-cli` project templates, the README badge, and `llms.txt` agree with
-  `rust-toolchain.toml`'s channel, so the declaration can no longer drift
-  silently across those files.
+  follow N-2. A new gate, `cargo xtask toolchain` (part of `cargo xtask checks`),
+  checks that `Cargo.toml`, all five `flui-cli` project templates, the README
+  badge, and `llms.txt` agree with `rust-toolchain.toml`'s channel, so the
+  declaration can no longer drift silently across those files.
 - **Dependency gate: `cargo xtask deps`** (the CI job `deps`, formerly `deny`). cargo-deny now
   graphs every workspace member: the root manifest is the `flui` package, so the old run
   started at the facade and never checked `flui-cli`, `flui-assets`' `network` feature, the
@@ -331,7 +329,7 @@ document.
   FLUI clipboard sessions on Windows (the Win32 backend and the winit backend's `arboard`
   clipboard) now run under one process-wide lock. This was the crash that kept
   `flui-platform`'s suite off Windows; it now runs on windows-latest in the new
-  `platform-windows` CI job and in `just test-ci` on Windows.
+  `platform-windows` CI job and in `cargo xtask test` on Windows.
 - **winit backend parked after an exit requested in `about_to_wait` on Windows**
   (`flui-platform`): winit's Windows runner blocks on the control flow set in `about_to_wait`
   before it checks the exit flag, and `about_to_wait` kept setting `ControlFlow::Wait` even

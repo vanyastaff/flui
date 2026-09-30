@@ -29,8 +29,6 @@ The `edge-exceptions` in force:
 - `flui → flui-hot-reload` until [ADR-0094](adr/ADR-0094-hot-reload-through-subsecond.md); `flui → flui-material` and `flui → flui-cupertino` until [ADR-0088](adr/ADR-0088-official-packages-sdk-and-facade.md);
 - the kind rule's: the official package not yet on the SDK, `flui-hot-reload` → `flui-foundation`, `flui-layer`, `flui-rendering`, `flui-view` until ADR-0094.
 
-A crate marked **DISABLED** is commented out in `Cargo.toml` `[workspace.members]` while integration is in progress; the source tree still exists but is not built by default.
-
 ## Layer 0 — Foundation (value types)
 
 Empty: no crate declares `layer = 0`. The value types have no crate of their own; each lives with its owner ([ADR-0098](adr/ADR-0098-owned-f64-geometry-values.md) §8): geometry in `flui_foundation::geometry`, paint, styling and typography values in `flui-painting`, constraints in `flui-rendering`, gesture details in `flui-interaction`, and platform values (`Brightness`, `Locale`, IME) in `flui-platform-api`. The index stays so no manifest's `layer` renumbers.

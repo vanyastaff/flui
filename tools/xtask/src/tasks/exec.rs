@@ -2,8 +2,8 @@
 //!
 //! A command line is data ([`Cmd`]): a plan is a list of them ([`Step`]), so it
 //! can be printed (`--dry-run`), compared with the CI job it mirrors in a unit
-//! test, or run. [`Runner`] prints each command before it runs it, as `just`
-//! did, and stops at the first failure. Every command runs from the repository
+//! test, or run. [`Runner`] prints each command before it runs it and stops at
+//! the first failure. Every command runs from the repository
 //! root with this process's environment, so `CARGO_TARGET_DIR`,
 //! `CARGO_BUILD_JOBS` and the rest reach the nested cargo unchanged.
 

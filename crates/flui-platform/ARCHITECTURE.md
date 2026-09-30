@@ -237,7 +237,7 @@ probes retain their narrower lifecycle/frame assertions.
 
 **Rule:** every native keyboard event this crate receives must be normalized
 into the canonical `ui_events`/`keyboard-types` vocabulary (`Code`, `Key`,
-`Location`) at the platform boundary — see `traits/input.rs`'s module doc.
+`Location`) at the platform boundary — see the module doc of `flui-platform-api`'s `src/input.rs`.
 `Code::Unidentified` must mean the backend genuinely could not identify the
 physical key, never that a conversion table was incomplete (issue #1092).
 

@@ -181,7 +181,7 @@ RUST_LOG=flui_platform=trace,flui_engine=info cargo test -p flui-platform
 
 | Symptom | Likely cause |
 |---------|--------------|
-| `error: package 'flui-X' not found` | The crate is currently disabled in `Cargo.toml` `[workspace.members]`. Check [`crates.md`](crates.md). |
+| `error: package 'flui-X' not found` | Package names take a hyphen (`-p flui-assets`), crate paths an underscore (`flui_assets::`). [`crates.md`](crates.md) lists the packages. |
 | `error[E0432]: unresolved import 'flui_rendering::prelude::*'` | The crate is not in the dependency graph or the `prelude` module does not exist yet. |
 | `error: linking with 'link.exe'` on Windows | Install Visual Studio Build Tools 2022 (Desktop development with C++). |
 | `wgpu` crashes or shows blank window | Update graphics drivers; `cargo update -p wgpu` to pick up any patch-level fixes. |
