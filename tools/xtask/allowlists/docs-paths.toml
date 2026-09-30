@@ -1,0 +1,298 @@
+# Stale repository paths, packages and llms.txt links the docs keep on purpose, checked by
+# `cargo xtask docs-paths`. Counts are exact and only go down: a doc whose count of a kind
+# grows past its entry, or falls below it, is a finding. `--seed` prints the entries the tree
+# needs, with each `reason` left empty for a person to fill in.
+
+[[allow]]
+path = ".rust-studio/research/display-list-effect-depth-cliff.md"
+kind = "path"
+count = 1
+reason = "a dated research note: it cites the tree as it was when written"
+
+[[allow]]
+path = ".rust-studio/research/flutter-build-phase-geometry-lessons.md"
+kind = "path"
+count = 1
+reason = "a dated research note: it cites the tree as it was when written"
+
+[[allow]]
+path = ".rust-studio/research/flutter-cacheable-hot-path-lessons.md"
+kind = "path"
+count = 7
+reason = "a dated research note: it cites the tree as it was when written"
+
+[[allow]]
+path = ".rust-studio/research/flutter-container-state-loss-lessons.md"
+kind = "path"
+count = 1
+reason = "a dated research note: it cites the tree as it was when written"
+
+[[allow]]
+path = ".rust-studio/research/flutter-deep-widget-stack-lessons.md"
+kind = "path"
+count = 2
+reason = "a dated research note: it cites the tree as it was when written"
+
+[[allow]]
+path = ".rust-studio/research/flutter-invalid-unicode-text-input-lessons.md"
+kind = "path"
+count = 1
+reason = "a dated research note: it cites the tree as it was when written"
+
+[[allow]]
+path = ".rust-studio/research/flutter-overlay-follower-lessons.md"
+kind = "path"
+count = 3
+reason = "a dated research note: it cites the tree as it was when written"
+
+[[allow]]
+path = ".rust-studio/research/flutter-page-storage-typed-state-lessons.md"
+kind = "path"
+count = 1
+reason = "a dated research note: it cites the tree as it was when written"
+
+[[allow]]
+path = ".rust-studio/research/layer-tree-recursive-hot-walks.md"
+kind = "path"
+count = 2
+reason = "a dated research note: it cites the tree as it was when written"
+
+[[allow]]
+path = ".rust-studio/research/scheduler-async-frame-inventory.md"
+kind = "path"
+count = 1
+reason = "a dated research note: it cites the tree as it was when written"
+
+[[allow]]
+path = ".rust-studio/research/unsafe-concurrency-inventory.md"
+kind = "path"
+count = 1
+reason = "a dated research note: it cites the tree as it was when written"
+
+[[allow]]
+path = "crates/flui-cli/README.md"
+kind = "path"
+count = 2
+reason = "a file of the project `flui create` generates, not of this repository"
+
+[[allow]]
+path = "crates/flui-platform/ARCHITECTURE.md"
+kind = "path"
+count = 2
+reason = "winit's source layout, cited as market lineage"
+
+[[allow]]
+path = "crates/flui-rendering/ARCHITECTURE.md"
+kind = "path"
+count = 2
+reason = "the files of deferred work, named before they exist"
+
+[[allow]]
+path = "crates/flui-rendering/docs/AUDIT-AND-PLAN-2026-06.md"
+kind = "path"
+count = 2
+reason = "a dated audit: it names the files it audited"
+
+[[allow]]
+path = "design/architecture.md"
+kind = "path"
+count = 1
+reason = "`docs/evidence/windows.toml` is the planned record of the live IME and Narrator session"
+
+[[allow]]
+path = "design/build-footprint.md"
+kind = "path"
+count = 1
+reason = "trybuild's directory under the target directory, a build output"
+
+[[allow]]
+path = "design/decisions.md"
+kind = "path"
+count = 2
+reason = "a decision's context names the layout it changed, and the planned `docs/evidence/windows.toml` record"
+
+[[allow]]
+path = "design/dynamic-linking.md"
+kind = "package"
+count = 5
+reason = "the temporary prototype packages the measurement built and removed"
+
+[[allow]]
+path = "design/dynamic-linking.md"
+kind = "path"
+count = 4
+reason = "the temporary prototype packages the measurement built and removed"
+
+[[allow]]
+path = "design/research-findings.md"
+kind = "path"
+count = 4
+reason = "names files the text records as deleted"
+
+[[allow]]
+path = "docs/BETA.md"
+kind = "path"
+count = 3
+reason = "names files the text records as deleted"
+
+[[allow]]
+path = "docs/adr/ADR-0041-workspace-topology-contract.md"
+kind = "path"
+count = 1
+reason = "the decision's context names the layout the decision changed"
+
+[[allow]]
+path = "docs/adr/ADR-0042-theming-ownership.md"
+kind = "path"
+count = 1
+reason = "the decision's context names the layout the decision changed"
+
+[[allow]]
+path = "docs/adr/ADR-0044-driver-loop-hybrid.md"
+kind = "path"
+count = 2
+reason = "the decision's context names the layout the decision changed"
+
+[[allow]]
+path = "docs/adr/ADR-0077-migrate-to-parley.md"
+kind = "path"
+count = 1
+reason = "the decision's context names the layout the decision changed"
+
+[[allow]]
+path = "docs/adr/ADR-0078-rules-live-in-types-and-lints.md"
+kind = "path"
+count = 3
+reason = "the decision's context names the layout the decision changed"
+
+[[allow]]
+path = "docs/adr/ADR-0081-workspace-tiers-and-reach-facts.md"
+kind = "path"
+count = 1
+reason = "the decision's context names the layout the decision changed"
+
+[[allow]]
+path = "docs/adr/ADR-0082-platform-api-contract-crate.md"
+kind = "path"
+count = 3
+reason = "the decision's context names the layout the decision changed"
+
+[[allow]]
+path = "docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md"
+kind = "path"
+count = 3
+reason = "the decision's context names the layout the decision changed"
+
+[[allow]]
+path = "docs/adr/ADR-0084-open-capability-seam-and-plugins.md"
+kind = "path"
+count = 1
+reason = "the decision's context names the layout the decision changed"
+
+[[allow]]
+path = "docs/adr/ADR-0088-official-packages-sdk-and-facade.md"
+kind = "path"
+count = 2
+reason = "the decision's context names the layout the decision changed"
+
+[[allow]]
+path = "docs/adr/ADR-0089-upstream-types-in-stable-signatures.md"
+kind = "path"
+count = 1
+reason = "the decision's context names the layout the decision changed"
+
+[[allow]]
+path = "docs/adr/ADR-0090-ime-pull-text-store-contract.md"
+kind = "path"
+count = 2
+reason = "the decision's context names the layout the decision changed"
+
+[[allow]]
+path = "docs/adr/ADR-0097-no-process-global-state-gate.md"
+kind = "path"
+count = 1
+reason = "the decision's context names the layout the decision changed"
+
+[[allow]]
+path = "docs/designs/2026-05-20-mythos-flui-engine-redesign.md"
+kind = "path"
+count = 29
+reason = "a dated design proposal: it names the layout it proposed or replaced"
+
+[[allow]]
+path = "docs/designs/2026-05-20-mythos-flui-layer-redesign.md"
+kind = "path"
+count = 7
+reason = "a dated design proposal: it names the layout it proposed or replaced"
+
+[[allow]]
+path = "docs/designs/2026-05-20-mythos-flui-painting-redesign.md"
+kind = "path"
+count = 41
+reason = "a dated design proposal: it names the layout it proposed or replaced"
+
+[[allow]]
+path = "docs/designs/2026-05-20-mythos-flui-rendering-redesign.md"
+kind = "path"
+count = 2
+reason = "a dated design proposal: it names the layout it proposed or replaced"
+
+[[allow]]
+path = "docs/designs/2026-06-28-flutter-parity-hot-reload.md"
+kind = "package"
+count = 1
+reason = "a dated design proposal: it names the layout it proposed or replaced"
+
+[[allow]]
+path = "docs/designs/2026-08-10-render-update-impact.md"
+kind = "path"
+count = 2
+reason = "a dated design proposal: it names the layout it proposed or replaced"
+
+[[allow]]
+path = "docs/designs/2026-09-18-macos-ios-feature-completeness.md"
+kind = "path"
+count = 1
+reason = "a dated design proposal: it names the layout it proposed or replaced"
+
+[[allow]]
+path = "docs/hot-reload.md"
+kind = "package"
+count = 2
+reason = "the worker and host packages of the project `flui run` builds, not of this repository"
+
+[[allow]]
+path = "docs/test-minimization/inventory.md"
+kind = "package"
+count = 1
+reason = "a dated test-minimization report: it names the files it measured"
+
+[[allow]]
+path = "docs/test-minimization/inventory.md"
+kind = "path"
+count = 2
+reason = "a dated test-minimization report: it names the files it measured"
+
+[[allow]]
+path = "docs/test-minimization/report.md"
+kind = "package"
+count = 1
+reason = "a dated test-minimization report: it names the files it measured"
+
+[[allow]]
+path = "docs/test-minimization/report.md"
+kind = "path"
+count = 7
+reason = "a dated test-minimization report: it names the files it measured"
+
+[[allow]]
+path = "docs/testing.md"
+kind = "path"
+count = 1
+reason = "trybuild's directory under the target directory, a build output"
+
+[[allow]]
+path = "examples/README.md"
+kind = "path"
+count = 1
+reason = "`wasm-bindgen`'s output directory, a build output"
