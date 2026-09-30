@@ -22,7 +22,7 @@ use crate::typography::{
 
 /// One cluster where it is painted.
 #[derive(Clone, Debug)]
-struct Placed {
+pub(super) struct Placed {
     range: Range<usize>,
     left: f32,
     right: f32,
@@ -60,7 +60,8 @@ impl Placed {
 }
 
 /// One kept line where it is painted.
-struct PlacedLine {
+#[derive(Debug)]
+pub(super) struct PlacedLine {
     top: f32,
     bottom: f32,
     /// Where a caret on the line with no cluster sits.
@@ -72,8 +73,14 @@ struct PlacedLine {
 }
 
 impl ParagraphLayout {
-    /// The kept lines with their clusters, in painted coordinates.
-    fn placed_lines(&self) -> Vec<PlacedLine> {
+    /// The kept lines with their clusters, in painted coordinates, built on
+    /// the first query and kept with the layout.
+    fn placed_lines(&self) -> &[PlacedLine] {
+        self.placed.get_or_init(|| self.place_lines())
+    }
+
+    /// Places the kept lines' clusters where paint puts their glyphs.
+    fn place_lines(&self) -> Vec<PlacedLine> {
         let (box_width, _) = self.kept_extent();
         self.layout
             .lines()
@@ -172,7 +179,7 @@ impl ParagraphLayout {
     /// caret, a proportional slice of the cluster.
     pub(crate) fn caret(&self, position: TextPosition) -> Offset<f64> {
         let lines = self.placed_lines();
-        let (x, line) = self.caret_at(&lines, position);
+        let (x, line) = self.caret_at(lines, position);
         let top = lines.get(line).map_or(0.0, |line| line.top);
         Offset::new(f64::from(x), f64::from(top))
     }
@@ -222,7 +229,7 @@ impl ParagraphLayout {
         }
         let candidate = |offset: usize, affinity: TextAffinity| {
             let position = TextPosition::new(offset, affinity);
-            let (caret, on) = self.caret_at(&lines, position);
+            let (caret, on) = self.caret_at(lines, position);
             (on == index).then_some(((caret - x).abs(), position))
         };
         match (
@@ -301,8 +308,11 @@ impl ParagraphLayout {
 
     /// One entry per kept line, in the painted box.
     ///
-    /// `width` leaves out trailing whitespace and `left` is where the line's
-    /// visible text starts; `end_index` leaves out the line's hard break,
+    /// `hard_break` is true on a line that ends at an explicit break or at
+    /// the end of the paragraph, as Flutter's `LineMetrics.hardBreak`; the
+    /// last kept line of truncated text ends at neither. `width` leaves out
+    /// trailing whitespace and `left` is where the line's visible text
+    /// starts; `end_index` leaves out the line's hard break,
     /// which `end_including_newline` keeps. A layout with no line reports one
     /// line box of the paragraph's line height.
     pub(crate) fn line_metrics(&self) -> Vec<LineMetrics> {
@@ -326,8 +336,9 @@ impl ParagraphLayout {
                 let without_newline = text.trim_end_matches(is_break);
                 let end_index = start + without_newline.len();
                 let visible_end = start + without_newline.trim_end().len();
+                let ends_paragraph = !self.ellipsized && range.end >= self.text.len();
                 LineMetrics::new(
-                    line.break_reason() == BreakReason::Explicit,
+                    line.break_reason() == BreakReason::Explicit || ends_paragraph,
                     f64::from(m.baseline - m.block_min_coord),
                     f64::from(m.block_max_coord - m.baseline),
                     f64::from(m.baseline - m.block_min_coord),

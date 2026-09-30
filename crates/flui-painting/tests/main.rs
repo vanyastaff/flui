@@ -272,6 +272,14 @@ fn caret_contract() {
                 "truncated_carets_stay_in_kept_lines",
                 cc::truncated_carets_stay_in_kept_lines,
             ),
+            (
+                "truncated_text_without_an_ellipsis_stays_in_its_kept_line",
+                cc::truncated_text_without_an_ellipsis_stays_in_its_kept_line,
+            ),
+            (
+                "line_metrics_index_each_line",
+                cc::line_metrics_index_each_line,
+            ),
         ],
     );
 }

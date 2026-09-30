@@ -375,3 +375,68 @@ pub(crate) fn truncated_carets_stay_in_kept_lines() {
         "a hit past the line answers the kept end, got {far}"
     );
 }
+
+/// Truncation without an ellipsis keeps carets and word boundaries in the
+/// kept line: an offset in the dropped line answers the caret at the kept
+/// line's end, and the word there is one the kept line holds.
+pub(crate) fn truncated_text_without_an_ellipsis_stays_in_its_kept_line() {
+    let text = "one two\nthree";
+    let painter = laid_out(
+        painter(text, TextDirection::Ltr).with_max_lines(Some(1)),
+        f64::INFINITY,
+    );
+    assert!(painter.did_exceed_max_lines());
+    let kept_end = caret(&painter, 7);
+    assert!(kept_end.dx > 1.0, "{kept_end:?}");
+    for offset in 8..=text.len() {
+        let got = caret(&painter, offset);
+        assert!(
+            (got.dx - kept_end.dx).abs() < EPS && (got.dy - kept_end.dy).abs() < EPS,
+            "{offset}: {got:?}, the kept end is {kept_end:?}"
+        );
+    }
+    let word = painter.get_word_boundary(TextPosition::downstream(10));
+    assert!(word.end <= 7, "a dropped word was selected: {word:?}");
+}
+
+/// Line metrics index each line's own text and say where it is painted:
+/// every line ends at a hard break, the last at the paragraph's end; the
+/// trailing space before a newline is in `end_index` but not in
+/// `end_excluding_whitespace`; and a short line aligned right starts where
+/// its glyphs are painted. Line metrics are in the paragraph's own box, the
+/// painter's alignment offset left out.
+pub(crate) fn line_metrics_index_each_line() {
+    let ltr_lines = ltr("ab \ncd");
+    let got: Vec<_> = ltr_lines
+        .get_line_metrics()
+        .iter()
+        .map(|line| {
+            (
+                line.hard_break,
+                line.start_index,
+                line.end_index,
+                line.end_excluding_whitespace,
+                line.end_including_newline,
+            )
+        })
+        .collect();
+    assert_eq!(got, vec![(true, 0, 3, 2, 4), (true, 4, 6, 6, 6)]);
+    for line in ltr_lines.get_line_metrics() {
+        assert!(line.left.abs() < EPS, "{line:?}");
+    }
+
+    let rtl = laid_out(painter("abcd\nx", TextDirection::Rtl), 300.0);
+    let lines = rtl.get_line_metrics();
+    let short = &lines[1];
+    assert!(short.left > 1.0, "{short:?}");
+    assert!(
+        (short.left + short.width - rtl.width()).abs() < EPS,
+        "the short line ends at the box's right edge: {short:?}"
+    );
+    let (_, offset) = painted(&rtl);
+    let first = caret(&rtl, 5).dx - offset.dx;
+    assert!(
+        (short.left - first).abs() < EPS,
+        "the line starts at its first caret, {first} in the box: {short:?}"
+    );
+}

@@ -8,7 +8,9 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::OnceLock;
 
+use super::caret::PlacedLine;
 use crate::display_list::paragraph::RunData;
 use crate::display_list::{FontBlob, FontFace, ShapedGlyph, ShapedParagraph};
 use crate::glyphs::{Synthesis, fake_bold_width};
@@ -73,11 +75,14 @@ pub struct ParagraphLayout {
     direction: TextDirection,
     /// Whether an ellipsis replaced dropped lines; the layout itself then
     /// holds only the kept ones.
-    ellipsized: bool,
+    pub(super) ellipsized: bool,
     /// Where the kept text ends: before an appended ellipsis, or at the end
     /// of the last kept line (its hard break left out) when lines are
     /// dropped. Caret and hit queries never reach past it.
     pub(super) kept_text: usize,
+    /// The kept lines' clusters where they are painted, for the caret
+    /// queries; built on the first one.
+    pub(super) placed: OnceLock<Vec<PlacedLine>>,
 }
 
 // A painter keeps its layout in its cache, and a render object holding the
@@ -500,6 +505,7 @@ impl TextContext {
             direction: paragraph.direction,
             ellipsized,
             kept_text,
+            placed: OnceLock::new(),
         }
     }
 
@@ -738,8 +744,8 @@ fn span_info(len: usize, family: String, style: Option<&TextStyle>) -> SpanInfo 
 
 /// The one family a style is shaped with, and its name as a snapshot prints
 /// it: FLUI's family rule (`resolve_family_name`) over the families
-/// `collection` holds, the rule the process font system resolves with over
-/// its own database. Nothing follows it in the list: past that family,
+/// `collection` holds, so an absent name never reaches Parley's fallback
+/// walk (flui-painting `ARCHITECTURE.md`, mapping decision 8). Nothing follows it in the list: past that family,
 /// Parley walks the collection's fallback families, which mirror the process
 /// font system's fallback order in a collection fed from the host
 /// (`FontCollection::with_host_faces`).
@@ -765,11 +771,10 @@ fn family(
 
 /// Whether `collection` holds a family spelled exactly `name`.
 ///
-/// fontique looks family names up without regard to case, fontdb (and so the
-/// process font system's `InstalledFamilies`) exactly; the rule is asked the
-/// process side's question, so a style naming `"segoe ui"` degrades to the
-/// sans-serif generic on both sides instead of shaping in Segoe UI here and
-/// in the generic's family there.
+/// fontique looks family names up without regard to case; the rule asks for
+/// the exact spelling, as it did of the process font system's database, so a
+/// style naming `"segoe ui"` degrades to the sans-serif generic rather than
+/// shaping in Segoe UI on one host and in the generic's family on another.
 pub(crate) fn holds_exactly(collection: &mut Collection, name: &str) -> bool {
     collection
         .family_id(name)
