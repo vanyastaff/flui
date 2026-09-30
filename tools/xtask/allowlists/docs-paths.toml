@@ -148,12 +148,6 @@ count = 1
 reason = "the decision's context names the layout the decision changed"
 
 [[allow]]
-path = "docs/adr/ADR-0093-router-is-the-primary-navigation-api.md"
-kind = "path"
-count = 1
-reason = "the decision's context names the layout the decision changed"
-
-[[allow]]
 path = "docs/adr/ADR-0097-no-process-global-state-gate.md"
 kind = "path"
 count = 1
