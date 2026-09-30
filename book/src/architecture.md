@@ -18,7 +18,7 @@ is an index into it, not a restatement.
 ## Per-crate architecture
 
 Most crates carry their own `crates/<crate>/ARCHITECTURE.md` for the design decisions local to
-it, including a `## Mapping decisions` section recording any deliberate Flutter divergence.
+it; a `## Mapping decisions` section there explains the notable choices.
 
 ## Architecture Decision Records
 

@@ -11,7 +11,6 @@ parts that differ.
 - [Layout: constraints down, sizes up](layout.md) — the layout protocol.
 - [State: setState, InheritedView, ValueNotifier](state.md) — the ways state enters the tree.
 
-Every claim on these pages is checked against the real trait/struct definitions in `crates/` —
-see AGENTS.md's Design stance for why that matters more here than it would in most frameworks'
-docs: a divergence from Flutter is only valid when it's deliberate and recorded, so this book
-cannot afford to describe a contract that doesn't match the code.
+Every claim on these pages is checked against the real trait/struct definitions in `crates/`:
+FLUI differs from Flutter in many places by design, so a page written from Flutter's docs rather
+than from the code would describe a contract FLUI does not have.

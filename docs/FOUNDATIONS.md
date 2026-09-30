@@ -2,7 +2,7 @@
 
 # FLUI Architecture Foundations
 
-> The architecture contract for the Flutter → Rust port. It defines the **target** — the complete FLUI product — and the rules that target is built to. It is written **forward**: the benchmark is released Flutter; the goal is the finished framework; the current codebase is a head start measured *against* that target, never the other way around.
+> The architecture contract for FLUI, a declarative UI framework for Rust that takes Flutter as its reference, not as a spec to port. It defines the **target** — the complete FLUI product — and the rules that target is built to. It is written **forward**: the benchmark is released Flutter; the goal is the finished framework; the current codebase is a head start measured *against* that target, never the other way around.
 
 This document is the bedrock under [`ROADMAP.md`](ROADMAP.md). The roadmap sequences construction; this document says *what is being constructed and to what rules*. It is the "right contract" — the set of decisions that, if settled wrong, force a catalog-wide rewrite later.
 
@@ -13,7 +13,7 @@ This document is the bedrock under [`ROADMAP.md`](ROADMAP.md). The roadmap seque
 - **Benchmark / floor — released Flutter.** `.flutter/flutter-master/packages/flutter/lib/src/` is a shipped, mature product (framework logic across 12 packages) with a test corpus to match. It defines the *minimum* observable behavior and the cheapest oracle for it; it does not define the ceiling, the architecture, or the idiom. FLUI is measured as *at least* this, and expected to be more.
 - **Target — the complete FLUI.** Flutter's behavior as the floor, Rust-native structure, and **better than Flutter wherever a better solution is known** — in functionality, architecture, and code style — with each improvement pinned by a FLUI test.
 - **Current code — a flawed head start.** The existing crates are an inventory, not an anchor. Where the current code matches the target it is kept (a genuine head start — the render *machine* is gold-standard); where it does not, that is an unbuilt or wrong delta of **low narrative weight**, closed as normal construction reaches it. The current code does not anchor the target architecture — the target does. Where current-code defect *patterns* inform the standing quality discipline of Part VI, that is deliberate and forward-looking: a rule that refuses an observed mistake protects the finished product.
-- **The three architectural rules**: *behavior as floor, everything else designed for Rust* (observable contracts from `.flutter/` are the minimum, improved wherever a better solution is known and the improvement is recorded and tested), *compile-time over runtime*, *sync hot path, async at the edges*. What "better" may never cost is an edge case lost by accident: a Flutter behavior is dropped only by decision, with its test replaced.
+- **The three architectural rules**: *behavior as floor, everything else designed for Rust* (observable contracts from `.flutter/` are the minimum, improved wherever a better solution is known and the improvement pinned by a test), *compile-time over runtime*, *sync hot path, async at the edges*. What "better" may never cost is an edge case lost by accident: a Flutter behavior is dropped only by decision, with its test replaced.
 
 **Backing research** (read for the per-decision depth this document synthesizes):
 
@@ -64,7 +64,7 @@ Four subsystems needed FLUI's code to **change direction** before the widget cat
 
 ## Part II — Where FLUI is better than Flutter
 
-A port is not a transliteration. Flutter's *behavior* is the specification; Flutter's *Dart structure* is an implementation detail of a garbage-collected language. Rust permits genuine improvements at the structure layer — and FLUI takes them, deliberately, where they cost nothing in behavior parity.
+FLUI is not a transliteration of Flutter. Flutter's *behavior* is the reference to start from; Flutter's *Dart structure* is an implementation detail of a garbage-collected language. Rust permits genuine improvements at both layers, and FLUI takes them wherever the result is better.
 
 | # | Area | Flutter (Dart) | FLUI target (Rust) | Why it is better |
 |---|---|---|---|---|
@@ -286,7 +286,7 @@ in `AGENTS.md` and each crate's `ARCHITECTURE.md`, checked in review.
 
 ## Governance
 
-This document is the **architecture contract** for the port. Its relationship to the other governing documents:
+This document is the **architecture contract** for FLUI. Its relationship to the other governing documents:
 
 - **`FOUNDATIONS.md`** (this document) — *what* (the target architecture, the locked contracts, the crate graph).
 - [`ROADMAP.md`](ROADMAP.md) — *when / in what order* (the dependency-ordered construction phases).

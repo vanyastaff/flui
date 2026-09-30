@@ -30,12 +30,11 @@ into.
   render object in `flui-objects` is catalog-tested against it. See
   [`docs/TESTING.md`](docs/TESTING.md).
 
-## Flutter parity
+## Flutter as a reference
 
-Layout, paint, hit-test, and dirty-propagation behavior is ported 1:1 from
-Flutter's `rendering/` library (behavior, not structure). Changes here must be
-cross-checked against the reference; the harness suite is the enforcement, and
-a deliberate divergence is recorded in `ARCHITECTURE.md` `## Mapping decisions`.
+Layout, paint, hit-test, and dirty-propagation behavior starts from Flutter's
+`rendering/` library, and FLUI diverges wherever the result is better. The
+harness suite pins the behavior FLUI ships.
 
 ## Documentation
 
