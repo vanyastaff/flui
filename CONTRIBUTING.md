@@ -40,6 +40,11 @@ design document with no code, and a code change with no record, are both incompl
 - The repository ships no git hook: CI's fast lane is the gate. For the answer before a push,
   `cargo xtask check-changed` runs that lane locally, and `cargo xtask gate` the non-test half of
   `cargo xtask ci`.
+- `.gitignore` lists only what this repository's own builds and workflows write. Your own tools
+  stay on your machine: an agent runtime's or editor's state goes in `.git/info/exclude` (every
+  worktree of the clone shares it) or your global excludes file, and an MCP server or language
+  server you want goes in your user-level configuration (for Claude Code,
+  `claude mcp add --scope user`).
 
 ## Changelog
 
