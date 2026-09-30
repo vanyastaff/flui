@@ -115,12 +115,20 @@ pub(super) fn code(markdown: &str) -> Vec<Code> {
     found
 }
 
-/// Whether `dest` is a permalink to this repository at a commit (a hex hash of
+/// Whether `dest` (its scheme and host in any case) is a permalink to this repository at a commit (a hex hash of
 /// 7 to 40 digits): it cites a file as it was then, deleted since or not. A
 /// branch, `main` or a misspelling of it, is not a pinned revision.
 fn pinned(dest: &str) -> bool {
+    const GITHUB: &str = "https://github.com/";
+    let Some(rest) = dest
+        .get(..GITHUB.len())
+        .filter(|origin| origin.eq_ignore_ascii_case(GITHUB))
+        .map(|_| &dest[GITHUB.len()..])
+    else {
+        return false;
+    };
     ["blob", "tree"].iter().any(|kind| {
-        dest.strip_prefix(&format!("https://github.com/vanyastaff/flui/{kind}/"))
+        rest.strip_prefix(&format!("vanyastaff/flui/{kind}/"))
             .and_then(|rest| rest.split_once('/'))
             .is_some_and(|(reference, _)| {
                 (7..=40).contains(&reference.len())
@@ -338,8 +346,8 @@ pub(super) fn packages(code: &str) -> Vec<Selected> {
             found.extend(package(&name).map(|(name, version)| Selected {
                 line,
                 subcommand: subcommand.clone(),
-                name: name.to_owned(),
-                version: version.map(str::to_owned),
+                name,
+                version,
             }));
         }
     }
@@ -363,6 +371,19 @@ fn cargo_command(words: &mut VecDeque<(usize, String)>) -> bool {
         };
         if program == "cargo" || program.ends_with("/cargo") {
             return true;
+        }
+        // `command [-p] COMMAND` runs it; `command -v`/`-V` only looks it up
+        if program == "command" {
+            while let Some((line, word)) = words.pop_front() {
+                if matches!(word.as_str(), "-v" | "-V") {
+                    return false;
+                }
+                if !word.starts_with('-') {
+                    words.push_front((line, word));
+                    break;
+                }
+            }
+            continue;
         }
         // `time [OPTION]... COMMAND`: the shell keyword and GNU time alike
         if program == "time" || program.ends_with("/time") {
@@ -460,7 +481,7 @@ fn assignment(word: &str) -> bool {
 /// version after `@`, if any; `None` for a placeholder (`<crate>`, `$CRATE`,
 /// `{name}`, `…`), which names no one package. Any other word is taken as written, so a malformed name
 /// (`definitely.missing`) is a finding, as cargo rejects it.
-fn package(word: &str) -> Option<(&str, Option<&str>)> {
+fn package(word: &str) -> Option<(String, Option<String>)> {
     let placeholder = word.is_empty()
         || word.starts_with('@')
         || word.contains(['<', '>', '$', '{', '}', '…'])
@@ -468,50 +489,92 @@ fn package(word: &str) -> Option<(&str, Option<&str>)> {
     if placeholder {
         return None;
     }
+    // a fully qualified spec, `[kind+]url[#name][@|:version]`: the name is the
+    // fragment's, or else the URL's last path segment; its source is not checked
+    let spec = match word.rsplit_once('#') {
+        Some((url, fragment)) if url.contains("://") => {
+            if fragment.starts_with(|c: char| c.is_ascii_alphabetic()) {
+                fragment.to_owned()
+            } else {
+                format!("{}@{fragment}", last_segment(url))
+            }
+        }
+        _ if word.contains("://") => last_segment(word).to_owned(),
+        _ => word.to_owned(),
+    };
     // `name@version`, or the legacy `name:version`
     Some(
-        match word.split_once('@').or_else(|| word.split_once(':')) {
-            Some((name, version)) => (name, Some(version)),
-            None => (word, None),
+        match spec.split_once('@').or_else(|| spec.split_once(':')) {
+            Some((name, version)) => (name.to_owned(), Some(version.to_owned())),
+            None => (spec, None),
         },
     )
+}
+
+/// The last path segment of `url` (`…/crates/flui-view` gives `flui-view`).
+fn last_segment(url: &str) -> &str {
+    url.trim_end_matches('/').rsplit('/').next().unwrap_or(url)
 }
 
 /// Whether a `-p` value is a glob cargo matches against package names
 /// (`flui-*`, `flui-?iew`).
 pub(super) fn is_glob(name: &str) -> bool {
-    name.contains(['*', '?'])
+    name.contains(['*', '?', '['])
 }
 
-/// Whether the glob `pattern` (`*` any run, `?` any one character) matches
-/// all of `name`.
+/// Whether the glob `pattern` matches all of `name`: `*` any run, `?` any one
+/// character, `[abc]`/`[a-z]` one of a class (`[!…]`/`[^…]` one not in it).
 pub(super) fn glob_matches(pattern: &str, name: &str) -> bool {
-    let (pattern, name): (Vec<char>, Vec<char>) =
-        (pattern.chars().collect(), name.chars().collect());
-    // the classic two-pointer walk, backtracking to the last `*`
-    let (mut p, mut n) = (0, 0);
-    let mut star: Option<(usize, usize)> = None;
-    while n < name.len() {
-        match pattern.get(p) {
-            Some('*') => {
-                star = Some((p, n));
-                p += 1;
-            }
-            Some(&c) if c == '?' || c == name[n] => {
-                p += 1;
-                n += 1;
-            }
-            _ => match star {
-                Some((star_p, star_n)) => {
-                    p = star_p + 1;
-                    n = star_n + 1;
-                    star = Some((star_p, star_n + 1));
-                }
-                None => return false,
-            },
-        }
+    let pattern: Vec<char> = pattern.chars().collect();
+    let name: Vec<char> = name.chars().collect();
+    glob_at(&pattern, &name)
+}
+
+fn glob_at(pattern: &[char], name: &[char]) -> bool {
+    match pattern.first() {
+        None => name.is_empty(),
+        Some('*') => (0..=name.len()).any(|skip| glob_at(&pattern[1..], &name[skip..])),
+        Some('?') => !name.is_empty() && glob_at(&pattern[1..], &name[1..]),
+        Some('[') => match (class(&pattern[1..]), name.first()) {
+            (Some((set, len)), Some(&c)) => set(c) && glob_at(&pattern[1 + len..], &name[1..]),
+            (Some(_), None) => false,
+            // an unclosed `[` is a literal
+            (None, first) => first == Some(&'[') && glob_at(&pattern[1..], &name[1..]),
+        },
+        Some(literal) => name.first() == Some(literal) && glob_at(&pattern[1..], &name[1..]),
     }
-    pattern[p..].iter().all(|&c| c == '*')
+}
+
+/// The class after a `[`: whether a character is in it, and how many
+/// characters of the pattern it takes, its `]` included; `None` when unclosed.
+fn class(pattern: &[char]) -> Option<(impl Fn(char) -> bool + '_, usize)> {
+    let negated = matches!(pattern.first(), Some('!' | '^'));
+    let body_start = usize::from(negated);
+    // a `]` first in the class is a member, not its end
+    let close = pattern
+        .iter()
+        .skip(body_start + 1)
+        .position(|&c| c == ']')
+        .map(|at| at + body_start + 1)?;
+    let body = &pattern[body_start..close];
+    let contains = move |c: char| {
+        let mut at = 0;
+        while at < body.len() {
+            if at + 2 < body.len() && body[at + 1] == '-' {
+                if (body[at]..=body[at + 2]).contains(&c) {
+                    return true;
+                }
+                at += 3;
+            } else {
+                if body[at] == c {
+                    return true;
+                }
+                at += 1;
+            }
+        }
+        false
+    };
+    Some((move |c| contains(c) != negated, close + 1))
 }
 
 /// Byte offsets to 1-based line numbers.

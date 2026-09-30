@@ -183,6 +183,34 @@ fn packages_are_read_only_from_cargo_commands() {
             &[(3, build, "a")],
         ),
         ("cat <<< x; cargo build -p a", &[(0, build, "a")]),
+        (
+            "cat <<'END MARK'\ncargo test -p gone\nEND MARK\ncargo build -p a",
+            &[(3, build, "a")],
+        ),
+        // a command substitution is a command of its own
+        ("echo \"$(cargo test -p a)\"", &[(0, test, "a")]),
+        ("x=`cargo tree -p a`", &[(0, Some("tree"), "a")]),
+        ("echo $(cd y && cargo build -p a)", &[(0, build, "a")]),
+        // redirections and their targets are not words
+        (">build.log cargo test -p a", &[(0, test, "a")]),
+        ("cargo test -p a 2>&1 | tee log", &[(0, test, "a")]),
+        ("cargo test -p a &>log", &[(0, test, "a")]),
+        ("cargo build -p a < in", &[(0, build, "a")]),
+        // a `<name>` placeholder is a word, not a redirection
+        ("cargo tree -p <crate> -e normal", &[]),
+        // the `command` builtin runs its operand; `-v` only looks it up
+        ("command cargo test -p a", &[(0, test, "a")]),
+        ("command -p cargo test -p a", &[(0, test, "a")]),
+        ("command -v cargo test -p gone", &[]),
+        // a fully qualified package-ID spec names its fragment's package
+        (
+            "cargo pkgid -p 'registry+https://github.com/rust-lang/crates.io-index#bitflags@2'",
+            &[(0, Some("pkgid"), "bitflags")],
+        ),
+        (
+            "cargo pkgid -p https://github.com/o/some-crate#1.2.3",
+            &[(0, Some("pkgid"), "some-crate")],
+        ),
         // the legacy `name:version` spec
         ("cargo test -p a:1.2.3", &[(0, test, "a")]),
         // `time` runs the command after its own options (`-p` is time's)
@@ -301,6 +329,15 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
         ("cargo test -p alpha:1.2.3", true),
         ("cargo pkgid -p flui-view:0.2.0-dev", true),
         ("cargo pkgid -p flui-view:0.2", false),
+        (
+            "cargo pkgid -p 'registry+https://github.com/rust-lang/crates.io-index#bitflags@2.13.2'",
+            true,
+        ),
+        // glob classes, as cargo's package patterns take them
+        ("cargo test -p 'flui-[v]iew'", true),
+        ("cargo test -p 'flui-[a-z]pp'", true),
+        ("cargo test -p 'flui-[!v]iew'", false),
+        ("cargo test -p 'flui-[^a]pp'", false),
         ("cargo update -p wgpu", true),
         ("cargo tree -p wgpu", true),
         ("cargo pkgid -p wgpu", true),
@@ -348,12 +385,13 @@ fn headings_give_github_anchors() {
 }
 
 fn code_spans_and_blocks_carry_their_lines() {
-    // a code span labelling a permalink to a commit cites the file as it was
+    // a code span labelling a permalink to a commit (its scheme and host in
+    // any case) cites the file as it was
     // then; any other link's label, a branch (or `main` misspelt) too, is still
     // a path to check
     let markdown = "# T\n\nSee `docs/x.md`.\n\n```bash\ncargo test\ncargo run -p a\n```\n\n    indented\n\n\
                     [l](docs/y.md) ![i](/z.png) \
-                    [`docs/old.md`](https://github.com/vanyastaff/flui/blob/e30ab71/docs/old.md) \
+                    [`docs/old.md`](HTTPS://GitHub.com/vanyastaff/flui/blob/e30ab71/docs/old.md) \
                     [`docs/now.md`](https://github.com/vanyastaff/flui/blob/mian/docs/now.md) \
                     [`docs/testng.md`](docs/testing.md)\n";
     let code = extract::code(markdown);
@@ -394,7 +432,7 @@ fn code_spans_and_blocks_carry_their_lines() {
             (12, "/z.png".to_owned()),
             (
                 12,
-                "https://github.com/vanyastaff/flui/blob/e30ab71/docs/old.md".to_owned()
+                "HTTPS://GitHub.com/vanyastaff/flui/blob/e30ab71/docs/old.md".to_owned()
             ),
             (
                 12,
@@ -493,7 +531,7 @@ fn a_doc_reports_each_stale_name_once() {
                 [ok](docs/testing.md) [gone](docs/gone.md) [out](../x.md) [web](https://a.b/)\n\
                 [h](docs/testing.md#the-harness) [no](docs/testing.md#no-heading) \
                 [dir](crates/flui-view#x) [self](#no-heading) \
-                [escaped](docs/testing.md#the%2Dharness) [root](./) [root](/)\n";
+                [escaped](docs/testing.md#the%2Dharness) [root](./) [root](/) [top](#) [top](docs/testing.md#)\n";
     let names = |doc: &str| -> Vec<(usize, Kind, String)> {
         stale(doc, text, &known, &packages, &read)
             .into_iter()

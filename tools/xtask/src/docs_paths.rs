@@ -417,7 +417,8 @@ impl fmt::Display for Stale {
         let why = match self.kind {
             Kind::Path => "no such file or directory",
             Kind::Package => {
-                "no package the command can select (not in the checkout, or a lockfile \n                 package it cannot pick: another subcommand, or one of several versions)"
+                "no package the command can select (not in the checkout, or a lockfile \
+                 package it cannot pick: another subcommand, or one of several versions)"
             }
             Kind::Link => "the link resolves to no file, directory or heading",
         };
@@ -472,7 +473,9 @@ fn stale(
             };
             let anchor = dest
                 .split_once('#')
-                .map(|(_, anchor)| percent_decoded(anchor));
+                .map(|(_, anchor)| percent_decoded(anchor))
+                // an empty anchor (`#`) is the top of the document
+                .filter(|anchor| !anchor.is_empty());
             let resolves = path.as_deref().is_some_and(|path| {
                 known.has(path)
                     && anchor.as_ref().is_none_or(|anchor| {
