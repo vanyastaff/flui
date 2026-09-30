@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-24
+- **Amended by:** [ADR-0095](ADR-0095-agent-protocol-schema-crate.md) §3 (the in-process
+  transport this ADR left open: a local endpoint `flui mcp` will proxy)
 - **Refs:** roadmap tracks G1 (devtools protocol) and G2 (`flui mcp`)
 
 ## Context

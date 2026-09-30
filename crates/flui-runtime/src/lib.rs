@@ -11,6 +11,9 @@
 //! `flui_platform_api::PlatformWindow`, and a frame leaves through a
 //! [`FrameSink`](sink::FrameSink) the host implements.
 //!
+//! - [`dev_agent`]: the host half of the development-agent seam — attaches
+//!   an installed `DevAgentHook` once per loop, hands it each window with
+//!   content, and contains its panics (ADR-0095 §3);
 //! - [`ui_realm`]: `UiRealm`, the owner-affine realm — the presentations it
 //!   hosts, their frame transaction, input routing, lifecycle and command
 //!   inbox;
@@ -46,6 +49,7 @@
 //! - `testing` (with the `test-support` feature): a window double and a
 //!   scripted sink for driving a realm headlessly.
 
+pub mod dev_agent;
 pub mod epoch;
 pub mod execution;
 pub mod frame_failure;
