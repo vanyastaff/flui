@@ -14,6 +14,9 @@
   module `flui_view::__runtime` (ADR-0081 §4), which `flui_sdk::view` shadows; that does not
   unblock the hot-reload move (move 4).
 - **Date:** 2026-09-25
+- **Amended by:** [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (§8) — `flui-geometry` and
+  `flui-types` are deleted, so the duplicate-guard list below names two crates that no longer
+  exist.
 - **Supersedes in part (on acceptance):** [ADR-0028](ADR-0028-design-system-decoupling-contract.md) — the
   placement of Material and Cupertino as core-workspace crates, and the exemption set
   `{flui-app, flui}` that may depend on them (it named `flui-localizations` too until

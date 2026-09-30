@@ -4,6 +4,9 @@
 - **Date:** 2026-06-17
 - **Amended by:** [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (§4: `flui-types` is deleted
   and `Matrix4` lives in `flui_foundation::geometry`; the one glam edge is unchanged)
+- **Amended by (on acceptance):** [ADR-0087](ADR-0087-raster-contract-and-cpu-backend.md) §5
+  (the scene-level backend trait and the GPU-free lowering move to `flui-layer`; the Command IR
+  stays in the engine)
 
 ## Context
 

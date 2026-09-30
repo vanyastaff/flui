@@ -17,6 +17,9 @@
   2026-09-26. §4.2 is implemented (2026-09-29): `runtime-internals` is gone and its items are
   at `flui_view::__runtime`; the facade and the SDK shadow it.
 - **Date:** 2026-09-25
+- **Amended by:** [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (§8) — `flui-geometry` and
+  `flui-types` are deleted; the V tier's values live in `flui-foundation` and their owners
+  above it, so the tier table and the `mint` findings below name crates that no longer exist.
 - **Supersedes in part:** [ADR-0041](ADR-0041-workspace-topology-contract.md) through the
   accepted §1 (the numbered layer table, "a crate is a layer" as the only reason for a crate, and
   the "Localization direction is locked" paragraph, which end when the `layer` key is removed;
