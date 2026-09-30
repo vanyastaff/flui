@@ -683,5 +683,10 @@ Not changed, with the reason:
   room that is not there; raising the limit is paid. Fewer, shared keys come first.
 - **Debuginfo.** `line-tables-only` stays ([build-footprint R5](build-footprint.md)): `debug = 0`,
   as Bevy, Slint and Xilem use in CI, would drop file:line from CI backtraces for about 2 GB.
+- **Dependency opt-level.** Dependencies build at `opt-level = 3` (`[profile.dev.package."*"]`).
+  Measured on a clean `origin/main` checkout, `-j 4`, cold target, the CI environment: `TEST_SCOPE`
+  built in 448 s and its tests ran in 60 s; with dependencies at `opt-level = 0`, 365 s and 103 s,
+  and a 0.4 GB larger target. That saves about 40 s on a cold build and costs 43 s on every warm
+  one, which is most CI runs, so no CI profile overrides it.
 - **Test sharding, mold, cranelift**: none of the eleven projects compared uses them in CI (zed,
   bevy, xilem, vello, egui, iced, rust-analyzer, tokio, wgpu, slint, dioxus).
