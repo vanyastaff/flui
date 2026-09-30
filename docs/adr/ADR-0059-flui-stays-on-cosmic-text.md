@@ -33,12 +33,11 @@ policy rather than by whatever the shaper's fallback tail sorts first. The
 upstream defects are worked around there, not waited on. That layer carries
 over to parley unchanged; it is the part of this decision that is not a bet.
 
-Since ADR-0092 §10 step 4a, this resolution chooses the family of the painted
-layout only. Measurement resolves families on Parley over the realm's
-`FontCollection`, which reads the same generic spellings but holds only the
-bundled and registered faces, so a family only the host carries is measured in
-Roboto and painted in the host face until the collection carries host faces
-(flui-painting `ARCHITECTURE.md`, mapping decisions 15 and 16).
+Since ADR-0092 §10 step 4, this resolution chooses the family of the caret
+layout only. Measurement and paint resolve families on Parley over the realm's
+`FontCollection`, by the same rule over the families it holds, which since step
+3c are the process font system's own (flui-painting `ARCHITECTURE.md`, mapping
+decisions 15, 16 and 17).
 
 The reason for staying was cost, and the dominant cost is gone: it was
 replacing glyphon, for which parley had no wgpu equivalent. ADR-0067 removed

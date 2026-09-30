@@ -204,7 +204,7 @@ is settled with the implementation; sharing one mutable database across realms i
   surface — is replaced by an equivalent font-family selection type. `measure.rs`'s selection-rect
   and offset↔cursor conversion logic needs re-deriving against parley's API (precondition 3 above),
   not a drop-in swap.
-- `crates/flui-painting/src/text_layout/glyphs.rs`'s `GlyphKey` and
+- flui-painting's `text_layout/glyphs.rs`'s `GlyphKey` (since removed, ADR-0092 §10 step 4) and
   `crates/flui-painting/src/text_layout/layout.rs`'s `rasterize()` need a parley-compatible
   rasterization path (precondition 1) -- this is new work, not a rename of existing cosmic-text
   calls, since parley does not rasterize glyphs itself.

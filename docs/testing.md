@@ -839,15 +839,17 @@ since the suite ran on no job.
 
 ### Determinism
 
-Text is measured on the realm's `FontCollection`, which holds only the bundled
-faces and those registered on it, so measured geometry does not depend on the
-host. Paint still shapes on the process-wide `FontSystem` until ADR-0092 §10
-step 4b, and that one resolves against the host's fonts: the same Cupertino
+Text is measured and painted on the realm's `FontCollection`. A test bootstrap
+builds it with `FontCollection::new()`, which holds only the bundled faces and
+those registered on it, so measured geometry and painted glyphs do not depend
+on the host; the app's collection is fed from the host's fonts. Carets and
+selection still shape on the process-wide `FontSystem` until ADR-0092 §10
+step 5, and that one resolves against the host's fonts: the same Cupertino
 button once measured 61.18 px wide on a host with fonts installed and
 129.55 px on one without. `flui_testing::fonts::pin_font_faces` builds the
 process-wide `FontSystem` from the faces this repository ships
-(`flui_painting::fonts`), so the painted glyphs a snapshot records are
-reproducible off any one machine.
+(`flui_painting::fonts`), so caret geometry is reproducible off any one
+machine.
 
 It *builds* the font system rather than editing it, and that distinction is
 load-bearing: `FontSystem` freezes its fallback chain and monospace face list

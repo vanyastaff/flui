@@ -41,13 +41,15 @@ Registration anywhere is visible to layout and to every engine instance, in any
 order — the measure/paint mismatch is excluded by construction rather than by
 keeping two databases in sync.
 
-**No longer holds for measurement (ADR-0092 §10 step 4a).** Layout measures on
-Parley over the realm's `FontCollection`, and this font system shapes only the
-painted layout until step 4b. A face passed to `SharedFontSystem::register_font`
-reaches paint but not measurement until registration moves to the collection
-(the rest of step 3b), and a family only the host carries is measured in another
-face than it paints in (flui-painting `ARCHITECTURE.md`, mapping decisions 15
-and 16). The rest of this record stands until ADR-0092 supersedes it.
+**No longer holds for measurement or paint (ADR-0092 §10 step 4).** Layout
+measures on Parley over the realm's `FontCollection` and paint draws the runs of
+that layout, rasterized by the engine's `SwashRasterizer` from the faces the
+runs carry; this font system shapes only the caret layout until step 5, and the
+engine no longer reads glyphs through it. A face passed to
+`SharedFontSystem::register_font` reaches carets but neither measurement nor
+paint until registration moves to the collection (the rest of step 3b)
+(flui-painting `ARCHITECTURE.md`, mapping decisions 15, 16 and 18). The rest of
+this record stands until ADR-0092 supersedes it.
 
 ## What is changing
 

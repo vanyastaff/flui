@@ -70,6 +70,15 @@ carries `Arc<Buffer>` for the same reason FLUI did: glyphon.
   cosmic-text type, and `the_engine_does_not_shape` pins both the source and
   the manifest.
 
+**Amended by ADR-0092 §10 step 4.** The door is `flui_painting::glyphs`
+now: runs of a `ShapedParagraph` place their glyphs
+(`ShapedRun::placed_glyphs`), `GlyphKey` names a face by font blob id and face
+index, and the engine's atlas is `GlyphAtlas<SwashRasterizer>`, whose registry
+holds the faces the runs carry. `TextLayout::placed_glyphs`,
+`SharedFontSystem::rasterize` and the cosmic-text `GlyphKey` are gone, and
+rasterization takes no font lock. The atlas, its pages and the upload guard
+below are unchanged.
+
 Rasterisation sits in painting rather than the engine because it is an
 operation on the font database that the font lock already guards, and
 because keeping cosmic-text a dependency of one crate is the boundary
