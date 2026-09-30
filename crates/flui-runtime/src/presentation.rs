@@ -1602,4 +1602,28 @@ mod tests {
         presentation.close();
         assert_eq!(presentation.lifecycle(), PresentationLifecycle::Closed);
     }
+
+    /// While the realm's text context is lent, the overlay skips the frame
+    /// and leaves the tree as it was, rather than panic on the borrow; once
+    /// the loan ends, the next frame attaches it. Fails if the overlay
+    /// borrows the context unconditionally (a panic), or attaches an
+    /// unshaped readout while the context is lent.
+    #[test]
+    fn a_lent_text_context_skips_the_overlay_frame() {
+        let presentation = presentation();
+        presentation.set_performance_overlay(true);
+        let text = flui_rendering::TextContextHandle::standalone();
+        let mut tree = LayerTree::new(flui_layer::Layer::from(flui_layer::OffsetLayer::zero()));
+
+        text.with(|_| presentation.attach_performance_overlay(&mut tree, &text));
+        assert_eq!(tree.len(), 1, "a lent context attaches no overlay");
+
+        presentation.attach_performance_overlay(&mut tree, &text);
+        assert_eq!(tree.len(), 2, "a free context attaches the overlay");
+        assert!(
+            tree.iter()
+                .any(|(_, node)| node.layer().as_performance_overlay().is_some()),
+            "the attached child is the overlay"
+        );
+    }
 }

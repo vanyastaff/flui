@@ -91,7 +91,8 @@ convenience) shapes through `TextLayout` and records a paragraph.
 `Arc<ShapedParagraph>` built from the Parley layout that measured it, not an
 `Arc<TextLayout>`; painted-as-measured still holds by identity. The engine's
 public `draw_text` is gone: the performance overlay's labels are shaped through
-flui-painting's `TextContext`, and a hand-driven painter shapes a paragraph
+the realm's `TextContext` at scene assembly (`PerformanceOverlayLayer::record`)
+and the engine replays them, and a hand-driven painter shapes a paragraph
 itself and calls `draw_paragraph`.
 
 ## Consequences

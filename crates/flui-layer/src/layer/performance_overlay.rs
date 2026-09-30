@@ -91,6 +91,9 @@ impl PerformanceOverlayLayer {
     /// "GPU" label and the fps, a "Frame" label and the frame time, then the
     /// diagnostic line when the sample has one. The fps is coloured green at
     /// 55 and above, yellow from 30, red below.
+    ///
+    /// `options` is carried on the layer and not honoured yet: every row is
+    /// recorded whatever it names.
     #[must_use]
     pub fn record(
         text: &mut TextContext,

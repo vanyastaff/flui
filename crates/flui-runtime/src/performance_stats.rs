@@ -18,7 +18,6 @@ pub struct PerformanceStats {
     frame_times: VecDeque<Duration>,
     max_samples: usize,
     last_frame: Option<Instant>,
-    total_frames: u64,
 }
 
 impl Default for PerformanceStats {
@@ -36,7 +35,6 @@ impl PerformanceStats {
             frame_times: VecDeque::with_capacity(max_samples),
             max_samples,
             last_frame: None,
-            total_frames: 0,
         }
     }
 
@@ -50,7 +48,6 @@ impl PerformanceStats {
             self.frame_times.push_back(now.duration_since(last));
         }
         self.last_frame = Some(now);
-        self.total_frames += 1;
     }
 
     /// Average frame time over the window, in milliseconds; `0.0` before the
@@ -73,11 +70,5 @@ impl PerformanceStats {
     pub fn fps(&self) -> f64 {
         let avg_ms = self.avg_frame_time_ms();
         if avg_ms > 0.0 { 1000.0 / avg_ms } else { 0.0 }
-    }
-
-    /// Frames recorded since this window was created.
-    #[must_use]
-    pub fn total_frames(&self) -> u64 {
-        self.total_frames
     }
 }

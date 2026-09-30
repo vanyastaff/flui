@@ -109,9 +109,8 @@ pub struct AppConfig {
     ///
     /// Scope, deliberately narrow: the overlay's three rows are shaped
     /// through the realm's text context at scene assembly and the renderer
-    /// only rasterizes them; the rows ignore both the frame counter and the
-    /// option mask, so
-    /// `PerformanceOverlayOption` has no observable effect yet. The sampled
+    /// only rasterizes them; every row is drawn whatever the option mask
+    /// says, so `PerformanceOverlayOption` has no observable effect yet. The sampled
     /// interval is between *composited* frames — an idle frame produces no layer
     /// tree, so it is a repaint rate, not a wall-clock frame rate. The telemetry
     /// row reports p99 present/input latency, deferred/dropped counts, and
