@@ -19,10 +19,10 @@ are defined in [Beta release criteria](docs/BETA.md).
 
 - ✅ Foundation: `flui-foundation` (with the `f64` geometry values), `flui-macros`, `flui-log`, `flui-platform`
 - ✅ Contracts: `flui-platform-api` (platform capability traits and the window, input and data-transfer vocabulary, no OS backend), `flui-protocol` (semantics roles and actions, the agent-protocol wire names)
-- ✅ Core: `flui-painting`, `flui-engine`, `flui-rendering`, `flui-scheduler`, `flui-layer`, `flui-semantics`, `flui-interaction`, `flui-hot-reload`
+- ✅ Core: `flui-painting`, `flui-engine`, `flui-rendering`, `flui-scheduler`, `flui-layer`, `flui-semantics`, `flui-interaction`
 - ✅ Framework/application: `flui-view`, `flui-objects`, `flui-widgets`, `flui-runtime` (the UI realm and the per-presentation frame transaction it drives; internal), `flui-testing`, `flui-animation`, `flui-assets`, `flui-app`
 - ✅ Package-author surface: `flui-sdk` (what an official or third-party package builds on, without the host, engine or GPU stack; evolving, versioned `0.N` apart from the other crates)
-- ✅ Official packages (`packages/`, built on `flui-sdk` alone): `flui-material`, `flui-cupertino`, `flui-devtools` (partial)
+- ✅ Official packages (`tier-kind = "official"`): `flui-material`, `flui-cupertino`, `flui-devtools` (partial) under `packages/`, built on `flui-sdk` alone; and `flui-hot-reload`, still under `crates/` until its plugin half moves (ADR-0094)
 - ✅ DX/tooling: `flui-cli` (with the per-target build pipeline in `crates/flui-cli/src/build/`)
 
 See [`docs/crates.md`](docs/crates.md) for the full layered map and per-crate status.
