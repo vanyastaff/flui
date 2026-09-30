@@ -4,16 +4,17 @@
 //! `TextPainter` measures on Parley and paints a cosmic-text layout until
 //! ADR-0092 §10 step 4b, so measured and painted text agree only while both
 //! shape the same face to the same metrics. Each case lays a painter out on
-//! one context, then reads the `Paragraph` it paints, once with Roboto named
-//! and once with no family, which both sides must resolve to the bundled
-//! Roboto rather than a host face (painting mapping decision 16). The
+//! one context, then reads the `Paragraph` it paints, with Roboto named, with
+//! no family and with the monospace generic, regular and bold, which both
+//! sides must resolve to the bundled Roboto Regular rather than a host face
+//! (painting mapping decision 16). The
 //! comparison is the one the painter makes observable: a baseline placed on
 //! the device grid as `(line_y * scale).round()`
 //! (`TextLayout::placed_glyphs`), the paragraph height, and a single line's
 //! width.
 
 use flui_foundation::geometry::Offset;
-use flui_painting::typography::{TextDirection, TextSpan, TextStyle};
+use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
 use flui_painting::{
     Canvas, DrawOp, FontCollection, TextBaseline, TextContext, TextLayoutResult, TextPainter,
 };
@@ -23,8 +24,10 @@ const HEIGHTS: [Option<f64>; 2] = [None, Some(1.5)];
 const SCALES: [f64; 4] = [1.0, 1.25, 1.5, 2.0];
 const TEXT: &str = "Hamburgefonstiv 0123";
 const ROBOTO: &[u8] = include_bytes!("../assets/fonts/Roboto-Regular.ttf");
-/// Roboto by name, and the default family.
-const FAMILIES: [Option<&str>; 2] = [Some("Roboto"), None];
+/// Roboto by name, the default family, and a generic other than sans-serif.
+const FAMILIES: [Option<&str>; 3] = [Some("Roboto"), None, Some("monospace")];
+/// Regular, and a weight the bundled Roboto has no face for.
+const WEIGHTS: [FontWeight; 2] = [FontWeight::W400, FontWeight::W700];
 
 struct Measured {
     width: f64,
@@ -36,11 +39,13 @@ struct Measured {
 fn measure_and_paint(
     context: &mut TextContext,
     family: Option<&str>,
+    weight: FontWeight,
     size: f64,
     height: Option<f64>,
 ) -> (Measured, Measured) {
     let style = TextStyle {
         font_family: family.map(str::to_owned),
+        font_weight: Some(weight),
         font_size: Some(size),
         height,
         ..TextStyle::default()
@@ -73,7 +78,7 @@ fn measure_and_paint(
     (measured, painted)
 }
 
-/// Every family, size, line height and scale factor places the first baseline
+/// Every family, weight, size, line height and scale factor places the first baseline
 /// on the same device row in the measurement and the painted layout, with
 /// equal paragraph height and a single line's width within a hundredth of a
 /// pixel.
@@ -88,23 +93,26 @@ fn parley_metrics_round_to_todays_baseline() {
         .expect("the bundled Roboto loads");
     let mut context = TextContext::new(&FontCollection::new());
     let mut failures = Vec::new();
-    for (family, size, height) in FAMILIES.into_iter().flat_map(|family| {
-        SIZES.into_iter().flat_map(move |size| {
-            HEIGHTS
-                .into_iter()
-                .map(move |height| (family, size, height))
+    for (family, weight, size, height) in FAMILIES.into_iter().flat_map(|family| {
+        WEIGHTS.into_iter().flat_map(move |weight| {
+            SIZES.into_iter().flat_map(move |size| {
+                HEIGHTS
+                    .into_iter()
+                    .map(move |height| (family, weight, size, height))
+            })
         })
     }) {
-        let (parley, cosmic) = measure_and_paint(&mut context, family, size, height);
+        let (parley, cosmic) = measure_and_paint(&mut context, family, weight, size, height);
+        let case = format!("{family:?} {weight:?} {size} px, height {height:?}");
         if (parley.height - cosmic.height).abs() > 1e-3 {
             failures.push(format!(
-                "{family:?} {size} px, height {height:?}: height measured {} painted {}",
+                "{case}: height measured {} painted {}",
                 parley.height, cosmic.height
             ));
         }
         if (parley.width - cosmic.width).abs() > 0.01 {
             failures.push(format!(
-                "{family:?} {size} px, height {height:?}: width measured {} painted {}",
+                "{case}: width measured {} painted {}",
                 parley.width, cosmic.width
             ));
         }
@@ -112,8 +120,7 @@ fn parley_metrics_round_to_todays_baseline() {
             let device = |baseline: f64| (baseline * scale).round();
             if device(parley.alphabetic) != device(cosmic.alphabetic) {
                 failures.push(format!(
-                    "{family:?} {size} px, height {height:?}, scale {scale}: baseline measured {} \
-                         painted {}",
+                    "{case}, scale {scale}: baseline measured {} painted {}",
                     parley.alphabetic, cosmic.alphabetic
                 ));
             }
