@@ -28,9 +28,10 @@ use crate::text::RichText;
 /// shape to real glyphs in measurement and paint alike. Any other icon font
 /// must be registered first with `SharedFontSystem::register_font`, which
 /// paint and default measurement use; under `flui-painting/parley-layout`
-/// measurement goes through the realm's `FontCollection`, so the font must be
-/// registered there too (`FontCollection::register_font`). Until then its
-/// codepoints shape to tofu (the "missing glyph" box).
+/// measurement goes through the realm's `FontCollection`, which `flui-app`
+/// does not expose, so a custom icon font measures as tofu (the "missing
+/// glyph" box) on the standard app path with that feature. Without a
+/// registration its codepoints shape to tofu everywhere.
 ///
 /// # Deferred from the oracle
 ///

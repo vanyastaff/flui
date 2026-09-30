@@ -35,8 +35,9 @@ Layer 3  ── flui-layer [R], flui-semantics [S], flui-animation [S],
                 │  (flui-platform = OS backends; only flui-app depends on it)
 Layer 2  ── flui-log [S], flui-scheduler [S], flui-painting [S],
                 │  flui-interaction [S], flui-assets [S]
-                │  (flui-log = the subscriber backend; only flui-app,
-                │   flui-cli and the facade depend on it)
+                │  (flui-log = the subscriber backend; flui-app depends on
+                │   it, and its allowed-dependents also admit flui-cli and
+                │   the facade)
 Layer 1  ── flui-foundation [V], flui-macros [V],
                 │  flui-platform-api [C], flui-protocol [C]
                 │   (flui-foundation = framework primitives:
