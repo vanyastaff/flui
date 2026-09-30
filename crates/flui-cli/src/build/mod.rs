@@ -23,6 +23,9 @@ pub(crate) mod error;
 pub(crate) mod ios;
 mod ios_package;
 /// Platform abstractions and core types
+/// Build output directories, and which of them `flui clean` may remove.
+pub(crate) mod output;
+
 pub(crate) mod platform;
 /// Platform scaffolding for new projects
 pub(crate) mod scaffold;

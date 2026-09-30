@@ -5,19 +5,9 @@ allprojects {
     }
 }
 
-val newBuildDir: Directory =
-    rootProject.layout.buildDirectory
-        .dir("../../build")
-        .get()
-rootProject.layout.buildDirectory.value(newBuildDir)
-
-subprojects {
-    val newSubprojectBuildDir: Directory = newBuildDir.dir(project.name)
-    project.layout.buildDirectory.value(newSubprojectBuildDir)
-}
-subprojects {
-    project.evaluationDependsOn(":app")
-}
+// Gradle's default build directories stay in place: `flui build android`
+// reads the APK from `app/build/outputs/apk/<profile>/`, and the scaffolded
+// `.gitignore` and `flui clean` cover `build/` and `app/build/`.
 
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)

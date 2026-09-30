@@ -10,6 +10,7 @@
 /// - `NoProfile` / `HasProfile` - Build profile (debug/release)
 use std::path::PathBuf;
 
+use crate::build::output::default_output_dir;
 use crate::build::platform::{AppBundle, BuildUnit, BuilderContext, Platform, Profile};
 
 /// Type state: No platform set
@@ -137,7 +138,8 @@ impl<P, Pr> BuilderContextBuilder<P, Pr> {
 
     /// Set custom output directory.
     ///
-    /// If not set, defaults to `workspace_root/target/flui-out/`.
+    /// If not set, defaults to `<cargo target-dir>/flui-out/<project>/<platform>`
+    /// (see [`default_output_dir`]).
     ///
     /// # Arguments
     ///
@@ -161,12 +163,9 @@ impl BuilderContextBuilder<HasPlatform, HasProfile> {
     /// A fully configured `BuilderContext`.
     #[must_use]
     pub(crate) fn build(self) -> BuilderContext {
-        let output_dir = self.output_dir.unwrap_or_else(|| {
-            self.workspace_root
-                .join("target")
-                .join("flui-out")
-                .join(self.platform.0.name())
-        });
+        let output_dir = self
+            .output_dir
+            .unwrap_or_else(|| default_output_dir(&self.workspace_root, self.platform.0.name()));
 
         BuilderContext {
             workspace_root: self.workspace_root,
