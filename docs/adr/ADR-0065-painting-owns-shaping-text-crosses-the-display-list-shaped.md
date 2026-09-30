@@ -58,8 +58,8 @@ an engine-owned rasteriser, which is its own project.
   `Shaper::resolve_font` and `Shaper::font_system`, never bumps the
   generation. Resolution and shaping happen under one acquisition, so the
   "resolve before `with_mut`, never inside" deadlock has no reachable shape.
-- `register_font(&[u8])`: the only mutation of the database, append-only,
-  bumps `generation()`. A face is never removed, so a font id recorded
+- `add_face(&[u8])`, reached through `FontCollection::register_font`: the
+  only mutation of the database, append-only, bumps `generation()`. A face is never removed, so a font id recorded
   anywhere stays valid for the life of the process.
 - `generation()`: what every cache of shaped text keys on.
   `TextLayoutCache` re-lays-out when it moves; the engine drops its buffer
@@ -143,7 +143,7 @@ itself and calls `draw_paragraph`.
 
 Part 1: `shaping_never_bumps_the_generation`,
 `register_font_bumps_the_generation_once`,
-`a_face_registered_on_the_process_font_system_reaches_carets_not_measurement_or_paint`,
+`a_face_registered_on_the_collection_reaches_measurement_paint_and_carets`,
 `icon_fonts_measure_before_any_engine_exists`
 (`crates/flui-painting/tests/font_registration.rs`);
 `an_empty_host_database_gets_roboto_and_both_icon_faces` and its two

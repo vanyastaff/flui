@@ -33,7 +33,9 @@
 //! [`ShapedParagraph`], whose glyphs the engine rasterizes through
 //! [`glyphs::SwashRasterizer`]. Carets, selection and line metrics still come
 //! from a cosmic-text [`TextLayout`] over the process-wide font system
-//! ([`shared_font_system`]) until ADR-0092 §10 step 5.
+//! ([`shared_font_system`]) until ADR-0092 §10 step 5. A face registered
+//! through [`FontCollection::register_font`] reaches measurement, paint and
+//! carets alike.
 //!
 //! # Decorations
 //!

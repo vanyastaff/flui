@@ -97,12 +97,17 @@ database first, decision 8), built on the first such query and kept while the
 process font system's generation is unchanged (decision 15). Plain `Text`
 never builds one. The font system is a `OnceLock<Arc<Mutex<FontState>>>`, an
 ambient residual (a process-global the runtime still reaches); `AppRuntime`
-installs it at realm install. `SharedFontSystem` has three doors:
+installs it at realm install. `SharedFontSystem` has two public doors:
 `shape(|Shaper| …)` resolves and shapes under one acquisition and never bumps
-the generation; `register_font` is the only mutation, append-only, and bumps
-it; `generation()` is what the caret layout keys on. The collection is fed from
-its discovery (decision 17). The embedded baseline faces (`fonts.rs`,
-`bundled-fonts`) are installed at construction.
+the generation; `generation()` is what the caret layout keys on. The one
+mutation, append-only and bumping the generation, is crate-internal
+(`add_face`): an app registers through `FontCollection::register_font` on a
+collection built by `with_host_faces`, which loads the face into the
+collection (measurement and paint) and here (carets) alike (decision 11). The
+`testing` feature keeps `SharedFontSystem::register_font` as a caret-only
+door for tests. The collection is fed from its discovery (decision 17). The
+embedded baseline faces (`fonts.rs`, `bundled-fonts`) are installed at
+construction.
 
 The raster side is `glyphs` (ADR-0092 §5). What crosses to the engine is the
 `ShapedParagraph`; the engine's atlas registers each run's face in its
@@ -198,8 +203,8 @@ consumer at all and broke the "immutable after recording" claim.
 `PaintingBinding` owned an image cache nothing read (the live decode cache
 is `flui_widgets::image::decode_cache`) and a font-change notifier nothing
 listened to; its one live accessor reached the process-wide font system,
-which `shared_font_system()` now names directly, and `register_font` lives
-on `SharedFontSystem`. `ClipContext` had no production implementor.
+which `shared_font_system()` now names directly, and a registration goes
+through `FontCollection::register_font`. `ClipContext` had no production implementor.
 
 ### 5. `Canvas::finish(self) -> DisplayList` stays infallible
 
@@ -470,9 +475,21 @@ collection's data once, on its next shape, and `register_font` itself clones
 fontique's local collection data to get the `&mut` its registration takes,
 rather than holding a FLUI lock; both are accepted because registration is
 rare. Until ADR-0092 §10 step 6 the bundled faces sit in both this collection
-and the cosmic-text font system. Locked by `two_realms_shape_in_parallel` and
+and the cosmic-text font system, and so does every registered face: the
+collection is the one registration door, and one built by `with_host_faces`
+keeps that font system as its caret side and loads each face there first, so
+one registration reaches measurement, paint and carets at the next layout. The
+collection judges the bytes on a scratch fontique collection before the caret
+side loads anything, so bytes one side reads and the other does not (a face
+with no `cmap`: fontdb loads it, fontique finds no family) change neither.
+`FontCollection::check_font` gives the same verdict with no collection at
+all, for the app to answer a registration made before its first window.
+`FontCollection::new` has
+no caret side and never touches the process font system. Locked by
+`two_realms_shape_in_parallel` and
 `a_face_registered_after_the_fork_shapes_in_every_realm`
-(`tests/text_context.rs`).
+(`tests/text_context.rs`), and `registration_contract`
+(`src/text_layout/context.rs`).
 
 
 ### 12. `TextDirection` sets line alignment on the Parley path, not the base direction
@@ -586,9 +603,10 @@ the caret layout and the painted glyphs disagree:
   (`FontCollection::new()`, standalone contexts and the hot-reload plugin)
   measures and paints every family it lacks, and every glyph a family it holds
   lacks, in Roboto.
-- A face registered through `SharedFontSystem::register_font` reaches the
-  caret layout but neither measurement nor paint (ADR-0092 §10 step 3b routes
-  registration through the collection).
+- A face loaded on the process font system alone (the `testing` door
+  `SharedFontSystem::register_font`) reaches the caret layout but neither
+  measurement nor paint; an app registers through its collection, which
+  reaches all three (decision 11).
 - A line narrower than a space's advance (2 px at 12–17 px) takes each space
   of a glyph-broken paragraph onto a line of its own in the caret layout and
   hangs it on Parley (`"ab cd"` at 0 px: 4 lines painted, 5 in the caret
@@ -612,8 +630,8 @@ spacing and height set without a size, and zero `max_lines`;
 `measured_width_equals_painted_width_on_host_faces`
 (`tests/host_faces_oracle.rs`) pins the caret layout's size against the
 measurement on the host's faces.
-`a_face_registered_on_the_process_font_system_reaches_carets_not_measurement_or_paint`
-(`tests/font_registration.rs`) pins the registration split.
+`a_face_registered_on_the_collection_reaches_measurement_paint_and_carets`
+(`tests/font_registration.rs`) pins that one registration moves all three.
 
 ### 16. With `bundled-fonts`, the process font system's generic families bind to Roboto
 
@@ -714,7 +732,7 @@ ADR-0092 §10 step 6, so it mirrors one into the other instead.
   resort;
   unverified, since Android is clippy-only here.
 - Two scans decide what is carried: a file that disappears between them is
-  carried on the paint side and absent from the collection, and a family name
+  carried on the caret side and absent from the collection, and a family name
   fontdb records in another language only (fontique keeps the English or first
   name) resolves on the caret side alone.
 - A host copy of a bundled family (Roboto, Material Icons, CupertinoIcons) is
@@ -726,8 +744,8 @@ ADR-0092 §10 step 6, so it mirrors one into the other instead.
 - The feed reads the host's font files a second time before the first frame
   (about 35 ms over 76 families on the Windows development host), until
   ADR-0092 §10 step 3b's event lets it run off the owner thread.
-- A face registered after the feed reaches the process font system only
-  (decision 15; ADR-0092 §10 step 3b).
+- A face registered after the feed reaches the collection and the process
+  font system together, through `FontCollection::register_font` (decision 11).
 
 Locked by `measured_width_equals_painted_width_on_host_faces` and
 `every_family_the_process_font_system_carries_resolves_in_the_collection`
@@ -817,11 +835,6 @@ rule is pinned against cosmic-text's rows by
 
 ## Open items
 
-- **Nothing marks text render objects dirty on `register_font`.** The caches
-  heal at the next layout (they key on the collection's
-  `FontCollection::generation`, the caret layout on `generation()`), but the
-  layout is not requested by the registration — ADR-0092 §10 step 3b raises a font-collection-changed event
-  on every realm for it.
 - **`Save`/`Restore` carry a transform nobody reads.** Every command is
   stamped, the markers included; a marker-only shape would save 64 bytes
   per scope at the cost of a second command type on the wire.

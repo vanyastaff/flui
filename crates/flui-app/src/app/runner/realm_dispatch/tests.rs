@@ -736,6 +736,222 @@ fn panicking_visit_restores_the_checked_out_realm_and_clears_iterating_all_realm
     teardown_platform_realm();
 }
 
+// Each registration row adds a face of its own: the rows share this thread's
+// runtime, which refuses bytes it registered before, and the process font
+// system, which keeps every face.
+const PROBE_VARIABLE: &[u8] =
+    include_bytes!("../../../../../flui-painting/assets/fonts/probe-variable-wght.ttf");
+const PROBE_MONO_SEMIBOLD: &[u8] =
+    include_bytes!("../../../../../flui-painting/assets/fonts/probe-mono-600.ttf");
+const PROBE_SANS: &[u8] =
+    include_bytes!("../../../../../flui-painting/assets/fonts/probe-sans-400.ttf");
+const PROBE_MONO_THIN: &[u8] =
+    include_bytes!("../../../../../flui-painting/assets/fonts/probe-mono-100.ttf");
+const DECOY: &[u8] =
+    include_bytes!("../../../../../flui-painting/assets/fonts/decoy-wide-space.ttf");
+
+/// Clears `dispatcher`'s realm's redraw request.
+fn clear_redraw(dispatcher: RealmDispatcher) {
+    dispatch_platform_realm(
+        dispatcher,
+        RealmTask::Frame(Box::new(crate::app::ui_realm::UiRealm::mark_rendered)),
+    )
+    .expect("the realm dispatches");
+}
+
+/// Whether `dispatcher`'s realm has a redraw requested.
+fn redraw_requested(dispatcher: RealmDispatcher) -> bool {
+    let requested = Rc::new(Cell::new(false));
+    let requested_in_task = Rc::clone(&requested);
+    dispatch_platform_realm(
+        dispatcher,
+        RealmTask::Frame(Box::new(move |realm| {
+            requested_in_task.set(realm.needs_redraw());
+        })),
+    )
+    .expect("the realm dispatches");
+    requested.get()
+}
+
+/// A face registered while two realm windows run tells both: each draws its
+/// next frame, where its pipeline lays out again the text measured before.
+/// Fails if the registration notifies no realm, or only one.
+fn a_registration_notifies_every_realm_window() {
+    let (dispatcher_a, dispatcher_b) = install_two_test_realms();
+    for dispatcher in [dispatcher_a, dispatcher_b] {
+        clear_redraw(dispatcher);
+    }
+    let generation = super::super::host::runtime_font_collection().generation();
+
+    super::super::register_font(PROBE_VARIABLE).expect("the probe face registers");
+
+    assert_eq!(
+        super::super::host::runtime_font_collection().generation(),
+        generation + 1,
+        "the face went into the app's collection"
+    );
+    for dispatcher in [dispatcher_a, dispatcher_b] {
+        assert!(
+            redraw_requested(dispatcher),
+            "{dispatcher:?} draws its next frame"
+        );
+    }
+
+    teardown_platform_realm();
+}
+
+/// The same bytes registered twice are refused the second time: the
+/// collection does not change and no realm is woken. Fails if a repeated
+/// registration adds the face again or lays text out again for nothing.
+fn a_duplicate_registration_is_refused_and_notifies_nothing() {
+    let dispatcher = install_test_realm();
+    super::super::register_font(PROBE_MONO_SEMIBOLD).expect("the first registration adds it");
+    clear_redraw(dispatcher);
+    let generation = super::super::host::runtime_font_collection().generation();
+
+    assert_eq!(
+        super::super::register_font(PROBE_MONO_SEMIBOLD),
+        Err(super::super::FontRegistrationError::AlreadyRegistered)
+    );
+
+    assert_eq!(
+        super::super::host::runtime_font_collection().generation(),
+        generation
+    );
+    assert!(!redraw_requested(dispatcher), "no realm is woken");
+
+    teardown_platform_realm();
+}
+
+/// Bytes with no face are refused: the collection does not change and no
+/// realm is woken. Fails if a refused registration notifies the realms.
+fn bytes_with_no_face_are_refused_and_notify_nothing() {
+    let dispatcher = install_test_realm();
+    clear_redraw(dispatcher);
+    let generation = super::super::host::runtime_font_collection().generation();
+
+    assert!(matches!(
+        super::super::register_font(b"not a font"),
+        Err(super::super::FontRegistrationError::Font(_))
+    ));
+
+    assert_eq!(
+        super::super::host::runtime_font_collection().generation(),
+        generation
+    );
+    assert!(!redraw_requested(dispatcher), "no realm is woken");
+
+    teardown_platform_realm();
+}
+
+/// A registration made from inside one realm's task reaches that realm once
+/// the task returns, and its sibling as well: the calling realm is checked
+/// out while its task runs, so its notice waits in the owner queue. Fails if
+/// the notice to the running realm is dropped, or re-enters it.
+fn a_registration_from_inside_a_realm_task_reaches_that_realm_after_it_returns() {
+    let (dispatcher_a, dispatcher_b) = install_two_test_realms();
+    for dispatcher in [dispatcher_a, dispatcher_b] {
+        clear_redraw(dispatcher);
+    }
+
+    dispatch_platform_realm(
+        dispatcher_a,
+        RealmTask::Frame(Box::new(|realm| {
+            super::super::register_font(PROBE_SANS).expect("the probe face registers");
+            assert!(
+                !realm.needs_redraw(),
+                "the notice waits for the running task to return"
+            );
+        })),
+    )
+    .expect("realm A's task runs, then the queued notices");
+
+    for dispatcher in [dispatcher_a, dispatcher_b] {
+        assert!(
+            redraw_requested(dispatcher),
+            "{dispatcher:?} draws its next frame"
+        );
+    }
+
+    teardown_platform_realm();
+}
+
+/// A face registered on a thread that runs no app reaches neither the
+/// process font system carets shape with nor the app's collection, so carets
+/// and measurement cannot disagree over it. Fails if the call registers on
+/// the caret side from a thread whose collection no window reads.
+fn a_registration_on_a_thread_that_runs_no_app_changes_neither_side() {
+    let dispatcher = install_test_realm();
+    clear_redraw(dispatcher);
+    let paint = flui_painting::shared_font_system();
+    let (paint_before, fonts_before) = (
+        paint.generation(),
+        super::super::host::runtime_font_collection().generation(),
+    );
+
+    std::thread::spawn(|| super::super::register_font(PROBE_MONO_THIN))
+        .join()
+        .expect("the worker does not panic")
+        .expect("the bytes hold a face");
+
+    assert_eq!(
+        paint.generation(),
+        paint_before,
+        "the caret side gained no face"
+    );
+    assert_eq!(
+        super::super::host::runtime_font_collection().generation(),
+        fonts_before,
+        "the app's collection gained no face"
+    );
+    assert!(!redraw_requested(dispatcher), "no realm is woken");
+
+    teardown_platform_realm();
+}
+
+/// A face registered before a thread builds its first realm is held, and
+/// lands on both sides when the collection is built: the first window
+/// measures and paints with it and lays carets out in it. Fails if a
+/// registration before the start is lost, reaches carets before the
+/// collection exists, or accepts bytes with
+/// no face because nothing judges them yet.
+fn a_registration_before_the_first_realm_lands_with_the_collection() {
+    std::thread::spawn(|| {
+        let paint = flui_painting::shared_font_system();
+        let paint_before = paint.generation();
+
+        assert!(
+            matches!(
+                super::super::register_font(b"not a font"),
+                Err(super::super::FontRegistrationError::Font(_))
+            ),
+            "bytes with no face are refused before the collection exists"
+        );
+        super::super::register_font(DECOY).expect("the bytes hold a face");
+        assert_eq!(
+            paint.generation(),
+            paint_before,
+            "held until the collection is built"
+        );
+        assert_eq!(
+            super::super::register_font(DECOY),
+            Err(super::super::FontRegistrationError::AlreadyRegistered),
+            "a held face counts as registered"
+        );
+
+        // What the runner does as it builds the first realm.
+        let fonts = super::super::host::runtime_font_collection();
+        assert_eq!(fonts.generation(), 1, "the collection gained the face");
+        assert_eq!(
+            paint.generation(),
+            paint_before + 1,
+            "the caret side gained it too"
+        );
+    })
+    .join()
+    .expect("the registration lands with the collection");
+}
+
 #[test]
 fn realm_dispatch_matrix() {
     crate::table_test::run_table(
@@ -785,6 +1001,31 @@ fn realm_dispatch_matrix() {
             (
                 "separate_realm_windows_shape_over_the_runtimes_font_collection",
                 separate_realm_windows_shape_over_the_runtimes_font_collection as fn(),
+            ),
+            (
+                "a_registration_notifies_every_realm_window",
+                a_registration_notifies_every_realm_window as fn(),
+            ),
+            (
+                "a_duplicate_registration_is_refused_and_notifies_nothing",
+                a_duplicate_registration_is_refused_and_notifies_nothing as fn(),
+            ),
+            (
+                "bytes_with_no_face_are_refused_and_notify_nothing",
+                bytes_with_no_face_are_refused_and_notify_nothing as fn(),
+            ),
+            (
+                "a_registration_from_inside_a_realm_task_reaches_that_realm_after_it_returns",
+                a_registration_from_inside_a_realm_task_reaches_that_realm_after_it_returns
+                    as fn(),
+            ),
+            (
+                "a_registration_on_a_thread_that_runs_no_app_changes_neither_side",
+                a_registration_on_a_thread_that_runs_no_app_changes_neither_side as fn(),
+            ),
+            (
+                "a_registration_before_the_first_realm_lands_with_the_collection",
+                a_registration_before_the_first_realm_lands_with_the_collection as fn(),
             ),
         ],
     );

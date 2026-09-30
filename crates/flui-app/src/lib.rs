@@ -54,6 +54,8 @@ mod table_test;
 pub use app::{
     AppConfig, DiagnosticsProfile, RootRenderElement, RootRenderView, run_app, run_app_with_config,
 };
+// The app's font registration door (ADR-0092 §2).
+pub use app::{FontRegistrationError, register_font};
 // `run_direct` needs the non-iOS owner-platform host — see `app::direct`'s gate.
 #[cfg(not(target_os = "ios"))]
 pub use app::run_direct;

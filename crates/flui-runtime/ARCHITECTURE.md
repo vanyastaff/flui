@@ -373,3 +373,19 @@ path the same code. The devtools server cannot name the runtime (an official pac
 `flui-sdk` and the contract crates only), so the hook trait is `flui-view`'s and reaches it
 through the SDK; the runtime holds no transport. Flutter has no counterpart: its service
 extensions are the VM's. Pinned by `dev_agent_host_contains_its_hook` (`src/dev_agent/tests.rs`).
+
+### A font change reaches a realm through its owner turn, on its next frame
+
+**Rule.** `UiRealm::fonts_changed` requests a redraw for every presentation the realm hosts, and
+nothing else: the marking is each pipeline's, at its next drain
+(`PipelineOwner::apply_font_change`, flui-rendering), which compares the collection's
+generation with the last one it applied. The host sends the notice: `flui-app`'s
+`register_font` registers on the app's `FontCollection`, then dispatches `fonts_changed` to every
+installed realm as a frame task, so a realm checked out for the task that registered gets it
+queued behind that task. Bytes registered before are refused at that door
+(`FontRegistrationError::AlreadyRegistered`) and notify nothing.
+
+**Why.** The collection is shared by every realm, but a realm's state is touched only on its
+owner turn. A notice that only wakes is idempotent: a second notice, or a pipeline that already
+applied the change, lays nothing out. Pinned by `font_registration_matrix`
+(`src/ui_realm/tests/font_registration.rs`).

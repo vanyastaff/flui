@@ -253,13 +253,6 @@ pub(in crate::app) enum PlatformToUi {
 /// the realm explicitly for whatever runner work precedes the pump.
 pub(in crate::app) enum RealmTask {
     Event(PlatformToUi),
-    #[cfg_attr(
-        all(not(any(target_os = "android", target_os = "ios")), not(test)),
-        expect(
-            dead_code,
-            reason = "only mobile surface restoration still submits a repaint closure"
-        )
-    )]
     Frame(Box<dyn FnOnce(&crate::app::ui_realm::UiRealm)>),
     Pump(Box<dyn FnOnce(&mut crate::app::ui_realm::UiRealm)>),
     /// Commit the owner inbox, then poll async work without running a frame.

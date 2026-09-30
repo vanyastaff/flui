@@ -1,6 +1,5 @@
-//! A face registered on the process font system reaches a laid-out
-//! `TextPainter`'s caret layout, and not its measurement or paint, until
-//! registration moves to the collection.
+//! A face registered on the app's collection reaches a laid-out
+//! `TextPainter`'s measurement, paint and caret layout together.
 //!
 //! Its own test target: these tests append to the process-wide font database,
 //! which the `painting_it` binary's tests deliberately never do.
@@ -9,13 +8,11 @@ use std::sync::Arc;
 
 use flui_foundation::geometry::Offset;
 
+use flui_painting::glyphs::FaceKey;
 use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
-use flui_painting::{Canvas, DrawOp, ShapedParagraph, TextPainter, shared_font_system};
-
-/// A text context over a fresh collection, lent to each measurement.
-fn text_cx() -> flui_painting::TextContext {
-    flui_painting::TextContext::new(&flui_painting::FontCollection::new())
-}
+use flui_painting::{
+    Canvas, DrawOp, FontCollection, ShapedParagraph, TextContext, TextPainter, shared_font_system,
+};
 
 /// Wide enough for the probe text on one line, and finite: the painter
 /// keeps its cached layout only for a finite width it was laid out at.
@@ -60,26 +57,31 @@ fn caret_line_width(painter: &TextPainter) -> f64 {
         .width
 }
 
-/// Measurement and paint shape on Parley through the lent context and never
-/// read the process font system, while carets still shape on it (painting
-/// mapping decision 15): a face registered there re-shapes the caret layout
-/// once, at the next `layout()`, and leaves the measured size and the painted
-/// paragraph alone.
+/// The face every run of the painted paragraph names.
+fn painted_faces(paragraph: &ShapedParagraph) -> Vec<FaceKey> {
+    paragraph.runs().map(|run| run.face().key()).collect()
+}
+
+/// A face registered through the one door, the app's collection, reaches
+/// measurement, paint and carets together at the next `layout()`: the
+/// collection measures and paints with it, and the process font system it was
+/// fed from lays carets out with it. Before that `layout()` the painter keeps
+/// what it had, carets included.
 ///
-/// This pins a known gap, not the contract: once registration goes through the
-/// collection (the rest of ADR-0092 §10 step 3b), a registered face must reach
-/// measurement and paint as well, and this test is inverted rather than
-/// deleted.
+/// Fails if the collection keeps no caret side (the carets stay on the
+/// fallback), or if a registration reaches the process font system alone
+/// (measurement and paint stay on the fallback).
 #[test]
-fn a_face_registered_on_the_process_font_system_reaches_carets_not_measurement_or_paint() {
-    let mut text_cx = text_cx();
+fn a_face_registered_on_the_collection_reaches_measurement_paint_and_carets() {
+    let fonts = FontCollection::with_host_faces(&shared_font_system());
+    let mut text_cx = TextContext::new(&fonts);
     let mut painter = probe_painter("iiii wwww");
     painter.layout(&mut text_cx, 0.0, WIDTH);
     let measured = painter.size();
     let painted = painted_paragraph(&painter);
     let caret_width = caret_line_width(&painter);
 
-    shared_font_system()
+    fonts
         .register_font(PROBE_MONO)
         .expect("the probe face loads");
     // Until the next `layout()` the cursor queries keep the caret layout
@@ -89,26 +91,33 @@ fn a_face_registered_on_the_process_font_system_reaches_carets_not_measurement_o
         assert_eq!(
             caret_line_width(&painter),
             caret_width,
-            "caret query {query} after the registration and before `layout()` reads the \
-             caret layout it already had"
+            "caret query {query} after the registration and before `layout()` reads the              caret layout it already had"
         );
     }
     painter.layout(&mut text_cx, 0.0, WIDTH);
 
+    // In the proportional fallback 'iiii' and 'wwww' differ in width, in the
+    // monospace probe they do not, so each side moves by more than rounding.
     assert!(
-        Arc::ptr_eq(&painted, &painted_paragraph(&painter)),
-        "the process registration does not reach the painted paragraph"
+        (painter.size().width - measured.width).abs() > 1.0,
+        "measurement moves to the probe ({} vs {})",
+        measured.width,
+        painter.size().width
+    );
+    let repainted = painted_paragraph(&painter);
+    assert_ne!(
+        painted_faces(&repainted),
+        painted_faces(&painted),
+        "paint draws the probe face"
+    );
+    assert_eq!(
+        repainted.size(),
+        painter.size(),
+        "paint draws the layout that measured"
     );
     assert!(
         (caret_line_width(&painter) - caret_width).abs() > 1.0,
-        "the caret layout moves to the probe: in the proportional fallback 'iiii' and \
-         'wwww' differ, in the monospace probe they do not ({caret_width} vs {})",
+        "the caret layout moves to the probe ({caret_width} vs {})",
         caret_line_width(&painter)
-    );
-    assert_eq!(
-        painter.size(),
-        measured,
-        "measurement is Parley's on the context's collection, which the process \
-         registration does not reach"
     );
 }

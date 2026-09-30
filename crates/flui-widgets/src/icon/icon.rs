@@ -25,11 +25,10 @@ use crate::text::RichText;
 /// Cupertino Icons (family `"CupertinoIcons"`) faces and installs each one
 /// in every `FontCollection` (`flui_painting::fonts`), so those families'
 /// codepoints shape to real glyphs in measurement and paint alike. Any other
-/// icon font must be registered on the `FontCollection` the realm measures
-/// and paints with, which `flui-app` does not expose yet (ADR-0092 §10 step
-/// 3b), so on the standard app path a custom icon font measures and paints
-/// as tofu (the "missing glyph" box). `SharedFontSystem::register_font`
-/// reaches only the caret layout.
+/// icon font must be registered first with `flui::register_font`, which
+/// loads it for measurement, paint and carets alike and lays laid-out text
+/// out again on the next frame. Without a registration its codepoints shape
+/// to tofu (the "missing glyph" box).
 ///
 /// # Deferred
 ///

@@ -82,7 +82,7 @@ pub fn host_sans_serif_family() -> String {
 }
 
 /// The family names the process font system's faces carry first, each once:
-/// the names a style resolves against on the paint side.
+/// the names a style resolves against on the caret side.
 #[must_use]
 pub fn host_family_names() -> Vec<String> {
     crate::shared_font_system().family_names()

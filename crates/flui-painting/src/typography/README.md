@@ -47,15 +47,18 @@ variant; `value()` returns it back.
 
 ## Registering fonts
 
-Fonts register as bytes with the process-wide font system; the face is visible to measurement
-and to the engine's glyph pipeline from the next shape onward:
+An app registers a font as bytes through `flui::register_font`, which loads the face into the
+app's `FontCollection`, which measures and paints text, and the process-wide font system it was
+fed from, which lays carets out. The face is visible to all three from the next shape onward, and
+every realm lays its text out again on its next frame:
 
 ```rust
-use flui_painting::shared_font_system;
-
 let bytes = std::fs::read("assets/fonts/MyFont.ttf")?;
-shared_font_system().register_font(&bytes)?; // RegisterFontError if no face parses
+flui::register_font(&bytes)?; // FontRegistrationError if no face parses
 ```
+
+Below the app, `FontCollection::register_font` is the same door for a collection a caller built
+itself.
 
 With the `bundled-fonts` feature, `flui_painting::fonts` exposes the faces the crate embeds
 (`ROBOTO_REGULAR`, `MATERIAL_ICONS_REGULAR`, `CUPERTINO_ICONS`), so a host with no usable system

@@ -16,13 +16,21 @@
 //! and a second borrow at the same time is a bug (`BUG:` panic), not a
 //! contended lock. A presentation's layout never drives another's
 //! synchronously, since a `PipelineCell` checkout is not re-entrant.
+//!
+//! Every loan a pipeline's walk makes records the node it was made for
+//! ([`TextMeasurers`]): those are the nodes whose layout depends on the font
+//! collection, and the ones the pipeline lays out again when a face is
+//! registered on it (`PipelineOwner::apply_font_change`). A render object
+//! needs no code for this; measuring through the context is the opt-in.
 
 use std::cell::{RefCell, RefMut};
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 
+use flui_foundation::RenderId;
 use flui_painting::{FontCollection, TextContext};
+use rustc_hash::FxHashSet;
 
 /// A realm's text context, shared with each presentation's pipeline.
 ///
@@ -53,10 +61,11 @@ impl TextContextHandle {
     /// The source a layout or query context lends this context through, so a
     /// test can drive a raw entry point such as
     /// [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only).
+    /// A loan through it records no node.
     #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn source(&self) -> TextSource<'_> {
-        TextSource::new(&self.0)
+        TextSource::unrecorded(&self.0)
     }
 
     /// Whether `a` and `b` share one context.
@@ -74,12 +83,22 @@ impl TextContextHandle {
     /// re-enters another on the same realm could cause.
     #[cfg(any(test, feature = "testing"))]
     pub fn with<R>(&self, f: impl FnOnce(&mut TextContext) -> R) -> R {
-        f(&mut lend(TextSource::new(&self.0)))
+        f(&mut lend(TextSource::unrecorded(&self.0)))
     }
 
     /// The shared cell layout borrows from.
     pub(crate) fn cell(&self) -> &RefCell<TextContext> {
         &self.0
+    }
+
+    /// The generation of the collection the context was built over, or
+    /// `None` while the context is lent: a caller outside a measurement
+    /// asks again later rather than wait or panic.
+    pub(crate) fn fonts_generation(&self) -> Option<u64> {
+        self.0
+            .try_borrow()
+            .ok()
+            .map(|context| context.fonts().generation())
     }
 }
 
@@ -95,12 +114,88 @@ impl fmt::Debug for TextContextHandle {
     }
 }
 
+/// The nodes of one pipeline that measured through its text context since
+/// the collection last changed.
+///
+/// Owned by the pipeline, since render ids are per pipeline; one `insert` per
+/// loan. A node stays recorded until the next change takes the set, so a
+/// node that stopped measuring text is laid out once more than it needs at
+/// worst. A removed node's id is never reused (ids are generational), so
+/// [`Self::prune`] drops the dead ones once they outnumber the live tree:
+/// without it an app that never registers a font would keep the id of every
+/// text node it ever built.
+#[derive(Default)]
+pub(crate) struct TextMeasurers(RefCell<FxHashSet<RenderId>>);
+
+/// The record size below which [`TextMeasurers::prune`] never walks it.
+const PRUNE_FLOOR: usize = 64;
+
+impl TextMeasurers {
+    fn note(&self, node: RenderId) {
+        self.0.borrow_mut().insert(node);
+    }
+
+    /// Every recorded node, leaving the record empty.
+    pub(crate) fn take(&self) -> FxHashSet<RenderId> {
+        std::mem::take(&mut *self.0.borrow_mut())
+    }
+
+    /// Drops every recorded node `is_live` rejects, once the record holds
+    /// more than twice `live_nodes` (and more than a small floor).
+    ///
+    /// Amortized: a walk halves the record at least, so the next one waits
+    /// until as many ids were added again. The record stays within twice the
+    /// live tree plus what one frame measures.
+    pub(crate) fn prune(&self, live_nodes: usize, is_live: impl Fn(RenderId) -> bool) {
+        let mut set = self.0.borrow_mut();
+        if set.len() > PRUNE_FLOOR.max(live_nodes.saturating_mul(2)) {
+            set.retain(|id| is_live(*id));
+        }
+    }
+
+    /// How many nodes are recorded.
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn len(&self) -> usize {
+        self.0.borrow().len()
+    }
+}
+
+impl fmt::Debug for TextMeasurers {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("TextMeasurers")
+            .field(&self.0.try_borrow().map(|set| set.len()).ok())
+            .finish()
+    }
+}
+
+/// A pipeline's text context and the record its loans go into, as a layout
+/// or query walk carries them: it mints a [`TextSource`] per node.
+#[derive(Clone, Copy)]
+pub(crate) struct TextLender<'a> {
+    cell: &'a RefCell<TextContext>,
+    measurers: &'a TextMeasurers,
+}
+
+impl<'a> TextLender<'a> {
+    pub(crate) fn new(cell: &'a RefCell<TextContext>, measurers: &'a TextMeasurers) -> Self {
+        Self { cell, measurers }
+    }
+
+    /// The source `node`'s contexts lend through; a loan records `node`.
+    pub(crate) fn source(self, node: RenderId) -> TextSource<'a> {
+        TextSource {
+            cell: self.cell,
+            measured: Some((self.measurers, node)),
+        }
+    }
+}
+
 /// The realm's text context as a layout or query walk carries it to a node.
 ///
-/// Opaque outside this crate: a render object passes it on (to a child's
-/// raw query, or to a context it builds) but cannot borrow it. The borrow
-/// happens only inside a context's `text()`, which ties the loan to `&mut`
-/// context, so no loan can outlive a measurement or span a child's.
+/// Opaque outside this crate: a render object passes it on (to a context it
+/// builds) but cannot borrow it. The borrow happens only inside a context's
+/// `text()`, which ties the loan to `&mut` context, so no loan can outlive a
+/// measurement or span a child's.
 ///
 /// ```compile_fail
 /// fn hold(source: flui_rendering::TextSource<'_>) {
@@ -109,24 +204,34 @@ impl fmt::Debug for TextContextHandle {
 /// }
 /// ```
 #[derive(Clone, Copy)]
-pub struct TextSource<'a>(&'a RefCell<TextContext>);
+pub struct TextSource<'a> {
+    cell: &'a RefCell<TextContext>,
+    /// The record a loan goes into and the node it is made for; `None` for a
+    /// test's source, which belongs to no walk.
+    measured: Option<(&'a TextMeasurers, RenderId)>,
+}
 
 impl<'a> TextSource<'a> {
-    /// A source over the pipeline's shared cell.
-    pub(crate) fn new(cell: &'a RefCell<TextContext>) -> Self {
-        Self(cell)
+    /// A source whose loans record nothing.
+    #[cfg(any(test, feature = "testing"))]
+    fn unrecorded(cell: &'a RefCell<TextContext>) -> Self {
+        Self {
+            cell,
+            measured: None,
+        }
     }
 
     /// The cell a context borrows from.
     pub(crate) fn cell(self) -> &'a RefCell<TextContext> {
-        self.0
+        self.cell
     }
 }
 
 impl fmt::Debug for TextSource<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("TextSource")
-            .field(&std::ptr::from_ref(self.0))
+        f.debug_struct("TextSource")
+            .field("context", &std::ptr::from_ref(self.cell))
+            .field("node", &self.measured.map(|(_, node)| node))
             .finish()
     }
 }
@@ -157,12 +262,16 @@ impl fmt::Debug for TextCx<'_> {
     }
 }
 
-/// Borrows the realm's context for one measurement.
+/// Borrows the realm's context for one measurement, and records the node it
+/// is lent to.
 #[expect(
     clippy::expect_used,
     reason = "a second loan is a re-entrant measurement, an invariant violation"
 )]
 pub(crate) fn lend(source: TextSource<'_>) -> TextCx<'_> {
+    if let Some((measurers, node)) = source.measured {
+        measurers.note(node);
+    }
     TextCx(
         source
             .cell()

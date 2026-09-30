@@ -11,7 +11,10 @@
   `parley-layout`; registration re-layout is 3b. §10 step 3b's pipeline half landed: every
   `PipelineOwner` is built with a `TextContextHandle`, nothing in layout, intrinsics or dry
   queries builds a context of its own, and the hot-reload plugin pipeline measures over its own
-  image's collection; the font-collection-changed event is the other half. §7's host-face feed
+  image's collection. Its registration half landed too: a face registered on the collection is
+  loaded into the process font system as well (for carets), and every pipeline that measured
+  text on it lays that text out again at its next frame, so the face reaches measurement, paint
+  and carets together (§2). §7's host-face feed
   landed ahead of step 4 as step 3c: the app's collection holds the faces, generic families and
   fallback order of the process font system, fed synchronously before the first frame
   (asynchronously once step 3b's event exists). §10 step 4 landed on top of it, 4a and 4b
@@ -31,7 +34,9 @@
   process font system's discovery, with one family rule and one fallback order for both
   shapers; §10 step 3c; §10 step 4 split into 4a and 4b, and 4a's face-agreement gate
   decided: host faces first; then 4a and 4b land together, §4's blob table is per paragraph,
-  and variation interning and the subpixel bin move to the raster side)
+  and variation interning and the subpixel bin move to the raster side); 2026-09-30 (§2 and
+  §10 step 3b: the collection-changed event is the collection's generation, read by each
+  pipeline at its next frame)
 - **Supersedes (when §§1–5 are accepted):** [ADR-0077](ADR-0077-migrate-to-parley.md)
   (absorbed: its direction, its preconditions and its "If later Rejected" branch are carried
   here)
@@ -74,7 +79,7 @@ Text is one process-wide, locked object today.
   (`crates/flui-painting/src/lib.rs:87`).
 - Every painter builds its own glyph atlas over that shared system
   (`crates/flui-engine/src/painter/mod.rs:163-167`), one per window.
-- `register_font` appends a face and bumps the generation (`layout.rs:391-402`); the family
+- `add_face` appends a face and bumps the generation (`layout.rs:484-495`); the family
   resolver rebuilds on the new generation (`font_resolve.rs:641-662`), but nothing marks text
   render objects for layout. [ADR-0065](ADR-0065-painting-owns-shaping-text-crosses-the-display-list-shaped.md)
   records this as a named gap and defers "a `FontContext` handle threaded through layout" until a
@@ -179,9 +184,13 @@ offers `register_font` and no removal, so the rule is the API's, not a conventio
 the host's (`flui-app`'s) shared engine services (`SharedEngineServices`, one per owner thread,
 which is one per app while ADR-0091 fixes a single owner thread), held in the host's granted
 ADR-0097 trampoline cell with no global of its own, and reaches each realm only through
-`UiRealm::new`. Registering a font adds it to the collection and raises a
-font-collection-changed event on every realm, which marks every text render object in that
-realm as needing layout — closing ADR-0065's named gap.
+`UiRealm::new`. Registering a font adds it to the collection, and to the process font system a
+collection fed from it paints with, and raises the collection's generation: that generation is
+the font-collection-changed event. The app notifies every realm it owns (`UiRealm::fonts_changed`,
+on each realm's owner turn), and at the next frame each pipeline marks for layout and paint every
+render object that measured through the realm's context since the last change — closing
+ADR-0065's named gap. The pipeline finds those objects by their loans of the context, so a render
+object that measures text needs no code of its own to be re-laid out.
 
 ### 3. Per-realm contexts with no FLUI lock
 
@@ -300,11 +309,10 @@ Measurement and paint must pick the same face for the same text, so the two shap
 - **one set of generics**: the collection's generic families name the families the process font
   system binds them to, and system-ui names sans-serif's.
 
-A face whose family the collection already holds (the bundled faces) is not fed again. Until the
-font-collection-changed event exists (§10 step 3b) the feed runs synchronously on the owner
-thread before the first frame, because text measured before a later feed would keep its old
-measurement; with the event it moves off the owner thread and its faces arrive through that event
-as a registration does. On wasm32 fontdb finds no host fonts and the platform has no common
+A face whose family the collection already holds (the bundled faces) is not fed again. The feed
+runs synchronously on the owner thread before the first frame. The font-collection-changed event
+now exists (§2, §10 step 3b), so the feed can move off the owner thread, its faces arriving as a
+registration's do; that move is step 5. On wasm32 fontdb finds no host fonts and the platform has no common
 list, so the collection holds the bundled and registered faces and every script falls back to the
 sans-serif family alone. A bundled-only collection (`FontCollection::new()`) falls back to Roboto
 for every script, as cosmic-text's last resort does over the bundled faces.
@@ -387,8 +395,8 @@ that wires what it adds.
      realms' contexts proven to be built from that same collection, it is not repeated at the
      runtime level, which would need `parley` on the runtime's test build.
 3. **Layout reaches the realm's text context; registration re-lays out text.** Two halves that
-   land separately. 3a has landed. A third part, 3c, feeds the host's faces into the collection
-   (§7); it has landed.
+   land separately. 3a and 3b have landed. A third part, 3c, feeds the host's faces into the
+   collection (§7); it has landed.
    - (3a) The realm lends its `TextContext` to each presentation's layout, and the box layout,
      intrinsics, dry-layout and dry-baseline contexts expose it (`ctx.text()`, a scoped
      `&mut TextContext`). Every `TextPainter` measuring method takes `&mut TextContext`, and
@@ -410,9 +418,23 @@ that wires what it adds.
      Under `parley-layout` size, baselines and intrinsics came from Parley while glyphs and
      carets still came from cosmic-text, until step 4a (flui-painting `ARCHITECTURE.md`,
      mapping decisions 14 and 15).
-   - (3b) Registering raises a font-collection-changed event on every realm, which marks text
-     render objects for layout (ADR-0065's named gap); flui-app's `register_font` moves from
-     `FONT_SYSTEM` to the collection.
+   - (3b) Registering raises a font-collection-changed event on every realm, which marks
+     text render objects for layout (ADR-0065's named gap). The app's door is
+     `flui::register_font` (`flui_app::register_font`): it registers on the app's collection,
+     whose `register_font` also loads the face into the process font system the collection was
+     fed from, and dispatches `UiRealm::fonts_changed` to every realm, which requests a frame
+     for each presentation. Each `PipelineOwner` records, per loan of the context, the node the
+     loan was made for, and its drain before each frame compares the collection's generation
+     with the last one it applied: on a change it marks every recorded node for layout and
+     paint. `SharedFontSystem::register_font` is no longer a public door (a `testing` one
+     remains, and reaches carets alone). This meets the precondition step 4's move of
+     measurement waits on: a face registered after start reaches measurement, paint and carets
+     alike. The app's fonts belong to the
+     thread that runs it: a registration made before that thread builds its first realm is
+     checked (`FontCollection::check_font`) and held, and lands on both sides when the
+     collection is built, so a call on a thread that never runs the app changes neither side.
+     The collection judges bytes before the caret side (the process font system) loads them, so
+     no refusal leaves a face on one side only.
    - (3b) Every pipeline is built with a text context: `PipelineOwner::new` and
      `new_with_capacity` take a `TextContextHandle`, `PipelineOwner` has no `Default`, and a
      layout, intrinsic or dry-query context takes a `TextSource`, so no path builds a context
@@ -435,8 +457,9 @@ that wires what it adds.
      realm's handle; a painter measures through the context it is given, and a registration on
      that collection invalidates its cache; Parley's metrics on the bundled Roboto round to
      today's baselines; a layout that panics while holding the context releases it.
-   - *Acceptance (3b):* a two-realm test: a font registered through realm A re-lays out text in
-     realm B (fails on main). Test bootstraps construct the collection.
+   - *Acceptance (3b):* a two-realm test: a font registered on the collection both realms were
+     built over re-lays out text in both at their next frame, measured and painted in the new
+     face (`font_registration_matrix`, flui-runtime). Test bootstraps construct the collection.
    - *Acceptance (3b, pipelines):* a pipeline constructor without a context does not compile; an
      owner taken out of its slot leaves one that measures through the same context; a plugin
      pipeline measures through the context it is mounted with and lays its root out at each
@@ -455,7 +478,7 @@ that wires what it adds.
      cosmic-text layout's within 0.05 px for Latin at 400 and 700, monospace, Cupertino's chain
      at 400 and 600, CJK, emoji and mixed text, at 16 and 32 px, and fail on a bundled-only
      collection; every family the process font system carries is in the collection; each
-     script's fallback families and the emoji generic follow the paint side's lists in order,
+     script's fallback families and the emoji generic follow the caret side's lists in order,
      with the sans-serif family last; a family spelled in another case than the fonts name it
      resolves alike on both sides; on a bundled-only collection a glyph the named family lacks
      measures in Roboto;
@@ -491,11 +514,10 @@ that wires what it adds.
      `你好世界 emoji 😀` 133.27 px (was 82.77 against 133.27), `你好世界` 64.00 px, `😀`
      21.97 px, and Latin in the default family, bold and monospace 163.29 px, each measured and
      painted alike, within the 0.05 px of `host_faces_oracle`, whose rows run on CI's Linux host
-     too. That half of the gate is closed. The other half is still open: the registration half
-     of step 3b (the font-collection-changed event, and `register_font` moving to the
-     collection) merges first, unless the owner waives the ordering here; until then a face
-     registered at run time on the process font system reaches the caret layout and neither
-     measurement nor paint (mapping decision 15).
+     too. That half of the gate is closed. The other half, the ordering, is met: the registration
+     half of step 3b (the font-collection-changed event, and `register_font` moving to the
+     collection) merged first, so a face registered at run time through the one door reaches
+     measurement, paint and carets on the next frame.
    - (4a) Merge gate, line breaks: closed by the owner on 2026-09-30, by landing 4a with 4b,
      and `"A\n"` is two lines, as Parley lays it out. `"A\r\nB"` is three lines on Parley,
      an empty one between; whether CR LF breaks once is open with the owner, and pinned as
@@ -509,9 +531,9 @@ that wires what it adds.
      no setting of either shaper aligns them. With paint on Parley that difference moves
      to the caret layout until step 5 (mapping decision 15).
    - *Acceptance (4a):* measurement is Parley's in the default build, at the painter
-     (`text_context_contract`, and a face registered only on the process font system reaches
-     the caret layout and neither measurement nor paint,
-     `a_face_registered_on_the_process_font_system_reaches_carets_not_measurement_or_paint`) and at the realm (a face registered on one realm's collection sizes
+     (`text_context_contract`, and a face registered on the collection reaches measurement,
+     paint and carets at the next layout,
+     `a_face_registered_on_the_collection_reaches_measurement_paint_and_carets`) and at the realm (a face registered on one realm's collection sizes
      that realm's paragraph); measured and painted metrics agree on the bundled Roboto, named,
      as the default family and as the monospace generic, regular and bold, and a host face named
      "Roboto", "Material Icons" or "CupertinoIcons" does not replace the bundled one; on the host's faces they agree for every row of
@@ -672,8 +694,16 @@ its runs (§10 step 4); the rest do not exist yet.
   (`font_resolve.rs`); `a_missing_path_is_skipped_and_the_feed_completes` (`context.rs`); in
   flui-app, `the_runtime_feeds_host_faces_once_for_every_realm` (`runtime.rs`) and the feed count
   in `separate_realm_windows_shape_over_the_runtimes_font_collection`.
-- A two-realm test: registering a font in one realm makes text in the other re-lay out (§10
-  step 3b).
+- Registration re-lays out text (§10 step 3b): in flui-runtime's `font_registration_matrix`,
+  `a_face_registered_after_start_re_lays_out_text_in_every_realm_on_the_next_frame`,
+  `a_face_registered_before_the_realm_is_built_measures_on_its_first_frame` and
+  `a_font_change_notice_requests_a_redraw_for_every_presentation`; flui-rendering's
+  `font_change_contract` (`tests/text_context.rs`); flui-painting's `registration_contract`
+  (`context.rs`); in flui-app's `realm_dispatch_matrix`,
+  `a_registration_notifies_every_realm_window`,
+  `a_duplicate_registration_is_refused_and_notifies_nothing`,
+  `bytes_with_no_face_are_refused_and_notify_nothing` and
+  `a_registration_from_inside_a_realm_task_reaches_that_realm_after_it_returns`.
 - A registry test: a source-cache prune while the registry holds the blob keeps keys equal, and
   an arm without the registry shows the keys change
   (`a_held_blob_keeps_its_keys_across_a_prune`, `crates/flui-painting/src/text_layout/context.rs`).
@@ -696,7 +726,7 @@ its runs (§10 step 4); the rest do not exist yet.
 - A first-frame test that renders bundled text before the system scan completes.
 - Parley measures in the default build (§10 step 4a): the rows of `text_context_contract`
   (`crates/flui-painting/tests/main.rs`); in `crates/flui-painting/tests/font_registration.rs`,
-  `a_face_registered_on_the_process_font_system_reaches_carets_not_measurement_or_paint`; in
+  `a_face_registered_on_the_collection_reaches_measurement_paint_and_carets`; in
   `crates/flui-runtime/src/ui_realm/tests/text_context.rs`,
   `a_realm_measures_text_with_the_faces_of_its_own_collection`; the default-family, monospace
   and bold rows of `parley_metrics_round_to_todays_baseline`, which fail without flui-painting's

@@ -122,6 +122,14 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// A constructor argument: no pipeline exists without one.
     text: crate::pipeline::TextContextHandle,
 
+    /// The nodes that measured through `text` since the font collection
+    /// last changed: the ones [`Self::apply_font_change`] lays out again.
+    text_measurers: crate::pipeline::TextMeasurers,
+
+    /// The font collection's generation this pipeline last applied; a
+    /// different one means a face was registered since.
+    fonts_seen: u64,
+
     /// Allocation identity binding linear relocation tokens to this owner.
     /// Pointer identity is sufficient; unlike a numeric id it cannot collide
     /// or require process-global token bookkeeping.
@@ -337,6 +345,8 @@ where
     PipelineOwner {
         id: from.id,
         text: from.text,
+        text_measurers: from.text_measurers,
+        fonts_seen: from.fonts_seen,
         relocation_owner_seal: from.relocation_owner_seal,
         render_tree: from.render_tree,
         root_id: from.root_id,

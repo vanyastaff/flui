@@ -94,6 +94,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// a [`crate::pipeline::RenderInvalidationHandle`] and the owner observes them on
     /// the next frame. Non-blocking; processes every request
     /// available at the time of call and returns the count drained.
+    ///
+    /// Then applies a font collection change ([`Self::apply_font_change`]),
+    /// the other invalidation that arrives from outside the frame.
     pub fn drain_pending_dirty(&mut self) -> usize {
         let mut drained = 0;
         while let Ok(req) = self.dirty_rx.try_recv() {
@@ -128,7 +131,61 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 }
             }
         }
+        self.apply_font_change();
         drained
+    }
+
+    /// Lays out again, and repaints, every node that measured text since
+    /// the font collection last changed, if it changed since this pipeline
+    /// last looked. Returns whether it had changed.
+    ///
+    /// A face registered on the collection after text was laid out may
+    /// change what that text measures to, and the node that measured it has
+    /// no way to notice. The pipeline knows who measured: every loan of the
+    /// text context records its node, so a render object that measures
+    /// through its context needs no code of its own. The marks go through
+    /// the ordinary [`Self::mark_needs_layout`] and [`Self::mark_needs_paint`]
+    /// paths: a node removed since it measured is skipped, and the layout
+    /// mark clears the cached intrinsics of the node and its ancestors and
+    /// requests a visual update.
+    ///
+    /// While the context is lent (a drain run from inside a measurement) it
+    /// does nothing and returns `false`: the change stays pending for the
+    /// next drain. [`Self::drain_pending_dirty`] calls it, which both frame
+    /// entries run first. Each call also forgets the removed nodes once they
+    /// outnumber the live tree, so the record stays bounded in an app that
+    /// never registers a font.
+    pub fn apply_font_change(&mut self) -> bool {
+        let render_tree = &self.render_tree;
+        self.text_measurers
+            .prune(render_tree.len(), |id| render_tree.get(id).is_some());
+        let Some(generation) = self.text.fonts_generation() else {
+            return false;
+        };
+        if generation == self.fonts_seen {
+            return false;
+        }
+        self.fonts_seen = generation;
+        let measured = self.text_measurers.take();
+        tracing::debug!(
+            nodes = measured.len(),
+            "the font collection changed; laying out the text measured on it again"
+        );
+        for id in measured {
+            if self.render_tree.get(id).is_some() {
+                self.mark_needs_layout(id);
+                self.mark_needs_paint(id);
+            }
+        }
+        true
+    }
+
+    /// How many nodes the pipeline has recorded as measuring text since the
+    /// font collection last changed, removed ones not yet pruned included.
+    #[cfg(any(test, feature = "testing"))]
+    #[must_use]
+    pub fn text_measurer_count(&self) -> usize {
+        self.text_measurers.len()
     }
 
     /// Returns the root render object ID.
