@@ -1,4 +1,4 @@
-use crate::build::context_builder::default_output_dir;
+use crate::build::output::clean_output_dirs;
 use crate::error::{CliError, CliResult};
 use crate::runner::{CargoCommand, OutputStyle};
 use crate::ui;
@@ -40,13 +40,8 @@ pub(crate) fn execute(deep: bool, platform: Option<String>) -> CliResult<()> {
         spinner.stop(format!("{} {plat_lower} cleaned", style("✓").green()));
         report_removed(&removed)?;
     } else {
-        let spinner = ui::spinner();
-        spinner.start("Cleaning cargo artifacts...");
-        let _ = CargoCommand::clean()
-            .output_style(OutputStyle::Silent)
-            .run()?;
-        spinner.stop(format!("{} Cargo artifacts cleaned", style("✓").green()));
-
+        // Platforms first: the `--out` directories builds claimed are
+        // recorded under `target/`, which `cargo clean` removes.
         if deep {
             let spinner = ui::spinner();
             spinner.start("Cleaning platform directories...");
@@ -60,6 +55,13 @@ pub(crate) fn execute(deep: bool, platform: Option<String>) -> CliResult<()> {
             ));
             report_removed(&removed)?;
         }
+
+        let spinner = ui::spinner();
+        spinner.start("Cleaning cargo artifacts...");
+        let _ = CargoCommand::clean()
+            .output_style(OutputStyle::Silent)
+            .run()?;
+        spinner.stop(format!("{} Cargo artifacts cleaned", style("✓").green()));
     }
 
     let mode = if deep { "deep" } else { "standard" };
@@ -84,23 +86,21 @@ fn report_removed(removed: &[PathBuf]) -> CliResult<()> {
 }
 
 /// Clean build artifacts for a specific platform, returning the paths that
-/// were actually removed: the build's default output directory, and what the
-/// platform's own build tool writes inside `platforms/<platform>/`.
+/// were actually removed: the build's output directories (the default one
+/// and each `--out` directory a build claimed, see [`clean_output_dirs`]),
+/// and what the platform's own build tool writes inside
+/// `platforms/<platform>/`.
 fn clean_platform(platform: &str) -> CliResult<Vec<PathBuf>> {
+    let mut removed = clean_output_dirs(&std::env::current_dir()?, platform)?;
+
     let platform_dir = Path::new("platforms").join(platform);
     let tool_outputs: &[&str] = match platform {
         "android" => &["app/build", "build", ".gradle", "app/src/main/jniLibs"],
         "ios" => &["build"],
         _ => &[],
     };
-
-    let mut removed = Vec::new();
-    let dirs = std::iter::once(default_output_dir(Path::new(""), platform)).chain(
-        tool_outputs
-            .iter()
-            .map(|sub_dir| platform_dir.join(sub_dir)),
-    );
-    for dir in dirs {
+    for sub_dir in tool_outputs {
+        let dir = platform_dir.join(sub_dir);
         if remove_dir_if_exists(&dir)? {
             removed.push(dir);
         }

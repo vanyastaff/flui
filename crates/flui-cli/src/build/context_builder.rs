@@ -8,8 +8,9 @@
 ///
 /// - `NoPlatform` / `HasPlatform` - Platform configuration
 /// - `NoProfile` / `HasProfile` - Build profile (debug/release)
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
+use crate::build::output::default_output_dir;
 use crate::build::platform::{AppBundle, BuildUnit, BuilderContext, Platform, Profile};
 
 /// Type state: No platform set
@@ -137,7 +138,8 @@ impl<P, Pr> BuilderContextBuilder<P, Pr> {
 
     /// Set custom output directory.
     ///
-    /// If not set, defaults to [`default_output_dir`].
+    /// If not set, defaults to `target/flui-out/<platform>` (see
+    /// [`default_output_dir`]).
     ///
     /// # Arguments
     ///
@@ -174,15 +176,4 @@ impl BuilderContextBuilder<HasPlatform, HasProfile> {
             bundle: self.bundle,
         }
     }
-}
-
-/// Where a build for `platform` (a [`Platform::name`]) writes its
-/// deliverables when no `--out` is given: `target/flui-out/<platform>` under
-/// the project. `flui clean --platform` removes the same directory.
-#[must_use]
-pub(crate) fn default_output_dir(workspace_root: &Path, platform: &str) -> PathBuf {
-    workspace_root
-        .join("target")
-        .join("flui-out")
-        .join(platform)
 }

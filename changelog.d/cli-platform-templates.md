@@ -13,4 +13,8 @@
 - The web `index.html` and `manifest.json` no longer reference a favicon and icons the scaffold
   never writes.
 - `flui clean --platform <android|ios|web>` removes the build's output in
-  `target/flui-out/<platform>/`; for web it removed `platforms/web/pkg/`, which no build writes.
+  `target/flui-out/<platform>/`, and each `--out` directory a build created (or found empty): the
+  build leaves a `.flui-out` marker there, and a directory that held anything before the first
+  build into it is never removed. For web it removed `platforms/web/pkg/`, which no build writes.
+  `flui clean --deep` cleans platforms before `cargo clean`, which removes the record of those
+  directories.
