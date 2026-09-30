@@ -4,41 +4,39 @@
 //! objects in `flui-objects`, matching Flutter's `Semantics`,
 //! `MergeSemantics`, and `ExcludeSemantics` split.
 //!
-//! # The `Send + Sync` bound on action handlers comes from storage, not from threading
+//! # Action handlers are owner-local and receive an `EventCx`
 //!
 //! [`Semantics`]'s `on_*` builders register handlers that assistive technology
-//! can invoke. The stored handler type is
-//! `Arc<dyn Fn(..) + Send + Sync>` (`flui_semantics::SemanticsActionHandler`),
-//! so the builders require that bound. A caller meets the consequence
-//! immediately and it is worth stating here rather than leaving to a compiler
-//! error: the ordinary "activation toggles this control's own state" closure
-//! does not compile, because the state a widget keeps is `Rc<RefCell<_>>` and
-//! that is neither `Send` nor `Sync`. Reaching for `Arc<Mutex<_>>` or a shared
-//! store is the way through.
+//! can invoke, and each receives the `&mut EventCx<'_>` a write through the
+//! widget's `WriterSource` opens (ADR-0086), exactly like a pointer callback:
+//! "activation toggles this control's own state" is a signal write.
 //!
-//! The bound is inherited, not chosen. The handler lives inside a
-//! `SemanticsConfiguration`, which rides in the semantics proxy render object,
-//! whose `RenderView::RenderObject` associated type is pinned `Send + Sync`
-//! (`flui_view::RenderView`). **The handler is not invoked across a thread**:
-//! action resolution is owner-local and commits at the pipeline's Idle point.
-//! The point at which a platform adapter really does cross threads is one layer
-//! out, in `flui_platform`, at the seam where the platform's own thread hands
-//! work to the owner.
+//! The configuration a semantics node carries still stores
+//! `flui_semantics::SemanticsActionHandler`, an `Arc<dyn Fn(..) + Send + Sync>`,
+//! because it rides in the semantics proxy render object, which
+//! `flui_view::RenderView` pins `Send + Sync`. So the widget's closures do not
+//! go there. They stay in the owner's interaction lane as one table per node,
+//! and the configuration advertises each action through one `Send + Sync`
+//! handler that holds only the lane's ticket. Invoking it resolves the ticket
+//! on the owner thread, inside the realm, and runs the closure there.
 //!
-//! It also diverges from this catalog's dominant convention rather than being a
-//! novelty in it: the widget crates' callback aliases are `Rc<dyn Fn(..)>`,
-//! owner-thread-local, and the one other
-//! public family that takes `impl Fn(..) + Send + Sync + 'static` is
-//! `interaction/drag_target.rs`, whose callbacks ride the same kind of
-//! `Send + Sync` render-object metadata. The market survey, the rejected alternatives, and the
-//! reason the reference's shape does not transcribe are recorded in
-//! `ARCHITECTURE.md` §17.
+//! An action invoked outside its realm — no interaction lane active on the
+//! calling thread — has no owner to run in and is dropped with a warning. A
+//! [`Semantics`] mounted without an owner lane (a detached render-object
+//! context) advertises none of these actions, so no platform sees a control
+//! that nothing can run. [`Semantics::from_configuration`] and
+//! [`Semantics::from_properties`] still take raw `Send + Sync` handlers; that
+//! is the `flui-semantics` surface, below this widget. `ARCHITECTURE.md` §17
+//! records the design.
 
+use std::any::Any;
+use std::rc::Rc;
 use std::sync::Arc;
 
+use flui_interaction::{LocalPayloadTarget, resolve_local_payload};
 use flui_objects::{
     RenderExcludeSemantics, RenderIndexedSemantics, RenderMergeSemantics,
-    RenderSemanticsAnnotations,
+    RenderSemanticsAnnotations, SemanticsActionRoute,
 };
 use flui_rendering::{
     protocol::BoxProtocol,
@@ -47,7 +45,12 @@ use flui_rendering::{
         SemanticsProperties, SemanticsRole, TextDirection,
     },
 };
-use flui_view::{Child, IntoView, RenderView, impl_render_view};
+use flui_view::{
+    Child, EventCx, EventOutcome, IntoView, RenderObjectContext, RenderView, WriterSource,
+    impl_render_view,
+};
+
+use crate::support::{event_callback, ref_callback, value_callback};
 
 #[derive(Clone, Copy, Debug, Default)]
 struct SemanticsOptions {
@@ -75,18 +78,117 @@ impl SemanticsOptions {
     }
 }
 
+/// One owner-local action handler: the dispatch's `EventCx` and the action's
+/// optional payload.
+type EventActionHandler = Rc<dyn Fn(&mut EventCx<'_>, Option<ActionArgs>)>;
+
+/// The owner-local action handlers one [`Semantics`] registered, in
+/// registration order, one per action (a later registration replaces an
+/// earlier one, as `SemanticsConfiguration::add_action` does).
+#[derive(Clone, Default)]
+struct EventActions {
+    handlers: Vec<(SemanticsAction, EventActionHandler)>,
+}
+
+impl EventActions {
+    fn insert(&mut self, action: SemanticsAction, handler: EventActionHandler) {
+        match self.handlers.iter_mut().find(|(known, _)| *known == action) {
+            Some((_, slot)) => *slot = handler,
+            None => self.handlers.push((action, handler)),
+        }
+    }
+
+    fn get(&self, action: SemanticsAction) -> Option<EventActionHandler> {
+        self.handlers
+            .iter()
+            .find(|(known, _)| *known == action)
+            .map(|(_, handler)| Rc::clone(handler))
+    }
+
+    fn is_empty(&self) -> bool {
+        self.handlers.is_empty()
+    }
+
+    fn actions(&self) -> impl Iterator<Item = SemanticsAction> + '_ {
+        self.handlers.iter().map(|(action, _)| *action)
+    }
+}
+
+impl std::fmt::Debug for EventActions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.actions()).finish()
+    }
+}
+
+/// What a mounted [`Semantics`] keeps in the owner's interaction lane: its
+/// action table and the writer each handler's `EventCx` is opened from.
+struct SemanticsActionCell {
+    writer: WriterSource,
+    actions: EventActions,
+}
+
+/// Run `action`'s owner-local handler for the node whose table `target`
+/// names.
+///
+/// Reached through the `Send + Sync` handler the configuration advertises,
+/// which the semantics owner invokes on the owner thread while the realm is
+/// entered. Every failure is a dropped action, never a panic: the platform
+/// asked for something the tree can no longer do.
+fn deliver(target: LocalPayloadTarget, action: SemanticsAction, arguments: Option<ActionArgs>) {
+    let payload = match resolve_local_payload(target) {
+        Ok(payload) => payload,
+        Err(error) => {
+            tracing::warn!(
+                ?error,
+                ?action,
+                "a semantics action was dropped: its handler is owner-local and runs only \
+                 inside its realm"
+            );
+            return;
+        }
+    };
+    let Ok(cell) = payload.downcast::<SemanticsActionCell>() else {
+        tracing::error!(
+            ?action,
+            "BUG: a semantics action ticket resolved to a payload of another type"
+        );
+        return;
+    };
+    let Some(handler) = cell.actions.get(action) else {
+        tracing::debug!(
+            ?action,
+            "a semantics action arrived after its handler was removed; dropped"
+        );
+        return;
+    };
+    cell.writer.write(|cx| handler(cx, arguments));
+}
+
 /// Annotates a subtree with accessibility semantics.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Semantics {
     configuration: SemanticsConfiguration,
+    event_actions: EventActions,
     options: SemanticsOptions,
     child: Child,
+}
+
+impl std::fmt::Debug for Semantics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Semantics")
+            .field("configuration", &self.configuration)
+            .field("event_actions", &self.event_actions)
+            .field("options", &self.options)
+            .field("child", &self.child)
+            .finish()
+    }
 }
 
 impl Default for Semantics {
     fn default() -> Self {
         Self {
             configuration: SemanticsConfiguration::new(),
+            event_actions: EventActions::default(),
             options: SemanticsOptions::default(),
             child: Child::empty(),
         }
@@ -351,44 +453,62 @@ impl Semantics {
     /// the platform as a click — this is what makes a custom-drawn control
     /// pressable without a pointer.
     #[must_use]
-    pub fn on_tap(mut self, handler: impl Fn() + Send + Sync + 'static) -> Self {
-        self.add_action_handler(SemanticsAction::Tap, handler);
-        self
+    pub fn on_tap<F, R>(self, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_plain_action(SemanticsAction::Tap, handler)
     }
 
     /// Invoke `handler` when assistive technology requests a context menu.
     #[must_use]
-    pub fn on_long_press(mut self, handler: impl Fn() + Send + Sync + 'static) -> Self {
-        self.add_action_handler(SemanticsAction::LongPress, handler);
-        self
+    pub fn on_long_press<F, R>(self, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_plain_action(SemanticsAction::LongPress, handler)
     }
 
     /// Invoke `handler` when assistive technology scrolls this node left.
     #[must_use]
-    pub fn on_scroll_left(mut self, handler: impl Fn() + Send + Sync + 'static) -> Self {
-        self.add_action_handler(SemanticsAction::ScrollLeft, handler);
-        self
+    pub fn on_scroll_left<F, R>(self, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_plain_action(SemanticsAction::ScrollLeft, handler)
     }
 
     /// Invoke `handler` when assistive technology scrolls this node right.
     #[must_use]
-    pub fn on_scroll_right(mut self, handler: impl Fn() + Send + Sync + 'static) -> Self {
-        self.add_action_handler(SemanticsAction::ScrollRight, handler);
-        self
+    pub fn on_scroll_right<F, R>(self, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_plain_action(SemanticsAction::ScrollRight, handler)
     }
 
     /// Invoke `handler` when assistive technology scrolls this node up.
     #[must_use]
-    pub fn on_scroll_up(mut self, handler: impl Fn() + Send + Sync + 'static) -> Self {
-        self.add_action_handler(SemanticsAction::ScrollUp, handler);
-        self
+    pub fn on_scroll_up<F, R>(self, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_plain_action(SemanticsAction::ScrollUp, handler)
     }
 
     /// Invoke `handler` when assistive technology scrolls this node down.
     #[must_use]
-    pub fn on_scroll_down(mut self, handler: impl Fn() + Send + Sync + 'static) -> Self {
-        self.add_action_handler(SemanticsAction::ScrollDown, handler);
-        self
+    pub fn on_scroll_down<F, R>(self, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_plain_action(SemanticsAction::ScrollDown, handler)
     }
 
     /// Invoke `handler` when assistive technology increments this node's value.
@@ -396,16 +516,22 @@ impl Semantics {
     /// The one-step-up counterpart to [`Self::on_decrease`], for sliders and
     /// steppers whose value a screen reader can adjust without a pointer.
     #[must_use]
-    pub fn on_increase(mut self, handler: impl Fn() + Send + Sync + 'static) -> Self {
-        self.add_action_handler(SemanticsAction::Increase, handler);
-        self
+    pub fn on_increase<F, R>(self, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_plain_action(SemanticsAction::Increase, handler)
     }
 
     /// Invoke `handler` when assistive technology decrements this node's value.
     #[must_use]
-    pub fn on_decrease(mut self, handler: impl Fn() + Send + Sync + 'static) -> Self {
-        self.add_action_handler(SemanticsAction::Decrease, handler);
-        self
+    pub fn on_decrease<F, R>(self, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_plain_action(SemanticsAction::Decrease, handler)
     }
 
     /// Invoke `handler` when assistive technology asks for this node to be
@@ -415,16 +541,22 @@ impl Semantics {
     /// *next*, which is not always something the pointer path can trigger —
     /// the platform asks for a node that is currently offscreen.
     #[must_use]
-    pub fn on_show_on_screen(mut self, handler: impl Fn() + Send + Sync + 'static) -> Self {
-        self.add_action_handler(SemanticsAction::ShowOnScreen, handler);
-        self
+    pub fn on_show_on_screen<F, R>(self, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_plain_action(SemanticsAction::ShowOnScreen, handler)
     }
 
     /// Invoke `handler` when assistive technology moves focus to this node.
     #[must_use]
-    pub fn on_focus(mut self, handler: impl Fn() + Send + Sync + 'static) -> Self {
-        self.add_action_handler(SemanticsAction::Focus, handler);
-        self
+    pub fn on_focus<F, R>(self, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_plain_action(SemanticsAction::Focus, handler)
     }
 
     /// Invoke `handler` when assistive technology moves focus away from this node.
@@ -434,9 +566,12 @@ impl Semantics {
     /// about something that already happened, whereas a focus request is a
     /// command the node may refuse.
     #[must_use]
-    pub fn on_blur(mut self, handler: impl Fn() + Send + Sync + 'static) -> Self {
-        self.add_action_handler(SemanticsAction::DidLoseAccessibilityFocus, handler);
-        self
+    pub fn on_blur<F, R>(self, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_plain_action(SemanticsAction::DidLoseAccessibilityFocus, handler)
     }
 
     /// Invoke `handler` with the text a platform asked this node to hold.
@@ -447,12 +582,17 @@ impl Semantics {
     /// could mean, so synthesizing one would turn a lost payload into a silent
     /// erasure of the field's contents.
     #[must_use]
-    pub fn on_set_text(mut self, handler: impl Fn(&str) + Send + Sync + 'static) -> Self {
-        self.configuration.add_action(
+    pub fn on_set_text<F, R>(mut self, handler: F) -> Self
+    where
+        F: for<'a> Fn(&mut EventCx<'_>, &'a str) -> R + 'static,
+        R: EventOutcome,
+    {
+        let handler = ref_callback::<str, _, _>(handler);
+        self.event_actions.insert(
             SemanticsAction::SetText,
-            Arc::new(move |_, args| {
+            Rc::new(move |cx, args| {
                 if let Some(ActionArgs::SetText { text }) = args {
-                    handler(&text);
+                    handler(cx, &text);
                 } else {
                     tracing::warn!(
                         "dropping a set-text request whose payload did not cross the translation \
@@ -471,15 +611,18 @@ impl Semantics {
     /// the origin is a position a platform can legitimately mean, so inventing
     /// it would scroll the view somewhere the request never asked for.
     #[must_use]
-    pub fn on_scroll_to_offset(
-        mut self,
-        handler: impl Fn(f64, f64) + Send + Sync + 'static,
-    ) -> Self {
-        self.configuration.add_action(
+    pub fn on_scroll_to_offset<F, R>(mut self, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, f64, f64) -> R + 'static,
+        R: EventOutcome,
+    {
+        let handler =
+            value_callback(move |cx: &mut EventCx<'_>, (x, y): (f64, f64)| handler(cx, x, y));
+        self.event_actions.insert(
             SemanticsAction::ScrollToOffset,
-            Arc::new(move |_, args| {
+            Rc::new(move |cx, args| {
                 if let Some(ActionArgs::ScrollToOffset { x, y }) = args {
-                    handler(x, y);
+                    handler(cx, (x, y));
                 } else {
                     tracing::warn!(
                         "dropping a scroll-to-offset request whose payload did not cross the \
@@ -491,70 +634,117 @@ impl Semantics {
         self
     }
 
-    /// Registers `handler` for `action` verbatim, without adapting its shape.
+    /// Invoke `handler` for `action`, with the action's payload as the
+    /// platform sent it.
     ///
-    /// The escape hatch for the two things the typed builders deliberately do
-    /// not cover: the actions the platform vocabulary cannot route yet, and
-    /// callers that need the handler's identity to survive a rebuild. The
-    /// handler arrives already wrapped, as a [`SemanticsActionHandler`], and is
-    /// stored as given.
+    /// The escape hatch for what the typed builders deliberately do not cover
+    /// — actions the platform vocabulary cannot route yet, and payloads a
+    /// typed builder would narrow. A configuration built by hand and passed to
+    /// [`Self::from_configuration`] reaches the same actions with raw
+    /// `Send + Sync` handlers, but only wholesale; this adds one action to an
+    /// annotation assembled by the other builders.
     ///
-    /// Identity matters because this widget's configuration is compared with
-    /// `Arc::ptr_eq` — a fresh handler allocated on every `build` therefore
-    /// makes the configuration compare unequal and raises a semantics dirty
-    /// impact on every rebuild, even when nothing semantic changed. Building
-    /// the handler once and cloning the `Arc` keeps that quiet:
-    ///
-    /// ```rust
-    /// use std::sync::Arc;
-    ///
-    /// use flui_rendering::RenderUpdateImpact;
-    /// use flui_rendering::semantics::{SemanticsAction, SemanticsActionHandler};
-    /// use flui_view::{RenderObjectContext, RenderView as _};
-    /// use flui_widgets::Semantics;
-    ///
-    /// // Built once, where the widget's own state lives:
-    /// let activate: SemanticsActionHandler = Arc::new(|_action, _arguments| {});
-    ///
-    /// // Each build clones that handler into a fresh widget, so a rebuild
-    /// // carries the same handler and the mounted configuration compares equal:
-    /// let building = || {
-    ///     Semantics::new()
-    ///         .label("Play")
-    ///         .on_action(SemanticsAction::Tap, Arc::clone(&activate))
-    /// };
-    ///
-    /// let mut mounted = building().create_render_object(&RenderObjectContext::detached());
-    /// assert_eq!(
-    ///     building().update_render_object(&RenderObjectContext::detached(), &mut mounted),
-    ///     RenderUpdateImpact::NONE,
-    /// );
-    /// ```
-    ///
-    /// A configuration built by hand and passed to [`Self::from_configuration`]
-    /// reaches the same surface, but only wholesale — this builder adds one
-    /// action to an annotation assembled by the other builders.
+    /// A fresh closure on every `build` is fine: the node advertises the
+    /// action through one handler it keeps across rebuilds, so a rebuild that
+    /// changes only the closure raises no semantics update.
     #[must_use]
-    pub fn on_action(mut self, action: SemanticsAction, handler: SemanticsActionHandler) -> Self {
-        self.configuration.add_action(action, handler);
+    pub fn on_action<F, R>(mut self, action: SemanticsAction, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, Option<ActionArgs>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.event_actions.insert(action, value_callback(handler));
         self
     }
 
-    /// Registers a no-argument action handler.
-    ///
-    /// The single adaptation point from a widget-facing closure to the stored
-    /// `SemanticsActionHandler`, which takes both the action and its optional
-    /// payload. Both are dropped deliberately here: a typed builder already
-    /// knows which action it is bound to, so the discriminant carries nothing
-    /// its caller does not have, and every action routed through this helper
-    /// takes no arguments.
-    fn add_action_handler(
-        &mut self,
-        action: SemanticsAction,
-        handler: impl Fn() + Send + Sync + 'static,
-    ) {
-        self.configuration
-            .add_action(action, Arc::new(move |_, _| handler()));
+    /// Registers a no-argument action handler. The action's payload is
+    /// dropped: every action routed through here takes none, and the typed
+    /// builder already knows which action it is bound to.
+    fn on_plain_action<F, R>(mut self, action: SemanticsAction, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        let handler = event_callback(handler);
+        self.event_actions
+            .insert(action, Rc::new(move |cx, _args| handler(cx)));
+        self
+    }
+
+    /// The configuration to mount: the widget's own, plus every owner-local
+    /// action advertised through `route`'s handler.
+    fn configuration_with(&self, route: Option<&SemanticsActionRoute>) -> SemanticsConfiguration {
+        let mut configuration = self.configuration.clone();
+        if let Some(route) = route {
+            for action in self.event_actions.actions() {
+                configuration.add_action(action, Arc::clone(route.handler()));
+            }
+        }
+        configuration
+    }
+
+    /// The lane payload for this build's action table, or `None` when there
+    /// is none to register or no writer to open its `EventCx` from.
+    fn action_cell(&self, ctx: &RenderObjectContext<'_>) -> Option<Rc<dyn Any>> {
+        if self.event_actions.is_empty() {
+            return None;
+        }
+        let Some(writer) = ctx.writer_source() else {
+            tracing::debug!(
+                actions = ?self.event_actions,
+                "semantics actions are not advertised: the node is mounted without an owner"
+            );
+            return None;
+        };
+        Some(Rc::new(SemanticsActionCell {
+            writer,
+            actions: self.event_actions.clone(),
+        }))
+    }
+
+    /// Register this build's action table in the owner lane and mint the
+    /// handler that reaches it.
+    fn register_actions(&self, ctx: &RenderObjectContext<'_>) -> Option<SemanticsActionRoute> {
+        let cell = self.action_cell(ctx)?;
+        match ctx.register_local_payload(cell) {
+            Ok(target) => {
+                let handler: SemanticsActionHandler =
+                    Arc::new(move |action, arguments| deliver(target, action, arguments));
+                Some(SemanticsActionRoute::new(target, handler))
+            }
+            Err(error) => {
+                tracing::debug!(
+                    ?error,
+                    "semantics actions are not advertised: no owner lane to hold them"
+                );
+                None
+            }
+        }
+    }
+
+    /// Bring the render object's lane registration in line with this build:
+    /// replace the table under the existing ticket (keeping its handler, so
+    /// the configuration still compares equal), register one if none exists,
+    /// or release it when this build has no actions left.
+    fn sync_actions(
+        &self,
+        ctx: &RenderObjectContext<'_>,
+        render_object: &RenderSemanticsAnnotations,
+    ) -> Option<SemanticsActionRoute> {
+        let Some(existing) = render_object.action_route().cloned() else {
+            return self.register_actions(ctx);
+        };
+        let Some(cell) = self.action_cell(ctx) else {
+            release_actions(ctx, &existing);
+            return None;
+        };
+        match ctx.replace_local_payload(existing.target(), cell) {
+            Ok(()) => Some(existing),
+            Err(error) => {
+                tracing::debug!(?error, "semantics action table was gone; registering anew");
+                self.register_actions(ctx)
+            }
+        }
     }
 
     /// Set the child.
@@ -565,31 +755,46 @@ impl Semantics {
     }
 }
 
+/// Remove a node's action table from the owner lane.
+fn release_actions(ctx: &RenderObjectContext<'_>, route: &SemanticsActionRoute) {
+    if let Err(error) = ctx.unregister_local_payload(route.target()) {
+        tracing::debug!(?error, "semantics action table was already unregistered");
+    }
+}
+
 impl RenderView for Semantics {
     type Protocol = BoxProtocol;
     type RenderObject = RenderSemanticsAnnotations;
 
-    fn create_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-    ) -> Self::RenderObject {
-        RenderSemanticsAnnotations::from_configuration(self.configuration.clone())
-            .with_container(self.options.contains(SemanticsOptions::CONTAINER))
-            .with_explicit_child_nodes(
-                self.options
-                    .contains(SemanticsOptions::EXPLICIT_CHILD_NODES),
-            )
-            .with_exclude_semantics(self.options.contains(SemanticsOptions::EXCLUDE_DESCENDANTS))
-            .with_block_user_actions(self.options.contains(SemanticsOptions::BLOCK_USER_ACTIONS))
+    fn create_render_object(&self, ctx: &RenderObjectContext<'_>) -> Self::RenderObject {
+        let route = self.register_actions(ctx);
+        let mut render_object =
+            RenderSemanticsAnnotations::from_configuration(self.configuration_with(route.as_ref()))
+                .with_container(self.options.contains(SemanticsOptions::CONTAINER))
+                .with_explicit_child_nodes(
+                    self.options
+                        .contains(SemanticsOptions::EXPLICIT_CHILD_NODES),
+                )
+                .with_exclude_semantics(
+                    self.options.contains(SemanticsOptions::EXCLUDE_DESCENDANTS),
+                )
+                .with_block_user_actions(
+                    self.options.contains(SemanticsOptions::BLOCK_USER_ACTIONS),
+                );
+        let _none = render_object.set_action_route(route);
+        render_object
     }
 
     fn update_render_object(
         &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
+        ctx: &RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
+        let route = self.sync_actions(ctx, render_object);
+        let configuration = self.configuration_with(route.as_ref());
+        let _previous = render_object.set_action_route(route);
         let mut impact = flui_rendering::RenderUpdateImpact::NONE;
-        impact |= render_object.set_configuration(self.configuration.clone());
+        impact |= render_object.set_configuration(configuration);
         impact |= render_object.set_container(self.options.contains(SemanticsOptions::CONTAINER));
         impact |= render_object.set_explicit_child_nodes(
             self.options
@@ -600,6 +805,16 @@ impl RenderView for Semantics {
         impact |= render_object
             .set_block_user_actions(self.options.contains(SemanticsOptions::BLOCK_USER_ACTIONS));
         impact
+    }
+
+    fn did_unmount_render_object(
+        &self,
+        ctx: &RenderObjectContext<'_>,
+        render_object: &mut Self::RenderObject,
+    ) {
+        if let Some(route) = render_object.set_action_route(None) {
+            release_actions(ctx, &route);
+        }
     }
 
     flui_view::single_child_view_children!();

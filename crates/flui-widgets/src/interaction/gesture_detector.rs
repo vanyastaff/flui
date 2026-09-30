@@ -683,14 +683,14 @@ impl GestureDetectorState {
         if view.on_tap.is_some() {
             let requests = Arc::clone(&self.semantics_requests);
             let rebuild = rebuild.clone();
-            semantics = semantics.on_tap(move || {
+            semantics = semantics.on_tap(move |_cx| {
                 requests.push(PendingSemanticsAction::Tap);
                 rebuild.schedule(flui_view::RebuildReason::StateChange);
             });
         }
         if view.on_long_press.is_some() {
             let requests = Arc::clone(&self.semantics_requests);
-            semantics = semantics.on_long_press(move || {
+            semantics = semantics.on_long_press(move |_cx| {
                 requests.push(PendingSemanticsAction::LongPress);
                 rebuild.schedule(flui_view::RebuildReason::StateChange);
             });

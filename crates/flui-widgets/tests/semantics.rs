@@ -87,35 +87,48 @@ pub(crate) fn merge_semantics_collapses_its_descendants_in_the_a11y_tree() {
 // Actions: a platform request, routed back to the widget's own callback
 // ===========================================================================
 
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
-use flui_testing::{Action, ActionData, ActionRequest, NodeId, TreeId, invoke_semantics_action};
+use flui_rendering::semantics::{AccessibilityNodeId, SemanticsActionRequest};
+use flui_testing::widgets::LaidOut;
+use flui_testing::{Action, ActionData, ActionRequest, NodeId, TreeId};
+use flui_view::{SignalWriteExt as _, View};
 
-/// Mounts `semantics` with semantics enabled and returns the single node
-/// carrying `label`, together with a live view of the a11y tree.
+use crate::common::{ProbeSignals, SignalProbe};
+
+/// Mounts `root` with semantics enabled and returns the single node carrying
+/// `label`, together with a live view of the a11y tree.
 ///
 /// The tree is returned alongside its own description so a failing assertion
 /// can show what was actually there, matching this file's other a11y tests.
-fn pump_labelled(
-    semantics: Semantics,
-) -> (
-    flui_testing::widgets::LaidOut,
-    flui_testing::A11yTree,
-    NodeId,
-) {
-    let mut laid = lay_out(semantics, loose(200.0));
+fn pump_labelled(root: impl View) -> (LaidOut, flui_testing::A11yTree, NodeId) {
+    let mut laid = lay_out(root, loose(200.0));
     laid.enable_semantics();
     laid.pump();
     let tree = laid
         .a11y_tree()
         .expect("semantics enabled before the frame");
-    let node_id = tree
-        .find_by_label(LABEL)
-        .unwrap_or_else(|error| panic!("expected one node labelled {LABEL:?}: {error}"))
-        .id();
+    let node_id = labelled_node(&tree);
     (laid, tree, node_id)
+}
+
+/// The node carrying [`LABEL`] in `tree`.
+fn labelled_node(tree: &flui_testing::A11yTree) -> NodeId {
+    tree.find_by_label(LABEL)
+        .unwrap_or_else(|error| {
+            panic!(
+                "expected one node labelled {LABEL:?}: {error}\n{}",
+                tree.describe()
+            )
+        })
+        .id()
+}
+
+/// A container node labelled [`LABEL`] around a fixed-size box, for the
+/// action builders to decorate.
+fn host() -> Semantics {
+    Semantics::new().container(true).label(LABEL)
 }
 
 /// The label every action test mounts under; unique within its own tree.
@@ -138,16 +151,12 @@ fn request(action: Action, node_id: NodeId, data: Option<ActionData>) -> ActionR
 /// the first is the dead control this whole surface exists to rule out — an
 /// action advertised outbound that nothing routes inbound.
 pub(crate) fn a_tap_handler_round_trips_from_a_platform_click_to_the_callback() {
-    let activations = Arc::new(AtomicU32::new(0));
-    let counted = Arc::clone(&activations);
+    let activations = Rc::new(Cell::new(0_u32));
+    let counted = Rc::clone(&activations);
 
     let (laid, tree, node_id) = pump_labelled(
-        Semantics::new()
-            .container(true)
-            .label(LABEL)
-            .on_tap(move || {
-                counted.fetch_add(1, Ordering::SeqCst);
-            })
+        host()
+            .on_tap(move |_cx| counted.set(counted.get() + 1))
             .child(SizedBox::new(40.0, 20.0)),
     );
 
@@ -160,17 +169,143 @@ pub(crate) fn a_tap_handler_round_trips_from_a_platform_click_to_the_callback() 
         tree.describe()
     );
 
-    invoke_semantics_action(
-        &laid.pipeline_owner(),
-        request(Action::Click, node_id, None),
-    )
-    .expect("a click on a node advertising one must resolve");
+    laid.invoke_semantics_action(request(Action::Click, node_id, None))
+        .expect("a click on a node advertising one must resolve");
 
     assert_eq!(
-        activations.load(Ordering::SeqCst),
+        activations.get(),
         1,
-        "the handler must have run exactly once",
+        "the handler must have run exactly once"
     );
+}
+
+/// An action handler receives the dispatch's `EventCx`: its signal write
+/// lands, and the signal's reader rebuilds on the next frame.
+pub(crate) fn an_action_handler_writes_a_signal_and_rebuilds_its_reader() {
+    let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
+        host()
+            .on_increase(move |cx| count.update(cx, |n| *n += 1))
+            .child(SizedBox::new(40.0, 20.0))
+    });
+    let (mut laid, _tree, node_id) = pump_labelled(probe.view());
+
+    laid.invoke_semantics_action(request(Action::Increment, node_id, None))
+        .expect("an increment on a node advertising one must resolve");
+    assert_eq!(probe.value(), Ok(1), "the handler wrote through its cx");
+
+    laid.tick();
+    assert_eq!(
+        probe.reads().last(),
+        Some(&1),
+        "the reader rebuilt with the write"
+    );
+}
+
+/// A handler whose write is refused (its signal's slot is released) is
+/// reported at the dispatch boundary, and the next action still runs.
+pub(crate) fn a_refused_write_in_an_action_handler_is_reported_not_panicked() {
+    let probe = SignalProbe::new(|ProbeSignals { count, released }| {
+        host()
+            .on_decrease(move |cx| released.set(cx, 1))
+            .on_increase(move |cx| count.set(cx, 1))
+            .child(SizedBox::new(40.0, 20.0))
+    });
+    let (laid, _tree, node_id) = pump_labelled(probe.view());
+
+    let (outcome, log) = flui_testing::log_capture::capture(|| {
+        laid.invoke_semantics_action(request(Action::Decrement, node_id, None))
+    });
+    outcome.expect("a decrement on a node advertising one must resolve");
+    assert!(
+        log.contains("an event callback's signal write was refused"),
+        "the refusal is logged at the dispatch boundary: {log}"
+    );
+
+    laid.invoke_semantics_action(request(Action::Increment, node_id, None))
+        .expect("the node still resolves after a refused write");
+    assert_eq!(probe.value(), Ok(1), "the next action still wrote");
+}
+
+/// A handler is owner-local, so an action invoked with no realm entered — a
+/// caller holding a `SemanticsActionInvocation` outside the owner's
+/// dispatch — has nowhere to run it: the action is dropped with a warning,
+/// and nothing panics.
+pub(crate) fn an_action_invoked_outside_its_realm_is_dropped_with_a_warning() {
+    let activations = Rc::new(Cell::new(0_u32));
+    let counted = Rc::clone(&activations);
+    let (laid, _tree, node_id) = pump_labelled(
+        host()
+            .on_tap(move |_cx| counted.set(counted.get() + 1))
+            .child(SizedBox::new(40.0, 20.0)),
+    );
+
+    let invocation = laid
+        .pipeline_owner()
+        .with(|owner| {
+            owner.resolve_semantics_action(SemanticsActionRequest {
+                node_id: AccessibilityNodeId::from_u64(node_id.0)
+                    .expect("an exported node id is non-zero"),
+                action: SemanticsAction::Tap,
+                arguments: None,
+            })
+        })
+        .expect("the node advertises a tap");
+    let ((), log) = flui_testing::log_capture::capture(|| invocation.invoke());
+
+    assert_eq!(activations.get(), 0, "the handler did not run");
+    assert!(
+        log.contains("a semantics action was dropped"),
+        "the drop is reported: {log}"
+    );
+
+    laid.invoke_semantics_action(request(Action::Click, node_id, None))
+        .expect("the same node resolves inside its realm");
+    assert_eq!(activations.get(), 1, "inside the realm the handler runs");
+}
+
+/// A rebuild that hands the node a fresh closure — the ordinary case, a
+/// closure literal in `build` — leaves the mounted configuration equal, so it
+/// raises no semantics update, and the action runs the rebuilt closure rather
+/// than the first one.
+pub(crate) fn rebuilding_with_fresh_handlers_keeps_the_configuration_and_runs_the_new_one() {
+    let ran = Rc::new(Cell::new(0_u32));
+    let tree_for = |version: u32| {
+        let ran = Rc::clone(&ran);
+        host()
+            .on_tap(move |_cx| ran.set(version))
+            .child(SizedBox::new(40.0, 20.0))
+    };
+    let (mut laid, _tree, node_id) = pump_labelled(tree_for(1));
+    let before = mounted_configuration(&laid);
+
+    laid.pump_widget(tree_for(2));
+    let after = mounted_configuration(&laid);
+    assert!(
+        before == after,
+        "a rebuild that changes only the closure must keep the configuration \
+         equal, or every rebuild re-assembles this node's semantics"
+    );
+
+    laid.invoke_semantics_action(request(Action::Click, node_id, None))
+        .expect("the rebuilt node still resolves a click");
+    assert_eq!(ran.get(), 2, "the rebuilt closure ran, not the first one");
+}
+
+/// The configuration the single `Semantics` wrapper has mounted.
+fn mounted_configuration(laid: &LaidOut) -> flui_rendering::semantics::SemanticsConfiguration {
+    let [id] = laid.find_semantics_wrappers()[..] else {
+        panic!("one Semantics wrapper is mounted");
+    };
+    laid.pipeline_owner().with_mut(|owner| {
+        owner
+            .render_tree_mut()
+            .get_mut(id)
+            .and_then(|node| {
+                node.downcast_render_object_mut::<flui_objects::RenderSemanticsAnnotations>()
+            })
+            .map(|render| render.configuration().clone())
+            .expect("the wrapper is a RenderSemanticsAnnotations")
+    })
 }
 
 /// A set-text request that arrives without its payload is dropped, not emptied.
@@ -181,35 +316,24 @@ pub(crate) fn a_tap_handler_round_trips_from_a_platform_click_to_the_callback() 
 /// resolves: this is the payload being dropped, not the action being refused,
 /// which is why the outcome is asserted positive as well.
 pub(crate) fn a_set_text_request_without_a_payload_is_dropped_rather_than_emptied() {
-    let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    let sink = Arc::clone(&seen);
+    let seen: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&seen);
 
     let (laid, _tree, node_id) = pump_labelled(
-        Semantics::new()
-            .container(true)
-            .label(LABEL)
-            .on_set_text(move |text| {
-                sink.lock()
-                    .expect("this test never poisons its own lock")
-                    .push(text.to_owned());
-            })
+        host()
+            .on_set_text(move |_cx, text| sink.borrow_mut().push(text.to_owned()))
             .child(SizedBox::new(40.0, 20.0)),
     );
 
     // `SetValue` with no `data`: the action routes, the payload does not.
-    invoke_semantics_action(
-        &laid.pipeline_owner(),
-        request(Action::SetValue, node_id, None),
-    )
-    .expect(
-        "the request must resolve — the node advertises the action, so a \
+    laid.invoke_semantics_action(request(Action::SetValue, node_id, None))
+        .expect(
+            "the request must resolve — the node advertises the action, so a \
          rejection here would mean this test never reached the payload",
-    );
+        );
 
     assert!(
-        seen.lock()
-            .expect("this test never poisons its own lock")
-            .is_empty(),
+        seen.borrow().is_empty(),
         "the handler must not run: an empty string is an edit the platform \
          never asked for",
     );

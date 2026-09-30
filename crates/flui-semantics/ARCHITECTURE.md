@@ -367,7 +367,7 @@ no FLUI argument shape: the handler receives `SetText` with no arguments. Nothin
 `an_expandable_node_advertises_only_the_transition_its_state_allows` and
 `every_inbound_routable_action_is_advertised_outbound_again` in `accesskit_translation.rs`;
 `a_platform_expand_runs_the_tap_handler_of_a_collapsed_node` in
-`crates/flui-widgets/tests/semantics.rs`. `flui_testing::a11y::invoke_semantics_action` has
+`crates/flui-widgets/tests/semantics.rs`. `flui_testing::widgets::LaidOut::invoke_semantics_action` has
 no state guard: sending it the transition the node does not advertise toggles it anyway.
 
 ### 6. Every explicit role maps to an AccessKit role; `DragHandle` and `HotKey` stay generic

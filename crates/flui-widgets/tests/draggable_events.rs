@@ -10,10 +10,9 @@ use std::rc::Rc;
 use flui_interaction::DragUpdateDetails;
 use flui_painting::styling::Color;
 use flui_view::prelude::*;
-use flui_widgets::Draggable;
 use flui_widgets::{
-    ColoredBox, DraggableCanceledDetails, DraggableDetails, InsertPosition, Overlay, OverlayEntry,
-    OverlayHandle, SizedBox, Text,
+    ColoredBox, DragTarget, DragTargetDetails, Draggable, DraggableCanceledDetails,
+    DraggableDetails, InsertPosition, Overlay, OverlayEntry, OverlayHandle, SizedBox, Text,
 };
 
 use crate::common::{LaidOut, ProbeSignals, SignalProbe, lay_out, tight};
@@ -31,6 +30,25 @@ struct Rig {
 }
 
 fn rig(configure: impl Fn(Draggable<u32>, ProbeSignals) -> Draggable<u32> + 'static) -> Rig {
+    rig_over_target(configure, None)
+}
+
+/// How a test wires a drag target's callbacks to the probe's signals.
+type ConfigureTarget = Rc<dyn Fn(DragTarget<u32>, ProbeSignals) -> DragTarget<u32>>;
+
+/// [`rig`] with the draggable built inside a `DragTarget<u32>`, so the target
+/// is on the hit path under every point of the drag, the drop included.
+fn target_rig(
+    configure: impl Fn(Draggable<u32>, ProbeSignals) -> Draggable<u32> + 'static,
+    configure_target: impl Fn(DragTarget<u32>, ProbeSignals) -> DragTarget<u32> + 'static,
+) -> Rig {
+    rig_over_target(configure, Some(Rc::new(configure_target)))
+}
+
+fn rig_over_target(
+    configure: impl Fn(Draggable<u32>, ProbeSignals) -> Draggable<u32> + 'static,
+    configure_target: Option<ConfigureTarget>,
+) -> Rig {
     let configure: Configure = Rc::new(configure);
     let show = Rc::new(Cell::new(true));
     let signals: Rc<Cell<Option<ProbeSignals>>> = Rc::new(Cell::new(None));
@@ -43,10 +61,20 @@ fn rig(configure: impl Fn(Draggable<u32>, ProbeSignals) -> Draggable<u32> + 'sta
                 return SizedBox::shrink().into_view().boxed();
             }
             let signals = signals.get().expect("the probe built before its overlay");
-            let draggable = Draggable::new(ColoredBox::new(Color::rgb(10, 20, 30)))
-                .data(7_u32)
-                .feedback(|| Text::new("feedback").into_view().boxed());
-            configure(draggable, signals).into_view().boxed()
+            let configure = Rc::clone(&configure);
+            let draggable = move || {
+                let draggable = Draggable::new(ColoredBox::new(Color::rgb(10, 20, 30)))
+                    .data(7_u32)
+                    .feedback(|| Text::new("feedback").into_view().boxed());
+                configure(draggable, signals).into_view().boxed()
+            };
+            match &configure_target {
+                None => draggable(),
+                Some(configure_target) => {
+                    let target = DragTarget::new(move |_candidates, _rejected| draggable());
+                    configure_target(target, signals).into_view().boxed()
+                }
+            }
         })
     };
     let handle = OverlayHandle::new();
@@ -199,6 +227,111 @@ fn a_let_bound_drag_callback_compiles_through_callback_with() {
         value > updates + 100,
         "the cancel closure ran with the drag's displacement: {value}"
     );
+}
+
+/// A drop onto a target writes through the target's `on_accept` `EventCx`,
+/// and does so before the draggable's own completion callback — the oracle's
+/// `finishDrag` order. `on_accept` sets 1 and `on_drag_completed` multiplies
+/// by 10, so only that order, with both writes landing, leaves 10.
+pub(crate) fn a_drop_writes_through_the_targets_on_accept_before_the_draggable_completes() {
+    let rig = target_rig(
+        |draggable, ProbeSignals { count, .. }| {
+            draggable.on_drag_completed(move |cx| count.update(cx, |n| *n *= 10))
+        },
+        |target, ProbeSignals { count, .. }| {
+            target.on_accept(move |cx, details: DragTargetDetails<u32>| {
+                assert_eq!(details.data, 7, "the target receives the drag's data");
+                count.set(cx, 1)
+            })
+        },
+    );
+    let mut app = mounted(&rig);
+
+    start_drag(&app);
+    app.dispatch_pointer_up(50.0, 130.0);
+    assert_eq!(
+        rig.probe.value(),
+        Ok(10),
+        "on_accept wrote, then on_drag_completed"
+    );
+
+    app.tick();
+    assert_eq!(rig.probe.reads().last(), Some(&10), "the reader rebuilt");
+}
+
+/// `on_move` fires for a drag over a target that refused it, and `on_leave`
+/// when that drag ends there; both write through their `EventCx`. The veto
+/// is an owner-local query: it captures an `Rc`.
+pub(crate) fn a_drag_leaving_a_target_writes_through_on_leave_and_on_move() {
+    let vetoes = Rc::new(Cell::new(0_u32));
+    let asked = Rc::clone(&vetoes);
+    let rig = target_rig(
+        |draggable, _signals| draggable,
+        move |target, ProbeSignals { count, .. }| {
+            let asked = Rc::clone(&asked);
+            target
+                .on_will_accept(move |_details| {
+                    asked.set(asked.get() + 1);
+                    false
+                })
+                .on_move(move |cx, _details| count.update(cx, |n| *n += 1))
+                .on_leave(move |cx, data: Option<u32>| {
+                    assert_eq!(data, Some(7), "the leaving drag's data");
+                    count.update(cx, |n| *n += 1000)
+                })
+        },
+    );
+    let mut app = mounted(&rig);
+
+    start_drag(&app);
+    assert!(
+        vetoes.get() >= 1,
+        "the veto was asked when the drag entered"
+    );
+    let moves = rig.probe.value().expect("the probe's signal is live");
+    assert!(
+        moves >= 1,
+        "on_move wrote while the drag was over the target"
+    );
+
+    app.dispatch_pointer_up(50.0, 130.0);
+    assert_eq!(
+        rig.probe.value(),
+        Ok(moves + 1000),
+        "the refused drop left the target through on_leave"
+    );
+    app.tick();
+    assert_eq!(rig.probe.reads().last(), Some(&(moves + 1000)));
+}
+
+/// A target callback whose write is refused is reported, and the drop is
+/// still accepted.
+pub(crate) fn a_refused_write_in_a_target_callback_is_reported_not_panicked() {
+    let rig = target_rig(
+        |draggable, ProbeSignals { count, .. }| {
+            draggable.on_drag_end(move |cx, details: DraggableDetails| {
+                count.set(cx, if details.was_accepted { 1 } else { 2 })
+            })
+        },
+        |target, ProbeSignals { released, .. }| {
+            target
+                .on_move(move |cx, _details| released.set(cx, 1))
+                .on_accept(move |cx, _details| released.set(cx, 1))
+        },
+    );
+    let mut app = mounted(&rig);
+
+    let ((), log) = flui_testing::log_capture::capture(|| {
+        start_drag(&app);
+        app.dispatch_pointer_up(50.0, 130.0);
+    });
+    assert!(
+        log.contains("an event callback's signal write was refused"),
+        "the refusal is logged at the dispatch boundary: {log}"
+    );
+    assert_eq!(rig.probe.value(), Ok(1), "the drop was still accepted");
+    app.tick();
+    assert_eq!(rig.probe.reads().last(), Some(&1));
 }
 
 /// A drag callback that panics while the unmount cancels the drag must not

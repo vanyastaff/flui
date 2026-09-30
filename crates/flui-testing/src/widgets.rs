@@ -438,6 +438,30 @@ impl LaidOut {
         self.host.realm().enter(|_| callback())
     }
 
+    /// Deliver an accessibility action to the node it addresses, as a platform
+    /// adapter would, inside this tree's realm — where a widget's owner-local
+    /// action handlers run.
+    ///
+    /// Synchronous: the handler has run when this returns. The production
+    /// path queues the request and runs it at the next pump's drain; this
+    /// resolves and invokes it immediately, at the same kind of frame
+    /// boundary.
+    ///
+    /// # Errors
+    ///
+    /// See [`InvokeActionError`](crate::InvokeActionError): a malformed node
+    /// identity, a platform action FLUI does not route, or a request the
+    /// semantics tree does not resolve.
+    pub fn invoke_semantics_action(
+        &self,
+        request: crate::ActionRequest,
+    ) -> Result<(), crate::InvokeActionError> {
+        let pipeline = self.pipeline_owner();
+        self.host
+            .realm()
+            .enter(|_| crate::a11y::invoke_semantics_action(&pipeline, request))
+    }
+
     /// The owner-local post-frame handle the realm installed on this tree's
     /// `BuildOwner`, so a test can `schedule_local` a callback that captures
     /// the (`!Send`) [`PipelineCell`] — `PostFrameHandle::schedule`'s `Send`

@@ -106,7 +106,7 @@ pub mod widgets;
 
 pub use a11y::{
     A11yNode, A11yQuery, A11yQueryError, A11yTree, Action, ActionData, ActionRequest,
-    InvokeActionError, NodeId, NotTreeBound, TreeId, invoke_semantics_action,
+    InvokeActionError, NodeId, NotTreeBound, TreeId,
 };
 pub use bootstrap::{BuildCapabilities, MountOptions, MountOwners, Mounted};
 pub use fonts::pin_font_faces;
