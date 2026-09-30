@@ -12,9 +12,6 @@ extend-exclude = [
     "docs/brainstorms/**/*.md",
     "docs/plans/**/*.md",        # plans are reviewed artifacts; preserve verbatim
     "specs/**/*.md",             # speckit artifacts: reviewed, preserved verbatim
-    "platforms/**/*.storyboard", # auto-generated Apple XIB
-    "platforms/**/*.xib",
-    "platforms/**/*.pbxproj",
 ]
 
 [default]
