@@ -231,7 +231,7 @@ fn family(
     collection: &mut Collection,
     style: Option<&TextStyle>,
 ) -> StyleProperty<'static, SpanBrush> {
-    let family = resolve_family_name(style, |name| collection.family_id(name).is_some());
+    let family = resolve_family_name(style, |name| holds_exactly(collection, name));
     let name = match family {
         Family::Name(name) => FontFamilyName::Named(Cow::Owned(name.to_owned())),
         Family::Serif => FontFamilyName::Generic(GenericFamily::Serif),
@@ -241,6 +241,20 @@ fn family(
         Family::Monospace => FontFamilyName::Generic(GenericFamily::Monospace),
     };
     StyleProperty::FontFamily(FontFamily::Single(name))
+}
+
+/// Whether `collection` holds a family spelled exactly `name`.
+///
+/// fontique looks family names up without regard to case, fontdb (and so the
+/// paint side's `InstalledFamilies`) exactly; the rule is asked the paint
+/// side's question, so a style naming `"segoe ui"` degrades to the
+/// sans-serif generic on both sides instead of measuring in Segoe UI and
+/// painting in the generic's family.
+pub(crate) fn holds_exactly(collection: &mut Collection, name: &str) -> bool {
+    collection
+        .family_id(name)
+        .and_then(|id| collection.family_name(id))
+        .is_some_and(|held| held == name)
 }
 
 /// The Parley properties `style` sets; a field left unset adds nothing.
@@ -345,6 +359,40 @@ mod tests {
                 .layout
                 .is_rtl(),
             "Hebrew-first text takes an RTL base direction under Ltr"
+        );
+    }
+
+    /// On a collection holding only the bundled faces, a glyph the style's
+    /// family lacks measures in Roboto, the face cosmic-text's last resort
+    /// paints it with, not as `.notdef`: Cyrillic in Material Icons measures
+    /// exactly as Cyrillic in Roboto.
+    #[test]
+    fn a_glyph_the_named_family_lacks_measures_in_roboto_on_the_bundled_collection() {
+        let fonts = FontCollection::new();
+        let width = |family: &str| {
+            let style = TextStyle {
+                font_family: Some(family.to_owned()),
+                ..TextStyle::default()
+            };
+            let spans: Vec<(String, Option<TextStyle>)> = vec![("Привет".to_owned(), Some(style))];
+            TextContext::new(&fonts)
+                .shape(&ParagraphSpec {
+                    spans: &spans,
+                    default_style: None,
+                    font_size: 16.0,
+                    max_width: None,
+                    line_height: None,
+                    direction: TextDirection::Ltr,
+                    max_lines: None,
+                })
+                .metrics()
+                .width
+        };
+        let roboto = width("Roboto");
+        let icons = width("Material Icons");
+        assert!(
+            (icons - roboto).abs() < 1e-3,
+            "Cyrillic in Material Icons measures {icons}, in Roboto {roboto}"
         );
     }
 

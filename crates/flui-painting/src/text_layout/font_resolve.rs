@@ -970,11 +970,12 @@ mod tests {
         );
     }
 
-    /// Over the same faces, the Parley path's check (the family is in the
-    /// collection) resolves every style to the family the process font
-    /// system resolves it to: a carried primary, the first carried or
-    /// generic entry of the chain past absent ones, and the sans-serif
-    /// degrade.
+    /// Over the same faces, the Parley path's check (the collection holds a
+    /// family spelled exactly so) resolves every style to the family the
+    /// process font system resolves it to: a carried primary, the first
+    /// carried or generic entry of the chain past absent ones, the
+    /// sans-serif degrade, and a carried family spelled in another case,
+    /// which fontdb does not match and so degrades too.
     #[cfg(feature = "parley")]
     fn the_collection_resolves_the_family_the_font_system_does() {
         use parley::fontique::{Blob, Collection, CollectionOptions};
@@ -998,6 +999,11 @@ mod tests {
         let rows = [
             (TextStyle::default(), Family::SansSerif),
             (chained("Roboto", &[]), Family::Name("Roboto")),
+            (chained("roboto", &[]), Family::SansSerif),
+            (
+                chained("material icons", &["Material Icons"]),
+                Family::Name("Material Icons"),
+            ),
             (
                 chained("CupertinoSystemText", &["-apple-system", "Material Icons"]),
                 Family::Name("Material Icons"),
@@ -1016,8 +1022,9 @@ mod tests {
         ];
         for (style, expected) in &rows {
             let paint = resolve_family(Some(style), &mut system, &mut installed, 0);
-            let measure =
-                resolve_family_name(Some(style), |name| collection.family_id(name).is_some());
+            let measure = resolve_family_name(Some(style), |name| {
+                crate::parley_text::holds_exactly(&mut collection, name)
+            });
             assert_eq!(paint, *expected, "{style:?} on the font system");
             assert_eq!(measure, paint, "{style:?}: the collection agrees");
         }
