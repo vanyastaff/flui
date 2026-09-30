@@ -113,9 +113,11 @@ that the type is nameable without an engine dependency — not its field set.
 (decision 8), are defined here. Its
 three-rect merge was removed with the move: the one consumer reads `damage_rect()`, the bounding
 union, through which the merge was unobservable. `PerformanceStats` (a clock-bearing frame-time
-window) moved to `flui-app`; `PerformanceOverlayLayer::update_stats(fps, frame_time_ms,
-total_frames)` takes the numbers, and `PerformanceOverlayOption` crosses the engine boundary as
-itself rather than as a `u32`.
+window) moved to `flui-app`; `PerformanceOverlayLayer::record` composes the numbers it is
+handed through the caller's `TextContext` into the display list the layer carries, so the
+engine replays shaped labels and shapes nothing (ADR-0092), and `PerformanceOverlayOption`
+crosses the engine boundary as itself rather than as a `u32`
+(`performance_overlay_readout_rows`).
 
 ### 8. Damage is a diff of boundary stamps — [ADR-0087 §3](../../docs/adr/ADR-0087-raster-contract-and-cpu-backend.md)
 

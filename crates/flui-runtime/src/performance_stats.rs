@@ -3,7 +3,8 @@
 //!
 //! Owned by the presentation because it is the thing that knows when a
 //! frame was composited; the overlay layer (`flui_layer::PerformanceOverlayLayer`)
-//! only draws the numbers it is handed.
+//! only records the numbers it is handed, shaped through the realm's text
+//! context.
 
 use std::collections::VecDeque;
 

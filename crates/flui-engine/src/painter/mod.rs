@@ -71,9 +71,6 @@ pub struct WgpuPainter {
     /// The rasterised-glyph cache paragraphs are recorded against and the
     /// glyph pipeline samples.
     glyph_atlas: TextAtlas,
-    /// Shapes the performance overlay's labels (`draw_label`); built on the
-    /// first one, so a painter that draws no overlay holds no fonts.
-    labels: Option<flui_painting::TextContext>,
 
     // ===== GPU Draw-State Stack =====
     /// Owns the four parallel transform/scissor/SDF-clip stacks and their
@@ -183,7 +180,6 @@ impl WgpuPainter {
             replay,
             batcher: crate::batches::DrawBatcher::new(),
             glyph_atlas,
-            labels: None,
             state: GpuStateStack::new(),
             compositor: LayerCompositor::new(),
             current_segment: DrawSegment::new(),
@@ -193,6 +189,13 @@ impl WgpuPainter {
     }
 
     // ===== Accessors =====
+
+    /// How many faces the glyph rasterizer has registered: one per distinct
+    /// face the paragraphs it rasterized named.
+    #[cfg(test)]
+    pub(crate) fn glyph_face_count(&mut self) -> usize {
+        self.glyph_atlas.rasterizer_mut().fonts().face_count()
+    }
 
     /// Returns a reference to the wgpu device.
     #[must_use]

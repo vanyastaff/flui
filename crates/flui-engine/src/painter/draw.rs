@@ -220,37 +220,6 @@ impl super::WgpuPainter {
         );
     }
 
-    /// Draws an overlay label at `position` (local pixels) in one style:
-    /// the performance overlay's readouts, which no recorder shapes. Shaped
-    /// through flui-painting's [`flui_painting::TextContext`] over the
-    /// bundled faces, built on the first label; everything a recorder paints
-    /// arrives shaped through [`Self::draw_paragraph`].
-    pub(crate) fn draw_label(
-        &mut self,
-        text: &str,
-        position: flui_foundation::geometry::Point<f64>,
-        font_size: f32,
-        color: flui_painting::styling::Color,
-    ) {
-        let labels = self.labels.get_or_insert_with(|| {
-            flui_painting::TextContext::new(&flui_painting::FontCollection::new())
-        });
-        let spans = [(text.to_owned(), None)];
-        let paragraph = labels
-            .shape(&flui_painting::parley_text::ParagraphSpec {
-                spans: &spans,
-                default_style: None,
-                font_size,
-                max_width: None,
-                line_height: None,
-                direction: flui_painting::typography::TextDirection::Ltr,
-                max_lines: None,
-                ellipsis: None,
-            })
-            .to_shaped(None);
-        self.draw_paragraph(Arc::new(paragraph), position, color);
-    }
-
     /// Draws a shaped paragraph with its top-left at `position` (local
     /// pixels); `color` paints every glyph without a span colour of its own.
     ///

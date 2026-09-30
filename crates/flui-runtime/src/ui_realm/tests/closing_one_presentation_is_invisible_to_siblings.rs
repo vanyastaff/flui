@@ -27,7 +27,7 @@ pub(crate) fn closing_presentation_a_leaves_sibling_layer_tree_identical() {
     let constraints = BoxConstraints::tight(flui_foundation::geometry::Size::new(50.0, 50.0));
     let b_layer_tree_before = realm.enter(|realm| {
         let b = realm.presentations.get(b_id).expect("B installed");
-        match UiRealm::draw_frame_for_presentation(b, constraints) {
+        match UiRealm::draw_frame_for_presentation(b, constraints, &realm.text) {
             Ok(FramePaintOutcome::Painted(scene)) => format!("{:?}", scene.tree()),
             Ok(FramePaintOutcome::Idle) => panic!("B's first frame must paint, got Idle"),
             Ok(FramePaintOutcome::Errored) => {
@@ -58,7 +58,7 @@ pub(crate) fn closing_presentation_a_leaves_sibling_layer_tree_identical() {
                 owner.mark_needs_paint(root_id);
             }
         });
-        match UiRealm::draw_frame_for_presentation(b, constraints) {
+        match UiRealm::draw_frame_for_presentation(b, constraints, &realm.text) {
             Ok(FramePaintOutcome::Painted(scene)) => format!("{:?}", scene.tree()),
             Ok(FramePaintOutcome::Idle) => {
                 panic!("B's post-A-close frame must still paint, got Idle")

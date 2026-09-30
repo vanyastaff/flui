@@ -34,8 +34,9 @@
 //! - [`execution`]: the loop-scoped background execution services (ADR-0047)
 //!   — the compute and IO lanes, their bounded admission and shutdown, and
 //!   the host-injection seam — which only the host constructs;
-//! - [`performance_stats`]: the rolling frame-time window a presentation's
-//!   performance overlay draws;
+//! - [`performance_stats`]: the rolling frame-time window whose numbers a
+//!   presentation's performance overlay records, shaped through the realm's
+//!   text context;
 //! - [`pump`]: what a realm's frame transaction reads and reports — the
 //!   [`FrameClockSource`](pump::FrameClockSource) it samples once per frame
 //!   and the [`FrameOutcome`](pump::FrameOutcome) the host paces from;

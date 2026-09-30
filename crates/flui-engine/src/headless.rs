@@ -561,6 +561,11 @@ impl RetainedCapture {
         self.intermediate_required = true;
     }
 
+    /// How many faces the capture's glyph rasterizer has registered.
+    pub(crate) fn glyph_face_count(&mut self) -> usize {
+        self.painter.glyph_face_count()
+    }
+
     /// The plan the last frame ran.
     pub(crate) fn last_plan(&self) -> Option<crate::damage::FramePlan> {
         self.last_plan

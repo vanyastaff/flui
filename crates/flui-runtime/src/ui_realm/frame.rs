@@ -218,7 +218,7 @@ impl UiRealm {
             // ADR-0048's consistency audit; nothing here claims full
             // transactionality of mid-segment mutations.
             let attempt = catch_unwind(AssertUnwindSafe(|| {
-                Self::draw_frame_for_presentation(presentation, constraints)
+                Self::draw_frame_for_presentation(presentation, constraints, &self.text)
             }));
 
             // Drain exactly once after the entire attempt, outside the
@@ -371,6 +371,7 @@ impl UiRealm {
     pub(super) fn draw_frame_for_presentation(
         presentation: &PresentationState,
         constraints: BoxConstraints,
+        text: &flui_rendering::TextContextHandle,
     ) -> Result<FramePaintOutcome, flui_rendering::RenderError> {
         presentation.enter_segment_phase(SegmentPhase::Build);
 
@@ -423,7 +424,7 @@ impl UiRealm {
         // Phase 4: freeze the LayerTree into a Scene.
         if let Some(mut layer_tree) = layer_tree {
             presentation.enter_segment_phase(SegmentPhase::Scene);
-            presentation.attach_performance_overlay(&mut layer_tree);
+            presentation.attach_performance_overlay(&mut layer_tree, text);
 
             // By value, not `Arc<Scene>` — see `FramePaintOutcome::Painted`'s
             // own doc for why.

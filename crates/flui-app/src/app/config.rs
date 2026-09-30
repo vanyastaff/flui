@@ -107,10 +107,10 @@ pub struct AppConfig {
     /// Whether to show the performance overlay — FPS, average frame time, and
     /// runtime tail-latency/counter telemetry drawn over the app's own content.
     ///
-    /// Scope, deliberately narrow: the renderer
-    /// (`WgpuPainter`'s `add_performance_overlay`, reached through the layer
-    /// dispatcher) draws three rows
-    /// but still ignores both the frame counter and the option mask, so
+    /// Scope, deliberately narrow: the overlay's three rows are shaped
+    /// through the realm's text context at scene assembly and the renderer
+    /// only rasterizes them; the rows ignore both the frame counter and the
+    /// option mask, so
     /// `PerformanceOverlayOption` has no observable effect yet. The sampled
     /// interval is between *composited* frames — an idle frame produces no layer
     /// tree, so it is a repaint rate, not a wall-clock frame rate. The telemetry
