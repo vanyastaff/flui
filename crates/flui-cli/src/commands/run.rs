@@ -1500,7 +1500,7 @@ fn spawn_app(profile: Option<&str>, verbose: bool) -> CliResult<AppChild> {
 }
 
 // ============================================================================
-// Strategy: worker host (Flutter-parity hot reload)
+// Strategy: worker host (state-preserving hot reload)
 // ============================================================================
 
 /// Resolved host/worker project paths for `flui run`.
@@ -1520,7 +1520,7 @@ struct WorkerHost {
 }
 
 impl WorkerHost {
-    fn worker_path(&self) -> PathBuf {
+    fn worker_path(&self) -> CliResult<PathBuf> {
         worker_dylib_path(
             &self.project.workspace_root,
             &self.project.config.worker_lib,
@@ -1546,14 +1546,13 @@ impl WorkerHost {
                 ],
                 self.profile.as_deref(),
                 self.verbose,
-                None,
             )
         })
     }
 
     /// Stage the freshly built worker and point the sidecar at it.
     fn publish(&self) -> CliResult<PathBuf> {
-        let canonical = self.worker_path();
+        let canonical = self.worker_path()?;
         let staged = stage_worker_artifact(&canonical, &canonical, true)?;
         publish_worker_plugin(&canonical, &staged)?;
         Ok(staged)
@@ -1864,21 +1863,11 @@ fn spawn_host_package(
 /// failure that made `flui run` unusable whenever host and worker were built
 /// separately. Passing every `-p` flag to one `cargo build` makes cargo unify
 /// once, so both binaries link one instance and the `TypeId`s agree.
-fn run_cargo_build_packages(
-    packages: &[&str],
-    profile: Option<&str>,
-    verbose: bool,
-    target_dir: Option<&Path>,
-) -> bool {
+fn run_cargo_build_packages(packages: &[&str], profile: Option<&str>, verbose: bool) -> bool {
     let mut cmd = Command::new("cargo");
     cmd.arg("build");
     for package in packages {
         cmd.args(["-p", package]);
-    }
-
-    if let Some(dir) = target_dir {
-        let dir = dir.to_string_lossy();
-        cmd.args(["--target-dir", &dir]);
     }
 
     if let Some(prof) = profile {
@@ -1898,9 +1887,18 @@ fn run_cargo_build_packages(
     }
 }
 
-fn worker_dylib_path(workspace_root: &Path, worker_lib: &str, profile: Option<&str>) -> PathBuf {
-    let profile_dir = profile.unwrap_or("debug");
-    let mut path = workspace_root.join("target").join(profile_dir);
+/// Where `cargo build` in `workspace_root` leaves the worker library: the
+/// target-dir cargo uses (`CARGO_TARGET_DIR`, `build.target-dir`, the
+/// workspace's `target/`), then the directory cargo names after `profile`.
+fn worker_dylib_path(
+    workspace_root: &Path,
+    worker_lib: &str,
+    profile: Option<&str>,
+) -> CliResult<PathBuf> {
+    use crate::build::util::cargo::{profile_dir, target_directory};
+    let mut path = target_directory(workspace_root)
+        .map_err(CliError::Build)?
+        .join(profile_dir(profile.unwrap_or("dev")));
     #[cfg(windows)]
     {
         path.push(format!("{worker_lib}.dll"));
@@ -1913,7 +1911,7 @@ fn worker_dylib_path(workspace_root: &Path, worker_lib: &str, profile: Option<&s
     {
         path.push(format!("lib{worker_lib}.dylib"));
     }
-    path
+    Ok(path)
 }
 
 fn find_worker_hot_reload_project() -> CliResult<Option<WorkerHotReloadProject>> {
@@ -2227,6 +2225,82 @@ pub(crate) fn execute_scene(
 #[cfg(test)]
 mod tests {
     use super::env;
+
+    /// Set in the child run of `worker_path_follows_cargos_target_dir`: the
+    /// fixture project it builds.
+    const WORKER_FIXTURE: &str = "FLUI_WORKER_FIXTURE_ROOT";
+
+    /// Hot reload loads the worker from where `cargo build` put it. The
+    /// fixture's `.cargo/config.toml` moves the target-dir out of the
+    /// project, and the `dev` profile builds into `debug/`; the worker must
+    /// be found there. The build runs in a child run of this test binary, in
+    /// the fixture, so the target-dir comes from the fixture's config and
+    /// not from a `CARGO_TARGET_DIR` the test run inherits.
+    #[test]
+    fn worker_path_follows_cargos_target_dir() {
+        if let Some(root) = std::env::var_os(WORKER_FIXTURE) {
+            let root = std::path::PathBuf::from(root);
+            assert!(
+                super::run_cargo_build_packages(&["worker"], Some("dev"), false),
+                "cargo build of the fixture failed"
+            );
+            let path = super::worker_dylib_path(&root, "worker", Some("dev")).expect("worker path");
+            assert!(path.is_file(), "no worker at {}", path.display());
+            return;
+        }
+
+        let temp = tempfile::tempdir().expect("fixture dir");
+        let root = temp.path().join("app");
+        let external = temp.path().join("external target");
+        let write = |path: &str, contents: &str| {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("fixture dir");
+            std::fs::write(path, contents).expect("fixture file");
+        };
+        write(
+            "Cargo.toml",
+            "[workspace]\n[package]\nname = \"worker\"\nversion = \"0.1.0\"\n\
+             edition = \"2024\"\n[lib]\ncrate-type = [\"cdylib\"]\n",
+        );
+        write("src/lib.rs", "");
+        let config = toml::Table::from_iter([(
+            "build".to_owned(),
+            toml::Value::Table(toml::Table::from_iter([(
+                "target-dir".to_owned(),
+                toml::Value::String(external.to_string_lossy().into_owned()),
+            )])),
+        )]);
+        write(
+            ".cargo/config.toml",
+            &toml::to_string(&config).expect("config TOML"),
+        );
+
+        let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([
+                "--exact",
+                "commands::run::tests::worker_path_follows_cargos_target_dir",
+                "--nocapture",
+            ])
+            .current_dir(&root)
+            .env(WORKER_FIXTURE, &root)
+            .env_remove("CARGO_TARGET_DIR")
+            .env_remove("CARGO_BUILD_TARGET_DIR")
+            .env("CARGO_NET_OFFLINE", "true")
+            .output()
+            .expect("fixture run");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stdout}\n{stderr}");
+        // libtest exits 0 when `--exact` matches nothing; require the run.
+        assert!(
+            stdout.contains("1 passed"),
+            "the fixture run did not run:\n{stdout}\n{stderr}"
+        );
+        assert!(
+            external.join("debug").is_dir(),
+            "cargo did not build into the configured target-dir"
+        );
+    }
 
     /// The env-var names are duplicated from `flui-hot-reload` so the CLI
     /// does not link the framework; this is the only place that proves they

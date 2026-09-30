@@ -1,6 +1,6 @@
 ### Added
 
-- **`Form`, `FormField` and `TextFormField`** (`flui-widgets`, `flui-material`): Flutter's form
+- **`Form`, `FormField` and `TextFormField`** (`flui-widgets`, `flui-material`): A form
   with validation, the five `AutovalidateMode`s, `save`, `reset`, `force_error_text` and Tab
   traversal between fields, driven through `FormHandle`/`FormFieldHandle` (or `Form::of`)
   instead of a `GlobalKey<FormState>`. `flui_material::TextFormField` puts the field's error on
@@ -22,5 +22,5 @@
 
 - **`SingleActivator`** matches an ASCII letter trigger in either case, so Ctrl+C still fires
   with Caps Lock on; the Shift comparison stays exact.
-- **Ctrl/Cmd+C in a focused text field with a selection** is consumed there, as in Flutter, so
+- **Ctrl/Cmd+C in a focused text field with a selection** is consumed there, so
   an app binding for that chord above the focus root no longer sees it then.

@@ -2,16 +2,15 @@
 //! [`SliverFillRemainingAndOverscroll`] — slivers that fill the remaining
 //! viewport space after preceding slivers.
 //!
-//! These map to the three `RenderSliverFillRemaining*` render objects — Flutter's
-//! `SliverFillRemaining` collapses the `hasScrollBody`/`fillOverscroll` bool
-//! combinations, but FLUI exposes each as a distinct type (illegal states
-//! unrepresentable):
+//! These map to the three `RenderSliverFillRemaining*` render objects. Each
+//! combination of "has a scroll body" and "fill overscroll" is a distinct type
+//! (illegal states unrepresentable) rather than a pair of bool flags:
 //!
-//! | Widget                                | Render object                             | Flutter flags |
-//! |---------------------------------------|-------------------------------------------|---------------|
-//! | [`SliverFillRemaining`]               | `RenderSliverFillRemaining`               | `hasScrollBody=false` |
-//! | [`SliverFillRemainingWithScrollable`] | `RenderSliverFillRemainingWithScrollable` | `hasScrollBody=true` (default) |
-//! | [`SliverFillRemainingAndOverscroll`]  | `RenderSliverFillRemainingAndOverscroll`  | `hasScrollBody=false, fillOverscroll=true` |
+//! | Widget                                | Render object                             | Child |
+//! |---------------------------------------|-------------------------------------------|-------|
+//! | [`SliverFillRemaining`]               | `RenderSliverFillRemaining`               | non-scrollable box |
+//! | [`SliverFillRemainingWithScrollable`] | `RenderSliverFillRemainingWithScrollable` | self-contained scroller |
+//! | [`SliverFillRemainingAndOverscroll`]  | `RenderSliverFillRemainingAndOverscroll`  | non-scrollable box, also fills overscroll |
 
 use flui_objects::{
     RenderSliverFillRemaining, RenderSliverFillRemainingAndOverscroll,
@@ -34,10 +33,6 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// For a child that is itself a scrollable widget (e.g.
 /// [`SingleChildScrollView`], [`ListView`]) use
 /// [`SliverFillRemainingWithScrollable`] instead.
-///
-/// Flutter parity: `widgets/sliver.dart` `SliverFillRemaining` with
-/// `hasScrollBody = false, fillOverscroll = false` over
-/// `RenderSliverFillRemaining`.
 ///
 /// [`SingleChildScrollView`]: crate::SingleChildScrollView
 /// [`ListView`]: crate::ListView
@@ -97,10 +92,6 @@ impl_render_view!(SliverFillRemaining);
 /// it is meant to host a self-contained scroller (e.g. `ListView`,
 /// `SingleChildScrollView`).
 ///
-/// Flutter parity: `widgets/sliver.dart` `SliverFillRemaining` with
-/// `hasScrollBody = true` (the default) over
-/// `RenderSliverFillRemainingWithScrollable`.
-///
 /// [`SingleChildScrollView`]: crate::SingleChildScrollView
 /// [`ListView`]: crate::ListView
 #[derive(Clone, Debug, Default)]
@@ -156,11 +147,7 @@ impl_render_view!(SliverFillRemainingWithScrollable);
 /// child paints across the bounce/stretch region on platforms that overscroll.
 ///
 /// Like [`SliverFillRemaining`] the child is a non-scrollable box; the
-/// difference is the extra overscroll extent (`fillOverscroll = true`).
-///
-/// Flutter parity: `widgets/sliver.dart` `SliverFillRemaining` with
-/// `hasScrollBody = false, fillOverscroll = true` over
-/// `RenderSliverFillRemainingAndOverscroll`.
+/// difference is the extra overscroll extent it also fills.
 #[derive(Clone, Debug, Default)]
 pub struct SliverFillRemainingAndOverscroll {
     child: Child,

@@ -4,13 +4,11 @@
 //! Every page is mounted under a real `Vsync` and the transitions are driven by
 //! pumping it, so "on the stack" is checked together with "laid out".
 //!
-//! # Parity oracles
+//! # Scenarios
 //!
-//! Flutter 3.44 `navigator_test.dart` — `'Initial route can have gaps'`,
-//! `'The full initial route has to be matched'` (`Routable::back_stack`, unit
-//! tests in `router/routable.rs`), and the page-list diff of
-//! `NavigatorState._updatePages` for `go`. From memory of that release; not
-//! checked against a local clone.
+//! An initial route may have gaps in its back stack, and the full initial
+//! route has to be matched (`Routable::back_stack`, unit tests in
+//! `router/routable.rs`); `go` diffs the page list.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;

@@ -8,8 +8,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Aligns its child within itself.
 ///
-/// Flutter parity: `widgets/basic.dart` `Align` over `RenderPositionedBox`
-/// (here `RenderAlign`). With no size factors the box expands to fill the
+/// Backed by `RenderAlign`. With no size factors the box expands to fill the
 /// incoming constraints (or shrinks to the child when a dimension is
 /// unbounded); a `width_factor`/`height_factor` sizes the box to that multiple
 /// of the child's corresponding dimension.

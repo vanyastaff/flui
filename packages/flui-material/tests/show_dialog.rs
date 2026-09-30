@@ -30,7 +30,7 @@ const FRAME: Duration = Duration::from_millis(50);
 /// file's tests to settle a *second* transition (a barrier-tap pop's reverse
 /// run) within the same per-phase budget: one whole `TRANSITION / FRAME`,
 /// plus one frame because the first pump after a controller starts only
-/// anchors `t = 0` (Flutter's first ticker tick delivers elapsed 0 — the same
+/// anchors `t = 0` (a ticker's first tick delivers elapsed 0 — the same
 /// `+ 1` `flui-widgets/tests/routes.rs`'s `PUMPS` documents for this
 /// identical 300ms/50ms pair), plus one more frame for the reverse
 /// transition's post-completion route removal to land. Asserted below rather
@@ -68,7 +68,7 @@ impl ViewState<HomePage> for HomePageState {
 impl StatefulView for HomePage {
     type State = HomePageState;
 
-    /// Flutter's `createState()` — called exactly once when the element is
+    /// State creation — called exactly once when the element is
     /// created, never again across rebuilds. Incrementing `created` here
     /// (rather than relying on a hypothetical rebuild hook) is what makes
     /// `created.get() == 1` after a dialog's push/dismiss round-trip prove

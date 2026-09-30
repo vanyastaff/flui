@@ -20,7 +20,7 @@ the Stable promise (ADR-0089 §1). Applications depend on `flui`, and hosts on
 - `lifecycle_state`: the application lifecycle a presentation observes.
 - `frame_failure`: what a contained frame failure reports (ADR-0048).
 - `media_query_root`: the `MediaQuery` a realm installs above each root.
-- `renderer_binding`: `RenderingFlutterBinding`, a presentation's rendering
+- `renderer_binding`: `RenderingBinding`, a presentation's rendering
   binding over its pipeline owner.
 - `epoch`: the tree revision a presentation's frames advance, and whether the
   current one has been acknowledged by a submit.

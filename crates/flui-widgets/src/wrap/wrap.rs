@@ -1,4 +1,4 @@
-//! [`Wrap`] widget — Flutter-parity flow layout over [`RenderWrap`].
+//! [`Wrap`] widget — flow layout over [`RenderWrap`].
 
 use std::fmt;
 
@@ -13,8 +13,6 @@ use crate::support::generic_render_view_element;
 
 /// Lays children out along [`direction`](Wrap::direction), wrapping to a new
 /// run when the next child would overflow the available main-axis extent.
-///
-/// Flutter parity: `widgets/basic.dart` `Wrap` over [`RenderWrap`].
 ///
 /// # Direction and axis terminology
 ///

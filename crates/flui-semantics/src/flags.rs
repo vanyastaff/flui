@@ -7,10 +7,6 @@
 // ============================================================================
 
 /// Boolean properties of a semantics node.
-///
-/// # Flutter Equivalence
-///
-/// Corresponds to Flutter's `SemanticsFlag` enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u64)]
 pub enum SemanticsFlag {
@@ -98,9 +94,8 @@ pub enum SemanticsFlag {
     /// Indicates that this node has expandable state — paired with
     /// [`Self::IsExpanded`] to express "this is expandable, and it is
     /// currently expanded / collapsed." Added alongside the removal of
-    /// the `Expand` / `Collapse` `SemanticsAction` variants to match
-    /// Flutter's wire format: collapse-state lives on the flag word,
-    /// not as a discrete action.
+    /// the `Expand` / `Collapse` `SemanticsAction` variants:
+    /// collapse-state lives on the flag word, not as a discrete action.
     HasExpandedState = 1 << 27,
 }
 

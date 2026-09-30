@@ -55,6 +55,35 @@ fn command_error(command: &str, error: impl std::fmt::Display) -> BuildError {
     }
 }
 
+/// The directory cargo builds the project at `dir` into, as `cargo metadata`
+/// reports it: whichever of `CARGO_TARGET_DIR`, `build.target-dir` and the
+/// enclosing workspace's `target/` cargo itself would use.
+///
+/// # Errors
+///
+/// Returns the failure of `cargo metadata`, such as a missing or invalid
+/// manifest.
+pub(crate) fn target_directory(dir: &Path) -> BuildResult<PathBuf> {
+    cargo_metadata::MetadataCommand::new()
+        .current_dir(dir)
+        .no_deps()
+        .exec()
+        .map(|metadata| metadata.target_directory.into_std_path_buf())
+        .map_err(|error| command_error("cargo metadata", error))
+}
+
+/// The directory inside a target-dir that cargo names after `profile`: `dev`
+/// and `test` build into `debug`, `bench` into `release`, and any other
+/// profile, `release` included, into its own name.
+#[must_use]
+pub(crate) fn profile_dir(profile: &str) -> &str {
+    match profile {
+        "dev" | "test" => "debug",
+        "bench" => "release",
+        other => other,
+    }
+}
+
 async fn cargo_output(dir: &Path, args: &[&str]) -> BuildResult<Vec<u8>> {
     let output = Command::new("cargo")
         .args(args)

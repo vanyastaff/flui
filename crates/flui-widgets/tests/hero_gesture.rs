@@ -6,13 +6,11 @@
 //! `tests/hero_public.rs`'s render-tree observation, needed here because
 //! [`BackGestureController`] itself is `pub(crate)`.
 //!
-//! # Oracle
+//! # Covered behavior
 //!
-//! `.flutter/packages/flutter/lib/src/widgets/heroes.dart` (3.44.0):
-//! `HeroController.didStartUserGesture` / `didStopUserGesture` (`:871-907`),
-//! `_maybeStartHeroTransition`'s `hasValidSize` fast path (`:948-959`),
-//! `Hero._allHeroesFor`'s `inviteHero` (`:308-314`), and
-//! `_HeroFlight._handleAnimationUpdate` (`:622-650`).
+//! The controller's user-gesture start and stop handling, the valid-size fast
+//! path when a hero transition starts, inviting a hero into a flight, and the
+//! flight's reaction to animation updates.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -198,7 +196,7 @@ fn gesture_fixture(
 /// the navigator reports the gesture stopped, the parked terminal status
 /// replays and the flight lands: `finish`'s `Completed` arm keeps the
 /// (now-gone) from-hero's placeholder rather than clearing it
-/// (`from_hero.end_flight(status.is_completed())`, `heroes.dart:614`).
+/// (`from_hero.end_flight(status.is_completed())`).
 pub(crate) fn complete_release_pops_to_the_destination_route_and_the_flight_lands() {
     let (navigator, mut harness, controller, to, from, from_controller) =
         gesture_fixture(true, true);

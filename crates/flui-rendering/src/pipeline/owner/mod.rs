@@ -82,12 +82,10 @@ static PIPELINE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 /// - Coordinates phase work via consuming phase transitions
 /// - Holds the layer tree produced by the most recent paint phase
 ///
-/// # Flutter Equivalence
+/// # Phase ordering
 ///
-/// This corresponds to Flutter's `PipelineOwner` class in
-/// `rendering/object.dart`. Where Flutter uses runtime `_debugDoingThis*`
-/// asserts to enforce phase ordering, FLUI lifts the question into the
-/// type system: each phase's `run_*` method lives only on the matching
+/// Phase ordering is enforced by the type system rather than runtime
+/// asserts: each phase's `run_*` method lives only on the matching
 /// `PipelineOwner<PhaseMarker>` impl block.
 ///
 /// # Pipeline Phases
@@ -204,8 +202,8 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// (see `last_hidden_follower_ids`). Consulted generically by the
     /// hit-test walk (`accessors.rs`) so a visually-displaced
     /// `RenderFollowerLayer` hit-tests at its RESOLVED on-screen position,
-    /// not its plain tree-relative position — Flutter's `getLastTransform()`
-    /// cache-from-last-composite contract, one frame stale by design.
+    /// not its plain tree-relative position — cached from the last
+    /// composite, one frame stale by design.
     last_follower_offsets: FxHashMap<RenderId, Offset>,
 
     /// Painted output kept per repaint boundary, reused when that boundary is
@@ -855,7 +853,7 @@ mod tests {
         owner.set_root_id(Some(root_id));
         // Root layout needs binding constraints on the first frame; without
         // them run_layout skips the dirty entry, NEEDS_LAYOUT stays set, and
-        // the paint guard (Flutter object.dart:3497) correctly skips paint —
+        // the paint guard correctly skips paint —
         // which would make this test miss the intentional paint panic.
         owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
 
@@ -946,7 +944,7 @@ mod tests {
     // PipelineOwner::mark_needs_layout walk tests
     // ========================================================================
     //
-    // Verifies the Flutter `markNeedsLayout` shape ported here:
+    // Verifies the `mark_needs_layout` walk shape:
     //   - propagation walks the ancestor chain
     //   - flag is set on every visited node (NEEDS_LAYOUT)
     //   - propagation stops at the first relayout boundary or root

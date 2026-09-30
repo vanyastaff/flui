@@ -5,7 +5,7 @@
 ///
 /// The first fourteen variants are Porter-Duff compositing operators; the
 /// rest are "advanced" (separable and non-separable) blend modes matching
-/// CSS/Skia semantics. Mirrors Flutter's `BlendMode`.
+/// CSS/Skia semantics.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BlendMode {

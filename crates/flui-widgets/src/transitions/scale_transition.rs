@@ -14,8 +14,7 @@ use crate::Transform;
 /// Scales its child about its center as an [`Animation<f64>`] (the scale factor)
 /// changes.
 ///
-/// Flutter parity: `widgets/transitions.dart` `ScaleTransition` — an
-/// `AnimatedWidget` wrapping a center-aligned `Transform.scale`. `1.0` is the
+/// Wraps a center-aligned `Transform::scale`. `1.0` is the
 /// child's natural size, `0.0` collapses it to a point. Scaling is paint-only;
 /// the child is laid out as if untransformed.
 #[derive(Clone)]
@@ -50,7 +49,7 @@ impl ViewState<ScaleTransition> for ScaleTransitionState {
     fn build(&self, view: &ScaleTransition, _ctx: &dyn BuildContext) -> impl IntoView {
         let scale = view.scale.value();
         // `Transform` applies the matrix about its alignment, which defaults to
-        // the center — Flutter's `ScaleTransition` center-scale.
+        // the center.
         Transform::scale(scale, scale).child(view.child.clone())
     }
 }

@@ -2,12 +2,7 @@
 //! [`RenderLeaderLayer`](super::leader::RenderLeaderLayer) currently
 //! publishes under the same [`LayerLink`].
 //!
-//! # Flutter equivalence
-//!
-//! Behavior-faithful port of Flutter's
-//! [`RenderFollowerLayer`](https://api.flutter.dev/flutter/rendering/RenderFollowerLayer-class.html)
-//! (`packages/flutter/lib/src/rendering/proxy_box.dart:4550-4753`), backing
-//! `CompositedTransformFollower`.
+//! Backs `CompositedTransformFollower`.
 //!
 //! # Scope — Tier 1 (structural) + Tier 2 (render-time position) + resolved
 //! hit-testing (flui-rendering ARCHITECTURE.md, follower hit-testing)
@@ -47,13 +42,12 @@
 //! — see that module's doc for why the two land in the "two plain structs"
 //! bucket (plan §5).
 //!
-//! # Divergence from the immediately-preceding ShaderMask/BackdropFilter
-//! pair
+//! # Difference from ShaderMask/BackdropFilter
 //!
-//! Oracle pushes the `FollowerLayer` and reports `alwaysNeedsCompositing`
-//! **unconditionally**, regardless of child presence (`:4656`,
-//! `:4708-4721`) — unlike `RenderShaderMask`/`RenderBackdropFilter`, which
-//! gate both on `child != null`.
+//! This object pushes the `FollowerLayer` and reports
+//! `always_needs_compositing` **unconditionally**, regardless of child
+//! presence — unlike `RenderShaderMask`/`RenderBackdropFilter`, which gate
+//! both on having a child.
 
 use flui_foundation::Single;
 use flui_foundation::geometry::Offset;
@@ -70,23 +64,21 @@ use flui_rendering::{
 /// [`RenderLeaderLayer`](super::leader::RenderLeaderLayer) linked via the
 /// same [`LayerLink`].
 ///
-/// Zero or one child (a `RenderProxyBox`, oracle `:4564`).
+/// Zero or one child.
 #[derive(Debug, Clone)]
 pub struct RenderFollowerLayer {
     link: LayerLink,
     /// Whether to remain visible when no leader currently publishes
-    /// under `link`. Default `true` (oracle `:4554`).
+    /// under `link`. Default `true`.
     show_when_unlinked: bool,
-    /// Oracle's dual-purpose field (`:4555`): feeds BOTH the linked-anchor
+    /// Dual-purpose field: feeds BOTH the linked-anchor
     /// gap AND the unlinked-fallback standalone position (resolved at a
     /// later render-time pass, not by this render object — see the
     /// module doc's Tier-2 note).
     offset: Offset,
-    /// Anchor point on the leader's rect. Default `TOP_LEFT` (oracle
-    /// `:4556`).
+    /// Anchor point on the leader's rect. Default `TOP_LEFT`.
     leader_anchor: Alignment,
-    /// Anchor point on this follower's own rect. Default `TOP_LEFT`
-    /// (oracle `:4557`).
+    /// Anchor point on this follower's own rect. Default `TOP_LEFT`.
     follower_anchor: Alignment,
     /// Whether a child is attached (tracked for hit testing / layout,
     /// mirroring `RenderClip`'s `has_child`). Does **not** gate paint or
@@ -95,7 +87,7 @@ pub struct RenderFollowerLayer {
 }
 
 impl RenderFollowerLayer {
-    /// Creates a follower layer targeting `link`, with oracle's defaults:
+    /// Creates a follower layer targeting `link`, with these defaults:
     /// `show_when_unlinked = true`, zero `offset`, `TOP_LEFT` anchors on
     /// both sides.
     pub fn new(link: LayerLink) -> Self {
@@ -225,11 +217,8 @@ impl RenderFollowerLayer {
 
 impl flui_foundation::Diagnosticable for RenderFollowerLayer {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        // Oracle `:4746-4752` surfaces `link`/`show_when_unlinked`/`offset`
-        // plus a derived `current transform matrix`. That last property
-        // has no resolved value to show until the Tier-2 render-time
-        // resolution lands (module doc) — omitted here rather than
-        // fabricated.
+        // A derived current transform matrix has no resolved value to show
+        // at this point (module doc) — omitted here rather than fabricated.
         builder.add_enum("link", self.link);
         builder.add_flag(
             "show_when_unlinked",
@@ -250,15 +239,14 @@ impl RenderBox for RenderFollowerLayer {
 
     flui_rendering::forward_single_child_box_queries!();
 
-    // Oracle `:4656` — UNCONDITIONAL, same as `RenderLeaderLayer`, and
-    // unlike ShaderMask/BackdropFilter's `self.has_child`-gated version.
+    // UNCONDITIONAL, same as `RenderLeaderLayer`, and unlike
+    // ShaderMask/BackdropFilter's `self.has_child`-gated version.
     fn always_needs_compositing(&self) -> bool {
         true
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
-        // Oracle `:4708-4721` — pushes the FollowerLayer regardless of
-        // child presence; the no-leader/hidden decision resolves at a
+        // Pushes the FollowerLayer regardless of child presence; the no-leader/hidden decision resolves at a
         // later render-time pass (module doc), not here. This node's own
         // paint-time size is published the same way `RenderLeaderLayer`
         // publishes its size — the Tier-2 render-time resolution needs it
@@ -276,11 +264,8 @@ impl RenderBox for RenderFollowerLayer {
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        // Oracle `:4672-4694`: Follower never adds itself as a hit
-        // target, only forwards, gated on `link.leader == null &&
-        // !show_when_unlinked`, wrapped in the CURRENT resolved
-        // transform. This body stays the plain structural forward — has
-        // a child, forward the hit at its own layout-relative offset; no
+        // A follower never adds itself as a hit target, only forwards. This
+        // body stays the plain structural forward — has a child, forward the hit at its own layout-relative offset; no
         // child, miss — because BOTH the resolved-transform shift and the
         // unlinked-hidden skip are applied by the hit-test WALK
         // (`PipelineOwner::hit_test_subtree_impl`), not by this object

@@ -1,7 +1,6 @@
 //! [`Theater`] — the [`Overlay`](super::Overlay)'s private render view.
 //!
-//! Flutter's `_Theater` (`overlay.dart:979-1006`), likewise private to the
-//! overlay library. It exists only so [`OverlayState::build`](super::OverlayState)
+//! Private to the overlay module. It exists only so [`OverlayState::build`](super::OverlayState)
 //! can hand `skip_count` to [`RenderTheater`], which drops the leading offstage
 //! children from layout, paint and hit-test.
 
@@ -19,9 +18,8 @@ pub(super) struct Theater {
 }
 
 impl Theater {
-    /// Flutter asserts `skipCount >= 0 && children.length >= skipCount`
-    /// (`overlay.dart:989-990`). The first is unrepresentable here; the second is
-    /// an invariant of `OverlayState::build`, which computes `skip_count` from
+    /// `skip_count` must not exceed the child count. A negative count is
+    /// unrepresentable; the bound is an invariant of `OverlayState::build`, which computes `skip_count` from
     /// `children.len()`, so it is a `debug_assert`.
     pub(super) fn new(children: Vec<BoxedView>, skip_count: usize) -> Self {
         debug_assert!(

@@ -17,8 +17,7 @@
 //!
 //! # Protocol
 //!
-//! Mirrors Flutter's [`MultiDragGestureRecognizer`](https://api.flutter.dev/flutter/gestures/MultiDragGestureRecognizer-class.html)
-//! (`gestures/multidrag.dart`). The recogniser:
+//! The recogniser:
 //!
 //! 1. Calls `on_pointer_down(pointer, position)` for every pointer that
 //!    contacts the region.
@@ -122,7 +121,7 @@ pub enum MultiDragAxis {
 pub type MultiDragStartCallback =
     Rc<dyn Fn(PointerId, Offset<f64>) -> Option<Box<dyn MultiDragHandle>>>; // per-pointer handle trait; ≤3 workspace sites, marker preferred over allowlist promotion.
 
-/// Per-pointer state. Mirrors Flutter's `MultiDragPointerState`.
+/// Per-pointer state.
 ///
 /// State lifecycle: `Possible` (added) → `Accepted` (arena victory) → `Ended` /
 /// `Cancelled` (terminal). The client is installed only after `on_start`
@@ -293,23 +292,17 @@ impl MultiDragGestureRecognizer {
 
     /// Slop threshold for the given pointer kind.
     ///
-    /// Flutter parity: `gestures/multidrag.dart` (tag `3.44.0`) — every
-    /// `MultiDragPointerState` variant (`_ImmediatePointerState`,
-    /// `_HorizontalPointerState`, `_VerticalPointerState`,
-    /// `_DelayedPointerState`) checks `computeHitSlop(kind, gestureSettings)`
-    /// regardless of axis; unlike `PanGestureRecognizer`, none of them use
-    /// `computePanSlop`. `computeHitSlop` (`gestures/events.dart`)
-    /// special-cases exactly `PointerDeviceKind.mouse` as "precise" — every
-    /// other kind resolves `settings?.touchSlop ?? kTouchSlop`. A precise
-    /// (mouse) pointer always gets the fixed `kPrecisePointerHitSlop`
-    /// constant, unconditionally; `with_settings` customization has no effect
-    /// on it.
+    /// Every axis mode checks the plain hit slop for the pointer kind; none of
+    /// them use the pan slop. Exactly the mouse kind is treated as "precise":
+    /// it always gets the fixed precise-pointer hit slop, unconditionally, and
+    /// `with_settings` customization has no effect on it. Every other kind
+    /// resolves through the touch tier.
     ///
-    /// Both arms live in [`GestureSettings::hit_slop`], which is
-    /// `computeHitSlop` itself; this method only picks the tier.
+    /// Both arms live in [`GestureSettings::hit_slop`]; this method only picks
+    /// the tier.
     ///
     /// That non-mouse arm reads [`GestureSettings::touch_slop`], not
-    /// `pan_slop`: `computeHitSlop` resolves through the *touch* tier, and
+    /// `pan_slop`: the hit slop resolves through the *touch* tier, and
     /// the two differ in the platform profiles
     /// ([`android_defaults`](GestureSettings::android_defaults) is 8 vs 16,
     /// [`ios_defaults`](GestureSettings::ios_defaults) 10 vs 20) even though
@@ -345,7 +338,7 @@ impl MultiDragGestureRecognizer {
         let mut state = MultiDragPointerState::new(position, global_position, kind, slop);
 
         // Compete in the arena with a stable member identity. A lone immediate
-        // multi-drag may win by default after Down, exactly like Flutter;
+        // multi-drag may win by default after Down;
         // delayed variants belong in a distinct recognizer policy, not an
         // arena-wide hold.
         let member: Arc<dyn GestureArenaMember> = Arc::<Self>::clone(self);
@@ -396,9 +389,8 @@ impl MultiDragGestureRecognizer {
             // kind captured at Down (`add_pointer` cannot report kind at
             // all — see `GestureRecognizer::add_pointer`'s signature — so
             // the pointer's real kind is only known from the first Move
-            // event onward, exactly like `Self::slop_for`'s Flutter
-            // reference recomputes `computeHitSlop` on every check rather
-            // than caching it).
+            // event onward; `Self::slop_for` is recomputed on every check
+            // rather than cached).
             state.slop = self.slop_for(kind);
             state.velocity_tracker.add_position(timestamp, position);
 

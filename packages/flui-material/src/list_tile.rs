@@ -2,100 +2,94 @@
 //! trailing content, the data-display building block for lists, drawers, and
 //! menus.
 //!
-//! # Flutter parity
+//! # M3 defaults
 //!
-//! `material/list_tile.dart`'s `ListTile`, composed with `_LisTileDefaultsM3`
-//! (oracle tag `3.44.0`, M3-only — this crate has no M2 mode):
+//! M3-only — this crate has no M2 mode:
 //!
-//! | Token | Value | Oracle |
-//! |---|---|---|
-//! | `contentPadding` | `EdgeInsetsDirectional.only(start: 16.0, end: 24.0)` | `_LisTileDefaultsM3` constructor |
-//! | `minLeadingWidth` | `24.0` | `_LisTileDefaultsM3` constructor |
-//! | `minVerticalPadding` | `8.0` | `_LisTileDefaultsM3` constructor |
-//! | `shape` | `RoundedRectangleBorder()` (square corners) | `_LisTileDefaultsM3` constructor |
-//! | `tileColor` | `Colors.transparent` | `_LisTileDefaultsM3.tileColor` |
-//! | `titleTextStyle` | `TextTheme.bodyLarge` colored `onSurface` | `_LisTileDefaultsM3.titleTextStyle` |
-//! | `subtitleTextStyle` | `TextTheme.bodyMedium` colored `onSurfaceVariant` | `_LisTileDefaultsM3.subtitleTextStyle` |
-//! | `leadingAndTrailingTextStyle` | `TextTheme.labelSmall` colored `onSurfaceVariant` | `_LisTileDefaultsM3.leadingAndTrailingTextStyle` |
-//! | `selectedColor` | `ColorScheme.primary` | `_LisTileDefaultsM3.selectedColor` |
-//! | `iconColor` | `ColorScheme.onSurfaceVariant` | `_LisTileDefaultsM3.iconColor` |
+//! | Token | Value |
+//! |---|---|
+//! | `contentPadding` | `EdgeInsetsDirectional.only(start: 16.0, end: 24.0)` |
+//! | `minLeadingWidth` | `24.0` |
+//! | `minVerticalPadding` | `8.0` |
+//! | `shape` | `RoundedRectangleBorder()` (square corners) |
+//! | `tileColor` | `Colors.transparent` |
+//! | `titleTextStyle` | `TextTheme.bodyLarge` colored `onSurface` |
+//! | `subtitleTextStyle` | `TextTheme.bodyMedium` colored `onSurfaceVariant` |
+//! | `leadingAndTrailingTextStyle` | `TextTheme.labelSmall` colored `onSurfaceVariant` |
+//! | `selectedColor` | `ColorScheme.primary` |
+//! | `iconColor` | `ColorScheme.onSurfaceVariant` |
 //!
-//! `minLeadingWidth` is `24.0`, not `40.0` — that's `_LisTileDefaultsM2`'s
-//! value; the M3 table halves it.
+//! `minLeadingWidth` is `24.0`, not the M2 value of `40.0`; the M3 table
+//! halves it.
 //!
-//! The one/two/three-line minimum tile heights (`_RenderListTile._defaultTileHeight`,
-//! `list_tile.dart`, tag `3.44.0`) are a **flat literal table**, not part of
-//! `_LisTileDefaultsM3`: `56.0`/`72.0`/`88.0` (one/two/three lines), reduced
+//! The one/two/three-line minimum tile heights are a **flat literal
+//! table**, not part of the M3 token defaults: `56.0`/`72.0`/`88.0` (one/two/three lines), reduced
 //! to `48.0`/`64.0`/`76.0` when [`ListTile::dense`] is set. Note the
 //! three-line dense height is `76.0`, not `88.0 - 12.0`— it's its own table
 //! entry, not derived arithmetically.
 //!
-//! `horizontalTitleGap` defaults to `16.0` — also a bare `list_tile.dart`
-//! literal (`ListTile.build`'s `horizontalTitleGap ?? tileTheme.horizontalTitleGap
-//! ?? 16`), not a `_LisTileDefaultsM3` field.
+//! `horizontalTitleGap` defaults to `16.0` — a bare literal
+//! (`horizontalTitleGap ?? tileTheme.horizontalTitleGap ?? 16`), not an M3
+//! token default.
 //!
-//! # Scope: M3 composition, not a `_RenderListTile` port
+//! # Scope: M3 composition, not a baseline-aware render object
 //!
-//! The oracle lays out leading/title/subtitle/trailing with a custom
-//! baseline-aware `_RenderListTile` (`SlottedMultiChildRenderObjectWidget`),
-//! computing exact baseline offsets per `ListTileTitleAlignment` variant and
-//! a `titleStart`/`adjustedTrailingWidth` intrinsic-width negotiation. This
+//! A full list tile lays out leading/title/subtitle/trailing with a custom
+//! baseline-aware render object, computing exact baseline offsets per
+//! `ListTileTitleAlignment` variant and a
+//! `titleStart`/`adjustedTrailingWidth` intrinsic-width negotiation. This
 //! substrate composes the SAME visible shape from `Row`/`Column`/`Padding`/
 //! `ConstrainedBox`/`Expanded` instead — the honest claim is **M3 list-tile
-//! composition (colors, typography, min-heights, tap), not a
-//! `_RenderListTile` port**. Concretely:
+//! composition (colors, typography, min-heights, tap)**. Concretely:
 //!
 //! - **`leading`** is wrapped in `ConstrainedBox(min_width:
-//!   min_leading_width)` — Flutter parity for `titleStart = max(minLeadingWidth,
-//!   leadingSize.width) + horizontalTitleGap` (`list_tile.dart` `:1607-1609`):
-//!   the leading slot never shrinks below `min_leading_width`, but (unlike the
-//!   oracle) this substrate does not separately track and error on a leading
-//!   widget that consumes the entire tile width.
+//!   min_leading_width)` — `titleStart = max(minLeadingWidth,
+//!   leadingSize.width) + horizontalTitleGap`: the leading slot never
+//!   shrinks below `min_leading_width`, but this substrate does not
+//!   separately track and error on a leading widget that consumes the
+//!   entire tile width.
 //! - **`title`/`subtitle`** sit in an `Expanded(Column(...))`, wrapped in a
 //!   single `Padding(vertical: min_vertical_padding)` around the whole
-//!   two-line block — Flutter parity for "the minimum padding on the top and
+//!   two-line block — "the minimum padding on the top and
 //!   bottom of the title and subtitle widgets" ([`ListTile::min_vertical_padding`]'s
-//!   doc), but NOT the oracle's per-`ListTileTitleAlignment` baseline math
+//!   doc), but NOT per-`ListTileTitleAlignment` baseline math
 //!   (`top`/`center`/`bottom`/`threeLine`/`titleHeight` each compute a
-//!   different y-offset — `list_tile.dart` `:130-165`). `ListTileTitleAlignment`
-//!   itself is not exposed; every tile lays out as the oracle's `threeLine`
+//!   different y-offset). `ListTileTitleAlignment`
+//!   itself is not exposed; every tile lays out as the `threeLine`
 //!   variant's **`≤2`-line (centered) arm, always** — title above subtitle,
 //!   both left-aligned, `leading`/`trailing` vertically centered via
-//!   `Row`'s `CrossAxisAlignment::Center`. The oracle's `threeLine` variant
+//!   `Row`'s `CrossAxisAlignment::Center`. The `threeLine` variant
 //!   only centers `leading`/`trailing` when `isThreeLine` is `false`; when
 //!   `true`, it TOP-aligns them instead (`listTile.minVerticalPadding` from
-//!   the tile's top edge, `list_tile.dart` `:138-146`, `:161`) so a
+//!   the tile's top edge) so a
 //!   three-line tile's icon sits flush with the title, not centered against
 //!   the full three-line block. This substrate always centers regardless of
-//!   `is_three_line` — a named divergence, not (as an earlier revision of
-//!   these docs claimed) a faithful port of the `threeLine` variant as a
-//!   whole.
+//!   `is_three_line` — a named divergence from the `threeLine` variant.
 //! - **`trailing`**'s reserved-width floor (`max(trailingSize.width +
-//!   horizontalTitleGap, 32.0)`, `list_tile.dart` `:1611-1613`) is not
+//!   horizontalTitleGap, 32.0)`) is not
 //!   replicated — `Row`'s own intrinsic sizing handles it instead.
-//! - **`isThreeLine`** is ported as the SAME explicit `bool` flag the oracle
-//!   itself uses (`ListTile.isThreeLine`, never a subtitle-line-count
+//! - **`isThreeLine`** is an explicit `bool` flag
+//!   (`ListTile.isThreeLine`, never a subtitle-line-count
 //!   heuristic) — see [`ListTile::is_three_line`].
 //! - **`dense`** switches between the two literal height tables above AND
 //!   clamps `title`'s resolved font size to `13.0`/subtitle's to `12.0`
 //!   (`titleStyle.copyWith(fontSize: _isDenseLayout ? 13.0 : null)` and the
-//!   subtitle equivalent, `list_tile.dart` `:923-926`/`:939-942`) — both
+//!   subtitle equivalent) — both
 //!   ported. `VisualDensity`'s finer `baseSizeAdjustment` nudge
-//!   (`list_tile.dart` `:1548`) is a named deferral (no `VisualDensity`
+//!   is a named deferral (no `VisualDensity`
 //!   consumer wired to this substrate's `ListTile` yet).
 //! - **Baseline alignment** — every text run in this composition sits by
-//!   `Column`/`Row` box-model layout, not by shared text baseline. The
-//!   oracle's `_ListTile.performLayout` positions `title`/`subtitle` by
+//!   `Column`/`Row` box-model layout, not by shared text baseline. A full
+//!   list-tile layout positions `title`/`subtitle` by
 //!   their own top-of-box offsets too (not a true cross-widget baseline
 //!   grid), so this is a smaller divergence than it may sound — but it is
-//!   still not a byte-for-byte port and is named here for the record.
+//!   named here for the record.
 //!
 //! # State-color cascade: a flat resolve, not `WidgetStateColor`
 //!
-//! The oracle resolves `iconColor`/`textColor` through
-//! `_IndividualOverrides`, a `WidgetStateProperty<Color?>` with a
-//! `disabled > selected > enabled` precedence (`list_tile.dart`
-//! `_IndividualOverrides.resolve`, `:1217-1229`) and a `WidgetStateColor`
+//! `iconColor`/`textColor` follow a
+//! `disabled > selected > enabled` precedence, which a full implementation
+//! expresses as a `WidgetStateProperty<Color?>` plus a `WidgetStateColor`
 //! escape hatch this crate's plain `Color` fields have no counterpart for
 //! (matching every other widget in this crate — see `crate::icon_button`'s
 //! module docs). `resolve_content_color` carries the exact same
@@ -105,7 +99,7 @@
 //! surface — `selected`/`enabled` are plain `bool` widget properties, so a
 //! static resolve at `build` time is exact, not an approximation.
 //!
-//! `theme.disabled_color` (Flutter's `ThemeData.disabledColor`) has no
+//! `theme.disabled_color` (`ThemeData.disabledColor`) has no
 //! `ThemeData` field in this crate yet — the disabled branch instead uses
 //! `on_surface@38%`, the same M3 "disabled content" convention
 //! `crate::icon_button`'s own `default_style` already applies for the
@@ -120,13 +114,12 @@
 //! - **`style`** (`ListTileStyle.list`/`drawer`, an M2-only fork) —
 //!   irrelevant to this M3-only crate.
 //! - **`visualDensity`**, **`titleAlignment`** — see the "Scope" section.
-//! - **`internalAddSemanticForOnTap`** — always behaves as the oracle's own
-//!   eventual-default (`true`): the emitted `Semantics.button` flag is just
+//! - **`internalAddSemanticForOnTap`** — always behaves as if `true`: the emitted `Semantics.button` flag is just
 //!   `on_tap.is_some()`.
 //! - **`ListTile.divideTiles`** — the `Iterable<Widget>` inter-tile divider
 //!   helper; a natural, additive follow-up once a caller list-builds
 //!   `ListTile`s (see [`crate::divider`]'s module docs).
-//! - **The oracle's `SafeArea`/`IconTheme.merge` wrapper layers ARE
+//! - **The `SafeArea`/`IconTheme.merge` wrapper layers ARE
 //!   ported**: `SafeArea::new().top(false).bottom(false).minimum(...)`, and
 //!   `IconTheme::new(IconThemeData { color: .., ..IconTheme::of(ctx) }, ..)`
 //!   — a genuine merge over the ambient `IconTheme::of(ctx)` snapshot (only
@@ -137,8 +130,7 @@
 //!   (`IconButton` reads `ThemeData.icon_button_theme` directly — see
 //!   `crate::icon_button`'s module docs), so a nested `IconButton` in
 //!   `leading`/`trailing` will not automatically pick up this tile's
-//!   resolved icon color the way the
-//!   oracle's does.
+//!   resolved icon color.
 
 use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::painting::Color;
@@ -156,20 +148,15 @@ use crate::shape::MaterialShape;
 use crate::theme::Theme;
 use crate::theme_data::ThemeData;
 
-/// `_LisTileDefaultsM3`'s content padding start inset (`list_tile.dart`,
-/// oracle tag `3.44.0`).
+/// The M3 content padding start inset.
 const CONTENT_PADDING_START: f64 = 16.0;
-/// `_LisTileDefaultsM3`'s content padding end inset (`list_tile.dart`,
-/// oracle tag `3.44.0`).
+/// The M3 content padding end inset.
 const CONTENT_PADDING_END: f64 = 24.0;
-/// `_LisTileDefaultsM3`'s minimum leading width (`list_tile.dart`, oracle tag
-/// `3.44.0`) — `24.0`, not M2's `40.0`.
+/// The M3 minimum leading width — `24.0`, not M2's `40.0`.
 const MIN_LEADING_WIDTH: f64 = 24.0;
-/// `_LisTileDefaultsM3`'s minimum vertical padding (`list_tile.dart`, oracle
-/// tag `3.44.0`).
+/// The M3 minimum vertical padding.
 const MIN_VERTICAL_PADDING: f64 = 8.0;
-/// `ListTile.build`'s bare horizontal-title-gap literal (`list_tile.dart`
-/// `:1029`, oracle tag `3.44.0`) — not part of `_LisTileDefaultsM3`.
+/// The bare horizontal-title-gap literal — not part of the M3 token defaults.
 const HORIZONTAL_TITLE_GAP: f64 = 16.0;
 
 /// The M3 "disabled content" opacity this substrate uses in place of
@@ -177,10 +164,9 @@ const HORIZONTAL_TITLE_GAP: f64 = 16.0;
 /// docs' "State-color cascade" section.
 const DISABLED_CONTENT_OPACITY: f64 = 0.38;
 
-/// `_RenderListTile._defaultTileHeight`'s one/two/three-line ×
-/// dense/not-dense table (`list_tile.dart` `:1503-1510`, oracle tag
-/// `3.44.0`) — a flat literal table, NOT `_LisTileDefaultsM3` and NOT
-/// arithmetically derived from the non-dense values.
+/// The one/two/three-line × dense/not-dense minimum-height table — a flat
+/// literal table, NOT part of the M3 token defaults and NOT arithmetically
+/// derived from the non-dense values.
 fn default_tile_height(is_three_line: bool, has_subtitle: bool, is_dense: bool) -> f64 {
     match (is_three_line, has_subtitle, is_dense) {
         (true, _, true) => 76.0,
@@ -315,7 +301,7 @@ impl ListTile {
         self
     }
 
-    /// Marks this tile as displaying three lines of text. Flutter parity: an
+    /// Marks this tile as displaying three lines of text. An
     /// explicit flag, never a subtitle-line-count heuristic — see the module
     /// docs. Only meaningful with [`ListTile::subtitle`] set.
     ///
@@ -475,8 +461,8 @@ impl ListTile {
         self
     }
 
-    /// Whether this tile responds to a whole-tile tap — Flutter parity:
-    /// `enabled ? onTap : null` being non-null.
+    /// Whether this tile responds to a whole-tile tap: enabled with an
+    /// `on_tap` set.
     fn is_interactive(&self) -> bool {
         self.enabled && self.on_tap.is_some()
     }
@@ -498,9 +484,8 @@ struct ResolvedListTileStyle {
     tile_height: f64,
 }
 
-/// Resolves the `disabled > selected > enabled` color precedence Flutter's
-/// `_IndividualOverrides.resolve` applies (`list_tile.dart` `:1217-1229`,
-/// oracle tag `3.44.0`) — see the module docs' "State-color cascade" section
+/// Resolves the `disabled > selected > enabled` color precedence — see the
+/// module docs' "State-color cascade" section
 /// for why this is a direct `if`/`else if`/`else`, not a
 /// `WidgetStateProperty`.
 fn resolve_content_color(
@@ -521,8 +506,7 @@ fn resolve_content_color(
 
 /// Resolve `ListTile`'s M3 defaults through the widget → theme → default
 /// cascade — see the module docs' token table and "State-color cascade"
-/// section. Flutter parity: `ListTile.build`, `list_tile.dart`, oracle tag
-/// `3.44.0`.
+/// section.
 fn resolve_style(theme: &ThemeData, view: &ListTile) -> ResolvedListTileStyle {
     let tile_theme = theme.list_tile_theme.as_ref();
     let colors = theme.color_scheme;
@@ -534,8 +518,8 @@ fn resolve_style(theme: &ThemeData, view: &ListTile) -> ResolvedListTileStyle {
         .unwrap_or(false);
 
     // The selected-color cascade is shared by icon and text resolution —
-    // Flutter parity: both `resolveColor` calls in `ListTile.build` pass the
-    // SAME `selectedColor` chain (`list_tile.dart` `:855-861`, `:878-884`).
+    // Both the icon and text color resolution pass the SAME
+    // `selectedColor` chain.
     let selected_color = view
         .selected_color
         .or_else(|| tile_theme.and_then(|t| t.selected_color))
@@ -580,11 +564,9 @@ fn resolve_style(theme: &ThemeData, view: &ListTile) -> ResolvedListTileStyle {
         Some(color) => title_style.with_color(color),
         None => title_style,
     };
-    // Flutter parity: `titleStyle.copyWith(fontSize: _isDenseLayout ? 13.0 :
-    // null)` (`list_tile.dart` `:923-926`, oracle tag `3.44.0`) — Dart's
-    // `copyWith(fontSize: null)` means "leave the current value alone", not
-    // "clear it", so the non-dense branch intentionally does nothing here
-    // rather than resetting `font_size` to `None`.
+    // Dense layout clamps the font size to 13.0; the non-dense branch
+    // intentionally leaves the current value alone rather than resetting
+    // `font_size` to `None`.
     let title_style = if is_dense {
         title_style.with_font_size(13.0)
     } else {
@@ -607,10 +589,8 @@ fn resolve_style(theme: &ThemeData, view: &ListTile) -> ResolvedListTileStyle {
         Some(color) => subtitle_style.with_color(color),
         None => subtitle_style,
     };
-    // Flutter parity: `subtitleStyle.copyWith(fontSize: _isDenseLayout ?
-    // 12.0 : null)` (`list_tile.dart` `:939-942`, oracle tag `3.44.0`) — see
-    // `title_style`'s identical clamp above for the `copyWith(fontSize:
-    // null)` = "leave alone" semantics.
+    // Dense layout clamps the font size to 12.0 — see `title_style`'s
+    // identical clamp above for the "leave alone" semantics.
     let subtitle_style = if is_dense {
         subtitle_style.with_font_size(12.0)
     } else {
@@ -634,10 +614,9 @@ fn resolve_style(theme: &ThemeData, view: &ListTile) -> ResolvedListTileStyle {
         None => leading_and_trailing_style,
     };
 
-    // Flutter parity: `backgroundColor`/`selectedBackgroundColor` both fall
-    // through to the SAME `defaults.tileColor` (`Colors.transparent`,
-    // `list_tile.dart` `:823-830`) — there is no separate "default selected
-    // tile color" constant.
+    // `backgroundColor`/`selectedBackgroundColor` both fall through to the
+    // SAME `defaults.tileColor` (`Colors.transparent`) — there is no
+    // separate "default selected tile color" constant.
     let background_color = view
         .tile_color
         .or_else(|| tile_theme.and_then(|t| t.tile_color))
@@ -675,12 +654,11 @@ fn resolve_style(theme: &ThemeData, view: &ListTile) -> ResolvedListTileStyle {
         .or_else(|| tile_theme.and_then(|t| t.min_leading_width))
         .unwrap_or(MIN_LEADING_WIDTH);
 
-    // Flutter parity: `isThreeLine ?? tileTheme.isThreeLine ?? false`
-    // (`list_tile.dart` `:1019-1023`, oracle tag `3.44.0`) — the same
+    // `isThreeLine ?? tileTheme.isThreeLine ?? false` — the same
     // widget → theme → default cascade `dense` uses just above, now that
     // `ListTile::is_three_line` is `Option<bool>` too: an explicit
     // widget-level `false` short-circuits the cascade and wins over a
-    // theme-level `true`, exactly like the oracle's `??` chain.
+    // theme-level `true`.
     let is_three_line = view
         .is_three_line
         .or_else(|| tile_theme.and_then(|t| t.is_three_line))
@@ -767,16 +745,13 @@ impl StatelessView for ListTile {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         debug_assert!(
             self.is_three_line != Some(true) || self.subtitle.is_some(),
-            "ListTile::is_three_line(true) requires ListTile::subtitle to be set — \
-             Flutter parity: `assert(isThreeLine != true || subtitle != null)` \
-             (list_tile.dart, oracle tag 3.44.0)"
+            "ListTile::is_three_line(true) requires ListTile::subtitle to be set"
         );
 
         let theme = Theme::of(ctx);
         let resolved = resolve_style(&theme, self);
 
-        // Flutter parity: `IconTheme.merge(data: iconThemeData, child: ...)`
-        // (`list_tile.dart` `:1008-1009`) — a MERGE over the ambient theme,
+        // An `IconTheme.merge` over the ambient theme,
         // not a replacement: only `color` is overridden, every other field
         // (`size`, `opacity`, …) passes the enclosing `IconTheme::of`
         // through unchanged. `IconThemeData { color: ..,

@@ -129,8 +129,7 @@ impl<'a> RenderObjectContext<'a> {
     ///
     /// Unlike an ordinary pointer handler (which only observes), a scroll
     /// handler *competes* for the tick: leaf-first dispatch stops at the first
-    /// handler returning `EventPropagation::Stop` — the FLUI port of Flutter's
-    /// `PointerSignalResolver` arbitration. The returned target is data-only
+    /// handler returning `EventPropagation::Stop`. The returned target is data-only
     /// and may be stored in a render object.
     ///
     /// # Errors
@@ -273,9 +272,8 @@ impl<'a> RenderObjectContext<'a> {
     /// (`crates/flui-widgets/src/interaction/mouse_region.rs`) keeps
     /// the target registered and calls
     /// [`replace_mouse_region`](Self::replace_mouse_region) with the empty
-    /// set instead, matching Flutter's `RenderMouseRegion`, which stays a
-    /// valid annotation with null callback fields until `detach()`
-    /// (`rendering/proxy_box.dart`). This method is the lower-level lane
+    /// set instead, so the region stays a valid annotation with empty
+    /// callbacks until it is detached. This method is the lower-level lane
     /// primitive underneath it: existing tracker state may still retain a
     /// strong owner-local cell clone long enough to emit a matching exit
     /// callback for an annotation that was already resolved before this
@@ -472,13 +470,6 @@ impl<'a> RenderObjectContext<'a> {
 /// # Type Parameters
 ///
 /// * `R` - The RenderObject type this View creates
-///
-/// # Flutter Equivalent
-///
-/// This corresponds to Flutter's `RenderObjectWidget` and its subclasses:
-/// - `LeafRenderObjectWidget` - No children
-/// - `SingleChildRenderObjectWidget` - One child
-/// - `MultiChildRenderObjectWidget` - Multiple children
 ///
 /// # Example
 ///

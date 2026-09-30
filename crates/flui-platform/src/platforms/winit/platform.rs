@@ -1402,10 +1402,8 @@ impl ApplicationHandler for WinitApp {
                 //   an Alt-Tab. A stray Up is inert to every Down-actuated
                 //   consumer.
                 //
-                // Flutter draws the same line, from the other side: its
-                // embedders deliver state-sync as `synthesized` events that
-                // update key state without being treated as the user's
-                // direct action (`hardware_keyboard.dart`). FLUI's
+                // A state-sync event ought to update key state without being
+                // treated as the user's direct action. FLUI's
                 // `KeyboardEvent` carries no such flag, so the press half —
                 // which WOULD actuate — cannot be forwarded safely and is
                 // dropped instead.

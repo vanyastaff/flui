@@ -152,8 +152,8 @@ pub(crate) fn viewport_lays_out_forward_slivers_and_applies_content_dimensions()
     );
 }
 
-// Flutter's `center` is always a direct child (`center!.parent == this`), so
-// a lone reverse-growth sliver — FLUI's old `center_sliver_index(Some(0))`,
+// The `center` is always a direct child, so
+// a lone reverse-growth sliver — the old `center_sliver_index(Some(0))`,
 // which meant "every child reverse" — is unrepresentable under the new
 // model: with one child, the only valid `center` is `0`, and `center == 0`
 // means every child grows FORWARD (empty reverse group). The reverse rows
@@ -258,7 +258,7 @@ pub(crate) fn viewport_positions_first_sliver_for_axis_and_growth_matrix() {
 
 // `viewport_center_at_child_count_behaves_like_no_center` tested FLUI's old
 // "no center" spelling, `center_sliver_index(Some(child_count))` — under
-// Flutter's model `center` is always a direct child, so `Some(n) ==
+// the current model `center` is always a direct child, so `Some(n) ==
 // child_count` is invalid configuration, not a synonym for `None`. That
 // state does not exist any more; there is nothing left for this test to
 // pin, so it is deleted rather than rewritten.

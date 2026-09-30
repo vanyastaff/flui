@@ -203,14 +203,14 @@ pub(crate) trait CommandRenderer {
         transform: &Matrix4,
     );
 
-    /// Set rounded-superellipse clip region (Flutter `RSuperellipse`).
+    /// Set rounded-superellipse clip region.
     ///
     /// The rounded-superellipse uses a smoother corner falloff than the
     /// elliptical arcs of `RRect`. The default implementation falls back to
     /// `clip_rrect` against an approximating rounded rectangle built from
     /// the superellipse's outer rect and per-corner radii. Backends that
     /// can render the iOS-squircle SDF directly should override this for
-    /// pixel-perfect parity with Flutter.
+    /// an exact squircle edge.
     fn clip_rsuperellipse(
         &mut self,
         rsuperellipse: RSuperellipse,
@@ -268,9 +268,8 @@ pub(crate) trait CommandRenderer {
 
     /// Add a performance overlay to the scene
     ///
-    /// This is the equivalent of Flutter's
-    /// `SceneBuilder.addPerformanceOverlay()`. Renders FPS counter and
-    /// frame timing statistics at the specified location.
+    /// Renders an FPS counter and frame timing statistics at the specified
+    /// location.
     ///
     /// # Arguments
     ///

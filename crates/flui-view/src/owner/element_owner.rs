@@ -3,16 +3,14 @@
 //!
 //! # Why this type exists
 //!
-//! Flutter's `Element` class carries a mutable backreference to its
-//! `BuildOwner` (see `flutter/lib/src/widgets/framework.dart:2901`'s
-//! `_owner` field). Element lifecycle methods (`mount`, `unmount`,
-//! `update`) reach back through that field to:
+//! Element lifecycle methods (`mount`, `unmount`, `update`) need to reach the
+//! `BuildOwner` to:
 //! - register / unregister `GlobalKey`s,
 //! - schedule rebuilds when a descendant marks itself dirty,
 //! - queue inactive elements for finalization at end-of-frame.
 //!
-//! Rust's borrow checker forbids a mutable backreference of that shape
-//! (mutable aliasing). The Rust-native answer is a **split-borrow
+//! Rust's borrow checker forbids a mutable backreference from element to
+//! owner (mutable aliasing). The answer is a **split-borrow
 //! handle**: a small struct that carries `&mut` references to the
 //! specific `BuildOwner` fields each lifecycle path needs, with no
 //! aliasing because each field is borrowed once. The handle is built
@@ -59,7 +57,7 @@ use super::recovered_panic::{
     LifecycleHook, LifecyclePanicHandoff, RecoveredAt, RecoveredPanic, StagedRecoveredPanic,
 };
 use crate::element::child_manager::{ChildManager, ChildManagerRegistry};
-use crate::view::FlutterError;
+use crate::view::FrameworkError;
 use flui_foundation::RebuildReasons;
 
 /// Borrowed live-tree access carried by [`ElementOwner`] while a
@@ -106,11 +104,6 @@ pub(crate) struct BuildHandle<'a> {
 ///
 /// Downstream units layer on top by calling the registration methods below
 /// from `Element` lifecycle code paths.
-///
-/// # Flutter equivalent
-///
-/// Replaces `Element._owner` mutable backreference at
-/// `flutter/lib/src/widgets/framework.dart:2901`.
 #[non_exhaustive]
 pub struct ElementOwner<'a> {
     /// `GlobalKey` registry: key → element holding the key, indexed by
@@ -162,8 +155,7 @@ pub struct ElementOwner<'a> {
     /// `perform_build` so the typed
     /// [`ViewState::did_change_dependencies`](crate::view::ViewState::did_change_dependencies)
     /// hook fires exactly once per dependency-change-then-rebuild
-    /// cycle. Flutter parity: `framework.dart:6114`
-    /// `_didChangeDependencies` flag on `StatefulElement`.
+    /// cycle.
     pub(crate) pending_dependency_changes: &'a mut HashSet<ElementId>,
 
     /// Sparse reverse index for inherited dependency ownership.
@@ -419,9 +411,8 @@ impl ElementOwner<'_> {
     /// Build an owned [`ExternalBuildScheduler`] for an element to capture at
     /// mount. Its mark-dirty callback — fired by a listenable tick *outside* a
     /// frame, with no owner in scope — uses it to enqueue the element onto the
-    /// shared inbox `build_scope` drains, and to request a frame. This is the
-    /// arena analogue of Flutter handing each `Element` a `BuildOwner`
-    /// backreference for `markNeedsBuild`.
+    /// shared inbox `build_scope` drains, and to request a frame. It stands in for a
+    /// backreference to the owner, which arena elements cannot hold.
     pub(crate) fn external_scheduler(&self) -> ExternalBuildScheduler {
         ExternalBuildScheduler::from_parts(
             Arc::clone(self.external_inbox),
@@ -439,8 +430,7 @@ impl ElementOwner<'_> {
     /// the id is present, fires the typed
     /// [`ViewState::did_change_dependencies`](crate::view::ViewState::did_change_dependencies)
     /// hook (via `ElementBase::notify_dependency_change`) BEFORE the
-    /// actual rebuild — Flutter parity for the `_didChangeDependencies`
-    /// flag at `framework.dart:6114`.
+    /// actual rebuild.
     ///
     /// Idempotent: re-marking the same id is a no-op (HashSet dedup) —
     /// `did_change_dependencies` fires at most once per
@@ -537,9 +527,8 @@ impl ElementOwner<'_> {
 
     /// Remove an element from the inactive queue.
     ///
-    /// Used when an element is re-activated mid-frame (Flutter
-    /// reparenting via `GlobalKey`). No-op if the id
-    /// isn't queued.
+    /// Used when an element is re-activated mid-frame (reparenting via
+    /// `GlobalKey`). No-op if the id isn't queued.
     pub(crate) fn remove_inactive(
         &mut self,
         id: ElementId,
@@ -669,7 +658,7 @@ impl ElementOwner<'_> {
         context: impl Into<String>,
     ) {
         let Some(element) = element else {
-            let error = FlutterError::from_panic(payload, context);
+            let error = FrameworkError::from_panic(payload, context);
             tracing::error!(
                 hook = %hook,
                 panic_message = %error.message,

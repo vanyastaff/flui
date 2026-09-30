@@ -12,41 +12,9 @@ use super::stateful::StatefulView;
 
 /// A View that automatically rebuilds when an animation changes.
 ///
-/// AnimatedViews combine StatefulView with automatic Listenable subscription,
-/// similar to Flutter's AnimatedWidget. When the listenable changes, the
-/// element is automatically marked dirty and rebuilt.
-///
-/// # Flutter Equivalent
-///
-/// This corresponds to Flutter's `AnimatedWidget`:
-///
-/// ```dart
-/// abstract class AnimatedWidget extends StatefulWidget {
-///   const AnimatedWidget({required this.listenable});
-///   final Listenable listenable;
-///
-///   @override
-///   State<AnimatedWidget> createState() => _AnimatedState();
-/// }
-///
-/// class _AnimatedState extends State<AnimatedWidget> {
-///   @override
-///   void initState() {
-///     super.initState();
-///     widget.listenable.addListener(_handleChange);
-///   }
-///
-///   void _handleChange() {
-///     setState(() {});  // Rebuild when listenable changes
-///   }
-///
-///   @override
-///   void dispose() {
-///     widget.listenable.removeListener(_handleChange);
-///     super.dispose();
-///   }
-/// }
-/// ```
+/// AnimatedViews combine StatefulView with automatic Listenable subscription.
+/// When the listenable changes, the element is automatically marked dirty and
+/// rebuilt.
 ///
 /// # Example
 ///

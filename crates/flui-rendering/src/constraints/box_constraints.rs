@@ -1,4 +1,4 @@
-//! Box layout constraints following Flutter's proven model.
+//! Box layout constraints: a min/max range per axis.
 //!
 //! Provides rectangular constraints for 2D box-based layout with
 //! comprehensive query and transformation operations.
@@ -33,10 +33,6 @@ use super::Constraints;
 /// The `round_for_cache()` method rounds floating-point values to 0.01 precision
 /// (2 decimal places) to avoid cache thrashing from rounding errors while
 /// maintaining sufficient accuracy for layout calculations.
-///
-/// # Flutter Equivalence
-///
-/// Maps directly to Flutter's `BoxConstraints` class with identical semantics.
 #[derive(Clone, Copy, PartialEq)]
 pub struct BoxConstraints {
     /// Minimum width that satisfies the constraints.
@@ -165,9 +161,8 @@ impl BoxConstraints {
     /// Creates constraints that tighten each dimension to its value only when
     /// that value is finite, leaving infinite dimensions unconstrained.
     ///
-    /// Mirrors Flutter's `BoxConstraints.tightForFinite` (`box.dart`), used by
-    /// intrinsic-dimension probes that pass `f64::INFINITY` for the axis they
-    /// are not constraining.
+    /// Used by intrinsic-dimension probes that pass `f64::INFINITY` for the
+    /// axis they are not constraining.
     #[inline]
     #[must_use]
     pub fn tight_for_finite(width: f64, height: f64) -> Self {
@@ -196,7 +191,7 @@ impl BoxConstraints {
     /// Rounds finite values to 0.01 precision (2 decimal places).
     /// Infinite values are preserved unchanged.
     ///
-    // TODO: a real Flutter-semantic normalize() (min≥0, max≥min) can live here if a caller needs it
+    // TODO: a real normalize() (min≥0, max≥min) can live here if a caller needs it
     #[inline]
     #[must_use]
     pub fn round_for_cache(&self) -> Self {
@@ -352,11 +347,9 @@ impl BoxConstraints {
     ///
     /// If the natural size is zero, returns the constrained zero size.
     /// If an axis is unbounded, the natural size is kept on that axis (subject to min constraints).
-    ///
-    /// Flutter equivalent: `BoxConstraints.constrainSizeAndAttemptToPreserveAspectRatio`
     #[must_use]
     pub fn constrain_size_and_attempt_to_preserve_aspect_ratio(&self, size: Size) -> Size {
-        // Tight constraints fix the size outright (Flutter `box.dart`).
+        // Tight constraints fix the size outright.
         if self.is_tight() {
             return self.smallest();
         }
@@ -376,11 +369,9 @@ impl BoxConstraints {
         let max_h = self.max_height;
 
         // Adjust each out-of-range dimension and bring the OTHER dimension along
-        // to keep the ratio. Order (max then min, width then height) and the
-        // re-derivation of the partner dimension match Flutter's
-        // `constrainSizeAndAttemptToPreserveAspectRatio` exactly — the previous
-        // flui version clamped a dimension up to its min and then "scaled down"
-        // the same dimension, which got re-clamped and never grew its partner.
+        // to keep the ratio. Order (max then min, width then height) matters:
+        // clamping a dimension up to its min and then "scaling down" the same
+        // dimension would get re-clamped and never grow its partner.
         if width > max_w {
             width = max_w;
             height = width / aspect_ratio;
@@ -499,8 +490,6 @@ impl BoxConstraints {
     /// child when the quarter-turns count is odd (90° or 270°): the child must
     /// fill the space that appears as the parent's *height* but, from the child's
     /// coordinate frame, is its *width*.
-    ///
-    /// Flutter parity: `BoxConstraints.flipped` getter in `box.dart`.
     #[inline]
     #[must_use]
     pub fn flipped(self) -> Self {
@@ -515,14 +504,11 @@ impl BoxConstraints {
     /// Returns these constraints clamped to fit within `other`'s bounds, while
     /// staying as close as possible to the originals.
     ///
-    /// Flutter parity: `BoxConstraints.enforce`
-    /// (`.flutter/flutter-master/packages/flutter/lib/src/rendering/box.dart`):
     /// `a.enforce(b)` clamps **`a`'s own** values into `b`'s `[min, max]` range —
     /// the argument's bounds win — so `additional.enforce(parent)` keeps the
-    /// parent's hard limits. The prior implementation clamped `other`'s values
-    /// into `self`'s range (the reverse), which let additional constraints
-    /// override the parent and silently oversized children whenever the two
-    /// ranges did not overlap.
+    /// parent's hard limits. Clamping `other`'s values into `self`'s range
+    /// (the reverse) would let additional constraints override the parent and
+    /// silently oversize children whenever the two ranges did not overlap.
     #[inline]
     #[must_use]
     pub fn enforce(&self, other: &Self) -> Self {

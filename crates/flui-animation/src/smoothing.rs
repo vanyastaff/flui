@@ -1,6 +1,6 @@
 //! Frame-rate-independent smoothing primitives.
 //!
-//! Two building blocks Flutter does not ship:
+//! Two building blocks:
 //!
 //! - [`exp_decay`] / [`Smoothed`]: exponential decay toward a moving target,
 //!   parameterized by **half-life**. The classic `lerp(a, b, f)`-per-frame

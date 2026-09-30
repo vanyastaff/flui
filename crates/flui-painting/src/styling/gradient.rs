@@ -4,7 +4,7 @@
 pub use crate::paint::TileMode;
 use crate::{Alignment, styling::Color};
 
-/// A description of a color gradient, similar to Flutter's `Gradient`.
+/// A description of a color gradient.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Gradient {
@@ -62,7 +62,7 @@ impl Gradient {
 }
 
 /// A gradient that transitions colors along a line between two alignment
-/// points, similar to Flutter's `LinearGradient`.
+/// points.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LinearGradient {
@@ -181,17 +181,15 @@ impl LinearGradient {
         )
     }
 
-    /// Linearly interpolate between two linear gradients, like Flutter's
-    /// `LinearGradient.lerp`: the result has a stop wherever either side
-    /// has one, each coloured by lerping the two gradients sampled there,
-    /// so gradients with different colour counts or stops interpolate.
+    /// Linearly interpolate between two linear gradients: the result has a
+    /// stop wherever either side has one, each coloured by lerping the two
+    /// gradients sampled there, so gradients with different colour counts or stops interpolate.
     ///
     /// Returns `None` if either side has no colours, or explicit stops
     /// that do not match its colours one for one.
     #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f64) -> Option<Self> {
-        // Flutter returns `a` when both are the same object; equal values
-        // are the closest this has to identity.
+        // Equal gradients short-circuit to `a`.
         if a == b {
             return Some(a.clone());
         }
@@ -211,8 +209,7 @@ impl LinearGradient {
     }
 }
 
-/// A gradient that radiates outward from a center point, similar to
-/// Flutter's `RadialGradient`.
+/// A gradient that radiates outward from a center point.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RadialGradient {
@@ -308,20 +305,18 @@ impl RadialGradient {
             None,
         )
     }
-    /// Linearly interpolate between two radial gradients, like Flutter's
-    /// `RadialGradient.lerp`. Colours and stops combine as in
-    /// [`LinearGradient::lerp`], the radii never go below zero, and a
-    /// missing focal radius counts as `0.0`, Flutter's default.
+    /// Linearly interpolate between two radial gradients. Colours and stops
+    /// combine as in [`LinearGradient::lerp`], the radii never go below
+    /// zero, and a missing focal radius counts as `0.0`.
     ///
     /// A focal point on one side only moves to or from the other side's
     /// *center*, because a gradient without a focal point is focused on its
-    /// center: the result at `t = 1` paints exactly like `b`. Flutter lerps
-    /// it toward `Alignment(0, 0)` instead (`AlignmentGeometry.lerp` with a
-    /// null end), which jumps whenever that center is anywhere else.
+    /// center: the result at `t = 1` paints exactly like `b`. Lerping
+    /// toward `Alignment(0, 0)` instead would jump whenever that center is
+    /// anywhere else.
     #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f64) -> Option<Self> {
-        // Flutter returns `a` when both are the same object; equal values
-        // are the closest this has to identity.
+        // Equal gradients short-circuit to `a`.
         if a == b {
             return Some(a.clone());
         }
@@ -354,8 +349,7 @@ impl RadialGradient {
     }
 }
 
-/// A gradient that sweeps through an arc of angles around a center point,
-/// similar to Flutter's `SweepGradient`.
+/// A gradient that sweeps through an arc of angles around a center point.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SweepGradient {
@@ -414,13 +408,11 @@ impl SweepGradient {
         )
     }
 
-    /// Linearly interpolate between two sweep gradients, like Flutter's
-    /// `SweepGradient.lerp`. Colours and stops combine as in
-    /// [`LinearGradient::lerp`]; the angles never go below zero.
+    /// Linearly interpolate between two sweep gradients. Colours and stops
+    /// combine as in [`LinearGradient::lerp`]; the angles never go below zero.
     #[inline]
     pub fn lerp(a: &Self, b: &Self, t: f64) -> Option<Self> {
-        // Flutter returns `a` when both are the same object; equal values
-        // are the closest this has to identity.
+        // Equal gradients short-circuit to `a`.
         if a == b {
             return Some(a.clone());
         }
@@ -445,7 +437,7 @@ fn lerp_f32(a: f64, b: f64, t: f64) -> f64 {
     a + (b - a) * t
 }
 
-/// Flutter's `Gradient._impliedStops`: the explicit stops, or the colours
+/// The explicit stops, or the colours
 /// spread evenly from 0 to 1. `None` for stops that do not pair one for
 /// one with the colours, or no colours at all.
 fn implied_stops(colors: &[Color], stops: Option<&[f64]>) -> Option<Vec<f64>> {
@@ -463,7 +455,7 @@ fn implied_stops(colors: &[Color], stops: Option<&[f64]>) -> Option<Vec<f64>> {
     }
 }
 
-/// Flutter's gradient `_sample`: the colour at `t` along `colors` placed at
+/// The colour at `t` along `colors` placed at
 /// `stops`, holding the end colours beyond the first and last stop.
 #[expect(
     clippy::expect_used,
@@ -488,7 +480,7 @@ fn sample(colors: &[Color], stops: &[f64], t: f64) -> Color {
     )
 }
 
-/// Flutter's `_interpolateColorsAndStops`: a stop wherever either gradient
+/// A stop wherever either gradient
 /// has one, coloured by lerping both gradients sampled there.
 fn interpolate_colors_and_stops(
     (a_colors, a_stops): (&[Color], Option<&[f64]>),
@@ -514,8 +506,6 @@ fn interpolate_colors_and_stops(
 }
 
 /// Base trait for gradient transformations.
-///
-/// Similar to Flutter's `GradientTransform`.
 pub trait GradientTransform: std::fmt::Debug {
     /// Transform the gradient according to this transformation.
     ///
@@ -523,8 +513,7 @@ pub trait GradientTransform: std::fmt::Debug {
     fn transform(&self) -> [[f64; 3]; 3];
 }
 
-/// A gradient transform that rotates the gradient by a fixed angle, similar
-/// to Flutter's `GradientRotation`.
+/// A gradient transform that rotates the gradient by a fixed angle.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GradientRotation {

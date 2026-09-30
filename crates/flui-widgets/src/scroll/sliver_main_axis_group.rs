@@ -13,8 +13,7 @@ use crate::__private::generic_render_view_element;
 /// Places multiple sliver children in a linear array along the main axis,
 /// presenting them to the enclosing viewport as a single sliver.
 ///
-/// Flutter parity: `widgets/sliver.dart` `SliverMainAxisGroup` over
-/// `RenderSliverMainAxisGroup`. A pinned persistent header inside the group
+/// Backed by `RenderSliverMainAxisGroup`. A pinned persistent header inside the group
 /// pins to the GROUP's bounds, not the viewport's — scrolling past the group
 /// pushes the header out with it.
 ///

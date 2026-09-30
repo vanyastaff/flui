@@ -37,14 +37,10 @@ pub(crate) fn gesture_detector_fires_on_tap_for_a_down_up_on_the_child() {
     );
 }
 
-/// Flutter parity (tag `3.44.0`): `packages/flutter/lib/src/gestures/arena.dart`
-/// `GestureArenaManager` — "The first member to accept or the last member to
-/// not reject wins" (line 110). A drag past the slop makes the tap recognizer
+/// The gesture arena's rule is that the first member to accept, or the last
+/// member not to reject, wins. A drag past the slop makes the tap recognizer
 /// reject itself, leaving the pan recognizer as the last remaining (and thus
-/// winning) member. The upstream Flutter case asserts exactly this
-/// arena-elimination behavior, and this test already covers it end to end, so
-/// the citation lives here instead of duplicating the case in the parity
-/// corpus.
+/// winning) member.
 pub(crate) fn gesture_detector_recognizes_a_pan_and_suppresses_the_tap() {
     let taps = Arc::new(AtomicUsize::new(0));
     let starts = Arc::new(AtomicUsize::new(0));
@@ -107,9 +103,8 @@ pub(crate) fn gesture_detector_recognizes_a_pan_and_suppresses_the_tap() {
     );
 }
 
-/// Flutter parity: once a drag has won its arena, `PointerCancel` follows
-/// `didStopTrackingLastPointer`'s accepted branch and fires `onEnd`, not
-/// `onCancel`. The terminal event must still leave the recognizer reusable.
+/// Once a drag has won its arena, `PointerCancel` takes the accepted branch
+/// and fires `onEnd`, not `onCancel`. The terminal event must still leave the recognizer reusable.
 pub(crate) fn horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_wedge_the_detector()
 {
     let cancels = Arc::new(AtomicUsize::new(0));

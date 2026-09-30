@@ -1,12 +1,12 @@
-//! `Color::blend_over` against Flutter's `Color.alphaBlend`, computed by hand.
+//! `Color::blend_over` against hand-computed expected values.
 
 use flui_painting::styling::Color;
 
-/// Flutter's `Color.alphaBlend`, computed by hand. Over an opaque
+/// Source-over blend, computed by hand. Over an opaque
 /// background the result alpha is exactly 1: `r = 255 · 128/255 = 128`,
 /// `b = 255 · 127/255 = 127`. Over a translucent one the background keeps
 /// `56/255 · 245/255` of its alpha: `10/255 + 0.2110 = 0.2502 → 63.8 → 64`.
-pub(crate) fn blend_over_matches_flutter_alpha_blend() {
+pub(crate) fn blend_over_is_source_over_alpha_blend() {
     assert_eq!(
         Color::rgba(255, 0, 0, 128).blend_over(Color::rgb(0, 0, 255)),
         Color::rgba(128, 0, 127, 255)

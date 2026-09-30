@@ -1,34 +1,30 @@
 //! [`Draggable`] — a widget that can be picked up and dragged, carrying typed
 //! `data` for a [`DragTarget`](crate::DragTarget) to receive on drop.
 //!
-//! Flutter parity: `widgets/drag_target.dart` (tag `3.44.0`) — `Draggable`,
-//! `_DraggableState`, `DraggableDetails`, `_DragAvatar`. `LongPressDraggable`
-//! and `DragAnchorStrategy` are named deferrals; see the module docs below.
+//! A long-press variant and a configurable drag-anchor strategy are named
+//! deferrals; see the notes below.
 //!
-//! # Deliberate divergences from the oracle (framework-surface gaps)
+//! # Limits (framework-surface gaps)
 //!
 //! 1. **Feedback paints, but at a displacement, not a global position.**
-//!    `Overlay::maybe_of` (ADR-0076) closed the lookup gap this divergence
-//!    used to name in full: `DraggableState` now resolves the ancestor
-//!    `Overlay` in `did_change_dependencies` and, on drag start, inserts
-//!    `feedback` as a real `OverlayEntry` — matching the oracle's
-//!    `_DragAvatar`, which does the same through `Overlay.of(context)`. What
-//!    remains a divergence is *where* it paints: the oracle's `_lastOffset`
-//!    is anchored at the drag's true global position (`dragAnchorStrategy`
-//!    plus the pointer's live global coordinates — see divergence #4 below).
-//!    This port has neither a `dragAnchorStrategy` nor the global-origin term
-//!    divergence #4 already names as missing, so the feedback entry positions
-//!    itself at `feedback_offset` plus the same **displacement-since-start**
-//!    `DragSession` already tracks for `DraggableDetails.offset` — visibly
-//!    correct only for a `Draggable` sitting at the screen origin, honestly
-//!    wrong (by exactly that origin) everywhere else, same shape of divergence
-//!    as #4. `rootOverlay`, `ignoringFeedback*`, and scaled/rotated-ancestor
-//!    correctness are separate, still-open gaps (ADR-0076's deferrals).
+//!    `DraggableState` resolves the ancestor `Overlay` (`Overlay::maybe_of`,
+//!    ADR-0076) in `did_change_dependencies` and, on drag start, inserts
+//!    `feedback` as a real `OverlayEntry`. What remains open is *where* it
+//!    paints: ideally anchored at the drag's true global position (a
+//!    drag-anchor strategy plus the pointer's live global coordinates — see
+//!    note #4 below). There is neither a drag-anchor strategy nor the
+//!    global-origin term note #4 names as missing, so the feedback entry
+//!    positions itself at `feedback_offset` plus the same
+//!    **displacement-since-start** `DragSession` already tracks for
+//!    `DraggableDetails.offset` — visibly correct only for a `Draggable`
+//!    sitting at the screen origin, honestly wrong (by exactly that origin)
+//!    everywhere else, the same shape of gap as #4. A root-overlay choice,
+//!    `ignoring_feedback_*` options, and scaled/rotated-ancestor correctness
+//!    are separate, still-open gaps (ADR-0076's deferrals).
 //! 2. **Live drag-target discovery, reached through a private origin probe.**
-//!    The oracle's `_DragAvatar.updateDrag` hit-tests at the pointer's
-//!    *current* global position on every move, independent of wherever the
-//!    drag's own pointer went down, and walks the result for
-//!    `RenderMetaData`-tagged `DragTarget`s. FLUI does the same now:
+//!    Every move hit-tests at the pointer's *current* global position,
+//!    independent of wherever the drag's own pointer went down, and walks the
+//!    result for metadata-tagged `DragTarget`s.
 //!    `LifecycleContext::hit_test_handle()` (acquired in `init_state` /
 //!    `did_change_dependencies`, never from a frame phase) runs a fresh test
 //!    against the live render tree, and [`DragTarget`](crate::DragTarget)
@@ -37,15 +33,13 @@
 //!    `PointerDown` and replays it; the fresh probe is deliberately
 //!    independent of that route, which is the whole point.
 //!
-//!    **The divergence is where the position comes from.** Flutter's
-//!    `PointerEvent` carries `position` (global) *and* `localPosition`, so a
-//!    widget always has both. FLUI's pointer events are `ui_events` types with
-//!    room for one position, so dispatch delivers the pair beside the event
-//!    instead, as a `PointerDispatch`. Issue #908 carried that pair the rest
-//!    of the way: `GestureRecognizer::handle_event` takes the dispatch, and
-//!    every `Drag*Details` reports its `global_position` from the
-//!    untransformed half. So a drag now knows both spaces, and a consumer
-//!    reaching for the global one gets a global one.
+//!    **Where the position comes from.** FLUI's pointer events are
+//!    `ui_events` types with room for one position, so dispatch delivers the
+//!    global/local pair beside the event, as a `PointerDispatch`.
+//!    `GestureRecognizer::handle_event` takes the dispatch, and every
+//!    `Drag*Details` reports its `global_position` from the untransformed
+//!    half. So a drag knows both spaces, and a consumer reaching for the
+//!    global one gets a global one.
 //!
 //!    What survives is the ORIGIN probe below, for a different reason: it
 //!    needs the position of the draggable's own node, not of the pointer, and
@@ -60,76 +54,69 @@
 //!
 //!    Handing the recognizer the global event instead would not remove the
 //!    probe honestly — it would make `global_position` truthful and
-//!    `local_position` a lie. What removes it is giving the recognizers
-//!    Flutter's `OffsetPair`, which is its own change; see mapping decision 3
-//!    in `crates/flui-widgets/ARCHITECTURE.md` for what that costs.
+//!    `local_position` a lie. What removes it is giving the recognizers a
+//!    paired local/global position, which is its own change; see mapping
+//!    decision 3 in `crates/flui-widgets/ARCHITECTURE.md` for what that costs.
 //!
 //!    Two consequences worth naming rather than discovering later. A drag
-//!    carrying **no data** discovers nothing at all: a target's
-//!    `isExpectedDataType` filter has nothing to match, and the oracle's
-//!    null-data drag — which enters *every* target — has no representation
-//!    here (`ErasedDragData` erases a concrete value, not an `Option`). And
-//!    `axis` restriction is applied to deltas in the `Listener`'s space rather
-//!    than the root's, which differs from the oracle only under a rotating
-//!    ancestor.
+//!    carrying **no data** discovers nothing at all: a target's data-type
+//!    filter has nothing to match, and a null-data drag that would enter
+//!    *every* target has no representation here (`ErasedDragData` erases a
+//!    concrete value, not an `Option`). And `axis` restriction is applied to
+//!    deltas in the `Listener`'s space rather than the root's, which differs
+//!    only under a rotating ancestor.
 //!
-//! 3. **No `LongPressDraggable`.** The oracle's variant swaps in a
-//!    `DelayedMultiDragGestureRecognizer`, which does not exist in
-//!    `flui-interaction` yet (only the immediate `MultiDragGestureRecognizer`
-//!    is ported). Deferred rather than hand-rolling a new recognizer as a
-//!    side effect of this port.
-//! 4. **No configurable `dragAnchorStrategy`, `affinity`, `hitTestBehavior`,
-//!    `ignoringFeedback*`, `rootOverlay`, `allowedButtonsFilter`.**
-//!    `ignoringFeedback*`/`rootOverlay` only affect the feedback overlay
+//! 3. **No long-press variant.** It would need a delayed multi-drag
+//!    recognizer, which does not exist in `flui-interaction` yet (only the
+//!    immediate `MultiDragGestureRecognizer` does). Deferred rather than
+//!    hand-rolling a new recognizer as a side effect of this widget.
+//! 4. **No configurable drag-anchor strategy, `affinity`, `hit_test_behavior`,
+//!    `ignoring_feedback_*`, root-overlay choice or allowed-buttons filter.**
+//!    `ignoring_feedback_*`/root-overlay only affect the feedback overlay
 //!    (moot per point 1). `affinity` selects which single-axis recognizer
 //!    competes for the *start* of the gesture — a named deferral, unrelated
 //!    to `Draggable::axis` (implemented), which restricts *reported*
-//!    movement after the drag has already started
-//!    (`_DragAvatar._restrictAxis`). `dragAnchorStrategy` is **not** merely
-//!    cosmetic feedback positioning: it defines `dragStartPoint`, which the
-//!    oracle subtracts from every reported global position to produce
-//!    `DraggableDetails.offset` / `DragTargetDetails.offset`
-//!    (`_DragAvatar.updateDrag`'s `_lastOffset = globalPosition -
-//!    dragStartPoint`).
+//!    movement after the drag has already started. A drag-anchor strategy is
+//!    **not** merely cosmetic feedback positioning: it defines the drag start
+//!    point, which would be subtracted from every reported global position to
+//!    produce `DraggableDetails.offset` / `DragTargetDetails.offset`.
 //!
-//!    **A further, separately-named divergence in `_lastOffset` itself,**
-//!    found while pinning this down precisely: under the default
-//!    `childDragAnchorStrategy`, `dragStartPoint = renderObject.globalToLocal(initialPosition)`
-//!    — a LOCAL offset — while `globalPosition` in the formula above is
-//!    GLOBAL. Writing `globalOrigin` for `Draggable`'s own render object's
-//!    global top-left corner, `initialPosition = globalOrigin +
-//!    dragStartPoint` by definition of `globalToLocal`, so the formula
-//!    reduces to `_lastOffset(t) = globalOrigin + Σ(axis-restricted deltas
-//!    since the drag started)` — **not** just the running sum. The running
-//!    sum alone (which is all [`DragSession::offset`] tracks: seeded at
-//!    `Offset::ZERO`, never given a `globalOrigin` term) is correct only for
-//!    a `Draggable` whose render object sits at the screen origin; for any
-//!    other position, this port's reported offset is short by exactly that
-//!    origin. **The blocker this note used to name is gone**: point 2's origin
-//!    probe now converts a `Listener`-local point to the root's space through
-//!    `PipelineOwner::local_to_global`, which is exactly the `globalOrigin`
-//!    term this formula wants. Closing it is nonetheless a separate change —
-//!    it alters what `DraggableDetails.offset` and `on_draggable_canceled`
-//!    report to existing callers, and `dragAnchorStrategy` (which decides
-//!    `dragStartPoint`) has to land with it or the "fix" would be a different
-//!    wrong value. What this port ships is still **displacement since the drag
-//!    started**, not the oracle's globally-anchored value — pinned by
+//!    **A further, separately-named gap in the reported offset itself.**
+//!    With a child-anchored strategy the start point is a LOCAL offset in the
+//!    draggable's own render object, while the reported position is GLOBAL.
+//!    Writing `globalOrigin` for `Draggable`'s own render object's global
+//!    top-left corner, the reported offset reduces to
+//!    `globalOrigin + Σ(axis-restricted deltas since the drag started)` —
+//!    **not** just the running sum. The running sum alone (which is all
+//!    [`DragSession::offset`] tracks: seeded at `Offset::ZERO`, never given a
+//!    `globalOrigin` term) is correct only for a `Draggable` whose render
+//!    object sits at the screen origin; for any other position, the reported
+//!    offset is short by exactly that origin. **The blocker this note used to
+//!    name is gone**: point 2's origin probe now converts a `Listener`-local
+//!    point to the root's space through `PipelineOwner::local_to_global`,
+//!    which is exactly the `globalOrigin` term this formula wants. Closing it
+//!    is nonetheless a separate change — it alters what
+//!    `DraggableDetails.offset` and `on_draggable_canceled` report to existing
+//!    callers, and a drag-anchor strategy (which decides the start point) has
+//!    to land with it or the "fix" would be a different wrong value. What
+//!    ships is **displacement since the drag started**, not a
+//!    globally-anchored value — pinned by
 //!    `draggable_test.rs`'s `reported_offset_is_displacement_not_global_position`,
 //!    which lays the `Draggable` under a nonzero `Padding` specifically so a
 //!    future accidental "fix" that seeds the offset with *some* base instead
 //!    of `Offset::ZERO` is still caught red-handed for shipping the *wrong*
 //!    base rather than silently looking correct at the origin.
 //!
-//!    Separately, `pointerDragAnchorStrategy` (anchor at `Offset.zero`) is
-//!    not selectable at all — that is the actual, named deferral for
-//!    *strategy choice*, distinct from the `_lastOffset` divergence above.
-//! 5. **Unmounting mid-drag still cancels immediately.** The oracle's
-//!    `_disposeRecognizerIfInactive` transfers the recognizer and overlay
-//!    lifetime to active drag avatars until their real pointer-up. This port
-//!    still keeps both resources on `DraggableState`, so unmount disposes the
-//!    recognizer and removes feedback immediately. `MultiDragHandle` is now
-//!    correctly owner-local, removing the former type-system obstacle; the
-//!    remaining work is a real lifetime transfer, not a threading workaround.
+//!    Separately, anchoring at the pointer (`Offset::ZERO`) is not selectable
+//!    at all — that is the actual, named deferral for *strategy choice*,
+//!    distinct from the offset gap above.
+//! 5. **Unmounting mid-drag still cancels immediately.** Ideally the
+//!    recognizer and overlay lifetime would transfer to active drags until
+//!    their real pointer-up. Both resources stay on `DraggableState`, so
+//!    unmount disposes the recognizer and removes feedback immediately.
+//!    `MultiDragHandle` is owner-local, removing the former type-system
+//!    obstacle; the remaining work is a real lifetime transfer, not a
+//!    threading workaround.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -169,8 +156,6 @@ type DraggableCanceledCallback = ValueCallback<DraggableCanceledDetails>;
 
 /// Details for [`Draggable::on_drag_end`] — the velocity and position at
 /// release, and whether a [`DragTarget`](crate::DragTarget) accepted the drop.
-///
-/// Flutter parity: `DraggableDetails`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DraggableDetails {
     /// Whether a `DragTarget` accepted this drop — `true` when the drag
@@ -181,17 +166,15 @@ pub struct DraggableDetails {
     pub velocity: Velocity,
     /// Displacement since the drag started — the running sum of every
     /// axis-restricted delta, not a raw global position. See the module
-    /// divergence note #4: the oracle's `_lastOffset` adds the draggable's
-    /// global origin on top of this sum; this port does not (a named,
-    /// pinned divergence, not a raw position either way).
+    /// note #4: the draggable's global origin is not added on top of this sum
+    /// (a named, pinned gap, not a raw position either way).
     pub offset: Offset<f64>,
 }
 
 /// Details for [`Draggable::on_draggable_canceled`]: the velocity and the
 /// displacement at the moment the drag ended without a target accepting it.
 ///
-/// Flutter's `DraggableCanceledCallback` takes the two as separate
-/// arguments. One value keeps the callback's shape `|cx, details|`, which a
+/// The two are one value so the callback's shape stays `|cx, details|`, which a
 /// `let`-bound closure can name through [`callback_with`];
 /// see mapping decision 38 in `crates/flui-widgets/ARCHITECTURE.md`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -206,9 +189,8 @@ pub struct DraggableCanceledDetails {
 /// A widget that can be dragged, carrying `data` for a
 /// [`DragTarget`](crate::DragTarget) to receive.
 ///
-/// Flutter parity: `widgets/drag_target.dart` `Draggable`. See the module
-/// docs for the divergences, notably where the drag's global position comes
-/// from.
+/// See the module docs for the limits, notably where the drag's global
+/// position comes from.
 #[derive(Clone, StatefulView)]
 pub struct Draggable<T: Clone + Send + Sync + 'static> {
     child: Child,
@@ -262,7 +244,7 @@ impl<T: Clone + Send + Sync + 'static> Draggable<T> {
         self
     }
 
-    /// Restricts reported drag movement to one axis (`_DragAvatar._restrictAxis`).
+    /// Restricts reported drag movement to one axis.
     #[must_use]
     pub fn axis(mut self, axis: Axis) -> Self {
         self.axis = Some(axis);
@@ -279,8 +261,8 @@ impl<T: Clone + Send + Sync + 'static> Draggable<T> {
 
     /// The widget shown under the pointer during a drag, painted in an
     /// `OverlayEntry` if an ancestor `Overlay` is found (`Overlay::maybe_of`,
-    /// ADR-0076) — positioned at a **displacement**, not the oracle's true
-    /// global anchor; see the module divergence notes.
+    /// ADR-0076) — positioned at a **displacement**, not a true
+    /// global anchor; see the module notes.
     #[must_use]
     pub fn feedback(mut self, builder: impl Fn() -> BoxedView + 'static) -> Self {
         self.feedback = Some(Rc::new(builder));
@@ -372,9 +354,8 @@ impl<T: Clone + Send + Sync + 'static> Draggable<T> {
 
 /// Persistent gesture state: the recognizer survives rebuilds (the pointer
 /// stream is stateful) and is disposed on unmount — see
-/// `DragSession`'s docs for why this diverges from the oracle's
-/// `_disposeRecognizerIfInactive` keep-alive. Mirrors `GestureDetectorState`'s
-/// init_state-acquires-the-arena shape.
+/// `DragSession`'s docs for why it does not outlive the element.
+/// Follows `GestureDetectorState`'s init_state-acquires-the-arena shape.
 pub struct DraggableState<T: Clone + Send + Sync + 'static> {
     /// How many drags this widget currently has active — gates
     /// `max_simultaneous_drags` and switches `child` vs `child_when_dragging`.
@@ -491,9 +472,9 @@ struct DragConfig {
     /// this is only ever what the *next* drag to start will carry.
     ///
     /// `None` when the `Draggable` carries no data — such a drag discovers
-    /// nothing, since a target's `isExpectedDataType` filter has nothing to
-    /// match against (the oracle's null-data drag, which enters every target,
-    /// has no representation here — a named gap, see the module docs).
+    /// nothing, since a target's data-type filter has nothing to
+    /// match against (a null-data drag that enters every target has no
+    /// representation here — a named gap, see the module docs).
     data: Option<ErasedDragData>,
     on_drag_started: Option<StartedCallback>,
     on_drag_update: Option<DragUpdateCallback>,
@@ -642,9 +623,8 @@ impl ViewState<FeedbackAnchor> for FeedbackAnchorState {
             // construction, so hit-testable feedback claims the very position
             // the drag re-probes on every move and hides every `DragTarget`
             // beneath it. The drag would then leave the target it is visibly
-            // hovering. Flutter defaults `ignoringFeedbackPointer` to `true`
-            // for the same reason; making it configurable (and its
-            // `ignoringFeedbackSemantics` sibling) stays a named deferral.
+            // hovering. Making it configurable (and its semantics counterpart)
+            // stays a named deferral.
             Positioned::new(IgnorePointer::new().child((view.feedback)()))
                 .left(view.feedback_offset.dx + displacement.dx)
                 .top(view.feedback_offset.dy + displacement.dy)
@@ -722,7 +702,7 @@ fn feedback_entry(
     })
 }
 
-/// Restricts `offset` to `axis`'s component (`_DragAvatar._restrictAxis`).
+/// Restricts `offset` to `axis`'s component.
 fn restrict_axis(offset: Offset<f64>, axis: Option<Axis>) -> Offset<f64> {
     match axis {
         Some(Axis::Horizontal) => Offset::new(offset.dx, 0.0),
@@ -822,9 +802,9 @@ fn localize(global: Offset<f64>, transform: Option<&Matrix4>) -> Offset<f64> {
 
 /// The drag targets on `path`, leaf-first, that will take `data`.
 ///
-/// Flutter parity: `_DragAvatar._getDragTargets` — walk the hit path for
-/// metadata-tagged targets and keep those whose `T` matches the drag's
-/// payload (`isExpectedDataType`). Order is the path's own, which is what
+/// Walks the hit path for
+/// metadata-tagged targets and keeps those whose `T` matches the drag's
+/// payload. Order is the path's own, which is what
 /// makes the innermost of a set of nested targets win.
 ///
 /// A target tags its node with a lane ticket, resolved here to its
@@ -858,8 +838,8 @@ fn drag_targets_on(
                 return None;
             }
         };
-        // A lane payload is `dyn Any` by construction; this is the
-        // `metaData is _DragTargetState` test of the oracle's `_getDragTargets`.
+        // A lane payload is `dyn Any` by construction; this is the check
+        // that the tagged node is a drag target's slot.
         let Ok(slot) = payload.downcast::<DragTargetSlot>() else {
             continue;
         };
@@ -878,8 +858,8 @@ fn drag_targets_on(
 
 /// What a drag reads from its `Draggable` exactly once, when it starts.
 ///
-/// The oracle's `_DragAvatar` is constructed with `widget.data` and
-/// `widget.feedbackOffset` and never looks at the widget again, so a rebuild
+/// A drag is constructed with the widget's `data` and
+/// `feedback_offset` and never looks at the widget again, so a rebuild
 /// under a live drag cannot change what that drag is carrying or where it
 /// probes. Reading either live instead splits one drag in two: targets entered
 /// before the rebuild hold the old payload (the slot stored it at `did_enter`)
@@ -893,25 +873,25 @@ fn drag_targets_on(
 struct DragStart {
     /// The drag's payload, type-erased for delivery to targets that cannot
     /// name `T`. `None` when the `Draggable` carries no data — such a drag
-    /// discovers nothing, since a target's `isExpectedDataType` filter has
+    /// discovers nothing, since a target's data-type filter has
     /// nothing to match against.
     data: Option<ErasedDragData>,
     /// Displacement from the pointer to the feedback layer, and therefore from
-    /// the pointer to the point the drag hit-tests
-    /// (`_DragAvatar.updateDrag`'s `globalPosition + feedbackOffset`).
+    /// the pointer to the point the drag hit-tests (the global pointer
+    /// position plus this offset).
     feedback_offset: Offset<f64>,
 }
 
-/// The `_DragAvatar` analogue: one instance per active drag, held by the
+/// One instance per active drag, held by the
 /// recognizer for the pointer's lifetime. It owns the drag's standing with
 /// every [`DragTargetSlot`] it has entered, and re-discovers that set on
 /// every move.
 ///
-/// **Current divergence from `_disposeRecognizerIfInactive`:** the recognizer
+/// **Current limit:** the recognizer
 /// and feedback entry still belong to `DraggableState`, rather than being
 /// transferred to active sessions. Unmount therefore cancels the session
 /// immediately. The handle is owner-local and can carry that ownership in a
-/// future parity pass; no `Send + Sync` constraint prevents it.
+/// future change; no `Send + Sync` constraint prevents it.
 struct DragSession {
     active_count: Arc<AtomicUsize>,
     rebuild: RebuildHandle,
@@ -935,7 +915,7 @@ struct DragSession {
     /// tree that can convert them to the root's space — see [`DragOrigin`].
     listener_node: Rc<Cell<Option<flui_foundation::RenderId>>>,
     pipeline: Rc<RefCell<Option<flui_rendering::pipeline::PipelineCell>>>,
-    /// The drag's current position (`_DragAvatar._position`): the contact's
+    /// The drag's current position: the contact's
     /// down position plus every axis-restricted delta since.
     ///
     /// In the `Listener`'s LOCAL space, because that is the space every
@@ -947,18 +927,17 @@ struct DragSession {
     /// note #4 on why `DraggableDetails.offset` keeps that narrower meaning.
     position: Mutex<Offset<f64>>,
     /// Every target this drag is currently inside, outermost-last, and the
-    /// drag position each one last saw (`_DragAvatar._enteredTargets`).
+    /// drag position each one last saw.
     entered: RefCell<Vec<EnteredTarget>>,
     /// The first entered target that accepted the drag, if any
-    /// (`_DragAvatar._activeTarget`) — the one a drop is delivered to, and the
+    /// — the one a drop is delivered to, and the
     /// position it last saw, so the drop reports where the pointer actually
     /// was instead of re-deriving it.
     active: RefCell<Option<EnteredTarget>>,
     /// Running sum of every axis-restricted delta since the drag started —
-    /// displacement, seeded at `Offset::ZERO`. **Not** the oracle's
-    /// `_lastOffset`: that adds the draggable's global origin on top of this
-    /// same sum (see the module's divergence note #4 — a named, pinned
-    /// divergence, not attempted here). Reported as `DraggableDetails.offset`.
+    /// displacement, seeded at `Offset::ZERO`. It does **not** include the
+    /// draggable's global origin (see the module's note #4 — a named, pinned
+    /// gap, not attempted here). Reported as `DraggableDetails.offset`.
     offset: Mutex<Offset<f64>>,
     /// Signal to this session's feedback layer, if one is showing — `None`
     /// when there is no ancestor `Overlay`
@@ -1036,11 +1015,11 @@ impl DragSession {
     /// Re-discover the targets under `global` and drive the resulting
     /// enter/move/leave transitions.
     ///
-    /// Flutter parity: `_DragAvatar.updateDrag`, including its prefix-match
-    /// fast path. The oracle bails to move-only when the new target list
+    /// Includes a prefix-match fast path: it bails to move-only when the new
+    /// target list
     /// starts with exactly the entered list AND either something has already
     /// accepted (deeper targets below the active one are correctly ignored) or
-    /// the lists are the same length (nothing has accepted, so `_enteredTargets`
+    /// the lists are the same length (nothing has accepted, so the entered list
     /// holds every hit target and a longer list means a new one appeared).
     fn update_drag(&self, local: Offset<f64>) {
         let Some(global) = self.to_global(local) else {
@@ -1114,8 +1093,7 @@ impl DragSession {
         }
     }
 
-    /// Leave every target this drag has entered, in entry order
-    /// (`_DragAvatar._leaveAllEntered`).
+    /// Leave every target this drag has entered, in entry order.
     fn leave_all_entered(&self) {
         let leaving: Vec<EnteredTarget> = self.entered.borrow_mut().drain(..).collect();
         for target in leaving {
@@ -1126,11 +1104,9 @@ impl DragSession {
     /// Deliver the drop, if this drag ends over an accepting target, then
     /// leave everything. Returns whether a target took the data.
     ///
-    /// Flutter parity: `_DragAvatar.finishDrag`. The one divergence is the
-    /// return value: the oracle records `wasAccepted = true` whenever an
-    /// active target exists, even when that target's own `didDrop` returned
-    /// early because it had left the tree. [`DragTargetSlot::did_drop`]
-    /// answers whether the data was actually taken, and this reports that.
+    /// The return value reports whether the data was actually taken:
+    /// [`DragTargetSlot::did_drop`] answers false for a target that had left
+    /// the tree, even though an active target existed.
     fn finish_drag(&self, dropped: bool) -> bool {
         let mut was_accepted = false;
         let active = self.active.borrow_mut().take();
@@ -1161,8 +1137,8 @@ impl MultiDragHandle for DragSession {
             }
         }
 
-        // Unconditional, like the oracle's `updateDrag(_position)` call: only
-        // `onDragUpdate` is gated on the restricted position having moved.
+        // Unconditional: only
+        // `on_drag_update` is gated on the restricted position having moved.
         // Targets still expect a move report for a sample that did not move
         // them, and a rebuild elsewhere can change what is under the pointer
         // without the pointer itself moving at all.
@@ -1171,8 +1147,8 @@ impl MultiDragHandle for DragSession {
         if !moved {
             return;
         }
-        // Flutter's `update` passes the RAW (unrestricted) `details` through
-        // to `onDragUpdate` unchanged — only the *gate* ("did the restricted
+        // The RAW (unrestricted) `details` pass through
+        // to `on_drag_update` unchanged — only the *gate* ("did the restricted
         // position move") is axis-aware, not the reported delta.
         // Cloned out: the borrow ends before the callback runs.
         let on_drag_update = self.config.borrow().on_drag_update.clone();
@@ -1194,8 +1170,8 @@ impl MultiDragHandle for DragSession {
     }
 
     fn end(&self, details: MultiDragEndDetails) {
-        // The drop lands before the state change, matching the oracle's
-        // `finishDrag`: `didDrop` runs, then `onDragEnd` reports the outcome.
+        // The drop lands before the state change: `did_drop` runs, then
+        // `on_drag_end` reports the outcome.
         let was_accepted = self.finish_drag(true);
         self.end_active();
 
@@ -1240,10 +1216,10 @@ impl MultiDragHandle for DragSession {
         self.finish_drag(false);
         self.end_active();
 
-        // Flutter's `_DragAvatar.cancel` also routes through `finishDrag`,
-        // which fires `onDragEnd` unconditionally (zero velocity, not
-        // accepted, but the real `_lastOffset` — not zero) before
-        // `onDraggableCanceled` — not a cancel-only path.
+        // A cancel also routes through the finish path, which fires
+        // `on_drag_end` unconditionally (zero velocity, not accepted, but the
+        // real offset — not zero) before `on_draggable_canceled` — not a
+        // cancel-only path.
         // Cloned out: the borrow ends before any callback runs.
         let (on_drag_end, on_draggable_canceled) = {
             let config = self.config.borrow();
@@ -1486,8 +1462,7 @@ impl<T: Clone + Send + Sync + 'static> ViewState<Draggable<T>> for DraggableStat
     }
 
     /// Disposes the state-owned recognizer unconditionally, so an in-flight
-    /// drag is canceled here instead of surviving unmount like Flutter's
-    /// `_disposeRecognizerIfInactive` path.
+    /// drag is canceled here instead of surviving unmount.
     ///
     /// Also removes the feedback layer directly, if one is still showing:
     /// `recognizer.dispose()`'s `cancel()` calls schedule a rebuild

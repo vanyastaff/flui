@@ -3,16 +3,12 @@
 //! protocol (scroll/paint/cache extents, scroll-offset correction passthrough,
 //! viewport overlap reduction).
 //!
-//! # Flutter equivalence
+//! # Geometry
 //!
-//! Behavior-faithful port of Flutter's
-//! [`RenderSliverPadding`](https://api.flutter.dev/flutter/rendering/RenderSliverPadding-class.html)
-//! (`packages/flutter/lib/src/rendering/sliver_padding.dart`). The
-//! geometry math (`mainAxisPaintPadding`, `paintExtent`,
-//! `layoutExtent`, `hitTestExtent`, `cacheExtent` composition) is a
-//! direct translation of `RenderSliverEdgeInsetsPadding.performLayout`.
+//! The geometry math (main-axis paint padding, paint extent, layout extent,
+//! hit-test extent and cache extent composition) lives in the helpers below.
 //!
-//! Scroll-offset correction (`SliverGeometry.scrollOffsetCorrection`)
+//! Scroll-offset correction (`SliverGeometry::scroll_offset_correction`)
 //! returned by the child propagates through unchanged — the viewport
 //! reruns the layout pass on the next frame with the corrected scroll
 //! offset.
@@ -73,8 +69,7 @@ impl RenderSliverPadding {
     /// these insets to the child's scroll extent and offsets the child by the
     /// leading one, so a negative inset would place the child ahead of its own
     /// paint origin and shrink the sliver below the extent it actually
-    /// occupies. Mirrors the Dart `assert(padding.isNonNegative)`, and like it
-    /// is stripped from a release build.
+    /// occupies. The check is stripped from a release build.
     ///
     /// The message carries no inset values because a `const fn` may only panic
     /// with a literal — formatting is not available in a const context.
@@ -96,8 +91,7 @@ impl RenderSliverPadding {
     /// Creates a sliver-padding render object with symmetric horizontal /
     /// vertical insets.
     ///
-    /// Order matches Flutter's `EdgeInsets.symmetric(horizontal:,
-    /// vertical:)`. Internally we forward to
+    /// Arguments are `(horizontal, vertical)`. Internally this forwards to
     /// [`EdgeInsets::symmetric`] whose signature is
     /// `(vertical, horizontal)`.
     #[must_use]
@@ -118,15 +112,10 @@ impl RenderSliverPadding {
     /// Debug builds panic if any *incoming* inset is negative, for the reason
     /// given on [`RenderSliverPadding::new`].
     ///
-    /// **Documented divergence.** Dart's `RenderSliverPadding` setter asserts
-    /// `padding.isNonNegative` — the getter, i.e. the value already stored —
-    /// so upstream the check inspects the outgoing value and a negative one
-    /// assigned to a previously-valid object passes unnoticed. Its box
-    /// counterpart in `shifted_box.dart` asserts `value.isNonNegative`, which
-    /// is the check both were meant to be. FLUI asserts the incoming value in
-    /// both: the invariant being protected is a property of what gets stored,
-    /// and a guard that can only fire on a value it is too late to reject is
-    /// not one worth porting.
+    /// The check inspects the incoming value, not the one already stored: the
+    /// invariant being protected is a property of what gets stored, and a
+    /// guard that can only fire on a value it is too late to reject would not
+    /// protect it.
     pub fn set_padding(&mut self, padding: EdgeInsets) -> flui_rendering::RenderUpdateImpact {
         debug_assert!(
             padding.is_non_negative(),
@@ -174,9 +163,8 @@ impl RenderSliverPadding {
         (before, after, main, cross)
     }
 
-    /// Sliver `calculatePaintOffset` (Flutter source-of-truth) inlined as
-    /// a pure function so the math helpers below stay independent of
-    /// `self`. Mirrors the trait default in
+    /// Sliver paint-offset calculation inlined as a pure function so the math
+    /// helpers below stay independent of `self`. Mirrors the trait default in
     /// [`RenderSliver::calculate_paint_offset`].
     #[inline]
     fn paint_offset(constraints: &SliverConstraints, from: f64, to: f64) -> f64 {
@@ -189,7 +177,7 @@ impl RenderSliverPadding {
         (to.min(b) - from.max(a)).max(0.0)
     }
 
-    /// Sliver `calculateCacheOffset` inlined as a pure function. Mirrors
+    /// Sliver cache-offset calculation inlined as a pure function. Mirrors
     /// the trait default in [`RenderSliver::calculate_cache_offset`].
     #[inline]
     fn cache_offset(constraints: &SliverConstraints, from: f64, to: f64) -> f64 {
@@ -207,8 +195,7 @@ impl RenderSliverPadding {
     /// Computes the sliver child's constraints given the parent
     /// constraints and the padding insets.
     ///
-    /// Flutter's `SliverPadding` passes the child a copy of the parent
-    /// constraints with:
+    /// The child gets a copy of the parent constraints with:
     /// - `scroll_offset` reduced by the leading padding (clamped to 0),
     /// - `cache_origin` extended by the leading padding (clamped to 0
     ///   on the high side — `cache_origin` is always <= 0),
@@ -408,23 +395,16 @@ impl RenderSliver for RenderSliverPadding {
         constraints: &SliverConstraints,
         _child: &dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::SliverProtocol>,
     ) -> f64 {
-        // This MATCHES the reference; there is no LTR assumption to remove.
-        //
-        // An earlier TODO here claimed `RenderSliverPadding.childCrossAxisPosition`
-        // resolves the cross-axis start from `TextDirection`. It does not:
-        // `rendering/sliver_padding.dart` returns `resolvedPadding.top` for a
-        // horizontal axis and `resolvedPadding.left` for a vertical one -- the
-        // same two expressions as below. The reference's direction handling
-        // lives entirely in `_resolvedPadding = padding.resolve(textDirection)`,
-        // which converts an `EdgeInsetsDirectional` (start/end) into an
-        // `EdgeInsets` (left/right).
+        // There is no LTR assumption to remove: the cross-axis start is the
+        // top inset for a horizontal axis and the left inset for a vertical
+        // one, with no text-direction lookup.
         //
         // FLUI has no directional inset type at all -- `EdgeInsets` is
         // `EdgeInsets` with `top`/`right`/`bottom`/`left`, already resolved
         // -- so there is nothing to resolve and nothing to flip. Adding a
-        // direction branch here would INTRODUCE a divergence, not remove one.
-        // If a directional inset type ever lands, the resolution belongs at its
-        // construction site, not in this method.
+        // direction branch here would be wrong. If a directional inset type
+        // ever lands, the resolution belongs at its construction site, not in
+        // this method.
         match constraints.axis() {
             Axis::Vertical => self.padding.left,
             Axis::Horizontal => self.padding.top,

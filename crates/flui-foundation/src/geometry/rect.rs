@@ -1,6 +1,6 @@
 //! Rectangle type for bounding boxes and regions.
 //!
-//! API design inspired by kurbo, glam, and Flutter.
+//! API design inspired by kurbo and glam.
 //!
 //! # Type Safety
 //!
@@ -192,14 +192,14 @@ impl Rect<f64> {
         Self::new(x, y, x + width, y + height)
     }
 
-    /// Creates a rectangle from left, top, right, bottom (Flutter-style).
+    /// Creates a rectangle from left, top, right, bottom.
     #[inline]
     #[must_use]
     pub const fn from_ltrb(left: f64, top: f64, right: f64, bottom: f64) -> Self {
         Self::new(left, top, right, bottom)
     }
 
-    /// Creates a rectangle from left, top, width, height (Flutter-style).
+    /// Creates a rectangle from left, top, width, height.
     #[inline]
     #[must_use]
     pub fn from_ltwh(left: f64, top: f64, width: f64, height: f64) -> Self {
@@ -320,8 +320,7 @@ where
     }
 
     /// The lesser of the magnitudes of [`Self::width`] and
-    /// [`Self::height`] (Flutter parity: `Rect.shortestSide`,
-    /// `math.min(width.abs(), height.abs())`).
+    /// [`Self::height`] (`min(width.abs(), height.abs())`).
     ///
     /// Uses the absolute value so an inverted rectangle (`min > max` on
     /// either axis) still yields a non-negative side length.
@@ -886,9 +885,6 @@ mod tests {
     /// Worth pinning because a property test asserted the opposite ("a rect
     /// always intersects itself") and passed for as long as its generator
     /// never produced a degenerate rect. It does now.
-    ///
-    /// Not verified against the reference: `Rect.overlaps` lives in `dart:ui`,
-    /// which the local `.flutter` clone does not include.
     fn an_empty_rect_never_overlaps_itself() {
         let empty = Rect::from_xywh(10.0, 10.0, 0.0, 50.0);
         let straddling = Rect::from_xywh(0.0, 0.0, 100.0, 100.0);

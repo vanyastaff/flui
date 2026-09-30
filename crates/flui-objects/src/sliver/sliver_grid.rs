@@ -17,18 +17,11 @@
 //! delegate each pass; storing it in parent data is not load-bearing (paint
 //! and hit-test read from `RenderState.offset`, not from parent data).
 //!
-//! # Flutter parity
-//!
-//! Corresponds to Flutter's `RenderSliverGrid` with a `childManager`
-//! (`SliverMultiBoxAdaptorElement`).  Oracle:
-//! `flutter/rendering/sliver_grid.dart:594-728`.
-//!
-//! ## Documented divergence — unbounded main axis + undefined item count
+//! ## Unbounded main axis + undefined item count
 //!
 //! An infinite window end (a shrink-wrapping viewport in an unbounded parent)
-//! means "no upper bound", which the oracle expresses by passing a null
-//! `targetLastIndex` (`sliver_grid.dart:608-610`) and then looping until the
-//! builder returns null. That loop can call the builder mid-layout; this
+//! means "no upper bound", which could be served by looping until the
+//! builder returns nothing. That loop would call the builder mid-layout; this
 //! render object cannot — it emits build *requests* the element tree services
 //! on a later pass — so it has no way to discover the builder's end within the
 //! frame that must commit a size. A count past
@@ -37,10 +30,9 @@
 //! reporting the extent it actually covers rather than the declared one and
 //! logging the shortfall once. The threshold separates a sentinel from a
 //! length, not a large grid from a small one: every count at or below it lays
-//! out in full, matching the oracle, and it is set above every count that can
-//! render at all.
+//! out in full, and it is set above every count that can render at all.
 //!
-//! ## Documented divergence — non-finite scroll-window edges
+//! ## Non-finite scroll-window edges
 //!
 //! `NaN` / `+∞` leading edges and `NaN` / `−∞` trailing edges are rejected
 //! before float→index conversion can saturate to `usize::MAX`. Shared
@@ -81,8 +73,8 @@ use flui_rendering::{
 /// grids are too slow" budget: every count at or below it is laid out in full,
 /// however large. The hazard it guards is specific — with no finite window end
 /// the request loop runs `first..=last` in a single pass, so a declared
-/// `usize::MAX` (the conventional stand-in for the oracle's undefined
-/// `itemCount`) would enqueue ~2^64 build requests before the frame could
+/// `usize::MAX` (the conventional stand-in for an undefined item count)
+/// would enqueue ~2^64 build requests before the frame could
 /// return.
 ///
 /// The value sits above every count that can render at all. Measured on the
@@ -174,11 +166,6 @@ fn poison_window_geometry(tile_layout: &SliverGridLayout, item_count: usize) -> 
 ///     50,
 /// );
 /// ```
-///
-/// # Flutter parity
-///
-/// Corresponds to Flutter's `RenderSliverGrid` with `childManager`; oracle
-/// `sliver_grid.dart:594-728`.
 pub struct RenderSliverGrid {
     /// Grid layout delegate — controls tile sizes and cross-axis count.
     grid_delegate: Arc<dyn SliverGridDelegate>,
@@ -360,17 +347,15 @@ impl RenderSliver for RenderSliverGrid {
                 // An infinite window end means "no upper bound" and must not
                 // reach the delegate: it divides infinity by the stride,
                 // saturates the `f64 as usize` cast at `usize::MAX`, and
-                // overflows the index product. The oracle expresses the same
-                // thing by not asking at all —
-                // `sliver_grid.dart:608-610` passes a null `targetLastIndex` —
-                // and a shrink-wrapped `GridView::builder` under an unbounded
-                // parent hands down exactly that window.
+                // overflows the index product. A shrink-wrapped
+                // `GridView::builder` under an unbounded parent hands down
+                // exactly that window.
                 //
                 // Falling back to every child needs an extra bound here,
                 // because `item_count` is whatever the caller declared rather
                 // than a count of mounted children, and `usize::MAX` is the
-                // conventional stand-in for the oracle's undefined
-                // `itemCount`. The request loop below is synchronous, so an
+                // conventional stand-in for an undefined item count. The
+                // request loop below is synchronous, so an
                 // unbounded count would ask for ~2^64 build requests in a
                 // single frame.
                 //
@@ -380,9 +365,8 @@ impl RenderSliver for RenderSliverGrid {
                 // at or below it is laid out in full, and the constant is set
                 // above every count that can render at all. Past it the tree
                 // is asking for infinite content in an infinitely tall box,
-                // which the oracle answers by looping until the builder
-                // returns null — and would never terminate for a builder that
-                // never does.
+                // which a loop until the builder returns nothing would never
+                // finish serving for a builder that never does.
                 //
                 // Truncating also has to move the reported scroll extent with
                 // it. `item_count` normally drives that extent so a bounded
@@ -479,13 +463,13 @@ impl RenderSliver for RenderSliverGrid {
         // virtualizer or estimate needed.
         let scroll_extent = tile_layout.compute_max_scroll_offset(effective_item_count);
 
-        // ── 8. Paint geometry (oracle `sliver_grid.dart:700-719`) ─────────────
+        // ── 8. Paint geometry ──────────────────────────────────────────────────
         let leading_row_offset = tile_layout.get_scroll_offset_of_child(first_in_window);
         let trailing_row_offset = tile_layout.get_scroll_offset_of_child(last_in_window)
             + tile_layout.child_main_axis_extent;
 
         // `from` clamps to the viewport start so partial leading rows don't
-        // drive paint_extent negative (Flutter's `from = min(scrollOffset, leading)` ).
+        // drive paint_extent negative (`min(scroll_offset, leading)`).
         let paint_start = constraints.scroll_offset.min(leading_row_offset);
         let paint_extent =
             self.calculate_paint_offset(&constraints, paint_start, trailing_row_offset);

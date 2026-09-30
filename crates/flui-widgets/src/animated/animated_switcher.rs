@@ -1,16 +1,14 @@
 //! [`AnimatedSwitcher`] — cross-fades (or custom-transitions) between a
 //! sequence of children keyed by [`View::can_update`].
 //!
-//! Flutter parity: `widgets/animated_switcher.dart` `AnimatedSwitcher`, tag
-//! `3.44.0`. Structurally this widget is the odd one out among its
+//! Structurally this widget is the odd one out among its
 //! `animated/` siblings: `AnimatedContainer`/`AnimatedOpacity`/… hold ONE
 //! persistent [`AnimationController`] retargeted in place
 //! ([`crate::animated::implicitly_animated::ImplicitController`]).
 //! `AnimatedSwitcher` instead owns a **set of entries**, each with its own
 //! controller — a new child gets a fresh entry that animates in while the
 //! previous entry (now "outgoing") animates out, and outgoing entries are
-//! disposed once their reverse run dismisses. This mirrors the oracle's
-//! `_ChildEntry` / `_currentEntry` / `_outgoingEntries` bookkeeping.
+//! disposed once their reverse run dismisses.
 //!
 //! # Why `build` needs interior mutability
 //!
@@ -56,22 +54,16 @@ use crate::{FadeTransition, Stack};
 /// A custom transition for [`AnimatedSwitcher`]: wraps an incoming/outgoing
 /// `child` with a widget driven by `animation` (`0.0` = fully switched out,
 /// `1.0` = fully switched in).
-///
-/// Flutter parity: `AnimatedSwitcherTransitionBuilder`
-/// (`animated_switcher.dart`, tag `3.44.0`).
 pub type AnimatedSwitcherTransitionBuilder =
     Rc<dyn Fn(BoxedView, Arc<dyn Animation<f64>>) -> BoxedView>;
 
 /// A custom layout for [`AnimatedSwitcher`]: arranges the incoming
 /// `current_child` (if any) alongside the still-animating-out
 /// `previous_children` (oldest first).
-///
-/// Flutter parity: `AnimatedSwitcherLayoutBuilder` (`animated_switcher.dart`,
-/// tag `3.44.0`).
 pub type AnimatedSwitcherLayoutBuilder = Rc<dyn Fn(Option<BoxedView>, Vec<BoxedView>) -> BoxedView>;
 
-/// Cross-fades between children, keyed by [`View::can_update`] (Flutter's
-/// `Widget.canUpdate`: same concrete type and same key).
+/// Cross-fades between children, keyed by [`View::can_update`]
+/// (same concrete type and same key).
 ///
 /// Setting [`AnimatedSwitcher::child`] to a widget that is NOT
 /// `can_update`-compatible with the previous one starts a transition: the old
@@ -81,8 +73,8 @@ pub type AnimatedSwitcherLayoutBuilder = Rc<dyn Fn(Option<BoxedView>, Vec<BoxedV
 /// the existing entry in place — no transition restarts. Setting the SAME
 /// key on a new child that is mid-transition-out (e.g. a value oscillating A
 /// → B → A faster than `duration`) does not collapse into the old outgoing
-/// entry; it starts its own fresh entry, exactly as `Widget.canUpdate` would
-/// never unify two different `_ChildEntry`s.
+/// entry; it starts its own fresh entry, since `can_update` never unifies two
+/// different entries.
 ///
 /// The default `transition_builder` cross-fades via [`FadeTransition`]; the
 /// default `layout_builder` overlaps every still-animating entry in a
@@ -118,7 +110,7 @@ thread_local! {
 
 impl AnimatedSwitcher {
     /// A switcher with no child yet, transitioning over `duration` with
-    /// `Curves::Linear` in both directions (oracle default — deliberately
+    /// `Curves::Linear` in both directions (deliberately
     /// NOT the `EaseInOut` default of the sibling implicit-animation
     /// widgets), the default fade transition, and the default centered-stack
     /// layout.
@@ -188,15 +180,11 @@ impl AnimatedSwitcher {
     /// The default `transition_builder`: cross-fades `child` via
     /// [`FadeTransition`].
     ///
-    /// Flutter parity: `AnimatedSwitcher.defaultTransitionBuilder`
-    /// (`animated_switcher.dart`, tag `3.44.0`) wraps in a `FadeTransition`
-    /// additionally keyed by `child.key`. FLUI's `FadeTransition` has no
-    /// `.key(...)` setter (a keyed `impl View` cannot come from
-    /// `impl_animated_view!`'s generated block — see `flui-macros`'
-    /// "Keyed widgets" doc), so that inner re-key is not reproduced; the
-    /// entry's OWN stable identity (this builder's caller wraps the result
-    /// in a per-entry key, mirroring the oracle's `KeyedSubtree.wrap(...,
-    /// _childNumber)`) is what the corpus actually asserts on.
+    /// `FadeTransition` has no `.key(...)` setter (a keyed `impl View`
+    /// cannot come from `impl_animated_view!`'s generated block — see
+    /// `flui-macros`' "Keyed widgets" doc), so the child's own key is not
+    /// re-applied here; the entry's OWN stable identity (this builder's
+    /// caller wraps the result in a per-entry key) is what carries the slot.
     pub fn default_transition_builder(
         child: BoxedView,
         animation: Arc<dyn Animation<f64>>,
@@ -207,9 +195,6 @@ impl AnimatedSwitcher {
     /// The default `layout_builder`: a [`Stack`] centering every
     /// still-animating entry, oldest `previous_children` first, then
     /// `current_child` last (so it paints on top).
-    ///
-    /// Flutter parity: `AnimatedSwitcher.defaultLayoutBuilder`
-    /// (`animated_switcher.dart`, tag `3.44.0`).
     pub fn default_layout_builder(
         current_child: Option<BoxedView>,
         previous_children: Vec<BoxedView>,
@@ -233,12 +218,9 @@ impl std::fmt::Debug for AnimatedSwitcher {
 /// so the layout builder's dynamic `Vec<BoxedView>` — reconciled by
 /// `flui-view`'s keyed-child machinery — recognizes the SAME entry across
 /// rebuilds even though [`AnimatedSwitcherState::build`] constructs a fresh
-/// `Vec` every time. Rust-native stand-in for Flutter's `KeyedSubtree`
-/// (`widgets/basic.dart`), which the oracle's `_newEntry` /
-/// `_updateTransitionForEntry` wrap every transition in for exactly this
-/// reason — the key is the entry's `child_number`, never rebuilt once
-/// assigned, so `_updateTransitionForEntry`-equivalent calls
-/// ([`ChildEntry::update_transition`]) can swap the wrapped content without
+/// `Vec` every time. The key is the entry's
+/// `child_number`, never rebuilt once assigned, so calls to
+/// [`ChildEntry::update_transition`] can swap the wrapped content without
 /// losing the slot's element identity.
 #[derive(Clone)]
 struct KeyedEntry {
@@ -280,8 +262,7 @@ impl StatelessView for KeyedEntry {
 }
 
 /// One child that is, now or in the past, the value [`AnimatedSwitcher`]'s
-/// `child` was set to but is still transitioning. Flutter parity:
-/// `_ChildEntry` (`animated_switcher.dart`, tag `3.44.0`).
+/// `child` was set to but is still transitioning.
 struct ChildEntry {
     /// This entry's stable identity — assigned once at creation, carried
     /// unchanged by its [`KeyedEntry`] wrapper for the entry's whole life.
@@ -320,7 +301,7 @@ impl ChildEntry {
     /// attach the dismissal status-listener — [`ChildEntry::register`] does
     /// that once a [`BuildContext`] is available (`create_state` has none;
     /// see `AnimatedSwitcherState::init_state`).
-    #[expect(clippy::too_many_arguments)] // one argument per oracle constructor parameter
+    #[expect(clippy::too_many_arguments)] // one argument per entry parameter
     fn new(
         child: BoxedView,
         child_number: u64,
@@ -342,11 +323,10 @@ impl ChildEntry {
             CurvedAnimation::new(parent, switch_in_curve).with_reverse_curve(switch_out_curve);
 
         if animate {
-            // Oracle: `controller.forward();` (`_addEntryForNewChild`,
-            // `animated_switcher.dart`, tag `3.44.0`).
+            // A new entry animates in.
             let _ = controller.forward();
         } else {
-            // Oracle: `controller.value = 1.0;` for the very first entry — sits
+            // The very first entry sits
             // at rest, fully switched in, no motion.
             controller.set_value(1.0);
         }
@@ -369,8 +349,7 @@ impl ChildEntry {
     /// Register with `vsync` (if any) and attach the dismissal
     /// status-listener, which flips [`ChildEntry::dismissed`] and schedules
     /// `rebuild` when `controller` reaches
-    /// [`AnimationStatus::Dismissed`] — the oracle's
-    /// `animation.addStatusListener` in `_newEntry`.
+    /// [`AnimationStatus::Dismissed`].
     fn register(&mut self, vsync: Option<Vsync>, rebuild: RebuildHandle) {
         if let Some(vsync) = &vsync {
             self.vsync_registration = Some(vsync.register(self.controller.clone()));
@@ -388,8 +367,7 @@ impl ChildEntry {
     }
 
     /// Re-run `transition_builder` over the current `widget_child`/`curved`,
-    /// preserving this entry's key. Oracle: `_updateTransitionForEntry`
-    /// (`animated_switcher.dart`, tag `3.44.0`) — called both when
+    /// preserving this entry's key. Called both when
     /// `transition_builder` itself changes and when a `can_update`-compatible
     /// child rebuilds the current entry in place.
     fn update_transition(&mut self, transition_builder: &AnimatedSwitcherTransitionBuilder) {
@@ -413,8 +391,7 @@ impl ChildEntry {
     }
 
     /// Detach the status listener, unregister from `vsync`, and dispose the
-    /// controller. Oracle: `dispose()` (`animated_switcher.dart`, tag
-    /// `3.44.0`) disposes every entry's controller and animation.
+    /// controller.
     fn dispose(&mut self) {
         if let Some(id) = self.status_listener_id.take() {
             self.controller.remove_status_listener(id);
@@ -444,8 +421,7 @@ pub struct AnimatedSwitcherState {
     current_entry: Option<ChildEntry>,
     outgoing_entries: RefCell<Vec<ChildEntry>>,
     /// Monotonically increasing entry counter — the source of each
-    /// [`ChildEntry::child_number`]. Oracle: `_childNumber`
-    /// (`animated_switcher.dart`, tag `3.44.0`).
+    /// [`ChildEntry::child_number`].
     child_number: u64,
     /// Captured in `init_state` (unavailable in `create_state`, which has no
     /// `BuildContext`); reused for every later entry `did_update_view`
@@ -467,8 +443,7 @@ impl StatefulView for AnimatedSwitcher {
     type State = AnimatedSwitcherState;
 
     fn create_state(&self) -> Self::State {
-        // Oracle: `initState` calls `_addEntryForNewChild(animate: false)`
-        // (`animated_switcher.dart`, tag `3.44.0`). FLUI splits controller
+        // The initial entry is added without animating. FLUI splits controller
         // construction (here, no `BuildContext` yet) from vsync/listener
         // registration (`init_state`, below) — see `ChildEntry::new`'s doc.
         let current_entry = self.child.clone().map(|child| {
@@ -496,8 +471,7 @@ impl StatefulView for AnimatedSwitcher {
 impl AnimatedSwitcherState {
     /// Demote the current entry to outgoing (reversing it) and install a
     /// fresh incoming entry for `view.child`, or do nothing if `view` has no
-    /// child. Oracle: `_addEntryForNewChild` (`animated_switcher.dart`, tag
-    /// `3.44.0`).
+    /// child.
     fn add_entry_for_new_child(&mut self, view: &AnimatedSwitcher, animate: bool) {
         debug_assert!(
             animate || self.current_entry.is_none(),
@@ -542,9 +516,7 @@ impl ViewState<AnimatedSwitcher> for AnimatedSwitcherState {
     fn build(&self, view: &AnimatedSwitcher, _ctx: &dyn BuildContext) -> impl IntoView {
         // Sweep entries whose reverse run dismissed since the last build — see
         // the module docs for why this cannot happen inside the status
-        // listener itself. Oracle: the `setState` inside
-        // `animation.addStatusListener` in `_newEntry` removes the entry from
-        // `_outgoingEntries` and disposes it.
+        // listener itself.
         self.outgoing_entries.borrow_mut().retain_mut(|entry| {
             if entry.dismissed.load(Ordering::Acquire) {
                 entry.dispose();
@@ -559,11 +531,9 @@ impl ViewState<AnimatedSwitcher> for AnimatedSwitcherState {
             .current_entry
             .as_ref()
             .map(|entry| entry.transition.clone());
-        // Oracle: `_outgoingWidgets!.where((w) => w.key != _currentEntry?.transition.key)`
-        // (`build`, `animated_switcher.dart`, tag `3.44.0`) — an outgoing entry
-        // sharing the current entry's key is suppressed from
-        // `previousChildren`; translated here as the same `child_number` never
-        // appearing in both lists at once.
+        // An outgoing entry sharing the current entry's key is suppressed from
+        // the previous children: the same `child_number` never appears in both
+        // lists at once.
         let previous_transitions: Vec<BoxedView> = self
             .outgoing_entries
             .borrow()
@@ -576,9 +546,8 @@ impl ViewState<AnimatedSwitcher> for AnimatedSwitcherState {
     }
 
     fn did_update_view(&mut self, old_view: &AnimatedSwitcher, new_view: &AnimatedSwitcher) {
-        // Oracle: a `transitionBuilder` swap rebuilds every cached transition in
-        // place, preserving each entry's key (`didUpdateWidget`,
-        // `animated_switcher.dart`, tag `3.44.0`).
+        // A `transition_builder` swap rebuilds every cached transition in
+        // place, preserving each entry's key.
         if !Rc::ptr_eq(&old_view.transition_builder, &new_view.transition_builder) {
             for entry in self.outgoing_entries.get_mut() {
                 entry.update_transition(&new_view.transition_builder);
@@ -588,8 +557,8 @@ impl ViewState<AnimatedSwitcher> for AnimatedSwitcherState {
             }
         }
 
-        // Oracle: `hasNewChild != hasOldChild || (hasNewChild &&
-        // !Widget.canUpdate(widget.child!, _currentEntry!.widgetChild))`.
+        // A new entry is needed when a child appeared or disappeared, or when
+        // the new child cannot update the current entry's child in place.
         let needs_new_entry = match (new_view.child.as_ref(), self.current_entry.as_ref()) {
             (Some(new_child), Some(entry)) => !new_child.can_update(&entry.widget_child),
             (Some(_), None) | (None, Some(_)) => true,

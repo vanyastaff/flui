@@ -1,9 +1,7 @@
 # Flutter → FLUI mapping
 
 A vocabulary table for readers coming from Flutter. Every row is checked against the real trait or
-struct in `crates/` — see AGENTS.md's Design stance on why an unverified mapping isn't
-acceptable here: a wrong row would misrepresent either what FLUI follows from Flutter or what it
-deliberately changed.
+struct in `crates/`.
 
 | Flutter | FLUI | Where |
 |---|---|---|
@@ -15,18 +13,16 @@ deliberately changed.
 | `Navigator` | `Navigator` / `NavigatorHandle` / `NavigatorState` | `crates/flui-widgets/src/navigator/navigator.rs` |
 | `MaterialApp` | No single equivalent — `run_app()` plus `Theme`/`ThemeData` wrapping the root view | `run_app`: facade `src/lib.rs`, impl in `crates/flui-app`; `Theme`/`ThemeData`: `packages/flui-material/src/theme*.rs` |
 
-## Notes on the divergences
+## Notes
 
 - **`Navigator`, no `Router`.** FLUI has `Navigator` and named-route support (see
   [ADR-0019](https://github.com/vanyastaff/flui/blob/main/docs/adr/ADR-0019-navigator-routing-seam.md)
   and
   [ADR-0024](https://github.com/vanyastaff/flui/blob/main/docs/adr/ADR-0024-named-routes-seam.md)),
-  but no standalone `Router`/`RouteInformationParser`-style class the way Flutter's `Router` widget
-  provides. Every other "Router" hit in the codebase is unrelated pointer/event routing in
+  but no standalone `Router`/`RouteInformationParser`-style class. Every other "Router" hit in the codebase is unrelated pointer/event routing in
   `flui-interaction`, not navigation.
-- **No `MaterialApp` equivalent.** Flutter's `MaterialApp` bundles a `Navigator`, a `Theme`, a
-  title, and app-level configuration into one widget. FLUI doesn't have a single type that does
-  the same — the shipped pattern (see `examples/form.rs`) is
+- **No `MaterialApp` equivalent.** FLUI has no single type that bundles a `Navigator`, a `Theme`,
+  a title, and app-level configuration — the shipped pattern (see `examples/form.rs`) is
   `Theme::new(ThemeData::light(), <root view>)` passed to `run_app`.
 - **`Layer` is a closed `enum`, not a class hierarchy** — see
   [View, Element, RenderObject](concepts/view-element-render.md).

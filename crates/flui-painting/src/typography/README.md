@@ -60,13 +60,3 @@ shared_font_system().register_font(&bytes)?; // RegisterFontError if no face par
 With the `bundled-fonts` feature, `flui_painting::fonts` exposes the faces the crate embeds
 (`ROBOTO_REGULAR`, `MATERIAL_ICONS_REGULAR`, `CUPERTINO_ICONS`), so a host with no usable system
 fonts still measures and paints text and icons.
-
-## Comparison with Flutter
-
-| Flutter | Flui |
-|---------|------|
-| `FontWeight.w400` | `FontWeight::W400` |
-| `FontStyle.italic` | `FontStyle::Italic` |
-| `TextStyle(fontFamily: 'Roboto')` | `TextStyle::new().with_font_family("Roboto")` |
-| `TextSpan(text:, style:)` | `TextSpan::new(text).with_style(style)` |
-| `FontLoader` | `shared_font_system().register_font(bytes)` |

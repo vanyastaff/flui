@@ -12,10 +12,9 @@ use crate::text::RichText;
 /// A graphical icon drawn from a glyph in an icon font, described by an
 /// [`IconData`].
 ///
-/// Flutter parity: `widgets/icon.dart` `Icon`. `build` resolves the ambient
+/// `build` resolves the ambient
 /// [`IconTheme`], picks an effective size, and — when an icon is set —
-/// composes `SizedBox::square(size) → Center → RichText(TextSpan(codepoint))`
-/// exactly as `icon.dart:260-357` does.
+/// composes `SizedBox::square(size) → Center → RichText(TextSpan(codepoint))`.
 ///
 /// # Glyph rendering is not yet faithful
 ///
@@ -28,7 +27,7 @@ use crate::text::RichText;
 /// icon-font codepoint shapes to tofu (the "missing glyph" box) until that
 /// infrastructure lands.
 ///
-/// # Deferred from the oracle
+/// # Deferred
 ///
 /// - **`IconData::match_text_direction`** RTL mirroring: needs a `Transform`
 ///   composition step not wired into this build path yet.
@@ -38,8 +37,8 @@ use crate::text::RichText;
 /// - **`Semantics`/`ExcludeSemantics`** wrapping (`semantic_label` is stored
 ///   but not yet surfaced to the accessibility tree).
 /// - **`IconThemeData::opacity`** folding into the resolved color.
-/// - `fontWeight`, `blendMode`, and per-call `shadows`/`textDirection`
-///   overrides from the oracle's constructor are not ported in this slice.
+/// - Font weight, blend mode, and per-call shadow/text-direction
+///   overrides are not supported in this slice.
 #[derive(Clone, Debug, Default, StatelessView)]
 pub struct Icon {
     data: Option<IconData>,
@@ -60,9 +59,6 @@ impl Icon {
 
     /// An icon with no glyph: reserves an empty `size × size` square and
     /// draws nothing.
-    ///
-    /// Flutter parity: `Icon(null)` — the `icon` constructor argument is
-    /// nullable in the oracle.
     #[must_use]
     pub fn none() -> Self {
         Self::default()
@@ -119,8 +115,6 @@ impl Icon {
     /// Split out from `build` so the style-construction logic (`font_size`,
     /// `height`, color resolution, font-variation axes) is unit-testable
     /// without a live [`BuildContext`].
-    ///
-    /// Oracle: `icon.dart:305-319`.
     fn style_for(&self, icon: &IconData, size: f64, theme: &IconThemeData) -> TextStyle {
         TextStyle {
             color: self.color.or(theme.color),
@@ -137,11 +131,10 @@ impl Icon {
 
 impl StatelessView for Icon {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        // Oracle: icon.dart:260-357.
         let theme = IconTheme::of(ctx);
         let size = self.size.or(theme.size).unwrap_or(24.0);
 
-        // `icon.dart:285-289`: a null `icon` renders as empty `size × size`
+        // A missing `icon` renders as empty `size × size`
         // space. Same shape for a codepoint that isn't a valid Unicode scalar
         // value (see `IconData::code_point_string`) — there is nothing to
         // shape either way.

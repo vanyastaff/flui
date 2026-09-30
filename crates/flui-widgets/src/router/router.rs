@@ -155,8 +155,7 @@ impl<R: Routable> Router<R> {
         self
     }
 
-    /// A handle to the nearest ancestor `Router<R>` — the contract of Flutter's
-    /// `Navigator.of(context)`.
+    /// A handle to the nearest ancestor `Router<R>`.
     ///
     /// Lifecycle-only (ADR-0078): acquire it in `init_state` or
     /// `did_change_dependencies` and keep it; callbacks use the handle their
@@ -260,8 +259,7 @@ impl<R: Routable> ViewState<Router<R>> for RouterState<R> {
     /// parent rebuild or hot reload reaches the pages already on the stack. A
     /// new transition duration reaches only the pages placed afterwards: a
     /// page's animation controller is made with its duration. A changed
-    /// initial stack is ignored after mount, as Flutter ignores a changed
-    /// initial route.
+    /// initial stack is ignored after mount.
     fn did_update_view(&mut self, _old_view: &Router<R>, new_view: &Router<R>) {
         *self.shared.page.borrow_mut() = Rc::clone(&new_view.page);
         self.shared

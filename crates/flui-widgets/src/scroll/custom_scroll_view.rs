@@ -30,12 +30,9 @@ use crate::scroll::{ShrinkWrappingViewport, Viewport};
 /// unbounded constraints in the scroll axis.
 ///
 /// A horizontal `scroll_direction` resolves its `AxisDirection` from the
-/// ambient [`Directionality`] (`RightToLeft` under an RTL ancestor), matching
-/// `ScrollView.getDirection` (`widgets/scroll_view.dart`); the vertical axis
-/// never consults it. `CustomScrollView` has no `reverse` flag yet, unlike
-/// [`SingleChildScrollView`].
-///
-/// Flutter parity: `widgets/scroll_view.dart` `CustomScrollView`.
+/// ambient [`Directionality`] (`RightToLeft` under an RTL ancestor); the
+/// vertical axis never consults it. `CustomScrollView` has no `reverse` flag yet,
+/// unlike [`SingleChildScrollView`].
 ///
 /// [`Directionality`]: crate::Directionality
 /// [`SingleChildScrollView`]: crate::SingleChildScrollView
@@ -90,7 +87,7 @@ impl CustomScrollView {
     /// Whether the scroll view should size itself to its sliver contents in the
     /// scroll axis.
     ///
-    /// Defaults to `false`, matching Flutter. Use `true` when the parent gives
+    /// Defaults to `false`. Use `true` when the parent gives
     /// unbounded main-axis constraints.
     #[must_use]
     pub fn shrink_wrap(mut self, shrink_wrap: bool) -> Self {
@@ -98,10 +95,10 @@ impl CustomScrollView {
         self
     }
 
-    /// Set the index of the first forward child (Flutter's
-    /// `ScrollView.center`, index-based here — a key-based `center` is a
-    /// follow-up). Has no effect when [`CustomScrollView::shrink_wrap`] is
-    /// set: Flutter's `ShrinkWrappingViewport` has no `center` either. See
+    /// Set the index of the first forward child (index-based; a key-based
+    /// `center` is a follow-up). Has no effect when
+    /// [`CustomScrollView::shrink_wrap`] is set: the shrink-wrapping viewport
+    /// has no `center`. See
     /// [`Viewport::center`] for the full contract.
     #[must_use]
     pub fn center(mut self, center: Option<usize>) -> Self {
@@ -112,7 +109,7 @@ impl CustomScrollView {
     /// Set where the zero-scroll line sits along the main axis, as a
     /// fraction of the viewport's extent from the leading edge (default
     /// `0.0`). Has no effect when [`CustomScrollView::shrink_wrap`] is set:
-    /// Flutter's `ShrinkWrappingViewport` has no `anchor` either. See
+    /// the shrink-wrapping viewport has no `anchor`. See
     /// [`Viewport::anchor`] for the formulas this drives.
     #[must_use]
     pub fn anchor(mut self, anchor: f64) -> Self {
@@ -132,8 +129,7 @@ impl CustomScrollView {
     /// Set how overflowing content is clipped (default [`Clip::HardEdge`]).
     /// [`Clip::None`] clips nothing, so a sliver may paint outside the
     /// viewport's bounds; applies whether or not
-    /// [`CustomScrollView::shrink_wrap`] is set. Flutter's
-    /// `ScrollView.clipBehavior`.
+    /// [`CustomScrollView::shrink_wrap`] is set.
     #[must_use]
     pub fn clip_behavior(mut self, clip_behavior: Clip) -> Self {
         self.clip_behavior = clip_behavior;
@@ -161,8 +157,7 @@ impl StatelessView for CustomScrollView {
         // `reverse` isn't modeled on `CustomScrollView` yet (unlike
         // `SingleChildScrollView`), so it's always `false` here — the
         // resolution still consults ambient `Directionality` for a
-        // horizontal `scroll_direction`, matching `ScrollView.getDirection`
-        // (`widgets/scroll_view.dart`).
+        // horizontal `scroll_direction`.
         let axis_direction =
             axis_direction_from_axis_reverse_and_directionality(ctx, self.scroll_direction, false);
         if self.shrink_wrap {

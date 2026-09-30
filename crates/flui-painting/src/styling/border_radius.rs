@@ -36,8 +36,7 @@ pub type BorderRadius = Corners<Radius<f64>>;
 /// Extension trait providing BorderRadius-specific constructors and methods.
 ///
 /// This trait is automatically implemented for [`BorderRadius`] (which is
-/// [`Corners<Radius>`](Corners)) to provide ergonomic APIs that match
-/// Flutter's BorderRadius.
+/// [`Corners<Radius>`](Corners)) to provide ergonomic constructors.
 pub trait BorderRadiusExt {
     /// Creates a border radius with all corners having the same circular
     /// radius.

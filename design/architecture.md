@@ -29,7 +29,7 @@ ADR is the place to argue with it.
 **Positioning.** The owner set the product promise on 2026-09-25: FLUI is a UI runtime that
 people and agents can trust. Frames are deterministic, realms hold their state without process
 globals, one protocol serves tests, devtools and agents, and generative UI arrives through A2UI.
-The Flutter model (views, elements, render objects, the lifecycle) stays as the familiar shape a
+The declarative widget model (views, elements, render objects, the lifecycle) stays as the familiar shape a
 developer recognises; it is not the headline promise. Notes is the beta hero application, and
 live platform evidence comes in the order Windows, macOS, Linux, web
 ([decisions](decisions.md#strategy)).
@@ -110,7 +110,7 @@ because a principle with no enforcer is a wish.
 | P4 | Everything is machine-readable: semantics, diagnostics, frame events, the catalog and test results share one vocabulary with devtools and agents. | `flui-protocol` as the only schema crate ([ADR-0095](../docs/adr/ADR-0095-agent-protocol-schema-crate.md)). |
 | P5 | Evidence, not claims: a platform or performance status needs dated, recorded evidence. | `docs/evidence/<platform>.toml`, checked for freshness by `cargo xtask release-check` (owner decision 8). |
 | P6 | Break explicitly: every break is an ADR with `Supersedes`, a CHANGELOG entry and a `flui migrate` rule. | ADR front-matter review; `flui migrate` rules as data. |
-| P7 | Look at the market before deciding. Flutter is a reference, not a spec. | Review; each ADR's alternatives section. |
+| P7 | Look at the market before deciding. | Review; each ADR's alternatives section. |
 | S1 | One implementation per contract: one frame transaction, one `BuildContext`, one raster lowering, one reactive graph, one protocol schema. | The deletions in §17. |
 | P8 | A crate costs money. A new crate needs an ADR that names its second consumer, or the compile or semver seam it buys. | ADR review; `cargo xtask workspace`. |
 | P9 | A seam exists only when a second implementation passes its conformance kit. Unwired `pub` surface is removed in the next minor. | Conformance kits; the public-API closure check. |
@@ -243,7 +243,7 @@ inline test modules are large.
 | flui-scheduler | 2, 20.6k | S / internal | Keep, lighten | An owner-local core with a `Send` waker instead of the mutexes inside the scheduler. `AsyncDriver` and `Spawner` stay here as `!Send` types. `TIME_DILATION` (`crates/flui-scheduler/src/config.rs:43`) becomes a property of each presentation's clock. |
 | flui-painting | 2, 7.0k | S / internal | Keep | `FONT_SYSTEM` (`crates/flui-painting/src/text_layout/layout.rs:124`) becomes an injected per-realm `TextContext` ([ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md)). |
 | flui-interaction | 2, 40.3k | S / internal | Keep | Depends on `flui-platform-api` instead of `flui-platform`. The gesture arena keeps its shape ([ADR-0086](../docs/adr/ADR-0086-signal-writes-through-event-context.md)). |
-| flui-assets | 2, 5.1k | S / internal | Keep, detach from the runtime | Delete `AssetRegistry::global()` (`crates/flui-assets/src/registry/mod.rs:83`) and its own tokio runtime (`crates/flui-assets/src/registry/bridge.rs:66`). |
+| flui-assets | 2, 5.1k | S / internal | Keep, detach from the runtime | Delete its own tokio runtime (`BridgeRuntime`, `crates/flui-assets/src/registry/bridge.rs`); `AssetRegistry::global()` is already deleted. |
 | flui-log | 2, 3.7k | S / internal | Keep | Linked only by composition roots; merging it into the app closes no exit criterion. |
 | flui-layer | 3, 5.0k | R / internal | Keep, grow | Takes the GPU-free lowering, `LayerStateStack`, `RasterBackend` (`crates/flui-engine/src/raster.rs:100`), `PresentDisposition` (`raster.rs:54`) and a wgpu-free `RasterError`; stable layer identity, a differ, `DamageRegion::Partial`, `Layer::External`. |
 | flui-semantics | 3, 10.9k | S / internal | Keep | Action targets run on the owner lane; the role and action vocabulary moves to `flui-protocol` (§11.3). |
@@ -451,7 +451,7 @@ packages, same run).
   passes, bounded by `MAX_LAYOUT_BUILD_PASSES = 10` and `MAX_LAZY_BAND_PASSES = 6`
   (`crates/flui-view/src/owner/layout_builder.rs:64,74`), because `PipelineCell` is
   `Rc<RefCell<PipelineOwner>>` (`crates/flui-rendering/src/pipeline/owner/cell.rs:51`) and is
-  borrowed during layout. A Flutter-style `invokeLayoutCallback` scope would let a lazy band
+  borrowed during layout. A layout-callback scope (build invoked from inside layout) would let a lazy band
   converge in one pass, but it contradicts ADR-0017 §3 ("build never runs during layout") and the
   ADR-0003 fixpoint. It enters the frame order only through its own ADR that supersedes those,
   after a spike; see [open questions](open-questions.md). A 2026-09-26 spike reached one pass for
@@ -572,7 +572,6 @@ The known entries, each with its exit:
 | `REQUEST_REBUILD` | `crates/flui-hot-reload/src/dispatch.rs:24` | Subsecond runtime hook ([ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md)). |
 | `REGISTRY_STACK` | `crates/flui-view/src/key/registry.rs:204` | Realm-owned GlobalKey scope ([ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md) removes its `ManuallyDrop` form). |
 | `NAVIGATOR_COMMAND_TARGETS` | `crates/flui-widgets/src/navigator/navigator.rs:91` | Router handle from `init_state` ([ADR-0093](../docs/adr/ADR-0093-router-is-the-primary-navigation-api.md)). |
-| `AssetRegistry::global` | `crates/flui-assets/src/registry/mod.rs:83` | Realm image-cache handle ([ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md)). |
 
 The list above is not the allowlist. The allowlist is the `[package.metadata.flui] globals` key
 of each crate manifest, seeded by the scan itself in the change that added the gate; it can only
@@ -742,7 +741,7 @@ which is what ADR-0045 rejected when it rejected process-wide GPU services.
 [ADR-0093](../docs/adr/ADR-0093-router-is-the-primary-navigation-api.md) supersedes ADR-0024 and
 in part ADR-0019; decision D14. Router is the primary navigation API: derive-generated routes, the
 URL as the source of truth, and a handle to the nearest ancestor Router acquired in `init_state`
-(Flutter's `Navigator.of` contract). `Router::of(cx)` from a callback cannot work, because a
+(the handle is acquired once, like an `of(context)` lookup). `Router::of(cx)` from a callback cannot work, because a
 writer has no tree position. The Navigator is frozen, and the thread-local command-target registry
 (`crates/flui-widgets/src/navigator/navigator.rs:91`) goes. Every push is URL-addressable: a
 route that enters the stack has a path, and there are no pageless pages. Dialogs, popups, sheets

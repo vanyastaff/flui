@@ -7,8 +7,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// Keeps its child in the tree (so its state persists) but, while `offstage`,
 /// lays it out off-screen at zero size and does not paint or hit-test it.
 ///
-/// Flutter parity: `widgets/basic.dart` `Offstage` over `RenderOffstage`.
-/// `offstage` defaults to `true`. Toggle it to show/hide without losing the
+/// The widget over `RenderOffstage`. `offstage` defaults to `true`. Toggle it to show/hide without losing the
 /// child's state — cheaper than rebuilding when the child is expensive.
 #[derive(Clone, Debug)]
 pub struct Offstage {

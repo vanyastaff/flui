@@ -20,7 +20,7 @@
 //!   per-boundary on the data plane.
 //! * **Local coordinates.** The recorder pre-translates every run to
 //!   the node's origin, so paint code draws in the node's own space —
-//!   no manual offset arithmetic (a recurring Flutter paint-bug class).
+//!   no manual offset arithmetic (a recurring paint-bug class).
 //!
 //! # Coordinate model
 //!
@@ -124,11 +124,10 @@ pub enum FragmentScope {
     /// implementation.
     Clip(PaintClip),
     /// GPU shader mask (`RenderShaderMask`) — the shader is resolved by
-    /// the render object from its LOCAL bounds (`Offset.zero & size` in
-    /// oracle terms) before being recorded here; the composer shifts
-    /// `bounds` by the accumulated origin the same way it already does
-    /// for [`Self::Clip`], reproducing oracle's local-callback,
-    /// global-`maskRect` split "for free".
+    /// the render object from its LOCAL bounds (`Offset.zero & size`)
+    /// before being recorded here; the composer shifts `bounds` by the
+    /// accumulated origin the same way it already does for [`Self::Clip`],
+    /// which gives the local-shader, global-mask-rect split "for free".
     ShaderMask {
         /// The shader to apply as a mask over everything painted inside
         /// this scope.
@@ -153,8 +152,8 @@ pub enum FragmentScope {
     /// Leader-layer link tag (`RenderLeaderLayer`) — publishes this
     /// node's paint-time size under `link` so followers can later
     /// resolve their anchor pose against it. Pushed UNCONDITIONALLY,
-    /// regardless of child presence (oracle `proxy_box.dart:4513-4528`;
-    /// see the design research plan's trap §7.1). Carries no clip/mask
+    /// regardless of child presence (a childless leader is still a
+    /// coordinate anchor). Carries no clip/mask
     /// geometry, just link identity + size.
     Leader {
         /// The link this node publishes itself under.
@@ -166,8 +165,8 @@ pub enum FragmentScope {
     },
     /// Follower-layer link tag (`RenderFollowerLayer`) — positions
     /// everything painted inside relative to whichever `Leader`
-    /// currently publishes under `link`. Also pushed UNCONDITIONALLY
-    /// (oracle `:4708-4721`); resolving the actual on-screen position is
+    /// currently publishes under `link`. Also pushed UNCONDITIONALLY;
+    /// resolving the actual on-screen position is
     /// deferred to a later render-time pass, not performed here (design
     /// research plan §4/§8 — genuinely out of this pass's Tier-1 scope).
     Follower {
@@ -180,7 +179,7 @@ pub enum FragmentScope {
         size: Size<f64>,
         /// Pixel gap added on top of the anchor-derived linked
         /// position, AND the standalone position used when unlinked
-        /// (oracle's dual-purpose `offset` field, `:4555`).
+        /// (one field serves both purposes).
         target_offset: Offset<f64>,
         /// Whether to remain visible when no leader currently publishes
         /// under `link`.
@@ -418,8 +417,7 @@ impl<'a, A: Arity> PaintCx<'a, A> {
     ///
     /// This is the default `RenderBox::paint` body — a pass-through
     /// node (Padding, Flex without overflow clip, …) paints nothing
-    /// itself and splices its children in order, matching Flutter's
-    /// `RenderProxyBox.paint`. An override that does NOT call any
+    /// itself and splices its children in order. An override that does NOT call any
     /// child-painting method hides its subtree (offstage semantics).
     pub fn paint_children_in_order(&mut self) {
         for index in 0..self.child_count {
@@ -481,8 +479,8 @@ impl<'a, A: Arity> PaintCx<'a, A> {
     /// `bounds` must be in node-LOCAL coordinates — the composer shifts it
     /// by the accumulated origin when building the layer, exactly like
     /// [`Self::with_clip_rect`]'s `rect`. Do not pre-offset it: the
-    /// oracle's own split (shader resolved against the LOCAL rect, stored
-    /// `maskRect` in GLOBAL space) falls out of this for free.
+    /// split (shader resolved against the LOCAL rect, mask rect stored in
+    /// GLOBAL space) falls out of this for free.
     pub fn with_shader_mask(
         &mut self,
         shader: Shader,
@@ -526,9 +524,8 @@ impl<'a, A: Arity> PaintCx<'a, A> {
     /// (`RenderLeaderLayer`).
     ///
     /// Pushed UNCONDITIONALLY, unlike [`Self::with_shader_mask`]/
-    /// [`Self::with_backdrop_filter`] — oracle's `RenderLeaderLayer.paint`
-    /// never gates on child presence (`proxy_box.dart:4513-4528`): a
-    /// childless leader still needs its own compositor layer, since it is
+    /// [`Self::with_backdrop_filter`] — a leader never gates on child
+    /// presence: a childless leader still needs its own compositor layer, since it is
     /// a coordinate anchor, not a visual effect.
     pub fn with_leader(&mut self, link: LayerLink, size: Size<f64>, f: impl FnOnce(&mut Self)) {
         self.rec.push_scope(FragmentScope::Leader { link, size });
@@ -540,12 +537,11 @@ impl<'a, A: Arity> PaintCx<'a, A> {
     /// with `link`, publishing this node's own paint-time `size` to the
     /// layer the same way [`Self::with_leader`] does (`RenderFollowerLayer`).
     ///
-    /// Also pushed UNCONDITIONALLY (oracle `:4708-4721`) — the
+    /// Also pushed UNCONDITIONALLY — the
     /// no-leader/hidden decision and the resolved on-screen position are
-    /// both determined at a later composite/render-time pass
-    /// (`FollowerLayer.addToScene`, `layer.dart:2857-2865`), not here.
+    /// both determined at a later composite/render-time pass, not here.
     // clippy::too_many_arguments is crate-wide allowed (lib.rs) — this
-    // mirrors oracle's full RenderFollowerLayer constructor surface.
+    // carries the full follower-layer constructor surface.
     pub fn with_follower(
         &mut self,
         link: LayerLink,
@@ -576,9 +572,8 @@ impl<'a, A: Arity> PaintCx<'a, A> {
     /// Unlike `paint_effects().transform` (one transform value for the
     /// whole node, read once by the pipeline), this lets a single
     /// Variable-arity node give each child its own transform at paint
-    /// time — the primitive
-    /// [`RenderFlow`](https://api.flutter.dev/flutter/rendering/RenderFlow-class.html)
-    /// needs and no other FLUI render object has required until now.
+    /// time — the primitive a flow-style layout needs and no other FLUI
+    /// render object has required until now.
     pub fn with_transform(&mut self, transform: Matrix4, f: impl FnOnce(&mut Self)) {
         self.rec.push_transform_scope(transform);
         f(self);

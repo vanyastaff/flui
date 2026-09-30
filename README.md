@@ -4,7 +4,7 @@
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](README.md#license)
 [![MSRV: 1.98](https://img.shields.io/badge/MSRV-1.98-orange.svg)](README.md#minimum-supported-rust-version)
 
-> A modular, Flutter-inspired declarative UI framework for Rust with GPU-accelerated rendering.
+> A modular declarative UI framework for Rust with GPU-accelerated rendering.
 
 FLUI brings the proven three-tree architecture (View → Element → Render) to Rust, adapted to native ownership, type-safe arity, and a strict layered crate DAG. The Core.1 vertical slice is complete: the widget catalog (`flui-widgets`) is live, the full build → layout → paint → composite pipeline is exercised end-to-end, and the gesture/animation integration ships.
 
@@ -85,8 +85,8 @@ driver.
 
 ## Why FLUI
 
-- **Flutter's layout protocol, not CSS.** The Rust GUI stacks that are not game engines lay out with Taffy (flexbox/grid): GPUI, Dioxus Native, Bevy UI, Vexo. FLUI implements Flutter's box and sliver protocols — constraints down, sizes up, one pass, with intrinsic dimensions, baselines, relayout boundaries, and `RenderSliver` for pinned, floating, and overlapping scrolling — because that is the model a Flutter developer expects, and the one Jetpack Compose independently converged on. Flutter's own rendering and widget tests are the oracle: 72 test files in this workspace are adapted from `packages/flutter/test` (see [`NOTICE`](NOTICE)).
-- **Pure Rust, one toolchain.** rinf and flutter_rust_bridge put Rust logic inside a real Flutter app, so the Dart VM, the Flutter SDK, and a second build system ship with it. FLUI keeps the same mental model — declarative widgets over a retained three-tree, keys, lifecycle — as ordinary crates: `cargo build` is the whole build, `wgpu` is the one renderer on every platform, and there is no VM in the binary.
+- **Constraint-based box and sliver layout, not CSS.** The Rust GUI stacks that are not game engines lay out with Taffy (flexbox/grid): GPUI, Dioxus Native, Bevy UI, Vexo. FLUI uses box and sliver protocols — constraints down, sizes up, one pass, with intrinsic dimensions, baselines, relayout boundaries, and `RenderSliver` for pinned, floating, and overlapping scrolling — the model Jetpack Compose also converged on. 72 test files in this workspace are adapted from Flutter's rendering and widget tests (see [`NOTICE`](NOTICE)).
+- **Pure Rust, one toolchain.** Bridges such as rinf and flutter_rust_bridge put Rust logic inside a Flutter app, so the Dart VM, the Flutter SDK, and a second build system ship with it. FLUI offers declarative widgets over a retained three-tree, keys, and lifecycle as ordinary crates: `cargo build` is the whole build, `wgpu` is the one renderer on every platform, and there is no VM in the binary.
 - **Resilience that is tested, not assumed.** The renderer recovers from GPU device loss and rebuilds its surface; a window reported as fully occluded stops submitting GPU work while input is still serviced; and both are exercised by a live end-to-end smoke test that drives a real window with real X11 input under Xvfb, checks the captured pixels and the exit code, and verifies occlusion against a real cover window — plus a Wayland variant for the close-path teardown order. Synthetic-event tests stayed green through every one of the platform-layer regressions that suite now catches.
 
 ## Hello World
@@ -200,6 +200,6 @@ Licensed under either the [MIT License](LICENSE) or the [Apache License, Version
 
 ## Acknowledgments
 
-FLUI takes [Flutter](https://flutter.dev) as its behavioral reference: the three-tree model, the box/sliver layout protocol, lifecycle ordering, and Flutter's test corpus are the floor it must meet, and 72 test files here are adapted from `packages/flutter/test`. Structure and mechanisms are designed for Rust and diverge deliberately, with each divergence recorded in an ADR or a crate's `## Mapping decisions`. Flutter is Copyright 2014 The Flutter Authors, BSD-3-Clause — see [`NOTICE`](NOTICE) for the attribution that ships with the affected crates. Flutter is a trademark of Google LLC; FLUI is not affiliated with or endorsed by Google.
+FLUI is inspired by [Flutter](https://flutter.dev)'s declarative widget composition; structure and mechanisms are designed for Rust. 72 test files here are adapted from `packages/flutter/test`. Flutter is Copyright 2014 The Flutter Authors, BSD-3-Clause — see [`NOTICE`](NOTICE) for the attribution that ships with the affected crates. Flutter is a trademark of Google LLC; FLUI is not affiliated with or endorsed by Google.
 
-[GPUI](https://www.gpui.rs/) (Zed Industries, Apache-2.0) is consulted as a design reference for the platform layer; nothing is copied from it. Maintainer checkouts may include local `.flutter/` and `.gpui/` mirrors for that reference work.
+[GPUI](https://www.gpui.rs/) (Zed Industries, Apache-2.0) is consulted as a design reference for the platform layer; nothing is copied from it.

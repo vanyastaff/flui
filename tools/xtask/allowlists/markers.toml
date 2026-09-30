@@ -20,11 +20,6 @@ class = "wave"
 count = 1
 
 [[allow]]
-path = "book/book.toml"
-class = "tracker-h"
-count = 1
-
-[[allow]]
 path = "crates/flui-animation/src/lib.rs"
 class = "wave"
 count = 1
@@ -163,11 +158,6 @@ count = 1
 path = "crates/flui-macros/src/lib.rs"
 class = "wave"
 count = 1
-
-[[allow]]
-path = "crates/flui-objects/src/layout/stack.rs"
-class = "wave"
-count = 2
 
 [[allow]]
 path = "crates/flui-objects/src/lib.rs"
@@ -310,7 +300,7 @@ class = "wave"
 count = 1
 
 [[allow]]
-path = "docs/designs/2026-06-28-flutter-parity-hot-reload.md"
+path = "docs/designs/2026-06-28-hot-reload-runtime-protocol.md"
 class = "phase-letter"
 count = 4
 

@@ -12,11 +12,7 @@ use super::view::View;
 /// - Providing configuration (themes, localization)
 /// - Composition without visual representation
 ///
-/// # Flutter Equivalent
-///
-/// This corresponds to Flutter's `ProxyWidget` and its subclasses like:
-/// - `InheritedWidget` (though we have InheritedView separately)
-/// - `ParentDataWidget`
+/// `InheritedView` and `ParentDataView` are separate traits.
 ///
 /// # Example
 ///

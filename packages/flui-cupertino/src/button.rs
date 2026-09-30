@@ -1,31 +1,28 @@
 //! [`CupertinoButton`] — the iOS (17) Human Interface Guidelines button.
 //!
-//! Flutter parity: `cupertino/button.dart` + `cupertino/constants.dart`
-//! (oracle tag `3.44.0`). Every geometry constant (padding, border radius,
-//! minimum size, tinted opacity, fade timing) is a verbatim port of
-//! `constants.dart`'s per-[`CupertinoButtonSize`] tables — pinned by an
-//! oracle-diffed const-table test in `tests/button.rs`.
+//! Every geometry constant (padding, border radius, minimum size, tinted
+//! opacity, fade timing) follows the iOS HIG per-[`CupertinoButtonSize`]
+//! tables — pinned by a const-table test in `tests/button.rs`.
 //!
 //! ## Honest reduction: one recognized tap, not a real down/move/up sequence
 //!
-//! The oracle drives its press-opacity animation off `TapGestureRecognizer`'s
-//! `onTapDown`/`onTapMove`/`onTapUp`/`onTapCancel` — four independent
-//! callbacks, so the fade can start the instant the finger goes down and
-//! reverse mid-gesture if the finger drags outside `kCupertinoButtonTapMoveSlop`
-//! before lifting. FLUI's [`flui_sdk::widgets::GestureDetector`] exposes only
+//! A full implementation would drive the press-opacity animation off separate
+//! tap-down/move/up/cancel callbacks, so the fade can start the instant the
+//! finger goes down and reverse mid-gesture if the finger drags outside the
+//! tap-move slop before lifting. FLUI's [`flui_sdk::widgets::GestureDetector`] exposes only
 //! `on_tap` (fires once a tap is *recognized* — down + up without exceeding
 //! touch slop) and `on_long_press`, with no down/move primitives to hang
 //! separate handlers on — the same gap `flui-material`'s `ink_well` documents
 //! for its own press-state timing.
 //!
-//! This port applies the oracle's fade *sequence* uniformly to that single
+//! So the fade *sequence* is applied uniformly to that single
 //! `on_tap` event: on tap, animate toward `CupertinoButton::pressed_opacity` over
-//! [`K_FADE_OUT_DURATION`] (`Curves::EaseInOutCubicEmphasized`, matching the
-//! oracle's press-down curve), call the handler, then — once that fade
+//! [`K_FADE_OUT_DURATION`] (`Curves::EaseInOutCubicEmphasized`, the press-down
+//! curve), call the handler, then — once that fade
 //! completes — animate back to full opacity over [`K_FADE_IN_DURATION`]
-//! (`Curves::EaseOutCubic`, the oracle's release curve). The visible result
+//! (`Curves::EaseOutCubic`, the release curve). The visible result
 //! is a brief "flash" per tap instead of a fade that tracks how long the
-//! finger is actually held down. `tapMoveSlop`-driven cancel-while-dragging
+//! finger is actually held down. Tap-move-slop-driven cancel-while-dragging
 //! has no equivalent here (named, not silently dropped): there is no drag
 //! signal to cancel against.
 //!
@@ -35,15 +32,14 @@
 //!   `enabled && isFocused`) — `flui-painting` has the superellipse
 //!   primitive, but wiring a focus-visible border is out of this crate's V1
 //!   scope.
-//! - **`WidgetState`-resolved mouse cursor** — the oracle's `_defaultCursor`
-//!   is `kIsWeb`-gated (`SystemMouseCursors.click` only on web) and FLUI has
-//!   no `MouseCursor` type yet to resolve against. Not "Cupertino doesn't use
-//!   `WidgetState`" (the oracle's cursor *and* focus paths do) — just no
-//!   consumer for it in this crate yet.
+//! - **`WidgetState`-resolved mouse cursor** — a pointer cursor is only
+//!   appropriate on web, and FLUI has no `MouseCursor` type yet to resolve
+//!   against. Not "Cupertino doesn't use `WidgetState`" — just no consumer
+//!   for it in this crate yet.
 //! - **`onFocusChange`/`autofocus`** — no `FocusableActionDetector`-equivalent
 //!   wiring in this pass; [`crate::button`] wraps `GestureDetector` directly.
-//! - **Icon theming** — the oracle wraps `child` in an `IconTheme` sized off
-//!   the resolved text style; not wired here (no icon-bearing V1 consumer).
+//! - **Icon theming** — wrapping `child` in an `IconTheme` sized off
+//!   the resolved text style is not wired here (no icon-bearing V1 consumer).
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -77,23 +73,18 @@ use crate::theme::CupertinoTheme;
 /// matches `GestureDetector::on_tap`'s own callback shape.
 type ButtonCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>)>;
 
-/// `kFadeOutDuration` (`button.dart`, oracle tag `3.44.0`) — the press-in
-/// fade's duration.
+/// The press-in fade's duration.
 pub const K_FADE_OUT_DURATION: Duration = Duration::from_millis(120);
 
-/// `kFadeInDuration` (`button.dart`, oracle tag `3.44.0`) — the release fade's
-/// duration.
+/// The release fade's duration.
 pub const K_FADE_IN_DURATION: Duration = Duration::from_millis(180);
 
-/// `kCupertinoButtonTintedOpacityLight` (`constants.dart`, oracle tag
-/// `3.44.0`).
+/// The tinted background's opacity under a light theme.
 const K_TINTED_OPACITY_LIGHT: f64 = 0.12;
-/// `kCupertinoButtonTintedOpacityDark` (`constants.dart`, oracle tag
-/// `3.44.0`).
+/// The tinted background's opacity under a dark theme.
 const K_TINTED_OPACITY_DARK: f64 = 0.26;
 
-/// The size of a [`CupertinoButton`]. Flutter parity: `CupertinoButtonSize`
-/// (`button.dart`, oracle tag `3.44.0`).
+/// The size of a [`CupertinoButton`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CupertinoButtonSize {
     /// A smaller button with round sides and [`crate::text_theme::CupertinoTextThemeData::action_small_text_style`].
@@ -105,8 +96,7 @@ pub enum CupertinoButtonSize {
     Large,
 }
 
-/// `kCupertinoButtonPadding[sizeStyle]` (`constants.dart`, oracle tag
-/// `3.44.0`).
+/// The padding for each button size.
 fn size_padding(size: CupertinoButtonSize) -> EdgeInsets {
     match size {
         CupertinoButtonSize::Small => EdgeInsets::symmetric(6.0, 12.0),
@@ -115,8 +105,7 @@ fn size_padding(size: CupertinoButtonSize) -> EdgeInsets {
     }
 }
 
-/// `kCupertinoButtonSizeBorderRadius[sizeStyle]` (`constants.dart`, oracle
-/// tag `3.44.0`).
+/// The border radius for each button size.
 fn size_border_radius(size: CupertinoButtonSize) -> BorderRadius {
     match size {
         CupertinoButtonSize::Small | CupertinoButtonSize::Medium => BorderRadius::circular(40.0),
@@ -124,16 +113,12 @@ fn size_border_radius(size: CupertinoButtonSize) -> BorderRadius {
     }
 }
 
-/// `kCupertinoButtonMinSize[sizeStyle]` (`constants.dart`, oracle tag
-/// `3.44.0`) — the fallback `build()` uses only when [`CupertinoButton::minimum_size`]
-/// is unset. The oracle's constraint expression is
-/// `minimumSize?.width ?? kCupertinoButtonMinSize[sizeStyle] ?? kMinInteractiveDimensionCupertino`:
-/// the final `kMinInteractiveDimensionCupertino` (44.0) fallback is
-/// unreachable in practice (`kCupertinoButtonMinSize` covers every
-/// [`CupertinoButtonSize`] variant), so this port omits that dead constant
-/// rather than carry unused code — `minimum_size` passes an explicit value
-/// (including `0.0`, which genuinely removes the floor) straight through
-/// unmodified, exactly as `minimumSize?.width` does.
+/// The minimum dimension for each button size — the fallback `build()` uses
+/// only when [`CupertinoButton::minimum_size`] is unset. A further 44.0
+/// minimum-interactive-dimension fallback would be unreachable (this covers
+/// every [`CupertinoButtonSize`] variant), so it is omitted —
+/// `minimum_size` passes an explicit value (including `0.0`, which genuinely
+/// removes the floor) straight through unmodified.
 fn size_min_dimension(size: CupertinoButtonSize) -> f64 {
     match size {
         CupertinoButtonSize::Small => 28.0,
@@ -142,9 +127,7 @@ fn size_min_dimension(size: CupertinoButtonSize) -> f64 {
     }
 }
 
-/// The background-fill style. Flutter parity: `_CupertinoButtonStyle`
-/// (`button.dart`, oracle tag `3.44.0`) — private in the oracle, exposed here
-/// only through the three constructors, matching that scoping.
+/// The background-fill style, exposed only through the three constructors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ButtonFillStyle {
     /// No background, primary-color foreground. [`CupertinoButton::new`].
@@ -156,8 +139,8 @@ enum ButtonFillStyle {
     Filled,
 }
 
-/// An iOS-style button — see the module doc for the honest reductions this
-/// port makes against the oracle's real down/move/up press tracking.
+/// An iOS-style button — see the module doc for the honest reductions made
+/// against real down/move/up press tracking.
 #[derive(Clone, StatefulView)]
 pub struct CupertinoButton {
     child: BoxedView,
@@ -202,23 +185,20 @@ impl CupertinoButton {
         }
     }
 
-    /// A plain button: no background, primary-color text. Flutter parity:
-    /// `CupertinoButton(...)`.
+    /// A plain button: no background, primary-color text.
     #[must_use]
     pub fn new(child: impl IntoView) -> Self {
         Self::with_style(child, ButtonFillStyle::Plain)
     }
 
     /// A button with a translucent background derived from
-    /// [`crate::theme::CupertinoThemeData::primary_color`]. Flutter parity:
-    /// `CupertinoButton.tinted`.
+    /// [`crate::theme::CupertinoThemeData::primary_color`].
     #[must_use]
     pub fn tinted(child: impl IntoView) -> Self {
         Self::with_style(child, ButtonFillStyle::Tinted)
     }
 
-    /// A button with a solid, opaque background. Flutter parity:
-    /// `CupertinoButton.filled`.
+    /// A button with a solid, opaque background.
     #[must_use]
     pub fn filled(child: impl IntoView) -> Self {
         Self::with_style(child, ButtonFillStyle::Filled)
@@ -311,8 +291,8 @@ impl CupertinoButton {
 
     /// Sets the long-press handler — wired straight to
     /// [`flui_sdk::widgets::GestureDetector::on_long_press`], with no fade
-    /// animation tied to it (matching the oracle: `LongPressGestureRecognizer`
-    /// is a wholly separate recognizer from the tap-driven fade).
+    /// animation tied to it (long press is a wholly separate recognizer from
+    /// the tap-driven fade).
     #[must_use]
     pub fn on_long_press<R: flui_sdk::view::EventOutcome>(
         mut self,
@@ -322,8 +302,7 @@ impl CupertinoButton {
         self
     }
 
-    /// Whether the button responds to interaction. Flutter parity:
-    /// `CupertinoButton.enabled`.
+    /// Whether the button responds to interaction.
     #[must_use]
     pub fn enabled(&self) -> bool {
         self.on_pressed.is_some() || self.on_long_press.is_some()
@@ -340,40 +319,27 @@ impl std::fmt::Debug for CupertinoButton {
     }
 }
 
-/// Resolves the background fill, per `_CupertinoButtonState.build`'s
-/// `backgroundColor` computation (`button.dart`, oracle tag `3.44.0`):
-///
-/// ```dart
-/// final Color? backgroundColor =
-///     (widget.color == null ? ... : CupertinoDynamicColor.maybeResolve(widget.color, context))
-///         ?.withOpacity(widget._style == tinted ? ... : widget.color?.opacity ?? 1.0);
-/// ```
+/// Resolves the background fill.
 ///
 /// ## Why the `Plain`/`Filled` alpha comes from `view.color`, not the resolved color
 ///
 /// For `Tinted`, the multiplier is a fixed light/dark constant — no
-/// surprises. For `Plain`/`Filled`, the oracle multiplies by `widget.color?.opacity`,
-/// which reads the **original, never-resolved** `widget.color` — not the
-/// `CupertinoDynamicColor.maybeResolve` result assigned to `backgroundColor`
-/// two lines above. `CupertinoDynamicColor.opacity` forwards to its private
-/// `_effectiveColor`, which every public constructor seeds with `color` (the
-/// light/normal variant) and which is only ever replaced by calling
-/// `resolveFrom` — a call that returns a **new** instance, leaving the
-/// original `widget.color` untouched. So this multiplier is always the
-/// color's light-variant alpha, even when `backgroundColor` itself resolved
-/// to the dark variant.
+/// surprises. For `Plain`/`Filled`, the alpha is read from the **original,
+/// never-resolved** `view.color`, not from the resolved color. A dynamic
+/// color's own alpha is that of its light/normal variant; resolving it
+/// against the ambient brightness yields a separate value. So this
+/// multiplier is always the color's light-variant alpha, even when the
+/// background itself resolved to the dark variant.
 ///
 /// This looks like a bug (a dark-mode background painted with the light
-/// alpha) but is the oracle's real, verified behavior: `CupertinoColors.separator`
-/// is alpha 73 light / 153 dark (`colors.dart`, oracle tag `3.44.0`), and a
-/// `.separator`-colored `Plain`/`Filled` button under a Dark theme really
-/// does render at alpha 73 in real Flutter — see
+/// alpha) but is deliberate: `CupertinoColors::SEPARATOR` is alpha 73 light /
+/// 153 dark, and a `SEPARATOR`-colored `Plain`/`Filled` button under a Dark
+/// theme renders at alpha 73 — see
 /// `background_dynamic_color_keeps_the_light_variants_alpha_under_a_dark_theme`
-/// in `tests/button.rs`, which mounts a `.separator`-colored button under a
-/// Dark theme and pins this exact (surprising but oracle-faithful) value.
-/// Ported here as a direct alpha-channel copy (`Color::with_alpha`, `u8`)
-/// rather than the oracle's `opacity` (`f64`) round trip through
-/// `with_opacity` — same source byte, no float-precision risk.
+/// in `tests/button.rs`, which mounts such a button under a Dark theme and
+/// pins this exact value. The alpha is a direct channel copy
+/// (`Color::with_alpha`, `u8`) rather than an `f64` opacity round trip — same
+/// source byte, no float-precision risk.
 fn resolve_background_color(
     view: &CupertinoButton,
     ctx: &dyn BuildContext,
@@ -407,8 +373,7 @@ fn resolve_background_color(
     })
 }
 
-/// Resolves the foreground (text/icon) color, per
-/// `_CupertinoButtonState.build`'s `effectiveForegroundColor` computation.
+/// Resolves the foreground (text/icon) color.
 fn resolve_foreground_color(
     view: &CupertinoButton,
     ctx: &dyn BuildContext,
@@ -433,16 +398,11 @@ fn resolve_foreground_color(
 /// unit-testable without mounting a render tree (see the tests below).
 ///
 /// `pressed_opacity: None` means [`CupertinoButton::pressed_opacity`]'s
-/// contract — "disables the fade animation entirely" — a stronger,
-/// FLUI-authored promise than the oracle's own doc ("opacity will not change
-/// on pressed"); the oracle's `_animate()` has no such guard and always
-/// drives the `AnimationController` on tap, even when `pressedOpacity` is
-/// `null` (the tween's begin/end both collapse to `1.0`, so the run ticks
-/// invisibly). Skipping the run here has no observable paint difference —
+/// contract — "disables the fade animation entirely". Driving the controller
+/// anyway would tick invisibly (the tween's begin/end both collapse to
+/// `1.0`). Skipping the run here has no observable paint difference —
 /// `build`'s `opacity` `FloatTween` also collapses to `1.0..=1.0` in that
-/// case — it only removes wasted ticking and rebuild-scheduling, so this
-/// does not diverge from the oracle's visible behavior, only from its
-/// incidental cost.
+/// case — it only removes wasted ticking and rebuild-scheduling.
 fn start_press_fade(
     controller: &AnimationController,
     pressed_opacity: Option<f64>,
@@ -473,10 +433,8 @@ fn start_press_fade(
 /// landed" from "the release fade just landed" now that direction is chosen
 /// by the method (`animate_to_curved` reports `Completed` at BOTH ends,
 /// issue #1171) — a listener watching `Completed` unconditionally
-/// re-triggers itself once the release it started lands. The oracle's own
-/// `_animate()`'s `ticker.then(...)` has the same one-shot shape: it chains
-/// off the return of the leg it just started, not off a persistent
-/// listener.
+/// re-triggers itself once the release it started lands. Chaining off the
+/// return of the leg just started is one-shot, unlike a persistent listener.
 fn chain_release_fade(controller: &AnimationController, press_fade: TickerFuture) {
     let release_controller = controller.clone();
     press_fade.when_complete_or_cancel(move |outcome| {
@@ -613,9 +571,8 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
             None => Arc::new(flui_sdk::animation::ConstantAnimation::new(1.0)),
         };
 
-        // Flutter parity: `Semantics(button: true, child: ConstrainedBox(...))`
-        // — applied unconditionally, not gated on `enabled` (a disabled
-        // button is still announced as a button, just an inert one).
+        // The button role is applied unconditionally, not gated on `enabled`
+        // (a disabled button is still announced as a button, just an inert one).
         let faded = Semantics::new()
             .button(true)
             .child(ConstrainedBox::new(constraints).child(FadeTransition::new(opacity, decorated)));

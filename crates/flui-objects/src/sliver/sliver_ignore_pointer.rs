@@ -3,15 +3,10 @@
 //! events flow past it to whatever sliver is painted beneath in the
 //! viewport.
 //!
-//! # Flutter equivalence
-//!
-//! Behavior-faithful port of Flutter's
-//! [`RenderSliverIgnorePointer`](https://api.flutter.dev/flutter/rendering/RenderSliverIgnorePointer-class.html)
-//! (`packages/flutter/lib/src/rendering/sliver.dart`). Layout and
-//! paint are pure passthroughs; only `hit_test` differs from a
+//! Layout and paint are pure passthroughs; only `hit_test` differs from a
 //! transparent proxy.
 //!
-//! # Rust-native improvements
+//! # Design notes
 //!
 //! * `ignoring` is a typed `bool` boundary; its setter returns the exact
 //!   pipeline impact.
@@ -69,7 +64,7 @@ impl RenderSliverIgnorePointer {
 }
 
 impl Default for RenderSliverIgnorePointer {
-    /// Defaults to `ignoring = true` (Flutter parity).
+    /// Defaults to `ignoring = true`.
     fn default() -> Self {
         Self::new(true)
     }

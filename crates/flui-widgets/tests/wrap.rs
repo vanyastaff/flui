@@ -1,5 +1,5 @@
-//! Layout-parity tests for the [`Wrap`] widget — verifies that run-building,
-//! wrapping, spacing, and alignment match Flutter's `RenderWrap` semantics.
+//! Layout tests for the [`Wrap`] widget — verifies run-building, wrapping,
+//! spacing, and alignment.
 
 use crate::common::{lay_out, loose, offset, size};
 use flui_view::ViewExt;

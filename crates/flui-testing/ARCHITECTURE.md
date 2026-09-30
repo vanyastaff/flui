@@ -71,23 +71,20 @@ substrate driver over raw owners, which the raw-owner suites still use.
 
 ## Mapping decisions
 
-### `TestWidgetsFlutterBinding.pump` becomes the realm's pump
+### The harness pumps the realm
 
-Flutter's widget tester drives a test binding whose `pump(duration)` elapses
-fake time and calls `handleBeginFrame`/`handleDrawFrame` on the same binding
-the app would run. Here the harness calls `HeadlessRealm::pump(dt)`, which
+The harness calls `HeadlessRealm::pump(dt)`, which
 advances the manual clock and runs `UiRealm::pump`, the one frame
-transaction every runner drives. `lay_out`'s mount is a frame, as
-`pumpWidget` is: post-frame callbacks registered in `init_state` run at its
+transaction every runner drives. `lay_out`'s mount is a frame:
+post-frame callbacks registered in `init_state` run at its
 end.
 
-Two differences follow from the realm, not from the harness. The realm's
+Two behaviors follow from the realm, not from the harness. The realm's
 `Vsync` registry ticks in the persistent phase with the pipeline, not among
 the transient callbacks (recorded in `flui-runtime`'s `ARCHITECTURE.md`,
 "`Vsync` ticks in the persistent phase, not among the transient
 callbacks"); a caller's own registry passed to `lay_out_animated` is ticked
 in the same phase at the same time. And the realm coalesces pointer moves
-until the next frame, where Flutter's binding dispatches them at once when
-resampling is off; the harness flushes the queue after each event, through
-the same dispatch code the frame would run, so a test observes a move as a
-Flutter test does.
+until the next frame; the harness flushes the queue after each event, through
+the same dispatch code the frame would run, so a test observes a move
+immediately.

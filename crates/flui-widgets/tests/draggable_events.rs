@@ -230,8 +230,8 @@ fn a_let_bound_drag_callback_compiles_through_callback_with() {
 }
 
 /// A drop onto a target writes through the target's `on_accept` `EventCx`,
-/// and does so before the draggable's own completion callback — the oracle's
-/// `finishDrag` order. `on_accept` sets 1 and `on_drag_completed` multiplies
+/// and does so before the draggable's own completion callback. `on_accept`
+/// sets 1 and `on_drag_completed` multiplies
 /// by 10, so only that order, with both writes landing, leaves 10.
 pub(crate) fn a_drop_writes_through_the_targets_on_accept_before_the_draggable_completes() {
     let rig = target_rig(

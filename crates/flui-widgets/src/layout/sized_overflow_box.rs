@@ -13,8 +13,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// The box's own size is always `constraints.constrain(requested_size)`.  The
 /// child is aligned within that slot using `alignment`.
 ///
-/// Flutter parity: `widgets/basic.dart` `SizedOverflowBox` over
-/// [`RenderSizedOverflowBox`].
+/// Backed by [`RenderSizedOverflowBox`].
 #[derive(Clone, Debug)]
 pub struct SizedOverflowBox {
     alignment: Alignment,

@@ -31,7 +31,7 @@ enum OffsetSource {
 
 /// A scrollable 2-D grid.
 ///
-/// Three construction modes, mirroring Flutter's named constructors:
+/// Three construction modes:
 ///
 /// - [`GridView::count`] — a fixed number of columns in the cross axis, driven
 ///   by [`SliverGridDelegateWithFixedCrossAxisCount`].
@@ -45,7 +45,7 @@ enum OffsetSource {
 ///   Tiles that scroll out of the cache window are disposed.  Backed by
 ///   [`SliverGrid`] (element-owned, request-strategy).
 ///
-///   **First-frame settling (Flutter divergence):** lazy children are built
+///   **First-frame settling:** lazy children are built
 ///   *after* the frame's paint, so the first frame a viewport band appears it
 ///   paints blank; content lands on the next frame (~16 ms @ 60 fps).  See
 ///   [`SliverChildBuilderDelegate`] for the full rationale.
@@ -57,12 +57,8 @@ enum OffsetSource {
 ///
 /// A horizontal `scroll_direction` resolves its `AxisDirection` from the
 /// ambient [`Directionality`](crate::Directionality) (`RightToLeft` under an
-/// RTL ancestor), matching `ScrollView.getDirection`
-/// (`widgets/scroll_view.dart`); the vertical axis never consults it.
+/// RTL ancestor); the vertical axis never consults it.
 /// `GridView` has no `reverse` flag yet.
-///
-/// Flutter parity: `widgets/scroll_view.dart` `GridView.count`,
-/// `GridView.extent`, and `GridView.builder`.
 #[derive(Clone, StatelessView)]
 pub struct GridView {
     scroll_direction: Axis,
@@ -81,9 +77,6 @@ pub struct GridView {
     /// Builder delegate for the lazy variant.  `None` in the static variants.
     builder_source: Option<SliverChildBuilderDelegate>,
     /// Wrap each tile in a `RepaintBoundary` (default `true`).
-    ///
-    /// Flutter parity: `addRepaintBoundaries` on the delegates `GridView`
-    /// builds, which defaults to `true`.
     add_repaint_boundaries: bool,
 }
 
@@ -95,8 +88,6 @@ impl GridView {
     /// viewport-visible (plus cache margin) window is actually materialized
     /// — the same [`SliverGrid`] request strategy [`GridView::builder`] uses
     /// (ADR-0053).
-    ///
-    /// Flutter parity: `GridView.count`.
     pub fn count(cross_axis_count: usize, children: impl ViewSeq) -> Self {
         let delegate = SliverGridDelegateWithFixedCrossAxisCount::new(cross_axis_count);
         Self {
@@ -119,8 +110,6 @@ impl GridView {
     /// cross-axis evenly. Only the viewport-visible (plus cache margin)
     /// window is actually materialized (ADR-0053), as for
     /// [`GridView::count`].
-    ///
-    /// Flutter parity: `GridView.extent`.
     pub fn extent(max_cross_axis_extent: f64, children: impl ViewSeq) -> Self {
         let delegate = SliverGridDelegateWithMaxCrossAxisExtent::new(max_cross_axis_extent);
         Self {
@@ -142,8 +131,6 @@ impl GridView {
     /// disposed.  The `builder` closure receives a logical index and returns
     /// the tile view, or `None` when the index is at or past the end of the
     /// data source.
-    ///
-    /// Flutter parity: `GridView.builder`.
     pub fn builder<F>(
         grid_delegate: Arc<dyn SliverGridDelegate>,
         item_count: usize,
@@ -166,10 +153,8 @@ impl GridView {
 
     /// Wrap each tile in a `RepaintBoundary` (default `true`).
     ///
-    /// Flutter parity: the `addRepaintBoundaries` knob its delegates carry,
-    /// defaulting to `true` for the reason its doc gives — children in a
-    /// scrolling container "do not need to be repainted as the list scrolls".
-    /// Pass `false` when a tile is cheaper to repaint than to composite.
+    /// On by default because children in a scrolling container do not need to be
+    /// repainted as the list scrolls. Pass `false` when a tile is cheaper to repaint than to composite.
     #[must_use]
     pub fn repaint_boundaries(mut self, add: bool) -> Self {
         self.add_repaint_boundaries = add;
@@ -225,7 +210,7 @@ impl GridView {
     /// Whether the grid should size itself to its sliver contents in the scroll
     /// axis.
     ///
-    /// Defaults to `false`, matching Flutter. Use `true` when the parent gives
+    /// Defaults to `false`. Use `true` when the parent gives
     /// unbounded main-axis constraints.
     #[must_use]
     pub fn shrink_wrap(mut self, shrink_wrap: bool) -> Self {
@@ -259,8 +244,7 @@ impl StatelessView for GridView {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         // `reverse` isn't modeled on `GridView` yet, so it's always `false`
         // here — the resolution still consults ambient `Directionality` for
-        // a horizontal `scroll_direction`, matching `ScrollView.getDirection`
-        // (`widgets/scroll_view.dart`).
+        // a horizontal `scroll_direction`.
         let axis_direction =
             axis_direction_from_axis_reverse_and_directionality(ctx, self.scroll_direction, false);
 

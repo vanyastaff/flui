@@ -1,7 +1,6 @@
 //! Object key - key based on object identity (pointer equality).
 //!
-//! This module is part of the widgets layer, matching Flutter's architecture
-//! where `ObjectKey` is defined in `widgets/framework.dart`.
+//! This module is part of the widgets layer.
 #![expect(unsafe_code)]
 
 use std::{any::Any, fmt, sync::Arc};

@@ -33,14 +33,14 @@ pub type KeyEventHandler = Rc<dyn Fn(&KeyEvent) -> KeyEventResult>;
 /// Computes a node's bounding rectangle on demand, in root coordinates.
 pub type RectProvider = Rc<dyn Fn() -> Option<Rect<f64>>>;
 
-/// What the widget layer records about where a node sits in its tree — the
-/// counterpart of Flutter's `FocusNode.context`, which this crate cannot hold
-/// because it sits below the element tree.
+/// What the widget layer records about where a node sits in its tree. This
+/// crate cannot hold an element reference itself because it sits below the
+/// element tree.
 ///
 /// Opaque here: this crate stores and returns it and never reads it.
 /// `flui-widgets` records the `Actions` chain visible at the node's `Focus`
 /// widget, so a `Shortcuts` above the focused widget resolves an intent from
-/// the focused widget's position, as Flutter's `primaryFocus.context` does.
+/// the focused widget's position.
 pub type NodeContext = Rc<dyn std::any::Any>;
 
 /// ChangeNotifier-style callback for one focus node.
@@ -58,7 +58,7 @@ pub enum KeyEventResult {
 }
 
 impl KeyEventResult {
-    /// Combine several handler channels on one node using Flutter semantics.
+    /// Combine several handler channels on one node.
     #[must_use]
     pub fn combine(self, other: Self) -> Self {
         use KeyEventResult::{Handled, Ignored, SkipRemainingHandlers};
@@ -714,8 +714,7 @@ impl FocusNode {
         for (id, listener) in listeners {
             // Mirrors `FocusManager::notify_listeners`: a listener removed
             // by an earlier one in this same dispatch (itself included) is
-            // never called, matching Flutter's
-            // `_HighlightModeManager.notifyListeners` contract.
+            // never called.
             let still_registered = self.listeners.borrow().iter().any(|(held, _)| *held == id);
             if still_registered {
                 listener();
@@ -1574,7 +1573,7 @@ impl FocusScopeNode {
                 })
             }
             TraversalEdgeBehavior::Stop => ResolvedStep::None,
-            TraversalEdgeBehavior::LeaveFlutterView => ResolvedStep::Unfocus,
+            TraversalEdgeBehavior::LeaveView => ResolvedStep::Unfocus,
         }
     }
 
@@ -1680,7 +1679,7 @@ pub enum TraversalEdgeBehavior {
     #[default]
     ClosedLoop,
     /// Release focus so the host can move outside this view.
-    LeaveFlutterView,
+    LeaveView,
     /// Continue in the enclosing scope.
     ParentScope,
     /// Keep current focus.

@@ -1,9 +1,11 @@
 # ADR-0097: Process-global state is gated: one trampoline cell, everything else realm-owned
 
 - **Status:** Accepted in part (2026-09-26): §1–§4, the gate (`cargo xtask globals`) and its
-  seeded allowlist; removing each global remains with its exit ADR. For the entries whose exit
-  is this ADR (`TIME_DILATION`, the asset `REGISTRY` and `INTERNER`, `ERROR_VIEW_BUILDER`, the
-  decoded-image `CACHE`), that removal is the part of this ADR still Proposed.
+  seeded allowlist; removing each global remains with its exit ADR. Of the entries whose exit
+  is this ADR, the asset `REGISTRY` is removed (`AssetRegistry::global` is deleted; an
+  application builds and owns its registry). For the rest (`TIME_DILATION`, the asset
+  `INTERNER`, `ERROR_VIEW_BUILDER`, the decoded-image `CACHE`), removal is the part of this ADR
+  still Proposed.
 - **Date:** 2026-09-25
 - **Amends:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (its open question "the runner's
   thread-local `AppRuntime` slot is the sanctioned transitional form" becomes a named,
@@ -22,8 +24,9 @@
 - **Refs:** principle P3 and its gate in the [decision index](../../design/decisions.md); the
   [architecture review](../research/2026-09-25-architecture-review/report-architecture.ru.md)
 
-The gate is `tools/xtask/src/globals.rs`; the entries live in the crate manifests. No global is
-removed by this ADR.
+The gate is `tools/xtask/src/globals.rs`; the entries live in the crate manifests. The gate
+itself removes no global; each removal lands with its own change. The Context table below is the
+inventory as of the ADR's date.
 
 ## Context
 

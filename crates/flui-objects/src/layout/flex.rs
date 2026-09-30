@@ -119,9 +119,8 @@ pub struct RenderFlex {
     /// children are laid out in.
     ///
     /// A horizontal flex (`Row`) consults this for its **main** axis: under
-    /// `Rtl` children are laid out right-to-left (`RenderFlex._flipMainAxis`,
-    /// `rendering/flex.dart`). A vertical flex (`Column`) consults this for
-    /// its **cross** axis instead (`_flipCrossAxis`) — its main axis is
+    /// `Rtl` children are laid out right-to-left. A vertical flex (`Column`)
+    /// consults this for its **cross** axis instead — its main axis is
     /// governed by `VerticalDirection`, which FLUI does not yet model, so a
     /// `Column`'s main axis never flips. Defaults to `Ltr`, matching every
     /// other FLUI render object that has no ambient `Directionality` to fall
@@ -139,9 +138,8 @@ pub struct RenderFlex {
     /// Index 0 = `Alphabetic`, index 1 = `Ideographic` (see [`baseline_kind_index`]).
     ///
     /// - Horizontal flex: minimum of `child_baseline + child_offset.dy` over
-    ///   all children (oracle: `box.dart:3336-3348` highest baseline).
-    /// - Vertical flex: first child in list order that has a baseline
-    ///   (oracle: `box.dart:3318-3330` first baseline).
+    ///   all children (the highest baseline).
+    /// - Vertical flex: first child in list order that has a baseline.
     ///
     /// Mirrors the eager-record convention of `AligningShiftedBox::child_baselines`
     /// (`shifted_box.rs:138-141`).  Reset to `[None; 2]` on layout when no
@@ -266,8 +264,7 @@ impl RenderFlex {
 
     /// Sets the spacing between children.
     ///
-    /// Debug-asserts `spacing >= 0.0` — Flutter's `RenderFlex` asserts the
-    /// same (`rendering/flex.dart`, tag `3.44.0`); a NaN also fails the
+    /// Debug-asserts `spacing >= 0.0`; a NaN also fails the
     /// comparison. Negative spacing would subtract main-axis extent and
     /// overlap children.
     pub fn with_spacing(mut self, spacing: f64) -> Self {
@@ -301,8 +298,7 @@ impl RenderFlex {
 
     /// Whether the main axis is laid out and iterated in reverse.
     ///
-    /// Mirrors Flutter `RenderFlex._flipMainAxis` (`rendering/flex.dart`):
-    /// only a horizontal flex (`Row`) consults `text_direction` here — a
+    /// Only a horizontal flex (`Row`) consults `text_direction` here — a
     /// vertical flex's main axis is governed by `VerticalDirection`, which
     /// FLUI does not model, so it never flips.
     fn flip_main_axis(&self) -> bool {
@@ -311,7 +307,7 @@ impl RenderFlex {
 
     /// Whether the cross axis's `Start`/`End` offsets are swapped.
     ///
-    /// Mirrors Flutter `RenderFlex._flipCrossAxis`: only a vertical flex
+    /// Only a vertical flex
     /// (`Column`) consults `text_direction` here — a horizontal flex's cross
     /// axis is governed by `VerticalDirection` instead, so a `Row` never
     /// flips its cross axis from `text_direction` alone.
@@ -351,8 +347,7 @@ impl RenderFlex {
         }
     }
 
-    /// Flutter `RenderFlex._getIntrinsicSize` main-axis branch
-    /// (`flex.dart:716-733`): flex children contribute via the largest
+    /// Main-axis intrinsic fold: flex children contribute via the largest
     /// per-flex-unit size; inflexible children sum directly.
     fn fold_main_axis_intrinsics(
         &self,
@@ -404,8 +399,8 @@ impl RenderFlex {
     /// Whether children are positioned by their baselines — only ever true for
     /// a horizontal flex, since a column has no shared baseline to align to.
     ///
-    /// Mirrors Flutter's `RenderFlex._isBaselineAligned`, which gates both the
-    /// baseline queries during sizing and the cross-axis offset formula.
+    /// Gates both the baseline queries during sizing and the cross-axis
+    /// offset formula.
     fn is_baseline_aligned(&self) -> bool {
         self.cross_axis_alignment == CrossAxisAlignment::Baseline
             && self.direction == FlexDirection::Horizontal
@@ -422,12 +417,9 @@ impl RenderFlex {
     ///
     /// The callback returns the baseline alongside the size because a
     /// baseline-aligned child's contribution to the cross extent is its ascent
-    /// and descent, not its raw cross size, and the reference queries the
-    /// baseline immediately after laying the child out. Callers that are not
-    /// baseline-aligned return `None` — mirroring the reference, which nulls
-    /// out the baseline kind unless [`Self::is_baseline_aligned`].
-    ///
-    /// Mirrors Flutter `RenderFlex._computeSizes`.
+    /// and descent, not its raw cross size, so the baseline is queried
+    /// immediately after laying the child out. Callers that are not
+    /// baseline-aligned return `None` (see [`Self::is_baseline_aligned`]).
     fn compute_sizes(
         &self,
         constraints: BoxConstraints,
@@ -438,7 +430,7 @@ impl RenderFlex {
         let child_count = flex_factors.len();
 
         // ── Zero-child fast path ──────────────────────────────────────────────
-        // Flutter flex.dart: `idealMainSize = maxMainSize` when MainAxisSize::Max
+        // The ideal main size is the max main extent when MainAxisSize::Max
         // and the main axis is bounded; otherwise collapse both axes.
         if child_count == 0 {
             let max_main = match self.direction {
@@ -464,8 +456,8 @@ impl RenderFlex {
         }
 
         // ── Cross-axis policy ─────────────────────────────────────────────────
-        // Flutter flex.dart:889-898: Stretch tightens the cross axis to max when
-        // it is bounded; all other alignments loosen the cross.
+        // Stretch tightens the cross axis to max when it is bounded; all
+        // other alignments loosen the cross.
         let stretch = self.cross_axis_alignment == CrossAxisAlignment::Stretch;
         let cross_max = match self.direction {
             FlexDirection::Horizontal => constraints.max_height,
@@ -534,8 +526,7 @@ impl RenderFlex {
         let total_spacing = self.spacing * (child_count - 1) as f64;
         inflexible_main += total_spacing;
 
-        // Flutter flex.dart:1232 — flex factors are meaningful only when the
-        // main axis is bounded. Under an unbounded main, flex children are
+        // Flex factors are meaningful only when the main axis is bounded. Under an unbounded main, flex children are
         // treated as inflexible (tight or zero allocation would collapse them).
         let max_main = match self.direction {
             FlexDirection::Horizontal => constraints.max_width,
@@ -603,8 +594,7 @@ impl RenderFlex {
         // individual child's own cross size. Children with no baseline (and
         // every child when the flex is not baseline-aligned) still contribute
         // their raw cross size through `max_cross`, so a tall no-baseline child
-        // continues to win. Mirrors Flutter's `_AscentDescent` accumulation
-        // folded into `accumulatedSize` in `RenderFlex._computeSizes`.
+        // continues to win.
         if let Some((ascent, descent)) = ascent_descent {
             max_cross = max_cross.max(ascent + descent);
         }
@@ -616,8 +606,8 @@ impl RenderFlex {
         }
         total_main += total_spacing;
 
-        // Flutter flex.dart:1298 — MainAxisSize::Max claims the full bounded
-        // main extent; Min shrink-wraps.
+        // MainAxisSize::Max claims the full bounded main extent; Min
+        // shrink-wraps.
         let ideal_main = if can_flex && self.main_axis_size == MainAxisSize::Max {
             max_main
         } else {
@@ -652,7 +642,6 @@ impl RenderFlex {
     /// (live baselines) and `compute_dry_baseline` (dry baselines) share one
     /// positioning home — one fact, one place.
     ///
-    /// Mirrors Flutter `RenderFlex.performLayout` offset loop (`flex.dart:1339+`).
     /// The returned `Vec` is parallel to `flex_sizes.child_sizes`.
     fn compute_child_offsets(
         &self,
@@ -666,14 +655,13 @@ impl RenderFlex {
 
         let main_extent = self.main_size(flex_sizes.size);
         let cross_extent = self.cross_size(flex_sizes.size);
-        // Flutter flex.dart:1339 — clamp free_space to zero so overflowing rows
-        // do not shift children by negative offsets under End/Center/Space*.
+        // Clamp free_space to zero so overflowing rows do not shift children
+        // by negative offsets under End/Center/Space*.
         let free_space = (main_extent - flex_sizes.total_main).max(0.0);
 
-        // Flutter flex.dart: `MainAxisAlignment._distributeSpace` derives `end`'s
-        // leading space from `start`'s formula with the flip inverted, which is
-        // equivalent to swapping Start/End up front and reusing one formula
-        // table below. Center/SpaceBetween/SpaceAround/SpaceEvenly are already
+        // `End`'s leading space is `Start`'s formula with the flip inverted,
+        // which is equivalent to swapping Start/End up front and reusing one
+        // formula table below. Center/SpaceBetween/SpaceAround/SpaceEvenly are already
         // symmetric, so flipping never changes their case.
         let flip_main_axis = self.flip_main_axis();
         let effective_main_axis_alignment = match (self.main_axis_alignment, flip_main_axis) {
@@ -703,7 +691,7 @@ impl RenderFlex {
             }
         };
 
-        // Same Start/End swap for the cross axis (`_flipCrossAxis`); unlike
+        // Same Start/End swap for the cross axis (`flip_cross_axis`); unlike
         // the main axis this never reorders children, it only changes which
         // physical edge each child's own offset is measured from.
         let effective_cross_axis_alignment =
@@ -713,7 +701,7 @@ impl RenderFlex {
                 (alignment, _) => alignment,
             };
 
-        // Flutter flex.dart: baseline cross-axis alignment applies to rows only.
+        // Baseline cross-axis alignment applies to rows only.
         // Find the maximum alignment-baseline distance — all children shift down
         // so their baselines land on the same horizontal level.
         let max_alignment_baseline = if self.direction == FlexDirection::Horizontal
@@ -727,9 +715,9 @@ impl RenderFlex {
             None
         };
 
-        // Flutter flex.dart's offset loop walks from `topLeftChild` (last
-        // child, iterating `childBefore`) when `flipMainAxis`, instead of the
-        // usual first-child-forward order — the visual placement order
+        // When `flip_main_axis` the offset loop walks from the last child
+        // backwards, instead of the usual first-child-forward order — the
+        // visual placement order
         // reverses under RTL even though each child's own offset is still
         // measured in the same local (always-increasing-rightward) coordinate
         // space. `offsets` is written by real child index so the caller sees
@@ -840,8 +828,8 @@ impl RenderBox for RenderFlex {
             ctx.position_child(i, child_offset);
 
             // Record the flex's own baseline for both kinds.
-            // Horizontal → highest = minimum (oracle box.dart:3336-3348).
-            // Vertical   → first child in list order (oracle box.dart:3318-3330).
+            // Horizontal → highest = minimum.
+            // Vertical   → first child in list order.
             // The queried kind differs from the alignment kind in the general case,
             // so both are queried; when kind == self.text_baseline and the
             // Baseline alignment was active, reuse the pre-queried value instead
@@ -913,11 +901,9 @@ impl RenderBox for RenderFlex {
     /// Returns the flex's own baseline recorded during `perform_layout`.
     ///
     /// - Horizontal: the **highest** baseline across children — the minimum of
-    ///   `child_baseline + child_offset.dy` (oracle: `box.dart:3336-3348`,
-    ///   `flex.dart:806-812`).
+    ///   `child_baseline + child_offset.dy`.
     /// - Vertical: the **first** child baseline in list order —
-    ///   `child_baseline + child_offset.dy` (oracle: `box.dart:3318-3330`,
-    ///   `flex.dart:806-812`).
+    ///   `child_baseline + child_offset.dy`.
     ///
     /// Both kinds are recorded eagerly so the querying parent can choose;
     /// this mirrors `AligningShiftedBox::actual_baseline` (`shifted_box.rs:154`).
@@ -930,8 +916,7 @@ impl RenderBox for RenderFlex {
     /// Uses `ctx.child_dry_layout` + `ctx.child_dry_baseline` through the shared
     /// `compute_child_offsets` helper (flui-rendering ARCHITECTURE.md, reported baselines), so the offset/positioning
     /// math is not duplicated.  Applies the same horizontal/highest vs
-    /// vertical/first formulas as the live path (oracle: `flex.dart:936-1025` /
-    /// `box.dart:3318-3348`).
+    /// vertical/first formulas as the live path.
     fn compute_dry_baseline(
         &self,
         constraints: BoxConstraints,

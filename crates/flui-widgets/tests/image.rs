@@ -1,4 +1,4 @@
-//! Layout parity tests for the `Image` widget's synchronous path.
+//! Layout tests for the `Image` widget's synchronous path.
 //!
 //! Each test exercises a distinct layout mode and asserts a computed size that
 //! would be wrong if the widget mis-wired its render object, swapped
@@ -47,9 +47,7 @@ fn image_from_decoded_lays_out_at_intrinsic_size() {
 // ---------------------------------------------------------------------------
 // Full-pipeline paint-geometry wiring
 //
-// Not direct `image_test.dart` ports -- Flutter's fit/alignment paint math
-// has its own oracle, `painting/paint_image_test.dart`, outside this
-// corpus's denominator, and `RenderImage`'s fit math is already exhaustively
+// `RenderImage`'s fit math is already exhaustively
 // unit-tested in `crates/flui-objects/src/image/render_image.rs`
 // (`test_compute_paint_rect_*`, `test_paint_*`). These three prove the
 // WIRING instead: that a real `Image` widget, mounted through the full

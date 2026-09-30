@@ -1,9 +1,8 @@
 //! Semantics proxy render objects.
 //!
-//! These mirror Flutter's `RenderSemanticsAnnotations`,
-//! `RenderMergeSemantics`, and `RenderExcludeSemantics` from
-//! `rendering/proxy_box.dart`. Layout, paint, and hit-testing are transparent
-//! single-child proxy behavior; only the semantics hooks differ.
+//! Semantics annotations, merging and exclusion. Layout, paint, and
+//! hit-testing are transparent single-child proxy behavior; only the
+//! semantics hooks differ.
 
 use flui_foundation::Single;
 
@@ -302,9 +301,8 @@ impl RenderBox for RenderSemanticsAnnotations {
 /// A render object that annotates its child's semantics node with an index
 /// among its siblings.
 ///
-/// Flutter's `RenderIndexedSemantics` (`rendering/proxy_box.dart`). The index
-/// is the "12" a screen reader announces in "item 12 of 100", and is
-/// **zero-based** as the reference's is; the one-based conversion AccessKit's
+/// The index is the "12" a screen reader announces in "item 12 of 100", and is
+/// **zero-based**; the one-based conversion AccessKit's
 /// `position_in_set` wants happens once, at the platform boundary.
 #[derive(Debug, Clone)]
 pub struct RenderIndexedSemantics {
@@ -330,8 +328,7 @@ impl RenderIndexedSemantics {
 
     /// Sets the index, reporting whether semantics must be republished.
     ///
-    /// An unchanged index reports [`RenderUpdateImpact::NONE`](flui_rendering::RenderUpdateImpact::NONE) — Flutter's
-    /// setter returns early on the same comparison. Index churn is the norm on
+    /// An unchanged index reports [`RenderUpdateImpact::NONE`](flui_rendering::RenderUpdateImpact::NONE). Index churn is the norm on
     /// a scrolling list (every item's wrapper is rebuilt as the band moves),
     /// so a setter that always marked would republish the whole subtree's
     /// semantics on every frame of a scroll.

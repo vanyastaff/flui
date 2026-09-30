@@ -1,17 +1,13 @@
 //! [`ButtonStyle`] — the property bag the M3 button family resolves against.
 //!
-//! # Flutter parity
-//!
-//! `material/button_style.dart`'s `ButtonStyle` (oracle tag `3.44.0`): a
-//! bag of nullable, per-state property slots. Every field is `null` by
+//! A bag of optional, per-state property slots. Every field is `None` by
 //! default; a button's visible style comes from resolving each slot through
 //! `crate::button_style_button`'s widget → theme → default cascade — see
 //! that module's docs for how the cascade consumes this shape.
 //!
 //! # Slot shape: `Option<WidgetStateProperty<Option<V>>>`
 //!
-//! The double `Option` encodes two independent "unset" signals the oracle
-//! collapses into one nullable field:
+//! The double `Option` encodes two independent "unset" signals:
 //!
 //! - **Outer `Option`** — this property was never configured at all (the
 //!   whole slot falls through to the next tier: widget → theme → default).
@@ -22,10 +18,8 @@
 //!   module docs, the substrate this button family was built against).
 //!
 //! Both signals fall through identically in
-//! `crate::button_style_button`'s resolver, matching the oracle's
-//! `getProperty(style)?.resolve(states) ?? …` chain (`button_style_button.dart`,
-//! tag `3.44.0`) where a null *property* and a property that *resolves* to
-//! null behave the same way.
+//! `crate::button_style_button`'s resolver: an unset *property* and a property
+//! that *resolves* to `None` behave the same way.
 //!
 //! # Shape: an all-optional patch, not `#[non_exhaustive]`
 //!
@@ -44,13 +38,12 @@
 //! ceremony — see those types' doc comments for the same reasoning spelled
 //! out in full.
 //!
-//! # V1 slots vs. the oracle's full field list
+//! # V1 slots
 //!
-//! Ported: `text_style`, `background_color`, `foreground_color`,
+//! `text_style`, `background_color`, `foreground_color`,
 //! `overlay_color`, `elevation`, `padding`, `minimum_size`, `fixed_size`,
-//! `maximum_size`, `side`, `shape` — the eleven slots every
-//! `_TokenDefaultsM3` table in `elevated_button.dart`/`filled_button.dart`/
-//! `outlined_button.dart`/`text_button.dart` (oracle tag `3.44.0`) populates.
+//! `maximum_size`, `side`, `shape` — the eleven slots every M3 default table
+//! in the button family populates.
 //!
 //! Named omissions, not silently dropped:
 //!
@@ -63,9 +56,9 @@
 //!   substrate (`InkWell`'s own named deferral) to select a splash factory
 //!   for.
 //! - **`visual_density` / `tap_target_size`** — FLUI has no `VisualDensity`
-//!   type; every button below skips the `_InputPadding`/density-adjustment
-//!   step the oracle's `_ButtonStyleState.build` performs.
-//! - **`alignment`** — the oracle's `Align`-wrapped child slot; the V1
+//!   type; every button below skips the tap-target padding and
+//!   density-adjustment step.
+//! - **`alignment`** — an `Align`-wrapped child slot; the V1
 //!   composition in `crate::button_style_button` omits the `Align` layer
 //!   entirely (see that module's docs).
 //! - **`shadow_color` / `surface_tint_color`** — `Material`'s own
@@ -76,10 +69,8 @@
 //!   all three presuppose the icon constructor and/or an extension point
 //!   (`crate::button_style_button`'s composition is currently fixed, not
 //!   builder-customizable).
-//! - **[`ButtonStyle::lerp`]** — arrives when a component first needs
+//! - **`ButtonStyle::lerp`** — arrives when a component first needs
 //!   `AnimatedTheme`; nothing here consumes an interpolated style yet.
-//!
-//! [`ButtonStyle::lerp`]: https://api.flutter.dev/flutter/material/ButtonStyle/lerp.html
 
 use flui_sdk::painting::BorderSide;
 use flui_sdk::painting::TextStyle;
@@ -91,12 +82,9 @@ use flui_sdk::{
 
 use crate::shape::MaterialShape;
 
-/// The visual properties most buttons have in common — Flutter's
-/// `ButtonStyle`.
+/// The visual properties most buttons have in common.
 ///
-/// Every field is `None` by default (Flutter parity: "All of the ButtonStyle
-/// properties are null by default", `button_style.dart` doc comment). Build
-/// one with a struct literal and `..Default::default()`:
+/// Every field is `None` by default. Build one with a struct literal and `..Default::default()`:
 ///
 /// ```rust
 /// use flui_material::ButtonStyle;
@@ -114,50 +102,39 @@ use crate::shape::MaterialShape;
 /// deliberately not `#[non_exhaustive]`, and the V1 slot list.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ButtonStyle {
-    /// The style for the button's text descendants. Flutter parity:
-    /// `ButtonStyle.textStyle`.
+    /// The style for the button's text descendants.
     pub text_style: Option<WidgetStateProperty<Option<TextStyle>>>,
 
-    /// The button's background fill color. Flutter parity:
-    /// `ButtonStyle.backgroundColor`.
+    /// The button's background fill color.
     pub background_color: Option<WidgetStateProperty<Option<Color>>>,
 
     /// The color for the button's text descendants — takes precedence over
-    /// [`text_style`](Self::text_style)'s own color (see the oracle's own
-    /// doc comment on `foregroundColor`). Flutter parity:
-    /// `ButtonStyle.foregroundColor`.
+    /// [`text_style`](Self::text_style)'s own color.
     pub foreground_color: Option<WidgetStateProperty<Option<Color>>>,
 
     /// The state-overlay highlight color, resolved and handed to the
     /// button's `InkWell` as a live property (not a single baked value —
-    /// see `crate::button_style_button`'s docs). Flutter parity:
-    /// `ButtonStyle.overlayColor`.
+    /// see `crate::button_style_button`'s docs).
     pub overlay_color: Option<WidgetStateProperty<Option<Color>>>,
 
-    /// The elevation of the button's `Material`. Flutter parity:
-    /// `ButtonStyle.elevation`.
+    /// The elevation of the button's `Material`.
     pub elevation: Option<WidgetStateProperty<Option<f64>>>,
 
-    /// The padding between the button's boundary and its child. Flutter
-    /// parity: `ButtonStyle.padding` (narrowed to `EdgeInsets`; the oracle's
-    /// `EdgeInsetsGeometry` directional variant has no FLUI consumer yet).
+    /// The padding between the button's boundary and its child (an
+    /// `EdgeInsets`; a directional variant has no FLUI consumer yet).
     pub padding: Option<WidgetStateProperty<Option<EdgeInsets>>>,
 
-    /// The minimum size of the button itself. Flutter parity:
-    /// `ButtonStyle.minimumSize`.
+    /// The minimum size of the button itself.
     pub minimum_size: Option<WidgetStateProperty<Option<Size>>>,
 
     /// The button's fixed size, overriding [`minimum_size`](Self::minimum_size)/
     /// [`maximum_size`](Self::maximum_size) on whichever axis is finite.
-    /// Flutter parity: `ButtonStyle.fixedSize`.
     pub fixed_size: Option<WidgetStateProperty<Option<Size>>>,
 
-    /// The maximum size of the button itself. Flutter parity:
-    /// `ButtonStyle.maximumSize`.
+    /// The maximum size of the button itself.
     pub maximum_size: Option<WidgetStateProperty<Option<Size>>>,
 
-    /// The color and weight of the button's outline. Flutter parity:
-    /// `ButtonStyle.side`.
+    /// The color and weight of the button's outline.
     ///
     /// **Data-complete, not yet painted**: this slot resolves correctly
     /// (exercised by [`OutlinedButton`](crate::OutlinedButton)'s
@@ -168,8 +145,8 @@ pub struct ButtonStyle {
     /// yet draw a stroke.
     pub side: Option<WidgetStateProperty<Option<BorderSide<f64>>>>,
 
-    /// The shape of the button's underlying `Material`. Flutter parity:
-    /// `ButtonStyle.shape` (narrowed to [`MaterialShape`]; the oracle's open
-    /// `OutlinedBorder` hierarchy is `Material`'s own named deferral).
+    /// The shape of the button's underlying `Material` (a
+    /// [`MaterialShape`]; an open border hierarchy is `Material`'s own named
+    /// deferral).
     pub shape: Option<WidgetStateProperty<Option<MaterialShape>>>,
 }

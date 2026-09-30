@@ -2,63 +2,41 @@
 //! outlined/filled information element with an optional leading avatar and
 //! trailing delete affordance.
 //!
-//! # Flutter parity
+//! # V1 scope: a reduced chip family
 //!
-//! `material/chip.dart`'s `Chip`/`RawChip`/`_ChipDefaultsM3`,
-//! `material/chip_theme.dart`'s `ChipThemeData`, and
-//! `material/filter_chip.dart`'s `FilterChip`/`_FilterChipDefaultsM3` (oracle
-//! tag `3.44.0`).
+//! The M3 chip family has several kinds (assist, input, choice, filter,
+//! action) that differ only in how one shared state machine is configured.
+//! This V1 ships two shapes, [`Chip`] and [`FilterChip`], each composing the
+//! same reduced primitives ([`Material`], [`InkWell`], shared default-token
+//! functions in this module) directly. Input, choice and action chips are
+//! named deferrals: each is a thin reconfiguration the same shared functions
+//! already support, they just have no constructor yet.
 //!
-//! # V1 scope: `RawChip`, honestly reduced
+//! [`Chip`] uses the generic M3 chip default table and widens it with an
+//! optional [`Chip::on_pressed`], so a tappable "assist-shaped" chip is
+//! available. This is a deliberate, documented widening of `Chip`'s surface,
+//! not a change to the token values.
 //!
-//! The oracle's chip family is one `RawChip` state machine that every
-//! concrete chip type (`Chip`, `InputChip`, `ChoiceChip`, `FilterChip`,
-//! `ActionChip`) configures differently. FLUI does not port `RawChip` itself
-//! — it ports the two shapes this V1 ships, [`Chip`] and [`FilterChip`],
-//! each composing the same reduced primitives ([`Material`], [`InkWell`],
-//! shared default-token functions in this module) directly. `InputChip`,
-//! `ChoiceChip`, and `ActionChip` are named deferrals: each is a thin
-//! `RawChip` reconfiguration the same shared functions already support, they
-//! just have no constructor yet.
-//!
-//! No `assist_chip.dart` file exists at this oracle tag — M3's "assist chip"
-//! shape is realized by `ActionChip`'s own `_ActionChipDefaultsM3`, a
-//! variant `_ChipDefaultsM3` this V1 does not port. [`Chip`] instead ports
-//! `_ChipDefaultsM3` directly (`RawChip`'s own generic fallback default
-//! table, the one `Chip.build` implicitly gets since it passes no
-//! `defaultProperties`) and widens it with an optional
-//! [`Chip::on_pressed`] — the oracle's bare `Chip` never exposes `onPressed`
-//! (`ActionChip` owns that), but `RawChip` itself already supports it, and a
-//! tappable "assist-shaped" chip is exactly what this task calls for. This
-//! is a deliberate, documented widening of `Chip`'s surface beyond the
-//! oracle's own `Chip`, not a divergence in `_ChipDefaultsM3`'s token
-//! values.
-//!
-//! Similarly, [`Chip::enabled`] surfaces `RawChip.isEnabled` directly (the
-//! oracle's `Chip.build` never varies it — it is always `true`) so the M3
-//! default table's disabled branch is reachable and testable on this V1
-//! type, matching the task's expected disabled-state coverage.
+//! Similarly, [`Chip::enabled`] is exposed directly so the M3 default
+//! table's disabled branch is reachable and testable on this V1 type.
 //!
 //! # `ChipThemeData`: plain overrides, not `WidgetStateProperty`
 //!
 //! Unlike [`crate::CheckboxThemeData`]/[`crate::SwitchThemeData`]/
 //! [`crate::RadioThemeData`]/[`crate::NavigationBarThemeData`], whose color
-//! slots are all `Option<WidgetStateProperty<Option<Color>>>` — because
-//! their own oracle theme types (`checkbox_theme.dart` and siblings)
-//! genuinely type those fields as `WidgetStateProperty`, [`crate::ChipThemeData`]'s
-//! fields are **plain** (`Option<Color>`, `Option<BorderSide<f64>>`, …).
-//! This mirrors `chip_theme.dart` exactly: every `ChipThemeData` field
-//! except `color` (the container fill, not ported to the theme tier here —
-//! see below) is a plain, non-resolved value in the oracle too. Per-state
+//! slots are all `Option<WidgetStateProperty<Option<Color>>>`,
+//! [`crate::ChipThemeData`]'s fields are **plain** (`Option<Color>`,
+//! `Option<BorderSide<f64>>`, …): every field except `color` (the container
+//! fill, not exposed at the theme tier here — see below) is a plain,
+//! non-resolved value. Per-state
 //! variation for label/icon/delete-icon color is entirely a property of the
-//! `_ChipDefaultsM3`/`_FilterChipDefaultsM3` *default* tables (each
-//! reconstructed fresh per build with the current `isEnabled`/`isSelected`
-//! already closed over — so their getters return already-resolved plain
-//! values, not deferred per-state properties); the theme/widget tiers above
-//! that default only ever override with one fixed value, never a function
-//! of state.
+//! M3 *default* tables (each reconstructed fresh per build with the current
+//! enabled/selected state already closed over — so their getters return
+//! already-resolved plain values, not deferred per-state properties); the
+//! theme/widget tiers above that default only ever override with one fixed
+//! value, never a function of state.
 //!
-//! This has a structural benefit beyond fidelity: with no
+//! This has a structural benefit: with no
 //! `WidgetStateProperty::Map` anywhere in [`crate::ChipThemeData`], the
 //! first-match-wins map-ordering hazard [`crate::NavigationBar`]'s own
 //! module docs warn about (a `Map` ordered `[Is(Selected), Is(Disabled),
@@ -91,7 +69,7 @@
 //! [`Material`] fills, clips, and elevates but paints no border side (see
 //! that module's shape docs) — the same gap [`crate::OutlinedButton`] left
 //! unpainted. [`Chip`]'s outline is load-bearing (the base chip has no fill
-//! at all — `_ChipDefaultsM3.color` is `null`, i.e. transparent, so the
+//! at all — its default color is transparent, so the
 //! stroke is the only visible container boundary), so this V1 draws it
 //! directly: a [`flui_sdk::widgets::CustomPaint`] wraps the [`Material`] subtree
 //! with a `foreground_painter` that strokes the resolved [`MaterialShape`]
@@ -105,72 +83,56 @@
 //!
 //! # Selection: checkmark replaces the avatar, snapped
 //!
-//! The oracle animates a selected [`FilterChip`]'s leading slot between the
-//! avatar and an overlaid checkmark (`AnimationController`-driven
-//! avatar-drawer width plus a `srcATop`-blended darkening scrim under the
-//! check, `chip.dart`'s `_paintSelectionOverlay`). This V1 **snaps**: no
+//! A fuller implementation animates a selected [`FilterChip`]'s leading slot
+//! between the avatar and an overlaid checkmark (animated avatar-drawer width
+//! plus a blended darkening scrim under the check). This V1 **snaps**: no
 //! animation, and the checkmark *replaces* the avatar in the leading slot
 //! rather than painting an overlay on top of it (see this module's own
-//! `filter_chip_leading_content`) — a further reduction than the oracle's
-//! own overlay shape, chosen because painting a darkening scrim over an
-//! arbitrary caller-supplied avatar widget has no home in this substrate's
-//! paint primitives yet. The checkmark geometry itself (`ChipCheckmarkPainter`,
-//! this module, private) is a direct, honest port of the oracle's own
-//! relative-coordinate stroke path (`_paintCheck`, `chip.dart`) at its
-//! fully-settled shape — the same "real stroked geometry, `t == 1.0`"
-//! precedent this crate's `checkbox::CheckboxPainter`'s own module docs
-//! describe.
+//! `filter_chip_leading_content`) — chosen because painting a darkening scrim
+//! over an arbitrary caller-supplied avatar widget has no home in this
+//! substrate's paint primitives yet. The checkmark geometry itself
+//! (`ChipCheckmarkPainter`, this module, private) is a real stroked
+//! relative-coordinate path at its fully-settled shape — the same "real
+//! stroked geometry, settled" precedent this crate's
+//! `checkbox::CheckboxPainter`'s own module docs describe.
 //!
 //! # Disabled content: steady-state 38% opacity, no fade
 //!
-//! The oracle wraps a chip's avatar (`_paintAvatar`) and separately its
-//! label/delete icon (`_paintChild`) each in their own `pushOpacity` (or an
-//! equivalent `saveLayer`) at `_disabledColor.alpha`, gated on
-//! `!enableAnimation.isCompleted` (`chip.dart` `:2199-2231`/`:2236-2275`,
-//! oracle tag `3.44.0`) — and that gate is true not only *during* an
-//! enable/disable transition but for the entire steady-state lifetime of a
-//! chip that is (and stays) disabled, since `enableController` never runs
-//! `forward()` for it. `_disabledColor.alpha` itself resolves to
-//! `_kDisabledAlpha` (`0x61`, `chip.dart`) whenever `enableAnimation` is not
-//! completed, `0xff` (opaque) once it is. This V1 has no
-//! `enableController`/`AnimationController` to run at all (see the
-//! "Deferred" list below), but the *steady-state* alpha is still real,
-//! observable behavior a disabled chip must show — not merely a transition
-//! artifact safe to snap away. So [`Chip`]/[`FilterChip`] wrap their
-//! composed avatar/label/delete content (never the container fill or
-//! border, which the oracle's `Ink`/`ShapeDecoration` painting never wraps
-//! in this opacity layer either) in one [`flui_sdk::widgets::Opacity`] at the
-//! private `DISABLED_CONTENT_ALPHA` when disabled, `1.0` when enabled — a single
-//! group wrap rather than the oracle's three separate `pushOpacity` calls,
-//! which is equivalent here since every one of those three calls uses the
-//! identical alpha value (there is no per-slot variation to preserve by
-//! keeping them separate).
+//! A chip's avatar and its label/delete icon are drawn at a reduced alpha
+//! (`0x61`) whenever the chip is not fully enabled — and that is true not
+//! only *during* an enable/disable transition but for the entire
+//! steady-state lifetime of a chip that is (and stays) disabled. This V1 has
+//! no enable animation to run at all (see the "Deferred" list below), but the
+//! *steady-state* alpha is still real, observable behavior a disabled chip
+//! must show — not merely a transition artifact safe to snap away. So
+//! [`Chip`]/[`FilterChip`] wrap their composed avatar/label/delete content
+//! (never the container fill or border, which are not drawn through this
+//! opacity layer) in one [`flui_sdk::widgets::Opacity`] at the private
+//! `DISABLED_CONTENT_ALPHA` when disabled, `1.0` when enabled — a single
+//! group wrap, which is equivalent to wrapping each slot separately since
+//! every slot uses the identical alpha value.
 //!
 //! # Deferred (named, not silently dropped)
 //!
 //! - **Avatar/delete/selection/enable animation** — every transition snaps
 //!   directly to its settled end state (including the disabled-content
 //!   opacity — see the "Disabled content" section above: the *value* is
-//!   ported, the *fade into/out of* it is not); see the sections above.
-//! - **Elevated variants** (`FilterChip.elevated`, and any chip's non-zero
-//!   `elevation`/`pressElevation`) — V1 is flat-only, elevation fixed at
-//!   `0.0`.
-//! - **`InputChip`, `ChoiceChip`, `ActionChip`** — see the "V1 scope"
+//!   applied, the *fade into/out of* it is not); see the sections above.
+//! - **Elevated variants** (and any chip's non-zero elevation or press
+//!   elevation) — V1 is flat-only, elevation fixed at `0.0`.
+//! - **Input, choice and action chips** — see the "V1 scope"
 //!   section above.
 //! - **Custom `delete_icon` widget override** — the delete affordance
-//!   always renders the M3 default glyph (`Icons.cancel` for [`Chip`],
-//!   `Icons.clear` for [`FilterChip`] — see `_kDefaultDeleteIcon` and
-//!   `FilterChip.build`'s own `resolvedDeleteIcon`, both `chip.dart`/
-//!   `filter_chip.dart`).
-//! - **Delete-button tooltip** (`deleteButtonTooltipMessage`,
-//!   `MaterialLocalizations.deleteButtonTooltip`) — no localization
+//!   always renders the M3 default glyph (`cancel` for [`Chip`], `clear` for
+//!   [`FilterChip`]).
+//! - **Delete-button tooltip** — no localization
 //!   substrate consumes it yet.
 //! - **RTL** — the content `Row` always lays out left-to-right; no
 //!   `Directionality` ambient in this substrate yet (the same gap
 //!   [`flui_sdk::widgets::Icon`]'s own docs already name).
 //! - **`focus_node`/`autofocus`** — [`InkWell`] itself has no `autofocus`
 //!   hook yet, matching every other selection-control's own deferred list.
-//! - **`avatarBoxConstraints`/`deleteIconBoxConstraints`** — the avatar
+//! - **Avatar/delete-icon box constraints** — the avatar
 //!   sizes intrinsically (no forced square constraint); the delete icon is
 //!   fixed at [`CHIP_ICON_SIZE`].
 //! - **Material elevation interplay, press elevation** — elevation is fixed
@@ -202,48 +164,37 @@ use crate::material::Material;
 use crate::shape::MaterialShape;
 use crate::theme::Theme;
 
-/// The container's target height when its content fits within it. Flutter
-/// parity: `_kChipHeight` (`chip.dart`, oracle tag `3.44.0`).
+/// The container's target height when its content fits within it.
 pub const CHIP_HEIGHT: f64 = 32.0;
 
-/// The container's corner radius. Flutter parity: `_ChipDefaultsM3.shape` /
-/// `_FilterChipDefaultsM3`'s constructor, both
-/// `RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(8.0)))`.
+/// The container's corner radius, `8.0`.
 const CORNER_RADIUS: f64 = 8.0;
 
-/// The avatar/delete-icon/checkmark side length. Flutter parity:
-/// `_ChipDefaultsM3.iconTheme`/`_FilterChipDefaultsM3.iconTheme`'s
-/// `size: 18.0`.
+/// The avatar/delete-icon/checkmark side length, `18.0`.
 pub const CHIP_ICON_SIZE: f64 = 18.0;
 
-/// The default container padding. Flutter parity: `_ChipDefaultsM3.padding`/
-/// `_FilterChipDefaultsM3.padding`, `EdgeInsets.all(8.0)`.
+/// The default container padding, `EdgeInsets::all(8.0)`.
 const PADDING: f64 = 8.0;
 
-/// The default label padding (horizontal only). Flutter parity: the
-/// text-scale-1x tier of `_ChipDefaultsM3.labelPadding`/
-/// `_FilterChipDefaultsM3.labelPadding`, `EdgeInsets.symmetric(horizontal:
-/// 8.0)` — the text-scaler-driven 8px-to-4px interpolation is a named V1
+/// The default label padding (horizontal only), at text scale 1x — the
+/// text-scaler-driven 8px-to-4px interpolation is a named V1
 /// simplification (no `MediaQuery` text-scaling substrate consumed here,
 /// the same gap [`crate::elevated_button`]'s own `scaled_padding_1x` docs
 /// already name for button padding).
 const LABEL_PADDING_HORIZONTAL: f64 = 8.0;
 
-/// `Icons.cancel`'s codepoint (`MaterialIcons`), [`Chip`]'s default delete
-/// glyph. Flutter parity: `_kDefaultDeleteIcon = Icon(Icons.cancel)`
-/// (`chip.dart`, oracle tag `3.44.0`).
+/// The `cancel` icon's codepoint (`MaterialIcons`), [`Chip`]'s default delete
+/// glyph.
 const DELETE_ICON_CANCEL_CODEPOINT: u32 = 0xE139;
 
-/// `Icons.clear`'s codepoint (`MaterialIcons`), [`FilterChip`]'s default
-/// delete glyph. Flutter parity: `FilterChip.build`'s `resolvedDeleteIcon`
-/// (`const Icon(Icons.clear, size: 18)`, `filter_chip.dart`, oracle tag
-/// `3.44.0`).
+/// The `clear` icon's codepoint (`MaterialIcons`), [`FilterChip`]'s default
+/// delete glyph.
 const DELETE_ICON_CLEAR_CODEPOINT: u32 = 0xE168;
 
-/// The opacity a disabled chip's avatar/label/delete content settles at.
-/// Flutter parity: `_kDisabledAlpha` (`chip.dart`, `0x61`) — see the module
-/// docs' "Disabled content" section for why this is steady-state behavior,
-/// not merely a transition artifact this V1 is entitled to snap away.
+/// The opacity a disabled chip's avatar/label/delete content settles at
+/// (`0x61`) — see the module docs' "Disabled content" section for why this is
+/// steady-state behavior, not merely a transition artifact this V1 is
+/// entitled to snap away.
 const DISABLED_CONTENT_ALPHA: f64 = 0x61 as f64 / 255.0;
 
 /// The content opacity for a chip in `enabled`'s state — `1.0` enabled,
@@ -271,14 +222,13 @@ fn clear_icon_data() -> IconData {
 /// default tables' `disabled > selected > else` branch order resolves
 /// against.
 ///
-/// Flutter parity: this is the same shape the private
-/// `navigation_destination_states` helper (`navigation_bar.rs`) establishes,
-/// applied here for the identical reason — `_ChipDefaultsM3`/
-/// `_FilterChipDefaultsM3`'s label/icon/delete-icon-color getters all read
-/// as a plain `isEnabled ? (isSelected ? A : B) : C` ternary (disabled
-/// always wins, selected only distinguishes within the enabled branch),
-/// never a state genuinely carrying both `Selected` and `Disabled` at once
-/// for those fields. A combined query would risk resolving the wrong branch
+/// This is the same shape the private `navigation_destination_states`
+/// helper (`navigation_bar.rs`) establishes, applied here for the identical
+/// reason — the label/icon/delete-icon-color defaults all read as a plain
+/// `enabled ? (selected ? A : B) : C` ternary (disabled always wins, selected
+/// only distinguishes within the enabled branch), never a state genuinely
+/// carrying both `Selected` and `Disabled` at once for those fields. A
+/// combined query would risk resolving the wrong branch
 /// through a `WidgetStateProperty::Map`-shaped consumer (see the module
 /// docs) even though [`crate::ChipThemeData`] itself has no such field
 /// today.
@@ -315,18 +265,13 @@ fn resolve_pure_chip_default(
     }
 }
 
-/// The label and delete-icon color default table. Flutter parity:
-/// `_FilterChipDefaultsM3.labelStyle`/`.deleteIconColor` (`filter_chip.dart`,
-/// oracle tag `3.44.0`) — the real three-way (`disabled`/`selected`/`else`)
-/// table. `_ChipDefaultsM3.labelStyle`/`.deleteIconColor` (`chip.dart`) has
-/// **no** `isSelected` member at all — it is a plain two-way `isEnabled ?
-/// onSurfaceVariant : onSurface` ternary, since a bare `Chip` is never
-/// selected. That two-way table's `enabled` value is identical to this
-/// function's `unselected` branch, and [`Chip`]'s own [`chip_states`] call
-/// site never sets [`WidgetState::Selected`] (see [`chip_icon_color_default`]'s
-/// doc comment for the same note) — so reusing this one function for both
-/// [`Chip`] and [`FilterChip`] is safe, but is not itself evidence that
-/// `_ChipDefaultsM3` has a selected branch.
+/// The label and delete-icon color default table: a three-way
+/// (`disabled`/`selected`/`else`) table. A bare [`Chip`] is never selected, so
+/// its plain two-way `enabled ? onSurfaceVariant : onSurface` table is
+/// identical to this function's `unselected` branch, and [`Chip`]'s own
+/// [`chip_states`] call site never sets [`WidgetState::Selected`] (see
+/// [`chip_icon_color_default`]'s doc comment for the same note) — so reusing
+/// this one function for both [`Chip`] and [`FilterChip`] is safe.
 fn chip_content_color_default(states: WidgetStates, colors: &ColorScheme) -> Color {
     resolve_pure_chip_default(
         states,
@@ -336,16 +281,12 @@ fn chip_content_color_default(states: WidgetStates, colors: &ColorScheme) -> Col
     )
 }
 
-/// The avatar and checkmark icon color default table. Flutter parity:
-/// `_FilterChipDefaultsM3.iconTheme.color`/`.checkmarkColor`
-/// (`filter_chip.dart`, oracle tag `3.44.0`) — the real three-way
-/// (`disabled`/`selected`/`else`) table. `_ChipDefaultsM3.iconTheme.color`
-/// (`chip.dart`) has **no** `isSelected` member — it is a plain two-way
-/// `isEnabled ? primary : onSurface` ternary. That two-way table's `enabled`
-/// value is identical to this function's `unselected` branch, and
-/// [`Chip`]'s own states never carry `Selected` (see [`chip_states`]'s call
-/// site in [`Chip`]'s build), so the `selected` branch is simply
-/// unreachable there rather than evidence `_ChipDefaultsM3` itself has one.
+/// The avatar and checkmark icon color default table: a three-way
+/// (`disabled`/`selected`/`else`) table. A bare [`Chip`]'s plain two-way
+/// `enabled ? primary : onSurface` table is identical to this function's
+/// `unselected` branch, and [`Chip`]'s own states never carry `Selected` (see
+/// [`chip_states`]'s call site in [`Chip`]'s build), so the `selected` branch
+/// is simply unreachable there.
 fn chip_icon_color_default(states: WidgetStates, colors: &ColorScheme) -> Color {
     resolve_pure_chip_default(
         states,
@@ -355,15 +296,11 @@ fn chip_icon_color_default(states: WidgetStates, colors: &ColorScheme) -> Color 
     )
 }
 
-/// The container border default table. Flutter parity:
-/// `_FilterChipDefaultsM3.side` (flat variant only — see the module docs),
-/// `filter_chip.dart`, oracle tag `3.44.0` — the real `selected`-gated
-/// table. `_ChipDefaultsM3.side` (`chip.dart`) has **no** `isSelected`
-/// member — it is a plain two-way `isEnabled ? outlineVariant :
-/// onSurface@12%` ternary, since a bare `Chip` is never selected; that
-/// two-way table agrees with this function's `enabled`/`disabled`
-/// (unselected) branches, so [`Chip`] safely calls this same function with
-/// `selected` pinned to `false`.
+/// The container border default table (flat variant only — see the module
+/// docs), a `selected`-gated table. A bare `Chip` is never selected, and its
+/// plain two-way `enabled ? outlineVariant : onSurface@12%` table agrees with
+/// this function's `enabled`/`disabled` (unselected) branches, so [`Chip`]
+/// safely calls this same function with `selected` pinned to `false`.
 ///
 /// **Combined-state, not pure**: `selected` is checked FIRST and wins
 /// unconditionally (a selected chip's side is transparent whether or not it
@@ -391,8 +328,7 @@ fn chip_default_side(selected: bool, enabled: bool, colors: &ColorScheme) -> Bor
     }
 }
 
-/// The default container shape: an 8dp rounded rectangle. Flutter parity:
-/// `_ChipDefaultsM3`/`_FilterChipDefaultsM3`'s constructor `shape:`.
+/// The default container shape: an 8dp rounded rectangle.
 fn chip_default_shape() -> MaterialShape {
     use flui_sdk::painting::BorderRadius;
     MaterialShape::RoundedRect(BorderRadius::all(flui_sdk::geometry::Radius::circular(
@@ -400,8 +336,7 @@ fn chip_default_shape() -> MaterialShape {
     )))
 }
 
-/// The default container padding: `EdgeInsets.all(8.0)`. Flutter parity:
-/// `_ChipDefaultsM3.padding`/`_FilterChipDefaultsM3.padding`.
+/// The default container padding: `EdgeInsets::all(8.0)`.
 fn chip_default_padding() -> EdgeInsets {
     EdgeInsets::all(PADDING)
 }
@@ -413,15 +348,11 @@ fn chip_default_label_padding() -> EdgeInsets {
 }
 
 /// The container's minimum content height (excludes `padding`, includes
-/// `label_padding`'s own vertical inset). Flutter parity: `_RenderChip
-/// ._computeSizes`'s `contentSize` floor, `math.max(_kChipHeight -
-/// theme.padding.vertical + theme.labelPadding.vertical, ...)` (`chip.dart`
-/// `:1953-1956`, oracle tag `3.44.0`) — narrowed to just the floor term
-/// (the `rawLabelSize.height + labelPadding.vertical` alternative is the
-/// label's own intrinsic height, which this substrate's plain
-/// `ConstrainedBox` + `Row` composition already accommodates by growing
-/// past the floor when the label needs more room, without needing to
-/// compute `rawLabelSize` up front).
+/// `label_padding`'s own vertical inset): `CHIP_HEIGHT - padding.vertical +
+/// label_padding.vertical`, floored at `0.0`. Only the floor term is
+/// computed — the label's own intrinsic height is already accommodated by
+/// this substrate's plain `ConstrainedBox` + `Row` composition, which grows
+/// past the floor when the label needs more room.
 fn chip_content_min_height(padding: EdgeInsets, label_padding: EdgeInsets) -> f64 {
     let floor = CHIP_HEIGHT - padding.vertical_total() + label_padding.vertical_total();
     floor.max(0.0)
@@ -438,9 +369,8 @@ type FilterChipSelectCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>, bool
 /// A Material Design chip: a compact label with an optional leading avatar
 /// and trailing delete affordance, outlined and unfilled by default.
 ///
-/// See the module docs for the V1 scope (a reduced `RawChip`, an
-/// [`Chip::on_pressed`] widening beyond the oracle's own non-interactive
-/// `Chip`) and named deferrals.
+/// See the module docs for the V1 scope (a reduced chip family, with an
+/// [`Chip::on_pressed`] widening) and named deferrals.
 ///
 /// ```rust
 /// use flui_material::Chip;
@@ -502,7 +432,7 @@ impl Chip {
     }
 
     /// Sets the delete handler. Presence of a handler is what shows the
-    /// trailing delete icon. Flutter parity: `Chip.onDeleted`.
+    /// trailing delete icon.
     #[must_use]
     pub fn on_deleted<R: flui_sdk::view::EventOutcome>(
         mut self,
@@ -512,9 +442,8 @@ impl Chip {
         self
     }
 
-    /// Sets whether this chip responds to interaction. Defaults to `true`.
-    /// Flutter parity: `RawChip.isEnabled` (the oracle's own `Chip` never
-    /// varies this — see the module docs).
+    /// Sets whether this chip responds to interaction. Defaults to `true`
+    /// (see the module docs).
     #[must_use]
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
@@ -713,8 +642,7 @@ impl FilterChip {
 
     /// Sets the selection-change handler, fired with the next selected
     /// value on tap. Presence of a handler is what makes this chip
-    /// interactive — Flutter parity: `FilterChip.isEnabled => onSelected !=
-    /// null`.
+    /// interactive.
     #[must_use]
     pub fn on_selected<R: flui_sdk::view::EventOutcome>(
         mut self,
@@ -755,11 +683,9 @@ enum FilterChipLeading {
 
 /// Decides the leading slot's content — a pure decision function so the
 /// avatar/checkmark swap is unit-testable without mounting a widget tree.
-/// Flutter parity: `_layoutAvatar`'s `showCheckmark`/`showAvatar` branch
-/// (`chip.dart`, oracle tag `3.44.0`), reduced to "checkmark wins outright
-/// when selected" per the module docs' "Selection" section (the oracle
-/// itself keeps both children present and blends between them; V1 shows
-/// exactly one).
+/// "Checkmark wins outright when selected", per the module docs' "Selection"
+/// section (a fuller implementation keeps both children present and blends
+/// between them; V1 shows exactly one).
 fn filter_chip_leading_content(selected: bool, has_avatar: bool) -> FilterChipLeading {
     if selected {
         FilterChipLeading::Checkmark
@@ -771,8 +697,7 @@ fn filter_chip_leading_content(selected: bool, has_avatar: bool) -> FilterChipLe
 }
 
 /// The container fill color default table (flat variant only — see the
-/// module docs). Flutter parity: `_FilterChipDefaultsM3.color`
-/// (`filter_chip.dart` `:341-361`, oracle tag `3.44.0`).
+/// module docs).
 ///
 /// **Genuinely combined-state, not pure**: disabled-and-selected resolves
 /// to its own distinct value (`onSurface@12%`), different from BOTH plain
@@ -792,8 +717,7 @@ fn filter_chip_default_background_color(
         (true, true) => colors.secondary_container,
         // Unselected resolves to no fill either way — enabled and disabled
         // are genuinely the same value here (unlike the selected column
-        // above), matching `_FilterChipDefaultsM3.color`'s own `null`
-        // fall-through for both unselected branches.
+        // above): both unselected branches fall through to no fill.
         (false, false | true) => Color::TRANSPARENT,
     }
 }
@@ -1004,19 +928,14 @@ impl CustomPainter for ChipBorderPainter {
 }
 
 /// Paints the settled (non-animated) checkmark [`FilterChip`] shows in its
-/// leading slot while selected — a direct port of the oracle's own
-/// relative-coordinate stroke path at its fully-settled shape, scaled down
-/// and centered exactly as the oracle does. Flutter parity:
-/// `_RenderChip._paintSelectionOverlay`/`._paintCheck` (`chip.dart`
-/// `:2174-2195`/`:2125-2172`, oracle tag `3.44.0`) evaluated at `t == 1.0`
-/// (the full `start -> mid -> end` polyline, no animated partial stroke) —
-/// the same "real stroked geometry, `t == 1.0`" precedent the private
-/// `CheckboxPainter`'s (`checkbox.rs`) own module docs describe, using the
-/// identical relative coordinates (`0.15, 0.45` / `0.4, 0.7` / `0.85,
-/// 0.25`) that painter's own `draw_checkmark` uses — but, unlike that full-
-/// cell checkmark, scaled to `checkSize = avatar.size.height * 0.75` and
-/// offset by `avatar.size.height * 0.125` on both axes ("a little smaller
-/// than the avatar", `_paintSelectionOverlay`'s own comment, `:2188-2192`):
+/// leading slot while selected — a relative-coordinate stroke path at its
+/// fully-settled shape (the full `start -> mid -> end` polyline, no animated
+/// partial stroke) — the same "real stroked geometry, settled" precedent the
+/// private `CheckboxPainter`'s (`checkbox.rs`) own module docs describe,
+/// using the identical relative coordinates (`0.15, 0.45` / `0.4, 0.7` /
+/// `0.85, 0.25`) that painter's own `draw_checkmark` uses — but, unlike that
+/// full-cell checkmark, scaled to `avatar height * 0.75` and offset by
+/// `avatar height * 0.125` on both axes (a little smaller than the avatar):
 /// this painter's `size` is the full leading-slot cell (avatar's own size),
 /// so the checkmark itself must be drawn at 75% of that cell, inset by
 /// 12.5% on each side — drawing at the full cell size would be ~33%
@@ -1029,15 +948,12 @@ struct ChipCheckmarkPainter {
 impl CustomPainter for ChipCheckmarkPainter {
     fn paint(&self, canvas: &mut Canvas, size: Size) {
         let cell = size.height;
-        // Flutter parity: `_kCheckmarkStrokeWidth * avatar.size.height /
-        // 24.0` (`chip.dart`) — the FULL cell height, not `check_size`.
+        // The stroke scales with the FULL cell height, not `check_size`.
         let stroke_width = 2.0 * cell / 24.0;
         let paint = Paint::stroke(self.color, stroke_width);
 
-        // Flutter parity: `checkSize = avatar.size.height * 0.75` and the
-        // `avatar.size.height * 0.125` origin offset on both axes
-        // (`_paintSelectionOverlay`, `chip.dart` `:2188-2192`) — see this
-        // struct's own doc comment.
+        // The check is 75% of the cell, offset by 12.5% on both axes — see
+        // this struct's own doc comment.
         let check_size = cell * 0.75;
         let origin_offset = cell * 0.125;
         let point = |dx: f64, dy: f64| Point::new(origin_offset + dx, origin_offset + dy);

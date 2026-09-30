@@ -8,7 +8,6 @@ use std::sync::Arc;
 /// A mapping from the unit interval to the unit interval.
 ///
 /// A curve must map `t=0.0` to `0.0` and `t=1.0` to `1.0`.
-/// Similar to Flutter's `Curve`.
 ///
 /// # Examples
 ///
@@ -38,8 +37,7 @@ pub trait Curve {
     ///
     /// Flipping rotates the curve 180°: `transform(t)` becomes
     /// `1.0 - transform(1.0 - t)`, turning an ease-in into an ease-out. A curve
-    /// symmetric about the centre (like [`Linear`]) is its own flip. Flutter's
-    /// `Curve.flipped` / `FlippedCurve` (`curves.dart:1247`).
+    /// symmetric about the centre (like [`Linear`]) is its own flip.
     #[must_use]
     fn flipped(self) -> FlippedCurve<Self>
     where
@@ -61,24 +59,18 @@ pub trait Curve {
 }
 
 /// A parametric curve in 2D space.
-///
-/// Similar to Flutter's `ParametricCurve<T>`.
 pub trait ParametricCurve<T> {
     /// Returns the value of the curve at point `t`.
     fn transform(&self, t: f64) -> T;
 }
 
 /// A curve that maps a value in the unit interval to a 2D point.
-///
-/// Similar to Flutter's `Curve2D`.
 pub trait Curve2D {
     /// Returns the point on the curve at parameter `t`.
     fn transform(&self, t: f64) -> Curve2DSample;
 }
 
 /// A sample point on a 2D curve.
-///
-/// Similar to Flutter's `Curve2DSample`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Curve2DSample {
@@ -116,8 +108,6 @@ impl Curve for Linear {
 }
 
 /// A sawtooth curve that repeats.
-///
-/// Similar to Flutter's `SawTooth`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SawTooth {
@@ -144,8 +134,6 @@ impl Curve for SawTooth {
 
 /// A curve that is 0.0 until `begin`, then curved from 0.0 to 1.0 at `begin`
 /// and `end`, then 1.0 after `end`.
-///
-/// Similar to Flutter's `Interval`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Interval<C: Curve + Copy = Linear> {
@@ -202,8 +190,6 @@ impl<C: Curve + Copy> Curve for Interval<C> {
 }
 
 /// A curve that is 0.0 until `threshold`, then jumps to 1.0.
-///
-/// Similar to Flutter's `Threshold`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Threshold {
@@ -237,8 +223,6 @@ impl Curve for Threshold {
 // ============================================================================
 
 /// A cubic polynomial curve.
-///
-/// Similar to Flutter's `Cubic`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Cubic {
@@ -345,8 +329,6 @@ impl Curve for Cubic {
 /// The curve passes through `(0,0)`, `midpoint`, and `(1,1)`; each half is a
 /// [`Cubic`] rescaled into its sub-rectangle. This is the building block for
 /// the Material 3 emphasized easing set.
-///
-/// Similar to Flutter's `ThreePointCubic`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ThreePointCubic {
@@ -369,7 +351,7 @@ impl ThreePointCubic {
     /// Creates a three-point cubic from the control points of both segments.
     ///
     /// The two implied end points `(0,0)` and `(1,1)` are fixed and not
-    /// passed. See Flutter's `ThreePointCubic` for the geometry.
+    /// passed.
     ///
     /// # Panics
     ///
@@ -447,8 +429,6 @@ impl Curve for ThreePointCubic {
 /// Useful when a widget must track the user's finger (linear) and then be
 /// flung with an easing curve after release: `split` is the animation
 /// progress at the moment of release.
-///
-/// Similar to Flutter's `Split`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Split<B: Curve = Linear, E: Curve = Cubic> {
@@ -461,7 +441,7 @@ pub struct Split<B: Curve = Linear, E: Curve = Cubic> {
 }
 
 impl Split<Linear, Cubic> {
-    /// Creates a split curve with Flutter's defaults: linear before `split`,
+    /// Creates a split curve with the default halves: linear before `split`,
     /// `Curves::EaseOutCubic` after.
     #[must_use]
     pub fn new(split: f64) -> Self {
@@ -486,7 +466,7 @@ impl<B: Curve, E: Curve> Split<B, E> {
 }
 
 impl<B: Curve, E: Curve> Curve for Split<B, E> {
-    #[expect(clippy::float_cmp)] // Intentional exact comparisons per the Flutter contract
+    #[expect(clippy::float_cmp)] // Intentional exact comparisons at the split boundary
     fn transform(&self, t: f64) -> f64 {
         if t.is_nan() {
             return 0.0;
@@ -515,8 +495,6 @@ impl<B: Curve, E: Curve> Curve for Split<B, E> {
 // ============================================================================
 
 /// An oscillating curve that grows in magnitude while overshooting its bounds.
-///
-/// Similar to Flutter's `ElasticInCurve`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ElasticInCurve {
@@ -556,8 +534,6 @@ impl Curve for ElasticInCurve {
 }
 
 /// An oscillating curve that shrinks in magnitude while overshooting its bounds.
-///
-/// Similar to Flutter's `ElasticOutCurve`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ElasticOutCurve {
@@ -597,8 +573,6 @@ impl Curve for ElasticOutCurve {
 
 /// An oscillating curve that grows and then shrinks in magnitude while
 /// overshooting its bounds.
-///
-/// Similar to Flutter's `ElasticInOutCurve`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ElasticInOutCurve {
@@ -647,8 +621,6 @@ impl Curve for ElasticInOutCurve {
 // ============================================================================
 
 /// A bounce curve that bounces at the end.
-///
-/// Similar to Flutter's `Curves.bounceOut`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BounceOutCurve;
@@ -661,8 +633,6 @@ impl Curve for BounceOutCurve {
 }
 
 /// A bounce curve that bounces at the beginning.
-///
-/// Similar to Flutter's `Curves.bounceIn`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BounceInCurve;
@@ -675,8 +645,6 @@ impl Curve for BounceInCurve {
 }
 
 /// A bounce curve that bounces at both ends.
-///
-/// Similar to Flutter's `Curves.bounceInOut`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BounceInOutCurve;
@@ -717,8 +685,6 @@ fn bounce_out(t: f64) -> f64 {
 // ============================================================================
 
 /// A curve where the rate of change starts fast and then decelerates.
-///
-/// Similar to Flutter's `Curves.decelerate`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DecelerateCurve;
@@ -738,8 +704,6 @@ impl Curve for DecelerateCurve {
 /// A Catmull-Rom curve passing through a set of points.
 ///
 /// Uses stack allocation for up to 8 points to avoid heap allocations in common cases.
-///
-/// Similar to Flutter's `CatmullRomCurve`.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CatmullRomCurve {
@@ -813,8 +777,6 @@ impl Curve for CatmullRomCurve {
 /// A Catmull-Rom spline.
 ///
 /// Uses stack allocation for up to 8 points to avoid heap allocations in common cases.
-///
-/// Similar to Flutter's `CatmullRomSpline`.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CatmullRomSpline {
@@ -894,10 +856,9 @@ impl Curve2D for CatmullRomSpline {
 /// `1.0 - curve.transform(1.0 - t)`, which turns an ease-in into an ease-out
 /// while still mapping `0.0 → 0.0` and `1.0 → 1.0`.
 ///
-/// Flutter's `FlippedCurve` (`curves.dart:1239-1253`). Historical note: this
-/// type once computed the vertical mirror `1.0 - curve.transform(t)` under the
-/// same name — a divergence that inverted every consumer expecting Flutter's
-/// rotation (a `CurvedAnimation` reverse-curve default, most visibly).
+/// It is the 180° rotation, not the vertical mirror `1.0 - curve.transform(t)`
+/// — a mirror would invert every consumer expecting a rotation (a
+/// `CurvedAnimation` reverse-curve default, most visibly).
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FlippedCurve<C: Curve> {
@@ -924,8 +885,6 @@ impl<C: Curve> Curve for FlippedCurve<C> {
 /// A curve that is the reversed version of another curve.
 ///
 /// Reversing swaps the input: `transform(t)` becomes `transform(1.0 - t)`.
-///
-/// Similar to Flutter's `ReverseCurve` (but Flutter doesn't have this as a separate type).
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ReverseCurve<C: Curve> {
@@ -954,8 +913,6 @@ impl<C: Curve> Curve for ReverseCurve<C> {
 // ============================================================================
 
 /// A collection of commonly used curves.
-///
-/// Similar to Flutter's `Curves` class.
 #[derive(Debug)]
 pub struct Curves;
 
@@ -1122,12 +1079,9 @@ impl Curves {
 ///
 /// `PartialEq`/`Eq` are reference equality (`Arc::ptr_eq`) — `Curve` carries
 /// no structural-equality bound, so this is the only comparison available for
-/// an erased `dyn Curve`. This deliberately mirrors Dart's unoverridden
-/// `Curve.==` (identity), which is what lets Flutter's own implicit-animation
-/// staleness check (`ImplicitlyAnimatedWidgetState.didUpdateWidget`,
-/// `implicit_animations.dart` `didUpdateWidget` (curve swap via `_createCurve`) at tag `3.44.0`) compare a repeated
-/// `Curves.easeInOut` reference as unchanged: the Dart compiler canonicalizes
-/// repeated `const` expressions to one object. Two `ArcCurve`s built from
+/// an erased `dyn Curve`. Identity comparison is what lets an
+/// implicit-animation staleness check compare a repeated curve handle as
+/// unchanged. Two `ArcCurve`s built from
 /// separate `ArcCurve::new(...)` calls compare unequal even when they wrap the
 /// same curve *value* — callers who want a stable comparison across rebuilds
 /// must reuse the same `ArcCurve` handle (clone it), not reconstruct it.

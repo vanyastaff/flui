@@ -1,11 +1,11 @@
 ### Changed
 
 - **`flui-runtime`**: the realm core moved here from `flui-app` (`UiRealm`, its presentations
-  and their frame transaction, lifecycle, frame-failure reporting and `RenderingFlutterBinding`;
+  and their frame transaction, lifecycle, frame-failure reporting and `RenderingBinding`;
   [ADR-0083](/docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) move 4). The realm
   renders through any `FrameSink` and names no engine type. The `flui_app` paths of
   `FailureDisposition`, `FrameFailureDetail`, `FrameFailureHandler`, `FrameFailureKind`,
-  `FrameFailureReport`, `PanicText`, `SegmentPhase` and `bindings::RenderingFlutterBinding` are
+  `FrameFailureReport`, `PanicText`, `SegmentPhase` and `bindings::RenderingBinding` are
   unchanged.
 - **`flui-semantics`**: `PlatformAccessibility` and its listener aliases are defined in
   `flui_semantics::platform`; `flui_platform::traits` re-exports them at their old paths

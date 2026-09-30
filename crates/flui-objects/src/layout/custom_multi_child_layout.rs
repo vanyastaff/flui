@@ -1,9 +1,7 @@
 //! `RenderCustomMultiChildLayoutBox` — delegates multi-child layout to a
 //! [`MultiChildLayoutDelegate`].
 //!
-//! Flutter parity: `rendering/custom_layout.dart`
-//! `RenderCustomMultiChildLayoutBox`. The render object keeps Flutter's
-//! contract: parent size is `constraints.constrain(delegate.getSize)`;
+//! The contract: parent size is `constraints.constrain(delegate.get_size)`;
 //! intrinsics use the same finite-tight probe as layout; dry layout never
 //! touches children; every child must carry a `LayoutId`/parent-data id; and
 //! the delegate must lay out each child exactly once.
@@ -44,7 +42,7 @@ impl RenderCustomMultiChildLayoutBox {
 
     /// Replaces the delegate and returns whether layout must be recomputed.
     ///
-    /// Mirrors Flutter's setter: the identical delegate instance is a no-op;
+    /// The identical delegate instance is a no-op;
     /// changing the concrete delegate type forces relayout; otherwise the new
     /// delegate's `should_relayout(old_delegate)` decides.
     pub fn set_delegate(
@@ -64,7 +62,7 @@ impl RenderCustomMultiChildLayoutBox {
         }
     }
 
-    /// Flutter's private `_getSize`: delegate size, then incoming constraints.
+    /// Delegate size, then incoming constraints.
     fn get_size(&self, constraints: BoxConstraints) -> Size {
         constraints.constrain(self.delegate.get_size(constraints))
     }
@@ -212,13 +210,9 @@ impl<'ctx, 'layout> DelegateLayoutContext<'ctx, 'layout> {
     /// Reject a delegate that left any child unlaid, naming EVERY forgotten
     /// id in one diagnostic.
     ///
-    /// Enumerating all of them rather than stopping at the first is the
-    /// oracle's own contract: Flutter's end-of-layout check collects the
-    /// whole `_debugChildrenNeedingLayout` set into one `DiagnosticsBlock`
-    /// (`rendering/custom_layout.dart`), and its test suite has a separate
-    /// case for the multi-child message precisely to pin that completeness.
-    /// A message that named only the first forgotten child would send an
-    /// author back for another layout run per missing id.
+    /// Enumerating all of them rather than stopping at the first is
+    /// deliberate: a message that named only the first forgotten child would
+    /// send an author back for another layout run per missing id.
     fn finish(self) {
         let missing: Vec<String> = self
             .laid_out

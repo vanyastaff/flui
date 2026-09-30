@@ -1,49 +1,36 @@
 //! `RenderTheater` — the `Overlay`'s stack, with the first `skip_count`
 //! children held offstage.
 //!
-//! # Flutter equivalence
-//!
-//! `_Theater` / `_RenderTheater` (`packages/flutter/lib/src/widgets/overlay.dart`,
-//! master `3.33.0-0.0.pre-6280-g88e87cd963f`). Flutter's own summary
-//! (`overlay.dart:979-981`):
-//!
-//! > Special version of a `Stack`, that doesn't layout and render the first
-//! > `skipCount` children. The first `skipCount` children are considered
-//! > "offstage".
+//! A special version of a `Stack` that doesn't lay out or render the first
+//! `skip_count` children; those are considered "offstage".
 //!
 //! `skip_count` exists to serve `OverlayEntry.opaque`: entries below the topmost
 //! opaque one are dropped from the tree unless they set `maintainState`, and the
-//! ones kept are the ones skipped here. Because `OverlayState.build` collects
-//! top-first and then reverses (`overlay.dart:894`, `:916`), the skipped
-//! children are always the **leading** ones of the child list.
+//! ones kept are the ones skipped here. Because the overlay collects entries
+//! top-first and then reverses, the skipped children are always the **leading**
+//! ones of the child list.
 //!
 //! With `skip_count == 0` this is exactly `RenderStack` with `StackFit::Expand`:
-//! `size = constraints.biggest` and every child gets `BoxConstraints::tight(size)`
-//! — Flutter comments the very same line as "Equivalent to BoxConstraints used by
-//! RenderStack for StackFit.expand" (`overlay.dart:1478`).
+//! `size = constraints.biggest` and every child gets `BoxConstraints::tight(size)`.
 //!
-//! # Divergences, deliberate and recorded
+//! # Design notes
 //!
-//! * **No positioned children.** `_RenderTheater` runs the full `RenderStack`
-//!   positioned/non-positioned split, because an app may put a `Positioned` at the
-//!   root of an `OverlayEntry`. FLUI's `Overlay` builds one non-positioned
+//! * **No positioned children.** `RenderStack` runs the full
+//!   positioned/non-positioned split, because an app may put a `Positioned` at
+//!   the root of an entry. FLUI's `Overlay` builds one non-positioned
 //!   `OverlayEntryView` per entry and nothing else, so every child here is
 //!   non-positioned. `StackParentData` is kept as the parent-data type for
 //!   compatibility with `RenderStack` tooling; its positioning fields are ignored.
 //! * **No `canSizeOverlay` / `alwaysSizeToContent`.** Those only matter under
-//!   *unbounded* constraints, where Flutter throws unless an entry opts in
-//!   (`overlay.dart:1511-1525`). FLUI has no `canSizeOverlay` flag, so an
+//!   *unbounded* constraints, and FLUI has no such flag, so an
 //!   unbounded theater falls back to `constraints.smallest()`, matching
 //!   `RenderStack`'s own no-non-positioned-children fallback rather than panicking
 //!   — see [`PANIC-POLICY`](../../../../docs/PANIC-POLICY.md).
-//! * **Offstage entries publish no semantics**, matching the reference, but by
-//!   two mechanisms rather than Flutter's one. Flutter's
-//!   `visitChildrenForSemantics` walks `_childrenInPaintOrder()`
-//!   (`overlay.dart:1427-1428`) and that is the whole story there.
+//! * **Offstage entries publish no semantics**, by two mechanisms.
 //!
-//!   Here, `visits_child_for_semantics` answers from `skip_count` directly, so
+//!   `visits_child_for_semantics` answers from `skip_count` directly, so
 //!   an entry offstage from its very first pass is excluded regardless of
-//!   layout history — that is the equivalent of Flutter's override. The
+//!   layout history. The
 //!   placed-generation stamp independently excludes an entry that was laid out
 //!   while visible and then covered, since its stamp goes stale.
 //!
@@ -110,10 +97,9 @@ impl RenderTheater {
 
     /// The index of the first onstage child.
     ///
-    /// Flutter asserts `skipCount <= children.length` (`overlay.dart:989`) and
-    /// would then walk off the end. Clamping is the same behavior for every legal
-    /// input and is total for the rest; a caller error here must not corrupt the
-    /// child walk.
+    /// `skip_count` is expected to be at most the child count; clamping is
+    /// total for every input, so a caller error here cannot corrupt the child
+    /// walk.
     const fn first_onstage(&self, child_count: usize) -> usize {
         if self.skip_count > child_count {
             child_count
@@ -132,8 +118,8 @@ impl RenderTheater {
         }
     }
 
-    /// Flutter's `RenderStack.getIntrinsicDimension` over `_firstOnstageChild`
-    /// and its later siblings (`overlay.dart:1359-1389`).
+    /// The stack's intrinsic dimension over the first onstage child and its
+    /// later siblings.
     fn max_onstage_intrinsic(
         &self,
         ctx: &mut BoxIntrinsicsCtx<'_>,
@@ -170,9 +156,7 @@ impl RenderBox for RenderTheater {
     /// nothing ever stamps it and it reads as placed. Answering here is
     /// history-independent.
     ///
-    /// Flutter parity: `RenderTheater.visitChildrenForSemantics` walks
-    /// `_childrenInPaintOrder()` (`overlay.dart:1427-1428`), which is exactly
-    /// the entries from `skip_count` onward.
+    /// The visited children are exactly the entries from `skip_count` onward.
     fn visits_child_for_semantics(&self, child_slot: usize) -> bool {
         child_slot >= self.skip_count
     }
@@ -189,8 +173,8 @@ impl RenderBox for RenderTheater {
         let child_constraints = BoxConstraints::tight(size);
 
         // Only the onstage children. The skipped ones keep whatever geometry they
-        // last had — Flutter does the same, and nothing reads it: they are absent
-        // from paint, hit-test and (in Flutter) semantics.
+        // last had, and nothing reads it: they are absent from paint, hit-test
+        // and semantics.
         for i in self.first_onstage(child_count)..child_count {
             ctx.layout_child(i, child_constraints);
             ctx.position_child(i, Offset::ZERO);
@@ -231,11 +215,9 @@ impl RenderBox for RenderTheater {
         })
     }
 
-    /// Bottom → top over the onstage children only — Flutter's
-    /// `_childrenInPaintOrder()` starting at `_firstOnstageChild`
-    /// (`overlay.dart:1424-1440`).
+    /// Bottom → top over the onstage children only.
     ///
-    /// No clip: `_RenderTheater`'s `clipBehavior` only bites when a `Positioned`
+    /// No clip: a clip behavior would only bite when a `Positioned`
     /// entry overflows, and FLUI's theater has no positioned children.
     fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Variable>) {
         for i in self.first_onstage(self.child_count)..self.child_count {
@@ -243,9 +225,8 @@ impl RenderBox for RenderTheater {
         }
     }
 
-    /// Top → bottom over the onstage children only — Flutter's
-    /// `_childrenInHitTestOrder()`, which stops after `childCount - skipCount`
-    /// children (`overlay.dart:1443-1458`).
+    /// Top → bottom over the onstage children only, stopping after
+    /// `child_count - skip_count` children.
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, StackParentData>) -> bool {
         if !ctx.is_within_own_size() {
             return false;

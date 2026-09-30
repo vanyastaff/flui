@@ -12,35 +12,6 @@ use crate::context::{BuildContext, LifecycleContext};
 /// (the `ViewState`). The View is immutable and recreated each build,
 /// while the State persists in the Element.
 ///
-/// # Flutter Equivalent
-///
-/// This corresponds to Flutter's `StatefulWidget` + `State<T>`:
-///
-/// ```dart
-/// class Counter extends StatefulWidget {
-///   final int initial;
-///   Counter({required this.initial});
-///
-///   @override
-///   State<Counter> createState() => _CounterState();
-/// }
-///
-/// class _CounterState extends State<Counter> {
-///   late int count;
-///
-///   @override
-///   void initState() {
-///     super.initState();
-///     count = widget.initial;
-///   }
-///
-///   @override
-///   Widget build(BuildContext context) {
-///     return Text('Count: $count');
-///   }
-/// }
-/// ```
-///
 /// # Example
 ///
 /// ```rust,ignore
@@ -113,11 +84,8 @@ pub trait ViewState<V: StatefulView>: 'static {
 
     /// Called when an already-registered `InheritedView` dependency changes.
     ///
-    /// **Divergence from Flutter:** Flutter's `State.didChangeDependencies`
-    /// is guaranteed to fire once, unconditionally, right after `initState` —
-    /// even before any dependency has been registered — precisely so a
-    /// widget can use that first call to register one. This implementation
-    /// does not provide that guarantee: it fires only when an `InheritedView`
+    /// This does not fire once
+    /// unconditionally after `init_state`: it fires only when an `InheritedView`
     /// this state has *already* registered as a dependent of (via
     /// `ctx.depend_on()`) later notifies. A state that needs its first
     /// `depend_on`-derived value at mount time must resolve it directly in
@@ -154,9 +122,8 @@ pub trait ViewState<V: StatefulView>: 'static {
     ///
     /// The Element has just swapped in `new_view` (the current configuration);
     /// `old_view` is the previous one. Compare the two to react to a changed
-    /// field — this is Flutter's `didUpdateWidget(oldWidget)`, where `oldWidget`
-    /// is the argument and the new widget is `this.widget` (here passed
-    /// explicitly as `new_view`, since FLUI state does not hold the view).
+    /// field. The new configuration is passed explicitly as `new_view`, since
+    /// FLUI state does not hold the view.
     ///
     /// An implicitly-animated widget retargets its controller here: if the
     /// animated property differs between `old_view` and `new_view`, it sets the

@@ -1,9 +1,7 @@
 //! Pre-built drag recognisers with fixed axis.
 //!
-//! Flutter parity: `gestures/monodrag.dart` exposes
 //! `VerticalDragGestureRecognizer`, `HorizontalDragGestureRecognizer`, and
-//! `PanGestureRecognizer` as thin subclasses of `DragGestureRecognizer` that
-//! hard-code the axis. We expose the same three names as type aliases over
+//! `PanGestureRecognizer` are type aliases over
 //! [`DragGestureRecognizer`] for call-site readability, paired with the
 //! [`vertical_drag`] / [`horizontal_drag`] / [`pan`] constructors that set the
 //! axis. Note: aliases are the *same* type — they do NOT enforce the axis at
@@ -40,31 +38,29 @@ use super::drag::{DragEndCallback, DragGestureRecognizer, DragStartCallback, Dra
 
 /// A drag recogniser constrained to the vertical axis.
 ///
-/// Mirrors Flutter's `VerticalDragGestureRecognizer` (which itself extends
-/// `DragGestureRecognizer`). Construct via [`vertical_drag`] to bind
+/// Construct via [`vertical_drag`] to bind
 /// [`DragAxis::Vertical`]; the alias is for call-site readability, not
 /// compile-time axis enforcement.
 pub type VerticalDragGestureRecognizer = DragGestureRecognizer;
 
 /// A drag recogniser constrained to the horizontal axis.
 ///
-/// Mirrors Flutter's `HorizontalDragGestureRecognizer`.
+/// Construct via [`horizontal_drag`] to bind [`DragAxis::Horizontal`].
 pub type HorizontalDragGestureRecognizer = DragGestureRecognizer;
 
 /// A free-direction pan recogniser.
 ///
-/// Mirrors Flutter's `PanGestureRecognizer`. A pan is a drag that can
+/// A pan is a drag that can
 /// move in any direction — the default axis is [`DragAxis::Free`].
 pub type PanGestureRecognizer = DragGestureRecognizer;
 
 // ============================================================================
-// Free fn constructors (Flutter parity for per-axis subclass constructors)
+// Free fn constructors (one per axis)
 // ============================================================================
 //
 // Inherent `new`/`with_settings` methods on a type alias collide with the
 // underlying type's identical-shaped methods, so we use free fns here. The
-// axis becomes implicit in the recogniser type — matching Flutter's
-// per-axis subclasses.
+// axis becomes implicit at the call site.
 
 /// Construct a vertical-only drag recogniser.
 ///

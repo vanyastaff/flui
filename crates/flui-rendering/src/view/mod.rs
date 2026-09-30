@@ -13,13 +13,6 @@
 //!
 //! Viewports are render objects that are "bigger on the inside" - they
 //! display a portion of their content controlled by a scroll offset.
-//!
-//! # Flutter Equivalence
-//!
-//! This corresponds to Flutter's:
-//! - `rendering/view.dart`
-//! - `rendering/viewport_offset.dart`
-//! - `rendering/viewport.dart` (partial)
 
 mod configuration;
 mod render_view;

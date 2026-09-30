@@ -17,17 +17,15 @@ use crate::FractionalTranslation;
 /// Animates its child's position by a fraction of the child's own size, as a
 /// [`TranslationFraction`] read off an [`Animation`].
 ///
-/// Flutter parity: `widgets/transitions.dart` `SlideTransition` — an
-/// `AnimatedWidget` wrapping `FractionalTranslation`. Each tick of `position`
+/// Wraps `FractionalTranslation`. Each tick of `position`
 /// rebuilds the transition and re-reads [`Animation::value`] into a
 /// [`FractionalTranslation`].
 ///
-/// **Rust-native improvement over the oracle's `Animation<Offset>`**: Flutter
-/// overloads `Offset` (normally *pixels*) to carry a size-relative fraction
-/// here — the same unit-mismatch `FractionalTranslation` itself already
-/// documents (see `flui_objects::TranslationFraction`'s module doc). This
-/// transition drives that same dedicated fraction newtype end to end instead
-/// of re-introducing the ambiguity one layer up.
+/// The animated value is a dedicated [`TranslationFraction`], not an `Offset`:
+/// an `Offset` is in pixels, so carrying a size-relative fraction in one would
+/// be the unit mismatch `FractionalTranslation` already documents (see
+/// `flui_objects::TranslationFraction`'s module doc). This transition drives
+/// that fraction newtype end to end.
 ///
 /// `position.value() == TranslationFraction { dx: 0.0, dy: 0.0 }` paints the
 /// child at its normal location; `{ dx: 1.0, dy: 0.0 }` shifts it fully off
@@ -35,11 +33,8 @@ use crate::FractionalTranslation;
 ///
 /// # `text_direction`
 ///
-/// Verified against the oracle at tag `3.44.0`: `SlideTransition` does
-/// **not** read the ambient `Directionality` — `textDirection` is a plain,
-/// caller-supplied, nullable constructor parameter (`build` reads
-/// `this.textDirection` directly, no `Directionality.of(context)` call
-/// anywhere in the type). This port matches that exactly: `text_direction`
+/// `SlideTransition` does **not** read the ambient `Directionality`;
+/// `text_direction` is a plain, caller-supplied, optional setting. It
 /// defaults to `None` (canvas coordinates — positive `dx` moves the child
 /// right), and `Some(TextDirection::Rtl)` flips `dx`'s sign so positive
 /// values move the child toward the reading-direction start instead.
@@ -71,7 +66,7 @@ impl SlideTransition {
     }
 
     /// Sets whether hit-testing follows the painted translation (default
-    /// `true`). Flutter parity: `SlideTransition.transformHitTests`.
+    /// `true`).
     #[must_use]
     pub fn transform_hit_tests(mut self, transform_hit_tests: bool) -> Self {
         self.transform_hit_tests = transform_hit_tests;
@@ -79,8 +74,7 @@ impl SlideTransition {
     }
 
     /// Sets the reading direction `dx` is interpreted against — see the type
-    /// doc's `text_direction` section. Flutter parity:
-    /// `SlideTransition.textDirection`.
+    /// doc's `text_direction` section.
     #[must_use]
     pub fn text_direction(mut self, text_direction: TextDirection) -> Self {
         self.text_direction = Some(text_direction);

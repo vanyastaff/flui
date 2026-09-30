@@ -355,8 +355,8 @@ impl Virtualizer {
     /// This is the hint a band should adapt to: the running mean over *every*
     /// measurement ([`Self::measured_mean`]) is dominated by history — after
     /// a jump from a region of tall items into one of short items it stays
-    /// tall for hundreds of measurements — while the band's own children are
-    /// what Flutter's `_extrapolateMaxScrollOffset` averages. Zero-extent
+    /// tall for hundreds of measurements — while the band's own children
+    /// track the region being scrolled through. Zero-extent
     /// children are left out: a collapsed row or a `SizedBox.shrink`
     /// placeholder says nothing about the extent of a row that has not been
     /// measured, and counting it would shrink every unmeasured hint (and the

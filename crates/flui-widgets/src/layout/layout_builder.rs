@@ -8,6 +8,6 @@
 //! The builder runs during layout with the real incoming `BoxConstraints`, and
 //! the child it returns is laid out **and painted in the same frame** — see
 //! [`ADR-0017`](../../../../docs/adr/ADR-0017-build-during-layout-callback-seam.md)
-//! for how that is achieved without Flutter's mid-pass `invokeLayoutCallback`.
+//! for how that is achieved without invoking a build callback mid-layout-pass.
 
 pub use flui_view::element::LayoutBuilder;

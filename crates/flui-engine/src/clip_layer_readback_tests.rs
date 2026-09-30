@@ -335,7 +335,7 @@ fn a_path_clip_lets_through_what_lies_inside_the_box_but_outside_the_shape() {
 ///
 /// `Path::compute_bounds` answers `Rect::ZERO` for a path with no commands, so
 /// the scissor is zero-area and the draw is dropped. That is the same answer
-/// Flutter gives — `clipPath(Path())` leaves nothing visible — and it is the
+/// a clip with an empty path gives — nothing visible — and it is the
 /// one case where the bounding-box approximation is EXACT, since the box and
 /// the shape are both empty. Asserted rather than assumed: the previous
 /// behaviour was that an empty clip path clipped nothing at all, and the chain

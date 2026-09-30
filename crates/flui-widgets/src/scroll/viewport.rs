@@ -52,8 +52,7 @@ fn default_cross_axis_direction(axis_direction: AxisDirection) -> AxisDirection 
 /// (e.g. [`SliverToBoxAdapter`](crate::SliverToBoxAdapter)) along a scroll axis,
 /// clipping them to its own bounds at a scroll offset.
 ///
-/// Flutter parity: `widgets/viewport.dart` `Viewport` over `RenderViewport`.
-/// The viewport sizes to its (bounded) incoming constraints — place it under a
+/// Backed by `RenderViewport`. The viewport sizes to its (bounded) incoming constraints — place it under a
 /// bounded main-axis constraint, not directly inside an unbounded `Column`.
 /// `offset` is a programmatic scroll position in logical pixels (interactive
 /// drag-to-scroll arrives with the `Scrollable`/`ScrollController` layer).
@@ -139,7 +138,7 @@ impl<C> Viewport<C> {
 
     /// Set where the zero-scroll line sits along the main axis, as a
     /// fraction of the viewport's extent from the leading edge (default
-    /// `0.0`). Flutter's `Viewport.anchor`; see
+    /// `0.0`). See
     /// [`RenderViewport::set_anchor`](flui_objects::RenderViewport::set_anchor)
     /// for the formulas this drives.
     #[must_use]
@@ -148,8 +147,8 @@ impl<C> Viewport<C> {
         self
     }
 
-    /// Set the index of the first forward child (Flutter's `Viewport.center`,
-    /// index-based here — a key-based `center` is a follow-up). `None` (the
+    /// Set the index of the first forward child (index-based; a key-based
+    /// `center` is a follow-up). `None` (the
     /// default) means every child grows forward from the leading edge; see
     /// [`RenderViewport::set_center`](flui_objects::RenderViewport::set_center)
     /// for the full contract, including why an out-of-range index is invalid.
@@ -161,7 +160,7 @@ impl<C> Viewport<C> {
 
     /// Set how overflowing content is clipped (default [`Clip::HardEdge`]).
     /// [`Clip::None`] clips nothing, so a child may paint outside the
-    /// viewport's bounds. Flutter's `Viewport.clipBehavior`.
+    /// viewport's bounds.
     #[must_use]
     pub fn clip_behavior(mut self, clip_behavior: Clip) -> Self {
         self.clip_behavior = clip_behavior;
@@ -288,8 +287,7 @@ generic_render_view_element!(Viewport);
 /// A box render-object widget that shrink-wraps a sequence of **sliver**
 /// children in the scroll axis.
 ///
-/// Flutter parity: `widgets/viewport.dart` `ShrinkWrappingViewport` over
-/// `RenderShrinkWrappingViewport`. It expands in the cross axis but takes its
+/// Backed by `RenderShrinkWrappingViewport`. It expands in the cross axis but takes its
 /// main-axis size from the accumulated sliver content, constrained by its
 /// parent.
 ///
@@ -359,7 +357,7 @@ impl<C> ShrinkWrappingViewport<C> {
     }
 
     /// Set how overflowing content is clipped (default [`Clip::HardEdge`]).
-    /// [`Clip::None`] clips nothing. Flutter's `clipBehavior`.
+    /// [`Clip::None`] clips nothing.
     #[must_use]
     pub fn clip_behavior(mut self, clip_behavior: Clip) -> Self {
         self.clip_behavior = clip_behavior;

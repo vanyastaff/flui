@@ -1,46 +1,31 @@
-//! Ported from `packages/flutter/test/widgets/framework_test.dart` (tag
-//! `3.44.0`), the `'GlobalKey duplication N'` series.
+//! `GlobalKey` duplication: what the element tree does when one key is claimed twice.
 //!
-//! ## The two models, and where they actually differ
+//! ## The optimistic graft, and what happens when it is wrong
 //!
-//! Both frameworks resolve a `GlobalKey` optimistically. Flutter's
-//! `Element._retakeInactiveElement` takes the keyed element even when it is
-//! still attached to a live parent, and says so in its own comment: the
-//! "inactivity" is *forward-looking* — the old parent is assumed to be about
-//! to give the child up, and "the only way that assumption could be false is
-//! if the global key is being duplicated". FLUI's `reuse_or_mount` →
+//! A `GlobalKey` is resolved optimistically. `reuse_or_mount` →
 //! `retake_active_global_key` (`crates/flui-view/src/tree/element_tree.rs`)
-//! does the same graft. So the frameworks agree on the optimistic move; the
-//! series' cases are about what happens when the optimism turns out to be
-//! wrong.
+//! takes the keyed element even when it is still attached to a live parent:
+//! the old parent is assumed to be about to give the child up, and the only
+//! way that assumption is false is if the key is duplicated. The cases below
+//! are about what happens when the optimism turns out to be wrong.
 //!
-//! - **Same parent, twice — both reject, eagerly.** Flutter throws `'A
-//!   GlobalKey was used multiple times inside one widget's child list.'`
-//!   straight from `_retakeInactiveElement` when the element's parent *is*
-//!   the parent now asking for it; FLUI panics in debug from
-//!   `retake_active_global_key` under the same condition. Same verdict, same
-//!   timing, different channel.
-//! - **Two different parents — both re-check at the frame boundary.**
-//!   Flutter records each declaration in `_debugGlobalKeyReservations` and
-//!   verifies at the end of the frame (`_debugVerifyGlobalKeyReservation`
-//!   inside `finalizeTree`), raising `'Multiple widgets used the same
-//!   GlobalKey.'` when two parents reserved one key. It also repairs the
-//!   tree (`forgetChild` on the losing parent) so teardown does not cascade.
-//!   FLUI now does the same, with two deliberate differences: the
+//! - **Same parent, twice — rejected eagerly.** `retake_active_global_key`
+//!   panics in debug when the element's parent *is* the parent now asking for
+//!   it.
+//! - **Two different parents — re-checked at the frame boundary.** Each
+//!   declaration is recorded during build and verified at the end of the frame
+//!   (`finalize_tree`), reporting a duplicate when two parents reserved one
+//!   key. The losing parent is repaired so teardown does not cascade. The
 //!   verification is not debug-only, and the duplicate arrives as a typed
 //!   [`DuplicateGlobalKey`](flui_view::DuplicateGlobalKey) on
 //!   `BuildOwner::take_global_key_diagnostics` instead of being thrown —
 //!   a duplicate key is caller-controlled input, so the frame completes.
 //!
-//! What is ported is therefore the *verdict* on each tree shape, not the
-//! oracle's message text or its diagnostic machinery. Where FLUI's channel
-//! differs, the test says so and asserts what FLUI actually does — never a
-//! narrowed version of the oracle's expectation.
+//! Where a case's channel is a typed diagnostic rather than a panic, the test
+//! says so and asserts what FLUI actually does.
 //!
-//! Structural substitution: the oracle expresses its trees as
-//! `Stack`/`Container` hierarchies through `pumpWidget`. These ports drive
-//! `ElementTree` directly with the same *shape* (N parents, each given a child
-//! carrying the key), because the subject is the element tree's keyed
+//! The tests drive `ElementTree` directly with N parents, each given a child
+//! carrying the key, because the subject is the element tree's keyed
 //! reconciliation, not any widget's layout.
 
 // ADR-0027: the test/prod seam still hands `Arc<RwLock<ElementTree/BuildOwner>>`
@@ -64,8 +49,7 @@ use parking_lot::RwLock;
 // evolve independently.
 // ============================================================================
 
-/// A leaf used as a parent slot or filler — the oracle's `Container` with no
-/// child.
+/// A leaf used as a parent slot or filler, with no child.
 #[derive(Clone)]
 struct Filler;
 
@@ -86,7 +70,7 @@ struct KeyedState {
     tag: i32,
 }
 
-/// A stateful view carrying a `GlobalKey` — the oracle's keyed child.
+/// A stateful view carrying a `GlobalKey`.
 #[derive(Clone)]
 struct Keyed {
     key: GlobalKey<KeyedState>,
@@ -203,7 +187,7 @@ fn fresh_tree() -> (Arc<RwLock<ElementTree>>, Arc<RwLock<BuildOwner>>) {
 }
 
 /// Mounts a root with `parent_count` `Filler` parents beneath it and returns
-/// their ids — the oracle's `Stack` with N `Container` children.
+/// their ids.
 fn tree_with_parents(
     tree: &Arc<RwLock<ElementTree>>,
     owner: &Arc<RwLock<BuildOwner>>,
@@ -275,15 +259,12 @@ fn children_of(tree: &Arc<RwLock<ElementTree>>, parent: ElementId) -> Vec<Elemen
 // Cases 1, 7, 8, 9, 10 — the key appears under two DIFFERENT parents
 // ============================================================================
 
-/// The optimistic graft itself matches the oracle: a second parent claiming
-/// the key takes the *same* element, rather than a second one being created.
+/// The optimistic graft: a second parent claiming the key takes the *same*
+/// element, rather than a second one being created.
 ///
-/// Flutter parity: `framework_test.dart` `'GlobalKey duplication 1 - double
-/// appearance'` (3.44.0) builds exactly this shape. Flutter performs the same
-/// graft — `_retakeInactiveElement` takes the element from its live parent —
-/// and only *afterwards*, at end of frame, decides the tree was illegal. This
-/// test pins the graft half, which the two frameworks agree on; the half they
-/// disagree on is pinned by the tug-of-war test below.
+/// The graft happens first and only *afterwards*, at end of frame, is the tree
+/// judged illegal. This test pins the graft half; the verdict half is pinned by
+/// the tug-of-war test below.
 #[serial_test::serial(global_key_registry)]
 pub(crate) fn a_second_parent_grafts_the_same_element_rather_than_creating_another() {
     let (tree, owner) = fresh_tree();
@@ -314,8 +295,8 @@ pub(crate) fn a_second_parent_grafts_the_same_element_rather_than_creating_anoth
     );
     assert!(
         children_of(&tree, parents[0]).is_empty(),
-        "and is gone from the first — Flutter's graft leaves the same hole, \
-         and repairs it at end of frame; see this file's module doc",
+        "and is gone from the first — the graft leaves a hole that is \
+         repaired at end of frame; see this file's module doc",
     );
     assert_eq!(
         key.current_element(),
@@ -326,10 +307,10 @@ pub(crate) fn a_second_parent_grafts_the_same_element_rather_than_creating_anoth
     flui_view::test_only_clear_global_key_registry();
 }
 
-/// A parent whose *build output* carries the key — the oracle's `Container`
-/// with a keyed child, expressed through the build path rather than by a
-/// direct tree insert. This is what makes a reservation check observable:
-/// the key is declared by a build, which is where Flutter records it.
+/// A parent whose *build output* carries the key, expressed through the build
+/// path rather than by a direct tree insert. This is what makes a reservation
+/// check observable: the key is declared by a build, which is where it is
+/// recorded.
 #[derive(Clone)]
 struct KeyedParent {
     key: GlobalKey<KeyedState>,
@@ -352,17 +333,13 @@ impl View for KeyedParent {
     }
 }
 
-/// **The oracle behaviour, end to end.** Two parents each *build* a child
+/// **End to end.** Two parents each *build* a child
 /// carrying the same key; a whole frame runs — `build_scope` then
 /// `finalize_tree` — and the duplicate is reported.
 ///
-/// Flutter parity: `framework_test.dart` `'GlobalKey duplication 1 - double
-/// appearance'` and the ordering variants `'7'`–`'10'` (3.44.0), all of which
-/// expect a `FlutterError`. Flutter records each declaration during build
-/// (`_debugReserveGlobalKeyFor`) and verifies at the frame boundary
-/// (`_debugVerifyGlobalKeyReservation` in `finalizeTree`). FLUI records and
-/// verifies at the same two points; the verdict arrives as a typed
-/// diagnostic rather than a throw, so the frame still completes.
+/// Each declaration is recorded during build and verified at the frame
+/// boundary (`finalize_tree`); the verdict arrives as a typed diagnostic
+/// rather than a panic, so the frame still completes.
 ///
 /// Why this shape rather than a sequence of inserts: the graft
 /// (`retake_active_global_key`) unlinks the child from its previous parent

@@ -1,7 +1,6 @@
 //! `Visibility` -- show/hide a child, optionally preserving its state via
 //! `Offstage`. Verifies the build branches and animation policy documented in
-//! `crates/flui-widgets/src/interaction/visibility.rs` (Flutter oracle:
-//! `widgets/indexed_stack.dart`).
+//! `crates/flui-widgets/src/interaction/visibility.rs`.
 
 use crate::common::{lay_out, lay_out_animated, loose, size};
 use std::sync::Arc;

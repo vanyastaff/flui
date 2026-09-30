@@ -39,14 +39,9 @@ crate-type = ["rlib", "cdylib"]
 /// `.gitignore` for a generated project. Part of the plan (not a
 /// side-effect of `git init`) so `--dry-run` lists it and a real run and a
 /// dry run always agree on the file set.
-const GITIGNORE_TEMPLATE: &str = r"# Build artifacts
+const GITIGNORE_TEMPLATE: &str = r"# Build artifacts (each platforms/<name>/.gitignore covers what that
+# platform's build writes there)
 /target
-/build
-
-# Platform-specific
-platforms/android/app/build/
-platforms/android/.gradle/
-platforms/ios/build/
 
 # IDE
 .vscode/
@@ -58,9 +53,6 @@ platforms/ios/build/
 # OS
 .DS_Store
 Thumbs.db
-
-# FLUI
-flui.lock
 
 # Rust
 *.pdb
@@ -142,7 +134,7 @@ impl TemplateBuilder {
         self
     }
 
-    /// Generate the Flutter-parity hot-reload workspace (host/worker/types)
+    /// Generate the hot-reload workspace (host/worker/types)
     /// instead of a single-crate project.
     ///
     /// Takes precedence over [`template`](Self::template): the hot-reload

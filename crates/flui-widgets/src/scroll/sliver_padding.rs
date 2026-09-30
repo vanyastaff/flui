@@ -8,8 +8,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// Applies padding around a **sliver** child inside a
 /// [`Viewport`](crate::Viewport).
 ///
-/// Flutter parity: `widgets/sliver.dart` `SliverPadding` over
-/// `RenderSliverPadding`. Its child is itself a sliver (e.g. a
+/// Its child is itself a sliver (e.g. a
 /// [`SliverFixedExtentList`](crate::SliverFixedExtentList)).
 #[derive(Clone, Debug)]
 pub struct SliverPadding {

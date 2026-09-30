@@ -5,29 +5,21 @@
 //! so the builders stay thin, and so `flui-material` never has to
 //! re-declare it.
 //!
-//! # Verified against the reference
+//! The builders themselves do not exist yet; this module is only the state
+//! machine they will share.
 //!
-//! Cross-checked against `.flutter/packages/flutter/lib/src/widgets/async.dart`
-//! (`ConnectionState`, `AsyncSnapshot`, `_FutureBuilderState`, `StreamBuilder`'s
-//! `after*` overrides) and `.flutter/packages/flutter/test/widgets/async_test.dart`,
-//! Flutter master `3.33.0-0.0.pre-6280-g88e87cd963f`.
+//! # Design notes
 //!
-//! The transition tables in [`AsyncSnapshot`]'s method docs are transcriptions,
-//! not inventions. No parity is claimed for the *builders* — they do not exist
-//! yet.
-//!
-//! # Deliberate divergences from Flutter
-//!
-//! | Flutter | FLUI | Why |
+//! | Dynamic-language shape | FLUI | Why |
 //! |---|---|---|
 //! | `error: Object?` + `stackTrace: StackTrace` | generic `E`, **no stack trace** | Rust has no ambient stack traces on error values. `E` comes from `Future<Output = Result<T, E>>` — errors are in the type, not thrown. An infallible future uses `E = Infallible`. |
-//! | `T get requireData` throws | **absent** | It exists in Dart because `data` is nullable and there is no `Option`. Use [`AsyncSnapshot::data`] → `Option<&T>` and `expect` at the call site. `docs/PANIC-POLICY.md` reserves panics for internal invariants. |
+//! | `T get requireData` throws | **absent** | It only makes sense where `data` is nullable and there is no `Option`. Use [`AsyncSnapshot::data`] → `Option<&T>` and `expect` at the call site. `docs/PANIC-POLICY.md` reserves panics for internal invariants. |
 //! | `AsyncSnapshot` handed to `builder` by value | handed by **reference** | Avoids `T: Clone`. `FOUNDATIONS.md`: "Application state carries no trait bound beyond `'static` — the Druid mistake is the one most dangerous trap." |
 //! | `AsyncSnapshot.waiting()` | [`AsyncSnapshot::waiting`] | Same, kept for symmetry even though the folds never need it. |
 //!
 //! # The data/error invariant
 //!
-//! Flutter asserts `data == null || error == null`. Here it is upheld **by
+//! A snapshot never holds both data and an error. This is upheld **by
 //! construction**: the fields are private, and every constructor and fold sets
 //! exactly one of them. [`with_data`](AsyncSnapshot::with_data) clears the error;
 //! [`with_error`](AsyncSnapshot::with_error) clears the data.
@@ -38,8 +30,6 @@ use core::fmt;
 ///
 /// The usual flow is `None` → `Waiting` → `Active` → `Done`; a `Future` skips
 /// `Active`, going straight from `Waiting` to `Done`.
-///
-/// Transcribed from Flutter's `ConnectionState`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ConnectionState {
     /// Not currently connected to any asynchronous computation.
@@ -96,8 +86,6 @@ impl<T, E> AsyncSnapshot<T, E> {
     // ── constructors ────────────────────────────────────────────────────────
 
     /// `ConnectionState::None`, with neither data nor error.
-    ///
-    /// Flutter: `AsyncSnapshot.nothing()`.
     #[must_use]
     pub const fn nothing() -> Self {
         Self {
@@ -108,8 +96,6 @@ impl<T, E> AsyncSnapshot<T, E> {
     }
 
     /// `ConnectionState::Waiting`, with neither data nor error.
-    ///
-    /// Flutter: `AsyncSnapshot.waiting()`.
     #[must_use]
     pub const fn waiting() -> Self {
         Self {
@@ -120,8 +106,6 @@ impl<T, E> AsyncSnapshot<T, E> {
     }
 
     /// `state` with `data`, clearing any error.
-    ///
-    /// Flutter: `AsyncSnapshot.withData(state, data)`.
     #[must_use]
     pub const fn with_data(state: ConnectionState, data: T) -> Self {
         Self {
@@ -132,8 +116,6 @@ impl<T, E> AsyncSnapshot<T, E> {
     }
 
     /// `state` with `error`, clearing any data.
-    ///
-    /// Flutter: `AsyncSnapshot.withError(state, error)` — minus the stack trace.
     #[must_use]
     pub const fn with_error(state: ConnectionState, error: E) -> Self {
         Self {
@@ -145,8 +127,6 @@ impl<T, E> AsyncSnapshot<T, E> {
 
     /// The snapshot a builder starts from: `with_data(None, d)` when
     /// `initial_data` is given, else [`nothing`](Self::nothing).
-    ///
-    /// Flutter: `_FutureBuilderState.initState` / `StreamBuilder.initial`.
     #[must_use]
     pub fn initial(initial_data: Option<T>) -> Self {
         match initial_data {
@@ -177,9 +157,8 @@ impl<T, E> AsyncSnapshot<T, E> {
 
     /// Whether this snapshot carries data.
     ///
-    /// Unlike Flutter, this cannot be false for a successfully-completed
-    /// `Future<()>`: a unit value is still `Some(())`. Dart's `hasData` is
-    /// `data != null`, so a `Future<void>` completes with `hasData == false`.
+    /// This cannot be false for a successfully-completed `Future<()>`: a unit
+    /// value is still `Some(())`.
     #[must_use]
     pub const fn has_data(&self) -> bool {
         self.data.is_some()
@@ -211,9 +190,7 @@ impl<T, E> AsyncSnapshot<T, E> {
     /// `ConnectionState::None`. That preservation is load-bearing: it is why a
     /// `FutureBuilder` handed a new future keeps showing the old value while the
     /// new one is `Waiting`, and why `initial_data` is *not* re-applied on
-    /// reconfigure (Flutter's `'ignores initialData when reconfiguring'`).
-    ///
-    /// Flutter: `AsyncSnapshot.inState(state)`.
+    /// reconfigure.
     #[must_use]
     pub fn in_state(self, state: ConnectionState) -> Self {
         Self {
@@ -227,10 +204,8 @@ impl<T, E> AsyncSnapshot<T, E> {
 
     /// After subscribing to a future: `Waiting`, **unless already `Done`**.
     ///
-    /// The guard is Flutter's `if (_snapshot.connectionState != ConnectionState.done)`,
-    /// which exists for `SynchronousFuture` — a future whose `.then` runs inline.
-    /// Its Rust analogue is a future that is `Ready` on its first poll. Without
-    /// the guard, an immediately-ready future would flash `Waiting`.
+    /// The guard exists for a future that is `Ready` on its first poll: without
+    /// it, an immediately-ready future would flash `Waiting`.
     #[must_use]
     pub fn after_subscribe(self) -> Self {
         if self.connection_state == ConnectionState::Done {
@@ -255,16 +230,12 @@ impl<T, E> AsyncSnapshot<T, E> {
     // ── StreamBuilder folds (`StreamBuilder`'s `after*` overrides) ──────────
 
     /// Connected to a stream: `Waiting`, preserving data/error.
-    ///
-    /// Flutter: `afterConnected`.
     #[must_use]
     pub fn after_connected(self) -> Self {
         self.in_state(ConnectionState::Waiting)
     }
 
     /// A stream event: `Active` + data. **Clears any previous error.**
-    ///
-    /// Flutter: `afterData`.
     #[must_use]
     pub fn after_data(self, data: T) -> Self {
         Self::with_data(ConnectionState::Active, data)
@@ -274,16 +245,12 @@ impl<T, E> AsyncSnapshot<T, E> {
     ///
     /// A Dart stream continues after an error unless `cancelOnError`; a Rust
     /// `Stream<Item = Result<T, E>>` does the same, so the state stays `Active`.
-    ///
-    /// Flutter: `afterError`.
     #[must_use]
     pub fn after_error(self, error: E) -> Self {
         Self::with_error(ConnectionState::Active, error)
     }
 
     /// The stream ended: `Done`, preserving the last data **or** error.
-    ///
-    /// Flutter: `afterDone`.
     #[must_use]
     pub fn after_done(self) -> Self {
         self.in_state(ConnectionState::Done)
@@ -292,10 +259,8 @@ impl<T, E> AsyncSnapshot<T, E> {
     /// Disconnected from the stream: `None`, preserving the last data **or**
     /// error.
     ///
-    /// Also the first half of a future/stream swap: Flutter's `didUpdateWidget`
-    /// does `_snapshot.inState(ConnectionState.none)` before resubscribing.
-    ///
-    /// Flutter: `afterDisconnected`.
+    /// Also the first half of a future/stream swap: the snapshot moves to
+    /// `ConnectionState::None` before resubscribing.
     #[must_use]
     pub fn after_disconnected(self) -> Self {
         self.in_state(ConnectionState::None)
@@ -341,9 +306,6 @@ mod tests {
     // ── invariant ───────────────────────────────────────────────────────────
 
     // ── FutureBuilder transition table ───────────────────────────────────────
-    //
-    // Transcribed from `_FutureBuilderState` and the oracles in
-    // `.flutter/packages/flutter/test/widgets/async_test.dart`.
 
     /// `'tracks life-cycle of Future to success'`: `None` → `Waiting` → `Done + data`.
     fn future_life_cycle_to_success() {

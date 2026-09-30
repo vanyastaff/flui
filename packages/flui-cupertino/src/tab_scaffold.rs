@@ -3,30 +3,25 @@
 //! and kept alive [`Offstage`] once visited — and [`CupertinoTabController`],
 //! the shared selection state driving it.
 //!
-//! Flutter parity: `cupertino/tab_scaffold.dart`'s `CupertinoTabScaffold`,
-//! `CupertinoTabController`, and `_TabSwitchingView` (oracle tag `3.44.0`).
 //! See "Deferred, named" below for exactly what this V1 does not carry over.
 //!
-//! ## What this ports
+//! ## What it does
 //!
-//! - The `_TabSwitchingView` mechanic: every tab mounts a slot up front, but
+//! - The tab-switching mechanic: every tab mounts a slot up front, but
 //!   a tab's content is only ever *built* the first time it becomes active
 //!   (`should_build_tab`, tracked per index and never reset — "once
 //!   visited, stays built"), and every non-active tab is
 //!   [`HeroMode`]-disabled + [`Offstage`]-hidden + [`TickerMode`]-disabled
 //!   rather than unmounted — so an inactive tab's own state (a counter, a
 //!   scroll position, a nested `Navigator` stack) survives a switch away and
-//!   back, and its animations genuinely stop advancing while hidden
-//!   ("Off stage tabs' animations are stopped", `tab_scaffold.dart`'s own
-//!   doc comment on `_TabSwitchingView`) — nested in oracle order,
-//!   `HeroMode(enabled: active, child: Offstage(offstage: !active, child:
-//!   TickerMode(enabled: active, child: …)))`.
+//!   back, and its animations genuinely stop advancing while hidden —
+//!   nested as `HeroMode(enabled: active, child: Offstage(offstage: !active,
+//!   child: TickerMode(enabled: active, child: …)))`.
 //! - The content-padding contract: content is pushed up by exactly
 //!   [`preferred_size`](PreferredSizeView::preferred_size)'s height
 //!   *plus* `MediaQuery.padding.bottom`, unless the on-screen keyboard
-//!   inset is already taller than the tab bar (`tab_scaffold.dart`'s exact
-//!   two-step `contentPadding` computation, oracle tag `3.44.0` — a real,
-//!   not simplified, edge case).
+//!   inset is already taller than the tab bar (a real edge case: don't
+//!   double-pad).
 //! - `resize_to_avoid_bottom_inset` (default `true`), same contract as
 //!   [`crate::CupertinoPageScaffold`]'s.
 //! - The scaffold background, resolved from
@@ -34,25 +29,21 @@
 //!
 //! ## `CupertinoTabController` is required, not auto-created
 //!
-//! The oracle creates and owns an internal `RestorableCupertinoTabController`
-//! when the caller supplies none, so a `CupertinoTabScaffold` with no
-//! `controller` argument still works. That auto-creation exists mostly to
-//! give `RestorationMixin` something to restore — a feature this crate does
-//! not port (no restoration substrate in FLUI at all yet). Without it, an
+//! A scaffold could create and own an internal controller when the caller
+//! supplies none. That auto-creation would exist mostly to give state
+//! restoration something to restore — a feature this crate does not have (no
+//! restoration substrate in FLUI at all yet). Without it, an
 //! internally-created controller would just be state a caller can never
 //! reach to drive tab switches programmatically, which is worse than
-//! requiring one explicitly. This port always takes an explicit
+//! requiring one explicitly. The scaffold always takes an explicit
 //! [`CupertinoTabController`]; there is no auto-create fallback.
 //!
 //! ## Deferred, named
 //!
-//! - **State restoration** (`RestorationMixin`, `restorationId`,
-//!   `RestorableCupertinoTabController`) — no restoration substrate in FLUI.
-//! - **Per-tab `FocusScope`** (`_TabSwitchingViewState`'s
-//!   `tabFocusNodes`/`_focusActiveTab`) — no per-tab focus-scope wiring;
-//!   [`Offstage`] alone governs visibility.
-//! - **Text-scaling suppression on the tab bar**
-//!   (`MediaQuery.withNoTextScaling`) — `MediaQueryData` has no
+//! - **State restoration** — no restoration substrate in FLUI.
+//! - **Per-tab focus scope** — no per-tab focus-scope wiring; [`Offstage`]
+//!   alone governs visibility.
+//! - **Text-scaling suppression on the tab bar** — `MediaQueryData` has no
 //!   no-scaling variant to apply yet.
 
 use std::cell::RefCell;
@@ -76,9 +67,8 @@ use crate::colors::CupertinoColor;
 use crate::theme::CupertinoTheme;
 
 /// Coordinates tab selection between a [`CupertinoTabBar`] and a
-/// [`CupertinoTabScaffold`]. Flutter parity: `CupertinoTabController`
-/// (`tab_scaffold.dart`, oracle tag `3.44.0`) — a `ChangeNotifier` wrapping
-/// an `int`, ported here as a genuinely `Arc`-shared handle (every
+/// [`CupertinoTabScaffold`]. A `ChangeNotifier` wrapping
+/// an index, as a genuinely `Arc`-shared handle (every
 /// `.clone()` observes and mutates the *same* index — unlike
 /// `flui_sdk::foundation::ValueNotifier<T>`, whose `Clone` deep-copies the
 /// value; this controller is handed to both the scaffold and the tab bar's
@@ -114,8 +104,7 @@ impl CupertinoTabController {
         self.index.load(Ordering::Acquire)
     }
 
-    /// Selects `index`, notifying listeners if it actually changed. Flutter
-    /// parity: `CupertinoTabController.index`'s setter.
+    /// Selects `index`, notifying listeners if it actually changed.
     pub fn set_index(&self, index: usize) {
         let previous = self.index.swap(index, Ordering::AcqRel);
         if previous != index {
@@ -151,9 +140,8 @@ impl Listenable for CupertinoTabController {
 type TabBuilder = Rc<dyn Fn(&dyn BuildContext, usize) -> BoxedView>;
 
 /// A tabbed iOS application's root layout: [`CupertinoTabBar`] at the
-/// bottom, `tab_builder`'s output for the active tab above it. Flutter
-/// parity: `CupertinoTabScaffold` (`tab_scaffold.dart`, oracle tag
-/// `3.44.0`) — see the module docs for exactly what is and is not ported.
+/// bottom, `tab_builder`'s output for the active tab above it — see the module
+/// docs for exactly what is and is not supported.
 ///
 /// ```
 /// use flui_cupertino::{CupertinoTabBar, CupertinoTabBarItem, CupertinoTabController, CupertinoTabScaffold};
@@ -198,8 +186,7 @@ impl CupertinoTabScaffold {
     }
 
     /// Overrides the resolved background. Defaults to
-    /// [`crate::CupertinoThemeData::scaffold_background_color`]. Flutter
-    /// parity: `CupertinoTabScaffold.backgroundColor`.
+    /// [`crate::CupertinoThemeData::scaffold_background_color`].
     #[must_use]
     pub fn background_color(mut self, color: impl Into<CupertinoColor>) -> Self {
         self.background_color = Some(color.into());
@@ -207,8 +194,7 @@ impl CupertinoTabScaffold {
     }
 
     /// Whether content should size itself to avoid the window's bottom
-    /// inset. Defaults to `true`. Flutter parity:
-    /// `CupertinoTabScaffold.resizeToAvoidBottomInset`.
+    /// inset. Defaults to `true`.
     #[must_use]
     pub fn resize_to_avoid_bottom_inset(mut self, resize: bool) -> Self {
         self.resize_to_avoid_bottom_inset = resize;
@@ -228,8 +214,7 @@ impl std::fmt::Debug for CupertinoTabScaffold {
 impl_animated_view!(CupertinoTabScaffold);
 
 impl AnimatedView for CupertinoTabScaffold {
-    /// Rebuilds whenever the controller's index changes — Flutter parity:
-    /// `_CupertinoTabScaffoldState._onCurrentIndexChange`'s `setState`.
+    /// Rebuilds whenever the controller's index changes.
     fn listenable(&self) -> Arc<dyn Listenable> {
         Arc::new(self.controller.clone()) as Arc<dyn Listenable>
     }
@@ -246,8 +231,7 @@ impl StatefulView for CupertinoTabScaffold {
 }
 
 /// Persistent state for [`CupertinoTabScaffold`]: which tabs have ever been
-/// built. Flutter parity: `_TabSwitchingViewState.shouldBuildTab` — grown
-/// or truncated to match the tab count on every build (`didUpdateWidget`'s
+/// built — grown or truncated to match the tab count on every build (a
 /// partial-invalidation contract), never reset for an index that already
 /// built once.
 pub struct CupertinoTabScaffoldState {
@@ -266,32 +250,19 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
         let current_index = view.controller.index();
         let tab_count = view.tab_bar.items().len();
 
-        // Flutter parity: the constructor's own `assert(controller == null ||
-        // controller.index < tabBar.items.length, ...)` plus
-        // `_onCurrentIndexChange`'s identical `assert` on every subsequent
-        // `controller.index` change (`tab_scaffold.dart`, oracle tag
-        // `3.44.0`) — both debug-only, like `debug_assert!`. Unlike a bare
-        // port of just those asserts, the oracle *also* crashes
-        // unconditionally in **release** builds: `_TabSwitchingViewState
-        // ._focusActiveTab` indexes `tabFocusNodes[widget.currentTabIndex]`,
-        // and Dart's `List` bounds-checks on every build profile, so an
-        // out-of-range index throws a `RangeError` there regardless of
-        // `assert` stripping. This port has no `tabFocusNodes` array (see the
-        // module doc's "Deferred, named" — no per-tab `FocusScope` wiring),
-        // so it has no equivalent unconditional check to inherit for free.
-        // Named divergence, not a silent one: release builds (where
-        // `debug_assert!` compiles out) fall through to every tab
-        // `Offstage`-hidden and `tab_builder` never invoked for
-        // `current_index` — the oracle instead crashes hard in every build
-        // mode. Do not "fix" this by silently clamping `current_index`; the
-        // oracle doesn't clamp either, it crashes.
+        // A controller index at or past the tab count is a caller bug, checked
+        // by a debug-only assertion. This build has no per-tab focus array
+        // (see the module doc's "Deferred, named" — no per-tab focus-scope
+        // wiring), so it has no unconditional check of its own: release
+        // builds (where `debug_assert!` compiles out) fall through to every
+        // tab `Offstage`-hidden and `tab_builder` never invoked for
+        // `current_index`. Do not "fix" this by silently clamping
+        // `current_index`.
         //
         // A panic here is caught by this crate's own build-error boundary
         // (`flui-view`'s `build_or_recover`) and
         // substitutes an `ErrorView` for this whole subtree rather than
-        // unwinding to the caller — mirroring Flutter's own
-        // `ComponentElement.performRebuild` try/catch → `ErrorWidget.builder`
-        // recovery for a `build()`-phase exception. So this crash is loud
+        // unwinding to the caller. So this failure is loud
         // (a rendered error) rather than silent, but it is not a raw unwind
         // out of `build`; see `tests/tab_scaffold.rs`'s
         // `out_of_range_controller_index_builds_an_error_instead_of_silently_hiding_every_tab`.
@@ -339,9 +310,8 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
         }
 
         // Only pad content with the tab bar's height if it isn't already
-        // entirely obstructed by the keyboard (or another view inset) —
-        // `tab_scaffold.dart`'s exact two-step contract (oracle tag
-        // `3.44.0`), not a simplification: don't double-pad.
+        // entirely obstructed by the keyboard (or another view inset): don't
+        // double-pad.
         if !view.resize_to_avoid_bottom_inset || tab_bar_height > media.view_insets.bottom {
             let bottom_padding = tab_bar_height + media.padding.bottom;
             if view.tab_bar.opaque(ctx) {
@@ -367,12 +337,10 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
             .unwrap_or_else(|| CupertinoTheme::of(ctx).scaffold_background_color())
             .resolve(ctx);
 
-        // The tab bar's own `currentIndex`/`onTap` are overridden here —
-        // `_CupertinoTabScaffoldState.build`'s `widget.tabBar.copyWith(...)`,
-        // ported as `Clone` + builder methods rather than a hand-written
-        // `copyWith` — see `bottom_tab_bar.rs`'s module docs. The original
-        // handler is captured first so the override can still chain into
-        // it, exactly as the oracle's `widget.tabBar.onTap?.call(newIndex)`.
+        // The tab bar's own `current_index`/`on_tap` are overridden here via
+        // `Clone` + builder methods rather than a hand-written `copy_with` —
+        // see `bottom_tab_bar.rs`'s module docs. The original handler is
+        // captured first so the override can still chain into it.
         let original_on_tap = view.tab_bar.on_tap_handler();
         let controller = view.controller.clone();
         let bar = view
@@ -399,8 +367,8 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
 
 /// Whether `current_index` is a mountable tab index for `tab_count` tabs.
 /// Extracted from `build`'s `debug_assert!` so the exact guard condition is
-/// unit-testable without mounting a render tree — see `build`'s doc comment
-/// for the full oracle-mechanism citation.
+/// unit-testable without mounting a render tree — see `build`'s comment for
+/// the full failure-mode rationale.
 fn is_valid_tab_index(current_index: usize, tab_count: usize) -> bool {
     current_index < tab_count
 }

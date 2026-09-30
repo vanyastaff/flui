@@ -11,8 +11,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// Layout and paint are unconditional passthroughs; only hit-testing is
 /// affected. When `ignoring` is `false` the child receives events normally.
 ///
-/// Flutter parity: `widgets/sliver.dart` `SliverIgnorePointer` over
-/// `RenderSliverIgnorePointer`. Lives inside a
+/// Backed by `RenderSliverIgnorePointer`. Lives inside a
 /// [`Viewport`](crate::Viewport).
 ///
 /// **Note:** the box-protocol equivalent is

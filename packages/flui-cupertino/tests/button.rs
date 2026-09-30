@@ -30,11 +30,10 @@ pub fn tap_callback_writes_a_signal_and_rebuilds_its_reader() {
 /// (`packages/flui-material/src/button_style_button.rs`), proven here for
 /// `CupertinoButton`'s own pre-existing `Semantics::new().button(true)` wrap
 /// (`packages/flui-cupertino/src/button.rs`) now that `RenderParagraph`
-/// publishes a label for its child to merge up. Flutter parity:
-/// `CupertinoButton`'s `Semantics(button: true, child: ...)` never sets
-/// `enabled` either (`cupertino/button.dart`), so unlike the Material case
-/// this node reports no enabled/disabled state at all — not asserted here
-/// because there is nothing to assert.
+/// publishes a label for its child to merge up. `CupertinoButton`'s button
+/// semantics never set `enabled`, so unlike the Material case this node
+/// reports no enabled/disabled state at all — not asserted here because there
+/// is nothing to assert.
 pub fn cupertino_button_with_text_child_announces_one_labelled_button_node() {
     let mut laid = lay_out(
         CupertinoButton::new(Text::new("Tap")).on_pressed(|_cx| {}),

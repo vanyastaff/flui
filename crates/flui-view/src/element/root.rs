@@ -5,10 +5,6 @@
 //! - No parent element
 //! - Must be assigned a BuildOwner before mounting
 //! - Responsible for propagating the owner to descendants
-//!
-//! # Flutter Equivalent
-//!
-//! This corresponds to Flutter's `RootElementMixin`.
 
 use std::sync::Arc;
 
@@ -23,11 +19,8 @@ use crate::owner::BuildOwner;
 /// - Must have a BuildOwner assigned before mounting
 /// - Propagate the BuildOwner to all descendants
 ///
-/// # Flutter Equivalent
-///
-/// Corresponds to Flutter's `RootElementMixin` which provides:
-/// - `assignOwner()` - set the BuildOwner
-/// - `mount()` override that asserts parent is null
+/// The trait provides `assign_owner` to set the BuildOwner, and mounting
+/// asserts the parent is `None`.
 ///
 /// # Example
 ///

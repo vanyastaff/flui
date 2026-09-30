@@ -17,7 +17,7 @@ into.
   Arity-parameterized children (`Leaf`/`Single`/`Optional`/`Variable` —
   child-count mismatches are compile errors).
 - **Pipeline** — `PipelineOwner` drives dirty-tracked layout → paint →
-  composite through the Flutter contract (sync, on-demand phases). The
+  composite (sync, on-demand phases). The
   re-entrant layout walk's `unsafe` is confined to one SAFETY-audited arena
   module (`pipeline/owner/subtree_arena.rs`), machine-checked by a miri CI
   job.
@@ -30,12 +30,11 @@ into.
   render object in `flui-objects` is catalog-tested against it. See
   [`docs/TESTING.md`](docs/TESTING.md).
 
-## Flutter parity
+## Layout protocol
 
-Layout, paint, hit-test, and dirty-propagation behavior is ported 1:1 from
-Flutter's `rendering/` library (behavior, not structure). Changes here must be
-cross-checked against the reference; the harness suite is the enforcement, and
-a deliberate divergence is recorded in `ARCHITECTURE.md` `## Mapping decisions`.
+Constraints go down, sizes come up. The harness suite is the enforcement when changing layout,
+paint, hit-test or dirty propagation; the decided behaviours are recorded in `ARCHITECTURE.md`
+`## Mapping decisions`.
 
 ## Documentation
 

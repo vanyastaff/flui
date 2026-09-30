@@ -1,6 +1,6 @@
 [book]
 title = "FLUI"
-description = "A Flutter-inspired declarative UI framework for Rust — book skeleton (H2, part 1)."
+description = "A Flutter-inspired declarative UI framework for Rust."
 authors = ["FLUI Contributors"]
 language = "en"
 src = "src"

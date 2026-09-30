@@ -17,8 +17,6 @@ use flui_view::{BoxedView, IntoView, ParentDataView, View, ViewExt, impl_parent_
 /// otherwise `width` / `height` size it. An unset axis leaves the child at the
 /// stack's alignment (a "non-positioned" child).
 ///
-/// Flutter parity: `widgets/basic.dart` `Positioned`.
-///
 /// [`Stack`]: crate::Stack
 #[derive(Clone, Debug)]
 pub struct Positioned {
@@ -46,8 +44,7 @@ impl Positioned {
         }
     }
 
-    /// Pin the child to all four edges of the stack (Flutter's
-    /// `Positioned.fill` with the default zero insets).
+    /// Pin the child to all four edges of the stack (zero insets).
     pub fn fill(child: impl IntoView) -> Self {
         Self::new(child).left(0.0).top(0.0).right(0.0).bottom(0.0)
     }

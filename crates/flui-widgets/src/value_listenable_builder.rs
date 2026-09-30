@@ -1,44 +1,35 @@
 //! [`ValueListenableBuilder`] — rebuilds a subtree from the latest value of a
 //! [`ValueListenable`].
 //!
-//! Flutter parity: `widgets/value_listenable_builder.dart`
-//! (`ValueListenableBuilder<T>` / `_ValueListenableBuilderState<T>`, tag
-//! `3.44.0`). The state subscribes to `value_listenable` in `init_state`,
+//! The state subscribes to `value_listenable` in `init_state`,
 //! swaps the subscription when the listenable *instance* changes (not merely
 //! its current value) in `did_update_view`, and unsubscribes in `dispose`.
 //!
 //! # Read at build time, not cached
 //!
-//! Flutter's `_ValueListenableBuilderState` caches the value in a `late T
-//! value` field, overwritten by `_valueChanged` on every notification and
-//! read by `build`. FLUI's port instead re-reads [`ValueListenable::value`]
-//! directly inside `build` — the listener callback's only job is to request
-//! a rebuild ([`RebuildHandle::schedule`]). Both give the same observable
-//! behavior: a notification landing between two frames with no intervening
-//! build coalesces to whatever value is live when `build` finally runs,
-//! because there is exactly one source of truth (the listenable itself)
-//! rather than a second field that could drift from it.
+//! The state does not cache the value in a field of its own. `build`
+//! re-reads [`ValueListenable::value`] directly — the listener callback's
+//! only job is to request a rebuild ([`RebuildHandle::schedule`]). A
+//! notification landing between two frames with no intervening build
+//! coalesces to whatever value is live when `build` finally runs, because
+//! there is exactly one source of truth (the listenable itself) rather than
+//! a second field that could drift from it.
 //!
 //! # Instance identity, not value equality
 //!
 //! `did_update_view` decides whether to resubscribe by comparing the two
-//! `Arc` pointers ([`Arc::ptr_eq`]), matching Flutter's reference-identity
-//! `oldWidget.valueListenable != widget.valueListenable` (Dart's
-//! `ValueNotifier` does not override `==`, so it compares by identity). A
-//! `PartialEq`-by-value comparison would be wrong here: two distinct
-//! notifiers that happen to hold equal values are still a listenable swap,
-//! and must still unsubscribe the old one.
+//! `Arc` pointers ([`Arc::ptr_eq`]). A `PartialEq`-by-value comparison would
+//! be wrong here: two distinct notifiers that happen to hold equal values
+//! are still a listenable swap, and must still unsubscribe the old one.
 //!
-//! # Divergence: `child` passthrough is not a rebuild-skip
+//! # Limitation: `child` passthrough is not a rebuild-skip
 //!
-//! Flutter's `Element.updateChild` short-circuits when the new child widget
-//! is `identical()` to the old one, so the pre-built `child` subtree's
-//! `build()` never re-runs. FLUI's [`BoxedView`] clones the child view's
-//! configuration (`dyn_clone`) on every read rather than tracking object
-//! identity, so `child` reaches `builder` **unchanged in content** on every
-//! rebuild, but the framework does not special-case skipping that subtree's
-//! own reconciliation. This is a Rust-shape divergence from the Dart
-//! optimization, not a behavioral one visible to `builder`'s caller.
+//! A framework that tracks child identity can skip rebuilding a pre-built
+//! `child` subtree when the same instance is handed back. FLUI's
+//! [`BoxedView`] instead clones the child view's configuration (`dyn_clone`)
+//! on every read, so `child` reaches `builder` **unchanged in content** on
+//! every rebuild, but the framework does not special-case skipping that
+//! subtree's own reconciliation. This is not visible to `builder`'s caller.
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -51,12 +42,10 @@ use flui_view::{BoxedView, IntoView, RebuildHandle, StatefulView, View, ViewExt,
 /// Builds a widget from the current value of a [`ValueListenable<T>`].
 ///
 /// If `child` is `Some`, it is handed back unchanged in content on every
-/// call (the module doc's divergence note explains why identity is not
+/// call (the module doc's limitation note explains why identity is not
 /// preserved through `BoxedView`'s dyn-clone) — build the value-independent
 /// part of the subtree once (outside the closure) and incorporate it here,
 /// rather than reconstructing it every notification.
-///
-/// Flutter parity: `ValueWidgetBuilder<T>`.
 pub type ValueWidgetBuilder<T> = Rc<dyn Fn(&dyn BuildContext, &T, Option<BoxedView>) -> BoxedView>;
 
 /// A widget whose content stays synced with a [`ValueListenable`].

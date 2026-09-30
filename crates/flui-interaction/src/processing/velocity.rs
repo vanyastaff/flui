@@ -1,13 +1,11 @@
 //! Velocity estimation for gesture recognition
 //!
-//! This module provides pointer velocity estimation that mirrors Flutter's
-//! [`velocity_tracker.dart`](https://api.flutter.dev/flutter/gestures/VelocityTracker-class.html)
-//! API. Three tracker flavours are provided:
+//! This module provides pointer velocity estimation. Three tracker flavours
+//! are provided:
 //!
 //! - [`VelocityTracker`] — least-squares polynomial regression on a 20-sample
-//!   circular buffer, identical algorithm to Flutter's
-//!   `PolynomialFitLeastSquaresVelocityTracker`. This is the default and the
-//!   only one Flutter's core gesture pipeline uses.
+//!   circular buffer. This is the default and the one the core gesture
+//!   pipeline uses.
 //! - [`IosFlingVelocityTracker`] — iOS `UIScrollView` fling approximation:
 //!   weighted average of three adjacent 2-point velocities. Use this when you
 //!   want the initial fling velocity that matches native iOS scroll physics.
@@ -63,39 +61,31 @@ use flui_foundation::geometry::Offset;
 use super::lsq_solver::{MAX_SAMPLES, solve_two};
 
 // ============================================================================
-// Constants (Flutter parity — see velocity_tracker.dart lines 142-145)
+// Constants
 // ============================================================================
 
 /// If no sample has been added for this long, the pointer is considered
 /// stopped and the velocity is reported as zero with confidence 1.0.
-///
-/// Flutter: `_assumePointerMoveStoppedMilliseconds = 40`.
 const ASSUME_POINTER_STOPPED: Duration = Duration::from_millis(40);
 
 /// Maximum age of samples to consider when fitting.
-///
-/// Flutter: `_horizonMilliseconds = 100`.
 const HORIZON: Duration = Duration::from_millis(100);
 
 /// Minimum number of contiguous samples needed to attempt a least-squares fit.
-///
-/// Flutter: `_minSampleSize = 3`.
 const MIN_SAMPLE_SIZE: usize = 3;
 
-/// Number of samples to keep in the circular buffer.
-///
-/// Flutter: `_historySize = 20`. We also use this as the upper bound for the
-/// shared `LeastSquaresSolver` scratch buffer.
+/// Number of samples to keep in the circular buffer. Also the upper bound for
+/// the shared `LeastSquaresSolver` scratch buffer.
 const HISTORY_SIZE: usize = MAX_SAMPLES;
 
-/// Polynomial degree for the least-squares fit. Quadratic — same as Flutter.
+/// Polynomial degree for the least-squares fit. Quadratic.
 const POLYNOMIAL_DEGREE: usize = 2;
 
 /// Speed below which a release is not a fling, in px/s.
 ///
-/// Flutter's `VerticalDragGestureRecognizer.isFlingGesture` combines this
-/// with a slop check on the up/down offset; this crate applies the speed half
-/// on its own, through [`fling_velocity_or_zero`].
+/// A fling is normally a speed check combined with a slop check on the
+/// up/down offset; this crate applies the speed half on its own, through
+/// [`fling_velocity_or_zero`].
 const MIN_FLING_SPEED_PX_S: f64 = 50.0;
 
 /// Gate `velocity` to [`Velocity::ZERO`] unless it is a fling, or `allow_slow`
@@ -147,15 +137,14 @@ struct PointAtTime {
 
 /// Computes a pointer's velocity from a stream of `(time, position)` samples.
 ///
-/// Mirrors Flutter's `VelocityTracker` (the
-/// `PolynomialFitLeastSquaresVelocityTracker` strategy). Adding samples is
+/// Uses a polynomial least-squares fit. Adding samples is
 /// O(1); computing a velocity is O(N) where N ≤ 20, with the inner loop
 /// running through fixed-size stack-allocated scratch buffers in
 /// `LeastSquaresSolver`.
 #[derive(Debug, Clone)]
 pub struct VelocityTracker {
-    /// Pointer device kind. Recorded for parity with Flutter even though the
-    /// algorithm is currently device-independent.
+    /// Pointer device kind. Recorded even though the algorithm is currently
+    /// device-independent.
     kind: PointerDeviceKind,
 
     /// Circular buffer of samples. Empty slots are `None` so we can
@@ -167,8 +156,8 @@ pub struct VelocityTracker {
     index: usize,
 
     /// When the most recent sample was added. Used to detect "the pointer
-    /// has been still for 40 ms or more" — the canonical Flutter signal that
-    /// the velocity is zero.
+    /// has been still for 40 ms or more" — the signal that the velocity is
+    /// zero.
     since_last_sample: Option<Instant>,
 
     /// Memoized result of the buffer-pure part of [`Self::get_velocity_estimate`]
@@ -193,10 +182,9 @@ impl Default for VelocityTracker {
 impl VelocityTracker {
     /// Construct a new velocity tracker for the given pointer device kind.
     ///
-    /// Flutter's `VelocityTracker.withKind(this.kind)` constructor — we keep
-    /// the parameter even though the algorithm doesn't yet branch on it, so
-    /// downstream code can match Flutter's API shape and the field is in
-    /// place for future device-specific tuning (mouse vs touch vs stylus).
+    /// The parameter is kept even though the algorithm doesn't yet branch on
+    /// it, so the field is in place for future device-specific tuning (mouse
+    /// vs touch vs stylus).
     #[must_use]
     pub fn with_kind(kind: PointerDeviceKind) -> Self {
         Self {
@@ -275,8 +263,6 @@ impl VelocityTracker {
     ///
     /// Returns `None` if the tracker has no samples at all.
     ///
-    /// This is the Rust port of Flutter's `getVelocityEstimate()`.
-    ///
     /// Takes `&mut self` because the buffer-pure part of the result is
     /// memoized (see the private `compute_estimate`); the cache is reused until
     /// the next [`Self::add_position`] / [`Self::reset`]. The "stationary for
@@ -284,8 +270,8 @@ impl VelocityTracker {
     /// cached fit is only ever returned while the pointer is still moving.
     pub fn get_velocity_estimate(&mut self) -> Option<VelocityEstimate> {
         // Pointer has been still for >= 40 ms → velocity is exactly zero with
-        // perfect confidence. Flutter returns a fully-populated
-        // VelocityEstimate so callers can still ask for `duration` / `offset`.
+        // perfect confidence. A fully-populated VelocityEstimate is returned
+        // so callers can still ask for `duration` / `offset`.
         // Time-dependent, so never cached.
         if let Some(last) = self.since_last_sample
             && last.elapsed() >= ASSUME_POINTER_STOPPED
@@ -362,7 +348,7 @@ impl VelocityTracker {
             ts[n] = -age_ms; // Negative: we go back from the newest sample.
             xs[n] = sample.position.dx;
             ys[n] = sample.position.dy;
-            ws[n] = 1.0; // Uniform weights — Flutter's `PolynomialFitLeastSquares`.
+            ws[n] = 1.0; // Uniform weights.
             n += 1;
 
             // Step the cursor one slot backwards through the circular buffer.
@@ -460,8 +446,8 @@ impl VelocityTracker {
     ///
     /// Cheap wrapper over [`Self::get_velocity_estimate`] that returns
     /// [`Velocity::ZERO`] when the estimate is missing or its velocity is
-    /// zero. This is the canonical call site for "fling this view" — Flutter
-    /// uses `getVelocity()` in the drag-end callback for the same purpose.
+    /// zero. This is the canonical call site for "fling this view" in a drag-end
+    /// callback.
     ///
     /// `&mut self` for the same memoization reason as
     /// [`Self::get_velocity_estimate`], which this delegates to.
@@ -472,10 +458,9 @@ impl VelocityTracker {
     /// Velocity for fling detection.
     ///
     /// When `allow_slow` is `false` (the typical case), the result is
-    /// [`Velocity::ZERO`] for any motion under ~50 px/s — the threshold
-    /// Flutter's `VerticalDragGestureRecognizer.isFlingGesture` checks
-    /// against (it requires the offset between the up and down events to
-    /// exceed a slop, combined with a non-trivial velocity). When
+    /// [`Velocity::ZERO`] for any motion under ~50 px/s — the usual fling
+    /// threshold (a fling also requires the offset between the up and down
+    /// events to exceed a slop, combined with a non-trivial velocity). When
     /// `allow_slow` is `true`, the raw estimate is returned even at very
     /// low speeds — useful for snap-back animations and small-list
     /// micro-scrolls.
@@ -485,7 +470,7 @@ impl VelocityTracker {
         fling_velocity_or_zero(self.get_velocity(), allow_slow)
     }
 
-    /// Flutter-port alias for [`Self::get_velocity_estimate`].
+    /// Alias for [`Self::get_velocity_estimate`].
     ///
     /// `&mut self` for the same memoization reason as
     /// [`Self::get_velocity_estimate`], which this delegates to.
@@ -551,10 +536,9 @@ impl VelocityTracker {
 /// and the gesture pipeline uses it to seed the `Scrollable`'s fling
 /// simulation.
 ///
-/// The 20-slot history is larger than the 4 used by the maths — Flutter
-/// keeps the extra slots so the `VelocityEstimate.offset` (computed as
-/// `newest - oldest`) is large enough to be recognised as a fling by
-/// `VerticalDragGestureRecognizer.isFlingGesture`.
+/// The 20-slot history is larger than the 4 used by the maths — the extra
+/// slots keep the `VelocityEstimate.offset` (computed as `newest - oldest`)
+/// large enough to be recognised as a fling by the drag recognizers.
 #[derive(Debug, Clone)]
 pub struct IosFlingVelocityTracker {
     inner: VelocityTracker,
@@ -599,7 +583,7 @@ impl IosFlingVelocityTracker {
     /// makes no claim about fit quality); `duration` and `offset` are
     /// computed from the newest and oldest non-null samples.
     pub fn get_velocity_estimate(&self) -> Option<VelocityEstimate> {
-        // Stationary? Flutter's contract: report zero with confidence 1.0.
+        // Stationary? Report zero with confidence 1.0.
         if let Some(last) = self.inner.since_last_sample
             && last.elapsed() >= ASSUME_POINTER_STOPPED
         {
@@ -659,7 +643,7 @@ impl IosFlingVelocityTracker {
             return (0.0, 0.0);
         };
         // dt is in microseconds; convert to milliseconds for the divisor so
-        // we preserve precision the way Flutter does.
+        // we preserve precision.
         let dt_us = end.time.saturating_duration_since(start.time).as_micros();
         if dt_us == 0 {
             return (0.0, 0.0);
@@ -671,7 +655,7 @@ impl IosFlingVelocityTracker {
         (dx_px_s, dy_px_s)
     }
 
-    /// Flutter-port alias for [`Self::get_velocity_estimate`].
+    /// Alias for [`Self::get_velocity_estimate`].
     #[inline]
     pub fn estimate(&self) -> Option<VelocityEstimate> {
         self.get_velocity_estimate()
@@ -753,8 +737,7 @@ impl MacosFlingVelocityTracker {
 /// since Android 8.1 (`ImpulseVelocityTrackerStrategy` in AOSP
 /// `frameworks/native/libs/input/VelocityTracker.cpp`).
 ///
-/// Flutter does not ship this strategy at all; its pipeline is least-squares
-/// only. The impulse model treats the touch surface as a physical object the
+/// The impulse model treats the touch surface as a physical object the
 /// finger does work on, and recovers the release velocity from the
 /// accumulated kinetic energy:
 ///
@@ -768,7 +751,7 @@ impl MacosFlingVelocityTracker {
 /// deceleration right before lift-off discounts older samples instead of
 /// being averaged away — flings track the finger's final intent, which is
 /// why AOSP made it the default. Use this tracker for Android-feel scroll
-/// and fling; use [`VelocityTracker`] (least-squares) for Flutter parity.
+/// and fling; use [`VelocityTracker`] (least-squares) for the default fit.
 ///
 /// Sample window and stationary gates are shared with the other trackers
 /// (100 ms horizon, 40 ms assume-stopped).

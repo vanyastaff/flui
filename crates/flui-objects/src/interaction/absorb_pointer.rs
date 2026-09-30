@@ -3,13 +3,7 @@
 //! receiving them. Siblings *below* in the paint order also see
 //! nothing (the box is "opaque" to pointers).
 //!
-//! # Flutter equivalence
-//!
-//! Behavior-faithful port of Flutter's
-//! [`RenderAbsorbPointer`](https://api.flutter.dev/flutter/rendering/RenderAbsorbPointer-class.html)
-//! (`packages/flutter/lib/src/rendering/proxy_box.dart`).
-//!
-//! # Rust-native improvements
+//! # Design
 //!
 //! * `absorbing` is a typed `bool` boundary; setter returns
 //!   `bool` change-flag for pipeline `mark_needs_paint` /
@@ -63,7 +57,7 @@ impl RenderAbsorbPointer {
 }
 
 impl Default for RenderAbsorbPointer {
-    /// Defaults to `absorbing = true` (Flutter parity).
+    /// Defaults to `absorbing = true`.
     fn default() -> Self {
         Self::new(true)
     }

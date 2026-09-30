@@ -60,10 +60,8 @@ use crate::{
 /// Recommended lookback from the presentation/frame time to the resample
 /// target: `sample_time = frame_time - DEFAULT_RESAMPLE_LOOKBACK`.
 ///
-/// 38 ms is Flutter's `GestureBinding.samplingOffset` default
-/// (`gestures/binding.dart`, `_defaultSamplingOffset = -38 ms`): two 60 Hz
-/// frames of worst-case input latency (33.3 ms) plus a 4.7 ms input-driver
-/// margin. On 120 Hz input/display pipelines a ~22 ms lookback is
+/// 38 ms is two 60 Hz frames of worst-case input latency (33.3 ms) plus a
+/// 4.7 ms input-driver margin. On 120 Hz input/display pipelines a ~22 ms lookback is
 /// appropriate instead — pass your own offset to [`PointerEventResampler::sample`].
 pub const DEFAULT_RESAMPLE_LOOKBACK: Duration = Duration::from_millis(38);
 
@@ -253,9 +251,8 @@ impl PointerEventResampler {
                 emitted.push(event);
             }
 
-            // Interpolate if we have move events pending (Flutter parity:
-            // `resampler.dart _samplePointerPosition` synthesizes a Move at
-            // the interpolated position).
+            // Interpolate if we have move events pending: synthesize a Move at
+            // the interpolated position.
             if !inner.event_queue.is_empty()
                 && inner.last_position.is_some()
                 && let Some(next_event) = inner.event_queue.front()
