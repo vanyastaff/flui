@@ -37,6 +37,10 @@ use super::aggregator::WIDE_CONDITION;
 /// inputs of the `xtask` package.
 pub(super) const DOCS_ONLY: &[&str] = &[
     "*.md", // root-level only: `*` does not cross `/` (see `matches`)
+    // License texts, and their copies shipped in each package: no build reads
+    // them, and cargo-deny judges the manifests' SPDX `license` field instead.
+    "LICENSE*",
+    "NOTICE*",
     "docs/**",
     "design/**",
     "book/**",
@@ -46,9 +50,11 @@ pub(super) const DOCS_ONLY: &[&str] = &[
     ".editorconfig",
     "crates/*/ARCHITECTURE.md",
     "crates/*/CHANGELOG.md",
-    "crates/*/NOTICE", // the root NOTICE's per-crate copies, shipped in each package
+    "crates/*/LICENSE*",
+    "crates/*/NOTICE",
     "packages/*/ARCHITECTURE.md",
     "packages/*/CHANGELOG.md",
+    "packages/*/LICENSE*",
     "packages/*/NOTICE",
     "changelog.d/**", // changelog fragments; `changelog --check` in `checks` judges them
 ];
@@ -106,8 +112,6 @@ pub(super) const TOOLING: &[&str] = &[
     ".gitignore",
     ".gitattributes",
     "llms.txt",
-    "LICENSE*",
-    "NOTICE*",
     ".github/dependabot.yml",
 ];
 
@@ -771,6 +775,8 @@ pub(super) mod tests {
     fn documentation_paths() {
         for path in [
             "README.md",
+            "LICENSE-APACHE",
+            "NOTICE",
             "docs/testing.md",
             "design/architecture.md",
             "book/src/intro.md",
@@ -779,7 +785,10 @@ pub(super) mod tests {
             "crates/flui-view/CHANGELOG.md",
             "packages/flui-material/ARCHITECTURE.md",
             "packages/flui-material/CHANGELOG.md",
+            "crates/flui-view/LICENSE",
+            "crates/flui-view/LICENSE-APACHE",
             "crates/flui-view/NOTICE",
+            "packages/flui-material/LICENSE-APACHE",
             "packages/flui-material/NOTICE",
             "changelog.d/tools-changelog-fragments.md",
             "changelog.d/README.md",
@@ -805,9 +814,15 @@ pub(super) mod tests {
 
     fn docs_and_empty() {
         assert_eq!(scope(&["docs/a.md", "README.md"]).mode, Mode::Docs);
-        // a license-notice sweep over every crate compiles nothing
+        // a license sweep over every crate compiles nothing
         assert_eq!(
-            scope(&["crates/flui-view/NOTICE", "packages/flui-material/NOTICE"]).mode,
+            scope(&[
+                "crates/flui-view/LICENSE",
+                "crates/flui-view/NOTICE",
+                "packages/flui-material/LICENSE-APACHE",
+                "packages/flui-material/NOTICE",
+            ])
+            .mode,
             Mode::Docs
         );
         assert_eq!(scope(&[]).mode, Mode::Docs);
