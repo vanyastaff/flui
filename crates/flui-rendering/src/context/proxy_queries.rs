@@ -1,5 +1,5 @@
 //! Shared helpers for single-child proxy boxes that pass layout queries
-//! through to their child unchanged (Flutter `RenderProxyBoxMixin` parity).
+//! through to their child unchanged.
 
 use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Size};

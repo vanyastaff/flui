@@ -6,11 +6,10 @@ render object's (or a `CustomPaint` painter's) drawing into a
 inline span through cosmic-text and answers layout queries on the result.
 Nothing is rasterised here — `flui-engine` replays the list.
 
-The reference is `dart:ui`'s `Canvas`/`Paint`/`Path` vocabulary and
-Flutter's `TextPainter`; the paint, style and text values (`paint`, `styling`, `typography`, plus
+The paint, style and text values (`paint`, `styling`, `typography`, plus
 `Alignment`, `BoxFit` and `TextBaseline`) are owned here too (ADR-0098 §8), and
 geometry comes from `flui_foundation::geometry`.
-Divergences from Flutter are recorded under [Mapping decisions](#mapping-decisions).
+Design decisions are recorded under [Mapping decisions](#mapping-decisions).
 
 ---
 
@@ -67,7 +66,7 @@ stack is a silent no-op for the same reason.
 system: family and weight are resolved against the host database first
 (decision 8), the buffer is shaped, and `max_lines`/`ellipsis` truncation
 RE-SHAPES the kept prefix so size, line metrics, and glyphs agree.
-`TextPainter` is the Flutter-shaped facade over it that `RenderParagraph`
+`TextPainter` is the facade over it that `RenderParagraph`
 drives; its intrinsic-width probes shape without truncation (decision 9).
 
 Every `TextPainter` measurement takes the `TextContext` it measures through:
@@ -201,65 +200,51 @@ on `SharedFontSystem`. `ClipContext` had no production implementor.
 ### 5. `Canvas::finish(self) -> DisplayList` stays infallible
 
 Returning `Result` would put a `?` on every paint call site to report a
-programmer error Flutter also reports only in debug; `save_count()` is there
+programmer error that is only a debug-time check; `save_count()` is there
 for a caller that wants to check.
 
 ### 6. The zero-area background guard sits on the FILL, not on a caller
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — behaviour is the floor, and an
-improvement over the reference owes a named record plus a replacement test.
-
 **Choice:** `paint_box_decoration` records no background — colour or gradient — when either
 dimension of its rect is exactly zero. Border, shadow and image passes stay outside the guard.
 
-**Why not where Flutter puts it:** Flutter guards this on the CLASS. `_RenderColoredBox.paint`
-(`widgets/basic.dart`) wraps its `drawRect` in `if (size > Size.zero)`, and `RenderDecoratedBox`
-(`rendering/proxy_box.dart`) has no such check, so a degenerate `DecoratedBox` there DOES record a
-zero-area fill. FLUI cannot copy that placement: `ColoredBox` here realizes as a
-`RenderDecoratedBox` with a colour-only `BoxDecoration`, so one painter serves both widgets and a
-class-level guard would have to pick which of the two to match while diverging from the other.
+**Why on the fill, not the class:** `ColoredBox` realizes as a `RenderDecoratedBox` with a
+colour-only `BoxDecoration`, so one painter serves both widgets and a class-level guard would have
+to pick one of the two to cover.
 
-**The divergence, stated:** a zero-area `DecoratedBox` in FLUI records no background where Flutter
-records one. Identical pixels — a zero-area fill rasterizes nothing either way — and one fewer
-display-list command. What a caller reading the display list sees is the difference, which is
-precisely the reason the guard was worth adding for `ColoredBox` in the first place.
+**Effect:** a zero-area `DecoratedBox` records no background. Identical pixels — a zero-area fill
+rasterizes nothing either way — and one fewer display-list command.
 
 **Alternatives:**
-- Guard the whole decoration at zero size — rejected, and this is the edge case a naive port of
-  Flutter's class-level guard loses: a border on a degenerate box still draws lines, and a shadow
+- Guard the whole decoration at zero size — rejected, and this is the edge case a class-level guard
+  loses: a border on a degenerate box still draws lines, and a shadow
   still has a silhouette. Skipping the decoration wholesale would drop them silently.
 - Give `ColoredBox` its own render object so each class can carry its own guard — rejected as
-  duplication for one boolean. `RenderColoredBox` exists but is `Leaf` arity, so it is not the
-  analogue of Flutter's child-bearing `_RenderColoredBox` either.
+  duplication for one boolean. `RenderColoredBox` exists but is `Leaf` arity, so it cannot carry
+  the child a `ColoredBox` has.
 - Signed comparison (`<= 0`) instead of `== 0` — rejected after it broke
   `circle_zero_size_and_negative_area_rects_do_not_panic`. A rect whose min exceeds its max is
   INVERTED, not empty, and this module deliberately normalizes those through `shortest_side`'s
   `.abs()`; the signed test swallowed that whole case.
 
-**Replacement test:** `harness_decorated_box_skips_the_fill_rect_at_zero_size_like_flutter`
-(`crates/flui-objects/tests/render_object_harness.rs`) covers all three degenerate shapes. The twin
-that pinned the old unconditional behaviour is deleted rather than left contradicting it.
+**Test:** the `render_object_harness` decorated-box rows in
+`crates/flui-objects/tests/render_object_harness.rs` cover the degenerate shapes.
 
 
 ### 7. `anti_alias` is a paint OPTION, not a `BoxDecoration` field
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Look around before settling") — pick the best-known shape and say
-where it comes from.
-
 **Choice:** `paint_box_decoration` takes a `DecorationPaintOptions` alongside the decoration, and
 `RenderDecoratedBox` owns the flag. `BoxDecoration` is untouched.
 
-**Why:** Flutter puts `isAntiAlias` on `_RenderColoredBox`, not on any decoration, and the reason
-generalizes: a decoration DESCRIBES an appearance and is `serde`-serializable here, while
+**Why:** a decoration DESCRIBES an appearance and is `serde`-serializable here, while
 anti-aliasing is a rasterization-quality hint that belongs to whoever is doing the rasterizing.
 Serializing a rendering hint beside colours and radii would make the style data carry something
 that is not style.
 
 **Scope, stated:** the flag reaches the SOLID COLOUR fill and nothing else. Borders, shadows and
-images keep the default because a `ColoredBox` has none of them, so the reference says nothing
-about what they should do when it is off. Gradient backgrounds keep it for the same reason: a
-`ColoredBox` has no gradient either, so the only reachable gradient is a `DecoratedBox`'s, where the
-reference has no anti-alias knob. (They COULD carry it — a gradient is a shader on an ordinary
+images keep the default because a `ColoredBox` has none of them, so nothing says
+what they should do when it is off. Gradient backgrounds keep it for the same reason: a
+`ColoredBox` has no gradient either, so the only reachable gradient is a `DecoratedBox`'s. (They COULD carry it — a gradient is a shader on an ordinary
 fill paint since ADR-0066 — and deliberately do not.) `DecorationPaintOptions` is
 `#[non_exhaustive]`, so growing it is additive if a consumer appears.
 
@@ -281,10 +266,10 @@ reason: it used to write the whole vector, which dropped the paint's bit, and di
 - A second `paint_box_decoration_aliased` entry point — rejected; two names for one operation, and
   it does not extend to the next option.
 
-**Replacement tests:** `harness_decorated_box_background_carries_the_anti_alias_flag` (render
+**Tests:** `harness_decorated_box_background_carries_the_anti_alias_flag` (render
 level, red when the flag is dropped between the render object and the canvas) and
-`colored_box_anti_alias_defaults_on_and_reaches_the_recorded_paint` (widget level, the two oracle
-cases from `basic_test.dart`, reading the composited layer tree's own `DrawRect`).
+`colored_box_anti_alias_defaults_on_and_reaches_the_recorded_paint` (widget level, the default-on and opt-out
+cases, reading the composited layer tree's own `DrawRect`).
 
 **Test-support note:** the harness's paint summary
 (`flui_rendering::testing::snapshot::summarize_paint`) now prints ` aliased` for a paint that opted
@@ -294,9 +279,6 @@ snapshots untouched while making the opt-out visible to any test reading those l
 
 
 ### 8. A style's font family is resolved against the host before it reaches the shaper
-
-**Rule:** Design stance ("Flutter is a reference, not a spec") — a behavioural divergence from the reference is recorded with the
-test that replaces the reference's own coverage.
 
 **Choice:** [`src/text_layout/font_resolve.rs`](src/text_layout/font_resolve.rs) picks the family a
 `TextStyle` is shaped with, instead of handing `style.font_family` to cosmic-text unchanged. A named
@@ -356,25 +338,24 @@ so forbidding emoji families would not redirect a Latin run, it would make emoji
 is a runtime check on the platform list, not a `cfg`: the question is "is there another route", and
 a future target answers it without being enumerated.
 
-**Accepted trade-off — this is where the divergence lies.** Flutter's `fontFamilyFallback`
-(`packages/flutter/lib/src/painting/text_style.dart`) is searched **per glyph**: each family in the
-chain is consulted when a glyph is missing from a higher-priority one. `Attrs::family` holds exactly
-one family, so a per-*glyph* chain cannot be expressed. What is expressed is the per-*style* chain:
+**Accepted trade-off — fallback is per style, not per glyph.** A per-glyph fallback chain would
+consult each family when a glyph is missing from a higher-priority one. `Attrs::family` holds exactly
+one family, so that cannot be expressed. What is expressed is the per-*style* chain:
 resolution walks `TextStyle::font_family_fallback` in order and takes the first entry the host
 carries, degrading to the sans-serif generic only when none of them is present. The residual
-divergence is therefore narrower than it was, and precisely locatable — a family that is present
-but lacks the glyph still stops the walk, where Flutter would fall through: `font_family:
-"CupertinoIcons", font_family_fallback: ["Noto Sans"]` on Latin text renders tofu here and text in
-Flutter, because `CupertinoIcons` IS installed. Closing that needs per-run family splitting above
+limit is precisely locatable — a family that is present
+but lacks the glyph still stops the walk: `font_family:
+"CupertinoIcons", font_family_fallback: ["Noto Sans"]` on Latin text renders tofu,
+because `CupertinoIcons` IS installed. Closing that needs per-run family splitting above
 `Attrs`, which is tracked separately.
 
-Pinned, per rule #1, by `a_present_but_narrow_family_stops_the_chain_where_flutter_would_not`, which
-guards the divergence in both directions: it fails if the walk is "fixed" to skip a present family
+Pinned by `a_present_but_narrow_family_stops_the_chain_without_per_glyph_fallback`, which
+guards the limit in both directions: it fails if the walk is "fixed" to skip a present family
 (that would be a different guess, not per-glyph fallback), and it fails again if per-glyph fallback
 ever lands — which is the signal to retire this record rather than let it go stale. Its control
 asserts that an ABSENT primary still reaches the chain, so the stop is about presence and not about
 the chain being unread.
-Replacement coverage, per rule #1, in two tests because no single fixture gives both properties.
+Two tests cover the rest because no single fixture gives both properties.
 `an_uninstalled_family_shapes_in_the_bound_generic_both_ways` pins which family a run shapes in,
 hermetically and in both fixture orders so that no load order satisfies it — but its fixture carries
 no emoji face, so it never observes the letters and the space landing apart.
@@ -399,11 +380,6 @@ reverted; that was verified, not assumed.
 
 ### 9. Intrinsic width probes skip `max_lines` truncation, floor at ellipsis
 
-**Rule:** Design stance ("Flutter is a reference, not a spec") — Flutter is not a clean oracle for this edge
-([flutter/flutter#13512](https://github.com/flutter/flutter/issues/13512) still open; pinned
-`text_painter_test.dart` skips the intrinsic/`maxLines` block). Record the FLUI contract and
-replace the skipped reference with a FLUI test.
-
 **Choice:** [`TextPainter`](src/text_painter/measure.rs) min/max intrinsic width probes
 (`layout()` cache fill and the uncached getters) shape with
 `LineOverflow::IgnoreForWidthIntrinsic`, so `max_lines` truncation does not reach
@@ -419,8 +395,8 @@ wider than the text's narrowest run. Intrinsics measure shaped runs / wrap oppor
 with the ellipsis as a lower bound when truncation can leave only that glyph string.
 
 **Alternatives:**
-- Copy Flutter's skipped exact intrinsic/`maxLines` equality expectations — rejected; the
-  upstream contract is unresolved.
+- Require exact intrinsic/`maxLines` equality with the truncated layout — rejected; the
+  contract is unresolved.
 - Derive min intrinsic from break opportunities without a zero-width layout — deferred; the
   overflow-free probe plus ellipsis floor restores the documented contract without a second
   shaping pipeline for the main text.
@@ -438,16 +414,15 @@ tests.
 **Rule:** a face with no bold weight is emboldened at raster time when the
 style asks for bold. cosmic-text has no fake bold at all (its swash call sets
 no `embolden`, only a 14° skew for `FAKE_ITALIC`), so there is no in-repo
-oracle, and no Flutter reference has been checked for this.
+reference.
 
-**Choice:** a FLUI choice, not a parity claim. `SwashRasterizer` grows the
+**Choice:** `SwashRasterizer` grows the
 outline by `size × ratio` in total, the ratio interpolated linearly from 1/24
 at 9 px to 1/32 at 36 px and clamped outside. The constants are the
 interpolation `SkScalerContext` uses (`kStdFakeBoldInterpKeys` `{9, 36}`,
 `kStdFakeBoldInterpValues` `{1/24, 1/32}`), recalled from Skia source and not
 checked against a clone. Skia's FreeType backend may embolden in the font host
-instead, with a different strength, so what Flutter draws on Android and Linux
-is not known to match. swash moves each point by its strength on each side,
+instead, with a different strength, so the result is not known to match Skia's on Android and Linux. swash moves each point by its strength on each side,
 so the strength passed is half the width.
 
 **Why:** the growth stays a moderate share of the stem at large sizes, where
@@ -455,7 +430,7 @@ the prototype's `size / 24` per side doubled it, and the curve is small enough
 to replace once a reference is checked.
 
 **Alternatives:** FreeType's `FT_GlyphSlot_Embolden` (about `size / 24` in
-total at every size), a candidate once Flutter's per-platform output is
+total at every size), a candidate once Skia's per-platform output is
 measured; no fake bold, as cosmic-text does — rejected, a bold style on a
 regular-only face would draw regular.
 
@@ -475,11 +450,6 @@ both types; the runtime constructs them (the app's shared engine services hold
 the collection, and each realm owns a context built in its constructor,
 ADR-0092 §10 step 2). Layout, intrinsic and dry queries measure through the
 realm's context (step 3, decision 14); it shapes under `parley-layout`.
-
-**Flutter:** one engine-wide `FontCollection` behind `dart:ui`, reached
-ambiently by every paragraph builder in the process; `loadFontFromList` adds
-to it and `PaintingBinding.systemFonts` notifies listeners. Recalled from
-Flutter's API, not checked against a clone.
 
 **Why:** FLUI runs several realms on their own threads (ADR-0027, ADR-0091).
 An ambient collection behind one lock makes every realm's shaping wait on the
@@ -506,10 +476,6 @@ and the cosmic-text font system. Locked by `two_realms_shape_in_parallel` and
 paragraph's first strong character, so Latin-first text under `Rtl` is still
 ordered as an LTR paragraph, and Hebrew-first text under `Ltr` is ordered RTL.
 
-**Flutter:** `ParagraphStyle.textDirection` sets SkParagraph's base
-direction, which orders the runs and decides which side the start edge is.
-Recalled from Flutter's API, not checked against a clone.
-
 **Why:** Parley 0.11.1 has no way to set it: its analysis calls the bidi
 resolver with `None` for the base level (`analysis/mod.rs:539-546`), and
 neither the builder nor the layout exposes one. Right alignment is the part
@@ -528,13 +494,12 @@ The default build does not shape through `ParagraphSpec`. Locked by
 
 ### 13. `Color::lerp` interpolates premultiplied
 
-Flutter's `Color.lerp` interpolates each straight-alpha channel on its own, so
-fading a colour to `Colors.transparent` (transparent *black*) darkens it on the
-way ([flutter#48674](https://github.com/flutter/flutter/issues/48674)): red to
-transparent passes through `(128, 0, 0, 128)`. FLUI weights each channel by its
+Interpolating each straight-alpha channel on its own would darken a colour faded to
+transparent (transparent *black*): red to transparent would pass through
+`(128, 0, 0, 128)`. `Color::lerp` weights each channel by its
 endpoint's alpha and divides by the mixed alpha, as CSS Color 4 does, so the
 same fade stays red: `(255, 0, 0, 128)`. Between two opaque colours the result
-is Flutter's. When the mixed alpha is zero there is nothing to weight by and the
+is the plain per-channel lerp. When the mixed alpha is zero there is nothing to weight by and the
 channels interpolate straight, which keeps both endpoints exact. Everything that
 lerps a colour inherits it: border sides, shadows, decorations and gradient
 stops. Locked by `lerp_to_transparent_keeps_the_hue`
@@ -547,10 +512,6 @@ there is no ambient collection to fall back on. A render object lends its
 realm's context (`ctx.text()` in flui-rendering), and the painter's cache is
 keyed on that context's collection and generation as well as the
 constraints.
-
-**Flutter:** `TextPainter.layout` builds a `ui.Paragraph` that reaches the
-engine-wide `FontCollection` ambiently; nothing is passed. Recalled from
-Flutter's API, not checked against a clone.
 
 **Why:** a realm owns its text context (decision 11), and a realm's layout
 must measure with it rather than with whichever context is ambient. Passing it
@@ -577,10 +538,6 @@ device grid once, when painted (`(line_y * scale).round()`). The ellipsis is
 not shaped into the last kept line: `max_lines` stops the metrics at the kept
 lines, and the ellipsis only floors the intrinsic widths. Parley's width
 excludes trailing whitespace; cosmic-text's includes it.
-
-**Flutter:** one paragraph object answers metrics and paints, so what is
-painted is what was measured, ellipsis included. Recalled from Flutter's API,
-not checked against a clone.
 
 **Why:** painted-as-measured returns when `DrawOp::Paragraph` carries runs
 from the same Parley layout (ADR-0092 §10 step 4) and carets come from its
@@ -627,5 +584,5 @@ the family-selection regression. The four older generated fixtures are unchanged
 and complete local license/attribution texts. The font asset gate discovers
 unlisted fonts, checks hashes/notices, regenerates all fixtures into a temporary
 directory, and checks Cargo package file selection. This is a Rust test-fixture
-and packaging decision; it changes no Flutter-derived shaping contract. It also
+and packaging decision; it changes no shaping contract. It also
 does not solve registry dependency cycles or certify complete release archives.

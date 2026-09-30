@@ -5,24 +5,12 @@
 //! the opaque [`RouteBindingSlot`] a route hands the
 //! navigator to receive one is exported. See *Correction 2* and its resolution below.
 //!
-//! # What Flutter does
+//! # Why routes do not call the navigator directly
 //!
-//! A Flutter `Route` holds `_navigator` and calls back into it directly:
-//!
-//! ```dart
-//! // routes.dart:87-94 — OverlayRoute.didPop, i.e. DURING _flushHistoryUpdates
-//! if (finishedWhenPopped) { navigator!.finalizeRoute(this); }
-//!
-//! // navigator.dart:5825-5828 — finalizeRoute
-//! entry.finalize();
-//! if (!_flushingHistory) { _flushHistoryUpdates(rearrangeOverlay: false); }
-//! ```
-//!
-//! So `finalizeRoute` mutates the entry **immediately** and merely declines to
-//! start a *nested* flush while one is running. `handlePush`'s
-//! `whenCompleteOrCancel` (`navigator.dart:3276-3290`) is the opposite: it
-//! `assert(!navigator._debugLocked)`, because a `TickerFuture` completion always
-//! arrives on a later microtask, never inside a flush.
+//! A route finishing during a flush (e.g. from `did_pop`) needs the navigator to
+//! finalize it. Mutating the entry **immediately** while declining to start a
+//! *nested* flush is the shape that is needed; a push-completion, by contrast,
+//! must never land inside a flush.
 //!
 //! # Correction 1 to ADR-0020: a direct callback would **deadlock**
 //!
@@ -36,7 +24,7 @@
 //! mutex, then calls a `wake` closure. `wake` uses `try_lock` on the history: if
 //! it succeeds we are outside a flush and the commands are applied and flushed
 //! at once; if it fails, a flush is in progress on this thread and *that* flush
-//! drains the queue before it returns. The queue is Flutter's `_flushingHistory`
+//! drains the queue before it returns. The queue is the "is a flush running"
 //! check, expressed as ownership rather than as a flag.
 //!
 //! This preserves both invariants: `RouteHistory` never learns about the
@@ -95,25 +83,21 @@ use crate::OverlayEntry;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RouteCommand {
     /// The entrance transition's `TickerFuture` resolved, complete or
-    /// canceled alike — Flutter's `whenCompleteOrCancel` callback
-    /// (`navigator.dart:3276-3290`): `pushing` → `idle`, then re-flush. Raised
+    /// canceled alike: `pushing` → `idle`, then re-flush. Raised
     /// by `NavigatorShared::await_push`'s continuation (ADR-0064), not by a
     /// route through this binding.
     PushCompleted(RouteId),
-    /// The route is finished and may be disposed. Flutter's `finalizeRoute`
-    /// (`navigator.dart:5798-5834`): `entry.finalize()`, then flush unless one is
-    /// already running.
+    /// The route is finished and may be disposed: the entry is finalized, then
+    /// a flush runs unless one is already running.
     Finalize(RouteId),
 }
 
 /// What one transition route publishes about itself so the route **below** it can
 /// drive its `secondary_animation`.
 ///
-/// Flutter reads these straight off the next `Route` object
-/// (`routes.dart:429-437`). FLUI's routes are named by [`RouteId`] and live behind
-/// `Box<dyn ErasedRoute>` inside a `Mutex`, so a route cannot reach another —
-/// this was flagged early on as needing a lookup handle. The
-/// registry is that handle.
+/// FLUI's routes are named by [`RouteId`] and live behind
+/// `Box<dyn ErasedRoute>` inside a `Mutex`, so a route cannot reach another
+/// directly. The registry is the lookup handle.
 ///
 /// `pub` only so `crate::__test_access` can re-export it (ADR-0083 §4); the
 /// module is private, so nothing else names it.
@@ -121,14 +105,12 @@ pub(crate) enum RouteCommand {
 pub struct TransitionPeer {
     /// The route's **primary** animation, controller-backed.
     pub animation: Arc<dyn Animation<f64>>,
-    /// `nextRoute.canTransitionFrom(this)` (`routes.dart:561`), asked of the
-    /// route *above*.
+    /// Whether the route *above* can transition from this one.
     pub can_transition_from: bool,
     /// Which family of routes this one coordinates transitions with.
     pub group: TransitionGroup,
-    /// Fires when the route is disposed — Flutter's `Route.completed`
-    /// (`routes.dart:115-122`), which `_setSecondaryAnimation` awaits to release
-    /// its reference to a gone route's animation (`:503-509`).
+    /// Fires when the route is disposed, so the route below can release its
+    /// reference to a gone route's animation.
     pub(crate) completed: Arc<CompletedSignal>,
 }
 
@@ -143,18 +125,15 @@ impl std::fmt::Debug for TransitionPeer {
 
 /// The family a route coordinates its transitions with.
 ///
-/// Flutter expresses this as a *pair* of predicates over the other route's Dart
-/// type — `PageRoute.canTransitionTo(next) => next is PageRoute` and
-/// `PageRoute.canTransitionFrom(prev) => prev is PageRoute` (`pages.dart:58-61`),
-/// while every other `TransitionRoute` leaves both at `true`. Because
-/// `PageRoute` overrides *both* sides with the same test, the pair is exactly a
-/// symmetric "same family?" relation, which is what this enum encodes. FLUI's
-/// routes cannot ask "is the route above a `PageRoute`" — they name each other by
-/// [`RouteId`] and never hold each other's object — so the family
-/// travels with the published [`TransitionPeer`].
+/// A page route coordinates only with other page routes, while every other
+/// transition route coordinates with anything that also leaves the relation
+/// open — a symmetric "same family?" relation, which is what this enum
+/// encodes. FLUI's routes cannot ask "is the route above a page route" — they
+/// name each other by [`RouteId`] and never hold each other's object — so the
+/// family travels with the published [`TransitionPeer`].
 ///
 /// A `PopupRoute` pushed over a `PageRoute` therefore drives no secondary
-/// animation on the page, matching `PageRoute.canTransitionTo(popup) == false`.
+/// animation on the page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TransitionGroup {
     /// `TransitionRoute`'s defaults: coordinates with anything else that also
@@ -167,8 +146,8 @@ pub enum TransitionGroup {
 
 /// A one-shot "this route is disposed" owner-local signal with callbacks.
 ///
-/// Flutter uses a `Future`; FLUI's routes are driven synchronously from the flush,
-/// so a plain callback list is both sufficient and observable. Private: this is
+/// FLUI's routes are driven synchronously from the flush, so a plain callback
+/// list is both sufficient and observable (no future needed). Private: this is
 /// the `completed` channel, added **only if** the disposal /
 /// train-hopping contract needs it. It does — see `transition_route.rs`.
 #[derive(Default)]
@@ -213,11 +192,9 @@ pub(crate) type TransitionRegistry = Arc<Mutex<HashMap<RouteId, TransitionPeer>>
 
 /// The clock a route's `AnimationController` registers with.
 ///
-/// **Correction to ADR-0020.** Flutter's `vsync: navigator!` works
-/// because `NavigatorState` mixes in `TickerProviderStateMixin`.
-/// `flui_animation::Vsync` is not a `TickerProvider` at all but a *registry*
-/// a binding drives with `tick_all`. So the seam is not "the navigator is the
-/// ticker" but "the navigator owns the `Vsync` its routes register with" —
+/// **Correction to ADR-0020.** `flui_animation::Vsync` is not a
+/// ticker provider but a *registry* a binding drives with `tick_all`. So the
+/// seam is not "the navigator is the ticker" but "the navigator owns the `Vsync` its routes register with" —
 /// which preserves the property that matters: one clock per navigator, and
 /// transitions freeze when the navigator's binding stops ticking.
 ///
@@ -229,31 +206,28 @@ pub(crate) type TransitionRegistry = Arc<Mutex<HashMap<RouteId, TransitionPeer>>
 pub(crate) type RouteVsync = Arc<Mutex<Option<Vsync>>>;
 
 /// `RouteId -> OverlayEntry`, the navigator's map. A route reaches **its own**
-/// entry through it — Flutter's `OverlayRoute.overlayEntries`, which FLUI keeps
-/// on the navigator instead (`overlay_route.rs`).
+/// entry through it; the entries live on the navigator, not the route
+/// (`overlay_route.rs`).
 pub(crate) type RouteEntries = Arc<Mutex<HashMap<RouteId, OverlayEntry>>>;
 
-/// `RouteId -> RouteSubtreeCell`, the navigator's answer to Flutter's
-/// `route.subtreeContext` (`routes.dart:1966`) — which reads a `GlobalKey` off the
-/// route object. FLUI's routes live behind `Box<dyn ErasedRoute>` inside the
+/// `RouteId -> RouteSubtreeCell`, the navigator's way to reach a route's page
+/// subtree. FLUI's routes live behind `Box<dyn ErasedRoute>` inside the
 /// history's mutex, so the route publishes its cell into a registry the navigator
-/// owns instead.
+/// owns.
 pub(crate) type RouteSubtrees = Arc<Mutex<HashMap<RouteId, RouteSubtreeCell>>>;
 
-/// `RouteId -> ModalHandle`, the navigator's answer to Flutter's
-/// `toRoute.offstage = …` (`routes.dart:1951`, driven from `heroes.dart:967`) —
-/// which writes straight to the `Route` object. FLUI's routes are unreachable, so a
-/// `ModalRoute` publishes its handle here at `install()`.
+/// `RouteId -> ModalHandle`, how the navigator (and the hero controller) set a
+/// route's `offstage`. FLUI's routes are unreachable, so a `ModalRoute`
+/// publishes its handle here at `install()`.
 pub(crate) type RouteModals = Arc<Mutex<HashMap<RouteId, ModalHandle>>>;
 
 /// How a route's exit transition should run, overriding its own default
 /// reverse pacing for exactly one pop.
 ///
-/// Flutter's `_CupertinoBackGestureController.dragEnd` (`cupertino/route.dart`,
-/// 3.44.0) calls `_controller.animateBack(...)` with a duration/curve it
-/// computed from the drag (the fling velocity, or the flat 350ms/
-/// `Curves.fastEaseInToSlowEaseOut` "stay" pacing) — never the route's plain
-/// `reverse()`. FLUI has no `Route` object a gesture controller can reach to
+/// A back-gesture release animates back with a duration/curve computed from
+/// the drag (the fling velocity, or the flat 350ms/
+/// `Curves::FastEaseInToSlowEaseOut` "stay" pacing) — never the route's plain
+/// reverse. FLUI has no `Route` object a gesture controller can reach to
 /// override, so the navigator publishes the override here, keyed by the one
 /// route it applies to, and [`RouteBinding::take_pop_pacing`] consumes it
 /// exactly once, from that route's own `did_pop`.
@@ -287,7 +261,8 @@ pub(crate) type RouteCommandQueue = Arc<Mutex<VecDeque<RouteCommand>>>;
 ///
 /// A bundle rather than five parameters: they are created together in
 /// `NavigatorHandle::new`, cloned together into every binding, and each is a
-/// `RouteId -> _` map Flutter reads straight off the `Route` object.
+/// `RouteId -> _` map standing in for state a route object would otherwise
+/// own directly.
 #[derive(Clone)]
 pub(crate) struct RouteRegistries {
     /// `RouteId -> TransitionPeer`. A **different** mutex from the history's, so a
@@ -343,8 +318,7 @@ impl RouteBinding {
         }
     }
 
-    /// This route's overlay entry, or `None` before it is installed — Flutter's
-    /// `overlayEntries.isNotEmpty` guard (`routes.dart:295`).
+    /// This route's overlay entry, or `None` before it is installed.
     ///
     /// Cloned **out** of the map, so the caller never holds the `entries` lock
     /// while touching the overlay.
@@ -352,22 +326,21 @@ impl RouteBinding {
         self.registries.entries.lock().get(&self.route).cloned()
     }
 
-    /// `overlayEntries.first.opaque = value` (`routes.dart:296`, `:304`).
+    /// Set whether this route's overlay entry is opaque.
     pub(crate) fn set_entry_opaque(&self, opaque: bool) {
         if let Some(entry) = self.entry() {
             entry.set_opaque(opaque);
         }
     }
 
-    /// `_modalScope.maintainState = maintainState` (`routes.dart:2230`).
+    /// Set whether this route's overlay entry maintains its state while hidden.
     pub(crate) fn set_entry_maintain_state(&self, maintain_state: bool) {
         if let Some(entry) = self.entry() {
             entry.set_maintain_state(maintain_state);
         }
     }
 
-    /// `_modalBarrier.markNeedsBuild()` (`routes.dart:2228`) — rebuild **this
-    /// route's** overlay entry, not the navigator.
+    /// Rebuild **this route's** overlay entry, not the navigator.
     ///
     /// Reached only through `ModalRoute::changed_internal_state`, whose caller is
     /// `ModalHandle::set_offstage` — the `HeroController` seam.
@@ -397,8 +370,7 @@ impl RouteBinding {
         let _prev = self.registries.peers.lock().remove(&self.route);
     }
 
-    /// Publish where this route's page subtree *will* live — Flutter's
-    /// `_subtreeKey`, which a `ModalRoute` owns from construction (`routes.dart:2268`).
+    /// Publish where this route's page subtree *will* live.
     ///
     /// The cell is registered at `install()`, before the page has ever been built,
     /// and resolves to `None` until it mounts. See `subtree.rs`.
@@ -412,8 +384,8 @@ impl RouteBinding {
         let _prev = self.registries.subtrees.lock().remove(&self.route);
     }
 
-    /// Publish this route's `offstage` control — Flutter's `route.offstage` setter,
-    /// reachable off the `Route` object it hands `HeroController` (`heroes.dart:967`).
+    /// Publish this route's `offstage` control, the handle `HeroController`
+    /// uses.
     pub(crate) fn publish_modal(&self, modal: ModalHandle) {
         let _prev = self.registries.modals.lock().insert(self.route, modal);
     }
@@ -438,13 +410,12 @@ impl RouteBinding {
         self.route
     }
 
-    /// The peer for `route`, or `None` when it is not a transition route —
-    /// Flutter's `nextRoute is TransitionRoute` test (`routes.dart:429`).
+    /// The peer for `route`, or `None` when it is not a transition route.
     pub(crate) fn peer(&self, route: RouteId) -> Option<TransitionPeer> {
         self.registries.peers.lock().get(&route).cloned()
     }
 
-    /// The route is finished; dispose it — Flutter's `navigator.finalizeRoute`.
+    /// The route is finished; dispose it.
     pub(crate) fn finalize(&self) {
         self.raise(RouteCommand::Finalize(self.route));
     }

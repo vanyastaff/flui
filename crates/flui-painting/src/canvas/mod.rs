@@ -1,7 +1,7 @@
 //! `Canvas` — records drawing commands into a [`DisplayList`].
 //!
-//! The surface is `dart:ui`'s `Canvas` (the contract a `CustomPaint`
-//! painter is written against): every command is recorded with the current
+//! This is the surface a `CustomPaint` painter is written against: every
+//! command is recorded with the current
 //! transform baked in, clips are scoped by `save`/`restore`, and nothing is
 //! rasterised here — `flui-engine` replays the list.
 //!
@@ -110,8 +110,7 @@ impl Canvas {
     ///
     /// Consumes the canvas. On unrestored save() calls, fires
     /// `debug_assert!` (caught during tests) and `tracing::warn!`
-    /// (release-build observability); release behaviour matches Flutter's
-    /// `PictureRecorder.endRecording()` silent finalisation.
+    /// (release-build observability); release builds finalise silently.
     #[tracing::instrument(skip(self), fields(
         commands = self.display_list.len(),
         save_depth = self.save_stack.len(),

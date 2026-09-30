@@ -28,7 +28,7 @@ let list = canvas.finish(); // Save, DrawRect, Restore
   the process-wide font system that the engine shares
   (`shared_font_system()`), so a face registered through
   `SharedFontSystem::register_font` measures and paints alike.
-- `paint_box_decoration`, `paint_table_border` — the Flutter-shaped
+- `paint_box_decoration`, `paint_table_border` — the
   decoration painters.
 
 The crate owns the paint, style and text values:

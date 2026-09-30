@@ -6,8 +6,7 @@
 //! current virtual instant. Controllers reach the same registry ambiently — in
 //! the widget layer a `VsyncScope` inherited-view hands a clone down a subtree,
 //! and an implicitly-animated widget registers its controller in `init_state`.
-//! This is the FLUI-native, non-singleton analogue of Flutter's
-//! `SchedulerBinding` owning every `Ticker`.
+//! It is not a process-wide singleton.
 //!
 //! ## Why the binding drives controllers here, not via each controller's own
 //! scheduler-ticker
@@ -48,8 +47,8 @@ pub struct VsyncRegistration(u64);
 /// Subtracting the two `f64` readings directly leaves the difference one ulp
 /// off the value a `Duration` of the same length converts to (`0.12 - 0.02` is
 /// `0.09999999999999999`), so a 100 ms run anchored at 20 ms would stop one ulp
-/// short of its end and never complete. Flutter avoids the same trap by
-/// measuring elapsed time in integer microseconds.
+/// short of its end and never complete. Measuring elapsed time in integer
+/// nanoseconds avoids the trap.
 fn elapsed_since(start: f64, now: f64) -> f64 {
     const NANOS_PER_SEC: f64 = 1e9;
     let nanos = (now * NANOS_PER_SEC).round() - (start * NANOS_PER_SEC).round();
@@ -86,14 +85,12 @@ struct VsyncInner {
     /// ascending key order is ascending registration order. `tick_all`'s
     /// cursor walk relies on that order to replace a per-frame id snapshot.
     controllers: BTreeMap<u64, RegisteredController>,
-    /// Nested registries — Flutter's `TickerMode` mutes a *subtree*'s tickers
-    /// (`ticker_provider.dart:397`); FLUI's widgets take their `Vsync` from the
-    /// ambient `VsyncScope`, so a subtree's registry is a child of the one
-    /// above it and muting is structural: a muted registry ticks neither its
-    /// own controllers nor its children's. That is Flutter's
-    /// `_updateEffectiveMode` AND (`ticker_provider.dart:246-252`) — a nested
-    /// enabled `TickerMode` cannot re-enable a muted ancestor, because the
-    /// ancestor never forwards the tick.
+    /// Nested registries — muting applies to a whole *subtree*'s controllers.
+    /// Widgets take their `Vsync` from the ambient `VsyncScope`, so a
+    /// subtree's registry is a child of the one above it and muting is
+    /// structural: a muted registry ticks neither its own controllers nor its
+    /// children's. A nested unmuted registry cannot re-enable a muted
+    /// ancestor, because the ancestor never forwards the tick.
     children: Vec<RegisteredChild>,
     next_id: u64,
     muted: bool,
@@ -200,8 +197,7 @@ impl Vsync {
     }
 
     /// Whether this registry is muted — its controllers and every nested
-    /// registry stop advancing (`ticker.dart:124-128`'s `muted` semantics,
-    /// lifted to the registry a `TickerMode` owns).
+    /// registry stop advancing.
     #[must_use]
     pub fn is_muted(&self) -> bool {
         self.inner.lock().muted
@@ -212,9 +208,8 @@ impl Vsync {
     ///
     /// **The clock keeps running.** Run anchors are absolute, so an unmuted
     /// controller lands where the wall clock says it should be — it does not
-    /// resume from where it stopped. That is Flutter's `Ticker.muted`
-    /// convention: "a ticker's clock can still run, but the callback will not
-    /// be called" (`ticker.dart:102-104`).
+    /// resume from where it stopped: a muted clock still runs, only the
+    /// callback is withheld.
     pub fn set_muted(&self, muted: bool) {
         self.inner.lock().muted = muted;
     }
@@ -344,17 +339,12 @@ impl Vsync {
     ///
     /// `muted` is **re-read under the per-iteration lock**, not only at
     /// entry: a listener that mutes the registry mid-walk stops the remaining
-    /// entries of *this* frame from ticking — Flutter honors a mid-frame
-    /// `Ticker.muted = true` the same way: the `muted` setter's
-    /// `unscheduleTick` call (`scheduler/ticker.dart`) hands the cancellation
-    /// to `SchedulerBinding.cancelFrameCallbackWithId`, and it is
-    /// `handleBeginFrame`'s callback loop (`scheduler/binding.dart`), which
-    /// skips any id already in `_removedIds`, that actually honors it within
-    /// the same frame. Nested `children` registries are still sampled **once
-    /// at entry** and ticked before the cursor walk starts, exactly as
-    /// before: a child attached via [`attach_child`](Self::attach_child) from
-    /// a listener mid-walk is first ticked on the *next* call — a ticker
-    /// started mid-frame schedules for the next frame in Flutter too.
+    /// entries of *this* frame from ticking. Nested `children` registries are
+    /// still sampled **once at entry** and ticked before the cursor walk
+    /// starts, exactly as before: a child attached via
+    /// [`attach_child`](Self::attach_child) from a listener mid-walk is first
+    /// ticked on the *next* call — a ticker started mid-frame schedules for
+    /// the next frame.
     ///
     /// Cost: **O(log N)** per register/unregister/lookup — each
     /// `range_mut(cursor..fence).next()` is its own fresh seek, since the
@@ -378,7 +368,7 @@ impl Vsync {
         // A muted registry delivers no tick — not to its own controllers, not
         // to a nested registry's. The anchors are absolute and left alone, so
         // the clock keeps running underneath: an unmute lands the animation
-        // where the wall clock says (`ticker.dart:102-104`).
+        // where the wall clock says.
         if muted {
             return;
         }
@@ -469,8 +459,7 @@ mod tests {
         AnimationController::new(Duration::from_millis(ms), &UpdateScheduler::new())
     }
 
-    /// Muting is **structural**, so nesting composes as Flutter's
-    /// `_updateEffectiveMode` AND (`ticker_provider.dart:246-252`): an inner
+    /// Muting is **structural**, so nesting composes as a logical AND: an inner
     /// registry that is itself unmuted still never advances while an ancestor
     /// is muted — the ancestor simply never forwards the tick. There is no
     /// flag to compose, and no way to get the composition wrong.

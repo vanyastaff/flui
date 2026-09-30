@@ -117,7 +117,7 @@ impl From<HSLColor> for Color {
             (c, 0.0, x)
         };
 
-        // Round like Flutter's `_colorFromHue`; truncating loses a unit
+        // Round to nearest; truncating loses a unit
         // whenever the float lands just under an integer.
         Color::rgba(
             ((r + m) * 255.0).round() as u8,
@@ -234,7 +234,7 @@ impl From<HSVColor> for Color {
             (c, 0.0, x)
         };
 
-        // Round like Flutter's `_colorFromHue`; truncating loses a unit
+        // Round to nearest; truncating loses a unit
         // whenever the float lands just under an integer.
         Color::rgba(
             ((r + m) * 255.0).round() as u8,

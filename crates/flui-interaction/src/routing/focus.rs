@@ -59,7 +59,7 @@ pub type KeyEventCallback = Rc<dyn Fn(&KeyEvent) -> bool>;
 /// caller had already had accepted), so a later, healthy call is never
 /// asked to replay a chain a panic interrupted partway through.
 /// See `## Mapping decisions` in `crates/flui-interaction/docs/ARCHITECTURE.md`
-/// for how this compares to Flutter's microtask-deferred model.
+/// for why transitions apply synchronously rather than being deferred.
 pub struct FocusManager {
     root_scope: Rc<FocusScopeNode>,
     primary_focus: RefCell<Option<Rc<FocusNode>>>,
@@ -132,9 +132,8 @@ impl FocusManager {
     /// Maximum reentrant focus transitions applied per outermost
     /// `request_focus`/`unfocus`/`close` call.
     ///
-    /// FLUI applies focus transitions synchronously, unlike Flutter's
-    /// microtask-scheduled `applyFocusChangesIfNeeded`
-    /// (`focus_manager.dart`), which merely yields a frame per bounce —
+    /// FLUI applies focus transitions synchronously (unlike a
+    /// microtask-deferred model, which merely yields a frame per bounce), so
     /// two listeners that keep redirecting focus to each other would
     /// otherwise spin the caller forever. Past the budget,
     /// [`Self::drain_pending_focus_transitions`] drops whatever is left
@@ -472,9 +471,7 @@ impl FocusManager {
         let listeners = self.listeners.borrow().clone();
         for (id, listener) in listeners {
             // A listener already dispatched in this loop may have removed
-            // a later one (itself included) — skip it, matching Flutter's
-            // `_HighlightModeManager.notifyListeners`
-            // (`if (_listeners.contains(listener))`): once removed, a
+            // a later one (itself included) — skip it: once removed, a
             // listener is never called again, even mid-dispatch.
             let still_registered = self.listeners.borrow().iter().any(|(held, _)| *held == id);
             if still_registered {
@@ -630,10 +627,8 @@ impl FocusManager {
     ///
     /// The walk normally starts at the primary focus. A window opened with
     /// nothing focused has none, so without a target every key is dropped —
-    /// including the first Tab that would bring the focus in. Flutter never
-    /// has that state: its primary focus falls back to the root scope, and an
-    /// app's route scope sits under the `WidgetsApp` shortcuts. FLUI's
-    /// default bindings claim their own node here instead, so the walk
+    /// including the first Tab that would bring the focus in. FLUI's
+    /// default bindings claim their own node here, so the walk
     /// reaches them and nothing about `primary_focus` changes.
     ///
     /// Claims nest: the newest one that is still alive, attached and owned by
@@ -1064,9 +1059,8 @@ mod tests {
     }
 
     /// Two listeners that keep redirecting focus to each other cannot spin
-    /// the caller forever: FLUI applies transitions synchronously (unlike
-    /// Flutter's microtask-scheduled model, which merely yields a frame
-    /// per bounce), so the drain is bounded at
+    /// the caller forever: FLUI applies transitions synchronously, so the
+    /// drain is bounded at
     /// `FocusManager::REENTRANT_FOCUS_DRAIN_BUDGET` applications and warns
     /// once when it drops the rest.
     fn ping_pong_listeners_are_bounded_and_warned() {

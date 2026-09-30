@@ -8,11 +8,11 @@ use parking_lot::Mutex;
 use std::fmt;
 use std::sync::Arc;
 
-/// Flutter's `CurvedAnimation._updateCurveDirection` (`animations.dart`,
-/// 3.44.0): `_curveDirection = status.isAnimating ? _curveDirection ??
-/// status : null`. Reads only the reported `AnimationStatus` — no separate
-/// "is a ticker literally running" check. Shared by the constructor's seed
-/// call and the status-listener callback so both apply the identical rule.
+/// Captures the run's entering direction while animating (keeping an already
+/// captured one) and clears it at rest. Reads only the reported
+/// `AnimationStatus` — no separate "is a ticker literally running" check.
+/// Shared by the constructor's seed call and the status-listener callback so
+/// both apply the identical rule.
 fn update_curve_direction(direction: &Mutex<Option<AnimationStatus>>, status: AnimationStatus) {
     let mut direction = direction.lock();
     match status {
@@ -58,8 +58,7 @@ pub struct CurvedAnimation<C: Curve + Clone + Send + Sync> {
     notifier: Arc<ChangeNotifier>,
     /// The running direction captured at run start; `None` at rest.
     ///
-    /// Flutter parity (`CurvedAnimation._curveDirection`): the active curve is
-    /// locked to the direction the run *entered* with, so flipping direction
+    /// The active curve is locked to the direction the run *entered* with, so flipping direction
     /// mid-run does not swap curves underneath the value and cause a visual
     /// discontinuity.
     curve_direction: Arc<Mutex<Option<AnimationStatus>>>,
@@ -83,9 +82,7 @@ impl<C: Curve + Clone + Send + Sync> CurvedAnimation<C> {
         let parent_sub = link_parent(&parent, &notifier);
 
         let curve_direction = Arc::new(Mutex::new(None));
-        // Flutter's `CurvedAnimation` constructor (`animations.dart`, 3.44.0):
-        // `_updateCurveDirection(parent.status); parent.addStatusListener(...)`
-        // — the seed runs BEFORE the listener is registered. A
+        // The seed runs BEFORE the status listener is registered. A
         // `CurvedAnimation` built while the parent is already mid-run (e.g.
         // constructed against a controller some other code already called
         // `forward()` on) captures the run's entering direction immediately;
@@ -128,7 +125,7 @@ impl<C: Curve + Clone + Send + Sync> CurvedAnimation<C> {
     ///
     /// Uses the direction captured at run start when running (so a mid-run
     /// direction flip keeps the entry curve), falling back to the parent's
-    /// instantaneous status at rest — Flutter's `_useForwardCurve`.
+    /// instantaneous status at rest.
     #[inline]
     fn current_curve(&self) -> &C {
         let captured: Option<AnimationStatus> = *self.curve_direction.lock();
@@ -198,7 +195,7 @@ mod tests {
 
     #[test]
     fn reverse_curve_locked_to_run_entry_direction() {
-        // Flutter `_curveDirection` parity: a run that entered Forward keeps
+        // A run that entered Forward keeps
         // the forward curve even if the parent's status flips to Reverse
         // mid-run; the reverse curve only applies to a run entered in
         // Reverse. Without the lock, a mid-run `reverse()` would swap curves

@@ -248,7 +248,7 @@ pub struct WindowCallbacks {
     /// is_visible (`true` when the window becomes visible/unoccluded).
     ///
     /// Distinct from `on_active_status_change`: a window can be visible but
-    /// unfocused (Flutter's `AppLifecycleState::Inactive`), or focused but
+    /// unfocused (the `Inactive` lifecycle state), or focused but
     /// not visible (unusual, but not excluded). Feeds the `AppLifecycleState`
     /// derivation `ADR-0035` documents; winit's `WindowEvent::Occluded`
     /// drives it on desktop, but only on X11 (Xlib's

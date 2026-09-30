@@ -1,7 +1,7 @@
 # Native iOS application
 
 FLUI builds the Rust executable and creates its native UIKit application bundle.
-No Flutter Runner or Xcode project is required.
+No Xcode project is required.
 
 - `flui build ios`: stage an unsigned device `.app` (signing is a separate step).
 - `flui build ios --simulator <UDID>`: build for an available iOS simulator.

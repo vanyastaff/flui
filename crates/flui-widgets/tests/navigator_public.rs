@@ -4,14 +4,11 @@
 //! `HeadlessBinding` frame — the path `UiRealm::draw_frame` takes. If a name
 //! were not exported, this file would not compile.
 //!
-//! # Parity oracles
+//! # Scenarios
 //!
-//! `.flutter/packages/flutter/test/widgets/navigator_test.dart` —
-//! `'Can navigator navigate to and from a stateful widget'`,
-//! `'Navigator.of fails gracefully when not found in context'`,
-//! `'Navigator.of rootNavigator finds root Navigator'`,
-//! `'Can push, pop, and replace in sequence'`, `'removeRoute'`,
-//! `'remove a route whose value is awaited'`.
+//! Navigating to and from a stateful widget, a graceful failure when no
+//! navigator is in context, finding the root navigator, push/pop/replace in
+//! sequence, `remove_route`, and removing a route whose value is awaited.
 
 // ADR-0027: these public API tests capture owner-local `NavigatorHandle`s in
 // test cells. The production crate has the same lint allowance; integration
@@ -135,8 +132,7 @@ fn leaf(_ctx: &dyn BuildContext) -> BoxedView {
 ///
 /// The disposal half is not incidental. `Route::dispose` is an explicit method,
 /// not `Drop`, and this refusal is a routine path rather than a rare one, so a
-/// `GeneratedRoute` that is dropped unpushed has to run it — Flutter discharges
-/// the same obligation in `defaultGenerateInitialRoutes`' failure branch. The
+/// `GeneratedRoute` that is dropped unpushed has to run it. The
 /// leak is invisible without this assertion.
 ///
 /// Red-check for the refusal: drop the `TypeId` comparison in

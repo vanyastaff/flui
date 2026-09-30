@@ -381,8 +381,7 @@ nearest ancestor Router acquired in `init_state`, `Navigator` frozen.
 **Alternatives rejected.** Builder routes; named routes in the prelude.
 
 **Changed by verification.** `Router::of(w)` cannot be implemented, because a `Writer` has no
-position in the tree; the handle comes from `init_state` (Flutter's `Navigator.of(context)`
-contract). The research synthesis also had "every push produces a URL-addressable entry; no
+position in the tree; the handle comes from `init_state`. The research synthesis also had "every push produces a URL-addressable entry; no
 pageless routes", which the final report dropped without a reason; see
 [open-questions.md](open-questions.md#15-pageless-routes).
 
@@ -525,8 +524,7 @@ outside author's build. A package leaves for its own repository only on a record
 
 **Alternatives rejected.** A nested workspace before anything is published (double compilation,
 exact prerelease pins, a second root that change classification does not see). Separate
-repositories now (two-way pins and a roller bot; Flutter consolidated its repositories in 2023
-and 2024).
+repositories now (two-way pins and a roller bot).
 
 **Evidence.** The panel counted 68 of 123 commits touching the design-system crates also touch other crates. The
 named exceptions: `crates/flui-testing/Cargo.toml:106` (dev edge to `flui-devtools`),
@@ -756,7 +754,7 @@ how.
 FLUI is a UI runtime trusted by people and agents: deterministic frames, realms without process
 globals, one protocol shared by tests, devtools and agents
 ([ADR-0095](../docs/adr/ADR-0095-agent-protocol-schema-crate.md)), and generative UI through
-A2UI. The Flutter model stays as the familiar shape, not the headline promise. Recorded in
+A2UI. The declarative widget model stays as the familiar shape, not the headline promise. Recorded in
 [architecture.md](architecture.md).
 
 #### S2. Notes is the hero application

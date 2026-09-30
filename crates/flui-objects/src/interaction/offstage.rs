@@ -1,44 +1,31 @@
 //! `RenderOffstage` — single-child proxy that lays its subtree out **at full
 //! size** while hiding it from paint, hit-test and semantics.
 //!
-//! # Flutter equivalence
+//! # Contract
 //!
-//! Port of Flutter's `RenderOffstage`
-//! (`packages/flutter/lib/src/rendering/proxy_box.dart:3834-3952`, master
-//! `3.33.0-0.0.pre-6280-g88e87cd963f`). The contract, read from the source:
-//!
-//! ```dart
-//! bool get sizedByParent => offstage;                                    // :3896
-//! Size computeDryLayout(c) => offstage ? c.smallest : super…;            // :3905-3910
-//! void performLayout() { if (offstage) { child?.layout(constraints); }   // :3919-3925
-//!                        else { super.performLayout(); } }
-//! bool hitTest(…)      => !offstage && super.hitTest(…);                 // :3927-3930
-//! void paint(…)        { if (offstage) return; super.paint(…); }         // :3937-3943
-//! void visitChildrenForSemantics(v) { if (offstage) return; super…; }    // :3945-3951
-//! ```
+//! * While `offstage`, the box is sized by the parent to
+//!   `constraints.smallest`, `paint` returns without painting, `hit_test`
+//!   refuses, and the semantics walk drops the subtree (this node's own
+//!   configuration is still built).
+//! * While not `offstage`, it is a transparent single-child proxy.
 //!
 //! The child is laid out under the **real incoming constraints** — that is the
-//! whole point of `Offstage`, and what `ModalRoute.offstage` exploits to measure
-//! a route at its final geometry before it is visible. Only the `RenderOffstage`
-//! box itself shrinks, to `constraints.smallest`.
+//! whole point of `Offstage`, and what a modal route exploits to measure
+//! itself at its final geometry before it is visible. Only the
+//! `RenderOffstage` box itself shrinks, to `constraints.smallest`.
 //!
-//! # History: this was wrong, and its comment said otherwise
-//!
-//! This used to lay the child out at `BoxConstraints::tight(Size::ZERO)`
-//! and return `Size::ZERO`, under a comment asserting "Flutter parity". Two
-//! defects followed: the child never reached its real geometry, and under a
-//! **tight** parent the box violated its own constraints (`constraints.smallest`
-//! is the tight size, not zero). See
+//! Laying the child out at `BoxConstraints::tight(Size::ZERO)` and returning
+//! `Size::ZERO` would be wrong twice over: the child would never reach its
+//! real geometry, and under a **tight** parent the box would violate its own
+//! constraints (`constraints.smallest` is the tight size, not zero). See
 //! [`ADR-0020`](../../../../docs/adr/ADR-0020-transition-modal-route-seam.md).
-//! Under *loose* constraints `smallest` is zero, which is why the defect
-//! hid for so long.
+//! Under *loose* constraints `smallest` is zero, which is how such a defect
+//! hides.
 //!
 //! # Rust-native improvements
 //!
 //! * The `offstage` flag is a typed `bool` boundary — no `Visibility`
-//!   enum overload like some Material-side ports. Flutter's source
-//!   keeps the same shape, but the bool is exposed publicly without
-//!   getters; here it lives behind `offstage()` / `set_offstage(...)`
+//!   enum overload. It lives behind `offstage()` / `set_offstage(...)`
 //!   so the change-flag pipeline-discipline applies uniformly.
 //! * The setter returns the exact pipeline impact.
 
@@ -71,8 +58,7 @@ pub struct RenderOffstage {
 }
 
 impl RenderOffstage {
-    /// Creates an offstage render object. Default matches Flutter:
-    /// `offstage = true`.
+    /// Creates an offstage render object with the given `offstage` flag.
     pub const fn new(offstage: bool) -> Self {
         Self {
             offstage,
@@ -124,12 +110,10 @@ impl RenderBox for RenderOffstage {
 
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>) -> Size {
         if self.offstage {
-            // `performLayout`: `child?.layout(constraints)` — the **real**
-            // constraints, so the child reaches its true geometry
-            // (proxy_box.dart:3919-3925). The box itself is `sizedByParent`
-            // (`:3896`), so its size is `computeDryLayout` = `constraints.smallest`
-            // (`:3905-3910`) — **not** `Size::ZERO`, which would violate a tight
-            // parent's constraints.
+            // The child gets the **real** constraints, so it reaches its true
+            // geometry. The box itself is sized by the parent to
+            // `constraints.smallest` — **not** `Size::ZERO`, which would
+            // violate a tight parent's constraints.
             let constraints = *ctx.constraints();
             if ctx.child_count() > 0 {
                 self.has_child = true;
@@ -208,7 +192,7 @@ impl RenderBox for RenderOffstage {
         ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
     ) -> Size {
         if self.offstage {
-            // `computeDryLayout` (proxy_box.dart:3905-3910).
+            // Same size `perform_layout` commits while offstage.
             constraints.smallest()
         } else {
             forward_dry_layout(constraints, ctx)
@@ -230,22 +214,21 @@ impl RenderBox for RenderOffstage {
 
     fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Single>) {
         if self.offstage {
-            // `paint` returns without painting (proxy_box.dart:3937-3943).
+            // Nothing is painted while offstage.
             return;
         }
         ctx.paint_child();
     }
 
-    /// `visitChildrenForSemantics` returns early when offstage
-    /// (proxy_box.dart:3945-3951): this node's own config is still built, its
-    /// descendants are dropped from the walk.
+    /// While offstage this node's own config is still built, but its
+    /// descendants are dropped from the semantics walk.
     fn excludes_semantics_subtree(&self) -> bool {
         self.offstage
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
         if self.offstage {
-            // `hitTest => !offstage && super.hitTest(…)` (proxy_box.dart:3927-3930).
+            // Unreachable by hit testing while offstage.
             return false;
         }
         if !ctx.is_within_own_size() {

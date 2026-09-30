@@ -10,8 +10,6 @@ use flui_foundation::geometry::Size;
 
 /// A handle to an image resource.
 ///
-/// Similar to Flutter's `ui.Image`.
-///
 /// This is an opaque handle that represents an image loaded into memory.
 /// The actual image data is managed by the rendering backend.
 ///
@@ -286,8 +284,6 @@ pub use crate::{BoxFit, FittedSizes};
 
 /// How to repeat an image to fill its layout bounds.
 ///
-/// Similar to Flutter's `ImageRepeat`.
-///
 /// # Examples
 ///
 /// ```
@@ -315,8 +311,6 @@ pub enum ImageRepeat {
 }
 
 /// Configuration information for an image.
-///
-/// Similar to Flutter's `ImageConfiguration`.
 ///
 /// # Examples
 ///
@@ -407,8 +401,6 @@ impl Default for ImageConfiguration {
 
 /// A color filter to apply to an image.
 ///
-/// Similar to Flutter's `ColorFilter`.
-///
 /// # Examples
 ///
 /// ```
@@ -469,8 +461,7 @@ pub enum ColorFilter {
 
 impl ColorFilter {
     /// Whether the filter turns a transparent black pixel into a visible
-    /// one, so a layer it filters changes pixels its children never inked
-    /// (Flutter's `DlColorFilter::modifies_transparent_black`).
+    /// one, so a layer it filters changes pixels its children never inked.
     ///
     /// A `Mode` filter blends its colour (the source) over the pixel (the
     /// destination): over a transparent destination only the source factor

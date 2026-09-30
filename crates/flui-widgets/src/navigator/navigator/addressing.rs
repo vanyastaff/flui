@@ -224,8 +224,8 @@ impl NavigatorHandle {
         self.push_reporting_id(route).0
     }
 
-    /// Push a Router page that replaces `target` — Flutter's `pushReplacement`
-    /// aimed at one captured route.
+    /// Push a Router page that replaces `target`: a push-replacement aimed at
+    /// one captured route.
     pub(crate) fn push_replacement_page<P: NavigatorRoute>(
         &self,
         target: RouteId,

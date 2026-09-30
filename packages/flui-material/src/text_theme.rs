@@ -1,65 +1,56 @@
 //! [`TextTheme`] — the 15 M3 type-scale roles, and the color overlays
 //! [`ThemeData`](crate::ThemeData) composes them with by default.
-//!
-//! Flutter parity: `material/text_theme.dart` `TextTheme`, and the
-//! `blackMountainView`/`whiteMountainView` const tables in
-//! `material/typography.dart` (oracle tag `3.44.0`).
 
 use flui_sdk::painting::Color;
 use flui_sdk::painting::TextStyle;
 
 /// The 15 Material 3 type-scale roles, each independently overridable.
 ///
-/// Flutter parity: `TextTheme` (`material/text_theme.dart`, oracle tag
-/// `3.44.0`) — same 15 named roles, same nesting (`display_large` down to
-/// `label_small`). Unset (`None`) roles mean "inherit from whatever this
-/// theme is merged onto" — see [`TextTheme::merge`].
+/// Roles run from `display_large` down to `label_small`. Unset (`None`)
+/// roles mean "inherit from whatever this theme is merged onto" — see
+/// [`TextTheme::merge`].
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TextTheme {
-    /// Flutter parity: `TextTheme.displayLarge`.
+    /// The display-large role.
     pub display_large: Option<TextStyle>,
-    /// Flutter parity: `TextTheme.displayMedium`.
+    /// The display-medium role.
     pub display_medium: Option<TextStyle>,
-    /// Flutter parity: `TextTheme.displaySmall`.
+    /// The display-small role.
     pub display_small: Option<TextStyle>,
-    /// Flutter parity: `TextTheme.headlineLarge`.
+    /// The headline-large role.
     pub headline_large: Option<TextStyle>,
-    /// Flutter parity: `TextTheme.headlineMedium`.
+    /// The headline-medium role.
     pub headline_medium: Option<TextStyle>,
-    /// Flutter parity: `TextTheme.headlineSmall`.
+    /// The headline-small role.
     pub headline_small: Option<TextStyle>,
-    /// Flutter parity: `TextTheme.titleLarge`.
+    /// The title-large role.
     pub title_large: Option<TextStyle>,
-    /// Flutter parity: `TextTheme.titleMedium`.
+    /// The title-medium role.
     pub title_medium: Option<TextStyle>,
-    /// Flutter parity: `TextTheme.titleSmall`.
+    /// The title-small role.
     pub title_small: Option<TextStyle>,
-    /// Flutter parity: `TextTheme.labelLarge`.
+    /// The label-large role.
     pub label_large: Option<TextStyle>,
-    /// Flutter parity: `TextTheme.labelMedium`.
+    /// The label-medium role.
     pub label_medium: Option<TextStyle>,
-    /// Flutter parity: `TextTheme.labelSmall`.
+    /// The label-small role.
     pub label_small: Option<TextStyle>,
-    /// Flutter parity: `TextTheme.bodyLarge`.
+    /// The body-large role.
     pub body_large: Option<TextStyle>,
-    /// Flutter parity: `TextTheme.bodyMedium`.
+    /// The body-medium role.
     pub body_medium: Option<TextStyle>,
-    /// Flutter parity: `TextTheme.bodySmall`.
+    /// The body-small role.
     pub body_small: Option<TextStyle>,
 }
 
-/// Merge one role: mirrors Flutter's
-/// `base?.merge(patch) ?? patch` (`TextTheme.merge`, `text_theme.dart`,
-/// oracle tag `3.44.0`).
+/// Merge one role: `base?.merge(patch) ?? patch`.
 ///
 /// `flui_sdk::painting::TextStyle::merge` already implements "each of `other`'s
-/// non-`None` fields wins, field-wise, else keep `self`'s" — the same shape
-/// as the oracle's own `TextStyle.merge`, minus Flutter's `inherit` flag
-/// (`flui_sdk::painting::TextStyle` carries no such flag, so there is nothing for it
-/// to interact with). That is the one documented divergence this module
-/// relies on: FLUI has no build-context-relative "inherit from ambient
-/// DefaultTextStyle" concept baked into `TextStyle` itself, so merging here
-/// is a pure, context-free field combination.
+/// non-`None` fields wins, field-wise, else keep `self`'s".
+/// `flui_sdk::painting::TextStyle` carries no `inherit` flag: FLUI has no
+/// build-context-relative "inherit from ambient DefaultTextStyle" concept
+/// baked into `TextStyle` itself, so merging here is a pure, context-free
+/// field combination.
 fn merge_role(base: Option<&TextStyle>, patch: Option<&TextStyle>) -> Option<TextStyle> {
     match (base, patch) {
         (Some(base), Some(patch)) => Some(base.merge(patch)),
@@ -68,8 +59,7 @@ fn merge_role(base: Option<&TextStyle>, patch: Option<&TextStyle>) -> Option<Tex
     }
 }
 
-/// Set `color` on a role if it is present, leaving `None` roles `None` —
-/// mirrors the shape of Flutter's `TextStyle?.apply(color: ...)`.
+/// Set `color` on a role if it is present, leaving `None` roles `None`.
 fn recolor_role(role: Option<&TextStyle>, color: Color) -> Option<TextStyle> {
     role.map(|style| TextStyle {
         color: Some(color),
@@ -80,12 +70,8 @@ fn recolor_role(role: Option<&TextStyle>, color: Color) -> Option<TextStyle> {
 impl TextTheme {
     /// Merge `patch` onto `self`: for every role, `patch`'s non-`None` fields
     /// win field-wise (via [`TextStyle::merge`]); a role `patch` leaves
-    /// entirely unset keeps `self`'s value unchanged.
-    ///
-    /// Flutter parity: `TextTheme.merge` (`material/text_theme.dart`, oracle
-    /// tag `3.44.0`). See `merge_role`'s doc comment (this module, private) for
-    /// the one documented
-    /// divergence (no `inherit` flag).
+    /// entirely unset keeps `self`'s value unchanged. See `merge_role`'s doc
+    /// comment (this module, private) for why there is no `inherit` flag.
     #[must_use]
     pub fn merge(&self, patch: &TextTheme) -> TextTheme {
         TextTheme {
@@ -113,17 +99,13 @@ impl TextTheme {
     /// Set `color` uniformly on every role that is currently `Some`, leaving
     /// `None` roles `None`.
     ///
-    /// Flutter's `TextTheme.apply` splits `displayColor` (applied to
-    /// `display*`/`headline*`/`bodySmall`) from `bodyColor` (the rest) — see
-    /// its doc comment on `text_theme.dart`, oracle tag `3.44.0`. This crate
-    /// only calls `apply` from [`ThemeData`](crate::ThemeData)'s M3 default
+    /// A general recolor could split a display color (`display*`/
+    /// `headline*`/`bodySmall`) from a body color (the rest). This crate
+    /// only recolors from [`ThemeData`](crate::ThemeData)'s M3 default
     /// construction, where both colors are always the *same* value
-    /// (`ColorScheme.onSurface` — see `Typography.material2021`'s
-    /// `dark`/`light` locals in `typography.dart`, oracle tag `3.44.0`, which
-    /// both reduce to `onSurface` regardless of brightness). This method is
-    /// the honest simplification of that specific call site — a single
-    /// uniform color — not a general port of `apply`'s `displayColor`/
-    /// `bodyColor` split, which has no other caller yet.
+    /// (`ColorScheme.onSurface`, regardless of brightness), so this method
+    /// takes a single uniform color; the display/body split has no caller
+    /// yet.
     #[must_use]
     pub fn apply_color(&self, color: Color) -> TextTheme {
         TextTheme {
@@ -145,7 +127,7 @@ impl TextTheme {
         }
     }
 
-    /// All 15 roles, in the oracle's declared order, for iteration in tests
+    /// All 15 roles, in declaration order, for iteration in tests
     /// and diagnostics.
     pub fn roles(&self) -> [Option<&TextStyle>; 15] {
         [
@@ -171,12 +153,9 @@ impl TextTheme {
     /// surfaces — Roboto family, no geometry (`font_size`/`font_weight`/…
     /// left `None`).
     ///
-    /// Flutter parity: `Typography.blackMountainView`
-    /// (`material/typography.dart`, oracle tag `3.44.0`) — every
-    /// `Colors.black*` value below is that const table's `color`, cited by
-    /// name (`Colors.black54` = `0x8A000000`, `Colors.black87` = `0xDD000000`,
-    /// `Colors.black` = `0xFF000000` — `material/colors.dart`, oracle tag
-    /// `3.44.0`).
+    /// Every `Colors.black*` value below is cited by name
+    /// (`Colors.black54` = `0x8A000000`, `Colors.black87` = `0xDD000000`,
+    /// `Colors.black` = `0xFF000000`).
     #[must_use]
     pub fn black_mountain_view() -> TextTheme {
         let black54 = Color::from_argb(0x8A00_0000);
@@ -189,10 +168,7 @@ impl TextTheme {
     /// surfaces — the [`black_mountain_view`](Self::black_mountain_view)
     /// counterpart.
     ///
-    /// Flutter parity: `Typography.whiteMountainView`
-    /// (`material/typography.dart`, oracle tag `3.44.0`) — `Colors.white70` =
-    /// `0xB3FFFFFF`, `Colors.white` = `0xFFFFFFFF` (`material/colors.dart`,
-    /// oracle tag `3.44.0`).
+    /// `Colors.white70` = `0xB3FFFFFF`, `Colors.white` = `0xFFFFFFFF`.
     #[must_use]
     pub fn white_mountain_view() -> TextTheme {
         let white70 = Color::from_argb(0xB3FF_FFFF);
@@ -205,7 +181,7 @@ impl TextTheme {
 }
 
 /// Shared shape behind [`TextTheme::black_mountain_view`] /
-/// [`TextTheme::white_mountain_view`]: both oracle tables assign each of the
+/// [`TextTheme::white_mountain_view`]: both tables assign each of the
 /// 15 roles one of exactly three colors, in the same per-role pattern —
 /// `low` for `display*`/`headline{Large,Medium}`/`bodySmall`, `mid` for
 /// `headlineSmall`/`title{Large,Medium}`/`bodyLarge`/`bodyMedium`/

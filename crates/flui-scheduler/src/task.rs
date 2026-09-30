@@ -33,27 +33,24 @@ fn next_task_id() -> TaskId {
 /// Task priority levels (higher value = higher priority).
 ///
 /// Internal `#[repr(u8)]` discriminants are 0/1/2/3 for compact atomic
-/// storage and exhaustive matching. The Flutter-faithful numeric values
-/// (0/50000/100000/200000 — matching [`priority.dart:11-54`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/priority.dart)
-/// `idle/animation/touch` with `Build` inserted between Idle and
-/// Animation) are exposed via [`Priority::numeric_value`]. FLUI deliberately
-/// uses a closed 4-variant enum instead of Flutter's open class +
-/// `operator +/-` offset arithmetic — the offset arithmetic has zero usages
-/// in the Flutter framework code itself (verified via repo-wide grep).
+/// storage and exhaustive matching. The widely spaced numeric values
+/// (0/50000/100000/200000 for `Idle/Build/Animation/UserInput`) are exposed
+/// via [`Priority::numeric_value`], leaving room for relative-priority
+/// offsets. FLUI deliberately uses a closed 4-variant enum rather than an
+/// open priority class with offset arithmetic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[repr(u8)]
 pub enum Priority {
-    /// Background/idle work (GC, telemetry). Flutter `priority.dart::idle` = 0.
+    /// Background/idle work (GC, telemetry). Numeric value 0.
     Idle = 0,
-    /// Normal UI updates (widget rebuilds). FLUI-only — inserted between
-    /// Idle and Animation. Maps to Flutter numeric 50000.
+    /// Normal UI updates (widget rebuilds). Sits between
+    /// Idle and Animation. Numeric value 50000.
     #[default]
     Build = 1,
-    /// Animations and transitions. Flutter `priority.dart::animation` = 100000.
+    /// Animations and transitions. Numeric value 100000.
     Animation = 2,
-    /// User input events (must be immediate). Flutter
-    /// `priority.dart::touch` = 200000.
+    /// User input events (must be immediate). Numeric value 200000.
     UserInput = 3,
 }
 
@@ -66,12 +63,11 @@ impl Priority {
         Priority::UserInput,
     ];
 
-    /// Flutter-faithful numeric value for this priority.
+    /// Spaced numeric value for this priority (`idle=0`, `build=50000`,
+    /// `animation=100000`, `input=200000`).
     ///
-    /// Maps to Flutter `priority.dart` numeric layout — see [`Priority`] doc
-    /// comment for full mapping. Use this when interoperating with code
-    /// expecting Flutter's `idle=0/animation=100000/touch=200000` scheme
-    /// or when computing relative-priority offsets.
+    /// Use this when interoperating with code expecting a numeric priority
+    /// scheme or when computing relative-priority offsets.
     #[inline]
     pub const fn numeric_value(self) -> u32 {
         match self {

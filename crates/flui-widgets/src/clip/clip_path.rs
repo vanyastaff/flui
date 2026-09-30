@@ -16,10 +16,9 @@ type PathClipper = Rc<dyn Fn(Size) -> Path>;
 
 /// Clips its child to a custom [`Path`] derived from the child's size.
 ///
-/// Flutter parity: `widgets/basic.dart` `ClipPath` over `RenderClipPath`, with
-/// an owner-local path factory supplied as a closure `Fn(Size) -> Path`.
+/// The path factory is a closure `Fn(Size) -> Path`.
 /// Layout is a pass-through — only painting is clipped. `clip_behavior`
-/// defaults to [`Clip::AntiAlias`] (Flutter's `ClipPath` default).
+/// defaults to [`Clip::AntiAlias`].
 #[derive(Clone)]
 pub struct ClipPath {
     clipper: PathClipper,
@@ -30,7 +29,7 @@ pub struct ClipPath {
 
 impl ClipPath {
     /// Clip to the path returned by `clipper` for the laid-out size, with
-    /// Flutter's default anti-aliased clip behavior.
+    /// the default anti-aliased clip behavior.
     ///
     /// # Clip identity
     ///
@@ -53,9 +52,8 @@ impl ClipPath {
     ///   the closure must be rebuilt (it captures changing state) but the clip
     ///   it produces has not actually changed.
     ///
-    /// Flutter has the same problem and forces the answer: `CustomClipper`'s
-    /// `shouldReclip` is abstract, so every clipper author must decide. This
-    /// is the same decision, made visible at the call site instead.
+    /// The caller has to decide this, so the decision is made visible at the
+    /// call site.
     pub fn new(clipper: impl Fn(Size) -> Path + 'static) -> Self {
         Self::with_source(ClipSourceToken::fresh(), clipper)
     }

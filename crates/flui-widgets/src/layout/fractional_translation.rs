@@ -8,8 +8,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// Translates its child by `(dx, dy)` × the child's size before painting (e.g.
 /// `dx = -0.5` shifts the child left by half its width). Layout is unaffected.
 ///
-/// Flutter parity: `widgets/basic.dart` `FractionalTranslation` over
-/// `RenderFractionalTranslation`. `transform_hit_tests` (default `true`) also
+/// Backed by `RenderFractionalTranslation`. `transform_hit_tests` (default `true`) also
 /// shifts the hit-test region with the paint.
 #[derive(Clone, Debug)]
 pub struct FractionalTranslation {

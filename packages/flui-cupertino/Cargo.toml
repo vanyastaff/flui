@@ -8,7 +8,7 @@ authors.workspace = true
 license.workspace = true
 description = "iOS-style (Cupertino) theming foundation for FLUI — CupertinoDynamicColor, CupertinoTextTheme, CupertinoThemeData, and the CupertinoButton family"
 repository.workspace = true
-keywords = ["ui", "cupertino", "ios", "flutter", "flui"]
+keywords = ["ui", "cupertino", "ios", "flui"]
 categories = ["gui"]
 # All root tests/*.rs files are compiled as modules of ONE integration-test
 # binary (tests/main.rs); the per-file auto-discovered targets each linked the

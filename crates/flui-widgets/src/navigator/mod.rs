@@ -4,9 +4,8 @@
 //! one: a `Vec<RouteEntry>`, the lifecycle state machine, the flush algorithm,
 //! the observer queues, and the pop-result channel. The central
 //! observation is that all of it is a pure function over route entries —
-//! `_flushHistoryUpdates` never touches Flutter's element tree, and its only
-//! tree-visible effect is the `overlay.rearrange` at the very end, which the
-//! `Navigator` view performs. So this layer is testable with no element tree, no
+//! the flush never touches the element tree, and its only tree-visible effect
+//! is the overlay rearrange at the very end, which the `Navigator` view performs. So this layer is testable with no element tree, no
 //! build owner, no render pipeline, and no overlay, and
 //! `route_stack_flush_is_pure_data` enforces that mechanically rather than on
 //! trust.
@@ -19,11 +18,6 @@
 //! The pure route-stack internals stay private, and the `Box<dyn Any + Send>`
 //! pop-result boundary remains an implementation detail behind typed public
 //! methods (`pop_with`, `remove_route_with`, `maybe_pop_with`).
-//!
-//! # Flutter parity
-//!
-//! `.flutter/packages/flutter/lib/src/widgets/navigator.dart`, Flutter master
-//! `3.33.0-0.0.pre-6280-g88e87cd963f`.
 //!
 //! # Not implemented, and not claimed
 //!
@@ -61,31 +55,28 @@
 //! a turbofish today; the shape is described here only because it is the
 //! rejected one.)
 //!
-//! Deferred **by decision** for named routes: Flutter's
-//! `Navigator.initialRoute` / `Navigator.defaultRouteName` /
-//! `Navigator.defaultGenerateInitialRoutes` — the initial-route back-stack
+//! Deferred **by decision** for named routes: the initial-route back-stack
 //! synthesis. ADR-0024 defers it; the typed `Router` has it instead, as
 //! `Routable::back_stack` (ADR-0093), which is where it will stay once the
 //! named doors are removed.
 //!
 //! The reason first given for the deferral — "no consumer until deep links
-//! exist" — is **false**, and is corrected in ADR-0024. Read
-//! `Navigator.defaultGenerateInitialRoutes`: **any** initial name other than
-//! `/` takes the expansion branch, and that branch seeds `/` *first*. So
-//! `initialRoute: "/settings"` yields `["/", "/settings"]` — a two-deep stack
+//! exist" — is **false**, and is corrected in ADR-0024. **Any** initial name
+//! other than `/` takes an expansion branch that seeds `/` *first*. So an
+//! initial route of `"/settings"` yields `["/", "/settings"]` — a two-deep stack
 //! whose back button returns home, not a one-deep stack that exits the app.
-//! The consumer is `MaterialApp(initialRoute:)`, not deep linking.
+//! The consumer is an app shell's initial route, not deep linking.
 //!
 //! What the gap owes when it is built: seed `/` first, build the prefix chain
 //! segment by segment, drop the segments the registry does not resolve, and
 //! treat an unmatched *final* segment as an error that disposes every route
-//! generated so far and seeds `/` alone. Its upstream oracles are
-//! `'Initial route can have gaps'` and `'The full initial route has to be
-//! matched'`. Until then FLUI bootstraps through
+//! generated so far and seeds `/` alone. The behaviors to pin are that an
+//! initial route can have gaps, and that the full initial route has to be
+//! matched. Until then FLUI bootstraps through
 //! `NavigatorHandle::seed_initial`, one call per route.
 //!
-//! `restorablePushNamed` (restoration is unbuilt) and `replaceNamed` (`replace`
-//! itself is private) are absent for their own reasons.
+//! Restorable named pushes (restoration is unbuilt) and `replace_named`
+//! (`replace` itself is private) are absent for their own reasons.
 
 // `pub(crate)` only so `crate::__test_access` can re-export the items the
 // integration tests still reach (ADR-0083 §4); nothing here is public.

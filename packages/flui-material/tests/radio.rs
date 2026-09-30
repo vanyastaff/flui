@@ -35,7 +35,7 @@ use common::{lay_out, tight};
 use flui_material::{Radio, Theme, ThemeData};
 use flui_testing::a11y::Role;
 
-/// The radio's full tap target. Flutter parity: `kMinInteractiveDimension`.
+/// The radio's full tap target: the minimum interactive dimension.
 const TAP_TARGET: f64 = 48.0;
 
 fn constraints() -> flui_sdk::rendering::BoxConstraints {

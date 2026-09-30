@@ -57,7 +57,7 @@
 //! reconstructed from owned snapshots (key hashes + view type ids) taken
 //! up front, so the matching loop never holds a slab borrow either.
 //!
-//! # Matching semantics (Flutter-faithful)
+//! # Matching semantics
 //!
 //! A new view reuses an old child when they share a concrete view type
 //! **and** the same key (both keyless, or both keyed and equal via
@@ -115,9 +115,9 @@ use crate::view::{ElementBase, View};
 /// bucket whose candidates mostly fail the semantic `key_eq` check —
 /// the cost of collision-resistant keyed matching. Both `n`
 /// and `m` are bounded by the parent's fan-out, not the whole tree.
-// Five Flutter-parity phases + per-disposition ReconcileEvent emission push the
-// body past 100 lines; splitting would scramble the 1:1 mapping to the keyed
-// reconcile algorithm (Flutter's `Element.updateChildren`).
+// Five phases + per-disposition ReconcileEvent emission push the body past 100
+// lines; splitting would scramble the phase-by-phase reading of the keyed
+// reconcile algorithm.
 pub(crate) fn reconcile_children_by_id(
     tree: &mut ElementTree,
     parent_id: ElementId,
@@ -202,7 +202,7 @@ pub(crate) fn reconcile_children_by_id(
     // ── Phase 2: scan the bottom of both lists while children match.
     // Matches are RECORDED (the bounds shrink); the actual `update` runs
     // in phase 5a so every update is applied strictly front-to-back
-    // (the Flutter `updateChildren` ordering guarantee).
+    // (the ordering guarantee).
     let mut old_bottom = old_len;
     let mut new_bottom = new_len;
     while old_top < old_bottom && new_top < new_bottom {
@@ -591,9 +591,8 @@ fn update_child(
     // mounting one is: a parent that holds its `GlobalKey` child across a
     // rebuild is still claiming the key this frame, and the frame boundary
     // must see that claim or a second parent grafting the same element
-    // would look like a lone, legal reparent. Flutter records the same
-    // reservation from `Element.updateChild`'s reuse branch
-    // (`framework.dart:4086`), which covers update and inflate alike.
+    // would look like a lone, legal reparent. The reservation is recorded on
+    // the reuse branch as well as on inflate.
     if now == id
         && let Some(key) = new.key()
         && key.is_global_key()
@@ -666,9 +665,7 @@ fn remove_child(
     // declared for it earlier in the frame is withdrawn: a parent that no
     // longer holds a keyed child is not a claimant on that key, and leaving
     // the reservation in place would make the frame boundary report a
-    // duplicate against a claim nobody is making. Flutter withdraws the
-    // same way in `_debugRemoveGlobalKeyReservationFor`
-    // (`framework.dart:3188`).
+    // duplicate against a claim nobody is making.
     owner.forget_global_key_reservation(parent_id, id);
 
     // One implementation, two callers. This used to carry its own copy of

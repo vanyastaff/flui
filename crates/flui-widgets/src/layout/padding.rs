@@ -7,7 +7,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// A widget that insets its child by the given [`EdgeInsets`].
 ///
-/// Flutter parity: `widgets/basic.dart` `Padding` over `RenderPadding`. The
+/// Backed by `RenderPadding`. The
 /// child is laid out inside the constraints deflated by the padding, then the
 /// padding is added back to the child's size to produce this widget's size.
 ///

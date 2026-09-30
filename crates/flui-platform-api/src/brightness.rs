@@ -2,7 +2,7 @@
 
 /// Whether the ambient theme is visually light or dark.
 ///
-/// Mirrors Flutter's `Brightness` enum. Used by `MediaQueryData`
+/// Used by `MediaQueryData`
 /// (platform OS preference) and `ThemeData` (app-level override).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

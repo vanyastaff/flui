@@ -6,8 +6,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Centers its child within itself.
 ///
-/// Flutter parity: `widgets/basic.dart` `Center extends Align` with
-/// `Alignment.center`. Optionally sizes itself to a multiple of the child's
+/// An `Align` fixed to `Alignment::CENTER`. Optionally sizes itself to a multiple of the child's
 /// dimensions via `width_factor`/`height_factor`.
 #[derive(Clone, Debug, Default)]
 pub struct Center {

@@ -1,7 +1,6 @@
 //! 2D offset (position/translation) type
 //!
-//! This module provides an immutable 2D offset type, similar to Flutter's
-//! Offset.
+//! This module provides an immutable 2D offset type.
 use std::{
     fmt::{self, Display},
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign},
@@ -15,7 +14,6 @@ use super::{
 /// An immutable 2D offset in Cartesian coordinates.
 ///
 /// This represents a translation or displacement in 2D space.
-/// Similar to Flutter's `Offset`.
 ///
 /// Generic over unit type `T`. Common usage:
 /// - `Offset` - UI displacement
@@ -24,7 +22,7 @@ use super::{
 /// # Distinction from Vec2
 ///
 /// `Offset` and `Vec2` are mathematically identical but semantically different:
-/// - `Offset`: Flutter-style displacement with `dx`/`dy` naming
+/// - `Offset`: displacement with `dx`/`dy` naming
 /// - `Vec2`: General vector with `x`/`y` naming
 ///
 /// They are freely convertible.

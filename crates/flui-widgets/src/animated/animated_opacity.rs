@@ -31,7 +31,7 @@ use crate::animated::vsync_scope::VsyncScope;
 
 /// Animates the opacity of its child whenever a new `opacity` is given.
 ///
-/// Flutter parity: `widgets/implicit_animations.dart` `AnimatedOpacity`. On the
+/// On the
 /// first build the child sits at the given opacity with no motion; each later
 /// build with a *different* opacity animates from the current value to the new
 /// one over `duration` along `curve`. The child is always laid out — only its
@@ -190,7 +190,7 @@ impl RenderView for AnimatedOpacityRenderView {
     type RenderObject = RenderAnimatedOpacity;
 
     fn create_render_object(&self, _ctx: &RenderObjectContext<'_>) -> Self::RenderObject {
-        // Flutter default: `alwaysIncludeSemantics = false`. `AnimatedOpacity`
+        // `always_include_semantics` is false. `AnimatedOpacity`
         // does not expose a builder for it yet — no call site needs it — so
         // this is not a widget-configurable knob today.
         RenderAnimatedOpacity::new(self.proxy.clone(), false)

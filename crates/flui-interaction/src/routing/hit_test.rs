@@ -1,21 +1,13 @@
-//! Hit testing infrastructure (Flutter-like)
+//! Hit testing infrastructure
 //!
-//! This module provides base hit testing types following Flutter's
-//! architecture:
+//! This module provides the base hit testing types:
 //!
 //! - **`HitTestResult`** - Base result with transform stack
-//!   (gestures/hit_test.dart)
 //! - **`HitTestEntry`** - Single hit entry with transform
 //!
 //! Protocol-specific types (`BoxHitTestResult`, `SliverHitTestResult`) are
-//! defined in `flui_rendering` crate, following Flutter's organization where:
-//! - `BoxHitTestResult` is in `rendering/box.dart`
-//! - `SliverHitTestResult` is in `rendering/sliver.dart`
-//!
-//! # Flutter References
-//!
-//! - HitTestResult: gestures/hit_test.dart
-//! - HitTestEntry: gestures/hit_test.dart
+//! defined in the `flui_rendering` crate, next to the render protocols they
+//! serve.
 
 pub use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset};
@@ -36,12 +28,11 @@ use crate::{
 /// Claim-walk propagation control.
 ///
 /// Ordinary pointer delivery has no propagation result: every hit target
-/// receives its locally transformed event in leaf-first order (ADR-0027,
-/// Flutter `GestureBinding.dispatchEvent` parity). Only the two arbitrated
-/// walks carry a claiming result — the pointer-signal / scroll resolver
-/// (mirroring Flutter's separate `PointerSignalResolver`) and the trackpad
-/// pan-zoom walk (standing in for Flutter's scale gesture arena until FLUI
-/// has a scale recognizer).
+/// receives its locally transformed event in leaf-first order (ADR-0027).
+/// Only the two arbitrated walks carry a claiming result — the
+/// pointer-signal / scroll resolver and the trackpad pan-zoom walk
+/// (standing in for a scale gesture arena until FLUI has a scale
+/// recognizer).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EventPropagation {
     /// Keep dispatching to the remaining entries on the walk.
@@ -69,17 +60,17 @@ impl EventPropagation {
 // HIT TEST BEHAVIOR
 // ============================================================================
 
-/// Hit test behavior (Flutter's HitTestBehavior).
+/// How an element takes part in hit testing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HitTestBehavior {
-    /// Receive events only if a child is hit (Flutter's `deferToChild`).
+    /// Receive events only if a child is hit.
     #[default]
     DeferToChild,
     /// Hit within bounds even with no child hit, and block targets visually
-    /// behind from receiving the event (Flutter's `opaque`).
+    /// behind from receiving the event.
     Opaque,
     /// Hit within bounds while still letting targets visually behind receive
-    /// the event too (Flutter's `translucent`).
+    /// the event too.
     Translucent,
 }
 
@@ -100,7 +91,7 @@ impl HitTestBehavior {
 }
 
 // ============================================================================
-// HIT TEST ENTRY (Base - Flutter's HitTestEntry<T>)
+// HIT TEST ENTRY (Base)
 // ============================================================================
 
 /// Base hit test entry.
@@ -108,8 +99,6 @@ impl HitTestBehavior {
 /// Data-only (`Send + Sync`): executable pointer callbacks live in the
 /// owner-local interaction lane and are addressed through the entry's
 /// [`PointerTarget`] identity, never stored here.
-///
-/// Flutter equivalent: `HitTestEntry<T extends HitTestTarget>`
 #[derive(Clone)]
 pub struct HitTestEntry {
     /// Element/render ID.
@@ -126,10 +115,7 @@ pub struct HitTestEntry {
     /// [`HitTestResult::with_paint_transform`] that push each level's OWN
     /// INVERSE, so `HitTestResult::last_transform` folds those inverses
     /// left-multiplied in descent order and the result already maps global
-    /// to local -- no further inversion is needed at delivery. Flutter
-    /// parity: `pushTransform(Matrix4.tryInvert(...))` (`rendering/box.dart`,
-    /// `addWithPaintTransform`/`addWithPaintOffset`), folded by
-    /// `HitTestResult._globalizeTransforms` (`gestures/hit_test.dart`).
+    /// to local -- no further inversion is needed at delivery.
     ///
     /// Set automatically when added to HitTestResult.
     pub transform: Option<Matrix4>,
@@ -264,12 +250,10 @@ impl HitTestEntry {
 }
 
 // ============================================================================
-// HIT TEST RESULT (Base - Flutter's HitTestResult)
+// HIT TEST RESULT (Base)
 // ============================================================================
 
-/// Result of hit testing (base class).
-///
-/// Flutter equivalent: `class HitTestResult` from gestures/hit_test.dart
+/// Result of hit testing (base result type).
 ///
 /// Contains the path of hit targets and manages the transform stack.
 #[derive(Debug, Clone, Default)]
@@ -284,7 +268,7 @@ pub struct HitTestResult {
     local_transforms: Vec<TransformPart>,
 }
 
-/// Transform part for lazy globalization (Flutter's _TransformPart).
+/// Transform part for lazy globalization.
 #[derive(Debug, Clone)]
 enum TransformPart {
     Matrix(Matrix4),
@@ -315,8 +299,6 @@ impl HitTestResult {
     }
 
     /// Wraps another result (shares the same path).
-    ///
-    /// Flutter equivalent: `HitTestResult.wrap(HitTestResult result)`
     pub fn wrap(other: &mut HitTestResult) -> &mut Self {
         other
     }
@@ -354,8 +336,6 @@ impl HitTestResult {
     }
 
     /// Adds an entry to the path.
-    ///
-    /// Flutter equivalent: `void add(HitTestEntry entry)`
     pub fn add(&mut self, mut entry: HitTestEntry) {
         entry.transform = Some(self.last_transform());
         self.path.push(entry);
@@ -364,9 +344,8 @@ impl HitTestResult {
     /// Pushes a transform matrix onto the stack, VERBATIM -- no inversion.
     ///
     /// This is the raw primitive: it pushes exactly the matrix it is given.
-    /// [`HitTestEntry::transform`] is documented (and Flutter's own
-    /// `pushTransform`/`_globalizeTransforms` contract requires) that the
-    /// stack accumulates the GLOBAL-TO-LOCAL mapping as the walk descends,
+    /// [`HitTestEntry::transform`] is documented to be the
+    /// stack accumulating the GLOBAL-TO-LOCAL mapping as the walk descends,
     /// so the CALLER is responsible for passing this method the inverse of
     /// whatever forward (paint-direction) transform the level represents.
     /// Prefer [`HitTestResult::with_paint_transform`], which computes and
@@ -374,10 +353,6 @@ impl HitTestResult {
     /// forward matrix here by mistake is exactly the composition-order bug
     /// `with_paint_offset`/`with_paint_transform` exist to prevent -- see
     /// their docs.
-    ///
-    /// Flutter equivalent: `@protected void pushTransform(Matrix4 transform)`
-    /// (callers invert before calling, e.g. `addWithPaintTransform` in
-    /// `rendering/box.dart`).
     pub fn push_transform(&mut self, transform: Matrix4) {
         self.local_transforms.push(TransformPart::Matrix(transform));
     }
@@ -391,17 +366,11 @@ impl HitTestResult {
     /// caller composing a global-to-local stack must pass `-offset`, not
     /// `offset`. Prefer [`HitTestResult::with_paint_offset`], which negates
     /// and pops for you.
-    ///
-    /// Flutter equivalent: `@protected void pushOffset(Offset offset)`
-    /// (callers negate before calling, e.g. `addWithPaintOffset` in
-    /// `rendering/box.dart:839` calls `pushOffset(-offset)`).
     pub fn push_offset(&mut self, offset: Offset<f64>) {
         self.local_transforms.push(TransformPart::Offset(offset));
     }
 
     /// Pops the last transform from the stack.
-    ///
-    /// Flutter equivalent: `@protected void popTransform()`
     pub fn pop_transform(&mut self) {
         if !self.local_transforms.is_empty() {
             self.local_transforms.pop();
@@ -414,14 +383,11 @@ impl HitTestResult {
     /// pops the transform before returning, regardless of `f`'s
     /// return value.
     ///
-    /// Mirrors `BoxHitTestResult::addWithPaintOffset` in Flutter's
-    /// `rendering/box.dart`: the Flutter code uses a try/finally
-    /// pair around the pushOffset/popTransform sequence; Rust
-    /// expresses the same scope via a closure.
+    /// The push/pop pair is expressed as a scope via a closure.
     ///
     /// # Why the offset is negated
     ///
-    /// `box.dart:839` calls `pushOffset(-offset)`, not `pushOffset(offset)`:
+    /// This pushes `-offset`, not `offset`:
     /// the transform stack accumulates the GLOBAL-TO-LOCAL mapping as the
     /// walk descends, so each level must push its own inverse. For a pure
     /// translation the inverse of "translate by `offset`" is "translate by
@@ -469,20 +435,17 @@ impl HitTestResult {
     /// Runs `f` with the INVERSE of `transform` pushed onto the transform
     /// stack and pops it before returning.
     ///
-    /// See [`with_paint_offset`](Self::with_paint_offset) for the
-    /// Flutter-parity rationale and the closure-vs-guard discussion
-    /// (closure-vs-guard rationale); this is the matrix-typed sibling for
+    /// See [`with_paint_offset`](Self::with_paint_offset) for the negation
+    /// rationale and the closure-vs-guard discussion; this is the
+    /// matrix-typed sibling for
     /// callers that need a full 4x4 transform rather than a paint-offset --
     /// same caller-supplies-the-forward-matrix, callee-inverts-it contract.
-    /// Flutter parity: `BoxHitTestResult.addWithPaintTransform`
-    /// (`rendering/box.dart:799-812`), which inverts via `Matrix4.tryInvert`
-    /// at line 805 before delegating at line 811 to `addWithRawTransform`.
     ///
-    /// # Known divergences from Flutter
+    /// # Known limitations
     ///
-    /// 1. **Non-invertible transforms.** Flutter's `addWithPaintTransform`
-    ///    returns `false` outright when the transform cannot be inverted
-    ///    (the subtree is not visible/hittable). This method instead falls
+    /// 1. **Non-invertible transforms.** A hard refusal (returning `false`
+    ///    to say the subtree is not hittable) would need a `bool` threaded
+    ///    through every caller. This method instead falls
     ///    back to pushing the still-singular forward matrix, the same
     ///    convention `PipelineOwner::hit_test_subtree` already uses for
     ///    `RenderBox::hit_test_transform`
@@ -498,20 +461,18 @@ impl HitTestResult {
     ///    elsewhere in the chain can lift the product back above
     ///    `f64::EPSILON`. In that case delivery sees an invertible
     ///    composite and delivers the entry with a garbage local position --
-    ///    a wider divergence from Flutter's hard refusal than the
-    ///    still-singular fallback above covers by itself.
-    /// 2. **No perspective removal.** `box.dart:805` inverts
-    ///    `PointerEvent.removePerspectiveTransform(transform)`, not
-    ///    `transform` itself -- Flutter strips the perspective row/column
-    ///    before inverting so a perspective-projected transform still
-    ///    inverts to a usable affine map. This method calls
+    ///    a wider gap than the still-singular fallback above covers by
+    ///    itself.
+    /// 2. **No perspective removal.** Stripping the perspective row/column
+    ///    before inverting would let a perspective-projected transform still
+    ///    invert to a usable affine map. This method calls
     ///    `transform.try_inverse()` directly, with no perspective removal.
     ///    Low reachability today: nothing in the widget layer constructs a
     ///    perspective (non-affine) transform, so every `transform` reaching
     ///    this method in practice is already affine. Perspective removal is
     ///    intentionally not implemented here (out of scope); a
     ///    perspective-producing widget added later would make this
-    ///    divergence live and worth revisiting.
+    ///    limitation live and worth revisiting.
     pub fn with_paint_transform<F, R>(&mut self, transform: Matrix4, f: F) -> R
     where
         F: FnOnce(&mut Self) -> R,
@@ -565,8 +526,7 @@ impl HitTestResult {
     /// synchronously with per-entry local transforms and per-target panic
     /// isolation, and releases the route before returning (or before resuming
     /// a captured panic). Delivery never stops early: ordinary pointer events
-    /// have no propagation result (Flutter `GestureBinding.dispatchEvent`
-    /// parity).
+    /// have no propagation result.
     ///
     /// Must run on the owner thread inside an active interaction lane scope
     /// (a binding's `dispatch_pointer` / owner scope). Without one, entries
@@ -645,8 +605,8 @@ impl HitTestResult {
     /// only knows about ordinary pointer targets.
     ///
     /// A `Listener` and a nested `MouseRegion` sharing this path must fire in
-    /// hit-test order relative to EACH OTHER (Flutter's single per-entry
-    /// `entry.target.handleEvent` loop, `gestures/binding.dart:496`); calling
+    /// hit-test order relative to EACH OTHER (one per-entry loop over the
+    /// leaf-first path); calling
     /// [`dispatch_capturing_panic`](Self::dispatch_capturing_panic) and
     /// [`MouseTracker::dispatch_hover`](super::mouse_tracker::MouseTracker::dispatch_hover)
     /// as two separate full passes always delivers every ordinary target
@@ -742,11 +702,10 @@ impl HitTestResult {
     /// so a viewer already clamped at its scale extent hands the pinch to the
     /// one above it.
     ///
-    /// Flutter routes trackpad pan-zoom through the SCALE GESTURE ARENA
-    /// (`PointerPanZoomStartEvent` opens a `ScaleGestureRecognizer`'s arena
-    /// entry, `gestures/scale.dart`), which resolves the same contention with
-    /// full gesture arbitration. This claim walk is the interim arbitration
-    /// FLUI has until that recognizer lands; it is deliberately shaped like
+    /// Routing trackpad pan-zoom through the SCALE GESTURE ARENA would
+    /// resolve the same contention with full gesture arbitration. This claim
+    /// walk is the interim arbitration FLUI has until a recognizer takes
+    /// pan-zoom input; it is deliberately shaped like
     /// the pointer-signal claim walk, which is the arbitration primitive this
     /// codebase already has.
     ///
@@ -930,17 +889,14 @@ pub(crate) fn transform_pointer_event(event: &PointerEvent, transform: &Matrix4)
 
 /// Re-express a pan-zoom event in an entry's local space.
 ///
-/// Ported from Flutter's `_TransformedPointerPanZoomUpdateEvent`
-/// (`gestures/events.dart`), which is the oracle for exactly this
-/// localization and treats each field differently:
+/// Each field is localized differently:
 ///
-/// - `position` and `pan` are **positions**: `transformPosition`.
-/// - `pan_delta` is a **delta anchored at `pan`**: the oracle's
-///   `transformDeltaViaPositions` transforms the delta's start and end points
-///   separately and subtracts, rather than mapping the offset directly —
-///   mathematically equivalent for an affine matrix, but it also stays
-///   correct under perspective and, as the oracle's own comment records,
-///   carries less precision error.
+/// - `position` and `pan` are **positions**: transformed as points.
+/// - `pan_delta` is a **delta anchored at `pan`**: the delta's start and end
+///   points are transformed separately and subtracted, rather than mapping
+///   the offset directly — mathematically equivalent for an affine matrix,
+///   but it also stays correct under perspective and carries less precision
+///   error.
 /// - `scale` and `rotation` are dimensionless and pass through untouched.
 ///
 /// Localizing `pan`/`pan_delta` matters even though today's W3C adapter

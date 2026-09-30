@@ -1,20 +1,17 @@
 //! [`TextButton`] — an M3 button with no outline or fill, the lowest-emphasis
 //! member of the button family.
 //!
-//! # Flutter parity
+//! # Defaults and scope
 //!
-//! `material/text_button.dart`'s `TextButton` (oracle tag `3.44.0`).
-//! `default_style` ports `_TextButtonDefaultsM3` (`text_button.dart`
-//! `:493-596`) field-by-field, narrowed to the V1 slots [`ButtonStyle`]
-//! carries — see that module's docs. Ported: `text_style`, `background_color`
-//! (constant transparent), `foreground_color`, `overlay_color`, `elevation`
-//! (constant `0.0`), `padding`, `minimum_size`, `maximum_size`, `shape`. The
-//! oracle table sets no default `side` or `fixed_size` (its own "No default
-//! fixedSize"/"No default side" comments), so neither field is populated
-//! here.
+//! `default_style` holds the M3 text-button defaults, narrowed to the V1
+//! slots [`ButtonStyle`] carries — see that module's docs. Populated:
+//! `text_style`, `background_color` (constant transparent), `foreground_color`,
+//! `overlay_color`, `elevation` (constant `0.0`), `padding`, `minimum_size`,
+//! `maximum_size`, `shape`. The M3 defaults set no `side` or `fixed_size`, so
+//! neither field is populated here.
 //!
 //! `padding` is the one slot that differs in *shape*, not just color, from
-//! its siblings: `_scaledPadding` in `text_button.dart` uses `12px`
+//! its siblings: the M3 text button uses `12px`
 //! horizontal / `8px` vertical at the M3 1x tier, versus `24px`/`0px` for
 //! `ElevatedButton`/`FilledButton`/`OutlinedButton` — text buttons ship
 //! tighter by design (no fill or outline to visually separate from

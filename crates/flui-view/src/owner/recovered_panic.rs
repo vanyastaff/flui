@@ -51,7 +51,7 @@ use flui_foundation::{
     panic::{is_internal_invariant, payload_text},
 };
 
-use crate::view::FlutterError;
+use crate::view::FrameworkError;
 
 /// Which `ViewState`/view lifecycle hook a [`RecoveredPanic`] was caught
 /// inside.
@@ -73,7 +73,7 @@ pub enum LifecycleHook {
     DidChangeDependencies,
     /// A fresh element's `View::create_element` (including `create_state`
     /// for a `StatefulView`) or `RenderView::create_render_object`. The
-    /// [`FlutterError`] `details` breadcrumb carries which of the two
+    /// [`FrameworkError`] `details` breadcrumb carries which of the two
     /// actually panicked. `ViewState::init_state` is NOT this hook — it
     /// runs later, in the `build_scope` drain, not during `mount`. See
     /// [`Self::InitState`].
@@ -261,7 +261,7 @@ pub struct RecoveredPanic {
     /// fallback; `details` is the framework breadcrumb describing the hook
     /// context. Consumers that need exact payload provenance use
     /// [`Self::payload_text`].
-    pub error: FlutterError,
+    pub error: FrameworkError,
     /// Whether the payload text started with `BUG:` — FLUI's own
     /// internal-invariant convention (`docs/PANIC-POLICY.md`). Computed
     /// while constructing the record from the raw payload, before any
@@ -289,12 +289,12 @@ impl RecoveredPanic {
     }
 
     /// Build a [`RecoveredPanic`] directly from a caught panic payload,
-    /// converting it to a [`FlutterError`] and classifying it in the same
+    /// converting it to a [`FrameworkError`] and classifying it in the same
     /// step.
     ///
-    /// `context` becomes the `FlutterError::details` breadcrumb (e.g.
+    /// `context` becomes the `FrameworkError::details` breadcrumb (e.g.
     /// `"disposing StatefulElement"`) — never user data. Use this when the
-    /// seam has not already built a `FlutterError` for another purpose
+    /// seam has not already built a `FrameworkError` for another purpose
     /// (e.g. to render the substituted `ErrorView`); a seam that has one
     /// already should call [`Self::with_error`] instead of re-deriving the
     /// message from the payload a second time.
@@ -306,12 +306,12 @@ impl RecoveredPanic {
         context: impl Into<String>,
     ) -> Self {
         let source_payload_text = payload_text(payload);
-        let error = FlutterError::from_payload_text(source_payload_text, context);
+        let error = FrameworkError::from_payload_text(source_payload_text, context);
         Self::with_payload_text(at, view_type_id, hook, source_payload_text, error)
     }
 
     /// Build a [`RecoveredPanic`] from a panic payload and an
-    /// **already-built** [`FlutterError`] — for a seam that built the
+    /// **already-built** [`FrameworkError`] — for a seam that built the
     /// error first for another purpose (typically to render the
     /// substituted `ErrorView` before it knows whether it will push a
     /// record at all) and must not re-derive the message from the payload
@@ -322,7 +322,7 @@ impl RecoveredPanic {
         view_type_id: TypeId,
         hook: LifecycleHook,
         payload: &(dyn Any + Send),
-        error: FlutterError,
+        error: FrameworkError,
     ) -> Self {
         Self::with_payload_text(at, view_type_id, hook, payload_text(payload), error)
     }
@@ -332,7 +332,7 @@ impl RecoveredPanic {
         view_type_id: TypeId,
         hook: LifecycleHook,
         source_payload_text: Option<&str>,
-        error: FlutterError,
+        error: FrameworkError,
     ) -> Self {
         Self {
             at,

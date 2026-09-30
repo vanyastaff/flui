@@ -1,8 +1,5 @@
 //! [`PreferredSizeView`] and [`PreferredSize`] — a view that can advertise the
 //! size it would prefer if it were otherwise unconstrained.
-//!
-//! Flutter parity: `widgets/preferred_size.dart` `PreferredSizeWidget` /
-//! `PreferredSize` (oracle tag `3.44.0`).
 
 use flui_foundation::geometry::Size;
 use flui_view::prelude::*;
@@ -13,15 +10,13 @@ use flui_view::prelude::*;
 /// A parent that needs to size a region *before* laying the child out (e.g.
 /// a `Scaffold`'s `app_bar` slot, sized to its app bar's preferred height
 /// plus the status-bar inset before the child ever sees a constraint) can
-/// require this trait on that slot instead of a plain view. Flutter parity:
-/// `PreferredSizeWidget` (`widgets/preferred_size.dart`) — `AppBar` and
+/// require this trait on that slot instead of a plain view. `AppBar` and
 /// `TabBar` implement it directly; [`PreferredSize`] adapts an arbitrary view
 /// for a caller that needs the trait but has neither.
 ///
-/// **Named divergence**: the oracle re-consults `preferredSize` lazily, at
-/// the *parent's* `BuildContext` (`AppBar.preferredHeightFor` re-reads
-/// `AppBarTheme.of` there, not at the `AppBar`'s own context), so a
-/// component-theme change is picked up without the child rebuilding. FLUI's
+/// **Known limit**: `preferred_size` is not re-consulted lazily at the
+/// *parent's* `BuildContext`, which is what would let a component-theme
+/// change be picked up without the child rebuilding. FLUI's
 /// Material substrate has no component-theme layer yet (see
 /// `flui-material`'s crate-root docs, "Scope (V1 — constants-first)"), so
 /// there is nothing for a lazy re-consult to observe: a caller resolves
@@ -38,7 +33,7 @@ pub trait PreferredSizeView: View {
 /// Advertises a preferred size for an arbitrary child, without imposing any
 /// constraint on it or otherwise affecting its layout.
 ///
-/// Flutter parity: `widgets/preferred_size.dart` `PreferredSize`. Use this to
+/// Use this to
 /// give a [`PreferredSizeView`]-requiring slot a child that does not itself
 /// implement the trait — a view that already implements it directly (like
 /// `flui_material::AppBar`) needs no wrapper.
@@ -79,9 +74,8 @@ impl std::fmt::Debug for PreferredSize {
 
 impl StatelessView for PreferredSize {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        // Flutter oracle (`preferred_size.dart`): `PreferredSize.build` just
-        // returns `child` — this widget imposes no constraint of its own, it
-        // only advertises `preferredSize` to whatever slot required it.
+        // Just returns `child` — this widget imposes no constraint of its
+        // own, it only advertises `preferred_size` to whatever slot required it.
         self.child.clone()
     }
 }

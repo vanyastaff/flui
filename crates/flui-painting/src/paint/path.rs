@@ -336,15 +336,15 @@ impl Path {
         self.edit().line_to(to_kurbo(point));
     }
 
-    /// Adds a quadratic Bézier curve from the pen to `end`, pulled toward `control`
-    /// (Flutter's `quadraticBezierTo`). Starts where [`Self::line_to`] does.
+    /// Adds a quadratic Bézier curve from the pen to `end`, pulled toward `control`.
+    /// Starts where [`Self::line_to`] does.
     pub fn quadratic_bezier_to(&mut self, control: Point<f64>, end: Point<f64>) {
         self.begin_at_pen();
         self.edit().quad_to(to_kurbo(control), to_kurbo(end));
     }
 
     /// Adds a cubic Bézier curve from the pen to `end`, with `control1` shaping its start and
-    /// `control2` its end (Flutter's `cubicTo`). Starts where [`Self::line_to`] does.
+    /// `control2` its end. Starts where [`Self::line_to`] does.
     pub fn cubic_to(&mut self, control1: Point<f64>, control2: Point<f64>, end: Point<f64>) {
         self.begin_at_pen();
         self.edit()
@@ -382,14 +382,14 @@ impl Path {
     /// Adds an arc on the oval inscribed in `rect`, starting at `start_angle` and sweeping by
     /// `sweep_angle` (both in radians).
     ///
-    /// # Divergence from Flutter's `Path.addArc`
+    /// # Contour joining
     ///
-    /// Flutter's `Path.addArc` always starts a **new** contour. FLUI's joins an open contour
-    /// with a line from the pen to the arc's start, so a shape built from edges and corner arcs
-    /// ([`Self::from_rrect`]) is one continuous contour instead of four open pieces, each of
-    /// which would be filled with a chord across its corner. With no contour open the arc
-    /// starts its own. A caller wanting Flutter's behaviour calls [`Self::move_to`] to the
-    /// arc's start first.
+    /// Unlike an arc primitive that always starts a **new** contour (as Skia's `addArc` does),
+    /// this joins an open contour with a line from the pen to the arc's start, so a shape built
+    /// from edges and corner arcs ([`Self::from_rrect`]) is one continuous contour instead of
+    /// four open pieces, each of which would be filled with a chord across its corner. With no
+    /// contour open the arc starts its own. A caller wanting a fresh contour calls
+    /// [`Self::move_to`] to the arc's start first.
     pub fn add_arc(&mut self, rect: Rect<f64>, start_angle: f64, sweep_angle: f64) {
         let arc = kurbo::Arc::new(
             to_kurbo_rect(rect).center(),

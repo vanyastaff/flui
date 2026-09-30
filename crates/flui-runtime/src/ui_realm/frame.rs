@@ -65,7 +65,7 @@ impl UiRealm {
     /// EXACTLY that same `woken || has_pending_work()` union (hidden/
     /// backpressure aside — unwired in production today), independent of
     /// first-frame deferral, which never gates the segment (see
-    /// `FrameClock`'s own module doc's `.flutter/` citation — deferral
+    /// `FrameClock`'s own module doc — deferral
     /// withholds only the submit). Production can host multiple
     /// presentations, but secondary windows carry no widget content today,
     /// so only the primary can produce painted output; see
@@ -96,9 +96,8 @@ impl UiRealm {
             let vsync = presentation.vsync();
             // Sampled BEFORE `tick_all`, not after: the tick that completes
             // a controller still delivers that controller's final value and
-            // status change (`.flutter/packages/flutter/lib/src/scheduler/
-            // ticker.dart:272-285`'s `_tick` calls `_onTick` unconditionally,
-            // THEN checks whether to schedule another one), so a controller
+            // status change (a ticker's tick calls its callback
+            // unconditionally, THEN checks whether to schedule another one), so a controller
             // that WAS running when this tick started must still mark
             // demand for THIS exact pump even though it may have just
             // settled -- the identical before/after-tick question
@@ -106,7 +105,7 @@ impl UiRealm {
             // doc), just never wired at this layer before this slice.
             //
             // The "does the NEXT pump need to be scheduled" question
-            // (Flutter's own `shouldScheduleTick`, sampled AFTER the tick)
+            // (the ticker's should-schedule-tick check, sampled AFTER the tick)
             // is answered separately, in `render_frame`, AFTER the
             // segment this demand mark feeds has actually rendered and
             // `mark_rendered()`/the retry check has run -- NOT here. See
@@ -123,8 +122,7 @@ impl UiRealm {
             if was_running {
                 // A running controller with no OTHER tree-visible effect
                 // now genuinely marks demand -- and therefore flushes --
-                // every tick, matching Flutter's own `Ticker`-driven
-                // `scheduleFrame` (the running ticker alone is sufficient),
+                // every tick (the running ticker alone is sufficient),
                 // rather than silently relying on some unrelated dirty
                 // state to also be present. This closes a gap the previous
                 // slice on this issue explicitly named and deferred.
@@ -194,8 +192,7 @@ impl UiRealm {
                 // true rather than merely documented. First-frame deferral
                 // is NOT one of these reasons — see `FrameClock`'s module
                 // doc: deferral withholds only the submit, never the
-                // segment (`.flutter/packages/flutter/lib/src/rendering/
-                // binding.dart:582-599`), so a deferred-but-demanded
+                // segment, so a deferred-but-demanded
                 // presentation always reaches `should_run_segment() ==
                 // true` (`PollDecision::ProduceWithheld`) below.
                 continue;
@@ -300,7 +297,7 @@ impl UiRealm {
             presentation.set_last_segment_span(segment_start, presentation.clock().now());
             // Latch "first frame confirmed sent" only for an unconditional
             // `Produce` that didn't error -- mirrors the old
-            // `RenderingFlutterBinding::mark_first_frame_sent`'s `!errored`
+            // `RenderingBinding::mark_first_frame_sent`'s `!errored`
             // guard, now also excluding `ProduceWithheld`: a withheld
             // result was never sent, by construction, so confirming it as
             // sent would be self-contradictory and would wrongly disarm a
@@ -505,10 +502,8 @@ impl UiRealm {
     /// submit gate is DELIBERATELY
     /// separate from `draw_frame_entered`'s own segment gate: first-frame
     /// deferral withholds only the submit, never the build/layout/paint
-    /// work (`.flutter/packages/flutter/lib/src/rendering/binding.dart:582-599`
-    /// — `RendererBinding.deferFirstFrame`'s own doc: "the framework will
-    /// still do all the work to produce frames, but those frames are never
-    /// sent to the engine"), so a deferred presentation's segment can very
+    /// work (the framework still does all the work to produce frames, but
+    /// those frames are never sent to the engine), so a deferred presentation's segment can very
     /// much have produced a real `Painted` outcome here, and this check is
     /// what keeps it off the engine. A stale/lost surface, a lost device,
     /// and a pipeline `Errored` outcome all count as a dropped (not
@@ -928,7 +923,7 @@ impl UiRealm {
         // probe rather than assumed:
         // `draw_frame_entered`'s own tick already ran (this method called
         // it above), so `presentation.vsync().has_running()` here reads
-        // the SAME post-tick state Flutter's own `shouldScheduleTick`
+        // the SAME post-tick state the ticker's should-schedule-tick check
         // reads — but `mark_rendered()` unconditionally clears
         // `needs_redraw` to `false`, and a `wake_frame()` call made BEFORE
         // that point (inside `draw_frame_entered`) gets silently clobbered

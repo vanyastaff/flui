@@ -1,89 +1,76 @@
 //! [`CupertinoNavigationBar`] — a static iOS-style navigation bar: a
 //! centered `middle` title with `leading`/`trailing` slots.
 //!
-//! Flutter parity: `cupertino/nav_bar.dart`'s `CupertinoNavigationBar`
-//! (oracle tag `3.44.0`), narrowed to the **collapsed, static** shape —
-//! `CupertinoNavigationBar`'s default constructor, not `.large()`, and not
-//! `CupertinoSliverNavigationBar` (an entirely different, scroll-driven
-//! widget). See "Deferred, named" below for exactly what that excludes.
+//! This is the **collapsed, static** shape only — no large-title layout, and
+//! no scroll-driven sliver variant. See "Deferred, named" below for exactly
+//! what that excludes.
 //!
-//! ## What this ports
+//! ## What it does
 //!
-//! - `_kNavBarPersistentHeight` (`= kMinInteractiveDimensionCupertino =
-//!   44.0`) as [`preferred_size`](PreferredSizeView::preferred_size)'s
-//!   height — verified at the oracle source, not the plan's guess: it is
+//! - A persistent height of `44.0` as
+//!   [`preferred_size`](PreferredSizeView::preferred_size)'s height. It is
 //!   *not* itself topped up by `MediaQuery.padding.top` (that addition
 //!   happens once, in `CupertinoPageScaffold`, the same "advertise the bar
-//!   height only" contract `flui-material`'s `AppBar` already established in
+//!   height only" contract `flui-material`'s `AppBar` established in
 //!   this workspace).
-//! - The hairline bottom border, `_kDefaultNavBarBorder` (color
-//!   `0x4D000000`) — see the "hairline" divergence note below.
-//! - The opaque background: `backgroundColor` resolved from
+//! - The hairline bottom border (color `0x4D000000`) — see the "hairline"
+//!   note below.
+//! - The opaque background: `background_color` resolved from
 //!   [`crate::CupertinoThemeData::bar_background_color`] when unset.
-//! - Self-padding against the top safe-area inset via [`SafeArea`],
-//!   matching the oracle's `_PersistentNavigationBar` (and
-//!   `flui-material`'s `AppBar` and its own "the bar pads itself" contract).
+//! - Self-padding against the top safe-area inset via [`SafeArea`]
+//!   (like `flui-material`'s `AppBar`, "the bar pads itself").
 //! - `middle` true-centered across the bar's full width (a [`Stack`] +
 //!   full-bleed [`Center`], not `Row`'s remaining-space centering) — see
 //!   "Layout: no `NavigationToolbar`" below.
 //!
 //! ## Deferred, named
 //!
-//! - **`automaticallyImplyLeading`/`automaticallyImplyMiddle`/
-//!   `previousPageTitle`** — the back-chevron-from-the-previous-route's-title
-//!   heuristics. No consumer route carries a `title` to imply from yet in
-//!   this crate (`cupertino_page_route`'s own `title` field is itself
+//! - **Automatic leading/middle** (a back chevron and title implied from the
+//!   previous route's title). No consumer route carries a `title` to imply
+//!   from yet in this crate (`cupertino_page_route`'s own `title` is itself
 //!   deferred — see `route.rs`'s module docs). `leading`/`middle` are always
 //!   exactly what the caller supplies.
-//! - **`.large()` / `largeTitle` / `bottom`** — the expanded large-title
+//! - **Large title / `bottom`** — the expanded large-title
 //!   layout and the bottom-accessory slot. This type ships the collapsed
 //!   shape only.
-//! - **`automaticBackgroundVisibility` / scroll-under fade** — no
-//!   `ScrollNotificationObserver` substrate to drive
-//!   `_scrollAnimationValue` from. The background is always fully opaque at
-//!   its resolved color; `_kTransparentNavBarBorder`'s scroll-under lerp
-//!   never applies.
-//! - **Blur** (`enableBackgroundFilterBlur`, `BackdropFilter`). Flutter
-//!   itself only blurs when the resolved background's alpha is not `0xFF`
-//!   (`_wrapWithBackground`'s `enabled: backgroundColor.alpha != 0xFF && ...`)
-//!   — moot today since this V1 has no translucent-background path to
-//!   trigger it, and `flui-widgets` has no `BackdropFilter` primitive yet
-//!   regardless.
-//! - **Hero transition between nav bars** (`transitionBetweenRoutes`,
-//!   `heroTag`, `_TransitionableNavigationBar`, `_NavigationBarTransition`)
-//!   — the push/pop hand-off where two nav bars visually merge. Out of this
-//!   component's scope; each nav bar is independently mounted per route.
+//! - **Automatic background visibility / scroll-under fade** — no
+//!   scroll-notification observer substrate to drive it from. The
+//!   background is always fully opaque at its resolved color, and the
+//!   scroll-under border lerp never applies.
+//! - **Blur** (`BackdropFilter`). A blur is only wanted when the resolved
+//!   background's alpha is not `0xFF` — moot today since this V1 has no
+//!   translucent-background path to trigger it, and `flui-widgets` has no
+//!   `BackdropFilter` primitive yet regardless.
+//! - **Hero transition between nav bars** — the push/pop hand-off where two
+//!   nav bars visually merge. Out of this component's scope; each nav bar is
+//!   independently mounted per route.
 //! - **`brightness`** (system status-bar style override) — no platform
 //!   status-bar styling seam in FLUI.
-//! - **System UI overlay style** (`AnnotatedRegion<SystemUiOverlayStyle>`)
-//!   — platform-only, no FLUI equivalent.
+//! - **System UI overlay style** — platform-only, no FLUI equivalent.
 //!
 //! ## The hairline border is *not* a literal `width: 0.0`
 //!
-//! The oracle's `_kDefaultNavBarBorder` is `BorderSide(color: ..., width:
-//! 0.0)`, with the comment "0.0 means one physical pixel" — Flutter's
-//! device-pixel-hairline convention. `flui-painting`'s box-border painter
+//! iOS draws its bar border as a device-pixel hairline, which some toolkits
+//! spell as a border of width `0.0`. `flui-painting`'s box-border painter
 //! has no such convention: `paint_border` skips any side with
 //! `width.get() <= 0.0` outright (`decoration.rs`). A literal `width: 0.0`
-//! port would render **no border at all**, silently failing the "hairline
+//! would render **no border at all**, silently failing the "hairline
 //! bottom border" contract. This uses [`HAIRLINE_BORDER_WIDTH`] (one logical
-//! pixel) instead — a real, honestly-approximated stroke, not Flutter's
-//! true device-pixel width.
+//! pixel) instead — a real, honestly-approximated stroke, not a true
+//! device-pixel width.
 //!
 //! ## Layout: no `NavigationToolbar`
 //!
-//! The oracle composes `leading`/`middle`/`trailing` with
-//! `NavigationToolbar`, whose render object centers `middle` in the full
-//! toolbar width and *shifts* it only if `leading`/`trailing` would
+//! A dedicated toolbar render object could center `middle` in the full
+//! toolbar width and *shift* it only if `leading`/`trailing` would
 //! otherwise overlap it. ADR-0028 prefers composition over a new render
 //! object unless one is proven necessary, and ordinary
 //! leading/middle/trailing widths never approach that overlap case in
-//! practice — so this ports the visual outcome (a true-centered title) with
-//! a [`Stack`]: `middle` is [`Center`]-ed across the **entire** bar width in
-//! one layer, `leading`/`trailing` are [`Positioned`] at the edges in
-//! another. **Named divergence**: unlike `NavigationToolbar`, nothing here
-//! shifts or clips `middle` if `leading`/`trailing` grow wide enough to
-//! visually collide with it.
+//! practice — so the visual outcome (a true-centered title) is produced
+//! with a [`Stack`]: `middle` is [`Center`]-ed across the **entire** bar width
+//! in one layer, `leading`/`trailing` are [`Positioned`] at the edges in
+//! another. Nothing here shifts or clips `middle` if `leading`/`trailing`
+//! grow wide enough to visually collide with it.
 
 use flui_sdk::geometry::Size;
 use flui_sdk::painting::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
@@ -97,27 +84,23 @@ use flui_sdk::widgets::{
 use crate::colors::CupertinoColor;
 use crate::theme::CupertinoTheme;
 
-/// `_kNavBarPersistentHeight` (`nav_bar.dart`, oracle tag `3.44.0`) —
-/// `kMinInteractiveDimensionCupertino`, `44.0`.
+/// The persistent height of the bar (the minimum interactive dimension),
+/// `44.0`.
 pub const NAV_BAR_PERSISTENT_HEIGHT: f64 = 44.0;
 
-/// `_kNavBarEdgePadding` (`nav_bar.dart`, oracle tag `3.44.0`) — the
-/// horizontal inset `leading`/`trailing` sit at from the bar's edges (the
-/// oracle's "if leading is an automatically-inserted back button, padding is
-/// 0" branch is unreachable here — see the module docs' deferred
-/// `automaticallyImplyLeading`).
+/// The horizontal inset `leading`/`trailing` sit at from the bar's edges (the
+/// "automatically-inserted back button needs no padding" case is unreachable
+/// here — see the module docs' deferred automatic leading).
 const NAV_BAR_EDGE_PADDING: f64 = 16.0;
 
-/// `_kDefaultNavBarBorderColor` (`nav_bar.dart`, oracle tag `3.44.0`).
+/// The default border color.
 const DEFAULT_NAV_BAR_BORDER_COLOR: Color = Color::from_argb(0x4D00_0000);
 
-/// The stroke width this port paints the hairline border at — see the
-/// module docs' "hairline" divergence note. One logical pixel, not the
-/// oracle's true device-pixel width.
+/// The stroke width the hairline border is painted at — see the module docs'
+/// "hairline" note. One logical pixel, not a true device-pixel width.
 pub const HAIRLINE_BORDER_WIDTH: f64 = 1.0;
 
-/// `_kDefaultNavBarBorder` (`nav_bar.dart`, oracle tag `3.44.0`): a
-/// bottom-only hairline, approximated per [`HAIRLINE_BORDER_WIDTH`]'s doc.
+/// A bottom-only hairline, approximated per [`HAIRLINE_BORDER_WIDTH`]'s doc.
 fn default_border() -> Border<f64> {
     Border::new(
         None,
@@ -133,9 +116,8 @@ fn default_border() -> Border<f64> {
 
 /// A static iOS-style navigation bar: `leading` / `middle` / `trailing`
 /// slots on a 44pt-tall bar with a hairline bottom border, self-padded
-/// against the top safe-area inset. Flutter parity: `CupertinoNavigationBar`
-/// (`nav_bar.dart`, oracle tag `3.44.0`, collapsed-static shape only) — see
-/// the module docs for exactly what is and is not ported.
+/// against the top safe-area inset (collapsed-static shape only) — see
+/// the module docs for exactly what is and is not supported.
 ///
 /// ```
 /// use flui_cupertino::CupertinoNavigationBar;
@@ -166,7 +148,7 @@ impl CupertinoNavigationBar {
         }
     }
 
-    /// Sets the leading slot — Flutter parity: `CupertinoNavigationBar.leading`.
+    /// Sets the leading slot.
     #[must_use]
     pub fn leading(mut self, leading: impl IntoView) -> Self {
         self.leading = Some(leading.into_view().boxed());
@@ -174,15 +156,14 @@ impl CupertinoNavigationBar {
     }
 
     /// Sets the middle (title) slot, true-centered across the bar's full
-    /// width — see the module docs' layout note. Flutter parity:
-    /// `CupertinoNavigationBar.middle`.
+    /// width — see the module docs' layout note.
     #[must_use]
     pub fn middle(mut self, middle: impl IntoView) -> Self {
         self.middle = Some(middle.into_view().boxed());
         self
     }
 
-    /// Sets the trailing slot — Flutter parity: `CupertinoNavigationBar.trailing`.
+    /// Sets the trailing slot.
     #[must_use]
     pub fn trailing(mut self, trailing: impl IntoView) -> Self {
         self.trailing = Some(trailing.into_view().boxed());
@@ -198,8 +179,7 @@ impl CupertinoNavigationBar {
     }
 
     /// Overrides the bottom border, or removes it with `None`. Defaults to
-    /// the hairline border — see the module docs' divergence note. Flutter
-    /// parity: `CupertinoNavigationBar.border`.
+    /// the hairline border — see the module docs' hairline note.
     #[must_use]
     pub fn border(mut self, border: Option<Border<f64>>) -> Self {
         self.border = border;
@@ -279,9 +259,8 @@ impl StatelessView for CupertinoNavigationBar {
 
 impl PreferredSizeView for CupertinoNavigationBar {
     fn preferred_size(&self) -> Size {
-        // `CupertinoNavigationBar.preferredSize` (`nav_bar.dart`, oracle tag
-        // `3.44.0`), minus the `bottom`/`largeTitle` height contributions
-        // (both deferred — see the module docs).
+        // No `bottom`/large-title height contributions (both deferred — see
+        // the module docs).
         Size::new(f64::INFINITY, NAV_BAR_PERSISTENT_HEIGHT)
     }
 }

@@ -13,8 +13,7 @@
   cosmic-text path for the same face, glyph, size and bin
   ([`parley_oracle.rs`](/crates/flui-painting/tests/parley_oracle.rs)), refuses a key it cannot
   draw (unregistered face, unknown variation, a size that is not finite and positive, a skew past
-  `Synthesis::MAX_SKEW_DEGREES`), and emboldens by an interpolated stroke width with no checked
-  Flutter reference (mapping decision 10 in
+  `Synthesis::MAX_SKEW_DEGREES`), and emboldens by an interpolated stroke width (mapping decision 10 in
   [`flui-painting`'s ARCHITECTURE.md](/crates/flui-painting/ARCHITECTURE.md#10-synthetic-bold-uses-an-interpolated-stroke-width)).
   No production caller yet: the migration series in
   [ADR-0092](/docs/adr/ADR-0092-per-realm-text-over-parley.md) wires it.

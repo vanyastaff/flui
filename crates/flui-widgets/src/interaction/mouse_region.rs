@@ -37,8 +37,7 @@ fn in_write(writer: &WriterSource, callback: &MouseCallback) -> Rc<dyn Fn(Device
 
 /// Calls callbacks when the mouse enters, hovers within, or exits its bounds.
 ///
-/// Flutter parity: `widgets/basic.dart` `MouseRegion` over
-/// `RenderMouseRegion`. Layout and paint are pass-through when a child exists;
+/// The widget over `RenderMouseRegion`. Layout and paint are pass-through when a child exists;
 /// without a child the region grows to the incoming biggest constraint.
 ///
 /// Each callback receives the dispatch's `&mut EventCx<'_>` first, so it
@@ -189,13 +188,10 @@ impl MouseRegion {
     ///
     /// A target, once registered, stays registered for as long as the render
     /// object stays mounted — including across a rebuild that empties the
-    /// callback set down to none. This mirrors Flutter's `RenderMouseRegion`,
-    /// which stays a valid `MouseTrackerAnnotation` with null `onEnter`/
-    /// `onHover`/`onExit` fields for as long as it is attached; there is no
-    /// "unregister while still attached" concept to port
-    /// (`rendering/proxy_box.dart`: `onEnter`/`onHover`/`onExit` are plain
-    /// nullable fields, and `validForMouseTracker` only flips false from
-    /// `detach()`). Dropping the lane registration here instead would make
+    /// callback set down to none. A `RenderMouseRegion` stays a valid mouse
+    /// tracker annotation with empty callback fields for as long as it is
+    /// attached; there is no "unregister while still attached" state.
+    /// Dropping the lane registration here instead would make
     /// `RenderMouseRegion::mouse_tracker_annotation`
     /// (`crates/flui-objects/src/interaction/mouse_region.rs`) stop
     /// contributing an annotation to hit-test results the moment callbacks

@@ -316,8 +316,8 @@ impl WgpuPainter {
         let paint_alpha = f32::from(paint.color.a) / 255.0;
         let layer_opacity = self.compositor.effective_layer_opacity(paint_alpha);
 
-        // A saveLayer paint's RGB is NOT a compositing tint. Per Flutter
-        // semantics the layer's group opacity comes from the paint's *alpha*,
+        // A saveLayer paint's RGB is NOT a compositing tint. The layer's group
+        // opacity comes from the paint's *alpha*,
         // and chroma comes only from an explicit ColorFilter — never from
         // `paint.color`'s RGB. The public canvas opacity helpers build
         // alpha-only layer paints as `Paint::fill(Color::TRANSPARENT)
@@ -343,7 +343,7 @@ impl WgpuPainter {
 
     /// Open an offscreen whose COMPOSITE carries `clip`.
     ///
-    /// This is `Clip::AntiAliasWithSaveLayer`. Flutter renders the clipped
+    /// This is `Clip::AntiAliasWithSaveLayer`, which renders the clipped
     /// subtree into an offscreen so the group composites against the clip edge
     /// ONCE; applying the coverage per draw instead makes the edge darker or
     /// more opaque wherever the content overlaps itself, because each draw is
@@ -366,9 +366,7 @@ impl WgpuPainter {
     /// present.
     ///
     /// `bounds` is the clip's DEVICE-space rect, and it is not optional the way
-    /// [`Self::save_layer`]'s is. Flutter passes the clip's bounds for this
-    /// mode for a reason (`clip.dart`'s `_clipAndPaint` takes them and hands
-    /// them to `canvas.saveLayer`); left at the viewport fallback, every
+    /// [`Self::save_layer`]'s is. Left at the viewport fallback, every
     /// clipped group composites as a full-screen textured quad running the
     /// clip SDF per fragment, however small the clip. Pass the SCISSOR the
     /// clip just installed: it is already intersected with every ancestor
@@ -416,8 +414,8 @@ impl WgpuPainter {
     ) {
         // Filter layers composite with white tint and SrcOver.  `effective_layer_opacity(1.0)`
         // multiplies 1.0 by the current ancestor opacity, so a filter layer nested inside an
-        // outer opacity layer correctly inherits that opacity — matching Flutter semantics where
-        // a color-filter saveLayer respects the parent's opacity.
+        // outer opacity layer correctly inherits that opacity — a color-filter
+        // saveLayer respects the parent's opacity.
         let layer_opacity = self.compositor.effective_layer_opacity(1.0);
         self.save_layer_impl(
             bounds,

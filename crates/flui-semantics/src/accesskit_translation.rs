@@ -6,7 +6,7 @@
 //!
 //! # Role is carried in two places
 //!
-//! FLUI mirrors Flutter, which encodes role at two granularities:
+//! FLUI encodes role at two granularities:
 //!
 //! - [`SemanticsFlag`] identifies the common controls — `IsButton`, `IsLink`,
 //!   `IsTextField`, `IsSlider`. These leave [`SemanticsRole::None`].
@@ -50,8 +50,7 @@ fn has_action(bits: u64, action: SemanticsAction) -> bool {
 /// An explicit [`SemanticsRole`] wins. Otherwise the role-bearing flags are
 /// consulted in specificity order; a node that claims none of them but carries
 /// a label (a plain `Text`, a labelled `Semantics` wrapper) is a
-/// [`Role::Label`] — static text, which is what Flutter's platform bridges
-/// publish for the same node (`kStaticText`) — and a node with neither becomes
+/// [`Role::Label`] — static text — and a node with neither becomes
 /// [`Role::GenericContainer`], present in the tree for structure but making no
 /// claim about what it is.
 ///
@@ -87,13 +86,10 @@ pub(crate) fn resolve_role(data: &SemanticsNodeData) -> Role {
     //
     // Only the checkable states moved. The flags left below `IsButton` — link,
     // slider, text field, image, header — carry the same theoretical argument, and
-    // the reference's corpus is *not* silent about all of them: it pins `isButton`
-    // beside `isTextField` (`test/material/dropdown_menu_test.dart`,
-    // `testWidgets('ensure exclude semantics for trailing button')`) and beside
-    // `isLink` (`test/widgets/semantics_merge_test.dart`, `testWidgets('LinkUri from
-    // child is passed up to the parent when merging nodes')`). FLUI's `Role` is
-    // single-valued where the reference publishes a flag set, so `IsButton`
-    // outranking them is a pre-existing divergence rather than an absence of
+    // real widget trees do combine `IsButton` with `IsTextField` (a dropdown's
+    // trailing button) and with `IsLink` (a merged link child). FLUI's `Role` is
+    // single-valued rather than a flag set, so `IsButton`
+    // outranking them is deliberate rather than an absence of
     // coverage — recorded, with its replacement test, in
     // `crates/flui-semantics/ARCHITECTURE.md` mapping decision 2. Reordering the
     // rest is a precedence decision that entry has now had to make explicitly.
@@ -309,11 +305,11 @@ fn apply_actions(node: &mut Node, actions: u64, flags: u64) {
 ///
 /// - `Focus` maps to [`SemanticsAction::Focus`] only. Outbound, a node
 ///   registering only the legacy `DidGainAccessibilityFocus` *notification*
-///   also advertises `Focus`, but Flutter's engine likewise dispatches the
-///   platform's focus request as the `focus` action itself — the legacy
-///   handler is a notification hook, not the action's implementation.
+///   also advertises `Focus`, but the platform's focus request is dispatched
+///   as the `focus` action itself — the legacy handler is a notification
+///   hook, not the action's implementation.
 /// - `Blur` maps to `DidLoseAccessibilityFocus`, which IS the notification,
-///   because that is the only vocabulary FLUI (and Flutter) has for it.
+///   because that is the only vocabulary FLUI has for it.
 /// - `Expand` and `Collapse` have no FLUI action. They reach the node's tap
 ///   handler ([`SemanticsAction::Tap`]), which is how FLUI toggles an
 ///   expandable node, and `apply_actions` advertises only the one its expanded
@@ -323,7 +319,7 @@ fn apply_actions(node: &mut Node, actions: u64, flags: u64) {
 ///   check reads the adapter's copy of the tree, which lags until the next
 ///   published update, so two `Expand`s before the next frame both pass it and
 ///   both toggle; the routed `Tap` carries no direction for FLUI to check.
-///   Discrete `Expand`/`Collapse` actions at Flutter's bits would close this
+///   Discrete `Expand`/`Collapse` actions would close this
 ///   (`crates/flui-semantics/ARCHITECTURE.md`, mapping decision 5).
 ///
 /// `SetValue` lands on [`SemanticsAction::SetText`] whatever its payload: a
@@ -481,11 +477,9 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
     // arithmetic underflowing an offset) is dropped rather than published as
     // a nonsensical position.
     //
-    // Divergence from the reference, recorded in flui-semantics'
-    // `## Mapping decisions`: Flutter carries `indexInParent` and
-    // `scrollChildCount` as separate fields and leaves each platform bridge to
-    // reconcile them into whatever that platform's set-position concept is.
-    // AccessKit has the concept directly, so the pair is emitted here.
+    // Recorded in flui-semantics' `## Mapping decisions`: AccessKit has the
+    // set-position concept directly, so the index/count pair is emitted here
+    // rather than left for each platform bridge to reconcile.
     if let Some(index) = data.index_in_parent
         && index >= 0
     {

@@ -9,8 +9,6 @@
 //! - Drag gestures that continue even when pointer leaves the original target
 //! - Modal dialogs that capture all pointer events
 //!
-//! Flutter reference: <https://api.flutter.dev/flutter/gestures/PointerRouter-class.html>
-//!
 //! # Example
 //!
 //! ```rust,ignore
@@ -212,13 +210,10 @@ impl PointerRouter {
     /// Dispatch snapshots the candidate callbacks before the first handler
     /// fires, so additions take effect on the next event. Before invoking each
     /// candidate it checks the live registry, so a callback removed before its
-    /// turn is skipped in the current event. This matches Flutter
-    /// [`pointer_router.dart::route`](https://github.com/flutter/flutter/blob/master/packages/flutter/lib/src/gestures/pointer_router.dart)
-    /// behavior.
+    /// turn is skipped in the current event.
     ///
-    /// Dispatch order is **per-pointer handlers first, then global handlers**
-    /// matching Flutter `pointer_router.dart:124` ordering. Per-pointer
-    /// handlers run in their registration order (insertion order in the
+    /// Dispatch order is **per-pointer handlers first, then global handlers**.
+    /// Per-pointer handlers run in their registration order (insertion order in the
     /// HashMap entry's Vec); global handlers fire afterward.
     pub fn route(&self, event: &PointerEvent) {
         if let Some(panic) = self.route_capturing_panics(event) {
@@ -248,7 +243,7 @@ impl PointerRouter {
 
         let mut first_panic = None;
 
-        // Per-pointer handlers first (Flutter ordering).
+        // Per-pointer handlers first.
         for handler in pointer_handlers {
             if self.contains_route(pointer, &handler) {
                 let delivered = RoutePanic::capture(|| handler(event));

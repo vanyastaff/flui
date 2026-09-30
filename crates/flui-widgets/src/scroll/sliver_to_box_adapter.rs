@@ -8,8 +8,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// Wraps a single box (non-sliver) child as a sliver, so an ordinary widget can
 /// be placed inside a scrolling [`Viewport`](crate::Viewport).
 ///
-/// Flutter parity: `widgets/sliver.dart` `SliverToBoxAdapter` over
-/// `RenderSliverToBoxAdapter`. The box child is laid out with an unbounded main
+/// The box child is laid out with an unbounded main
 /// axis and its main-axis size becomes the sliver's scroll extent.
 #[derive(Clone, Debug, Default)]
 pub struct SliverToBoxAdapter {

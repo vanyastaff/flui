@@ -8,8 +8,6 @@
 //! - Pointer held for long_press_timeout (default 500ms)
 //! - Optional move updates while pressed
 //! - Pointer up
-//!
-//! Flutter reference: <https://api.flutter.dev/flutter/gestures/LongPressGestureRecognizer-class.html>
 
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
@@ -116,7 +114,7 @@ pub struct LongPressGestureRecognizer {
     deadline_registration: Rc<RefCell<Option<GestureDeadlineRegistration>>>,
 }
 
-// Field names keep Flutter's `onLongPressStart`-style callback names (parity).
+// Field names keep the `on_long_press_start`-style callback names.
 #[expect(clippy::struct_field_names)]
 #[derive(Default)]
 struct LongPressCallbacks {
@@ -255,8 +253,7 @@ impl LongPressGestureRecognizer {
     /// Set the long press end callback (called after up, with details)
     ///
     /// Similar to `on_long_press_up` but called after the up event is
-    /// processed. This follows Flutter's pattern of having both
-    /// onLongPressUp and onLongPressEnd.
+    /// processed, so both `on_long_press_up` and `on_long_press_end` exist.
     pub fn with_on_long_press_end(
         self: Arc<Self>,
         callback: impl Fn(LongPressDetails) + 'static,
@@ -419,8 +416,7 @@ impl LongPressGestureRecognizer {
     /// [`Self::handle_move`] (move events carry their own deadline
     /// resolution), and from `did_exceed_deadline` (the parent
     /// `PrimaryPointerGestureRecognizer` deadline hook). Extracting
-    /// it once keeps the three call sites in lock-step with Flutter
-    /// `long_press.dart::_checkLongPressStart` semantics.
+    /// it once keeps the three call sites in lock-step.
     #[instrument(
         name = "long_press.try_fire_timer",
         level = "trace",
@@ -594,9 +590,8 @@ impl GestureRecognizer for LongPressGestureRecognizer {
     fn dispose(&self) {
         self.state.mark_disposed();
         self.stop_deadline_polling();
-        // Reject arena entries + clear tracked pointer (Flutter parity:
-        // gestures/recognizer.dart:485-493 disposing GestureRecognizer
-        // clears arena state for tracked pointers).
+        // Reject arena entries + clear tracked pointer, so a disposed
+        // recognizer never lingers in the arena for a tracked pointer.
         self.state.reject();
         let mut callbacks = self.callbacks.borrow_mut();
         callbacks.on_long_press_down = None;
@@ -617,8 +612,7 @@ impl GestureRecognizer for LongPressGestureRecognizer {
 // Canonical trait hierarchy adoption
 // =============================================================================
 //
-// Flutter parity: `long_press.dart:262 LongPressGestureRecognizer extends
-// PrimaryPointerGestureRecognizer`.
+// A long press is a primary-pointer recognizer with a pre-acceptance deadline.
 
 impl crate::recognizers::OneSequenceGestureRecognizer for LongPressGestureRecognizer {
     fn tracked_pointers(&self) -> Vec<PointerId> {
@@ -658,8 +652,7 @@ impl crate::recognizers::PrimaryPointerGestureRecognizer for LongPressGestureRec
     fn did_exceed_deadline(&self) {
         // The long-press deadline expiring IS acceptance: fire the start
         // callbacks AND win the arena so competing recognizers (e.g. a tap on
-        // the same region) are rejected. Flutter parity:
-        // `long_press.dart::didExceedDeadline` -> `resolve(accepted)`.
+        // the same region) are rejected.
         let position = self
             .gesture_state
             .lock()
@@ -668,14 +661,11 @@ impl crate::recognizers::PrimaryPointerGestureRecognizer for LongPressGestureRec
             .unwrap_or_else(|| Offset::new(0.0, 0.0));
         self.try_fire_timer(position);
         // Kept deliberately, even though `try_fire_timer` now also resolves on
-        // fire. This hook is the ARENA's deadline, and in the reference the
-        // arena's deadline is the authority — `didExceedDeadline` resolves
-        // unconditionally before firing ("Exceeding the deadline puts the
-        // gesture in the accepted state",
-        // .flutter/packages/flutter/lib/src/gestures/long_press.dart), with no
-        // re-check of elapsed time. Dropping this call would make acceptance
-        // conditional on `try_fire_timer`'s own clock comparison and diverge
-        // from that. The two agree in production — `deadline()` returns the
+        // fire. This hook is the ARENA's deadline, and the arena's deadline is
+        // the authority: exceeding it puts the gesture in the accepted state
+        // unconditionally, with no re-check of elapsed time. Dropping this
+        // call would make acceptance conditional on `try_fire_timer`'s own
+        // clock comparison. The two agree in production — `deadline()` returns the
         // same `long_press_timeout` `try_fire_timer` measures against — so the
         // second resolve lands on an already-resolved arena and is a no-op.
         self.state.accept_tracked();

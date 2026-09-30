@@ -1,9 +1,5 @@
 //! `RenderIntrinsicHeight` — expands the child to its maximum intrinsic height.
 //!
-//! # Flutter equivalence
-//!
-//! Behavior-faithful port of Flutter's `RenderIntrinsicHeight`
-//! (`packages/flutter/lib/src/rendering/proxy_box.dart`, lines 783–850).
 //! The child is asked for its maximum intrinsic height for the incoming raw
 //! `max_width`, then laid out tight to that height.  Width is left unconstrained
 //! so the child can take whatever width it needs within the parent's bounds.
@@ -11,14 +7,14 @@
 //! `RenderIntrinsicHeight` has no `step_width`/`step_height` knobs — those
 //! belong to `RenderIntrinsicWidth` only.
 //!
-//! # Dry intrinsics fix
+//! # Dry intrinsics
 //!
-//! The old `compute_dry_layout` / `compute_dry_baseline` approximated the
-//! intrinsic height via a `child_dry_layout` probe at unconstrained width, which
-//! diverges from `perform_layout` for width-filling children (e.g. a flex row
-//! with `MainAxisSize::Max`).  All three compute passes now share one
-//! `child_constraints` helper that issues the real child-intrinsic query through
-//! the appropriate context channel — dry ≡ committed.
+//! Approximating the intrinsic height via a `child_dry_layout` probe at
+//! unconstrained width would diverge from `perform_layout` for width-filling
+//! children (e.g. a flex row with `MainAxisSize::Max`).  All three compute
+//! passes therefore share one `child_constraints` helper that issues the real
+//! child-intrinsic query through the appropriate context channel — dry ≡
+//! committed.
 
 use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Size};
@@ -38,8 +34,6 @@ use flui_rendering::{
 /// directly without querying the child's intrinsic.  When the height is
 /// unbounded, the child is asked for its maximum intrinsic height and the
 /// result is clamped to the incoming height range before being tightened.
-///
-/// Flutter parity: `RenderIntrinsicHeight` in `proxy_box.dart`.
 #[derive(Debug, Clone)]
 pub struct RenderIntrinsicHeight {
     /// True after the first successful `perform_layout` with a child present.
@@ -54,11 +48,8 @@ impl RenderIntrinsicHeight {
 
     /// Computes the tight child constraints using an `intrinsic` closure.
     ///
-    /// Mirrors Flutter's `RenderIntrinsicHeight._childConstraints`
-    /// (proxy_box.dart:816-819):
-    ///
-    /// - **Width axis**: unchanged (Flutter passes the incoming width range
-    ///   through unmodified; `tighten(None, Some(height))` preserves `min_width`
+    /// - **Width axis**: unchanged (the incoming width range passes through
+    ///   unmodified; `tighten(None, Some(height))` preserves `min_width`
     ///   and `max_width`).
     ///
     /// - **Height axis**: if the incoming height is already tight, keep it.
@@ -74,7 +65,7 @@ impl RenderIntrinsicHeight {
         constraints: BoxConstraints,
         mut intrinsic: impl FnMut(IntrinsicDimension, f64) -> f64,
     ) -> BoxConstraints {
-        // Height axis — proxy_box.dart:816-819
+        // Height axis.
         let height = if constraints.has_tight_height() {
             // Parent already determined height; skip the intrinsic query.
             constraints.min_height
@@ -127,7 +118,6 @@ impl RenderBox for RenderIntrinsicHeight {
 
     // ---- intrinsic dimensions -----------------------------------------------
     //
-    // Flutter parity: proxy_box.dart RenderIntrinsicHeight.
     // Width queries delegate to child; height queries use the tightened-height
     // child constraints to get the accurate value.
 
@@ -135,10 +125,9 @@ impl RenderBox for RenderIntrinsicHeight {
         if ctx.child_count() == 0 {
             return 0.0;
         }
-        // Flutter (proxy_box.dart): an infinite height resolves to the
-        // child's own max intrinsic height at infinity before querying its
-        // min intrinsic width — "min width at infinite height" is not a
-        // meaningful query on its own.
+        // An infinite height resolves to the child's own max intrinsic height
+        // at infinity before querying its min intrinsic width — "min width at
+        // infinite height" is not a meaningful query on its own.
         let height = if height.is_finite() {
             height
         } else {

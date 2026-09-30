@@ -126,8 +126,8 @@ where
     /// Requests that the pipeline append this render object to the global
     /// hit-test path even if this object's `hit_test` returns `false`.
     ///
-    /// This models Flutter's `HitTestBehavior::Translucent` side effect:
-    /// receive the event, but keep testing siblings visually behind this node.
+    /// This is the translucent hit-test side effect: receive the event, but
+    /// keep testing siblings visually behind this node.
     pub fn register_self_hit_entry(&mut self) {
         self.self_hit_entry_registered = true;
     }

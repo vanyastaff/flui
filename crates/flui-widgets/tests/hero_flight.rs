@@ -118,10 +118,9 @@ fn fly(
 // ============================================================================
 
 /// **push interrupted by pop.** Open a page, then immediately go back while its hero
-/// is still flying. Flutter's `_HeroFlight.divert` (`heroes.dart:742-757`) reuses the
-/// *same* flight and its *same* overlay entry, repoints the proxy at
-/// `ReverseAnimation(newAnimation)`, and reverses the rect tween — the pop retraces
-/// the push path backwards, no jump cut.
+/// is still flying. The divert reuses the *same* flight and its *same* overlay
+/// entry, repoints the proxy at the reversed new animation, and reverses the rect
+/// tween — the pop retraces the push path backwards, no jump cut.
 ///
 /// Observable: one flight, the **same** `entry_id` as before the pop, and the tween's
 /// begin/end swapped (the shuttle now heads back to where it came from).
@@ -193,7 +192,7 @@ pub(crate) fn a_push_flight_interrupted_by_a_pop_diverts_in_place() {
 // ============================================================================
 
 // ============================================================================
-// Flight easing — `Hero.curve` / `Hero.reverse_curve` (heroes.dart:472-491)
+// Flight easing — `Hero.curve` / `Hero.reverse_curve`
 // ============================================================================
 
 /// A `hero_page` whose `Hero` is customized by `configure` — a flight curve, say.
@@ -231,7 +230,7 @@ fn assert_rect_close(actual: Rect, expected: Rect, what: &str) {
 }
 
 /// `Hero::curve` shapes the flight, and a push eases on the **destination** hero's
-/// curve (`heroes.dart:479`). `Threshold(0.9)` reads 0.0 until 90% of the transition —
+/// curve. `Threshold(0.9)` reads 0.0 until 90% of the transition —
 /// so halfway through, the shuttle has not left its begin rect.
 ///
 /// Red-check: resolve the curve from `from_hero` for a push in `MeasurementPass::launch`
@@ -267,5 +266,5 @@ pub(crate) fn a_push_eases_on_the_destination_hero_curve() {
 }
 
 // ============================================================================
-// HeroMode (heroes.dart:1124-1152, :335-337)
+// HeroMode
 // ============================================================================

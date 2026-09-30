@@ -1,6 +1,4 @@
 //! Hot-reload hooks on the render pipeline owner.
-//!
-//! Flutter parity: `PipelineOwner.flushReassemble()` / `RenderObject.reassemble()`.
 
 use flui_foundation::RenderId;
 
@@ -15,18 +13,15 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// render object identity (same `RenderId`, same in-tree state) while
     /// forcing a full rebuild pass on the next frame.
     ///
-    /// All four marks mirror Flutter's `RenderObject.reassemble()`
-    /// (`rendering/object.dart`), which does exactly:
-    /// `markNeedsLayout` / `markNeedsCompositingBitsUpdate` / `markNeedsPaint` /
-    /// `markNeedsSemanticsUpdate` plus a child walk. Reassemble is the one place
-    /// a hot reload can change code that affects compositing or semantics
-    /// without touching layout or paint, so omitting those two marks would leave
-    /// the changed behaviour invisible until something else dirtied those phases
-    /// — the mark-and-skip divergence this method exists to avoid.
+    /// All four marks are made: layout, compositing bits, paint and
+    /// semantics, plus a child walk. A hot reload can change code that affects
+    /// compositing or semantics without touching layout or paint, so omitting
+    /// those two marks would leave the changed behaviour invisible until
+    /// something else dirtied those phases — the mark-and-skip divergence this
+    /// method exists to avoid.
     ///
     /// `mark_needs_semantics` remains gated on semantics being enabled
-    /// ([`PipelineOwner::semantics_enabled`]); that gate is the pipeline's own
-    /// contract, not a departure from Flutter, and marking is a no-op when
+    /// ([`PipelineOwner::semantics_enabled`]); marking is a no-op when
     /// semantics are off.
     pub fn reassemble(&mut self) {
         let Some(root_id) = self.root_id else {

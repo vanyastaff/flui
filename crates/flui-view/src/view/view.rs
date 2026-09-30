@@ -4,8 +4,6 @@
 //! - **Immutable**: Created fresh each build cycle
 //! - **Short-lived**: Exist only for diffing, then dropped
 //! - **Composable**: Build trees of nested Views
-//!
-//! This is equivalent to Flutter's `Widget` class.
 
 use std::any::TypeId;
 
@@ -82,12 +80,6 @@ impl ElementDepth {
 ///     }
 /// }
 /// ```
-///
-/// # Flutter Equivalent
-///
-/// This trait corresponds to Flutter's `Widget` abstract class:
-/// - `create_element()` → `Widget.createElement()`
-/// - `can_update()` → `Widget.canUpdate()` static method
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a FLUI view",
     label = "not a `View`",
@@ -124,7 +116,7 @@ pub trait View: Downcast + DynClone + 'static {
     /// keyed widget moved to a new slot must NOT be absorbed by whatever
     /// same-type sibling happens to land in its old position. It also
     /// means a `UniqueKey` never matches (each instance is distinct), so
-    /// it always forces a fresh element — Flutter parity.
+    /// it always forces a fresh element.
     ///
     /// # Arguments
     ///
@@ -133,12 +125,6 @@ pub trait View: Downcast + DynClone + 'static {
     /// # Returns
     ///
     /// `true` if the Element can be updated, `false` if it must be replaced.
-    ///
-    /// # Flutter Equivalent
-    ///
-    /// `Widget.canUpdate` (`framework.dart:4123`):
-    /// `oldWidget.runtimeType == newWidget.runtimeType
-    ///  && oldWidget.key == newWidget.key`.
     fn can_update(&self, old: &dyn View) -> bool {
         if self.view_type_id() != old.view_type_id() {
             return false;
@@ -161,7 +147,7 @@ pub trait View: Downcast + DynClone + 'static {
     ///
     /// # Default
     ///
-    /// `false` — always rebuild (Flutter parity). This is the safe default:
+    /// `false` — always rebuild. This is the safe default:
     /// skipping a rebuild whose output *would* have differed silently loses
     /// user-visible state, so the opt-in direction is the only safe one.
     ///
@@ -174,7 +160,7 @@ pub trait View: Downcast + DynClone + 'static {
     ///
     /// # Opposite polarity to `can_update`
     ///
-    /// [`View::can_update`] is the Flutter *type + key matchability* gate:
+    /// [`View::can_update`] is the *type + key matchability* gate:
     /// can this element be *reused at all*? `should_skip_rebuild` is a
     /// *content equality* short-circuit: given that the element **is**
     /// being reused, can the rebuild be skipped? Do **not** merge them —
@@ -212,15 +198,6 @@ clone_trait_object!(View);
 /// This is the object-safe version of Element for dynamic dispatch.
 /// Specific Element types (StatelessElement, StatefulElement, etc.)
 /// implement the full Element trait.
-///
-/// # Flutter Equivalent
-///
-/// This corresponds to Flutter's `Element` abstract class. Key methods:
-/// - `mount()` / `unmount()` - lifecycle
-/// - `update()` - update with new widget
-/// - `rebuild()` / `performRebuild()` - rebuild children
-/// - `activate()` / `deactivate()` - temporary removal
-/// - `didChangeDependencies()` - inherited widget changed
 pub trait ElementBase: Downcast + 'static {
     // ========================================================================
     // Identity
@@ -240,10 +217,8 @@ pub trait ElementBase: Downcast + 'static {
     /// this to forward to `View::key().map(ViewKey::key_hash)`; every other
     /// implementor keeps the keyless default.
     ///
-    /// Flutter parity: `framework.dart:4125` `Element.updateChildren`
-    /// reads `oldChild.widget.key` directly because Dart elements carry
-    /// a typed `widget` field. FLUI's object-safe element surface
-    /// exposes the same fact through this type-erased accessor instead.
+    /// The object-safe element surface exposes the key through this
+    /// type-erased accessor because it cannot name the concrete `View`.
     fn current_key_hash(&self) -> Option<u64> {
         None
     }
@@ -266,11 +241,7 @@ pub trait ElementBase: Downcast + 'static {
     /// callers use it synchronously inside the reconciler dispatch and
     /// must not extend it across mutating calls on the element.
     ///
-    /// Flutter parity: `framework.dart:4123` `Widget.canUpdate` uses
-    /// `oldWidget.key == newWidget.key` directly. FLUI exposes the
-    /// same fact through this typed accessor at the dispatch
-    /// boundary; `View::can_update` calls the parallel typed surface
-    /// on `&dyn View`.
+    /// `View::can_update` calls the parallel typed surface on `&dyn View`.
     fn current_key(&self) -> Option<&dyn flui_foundation::ViewKey> {
         None
     }
@@ -451,12 +422,7 @@ pub trait ElementBase: Downcast + 'static {
     /// returns true). The unified `Element<V, A, B>` impl routes this
     /// through the behavior so `StatefulBehavior` can fire the typed
     /// `ViewState::did_change_dependencies` hook on the dependent's
-    /// state BEFORE its build runs — Flutter parity for
-    /// `framework.dart:6117` `StatefulElement.didChangeDependencies`
-    /// (which sets the `_didChangeDependencies` flag) plus
-    /// `framework.dart:5977-5982` `StatefulElement.performRebuild`
-    /// (which fires `state.didChangeDependencies()` when the flag is
-    /// set).
+    /// state BEFORE its build runs.
     ///
     /// Default implementation is a no-op — non-stateful behaviors
     /// (Stateless, Proxy, Inherited, Render) have no typed `ViewState`
@@ -577,9 +543,7 @@ pub trait ElementBase: Downcast + 'static {
     /// The lazy-sliver logical index a child inserted at `slot` under this
     /// element must carry down to its render object.
     ///
-    /// Companion to [`Self::child_render_id`], and the FLUI shape of the slot
-    /// Flutter's `RenderObjectElement` inherits through component elements
-    /// down to `didAdoptChild`: a sparse sliver host answers `Some(slot)`
+    /// Companion to [`Self::child_render_id`]: a sparse sliver host answers `Some(slot)`
     /// (its insert slot *is* the logical index); a component element passes
     /// through the slot it received; a render element answers `None`, since
     /// its own children attach under it, not under the sliver. Default
@@ -663,10 +627,6 @@ pub trait ElementBase: Downcast + 'static {
     /// borrow on this element — the caller's typed-callback wrapper
     /// runs synchronously while the tree-read-lock is held, never
     /// extending the borrow into the rest of `build()`.
-    ///
-    /// Flutter parity: `framework.dart:5122`
-    /// `findAncestorWidgetOfExactType<T>` — reads `element.widget` once
-    /// the ancestor is identified.
     fn view_as_any(&self) -> Option<&dyn std::any::Any> {
         None
     }
@@ -681,12 +641,7 @@ pub trait ElementBase: Downcast + 'static {
     /// the typed `ViewState` without leaking `V` into the object-safe
     /// trait surface.
     ///
-    /// Flutter parity: `framework.dart:5132`
-    /// `findAncestorStateOfType<T>` and `framework.dart:5146`
-    /// `findRootAncestorStateOfType<T>` both read `element.state` on a
-    /// `StatefulElement` after the runtime-type check succeeds. We do
-    /// the equivalent runtime-type check via `TypeId::of::<S>()` keyed
-    /// off `V::State`.
+    /// The runtime-type check is `TypeId::of::<S>()` keyed off `V::State`.
     fn state_as_any(&self) -> Option<&dyn std::any::Any> {
         None
     }
@@ -707,12 +662,8 @@ pub trait ElementBase: Downcast + 'static {
     /// extending a `&self` borrow — `RenderId` is `Copy`, so the
     /// non-callback signature is sound.
     ///
-    /// Flutter parity: `framework.dart:5160`
-    /// `findAncestorRenderObjectOfType<T>` walks `_parent` and reads
-    /// `(ancestor as RenderObjectElement).renderObject` once the
-    /// runtime-type check succeeds. We do the equivalent strict-ancestor
-    /// walk and read `RenderBehavior::render_id` at the dispatch
-    /// boundary.
+    /// The lookup is a strict-ancestor walk reading
+    /// `RenderBehavior::render_id` at the dispatch boundary.
     fn render_id(&self) -> Option<flui_foundation::RenderId> {
         None
     }
@@ -726,11 +677,6 @@ pub trait ElementBase: Downcast + 'static {
     /// insert/update seam walks ancestors of a freshly-attached render child,
     /// collects each `Some` between the child and the nearest ancestor render
     /// object, and writes them onto that child's render node (nearest wins).
-    ///
-    /// Flutter parity: `ParentDataElement.applyParentData` —
-    /// `framework.dart`'s `ParentDataElement<T>` attaches its
-    /// `ParentDataWidget.applyParentData` payload to the descendant
-    /// `RenderObject.parentData` at the same point we write it here.
     fn parent_data_config(&self) -> Option<Box<dyn flui_rendering::parent_data::ParentData>> {
         None
     }
@@ -815,10 +761,7 @@ pub trait ElementBase: Downcast + 'static {
     /// keeps the default unless the user opts in.
     ///
     /// Returning `true` cancels the bubble; `false` lets it continue to
-    /// the next ancestor. Flutter parity:
-    /// `notification_listener.dart:127`
-    /// (`_NotificationElement.onNotification`) performs the same
-    /// runtime-type check + downcast + typed-callback chain.
+    /// the next ancestor.
     fn on_notification(&self, type_id: std::any::TypeId, notification: &dyn std::any::Any) -> bool {
         let _ = (type_id, notification);
         false

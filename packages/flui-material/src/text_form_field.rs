@@ -1,7 +1,6 @@
 //! [`TextFormField`] — a Material [`TextField`] in a [`FormField<String>`].
 //!
-//! Flutter parity: `material/text_form_field.dart` `TextFormField` (tag
-//! `3.44.0`): the field's error reaches the decoration's error line
+//! The field's error reaches the decoration's error line
 //! (`decoration.copyWith(errorText: field.errorText)`), a user edit is the
 //! field's `didChange`, and a reset writes the initial text back into the
 //! controller. `flui_sdk::widgets::RawTextFormField` is the theme-free sibling;
@@ -21,11 +20,10 @@ use flui_sdk::widgets::{AutovalidateMode, FormFieldHandle, TextEditingController
 use crate::input_decorator::InputDecoration;
 use crate::text_field::TextField;
 
-/// A Material [`TextField`] in a [`FormField<String>`] — Flutter's
-/// `TextFormField`.
+/// A Material [`TextField`] in a [`FormField<String>`].
 ///
-/// Two constructors put Flutter's "`initialValue` or `controller`, not both"
-/// assert into the types: [`Self::new`] edits a caller's controller and
+/// Two constructors put the "`initialValue` or `controller`, not both"
+/// rule into the types: [`Self::new`] edits a caller's controller and
 /// starts from its text, [`Self::with_initial_value`] owns its controller.
 ///
 /// [`FormField<String>`]: flui_sdk::widgets::FormField

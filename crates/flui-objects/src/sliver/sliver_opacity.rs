@@ -1,25 +1,19 @@
 //! `RenderSliverOpacity` — single-child sliver that applies a uniform
 //! alpha to its inner sliver during compositing.
 //!
-//! # Flutter equivalence
-//!
-//! Behavior-faithful port of Flutter's
-//! [`RenderSliverOpacity`](https://api.flutter.dev/flutter/rendering/RenderSliverOpacity-class.html)
-//! (`packages/flutter/lib/src/rendering/sliver.dart` — `_RenderSliverOpacity`
-//! / the proxy-sliver variant). Layout is a pure passthrough of the
+//! Layout is a pure passthrough of the
 //! parent's [`flui_rendering::constraints::SliverConstraints`] to the child; the alpha is consumed
 //! by the compositor via the
 //! [`flui_rendering::traits::RenderSliver::paint_effects`] override.
 //!
-//! # Rust-native improvements
+//! # Design notes
 //!
 //! * `opacity` is clamped to `[0, 1]` on construction and `set_opacity`;
 //!   the cached `alpha: u8` is recomputed at the boundary so paint-time
 //!   code reads it as `Some(u8)` without re-clamping per frame.
 //! * The opacity setter reports the exact paint, compositing, and semantics
 //!   impact of the alpha transition.
-//! * `always_needs_compositing` opt-in mirrors Flutter's
-//!   `RenderProxyBox.alwaysNeedsCompositing` toggle and is honoured by
+//! * The `always_needs_compositing` opt-in is honoured by
 //!   [`RenderSliverOpacity::needs_compositing`] independent of the
 //!   alpha value, useful for animations that want a stable compositing
 //!   layer.
@@ -110,18 +104,15 @@ impl RenderSliverOpacity {
     /// (`alpha == 0`) does not need compositing because the subtree is skipped
     /// entirely.
     ///
-    /// **Recorded divergence, not parity.** Upstream's predicate is
-    /// `child != null && _alpha > 0`, which is TRUE at alpha 255 — its own
-    /// `proxy_sliver_test.dart` case "RenderSliverOpacity does composite if it
-    /// is opaque" asserts exactly that, and this predicate does not satisfy it.
-    /// The `alpha != 255` term is deliberate and is the same `is_layered`
+    /// This is false at alpha 255. The `alpha != 255` term is
+    /// deliberate and is the same `is_layered`
     /// threshold `paint_effects` and `skip_paint` already use: at alpha 255 no
     /// layer is ever allocated (`paint_effects` returns no opacity effect),
     /// so demanding compositing there is pure overhead with no visual
     /// effect. The full rationale is recorded once, on the sibling that
-    /// first made the call —
-    /// see `proxy::animated_opacity`'s `is_repaint_boundary` comment. Oracle
-    /// for the divergent value: `opaque_and_transparent_constructors` below.
+    /// first made the call — see `always_needs_compositing` in
+    /// `proxy::animated_opacity`. Pinned by
+    /// `opaque_and_transparent_constructors` below.
     #[inline]
     pub fn needs_compositing(&self) -> bool {
         self.always_needs_compositing || (self.alpha > 0 && self.alpha != 255)
@@ -157,26 +148,13 @@ impl RenderSliverOpacity {
         // repaint boundary's retained output rather than repainting the
         // subtree.
         //
-        // DIVERGENCE FROM THE REFERENCE, and a deliberate improvement — see
+        // Cheaper than a plain paint mark — see
         // `flui-rendering/ARCHITECTURE.md`, "A composited-layer update patches
-        // the enclosing capture". Flutter's `RenderSliverOpacity.opacity`
-        // setter calls `markNeedsPaint()` (`proxy_sliver.dart`), NOT
-        // `markNeedsCompositedLayerUpdate()` — and it has no choice: that
-        // mechanism requires the node to BE a repaint boundary, and
-        // `RenderSliverOpacity` never overrides `isRepaintBoundary` — the word
-        // does not appear in `proxy_sliver.dart` at all. Upstream declares it
-        // in exactly two places: `RenderOpacity` (`proxy_box.dart`,
-        // `isRepaintBoundary => alwaysNeedsCompositing`) and
-        // `RenderAnimatedOpacityMixin`, which is generic over `RenderObject`
-        // and so covers the animated case on BOTH protocols. The STATIC sliver
-        // opacity is the one node the mechanism cannot reach upstream — not
-        // "the sliver protocol", which `RenderSliverAnimatedOpacity` is served
-        // on through that mixin.
+        // the enclosing capture".
         //
-        // FLUI has the path here because a retained capture is a flat list and
+        // The path exists here because a retained capture is a flat list and
         // a node's own effect layers are addressable INSIDE the enclosing
-        // boundary's capture, so nothing is promoted. Oracles (net-new — no
-        // upstream test drives this setter, so nothing was replaced):
+        // boundary's capture, so nothing is promoted. Tests:
         // `a_sliver_alpha_change_updates_the_layer_without_repainting_the_subtree`
         // and `a_sliver_layer_update_is_written_back_into_the_retained_capture`
         // (`flui-rendering/tests/retained_boundary_layers.rs`).
@@ -239,7 +217,7 @@ impl RenderSliverOpacity {
 }
 
 impl Default for RenderSliverOpacity {
-    /// Defaults to fully-opaque (Flutter parity).
+    /// Defaults to fully-opaque.
     fn default() -> Self {
         Self::opaque()
     }
@@ -278,10 +256,9 @@ impl RenderSliver for RenderSliverOpacity {
         &self,
         ctx: &mut SliverHitTestContext<'_, Single, SliverPhysicalParentData>,
     ) -> bool {
-        // Transparent — fully-transparent slivers still hit-test (Flutter
-        // parity: `RenderSliverOpacity` does not gate hit-testing on
-        // alpha, leaving that to `RenderSliverIgnorePointer`). The
-        // opacity object adds no extra hit area.
+        // Transparent — fully-transparent slivers still hit-test (hit-testing
+        // is not gated on alpha, leaving that to `RenderSliverIgnorePointer`).
+        // The opacity object adds no extra hit area.
         ctx.hit_test_child_at_layout_offset(0)
     }
 
@@ -292,14 +269,10 @@ impl RenderSliver for RenderSliverOpacity {
     // blanket impl returns the default `false`, silently skipping the
     // dedicated compositing layer that the opacity effect requires.
     //
-    // Upstream's `RenderSliverOpacity.alwaysNeedsCompositing` is
-    // `child != null && _alpha > 0`. Two differences, both deliberate:
-    // the child-presence gate is absorbed into the paint phase here, and the
-    // alpha threshold diverges at 255 — see [`needs_compositing`]'s doc for
-    // that one, which is a recorded divergence rather than parity. The
-    // `always_needs_compositing` opt-in field is a FLUI extension
-    // (stable-layer animation support) with no upstream counterpart; it is
-    // OR-ed in, so it only ever widens when a layer is demanded.
+    // The child-presence gate is absorbed into the paint phase, and the
+    // alpha threshold excludes 255 — see [`needs_compositing`]'s doc. The
+    // `always_needs_compositing` opt-in field (stable-layer animation
+    // support) is OR-ed in, so it only ever widens when a layer is demanded.
     fn always_needs_compositing(&self) -> bool {
         self.needs_compositing()
     }
@@ -310,7 +283,6 @@ impl RenderSliver for RenderSliverOpacity {
     fn paint_effects(&self, _size: Size) -> PaintEffects {
         // None when fully opaque (255) OR fully transparent (0) without the
         // always-needs-compositing flag: neither requires an OpacityLayer.
-        // Flutter proxy_sliver.dart: alpha=0 → layer=null (no layer, just skip).
         if (self.alpha == 255 || self.alpha == 0) && !self.always_needs_compositing {
             PaintEffects::NONE
         } else {
@@ -319,7 +291,6 @@ impl RenderSliver for RenderSliverOpacity {
     }
 
     fn skip_paint(&self) -> bool {
-        // Flutter proxy_sliver.dart: `if (_alpha == 0) { return; }`
         // Fully transparent without the always-compositing flag: suppress child
         // paint entirely (no invisible GPU draws).
         self.alpha == 0 && !self.always_needs_compositing

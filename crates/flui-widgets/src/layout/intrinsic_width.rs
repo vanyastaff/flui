@@ -11,8 +11,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// `step_height` parameters round values up to a size grid, reducing relayout
 /// churn in dynamic lists where adjacent items should snap to a common width.
 ///
-/// Flutter parity: `widgets/basic.dart` `IntrinsicWidth` over
-/// [`RenderIntrinsicWidth`].
+/// Backed by [`RenderIntrinsicWidth`].
 #[derive(Clone, Debug)]
 pub struct IntrinsicWidth {
     /// Optional column-width quantum; intrinsic width is rounded up to the

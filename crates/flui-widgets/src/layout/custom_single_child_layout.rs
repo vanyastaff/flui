@@ -11,8 +11,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// A widget that sizes and positions one child using a layout delegate.
 ///
-/// Flutter parity: `widgets/basic.dart` `CustomSingleChildLayout` over
-/// `RenderCustomSingleChildLayoutBox`.
+/// Backed by `RenderCustomSingleChildLayoutBox`.
 #[derive(Clone)]
 pub struct CustomSingleChildLayout {
     delegate: Arc<dyn SingleChildLayoutDelegate>,

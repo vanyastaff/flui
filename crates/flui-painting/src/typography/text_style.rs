@@ -62,9 +62,9 @@ impl FontWeight {
     /// Values round to the closest hundred and clamp to `W100`..=`W900`.
     /// An exact half goes the way CSS Fonts 4's font matching algorithm
     /// searches when a weight is missing: lighter below 400, heavier from
-    /// 400 up, so 350 is `W300` and 450 is `W500`. Flutter snaps with a
-    /// plain `round()` in `FontWeight.lerp`, which would send 350 to `W400`,
-    /// away from the direction a browser would pick for a CSS weight.
+    /// 400 up, so 350 is `W300` and 450 is `W500`. A plain `round()` would
+    /// send 350 to `W400`, away from the direction a browser would pick for
+    /// a CSS weight.
     #[must_use]
     #[inline]
     pub const fn from_css(value: i32) -> Self {
@@ -157,8 +157,7 @@ impl FontVariation {
 }
 
 /// Defines a strut: a minimum line-height scaffold that vertical text
-/// metrics are laid out against, independent of the actual glyphs
-/// (mirrors Flutter's `StrutStyle`).
+/// metrics are laid out against, independent of the actual glyphs.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct StrutStyle {
     /// Font family name.
@@ -216,8 +215,7 @@ impl StrutStyle {
 }
 
 #[derive(Default, Clone, Debug, PartialEq)]
-/// Visual and layout styling to apply to a span of text (mirrors
-/// Flutter's `TextStyle`).
+/// Visual and layout styling to apply to a span of text.
 ///
 /// All fields are optional; unset fields inherit from an enclosing style
 /// via `merge`. Use `layout_affecting_eq` to compare only the fields that

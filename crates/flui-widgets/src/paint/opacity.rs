@@ -6,7 +6,6 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Makes its child partially transparent.
 ///
-/// Flutter parity: `widgets/basic.dart` `Opacity` over `RenderOpacity`.
 /// `opacity` is clamped to `0.0..=1.0`; `0.0` paints nothing (but the child is
 /// still laid out and interactive unless wrapped in `IgnorePointer`).
 #[derive(Clone, Debug)]

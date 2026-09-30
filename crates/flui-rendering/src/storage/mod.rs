@@ -32,11 +32,10 @@
 //! - `RenderId(1)` → `nodes[0]`
 //! - `RenderId(2)` → `nodes[1]`
 //!
-//! # Flutter Equivalence
+//! # Why a separate tree
 //!
-//! In Flutter, render objects form a tree via parent/child pointers stored
-//! directly on each object. We use a separate `RenderTree` structure with
-//! Slab storage for:
+//! Render objects do not hold parent/child pointers themselves. A separate
+//! `RenderTree` structure with Slab storage gives:
 //! - O(1) access by ID
 //! - Cache-friendly contiguous memory
 //! - Safe ID-based references (no raw pointers in user code)

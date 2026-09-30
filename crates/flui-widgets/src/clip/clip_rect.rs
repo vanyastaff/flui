@@ -8,9 +8,8 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Clips its child to this widget's rectangular bounds.
 ///
-/// Flutter parity: `widgets/basic.dart` `ClipRect` over `RenderClipRect`.
 /// Layout is a pass-through; only painting is clipped. `clip_behavior` defaults
-/// to [`Clip::HardEdge`] (Flutter's `ClipRect` default).
+/// to [`Clip::HardEdge`].
 #[derive(Clone, Debug)]
 pub struct ClipRect {
     clip_behavior: Clip,
@@ -29,7 +28,7 @@ impl Default for ClipRect {
 }
 
 impl ClipRect {
-    /// Create a rectangular clip with Flutter's default `HardEdge` behavior.
+    /// Create a rectangular clip with the default `HardEdge` behavior.
     pub fn new() -> Self {
         Self::default()
     }
@@ -43,10 +42,8 @@ impl ClipRect {
 
     /// The fixed rectangle to clip to, in the widget's own coordinates.
     ///
-    /// Without it the clip is the widget's whole box. Flutter's equivalent is
-    /// `ClipRect(clipper: CustomClipper<Rect>)`, a callback plus a
-    /// hand-written `shouldReclip`; this is a value compared with `==`, which
-    /// is what its own test clipper amounts to. See
+    /// Without it the clip is the widget's whole box. This is a value compared
+    /// with `==`, not a callback with a hand-written re-clip predicate. See
     /// [`RenderClip::set_clip_shape`](flui_objects::RenderClipRect::set_clip_shape)
     /// for the full reasoning and for the size-dependent case it does not
     /// cover.

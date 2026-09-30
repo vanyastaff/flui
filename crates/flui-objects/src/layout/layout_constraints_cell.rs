@@ -8,10 +8,8 @@
 //! constraints it was laid out with; the element layer later *reads* them,
 //! rebuilds, and *commits*.
 //!
-//! It exists because FLUI cannot do what Flutter does. Flutter's
-//! `LayoutBuilder` rebuilds its child **inside** `performLayout` via
-//! `invokeLayoutCallback`, mutating the element and render trees mid-walk. In
-//! FLUI the layout walk holds `&mut RenderTree` for its whole duration (the
+//! It exists because FLUI cannot rebuild a child **inside** `perform_layout`,
+//! which would mutate the element and render trees mid-walk. The layout walk holds `&mut RenderTree` for its whole duration (the
 //! `SubtreeArena`), and building while the pipeline write-lock is held would
 //! self-deadlock when mounting render objects. Instead the render object records
 //! what it saw, and `BuildOwner::service_layout_builders` services it
@@ -21,9 +19,8 @@
 //! # Edge-triggered, not level-triggered
 //!
 //! [`publish`](LayoutConstraintsCell::publish) raises `needs_build` **only when
-//! the constraints differ from the last committed ones**. This is the direct
-//! analogue of Flutter's skip condition
-//! (`_previousConstraints == constraints && !_needsBuild`), and it is what makes
+//! the constraints differ from the last committed ones**. This is the skip
+//! condition (`previous == constraints && !needs_build`), and it is what makes
 //! "same constraints ⇒ no rebuild" a structural property of the seam rather than
 //! something a test merely happens to observe. A level-triggered flag would
 //! re-dirty the element on every layout pass and the fixpoint would never

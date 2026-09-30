@@ -1,14 +1,12 @@
 //! [`InkWell`] — an M3 state-overlay surface: paints a single resolved
-//! overlay color that tracks hover/focus/press, in place of Flutter's ink
+//! overlay color that tracks hover/focus/press, in place of an ink
 //! splash/highlight feature list.
 //!
-//! # Flutter parity
+//! # One type for `InkWell` and `InkResponse`
 //!
-//! `material/ink_well.dart`'s `InkResponse`/`InkWell` (oracle tag `3.44.0`).
-//! `InkWell` extends `InkResponse` with `containedInkWell: true` and a
-//! rectangular `highlightShape` — a distinction that only matters to the
-//! oracle's ink-feature clipping, which this substrate doesn't have (see
-//! below). FLUI ships one type covering both.
+//! A contained, rectangular-highlight `InkWell` and a free-form
+//! `InkResponse` only differ in ink-feature clipping, which this substrate
+//! doesn't have (see below). FLUI ships one type covering both.
 //!
 //! # Scope: overlay only, no ink-feature registry
 //!
@@ -50,7 +48,7 @@
 //! reduces to `on_tap.is_some()`. When
 //! disabled: [`WidgetState::Disabled`] is asserted in the states set, the
 //! `GestureDetector` built has no `on_tap` closure at all (so it never
-//! resolves any gesture and — Flutter parity — "swallows nothing": its
+//! resolves any gesture and "swallows nothing": its
 //! default [`flui_sdk::widgets::HitTestBehavior::DeferToChild`] lets an
 //! unclaimed pointer contact fall through to whatever is behind it), hover
 //! stops updating [`WidgetState::Hovered`] (oracle: `handleMouseEnter`
@@ -69,7 +67,7 @@
 //! *shows* a pressed state for a moment.
 //!
 //! This substrate wires [`GestureDetector::on_tap`] only — a callback that
-//! fires once the gesture is *recognized* (Flutter parity for a tap: down +
+//! fires once the gesture is *recognized* (a tap: down +
 //! up without exceeding touch slop), with no separate down/up primitives to
 //! hang two different callbacks on. Architecturally that is the oracle's
 //! *synthetic*-activation shape, not its real-pointer shape — there is no
@@ -94,8 +92,7 @@
 //!
 //! [`InkWell::states_controller`] accepts an external controller (shared
 //! with a caller that also wants to read/drive the same state set); absent
-//! one, the state owns a private [`WidgetStatesController`] — Flutter
-//! parity: `initStatesController`/`MaterialStatesController`.
+//! one, the state owns a private [`WidgetStatesController`].
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -123,7 +120,7 @@ use crate::shape::MaterialShape;
 /// `GestureDetector::on_tap`'s own callback shape.
 type TapCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>)>;
 
-/// Flutter's `_InkResponseState._activationDuration` — see the module doc's
+/// How long the pressed state lingers after a tap — see the module doc's
 /// "Press-state timing" section for why this substrate applies it
 /// uniformly rather than only on synthetic activation.
 const PRESS_DEACTIVATION_DELAY: Duration = Duration::from_millis(100);
@@ -185,16 +182,15 @@ impl InkWell {
     }
 
     /// Shares an external [`WidgetStatesController`] instead of the private
-    /// one this widget otherwise owns — Flutter parity:
-    /// `InkWell.statesController`.
+    /// one this widget otherwise owns.
     #[must_use]
     pub fn states_controller(mut self, controller: WidgetStatesController) -> Self {
         self.states_controller = Some(controller);
         self
     }
 
-    /// Drives an external [`FocusNode`] instead of a widget-owned one —
-    /// Flutter parity: `InkWell.focusNode`. Exposed primarily so a caller
+    /// Drives an external [`FocusNode`] instead of a widget-owned one.
+    /// Exposed primarily so a caller
     /// (or a test) can request focus on this `InkWell` from outside the
     /// widget tree via [`FocusNode::request_focus`].
     #[must_use]
@@ -293,16 +289,12 @@ impl ViewState<InkWell> for InkWellState {
         // listener below) — never called from `build`.
         let rebuild = ctx.rebuild_handle();
 
-        // Flutter parity: `initStatesController` syncs `Disabled` from the
-        // widget's `enabled` BEFORE the first build (never inside `build`
-        // — the oracle's own doc: mutating a possibly-caller-shared
+        // Sync `Disabled` from the widget's `enabled` BEFORE the first build
+        // (never inside `build`: mutating a possibly-caller-shared
         // controller and notifying its listeners synchronously mid-build is
-        // exactly the "setState during build" hazard Flutter's lifecycle
-        // exists to prevent; `did_update_view` below handles every later
-        // transition) — AND before `addListener`
-        // (`statesController.update(...)` precedes
-        // `statesController.addListener(handleStatesControllerChange)` in
-        // the oracle body, `ink_well.dart` `:923-924`). That order is load
+        // exactly the "rebuild during build" hazard the lifecycle exists to
+        // prevent; `did_update_view` below handles every later transition)
+        // — AND before adding the listener. That order is load
         // bearing, not incidental: this very first sync almost always IS a
         // real change (a freshly-constructed controller starts at
         // `WidgetStates::NONE`, so an initially-disabled `InkWell` — the
@@ -321,9 +313,7 @@ impl ViewState<InkWell> for InkWellState {
 
         // A rebuild is needed whenever the states set actually changes
         // (hover/focus/press/disabled) from here on, so the overlay color
-        // is re-resolved. Mirrors `_InkResponseState.initStatesController`'s
-        // `statesController.addListener(handleStatesControllerChange)`,
-        // whose Flutter body is `setState(() {})`.
+        // is re-resolved.
         let rebuild_for_listener = rebuild.clone();
         self.states_listener = Some(self.states.add_listener(Arc::new(move || {
             rebuild_for_listener.schedule(flui_sdk::view::RebuildReason::StateChange);
@@ -334,10 +324,8 @@ impl ViewState<InkWell> for InkWellState {
     }
 
     fn did_update_view(&mut self, old_view: &InkWell, new_view: &InkWell) {
-        // Flutter parity: `didUpdateWidget` re-homes the states controller
-        // when the caller swaps in a genuinely different one —
-        // `widget.statesController != oldWidget.statesController`
-        // (`ink_well.dart` `:938-940`). A rebuild that re-clones the SAME
+        // Re-home the states controller when the caller swaps in a
+        // genuinely different one. A rebuild that re-clones the SAME
         // external controller, or leaves both `None` (keeping the private
         // one this state already owns), is not a swap: `WidgetStatesController`
         // has no `PartialEq`, so identity is `is_same`, not value equality.
@@ -370,10 +358,8 @@ impl ViewState<InkWell> for InkWellState {
                 rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
             })));
         } else if new_view.is_interactive() != old_view.is_interactive() {
-            // Flutter parity: `didUpdateWidget`'s `if (enabled !=
-            // isWidgetEnabled(oldWidget))` branch — the controller didn't
-            // change, but `enabled` did, so the existing controller needs a
-            // resync (`ink_well.dart` `:963-964`). Still never from `build`.
+            // The controller didn't change, but `enabled` did, so the
+            // existing controller needs a resync. Still never from `build`.
             self.states
                 .update(WidgetState::Disabled, !new_view.is_interactive());
         }
@@ -433,9 +419,8 @@ impl ViewState<InkWell> for InkWellState {
         let hover_states_enter = self.states.clone();
         let hover_states_exit = self.states.clone();
         let mouse_region = MouseRegion::new()
-            // Flutter 3.44 `_InkResponseState` changes hover state on the
-            // structural MouseRegion enter/exit transitions. FLUI's
-            // presentation-owned MouseTracker also re-hit-tests stationary
+            // Hover state changes on the structural MouseRegion enter/exit
+            // transitions. FLUI's presentation-owned MouseTracker also re-hit-tests stationary
             // devices after layout, so a widget appearing beneath an
             // unmoved pointer takes the same path as a physical pointer move.
             .on_enter(move |_cx, _device, _position| {

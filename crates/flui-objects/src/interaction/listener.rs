@@ -1,17 +1,12 @@
 //! `RenderListener` — single-child proxy that receives pointer events landing
 //! within its bounds and routes them to its owner-local handler.
 //!
-//! # Flutter equivalence
-//!
-//! Behavior-faithful port of Flutter's `RenderPointerListener`
-//! (`packages/flutter/lib/src/rendering/proxy_box.dart`): the listener
-//! advertises a data-only [`PointerTarget`] that the pipeline attaches to its
+//! The listener advertises a data-only [`PointerTarget`] that the pipeline attaches to its
 //! [`HitTestEntry`](flui_rendering::hit_testing::HitTestEntry); pointer
 //! dispatch resolves the target through the owner-local interaction lane and
 //! invokes the registered handler (ADR-0027 — the executable callback never
 //! lives in render storage). Layout and paint pass through transparently.
-//! When childless it grows to the incoming maximum constraints, matching
-//! Flutter's `computeSizeForNoChild`; only `hit_test` (registering self) and
+//! When childless it grows to the incoming maximum constraints; only `hit_test` (registering self) and
 //! `pointer_target` (advertising the identity) differ from a transparent
 //! proxy.
 
@@ -35,8 +30,8 @@ use flui_rendering::{context::BoxDryBaselineCtx, context::BoxDryLayoutCtx};
 /// interaction lane (e.g. a detached harness mount); such a listener still
 /// participates in hit-testing but delivers no pointer events.
 ///
-/// `behavior` controls when the listener registers itself (Flutter's
-/// `HitTestBehavior`, default [`DeferToChild`](HitTestBehavior::DeferToChild)):
+/// `behavior` controls when the listener registers itself (default
+/// [`DeferToChild`](HitTestBehavior::DeferToChild)):
 ///
 /// * `DeferToChild` — registers only when a descendant is hit (the common case:
 ///   a listener wrapping a visible child; pointers landing on empty regions of

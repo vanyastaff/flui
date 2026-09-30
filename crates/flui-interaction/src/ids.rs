@@ -28,10 +28,6 @@
 //! should use `PointerId::new((N as u64) + 1).expect("nonzero pointer id")`
 //! — adding `1` keeps test pointers distinct from `PRIMARY`.
 //!
-//! Flutter parity: `gestures/events.dart::PointerEvent.pointer` is an
-//! unbounded `int`; `PointerId::PRIMARY` corresponds to Flutter's
-//! mouse/primary pointer convention.
-//!
 //! # Local IDs
 //!
 //! [`FocusNodeId`] and [`HandlerId`] remain local — they back their own

@@ -1,6 +1,5 @@
 //! Composite tap-and-drag gesture recogniser.
 //!
-//! Flutter parity: `gestures/tap_and_drag.dart` `BaseTapAndDragGestureRecognizer`.
 //! The recogniser arbitrates between two gesture outcomes for a single
 //! primary pointer:
 //!
@@ -21,7 +20,7 @@
 //!
 //! Use this recogniser when a single widget should react to *both* a
 //! quick tap and a drag. Examples include text-selection handles
-//! (Flutter's canonical use), draggable list items with tap-to-select
+//! (a canonical use), draggable list items with tap-to-select
 //! semantics, and map pins (tap to inspect, drag to reposition).
 //!
 //! # Example
@@ -152,8 +151,7 @@ enum Phase {
     Finished,
 }
 
-// Field names keep Flutter's `onTapDown`/`onDragStart`-style callback names
-// (parity with `BaseTapAndDragGestureRecognizer`).
+// Field names keep the `on_tap_down`/`on_drag_start`-style callback names.
 #[expect(clippy::struct_field_names)]
 #[derive(Default)]
 struct TapDragCallbacks {
@@ -180,8 +178,7 @@ struct DragState {
     /// Velocity tracker for end-of-drag velocity.
     velocity_tracker: VelocityTracker,
     /// `true` while a tap outcome is still possible. Set `false` once the
-    /// pointer wanders past tap slop (but not yet drag slop) — Flutter parity:
-    /// such a move voids the tap so a later up fires nothing.
+    /// pointer wanders past tap slop (but not yet drag slop): such a move voids the tap so a later up fires nothing.
     tap_viable: bool,
 }
 
@@ -268,10 +265,9 @@ impl TapAndDragGestureRecognizer {
     /// Drag slop threshold for `kind` (uses
     /// [`GestureSettings::pan_slop_for`]).
     ///
-    /// This recognizer drags in a free plane, so it takes the *pan* tier —
-    /// `computePanSlop`, as `TapAndPanGestureRecognizer` does
-    /// (`tap_and_drag.dart:1445`). The axis-locked variants take the plain hit
-    /// tier instead (`:1410`); if this recognizer ever grows a vertical- or
+    /// This recognizer drags in a free plane, so it takes the *pan* tier.
+    /// Axis-locked drags take the plain hit
+    /// tier instead; if this recognizer ever grows a vertical- or
     /// horizontal-only mode, that mode reads [`Self::tap_slop`]'s tier, not
     /// this one.
     fn drag_slop(&self, kind: PointerType) -> f64 {
@@ -281,7 +277,7 @@ impl TapAndDragGestureRecognizer {
     /// Tap slop threshold for `kind` (uses [`GestureSettings::hit_slop`]).
     ///
     /// The tap-viability check is a *hit* test, not a pan one, so it takes the
-    /// plain tier — `computeHitSlop` at `tap_and_drag.dart:532`.
+    /// plain tier.
     fn tap_slop(&self, kind: PointerType) -> f64 {
         self.settings.lock().hit_slop(kind)
     }
@@ -541,7 +537,7 @@ impl TapAndDragGestureRecognizer {
                     }
                 } else if distance > self.tap_slop(kind) {
                     // Past tap slop but not drag slop: the pointer wandered too
-                    // far to still count as a tap (Flutter parity). Void the tap
+                    // far to still count as a tap. Void the tap
                     // so a later up does not fire `on_tap_*`.
                     self.drag_state.lock().tap_viable = false;
                 }

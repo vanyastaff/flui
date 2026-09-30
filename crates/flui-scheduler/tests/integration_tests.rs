@@ -109,8 +109,8 @@ fn test_full_frame_lifecycle() {
 //
 // The old `test_ticker_provider_schedule_tick_typed` exercised
 // `TickerProvider::schedule_tick_typed`, since removed alongside the
-// `schedule_tick` API (Flutter `TickerProvider.createTicker(callback)
-// -> Ticker` is now the only factory shape). The auto-scheduling integration
+// `schedule_tick` API (`create_ticker(callback) -> Ticker` is now the only
+// factory shape). The auto-scheduling integration
 // is covered by `crates/flui-scheduler/src/ticker.rs` unit tests
 // (`test_auto_scheduling_ticker_fires_each_frame`,
 // `test_create_ticker_via_provider_auto_schedules`).

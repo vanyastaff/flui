@@ -1,10 +1,7 @@
 //! [`Divider`]/[`VerticalDivider`] — a thin, inset rule painted with the M3
 //! `_DividerDefaultsM3` token defaults.
 //!
-//! # Flutter parity
-//!
-//! `material/divider.dart`'s `Divider`/`VerticalDivider`, composed with
-//! `_DividerDefaultsM3` (oracle tag `3.44.0`):
+//! # M3 defaults
 //!
 //! | Token | Value | Oracle |
 //! |---|---|---|
@@ -271,16 +268,16 @@ struct ResolvedDividerStyle {
     end_indent: f64,
     color: Color,
     /// Unlike every other field, `radius` has no concrete M3 default to fall
-    /// through to — square corners (`None`) are Flutter's own fallback too
-    /// (`BoxDecoration`'s default), not a value this module invents.
+    /// through to — square corners (`None`) are `BoxDecoration`'s own
+    /// default, not a value this module invents.
     radius: Option<BorderRadius>,
 }
 
 /// Resolve the M3 divider defaults through the widget → theme → default
-/// cascade, per field. Flutter parity: `this.height ?? dividerTheme.space ??
+/// cascade, per field: `this.height ?? dividerTheme.space ??
 /// defaults.space!` (and the `thickness`/`indent`/`endIndent`/`color`
-/// equivalents), `divider.dart`, oracle tag `3.44.0`.
-// mirrors the oracle's own per-field cascade; a patch struct would only relocate this
+/// equivalents).
+// a per-field cascade; a patch struct would only relocate this
 fn resolve_style(
     theme: &ThemeData,
     space: Option<f64>,

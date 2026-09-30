@@ -1,27 +1,25 @@
 //! [`Form`], [`FormField`] and [`RawTextFormField`] — a group of fields that
 //! validate, save and reset together.
 //!
-//! Flutter parity: `widgets/form.dart` (tag `3.44.0`): `Form`, `FormState`,
-//! `FormField`, `FormFieldState` and `AutovalidateMode`. The behaviour is
-//! Flutter's; the shape is Rust's:
+//! The pieces are `Form`, `FormField`, their handles and `AutovalidateMode`;
+//! the shape is Rust's:
 //!
 //! - **Handles, not `GlobalKey<FormState>`.** A [`FormHandle`] or
 //!   [`FormFieldHandle`] the caller creates (or [`Form::of`]) is the
 //!   imperative surface — `validate`, `save`, `reset`, the field's value and
 //!   error.
-//! - **Validation runs at the event.** Flutter validates inside `build`; FLUI's
-//!   `build(&self)` cannot mutate, so a field validates when its value changes,
-//!   when it mounts or is reconfigured, when it loses focus, or when the form
-//!   asks — the same moments, since each of those is what schedules Flutter's
-//!   build. The field then schedules its own rebuild.
+//! - **Validation runs at the event.** `build(&self)` cannot mutate, so a field
+//!   validates when its value changes, when it mounts or is reconfigured, when
+//!   it loses focus, or when the form asks. The field then schedules its own
+//!   rebuild.
 //! - **Registration in lifecycle hooks.** A field registers with its form in
 //!   `init_state`, moves in `did_change_dependencies`, and leaves in
-//!   `dispose`; Flutter registers in `build` and leaves in `deactivate`.
+//!   `dispose`, never in `build`.
 //!
 //! `flui-widgets/ARCHITECTURE.md`'s `## Mapping decisions` records each
 //! divergence and the test that pins it.
 //!
-//! # Not ported
+//! # Not provided
 //!
 //! Pop veto (`canPop`/`onPopInvokedWithResult`), restoration,
 //! `validateGranularly`, `FormField.errorBuilder`, and the announcement
@@ -50,8 +48,7 @@ pub use raw_text_form_field::{RawTextFormField, RawTextFormFieldState};
 use crate::semantics::Semantics;
 use crate::support::{EventCallback, event_callback};
 
-/// When a field validates without an explicit `validate()` — Flutter's
-/// `AutovalidateMode`.
+/// When a field validates without an explicit `validate()`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum AutovalidateMode {
@@ -89,15 +86,13 @@ pub(crate) struct FormInner {
     next_attachment: Cell<u64>,
     attachment_error_pending: Cell<bool>,
     writer: RefCell<Option<WriterSource>>,
-    /// Registered fields, in registration order (Flutter's insertion-ordered
-    /// `Set<FormFieldState>`).
+    /// Registered fields, in registration order.
     fields: RefCell<Vec<Rc<dyn FormFieldEntry>>>,
     interacted: Cell<bool>,
     mode: Cell<AutovalidateMode>,
     on_changed: RefCell<Option<EventCallback>>,
     /// Set while `reset` visits its fields: a field's change notice then
-    /// reports `on_changed` but defers autovalidation to the end, as
-    /// Flutter's single rebuild after the loop does.
+    /// reports `on_changed` but defers autovalidation to the end.
     resetting: Cell<bool>,
 }
 
@@ -128,7 +123,7 @@ impl Drop for FormAttachment {
     }
 }
 
-/// The form's imperative surface — Flutter's `FormState`, reached by a handle
+/// The form's imperative surface, reached by a handle
 /// the caller creates and passes to [`Form::handle`], or from [`Form::of`],
 /// instead of a `GlobalKey<FormState>`.
 ///
@@ -195,15 +190,14 @@ impl FormHandle {
     }
 
     /// Validate every registered field and show each result; mark the form
-    /// interacted. `true` iff every field passed. Flutter's
-    /// `FormState.validate`.
+    /// interacted. `true` iff every field passed.
     pub fn validate(&self) -> bool {
         self.inner.interacted.set(true);
         self.validate_fields()
     }
 
     /// Call every field's `on_saved` with its current value, in registration
-    /// order — Flutter's `FormState.save`.
+    /// order.
     ///
     /// Takes the `&mut EventCx<'_>` of the event callback that saves (a
     /// submit button's press), and hands it to each `on_saved` (ADR-0086 §6):
@@ -225,7 +219,7 @@ impl FormHandle {
 
     /// Every field back to its initial value, its error and interaction
     /// cleared; then the form's interaction is cleared and `on_changed`
-    /// runs — Flutter's `FormState.reset`. The caller's `&mut EventCx<'_>`
+    /// runs. The caller's `&mut EventCx<'_>`
     /// reaches every `on_reset` and `on_changed`.
     ///
     /// # Errors
@@ -338,8 +332,8 @@ impl FormHandle {
         Rc::ptr_eq(&self.inner, &other.inner)
     }
 
-    /// A field's value changed, or it was reset — Flutter's `_fieldDidChange`
-    /// followed by the form's autovalidation in `FormState.build`.
+    /// A field's value changed, or it was reset; the form's autovalidation
+    /// follows.
     pub(crate) fn field_did_change(&self, cx: &mut EventCx<'_>) {
         let on_changed = self.inner.on_changed.borrow().clone();
         if let Some(on_changed) = on_changed {
@@ -378,8 +372,7 @@ impl FormHandle {
 // Form
 // ============================================================================
 
-/// A group of form fields that validate, save and reset together — Flutter's
-/// `Form`.
+/// A group of form fields that validate, save and reset together.
 ///
 /// Reach the form through a [`FormHandle`] passed to [`Self::handle`], or
 /// from a descendant with [`Form::of`]. The form is a semantics node with the
@@ -443,7 +436,7 @@ impl Form {
         self
     }
 
-    /// The enclosing form's handle — Flutter's `Form.of`.
+    /// The enclosing form's handle.
     ///
     /// # Panics
     ///
@@ -456,8 +449,7 @@ impl Form {
         )
     }
 
-    /// The enclosing form's handle, if any, registering a dependency on it —
-    /// Flutter's `Form.maybeOf`.
+    /// The enclosing form's handle, if any, registering a dependency on it.
     #[must_use]
     pub fn maybe_of(ctx: &dyn BuildContext) -> Option<FormHandle> {
         ctx.depend_on::<FormScope, _>(|scope| scope.handle.clone())
@@ -577,8 +569,7 @@ impl ViewState<Form> for FormState {
         // form from the handle that still owns its fields and writer.
         self.try_rebind(new_view);
         self.configure(new_view);
-        // A reconfigured form rebuilds in Flutter, and its build runs the
-        // form-level autovalidation.
+        // A reconfigured form re-runs the form-level autovalidation.
         let fields = self.handle.fields();
         self.handle.autovalidate(&fields);
     }

@@ -43,8 +43,8 @@ use accesskit::{ActionRequest, TreeUpdate};
 /// Notified when assistive technology attaches (`true`) or detaches (`false`).
 ///
 /// A composition root uses this to drive semantics assembly: FLUI does not
-/// build a semantics tree until something is listening, mirroring Flutter's
-/// `ensureSemantics` refcount. Assembly costs a tree walk per frame, so leaving
+/// build a semantics tree until something is listening (a refcount of
+/// interested listeners). Assembly costs a tree walk per frame, so leaving
 /// it on unconditionally would charge every user for a feature almost none of
 /// them have enabled.
 pub type AccessibilityActivationListener = Arc<dyn Fn(bool) + Send + Sync>;

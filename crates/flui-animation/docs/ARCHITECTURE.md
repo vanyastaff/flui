@@ -274,7 +274,7 @@ run-starting site funnels through `AnimationController::finish`, the single
 chokepoint that owns `drop(inner)` then delivers — see
 `docs/adr/ADR-0064-animation-completion-is-one-controller-resolved-future.md`
 for why resolution moved here rather than staying on `Ticker` (a lock-order
-fact, not a Flutter divergence).
+fact).
 
 **Per-site table** (guard held → what happens → delivered after unlock):
 
@@ -293,10 +293,8 @@ fact, not a Flutter divergence).
 **Publish-before-listeners.** A natural end (`tick_time_based`,
 `tick_simulation`) takes `active_run` and calls
 `TickerCompleter::complete()` **before** `drop(inner)` — the same guard scope
-that sets `status`. Flutter's `_tick` completes its `Completer` before
-`notifyListeners()`/`_checkStatusChanged()` too
-(`animation_controller.dart:951`); only *delivery* (continuations, wakers) is
-deferred past the unlock. This is what makes a panicking status listener
+that sets `status`, before listeners are notified; only *delivery*
+(continuations, wakers) is deferred past the unlock. This is what makes a panicking status listener
 leave the run `Ok`: the unwind drops the `TickerDelivery` `finish` was mid-way
 through handing off, which delivers the already-published outcome instead of
 losing it.
@@ -304,40 +302,34 @@ losing it.
 **Status-before-cancel.** A run-starting site displaces `active_run` under
 the lock, but `finish` fires the run's own (new) status listeners **before**
 delivering the displaced run's cancellation — the observable order a caller
-sees is "the new run started" then "the old one was canceled", matching
-Flutter's own sync-status/microtask-cancel split.
+sees is "the new run started" then "the old one was canceled".
 
 ### Direction is chosen by the method; a run ends in its direction's settled status
 
 **Rule:** `animate_to`/`animate_to_curved` always run `Forward`, and
 `animate_back`/`animate_back_curved` always run `Reverse`, regardless of
-whether `target` is above or below the current value. Flutter documents
-this exactly: `animateTo`'s status "is reported as forward regardless of
-whether target > value or not", completed at the end; `animateBack` is the
-reverse/dismissed mirror (`AnimationController.animateTo`/`animateBack`,
-`animation_controller.dart` @ 3.44.0). Every run ends in its direction's
+whether `target` is above or below the current value: the caller's choice of
+method is the one bit of direction information it carries. Every run ends in its direction's
 settled status with no bound check
 (`AnimationDirection::settled_status`: `Forward` → `Completed`, `Reverse` →
 `Dismissed`), at every run end: `tick_time_based`'s non-repeat end,
 `tick_repeat`'s exhaustion end, `tick_simulation`'s `is_done`, and
-`settle_at_target`. Flutter's `_tick` applies the identical rule
-unconditionally, so `animate_to(lower_bound)` from mid-range ends
+`settle_at_target`. The rule is unconditional, so `animate_to(lower_bound)` from mid-range ends
 `Completed`, not `Dismissed` — and the same holds through
 `tick_simulation`: `animate_with(sim)` landing on a BOUNDED controller's
 lower bound also ends `Completed`. A fling's own end is unaffected:
 `fling`/`fling_with` pick `direction` from the sign of `velocity`, not from
 where the simulation happens to land.
 
-**Divergence removed.** `drive_to` previously derived direction from
-`target >= value` (travel, not the method) — an unrecorded divergence that
-made `animate_to`/`animate_back` differ only in default duration and
-discarded the one bit of information the caller's choice of method carries
-(flutter#158233's complaint). Two real consumers call `animate_to_curved`/
+**Why not derive direction from travel.** Deriving direction from
+`target >= value` would make `animate_to`/`animate_back` differ only in
+default duration and discard the one bit of information the caller's choice of
+method carries. Two real consumers call `animate_to_curved`/
 `animate_back_curved` toward a value that can land on either side of the
 current one: `scroll_controller.rs`'s ballistic fling (`animate_to_curved`
 toward an arbitrary pixel offset) and `flui-cupertino`'s `CupertinoButton`
-(`animate_to_curved` for both the press-in fade toward `1.0` and, kept for
-oracle parity, the release fade toward `0.0`). The scroll controller's
+(`animate_to_curved` for both the press-in fade toward `1.0` and the
+release fade toward `0.0`). The scroll controller's
 status listener matches `Completed | Dismissed` identically (it only ends
 the scroll activity), so its `animate_to` toward a SMALLER pixel value
 reporting `Forward`/`Completed` instead of `Reverse`/`Dismissed` changes
@@ -349,16 +341,15 @@ redundant zero-distance settle when the release it started reached its own
 end (no observable trace — same-status writes are deduplicated — but the
 wrong shape). It now chains the release on the press fade's own
 `TickerFuture` (`chain_release_fade`, `packages/flui-cupertino/src/button.rs`),
-`Ok`-only and one-shot: Flutter's own `ticker.then(...)` shape.
+`Ok`-only and one-shot.
 
 **`stop()`/`set_value` keep the bounds-first rule.**
 `AnimationControllerInner::settled_status_directed`/`settled_status_keep_direction`
 still check `is_at_upper_bound`/`is_at_lower_bound` first, falling back to
 direction only for a non-bound stop. This is FLUI's own frame-driver
-contract, not a Flutter one: a scroll gesture's every-frame `set_value` must
+contract: a scroll gesture's every-frame `set_value` must
 report the bound it actually reached, not the gesture's nominal direction,
-so a driver polling `status().is_running()` sees a real settle. Flutter's
-own `stop()` changes no status at all.
+so a driver polling `status().is_running()` sees a real settle.
 
 ### `settle_at_target` also covers zero-duration runs, and gates value notification on real movement
 
@@ -367,10 +358,8 @@ settle chokepoint for BOTH zero-DISTANCE runs (`forward()` already at the
 upper bound) and zero-DURATION runs (`forward(..., Some(Duration::ZERO))`, or
 a zero base `duration`): `forward_from`/`reverse_from`/`drive_to` compute the
 run duration before their settle check and gate on
-`distance < BOUND_EPSILON || run_duration.is_zero()`, Flutter's own
-`simulationDuration == Duration.zero` test
-(`AnimationController._animateToInternal`, `animation_controller.dart` @
-3.44.0, covering both causes identically).
+`distance < BOUND_EPSILON || run_duration.is_zero()`, which covers both causes
+identically.
 
 It also notifies value listeners only when the value actually moved,
 measured against the value at METHOD ENTRY, before
@@ -378,28 +367,21 @@ measured against the value at METHOD ENTRY, before
 comparison against the post-`from` value would miss a jump:
 `forward_from(Some(1.0))` from `0.3` lands exactly on the target it was told
 to jump to, so comparing the post-`from` value to the target always reads
-"unchanged" there. Flutter: `if (value != target) { …; notifyListeners(); }`
-(`_animateToInternal`, same file).
+"unchanged" there.
 
 **The same entry-value rule extends to the NON-settling path.** A real run
 that still applies `from` (`forward_from(Some(x))`/`reverse_from(Some(x))`
 when the resulting distance and duration are both nonzero) notifies iff
-`from` actually moved the value, narrower than Flutter's `forward`/
-`reverse`, whose `if (from != null) { value = from; }` goes through the
-`value=` setter and notifies UNCONDITIONALLY. One case is worth naming
+`from` actually moved the value, and never notifies unconditionally. One case is worth naming
 because it looks surprising at first: `forward_from(Some(0.0))` from `1.0`
 with a Duration::ZERO base ends at `1.0` (a Forward run settles at the
 UPPER bound, never at `from`) and fires NO value notification at all — net
-unchanged, even though Flutter's own path fires the `value=` setter's
-notification twice (once for the jump to `0.0`, once for `_animateToInternal`
-snapping back to `1.0`); both observers read `1.0` at the end either way.
+unchanged; an observer reads `1.0` before and after the call.
 
 ### `dispose` does not settle the status; `Vsync` polls for an installed run, not a running status
 
 **`dispose` does not settle the status.** `dispose()` disposes the ticker,
-cancels the active run, and clears listeners; it never touches `status`,
-Flutter parity — `AnimationController.dispose` disposes the ticker and
-clears listeners only (`animation_controller.dart` @ 3.44.0). A controller
+cancels the active run, and clears listeners; it never touches `status`. A controller
 disposed mid-run therefore keeps whatever status it had (e.g. `Forward`):
 `hero_flight.rs`'s deferred replay reads `proxy.status()` after a flight's
 controller may already be disposed, and a manufactured settled status would
@@ -410,7 +392,7 @@ is.** Two independent paths leave `status` reporting a RUNNING value
 (`Forward`/`Reverse`) with no run actually installed: a mid-run `dispose()`
 (above), and `set_value` at an interior value. `set_value` calls
 `stop_running()`, clearing `active_run`, but still reports a directional
-running status (Flutter parity, `AnimationControllerInner::settled_status_keep_direction`).
+running status (`AnimationControllerInner::settled_status_keep_direction`).
 
 A `Vsync`-driven controller polled on `status().is_running()` after a
 mid-run `set_value` would therefore look like it still has a run to
@@ -452,38 +434,31 @@ the one place the leg/landing/phase parity lives now; every call site
 (`repeat_with`'s value-at-the-call sample, `tick_repeat`'s running leg and
 exhaustion landing) defers to them instead of re-deriving it.
 
-**Initial phase = Flutter parity.** A repeat starts from the CURRENT value
-clamped into `[min, max]`, not from `min` — matching
-`AnimationController._startSimulation`'s `_value = x(0.0)`
-(`animation_controller.dart` @ 3.44.0). This is not merely oracle fidelity:
-a `repeat()` issued fresh on every widget build (a common pattern for a
+**Initial phase.** A repeat starts from the CURRENT value
+clamped into `[min, max]`, not from `min`: a `repeat()` issued fresh on every widget build (a common pattern for a
 looping indicator built imperatively rather than held across rebuilds)
 progresses from wherever the animation currently is instead of snapping
 back to the start every time it is called.
 
-**IMPROVEMENT over Flutter: exhaustion lands on the last cycle's endpoint,
-with that leg's own settled status.** Flutter's `_RepeatingSimulation.x`
-wraps with `% 1.0`, so a 1-count restart repeat's exit value is exactly
-`min` at `completed` (`animation_controller_test.dart`'s "calling repeat by
-setting count as valid with reverse as false" expects `0` at 100ms even
-though the run is reported `completed`, not `dismissed`), and a bounce
-exhaustion reports the direction of the NEXT leg it never runs (`count: 1`
-bounce ends `dismissed` at value `1.0`). FLUI lands on the endpoint its own
-final retired leg actually reached, with that leg's own direction settled
-(`Completed` at `max`, `Dismissed` at `min`) — matching the Web Animations
-spec's fill behavior ("holding the endpoint of the final iteration rather
+**Exhaustion lands on the last cycle's endpoint,
+with that leg's own settled status.** Wrapping with `% 1.0` would make a
+1-count restart repeat's exit value exactly `min` at `completed`, and a
+bounce exhaustion would report the direction of the NEXT leg it never runs
+(`count: 1` bounce ends `dismissed` at value `1.0`). FLUI lands on the
+endpoint its own final retired leg actually reached, with that leg's own
+direction settled (`Completed` at `max`, `Dismissed` at `min`) — matching
+the Web Animations spec's fill behavior ("holding the endpoint of the final iteration rather
 than the start of the next"), Android's `ValueAnimator`, and Compose's
-`VectorizedRepeatableSpec`, all of which land on the actual endpoint. The
-replaced oracle is `repeat_restart_finite_count_exhausts_from_the_phase_origin`
-and `repeat_bounce_flutter_oracle_finite_count_and_absolute_time_rewind`'s
-exhaustion assertion (`crates/flui-animation/src/controller.rs`), which pin
-the new landing/status instead of Flutter's wrap.
+`VectorizedRepeatableSpec`, all of which land on the actual endpoint.
+The tests `repeat_restart_finite_count_exhausts_from_the_phase_origin`
+and `repeat_bounce_finite_count_and_absolute_time_rewind`'s
+exhaustion assertion (`crates/flui-animation/src/controller.rs`) pin
+the landing/status.
 (The `repeat_*` and `without_ticker_bounds_*` names in this document are rows of the table tests
-`repeat_contract_and_flutter_divergences` and `controller_contract` in
+`repeat_contract` and `controller_contract` in
 `src/controller_tests.rs`; a failure names its row.)
 
-**`min == max` stays rejected.** Flutter permits the degenerate range
-(`assert(max >= min)`); FLUI does not, the same contract `with_bounds`
+**`min == max` stays rejected.** The degenerate range is refused, the same contract `with_bounds`
 already applies to an empty range (`repeat_with_rejects_equal_min_and_max`
 pins it) — a repeat that can structurally never change value is a caller
 error that would hold the frame loop open forever doing nothing, and
@@ -495,7 +470,7 @@ effective period (any `count`): Android's `ValueAnimator.animateBasedOnTime`
 explicitly "ignores the repeat count and skips to the end" for a
 0-duration animator; Compose's `InfiniteRepeatableSpec` throws
 ("Animation to be infinitely repeated cannot have a 0-duration",
-`AnimationSpec.kt`'s `init` block); Flutter asserts. FLUI repairs rather
+`AnimationSpec.kt`'s `init` block). FLUI repairs rather
 than rejects (the house rule — see `with_bounds`'s own `InvalidBounds`
 contract for the cases that DO reject): an infinite zero-period repeat
 that ticked once per frame would hold the frame loop open forever doing
@@ -507,25 +482,21 @@ documented exception to "an infinite repeat's future resolves only by
 cancellation". `count: Some(0)` (any period), separately: zero CYCLES run
 at all, so there is no cycle to land on — the settle value is the plain
 CLAMPED CURRENT value, not a landing jump, status `Completed` (Web
-Animations semantics for an empty active interval; Flutter asserts
-`count > 0`, Compose throws for `iterations < 1`).
+Animations semantics for an empty active interval; Compose throws for
+`iterations < 1`).
 
 **One period for both legs of a bounce; `set_duration` does not retime an
 active repeat.** `RepeatRun::period` is resolved ONCE at the call
-(`period.unwrap_or(duration)`), not read live on every tick — Flutter
-parity, `AnimationController.repeat`'s `period ??= duration` captured by
-the simulation. The previous behavior fell through to
-`current_duration()`'s live `duration`/`reverse_duration` lookup whenever
-`period` defaulted, so the reverse leg of a bounce with a defaulted period
+(`period.unwrap_or(duration)`), not read live on every tick. Falling
+through to `current_duration()`'s live `duration`/`reverse_duration` lookup
+whenever `period` defaulted would let the reverse leg of a bounce with a defaulted period
 could pick up `reverse_duration` instead of the forward leg's period
 (contradicting `repeat_with`'s own "defaults to the forward duration"
-doc), and a live `set_duration` mid-repeat changed the running period out
-from under it. Resolving once fixes both, and keeps the modular-nanosecond
+doc), and a live `set_duration` mid-repeat change the running period out
+from under it. Resolving once avoids both, and keeps the modular-nanosecond
 arithmetic in `tick_repeat` exact (one divisor for every leg).
 
-**`velocity()` on a reverse leg is SIGNED** — a deliberate divergence from
-Flutter's `_RepeatingSimulation.dx`, which is always positive
-(`(max-min)/period`). FLUI's `velocity()` reports `range / duration` off
+**`velocity()` on a reverse leg is SIGNED.** `velocity()` reports `range / duration` off
 the leg's own `start_value`/`target_value`, which are swapped on a reverse
 leg, so it comes out negative — matching FLUI's non-repeat velocity
 contract rather than introducing a repeat-specific special case. Pinned by
@@ -533,9 +504,7 @@ contract rather than introducing a repeat-specific special case. Pinned by
 
 ### Unbounded is a constructor fact; bound-targeting runs on it are refused; no path reads NaN
 
-**Issue #1183; flutter/flutter#76014** (open: Flutter itself calls
-`unbounded`'s behavior under `forward`/`reverse`/`repeat` "simply not
-defined"). `AnimationController::unbounded`/`unbounded_without_ticker`/
+**Issue #1183.** `AnimationController::unbounded`/`unbounded_without_ticker`/
 `unbounded_with_detached_ticker` fix bounds at `(f32::NEG_INFINITY,
 f32::INFINITY)` and are infallible: unboundedness is a constructor fact,
 never a bound VALUE.
@@ -548,23 +517,17 @@ still overflow `f32` as a RANGE (`(-f32::MAX, f32::MAX)`; a bounded run's
 `target - value`/`target - start` arithmetic needs the SPAN to be finite,
 not just each endpoint).
 
-**FLUI's own rule.** Flutter's `AnimationController` constructor asserts
-only `upperBound >= lowerBound`: it accepts a non-finite (infinite) pair
-and an EQUAL pair, and rejects an inverted pair only in debug (the assert
-is compiled out in release, so an inverted pair is silently accepted there
-too); nothing in the constructor rejects `NaN` specifically, though a NaN
-bound makes that same `>=` comparison false and so trips the assert in
-debug the same way an inverted pair does. Only the dedicated `unbounded`
-factory fixes `+-inf`.
+**The rule.** A bounded constructor accepts only a finite, non-inverted pair (NaN
+included in what is refused). Only the dedicated `unbounded` factory fixes
+`+-inf`.
 
 A half-open pair (one bound finite, one infinite) is rejected the same way
 as a wide-open one: nothing in this workspace needs it, and allowing it
 would make the "bounded means finite" rule incidental complexity with no
 consumer.
 
-**Initial value and status: parity, then a recorded cost.** `value = 0.0`
-(never `lower_bound`, which is `-inf`) is Flutter's own `unbounded` doc
-(`animation_controller.dart` @ 3.44.0). The initial `status` is computed by
+**Initial value and status, and a recorded cost.** `value = 0.0`
+(never `lower_bound`, which is `-inf`). The initial `status` is computed by
 the SAME rule `set_value` applies,
 `AnimationControllerInner::settled_status_keep_direction`, applied once at
 construction for every constructor, not hard-coded `Dismissed`: a bounded
@@ -572,10 +535,9 @@ controller at `lower_bound` still reports `Dismissed` (unchanged), but an
 unbounded one at `0.0`, with `AnimationDirection` defaulted `Forward` and
 neither infinite bound ever "at", reports **`Forward`**.
 
-This IS Flutter parity: `AnimationController._internalSetValue`
-(`animation_controller.dart` @ 3.44.0) falls to the same directional
-`switch` FLUI's `settled_status_keep_direction` mirrors at `value == 0.0`,
-since that value is neither the lower nor upper bound in the general case.
+`settled_status_keep_direction` falls to its directional `switch` at
+`value == 0.0`, since that value is neither the lower nor upper bound in the
+general case.
 
 The recorded cost: a never-run unbounded controller reports
 `status().is_running() == true` from the moment it is constructed. The
@@ -629,7 +591,7 @@ the guard drops (`warn_non_finite_target`, mirroring `warn_if_no_ticker`'s
 pattern): every production caller of these methods discards the `Result`
 (`let _ = fling.animate_to_curved(..)`, `let _ =
 fc_fling.animate_with(sim)`), and a silent no-op here would hide the
-caller bug exactly the way Flutter's own `∞` jump does.
+caller bug.
 
 **`repeat_with`'s NaN endpoint is `InvalidBounds`, a range-SHAPE error,
 distinct from the unbounded-range `NonFiniteTarget` above.** A
@@ -674,10 +636,8 @@ misbehaving simulation must warn once, not every frame.
 
 **`tick_time_based` reads `start_value`/`target_value` DIRECTLY at the
 exact endpoints (`t <= 0.0` / `t >= 1.0`), never via `start + range *
-eased_t` there.** Flutter's `_InterpolationSimulation.x` already
-special-cases the endpoints to the exact begin/end value structurally, but
-FLUI's previous shape only special-cased `eased_t` (to exactly `0.0`/`1.0`)
-while still computing the product: `range` can be `+-inf` in principle
+eased_t` there.** Special-casing only `eased_t` (to exactly `0.0`/`1.0`)
+while still computing the product is not enough: `range` can be `+-inf` in principle
 (the span-overflow case above), and `inf * 0.0 = NaN`.
 
 Reading the field directly at the boundary removes the multiplication from
@@ -703,9 +663,7 @@ unconditionally on `Ok` keeps that already-correct settle from being
 clobbered back to `true`.
 
 **`reset()` on an unbounded controller lands on `0.0`, not `-inf`.** This
-is the one place this change diverges from a literal reading of Flutter's
-own `unbounded` doc (which implies `-inf`/`+inf` as the "ends"):
-flutter#76014's reporter asks for exactly this defined beginning, and
+is a defined beginning rather than `-inf`, and
 `0.0` is already the value construction itself starts an unbounded
 controller at.
 

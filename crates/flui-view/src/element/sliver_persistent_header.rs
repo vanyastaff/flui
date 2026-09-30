@@ -47,10 +47,8 @@
 //! a view-type change the reconciler answers by replacement — never an
 //! in-place update against a render object of the wrong variant.
 //!
-//! Cross-checked against `.flutter/packages/flutter/lib/src/widgets/sliver_persistent_header.dart`
-//! (delegate contract, `shouldRebuild` semantics) — the servicing *timing*
-//! deliberately follows FLUI's between-passes fixpoint rather than Flutter's
-//! inside-layout `updateChild`, because FLUI's layout walk holds
+//! The servicing *timing* is a between-passes fixpoint rather than an
+//! inside-layout child update, because FLUI's layout walk holds
 //! `&mut RenderTree` (ADR-0017's rejected alternatives).
 
 use std::{marker::PhantomData, rc::Rc, sync::Arc};
@@ -95,8 +93,7 @@ use crate::{
 /// the new delegate could produce different content **or different
 /// `min_extent`/`max_extent`** — the extents are pushed to the render object
 /// on the same update path, so answering `false` freezes both the child and
-/// the geometry. (Flutter's `SliverPersistentHeaderDelegate.shouldRebuild`
-/// states the same obligation.)
+/// the geometry.
 pub trait SliverPersistentHeaderDelegate {
     /// Build the header's content for the given collapse state.
     ///
@@ -126,8 +123,6 @@ pub trait SliverPersistentHeaderDelegate {
     /// every widget update (same path as the extents), so swapping a delegate
     /// can turn stretching on or off — subject to the same
     /// [`should_rebuild`](Self::should_rebuild) obligation.
-    ///
-    /// Flutter parity: `SliverPersistentHeaderDelegate.stretchConfiguration`.
     fn stretch_configuration(&self) -> Option<OverScrollHeaderStretchConfiguration> {
         None
     }
@@ -137,8 +132,7 @@ pub trait SliverPersistentHeaderDelegate {
     /// `Some` gives the floating variants a snap animation (expand or
     /// collapse to the nearest edge when a scroll gesture ends) once a
     /// controller is injected by the widget layer. Ignored by the
-    /// non-floating variants, exactly as Flutter ignores
-    /// `snapConfiguration` outside floating headers. Read on every widget
+    /// non-floating variants. Read on every widget
     /// update, same as [`Self::stretch_configuration`].
     fn snap_configuration(&self) -> Option<FloatingHeaderSnapConfiguration> {
         None
@@ -198,10 +192,9 @@ pub trait PersistentHeaderRenderObject:
 
     /// Install the snap controller and configuration.
     ///
-    /// Meaningful only for the floating variants; the others ignore it,
-    /// exactly as Flutter ignores `snapConfiguration` outside floating
-    /// headers — snapping is the floating reveal's settling behavior, and a
-    /// pinned or scrolling header has nothing to settle.
+    /// Meaningful only for the floating variants; the others ignore it —
+    /// snapping is the floating reveal's settling behavior, and a pinned or
+    /// scrolling header has nothing to settle.
     fn install_snap(
         &mut self,
         controller: Option<AnimationController>,
@@ -290,8 +283,8 @@ macro_rules! persistent_header_render_object {
                 self.set_stretch_configuration(stretch)
             }
 
-            // Not floating: nothing to settle, matching Flutter's non-floating
-            // headers ignoring `snapConfiguration`.
+            // Not floating: nothing to settle, so `snapConfiguration` is
+            // ignored.
             fn install_snap(
                 &mut self,
                 _controller: Option<AnimationController>,

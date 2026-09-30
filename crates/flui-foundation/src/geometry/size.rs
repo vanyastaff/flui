@@ -1,6 +1,6 @@
 //! Size type for 2D dimensions.
 //!
-//! API design inspired by kurbo, glam, and Flutter.
+//! API design inspired by kurbo and glam.
 use std::{
     fmt::{self, Display},
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},

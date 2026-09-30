@@ -16,8 +16,7 @@ use super::{Radius, Rect};
 /// A rounded superellipse (squircle) with independent corner radii.
 ///
 /// Like a rounded rectangle, but corners blend smoothly into the edges,
-/// matching iOS/SwiftUI's `.continuous` corner style. Corresponds to
-/// Flutter's `RSuperellipse`.
+/// matching iOS/SwiftUI's `.continuous` corner style.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

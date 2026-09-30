@@ -33,21 +33,17 @@ use crate::scroll::scroll_position_scope::ScrollPositionScope;
 /// `pinned` keeps the collapsed header on screen; `floating` re-reveals it on
 /// any scroll toward the start. The four combinations map to four distinct
 /// render objects, so flipping a flag replaces the element rather than
-/// mutating it — exactly Flutter's shape, where each combination is its own
-/// internal widget.
+/// mutating it.
 ///
 /// # Stretch is on the delegate; snap is deferred, deliberately
 ///
 /// Over-scroll stretch is configured per delegate —
-/// [`SliverPersistentHeaderDelegate::stretch_configuration`] — matching
-/// Flutter's placement, so this widget carries no stretch knob of its own.
+/// [`SliverPersistentHeaderDelegate::stretch_configuration`] — so this widget
+/// carries no stretch knob of its own.
 /// Snap (`FloatingHeaderSnapConfiguration`) remains unreachable: starting a
 /// snap needs a scroll-end trigger from the enclosing scrollable, which is
 /// the `SliverAppBar` integration seam. Until that lands, floating headers
 /// scroll freely and never snap.
-///
-/// Flutter parity: `widgets/sliver_persistent_header.dart`
-/// `SliverPersistentHeader`.
 #[derive(Clone, StatelessView)]
 pub struct SliverPersistentHeader {
     delegate: Rc<dyn SliverPersistentHeaderDelegate>, // carries flui-view's SharedHeaderDelegate erasure (justified at its declaration) through the facade
@@ -328,8 +324,7 @@ impl OwnerThreadSnapListener {
                 return;
             }
             // A NEW scroll began: an in-flight snap must yield to the
-            // finger immediately (Flutter's maybeStopSnapAnimation on the
-            // isScrollingNotifier's true edge).
+            // finger immediately (on the rising edge of "is scrolling").
             slot.epoch += 1;
             slot.pending = Some(SnapCommand {
                 epoch: slot.epoch,
@@ -342,8 +337,8 @@ impl OwnerThreadSnapListener {
         }
         // Scrolling just ended: the position's own direction is already
         // reset, so the captured one is the scroll that ended. No captured
-        // direction (a programmatic jump) ⇒ no snap, matching Flutter,
-        // where snapping keys on user gestures only.
+        // direction (a programmatic jump) ⇒ no snap: snapping keys on user
+        // gestures only.
         let Some(direction) = slot.last_direction.take() else {
             return;
         };

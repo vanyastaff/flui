@@ -1,91 +1,76 @@
 //! [`DataTable`] — a tabular data display with an optional leading
 //! selection checkbox column.
 //!
-//! # Flutter parity
+//! # M3 defaults
 //!
-//! `material/data_table.dart`'s `DataColumn`/`DataRow`/`DataCell`/`DataTable`
-//! and `material/data_table_theme.dart`'s `DataTableThemeData` (oracle tag
-//! `3.44.0`). Verified constants (`data_table.dart`'s private statics,
-//! `:815-828`, and the `kMinInteractiveDimension` default sourced from
-//! `constants.dart`):
+//! | Token | Value |
+//! |---|---|
+//! | heading row height | `56.0` |
+//! | horizontal margin | `24.0` |
+//! | column spacing | `56.0` |
+//! | divider thickness | `1.0` |
+//! | data row min/max height | minimum interactive dimension, `48.0` |
+//! | heading text style | `TextTheme.titleSmall` |
+//! | data text style | `TextTheme.bodyMedium` |
+//! | selected row color | `colorScheme.primary` @ `8%` opacity |
+//! | checkbox width (checkbox column formula) | `18.0` |
 //!
-//! | Token | Value | Oracle |
-//! |---|---|---|
-//! | `_headingRowHeight` | `56.0` | `data_table.dart` |
-//! | `_horizontalMargin` | `24.0` | `data_table.dart` |
-//! | `_columnSpacing` | `56.0` | `data_table.dart` |
-//! | `_dividerThickness` | `1.0` | `data_table.dart` |
-//! | data row min/max height | `kMinInteractiveDimension` = `48.0` | `constants.dart` |
-//! | heading text style | `TextTheme.titleSmall` | `_buildHeadingCell` |
-//! | data text style | `TextTheme.bodyMedium` | `_buildDataCell` |
-//! | selected row color | `colorScheme.primary` @ `8%` opacity | `build`'s `defaultRowColor` |
-//! | `Checkbox.width` (checkbox column formula) | `18.0` | `checkbox.dart` |
-//!
-//! `data_table.dart` at `3.44.0` has no `_DataTableDefaultsM3` token-class
-//! layer at all (unlike the button family) — every default above is a bare
-//! literal or a direct `TextTheme`/`ColorScheme` read. The data row height
-//! default is `kMinInteractiveDimension` (`48.0`), not `52.0`; the heading
-//! text style is `TextTheme.titleSmall`, not `labelLarge`.
+//! There is no separate token-class layer (unlike the button family) — every
+//! default above is a bare literal or a direct `TextTheme`/`ColorScheme` read.
+//! The data row height default is `48.0`, not `52.0`; the heading text style
+//! is `TextTheme.titleSmall`, not `labelLarge`.
 //!
 //! # Layout: genuine per-column intrinsic sizing, not a fallback
 //!
-//! Flutter's `DataTable` lays out over a custom `Table`/`RenderTable` with
-//! per-column `IntrinsicColumnWidth` sizing. FLUI has the same machinery —
-//! [`flui_sdk::widgets::Table`] over `RenderTable`, including
-//! [`TableColumnWidth::Intrinsic`] with the oracle's own 4-pass grow/shrink
-//! algorithm (`rendering/table.dart:1070-1236`, ported in
-//! `flui-objects/src/layout/table.rs`). V1 uses the SAME default heuristic
-//! as the oracle (`_initOnlyTextColumn`/`build`'s column-width selection,
-//! `data_table.dart:1148-1155`): the single non-numeric column (if there is
-//! exactly one) gets `Intrinsic { flex: Some(1.0) }`, every other column
-//! gets `Intrinsic { flex: None }`, and [`DataColumn::column_width`]
-//! overrides either with any [`TableColumnWidth`] (the oracle's
-//! `DataColumn.columnWidth`).
+//! `DataTable` lays out over [`flui_sdk::widgets::Table`] over `RenderTable`
+//! with per-column intrinsic sizing, including
+//! [`TableColumnWidth::Intrinsic`] with its 4-pass grow/shrink algorithm
+//! (in `flui-objects/src/layout/table.rs`). The default heuristic: the single
+//! non-numeric column (if there is exactly one) gets
+//! `Intrinsic { flex: Some(1.0) }`, every other column gets
+//! `Intrinsic { flex: None }`, and [`DataColumn::column_width`] overrides
+//! either with any [`TableColumnWidth`].
 //!
-//! # Composition: per-cell `InkWell`, not a row-spanning `TableRowInkWell`
+//! # Composition: per-cell `InkWell`, not a row-spanning ink responder
 //!
-//! The oracle wraps each selectable row's non-`onTap` cells in
-//! `TableRowInkWell`, a row-rect-spanning ink responder that walks up to the
-//! nearest `RenderTable` (`data_table.dart`'s `TableRowInkWell.getRectCallback`)
-//! to paint one splash across the whole row. FLUI's `RenderTable` exposes no
-//! such row-rect query yet. V1 instead wraps each selectable cell
-//! individually in [`crate::InkWell`] bound to the SAME toggle callback —
-//! tapping any cell (or the checkbox's own padding) still fires
+//! A row-rect-spanning ink responder would walk up to the nearest
+//! `RenderTable` to paint one splash across the whole row. FLUI's
+//! `RenderTable` exposes no such row-rect query yet. V1 instead wraps each
+//! selectable cell individually in [`crate::InkWell`] bound to the SAME toggle
+//! callback — tapping any cell (or the checkbox's own padding) still fires
 //! [`DataRow::on_select_changed`] with the same next value, but the overlay
 //! fill is clipped to each cell's own bounds rather than spanning the row. A
-//! named divergence, not a silent one.
+//! named limitation, not a silent one.
 //!
 //! # Selection: tristate heading checkbox
 //!
 //! The heading checkbox (shown when [`DataTable::show_checkbox_column`] is
-//! `true` and at least one row carries [`DataRow::on_select_changed`])
-//! mirrors the oracle's `_handleSelectAll` exactly: checked when every
-//! selectable row is selected, unchecked when none are, and
+//! `true` and at least one row carries [`DataRow::on_select_changed`]) is
+//! checked when every selectable row is selected, unchecked when none are, and
 //! indeterminate (`None`, tristate) when some but not all are.
 //! [`DataTable::on_select_all`] overrides the fan-out; otherwise every
 //! selectable row whose `selected` differs from the new value is toggled.
 //!
 //! # Deferred (named, not silently dropped)
 //!
-//! - **Sorting** — `sortColumnIndex`/`sortAscending`/`DataColumn.onSort` and
-//!   the animated sort-arrow indicator. No `DataColumn` sort surface ships in
-//!   V1.
-//! - **`PaginatedDataTable`** — a distinct oracle widget, out of scope.
-//! - **Editable cells** — `DataCell.showEditIcon`/`placeholder`, and
-//!   `DataCell.onDoubleTap`/`onLongPress`/`onTapDown`/`onTapCancel` (only
-//!   [`DataCell::on_tap`] ships).
-//! - **`DataRow.onLongPress`/`onHover`/`mouseCursor`/`color`** — no per-row
+//! - **Sorting** — a sort column index and direction, per-column sort
+//!   callbacks, and the animated sort-arrow indicator. No `DataColumn` sort
+//!   surface ships in V1.
+//! - **Paginated tables** — a distinct widget, out of scope.
+//! - **Editable cells** — an edit icon, a placeholder, and double-tap,
+//!   long-press, tap-down and tap-cancel handlers (only [`DataCell::on_tap`]
+//!   ships).
+//! - **Per-row long-press/hover/mouse-cursor/color** — no per-row
 //!   override surface beyond `selected`/`on_select_changed` yet; a row's
 //!   background/overlay always resolves through the table-level
 //!   [`DataTable::data_row_color`] cascade.
-//! - **`DataColumn.tooltip`/`onSort`/`mouseCursor`/`headingRowAlignment`** —
+//! - **Per-column tooltip, sort, mouse cursor and heading alignment** —
 //!   tied to the deferred sort feature.
-//! - **`DataTable.border`/`clipBehavior`** — the table always composes as
-//!   the oracle's `Clip.none` default with no `TableBorder`.
-//! - **Sticky headers** — `DataTable` (unlike a future scrolling container)
-//!   never scrolled independently of its heading row in the oracle either;
-//!   this is a property of whatever scrolls a `DataTable`, not of the widget
-//!   itself, so there is nothing to port here.
+//! - **`DataTable` border and clip behavior** — the table always composes
+//!   with no clip and no `TableBorder`.
+//! - **Sticky headers** — a `DataTable` never scrolls independently of its
+//!   heading row; this is a property of whatever scrolls a `DataTable`, not
+//!   of the widget itself.
 //! - **Dense/`VisualDensity`** — no consumer wired to this substrate yet,
 //!   matching every other V1 selection control in this crate.
 
@@ -110,20 +95,18 @@ use crate::material::Material;
 use crate::theme::Theme;
 use crate::theme_data::ThemeData;
 
-/// `data_table.dart`'s `_headingRowHeight` (oracle tag `3.44.0`).
+/// The default heading row height.
 const DEFAULT_HEADING_ROW_HEIGHT: f64 = 56.0;
-/// `data_table.dart`'s `_horizontalMargin` (oracle tag `3.44.0`).
+/// The default horizontal margin.
 const DEFAULT_HORIZONTAL_MARGIN: f64 = 24.0;
-/// `data_table.dart`'s `_columnSpacing` (oracle tag `3.44.0`).
+/// The default column spacing.
 const DEFAULT_COLUMN_SPACING: f64 = 56.0;
-/// `data_table.dart`'s `_dividerThickness` (oracle tag `3.44.0`).
+/// The default divider thickness.
 const DEFAULT_DIVIDER_THICKNESS: f64 = 1.0;
-/// `kMinInteractiveDimension` (`constants.dart`, `48.0`, oracle tag
-/// `3.44.0`) — the data row min/max height default. Verified at the tag;
-/// NOT `52.0`.
+/// The minimum interactive dimension (`48.0`) — the data row min/max height
+/// default. NOT `52.0`.
 const DEFAULT_DATA_ROW_HEIGHT: f64 = 48.0;
-/// The selected-row default color's opacity: `colorScheme.primary.withOpacity(0.08)`
-/// (`data_table.dart`'s `defaultRowColor`, oracle tag `3.44.0`).
+/// The selected-row default color's opacity: `colorScheme.primary` at `0.08`.
 const SELECTED_ROW_OPACITY: f64 = 0.08;
 
 /// A row-selection toggle: fires with the row's next `selected` value.
@@ -137,10 +120,9 @@ type RowColorProperty = WidgetStateProperty<Option<Color>>;
 
 /// Column configuration for a [`DataTable`].
 ///
-/// Flutter parity: `DataColumn` (`data_table.dart`, oracle tag `3.44.0`),
-/// narrowed to [`label`](Self::new) and [`numeric`](Self::numeric) — see the
-/// module docs for the deferred `tooltip`/`onSort`/`mouseCursor`/
-/// `headingRowAlignment` fields.
+/// Carries a [`label`](Self::new) and [`numeric`](Self::numeric) — see the
+/// module docs for the deferred tooltip, sort, mouse-cursor and
+/// heading-alignment fields.
 #[derive(Clone, Debug)]
 pub struct DataColumn {
     label: BoxedView,
@@ -161,7 +143,7 @@ impl DataColumn {
 
     /// Marks this column's cell contents as numeric: right-aligned instead
     /// of left-aligned, and excluded from the "only text column gets flex"
-    /// heuristic. Flutter parity: `DataColumn.numeric`.
+    /// heuristic.
     #[must_use]
     pub fn numeric(mut self, numeric: bool) -> Self {
         self.numeric = numeric;
@@ -169,7 +151,7 @@ impl DataColumn {
     }
 
     /// Overrides this column's width, bypassing the default intrinsic-width
-    /// heuristic. Flutter parity: `DataColumn.columnWidth`.
+    /// heuristic.
     #[must_use]
     pub fn column_width(mut self, width: TableColumnWidth) -> Self {
         self.column_width = Some(width);
@@ -179,10 +161,9 @@ impl DataColumn {
 
 /// One cell's data within a [`DataRow`].
 ///
-/// Flutter parity: `DataCell` (`data_table.dart`, oracle tag `3.44.0`),
-/// narrowed to [`child`](Self::new) and [`on_tap`](Self::on_tap) — see the
-/// module docs for the deferred `placeholder`/`showEditIcon`/
-/// `onDoubleTap`/`onLongPress`/`onTapDown`/`onTapCancel` fields.
+/// Carries a [`child`](Self::new) and an [`on_tap`](Self::on_tap) — see the
+/// module docs for the deferred placeholder, edit-icon and extra gesture
+/// handler fields.
 #[derive(Clone)]
 pub struct DataCell {
     child: BoxedView,
@@ -208,8 +189,7 @@ impl DataCell {
     }
 
     /// Sets a tap handler for this specific cell. When present, it overrides
-    /// the row's own selection-toggle tap for this cell only. Flutter
-    /// parity: `DataCell.onTap`.
+    /// the row's own selection-toggle tap for this cell only.
     #[must_use]
     pub fn on_tap<R: flui_sdk::view::EventOutcome>(
         mut self,
@@ -222,10 +202,9 @@ impl DataCell {
 
 /// Row configuration and cell data for a [`DataTable`].
 ///
-/// Flutter parity: `DataRow` (`data_table.dart`, oracle tag `3.44.0`),
-/// narrowed to [`cells`](Self::new), [`selected`](Self::selected), and
+/// Carries [`cells`](Self::new), [`selected`](Self::selected), and
 /// [`on_select_changed`](Self::on_select_changed) — see the module docs for
-/// the deferred `onLongPress`/`onHover`/`color`/`mouseCursor` fields.
+/// the deferred long-press, hover, color and mouse-cursor fields.
 #[derive(Clone)]
 pub struct DataRow {
     cells: Vec<DataCell>,
@@ -255,7 +234,7 @@ impl DataRow {
         }
     }
 
-    /// Marks this row as currently selected. Flutter parity: `DataRow.selected`.
+    /// Marks this row as currently selected.
     #[must_use]
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
@@ -265,7 +244,7 @@ impl DataRow {
     /// Sets the selection-change handler, fired with the row's next
     /// `selected` value on a checkbox toggle or a row tap. Presence of a
     /// handler is what makes this row selectable — see the module docs'
-    /// "Selection" section. Flutter parity: `DataRow.onSelectChanged`.
+    /// "Selection" section.
     #[must_use]
     pub fn on_select_changed<R: flui_sdk::view::EventOutcome>(
         mut self,
@@ -330,7 +309,7 @@ impl std::fmt::Debug for DataTable {
 impl DataTable {
     /// A table of `columns` headings above `rows` of data, with every style
     /// override falling through to the M3 defaults (see the module docs'
-    /// token table). Flutter parity: `DataTable.new`.
+    /// token table).
     ///
     /// A row that does not match `columns` in length is squared up here —
     /// padded with empty cells, extras dropped — with a warning naming the
@@ -339,8 +318,7 @@ impl DataTable {
     /// It used to be a `debug_assert!` on [`build`](StatelessView::build),
     /// which meant a release build walked straight into `row.cells[col_index]`
     /// and panicked with an index-out-of-bounds instead. Repairing rather than
-    /// rejecting is this library's rule for caller configuration; Flutter
-    /// asserts, and the divergence is deliberate.
+    /// rejecting is this library's rule for caller configuration.
     pub fn new(columns: Vec<DataColumn>, rows: Vec<DataRow>) -> Self {
         let rows = square_up_rows(rows, columns.len());
         Self {
@@ -365,8 +343,7 @@ impl DataTable {
     }
 
     /// Overrides the heading checkbox's "select/clear all" fan-out; without
-    /// it, every selectable row's own handler is called directly. Flutter
-    /// parity: `DataTable.onSelectAll`.
+    /// it, every selectable row's own handler is called directly.
     #[must_use]
     pub fn on_select_all<R: flui_sdk::view::EventOutcome>(
         mut self,
@@ -377,8 +354,7 @@ impl DataTable {
     }
 
     /// Whether a leading checkbox column is displayed when at least one row
-    /// is selectable. Defaults to `true`. Flutter parity:
-    /// `DataTable.showCheckboxColumn`.
+    /// is selectable. Defaults to `true`.
     #[must_use]
     pub fn show_checkbox_column(mut self, show: bool) -> Self {
         self.show_checkbox_column = show;
@@ -387,71 +363,63 @@ impl DataTable {
 
     /// Whether every row (including the heading row) paints a bottom
     /// divider instead of the default top divider on rows after the first.
-    /// Defaults to `false`. Flutter parity: `DataTable.showBottomBorder`.
+    /// Defaults to `false`.
     #[must_use]
     pub fn show_bottom_border(mut self, show: bool) -> Self {
         self.show_bottom_border = show;
         self
     }
 
-    /// Overrides the table's background/border decoration. Flutter parity:
-    /// `DataTable.decoration`.
+    /// Overrides the table's background/border decoration.
     #[must_use]
     pub fn decoration(mut self, decoration: BoxDecoration<f64>) -> Self {
         self.decoration = Some(decoration);
         self
     }
 
-    /// Overrides the data rows' background color, per state. Flutter
-    /// parity: `DataTable.dataRowColor`.
+    /// Overrides the data rows' background color, per state.
     #[must_use]
     pub fn data_row_color(mut self, color: RowColorProperty) -> Self {
         self.data_row_color = Some(color);
         self
     }
 
-    /// Overrides each data row's minimum height. Flutter parity:
-    /// `DataTable.dataRowMinHeight`.
+    /// Overrides each data row's minimum height.
     #[must_use]
     pub fn data_row_min_height(mut self, height: f64) -> Self {
         self.data_row_min_height = Some(height);
         self
     }
 
-    /// Overrides each data row's maximum height. Flutter parity:
-    /// `DataTable.dataRowMaxHeight`.
+    /// Overrides each data row's maximum height.
     #[must_use]
     pub fn data_row_max_height(mut self, height: f64) -> Self {
         self.data_row_max_height = Some(height);
         self
     }
 
-    /// Overrides the data cells' text style. Flutter parity:
-    /// `DataTable.dataTextStyle`.
+    /// Overrides the data cells' text style.
     #[must_use]
     pub fn data_text_style(mut self, style: TextStyle) -> Self {
         self.data_text_style = Some(style);
         self
     }
 
-    /// Overrides the heading row's background color, per state. Flutter
-    /// parity: `DataTable.headingRowColor`.
+    /// Overrides the heading row's background color, per state.
     #[must_use]
     pub fn heading_row_color(mut self, color: RowColorProperty) -> Self {
         self.heading_row_color = Some(color);
         self
     }
 
-    /// Overrides the heading row's height. Flutter parity:
-    /// `DataTable.headingRowHeight`.
+    /// Overrides the heading row's height.
     #[must_use]
     pub fn heading_row_height(mut self, height: f64) -> Self {
         self.heading_row_height = Some(height);
         self
     }
 
-    /// Overrides the heading cells' text style. Flutter parity:
-    /// `DataTable.headingTextStyle`.
+    /// Overrides the heading cells' text style.
     #[must_use]
     pub fn heading_text_style(mut self, style: TextStyle) -> Self {
         self.heading_text_style = Some(style);
@@ -459,31 +427,28 @@ impl DataTable {
     }
 
     /// Overrides the margin between the table's edges and the first/last
-    /// column's content. Flutter parity: `DataTable.horizontalMargin`.
+    /// column's content.
     #[must_use]
     pub fn horizontal_margin(mut self, margin: f64) -> Self {
         self.horizontal_margin = Some(margin);
         self
     }
 
-    /// Overrides the margin between adjacent data columns. Flutter parity:
-    /// `DataTable.columnSpacing`.
+    /// Overrides the margin between adjacent data columns.
     #[must_use]
     pub fn column_spacing(mut self, spacing: f64) -> Self {
         self.column_spacing = Some(spacing);
         self
     }
 
-    /// Overrides the divider thickness painted between rows. Flutter
-    /// parity: `DataTable.dividerThickness`.
+    /// Overrides the divider thickness painted between rows.
     #[must_use]
     pub fn divider_thickness(mut self, thickness: f64) -> Self {
         self.divider_thickness = Some(thickness);
         self
     }
 
-    /// Overrides the margin around the leading selection checkbox. Flutter
-    /// parity: `DataTable.checkboxHorizontalMargin`.
+    /// Overrides the margin around the leading selection checkbox.
     #[must_use]
     pub fn checkbox_horizontal_margin(mut self, margin: f64) -> Self {
         self.checkbox_horizontal_margin = Some(margin);
@@ -514,8 +479,7 @@ struct ResolvedDataTableStyle {
     data_row_max_height: f64,
     data_text_style: TextStyle,
     /// The heading row's resolved background color — pre-resolved against
-    /// the empty state set (the oracle always resolves `headingRowColor`
-    /// against `<WidgetState>{}`, `data_table.dart`'s `build`).
+    /// the empty state set (a heading row has no per-state variation).
     heading_row_color: Option<Color>,
     heading_row_height: f64,
     heading_text_style: TextStyle,
@@ -527,10 +491,8 @@ struct ResolvedDataTableStyle {
 }
 
 /// Resolves the M3 `DataTable` defaults through the widget -> theme ->
-/// default cascade, per field. Flutter parity: `this.horizontalMargin ??
-/// dataTableTheme.horizontalMargin ?? theme.dataTableTheme.horizontalMargin
-/// ?? _horizontalMargin` (and the sibling per-field cascades),
-/// `data_table.dart`'s `build`, oracle tag `3.44.0`.
+/// default cascade, per field: the widget's own value wins over the theme's,
+/// which wins over the constant default.
 fn resolve_style(widget: &DataTable, theme: &ThemeData) -> ResolvedDataTableStyle {
     let table_theme = theme.data_table_theme.as_ref();
 
@@ -613,8 +575,6 @@ fn resolve_style(widget: &DataTable, theme: &ThemeData) -> ResolvedDataTableStyl
 
 /// The M3 default row-color resolver: selected rows tint `primary` at
 /// [`SELECTED_ROW_OPACITY`], every other state resolves to no color.
-/// Flutter parity: `build`'s `defaultRowColor` (`data_table.dart`, oracle
-/// tag `3.44.0`).
 fn default_row_color(primary: Color) -> RowColorProperty {
     WidgetStateProperty::resolve_with(move |states: &WidgetStates| {
         if states.contains_state(WidgetState::Selected) {
@@ -627,10 +587,8 @@ fn default_row_color(primary: Color) -> RowColorProperty {
 
 /// A data row's resolved background color for `states`: the widget/theme
 /// `data_row_color` cascade if it resolves to a color for these states, else
-/// `default_row_color`. Flutter parity: `build`'s
-/// `rowColor ?? defaultRowColor.resolve(states)` (`data_table.dart`, oracle
-/// tag `3.44.0`) — this is the value `build` passes as [`row_decoration`]'s
-/// `color` argument for every data row.
+/// `default_row_color` — this is the value `build` passes as
+/// [`row_decoration`]'s `color` argument for every data row.
 fn resolve_row_color(
     data_row_color: Option<&RowColorProperty>,
     default_row_color: &RowColorProperty,
@@ -643,8 +601,7 @@ fn resolve_row_color(
 
 /// The active [`WidgetStates`] for a data row: `Selected` when the row is
 /// selected, `Disabled` when at least one row in the table is selectable but
-/// this one is not. Flutter parity: `build`'s per-row `states` set
-/// (`data_table.dart`, oracle tag `3.44.0`).
+/// this one is not.
 fn row_states(selected: bool, is_disabled: bool) -> WidgetStates {
     let mut states = WidgetStates::NONE;
     if selected {
@@ -661,8 +618,7 @@ fn row_states(selected: bool, is_disabled: bool) -> WidgetStates {
 // =============================================================================
 
 /// The index of `columns`' only non-numeric column, or `None` when there
-/// are zero or more than one. Flutter parity: `DataTable._initOnlyTextColumn`
-/// (`data_table.dart`, oracle tag `3.44.0`).
+/// are zero or more than one.
 fn only_text_column(columns: &[DataColumn]) -> Option<usize> {
     let mut result = None;
     for (index, column) in columns.iter().enumerate() {
@@ -677,10 +633,8 @@ fn only_text_column(columns: &[DataColumn]) -> Option<usize> {
 }
 
 /// The [`TableColumnWidth`] for `column`: its own override if set, else the
-/// oracle's default heuristic — `Intrinsic { flex: Some(1.0) }` for the sole
-/// non-numeric column, `Intrinsic { flex: None }` otherwise. Flutter parity:
-/// `build`'s column-width selection (`data_table.dart:1148-1155`, oracle tag
-/// `3.44.0`).
+/// default heuristic — `Intrinsic { flex: Some(1.0) }` for the sole
+/// non-numeric column, `Intrinsic { flex: None }` otherwise.
 fn column_table_width(
     column: &DataColumn,
     index: usize,
@@ -696,15 +650,13 @@ fn column_table_width(
 }
 
 /// The checkbox column's fixed width: margin + [`CHECKBOX_EDGE_SIZE`] +
-/// margin. Flutter parity: `build`'s `tableColumns[0] = FixedColumnWidth(...)`
-/// (`data_table.dart`, oracle tag `3.44.0`).
+/// margin.
 fn checkbox_column_width(margin_start: f64, margin_end: f64) -> f64 {
     margin_start + CHECKBOX_EDGE_SIZE + margin_end
 }
 
 /// A data column's cell padding at `data_column_index` (0-based, excluding
-/// any leading checkbox column). Flutter parity: `build`'s `paddingStart`/
-/// `paddingEnd` `switch` (`data_table.dart`, oracle tag `3.44.0`).
+/// any leading checkbox column).
 fn cell_padding(
     data_column_index: usize,
     column_count: usize,
@@ -730,19 +682,16 @@ fn cell_padding(
     EdgeInsets::new(0.0, end, 0.0, start)
 }
 
-/// The row divider's border side. Flutter parity: `Divider.createBorderSide`
-/// (reusing [`crate::divider`]'s own established M3 default color,
-/// `ColorScheme.outlineVariant`), invoked from `build`'s `borderSide`
-/// (`data_table.dart`, oracle tag `3.44.0`).
+/// The row divider's border side, reusing [`crate::divider`]'s own
+/// established M3 default color, `ColorScheme.outlineVariant`.
 fn row_border_side(color_scheme: &ColorScheme, thickness: f64) -> BorderSide<f64> {
     BorderSide::new(color_scheme.outline_variant, thickness, BorderStyle::Solid)
 }
 
-/// A [`TableRow`]'s background/border decoration. Flutter parity: `build`'s
-/// `TableRow` construction — `Border(bottom: side)` when
-/// [`DataTable::show_bottom_border`] is set, else `Border(top: side)` for
-/// every row EXCEPT `row_index == 0` (the heading row never gets a top
-/// border), else no border at all (`data_table.dart`, oracle tag `3.44.0`).
+/// A [`TableRow`]'s background/border decoration: a bottom border when
+/// [`DataTable::show_bottom_border`] is set, else a top border for every row
+/// EXCEPT `row_index == 0` (the heading row never gets a top border), else no
+/// border at all.
 fn row_decoration(
     row_index: usize,
     show_bottom_border: bool,
@@ -761,8 +710,7 @@ fn row_decoration(
 
 /// Whether every selectable row is selected (`all_checked`) and whether some
 /// but not all are (`some_checked`, driving the heading checkbox's
-/// indeterminate tristate). Flutter parity: `build`'s `allChecked`/
-/// `someChecked` (`data_table.dart`, oracle tag `3.44.0`).
+/// indeterminate tristate).
 fn selection_summary(rows: &[DataRow], display_checkbox_column: bool) -> (bool, bool) {
     if !display_checkbox_column {
         return (false, false);
@@ -805,9 +753,7 @@ fn wrap_selectable(
 }
 
 /// The heading checkbox cell: a tristate [`Checkbox`] centered in its
-/// margin, wrapped to fill the checkbox column's cell. Flutter parity:
-/// `_buildCheckbox` called with `tristate: true` from `build`
-/// (`data_table.dart`, oracle tag `3.44.0`).
+/// margin, wrapped to fill the checkbox column's cell.
 fn header_checkbox_cell(
     checked: Option<bool>,
     on_change: impl Fn(&mut flui_sdk::view::EventCx<'_>, Option<bool>) + 'static,
@@ -823,9 +769,7 @@ fn header_checkbox_cell(
 }
 
 /// A data row's checkbox cell: a non-tristate [`Checkbox`], with the whole
-/// cell also tap-toggling the row when selectable. Flutter parity:
-/// `_buildCheckbox` called per row from `build` (`data_table.dart`, oracle
-/// tag `3.44.0`).
+/// cell also tap-toggling the row when selectable.
 fn row_checkbox_cell(
     selected: bool,
     on_select_changed: Option<RowSelectCallback>,
@@ -854,8 +798,7 @@ fn row_checkbox_cell(
 
 /// A heading cell: the column's label, right-aligned when
 /// [`DataColumn::numeric`], at the resolved heading text style and row
-/// height. Flutter parity: `_buildHeadingCell` (sorting arrow omitted — see
-/// the module docs). `data_table.dart`, oracle tag `3.44.0`.
+/// height (sorting arrow omitted — see the module docs).
 fn header_cell(
     label: BoxedView,
     numeric: bool,
@@ -882,10 +825,9 @@ fn header_cell(
 
 /// A data cell: the cell's child, right-aligned when [`DataColumn::numeric`],
 /// at the resolved data text style and row height range, wrapped in an
-/// [`InkWell`] when the cell or its row is tappable. Flutter parity:
-/// `_buildDataCell` (edit-icon/placeholder omitted — see the module docs).
-/// `data_table.dart`, oracle tag `3.44.0`.
-#[expect(clippy::too_many_arguments)] // mirrors the oracle's own per-cell parameter list; a patch struct would only relocate this
+/// [`InkWell`] when the cell or its row is tappable (edit-icon/placeholder
+/// omitted — see the module docs).
+#[expect(clippy::too_many_arguments)] // per-cell parameter list; a patch struct would only relocate this
 fn data_cell(
     cell: &DataCell,
     numeric: bool,

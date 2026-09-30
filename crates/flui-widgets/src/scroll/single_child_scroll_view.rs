@@ -20,17 +20,14 @@ enum OffsetSource {
 /// A box that lets its single child be larger than the available space along
 /// `scroll_direction`, showing a scrollable window into it.
 ///
-/// Flutter parity: `widgets/scroll_view.dart` `SingleChildScrollView`. Composes
-/// a [`Viewport`] over a
+/// Composes a [`Viewport`] over a
 /// [`SliverToBoxAdapter`]: the child is laid out
 /// unbounded on the scroll axis and the viewport clips the overflow.
 ///
 /// `scroll_direction` defaults to [`Axis::Vertical`]. `offset` is a programmatic
 /// scroll position; gesture-driven scrolling arrives with the
 /// `Scrollable`/`ScrollController` layer. `reverse` flips which edge scroll
-/// position `0.0` anchors to. `AxisDirection` is resolved the way
-/// `getAxisDirectionFromAxisReverseAndDirectionality` (`widgets/basic.dart`)
-/// does: a horizontal `scroll_direction` reads the ambient
+/// position `0.0` anchors to. `AxisDirection` is resolved as follows: a horizontal `scroll_direction` reads the ambient
 /// [`Directionality`](crate::Directionality) (`RightToLeft` under an RTL
 /// ancestor, defaulting to `LeftToRight` with no ancestor), and `reverse`
 /// flips whichever base direction that resolves to — including the vertical

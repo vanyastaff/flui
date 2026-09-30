@@ -1,9 +1,6 @@
 //! `PrimaryPointerGestureRecognizer` — canonical trait for recognizers that
 //! track only the first pointer that hits.
 //!
-//! Flutter parity: [`recognizer.dart:611+`](../../../.flutter/flutter-master/packages/flutter/lib/src/gestures/recognizer.dart)
-//! `abstract class PrimaryPointerGestureRecognizer extends OneSequenceGestureRecognizer`.
-//!
 //! Concrete implementers (after the migration wave): Tap, LongPress.
 //!
 //! Note: this trait was previously a 481-LOC scaffold with zero `impl ... for`
@@ -32,8 +29,7 @@ pub trait PrimaryPointerGestureRecognizer:
 
     /// Deadline before which the recognizer must decide.
     ///
-    /// Flutter parity: `recognizer.dart:644 deadline`. `None` means no
-    /// pre-acceptance timeout (e.g. Tap fires immediately on Up).
+    /// `None` means no pre-acceptance timeout (e.g. Tap fires immediately on Up).
     fn deadline(&self) -> Option<Duration> {
         None
     }
@@ -41,15 +37,12 @@ pub trait PrimaryPointerGestureRecognizer:
     /// Called when the pre-acceptance deadline elapses without resolution.
     ///
     /// Default: resolve with [`GestureDisposition::Rejected`](crate::arena::GestureDisposition::Rejected). Concrete
-    /// recognizers may override (e.g. LongPress accepts on deadline). Flutter
-    /// parity: `recognizer.dart:646+ didExceedDeadline(position)`.
+    /// recognizers may override (e.g. LongPress accepts on deadline).
     fn did_exceed_deadline(&self) {
         use crate::arena::GestureDisposition;
         self.resolve(GestureDisposition::Rejected);
     }
 
     /// Called for events on the primary pointer.
-    ///
-    /// Flutter parity: `recognizer.dart:684+ @protected void handlePrimaryPointer(PointerEvent event)`.
     fn handle_primary_pointer(&self, dispatch: crate::routing::PointerDispatch<'_>);
 }

@@ -2,17 +2,10 @@
 //! [`DefaultTabController`], the inherited-widget shortcut that owns one for
 //! a subtree.
 //!
-//! # Flutter parity
-//!
-//! `material/tab_controller.dart`'s `TabController`/`DefaultTabController`
-//! (oracle tag `3.44.0`).
-//!
 //! # `TabController`: one non-`Send` cell, not an `Arc<AtomicUsize>` pair
 //!
-//! The oracle's `TabController` is a `ChangeNotifier` (Dart has no
-//! `Send`/`Sync` distinction) holding two plain `int` fields, `_index` and
-//! `_previousIndex`, mutated together by `_changeIndex` and then notified
-//! once. A naive Rust port — following
+//! A tab controller holds two plain indices, `index` and `previous_index`,
+//! mutated together and then notified once. A naive Rust design — following
 //! [`crate::CupertinoTabController`](../flui_cupertino/struct.CupertinoTabController.html)'s
 //! `Arc<AtomicUsize>` precedent, but for a *pair* of counters — would let a
 //! listener observe a **torn** snapshot: `index` swapped to the new value on
@@ -50,14 +43,13 @@
 //!
 //! # `animate_to` is a documented alias, not an animation
 //!
-//! The oracle's `animateTo`/`_changeIndex` additionally: (a) fires **two**
-//! `notifyListeners()` calls when a `duration` is given — once immediately
-//! (so [`indexIsChanging`](https://api.flutter.dev/flutter/material/TabController/indexIsChanging.html)
-//! flips true) and once when the drive animation completes; (b) exposes
-//! `indexIsChanging`, read by `TabBarView`'s warp-to-adjacent-page
-//! optimization to distinguish a programmatic tab change from a drag; (c)
-//! animates `animation.value` from the old index to the new one over
-//! `duration`/`curve`. None of that is ported here: this V1 has no
+//! A full animated tab change would additionally: (a) notify listeners
+//! **twice** when a `duration` is given — once immediately (so an
+//! `indexIsChanging` flag flips true) and once when the drive animation
+//! completes; (b) expose `indexIsChanging`, read by `TabBarView`'s
+//! warp-to-adjacent-page optimization to distinguish a programmatic tab
+//! change from a drag; (c) animate `animation.value` from the old index to
+//! the new one over `duration`/`curve`. None of that exists here: this V1 has no
 //! `AnimationController`/`Ticker` wiring on `TabController` at all — see
 //! [`crate::tabs`] module docs for why `TabBarView` itself is out of scope
 //! for this unit. [`TabController::animate_to`] is therefore a plain alias
@@ -153,9 +145,8 @@ impl TabListenerRegistry {
 }
 
 /// Coordinates tab selection for [`TabBar`](crate::TabBar) (and, in a later
-/// unit, `TabBarView`). Flutter parity: `TabController`
-/// (`tab_controller.dart`, oracle tag `3.44.0`) — see the module docs for
-/// what this V1 does and does not carry over.
+/// unit, `TabBarView`). See the module docs for what this V1 does and does
+/// not carry over.
 ///
 /// `Clone` is cheap and shares identity: every clone observes and mutates
 /// the *same* underlying state, the same shape as
@@ -180,9 +171,8 @@ pub struct TabController {
 
 /// Rejects an illegal construction-time tab index in every build profile.
 ///
-/// Stricter than Flutter's constructor assert when `length == 0`: only
-/// `index == 0` is accepted (Flutter allows any non-negative `initialIndex`
-/// when `length == 0`). See `ARCHITECTURE.md` §TabController.
+/// When `length == 0`, only `index == 0` is accepted. See
+/// `ARCHITECTURE.md` §TabController.
 #[inline]
 fn assert_construction_tab_index(length: usize, index: usize, context: &str) {
     assert!(
@@ -191,11 +181,11 @@ fn assert_construction_tab_index(length: usize, index: usize, context: &str) {
     );
 }
 
-/// Rejects an out-of-range `set_index` argument using Flutter `_changeIndex`'s
-/// predicate (`value < length || length == 0`), raised to a release `assert!`.
+/// Rejects an out-of-range `set_index` argument (`value < length || length ==
+/// 0` must hold), as a release `assert!`.
 ///
 /// When `length == 0`, any `index` passes this gate and then hits the
-/// `length < 2` no-op — matching Flutter release (debug assert stripped).
+/// `length < 2` no-op.
 #[inline]
 fn assert_set_index_in_range(length: usize, index: usize) {
     assert!(
@@ -210,9 +200,8 @@ impl TabController {
     /// # Panics
     ///
     /// Panics if `initial_index` is out of range for `length` (only `0` is
-    /// valid when `length == 0` — stricter than Flutter's constructor assert).
-    /// Flutter uses a debug-only assert; FLUI enforces construction bounds in
-    /// every build profile — see `ARCHITECTURE.md` §TabController length/index.
+    /// valid when `length == 0`). Construction bounds are enforced in every
+    /// build profile — see `ARCHITECTURE.md` §TabController length/index.
     #[must_use]
     pub fn new(length: usize, initial_index: usize) -> Self {
         assert_construction_tab_index(length, initial_index, "TabController::new");
@@ -221,8 +210,7 @@ impl TabController {
 
     /// A controller starting at `index` with a distinct `previous_index` —
     /// the shape [`DefaultTabController`]'s length-change re-creation needs
-    /// (Flutter parity: `TabController._copyWithAndDispose`'s
-    /// `index`/`previousIndex` pair, see that type's docs).
+    /// (see that type's docs).
     ///
     /// `index` must already be in range for `length`; callers that shrink
     /// length clamp first (see `recreate_for_length_change`).
@@ -263,11 +251,10 @@ impl TabController {
     /// Selects `index`, updating [`previous_index`](Self::previous_index)
     /// and notifying listeners — unless this is a no-op.
     ///
-    /// Flutter parity: `TabController._changeIndex`'s core (the
-    /// non-animating branch; see the module docs for what is deferred).
+    /// The non-animating branch; see the module docs for what is deferred.
     /// **No-op, no notify** when `index == self.index()` OR
-    /// `self.length() < 2` — both conditions the oracle checks before
-    /// touching any state (`if (value == _index || length < 2) return;`).
+    /// `self.length() < 2` — both conditions are checked before
+    /// touching any state.
     /// The pair update itself is a single [`Cell::set`] of the whole
     /// `(index, previous_index)` tuple, so a listener invoked by the
     /// `notify_listeners()` that follows always observes a consistent pair
@@ -275,10 +262,9 @@ impl TabController {
     ///
     /// # Panics
     ///
-    /// Panics if `index >= length` when `length > 0` (Flutter `_changeIndex`'s
-    /// `assert(value < length || length == 0)`, raised to release). When
-    /// `length == 0` (or `length == 1`), the call is a no-op after the check —
-    /// same as Flutter release once the debug assert is stripped.
+    /// Panics if `index >= length` when `length > 0` (in every build
+    /// profile). When `length == 0` (or `length == 1`), the call is a no-op
+    /// after the check.
     ///
     /// This panic is **not** wrapped by the build-error `ErrorView` boundary:
     /// it fires on the caller's thread (gesture / app code). Length mismatch
@@ -340,11 +326,9 @@ impl Clone for TabController {
 
 /// Identity equality — two clones of the same controller are equal; two
 /// independently-constructed controllers are not, even with identical
-/// `(index, previous_index, length)`. Flutter parity: the oracle's
-/// `TabController` has no `==` override, so Dart's default reference
-/// equality applies to `_TabControllerScope.updateShouldNotify`'s `controller
-/// != old.controller` check — this is that same reference-identity
-/// comparison, ported as `Rc::ptr_eq` over the shared cell.
+/// `(index, previous_index, length)`. The scope's `update_should_notify`
+/// relies on this reference-identity comparison, implemented as `Rc::ptr_eq`
+/// over the shared cell.
 impl PartialEq for TabController {
     fn eq(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.state, &other.state)
@@ -365,9 +349,8 @@ impl std::fmt::Debug for TabController {
 }
 
 /// The inherited node [`DefaultTabController`] publishes its
-/// [`TabController`] through. Flutter parity: `_TabControllerScope` — a
-/// private `InheritedWidget`, ported as a private `InheritedView` for the
-/// same reason: nothing outside this module should construct one directly,
+/// [`TabController`] through. A private `InheritedView`, since nothing
+/// outside this module should construct one directly,
 /// only read it via [`DefaultTabController::of`]/[`maybe_of`](DefaultTabController::maybe_of).
 #[derive(Clone)]
 struct TabControllerScope {
@@ -387,12 +370,9 @@ impl InheritedView for TabControllerScope {
     }
 
     fn update_should_notify(&self, old: &Self) -> bool {
-        // Flutter parity: `_TabControllerScope.updateShouldNotify` also
-        // compares `enabled` (a `TickerMode.of(context)` snapshot) — no
-        // consumer here depends on ticker-mode-gated notification yet (this
-        // controller has no ticker to gate), so only the controller-identity
-        // half of that comparison is ported; see `DefaultTabController`'s
-        // docs.
+        // Only controller identity is compared: no consumer here depends
+        // on ticker-mode-gated notification yet (this controller has no
+        // ticker to gate); see `DefaultTabController`'s docs.
         self.controller != old.controller
     }
 }
@@ -401,9 +381,6 @@ impl_inherited_view!(TabControllerScope);
 
 /// Shares one [`TabController`] with a `TabBar`/`TabBarView` pair that don't
 /// have a convenient stateful ancestor to own it directly.
-///
-/// Flutter parity: `DefaultTabController` (`tab_controller.dart`, oracle tag
-/// `3.44.0`).
 ///
 /// # Length-change re-creation
 ///
@@ -417,9 +394,8 @@ impl_inherited_view!(TabControllerScope);
 ///   over unchanged, and `previous_index` carries over unchanged too.
 /// - If the old `index` is now out of range (the tab list shrank past it),
 ///   the new controller clamps to `length - 1` and records the *old* index
-///   as its `previous_index` — Flutter parity: `newIndex = max(0,
-///   widget.length - 1); previousIndex = _controller.index;`
-///   (`_DefaultTabControllerState.didUpdateWidget`).
+///   as its `previous_index` (`new_index = max(0, length - 1);
+///   previous_index = old.index`).
 ///
 /// Because [`TabController`]'s equality is identity-based (see its `PartialEq`
 /// doc), this re-creation is itself what makes the private
@@ -477,9 +453,7 @@ impl DefaultTabController {
     ///
     /// # Panics
     ///
-    /// Panics if there is no `DefaultTabController` ancestor. Flutter
-    /// parity: `DefaultTabController.of`, which throws a `FlutterError` in
-    /// release mode (an `assert` in debug) under the identical condition.
+    /// Panics if there is no `DefaultTabController` ancestor.
     #[must_use]
     pub fn of(ctx: &dyn BuildContext) -> TabController {
         Self::maybe_of(ctx).expect(
@@ -490,7 +464,7 @@ impl DefaultTabController {
     }
 
     /// Like [`of`](Self::of), but returns `None` instead of panicking when
-    /// there is no ancestor. Flutter parity: `DefaultTabController.maybeOf`.
+    /// there is no ancestor.
     #[must_use]
     pub fn maybe_of(ctx: &dyn BuildContext) -> Option<TabController> {
         ctx.depend_on::<TabControllerScope, _>(|scope| scope.controller.clone())
@@ -553,10 +527,7 @@ impl ViewState<DefaultTabController> for DefaultTabControllerState {
 
 /// The re-creation rule for a `length` change — extracted from
 /// [`DefaultTabControllerState::did_update_view`] so it is unit-testable in
-/// isolation. Flutter parity:
-/// `_DefaultTabControllerState.didUpdateWidget`'s `newIndex`/`previousIndex`
-/// computation (`tab_controller.dart`, oracle tag `3.44.0`); see
-/// [`DefaultTabController`]'s docs for the full contract.
+/// isolation. See [`DefaultTabController`]'s docs for the full contract.
 fn recreate_for_length_change(old: &TabController, new_length: usize) -> TabController {
     let old_index = old.index();
     if old_index >= new_length {

@@ -12,19 +12,13 @@
 //! each want a hold independently, so a boolean resolves last-writer-wins and
 //! loses one of them.
 //!
-//! Flutter routes this as `KeepAliveNotification(handle)` bubbling to a
-//! per-item `AutomaticKeepAlive`, which keeps a `Map<Listenable, VoidCallback>`
-//! and writes a `KeepAlive` parent-data widget while any handle is held. FLUI
-//! keeps the decision where the decision is made — the element side, next to
-//! the eviction it modifies — and replaces the handle with an RAII lease:
+//! FLUI keeps the decision where the decision is made — the element side, next
+//! to the eviction it modifies — and expresses a hold as an RAII lease:
 //!
-//! - **`Drop` is the release.** Flutter fuses release into
-//!   `KeepAliveHandle.dispose()` precisely because a separate `release()` gets
-//!   forgotten, and its own documentation concedes the failure mode ("the
-//!   subtree will continue to be kept alive until the list itself is
-//!   disposed"). A `#[must_use]` guard makes that unrepresentable.
-//! - **N holders are a refcount**, which is what Flutter's handle map emulates
-//!   by hand.
+//! - **`Drop` is the release.** A separate `release()` call gets forgotten,
+//!   and the subtree would stay kept alive until the list itself is disposed.
+//!   A `#[must_use]` guard makes that unrepresentable.
+//! - **N holders are a refcount.**
 //! - **Nothing is cached but the holder.** A lease records the element that took
 //!   it; the child it keeps alive is resolved from the tree when eviction asks.
 //!   So a held child whose logical index changes under reconcile keeps its hold,
@@ -35,9 +29,8 @@
 //!
 //! # Where the parked child goes: nowhere
 //!
-//! Flutter moves a kept-alive child out of the render child list into
-//! `_keepAliveBucket`, re-adopting it on revival. FLUI leaves it attached and
-//! simply does not lay it out — the band walk only visits `cache_first
+//! A kept-alive child stays attached to the render child list and is simply
+//! not laid out — the band walk only visits `cache_first
 //! ..cache_last`. Every phase that could observe it consults the
 //! placed-generation stamp, so an unlaid child is skipped by paint, both
 //! hit-test walks, and semantics alike. That makes the stamp load-bearing here

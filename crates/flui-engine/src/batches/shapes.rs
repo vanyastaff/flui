@@ -787,7 +787,7 @@ impl DrawBatcher {
                 // Encode the arc as a unit circle under M_world * diag(rx, ry)
                 // (elliptical when rx != ry, mirroring `oval`). The center goes
                 // into transform_translate (never scaled by M). Angles parameterise
-                // the unit circle, so they map to Flutter's elliptical-arc angles.
+                // the unit circle, so they map to elliptical-arc angles.
                 let linear_cols = [
                     m.x_axis.x * (rx as f32),
                     m.x_axis.y * (rx as f32),

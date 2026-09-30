@@ -7,8 +7,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// Makes a **sliver** child partially transparent inside a
 /// [`Viewport`](crate::Viewport).
 ///
-/// Flutter parity: `widgets/sliver.dart` `SliverOpacity` over
-/// `RenderSliverOpacity`. `opacity` is clamped to `0.0..=1.0`.
+/// `opacity` is clamped to `0.0..=1.0`.
 #[derive(Clone, Debug)]
 pub struct SliverOpacity {
     opacity: f64,

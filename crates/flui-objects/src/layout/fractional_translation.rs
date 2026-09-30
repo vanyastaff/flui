@@ -1,22 +1,14 @@
 //! `RenderFractionalTranslation` — single-child proxy that, at paint
 //! time, shifts its child by a fraction of the child's own size.
 //!
-//! # Flutter equivalence
+//! # Design
 //!
-//! Behavior-faithful port of Flutter's
-//! [`RenderFractionalTranslation`](https://api.flutter.dev/flutter/rendering/RenderFractionalTranslation-class.html)
-//! (`packages/flutter/lib/src/rendering/proxy_box.dart`).
+//! Carrying the *fraction* in an `Offset` (a `dx, dy` of *pixels*) would be
+//! a unit mismatch — a pixels-typed value holding a fraction — enforced only
+//! by convention.
 //!
-//! # Rust-native improvement
-//!
-//! Flutter overloads `Offset` (a `dx, dy` of *pixels*) to carry the
-//! *fraction*: callers write `translation: Offset(-0.5, 0.0)` and the
-//! render object multiplies by child size at paint time. The unit
-//! mismatch — pixels-typed value holding a fraction — is a runtime
-//! convention with no compile-side enforcement.
-//!
-//! This port introduces a dedicated [`TranslationFraction`] newtype so
-//! "fraction of child size" is visible in the API surface. Lengths
+//! A dedicated [`TranslationFraction`] newtype makes
+//! "fraction of child size" visible in the API surface. Lengths
 //! never appear in the translation slot; the conversion happens once
 //! inside `paint`/`hit_test` against the driver-supplied size (from
 //! `RenderState`). The intent collapses into the type system instead of
@@ -97,8 +89,7 @@ impl Lerp for TranslationFraction {
 pub struct RenderFractionalTranslation {
     translation: TranslationFraction,
     /// When true, the translation is also applied to hit testing so
-    /// pointers land where the user *sees* the child. Flutter parity:
-    /// default true.
+    /// pointers land where the user *sees* the child. Defaults to true.
     transform_hit_tests: bool,
     has_child: bool,
 }
@@ -114,7 +105,7 @@ impl RenderFractionalTranslation {
     }
 
     /// Creates a fractional-translation render object with
-    /// `transform_hit_tests = true` (Flutter parity default).
+    /// `transform_hit_tests = true` (the default).
     pub const fn translated(translation: TranslationFraction) -> Self {
         Self::new(translation, true)
     }
@@ -197,18 +188,17 @@ impl RenderBox for RenderFractionalTranslation {
         ctx.paint_child_at(self.pixel_offset(ctx.size()));
     }
 
-    /// Flutter's `RenderFractionalTranslation.applyPaintTransform`
-    /// (`proxy_box.dart`): `transform.translate(translation.dx * size.width,
-    /// translation.dy * size.height)`.
+    /// Translates by `translation.dx * size.width, translation.dy *
+    /// size.height`.
     ///
     /// **The default would be wrong here.** `perform_layout` positions the child
     /// at `Offset::ZERO` and `paint` shifts it with `paint_child_at` — an
     /// `offset_override`. The child's *committed* offset, which the default
     /// composes, is zero and says nothing about where the child paints.
     ///
-    /// Unlike `hit_test`, this ignores `transform_hit_tests`: Flutter's
-    /// `applyPaintTransform` is unconditional, because it answers "where does the
-    /// child paint", not "where can it be hit".
+    /// Unlike `hit_test`, this ignores `transform_hit_tests`: it is
+    /// unconditional, because it answers "where does the child paint", not
+    /// "where can it be hit".
     fn apply_paint_transform(
         &self,
         _child: usize,
@@ -221,11 +211,9 @@ impl RenderBox for RenderFractionalTranslation {
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        // Flutter RenderFractionalTranslation overrides `hitTest` to skip the
-        // own-bounds check and delegate straight to `hitTestChildren`
-        // (proxy_box.dart), so a pointer over the SHIFTED child still hits even
-        // when it lies outside the box's original bounds. (RenderTransform does
-        // the same; the prior `is_within_own_size` gate here rejected those hits.)
+        // Skip the own-bounds check and go straight to the child, so a
+        // pointer over the SHIFTED child still hits even when it lies outside
+        // the box's original bounds. (RenderTransform does the same.)
         if !self.has_child {
             return false;
         }
