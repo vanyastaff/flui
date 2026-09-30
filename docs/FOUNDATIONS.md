@@ -37,7 +37,7 @@ This document is the bedrock under [`ROADMAP.md`](ROADMAP.md). The roadmap seque
 
 FLUI keeps Flutter's tree architecture — five trees: immutable **View** configuration → mutable **Element** lifecycle → layout/paint **Render** objects → a **Layer** compositing tree, with a **Semantics** accessibility tree alongside. This shape is not FLUI's idiosyncrasy — it is the validated answer. Linebender's Xilem, the most serious attempt to solve retained reactive UI in Rust, converged independently on the same split (a retained Masonry widget layer beneath a transient reactive view layer). The architecture is correct; the discipline is to *hold it* against simplification proposals (GPUI's drop-the-tree-per-frame model is productive for a code editor and inadequate for a full toolkit — accessibility, IME, and layout caching all require stable node identity across frames).
 
-Every subsystem has two axes. **Behavior** is always Flutter — the constraint, not a decision. **Structure** is a decision: the Rust shape may come from Flutter, GPUI, Xilem/Masonry, Vello, or be Rust-native original. The target structure per subsystem:
+Every subsystem has two axes. **Behavior** starts from Flutter's observable contract and improves on it wherever the result is better, pinned by a FLUI test. **Structure** is a decision: the Rust shape may come from Flutter, GPUI, Xilem/Masonry, Vello, or be Rust-native original. The target structure per subsystem:
 
 | Subsystem | Behavior source (`.flutter/`) | Structure source | Target shape |
 |---|---|---|---|
