@@ -11,7 +11,8 @@
 use flui_foundation::geometry::Offset;
 use flui_painting::display_list::DrawOp;
 use flui_painting::testing::{
-    collection_holds, host_covers, host_family_names, measure_with_parley,
+    collection_holds, host_chain_covers, host_covers, host_family_names, host_sans_serif_family,
+    measure_with_parley,
 };
 use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
 use flui_painting::{Canvas, FontCollection, TextContext, TextPainter, shared_font_system};
@@ -50,9 +51,28 @@ fn weighted(family: Option<&str>, weight: FontWeight) -> TextStyle {
     }
 }
 
+/// A host family other than the sans-serif generic's, spelled in lower case
+/// where that differs from how the host names it: both shapers match family
+/// names exactly, as fontdb does, so both degrade it to the sans-serif
+/// generic rather than one finding the family and the other not.
+fn mis_cased_family() -> Option<String> {
+    let sans_serif = host_sans_serif_family();
+    host_family_names()
+        .into_iter()
+        .filter(|name| *name != sans_serif)
+        .map(|name| name.to_lowercase())
+        .find(|lower| !host_family_names().contains(lower))
+}
+
 /// The rows: a name, the style, the text.
 fn rows() -> Vec<(&'static str, TextStyle, &'static str)> {
+    let mis_cased = mis_cased_family().expect("the host names a family with an upper-case letter");
     vec![
+        (
+            "mis_cased_family",
+            weighted(Some(&mis_cased), FontWeight::W400),
+            LATIN,
+        ),
         ("latin_default", weighted(None, FontWeight::W400), LATIN),
         ("latin_bold", weighted(None, FontWeight::W700), LATIN),
         (
@@ -115,13 +135,20 @@ fn measured_width_equals_painted_width_on_host_faces() {
     let mut failures = Vec::new();
     let mut latin_rows = 0;
     for (name, style, text) in rows() {
-        if !host_covers(text) {
+        if !host_chain_covers(text) {
             let missing: Vec<_> = text
                 .chars()
-                .filter(|c| !c.is_whitespace() && !host_covers(&c.to_string()))
-                .map(|c| format!("U+{:04X}", u32::from(c)))
+                .filter(|c| !c.is_whitespace() && !host_chain_covers(&c.to_string()))
+                .map(|c| {
+                    let reach = if host_covers(&c.to_string()) {
+                        "is covered only past the fallback chain"
+                    } else {
+                        "is covered by no host face"
+                    };
+                    format!("U+{:04X} {reach}", u32::from(c))
+                })
                 .collect();
-            println!("{name}: skipped, no host face covers {}", missing.join(" "));
+            println!("{name}: skipped, {}", missing.join("; "));
             continue;
         }
         if text == LATIN {
@@ -140,7 +167,7 @@ fn measured_width_equals_painted_width_on_host_faces() {
             }
         }
     }
-    assert_eq!(latin_rows, 5, "every Latin row runs on any host");
+    assert_eq!(latin_rows, 6, "every Latin row runs on any host");
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
