@@ -387,6 +387,3 @@ impl InputPredictor {
         self.velocity_tracker.sample_count() >= MIN_PREDICTION_SAMPLES
     }
 }
-
-#[cfg(test)]
-mod tests {}

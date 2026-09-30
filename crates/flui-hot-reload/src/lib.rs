@@ -150,6 +150,16 @@ pub use flui_layer::Scene;
 #[doc(hidden)]
 pub use tracing as __private_tracing;
 
+// Re-exported so `app_plugin!`'s generated `flui_app_build` can build the
+// plugin image's own text context through `$crate` — the plugin cdylib names
+// no rendering crate itself. `#[doc(hidden)]`, never named outside this
+// crate's own macros.
+#[cfg(feature = "app-plugin")]
+#[doc(hidden)]
+pub mod __private_text {
+    pub use flui_rendering::pipeline::TextContextHandle;
+}
+
 #[cfg(feature = "app-plugin")]
 mod pipeline;
 mod plugin;

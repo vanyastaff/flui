@@ -240,6 +240,3 @@ macro_rules! forward_single_child_box_hit_test {
         }
     };
 }
-
-#[cfg(test)]
-mod tests {}

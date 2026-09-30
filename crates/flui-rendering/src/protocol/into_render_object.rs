@@ -168,6 +168,3 @@ where
 //    RenderObject<SliverProtocol> for all RenderSliver types
 // 3. This eliminates an unnecessary layer of indirection
 // 4. Simpler API: Box::new(render_box) instead of Box::new(adapter)
-
-#[cfg(test)]
-mod tests {}

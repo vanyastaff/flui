@@ -156,13 +156,6 @@
 //! - `images` - Enable image loading (PNG, JPEG, GIF, WebP)
 //! - `network` - Enable HTTP/HTTPS asset loading
 //! - `full` - Enable all stable features
-//!
-//! # API Compliance
-//!
-//! This crate achieves **96% compliance** with Rust API Guidelines (106/110 points).
-//!
-//! See the [API Guidelines Audit](https://github.com/your-repo/flui/blob/main/crates/flui_assets/API_GUIDELINES_AUDIT.md)
-//! for detailed compliance report.
 
 // Ship bar: crate is doc-complete — keep it that way.
 #![deny(missing_docs)]

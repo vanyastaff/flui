@@ -101,7 +101,7 @@ fn fixed_extent_tree(
     flui_foundation::RenderId,
     Vec<flui_foundation::RenderId>,
 ) {
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let root_id = owner.insert(Box::new(SliverHost { constraints }) as BoxedRenderObject);
     let sliver_id = owner
         .render_tree_mut()

@@ -134,7 +134,7 @@ fn two_realms_measure_text_through_their_own_contexts() {
 
 /// Every presentation's pipeline lends the realm's one context: the first,
 /// built with the realm, and one assembled and installed later. Fails if a
-/// presentation's pipeline is left to measure on a context of its own.
+/// presentation's pipeline is built with any context but the realm's.
 fn every_presentation_pipeline_holds_the_realms_text_context() {
     let fonts = FontCollection::new();
     let mut realm = realm_over(&fonts);
@@ -147,8 +147,7 @@ fn every_presentation_pipeline_holds_the_realms_text_context() {
     for presentation in realm.presentations.iter() {
         let lent = presentation
             .pipeline()
-            .with(|owner| owner.text_context_for_test().cloned())
-            .expect("the presentation's pipeline was given the realm's text context");
+            .with(|owner| owner.text_context_for_test().clone());
         assert!(
             flui_rendering::TextContextHandle::ptr_eq(&lent, &realm_text),
             "a presentation's pipeline lends the realm's context, not one of its own"

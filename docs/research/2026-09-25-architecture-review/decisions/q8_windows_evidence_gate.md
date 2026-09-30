@@ -176,7 +176,7 @@ _Raw research, options, judge verdicts and verification for this question (2026-
   "choice": "D",
   "confidence": 0.82,
   "reasons": [
-    "Option A cannot be satisfied at H0. The crates contain no IME code: a Grep for WM_IME|ITextStore|ITfThreadMgr|ImmGetContext over D:\\flui\\crates returned 'No files found', and Win32 has no text_input() override. Gating the plugin seam on IME would make PlatformCapability (clipboard, haptics, dialogs) wait for TSF (W1-W2) and the Parley text-store (W4). It would reorder the migration with nothing gained for the seam.",
+    "Option A cannot be satisfied at H0. The crates contain no IME code: a Grep for WM_IME|ITextStore|ITfThreadMgr|ImmGetContext over crates returned 'No files found', and Win32 has no text_input() override. Gating the plugin seam on IME would make PlatformCapability (clipboard, haptics, dialogs) wait for TSF (W1-W2) and the Parley text-store (W4). It would reorder the migration with nothing gained for the seam.",
     "AGENTS.md says a gate is an xtask command plus a CI step under the ci aggregator. A human session with Japanese IME and Narrator cannot meet that, and Narrator offers no speech capture. So an 'H0 gate' built on it would not be enforced. At most it could be a status or release check.",
     "The plugin author's real risk is whether a third-party text widget can implement the pull text-store. That can be tested headless now as a conformance kit, and Chromium's mock-TSF unit tests show the pattern. It belongs at H0 and costs nothing on Windows.",
     "B leaves the existing automation unused. No CI job runs xtask device (ci.yml has windows-latest only at :953 gpu-test and :1053 platform-windows). The single-run B1 record would also go stale with nothing noticing.",
@@ -227,7 +227,7 @@ _Raw research, options, judge verdicts and verification for this question (2026-
   "choice": "D",
   "confidence": 0.8,
   "reasons": [
-    "Option A's gate cannot be met today. I re-checked: grep for WM_IME|ITextStore|ITfThreadMgr|ImmGetContext in D:\\flui\\crates returns 0 matches. An H0 gate tied to TSF would stall the plugin seam behind W1-W2 TSF and W4 Parley text-store work. The seam (clipboard, haptics, dialogs; flui-global-architecture.md:304, :633) has no IME dependency.",
+    "Option A's gate cannot be met today. I re-checked: grep for WM_IME|ITextStore|ITfThreadMgr|ImmGetContext in crates returns 0 matches. An H0 gate tied to TSF would stall the plugin seam behind W1-W2 TSF and W4 Parley text-store work. The seam (clipboard, haptics, dialogs; flui-global-architecture.md:304, :633) has no IME dependency.",
     "The plugin author's real risk is whether a third-party widget can implement the pull text-store. A headless conformance kit that runs on every PR tests that directly. It follows Chromium, which covers its TSF text store with mock-TSF unit tests and leaves real-IME behavior to manual QA.",
     "Under AGENTS.md a human session can never be a merge gate; a gate must be an xtask command plus a CI step. So the live Japanese IME + Narrator record belongs in the release/status layer: exit B1 and the Windows row of BETA.md, which is 'experimental' today (docs/BETA.md:122).",
     "For one maintainer, re-recording when relevant paths change or a release is cut costs far less than a 30-day calendar rule (about 12 sessions a year), and each re-record is tied to real risk. That gives plan.md:60's 'fresh evidence' metric a definition someone can maintain.",

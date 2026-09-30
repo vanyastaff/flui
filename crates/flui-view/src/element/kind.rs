@@ -178,9 +178,8 @@ where
 {
 }
 
-// Animated + ParentData wiring — resolves the Phase 1 `create_element` blocker
-// (these two families previously had no `ElementKind` mapping; see
-// docs/ROADMAP-TRACKER.md N5.1). `AnimatedView: StatefulView` and
+// Animated + ParentData wiring: these two families map onto the existing
+// `ElementKind` variants. `AnimatedView: StatefulView` and
 // `AnimatedBehavior` composes the stateful body, so an `AnimatedElement` routes
 // to the `Stateful` variant — its `AnimationListener` is captured into the
 // variant's `animation_listener` field at `create_element` time (FR-020), NOT

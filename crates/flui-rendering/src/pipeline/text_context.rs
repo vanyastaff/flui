@@ -40,6 +40,25 @@ impl TextContextHandle {
         Self(Rc::new(RefCell::new(context)))
     }
 
+    /// A context over a font collection of its own, holding only the bundled
+    /// faces, for a pipeline that is a realm by itself: a hot-reload plugin
+    /// image, or a test with no app behind it. A realm's presentations share
+    /// the context the realm builds over the app's collection instead, so a
+    /// face the app registers reaches their layout.
+    #[must_use]
+    pub fn standalone() -> Self {
+        Self::new(TextContext::new(&FontCollection::new()))
+    }
+
+    /// The source a layout or query context lends this context through, so a
+    /// test can drive a raw entry point such as
+    /// [`RenderEntry::layout_leaf_only`](crate::storage::RenderEntry::layout_leaf_only).
+    #[cfg(any(test, feature = "testing"))]
+    #[must_use]
+    pub fn source(&self) -> TextSource<'_> {
+        TextSource::new(&self.0)
+    }
+
     /// Whether `a` and `b` share one context.
     #[cfg(any(test, feature = "testing"))]
     #[must_use]
@@ -55,7 +74,7 @@ impl TextContextHandle {
     /// re-enters another on the same realm could cause.
     #[cfg(any(test, feature = "testing"))]
     pub fn with<R>(&self, f: impl FnOnce(&mut TextContext) -> R) -> R {
-        f(&mut lend(&self.0))
+        f(&mut lend(TextSource::new(&self.0)))
     }
 
     /// The shared cell layout borrows from.
@@ -112,35 +131,23 @@ impl fmt::Debug for TextSource<'_> {
     }
 }
 
-/// The text context lent to one measurement: the realm's, or one a context
-/// built for itself when its pipeline has none.
+/// The realm's text context lent to one measurement.
 ///
 /// Dereferences to `&mut TextContext`, so a render object passes
 /// `&mut ctx.text()` straight to `TextPainter`.
-pub struct TextCx<'a>(Lent<'a>);
-
-enum Lent<'a> {
-    Shared(RefMut<'a, TextContext>),
-    Own(&'a mut TextContext),
-}
+pub struct TextCx<'a>(RefMut<'a, TextContext>);
 
 impl Deref for TextCx<'_> {
     type Target = TextContext;
 
     fn deref(&self) -> &TextContext {
-        match &self.0 {
-            Lent::Shared(context) => context,
-            Lent::Own(context) => context,
-        }
+        &self.0
     }
 }
 
 impl DerefMut for TextCx<'_> {
     fn deref_mut(&mut self) -> &mut TextContext {
-        match &mut self.0 {
-            Lent::Shared(context) => context,
-            Lent::Own(context) => context,
-        }
+        &mut self.0
     }
 }
 
@@ -155,107 +162,45 @@ impl fmt::Debug for TextCx<'_> {
     clippy::expect_used,
     reason = "a second loan is a re-entrant measurement, an invariant violation"
 )]
-pub(crate) fn lend(cell: &RefCell<TextContext>) -> TextCx<'_> {
-    TextCx(Lent::Shared(cell.try_borrow_mut().expect(
-        "BUG: the realm's text context is lent to one measurement at a time",
-    )))
-}
-
-/// A context over a collection of its own, for a measurement with no realm
-/// behind it: a pipeline that was never given the realm's context, or a
-/// context a test built by hand.
-pub(crate) fn private_context() -> TextContext {
-    TextContext::new(&FontCollection::new())
-}
-
-/// Where a layout or query context gets the text context it lends: the
-/// pipeline's, or one of its own built on first use.
-#[derive(Default)]
-pub(crate) struct TextSlot<'a> {
-    source: Option<TextSource<'a>>,
-    own: Option<Box<TextContext>>,
-}
-
-impl<'a> TextSlot<'a> {
-    /// A slot that lends `source`, or its own context when `None`.
-    pub(crate) fn new(source: Option<TextSource<'a>>) -> Self {
-        Self { source, own: None }
-    }
-
-    /// The pipeline's context, if the slot has one.
-    pub(crate) fn source(&self) -> Option<TextSource<'a>> {
-        self.source
-    }
-
-    /// Lends `source` when given, else the pipeline's context, else the
-    /// slot's own.
-    pub(crate) fn lend_from<'s>(&'s mut self, source: Option<TextSource<'s>>) -> TextCx<'s> {
-        match source.or(self.source) {
-            Some(source) => lend(source.cell()),
-            None => self.lend_own(),
-        }
-    }
-
-    /// Lends the pipeline's context, or the slot's own.
-    pub(crate) fn lend(&mut self) -> TextCx<'_> {
-        self.lend_from(None)
-    }
-
-    fn lend_own(&mut self) -> TextCx<'_> {
-        TextCx(Lent::Own(
-            self.own.get_or_insert_with(|| Box::new(private_context())),
-        ))
-    }
-}
-
-impl fmt::Debug for TextSlot<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TextSlot")
-            .field("shared", &self.source.is_some())
-            .field("own", &self.own.is_some())
-            .finish()
-    }
+pub(crate) fn lend(source: TextSource<'_>) -> TextCx<'_> {
+    TextCx(
+        source
+            .cell()
+            .try_borrow_mut()
+            .expect("BUG: the realm's text context is lent to one measurement at a time"),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use static_assertions::assert_not_impl_any;
 
-    use super::{TextContextHandle, TextSlot, TextSource, private_context};
+    use super::{TextContextHandle, lend};
 
     assert_not_impl_any!(TextContextHandle: Send, Sync);
 
     #[test]
     fn a_clone_shares_the_context() {
-        let handle = TextContextHandle::new(private_context());
+        let handle = TextContextHandle::standalone();
         assert!(TextContextHandle::ptr_eq(&handle, &handle.clone()));
         assert!(!TextContextHandle::ptr_eq(
             &handle,
-            &TextContextHandle::new(private_context())
+            &TextContextHandle::standalone()
         ));
     }
 
     #[test]
-    fn a_slot_lends_the_shared_context_and_releases_it() {
-        let handle = TextContextHandle::new(private_context());
-        let mut slot = TextSlot::new(Some(TextSource::new(handle.cell())));
-        let lent = slot.lend();
+    fn a_loan_holds_the_shared_context_until_it_drops() {
+        let handle = TextContextHandle::standalone();
+        let lent = lend(handle.source());
         assert!(
             handle.cell().try_borrow_mut().is_err(),
-            "the slot lends the shared context"
+            "the loan borrows the shared context"
         );
         drop(lent);
         assert!(
             handle.cell().try_borrow_mut().is_ok(),
             "the loan ends with the TextCx"
         );
-    }
-
-    #[test]
-    fn a_slot_without_a_source_lends_one_context_of_its_own() {
-        let mut slot = TextSlot::new(None);
-        let first = std::ptr::from_ref(&*slot.lend()).addr();
-        let second = std::ptr::from_ref(&*slot.lend()).addr();
-        assert_eq!(first, second, "built once, on first use");
     }
 }

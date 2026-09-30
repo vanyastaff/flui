@@ -52,7 +52,10 @@ fn archival_roots_are_the_ones_agents_md_lists() {
     let agents = crate::util::read("AGENTS.md").expect("AGENTS.md");
     assert_eq!(archival_drift(&agents), Ok(()));
     // a root added to the prose alone is drift
-    let widened = agents.replace("`openspec`)", "`openspec`, `docs/drafts`)");
+    let widened = agents.replace(
+        "`docs/{plans,research}`)",
+        "`docs/{plans,research}`, `docs/drafts`)",
+    );
     assert_ne!(widened, agents, "the list's last item moved");
     let why = archival_drift(&widened).expect_err("drift is reported");
     assert!(why.contains("docs/drafts/"), "{why}");

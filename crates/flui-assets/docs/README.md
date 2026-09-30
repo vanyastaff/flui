@@ -222,7 +222,7 @@ Full API documentation available at:
 Located in `crates/flui-assets/examples/`:
 
 - `assets_basic_usage.rs` - Simple font loading
-- (More examples coming soon)
+- `network_loader.rs` - Loading assets over HTTP/HTTPS (`network` feature)
 
 Run with:
 ```bash

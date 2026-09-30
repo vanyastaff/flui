@@ -52,7 +52,7 @@ impl RenderBox for SemanticLeaf {
 }
 
 fn binding_with(leaf: SemanticLeaf) -> HeadlessBinding {
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let root = owner.insert::<BoxProtocol>(Box::new(leaf));
     owner.set_root_id(Some(root));
     owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));

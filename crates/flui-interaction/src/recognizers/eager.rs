@@ -245,6 +245,3 @@ impl GestureArenaMember for EagerGestureRecognizer {
         self.state.clear_initial_contact();
     }
 }
-
-#[cfg(test)]
-mod tests {}

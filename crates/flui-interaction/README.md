@@ -414,7 +414,6 @@ FLUI separates executable UI ownership from data-plane routing:
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — Internal design
 - [docs/HIT_TESTING.md](docs/HIT_TESTING.md) — Hit testing guide
 - [docs/GESTURES.md](docs/GESTURES.md) — Gesture recognition details
-- [docs/INTEGRATION.md](docs/INTEGRATION.md) — Integration with other crates
 
 ---
 

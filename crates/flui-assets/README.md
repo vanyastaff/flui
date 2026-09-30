@@ -257,10 +257,6 @@ cargo run -p flui-assets --example assets_basic_usage
 cargo run -p flui-assets --example assets_basic_usage --features images
 ```
 
-## API Compliance
-
-This crate achieves **96% compliance** with Rust API Guidelines (106/110 points).
-
 ## Documentation
 
 ### Quick Links

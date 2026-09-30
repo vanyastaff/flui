@@ -746,7 +746,7 @@ where
         child_count: usize,
         child_parent_data: &[Option<&dyn crate::parent_data::ParentData>],
         child_query: &mut dyn FnMut(usize, crate::storage::IntrinsicDimension, f64) -> f64,
-        text: Option<crate::pipeline::TextSource<'_>>,
+        text: crate::pipeline::TextSource<'_>,
     ) -> f64 {
         // The intrinsics bridge: wrap the driver's memoizing child
         // recursion in the typed ctx and dispatch the dimension to the
@@ -776,7 +776,7 @@ where
             usize,
             crate::context::DryLayoutChildRequest,
         ) -> crate::context::DryLayoutChildResponse,
-        text: Option<crate::pipeline::TextSource<'_>>,
+        text: crate::pipeline::TextSource<'_>,
     ) -> crate::protocol::ProtocolGeometry<BoxProtocol> {
         let mut ctx =
             crate::context::BoxDryLayoutCtx::new(child_count, child_parent_data, child_query, text);
@@ -793,7 +793,7 @@ where
             usize,
             crate::context::DryBaselineChildRequest,
         ) -> crate::context::DryBaselineChildResponse,
-        text: Option<crate::pipeline::TextSource<'_>>,
+        text: crate::pipeline::TextSource<'_>,
     ) -> Option<f64> {
         let mut ctx = crate::context::BoxDryBaselineCtx::new(
             child_count,
@@ -925,15 +925,4 @@ where
     fn child_parent_data_type_id(&self) -> std::any::TypeId {
         std::any::TypeId::of::<T::ParentData>()
     }
-}
-
-// ============================================================================
-// Tests
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-
-    // BoxHitTestResult and BoxHitTestEntry tests are now in
-    // hit_testing/result.rs
 }

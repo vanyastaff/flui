@@ -1,8 +1,7 @@
 //! Node-bound cross-thread invalidation.
 //!
-//! Per docs/designs/2026-05-20-mythos-flui-rendering-redesign.md Section 7
-//! and Section 8. The pipeline owner is single-owner-mutable; nothing else
-//! holds `&mut PipelineOwner`. But background work (async asset loader
+//! The pipeline owner is single-owner-mutable; nothing else holds
+//! `&mut PipelineOwner`. But background work (async asset loader
 //! completing, scheduler timer firing, semantics platform callback) still
 //! needs to say "this render object is dirty". That request crosses the
 //! owner boundary only through [`RenderInvalidationHandle`], which is stamped for one

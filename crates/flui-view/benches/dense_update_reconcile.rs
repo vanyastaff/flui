@@ -124,7 +124,9 @@ fn children(fan_out: usize, revision: usize, order: UpdateOrder) -> Vec<BoxedVie
 }
 
 fn setup(fan_out: usize, update_order: UpdateOrder) -> Fixture {
-    let pipeline = PipelineCell::new(PipelineOwner::new());
+    let pipeline = PipelineCell::new(PipelineOwner::new(
+        flui_rendering::TextContextHandle::standalone(),
+    ));
     let mut owner = BuildOwner::new();
     let mut tree = ElementTree::new();
     let initial = DenseHost {

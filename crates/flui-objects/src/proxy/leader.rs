@@ -18,7 +18,8 @@
 //! own GPU rendering (`LayerRender<LeaderLayer>`,
 //! `crates/flui-engine/src/layer_render.rs`) is already complete and
 //! self-contained — it needs no further engine work once this node pushes
-//! the layer. See `docs/research/2026-07-01-render-leader-follower-layer-plan.md`.
+//! the layer. See the
+//! [design research](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-07-01-render-leader-follower-layer-plan.md).
 //!
 //! # Rust-native shape
 //!
