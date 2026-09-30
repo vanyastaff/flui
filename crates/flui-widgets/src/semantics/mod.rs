@@ -33,7 +33,7 @@ use std::any::Any;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_interaction::{LocalPayloadTarget, resolve_local_payload};
+use flui_interaction::{InteractionDispatchError, LocalPayloadTarget, resolve_local_payload};
 use flui_objects::{
     RenderExcludeSemantics, RenderIndexedSemantics, RenderMergeSemantics,
     RenderSemanticsAnnotations, SemanticsActionRoute,
@@ -46,8 +46,8 @@ use flui_rendering::{
     },
 };
 use flui_view::{
-    Child, EventCx, EventOutcome, IntoView, RenderObjectContext, RenderView, WriterSource,
-    impl_render_view,
+    Child, EventCx, EventOutcome, IntoView, RenderObjectContext, RenderObjectContextError,
+    RenderView, WriterSource, impl_render_view,
 };
 
 use crate::support::{event_callback, ref_callback, value_callback};
@@ -740,9 +740,20 @@ impl Semantics {
         };
         match ctx.replace_local_payload(existing.target(), cell) {
             Ok(()) => Some(existing),
-            Err(error) => {
-                tracing::debug!(?error, "semantics action table was gone; registering anew");
+            Err(RenderObjectContextError::Interaction(InteractionDispatchError::TargetGone)) => {
+                tracing::debug!("semantics action table was gone; registering anew");
                 self.register_actions(ctx)
+            }
+            Err(error) => {
+                // The lane cannot be reached from this update, so it could
+                // neither register a new table nor release the old one. Keep
+                // the existing route: its ticket stays the one unmount
+                // releases, rather than orphaning it in the lane.
+                tracing::debug!(
+                    ?error,
+                    "semantics action table not replaced: the owner lane is unreachable"
+                );
+                Some(existing)
             }
         }
     }

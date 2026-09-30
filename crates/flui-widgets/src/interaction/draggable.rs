@@ -139,10 +139,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::{Matrix4, Offset};
 use flui_interaction::{
-    DragUpdateDetails, GestureRecognizer, HitTestEntry, HitTestHandle, LocalPayloadTarget,
-    MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle,
-    MultiDragStartCallback, MultiDragUpdateDetails, PointerEventExt as _, PointerId, Velocity,
-    resolve_local_payload,
+    DragUpdateDetails, GestureRecognizer, HitTestEntry, HitTestHandle, InteractionDispatchError,
+    LocalPayloadTarget, MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,
+    MultiDragHandle, MultiDragStartCallback, MultiDragUpdateDetails, PointerEventExt as _,
+    PointerId, Velocity, resolve_local_payload,
 };
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
@@ -829,33 +829,51 @@ fn localize(global: Offset<f64>, transform: Option<&Matrix4>) -> Offset<f64> {
 ///
 /// A target tags its node with a lane ticket, resolved here to its
 /// owner-local slot; this runs inside pointer dispatch, where the realm's
-/// lane is active. A ticket that no longer resolves (the target unmounted
-/// since the hit test) is skipped, as a foreign payload is.
+/// lane is active. A ticket that no longer resolves because its target
+/// unmounted since the hit test is skipped, as a foreign payload is. Any
+/// other lane error means the question could not be asked at all (no realm
+/// entered, or another realm's), so the answer is `None`, not an empty list:
+/// see [`DragSession::discover`].
 fn drag_targets_on(
     path: &[HitTestEntry],
     data: &ErasedDragData,
     global: Offset<f64>,
-) -> Vec<EnteredTarget> {
-    path.iter()
-        .filter_map(|entry| {
-            let target = *entry.metadata_as::<LocalPayloadTarget>()?;
-            let payload = match resolve_local_payload(target) {
-                Ok(payload) => payload,
-                Err(error) => {
-                    tracing::debug!(?error, "drag-target ticket did not resolve; skipped");
-                    return None;
-                }
-            };
-            let slot = payload.downcast::<DragTargetSlot>().ok()?; // a lane payload is `dyn Any` by construction; this is the `metaData is _DragTargetState` test of the oracle's `_getDragTargets`.
-            slot.accepts_data_type(data).then(|| EnteredTarget {
+) -> Option<Vec<EnteredTarget>> {
+    let mut targets = Vec::new();
+    for entry in path {
+        let Some(target) = entry.metadata_as::<LocalPayloadTarget>().copied() else {
+            continue;
+        };
+        let payload = match resolve_local_payload(target) {
+            Ok(payload) => payload,
+            Err(InteractionDispatchError::TargetGone) => {
+                tracing::debug!("drag-target ticket outlived its target; skipped");
+                continue;
+            }
+            Err(error) => {
+                tracing::debug!(
+                    ?error,
+                    "drag-target discovery skipped: the lane could not answer"
+                );
+                return None;
+            }
+        };
+        // A lane payload is `dyn Any` by construction; this is the
+        // `metaData is _DragTargetState` test of the oracle's `_getDragTargets`.
+        let Ok(slot) = payload.downcast::<DragTargetSlot>() else {
+            continue;
+        };
+        if slot.accepts_data_type(data) {
+            targets.push(EnteredTarget {
                 at: DragPosition {
                     global,
                     local: localize(global, entry.transform.as_ref()),
                 },
                 slot,
-            })
-        })
-        .collect()
+            });
+        }
+    }
+    Some(targets)
 }
 
 /// What a drag reads from its `Draggable` exactly once, when it starts.
@@ -1002,7 +1020,7 @@ impl DragSession {
         let probe_at = global + self.start.feedback_offset;
         match handle.hit_test_at(probe_at) {
             Ok(snapshot) => {
-                let targets = drag_targets_on(snapshot.path(), &data, global);
+                let targets = drag_targets_on(snapshot.path(), &data, global)?;
                 Some((data, targets))
             }
             Err(error) => {
