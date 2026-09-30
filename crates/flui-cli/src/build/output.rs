@@ -9,33 +9,34 @@
 //! project level keeps projects that share one target-dir apart.
 //!
 //! A build writes to [`default_output_dir`] unless `--output` names another
-//! directory. The default is always the CLI's to remove. An `--output`
-//! directory is a build's only if the build found it missing or empty: the
-//! build then leaves an [`OWNER_MARKER`] in it naming the owner (a digest of
-//! the platform and the project, so the marker carries no local path into a
-//! deliverable), and records the claim in the project's output root. `flui
-//! clean` removes a recorded directory only while the marker still names
-//! the same owner. A directory that held anything before the first build
-//! into it (`--output .`, `--output src`, a shared folder) is never claimed,
-//! so it is never removed. A build refuses a directory whose marker names
-//! another platform or project: its output would land inside a directory
-//! the other build's clean removes whole.
+//! directory outside the output root. The default is always the CLI's to
+//! remove. An `--output` directory is a build's only if the build found it
+//! missing or empty and created its [`OWNER_MARKER`] first (exclusively, so
+//! of builds racing for one directory exactly one wins); the marker names
+//! the owner as a digest of the platform and the project, so it carries no
+//! local path into a deliverable. `flui clean` removes a claimed directory
+//! only while the marker still names the same owner. A directory that held
+//! anything before the first build into it (`--output .`, `--output src`, a
+//! shared folder) is never claimed, so it is never removed; one whose marker
+//! names another platform or project is refused, since its output would land
+//! inside a directory the other build's clean removes whole.
 //!
-//! The marker is the proof of ownership; the record is only an index of
-//! where to look. Each claim is a file of its own holding the directory's
-//! path byte for byte, so concurrent builds never overwrite each other's
-//! claims and any path the OS accepts survives the round trip. Losing or
-//! damaging the record (`cargo clean`, deleting `target/` by hand, a
-//! truncated write) never fails a build or a clean: an unreadable claim is
-//! skipped, a claim that cannot be written is skipped, and the next build
-//! into a claimed directory records it again.
+//! The marker is the proof of ownership; the claims are only an index of
+//! where to look. They live in the project, in `.flui/out-dirs/<platform>/`,
+//! not in the target-dir, so `cargo clean`, a new target-dir or a renamed
+//! package cannot lose them. Each claim is a file of its own holding the
+//! directory's path byte for byte, so concurrent builds never overwrite each
+//! other's claims and any path the OS accepts survives the round trip.
+//! Losing or damaging the claims never fails a build or a clean: an
+//! unreadable claim is skipped, a claim that cannot be written is skipped,
+//! and the next build into a claimed directory records it again.
 //!
-//! A clean goes on past a directory it fails to remove: it removes the rest,
-//! keeps the failed claim for the next clean to retry, and reports the first
-//! failure once everything else is done.
+//! A clean goes on past a directory it fails to remove or inspect: it removes
+//! the rest, keeps that claim for the next clean to retry, and reports the
+//! first failure once everything else is done.
 
 use std::ffi::{OsStr, OsString};
-use std::io;
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 
 use crate::build::platform::BuilderContext;
@@ -48,9 +49,9 @@ pub(crate) const OWNER_MARKER: &str = ".flui-out";
 /// `<target-dir>/flui-out/<project>`, with the target-dir `cargo metadata`
 /// reports and the project named after the package whose manifest is in
 /// `workspace_root` (the directory's name for a virtual workspace), not
-/// after an enclosing workspace, so members of one workspace stay apart. Two projects of one name sharing a
-/// target-dir share this directory, as their same-named binaries share
-/// `<target-dir>/<profile>`. Where cargo cannot read the project, the
+/// after an enclosing workspace, so members of one workspace stay apart.
+/// Two projects of one name sharing a target-dir share this directory, as
+/// their same-named binaries share `<target-dir>/<profile>`. Where cargo cannot read the project, the
 /// target-dir is `<workspace_root>/target`, cargo's own default.
 #[must_use]
 pub(crate) fn project_output_root(workspace_root: &Path) -> PathBuf {
@@ -100,12 +101,12 @@ pub(crate) fn default_output_dir(workspace_root: &Path, platform: &str) -> PathB
     project_output_root(workspace_root).join(platform)
 }
 
-/// The directory of claims builds for `platform` recorded, one file per
-/// claimed `--output` directory. It sits beside the default output
-/// directory, not in it, so cleaning that directory keeps the claims until
-/// the claimed directories are gone too.
-fn claims_dir(output_root: &Path, platform: &str) -> PathBuf {
-    output_root.join(format!("{platform}.out-dirs"))
+/// The directory of claims builds for `platform` of the project at
+/// `workspace_root` recorded, one file per claimed `--output` directory. It
+/// is in the project, not the target-dir, so `cargo clean`, a new
+/// target-dir or a renamed package keeps it.
+fn claims_dir(workspace_root: &Path, platform: &str) -> PathBuf {
+    workspace_root.join(".flui").join("out-dirs").join(platform)
 }
 
 /// What the owner marker holds: a digest of the platform and the canonical
@@ -149,8 +150,9 @@ fn owned_by(dir: &Path, owner: &[u8]) -> io::Result<bool> {
 /// # Errors
 ///
 /// Returns the I/O error of creating the directory, resolving the project or
-/// writing the marker. Recording the claim is best effort and never fails the
-/// build.
+/// writing the marker, and refuses an `--output` inside the output root or
+/// one another platform or project claimed. Recording the claim is best
+/// effort and never fails the build.
 pub(crate) fn prepare_output_dir(ctx: &BuilderContext) -> io::Result<()> {
     let platform = ctx.platform.name();
     let dir = &ctx.output_dir;
@@ -159,32 +161,43 @@ pub(crate) fn prepare_output_dir(ctx: &BuilderContext) -> io::Result<()> {
         return std::fs::create_dir_all(dir);
     }
 
+    // The output root holds every platform's default output, which a clean
+    // removes whole and a build never checks for markers: an `--output` in
+    // there could claim another platform's default, or be removed with one.
+    std::fs::create_dir_all(&output_root)?;
+    let reserved = std::fs::canonicalize(&output_root)?;
+    if resolve(dir)?.starts_with(&reserved) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "--output {} is inside {}, where builds keep their default outputs; choose a directory outside it",
+                dir.display(),
+                output_root.display()
+            ),
+        ));
+    }
+
     let owner = owner(&std::fs::canonicalize(&ctx.workspace_root)?, platform);
-    let claimable = match std::fs::read_dir(dir).map(|mut entries| entries.next().is_none()) {
-        Ok(true) => true,
-        Ok(false) if owned_by(dir, &owner)? => true,
-        // A marker naming someone else: refuse, or that owner's clean would
-        // remove this build's output along with its own.
-        Ok(false) if dir.join(OWNER_MARKER).exists() => {
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                format!(
-                    "{} holds the output of another platform or project; build into another directory",
-                    dir.display()
-                ),
-            ));
-        }
-        Ok(false) => false,
+    let was_empty = match std::fs::read_dir(dir).map(|mut entries| entries.next().is_none()) {
+        Ok(empty) => empty,
         Err(error) if error.kind() == io::ErrorKind::NotFound => true,
         Err(error) => return Err(error),
     };
     std::fs::create_dir_all(dir)?;
-    if !claimable {
+    let claimed = if was_empty {
+        claim(dir, &owner)?
+    } else if owned_by(dir, &owner)? {
+        true
+    } else if dir.join(OWNER_MARKER).exists() {
+        return Err(claimed_by_another(dir));
+    } else {
+        false
+    };
+    if !claimed {
         return Ok(());
     }
-    std::fs::write(dir.join(OWNER_MARKER), &owner)?;
 
-    let claims = claims_dir(&output_root, platform);
+    let claims = claims_dir(&ctx.workspace_root, platform);
     if let Err(error) = record_claim(&claims, dir) {
         crate::ui::debug(format!(
             "could not record {} in {}: {error}; `flui clean` will find it after the next build",
@@ -193,6 +206,66 @@ pub(crate) fn prepare_output_dir(ctx: &BuilderContext) -> io::Result<()> {
         ));
     }
     Ok(())
+}
+
+/// Take the empty `dir` for `owner` by creating its marker exclusively. Of
+/// builds racing for one directory exactly one creates the marker; each
+/// other finds it and is refused unless it names the same owner (a build
+/// that reads it before the winner has written it is refused too, which
+/// errs on the side of never sharing).
+fn claim(dir: &Path, owner: &[u8]) -> io::Result<bool> {
+    let marker = dir.join(OWNER_MARKER);
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&marker)
+    {
+        Ok(mut file) => file.write_all(owner).map(|()| true),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            if owned_by(dir, owner)? {
+                Ok(true)
+            } else {
+                Err(claimed_by_another(dir))
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn claimed_by_another(dir: &Path) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        format!(
+            "{} holds the output of another platform or project; build into another directory",
+            dir.display()
+        ),
+    )
+}
+
+/// `path` made absolute, with its longest existing ancestor canonicalized,
+/// so a directory that does not exist yet compares with canonical paths.
+fn resolve(path: &Path) -> io::Result<PathBuf> {
+    let absolute = std::path::absolute(path)?;
+    let mut existing = absolute.as_path();
+    let mut missing = Vec::new();
+    loop {
+        match std::fs::canonicalize(existing) {
+            Ok(canonical) => {
+                return Ok(missing
+                    .iter()
+                    .rev()
+                    .fold(canonical, |path, name| path.join(name)));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let (Some(parent), Some(name)) = (existing.parent(), existing.file_name()) else {
+                    return Ok(absolute);
+                };
+                missing.push(name.to_owned());
+                existing = parent;
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 /// Record `dir` as a file of its own in `claims`, named after a hash of its
@@ -253,12 +326,12 @@ pub(crate) fn remove_dir_all(dir: &Path) -> io::Result<()> {
 }
 
 /// Remove what builds for `platform` of the project at `workspace_root`
-/// wrote under `output_root` (its [`project_output_root`]): every recorded
-/// `--output` directory whose marker still names this platform of this
-/// project and that is neither the project nor one of its ancestors, then
-/// the default output directory. A claim is forgotten once its directory is
-/// removed or no longer this build's; a claim whose directory could not be
-/// removed is kept, and the clean goes on with the rest.
+/// wrote: every claimed `--output` directory whose marker still names this
+/// platform of this project and that is neither the project nor one of its
+/// ancestors, then the default output directory under `output_root` (its
+/// [`project_output_root`]). A claim is forgotten once its directory is
+/// removed, gone or no longer this build's; a claim whose directory could not
+/// be inspected or removed is kept, and the clean goes on with the rest.
 pub(crate) fn clean_output_dirs(
     workspace_root: &Path,
     output_root: &Path,
@@ -266,17 +339,36 @@ pub(crate) fn clean_output_dirs(
     remove: RemoveDir,
 ) -> Cleaned {
     let mut cleaned = Cleaned::default();
-    let claims = claims_dir(output_root, platform);
+    let claims = claims_dir(workspace_root, platform);
     match std::fs::canonicalize(workspace_root) {
         Ok(project) => {
             let owner = owner(&project, platform);
             for (claim, dir) in read_claims(&claims) {
-                // A claim whose directory is gone (or whose bytes name no
-                // directory) has nothing left to remove.
-                let Some(dir) = dir.filter(|dir| dir.is_dir() && !project.starts_with(dir)) else {
+                let Some(dir) = dir else {
                     forget(&claim);
                     continue;
                 };
+                match std::fs::metadata(&dir) {
+                    Ok(meta) if meta.is_dir() && !project.starts_with(&dir) => {}
+                    // Not a directory, or the project itself: nothing to remove.
+                    Ok(_) => {
+                        forget(&claim);
+                        continue;
+                    }
+                    // Gone, or bytes that name no path.
+                    Err(error) if is_gone(&error) => {
+                        forget(&claim);
+                        continue;
+                    }
+                    // Unreachable is not gone: keep the claim to retry.
+                    Err(error) => {
+                        cleaned.fail(io::Error::new(
+                            error.kind(),
+                            format!("could not inspect {}: {error}", dir.display()),
+                        ));
+                        continue;
+                    }
+                }
                 match owned_by(&dir, &owner) {
                     Ok(true) => {
                         let result = remove(&dir);
@@ -305,6 +397,18 @@ pub(crate) fn clean_output_dirs(
     // this and stays.
     let _ = std::fs::remove_dir(&claims);
     cleaned
+}
+
+/// Whether a metadata error says the path is not there (or cannot be one),
+/// as opposed to being there but out of reach.
+fn is_gone(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::NotFound
+            | io::ErrorKind::NotADirectory
+            | io::ErrorKind::InvalidFilename
+            | io::ErrorKind::InvalidInput
+    )
 }
 
 fn forget(claim: &Path) {
@@ -515,15 +619,15 @@ mod tests {
         let out = tmp.path().join("dist");
         let ctx = web_ctx(&root, Some(out.clone()));
         prepare_output_dir(&ctx).expect("first build");
-        std::fs::remove_dir_all(root.join("target")).expect("delete target by hand");
-        prepare_output_dir(&ctx).expect("build after target is gone");
+        std::fs::remove_dir_all(root.join(".flui")).expect("delete the claims by hand");
+        prepare_output_dir(&ctx).expect("build after the claims are gone");
         clean(&root).expect("clean");
         assert!(!out.exists(), "the rebuilt claim was not cleaned");
     }
 
     fn a_damaged_record_breaks_neither_build_nor_clean() {
         let (tmp, root) = project();
-        let claims = claims_dir(&project_output_root(&root), "web");
+        let claims = claims_dir(&root, "web");
         std::fs::create_dir_all(&claims).expect("claims dir");
         std::fs::write(claims.join("garbage"), [0xff, 0xfe, b'\n', 0x00]).expect("garbage claim");
         let out = tmp.path().join("dist");
@@ -539,7 +643,7 @@ mod tests {
         let (tmp, root) = project();
         // A file where the claims directory belongs: reading and writing
         // claims both fail.
-        let claims = claims_dir(&project_output_root(&root), "web");
+        let claims = claims_dir(&root, "web");
         std::fs::create_dir_all(claims.parent().expect("parent")).expect("output root");
         std::fs::write(&claims, "").expect("claims path taken");
         let out = tmp.path().join("dist");
@@ -594,7 +698,7 @@ mod tests {
     fn concurrent_claims_are_all_recorded() {
         const BUILDS: usize = 16;
         let (tmp, root) = project();
-        let claims = claims_dir(&project_output_root(&root), "web");
+        let claims = claims_dir(&root, "web");
         let outs: Vec<PathBuf> = (0..BUILDS)
             .map(|build| {
                 let out = tmp.path().join(format!("dist-{build}"));
@@ -708,6 +812,102 @@ mod tests {
         );
     }
 
+    /// Claims outlive `cargo clean` (the target-dir removed) and a package
+    /// rename (a new output root): the next clean still finds them.
+    fn claims_survive_cargo_clean_and_a_rename() {
+        let (tmp, root) = project();
+        let manifest = |name: &str| {
+            format!(
+                "[workspace]\n[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n"
+            )
+        };
+        std::fs::write(root.join("Cargo.toml"), manifest("first")).expect("manifest");
+        std::fs::create_dir_all(root.join("src")).expect("src");
+        std::fs::write(root.join("src/lib.rs"), "").expect("lib");
+        let out = tmp.path().join("dist");
+        prepare_output_dir(&web_ctx(&root, Some(out.clone()))).expect("build");
+
+        std::fs::remove_dir_all(root.join("target")).expect("cargo clean");
+        std::fs::write(root.join("Cargo.toml"), manifest("second")).expect("rename");
+        clean(&root).expect("clean");
+        assert!(
+            !out.exists(),
+            "the claim was lost to cargo clean or the rename"
+        );
+    }
+
+    /// Two owners racing to claim one empty directory: exactly one wins and
+    /// the other is refused, every round.
+    fn racing_owners_claim_once() {
+        let (tmp, root) = project();
+        let project = std::fs::canonicalize(&root).expect("project");
+        let owners = [owner(&project, "web"), owner(&project, "desktop")];
+        for round in 0..200 {
+            let dir = tmp.path().join(format!("dist-{round}"));
+            std::fs::create_dir_all(&dir).expect("empty dir");
+            let barrier = std::sync::Barrier::new(owners.len());
+            let won: Vec<bool> = std::thread::scope(|scope| {
+                let handles: Vec<_> = owners
+                    .iter()
+                    .map(|owner| {
+                        let (dir, barrier) = (&dir, &barrier);
+                        scope.spawn(move || {
+                            barrier.wait();
+                            claim(dir, owner).unwrap_or(false)
+                        })
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|handle| handle.join().expect("claim thread"))
+                    .collect()
+            });
+            assert_eq!(
+                won.iter().filter(|won| **won).count(),
+                1,
+                "round {round}: {won:?} owners claimed one directory"
+            );
+        }
+    }
+
+    fn an_out_dir_inside_the_output_root_is_refused() {
+        let (_tmp, root) = project();
+        let desktop_default = project_output_root(&root).join("desktop");
+        assert!(
+            prepare_output_dir(&web_ctx(&root, Some(desktop_default.clone()))).is_err(),
+            "a web build claimed the desktop default output"
+        );
+        assert!(
+            !desktop_default.join(OWNER_MARKER).exists(),
+            "the refused build left a marker in the desktop default output"
+        );
+    }
+
+    /// A claimed directory whose parent cannot be searched: the clean reports
+    /// it and keeps the claim, and once the parent opens the next clean
+    /// removes it. (Unix only: a Windows ACL needs more than the standard
+    /// library to set.)
+    #[cfg(unix)]
+    fn an_unreachable_claim_is_kept() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let (tmp, root) = project();
+        let parent = tmp.path().join("locked");
+        let out = parent.join("dist");
+        prepare_output_dir(&web_ctx(&root, Some(out.clone()))).expect("prepare");
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o000)).expect("lock");
+        let unreachable = std::fs::metadata(&out).is_err();
+        let first = clean(&root);
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).expect("unlock");
+        if !unreachable {
+            // Running as root: permissions do not apply, nothing to observe.
+            return;
+        }
+        assert!(first.is_err(), "an unreachable claim was not reported");
+        assert!(out.is_dir(), "an unreachable claim's dir was removed");
+        clean(&root).expect("clean after unlock");
+        assert!(!out.exists(), "the claim was forgotten while unreachable");
+    }
+
     fn members_of_one_workspace_keep_apart() {
         let (tmp, _root) = project();
         let workspace = tmp.path().join("workspace");
@@ -755,6 +955,11 @@ mod tests {
 
     #[test]
     fn clean_removes_only_output_dirs_a_build_claimed() {
+        #[cfg(unix)]
+        crate::test_cases::run_cases(&[(
+            "an_unreachable_claim_is_kept",
+            an_unreachable_claim_is_kept,
+        )]);
         crate::test_cases::run_cases(&[
             (
                 "missing_out_dir_is_claimed_and_cleaned",
@@ -805,6 +1010,15 @@ mod tests {
             (
                 "an_unreadable_marker_keeps_the_claim",
                 an_unreadable_marker_keeps_the_claim,
+            ),
+            (
+                "claims_survive_cargo_clean_and_a_rename",
+                claims_survive_cargo_clean_and_a_rename,
+            ),
+            ("racing_owners_claim_once", racing_owners_claim_once),
+            (
+                "an_out_dir_inside_the_output_root_is_refused",
+                an_out_dir_inside_the_output_root_is_refused,
             ),
             (
                 "concurrent_claims_are_all_recorded",

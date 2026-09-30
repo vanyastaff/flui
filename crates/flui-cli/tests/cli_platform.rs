@@ -97,7 +97,8 @@ fn git_ignores(project: &std::path::Path, rel_path: &str) -> bool {
 /// root-project and `app` module outputs (the module one holds the APK
 /// `flui build android` copies out), the native libraries the builder
 /// copies in before Gradle runs, xcodebuild's output, and each build's
-/// deliverables under `<target-dir>/flui-out/<project>/<platform>`.
+/// deliverables under `<target-dir>/flui-out/<project>/<platform>`, and the
+/// CLI's record of claimed `--output` directories in `.flui/`.
 const BUILD_OUTPUTS: &[&str] = &[
     "platforms/android/.gradle/8.9/checksums/checksums.lock",
     "platforms/android/build/reports/problems/problems-report.html",
@@ -109,6 +110,7 @@ const BUILD_OUTPUTS: &[&str] = &[
     "target/flui-out/all-platforms/web/pkg/app_bg.wasm",
     "target/flui-out/all-platforms/web/index.html",
     "target/flui-out/all-platforms/desktop/all-platforms.exe",
+    ".flui/out-dirs/web/0000000000000000",
 ];
 
 /// Scaffolded or user-added source the builds read, which must stay

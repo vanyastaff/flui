@@ -25,11 +25,13 @@
   `<target-dir>/flui-out/<project>/<platform>/`, and each `--output` directory a build created (or found empty): the
   build leaves a `.flui-out` marker there naming the platform and project, a directory that held
   anything before the first build into it is never removed, and a build refuses a directory whose
-  marker names another platform or project. For web it removed `platforms/web/pkg/`, which no build writes.
+  marker names another platform or project, or that lies inside the output root. The record of
+  claimed directories lives in the project's `.flui/` (ignored by the generated `.gitignore`), so
+  `cargo clean` and a renamed package keep it. For web it removed `platforms/web/pkg/`, which no build writes.
   `flui clean` without `--platform` removes every platform's `--output` directories too, before
   `cargo clean` removes the record of them; `--deep` still adds what the platform build tools write
   in `platforms/`. The record of those directories is only an index: losing or damaging it
-  (`cargo clean`, deleting `target/` by hand) never fails a build or a clean, and the next build
+  never fails a build or a clean, and the next build
   into a claimed directory records it again.
   A directory `flui clean` cannot remove (an executable still running on Windows) no longer stops
   it: the rest, the other platforms and `cargo clean` still run, the failed claim is kept for the

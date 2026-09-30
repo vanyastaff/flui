@@ -54,8 +54,9 @@ pub(crate) fn execute(deep: bool, platform: Option<String>) -> CliResult<()> {
             return Err(failure.into());
         }
     } else {
-        // Build outputs first: the `--output` directories builds claimed are
-        // recorded under `target/`, which `cargo clean` removes.
+        // Build outputs first: the default outputs live in the target-dir
+        // `cargo clean` removes next, and the claimed `--output` directories
+        // go before it so one clean reports every removal.
         let spinner = ui::spinner();
         spinner.start("Cleaning build outputs...");
         let cleaned = clean_build_outputs(&std::env::current_dir()?, deep, remove_dir_all);
