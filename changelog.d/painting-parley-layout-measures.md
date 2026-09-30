@@ -6,6 +6,5 @@
 
 ### Added
 
-- `flui-painting`'s `parley-layout` feature: `TextPainter` measures size, baselines and intrinsic widths with Parley on the realm's `TextContext`; glyphs and carets still come from cosmic-text until ADR-0092 §10 step 5.
 - `TextContextHandle`, the realm's shared text context, and `TextCx`, the scoped loan a render object measures with: `BoxLayoutContext::text`, `BoxIntrinsicsCtx::text`, `BoxDryLayoutCtx::text` and `BoxDryBaselineCtx::text`.
 - `ParagraphSpec::max_lines` and `ParagraphLayout::content_widths` on the Parley path.

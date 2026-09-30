@@ -42,12 +42,14 @@
 //!
 //! # Determinism
 //!
-//! Text measurement resolves against the *host's* fonts, and widgets sized to
-//! their text inherit that: measured, the Cupertino demo's button came out
-//! 61.18 px wide on a host with fonts installed and 129.55 px on one without.
-//! [`pin_font_faces`] builds the process-wide font system from the faces this
-//! repository ships, once per process, so the committed geometry is
-//! reproducible off this machine. Everything else in the serialized form is
+//! Text is measured on the realm's font collection, which holds only the
+//! bundled faces, so the geometry does not depend on the host. The painted
+//! glyphs still come from the process-wide font system until ADR-0092 §10
+//! step 4b, and that one resolves against the *host's* fonts: before
+//! measurement moved, the Cupertino demo's button came out 61.18 px wide on a
+//! host with fonts installed and 129.55 px on one without. [`pin_font_faces`]
+//! builds the process-wide font system from the faces this repository ships,
+//! once per process, so the committed paint is reproducible off this machine. Everything else in the serialized form is
 //! documented stable: two-decimal floats, insertion-ordered children, no
 //! hash-map iteration.
 //!
@@ -104,8 +106,8 @@ const SHOT_HEIGHT: f64 = 760.0;
 /// Pins the shared font database to the faces this repository ships.
 ///
 /// Once per process: `cosmic-text` caches shaping per `FontSystem`, so the
-/// face set has to be settled before the first measurement, and every test in
-/// this binary shares that process.
+/// face set has to be settled before the first paragraph is shaped, and every
+/// test in this binary shares that process.
 fn pin_fonts() {
     static PIN: Once = Once::new();
     PIN.call_once(|| {

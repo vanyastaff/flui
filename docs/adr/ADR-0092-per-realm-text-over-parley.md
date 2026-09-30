@@ -11,7 +11,9 @@
   `parley-layout`; registration re-layout is 3b. §10 step 3b's pipeline half landed: every
   `PipelineOwner` is built with a `TextContextHandle`, nothing in layout, intrinsics or dry
   queries builds a context of its own, and the hot-reload plugin pipeline measures over its own
-  image's collection; the font-collection-changed event is the other half. A passed gate is evidence, not shipped
+  image's collection; the font-collection-changed event is the other half. §10 step 4a landed:
+  Parley measures in the default build; the `parley` and `parley-layout` features are gone;
+  paint stays on cosmic-text until step 4b and carets until step 5. A passed gate is evidence, not shipped
   behaviour: the record is accepted section by section as the text migration lands §§1–7, and
   gates 2–8 bind those changes. The three supersessions below take effect together, when §§1–5
   are accepted; a section accepted before then supersedes nothing.
@@ -19,7 +21,7 @@
 - **Revised:** 2026-09-26 (rasterization prototype; see Context); 2026-09-29 (§10 step 3
   split into 3a and 3b; the realm lends its context through a shared handle; Parley
   measurement behind `parley-layout`; a pipeline is built with its context, and the hot-reload
-  plugin image is a realm of its own for text)
+  plugin image is a realm of its own for text); 2026-09-30 (§10 step 4 split into 4a and 4b)
 - **Supersedes (when §§1–5 are accepted):** [ADR-0077](ADR-0077-migrate-to-parley.md)
   (absorbed: its direction, its preconditions and its "If later Rejected" branch are carried
   here)
@@ -313,7 +315,7 @@ that wires what it adds.
      offers `register_font` and no removal. `TextContext`, built from it, owns Parley's
      `FontContext` and `LayoutContext` and shapes a paragraph through `&mut`. Both types exist in
      every build, so a realm's constructor has one signature with or without `parley`; shaping
-     and registration sit behind the `parley` feature, off by default.
+     and registration sat behind the `parley` feature until step 4a folded it.
    - (2b) The runtime's shared engine services hold the collection, and each realm owns a
      `TextContext` built from the collection passed to `UiRealm::new`.
    - The cosmic-text path is unchanged, and `FONT_SYSTEM` and `shared_font_system()` stay until
@@ -352,8 +354,8 @@ that wires what it adds.
      `parley` on for CI's `test` and `fast-lane` jobs, and if `parley` switched measurement, CI
      would measure every text-size test with Parley while the build that ships measures with
      cosmic-text. `parley` compiles the Parley measurement and its tests pin a painter to it.
-     Under `parley-layout` size, baselines and intrinsics come from Parley while glyphs and
-     carets still come from cosmic-text, until steps 4 and 5 (flui-painting `ARCHITECTURE.md`,
+     Under `parley-layout` size, baselines and intrinsics came from Parley while glyphs and
+     carets still came from cosmic-text, until step 4a (flui-painting `ARCHITECTURE.md`,
      mapping decisions 14 and 15).
    - (3b) Registering raises a font-collection-changed event on every realm, which marks text
      render objects for layout (ADR-0065's named gap); flui-app's `register_font` moves from
@@ -385,18 +387,40 @@ that wires what it adds.
    - *Acceptance (3b, pipelines):* a pipeline constructor without a context does not compile; an
      owner taken out of its slot leaves one that measures through the same context; a plugin
      pipeline measures through the context it is mounted with and lays its root out at each
-     frame's surface size. The default build still measures
-     with cosmic-text through `FONT_SYSTEM`, and `parley-layout` still shapes for paint there,
-     until steps 4 and 5.
-4. **Neutral shaped runs on the display list.**
+     frame's surface size. The default build still measured
+     with cosmic-text through `FONT_SYSTEM`, and `parley-layout` still shaped for paint there,
+     until step 4a.
+4. **Parley measures by default (4a); neutral shaped runs on the display list (4b).** Two
+   halves that land separately, as step 3's did: 4a moves measurement while paint stays on
+   cosmic-text, so for one step the painted runs do not come from the layout that measured.
+   The (4a) bullets have landed; the others are 4b.
+   - (4a) `TextPainter` measures size, baselines and intrinsics on Parley through the lent
+     `TextContext` in the default build. The cosmic-text `TextLayout` is still built beside it
+     for paint (until 4b) and carets (until step 5); flui-painting `ARCHITECTURE.md`, mapping
+     decision 15, records what differs meanwhile.
+   - (4a) The `parley` and `parley-layout` features are removed: Parley, swash and the raster
+     side are in the default build, and nothing selects cosmic-text measurement.
+   - (4a) With `bundled-fonts`, the process font system installs Roboto and binds its generic
+     families to it, as the collection does, so default-family text paints in the face it was
+     measured in (mapping decision 16).
+   - (4a) Preconditions: the registration half of step 3b (the font-collection-changed event,
+     and `register_font` moving to the collection) merges first, and the owner accepts one of:
+     non-Latin and named host families measure with no covering face, or in Roboto, until §7
+     (step 5); a host-face feed into the collection ahead of 4a; or 4a lands with 4b.
+   - *Acceptance (4a):* measurement is Parley's in the default build, at the painter
+     (`text_context_contract`, a face registered only on the process font system reaches paint
+     and not measurement) and at the realm (a face registered on one realm's collection sizes
+     that realm's paragraph); measured and painted metrics agree on the bundled Roboto, named
+     and as the default family; the `wasm32` lane, `cargo xtask deps` and `cargo xtask reach`
+     are green.
    - `DrawOp::Paragraph` carries flui-painting's `ShapedParagraph`: runs naming a FLUI-owned
      font blob id, face index, size, interned variation and synthesis, with glyph id, position,
      subpixel bin and span colour. It replaces `Arc<TextLayout>`
      (`display_list/command.rs:167-174`). Runs are produced from the same shaped layout that
      measured, so "painted as measured" still holds.
    - A per-frame table carries the blobs a frame names first, which is the door §5 leaves open.
-     The engine's atlas becomes `GlyphAtlas<SwashRasterizer>`, the `parley` feature folds into
-     the default build, and the atlas's default parameter goes.
+     The engine's atlas becomes `GlyphAtlas<SwashRasterizer>` (the `parley` feature was already
+     folded in 4a), and the atlas's default parameter goes.
    - `TextPainter` measures on Parley in the default build and the `parley-layout` feature is
      removed, so the runs painted come from the layout that measured. Folding `parley` alone
      would leave measurement on cosmic-text while paint moves to Parley runs.
@@ -503,7 +527,7 @@ exist yet.
   `crates/flui-runtime/src/ui_realm/tests/text_context.rs`,
   `two_realms_measure_text_through_their_own_contexts` and
   `every_presentation_pipeline_holds_the_realms_text_context`; in
-  `crates/flui-painting/tests/text_painter_unit.rs` (under `parley`),
+  `crates/flui-painting/tests/text_painter_unit.rs`,
   `measurement_follows_the_context_it_is_given` and
   `a_registration_on_the_collection_invalidates_the_painter_cache`; in
   `crates/flui-rendering/tests/text_context.rs`,
@@ -534,3 +558,10 @@ exist yet.
 - The process-global state gate ([ADR-0097](ADR-0097-no-process-global-state-gate.md)) with
   `FONT_SYSTEM` removed from its allowlist.
 - A first-frame test that renders bundled text before the system scan completes.
+- Parley measures in the default build (§10 step 4a): the rows of `text_context_contract`
+  (`crates/flui-painting/tests/main.rs`); in `crates/flui-painting/tests/font_registration.rs`,
+  `a_face_registered_on_the_process_font_system_reaches_paint_not_measurement`; in
+  `crates/flui-runtime/src/ui_realm/tests/text_context.rs`,
+  `a_realm_measures_text_with_the_faces_of_its_own_collection`; and the default-family rows of
+  `parley_metrics_round_to_todays_baseline`, which fail without flui-painting's mapping
+  decision 16.

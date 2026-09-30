@@ -429,8 +429,8 @@ way `lyon` stays behind `tessellator.rs`.
 `GlyphAtlas<R: GlyphRasterizer = SharedFontSystem>` is generic over where
 bitmaps come from: it hashes `R::Key` and owns `R`, taking it by `&mut` on a
 miss and on a grow. Production names the default; `flui_painting`'s
-`SwashRasterizer` (behind its `parley` feature, a dev-dependency here) is the
-rasterizer ADR-0092 §10 step 4 switches to. Because a rasterizer is a seam,
+`SwashRasterizer` is the
+rasterizer ADR-0092 §10 step 4b switches to. Because a rasterizer is a seam,
 the atlas guards the upload rather than trusting it: an image whose data
 length is not `width × height × bytes_per_texel` is not placed (warned), and
 a grow re-uploads a re-rasterized glyph only if it has the size and content

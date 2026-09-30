@@ -21,9 +21,9 @@ Divergences from Flutter are recorded under [Mapping decisions](#mapping-decisio
 | Recorder | `canvas/{mod,state,transform,clipping,drawing,scoped}.rs` | `Canvas`: the `dart:ui` surface, save/restore, transforms, clips, `draw_*`, and the `with_*` helpers that pair a save with its restore |
 | Wire vocabulary | `display_list/{mod,command,command_ops}.rs` | `DisplayList` (commands + cached bounds), `DrawCommand` (the closed enum `flui-engine` matches exhaustively), `DrawCommand::bounds` |
 | Text | `text_layout/{layout,font_resolve}.rs`, `text_painter/{mod,measure,paint,baseline}.rs` | The process-wide font system and `SharedFontSystem`, `TextLayout` (shape, truncate, caret/hit-test/line queries), family resolution against the host, `TextPainter` |
-| Per-realm text context | `text_layout/context.rs` (every build; shaping and registration behind `parley`) | `FontCollection` (the app's shared, add-only fontique collection) and `TextContext` (one realm's Parley font and layout contexts over it, used through `&mut`); constructed by the runtime, one context per realm; shaping has no production caller until ADR-0092 §10 step 3 |
-| Parley shaping | `parley_text/shape.rs` (`parley` feature) | `TextContext::shape`: a `ParagraphSpec` (styled spans, width, line height, direction) to a `ParagraphLayout` whose `metrics()` read the laid-out lines |
-| Parley raster side | `parley_text/{key,registry,swash}.rs` (`parley` feature) | `ParleyGlyphKey` (a face named by font blob), `FontRegistry` (faces and interned variation instances), `SwashRasterizer`; no production caller until ADR-0092 §10 step 4 |
+| Per-realm text context | `text_layout/context.rs` | `FontCollection` (the app's shared, add-only fontique collection) and `TextContext` (one realm's Parley font and layout contexts over it, used through `&mut`); constructed by the runtime, one context per realm; every `TextPainter` measurement shapes on it |
+| Parley shaping | `parley_text/shape.rs` | `TextContext::shape`: a `ParagraphSpec` (styled spans, width, line height, direction) to a `ParagraphLayout` whose `metrics()` read the laid-out lines |
+| Parley raster side | `parley_text/{key,registry,swash}.rs` | `ParleyGlyphKey` (a face named by font blob), `FontRegistry` (faces and interned variation instances), `SwashRasterizer`; no production caller until ADR-0092 §10 step 4b |
 | Paint values | `paint/{style,path,shader,effects,image,clipping,blend_mode,canvas}.rs` | `Paint`, `Path` (with its shape hint), shaders, filters, images, clip and blend modes: the vocabulary the recorder records |
 | Style values | `styling/*.rs`, `lerp_impls.rs` | `Color` (straight-alpha sRGB, premultiplied `lerp`), borders, radii, decorations, gradients, shadows |
 | Text values | `typography/*.rs` | `TextStyle`, spans, alignment, decoration, metrics |
@@ -72,21 +72,19 @@ drives; its intrinsic-width probes shape without truncation (decision 9).
 
 Every `TextPainter` measurement takes the `TextContext` it measures through:
 `layout`, the four intrinsics, `dry_size` and `dry_baseline` each take
-`&mut TextContext`, and a render object lends its realm's (decision 14). The
-default build measures on cosmic-text as above and only counts the loan. Under
-`parley-layout`, size, baselines and intrinsics come from Parley shaping on
-that context (`ParagraphSpec` with the painter's spans, scale and
-`max_lines`; intrinsic widths from `ParagraphLayout::content_widths`), while
-the cosmic-text `TextLayout` is still built for paint, carets and selection
-until ADR-0092 §10 step 5 (decision 15). `parley` alone compiles that path
-without choosing it, because the workspace test scope turns `parley` on and
-must still test the build that ships; its tests pin a painter to Parley
-through `testing::measure_with_parley`. The painter's cache keys on the
-context's collection and its `FontCollection::generation`, so a layout from
-another realm's collection, or from before a registration, measures again.
+`&mut TextContext`, and a render object lends its realm's (decision 14).
+Size, baselines and intrinsics come from Parley shaping on that context
+(`ParagraphSpec` with the painter's spans, scale and `max_lines`; intrinsic
+widths from `ParagraphLayout::content_widths`) in every build, while the
+cosmic-text `TextLayout` above is still built for paint until ADR-0092 §10
+step 4b and for carets and selection until step 5 (decision 15). The
+painter's cache keys on the context's collection and its
+`FontCollection::generation`, so a layout from another realm's collection, or
+from before a registration, measures again; it also keys on the process font
+system's generation, because the painted layout is shaped there.
 `TextPainter::paint` records `DrawCommand::Paragraph { layout, offset,
 color }` with the very `Arc<TextLayout>` its cache holds (ADR-0065): the
-engine rasterises what was measured and shapes nothing. The root colour
+engine rasterises that layout and shapes nothing. The root colour
 rides on the command; a span's own colour is baked into the layout, so a
 span recolour is a layout change and a root recolour is not.
 
@@ -474,7 +472,7 @@ before the registration. The collection offers no removal. This crate provides
 both types; the runtime constructs them (the app's shared engine services hold
 the collection, and each realm owns a context built in its constructor,
 ADR-0092 §10 step 2). Layout, intrinsic and dry queries measure through the
-realm's context (step 3, decision 14); it shapes under `parley-layout`.
+realm's context (step 3, decision 14); layout measures on it (step 4a).
 
 **Flutter:** one engine-wide `FontCollection` behind `dart:ui`, reached
 ambiently by every paragraph builder in the process; `loadFontFromList` adds
@@ -518,11 +516,13 @@ of `Rtl` that can be honoured today.
 **Accepted trade-off:** a right-to-left paragraph whose text starts with Latin
 or neutrals lays out its runs in the wrong order until the base direction can
 be set; that belongs to ADR-0092 §10 step 5, where editable text moves to
-Parley and its acceptance covers LTR, RTL and mixed bidi. Under
-`parley-layout`, `TextPainter` measures through `ParagraphSpec`, so an `Rtl`
-paragraph's measured size is that of the wrongly ordered runs; line widths do
-not depend on run order, so only a line break that falls differently shows.
-The default build does not shape through `ParagraphSpec`. Locked by
+Parley and its acceptance covers LTR, RTL and mixed bidi. `TextPainter`
+measures through `ParagraphSpec` in every build, so an `Rtl` paragraph's
+measured size is that of the wrongly ordered runs, and its painted
+cosmic-text layout is shaped separately: line widths do not depend on run
+order, so only a line break that falls differently shows, and then the
+measured and painted line counts can differ. This is a divergence of
+the default build's metrics from Flutter's. Locked by
 `rtl_aligns_lines_right_without_setting_the_base_direction`
 (`src/parley_text/shape.rs`).
 
@@ -559,46 +559,80 @@ two realms' layouts apart (ADR-0092 §3). Keying the cache on the collection
 closes the case a single ambient collection never had: one painter measured
 through two collections.
 
-**Accepted trade-off:** the default build still measures on the process font
-system, so the context is lent and counted but not shaped on until ADR-0092
-§10 step 4 makes Parley measurement the default and removes `parley-layout`,
-together with folding `parley` into the default build. Locked by
-`measurement_follows_the_context_it_is_given` and
+**Accepted trade-off:** every signature that measures names the context, even
+where only one realm exists. The context is shaped on in every build (ADR-0092
+§10 step 4a). Locked by `measurement_follows_the_context_it_is_given`,
+`intrinsic_widths_follow_the_context_they_are_asked_through` and
 `a_registration_on_the_collection_invalidates_the_painter_cache`
-(`tests/text_painter_unit.rs`, under `parley`).
+(`tests/text_painter_unit.rs`, rows of `text_context_contract`), and at the
+realm level by `a_realm_measures_text_with_the_faces_of_its_own_collection`
+(`crates/flui-runtime/src/ui_realm/tests/text_context.rs`).
 
-### 15. Under `parley-layout`, measurement and paint use different shapers
+### 15. Measurement and paint use different shapers until ADR-0092 §10 step 4b
 
-**Rule:** with `parley-layout`, size, baselines and intrinsic widths come from
-Parley on the realm's context; glyphs, carets, selection and hit-testing still
-come from the cosmic-text `TextLayout` the painter builds beside it. Parley
+**Rule:** size, baselines and intrinsic widths come from Parley on the realm's
+context; glyphs, line metrics, carets, selection and hit-testing still come
+from the cosmic-text `TextLayout` the painter builds beside it. Parley
 metrics are unquantized, as cosmic-text's are, so a baseline reaches the
 device grid once, when painted (`(line_y * scale).round()`). The ellipsis is
 not shaped into the last kept line: `max_lines` stops the metrics at the kept
 lines, and the ellipsis only floors the intrinsic widths. Parley's width
-excludes trailing whitespace; cosmic-text's includes it.
+excludes trailing whitespace; cosmic-text's includes it, and so does
+Flutter's max intrinsic width (recalled, not checked against a clone).
 
 **Flutter:** one paragraph object answers metrics and paints, so what is
 painted is what was measured, ellipsis included. Recalled from Flutter's API,
 not checked against a clone.
 
 **Why:** painted-as-measured returns when `DrawOp::Paragraph` carries runs
-from the same Parley layout (ADR-0092 §10 step 4) and carets come from its
-clusters (step 5). Until then measurement can move to the realm's context
-without a paint path, behind a feature that is off everywhere.
+from the same Parley layout (ADR-0092 §10 step 4b) and carets come from its
+clusters (step 5). Measuring on the realm's context first (step 4a) lets a
+realm's faces decide its layout before the paint path moves.
 
-**Accepted trade-off:** under `parley-layout`, a face the two shapers resolve
-differently measures and paints in different faces, a truncated paragraph's
-painted ellipsis can overhang its measured width, and a face registered
-through `SharedFontSystem::register_font` reaches paint but not measurement
-(ADR-0092 §10 step 3b routes registration through the collection). On the same
-face the two agree: `tests/parley_metrics_oracle.rs` pins equal width and
-height and the same device baseline for the bundled Roboto at 13–32 px,
-default and 1.5 line height, scales 1–2 (its cosmic side registers Roboto,
-because the cosmic-text path loads the bundled Roboto only on a host with no
-fonts). `register_font_invalidates_a_laid_out_painter` is ignored under
-`parley-layout`, naming this decision in its `ignore` reason: registration
-reaches the process font system, not the collection Parley measures on.
+**Accepted trade-off:** in the default build:
+
+- A face the two shapers resolve differently measures and paints in different
+  faces: a family only the process font system has (a named host family, or a
+  non-Latin script's host fallback, since the collection holds only the
+  bundled and registered faces until ADR-0092 §7) is measured in Roboto or
+  with no face, and painted in the host face, so it can clip or overhang.
+- A truncated paragraph's painted ellipsis can overhang its measured width.
+- A caret after trailing whitespace in `EditableText` can sit past the
+  measured width, because the painted layout counts the whitespace.
+- A face registered through `SharedFontSystem::register_font` reaches paint
+  but not measurement (ADR-0092 §10 step 3b routes registration through the
+  collection).
+
+On the same face the two agree: `tests/parley_metrics_oracle.rs` pins equal
+width and height and the same device baseline between the measurement and the
+recorded layout for the bundled Roboto, by name and as the default family
+(decision 16), at 13–32 px, default and 1.5 line height, scales 1–2.
+`a_face_registered_on_the_process_font_system_reaches_paint_not_measurement`
+(`tests/font_registration.rs`) pins the registration split: the painted layout
+re-shapes, the measured size does not move.
+
+### 16. With `bundled-fonts`, the process font system's generic families bind to Roboto
+
+**Rule:** with `bundled-fonts`, the process font system installs the bundled
+Roboto whether or not the host has fonts, and binds sans-serif, serif,
+cursive, fantasy and monospace to it before the host generics are bound
+(`fonts::bind_generics_to_bundled`), as every `FontCollection` does. Text whose
+style names no family is measured and painted in Roboto on every host.
+
+**Flutter:** the default family is the platform's (Segoe UI on Windows, the
+system font on Apple platforms, Roboto on Android). Recalled, not checked
+against a clone.
+
+**Why:** measurement runs on the collection, which holds no host face, and
+paint runs on the process font system until ADR-0092 §10 step 4b. Bound to a
+host face, default text would be measured in Roboto and painted in Segoe UI,
+Arial or DejaVu.
+
+**Accepted trade-off:** default text is Roboto on every desktop host until
+ADR-0092 §7 brings host faces into the collection; an app that wants the
+host's face names the family (and then meets decision 15's first case).
+Locked by the default-family rows of `parley_metrics_round_to_todays_baseline`
+(`tests/parley_metrics_oracle.rs`), which fail without the binding.
 
 ---
 

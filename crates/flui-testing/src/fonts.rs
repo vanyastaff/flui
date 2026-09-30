@@ -3,11 +3,12 @@
 //! # Why a test has to care
 //!
 //! `flui-painting`'s process-wide `FontSystem` is built from whatever fonts
-//! the *host machine* has installed. Text measurement runs against it, and
-//! anything sized to its text — a button hugging its label, a centered row, an
-//! app bar's title — takes its geometry from the resulting advance widths. So
-//! the same tree, built from the same source on two machines with different
-//! font sets, lays out differently.
+//! the *host machine* has installed. Text is measured on the realm's
+//! `FontCollection`, which holds only the bundled faces and those registered
+//! on it, so layout no longer depends on the host; but paint still shapes on
+//! the process `FontSystem` until ADR-0092 §10 step 4b, so the glyphs a
+//! snapshot or a pixel golden records do. Before measurement moved to the
+//! collection, the host decided layout too:
 //!
 //! That is not hypothetical. Measured on this repository's demo trees, the
 //! same Cupertino button was 61.18 px wide on a host with fonts installed and
@@ -20,8 +21,8 @@
 //!
 //! [`pin_font_faces`] is that pin.
 
-/// Builds the process-wide font system from `faces` alone, so text
-/// measurement resolves against repository-shipped bytes on every host.
+/// Builds the process-wide font system from `faces` alone, so the painted
+/// layout resolves against repository-shipped bytes on every host.
 ///
 /// Call this **before any text is measured or shaped in the process**, and
 /// before anything else touches the font system: it initializes the shared

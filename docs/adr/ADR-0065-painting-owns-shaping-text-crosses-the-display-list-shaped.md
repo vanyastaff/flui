@@ -136,7 +136,7 @@ convenience) shapes through `TextLayout` and records a paragraph.
 
 Part 1: `shaping_never_bumps_the_generation`,
 `register_font_bumps_the_generation_once`,
-`register_font_invalidates_a_laid_out_painter`,
+`a_face_registered_on_the_process_font_system_reaches_paint_not_measurement`,
 `icon_fonts_measure_before_any_engine_exists`
 (`crates/flui-painting/tests/font_registration.rs`);
 `an_empty_host_database_gets_roboto_and_both_icon_faces` and its two
