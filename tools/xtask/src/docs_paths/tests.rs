@@ -201,10 +201,26 @@ fn packages_are_read_only_from_cargo_commands() {
     }
 }
 
+/// A `Cargo.lock` of `(name, version)` packages.
+fn locked(packages: &[(&str, &str)]) -> BTreeMap<String, BTreeSet<String>> {
+    let mut locked: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (name, version) in packages {
+        locked
+            .entry((*name).to_owned())
+            .or_default()
+            .insert((*version).to_owned());
+    }
+    locked
+}
+
 fn a_lockfile_package_is_selected_only_by_update_and_tree() {
     let packages = Packages {
         local: ["flui-view".to_owned()].into(),
-        locked: ["wgpu".to_owned()].into(),
+        locked: locked(&[
+            ("wgpu", "25.0.0"),
+            ("bitflags", "1.3.2"),
+            ("bitflags", "2.13.2"),
+        ]),
     };
     for (code, selects) in [
         ("cargo test -p flui-view", true),
@@ -212,9 +228,20 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
         ("cargo tree -p wgpu", true),
         ("cargo pkgid -p wgpu", true),
         ("cargo clean -p wgpu", true),
+        ("cargo update -p wgpu@25", true),
+        ("cargo update -p wgpu@24", false),
         ("cargo test -p wgpu", false),
         ("cargo -p wgpu", false),
         ("cargo update -p flui-types", false),
+        // two locked versions: a bare name is ambiguous but to `clean`
+        ("cargo tree -p bitflags", false),
+        ("cargo update -p bitflags", false),
+        ("cargo pkgid -p bitflags", false),
+        ("cargo clean -p bitflags", true),
+        ("cargo tree -p bitflags@2", true),
+        ("cargo pkgid -p bitflags@1.3.2", true),
+        // `@2.1` is no prefix of `2.13.2` at a version boundary
+        ("cargo tree -p bitflags@2.1", false),
     ] {
         let selected = extract::packages(code);
         assert_eq!(selected.len(), 1, "{code:?}");
@@ -225,7 +252,7 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
 fn headings_give_github_anchors() {
     let markdown = "# Start here\n## The `View` tree: a guide!\n## Start here\n\
                     ## Custom {#own-id}\n\n```\n# not a heading\n```\n\
-                    # Foo\n# Foo-1\n# Foo\n";
+                    # Foo\n# Foo-1\n# Foo\n# The $x$ value\n";
     // GitHub renders `{#own-id}` as text; it is no anchor of its own. The
     // second `Foo` takes `foo-2`: `foo-1` is a heading's already
     let want: BTreeSet<String> = [
@@ -236,6 +263,7 @@ fn headings_give_github_anchors() {
         "start-here",
         "start-here-1",
         "the-view-tree-a-guide",
+        "the-x-value",
     ]
     .map(str::to_owned)
     .into();
@@ -344,6 +372,9 @@ fn an_llms_link_resolves_like_a_github_link() {
             Some(Some("crates/flui-view")),
         ),
         ("docs/../README.md", Some(Some("README.md"))),
+        // the repository root
+        ("./", Some(Some(""))),
+        ("/", Some(Some(""))),
         ("../README.md", Some(None)),
         // not local
         ("https://example.com/x.md", None),
@@ -363,7 +394,7 @@ fn a_doc_reports_each_stale_name_once() {
     let known = known();
     let packages = Packages {
         local: ["flui-view", "flui-app"].map(str::to_owned).into(),
-        locked: ["wgpu".to_owned()].into(),
+        locked: locked(&[("wgpu", "25.0.0")]),
     };
     let read = |path: &str| (path == "docs/testing.md").then(|| "# The harness\n".to_owned());
     let text = "`crates/flui-view/src/lib.rs` `crates/flui-types/` `crates/flui-types/`\n\
@@ -372,7 +403,7 @@ fn a_doc_reports_each_stale_name_once() {
                 [ok](docs/testing.md) [gone](docs/gone.md) [out](../x.md) [web](https://a.b/)\n\
                 [h](docs/testing.md#the-harness) [no](docs/testing.md#no-heading) \
                 [dir](crates/flui-view#x) [self](#no-heading) \
-                [escaped](docs/testing.md#the%2Dharness)\n";
+                [escaped](docs/testing.md#the%2Dharness) [root](./) [root](/)\n";
     let names = |doc: &str| -> Vec<(usize, Kind, String)> {
         stale(doc, text, &known, &packages, &read)
             .into_iter()

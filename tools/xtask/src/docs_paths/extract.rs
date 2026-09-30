@@ -157,7 +157,11 @@ pub(super) fn anchors(markdown: &str) -> BTreeSet<String> {
     for event in Parser::new_ext(markdown, options) {
         match event {
             Event::Start(Tag::Heading { .. }) => heading = Some(String::new()),
-            Event::Text(text) | Event::Code(text) => {
+            // `$x$` is text in GitHub's heading slug
+            Event::Text(text)
+            | Event::Code(text)
+            | Event::InlineMath(text)
+            | Event::DisplayMath(text) => {
                 if let Some(heading) = &mut heading {
                     heading.push_str(&text);
                 }
@@ -260,6 +264,8 @@ pub(super) struct Selected {
     /// The cargo subcommand (`test`, `update`), when one came before it.
     pub(super) subcommand: Option<String>,
     pub(super) name: String,
+    /// The version after `@` (`bitflags@2`), when the spec names one.
+    pub(super) version: Option<String>,
 }
 
 /// Cargo's options before the subcommand that take a value in the next word
@@ -325,10 +331,11 @@ pub(super) fn packages(code: &str) -> Vec<Selected> {
                 }
                 continue;
             };
-            found.extend(package(&name).map(|name| Selected {
+            found.extend(package(&name).map(|(name, version)| Selected {
                 line,
                 subcommand: subcommand.clone(),
                 name: name.to_owned(),
+                version: version.map(str::to_owned),
             }));
         }
     }
@@ -344,16 +351,22 @@ fn assignment(word: &str) -> bool {
     })
 }
 
-/// `word` as a package name, without a `@version`; `None` for a placeholder
-/// (`<crate>`, `$CRATE`, `{name}`, `…`), which names no one package. Any other
-/// word is the name as written, so a malformed one (`definitely.missing`) is
-/// a finding, as cargo rejects it.
-fn package(word: &str) -> Option<&str> {
-    let name = word.split_once('@').map_or(word, |(name, _)| name);
-    let placeholder = name.is_empty()
-        || name.contains(['<', '>', '$', '{', '}', '*', '…'])
-        || name.contains("...");
-    (!placeholder).then_some(name)
+/// `word` as a package spec: its name and the version after `@`, if any;
+/// `None` for a placeholder (`<crate>`, `$CRATE`, `{name}`, `…`), which names
+/// no one package. Any other word is taken as written, so a malformed name
+/// (`definitely.missing`) is a finding, as cargo rejects it.
+fn package(word: &str) -> Option<(&str, Option<&str>)> {
+    let placeholder = word.is_empty()
+        || word.starts_with('@')
+        || word.contains(['<', '>', '$', '{', '}', '*', '…'])
+        || word.contains("...");
+    if placeholder {
+        return None;
+    }
+    Some(match word.split_once('@') {
+        Some((name, version)) => (name, Some(version)),
+        None => (word, None),
+    })
 }
 
 /// Byte offsets to 1-based line numbers.

@@ -146,19 +146,38 @@ struct Packages {
     /// The workspace members, and every other package the checkout has a
     /// manifest for (the Android examples are excluded from the workspace).
     local: BTreeSet<String>,
-    /// Every package in `Cargo.lock`, for a [`GRAPH_SUBCOMMANDS`] command.
-    locked: BTreeSet<String>,
+    /// Every package in `Cargo.lock` and its locked versions, for a
+    /// [`GRAPH_SUBCOMMANDS`] command.
+    locked: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl Packages {
-    /// Whether the command `selected` is in names a package it can select.
+    /// Whether the command `selected` is in names a package it can select. A
+    /// lockfile package locked at two versions is ambiguous by name alone to
+    /// every graph subcommand but `clean`, which cleans them all; `name@1` or
+    /// `name@1.3.2` picks the versions that start with it.
     fn selects(&self, selected: &extract::Selected) -> bool {
-        self.local.contains(&selected.name)
-            || (selected
-                .subcommand
-                .as_deref()
-                .is_some_and(|subcommand| GRAPH_SUBCOMMANDS.contains(&subcommand))
-                && self.locked.contains(&selected.name))
+        if self.local.contains(&selected.name) {
+            return true;
+        }
+        let Some(subcommand) = selected
+            .subcommand
+            .as_deref()
+            .filter(|subcommand| GRAPH_SUBCOMMANDS.contains(subcommand))
+        else {
+            return false;
+        };
+        let Some(versions) = self.locked.get(&selected.name) else {
+            return false;
+        };
+        let matching = match &selected.version {
+            Some(version) => versions
+                .iter()
+                .filter(|locked| *locked == version || locked.starts_with(&format!("{version}.")))
+                .count(),
+            None => versions.len(),
+        };
+        matching == 1 || (matching > 1 && subcommand == "clean")
     }
 }
 
@@ -171,7 +190,12 @@ fn packages(root: &std::path::Path, known: &Known) -> anyhow::Result<Packages> {
     #[derive(Deserialize)]
     struct Lock {
         #[serde(default)]
-        package: Vec<Named>,
+        package: Vec<Locked>,
+    }
+    #[derive(Deserialize)]
+    struct Locked {
+        name: String,
+        version: String,
     }
     #[derive(Deserialize)]
     struct Named {
@@ -199,13 +223,16 @@ fn packages(root: &std::path::Path, known: &Known) -> anyhow::Result<Packages> {
     }
     let lock: Lock =
         toml::from_str(&crate::util::read("Cargo.lock")?).context("parsing Cargo.lock")?;
+    let mut locked: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for package in lock.package {
+        locked
+            .entry(package.name)
+            .or_default()
+            .insert(package.version);
+    }
     Ok(Packages {
         local: names,
-        locked: lock
-            .package
-            .into_iter()
-            .map(|package| package.name)
-            .collect(),
+        locked,
     })
 }
 
@@ -242,8 +269,11 @@ impl Known {
     }
 
     /// Whether `path` (repository-relative; a trailing `/` asks for a
-    /// directory) is a known file or directory.
+    /// directory; `""` is the root) is a known file or directory.
     fn has(&self, path: &str) -> bool {
+        if path.trim_end_matches('/').is_empty() {
+            return true;
+        }
         match path.strip_suffix('/') {
             Some(dir) => self.dirs.contains(dir),
             None => self.files.contains(path) || self.dirs.contains(path),
@@ -330,7 +360,9 @@ impl fmt::Display for Stale {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let why = match self.kind {
             Kind::Path => "no such file or directory",
-            Kind::Package => "not a workspace member",
+            Kind::Package => {
+                "no package the command can select (not in the checkout, or a lockfile \n                 package it cannot pick: another subcommand, or one of several versions)"
+            }
             Kind::Link => "the link resolves to no file, directory or heading",
         };
         write!(
