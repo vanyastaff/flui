@@ -156,8 +156,11 @@ fn measure_and_paint(
 }
 
 /// Every row the host covers paints what it measured, and paints no glyph as
-/// `.notdef`. Fails on a collection holding only the bundled faces
-/// (`FontCollection::new()`): there CJK and emoji have no face to paint in.
+/// `.notdef`. The `.notdef` count is the assertion that can fail: it fails on
+/// a collection holding only the bundled faces (`FontCollection::new()`),
+/// where CJK and emoji have no face to paint in. Measured and painted size
+/// come from one cached layout, so their comparison guards only against a
+/// paint path that stops reading it.
 #[test]
 fn measured_width_equals_painted_width_on_host_faces() {
     let fonts = FontCollection::with_host_faces(&shared_font_system());

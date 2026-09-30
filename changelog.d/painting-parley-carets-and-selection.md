@@ -16,6 +16,10 @@
   next line.
 - Caret and hit queries on truncated text stay in the kept text: an offset in dropped lines or
   in the ellipsis answers the kept text's end.
+- `get_line_metrics`: `LineMetrics::left` is the line's first painted x in the paragraph's box
+  (it was always 0), so a short line aligned right reports where it starts; `hard_break` is true
+  on a line ending at an explicit break or at the end of the paragraph (it was true on every
+  line), and false on the last kept line of truncated text.
 - Double-tap word boundaries come from ICU4X's word segmenter (non-complex scripts) instead of
   `unicode-segmentation`; the tie-break is unchanged.
 - `FontCollection::register_font` and `check_font` load and judge bytes on the collection alone;
@@ -27,6 +31,8 @@
   `SharedFontSystem::generation` and the `testing` door `SharedFontSystem::register_font`.
   Carets and selection come from `TextPainter`; register fonts through
   `FontCollection::register_font` or `flui::register_font`.
+- The `flui_painting::Family` re-export of `cosmic_text::fontdb::Family`: no public signature
+  names it.
 
 ### Fixed
 

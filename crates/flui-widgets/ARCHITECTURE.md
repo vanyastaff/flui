@@ -1803,7 +1803,10 @@ A tap, a drag and the arrow keys keep snapping to extended grapheme clusters
 through the controller (its "Character unit"); a tap and a drag land where
 `TextPainter::get_position_for_offset` answers, which snaps to an ICU4X
 grapheme boundary while a caret query stays per scalar (flui-painting mapping
-decision 15). **Tests:** the kit's
+decision 15). Until the editor's grapheme steps move to ICU4X (ADR-0092 §10
+step 6), the arrow keys step `unicode-segmentation` graphemes and a hit snaps
+to ICU4X ones; where the two disagree, an arrow key can land on an offset no
+hit answers. **Tests:** the kit's
 `selection_inside_a_grapheme_is_kept_exactly`, for the platform half; for the
 tap half, the painter's `a_combining_mark_is_one_hit_target` and
 `a_zwj_family_is_one_hit_target` rows of flui-painting's `caret_contract`.

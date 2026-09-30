@@ -23,12 +23,11 @@ let list = canvas.finish(); // Save, DrawRect, Restore
   A render object or a `CustomPaint` painter draws against it.
 - `DisplayList` / `DrawCommand` — the recorded commands with their transform
   baked in; the closed vocabulary `flui-engine` matches exhaustively.
-- `TextPainter` / `TextLayout` — lay an inline span out against a width
-  constraint, query caret / hit-test / lines, paint it. Measurement and paint
-  shape on Parley through the realm's `TextContext`; carets still shape on the
-  process-wide font system (`shared_font_system()`). A face an app registers
-  (`flui::register_font`, through the app's `FontCollection`) reaches all
-  three alike.
+- `TextPainter` — lays an inline span out against a width constraint,
+  answers caret / hit-test / line queries, paints it. Measurement, paint and
+  the queries read one Parley layout, shaped through the realm's
+  `TextContext`. A face an app registers (`flui::register_font`, through the
+  app's `FontCollection`) reaches all three alike.
 - `paint_box_decoration`, `paint_table_border` — the
   decoration painters.
 

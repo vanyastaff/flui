@@ -25,7 +25,7 @@
   carets, selection boxes, hit-testing, line metrics and word boundaries read the Parley layout
   that measured and painted, the cosmic-text `TextLayout` is gone with no rollback flag, and a
   registration loads the collection alone; the process font system is host discovery until
-  step 6. A passed gate is evidence, not shipped
+  step 6. Gates 2 (the `arabic_mixed` difference), 6 and 7 stay open. A passed gate is evidence, not shipped
   behaviour: the record is accepted section by section as the text migration lands §§1–7, and
   gates 2–8 bind those changes. The three supersessions below take effect together, when §§1–5
   are accepted; a section accepted before then supersedes nothing.
@@ -602,16 +602,23 @@ that wires what it adds.
      and `generation`.
    - No rollback flag: a cosmic-text caret layout over Parley paint is itself the divergence
      this step removes, and measurement and paint have had no rollback since step 4.
+   - `pub use cosmic_text::fontdb::Family` goes: once `ResolvedFont` is gone, no public
+     signature names it, so FLUI needs no family type of its own to replace it.
    - Not in this step: the bidi base direction (Parley 0.11.1 still takes it from the first
      strong character, mapping decision 12; setting it needs a leading mark and an offset map
      through every query, its own step), and the host scan off the owner thread (step 6,
      which rewrites discovery). The `system` feature question is settled: `fontique/system`
      reaches `windows`, which tier S forbids, and needs fontconfig headers on Linux, so it is
      not used.
-   - *Acceptance:* gate 2 by the grapheme rows (`a_combining_mark_is_one_hit_target`,
-     `a_zwj_family_is_one_hit_target`); gate 3 by `caret_contract` and by the existing
-     selection, tap, drag and double-tap tests and `text_store_kit`, passing unchanged; gate 4's
-     `complex-scripts` decision above. Gates 6 and 7 stay open.
+   - *Acceptance:* gate 2 in part: the `emoji_zwj` difference by the grapheme rows
+     (`a_combining_mark_is_one_hit_target`, `a_zwj_family_is_one_hit_target`, which also pass
+     on the cosmic-text path, so they pin the behaviour rather than prove the change); the
+     `arabic_mixed` difference is neither pinned nor enumerated yet. Gate 3 by `caret_contract`
+     and by the existing selection, tap, drag and double-tap tests and `text_store_kit`,
+     passing unchanged; gate 4's `complex-scripts` decision above; gate 5 by the row
+     `a_missing_family_never_takes_its_space_from_an_emoji_face` of `family_resolution`
+     (flui-painting `src/text_layout/context.rs`), which shapes on Parley and turns red when
+     the family reaches Parley unresolved. Gates 2 (`arabic_mixed`), 6 and 7 stay open.
 6. **cosmic-text removed; `FONT_SYSTEM` leaves.**
    - cosmic-text, `unicode-segmentation` and `unicode-script` leave the workspace. Host
      discovery stays fontdb's, which becomes a direct dependency, owned by the shared engine
@@ -620,8 +627,8 @@ that wires what it adds.
      `FallbackChain` reads from cosmic-text today, keyed by an ICU4X script; the editor's
      grapheme and word steps move to the ICU4X boundaries in flui-painting.
    - `FONT_SYSTEM`, `shared_font_system()`, `SharedFontSystem`, the emoji-forbidden cosmic
-     fallback, the test doors that pin the process font system, the process-side Roboto
-     binding (flui-painting mapping decision 16) and `pub use cosmic_text::fontdb::Family` go.
+     fallback, the test doors that pin the process font system and the process-side Roboto
+     binding (flui-painting mapping decision 16) go.
    - *Acceptance:* `cargo tree -i cosmic-text` is empty; the globals allowlist is shorter by
      `text_layout::layout::FONT_SYSTEM`; the `disallowed_types` `#[expect]` in
      `text_layout/layout.rs` is gone; §§1–5 are accepted and the back-links in Consequences are
@@ -656,8 +663,9 @@ that wires what it adds.
   over 76 families on the Windows development host). Once the feed moves off the owner thread,
   a text run styled with a system-only family may re-lay out when it completes; that visible
   swap is the price of taking the scan off the startup path.
-- `pub use cosmic_text::fontdb::Family` is replaced by FLUI's own family type, one fewer upstream
-  type on a public path ([ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md)).
+- `pub use cosmic_text::fontdb::Family` left at §10 step 5, when no public signature named it
+  any more: one fewer upstream type on a public path
+  ([ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md)).
 - The engine names no shaper crate; its glyph atlas moves from each painter to the `GpuContext`.
 - The editor's segmentation changes data source; word and grapheme boundaries may shift at the
   edges where `unicode-segmentation` and ICU4X disagree, which gate 3's tests expose.
@@ -727,8 +735,8 @@ the rest do not exist yet.
   `the_sans_serif_family_ends_every_script_fallback` and
   `the_emoji_generic_is_the_common_list`; in `crates/flui-painting/src/parley_text/shape.rs`,
   `a_glyph_the_named_family_lacks_measures_in_roboto_on_the_bundled_collection`; the row
-  `the_collection_resolves_the_family_the_font_system_does` of `family_resolution_contract`
-  (`font_resolve.rs`); `a_missing_path_is_skipped_and_the_feed_completes` (`context.rs`); in
+  `a_style_resolves_by_the_family_rule` of `family_resolution` (`context.rs`);
+  `a_missing_path_is_skipped_and_the_feed_completes` (`context.rs`); in
   flui-app, `the_runtime_feeds_host_faces_once_for_every_realm` (`runtime.rs`) and the feed count
   in `separate_realm_windows_shape_over_the_runtimes_font_collection`.
 - Registration re-lays out text (§10 step 3b): in flui-runtime's `font_registration_matrix`,

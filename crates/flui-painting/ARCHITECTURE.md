@@ -297,9 +297,12 @@ property of the *request*, not of any face. Reading it as a face property is wha
 revision of `family_accepts_weight` accept any monospaced face at any weight.) Naming a family the database carries forecloses both,
 because `Database::query`'s front-insert puts the CSS-matched face ahead of the emoji entry in each.
 
-Nothing shapes on cosmic-text any more (ADR-0092 §10 step 5): the family rule serves the
-collection (`resolve_family_name`, decision 17), and its cosmic-text side (`resolve_family`) is
-kept only for the test that pins the two sides agree. The weight snap that kept cosmic-text from
+Nothing shapes on cosmic-text any more (ADR-0092 §10 step 5), and the rule now serves the
+collection (`resolve_family_name`, decision 17). Parley has the first route too: a family the
+collection lacks sends every cluster down the collection's fallback order, which a host feed copies
+from the process font system's lists, so on a unix host whose only listed family is its emoji face
+the space lands there and the letters fall through to the sans-serif family. The rule closes it the
+same way: Parley is handed a held family or a generic, never an absent name. The weight snap that kept cosmic-text from
 abandoning a family at a weight it lacks (`snap_weight`, issue #929) served cosmic-text shaping
 alone and left with it: Parley matches a weight within the family and synthesizes a bold the family
 lacks (decisions 10 and 18).
@@ -324,41 +327,33 @@ is a runtime check on the platform list, not a `cfg`: the question is "is there 
 a future target answers it without being enumerated.
 
 **Accepted trade-off — fallback is per style, not per glyph.** A per-glyph fallback chain would
-consult each family when a glyph is missing from a higher-priority one. `Attrs::family` holds exactly
-one family, so that cannot be expressed. What is expressed is the per-*style* chain:
+consult each family when a glyph is missing from a higher-priority one. The rule hands Parley exactly
+one family (`FontFamily::Single`), so that is not expressed. What is expressed is the per-*style* chain:
 resolution walks `TextStyle::font_family_fallback` in order and takes the first entry the host
 carries, degrading to the sans-serif generic only when none of them is present. The residual
 limit is precisely locatable — a family that is present
 but lacks the glyph still stops the walk: `font_family:
 "CupertinoIcons", font_family_fallback: ["Noto Sans"]` on Latin text renders tofu,
 because `CupertinoIcons` IS installed. Closing that needs per-run family splitting above
-`Attrs`, which is tracked separately.
+the style, which is tracked separately.
 
-Pinned by `a_present_but_narrow_family_stops_the_chain_without_per_glyph_fallback`, which
-guards the limit in both directions: it fails if the walk is "fixed" to skip a present family
-(that would be a different guess, not per-glyph fallback), and it fails again if per-glyph fallback
-ever lands — which is the signal to retire this record rather than let it go stale. Its control
-asserts that an ABSENT primary still reaches the chain, so the stop is about presence and not about
-the chain being unread.
-Replacement coverage, per rule #1. Which family a run shapes in, in both fixture load orders so that
-no load order satisfies it, is **Unasserted:** no test pins this.
-`oversized_space_from_an_emoji_face_is_closed` observes the letters and the space landing apart: it
-asserts the red state (space above 1 em, on a different face from the letters) before asserting the
-fix. It is hermetic,
-because the face it needs — one carrying `' '` and no letters, with "Emoji" in the PostScript name
-so cosmic-text classifies it as one — is *generated*, not borrowed:
-`tools/decoy-face/generate.py` writes `decoy-wide-space.ttf`, whose space advance is fixed at 1.3 em
-by construction. It used to build the fixture from the host's emoji font, which made a
-merge-blocking assertion depend on a distro package's metrics and needed a `FLUI_REQUIRE_EMOJI_FONT`
-CI variable to keep the absent-font skip branch honest; both the package install and the variable
-are gone, because the skip branch is.
+Locked by the table `family_resolution` (`src/text_layout/context.rs`). Its row
+`a_style_resolves_by_the_family_rule` pins the rule's answers, the limit above among them in both
+directions: `"Material Icons"` with `["Roboto"]` stops on the present icon family (a walk "fixed" to
+skip a present family fails it, and so does per-glyph fallback landing, the signal to retire this
+record), and an ABSENT primary with the same chain reaches `Roboto`, so the stop is about presence
+and not about the chain being unread. Its row `a_missing_family_never_takes_its_space_from_an_emoji_face`
+shapes `"Ao Bo"` styled `CupertinoSystemText` on Parley over a collection fed from a host whose
+fallback order puts an emoji face first, and asserts letters and space in one face with the space
+under half an em; handing Parley the unresolved name turns it red (the space lands in the decoy at
+1.3 em). It is hermetic, because the face it needs — one carrying `' '` and no letters, with "Emoji"
+in the PostScript name — is *generated*, not borrowed: `tools/decoy-face/generate.py` writes
+`decoy-wide-space.ttf`, whose space advance is fixed at 1.3 em by construction.
 
-The same generator supplies the fixtures for the weight probes, and for the same reason — every
-shipped font asset is a single-weight, non-monospaced, static face, so three arms of the resolution
-were untestable against it. `probe-mono-{100,600}.ttf` is one monospaced family at two weights (the
-`face.monospaced` arm, and the CSS-versus-nearest tie-break, where 100 and 600 disagree at a W500
-request); `probe-variable-wght.ttf` carries an `fvar` `wght` axis spanning 100..900 over a
-`usWeightClass` of 400 (the variable-weight arm). **Unasserted:** no test pins this.
+The same generator supplies the probe faces (`probe-mono-{100,600}.ttf`, `probe-sans-400.ttf`,
+`probe-variable-wght.ttf`), because every shipped font asset is a single-weight, non-monospaced,
+static face. The weight-snap arms they were made for left with cosmic-text shaping; registration
+and generic-binding tests still load them.
 
 
 ### 9. Intrinsic width probes skip `max_lines` truncation, floor at ellipsis
@@ -590,6 +585,15 @@ against a clone):
   lines or in an appended ellipsis answers the kept text's end, and a hit
   never answers an offset past it; the line metrics list only kept lines.
   Flutter's paragraph can place a caret in the ellipsis.
+- **Line metrics** say where each kept line is painted in the paragraph's own
+  box: `left` is the line's first painted x (so a short line aligned right
+  starts right of 0), `hard_break` is true on a line that ends at an explicit
+  break or at the end of the paragraph, as Flutter's `LineMetrics.hardBreak`
+  documents, and false on the last kept line of truncated text. Flutter's
+  `TextPainter.computeLineMetrics` also shifts them by the painter's paint
+  offset; FLUI's `get_line_metrics` does not, where its carets and boxes do.
+  (These two checked against `dart:ui`'s `text.dart` and the framework's
+  `text_painter.dart` on flutter/flutter `master`.)
 - **Word boundaries** come from ICU4X's word segmenter for non-complex
   scripts over the kept text, with FLUI's tie-break (a word beats whitespace
   on either side; between two words the following one wins). The layout's
@@ -609,9 +613,13 @@ layout compared global byte offsets with glyph offsets counted per buffer
 line, so `"ab\ncd"` gave the selection `3..5` no box. One layout makes that
 disagreement impossible, and needs no process font system for a caret.
 
-**Accepted trade-off:** the queries walk the kept lines' clusters on each call
-rather than caching an index, which costs linear time in the paragraph's
-length per query; editable text is short, and a query never shapes.
+**Accepted trade-offs:** a painter keeps the whole Parley layout (runs,
+clusters, glyphs) in its cache beside the shaped paragraph, text that never
+gets a cursor query included; that memory is not measured yet (ADR-0092
+gate 6). The first cursor query places the kept lines' clusters once and
+keeps them with the layout; a later query walks them without allocating, in
+time linear in the paragraph's length. Editable text is short, and a query
+never shapes.
 
 Locked by the table `caret_contract` (`tests/main.rs`, rows in
 `tests/caret_contract.rs`): `a_combining_mark_is_one_hit_target` and
@@ -621,7 +629,9 @@ Locked by the table `caret_contract` (`tests/main.rs`, rows in
 `a_trailing_newline_puts_the_caret_on_the_empty_line`,
 `crlf_is_one_break_for_carets`, `multi_line_selection_boxes_follow_their_line`,
 `carets_sit_on_the_painted_glyphs`, `a_soft_wrap_caret_follows_its_affinity`,
-`truncated_carets_stay_in_kept_lines`, `caret_position` and
+`truncated_carets_stay_in_kept_lines`,
+`truncated_text_without_an_ellipsis_stays_in_its_kept_line`,
+`line_metrics_index_each_line`, `caret_position` and
 `two_space_run_word_boundary`; by `word_boundaries_agree_with_the_layouts_clusters`
 (`src/parley_text/caret.rs`); by
 `caret_queries_never_build_the_process_font_system` (`tests/text_context.rs`);
@@ -752,8 +762,9 @@ family and a family the host names exactly among them, never are),
 `the_emoji_generic_is_the_common_list` (`src/text_layout/fallback_chain.rs`),
 `a_glyph_the_named_family_lacks_measures_in_roboto_on_the_bundled_collection`
 (`src/parley_text/shape.rs`),
-the row `the_collection_resolves_the_family_the_font_system_does` of
-`family_resolution_contract` (`src/text_layout/font_resolve.rs`), and
+the table `family_resolution` (`src/text_layout/context.rs`: the rule's
+answers over a collection, and the emoji face a host fallback order puts
+first kept out of a Latin run), and
 `a_missing_path_is_skipped_and_the_feed_completes`
 (`src/text_layout/context.rs`).
 
