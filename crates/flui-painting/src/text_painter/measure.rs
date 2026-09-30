@@ -151,8 +151,9 @@ impl TextPainter {
 
     /// Shapes `text` on Parley through `text_cx` at `max_width`, with the
     /// same span flattening and scale as the caret layout. Every span
-    /// carries its merged style, so no paragraph default style is passed: a
-    /// default would lay its unscaled size under the scaled spans.
+    /// carries its merged style; the root's style, scaled as a span's is, is
+    /// the paragraph default, so a paragraph with no run (empty text)
+    /// measures the line its style would, family and line height included.
     ///
     /// [`LineOverflow::Enforce`] applies `max_lines` and the ellipsis
     /// (committed layout, dry size, height probes), so a dry probe measures
@@ -172,13 +173,16 @@ impl TextPainter {
         line_overflow: LineOverflow,
     ) -> crate::parley_text::ParagraphLayout {
         let spans = collect_styled_spans(text, self.text_scale_factor);
+        let root = text
+            .style()
+            .map(|style| effective_style(style, self.text_scale_factor));
         let (max_lines, ellipsis) = match line_overflow {
             LineOverflow::Enforce => (self.max_lines.map(|n| n as usize), self.ellipsis.as_deref()),
             LineOverflow::IgnoreForWidthIntrinsic => (None, None),
         };
         text_cx.shape(&crate::parley_text::ParagraphSpec {
             spans: &spans,
-            default_style: None,
+            default_style: root.as_ref(),
             font_size: self.scaled_font_size(text) as f32,
             max_width: max_width.is_finite().then_some(max_width as f32),
             line_height: None,

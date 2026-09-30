@@ -55,22 +55,57 @@ pub(crate) fn wide_ellipsis_floors_min_intrinsic_width() {
 
 /// An empty paragraph measures the line box and baseline a line of text in
 /// the same style measures, so an empty `Text` in a baseline-aligned row
-/// sits on its neighbours' baseline (painting mapping decision 15).
+/// sits on its neighbours' baseline (painting mapping decision 15). Every
+/// root property that shapes the line counts, not only the font size the
+/// painter passes separately: a line height and a family (the probe face,
+/// whose line metrics are not Roboto's) each change the empty line too.
 pub(crate) fn an_empty_paragraph_measures_a_line_of_its_style() {
     use flui_painting::TextBaseline;
-    use flui_painting::typography::TextStyle;
+    use flui_painting::typography::{FontWeight, TextStyle};
 
+    const PROBE_MONO: &[u8] = include_bytes!("../assets/fonts/probe-mono-100.ttf");
+
+    let fonts = flui_painting::FontCollection::new();
+    fonts
+        .register_font(PROBE_MONO)
+        .expect("the probe face loads");
+    let probe = |size: f64| TextStyle {
+        font_family: Some("FLUI Probe Mono".to_owned()),
+        font_weight: Some(FontWeight::W100),
+        font_size: Some(size),
+        ..TextStyle::default()
+    };
+    let rows = [
+        TextStyle {
+            font_size: Some(14.0),
+            ..TextStyle::default()
+        },
+        TextStyle {
+            font_size: Some(32.0),
+            ..TextStyle::default()
+        },
+        TextStyle {
+            font_size: Some(14.0),
+            height: Some(2.0),
+            ..TextStyle::default()
+        },
+        probe(20.0),
+        TextStyle {
+            height: Some(2.0),
+            ..probe(20.0)
+        },
+    ];
     let mut failures = Vec::new();
-    for size in [14.0, 32.0] {
+    for style in rows {
         let measure = |text: &str| {
-            let style = TextStyle {
-                font_size: Some(size),
-                ..TextStyle::default()
-            };
             let mut painter = TextPainter::new()
-                .with_text(TextSpan::styled(text, style))
+                .with_text(TextSpan::styled(text, style.clone()))
                 .with_text_direction(TextDirection::Ltr);
-            painter.layout(&mut text_cx(), 0.0, f64::INFINITY);
+            painter.layout(
+                &mut flui_painting::TextContext::new(&fonts),
+                0.0,
+                f64::INFINITY,
+            );
             (
                 painter.height(),
                 painter.compute_distance_to_actual_baseline(TextBaseline::Alphabetic),
@@ -79,11 +114,18 @@ pub(crate) fn an_empty_paragraph_measures_a_line_of_its_style() {
         let (empty, line) = (measure(""), measure("A"));
         if (empty.0 - line.0).abs() > 1e-3 || (empty.1 - line.1).abs() > 1e-3 {
             failures.push(format!(
-                "{size} px: empty {empty:?}, one line {line:?} (height, baseline)"
+                "{style:?}: empty {empty:?}, one line {line:?} (height, baseline)"
             ));
         }
     }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{}",
+        failures.join(
+            "
+"
+        )
+    );
 }
 
 /// Measurement is Parley on the lent context in the default build: the probe

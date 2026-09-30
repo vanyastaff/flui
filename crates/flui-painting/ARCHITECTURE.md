@@ -580,7 +580,10 @@ The painter hands both shapers inputs they read alike:
 An empty paragraph measures one line of its style from the font: the line box
 and the baseline a line of text in that style has (13.19 px at 14 px Roboto),
 where cosmic-text put that baseline mid-line (8.40 px), which left an empty
-`Text` in a baseline-aligned row off its neighbours' baseline.
+`Text` in a baseline-aligned row off its neighbours' baseline. An empty span
+shapes no run, so the root's style, scaled as a run's is, is the Parley
+paragraph's default style: its family, weight and line height shape the empty
+line as they would a line of text.
 
 **Why:** carets and selection move to Parley's clusters with gate 3's LTR,
 RTL and mixed-bidi tests (ADR-0092 §10 step 5); until then the caret queries
