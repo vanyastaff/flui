@@ -419,7 +419,9 @@ mod tests {
 
     impl Harness {
         fn mount(view: &dyn View, constraints: BoxConstraints) -> Self {
-            let pipeline = PipelineCell::new(PipelineOwner::new());
+            let pipeline = PipelineCell::new(PipelineOwner::new(
+                flui_rendering::TextContextHandle::standalone(),
+            ));
             let mut owner = BuildOwner::new();
             let mut tree = ElementTree::new();
 

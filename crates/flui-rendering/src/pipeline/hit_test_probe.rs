@@ -120,7 +120,7 @@ mod tests {
 
     /// A laid-out one-node tree, 20x20 at the origin.
     fn laid_out_cell() -> PipelineCell {
-        let mut owner = PipelineOwner::new();
+        let mut owner = PipelineOwner::new(crate::pipeline::TextContextHandle::standalone());
         let root = owner.insert(Box::new(HittableLeaf {
             size: Size::new(20.0, 20.0),
         }) as Box<dyn RenderObject<BoxProtocol>>);
@@ -129,7 +129,7 @@ mod tests {
 
         let cell = PipelineCell::new(owner);
         cell.with_mut(|o| {
-            let (returned, _) = std::mem::take(o).run_frame();
+            let (returned, _) = o.take_idle().run_frame();
             *o = returned;
         });
         cell

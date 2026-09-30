@@ -27,7 +27,7 @@ pub type BoxedSliverObject = Box<dyn RenderObject<SliverProtocol>>;
 /// build the tree via `render_tree_mut` (phase-agnostic accessor) before
 /// driving layout.
 pub fn fresh_layout_pipeline() -> PipelineOwner<Layout> {
-    PipelineOwner::new().into_layout()
+    PipelineOwner::new(flui_rendering::TextContextHandle::standalone()).into_layout()
 }
 
 /// Installs `root` with the given root constraints, runs layout, and

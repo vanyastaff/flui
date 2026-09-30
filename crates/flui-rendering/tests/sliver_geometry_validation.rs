@@ -90,7 +90,8 @@ impl RenderSliver for BadGeometrySliver {
 }
 
 pub(crate) fn sliver_leaf_layout_rejects_invalid_geometry_before_state_commit() {
-    let mut owner = PipelineOwner::new();
+    let text = flui_rendering::TextContextHandle::standalone();
+    let mut owner = PipelineOwner::new(text.clone());
     let sliver_id = owner
         .render_tree_mut()
         .insert_sliver(
@@ -104,7 +105,7 @@ pub(crate) fn sliver_leaf_layout_rejects_invalid_geometry_before_state_commit() 
         .and_then(|node| node.as_sliver_mut())
         .expect("sliver entry");
     let err = entry
-        .layout_leaf_only(sliver_constraints(), None)
+        .layout_leaf_only(sliver_constraints(), text.source())
         .expect_err("invalid sliver geometry must fail layout");
 
     assert_invalid_geometry(err, "paint_extent is negative");

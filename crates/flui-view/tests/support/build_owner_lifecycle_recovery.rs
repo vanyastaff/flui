@@ -164,7 +164,7 @@ fn scoped_child_dependency_panic_is_replaced_without_consuming_foreign_work() {
 fn production_layout_builder_contains_a_stateful_descendant_init_panic() {
     let mut owner = BuildOwner::new();
     let mut tree = ElementTree::new();
-    let pipeline = PipelineCell::new(PipelineOwner::new());
+    let pipeline = PipelineCell::new(PipelineOwner::new(flui_rendering::TextContextHandle::standalone()));
     let failed_id = Arc::new(parking_lot::Mutex::new(None));
     let child = InitPanicView {
         failed_id: Arc::clone(&failed_id),

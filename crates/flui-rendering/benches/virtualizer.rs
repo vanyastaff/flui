@@ -412,7 +412,7 @@ fn build_settled_list(
     let constraints = bench_constraints(0.0);
     let list = RenderSliverList::new(n_items, BENCH_ITEM_HEIGHT);
 
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let root_id = owner
         .insert(Box::new(BenchSliverHost { constraints }) as Box<dyn RenderObject<BoxProtocol>>);
     let sliver_id = owner

@@ -250,7 +250,7 @@ impl PipelineOwner<Idle> {
     /// use flui_foundation::RenderId;
     /// use flui_rendering::pipeline::{DetachRenderSubtreesError, PipelineOwner};
     ///
-    /// let mut owner = PipelineOwner::new();
+    /// let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     /// let result = owner.detach_render_subtrees(&[RenderId::new(1)]);
     /// assert!(matches!(result, Err(DetachRenderSubtreesError::NodeNotFound { .. })));
     /// ```

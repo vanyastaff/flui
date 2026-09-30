@@ -26,21 +26,39 @@ use super::{DEFAULT_DIRTY_CHANNEL_CAPACITY, PIPELINE_ID_COUNTER, PipelineOwner, 
 impl PipelineOwner<Idle> {
     /// Creates a new pipeline owner in the [`Idle`] phase with the
     /// default dirty-channel capacity (`DEFAULT_DIRTY_CHANNEL_CAPACITY`,
-    /// 256).
-    pub fn new() -> Self {
-        Self::new_with_capacity(DEFAULT_DIRTY_CHANNEL_CAPACITY)
+    /// 256), measuring text through `text`.
+    ///
+    /// `text` is lent to every measurement this pipeline makes: layout,
+    /// intrinsics, dry layout and dry baselines (ADR-0092 §10 step 3). A
+    /// realm passes the context it built over the app's font collection; a
+    /// pipeline with no realm behind it passes
+    /// [`TextContextHandle::standalone`]. There is no constructor without a
+    /// context, so no pipeline measures on one it made up for itself:
+    ///
+    /// ```compile_fail
+    /// let owner = flui_rendering::PipelineOwner::new();
+    /// ```
+    ///
+    /// and no `Default` to pick one:
+    ///
+    /// ```compile_fail
+    /// let owner: flui_rendering::PipelineOwner = Default::default();
+    /// ```
+    pub fn new(text: TextContextHandle) -> Self {
+        Self::new_with_capacity(DEFAULT_DIRTY_CHANNEL_CAPACITY, text)
     }
 
     /// Creates a new pipeline owner in the [`Idle`] phase with a custom
-    /// dirty-channel capacity. Use this when the default 256 doesn't match
-    /// the producer profile.
-    pub fn new_with_capacity(dirty_channel_capacity: usize) -> Self {
+    /// dirty-channel capacity, measuring text through `text` (see
+    /// [`Self::new`]). Use this when the default 256 doesn't match the
+    /// producer profile.
+    pub fn new_with_capacity(dirty_channel_capacity: usize, text: TextContextHandle) -> Self {
         let notifier = std::sync::Arc::new(parking_lot::RwLock::new(VisualUpdateNotifier::new()));
         let (dirty_sender, dirty_rx) =
             DirtySender::new_pair(dirty_channel_capacity, std::sync::Arc::clone(&notifier));
         let scheduler = DirtyTracker::new(std::sync::Arc::clone(&notifier));
         Self {
-            text: None,
+            text,
             id: PIPELINE_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
             relocation_owner_seal: std::rc::Rc::new(super::relocation::RelocationOwnerSeal),
             render_tree: RenderTree::new(),
@@ -71,18 +89,18 @@ impl PipelineOwner<Idle> {
         }
     }
 
-    /// Lends the realm's text context to every measurement this pipeline
-    /// makes: layout, intrinsics, dry layout and dry baselines.
+    /// Moves this owner out, leaving an empty one in its place that measures
+    /// through the same text context.
     ///
-    /// Installed once, before the first layout: a node whose constraints are
-    /// cached skips its `perform_layout`, so text laid out on another
-    /// context would not measure again on this one.
-    pub fn set_text_context(&mut self, text: TextContextHandle) {
-        debug_assert_eq!(
-            self.counters.layout_passes, 0,
-            "set_text_context: install the realm's text context before the first layout"
-        );
-        self.text = Some(text);
+    /// For a caller that holds the owner behind `&mut` and must pass it by
+    /// value through a typestate transition (`run_frame`, `into_layout`),
+    /// then put the result back. The placeholder is what the slot holds if
+    /// that transition unwinds, so it keeps the pipeline's text context
+    /// rather than a context of its own.
+    #[must_use = "the taken owner holds the render tree; put it back"]
+    pub fn take_idle(&mut self) -> Self {
+        let placeholder = Self::new(self.text.clone());
+        std::mem::replace(self, placeholder)
     }
 
     /// Records harness parent metadata for `child_id`, cloned into the
@@ -103,65 +121,6 @@ impl PipelineOwner<Idle> {
     #[cfg(any(test, feature = "testing"))]
     pub fn fail_next_semantics_after_paint_for_test(&mut self, error: crate::error::RenderError) {
         self.semantics_error_once_for_test = Some(error);
-    }
-
-    /// Creates a new pipeline owner with callbacks in the [`Idle`] phase.
-    pub fn with_callbacks<F, G, H>(
-        on_need_visual_update: Option<F>,
-        on_semantics_owner_created: Option<G>,
-        on_semantics_owner_disposed: Option<H>,
-    ) -> Self
-    where
-        F: Fn() + Send + Sync + 'static,
-        G: Fn() + Send + Sync + 'static,
-        H: Fn() + Send + Sync + 'static,
-    {
-        let mut notifier = VisualUpdateNotifier::new();
-        if let Some(f) = on_need_visual_update {
-            notifier.set_need_visual_update(f);
-        }
-        if let Some(f) = on_semantics_owner_created {
-            notifier.set_semantics_owner_created(f);
-        }
-        if let Some(f) = on_semantics_owner_disposed {
-            notifier.set_semantics_owner_disposed(f);
-        }
-        let notifier = std::sync::Arc::new(parking_lot::RwLock::new(notifier));
-        let (dirty_sender, dirty_rx) = DirtySender::new_pair(
-            DEFAULT_DIRTY_CHANNEL_CAPACITY,
-            std::sync::Arc::clone(&notifier),
-        );
-        let scheduler = DirtyTracker::new(std::sync::Arc::clone(&notifier));
-        Self {
-            text: None,
-            id: PIPELINE_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
-            relocation_owner_seal: std::rc::Rc::new(super::relocation::RelocationOwnerSeal),
-            render_tree: RenderTree::new(),
-            root_id: None,
-            notifier,
-            scheduler,
-            layout_poison: super::poison::LayoutPoison::default(),
-            root_constraints: None,
-            semantics_enabled: AtomicBool::new(false),
-            semantics_owner: None,
-            semantics_update_callback: None,
-            last_layer_tree: None,
-            last_follower_offsets: FxHashMap::default(),
-            retained_boundaries: FxHashMap::default(),
-            root_content: None,
-            last_hidden_follower_ids: FxHashSet::default(),
-            device_pixel_ratio: 1.0,
-            dirty_sender,
-            dirty_rx,
-            #[cfg(any(test, feature = "testing"))]
-            parent_data_seeds: FxHashMap::default(),
-            #[cfg(any(test, feature = "testing"))]
-            semantics_error_once_for_test: None,
-            pending_child_requests: Vec::new(),
-            pending_retain_bands: Vec::new(),
-            counters: super::PipelineCounters::default(),
-            _phase: PhantomData,
-        }
     }
 
     /// Transitions an idle pipeline into the [`Layout`] phase.
@@ -264,25 +223,16 @@ impl PipelineOwner<Idle> {
 }
 
 impl<Phase: PipelinePhase> PipelineOwner<Phase> {
-    /// The text context this pipeline lends, building a private one the
-    /// first time a pipeline that was never given the realm's is asked.
-    pub(crate) fn text_handle(&mut self) -> TextContextHandle {
-        self.text
-            .get_or_insert_with(|| {
-                tracing::debug!(
-                    pipeline = self.id,
-                    "no realm text context installed; measuring on a private one"
-                );
-                TextContextHandle::new(crate::pipeline::private_context())
-            })
-            .clone()
+    /// The text context this pipeline was built with.
+    pub(crate) fn text_handle(&self) -> TextContextHandle {
+        self.text.clone()
     }
 
-    /// The text context installed on this pipeline, if any, so a test can
-    /// tell whose context its layout measures with.
+    /// The text context this pipeline was built with, so a test can tell
+    /// whose context its layout measures with.
     #[cfg(any(test, feature = "testing"))]
     #[must_use]
-    pub fn text_context_for_test(&self) -> Option<&TextContextHandle> {
-        self.text.as_ref()
+    pub fn text_context_for_test(&self) -> &TextContextHandle {
+        &self.text
     }
 }

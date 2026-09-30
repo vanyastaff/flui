@@ -306,7 +306,7 @@ pub(super) fn run_real_pipeline_frame(
         );
         owner.set_root_id(Some(render_root));
         owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(320.0, 80.0))));
-        let (idle, result) = std::mem::take(owner).run_frame();
+        let (idle, result) = owner.take_idle().run_frame();
         *owner = idle;
         result.expect("the dense containment topology must complete a real pipeline frame");
     });
@@ -473,7 +473,9 @@ pub(super) fn mount_dense_root(
     Arc<DenseObserver>,
     ElementId,
 ) {
-    let pipeline = PipelineCell::new(PipelineOwner::new());
+    let pipeline = PipelineCell::new(PipelineOwner::new(
+        flui_rendering::TextContextHandle::standalone(),
+    ));
     let observer = Arc::new(DenseObserver::default());
     let mut owner = BuildOwner::new();
     owner.set_tree_observer(

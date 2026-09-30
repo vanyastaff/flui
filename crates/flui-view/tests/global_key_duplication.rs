@@ -213,7 +213,9 @@ fn tree_with_parents(
         &SlotHost {
             children: Vec::new(),
         },
-        Some(PipelineCell::new(PipelineOwner::new())),
+        Some(PipelineCell::new(PipelineOwner::new(
+            flui_rendering::TextContextHandle::standalone(),
+        ))),
         &mut owner.write().element_owner_mut(),
     );
     (0..parent_count)

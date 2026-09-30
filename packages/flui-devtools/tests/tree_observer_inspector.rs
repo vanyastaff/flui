@@ -132,7 +132,9 @@ fn mount_root_with_pipeline(
 ) -> ElementId {
     tree.mount_root_with_pipeline_owner(
         view,
-        Some(PipelineCell::new(PipelineOwner::new())),
+        Some(PipelineCell::new(PipelineOwner::new(
+            flui_rendering::TextContextHandle::standalone(),
+        ))),
         &mut owner.element_owner_mut(),
     )
 }
