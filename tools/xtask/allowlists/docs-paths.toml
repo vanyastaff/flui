@@ -136,12 +136,6 @@ count = 1
 reason = "the decision's context names the layout the decision changed"
 
 [[allow]]
-path = "docs/adr/ADR-0090-ime-pull-text-store-contract.md"
-kind = "path"
-count = 2
-reason = "the decision's context names the layout the decision changed"
-
-[[allow]]
 path = "docs/adr/ADR-0092-per-realm-text-over-parley.md"
 kind = "path"
 count = 1
