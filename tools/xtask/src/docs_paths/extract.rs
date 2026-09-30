@@ -276,6 +276,12 @@ pub(super) struct Selected {
 /// (`cargo --color always update`).
 const GLOBAL_VALUE_OPTIONS: [&str; 4] = ["--color", "--config", "-C", "-Z"];
 
+/// Shell reserved words that can stand before a command (`{ cargo test; }`,
+/// `if cargo test; then`).
+const RESERVED: [&str; 9] = [
+    "{", "!", "if", "then", "else", "elif", "while", "until", "do",
+];
+
 /// GNU `time`'s options that take a value in the next word.
 const TIME_VALUE_OPTIONS: [&str; 4] = ["-f", "--format", "-o", "--output"];
 
@@ -346,7 +352,10 @@ pub(super) fn packages(code: &str) -> Vec<Selected> {
 /// command is not cargo's.
 fn cargo_command(words: &mut VecDeque<(usize, String)>) -> bool {
     loop {
-        while words.front().is_some_and(|(_, word)| assignment(word)) {
+        while words
+            .front()
+            .is_some_and(|(_, word)| assignment(word) || RESERVED.contains(&word.as_str()))
+        {
             words.pop_front();
         }
         let Some((_, program)) = words.pop_front() else {
@@ -459,10 +468,13 @@ fn package(word: &str) -> Option<(&str, Option<&str>)> {
     if placeholder {
         return None;
     }
-    Some(match word.split_once('@') {
-        Some((name, version)) => (name, Some(version)),
-        None => (word, None),
-    })
+    // `name@version`, or the legacy `name:version`
+    Some(
+        match word.split_once('@').or_else(|| word.split_once(':')) {
+            Some((name, version)) => (name, Some(version)),
+            None => (word, None),
+        },
+    )
 }
 
 /// Whether a `-p` value is a glob cargo matches against package names

@@ -58,10 +58,24 @@ fn history(doc: &str) -> bool {
 const PACKAGE_LAYOUT: [&str; 4] = ["benches", "examples", "src", "tests"];
 
 /// Links to this repository's `main` on GitHub; the rest is a checkout path.
-const SELF_MAIN: [&str; 2] = [
-    "https://github.com/vanyastaff/flui/blob/main/",
-    "https://github.com/vanyastaff/flui/tree/main/",
-];
+const SELF_MAIN: [&str; 2] = ["vanyastaff/flui/blob/main/", "vanyastaff/flui/tree/main/"];
+
+/// GitHub's origin, whose scheme and host match in any case.
+const GITHUB: &str = "https://github.com/";
+
+/// The checkout path a link to this repository's `main` names ([`SELF_MAIN`]).
+fn self_main(dest: &str) -> Option<&str> {
+    let origin = dest.get(..GITHUB.len())?;
+    let rest = &dest[GITHUB.len()..];
+    origin
+        .eq_ignore_ascii_case(GITHUB)
+        .then(|| {
+            SELF_MAIN
+                .iter()
+                .find_map(|prefix| rest.strip_prefix(prefix))
+        })
+        .flatten()
+}
 
 /// Arguments for `cargo xtask docs-paths`.
 #[derive(Debug, clap::Args)]
@@ -486,10 +500,7 @@ fn stale(
     reason = "not local, and local but outside the checkout, are different answers"
 )]
 fn link_target(doc: &str, dest: &str) -> Option<Option<String>> {
-    let local = SELF_MAIN
-        .iter()
-        .find_map(|prefix| dest.strip_prefix(prefix))
-        .map(|rest| format!("/{rest}"));
+    let local = self_main(dest).map(|rest| format!("/{rest}"));
     let dest = match &local {
         Some(dest) => dest.as_str(),
         // an empty path before a query or an anchor is the doc itself

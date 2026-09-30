@@ -2,7 +2,8 @@
 //! them, as far as finding the commands a doc runs needs: quotes (`'…'`,
 //! `"…"`) join and are removed, `\` escapes a character and continues a line,
 //! `#` at the start of a word comments out the rest of the line, and `&&`,
-//! `||`, `|`, `&`, `;` and a newline end a command, attached to a word or not.
+//! `||`, `|`, `&`, `;`, `(`, `)` and a newline end a command, attached to a
+//! word or not. A here-document's body (`<<EOF` … `EOF`) is skipped as data.
 //! No expansion: `$VAR` stays as written.
 
 /// One command: its words, each with the 0-based line of the code it starts on.
@@ -28,6 +29,9 @@ pub(super) fn commands(code: &str) -> Vec<Command> {
             commands.push(Command::new());
         }
     };
+    // the here-documents opened on this line: each delimiter, and whether
+    // `<<-` strips leading tabs; their bodies follow the newline
+    let mut heredocs: Vec<(String, bool)> = Vec::new();
     while let Some(c) = chars.next() {
         match c {
             ' ' | '\t' | '\r' => flush(&mut word, &mut commands),
@@ -35,6 +39,48 @@ pub(super) fn commands(code: &str) -> Vec<Command> {
                 flush(&mut word, &mut commands);
                 end(&mut commands);
                 line += 1;
+                // a here-document's body is data, not commands
+                for (delimiter, strip_tabs) in heredocs.drain(..) {
+                    loop {
+                        let mut body_line = String::new();
+                        while let Some(next) = chars.next_if(|&next| next != '\n') {
+                            body_line.push(next);
+                        }
+                        let ended = chars.next().is_none();
+                        line += usize::from(!ended);
+                        let body_line = body_line.trim_end_matches('\r');
+                        let body_line = if strip_tabs {
+                            body_line.trim_start_matches('\t')
+                        } else {
+                            body_line
+                        };
+                        if ended || body_line == delimiter {
+                            break;
+                        }
+                    }
+                }
+            }
+            // `<<WORD`/`<<-WORD` opens a here-document; `<<<` is a here-string
+            '<' if chars.peek() == Some(&'<') => {
+                flush(&mut word, &mut commands);
+                chars.next();
+                if chars.next_if_eq(&'<').is_some() {
+                    continue;
+                }
+                let strip_tabs = chars.next_if_eq(&'-').is_some();
+                while chars.next_if(|&next| next == ' ' || next == '\t').is_some() {}
+                let mut delimiter = String::new();
+                while let Some(next) =
+                    chars.next_if(|&next| !next.is_whitespace() && !";&|()<>".contains(next))
+                {
+                    // quoting the delimiter only turns expansion off
+                    if !matches!(next, '\'' | '"' | '\\') {
+                        delimiter.push(next);
+                    }
+                }
+                if !delimiter.is_empty() {
+                    heredocs.push((delimiter, strip_tabs));
+                }
             }
             // `(`/`)` group commands (`(cargo test)`): a command ends there too
             '&' | '|' | ';' | '(' | ')' => {

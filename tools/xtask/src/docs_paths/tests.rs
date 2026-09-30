@@ -169,6 +169,22 @@ fn packages_are_read_only_from_cargo_commands() {
         // a subshell groups commands
         ("(cargo test -p a)", &[(0, test, "a")]),
         ("x && (cd y; cargo build -p a)", &[(0, build, "a")]),
+        // reserved words before a command
+        ("{ cargo test -p a; }", &[(0, test, "a")]),
+        ("if cargo test -p a; then x; fi", &[(0, test, "a")]),
+        ("! cargo build -p a", &[(0, build, "a")]),
+        // a here-document's body is data; the command after it is read
+        (
+            "cat <<'EOF'\ncargo test -p gone\nEOF\ncargo build -p a",
+            &[(3, build, "a")],
+        ),
+        (
+            "cat <<-EOF > x\n\tcargo test -p gone\n\tEOF\ncargo build -p a",
+            &[(3, build, "a")],
+        ),
+        ("cat <<< x; cargo build -p a", &[(0, build, "a")]),
+        // the legacy `name:version` spec
+        ("cargo test -p a:1.2.3", &[(0, test, "a")]),
         // `time` runs the command after its own options (`-p` is time's)
         ("time cargo tree -p a", &[(0, Some("tree"), "a")]),
         ("time -p cargo test -p a", &[(0, test, "a")]),
@@ -282,6 +298,9 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
         ("cargo test -p alpha@1.2.3", true),
         ("cargo test -p alpha@1.2.3+meta", true),
         ("cargo test -p alpha@1.2.3+other", false),
+        ("cargo test -p alpha:1.2.3", true),
+        ("cargo pkgid -p flui-view:0.2.0-dev", true),
+        ("cargo pkgid -p flui-view:0.2", false),
         ("cargo update -p wgpu", true),
         ("cargo tree -p wgpu", true),
         ("cargo pkgid -p wgpu", true),
@@ -427,6 +446,11 @@ fn an_llms_link_resolves_like_a_github_link() {
         ),
         (
             "https://github.com/vanyastaff/flui/tree/main/crates/flui-view",
+            Some(Some("crates/flui-view")),
+        ),
+        // a scheme and a host match in any case
+        (
+            "HTTPS://GitHub.COM/vanyastaff/flui/tree/main/crates/flui-view",
             Some(Some("crates/flui-view")),
         ),
         ("docs/../README.md", Some(Some("README.md"))),
