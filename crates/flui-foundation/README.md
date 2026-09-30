@@ -58,9 +58,11 @@ use flui_foundation::{ElementId, Identifier, LayerId, RenderId, TreeId, ViewId};
 // The plain `Id<T: Marker>` family (ViewId, LayerId, SemanticsId, ListenerId,
 // ObserverId, FrameCallbackId, FrameId, TaskId, TickerId) are
 // `NonZeroUsize`-backed indices into a Slab. They implement `Identifier`.
-let view_id = ViewId::zip(0);      // index 0 → ID 1
-let layer_id = LayerId::zip(2);    // index 2 → ID 3
-assert_eq!(layer_id.unzip(), 2);   // ID 3 → index 2
+// `zip` takes the public (1-based) value; the slab offset is the caller's.
+let slab_index = 2;
+let layer_id = LayerId::zip(slab_index + 1);  // slot 2 → ID 3
+assert_eq!(layer_id.unzip() - 1, slab_index); // ID 3 → slot 2
+let first_view = ViewId::zip(1);              // slot 0 → ID 1
 
 // Generational keys (`ElementId`, and `GenId<T>` aliases `RenderId`,
 // `RealmId`, `DataTransferId`) pack a 32-bit slab index and a non-zero 32-bit
@@ -83,7 +85,7 @@ fn process<I: Identifier>(id: I) {
 fn any_tree_id<I: TreeId>(id: I) {
     println!("Tree id: {id}"); // Display/Eq/Hash, but no bare index accessor
 }
-process(view_id);
+process(first_view);
 any_tree_id(render_id);
 ```
 
@@ -240,11 +242,11 @@ the Slab uses 0-based indices while IDs use 1-based `NonZeroUsize` values:
 
 ```rust
 // Inserting into Slab:
-let slab_index = slab.insert(node);      // 0, 1, 2, ...
-let id = LayerId::zip(slab_index);        // 1, 2, 3, ... (index + 1)
+let slab_index = slab.insert(node);       // 0, 1, 2, ...
+let id = LayerId::zip(slab_index + 1);     // 1, 2, 3, ...
 
 // Accessing from Slab:
-let index = id.unzip();                   // ID → index (value - 1)
+let index = id.unzip() - 1;                // ID → slab index
 let node = slab.get(index);
 ```
 

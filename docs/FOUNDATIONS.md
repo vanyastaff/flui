@@ -113,7 +113,7 @@ The `View` trait stays object-safe (the children machinery needs it) with **no l
 
 ### C6 — Reconciliation: keyed
 
-Variable-arity child reconciliation is the keyed O(N) linear algorithm (match-from-top, match-from-bottom, keyed-`HashMap` middle, inflate the rest) — Flutter's exact algorithm, which already exists in the codebase, tested, with zero production callers. Every `ElementNode` carries `key: Option<Key>`, set at insert from `View::key()`. The positional index-match path is deleted. Without this, every list/grid/table silently loses widget state on reorder. Co-designed with C2 (a tuple `ViewSeq` spine makes the contiguous fast-path monomorphic) and C4.
+Variable-arity child reconciliation is the keyed O(N) linear algorithm (match-from-top, match-from-bottom, keyed-`HashMap` middle, inflate the rest): `reconcile_children_by_id` (`crates/flui-view/src/tree/id_reconcile.rs`), which `BuildOwner` calls for every variable-arity child list (`rg -n reconcile_children_by_id crates/flui-view/src/owner` shows the call). A keyed child keeps its element, and its state, across a reorder; a keyless child matches only by position. Co-designed with C2 (a tuple `ViewSeq` spine makes the contiguous fast-path monomorphic) and C4.
 
 ### C7 — Error model: `build()` infallible, `Result` everywhere else
 
@@ -216,7 +216,7 @@ graph TD
     view --> objects
     view --> macros
     widgets --> view
-    widgets --> assets
+    widgets -.-> assets
     runtime --> widgets
     runtime --> protocol
     sdk --> widgets
