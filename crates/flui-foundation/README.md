@@ -55,10 +55,12 @@ IDs use marker traits for type safety, similar to wgpu's resource ID system:
 ```rust
 use flui_foundation::{ElementId, Identifier, LayerId, RenderId, TreeId, ViewId};
 
-// The plain `Id<T: Marker>` family (ViewId, LayerId, SemanticsId, ListenerId,
-// ObserverId, FrameCallbackId, FrameId, TaskId, TickerId) are
-// `NonZeroUsize`-backed indices into a Slab. They implement `Identifier`.
-// `zip` takes the public (1-based) value; the slab offset is the caller's.
+// The plain `Id<T: Marker>` family wraps a `NonZeroUsize` and implements
+// `Identifier`. The tree ids that address slab storage (ViewId, LayerId,
+// SemanticsId) are the slot plus one; the rest (ListenerId, ObserverId,
+// FrameCallbackId, FrameId, TaskId, TickerId) are opaque counters with no
+// slot behind them. `zip` takes the public (non-zero) value; the slab offset
+// is the caller's.
 let slab_index = 2;
 let layer_id = LayerId::zip(slab_index + 1);  // slot 2 → ID 3
 assert_eq!(layer_id.unzip() - 1, slab_index); // ID 3 → slot 2
