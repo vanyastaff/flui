@@ -69,19 +69,18 @@ pub(super) struct Code {
 }
 
 /// The code spans and code blocks of `markdown`, in order, but for a code
-/// span that is (part of) a link's text.
+/// span labelling a [`pinned`] permalink.
 pub(super) fn code(markdown: &str) -> Vec<Code> {
     let lines = LineIndex::new(markdown);
     let mut found = Vec::new();
     let mut block: Option<Code> = None;
-    // a code span in a link's text labels the link, which lychee checks; a
-    // permalink to a commit cites a file as it was, deleted since or not
-    let mut links = 0_usize;
+    // CommonMark links do not nest
+    let mut in_pinned = false;
     for (event, range) in Parser::new_ext(markdown, Options::all()).into_offset_iter() {
         match event {
-            Event::Start(Tag::Link { .. }) => links += 1,
-            Event::End(TagEnd::Link) => links = links.saturating_sub(1),
-            Event::Code(_) if links > 0 => {}
+            Event::Start(Tag::Link { dest_url, .. }) => in_pinned = pinned(&dest_url),
+            Event::End(TagEnd::Link) => in_pinned = false,
+            Event::Code(_) if in_pinned => {}
             Event::Code(text) => found.push(Code {
                 line: lines.line(range.start),
                 text: text.into_string(),
@@ -111,6 +110,16 @@ pub(super) fn code(markdown: &str) -> Vec<Code> {
     found
 }
 
+/// Whether `dest` is a permalink to this repository at a commit or tag, not
+/// `main`: it cites a file as it was then, deleted since or not.
+fn pinned(dest: &str) -> bool {
+    ["blob", "tree"].iter().any(|kind| {
+        dest.strip_prefix(&format!("https://github.com/vanyastaff/flui/{kind}/"))
+            .and_then(|rest| rest.split_once('/'))
+            .is_some_and(|(reference, _)| reference != "main")
+    })
+}
+
 /// The destination of every link and image in `markdown`, with its line.
 pub(super) fn links(markdown: &str) -> Vec<(usize, String)> {
     let lines = LineIndex::new(markdown);
@@ -125,31 +134,27 @@ pub(super) fn links(markdown: &str) -> Vec<(usize, String)> {
         .collect()
 }
 
-/// The `#anchor`s the headings of `markdown` give, as GitHub makes them: an
-/// explicit `{#id}`, or the text lowercased, spaces turned to `-`, other
-/// punctuation but `-` and `_` dropped, and `-1`, `-2`, … after a repeat.
+/// The `#anchor`s the headings of `markdown` give, as GitHub makes them: the
+/// text lowercased, spaces turned to `-`, other punctuation but `-` and `_`
+/// dropped, and `-1`, `-2`, … after a repeat. GitHub has no `{#id}` heading
+/// attribute: it renders the braces as text, so the parser's extension is off.
 pub(super) fn anchors(markdown: &str) -> BTreeSet<String> {
     let mut anchors = BTreeSet::new();
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
-    let mut heading: Option<(Option<String>, String)> = None;
-    for event in Parser::new_ext(markdown, Options::all()) {
+    let mut heading: Option<String> = None;
+    let options = Options::all().difference(Options::ENABLE_HEADING_ATTRIBUTES);
+    for event in Parser::new_ext(markdown, options) {
         match event {
-            Event::Start(Tag::Heading { id, .. }) => {
-                heading = Some((id.map(pulldown_cmark::CowStr::into_string), String::new()));
-            }
+            Event::Start(Tag::Heading { .. }) => heading = Some(String::new()),
             Event::Text(text) | Event::Code(text) => {
-                if let Some((_, heading)) = &mut heading {
+                if let Some(heading) = &mut heading {
                     heading.push_str(&text);
                 }
             }
             Event::End(TagEnd::Heading(_)) => {
-                let Some((id, text)) = heading.take() else {
+                let Some(text) = heading.take() else {
                     continue;
                 };
-                if let Some(id) = id {
-                    anchors.insert(id);
-                    continue;
-                }
                 let slug: String = text
                     .to_lowercase()
                     .chars()
@@ -225,18 +230,25 @@ pub(super) struct Selected<'a> {
     pub(super) name: &'a str,
 }
 
+/// Cargo's options before the subcommand that take a value in the next word
+/// (`cargo --color always update`).
+const GLOBAL_VALUE_OPTIONS: [&str; 4] = ["--color", "--config", "-C", "-Z"];
+
 /// The packages the cargo commands in `code` select, in every spelling cargo
-/// takes: `-p x`, `--package x`, `-p=x`, `--package=x` and `-px`.
+/// takes: `-p x`, `--package x`, `-p=x`, `--package=x` and `-px`, a quoted
+/// value too (`--package='x'`).
 pub(super) fn packages(code: &str) -> Vec<Selected<'_>> {
     let mut found = Vec::new();
     let mut continued = false;
     // `Some(subcommand)` inside a cargo command
     let mut cargo: Option<Option<&str>> = None;
     let mut after_flag = false;
+    let mut after_global = false;
     for (index, line) in code.lines().enumerate() {
         if !continued {
             cargo = None;
             after_flag = false;
+            after_global = false;
         }
         let body = line.trim_end();
         continued = body.ends_with('\\');
@@ -258,17 +270,23 @@ pub(super) fn packages(code: &str) -> Vec<Selected<'_>> {
                 cargo = None;
                 continue;
             }
+            if after_global {
+                after_global = false;
+                continue;
+            }
             if word == "cargo" || word.ends_with("/cargo") {
                 cargo = Some(None);
             } else if let Some(subcommand) = &mut cargo {
-                if matches!(word, "-p" | "--package") {
+                if subcommand.is_none() && GLOBAL_VALUE_OPTIONS.contains(&word) {
+                    after_global = true;
+                } else if matches!(word, "-p" | "--package") {
                     after_flag = true;
                 } else if let Some(name) = word
                     .strip_prefix("--package=")
                     .or_else(|| word.strip_prefix("-p="))
                     .or_else(|| word.strip_prefix("-p").filter(|_| !word.starts_with("--")))
                 {
-                    select(*subcommand, name);
+                    select(*subcommand, name.trim_matches(['"', '\'']));
                 } else if subcommand.is_none() && !word.starts_with(['-', '+']) {
                     *subcommand = Some(word.trim_end_matches(';'));
                 }

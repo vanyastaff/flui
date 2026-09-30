@@ -118,6 +118,15 @@ fn packages_are_read_only_from_cargo_commands() {
         ("cargo --locked test -p a", &[(0, test, "a")]),
         ("cargo -p a test", &[(0, None, "a")]),
         (
+            "cargo --color always update -p w",
+            &[(0, Some("update"), "w")],
+        ),
+        ("cargo --config x=1 -Z y test -p a", &[(0, test, "a")]),
+        (
+            "cargo test --package='a' -p\"b\"",
+            &[(0, test, "a"), (0, test, "b")],
+        ),
+        (
             "~/.cargo/bin/cargo test -p flui-view",
             &[(0, test, "flui-view")],
         ),
@@ -170,8 +179,9 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
 fn headings_give_github_anchors() {
     let markdown = "# Start here\n## The `View` tree: a guide!\n## Start here\n\
                     ## Custom {#own-id}\n\n```\n# not a heading\n```\n";
+    // GitHub renders `{#own-id}` as text; it is no anchor of its own
     let want: BTreeSet<String> = [
-        "own-id",
+        "custom-own-id",
         "start-here",
         "start-here-1",
         "the-view-tree-a-guide",
@@ -182,9 +192,13 @@ fn headings_give_github_anchors() {
 }
 
 fn code_spans_and_blocks_carry_their_lines() {
-    // the code span labelling a permalink is the link's, not a path to check
+    // a code span labelling a permalink to a commit cites the file as it was
+    // then; any other link's label is still a path to check
     let markdown = "# T\n\nSee `docs/x.md`.\n\n```bash\ncargo test\ncargo run -p a\n```\n\n    indented\n\n\
-                    [l](docs/y.md) ![i](/z.png) [`docs/old.md` then](https://github.com/o/r/blob/abc/docs/old.md)\n";
+                    [l](docs/y.md) ![i](/z.png) \
+                    [`docs/old.md`](https://github.com/vanyastaff/flui/blob/e30ab71/docs/old.md) \
+                    [`docs/now.md`](https://github.com/vanyastaff/flui/blob/main/docs/now.md) \
+                    [`docs/testng.md`](docs/testing.md)\n";
     let code = extract::code(markdown);
     assert_eq!(
         code,
@@ -204,6 +218,16 @@ fn code_spans_and_blocks_carry_their_lines() {
                 text: "indented\n".to_owned(),
                 block: true,
             },
+            extract::Code {
+                line: 12,
+                text: "docs/now.md".to_owned(),
+                block: false,
+            },
+            extract::Code {
+                line: 12,
+                text: "docs/testng.md".to_owned(),
+                block: false,
+            },
         ]
     );
     assert_eq!(
@@ -211,7 +235,15 @@ fn code_spans_and_blocks_carry_their_lines() {
         [
             (12, "docs/y.md".to_owned()),
             (12, "/z.png".to_owned()),
-            (12, "https://github.com/o/r/blob/abc/docs/old.md".to_owned())
+            (
+                12,
+                "https://github.com/vanyastaff/flui/blob/e30ab71/docs/old.md".to_owned()
+            ),
+            (
+                12,
+                "https://github.com/vanyastaff/flui/blob/main/docs/now.md".to_owned()
+            ),
+            (12, "docs/testing.md".to_owned()),
         ]
     );
 }
