@@ -209,12 +209,6 @@ impl<'a> ShapedRun<'a> {
         &self.paragraph.faces[self.data.face as usize]
     }
 
-    /// The font file the run's face is in.
-    #[must_use]
-    pub fn blob(&self) -> &'a FontBlob {
-        &self.face().blob
-    }
-
     /// The normalized variation coordinates, synthesis variations included;
     /// empty for the default instance.
     #[must_use]
