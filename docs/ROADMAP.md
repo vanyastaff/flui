@@ -2,7 +2,7 @@
 
 # FLUI Roadmap
 
-Active objective: a verified beta (see [BETA.md](BETA.md) for acceptance criteria and per-platform evidence). The living plan is in this repository and is its source of truth: the target architecture and its decisions in [`design/README.md`](../design/README.md) (ADR-0081 to ADR-0097, all Proposed), and the order of work in the [migration plan](plans/2026-09-25-architecture-migration-plan.md); any document kept outside the repository only mirrors them. Historical roadmaps are in `docs/archive/` and are not a source of status.
+Active objective: a verified beta (see [BETA.md](BETA.md) for acceptance criteria and per-platform evidence). The living plan is in this repository and is its source of truth: the target architecture and its decisions in [`design/README.md`](../design/README.md) (ADR-0081 to ADR-0098; some are accepted in part and the rest are Proposed, as each ADR's `Status` line records), and the order of work in the [migration plan](plans/2026-09-25-architecture-migration-plan.md); any document kept outside the repository only mirrors them. Historical roadmaps are in `docs/archive/` and are not a source of status.
 
 ## Milestones
 
