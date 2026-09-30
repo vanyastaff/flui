@@ -169,7 +169,7 @@ pub(super) fn run(runner: Runner, only: Option<Part>, strict: bool) -> anyhow::R
 mod tests {
     use super::*;
 
-    fn ci_lets_only_the_advisories_pass_in_the_fast_and_tooling_lanes() {
+    fn ci_lets_only_the_advisories_pass_on_a_package_or_tooling_pr() {
         let ci = std::fs::read_to_string(crate::util::repo_root().join(".github/workflows/ci.yml"))
             .expect("ci.yml")
             .replace("\r\n", "\n");
@@ -187,7 +187,7 @@ mod tests {
         assert!(!step("policy").contains("continue-on-error"));
         assert!(
             step("advisories")
-                .contains("continue-on-error: ${{ needs.plan.outputs.lane == 'fast' || needs.plan.outputs.lane == 'tooling' }}"),
+                .contains("continue-on-error: ${{ needs.plan.outputs.lane == 'tooling' || (needs.plan.outputs.lane == 'wide' && needs.plan.outputs.mode == 'packages' && needs.plan.outputs.heavy_required == 'false') }}"),
             "{}",
             step("advisories")
         );
@@ -221,8 +221,8 @@ mod tests {
             "deps_gate_contract",
             &[
                 (
-                    "ci_lets_only_the_advisories_pass_in_the_fast_and_tooling_lanes",
-                    ci_lets_only_the_advisories_pass_in_the_fast_and_tooling_lanes as fn(),
+                    "ci_lets_only_the_advisories_pass_on_a_package_or_tooling_pr",
+                    ci_lets_only_the_advisories_pass_on_a_package_or_tooling_pr as fn(),
                 ),
                 (
                     "a_missing_tool_is_a_note_or_under_strict_a_failure",

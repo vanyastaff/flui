@@ -391,7 +391,7 @@ that wires what it adds.
      context as `TextSource`, an opaque token only flui-rendering can borrow, so a direct
      `RenderObject` implementation cannot hold a loan across a child query either.
    - (3a) Parley measures behind `parley-layout`, not `parley`: the workspace test scope turns
-     `parley` on for CI's `test` and `fast-lane` jobs, and if `parley` switched measurement, CI
+     `parley` on for CI's `test` job, and if `parley` switched measurement, CI
      would measure every text-size test with Parley while the build that ships measures with
      cosmic-text. `parley` compiles the Parley measurement and its tests pin a painter to it.
      Under `parley-layout` size, baselines and intrinsics come from Parley while glyphs and

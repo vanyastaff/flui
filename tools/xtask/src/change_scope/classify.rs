@@ -63,19 +63,19 @@ pub(super) const HEAVY_TRIGGERS: &[&str] = &[
     "rust-toolchain", // the extensionless form; rustup prefers it over .toml
     ".github/workflows/**",
     // Shaders: clippy only embeds them as strings and no build script parses
-    // them, so the fast lane never compiles one (`checks`' `wgsl` step is a
-    // syntactic uniformity check, in every lane). The wide lane adds
-    // live-smoke, whose demo compiles the pipelines it draws with on
-    // lavapipe; gpu-test, which compiles every shader module on WARP, runs
-    // only from the full lane up (merge queue, main), so a shader the demo
-    // does not draw is first compiled there.
+    // them (`checks`' `wgsl` step is a syntactic uniformity check, in every
+    // lane). The wide lane's live-smoke compiles the pipelines its demo draws
+    // with on lavapipe; gpu-test, which compiles every shader module on WARP,
+    // runs only from the full lane up (merge queue, main), so a shader the
+    // demo does not draw is first compiled there. A shader outside every
+    // crate would otherwise take the tooling lane.
     "**/*.wgsl",
     // The `deps` job's advisories step blocks only from the wide lane up, and an
     // edited advisory ignore is exactly what that step judges.
     "deny.toml",
 ];
 
-/// Everything depends on these, and the fast lane checks what they change.
+/// Everything depends on these: a change to one checks the whole workspace.
 pub(super) const FULL_TRIGGERS: &[&str] = &[
     "clippy.toml",
     ".config/nextest.toml",

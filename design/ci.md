@@ -3,6 +3,9 @@
 - **Status:** Accepted 2026-09-26, with the owner's decisions in [§9](#9-open-points-for-the-owner).
   Implemented except the rows [§7](#7-migration-steps-each-pr-labelled-full-ci) lists as deferred
   (jobs whose commands do not exist yet, and the levers that need CI runs to measure).
+  **Revised 2026-09-30** ([§10](#10-revision-2026-09-30-the-fast-lane-measured)): the `fast` lane
+  and its `fast-lane`/`fast-lane-ios` jobs are gone, every compiling pull request takes `wide`, and
+  the text below that describes the fast lane records what was measured, not what runs.
 - **Date:** 2026-09-26
 - **Baseline:** `main` at `c2ba3ae51`; workflows as of that commit; CI runs from 2026-09-23 to
   2026-09-26.
@@ -620,3 +623,65 @@ The proposals as they were put:
   against a cold `TEST_SCOPE` build (C6).
 - **C7. Standalone crates.** Proposed: `tooling`, with nothing compiled for them. The alternative
   adds a `cargo check --manifest-path <crate>/Cargo.toml` step to `checks`.
+
+---
+
+## 10. Revision 2026-09-30: the fast lane, measured
+
+C6 and C8 left the fast lane's shape as an unmeasured lever until its first runs. Those runs are
+in: the 40 successful `ci.yml` runs from 2026-09-30 00:00 to 20:00 UTC, per job, from
+`gh api repos/vanyastaff/flui/actions/runs/<id>/jobs`.
+
+| Lane (event) | Runs | Median wall-clock | Longest job (median) |
+|---|---:|---:|---|
+| `fast` (`pull_request`) | 6 | 35.1 min | `fast-lane` 30.6 min |
+| `wide` (`pull_request`) | 20 | 18.0 min | `test` 14.6 min |
+| `full` (`push`) | 11 | 27.6 min | `test` 15.5 min |
+| `extended` | 2 | 49-106 min | `test-windows` 46-55 min, `macos-ci` 40-47 min |
+
+No job waited for a runner: the longest gap between a run's creation and a job's start was
+0.6 min, outside one extended run's macOS jobs (10.2 min). The concurrency argument of §1 did not
+materialise, and the fast lane, one serial job, took twice the wall-clock of the parallel jobs
+over the whole workspace. It was also the only lane that could time out: a pull request touching
+every crate (vanyastaff/flui#1384) put 23 crates into its per-feature pass and was cancelled at
+40 minutes twice.
+
+Decisions, each in `ci.yml` and `tools/xtask/src/change_scope/`:
+
+1. **No fast lane.** `Lane::decide` maps a pull request that compiles anything to `wide`. The
+   scope still feeds `cargo xtask check-changed`, which keeps its scoped local run (C6's local
+   half stands), and two CI outputs: `cross_ios` starts `ios-runner` (the former `fast-lane-ios`)
+   in the wide lane, and `mode`/`heavy_required` keep `deps`' advisories blocking only on a
+   workspace-wide change or a heavy-job input, as the fast lane did. `plan_args`,
+   `ci_test_args` and the per-feature and feature-gated-dependent caps that routed a pull request
+   away from the fast lane's timeout are removed; the tests
+   `lane_args::fast_lane_builds_the_test_scope_and_filters`,
+   `lane_args::many_feature_gated_dependents_take_the_wide_lane`,
+   `lane_args::many_per_feature_packages_take_the_wide_lane` and `aggregator::fast_lane` went
+   with them, and `lane_args::a_package_change_takes_the_wide_lane_and_scopes_check_changed`
+   pins the new route.
+2. **`test` stops building twice.** It linked the examples with `cargo build --workspace
+   --all-targets` (default features, 4-6 min) and then built `TEST_SCOPE` (another resolution,
+   3.6 min). It now runs `cargo xtask test --fast`, then `cargo xtask build-all-targets`, the
+   all-targets build with `TEST_SCOPE`'s features, which reuses the test build.
+3. **`test-nested` runs the nested-cargo group beside `test`** (`cargo xtask test --nested`), off
+   the critical path: 5.7 of `test`'s ~10 min in run 36752979987. It restores `test`'s cache and
+   saves none of its own. `test-windows` runs `cargo xtask test --fast`: the group checks nothing
+   host-specific, and it was 17 of the job's 51 min on a cold cache (run 36663455643).
+4. **Advisory jobs whose own graduation rule is met are blocking**: `miri` (67 green runs, no
+   red), `macos-ci` and `test-windows` (three green runs each, the rule their comments stated).
+5. **Single-entry matrices dropped** (`test`, `bench-compile`: `os: [ubuntu-latest]`, with a
+   stale "Windows temporarily dropped" note; `test-windows` covers Windows). Each job's name now
+   equals its key.
+6. **Floating tools pinned**: `zizmor@1.30.1` (a new minor adds audits that fail `checks`
+   without a commit here) and `mdbook@0.5.4` in `docs.yml`.
+
+Not changed, with the reason:
+
+- **Caches.** `gh cache list` holds 12.3 GB in 18 main-only entries, over the 10 GB default.
+  Warm caches for `test-windows` and `macos-ci` (their cold builds are most of their time) need
+  room that is not there; raising the limit is paid. Fewer, shared keys come first.
+- **Debuginfo.** `line-tables-only` stays ([build-footprint R5](build-footprint.md)): `debug = 0`,
+  as Bevy, Slint and Xilem use in CI, would drop file:line from CI backtraces for about 2 GB.
+- **Test sharding, mold, cranelift**: none of the eleven projects compared uses them in CI (zed,
+  bevy, xilem, vello, egui, iced, rust-analyzer, tokio, wgpu, slint, dioxus).

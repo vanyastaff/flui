@@ -174,7 +174,7 @@ Two choices in it differ from CI on purpose:
   (`--all-targets`, part of `cargo xtask gate`), so a type error in one still
   fails the local gate. What goes unchecked locally is only a *link* failure
   specific to an example; CI's `test` job and a local
-  `cargo build --workspace --all-targets --locked` catch it.
+  `cargo xtask build-all-targets` catch it.
 
 Measured against the previous two-slice scope (2026-09-22, M1/8 GB,
 `CARGO_BUILD_JOBS=6`, shared target, after an edit to the bottom value-types
@@ -904,11 +904,12 @@ cargo xtask deps --strict --only policy                       # deps job: cargo-
 cargo xtask deps --strict --only advisories                   # same job: RustSec advisories, blocking in the wide, full and extended lanes
 cargo bench -p flui-rendering --no-run                        # bench-compile job
 cargo xtask doc-strict                                        # doc job
-cargo build --workspace --all-targets --locked                # test job: links the examples
-cargo xtask test                                              # same job: nextest over the test scope, then flui-platform under Xvfb (FLUI_HEADLESS=1), then the nested-cargo group
+cargo xtask test --fast                                       # test job: nextest over the test scope, then flui-platform under Xvfb (FLUI_HEADLESS=1)
+cargo xtask build-all-targets                                 # same job: links the examples and benches with the test scope's features
+cargo xtask test --nested                                     # test-nested job: the nested-cargo group
 cargo nextest run -p flui-platform --locked [--all-features] --no-fail-fast                           # platform-windows job (windows-latest), both feature sets
 cargo test --workspace --locked --doc
-cargo +nightly miri test -p flui-rendering --lib pipeline::owner  # advisory (continue-on-error); NARROW — every
+cargo +nightly miri test -p flui-rendering --lib pipeline::owner  # miri job; NARROW — every
                                                               # unit test under that module, including PipelineCell
                                                               # checkout, an owner-local run_frame traversal, a
                                                               # reentrant-layout walk, and two real-NodePtr walks
@@ -919,7 +920,7 @@ cargo +nightly miri test -p flui-rendering --lib pipeline::owner  # advisory (co
 
 ### CI jobs and their local commands
 
-Each CI run takes one of six lanes. The `plan` job picks it
+Each CI run takes one of five lanes. The `plan` job picks it
 (`cargo xtask affected --event <event> --full-ci-label <bool>`), and every lane
 runs `checks`, `plan` and the `ci` aggregator:
 
@@ -927,58 +928,39 @@ runs `checks`, `plan` and the `ci` aggregator:
 |---|---|---|
 | `docs` | a pull request that changes only documentation | nothing |
 | `tooling` | a pull request that changes only repository tooling, or a standalone crate | `deps`; `standalone` for the crate |
-| `fast` | a pull request whose change is a set of packages | `deps`, `fast-lane`; `fast-lane-ios` when the iOS runner is in scope |
-| `wide` | a pull request that needs the whole workspace or changes a heavy-job input | `deps` and every Linux job (`HEAVY_JOBS`); no Windows or macOS runner |
+| `wide` | a pull request that compiles anything | `deps` and every Linux job (`HEAVY_JOBS`) over the whole workspace; `ios-runner` when the change reaches the iOS runner; no Windows or macOS suite |
 | `full` | a push to `main`, the merge queue | `wide` plus the Windows and macOS jobs (`FULL_JOBS`) |
 | `extended` | the nightly schedule, `workflow_dispatch`, a pull request labelled `full-ci` | `full` plus the nightly-only platform jobs (`EXTENDED_JOBS`) |
 
-- **Fast lane**: `fast-lane` runs clippy and nextest over the changed crates and
-  every workspace crate that declares a dependency on them, including optional,
-  dev and target-specific dependencies. Normal and build edges are followed
-  transitively; a dev edge is the last hop, because the dev-dependent's library
-  does not contain the change. It also checks the code a Linux build
-  never compiles:
-  - clippy on the other targets for `flui-platform`'s backends, the
-    `flui-app`/`flui` Android runner and `flui-cli` on Windows, when they are
-    in scope;
-  - wasm32 clippy for the wasm-capable crates in scope;
-  - a per-feature `cargo hack clippy` for the changed crates that have
-    features, for any crate whose `Cargo.toml` changed, and for each
-    dependent whose edge to a crate in scope only a non-default feature
-    compiles (an optional dependency, or one a non-default feature names).
-    Other dependents keep the default build. More than three such dependents
-    send the PR to the wide lane, whose `feature-matrix` covers them;
-  - the `flui-app`/`flui` iOS runner's clippy, when either is in scope, in a
-    separate macOS job (`fast-lane-ios`), because it needs xcrun;
-  - rustdoc with `-D warnings` over the crates in scope, with their `testing`
-    features (the `doc` job's flags). A moved item's broken intra-doc link is
-    the typical casualty of a refactor;
-  - the doctests of the library crates in scope (`cargo test --doc`, the
-    `doc-test` job narrowed): nextest runs none.
+- **Wide lane**: every pull request that compiles anything runs every Linux
+  job, in parallel, over the whole workspace. One serial job over the
+  changed crates and their dependents was slower (35 min median, against 18
+  for these parallel jobs, over the runs of 2026-09-30), and hosted runners
+  do not queue for this repository, so scoping bought nothing in CI. The
+  scope still decides two things: `ios-runner`, the `flui-app`/`flui` iOS
+  runner's clippy on macOS (it needs xcrun), runs when the change reaches
+  either crate; and `deps`' advisories block only when the change is
+  workspace-wide (`mode` full: `Cargo.lock`, the root `Cargo.toml`,
+  `.cargo/`, the toolchain file, a workflow, the lane's own code in
+  `tools/xtask/src/change_scope/`, a file no crate owns) or touches an
+  input of the wide lane's jobs (`deny.toml`, a WGSL shader); otherwise a new advisory is reported without failing
+  unrelated work, and main turns red for it.
 
-  The scope comes from `cargo xtask affected`; `cargo xtask check-changed`
-  uses the same classification and arguments before a PR, and also counts
-  uncommitted work. One difference: CI's `fast-lane` runs clippy over the
-  whole workspace and builds the tests of `cargo xtask test`'s scope (the
-  feature set whose dependencies its cache, saved by `test` on main, holds;
-  the cache keeps no workspace crates, so all of them compile), then runs
-  only the affected packages' tests with a nextest filterset
-  (`-E package(a)|package(b)`); `check-changed` builds only the scope, which
-  is cheaper in a fresh worktree. Whether the CI shape beats a scoped build
-  is measured on its first runs (`design/ci.md` §4.1).
+  `cargo xtask check-changed` keeps the scope before a PR: clippy and
+  nextest over the changed crates and every workspace crate that declares a
+  dependency on them (optional, dev and target-specific dependencies
+  included; normal and build edges transitively, a dev edge as the last
+  hop), and the checks a Linux build never compiles: the other targets'
+  clippy for `flui-platform`'s backends, the Android runner and `flui-cli`
+  on Windows, wasm32 clippy, a per-feature `cargo hack clippy` for the
+  changed crates with features, changed manifests and dependents whose edge
+  only a feature compiles, rustdoc with `-D warnings`, and the doctests. It
+  counts uncommitted work.
 - **Tooling lane**: nothing in the workspace compiles. A standalone crate is
   a directory under the repository whose `Cargo.toml` declares its own
   `[workspace]` and that no workspace crate reaches by a path dependency
   (the repository has none today); the `standalone` job runs
   `cargo check --locked --all-targets` on each one the change touches.
-- **Wide lane**: a workspace-wide input (clippy/nextest config, the lane's own
-  code in `tools/xtask/src/change_scope/`), a file no crate owns, more than
-  three feature-gated dependents, or an input of the wide lane's jobs. Those
-  inputs are `Cargo.lock`, the root `Cargo.toml`, `.cargo/`, the toolchain
-  file (either spelling), a workflow, a WGSL shader, `deny.toml` (only this
-  lane and the ones above it block on `deps`' advisories), and any script or
-  xtask command only such a job runs (read from `ci.yml`). Every Linux job
-  runs, in parallel, over the whole workspace.
 - **Full and extended lanes**: `main` and the merge queue run `full`, which
   adds `gpu-test`, `platform-windows` and `cli-macos`. The nightly run,
   `workflow_dispatch` and the `full-ci` label run `extended`, which adds the
@@ -992,31 +974,14 @@ runs `checks`, `plan` and the `ci` aggregator:
   A red run on main or nightly opens (or comments on) the "CI is red on main"
   issue. The rule is fix forward within the hour, or revert.
 
-**Only `wide`, `full` and `extended` check these**, so a pull request on the
-fast lane can merge green and still turn main red:
-
-- doc-tests and rustdoc of crates outside the change's scope (`doc-test`,
-  `doc`);
-- linking of examples and benches (`test`'s `build --all-targets`,
-  `bench-compile`);
-- the feature-gated suites (`test-features`);
-- the per-feature matrix of dependents that reach the change under a
-  default feature or not at all (`feature-matrix`);
-- the facade in its default feature set;
-- miri, `live-smoke`;
-- linking and running the wasm32 tests (`wasm-check`);
-- a RustSec advisory published against an unchanged lockfile (`deps` reports
-  it in the fast and tooling lanes, but only the wide lane and above fail on
-  it).
-
 **Only `full` and `extended` check these**, so even a wide pull request can
 merge green and still turn main red: every Windows and macOS job, that is
 GPU readback on WARP (`gpu-test`), flui-platform's Windows suite
 (`platform-windows`), macOS's `flui-cli` suite and the iOS runner clippy
-(`cli-macos`; the iOS clippy also runs in `fast-lane-ios` when `flui-app`
-or `flui` is in scope, but a wide pull request runs no macOS job). Only
+(`cli-macos`; on a pull request the iOS clippy runs in `ios-runner` when
+the change reaches `flui-app` or `flui`). Only
 `extended` runs the whole workspace suite on macOS (`macos-ci`) and on
-Windows (`test-windows`), both advisory for now.
+Windows (`test-windows`).
 
 Label a change that is likely to break one of these `full-ci`.
 
@@ -1033,26 +998,26 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 |---|---|---|
 | `checks` | `cargo xtask checks` + `cargo test -p xtask`, then `actionlint` and `zizmor .` (`ci-full` runs both, skipping one that is not installed) | CI passes `--strict`: a missing typos, taplo or lychee fails there instead of being skipped with a message |
 | `plan` | `cargo xtask affected` (`check-changed` runs the same classification) | decides the lane and the affected packages; CI passes `--event`, `--full-ci-label` and the PR's base SHA, `check-changed` diffs against `origin/main` (or `--base`) and adds uncommitted files |
-| `fast-lane` | `cargo xtask check-changed` | same packages; CI lints the whole workspace and runs the scope's tests out of the `cargo xtask test` build (see the fast lane above), `check-changed` builds only the scope; the cross-target and wasm32 clippy and the per-feature pass for changed manifests run only when their rustup target or cargo-hack is installed (`cargo xtask doctor full`); the flui-platform leg needs `xvfb-run` (Linux) |
-| `fast-lane-ios` | `cargo xtask check-changed` (on a Mac with the iOS target) | the same iOS runner clippy as `cli-macos`, run in the fast lane when `flui-app` or `flui` is in scope |
+| `ios-runner` | `cargo xtask check-changed` (on a Mac with the iOS target) | the same iOS runner clippy as `cli-macos`, run in the wide lane when the change reaches `flui-app` or `flui` |
 | `standalone` | `cargo check --locked --all-targets --manifest-path <crate>/Cargo.toml` | tooling lane only, for each standalone crate the change touches; warnings are not denied (the crate is outside the workspace lints) |
 | `clippy` | `cargo xtask lint` (in `gate`) | — |
-| `test` | `cargo build --workspace --all-targets --locked`, then `cargo xtask test` | the same commands: the job runs `cargo xtask test` itself, after the build that links the examples (the facade's default feature set is compiled there, not tested); the flui-platform leg needs `xvfb-run` (Linux) |
+| `test` | `cargo xtask test --fast`, then `cargo xtask build-all-targets` | the same commands; the all-targets build uses the test scope's features, so it links the examples and benches without rebuilding the rest (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-platform leg needs `xvfb-run` (Linux) |
+| `test-nested` | `cargo xtask test --nested` | the nested-cargo group (trybuild, generated projects, facade consumers), beside `test`; `cargo xtask test` without a flag runs both |
 | `test-features` | the job's `cargo nextest run` lines (`ci-full` runs them) | — |
 | `live-smoke` | `cargo xtask live-smoke`, `cargo xtask live-smoke --wayland` | the job runs these two commands; Linux only (Xvfb, lavapipe, weston); `ci-full` runs them on Linux and says it skipped them elsewhere |
 | `gpu-test` | `cargo xtask gpu-test` | the job runs this command, in the full and extended lanes only; CI renders on Windows' WARP software rasterizer; locally the host adapter renders, so a local-only mismatch is a host difference to look at, not a CI verdict |
 | `platform-windows` | `cargo xtask test` (on Windows) | `test` runs the all-features pass only; CI adds a default-features pass |
 | `bench-compile` | `cargo xtask bench-compile` | — |
 | `doc` | `cargo xtask doc-strict` (in `gate`) | — |
-| `deps` | `cargo xtask deps` | CI runs `--only policy` and `--only advisories` as two steps, with `--strict` (a missing cargo-deny or cargo-shear fails instead of being skipped); every lane but `docs` runs it; the advisories step blocks from the wide lane up and only reports in the fast and tooling lanes, because a new RustSec entry can fail a commit that passed the day before |
+| `deps` | `cargo xtask deps` | CI runs `--only policy` and `--only advisories` as two steps, with `--strict` (a missing cargo-deny or cargo-shear fails instead of being skipped); every lane but `docs` runs it; the advisories step blocks on main, nightly and a pull request whose change is workspace-wide or touches `deny.toml`, and only reports on other pull requests, because a new RustSec entry can fail a commit that passed the day before |
 | `doc-test` | `cargo test --workspace --locked --doc` (in `cargo xtask ci`) | — |
-| `miri` | `cargo xtask miri` | nightly + miri; advisory in CI too (`continue-on-error`) |
+| `miri` | `cargo xtask miri` | nightly + miri |
 | `feature-matrix` | `cargo xtask feature-matrix` (runs `facade-combos` too) | CI runs `--slice 1/3`, `2/3`, `3/3` and `combinations` in parallel; locally it is one run over the workspace |
 | `wasm-check` | `cargo xtask wasm-check`, `cargo xtask wasm-link`, `cargo xtask wasm-test` | `wasm-test` needs the `wasm-bindgen-cli` version `Cargo.lock` pins (`cargo xtask doctor full` names it) |
 | `cli-macos` | `cargo xtask test` (flui-cli's tests) + `cargo xtask cross-typecheck` (its iOS clippy line) | the same commands; they only mean "macOS" on a Mac |
 | `cross-typecheck` | `cargo xtask cross-typecheck` | needs the four targets (`cargo xtask doctor full`) |
-| `macos-ci` | `cargo xtask ci` + `cargo xtask cross-typecheck`'s iOS runner line (on a Mac) | the job runs the same commands on macos-latest; extended lane only, advisory (`continue-on-error`) until three green runs |
-| `test-windows` | `cargo xtask test` (on Windows) | the job runs the same command on windows-latest; extended lane only, advisory until three green runs |
+| `macos-ci` | `cargo xtask ci` + `cargo xtask cross-typecheck`'s iOS runner line (on a Mac) | the job runs the same commands on macos-latest; extended lane only |
+| `test-windows` | `cargo xtask test --fast` (on Windows) | the job runs the same command on windows-latest; extended lane only; the nested-cargo group runs on Linux (`test-nested`) |
 | `ci` | — | CI only: the single check a ruleset would require. `cargo xtask ci-verify` verifies that every gated job ran and passed, and that the jobs which skipped are exactly those the lane skips |
 | `notify-main-red` | — | CI only: opens or updates the "CI is red on main" issue after a red run on main or nightly |
 

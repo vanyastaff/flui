@@ -1,10 +1,11 @@
-//! `cargo xtask check-changed`: CI's fast lane, locally.
+//! `cargo xtask check-changed`: CI's checks, scoped to a change, locally.
 //!
 //! The scope is `change_scope`'s, the computation behind CI's `plan` job, over
-//! this branch's diff against the base PLUS uncommitted and untracked files, so
-//! CI and a local run pick the same packages from the same inputs. The steps
-//! are the fast-lane job's, in its order; a step whose target or tool this host
-//! lacks is skipped with a message naming the fix, since CI runs it anyway.
+//! this branch's diff against the base PLUS uncommitted and untracked files:
+//! the changed crates and their dependents. The steps are the wide lane's jobs
+//! narrowed to that scope (clippy, tests, rustdoc, doctests, the cross and
+//! per-feature clippies); a step whose target or tool this host lacks is
+//! skipped with a message naming the fix, since CI runs it anyway.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
@@ -21,7 +22,7 @@ use super::{
 use crate::change_scope;
 use crate::util::repo_root;
 
-/// The fast lane's inputs: `change_scope`'s `plan` outputs, typed.
+/// The scope's inputs: `change_scope`'s `affected` outputs, typed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Lane {
     /// `docs`, `none`, `packages` or `full`.
@@ -122,8 +123,7 @@ fn outside_checkout(target: &Path, cwd: &Path, checkout: &Path) -> bool {
     !resolve(target, cwd).starts_with(resolve(checkout, cwd))
 }
 
-/// The compiling steps for `lane`, after `cargo fmt`, in the fast-lane job's
-/// order. `targets` are the installed rustup targets; `have_hack` says whether
+/// The compiling steps for `lane`, after `cargo fmt`. `targets` are the installed rustup targets; `have_hack` says whether
 /// cargo-hack is.
 fn plan(lane: &Lane, host: Host, targets: &BTreeSet<String>, have_hack: bool) -> Vec<Step> {
     let have = |target: &str| targets.contains(target);
@@ -162,7 +162,7 @@ fn plan(lane: &Lane, host: Host, targets: &BTreeSet<String>, have_hack: bool) ->
                 .into(),
         );
     }
-    // cfg-gated code this host's build never compiles (the fast lane's commands)
+    // cfg-gated code this host's build never compiles (the cross-typecheck commands)
     if lane.cross_platform {
         for target in PLATFORM_TARGETS {
             steps.push(if have(target) {
@@ -208,7 +208,7 @@ fn plan(lane: &Lane, host: Host, targets: &BTreeSet<String>, have_hack: bool) ->
             ios_runner().into()
         } else {
             Step::Note(format!(
-                "check-changed: skipped the iOS runner (needs macOS + rustup target add {IOS_TARGET}; CI's fast-lane-ios runs it)"
+                "check-changed: skipped the iOS runner (needs macOS + rustup target add {IOS_TARGET}; CI's ios-runner runs it)"
             ))
         });
     }
@@ -271,7 +271,7 @@ pub(super) fn run(runner: Runner, base: &str) -> anyhow::Result<ExitCode> {
     println!("check-changed: {}", lane.reason);
     if lane.heavy_required {
         println!(
-            "check-changed: only CI's wide-lane jobs check part of this change (see the reason above): the PR will run the wide lane (every Linux job); locally, consider cargo xtask ci-full"
+            "check-changed: this change reaches beyond the scoped checks (see the reason above): CI checks the whole workspace; locally, consider cargo xtask ci-full"
         );
     }
     runner.run(&Cmd::cargo(["fmt", "--all", "--", "--check"]))?;
@@ -339,7 +339,7 @@ mod tests {
             .collect()
     }
 
-    fn a_package_change_runs_the_fast_lane_commands() {
+    fn a_package_change_runs_the_scoped_commands() {
         assert_eq!(
             lines(&plan(&material(), Host::Linux, &all_targets(), true)),
             [
@@ -348,7 +348,7 @@ mod tests {
                 "$ RUSTDOCFLAGS='-D warnings' cargo doc -p flui -p flui-material -p flui-web-counter --features flui/testing --no-deps --locked --document-private-items",
                 "$ cargo test -p flui -p flui-material --locked --doc",
                 "$ CC_aarch64_linux_android=clang CFLAGS_aarch64_linux_android=--target=aarch64-linux-android21 AR_aarch64_linux_android=ar cargo clippy -p flui-app -p flui --locked --target aarch64-linux-android -- -D warnings",
-                "check-changed: skipped the iOS runner (needs macOS + rustup target add aarch64-apple-ios; CI's fast-lane-ios runs it)",
+                "check-changed: skipped the iOS runner (needs macOS + rustup target add aarch64-apple-ios; CI's ios-runner runs it)",
                 "$ cargo clippy -p flui -p flui-material -p flui-web-counter --lib --bins --locked --target wasm32-unknown-unknown -- -D warnings",
                 "$ cargo check -p flui --locked --target wasm32-unknown-unknown --no-default-features --features hot-reload",
                 "$ cargo hack clippy -p flui-material --locked --each-feature --keep-going -- -D warnings",
@@ -439,8 +439,8 @@ mod tests {
             "check_changed_contract",
             &[
                 (
-                    "a_package_change_runs_the_fast_lane_commands",
-                    a_package_change_runs_the_fast_lane_commands as fn(),
+                    "a_package_change_runs_the_scoped_commands",
+                    a_package_change_runs_the_scoped_commands as fn(),
                 ),
                 (
                     "the_whole_workspace_also_lints_the_engine_testing_code",

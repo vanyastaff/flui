@@ -72,7 +72,7 @@ impl Cmd {
         self
     }
 
-    /// Appends a whitespace-separated argument list (the fast lane's
+    /// Appends a whitespace-separated argument list (`check-changed`'s
     /// `pkg_args`, `features`, ...: package names and flags, never quoted).
     pub(super) fn split(self, list: &str) -> Self {
         self.args(list.split_whitespace())
