@@ -235,7 +235,7 @@ impl TextPainter {
         let Some(ellipsis) = self.ellipsis.as_deref().filter(|e| !e.is_empty()) else {
             return 0.0;
         };
-        if self.max_lines.is_none_or(|n| n == 0) {
+        if self.max_lines.is_none() {
             return 0.0;
         }
 
@@ -247,7 +247,7 @@ impl TextPainter {
         let spans = vec![(
             ellipsis.to_string(),
             text.style()
-                .map(|style| scaled_style(style, self.text_scale_factor)),
+                .map(|style| effective_style(style, self.text_scale_factor)),
         )];
         text_cx
             .shape(&crate::parley_text::ParagraphSpec {
@@ -470,8 +470,10 @@ enum LineOverflow {
 /// style merges over its ancestors' (`TextStyle::merge`), so a bold
 /// child of a sized parent shapes bold at the parent's size.
 ///
-/// The text scale factor is baked into every effective font size here
-/// — the shaper sees final pixel sizes.
+/// Every styled run carries an explicit font size, the default where no
+/// ancestor sets one, with the text scale factor baked in: the shaper sees
+/// final pixel sizes, and a run's letter spacing and line height apply at
+/// that size on both shapers ([`effective_style`]).
 ///
 /// **Placeholder spans** are emitted as `\u{FFFC}` (Unicode Object
 /// Replacement Character) with the inherited style. The shaper gives
@@ -499,7 +501,7 @@ pub(crate) fn collect_styled_spans(
         if let Some(text) = &span.text
             && !text.is_empty()
         {
-            let effective = merged.as_ref().map(|style| scaled_style(style, scale));
+            let effective = merged.as_ref().map(|style| effective_style(style, scale));
             out.push((text.clone(), effective));
         }
         for child in &span.children {
@@ -520,17 +522,21 @@ pub(crate) fn collect_styled_spans(
     out
 }
 
-/// `style` with its font size and letter spacing multiplied by `scale`.
+/// `style` as a run is shaped with: its font size, [`DEFAULT_FONT_SIZE`]
+/// where it sets none, and its letter spacing, both multiplied by `scale`.
+///
+/// The size is made explicit because the painted layout applies a run's
+/// letter spacing and line height only at a size the run carries, while
+/// Parley applies them at the inherited one: a spacing or height set without
+/// a size would otherwise measure and paint differently.
 ///
 /// Letter spacing scales with the size so that `from_spans` computes the EM
 /// ratio as `spacing / font_size` in consistent units: without it, at a
 /// scale of 2 a 2 px spacing on a 16 px font yields 2/32 = 0.0625 EM instead
 /// of 0.125 EM.
-fn scaled_style(style: &TextStyle, scale: f64) -> TextStyle {
+fn effective_style(style: &TextStyle, scale: f64) -> TextStyle {
     let mut style = style.clone();
-    if let Some(size) = style.font_size {
-        style.font_size = Some(size * scale);
-    }
+    style.font_size = Some(style.font_size.unwrap_or(DEFAULT_FONT_SIZE) * scale);
     if let Some(spacing) = style.letter_spacing {
         style.letter_spacing = Some(spacing * scale);
     }

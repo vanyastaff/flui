@@ -12,6 +12,13 @@
 //! the device grid as `(line_y * scale).round()`
 //! (`TextLayout::placed_glyphs`), the paragraph height, and a single line's
 //! width.
+//!
+//! `measured_lines_are_painted_lines` extends it past one line: wrapped
+//! paragraphs, and style combinations the two shapers read differently
+//! unless the painter normalizes them, measure the height they paint.
+
+#[path = "support/cases.rs"]
+mod cases;
 
 use flui_foundation::geometry::Offset;
 use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
@@ -33,6 +40,19 @@ struct Measured {
     width: f64,
     height: f64,
     alphabetic: f64,
+}
+
+/// The metrics of the layout `painter` records.
+fn painted(painter: &TextPainter) -> TextLayoutResult {
+    let mut canvas = Canvas::new();
+    painter.paint(&mut canvas, Offset::ZERO);
+    let list = canvas.finish();
+    list.iter()
+        .find_map(|command| match &command.op {
+            DrawOp::Paragraph { layout, .. } => Some(layout.metrics()),
+            _ => None,
+        })
+        .expect("a laid-out painter records a paragraph")
 }
 
 /// What the painter measured, and the metrics of the layout it paints.
@@ -60,16 +80,7 @@ fn measure_and_paint(
         alphabetic: painter.compute_distance_to_actual_baseline(TextBaseline::Alphabetic),
     };
 
-    let mut canvas = Canvas::new();
-    painter.paint(&mut canvas, Offset::ZERO);
-    let list = canvas.finish();
-    let painted: TextLayoutResult = list
-        .iter()
-        .find_map(|command| match &command.op {
-            DrawOp::Paragraph { layout, .. } => Some(layout.metrics()),
-            _ => None,
-        })
-        .expect("a laid-out painter records a paragraph");
+    let painted = painted(&painter);
     let painted = Measured {
         width: painted.width,
         height: painted.height,
@@ -127,4 +138,138 @@ fn parley_metrics_round_to_todays_baseline() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Lays `painter` out at `max_width` and asserts it measured the height of
+/// the layout it paints, and, for a single line (`max_width` unbounded), its
+/// width. A wrapped line's width is not compared: Parley leaves trailing
+/// whitespace out of it and the painted layout keeps it (painting mapping
+/// decision 15).
+fn assert_measures_what_it_paints(mut painter: TextPainter, max_width: f64) {
+    let mut context = TextContext::new(&FontCollection::new());
+    painter.layout(&mut context, 0.0, max_width);
+    let painted = painted(&painter);
+    assert!(
+        (painter.height() - painted.height).abs() < 1e-3,
+        "measured {} high, painted {} high ({} lines)",
+        painter.height(),
+        painted.height,
+        painted.line_count
+    );
+    if max_width.is_infinite() {
+        assert!(
+            (painter.width() - painted.width).abs() < 0.01,
+            "measured {} wide, painted {} wide",
+            painter.width(),
+            painted.width
+        );
+    }
+}
+
+fn painter(text: &str, style: TextStyle) -> TextPainter {
+    TextPainter::new()
+        .with_text(TextSpan::styled(text, style))
+        .with_text_direction(TextDirection::Ltr)
+}
+
+/// A word wider than the line breaks between its glyphs on both shapers.
+fn an_overlong_word_breaks_between_glyphs() {
+    assert_measures_what_it_paints(painter("supercalifragilistic", TextStyle::default()), 50.0);
+}
+
+/// Words, one of which is wider than the line.
+fn words_break_where_paint_breaks_them() {
+    assert_measures_what_it_paints(painter("one two three four", TextStyle::default()), 30.0);
+}
+
+/// A short word, then one that must break by glyph on a line of its own.
+fn a_short_word_then_an_overlong_one() {
+    assert_measures_what_it_paints(
+        painter("a supercalifragilistic", TextStyle::default()),
+        50.0,
+    );
+}
+
+/// A hard break between two wrapped paragraphs.
+fn a_hard_break_between_wrapped_lines() {
+    assert_measures_what_it_paints(painter("one two\nthree four", TextStyle::default()), 30.0);
+}
+
+fn spaced() -> TextStyle {
+    TextStyle {
+        letter_spacing: Some(10.0),
+        ..TextStyle::default()
+    }
+}
+
+/// Letter spacing on a style that sets no size applies at the default size.
+fn letter_spacing_without_a_size() {
+    assert_measures_what_it_paints(painter("AAAA", spaced()), f64::INFINITY);
+}
+
+/// The same, under a text scale factor.
+fn scaled_letter_spacing_without_a_size() {
+    assert_measures_what_it_paints(
+        painter("AAAA", spaced()).with_text_scale_factor(1.5),
+        f64::INFINITY,
+    );
+}
+
+/// A line height on a style that sets no size is a multiple of the default.
+fn line_height_without_a_size() {
+    let style = TextStyle {
+        height: Some(2.0),
+        ..TextStyle::default()
+    };
+    assert_measures_what_it_paints(painter("A", style), f64::INFINITY);
+}
+
+/// `max_lines` of zero keeps every line on both shapers.
+fn zero_max_lines_keeps_every_line() {
+    assert_measures_what_it_paints(
+        painter("one two three four", TextStyle::default()).with_max_lines(Some(0)),
+        30.0,
+    );
+}
+
+/// Each row measures the height it paints, and a single line its width.
+/// Hard breaks other than an interior `\n` are not rows: the two shapers
+/// break at different characters and treat a trailing break differently
+/// (painting mapping decision 15).
+#[test]
+fn measured_lines_are_painted_lines() {
+    cases::run_cases(
+        "measured_lines_are_painted_lines",
+        &[
+            (
+                "an_overlong_word_breaks_between_glyphs",
+                an_overlong_word_breaks_between_glyphs,
+            ),
+            (
+                "words_break_where_paint_breaks_them",
+                words_break_where_paint_breaks_them,
+            ),
+            (
+                "a_short_word_then_an_overlong_one",
+                a_short_word_then_an_overlong_one,
+            ),
+            (
+                "a_hard_break_between_wrapped_lines",
+                a_hard_break_between_wrapped_lines,
+            ),
+            (
+                "letter_spacing_without_a_size",
+                letter_spacing_without_a_size,
+            ),
+            (
+                "scaled_letter_spacing_without_a_size",
+                scaled_letter_spacing_without_a_size,
+            ),
+            ("line_height_without_a_size", line_height_without_a_size),
+            (
+                "zero_max_lines_keeps_every_line",
+                zero_max_lines_keeps_every_line,
+            ),
+        ],
+    );
 }

@@ -456,8 +456,10 @@ that wires what it adds.
    - (4a) The `parley` and `parley-layout` features are removed: Parley, swash and the raster
      side are in the default build, and nothing selects cosmic-text measurement. The host-face
      feed (step 3c) is therefore unconditional too.
-   - (4a) With `bundled-fonts`, the process font system installs the bundled Roboto in place of
-     any host face of that name, binds its generic families to it, as the collection does, and
+   - (4a) With `bundled-fonts`, the process font system installs the bundled Roboto, Material
+     Icons and CupertinoIcons in place of any host face of those names (the collection measures
+     those families in the bundled faces alone), binds its generic families to Roboto, as the
+     collection does, and
      snaps a weight the family lacks to one it has, so default-family and generic text, bold
      included, paints in the face it was measured in (mapping decision 16). The fed collection
      binds its generics to the families the process font system binds them to, so both sides
@@ -475,12 +477,22 @@ that wires what it adds.
      of step 3b (the font-collection-changed event, and `register_font` moving to the
      collection) merges first, unless the owner waives the ordering here; until then a face
      registered at run time reaches paint and not measurement (mapping decision 15).
+   - (4a) Merge gate, line breaks: open, with the owner. Soft wrapping agrees: Parley shapes
+     with `OverflowWrap::BreakWord`, so an overlong word breaks between glyphs as cosmic-text's
+     `Wrap::WordOrGlyph` breaks it. Over ten paragraphs (Latin, Cyrillic, Arabic, CJK, emoji,
+     URLs) at 12, 14 and 17 px and every width from 2 to 398 px in 3 px steps, 668 of 3990
+     measured a height other than the one painted without it and 30 with it, all 30 at 2 px,
+     narrower than a space. Hard breaks do not agree: the two shapers break at different
+     characters and read a trailing break differently (mapping decision 15 lists them), and
+     no setting of either shaper aligns them. The choice is the owner's: keep measurement on
+     the painted cosmic-text layout until 4b, or land 4a with 4b so one layout measures and
+     paints.
    - *Acceptance (4a):* measurement is Parley's in the default build, at the painter
      (`text_context_contract`, a face registered only on the process font system reaches paint
      and not measurement) and at the realm (a face registered on one realm's collection sizes
      that realm's paragraph); measured and painted metrics agree on the bundled Roboto, named,
      as the default family and as the monospace generic, regular and bold, and a host face named
-     "Roboto" does not replace the bundled one; on the host's faces they agree for every row of
+     "Roboto", "Material Icons" or "CupertinoIcons" does not replace the bundled one; on the host's faces they agree for every row of
      `measured_width_equals_painted_width_on_host_faces`, a family the host names exactly among
      them; the `wasm32` lane, `cargo xtask deps` and `cargo xtask reach` are green.
    - `DrawOp::Paragraph` carries flui-painting's `ShapedParagraph`: runs naming a FLUI-owned
@@ -652,7 +664,9 @@ exist yet.
   `a_realm_measures_text_with_the_faces_of_its_own_collection`; the default-family, monospace
   and bold rows of `parley_metrics_round_to_todays_baseline`, which fail without flui-painting's
   mapping decision 16 (the bold monospace rows also without the monospace weight snap);
-  `a_host_roboto_does_not_replace_the_bundled_face` (`crates/flui-painting/src/fonts.rs`); and,
+  `a_host_copy_does_not_replace_a_bundled_face` (`crates/flui-painting/src/fonts.rs`); every row
+  of `measured_lines_are_painted_lines` (`crates/flui-painting/tests/parley_metrics_oracle.rs`)
+  and `an_empty_paragraph_measures_a_line_of_its_style`; and,
   for the merge gate's face agreement, every row of
   `measured_width_equals_painted_width_on_host_faces`
   (`crates/flui-painting/tests/host_faces_oracle.rs`), which fails on a bundled-only collection.

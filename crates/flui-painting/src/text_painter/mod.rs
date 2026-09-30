@@ -185,7 +185,8 @@ impl TextPainter {
         self
     }
 
-    /// Sets the maximum number of lines.
+    /// Sets the maximum number of lines; `Some(0)` is no limit, as `None`
+    /// is ([`set_max_lines`](Self::set_max_lines)).
     #[must_use]
     pub fn with_max_lines(mut self, max_lines: Option<u32>) -> Self {
         self.set_max_lines(max_lines);
@@ -327,7 +328,12 @@ impl TextPainter {
     }
 
     /// Sets the maximum number of lines.
+    ///
+    /// `Some(0)` is no limit, as `None` is, and reads back as `None`: a
+    /// paragraph that kept no line would measure empty while painting every
+    /// line, so zero never reaches either shaper.
     pub fn set_max_lines(&mut self, max_lines: Option<u32>) {
+        let max_lines = max_lines.filter(|&lines| lines > 0);
         if self.max_lines != max_lines {
             self.max_lines = max_lines;
             self.mark_needs_layout();

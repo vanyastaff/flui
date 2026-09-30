@@ -544,6 +544,26 @@ lines, and the ellipsis only floors the intrinsic widths. Parley's width
 excludes trailing whitespace; cosmic-text's includes it, and so does
 Flutter's max intrinsic width (recalled, not checked against a clone).
 
+The painter hands both shapers inputs they read alike:
+
+- a word wider than the line breaks between its glyphs: Parley shapes with
+  `OverflowWrap::BreakWord`, cosmic-text's buffers wrap `WordOrGlyph`.
+  `BreakWord` rather than `Anywhere`, so the min-content width stays the
+  widest word;
+- every styled run carries an explicit size, the default 14 px where no
+  ancestor sets one, because cosmic-text applies a run's letter spacing and
+  line height only at a size the run carries while Parley applies them at the
+  inherited one (`effective_style`);
+- `max_lines` of zero is no limit (`TextPainter::set_max_lines`,
+  `ParagraphSpec::max_lines`), as cosmic-text always read it.
+
+An empty paragraph measures one line of its style from the font: the line box
+and the baseline a line of text in that style has (13.19 px at 14 px Roboto).
+The painted cosmic-text layout, which paints nothing for it, puts that
+baseline mid-line (8.40 px), and so did measurement before this step: the old
+value left an empty `Text` in a baseline-aligned row off its neighbours'
+baseline.
+
 **Why:** painted-as-measured returns when `DrawOp::Paragraph` carries runs
 from the same Parley layout (ADR-0092 §10 step 4b) and carets come from its
 clusters (step 5). Measuring on the realm's context first (step 4a) lets a
@@ -566,11 +586,28 @@ realm's faces decide its layout before the paint path moves.
 - A face registered through `SharedFontSystem::register_font` reaches paint
   but not measurement (ADR-0092 §10 step 3b routes registration through the
   collection).
+- Hard breaks other than an interior `\n` measure a different number of lines
+  than they paint (open; ADR-0092 §10 step 4a's line-break gate). A trailing
+  `\n` or U+2029 adds an empty line on Parley and none on cosmic-text (`"A\n"`
+  measures 2 lines, paints 1); Parley breaks twice at `\r\n` (`"A\r\n"`: 3
+  against 1), and once at U+2028 and at `\r`, where cosmic-text never breaks
+  and, in ASCII text, does not (its `BidiParagraphs` splits ASCII text at `\n`
+  alone); cosmic-text breaks at U+0085 and U+001C–U+001E, which Parley does
+  not (`"A\u{85}B"`: 1 against 2).
+- A line narrower than a space's advance (2 px at 12–17 px) takes each space
+  of a glyph-broken paragraph onto a line of its own in the painted layout and
+  hangs it on Parley, so the painted paragraph is taller (`"ab cd"` at 0 px:
+  4 lines measured, 5 painted).
 
 On the same face the two agree: `tests/parley_metrics_oracle.rs` pins equal
 width and height and the same device baseline between the measurement and the
 recorded layout for the bundled Roboto, by name and as the default family
-(decision 16), at 13–32 px, default and 1.5 line height, scales 1–2.
+(decision 16), at 13–32 px, default and 1.5 line height, scales 1–2. Its
+`measured_lines_are_painted_lines` pins the height (and a single line's width)
+of wrapped paragraphs, an overlong word, an interior hard break, spacing and
+height set without a size, and zero `max_lines`, each row failing without the
+normalization above; `an_empty_paragraph_measures_a_line_of_its_style`
+(`text_contract`, `tests/main.rs`) pins the empty paragraph.
 `a_face_registered_on_the_process_font_system_reaches_paint_not_measurement`
 (`tests/font_registration.rs`) pins the registration split: the painted layout
 re-shapes, the measured size does not move.
@@ -613,8 +650,9 @@ binding; default text stays the same face on every host.
 Locked by the default-family, monospace and bold rows of
 `parley_metrics_round_to_todays_baseline` (`tests/parley_metrics_oracle.rs`),
 which fail without the binding (the bold monospace rows also without the
-monospace snap), and by `a_host_roboto_does_not_replace_the_bundled_face`
-(`src/fonts.rs`), which fails when a host Roboto keeps its place.
+monospace snap), and by `a_host_copy_does_not_replace_a_bundled_face`
+(`src/fonts.rs`), which fails when a host Roboto, Material Icons or
+CupertinoIcons keeps its place.
 
 ### 17. The collection mirrors the process font system's faces, generics and fallback order
 
@@ -674,11 +712,10 @@ ADR-0092 §10 step 6, so it mirrors one into the other instead.
   name) resolves on the paint side alone.
 - A host copy of a bundled family (Roboto, Material Icons, CupertinoIcons) is
   not fed, so one family never mixes two copies. With `bundled-fonts` the
-  process font system replaces a host Roboto with the bundled one (decision
-  16), but loads an icon face only when the host lacks that family; a host that
-  installs Material Icons or CupertinoIcons paints it with its own copy and
-  measures it with the bundled one until the process font system prefers the
-  bundled icon faces too.
+  process font system replaces every host face of those families with the
+  bundled one (`fonts::install_bundled`), so both sides measure and paint the
+  bundled copy; an app that wants a host's own icon font registers it under
+  another family name.
 - The feed reads the host's font files a second time before the first frame
   (about 35 ms over 76 families on the Windows development host), until
   ADR-0092 §10 step 3b's event lets it run off the owner thread.

@@ -204,6 +204,10 @@ fn text_contract() {
                 text_painter_unit::wide_ellipsis_floors_min_intrinsic_width,
             ),
             (
+                "an_empty_paragraph_measures_a_line_of_its_style",
+                text_painter_unit::an_empty_paragraph_measures_a_line_of_its_style,
+            ),
+            (
                 "truncated_paragraph_paints_what_it_measured",
                 text_overflow_unit::a_truncated_paragraph_paints_exactly_the_lines_it_measured,
             ),

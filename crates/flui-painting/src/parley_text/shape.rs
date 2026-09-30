@@ -14,7 +14,7 @@ use cosmic_text::fontdb::Family;
 use parley::fontique::Collection;
 use parley::style::{
     FontFamily, FontFamilyName, FontStyle as ParleyFontStyle, FontWeight, GenericFamily,
-    LineHeight, StyleProperty,
+    LineHeight, OverflowWrap, StyleProperty,
 };
 use parley::{Alignment, AlignmentOptions, Layout};
 
@@ -43,7 +43,8 @@ pub struct ParagraphSpec<'a> {
     /// so Latin-first text under `Rtl` is still ordered as an LTR paragraph
     /// (flui-painting `ARCHITECTURE.md`, mapping decision 12).
     pub direction: TextDirection,
-    /// The lines the paragraph keeps; `None` keeps every line. Lines past
+    /// The lines the paragraph keeps; `None` or `Some(0)` keeps every line,
+    /// as `TextLayout::from_spans` does. Lines past
     /// it are still shaped, but the metrics stop at it and report
     /// `truncated`. No ellipsis is shaped into the last kept line
     /// (flui-painting `ARCHITECTURE.md`, mapping decision 15).
@@ -61,17 +62,14 @@ pub struct ParagraphLayout {
 impl ParagraphLayout {
     /// The paragraph's metrics, read from its laid-out lines.
     ///
-    /// Empty text has no line to read, so it reports one line box of the
-    /// paragraph's line height with the baseline at `0.8 ×` that height, as
-    /// the cosmic-text path does.
+    /// Empty text lays out one empty line in the paragraph's font, so it
+    /// reports the line box and baseline a line of text in that font has
+    /// (flui-painting `ARCHITECTURE.md`, mapping decision 15). A layout with
+    /// no line at all reports one line box of the paragraph's line height
+    /// with the baseline at `0.8 ×` that height.
     #[must_use]
     pub fn metrics(&self) -> TextLayoutResult {
-        let first = if self.text.is_empty() {
-            None
-        } else {
-            self.layout.get(0)
-        };
-        let Some(first) = first else {
+        let Some(first) = self.layout.get(0) else {
             return TextLayoutResult {
                 width: 0.0,
                 height: f64::from(self.line_height),
@@ -190,6 +188,12 @@ impl TextContext {
             .ranged_builder(&mut self.font_cx, &text, 1.0, false);
         builder.push_default(default_family);
         builder.push_default(StyleProperty::FontSize(paragraph.font_size));
+        // A word wider than the line breaks between its glyphs, as the
+        // painted layout's `Wrap::WordOrGlyph` does, instead of overflowing
+        // the line. `BreakWord` rather than `Anywhere`: the min-content width
+        // stays the widest word (flui-painting `ARCHITECTURE.md`, mapping
+        // decision 15).
+        builder.push_default(StyleProperty::OverflowWrap(OverflowWrap::BreakWord));
         // No explicit height is 1.2 em of each run's own size, so a larger
         // span grows its line box, as on the cosmic-text path; an explicit
         // height is one absolute line box for the paragraph.
@@ -216,7 +220,7 @@ impl TextContext {
             layout,
             text,
             line_height,
-            max_lines: paragraph.max_lines,
+            max_lines: paragraph.max_lines.filter(|&lines| lines > 0),
         }
     }
 }

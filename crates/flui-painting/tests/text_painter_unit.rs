@@ -53,6 +53,39 @@ pub(crate) fn wide_ellipsis_floors_min_intrinsic_width() {
     );
 }
 
+/// An empty paragraph measures the line box and baseline a line of text in
+/// the same style measures, so an empty `Text` in a baseline-aligned row
+/// sits on its neighbours' baseline (painting mapping decision 15).
+pub(crate) fn an_empty_paragraph_measures_a_line_of_its_style() {
+    use flui_painting::TextBaseline;
+    use flui_painting::typography::TextStyle;
+
+    let mut failures = Vec::new();
+    for size in [14.0, 32.0] {
+        let measure = |text: &str| {
+            let style = TextStyle {
+                font_size: Some(size),
+                ..TextStyle::default()
+            };
+            let mut painter = TextPainter::new()
+                .with_text(TextSpan::styled(text, style))
+                .with_text_direction(TextDirection::Ltr);
+            painter.layout(&mut text_cx(), 0.0, f64::INFINITY);
+            (
+                painter.height(),
+                painter.compute_distance_to_actual_baseline(TextBaseline::Alphabetic),
+            )
+        };
+        let (empty, line) = (measure(""), measure("A"));
+        if (empty.0 - line.0).abs() > 1e-3 || (empty.1 - line.1).abs() > 1e-3 {
+            failures.push(format!(
+                "{size} px: empty {empty:?}, one line {line:?} (height, baseline)"
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 /// Measurement is Parley on the lent context in the default build: the probe
 /// face is registered only on a collection, never on the process font system,
 /// so a painter measuring on cosmic-text would never see it.
