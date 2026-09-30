@@ -8,8 +8,8 @@ is an index into it, not a restatement.
 ## Start here
 
 - [`docs/architecture.md`](https://github.com/vanyastaff/flui/blob/main/docs/architecture.md) —
-  the three-tree pipeline overview (`View` → `Element` → `RenderObject` → `Layer` →
-  `flui-engine` → `wgpu`).
+  the pipeline overview (`View` → `Element` → `RenderObject` → `Layer` → `flui-engine` →
+  `wgpu`).
 - [`docs/FOUNDATIONS.md`](https://github.com/vanyastaff/flui/blob/main/docs/FOUNDATIONS.md) — the
   architecture contract and the locked contracts (C1–C9).
 - [`AGENTS.md`](https://github.com/vanyastaff/flui/blob/main/AGENTS.md) — the design stance
@@ -17,9 +17,8 @@ is an index into it, not a restatement.
 
 ## Per-crate architecture
 
-Each framework-layer crate carries its own `ARCHITECTURE.md` for the design decisions local to it,
-including a `## Mapping decisions` section recording its local design decisions:
-`crates/flui-{engine,foundation,layer,painting,platform,rendering,scheduler,widgets}/ARCHITECTURE.md`.
+Most crates carry their own `crates/<crate>/ARCHITECTURE.md` for the design decisions local to
+it, including a `## Mapping decisions` section recording those decisions.
 
 ## Architecture Decision Records
 

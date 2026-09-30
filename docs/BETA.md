@@ -217,9 +217,9 @@ The external regression first failed against the static template; the updated
 creation suite passes 20 tests, including generated basic, counter and hot-reload
 projects. Removing the generated callback's rebuild scheduling fails at
 “counter should display 1”; restoring it passes. Scoped CLI Clippy and generated
-source formatting checks pass. Evidence: `/tmp/flui-counter-red.log`,
-`/tmp/flui-counter-cli-suite.log`, `/tmp/flui-counter-mutation.log`,
-`/tmp/flui-counter-restored.log`, and `/tmp/flui-counter-clippy.log`.
+source formatting checks pass. Reproduce with
+`cargo nextest run -p flui-cli generated_counter_project_compiles`, which
+generates the counter and runs its tests.
 
 Publication graph audit (manifests, not a successful package dry run): the facade
 currently reaches 20 workspace packages without default features, 21 with
@@ -263,9 +263,11 @@ The release closure includes optional and target-specific normal/build edges,
 and dev-dependencies that Cargo retains because their resolved declaration has a
 version. Versionless dev-dependencies are omitted. Workspace inheritance and
 renamed package identities are resolved before checking. The workspace is now
-version `0.1.0`, and every internal requirement pins that exact
-cohort version (`=0.1.0`), so a published facade can never resolve a
-sibling from a later cohort.
+version `0.2.0-dev` (`[workspace.package] version` in the root
+`Cargo.toml`), and every internal requirement pins that exact cohort version
+(`=0.2.0-dev`), so a published facade can never resolve a sibling from a later
+cohort. `flui-sdk`, versioned apart from the train (ADR-0088), is pinned at its
+own `=0.1.0-dev`.
 
 Twelve backward or self dev declarations were explicitly checkout-only in
 `docs/workspace-layers.toml`: six self feature activations, foundation → macros,
@@ -293,8 +295,8 @@ The release package check created local archives for the computed set in one
 explicit `cargo package --registry crates-io --no-verify` invocation and checked
 normalized dependencies, including feature activation settings. A dirty preview
 required explicit `--preview-dirty`; the default required a clean tree. The
-29-package dirty preview and normalized-manifest inspection passed on macOS
-(`/tmp/flui-cycle-real-package-preview-network.log`). The initial restricted run
+29-package dirty preview and normalized-manifest inspection passed on macOS.
+The initial restricted run
 failed DNS resolution; the permitted network retry completed successfully.
 
 This archive preview neither builds nor uploads packages. Archive inclusion
@@ -308,7 +310,7 @@ source, generated a counter project with `flui create` *without* `--local`, and
 built and tested it offline; the consumer's lockfile had to resolve every
 `flui-*` package to an archive digest.
 
-First run, 2026-09-21 on the `0.1.0` cut (`/tmp/flui-beta-consumer-check4.log`):
+First run, 2026-09-21 on the `0.1.0` cut:
 `cargo vendor` produced a 971 MiB third-party set; all 29 archives installed
 as a directory source; `flui create beta_consumer --template counter` without
 `--local` wrote `flui = "0.1.0"`; `cargo build --offline` compiled the
@@ -335,9 +337,8 @@ and the lockfile resolved 22 `flui-*` packages to archive digests — PASS.
 
 Baseline verification before the release-policy and surface-color changes:
 `just ci` completed on macOS with 9,439 workspace tests and 52 GPU tests passing,
-plus doctests (`/tmp/flui-beta-ci-facade-final.log`). That run skipped three
-explicitly ignored tests; all three were then invoked directly and passed
-(`/tmp/flui-three-ignored-tests.log`). The platform native test suite remained
+plus doctests. That run skipped three explicitly ignored tests; all three
+were then invoked directly and passed. The platform native test suite remained
 excluded by the macOS recipe because its X11-backed suite requires Linux/Xvfb;
 this does not certify that platform suite. Ignored doctest examples retain their
 existing status. These results describe that baseline, not subsequent changes.
@@ -362,7 +363,7 @@ regression before the restored implementation is accepted.
 After the 29-package preview, the actual painting `.crate` was inspected:
 eight fonts and six notices match the reviewed SHA-256 hashes, the archived
 inventory matches the source, and Arial is absent. The facade and CLI archives
-both retain `Cargo.lock` (`/tmp/flui-font-archive-verification.log`). This verifies
+both retain `Cargo.lock`. This verifies
 archive contents; clean archived builds and broader inclusion/license-file work
 remain open. No registry upload or version bump is part of this repair.
 
@@ -382,8 +383,8 @@ Clippy, Rust formatting, TOML formatting, and focused spelling checks passed.
 No full-workspace CI result is claimed for these subsequent changes yet.
 
 
-A bounded AppKit close-path probe also passed (`cargo xtask device macos-close-path`,
-`/tmp/flui-beta-macos-close-path.log`): programmatic close makes the native handle
+A bounded AppKit close-path probe also passed (`cargo xtask device macos-close-path`):
+programmatic close makes the native handle
 unavailable, invokes the callback, bypasses the veto, and permits immediate
 wrapper drop. The probe uses a non-visible real window and exits the process
 explicitly; it does not certify ordinary GUI shutdown or complete autorelease
@@ -394,9 +395,11 @@ The CLI run admission check now recognizes the sole-facade applications it
 creates. It uses Cargo-resolved normal dependency identities, including aliases
 and workspace inheritance, rather than searching manifest text for internal
 crate names. Headless CLI fixtures execute marker binaries and reject unrelated
-members, dev/build-only dependencies, comments and prefix lookalikes. This tests
-admission, not live UI behavior. Evidence: `/tmp/flui-run-admission-red.log`
-(original sole-facade rejection) and `/tmp/flui-run-admission-suite.log`.
+members, dev/build-only dependencies, comments and prefix lookalikes. This tested
+admission, not live UI behavior. That fixture matrix is historical evidence: it is no
+longer in the suite, whose one run test (`crates/flui-cli/tests/cli_run.rs`) covers an
+ordinary `flui` dependency. The admission check itself is `metadata_identifies_project`
+in `crates/flui-cli/src/commands/run.rs`.
 
 ## Desktop build artifact discovery
 
@@ -422,8 +425,7 @@ separately when performed. No new cross-platform runtime or shutdown claim follo
 from artifact discovery alone.
 
 The retained generated counter subsequently passed `flui build desktop` with its
-external `CARGO_TARGET_DIR` (`/tmp/flui-beta-counter-desktop-fixed.log`). The
-launch sequence recorded there showed a white window through the UI automation
+external `CARGO_TARGET_DIR`. The launch sequence recorded in that run showed a white window through the UI automation
 service while a direct launch of the same bundled executable rendered the
 counter; two observed pointer clicks changed 18 to 19 to 20. The initial value of
 that live observation was already 18, so it does not establish the initial zero
@@ -454,7 +456,8 @@ came back withheld until the fallback. With the transparent window the log
 reads create → one withheld acquire → present → reveal 85 ms after the first
 frame, and the CoreGraphics window list's first sighting of the bundled
 example (`open`, 1.41 s after launch on a warm cache) was already painted
-(`/tmp/flui-reveal-live5.log`, computer-use window capture). The winit and
+(a computer-use window capture; `cargo xtask device macos-launch-render`
+repeats the launch-route check). The winit and
 Win32 backends still reveal at open; see the platform architecture document
 for why the deferral is macOS-only for now.
 
@@ -463,7 +466,7 @@ that same close was recorded against a pre-`0ae979fd` binary, and is not
 reproducible on the current candidate: see the live verification below. The
 independent fixture review also strengthened package selection coverage:
 same-named binaries now emit distinct package identities, which the tests execute
-and verify (`/tmp/flui-desktop-package-identity-repair.log`, nine tests passed).
+and verify (`cargo nextest run -p flui-cli desktop_artifacts`).
 
 ### Native macOS last-window exit
 
@@ -648,8 +651,8 @@ witness's appearance proves the reload ran code that did not exist before it,
 inside the host started before it, and its value is the state the host
 carried across.
 
-Run on 2026-09-21 (`/private/tmp/.../hrloop/run.jsonl`; host PID 752 for the
-whole run): initial build 408 s cold; edit #1 → `run.build.done ok=true` in
+Run on 2026-09-21 (`cargo xtask device macos-hot-reload-loop`; one host
+process for the whole run): initial build 408 s cold; edit #1 → `run.build.done ok=true` in
 12.0 s → `run.reload kind=hot ok=true` → `PROBE count=1`; edit #2 (an
 unterminated string) → `run.build.done ok=false` in 3.4 s → `run.reload
 ok=false`, host alive, no restart; edit #3 (the fix) → build 9.1 s → reload →
@@ -940,7 +943,7 @@ The CLI rebuilt from `52c0a03a` subsequently built, installed and launched the
 external generated sole-`flui` counter on the dedicated iOS 26.2 simulator. The
 installed bundle's identifier, executable permissions, SHA-256 equality with
 the Cargo executable, and single-scene `FluiSceneDelegate` manifest passed
-direct checks. The run log is `/tmp/flui-ios-counter-final-run.log`.
+direct checks.
 Simulator UI automation timed out in that attempt, so real touch input and
 retained displayed counter state after Home/return were unverified **by it**.
 Both are now measured, on that same candidate and on the in-repo Material demo,
@@ -1134,12 +1137,12 @@ operates on the same fields and is unaffected.
 
 Live check on the iPhone 16e simulator (`iOS 26.2`, portrait), built from the
 revision carrying this record:
-`python3 -B tools/device-checks/check-ios-safe-area.py <UDID> /tmp/flui-ios-safe-area`. The
+`cargo xtask device ios-safe-area-check <UDID>`, which builds the fixture and
+runs `tools/device-checks/check-ios-safe-area.py`. The
 fixture is a sole-`flui` application whose Stack holds one bare leaf and one
 `SafeArea`-wrapped leaf; it compares both laid-out geometries against the view's
 own `safeAreaInsets`, read inside the running application, so the oracle is the
-platform's value rather than a recorded constant
-(`/tmp/flui-ios-safe-area-check.log`). Native and ambient padding agreed at
+platform's value rather than a recorded constant. Native and ambient padding agreed at
 `[47, 0, 34, 0]`; the wrapped leaf landed at `(0, 47)` with size `390x763` and
 the bare leaf filled `390x844`. Backends without inset reporting keep the zero
 default, so no other platform's behavior changes.

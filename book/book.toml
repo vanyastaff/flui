@@ -8,7 +8,8 @@ src = "src"
 [build]
 # Rust code fences are marked `rust,ignore` wherever they are not copied
 # verbatim from a compiling source (an example, a CLI template, or a
-# doctest) — see AGENTS.md's "no invented API" rule for this book. This
+# doctest). That is an authoring convention, not a check: nothing
+# compiles an ignored fence, so a renamed API can go stale in one. This
 # flag is a backstop, not the primary defense: it stops an accidentally
 # un-ignored fence from failing a `mdbook test` run, but `mdbook test`
 # is not part of this book's CI gate (see .github/workflows/docs.yml's

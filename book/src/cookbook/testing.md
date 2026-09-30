@@ -7,7 +7,7 @@ rendered count advanced — using only `flui::…`, no window. A second test in 
 the actionable failure a missing accessibility label produces.
 
 ```bash
-cargo test --test agent_workflow
+cargo test --test agent_workflow --features testing,material
 ```
 
 [`docs/testing.md`](https://github.com/vanyastaff/flui/blob/main/docs/testing.md) walks through

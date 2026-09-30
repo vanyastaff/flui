@@ -1,7 +1,7 @@
 # FLUI design
 
 - **Status:** in progress. What is implemented is recorded in one place per decision: the
-  `Status` line of each ADR (ADR-0081 to ADR-0097) and the step rows of the
+  `Status` line of each ADR (ADR-0081 to ADR-0098) and the step rows of the
   [migration plan](../docs/plans/2026-09-25-architecture-migration-plan.md). This page does not
   repeat them, so a change that lands a step edits its ADR and its plan row, not this paragraph.
   The owner answered the open questions on 2026-09-25; the ADRs and this folder carry those
@@ -74,15 +74,16 @@ study and a CI redesign take up the build cost instead.
 
 ## ADRs
 
-All are dated 2026-09-25 and `Proposed`, except the four the status above names as accepted in
-part. An ADR moves to `Accepted` in the change that ships the first behaviour it decides; the
-older ADRs it amends or supersedes get their back-links then.
+All are dated 2026-09-25 except ADR-0098 (2026-09-28). Each one's `Status` line says whether it
+is `Proposed` or accepted in part; this table does not repeat it. An ADR moves to `Accepted` in
+the change that ships the first behaviour it decides; the older ADRs it amends or supersedes get
+their back-links then.
 
 | ADR | Decision |
 |---|---|
 | [ADR-0081](../docs/adr/ADR-0081-workspace-tiers-and-reach-facts.md) | Workspace tiers, reach facts, stability kinds, feature policy and the B0 exit |
-| [ADR-0082](../docs/adr/ADR-0082-platform-api-contract-crate.md) | `flui-platform-api` is the contract crate; OS backends stay in `flui-platform` (accepted in part: the capability and vocabulary move; `PlatformWindow`'s move, with `HostWindow` carrying accessibility, is accepted on merge pending Android/iOS/wasm32 type-checks and a live Windows run; `Send` removal and deletions remain proposed, and Win32 has done the `Send` removal's first step) |
-| [ADR-0083](../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) | One frame transaction lives in `flui-runtime` above `flui-widgets` (accepted in part: the crate's placement and its first move) |
+| [ADR-0082](../docs/adr/ADR-0082-platform-api-contract-crate.md) | `flui-platform-api` is the contract crate; OS backends stay in `flui-platform` |
+| [ADR-0083](../docs/adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) | One frame transaction lives in `flui-runtime` above `flui-widgets` |
 | [ADR-0084](../docs/adr/ADR-0084-open-capability-seam-and-plugins.md) | Platform capabilities are an open, typed set in two classes (core-required backend methods, optional plugins) behind one door |
 | [ADR-0085](../docs/adr/ADR-0085-reactive-core-placement-and-phase-subscribers.md) | The reactive graph is realm-owned and stays in `flui-view`; reads go through a `ReadScope` contract in `flui-foundation` |
 | [ADR-0086](../docs/adr/ADR-0086-signal-writes-through-event-context.md) | Signal writes go through `EventCx` opened by a `WriterSource` |
@@ -97,6 +98,7 @@ older ADRs it amends or supersedes get their back-links then.
 | [ADR-0095](../docs/adr/ADR-0095-agent-protocol-schema-crate.md) | `flui-protocol` is the typed schema shared by tests, devtools and agents |
 | [ADR-0096](../docs/adr/ADR-0096-dev-build-dynamic-linking.md) | Dynamic linking for development builds: not for framework or test builds; app-side deferred to H1 or later |
 | [ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md) | Process-global state is gated: one trampoline cell, everything else realm-owned |
+| [ADR-0098](../docs/adr/ADR-0098-owned-f64-geometry-values.md) | Geometry values are FLUI-owned `f64` structs; flui-geometry and flui-types dissolve |
 
 ## How this relates to the other plans
 

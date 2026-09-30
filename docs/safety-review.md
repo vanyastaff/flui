@@ -160,7 +160,7 @@ window (`HWND_MESSAGE` parent, created once per process on a dedicated thread
 that pumps its messages), so Win32 itself refuses a concurrent `OpenClipboard`
 from any other owner in the process, third-party `NULL`-owner openers included.
 `a_null_owner_open_on_another_thread_fails_while_a_session_is_open` in
-`platforms/windows/clipboard.rs` pins this; with the `NULL` owner restored it
+`crates/flui-platform/src/platforms/windows/clipboard.rs` pins this; with the `NULL` owner restored it
 fails. That the owner thread pumps is not covered by a test: without the
 pump, another opener's `EmptyClipboard` stalls for about five seconds on the
 unanswered `WM_DESTROYCLIPBOARD`.

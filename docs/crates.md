@@ -154,6 +154,6 @@ A new crate is a topology change, so it starts with the contract, not the direct
 - [ADR-0041](adr/ADR-0041-workspace-topology-contract.md) — the workspace topology contract and its enforcement rules
 - [Foundations](FOUNDATIONS.md) — architecture contract, target crate graph
 - [Roadmap](ROADMAP.md) — construction phases from current to target
-- [Architecture](architecture.md) — three-tree pipeline + layered DAG (current state)
+- [Architecture](architecture.md) — frame pipeline + layered DAG (current state)
 - [Getting Started](getting-started.md) — build and run instructions
 - [`AGENTS.md`](../AGENTS.md) — current cross-tool rules (`.ai-factory/ARCHITECTURE.md` and `.specify/memory/constitution.md` were the historical originals; neither exists in this checkout)

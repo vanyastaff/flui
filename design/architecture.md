@@ -259,7 +259,7 @@ inline test modules are large.
 | flui-cupertino | 7, 4.3k | pkg / official | Official package on `flui-sdk` | `packages/flui-cupertino` builds on `flui-sdk` alone, pinned by the same test; gains focus and keyboard activation from the Raw primitives. |
 | flui-localizations | 8, 0.3k | — | **Deleted 2026-09-26** (ADR-0081) | 281 lines in a layer of its own, with no translated strings. The RTL table and delegate moved to `flui_widgets::localization`; nothing went to the packages; ICU4X goes to `flui-i18n` (H1). |
 | flui-app | 9, 52.1k | H / internal | **Shrink to runners** | Realm, frame, lanes, semantics host and retained input move to `flui-runtime`. Keeps the sole trampoline cell `APP_RUNTIME`, which contains an ordinary `!Send + !Sync` `OwnerHost` beside platform-only state. Native-window mapping, surface application, owner-platform access, raster/engine ownership, services and execution-pool lifetime stay here. `realm_dispatch.rs` is split by ownership, not moved wholesale. |
-| flui-cli | 9, 18.6k | H / tool | Keep, own version | `mcp`, `devtools`, `test --golden --accept` with per-test NDJSON, `catalog`; absorbs `tools/web-server`. |
+| flui-cli | 9, 18.6k | H / tool | Keep, own version | `mcp`, `devtools`, `test --golden --accept` with per-test NDJSON, `catalog`; absorbs the former web-server tool. |
 | flui-devtools | 9, 2.5k | pkg / official | Official package | The in-process protocol server. It does not merge with `flui-protocol`: schema and server stay apart. |
 
 ### 3.4 New crates
@@ -441,8 +441,8 @@ packages, same run).
   (`crates/flui-foundation/src/id.rs:10,723,740`). `LayerId` and `SemanticsId` (`id.rs:674,680`) are plain
   reused slab indices; the module itself names them as the next generational candidates
   (`id.rs:766`). They become generational before caches and agent handles key on them.
-  The AGENTS.md "ID offset" row describes 1-based slab indices, which no longer matches every ID;
-  it is corrected in the change that touches the IDs.
+  The AGENTS.md "ID offset" row separates the plain slab-backed IDs (slot + 1) from the
+  generational keys (0-based slot plus a generation).
 - View configurations are shared (`Rc`) or moved, not deep-cloned per level.
 - **The tree that stores the topology owns it.** `PipelineOwner::set_children(parent, &[RenderId])`
   and `move_subtree` check arity and depth; the global render-children synchronisation pass becomes
@@ -1288,7 +1288,7 @@ as an optional, desktop-only, dev-only convenience:
 | cosmic-text, `FONT_SYSTEM`, unicode-segmentation | Parley, fontique, HarfRust, ICU4X |
 | dlopen hot reload, the three-crate template, `--scene` (after the spike) | Subsecond |
 | the hand-written CPU reference | vello_cpu or tiny-skia behind the contract (spike) |
-| `tools/web-server` (done) | `flui run --device browser` |
+| the web-server tool (done) | `flui run --device browser` |
 | tokio runtimes in platform and assets | the runtime's single executor |
 | four desktop-automation drivers (the COM UIA code in `xtask device`, `desktop-mcp`, `live-smoke`, the Python and Swift checks) | the `flui-mcp` driver library |
 | the role enum copied into `tools/desktop-mcp` | `flui_protocol::SemanticsRole` |

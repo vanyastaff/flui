@@ -1,6 +1,6 @@
 # Animation
 
-`examples/animated_box_app` drives FLUI's animation engine through the real render pipeline on
+`examples/animated_box_app.rs` drives FLUI's animation engine through the real render pipeline on
 GPU.
 
 ```bash

@@ -7,7 +7,7 @@ High-performance asset management system for FLUI framework with smart caching, 
 - 🚀 **High Performance** - Lock-free caching with TinyLFU eviction algorithm
 - 🔒 **Thread-Safe** - Built on tokio, parking_lot, and moka for concurrent access
 - 💾 **Smart Caching** - Automatic memory management with configurable capacity
-- 🎯 **Type-Safe** - Generic `Asset<T>` trait for compile-time guarantees
+- 🎯 **Type-Safe** - `Asset` trait with typed `Data`, `Key` and `Error`
 - ⚡ **Async I/O** - Non-blocking loading with tokio runtime
 - 🔑 **Efficient Keys** - 4-byte interned keys for fast hashing and comparison
 - 📦 **Arc-Based Handles** - Cheap cloning with automatic cleanup via weak references
@@ -111,7 +111,7 @@ Requires `images` feature flag:
 
 ```toml
 [dependencies]
-flui_assets = { path = "../flui_assets", features = ["images"] }
+flui-assets = { git = "https://github.com/vanyastaff/flui", features = ["images"] }
 ```
 
 ```rust
@@ -228,8 +228,8 @@ use flui_assets::AssetError;
 match registry.load(asset).await {
     Ok(handle) => println!("Loaded!"),
     Err(AssetError::Io(e)) => eprintln!("IO error: {}", e),
-    Err(AssetError::InvalidFormat(msg)) => eprintln!("Invalid: {}", msg),
-    Err(AssetError::NotFound(key)) => eprintln!("Not found: {}", key),
+    Err(AssetError::InvalidData { path, reason }) => eprintln!("Invalid {}: {}", path, reason),
+    Err(AssetError::NotFound { path }) => eprintln!("Not found: {}", path),
     Err(e) => eprintln!("Error: {}", e),
 }
 ```
