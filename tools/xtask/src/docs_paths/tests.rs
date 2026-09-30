@@ -259,6 +259,24 @@ fn packages_are_read_only_from_cargo_commands() {
             "args+=(cargo test -p gone); cargo build -p a",
             &[(0, build, "a")],
         ),
+        // …but a substitution among its elements runs
+        ("args=($(cargo test -p a))", &[(0, test, "a")]),
+        // a single-quoted redirection target is inert
+        ("echo >'$(cargo test -p gone)'", &[]),
+        // `nohup` runs its command
+        ("nohup cargo test -p a &", &[(0, test, "a")]),
+        // `env -S` splits arguments, not shell commands: `;` stays in the word
+        (
+            "env -S 'cargo test -p flui-view;'",
+            &[(0, test, "flui-view;")],
+        ),
+        // an escaped quote inside a quoted here-document delimiter
+        (
+            "cat <<\"E\\\"OF\"\nx\nE\"OF\ncargo build -p a",
+            &[(3, build, "a")],
+        ),
+        // a descriptor before `<<` is no program
+        ("3<<EOF cargo test -p a\nx\nEOF", &[(0, test, "a")]),
         ("cat <<\\EOF\n$(cargo test -p gone)\nEOF", &[]),
         (
             "cat <<'END MARK'\ncargo test -p gone\nEND MARK\ncargo build -p a",
@@ -408,7 +426,11 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
                 "2.0.0",
                 Some("git+https://example.com/flui?rev=1#abc"),
             ),
-            ("gitdep", "1.2.3", Some("git+file:///tmp/dep?rev=abc#abc")),
+            (
+                "gitdep",
+                "1.2.3",
+                Some("git+file:///tmp/gitdep?rev=abc#abc"),
+            ),
         ]),
     };
     for (code, selects) in [
@@ -425,10 +447,18 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
         ("cargo clean -p flui-view", true),
         // a git source's `?rev=` query is part of it; its `#revision` is not
         (
-            "cargo pkgid -p 'git+file:///tmp/dep?rev=abc#gitdep@1.2.3'",
+            "cargo pkgid -p 'git+file:///tmp/gitdep?rev=abc#gitdep@1.2.3'",
             true,
         ),
-        ("cargo pkgid -p 'git+file:///tmp/dep#gitdep@1.2.3'", false),
+        (
+            "cargo pkgid -p 'git+file:///tmp/gitdep#gitdep@1.2.3'",
+            false,
+        ),
+        // a version-only fragment names the package by the URL's path, not its query
+        (
+            "cargo pkgid -p 'git+file:///tmp/gitdep?rev=abc#1.2.3'",
+            true,
+        ),
         // cargo canonicalizes the source kind's case and a default port
         (
             "cargo pkgid -p 'REGISTRY+https://github.com:443/rust-lang/crates.io-index#bitflags@2.13.2'",

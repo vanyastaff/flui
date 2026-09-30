@@ -93,6 +93,7 @@ impl Lexer<'_> {
                 }
                 '<' if self.chars.peek() == Some(&'<') => {
                     self.chars.next();
+                    self.drop_descriptor();
                     self.flush();
                     if self.chars.next_if_eq(&'<').is_some() {
                         // `<<< word`: a here-string, a redirection like `<`
@@ -136,8 +137,13 @@ impl Lexer<'_> {
                     .as_ref()
                     .is_some_and(|(_, word)| word.ends_with('=')) =>
                 {
+                    let start = self.line;
                     let elements = substitution_text(&mut self.chars, ')');
                     self.line += elements.matches('\n').count();
+                    // an element's substitution runs as the array is built
+                    for (offset, text) in substitutions(&elements, Quoting::Shell) {
+                        self.nest(&text, start + offset);
+                    }
                     self.push('(');
                     for c in elements.chars() {
                         self.push(c);
@@ -281,19 +287,7 @@ impl Lexer<'_> {
     /// rest of the operator, and its target word, whose command substitutions
     /// still run (`>"$(cargo …)"`).
     fn redirect(&mut self) {
-        let descriptor = |word: &str| {
-            word.bytes().all(|b| b.is_ascii_digit())
-                || word
-                    .strip_prefix('{')
-                    .and_then(|rest| rest.strip_suffix('}'))
-                    .is_some_and(|name| {
-                        !name.is_empty()
-                            && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
-                    })
-        };
-        if self.word.as_ref().is_some_and(|(_, word)| descriptor(word)) {
-            self.word = None;
-        }
+        self.drop_descriptor();
         self.flush();
         while self
             .chars
@@ -308,8 +302,26 @@ impl Lexer<'_> {
         let start = self.line;
         let mut target = String::new();
         self.read_raw_word(&mut target);
-        for (offset, text) in substitutions(&target) {
+        for (offset, text) in substitutions(&target, Quoting::Shell) {
             self.nest(&text, start + offset);
+        }
+    }
+
+    /// Drops the word being read when it is the file descriptor of the
+    /// redirection that follows it: a number (`2>`) or a name (`{fd}>`).
+    fn drop_descriptor(&mut self) {
+        let descriptor = |word: &str| {
+            word.bytes().all(|b| b.is_ascii_digit())
+                || word
+                    .strip_prefix('{')
+                    .and_then(|rest| rest.strip_suffix('}'))
+                    .is_some_and(|name| {
+                        !name.is_empty()
+                            && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                    })
+        };
+        if self.word.as_ref().is_some_and(|(_, word)| descriptor(word)) {
+            self.word = None;
         }
     }
 
@@ -389,6 +401,12 @@ impl Lexer<'_> {
                     self.chars.next();
                     if next == open {
                         quote = None;
+                    } else if open == '"'
+                        && next == '\\'
+                        && let Some(escaped) =
+                            self.chars.next_if(|c| matches!(c, '"' | '\\' | '$' | '`'))
+                    {
+                        each(escaped);
                     } else {
                         each(next);
                     }
@@ -453,7 +471,7 @@ impl Lexer<'_> {
                 }
             }
             if !heredoc.quoted {
-                for (offset, text) in substitutions(&body) {
+                for (offset, text) in substitutions(&body, Quoting::HeredocBody) {
                     self.nest(&text, start + offset);
                 }
             }
@@ -620,15 +638,36 @@ fn ansi_c_escape(chars: &mut Peekable<Chars<'_>>) -> String {
     decoded.map_or_else(|| format!("\\{escape}"), String::from)
 }
 
-/// The command substitutions (`$(…)`, `` `…` ``) of a here-document body the
-/// shell expands, each with the 0-based line of the body it starts on.
-fn substitutions(body: &str) -> Vec<(usize, String)> {
+/// How the text [`substitutions`] scans treats quotes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Quoting {
+    /// A shell word: nothing inside `'…'` is expanded.
+    Shell,
+    /// A here-document body: quotes are plain characters.
+    HeredocBody,
+}
+
+/// The command substitutions (`$(…)`, `` `…` ``) the shell runs in `body` (a
+/// here-document body, a redirection target, array elements), each with the
+/// 0-based line of the body it starts on.
+fn substitutions(body: &str, quoting: Quoting) -> Vec<(usize, String)> {
     let mut found = Vec::new();
     let mut chars = body.chars().peekable();
     let mut line = 0;
+    let mut in_double = false;
     while let Some(c) = chars.next() {
         match c {
             '\n' => line += 1,
+            '"' if quoting == Quoting::Shell => in_double = !in_double,
+            // a single-quoted run is inert, but not inside double quotes
+            '\'' if quoting == Quoting::Shell && !in_double => {
+                for quoted in chars.by_ref() {
+                    line += usize::from(quoted == '\n');
+                    if quoted == '\'' {
+                        break;
+                    }
+                }
+            }
             '\\' => {
                 if chars.next() == Some('\n') {
                     line += 1;

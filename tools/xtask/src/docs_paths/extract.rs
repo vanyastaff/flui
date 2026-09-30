@@ -470,6 +470,10 @@ fn cargo_command(words: &mut VecDeque<(usize, String)>) -> bool {
             }
             continue;
         }
+        // `nohup COMMAND`: the command, immune to hangups
+        if program == "nohup" || program.ends_with("/nohup") {
+            continue;
+        }
         // `function NAME { BODY }`: the body's commands run when it is called
         if program == "function" {
             words.pop_front();
@@ -516,11 +520,7 @@ fn cargo_command(words: &mut VecDeque<(usize, String)>) -> bool {
                     .map(str::to_owned)
             };
             if let Some(split) = split {
-                for (_, part) in shell::commands_in(&split, shell::Dialect::Posix)
-                    .into_iter()
-                    .flatten()
-                    .rev()
-                {
+                for part in split_string(&split).into_iter().rev() {
                     words.push_front((line, part));
                 }
                 break;
@@ -613,11 +613,14 @@ fn package(word: &str) -> Option<(String, Option<String>, Option<String>)> {
             let spec = if fragment.starts_with(|c: char| c.is_ascii_alphabetic()) {
                 fragment.to_owned()
             } else {
-                format!("{}@{fragment}", last_segment(url))
+                format!("{}@{fragment}", last_segment(url_path(url)))
             };
             (spec, Some(url.to_owned()))
         }
-        _ if word.contains("://") => (last_segment(word).to_owned(), Some(word.to_owned())),
+        _ if word.contains("://") => (
+            last_segment(url_path(word)).to_owned(),
+            Some(word.to_owned()),
+        ),
         _ => (word.to_owned(), None),
     };
     // `name@version`, or the legacy `name:version`
@@ -627,6 +630,36 @@ fn package(word: &str) -> Option<(String, Option<String>, Option<String>)> {
             None => (spec, None, source),
         },
     )
+}
+
+/// `url` without its `?query` (a git source's `?rev=…`).
+fn url_path(url: &str) -> &str {
+    url.split('?').next().unwrap_or(url)
+}
+
+/// `env -S`'s argument splitting: words at whitespace, `'…'` and `"…"`
+/// quoting, `\\` escapes; no shell operators, so a `;` stays in its word.
+fn split_string(value: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word: Option<String> = None;
+    let mut quote: Option<char> = None;
+    let mut chars = value.chars();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some(open), c) if c == open => quote = None,
+            (Some('"') | None, '\\') => {
+                word.get_or_insert_with(String::new).extend(chars.next());
+            }
+            (None, '\'' | '"') => {
+                word.get_or_insert_with(String::new);
+                quote = Some(c);
+            }
+            (None, c) if c.is_whitespace() => words.extend(word.take()),
+            (_, c) => word.get_or_insert_with(String::new).push(c),
+        }
+    }
+    words.extend(word);
+    words
 }
 
 /// The last path segment of `url` (`…/crates/flui-view` gives `flui-view`).
