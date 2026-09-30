@@ -65,14 +65,28 @@ class FaceSpec:
     #: face. Present so a test can reach the variable-weight arm of
     #: `family_accepts_weight`, which no static fixture can.
     variable_wght: tuple[int, int, int] | None = None
+    #: `hmtx` advance per entry of `codepoints`, in font units; empty gives
+    #: every letter `space_advance`.
+    advances: tuple[int, ...] = ()
+    #: `(first, second, advance)`: a `GSUB` `rlig` ligature under script
+    #: `arab` that turns the glyphs of the two codepoints, in logical order,
+    #: into one glyph of that advance, unmapped in `cmap`.
+    ligature: tuple[int, int, int] | None = None
 
     @property
     def mapped_letters(self) -> tuple[int, ...]:
         return (0x0041,) if self.letters else self.codepoints
 
+    def letter_advance(self, index: int) -> int:
+        return self.advances[index] if self.advances else self.space_advance
+
+    def glyph_of(self, code: int) -> int:
+        return 2 + self.mapped_letters.index(code)
+
     @property
     def num_glyphs(self) -> int:
-        return 2 + len(self.mapped_letters)  # .notdef, space, explicit letters
+        # .notdef, space, explicit letters, then the ligature glyph.
+        return 2 + len(self.mapped_letters) + (1 if self.ligature else 0)
 
 
 def pad4(data: bytes) -> bytes:
@@ -111,7 +125,7 @@ def hhea_table(spec: FaceSpec) -> bytes:
         800,   # ascender
         -200,  # descender
         0,     # lineGap
-        spec.space_advance,  # advanceWidthMax
+        max((spec.space_advance, *spec.advances)),  # advanceWidthMax
         0, 0, 0,  # minLeft/minRight/xMaxExtent
         1, 0,     # caretSlopeRise/Run
         0,        # caretOffset
@@ -128,8 +142,10 @@ def maxp_table(spec: FaceSpec) -> bytes:
 def hmtx_table(spec: FaceSpec) -> bytes:
     # One longHorMetric per glyph (numberOfHMetrics == numGlyphs).
     metrics = struct.pack(">Hh", 0, 0) + struct.pack(">Hh", spec.space_advance, 0)
-    for _ in spec.mapped_letters:
-        metrics += struct.pack(">Hh", spec.space_advance, 0)
+    for index, _ in enumerate(spec.mapped_letters):
+        metrics += struct.pack(">Hh", spec.letter_advance(index), 0)
+    if spec.ligature:
+        metrics += struct.pack(">Hh", spec.ligature[2], 0)
     return metrics
 
 
@@ -261,6 +277,53 @@ def fvar_table(spec: FaceSpec) -> bytes:
     return header + axis
 
 
+def gsub_table(spec: FaceSpec) -> bytes:
+    """A `GSUB` holding one `rlig` ligature under script `arab`.
+
+    One script (`arab`, default language system only), one feature (`rlig`,
+    which an Arabic shaper applies to every glyph), one lookup: a type 4
+    ligature substitution of `spec.ligature`'s two glyphs, in logical order.
+    """
+    first, second, _ = spec.ligature
+    first_glyph, second_glyph = spec.glyph_of(first), spec.glyph_of(second)
+    ligature_glyph = spec.num_glyphs - 1
+
+    # Script list: one record, a Script with a default LangSys naming feature 0.
+    lang_sys = struct.pack(">HHHH", 0, 0xFFFF, 1, 0)
+    script = struct.pack(">HH", 4, 0) + lang_sys
+    script_list = struct.pack(">H4sH", 1, b"arab", 8) + script
+    # Feature list: one record, `rlig`, naming lookup 0.
+    feature = struct.pack(">HHH", 0, 1, 0)
+    feature_list = struct.pack(">H4sH", 1, b"rlig", 8) + feature
+    # Lookup list: one type 4 lookup with one LigatureSubstFormat1 subtable:
+    # its coverage (the first glyph), one LigatureSet, one Ligature.
+    ligature = struct.pack(">HHH", ligature_glyph, 2, second_glyph)
+    ligature_set = struct.pack(">HH", 1, 4) + ligature
+    coverage = struct.pack(">HHH", 1, 1, first_glyph)
+    subst_header = 8  # substFormat, coverageOffset, ligatureSetCount, one offset
+    subtable = (
+        struct.pack(">HHHH", 1, subst_header, 1, subst_header + len(coverage))
+        + coverage
+        + ligature_set
+    )
+    lookup = struct.pack(">HHHH", 4, 0, 1, 8) + subtable
+    lookup_list = struct.pack(">HH", 1, 4) + lookup
+
+    header = 10
+    return (
+        struct.pack(
+            ">HHHHH",
+            1, 0,
+            header,
+            header + len(script_list),
+            header + len(script_list) + len(feature_list),
+        )
+        + script_list
+        + feature_list
+        + lookup_list
+    )
+
+
 def tables_for(spec: FaceSpec) -> dict[bytes, bytes]:
     tables = {
         b"OS/2": os2_table(spec),
@@ -280,6 +343,8 @@ def tables_for(spec: FaceSpec) -> dict[bytes, bytes]:
     }
     if spec.variable_wght is not None:
         tables[b"fvar"] = fvar_table(spec)
+    if spec.ligature is not None:
+        tables[b"GSUB"] = gsub_table(spec)
     return tables
 
 
@@ -369,6 +434,20 @@ FACES = [
         letters=True,
         weight=400,
         variable_wght=(100, 400, 900),
+    ),
+    # Arabic letters of distinct advances and a lam-alef ligature (`rlig`):
+    # the face a caret test shapes `الاسم` in, to pin that a ligature is one
+    # glyph and one caret stop per scalar. Alef 300, seen 400, lam 500,
+    # meem 450; lam + alef is one glyph of 650.
+    FaceSpec(
+        family="FLUI Probe Arabic",
+        postscript="FLUIProbeArabic",
+        subfamily="Regular",
+        out="probe-arabic-ligature.ttf",
+        codepoints=(0x0627, 0x0633, 0x0644, 0x0645),
+        advances=(300, 400, 500, 450),
+        space_advance=250,
+        ligature=(0x0644, 0x0627, 650),
     ),
 ]
 

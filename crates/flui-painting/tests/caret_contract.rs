@@ -440,3 +440,78 @@ pub(crate) fn line_metrics_index_each_line() {
         "the line starts at its first caret, {first} in the box: {short:?}"
     );
 }
+
+/// "FLUI Probe Arabic" (`tools/decoy-face/generate.py`): alef 300, seen 400,
+/// lam 500 and meem 450 units wide, and lam + alef a 650-unit ligature
+/// (`rlig`, glyph 6), 1000 units to the em.
+const PROBE_ARABIC: &[u8] = include_bytes!("../assets/fonts/probe-arabic-ligature.ttf");
+
+/// A lam-alef ligature is one glyph and one caret stop per scalar (mapping
+/// decision 19). `الاسم` in the probe face shapes four glyphs, the ligature
+/// among them, and measures their advances; the caret between lam and alef
+/// sits midway across the ligature, and a hit in each quarter of it answers
+/// the nearest of its three stops. Fails if the face stops ligating (five
+/// glyphs, a wider paragraph), or if carets collapse the ligature's
+/// components into one stop (the middle caret lands on an edge).
+pub(crate) fn a_lam_alef_ligature_is_one_glyph_and_two_caret_stops() {
+    let fonts = FontCollection::new();
+    fonts
+        .register_font(PROBE_ARABIC)
+        .expect("the probe face loads");
+    // Alef, lam, alef, seen, meem: bytes 0, 2, 4, 6 and 8.
+    let text = "\u{0627}\u{0644}\u{0627}\u{0633}\u{0645}";
+    let style = TextStyle {
+        font_family: Some("FLUI Probe Arabic".to_owned()),
+        font_size: Some(SIZE),
+        ..TextStyle::default()
+    };
+    let mut painter = TextPainter::new()
+        .with_text(TextSpan::styled(text, style))
+        .with_text_direction(TextDirection::Rtl);
+    painter.layout(&mut TextContext::new(&fonts), 0.0, f64::INFINITY);
+
+    let (paragraph, _) = painted(&painter);
+    let glyphs: Vec<u16> = paragraph
+        .runs()
+        .flat_map(|run| run.glyphs().iter().map(|glyph| glyph.id))
+        .collect();
+    assert_eq!(glyphs.len(), 4, "alef, lam-alef, seen, meem: {glyphs:?}");
+    assert!(
+        glyphs.contains(&6),
+        "the ligature glyph is painted: {glyphs:?}"
+    );
+    let units = f64::from(300 + 650 + 400 + 450);
+    assert!(
+        (painter.width() - units / 1000.0 * SIZE).abs() < EPS,
+        "the paragraph measures the four advances: {}",
+        painter.width()
+    );
+
+    let (right, middle, left) = (
+        caret(&painter, 2).dx,
+        caret(&painter, 4).dx,
+        caret(&painter, 6).dx,
+    );
+    assert!(
+        (right - left - 0.65 * SIZE).abs() < EPS,
+        "the ligature's outer carets span its advance: {left}..{right}"
+    );
+    assert!(
+        left < middle && middle < right && (middle - f64::midpoint(left, right)).abs() < EPS,
+        "the caret between lam and alef is midway across the ligature: \
+         {left} < {middle} < {right}"
+    );
+
+    let (width, y) = (right - left, line_middle(&painter, 0));
+    let hits = [
+        hit(&painter, right - width / 8.0, y),
+        hit(&painter, right - width * 3.0 / 8.0, y),
+        hit(&painter, left + width * 3.0 / 8.0, y),
+        hit(&painter, left + width / 8.0, y),
+    ];
+    assert_eq!(
+        hits,
+        [2, 4, 4, 6],
+        "each quarter of the ligature answers its nearest stop"
+    );
+}

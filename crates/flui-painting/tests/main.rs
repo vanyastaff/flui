@@ -306,6 +306,10 @@ fn caret_contract() {
                 "line_metrics_index_each_line",
                 cc::line_metrics_index_each_line,
             ),
+            (
+                "a_lam_alef_ligature_is_one_glyph_and_two_caret_stops",
+                cc::a_lam_alef_ligature_is_one_glyph_and_two_caret_stops,
+            ),
         ],
     );
 }
