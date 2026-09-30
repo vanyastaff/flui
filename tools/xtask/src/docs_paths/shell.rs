@@ -68,6 +68,11 @@ pub(super) fn commands(code: &str) -> Vec<Command> {
                 while let Some(quoted) = chars.next() {
                     match quoted {
                         '"' => break,
+                        // a line continuation inside quotes too
+                        '\\' if chars.peek() == Some(&'\n') => {
+                            chars.next();
+                            line += 1;
+                        }
                         '\\' if chars
                             .peek()
                             .is_some_and(|next| matches!(next, '"' | '\\' | '$' | '`')) =>

@@ -16,7 +16,7 @@
 //! splits them ([`super::shell`]): `mkdir -p` after `&&` is not cargo's, nor is
 //! `echo "cargo test -p x"`, nor a `-p` after `--`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use super::shell;
 
@@ -275,61 +275,43 @@ const GLOBAL_VALUE_OPTIONS: [&str; 4] = ["--color", "--config", "-C", "-Z"];
 /// `env`'s options that take a value in the next word.
 const ENV_VALUE_OPTIONS: [&str; 4] = ["-u", "--unset", "-C", "--chdir"];
 
+/// Cargo's short options that take a value, so a `p` after one in a cluster
+/// (`-Zp…`) is that value, not `-p`.
+const SHORT_VALUE_OPTIONS: [char; 4] = ['C', 'F', 'Z', 'j'];
+
 /// The packages the cargo commands in `code` select, in every spelling cargo
-/// takes: `-p x`, `--package x`, `-p=x`, `--package=x` and `-px`. A command is
-/// cargo's when its first word, after any `NAME=value` assignments and an
-/// `env` wrapper, is `cargo` (or a path ending in `/cargo`); its arguments stop
-/// at `--`, after which they are the program's.
+/// takes: `-p x`, `--package x`, `-p=x`, `--package=x`, `-px` and a cluster
+/// (`-qpx`, `-qp x`). A command is cargo's when its first word, after any
+/// `NAME=value` assignments and an `env` wrapper, is `cargo` (or a path ending
+/// in `/cargo`); its arguments stop at `--`, after which they are the program's.
 pub(super) fn packages(code: &str) -> Vec<Selected> {
     let mut found = Vec::new();
     for command in shell::commands(code) {
-        let mut words = command.into_iter().skip_while(|(_, word)| assignment(word));
-        let Some((_, mut program)) = words.next() else {
-            continue;
-        };
-        // `env [OPTION]... [NAME=VALUE]... COMMAND [ARG]...` runs COMMAND
-        while program == "env" || program.ends_with("/env") {
-            let mut command = None;
-            while let Some((_, word)) = words.next() {
-                if ENV_VALUE_OPTIONS.contains(&word.as_str()) {
-                    words.next();
-                } else if !word.starts_with('-') && !assignment(&word) {
-                    command = Some(word);
-                    break;
-                }
-            }
-            let Some(command) = command else {
-                break;
-            };
-            program = command;
-        }
-        if program != "cargo" && !program.ends_with("/cargo") {
+        let mut words: VecDeque<(usize, String)> = command.into();
+        if !cargo_command(&mut words) {
             continue;
         }
         let mut subcommand: Option<String> = None;
-        while let Some((line, word)) = words.next() {
-            let (line, name) = if word == "--" {
+        while let Some((line, word)) = words.pop_front() {
+            if word == "--" {
                 break;
-            } else if matches!(word.as_str(), "-p" | "--package") {
-                match words.next() {
+            }
+            let (line, name) = match package_flag(&word) {
+                PackageFlag::Joined(value) => (line, value.to_owned()),
+                PackageFlag::NextWord => match words.pop_front() {
                     Some(value) => value,
                     None => break,
-                }
-            } else if let Some(name) = word
-                .strip_prefix("--package=")
-                .or_else(|| word.strip_prefix("-p="))
-                .or_else(|| word.strip_prefix("-p").filter(|_| !word.starts_with("--")))
-            {
-                (line, name.to_owned())
-            } else {
-                if subcommand.is_none() {
-                    if GLOBAL_VALUE_OPTIONS.contains(&word.as_str()) {
-                        words.next();
-                    } else if !word.starts_with(['-', '+']) {
-                        subcommand = Some(word);
+                },
+                PackageFlag::None => {
+                    if subcommand.is_none() {
+                        if GLOBAL_VALUE_OPTIONS.contains(&word.as_str()) {
+                            words.pop_front();
+                        } else if !word.starts_with(['-', '+']) {
+                            subcommand = Some(word);
+                        }
                     }
+                    continue;
                 }
-                continue;
             };
             found.extend(package(&name).map(|(name, version)| Selected {
                 line,
@@ -340,6 +322,92 @@ pub(super) fn packages(code: &str) -> Vec<Selected> {
         }
     }
     found
+}
+
+/// Takes the words before cargo's arguments off the front of `words`: the
+/// `NAME=value` assignments, an `env` wrapper with its options (`-S` splits
+/// its value into the command it runs), and `cargo`. `false` when the
+/// command is not cargo's.
+fn cargo_command(words: &mut VecDeque<(usize, String)>) -> bool {
+    loop {
+        while words.front().is_some_and(|(_, word)| assignment(word)) {
+            words.pop_front();
+        }
+        let Some((_, program)) = words.pop_front() else {
+            return false;
+        };
+        if program == "cargo" || program.ends_with("/cargo") {
+            return true;
+        }
+        if program != "env" && !program.ends_with("/env") {
+            return false;
+        }
+        // `env [OPTION]... [NAME=VALUE]... COMMAND [ARG]...` runs COMMAND
+        while let Some((line, word)) = words.pop_front() {
+            let split = if matches!(word.as_str(), "-S" | "--split-string") {
+                words.pop_front().map(|(_, value)| value)
+            } else {
+                word.strip_prefix("--split-string=")
+                    .or_else(|| {
+                        word.strip_prefix("-S")
+                            .filter(|value| !value.is_empty() && !word.starts_with("--"))
+                    })
+                    .map(str::to_owned)
+            };
+            if let Some(split) = split {
+                for (_, part) in shell::commands(&split).into_iter().flatten().rev() {
+                    words.push_front((line, part));
+                }
+                break;
+            } else if ENV_VALUE_OPTIONS.contains(&word.as_str()) {
+                words.pop_front();
+            } else if !word.starts_with('-') {
+                // an assignment or the command: the outer loop reads it
+                words.push_front((line, word));
+                break;
+            }
+        }
+    }
+}
+
+/// What one of cargo's words says about the package it selects.
+enum PackageFlag<'a> {
+    /// No package option.
+    None,
+    /// A package option whose value is the next word (`-p`, `-qp`).
+    NextWord,
+    /// A package option with its value in the word (`-px`, `--package=x`).
+    Joined(&'a str),
+}
+
+/// What `word` says about the package it selects. A short cluster (`-qpx`)
+/// is read as clap reads it: flags up to `p`, then the rest is the value,
+/// unless a flag before `p` takes one.
+fn package_flag(word: &str) -> PackageFlag<'_> {
+    if matches!(word, "-p" | "--package") {
+        return PackageFlag::NextWord;
+    }
+    if let Some(value) = word.strip_prefix("--package=") {
+        return PackageFlag::Joined(value);
+    }
+    let Some(cluster) = word.strip_prefix('-').filter(|rest| !rest.starts_with('-')) else {
+        return PackageFlag::None;
+    };
+    for (at, flag) in cluster.char_indices() {
+        if flag == 'p' {
+            let value = &cluster[at + 1..];
+            let value = value.strip_prefix('=').unwrap_or(value);
+            return if value.is_empty() {
+                PackageFlag::NextWord
+            } else {
+                PackageFlag::Joined(value)
+            };
+        }
+        if SHORT_VALUE_OPTIONS.contains(&flag) || !flag.is_ascii_alphabetic() {
+            return PackageFlag::None;
+        }
+    }
+    PackageFlag::None
 }
 
 /// Whether `word` is a `NAME=value` assignment before a command (PowerShell's

@@ -162,6 +162,21 @@ fn packages_are_read_only_from_cargo_commands() {
         ("env RUSTFLAGS=x cargo test -p a", &[(0, test, "a")]),
         ("env -i -u X -C dir cargo build -p a", &[(0, build, "a")]),
         ("/usr/bin/env cargo test -p a", &[(0, test, "a")]),
+        // `env -S` splits its value into the command it runs
+        ("env -S 'cargo test -p a'", &[(0, test, "a")]),
+        (
+            "env --split-string='A=1 cargo test -p a'",
+            &[(0, test, "a")],
+        ),
+        ("env -S'cargo build' -p a", &[(0, build, "a")]),
+        // a short-option cluster, read as clap reads it
+        ("cargo test -qpa", &[(0, test, "a")]),
+        ("cargo test -qp a", &[(0, test, "a")]),
+        ("cargo test -vqp=a", &[(0, test, "a")]),
+        ("cargo build -j4", &[]),
+        ("cargo -Zpolonius test", &[]),
+        // a line continuation inside double quotes
+        ("cargo test -p \"flui-\\\nview\"", &[(0, test, "flui-view")]),
         // a malformed name is taken as written, for the check to reject
         (
             "cargo test -p definitely.missing",
@@ -215,7 +230,7 @@ fn locked(packages: &[(&str, &str)]) -> BTreeMap<String, BTreeSet<String>> {
 
 fn a_lockfile_package_is_selected_only_by_update_and_tree() {
     let packages = Packages {
-        local: ["flui-view".to_owned()].into(),
+        local: locked(&[("flui-view", "0.2.0")]),
         locked: locked(&[
             ("wgpu", "25.0.0"),
             ("bitflags", "1.3.2"),
@@ -224,6 +239,9 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
     };
     for (code, selects) in [
         ("cargo test -p flui-view", true),
+        // a local package's version is checked too
+        ("cargo test -p flui-view@0.2", true),
+        ("cargo test -p flui-view@999", false),
         ("cargo update -p wgpu", true),
         ("cargo tree -p wgpu", true),
         ("cargo pkgid -p wgpu", true),
@@ -381,6 +399,8 @@ fn an_llms_link_resolves_like_a_github_link() {
         ("https://github.com/vanyastaff/flui/issues/1", None),
         ("mailto:a@b.c", None),
         ("//example.com/docs", None),
+        // an empty path before a query is the doc itself
+        ("?view=compact#missing", Some(Some("llms.txt"))),
         // a percent-escaped name is the file's name
         ("docs/review%20probe.md", Some(Some("docs/review probe.md"))),
         ("#start-here", Some(Some("llms.txt"))),
@@ -393,7 +413,7 @@ fn an_llms_link_resolves_like_a_github_link() {
 fn a_doc_reports_each_stale_name_once() {
     let known = known();
     let packages = Packages {
-        local: ["flui-view", "flui-app"].map(str::to_owned).into(),
+        local: locked(&[("flui-view", "0.2.0"), ("flui-app", "0.2.0")]),
         locked: locked(&[("wgpu", "25.0.0")]),
     };
     let read = |path: &str| (path == "docs/testing.md").then(|| "# The harness\n".to_owned());

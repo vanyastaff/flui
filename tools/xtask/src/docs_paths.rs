@@ -144,21 +144,30 @@ const GRAPH_SUBCOMMANDS: [&str; 4] = ["clean", "pkgid", "tree", "update"];
 #[derive(Debug, Default)]
 struct Packages {
     /// The workspace members, and every other package the checkout has a
-    /// manifest for (the Android examples are excluded from the workspace).
-    local: BTreeSet<String>,
+    /// manifest for (the Android examples are excluded from the workspace),
+    /// each with its version when the manifest states one.
+    local: BTreeMap<String, BTreeSet<String>>,
     /// Every package in `Cargo.lock` and its locked versions, for a
     /// [`GRAPH_SUBCOMMANDS`] command.
     locked: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl Packages {
-    /// Whether the command `selected` is in names a package it can select. A
-    /// lockfile package locked at two versions is ambiguous by name alone to
-    /// every graph subcommand but `clean`, which cleans them all; `name@1` or
-    /// `name@1.3.2` picks the versions that start with it.
+    /// Whether the command `selected` is in names a package it can select.
+    /// `name@1` or `name@1.3.2` picks the versions that start with it, a local
+    /// package's too. A lockfile package locked at two versions is ambiguous
+    /// by name alone to every graph subcommand but `clean`, which cleans them all.
     fn selects(&self, selected: &extract::Selected) -> bool {
-        if self.local.contains(&selected.name) {
-            return true;
+        let matching = |versions: &BTreeSet<String>| match &selected.version {
+            Some(version) => versions
+                .iter()
+                .filter(|known| *known == version || known.starts_with(&format!("{version}.")))
+                .count(),
+            None => versions.len(),
+        };
+        if let Some(versions) = self.local.get(&selected.name) {
+            // a manifest that inherits its version states none to check against
+            return selected.version.is_none() || versions.is_empty() || matching(versions) > 0;
         }
         let Some(subcommand) = selected
             .subcommand
@@ -170,13 +179,7 @@ impl Packages {
         let Some(versions) = self.locked.get(&selected.name) else {
             return false;
         };
-        let matching = match &selected.version {
-            Some(version) => versions
-                .iter()
-                .filter(|locked| *locked == version || locked.starts_with(&format!("{version}.")))
-                .count(),
-            None => versions.len(),
-        };
+        let matching = matching(versions);
         matching == 1 || (matching > 1 && subcommand == "clean")
     }
 }
@@ -200,12 +203,16 @@ fn packages(root: &std::path::Path, known: &Known) -> anyhow::Result<Packages> {
     #[derive(Deserialize)]
     struct Named {
         name: String,
+        /// A string, or `{ workspace = true }` inherited from elsewhere.
+        version: Option<toml::Value>,
     }
-    let mut names: BTreeSet<String> = crate::util::metadata(root)?
-        .workspace_packages()
-        .into_iter()
-        .map(|package| package.name.to_string())
-        .collect();
+    let mut names: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for package in crate::util::metadata(root)?.workspace_packages() {
+        names
+            .entry(package.name.to_string())
+            .or_default()
+            .insert(package.version.to_string());
+    }
     for manifest in known
         .files
         .iter()
@@ -218,7 +225,10 @@ fn packages(root: &std::path::Path, known: &Known) -> anyhow::Result<Packages> {
             package: Some(package),
         }) = toml::from_str(&text)
         {
-            names.insert(package.name);
+            let versions = names.entry(package.name).or_default();
+            if let Some(version) = package.version.as_ref().and_then(toml::Value::as_str) {
+                versions.insert(version.to_owned());
+            }
         }
     }
     let lock: Lock =
@@ -450,7 +460,8 @@ fn link_target(doc: &str, dest: &str) -> Option<Option<String>> {
         .map(|rest| format!("/{rest}"));
     let dest = match &local {
         Some(dest) => dest.as_str(),
-        None if dest.starts_with('#') => return Some(Some(doc.to_owned())),
+        // an empty path before a query or an anchor is the doc itself
+        None if dest.starts_with(['#', '?']) => return Some(Some(doc.to_owned())),
         // another scheme, or a scheme-relative `//host/path`
         None if dest.contains(':') || dest.starts_with("//") || dest.is_empty() => return None,
         None => dest,
