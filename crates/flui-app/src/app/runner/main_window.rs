@@ -863,8 +863,12 @@ mod tests {
 
     /// The loop's development agent hook is attached once, when the loop
     /// starts, stays attached while main-window opens fail and are retried,
-    /// is handed no window that failed to install, and is detached exactly
-    /// once, when the loop ends.
+    /// and is detached exactly once, when the loop ends.
+    ///
+    /// The factory panics before GPU setup, so no window is ever vended here:
+    /// the zero hand-over count pins only that a failed open hands nothing
+    /// over, not the vend-then-hand-over order after a committed install,
+    /// which runs after GPU setup and no headless test reaches.
     fn main_window_agent_hook_stays_attached_across_failed_reopens_and_detaches_with_loop() {
         #[derive(Default)]
         struct Counts {
@@ -883,8 +887,9 @@ mod tests {
         }
         struct Counting(Arc<Counts>);
         impl flui_view::dev_agent::DevAgentHook for Counting {
-            fn attach(&mut self) {
+            fn attach(&mut self) -> bool {
                 self.0.attaches.fetch_add(1, Ordering::SeqCst);
+                true
             }
             fn detach(&mut self) {
                 self.0.detaches.fetch_add(1, Ordering::SeqCst);

@@ -527,6 +527,17 @@ impl HeadlessRealm {
         self.accessibility.attach();
     }
 
+    /// Whether the window's pipeline holds a semantics tree: assistive
+    /// technology or a development agent asked for one, and a
+    /// [`pump`](Self::pump) has run since. It stops once nothing asks and
+    /// the next pump has run.
+    #[must_use]
+    pub fn collects_semantics(&self) -> bool {
+        self.realm
+            .presentation_collects_semantics_for_test(self.realm.presentation_id())
+            .expect("BUG: a headless realm's window stays resident while the realm lives")
+    }
+
     /// The listener the realm registered for actions assistive technology
     /// requests. It is `Send + Sync`: a test plays the platform adapter by
     /// calling it, from any thread, and the realm queues the request in its

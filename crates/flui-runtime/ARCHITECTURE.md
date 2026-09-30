@@ -346,21 +346,26 @@ Pinned by `src/ui_realm/tests/agent_semantics.rs`.
 (`flui_view::dev_agent::DevAgentHook`, ADR-0095 §3). `UiRealm::dev_agent_window` vends one
 agent per presentation, keeps it on the `PresentationState`, and hands out
 `flui_view::dev_agent::AgentWindow`s that hold it weakly through the hidden
-`flui_view::__runtime::AgentPort`, so the hook never keeps a closed window or its semantics
-collection alive: closing the presentation drops the agent, collection stops on the next frame,
-and every call on a window answers `gone` (kind `window`). `flui-app`'s desktop and iOS runners
+`flui_view::__runtime::AgentPort`, so the hook never keeps a closed window alive: closing the
+presentation drops the agent and every call on a window answers `gone` (kind `window`). The
+windows hold the presentation's semantics handle strongly instead of the presentation, so the
+cost lasts exactly as long as the hook keeps a window: a hook that does not serve is handed none,
+and one that detaches or panics drops its windows, and collection stops on the next frame. `flui-app`'s desktop and iOS runners
 and `flui_testing::HeadlessDevAgent` drive the hook through `dev_agent::DevAgentHost`; the
 endpoint that serves it is `flui-devtools`' `agent` feature. Pinned by
-`an_agent_for_a_closed_presentation_answers_gone` and `dev_agent_host_contains_its_hook`.
+`an_agent_for_a_closed_presentation_answers_gone`, `dev_agent_host_contains_its_hook` and
+`flui-devtools`' `the_endpoint_contains_every_failure`.
 
 ### The development agent host lives in the runtime
 
 **Rule.** `dev_agent::DevAgentHost` is the only code that calls an installed `DevAgentHook`:
-attach once per loop (a second attach while attached is refused), hand over each window with
+attach once per loop (a second attach while attached is refused, and a hook whose `attach`
+answers that it does not serve stays unattached and is never detached), hand over each window with
 content, detach when the loop's `DevAgentAttachment` drops. Each call lends the hook out of its
 slot with no lock held, so a hook that re-enters the host finds the slot empty; a panic drops the
 hook (its `Drop` contained too, its payload forgotten) and every later call does nothing; nothing
-is vended while the hook is not attached, so a hook that failed to attach costs no semantics work.
+is vended while the hook is not attached, so a hook that does not serve or failed to attach costs
+no semantics work, and a window's semantics work ends once the hook drops its `AgentWindow`.
 
 **Why here.** Two hosts drive it, `flui-app`'s windowed runners and `flui-testing`'s headless
 realm, and the headless one is the only one CI executes (a windowed install creates a GPU

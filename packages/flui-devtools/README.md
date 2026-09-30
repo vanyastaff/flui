@@ -131,7 +131,8 @@ run_app_with_config(App, config);
 a socket path elsewhere) and `FLUI_AGENT_TOKEN` (at least 32 bytes), which the
 tool that launches the app sets. Without them, in a release build, or with a
 short token the server stays inert and logs why once; if the endpoint cannot
-be bound the app runs on without it. The desktop and iOS runners hand the
+be bound the app runs on without it. Either way the runner is told the server
+does not serve, so no window collects semantics for it. The desktop and iOS runners hand the
 server every window that mounts a root view; Android and web drive no agent.
 
 **Framing.** Newline-delimited JSON, one request per line, at most 1 MiB. The

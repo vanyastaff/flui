@@ -19,7 +19,7 @@
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::num::NonZeroU32;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TryRecvError, TrySendError};
@@ -323,6 +323,16 @@ impl<T: Send + 'static> PendingAnswer<T> for AgentReply<T> {
     }
 }
 
+/// What a presentation keeps for the development agent: see
+/// [`UiRealm::dev_agent_window`]. Owner thread only.
+pub(crate) struct DevAgentSlot {
+    /// The port every window handle answers through. Dropped at close.
+    agent: Arc<SemanticsAgent>,
+    /// The semantics handle the window handles share; dead once the hook
+    /// has dropped them all.
+    collecting: Weak<SemanticsHandle>,
+}
+
 /// A capability to read one presentation's semantics tree and act on its
 /// elements, from any thread, through the realm's owner inbox.
 ///
@@ -336,8 +346,9 @@ impl<T: Send + 'static> PendingAnswer<T> for AgentReply<T> {
 #[derive(Debug, Clone)]
 pub struct SemanticsAgent {
     sender: UiCommandSender,
-    /// Keeps semantics collected while any clone is alive.
-    _semantics: Arc<SemanticsHandle>,
+    /// Keeps semantics collected while any clone is alive. `None` for the
+    /// development agent's, whose [`AgentWindow`]s hold the handle instead.
+    _semantics: Option<Arc<SemanticsHandle>>,
     /// What this agent's reads reported. Touched only on the agent's side,
     /// never by the owner.
     issued: Arc<Mutex<IssuedHandles>>,
@@ -456,41 +467,61 @@ impl UiRealm {
     pub fn semantics_agent(&self, presentation: PresentationId) -> Option<SemanticsAgent> {
         let state = self.presentations.get(presentation)?;
         let handle = state.semantics_host().ensure_semantics();
+        self.request_redraw_for(state);
+        Some(self.agent_for(presentation, Some(Arc::new(handle))))
+    }
+
+    fn agent_for(
+        &self,
+        presentation: PresentationId,
+        semantics: Option<Arc<SemanticsHandle>>,
+    ) -> SemanticsAgent {
         let mut sender = self.sender_prototype.clone();
         sender.presentation_id = presentation;
-        self.request_redraw_for(state);
-        Some(SemanticsAgent {
+        SemanticsAgent {
             sender,
-            _semantics: Arc::new(handle),
+            _semantics: semantics,
             issued: Arc::new(Mutex::new(IssuedHandles::default())),
-        })
+        }
     }
 
     /// The development agent's window for `presentation`, or `None` when this
     /// realm does not host it.
     ///
-    /// The first call vends a [`SemanticsAgent`] (turning collection on and
-    /// requesting a frame, as [`Self::semantics_agent`] does) and keeps it on
-    /// the presentation; later calls hand out the same agent, so every
-    /// window handle shares one semantics handle and one record of issued
-    /// element handles. The returned [`AgentWindow`] holds the agent weakly:
-    /// closing the presentation drops the agent, collection stops on the next
-    /// frame, and every call on the window answers `gone`.
+    /// The presentation keeps one [`SemanticsAgent`] for the development
+    /// agent, so every window handle shares one record of issued element
+    /// handles. The returned [`AgentWindow`] holds that agent weakly: closing
+    /// the presentation drops it, and every call on the window answers
+    /// `gone`. It holds the presentation's semantics handle strongly: while
+    /// any window handle is alive the presentation collects semantics, and
+    /// once the hook has dropped them all collection stops on the next
+    /// frame. A call made while none is alive turns collection back on and
+    /// requests a frame, as [`Self::semantics_agent`] does.
     #[must_use]
     pub fn dev_agent_window(&self, presentation: PresentationId) -> Option<AgentWindow> {
         let state = self.presentations.get(presentation)?;
-        let kept = state.dev_agent.borrow().as_ref().map(Arc::clone);
-        let agent = if let Some(agent) = kept {
-            agent
-        } else {
-            let agent = Arc::new(self.semantics_agent(presentation)?);
-            *state.dev_agent.borrow_mut() = Some(Arc::clone(&agent));
-            agent
+        let (agent, collecting, fresh) = {
+            let mut slot = state.dev_agent.borrow_mut();
+            let slot = slot.get_or_insert_with(|| DevAgentSlot {
+                agent: Arc::new(self.agent_for(presentation, None)),
+                collecting: Weak::new(),
+            });
+            let kept = slot.collecting.upgrade();
+            let fresh = kept.is_none();
+            let collecting = kept.unwrap_or_else(|| {
+                let handle = Arc::new(state.semantics_host().ensure_semantics());
+                slot.collecting = Arc::downgrade(&handle);
+                handle
+            });
+            (Arc::clone(&slot.agent), collecting, fresh)
         };
+        if fresh {
+            self.request_redraw_for(state);
+        }
         let window = WindowId::from_u64(presentation.as_u64())
             .expect("BUG: a presentation id packs a non-zero generation");
-        let port: std::sync::Weak<dyn AgentPort> = Arc::downgrade(&agent) as _;
-        Some(flui_view::__runtime::agent_window(window, port))
+        let port: Weak<dyn AgentPort> = Arc::downgrade(&agent) as _;
+        Some(flui_view::__runtime::agent_window(window, port, collecting))
     }
 
     /// The owner half of [`SemanticsAgent::read`].

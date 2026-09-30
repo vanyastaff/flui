@@ -7,7 +7,8 @@
 - **`flui-view`**: `dev_agent::{DevAgentHook, AgentWindow, AgentAnswer, AgentFault,
   HandleKind}`, the seam between a host and such a tool, also reached as
   `flui_sdk::view::dev_agent`. An `AgentWindow` holds its window weakly: once the window
-  closes, every call answers `gone`.
+  closes, every call answers `gone`. A window collects semantics only while its hook keeps an
+  `AgentWindow`, and a hook whose `attach` answers `false` is handed none.
 - **`flui-devtools`**: the `agent` feature (off by default) adds `agent::AgentServer`, which
   serves the application's windows over a named pipe or Unix socket with a launch token, as
   newline-delimited JSON, in debug builds only; `cargo run -p flui-devtools --example

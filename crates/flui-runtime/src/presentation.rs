@@ -264,9 +264,10 @@ pub struct PresentationState {
     /// The semantics agent a development agent hook reads this presentation
     /// through, once `UiRealm::dev_agent_window` has vended it. The hook's
     /// `AgentWindow`s hold it weakly, so dropping it here (at close, or with
-    /// the presentation) stops collection and turns every handle `gone`.
+    /// the presentation) turns every handle `gone`; they hold the semantics
+    /// handle themselves, so collection lasts while the hook keeps one.
     /// Owner thread only.
-    pub(crate) dev_agent: RefCell<Option<Arc<crate::ui_realm::SemanticsAgent>>>,
+    pub(crate) dev_agent: RefCell<Option<crate::ui_realm::DevAgentSlot>>,
     /// Owner-local widget framework state. One instance per presentation
     /// (ADR-0043) — the realm-level singular binding this used to be
     /// dissolves here; every widget-tree operation for this surface enters
@@ -1459,7 +1460,7 @@ impl PresentationState {
             self.semantics.clear_announce_callback();
             self.semantics.clear_event_callback();
             // The development agent goes with the window: its handles answer
-            // `gone` from here on, and its semantics handle is released.
+            // `gone` from here on.
             drop(self.dev_agent.take());
             // Withdraw from the platform accessibility bridge: detach both
             // listeners so an activation flip or action request arriving after

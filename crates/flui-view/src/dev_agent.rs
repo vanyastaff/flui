@@ -22,8 +22,10 @@
 //! hook when one is installed.
 //!
 //! - [`DevAgentHook::attach`] runs once per event loop, on the owner thread,
-//!   before the first window opens; [`DevAgentHook::detach`] runs once when
-//!   that loop ends. A hook is never attached twice without a detach between.
+//!   before the first window opens. When it answers that it serves, the
+//!   hook is attached and [`DevAgentHook::detach`] runs once when that loop
+//!   ends; when it answers that it does not, nothing else is called for that
+//!   loop. A hook is never attached twice without a detach between.
 //! - [`DevAgentHook::window_opened`] runs on the owner thread once a window's
 //!   realm is installed, and only between `attach` and `detach`. A window
 //!   whose installation fails is never handed over.
@@ -34,6 +36,13 @@
 //! weakly, so once the window closes every call answers `gone` with kind
 //! `window`, and [`AgentWindow::is_open`] turns `false`.
 //!
+//! While any clone of a window's [`AgentWindow`] is alive, that window
+//! collects semantics on every frame, as it does while assistive technology
+//! is on; once the hook has dropped every clone (at detach, or with the hook
+//! itself when it panics), collection stops at the next frame. A hook that
+//! does not serve answers so from `attach` and is handed no window, so it
+//! costs the application nothing.
+//!
 //! # What a hook promises
 //!
 //! - It never waits on an [`AgentAnswer`] inside a hook method, and never on
@@ -42,12 +51,12 @@
 //!   from threads of the hook's own.
 //! - It keeps what it logs free of labels and values: a read returns the
 //!   application's text.
-//!
-//! While a hook is installed, every published window collects semantics on
-//! every frame, as it does while assistive technology is on.
+//! - It drops every [`AgentWindow`] at `detach`, and keeps none it does not
+//!   serve.
 
+use std::any::Any;
 use std::fmt;
-use std::sync::Weak;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use flui_protocol::{ActionRequest, ErrorCode, ReadQuery, Retry, Tree, WindowId};
@@ -73,7 +82,9 @@ use crate::__runtime::{AgentPort, PendingAnswer};
 /// struct Windows(Vec<AgentWindow>);
 ///
 /// impl DevAgentHook for Windows {
-///     fn attach(&mut self) {}
+///     fn attach(&mut self) -> bool {
+///         true
+///     }
 ///
 ///     fn detach(&mut self) {
 ///         self.0.clear();
@@ -86,11 +97,18 @@ use crate::__runtime::{AgentPort, PendingAnswer};
 /// ```
 pub trait DevAgentHook: Send + 'static {
     /// Once per event loop, before the first window: start serving (bind an
-    /// endpoint, start the threads that answer agents).
-    fn attach(&mut self);
+    /// endpoint, start the threads that answer agents), and answer whether
+    /// it serves.
+    ///
+    /// `false` (the endpoint could not be bound, the build or the
+    /// credentials rule serving out) leaves the hook unattached for this
+    /// loop: it is handed no window and not detached, so the application
+    /// collects no semantics for it.
+    #[must_use = "the host attaches the hook only when it serves"]
+    fn attach(&mut self) -> bool;
 
     /// The loop is ending: stop serving and let go of every window. The
-    /// host pairs every `attach` with one `detach`.
+    /// host pairs every `attach` that answered `true` with one `detach`.
     fn detach(&mut self) {}
 
     /// A window with content to read has opened.
@@ -248,18 +266,30 @@ impl<T> fmt::Debug for AgentAnswer<T> {
 /// One window an agent can read and act on, from any thread.
 ///
 /// Handed to [`DevAgentHook::window_opened`] by the host. `Clone + Send +
-/// Sync`; it holds the window weakly, so it never keeps a closed window, or
-/// its semantics collection, alive. Its element handles are scoped to this
-/// window: another window can report the same `e<n>` for a different element.
+/// Sync`. It holds the window weakly, so it never keeps a closed window
+/// alive, and it keeps the window's semantics collected while any clone is
+/// alive: a hook that lets go of every clone ends that work. Its element
+/// handles are scoped to this window: another window can report the same
+/// `e<n>` for a different element.
 #[derive(Clone)]
 pub struct AgentWindow {
     id: WindowId,
     port: Weak<dyn AgentPort>,
+    /// Keeps the window's semantics collected; opaque to this crate.
+    _collecting: Arc<dyn Any + Send + Sync>,
 }
 
 impl AgentWindow {
-    pub(crate) fn new(id: WindowId, port: Weak<dyn AgentPort>) -> Self {
-        Self { id, port }
+    pub(crate) fn new(
+        id: WindowId,
+        port: Weak<dyn AgentPort>,
+        collecting: Arc<dyn Any + Send + Sync>,
+    ) -> Self {
+        Self {
+            id,
+            port,
+            _collecting: collecting,
+        }
     }
 
     /// The window's handle, `w<n>` on the wire. Unique within the process.
@@ -355,7 +385,10 @@ mod tests {
     fn a_window_answers_through_its_port_until_the_port_is_gone() {
         let id = WindowId::from_u64(3).expect("non-zero");
         let port: Arc<dyn AgentPort> = Arc::new(Answering);
-        let window = crate::__runtime::agent_window(id, Arc::downgrade(&port));
+        let collecting: Arc<dyn std::any::Any + Send + Sync> = Arc::new(());
+        let window =
+            crate::__runtime::agent_window(id, Arc::downgrade(&port), Arc::clone(&collecting));
+        assert_eq!(Arc::strong_count(&collecting), 2, "the window holds it");
         assert!(window.is_open());
         let mut answer = window.read(ReadQuery::new()).expect("the port is alive");
         assert!(matches!(answer.try_take(), Some(Ok(_))));
@@ -363,6 +396,11 @@ mod tests {
 
         drop(port);
         assert!(!window.is_open());
+        assert_eq!(
+            Arc::strong_count(&collecting),
+            2,
+            "a closed window still holds it until dropped"
+        );
         let element = flui_protocol::ElementId::from_u64(1).expect("non-zero");
         for fault in [
             window.read(ReadQuery::new()).expect_err("closed"),
@@ -379,5 +417,7 @@ mod tests {
             );
             assert!(!fault.may_have_run());
         }
+        drop(window);
+        assert_eq!(Arc::strong_count(&collecting), 1, "dropping lets go");
     }
 }

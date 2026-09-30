@@ -131,7 +131,11 @@ This settles ADR-0080's open item:
   hook's containment for every host (the desktop and iOS runners, and `flui-testing`'s headless
   realm, which is how CI exercises it); no transport is in the runtime. An `AgentWindow` holds
   its window's agent weakly, so a closed window answers `gone` with kind `window` and needs no
-  close notification. Android and web drive no hook.
+  close notification, and holds the window's semantics handle strongly, so semantics are
+  collected only while the tool keeps the window. `DevAgentHook::attach` answers whether the
+  hook serves: one that does not (a release build, missing or short credentials, a failed bind)
+  stays unattached and is handed no window, so it costs the application nothing. Android and
+  web drive no hook.
 - *Framing.* Newline-delimited JSON, lines of at most 1 MiB, a `{"hello":{"token":…}}` first
   line, then `windows`, `read` and `act` requests; every `read` and `act` names its window,
   because element ids are scoped to a window. Errors use ADR-0080's error object with `kind`

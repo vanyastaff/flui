@@ -1,7 +1,8 @@
 //! The development-agent host's containment matrix: each hook method
 //! panicking alone, a hook whose `Drop` panics too, a nested call, a refused
 //! second attach, a new loop after the last one ended, and no semantics work
-//! while no hook is attached. After every failure the realm still frames and
+//! while no hook is attached, while it does not serve, or once it has let go
+//! of its windows. After every failure the realm still frames and
 //! later publishes do nothing.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -19,6 +20,8 @@ enum PanicIn {
     Attach,
     WindowOpened,
     Detach,
+    /// `attach` returns, answering that the hook does not serve.
+    Inert,
 }
 
 #[derive(Default)]
@@ -51,9 +54,10 @@ struct Hook {
 }
 
 impl DevAgentHook for Hook {
-    fn attach(&mut self) {
+    fn attach(&mut self) -> bool {
         self.record.attaches.fetch_add(1, Ordering::SeqCst);
         assert!(self.panic_in != PanicIn::Attach, "hook attach fails");
+        self.panic_in != PanicIn::Inert
     }
 
     fn detach(&mut self) {
@@ -140,6 +144,26 @@ fn a_hook_panicking_in_attach_is_dropped_and_nothing_is_vended() {
     );
 }
 
+fn a_hook_that_does_not_serve_is_not_attached_and_costs_nothing() {
+    let (realm, mut sink) = realm();
+    let (host, record) = host(PanicIn::Inert, false);
+    assert!(host.attach().is_none(), "an inert hook attaches nothing");
+    assert!(!host.is_attached());
+    assert!(host.vend(&realm, realm.presentation_id()).is_none());
+    host.publish(&realm, realm.presentation_id());
+    assert_eq!(
+        record.counts(),
+        (1, 0, 0, 0),
+        "asked once, handed nothing, never detached, kept"
+    );
+    assert!(!collects_semantics(&realm, &mut sink), "no semantics work");
+    assert!(
+        host.attach().is_none(),
+        "the next loop asks again and is answered the same"
+    );
+    assert_eq!(record.counts(), (2, 0, 0, 0));
+}
+
 fn a_hook_panicking_in_window_opened_is_dropped_with_the_window() {
     let (realm, mut sink) = realm();
     let (host, record) = host(PanicIn::WindowOpened, false);
@@ -154,8 +178,8 @@ fn a_hook_panicking_in_window_opened_is_dropped_with_the_window() {
         "a later publish and the loop's end call nothing"
     );
     assert!(
-        collects_semantics(&realm, &mut sink),
-        "the vended agent is the presentation's until it closes"
+        !collects_semantics(&realm, &mut sink),
+        "the window went with the hook, and its semantics work with it"
     );
 }
 
@@ -226,6 +250,30 @@ fn a_new_loop_attaches_and_publishes_again() {
     );
 }
 
+fn detaching_the_hook_ends_its_windows_semantics_work() {
+    let (realm, mut sink) = realm();
+    let (host, record) = host(PanicIn::Nowhere, false);
+    let attachment = host.attach().expect("attach succeeds");
+    host.publish(&realm, realm.presentation_id());
+    assert!(
+        collects_semantics(&realm, &mut sink),
+        "a handed-over window is read"
+    );
+    drop(attachment);
+    assert_eq!(record.counts(), (1, 1, 1, 0));
+    assert!(
+        !collects_semantics(&realm, &mut sink),
+        "the hook let go of its windows at detach"
+    );
+    let second = host.attach().expect("the next loop attaches");
+    host.publish(&realm, realm.presentation_id());
+    assert!(
+        collects_semantics(&realm, &mut sink),
+        "the next loop's window is read again"
+    );
+    drop(second);
+}
+
 fn nothing_is_vended_while_no_hook_is_attached() {
     let (realm, mut sink) = realm();
     let (host, record) = host(PanicIn::Nowhere, false);
@@ -255,6 +303,10 @@ fn dev_agent_host_contains_its_hook() {
                 a_hook_panicking_in_attach_is_dropped_and_nothing_is_vended,
             ),
             (
+                "a_hook_that_does_not_serve_is_not_attached_and_costs_nothing",
+                a_hook_that_does_not_serve_is_not_attached_and_costs_nothing,
+            ),
+            (
                 "a_hook_panicking_in_window_opened_is_dropped_with_the_window",
                 a_hook_panicking_in_window_opened_is_dropped_with_the_window,
             ),
@@ -277,6 +329,10 @@ fn dev_agent_host_contains_its_hook() {
             (
                 "a_new_loop_attaches_and_publishes_again",
                 a_new_loop_attaches_and_publishes_again,
+            ),
+            (
+                "detaching_the_hook_ends_its_windows_semantics_work",
+                detaching_the_hook_ends_its_windows_semantics_work,
             ),
             (
                 "nothing_is_vended_while_no_hook_is_attached",

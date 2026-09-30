@@ -18,8 +18,9 @@
 //! part of the binding's public surface either: they resolve only where the
 //! trait is imported.
 
+use std::any::Any;
 use std::cell::Cell;
-use std::sync::Weak;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use flui_protocol::{ActionRequest, ReadQuery, Tree, WindowId};
@@ -58,10 +59,15 @@ pub trait PendingAnswer<T>: Send {
 }
 
 /// The [`AgentWindow`] for window `id`, answering through `port` while the
-/// port is alive and `gone` after.
+/// port is alive and `gone` after, and holding `collecting` (the window's
+/// semantics handle) while any clone of it is alive.
 #[must_use]
-pub fn agent_window(id: WindowId, port: Weak<dyn AgentPort>) -> AgentWindow {
-    AgentWindow::new(id, port)
+pub fn agent_window(
+    id: WindowId,
+    port: Weak<dyn AgentPort>,
+    collecting: Arc<dyn Any + Send + Sync>,
+) -> AgentWindow {
+    AgentWindow::new(id, port, collecting)
 }
 
 /// Wrap a pending answer.

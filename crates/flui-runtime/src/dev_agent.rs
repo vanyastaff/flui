@@ -15,7 +15,9 @@
 //! [vends](DevAgentHost::vend) the window's [`AgentWindow`] first and
 //! [hands it over](DevAgentHost::window_opened) once the window is
 //! installed. Nothing is vended while the hook is not attached, so a hook
-//! that failed to attach costs no semantics work.
+//! that does not serve, or failed to attach, costs no semantics work; a
+//! window's semantics work lasts only while the hook keeps its
+//! [`AgentWindow`], so a hook that detached or panicked ends it too.
 //!
 //! # Failure containment
 //!
@@ -84,7 +86,8 @@ impl DevAgentHost {
     ///
     /// `None` when the hook already panicked, when it is already attached to
     /// a live loop (refused with a warning: the hook's contract is one attach
-    /// per detach), or when `attach` panicked.
+    /// per detach), when `attach` answered that it does not serve (it is
+    /// then not detached), or when `attach` panicked.
     #[must_use = "dropping the attachment detaches the hook"]
     pub fn attach(&self) -> Option<DevAgentAttachment> {
         {
@@ -103,8 +106,8 @@ impl DevAgentHost {
             slot.attached = true;
         }
         match self.lend("attach", DevAgentHook::attach) {
-            Lent::Returned(()) => Some(DevAgentAttachment { host: self.clone() }),
-            Lent::Absent | Lent::Panicked => {
+            Lent::Returned(true) => Some(DevAgentAttachment { host: self.clone() }),
+            Lent::Returned(false) | Lent::Absent | Lent::Panicked => {
                 self.0.lock().attached = false;
                 None
             }

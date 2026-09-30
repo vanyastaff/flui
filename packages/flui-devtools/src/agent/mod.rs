@@ -216,10 +216,10 @@ impl AgentServer {
 }
 
 impl DevAgentHook for AgentServer {
-    fn attach(&mut self) {
+    fn attach(&mut self) -> bool {
         self.stop();
         let Some(endpoint) = &self.endpoint else {
-            return;
+            return false;
         };
         match endpoint::listen(endpoint, Registry::default()) {
             Ok(running) => {
@@ -233,6 +233,7 @@ impl DevAgentHook for AgentServer {
                 );
             }
         }
+        self.is_listening()
     }
 
     fn detach(&mut self) {

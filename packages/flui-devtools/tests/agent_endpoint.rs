@@ -580,6 +580,12 @@ fn detach_closes_the_endpoint() {
             "the socket file is removed"
         );
     });
+    let realm = owner.realm.as_mut().expect("the realm is open");
+    let _ = realm.pump(Duration::from_millis(16));
+    assert!(
+        !realm.collects_semantics(),
+        "the detached server let go of the window's semantics work"
+    );
 }
 
 fn a_bind_failure_leaves_the_realm_running() {
@@ -596,9 +602,35 @@ fn a_bind_failure_leaves_the_realm_running() {
             "the endpoint is the first server's; the second serves nothing"
         );
     });
+    assert!(
+        !owner
+            .agent
+            .as_ref()
+            .is_some_and(HeadlessDevAgent::is_attached),
+        "a server that could not bind is not attached"
+    );
     let realm = owner.realm.as_mut().expect("the realm is open");
     let _ = realm.pump(Duration::from_millis(16));
+    assert!(
+        !realm.collects_semantics(),
+        "a server that serves nothing costs the realm no semantics work"
+    );
     drop(first);
+
+    // A server whose token is too short is inert: not attached, no work.
+    let mut owner = Owner::new(AgentServer::new(AgentEndpoint::new(
+        Address::new().address,
+        "short",
+    )));
+    assert!(
+        !owner
+            .agent
+            .as_ref()
+            .is_some_and(HeadlessDevAgent::is_attached)
+    );
+    let realm = owner.realm.as_mut().expect("the realm is open");
+    let _ = realm.pump(Duration::from_millis(16));
+    assert!(!realm.collects_semantics(), "an inert server costs nothing");
 
     // A socket in a directory others can enter is refused.
     #[cfg(unix)]
