@@ -146,7 +146,7 @@ static FONT_SYSTEM: OnceLock<Arc<Mutex<FontState>>> = OnceLock::new();
 /// Held in an `Arc` (per ADR-0016) so the render engine's glyph pipeline
 /// can shape against the *same* `FontSystem` this module measures with:
 /// a font registered through
-/// [`FontCollection::register_font`](super::FontCollection::register_font)
+/// [`SharedFontSystem::register_font`]
 /// becomes visible to both measurement and rendering, closing the historic
 /// two-`FontSystem` gap where a registered face could measure but not paint.
 fn font_system_arc() -> &'static Arc<Mutex<FontState>> {
