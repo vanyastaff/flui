@@ -420,6 +420,35 @@ fn a_node_removed_after_measuring_is_skipped() {
     );
 }
 
+/// A long session that builds and drops text nodes and never registers a
+/// font keeps the record bounded by the live tree, not by every node it ever
+/// built. Fails if removed nodes stay recorded until a font change.
+fn the_record_stays_bounded_without_a_font_change() {
+    const REBUILDS: usize = 500;
+    let text = realm_text();
+    let mut owner = PipelineOwner::new(text.clone());
+    for _ in 0..REBUILDS {
+        let previous = owner.root_id();
+        let labels = mount_on(&mut owner, paragraph("rebuilt"));
+        assert!(
+            labels.get("paragraph").is_some(),
+            "the paragraph is mounted"
+        );
+        if let Some(previous) = previous {
+            assert_eq!(owner.remove_render_object(previous), 1);
+        }
+        let (next, result) = owner.run_frame();
+        result.expect("each rebuild lays out");
+        owner = next;
+    }
+    assert_eq!(owner.render_tree().len(), 1, "one paragraph is live");
+    assert!(
+        owner.text_measurer_count() <= 65,
+        "the record holds {} ids for one live node after {REBUILDS} rebuilds",
+        owner.text_measurer_count()
+    );
+}
+
 /// A face registered on the pipeline's font collection lays out again what
 /// measured text through the pipeline's context, and nothing else.
 #[test]
@@ -441,6 +470,10 @@ fn font_change_contract() {
         (
             "a_node_removed_after_measuring_is_skipped",
             a_node_removed_after_measuring_is_skipped,
+        ),
+        (
+            "the_record_stays_bounded_without_a_font_change",
+            the_record_stays_bounded_without_a_font_change,
         ),
     ];
     let failed: Vec<&str> = cases

@@ -120,9 +120,15 @@ impl fmt::Debug for TextContextHandle {
 /// Owned by the pipeline, since render ids are per pipeline; one `insert` per
 /// loan. A node stays recorded until the next change takes the set, so a
 /// node that stopped measuring text is laid out once more than it needs at
-/// worst.
+/// worst. A removed node's id is never reused (ids are generational), so
+/// [`Self::prune`] drops the dead ones once they outnumber the live tree:
+/// without it an app that never registers a font would keep the id of every
+/// text node it ever built.
 #[derive(Default)]
 pub(crate) struct TextMeasurers(RefCell<FxHashSet<RenderId>>);
+
+/// The record size below which [`TextMeasurers::prune`] never walks it.
+const PRUNE_FLOOR: usize = 64;
 
 impl TextMeasurers {
     fn note(&self, node: RenderId) {
@@ -132,6 +138,24 @@ impl TextMeasurers {
     /// Every recorded node, leaving the record empty.
     pub(crate) fn take(&self) -> FxHashSet<RenderId> {
         std::mem::take(&mut *self.0.borrow_mut())
+    }
+
+    /// Drops every recorded node `is_live` rejects, once the record holds
+    /// more than twice `live_nodes` (and more than a small floor).
+    ///
+    /// Amortized: a walk halves the record at least, so the next one waits
+    /// until as many ids were added again. The record stays within twice the
+    /// live tree plus what one frame measures.
+    pub(crate) fn prune(&self, live_nodes: usize, is_live: impl Fn(RenderId) -> bool) {
+        let mut set = self.0.borrow_mut();
+        if set.len() > PRUNE_FLOOR.max(live_nodes.saturating_mul(2)) {
+            set.retain(|id| is_live(*id));
+        }
+    }
+
+    /// How many nodes are recorded.
+    pub(crate) fn len(&self) -> usize {
+        self.0.borrow().len()
     }
 }
 

@@ -152,8 +152,13 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// While the context is lent (a drain run from inside a measurement) it
     /// does nothing and returns `false`: the change stays pending for the
     /// next drain. [`Self::drain_pending_dirty`] calls it, which both frame
-    /// entries run first.
+    /// entries run first. Each call also forgets the removed nodes once they
+    /// outnumber the live tree, so the record stays bounded in an app that
+    /// never registers a font.
     pub fn apply_font_change(&mut self) -> bool {
+        let render_tree = &self.render_tree;
+        self.text_measurers
+            .prune(render_tree.len(), |id| render_tree.get(id).is_some());
         let Some(generation) = self.text.fonts_generation() else {
             return false;
         };
@@ -173,6 +178,14 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             }
         }
         true
+    }
+
+    /// How many nodes the pipeline has recorded as measuring text since the
+    /// font collection last changed, removed ones not yet pruned included.
+    #[cfg(any(test, feature = "testing"))]
+    #[must_use]
+    pub fn text_measurer_count(&self) -> usize {
+        self.text_measurers.len()
     }
 
     /// Returns the root render object ID.
