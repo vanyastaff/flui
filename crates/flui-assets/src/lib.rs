@@ -17,12 +17,12 @@
 //! # Quick Start
 //!
 //! ```rust,no_run
-//! use flui_assets::{AssetRegistry, FontAsset};
+//! use flui_assets::{AssetRegistryBuilder, FontAsset};
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! // Get the global registry
-//! let registry = AssetRegistry::global();
+//! // Create a registry
+//! let registry = AssetRegistryBuilder::new().with_default_capacity().build();
 //!
 //! // Load a font
 //! let font = FontAsset::file("assets/font.ttf");
@@ -38,7 +38,7 @@
 //! The system uses a three-layer architecture:
 //!
 //! ```text
-//! AssetRegistry (Global)
+//! AssetRegistry (per app)
 //!     ↓
 //! AssetCache<T> (Per Type) - Moka TinyLFU cache
 //!     ↓
@@ -70,7 +70,7 @@
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! # let registry = flui_assets::AssetRegistry::global();
+//! # let registry = flui_assets::AssetRegistryBuilder::new().with_default_capacity().build();
 //! # let font = FontAsset::file("assets/font.ttf");
 //! let handle = registry.load(font).await?;
 //!

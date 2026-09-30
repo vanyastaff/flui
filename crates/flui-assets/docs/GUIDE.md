@@ -29,12 +29,12 @@ flui_assets = { version = "0.1", features = ["images"] }
 ### Your First Asset
 
 ```rust
-use flui_assets::{AssetRegistry, FontAsset};
+use flui_assets::{AssetRegistryBuilder, FontAsset};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Get global registry
-    let registry = AssetRegistry::global();
+    // Create a registry
+    let registry = AssetRegistryBuilder::new().with_default_capacity().build();
 
     // Load a font
     let font = FontAsset::file("assets/Roboto-Regular.ttf");
@@ -54,9 +54,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #### Method 1: Using Global Registry (Recommended)
 
 ```rust
-use flui_assets::AssetRegistry;
+use flui_assets::AssetRegistryBuilder;
 
-let registry = AssetRegistry::global();
+let registry = AssetRegistryBuilder::new().with_default_capacity().build();
 let font = registry.load(FontAsset::file("font.ttf")).await?;
 ```
 
@@ -127,9 +127,9 @@ assert!(Arc::ptr_eq(&font1.data, &font2.data));
 ### Cache Management
 
 ```rust
-use flui_assets::AssetRegistry;
+use flui_assets::AssetRegistryBuilder;
 
-let registry = AssetRegistry::global();
+let registry = AssetRegistryBuilder::new().with_default_capacity().build();
 
 // Invalidate specific asset
 registry.invalidate::<FontAsset>(&AssetKey::new("old_font.ttf")).await;
@@ -150,7 +150,7 @@ if let Some(cached) = registry.get::<FontAsset>(&key).await {
 Fonts are always available (no feature flag required):
 
 ```rust
-use flui_assets::{AssetRegistry, FontAsset};
+use flui_assets::{AssetRegistryBuilder, FontAsset};
 
 // Load from file
 let font = FontAsset::file("assets/Roboto-Regular.ttf");
@@ -175,7 +175,7 @@ flui_assets = { version = "0.1", features = ["images"] }
 ```
 
 ```rust
-use flui_assets::{AssetRegistry, ImageAsset};
+use flui_assets::{AssetRegistryBuilder, ImageAsset};
 
 // Load from file
 let image = ImageAsset::file("assets/logo.png");
@@ -373,7 +373,7 @@ Load multiple assets concurrently:
 ```rust
 use futures::future::join_all;
 
-let registry = AssetRegistry::global();
+let registry = AssetRegistryBuilder::new().with_default_capacity().build();
 
 // Load fonts in parallel
 let handles = (0..10)
@@ -427,7 +427,7 @@ match registry.load(font).await {
 
 ```rust
 // ✅ Good: Simple and clean
-let registry = AssetRegistry::global();
+let registry = AssetRegistryBuilder::new().with_default_capacity().build();
 let font = registry.load(FontAsset::file("font.ttf")).await?;
 ```
 
@@ -596,7 +596,7 @@ flui_assets = { version = "0.1", features = ["full"] }
 ### Example 1: Loading Multiple Font Families
 
 ```rust
-use flui_assets::{AssetRegistry, FontAsset};
+use flui_assets::{AssetRegistryBuilder, FontAsset};
 use std::collections::HashMap;
 
 async fn load_font_families(
@@ -623,7 +623,7 @@ async fn load_font_families(
 ### Example 2: Asset Loading Progress
 
 ```rust
-use flui_assets::{AssetRegistry, FontAsset};
+use flui_assets::{AssetRegistryBuilder, FontAsset};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 

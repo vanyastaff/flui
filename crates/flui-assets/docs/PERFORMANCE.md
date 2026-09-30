@@ -204,7 +204,7 @@ Load multiple assets concurrently:
 ```rust
 use futures::future::join_all;
 
-let registry = AssetRegistry::global();
+let registry = AssetRegistryBuilder::new().with_default_capacity().build();
 
 // Load 100 fonts concurrently
 let handles = (0..100)
@@ -285,7 +285,7 @@ Load assets before they're needed:
 
 ```rust
 // Preload critical assets at startup
-let registry = AssetRegistry::global();
+let registry = AssetRegistryBuilder::new().with_default_capacity().build();
 
 let assets = vec![
     FontAsset::file("ui_font.ttf"),
@@ -360,11 +360,11 @@ hyperfine --warmup 5 --runs 20 \
 
 ```rust
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use flui_assets::{AssetRegistry, FontAsset};
+use flui_assets::{AssetRegistryBuilder, FontAsset};
 
 fn bench_load(c: &mut Criterion) {
     let runtime = tokio::runtime::Runtime::new().unwrap();
-    let registry = AssetRegistry::global();
+    let registry = AssetRegistryBuilder::new().with_default_capacity().build();
 
     c.bench_function("load_font", |b| {
         b.to_async(&runtime).iter(|| async {

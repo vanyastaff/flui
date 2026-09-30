@@ -60,11 +60,11 @@ tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
 ### Basic Example
 
 ```rust
-use flui_assets::{AssetRegistry, FontAsset};
+use flui_assets::{AssetRegistryBuilder, FontAsset};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let registry = AssetRegistry::global();
+    let registry = AssetRegistryBuilder::new().with_default_capacity().build();
     let font = registry.load(FontAsset::file("font.ttf")).await?;
     println!("Loaded: {} bytes", font.bytes.len());
     Ok(())
@@ -88,7 +88,7 @@ Central hub for asset loading and caching.
 
 ```rust
 // Global registry (recommended)
-let registry = AssetRegistry::global();
+let registry = AssetRegistryBuilder::new().with_default_capacity().build();
 
 // Custom registry
 let registry = AssetRegistryBuilder::new()
@@ -138,7 +138,7 @@ Highly optimized for efficiency:
 ```
 Application
      ↓
-AssetRegistry (Global)
+AssetRegistry (per app)
      ↓
 AssetCache<T> (Per Type) - Moka TinyLFU
      ↓
@@ -234,7 +234,7 @@ cargo run -p flui_assets --example assets_basic_usage
 
 ### ✅ Do
 
-- Use global registry for simple apps
+- Build one registry with `AssetRegistryBuilder` and share it
 - Preload critical assets at startup
 - Monitor cache performance in production
 - Use weak references in long-lived structures
