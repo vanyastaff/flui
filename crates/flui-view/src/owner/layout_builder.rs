@@ -522,8 +522,8 @@ fn drive_fixpoint<E>(mut pass: impl FnMut() -> Result<bool, E>) -> Result<bool, 
 /// their frame paths actually run the seam is to plant an entry by hand.
 #[cfg(any(test, feature = "test-utils"))]
 impl BuildOwner {
-    /// Override the per-frame lazy-band pass budget (default
-    /// [`MAX_LAZY_BAND_PASSES`]). Test-only: a budget of one lets a harness
+    /// Override the per-frame lazy-band pass budget (default six passes).
+    /// Test-only: a budget of one lets a harness
     /// drive the deferral path with ordinary content instead of hunting for
     /// content that defeats the adaptive estimate.
     pub fn set_lazy_band_pass_budget_for_test(&mut self, passes: usize) {
