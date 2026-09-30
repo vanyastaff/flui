@@ -27,9 +27,13 @@
 //! is dropped — inside its own containment, because its `Drop` may panic too
 //! — and never called again; an [`AgentWindow`] it was being handed is
 //! dropped with it. The panic's payload is forgotten rather than dropped, for
-//! the same reason. The caller continues, and the realm is untouched.
+//! the same reason. The caller continues, and the realm is untouched. A hook
+//! that never panicked is dropped under the same containment when the last
+//! [`DevAgentHost`] clone goes, so a `Drop` that panics never escapes a
+//! host's teardown or turns an unwind into an abort.
 
 use std::fmt;
+use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
@@ -57,6 +61,17 @@ struct Slot {
     detach_owed: bool,
     /// The hook panicked and was dropped.
     disabled: bool,
+}
+
+impl Drop for Slot {
+    /// The last [`DevAgentHost`] clone went (an `AppConfig` or a headless
+    /// host torn down, possibly while unwinding): the hook is dropped inside
+    /// the same containment as a panicked one.
+    fn drop(&mut self) {
+        if let Some(hook) = self.hook.take() {
+            contain(|| drop(hook));
+        }
+    }
 }
 
 /// What lending the hook for one call produced.
@@ -106,7 +121,10 @@ impl DevAgentHost {
             slot.attached = true;
         }
         match self.lend("attach", DevAgentHook::attach) {
-            Lent::Returned(true) => Some(DevAgentAttachment { host: self.clone() }),
+            Lent::Returned(true) => Some(DevAgentAttachment {
+                host: self.clone(),
+                _owner_affine: PhantomData,
+            }),
             Lent::Returned(false) | Lent::Absent | Lent::Panicked => {
                 self.0.lock().attached = false;
                 None
@@ -158,23 +176,20 @@ impl DevAgentHost {
         let Some(mut hook) = self.0.lock().hook.take() else {
             return Lent::Absent;
         };
-        match catch_unwind(AssertUnwindSafe(|| call(hook.as_mut()))) {
-            Ok(value) => {
-                let owed = std::mem::take(&mut self.0.lock().detach_owed);
-                if owed && catch_unwind(AssertUnwindSafe(|| hook.detach())).is_err() {
-                    self.disable("detach", hook);
-                    return Lent::Returned(value);
-                }
-                self.0.lock().hook = Some(hook);
-                Lent::Returned(value)
-            }
-            Err(payload) => {
-                // The payload's own `Drop` may panic; never run it.
-                std::mem::forget(payload);
-                self.disable(what, hook);
-                Lent::Panicked
-            }
+        let Some(value) = contained(|| call(hook.as_mut())) else {
+            self.disable(what, hook);
+            return Lent::Panicked;
+        };
+        // A detach that arrived while the hook was lent (a nested or
+        // concurrent drop of the attachment) runs now, under the same
+        // containment as the call itself.
+        let owed = std::mem::take(&mut self.0.lock().detach_owed);
+        if owed && contained(|| hook.detach()).is_none() {
+            self.disable("detach", hook);
+            return Lent::Returned(value);
         }
+        self.0.lock().hook = Some(hook);
+        Lent::Returned(value)
     }
 
     /// Log a hook's panic and drop the hook without letting its `Drop`
@@ -218,9 +233,15 @@ impl fmt::Debug for DevAgentHost {
 }
 
 /// Keeps a [`DevAgentHost`]'s hook attached; dropping it detaches the hook.
+///
+/// `!Send + !Sync`: it stays on the thread that attached the hook, the
+/// owner thread every hook call is made on, so the detach its drop runs is
+/// made there too, and never races a hand-over made on the owner thread.
 #[must_use = "dropping the attachment detaches the hook"]
 pub struct DevAgentAttachment {
     host: DevAgentHost,
+    /// `*const ()` is neither `Send` nor `Sync`.
+    _owner_affine: PhantomData<*const ()>,
 }
 
 impl fmt::Debug for DevAgentAttachment {
@@ -237,12 +258,21 @@ impl Drop for DevAgentAttachment {
     }
 }
 
-/// Run `body`, swallowing a panic without running its payload's `Drop`,
-/// which may panic too.
-fn contain(body: impl FnOnce()) {
-    if let Err(payload) = catch_unwind(AssertUnwindSafe(body)) {
-        std::mem::forget(payload);
+/// Run `body`: its value, or `None` when it panicked. The panic's payload is
+/// forgotten rather than dropped, because its `Drop` may panic too.
+fn contained<R>(body: impl FnOnce() -> R) -> Option<R> {
+    match catch_unwind(AssertUnwindSafe(body)) {
+        Ok(value) => Some(value),
+        Err(payload) => {
+            std::mem::forget(payload);
+            None
+        }
     }
+}
+
+/// Run `body`, swallowing a panic as [`contained`] does.
+fn contain(body: impl FnOnce()) {
+    let _: Option<()> = contained(body);
 }
 
 #[cfg(test)]

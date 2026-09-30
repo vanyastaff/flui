@@ -43,8 +43,12 @@ tracing = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
 
 # `agent`: the wire schema the endpoint speaks (a contract crate, which an
-# official package may name) and the local socket it listens on.
+# official package may name).
 flui-protocol = { workspace = true, features = ["serde"], optional = true }
+
+# `agent`: the local socket the endpoint listens on. `interprocess` builds for
+# Windows and Unix only; elsewhere (wasm32) the server stays inert.
+[target.'cfg(any(unix, windows))'.dependencies]
 interprocess = { workspace = true, optional = true }
 
 # `agent` on Windows: the pipe's user-only security descriptor, as SDDL, over
@@ -132,7 +136,8 @@ name = "agent_counter"
 required-features = ["agent"]
 
 # The agent endpoint end to end: a separate target, because the rest of the
-# crate builds without the feature.
+# crate builds without the feature. It needs a local socket, so it compiles to
+# nothing where there is none.
 [[test]]
 name = "agent_endpoint"
 required-features = ["agent"]

@@ -362,9 +362,12 @@ endpoint that serves it is `flui-devtools`' `agent` feature. Pinned by
 **Rule.** `dev_agent::DevAgentHost` is the only code that calls an installed `DevAgentHook`:
 attach once per loop (a second attach while attached is refused, and a hook whose `attach`
 answers that it does not serve stays unattached and is never detached), hand over each window with
-content, detach when the loop's `DevAgentAttachment` drops. Each call lends the hook out of its
-slot with no lock held, so a hook that re-enters the host finds the slot empty; a panic drops the
-hook (its `Drop` contained too, its payload forgotten) and every later call does nothing; nothing
+content, detach when the loop's `DevAgentAttachment` drops. The attachment is `!Send + !Sync`,
+so that detach runs on the owner thread like every other call. Each call lends the hook out of its
+slot with no lock held, so a hook that re-enters the host finds the slot empty, and a detach that
+arrives meanwhile runs when the call returns; a panic drops the hook (its `Drop` contained too,
+its payload forgotten, a deferred detach's included) and every later call does nothing; a hook
+still held when the last host clone goes is dropped under the same containment; nothing
 is vended while the hook is not attached, so a hook that does not serve or failed to attach costs
 no semantics work, and a window's semantics work ends once the hook drops its `AgentWindow`.
 

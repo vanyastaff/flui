@@ -2,7 +2,9 @@
 //! panicking alone, a hook whose `Drop` panics too, a nested call, a refused
 //! second attach, a new loop after the last one ended, and no semantics work
 //! while no hook is attached, while it does not serve, or once it has let go
-//! of its windows. After every failure the realm still frames and
+//! of its windows; a deferred detach whose panic payload panics on drop, and
+//! a hook whose `Drop` panics when the last host clone goes, unwinding or
+//! not. After every failure the realm still frames and
 //! later publishes do nothing.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -12,6 +14,10 @@ use flui_protocol::ReadQuery;
 use super::*;
 use crate::testing::ScriptedSink;
 
+// The attachment stays on the owner thread, so its drop (the detach) runs
+// there and never races a hand-over.
+static_assertions::assert_not_impl_any!(DevAgentAttachment: Send, Sync);
+
 /// Which hook method panics.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 enum PanicIn {
@@ -20,8 +26,19 @@ enum PanicIn {
     Attach,
     WindowOpened,
     Detach,
+    /// `detach` panics with a payload whose own `Drop` panics.
+    DetachWithPanickingPayload,
     /// `attach` returns, answering that the hook does not serve.
     Inert,
+}
+
+/// A panic payload whose `Drop` panics.
+struct PanickingPayload;
+
+impl Drop for PanickingPayload {
+    fn drop(&mut self) {
+        panic!("the panic payload's drop fails");
+    }
 }
 
 #[derive(Default)]
@@ -34,6 +51,13 @@ struct Record {
     windows: Mutex<Vec<AgentWindow>>,
     /// The host a re-entrant hook publishes through from `window_opened`.
     reenter: Mutex<Option<DevAgentHost>>,
+}
+
+thread_local! {
+    /// The loop's attachment, which `window_opened` drops, ending the loop
+    /// while the hook is lent. Owner-thread state, as the attachment is.
+    static RELEASE: std::cell::RefCell<Option<DevAgentAttachment>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 impl Record {
@@ -64,6 +88,9 @@ impl DevAgentHook for Hook {
         self.record.detaches.fetch_add(1, Ordering::SeqCst);
         self.record.windows.lock().clear();
         assert!(self.panic_in != PanicIn::Detach, "hook detach fails");
+        if self.panic_in == PanicIn::DetachWithPanickingPayload {
+            std::panic::panic_any(PanickingPayload);
+        }
     }
 
     fn window_opened(&mut self, window: AgentWindow) {
@@ -76,6 +103,8 @@ impl DevAgentHook for Hook {
         if let Some(host) = reenter {
             host.window_opened(window.clone());
         }
+        let release = RELEASE.with_borrow_mut(Option::take);
+        drop(release);
         self.record.windows.lock().push(window);
     }
 }
@@ -208,6 +237,57 @@ fn a_hook_whose_drop_panics_too_is_contained() {
     frame(&realm, &mut sink);
 }
 
+fn a_deferred_detach_panicking_with_a_panicking_payload_is_contained() {
+    let (realm, mut sink) = realm();
+    let (host, record) = host(PanicIn::DetachWithPanickingPayload, false);
+    let attachment = host.attach().expect("attach succeeds");
+    RELEASE.set(Some(attachment));
+    host.publish(&realm, realm.presentation_id());
+    assert_eq!(
+        record.counts(),
+        (1, 1, 1, 1),
+        "the owed detach ran once when the hand-over returned, then the hook was dropped"
+    );
+    assert!(
+        host.attach().is_none(),
+        "a dropped hook never attaches again"
+    );
+    host.publish(&realm, realm.presentation_id());
+    assert_eq!(
+        record.counts(),
+        (1, 1, 1, 1),
+        "a later publish calls nothing"
+    );
+    assert!(!collects_semantics(&realm, &mut sink), "no semantics work");
+}
+
+fn a_hook_whose_drop_panics_is_contained_when_the_last_host_goes() {
+    let (first, record) = host(PanicIn::Nowhere, true);
+    let clone = first.clone();
+    drop(first);
+    assert_eq!(
+        record.counts(),
+        (0, 0, 0, 0),
+        "a clone still holds the hook"
+    );
+    drop(clone);
+    assert_eq!(record.counts(), (0, 0, 0, 1), "the last clone dropped it");
+
+    let (second, record) = host(PanicIn::Nowhere, true);
+    let attachment = second.attach().expect("attach succeeds");
+    drop(attachment);
+    let unwound = std::panic::catch_unwind(AssertUnwindSafe(move || {
+        let _host = second;
+        panic!("the host's owner unwinds");
+    }));
+    assert!(unwound.is_err(), "the owner's own panic still unwinds");
+    assert_eq!(
+        record.counts(),
+        (1, 1, 0, 1),
+        "the hook was dropped during the unwind without aborting it"
+    );
+}
+
 fn a_nested_call_finds_the_hook_lent_and_does_nothing() {
     let (realm, _sink) = realm();
     let (host, record) = host(PanicIn::Nowhere, false);
@@ -317,6 +397,14 @@ fn dev_agent_host_contains_its_hook() {
             (
                 "a_hook_whose_drop_panics_too_is_contained",
                 a_hook_whose_drop_panics_too_is_contained,
+            ),
+            (
+                "a_deferred_detach_panicking_with_a_panicking_payload_is_contained",
+                a_deferred_detach_panicking_with_a_panicking_payload_is_contained,
+            ),
+            (
+                "a_hook_whose_drop_panics_is_contained_when_the_last_host_goes",
+                a_hook_whose_drop_panics_is_contained_when_the_last_host_goes,
             ),
             (
                 "a_nested_call_finds_the_hook_lent_and_does_nothing",

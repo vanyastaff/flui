@@ -7,10 +7,16 @@
 //! inert, with a warning, without them:
 //!
 //! ```text
-//! # Windows: a pipe name. Elsewhere: a socket path in a 0700 directory.
-//! FLUI_AGENT_ENDPOINT=flui-agent-demo \
+//! # Linux and macOS: a socket path in a directory of its own with mode 0700.
+//! mkdir -m 700 /tmp/flui-agent-demo
+//! FLUI_AGENT_ENDPOINT=/tmp/flui-agent-demo/agent.sock \
 //! FLUI_AGENT_TOKEN=0123456789abcdef0123456789abcdef \
 //!   cargo run -p flui-devtools --example agent_counter --features agent
+//!
+//! # Windows (PowerShell): a pipe name.
+//! $env:FLUI_AGENT_ENDPOINT = 'flui-agent-demo'
+//! $env:FLUI_AGENT_TOKEN = '0123456789abcdef0123456789abcdef'
+//! cargo run -p flui-devtools --example agent_counter --features agent
 //! ```
 //!
 //! A client then sends newline-delimited JSON: the hello, then `windows`,

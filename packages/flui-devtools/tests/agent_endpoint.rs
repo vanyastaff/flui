@@ -3,6 +3,9 @@
 //! client thread speaks raw newline-delimited JSON while the test thread, the
 //! realm's owner, pumps frames.
 
+// A target without local sockets (wasm32) has no endpoint to test.
+#![cfg(any(unix, windows))]
+
 use std::io::{self, Read as _, Write as _};
 use std::panic::resume_unwind;
 use std::sync::Arc;
@@ -115,7 +118,7 @@ fn connect(address: &str) -> io::Result<Stream> {
         use interprocess::local_socket::{GenericNamespaced, ToNsName as _};
         address.to_ns_name::<GenericNamespaced>()?
     };
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     let name = {
         use interprocess::local_socket::{GenericFilePath, ToFsName as _};
         address.to_fs_name::<GenericFilePath>()?
@@ -706,6 +709,8 @@ fn traces_carry_no_labels_or_values() {
     use tracing_subscriber::layer::SubscriberExt as _;
 
     const VALUE: &str = "secret-value-5d1e";
+    /// An operation the server does not know, carrying a value of its own.
+    const UNKNOWN_OP: &str = "secret-op-9a4c";
     let log = Arc::new(parking_lot::Mutex::new(Vec::<u8>::new()));
     let writer = Arc::clone(&log);
     let subscriber = tracing_subscriber::registry()
@@ -737,6 +742,11 @@ fn traces_carry_no_labels_or_values() {
             json!({ "window": window, "request": { "element": button, "action": "set_value", "value": VALUE } }),
         );
         assert!(set.get("error").is_some(), "a button takes no value: {set}");
+        let unknown = client.call(UNKNOWN_OP, json!({}));
+        assert_eq!(
+            unknown["error"]["code"], "invalid_argument",
+            "an unknown op is refused: {unknown}"
+        );
         owner.ask(Command::Pause);
         let _ = client.tap(&window, &button);
         let _ = client.call("read", json!({ "window": window }));
@@ -755,7 +765,7 @@ fn traces_carry_no_labels_or_values() {
         log.contains("dropping a semantics agent reply nobody waits for"),
         "vacuous-pass guard: the late answers were traced\n{log}"
     );
-    for secret in ["Increment", "Count", VALUE, TOKEN] {
+    for secret in ["Increment", "Count", VALUE, UNKNOWN_OP, TOKEN] {
         assert!(!log.contains(secret), "`{secret}` reached the log\n{log}");
     }
 }

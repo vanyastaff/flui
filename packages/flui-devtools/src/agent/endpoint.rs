@@ -1,6 +1,8 @@
 //! Binding the endpoint, the acceptor thread, and stopping them.
 
 use std::io;
+
+use flui_sdk::view::dev_agent::AgentWindow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::JoinHandle;
@@ -38,8 +40,9 @@ pub(super) struct Running {
 }
 
 impl Running {
-    pub(super) fn registry(&self) -> &Registry {
-        &self.shared.registry
+    /// Serve `window` to the agents that connect.
+    pub(super) fn window_opened(&self, window: AgentWindow) {
+        self.shared.registry.insert(window);
     }
 
     /// Stop accepting, close every connection, and wait (boundedly) for the
@@ -73,10 +76,10 @@ impl Drop for Running {
 }
 
 /// Bind `endpoint` and start accepting.
-pub(super) fn listen(endpoint: &AgentEndpoint, registry: Registry) -> io::Result<Running> {
+pub(super) fn listen(endpoint: &AgentEndpoint) -> io::Result<Running> {
     let listener = bind(&endpoint.address)?;
     let shared = Arc::new(Shared {
-        registry,
+        registry: Registry::default(),
         stop: AtomicBool::new(false),
         token: endpoint.token.clone(),
         reply_timeout: endpoint.reply_timeout,
@@ -150,7 +153,7 @@ pub(crate) fn name(address: &str) -> io::Result<Name<'_>> {
             .unwrap_or(address)
             .to_ns_name::<GenericNamespaced>()
     }
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     {
         use interprocess::local_socket::{GenericFilePath, ToFsName as _};
         address.to_fs_name::<GenericFilePath>()
@@ -249,7 +252,7 @@ fn current_user_sid() -> io::Result<String> {
     converted.map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
 fn bind(address: &str) -> io::Result<Listener> {
     use std::os::unix::fs::MetadataExt as _;
     use std::path::Path;

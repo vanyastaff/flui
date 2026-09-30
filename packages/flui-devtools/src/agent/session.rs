@@ -245,7 +245,13 @@ fn handle(line: &[u8], shared: &Shared) -> Value {
     };
     let id = request.get("id").cloned().unwrap_or(Value::Null);
     let started = Instant::now();
-    let op = request.get("op").and_then(Value::as_str).unwrap_or("");
+    // Only a known operation's name is traced: an unknown one is the
+    // client's text, which may carry anything.
+    let op = request
+        .get("op")
+        .and_then(Value::as_str)
+        .filter(|op| matches!(*op, "windows" | "read" | "act"))
+        .unwrap_or("unknown");
     let outcome = match op {
         "windows" => Ok(json!({ "windows": shared.registry.list() })),
         "read" => read(&request, shared),

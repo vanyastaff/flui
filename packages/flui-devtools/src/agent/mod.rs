@@ -23,7 +23,9 @@
 //! A named pipe on Windows (`\\.\pipe\<name>`, owner-only, remote clients
 //! refused) and a Unix domain socket elsewhere (a path whose parent
 //! directory the current user owns with mode `0700`; the socket file is
-//! removed when the server stops). No TCP port. The server listens only in
+//! removed when the server stops). No TCP port, and no endpoint at all on a
+//! target without local sockets (wasm32), where binding fails as below. The
+//! server listens only in
 //! debug builds and only with a token of at least [`MIN_TOKEN_LEN`] bytes;
 //! otherwise it stays inert and logs why once. A bind failure is logged too,
 //! and the application keeps running without an agent.
@@ -61,9 +63,16 @@
 //! What the server traces carries the operation, window and element ids,
 //! error codes and timings, never a label, a value or a request line.
 
+#[cfg(any(unix, windows))]
 mod endpoint;
+#[cfg(any(unix, windows))]
 mod registry;
+#[cfg(any(unix, windows))]
 mod session;
+
+#[cfg(not(any(unix, windows)))]
+#[path = "unsupported.rs"]
+mod endpoint;
 
 use std::fmt;
 use std::time::Duration;
@@ -71,7 +80,6 @@ use std::time::Duration;
 use flui_sdk::view::dev_agent::{AgentWindow, DevAgentHook};
 
 use self::endpoint::Running;
-use self::registry::Registry;
 
 /// The environment variable [`AgentServer::from_env`] reads the endpoint
 /// address from.
@@ -221,7 +229,7 @@ impl DevAgentHook for AgentServer {
         let Some(endpoint) = &self.endpoint else {
             return false;
         };
-        match endpoint::listen(endpoint, Registry::default()) {
+        match endpoint::listen(endpoint) {
             Ok(running) => {
                 tracing::info!("development agent listening");
                 self.running = Some(running);
@@ -242,7 +250,7 @@ impl DevAgentHook for AgentServer {
 
     fn window_opened(&mut self, window: AgentWindow) {
         if let Some(running) = &self.running {
-            running.registry().insert(window);
+            running.window_opened(window);
         }
     }
 }
