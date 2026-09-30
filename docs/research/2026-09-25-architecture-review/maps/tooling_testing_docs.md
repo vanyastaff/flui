@@ -216,7 +216,7 @@ Missing edges the plan needs:
 ### The project's status and plan live outside the repository and are stale inside it
 
 - **Kind:** docs · **Severity:** medium
-- **Evidence:** docs/ROADMAP.md:5 defers 'the living plan' to https://claude.ai/code/artifact/4e1d6ca0-... (private by default). The same file's B0 exit says '26 crates' while 27 exist. BETA.md (1171 lines) is an append-only narrative whose platform table heading reads 'candidate: this branch at `v0.1.0`' (BETA.md:110) while the workspace is 0.2.0-dev. The evidence rows are prose paragraphs, not records.
+- **Evidence:** docs/ROADMAP.md:5 defers 'the living plan' to a claude.ai artifact (private by default). The same file's B0 exit says '26 crates' while 27 exist. BETA.md (1171 lines) is an append-only narrative whose platform table heading reads 'candidate: this branch at `v0.1.0`' (BETA.md:110) while the workspace is 0.2.0-dev. The evidence rows are prose paragraphs, not records.
 - **Impact:** The H3 exit ('an external contributor finishes a feature without the author') and principle 5 need status that a contributor or agent can read and check. Today it depends on an artifact only the owner sees and on a hand-edited prose log that drifts from the code.
 - **Direction:** Keep the plan in the repo (for example docs/plan/*.md, generated from or mirrored to the artifact). Turn BETA.md evidence into structured records (docs/evidence/*.toml: platform, check, command, commit, date, result, limitations), written by `xtask device` and live-smoke runs and rendered into BETA.md by an xtask command, and gate staleness by age or commit distance.
 

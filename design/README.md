@@ -123,7 +123,8 @@ older ADRs it amends or supersedes get their back-links then.
   and step labels.
 - `docs/research/2026-09-25-architecture-review/` is a record of the review and is not edited;
   a finding that becomes actionable moves into [research-findings.md](research-findings.md) or an
-  ADR.
+  ADR. The one exception so far replaced the reviewing machine's paths with `<scratchpad>` and
+  repository-relative paths, and a private claude.ai link with plain text; no finding changed.
 - `cargo xtask checks` must stay green; it runs the link check over these files. `design/**` is
   in the docs-only list of `tools/xtask/src/change_scope/classify.rs`, so a change that touches
   only this folder compiles nothing in CI.

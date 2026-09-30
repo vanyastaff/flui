@@ -2630,7 +2630,7 @@ impl NavigatorState {
     /// covered route — outside `flui-widgets` and outside this fix's diff — not
     /// something to patch blind here. No widgets-level `GlobalKey`-reparent test
     /// ships with this change as a result; `crates/flui-widgets/src/navigator/hero.rs`'s
-    /// module docs and `docs/ROADMAP-TRACKER.md` B1.4 both name this honestly.
+    /// module docs name this honestly.
     fn sync_nested_hero_registration(&self, ctx: &dyn BuildContext) {
         let current = ctx.get::<HeroScope, _>(HeroScope::registry);
         let mut slot = self.shared.nested_hero_registration.lock();

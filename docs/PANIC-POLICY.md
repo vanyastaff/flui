@@ -60,19 +60,7 @@ unwind path.
 runs with `-D warnings`, so an unannotated production `unwrap()` fails CI.
 The root `clippy.toml` sets `allow-unwrap-in-tests = true` and
 `allow-expect-in-tests = true`, so `#[test]` functions and `#[cfg(test)]`
-modules are exempt automatically.
-
-**Transitional state (ship-quality waves).** Crates that predate this policy
-carry a tracked crate-level opt-out:
-
-```rust
-#![allow(clippy::unwrap_used)] // TODO(ship-wave-N): burn down per docs/PANIC-POLICY.md
-```
-
-Each quality wave removes the allow for its cohort by converting every
-`unwrap()` to either a `Result` path or a `BUG:`-message `expect()`. New
-crates must not add the opt-out; new code in existing crates should conform
-even while the crate-level allow is still present.
+modules are exempt automatically. No crate opts out.
 
 `expect()` is deliberately **not** linted (`expect_used` stays off): with the
 `BUG:` convention it is the sanctioned invariant idiom, and the review bar is

@@ -1,4 +1,4 @@
-# Market survey: Market survey: Flutter, Jetpack Compose and SwiftUI. Their architecture, the regrets they have documented, and what FLUI should copy, avoid or fix at the level of workspace, crate topology, runtime and ecosystem. There is no .flutter/ clone at D:\flui (`ls D:/flui/.flutter` gives "No such file"), so every external claim below comes from web primary sources. Local claims are cited as path:line.
+# Market survey: Market survey: Flutter, Jetpack Compose and SwiftUI. Their architecture, the regrets they have documented, and what FLUI should copy, avoid or fix at the level of workspace, crate topology, runtime and ecosystem. There is no .flutter/ clone at <repo> (`ls .flutter` gives "No such file"), so every external claim below comes from web primary sources. Local claims are cited as path:line.
 
 _Raw output of the `market:flutter_compose_swiftui` agent (2026-09-25). Unedited; each claim carries the source the agent cited._
 

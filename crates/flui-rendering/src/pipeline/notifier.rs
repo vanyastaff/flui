@@ -1,6 +1,5 @@
 //! `VisualUpdateNotifier` -- consolidated callbacks for pipeline events.
 //!
-//! Per docs/designs/2026-05-20-mythos-flui-rendering-redesign.md Section 6,
 //! `PipelineOwner` used to carry three separate `Box<dyn Fn() + Send + Sync>`
 //! callback fields (visual-update, semantics-owner-created,
 //! semantics-owner-disposed) directly on the struct. That shape paid the
@@ -113,6 +112,3 @@ impl VisualUpdateNotifier {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {}

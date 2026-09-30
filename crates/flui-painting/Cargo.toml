@@ -54,7 +54,7 @@ parley = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Colour property tests and the compile-fail suite.
-proptest = "1.5"
+proptest = { workspace = true }
 trybuild = { workspace = true }
 criterion = { workspace = true }
 # Self dev-dependency that turns the off-by-default `testing` feature on for

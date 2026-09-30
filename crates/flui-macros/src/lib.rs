@@ -106,10 +106,7 @@ use syn::{DeriveInput, parse_macro_input};
 /// ```
 ///
 /// A `#[view(key = "<expr>")]` derive attribute that auto-wires a
-/// field-named key is a deferred ergonomics improvement (post-
-/// Catalog.1; tracked in
-/// `docs/plans/2026-05-22-005-feat-view-element-core-contracts-plan.md`
-/// "Open Questions").
+/// field-named key is a deferred ergonomics improvement.
 #[proc_macro_derive(StatelessView)]
 pub fn derive_stateless_view(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);

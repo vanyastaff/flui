@@ -1055,6 +1055,3 @@ fn node_semantics_rect(node: &RenderNode, origin: Offset) -> Rect<f64> {
 fn offset_add(a: Offset, b: Offset) -> Offset {
     Offset::new(a.dx + b.dx, a.dy + b.dy)
 }
-
-#[cfg(test)]
-mod tests {}

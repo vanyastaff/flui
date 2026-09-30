@@ -52,6 +52,3 @@ impl fmt::Debug for ClipboardHandle {
         f.debug_struct("ClipboardHandle").finish_non_exhaustive()
     }
 }
-
-#[cfg(test)]
-mod tests {}

@@ -1289,7 +1289,7 @@ as an optional, desktop-only, dev-only convenience:
 | cosmic-text, `FONT_SYSTEM`, unicode-segmentation | Parley, fontique, HarfRust, ICU4X |
 | dlopen hot reload, the three-crate template, `--scene` (after the spike) | Subsecond |
 | the hand-written CPU reference | vello_cpu or tiny-skia behind the contract (spike) |
-| `tools/web-server` | `flui run --device browser` |
+| `tools/web-server` (done) | `flui run --device browser` |
 | tokio runtimes in platform and assets | the runtime's single executor |
 | four desktop-automation drivers (the COM UIA code in `xtask device`, `desktop-mcp`, `live-smoke`, the Python and Swift checks) | the `flui-mcp` driver library |
 | the role enum copied into `tools/desktop-mcp` | `flui_protocol::SemanticsRole` |

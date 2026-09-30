@@ -7,10 +7,7 @@
 //!
 //! Phase 0 (this bench) does **not** modify production reconciliation code —
 //! the spec FR-016 commits to "both paths share the same algorithm" absent a
-//! strong S2 inversion. The companion [`docs/research/2026-05-22-s2-static-path-sketch.md`]
-//! synthesises these numbers into a verdict; the gate report consumes that
-//! verdict to decide whether to re-open FR-016 before a later phase lands the
-//! production reconciler.
+//! strong S2 inversion.
 //!
 //! # The static-path observation
 //!
@@ -46,11 +43,6 @@
 //! isolates algorithm-shape cost is a per-position TypeId-comparison loop
 //! (specialised) vs a HashMap-build-and-probe loop (linear). That is what we
 //! measure.
-//!
-//! # Plan / spec references
-//!
-//! - [`docs/plans/2026-05-22-005-feat-view-element-core-contracts-plan.md`]
-//! - [`specs/004-view-element-core/spec.md`] Deferred S2, FR-016
 
 // Bench harness, not public API; `criterion_group!` generates the
 // undocumentable entry fn.

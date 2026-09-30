@@ -34,7 +34,3 @@
 # Architecture
 
 - [Architecture](architecture.md)
-
-# Contributing
-
-- [Contributing](contributing.md)

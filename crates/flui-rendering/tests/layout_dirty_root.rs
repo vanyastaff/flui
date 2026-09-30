@@ -13,8 +13,6 @@
 //! disjoint-borrow walk itself.
 //!
 //! Refs:
-//!   * docs/plans/2026-05-23-001-feat-pipeline-wiring-d-block-plan.md
-//!   * docs/research/2026-05-23-d-block-architecture-decision-memo.md
 //!   * PR #140 (protocol-erased dispatch)
 //!   * PR #141 (typed bridge)
 //!   * PR #143 (perform_layout_raw → Result)
