@@ -410,7 +410,7 @@ impl cosmic_text::Fallback for EmojiForbiddenFallback {
 /// `probe-variable-wght.ttf` carries an `fvar` `wght` axis over a
 /// `usWeightClass` of 400 (see `tools/decoy-face/generate.py`).
 /// `requested_weights_resolve_to_ones_the_family_serves` in
-/// `tests/font_registration.rs` resolves styles against them, one row per
+/// `tests/font_weight_resolution.rs` resolves styles against them, one row per
 /// arm.
 fn family_accepts_weight(db: &Database, family: &str, weight: u16) -> bool {
     db.faces()

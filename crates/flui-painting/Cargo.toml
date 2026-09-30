@@ -102,6 +102,12 @@ path = "tests/main.rs"
 name = "font_registration"
 path = "tests/font_registration.rs"
 
+# Registers the probe families on the process-wide font database, which
+# `font_registration` must see without them, so it runs in its own process.
+[[test]]
+name = "font_weight_resolution"
+path = "tests/font_weight_resolution.rs"
+
 # swash against cosmic-text's scaler on Parley-shaped glyphs (ADR-0092 §10
 # step 1). Its own binary, so nothing in it can build the process font system.
 [[test]]
