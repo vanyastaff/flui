@@ -14,7 +14,6 @@
 //!    child's picture.
 //!
 //! Refs:
-//!   * docs/research/2026-06-10-rendering-design-amendments.md §D1/§D9
 //!   * crates/flui-rendering/src/context/paint_cx.rs (recording side)
 
 use flui_foundation::Variable;
@@ -103,7 +102,7 @@ impl RenderBox for SimpleRow {
 }
 
 pub(crate) fn inline_siblings_merge_into_one_origin_baked_picture() {
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let row_id = owner.insert(Box::new(SimpleRow) as BoxedRenderObject);
     owner
         .insert_child_render_object(row_id, Box::new(RenderColoredBox::red(40.0, 40.0)))
@@ -146,7 +145,7 @@ pub(crate) fn inline_siblings_merge_into_one_origin_baked_picture() {
 // ============================================================================
 
 pub(crate) fn repaint_boundary_child_splits_into_rebased_offset_layer() {
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let padding_id = owner.insert(Box::new(RenderPadding::all(5.0)) as BoxedRenderObject);
     let boundary_id = owner
         .insert_child_render_object(padding_id, Box::new(RenderRepaintBoundary::new()))
@@ -182,7 +181,7 @@ pub(crate) fn repaint_boundary_child_splits_into_rebased_offset_layer() {
 // ============================================================================
 
 pub(crate) fn clip_rect_object_brackets_child_in_clip_layer() {
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let clip_id = owner.insert(Box::new(RenderClipRect::hard_edge()) as BoxedRenderObject);
     owner
         .insert_child_render_object(clip_id, Box::new(RenderColoredBox::red(40.0, 40.0)))

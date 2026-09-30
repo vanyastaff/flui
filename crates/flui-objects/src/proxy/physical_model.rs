@@ -18,8 +18,7 @@
 //! [`PhysicalClipShape`] are a small, local trait pair scoped to exactly
 //! this family instead.
 //!
-//! # Design notes (see the design research doc,
-//! `docs/research/2026-07-01-render-physical-model-plan.md`)
+//! # Design notes (see the [design research](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-07-01-render-physical-model-plan.md))
 //!
 //! - **Hit-test always tests the clip shape for both variants.** Gating the
 //!   test on a custom clipper being present would mean it never engages for
@@ -648,9 +647,8 @@ impl<C: PhysicalClipSource> RenderBox for RenderPhysicalModelBase<C> {
         // the shape. Gating on a custom clipper would never engage for
         // `RenderPhysicalModel` (it has no public clipper), so a circular or
         // rounded-corner one would hit-test as its full bounding box. See the
-        // module doc and the design research plan
-        // (`docs/research/2026-07-01-render-physical-model-plan.md`,
-        // trap §4.2). `RenderPhysicalShape` uses the
+        // module doc and the design research it links (trap §4.2).
+        // `RenderPhysicalShape` uses the
         // same shape gate when an owner-lane path target is installed, and
         // otherwise falls back to the whole-box default clip.
         let shape = self.clip_source.compute_clip(ctx.own_size());

@@ -75,3 +75,34 @@ The host applies a `Patched` poll once to every realm, not to whichever realm
 polled first; before the hook, a worker's rebuild request reached only the most
 recently opened window. Pinned by `hook/tests.rs` here and by
 `app/hot_reload/tests.rs` in `flui-app`.
+
+### The plugin image is a realm of its own for text
+
+`PluginPipeline::mount` takes the `TextContextHandle` its pipeline measures
+through (ADR-0092 §10 step 3b), and `app_plugin!` passes
+`TextContextHandle::standalone()`: a context over the plugin image's own font
+collection, holding the bundled faces. It does not take the host realm's
+context. The plugin is a `dlopen`ed image the host reaches only through
+`flui_app_build(width, height)`, which has no parameter that could carry the
+host's handle, and `abi_token` covers only the `Scene` and `LayerTree` layouts,
+so nothing would check that the two images agree on `TextContext`'s layout if
+one were passed.
+
+The cost: a face the host app registers does not reach the plugin's text, as it
+never reached the plugin image's own copy of the process font system either.
+Carrying the font bytes across the FFI into the plugin's collection is a
+follow-up, unless ADR-0094's replacement of the `dlopen` path removes the
+boundary first.
+
+Pinned by `a_plugin_pipeline_measures_through_the_context_it_is_given`
+(`tests/plugin_pipeline_text.rs`, under `app-plugin`).
+
+### The plugin root lays out at each frame's surface size
+
+`PluginPipeline::draw_frame(width, height)` sets tight root constraints to the
+size the host passes to that `flui_app_build` call before it runs the frame, as
+the host realm does at its window's size every frame. The pipeline laid nothing
+out without root constraints, and constraints set once at mount would keep the
+first size after the host's surface is resized. Pinned by
+`a_plugin_pipeline_lays_out_at_the_size_of_each_frame`
+(`tests/plugin_pipeline_layout.rs`, under `app-plugin`).

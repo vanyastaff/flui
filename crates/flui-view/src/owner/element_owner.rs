@@ -19,8 +19,6 @@
 //! by the framework. See *Rust for Rustaceans* §"Lifetimes and split
 //! borrows" (Gjengset) for the pattern.
 //!
-//! Audit reference: `docs/research/2026-05-21-view-tree-foundation-audit.md` Finding #2.
-//!
 //! # Lifetime variance
 //!
 //! `ElementOwner<'a>` carries plain `&'a mut` references — no HRTB, no

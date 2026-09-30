@@ -13,7 +13,7 @@ use flui_rendering::pipeline::PipelineOwner;
 use crate::common::BoxedRenderObject;
 
 pub(crate) fn removing_a_subtree_evicts_its_dirty_entries() {
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let parent = owner.insert(Box::new(RenderColoredBox::red(10.0, 10.0)) as BoxedRenderObject);
     let child = owner
         .insert_child_render_object(parent, Box::new(RenderColoredBox::blue(10.0, 10.0)))

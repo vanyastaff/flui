@@ -91,7 +91,7 @@ impl Protocol for SliverProtocol {
     /// hands an erased `&mut dyn SliverLayoutCtxErased` view to `f`.
     fn with_leaf_erased_ctx<R>(
         constraints: SliverConstraints,
-        _text: Option<crate::pipeline::TextSource<'_>>,
+        _text: crate::pipeline::TextSource<'_>,
         f: impl FnOnce(&mut Self::LayoutCtxErased<'_>) -> R,
     ) -> R {
         let mut typed =
@@ -1217,16 +1217,4 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, SliverHitTest, A, P>
     fn pop_transform(&mut self) {
         // No-op for basic sliver hit test
     }
-}
-
-// ============================================================================
-// TESTS
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-
-    // ========================================================================
-    // SliverLayoutCtx (Direct storage) — scalar accessors and child dispatch
-    // ========================================================================
 }

@@ -510,18 +510,3 @@ impl Diagnosticable for RenderView {
 // closures directly, so no trait impl is needed on RenderView. The
 // `HitTestTarget` trait itself has since been removed entirely, since it
 // no longer had a production implementor.
-
-#[cfg(test)]
-mod tests {
-
-    // Tests for the `is_repaint_boundary` and `depth` fields were removed
-    // alongside the field deletions above -- the tests asserted the field
-    // VALUE (a literal `0` / `true`), not any behavior driven by the field.
-    // Both fields had zero production readers, so the assertions tested
-    // the test itself.
-    //
-    // `test_render_view_owner_is_none` (and the `attach`/`detach`/`has_owner`
-    // lifecycle tests below it) were removed alongside the `owner` field
-    // `RenderView` no longer holds a `PipelineOwner` back-reference
-    // at all, so there is nothing left to assert liveness of.
-}

@@ -47,7 +47,7 @@ fn frame(owner: PipelineOwner) -> (PipelineOwner, Option<LayerTree>) {
 // ============================================================================
 
 pub(crate) fn animated_opacity_layer_follows_and_zero_alpha_skips() {
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let fade = owner.insert(Box::new(RenderOpacity::new(1.0)) as BoxedRenderObject);
     let _child = owner
         .insert_child_render_object(fade, Box::new(RenderColoredBox::red(40.0, 40.0)))

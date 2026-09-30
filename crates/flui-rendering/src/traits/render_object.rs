@@ -337,7 +337,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         _child_count: usize,
         _child_parent_data: &[Option<&dyn ParentData>],
         _child_query: &mut dyn FnMut(usize, crate::storage::IntrinsicDimension, f64) -> f64,
-        _text: Option<crate::pipeline::TextSource<'_>>,
+        _text: crate::pipeline::TextSource<'_>,
     ) -> f64 {
         0.0
     }
@@ -360,7 +360,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
             usize,
             crate::context::DryLayoutChildRequest,
         ) -> crate::context::DryLayoutChildResponse,
-        _text: Option<crate::pipeline::TextSource<'_>>,
+        _text: crate::pipeline::TextSource<'_>,
     ) -> ProtocolGeometry<P> {
         P::default_geometry()
     }
@@ -382,7 +382,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
             usize,
             crate::context::DryBaselineChildRequest,
         ) -> crate::context::DryBaselineChildResponse,
-        _text: Option<crate::pipeline::TextSource<'_>>,
+        _text: crate::pipeline::TextSource<'_>,
     ) -> Option<f64> {
         None
     }
@@ -887,6 +887,3 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
 }
 
 impl_downcast!(RenderObject<P> where P: Protocol);
-
-#[cfg(test)]
-mod tests {}

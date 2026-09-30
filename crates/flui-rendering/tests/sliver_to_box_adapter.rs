@@ -94,7 +94,7 @@ impl RenderBox for SliverHost {
 }
 
 pub(crate) fn sliver_to_box_adapter_lays_out_box_child_and_commits_geometry() {
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let root_id = owner.insert(Box::new(SliverHost {
         constraints: vertical_constraints(40.0),
     }) as BoxedRenderObject);

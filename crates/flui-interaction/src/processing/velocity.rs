@@ -968,8 +968,6 @@ mod tests {
         );
     }
 
-    proptest::proptest! {}
-
     // ── Dead-fling witnesses ─────────────────────────────────────────────
     //
     // Both zero-velocity exits below are reachable on a loaded machine and

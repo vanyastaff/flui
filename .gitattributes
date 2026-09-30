@@ -41,6 +41,3 @@
 
 # Lock files (exact match, no diff)
 Cargo.lock text eol=lf -diff linguist-generated=true
-
-# Generated files
-*.generated.* linguist-generated=true

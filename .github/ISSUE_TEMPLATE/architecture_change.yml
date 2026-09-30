@@ -1,7 +1,7 @@
 name: Architecture change
 description: Propose a change to FLUI's architecture contract.
 title: "arch: "
-labels: ["architecture"]
+labels: ["area: architecture"]
 body:
   - type: textarea
     id: motivation
@@ -14,7 +14,7 @@ body:
     id: contract
     attributes:
       label: Contract impact
-      description: Which contracts in docs/FOUNDATIONS.md or docs/ROADMAP.md change?
+      description: Which contracts change (an ADR under docs/adr/, design/, or docs/FOUNDATIONS.md)?
     validations:
       required: true
   - type: textarea

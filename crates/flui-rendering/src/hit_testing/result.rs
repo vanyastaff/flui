@@ -33,8 +33,5 @@
 //! `flui_interaction::routing::HitTestResult` so existing
 //! `use crate::hit_testing::HitTestResult` consumers compile
 //! unchanged with the canonical type.
-//!
-//! See `docs/research/2026-05-22-cycle4-wave2-design.md` for the
-//! full migration plan.
 
 pub use flui_interaction::routing::HitTestResult;

@@ -1197,7 +1197,7 @@ it stores the callback and returns; whichever `complete`/`cancel` (or its
 **Conflict:** the earlier implementation blocked the calling thread on a
 still-pending future, which meant there was no non-blocking route to react to a resolution without
 `async`/`await`, and its wasm path silently reported a completion that had
-not happened (recorded in `docs/audits/2026-07-25-upgrade-pack-audit.md`).
+not happened.
 
 **Choice:** register a continuation and return immediately; an already-resolved (or resolving) future runs the callback
 **synchronously on the caller's thread**, not on a microtask, so a registrant

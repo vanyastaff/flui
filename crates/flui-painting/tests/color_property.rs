@@ -1,6 +1,7 @@
 //! `Color` contracts: the `to_hex`/`from_hex` roundtrip and the Porter-Duff
 //! mirror algebra of `blend` checked for arbitrary colors, `blend_over`
-//! against hand-computed values, and multi-stop lerp.
+//! against hand-computed values, multi-stop lerp, channel rounding and the
+//! premultiplied lerp.
 
 use flui_painting::paint::{BlendMode, BlendMode::*};
 use flui_painting::styling::Color;
@@ -65,4 +66,22 @@ pub(crate) fn hex_roundtrips_and_porter_duff_modes_mirror() {
             prop_assert_eq!(s.blend(d, mode), d.blend(s, mirror), "{:?} / {:?}", mode, mirror);
         }
     });
+}
+
+/// A float channel rounds to the nearest of the 256 steps, as the GPU's
+/// float-to-unorm8 conversion does; truncating would land up to one step low.
+pub(crate) fn channels_round_to_the_nearest_step() {
+    let red = Color::rgb(255, 0, 0);
+    // 127.5 and 30.6.
+    assert_eq!(red.with_opacity(0.5).a, 128);
+    assert_eq!(red.with_opacity(0.12).a, 31);
+    let grey = Color::lerp(Color::rgb(0, 0, 0), Color::rgb(255, 255, 255), 0.5);
+    assert_eq!(grey, Color::rgb(128, 128, 128));
+}
+
+/// The lerp is premultiplied: fading to transparent black keeps the hue
+/// instead of darkening on the way.
+pub(crate) fn lerp_to_transparent_keeps_the_hue() {
+    let half = Color::lerp(Color::rgb(255, 0, 0), Color::TRANSPARENT, 0.5);
+    assert_eq!(half, Color::rgba(255, 0, 0, 128));
 }

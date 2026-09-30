@@ -95,7 +95,6 @@ entry in [open questions](open-questions.md). Decisions already taken are indexe
 | M | The web backend justifies `unsafe impl`s with "SAFETY: WASM is single-threaded" (`crates/flui-platform/src/platforms/web/platform.rs:47`, also `clipboard.rs:24`, `executor.rs:13`). That is unsound once wasm threads are enabled | Confirmed | [platform_layer][m-plat] | Issue; forbid `target_feature = "atomics"` or fix the types |
 | L | `crates/flui-platform/src/lib.rs:296,299` rates Windows "Production 10/10" and Android "Stub 2/10", while `docs/BETA.md` calls Windows experimental | Confirmed | [platform_layer][m-plat] | Doc fix |
 | L | `GestureSettings` does not read the OS double-click time or drag slop | *Map claim* | [interaction_semantics][m-inter] | Issue |
-| L | `examples/android_*` are outside the workspace and CI does not build them | *Map claim* | [workspace_topology][m-ws] | Issue |
 
 ### 2.4 Workspace, tooling and process
 
@@ -111,7 +110,7 @@ entry in [open questions](open-questions.md). Decisions already taken are indexe
 | M | Windows was dropped from the CI test matrix "temporarily" (`.github/workflows/ci.yml:638-643`). The Windows evidence gate adds only the a11y probe, not the test suite | Confirmed | [tooling_testing_docs][m-tool] | An input to the [CI redesign](open-questions.md#ci-redesign) |
 | M | The `unwrap` target is already met: no bare `unwrap()` in production and no file above 2,000 production lines. The owner roadmap's "1143 unwrap" and "46 files over 2000" figures are out of date | *Map claim* | [xcut_safety_health][m-safety] | Roadmap update |
 | M | Owner-roadmap lines that neither report edits still describe removed tooling or missing features: `docs/workspace-layers.toml` and `docs/runtime-contract.toml` (both deleted in #1283), a `flui-state` crate, "68 ADR" (there are 61), and nested scrolling (no `NestedScroll` in the code) | Checked against the tree | [plan_alignment][m-plan] | Roadmap update |
-| L | `tools/text-spike` is a nested workspace with its own lockfile, outside every gate. `tools/` has no layer, so its dependencies (rmcp, uiautomation, xcap) sit in the root lock | *Map claim* | [tooling_testing_docs][m-tool] | ADR-0081 (tool tier) |
+| L | `tools/` has no layer, so its dependencies (rmcp, uiautomation, xcap) sit in the root lock | *Map claim* | [tooling_testing_docs][m-tool] | ADR-0081 (tool tier) |
 
 ### 2.5 API and developer experience
 

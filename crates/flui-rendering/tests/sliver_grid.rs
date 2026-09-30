@@ -119,7 +119,7 @@ fn build_grid_tree(
     flui_foundation::RenderId,
     Vec<flui_foundation::RenderId>,
 ) {
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
 
     let root_id = owner.insert(Box::new(SliverHost { constraints }) as BoxedRenderObject);
     let grid_id = owner

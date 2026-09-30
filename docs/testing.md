@@ -971,7 +971,7 @@ runs `checks`, `plan` and the `ci` aggregator:
 - **Tooling lane**: nothing in the workspace compiles. A standalone crate is
   a directory under the repository whose `Cargo.toml` declares its own
   `[workspace]` and that no workspace crate reaches by a path dependency
-  (today `tools/text-spike`); the `standalone` job runs
+  (the repository has none today); the `standalone` job runs
   `cargo check --locked --all-targets` on each one the change touches.
 - **Wide lane**: a workspace-wide input (clippy/nextest config, the lane's own
   code in `tools/xtask/src/change_scope/`), a file no crate owns, more than

@@ -205,6 +205,3 @@ impl<T: HitTestTarget + ?Sized> HitTestTarget for Box<T> {
         (**self).handle_event(event, entry);
     }
 }
-
-#[cfg(test)]
-mod tests {}

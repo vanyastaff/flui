@@ -1,17 +1,6 @@
-//! Async dispatch tests for the `Image` widget's `AssetImage` provider
-//! (`asset-images` feature): the decode-cache probe, the placeholder →
-//! decoded transition, remount/rebuild identity, and in-flight coalescing.
-//!
-//! # Fixture isolation
-//!
-//! `flui_widgets::image::decode_cache`'s sync cache and pending-load map are
-//! process-wide statics.
-//! `nextest` runs every test in this binary as OS threads within ONE process,
-//! so two tests racing on the SAME asset path would observe each other's
-//! cache entries. Each test below therefore loads its own dedicated fixture
-//! copy (`tiny-progress.png`, `tiny-remount.png`, …) — same 75-byte 5×3 PNG
-//! bytes as `tests/fixtures/tiny.png`, but a distinct path, hence a distinct
-//! `ImageCacheKey`.
+//! Async dispatch tests for the `Image` widget's image loads (`asset-images`
+//! feature): a retired provider's late completion cannot replace the current
+//! image, and unmounting the widget cancels its in-flight load.
 #![cfg(feature = "asset-images")]
 
 mod common;
@@ -55,10 +44,9 @@ fn pump_until(laid: &mut common::LaidOut, mut check: impl FnMut(&mut common::Lai
 // THE SWAP MATRIX, DRIVEN BY HAND
 // ============================================================================
 //
-// The tests above cover the swap corners a real `AssetImage` can reach on its
-// own schedule (cached→cached, cold→cached). The ones below need the two
-// loads' completion ORDER to be a test input rather than a race, so they run
-// against a provider whose async resolution the test completes by hand. Such
+// These tests need the two loads' completion ORDER to be a test input rather
+// than a race, so they run against a provider whose async resolution the test
+// completes by hand. Such
 // a provider never routes through `decode_cache::load_coalesced`, so nothing
 // it resolves is ever written to the process-wide sync cache — which is
 // exactly what keeps every one of its keys a permanent cache MISS, and each

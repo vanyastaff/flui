@@ -526,6 +526,3 @@ impl RenderError {
         Self::LayoutCycle(id)
     }
 }
-
-#[cfg(test)]
-mod tests {}

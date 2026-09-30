@@ -523,7 +523,7 @@ impl RenderNode {
     pub fn layout_leaf_erased(
         &mut self,
         constraints: crate::storage::ErasedConstraints,
-        text: Option<crate::pipeline::TextSource<'_>>,
+        text: crate::pipeline::TextSource<'_>,
     ) -> crate::error::RenderResult<crate::storage::ErasedGeometry> {
         use crate::storage::ErasedConstraints;
         match (self, constraints) {

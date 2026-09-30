@@ -6,7 +6,6 @@ use flui_foundation::geometry::Size;
 use flui_objects::{RenderFlex, RenderParagraph};
 use flui_painting::testing::text_context_lends;
 use flui_painting::typography::{TextDirection, TextSpan};
-use flui_painting::{FontCollection, TextContext};
 use flui_rendering::{
     PipelineOwner, TextContextHandle,
     constraints::BoxConstraints,
@@ -19,7 +18,7 @@ use flui_rendering::{
 };
 
 fn realm_text() -> TextContextHandle {
-    TextContextHandle::new(TextContext::new(&FontCollection::new()))
+    TextContextHandle::standalone()
 }
 
 fn lends(text: &TextContextHandle) -> u64 {
@@ -50,20 +49,31 @@ impl RenderBox for PanicsWithTheTextContextLent {
     }
 }
 
-/// Mounts `spec` on a fresh pipeline that lends `text`, with loose root
-/// constraints.
-fn mount(
-    text: Option<&TextContextHandle>,
-    spec: tree::TreeNode,
-) -> (PipelineOwner, tree::RenderLabelRegistry) {
-    let mut owner = PipelineOwner::new();
-    if let Some(text) = text {
-        owner.set_text_context(text.clone());
-    }
-    let (root, labels) = tree::mount(&mut owner, spec);
+/// Mounts `spec` on `owner`, with loose root constraints.
+fn mount_on(owner: &mut PipelineOwner, spec: tree::TreeNode) -> tree::RenderLabelRegistry {
+    let (root, labels) = tree::mount(owner, spec);
     owner.set_root_id(Some(root));
     owner.set_root_constraints(Some(loose()));
+    labels
+}
+
+/// Mounts `spec` on a fresh pipeline built with `text`, with loose root
+/// constraints.
+fn mount(
+    text: &TextContextHandle,
+    spec: tree::TreeNode,
+) -> (PipelineOwner, tree::RenderLabelRegistry) {
+    let mut owner = PipelineOwner::new(text.clone());
+    let labels = mount_on(&mut owner, spec);
     (owner, labels)
+}
+
+fn paragraph(text: &str) -> tree::TreeNode {
+    box_node(RenderParagraph::new(
+        TextSpan::new(text),
+        TextDirection::Ltr,
+    ))
+    .label("paragraph")
 }
 
 /// A panic unwinds out of a layout that holds the realm's context. The loan
@@ -79,7 +89,7 @@ fn a_layout_that_panics_while_holding_the_text_context_releases_it() {
 
     let text = realm_text();
     let (owner, labels) = mount(
-        Some(&text),
+        &text,
         box_node(RenderFlex::column())
             .child(box_node(PanicsWithTheTextContextLent).label("panics"))
             .child(
@@ -120,7 +130,7 @@ fn a_layout_that_panics_while_holding_the_text_context_releases_it() {
         "the next frame measures through the same context"
     );
 
-    let (owner, _) = mount(Some(&text), box_node(PanicsWithTheTextContextLent));
+    let (owner, _) = mount(&text, box_node(PanicsWithTheTextContextLent));
     let mut owner = owner.into_layout();
     let error = owner
         .run_layout()
@@ -150,7 +160,7 @@ fn a_layout_that_panics_while_holding_the_text_context_releases_it() {
 fn intrinsic_and_dry_queries_measure_through_the_pipelines_context() {
     let text = realm_text();
     let (mut owner, labels) = mount(
-        Some(&text),
+        &text,
         box_node(RenderParagraph::new(
             TextSpan::new("measured"),
             TextDirection::Ltr,
@@ -188,31 +198,30 @@ fn intrinsic_and_dry_queries_measure_through_the_pipelines_context() {
     );
 }
 
-/// A pipeline the runtime never gave a context to still measures: it builds
-/// one of its own on its first layout and keeps it.
+/// An owner moved out of its slot for a typestate transition leaves an empty
+/// one behind that measures through the same context: a frame driver that
+/// takes the owner (and the slot a transition that unwinds leaves) never
+/// measures on a context the pipeline was not built with. Fails if the
+/// placeholder is built with any other context.
 #[test]
-fn a_pipeline_without_a_handle_measures_on_its_own_context() {
-    let (owner, labels) = mount(
-        None,
-        box_node(RenderParagraph::new(
-            TextSpan::new("no realm"),
-            TextDirection::Ltr,
-        ))
-        .label("paragraph"),
-    );
-    let paragraph = labels.get("paragraph").expect("labelled");
-    assert!(owner.text_context_for_test().is_none());
-
-    let (owner, result) = owner.run_frame();
-    result.expect("layout succeeds");
-    let size = inspect::box_geometry(&owner, paragraph).expect("the paragraph laid out");
-    assert!(size.width > 0.0 && size.height > 0.0, "got {size:?}");
-    let own = owner
-        .text_context_for_test()
-        .expect("the pipeline built a context of its own")
-        .clone();
+fn a_taken_pipeline_leaves_an_owner_that_measures_through_the_same_context() {
+    let text = realm_text();
+    let mut slot = PipelineOwner::new(text.clone());
+    let taken = slot.take_idle();
     assert!(
-        lends(&own) > 0,
-        "the paragraph measured on the pipeline's own context"
+        TextContextHandle::ptr_eq(taken.text_context_for_test(), &text),
+        "the taken owner keeps the pipeline's context"
+    );
+
+    let labels = mount_on(&mut slot, paragraph("on the placeholder"));
+    let paragraph = labels.get("paragraph").expect("labelled");
+    let before = lends(&text);
+    let (slot, result) = slot.run_frame();
+    result.expect("the placeholder lays out");
+    let size = inspect::box_geometry(&slot, paragraph).expect("the paragraph laid out");
+    assert!(size.width > 0.0 && size.height > 0.0, "got {size:?}");
+    assert!(
+        lends(&text) > before,
+        "the placeholder measured through the context the pipeline was built with"
     );
 }

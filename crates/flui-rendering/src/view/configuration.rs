@@ -162,6 +162,3 @@ impl ViewConfiguration {
         )
     }
 }
-
-#[cfg(test)]
-mod tests {}

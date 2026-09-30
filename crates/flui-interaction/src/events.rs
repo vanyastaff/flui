@@ -1039,6 +1039,3 @@ pub fn make_pointer_event(kind: PointerEventKind, data: PointerEventData) -> Poi
         PointerEventKind::Cancel => PointerEvent::Cancel(pointer_info),
     }
 }
-
-#[cfg(test)]
-mod tests {}

@@ -803,19 +803,3 @@ pub fn assert_any(tree: Option<&LayerTree>, pred: impl Fn(&DrawCommandSummary) -
         snapshot_tree(tree),
     );
 }
-
-// ── Tests ────────────────────────────────────────────────────────────────────
-
-#[cfg(test)]
-mod tests {
-
-    // ── LayerTree serialization tests ─────────────────────────────────────────
-    //
-    // These tests drive the real pipeline to produce a layer tree and then
-    // inspect serialize_layer_tree / collect_commands output. We use a local
-    // `RedBox` leaf stub instead of `flui_objects::RenderColoredBox` to keep
-    // flui-rendering's own test suite free of a dependency on flui-objects
-    // (concrete objects moved there as part of the flui-objects extraction).
-
-    mod layer_tree_helpers {}
-}

@@ -111,7 +111,7 @@ exists to prevent.
 | Site | Primitive | Where | Why |
 |------|-----------|-------|-----|
 | `GlobalKey` ID counter | `AtomicU64` (static) | `key.rs:140, 462` | Monotonic key allocator. `fetch_add` only, no contention pattern. Off any hot path. |
-| `ChangeNotifier::listeners` / `Notifier::listeners` | `Arc<parking_lot::Mutex<HashMap<ListenerId, …Callback>>>` | `notifier.rs` / `notifier_generic.rs` (struct fields) | Listener registry held during register/unregister/notify. Notifier callbacks are invoked outside the lock (clone-then-iterate pattern from [`docs/plans/2026-03-31-core-crates-hardening.md`](../../docs/plans/2026-03-31-core-crates-hardening.md) Task 3). Not on the render hot path; consumed by the build phase. |
+| `ChangeNotifier::listeners` / `Notifier::listeners` | `Arc<parking_lot::Mutex<HashMap<ListenerId, …Callback>>>` | `notifier.rs` / `notifier_generic.rs` (struct fields) | Listener registry held during register/unregister/notify. Notifier callbacks are invoked outside the lock (clone-then-iterate pattern from [`docs/plans/2026-03-31-core-crates-hardening.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-core-crates-hardening.md) Task 3). Not on the render hot path; consumed by the build phase. |
 | `ChangeNotifier::next_id` / `Notifier::next_id` | `Arc<AtomicUsize>` | `notifier.rs` / `notifier_generic.rs` (struct fields) | Listener-ID allocator. `fetch_add` only. |
 
 No `RwLock` in `flui-foundation`. No primitive listed here sits inside `perform_layout` / `paint` / `View::build`.

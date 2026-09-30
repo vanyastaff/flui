@@ -2,7 +2,7 @@
 
 This document is the per-crate architecture record for `flui-rendering`. It records the module map for this crate, the design decisions taken so far, the current thread-safety surface, the known friction not yet refactored, and the planned cleanups still to pick up.
 
-The deeper architectural write-ups for individual subsystems (protocol, layout, paint, hit-test) live alongside this file under [`docs/`](docs/) and migration plans under [`migration/`](migration/).
+Deeper write-ups for layout and hit-testing, and the render test harness guide, live alongside this file under [`docs/`](docs/).
 
 ---
 
@@ -30,7 +30,7 @@ deepest-first element unmount so view lifecycle hooks remain canonical.
 
 ## Mapping decisions
 
-This section records design decisions and why they were taken. Each entry follows the "Accepted trade-offs" format established by [`docs/plans/2026-03-31-custom-render-callback-design.md`](../../docs/plans/2026-03-31-custom-render-callback-design.md): state the rule (or absence of rule), the choice, the alternatives considered, the trade-off accepted.
+This section records design decisions and why they were taken. Each entry follows the "Accepted trade-offs" format established by [`docs/plans/2026-03-31-custom-render-callback-design.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-custom-render-callback-design.md): state the rule (or absence of rule), the choice, the alternatives considered, the trade-off accepted.
 
 ### Canvas clips belong to one fragment run
 
@@ -838,7 +838,7 @@ of how the dead path was found.
 **Accepted trade-off:** subclasses that wanted to override `set_was_repaint_boundary` (none currently do) lose the hook. The flag's owner is now framework code, not user code.
 ### `unsafe impl Send + Sync for RenderTree` removed
 
-**Rule:** constitution Principle III ("zero unsafe in widget/app layer; `unsafe` only in `flui-platform`, `flui-painting`, `flui-engine`"); the prior `unsafe impl` was a soundness carve-out documented in [`docs/plans/2026-03-31-core-crates-hardening.md`](../../docs/plans/2026-03-31-core-crates-hardening.md) Task 7.
+**Rule:** constitution Principle III ("zero unsafe in widget/app layer; `unsafe` only in `flui-platform`, `flui-painting`, `flui-engine`"); the prior `unsafe impl` was a soundness carve-out documented in [`docs/plans/2026-03-31-core-crates-hardening.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-core-crates-hardening.md) Task 7.
 
 **Choice:** removed the `unsafe impl Send for RenderTree {}` / `unsafe impl Sync for RenderTree {}` block at the bottom of [`src/storage/tree.rs`](src/storage/tree.rs). The transitive Send+Sync chain still holds via auto-derivation: `Slab<RenderNode>` is auto-`Send + Sync` because `RenderNode` is; `RenderEntry<P>` holds `Box<dyn RenderObject<P>>` and the trait requires `Send + Sync + 'static`; `RenderState<P>` is built on atomics and `Option<T>` fields for geometry/constraints; `NodeLinks` is POD.
 
@@ -896,9 +896,9 @@ The remaining phase-misuse variants — `LayoutDuringPaint`, `LayoutDetached`, `
 The structural shape of individual components in this crate is designed for Rust and has been informed by multiple Rust-side audited references as recorded in prior plans:
 
 - `slab::Slab` storage pattern with `+1/-1` ID offset — internal precedent in [`src/storage/tree.rs`](src/storage/tree.rs); the offset rationale lives in [`docs/architecture.md`](../../docs/architecture.md).
-- `Weak<RwLock<PipelineOwner>>` parent back-reference replacing a raw pointer — [`docs/plans/2026-03-31-core-crates-hardening.md`](../../docs/plans/2026-03-31-core-crates-hardening.md) Task 7.
+- `Weak<RwLock<PipelineOwner>>` parent back-reference replacing a raw pointer — [`docs/plans/2026-03-31-core-crates-hardening.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-core-crates-hardening.md) Task 7.
 - Lock-free atomic dirty tracking (`AtomicRenderFlags`); the offset lives in an `OffsetCell` (`Cell<Offset>`, two `f64` components; the tree is `!Send + !Sync`); geometry/constraints as `Option<T>` mutated via `&mut RenderState`) — documented in [`src/storage/state/mod.rs`](src/storage/state/mod.rs) module docstring.
-- Multi-source design references (GPUI, Iced, Makepad, Vello, Skia) — [`docs/plans/2026-03-31-engine-hardening.md`](../../docs/plans/2026-03-31-engine-hardening.md) precedent for citing reference codebases when the structural pattern fits Rust idioms better.
+- Multi-source design references (GPUI, Iced, Makepad, Vello, Skia) — [`docs/plans/2026-03-31-engine-hardening.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-engine-hardening.md) precedent for citing reference codebases when the structural pattern fits Rust idioms better.
 
 ---
 
@@ -980,8 +980,12 @@ need the downstream engine to write into the upstream owner; the logic lives onc
 ### Layout contexts lend the realm's text context, one measurement at a time
 
 **Rule.** A `PipelineOwner` holds the realm's `TextContextHandle`
-(`Rc<RefCell<flui_painting::TextContext>>`), installed once by the runtime through
-`set_text_context` before the first layout (ADR-0092 §10 step 3). The layout walk passes the
+(`Rc<RefCell<flui_painting::TextContext>>`), a constructor argument: `PipelineOwner::new` and
+`new_with_capacity` take it, and there is no `Default` (ADR-0092 §10 step 3). A pipeline with no
+realm behind it (a hot-reload plugin image, a test) passes `TextContextHandle::standalone`, a
+context over a collection of its own. A frame driver that moves the owner out of its slot for a
+typestate transition calls `take_idle`, whose placeholder shares the handle, so the slot a
+transition that unwinds leaves still measures through it. The layout walk passes the
 cell to every box node it lays out or measures — leaves through `layout_leaf_only`, parents
 through `ErasedBoxLayoutCtx`, box intrinsics asked by a box or a sliver parent — and the
 intrinsic, dry-layout and dry-baseline query walks pass it to `intrinsic_raw`,
@@ -991,10 +995,9 @@ intrinsic, dry-layout and dry-baseline query walks pass it to `intrinsic_raw`,
 lay out a child or query one while it holds the loan. The raw methods and
 `BoxLayoutCtxErased::text_source` carry the cell as a `TextSource`, a `Copy` token whose cell
 only this crate can borrow, so a direct `RenderObject` implementation passes it on but cannot
-hold a loan across a child query. A pipeline that was never given a
-handle builds a private context on first use; a context built by hand (a test helper, a
-leaf-only layout) lends one of its own. Slivers get no text accessor: nothing that measures
-text is a sliver.
+hold a loan across a child query. Nothing builds a context implicitly: every layout, intrinsic
+and dry-query context is constructed with a `TextSource`, and `layout_leaf_only` takes one.
+Slivers get no text accessor: nothing that measures text is a sliver.
 
 **Why a channel.** The realm owns its text context (no ambient, engine-wide font
 collection), so the context has to reach the render object through the pipeline that lays it
@@ -1010,7 +1013,8 @@ not re-entrant). A `RefMut` drops on unwind, so a panicking layout releases the 
 walk's `catch_unwind` turns it into `Poisoned`. Locked by
 `a_layout_that_panics_while_holding_the_text_context_releases_it`,
 `intrinsic_and_dry_queries_measure_through_the_pipelines_context` and
-`a_pipeline_without_a_handle_measures_on_its_own_context` (`tests/text_context.rs`).
+`a_taken_pipeline_leaves_an_owner_that_measures_through_the_same_context`
+(`tests/text_context.rs`), and the `compile_fail` doctests on `PipelineOwner::new`.
 
 
 ## Thread safety
@@ -1024,7 +1028,7 @@ walk's `catch_unwind` turns it into `Poisoned`. Locked by
 | `RenderState<P>::geometry`, `constraints` (`src/storage/state.rs`) | `Option<ProtocolGeometry<P>>` / `Option<ProtocolConstraints<P>>` | Mutable via `&mut self` | Set and cleared via `&mut RenderState` during layout; no lock required. |
 | `RenderState<P>::offset` (`src/storage/state/offset.rs`) | `OffsetCell` | `Cell` (single-threaded tree) | Paint position. |
 | `RenderTree::owner` (`src/storage/tree.rs:65`) | `Option<Arc<RwLock<PipelineOwner>>>` | Shared infrastructure | Allowed: locks may guard shared infrastructure. Off the per-node hot path. |
-| `PipelineOwner` parent/back-references throughout [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs) | `Arc<RwLock<PipelineOwner>>`, `Weak<RwLock<PipelineOwner>>` | Shared infrastructure | Soundness-rewrite precedent ([core-crates-hardening Task 7](../../docs/plans/2026-03-31-core-crates-hardening.md)). |
+| `PipelineOwner` parent/back-references throughout [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs) | `Arc<RwLock<PipelineOwner>>`, `Weak<RwLock<PipelineOwner>>` | Shared infrastructure | Soundness-rewrite precedent ([core-crates-hardening Task 7](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/plans/2026-03-31-core-crates-hardening.md)). |
 | `RenderTree::nodes` (`src/storage/tree.rs:59`) | `Slab<RenderNode>` | Auto-derived Send+Sync | No `unsafe impl` needed after U2. |
 | Viewport listener list (`ScrollableViewportOffset::listeners`, `src/view/viewport_offset.rs`) | `RwLock<Vec<…>>` | Listener registry | Off layout/paint hot path. `FixedViewportOffset`'s former listener list was deleted as speculative API (a fixed offset never notifies). |
 | `PipelineOwner::text` (`src/pipeline/text_context.rs`) | `Rc<RefCell<TextContext>>` | Owner-thread shared infrastructure | The realm's text context, shared by its presentations' pipelines. Borrowed once per measurement, never across a child's layout; `!Send`, like the owner. See "Layout contexts lend the realm's text context". |
@@ -1043,8 +1047,7 @@ owning crate.
 Known sites that do not yet match the intended design but do not break a current rule. Each entry names the site and the next planned step.
 
 - **`PipelineOwner` paint-loop downcasts to `Box<dyn ContainerLayer>`** ([`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs)) — the paint phase uses `Box<dyn ContainerLayer>` returned from `RenderObject::paint`. This is correct for compositing-layer heterogeneity but worth periodic audit to ensure the cost stays at the boundary, not in the per-frame inner loop.
-- **`docs/PROTOCOL_ARCHITECTURE.md` predates this template** ([`docs/PROTOCOL_ARCHITECTURE.md`](docs/PROTOCOL_ARCHITECTURE.md)) — a deeper design write-up that overlaps with `## Module map` above for protocol-specific concerns. Not migrated under this template in U3; remains as a companion document.
-- **`docs/LAYOUT_SYSTEM.md`, `docs/PAINT_SYSTEM.md`, `docs/HIT_TEST_SYSTEM.md`** — subsystem-level deep-dives. Not part of the template surface. Stay as companion documents.
+- **`docs/LAYOUT_SYSTEM.md`, `docs/HIT_TEST_SYSTEM.md`** — subsystem-level deep-dives. Not part of the template surface. Stay as companion documents.
 
 ---
 
@@ -1126,7 +1129,7 @@ Criterion is already in `flui-rendering` dev-dependencies. The bench harness nee
 
 ### Migrate `docs/` companion architecture docs onto template-adjacent shape — DONE
 
-**File:** [`docs/PROTOCOL_ARCHITECTURE.md`](docs/PROTOCOL_ARCHITECTURE.md), [`docs/LAYOUT_SYSTEM.md`](docs/LAYOUT_SYSTEM.md), [`docs/PAINT_SYSTEM.md`](docs/PAINT_SYSTEM.md), [`docs/HIT_TEST_SYSTEM.md`](docs/HIT_TEST_SYSTEM.md), [`docs/ROADMAP.md`](docs/ROADMAP.md).
+**File:** [`docs/LAYOUT_SYSTEM.md`](docs/LAYOUT_SYSTEM.md), [`docs/HIT_TEST_SYSTEM.md`](docs/HIT_TEST_SYSTEM.md).
 
 These deep-dives stay as companion documents (not under the per-crate template directly); each now opens with a "See also" header line pointing back to this file, linking them into the methodology index.
 

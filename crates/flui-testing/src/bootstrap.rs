@@ -96,7 +96,9 @@ impl MountOwners {
         Self {
             build_owner: BuildOwner::new(),
             tree: ElementTree::new(),
-            pipeline_owner: PipelineCell::new(PipelineOwner::new()),
+            pipeline_owner: PipelineCell::new(PipelineOwner::new(
+                flui_rendering::TextContextHandle::standalone(),
+            )),
         }
     }
 

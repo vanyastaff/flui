@@ -3059,8 +3059,7 @@ mod tests {
 
     // =========================================================================
     // `Layer::ShaderMask` engine visual-rendering fix — GPU-level, end-to-end
-    // pixel-readback proof (design research plan
-    // `2026-07-01-shader-mask-engine-render-plan.md`).
+    // pixel-readback proof.
     //
     // `Layer::ShaderMask` previously fell through to the generic
     // `LayerRender` dispatch (`layer_render.rs`), which pushes an inert

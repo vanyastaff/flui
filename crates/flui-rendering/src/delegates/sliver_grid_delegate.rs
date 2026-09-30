@@ -389,6 +389,3 @@ impl SliverGridDelegate for SliverGridDelegateWithMaxCrossAxisExtent {
         self
     }
 }
-
-#[cfg(test)]
-mod tests {}

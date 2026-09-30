@@ -240,11 +240,6 @@ class = "pr-label"
 count = 1
 
 [[allow]]
-path = "crates/flui-rendering/src/traits/render_sliver.rs"
-class = "wave"
-count = 1
-
-[[allow]]
 path = "crates/flui-rendering/tests/cross_protocol_layout.rs"
 class = "wave"
 count = 1
@@ -305,19 +300,9 @@ class = "wave"
 count = 1
 
 [[allow]]
-path = "docs/designs/2026-06-25-pr-k-live-buildcontext-execution-spec.md"
-class = "pr-label"
-count = 3
-
-[[allow]]
 path = "docs/designs/2026-06-28-hot-reload-runtime-protocol.md"
 class = "phase-letter"
 count = 4
-
-[[allow]]
-path = "docs/designs/2026-06-30-rasterbackend-seam.md"
-class = "tracker-h"
-count = 1
 
 [[allow]]
 path = "docs/designs/2026-09-18-macos-ios-feature-completeness.md"

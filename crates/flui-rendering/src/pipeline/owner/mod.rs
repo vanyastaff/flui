@@ -119,9 +119,8 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
 
     /// The realm's text context, lent to every measurement in this
     /// pipeline's layout, intrinsic and dry queries (ADR-0092 §10 step 3).
-    /// Installed by the runtime through [`Self::set_text_context`]; a
-    /// pipeline never given one builds a private context on first use.
-    text: Option<crate::pipeline::TextContextHandle>,
+    /// A constructor argument: no pipeline exists without one.
+    text: crate::pipeline::TextContextHandle,
 
     /// Allocation identity binding linear relocation tokens to this owner.
     /// Pointer identity is sufficient; unlike a numeric id it cannot collide
@@ -324,12 +323,6 @@ impl<Phase: PipelinePhase> std::fmt::Debug for PipelineOwner<Phase> {
             )
             .field("has_semantics_owner", &self.semantics_owner.is_some())
             .finish_non_exhaustive()
-    }
-}
-
-impl Default for PipelineOwner<Idle> {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -574,7 +567,7 @@ mod tests {
         let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = std::sync::Arc::clone(&captured);
 
-        let mut owner = PipelineOwner::new();
+        let mut owner = PipelineOwner::new(crate::pipeline::TextContextHandle::standalone());
         owner.set_semantics_update_callback(std::sync::Arc::new(
             move |update: &flui_semantics::TreeUpdate| {
                 sink.lock()
@@ -622,7 +615,7 @@ mod tests {
     fn a_local_change_reassembles_only_the_affected_subtree() {
         let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = std::sync::Arc::clone(&captured);
-        let mut owner = PipelineOwner::new();
+        let mut owner = PipelineOwner::new(crate::pipeline::TextContextHandle::standalone());
         owner.set_semantics_update_callback(std::sync::Arc::new(
             move |update: &flui_semantics::TreeUpdate| {
                 sink.lock()
@@ -854,7 +847,7 @@ mod tests {
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
 
-        let mut owner = PipelineOwner::new();
+        let mut owner = PipelineOwner::new(crate::pipeline::TextContextHandle::standalone());
         let root_id = owner.insert(Box::new(PanickingPaintBox::new())
             as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>);
         owner.set_root_id(Some(root_id));
@@ -921,8 +914,13 @@ mod tests {
             RenderEntry::<crate::protocol::BoxProtocol>::new(Box::new(PanickingLayoutBox::new())
                 as Box<dyn crate::traits::RenderObject<crate::protocol::BoxProtocol>>);
 
-        let result =
-            entry.layout_leaf_only(crate::constraints::BoxConstraints::tight(Size::ZERO), None);
+        let result = {
+            let text = crate::pipeline::TextContextHandle::standalone();
+            entry.layout_leaf_only(
+                crate::constraints::BoxConstraints::tight(Size::ZERO),
+                text.source(),
+            )
+        };
 
         std::panic::set_hook(prev);
 

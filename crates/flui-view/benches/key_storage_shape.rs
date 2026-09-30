@@ -30,11 +30,6 @@
 //! question, not a *reconciler-algorithm* question. The minimal kernel that
 //! isolates the storage-shape cost is a `HashMap<key_hash, idx>` build +
 //! per-new-position lookup. That is what we measure.
-//!
-//! # Plan / spec references
-//!
-//! - [`docs/plans/2026-05-22-005-feat-view-element-core-contracts-plan.md`]
-//! - [`specs/004-view-element-core/spec.md`] Deferred S1, FR-022
 
 // Bench harness, not public API; `criterion_group!` generates the
 // undocumentable entry fn.

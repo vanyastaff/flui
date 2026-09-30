@@ -10,9 +10,8 @@
 //! `flui_painting::paint::ImageFilter` has no bounded/tile-mode blur
 //! variant, and `flui-layer`'s `BackdropFilterLayer` has no
 //! `backdrop_key` field at all. Adding either speculatively would be dead
-//! plumbing with zero consumers, so they are deferred — see the design
-//! research doc,
-//! `docs/research/2026-07-01-render-backdrop-filter-shader-mask-plan.md`,
+//! plumbing with zero consumers, so they are deferred — see the
+//! [design research](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-07-01-render-backdrop-filter-shader-mask-plan.md),
 //! §1.3 and §6.
 //!
 //! # Rust-native shape

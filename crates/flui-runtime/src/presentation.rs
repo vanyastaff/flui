@@ -23,7 +23,6 @@ use flui_platform_api::PlatformTextInput;
 use flui_platform_api::{Clipboard, CursorError, CursorIcon, PlatformWindow};
 use flui_rendering::binding::RendererBinding as _;
 use flui_rendering::pipeline::PipelineCell;
-#[cfg(test)]
 use flui_rendering::pipeline::PipelineOwner;
 use flui_scheduler::{
     AsyncDriver, ClockSource, FrameClock, LocalPostFrameHandle, PostFrameHandle, UpdateScheduler,
@@ -563,9 +562,13 @@ impl PresentationState {
     /// dispatch handles, before this presentation's own focus/IME are
     /// wired to its fresh [`WidgetsBinding`] and [`RenderingBinding`]
     /// — all before the caller ever attaches/mounts a root widget.
+    ///
+    /// Builds the presentation's pipeline here, from the realm's text
+    /// context, so no presentation pipeline measures on any other; a
+    /// `device_pixel_ratio` of `None` keeps the pipeline's default of `1.0`.
     pub(crate) fn new(
         id: PresentationId,
-        pipeline: PipelineCell,
+        device_pixel_ratio: Option<f64>,
         window: impl Into<PresentationWindow>,
         capabilities: RealmCapabilities<'_>,
     ) -> Self {
@@ -573,9 +576,10 @@ impl PresentationState {
             window,
             accessibility,
         } = window.into();
-        // The one place a presentation's pipeline gets the realm's text
-        // context, before anything can lay it out.
-        pipeline.with_mut(|owner| owner.set_text_context(capabilities.text));
+        let pipeline = PipelineCell::new(PipelineOwner::new(capabilities.text));
+        if let Some(device_pixel_ratio) = device_pixel_ratio {
+            pipeline.with_mut(|owner| owner.set_device_pixel_ratio(device_pixel_ratio));
+        }
         let gestures = Self::build_gestures(id, &window, capabilities.clock);
         let frame_clock = FrameClock::with_source(capabilities.clock.clone());
         let alive = Rc::new(());
@@ -1538,7 +1542,9 @@ mod tests {
     fn presentation() -> PresentationState {
         PresentationState::new_for_test(
             PresentationId::new_gen(0, NonZeroU32::MIN),
-            PipelineCell::new(PipelineOwner::new()),
+            PipelineCell::new(PipelineOwner::new(
+                flui_rendering::TextContextHandle::standalone(),
+            )),
             None,
         )
     }

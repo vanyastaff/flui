@@ -471,7 +471,7 @@ Cubic::new(0.42, 0.0, 0.58, 1.0)
 Run with:
 
 ```bash
-cargo bench -p flui_animation
+cargo bench -p flui-animation
 ```
 
 Typical results (Apple M1):

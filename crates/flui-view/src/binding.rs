@@ -1733,7 +1733,9 @@ mod tests {
     /// `RenderView` and sets it as the pipeline owner's root node.
     fn test_attach_root_widget_bootstraps_render_tree() {
         let binding = WidgetsBinding::new();
-        let pipeline_owner = PipelineCell::new(PipelineOwner::new());
+        let pipeline_owner = PipelineCell::new(PipelineOwner::new(
+            flui_rendering::TextContextHandle::standalone(),
+        ));
         binding.set_pipeline_owner(pipeline_owner.clone());
 
         binding

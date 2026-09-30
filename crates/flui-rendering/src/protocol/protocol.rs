@@ -183,12 +183,11 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
     /// `layout_dirty_root` constructs its own typed context with
     /// children access via disjoint borrows and bypasses this helper.
     ///
-    /// `text` is the realm's text context the leaf measures with (box
-    /// protocol only; slivers do not measure text); `None` leaves the leaf a
-    /// context of its own.
+    /// `text` is the pipeline's text context the leaf measures with (box
+    /// protocol only; slivers do not measure text).
     fn with_leaf_erased_ctx<R>(
         constraints: <Self::Layout as LayoutCapability>::Constraints,
-        text: Option<crate::pipeline::TextSource<'_>>,
+        text: crate::pipeline::TextSource<'_>,
         f: impl FnOnce(&mut Self::LayoutCtxErased<'_>) -> R,
     ) -> R
     where

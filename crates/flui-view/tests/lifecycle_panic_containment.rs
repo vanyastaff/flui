@@ -298,7 +298,9 @@ pub(crate) fn child_init_state_panic_is_replaced_in_place_and_the_build_scope_co
     let failed_id = Rc::new(Cell::new(None));
     let init_calls = Rc::new(Cell::new(0));
     let dispose_calls = Rc::new(Cell::new(0));
-    let pipeline = PipelineCell::new(PipelineOwner::new());
+    let pipeline = PipelineCell::new(PipelineOwner::new(
+        flui_rendering::TextContextHandle::standalone(),
+    ));
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
     let parent = tree.mount_root_with_pipeline_owner(

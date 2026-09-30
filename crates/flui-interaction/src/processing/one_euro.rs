@@ -171,6 +171,3 @@ impl OneEuroFilter2D {
         )
     }
 }
-
-#[cfg(test)]
-mod tests {}

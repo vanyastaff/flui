@@ -1155,10 +1155,8 @@ unsafe fn layout_subtree_borrowed_impl(
 
         // Leaf path: delegate to layout_leaf_only.
         if is_leaf {
-            return entry.layout_leaf_only(
-                constraints,
-                Some(crate::pipeline::TextSource::new(arena.text)),
-            );
+            return entry
+                .layout_leaf_only(constraints, crate::pipeline::TextSource::new(arena.text));
         }
 
         // Descendant-error tracking flag.  Closure flips to `true` on any
@@ -1367,7 +1365,7 @@ unsafe fn layout_subtree_borrowed_impl(
             Some(crate::protocol::DegradationProbe::new(
                 &arena.degradation_events,
             )),
-            Some(crate::pipeline::TextSource::new(arena.text)),
+            crate::pipeline::TextSource::new(arena.text),
         );
         let erased: &mut dyn BoxLayoutCtxErased = &mut ctx;
 
@@ -1672,7 +1670,7 @@ unsafe fn box_intrinsic_query_borrowed_impl(
             child_ids.len(),
             &child_parent_data_refs,
             &mut child_query,
-            Some(crate::pipeline::TextSource::new(arena.text)),
+            crate::pipeline::TextSource::new(arena.text),
         )
     };
 

@@ -161,7 +161,7 @@ impl RenderTester {
 
     /// Builds the owner, mounts the spec, and seeds the root + constraints.
     fn build(self) -> (PipelineOwner<Idle>, RenderId, RenderLabelRegistry) {
-        let mut owner = PipelineOwner::new();
+        let mut owner = PipelineOwner::new(crate::pipeline::TextContextHandle::standalone());
         let (root_id, registry) = tree::mount(&mut owner, self.spec);
         owner.set_root_id(Some(root_id));
         owner.set_root_constraints(Some(self.constraints.unwrap_or_else(default_constraints)));
@@ -396,7 +396,7 @@ impl FrameRun {
     /// A frame with no dirty work produces no layer tree, mirroring the
     /// production idle-frame behavior.
     pub fn pump(&mut self) -> FrameReport {
-        let owner = std::mem::take(&mut self.owner);
+        let owner = self.owner.take_idle();
         let (owner, result) = owner.run_frame();
         self.owner = owner;
         self.layer_tree = result.expect("pump frame must succeed for a well-formed test tree");

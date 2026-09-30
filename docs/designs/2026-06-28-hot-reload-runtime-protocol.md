@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-28  
 **Status:** approved direction — implementation in phases  
-**Supersedes:** the "hot-restart only" conclusion in `docs/research/2026-05-22-architectural-contracts.md` Contract 9 (partially — see §2)
+**Supersedes:** the "hot-restart only" conclusion in [`2026-05-22-architectural-contracts.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-22-architectural-contracts.md) Contract 9 (partially — see §2)
 
 ---
 

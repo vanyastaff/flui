@@ -11,8 +11,8 @@
 //! `RenderShaderMask` has none). The
 //! shared shape — single-child proxy, draws nothing of its own, wraps
 //! `paint_child()` in one closure-scoped effect — is about four lines,
-//! not worth a generic parameter (see the design research doc,
-//! `docs/research/2026-07-01-render-backdrop-filter-shader-mask-plan.md`,
+//! not worth a generic parameter (see the
+//! [design research](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-07-01-render-backdrop-filter-shader-mask-plan.md),
 //! §3).
 //!
 //! # Diagnostics

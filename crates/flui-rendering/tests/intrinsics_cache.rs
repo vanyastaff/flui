@@ -141,7 +141,7 @@ fn fixture() -> Fixture {
     let dry_runs = Arc::new(AtomicUsize::new(0));
     let layout_runs = Arc::new(AtomicUsize::new(0));
 
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let root =
         owner.insert(Box::new(CountingRoot::new(Arc::clone(&layout_runs))) as BoxedRenderObject);
     let mid = owner

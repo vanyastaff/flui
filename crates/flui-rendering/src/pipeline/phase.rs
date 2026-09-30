@@ -1,12 +1,10 @@
 //! Pipeline phase typestate markers.
 //!
-//! Per docs/designs/2026-05-20-mythos-flui-rendering-redesign.md, the
 //! `PipelineOwner` carries a phantom type parameter `Phase: PipelinePhase`
 //! that lifts the runtime "what frame phase am I in" question into the
-//! type system. The design was finalized on 2026-05-20: each
-//! `run_*` method now lives only on its phase's impl block, so calling
-//! `run_paint` on `<Idle>` or `run_layout` on `<Compositing>` is a
-//! compile error, not a runtime assert.
+//! type system: each `run_*` method lives only on its phase's impl block,
+//! so calling `run_paint` on `<Idle>` or `run_layout` on `<Compositing>` is
+//! a compile error, not a runtime assert.
 //!
 //! # Compile-time enforcement examples
 //!
@@ -16,20 +14,20 @@
 //!
 //! ```compile_fail
 //! use flui_rendering::pipeline::PipelineOwner;
-//! let owner = PipelineOwner::new();        // <Idle>
+//! let owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone()); // <Idle>
 //! owner.run_paint();                       // error[E0599]: run_paint is on <PaintPhase> only
 //! ```
 //!
 //! ```compile_fail
 //! use flui_rendering::pipeline::PipelineOwner;
-//! let owner = PipelineOwner::new();        // <Idle>
+//! let owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone()); // <Idle>
 //! let mut owner = owner.into_layout();     // <Layout>
 //! owner.run_paint();                       // error[E0599]: run_paint is on <PaintPhase>, not <Layout>
 //! ```
 //!
 //! ```compile_fail
 //! use flui_rendering::pipeline::PipelineOwner;
-//! let owner = PipelineOwner::new();        // <Idle>
+//! let owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone()); // <Idle>
 //! let owner = owner.into_layout();         // <Layout>
 //! let (_owner, _layer) = owner.run_frame(); // error[E0599]: run_frame is on <Idle> only
 //! ```
@@ -51,7 +49,7 @@
 //!
 //! ```
 //! use flui_rendering::pipeline::PipelineOwner;
-//! let owner = PipelineOwner::new();        // <Idle>
+//! let owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone()); // <Idle>
 //! let mut owner = owner.into_layout();     // <Layout>
 //! owner.run_layout().unwrap();
 //! let mut owner = owner.into_compositing();// <Compositing>
@@ -69,7 +67,7 @@
 //!
 //! ```
 //! use flui_rendering::pipeline::PipelineOwner;
-//! let owner = PipelineOwner::new();
+//! let owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
 //! let (_owner, result) = owner.run_frame();
 //! let _layer_tree = result.unwrap();
 //! ```

@@ -2,8 +2,7 @@
 //! generated tuple impls + `Vec`-of-View / `Vec<BoxedView>` impls
 //! that drive the two C2 authoring paths.
 //!
-//! See `docs/FOUNDATIONS.md` §C2 ("heterogeneous children") and
-//! `specs/004-view-element-core/spec.md` FR-012–FR-018. The two
+//! See `docs/FOUNDATIONS.md` §C2 ("heterogeneous children"). The two
 //! load-bearing paths are:
 //!
 //! - **Static tuple path** — `(A, B, C, …): ViewSeq` for tuple

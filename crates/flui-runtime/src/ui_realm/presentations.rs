@@ -7,7 +7,6 @@ use flui_foundation::PresentationId;
 #[cfg(any(test, feature = "test-support"))]
 use flui_interaction::FocusManager;
 use flui_interaction::GestureBinding;
-use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_view::__runtime::GlobalKeyRegistryComposite;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 #[cfg(any(test, feature = "test-support"))]
@@ -143,10 +142,7 @@ impl UiRealm {
     ) -> PresentationState {
         let window = window.into();
         let (_, presentation_id) = crate::realm_services::next_identity();
-        let pipeline = PipelineCell::new(PipelineOwner::new());
-        pipeline.with_mut(|owner| {
-            owner.set_device_pixel_ratio(window.window().scale_factor());
-        });
+        let device_pixel_ratio = window.window().scale_factor();
         // The prototype is stamped for the PRIMARY presentation; this
         // presentation's accessibility actions must address ITSELF, or the
         // drain would resolve them against a sibling's semantics tree.
@@ -156,7 +152,7 @@ impl UiRealm {
         };
         PresentationState::new(
             presentation_id,
-            pipeline,
+            Some(device_pixel_ratio),
             window,
             RealmCapabilities {
                 global_key_scope: self.global_key_scope.clone(),
