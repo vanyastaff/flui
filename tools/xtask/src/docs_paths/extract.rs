@@ -359,17 +359,18 @@ const ENV_VALUE_OPTIONS: [&str; 4] = ["-u", "--unset", "-C", "--chdir"];
 /// (`-Zp…`) is that value, not `-p`.
 const SHORT_VALUE_OPTIONS: [char; 4] = ['C', 'F', 'Z', 'j'];
 
-/// The packages the cargo commands in `code` select, in every spelling cargo
-/// takes: `-p x`, `--package x`, `-p=x`, `--package=x`, `-px` and a cluster
-/// (`-qpx`, `-qp x`). A command is cargo's when its first word, after any
-/// `NAME=value` assignments and an `env` wrapper, is `cargo` (or a path ending
-/// in `/cargo`); its arguments stop at `--`, after which they are the program's.
+/// [`packages_in`] of POSIX shell code.
 #[cfg(test)]
 pub(super) fn packages(code: &str) -> Vec<Selected> {
     packages_in(code, shell::Dialect::Posix)
 }
 
-/// [`packages`] of code written for `dialect`.
+/// The packages the cargo commands in `code`, written for `dialect`, select,
+/// in every spelling cargo takes: `-p x`, `--package x`, `-p=x`,
+/// `--package=x`, `-px` and a cluster (`-qpx`, `-qp x`). A command is cargo's
+/// when its first word, after any `NAME=value` assignments and a wrapper
+/// (`env`, `time`, `sudo`, `exec`, `command`), is `cargo` (or a path ending in
+/// `/cargo`); its arguments stop at `--`, after which they are the program's.
 pub(super) fn packages_in(code: &str, dialect: shell::Dialect) -> Vec<Selected> {
     let mut found = Vec::new();
     for command in shell::commands_in(code, dialect) {
