@@ -37,11 +37,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # The Linux runners fix the archives' glibc floor (a binary needs the
+        # glibc it was linked against or newer): 22.04's 2.35 covers Debian 12
+        # and Ubuntu 22.04. Named, not `-latest`, so it moves deliberately;
+        # when GitHub retires 22.04 the build fails here, loudly.
         include:
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-22.04
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-24.04-arm
+            os: ubuntu-22.04-arm
           - target: x86_64-apple-darwin
             os: macos-15-intel
           - target: aarch64-apple-darwin
@@ -106,7 +110,7 @@ jobs:
   release:
     name: draft release
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     # Only this job can write, and only releases.
     permissions:

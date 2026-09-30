@@ -666,9 +666,10 @@ Decisions, each in `ci.yml` and `tools/xtask/src/change_scope/`:
    all-targets build with `TEST_SCOPE`'s features, which reuses the test build.
 3. **`test-nested` runs the nested-cargo group beside `test`** (`cargo xtask test --nested`), off
    the critical path: 5.7 of `test`'s ~10 min in run 36752979987. It restores `test`'s cache and
-   saves none of its own. `test-windows` keeps the whole suite: `cli_create`'s generated
-   projects and the facade consumers run a native `cargo` with their own feature graphs, so the
-   group is host-specific there, whatever its 17 of the job's 51 min (run 36663455643).
+   saves none of its own. `test-windows` runs `cargo xtask test --no-trybuild`: `cli_create`'s
+   generated projects and the facade consumers (group `nested-cargo`) run a native `cargo` with
+   their own feature graphs, so they are host-specific; the trybuild suites (group `trybuild`)
+   check compiler output that is the same on every host, and Linux runs them.
 4. **Advisory jobs whose own graduation rule is met are blocking**: `miri` (67 green runs, no
    red), `macos-ci` and `test-windows` (three green runs each, the rule their comments stated).
 5. **Single-entry matrices dropped** (`test`, `bench-compile`: `os: [ubuntu-latest]`, with a
@@ -679,9 +680,16 @@ Decisions, each in `ci.yml` and `tools/xtask/src/change_scope/`:
 
 Not changed, with the reason:
 
-- **Caches.** `gh cache list` holds 12.3 GB in 18 main-only entries, over the 10 GB default.
-  Warm caches for `test-windows` and `macos-ci` (their cold builds are most of their time) need
-  room that is not there; raising the limit is paid. Fewer, shared keys come first.
+- **Caches** (changed in a follow-up). At 10.03 GB the entries evicted each other: a run after a
+  `Cargo.lock` change found no cache for `doc`, `doc-test`, the xtask jobs, `actionlint` and
+  `lychee`, and one main push later `test-features`, `live-smoke`, `gpu-test` and
+  `platform-windows` were gone too. The rule now in `ci.yml`'s header: a job keeps a target cache
+  only when its cold run would outlast the wide lane's longest jobs (about 9 min). `clippy`,
+  `cross-typecheck`, `miri`, `doc`, `doc-test` and the macOS jobs (about 3.6 GB of entries) build
+  cold; their cold times are what the follow-up's own CI run measures.
+- **Runner images.** Every job names its image (`ubuntu-26.04`) instead of `ubuntu-latest`,
+  which moves to 26.04 during 2026-10-19..11-19; the release archives build on `ubuntu-22.04`
+  (x86_64 and arm64), which fixes their glibc floor at 2.35.
 - **Debuginfo.** `line-tables-only` stays ([build-footprint R5](build-footprint.md)): `debug = 0`,
   as Bevy, Slint and Xilem use in CI, would drop file:line from CI backtraces for about 2 GB.
 - **Dependency opt-level.** Dependencies build at `opt-level = 3` (`[profile.dev.package."*"]`).

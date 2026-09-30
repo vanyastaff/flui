@@ -17,7 +17,7 @@
 # mutant.
 minimum-test-timeout = 60.0
 
-# The nested-cargo tests (the `nested-cargo` group in .config/nextest.toml)
+# The nested tests (the `trybuild` and `nested-cargo` groups in .config/nextest.toml)
 # run rustc or cargo themselves: trybuild's compile-fail fixtures, and the
 # projects flui-cli generates and the facade consumer builds. Inside the
 # instrumented tree they fail the baseline or cost a full compile per mutant,

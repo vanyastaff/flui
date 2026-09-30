@@ -21,7 +21,7 @@ jobs:
   rerun-ci:
     name: rerun-ci
     if: github.event.label.name == 'full-ci'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # The wait below allows 25 minutes for a cancelled run to finish.
     timeout-minutes: 30
     permissions:

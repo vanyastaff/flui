@@ -149,7 +149,7 @@ path = "tests/image_network.rs"
 harness = true
 
 # The `#[derive(Routable)]` trybuild suite: its own binary, because it runs a
-# nested cargo build (the `nested-cargo` test group in `.config/nextest.toml`).
+# nested cargo build (the `trybuild` test group in `.config/nextest.toml`).
 [[test]]
 name = "routable_ui"
 path = "tests/routable_ui.rs"

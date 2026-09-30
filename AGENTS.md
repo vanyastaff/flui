@@ -232,7 +232,7 @@ caps the count, so the review question is which existing table the new case join
   allocation counting) and for a feature the rest of the crate builds without.
 - **Do not fold what runs its own process.** Tests that spawn `cargo` or another program
   (trybuild suites, `cli_create::generated_*`, `flui::facade_consumer`) stay separate tests:
-  `.config/nextest.toml` names them one by one (group `nested-cargo`) so nextest runs them in
+  `.config/nextest.toml` names them one by one (groups `trybuild` and `nested-cargo`) so nextest runs them in
   parallel, and a folded one runs serially and holds the whole job. GPU readbacks share a
   single-threaded group and fold freely.
 - **Keep what the Definition of Done requires.** Every concrete `RenderBox`/`RenderSliver` has
