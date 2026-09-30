@@ -597,7 +597,7 @@ fn face_maps(
 }
 
 /// The faces a process font system holds, taken by
-/// [`SharedFontSystem::host_faces`] for a collection to be fed from.
+/// `SharedFontSystem::host_faces` for a collection to be fed from.
 #[cfg_attr(
     not(feature = "parley"),
     expect(
