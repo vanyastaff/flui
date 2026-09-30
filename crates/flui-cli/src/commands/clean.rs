@@ -15,7 +15,7 @@ const VALID_PLATFORMS: &[&str] = &["android", "ios", "web", "desktop"];
 ///
 /// # Arguments
 ///
-/// * `deep` - Also clean platform-specific directories
+/// * `deep` - Also clean what platform build tools write in `platforms/`
 /// * `platform` - Clean only a specific platform
 ///
 /// # Errors
@@ -39,25 +39,17 @@ pub(crate) fn execute(deep: bool, platform: Option<String>) -> CliResult<()> {
 
         let spinner = ui::spinner();
         spinner.start(format!("Cleaning {plat_lower} artifacts..."));
-        let removed = clean_platform(&plat_lower)?;
+        let removed = clean_platform(&std::env::current_dir()?, &plat_lower)?;
         spinner.stop(format!("{} {plat_lower} cleaned", style("✓").green()));
         report_removed(&removed)?;
     } else {
-        // Platforms first: the `--out` directories builds claimed are
+        // Build outputs first: the `--out` directories builds claimed are
         // recorded under `target/`, which `cargo clean` removes.
-        if deep {
-            let spinner = ui::spinner();
-            spinner.start("Cleaning platform directories...");
-            let mut removed = Vec::new();
-            for platform in VALID_PLATFORMS {
-                removed.extend(clean_platform(platform)?);
-            }
-            spinner.stop(format!(
-                "{} Platform directories cleaned",
-                style("✓").green()
-            ));
-            report_removed(&removed)?;
-        }
+        let spinner = ui::spinner();
+        spinner.start("Cleaning build outputs...");
+        let removed = clean_build_outputs(&std::env::current_dir()?, deep)?;
+        spinner.stop(format!("{} Build outputs cleaned", style("✓").green()));
+        report_removed(&removed)?;
 
         let spinner = ui::spinner();
         spinner.start("Cleaning cargo artifacts...");
@@ -88,15 +80,30 @@ fn report_removed(removed: &[PathBuf]) -> CliResult<()> {
     Ok(())
 }
 
+/// The build outputs of every platform: each one's output directories and,
+/// with `deep`, what its build tool writes in `platforms/`. Returns the
+/// paths removed.
+fn clean_build_outputs(root: &Path, deep: bool) -> CliResult<Vec<PathBuf>> {
+    let mut removed = Vec::new();
+    for platform in VALID_PLATFORMS {
+        if deep {
+            removed.extend(clean_platform(root, platform)?);
+        } else {
+            removed.extend(clean_output_dirs(root, platform)?);
+        }
+    }
+    Ok(removed)
+}
+
 /// Clean build artifacts for a specific platform, returning the paths that
 /// were actually removed: the build's output directories (the default one
 /// and each `--out` directory a build claimed, see [`clean_output_dirs`]),
 /// and what the platform's own build tool writes inside
 /// `platforms/<platform>/`.
-fn clean_platform(platform: &str) -> CliResult<Vec<PathBuf>> {
-    let mut removed = clean_output_dirs(&std::env::current_dir()?, platform)?;
+fn clean_platform(root: &Path, platform: &str) -> CliResult<Vec<PathBuf>> {
+    let mut removed = clean_output_dirs(root, platform)?;
 
-    let platform_dir = Path::new("platforms").join(platform);
+    let platform_dir = root.join("platforms").join(platform);
     let tool_outputs: &[&str] = match platform {
         "android" => &["app/build", "build", ".gradle", "app/src/main/jniLibs"],
         "ios" => &["build"],
@@ -119,5 +126,73 @@ fn remove_dir_if_exists(path: &Path) -> CliResult<bool> {
         Ok(true)
     } else {
         Ok(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::build::output::prepare_output_dir;
+    use crate::build::{BuilderContextBuilder, Platform, Profile};
+
+    /// A project with a web build claiming `dist-web/` and a desktop build
+    /// claiming `dist-desktop/` beside it, and Gradle output in
+    /// `platforms/android/app/build/`. Returns the temp dir, the project
+    /// root, the claimed directories and the Gradle output.
+    fn built_project() -> (tempfile::TempDir, PathBuf, Vec<PathBuf>, PathBuf) {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let root = tmp.path().join("app");
+        std::fs::create_dir_all(&root).expect("project dir");
+        let mut claimed = Vec::new();
+        for platform in [
+            Platform::Web {
+                target: "web".to_string(),
+            },
+            Platform::Desktop { target: None },
+        ] {
+            let out = tmp.path().join(format!("dist-{}", platform.name()));
+            let ctx = BuilderContextBuilder::new(root.clone())
+                .with_platform(platform)
+                .with_profile(Profile::Debug)
+                .with_output_dir(out.clone())
+                .build();
+            prepare_output_dir(&ctx).expect("claim --out");
+            claimed.push(out);
+        }
+        let gradle = root.join("platforms/android/app/build");
+        std::fs::create_dir_all(&gradle).expect("gradle output");
+        (tmp, root, claimed, gradle)
+    }
+
+    fn a_plain_clean_removes_claimed_out_dirs() {
+        let (_tmp, root, claimed, gradle) = built_project();
+        clean_build_outputs(&root, false).expect("clean");
+        for out in &claimed {
+            assert!(!out.exists(), "{} survived a plain clean", out.display());
+        }
+        assert!(gradle.is_dir(), "a plain clean removed Gradle's output");
+    }
+
+    fn a_deep_clean_also_removes_build_tool_output() {
+        let (_tmp, root, claimed, gradle) = built_project();
+        clean_build_outputs(&root, true).expect("clean");
+        for out in &claimed {
+            assert!(!out.exists(), "{} survived a deep clean", out.display());
+        }
+        assert!(!gradle.exists(), "a deep clean left Gradle's output");
+    }
+
+    #[test]
+    fn clean_without_a_platform_removes_every_platforms_outputs() {
+        crate::test_cases::run_cases(&[
+            (
+                "a_plain_clean_removes_claimed_out_dirs",
+                a_plain_clean_removes_claimed_out_dirs,
+            ),
+            (
+                "a_deep_clean_also_removes_build_tool_output",
+                a_deep_clean_also_removes_build_tool_output,
+            ),
+        ]);
     }
 }

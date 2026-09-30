@@ -17,5 +17,6 @@
   `target/flui-out/<platform>/`, and each `--out` directory a build created (or found empty): the
   build leaves a `.flui-out` marker there, and a directory that held anything before the first
   build into it is never removed. For web it removed `platforms/web/pkg/`, which no build writes.
-  `flui clean --deep` cleans platforms before `cargo clean`, which removes the record of those
-  directories.
+  `flui clean` without `--platform` removes every platform's `--out` directories too, before
+  `cargo clean` removes the record of them; `--deep` still adds what the platform build tools write
+  in `platforms/`.
