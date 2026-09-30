@@ -14,7 +14,7 @@ use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner};
 use crate::common::BoxedRenderObject;
 
 pub(crate) fn paint_root_carries_the_dpr_scale_and_ops_stay_logical() {
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     owner.set_device_pixel_ratio(2.0);
 
     let root = owner.insert(Box::new(RenderColoredBox::red(40.0, 40.0)) as BoxedRenderObject);

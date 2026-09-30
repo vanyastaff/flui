@@ -81,7 +81,9 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
-    let pipeline = PipelineCell::new(PipelineOwner::new());
+    let pipeline = PipelineCell::new(PipelineOwner::new(
+        flui_rendering::TextContextHandle::standalone(),
+    ));
     let mut owner = BuildOwner::new();
     let mut tree = ElementTree::new();
     let host = tree.mount_root_with_pipeline_owner(

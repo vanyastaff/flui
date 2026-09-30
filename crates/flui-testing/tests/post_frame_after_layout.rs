@@ -63,7 +63,7 @@ fn binding_with_one_box() -> (HeadlessBinding, PipelineCell, flui_foundation::Re
 fn binding_with_probe(
     root_box: FixedBox,
 ) -> (HeadlessBinding, PipelineCell, flui_foundation::RenderId) {
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let root = owner.insert::<BoxProtocol>(Box::new(root_box));
     owner.set_root_id(Some(root));
     owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));

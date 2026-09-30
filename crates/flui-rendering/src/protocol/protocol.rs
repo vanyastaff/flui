@@ -190,7 +190,7 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
     /// context of its own.
     fn with_leaf_erased_ctx<R>(
         constraints: <Self::Layout as LayoutCapability>::Constraints,
-        text: Option<crate::pipeline::TextSource<'_>>,
+        text: crate::pipeline::TextSource<'_>,
         f: impl FnOnce(&mut Self::LayoutCtxErased<'_>) -> R,
     ) -> R
     where

@@ -164,7 +164,9 @@ fn direct_children(
 }
 
 fn setup(unrelated_count: usize) -> Fixture {
-    let pipeline = PipelineCell::new(PipelineOwner::new());
+    let pipeline = PipelineCell::new(PipelineOwner::new(
+        flui_rendering::TextContextHandle::standalone(),
+    ));
     let mut owner = BuildOwner::new();
     let mut tree = ElementTree::new();
     let global = GlobalKey::<()>::new();

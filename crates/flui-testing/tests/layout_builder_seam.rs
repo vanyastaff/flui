@@ -29,7 +29,9 @@ pub(crate) fn headless_pump_frame_runs_the_layout_builder_seam() {
     let mut binding = HeadlessBinding::with_tree(
         build_owner,
         ElementTree::new(),
-        PipelineCell::new(PipelineOwner::new()),
+        PipelineCell::new(PipelineOwner::new(
+            flui_rendering::TextContextHandle::standalone(),
+        )),
     );
 
     binding.pump_frame(Duration::from_millis(16));

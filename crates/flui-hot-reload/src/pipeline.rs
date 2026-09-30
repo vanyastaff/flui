@@ -7,12 +7,24 @@
 //! This is intentionally independent of the host's realm — the plugin owns its
 //! own `WidgetsBinding` and `PipelineOwner`, so it never shares mutable UI
 //! state with the host's `UiRealm`.
+//!
+//! Text is no exception. The pipeline measures through the
+//! [`TextContextHandle`] it is mounted with, and `app_plugin!` passes a
+//! [`TextContextHandle::standalone`] one: a context over the plugin image's
+//! own font collection, holding the bundled faces. The host realm's context
+//! cannot cross the `dlopen` boundary: shaping into it from the plugin would
+//! grow and free host-allocated buffers with the plugin image's allocator,
+//! and the scene ABI frees memory only inside the image that allocated it.
+//! Faces the host app registers are not visible to the plugin (ARCHITECTURE.md,
+//! "The plugin image is a realm of its own for text").
 
 #[cfg(test)]
 use std::sync::Arc;
 
+use flui_foundation::geometry::Size;
 use flui_layer::Scene;
-use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
+use flui_rendering::constraints::BoxConstraints;
+use flui_rendering::pipeline::{PipelineCell, PipelineOwner, TextContextHandle};
 use flui_view::{__runtime::BindingRuntime as _, StatelessView, View, WidgetsBinding};
 
 /// Log messages via Android logcat (or stderr on other platforms).
@@ -68,12 +80,13 @@ impl PluginPipeline {
     ///
     /// This mirrors the `mount_root()` logic in `flui-app`'s runner,
     /// but uses a standalone `WidgetsBinding` instead of the host realm's
-    /// widget machinery.
-    pub fn mount<V>(root: V, width: f64, height: f64) -> Self
+    /// widget machinery. Every measurement the pipeline makes goes through
+    /// `text`.
+    pub fn mount<V>(root: V, width: f64, height: f64, text: TextContextHandle) -> Self
     where
         V: View + StatelessView + Clone + Send + Sync + 'static,
     {
-        let pipeline = Self::mount_with_boundary(&root, width, height, |_| {});
+        let pipeline = Self::mount_with_boundary(&root, width, height, text, |_| {});
         // Preserve the established by-value API contract: mounting consumes
         // the root configuration after cloning it into the element tree.
         drop(root);
@@ -84,13 +97,20 @@ impl PluginPipeline {
         root: &V,
         width: f64,
         height: f64,
+        text: TextContextHandle,
         mount_boundary: impl FnOnce(&WidgetsBinding),
     ) -> Self
     where
         V: View + StatelessView + Clone + Send + Sync + 'static,
     {
         let widgets = WidgetsBinding::new();
-        let pipeline_owner = PipelineCell::new(PipelineOwner::new());
+        let pipeline_owner = PipelineCell::new(PipelineOwner::new(text));
+        // The root lays out at the plugin's surface size, as the host realm's
+        // root does at its window's. Without root constraints the pipeline
+        // lays nothing out and paints an unmeasured tree.
+        pipeline_owner.with_mut(|owner| {
+            owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(width, height))));
+        });
 
         // Connect WidgetsBinding to PipelineOwner
         widgets.set_pipeline_owner(pipeline_owner.clone());
@@ -166,7 +186,7 @@ impl PluginPipeline {
                 } else {
                     log("draw_frame: WARNING — no root_id in pipeline");
                 }
-                let owner = std::mem::take(guard);
+                let owner = guard.take_idle();
                 let (owner, result) = owner.run_frame();
                 *guard = owner;
                 match result {
@@ -230,8 +250,12 @@ mod tests {
         let mount_observed_in_probe = Arc::clone(&mount_observed);
         let mount_probe_key = GlobalKey::<()>::new();
         let key_at_mount = mount_probe_key.clone();
-        let mut pipeline =
-            PluginPipeline::mount_with_boundary(&root, 320.0, 240.0, move |widgets| {
+        let mut pipeline = PluginPipeline::mount_with_boundary(
+            &root,
+            320.0,
+            240.0,
+            TextContextHandle::standalone(),
+            move |widgets| {
                 // The user root is built on the first draw, so mount uses a
                 // dedicated registry entry installed only after attach released
                 // its binding lock. This observes the real mount activation
@@ -241,7 +265,8 @@ mod tests {
                 });
                 mount_observed_in_probe
                     .store(key_at_mount.current_element().is_some(), Ordering::Relaxed);
-            });
+            },
+        );
         assert!(
             mount_observed.load(Ordering::Relaxed),
             "real mount path must keep plugin registry active after attach lock release"

@@ -3322,7 +3322,9 @@ mod tests {
     fn queued_work_follows_a_live_global_key_reparent_across_build_scopes() {
         let mut owner = BuildOwner::new();
         let mut tree = ElementTree::new();
-        let pipeline = PipelineCell::new(PipelineOwner::new());
+        let pipeline = PipelineCell::new(PipelineOwner::new(
+            flui_rendering::TextContextHandle::standalone(),
+        ));
         let root = tree.mount_root_with_pipeline_owner(
             &TestView,
             Some(pipeline),

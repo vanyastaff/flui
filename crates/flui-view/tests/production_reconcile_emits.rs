@@ -188,7 +188,9 @@ fn direct_children_in_slot_order(tree: &ElementTree, parent: ElementId) -> Vec<E
 
 #[serial]
 pub(crate) fn active_global_key_move_through_build_scope_updates_render_parent_links() {
-    let pipeline_owner = PipelineCell::new(PipelineOwner::new());
+    let pipeline_owner = PipelineCell::new(PipelineOwner::new(
+        flui_rendering::TextContextHandle::standalone(),
+    ));
     let mut owner = BuildOwner::new();
     let mut tree = ElementTree::new();
 
@@ -443,7 +445,9 @@ fn assert_destination_emits_only_final_mounts(
 pub(crate) fn failed_dense_mount_production_reconcile_emits_only_final_slots() {
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    let pipeline = PipelineCell::new(PipelineOwner::new());
+    let pipeline = PipelineCell::new(PipelineOwner::new(
+        flui_rendering::TextContextHandle::standalone(),
+    ));
     let root = MultiBox::host(
         0,
         dense_stream_children(DensePanicsOnCreate::ordinary().boxed()),

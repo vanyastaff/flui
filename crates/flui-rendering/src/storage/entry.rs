@@ -363,7 +363,7 @@ impl<P: Protocol> RenderEntry<P> {
     pub fn layout_leaf_only(
         &mut self,
         constraints: ProtocolConstraints<P>,
-        text: Option<crate::pipeline::TextSource<'_>>,
+        text: crate::pipeline::TextSource<'_>,
     ) -> crate::error::RenderResult<ProtocolGeometry<P>>
     where
         ProtocolGeometry<P>: Clone,

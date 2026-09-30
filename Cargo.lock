@@ -2056,6 +2056,7 @@ dependencies = [
  "android_log-sys",
  "flui-foundation",
  "flui-layer",
+ "flui-painting",
  "flui-rendering",
  "flui-sdk",
  "flui-view",

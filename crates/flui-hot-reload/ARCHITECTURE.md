@@ -75,3 +75,28 @@ The host applies a `Patched` poll once to every realm, not to whichever realm
 polled first; before the hook, a worker's rebuild request reached only the most
 recently opened window. Pinned by `hook/tests.rs` here and by
 `app/hot_reload/tests.rs` in `flui-app`.
+
+### The plugin image is a realm of its own for text
+
+`PluginPipeline::mount` takes the `TextContextHandle` its pipeline measures
+through (ADR-0092 §10 step 3b), and `app_plugin!` passes
+`TextContextHandle::standalone()`: a context over the plugin image's own font
+collection, holding the bundled faces. It does not take the host realm's
+context. The plugin is a `dlopen`ed image the host reaches only through
+`flui_app_build(width, height)`, and a `TextContextHandle` is an
+`Rc<RefCell<TextContext>>`: shaping into the host's context from the plugin
+would grow and free host-allocated Parley buffers with the plugin image's
+allocator, and the scene contract above frees memory only inside the image that
+allocated it. `abi_token` covers only the `Scene` and `LayerTree` layouts, so
+nothing would check that the two images agree on `TextContext` either.
+
+The cost: a face the host app registers does not reach the plugin's text, as it
+never reached the plugin image's own copy of the process font system either.
+Carrying the font bytes across the FFI into the plugin's collection is a
+follow-up, unless ADR-0094's replacement of the `dlopen` path removes the
+boundary first.
+
+`mount` also sets the root constraints to the surface size it is given, as the
+host realm does at its window's; the pipeline laid nothing out without them.
+Pinned by `a_plugin_pipeline_measures_through_the_context_it_is_given`
+(`tests/plugin_pipeline_text.rs`, under `app-plugin`).

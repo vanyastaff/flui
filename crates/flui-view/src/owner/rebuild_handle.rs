@@ -288,7 +288,9 @@ mod tests {
         let render_root = RootRenderView::new(view, 800.0, 600.0);
         let render_root_element = tree.mount_root_with_pipeline_owner(
             &render_root,
-            Some(PipelineCell::new(PipelineOwner::new())),
+            Some(PipelineCell::new(PipelineOwner::new(
+                flui_rendering::TextContextHandle::standalone(),
+            ))),
             &mut owner.element_owner_mut(),
         );
 

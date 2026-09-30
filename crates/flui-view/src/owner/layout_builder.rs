@@ -432,7 +432,7 @@ impl BuildOwner {
                     // publishes (a header's shrink change) is serviced one
                     // frame late, breaking the seam's same-frame promise.
                     pipeline_owner.drain_pending_dirty();
-                    let mut layout = std::mem::take(pipeline_owner).into_layout();
+                    let mut layout = pipeline_owner.take_idle().into_layout();
                     let result = layout.run_layout();
                     // Restore on the error path too: the owner always comes back.
                     *pipeline_owner = layout.into_idle();
@@ -490,7 +490,7 @@ impl BuildOwner {
         }
 
         pipeline.with_mut(|pipeline_owner| {
-            let (owner, result) = std::mem::take(pipeline_owner).run_frame();
+            let (owner, result) = pipeline_owner.take_idle().run_frame();
             *pipeline_owner = owner;
             result
         })
@@ -626,7 +626,9 @@ mod tests {
 
     /// The shared pipeline handle, exactly as the bindings hold it.
     fn shared_pipeline() -> PipelineCell {
-        PipelineCell::new(PipelineOwner::new())
+        PipelineCell::new(PipelineOwner::new(
+            flui_rendering::TextContextHandle::standalone(),
+        ))
     }
 
     fn constraints(side: f64) -> BoxConstraints {
