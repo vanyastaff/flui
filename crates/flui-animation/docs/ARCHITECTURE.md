@@ -450,9 +450,9 @@ direction settled (`Completed` at `max`, `Dismissed` at `min`) — matching
 the Web Animations spec's fill behavior ("holding the endpoint of the final iteration rather
 than the start of the next"), Android's `ValueAnimator`, and Compose's
 `VectorizedRepeatableSpec`, all of which land on the actual endpoint.
-The tests `repeat_restart_finite_count_exhausts_from_the_phase_origin`
+The tests `repeat_tick_at_infinity_exhausts_a_finite_count_instead_of_rewinding`
 and `repeat_bounce_finite_count_and_absolute_time_rewind`'s
-exhaustion assertion (`crates/flui-animation/src/controller.rs`) pin
+exhaustion assertion (`crates/flui-animation/src/controller_tests.rs`) pin
 the landing/status.
 (The `repeat_*` and `without_ticker_bounds_*` names in this document are rows of the table tests
 `repeat_contract` and `controller_contract` in

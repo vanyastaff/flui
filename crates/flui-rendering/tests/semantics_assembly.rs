@@ -3,12 +3,12 @@
 //! Exercises `PipelineOwner<Semantics>::run_semantics` through the real
 //! pipeline (`RenderTester::run_to_semantics`) against small test-only
 //! render objects that override `describe_semantics_configuration` /
-//! `excludes_semantics_subtree` directly. The
-//! `merge_semantics_collapses_a_nested_boundary_descendant` test specifically
-//! targets the boundary-vs-merge distinction: a naive
-//! `is_semantics_boundary() || has_been_annotated()` predicate, or a boundary
-//! decision that ignores `is_merging_semantics_of_descendants`, would
-//! leave the nested boundary child as its own node).
+//! `excludes_semantics_subtree` directly. The boundary-vs-merge distinction —
+//! a naive `is_semantics_boundary() || has_been_annotated()` predicate, or a
+//! boundary decision that ignores `is_merging_semantics_of_descendants`,
+//! would leave a nested boundary child as its own node — is pinned by
+//! `harness_merge_semantics_collapses_descendant_boundaries` in
+//! `flui-objects/tests/render_object_harness.rs`.
 
 use std::sync::Arc;
 

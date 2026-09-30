@@ -100,12 +100,7 @@
 //!    callers, and a drag-anchor strategy (which decides the start point) has
 //!    to land with it or the "fix" would be a different wrong value. What
 //!    ships is **displacement since the drag started**, not a
-//!    globally-anchored value — pinned by
-//!    `draggable_test.rs`'s `reported_offset_is_displacement_not_global_position`,
-//!    which lays the `Draggable` under a nonzero `Padding` specifically so a
-//!    future accidental "fix" that seeds the offset with *some* base instead
-//!    of `Offset::ZERO` is still caught red-handed for shipping the *wrong*
-//!    base rather than silently looking correct at the origin.
+//!    globally-anchored value; no test pins it.
 //!
 //!    Separately, anchoring at the pointer (`Offset::ZERO`) is not selectable
 //!    at all — that is the actual, named deferral for *strategy choice*,
@@ -575,9 +570,7 @@ impl FeedbackSignal {
 /// inside its own `Stack`. `RenderTheater` (the `Overlay`'s render object)
 /// does not run `RenderStack`'s positioned split on its direct children — a
 /// bare `Positioned` as an entry's root is silently dropped to the origin
-/// (pinned by
-/// `overlay::tests::positioned_inside_an_overlay_entry_is_laid_out_by_an_inner_stack`,
-/// ADR-0021) — so the inner `Stack` is load-bearing, not decorative.
+/// (ADR-0021) — so the inner `Stack` is load-bearing, not decorative.
 ///
 /// A real, `Rc`-backed `StatefulView` (not a bare closure) specifically so its
 /// `init_state` can acquire a `RebuildHandle` the ADR-0018 way and publish it

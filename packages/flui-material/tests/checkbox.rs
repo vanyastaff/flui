@@ -10,20 +10,15 @@
 //! since `Checkbox` shares its `WidgetStatesController` with the `InkWell`
 //! it builds).
 //!
-//! **Not covered here** (see `checkbox.rs`'s own unit tests instead, since
-//! neither needs a render tree): the M3 default token-table branch
-//! order/combined-state pins (exhaustively unit-tested against
-//! `ColorScheme` directly), and the widget -> theme -> default tier
-//! precedence + `active_color`'s `!Disabled && Selected` gate — both
+//! **Not covered here** (see `checkbox.rs`'s own unit test instead, since
+//! it needs no render tree): `active_color`'s `!Disabled && Selected` gate,
 //! exercised directly against `resolve_checkbox_fill_color` (extracted out
 //! of `build` specifically so this cascade is unit-testable without
-//! mounting a widget tree; see `theme_tier_beats_the_m3_default_when_no_widget_override_is_set`/
-//! `widget_override_is_ignored_when_disabled_even_if_selected`), plus `CheckboxPainter`'s
-//! own paint-invocation proof (`draws_the_correct_mark_per_tristate_value`,
-//! a real `Canvas`/`DisplayList` recording). The illegal
+//! mounting a widget tree; see
+//! `widget_override_is_ignored_when_disabled_even_if_selected`). The illegal
 //! `(None, tristate: false)` pair is unrepresentable at the type level
-//! (`CheckboxMode`); the a11y cases below prove indeterminate still exports
-//! `Toggled::Mixed` while binary never does.
+//! (`CheckboxMode`); the a11y case below proves indeterminate still exports
+//! `Toggled::Mixed`.
 
 use crate::common;
 
@@ -101,7 +96,7 @@ fn announced_toggled(checkbox: Checkbox, label: &str) -> Option<Toggled> {
 }
 
 pub fn indeterminate_tristate_exports_mixed_semantics() {
-    // Issue #1102 AC: valid tristate `None` paints the dash (unit-covered)
+    // Issue #1102 AC: valid tristate `None` paints the dash
     // AND exports mixed — never the old release hole of dash + unchecked.
     assert_eq!(
         announced_toggled(Checkbox::tristate(None), "indeterminate"),

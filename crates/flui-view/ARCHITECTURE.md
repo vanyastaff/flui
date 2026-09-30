@@ -95,17 +95,15 @@ The re-entries are visible in `BuildOwner::last_frame_build_report`:
 `elements_built` counts distinct elements (the size of `built_this_frame`),
 so a re-entered element counts once there, while `builds_run` counts every
 completed build, so it counts once per build. The two differ exactly by the
-frame's re-entries (pinned by
-`a_re_entered_element_counts_once_in_elements_built_and_twice_in_builds_run`),
-which is why the perf baseline records both.
+frame's re-entries, which is why the perf baseline records both.
+**Unasserted:** no test pins this.
 
 **Decision 3 (`on_build_scheduled` fires mid-drain):**
 `ExternalBuildScheduler::schedule` fires `on_build_scheduled` on every
-newly-queued id regardless of whether a drain is already running (pinned by
-`mid_drain_schedule_still_requests_a_frame_like_an_out_of_frame_schedule`).
-Latching the frame request while a drain runs is the alternative not built: the redundant
-frame request this can cause is discarded downstream by the ordinary
-dirty-state gate a wake-with-nothing-new-to-do already hits, so adding the
+newly-queued id regardless of whether a drain is already running.
+**Unasserted:** no test pins this. Latching the frame request while a drain runs is the
+alternative not built: the redundant frame request this can cause is discarded downstream
+by the ordinary dirty-state gate a wake-with-nothing-new-to-do already hits, so adding the
 latch(es) would trade a real per-callsite invariant (every fresh inbox
 entry asks for a frame) for a saving with no measured cost — take it up
 only if a wake-count oracle ever shows the cost is real.
@@ -147,7 +145,7 @@ mapped every consumer family of such a seam, including the hard cases
 **Replacement guarantee:** the loud half-state gate on the LIVE adoption
 path — `RenderBehavior::on_mount`'s diagnostic when an element-tree parent
 with an active `PipelineOwner` leaves the chain with no render ancestor,
-plus its `orphaned_render_mount` test family
+plus its debug-build refusal test
 (`crates/flui-view/tests/orphaned_render_mount.rs`).
 That gate and its tests arrived with the #1198 fix and are untouched here;
 the else-arm diagnostics the same fix added to the six (now deleted) seam
@@ -352,23 +350,22 @@ others, so keys held by other presentations of the realm resolve normally. The b
 `!Send` (pinned by a static assertion), so a held lock can only mean re-entry on the owner
 thread. Before this rule such a read blocked on its own thread forever. The skip is logged at
 `debug`, not `warn`: the running presentation is busy for every read in its frame, so a key
-mounted nowhere reports the same skip, and a warning there would fire every frame
-(`unmounted_global_key_read_during_a_frame_does_not_warn`).
+mounted nowhere reports the same skip, and a warning there would fire every frame.
+**Unasserted:** no test pins this.
 
 Closing a presentation uses the same composite as every other realm entry, the closing
 presentation included. Its keys resolve until its tree teardown takes the binding lock (a
 lifecycle observer told the presentation is detaching sees them), and resolve to nothing during
-the teardown, where `dispose` runs (`closing_presentations_own_key_resolves_while_it_detaches`
-in the realm tests; `dispose_opening_a_window_mid_teardown_defers_and_does_not_reenter` in
-`flui-app`'s dispatch tests).
+the teardown, where `dispose` runs. **Unasserted:** no test pins this.
 
 **Limitation.** A read returns nothing for keys of the presentation whose frame is
 running. The exit is to serve those reads from the frame's own tree once the realm owns the
 binding by value (ADR-0083). Pinned by
-`global_key_lookup_from_build_during_draw_frame_returns_instead_of_deadlocking`,
-`global_key_in_a_sibling_binding_resolves_during_this_bindings_frame` and
-`global_key_lookup_from_dispose_during_detach_returns_instead_of_deadlocking` (`binding.rs`), and
-through the realm by `ui_realm/tests/global_key_lookup_during_frame.rs` in `flui-runtime`.
+`global_key_lookup_from_build_during_draw_frame_returns_instead_of_deadlocking` (`binding.rs`),
+and through the realm by `state_read_across_presentations_during_a_segment_resolves`
+(`ui_realm/tests/global_key_lookup_during_frame.rs` in `flui-runtime`), which reads a key held
+by another presentation while the reader's own frame lock is held. For a read from `dispose`
+during detach: **Unasserted:** no test pins this.
 
 ### The development-reload hook lives here, not in the runtime
 

@@ -26,10 +26,12 @@ at delivery, after configuration updates, and checks that the state is still
 mounted. Each accepted platform action remains a distinct FIFO command across
 tap and long-press kinds; only the rebuild used to wake the UI thread may
 coalesce. Removing a handler or disposing the widget cancels delivery; queued
-requests never retain an obsolete user closure. This is pinned by
-`queued_semantics_delivery_rechecks_the_callback_and_mount_lifetime` and the
-assistive-tap replacement, removal, multiplicity and cross-action ordering
-integration tests.
+requests never retain an obsolete user closure. The delivery-time recheck and
+cancellation are pinned by
+`queued_semantics_delivery_rechecks_the_callback_and_mount_lifetime`, and FIFO
+order across a tap and a long press by
+`a_panicking_assistive_action_does_not_discard_the_fifo_tail`. That two queued
+actions of the same kind stay distinct is **Unasserted:** no test pins this.
 Post-frame entries hold only a weak reference to the detector-owned delivery
 target. Teardown therefore releases the live callbacks and presentation-bound
 writer even when an aborted or absent frame leaves the queue entry pending;
@@ -44,12 +46,7 @@ controller listener is still `Send + Sync`, so it only records each page change
 and schedules a rebuild; `build` queues one post-frame entry per recorded page,
 and delivery reads the current callback (mapping decision 37).
 
-Tests: `animated_size_completion_writes_a_signal_after_build`,
-`dismissible_layout_notifications_write_signals_and_dismiss_once`,
-`interactive_viewer_wheel_callbacks_write_in_order_in_the_dispatching_presentation`,
-`refresh_callback_writes_a_signal_in_the_dispatching_presentation`,
-`pop_scope_callback_writes_through_its_presentations_context`,
-`tests/draggable_events.rs`, `tests/page_view_events.rs`, and the
+Tests: `tests/draggable_events.rs`, `tests/page_view_events.rs`, and the
 `event_cx_tests` module of `tests/shortcuts.rs`.
 
 `DragTarget`'s `on_accept`/`on_leave`/`on_move` and `Semantics`' action
@@ -160,15 +157,13 @@ structural:
 - The slot outlives its element by `Rc`. A target that leaves the tree
   mid-drag is `retire`d in `dispose`, and every later transition is a no-op —
   a "not mounted" early return in a form that cannot be forgotten at one
-  call site. `did_drop` on a retired
-  slot returns `false`, so the drag reports the drop as *not* accepted. Covered by
-  `a_target_removed_mid_drag_receives_nothing_further_and_accepts_nothing`.
+  call site. `did_drop` on a retired slot returns `false`, so the drag reports
+  the drop as *not* accepted. **Unasserted:** no test pins this.
 - `DragTarget` tags itself `HitTestBehavior::Translucent`.
   Making it configurable stays a named deferral.
 
-**Tests:** none now. The `DragTargetSlot` protocol tests and the live-discovery
-tests that pinned the enter/move/leave/drop ordering for nested and
-overlapping targets were removed with the parity suite.
+**Replacement tests:** the `DragTargetSlot` protocol, and the enter/move/leave/drop
+ordering for nested and overlapping targets. **Unasserted:** no test pins this.
 
 ### 2. `DragTargetDetails` carries a target-local position as well as a global one
 
@@ -181,9 +176,8 @@ where the drag is in its own space. Taking the value from
 `HitTestEntry::transform` composes the entire ancestor chain, so it is exact
 under scale and rotation, where subtracting a remembered origin is not.
 
-**Test:**
-`a_transformed_target_is_told_the_drag_position_in_its_own_space`, whose
-expected value is reachable only by composing the real transform.
+**Replacement test:** a transformed target told the drag position in its own
+space. **Unasserted:** no test pins this.
 
 ### 3. `Draggable` recovers its global position through a private origin probe
 
@@ -252,9 +246,9 @@ recognizers' internal position plumbing — a change of its own size.
   at the `Listener`, one layer above where this widget reads its position. Not
   worked around.
 
-**Tests:** none now. The live-discovery tests that drove real pointer input
-across a tree where the draggable and the targets sit at different offsets
-were removed with the parity suite.
+**Replacement tests:** real pointer input across a tree where the draggable and
+the targets are at different offsets, so a local-position implementation enters
+targets the pointer was never over. **Unasserted:** no test pins this.
 
 ### 4. Named routes split into six untyped entry points and two typed ones, and a request that cannot be served is a typed error
 
@@ -287,8 +281,7 @@ navigate from one, a factory that captures a handle can still do it — so a
 factory that navigates and *then* declines has already changed the stack and
 notified observers by the time the name comes back unresolved: `push_named`
 returns `Err(Unresolved)` with the stack one deeper and `["push", "changeTop"]`
-observed, pinned by
-`an_unresolvable_name_after_a_navigating_factory_adds_nothing_of_its_own`. Those are the factory's own
+observed. **Unasserted:** no test pins this. Those are the factory's own
 mutations, deliberate on its part, and they are not rolled back for the same
 reason §5 does not undo a factory's nested push: it is not this operation's to
 undo. What the guarantee covers is that **the failing operation adds nothing of
@@ -320,22 +313,15 @@ route's `Output`. Only `push_named_typed`'s `T` is checked early. So
 `push_replacement_named_with(name, Wrong)` still completes the replaced route
 with `None` and a log line, exactly as `push_replacement_with` does.
 
-**Tests:** in `tests/navigator_public.rs` —
-`a_route_whose_output_the_caller_never_names_is_still_navigable_by_name`
-(a registered `PageRoute<i32>` reached through `push_named` with no `T` in
-sight: the regression the split prevents) and its sibling
-`the_other_five_untyped_operations_also_navigate_an_unnamed_output_route`;
+**Replacement tests:** in `tests/navigator_public.rs` —
 `push_named_typed_with_the_wrong_result_type_errors_disposes_the_route_and_changes_nothing`
-for the guarantee the typed entry point keeps; and
-`an_unresolvable_name_errors_without_touching_the_stack_or_the_observers`. The
-error cases assert the error's own fields *and* that the stack and the observer
-stream are unchanged.
-
-The two families have opposite polarity under one mutation, which is what makes
-them a pair rather than a duplication: deleting the `TypeId` comparison in
-`GeneratedRoute::checked` fails the typed test and leaves both untyped tests
-green, while routing `push_named` through `checked::<()>` fails the untyped ones
-and leaves the typed one green.
+for the guarantee the typed entry point keeps, asserting the error's own fields
+*and* that the stack and the observer stream are unchanged; deleting the
+`TypeId` comparison in `GeneratedRoute::checked` fails it. The untyped half — a
+registered `PageRoute<i32>` reached through `push_named` and the other five
+untyped operations with no `T` in sight, the regression the split prevents, and
+an unresolvable name leaving the stack and the observer stream untouched:
+**Unasserted:** no test pins this.
 
 ### 5. Named operations capture their target, then resolve, then act on the captured route
 
@@ -468,8 +454,8 @@ effects (`notify_pop_invoked`, `drain_local_history`) — *before* step 1 delive
 to observers. So a navigation issued from a `PopScope` callback **is** observed
 before the operation that triggered it. That is a different path from a value's
 `Drop`, it is not closed by the drain ordering above, and the guarantee here is
-deliberately worded to the drop case rather than generalised. The pinning test
-is named for the drop case too; the prose is what had to be narrowed to match it. `apply` deliberately runs
+deliberately worded to the drop case rather than generalised.
+**Unasserted:** no test pins this. `apply` deliberately runs
 re-entrant user code — deferred `PopScope` effects, observer delivery,
 `Route::dispose` — and a value's `Drop` running after all of it is a consequence
 landing where consequences belong.
@@ -494,28 +480,21 @@ flush time, because nothing can run between their call and the flush. The named
 ones capture it *before* resolving, because a factory can. That difference is
 the whole of this entry.
 
-**Tests** (`tests/navigator_public.rs`), each with the mutation it
-detects:
+**Replacement tests:** each behavior below is one a test would have to catch;
+the success path cannot see the resolve-before-pop ordering, because both
+orderings pop and then push.
 
-- `pop_and_push_named_with_an_unresolvable_name_pops_nothing` and
-  `…_delivers_its_result_to_nobody` — move `self.pop()` back above
-  `resolve_named` and only these two fail; the success path cannot see the
-  ordering, because both orderings pop and then push.
-- The three re-entrant-factory cases — drop the capture and act on the current
-  top, and they fail with `left: [1,2,4] right: [1,4]` and the misdelivered
-  result value.
-- `pop_and_push_named_observes_a_pop_where_push_replacement_named_does_not` pins
-  that this is a pop-and-push rather than a replacement wearing its name. Stack
-  shape and result delivery cannot tell those apart — a `PushMode::Replace` body
-  keeps every other named-route test green, the parity leg included — so the
-  discriminator is the observer stream: a pop-and-push emits `didPop` + `didPush`,
-  a replacement emits `didReplace` and neither.
-- `a_re_entrant_replacement_reports_the_route_it_actually_replaced` pins point 3
-  on the `didReplace` **payload**; deriving the reported id positionally again
-  makes it name the factory's route. Its sibling
-  `a_re_entrant_replacements_observer_stream_is_pinned` records the stream, and
-  is deliberately *not* the pin for point 3 — the stream does not change when
-  the identity is wrong.
+- An unresolvable name passed to `pop_and_push_named[_with]` pops nothing and
+  delivers its result to nobody. **Unasserted:** no test pins this.
+- A re-entrant factory: the operation acts on the captured target, not on the
+  current top. **Unasserted:** no test pins this.
+- A pop-and-push is not a replacement wearing its name. Stack shape and result
+  delivery cannot tell those apart, so the discriminator is the observer stream:
+  a pop-and-push emits `didPop` + `didPush`, a replacement emits `didReplace` and
+  neither. **Unasserted:** no test pins this.
+- Point 3 on the `didReplace` **payload**: deriving the reported id positionally
+  makes it name the factory's route, and the observer stream alone does not
+  change when the identity is wrong. **Unasserted:** no test pins this.
 
 ### 6. Named-route registration lives on the handle, and the app builder will replace the table wholesale
 
@@ -540,13 +519,10 @@ after mount.
 **Registrations are not mount-scoped, and that asymmetry with observers is
 deliberate.** `NavigatorState::dispose` detaches observers, because an observer
 holds a handle exactly while the navigator is mounted. It does **not** clear the
-registry: an app that registers once against a handle it retains — the flow
-`widgets_app.rs`'s
-`unmount_and_remount_over_a_retained_handle_does_not_duplicate_observers`
-exercises — would otherwise get `Unresolved` from every `push_named` after its
-first unmount. Clearing on dispose was tried in this slice and reverted for
-exactly that reason; `route_registrations_survive_an_unmount_and_remount_over_a_retained_handle`
-is the pin.
+registry: an app that registers once against a handle it retains would
+otherwise get `Unresolved` from every `push_named` after its first unmount.
+Clearing on dispose was tried and reverted for exactly that reason.
+**Unasserted:** no test pins this.
 
 **Consequence, named rather than left to be discovered:** a factory that clones
 its own `NavigatorHandle` in still closes an `Arc` cycle through the registry,
@@ -556,16 +532,14 @@ natural code does, and `NavigatorHandle::clear_routes` is the explicit escape fo
 a caller who captured anyway. Caller-controlled by necessity: only the caller
 knows whether it intends to register again.
 
-**Tests:**
-`route_registrations_survive_an_unmount_and_remount_over_a_retained_handle` and
-`clear_routes_drops_every_registration_including_the_generator_hooks`
-(`tests/navigator.rs`) for the lifecycle contract above — restoring the dispose
-clear fails the first;
-`a_table_entry_wins_and_the_generate_hook_is_never_consulted`,
-`on_unknown_route_runs_only_after_the_generator_declined_and_sees_the_callers_payload`,
-`two_handles_resolve_the_same_name_through_their_own_registries`, and
+**Replacement tests:**
 `a_factory_that_pushes_re_entrantly_does_not_deadlock` in
-`tests/navigator_public.rs`.
+`tests/navigator_public.rs`. The lifecycle contract above (registrations
+surviving an unmount and remount, `clear_routes` dropping every registration
+including the generator hooks), the resolution order (a table entry wins and the
+generator is never consulted; `on_unknown_route` runs only after the generator
+declined, and sees the caller's payload) and per-handle registries:
+**Unasserted:** no test pins this.
 
 ### 7. A generated route that is never pushed still runs `dispose`
 
@@ -617,18 +591,13 @@ so the safe form is as short as the unsafe one — rather than a fact about
 `with_arguments` that every relay site has to remember. That is a real but
 modest gain, and it is stated here as such.
 
-**Tests:**
-`route_key_with_arguments_shared_relays_a_payload_without_changing_its_identity` covers
-the keyed counterpart `RouteKey::with_arguments_shared`, which exists because
-`RouteKey::with_arguments` takes its payload by value and would wrap an `Arc` in
-another `Arc` — making the factory's `argument::<OriginalType>()` answer `None`
-silently. And
-`with_arguments_shared_relays_a_payload_without_changing_its_identity` (which
-also asserts the contrast: `with_arguments` on an identical value is *not*
-`ptr_eq`), and the identity half of
-`on_unknown_route_runs_only_after_the_generator_declined_and_sees_the_callers_payload`,
-which compares against an `Arc` the caller constructed rather than against the
-settings object it was handed.
+**Replacement tests:** the identity-preserving relay through
+`RouteSettings::with_arguments_shared` (and the contrast: `with_arguments` on an
+identical value is *not* `ptr_eq`), and through the keyed counterpart
+`RouteKey::with_arguments_shared`, which exists because `RouteKey::with_arguments`
+takes its payload by value and would wrap an `Arc` in another `Arc` — making the
+factory's `argument::<OriginalType>()` answer `None` silently.
+**Unasserted:** no test pins this.
 
 ### 9. A route factory is handed the request only — the navigator accessor is withdrawn
 
@@ -691,10 +660,12 @@ is the one that cost a review round:
   cost, then, was not the defences (those defend an invariant that was always
   worth defending) but the six rounds it took to notice they were needed.
 
-**Tests:** `a_factory_is_handed_the_callers_name_and_arguments` pins
-what the request delivers. Its predecessor also asserted that `navigator()`
-returned *this* navigator rather than any navigator; that claim's subject no
-longer exists, so nothing pins it and nothing needs to.
+**Replacement tests:**
+`a_route_key_carries_its_result_type_from_registration_to_delivery` pins that
+the caller's arguments reach the factory through the request; that the request
+also carries the caller's name: **Unasserted:** no test pins this. Whether
+`navigator()` returned *this* navigator rather than any navigator is a claim
+whose subject no longer exists, so nothing pins it and nothing needs to.
 `a_factory_that_pushes_re_entrantly_does_not_deadlock` now obtains its handle by
 an ordinary capture, through an `Rc<RefCell<Option<NavigatorHandle>>>` cell,
 since the accessor it used to call no longer exists. It still pins that the
@@ -746,9 +717,9 @@ a downgrade — it is §4's documented semantics, and it was already reachable a
 invisible coercion inside `impl Into<RouteSettings>`. The verb makes it the
 caller's decision, visible at the call site.
 
-**Replacement test:** `keyed_settings_untyped_carries_a_keys_arguments_onto_an_untyped_operation`
-— returning `RouteSettings::named(name)` without the payload fails it
-(`left: [Some(1776), None]`).
+**Replacement test:** a key's arguments carried onto an untyped operation, which
+returning `RouteSettings::named(name)` without the payload would break.
+**Unasserted:** no test pins this.
 
 **The hole, stated rather than hidden.** A `RouteKey` type-checks one
 *registration site*; the table it registers into is keyed by **name**. So any two
@@ -772,22 +743,15 @@ failure.** Not type safety — the `RouteResult` downcast underneath is checked,
 a silently wrong result was never reachable. Removing the guard does not produce
 a `RouteResult<u32>` fed by a `String` route; it makes `TypedPush::push` land the
 push and *then* fail its `BUG:` `expect`, panicking mid-operation with the stack
-already mutated. That is the stronger and more honest claim, and it is what the
-mutation below actually demonstrates.
+already mutated. That is the stronger and more honest claim.
 
 **Tests:**
 `a_route_key_carries_its_result_type_from_registration_to_delivery` (dropping
-`push_keyed`'s result handle fails it),
-`route_key_identity_is_its_name_and_costs_its_output_type_no_bounds` (deriving
-the impls instead of writing them stops it compiling, since its `Output` type
-implements nothing), and two collision tests —
-`a_name_registered_by_both_paths_with_different_outputs_is_reported_not_silently_wrong`
-(typed-vs-untyped) and
-`two_route_keys_sharing_a_name_collide_even_though_both_registrations_compile`
-(keyed-vs-keyed, the case that falsified this entry's original claim). Dropping
-the `TypeId` comparison fails both — by **panicking** inside `TypedPush::push`
-after the push has landed, which is the failure mode the guard converts into a
-clean `Err`.
+`push_keyed`'s result handle fails it). A `RouteKey`'s identity being its name
+and costing its `Output` type no bounds, and the two collisions — typed-vs-untyped and
+keyed-vs-keyed, the case that falsified this entry's original claim — reported
+as a clean `Err` rather than a **panic** inside `TypedPush::push` after the push
+has landed: **Unasserted:** no test pins this.
 
 ### 11. A route's `settings` are write-only, so the factory relays values instead — recorded, with its trigger
 
@@ -844,22 +808,16 @@ route and both type names.
 - Repair-and-warn is what this repo already does for caller misconfiguration.
 
 Latched rather than per-call because an app that rebuilds its table in a loop
-would otherwise emit one warning per pass; conflicts are still counted in full,
-which is what lets a test distinguish "warned once" from "stopped noticing". The
-latch is per **registry**, not a process-global `static`, so one navigator's
-conflict cannot silence another's.
+would otherwise emit one warning per pass. The latch is per **registry**, not a
+process-global `static`, so one navigator's conflict cannot silence another's.
 
 **The decision and the latch commit together, under the lock.** A review raised
 that latching *after* the emit would let a `tracing` subscriber re-entering
 registration during the warn see a stale flag and emit a second warning. Measured:
 that half is not reachable — `tracing` suppresses re-entrant event dispatch on the
 same thread, so the inner `warn!` never reaches a subscriber and the event count
-is 1 either way. What *is* reachable is the counter drifting from the emission
-(`warns_emitted` reads 2 for one event), and since that counter is the oracle the
-warn-once test asserts on, a counter that can over-report is a counter that cannot
-pin anything. Committing both in one locked step is what keeps it honest. Recorded
-so the guard is not later removed as dead: it is not protecting the warn, it is
-protecting the counter.
+is 1 either way. Committing both in one locked step keeps a subscriber that
+re-enters registration from observing a stale latch.
 
 **What this does not close.** The erased fall-through: a table entry that
 declines and an `on_generate_route` / `on_unknown_route` that answers with a
@@ -883,19 +841,10 @@ all four paths had shipped with the defect.
 `a_registration_dropped_while_replacing_or_clearing_may_re_enter_the_registry`
 covers all four displacement paths; reverting any one of them to drop under the
 guard makes it **hang** rather than fail, which is why it asserts progress
-counters as it goes rather than only at the end.
-`a_route_re_registered_with_a_different_output_type_warns_once_per_navigator`
-(`navigator_tests.rs`) asserts six conflicts produce one warning, that a
-same-type replacement produces neither, and that a second navigator warns for
-itself — dropping the latch reads 6 instead of 1, dropping the type guard makes
-the same-type replacement warn.
-`the_conflict_warning_is_emitted_once_and_names_both_result_types` captures the
-real `tracing` events through `flui_testing::log_capture` and asserts on them, so
-deleting the `tracing::warn!` fails it while every counter assertion still passes.
-`a_subscriber_that_re_registers_while_handling_the_warning_cannot_skew_the_latch`
-pins the re-entrancy above.
-`a_keyed_entry_that_declines_falls_through_to_a_generator_whose_type_is_still_checked`
-(`navigator_public.rs`) pins the shape the warning cannot reach.
+counters as it goes rather than only at the end. The warning itself — once per
+navigator, naming both result types, silent for a same-type replacement — the
+re-entrant subscriber above, and the declining keyed entry whose generator's type
+is still checked: **Unasserted:** no test pins this.
 
 ### 13. A `PopScope` callback runs before the observers, and may navigate, so an effect can be observed before its cause
 
@@ -907,8 +856,7 @@ So a `PopScope` callback runs **before** `NavigatorObserver.didPop`.
 
 **Re-entrancy is permitted.** Refusing a synchronous navigation from inside the
 callback would mean never having to sequence the interleaving; FLUI permits it,
-deliberately — `pop_scope_callbacks_may_call_back_into_the_navigator`
-guarantees it, and the permission exists because refusing re-entrancy is what
+deliberately, and the permission exists because refusing re-entrancy is what
 produced a fan-out deadlock here. **The inversion is the price of that.** A
 `PopScope` callback that navigates is observed before the pop that invoked it:
 
@@ -921,10 +869,9 @@ produced a fan-out deadlock here. **The inversion is the price of that.** A
 restriction removed on purpose; refusing re-entrancy is the easier prohibition,
 and this design sequences the interleaving instead.
 
-**Test:**
-`a_pop_scope_callback_that_navigates_is_observed_before_the_pop_that_caused_it`
-(`tests/navigator.rs`), red-checked by swapping step 0 and step 1 — which yields
-`[pop, push]`.
+**Replacement test:** a `PopScope` callback that navigates, permitted and observed
+before the pop that caused it; swapping step 0 and step 1 would yield `[pop, push]`.
+**Unasserted:** no test pins this.
 
 ### 14. `ParentDataView` ancestry is checked at attach, with catalog diagnostic labels
 
@@ -1045,8 +992,7 @@ Flex/Stack. A `RenderView` always inserts `RenderContainer`
 choice, not an accidental drop: restoring identity passthrough would rebuild
 the unkeyed child's state the moment any option is toggled on. The supported
 shape is `Row → Expanded → Container` / `Stack → Positioned → Container`.
-Covered by
-`identity_container_between_flex_and_expanded_is_not_parent_data_transparent`.
+**Unasserted:** no test pins this.
 
 Parent data is not the only consequence of that always-a-node choice.
 Hit-testing has the same shape one level up: `RenderContainer` always bounds
@@ -1065,13 +1011,11 @@ is the difference. Tracked in issue #1143.
 **Collapsed branch:** the stack's three childless shapes — the placeholder
 `LimitedBox(0, 0, child: ConstrainedBox(expand))`, an empty `Align`, and no
 inner widget at all — all resolve to the same box, so `RenderContainer` has no
-childless branch. The equality is proven, not assumed, by
-`harness_container_matches_the_widget_stack_it_collapses`, which
-diffs each real shape against `RenderContainer` under the configuration
-that would select it, and additionally forces the placeholder shape
-under the tight additional constraints branches two and three use, so all
-three shapes are diffed against EACH OTHER too, not only each against
-`RenderContainer`.
+childless branch. `harness_container_childless_fills_bounded_and_collapses_unbounded`
+pins the box it resolves to against hand-computed sizes (a bounded axis fills,
+an unbounded one collapses, each axis independently); the equality with each of
+the three shapes, diffed against `RenderContainer` and against each other:
+**Unasserted:** no test pins this.
 
 **Not carried over:** `foregroundDecoration`, `clipBehavior`, `isAntiAlias` and
 `transformAlignment` have no FLUI `Container` setter. These are four
@@ -1118,21 +1062,14 @@ over the decoration — the order the widget stack would have produced
 the stack itself by `harness_container_matches_the_widget_stack_it_collapses`
 (size, child size, absolute child position and hit path, over eight
 configurations spanning both wet layout and hit-testing, each making a
-different level decide), plus
-`harness_container_paints_its_chrome_inside_the_margin` for the decorated box's
-own rect — the level a stacked `DecoratedBox` exposes and the one a
-single node no longer exposes as a separate render object. State stability is
-covered by `container.rs`'s `container_optional_*_preserves_unkeyed_child_state`
-family and `animated_container_optional_color_preserves_unkeyed_child_state`;
-all five fail against the conditional stack and pass against this node.
-Tight additional constraints answering an intrinsic without querying a
-`LayoutBuilder` child are covered by
-`container_tight_width_does_not_query_layout_builder_intrinsics` and
-`container_tight_height_does_not_query_layout_builder_intrinsics`.
-Chrome self-hit uses the same half-open gate as the stacked `DecoratedBox`
-(`harness_container_decoration_misses_the_exclusive_chrome_max_edge`);
-baselines add the child's offset
-(`harness_container_baseline_adds_child_offset`).
+different level decide). Chrome self-hit uses the same half-open gate as the
+stacked `DecoratedBox`: the same differential probes the exclusive max edges of
+the chrome. The decorated box's own paint rect inside the margin — the level a
+stacked `DecoratedBox` exposes and the one a single node no longer exposes as a
+separate render object — state stability of an unkeyed child as each optional
+property toggles (on `Container` and `AnimatedContainer`), tight additional
+constraints answering an intrinsic without querying a `LayoutBuilder` child, and
+baselines adding the child's offset: **Unasserted:** no test pins this.
 
 **Hit-testing gates the child behind the SAME boxes the stack does — only
 when a level exists to gate on, and none always does.** `RenderContainer::
@@ -1167,19 +1104,16 @@ bound itself to its laid-out box — `RenderTransform` deliberately does not,
 so a scaled child stays hittable across its whole visually-overflowing
 area — to a tap the real stack rejects.
 
-Pinned in both directions: `harness_container_margin_alone_does_not_gate_an_
-overflowing_child` (nothing set — the tap DOES hit) against
-`harness_container_color_gates_an_overflowing_child_in_the_margin_band` (one
-property added — the identical tap does NOT), and
-`harness_container_padding_does_not_expose_an_overflowing_aligned_child`
-(the narrower content-box gate, alignment set) against
-`harness_container_padding_without_alignment_does_not_narrow_the_gate` (the
-same padding, no alignment — the content-box gate must not bind on its
-own). The differential carries the matching pair of cases too, and
-`padding` is `Option<EdgeInsets>` on `ContainerStackCase` for the same
+Pinned in both directions by two cases of
+`harness_container_matches_the_widget_stack_it_collapses`: a non-zero margin
+with nothing else set (the overflowing child's tap in the margin band DOES hit)
+against the same margin with a real padding level added (the identical tap does
+NOT). `padding` is `Option<EdgeInsets>` on `ContainerStackCase` for the same
 reason it is on `RenderContainer` — a composed tree that always inserted a
 zero-inset `Padding` level would silently endorse the difference instead of
-detecting it.
+detecting it. The narrower content-box gate (padding with alignment set does not
+expose an overflowing child, and the same padding without alignment does not
+narrow the gate): **Unasserted:** no test pins this.
 
 ### 16. A push's entrance-transition future is awaited outside the flush that installed it
 
@@ -1296,11 +1230,13 @@ as a right one.
   action exists (`supports_action(Action::Click)`) and pressing it *runs* the
   callback exactly once. A node passing only the first half is the dead control
   this surface exists to rule out.
-- `a_semantics_node_with_no_tap_handler_advertises_no_click` — the negative
-  control, so the advertise half is not satisfied by a node that advertises
-  everything.
-- `a_set_text_request_carries_its_payload_into_the_handler` — the payload path,
-  which no payload-free test reaches.
+- The negative control — a node with no tap handler advertises no click — so
+  the advertise half is not satisfied by a node that advertises everything.
+  **Unasserted:** no test pins this.
+- The payload path — a set-text request carries its payload into the handler —
+  which no payload-free test reaches. **Unasserted:** no test pins this.
+- `a_set_text_request_without_a_payload_is_dropped_rather_than_emptied` — a
+  request that lost its payload resolves, and the handler does not run.
 - `the_actions_the_platform_cannot_reach_are_exactly_the_documented_drop_set` —
   derives the unreachable set from the live translation table and asserts it
   equals the documented nine, so a table change that closes one is loud rather
@@ -1310,22 +1246,20 @@ as a right one.
   table, so it cannot drift into a second copy of the answer. Because
   `accesskit::Action` is not `#[non_exhaustive]`, an upstream release that adds
   a variant stops this file compiling rather than silently dropping it.
-- `block_user_actions_refuses_a_click_the_node_still_holds_a_handler_for` — both
-  halves, now measured rather than implied. The refusal half: the request errors
-  *and* the handler did not run. The advertise half: the blocked node does **not**
-  advertise the click, which is asserted as the measured value rather than
-  assumed — `blocks_user_actions` narrows the effective action set that snapshot
-  export and input dispatch both consult, so the node is invisible to assistive
-  technology instead of a control it can see and press to no effect.
+- `block_user_actions` refusing a click the node still holds a handler for, in
+  both halves. The refusal half: the request errors *and* the handler does not
+  run. The advertise half: the blocked node does **not** advertise the click —
+  `blocks_user_actions` narrows the effective action set that snapshot export and
+  input dispatch both consult, so the node is invisible to assistive technology
+  instead of a control it can see and press to no effect.
+  **Unasserted:** no test pins this.
 
 **Red→green, measured rather than asserted.** Both halves of the acceptance test
 were shown to fail against a mutated builder and then pass against the restored
 one: replacing the handler invocation with a discarded binding turns
 `a_tap_handler_round_trips_…` red on *its own* delivery assertion
 (`left: 0, right: 1` — the advertise assertion above it stays green, so the two
-halves are independently pinned), and the same mutation of `on_set_text` turns
-`a_set_text_request_carries_its_payload_into_the_handler` red with
-`left: [], right: ["hello"]`.
+halves are independently pinned).
 
 ### 18. Replacing a `HeroController` retires its in-flight flights, restoring both heroes
 
@@ -1373,14 +1307,12 @@ mean guessing a flight plan the replacement never measured.
   costs nothing and keeps the drop outside the animation listener family, the
   one invariant the type docs rest on.
 
-**Test**
-(`tests/hero_gesture.rs`, `replacing_the_auto_hero_observer_retires_its_in_flight_flight`):
-pushes two same-tagged hero pages so the auto observer launches a real
-programmatic flight, then installs a manual controller and asserts (a) the
-overlay count returns to its pre-flight value, (b) the replacement controller
-inherited no flight, and (c) both heroes' placeholders are cleared. Red-check:
-deleting the `finish_all` call from `did_detach` leaves the overlay count one
-entry high (`left: 4, right: 3`) and both placeholders set.
+**Replacement test:** with two same-tagged hero pages pushed so the auto observer
+launches a real programmatic flight, installing a manual controller returns the
+overlay count to its pre-flight value, leaves the replacement controller with no
+inherited flight, and clears both heroes' placeholders; deleting the
+`finish_all` call from `did_detach` would leave the overlay count one entry high
+and both placeholders set. **Unasserted:** no test pins this.
 
 ### 19. Word-boundary movement uses `unicode-segmentation` (UAX #29), not ICU dictionary segmentation
 
@@ -1427,14 +1359,12 @@ the wrong trade for what this feature is worth today.
   Han characters have no special UAX #29 word-class merging rule by
   default (unlike consecutive Katakana, which UAX #29's own `WB13` rule
   does merge — a script-specific rule already correct here, no dictionary
-  needed for it). A known, tested limitation
-  (`get_word_boundary_splits_cjk_per_character_not_per_word`), not a
-  silent bug.
-- **Every other script this crate's tests cover — Arabic (clusters-only,
-  see its own test's caveat below), Latin with apostrophes, emoji
-  clusters — segments correctly** per UAX #29's own rules, which is the
-  ceiling this crate claims for them; no claim is made about Hebrew,
-  which this crate does not currently test.
+  needed for it). A known limitation, not a silent bug.
+  **Unasserted:** no test pins this.
+- **Every other script named here — Arabic (clusters-only, see the caveat
+  below), Latin with apostrophes, emoji clusters — segments correctly** per
+  UAX #29's own rules, which is the ceiling this crate claims for them; no
+  claim is made about Hebrew.
 - **Grapheme-cluster correctness is unaffected.** The dictionary gap is
   specific to WORD boundaries; cluster boundaries (caret, Backspace,
   Delete) use `GraphemeCursor`, a different UAX #29 mode with no
@@ -1464,32 +1394,18 @@ the wrong trade for what this feature is worth today.
   `flui-widgets`, and inventing one for this one call site would be
   premature relative to `GestureSettings`' own still-open gap.
 
-**Tests**
-(`flui-widgets::controller::tests::{word_right_lands_on_the_next_words_start_skipping_trailing_whitespace,
-word_left_returns_to_the_current_words_own_start_without_skipping_it,
-a_run_of_whitespace_is_skipped_as_one_stop_not_a_stop_per_space,
-an_apostrophe_inside_a_word_does_not_split_it,
-cjk_text_splits_per_character_not_per_word,
-arabic_text_word_jump_never_lands_inside_a_char}`,
-`flui-widgets::text::editable_text::tests::word_jump_modifier_maps_every_platform`
-(the platform table itself, every `TargetPlatform` variant),
-`flui-painting::tests::text_layout_unit::{get_word_boundary_selects_a_whole_whitespace_run,
-get_word_boundary_does_not_split_on_an_apostrophe,
-get_word_boundary_splits_cjk_per_character_not_per_word,
-get_word_boundary_prefers_the_word_side_of_a_boundary_over_the_whitespace_side,
-get_word_boundary_prefers_the_following_segment_between_two_word_segments,
-get_word_boundary_word_vs_punctuation_boundary,
-get_word_boundary_two_space_run_boundary_matrix,
-get_word_boundary_at_the_buffers_own_leading_and_trailing_whitespace,
-get_word_boundary_never_splits_inside_a_zwj_emoji_cluster}`): each asserts
-a specific, pinned boundary — including the CJK per-character split and
-the boundary tie-break matrices (`"foo bar"` at 0/3/4/7; `"(foo"` at 1;
-`"日本語"` at 3; `"foo, bar"` at 3/4; `"foo  bar"` at 3/4/5; leading/
-trailing whitespace at a buffer's own edges) — rather than a loose "some
-boundary was found" check. Arabic is the one exception, asserted only as
-"never lands inside a char, always makes progress",
-because no cluster-vs-word segmentation claim is made for
-that script specifically, only that it is never corrupted.
+**Replacement tests:**
+`flui-painting::tests::text_layout_unit::get_word_boundary_two_space_run_boundary_matrix`
+pins a specific boundary rather than a loose "some boundary was found" check:
+`"foo  bar"` at 3/4/5, where an offset inside the two-space run selects the
+whole run. The controller's word-jump stops (skipping trailing whitespace, a
+whitespace run as one stop, an apostrophe inside a word, the CJK per-character
+split), the word-jump modifier's platform table, and the rest of the
+`get_word_boundary` tie-break matrices (`"foo bar"` at 0/3/4/7; `"(foo"` at 1;
+`"日本語"` at 3; `"foo, bar"` at 3/4; leading/trailing whitespace at a buffer's
+own edges; ZWJ emoji clusters): **Unasserted:** no test pins this. For Arabic
+the claim is only that a word jump never lands inside a char and always makes
+progress, not any cluster-vs-word segmentation for that script.
 
 ### 20. `GestureDetector` composes AROUND `Listener`, not inside it, for double-tap word selection
 
@@ -1547,18 +1463,16 @@ yet; building one for a single callback would be premature machinery for what
   never have joined the arena and its own callback would never have
   fired. Caught before it shipped by writing a detector-only test first.
 
-**Tests**
-(`flui-interaction::recognizers::double_tap::tests::on_double_tap_down_fires_at_the_second_contacts_own_down_not_its_up`,
-`flui-widgets::tests::gesture_detector_advanced::{double_tap_down_fires_before_the_second_contact_lifts,
-on_double_tap_down_alone_with_no_on_double_tap_still_participates}`,
-`flui-widgets::text::editable_text::tests::a_double_tap_selects_the_word_under_it`):
-the recognizer-level tests pin the DOWN-not-UP timing and the
-participation-gating fix in isolation; the widget-level test is the
-end-to-end proof that a double-tap on a mounted `EditableText` actually
-selects the word, not just that the underlying callback fires. Red-check
-for the last one: skip wrapping `install_pointer_handlers`'s return value
-in `wrap_double_tap_word_select` — the selection stays collapsed after
-the second tap.
+**Replacement tests:**
+`flui-widgets::tests::editable_text::a_double_tap_selects_the_word_under_it`
+is the end-to-end proof that a double-tap on a mounted `EditableText` actually
+selects the word, not just that the underlying callback fires. Red-check: skip
+wrapping `install_pointer_handlers`'s return value in
+`wrap_double_tap_word_select` — the selection stays collapsed after the second
+tap. It also pins the DOWN-not-UP timing, since it asserts the word selection
+on the second contact's DOWN before that contact lifts, and the
+participation-gating fix, since this detector sets `on_double_tap_down` alone
+and would otherwise never join the arena.
 
 ### 21. The `Router` is derived from the route type, and its handle is lifecycle-only
 
@@ -1574,10 +1488,10 @@ and transitions are shared with every page, so a parent rebuild reaches the
 pages already on the stack; a transition duration is fixed when a page is
 placed, because the page's animation controller is made with it.
 
-**Pinned by:** `nested_router_handle_targets_the_nearest_router`,
-`a_parent_rebuild_reaches_the_pages_already_on_the_stack`,
-`router_handle_without_a_router_is_no_router`, the `compile_fail` doctest on
-`Router::handle`, and `route_path_round_trips_a_hand_written_routable`.
+**Pinned by:** the `compile_fail` doctest on `Router::handle`. A nested handle
+resolving the nearest `Router<R>`, a parent rebuild reaching the pages already
+on the stack, a handle with no `Router` above it answering `NoRouter`, and a
+hand-written `Routable` round trip: **Unasserted:** no test pins this.
 
 ### 22. A Router's navigator refuses pages pushed through its facade, and admits pageless popups
 
@@ -1602,10 +1516,10 @@ pop the navigator makes — the facade's, a back gesture's, a barrier's —
 reaches the Router's stack through an internal `NavigatorObserver`, so the
 location follows it.
 
-**Pinned by:** `pushing_a_page_route_under_a_router_is_not_addressable`,
-`doors_that_remove_or_seed_refuse_even_a_popup_under_a_router`,
-`popup_routes_are_admitted_and_leave_the_location_alone`,
-`facade_pop_updates_the_router_location`.
+**Pinned by:** `popup_routes_are_admitted_and_leave_the_location_alone`. A
+`PageRoute` pushed through the facade refused as not addressable, the doors that
+remove or seed refusing even a popup, and a facade pop updating the Router's
+location: **Unasserted:** no test pins this.
 
 ### 23. A Router never pops or removes its last page
 
@@ -1617,10 +1531,10 @@ facade's `pop`, `pop_with` and `remove_route[_with]` answer `false`,
 there, all with the stack unchanged. A top page that handles the pop itself
 (a local-history entry) still pops, since that removes no page.
 
-**Pinned by:** `router_never_pops_its_last_page`,
-`pop_until_stops_at_a_routers_last_page`,
-`a_routers_last_page_cannot_be_removed_even_under_a_popup`,
-`pops_never_take_the_last_page_from_above_a_popup`.
+**Pinned by:** `router_never_pops_its_last_page` (the handle's `pop`, and the
+facade's `pop` and `pop_with`). `pop_until` stopping at the last page, and the
+last page beneath a popup surviving removal and pops: **Unasserted:** no test
+pins this.
 
 ### 24. `go` reconciles by common prefix
 
@@ -1636,11 +1550,12 @@ the divergence point is rebuilt. When the full path does not match, `go` and
 `Router::from_location` report `RouteParseError::NoMatch` and change nothing,
 rather than falling back to a default route.
 
-**Pinned by:** `go_reconciles_only_the_diverging_tail`,
-`go_adds_the_new_back_stack_beneath_the_new_top`,
-`router_opens_at_a_location_with_its_back_stack`,
-`go_with_an_unknown_location_leaves_the_stack_alone`, and
-`back_stack_is_the_matching_prefix_chain`.
+**Pinned by:** `router_opens_at_a_location_with_its_back_stack` (the matching
+prefix chain beneath an opened location, across the gap `/note`, and
+`Router::from_location` reporting `RouteParseError::NoMatch` for a path that
+does not match in full). `go` reconciling only the diverging tail, adding the
+new back stack beneath the new top, and leaving the stack alone for an unknown
+location: **Unasserted:** no test pins this.
 
 ### 25. Every Router page scopes a semantics route, and a labelled route names it
 
@@ -1650,7 +1565,7 @@ Router wraps each one in `Semantics::scopes_route(true)
 `Routable::semantics_label` returns one. An assistive technology then hears a
 route change on every navigation, with no app bar required.
 
-**Pinned by:** `router_pages_scope_and_name_a_semantics_route`.
+**Unasserted:** no test pins this.
 
 ### 26. Global widgets localizations live in the catalog, not in a separate package
 
@@ -1692,17 +1607,19 @@ defers the form-level autovalidation to the end of its loop, so it runs once
 after `reset`. A field is always wrapped in its unfocus
 `Focus` (not focusable, so
 never a traversal stop, and no semantics) and checks the modes at focus loss, so a
-mode change never remounts the field's content
-(`tab_and_shift_tab_move_focus_between_form_fields_in_order`,
-`on_unfocus_validates_when_tab_leaves_the_field`).
+mode change never remounts the field's content. Tab order between form fields
+and `OnUnfocus` validating as Tab leaves a field: **Unasserted:** no test pins
+this.
 
 **Tests** (`tests/form.rs`): `validate_shows_the_validator_error_and_revalidating_a_valid_value_clears_it`,
-`on_user_interaction_validates_only_after_the_first_edit`,
-`form_level_on_user_interaction_validates_every_field_after_any_edit`,
-`on_user_interaction_if_error_revalidates_only_while_an_error_is_shown`,
-`always_validates_at_mount_and_on_every_change`. Frames are driven with
+`reset_restores_initial_values_and_clears_errors_and_interaction` (an edit
+after a reset validates again under `OnUserInteraction`). Frames are driven with
 `tick`, which does not dirty the root, so a field that stored its error
-without scheduling a rebuild fails the first one.
+without scheduling a rebuild fails the first one. The remaining autovalidate
+modes — `OnUserInteraction` validating only after the first edit, the same
+mode set on the form validating every field after any edit,
+`OnUserInteractionIfError`, and `Always` at mount and on every change:
+**Unasserted:** no test pins this.
 
 ### 23. `FormHandle` and `FormFieldHandle` replace `GlobalKey<FormState>`
 
@@ -1714,7 +1631,8 @@ cannot disable validation for later edits; the partial field mutations are not
 rolled back. A field schedules its rebuild immediately after committing its
 reset state, before the controller sink and `on_reset`, so an unwind cannot hide
 that partial commit behind stale UI. `a_panicking_reset_callback_does_not_disable_later_form_validation`
-pins recovery and visibility, and the signal-write form tests pin context forwarding.
+pins recovery and visibility. Context forwarding: **Unasserted:** no test pins
+this.
 
 **Choice:** The caller creates a `FormHandle`/`FormFieldHandle` and passes it
 to the widget (`Form::handle`, `FormField::handle`), or reads `Form::of`. A
@@ -1737,12 +1655,12 @@ A handle is not the element's identity, so a field rebuilt with a different
 handle keeps its element and state. A text form field rebuilt without the
 caller's controller moves its text into a controller it owns.
 **Tests:** every `tests/form.rs` case drives the form through a handle;
-`a_new_handle_on_rebuild_takes_the_mounted_field_over`,
-`dropping_the_callers_controller_moves_the_text_into_a_field_owned_one`,
-`a_form_handle_refuses_a_second_simultaneous_mount_before_mutating_the_first`,
-`a_form_field_handle_refuses_a_second_simultaneous_mount_before_mutating_the_first`,
-the two `a_busy_*_rebind_*` tests, and
-`unmounting_a_text_form_field_releases_callbacks_and_controller_binding`.
+`a_form_handle_refuses_a_second_simultaneous_mount_before_mutating_the_first`.
+A new handle on rebuild taking the mounted field over, a dropped caller's
+controller moving its text into a field-owned one, the same duplicate-mount
+refusal for a `FormFieldHandle`, a rebind onto a busy handle, and unmounting a
+text form field releasing its callbacks and controller binding:
+**Unasserted:** no test pins this.
 
 ### 24. A field registers with its form in lifecycle hooks
 
@@ -1751,21 +1669,19 @@ registration when the enclosing form changed, and `dispose` unregisters.
 Registration order is kept; the
 form holds each field strongly and each field holds the form weakly, so a
 `FormHandle` captured in a field callback is a cycle only until that field's
-`dispose`. **Tests:** `save_calls_on_saved_with_each_fields_value_in_registration_order`,
-`a_disposed_field_no_longer_takes_part_in_validate`.
+`dispose`. **Unasserted:** no test pins this.
 
 ### 25. A text field's error line is a live region instead of an announcement
 
 **Choice:** there is no widget-facing announce API, so `RawTextFormField`'s
 error line is a `Semantics(live_region: true)` container, which assistive
-technology reads when it appears. **Test:**
-`form_reports_the_form_role_and_the_error_line_is_a_live_region`.
+technology reads when it appears. **Unasserted:** no test pins this.
 
 ### 26. `Form` carries the form semantics role
 
 **Choice:** `Form` is a semantics container with `SemanticsRole::Form`
-(AccessKit `Role::Form`), so a screen reader can name the group. **Test:**
-`form_reports_the_form_role_and_the_error_line_is_a_live_region`.
+(AccessKit `Role::Form`), so a screen reader can name the group.
+**Unasserted:** no test pins this.
 
 ### 27. Clipboard bindings come from `DefaultFocusTraversal`
 
@@ -1774,25 +1690,23 @@ three chords (Cmd on macOS and iOS, Control elsewhere — a pure table resolved
 once per state from `TargetPlatform::current()`). The chord resolves at the
 primary focus like the traversal keys: an `EditableText` answers it on its own
 node, and with no text field focused nothing does, so the chord keeps
-bubbling. **Tests:** `interaction::shortcuts::tests::clipboard_activators_map_every_platform`,
-`tests/editable_text_clipboard.rs`
-(`copy_then_paste_round_trips_text_in_an_editable_text`,
-`ctrl_c_with_no_text_field_focused_is_left_unconsumed`).
+bubbling. **Tests:** `tests/editable_text_clipboard.rs`
+(`copy_then_paste_round_trips_text_in_an_editable_text`). The platform table
+for every target, and a chord left unconsumed with no text field focused:
+**Unasserted:** no test pins this.
 
 ### 28. `EditableText`'s clipboard actions win over ancestor bindings
 
 **Choice:** `EditableText` layers its actions over the chain at its position
 and records the result on its node, so they are the nearest declaration of
-the two intent types and an ancestor mapping never replaces them. **Test:** `an_ancestor_paste_action_does_not_replace_the_fields_own`
-(an ancestor `CallbackAction<PasteTextIntent>` is never invoked, and the
-field's own paste runs).
+the two intent types and an ancestor mapping never replaces them.
+**Unasserted:** no test pins this.
 
 ### 29. Paste drops `\r` as well as `\n`
 
 **Choice:** a paste into the single-line field removes both, since a stray
 carriage return is never text the user meant (denying only `\n` would leave a
-`\r` behind from a Windows `\r\n`). **Test:**
-`paste_replaces_the_selection_and_drops_line_breaks`.
+`\r` behind from a Windows `\r\n`). **Unasserted:** no test pins this.
 
 ### 30. `RawTextFormField`, not `TextFormField`
 
@@ -1807,7 +1721,7 @@ feature never changes what an existing name resolves to.
 **Choice:** `Key::Character` carries what the key produced, so Caps
 Lock turns Ctrl+C into a `"C"` event. A single ASCII letter trigger therefore
 matches either case; the exact Shift comparison still tells Ctrl+Shift+C
-apart. **Test:** `interaction::shortcuts::tests::a_character_activator_matches_regardless_of_caps_lock`.
+apart. **Unasserted:** no test pins this.
 
 ### 32. `EditableText::on_changed` reports only the user's edits, and a text form field reads its controller
 
@@ -1821,9 +1735,10 @@ and a reset's write-back needs no equality guard. Because the controller is
 the value, `FormFieldHandle::set_value` on a text form field writes the text
 into the controller too, so the field's value and its controller never
 disagree. **Tests:**
-`tests/editable_text.rs::on_changed_reports_user_edits_but_not_the_callers_own`,
-`reset_restores_initial_values_and_clears_errors_and_interaction`,
-`set_value_on_a_text_form_field_is_seen_by_value_validate_and_save`.
+`reset_restores_initial_values_and_clears_errors_and_interaction` (the reset's
+write-back does not mark the field interacted). `on_changed` reporting the user's
+edits but not the caller's own, and `set_value` on a text form field seen by
+`value`, `validate` and `save`: **Unasserted:** no test pins this.
 
 ### 33. `RawButton` is a widgets-layer button whose press writes through `EventCx`
 
@@ -1841,9 +1756,9 @@ nothing. A press may return a write's
 `Result`; a refused write is logged on `flui::signals`. Keyboard activation
 (Enter and Space through `ButtonActivateIntent`) and pressed and hovered
 state are not implemented yet. **Tests:** `tests/raw_button.rs`
-(`raw_button_without_on_press_is_disabled_and_advertises_no_click`,
-`raw_button_press_is_reachable_through_a_platform_click`, and the pointer,
-rebuild, `callback` and refused-write cases).
+(`raw_button_press_is_reachable_through_a_platform_click`,
+`a_refused_write_in_a_press_is_reported_not_panicked`). A button without
+`on_press` disabled and advertising no click: **Unasserted:** no test pins this.
 
 ### 34. `EditableText` answers an input method's pulls; one platform session is one change
 
@@ -1859,10 +1774,14 @@ harness's `tick` as in `flui-app`'s `UiRealm::drive_frame`) runs after the
 frame; a key press first runs those queued grants, so it lands after an IME
 commit. **Tests:** `tests/text_store_kit.rs`
 (`editable_text_conforms_to_kit_v1`,
-`obscured_editable_text_conforms_to_kit_v1`), `tests/editable_text.rs`'s
-`text_store::a_three_edit_session_calls_on_changed_once`,
-`a_lock_requested_from_a_post_frame_callback_is_granted_after_the_frame`,
-`typing_after_a_deferred_commit_lands_after_the_commit`.
+`obscured_editable_text_conforms_to_kit_v1`; among the kit's cases,
+`tsf_style_conversion_script` counts one owner notification for a whole
+conversion session and `async_request_inside_a_transaction_waits_for_the_next_anchor`
+defers a lock asked for inside the frame transaction to the next frame),
+`tests/editable_text.rs`'s
+`text_store::typing_after_a_deferred_commit_lands_after_the_commit`. A lock
+requested from a post-frame callback specifically: **Unasserted:** no test pins
+this.
 
 ### 35. Platform selection is exact; user selection snaps
 
@@ -1871,10 +1790,9 @@ is kept at any scalar boundary, including inside a grapheme cluster (offset 4
 of `"a😀e\u{301}…"` is between the `e` and its combining mark), because TSF and
 AppKit address scalars and a snapped answer would disagree with what they set.
 A tap, a drag and the arrow keys keep snapping to extended grapheme clusters
-through the controller (its "Character unit"). **Tests:**
-`tests/editable_text.rs`'s
-`text_store::platform_selection_inside_a_grapheme_is_exact_while_a_tap_still_snaps`,
-the kit's `selection_inside_a_grapheme_is_kept_exactly`.
+through the controller (its "Character unit"). **Tests:** the kit's
+`selection_inside_a_grapheme_is_kept_exactly`, for the platform half. A tap
+still snapping to a grapheme cluster: **Unasserted:** no test pins this.
 
 ### 36. `WidgetsApp::router`: a bare Router as the routing subtree, and a form without navigator builders
 
@@ -1894,11 +1812,12 @@ view types, so switching one to the other remounts the shell, and the
 navigator form's `dispose` releases its navigator and observers. Owning the
 presentation's URL waits for ADR-0093 step 3's `RouterScope`. **Tests:**
 `tests/widgets_app_router.rs`
-(`widgets_app_router_roots_the_app_in_its_router`,
-`widgets_app_router_adds_no_focus_scope_above_the_router`,
-`rebuilt_widgets_app_router_keeps_its_stack`,
-`switching_widgets_app_from_home_to_router_releases_the_navigator`, and the
-navigation and localization cases); `tests/routable_ui/fail/router_app_takes_no_navigator.rs`.
+(`switching_widgets_app_from_home_to_router_releases_the_navigator`,
+`widgets_app_router_navigates_by_handle_and_the_url_follows`);
+`tests/routable_ui/fail/router_app_takes_no_navigator.rs`. The Router's
+navigator as the app's root navigator, refusing a stray page; no focus scope
+above the Router; and a rebuilt app keeping its stack: **Unasserted:** no test
+pins this.
 
 ### 37. `PageView` reports page changes after the frame, in order
 

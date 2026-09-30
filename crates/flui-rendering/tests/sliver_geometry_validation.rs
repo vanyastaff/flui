@@ -34,8 +34,7 @@ fn sliver_constraints() -> SliverConstraints {
 
 /// Violates a PIPELINE-SAFETY rule (negative paint extent) — the class
 /// `validate_layout_output` still rejects. The softer content-contract
-/// rules (layout > paint, paint > max_paint) commit with a warning instead
-/// — see `sliver_content_contract_violation_commits_and_stays_clean`.
+/// rules (layout > paint, paint > max_paint) commit with a warning instead.
 fn invalid_negative_paint_geometry() -> SliverGeometry {
     SliverGeometry {
         scroll_extent: 100.0,

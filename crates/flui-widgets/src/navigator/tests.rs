@@ -1,8 +1,7 @@
 //! Tests for the route stack.
 //!
 //! Every test here constructs a `RouteHistory` and nothing else. No element tree,
-//! no build owner, no render pipeline, no overlay — `route_stack_flush_is_pure_data`
-//! checks that claim against the sources rather than asserting it in prose.
+//! no build owner, no render pipeline, no overlay.
 
 use std::{rc::Rc, sync::Arc};
 

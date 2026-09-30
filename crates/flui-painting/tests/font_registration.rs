@@ -1,8 +1,8 @@
 //! A face registered on the app's collection reaches a laid-out
 //! `TextPainter`'s measurement, paint and caret layout together.
 //!
-//! Its own test target: these tests append to the process-wide font database,
-//! which the `painting_it` binary's tests deliberately never do.
+//! Its own test target: it appends to the process-wide font database, which
+//! the `painting_it` binary's tests deliberately never do.
 
 use std::sync::Arc;
 

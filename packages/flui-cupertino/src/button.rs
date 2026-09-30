@@ -334,10 +334,7 @@ impl std::fmt::Debug for CupertinoButton {
 /// This looks like a bug (a dark-mode background painted with the light
 /// alpha) but is deliberate: `CupertinoColors::SEPARATOR` is alpha 73 light /
 /// 153 dark, and a `SEPARATOR`-colored `Plain`/`Filled` button under a Dark
-/// theme renders at alpha 73 — see
-/// `background_dynamic_color_keeps_the_light_variants_alpha_under_a_dark_theme`
-/// in `tests/button.rs`, which mounts such a button under a Dark theme and
-/// pins this exact value. The alpha is a direct channel copy
+/// theme renders at alpha 73. The alpha is a direct channel copy
 /// (`Color::with_alpha`, `u8`) rather than an `f64` opacity round trip — same
 /// source byte, no float-precision risk.
 fn resolve_background_color(

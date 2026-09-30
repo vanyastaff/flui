@@ -1,8 +1,8 @@
 //! Real `dlopen`/`dlclose`/reload coverage for `app_plugin!` — the lifecycle
-//! `flui-hot-reload`'s own `tests/loader.rs` deliberately leaves untested
-//! ("environment-fragile... would violate the no-flaky-tests rule").
+//! `flui-hot-reload`'s own tests leave untested, because building a plugin
+//! from inside a test is environment-fragile.
 //!
-//! That rule is about *nested `cargo build` from inside a test* — spawning a
+//! That fragility is about *nested `cargo build` from inside a test* — spawning a
 //! second cargo process, racing target-dir locks, non-deterministic compile
 //! times. This test avoids all of that by living where its plugin already
 //! is: `flui-hot-reload-lifecycle-fixture` is `crate-type = ["rlib",
@@ -94,9 +94,7 @@ use flui_hot_reload::ScenePlugin;
 use flui_hot_reload::dynlib::DynLib;
 use std::ffi::c_void;
 
-/// A self-cleaning temp file path unique to this test process (mirrors
-/// `tests/loader.rs`'s `TempPath` — duplicated rather than shared, since
-/// each `tests/*.rs` file compiles as its own independent crate).
+/// A self-cleaning temp file path unique to this test process.
 struct TempPath(PathBuf);
 
 impl TempPath {

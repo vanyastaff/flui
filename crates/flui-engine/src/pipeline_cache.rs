@@ -272,8 +272,8 @@ pub(crate) fn coverage_blend_state_for(mode: BlendMode) -> wgpu::BlendState {
 ///
 /// (Rows where a dst-factor depends on `src_a` — DstIn, DstATop, Modulate —
 /// vanish only *because* `src_a = 0` here; they are state-dependent factors, not
-/// the constant `Zero`. `is_tile_safe_for_ssaa_agrees_with_color_blend` pins the
-/// whole partition to `Color::blend` so this hand-derivation can't drift.)
+/// the constant `Zero`. No test ties the partition to `Color::blend`, so this
+/// hand-derivation is the only record of it.)
 ///
 /// Advanced (dst-read) modes are NOT tile-safe by this definition, but they are
 /// handled separately via `flush_advanced_layer` (not fixed-function blend).
@@ -345,7 +345,7 @@ pub(crate) fn ssaa_eligible_for(mode: BlendMode, device_area: f32) -> bool {
 /// `destination_alpha_scale` for its blend mode.
 ///
 /// Shared with the WGSL by spelling, not by type, so
-/// `override_constant_name_matches_the_shader` pins the two together.
+/// `override_constant_names_match_their_shaders` pins the two together.
 const DESTINATION_ALPHA_SCALE_OVERRIDE: &str = "destination_alpha_scale";
 
 /// The two assemblies of one coverage-correct shader, from which a pipeline

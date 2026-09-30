@@ -7,8 +7,7 @@
 //! The presence and announcement predicates are index comparisons against the
 //! declaration order, so `#[derive(PartialOrd, Ord)]` over the variants — which
 //! orders by declaration — expresses them as range checks. Reordering a variant
-//! silently changes four predicates at once; `lifecycle_order_matches_flush_ranges`
-//! pins every membership.
+//! silently changes four predicates at once, and no test pins the memberships.
 //!
 //! # Two states are deliberately absent
 //!

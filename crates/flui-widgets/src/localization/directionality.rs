@@ -198,6 +198,3 @@ fn resolve_horizontal_axis_direction(
     };
     if reverse { base.opposite() } else { base }
 }
-
-// The mounted `resolve_alignment` test lives in
-// `crates/flui-widgets/tests/directionality.rs`.

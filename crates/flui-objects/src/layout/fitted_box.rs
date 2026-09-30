@@ -45,14 +45,6 @@
 //! box's coordinates against the child's scaled ones. Pushing both from
 //! `paint` puts them the right way round; `apply_paint_transform` then keeps
 //! coordinate mapping working without re-emitting the layer.
-//!
-//! Verified at both layers: `flui-painting`'s own unit tests pin every
-//! `BoxFit::apply` variant against expected `(source, destination)`
-//! pairs; this crate's `tests/render_object_harness.rs` drives
-//! `perform_layout` through the real pipeline
-//! (`harness_fitted_box_cover_crops_the_source_and_offsets_the_transform`)
-//! to prove `source_offset` is genuinely reachable, not just a field no
-//! call path ever sets to a nonzero value.
 
 use flui_foundation::Single;
 use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};

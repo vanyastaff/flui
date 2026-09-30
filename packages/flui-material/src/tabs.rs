@@ -43,25 +43,21 @@
 //! every tab cell is an equal `Expanded` share of the bar's width (see
 //! above), this composition renders **exactly** the rect a full tab bar
 //! computes for `TabBarIndicatorSize::Tab`
-//! with `indicatorPadding: EdgeInsets.zero`: the *horizontal* bounds are
-//! pinned in isolation by this module's test-only `indicator_rect`
-//! re-derivation (see `tests`, not a function the paint path itself calls),
-//! and the *vertical* position (the band sits at the bar's bottom edge, not
-//! its top) is pinned end to end, against the real mounted render tree, by
-//! `packages/flui-material/tests/tabs.rs`'s
-//! `indicator_band_sits_at_the_bar_bottom_beneath_the_divider_and_paints_over_it`
-//! — the horizontal-only unit test cannot see a regression that reverses
-//! the `Column`'s child order, so the vertical claim needs its own,
-//! independent, mounted proof.
+//! with `indicatorPadding: EdgeInsets.zero`. The *horizontal* bounds (one
+//! equal tab-cell share per band) are asserted against the mounted render
+//! tree by `packages/flui-material/tests/tabs.rs`'s
+//! `default_tab_controller_survives_a_length_shrink_past_the_selected_index`;
+//! no test asserts the *vertical* position (the band sits at the bar's
+//! bottom edge, not its top), which a reversed `Column` child order would
+//! break without disturbing the horizontal bounds.
 //!
 //! The divider (`showDivider: true` for a non-scrollable M3 bar) is a
 //! `Positioned` full-width strip at the bar's bottom edge, stacked *behind*
 //! the tab row — so an unselected tab's transparent band still lets the
 //! divider line show through beneath it, and a selected tab's opaque
-//! indicator band paints over it (divider drawn first, indicator second). The
-//! same mounted test above proves this stacking order structurally (the
+//! indicator band paints over it (divider drawn first, indicator second): the
 //! `Stack`'s divider layer is its first, earlier-painted child; the tab row
-//! is its second, later-painted — hence on top — child).
+//! is its second, later-painted — hence on top — child.
 //!
 //! # Named deferrals (not silently dropped)
 //!

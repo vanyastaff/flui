@@ -76,9 +76,8 @@ fn clamp_scissor_to_attachment(
 ///
 /// This is the only place in this module that calls
 /// `RenderPass::set_scissor_rect` — every batch and texture flush path below
-/// routes through it, so a new direct call can't silently reintroduce an
-/// unclamped scissor. `set_clamped_scissor_is_the_only_scissor_rect_call_site`
-/// in the `tests` module pins that invariant with a source scan.
+/// routes through it. No test pins that invariant, so a new direct call would
+/// silently reintroduce an unclamped scissor.
 fn set_clamped_scissor(
     render_pass: &mut wgpu::RenderPass<'_>,
     scissor: ScissorRect,

@@ -40,8 +40,7 @@
 //! during **build**, long before layout commits. Asking a `RouteSubtree` for
 //! geometry means asking [`PipelineOwner::box_size`], which returns `None` until
 //! the first layout commits. `SubtreeAnchor::get()` alone is *not*
-//! layout-readiness, and `route_subtree_ids_are_published_before_layout_commits`
-//! pins that.
+//! layout-readiness.
 //!
 //! [`PipelineOwner::box_size`]: flui_rendering::pipeline::PipelineOwner::box_size
 //! [`RenderSubtreeAnchor`]: flui_objects::RenderSubtreeAnchor

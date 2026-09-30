@@ -26,9 +26,8 @@ fn themed(theme: ThemeData, child: impl IntoView) -> MediaQuery {
 /// A tap anywhere on the tile — including inside the content padding gutter,
 /// well away from `title`'s own text glyphs — fires `on_tap`: the whole tile
 /// is the tap target, not just the title: the tile wraps its ENTIRE content
-/// (padding included) in a single `InkWell`, probed the same way as
-/// `tests/card.rs`'s `default_corner_radius_reaches_the_mounted_material`
-/// (the mounted surface rather than the title's own bounds).
+/// (padding included) in a single `InkWell`, so the test probes the mounted
+/// surface rather than the title's own bounds.
 pub fn whole_tile_tap_fires_from_a_point_inside_the_content_padding() {
     let taps = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&taps);

@@ -54,10 +54,12 @@ fn details_route() -> SimpleRoute<()> {
 /// A leading `IconButton`'s own `Material` (`RenderPhysicalShape`) among
 /// every such node in the tree — one sized exactly 40×40 (its
 /// `_IconButtonDefaultsM3.minimumSize`, see `icon_button.rs`), distinct from
-/// an `AppBar`'s own full-size `Material`. More than one may match (see
-/// `implied_leading_appears_once_the_navigator_can_pop`'s doc comment for
-/// why two mounted routes yield two leading buttons) — any one of them taps
-/// the same underlying `NavigatorHandle`, so the first is as good as any.
+/// an `AppBar`'s own full-size `Material`. More than one may match: this
+/// `Navigator` keeps a covered route mounted, and every mounted `AppBar` sees
+/// the same navigator-global `can_pop()` (see `app_bar.rs`'s "Implied
+/// leading" module docs), so two routes yield two leading buttons — any one
+/// of them taps the same underlying `NavigatorHandle`, so the first is as
+/// good as any.
 /// Panics with a diagnostic size list if none match at all.
 fn find_leading_icon_button_material(laid: &common::LaidOut) -> flui_sdk::foundation::RenderId {
     let candidates = laid.find_all_by_render_type("RenderPhysicalShape");
@@ -87,8 +89,8 @@ pub fn tapping_the_implied_back_button_pops_the_route() {
 
     let laid = lay_out(Navigator::new(handle.clone()), tight(400.0, 800.0));
 
-    // Both mounted routes' leadings sit at the same geometry (see the
-    // previous test's doc comment) — which one the tap lands on doesn't
+    // Both mounted routes' leadings sit at the same geometry (see
+    // `find_leading_icon_button_material`) — which one the tap lands on doesn't
     // matter: either fires `NavigatorHandle::maybe_pop()` against the SAME
     // `handle`, so either one popping is the behavior under test.
     let leading = find_leading_icon_button_material(&laid);
@@ -106,11 +108,3 @@ pub fn tapping_the_implied_back_button_pops_the_route() {
          leaving only the seeded initial route on the stack",
     );
 }
-
-// ── `AppBar.bottom` — Flexible-toolbar/fixed-bottom Column layout ──
-//
-// `bottom.rs`'s own module docs and `app_bar.rs`'s
-// `preferred_size_adds_the_bottom_slots_height_when_set` cover the pure
-// preferred-size math in isolation; these prove the mounted geometry end to
-// end: the toolbar and bottom slot actually stack at their expected sizes,
-// and a height shortfall shrinks the toolbar, never the bottom slot.

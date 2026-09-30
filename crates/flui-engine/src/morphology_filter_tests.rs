@@ -4,26 +4,20 @@
 //!
 //! | # | Gate | Requirement |
 //! |---|------|-------------|
-//! | M1 | GPU | radius=0 identity: Filter path runs, content is unchanged |
 //! | M2 | GPU | dilate opaque: content border expands by ceil(radius) |
-//! | M3 | GPU | erode opaque: content border contracts by ceil(radius) |
-//! | M4 | GPU | translucent DISCRIMINATING premul (G2): adjacent non-uniform pixels prove premul-direct max |
-//! | M5 | GPU | decal boundary: outside-content pixels are transparent-black, not clamped colour |
-//! | M6 | GPU | grown_bounds wiring: composite rect = content ⊕ ceil(radius) after dilate |
 //!
-//! ## Premul-direct invariant (PINNED #1)
+//! ## Premul-direct invariant
 //!
 //! max/min operates on **premultiplied** RGBA — there is NO unpremultiply step.
-//! The CPU oracle [`morph_oracle_premul`] follows the same contract.  M4 is
-//! specifically designed to discriminate premul-direct from unpremultiply+op+repremul:
-//! adjacent pixels `(128,128,128,255)` and `(128,128,128,128)` have premul-max RGB=128
-//! but unpremul-max RGB=255; the two paths produce different quantised outputs.
+//! Adjacent pixels `(128,128,128,255)` and `(128,128,128,128)` have premul-max
+//! RGB=128 but unpremul-max RGB=255, so a translucent pair would discriminate
+//! the two paths. **Unasserted:** no test pins this.
 //!
 //! ## Decal semantics
 //!
 //! Pixels outside the declared `content_bounds` in UV are treated as the neutral
 //! element (transparent-black for dilate, opaque-white for erode) — NOT clamped
-//! to the edge colour.  M5 verifies this for the dilate case.
+//! to the edge colour. **Unasserted:** no test pins this.
 //!
 //! All tests use `testing` feature-gate and follow the same harness
 //! pattern as `color_matrix_filter_tests`.  The 64×64 surface avoids DX12
@@ -105,10 +99,6 @@ mod gpu_tests {
             f64::from(SURFACE_HEIGHT as f32 - 2.0 * margin),
         )
     }
-
-    // ── CPU oracle ────────────────────────────────────────────────────────────
-
-    // ── M1: radius=0 identity — Filter path runs, content unchanged ───────────
 
     // ── M2: dilate opaque — border expands ────────────────────────────────────
 

@@ -480,11 +480,9 @@ impl PipelineOwner<PaintPhase> {
         // flag either (that list is populated from what this function
         // consumes, or from a REAL paint walk — neither runs on the silent
         // no-op path), stranding the flag set and self-refusing every later
-        // mark to the same node. Pinned by
-        // `a_childless_rotated_box_layer_update_falls_back_to_a_repaint_and_clears_the_flag`
-        // (`tests/retained_boundary_layers.rs`), which fails on the flag
-        // staying set — not on the emitted frame, which looks the same either
-        // way for a node that paints nothing regardless.
+        // mark to the same node. A test for it must observe the flag staying
+        // set, not the emitted frame, which looks the same either way for a
+        // node that paints nothing regardless.
         if targets.iter().any(|target| {
             !subtree
                 .effect_slots
@@ -564,8 +562,7 @@ impl PipelineOwner<PaintPhase> {
                 // tree; refusing it only trades a correct patch for a
                 // repaint, and that refusal is observable as one. No
                 // production producer changes its own clip kind at runtime,
-                // so no oracle pins that case; the output is pinned by
-                // `an_effect_layer_shape_change_falls_back_to_a_repaint`.
+                // and no test pins the fallback.
                 if std::mem::discriminant(&layer) != std::mem::discriminant(&captured.layer) {
                     return Ok(None);
                 }

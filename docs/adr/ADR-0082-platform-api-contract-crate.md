@@ -311,9 +311,7 @@ by the `flui_platform_api` crate doctest, which implements `PlatformTextInput` a
 - the doctests on `PlatformWindow`: one implements it with no `flui-platform` in scope, and its
   `compile_fail` twin, identical but for an `accessibility` method, is rejected with E0407;
 - `flui-platform`'s `host_window` tests (a headless `open_window` result keeps its bridge and
-  upcasts to the same window; `Arc<dyn HostWindow>` is a raw-handle source) and `flui-app`'s
-  `a_realm_built_from_a_host_window_publishes_through_its_accessibility`, which fails if the
-  runner drops the bridge on the way to the realm.
+  upcasts to the same window; `Arc<dyn HostWindow>` is a raw-handle source).
 
 A backend change is checked by `cargo xtask cross-typecheck` for Win32, AppKit, Android and iOS.
 For the second change only Win32 and AppKit (`aarch64-apple-darwin`, with `a11y`) and the Linux

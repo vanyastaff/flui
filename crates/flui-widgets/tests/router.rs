@@ -7,8 +7,7 @@
 //! # Scenarios
 //!
 //! An initial route may have gaps in its back stack, and the full initial
-//! route has to be matched (`Routable::back_stack`, unit tests in
-//! `router/routable.rs`); `go` diffs the page list.
+//! route has to be matched (`Routable::back_stack`); `go` diffs the page list.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;

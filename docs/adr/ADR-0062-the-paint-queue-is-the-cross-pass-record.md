@@ -82,8 +82,8 @@ must survive the current one regardless.
 
 **Putting `kind` on `DirtyNode`.** That type serves the layout, compositing and
 semantics queues too, where `PaintKind` is meaningless — it would trade one
-illegal state for three — and it is held to two words by
-`dirty_node_is_two_usize`, which a `SmallVec` payload breaks.
+illegal state for three — and it is two words, which a `SmallVec` payload
+breaks. **Unasserted:** no test pins this.
 
 ## Divergence from Flutter, and why it does not port
 

@@ -242,15 +242,14 @@ once keeps rebuilding on size changes after it stopped reading it. Here the fiel
 an element are those of its **latest** build: in `BuildOwner::drain_build_scope`, right after the
 element's `build`, its masks at previous providers reset to `NONE`, the build's reads
 re-accumulate, and an entry still at `NONE` is removed. The `LayoutBuilder`-scoped drain uses the
-same function. Pinned by `a_rebuild_re_derives_the_field_set_so_a_dropped_read_stops_depending`
-(`media_query_fields.rs`). Cost: one hash lookup per previous provider per build.
+same function. **Unasserted:** no test pins this. Cost: one hash lookup per previous provider per
+build.
 
 - Reads in `init_state` / `did_change_dependencies` go to `lifecycle_mask`, which **accumulates
   until unmount**, as in Flutter. It is not re-derived per `did_change_dependencies` (that hook
   does not run on the first build after `init_state`, so resetting would drop `init_state`'s
   reads). States such as `FocusState` and `DraggableState` acquire an inherited value in a
-  lifecycle hook and must stay subscribed
-  (`a_dependency_acquired_in_a_lifecycle_hook_survives_a_rebuild_that_does_not_reread_it`).
+  lifecycle hook and must stay subscribed. **Unasserted:** no test pins this.
 - A build that panics is not evidence of what the element reads: when `build_or_recover`
   recovers it with an `ErrorView`, previous masks are kept and new records only added; the signal
   registry likewise restores the previous read set

@@ -777,12 +777,10 @@ The test mounts that Material tree and queries `"Increment"` from the
 framework's own node; the template itself now uses `RawButton`, which
 publishes the same `Semantics(container, button, enabled)` node.
 
-The second test, `missing_label_query_reports_the_search_and_the_available_labels`,
-is the acceptance criterion's "actionable command failures" half: it queries
-a label that is not in the tree and asserts the resulting
-`flui::testing::a11y::A11yQueryError::NotFound` names the search (`"Decrement"`)
-and lists what *was* reachable (`"Increment"`) — the error `A11yTree::find_by_label`
-already produces, needing no new helper.
+The acceptance criterion's "actionable command failures" half is the error
+`A11yTree::find_by_label` already produces, needing no new helper: a label that
+is not in the tree yields `flui::testing::a11y::A11yQueryError::NotFound`, which
+names the search and lists the labels that *were* reachable. No test asserts it.
 
 Writing the test also found that the facade's `flui::testing::rendering`
 module did not re-export `render_diagnostics` (`flui-rendering`'s render-tree

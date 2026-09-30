@@ -111,8 +111,8 @@ itself and calls `draw_paragraph`.
   (`TextLayout::buffer`), inside the ADR-0016 boundary and named as the
   accessor a future engine-owned rasteriser deletes — ADR-0067 deleted it
   the same day.
-- A headless test measures icons in the face the app paints
-  (`icon_fonts_measure_before_any_engine_exists`).
+- A headless process measures icons in the face the app paints.
+  **Unasserted:** no test pins this.
 - **Named gap, not closed:** a registration invalidates caches, but nothing
   marks text render objects dirty on registration (Flutter's
   `PaintingBinding.systemFonts` listener). That is a realm-level broadcast
@@ -141,21 +141,20 @@ itself and calls `draw_paragraph`.
 
 ## Replacement tests
 
-Part 1: `shaping_never_bumps_the_generation`,
-`register_font_bumps_the_generation_once`,
-`a_face_registered_on_the_collection_reaches_measurement_paint_and_carets`,
-`icon_fonts_measure_before_any_engine_exists`
-(`crates/flui-painting/tests/font_registration.rs`);
-`an_empty_host_database_gets_roboto_and_both_icon_faces` and its two
-siblings (`crates/flui-painting/src/fonts.rs`).
+Part 1: `a_face_registered_on_the_collection_reaches_measurement_paint_and_carets`
+(`crates/flui-painting/tests/font_registration.rs`). That shaping leaves the
+generation alone, that a registration moves it exactly once, and that an
+empty host database receives Roboto and both icon faces:
+**Unasserted:** no test pins this.
 
 Part 2: `a_truncated_paragraph_paints_exactly_the_lines_it_measured`
 (records the measured `Arc`, one line, ellipsis in the text) and
 `root_recolor_keeps_the_shaped_buffer_and_span_recolor_reshapes_once`
 (`crates/flui-painting/tests/text_overflow_unit.rs`);
-`max_lines_one_reaches_the_composited_picture_as_one_line` (widgets parity
-tier — the `Text` widget wires `max_lines` but not `TextOverflow::Ellipsis`,
-a gap this ADR names and does not close);
+that `max_lines: 1` reaches the composited picture as one line through the
+`Text` widget is **Unasserted:** no test pins this (the widget wires
+`max_lines` but not `TextOverflow::Ellipsis`, a gap this ADR names and does
+not close);
 the mechanical `the_engine_does_not_shape`
 (`crates/flui-engine/src/paragraph_readback_tests.rs`).
 Flutter's `text_painter_test.dart` maxLines/intrinsics block is

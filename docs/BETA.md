@@ -778,8 +778,9 @@ adapters take a label node's name from its value
 (`accesskit_consumer::Node::label_comes_from_value`); the AppKit adapter falls
 back to the label, which is why the macOS run above passed. Static text now also
 carries its text as its value (`crates/flui-semantics/ARCHITECTURE.md`, mapping
-decision 4), pinned by `static_text_is_named_by_its_text`, which reads the name
-through `accesskit_consumer` as the adapters do.
+decision 4), pinned by `advertised_actions_follow_the_uia_patterns`
+(`crates/flui-semantics/src/agent/tests.rs`), which reads the name through
+`accesskit_consumer` as the adapters do.
 
 Accepted run (Windows 11 Pro 10.0.26200, x86-64, `platform/windows-live-checks`
 on `cf46dfe2`): before the invoke `Text "You have pushed the button this many

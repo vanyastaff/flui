@@ -33,10 +33,9 @@ This extends the existing pre-pipeline recovery invariant to the post-frame
 snapshot. It does not catch-and-continue individual callbacks, request another
 frame, or promise that a platform host survives an application panic. A direct
 or headless caller that catches the propagated panic decides whether to resume.
-The regression tests
-`post_frame_panic_preserves_uninvoked_mixed_tail_before_reentrant_work` and
-`shared_post_frame_panic_preserves_uninvoked_shared_tail_without_local_lane`
-pin tail survival, mixed-queue FIFO, and consumption of the failed entry.
+The regression test
+`post_frame_panic_preserves_uninvoked_mixed_tail_before_reentrant_work` pins
+tail survival, mixed-queue FIFO, and consumption of the failed entry.
 
 ### One recovery boundary closes phase/completion state before any pre-pipeline panic propagates
 
@@ -296,9 +295,8 @@ to become the one the caller observes.
 that a reentrant HIGHER-priority task displaces a still-queued, lower-
 priority sibling to the next call rather than deferring behind it the way
 `handle_begin_frame`'s id watermark does for transient callbacks — named
-above, and covered by its own test
-(`execute_until_lets_a_higher_priority_reentrant_task_displace_a_lower_priority_sibling`)
-rather than left as an unstated difference between the two queues' bounds.
+above rather than left as an unstated difference between the two queues'
+bounds. **Unasserted:** no test pins this.
 
 ### No legacy, lock-tied frame-callback registration API
 
@@ -331,16 +329,17 @@ the deletion, not a lock-scope patch that leaves a second,
 narrower-purpose registration API standing.
 
 **Every remaining callback family already followed, and continues to
-follow, the no-lock-held rule.** This is proven by a shared test oracle
+follow, the no-lock-held rule.** A shared test oracle
 (`scheduler/lock_discipline_tests.rs`'s `assert_no_scheduler_lock_held`,
 `#[cfg(test)]`, exhaustively destructuring `FrameState`/`CallbackState`/
 `BindingState` plus a `TaskQueue`/`AsyncDriver` probe so a new lock cannot
-be added to any of them without this oracle noticing) that `try_lock()`s
-every mutex a callback could legally observe and asserts each is free,
-invoked from inside a callback registered in every family: transient,
-persistent, shared post-frame, owner-local post-frame, idle, microtask,
-lifecycle listener, timings callback, and the `on_frame_scheduled`
-platform-wake hook. Three sibling sites shared a
+be added to any of them without this oracle noticing) `try_lock()`s every
+mutex a callback could legally observe and asserts each is free. It is
+invoked from inside a transient callback and a frame-completion waker
+(`callbacks_run_with_no_scheduler_lock_held`). For the persistent, shared
+post-frame, owner-local post-frame, idle, microtask, lifecycle-listener
+and timings-callback families and the `on_frame_scheduled` platform-wake
+hook, **Unasserted:** no test pins this. Three sibling sites shared a
 related but distinct hazard: `Vec::retain` drops the *removed* element
 while the collection's lock is still held, so a cancelled/removed
 callback's `Drop` could deadlock the same way if it re-entered the
@@ -349,13 +348,8 @@ scheduler. All three were fixed the same release
 consistency, `remove_timings_callback`) by locating the match under the
 lock without a full-`Vec` copy (`position`+`remove` for the two
 `CallbackId`-addressed sites, `extract_if` for the `Arc::ptr_eq`-addressed
-one) and dropping it only after the guard falls. Two of the three carry a
-bounded reproduction
-(`cancel_frame_callback_drops_the_cancelled_callback_outside_the_lock`,
-`remove_lifecycle_state_listener_drops_the_removed_listener_outside_the_lock`);
-`remove_timings_callback`'s hazard is not reachable through its own public
-signature (see that test's own doc comment for why), so its test is a
-plain removal-correctness regression instead of a deadlock reproduction.
+one) and dropping it only after the guard falls. **Unasserted:** no test
+pins this.
 
 **Alternatives considered:**
 
@@ -418,10 +412,7 @@ request.
 `frames_enabled` gate (`ensure_visual_update` calls
 `schedule_frame_if_enabled`, which calls `request_frame` only when
 `frames_enabled` is true) and needed no new code, only a caller.
-`crates/flui-runtime/src/renderer_binding.rs`'s test module pins both
-edges:
-`request_visual_update_does_not_schedule_a_frame_while_frames_are_disabled`
-and `request_visual_update_schedules_a_frame_while_frames_are_enabled`.
+**Unasserted:** no test pins this.
 
 **Alternatives considered:**
 
@@ -672,31 +663,21 @@ allowed to restore.
   outlive — is recorded here rather than changed.
 
 **Tests:** `flui-scheduler`'s `ticker::tests` module —
-`restart_inside_auto_tick_preserves_new_callback_and_one_pending_tick` and
-`mute_then_unmute_inside_tick_delivers_next_frame_once` pin the two measured
-failures directly; `restart_between_ticks_preserves_new_callback` is a
-non-reentrant control; `dispose_inside_tick_drops_the_callback_and_does_not_reschedule`
-and `reset_inside_tick_drops_the_callback_and_does_not_reschedule` are
-controls too — both already passed before this fix (`dispose` cleared the
-registration id and the tail returned at its `disposed` check; `reset` left
-the state `Idle`, so the tail's restore and reschedule were already
-skipped) and guard against a regression rather than pinning one of the
-defects; `a_panicking_tick_callback_leaves_the_slot_restored` pins the
-panic-unwind fix; `stale_callback_is_dropped_outside_the_lock` proves the
-outside-the-lock drop with a non-blocking `try_lock` probe rather than a
-test whose failure mode would be a hang. The manual `Ticker::tick(&self,
-...)` path cannot support the SAME reentrant-restart probe: restarting
-needs `&mut Ticker` (`stop`/`start`), which — since `tick` takes only
-`&self` — is only reachable by wrapping the ticker in an outer lock the
-CALLER holds for `tick`'s entire duration, including the callback; a
-reentrant call back through that same non-reentrant lock self-deadlocks
-before it ever reaches `stop()`. `stop_between_two_manual_ticks_does_not_reinvoke_callback`
-pins the manual path's (non-reentrant) restore contract instead.
-`flui-animation`'s `controller::tests::status_listener_chaining_forward_ticks_once_per_frame_and_stop_fully_stops_it`
-reproduces the auto-scheduling "restart inside tick" failure through the
-real production call chain (a status listener chaining the next run) rather
-than a ticker-level probe, and pins that `stop()` afterward cancels the
-run fully rather than one half of a duplicated pair.
+`restart_inside_auto_tick_preserves_new_callback_and_one_pending_tick` pins
+the restart-inside-a-tick failure directly, and
+`a_panicking_tick_callback_leaves_the_slot_restored` pins the panic-unwind
+fix. The manual `Ticker::tick(&self, ...)` path cannot support the SAME
+reentrant-restart probe: restarting needs `&mut Ticker` (`stop`/`start`),
+which — since `tick` takes only `&self` — is only reachable by wrapping the
+ticker in an outer lock the CALLER holds for `tick`'s entire duration,
+including the callback; a reentrant call back through that same
+non-reentrant lock self-deadlocks before it ever reaches `stop()`. For the
+mute/unmute-inside-a-tick retention failure, `dispose()`/`reset()` inside a
+tick leaving no pending registration, the superseded callback being dropped
+outside the lock, the manual path's (non-reentrant) restore contract, and
+the restart-inside-a-tick failure reached through `AnimationController`'s
+production call chain (a status listener chaining the next run, then
+`stop()` cancelling it fully), **Unasserted:** no test pins this.
 
 **Alternatives considered:**
 
@@ -740,11 +721,8 @@ scheduler: that one advances only as real time passes.
 **Choice:** kept for now, named. Moving the ticker onto the frame timestamp
 changes `start`, `mute`/`unmute`'s elapsed rebasing and the manual
 `Ticker::tick` path together, and belongs with the headless driver that needs
-it, not with the pump that exposed it. Pinned by
-`ticker::tests::a_scheduler_ticker_measures_wall_time_not_the_frame_timestamp`
-(two frames 10 s apart on the frame clock report ticks well under a second
-apart); moving the ticker onto the frame timestamp turns it red, and should
-delete this entry.
+it, not with the pump that exposed it. **Unasserted:** no test pins this.
+Moving the ticker onto the frame timestamp should delete this entry.
 
 ### `end_of_frame` registers before it demands, and the live registry is the memo
 
@@ -768,9 +746,9 @@ what makes the registry the natural place to keep the demand memo.
 **Choice:** the predicate is "no LIVE entry", evaluated on the vec already held
 under the registry guard, and the demand call is `schedule_frame_if_enabled()`
 rather than the ungated `request_frame()`. The guard is released before the demand,
-because the demand reaches the `on_frame_scheduled` hook and
-`frame_scheduled_hook_runs_with_no_scheduler_lock_held` asserts every scheduler
-mutex, `completion_waiters` included, is free inside it.
+because the demand reaches the `on_frame_scheduled` hook, which must find every
+scheduler mutex, `completion_waiters` included, free. **Unasserted:** no test
+pins this.
 
 That predicate has two halves, and only the first belongs to the registry:
 
@@ -846,15 +824,11 @@ That predicate has two halves, and only the first belongs to the registry:
   (measured: 14,641 probes for 121 registrations, under the registry mutex).
   The registry now carries a cursor that retires the tombstones it walks past,
   which makes the scan amortized O(1) and brought the same 121 registrations to
-  241 probes. `the_demand_scan_does_not_rewalk_a_tombstone_prefix` pins it, at
-  both ends: an upper bound alone is satisfied by a predicate that does no
-  scanning at all.
+  241 probes. **Unasserted:** no test pins this.
 - Gating the demand on `phase() == Idle`. Rejected: it goes silent in the post-drain window, where
   `notify_frame_completion` has already emptied the registry but the phase is
   still `PostFrameCallbacks`, so a waiter registered from a completion waker
-  hangs. `crates/flui-scheduler/tests/end_of_frame_lifecycle.rs`'s
-  `a_registration_from_inside_a_completion_waker_demands_the_next_frame` is the
-  oracle for exactly that window.
+  hangs. **Unasserted:** no test pins this.
 - A per-frame "a frame is already open" flag, cleared when the frame ends.
   Rejected for the same defect one level down: every candidate clear point sits
   later than the drain it is meant to pair with, so the flag is still set
@@ -864,10 +838,11 @@ That predicate has two halves, and only the first belongs to the registry:
   used by `TickerFuture` for the sibling problem. Rejected on a structural
   reason this crate has paid for once: `Event::notify` calls `task.wake()`
   inside the closure holding its own internal list mutex, which is the shape
-  issue #1057 removed from `notify_frame_completion`, and two currently-green
-  tests pin the contract it breaks
-  (`notify_frame_completion_tolerates_an_inline_polling_waker` and
-  `notify_frame_completion_still_wakes_a_later_waiter_when_an_earlier_waker_panics`).
+  issue #1057 removed from `notify_frame_completion`.
+  `notify_frame_completion_still_wakes_a_later_waiter_when_an_earlier_waker_panics`
+  pins one half of the contract it breaks. The other half, an inline-polling
+  waker finding free the lock its own future's `poll` takes: **Unasserted:** no
+  test pins this.
 
 **Trade-off accepted:** a registration landing mid-frame while no other waiter
 is live demands a frame the in-flight drain would have served anyway. That
@@ -1050,9 +1025,9 @@ latch (a notification landing on a registered-but-unpolled entry marks it
 `Notified`, and the next `register` reports that) is a redundant second net
 that closes only the `listen()`→poll half and cannot touch the window that is
 the defect. `TickerCompleter::publish` writes the durable state before
-anything is ever delivered, which is what makes the re-read sufficient, and
-`the_resolution_is_published_before_the_notification` pins that ordering
-independently. `poll_resolution` is unchanged by every later redesign in this
+anything is ever delivered, which is what makes the re-read sufficient; for
+that ordering, **Unasserted:** no test pins this. `poll_resolution` is
+unchanged by every later redesign in this
 family — the controller-owned-future rework below moved WHO resolves a run,
 never HOW a poll discovers that it has.
 
@@ -1289,22 +1264,18 @@ before this issue); reusing a per-task waker across polls is a distinct
 optimization this change does not make, named here so it is not mistaken
 for a regression.
 
-**Allocation gate, not just a bench:** `cargo xtask ci` has no bench step, so two
-`#[cfg(test)]`-gated oracles carry the CI-run complexity proof:
+**Allocation gate, not just a bench:** `cargo xtask ci` has no bench step, so a
+`#[cfg(test)]`-gated oracle carries the CI-run allocation proof:
 `tests/async_driver_ready_index_allocation.rs` (a dedicated-binary,
 counting-`#[global_allocator]` test, following `frame_telemetry_allocation.rs`'s
 convention) asserts R=0 at N∈{0, 100,000} costs zero allocations once warm,
 and steady R=64 self-re-waking tasks cost zero *extra* allocations once warm
 (exactly the per-poll waker count, never more) — but an allocation count
 cannot discriminate an O(N) scan from an O(R) drain when R=0, since
-collecting zero ready ids allocates nothing either way. The crate's own
-`#[cfg(test)]` unit test `an_empty_pump_touches_no_dormant_task_flags` closes
-that gap: it wraps each task's own readiness flag in a `ReadyFlag` newtype
-whose `load` increments a `#[cfg(test)]`-only counter (zero cost outside
-tests), then asserts an idle pump makes zero such loads — an O(N) filter-scan
-calls `.load()` once per resident task per pump regardless of readiness, so
-reverting to one reddens this test with a nonzero count (1,000 tasks × 20
-pumps = 20,000, measured).
+collecting zero ready ids allocates nothing either way. That an idle pump
+reads no dormant task's readiness flag (an O(N) filter-scan calls `.load()`
+once per resident task per pump regardless of readiness): **Unasserted:** no
+test pins this.
 
 `benches/async_driver_pump.rs` (criterion) is evidence attached to the PR, not
 a gate. CI's `clippy`/`feature-matrix` jobs pass `--all-targets`/`--benches`,
@@ -1349,8 +1320,7 @@ hazard — deleting it removes the hazard AND the dead surface in one motion.
 it to the counting loop only (no hazard there — `PriorityCount` is a plain
 `Copy` struct with no significant `Drop` — but a lock held longer than the
 work it protects is still worth narrowing on its own merits). It stays,
-unlike `clear`, though it has no production caller EITHER today (its only
-caller is `task.rs`'s own `test_priority_count`): it is a read-only
+unlike `clear`, though it has no caller EITHER today: it is a read-only
 diagnostics accessor, and an unused QUERY costs nothing and commits an
 owner to no distinct behavior, where `clear` was an unused MUTATION whose
 only two observers — its own definition and a test built solely to

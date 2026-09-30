@@ -54,7 +54,7 @@ pub(crate) struct UniformPool {
     queue: Arc<wgpu::Queue>,
     buckets: HashMap<u64, Bucket>,
     /// Cumulative count of buffers ever created — plateaus once a repeating
-    /// workload's buffers are all reused.  Used by tests to prove reuse.
+    /// workload's buffers are all reused.  Nothing reads it: no test pins reuse.
     total_created: u64,
 }
 

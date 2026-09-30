@@ -40,8 +40,8 @@ extension point, and plugin authors cannot define layer types — the accepted t
 
 Payloads are inline unless the variant would dominate the enum (`Canvas` carries a live recorder,
 ~184 B); `Picture` (`Arc` + `Rect`), `ClipPath` (`Arc<Path>`) and `PerformanceOverlay` are small
-and unboxed, so a sealed picture run costs no heap allocation beyond its `Arc`. `layer/mod.rs`'s
-`layer_fits_the_inline_budget` pins the 128 B budget; re-measure before boxing anything.
+and unboxed, so a sealed picture run costs no heap allocation beyond its `Arc`. The budget is
+128 B; re-measure before boxing anything. **Unasserted:** no test pins this.
 
 ### 2. Append-only `LayerTree` with a leader index, not a mutable tree plus a side registry
 
@@ -62,10 +62,11 @@ realm had to commit "as one pair" with the tree — duplicated the leader's offs
 `LeaderLayer` and kept a reverse follower index nothing read. Two leaders on one link in one frame
 is a widget-tree error; a debug build trips, a release build keeps the later one.
 
-Tests: `tree/layer_tree.rs` tests (`push_child_links_both_sides_in_paint_order`,
-`leaders_are_indexed_at_insertion`, `push_child_under_an_unknown_parent_is_a_bug`),
-`flui-engine/src/layer_walk.rs` (`a_deep_chain_survives_a_small_stack`),
-`flui-app`'s `semantics_failure_retry_submits_the_retained_linked_tree`.
+Tests: `tree/layer_tree.rs` tests (`push_child_links_both_sides_in_paint_order`),
+`link.rs` (`linked_across_offset_branches_sums_both_chains`, which finds a leader pushed under a
+branch through the index), `flui-engine/src/layer_walk.rs` (`a_deep_chain_survives_a_small_stack`).
+That `push_child` under an unknown parent panics, and that a semantics-failure retry submits the
+retained tree with its leader index intact: **Unasserted:** no test pins this.
 
 ### 3. One `Layer::local_translation`, read by the walk and the resolver
 
@@ -77,8 +78,8 @@ inclusive of the common ancestor (which cancels). Known limitations, named rathe
 translation (the follower system is offset-only), and a follower on another follower's chain
 contributes zero.
 
-Tests: `link.rs` tests, including `follower_nested_under_its_leader_resolves_to_zero`
-and `linked_through_an_opacity_offset_counts_it`.
+A follower nested under its own leader resolving to zero, and an `Opacity` offset on the
+follower's chain being counted: **Unasserted:** no test pins this.
 
 ### 4. Anchors and size on `FollowerLayer`, resolution at composite time
 

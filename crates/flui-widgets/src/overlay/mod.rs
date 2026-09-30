@@ -326,8 +326,7 @@ impl OverlayHandle {
     /// inserted.
     ///
     /// An empty `new_entries` does nothing, and a reorder to the order already in
-    /// place costs **no rebuild** — pinned by
-    /// `overlay_rearrange_to_the_same_order_is_a_noop`.
+    /// place costs **no rebuild**.
     ///
     /// **Deferred:** choosing where the unmentioned group goes (above or below).
     /// Nothing needs it yet; `Navigator` never asks.

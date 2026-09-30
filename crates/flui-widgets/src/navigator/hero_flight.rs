@@ -1015,8 +1015,7 @@ impl FlightManager {
 ///
 /// The inner `Stack` is **load-bearing**: `RenderTheater` runs no positioned split, so
 /// a `Positioned` handed straight to an overlay entry has its parent data dropped and
-/// lands at the origin. This is verified by
-/// `overlay::tests::positioned_inside_an_overlay_entry_is_laid_out_by_an_inner_stack`.
+/// lands at the origin.
 #[derive(Clone)]
 struct Shuttle {
     flight: Arc<FlightInner>,

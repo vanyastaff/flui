@@ -379,9 +379,9 @@ enum RealmMapMutation {
 /// `close()`/`simulate_close()` both consult that hook — via the shared
 /// `flui_platform::shared::PlatformHandlers::exit_policy` slot — instead of
 /// deciding from their own native window count alone; see
-/// `closing_one_of_two_windows_does_not_exit_through_the_real_platform_hook_closing_both_does`
-/// (`runner.rs`) for the live-loop counterpart of this module's own
-/// mechanism-level tests. Android/web bootstraps do not install this hook
+/// `closing_the_last_window_reentrantly_from_inside_a_dispatch_still_exits`
+/// (`realm_dispatch/tests.rs`), which closes the last window through the
+/// real platform hook. Android/web bootstraps do not install this hook
 /// today (their platforms don't override `set_exit_policy_hook` either, so
 /// doing so would be inert) — stated, not silently assumed.
 #[non_exhaustive]

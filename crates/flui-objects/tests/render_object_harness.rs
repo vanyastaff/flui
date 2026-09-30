@@ -1897,9 +1897,7 @@ fn harness_container_matches_the_widget_stack_it_collapses() {
     // (`RenderTransform`, deliberately, so a visually-overflowing child
     // stays hittable across its whole painted area) is reachable straight
     // through the margin band — both trees must AGREE it hits there, not
-    // that it doesn't. See
-    // `harness_container_margin_alone_does_not_gate_an_overflowing_child`
-    // for the same claim pinned directly (not just diffed).
+    // that it doesn't.
     assert_container_matches_stack(ContainerStackCase {
         case: "a non-zero margin with nothing else set does not gate an overflowing scaled child",
         margin: EdgeInsets::all(10.0),
@@ -1922,9 +1920,7 @@ fn harness_container_matches_the_widget_stack_it_collapses() {
     // margin band (right)" / "(bottom)" probes' load-bearing case: the
     // scale(2) pivot sits at the child's own top-left, so the overflow grows
     // toward the right/bottom, past the inner box and into the margin there,
-    // never toward the left/top. See
-    // `harness_container_color_gates_an_overflowing_child_in_the_margin_band`
-    // for the same claim pinned directly with `color` instead of `padding`.
+    // never toward the left/top.
     assert_container_matches_stack(ContainerStackCase {
         case: "a non-zero margin with a real padding level gates an overflowing scaled child",
         margin: EdgeInsets::all(10.0),
@@ -1999,33 +1995,6 @@ fn harness_limited_box_caps_unbounded_width_in_row() {
 
     assert_eq!(run.box_geometry(run.id("child")).width, 60.0);
 }
-
-// ---- RenderLimitedBox under an overflow-box parent ---------------------------
-//
-// Every case below mounts `RenderConstrainedOverflowBox` as the parent
-// fixture, with per-axis constraint overrides — never a substitute fixture —
-// so `RenderLimitedBox`'s constraint plumbing runs through the same path.
-// Root constraints are a tight 800×600.
-//
-// `RenderLimitedBox`'s getters and setters (default no-cap state + setter
-// read-back) are covered by `limited_box.rs`'s own unit tests
-// (`defaults_are_unset`, `const_constructors`, `setters_return_change_flag`).
-//
-// There is no deep-string-matching harness (see
-// `crates/flui-rendering/docs/TESTING.md`), so the observable content —
-// sizes and offsets — is asserted rather than a diagnostics dump. Not
-// asserted, with reasons:
-// - the parent's own `alignment`/min/max/`fit` diagnostics:
-//   `RenderConstrainedOverflowBox` has a known gap (`docs/ROADMAP.md` —
-//   `debug_fill_properties` omits `alignment` and has no placeholder for
-//   unset overrides).
-// - `RenderLimitedBox`'s own `max_width`/`max_height` diagnostics: already
-//   covered generically just above by
-//   `harness_limited_box_self_describes_and_caps_unbounded_height`.
-// - `RenderConstrainedBox`'s `additional_constraints` diagnostics: already
-//   covered generically by the `harness_constrained_box_*` tests.
-// - dirty-flag markers and relayout-boundary annotations: internal
-//   bookkeeping with no diagnostics equivalent to assert against.
 
 fn harness_offstage_hidden_collapses_and_misses_hits() {
     let run = RenderTester::mount(
@@ -2369,11 +2338,11 @@ fn harness_decorated_box_circle_shape_hit_test_misses_the_corner() {
 
 fn harness_decorated_box_paints_background_before_child() {
     // With the default `DecorationPosition::Background`, the decoration's fill must
-    // land on the canvas BEFORE the child's. `harness_decorated_box_wraps_child`
-    // only asserts `run.painted()` (a layer tree exists somewhere), which would
-    // stay green even if the decoration painted the wrong color or after the
-    // child instead of before it. Assert the actual draw commands and their
-    // order, mirroring `harness_custom_paint_orders_background_child_foreground`.
+    // land on the canvas BEFORE the child's. `run.painted()` (a layer tree
+    // exists somewhere) would stay green even if the decoration painted the
+    // wrong color or after the child instead of before it. Assert the actual
+    // draw commands and their order, mirroring
+    // `harness_custom_paint_orders_background_child_foreground`.
     let run = RenderTester::mount(
         box_node(RenderDecoratedBox::new(BoxDecoration::with_color(
             Color::RED,
@@ -2944,9 +2913,9 @@ fn harness_sliver_fixed_extent_list_geometry() {
 // a layout stamps its own generation onto the children it laid out, and the
 // paint driver skips any child carrying a different one. Every multi-child
 // object gets the property for free, not just the ones that remembered to
-// track a band. See `harness_sliver_list_out_of_band_resident_does_not_paint`
-// below, and the frame-level eviction that still runs above it
-// (`crates/flui-widgets/tests/lazy_list.rs::lazy_list_view_builder_exhausted_budget_evicts_stale_residents_before_paint`).
+// track a band. No test pins the paint-side skip;
+// `harness_placed_generation_gate_excludes_a_dropped_child_from_semantics`
+// pins the same stamp on the semantics walk.
 
 /// Regression for a NARROWER, review-caught defect ported from the eager
 /// grid's original fix: what a poisoned relayout must not lose is the
@@ -4609,12 +4578,10 @@ fn harness_render_animated_size_retarget_mid_flight_has_no_discontinuous_jump() 
 // empirically (a Pinned header at scroll_offset=300 reported
 // `paint_origin == -300.0`, i.e. `overlap == -300.0`, where a correct
 // top-anchored forward viewport must report `overlap == 0.0` for its first
-// sliver). **Fixed** (see `harness_viewport_forward_overlap_is_zero_without_
-// leading_reverse_group` / `harness_viewport_reverse_group_overlap_is_always_
-// zero` above, near the other `RenderViewport` harness tests): the formula now
-// is right for both the no-reverse-group case and the
-// leading-negative-child case (which forces `overlap` to `0.0` for both
-// sequences). It was a pre-existing defect, not something introduced by this
+// sliver). **Fixed**: the formula now is right for both the no-reverse-group
+// case and the leading-negative-child case (which forces `overlap` to `0.0`
+// for both sequences); no test pins the corrected sign. It was a pre-existing
+// defect, not something introduced by this
 // family's pass — no existing sliver in the catalog read `constraints.overlap`
 // in a way any prior test asserted on, so it had zero coverage until these
 // headers exercised it and it also would have affected
@@ -4623,10 +4590,8 @@ fn harness_render_animated_size_retarget_mid_flight_has_no_discontinuous_jump() 
 // depending on `overlap`-derived quantities through a real viewport (they
 // assert `paint_extent`/`effective_scroll_offset`/`max_scroll_obstruction_extent`,
 // none of which round-trip through `overlap` at scroll_offset > 0 in these
-// specific scenarios); the stretch-configuration formulas that DO need a
-// specific `overlap` are covered by the pure unit test in
-// `sliver_persistent_header.rs` using a directly-constructed
-// `SliverConstraints`, sidestepping the viewport entirely.
+// specific scenarios); no test covers the stretch-configuration formulas
+// that DO need a specific `overlap`.
 //
 // A second, separate finding (since fixed): `RenderTester::mount` used to
 // never call `RenderObject::attach` for a Sliver child. Box children went
@@ -4638,9 +4603,7 @@ fn harness_render_animated_size_retarget_mid_flight_has_no_discontinuous_jump() 
 // new `PipelineOwner::insert_sliver_child_render_object` (the
 // Sliver-protocol counterpart of `insert_child_render_object`; see
 // `crates/flui-rendering/tests/attach_detach_lifecycle.rs` for the
-// regression coverage). The snap-animation test below no longer forces its
-// own dirty mark — the real `attach()`-registered controller listener
-// drives it end-to-end.
+// regression coverage).
 
 fn viewport_multi_with_scroll(
     offset: f64,

@@ -33,10 +33,10 @@ targets. Using `crate::` would refer to those test crates instead of the library
 
 The resolver follows [proc-macro-crate 3.5.0](https://docs.rs/proc-macro-crate/3.5.0/proc_macro_crate/)
 and [Cargo dependency renaming](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#renaming-dependencies-in-cargotoml).
-Owner unit tests cover expansion inside libraries; consumer integration tests
-(`tests/facade_consumer.rs` at the root) cover facade-only and SDK-only
-manifests, the SDK beside a facade dev-dependency, renamed dependencies, and
-generic view derives.
+Owner unit tests cover expansion inside libraries; the consumer integration test
+`external_consumers_extend_and_test_through_the_facade` (`tests/facade_consumer.rs` at the root)
+covers facade-only and renamed-facade manifests. SDK-only manifests and the SDK beside a facade
+dev-dependency are **Unasserted:** no test pins this.
 
 ### Routable derive: specificity order, compile-time pattern validation, hidden helpers
 

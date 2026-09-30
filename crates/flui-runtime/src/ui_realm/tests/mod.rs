@@ -214,11 +214,9 @@ pub(crate) fn two_realms_two_threads_no_shared_state() {
     assert_ne!(realm_a.realm_id(), realm_b_id);
 }
 
-/// Extends `dropped_runtime_yields_owner_gone`'s single-realm shape
-/// (`UiRealmError`/`CommandSendError::OwnerGone`) across two coexisting
-/// realms: dropping realm A must leave realm B's wake counter and inbox
-/// completely untouched, and A's own senders must turn `OwnerGone`
-/// rather than silently reaching B.
+/// Across two coexisting realms, dropping realm A must leave realm B's
+/// wake counter and inbox completely untouched, and A's own senders must
+/// turn `CommandSendError::OwnerGone` rather than silently reaching B.
 pub(crate) fn dropping_realm_a_cannot_wake_realm_b() {
     // Realm A's own wake counter has nothing left to assert once A is
     // dropped below (its `wake` closure can never fire again); only
@@ -293,21 +291,6 @@ mod agent_semantics;
 // deferral gate moved to `UiRealm` verbatim; only the receiver syntax
 // changed (`binding.draw_frame(&realm, c)` -> `realm.draw_frame(c)`),
 // never the assertions themselves.
-//
-// NOT migrated in this change (tracked as deferred, not silently
-// dropped): the gesture-arena/pointer-dispatch tests
-// (`shell_installed_arena_resolves_nested_tap_detectors_to_one_winner`,
-// `root_gesture_scope_arbitrates_overlapping_detectors_once`,
-// `realm_input_dispatch_keeps_gesture_state_isolated`,
-// `pointer_input_boundary_drains_a_lone_deferred_winner`,
-// `long_press_fires_at_its_deadline_with_no_further_input`,
-// `resampled_contact_motion_keeps_the_frame_wake_gate_open`), the two
-// scheduler-wake-hook-stealing tests (re-homed to `runner.rs` against
-// the `install_platform_realm`-based once-per-thread seam),
-// `frames_reenable_redirties_root_so_next_frame_paints_not_idle`
-// (re-homed to `runner.rs`, same reason), the IME/text-input module,
-// and the haptics/clipboard/performance-overlay modules (re-homed to
-// `presentation.rs`/`runtime.rs`, whose state now owns them).
 mod frame_pipeline_and_vsync;
 
 // ========================================================================

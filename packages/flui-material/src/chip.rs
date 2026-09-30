@@ -308,9 +308,7 @@ fn chip_icon_color_default(states: WidgetStates, colors: &ColorScheme) -> Color 
 /// [`chip_icon_color_default`], `disabled` does NOT take priority here. A
 /// disabled-and-selected chip's side is `transparent` (the selected
 /// branch), not the disabled-only `onSurface@12%` a pure `disabled`-first
-/// query would give — confirmed against a deliberately `disabled`-first
-/// branch order, which fails
-/// `default_side_selected_and_disabled_stays_transparent_not_the_disabled_color`.
+/// query would give.
 /// Because of this real branch-order difference, `side` is resolved from
 /// plain `(bool, bool)` parameters rather than a [`WidgetStates`] query —
 /// see the module docs' "`ChipThemeData`: plain overrides" section.

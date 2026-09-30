@@ -79,11 +79,9 @@ when no ancestor provides one, and the widget-layer harness installs none. The
 panic is contained, the test still **passes**, the tile degrades, and the `Radio`
 below `SafeArea` never mounts — so the roles that came back belonged to the live
 tile and to nothing else. `packages/flui-material/tests/list_tile.rs` mounts every
-tile under a default `MediaQueryData` for exactly this reason, and
-`a_radio_inside_a_list_tile_announces_as_a_radio_button` is the test whose
-absence let the wrong figure stand: it reddens to
-`[GenericContainer, Button, CheckBox]` when the group flag is removed, which is
-the only thing that changes the answer.
+tile under a default `MediaQueryData` for exactly this reason. Removing the
+group flag, which turns the radio's node into a `CheckBox`, is the only thing
+that changes the answer.
 
 A bare `ListTile` with a `Radio` splits into separate nodes; the like-for-like
 composition of one interactive entity is
@@ -117,40 +115,30 @@ recorded gaps.
 
 **Replacement tests:**
 
-- `crates/flui-semantics/src/accesskit_translation.rs` —
-  `a_checkable_beside_is_button_still_resolves_to_the_checkable` is the pin, and it
-  lives here because the rule does. It asserts every arm of the reordered cascade
-  on a node carrying `IsButton` *beside* the more specific state, plus the
-  `IsButton`-only case as the non-vacuous premise. Its sibling
-  `a_checkable_in_a_mutually_exclusive_group_is_a_radio_button` sets only the
-  checkable flags, so it passes under either order and cannot pin this.
-  `is_link_and_is_text_field_lose_to_is_button_as_they_always_have` pins the
-  *other* half of the cascade — the two arms this reorder deliberately left below
-  `IsButton` (see mapping decision 2).
-- `packages/flui-material/tests/radio.rs` —
-  `a_mounted_radio_announces_as_a_radio_button` and
-  `a_mounted_radio_does_not_announce_as_a_checkbox` pin the direct case;
-  `a_radio_nested_under_an_annotated_ancestor_still_announces_as_a_radio_button`
-  mounts the absorbed composition end-to-end and reddens when the cascade is
-  reverted; `a_radio_without_a_tap_handler_still_announces_as_a_radio_button` pins
-  that interactivity and kind are independent.
 - `packages/flui-material/tests/list_tile.rs` —
-  `a_radio_inside_a_list_tile_announces_as_a_radio_button` pins the composition a
-  user actually writes, through this family's `MediaQuery`-wrapped `themed`
-  fixture. It asserts **both** roles the composition exports (`Button` from the
-  tile's own tap target, `RadioButton` from the radio's separate node), and it
-  reddens to `[GenericContainer, Button, CheckBox]` when `Radio` stops publishing
-  the group flag. It pins the *widget* half of the change rather than this
-  precedence: the tile composition exports the same roles with the cascade
-  reverted, so mounting it here would pin the wrong layer — which is exactly the
-  wrong figure its absence let stand.
-- `packages/flui-material/tests/checkbox.rs` keeps the other arm honest: a
-  checkbox is a `CheckBox` and not a `RadioButton`, so the group flag is what
-  distinguishes them rather than checked state alone. Both of its tests pass
-  before *and* after the reorder, since a checkbox carries neither `IsButton` nor
-  the group flag; they guard the group flag against leaking onto other
-  checkables, which is a real regression to guard against and not evidence for
-  the reorder.
+  `merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button` is the pin
+  for the `RadioButton` arm: its merged node carries the tile's `IsButton` beside
+  the radio's checkable flags, and it resolves `Button` once the checkable arms
+  move back below `IsButton`. `crates/flui-semantics/src/agent/tests.rs` —
+  `every_role_bearing_flag_reads_as_the_role_uia_reports` sets only the checkable
+  flags, so it passes under either order and cannot pin this. The `CheckBox` and
+  `Switch` arms beside `IsButton`, and the *other* half of the cascade — the two
+  arms this reorder deliberately left below `IsButton` (see mapping decision 2):
+  **Unasserted:** no test pins this.
+- `packages/flui-material/tests/radio.rs` —
+  `a_mounted_radio_announces_as_a_radio_button` pins the direct case, and with it
+  the *widget* half of the change: without `Radio`'s group flag the node resolves
+  `CheckBox`. The composition absorbed under an annotated ancestor
+  (`Semantics::new().button(true).child(Radio::new(..))`), a radio without a tap
+  handler, and the bare-tile composition a user actually writes (`Button` from the
+  tile's own tap target, `RadioButton` from the radio's separate node):
+  **Unasserted:** no test pins this.
+- The group flag staying off other checkables (a checkbox is a `CheckBox` and
+  not a `RadioButton`): **Unasserted:** no test pins this. At the flag level,
+  `every_role_bearing_flag_reads_as_the_role_uia_reports` resolves
+  `HasCheckedState` alone to `CheckBox` and beside the group flag to
+  `RadioButton`, so the group flag is what distinguishes them rather than checked
+  state alone.
 
 ### 2. `IsButton` outranks `IsLink` and `IsTextField`
 
@@ -172,12 +160,7 @@ resolves `Role::Button`, which makes the `IsTextField` arm — the one carrying
 reader announces — unreachable for such a node. A widget that publishes both
 intends both.
 
-**Replacement test:** `crates/flui-semantics/src/accesskit_translation.rs` —
-`is_link_and_is_text_field_lose_to_is_button_as_they_always_have` pins the
-current precedence for exactly those two co-flag nodes, so a later reorder cannot
-change the answer silently and the divergence reads as chosen rather than
-overlooked. Its fixture sets the losing flag explicitly and shows each flag
-winning on its own, so the pin cannot read as the `IsButton`-only case.
+**Unasserted:** no test pins this.
 
 ### 3. Semantics assembly is mark-scoped with a whole-tree fallback, and the tree reaches the OS through AccessKit
 
@@ -231,9 +214,10 @@ label (`flui::testing::a11y`, the harnesses) unchanged.
 AccessKit's `Label` has one text slot on UIA and AT-SPI, so the label and the value are
 joined with a newline, the same separator used when merged labels are concatenated.
 
-**Test.** `static_text_is_named_by_its_text` reads each node's name through
-`accesskit_consumer` the way the adapters do; `cargo xtask device windows-a11y` is the live
-check that found the defect.
+**Test.** `advertised_actions_follow_the_uia_patterns` in `src/agent/tests.rs` reads a static
+text's name through `accesskit_consumer` the way the adapters do; `cargo xtask device
+windows-a11y` is the live check that found the defect. For the joined label and value:
+**Unasserted:** no test pins this.
 
 ### 5. The ADR-0080 tools reach FLUI through AccessKit's Windows adapter: `set_value` is `SetText`, `expand`/`collapse` are `Tap`
 
@@ -273,13 +257,13 @@ UI Automation's `RangeValue`) arrives as `SetValue` with `ActionData::NumericVal
 no FLUI argument shape: the handler receives `SetText` with no arguments. Nothing sends
 `Increase`/`Decrease` for it.
 
-**Test.** `every_wire_action_routes_to_a_semantics_action` (one row per `ActionName::ALL`),
-`a_numeric_set_value_routes_set_text_without_its_number`,
-`an_expandable_node_advertises_only_the_transition_its_state_allows` and
-`every_inbound_routable_action_is_advertised_outbound_again` in `accesskit_translation.rs`;
-`a_platform_expand_runs_the_tap_handler_of_a_collapsed_node` in
-`crates/flui-widgets/tests/semantics.rs`. `flui_testing::widgets::LaidOut::invoke_semantics_action` has
-no state guard: sending it the transition the node does not advertise toggles it anyway.
+**Test.** `every_wire_action_routes_to_a_semantics_action` (one row per `ActionName::ALL`) in
+`src/agent/tests.rs`, and `every_inbound_routable_action_is_advertised_outbound_again` in
+`accesskit_translation.rs`, which advertises `Expand` on a collapsed node and `Collapse` on an
+expanded one. For the numeric `set_value` losing its number, a node advertising both
+transitions, and a platform expand reaching a mounted node's tap handler end to end:
+**Unasserted:** no test pins this. `flui_testing::widgets::LaidOut::invoke_semantics_action` has no
+state guard: sending it the transition the node does not advertise toggles it anyway.
 
 ### 6. Every explicit role maps to an AccessKit role; `DragHandle` and `HotKey` stay generic
 
