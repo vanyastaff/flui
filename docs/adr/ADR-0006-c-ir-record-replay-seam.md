@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-06-17
+- **Amended by:** [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (§4: `flui-types` is deleted
+  and `Matrix4` lives in `flui_foundation::geometry`; the one glam edge is unchanged)
 
 ## Context
 

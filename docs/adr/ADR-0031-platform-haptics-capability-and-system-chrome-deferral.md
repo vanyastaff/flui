@@ -4,7 +4,8 @@
 - **Date:** 2026-07-17
 - **Amended by:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (§1–§3: `PlatformHaptics`
   now lives in `flui-platform-api`, re-exported at its old `flui-platform` path; its contract is
-  unchanged)
+  unchanged); [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (§1: `flui-types` is deleted
+  and `HapticFeedback` lives in `flui-platform-api`, as `flui_platform_api::HapticFeedback`)
 
 ## Context
 

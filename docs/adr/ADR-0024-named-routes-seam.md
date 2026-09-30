@@ -1,9 +1,12 @@
 # ADR-0024: Named routes (`on_generate_route`, `push_named`, `RouteSettings.arguments`)
 
-- **Status:** Deprecated. String-named routes are replaced by the typed Router (roadmap track
-  A3: routes as a typed tree, the URL as source of truth). `RouteKey<T>` (§3) is the part to
-  carry over into it. The shipped surface below stays until the Router supersedes it.
+- **Status:** Deprecated. String-named routes are replaced by the typed Router
+  ([ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md): routes as a typed tree, the URL
+  as source of truth). `RouteKey<T>` (§3) is the part to carry over into it. The shipped surface
+  below stays until the Router supersedes it.
 - **Date:** 2026-07-10
+- **Superseded by (on acceptance):** [ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md)
+  (string-named routes; `RouteKey<T>` of §3 carries over)
 
 ## Context
 

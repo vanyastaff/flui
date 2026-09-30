@@ -1,9 +1,13 @@
 # ADR-0019: Navigator routing seam — an owned handle, a pure-data flush, a `dyn Any` pop result
 
-- **Status:** Accepted. The typed Router (roadmap track A3: routes as a typed tree, the URL as
-  the source of truth, push/pop as a thin facade over it) will supersede the Navigator-first
-  shape recorded here. The `dyn Any` pop-result decision (§3) is expected to carry over.
+- **Status:** Accepted. The typed Router
+  ([ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md): routes as a typed tree, the URL as the source of truth, push/pop as a thin facade over it)
+  will supersede the Navigator-first shape recorded here. The `dyn Any` pop-result decision
+  (§3) is expected to carry over.
 - **Date:** 2026-07-09
+- **Superseded in part by (on acceptance):**
+  [ADR-0093](ADR-0093-router-is-the-primary-navigation-api.md) (the Navigator-first shape; §1's
+  pure-data history flush and §3's `dyn Any` pop result carry over)
 
 ## Context
 
