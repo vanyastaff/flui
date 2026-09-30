@@ -4,6 +4,7 @@ use flui_foundation::geometry::Size;
 use flui_log::AppIdentity;
 
 use super::close_request::CloseRequestHandler;
+use super::dev_agent::DevAgent;
 use super::hot_reload::DevReload;
 #[cfg(not(target_arch = "wasm32"))]
 use super::lifecycle::ServiceDefinition;
@@ -147,6 +148,20 @@ pub struct AppConfig {
     /// configuration. The web runner drives no hook.
     pub dev_reload: Option<DevReload>,
 
+    /// The development agent hook, if the application installed one with
+    /// [`Self::with_dev_agent`] (ADR-0095 §3).
+    ///
+    /// `None` (the default): no agent is served, and no devtools crate is in
+    /// the application's graph. `Some`: the desktop and iOS runners attach
+    /// the hook once per event loop and hand it each window that mounts a
+    /// root view once the window is installed; a window with no content, and
+    /// a presentation opened into another window's realm, are not handed
+    /// over. Every window opened with a clone of this configuration shares
+    /// the one hook, so a secondary window is served only when opened with
+    /// the application's configuration. The Android and web runners drive no
+    /// hook, and log so at start.
+    pub dev_agent: Option<DevAgent>,
+
     /// Governs when the platform loop exits once every hosted window has
     /// closed. See [`ExitPolicy`]'s own doc for the drain-before-decide
     /// rule; `run_desktop`'s bootstrap installs this into the live winit
@@ -241,6 +256,7 @@ impl Default for AppConfig {
             show_performance_overlay: false,
             debug_paint: false,
             dev_reload: None,
+            dev_agent: None,
             exit_policy: ExitPolicy::default(),
             executors: None,
             frame_failure_handler: None,
@@ -350,6 +366,16 @@ impl AppConfig {
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_dev_reload(mut self, hook: impl flui_view::dev_reload::DevReloadHook) -> Self {
         self.dev_reload = Some(DevReload::new(hook));
+        self
+    }
+
+    /// Install a development agent hook, such as `flui-devtools`'
+    /// `agent::AgentServer`. See [`Self::dev_agent`] for when the runners call
+    /// it, and [`DevAgentHook`](flui_view::dev_agent::DevAgentHook) for the
+    /// hook's contract. Replaces any hook installed before.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
+    pub fn with_dev_agent(mut self, hook: impl flui_view::dev_agent::DevAgentHook) -> Self {
+        self.dev_agent = Some(DevAgent::new(hook));
         self
     }
 

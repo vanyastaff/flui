@@ -261,6 +261,12 @@ pub struct PresentationState {
     /// renderer fan-out (production read) — announce/event delivery itself
     /// still has no production caller.
     semantics: SemanticsHost,
+    /// The semantics agent a development agent hook reads this presentation
+    /// through, once `UiRealm::dev_agent_window` has vended it. The hook's
+    /// `AgentWindow`s hold it weakly, so dropping it here (at close, or with
+    /// the presentation) stops collection and turns every handle `gone`.
+    /// Owner thread only.
+    pub(crate) dev_agent: RefCell<Option<Arc<crate::ui_realm::SemanticsAgent>>>,
     /// Owner-local widget framework state. One instance per presentation
     /// (ADR-0043) — the realm-level singular binding this used to be
     /// dissolves here; every widget-tree operation for this surface enters
@@ -690,6 +696,7 @@ impl PresentationState {
             focus,
             text_input,
             semantics,
+            dev_agent: RefCell::new(None),
             widgets,
             renderer,
             frames_rendered: Cell::new(0),
@@ -766,6 +773,7 @@ impl PresentationState {
             focus,
             text_input,
             semantics,
+            dev_agent: RefCell::new(None),
             widgets,
             renderer,
             frames_rendered: Cell::new(0),
@@ -1450,6 +1458,9 @@ impl PresentationState {
             // announce-after-close decision this pins.
             self.semantics.clear_announce_callback();
             self.semantics.clear_event_callback();
+            // The development agent goes with the window: its handles answer
+            // `gone` from here on, and its semantics handle is released.
+            drop(self.dev_agent.take());
             // Withdraw from the platform accessibility bridge: detach both
             // listeners so an activation flip or action request arriving after
             // close is dropped at the platform seam (an action that slips

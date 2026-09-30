@@ -42,6 +42,15 @@ serde_json = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
 
+# `agent`: the wire schema the endpoint speaks (a contract crate, which an
+# official package may name) and the local socket it listens on.
+flui-protocol = { workspace = true, features = ["serde"], optional = true }
+interprocess = { workspace = true, optional = true }
+
+# `agent` on Windows: the pipe's owner-only security descriptor, as SDDL.
+[target.'cfg(windows)'.dependencies]
+widestring = { workspace = true, optional = true }
+
 [features]
 # Everything on: a crate that exists only to provide these three modules
 # gives its user nothing with an empty default. Release builds stay at zero
@@ -68,8 +77,21 @@ timeline = ["serde", "dep:serde_json"]
 # to the trees themselves.
 inspector = ["dep:tracing"]
 
+# The development agent server (ADR-0095 §3): serves the application's
+# semantics tree over a local endpoint (a named pipe or Unix socket with a
+# launch token), in debug builds only. Off by default: it opens an endpoint,
+# and an application turns it on behind its own development feature.
+agent = [
+    "dep:flui-protocol",
+    "serde",
+    "dep:serde_json",
+    "dep:tracing",
+    "dep:interprocess",
+    "dep:widestring",
+]
+
 # The complete inventory, kept as an explicit name for `cargo hack` runs.
-full = ["profiling", "timeline", "inspector"]
+full = ["profiling", "timeline", "inspector", "agent"]
 
 [dev-dependencies]
 # `log_capture::disarm_interest_cache`, which this crate's tracing-capturing
@@ -84,11 +106,28 @@ flui-rendering = { path = "../../crates/flui-rendering", version = "=0.2.0-dev" 
 flui-log = { path = "../../crates/flui-log", version = "=0.2.0-dev" }
 # The observer-overhead bench.
 criterion = { workspace = true }
+# The agent endpoint's tests: a 0700 directory for the Unix socket, and a
+# global subscriber that records what the server traces.
+tempfile = { workspace = true }
+tracing-subscriber = { workspace = true }
+# The agent example runs the counter in a real window.
+flui-app = { path = "../../crates/flui-app", version = "=0.2.0-dev" }
 
 # The profiler demo exercises the `profiling`-gated `profiler` module.
 [[example]]
 name = "profiler_demo"
 required-features = ["profiling"]
+
+# The counter, served to an agent over the endpoint.
+[[example]]
+name = "agent_counter"
+required-features = ["agent"]
+
+# The agent endpoint end to end: a separate target, because the rest of the
+# crate builds without the feature.
+[[test]]
+name = "agent_endpoint"
+required-features = ["agent"]
 
 # What an installed observer costs the tree against none.
 [[bench]]

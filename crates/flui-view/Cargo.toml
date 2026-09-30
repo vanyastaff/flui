@@ -39,6 +39,10 @@ flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
 # The `Stream` trait `StreamBuilder` polls. Trait-only.
 futures-core = { workspace = true }
 
+# The agent-protocol schema the development-agent seam speaks
+# (`dev_agent`, ADR-0095 §3).
+flui-protocol = { workspace = true }
+
 # Core dependencies
 parking_lot.workspace = true
 slab = "0.4"

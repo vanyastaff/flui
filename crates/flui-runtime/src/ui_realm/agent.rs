@@ -29,6 +29,8 @@ use flui_protocol::{
     ActionName, ActionRequest, ElementId, ErrorCode, ReadQuery, Retry, Tree, WindowId,
 };
 use flui_semantics::{Placement, SemanticsActionError, WireActionError, WireReadError};
+use flui_view::__runtime::{AgentPort, PendingAnswer};
+use flui_view::dev_agent::{AgentAnswer, AgentFault, AgentWindow, HandleKind};
 use parking_lot::Mutex;
 
 use super::UiRealm;
@@ -177,6 +179,24 @@ impl AgentError {
     }
 }
 
+impl From<AgentError> for AgentFault {
+    /// The development seam's view of the error: its code, retry advice and
+    /// effect, and a message that names element ids only.
+    fn from(error: AgentError) -> Self {
+        let kind = match &error {
+            AgentError::PresentationGone => Some(HandleKind::Window),
+            AgentError::NodeNotFound { .. } => Some(HandleKind::Element),
+            _ => None,
+        };
+        let fault = AgentFault::new(error.code(), error.retry(), error.to_string())
+            .with_may_have_run(error.may_have_run());
+        match kind {
+            Some(kind) => fault.with_kind(kind),
+            None => fault,
+        }
+    }
+}
+
 /// The owner's half of an [`AgentReply`].
 pub(super) type ReplySender<T> = Sender<Result<T, AgentError>>;
 
@@ -293,6 +313,16 @@ impl<T> AgentReply<T> {
     }
 }
 
+impl<T: Send + 'static> PendingAnswer<T> for AgentReply<T> {
+    fn try_take(&mut self) -> Option<Result<T, AgentFault>> {
+        AgentReply::try_take(self).map(|answer| answer.map_err(AgentFault::from))
+    }
+
+    fn recv_timeout(&mut self, timeout: Duration) -> Option<Result<T, AgentFault>> {
+        AgentReply::recv_timeout(self, timeout).map(|answer| answer.map_err(AgentFault::from))
+    }
+}
+
 /// A capability to read one presentation's semantics tree and act on its
 /// elements, from any thread, through the realm's owner inbox.
 ///
@@ -381,6 +411,22 @@ impl SemanticsAgent {
     }
 }
 
+/// The development seam's port: a [`flui_view::dev_agent::AgentWindow`]
+/// reads and acts through the agent the realm vended for it.
+impl AgentPort for SemanticsAgent {
+    fn read(&self, query: ReadQuery) -> Result<AgentAnswer<Tree>, AgentFault> {
+        SemanticsAgent::read(self, query)
+            .map(flui_view::__runtime::agent_answer)
+            .map_err(AgentFault::from)
+    }
+
+    fn act(&self, request: ActionRequest) -> Result<AgentAnswer<()>, AgentFault> {
+        SemanticsAgent::act(self, request)
+            .map(flui_view::__runtime::agent_answer)
+            .map_err(AgentFault::from)
+    }
+}
+
 /// Sends `result` to an agent that may have stopped waiting. A receiver that
 /// is gone is traced by the element and code alone: the answer can carry
 /// labels and values, which stay out of the log.
@@ -418,6 +464,33 @@ impl UiRealm {
             _semantics: Arc::new(handle),
             issued: Arc::new(Mutex::new(IssuedHandles::default())),
         })
+    }
+
+    /// The development agent's window for `presentation`, or `None` when this
+    /// realm does not host it.
+    ///
+    /// The first call vends a [`SemanticsAgent`] (turning collection on and
+    /// requesting a frame, as [`Self::semantics_agent`] does) and keeps it on
+    /// the presentation; later calls hand out the same agent, so every
+    /// window handle shares one semantics handle and one record of issued
+    /// element handles. The returned [`AgentWindow`] holds the agent weakly:
+    /// closing the presentation drops the agent, collection stops on the next
+    /// frame, and every call on the window answers `gone`.
+    #[must_use]
+    pub fn dev_agent_window(&self, presentation: PresentationId) -> Option<AgentWindow> {
+        let state = self.presentations.get(presentation)?;
+        let kept = state.dev_agent.borrow().as_ref().map(Arc::clone);
+        let agent = if let Some(agent) = kept {
+            agent
+        } else {
+            let agent = Arc::new(self.semantics_agent(presentation)?);
+            *state.dev_agent.borrow_mut() = Some(Arc::clone(&agent));
+            agent
+        };
+        let window = WindowId::from_u64(presentation.as_u64())
+            .expect("BUG: a presentation id packs a non-zero generation");
+        let port: std::sync::Weak<dyn AgentPort> = Arc::downgrade(&agent) as _;
+        Some(flui_view::__runtime::agent_window(window, port))
     }
 
     /// The owner half of [`SemanticsAgent::read`].

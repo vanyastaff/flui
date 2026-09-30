@@ -154,6 +154,13 @@ where
         });
     }
     worker_reload.register_realm(&ui_realm);
+    // The development agent's window is vended while the realm is still
+    // ours: if the installation below fails, the realm drops it, and the
+    // hook is handed only a window that finished installing.
+    let agent_window = config
+        .dev_agent
+        .as_ref()
+        .and_then(|agent| agent.vend(&ui_realm, ui_realm.presentation_id()));
 
     // 3b. Wire the wake chain (E0a).
     //
@@ -730,6 +737,9 @@ where
 
     super::host::with_owner_platform(|owner| owner.activate(false));
     tracing::info!("Desktop platform initialized with callbacks");
+    if let (Some(agent), Some(window)) = (config.dev_agent.as_ref(), agent_window) {
+        agent.window_opened(window);
+    }
     rollback.committed = true;
     Ok(RenderedMain {
         window,

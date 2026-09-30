@@ -342,6 +342,30 @@ there belongs to that frame. A reply whose receiver is gone
 is traced by element id and error code only, never a label or a value, and the drain goes on.
 Pinned by `src/ui_realm/tests/agent_semantics.rs`.
 
-**Wiring.** Nothing calls `semantics_agent` in production yet. The planned follow-up has
-`flui-app` vend it through its development hook and `flui-devtools` serve it over a local
-endpoint ([migration plan](../../docs/plans/2026-09-25-architecture-migration-plan.md)).
+**Wiring.** Production reaches the agent through the development-agent hook
+(`flui_view::dev_agent::DevAgentHook`, ADR-0095 §3). `UiRealm::dev_agent_window` vends one
+agent per presentation, keeps it on the `PresentationState`, and hands out
+`flui_view::dev_agent::AgentWindow`s that hold it weakly through the hidden
+`flui_view::__runtime::AgentPort`, so the hook never keeps a closed window or its semantics
+collection alive: closing the presentation drops the agent, collection stops on the next frame,
+and every call on a window answers `gone` (kind `window`). `flui-app`'s desktop and iOS runners
+and `flui_testing::HeadlessDevAgent` drive the hook through `dev_agent::DevAgentHost`; the
+endpoint that serves it is `flui-devtools`' `agent` feature. Pinned by
+`an_agent_for_a_closed_presentation_answers_gone` and `dev_agent_host_contains_its_hook`.
+
+### The development agent host lives in the runtime
+
+**Rule.** `dev_agent::DevAgentHost` is the only code that calls an installed `DevAgentHook`:
+attach once per loop (a second attach while attached is refused), hand over each window with
+content, detach when the loop's `DevAgentAttachment` drops. Each call lends the hook out of its
+slot with no lock held, so a hook that re-enters the host finds the slot empty; a panic drops the
+hook (its `Drop` contained too, its payload forgotten) and every later call does nothing; nothing
+is vended while the hook is not attached, so a hook that failed to attach costs no semantics work.
+
+**Why here.** Two hosts drive it, `flui-app`'s windowed runners and `flui-testing`'s headless
+realm, and the headless one is the only one CI executes (a windowed install creates a GPU
+renderer first). Writing the containment once below both keeps the tested path and the shipped
+path the same code. The devtools server cannot name the runtime (an official package depends on
+`flui-sdk` and the contract crates only), so the hook trait is `flui-view`'s and reaches it
+through the SDK; the runtime holds no transport. Flutter has no counterpart: its service
+extensions are the VM's. Pinned by `dev_agent_host_contains_its_hook` (`src/dev_agent/tests.rs`).

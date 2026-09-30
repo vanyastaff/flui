@@ -40,6 +40,7 @@ use flui_platform_api::{
     WindowId,
 };
 use flui_rendering::layer::{LayerTree, Scene};
+use flui_runtime::dev_agent::{DevAgentAttachment, DevAgentHost};
 use flui_runtime::frame_failure::{
     FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,
     FrameFailureReport,
@@ -52,6 +53,7 @@ use flui_scheduler::{ClockSource, LocalPostFrameHandle};
 use flui_semantics::platform::{
     AccessibilityActionListener, AccessibilityActivationListener, PlatformAccessibility,
 };
+use flui_view::dev_agent::DevAgentHook;
 use parking_lot::Mutex;
 
 /// The window a [`HeadlessRealm`] presents into: window 1 at scale factor 1,
@@ -275,6 +277,44 @@ impl FrameSink for HeadlessSink {
     }
 }
 
+/// A development-agent hook attached the way a runner's event loop attaches
+/// it: once, when this value is built, and detached when it is dropped.
+///
+/// Every [`HeadlessRealm`] built [`with`](HeadlessRealm::with_dev_agent) it
+/// hands the hook its window, as a runner hands it each window it opens, so
+/// one hook can serve several realms, and a realm dropped before the hook is
+/// a window that closed while the tool kept running. Containment is the
+/// runtime's (`flui_runtime::dev_agent`): a hook that panics is dropped, and
+/// the realms keep pumping.
+pub struct HeadlessDevAgent {
+    host: DevAgentHost,
+    attachment: Option<DevAgentAttachment>,
+}
+
+impl HeadlessDevAgent {
+    /// Take `hook` and attach it, as a runner does when its loop starts.
+    #[must_use]
+    pub fn attach(hook: impl DevAgentHook) -> Self {
+        let host = DevAgentHost::new(hook);
+        let attachment = host.attach();
+        Self { host, attachment }
+    }
+
+    /// Whether the hook is attached: it did not panic in `attach` or since.
+    #[must_use]
+    pub fn is_attached(&self) -> bool {
+        self.attachment.is_some() && self.host.is_attached()
+    }
+}
+
+impl std::fmt::Debug for HeadlessDevAgent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeadlessDevAgent")
+            .field("host", &self.host)
+            .finish_non_exhaustive()
+    }
+}
+
 /// A [`UiRealm`] hosted headlessly, driven frame by frame on a manual clock.
 /// See the [module docs](self).
 pub struct HeadlessRealm {
@@ -352,6 +392,20 @@ impl HeadlessRealm {
             clipboard,
             failures,
         }
+    }
+
+    /// Hand this realm's window to `agent`'s hook, as a runner hands it a
+    /// window it has installed. The window's first semantics tree is built
+    /// by the next [`pump`](Self::pump); dropping the realm closes the window,
+    /// and the hook's handle to it answers `gone` from then on.
+    ///
+    /// Does nothing when the hook is not attached.
+    #[must_use]
+    pub fn with_dev_agent(self, agent: &HeadlessDevAgent) -> Self {
+        agent
+            .host
+            .publish(&self.realm, self.realm.presentation_id());
+        self
     }
 
     /// Attach `view` as the realm's root widget, the root view sized to the

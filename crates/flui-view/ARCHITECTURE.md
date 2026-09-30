@@ -438,6 +438,19 @@ callback so a scene built by a plugin image cannot outlive it. Pinned by
 `scene_frame_default_never_calls_render` and by the host's tests in `flui-app`
 (`app/hot_reload/tests.rs`).
 
+### The development-agent hook lives here too
+
+`dev_agent::DevAgentHook` (ADR-0095 §3) is the seam between a host and a tool that serves the
+application's semantics tree to an agent (`flui-devtools`' `agent` server). It sits here for the
+reason `DevReloadHook` does: the host and the tool each name it without naming each other, and a
+package reaches it through `flui-sdk`'s `view` glob. Its calls speak `flui-protocol`'s schema,
+which is why this crate depends on that contract crate. An `AgentWindow` is built only through
+the hidden `__runtime::agent_window`, over a `Weak<dyn __runtime::AgentPort>` the runtime
+implements, so a package can hold and use one but cannot forge one, and a handle never keeps a
+closed window alive. Flutter has no counterpart. Pinned by
+`a_window_answers_through_its_port_until_the_port_is_gone` and the runtime's
+`dev_agent_host_contains_its_hook`.
+
 ### The composition-root seam is a hidden module, not a feature
 
 What the realm-owning crates (`flui-runtime`, `flui-app`, `flui-testing`, `flui-hot-reload`)

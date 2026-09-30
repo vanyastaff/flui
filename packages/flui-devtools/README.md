@@ -1,18 +1,19 @@
 # flui-devtools
 
 Runtime developer tooling for FLUI: the half that runs inside the
-application. Three small, feature-gated modules, each an adapter over a seam
-the framework already exposes. Nothing here walks a widget, element or render
-tree, opens a port, or watches files.
+application. Small, feature-gated modules, each an adapter over a seam the
+framework already exposes. Nothing here walks a widget, element or render tree
+itself, opens a TCP port, or watches files.
 
 | Module | Feature | What it is |
 |--------|---------|------------|
 | `profiler` + `frame_timing_layer` | `profiling` | Per-frame build/layout/paint/compositing timings, jank detection, FPS and history. Fed by a `tracing` layer that subscribes to the framework's own frame spans. |
 | `timeline` | `timeline` | An event recorder with Chrome trace (`chrome://tracing`) and JSON export, plus a bridge that turns the scheduler's `FrameSnapshot`s into trace events. |
 | `inspector` | `inspector` | `InspectorCounters`, a counting `TreeObserver` over the ADR-0040 observation seam: mounts, moves, rebuilds per cause, unmounts. |
+| `agent` | `agent` | `AgentServer`, a `DevAgentHook` that serves the application's semantics tree to an agent over a local endpoint, in debug builds only. Off by default. |
 
-All three features are on by default. A release build stays at zero devtools
-cost by not depending on this crate, not by a feature flag here.
+The first three features are on by default. A release build stays at zero
+devtools cost by not depending on this crate, not by a feature flag here.
 
 ## Profiling a running app
 
@@ -101,10 +102,82 @@ counters.
 Devtools is an official package: its only framework dependency is `flui-sdk`
 ([ADR-0088](../../docs/adr/ADR-0088-official-packages-sdk-and-facade.md)).
 
+## Serving the semantics agent
+
+With the `agent` feature, `flui_devtools::agent::AgentServer` lets an agent (a
+test driver, `flui mcp` once it exists) read a running app's semantics tree as
+ADR-0080 wire nodes and act on its elements, through the same path assistive
+technology takes ([ADR-0095](../../docs/adr/ADR-0095-agent-protocol-schema-crate.md) §3).
+
+**Enabling it.** The application installs the server behind a development
+feature of its own, so a release build never links it:
+
+```toml
+[features]
+dev-agent = ["dep:flui-devtools"]
+
+[dependencies]
+flui-devtools = { version = "0.2.0-dev", default-features = false, features = ["agent"], optional = true }
+```
+
+```rust
+let config = AppConfig::new();
+#[cfg(feature = "dev-agent")]
+let config = config.with_dev_agent(flui_devtools::agent::AgentServer::from_env());
+run_app_with_config(App, config);
+```
+
+`AgentServer::from_env()` reads `FLUI_AGENT_ENDPOINT` (a pipe name on Windows,
+a socket path elsewhere) and `FLUI_AGENT_TOKEN` (at least 32 bytes), which the
+tool that launches the app sets. Without them, in a release build, or with a
+short token the server stays inert and logs why once; if the endpoint cannot
+be bound the app runs on without it. The desktop and iOS runners hand the
+server every window that mounts a root view; Android and web drive no agent.
+
+**Framing.** Newline-delimited JSON, one request per line, at most 1 MiB. The
+first line is `{"hello":{"token":"…"}}`, answered with
+`{"hello":{"protocol":"0.1"}}`; then:
+
+| Request | Reply |
+|---|---|
+| `{"id":1,"op":"windows"}` | `{"id":1,"result":{"windows":["w3"]}}` |
+| `{"id":2,"op":"read","window":"w3","query":{"max_depth":4}}` | `{"id":2,"result":{"roots":[…]}}` |
+| `{"id":3,"op":"act","window":"w3","request":{"element":"e7","action":"invoke"}}` | `{"id":3,"result":{}}` |
+
+Element handles are scoped to their window, so every read and action names
+one. A failure is ADR-0080's error object,
+`{"id":n,"error":{"code","message","retry","kind"?,"handle"?,"effect"?}}`: a
+closed window answers `gone` with kind `window`; a request the app does not
+answer within the reply timeout (5 s) answers `timeout`, with retry `soon` for
+a read and the `may_have_run` effect for an action, which is still queued and
+runs at the next frame. Read the tree for an action's effect rather than
+acting again.
+
+**Security model.** The endpoint is local only: a named pipe that admits its
+owner alone and refuses remote clients, or a Unix socket in a directory the
+current user owns with mode `0700` (the server refuses any other). A client
+must present the launch token first, compared in constant time; a wrong or
+missing token closes the connection without a reply. The token keeps out
+other users and remote callers, not other processes of the same user, which
+can read the app's environment as they can reach the endpoint. What the
+server logs carries operation names, window and element ids, error codes and
+timings, never a label, a value or a request line.
+
+**Try it.**
+
+```sh
+FLUI_AGENT_ENDPOINT=flui-agent-demo \
+FLUI_AGENT_TOKEN=0123456789abcdef0123456789abcdef \
+  cargo run -p flui-devtools --example agent_counter --features agent
+```
+
+The endpoint is pinned by `tests/agent_endpoint.rs`, which serves a headless
+counter over a real pipe or socket.
+
 ## What this crate is not
 
-There is no inspector UI, no DevTools server, no network monitor, no memory
-profiler and no remote-debug protocol. Hot reload is two other places: the
+There is no inspector UI, no network monitor, no memory profiler and no
+remote-debug protocol beyond the agent endpoint above. Hot reload is two other places: the
 runtime half is `flui-hot-reload`, linked by the app; the source watcher and
 rebuild loop are the `flui` CLI.
 

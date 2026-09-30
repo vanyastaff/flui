@@ -221,6 +221,13 @@ dashmap = "6.1"
 # Bounded typed mailboxes (private render-invalidation channel, UiRealm
 # owner inbox — bounded queues with typed backpressure only)
 crossbeam-channel = "0.5"
+# Local sockets (a named pipe on Windows, a Unix domain socket elsewhere),
+# synchronous: `flui-devtools`' agent endpoint (ADR-0095 §3). No default
+# features, so no tokio integration.
+interprocess = { version = "2.4", default-features = false }
+# The SDDL string of the agent endpoint's owner-only pipe security descriptor
+# (Windows); `interprocess` already builds it.
+widestring = "1"
 
 # TIME - std::time re-export on native; performance.now()-backed Instant on
 # wasm32 (std Instant::now() panics there). Single source so every crate's

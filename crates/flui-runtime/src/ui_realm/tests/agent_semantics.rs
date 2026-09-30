@@ -422,8 +422,31 @@ fn an_agent_for_a_closed_presentation_answers_gone() {
     let agent = realm
         .semantics_agent(second)
         .expect("the realm hosts the second presentation");
+    let dev_window = realm
+        .dev_agent_window(second)
+        .expect("the realm hosts the second presentation");
+    let again = realm
+        .dev_agent_window(second)
+        .expect("the realm hosts the second presentation");
+    assert_eq!(dev_window.id(), again.id());
+    assert!(dev_window.is_open());
     assert!(realm.close_presentation_entered(second));
     assert!(realm.semantics_agent(second).is_none());
+    assert!(realm.dev_agent_window(second).is_none());
+    assert!(
+        !again.is_open(),
+        "the development agent went with its presentation"
+    );
+    let fault = dev_window
+        .read(ReadQuery::new())
+        .expect_err("a closed window answers at once");
+    assert_eq!(
+        (fault.code(), fault.kind()),
+        (
+            ErrorCode::Gone,
+            Some(flui_view::dev_agent::HandleKind::Window)
+        )
+    );
 
     let reply = agent.read(ReadQuery::new()).expect("the inbox has room");
     let report = realm.drain_commands();

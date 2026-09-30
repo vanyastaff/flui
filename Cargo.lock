@@ -1511,6 +1511,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "doctest-file"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2db04e74f0a9a93103b50e90b96024c9b2bdca8bce6a632ec71b88736d3d359"
+
+[[package]]
 name = "document-features"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1988,17 +1994,22 @@ name = "flui-devtools"
 version = "0.2.0-dev"
 dependencies = [
  "criterion",
+ "flui-app",
  "flui-log",
  "flui-objects",
+ "flui-protocol",
  "flui-rendering",
  "flui-sdk",
  "flui-testing",
+ "interprocess",
  "parking_lot",
  "serde",
  "serde_json",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
  "web-time",
+ "widestring",
 ]
 
 [[package]]
@@ -2428,6 +2439,7 @@ dependencies = [
  "flui-macros",
  "flui-objects",
  "flui-painting",
+ "flui-protocol",
  "flui-rendering",
  "flui-scheduler",
  "flui-testing",
@@ -3356,6 +3368,19 @@ dependencies = [
  "once_cell",
  "similar",
  "tempfile",
+]
+
+[[package]]
+name = "interprocess"
+version = "2.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6cb02ffbf25e8ef0f4a95bff054eef75f6d1bf16919474cf2caa63b21997478a"
+dependencies = [
+ "doctest-file",
+ "libc",
+ "recvmsg",
+ "widestring",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5313,6 +5338,12 @@ dependencies = [
  "font-types 0.12.5",
  "once_cell",
 ]
+
+[[package]]
+name = "recvmsg"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3edd4d5d42c92f0a659926464d4cce56b562761267ecf0f469d85b7de384175"
 
 [[package]]
 name = "redox_syscall"
