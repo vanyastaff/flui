@@ -227,7 +227,7 @@ flui run --scene --scene-crate <scene-crate> --package com.example.app --target 
 
 ## WASM / Web
 
-WASM has no `dlopen`. Use `tools/web-server` for rebuild + HTTP serve. Strategy: `ReloadStrategy::None` at runtime; layer 1 is manual `wasm-pack build`.
+WASM has no `dlopen`. `flui run --device browser:<browser>` serves the wasm32 build and reloads the open page on every rebuild (`r` rebuilds by hand). Strategy: `ReloadStrategy::None` at runtime.
 
 ## iOS
 

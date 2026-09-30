@@ -89,9 +89,9 @@ FLUI_SCENE_PLUGIN=target/debug/libflui_scene.so cargo run --example scene_render
 
 | Example | Run |
 |---|---|
-| **web_demo** — Web/WASM platform demo | `cd examples/web_demo && wasm-pack build --target web --out-dir pkg`, then `cargo run -p flui-web-server` |
+| **web_demo** — Web/WASM platform demo | `cd examples/web_demo && wasm-pack build --target web --out-dir pkg`; serve `examples/web_demo/` over HTTP |
 | **web_counter** — the counter template through `flui::run_app`, plain `cargo` + `wasm-bindgen` (no `wasm-pack`) | `cargo build -p flui-web-counter --locked --release --target wasm32-unknown-unknown`, then `wasm-bindgen --target web --out-dir examples/web_counter/pkg ${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/release/flui_web_counter.wasm`; serve `examples/web_counter/` over HTTP |
-| **painting_demo** — Web/WASM painting + engine demo | `cd examples/painting_demo && wasm-pack build --target web --out-dir pkg` |
+| **painting_demo** — Web/WASM painting + engine demo | `cd examples/painting_demo && wasm-pack build --target web --out-dir pkg`; serve `examples/painting_demo/` over HTTP |
 
 ## Android
 
