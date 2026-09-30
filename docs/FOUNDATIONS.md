@@ -41,7 +41,7 @@ Every subsystem has two axes. **Behavior** is always Flutter — the constraint,
 
 | Subsystem | Behavior source (`.flutter/`) | Structure source | Target shape |
 |---|---|---|---|
-| Three trees & ownership | `widgets/framework.dart`, `rendering/object.dart` | Flutter + Masonry | `Slab` arenas, 1-based niche-optimized IDs (generational for elements and render objects), library-owns-nodes |
+| Three trees & ownership | `widgets/framework.dart`, `rendering/object.dart` | Flutter + Masonry | `Slab` arenas, niche-optimized IDs (plain slab-backed ids are the slot plus one; element and render-object keys are generational, built from the 0-based slot with `new_gen`), library-owns-nodes |
 | Reconciliation | `framework.dart` `updateChildren` | Xilem `rebuild` + Flutter keyed algo | Typed `rebuild`, keyed O(N) linear, `key` on every node |
 | Layout protocol | `rendering/box.dart` | Flutter + FLUI arity type-state | Constraints down / sizes up, `RenderBox` with an associated `type Arity` |
 | Paint & display list | `rendering/object.dart`, `dart:ui` | Flutter / Skia / Vello record-replay | `Canvas` → `DisplayList` of `DrawCommand`, GPU-free |
