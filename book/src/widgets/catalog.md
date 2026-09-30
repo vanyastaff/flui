@@ -1,10 +1,10 @@
 # Widget catalog
 
-FLUI is not yet published to crates.io, so there is no live docs.rs page to link to yet — until
-there is, this page points at the source tree and the runnable catalog instead of listing every
-widget by name here (a hand-maintained list would go stale the moment a widget is added; the
-source directories and the gallery example do not). Screenshots are planned for a later pass of
-this book (see the beta roadmap's H2 tracking).
+The framework crates are not yet published to crates.io (only the `flui-cli` tool is), so there
+is no docs.rs page for the widgets to link to yet — until there is, this page points at the source
+tree and the runnable catalog instead of listing every widget by name here (a hand-maintained list
+would go stale the moment a widget is added; the source directories and the gallery example do
+not). This page has no screenshots yet.
 
 ## See it running
 

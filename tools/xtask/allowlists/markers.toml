@@ -20,11 +20,6 @@ class = "wave"
 count = 1
 
 [[allow]]
-path = "book/book.toml"
-class = "tracker-h"
-count = 1
-
-[[allow]]
 path = "crates/flui-animation/src/lib.rs"
 class = "wave"
 count = 1

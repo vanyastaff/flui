@@ -1,6 +1,7 @@
 # View, Element, RenderObject
 
-FLUI's pipeline is three trees, each rebuilt from the last:
+FLUI's pipeline is four trees, each built from the last, with a fifth, the `Semantics` tree
+(`flui-semantics`), built alongside for accessibility:
 
 ```text
 View (config)  →  Element (lifecycle)  →  RenderObject (layout/paint)  →  Layer (retained)
@@ -60,7 +61,7 @@ pub enum Layer { /* Canvas, Picture, Texture, PlatformView, ... */ }
 ```
 
 *(`crates/flui-layer/src/layer/mod.rs`)* — the retained compositing tree that paint produces,
-consumed by `flui-engine`'s compositor. Unlike the other three, `Layer` is a closed `enum` rather
-than a trait — FLUI's layer set is a known, fixed vocabulary rather than an extensible hierarchy,
+consumed by `flui-engine`'s compositor. Unlike `View` and `RenderObject`, `Layer` is a closed
+`enum` rather than a trait — FLUI's layer set is a known, fixed vocabulary rather than an extensible hierarchy,
 which is one of the deliberate divergences from Flutter's `Layer` class hierarchy (see the
 crate's own `ARCHITECTURE.md` for the reasoning).
