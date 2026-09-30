@@ -13,11 +13,13 @@
 //! directory is a build's only if the build found it missing or empty: the
 //! build then leaves an [`OWNER_MARKER`] in it naming the owner (a digest of
 //! the platform and the project, so the marker carries no local path into a
-//! deliverable), and records the claim in the project's output root. `flui clean` removes a recorded directory only while the marker
-//! still names the same owner. A directory that held anything before the
-//! first build into it (`--output .`, `--output src`, a shared folder, the
-//! output of another platform or project) is never claimed, so it is never
-//! removed.
+//! deliverable), and records the claim in the project's output root. `flui
+//! clean` removes a recorded directory only while the marker still names
+//! the same owner. A directory that held anything before the first build
+//! into it (`--output .`, `--output src`, a shared folder) is never claimed,
+//! so it is never removed. A build refuses a directory whose marker names
+//! another platform or project: its output would land inside a directory
+//! the other build's clean removes whole.
 //!
 //! The marker is the proof of ownership; the record is only an index of
 //! where to look. Each claim is a file of its own holding the directory's
@@ -125,9 +127,19 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
     })
 }
 
-/// Whether `dir` carries an owner marker naming `owner`.
-fn owned_by(dir: &Path, owner: &[u8]) -> bool {
-    std::fs::read(dir.join(OWNER_MARKER)).is_ok_and(|marker| marker == owner)
+/// Whether `dir` carries an owner marker naming `owner`: `Ok(false)` without
+/// a marker or with another owner's, an error when the marker exists but
+/// cannot be read, so a caller never mistakes "unreadable" for "not ours".
+fn owned_by(dir: &Path, owner: &[u8]) -> io::Result<bool> {
+    let marker = dir.join(OWNER_MARKER);
+    match std::fs::read(&marker) {
+        Ok(bytes) => Ok(bytes == owner),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(io::Error::new(
+            error.kind(),
+            format!("could not read {}: {error}", marker.display()),
+        )),
+    }
 }
 
 /// Create `ctx.output_dir`. An `--output` directory the build finds missing
@@ -148,8 +160,21 @@ pub(crate) fn prepare_output_dir(ctx: &BuilderContext) -> io::Result<()> {
     }
 
     let owner = owner(&std::fs::canonicalize(&ctx.workspace_root)?, platform);
-    let claimable = match std::fs::read_dir(dir) {
-        Ok(mut entries) => entries.next().is_none() || owned_by(dir, &owner),
+    let claimable = match std::fs::read_dir(dir).map(|mut entries| entries.next().is_none()) {
+        Ok(true) => true,
+        Ok(false) if owned_by(dir, &owner)? => true,
+        // A marker naming someone else: refuse, or that owner's clean would
+        // remove this build's output along with its own.
+        Ok(false) if dir.join(OWNER_MARKER).exists() => {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!(
+                    "{} holds the output of another platform or project; build into another directory",
+                    dir.display()
+                ),
+            ));
+        }
+        Ok(false) => false,
         Err(error) if error.kind() == io::ErrorKind::NotFound => true,
         Err(error) => return Err(error),
     };
@@ -195,14 +220,17 @@ impl Cleaned {
     pub(crate) fn record(&mut self, path: PathBuf, result: io::Result<()>) {
         match result {
             Ok(()) => self.removed.push(path),
-            Err(error) => {
-                if self.failure.is_none() {
-                    self.failure = Some(io::Error::new(
-                        error.kind(),
-                        format!("could not remove {}: {error}", path.display()),
-                    ));
-                }
-            }
+            Err(error) => self.fail(io::Error::new(
+                error.kind(),
+                format!("could not remove {}: {error}", path.display()),
+            )),
+        }
+    }
+
+    /// Keep `error` unless an earlier failure is already kept.
+    pub(crate) fn fail(&mut self, error: io::Error) {
+        if self.failure.is_none() {
+            self.failure = Some(error);
         }
     }
 
@@ -243,18 +271,25 @@ pub(crate) fn clean_output_dirs(
         Ok(project) => {
             let owner = owner(&project, platform);
             for (claim, dir) in read_claims(&claims) {
-                let owned = dir
-                    .as_deref()
-                    .filter(|dir| owned_by(dir, &owner) && !project.starts_with(dir));
-                let Some(dir) = owned else {
+                // A claim whose directory is gone (or whose bytes name no
+                // directory) has nothing left to remove.
+                let Some(dir) = dir.filter(|dir| dir.is_dir() && !project.starts_with(dir)) else {
                     forget(&claim);
                     continue;
                 };
-                let result = remove(dir);
-                if result.is_ok() {
-                    forget(&claim);
+                match owned_by(&dir, &owner) {
+                    Ok(true) => {
+                        let result = remove(&dir);
+                        if result.is_ok() {
+                            forget(&claim);
+                        }
+                        cleaned.record(dir, result);
+                    }
+                    // No longer this build's: nothing to retry.
+                    Ok(false) => forget(&claim),
+                    // Unreadable is not "not ours": keep the claim to retry.
+                    Err(error) => cleaned.fail(error),
                 }
-                cleaned.record(dir.to_path_buf(), result);
             }
         }
         // Without the project there is no owner to check a claim against:
@@ -513,12 +548,16 @@ mod tests {
         clean(&root).expect("clean");
     }
 
-    fn another_platforms_output_is_not_claimed() {
+    fn another_platforms_output_is_refused() {
         let (tmp, root) = project();
         let out = tmp.path().join("dist");
         prepare_output_dir(&web_ctx(&root, Some(out.clone()))).expect("web build");
         std::fs::write(out.join("index.html"), "").expect("web deliverable");
-        prepare_output_dir(&desktop_ctx(&root, out.clone())).expect("desktop build");
+        let refused = prepare_output_dir(&desktop_ctx(&root, out.clone()));
+        assert!(
+            refused.is_err(),
+            "a desktop build wrote into the web build's claimed dir, which the web clean removes whole"
+        );
         let cleaned = clean_output_dirs(
             &root,
             &project_output_root(&root),
@@ -534,14 +573,17 @@ mod tests {
         assert!(!out.exists(), "the web build's own output survived");
     }
 
-    fn another_projects_output_is_not_claimed() {
+    fn another_projects_output_is_refused() {
         let (tmp, root) = project();
         let other = tmp.path().join("other");
         std::fs::create_dir_all(&other).expect("other project");
         let out = tmp.path().join("dist");
         prepare_output_dir(&web_ctx(&root, Some(out.clone()))).expect("our build");
         std::fs::write(out.join("index.html"), "").expect("our deliverable");
-        prepare_output_dir(&web_ctx(&other, Some(out.clone()))).expect("their build");
+        assert!(
+            prepare_output_dir(&web_ctx(&other, Some(out.clone()))).is_err(),
+            "another project wrote into our claimed dir, which our clean removes whole"
+        );
         clean(&other).expect("their clean");
         assert!(
             out.join("index.html").is_file(),
@@ -639,6 +681,33 @@ mod tests {
         );
     }
 
+    /// A marker that exists but cannot be read (here a directory in its
+    /// place): the clean reports it, keeps the dir and its claim, and once the
+    /// marker reads again the next clean removes the dir.
+    fn an_unreadable_marker_keeps_the_claim() {
+        let (tmp, root) = project();
+        let out = tmp.path().join("dist");
+        prepare_output_dir(&web_ctx(&root, Some(out.clone()))).expect("prepare");
+        let marker = out.join(OWNER_MARKER);
+        let owner_bytes = std::fs::read(&marker).expect("marker");
+        std::fs::remove_file(&marker).expect("drop marker");
+        std::fs::create_dir(&marker).expect("unreadable marker");
+
+        assert!(
+            clean(&root).is_err(),
+            "an unreadable marker was not reported"
+        );
+        assert!(out.is_dir(), "a dir with an unreadable marker was removed");
+
+        std::fs::remove_dir(&marker).expect("restore marker");
+        std::fs::write(&marker, owner_bytes).expect("restore marker");
+        clean(&root).expect("clean");
+        assert!(
+            !out.exists(),
+            "the claim was forgotten while the marker was unreadable"
+        );
+    }
+
     fn members_of_one_workspace_keep_apart() {
         let (tmp, _root) = project();
         let workspace = tmp.path().join("workspace");
@@ -726,12 +795,16 @@ mod tests {
                 an_unwritable_record_breaks_neither_build_nor_clean,
             ),
             (
-                "another_platforms_output_is_not_claimed",
-                another_platforms_output_is_not_claimed,
+                "another_platforms_output_is_refused",
+                another_platforms_output_is_refused,
             ),
             (
-                "another_projects_output_is_not_claimed",
-                another_projects_output_is_not_claimed,
+                "another_projects_output_is_refused",
+                another_projects_output_is_refused,
+            ),
+            (
+                "an_unreadable_marker_keeps_the_claim",
+                an_unreadable_marker_keeps_the_claim,
             ),
             (
                 "concurrent_claims_are_all_recorded",

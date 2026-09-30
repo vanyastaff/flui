@@ -23,9 +23,9 @@
 - `flui clean --platform <android|ios|web|desktop>` (`desktop` is new, one output directory for
   every desktop target) removes the build's output in
   `<target-dir>/flui-out/<project>/<platform>/`, and each `--output` directory a build created (or found empty): the
-  build leaves a `.flui-out` marker there naming the platform and project, and a directory that held
-  anything before the first build into it, another platform's or project's output included, is
-  never removed. For web it removed `platforms/web/pkg/`, which no build writes.
+  build leaves a `.flui-out` marker there naming the platform and project, a directory that held
+  anything before the first build into it is never removed, and a build refuses a directory whose
+  marker names another platform or project. For web it removed `platforms/web/pkg/`, which no build writes.
   `flui clean` without `--platform` removes every platform's `--output` directories too, before
   `cargo clean` removes the record of them; `--deep` still adds what the platform build tools write
   in `platforms/`. The record of those directories is only an index: losing or damaging it

@@ -64,15 +64,12 @@ pub(crate) fn execute(deep: bool, platform: Option<String>) -> CliResult<()> {
 
         let spinner = ui::spinner();
         spinner.start("Cleaning cargo artifacts...");
-        let _ = CargoCommand::clean()
+        let cargo = CargoCommand::clean()
             .output_style(OutputStyle::Silent)
-            .run()?;
+            .run()
+            .map(drop);
         spinner.stop(format!("{} Cargo artifacts cleaned", style("✓").green()));
-        // A directory that could not be removed fails the clean, but only
-        // after everything else, cargo's artifacts included, was cleaned.
-        if let Some(failure) = cleaned.failure {
-            return Err(failure.into());
-        }
+        first_failure(cleaned.failure, cargo)?;
     }
 
     let mode = if deep { "deep" } else { "standard" };
@@ -94,6 +91,17 @@ fn report_removed(removed: &[PathBuf]) -> CliResult<()> {
         ui::info(format!("Removed {}", path.display()))?;
     }
     Ok(())
+}
+
+/// The outcome of a clean that removed build outputs and then ran `cargo
+/// clean`: a directory that could not be removed fails it, since that
+/// failure came first, and otherwise cargo's result does. Either way both
+/// ran.
+fn first_failure(removal: Option<std::io::Error>, cargo: CliResult<()>) -> CliResult<()> {
+    match removal {
+        Some(failure) => Err(failure.into()),
+        None => cargo,
+    }
 }
 
 /// The build outputs of every platform: each one's output directories and,
@@ -212,6 +220,21 @@ mod tests {
         );
     }
 
+    fn a_removal_failure_outranks_a_later_cargo_failure() {
+        let removal = std::io::Error::other("could not remove dist");
+        let cargo = Err(CliError::Missing("cargo clean failed".into()));
+        let error = first_failure(Some(removal), cargo).expect_err("both failed");
+        assert!(
+            matches!(&error, CliError::Io(io) if io.to_string() == "could not remove dist"),
+            "cargo's later failure replaced the first: {error:?}"
+        );
+        assert!(first_failure(None, Ok(())).is_ok());
+        assert!(
+            first_failure(None, Err(CliError::Missing("cargo".into()))).is_err(),
+            "cargo's own failure was dropped"
+        );
+    }
+
     #[test]
     fn clean_without_a_platform_removes_every_platforms_outputs() {
         crate::test_cases::run_cases(&[
@@ -226,6 +249,10 @@ mod tests {
             (
                 "one_platforms_failure_does_not_stop_the_others",
                 one_platforms_failure_does_not_stop_the_others,
+            ),
+            (
+                "a_removal_failure_outranks_a_later_cargo_failure",
+                a_removal_failure_outranks_a_later_cargo_failure,
             ),
         ]);
     }
