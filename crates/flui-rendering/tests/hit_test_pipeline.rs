@@ -31,7 +31,7 @@ fn hits(
 // ============================================================================
 
 pub(crate) fn padding_child_hits_leaf_first_at_laid_out_offset() {
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let padding_id = owner.insert(Box::new(RenderPadding::all(5.0)) as BoxedRenderObject);
     let child_id = owner
         .insert_child_render_object(padding_id, Box::new(RenderColoredBox::red(40.0, 40.0)))
@@ -63,7 +63,7 @@ pub(crate) fn padding_child_hits_leaf_first_at_laid_out_offset() {
 // ============================================================================
 
 pub(crate) fn transform_child_hits_through_inverse_matrix() {
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let transform_id =
         owner.insert(Box::new(RenderTransform::scale(2.0, 2.0)) as BoxedRenderObject);
     let child_id = owner
@@ -97,7 +97,7 @@ pub(crate) fn transform_child_hits_through_inverse_matrix() {
 /// tree PANICKED in from_erased (the walk hardcoded BoxParentData) —
 /// Flex/Stack were impossible in production layout.
 pub(crate) fn flex_lays_out_and_hits_children_at_layout_offsets() {
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let flex_id = owner.insert(Box::new(RenderFlex::row()) as BoxedRenderObject);
     let first = owner
         .insert_child_render_object(flex_id, Box::new(RenderColoredBox::red(40.0, 40.0)))

@@ -27,7 +27,7 @@ fn mount_two_node_tree() -> (
     PipelineOwner<flui_rendering::pipeline::Idle>,
     flui_foundation::RenderId,
 ) {
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let root_id = owner.insert(Box::new(RenderPadding::all(5.0))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
     let child_id = owner

@@ -57,7 +57,7 @@ impl RenderBox for Labeled {
 /// labeled leaves each, semantics enabled and settled (first pass done).
 /// Returns the owner at Idle plus one leaf id to mark.
 fn settled_owner(branches: usize) -> (PipelineOwner<Idle>, flui_foundation::RenderId) {
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let root = owner.set_root_render_object(Box::new(Labeled {
         label: "root",
         boundary: false,

@@ -5557,7 +5557,7 @@ fn harness_subtree_anchor_detach_preserves_replacement_publication() {
     use flui_rendering::pipeline::PipelineOwner;
     use flui_rendering::protocol::BoxProtocol;
     let anchor = SubtreeAnchor::new();
-    let mut owner = PipelineOwner::new();
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let first = owner.insert::<BoxProtocol>(Box::new(RenderSubtreeAnchor::new(anchor.clone())));
     let second = owner.insert::<BoxProtocol>(Box::new(RenderSubtreeAnchor::new(anchor.clone())));
     assert_eq!(anchor.get(), Some(second));

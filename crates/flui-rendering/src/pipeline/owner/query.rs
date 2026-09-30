@@ -504,7 +504,7 @@ fn intrinsic_query_impl(
                 children.len(),
                 &child_parent_data_refs,
                 &mut child_query,
-                Some(crate::pipeline::TextSource::new(text)),
+                crate::pipeline::TextSource::new(text),
             )
         };
         if let Some(err) = child_err {
@@ -642,7 +642,7 @@ fn dry_layout_query_impl(
                 children.len(),
                 &child_parent_data_refs,
                 &mut child_query,
-                Some(crate::pipeline::TextSource::new(text)),
+                crate::pipeline::TextSource::new(text),
             )
         };
         if let Some(err) = child_err {
@@ -787,7 +787,7 @@ fn dry_baseline_query_impl(
                 children.len(),
                 &child_parent_data_refs,
                 &mut child_query,
-                Some(crate::pipeline::TextSource::new(text)),
+                crate::pipeline::TextSource::new(text),
             )
         };
         if let Some(err) = child_err {

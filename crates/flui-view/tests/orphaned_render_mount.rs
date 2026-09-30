@@ -82,7 +82,9 @@ fn misuse_tree() -> (
     BuildOwner,
     flui_foundation::ElementId,
 ) {
-    let pipeline = PipelineCell::new(PipelineOwner::new());
+    let pipeline = PipelineCell::new(PipelineOwner::new(
+        flui_rendering::TextContextHandle::standalone(),
+    ));
     let mut tree = ElementTree::new();
     let mut build_owner = BuildOwner::new();
     let root_id = tree.mount_root_with_pipeline_owner(

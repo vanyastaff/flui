@@ -11,7 +11,7 @@ use flui_foundation::geometry::Size;
 
 use crate::constraints::BoxConstraints;
 use crate::parent_data::{FlexParentData, ParentData};
-use crate::pipeline::{TextCx, TextSlot};
+use crate::pipeline::{TextCx, TextSource, lend_text};
 use crate::storage::IntrinsicDimension;
 use crate::traits::TextBaseline;
 
@@ -108,7 +108,7 @@ pub struct BoxDryBaselineCtx<'a> {
     child_parent_data: &'a [Option<&'a dyn ParentData>],
     query: &'a mut dyn FnMut(usize, DryBaselineChildRequest) -> DryBaselineChildResponse,
     /// The text context this computation measures with.
-    text: TextSlot<'a>,
+    text: TextSource<'a>,
 }
 
 impl std::fmt::Debug for BoxDryBaselineCtx<'_> {
@@ -126,13 +126,13 @@ impl<'a> BoxDryBaselineCtx<'a> {
         child_count: usize,
         child_parent_data: &'a [Option<&'a dyn ParentData>],
         query: &'a mut dyn FnMut(usize, DryBaselineChildRequest) -> DryBaselineChildResponse,
-        text: Option<crate::pipeline::TextSource<'a>>,
+        text: TextSource<'a>,
     ) -> Self {
         Self {
             child_count,
             child_parent_data,
             query,
-            text: TextSlot::new(text),
+            text,
         }
     }
 
@@ -144,7 +144,7 @@ impl<'a> BoxDryBaselineCtx<'a> {
     /// If the realm's context is already lent, which only a measurement that
     /// re-enters another could cause.
     pub fn text(&mut self) -> TextCx<'_> {
-        self.text.lend()
+        lend_text(self.text)
     }
 
     /// Number of tree children.
@@ -251,7 +251,7 @@ pub struct BoxIntrinsicsCtx<'a> {
     child_parent_data: &'a [Option<&'a dyn ParentData>],
     query: &'a mut dyn FnMut(usize, IntrinsicDimension, f64) -> f64,
     /// The text context this computation measures with.
-    text: TextSlot<'a>,
+    text: TextSource<'a>,
 }
 
 impl std::fmt::Debug for BoxIntrinsicsCtx<'_> {
@@ -269,13 +269,13 @@ impl<'a> BoxIntrinsicsCtx<'a> {
         child_count: usize,
         child_parent_data: &'a [Option<&'a dyn ParentData>],
         query: &'a mut dyn FnMut(usize, IntrinsicDimension, f64) -> f64,
-        text: Option<crate::pipeline::TextSource<'a>>,
+        text: TextSource<'a>,
     ) -> Self {
         Self {
             child_count,
             child_parent_data,
             query,
-            text: TextSlot::new(text),
+            text,
         }
     }
 
@@ -287,7 +287,7 @@ impl<'a> BoxIntrinsicsCtx<'a> {
     /// If the realm's context is already lent, which only a measurement that
     /// re-enters another could cause.
     pub fn text(&mut self) -> TextCx<'_> {
-        self.text.lend()
+        lend_text(self.text)
     }
 
     /// Number of tree children.
@@ -383,7 +383,7 @@ pub struct BoxDryLayoutCtx<'a> {
     child_parent_data: &'a [Option<&'a dyn ParentData>],
     query: &'a mut dyn FnMut(usize, DryLayoutChildRequest) -> DryLayoutChildResponse,
     /// The text context this computation measures with.
-    text: TextSlot<'a>,
+    text: TextSource<'a>,
 }
 
 impl std::fmt::Debug for BoxDryLayoutCtx<'_> {
@@ -401,13 +401,13 @@ impl<'a> BoxDryLayoutCtx<'a> {
         child_count: usize,
         child_parent_data: &'a [Option<&'a dyn ParentData>],
         query: &'a mut dyn FnMut(usize, DryLayoutChildRequest) -> DryLayoutChildResponse,
-        text: Option<crate::pipeline::TextSource<'a>>,
+        text: TextSource<'a>,
     ) -> Self {
         Self {
             child_count,
             child_parent_data,
             query,
-            text: TextSlot::new(text),
+            text,
         }
     }
 
@@ -419,7 +419,7 @@ impl<'a> BoxDryLayoutCtx<'a> {
     /// If the realm's context is already lent, which only a measurement that
     /// re-enters another could cause.
     pub fn text(&mut self) -> TextCx<'_> {
-        self.text.lend()
+        lend_text(self.text)
     }
 
     /// Number of tree children.
@@ -536,7 +536,13 @@ pub mod test_support {
                  a childless compute_* must not consult children"
             )
         };
-        f(&mut BoxIntrinsicsCtx::new(0, &[], &mut deny_query, None))
+        let text = crate::pipeline::TextContextHandle::standalone();
+        f(&mut BoxIntrinsicsCtx::new(
+            0,
+            &[],
+            &mut deny_query,
+            text.source(),
+        ))
     }
 
     /// Leaf context for `compute_dry_layout` tests; panics on any child query
@@ -558,7 +564,8 @@ pub mod test_support {
                 ),
             }
         };
-        f(&mut BoxDryLayoutCtx::new(0, &[], &mut deny, None))
+        let text = crate::pipeline::TextContextHandle::standalone();
+        f(&mut BoxDryLayoutCtx::new(0, &[], &mut deny, text.source()))
     }
 
     /// Leaf context for `compute_dry_baseline` tests; panics on any child query.
@@ -581,7 +588,13 @@ pub mod test_support {
                 ),
             }
         };
-        f(&mut BoxDryBaselineCtx::new(0, &[], &mut deny, None))
+        let text = crate::pipeline::TextContextHandle::standalone();
+        f(&mut BoxDryBaselineCtx::new(
+            0,
+            &[],
+            &mut deny,
+            text.source(),
+        ))
     }
 }
 

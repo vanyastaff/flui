@@ -429,7 +429,7 @@ mod tests {
     /// `RenderAnimatedSize`'s own tests, which go through `PipelineOwner::insert`
     /// rather than constructing a handle by hand).
     fn anchor_handle() -> (PipelineOwner, RenderInvalidationHandle) {
-        let mut owner = PipelineOwner::new();
+        let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
         let anchor = owner
             .insert(Box::new(render_at(1.0))
                 as Box<dyn flui_rendering::traits::RenderObject<BoxProtocol>>);

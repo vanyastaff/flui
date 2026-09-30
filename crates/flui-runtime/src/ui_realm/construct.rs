@@ -18,7 +18,8 @@ use flui_painting::FontCollection;
 use flui_platform_api::Clipboard;
 #[cfg(any(test, feature = "test-support"))]
 use flui_platform_api::PlatformTextInput;
-use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
+#[cfg(test)]
+use flui_rendering::pipeline::PipelineCell;
 use flui_scheduler::{AppLifecycleState, ClockSource};
 use flui_view::GlobalKeyScope;
 use std::cell::{Cell, RefCell};
@@ -186,14 +187,9 @@ impl UiRealm {
         let interaction_lane = InteractionLane::try_new()?;
         let global_key_scope = GlobalKeyScope::new();
 
-        let pipeline = PipelineCell::new(PipelineOwner::new());
-        if let Some(device_pixel_ratio) = device_pixel_ratio {
-            pipeline.with_mut(|owner| owner.set_device_pixel_ratio(device_pixel_ratio));
-        }
-
         let presentation = PresentationState::new(
             presentation_id,
-            pipeline,
+            device_pixel_ratio,
             window,
             RealmCapabilities {
                 global_key_scope: global_key_scope.clone(),

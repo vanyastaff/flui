@@ -45,7 +45,7 @@ use flui_foundation::geometry::Offset;
 use flui_rendering::{
     binding::RendererBinding,
     hit_testing::HitTestResult,
-    pipeline::{PipelineCell, PipelineOwner},
+    pipeline::{PipelineCell, PipelineOwner, TextContextHandle},
     view::{RenderView, ViewConfiguration},
 };
 use parking_lot::RwLock;
@@ -121,7 +121,8 @@ pub(crate) fn redirty_pipeline_root(pipeline_owner: &PipelineCell) {
 /// use flui_runtime::renderer_binding::RenderingFlutterBinding;
 /// use flui_rendering::binding::RendererBinding;
 ///
-/// let binding = RenderingFlutterBinding::new();
+/// let binding =
+///     RenderingFlutterBinding::new(flui_rendering::TextContextHandle::standalone());
 /// let pipeline = binding.root_pipeline_owner().clone();
 /// // error[E0277]: `Rc<RefCell<PipelineOwner>>` cannot be sent between
 /// // threads safely -- `PipelineCell` is `!Send` by construction, so this
@@ -158,12 +159,12 @@ pub struct RenderingFlutterBinding {
     scheduler: WeakUpdateScheduler,
 
     /// Keeps `scheduler`'s backing `UpdateScheduler` alive — but ONLY for the
-    /// standalone constructor path ([`Self::new`] / [`Default`]), which owns
+    /// standalone constructor path ([`Self::new`]), which owns
     /// no external scheduler for anything else to keep alive. `None` for
     /// every [`Self::new_with_pipeline`] caller (production: the owning
     /// `UiRealm` holds the real strong root, per `scheduler`'s own doc).
     ///
-    /// Without this field, `Self::new()` passed a bare `&UpdateScheduler::new()`
+    /// Without this field, `Self::new` passed a bare `&UpdateScheduler::new()`
     /// into `new_with_pipeline`, which only stores the *downgraded*
     /// `WeakUpdateScheduler` — the temporary `UpdateScheduler` had no other strong
     /// owner, so it dropped at the end of `new()`'s constructing statement,
@@ -190,16 +191,10 @@ impl std::fmt::Debug for RenderingFlutterBinding {
     }
 }
 
-impl Default for RenderingFlutterBinding {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl RenderingFlutterBinding {
-    /// Creates a new rendering binding with its own PipelineOwner and a
-    /// fresh `UpdateScheduler` it owns for its own lifetime — test/standalone use
-    /// only. Production always goes through
+    /// Creates a new rendering binding with its own PipelineOwner, measuring
+    /// text through `text`, and a fresh `UpdateScheduler` it owns for its own
+    /// lifetime — test/standalone use only. Production always goes through
     /// [`new_with_pipeline`](Self::new_with_pipeline) with the owning
     /// realm's own scheduler.
     ///
@@ -213,10 +208,10 @@ impl RenderingFlutterBinding {
     /// scheduled callback sits queued, harmlessly, until the binding drops;
     /// a caller that wants it to actually fire must drive the scheduler
     /// itself.
-    pub fn new() -> Self {
+    pub fn new(text: TextContextHandle) -> Self {
         let scheduler = UpdateScheduler::new();
         let mut binding =
-            Self::new_with_pipeline(PipelineCell::new(PipelineOwner::new()), &scheduler);
+            Self::new_with_pipeline(PipelineCell::new(PipelineOwner::new(text)), &scheduler);
         binding.standalone_scheduler = Some(scheduler);
         binding
     }
@@ -479,7 +474,7 @@ impl RenderingFlutterBinding {
     /// step.
     pub fn draw_frame(&self) -> Option<flui_layer::LayerTree> {
         let layer_tree = self.root_pipeline_owner().with_mut(|guard| {
-            let owner = std::mem::take(guard);
+            let owner = guard.take_idle();
             let (owner, result) = owner.run_frame();
             *guard = owner;
             match result {
@@ -655,7 +650,7 @@ mod tests {
         use flui_objects::RenderColoredBox;
         use flui_rendering::constraints::BoxConstraints;
 
-        let owner = PipelineCell::new(PipelineOwner::new());
+        let owner = PipelineCell::new(PipelineOwner::new(TextContextHandle::standalone()));
         let root_id = owner.with_mut(|o| {
             let id = o.insert(Box::new(RenderColoredBox::red(40.0, 40.0))
                 as Box<
@@ -669,7 +664,7 @@ mod tests {
         // only stores a downgraded `WeakUpdateScheduler`, so a temporary here would
         // drop at the end of THIS statement and leave the binding holding a
         // permanently-dead weak (the exact bug `standalone_scheduler` fixes
-        // for `Self::new()` — this test's binding takes the explicit-scheduler
+        // for `Self::new` — this test's binding takes the explicit-scheduler
         // path instead, so it must keep its own scheduler alive the ordinary
         // way, via a local binding that outlives the statement).
         let scheduler = flui_scheduler::UpdateScheduler::new();

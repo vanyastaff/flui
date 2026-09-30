@@ -12,7 +12,7 @@ use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
 use crate::{
     constraints::{BoxConstraints, Constraints, SliverConstraints, SliverGeometry},
     parent_data::{BoxParentData, ParentData},
-    pipeline::{TextCx, TextSlot},
+    pipeline::{TextCx, TextSource, lend_text},
     protocol::{
         capabilities::{HitTestCapability, HitTestContextApi, LayoutCapability, LayoutContextApi},
         protocol::{Protocol, sealed},
@@ -186,7 +186,7 @@ impl Protocol for BoxProtocol {
     }
 
     /// Wraps the given `BoxConstraints` in a typed
-    /// `BoxLayoutCtx::<Leaf, BoxParentData>::new(constraints)` (no
+    /// `BoxLayoutCtx::<Leaf, BoxParentData>::new(constraints, text)` (no
     /// children, no callback) and hands an erased `&mut dyn
     /// BoxLayoutCtxErased` view to `f`.
     ///
@@ -202,11 +202,11 @@ impl Protocol for BoxProtocol {
     /// helper.
     fn with_leaf_erased_ctx<R>(
         constraints: BoxConstraints,
-        text: Option<crate::pipeline::TextSource<'_>>,
+        text: TextSource<'_>,
         f: impl FnOnce(&mut Self::LayoutCtxErased<'_>) -> R,
     ) -> R {
-        let mut typed = BoxLayoutCtx::<flui_foundation::Leaf, BoxParentData>::new(constraints)
-            .with_text_source(text);
+        let mut typed =
+            BoxLayoutCtx::<flui_foundation::Leaf, BoxParentData>::new(constraints, text);
         // Protocol-layout-erasure — sanctioned erased layout-context boundary
         let erased: &mut dyn BoxLayoutCtxErased = &mut typed;
         f(erased)
@@ -430,9 +430,6 @@ type ProxyChildSizeCache = Vec<Option<Size>>;
 ///    [`ParentData`].
 pub struct BoxLayoutCtx<'ctx, A: Arity, P: ParentData + Default> {
     storage: BoxLayoutCtxStorage<'ctx, P>,
-    /// The text context this context lends: the pipeline's (Direct), or,
-    /// when the erased context has none (Proxy), one of its own.
-    text: TextSlot<'ctx>,
     _phantom: std::marker::PhantomData<A>,
 }
 
@@ -465,6 +462,9 @@ enum BoxLayoutCtxStorage<'ctx, P: ParentData + Default> {
         /// Callback to perform synchronous child layout through
         /// RenderTree.
         layout_child_callback: Option<LayoutChildCallback<'ctx>>,
+        /// The pipeline's text context, lent to the render object this
+        /// context lays out. A Proxy lends the one its erased context carries.
+        text: TextSource<'ctx>,
     },
     /// Bridge path used by the `RenderObject<BoxProtocol>` blanket impl
     /// to reconstruct a typed view of an erased context.
@@ -487,24 +487,32 @@ enum BoxLayoutCtxStorage<'ctx, P: ParentData + Default> {
 
 impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
     /// Creates a new box layout context with given constraints (no children
-    /// access). Direct storage.
-    pub fn new(constraints: BoxConstraints) -> Self {
+    /// access), measuring text through `text`. Direct storage.
+    ///
+    /// Only flui-rendering can call this: a [`TextSource`] is lent by a
+    /// pipeline, and nothing outside the crate can build one (the `testing`
+    /// feature's `TextContextHandle::source` aside).
+    pub fn new(constraints: BoxConstraints, text: TextSource<'ctx>) -> Self {
         Self {
             storage: BoxLayoutCtxStorage::Direct {
                 constraints,
                 children: None,
                 child_ids: None,
                 layout_child_callback: None,
+                text,
             },
-            text: TextSlot::default(),
             _phantom: std::marker::PhantomData,
         }
     }
 
-    /// Creates a new box layout context with children access. Direct storage.
+    /// Creates a new box layout context with children access, measuring text
+    /// through `text`. Direct storage.
+    ///
+    /// Only flui-rendering can call this, for the reason [`Self::new`] gives.
     pub fn with_children(
         constraints: BoxConstraints,
         children: &'ctx mut Vec<ChildState<P>>,
+        text: TextSource<'ctx>,
     ) -> Self {
         Self {
             storage: BoxLayoutCtxStorage::Direct {
@@ -512,8 +520,8 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
                 children: Some(children),
                 child_ids: None,
                 layout_child_callback: None,
+                text,
             },
-            text: TextSlot::default(),
             _phantom: std::marker::PhantomData,
         }
     }
@@ -524,11 +532,14 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
     /// This constructor enables proper Flutter-style layout where parent's
     /// `layout_child()` triggers synchronous child layout through the
     /// RenderTree.
+    ///
+    /// Only flui-rendering can call this, for the reason [`Self::new`] gives.
     pub fn with_layout_callback(
         constraints: BoxConstraints,
         children: &'ctx mut Vec<ChildState<P>>,
         child_ids: &'ctx [flui_foundation::RenderId],
         layout_child_callback: LayoutChildCallback<'ctx>,
+        text: TextSource<'ctx>,
     ) -> Self {
         Self {
             storage: BoxLayoutCtxStorage::Direct {
@@ -536,8 +547,8 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
                 children: Some(children),
                 child_ids: Some(child_ids),
                 layout_child_callback: Some(layout_child_callback),
+                text,
             },
-            text: TextSlot::default(),
             _phantom: std::marker::PhantomData,
         }
     }
@@ -601,20 +612,8 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
                 child_sizes: vec![None; child_count],
                 erased,
             },
-            text: TextSlot::default(),
             _phantom: std::marker::PhantomData,
         }
-    }
-
-    /// Lends `text` to the render object this context lays out; `None`
-    /// leaves it a context of its own, built on first use.
-    #[must_use]
-    pub(crate) fn with_text_source(
-        mut self,
-        text: Option<crate::pipeline::TextSource<'ctx>>,
-    ) -> Self {
-        self.text = TextSlot::new(text);
-        self
     }
 
     /// The text context to measure with: the realm's, lent through the
@@ -625,11 +624,7 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
     /// If the realm's context is already lent, which only a measurement that
     /// re-enters another could cause.
     pub fn text(&mut self) -> TextCx<'_> {
-        let source = match &self.storage {
-            BoxLayoutCtxStorage::Direct { .. } => None,
-            BoxLayoutCtxStorage::Proxy { erased, .. } => erased.text_source(),
-        };
-        self.text.lend_from(source)
+        lend_text(BoxLayoutCtxErased::text_source(self))
     }
 
     /// Distance from the top of child `index` to its first baseline of
@@ -843,11 +838,13 @@ pub trait BoxLayoutCtxErased {
     /// Box constraints from parent. Cheap copy (`BoxConstraints` is `Copy`).
     fn constraints(&self) -> BoxConstraints;
 
-    /// The realm's text context, when the pipeline that built this context
-    /// has one; the typed view lends it through `BoxLayoutCtx::text`.
-    fn text_source(&self) -> Option<crate::pipeline::TextSource<'_>> {
-        None
-    }
+    /// The text context of the pipeline that built this context; the typed
+    /// view lends it through `BoxLayoutCtx::text`.
+    ///
+    /// Required, and a [`TextSource`] is built only inside flui-rendering, so
+    /// only flui-rendering implements this trait: every layout context
+    /// measures through a pipeline's text context.
+    fn text_source(&self) -> TextSource<'_>;
 
     /// Number of children visible to this context.
     fn child_count(&self) -> usize;
@@ -1003,9 +1000,9 @@ pub trait BoxLayoutCtxErased {
 
 impl<A: Arity, P: ParentData + Default> BoxLayoutCtxErased for BoxLayoutCtx<'_, A, P> {
     #[inline]
-    fn text_source(&self) -> Option<crate::pipeline::TextSource<'_>> {
+    fn text_source(&self) -> TextSource<'_> {
         match &self.storage {
-            BoxLayoutCtxStorage::Direct { .. } => self.text.source(),
+            BoxLayoutCtxStorage::Direct { text, .. } => *text,
             BoxLayoutCtxStorage::Proxy { erased, .. } => erased.text_source(),
         }
     }
@@ -1302,7 +1299,7 @@ pub struct ErasedBoxLayoutCtx<'ctx> {
     /// already used for the Sliver→Box intrinsic path.
     intrinsics_child_callback: Option<BoxChildIntrinsicCallback<'ctx>>,
     /// The realm's text context, lent to the node this context lays out.
-    text: Option<crate::pipeline::TextSource<'ctx>>,
+    text: TextSource<'ctx>,
 }
 
 impl std::fmt::Debug for ErasedBoxLayoutCtx<'_> {
@@ -1330,8 +1327,7 @@ impl<'ctx> ErasedBoxLayoutCtx<'ctx> {
     /// `RenderIntrinsicWidth` / `RenderIntrinsicHeight` can measure their child
     /// from within the layout walk.
     ///
-    /// `text` is the realm's text context the node measures with; `None`
-    /// leaves the node's typed view a context of its own.
+    /// `text` is the pipeline's text context the node measures with.
     pub fn new(
         constraints: BoxConstraints,
         children: &'ctx mut Vec<ErasedChildState>,
@@ -1341,7 +1337,7 @@ impl<'ctx> ErasedBoxLayoutCtx<'ctx> {
         sliver_layout_child_callback: Option<SliverLayoutChildCallback<'ctx>>,
         intrinsics_child_callback: Option<BoxChildIntrinsicCallback<'ctx>>,
         degradation: Option<DegradationProbe<'ctx>>,
-        text: Option<crate::pipeline::TextSource<'ctx>>,
+        text: TextSource<'ctx>,
     ) -> Self {
         Self {
             constraints,
@@ -1362,7 +1358,7 @@ impl BoxLayoutCtxErased for ErasedBoxLayoutCtx<'_> {
         self.constraints
     }
 
-    fn text_source(&self) -> Option<crate::pipeline::TextSource<'_>> {
+    fn text_source(&self) -> TextSource<'_> {
         self.text
     }
 

@@ -420,10 +420,15 @@ macro_rules! app_plugin {
                 let mut slot = state.pipeline.borrow_mut();
                 let pipeline = slot.get_or_insert_with(|| {
                     ::std::mem::ManuallyDrop::new($crate::PluginPipeline::mount(
-                        $root_view, width, height,
+                        $root_view,
+                        width,
+                        height,
+                        // The plugin image is a realm of its own for text: the
+                        // host's context cannot cross the dlopen boundary.
+                        $crate::__private_text::TextContextHandle::standalone(),
                     ))
                 });
-                let scene = pipeline.draw_frame();
+                let scene = pipeline.draw_frame(width, height);
                 ::std::boxed::Box::into_raw(::std::boxed::Box::new(scene))
                     .cast::<::std::ffi::c_void>()
             })
