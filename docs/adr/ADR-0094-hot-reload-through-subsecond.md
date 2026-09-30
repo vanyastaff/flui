@@ -50,7 +50,7 @@ crate does not document. Both are **hypotheses from reading the code; neither wa
    worker's copy of `REQUEST_REBUILD` (`crates/flui-hot-reload/src/dispatch.rs:24`, read at
    `dispatch.rs:78-85`); the host registered its hook in the host's copy. The same duplication
    already forced a fix for the worker's own `FONT_SYSTEM` (`docs/hot-reload.md:213`,
-   `crates/flui-painting/src/text_layout/layout.rs:124`).
+   flui-painting's `text_layout/layout.rs:124`).
 
 **Framework code is shaped around the plugin boundary.** `REGISTRY_STACK` is `ManuallyDrop`
 "because this module can be instantiated in a hot-reload cdylib"

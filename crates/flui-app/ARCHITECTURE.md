@@ -53,6 +53,15 @@ the dispatch layer moves there too.
 - **A window reaches a realm with its bridge.** `runner::presentation_window`
   reads a host window's accessibility bridge once and pairs it with the
   window in a `PresentationWindow`.
+- **The app's fonts are one host scan and one collection.**
+  `SharedEngineServices::resolve`, reached before the first realm is built,
+  scans the host's fonts once (`HostFonts::scan`, fontdb) and feeds the app's
+  `FontCollection` from the scan (`FontCollection::with_host_fonts`); the scan
+  is a value dropped once the feed is done, and no font state is
+  process-global. Every realm the runners build gets a clone of that one
+  collection. The feed runs synchronously on the owner thread, about 43 ms on
+  the Windows development host, until ADR-0092 §10 step 6b moves it off
+  (`the_runtime_feeds_host_faces_once_for_every_realm`).
 
 ## Mapping decisions
 

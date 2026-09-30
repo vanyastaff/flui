@@ -1,9 +1,10 @@
 # ADR-0016: One shared `FontSystem` for layout and render
 
-- **Status:** Accepted — to be superseded by ADR-0092, which absorbs ADR-0077
+- **Status:** Superseded by ADR-0092 (2026-09-30), which absorbs ADR-0077: one font
+  collection shared by per-realm contexts replaced the shared `FontSystem`, and the
+  process-wide font system is gone
 - **Date:** 2026-07-02
-- **Superseded by (when ADR-0092 §§1–5 are accepted):**
-  [ADR-0092](ADR-0092-per-realm-text-over-parley.md), which absorbs ADR-0077
+- **Superseded by:** [ADR-0092](ADR-0092-per-realm-text-over-parley.md), which absorbs ADR-0077
 
 ## Context
 

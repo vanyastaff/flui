@@ -36,7 +36,7 @@ re-checked:
 
 | Item | Where | Kind |
 |---|---|---|
-| `FONT_SYSTEM` | `crates/flui-painting/src/text_layout/layout.rs:124` | `static OnceLock<Arc<Mutex<FontState>>>` |
+| `FONT_SYSTEM` | flui-painting's `text_layout/layout.rs:124` | `static OnceLock<Arc<Mutex<FontState>>>` |
 | `TIME_DILATION` | `crates/flui-scheduler/src/config.rs:43`, written at `:94` | `static AtomicU64` holding configuration |
 | `AssetRegistry::global` | `crates/flui-assets/src/registry/mod.rs:83-90` | `static LazyLock<AssetRegistry>` behind a `pub fn` |
 | `APP_RUNTIME` | `crates/flui-app/src/app/runner/host.rs:25-47` | `thread_local!` host of every realm |
@@ -218,6 +218,7 @@ runs on the pinned stable toolchain, which dylint does not.
 - ADR-0027's transitional host slot becomes permanent by name, and nothing else may join it in
   the host.
 - ADR-0016 legitimizes `FONT_SYSTEM` until ADR-0092 lands; it is allowlisted with that exit.
+  ADR-0092 §10 step 6a removed it and its allowlist entry.
 - Removing each entry is its own change with its own test; this ADR only freezes the count.
 - `TIME_DILATION`'s public setter moves to the presentation's clock, a breaking change for
   callers of the process-wide setter.

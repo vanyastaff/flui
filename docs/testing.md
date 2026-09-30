@@ -842,21 +842,12 @@ since the suite ran on no job.
 Text is measured and painted on the realm's `FontCollection`. A test bootstrap
 builds it with `FontCollection::new()`, which holds only the bundled faces and
 those registered on it, so measured geometry and painted glyphs do not depend
-on the host; the app's collection is fed from the host's fonts. Carets and
-selection still shape on the process-wide `FontSystem` until ADR-0092 §10
-step 5, and that one resolves against the host's fonts: the same Cupertino
-button once measured 61.18 px wide on a host with fonts installed and
-129.55 px on one without. `flui_testing::fonts::pin_font_faces` builds the
-process-wide `FontSystem` from the faces this repository ships
-(`flui_painting::fonts`), so caret geometry is reproducible off any one
-machine.
-
-It *builds* the font system rather than editing it, and that distinction is
-load-bearing: `FontSystem` freezes its fallback chain and monospace face list
-at construction, so emptying its database afterwards and reloading known faces
-leaves stale construction-time state — which is exactly how the 61.18 px
-measurement arose. `flui_painting::text_layout::init_font_system_with_faces`
-carries the details.
+on the host; carets and selection read the same layout. Only the app's
+collection is fed from the host's fonts (`HostFonts::scan`), and no test
+bootstrap builds that one, so there is no font state to pin. A test that
+wants a host's faces builds its own collection with
+`FontCollection::with_host_fonts(&HostFonts::scan())` and accepts that its
+geometry depends on the machine.
 
 To *look* at what a tree renders without a window, capture it:
 

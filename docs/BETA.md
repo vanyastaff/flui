@@ -200,7 +200,7 @@ remain outstanding.
 
 `TextEditingController` now moves, extends and deletes by extended grapheme
 cluster, and the obscured-field mask counts the same unit (`unicode-segmentation`,
-already in the graph via cosmic-text). The ZWJ-family, regional-indicator-flag
+already in the graph via winit; it moves to ICU4X at ADR-0092 §10 step 6c). The ZWJ-family, regional-indicator-flag
 and combining-mark cases are headless regressions in `controller.rs` and
 `editable_text.rs`; each fails when the helper is swapped back to
 `char_indices`. Live IME and clipboard checks remain separate.

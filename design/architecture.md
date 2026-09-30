@@ -241,7 +241,7 @@ inline test modules are large.
 | flui-tree | 2, 6.9k | — | **Deleted 2026-09-26** (ADR-0081); markers merged into foundation | The `TreeRead`/`TreeNav`/`TreeWrite` traits had eight implementations, all on the layer, render and semantics trees, and no generic consumer; the call sites became inherent methods on those trees. |
 | flui-platform | 3, 46.3k | H / internal | **Split**: contracts to `flui-platform-api`, backends stay | Its only production import below the app is `crates/flui-interaction/src/text_input.rs:27`. Delete the no-op `desktop = ["dep:winit"]` feature (`crates/flui-platform/Cargo.toml:303`, zero `feature = "desktop"` sites in `src/`) and `LinuxPlatform` (`crates/flui-platform/src/platforms/linux/mod.rs:108`, whose methods are `unimplemented!`). `PlatformAccessibility` lives in `flui_semantics::platform` (internal, tier S), re-exported at `flui_platform::traits`, and never in `flui-platform-api`; that edge is why the crate sits at layer 3 ([ADR-0082](../docs/adr/ADR-0082-platform-api-contract-crate.md) §2, amended). |
 | flui-scheduler | 2, 20.6k | S / internal | Keep, lighten | An owner-local core with a `Send` waker instead of the mutexes inside the scheduler. `AsyncDriver` and `Spawner` stay here as `!Send` types. `TIME_DILATION` (`crates/flui-scheduler/src/config.rs:43`) becomes a property of each presentation's clock. |
-| flui-painting | 2, 7.0k | S / internal | Keep | `FONT_SYSTEM` (`crates/flui-painting/src/text_layout/layout.rs:124`) becomes an injected per-realm `TextContext` ([ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md)). |
+| flui-painting | 2, 7.0k | S / internal | Keep | `FONT_SYSTEM` (flui-painting's `text_layout/layout.rs:124`) becomes an injected per-realm `TextContext` ([ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md)). |
 | flui-interaction | 2, 40.3k | S / internal | Keep | Depends on `flui-platform-api` instead of `flui-platform`. The gesture arena keeps its shape ([ADR-0086](../docs/adr/ADR-0086-signal-writes-through-event-context.md)). |
 | flui-assets | 2, 5.1k | S / internal | Keep, detach from the runtime | Delete its own tokio runtime (`BridgeRuntime`, `crates/flui-assets/src/registry/bridge.rs`); `AssetRegistry::global()` is already deleted. |
 | flui-log | 2, 3.7k | S / internal | Keep | Linked only by composition roots; merging it into the app closes no exit criterion. |
@@ -567,7 +567,7 @@ The known entries, each with its exit:
 | Global | Where | Exit |
 |---|---|---|
 | `APP_RUNTIME` | `crates/flui-app/src/app/runner/host.rs:46` | Stays: the one named trampoline cell. |
-| `FONT_SYSTEM` | `crates/flui-painting/src/text_layout/layout.rs:124` | Per-realm `TextContext` ([ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md)). |
+| `FONT_SYSTEM` | flui-painting's `text_layout/layout.rs:124` | Per-realm `TextContext` ([ADR-0092](../docs/adr/ADR-0092-per-realm-text-over-parley.md)); gone since ADR-0092 §10 step 6a. |
 | `TIME_DILATION` | `crates/flui-scheduler/src/config.rs:43` | Presentation clock property ([ADR-0097](../docs/adr/ADR-0097-no-process-global-state-gate.md)). |
 | `REQUEST_REBUILD` | `crates/flui-hot-reload/src/dispatch.rs:24` | Subsecond runtime hook ([ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md)). |
 | `REGISTRY_STACK` | `crates/flui-view/src/key/registry.rs:204` | Realm-owned GlobalKey scope ([ADR-0094](../docs/adr/ADR-0094-hot-reload-through-subsecond.md) removes its `ManuallyDrop` form). |
@@ -713,7 +713,7 @@ acceptance, ADR-0016 and ADR-0059; decision D12.
 
 - One font `Collection { shared: true }`, immutable after load, and a lock-free per-realm
   `FontContext`/`LayoutContext` replace `static FONT_SYSTEM: OnceLock<Arc<Mutex<FontState>>>`
-  (`crates/flui-painting/src/text_layout/layout.rs:124`).
+  (flui-painting's `text_layout/layout.rs:124`).
 - The display list carries **neutral shaped runs** (font blob id, glyph id, size, variations,
   subpixel bin) and a `GlyphRasterizer` trait, instead of `Paragraph { layout: Arc<TextLayout> }`
   (`crates/flui-painting/src/display_list/command.rs:167-174`). Glyph keys carry the font blob's

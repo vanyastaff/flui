@@ -1,10 +1,11 @@
 # ADR-0077: Migrate from cosmic-text to parley
 
-- **Status:** Proposed — precondition 1 met 2026-09-26 (recorded in
-  [ADR-0092](ADR-0092-per-realm-text-over-parley.md), Context); absorbed by ADR-0092, which
-  supersedes it when ADR-0092 §§1–5 are accepted
+- **Status:** Superseded — absorbed by [ADR-0092](ADR-0092-per-realm-text-over-parley.md),
+  whose §§1–5 were accepted on 2026-09-30; precondition 1 was met 2026-09-26 (recorded in
+  ADR-0092, Context)
 - **Date:** 2026-09-22
-- **Supersedes (when ADR-0092 §§1–5 are accepted):** ADR-0016, ADR-0059
+- **Superseded by:** [ADR-0092](ADR-0092-per-realm-text-over-parley.md)
+- **Supersedes (through ADR-0092):** ADR-0016, ADR-0059
 
 Backed by a research spike: [`docs/research/text-stack-2026.md`](../research/text-stack-2026.md),
 code in [`tools/text-spike/`](https://github.com/vanyastaff/flui/tree/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/tools/text-spike)
@@ -44,7 +45,7 @@ cosmic-text-specific buffer at all. A parley-shaped run reaching the engine as g
 no longer blocked on "does parley have its own glyphon."
 
 **The other half is still open, and this spike did not close it.** `rasterize()`'s current
-implementation (`crates/flui-painting/src/text_layout/layout.rs:346-366`) is itself deeply
+implementation (flui-painting's `text_layout/layout.rs:346-366`) is itself deeply
 cosmic-text-specific: `GlyphKey` is `pub(super) cosmic_text::CacheKey` (`glyphs.rs:23`), and
 rasterization goes through a `cosmic_text::SwashCache`'s `get_image_uncached`. Checking
 `tools/text-spike/`'s own dependency tree against this: **parley 0.11.1 does not rasterize glyphs
@@ -195,7 +196,7 @@ is settled with the implementation; sharing one mutable database across realms i
 
 ## Consequences
 
-- `crates/flui-painting/src/text_layout/layout.rs`, `font_resolve.rs`, and `glyphs.rs` get
+- flui-painting's `text_layout/layout.rs`, `font_resolve.rs`, and `glyphs.rs` get
   rewritten against parley's `Layout<B>`/`Line`/`GlyphRun` API in place of cosmic-text's
   `Buffer`/`LayoutRun`; `crates/flui-painting/src/fonts.rs` (font registration, currently mutates a
   `cosmic_text::fontdb::Database` directly) needs an equivalent registration path against whatever
@@ -205,7 +206,7 @@ is settled with the implementation; sharing one mutable database across realms i
   and offset↔cursor conversion logic needs re-deriving against parley's API (precondition 3 above),
   not a drop-in swap.
 - flui-painting's `text_layout/glyphs.rs`'s `GlyphKey` (since removed, ADR-0092 §10 step 4) and
-  `crates/flui-painting/src/text_layout/layout.rs`'s `rasterize()` need a parley-compatible
+  flui-painting's `text_layout/layout.rs`'s `rasterize()` need a parley-compatible
   rasterization path (precondition 1) -- this is new work, not a rename of existing cosmic-text
   calls, since parley does not rasterize glyphs itself.
 - `crates/flui-painting/Cargo.toml`'s single `cosmic-text = { version = "0.19" }` line is replaced

@@ -8,6 +8,9 @@ ellipsis. One shaper, one font door, and a shaped paragraph on the wire make
 ---
 
 - **Status:** Accepted (parts 1 and 2 landed 2026-09-18)
+- **Amended by:** [ADR-0092](ADR-0092-per-realm-text-over-parley.md) (part 1: the process-wide
+  font doors became a per-realm context over one collection; part 2: the `Paragraph` payload is
+  a `ShapedParagraph`)
 - **Date:** 2026-09-18
 - **Deciders:** @vanyastaff
 - **Scope:** `flui-painting`'s font-system surface (`SharedFontSystem`,

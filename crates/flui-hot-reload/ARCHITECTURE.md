@@ -88,8 +88,7 @@ host's handle, and `abi_token` covers only the `Scene` and `LayerTree` layouts,
 so nothing would check that the two images agree on `TextContext`'s layout if
 one were passed.
 
-The cost: a face the host app registers does not reach the plugin's text, as it
-never reached the plugin image's own copy of the process font system either.
+The cost: a face the host app registers does not reach the plugin's text.
 Carrying the font bytes across the FFI into the plugin's collection is a
 follow-up, unless ADR-0094's replacement of the `dlopen` path removes the
 boundary first.

@@ -20,7 +20,7 @@ Design decisions are recorded under [Mapping decisions](#mapping-decisions).
 |---|---|---|
 | Recorder | `canvas/{mod,state,transform,clipping,drawing,scoped}.rs` | `Canvas`: the `dart:ui` surface, save/restore, transforms, clips, `draw_*`, and the `with_*` helpers that pair a save with its restore |
 | Wire vocabulary | `display_list/{mod,command,command_ops,paragraph}.rs` | `DisplayList` (commands + cached bounds), `DrawCommand` (the closed enum `flui-engine` matches exhaustively), `DrawCommand::bounds`, `ShapedParagraph` (the shaped text `DrawOp::Paragraph` carries, decision 18) |
-| Text | `text_layout/{layout,font_resolve}.rs`, `text_painter/{mod,measure,paint,baseline}.rs` | `TextPainter`; the process-wide font system and `SharedFontSystem` (host discovery a collection is fed from, until ADR-0092 §10 step 6), family resolution |
+| Text | `text_layout/{host,fallback_chain,fallback_tables,font_resolve}.rs`, `text_painter/{mod,measure,paint,baseline}.rs` | `TextPainter`; `HostFonts` (the one host font scan a collection is fed from), the per-platform fallback lists and the order a fed collection falls back in, family resolution |
 | Per-realm text context | `text_layout/context.rs` | `FontCollection` (the app's shared, add-only fontique collection) and `TextContext` (one realm's Parley font and layout contexts over it, used through `&mut`); constructed by the runtime, one context per realm; every `TextPainter` measurement shapes on it |
 | Parley shaping | `parley_text/{shape,caret,boundaries}.rs` | `TextContext::shape`: a `ParagraphSpec` (styled spans, width, line height, direction, `max_lines`, ellipsis) to a `ParagraphLayout` whose `metrics()` read the laid-out lines, whose `to_shaped()` is the paragraph paint records, and whose caret, hit-test, selection, line and word queries `TextPainter` answers from (decision 15); grapheme and word boundaries over ICU4X |
 | Raster side | `glyphs/{mod,key,registry,swash}.rs` | `GlyphKey` (a face named by font blob), `FontRegistry` (faces and interned variation instances), `SwashRasterizer` (the engine's atlas draws through it), `GlyphRasterizer`, `PlacedGlyph`, `GlyphImage` |
@@ -29,7 +29,7 @@ Design decisions are recorded under [Mapping decisions](#mapping-decisions).
 | Text values | `typography/*.rs` | `TextStyle`, spans, alignment, decoration, metrics |
 | Layout-facing values | `alignment.rs`, `box_fit.rs`, `text_painter/baseline.rs` | `Alignment` and its directional form, `BoxFit`/`BoxShape`/`FittedSizes`, `TextBaseline` |
 | Decorations | `decoration.rs`, `table_border.rs` | `paint_box_decoration` / `box_decoration_hit_test`, `paint_table_border` |
-| Test support | `testing/mod.rs`, `text_layout::init_font_system_with_faces` | `record` (`testing` feature); pinning the font system to a known face set |
+| Test support | `testing/mod.rs` | `record` and the collection and host-scan queries tests read (`testing` feature) |
 
 ---
 
@@ -73,9 +73,10 @@ width, `max_lines` and ellipsis), reads size and baselines from the
 come from a second shape without truncation (`content_widths`, decision 9).
 The painter's cache keys on the context's collection and its
 `FontCollection::generation`, so a layout from another realm's collection, or
-from before a registration, shapes again. The app's collection is fed from the
-process font system's faces, generics and fallback order, and both shapers
-resolve a family by one rule (decision 17).
+from before a registration, shapes again. The app's collection is fed from one
+scan of the host's fonts (`HostFonts`): its faces, the generics the bundled
+faces leave unbound, and FLUI's fallback lists for the host (decision 17); a
+style's family is resolved by one rule (decision 8).
 
 `TextPainter::paint` records `DrawOp::Paragraph { paragraph, offset, color }`
 with the very `Arc<ShapedParagraph>` its cache holds (ADR-0065, ADR-0092 §4):
@@ -91,14 +92,13 @@ from its end until the line and the ellipsis fit the width.
 
 Carets, selection boxes, word boundaries, line metrics and hit-testing read
 the same `ParagraphLayout`, which the cache keeps beside the paragraph
-(`parley_text/caret.rs`, decision 15): a query never shapes. The process-wide
-font system (a `OnceLock<Arc<Mutex<FontState>>>`, an ambient residual the
-runtime still reaches; `AppRuntime` builds it before the first realm) lays
-nothing out: it is the host's discovery, generic bindings and fallback lists,
-read once per app by `FontCollection::with_host_faces` (decision 17), and
-nothing changes it after construction. A registration loads the collection
-alone (decision 11). The embedded baseline faces (`fonts.rs`,
-`bundled-fonts`) are installed in it at construction (decision 16).
+(`parley_text/caret.rs`, decision 15): a query never shapes. `HostFonts` lays
+nothing out: it is one fontdb scan of the host with the generic families and
+fallback lists picked for it, a value the app's shared engine services build
+and drop once `FontCollection::with_host_fonts` has fed the collection from it
+(decision 17). No font state is process-global. A registration loads the
+collection (decision 11). The embedded baseline faces (`fonts.rs`,
+`bundled-fonts`) are in every collection, and bind its generics (decision 16).
 
 The raster side is `glyphs` (ADR-0092 §5). What crosses to the engine is the
 `ShapedParagraph`; the engine's atlas registers each run's face in its
@@ -116,10 +116,12 @@ quarter-pixel bin, hinting and synthesis. A `VariationId` carries the random
 identity of the `FontRegistry` that minted it, so a rasterizer over another
 registry refuses it instead of drawing its own instance at the same index. It
 drives swash with the sources, format and offsets cosmic-text's rasterizer
-used, so for the same face bytes, glyph, size and bin the two draw identical
-bitmaps; `tests/parley_oracle.rs` checks that bit for bit on Parley-shaped
-Latin, Cyrillic and Greek (Roboto) and icon glyphs (Material Icons), on
-vendored faces only so the result does not depend on the host. Complex scripts
+used, so for the same face bytes, glyph, size and bin it draws the bitmap
+cosmic-text drew; `tests/parley_oracle.rs` checks that bit for bit on
+Parley-shaped Latin, Cyrillic and Greek (Roboto) and icon glyphs (Material
+Icons), against bitmaps recorded from cosmic-text before it was removed
+(`tests/support/raster_recorded.rs`), on vendored faces only so the result
+does not depend on the host. Complex scripts
 and colour emoji have no vendored face and are not compared there. The key has
 no vertical bin because the placement truncates a glyph's row before binning,
 so its vertical bin is always zero. A registry holds every blob a key names,
@@ -132,12 +134,9 @@ so a key stays valid after fontique's source cache drops the file
 
 `#![forbid(unsafe_code)]`. Every type is plain `Send + Sync` value data;
 `Canvas` and `TextPainter` are mutated through `&mut self` by one owner.
-The one lock is the process font system's, taken to read the host's
-discovery once per app and never nested with another lock in this crate;
-measurement, paint, carets and rasterization never take it. The crate's
-`clippy.toml` disallows `Mutex` and `RwLock`; that font system is the one
-`#[expect]`ed site (`text_layout/layout.rs`), and it leaves at ADR-0092 §10
-step 6.
+The crate takes no lock of its own: its `clippy.toml` disallows `Mutex` and
+`RwLock`, with no `#[expect]`ed site, and it declares no process-global font
+state (`cargo xtask globals`).
 
 The Parley path takes no FLUI lock. A `TextContext` is `Send` and used
 through `&mut` by the realm that owns it (flui-rendering lends it to one
@@ -194,8 +193,8 @@ consumer at all and broke the "immutable after recording" claim.
 `PaintingBinding` owned an image cache nothing read (the live decode cache
 is `flui_widgets::image::decode_cache`) and a font-change notifier nothing
 listened to; its one live accessor reached the process-wide font system,
-which `shared_font_system()` now names directly, and a registration goes
-through `FontCollection::register_font`. `ClipContext` had no production implementor.
+which is gone (ADR-0092 §10 step 6a), and a registration goes through
+`FontCollection::register_font`. `ClipContext` had no production implementor.
 
 ### 5. `Canvas::finish(self) -> DisplayList` stays infallible
 
@@ -273,68 +272,39 @@ line of every snapshot and changed all of them at once; printing only the deviat
 snapshots untouched while making the opt-out visible to any test reading those lines.
 
 
-### 8. A style's font family is resolved against the host before it reaches the shaper
+### 8. A style's font family is resolved against the collection before it reaches the shaper
 
 **Choice:** [`src/text_layout/font_resolve.rs`](src/text_layout/font_resolve.rs) picks the family a
-`TextStyle` is shaped with, instead of handing `style.font_family` to cosmic-text unchanged. A named
-family the font database does not carry degrades to `Family::SansSerif`, and the five generic family
-names are pointed at families the database actually carries when their configured targets are
-missing (`FontSystem::new` hard-codes sans-serif to *Open Sans*, which a stock Debian/Ubuntu desktop
-does not install).
+`TextStyle` is shaped with (`resolve_family_name`), instead of handing `style.font_family` to
+Parley unchanged: the style's family when the collection holds it (spelled exactly), else the
+first entry of `font_family_fallback` that is a generic or is held, else the sans-serif generic.
+Parley is handed that one family and nothing after it.
 
 This exists because an unresolvable family lets an emoji face shape the **space** of an ordinary
-Latin run at roughly 1.24 em instead of 0.25. Shaping runs per word, which is what lets the letters
-and the space diverge: the letters are absent from an emoji face and move on, the space is present
-in it and stays. Two independent routes reach that face, and closing only one leaves the defect
-live — cosmic-text's unix `common_fallback()` list *ends* in `"Noto Color Emoji"`, so the walk
-reaches it at **any** weight (400 included, measured) when no earlier text family from that list is
-installed; and `default_font_match_key`'s candidate filter
-`font_weight_diff == 0 || variable_weight_match` empties every list for a family shipping only 400
-and 700, dropping the run into an unfiltered tail whose derived ordering puts emoji faces first.
-(There is an `|| is_mono` term in cosmic-text, but it lives in `next_item`'s
-`font_match_keys_iter`, and `is_mono` there is `default_families[i] == &Family::Monospace` — a
-property of the *request*, not of any face. Reading it as a face property is what made an earlier
-revision of `family_accepts_weight` accept any monospaced face at any weight.) Naming a family the database carries forecloses both,
-because `Database::query`'s front-insert puts the CSS-matched face ahead of the emoji entry in each.
+Latin run at roughly 1.24 em instead of 0.25 (issue #927). A family the collection lacks sends
+every cluster down the collection's fallback order; on a unix host whose first listed family
+present is its emoji face (the unix common list ends in `"Noto Color Emoji"`), the letters, absent
+from that face, fall through to the sans-serif family while the space, present in it, stays.
+Handing Parley a held family or a generic closes it. cosmic-text, which FLUI shaped with until
+ADR-0092 §10 step 5, reached the same face by a second route (an exact-weight filter that emptied
+its candidate lists into an emoji-first tail) and needed a scanned emoji-forbidden fallback and a
+weight snap besides; both left with it. Parley matches a weight within the family and synthesizes
+a bold the family lacks (decisions 10 and 18).
 
-Nothing shapes on cosmic-text any more (ADR-0092 §10 step 5), and the rule now serves the
-collection (`resolve_family_name`, decision 17). Parley has the first route too: a family the
-collection lacks sends every cluster down the collection's fallback order, which a host feed copies
-from the process font system's lists, so on a unix host whose only listed family is its emoji face
-the space lands there and the letters fall through to the sans-serif family. The rule closes it the
-same way: Parley is handed a held family or a generic, never an absent name. The weight snap that kept cosmic-text from
-abandoning a family at a weight it lacks (`snap_weight`, issue #929) served cosmic-text shaping
-alone and left with it: Parley matches a weight within the family and synthesizes a bold the family
-lacks (decisions 10 and 18).
-
-**Alternatives:**
-A custom `Fallback` impl whose `forbidden_fallback()` excludes emoji families is complementary
-rather than competing, and now ships (`EmojiForbiddenFallback`): it suppresses emoji faces in the
-unfiltered tail, the path reached when neither the resolved family nor the script list can serve a
-word. It was first deferred here for wanting "a per-platform emoji family list and its own red
-test". Neither obstacle survived contact: the trait returns `&[&'static str]` borrowed from `&self`,
-so the list is *scanned* from the host database using cosmic-text's own emoji predicate
-(`post_script_name.contains("Emoji")`, the same one that produces its `not_emoji` sort key) rather
-than guessed per platform; and the red test is hermetic on the generated decoy face.
-
-Two properties of that impl are load-bearing and easy to get wrong. It **extends** the platform's
-forbidden list rather than replacing it — macOS's is `[".LastResort"]`, and dropping that entry
-would let the system tofu face win a fallback on the one platform CI never executes. And it
-**declines to forbid anything** where `common_fallback()` is empty — Android and wasm, per
-`font/fallback/other.rs` — because there the unfiltered tail is the only route to any fallback face,
-so forbidding emoji families would not redirect a Latin run, it would make emoji unrenderable. That
-is a runtime check on the platform list, not a `cfg`: the question is "is there another route", and
-a future target answers it without being enumerated.
+The generic families a degraded style lands on are bound to a face that can set Latin text: with
+`bundled-fonts` to Roboto (decision 16), and on a host scan to the first family of the platform's
+common list the host carries that maps `'A'` and `' '` (`bind_generic_families`), so an emoji,
+symbols or icon face never becomes a generic.
 
 **Accepted trade-off — fallback is per style, not per glyph.** A per-glyph fallback chain would
 consult each family when a glyph is missing from a higher-priority one. The rule hands Parley exactly
 one family (`FontFamily::Single`), so that is not expressed. What is expressed is the per-*style* chain:
-resolution walks `TextStyle::font_family_fallback` in order and takes the first entry the host
-carries, degrading to the sans-serif generic only when none of them is present. The residual
+resolution walks `TextStyle::font_family_fallback` in order and takes the first entry the collection
+holds, degrading to the sans-serif generic only when none of them is present. The residual
 limit is precisely locatable — a family that is present
 but lacks the glyph still stops the walk: `font_family:
 "CupertinoIcons", font_family_fallback: ["Noto Sans"]` on Latin text renders tofu,
-because `CupertinoIcons` IS installed. Closing that needs per-run family splitting above
+because `CupertinoIcons` IS held. Closing that needs per-run family splitting above
 the style, which is tracked separately.
 
 Locked by the table `family_resolution` (`src/text_layout/context.rs`). Its row
@@ -351,9 +321,9 @@ in the PostScript name — is *generated*, not borrowed: `tools/decoy-face/gener
 `decoy-wide-space.ttf`, whose space advance is fixed at 1.3 em by construction.
 
 The same generator supplies the probe faces (`probe-mono-{100,600}.ttf`, `probe-sans-400.ttf`,
-`probe-variable-wght.ttf`), because every shipped font asset is a single-weight, non-monospaced,
-static face. The weight-snap arms they were made for left with cosmic-text shaping; registration
-and generic-binding tests still load them.
+`probe-variable-wght.ttf`, `probe-arabic-ligature.ttf`), because every shipped font asset is a
+single-weight, non-monospaced, static face; registration, generic-binding, host-feed and caret
+tests load them.
 
 
 ### 9. Intrinsic width probes skip `max_lines` truncation, floor at ellipsis
@@ -435,8 +405,8 @@ realm's context (step 3, decision 14); layout measures on it (step 4a).
 
 **Why:** FLUI runs several realms on their own threads (ADR-0027, ADR-0091).
 An ambient collection behind one lock makes every realm's shaping wait on the
-others, which is what the cosmic-text path's `FONT_SYSTEM` does today, and is
-process-global state ADR-0097 retires. Passing the collection keeps it out of
+others, which is what the cosmic-text path's `FONT_SYSTEM` did until ADR-0092
+§10 step 6a removed it, and is process-global state ADR-0097 retires. Passing the collection keeps it out of
 any `static`; a context per realm keeps shaping lock-free. Removal is left out
 because a glyph key names its face by blob and must not outlive it
 (ADR-0092 §2).
@@ -448,15 +418,13 @@ rather than holding a FLUI lock; both are accepted because registration is
 rare. The collection is the one registration door, and a registered face
 reaches the collection alone: measurement, paint and carets read the one
 layout shaped on it, so one registration reaches all three at the next layout,
-and the process font system a host-fed collection was built from (until
-ADR-0092 §10 step 6 the bundled faces sit there too) never gains it. The
+and the host scan a collection was fed from is a value nothing reads again. The
 collection judges the bytes on a scratch fontique collection before the shared
 registration, which bumps fontique's version even for bytes with no family, so
 a refused registration (no face, or a face with no `cmap`) changes nothing.
 `FontCollection::check_font` gives the same verdict with no collection at
 all, for the app to answer a registration made before its first window.
-Registration never touches the process font system. Locked by
-`two_realms_shape_in_parallel` and
+Locked by `two_realms_shape_in_parallel` and
 `a_face_registered_after_the_fork_shapes_in_every_realm`
 (`tests/text_context.rs`), and `registration_contract`
 (`src/text_layout/context.rs`).
@@ -611,12 +579,12 @@ against a clone):
 with the painted glyphs, and it did on multi-line text: the cosmic-text
 layout compared global byte offsets with glyph offsets counted per buffer
 line, so `"ab\ncd"` gave the selection `3..5` no box. One layout makes that
-disagreement impossible, and needs no process font system for a caret.
+disagreement impossible.
 
 **Accepted trade-offs:** a painter keeps the whole Parley layout (runs,
 clusters, glyphs) in its cache beside the shaped paragraph, text that never
-gets a cursor query included; that memory is not measured yet (ADR-0092
-gate 6). The first cursor query places the kept lines' clusters once and
+gets a cursor query included: with the paragraph, about 66 bytes per char of
+a 570-char paragraph (ADR-0092 gate 6, `benches/text_startup.rs`). The first cursor query places the kept lines' clusters once and
 keeps them with the layout; a later query walks them without allocating, in
 time linear in the paragraph's length. Editable text is short, and a query
 never shapes.
@@ -634,8 +602,8 @@ Locked by the table `caret_contract` (`tests/main.rs`, rows in
 `line_metrics_index_each_line`, `caret_position` and
 `two_space_run_word_boundary`; by `word_boundaries_agree_with_the_layouts_clusters`
 (`src/parley_text/caret.rs`); by
-`caret_queries_never_build_the_process_font_system` (`tests/text_context.rs`);
-and, as pixels, by `selection_highlights_the_second_line` in flui-engine's
+`a_lam_alef_ligature_is_one_glyph_and_two_caret_stops` (decision 19); and, as
+pixels, by `selection_highlights_the_second_line` in flui-engine's
 `parley_runs_read_back`. `parley_metrics_round_to_todays_baseline`
 (`tests/parley_metrics_oracle.rs`) pins width, height and the painted
 baseline row against the numbers the cosmic-text layout measured, recorded;
@@ -645,27 +613,25 @@ painted paragraph's; `an_empty_paragraph_measures_a_line_of_its_style`
 `a_face_registered_on_the_collection_reaches_measurement_paint_and_carets`
 (`tests/font_registration.rs`) pins that one registration moves all three.
 
-### 16. With `bundled-fonts`, the process font system's generic families bind to Roboto
+### 16. With `bundled-fonts`, every generic family a host feed leaves bound stays Roboto
 
-**Rule:** with `bundled-fonts`, the process font system installs the bundled
-Roboto on every host, in place of any host face named "Roboto", and binds
-sans-serif, serif, cursive, fantasy and monospace to it before the host
-generics are bound (`fonts::bind_generics_to_bundled`), as every
-`FontCollection` does; the app's collection, fed from the host, binds its
-generics to the families the process font system binds them to, so Roboto
-there too (decision 17). Text whose style names no family, names "Roboto" or
-names a generic is measured, painted and given carets in the bundled Roboto
-Regular on every host; paint synthesizes a bold weight on it (decisions 10 and
-18).
+**Rule:** with `bundled-fonts`, every `FontCollection` holds the bundled
+Roboto and binds sans-serif, serif, cursive, fantasy, monospace and system-ui
+to it. A host feed (decision 17) binds only a generic the collection leaves
+unbound, so it rebinds none of these, and never adds a host face of a family
+the collection holds, so a host "Roboto" never joins the bundled one. Text
+whose style names no family, names "Roboto" or names a generic is measured,
+painted and given carets in the bundled Roboto Regular on every host; paint
+synthesizes a bold weight on it (decisions 10 and 18). Without
+`bundled-fonts` an unbound generic takes the host scan's pick (decision 8).
 
 **Flutter:** the default family is the platform's (Segoe UI on Windows, the
 system font on Apple platforms, Roboto on Android). Recalled, not checked
 against a clone.
 
 **Why:** every collection binds its generics to the bundled Roboto, the
-standalone and bundled-only ones included, and the host-fed collection takes
-its generic bindings from the process font system (decision 17). Bound to a
-host face there, default text would measure in Roboto on a bundled-only
+standalone and bundled-only ones included. Were the host-fed collection's
+generics the host's, default text would measure in Roboto on a bundled-only
 collection and in Segoe UI, Arial or DejaVu on the app's; bound to Roboto,
 default text is the same face on every host and in every collection.
 
@@ -683,83 +649,83 @@ default text is the same face on every host and in every collection.
 Locked by the default-family, monospace and bold rows of
 `parley_metrics_round_to_todays_baseline` (`tests/parley_metrics_oracle.rs`),
 which fail when a row measures in another face than the bundled Roboto
-Regular, and by `a_host_copy_does_not_replace_a_bundled_face`
-(`src/fonts.rs`), which fails when a host Roboto, Material Icons or
-CupertinoIcons keeps its place.
+Regular; by `a_host_copy_of_a_bundled_family_is_not_fed`
+(`src/text_layout/context.rs`), which feeds a host "Roboto" at 400 and 700 and
+fails when the feed stops skipping a held family (bold Roboto then measures in
+the host face); and by `a_missing_path_is_skipped_and_the_feed_completes`
+(same file), which fails when the feed rebinds a bound generic.
 
-### 17. The collection mirrors the process font system's faces, generics and fallback order
+### 17. The app's collection is fed from one host scan, with FLUI's fallback lists
 
 **Rule:** the app's `FontCollection` is built with
-`FontCollection::with_host_faces` over the process font system, once per app
-(flui-app's shared engine services). It holds the bundled faces, then every
-face the process font system holds whose family it does not already hold, read
-from the same files (or shared from the same in-memory fonts). Its generic
-families name the families the process font system binds them to, system-ui
-naming sans-serif's: with `bundled-fonts`, Roboto (decision 16). Both
-shapers resolve a style's family by one rule,
-`resolve_family_name` (decision 8's rule, over the families each side holds),
-and Parley is handed that one family. A side holds a family only when spelled
-exactly as its fonts name it: fontdb matches exactly, so the Parley side
-narrows fontique's case-insensitive lookup (`holds_exactly`), and `"segoe ui"`
-degrades to the sans-serif generic on both. Past it both walk one fallback
-order, `FallbackChain`, built once beside the process font system: the font
-system is constructed over it, and the collection gets each script's list, then
-the common list, then the sans-serif generic's family as that script's fallback
-families, and the common list as the emoji generic. `FontCollection::new()`
-stays bundled-only, for standalone contexts, tests and the hot-reload plugin,
-and falls back to Roboto for every script.
+`FontCollection::with_host_fonts` over one `HostFonts::scan`, once per app
+(flui-app's shared engine services, synchronously before the first frame
+until ADR-0092 §10 step 6b). The scan is fontdb's: the platform's font
+directories, and fontconfig's configuration where there is one. The
+collection holds the bundled faces, then every face the scan found whose
+family it does not already hold, read from the same files. A generic it
+leaves unbound takes the scan's pick for it, system-ui taking sans-serif's
+(decision 16). A style's family is resolved by one rule, `resolve_family_name`
+(decision 8), over the families the collection holds, spelled exactly:
+fontdb matches names exactly, so the rule narrows fontique's
+case-insensitive lookup (`holds_exactly`), and `"segoe ui"` degrades to the
+sans-serif generic. Past that family the collection walks one fallback order,
+`FallbackChain`: each script's list for the host platform, then the
+platform's common list, then the sans-serif generic's family, and the common
+list is the emoji generic. The lists are FLUI's (`fallback_tables`, per
+platform, keyed by ISO 15924 code, ported from cosmic-text 0.19 and checked
+against lists recorded from it); the host locale (`sys-locale`) picks the Han
+list. `FontCollection::new()` stays bundled-only, for standalone contexts,
+tests and the hot-reload plugin, and falls back to Roboto for every script.
 
 **Why:** the app's text must find the host's faces. Over a bundled-only
 collection, text the bundled faces do not cover had no face: `你好世界 emoji
 😀` at 16 px measured 82.77 px where the host's faces give 134.01 px on
 Windows, and Cupertino's chain, which the host resolves to Segoe UI, measured
-in Roboto (163.29 px against 161.16 px). The feed reads the process font
-system's discovery rather than scanning again through fontique's `system`
-feature, which reaches `windows` and is forbidden at tier S (ADR-0092 §10
-step 6). Flutter's engine collection resolves through the platform font
-manager (recalled, not checked); FLUI keeps the process font system's
-discovery until ADR-0092 §10 step 6, so it mirrors its lists instead.
+in Roboto (163.29 px against 161.16 px). fontique's own `system` scan reaches
+`windows`, which tier S forbids, and a hand-rolled scan would save the 6 ms
+of a 43 ms startup cost that is mostly the feed (ADR-0092, gate 6), so the
+scan is fontdb's. Flutter's engine collection resolves through the platform
+font manager (recalled, not checked); FLUI keeps one layout for measurement,
+paint and carets, so one set of lists, FLUI's, decides the face everywhere.
 
 **Accepted trade-off:**
 
-- cosmic-text's last resort, any face not forbidden, has no Parley
-  counterpart beyond the trailing sans-serif family: a character neither the
-  script's list, the common list nor that family covers measures and paints as
-  notdef. The oracle skips such text.
-- Family names match exactly on both sides, where CSS matches them without
-  regard to case: a style must spell a family as the fonts name it.
+- fontique has no walk over every other face: a character neither the
+  script's list, the common list nor the sans-serif family covers measures
+  and paints as notdef. The host oracle skips such text.
+- Family names match exactly, where CSS matches them without regard to case:
+  a style must spell a family as the fonts name it.
 - Parley appends the Han fallback to every cluster's fallback families
   (fontique `Query::set_fallbacks`), so such a character may measure in the Han
   fallback face.
-- Parley falls back per cluster, where cosmic-text fell back per word.
 - Only each script's default key is set, with no locale: the Parley path
   passes none. A change that passes one must set locale keys too.
+- The Han list is picked for the whole process from the host locale, matched
+  whole (`"ja"`, not `"ja-JP"`) as cosmic-text matched it.
 - Android's platform common list is empty, so the collection falls back to the
   sans-serif family alone there; unverified, since Android is clippy-only here.
-- Two scans decide what is carried: a file that disappears between them is
-  absent from the collection, and a family name fontdb records in another
-  language only (fontique keeps the English or first name) is not found by the
-  family rule's exact match.
+- A family name fontdb records in another language only (fontique keeps the
+  English or first name) is not found by the family rule's exact match.
 - A host copy of a bundled family (Roboto, Material Icons, CupertinoIcons) is
-  not fed, so one family never mixes two copies. With `bundled-fonts` the
-  process font system replaces every host face of those families with the
-  bundled one (`fonts::install_bundled`), so its generic bindings name the
-  bundled copy; an app that wants a host's own icon font registers it under
-  another family name.
-- The feed reads the host's font files a second time before the first frame
-  (about 35 ms over 76 families on the Windows development host), until it
-  runs off the owner thread at ADR-0092 §10 step 6.
+  not fed, so one family never mixes two copies; an app that wants a host's
+  own icon font registers it under another family name.
+- The scan and the feed cost about 43 ms before the first frame on the
+  Windows development host, until the feed runs off the owner thread at
+  ADR-0092 §10 step 6b.
 - A face registered after the feed reaches the collection alone, through
   `FontCollection::register_font` (decision 11).
 
 Locked by `measured_width_equals_painted_width_on_host_faces` and
-`every_family_the_process_font_system_carries_resolves_in_the_collection`
-(`tests/host_faces_oracle.rs`, host-dependent: a row whose text only
-cosmic-text's last resort reaches is skipped, the Latin rows, a mis-cased
-family and a family the host names exactly among them, never are),
-`fontique_fallbacks_follow_the_paint_chain_in_order`,
-`the_sans_serif_family_ends_every_script_fallback` and
-`the_emoji_generic_is_the_common_list` (`src/text_layout/fallback_chain.rs`),
+`every_family_the_host_scan_finds_resolves_in_the_collection`
+(`tests/host_faces_oracle.rs`, host-dependent: a row whose text no listed
+family covers is skipped, the Latin rows, a mis-cased family and a family the
+host names exactly among them, never are),
+`fontique_fallbacks_follow_the_chain_in_order`,
+`the_sans_serif_family_ends_every_script_fallback`,
+`the_emoji_generic_is_the_common_list`,
+`platform_tables_match_the_recorded_lists` and
+`a_platform_chain_picks_han_by_locale` (`src/text_layout/fallback_chain.rs`),
 `a_glyph_the_named_family_lacks_measures_in_roboto_on_the_bundled_collection`
 (`src/parley_text/shape.rs`),
 the table `family_resolution` (`src/text_layout/context.rs`: the rule's
