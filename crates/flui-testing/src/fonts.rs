@@ -5,10 +5,11 @@
 //! `flui-painting`'s process-wide `FontSystem` is built from whatever fonts
 //! the *host machine* has installed. Text is measured on the realm's
 //! `FontCollection`, which holds only the bundled faces and those registered
-//! on it, so layout no longer depends on the host; but paint still shapes on
-//! the process `FontSystem` until ADR-0092 §10 step 4b, so the glyphs a
-//! snapshot or a pixel golden records do. Before measurement moved to the
-//! collection, the host decided layout too:
+//! on it, and painted from the same layout, so neither layout nor paint
+//! depends on the host; but carets and selection still shape on the process
+//! `FontSystem` until ADR-0092 §10 step 5, so caret geometry does. Before
+//! measurement and paint moved to the collection, the host decided layout
+//! too:
 //!
 //! That is not hypothetical. Measured on this repository's demo trees, the
 //! same Cupertino button was 61.18 px wide on a host with fonts installed and
@@ -21,7 +22,7 @@
 //!
 //! [`pin_font_faces`] is that pin.
 
-/// Builds the process-wide font system from `faces` alone, so the painted
+/// Builds the process-wide font system from `faces` alone, so the caret
 /// layout resolves against repository-shipped bytes on every host.
 ///
 /// Call this **before any text is measured or shaped in the process**, and
@@ -49,7 +50,7 @@ pub fn pin_font_faces(faces: &[&[u8]], default_family: &str) {
     assert!(
         flui_painting::text_layout::init_font_system_with_faces(faces, default_family, "en-US"),
         "pin_font_faces: the shared font system was already initialized, so this \
-         pin changed nothing and the painted layout would still resolve against \
+         pin changed nothing and the caret layout would still resolve against \
          the host's fonts. Pin before the first text is shaped — earlier in the \
          test, or before the code that shaped text first.",
     );

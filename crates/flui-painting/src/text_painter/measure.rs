@@ -1,7 +1,7 @@
 //! `TextPainter` layout and measurement: `layout`, the cached metrics it
 //! produces, and the size / baseline / overflow queries over them.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::typography::{InlineSpan, TextAlign, TextDirection, TextStyle};
 use flui_foundation::geometry::{Offset, Size};
@@ -10,32 +10,27 @@ use super::{DEFAULT_FONT_SIZE, LayoutMetrics, TextBaseline, TextLayoutCache, Tex
 use crate::text_layout::{FontsKey, TextContext, TextLayout, TextLayoutResult};
 
 impl TextPainter {
-    /// What a cached layout was taken against: the process font database's
-    /// generation, which the painted layout was shaped on, and `text_cx`'s
-    /// collection and its generation, which measured it.
-    fn font_key(text_cx: &TextContext) -> (u64, FontsKey) {
-        (
-            crate::shared_font_system().generation(),
-            text_cx.fonts().key(),
-        )
+    /// What a cached layout was taken against: `text_cx`'s collection and
+    /// its generation, which shaped it.
+    fn font_key(text_cx: &TextContext) -> FontsKey {
+        text_cx.fonts().key()
     }
 
-    /// The cached layout, when it was measured against the fonts `text_cx`
-    /// measures with now.
+    /// The cached layout, when it was shaped against the fonts `text_cx`
+    /// shapes with now.
     fn cache_for(&self, text_cx: &TextContext) -> Option<&TextLayoutCache> {
-        let (font_generation, fonts) = Self::font_key(text_cx);
+        let fonts = Self::font_key(text_cx);
         self.layout_cache
             .as_ref()
-            .filter(|cache| cache.font_generation == font_generation && cache.fonts.matches(&fonts))
+            .filter(|cache| cache.fonts.matches(&fonts))
     }
 
     /// Computes the text layout within the given width constraints,
     /// measuring through `text_cx`.
     ///
-    /// A cached layout is kept while the constraints, the process font
-    /// database and `text_cx`'s collection and generation are unchanged; a
-    /// context over another collection, or a face registered since, measures
-    /// again.
+    /// A cached layout is kept while the constraints and `text_cx`'s
+    /// collection and generation are unchanged; a context over another
+    /// collection, or a face registered since, shapes again.
     ///
     /// # Panics
     ///
@@ -52,7 +47,7 @@ impl TextPainter {
         );
         text_cx.note_lent();
 
-        let (font_generation, fonts) = Self::font_key(text_cx);
+        let fonts = Self::font_key(text_cx);
         if let Some(cache) = self.cache_for(text_cx)
             && (cache.min_width - min_width).abs() < f64::EPSILON
             && (cache.max_width - max_width).abs() < f64::EPSILON
@@ -68,19 +63,18 @@ impl TextPainter {
             .text_direction
             .expect("TextPainter.text_direction must be set before layout");
 
-        // The painted layout: glyphs come from it until ADR-0092 §10 step 4b,
-        // carets and selection until step 5. It measures nothing.
-        let layout = self.cosmic_layout(text, max_width);
-        let result = self
-            .parley_paragraph(text_cx, text, max_width, LineOverflow::Enforce)
-            .metrics();
+        // One layout measures and paints: the paragraph the display list
+        // carries is built from the layout the metrics are read from.
+        let layout = self.parley_paragraph(text_cx, text, max_width, LineOverflow::Enforce);
+        let result = layout.metrics();
         let metrics = self.metrics_from(&result, min_width, max_width);
+        let root = text.style().and_then(crate::text_layout::paint_color);
+        let paragraph = Arc::new(layout.to_shaped(root));
 
         // Precompute intrinsic widths (shape once, query many).
         let (min_intrinsic_width, max_intrinsic_width) = self.intrinsic_widths(text_cx, text);
 
         self.layout_cache = Some(TextLayoutCache {
-            font_generation,
             fonts,
             min_width,
             max_width,
@@ -89,7 +83,8 @@ impl TextPainter {
             ideographic_baseline: metrics.ideographic_baseline,
             did_exceed_max_lines: metrics.did_exceed_max_lines,
             paint_offset: metrics.paint_offset,
-            layout: Arc::new(layout),
+            paragraph,
+            caret_layout: OnceLock::new(),
             min_intrinsic_width,
             max_intrinsic_width,
         });
@@ -119,10 +114,10 @@ impl TextPainter {
             * self.text_scale_factor
     }
 
-    /// Shapes `text` on cosmic-text at `max_width` for paint, with
-    /// `max_lines` and the ellipsis applied so the painted glyphs keep the
-    /// lines the measurement kept.
-    fn cosmic_layout(&self, text: &InlineSpan, max_width: f64) -> TextLayout {
+    /// Shapes `text` on cosmic-text at `max_width` for carets, selection,
+    /// line metrics and hit-testing, with `max_lines` and the ellipsis
+    /// applied.
+    pub(super) fn cosmic_layout(&self, text: &InlineSpan, max_width: f64) -> TextLayout {
         let direction = self.text_direction.unwrap_or(TextDirection::Ltr);
         // RICH shaping: the span tree flattens to per-run styles with
         // inheritance (`TextStyle::merge`), so a bold or larger child
@@ -142,12 +137,13 @@ impl TextPainter {
     }
 
     /// Shapes `text` on Parley through `text_cx` at `max_width`, with the
-    /// same span flattening and scale as the painted layout. Every span
+    /// same span flattening and scale as the caret layout. Every span
     /// carries its merged style, so no paragraph default style is passed: a
     /// default would lay its unscaled size under the scaled spans.
     ///
-    /// [`LineOverflow::Enforce`] applies `max_lines` (committed layout, dry
-    /// size, height probes). [`LineOverflow::IgnoreForWidthIntrinsic`]
+    /// [`LineOverflow::Enforce`] applies `max_lines` and the ellipsis
+    /// (committed layout, dry size, height probes), so a dry probe measures
+    /// what `layout` paints. [`LineOverflow::IgnoreForWidthIntrinsic`]
     /// shapes without line-count truncation so a zero-width wrap cannot erase
     /// visible content under `max_lines` (#1085). Callers that need the
     /// ellipsis as a width floor apply [`Self::ellipsis_width_floor`] on top.
@@ -163,9 +159,9 @@ impl TextPainter {
         line_overflow: LineOverflow,
     ) -> crate::parley_text::ParagraphLayout {
         let spans = collect_styled_spans(text, self.text_scale_factor);
-        let max_lines = match line_overflow {
-            LineOverflow::Enforce => self.max_lines.map(|n| n as usize),
-            LineOverflow::IgnoreForWidthIntrinsic => None,
+        let (max_lines, ellipsis) = match line_overflow {
+            LineOverflow::Enforce => (self.max_lines.map(|n| n as usize), self.ellipsis.as_deref()),
+            LineOverflow::IgnoreForWidthIntrinsic => (None, None),
         };
         text_cx.shape(&crate::parley_text::ParagraphSpec {
             spans: &spans,
@@ -175,6 +171,7 @@ impl TextPainter {
             line_height: None,
             direction: self.text_direction.unwrap_or(TextDirection::Ltr),
             max_lines,
+            ellipsis,
         })
     }
 
@@ -258,6 +255,7 @@ impl TextPainter {
                 line_height: None,
                 direction: self.text_direction.unwrap_or(TextDirection::Ltr),
                 max_lines: None,
+                ellipsis: None,
             })
             .metrics()
             .width
@@ -525,10 +523,10 @@ pub(crate) fn collect_styled_spans(
 /// `style` as a run is shaped with: its font size, [`DEFAULT_FONT_SIZE`]
 /// where it sets none, and its letter spacing, both multiplied by `scale`.
 ///
-/// The size is made explicit because the painted layout applies a run's
+/// The size is made explicit because the caret layout applies a run's
 /// letter spacing and line height only at a size the run carries, while
 /// Parley applies them at the inherited one: a spacing or height set without
-/// a size would otherwise measure and paint differently.
+/// a size would otherwise paint and place carets differently.
 ///
 /// Letter spacing scales with the size so that `from_spans` computes the EM
 /// ratio as `spacing / font_size` in consistent units: without it, at a

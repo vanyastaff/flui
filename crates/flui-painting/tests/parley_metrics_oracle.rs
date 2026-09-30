@@ -1,97 +1,73 @@
-//! Parley's paragraph metrics against the cosmic-text layout the painter
-//! records, on the bundled Roboto (ADR-0092 §8 gate 8, the measurement side).
+//! Parley's paragraph metrics and painted runs on the bundled Roboto
+//! (ADR-0092 §8 gate 8).
 //!
-//! `TextPainter` measures on Parley and paints a cosmic-text layout until
-//! ADR-0092 §10 step 4b, so measured and painted text agree only while both
-//! shape the same face to the same metrics. Each case lays a painter out on
-//! one context, then reads the `Paragraph` it paints, with Roboto named, with
-//! no family and with the monospace generic, regular and bold, which both
-//! sides must resolve to the bundled Roboto Regular rather than a host face
-//! (painting mapping decision 16). The
-//! comparison is the one the painter makes observable: a baseline placed on
-//! the device grid as `(line_y * scale).round()`
-//! (`TextLayout::placed_glyphs`), the paragraph height, and a single line's
-//! width.
+//! `TextPainter` measures on Parley and paints the runs of the same layout,
+//! while its caret queries read a cosmic-text layout until ADR-0092 §10
+//! step 5. `parley_metrics_round_to_todays_baseline` lays a painter out with
+//! Roboto named, with no family and with the monospace generic, regular and
+//! bold, which both shapers must resolve to the bundled Roboto Regular
+//! rather than a host face (painting mapping decision 16), and compares it
+//! with the cosmic-text layout of the same text: the paragraph height, a
+//! single line's width, and the device row the first baseline is painted on
+//! (`ShapedRun::placed_glyphs`, `round(baseline × scale)`), which is where
+//! cosmic-text placed it.
 //!
 //! `measured_lines_are_painted_lines` extends it past one line: wrapped
-//! paragraphs, and style combinations the two shapers read differently
-//! unless the painter normalizes them, measure the height they paint.
+//! paragraphs, hard breaks, and style combinations the painter normalizes
+//! measure the lines and height they paint, and hard breaks lay out the lines
+//! Parley gives them.
 
 #[path = "support/cases.rs"]
 mod cases;
 
 use flui_foundation::geometry::Offset;
+use flui_painting::glyphs::FontRegistry;
 use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
 use flui_painting::{
-    Canvas, DrawOp, FontCollection, TextBaseline, TextContext, TextLayoutResult, TextPainter,
+    Canvas, DrawOp, FontCollection, ShapedParagraph, TextBaseline, TextContext, TextLayout,
+    TextPainter,
 };
 
 const SIZES: [f64; 5] = [13.0, 14.0, 16.0, 18.0, 32.0];
 const HEIGHTS: [Option<f64>; 2] = [None, Some(1.5)];
-const SCALES: [f64; 4] = [1.0, 1.25, 1.5, 2.0];
+const SCALES: [f32; 4] = [1.0, 1.25, 1.5, 2.0];
 const TEXT: &str = "Hamburgefonstiv 0123";
 const ROBOTO: &[u8] = include_bytes!("../assets/fonts/Roboto-Regular.ttf");
 /// Roboto by name, the default family, and a generic other than sans-serif.
 const FAMILIES: [Option<&str>; 3] = [Some("Roboto"), None, Some("monospace")];
 /// Regular, and a weight the bundled Roboto has no face for.
 const WEIGHTS: [FontWeight; 2] = [FontWeight::W400, FontWeight::W700];
+/// The lines `"A\r\nB"` lays out on.
+const CRLF_LINES: usize = 3;
 
-struct Measured {
-    width: f64,
-    height: f64,
-    alphabetic: f64,
-}
-
-/// The metrics of the layout `painter` records.
-fn painted(painter: &TextPainter) -> TextLayoutResult {
+/// The paragraph `painter` records.
+fn painted(painter: &TextPainter) -> std::sync::Arc<ShapedParagraph> {
     let mut canvas = Canvas::new();
     painter.paint(&mut canvas, Offset::ZERO);
     let list = canvas.finish();
     list.iter()
         .find_map(|command| match &command.op {
-            DrawOp::Paragraph { layout, .. } => Some(layout.metrics()),
+            DrawOp::Paragraph { paragraph, .. } => Some(std::sync::Arc::clone(paragraph)),
             _ => None,
         })
         .expect("a laid-out painter records a paragraph")
 }
 
-/// What the painter measured, and the metrics of the layout it paints.
-fn measure_and_paint(
-    context: &mut TextContext,
-    family: Option<&str>,
-    weight: FontWeight,
-    size: f64,
-    height: Option<f64>,
-) -> (Measured, Measured) {
-    let style = TextStyle {
-        font_family: family.map(str::to_owned),
-        font_weight: Some(weight),
-        font_size: Some(size),
-        height,
-        ..TextStyle::default()
-    };
-    let mut painter = TextPainter::new()
-        .with_text(TextSpan::styled(TEXT, style))
-        .with_text_direction(TextDirection::Ltr);
-    painter.layout(context, 0.0, f64::INFINITY);
-    let measured = Measured {
-        width: painter.width(),
-        height: painter.height(),
-        alphabetic: painter.compute_distance_to_actual_baseline(TextBaseline::Alphabetic),
-    };
-
-    let painted = painted(&painter);
-    let painted = Measured {
-        width: painted.width,
-        height: painted.height,
-        alphabetic: painted.alphabetic_baseline,
-    };
-    (measured, painted)
+/// The device row the first run's glyphs are placed on at `scale`, from the
+/// origin.
+fn first_baseline_row(paragraph: &ShapedParagraph, scale: f32) -> i32 {
+    let mut fonts = FontRegistry::new();
+    let run = paragraph.runs().next().expect("the text shapes a run");
+    let key = fonts.prepare_run(&run).expect("a shaped face registers");
+    run.placed_glyphs(key, (0.0, 0.0), scale)
+        .next()
+        .expect("the run has a glyph")
+        .y
 }
 
-/// Every family, weight, size, line height and scale factor places the first baseline
-/// on the same device row in the measurement and the painted layout, with
-/// equal paragraph height and a single line's width within a hundredth of a
+/// Every family, weight, size, line height and scale factor paints the first
+/// baseline on the device row cosmic-text placed it on, with the paragraph
+/// height it measured and a single line's width within a hundredth of a
 /// pixel.
 #[test]
 fn parley_metrics_round_to_todays_baseline() {
@@ -113,57 +89,139 @@ fn parley_metrics_round_to_todays_baseline() {
             })
         })
     }) {
-        let (parley, cosmic) = measure_and_paint(&mut context, family, weight, size, height);
+        let style = TextStyle {
+            font_family: family.map(str::to_owned),
+            font_weight: Some(weight),
+            font_size: Some(size),
+            height,
+            ..TextStyle::default()
+        };
+        let mut painter = TextPainter::new()
+            .with_text(TextSpan::styled(TEXT, style.clone()))
+            .with_text_direction(TextDirection::Ltr);
+        painter.layout(&mut context, 0.0, f64::INFINITY);
+        let paragraph = painted(&painter);
+        let cosmic =
+            TextLayout::new(TEXT, Some(&style), size, None, None, TextDirection::Ltr).metrics();
         let case = format!("{family:?} {weight:?} {size} px, height {height:?}");
-        if (parley.height - cosmic.height).abs() > 1e-3 {
+        if (painter.height() - cosmic.height).abs() > 1e-3
+            || (paragraph.size().height - cosmic.height).abs() > 1e-3
+        {
             failures.push(format!(
-                "{case}: height measured {} painted {}",
-                parley.height, cosmic.height
+                "{case}: height measured {} painted {} cosmic-text {}",
+                painter.height(),
+                paragraph.size().height,
+                cosmic.height
             ));
         }
-        if (parley.width - cosmic.width).abs() > 0.01 {
+        if (painter.width() - cosmic.width).abs() > 0.01 {
             failures.push(format!(
-                "{case}: width measured {} painted {}",
-                parley.width, cosmic.width
+                "{case}: width measured {} cosmic-text {}",
+                painter.width(),
+                cosmic.width
             ));
         }
+        let alphabetic = painter.compute_distance_to_actual_baseline(TextBaseline::Alphabetic);
         for scale in SCALES {
-            let device = |baseline: f64| (baseline * scale).round();
-            if device(parley.alphabetic) != device(cosmic.alphabetic) {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "cosmic-text's own baseline rule: a rounded device row"
+            )]
+            let todays = (cosmic.alphabetic_baseline * f64::from(scale)).round() as i32;
+            let row = first_baseline_row(&paragraph, scale);
+            if row != todays {
                 failures.push(format!(
-                    "{case}, scale {scale}: baseline measured {} painted {}",
-                    parley.alphabetic, cosmic.alphabetic
+                    "{case}, scale {scale}: baseline painted on row {row}, cosmic-text's row                      {todays} (measured baseline {alphabetic})"
                 ));
             }
         }
     }
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{}",
+        failures.join(
+            "
+"
+        )
+    );
 }
 
-/// Lays `painter` out at `max_width` and asserts it measured the height of
-/// the layout it paints, and, for a single line (`max_width` unbounded), its
-/// width. A wrapped line's width is not compared: Parley leaves trailing
-/// whitespace out of it and the painted layout keeps it (painting mapping
-/// decision 15).
-fn assert_measures_what_it_paints(mut painter: TextPainter, max_width: f64) {
+/// Lays `painter` out at `max_width` and returns it with the paragraph it
+/// paints, after asserting it measured that paragraph's height, and, for a
+/// single line (`max_width` unbounded), its width.
+fn assert_measures_what_it_paints(
+    mut painter: TextPainter,
+    max_width: f64,
+) -> (TextPainter, std::sync::Arc<ShapedParagraph>) {
     let mut context = TextContext::new(&FontCollection::new());
     painter.layout(&mut context, 0.0, max_width);
     let painted = painted(&painter);
     assert!(
-        (painter.height() - painted.height).abs() < 1e-3,
+        (painter.height() - painted.size().height).abs() < 1e-3,
         "measured {} high, painted {} high ({} lines)",
         painter.height(),
-        painted.height,
-        painted.line_count
+        painted.size().height,
+        painted.line_count()
     );
     if max_width.is_infinite() {
         assert!(
-            (painter.width() - painted.width).abs() < 0.01,
+            (painter.width() - painted.size().width).abs() < 0.01,
             "measured {} wide, painted {} wide",
             painter.width(),
-            painted.width
+            painted.size().width
         );
     }
+    (painter, painted)
+}
+
+/// Asserts `text` paints `lines` lines, each as tall as one line of the
+/// default style, and measures what it paints.
+fn assert_paints_lines(text: &str, lines: usize) {
+    let (one, _) =
+        assert_measures_what_it_paints(painter("A", TextStyle::default()), f64::INFINITY);
+    let (measured, painted) =
+        assert_measures_what_it_paints(painter(text, TextStyle::default()), f64::INFINITY);
+    assert_eq!(
+        painted.line_count(),
+        lines,
+        "{text:?} paints {} lines, not {lines}",
+        painted.line_count()
+    );
+    assert_eq!(painted.baselines().len(), lines, "one baseline per line");
+    #[expect(clippy::cast_precision_loss, reason = "a handful of lines")]
+    let expected = one.height() * lines as f64;
+    assert!(
+        (measured.height() - expected).abs() < 1e-3,
+        "{text:?} measures {} high, {lines} lines are {expected}",
+        measured.height()
+    );
+}
+
+/// A trailing newline ends a line and starts an empty one: Parley's reading,
+/// which the owner chose (ADR-0092 §10 step 4).
+fn a_trailing_newline_is_a_line() {
+    assert_paints_lines("A\n", 2);
+}
+
+/// CR LF: the lines Parley lays it out on (painting mapping decision 18).
+fn crlf_breaks() {
+    assert_paints_lines("A\r\nB", CRLF_LINES);
+}
+
+/// U+2028 LINE SEPARATOR breaks the line.
+fn a_line_separator_breaks() {
+    assert_paints_lines("A\u{2028}B", 2);
+}
+
+/// U+2029 PARAGRAPH SEPARATOR breaks the line, trailing or not.
+fn a_paragraph_separator_breaks() {
+    assert_paints_lines("A\u{2029}B", 2);
+    assert_paints_lines("A\u{2029}", 2);
+}
+
+/// U+0085 NEXT LINE does not break the line.
+fn next_line_does_not_break() {
+    assert_paints_lines("A\u{85}B", 1);
 }
 
 fn painter(text: &str, style: TextStyle) -> TextPainter {
@@ -232,10 +290,8 @@ fn zero_max_lines_keeps_every_line() {
     );
 }
 
-/// Each row measures the height it paints, and a single line its width.
-/// Hard breaks other than an interior `\n` are not rows: the two shapers
-/// break at different characters and treat a trailing break differently
-/// (painting mapping decision 15).
+/// Each row measures the height it paints, and a single line its width; the
+/// hard-break rows also paint the number of lines they name.
 #[test]
 fn measured_lines_are_painted_lines() {
     cases::run_cases(
@@ -270,6 +326,11 @@ fn measured_lines_are_painted_lines() {
                 "zero_max_lines_keeps_every_line",
                 zero_max_lines_keeps_every_line,
             ),
+            ("a_trailing_newline_is_a_line", a_trailing_newline_is_a_line),
+            ("crlf_breaks", crlf_breaks),
+            ("a_line_separator_breaks", a_line_separator_breaks),
+            ("a_paragraph_separator_breaks", a_paragraph_separator_breaks),
+            ("next_line_does_not_break", next_line_does_not_break),
         ],
     );
 }

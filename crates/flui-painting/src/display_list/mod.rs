@@ -4,6 +4,8 @@
 //! - [`command`] — the `DrawCommand` enum, the wire vocabulary shared with
 //!   `flui-engine`.
 //! - [`command_ops`] — `DrawCommand::bounds` and its per-variant geometry.
+//! - [`paragraph`] — [`ShapedParagraph`], the shaped text a
+//!   `DrawOp::Paragraph` carries.
 
 use std::ops::Index;
 
@@ -12,9 +14,11 @@ use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
 
 pub mod command;
 pub mod command_ops;
+pub mod paragraph;
 
 pub use command::{DrawCommand, DrawOp};
 pub use command_ops::DamageExtent;
+pub use paragraph::{FontBlob, FontFace, ShapedGlyph, ShapedParagraph, ShapedRun};
 // The paint vocabulary the commands carry; defined in `crate::paint`.
 pub(crate) use crate::paint::{
     BlendMode, Clip, ClipOp, FilterQuality, Paint, PointMode, TextureId,

@@ -42,14 +42,15 @@
 //!
 //! # Determinism
 //!
-//! Text is measured on the realm's font collection, which holds only the
-//! bundled faces, so the geometry does not depend on the host. The painted
-//! glyphs still come from the process-wide font system until ADR-0092 §10
-//! step 4b, and that one resolves against the *host's* fonts: before
-//! measurement moved, the Cupertino demo's button came out 61.18 px wide on a
-//! host with fonts installed and 129.55 px on one without. [`pin_font_faces`]
-//! builds the process-wide font system from the faces this repository ships,
-//! once per process, so the committed paint is reproducible off this machine. Everything else in the serialized form is
+//! Text is measured and painted on the realm's font collection, which holds
+//! only the bundled faces, so the geometry and the recorded paragraphs do not
+//! depend on the host. Carets still come from the process-wide font system
+//! until ADR-0092 §10 step 5, and that one resolves against the *host's*
+//! fonts: before measurement moved, the Cupertino demo's button came out
+//! 61.18 px wide on a host with fonts installed and 129.55 px on one without.
+//! [`pin_font_faces`] builds the process-wide font system from the faces this
+//! repository ships, once per process, so caret geometry is reproducible off
+//! this machine. Everything else in the serialized form is
 //! documented stable: two-decimal floats, insertion-ordered children, no
 //! hash-map iteration.
 //!

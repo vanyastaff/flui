@@ -15,7 +15,7 @@
 //! The app's collection is fed from the host
 //! ([`FontCollection::with_host_faces`]): the faces the process font system
 //! discovered, its generic families and its fallback order, so the Parley
-//! path measures text in the face cosmic-text paints it with (ADR-0092 §7).
+//! path shapes text in the face cosmic-text places its carets in (ADR-0092 §7).
 //! [`FontCollection::new`] holds the bundled faces alone; without
 //! `bundled-fonts` it starts empty, text shapes with no face until one is
 //! registered, and the first family registered becomes every generic family
@@ -294,8 +294,8 @@ fn bind_unbound_generics(
 ///
 /// fontique has no last resort past a style's families and its script's
 /// fallbacks, so without the fallback a glyph the style's family lacks (a
-/// Cyrillic letter in an icon font) would measure as `.notdef`, where
-/// cosmic-text paints it in Roboto. A host feed replaces the fallbacks with
+/// Cyrillic letter in an icon font) would measure and paint as `.notdef`,
+/// where cosmic-text shapes it in Roboto. A host feed replaces the fallbacks with
 /// the host's order (`install_into`).
 #[cfg(feature = "bundled-fonts")]
 fn bind_bundled_faces(collection: &mut parley::fontique::Collection) {
@@ -452,6 +452,7 @@ mod tests {
                     line_height: None,
                     direction: TextDirection::Ltr,
                     max_lines: None,
+                    ellipsis: None,
                 })
                 .metrics()
                 .width
@@ -540,6 +541,91 @@ mod tests {
                 .generic_families(GenericFamily::Emoji)
                 .collect::<Vec<_>>(),
             [roboto]
+        );
+    }
+
+    /// Keys stay equal across a source-cache prune while a registry holds
+    /// the face's blob (ADR-0092 §5): fontique keeps a file-backed blob only
+    /// weakly, so without a holder a prune drops it, the next shape loads
+    /// the file again under a new blob id, and every key naming the old id
+    /// changes. The arm without a registry shows the prune does that here.
+    #[test]
+    fn a_held_blob_keeps_its_keys_across_a_prune() {
+        use parley::fontique::{Collection, CollectionOptions, SourceCache};
+
+        use crate::glyphs::{FaceKey, FontRegistry};
+
+        // One file and one collection per arm, so neither arm's blob is
+        // reachable from the other's source cache.
+        let collection_over = |arm: &str| {
+            let path = std::env::temp_dir().join(format!(
+                "flui-prune-roboto-{arm}-{}-{:?}.ttf",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            std::fs::write(&path, ROBOTO).expect("the temp dir is writable");
+            let mut collection = Collection::new(CollectionOptions {
+                shared: false,
+                system_fonts: false,
+            });
+            collection.load_fonts_from_paths([path.as_path()]);
+            collection.make_shared();
+            let fonts = FontCollection(Arc::new(FontCollectionInner {
+                generation: std::sync::atomic::AtomicU64::new(0),
+                collection,
+                source_cache: SourceCache::new_shared(),
+            }));
+            (fonts, path)
+        };
+        let style = TextStyle {
+            font_family: Some("Roboto".to_owned()),
+            ..TextStyle::default()
+        };
+        let spans: Vec<(String, Option<TextStyle>)> = vec![("Hamburg".to_owned(), Some(style))];
+        let face = |cx: &mut TextContext, registry: Option<&mut FontRegistry>| -> FaceKey {
+            let paragraph = cx
+                .shape(&ParagraphSpec {
+                    spans: &spans,
+                    default_style: None,
+                    font_size: 16.0,
+                    max_width: None,
+                    line_height: None,
+                    direction: TextDirection::Ltr,
+                    max_lines: None,
+                    ellipsis: None,
+                })
+                .to_shaped(None);
+            let run = paragraph.runs().next().expect("Roboto shapes a run");
+            if let Some(registry) = registry {
+                registry.prepare_run(&run).expect("Roboto registers");
+            }
+            run.face().key()
+        };
+        let pruned = |cx: &mut TextContext| cx.font_cx.source_cache.prune(0, true);
+
+        let (fonts, path) = collection_over("held");
+        let mut cx = TextContext::new(&fonts);
+        let mut registry = FontRegistry::new();
+        let held = face(&mut cx, Some(&mut registry));
+        pruned(&mut cx);
+        let again = face(&mut cx, None);
+        let _ = std::fs::remove_file(&path);
+
+        let (fonts, path) = collection_over("control");
+        let mut control = TextContext::new(&fonts);
+        let first = face(&mut control, None);
+        pruned(&mut control);
+        let reloaded = face(&mut control, None);
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(
+            held, again,
+            "a blob the registry holds keeps its id, so its keys stay equal"
+        );
+        assert!(registry.contains_face(held));
+        assert_ne!(
+            first, reloaded,
+            "precondition: without a holder the prune reloads the file under a new id"
         );
     }
 }

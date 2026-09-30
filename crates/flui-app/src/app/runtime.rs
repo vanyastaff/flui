@@ -10,8 +10,8 @@
 //! `hot_reload.rs`, `config.rs`) are untouched — they remain until the
 //! change that retires each singleton they reach for.
 //! `flui-engine/src/wgpu/text.rs`'s ambient reach for painting has since
-//! closed: `GlyphAtlas::new` takes an injected `SharedFontSystem`
-//! parameter instead of calling `PaintingBinding::instance()` itself. This
+//! closed: the engine's glyph atlas owns a `SwashRasterizer` over the faces
+//! each paragraph carries, instead of calling `PaintingBinding::instance()`. This
 //! is not a forwarding shim: no old API is preserved-but-deprecated here,
 //! and no ambient access point this change does not touch is claimed as
 //! closed.
@@ -70,8 +70,8 @@ use flui_runtime::execution::{ExecutionServices, HostExecutors};
 /// [`FontCollection`] (ADR-0092 §2), which every realm builds its own
 /// `TextContext` from. It initializes the shared font system through
 /// [`flui_painting::shared_font_system`] and feeds the collection from it
-/// ([`FontCollection::with_host_faces`], ADR-0092 §7), so text measures in
-/// the face it paints with. "Per owner thread" is per app while
+/// ([`FontCollection::with_host_faces`], ADR-0092 §7), so text measures and
+/// paints in the host's faces, and its carets are shaped in the same ones. "Per owner thread" is per app while
 /// ADR-0091 fixes one owner thread per process. Semantics state belongs
 /// to each presentation's `SemanticsHost`; scheduling belongs to each realm
 /// (see `flui_runtime`'s `RealmServices::construct`). The retired `SemanticsBinding`
@@ -116,9 +116,9 @@ impl SharedEngineServices {
         // initialize it explicitly, here, at a known point, rather than
         // leaving it to whichever text layout happens to shape first on this
         // thread. Measurement does not read it: layout, intrinsics and dry
-        // queries measure on each realm's `TextContext` over `fonts` below.
-        // The painted layout still shapes on it, ambiently, until ADR-0092
-        // §10 step 4b paints the runs that measured.
+        // queries measure on each realm's `TextContext` over `fonts` below,
+        // and paint draws that layout's runs. The caret layout still shapes
+        // on it, ambiently, until ADR-0092 §10 step 5.
         //
         // The collection is fed from that font system's discovery here, on
         // the owner thread before the first frame: text measured before a

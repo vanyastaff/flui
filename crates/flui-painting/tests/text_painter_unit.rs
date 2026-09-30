@@ -164,6 +164,7 @@ pub(crate) mod parley_measurement {
                 line_height: None,
                 direction: TextDirection::Ltr,
                 max_lines: None,
+                ellipsis: None,
             })
             .metrics();
         painter.layout(&mut a, 0.0, WIDTH);

@@ -1,6 +1,6 @@
-//! The font system's three doors: shaping never moves the database
-//! generation, `register_font` moves it exactly once per call, and a laid-out
-//! `TextPainter` re-lays-out once a face has been registered.
+//! A face registered on the process font system reaches a laid-out
+//! `TextPainter`'s caret layout, and not its measurement or paint, until
+//! registration moves to the collection.
 //!
 //! Its own test target: these tests append to the process-wide font database,
 //! which the `painting_it` binary's tests deliberately never do.
@@ -8,14 +8,18 @@
 use std::sync::Arc;
 
 use flui_foundation::geometry::Offset;
-use flui_painting::text_layout::TextLayout;
+
 use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
-use flui_painting::{Canvas, DrawOp, TextPainter, shared_font_system};
+use flui_painting::{Canvas, DrawOp, ShapedParagraph, TextPainter, shared_font_system};
 
 /// A text context over a fresh collection, lent to each measurement.
 fn text_cx() -> flui_painting::TextContext {
     flui_painting::TextContext::new(&flui_painting::FontCollection::new())
 }
+
+/// Wide enough for the probe text on one line, and finite: the painter
+/// keeps its cached layout only for a finite width it was laid out at.
+const WIDTH: f64 = 400.0;
 
 const PROBE_MONO: &[u8] = include_bytes!("../assets/fonts/probe-mono-100.ttf");
 
@@ -34,57 +38,63 @@ fn probe_painter(text: &str) -> TextPainter {
         .with_text_direction(TextDirection::Ltr)
 }
 
-/// The layout `paint` records for `painter`.
-fn painted_layout(painter: &TextPainter) -> Arc<TextLayout> {
+/// The paragraph `paint` records for `painter`.
+fn painted_paragraph(painter: &TextPainter) -> Arc<ShapedParagraph> {
     let mut canvas = Canvas::new();
     painter.paint(&mut canvas, Offset::ZERO);
     let list = canvas.finish();
     list.iter()
         .find_map(|command| match &command.op {
-            DrawOp::Paragraph { layout, .. } => Some(Arc::clone(layout)),
+            DrawOp::Paragraph { paragraph, .. } => Some(Arc::clone(paragraph)),
             _ => None,
         })
         .expect("a laid-out painter records a paragraph")
 }
 
-/// Measurement shapes on Parley through the lent context and never reads the
-/// process font system, while paint still shapes on it (painting mapping
-/// decision 15): a face registered there re-shapes the painted layout and
-/// leaves the measured size alone. With cosmic-text measurement the size would
-/// follow the painted layout and change with it.
+/// The width of the first line the caret queries read.
+fn caret_line_width(painter: &TextPainter) -> f64 {
+    painter
+        .get_line_metrics()
+        .first()
+        .expect("a laid-out painter has a line")
+        .width
+}
+
+/// Measurement and paint shape on Parley through the lent context and never
+/// read the process font system, while carets still shape on it (painting
+/// mapping decision 15): a face registered there re-shapes the caret layout
+/// and leaves the measured size and the painted paragraph alone.
 ///
 /// This pins a known gap, not the contract: once registration goes through the
 /// collection (the rest of ADR-0092 §10 step 3b), a registered face must reach
-/// measurement as well, and this test is inverted rather than deleted.
+/// measurement and paint as well, and this test is inverted rather than
+/// deleted.
 #[test]
-fn a_face_registered_on_the_process_font_system_reaches_paint_not_measurement() {
+fn a_face_registered_on_the_process_font_system_reaches_carets_not_measurement_or_paint() {
     let mut text_cx = text_cx();
     let mut painter = probe_painter("iiii wwww");
-    painter.layout(&mut text_cx, 0.0, f64::INFINITY);
+    painter.layout(&mut text_cx, 0.0, WIDTH);
     let measured = painter.size();
-    let painted = painted_layout(&painter);
+    let painted = painted_paragraph(&painter);
+    let caret_width = caret_line_width(&painter);
 
     shared_font_system()
         .register_font(PROBE_MONO)
         .expect("the probe face loads");
-    painter.layout(&mut text_cx, 0.0, f64::INFINITY);
-    let repainted = painted_layout(&painter);
+    painter.layout(&mut text_cx, 0.0, WIDTH);
 
     assert!(
-        !Arc::ptr_eq(&painted, &repainted),
-        "a face registered on the process font system shapes the painted layout again"
+        Arc::ptr_eq(&painted, &painted_paragraph(&painter)),
+        "the process registration does not reach the painted paragraph"
     );
     assert!(
-        (repainted.metrics().width - painted.metrics().width).abs() > 1.0,
-        "the painted layout moves to the probe: in the proportional fallback 'iiii' and \
-         'wwww' differ, in the monospace probe they do not ({} vs {})",
-        painted.metrics().width,
-        repainted.metrics().width
+        (caret_line_width(&painter) - caret_width).abs() > 1.0,
+        "the caret layout moves to the probe: in the proportional fallback 'iiii' and          'wwww' differ, in the monospace probe they do not ({caret_width} vs {})",
+        caret_line_width(&painter)
     );
     assert_eq!(
         painter.size(),
         measured,
-        "measurement is Parley's on the context's collection, which the process \
-         registration does not reach"
+        "measurement is Parley's on the context's collection, which the process          registration does not reach"
     );
 }

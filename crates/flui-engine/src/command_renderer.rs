@@ -86,7 +86,7 @@ pub(crate) trait CommandRenderer {
     /// paints every glyph that carries no span colour of its own.
     fn render_paragraph(
         &mut self,
-        layout: &Arc<flui_painting::TextLayout>,
+        paragraph: &Arc<flui_painting::ShapedParagraph>,
         offset: Offset<f64>,
         color: Color,
         transform: &Matrix4,

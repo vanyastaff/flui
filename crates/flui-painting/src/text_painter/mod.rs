@@ -6,17 +6,18 @@
 //! - `paint` — `paint` and the cursor queries.
 //!
 //! Every measurement shapes on Parley through the lent
-//! [`TextContext`](crate::TextContext): a render object lends its realm's.
-//! Glyphs, carets, selection, line metrics and hit-testing still come from
-//! the cosmic-text `TextLayout` built beside it until ADR-0092 §10 step 4b
-//! (paint) and step 5 (carets) (flui-painting `ARCHITECTURE.md`, mapping
-//! decision 15).
+//! [`TextContext`](crate::TextContext): a render object lends its realm's,
+//! and `paint` records the runs of the layout that measured. Carets,
+//! selection, line metrics and hit-testing still come from a cosmic-text
+//! `TextLayout`, built on the first such query, until ADR-0092 §10 step 5
+//! (flui-painting `ARCHITECTURE.md`, mapping decision 15).
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::typography::{InlineSpan, TextAlign, TextDirection};
 use flui_foundation::geometry::{Offset, Size};
 
+use crate::display_list::ShapedParagraph;
 use crate::text_layout::TextLayout;
 
 pub mod baseline;
@@ -92,9 +93,6 @@ pub struct TextPainter {
 /// Cached layout information.
 #[derive(Debug)]
 pub(super) struct TextLayoutCache {
-    /// The font database generation the layout was shaped against; a face
-    /// registered since makes the same text shape differently.
-    pub(super) font_generation: u64,
     /// The collection the layout was measured on and its generation, so a
     /// layout from another realm's fonts, or from before a registration, is
     /// measured again.
@@ -113,8 +111,14 @@ pub(super) struct TextLayoutCache {
     pub(super) did_exceed_max_lines: bool,
     /// Computed paint offset based on alignment.
     pub(super) paint_offset: Offset<f64>,
-    /// The underlying text layout for cursor/hit testing.
-    pub(super) layout: Arc<TextLayout>,
+    /// The paragraph `paint` records: the runs of the layout that gave
+    /// `size`, so what is painted is, by identity, what was measured.
+    pub(super) paragraph: Arc<ShapedParagraph>,
+    /// The cosmic-text layout carets, selection, line metrics and
+    /// hit-testing read, with the process font database's generation it was
+    /// shaped at; built on the first such query (ADR-0092 §10 step 5 moves
+    /// them to Parley).
+    pub(super) caret_layout: OnceLock<(u64, Arc<TextLayout>)>,
 
     /// Precomputed min intrinsic width (narrowest unbreakable run).
     /// Computed once during `layout()` — O(1) access for intrinsics queries.

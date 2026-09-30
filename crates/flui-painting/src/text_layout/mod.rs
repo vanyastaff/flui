@@ -8,19 +8,16 @@
 //! - `font_resolve` — picking a family the host actually carries.
 //! - `layout` — the process-wide font system, `TextLayout` (shape, truncate,
 //!   caret/hit-test/line queries), and the style → `Attrs` mapping.
-//! - `glyphs` — the placed-glyph and glyph-bitmap types a rasteriser reads.
 
 use flui_foundation::geometry::Size;
 
 mod context;
 pub(crate) mod fallback_chain;
 pub(crate) mod font_resolve;
-pub(crate) mod glyphs;
 pub(crate) mod layout;
 
 pub(crate) use context::FontsKey;
 pub use context::{FontCollection, TextContext};
-pub use glyphs::{GlyphContent, GlyphImage, GlyphKey, GlyphRasterizer, PlacedGlyph};
 pub(crate) use layout::paint_color;
 pub use layout::{ResolvedFont, Shaper, SharedFontSystem, TextLayout, shared_font_system};
 // Test-support only: pinning the process-wide font system is irreversible, so

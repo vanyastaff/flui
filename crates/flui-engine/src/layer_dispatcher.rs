@@ -673,14 +673,14 @@ impl CommandRenderer for LayerDispatcher<'_> {
 
     fn render_paragraph(
         &mut self,
-        layout: &Arc<flui_painting::TextLayout>,
+        paragraph: &Arc<flui_painting::ShapedParagraph>,
         offset: Offset<f64>,
         color: Color,
         transform: &Matrix4,
     ) {
         let position = Point::new(offset.dx, offset.dy);
         self.with_transform(transform, |painter| {
-            painter.draw_paragraph(Arc::clone(layout), position, color);
+            painter.draw_paragraph(Arc::clone(paragraph), position, color);
         });
     }
 
@@ -978,8 +978,7 @@ impl CommandRenderer for LayerDispatcher<'_> {
 
         // GPU label (cyan) + FPS value
         let cyan = Color::rgba(0, 200, 200, 255);
-        self.painter
-            .draw_text("GPU", Point::new(x, y), 11.0, &Paint::fill(cyan));
+        self.painter.draw_label("GPU", Point::new(x, y), 11.0, cyan);
 
         // FPS with color coding
         let fps_color = if fps >= 55.0 {
@@ -989,12 +988,8 @@ impl CommandRenderer for LayerDispatcher<'_> {
         } else {
             Color::rgba(255, 130, 130, 255) // Light red
         };
-        self.painter.draw_text(
-            &format!("{fps:.0}"),
-            Point::new(x_val, y),
-            11.0,
-            &Paint::fill(fps_color),
-        );
+        self.painter
+            .draw_label(&format!("{fps:.0}"), Point::new(x_val, y), 11.0, fps_color);
 
         // FPS unit (dimmer)
         let gray = Color::rgba(130, 130, 130, 255);
@@ -1006,23 +1001,23 @@ impl CommandRenderer for LayerDispatcher<'_> {
             8.0
         };
         self.painter
-            .draw_text("FPS", Point::new(x_val + fps_w, y), 8.0, &Paint::fill(gray));
+            .draw_label("FPS", Point::new(x_val + fps_w, y), 8.0, gray);
         y += 14.0;
 
         // Frametime label (purple) + value
         let purple = Color::rgba(200, 100, 255, 255);
         self.painter
-            .draw_text("Frame", Point::new(x, y), 10.0, &Paint::fill(purple));
+            .draw_label("Frame", Point::new(x, y), 10.0, purple);
 
         let white = Color::rgba(220, 220, 220, 255);
-        self.painter.draw_text(
+        self.painter.draw_label(
             &format!("{frame_time_ms:.1}"),
             Point::new(x_val, y),
             10.0,
-            &Paint::fill(white),
+            white,
         );
         self.painter
-            .draw_text("ms", Point::new(x_val + 22.0, y), 8.0, &Paint::fill(gray));
+            .draw_label("ms", Point::new(x_val + 22.0, y), 8.0, gray);
 
         if let Some(line) = diagnostic_line {
             y += 14.0;
@@ -1031,7 +1026,7 @@ impl CommandRenderer for LayerDispatcher<'_> {
             // remains legible after glyph antialiasing and display scaling.
             let diagnostic_color = Color::rgba(205, 205, 210, 255);
             self.painter
-                .draw_text(line, Point::new(x, y), 9.0, &Paint::fill(diagnostic_color));
+                .draw_label(line, Point::new(x, y), 9.0, diagnostic_color);
         }
 
         self.painter.restore();

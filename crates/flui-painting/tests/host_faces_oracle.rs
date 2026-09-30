@@ -1,20 +1,20 @@
 //! Measurement against paint on the host's own faces (ADR-0092 §7).
 //!
 //! The collection is the one the app builds, fed from the process font
-//! system (`FontCollection::with_host_faces`); the painter measures on Parley
-//! over it and paints the cosmic-text layout the process font system shapes.
-//! Both sides resolve the style's family by one rule and fall back past it in
-//! one order, so the paragraph measured is the paragraph painted: CJK, emoji
-//! and a family chain the host only partly carries included. Its own binary,
-//! because it builds the process font system from the host's fonts.
+//! system (`FontCollection::with_host_faces`); the painter measures and
+//! paints on Parley over it, while carets, selection and line metrics read a
+//! cosmic-text layout the process font system shapes until ADR-0092 §10
+//! step 5. Both sides resolve the style's family by one rule and fall back
+//! past it in one order, so the paragraph measured is the paragraph the
+//! carets walk: CJK, emoji and a family chain the host only partly carries
+//! included. Its own binary, because it builds the process font system from
+//! the host's fonts.
 
-use flui_foundation::geometry::Offset;
-use flui_painting::display_list::DrawOp;
 use flui_painting::testing::{
     collection_holds, host_chain_covers, host_covers, host_family_names, host_sans_serif_family,
 };
 use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
-use flui_painting::{Canvas, FontCollection, TextContext, TextPainter, shared_font_system};
+use flui_painting::{FontCollection, TextContext, TextLayout, TextPainter, shared_font_system};
 
 const LATIN: &str = "Hamburgefonstiv 0123";
 const SIZES: [f64; 2] = [16.0, 32.0];
@@ -110,7 +110,9 @@ fn rows() -> Vec<(&'static str, TextStyle, &'static str)> {
     ]
 }
 
-/// `(measured, painted)` widths and heights of `text` in `style` at `size`.
+/// `(measured, caret layout)` widths and heights of `text` in `style` at
+/// `size`: the painter's Parley measurement, and the cosmic-text layout its
+/// caret queries shape.
 fn measure_and_paint(
     context: &mut TextContext,
     style: &TextStyle,
@@ -122,27 +124,19 @@ fn measure_and_paint(
         ..style.clone()
     };
     let mut painter = TextPainter::new()
-        .with_text(TextSpan::styled(text, style))
+        .with_text(TextSpan::styled(text, style.clone()))
         .with_text_direction(TextDirection::Ltr);
     painter.layout(context, 0.0, f64::INFINITY);
-    let mut canvas = Canvas::new();
-    painter.paint(&mut canvas, Offset::ZERO);
-    let list = canvas.finish();
-    let painted = list
-        .iter()
-        .find_map(|command| match &command.op {
-            DrawOp::Paragraph { layout, .. } => Some(layout.metrics()),
-            _ => None,
-        })
-        .expect("paint records the paragraph");
+    let painted =
+        TextLayout::new(text, Some(&style), size, None, None, TextDirection::Ltr).metrics();
     (
         (painter.width(), painter.height()),
         (painted.width, painted.height),
     )
 }
 
-/// Every row measures within [`TOLERANCE`] of the width and height it paints
-/// at. Fails on a collection holding only the bundled faces
+/// Every row measures within [`TOLERANCE`] of the width and height its caret
+/// layout has. Fails on a collection holding only the bundled faces
 /// (`FontCollection::new()`): there CJK and emoji have no face to measure in,
 /// and a host-named family measures in Roboto.
 #[test]
@@ -175,14 +169,14 @@ fn measured_width_equals_painted_width_on_host_faces() {
             let ((width, height), (painted_width, painted_height)) =
                 measure_and_paint(&mut context, &style, text, size);
             println!(
-                "{name} at {size} px: measured {width:.2} x {height:.2}, painted \
+                "{name} at {size} px: measured {width:.2} x {height:.2}, caret layout \
                  {painted_width:.2} x {painted_height:.2}"
             );
             if (width - painted_width).abs() > TOLERANCE
                 || (height - painted_height).abs() > TOLERANCE
             {
                 failures.push(format!(
-                    "{name} at {size} px: measured {width:.2} x {height:.2}, painted \
+                    "{name} at {size} px: measured {width:.2} x {height:.2}, caret layout \
                      {painted_width:.2} x {painted_height:.2}"
                 ));
             }

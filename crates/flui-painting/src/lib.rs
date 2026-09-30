@@ -28,10 +28,12 @@
 //!
 //! [`TextPainter`] lays out an inline span against a width constraint,
 //! answers caret / hit-test / line queries on the result, and paints it —
-//! the shape a `RenderParagraph` drives. [`TextLayout`] underneath shapes
-//! for paint through the process-wide font system, which the engine's glyph
-//! pipeline shares ([`shared_font_system`]); size, baselines and intrinsics
-//! are measured on Parley through the realm's [`TextContext`].
+//! the shape a `RenderParagraph` drives. It shapes on Parley through the
+//! realm's [`TextContext`], and paints the layout that measured as a
+//! [`ShapedParagraph`], whose glyphs the engine rasterizes through
+//! [`glyphs::SwashRasterizer`]. Carets, selection and line metrics still come
+//! from a cosmic-text [`TextLayout`] over the process-wide font system
+//! ([`shared_font_system`]) until ADR-0092 §10 step 5.
 //!
 //! # Decorations
 //!
@@ -72,6 +74,7 @@ pub mod display_list;
 pub mod error;
 #[cfg(feature = "bundled-fonts")]
 pub mod fonts;
+pub mod glyphs;
 mod lerp_impls;
 pub mod paint;
 pub mod styling;
@@ -81,10 +84,9 @@ pub mod table_border;
 pub mod text_layout;
 pub mod text_painter;
 
-// The Parley path: paragraph shaping and the raster side (ADR-0092 §10 steps 1
-// to 4a). The runtime builds the app's `FontCollection`, each realm owns a
-// `TextContext` over it, and layout measures on it through `TextPainter`;
-// shaped runs join the display list in step 4b.
+// Paragraph shaping on Parley (ADR-0092): the runtime builds the app's
+// `FontCollection`, each realm owns a `TextContext` over it, and
+// `TextPainter` measures on it and paints the same layout's runs.
 pub mod parley_text;
 
 // Test harness: `record` (`cfg(test)`, or the `testing` feature).
@@ -95,17 +97,18 @@ pub use alignment::{Alignment, AlignmentDirectional, AlignmentGeometry};
 pub use box_fit::{BoxFit, BoxShape, FittedSizes};
 pub use canvas::Canvas;
 pub use decoration::{DecorationPaintOptions, box_decoration_hit_test, paint_box_decoration};
-pub use display_list::{DamageExtent, DisplayList, DrawCommand, DrawOp};
+pub use display_list::{DamageExtent, DisplayList, DrawCommand, DrawOp, ShapedParagraph};
 pub use error::RegisterFontError;
 // `ResolvedFont` carries a `Family`, and a consumer that cannot name it
 // cannot hold the result. The one cosmic-text type on this crate's surface
-// (ADR-0016 boundary): the shaped buffer never crosses, and glyphs cross as
-// opaque `GlyphKey`s (ADR-0067).
+// (ADR-0016 boundary): paragraphs cross the display list as
+// `ShapedParagraph`s, which name no shaper (ADR-0092 §4).
 pub use cosmic_text::fontdb::Family;
+pub use glyphs::{GlyphContent, GlyphImage, GlyphKey, GlyphRasterizer, PlacedGlyph};
 pub use table_border::paint_table_border;
 pub use text_layout::{
-    FontCollection, GlyphContent, GlyphImage, GlyphKey, GlyphRasterizer, PlacedGlyph, ResolvedFont,
-    Shaper, SharedFontSystem, TextContext, TextLayout, TextLayoutResult, shared_font_system,
+    FontCollection, ResolvedFont, Shaper, SharedFontSystem, TextContext, TextLayout,
+    TextLayoutResult, shared_font_system,
 };
 pub use text_painter::{Invalidation, TextBaseline, TextPainter};
 

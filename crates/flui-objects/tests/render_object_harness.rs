@@ -571,6 +571,17 @@ fn harness_render_error_box_fills_bounded_constraints_and_paints() {
         "the caught message reaches diagnostics in every build"
     );
     assert_eq!(error_box_size(&run), (100.0, 60.0));
+    // The message is shaped at layout, through the realm's text context, and
+    // painted in debug builds only.
+    let paints_message = run
+        .display_commands()
+        .iter()
+        .any(|command| command.line.contains("Paragraph") && command.line.contains("boom"));
+    assert_eq!(
+        paints_message,
+        cfg!(debug_assertions),
+        "a debug build paints the message, a release build withholds it"
+    );
 }
 
 /// The committed size of the mounted `RenderErrorBox`, read back from its
