@@ -368,9 +368,11 @@ impl HeadlessRealm {
             1.0,
             Arc::new(AtomicBool::new(false)),
             Arc::clone(&clipboard) as Arc<dyn flui_platform_api::Clipboard>,
-            // A collection of its own, built the way the app's composition
-            // root builds the shared one: the realm owns a `TextContext` over
-            // it (ADR-0092 §3), exactly as a hosted realm does.
+            // A collection of its own: the realm owns a `TextContext` over it
+            // (ADR-0092 §3), exactly as a hosted realm does. Deliberately
+            // bundled-only, unlike the app's host-fed one
+            // (`FontCollection::with_host_faces`), so text measures the same
+            // on every host a test runs on.
             &flui_painting::FontCollection::new(),
             ClockSource::Manual(clock.clone()),
         )

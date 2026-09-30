@@ -5,7 +5,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use flui_testing::{Action, ActionRequest, NodeId, TreeId, invoke_semantics_action};
+use flui_testing::{Action, ActionRequest, NodeId, TreeId};
 use flui_view::prelude::*;
 use flui_view::{Reactive, SignalError};
 use flui_widgets::{Column, RawButton, Text, column};
@@ -130,15 +130,12 @@ pub(crate) fn raw_button_press_is_reachable_through_a_platform_click() {
     );
     assert!(!node.is_disabled());
 
-    invoke_semantics_action(
-        &app.pipeline_owner(),
-        ActionRequest {
-            action: Action::Click,
-            target_tree: TreeId::ROOT,
-            target_node: id,
-            data: None,
-        },
-    )
+    app.invoke_semantics_action(ActionRequest {
+        action: Action::Click,
+        target_tree: TreeId::ROOT,
+        target_node: id,
+        data: None,
+    })
     .expect("a click on a node advertising one resolves");
     assert_eq!(
         value(&seen),

@@ -42,6 +42,56 @@ pub fn text_context_lends(text: &TextContext) -> u64 {
     text.lends()
 }
 
+/// How many collections were built from the process font system's host
+/// faces ([`FontCollection::with_host_faces`]) in this process, whether or
+/// not the build had the Parley path to feed them into. A composition root's
+/// tests use it to show the feed runs once per app, not per realm.
+#[must_use]
+pub fn host_face_feeds() -> u64 {
+    crate::shared_font_system().host_feeds()
+}
+
+/// Whether the process font system holds a face mapping each character of
+/// `text` that is not whitespace. A test comparing measurement with paint on
+/// host faces skips text no host face can draw.
+#[must_use]
+pub fn host_covers(text: &str) -> bool {
+    crate::shared_font_system().covers(text)
+}
+
+/// Whether every character of `text` that is not whitespace is mapped by a
+/// face both shapers fall back to: one of the sans-serif generic's family,
+/// the fallback chain's list for the character's script, or its common list.
+/// A test comparing Parley measurement with paint on host faces skips text
+/// only cosmic-text's last resort reaches, which the Parley path does not
+/// have.
+#[cfg(feature = "parley")]
+#[must_use]
+pub fn host_chain_covers(text: &str) -> bool {
+    crate::shared_font_system().chain_covers(text)
+}
+
+/// The family the process font system's sans-serif generic names.
+#[must_use]
+pub fn host_sans_serif_family() -> String {
+    crate::shared_font_system().sans_serif_family()
+}
+
+/// The family names the process font system's faces carry first, each once:
+/// the names a style resolves against on the paint side.
+#[must_use]
+pub fn host_family_names() -> Vec<String> {
+    crate::shared_font_system().family_names()
+}
+
+/// Whether `fonts` holds a family named `family`: the check the Parley
+/// path's family rule makes against the collection.
+#[cfg(feature = "parley")]
+#[must_use]
+pub fn collection_holds(fonts: &FontCollection, family: &str) -> bool {
+    fonts.holds(family)
+}
+
 /// Makes `painter` measure on Parley through the context it is given,
 /// whatever the build's default, so the Parley measurement runs under
 /// `parley` alone (flui-painting `ARCHITECTURE.md`, mapping decision 15).

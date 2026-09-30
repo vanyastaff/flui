@@ -131,6 +131,21 @@ impl Harness {
         super::a11y_tree(&self.pipeline_owner)
     }
 
+    /// Deliver an accessibility action inside this tree's realm; see
+    /// [`LaidOut::invoke_semantics_action`](super::LaidOut::invoke_semantics_action).
+    ///
+    /// # Errors
+    ///
+    /// See [`InvokeActionError`](crate::InvokeActionError).
+    pub fn invoke_semantics_action(
+        &self,
+        request: crate::ActionRequest,
+    ) -> Result<(), crate::InvokeActionError> {
+        self.host
+            .realm()
+            .enter(|_| crate::a11y::invoke_semantics_action(&self.pipeline_owner, request))
+    }
+
     /// Advance the realm's virtual clock by the shared
     /// [`POINTER_SAMPLE_INTERVAL`] before a synthetic Move that records a new
     /// velocity sample — the same mechanism (and same 8ms rationale) as

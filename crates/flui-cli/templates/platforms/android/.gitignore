@@ -1,11 +1,14 @@
-gradle-wrapper.jar
-/.gradle
-/captures/
-/gradlew
-/gradlew.bat
+# What a build writes: Gradle's cache and outputs, the SDK path Android
+# Studio records, and the native libraries `flui build android` copies in
+# before packaging. The Gradle wrapper (`gradlew`, `gradle/wrapper/`) is
+# source: its presence is what makes `flui build android` use Gradle.
+/.gradle/
+/build/
+/app/build/
+/app/src/main/jniLibs/
 /local.properties
-GeneratedPluginRegistrant.java
-.cxx/
+
+# Signing material.
 key.properties
-**/*.keystore
-**/*.jks
+*.keystore
+*.jks
