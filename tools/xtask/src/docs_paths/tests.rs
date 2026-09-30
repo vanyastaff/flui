@@ -277,6 +277,11 @@ fn packages_are_read_only_from_cargo_commands() {
         ),
         // a descriptor before `<<` is no program
         ("3<<EOF cargo test -p a\nx\nEOF", &[(0, test, "a")]),
+        // a backslash-newline inside a here-document delimiter continues it
+        (
+            "cat <<EO\\\nF\nx\nEOF\ncargo build -p a",
+            &[(4, build, "a")],
+        ),
         ("cat <<\\EOF\n$(cargo test -p gone)\nEOF", &[]),
         (
             "cat <<'END MARK'\ncargo test -p gone\nEND MARK\ncargo build -p a",
@@ -476,6 +481,9 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
         ("cargo test -p wg*", false),
         // a graph subcommand's `-p` is a package-ID spec: no pattern
         ("cargo tree -p wg*", false),
+        // …but `cargo tree` takes a workspace pattern
+        ("cargo tree -p 'flui-*'", true),
+        ("cargo update -p 'flui-*'", false),
         ("cargo update -p 'bitf*'", false),
         // `uninstall` names an installed binary, not a checkout package
         ("cargo uninstall -p cargo-nextest", true),
@@ -571,7 +579,7 @@ fn headings_give_github_anchors() {
 }
 
 fn a_powershell_fence_is_lexed_as_powershell() {
-    let markdown = "```powershell\n<# cargo test -p gone\n#>\ncargo test -p a`-b `\n  -p x\\y\n```\n\n```bash\ncargo test -p a`x`\n```\n";
+    let markdown = "```powershell\n<# cargo test -p gone\n#>\necho x >\"prefix `$(cargo test -p gone)\"\necho x >\"$(cargo test -p c)\"\ncargo test -p a`-b `\n  -p x\\y\n```\n\n```bash\ncargo test -p a`x`\n```\n";
     let code = extract::code(markdown);
     let dialects: Vec<shell::Dialect> = code.iter().map(|code| code.dialect).collect();
     assert_eq!(
@@ -585,7 +593,8 @@ fn a_powershell_fence_is_lexed_as_powershell() {
             .collect()
     };
     // a backtick escapes and continues the line; `\` is a plain character
-    assert_eq!(names(&code[0]), ["a-b", "x\\y"]);
+    // a redirection target's `$(…)` runs, unless a backtick escapes its `$`
+    assert_eq!(names(&code[0]), ["a-b", "x\\y", "c"]);
     // in bash the backtick opens a substitution
     assert_eq!(names(&code[1]), [] as [&str; 0]);
 }

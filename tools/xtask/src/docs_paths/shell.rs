@@ -302,7 +302,11 @@ impl Lexer<'_> {
         let start = self.line;
         let mut target = String::new();
         self.read_raw_word(&mut target);
-        for (offset, text) in substitutions(&target, Quoting::Shell) {
+        let quoting = match self.dialect {
+            Dialect::Posix => Quoting::Shell,
+            Dialect::PowerShell => Quoting::PowerShell,
+        };
+        for (offset, text) in substitutions(&target, quoting) {
             self.nest(&text, start + offset);
         }
     }
@@ -431,6 +435,8 @@ impl Lexer<'_> {
                             quoted = true;
                             quote = Some(next);
                         }
+                        // a backslash-newline continues the word, adding nothing
+                        '\\' if self.chars.next_if_eq(&'\n').is_some() => self.line += 1,
                         '\\' => {
                             quoted = true;
                             each(self.chars.next().unwrap_or_default());
@@ -645,6 +651,9 @@ enum Quoting {
     Shell,
     /// A here-document body: quotes are plain characters.
     HeredocBody,
+    /// A PowerShell word: nothing inside `'…'` is expanded, a backtick escapes
+    /// the next character (so `` `$( `` is literal), and only `$(…)` runs.
+    PowerShell,
 }
 
 /// The command substitutions (`$(…)`, `` `…` ``) the shell runs in `body` (a
@@ -658,9 +667,12 @@ fn substitutions(body: &str, quoting: Quoting) -> Vec<(usize, String)> {
     while let Some(c) = chars.next() {
         match c {
             '\n' => line += 1,
-            '"' if quoting == Quoting::Shell => in_double = !in_double,
+            '"' if quoting != Quoting::HeredocBody => in_double = !in_double,
+            '`' if quoting == Quoting::PowerShell => {
+                line += usize::from(chars.next() == Some('\n'));
+            }
             // a single-quoted run is inert, but not inside double quotes
-            '\'' if quoting == Quoting::Shell && !in_double => {
+            '\'' if quoting != Quoting::HeredocBody && !in_double => {
                 for quoted in chars.by_ref() {
                     line += usize::from(quoted == '\n');
                     if quoted == '\'' {
@@ -668,7 +680,7 @@ fn substitutions(body: &str, quoting: Quoting) -> Vec<(usize, String)> {
                     }
                 }
             }
-            '\\' => {
+            '\\' if quoting != Quoting::PowerShell => {
                 if chars.next() == Some('\n') {
                     line += 1;
                 }

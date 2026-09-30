@@ -192,9 +192,10 @@ impl Packages {
         }
         let graph = subcommand.filter(|subcommand| GRAPH_SUBCOMMANDS.contains(subcommand));
         if extract::is_glob(&selected.name) {
-            // a pattern selects workspace packages; a graph subcommand's `-p`
-            // is a package-ID spec, where `*` is no valid character
-            return graph.is_none()
+            // a pattern selects workspace packages, `cargo tree`'s too; the
+            // other graph subcommands take a package-ID spec, where `*` is no
+            // valid character
+            return graph.is_none_or(|subcommand| subcommand == "tree")
                 && self
                     .local
                     .keys()
