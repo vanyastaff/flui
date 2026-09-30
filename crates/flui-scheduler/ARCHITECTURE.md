@@ -1248,7 +1248,7 @@ returns immediately, never blocking, and Dart always defers the callback to a
 microtask. FLUI's used to block the calling thread on a still-pending future,
 which meant there was no non-blocking route to react to a resolution without
 `async`/`await`, and its wasm path silently reported a completion that had
-not happened (recorded in `docs/audits/2026-07-25-upgrade-pack-audit.md`).
+not happened.
 
 **Choice:** match Flutter's non-blocking shape exactly, with one recorded
 divergence: an already-resolved (or resolving) future runs the callback

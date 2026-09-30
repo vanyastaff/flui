@@ -130,6 +130,3 @@ pub trait MultiChildLayoutContext {
     /// Panics if the child doesn't exist.
     fn position_child(&mut self, child_id: &str, offset: Offset);
 }
-
-#[cfg(test)]
-mod tests {}

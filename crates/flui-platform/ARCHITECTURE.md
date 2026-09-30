@@ -237,7 +237,7 @@ probes retain their narrower lifecycle/frame assertions.
 
 **Rule:** every native keyboard event this crate receives must be normalized
 into the canonical `ui_events`/`keyboard-types` vocabulary (`Code`, `Key`,
-`Location`) at the platform boundary — see `traits/input.rs`'s module doc.
+`Location`) at the platform boundary — see the module doc of `flui-platform-api`'s `src/input.rs`.
 `Code::Unidentified` must mean the backend genuinely could not identify the
 physical key, never that a conversion table was incomplete (issue #1092).
 
@@ -324,7 +324,7 @@ here so a future consumer that starts caring about dead-key state — an IME
 composition indicator, for instance — knows this signal already exists on
 the winit backend and does not need a new one.
 
-**Further reading:** [`.rust-studio/specs/1092-winit-physical-key-map/survey.md`](../../.rust-studio/specs/1092-winit-physical-key-map/survey.md)
+**Further reading:** [`.rust-studio/specs/1092-winit-physical-key-map/survey.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/.rust-studio/specs/1092-winit-physical-key-map/survey.md)
 is the market/reference survey that motivated this decision (`ui-events-winit`
 coverage measurement, Flutter's generated `PhysicalKeyboardKey` catalog as
 the completeness precedent, and the three options evaluated before choosing
@@ -572,10 +572,9 @@ on the real AppKit run loop, whose frame callback re-arms the way the engine's
 frame does, behind a primer that stops at the first frame so the measurement
 cannot be explained by it. Measured 2026-09-17: 301 frames in 3.010 s (100.0 fps
 on the 100 Hz panel) with the deferral, against 1 frame total and 0 in the
-measurement window with the deferral branch removed. Both runs' marker lines are
-recorded in the plan beside their probe
-(`.rust-studio/specs/macos-native-vsync-pacing-evidence/plan.md` §4); the raw
-run logs are not tracked, since `.gitignore` excludes `*.log` repo-wide.
+measurement window with the deferral branch removed. Both runs' marker lines
+(§4 of its `plan.md`) and the raw run logs are kept with the
+[pacing evidence](https://github.com/vanyastaff/flui/tree/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/.rust-studio/specs/macos-native-vsync-pacing-evidence).
 
 ### macOS reports its display period as the current mode's rate, cached on the window
 

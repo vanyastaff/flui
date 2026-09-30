@@ -49,7 +49,7 @@ impl AndroidBuilder {
     /// # Arguments
     ///
     /// * `target` - Android target triple (e.g., "arm64-v8a")
-    /// * `scene_crate` - Package name of the scene crate (e.g., "flui-android-scene")
+    /// * `scene_crate` - Package name of the scene crate
     /// * `release` - Whether to build in release mode
     pub(crate) async fn build_scene_plugin(
         &self,

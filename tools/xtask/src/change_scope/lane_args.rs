@@ -671,10 +671,19 @@ mod tests {
     }
 
     fn a_standalone_crate_runs_the_tooling_lane() {
-        let a = args(&["tools/text-spike/src/main.rs"]);
+        let only_standalone = Scope {
+            mode: Mode::None,
+            packages: Vec::new(),
+            seeds: Vec::new(),
+            manifests: Vec::new(),
+            standalone: vec!["tools/spike".to_owned()],
+            heavy_required: false,
+            reason: String::new(),
+        };
+        let a = lane_args(repo(), &only_standalone, Event::PullRequest, false).expect("lane args");
         assert_eq!(
             (a.lane, a.standalone.as_str(), a.pkg_args.as_str()),
-            (Lane::Tooling, "tools/text-spike", "")
+            (Lane::Tooling, "tools/spike", "")
         );
     }
 

@@ -104,6 +104,3 @@ pub(super) struct PaintCounts {
     pub(super) layers_produced: u64,
     pub(super) layers_reused: u64,
 }
-
-#[cfg(test)]
-mod tests {}

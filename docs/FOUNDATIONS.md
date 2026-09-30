@@ -19,14 +19,14 @@ This document is the bedrock under [`ROADMAP.md`](ROADMAP.md). The roadmap seque
 
 | Document | What it establishes |
 |---|---|
-| [`research/2026-05-22-flutter-flui-gap-matrix.md`](research/2026-05-22-flutter-flui-gap-matrix.md) | Flutter↔FLUI coverage across all 12 packages |
-| [`research/2026-05-22-port-phasing-dependency-order.md`](research/2026-05-22-port-phasing-dependency-order.md) | Dependency graph, critical path, phase order |
-| [`research/2026-05-22-architectural-contracts.md`](research/2026-05-22-architectural-contracts.md) | The high-stakes public-surface contracts |
-| [`research/2026-05-22-rust-ui-ecosystem-lessons.md`](research/2026-05-22-rust-ui-ecosystem-lessons.md) | Lessons from GPUI / Xilem / Druid / Iced / Vello |
-| [`research/2026-05-22-technology-adoption-matrix.md`](research/2026-05-22-technology-adoption-matrix.md) | Per-subsystem behavior/structure adoption decisions |
-| [`research/2026-05-22-architecture-correction-plan.md`](research/2026-05-22-architecture-correction-plan.md) | The systemic-defect inventory |
-| [`research/2026-05-22-crate-decomposition-redesign.md`](research/2026-05-22-crate-decomposition-redesign.md) | The target workspace topology |
-| [`research/2026-08-01-ui-runtime-evolution-study.md`](research/2026-08-01-ui-runtime-evolution-study.md) | Cross-framework runtime, multi-window, concurrency, embedding, and frame-pacing evidence |
+| [`research/2026-05-22-flutter-flui-gap-matrix.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-22-flutter-flui-gap-matrix.md) | Flutter↔FLUI coverage across all 12 packages |
+| [`research/2026-05-22-port-phasing-dependency-order.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-22-port-phasing-dependency-order.md) | Dependency graph, critical path, phase order |
+| [`research/2026-05-22-architectural-contracts.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-22-architectural-contracts.md) | The high-stakes public-surface contracts |
+| [`research/2026-05-22-rust-ui-ecosystem-lessons.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-22-rust-ui-ecosystem-lessons.md) | Lessons from GPUI / Xilem / Druid / Iced / Vello |
+| [`research/2026-05-22-technology-adoption-matrix.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-22-technology-adoption-matrix.md) | Per-subsystem behavior/structure adoption decisions |
+| [`research/2026-05-22-architecture-correction-plan.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-22-architecture-correction-plan.md) | The systemic-defect inventory |
+| [`research/2026-05-22-crate-decomposition-redesign.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-22-crate-decomposition-redesign.md) | The target workspace topology |
+| [`research/2026-08-01-ui-runtime-evolution-study.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-08-01-ui-runtime-evolution-study.md) | Cross-framework runtime, multi-window, concurrency, embedding, and frame-pacing evidence |
 | [`research/2026-08-01-runtime-architecture-execution-plan.md`](research/2026-08-01-runtime-architecture-execution-plan.md) | Dependency-ordered completion plan for ADR-0027/0037 and hostable runtime foundations |
 
 **Grounding.** Architecture decisions in this document are graded against *A Philosophy of Software Design* (Ousterhout): deep vs shallow modules, information hiding, "different layer, different abstraction". The other anchors are the canonical Rust corpus (*Programming Rust*, *Rust for Rustaceans*, *Rust Atomics and Locks*, *The Rust Performance Book*) and the Rust API Guidelines. FLUI's product is developer experience: the success metric is whether an external contributor finds the mental model legible from outside.
@@ -58,7 +58,7 @@ Every subsystem has two axes. **Behavior** is always Flutter — the constraint,
 | Platform abstraction | `services/*` (dissolved) | GPUI platform traits | `Platform`/`PlatformWindow` traits, callback registry |
 | Asset pipeline | `painting/image_provider.dart` | Flutter `ImageProvider` + Rust async IO | `ImageProvider` trait, async confined to `flui-assets` |
 
-Four subsystems require FLUI's current code to **change direction** before the widget catalog leans on them — reconciliation, layer lifecycle, reactivity (additively), and heterogeneous children. Those changes are the locked contracts of [Part III](#part-iii--the-locked-contracts). The other twelve subsystems are structurally correct today and the discipline is to *hold the line*. The per-subsystem reasoning is in [`research/2026-05-22-technology-adoption-matrix.md`](research/2026-05-22-technology-adoption-matrix.md).
+Four subsystems require FLUI's current code to **change direction** before the widget catalog leans on them — reconciliation, layer lifecycle, reactivity (additively), and heterogeneous children. Those changes are the locked contracts of [Part III](#part-iii--the-locked-contracts). The other twelve subsystems are structurally correct today and the discipline is to *hold the line*. The per-subsystem reasoning is in [`research/2026-05-22-technology-adoption-matrix.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-22-technology-adoption-matrix.md).
 
 ---
 
@@ -84,7 +84,7 @@ These are not "nice to have." Items 1, 2, and 4 are *contracts* — they are bak
 
 ## Part III — The locked contracts
 
-These nine decisions are the "right contract." Each is committed by the **first widget written**; changing one after the catalog exists is a catalog-wide rewrite, not a refactor. They must be locked before [ROADMAP Core.1 — Vertical slice](archive/ROADMAP.md#core1--vertical-slice-core--business-integration--was-phase-1---complete) (archived — historical detail; not current status).
+These nine decisions are the "right contract." Each is committed by the **first widget written**; changing one after the catalog exists is a catalog-wide rewrite, not a refactor. They must be locked before [ROADMAP Core.1 — Vertical slice](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/archive/ROADMAP.md#core1--vertical-slice-core--business-integration--was-phase-1---complete) (archived — historical detail; not current status).
 
 ### C1 — Reactivity: `setState` canonical, `memoize` added, realm-scoped signals (amended by ADR-0074)
 
@@ -255,7 +255,7 @@ The guarantee: every crate declares its layer in its own manifest (`[package.met
 
 **`flui-runtime` is extracted in steps.** ADR-0041 gated a runtime crate on two entry points driving one proven core. [ADR-0083](adr/ADR-0083-one-frame-transaction-in-flui-runtime.md) supersedes that gate: the product runners and the headless test driver must run the same frame transaction, so `flui-runtime` (tier K, internal, above `flui-widgets`) holds it, and `flui-app` keeps the runners, platform wiring and raster lane. Its normal graph reaches no platform backend, windowing, GPU or engine crate. The per-presentation lanes moved first, then the realm core, once `PlatformWindow` had left `flui-platform` for `flui-platform-api`; the realm renders through a `FrameSink` the host implements (ADR-0083 `## Migration`). The composition-only `flui-log` (issue [#568](https://github.com/vanyastaff/flui/issues/568)) is the one crate this milestone *does* add, and only because it removes process-global subscriber installation from `flui-foundation`; it sits at layer 2, and the `allowed-dependents` list in its manifest is what stops it becoming universal again.
 
-The DAG is acyclic and downward-correct. The Constitution **v2.3.0** layer table reflects an older layering snapshot (it predates [ADR-0098](adr/ADR-0098-owned-f64-geometry-values.md), which gave each value type to its owner and put geometry in `flui_foundation::geometry`); the **target graph above** is the forward-looking Part IV decomposition that Part V's roadmap migrates the workspace toward. The constitution remains "current state, locked"; this document is "target state, in progress." Full reasoning and the ordered migration delta: [`research/2026-05-22-crate-decomposition-redesign.md`](research/2026-05-22-crate-decomposition-redesign.md).
+The DAG is acyclic and downward-correct. The Constitution **v2.3.0** layer table reflects an older layering snapshot (it predates [ADR-0098](adr/ADR-0098-owned-f64-geometry-values.md), which gave each value type to its owner and put geometry in `flui_foundation::geometry`); the **target graph above** is the forward-looking Part IV decomposition that Part V's roadmap migrates the workspace toward. The constitution remains "current state, locked"; this document is "target state, in progress." Full reasoning and the ordered migration delta: [`research/2026-05-22-crate-decomposition-redesign.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-22-crate-decomposition-redesign.md).
 
 ---
 
@@ -275,7 +275,7 @@ This section is deliberately short. The current code's unfinished and wrong part
 | Paint | `run_paint` clears the dirty flag on nodes it never paints |
 | Contracts | C2 / C3 / C4+C6 are not yet locked with design docs |
 
-These are not a "repair project." They are the first stretch of normal construction — bringing the spine to its target specification — and [ROADMAP Core.0 — Spine to target spec](archive/ROADMAP.md#core0--spine-to-target-spec--was-phase-0---complete) (archived — historical detail; not current status) closes them. The full inventory, prioritized, with the per-defect blast radius, is [`research/2026-05-22-architecture-correction-plan.md`](research/2026-05-22-architecture-correction-plan.md).
+These are not a "repair project." They are the first stretch of normal construction — bringing the spine to its target specification — and [ROADMAP Core.0 — Spine to target spec](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/archive/ROADMAP.md#core0--spine-to-target-spec--was-phase-0---complete) (archived — historical detail; not current status) closes them. The full inventory, prioritized, with the per-defect blast radius, is [`research/2026-05-22-architecture-correction-plan.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-22-architecture-correction-plan.md).
 
 ---
 

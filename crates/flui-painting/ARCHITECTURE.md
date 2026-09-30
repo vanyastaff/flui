@@ -538,8 +538,7 @@ is Flutter's. When the mixed alpha is zero there is nothing to weight by and the
 channels interpolate straight, which keeps both endpoints exact. Everything that
 lerps a colour inherits it: border sides, shadows, decorations and gradient
 stops. Locked by `lerp_to_transparent_keeps_the_hue`
-(`tests/color_property.rs`) and `lerp_follows_flutter`
-(`src/styling/border.rs`).
+(`tests/color_property.rs`).
 
 ### 14. `TextPainter` measures through the context it is given
 

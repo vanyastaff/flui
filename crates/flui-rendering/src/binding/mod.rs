@@ -16,10 +16,6 @@
 //! ```text
 //! flui_app::RenderingFlutterBinding implements RendererBinding
 //! ```
-//!
-//! The three-trait stack (`PipelineManifold`, `HitTestDispatcher`,
-//! `ViewHitTestable`) was collapsed on 2026-05-20. See
-//! `docs/designs/2026-05-20-mythos-flui-rendering-redesign.md` Section 12.
 
 use std::sync::Arc;
 

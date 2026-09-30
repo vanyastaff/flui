@@ -68,10 +68,3 @@ impl_downcast!(ParentData);
 // Enable `Box<dyn ParentData>::clone()` — all concrete types that
 // derive `Clone` automatically satisfy the `DynClone` bound.
 dyn_clone::clone_trait_object!(ParentData);
-
-// ============================================================================
-// TESTS
-// ============================================================================
-
-#[cfg(test)]
-mod tests {}

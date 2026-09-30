@@ -255,6 +255,3 @@ impl Default for PointerSignalResolver {
         Self::new()
     }
 }
-
-#[cfg(test)]
-mod tests {}

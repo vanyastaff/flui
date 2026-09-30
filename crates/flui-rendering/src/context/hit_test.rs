@@ -429,17 +429,3 @@ where
         MainAxisPosition::new(self.main_axis() - offset, self.cross_axis())
     }
 }
-
-// ============================================================================
-// TESTS
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-    // The only test here exercised `add_self`, deleted with the rest of the
-    // unread protocol-level hit result (issue #844). What this module's
-    // surface actually does is covered where it is USED: the driver bridge's
-    // own tests, and the widget-level hit-test ports that dispatch through a
-    // real pipeline. A compiles-clean placeholder would assert nothing
-    // `cargo build` does not already.
-}

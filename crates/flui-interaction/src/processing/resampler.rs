@@ -364,6 +364,3 @@ impl PointerEventResampler {
         inner.last_position = None;
     }
 }
-
-#[cfg(test)]
-mod tests {}

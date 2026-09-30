@@ -89,6 +89,3 @@ impl From<Matrix4> for MatrixTransformPart {
         Self::Matrix(matrix)
     }
 }
-
-#[cfg(test)]
-mod tests {}

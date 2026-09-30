@@ -1,7 +1,6 @@
-//! Color Filter Demo - T1 ColorFilter live via SceneBuilder
+//! Color Filter Demo - ColorFilter live via SceneBuilder
 //!
-//! Demonstrates all three `ColorFilter` variants from T1 of the
-//! `gpu-filters-consumer-chain` spec, each applied via
+//! Demonstrates all three `ColorFilter` variants, each applied via
 //! `SceneBuilder::push_color_filter`. The window shows five columns
 //! side-by-side, each containing the same coral rectangle:
 //!
@@ -232,7 +231,7 @@ fn main() {
         .init();
 
     tracing::info!(
-        "Color filter demo — T1 ColorFilter (Mode/Gamma/Matrix) via SceneBuilder::push_color_filter"
+        "Color filter demo — ColorFilter (Mode/Gamma/Matrix) via SceneBuilder::push_color_filter"
     );
 
     let platform = current_platform().expect("failed to initialize platform");
