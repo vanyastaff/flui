@@ -441,6 +441,21 @@ impl UiRealm {
         self.sender_prototype.clone()
     }
 
+    /// Tell the realm that a face was registered on the app's font
+    /// collection: every presentation draws its next frame, and that frame's
+    /// pipeline lays out again the text measured before the face existed.
+    ///
+    /// Only wakes: the marking happens when each pipeline drains before its
+    /// next frame (`PipelineOwner::apply_font_change`), which compares the
+    /// collection's generation with the one it last applied, so a notice for
+    /// a change a pipeline already applied lays nothing out. Owner thread,
+    /// at a frame boundary; the app's registration sends it to every realm.
+    pub fn fonts_changed(&self) {
+        for presentation in self.presentations.iter() {
+            self.request_redraw_for(presentation);
+        }
+    }
+
     /// Consume the coalesced redraw request, if any.
     ///
     /// The runner merges this into its dirty gate each frame; reading clears
