@@ -6,7 +6,7 @@
 
 > A modular, Flutter-inspired declarative UI framework for Rust with GPU-accelerated rendering.
 
-FLUI brings Flutter's tree architecture to Rust as five trees — `View` (immutable configuration) → `Element` (lifecycle, reconciliation) → `RenderObject` (layout, paint, hit-test) → `Layer` (retained compositing), with `Semantics` alongside for accessibility — adapted to native ownership, type-safe arity, and a strict layered crate DAG. The widget catalog (`flui-widgets`) is live, the full build → layout → paint → composite pipeline runs end to end, and gestures and animation are integrated.
+FLUI brings Flutter's tree architecture to Rust as five trees — `View` (immutable configuration) → `Element` (lifecycle, reconciliation) → `RenderObject` (layout, paint, hit-test) → `Layer` (compositing, rebuilt each frame), with `Semantics` alongside for accessibility — adapted to native ownership, type-safe arity, and a strict layered crate DAG. The widget catalog (`flui-widgets`) is live, the full build → layout → paint → composite pipeline runs end to end, and gestures and animation are integrated.
 
 **Project stage: 0.x, beta candidate.** The `flui` CLI is on crates.io (`cargo install flui-cli --locked`; `flui create` scaffolds a project that pins the framework's `v0.1.0` git tag). The framework crates themselves are not yet published: they build and run from a clone (instructions below) or from that tag, and APIs may still change between minor versions. See [`CHANGELOG.md`](CHANGELOG.md) for notable changes and [`docs/ROADMAP.md`](docs/ROADMAP.md) for what lands next.
 
