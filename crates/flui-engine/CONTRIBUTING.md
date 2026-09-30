@@ -135,10 +135,11 @@ For a change confined to this crate, the parts that matter most:
 
 ## Invariants that are easy to break by accident
 
-- **The ID offset pattern.** Slab indices are 0-based; public IDs
-  (`RenderId`, `LayerId`, …) are 1-based `NonZeroUsize`. Insert is
-  `slab_index + 1`; lookup is `id.get() - 1`. Getting this wrong is an
-  off-by-one that only shows up at runtime.
+- **The ID offset pattern.** Slab indices are 0-based; a plain ID such as
+  `LayerId` is 1-based `NonZeroUsize` (insert `slab_index + 1`, look up
+  `id.get() - 1`), while a generational key such as `RenderId` carries the
+  0-based slot itself (`new_gen(slab_index, generation)`, `.index()`).
+  Getting this wrong is an off-by-one that only shows up at runtime.
 - **`Matrix4` → `glam` at one boundary.** `Matrix4`-to-`glam` conversion
   happens in `layer_dispatcher.rs` and nowhere else. The record path
   (`batches/`), the pipeline set, and `replay/` are glam-only.

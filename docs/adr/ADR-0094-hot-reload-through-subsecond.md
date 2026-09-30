@@ -1,6 +1,7 @@
 # ADR-0094: Hot reload goes through Subsecond behind a runtime hook
 
-- **Status:** Proposed
+- **Status:** Proposed. The hook's driver half is implemented (see "§1 as implemented");
+  Subsecond is not integrated.
 - **Date:** 2026-09-25
 - **Revised:** 2026-09-26 (Windows spike failed; see Context and §5); 2026-09-29 (the hook's
   driver half landed ahead of Subsecond and hosts the dlopen paths; see "§1 as implemented")

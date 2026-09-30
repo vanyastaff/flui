@@ -16,29 +16,34 @@ use crate::text::RichText;
 /// [`IconTheme`], picks an effective size, and — when an icon is set —
 /// composes `SizedBox::square(size) → Center → RichText(TextSpan(codepoint))`.
 ///
-/// # Glyph rendering is not yet faithful
+/// # Glyphs
 ///
-/// This slice wires the codepoint all the way to a [`RichText`] /
-/// `RenderParagraph`, and the bounded `size × size` box is exact and
-/// font-independent. **It does not assert, and cannot yet guarantee, that the
-/// codepoint shapes to a real icon glyph.** FLUI ships no bundled icon font,
-/// and the two independent font-shaping systems (layout-time measurement and
-/// render-time painting) have no public font-registration API today — an
-/// icon-font codepoint shapes to tofu (the "missing glyph" box) until that
-/// infrastructure lands.
+/// The codepoint reaches a [`RichText`] / `RenderParagraph`, and the bounded
+/// `size × size` box is exact and font-independent. The glyph comes from
+/// [`IconData::font_family`]. With its default `bundled-fonts` feature,
+/// `flui-painting` embeds the Material Icons (family `"Material Icons"`) and
+/// Cupertino Icons (family `"CupertinoIcons"`) faces and installs each one
+/// the host lacks (`flui_painting::fonts`), so those families' codepoints
+/// shape to real glyphs in measurement and paint alike. Any other icon font
+/// must be registered first with `SharedFontSystem::register_font`, which
+/// paint and default measurement use; under `flui-painting/parley-layout`
+/// measurement goes through the realm's `FontCollection`, which `flui-app`
+/// does not expose, so a custom icon font measures as tofu (the "missing
+/// glyph" box) on the standard app path with that feature. Without a
+/// registration its codepoints shape to tofu everywhere.
 ///
 /// # Deferred
 ///
 /// - **`IconData::match_text_direction`** RTL mirroring: needs a `Transform`
 ///   composition step not wired into this build path yet.
-/// - **Ambient `Directionality`**: FLUI has no `Directionality` inherited
-///   widget yet, so `Icon` always renders left-to-right
-///   ([`TextDirection::Ltr`]) rather than resolving one.
+/// - **Ambient `Directionality`**: `Icon` does not read
+///   `Directionality::of` yet, so it always renders left-to-right
+///   ([`TextDirection::Ltr`]).
 /// - **`Semantics`/`ExcludeSemantics`** wrapping (`semantic_label` is stored
 ///   but not yet surfaced to the accessibility tree).
 /// - **`IconThemeData::opacity`** folding into the resolved color.
 /// - Font weight, blend mode, and per-call shadow/text-direction
-///   overrides are not supported in this slice.
+///   overrides are not supported yet.
 #[derive(Clone, Debug, Default, StatelessView)]
 pub struct Icon {
     data: Option<IconData>,
@@ -83,8 +88,8 @@ impl Icon {
     /// Set the accessibility label announced for this icon.
     ///
     /// Stored on the widget even though the `Semantics` wrapper that would
-    /// surface it to the accessibility tree is deferred in this slice (see
-    /// the type docs).
+    /// surface it to the accessibility tree is not wired yet (see the type
+    /// docs).
     #[must_use]
     pub fn semantic_label(mut self, semantic_label: impl Into<String>) -> Self {
         self.semantic_label = Some(semantic_label.into());
@@ -147,7 +152,7 @@ impl StatelessView for Icon {
 
         let style = self.style_for(icon, size, &theme);
 
-        // Ambient `Directionality` is not yet modelled (see type docs) — a
+        // Ambient `Directionality` is not read yet (see type docs) — a
         // faithful port would resolve `Directionality::of(ctx)` here.
         let rich_text =
             RichText::new(TextSpan::styled(code_point_string, style)).direction(TextDirection::Ltr);

@@ -29,7 +29,7 @@ the backends that implement it:
 
 ```toml
 [dependencies]
-flui-platform-api = "0.2"
+flui-platform-api = { git = "https://github.com/vanyastaff/flui" }
 ```
 
 ```rust,ignore

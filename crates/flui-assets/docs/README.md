@@ -53,7 +53,7 @@ Deep dive into internals and optimization:
 
 ```toml
 [dependencies]
-flui_assets = "0.1"
+flui-assets = { git = "https://github.com/vanyastaff/flui" }
 tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -215,8 +215,7 @@ let results = join_all(handles).await;
 ## API Reference
 
 Full API documentation available at:
-- **docs.rs**: https://docs.rs/flui_assets
-- **Local**: `cargo doc -p flui-assets --open`
+- `cargo doc -p flui-assets --open`
 
 ## Examples
 

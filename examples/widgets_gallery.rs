@@ -1,7 +1,7 @@
 //! Widget gallery — composes the `flui-widgets` catalog into one screen through
 //! the real pipeline. Its purpose is twofold: a runnable demo, and a proof that
-//! the public authoring API reads cleanly (FLUI's C3 adoption metric — the
-//! call site below is the thing an app author actually writes).
+//! the public authoring API reads cleanly (the call site below is the thing an
+//! app author actually writes).
 //!
 //! ```text
 //! Container → Column → { Text, a Row of circular avatars, a faded Row,

@@ -441,8 +441,8 @@ packages, same run).
   (`crates/flui-foundation/src/id.rs:10,723,740`). `LayerId` and `SemanticsId` (`id.rs:674,680`) are plain
   reused slab indices; the module itself names them as the next generational candidates
   (`id.rs:766`). They become generational before caches and agent handles key on them.
-  The AGENTS.md "ID offset" row describes 1-based slab indices, which no longer matches every ID;
-  it is corrected in the change that touches the IDs.
+  The AGENTS.md "ID offset" row separates the plain slab-backed IDs (slot + 1) from the
+  generational keys (0-based slot plus a generation).
 - View configurations are shared (`Rc`) or moved, not deep-cloned per level.
 - **The tree that stores the topology owns it.** `PipelineOwner::set_children(parent, &[RenderId])`
   and `move_subtree` check arity and depth; the global render-children synchronisation pass becomes

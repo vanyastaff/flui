@@ -1,6 +1,6 @@
 # flui-app
 
-**The application layer — where the three trees meet the platform.**
+**The application layer — where the trees meet the platform.**
 
 `flui-app` is the top of the framework stack: it owns the `run_app` entry
 point, constructs an owner-affine `UiRealm`, hosts the process services still

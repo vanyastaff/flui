@@ -11,5 +11,7 @@ Source: [`examples/material_demo/tree.rs`](https://github.com/vanyastaff/flui/bl
 [`examples/cupertino_demo/tree.rs`](https://github.com/vanyastaff/flui/blob/main/examples/cupertino_demo/tree.rs).
 
 The minimal shape — wrap the root view in a theme, then call `run_app` — is also what
-`examples/form.rs` does with `Theme::new(ThemeData::light(), ...)`. FLUI has no single
-`MaterialApp`-style widget; see the [Flutter → FLUI mapping](../mapping.md) if you expect one.
+`examples/form.rs` does with `Theme::new(ThemeData::light(), ...)`. An application that also wants
+light/dark switching, a navigator and a `ScaffoldMessenger` roots itself in `MaterialApp`
+(`packages/flui-material/src/app.rs`) instead, which resolves `ThemeMode` and publishes the
+`ThemeData` through `Theme` itself; see the [Flutter → FLUI mapping](../mapping.md) notes.

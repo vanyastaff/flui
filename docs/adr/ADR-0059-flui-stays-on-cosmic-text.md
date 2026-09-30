@@ -1,7 +1,9 @@
 # ADR-0059: FLUI stays on cosmic-text and owns its own family resolution
 
-- **Status:** Accepted — to be superseded by ADR-0077
+- **Status:** Accepted — to be superseded by ADR-0092, which absorbs ADR-0077
 - **Date:** 2026-09-06
+- **Superseded by (when ADR-0092 §§1–5 are accepted):**
+  [ADR-0092](ADR-0092-per-realm-text-over-parley.md), which absorbs ADR-0077
 
 ## Context
 

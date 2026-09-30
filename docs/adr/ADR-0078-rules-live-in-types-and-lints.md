@@ -11,6 +11,10 @@
   `flui-foundation` and `flui-macros`.
 - **Amended-by:** [ADR-0086](ADR-0086-signal-writes-through-event-context.md) — §1 gains
   `writer_source`, the capability that opens a signal write.
+- **Amended by (on acceptance):** [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (§1) — the scalar unit wrappers
+  and `flui-geometry` are deleted, so the `From<f32>` row has nothing left to enforce; the
+  trybuild suite `crates/flui-painting/tests/compile_fail/` rejects mixing logical and device
+  geometry instead.
 - **Supersedes:** the capability-acquisition clauses of ADR-0018, ADR-0021, ADR-0030 and
   ADR-0037 (the rule stays, its enforcement moves into the type system); the port methodology
   (`docs/PORT.md`) and its grep gates (`scripts/port-check.sh`,

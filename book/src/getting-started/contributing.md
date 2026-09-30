@@ -35,5 +35,6 @@ cargo xtask check-changed
 
 This site is itself a FLUI-workspace artifact, under `book/`. See
 [`.github/workflows/docs.yml`](https://github.com/vanyastaff/flui/blob/main/.github/workflows/docs.yml)
-for how it builds and deploys, and AGENTS.md's documentation rules for what belongs in a page here
-versus in the repository's own `docs/`.
+for how it builds and deploys. A page here is a guide for readers; the design records and
+reference material stay in the repository's own `docs/`, and the book links to them rather than
+copying them.
