@@ -22,9 +22,10 @@ All types re-export flat from the crate root: `flui_objects::RenderPadding`.
 
 ## Guarantees
 
-- **Flutter parity by contract.** Each object ports the observable behavior
-  (layout math, edge cases, hit-test order) of its Flutter counterpart;
-  divergences are documented at the item.
+- **Flutter as the starting point.** Each object starts from the observable
+  behavior (layout math, edge cases, hit-test order) of its Flutter
+  counterpart and differs wherever the result is better; its harness rows pin
+  what it does.
 - **Harness-tested.** Every exported object appears in the render-object
   test catalog (`RENDER_OBJECT_TYPES`) with a `harness_*` row in a family table test exercising the
   real pipeline — the catalog completeness is CI-enforced.
