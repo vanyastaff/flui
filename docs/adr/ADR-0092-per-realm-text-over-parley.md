@@ -519,9 +519,11 @@ that wires what it adds.
      collection) merged first, so a face registered at run time through the one door reaches
      measurement, paint and carets on the next frame.
    - (4a) Merge gate, line breaks: closed by the owner on 2026-09-30, by landing 4a with 4b,
-     and `"A\n"` is two lines, as Parley lays it out. `"A\r\nB"` is three lines on Parley,
-     an empty one between; whether CR LF breaks once is open with the owner, and pinned as
-     three until then. What was measured before the decision: soft wrapping agrees: Parley shapes
+     and `"A\n"` is two lines, as Parley lays it out. CR LF breaks once, as the owner decided
+     on 2026-09-30: `"A\r\nB"` is two lines and `"A\r\n"` two, like `"A\n"`. Parley alone
+     breaks at the CR and again at the LF, so the painter hands it each CR that directly
+     precedes an LF as a space, the CR's one byte, which keeps every byte offset into the
+     layout valid for the text it was given. What was measured before the decision: soft wrapping agrees: Parley shapes
      with `OverflowWrap::BreakWord`, so an overlong word breaks between glyphs as cosmic-text's
      `Wrap::WordOrGlyph` breaks it. Over ten paragraphs (Latin, Cyrillic, Arabic, CJK, emoji,
      URLs) at 12, 14 and 17 px and every width from 2 to 398 px in 3 px steps, 668 of 3990
@@ -748,4 +750,4 @@ the rest do not exist yet.
   `parley_runs_read_back` (`crates/flui-engine/src/paragraph_readback_tests.rs`):
   `latin_breaks_at_a_line_separator`, `synthetic_bold_inks_more_than_regular`,
   `cjk_breaks_at_a_line_separator`, `colour_emoji_on_line_two`,
-  `arabic_rtl_right_aligns_each_line`, `crlf_puts_b_on_line_three` and `a_2x_baseline_row`.
+  `arabic_rtl_right_aligns_each_line`, `crlf_puts_b_on_line_two` and `a_2x_baseline_row`.

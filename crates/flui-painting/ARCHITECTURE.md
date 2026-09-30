@@ -586,7 +586,7 @@ the caret layout and the painted glyphs disagree:
 
 - Hard breaks (decision 18): after a trailing `\n` or U+2029 the painted
   paragraph has an empty last line, and the caret sits at the end of the line
-  before it instead of on it; after U+2028, `\r` or CR LF the painted text
+  before it instead of on it; after U+2028 or a lone `\r` the painted text
   continues on a line the caret layout does not have, and at U+0085 or
   U+001C–U+001E the caret layout breaks where paint does not. An editable
   paragraph's caret and selection can then be a line away from its glyphs.
@@ -793,9 +793,12 @@ cosmic-text paint it replaced:
   (`"A\n"` is two lines, the owner's choice; `a_trailing_newline_is_a_line`);
   U+2028 and `\r` break (`a_line_separator_breaks`,
   `latin_breaks_at_a_line_separator`, `cjk_breaks_at_a_line_separator`,
-  `colour_emoji_on_line_two`); CR LF breaks twice, so `"A\r\nB"` is three
-  lines with an empty one between (`crlf_breaks`,
-  `crlf_puts_b_on_line_three`; open with the owner, ADR-0092 §10 step 4);
+  `colour_emoji_on_line_two`); CR LF breaks once, as `\n` does, so
+  `"A\r\nB"` is two lines: Parley would break at the CR and again at the LF,
+  so the painter hands it a CR directly before an LF as a space, the CR's
+  one byte, and every byte offset into the layout still indexes the text
+  (`crlf_breaks`, `crlf_puts_b_on_line_two`; the owner's decision, ADR-0092
+  §10 step 4);
   U+0085 does not break (`next_line_does_not_break`).
 - Fallback is per cluster over the collection's fallback families, where
   cosmic-text walked per word, so a mixed-script run can pick another face.

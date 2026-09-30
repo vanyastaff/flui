@@ -558,6 +558,7 @@ impl TextContext {
         spans: &[(String, Option<TextStyle>)],
     ) -> Shaped {
         let text: String = spans.iter().map(|(text, _)| text.as_str()).collect();
+        let breaks = one_break_per_crlf(&text);
 
         // Families are resolved against the collection before the builder
         // borrows it: the same rule the process font system resolves with.
@@ -601,7 +602,7 @@ impl TextContext {
         // `tests/parley_metrics_oracle.rs` pins the agreement.
         let mut builder = self
             .layout_cx
-            .ranged_builder(&mut self.font_cx, &text, 1.0, false);
+            .ranged_builder(&mut self.font_cx, &breaks, 1.0, false);
         builder.push_default(default_family);
         builder.push_default(StyleProperty::FontSize(paragraph.font_size));
         // A word wider than the line breaks between its glyphs instead of
@@ -624,7 +625,7 @@ impl TextContext {
                 builder.push(property, range.clone());
             }
         }
-        let mut layout = builder.build(&text);
+        let mut layout = builder.build(&breaks);
         layout.break_all_lines(paragraph.max_width);
         let alignment = match paragraph.direction {
             TextDirection::Ltr => Alignment::Left,
@@ -636,6 +637,20 @@ impl TextContext {
             text,
             spans: infos,
         }
+    }
+}
+
+/// `text` as Parley is handed it: a CR directly before an LF becomes a
+/// space, so CR LF breaks the line once, as a lone LF does, where Parley
+/// breaks at the CR and again at the LF. The space is the CR's one byte, so
+/// every byte offset into the layout (clusters, span lengths, the ellipsis
+/// cut) still indexes `text`; as trailing whitespace it adds nothing to the
+/// line's width.
+fn one_break_per_crlf(text: &str) -> Cow<'_, str> {
+    if text.contains("\r\n") {
+        Cow::Owned(text.replace("\r\n", " \n"))
+    } else {
+        Cow::Borrowed(text)
     }
 }
 

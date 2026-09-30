@@ -37,8 +37,6 @@ const ROBOTO: &[u8] = include_bytes!("../assets/fonts/Roboto-Regular.ttf");
 const FAMILIES: [Option<&str>; 3] = [Some("Roboto"), None, Some("monospace")];
 /// Regular, and a weight the bundled Roboto has no face for.
 const WEIGHTS: [FontWeight; 2] = [FontWeight::W400, FontWeight::W700];
-/// The lines `"A\r\nB"` lays out on.
-const CRLF_LINES: usize = 3;
 
 /// The paragraph `painter` records.
 fn painted(painter: &TextPainter) -> std::sync::Arc<ShapedParagraph> {
@@ -202,9 +200,12 @@ fn a_trailing_newline_is_a_line() {
     assert_paints_lines("A\n", 2);
 }
 
-/// CR LF: the lines Parley lays it out on (painting mapping decision 18).
+/// CR LF breaks the line once, as LF does: `"A\r\nB"` is two lines, and a
+/// trailing CR LF adds one empty line, as a trailing LF does (painting
+/// mapping decision 18). Parley alone breaks at the CR and again at the LF.
 fn crlf_breaks() {
-    assert_paints_lines("A\r\nB", CRLF_LINES);
+    assert_paints_lines("A\r\nB", 2);
+    assert_paints_lines("A\r\n", 2);
 }
 
 /// U+2028 LINE SEPARATOR breaks the line.

@@ -402,9 +402,9 @@ fn arabic_rtl_right_aligns_each_line(renderer: &crate::headless::HeadlessRendere
     }
 }
 
-/// CR LF lays out as Parley breaks it: `B` on the third line, the second
-/// empty (painting mapping decision 18).
-fn crlf_puts_b_on_line_three(renderer: &crate::headless::HeadlessRenderer) {
+/// CR LF breaks the line once: `B` is painted on the line right after `A`,
+/// with no empty line between (painting mapping decision 18).
+fn crlf_puts_b_on_line_two(renderer: &crate::headless::HeadlessRenderer) {
     let fonts = FontCollection::new();
     let painter = laid_out(
         &fonts,
@@ -413,12 +413,11 @@ fn crlf_puts_b_on_line_three(renderer: &crate::headless::HeadlessRenderer) {
         TextDirection::Ltr,
         f64::from(WIDE.0) - 16.0,
     );
-    assert_eq!(recorded(&painter).line_count(), 3);
+    assert_eq!(recorded(&painter).line_count(), 2);
     let pixels = read_back(renderer, &painter, 1.0);
-    assert!(ink_in(&pixels, band(&painter, 1), everywhere(), inked).is_empty());
     assert!(
-        !ink_in(&pixels, band(&painter, 2), everywhere(), inked).is_empty(),
-        "B is painted on line 3"
+        !ink_in(&pixels, band(&painter, 1), everywhere(), inked).is_empty(),
+        "B is painted on line 2"
     );
 }
 
@@ -466,7 +465,7 @@ fn parley_runs_read_back() {
             "arabic_rtl_right_aligns_each_line",
             arabic_rtl_right_aligns_each_line,
         ),
-        ("crlf_puts_b_on_line_three", crlf_puts_b_on_line_three),
+        ("crlf_puts_b_on_line_two", crlf_puts_b_on_line_two),
         ("a_2x_baseline_row", a_2x_baseline_row),
     ];
     let failed: Vec<&str> = rows
