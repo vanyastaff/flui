@@ -154,6 +154,7 @@ impl TextMeasurers {
     }
 
     /// How many nodes are recorded.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn len(&self) -> usize {
         self.0.borrow().len()
     }
