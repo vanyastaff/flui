@@ -4,24 +4,6 @@
 //! gesture system. It coordinates hit testing, event routing, arena management,
 //! and pointer move event coalescing.
 //!
-//! # Flutter Equivalence
-//!
-//! This corresponds to Flutter's `GestureBinding` mixin:
-//!
-//! ```dart
-//! mixin GestureBinding on BindingBase implements HitTestable, HitTestDispatcher, HitTestTarget {
-//!   @override
-//!   void initInstances() {
-//!     super.initInstances();
-//!     _instance = this;
-//!     // ...
-//!   }
-//!
-//!   static GestureBinding get instance => BindingBase.checkInstance(_instance);
-//!   static GestureBinding? _instance;
-//! }
-//! ```
-//!
 //! # Architecture
 //!
 //! ```text
@@ -706,9 +688,8 @@ impl GestureBinding {
                     }
                 }
                 PendingMove::Hover { event, hit_test } => {
-                    // `MouseRegion::on_hover` has no device-kind gate (Flutter
-                    // parity: `RenderMouseRegion.handleEvent`, unlike
-                    // `MouseTracker.updateWithEvent`'s mouse/stylus-only gate)
+                    // `MouseRegion::on_hover` has no device-kind gate
+                    // (unlike the mouse/stylus-only enter/exit tracking)
                     // and rides the same coalesced dispatch cadence as the
                     // ordinary hit-test targets, not the immediate
                     // per-raw-event enter/exit update. It interleaves with
@@ -815,9 +796,9 @@ impl GestureBinding {
     /// Call this when the window loses OS focus: a defocused window may
     /// never receive the Up matching an in-flight Down (alt-tab mid-drag),
     /// which would otherwise strand the sequence until a superseding Down.
-    /// This is the contract Flutter's platforms honor by sending a cancel
-    /// for in-flight contacts when the view deactivates; FLUI's backends
-    /// send no such event, so the app runner synthesizes it here.
+    /// Platforms that honor this contract send a cancel for in-flight
+    /// contacts when the view deactivates; FLUI's backends send no such
+    /// event, so the app runner synthesizes it here.
     ///
     /// Unlike [`Self::cancel_all_pointer_sequences`] — the silent teardown
     /// for pause/detach, where user code should no longer run — this
@@ -1114,9 +1095,8 @@ impl GestureBinding {
             PointerEvent::Enter(_) | PointerEvent::Leave(_) => {
                 // An active contact keeps capture semantics: deliver on the
                 // route hit-tested at Down, like every other mid-contact
-                // event of the sequence (Flutter parity:
-                // `gestures/binding.dart` routes a down pointer's events
-                // over the result stored for it at Down).
+                // event of the sequence (a down pointer's events go over the
+                // result stored for it at Down).
                 let panic = if self.hit_tests.contains_key(&pointer_id) {
                     self.dispatch_on_cached_route(pointer_id, event)
                 } else {
@@ -1128,9 +1108,8 @@ impl GestureBinding {
                     // pointer), so the path is resolved at the device's
                     // last-known hover position. A device this binding has
                     // never seen has no position to resolve; the event
-                    // still reaches the pointer router (Flutter parity:
-                    // an added/removed-class event dispatches with no hit
-                    // path, router only).
+                    // still reaches the pointer router (an added/removed-class
+                    // event dispatches with no hit path, router only).
                     use crate::events::PointerEventExt as _;
                     let result = match self.mouse_tracker.device_position(event.device_id()) {
                         Some(position) => hit_test_fn(position),
@@ -1172,7 +1151,7 @@ impl GestureBinding {
                     cached
                 } else {
                     // `ui_events::PointerEvent::Gesture` is a complete
-                    // high-level gesture tick, not Flutter's explicit
+                    // high-level gesture tick, not an explicit
                     // PanZoomStart/Update/End stream. Without an active
                     // contact route it therefore resolves one fresh,
                     // ephemeral path at its own focal position.
@@ -1198,10 +1177,9 @@ impl GestureBinding {
                 }
             }
             PointerEvent::Scroll(scroll) => {
-                // Two channels, ported from Flutter's dispatch-then-resolve
-                // (`GestureBinding.dispatchEvent` delivers the signal to the
-                // whole hit path, THEN `pointerSignalResolver.resolve` lets
-                // exactly one registrant act): first every listener on the
+                // Two channels, dispatch-then-resolve (the signal is delivered
+                // to the whole hit path, THEN exactly one registrant is
+                // allowed to act): first every listener on the
                 // path observes the raw event, then the leaf-first claim walk
                 // over the path's scroll targets stops at the first handler
                 // that consumes the tick.
@@ -1210,11 +1188,8 @@ impl GestureBinding {
                     px_f32(scroll.state.position.y),
                 );
                 // BOTH channels use a FRESH hit test at the event position:
-                // a signal has no down-capture — the oracle hit-tests every
-                // `PointerSignalEvent` where it happens and asserts the
-                // signal's pointer has no stored result, even mid-contact
-                // (`gestures/binding.dart` `_handlePointerEventImmediately`)
-                // — so a wheel tick during a drag reaches the widgets under
+                // a signal has no down-capture — it is hit-tested where it
+                // happens, even mid-contact — so a wheel tick during a drag reaches the widgets under
                 // the cursor, not the route captured at Down.
                 let fresh_result = hit_test_fn(position);
                 if let Some(panic) = self.dispatch_ephemeral(event, &fresh_result) {
@@ -1503,7 +1478,7 @@ impl GestureBinding {
 
     /// Invoke the resolved hit route, then route through the pointer router.
     ///
-    /// Flutter's binding is the final/root hit-test entry, so leaf hit targets
+    /// The binding is the final/root hit-test entry, so leaf hit targets
     /// run before its `PointerRouter` and arena lifecycle. Returns the first
     /// panic in that transaction order so the caller can finish later phases
     /// and mandatory cleanup before resuming it.
@@ -1572,9 +1547,8 @@ impl GestureBinding {
     /// hover move never has a cached Down route, so this — like
     /// [`dispatch_ephemeral`](Self::dispatch_ephemeral) — resolves and
     /// releases everything within this one call, then still runs the root
-    /// pointer router after the walk (Flutter parity: `GestureBinding`'s own
-    /// `handleEvent`, the path's least-specific entry, calls
-    /// `pointerRouter.route(event)` last).
+    /// pointer router after the walk (the binding is the path's
+    /// least-specific entry and routes the event last).
     fn dispatch_ephemeral_with_hover_interleaved(
         &self,
         event: &PointerEvent,

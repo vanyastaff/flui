@@ -1,4 +1,4 @@
-//! Scroll-path parity tests:
+//! Scroll-path tests:
 #![expect(clippy::float_cmp)] // physics clamp + controller pixel reads return exact f64 literals
 //!
 //! 1. `SingleChildScrollView` viewport geometry (cross-protocol Box→Sliver path).
@@ -197,9 +197,8 @@ pub(crate) fn bouncing_physics_fling_springs_back_after_overscroll() {
 /// ticks registered controllers before draining the rebuild queue that
 /// services a queued command).
 ///
-/// Flutter parity: `ScrollPosition.jumpTo` calls `goIdle()` — cancelling
-/// whatever activity currently owns the position — before touching `pixels`
-/// (`scroll_position_with_single_context.dart`, tag `3.44.0`).
+/// `jump_to` first cancels whatever activity currently owns the position
+/// (goes idle) before touching the pixel offset.
 pub(crate) fn scrollable_jump_to_during_animate_to_cancels_it_synchronously() {
     let controller = ScrollController::new();
     controller.update_dimensions(300.0, 0.0, 4700.0);
@@ -277,20 +276,16 @@ pub(crate) fn scrollable_jump_to_during_animate_to_cancels_it_synchronously() {
 // any sliver whose child paints at a nonzero offset, the common case for a
 // scrolled list.
 //
-// Flutter's own regression test for the same class of bug --
-// `'SliverMainAxisGroup pointer event positions'`
-// (`packages/flutter/test/widgets/sliver_main_axis_group_test.dart`, tag
-// `3.44.0`, filed as flutter/flutter#173029) -- asserts
-// `TapDownDetails.localPosition` stays scroll-correct through nested slivers.
-// FLUI has no `SliverMainAxisGroup` yet, so these are non-parity regression
-// tests reproducing the same class of defect through the sliver widgets FLUI
+// The invariant is that a tap's `localPosition` stays scroll-correct through
+// nested slivers. FLUI has no `SliverMainAxisGroup` yet, so these regression
+// tests reproduce the class of defect through the sliver widgets FLUI
 // does have: `ListView` (the sliver->box leg, under a real scroll offset,
 // vertical and horizontal), `SliverPadding` wrapping a `SliverToBoxAdapter`
 // (the sliver->sliver leg), and a reversed `AxisDirection` (the sliver->box
 // leg's sign, not just its axis).
 
 // ============================================================================
-// Scrollable — scroll-activity signal (Flutter: isScrollingNotifier)
+// Scrollable — scroll-activity signal
 // ============================================================================
 
 /// The scroll-activity signal across a full gesture: idle before, live
@@ -382,10 +377,9 @@ fn nested_scrollables(outer: &ScrollController, inner: &ScrollController, vsync:
 }
 
 /// One wheel tick over nested scrollables moves ONLY the innermost one that
-/// can move — the oracle's `PointerSignalResolver` contract: every scrollable
+/// can move — the pointer-signal arbitration contract: every scrollable
 /// on the hit path registers interest, the first (leaf-most) registrant wins,
-/// and the rest never act (`gestures/pointer_signal_resolver.dart`,
-/// `widgets/scrollable.dart` `_receivedPointerSignal`). Without arbitration
+/// and the rest never act. Without arbitration
 /// the same tick advances BOTH controllers (issue #717's double-scroll).
 pub(crate) fn a_wheel_tick_over_nested_scrollables_moves_only_the_inner() {
     let outer = ScrollController::new();

@@ -1,36 +1,26 @@
 //! [`Localizations`] — resolves a [`Locale`] into localized resources and
 //! publishes both to the subtree.
 //!
-//! Flutter parity: `widgets/localizations.dart` `Localizations` (oracle tag
-//! `3.44.0`).
+//! ## Sync-only v1 (current limits)
 //!
-//! ## Sync-only v1 (documented divergences from the oracle)
-//!
-//! - **No async delegate loading.** The oracle's `LocalizationsDelegate.load`
-//!   returns a `Future<T>` and `Localizations` defers the first frame while
-//!   any delegate resolves asynchronously (`RendererBinding.deferFirstFrame`).
-//!   FLUI's [`LocalizationsDelegate::load`] is synchronous, so resources are
-//!   always available the instant `Localizations` is mounted — there is no
-//!   "not yet loaded" state to model. A one-shot async delegate seam
-//!   (parity with `RebuildHandle`/image-bridge precedent, ADR-0018) is a
+//! - **No async delegate loading.** FLUI's [`LocalizationsDelegate::load`] is
+//!   synchronous, so resources are always available the instant
+//!   `Localizations` is mounted — there is no "not yet loaded" state to
+//!   model, and no first-frame deferral. A one-shot async delegate seam
+//!   (following the `RebuildHandle`/image-bridge precedent, ADR-0018) is a
 //!   named follow-up, not implemented here.
-//! - **No `Semantics` wrapper.** The oracle wraps the private scope in
-//!   `Semantics(textDirection: ..., localeForSubtree: ...)` so the
-//!   accessibility tree also carries locale/direction. FLUI's `Localizations`
-//!   does not emit a `Semantics` node — a documented gap, not a silent one;
-//!   closing it is a named follow-up once the semantics widget layer grows a
-//!   `localeForSubtree`-equivalent property.
-//! - **Coarse, locale-keyed rebuild.** The oracle's private
-//!   `_LocalizationsScope.updateShouldNotify` compares `typeToResources` MAP
-//!   IDENTITY: a new map is installed exactly when `Localizations.build()`
-//!   decides to reload (locale changed, or a delegate's `shouldReload`
-//!   fired), so *every* dependent rebuilds on that boundary — not a
-//!   per-resource diff. This port's resources are a pure synchronous
-//!   function of `locale` alone (delegates are fixed at construction, no
-//!   `shouldReload` hook — see [`LocalizationsDelegate`]), so
-//!   `update_should_notify` compares `locale` — the parity-equivalent signal
-//!   for this simplified model. Do not "optimize" this into a per-key diff;
-//!   it would change observable rebuild behavior.
+//! - **No `Semantics` wrapper.** `Localizations` does not emit a `Semantics`
+//!   node carrying the subtree's locale and direction to the accessibility
+//!   tree — a documented gap, not a silent one; closing it is a named
+//!   follow-up once the semantics widget layer grows a per-subtree locale
+//!   property.
+//! - **Coarse, locale-keyed rebuild.** Every dependent rebuilds whenever the
+//!   resources are reloaded — not a per-resource diff. Resources are a pure
+//!   synchronous function of `locale` alone (delegates are fixed at
+//!   construction, no reload hook — see [`LocalizationsDelegate`]), so
+//!   `update_should_notify` compares `locale`, which is exactly the reload
+//!   signal for this simplified model. Do not "optimize" this into a per-key
+//!   diff; it would change observable rebuild behavior.
 
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
@@ -48,9 +38,8 @@ use super::widgets_localizations::{DefaultWidgetsLocalizations, WidgetsLocalizat
 /// [`Resources`](Self::Resources), loaded synchronously by a
 /// [`Localizations`] widget.
 ///
-/// Flutter parity: `LocalizationsDelegate<T>`
-/// (`widgets/localizations.dart`), simplified to synchronous loading — see
-/// the module docs for the full list of sync-only-v1 divergences.
+/// Loading is synchronous — see the module docs for the full list of
+/// sync-only-v1 limits.
 pub trait LocalizationsDelegate: fmt::Debug {
     /// The localized-resource type this delegate produces. Retrieved later
     /// with `Localizations::of::<Self::Resources>`.
@@ -148,8 +137,6 @@ impl BoxedWidgetsLocalizations {
     /// `Localizations` with a widgets-localizations delegate (see
     /// [`Localizations::new`]'s invariant). Use
     /// [`maybe_of`](Self::maybe_of) for a non-panicking variant.
-    ///
-    /// Flutter parity: `WidgetsLocalizations.of(context)`.
     #[must_use]
     pub fn of(ctx: &dyn BuildContext) -> Arc<Self> {
         Localizations::of::<Self>(ctx)
@@ -176,9 +163,6 @@ impl std::ops::Deref for BoxedWidgetsLocalizations {
 /// A [`LocalizationsDelegate`] that always resolves to
 /// [`DefaultWidgetsLocalizations`] (US English, LTR), regardless of the
 /// requested locale.
-///
-/// Flutter parity: `_WidgetsLocalizationsDelegate` /
-/// `DefaultWidgetsLocalizations.delegate`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DefaultWidgetsLocalizationsDelegate;
 
@@ -206,8 +190,6 @@ struct LocalizationsSnapshot {
 /// Private inherited scope publishing the resolved [`LocalizationsSnapshot`]
 /// to descendants. Never constructed directly — [`Localizations::build`]
 /// is the sole producer.
-///
-/// Flutter parity: `_LocalizationsScope`.
 #[derive(Clone)]
 struct LocalizationsScope {
     snapshot: LocalizationsSnapshot,
@@ -240,8 +222,7 @@ impl_inherited_view!(LocalizationsScope);
 /// resource-specific convenience wrapper, e.g.
 /// [`BoxedWidgetsLocalizations::of`]).
 ///
-/// Flutter parity: `Localizations` (`widgets/localizations.dart`) — see the
-/// module docs for the sync-only-v1 divergences (no async loading, no
+/// See the module docs for the sync-only-v1 limits (no async loading, no
 /// `Semantics` wrapper).
 #[derive(Clone, StatelessView)]
 pub struct Localizations {
@@ -266,8 +247,7 @@ impl Localizations {
     /// # Panics
     ///
     /// In debug builds, panics if no delegate produces
-    /// [`BoxedWidgetsLocalizations`] — mirrors the oracle's constructor
-    /// assert (`delegates.any((d) => d is LocalizationsDelegate<WidgetsLocalizations>)`).
+    /// [`BoxedWidgetsLocalizations`].
     /// [`text_direction`](WidgetsLocalizations::text_direction) has nothing
     /// to resolve without it.
     #[must_use]
@@ -299,8 +279,6 @@ impl Localizations {
     /// Panics if there is no `Localizations` ancestor. Use
     /// [`maybe_locale_of`](Self::maybe_locale_of) for a non-panicking
     /// variant.
-    ///
-    /// Flutter parity: `Localizations.localeOf(context)`.
     #[must_use]
     pub fn locale_of(ctx: &dyn BuildContext) -> Locale {
         Self::maybe_locale_of(ctx).expect(
@@ -311,8 +289,6 @@ impl Localizations {
     /// The [`Locale`] of the [`Localizations`] ancestor for `ctx`,
     /// registering a dependency. Returns `None` if there is no
     /// `Localizations` ancestor.
-    ///
-    /// Flutter parity: `Localizations.maybeLocaleOf(context)`.
     #[must_use]
     pub fn maybe_locale_of(ctx: &dyn BuildContext) -> Option<Locale> {
         ctx.depend_on::<LocalizationsScope, _>(|scope| scope.snapshot.locale.clone())
@@ -324,8 +300,8 @@ impl Localizations {
     /// Two distinct absences collapse into `None` here: no `Localizations`
     /// ancestor at all, or an ancestor whose delegates never produce `R`.
     /// Both are permanently-reachable "no provider" states in this
-    /// sync-only model (unlike the oracle's async path, there is no
-    /// "not yet loaded" state once mounted — see the module docs).
+    /// sync-only model (there is no "not yet loaded" state once mounted —
+    /// see the module docs).
     ///
     /// # Panics
     ///
@@ -373,8 +349,7 @@ impl StatelessView for Localizations {
         let mut resources: HashMap<TypeId, Arc<dyn Any + Send + Sync>> =
             HashMap::with_capacity(self.delegates.len());
         for delegate in self.delegates.iter() {
-            // Only the first delegate of a given resource type loads —
-            // oracle parity (`_loadAll`'s `if (!types.contains(delegate.type))`).
+            // Only the first delegate of a given resource type loads.
             let type_id = delegate.0.resource_type_id();
             if resources.contains_key(&type_id) || !delegate.0.is_supported(&self.locale) {
                 continue;

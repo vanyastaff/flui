@@ -3,7 +3,7 @@
 **The typed vocabulary FLUI shares with tests, devtools and agents.**
 
 - `SemanticsRole` and `SemanticsAction` — FLUI's semantics vocabulary,
-  modelled on Flutter's `dart:ui` enums. `flui-semantics` re-exports them.
+  `flui-semantics` re-exports them.
 - `Role`, `ActionName` and `Checked` — the agent-protocol wire names of
   [ADR-0080](../../docs/adr/ADR-0080-agent-protocol-desktop-contract.md), shared
   by the desktop agent server.

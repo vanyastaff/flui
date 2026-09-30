@@ -21,7 +21,7 @@ body:
     id: reference
     attributes:
       label: Reference behavior
-      description: Flutter reference behavior, or why this is an edge where FLUI should leapfrog.
+      description: The behavior the change should have, and why it is the right one.
   - type: textarea
     id: verification
     attributes:

@@ -34,6 +34,7 @@ where
     use crate::app::raster_lane::DirectSink;
 
     tracing::info!("Starting web platform via flui-platform");
+    crate::app::dev_agent::log_undriven(&config, "web");
 
     // Platform init is an environment failure (unsupported browser, missing
     // wasm feature, driver problem), not a `BUG:` invariant — see the

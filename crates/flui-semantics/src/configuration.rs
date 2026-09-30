@@ -37,10 +37,6 @@ enum DescendantSemanticsMerge {
 /// information to the semantics system. Each RenderObject can override
 /// `describeSemanticsConfiguration` to fill out this configuration.
 ///
-/// # Flutter Equivalence
-///
-/// Corresponds to Flutter's `SemanticsConfiguration` class.
-///
 /// # Example
 ///
 /// ```ignore
@@ -56,7 +52,7 @@ pub struct SemanticsConfiguration {
     /// Whether a semantic payload setter has touched this configuration.
     ///
     /// Structural assembly directives such as boundary formation, explicit
-    /// children, user-action blocking, and tags do not set this bit. Flutter's
+    /// children, user-action blocking, and tags do not set this bit. The
     /// descendant-merging directive deliberately does.
     has_been_annotated: bool,
 
@@ -87,8 +83,7 @@ pub struct SemanticsConfiguration {
     /// configuration.
     ///
     /// Set alongside `is_semantics_boundary = true` by `RenderMergeSemantics`
-    /// (`MergeSemantics` widget) — Flutter's
-    /// `isMergingSemanticsOfDescendants`. The assembly walk
+    /// (`MergeSemantics` widget). The assembly walk
     /// (`flui-rendering`'s `run_semantics`) honors this by
     /// suppressing every descendant's own boundary decision for the rest of
     /// that subtree, absorbing all descendant configs into this one node.
@@ -1083,18 +1078,15 @@ impl SemanticsConfiguration {
             || (cfg!(target_arch = "wasm32") && self.has_flag(SemanticsFlag::IsHeader))
     }
 
-    /// Absorbs the semantic information from another configuration,
-    /// Flutter-faithfully.
+    /// Absorbs the semantic information from another configuration.
     ///
-    /// Merges follow Flutter
-    /// [`semantics.dart:6790-6862`](../../../../.flutter/flutter-master/packages/flutter/lib/src/semantics/semantics.dart)
-    /// `absorb`:
+    /// The merge rules, per field:
     ///
     /// - **Flags** — union via [`SemanticsFlags::merge`].
     /// - **Actions** — absorb every action whose handler the child
     ///   defined. If `other.blocks_user_actions == true`, only actions in
     ///   the `UNBLOCKED_USER_ACTIONS_MASK` mask cross the boundary; the rest are
-    ///   filtered out. Mirrors `_kUnblockedUserActions`.
+    ///   filtered out.
     /// - **Custom actions** — concatenate only metadata backed by an effective
     ///   `CustomAction` handler at each source.
     /// - **Tags** — merge as a set (deduplication handled by
@@ -1102,7 +1094,7 @@ impl SemanticsConfiguration {
     /// - **Label / hint** — *concatenate* via [`concat_attributed_string`]
     ///   using the operands' text directions; the earlier first-wins
     ///   semantics produced "Submit" + "loading state" → "Submit",
-    ///   losing the child's hint. Flutter joins them into "Submit
+    ///   losing the child's hint. They now join into "Submit
     ///   loading state."
     /// - **Value / increased_value / decreased_value / tooltip / sort_key /
     ///   text_direction / hint overrides / scroll metadata / list index /
@@ -1369,7 +1361,7 @@ mod tests {
     }
 
     #[test]
-    fn compatibility_matches_flutter_for_modeled_fields() {
+    fn compatibility_rules_for_modeled_fields() {
         let empty = SemanticsConfiguration::new();
         let mut label_a = SemanticsConfiguration::new();
         label_a.set_label("Alpha");

@@ -33,7 +33,7 @@ pub use animated::AnimatedView;
 #[cfg(test)]
 pub(crate) use error::isolate_error_view_builder_test;
 pub use error::{
-    ErrorView, ErrorViewBuilder, FlutterError, clear_error_view_builder, set_error_view_builder,
+    ErrorView, ErrorViewBuilder, FrameworkError, clear_error_view_builder, set_error_view_builder,
 };
 // The containment substitute-view factory: `ErrorView`'s own
 // concept, so it lives beside `ErrorView::build_error_view` rather than in

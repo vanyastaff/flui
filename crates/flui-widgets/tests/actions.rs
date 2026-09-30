@@ -55,9 +55,8 @@ fn press(harness: &Harness, field: &Rc<FocusNode>) -> bool {
 /// Red-check: resolve from the raw own-map instead of the layered chain —
 /// the outer counter moves and the inner assertion flips.
 ///
-/// Flutter parity (`actions_test.dart`, tag `3.44.0`): covers
-/// `'Actions widget can invoke actions with default dispatcher'` — FLUI has
-/// one dispatch path (no replaceable `ActionDispatcher`, ADR-0023 deferred).
+/// FLUI has one dispatch path (no replaceable `ActionDispatcher`, ADR-0023
+/// deferred).
 pub(crate) fn the_nearest_enabled_action_wins_and_receives_the_payload() {
     let outer_sum = Arc::new(AtomicUsize::new(0));
     let inner_sum = Arc::new(AtomicUsize::new(0));

@@ -8,7 +8,7 @@ authors.workspace = true
 license.workspace = true
 description = "Material Design theming foundation for FLUI — ColorScheme, Typography/TextTheme, ThemeData, and the Theme inherited widget"
 repository.workspace = true
-keywords = ["ui", "material", "theme", "flutter", "flui"]
+keywords = ["ui", "material", "theme", "flui"]
 categories = ["gui"]
 # All root tests/*.rs files are compiled as modules of ONE integration-test
 # binary (tests/main.rs); the per-file auto-discovered targets each linked the

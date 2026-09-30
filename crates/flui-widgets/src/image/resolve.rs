@@ -1,20 +1,15 @@
 //! The resolve transaction behind [`Image`](crate::Image)'s async dispatch.
 //!
-//! Flutter parity: `_ImageState`'s `_updateSourceStream` / `_replaceImage`
-//! pair (`widgets/image.dart`, 3.44.0). Every observable rule below is that
-//! pair's, translated to a cache-key subscription instead of an
-//! `ImageStream` listener:
+//! The resolve transaction is a cache-key subscription with these rules:
 //!
-//! - A rebuild whose provider carries the **same** cache key is a no-op —
-//!   Flutter's `if (_imageStream?.key == newStream.key) return;`. Provider
+//! - A rebuild whose provider carries the **same** cache key is a no-op.
+//!   Provider
 //!   *instance* identity is deliberately not consulted: two distinct
 //!   `AssetImage`s for one path are one subscription.
 //! - A key change cancels the live load and, unless
 //!   [`gapless_playback`](crate::Image::gapless_playback) is set, clears the
-//!   displayed frame in the same frame the swap lands — Flutter's
-//!   `if (!widget.gaplessPlayback) _replaceImage(info: null);`.
-//! - A failed load leaves the displayed frame alone. Flutter's `onError` sets
-//!   `_lastException`; it never calls `_replaceImage`. With the default
+//!   displayed frame in the same frame the swap lands.
+//! - A failed load leaves the displayed frame alone. With the default
 //!   (non-gapless) policy there is nothing left to leave alone — the swap
 //!   already cleared it.
 //!
@@ -141,8 +136,7 @@ impl ImageResolver {
         }
     }
 
-    /// `_ImageState.initState` + `_resolveImage`: capture the lifecycle
-    /// capabilities, then start the first resolve.
+    /// Capture the lifecycle capabilities, then start the first resolve.
     pub(super) fn init(&mut self, ctx: &dyn LifecycleContext) {
         self.handle = Some(ctx.rebuild_handle());
         self.driver = ctx.async_driver();
@@ -150,7 +144,7 @@ impl ImageResolver {
         self.start(key);
     }
 
-    /// `_ImageState.didUpdateWidget`: re-resolve only when the *cache key*
+    /// Re-resolve only when the *cache key*
     /// changes, not when the provider instance does.
     pub(super) fn did_update(
         &mut self,
@@ -179,7 +173,7 @@ impl ImageResolver {
         self.key.is_some()
     }
 
-    /// `_ImageState.dispose`: cancel the load and retire its generation, so a
+    /// Cancel the load and retire its generation, so a
     /// completion already in flight cannot publish into a disposed state.
     pub(super) fn dispose(&mut self) {
         self.token = None; // Drop cancels.
@@ -209,7 +203,7 @@ impl ImageResolver {
             return;
         };
 
-        // Flutter's synchronously-completing `ImageStream`: a key already in
+        // A key already in
         // the decode cache resolves in this very frame, with no placeholder.
         if let Some(hit) = decode_cache::cached(&key) {
             self.published.lock().publish(generation, hit);

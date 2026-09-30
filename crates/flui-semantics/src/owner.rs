@@ -148,9 +148,8 @@ impl SemanticsActionInvocation {
 /// 3. Flushing updates to the platform accessibility services
 /// 4. Producing immutable full-tree snapshots for adapter handoff
 ///
-/// # Flutter Protocol
+/// # Responsibilities
 ///
-/// Similar to Flutter's `SemanticsOwner`:
 /// - Owns the semantics tree for a render tree
 /// - Manages update lifecycle (mark dirty → flush)
 /// - Sends updates to platform channel
@@ -571,9 +570,8 @@ impl SemanticsOwner {
     /// This clears all nodes, removes the callback, and disables semantics.
     /// After calling dispose, the owner should not be used.
     ///
-    /// # Flutter Protocol
+    /// # Effects
     ///
-    /// Similar to Flutter's `SemanticsOwner.dispose()`:
     /// - Clears the semantics tree
     /// - Removes all listeners
     /// - Releases resources
@@ -621,12 +619,11 @@ impl SemanticsOwner {
 
     /// Publishes what changed — and only what changed — to the platform.
     ///
-    /// The observable contract is Flutter's (`SemanticsOwner
-    /// .sendSemanticsUpdate`): an idle frame publishes nothing and returns in
+    /// The observable contract: an idle frame publishes nothing and returns in
     /// O(1); only nodes whose content actually changed serialize into the
-    /// update. The *mechanism* diverges because FLUI rebuilds the semantics
-    /// arena every assembly pass (flui-semantics ARCHITECTURE.md, semantics assembly) where Flutter mutates persistent
-    /// nodes: a rebuild marks every node dirty, so the dirty bit alone cannot
+    /// update. The *mechanism* is a diff because FLUI rebuilds the semantics
+    /// arena every assembly pass (flui-semantics ARCHITECTURE.md, semantics assembly)
+    /// rather than mutating persistent nodes: a rebuild marks every node dirty, so the dirty bit alone cannot
     /// say what changed. The diff therefore compares each dirty node's
     /// translation, keyed by its stable [`AccessibilityNodeId`], against a
     /// private mirror of the last delivered update — payload equality is

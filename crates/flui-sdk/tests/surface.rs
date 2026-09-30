@@ -4,8 +4,10 @@
 //! The list is every path `flui-material`, `flui-cupertino` and `flui-devtools`
 //! import from the internal crates outside their tests, rewritten to its SDK
 //! path (an associated item reduced to its type), plus `painting::DrawOp`,
-//! which the design systems' paint tests read, and `view::dev_reload`, the
-//! hook `flui-hot-reload`'s host drivers implement (ADR-0094 §1).
+//! which the design systems' paint tests read, `view::dev_reload`, the
+//! hook `flui-hot-reload`'s host drivers implement (ADR-0094 §1), and
+//! `view::dev_agent`, the hook `flui-devtools`' agent server implements
+//! (ADR-0095 §3).
 //! ARCHITECTURE.md records how it was measured.
 
 /// Every measured item through its SDK path: removing or moving one fails to
@@ -48,6 +50,9 @@ mod measured {
     use flui_sdk::platform::{Brightness as _, Locale as _};
     use flui_sdk::rendering::{
         BoxConstraints as _, BoxProtocol as _, HitTestBehavior as _, RenderUpdateImpact as _,
+    };
+    use flui_sdk::view::dev_agent::{
+        AgentAnswer as _, AgentFault as _, AgentWindow as _, DevAgentHook as _, HandleKind as _,
     };
     use flui_sdk::view::dev_reload::{DevReloadHook as _, ReloadEvent as _, ReloadWake as _};
     use flui_sdk::view::element::ElementKind as _;

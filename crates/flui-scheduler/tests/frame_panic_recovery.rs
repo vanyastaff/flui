@@ -17,24 +17,11 @@
 //! covers a panicking PIPELINE — that path was fixed before this issue and
 //! stays green, unmodified, alongside these.
 //!
-//! # Divergence from Flutter, named rather than assumed
+//! # Scope of the contract
 //!
-//! `.flutter/packages/flutter/lib/src/scheduler/binding.dart` @ 3.44.0 never
-//! reaches the state this file is guarding against: `handleBeginFrame`'s
-//! `finally` resets `_schedulerPhase` to `SchedulerPhase.midFrameMicrotasks`
-//! around its own transient-callback loop, and `handleDrawFrame`'s `finally`
-//! resets it to `SchedulerPhase.idle` — but `_invokeFrameCallback` wraps
-//! EVERY individual transient/persistent/post-frame callback in its own
-//! `FlutterError`-reporting boundary, and `drawFrame()` — the pipeline's own
-//! equivalent — is itself registered and invoked as a persistent callback
-//! through that SAME boundary (`rendering/binding.dart:61`, `:557-558`), so
-//! no callback's exception, `drawFrame`'s included, ever unwinds Dart's call
-//! stack far enough to reach either `finally` at all. Per-callback isolation
-//! is what the source actually shows holding there; each `finally` covers
-//! whatever else could still escape past it. FLUI does not isolate per
-//! callback — a panic here poisons and propagates the whole frame, unchanged
-//! by this issue — so what these tests pin is narrower than Flutter's
-//! contract: the scheduler's OWN bookkeeping closes cleanly no matter which
+//! FLUI does not isolate a panic per callback: a panic here poisons and propagates
+//! the whole frame, unchanged by this issue. So what these tests pin is
+//! narrower: the scheduler's OWN bookkeeping closes cleanly no matter which
 //! phase raised the panic, while the panic itself still escapes to the
 //! caller.
 

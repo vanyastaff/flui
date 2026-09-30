@@ -5,9 +5,8 @@
 //! Frames are driven with `tick`, which does not dirty the root: an error
 //! appears only if the field itself scheduled the rebuild that shows it.
 //!
-//! Flutter reference: `packages/flutter/test/widgets/form_test.dart`, tag
-//! `3.44.0` — the cases here port its validate/save/reset/autovalidate
-//! coverage onto FLUI's handles.
+//! The cases here cover validate, save, reset and autovalidate through FLUI's
+//! handles.
 
 use std::cell::Cell;
 use std::rc::Rc;

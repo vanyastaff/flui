@@ -21,8 +21,7 @@ use flui_view::{
 ///
 /// Every row must contribute exactly as many cells as the table has columns
 /// — [`Table`] derives its column count from the first row and
-/// debug-asserts every other row matches it (Flutter parity: `Table`
-/// requires every `TableRow.children` to have the same length).
+/// debug-asserts every other row matches it.
 #[derive(Clone)]
 pub struct TableRow {
     decoration: Option<BoxDecoration<f64>>,
@@ -54,8 +53,7 @@ impl TableRow {
     /// A keyed row keeps its cells' elements — and so their state — when the
     /// rows around it move, are inserted, or are removed. Unkeyed rows are
     /// matched to each other in order, among the unkeyed rows only, which is
-    /// what lets a keyed row move past them without disturbing them
-    /// (Flutter's `_TableElement.update`).
+    /// what lets a keyed row move past them without disturbing them.
     ///
     /// # Panics
     ///
@@ -84,8 +82,8 @@ impl TableRow {
 ///
 /// `RenderTable`'s children are one flat row-major list, so the element tree
 /// reconciles them as one flat list too. Giving each cell a key derived from
-/// `(row identity, column index)` makes that flat reconcile behave exactly as
-/// Flutter's row-scoped `_TableElement.update` does: a cell is matched to the
+/// `(row identity, column index)` makes that flat reconcile behave as a
+/// row-scoped one would: a cell is matched to the
 /// cell that held the same position in the same row, wherever that row has
 /// moved to, and a row with no counterpart is disposed whole.
 ///
@@ -218,14 +216,13 @@ impl StatelessView for KeyedCell {
 /// Lays out `rows` in a grid: `RenderTable` resolves each column's width
 /// (fixed/flex/fraction/intrinsic) and sizes each row to its tallest cell.
 ///
-/// Flutter parity: `widgets/table.dart` `Table` over `RenderTable`. Defaults
-/// match Flutter: `default_column_width = Flex(1.0)`,
+/// Backed by `RenderTable`. Defaults: `default_column_width = Flex(1.0)`,
 /// `default_vertical_alignment = Top`, no border, no explicit text baseline.
 ///
 /// Rows carry identity. `RenderTable`'s children are one flat row-major list,
 /// so the element tree reconciles them as one flat list — but each cell is
 /// keyed by its row's identity and its column, which makes that reconcile
-/// behave as Flutter's row-scoped `_TableElement.update` does: a keyed row
+/// behave as a row-scoped one would: a keyed row
 /// keeps its cells wherever it moves to, unkeyed rows are matched to each
 /// other in order, and a row with no counterpart is disposed whole. Wrap a
 /// cell in [`TableCell`] to override its vertical alignment.
@@ -244,7 +241,7 @@ pub struct Table {
 }
 
 impl Table {
-    /// A table of `rows`, with Flutter's default column width, alignment, no
+    /// A table of `rows`, with the default column width, alignment, no
     /// border, and no explicit text baseline.
     pub fn new(rows: Vec<TableRow>) -> Self {
         let rows = square_up(rows);
@@ -311,8 +308,7 @@ impl Table {
 ///
 /// A keyed row is identified by its key's hash; an unkeyed row by its ordinal
 /// among the unkeyed rows, so inserting or removing a keyed row does not
-/// renumber the unkeyed ones (Flutter matches its unkeyed rows by sequence
-/// among themselves for the same reason).
+/// renumber the unkeyed ones.
 /// Makes `rows` rectangular against the first row's cell count, padding a
 /// short row with empty cells and dropping a long row's extras.
 ///
@@ -326,8 +322,7 @@ impl Table {
 /// Repairing rather than rejecting is this library's rule for caller
 /// configuration — the same rule `RenderViewport::set_anchor` follows for an
 /// out-of-range anchor and `RenderTable` follows for a baseline alignment with
-/// no text baseline. Flutter asserts instead; the divergence is deliberate,
-/// and the warning is what keeps it from being silent.
+/// no text baseline. The warning is what keeps the repair from being silent.
 fn square_up(mut rows: Vec<TableRow>) -> Vec<TableRow> {
     let Some(columns) = rows.first().map(|row| row.cells.len()) else {
         return rows;
@@ -435,7 +430,7 @@ impl RenderView for Table {
         // Row-major, the exact order `RenderTable`'s flat child list expects
         // (`row = index / column_count`, `col = index % column_count`), each
         // cell carrying its row's identity so the flat reconcile preserves
-        // rows the way Flutter's row-scoped one does.
+        // rows the way a row-scoped one would.
         for cell in &self.cells {
             visitor(cell);
         }
@@ -450,8 +445,6 @@ impl_render_view!(Table);
 /// render node — mirrors [`Positioned`](crate::Positioned) exactly. Only
 /// `vertical_alignment` is set; `x`/`y`/`offset` are inert defaults since
 /// `RenderTable` overwrites them unconditionally during layout.
-///
-/// Flutter parity: `widgets/table.dart` `TableCell`.
 #[derive(Clone, Debug)]
 pub struct TableCell {
     vertical_alignment: TableCellVerticalAlignment,

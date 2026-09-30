@@ -4,8 +4,7 @@
 mounted into mutable `Element` nodes, which in turn own or connect to render
 objects.
 
-The crate is intentionally close to Flutter's widget/element contract while
-using Rust-native storage and dispatch:
+The crate uses Rust-native storage and dispatch:
 
 - public view identity is `TypeId + Option<&dyn ViewKey>`;
 - element storage is the closed `ElementKind` enum;
@@ -122,8 +121,9 @@ heterogeneous dynamic children.
 ## Keys And Reconciliation
 
 `ObjectKey`, `ValueKey`, `UniqueKey`, and `GlobalKey` are stored on each
-`ElementNode` as `Option<Box<dyn ViewKey>>`. Runtime update semantics follow
-Flutter's `Widget.canUpdate`: same view type and semantically equal key.
+`ElementNode` as `Option<Box<dyn ViewKey>>`. A mounted element is
+updated in place only when the new view has the same type and a semantically
+equal key.
 
 The variable-arity reconciler preserves `ElementId` and state on keyed
 reorders, tears down mismatched types, and emits structured `ReconcileEvent`s.

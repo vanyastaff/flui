@@ -5,7 +5,7 @@
 //!
 //! # Philosophy
 //!
-//! This API follows Flutter's transform philosophy:
+//! This API is built around these principles:
 //! - **Declarative**: Express what you want, not how to build the matrix
 //! - **Composable**: Chain transforms with `.then()` for readability
 //! - **Type-Safe**: Compile-time guarantees about transform correctness
@@ -182,7 +182,7 @@ use super::{Matrix4, Offset};
 ///     .then(Transform::scale(2.0, 2.0))
 /// ```
 ///
-/// This matches Flutter's transform semantics and Canvas2D API.
+/// The semantics match the Canvas2D API.
 #[derive(Debug, Clone, PartialEq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]

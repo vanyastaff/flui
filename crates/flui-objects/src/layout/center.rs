@@ -1,15 +1,12 @@
 //! `RenderCenter` — centers a single child within available space.
 //!
 //! Delegates to [`AligningShiftedBox`] at `Alignment::CENTER` and the shared
-//! [`positioned_box_size`] helper.  This replaces the previous inline `/2`
-//! arithmetic and fixes two latent divergences from Flutter:
+//! [`positioned_box_size`] helper:
 //!
-//! - **FIX A — unbounded shrink-wrap:** no factor + `max_width = ∞` now
-//!   shrinks to child width instead of returning an infinite size.
-//! - **FIX B — factor clamp removed:** `with_width_factor` / `with_height_factor`
-//!   previously clamped to `[0, 1]`; Flutter only asserts `>= 0.0`.
-//!
-//! The public API is unchanged so all existing callers continue to compile.
+//! - **Unbounded shrink-wrap:** no factor + `max_width = ∞` shrinks to the
+//!   child width instead of returning an infinite size.
+//! - **Factors are not clamped:** `with_width_factor` / `with_height_factor`
+//!   only require `>= 0.0`; values above 1.0 are valid.
 //!
 //! # Byte-identity guarantee
 //!
@@ -72,28 +69,20 @@ impl RenderCenter {
 
     /// Creates a center with a width factor.
     ///
-    /// The factor must be `>= 0.0`; values above 1.0 are valid (Flutter
-    /// parity — previously this was incorrectly clamped to `[0, 1]`).
+    /// The factor must be `>= 0.0`; values above 1.0 are valid.
     #[must_use]
     pub fn with_width_factor(mut self, factor: f64) -> Self {
-        debug_assert!(
-            factor >= 0.0,
-            "width_factor must be >= 0.0 (got {factor}); Flutter asserts the same"
-        );
+        debug_assert!(factor >= 0.0, "width_factor must be >= 0.0 (got {factor})");
         self.width_factor = Some(factor);
         self
     }
 
     /// Creates a center with a height factor.
     ///
-    /// The factor must be `>= 0.0`; values above 1.0 are valid (Flutter
-    /// parity — previously this was incorrectly clamped to `[0, 1]`).
+    /// The factor must be `>= 0.0`; values above 1.0 are valid.
     #[must_use]
     pub fn with_height_factor(mut self, factor: f64) -> Self {
-        debug_assert!(
-            factor >= 0.0,
-            "height_factor must be >= 0.0 (got {factor}); Flutter asserts the same"
-        );
+        debug_assert!(factor >= 0.0, "height_factor must be >= 0.0 (got {factor})");
         self.height_factor = Some(factor);
         self
     }
@@ -243,10 +232,9 @@ impl RenderBox for RenderCenter {
             self.width_factor,
             self.height_factor,
         );
-        // Mirror Flutter RenderPositionedBox.computeDryBaseline:
-        //   resolvedAlignment.alongOffset(size − childSize).dy + childBaseline
-        // For CENTER: along_size gives (size-child).dy * 0.5 = free_h * 0.5,
-        // matching the prior inline `free_h * 0.5` implementation exactly.
+        // Dry baseline = the alignment's vertical offset of the child inside
+        // the parent, plus the child's baseline.
+        // For CENTER: along_size gives (size-child).dy * 0.5 = free_h * 0.5.
         let child_offset_dy = self.inner.dry_child_offset(parent_size, child_size).dy;
         Some(child_baseline + child_offset_dy)
     }

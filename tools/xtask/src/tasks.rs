@@ -47,6 +47,9 @@ const PLATFORM_TARGETS: [&str; 4] = [WINDOWS_TARGET, MACOS_TARGET, ANDROID_TARGE
 /// - `flui-painting/parley`: the Parley path's raster side, off by default
 ///   until ADR-0092 §10 folds it into the default build; on here so its
 ///   `parley_oracle` test runs in CI's `test` and `fast-lane` jobs.
+/// - `flui-devtools/agent`: the development agent server, off by default
+///   because it opens an endpoint; on here so its `agent_endpoint` test runs
+///   in the same jobs.
 /// - `--lib --bins --tests`: build and run what has tests without LINKING the
 ///   ~60 examples, which `cargo nextest run` otherwise links on every run.
 ///   Examples still compile in `lint` (`--all-targets`); CI's `test` job and
@@ -66,7 +69,7 @@ pub(crate) const TEST_SCOPE: [&str; 10] = [
     "--bins",
     "--tests",
     "--features",
-    "flui/material,flui/cupertino,flui-painting/parley",
+    "flui/material,flui/cupertino,flui-painting/parley,flui-devtools/agent",
 ];
 
 /// Options every task takes.
@@ -1014,7 +1017,7 @@ mod tests {
         steps.iter().map(ToString::to_string).collect()
     }
 
-    const SCOPE: &str = "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/material,flui/cupertino,flui-painting/parley";
+    const SCOPE: &str = "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/material,flui/cupertino,flui-painting/parley,flui-devtools/agent";
 
     fn workflow_lint_runs_each_installed_linter_and_skips_the_rest() {
         assert_eq!(

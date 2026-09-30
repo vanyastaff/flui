@@ -5,9 +5,7 @@
 //! data to child RenderObjects. The data is stored on the child's
 //! `parentData` field and used by the parent RenderObject during layout.
 //!
-//! # Flutter Equivalent
-//!
-//! This corresponds to Flutter's `ParentDataWidget<T>` which is used for:
+//! It is used for:
 //! - `Positioned` - sets position in Stack
 //! - `Flexible`/`Expanded` - sets flex properties in Flex
 //! - `TableCell` - sets table cell properties
@@ -81,14 +79,14 @@ use super::view::View;
 ///
 /// - `flui_view::ParentDataConfig` (this trait): marker for the
 ///   widget-side **configuration value**, what a `ParentDataView`
-///   supplies (Flutter's `ParentDataWidget.applyParentData` payload).
+///   supplies.
 /// - `flui_rendering::ParentData`: the render-side **storage trait**
 ///   that a `RenderObject` carries.
 ///
 /// A same-name trait would force every workspace consumer importing both
 /// crates to fully-qualify or alias one of them. The distinct name
-/// matches Flutter's `ParentDataWidget` naming: the widget **configures**
-/// the parent-data; it is not itself the parent-data.
+/// says what it is: the view **configures** the parent-data; it is not
+/// itself the parent-data.
 pub trait ParentDataConfig: flui_rendering::parent_data::ParentData + Clone + Default {}
 
 /// Blanket: any concrete `flui-rendering` parent-data type
@@ -151,8 +149,8 @@ pub trait ParentDataView: Clone + 'static + Sized {
     /// Short name for diagnostics (`"Expanded"`, `"Positioned"`).
     ///
     /// Default: the fully-qualified Rust type name. Catalog widgets override
-    /// with a stable short label so attach-seam failures read like Flutter's
-    /// `Incorrect use of ParentDataWidget` messages.
+    /// with a stable short label so attach-seam failures name the misused
+    /// parent-data view.
     fn debug_type_name(&self) -> &'static str {
         core::any::type_name::<Self>()
     }

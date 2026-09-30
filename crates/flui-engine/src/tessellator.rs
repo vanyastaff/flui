@@ -34,7 +34,7 @@ const DEVICE_FILL_TOLERANCE: f32 = 0.1;
 const DEVICE_DASH_TOLERANCE: f32 = 0.5;
 
 /// Map a FLUI [`PathFillType`](flui_painting::paint::PathFillType) to lyon's
-/// [`FillRule`]. FLUI/Flutter default to non-zero winding; lyon's
+/// [`FillRule`]. FLUI defaults to non-zero winding; lyon's
 /// `FillOptions::default()` defaults to even-odd, so this mapping must be
 /// applied explicitly for every filled FLUI path.
 fn fill_rule_for(fill_type: flui_painting::paint::PathFillType) -> FillRule {
@@ -171,7 +171,7 @@ impl Tessellator {
     /// # Arguments
     /// * `path` - Lyon path to tessellate
     /// * `paint` - Paint style (color)
-    /// * `fill_rule` - Winding rule. FLUI/Flutter default to
+    /// * `fill_rule` - Winding rule. FLUI defaults to
     ///   [`FillRule::NonZero`]; only paths carrying an explicit
     ///   [`PathFillType::EvenOdd`](flui_painting::paint::PathFillType) use
     ///   even-odd. Convex shapes (circle/ellipse/arc/rrect/drrect) are unaffected
@@ -547,7 +547,7 @@ impl Tessellator {
 
         let path = path_builder.build();
         // The cutout is built from opposite windings, so either fill rule rings
-        // the inner region correctly; use NonZero to match the FLUI/Flutter
+        // the inner region correctly; use NonZero to match the FLUI
         // default.
         self.tessellate_fill(&path, paint, FillRule::NonZero)
     }

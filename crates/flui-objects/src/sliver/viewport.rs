@@ -1,13 +1,13 @@
 //! `RenderViewport` — Box render object that drives sliver children.
 //!
-//! `RenderViewport` ports Flutter's `center`/`anchor` model in full
-//! (`rendering/viewport.dart`'s `_attemptLayout`): `center` names the first
+//! `RenderViewport` implements the `center`/`anchor` model in full:
+//! `center` names the first
 //! FORWARD child, the prefix before it is the reverse group (walked
 //! backwards, laid out first), and `anchor` places the zero-scroll line at
 //! `main_axis_extent * anchor` from the leading edge. `showOnScreen` and lazy
 //! child creation stay out of this file. `RenderShrinkWrappingViewport` has
-//! no `center`/`anchor` in Flutter either — it always lays out every child
-//! forward from the first.
+//! no `center`/`anchor` — it always lays out every child forward from the
+//! first.
 
 use std::sync::Arc;
 
@@ -51,9 +51,8 @@ impl std::fmt::Debug for OffsetListener {
 /// re-layout of the node bound to `handle` whenever the offset's `pixels`
 /// changes out-of-band — a gesture's `set_pixels`, a
 /// `ScrollController::jump_to`, or the post-frame content-dimension flush.
-/// Flutter parity: `RenderViewport`/`RenderShrinkWrappingViewport` share this
-/// exact shape (`rendering/viewport.dart`'s `offset.addListener(markNeedsLayout)`
-/// wiring in `attach`).
+/// `RenderViewport` and `RenderShrinkWrappingViewport` share this exact shape
+/// (a relayout mark wired to the offset in `attach`).
 ///
 /// `apply_viewport_dimension`/`apply_content_dimensions`/`correct_by` never
 /// notify synchronously — that is `ViewportOffset`'s own contract (see the
@@ -129,15 +128,13 @@ struct LayoutChildSequenceParams {
     child_start: usize,
     child_end: usize,
     /// Whether this walk visits `[child_start, child_end)` back-to-front —
-    /// Flutter's reverse group (`advance: childBefore`). `false` walks
-    /// front-to-back, the only order `RenderShrinkWrappingViewport` ever uses.
+    /// the reverse group. `false` walks front-to-back, the only order `RenderShrinkWrappingViewport` ever uses.
     reversed: bool,
 }
 
 /// Iterates `[start, end)` either front-to-back or back-to-front, so
 /// [`RenderViewport::layout_child_sequence`] can share one loop body for
-/// both the forward and reverse groups (Flutter's `advance: childAfter` /
-/// `advance: childBefore`).
+/// both the forward and reverse groups.
 enum ChildIndexWalk {
     Forward(std::ops::Range<usize>),
     Reverse(std::iter::Rev<std::ops::Range<usize>>),
@@ -235,18 +232,17 @@ pub struct RenderViewport<O = ScrollableViewportOffset> {
     cache_extent: f64,
     cache_extent_style: CacheExtentStyle,
     paint_order: SliverPaintOrder,
-    /// The index of the first FORWARD child (Flutter's `center`). Children
+    /// The index of the first FORWARD child (the `center`). Children
     /// before it grow in reverse, walked backwards and laid out first;
-    /// `None` (the default) means index `0` — every child grows forward,
-    /// matching Flutter's `children.first` default. `Some(n)` is only valid
-    /// for `n < child_count`: Flutter's center is always a direct child, so
-    /// `set_center` and `attempt_layout` treat `n >= child_count` as
+    /// `None` (the default) means index `0` — every child grows forward.
+    /// `Some(n)` is only valid for `n < child_count`: the center is always a
+    /// direct child, so `set_center` and `attempt_layout` treat `n >= child_count` as
     /// misconfiguration (see `clamp_center`).
     center: Option<usize>,
     /// Where the zero-scroll line sits along the main axis, as a fraction of
-    /// `main_axis_extent` from the leading edge (`0.0`..=`1.0`). Flutter's
-    /// `RenderViewport.anchor`; `RenderShrinkWrappingViewport` has no
-    /// equivalent — it has no center to anchor.
+    /// `main_axis_extent` from the leading edge (`0.0`..=`1.0`).
+    /// `RenderShrinkWrappingViewport` has no equivalent — it has no center to
+    /// anchor.
     anchor: f64,
     /// Set once `clamp_center` has warned about an out-of-range `center`, so
     /// a misconfigured viewport does not spam a warning every frame.
@@ -273,7 +269,7 @@ pub struct RenderViewport<O = ScrollableViewportOffset> {
     staged_positions: Vec<StagedPosition>,
     /// How content that overflows this viewport is clipped when it paints.
     /// `Clip::None` clips nothing at all, so a child may paint outside the
-    /// viewport's bounds (Flutter's `clipBehavior`, default `hardEdge`).
+    /// viewport's bounds (default hard-edge).
     clip_behavior: Clip,
     /// The size and cache extent the last pass laid out under, and the
     /// per-slot paint-clip corrections it committed — everything the
@@ -468,7 +464,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
-    /// Sets the index of the first forward child (Flutter's `center`).
+    /// Sets the index of the first forward child (the `center`).
     ///
     /// `None` (the default) means index `0`: every child grows forward, from
     /// the leading edge. `Some(index)` makes children `[0, index)` grow in
@@ -476,7 +472,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
     /// `[index, child_count)` grow forward, starting at `index` itself.
     ///
     /// `index` must be `< child_count` once the viewport has children —
-    /// Flutter's center is always a direct child, so `index == child_count`
+    /// the center is always a direct child, so `index == child_count`
     /// (this render object's former "no center" spelling) has no meaning
     /// under this model; use `None` for that. An out-of-range `index` is
     /// caught by a `debug_assert!` in `perform_layout` and clamped (with a
@@ -503,12 +499,11 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
     /// Sets where the zero-scroll line sits along the main axis, as a
     /// fraction of `main_axis_extent` from the leading edge.
     ///
-    /// Flutter's `RenderViewport.anchor`, default `0.0` (the leading edge — no
-    /// room for a reverse group at rest).
+    /// Default `0.0` (the leading edge — no room for a reverse group at rest).
     ///
     /// A value outside `0.0..=1.0`, or a non-finite one, is caller input, not
     /// an internal invariant: it is clamped (a non-finite value to `0.0`) and
-    /// warned about once, never asserted. Flutter asserts here; this library
+    /// warned about once, never asserted: this library
     /// does not panic on a configuration gap — the same rule `RenderTable`
     /// follows for a baseline alignment with no text baseline. Letting `NaN`
     /// through would poison every offset the layout derives from it, and a
@@ -548,7 +543,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
     }
 
     /// Resolves `center` against `child_count`, clamping (and warning once)
-    /// an out-of-range index — Flutter's center is always a direct child, so
+    /// an out-of-range index — the center is always a direct child, so
     /// `Some(n) >= child_count` cannot be honored. `None` resolves to `0`.
     fn clamp_center(&mut self, child_count: usize) -> usize {
         let Some(index) = self.center else {
@@ -557,7 +552,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         debug_assert!(
             index < child_count,
             "BUG: RenderViewport::center ({index}) must be < child_count ({child_count}); \
-             Flutter's center is always a direct child"
+             the center is always a direct child"
         );
         if index < child_count {
             return index;
@@ -598,8 +593,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
     /// Total obstruction extent contributed by the slivers between `center`
     /// and `child_index`, in growth-direction order.
     ///
-    /// Mirrors Flutter's `maxScrollObstructionExtentBefore`
-    /// (`rendering/viewport.dart:1905`): a FORWARD child (`child_index >=
+    /// A FORWARD child (`child_index >=
     /// center`) sums indices `[center, child_index)`; a REVERSE child
     /// (`child_index < center`) sums indices `(child_index, center)` — the
     /// slivers *closer to center* than it, which for a reverse-growth child
@@ -701,8 +695,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
 
         let center = self.clamp_center(child_count);
 
-        // Oracle (`rendering/viewport.dart:1767-1846`, `_attemptLayout`,
-        // ported line for line): `center_offset` is the distance from the
+        // `center_offset` is the distance from the
         // viewport's leading edge to the zero-scroll line — the anchor
         // point, shifted by the current scroll position.
         let cache_extent = self.calculated_cache_extent(main_axis_extent);
@@ -717,12 +710,11 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
         let forward_remaining_cache_extent =
             (full_cache_extent - center_cache_offset).clamp(0.0, full_cache_extent);
 
-        // `leadingNegativeChild == null` in the oracle: no children precede
-        // `center`, so there is no reverse group at all.
+        // No children precede `center`, so there is no reverse group at all.
         let has_reverse_group = center > 0;
 
         if has_reverse_group {
-            // Oracle (`rendering/viewport.dart:1808-1828`): the reverse group
+            // The reverse group
             // — the prefix before `center` — is laid out FIRST, walking
             // backwards from `center - 1` to `0`. A non-zero correction is
             // returned NEGATED: a scroll correction is always expressed in
@@ -749,8 +741,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             }
         }
 
-        // Oracle (`rendering/viewport.dart:1830-1845`): the forward group
-        // starts AT `center` and always runs, even when the reverse group is
+        // The forward group starts AT `center` and always runs, even when the reverse group is
         // empty — `overlap` folds in the leading-edge overscroll only when
         // there is no reverse group ahead of it to have already claimed it.
         self.layout_child_sequence(
@@ -856,9 +847,7 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
             } else {
                 -scroll_offset + initial_layout_offset
             };
-            // Oracle (`rendering/viewport.dart:902-934`,
-            // `describeApproximatePaintClip`): a child nothing overlaps is
-            // clipped to the whole viewport; one a pinned header overlaps has
+            // A child nothing overlaps is clipped to the whole viewport; one a pinned header overlaps has
             // its clip's leading edge pushed in to where that overlap starts.
             // Computed here, where the child's own constraints are still in
             // hand, and staged so only an accepted pass commits it.
@@ -1010,9 +999,8 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
     type Arity = Variable;
     type ParentData = BoxParentData;
 
-    // Flutter parity: `RenderViewport`/`RenderAbstractViewport` subscribes to
-    // its `ViewportOffset` in `attach` and tears the subscription down in
-    // `detach` (`rendering/viewport.dart`). See `offset_relayout_listener`'s
+    // The viewport subscribes to its `ViewportOffset` in `attach` and tears
+    // the subscription down in `detach`. See `offset_relayout_listener`'s
     // docs for what fires the mark and why it can never re-enter `perform_layout`.
     fn attach(&mut self, handle: RenderInvalidationHandle) {
         self.offset_listener = Some(register_offset_listener(&self.offset, handle.clone()));
@@ -1032,7 +1020,7 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
         let main_axis_extent = self.main_axis_extent(size);
         let cross_axis_extent = self.cross_axis_extent(size);
         self.child_count = ctx.child_count();
-        // Flutter publishes the viewport dimension before laying anything
+        // The viewport dimension is published before laying anything
         // out, and a `ScrollPosition` may move `pixels` to answer it (a page
         // position keeps its fractional page across a resize). That is
         // correct for a healthy pass; for a degraded one it would move the
@@ -1081,8 +1069,7 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
                 continue;
             }
 
-            // Oracle (`rendering/viewport.dart:1732-1735`): the anchor shifts
-            // both ends of the published scroll range by the room it opens
+            // The anchor shifts both ends of the published scroll range by the room it opens
             // on each side of the zero-scroll line — an anchor > 0 lets the
             // reverse group scroll `main_axis_extent * anchor` further
             // before `min_scroll_extent` clamps, and symmetrically shrinks
@@ -1145,8 +1132,7 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
         }
     }
 
-    /// Oracle (`rendering/viewport.dart:886-934`,
-    /// `describeApproximatePaintClip`): the viewport's own bounds, with the
+    /// The viewport's own bounds, with the
     /// leading edge pushed in by whatever overlaps this child — the room a
     /// pinned header takes. `Clip::None` clips nothing, so it reports
     /// nothing and content outside the viewport stays a fully present
@@ -1175,8 +1161,7 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
         Some(shrink_leading_edge(clip, effective, committed.correction))
     }
 
-    /// Oracle (`rendering/viewport.dart:938-966`, `describeSemanticsClip`):
-    /// the viewport's bounds grown by the cache extent along the scroll axis.
+    /// The viewport's bounds grown by the cache extent along the scroll axis.
     ///
     /// Wider than the paint clip on purpose — a row just past the edge is
     /// off-screen but reachable, so it stays in the tree (flagged hidden by
@@ -1222,7 +1207,7 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
 /// Unlike [`RenderViewport`], which expands to the incoming main-axis extent,
 /// this render object sizes itself to the sum of its slivers'
 /// `max_paint_extent` values, constrained by its parent. It still expands in
-/// the cross axis, matching Flutter's `RenderShrinkWrappingViewport`.
+/// the cross axis.
 #[derive(Debug)]
 pub struct RenderShrinkWrappingViewport<O = ScrollableViewportOffset> {
     axis_direction: AxisDirection,
@@ -1244,7 +1229,7 @@ pub struct RenderShrinkWrappingViewport<O = ScrollableViewportOffset> {
     staged_positions: Vec<StagedPosition>,
     /// How content that overflows this viewport is clipped when it paints.
     /// `Clip::None` clips nothing at all, so a child may paint outside the
-    /// viewport's bounds (Flutter's `clipBehavior`, default `hardEdge`).
+    /// viewport's bounds (default hard-edge).
     clip_behavior: Clip,
     /// See [`RenderViewport::committed_clips`]'s matching field docs.
     committed_clips: CommittedClipGeometry,
@@ -1517,8 +1502,8 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
                 cache_origin: -cache_extent,
                 child_start: 0,
                 child_end: ctx.child_count(),
-                // `RenderShrinkWrappingViewport` has no `center`/`anchor` in
-                // Flutter either — every child grows forward, front-to-back.
+                // `RenderShrinkWrappingViewport` has no `center`/`anchor` —
+                // every child grows forward, front-to-back.
                 reversed: false,
             },
         )
@@ -1605,9 +1590,7 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
             } else {
                 -scroll_offset + initial_layout_offset
             };
-            // Oracle (`rendering/viewport.dart:902-934`,
-            // `describeApproximatePaintClip`): a child nothing overlaps is
-            // clipped to the whole viewport; one a pinned header overlaps has
+            // A child nothing overlaps is clipped to the whole viewport; one a pinned header overlaps has
             // its clip's leading edge pushed in to where that overlap starts.
             // Computed here, where the child's own constraints are still in
             // hand, and staged so only an accepted pass commits it.
@@ -1828,10 +1811,9 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderShrinkWrappingViewport<O> 
         // The accepted pass laid every child out against constraints that do
         // not depend on this viewport's final size; only the physical offsets
         // do (a reverse axis measures from the far edge), and they are
-        // resolved here, once, from what that pass staged. Flutter stores
-        // logical offsets in parent data and resolves them at paint; resolving
-        // them at commit is the same contract without a second layout of
-        // every child.
+        // resolved here, once, from what that pass staged. Storing logical
+        // offsets in parent data and resolving them at paint would need a
+        // second layout of every child; resolving them at commit does not.
         let size = self.size_from_extents(cross_axis_extent, effective_extent);
         self.commit_positions(ctx, size, self.calculated_cache_extent(main_axis_extent));
         size
@@ -1851,8 +1833,7 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderShrinkWrappingViewport<O> 
         }
     }
 
-    /// Oracle (`rendering/viewport.dart:886-934`,
-    /// `describeApproximatePaintClip`): the viewport's own bounds, with the
+    /// The viewport's own bounds, with the
     /// leading edge pushed in by whatever overlaps this child — the room a
     /// pinned header takes. `Clip::None` clips nothing, so it reports
     /// nothing and content outside the viewport stays a fully present
@@ -1881,8 +1862,7 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderShrinkWrappingViewport<O> 
         Some(shrink_leading_edge(clip, effective, committed.correction))
     }
 
-    /// Oracle (`rendering/viewport.dart:938-966`, `describeSemanticsClip`):
-    /// the viewport's bounds grown by the cache extent along the scroll axis.
+    /// The viewport's bounds grown by the cache extent along the scroll axis.
     ///
     /// Wider than the paint clip on purpose — a row just past the edge is
     /// off-screen but reachable, so it stays in the tree (flagged hidden by

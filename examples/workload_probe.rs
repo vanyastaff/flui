@@ -55,10 +55,8 @@
 //! independent mechanism counts them: a self-re-arming
 //! [`flui::view::PostFrameHandle`] callback chain. Unlike the
 //! `AnimationController`, scheduling a post-frame callback does not itself
-//! request a new frame — Flutter parity: `addPostFrameCallback` "does not
-//! request a new frame" (`scheduler_binding.dart`) — so it can observe
-//! frames from other sources without contributing to their cause. Each
-//! callback is a fresh, one-shot `FnOnce` consumed by the scheduler's
+//! request a new frame, so it can observe frames from other sources
+//! without contributing to their cause. Each callback is a fresh, one-shot `FnOnce` consumed by the scheduler's
 //! transient post-frame queue, so this chain carries no persistent cycle.
 //!
 //! # Honest gaps

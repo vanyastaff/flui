@@ -101,8 +101,7 @@ struct CoreState {
     /// and passed through composite elements exactly like
     /// `parent_render_id`; a render element consumes it (stamps its
     /// `SliverMultiBoxAdaptorParentData` at mount) and hands `None` to its
-    /// own children. This is the slot Flutter's `RenderObjectElement`
-    /// inherits down to `didAdoptChild`.
+    /// own children.
     sliver_slot: Option<SliverSlot>,
 
     /// This element's own `ElementId`, stamped at slab insertion.
@@ -148,7 +147,7 @@ impl CoreState {
     ) {
         debug_assert!(
             self.lifecycle.is_initial(),
-            "BUG: mount from {:?} — Flutter's contract is that mount runs once, \
+            "BUG: mount from {:?} — mount runs once, \
              on a freshly created element; reuse goes through activate()",
             self.lifecycle
         );
@@ -410,8 +409,7 @@ where
     /// Called by [`crate::tree::ElementTree`] through
     /// [`crate::view::ElementBase::set_depth`] whenever it sets the node's
     /// depth: before `mount`, and again when a GlobalKey retake or a reparent
-    /// moves the subtree. Flutter sets `Element._depth` in `mount` and repairs
-    /// it in `_updateDepth`; here the tree owns the value and stamps it.
+    /// moves the subtree. The tree owns the value and stamps it.
     #[inline]
     pub(crate) fn set_depth(&mut self, depth: usize) {
         self.state.set_depth(depth);

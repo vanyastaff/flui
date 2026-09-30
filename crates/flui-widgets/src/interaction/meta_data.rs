@@ -1,7 +1,6 @@
 //! `MetaData` — attach an opaque payload to a subtree so a hit test can find it.
 //!
-//! Flutter parity: `widgets/basic.dart`'s `MetaData` over
-//! `RenderMetaData` (tag `3.44.0`).
+//! The widget over `RenderMetaData`.
 
 use std::any::Any;
 use std::sync::Arc;

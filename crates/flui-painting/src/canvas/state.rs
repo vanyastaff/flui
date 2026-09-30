@@ -2,8 +2,8 @@
 //!
 //! A saved state is the transform and
 //! whether the save opened a layer (so `restore` emits the matching
-//! `RestoreLayer`). `restore()` on an empty save stack is a silent no-op,
-//! as `dart:ui`'s `Canvas.restore()` is in release builds.
+//! `RestoreLayer`). `restore()` on an empty save stack is a silent no-op
+//! in release builds.
 
 use crate::{paint::BlendMode, styling::Color};
 use flui_foundation::geometry::{Matrix4, Rect};
@@ -46,8 +46,7 @@ impl Canvas {
     /// composites the layer back using the paint specified when the
     /// layer was created.
     ///
-    /// If there is no saved state, this is a silent no-op (Flutter
-    /// parity).
+    /// If there is no saved state, this is a silent no-op.
     #[inline]
     pub fn restore(&mut self) {
         if let Some(state) = self.save_stack.pop() {
@@ -66,7 +65,7 @@ impl Canvas {
     }
 
     /// The number of saved states plus one for the initial state, so an
-    /// unmodified canvas answers 1 (`dart:ui`'s `Canvas.getSaveCount()`).
+    /// unmodified canvas answers 1.
     pub fn save_count(&self) -> usize {
         self.save_stack.len() + 1
     }
@@ -145,7 +144,7 @@ impl Canvas {
 
     /// Saves the canvas state with a layer that applies a blend mode at full opacity.
     ///
-    /// Flutter semantics: `saveLayer(blendMode)` with no explicit opacity is opaque
+    /// A blend-mode layer with no explicit opacity is opaque
     /// (alpha = 1.0).  The engine derives layer opacity from `paint.color.a`, so
     /// this method sets alpha = 255 — not the zero produced by `Color::TRANSPARENT`.
     /// RGB channels are ignored for saveLayer compositing; only alpha matters.

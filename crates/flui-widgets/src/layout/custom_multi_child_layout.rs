@@ -14,8 +14,6 @@ use flui_view::{BoxedView, IntoView, ParentDataView, View, ViewExt, impl_parent_
 use crate::support::generic_render_view_element;
 
 /// Metadata for identifying one child inside a [`CustomMultiChildLayout`].
-///
-/// Flutter parity: `widgets/basic.dart` `LayoutId`.
 #[derive(Clone, Debug)]
 pub struct LayoutId {
     id: String,
@@ -74,8 +72,7 @@ impl_parent_data_view!(LayoutId);
 /// A widget that sizes and positions multiple children using a layout delegate.
 ///
 /// Each child must be wrapped in [`LayoutId`] so the delegate can address it by
-/// id. Flutter parity: `widgets/basic.dart` `CustomMultiChildLayout` over
-/// `RenderCustomMultiChildLayoutBox`.
+/// id. Backed by `RenderCustomMultiChildLayoutBox`.
 #[derive(Clone)]
 pub struct CustomMultiChildLayout<C = Vec<BoxedView>> {
     delegate: Arc<dyn MultiChildLayoutDelegate>,

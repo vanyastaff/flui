@@ -147,8 +147,6 @@ impl CompoundAnimation {
 
     /// Create a compound animation that returns the mean (average) of two animations.
     ///
-    /// Similar to Flutter's `AnimationMean`.
-    ///
     /// # Examples
     ///
     /// ```
@@ -207,7 +205,7 @@ impl Animation<f64> for CompoundAnimation {
 
     /// The status of the **first** operand, regardless of operator.
     ///
-    /// Intentional (Flutter `CompoundAnimation` parity): even when `Min`/`Max`
+    /// Intentional: even when `Min`/`Max`
     /// currently selects the second operand's value, `first` drives both
     /// `status()` and the status listeners.
     #[inline]
@@ -270,9 +268,8 @@ mod tests {
     #[test]
     fn test_compound_animation_status() {
         // Controllers start at the lower bound so their status is genuinely
-        // Dismissed (a mid-range set_value now reports Forward per Flutter's
-        // _internalSetValue), letting this test assert the Dismissed->Forward
-        // transition.
+        // Dismissed (a mid-range set_value reports Forward), letting this test
+        // assert the Dismissed->Forward transition.
         let controller1 = create_controller(0.0);
         let controller2 = create_controller(0.0);
 

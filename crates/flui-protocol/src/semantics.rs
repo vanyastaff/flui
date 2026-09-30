@@ -1,11 +1,10 @@
 //! FLUI's own semantics vocabulary: the structural roles a node declares and
 //! the actions assistive technology can request of it.
 //!
-//! Both are modelled on `dart:ui`'s enums of the same names, and each enum's
-//! doc says where its values part from Flutter's. The values
-//! ([`SemanticsRole::value`], [`SemanticsAction::value`]) are part of this
-//! crate's stable surface. Interactive kinds (button, checkbox, slider, text field) are not
-//! roles: flui-semantics carries them as `SemanticsFlag`s, as Flutter does.
+//! The values ([`SemanticsRole::value`], [`SemanticsAction::value`]) are part
+//! of this crate's stable surface. Interactive kinds (button, checkbox,
+//! slider, text field) are not roles: flui-semantics carries them as
+//! `SemanticsFlag`s.
 //!
 //! These enums are not the agent-protocol wire vocabulary (see
 //! [`crate::wire`]) and carry no serde derive: nothing has chosen a
@@ -18,14 +17,10 @@ vocabulary! {
     /// element to assistive technologies. This helps screen readers and other
     /// accessibility tools present the correct interaction model.
     ///
-    /// # Flutter Equivalence
+    /// # Values
     ///
-    /// Corresponds to Flutter's `SemanticsRole` enum from `dart:ui`: every
-    /// [`name`](Self::name) is the identifier of a Flutter role. The numeric
-    /// [`value`](Self::value) is FLUI's own and is not Flutter's index —
-    /// Flutter declares its roles in another order and has a `slider` role,
-    /// which FLUI expresses as a flag (checked against
-    /// `engine/src/flutter/lib/ui/semantics.dart` on 2026-09-26).
+    /// The numeric [`value`](Self::value) is FLUI's own and is stable. There
+    /// is no `slider` role: FLUI expresses it as a flag.
     ///
     /// # Note
     ///
@@ -186,16 +181,13 @@ vocabulary! {
     /// such as screen readers activating a button. Each action is one bit, so a
     /// node's supported actions travel as a `u64` mask.
     ///
-    /// # Flutter Equivalence
+    /// # Bit layout
     ///
-    /// Corresponds to Flutter's `SemanticsAction` enum. `Tap` through `Focus`
-    /// carry Flutter's bits (`1 << 0` to `1 << 22`, checked against
-    /// `engine/src/flutter/lib/ui/semantics.dart` on 2026-09-26). The rest
-    /// differ: Flutter gives `scrollToOffset` `1 << 23` and has `expand`
-    /// (`1 << 24`) and `collapse` (`1 << 25`), while FLUI keeps those three
-    /// bits as [`RESERVED_BITS`](Self::RESERVED_BITS), has no expand or
-    /// collapse action (an expandable node toggles through its tap handler),
-    /// and puts [`ScrollToOffset`](Self::ScrollToOffset) at `1 << 26`.
+    /// `Tap` through `Focus` take `1 << 0` to `1 << 22`. Bits `1 << 23` to
+    /// `1 << 25` are kept as [`RESERVED_BITS`](Self::RESERVED_BITS): there
+    /// is no expand or collapse action (an expandable node toggles through
+    /// its tap handler), and [`ScrollToOffset`](Self::ScrollToOffset) sits
+    /// at `1 << 26`.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     #[repr(u64)]
     pub enum SemanticsAction {
@@ -254,16 +246,16 @@ impl SemanticsAction {
     /// Bits no action may take: `1 << 23`, `1 << 24` and `1 << 25`, the slots
     /// of FLUI's former `Unfocus`, `Expand` and `Collapse` actions.
     ///
-    /// Flutter's `dart:ui` uses the same three bits for `scrollToOffset`,
-    /// `expand` and `collapse`, so an action placed here takes the bit Flutter
-    /// gives that action or none. FLUI keeps the expanded state on the
+    /// Platform accessibility bit layouts (`dart:ui`'s among them) assign
+    /// these three bits to other actions, so an action placed here would
+    /// collide with them. FLUI keeps the expanded state on the
     /// `HasExpandedState`/`IsExpanded` flags and routes a platform expand or
     /// collapse to the tap handler; un-focus belongs to the platform's focus
     /// management.
     pub const RESERVED_BITS: u64 = (1 << 23) | (1 << 24) | (1 << 25);
 
-    /// Returns the bitmask value for this action (see the enum doc for how it
-    /// relates to Flutter's `dart:ui` bit).
+    /// Returns the bitmask value for this action (see the enum doc for the
+    /// bit layout).
     #[inline]
     #[must_use]
     pub const fn value(self) -> u64 {

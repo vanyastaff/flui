@@ -7,18 +7,12 @@
 //! `create_rect_tween`, `flight_shuttle_builder`, and FLUI's state-preserving
 //! `placeholder`.
 //!
-//! # Flutter parity
+//! # Registration, not an element walk
 //!
-//! `.flutter/packages/flutter/lib/src/widgets/heroes.dart`, master
-//! `3.33.0-0.0.pre-6280-g88e87cd963f`: `Hero` (`:180`), `_HeroState` (`:362-439`),
-//! `Hero._allHeroesFor` (`:279-345`).
-//!
-//! # Registration replaces the element walk
-//!
-//! `_allHeroesFor` walks a route's element subtree, tests `widget is Hero`, and reads
-//! `hero.state as _HeroState` (`:317-321`). FLUI cannot: a downcast from `&dyn View`
-//! is exactly the view-type smuggling FLUI rules out, and an element walk from an observer callback is
-//! exactly what a previous change deliberately removed.
+//! Finding a route's heroes by walking its element subtree, testing each widget for
+//! `Hero` and downcasting to its state is not possible here: a downcast from
+//! `&dyn View` is exactly the view-type smuggling FLUI rules out, and an element walk
+//! from an observer callback is exactly what a previous change deliberately removed.
 //!
 //! So the direction is inverted. Each `Hero` **registers itself** with the nearest
 //! enclosing [`HeroScope`] in `init_state` and deregisters in `dispose`. The registry
@@ -28,23 +22,20 @@
 //!
 //! Two consequences, both recorded:
 //!
-//! * **Registration order, not tree order.** `_allHeroesFor`'s map is filled in
-//!   depth-first visit order. Ours is filled in mount order, which for a static
-//!   subtree is the same, and for a dynamic one is not. Nothing in the flight
-//!   algorithm depends on the order — it looks tags up, never iterates positionally.
+//! * **Registration order, not tree order.** The registry is filled in mount order,
+//!   which for a static subtree matches depth-first tree order, and for a dynamic one
+//!   does not. Nothing in the flight algorithm depends on the order — it looks tags
+//!   up, never iterates positionally.
 //! * **A `Hero` under a nested `Navigator` registers with its own route**, because it
-//!   finds *its* nearest `HeroScope`. Flutter reaches the same answer through
-//!   `Navigator.of(hero) == navigator` (`:322`) plus a `ModalRoute.of` fallback
-//!   (`:330-333`) — `heroRoute.isCurrent && heroRoute is PageRoute`. FLUI ports that
-//!   fallback as [`NestedHeroSource`]: a nested `Navigator` publishes it on the
+//!   finds *its* nearest `HeroScope`. A hero inside a nested `Navigator`'s current
+//!   `PageRoute` must still be visible to an outer flight, which is what
+//!   [`NestedHeroSource`] provides: a nested `Navigator` publishes it on the
 //!   nearest enclosing route from its own `build` (resynced every time, so a
 //!   `GlobalKey` reparent under a different route is never missed), and
-//!   [`HeroRegistry::all_heroes`] resolves it recursively, so a hero inside a nested
-//!   `Navigator`'s current `PageRoute` is visible to an outer flight without an
-//!   element walk. `HeroControllerScope::none` still blocks a nested navigator's own
+//!   [`HeroRegistry::all_heroes`] resolves it recursively, without an element walk.
+//!   `HeroControllerScope::none` still blocks a nested navigator's own
 //!   *auto-default controller* (so it flies no heroes on its own pushes/pops), but it
-//!   does not gate this visibility hook — Flutter's predicate does not consult it
-//!   either.
+//!   does not gate this visibility hook.
 //!
 //! **A `GlobalKey`-reparented nested `Navigator`'s re-sync is verified in
 //! isolation, not end-to-end.** `NavigatorState::sync_nested_hero_registration`
@@ -63,13 +54,10 @@
 //!
 //! # Duplicate tags
 //!
-//! Flutter throws inside an `assert` (`:287-305`): a debug-only error, and in release
-//! `result[tag] = heroState` silently keeps the **last** hero registered. Whether that
-//! deserves an `expect("BUG: …")` was weighed. It does not: a duplicate tag is
-//! a *caller* mistake, and [`PANIC-POLICY`](../../../../docs/PANIC-POLICY.md) reserves
-//! panics for framework invariants. FLUI logs and keeps the **first**, which is the
-//! divergence a stable registry needs — "last wins" would make the surviving hero
-//! depend on mount order.
+//! A duplicate tag does not panic: it is a *caller*
+//! mistake, and [`PANIC-POLICY`](../../../../docs/PANIC-POLICY.md) reserves panics
+//! for framework invariants. FLUI logs and keeps the **first** — "last wins" would
+//! make the surviving hero depend on mount order.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -94,28 +82,24 @@ use crate::__private::AnchoredBox;
 use crate::{Offstage, SizedBox, Stack, TickerMode};
 
 /// Builds the [`RectTween`](flui_animation::RectTween)-like path a hero's shuttle
-/// follows. Flutter's `CreateRectTween` (`heroes.dart:27`); the default is a linear
-/// `RectTween`. Erased and `Rc`-shared because hero customization is UI-owner
+/// follows. The default is a linear `RectTween`. Erased and `Rc`-shared because hero customization is UI-owner
 /// local; the returned animation object stays `Send + Sync` for now.
 pub(crate) type RectTweenFactory =
     Rc<dyn Fn(Rect, Rect) -> Box<dyn Animatable<Rect> + Send + Sync>>;
 
 /// Builds the widget shown in flight instead of the default (a fresh copy of the
-/// destination hero's child). Flutter's `HeroFlightShuttleBuilder` (`heroes.dart:45`),
-/// minus the two foreign `BuildContext`s FLUI cannot hand out: the
-/// builder receives the flight animation, the direction, and the source and destination
-/// hero child views directly.
+/// destination hero's child). The builder receives the flight animation, the
+/// direction, and the source and destination hero child views directly (FLUI cannot
+/// hand out the two foreign `BuildContext`s a flight would otherwise involve).
 pub(crate) type ShuttleBuilder =
     Rc<dyn Fn(&Arc<dyn Animation<f64>>, FlightDirection, &BoxedView, &BoxedView) -> BoxedView>;
 
-/// Builds the widget left in the hero's place while it is in flight. FLUI's
-/// state-preserving alternative to Flutter's lossy `placeholderBuilder`:
-/// it takes only the frozen [`Size`], never the child, so it *cannot* drop the
-/// child — the real child stays offstage and its state survives.
+/// Builds the widget left in the hero's place while it is in flight. It is
+/// state-preserving: it takes only the frozen [`Size`], never the child, so it
+/// *cannot* drop the child — the real child stays offstage and its state survives.
 pub(crate) type PlaceholderBuilder = Rc<dyn Fn(Size) -> BoxedView>;
 
-/// What identifies a hero across two routes. Flutter's `Hero.tag`, an `Object`
-/// compared with `==` (`heroes.dart:286-309`).
+/// What identifies a hero across two routes, compared by value.
 ///
 /// Backed by [`ViewKey`], the framework's existing reconciliation-key trait: it
 /// already provides value equality (`key_eq`) and hashing (`key_hash`) across erased
@@ -126,8 +110,7 @@ pub struct HeroTag(Arc<dyn ViewKey>);
 
 impl HeroTag {
     /// Tag a hero with any [`ViewKey`] — `ValueKey<&str>`, `ValueKey<u64>`, a domain
-    /// newtype. Flutter accepts any `Object`; this accepts anything the framework
-    /// already knows how to compare.
+    /// newtype. Accepts anything the framework already knows how to compare.
     pub fn new(key: impl ViewKey) -> Self {
         Self(Arc::new(key))
     }
@@ -159,8 +142,8 @@ impl fmt::Debug for HeroTag {
 // The registry
 // ============================================================================
 
-/// Every [`Hero`] mounted inside one route, by tag. Flutter's `_allHeroesFor` result
-/// map (`heroes.dart:284`), built by registration rather than by an element walk.
+/// Every [`Hero`] mounted inside one route, by tag, built by registration rather
+/// than by an element walk.
 ///
 /// Cloneable and `'static`: the route owns one, the [`HeroScope`] hands clones to its
 /// descendants, and the controller reads it through [`ModalHandle`]. The lock is
@@ -170,10 +153,9 @@ impl fmt::Debug for HeroTag {
 #[derive(Clone, Default)]
 pub struct HeroRegistry {
     heroes: Arc<Mutex<HashMap<HeroTag, HeroHandle>>>,
-    /// Nested `Navigator`s that publish a cross-flight visibility hook here —
-    /// Flutter's `_allHeroesFor` does not stop its walk at a nested `Navigator`
-    /// (`heroes.dart:317-333`); FLUI has no walk to reach one, so each nested
-    /// `Navigator` registers itself with the nearest enclosing route instead.
+    /// Nested `Navigator`s that publish a cross-flight visibility hook here.
+    /// There is no element walk to reach one, so each nested `Navigator`
+    /// registers itself with the nearest enclosing route instead.
     /// Empty for the common case of no nested navigator inside this route.
     nested: Arc<Mutex<Vec<NestedHeroSource>>>,
 }
@@ -207,12 +189,10 @@ impl HeroRegistry {
     /// plus — recursively — whatever each registered nested `Navigator`
     /// publishes for its own current top route.
     ///
-    /// Flutter's `Hero._allHeroesFor` (`heroes.dart:279-333`): the walk keeps
-    /// descending past a nested `Navigator`, and a hero found there is still
-    /// invited iff `ModalRoute.of(hero).isCurrent && heroRoute is PageRoute` —
-    /// exactly the condition a [`NestedHeroSource`] encodes before it resolves
-    /// to anything at all (see [`NavigatorHandle`](super::navigator::NavigatorHandle)'s
-    /// registration).
+    /// A hero found in a nested `Navigator` is invited iff its route is current
+    /// and a `PageRoute` — exactly the condition a [`NestedHeroSource`] encodes
+    /// before it resolves to anything at all (see
+    /// [`NavigatorHandle`](super::navigator::NavigatorHandle)'s registration).
     ///
     /// This route's own heroes win a tag shared with a nested route's — the
     /// same first-registered-wins call [`register`](Self::register) makes
@@ -242,9 +222,8 @@ impl HeroRegistry {
 
     /// Register `handle` under `tag`, keeping the **first** registration.
     ///
-    /// Returns whether it was accepted. Flutter's duplicate-tag `assert` throws in
-    /// debug and silently last-wins in release (`heroes.dart:287-309`); see the module
-    /// docs for why this logs and first-wins instead.
+    /// Returns whether it was accepted. See the module docs for why a duplicate
+    /// tag logs and first-wins rather than panicking.
     fn register(&self, tag: HeroTag, handle: HeroHandle) -> bool {
         let mut heroes = self.heroes.lock();
         if heroes.contains_key(&tag) {
@@ -318,13 +297,11 @@ impl fmt::Debug for HeroRegistry {
 /// nearest enclosing route's [`HeroScope`] from that `Navigator`'s own `build`,
 /// resynced every time so a `GlobalKey` reparent is never missed.
 ///
-/// Flutter's `_allHeroesFor` reaches a hero inside a nested `Navigator` by
-/// walking the element tree straight through it (`heroes.dart:317-333`); FLUI
-/// registers heroes instead of walking for them, so the nested `Navigator`
-/// publishes this closure rather than being discovered by a walk. Resolving it
-/// answers `ModalRoute.of(hero).isCurrent && heroRoute is PageRoute` for that
-/// navigator's *current* top route in one step: `None` when the top route is
-/// not a `PageRoute`, is unmounted, or the navigator has none.
+/// Heroes are registered rather than found by walking the element tree, so the
+/// nested `Navigator` publishes this closure rather than being discovered by a
+/// walk. Resolving it answers "is the hero's route current and a `PageRoute`"
+/// for that navigator's *current* top route in one step: `None` when the top
+/// route is not a `PageRoute`, is unmounted, or the navigator has none.
 #[derive(Clone)]
 pub(crate) struct NestedHeroSource {
     query: Rc<dyn Fn() -> Option<HeroRegistry>>,
@@ -362,9 +339,9 @@ impl fmt::Debug for NestedHeroSource {
 /// the registry handle is fixed for the scope's lifetime — so a `Hero` never rebuilds
 /// because of it.
 ///
-/// This is what replaces `_allHeroesFor`'s element walk *and* Flutter's
-/// `Navigator.of(hero) == navigator` check: a hero registers with the route it is
-/// lexically inside, and can reach no other.
+/// This replaces both an element walk and a "which navigator owns this hero"
+/// check: a hero registers with the route it is lexically inside, and can reach
+/// no other.
 #[derive(Clone)]
 pub struct HeroScope {
     registry: HeroRegistry,
@@ -423,47 +400,41 @@ impl_inherited_view!(HeroScope);
 struct HeroInner {
     tag: HeroTag,
     /// The hero's own render node, published on `attach` and cleared on `detach` —
-    /// the same mechanism `RenderSubtreeAnchor` uses. This is FLUI's
-    /// `context.findRenderObject()` for a hero — `BuildContext::find_render_object`
-    /// walks strict *ancestors* and cannot answer it.
+    /// the same mechanism `RenderSubtreeAnchor` uses. This is how a hero finds its
+    /// own render object — `BuildContext::find_render_object` walks strict
+    /// *ancestors* and cannot answer it.
     anchor: SubtreeAnchor,
-    /// `_HeroState._placeholderSize` (`heroes.dart:364`). `Some` iff in flight.
+    /// The frozen placeholder size. `Some` iff in flight.
     placeholder: Mutex<Option<Size>>,
-    /// `_HeroState._shouldIncludeChild` (`:368`).
+    /// Whether the placeholder keeps the real child offstage.
     include_child: AtomicBool,
-    /// The render tree, so `start_flight` can read its own committed size the way
-    /// `_HeroState.startFlight` reads `box.size` (`:384-387`).
+    /// The render tree, so `start_flight` can read its own committed size.
     owner: Mutex<Option<PipelineCell>>,
     /// `setState`. Acquired in `init_state`, fired from a post-frame callback —
     /// never from `build`/layout/paint.
     rebuild: Mutex<Option<RebuildHandle>>,
     /// The hero's current child, for the flight shuttle to inflate afresh.
     ///
-    /// `_defaultHeroFlightShuttleBuilder` returns `toHero.widget.child`
-    /// (`heroes.dart:1083-1090`) — the *destination* hero's child, built anew in the
+    /// The default shuttle is the *destination* hero's child, built anew in the
     /// overlay. Nothing is reparented, so this is a `BoxedView` clone,
     /// kept current through `did_update_view`.
     shuttle_child: Mutex<BoxedView>,
-    /// `Hero.createRectTween` (`heroes.dart:202`), or `None` for the linear default.
+    /// The `create_rect_tween` factory, or `None` for the linear default.
     /// Read by the controller when it builds a flight.
     rect_factory: Mutex<Option<RectTweenFactory>>,
-    /// `Hero.flightShuttleBuilder` (`heroes.dart:240`), or `None` for the default
+    /// The `flight_shuttle_builder`, or `None` for the default
     /// shuttle. Read by the controller when it builds a flight.
     shuttle_builder: Mutex<Option<ShuttleBuilder>>,
-    /// `Hero.curve` (`heroes.dart:181`, `:266-269`): the flight's forward easing.
-    /// The default is `Curves::FastOutSlowIn`, as Flutter's is.
+    /// The flight's forward easing. The default is `Curves::FastOutSlowIn`.
     curve: Mutex<ArcCurve>,
-    /// `Hero.reverseCurve` (`:271-274`), or `None` for [`curve`](Self::curve) flipped.
+    /// The reverse easing, or `None` for [`curve`](Self::curve) flipped.
     reverse_curve: Mutex<Option<ArcCurve>>,
     /// Whether the ambient [`HeroMode`] allows this hero to fly — the AND of the `enabled` flags
     /// of every enclosing scope, sampled each build. `true` with no scope above.
-    /// Flutter never *visits* a disabled hero (`heroes.dart:335-337`); FLUI registers
-    /// it and the measurement pass skips it instead.
+    /// A disabled hero is still registered; the measurement pass skips it.
     hero_mode_enabled: AtomicBool,
-    /// `Hero.transitionOnUserGestures` (`heroes.dart:264`). Defaults to
-    /// `false`; a pair flies during a gesture-driven transition only when
-    /// **both** ends opt in (`Hero._allHeroesFor`'s `inviteHero`,
-    /// `heroes.dart:308-314`).
+    /// Defaults to `false`; a pair flies during a gesture-driven transition only
+    /// when **both** ends opt in.
     transition_on_user_gestures: AtomicBool,
 }
 
@@ -506,7 +477,7 @@ impl HeroHandle {
 
     /// Whether both handles name the same mounted hero — the "same tag" vs "same
     /// hero" distinction the duplicate-tag contract and the flight-divert logic both
-    /// turn on (`heroes.dart:744-745`, `:766`).
+    /// turn on.
     #[must_use]
     pub fn is_same(&self, other: &Self) -> bool {
         self.is(other)
@@ -526,7 +497,7 @@ impl HeroHandle {
         self.inner.anchor.get()
     }
 
-    /// `_HeroState._placeholderSize` — `Some` exactly while in flight.
+    /// The frozen placeholder size — `Some` exactly while in flight.
     #[must_use]
     pub fn placeholder_size(&self) -> Option<Size> {
         *self.inner.placeholder.lock()
@@ -534,31 +505,29 @@ impl HeroHandle {
 
     /// What the flight's shuttle should show: a fresh inflation of this hero's child.
     ///
-    /// `_defaultHeroFlightShuttleBuilder` (`heroes.dart:1076-1090`) returns
-    /// `toHero.widget.child`. Flutter's version also compensates for a `MediaQuery`
-    /// padding difference between the two heroes; FLUI has no `MediaQuery`, so the
-    /// `toMediaQueryData == null` early return (`:1089`) is the whole function.
+    /// This is the destination hero's child as-is; there is no `MediaQuery`
+    /// padding compensation between the two heroes.
     pub(crate) fn shuttle_child(&self) -> BoxedView {
         self.inner.shuttle_child.lock().clone()
     }
 
-    /// This hero's `create_rect_tween` factory, if it set one (`heroes.dart:202`).
+    /// This hero's `create_rect_tween` factory, if it set one.
     pub(crate) fn rect_factory(&self) -> Option<RectTweenFactory> {
         self.inner.rect_factory.lock().clone()
     }
 
-    /// This hero's `flight_shuttle_builder`, if it set one (`heroes.dart:240`).
+    /// This hero's `flight_shuttle_builder`, if it set one.
     pub(crate) fn shuttle_builder(&self) -> Option<ShuttleBuilder> {
         self.inner.shuttle_builder.lock().clone()
     }
 
-    /// This hero's flight curve (`Hero.curve`, `heroes.dart:266-269`).
+    /// This hero's forward flight curve.
     pub(crate) fn curve(&self) -> ArcCurve {
         self.inner.curve.lock().clone()
     }
 
-    /// This hero's reverse flight curve, if it set one (`Hero.reverseCurve`,
-    /// `heroes.dart:271-274`). `None` means "the forward curve, flipped".
+    /// This hero's reverse flight curve, if it set one. `None` means "the
+    /// forward curve, flipped".
     pub(crate) fn reverse_curve(&self) -> Option<ArcCurve> {
         self.inner.reverse_curve.lock().clone()
     }
@@ -568,9 +537,8 @@ impl HeroHandle {
         self.inner.hero_mode_enabled.load(Ordering::Relaxed)
     }
 
-    /// `Hero.transitionOnUserGestures` (`heroes.dart:264`): whether this hero
-    /// opts into a gesture-driven (e.g. edge swipe-back) flight. `false` by
-    /// default, matching Flutter.
+    /// Whether this hero opts into a gesture-driven (e.g. edge swipe-back)
+    /// flight. `false` by default.
     pub(crate) fn transition_on_user_gestures(&self) -> bool {
         self.inner
             .transition_on_user_gestures
@@ -586,10 +554,9 @@ impl HeroHandle {
     /// The hero's bounding box in `ancestor`'s coordinate space, or `None` when it is
     /// unmounted, not laid out, or not a descendant of `ancestor`.
     ///
-    /// Flutter's `_HeroFlightManifest._boundingBoxFor` (`heroes.dart:501-509`):
-    /// `MatrixUtils.transformRect(box.getTransformTo(ancestor), Offset.zero & box.size)`.
-    /// Its `assert(box.hasSize && box.size.isFinite)` becomes an `Option` here — a
-    /// hero on an unbuilt route is a routine `None`, not a broken invariant.
+    /// The box is the hero's size transformed into `ancestor`'s space. A missing
+    /// size is an `Option` rather than an assertion — a hero on an unbuilt route
+    /// is a routine `None`, not a broken invariant.
     #[must_use]
     pub fn bounding_box_in(&self, ancestor: RenderId) -> Option<Rect> {
         let render_id = self.render_id()?;
@@ -601,15 +568,13 @@ impl HeroHandle {
         })
     }
 
-    /// `_HeroState.startFlight` (`heroes.dart:381-389`): freeze the hero at its
-    /// committed size and rebuild it as a placeholder.
+    /// Freeze the hero at its committed size and rebuild it as a placeholder.
     ///
     /// Returns the captured size, or `None` when the hero has no committed layout to
-    /// freeze — Flutter asserts `box.hasSize` here and would crash; a `None` route
-    /// simply does not fly.
+    /// freeze — such a hero simply does not fly.
     ///
     /// `include_child_in_placeholder` is `true` for the *from* hero of a push and
-    /// `false` otherwise (`:379-380`): the source subtree is preserved offstage so its
+    /// `false` otherwise: the source subtree is preserved offstage so its
     /// state survives the flight, while the destination's is not yet needed.
     pub fn start_flight(&self, include_child_in_placeholder: bool) -> Option<Size> {
         let render_id = self.render_id()?;
@@ -626,11 +591,11 @@ impl HeroHandle {
         Some(size)
     }
 
-    /// `_HeroState.endFlight` (`heroes.dart:397-408`): drop the placeholder and show
-    /// the child again. Safe to call on a hero that is not in flight.
+    /// Drop the placeholder and show the child again. Safe to call on a hero that
+    /// is not in flight.
     ///
-    /// `keep_placeholder` leaves it frozen — Flutter uses it when a flight ends by
-    /// being diverted into another.
+    /// `keep_placeholder` leaves it frozen — used when a flight ends by being
+    /// diverted into another.
     pub fn end_flight(&self, keep_placeholder: bool) {
         {
             let mut placeholder = self.inner.placeholder.lock();
@@ -642,8 +607,7 @@ impl HeroHandle {
         self.request_rebuild();
     }
 
-    /// `setState`. Inert on an unmounted hero, as `_HeroState.endFlight`'s
-    /// `if (mounted)` guard is (`heroes.dart:403`).
+    /// Schedules a rebuild. Inert on an unmounted hero.
     fn request_rebuild(&self) {
         if let Some(rebuild) = self.inner.rebuild.lock().as_ref() {
             rebuild.schedule(flui_view::RebuildReason::AnimationTick);
@@ -668,7 +632,7 @@ impl fmt::Debug for HeroHandle {
 /// Marks a subtree as a hero: the thing that flies between two routes.
 ///
 /// A subtree that animates between two routes when it appears in both under the same
-/// tag — Flutter's `Hero` (`heroes.dart:180`).
+/// tag.
 ///
 /// A `HeroController` must observe the `Navigator` for flights to run; a bare
 /// `Navigator` now installs a default one, and `HeroControllerScope` customizes or
@@ -678,10 +642,9 @@ impl fmt::Debug for HeroHandle {
 /// state-preserving [`placeholder`](Self::placeholder), and the flight easing
 /// [`curve`](Self::curve) / [`reverse_curve`](Self::reverse_curve). A subtree is
 /// grounded with [`HeroMode`]. Cross-navigator flights work — a hero inside a nested
-/// `Navigator`'s current `PageRoute` matches an outer route's hero of the same tag,
-/// per `Hero._allHeroesFor`'s nested-navigator branch (`heroes.dart:317-333`).
+/// `Navigator`'s current `PageRoute` matches an outer route's hero of the same tag.
 /// [`transition_on_user_gestures`](Self::transition_on_user_gestures) opts a hero
-/// into a gesture-driven (edge swipe-back) flight; `false` by default, as Flutter's is.
+/// into a gesture-driven (edge swipe-back) flight; `false` by default.
 #[derive(Clone)]
 pub struct Hero {
     tag: HeroTag,
@@ -697,8 +660,6 @@ pub struct Hero {
 impl Hero {
     /// A hero identified by `tag`. Any [`ViewKey`] works — `ValueKey::new("photo")`,
     /// a domain newtype — and two heroes fly together iff their tags compare equal.
-    /// Flutter takes any `Object`; this takes anything the framework can already
-    /// compare and hash.
     pub fn new(tag: impl ViewKey, child: impl IntoView) -> Self {
         Self {
             tag: HeroTag::new(tag),
@@ -712,18 +673,17 @@ impl Hero {
         }
     }
 
-    /// The easing the flight animation runs with in the forward direction. Flutter's
-    /// `Hero.curve` (`heroes.dart:266-269`); the default is `Curves::FastOutSlowIn`
-    /// (`:181`). A push eases on the **destination** hero's curve, a pop on the
-    /// **source** hero's (`:474-485`).
+    /// The easing the flight animation runs with in the forward direction; the
+    /// default is `Curves::FastOutSlowIn`. A push eases on the **destination**
+    /// hero's curve, a pop on the **source** hero's.
     #[must_use]
     pub fn curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
         self.curve = ArcCurve::new(curve);
         self
     }
 
-    /// The easing for the reverse direction. Flutter's `Hero.reverseCurve`
-    /// (`heroes.dart:271-274`): when unset, [`curve`](Self::curve) flipped.
+    /// The easing for the reverse direction: when unset, [`curve`](Self::curve)
+    /// flipped.
     #[must_use]
     pub fn reverse_curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
         self.reverse_curve = Some(ArcCurve::new(curve));
@@ -732,24 +692,21 @@ impl Hero {
 
     /// Whether this hero participates in a **gesture-driven** transition
     /// (e.g. an edge swipe-back), as opposed to only a programmatic push/pop.
-    /// Flutter's `Hero.transitionOnUserGestures` (`heroes.dart:251-264`).
     ///
     /// A pair flies during a gesture-driven transition only when **both**
     /// ends opt in; a hero left out this way is explicitly un-hidden if a
-    /// prior flight had frozen it (`Hero._allHeroesFor`'s `inviteHero` else
-    /// branch, `heroes.dart:311-314`). Defaults to `false`.
+    /// prior flight had frozen it. Defaults to `false`.
     #[must_use]
     pub fn transition_on_user_gestures(mut self, enabled: bool) -> Self {
         self.transition_on_user_gestures = enabled;
         self
     }
 
-    /// Shape the path the hero's shuttle flies along. Flutter's `Hero.createRectTween`
-    /// (`heroes.dart:202`): `factory(begin, end)` returns the tween the flight
-    /// interpolates as its animation runs 0→1. The default is a linear
-    /// [`RectTween`](flui_animation::RectTween). When both this and the
-    /// [`HeroController`](super::hero_controller::HeroController)'s default are set, this
-    /// one wins (`heroes.dart:495`).
+    /// Shape the path the hero's shuttle flies along: `factory(begin, end)` returns
+    /// the tween the flight interpolates as its animation runs 0→1. The default is
+    /// a linear [`RectTween`](flui_animation::RectTween). When both this and the
+    /// [`HeroController`](super::hero_controller::HeroController)'s default are set,
+    /// this one wins.
     #[must_use]
     pub fn create_rect_tween<F, A>(mut self, factory: F) -> Self
     where
@@ -762,12 +719,10 @@ impl Hero {
         self
     }
 
-    /// Replace the default in-flight widget. Flutter's `Hero.flightShuttleBuilder`
-    /// (`heroes.dart:240`), with FLUI's divergence: the builder
-    /// receives the flight `animation`, the `direction`, and the source and destination
-    /// hero child views — not Flutter's two foreign `BuildContext`s, which FLUI has no
-    /// way to hand out. When both heroes of a pair supply one, the destination's wins
-    /// (`heroes.dart:1040`).
+    /// Replace the default in-flight widget. The builder receives the flight
+    /// `animation`, the `direction`, and the source and destination hero child
+    /// views — not two foreign `BuildContext`s, which FLUI has no way to hand out.
+    /// When both heroes of a pair supply one, the destination's wins.
     #[must_use]
     pub fn flight_shuttle_builder<F, V>(mut self, builder: F) -> Self
     where
@@ -785,12 +740,10 @@ impl Hero {
     /// Show a custom widget in the hero's place while it is in flight, **without**
     /// losing the child's state.
     ///
-    /// FLUI's state-preserving alternative to Flutter's lossy `placeholderBuilder`.
     /// The closure takes only the frozen [`Size`] the space must
     /// hold; it never receives the child, so it cannot drop it. FLUI keeps the real
     /// child offstage at a constant tree position, so its state survives the flight with
-    /// no `GlobalKey`. The default (no placeholder) leaves an empty box of that size, as
-    /// Flutter does.
+    /// no `GlobalKey`. The default (no placeholder) leaves an empty box of that size.
     #[must_use]
     pub fn placeholder<F, V>(mut self, builder: F) -> Self
     where
@@ -829,14 +782,13 @@ impl StatefulView for Hero {
     }
 }
 
-/// `_HeroState` (`heroes.dart:362`). `pub` only because `StatefulView::State` requires
+/// The state behind [`Hero`]. `pub` only because `StatefulView::State` requires
 /// it (as `NavigatorState` is); **not** re-exported, so it is reachable only as
 /// `<Hero as StatefulView>::State` and carries no public API of its own.
 pub struct HeroState {
     handle: HeroHandle,
     /// The route's registry, resolved once from the ambient [`HeroScope`]. `None` for
-    /// a `Hero` mounted outside any route, which is inert rather than an error —
-    /// Flutter's `_allHeroesFor` simply never visits it.
+    /// a `Hero` mounted outside any route, which is inert rather than an error.
     registry: Option<HeroRegistry>,
 }
 
@@ -909,17 +861,15 @@ impl ViewState<Hero> for HeroState {
         }
     }
 
-    /// `_HeroState.build` (`heroes.dart:410-438`), plus the anchor and FLUI's
-    /// state-preserving custom placeholder. The `TickerMode`
-    /// (`:433`) is ported: an offstage hero's animations stop while its copy
-    /// flies.
+    /// Builds the anchored box, with the state-preserving custom placeholder. An
+    /// offstage hero's animations stop (via `TickerMode`) while its copy flies.
     ///
-    /// | Flutter | here |
+    /// | Case | Structure |
     /// |---|---|
-    /// | `placeholderBuilder != null` ⇒ builder output, child dropped, no `_key` | custom `placeholder`: child kept **offstage** at a constant path, placeholder shown as a sibling — state preserved |
-    /// | `SizedBox(width: _placeholderSize?.width, …)` | `SizedBox` only while in flight |
-    /// | `Offstage(offstage: showPlaceholder, child: KeyedSubtree(key: _key, …))` | `Offstage`, no key: nothing reparents |
-    /// | `showPlaceholder && !_shouldIncludeChild` ⇒ bare `SizedBox` | same, in the default (no-placeholder) path |
+    /// | custom `placeholder` | child kept **offstage** at a constant path, placeholder shown as a sibling — state preserved |
+    /// | in flight | `SizedBox` of the frozen size only while in flight |
+    /// | default path | `Offstage`, no key: nothing reparents |
+    /// | `showPlaceholder && !include_child` | bare `SizedBox`, in the default (no-placeholder) path |
     ///
     /// The [`AnchoredBox`] is always present, in flight or not: it is what publishes
     /// the `RenderId` a controller measures, and a node that came and went would make
@@ -927,8 +877,7 @@ impl ViewState<Hero> for HeroState {
     fn build(&self, view: &Hero, ctx: &dyn BuildContext) -> impl IntoView {
         // The ambient `HeroMode`, re-sampled every build with a real dependency: a
         // scope that flips `enabled` rebuilds this hero, so the measurement pass
-        // always reads the current value — as Flutter's flight-time element walk
-        // does (`heroes.dart:335-337`). `true` with no scope above (`:1142`).
+        // always reads the current value. `true` with no scope above.
         let hero_mode_enabled = ctx
             .depend_on::<HeroModeScope, _>(|scope| scope.enabled)
             .unwrap_or(true);
@@ -946,8 +895,8 @@ impl ViewState<Hero> for HeroState {
         // so the child's element (slot 0) is never reparented and its state survives with
         // no `GlobalKey`. The placeholder visual is appended at slot 1 only while in
         // flight; the closure never sees the child, so it cannot drop it. This preserves
-        // state uniformly (both flight directions), where Flutter's `placeholderBuilder`
-        // drops it. Default heroes (below) keep the exact fixed chain, no `Stack`.
+        // state uniformly (both flight directions). Default heroes (below) keep the
+        // exact fixed chain, no `Stack`.
         if let Some(build_placeholder) = &view.placeholder {
             let mut layers: Vec<BoxedView> = vec![
                 Offstage::new()
@@ -966,16 +915,14 @@ impl ViewState<Hero> for HeroState {
             return AnchoredBox::new(anchor, sized.child(Stack::new(layers)));
         }
 
-        // `if (showPlaceholder && !_shouldIncludeChild) return SizedBox(w, h);`
-        // (`heroes.dart:423-425`): the destination hero drops its child — the shuttle
-        // carries it — so this branch legitimately changes shape, and the child's
-        // state is not preserved (as in Flutter).
+        // The destination hero drops its child — the shuttle carries it — so this
+        // branch legitimately changes shape, and the child's state is not preserved.
         if show_placeholder && !self.handle.includes_child() {
             let size = placeholder.expect("show_placeholder implies a size");
             return AnchoredBox::new(anchor, SizedBox::new(size.width, size.height));
         }
 
-        // The **fixed chain** — Flutter's `:427-437`, minus the `KeyedSubtree(_key)`:
+        // The **fixed chain**:
         //
         //   SizedBox(size?) → Offstage(showPlaceholder) → TickerMode(!showPlaceholder) → child
         //
@@ -984,8 +931,6 @@ impl ViewState<Hero> for HeroState {
         // (`SizedBox(size)`, `Offstage(true)`). Because the child sits at the same
         // depth under the same two view types either way, reconciliation preserves its
         // element — and therefore its state — with **no `GlobalKey`**.
-        // Flutter's `_key` guards the *caller-supplied `placeholderBuilder`* shape,
-        // which this slice does not support (deferred to the public API).
         let sized = match placeholder {
             Some(size) => SizedBox::new(size.width, size.height),
             None => SizedBox::default(),
@@ -993,8 +938,7 @@ impl ViewState<Hero> for HeroState {
         AnchoredBox::new(
             anchor,
             sized.child(Offstage::new().offstage(show_placeholder).child(
-                // `TickerMode(enabled: !showPlaceholder)` (`heroes.dart:433`):
-                // the hero left behind offstage keeps its subtree — and its
+                // The hero left behind offstage keeps its subtree — and its
                 // state — but its animations must not keep running while the
                 // shuttle carries a copy of it across the screen.
                 TickerMode::new(view.child.clone()).enabled(!show_placeholder),
@@ -1007,15 +951,12 @@ impl ViewState<Hero> for HeroState {
 // HeroMode
 // ============================================================================
 
-/// Enables or disables [`Hero`] flights for a subtree. Flutter's `HeroMode`
-/// (`heroes.dart:1124-1152`).
+/// Enables or disables [`Hero`] flights for a subtree.
 ///
 /// While [`enabled`](Self::enabled) is `false`, no hero in the subtree participates
 /// in a flight — it stays put during route transitions, whichever route carries its
-/// matching tag. Flutter's flight-time element walk stops at a disabled `HeroMode`
-/// and never descends (`heroes.dart:335-337`), so a nested *enabled* scope cannot
-/// re-enable a disabled subtree: the effective value is the AND of every enclosing
-/// scope.
+/// matching tag. A nested *enabled* scope cannot re-enable a disabled subtree: the
+/// effective value is the AND of every enclosing scope.
 #[derive(Clone)]
 pub struct HeroMode {
     enabled: bool,
@@ -1023,8 +964,8 @@ pub struct HeroMode {
 }
 
 impl HeroMode {
-    /// A scope that allows hero flights — `enabled` defaults to `true`
-    /// (`heroes.dart:1131`), so a bare `HeroMode` changes nothing.
+    /// A scope that allows hero flights — `enabled` defaults to `true`,
+    /// so a bare `HeroMode` changes nothing.
     pub fn new(child: impl IntoView) -> Self {
         Self {
             enabled: true,
@@ -1032,7 +973,7 @@ impl HeroMode {
         }
     }
 
-    /// Whether [`Hero`]es in this subtree may fly (`heroes.dart:1136-1142`).
+    /// Whether [`Hero`]es in this subtree may fly.
     #[must_use]
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
@@ -1057,7 +998,7 @@ impl View for HeroMode {
 impl StatelessView for HeroMode {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         // AND with the enclosing scope, so `HeroMode(false) > HeroMode(true) > Hero`
-        // stays disabled — the never-descends contract (`heroes.dart:335-337`).
+        // stays disabled.
         // `depend_on`, not `get`: an outer scope flipping re-derives this one.
         let ancestor_enabled = ctx
             .depend_on::<HeroModeScope, _>(|scope| scope.enabled)

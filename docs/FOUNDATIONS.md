@@ -2,7 +2,7 @@
 
 # FLUI Architecture Foundations
 
-> The architecture contract for FLUI, a declarative UI framework for Rust that takes Flutter as its reference, not as a spec to port. It defines the **target** — the complete FLUI product — and the rules that target is built to. It is written **forward**: the benchmark is released Flutter; the goal is the finished framework; the current codebase is a head start measured *against* that target, never the other way around.
+> The architecture contract for FLUI, a Rust framework inspired by Flutter's declarative widget composition, not a port of it. It defines the **target** — the complete FLUI product — and the rules that target is built to. It is written **forward**: the goal is the finished framework; the current codebase is a head start measured *against* that target, never the other way around.
 
 This document is the bedrock under [`ROADMAP.md`](ROADMAP.md). The roadmap sequences construction; this document says *what is being constructed and to what rules*. It is the "right contract" — the set of decisions that, if settled wrong, force a catalog-wide rewrite later.
 
@@ -10,16 +10,15 @@ This document is the bedrock under [`ROADMAP.md`](ROADMAP.md). The roadmap seque
 
 ## How to read this document
 
-- **Benchmark / floor — released Flutter.** `.flutter/flutter-master/packages/flutter/lib/src/` is a shipped, mature product (framework logic across 12 packages) with a test corpus to match. It defines the *minimum* observable behavior and the cheapest oracle for it; it does not define the ceiling, the architecture, or the idiom. FLUI is measured as *at least* this, and expected to be more.
-- **Target — the complete FLUI.** Flutter's behavior as the floor, Rust-native structure, and **better than Flutter wherever a better solution is known** — in functionality, architecture, and code style — with each improvement pinned by a FLUI test.
+- **Target — the complete FLUI.** Declarative composition over retained trees, Rust-native structure, and the best known solution for each subsystem — in functionality, architecture, and code style — with cross-crate decisions recorded in an ADR and each behavior pinned by a FLUI test.
 - **Current code — a flawed head start.** The existing crates are an inventory, not an anchor. Where the current code matches the target it is kept (a genuine head start — the render *machine* is gold-standard); where it does not, that is an unbuilt or wrong delta of **low narrative weight**, closed as normal construction reaches it. The current code does not anchor the target architecture — the target does. Where current-code defect *patterns* inform the standing quality discipline of Part VI, that is deliberate and forward-looking: a rule that refuses an observed mistake protects the finished product.
-- **The three architectural rules**: *behavior as floor, everything else designed for Rust* (observable contracts from `.flutter/` are the minimum, improved wherever a better solution is known and the improvement pinned by a test), *compile-time over runtime*, *sync hot path, async at the edges*. What "better" may never cost is an edge case lost by accident: a Flutter behavior is dropped only by decision, with its test replaced.
+- **The three architectural rules**: *everything designed for Rust*, *compile-time over runtime*, *sync hot path, async at the edges*. A behavior is dropped only by decision, never as an edge case lost by accident.
 
 **Backing research** (read for the per-decision depth this document synthesizes):
 
 | Document | What it establishes |
 |---|---|
-| [`research/2026-05-22-flutter-flui-gap-matrix.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-22-flutter-flui-gap-matrix.md) | Flutter↔FLUI coverage across all 12 packages |
+| [`research/2026-05-22-flutter-flui-gap-matrix.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-22-flutter-flui-gap-matrix.md) | Coverage of the widget-framework surface across 12 areas |
 | [`research/2026-05-22-port-phasing-dependency-order.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-22-port-phasing-dependency-order.md) | Dependency graph, critical path, phase order |
 | [`research/2026-05-22-architectural-contracts.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-22-architectural-contracts.md) | The high-stakes public-surface contracts |
 | [`research/2026-05-22-rust-ui-ecosystem-lessons.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-22-rust-ui-ecosystem-lessons.md) | Lessons from GPUI / Xilem / Druid / Iced / Vello |
@@ -35,48 +34,48 @@ This document is the bedrock under [`ROADMAP.md`](ROADMAP.md). The roadmap seque
 
 ## Part I — The target architecture
 
-FLUI keeps Flutter's tree architecture — five trees: immutable **View** configuration → mutable **Element** lifecycle → layout/paint **Render** objects → a **Layer** compositing tree, with a **Semantics** accessibility tree alongside. This shape is not FLUI's idiosyncrasy — it is the validated answer. Linebender's Xilem, the most serious attempt to solve retained reactive UI in Rust, converged independently on the same split (a retained Masonry widget layer beneath a transient reactive view layer). The architecture is correct; the discipline is to *hold it* against simplification proposals (GPUI's drop-the-tree-per-frame model is productive for a code editor and inadequate for a full toolkit — accessibility, IME, and layout caching all require stable node identity across frames).
+FLUI is five trees: immutable **View** configuration → mutable **Element** lifecycle → layout/paint **Render** objects, retained across frames, then a **Layer** compositing tree built each frame, with a **Semantics** accessibility tree alongside. This shape is not FLUI's idiosyncrasy — it is the validated answer. Linebender's Xilem, the most serious attempt to solve retained reactive UI in Rust, converged independently on the same split (a retained Masonry widget layer beneath a transient reactive view layer). The architecture is correct; the discipline is to *hold it* against simplification proposals (GPUI's drop-the-tree-per-frame model is productive for a code editor and inadequate for a full toolkit — accessibility, IME, and layout caching all require stable node identity across frames).
 
-Every subsystem has two axes. **Behavior** starts from Flutter's observable contract and improves on it wherever the result is better, pinned by a FLUI test. **Structure** is a decision: the Rust shape may come from Flutter, GPUI, Xilem/Masonry, Vello, or be Rust-native original. The target structure per subsystem:
+Every subsystem's structure is a decision: the Rust shape may come from GPUI, Xilem/Masonry, Vello, or be Rust-native original, and each edge case is kept, changed or dropped on purpose. The target structure per subsystem:
 
-| Subsystem | Behavior source (`.flutter/`) | Structure source | Target shape |
-|---|---|---|---|
-| Three trees & ownership | `widgets/framework.dart`, `rendering/object.dart` | Flutter + Masonry | `Slab` arenas, niche-optimized IDs (plain slab-backed ids are the slot plus one; element and render-object keys are generational, built from the 0-based slot with `new_gen`), library-owns-nodes |
-| Reconciliation | `framework.dart` `updateChildren` | Xilem `rebuild` + Flutter keyed algo | Typed `rebuild`, keyed O(N) linear, `key` on every node |
-| Layout protocol | `rendering/box.dart` | Flutter + FLUI arity type-state | Constraints down / sizes up, `RenderBox` with an associated `type Arity` |
-| Paint & display list | `rendering/object.dart`, `dart:ui` | Flutter / Skia / Vello record-replay | `Canvas` → `DisplayList` of `DrawCommand`, GPU-free |
-| Layer / compositor tree | `rendering/layer.dart` | Flutter layer tree, not its retained engine layers | Append-only `LayerTree` built per frame; cross-frame reuse and damage keyed on repaint boundaries ([ADR-0087](adr/ADR-0087-raster-contract-and-cpu-backend.md), `crates/flui-layer/ARCHITECTURE.md`) |
-| GPU engine / tessellation | n/a (Flutter's C++ engine) | lyon now → Vello-hybrid later | `RasterBackend` trait seam; lyon impl now |
-| Text / shaping / IME | `painting/text_painter.dart`, `services/text_input.dart` | Rust-native (cosmic-text, moving to Parley per [ADR-0092](adr/ADR-0092-per-realm-text-over-parley.md)) + GPUI for IME | cosmic-text in `flui-painting` by default; its `parley-layout` feature measures `TextPainter` with Parley over a per-realm `TextContext` while glyphs and carets stay on cosmic-text (`parley` alone only compiles the Parley path); engine glyph atlas; `PlatformTextInput` capability trait |
-| Scheduler & frame loop | `scheduler/binding.dart`, `ticker.dart` | Flutter phases + winit `ControlFlow::Wait` | Phase model, on-demand wakeup |
-| Gestures / hit-testing | `gestures/*` | Flutter 1:1 | Arena + recognizer FSMs, `ui-events` vocabulary |
-| Animation | `animation/*` | Flutter on FLUI `Listenable` | `AnimationController`/`Curve`/`Tween`, lock-free dirty-mark |
-| Reactivity / state | `framework.dart` `setState`, `InheritedWidget` | Flutter `setState` + Xilem `memoize` + realm-scoped signals (ADR-0074) | `setState` canonical mechanism; typed `can_update` + `Memo<V>`; signals read in `build`, written outside it |
-| `BuildContext` & inherited data | `framework.dart` `dependOnInheritedWidgetOfExactType` | Flutter semantics + GPUI lease | Object-safe trait, callback-form lookup, `TypeId` registry |
-| Heterogeneous children | `framework.dart` `MultiChildRenderObjectWidget` | **Xilem `ViewSequence`** (deliberately *not* Flutter) | Tuple `ViewSeq` trait + `column!`/`row!` macros |
-| Hot-reload | Flutter VM hot reload (not portable) | Makepad designed-in + Rust `cdylib` | Hot-*restart*; `State` owned by `Element` |
-| Platform abstraction | `services/*` (dissolved) | GPUI platform traits | `Platform` trait (`flui-platform`), `PlatformWindow` and capability traits (`flui-platform-api`), callback registry |
-| Asset pipeline | `painting/image_provider.dart` | Flutter `ImageProvider` + Rust async IO | `ImageProvider` trait, async confined to `flui-assets` |
+| Subsystem | Structure source | Target shape |
+|---|---|---|
+| Trees & ownership | Masonry | `Slab` arenas, niche-optimized IDs (plain slab-backed ids are the slot plus one; element and render-object keys are generational, built from the 0-based slot with `new_gen`), library-owns-nodes |
+| Reconciliation | Xilem `rebuild`, keyed linear diff | Typed `rebuild`, keyed O(N) linear, `key` on every node |
+| Layout protocol | FLUI arity type-state | Constraints down / sizes up, `RenderBox` with an associated `type Arity` |
+| Paint & display list | Skia / Vello record-replay | `Canvas` → `DisplayList` of `DrawCommand`, GPU-free |
+| Layer / compositor tree | Per-frame layer tree | Append-only `LayerTree` built per frame; cross-frame reuse and damage keyed on repaint boundaries ([ADR-0087](adr/ADR-0087-raster-contract-and-cpu-backend.md), `crates/flui-layer/ARCHITECTURE.md`) |
+| GPU engine / tessellation | lyon now → Vello-hybrid later | `RasterBackend` trait seam; lyon impl now |
+| Text / shaping / IME | Rust-native (cosmic-text, moving to Parley per [ADR-0092](adr/ADR-0092-per-realm-text-over-parley.md)) + GPUI for IME | cosmic-text in `flui-painting` by default; its `parley-layout` feature measures `TextPainter` with Parley over a per-realm `TextContext` while glyphs and carets stay on cosmic-text (`parley` alone only compiles the Parley path); engine glyph atlas; `PlatformTextInput` capability trait |
+| Scheduler & frame loop | Frame phases + winit `ControlFlow::Wait` | Phase model, on-demand wakeup |
+| Gestures / hit-testing | Gesture arena, Rust-shaped | Arena + recognizer FSMs, `ui-events` vocabulary |
+| Animation | FLUI `Listenable` | `AnimationController`/`Curve`/`Tween`, lock-free dirty-mark |
+| Reactivity / state | `setState` + Xilem `memoize` + realm-scoped signals (ADR-0074) | `setState` canonical mechanism; typed `can_update` + `Memo<V>`; signals read in `build`, written outside it |
+| `BuildContext` & inherited data | Callback-form lookup + GPUI lease | Object-safe trait, callback-form lookup, `TypeId` registry |
+| Heterogeneous children | **Xilem `ViewSequence`** | Tuple `ViewSeq` trait + `column!`/`row!` macros |
+| Hot-reload | Makepad designed-in + Rust `cdylib` | Hot-*restart*; `State` owned by `Element` |
+| Platform abstraction | GPUI platform traits | `Platform` trait (`flui-platform`), `PlatformWindow` and capability traits (`flui-platform-api`), callback registry |
+| Asset pipeline | `ImageProvider` + Rust async IO | `ImageProvider` trait, async confined to `flui-assets` |
 
 Four subsystems needed FLUI's code to **change direction** before the widget catalog leaned on them — reconciliation, layer lifecycle, reactivity (additively), and heterogeneous children; those changes are the locked contracts of [Part III](#part-iii--the-locked-contracts). For the rest the discipline is to *hold the line*. The per-subsystem reasoning is in [`research/2026-05-22-technology-adoption-matrix.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-22-technology-adoption-matrix.md).
 
 ---
 
-## Part II — Where FLUI is better than Flutter
+## Part II — Rust-native design choices
 
-FLUI is not a transliteration of Flutter. Flutter's *behavior* is the reference to start from; Flutter's *Dart structure* is an implementation detail of a garbage-collected language. Rust permits genuine improvements at both layers, and FLUI takes them wherever the result is better.
+Rust permits improvements at the structure layer that a garbage-collected language cannot express, and FLUI takes them deliberately.
 
-| # | Area | Flutter (Dart) | FLUI target (Rust) | Why it is better |
-|---|---|---|---|---|
-| 1 | **Child-count safety** | `RenderObjectWithChildMixin` vs `ContainerRenderObjectMixin`; a missing child is a runtime null/assert at paint | `Arity` sealed trait — `Leaf`/`Optional`/`Single`/`Exact<N>`/`AtLeast<N>`/`Range<MIN, MAX>`/`Variable` ZST markers; `RenderBox::Arity` types the layout context | The child count is part of the type, not a paint-time crash. Zero runtime cost (markers are zero-sized). *Programming Rust* — states encoded in types. |
-| 2 | **Error model** | Dart exceptions; `FlutterError` | `Result<T, E>` + `thiserror`, `#[non_exhaustive]` error enums; `build()` stays infallible behind an internal `catch_unwind` error-view boundary | Errors are typed and exhaustive; the compiler forces handling. No bare `unwrap()` in library code (`clippy::unwrap_used`, [`PANIC-POLICY.md`](PANIC-POLICY.md)). Ousterhout — "define errors out of existence." |
-| 3 | **References & memory** | `Element? _parent`, GC-managed pointers | Newtype IDs with a niche: plain slab-backed IDs are the slot plus one in a `NonZeroUsize`; element and render-object keys are generational, the 0-based slot and a non-zero generation packed in a `NonZeroU64`; `Option<ElementId>` is **8 bytes** via niche optimization; `Slab` arena, library-owns-nodes | 8 bytes saved on every optional tree link; the whole tree is iterable for an inspector or focus routing without walking the ownership chain. *The Rust Performance Book* — niche optimization; Masonry RFC. |
-| 4 | **Subtree memoization** | Internal `const`-constructor + `Widget.canUpdate` short-circuit; not author-visible | `View::can_update` (type + key matchability gate) + `View::should_skip_rebuild` defaulting to `false` (always rebuild — Flutter parity); `PartialEq`-skip is opt-in via `Memo<V>` or a per-view override | The `build()`-skip optimization is **first-class and composable**, not a framework-internal trick. Default is always-rebuild (safe); `Memo<V>` is the opt-in. No blanket `PartialEq` bound on `View` (the Druid trap). Xilem's `memoize` lesson. |
-| 5 | **Dispatch** | Open class hierarchies | Sealed traits (`Arity`); enum dispatch over `dyn` by default | Exhaustive `match`; the closed set is enforced; `dyn` is the justified exception, not the default. *Rust for Rustaceans* — sealed traits. |
-| 6 | **Resource lifecycle** | Manual `LayerHandle` ref-counting; GC for everything else | RAII — `Drop`; the layer tree is rebuilt each frame and holds no ref-counted engine layers | Deterministic release is **more correct** than Dart's manual ref-counting and removes a whole class of leak. *Programming Rust* — RAII guards. |
-| 7 | **Frame cadence** | Event-driven | `ControlFlow::Wait` — an idle UI burns zero CPU; render only when dirty | Battery and thermal headroom by construction. |
-| 8 | **Developer surface** | One import: `package:flutter/material.dart` | A `flui` **facade crate** + `flui::prelude`; app authors depend on one crate, framework authors on the granular crates | A multi-crate workspace presents as a single dependency to an app author — the product legibility metric, served. GPUI/`xilem` facade precedent. |
-| 9 | **No GC** | GC pauses possible mid-frame | Sync render hot path, arena allocation, zero hot-path allocations after build | Predictable frame budget; no GC jank. Sync hot path. |
+| # | Area | FLUI target (Rust) | Why |
+|---|---|---|---|
+| 1 | **Child-count safety** | `Arity` sealed trait — `Leaf`/`Optional`/`Single`/`Exact<N>`/`AtLeast<N>`/`Range<MIN, MAX>`/`Variable` ZST markers; `RenderBox::Arity` types the layout context | The child count is part of the type, not a paint-time crash. Zero runtime cost (markers are zero-sized). *Programming Rust* — states encoded in types. |
+| 2 | **Error model** | `Result<T, E>` + `thiserror`, `#[non_exhaustive]` error enums; `build()` stays infallible behind an internal `catch_unwind` error-view boundary | Errors are typed and exhaustive; the compiler forces handling. No bare `unwrap()` in library code (`clippy::unwrap_used`, [`PANIC-POLICY.md`](PANIC-POLICY.md)). Ousterhout — "define errors out of existence." |
+| 3 | **References & memory** | Newtype IDs with a niche: plain slab-backed IDs are the slot plus one in a `NonZeroUsize`; element and render-object keys are generational, the 0-based slot and a non-zero generation packed in a `NonZeroU64`; `Option<ElementId>` is **8 bytes** via niche optimization; `Slab` arena, library-owns-nodes | 8 bytes saved on every optional tree link; the whole tree is iterable for an inspector or focus routing without walking the ownership chain. *The Rust Performance Book* — niche optimization; Masonry RFC. |
+| 4 | **Subtree memoization** | `View::can_update` (type + key matchability gate) + `View::should_skip_rebuild` defaulting to `false` (always rebuild); `PartialEq`-skip is opt-in via `Memo<V>` or a per-view override | The `build()`-skip optimization is **first-class and composable**, not a framework-internal trick. Default is always-rebuild (safe); `Memo<V>` is the opt-in. No blanket `PartialEq` bound on `View` (the Druid trap). Xilem's `memoize` lesson. |
+| 5 | **Dispatch** | Sealed traits (`Arity`); enum dispatch over `dyn` by default | Exhaustive `match`; the closed set is enforced; `dyn` is the justified exception, not the default. *Rust for Rustaceans* — sealed traits. |
+| 6 | **Resource lifecycle** | RAII — `Drop`; the layer tree is rebuilt each frame and holds no ref-counted engine layers | Deterministic release removes a whole class of leak. *Programming Rust* — RAII guards. |
+| 7 | **Frame cadence** | `ControlFlow::Wait` — an idle UI burns zero CPU; render only when dirty | Battery and thermal headroom by construction. |
+| 8 | **Developer surface** | A `flui` **facade crate** + `flui::prelude`; app authors depend on one crate, framework authors on the granular crates | A multi-crate workspace presents as a single dependency to an app author — the product legibility metric, served. GPUI/`xilem` facade precedent. |
+| 9 | **No GC** | Sync render hot path, arena allocation, zero hot-path allocations after build | Predictable frame budget; no GC jank. Sync hot path. |
 
 These are not "nice to have." Items 1, 2, and 4 are *contracts* — they are baked into the `View`/`RenderBox` trait surfaces and cannot be added later without a rewrite. They are settled in Part III.
 
@@ -88,16 +87,16 @@ These nine decisions are the "right contract." Each is committed by the **first 
 
 ### C1 — Reactivity: `setState` canonical, `memoize` added, realm-scoped signals (amended by ADR-0074)
 
-Flutter's `setState` + `InheritedWidget` + depth-ordered dirty-element list is the **sole** canonical state model. The catalog crates — `flui-widgets`, `flui-material`, `flui-cupertino` — never take a dependency on a signals crate. This is mandated explicitly: signals are not the *external* model, and the mechanisms beneath it are open to improvement; the ecosystem research confirms it (Xilem converged away from signals; Druid died of the `Data: Clone + PartialEq` constraint-creep). **The one addition:** Xilem's `memoize`, surfaced as the typed `View::can_update` of Part II item 4 plus a `Memo<V>` combinator — Flutter's own internal short-circuit, made first-class. Application state carries **no trait bound beyond `'static`** — the Druid mistake is the one most dangerous trap; do not repeat it. **Amended by [ADR-0074](adr/ADR-0074-realm-scoped-signals.md) (2026-09-22, beta-roadmap mandate that locked contracts are revisable explicitly):** a realm-owned reactive graph (`Signal<T>` and its reader registry) is a first-class application-state layer of the view crate; derived values and effects are ADR-0075's subject (Proposed) and not yet part of the contract. Reading a signal in `build` is the sanctioned subscription path — the same class of edge as `depend_on`, so reading needs no `LifecycleContext` capability; **writing** or **creating** a signal inside `build`/`layout`/`paint` is refused at run time (`SignalError::{WrittenDuringBuild, CreatedDuringBuild}`). The catalog crates may accept `Signal<T>` values as widget inputs but never own application state, and `setState`/`InheritedWidget`/the depth-ordered dirty list remain the mechanism a signal write feeds: the smallest sound invalidation unit stays the Element.
+`setState` + `InheritedWidget` + a depth-ordered dirty-element list is the **sole** canonical state model. The catalog crates — `flui-widgets`, `flui-material`, `flui-cupertino` — never take a dependency on a signals crate. This is mandated explicitly: signals are not the *external* model, and the mechanisms beneath it are open to improvement; the ecosystem research confirms it (Xilem converged away from signals; Druid died of the `Data: Clone + PartialEq` constraint-creep). **The one addition:** Xilem's `memoize`, surfaced as the typed `View::can_update` of Part II item 4 plus a `Memo<V>` combinator — the internal `canUpdate` short-circuit, made first-class. Application state carries **no trait bound beyond `'static`** — the Druid mistake is the one most dangerous trap; do not repeat it. **Amended by [ADR-0074](adr/ADR-0074-realm-scoped-signals.md) (2026-09-22, beta-roadmap mandate that locked contracts are revisable explicitly):** a realm-owned reactive graph (`Signal<T>` and its reader registry) is a first-class application-state layer of the view crate; derived values and effects are ADR-0075's subject (Proposed) and not yet part of the contract. Reading a signal in `build` is the sanctioned subscription path — the same class of edge as `depend_on`, so reading needs no `LifecycleContext` capability; **writing** or **creating** a signal inside `build`/`layout`/`paint` is refused at run time (`SignalError::{WrittenDuringBuild, CreatedDuringBuild}`). The catalog crates may accept `Signal<T>` values as widget inputs but never own application state, and `setState`/`InheritedWidget`/the depth-ordered dirty list remain the mechanism a signal write feeds: the smallest sound invalidation unit stays the Element.
 
 ### C2 — Heterogeneous children: a `ViewSeq` trait with two load-bearing paths
 
-`Column { children: [Text(…), Button(…), Image(…)] }` — mixed child types — is the spine of every real UI. Dart gets it free (`List<Widget>`); Rust cannot (`Vec<T>` is homogeneous). **This is the one subsystem where FLUI deliberately does not copy Flutter's structure.** The target is Xilem's `ViewSequence` — a `ViewSeq` trait the design must build along **two equally load-bearing paths**:
+`Column { children: [Text(…), Button(…), Image(…)] }` — mixed child types — is the spine of every real UI. A garbage-collected language gets it free (`List<Widget>`); Rust cannot (`Vec<T>` is homogeneous). The target is Xilem's `ViewSequence` — a `ViewSeq` trait the design must build along **two equally load-bearing paths**:
 
 - **Static heterogeneous** — tuples `(A, B, C)` implement `ViewSeq` via a macro for arities `0..=16`; `column! { … }` / `row! { … }` macros give the literal call site. Each child keeps its concrete type to the `Slab` boundary and the reconciler is monomorphic per position. This serves hand-written `Column`/`Row`/`Stack`.
 - **Dynamic** (child count not statically known) — `Vec<BoxedView>`. This is **not a rare fallback**: it is the primary path for the entire scrolling and data-display half of the catalog — `ListView`, `GridView`, `CustomScrollView`, `DataTable`, every `Vec`/iterator-driven widget, much of Material. It pays the `dyn` erasure cost and uses the non-monomorphic reconciler path.
 
-The C2 design document must specify **both** paths to equal depth — most real lists are dynamic, so the dynamic path's reconciliation, keyed-reorder behavior, and erasure cost are as catalog-critical as the tuple path's ergonomics. This contract decides whether the catalog reads as well as the Flutter it ports; it needs its own design document before any widget code.
+The C2 design document must specify **both** paths to equal depth — most real lists are dynamic, so the dynamic path's reconciliation, keyed-reorder behavior, and erasure cost are as catalog-critical as the tuple path's ergonomics. This contract decides how well the catalog reads; it needs its own design document before any widget code.
 
 ### C3 — Widget-authoring API: `impl IntoView`, derive, `bon`
 
@@ -109,7 +108,7 @@ The `View` trait stays object-safe (the children machinery needs it) with **no l
 
 ### C5 — `BuildContext`: callback-form, no lifetime, single-threaded
 
-`BuildContext` is an object-safe trait threaded into `build()` as `&dyn BuildContext`, with **no lifetime parameter** (widget code stays clean; matches Flutter's "context is a handle" feel). Inherited-data lookup is the **callback form** — `depend_on::<T, R>(|t| …) -> Option<R>` — which threads the borrow safely instead of leaking a lifetime into every `build()` signature. `InheritedView` resolution uses the `TypeId` registry — the single sanctioned runtime-reflection window. `Send + Sync` is dropped from `BuildContext` (build is single-threaded). Internally the endgame is the GPUI lease pattern (`BuildPhase` owns `&mut ElementTree` exclusively, no runtime lock); the public trait surface is locked now so that endgame is non-breaking.
+`BuildContext` is an object-safe trait threaded into `build()` as `&dyn BuildContext`, with **no lifetime parameter** (widget code stays clean; the context is a handle). Inherited-data lookup is the **callback form** — `depend_on::<T, R>(|t| …) -> Option<R>` — which threads the borrow safely instead of leaking a lifetime into every `build()` signature. `InheritedView` resolution uses the `TypeId` registry — the single sanctioned runtime-reflection window. `Send + Sync` is dropped from `BuildContext` (build is single-threaded). Internally the endgame is the GPUI lease pattern (`BuildPhase` owns `&mut ElementTree` exclusively, no runtime lock); the public trait surface is locked now so that endgame is non-breaking.
 
 ### C6 — Reconciliation: keyed
 
@@ -117,7 +116,7 @@ Variable-arity child reconciliation is the keyed O(N) linear algorithm (match-fr
 
 ### C7 — Error model: `build()` infallible, `Result` everywhere else
 
-Library crates use `Result<T, E>` + per-crate `#[non_exhaustive]` `thiserror` enums; `anyhow` only at application/binary edges. **`View::build()` is infallible** — forcing `Result` on the most-written method taxes every widget and breaks Flutter-parity feel. A failed widget is contained by an internal `std::panic::catch_unwind` boundary around the build that substitutes an `ErrorView` — the tree survives, exactly as Flutter's error-widget behavior. A deliberate framework-level panic boundary is the standard Rust pattern here and is *not* the bare `unwrap()` that `clippy::unwrap_used` and [`PANIC-POLICY.md`](PANIC-POLICY.md) forbid.
+Library crates use `Result<T, E>` + per-crate `#[non_exhaustive]` `thiserror` enums; `anyhow` only at application/binary edges. **`View::build()` is infallible** — forcing `Result` on the most-written method taxes every widget. A failed widget is contained by an internal `std::panic::catch_unwind` boundary around the build that substitutes an `ErrorView` — the tree survives. A deliberate framework-level panic boundary is the standard Rust pattern here and is *not* the bare `unwrap()` that `clippy::unwrap_used` and [`PANIC-POLICY.md`](PANIC-POLICY.md) forbid.
 
 ### C8 — Async edges: the render path is strictly synchronous
 
@@ -141,7 +140,7 @@ The workspace is healthier than its crate count suggests: most crates are deep m
 - **The design systems are official packages.** `flui-material` and `flui-cupertino` live under `packages/` and build on `flui-sdk` alone, as a third-party package would.
 - **No global-localizations crate.** `flui-localizations` was deleted by [ADR-0081](adr/ADR-0081-workspace-tiers-and-reach-facts.md): it held no translated strings, only the RTL table and its delegate, which now live in `flui_widgets::localization` beside the contract they implement. Translated catalogs, when they arrive, belong to the catalog that defines each contract.
 
-**No `flui-physics`** — Flutter's `physics` package is already ported into `flui-animation`'s simulations, beside the controllers that drive them ([ADR-0098](adr/ADR-0098-owned-f64-geometry-values.md) §8); a standalone crate of simulation math would be shallow. **No `flui-services`** — Flutter's `services` is deliberately dissolved; its residue (IME/text-input, system chrome, haptics) becomes capability traits on `flui-platform-api` (`PlatformTextInput`, `PlatformHaptics`, and `PlatformSystemChrome` once it exists), implemented by the backends in `flui-platform` ([ADR-0082](adr/ADR-0082-platform-api-contract-crate.md)).
+**No `flui-physics`** — simulations live in `flui-animation`, beside the controllers that drive them ([ADR-0098](adr/ADR-0098-owned-f64-geometry-values.md) §8); this overrides the port-phasing research's proposal of a separate crate (a standalone crate of simulation math would be shallow). **No `flui-services`** — IME/text-input, system chrome and haptics are capability traits on `flui-platform-api` (`PlatformTextInput`, `PlatformHaptics`, and `PlatformSystemChrome` once it exists), implemented by the backends in `flui-platform` ([ADR-0082](adr/ADR-0082-platform-api-contract-crate.md)).
 
 **The workspace by layer, with each crate's tier in brackets:**
 
@@ -280,7 +279,7 @@ it. Presentation capabilities are reachable only through `LifecycleContext` (ADR
 guards in branch scrutinees, `todo!`/`unimplemented!`/`dbg!`, and printing from foundation
 crates are clippy lints; unit-wrapper conversions are `compile_fail` doctests. What no tool can
 see — resource-owning types implement the lifecycle protocol (`dispose` + disposed-assert + a
-dirty bit for frame-loop types), Flutter abstract-class chains become behavior-carrying Rust
+dirty bit for frame-loop types), abstract-class chains become behavior-carrying Rust
 shapes rather than mirror trait hierarchies, no speculative public surface — is design guidance
 in `AGENTS.md` and each crate's `ARCHITECTURE.md`, checked in review.
 
@@ -288,7 +287,7 @@ in `AGENTS.md` and each crate's `ARCHITECTURE.md`, checked in review.
 
 ## Governance
 
-This document is the **architecture contract** for FLUI. Its relationship to the other governing documents:
+This document is the **architecture contract** for the port. Its relationship to the other governing documents:
 
 - **`FOUNDATIONS.md`** (this document) — *what* (the target architecture, the locked contracts, the crate graph).
 - [`ROADMAP.md`](ROADMAP.md) — *when / in what order* (the dependency-ordered construction phases).

@@ -3,8 +3,7 @@
 //! Complete animation system for the FLUI framework.
 //!
 //! This crate provides all animation primitives: curves, tweens, status types,
-//! and stateful animation controllers, following Flutter's animation architecture
-//! with Rust idioms.
+//! and stateful animation controllers, in Rust idioms.
 //!
 //! ## Key Components
 //!
@@ -16,7 +15,7 @@
 //! - [`Tween`] - Maps animation values to any type T;
 //!   [`OklabColorTween`] interpolates colors perceptually (Oklab) instead of
 //!   componentwise sRGB
-//! - [`smoothing`] - Frame-rate-independent followers beyond Flutter:
+//! - [`smoothing`] - Frame-rate-independent followers:
 //!   [`exp_decay`]/[`Smoothed`] (half-life exponential decay) and
 //!   [`SmoothDamp`] (critically damped, max-speed-clamped)
 //! - [`AnimatedValue`] - Interruptible spring value with velocity-preserving

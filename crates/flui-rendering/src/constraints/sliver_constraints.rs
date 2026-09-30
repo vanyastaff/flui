@@ -37,11 +37,6 @@ use crate::view::ScrollDirection;
 /// - Matches typical display pixel precision (sub-pixel rendering is rare)
 /// - Avoids cache thrashing from floating-point rounding errors
 /// - Maintains sufficient precision for accurate layout
-///
-/// # Flutter Equivalence
-///
-/// Maps directly to Flutter's `SliverConstraints` class with identical
-/// semantics.
 #[derive(Clone, Copy, PartialEq)]
 pub struct SliverConstraints {
     /// Direction along the main axis (e.g., Down for vertical scroll).
@@ -160,7 +155,7 @@ impl SliverConstraints {
     ///
     /// Infinite values are preserved unchanged.
     ///
-    // TODO: a real Flutter-semantic normalize() (min≥0, max≥min) can live here if a caller needs it
+    // TODO: a real normalize() (min≥0, max≥min) can live here if a caller needs it
     #[inline]
     #[must_use]
     pub fn round_for_cache(&self) -> Self {
@@ -210,8 +205,7 @@ impl SliverConstraints {
 
     /// Returns [`BoxConstraints`] that reflect this sliver constraint space.
     ///
-    /// Mirrors Flutter's `SliverConstraints.asBoxConstraints`: the cross axis
-    /// is tight to either `cross_axis_extent` or this constraint's own
+    /// The cross axis is tight to either `cross_axis_extent` or this constraint's own
     /// cross-axis extent, while the main axis uses `min_extent..max_extent`.
     #[inline]
     #[must_use]

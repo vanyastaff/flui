@@ -7,8 +7,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// Sizes its child to a given `width / height` aspect ratio, fitting within the
 /// incoming constraints.
 ///
-/// Flutter parity: `widgets/basic.dart` `AspectRatio` over `RenderAspectRatio`.
-/// The ratio must be finite and `> 0` (debug-asserted in the render object).
+/// Backed by `RenderAspectRatio`. The ratio must be finite and `> 0` (debug-asserted in the render object).
 #[derive(Clone, Debug)]
 pub struct AspectRatio {
     aspect_ratio: f64,

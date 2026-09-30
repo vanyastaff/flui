@@ -1,7 +1,6 @@
 //! Listenable and change notification types.
 //!
-//! This module provides the observer pattern for reactive UI updates,
-//! similar to Flutter's `ChangeNotifier` system in foundation.
+//! This module provides the observer pattern for reactive UI updates.
 //!
 //! - **Listenable**: Base trait for objects that notify listeners
 //! - **`ChangeNotifier`**: Manages a list of listeners and notifies them
@@ -47,7 +46,6 @@ pub type ListenerCallback = Arc<dyn Fn() + Send + Sync + 'static>;
 
 /// An object that maintains a list of listeners.
 ///
-/// Similar to Flutter's `Listenable`.
 /// Uses interior mutability for thread-safe listener management.
 ///
 /// There are two variants of this interface:
@@ -82,8 +80,8 @@ pub trait Listenable: Send + Sync {
     /// Remove a previously registered listener.
     ///
     /// A no-op if `id` is not registered — including after the listenable
-    /// has been disposed (Flutter parity: `ChangeNotifier.removeListener`
-    /// tolerates a disposed receiver so teardown code can always detach).
+    /// has been disposed (`ChangeNotifier::remove_listener` tolerates a
+    /// disposed receiver so teardown code can always detach).
     fn remove_listener(&self, id: ListenerId);
 
     /// Remove all listeners.
@@ -91,8 +89,6 @@ pub trait Listenable: Send + Sync {
 }
 
 /// An interface for subclasses of [`Listenable`] that expose a value.
-///
-/// Similar to Flutter's `ValueListenable<T>`.
 ///
 /// This trait is implemented by [`ValueNotifier<T>`] and can be used
 /// to accept any listenable that provides a current value.
@@ -124,20 +120,15 @@ pub trait ValueListenable<T>: Listenable {
 /// A class that can be extended or mixed in that provides a change notification
 /// API.
 ///
-/// Similar to Flutter's `ChangeNotifier`.
-///
 /// # Disposal
 ///
 /// After [`dispose`] has been called, [`add_listener`] and
 /// [`notify_listeners`] panic in debug builds via `debug_assert!` and
-/// degrade to a `tracing::warn!` + no-op in release builds. Mirrors
-/// Flutter's `ChangeNotifier.dispose` and `_debugAssertNotDisposed` semantics
-/// (`flutter/lib/src/foundation/change_notifier.dart:181`, :376).
+/// degrade to a `tracing::warn!` + no-op in release builds.
 ///
 /// [`remove_listener`] is the deliberate exception: it carries no disposed
-/// check in either build profile, matching `ChangeNotifier.removeListener`
-/// upstream, which has no `debugAssertNotDisposed` so that teardown code can
-/// detach from an already-disposed listenable. It is always a silent no-op
+/// check in either build profile, so that teardown code can detach from an
+/// already-disposed listenable. It is always a silent no-op
 /// once disposed (the listener map is already empty).
 ///
 /// `is_disposed` is shared across clones via `Arc<AtomicBool>` so that a
@@ -150,7 +141,7 @@ pub trait ValueListenable<T>: Listenable {
 #[derive(Clone)]
 pub struct ChangeNotifier {
     /// The shared notification core — `ChangeNotifier` IS `Notifier<()>`
-    /// plus its Flutter-parity seams: the `ChangeNotifier`-branded
+    /// plus its own seams: the `ChangeNotifier`-branded
     /// use-after-dispose message, and `remove_listener` tolerating a
     /// disposed receiver. The snapshot/ordering/`catch_unwind` firing
     /// discipline lives once, in [`Notifier::notify`].
@@ -195,12 +186,10 @@ impl ChangeNotifier {
     /// subsequent calls to [`add_listener`] or [`notify_listeners`] panic in
     /// debug builds via `debug_assert!` and degrade to a `tracing::warn!` +
     /// no-op in release builds. [`remove_listener`] is the deliberate
-    /// exception — it stays a silent no-op after dispose (Flutter parity;
-    /// see [`Listenable::remove_listener`]'s impl on this type).
+    /// exception — it stays a silent no-op after dispose (see
+    /// [`Listenable::remove_listener`]'s impl on this type).
     ///
-    /// Mirrors Flutter's `ChangeNotifier.dispose` at
-    /// `flutter/lib/src/foundation/change_notifier.dart:376`. Disposal does
-    /// NOT notify listeners; consumers must decide whether to notify before
+    /// Disposal does NOT notify listeners; consumers must decide whether to notify before
     /// calling `dispose`.
     ///
     /// This method is **idempotent**: calling it again is a no-op (no panic).
@@ -221,13 +210,10 @@ impl ChangeNotifier {
     /// In debug builds, panics with `"ChangeNotifier used after dispose"`
     /// via `debug_assert!`. In release builds, emits a `tracing::warn!` and
     /// returns `true` to indicate the caller should early-return as a no-op
-    /// per plan §D7 (Flutter parity: release degrades gracefully).
+    /// (release degrades gracefully).
     ///
     /// Returns `true` if the notifier is disposed (caller should no-op),
     /// `false` if usable.
-    ///
-    /// Mirrors Flutter's `_debugAssertNotDisposed`
-    /// (`change_notifier.dart:181`).
     #[inline]
     fn check_disposed(&self) -> bool {
         if self.inner.is_disposed() {
@@ -236,8 +222,7 @@ impl ChangeNotifier {
             // its own documented message, not the generic channel's.
             //
             // cfg-explicit layout: debug panics immediately (hard contract
-            // violation), release degrades gracefully with a warning
-            // (Flutter parity).
+            // violation), release degrades gracefully with a warning.
             #[cfg(debug_assertions)]
             panic!(
                 "ChangeNotifier used after dispose: once dispose() has been \
@@ -258,7 +243,7 @@ impl ChangeNotifier {
 
     /// Call all the registered listeners.
     ///
-    /// Snapshot semantics (Flutter parity, `ChangeNotifier.notifyListeners`):
+    /// Snapshot semantics:
     ///
     /// - A snapshot of `(id, callback)` pairs is taken under lock before any
     ///   callback fires. The lock is released before iteration, preventing
@@ -273,12 +258,11 @@ impl ChangeNotifier {
     ///   `tracing::error!` and iteration continues with the next listener.
     ///   One panicking listener does NOT abort the rest.
     ///
-    /// Listeners fire in registration order (`ListenerId` ascending), matching
-    /// Flutter's array-order iteration; the backing `HashMap` does not preserve
+    /// Listeners fire in registration order (`ListenerId` ascending); the backing `HashMap` does not preserve
     /// insertion order, so the snapshot is sorted by id before firing.
     ///
-    /// Post-snapshot *additions* are NOT fired in the current notify cycle
-    /// (same as Flutter); only listeners present at snapshot time and still
+    /// Post-snapshot *additions* are NOT fired in the current notify cycle;
+    /// only listeners present at snapshot time and still
     /// registered when reached are invoked.
     ///
     /// # Disposal
@@ -338,17 +322,12 @@ impl Listenable for ChangeNotifier {
     }
 
     fn remove_listener(&self, id: ListenerId) {
-        // Deliberately NO disposed check here — Flutter parity.
-        // `ChangeNotifier.removeListener` in `change_notifier.dart` carries no
-        // `debugAssertNotDisposed`, unlike `addListener`/`dispose`/
-        // `notifyListeners` (each carries an explicit assert): its doc comment states
-        // "This method returns immediately if [dispose] has been called," and
-        // the rationale is explicit — "it is common that the owner of this
-        // instance would be disposed a frame earlier than the listeners.
-        // Allowing calls to this method after it is disposed makes it easier
-        // for listeners to properly clean up." `dispose()` already cleared
-        // the listener map, so the lookup below is naturally a no-op; the id
-        // simply isn't found.
+        // Deliberately NO disposed check here, unlike `add_listener`/`dispose`/
+        // `notify_listeners`: it is common that the owner of this instance is
+        // disposed a frame earlier than its listeners, and allowing removal
+        // after dispose makes it easier for listeners to clean up.
+        // `dispose()` already cleared the listener map, so the lookup below is
+        // naturally a no-op; the id simply isn't found.
         self.inner.remove_even_if_disposed(id);
     }
 
@@ -362,8 +341,6 @@ impl Listenable for ChangeNotifier {
 }
 
 /// A `ChangeNotifier` that holds a single value.
-///
-/// Similar to Flutter's `ValueNotifier`.
 #[derive(Clone)]
 pub struct ValueNotifier<T: Clone> {
     value: T,
@@ -510,8 +487,8 @@ impl<T: Clone + fmt::Debug> fmt::Debug for ValueNotifier<T> {
 // notifier would have a default-constructed value AND a fresh identity (no
 // listeners); two `ValueNotifier::<T>::default()` calls produce notifiers that
 // are `==` by value yet are observably distinct objects. This violates the
-// principle of least surprise, and Flutter's `ValueNotifier` likewise has no
-// default constructor. Construct explicitly via `ValueNotifier::new(value)`.
+// principle of least surprise. Construct explicitly via
+// `ValueNotifier::new(value)`.
 
 impl<T: Clone + PartialEq> PartialEq for ValueNotifier<T> {
     #[inline]
@@ -623,10 +600,6 @@ mod tests {
 
     // ------------------------------------------------------------------
     // ChangeNotifier::dispose + disposed-state assertion
-    //
-    // Mirrors Flutter's `ChangeNotifier.dispose` at
-    // flutter/lib/src/foundation/change_notifier.dart:181 (debugAssertNotDisposed)
-    // and :376 (dispose).
     // ------------------------------------------------------------------
 
     fn dispose_during_notify_iteration_safe() {

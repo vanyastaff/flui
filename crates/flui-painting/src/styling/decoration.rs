@@ -97,8 +97,6 @@ impl DecorationImage {
 }
 
 /// Base trait for decorations.
-///
-/// Similar to Flutter's `Decoration`.
 pub trait Decoration: std::fmt::Debug {
     /// Returns true if this decoration is complex enough that it might
     /// change its appearance when the size changes.
@@ -121,9 +119,9 @@ pub trait Decoration: std::fmt::Debug {
 ///
 /// This type is `#[non_exhaustive]`: build it with [`BoxDecoration::new`] (or
 /// one of the `with_*` constructors) and the `set_*` chain, never with a
-/// struct literal. Flutter's `BoxDecoration` has grown fields steadily —
-/// `shape`, `backgroundBlendMode`, `image` all arrived after the type
-/// existed — and each one would otherwise be a source-breaking change for
+/// struct literal. A decoration type tends to grow fields over time
+/// (`shape`, a background blend mode and `image` all arrive after the
+/// basics), and each one would otherwise be a source-breaking change for
 /// every caller that spelled out the braces. Keeping construction on the
 /// constructors is what lets a new field be additive.
 ///
@@ -179,7 +177,7 @@ pub struct BoxDecoration<T: Unit> {
     /// sides.
     ///
     /// The shape cannot be interpolated: `lerp` switches discretely at
-    /// `t == 0.5` (Flutter parity, `box_decoration.dart:209-211,314`).
+    /// `t == 0.5`.
     ///
     /// `serde(default)` is load-bearing, not decoration: this field was
     /// added after the type was already serializable, so a payload
@@ -294,8 +292,7 @@ impl<T: NumericUnit> BoxDecoration<T>
 where
     T: std::ops::Mul<f64, Output = T>,
 {
-    /// Linearly interpolate between two box decorations, following
-    /// Flutter's `BoxDecoration.lerp`.
+    /// Linearly interpolate between two box decorations.
     ///
     /// `t` is clamped to `0..=1`, and the endpoints return `a` and `b`
     /// exactly. A field set on only one side fades toward nothing: a lone
@@ -350,13 +347,13 @@ where
             (None, None) => None,
         };
 
-        // Images crossfade in Flutter; here they switch at the midpoint.
+        // Images are not crossfaded; they switch at the midpoint.
         let image = if t < 0.5 {
             a.image.clone()
         } else {
             b.image.clone()
         };
-        // Not interpolatable (Flutter parity, box_decoration.dart:209-211):
+        // Not interpolatable:
         // discrete switch at the midpoint, same as the image above.
         let shape = if t < 0.5 { a.shape } else { b.shape };
 
@@ -372,8 +369,7 @@ where
     }
 }
 
-/// Flutter's `Color.lerp(null, color, factor)`: the alpha scaled by
-/// `factor`, rounded to 8 bits.
+/// The alpha of `color` scaled by `factor`, rounded to 8 bits.
 fn scale_alpha(color: Color, factor: f64) -> Color {
     #[expect(
         clippy::cast_possible_truncation,
@@ -384,7 +380,7 @@ fn scale_alpha(color: Color, factor: f64) -> Color {
     color.with_alpha(alpha)
 }
 
-/// Flutter's `Border.scale`: every side's width scaled by `factor`.
+/// Every side's width scaled by `factor`.
 fn scale_border<T>(border: Border<T>, factor: f64) -> Border<T>
 where
     T: NumericUnit + std::ops::Mul<f64, Output = T>,
@@ -398,7 +394,7 @@ where
     )
 }
 
-/// Flutter's `Gradient.scale`: every color's alpha scaled by `factor`.
+/// Every color's alpha scaled by `factor`.
 fn scale_gradient(gradient: &Gradient, factor: f64) -> Gradient {
     let mut scaled = gradient.clone();
     let colors = match &mut scaled {

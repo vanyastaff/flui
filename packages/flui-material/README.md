@@ -5,9 +5,8 @@ Material Design theming foundation for [FLUI](https://github.com/vanyastaff/flui
 shell, and the M3 widget catalog built on them — `Scaffold`/`AppBar`, the button family
 (`ElevatedButton`, `FilledButton`, `OutlinedButton`, `TextButton`, `IconButton`,
 `FloatingActionButton`), `Card`, `Dialog`/`AlertDialog`, `TextField`/`InputDecoration`,
-`ListTile`, `NavigationBar`, `Chip`, and tabs — the Rust analog of
-`package:flutter/material.dart`'s theming and widget surface (see the crate's own
-[module docs](src/lib.rs) for per-widget Flutter oracle citations).
+`ListTile`, `NavigationBar`, `Chip`, and tabs (see the crate's own
+[module docs](src/lib.rs) for the per-widget details).
 
 It is an official package (ADR-0088): its only FLUI dependency is `flui-sdk`, the
 package-author surface, the same one a third-party design system builds on.

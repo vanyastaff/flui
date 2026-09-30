@@ -3,8 +3,6 @@
 use flui_foundation::geometry::Axis;
 
 /// A direction along either the horizontal or vertical axis.
-///
-/// Similar to Flutter's `AxisDirection`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Default)]

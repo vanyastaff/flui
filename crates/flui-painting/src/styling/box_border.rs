@@ -76,7 +76,7 @@ impl<T: Unit> Border<T> {
 
     /// Creates a border with symmetric vertical and horizontal sides.
     ///
-    /// As in Flutter's `Border.symmetric`, `vertical` applies to the left
+    /// `vertical` applies to the left
     /// and right sides (the vertical ones) and `horizontal` to the top and
     /// bottom.
     #[inline]

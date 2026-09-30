@@ -40,7 +40,7 @@ pub(crate) fn registered_controller_advances_fade_opacity_frame_to_frame() {
     controller.forward().expect("a fresh controller forwards");
 
     // The detection frame (first pump after `forward`) holds the run-start value
-    // — Flutter's first ticker tick delivers elapsed 0. Movement begins next pump.
+    // — a ticker's first tick delivers elapsed 0. Movement begins next pump.
     laid.pump_for(Duration::from_millis(20));
     assert!(
         laid.opacity(render_opacity).abs() < 1e-4,

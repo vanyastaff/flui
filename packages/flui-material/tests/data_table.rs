@@ -74,8 +74,7 @@ pub fn widget_override_beats_theme_beats_default_on_a_mounted_tree() {
 // Selection dispatch
 // =============================================================================
 
-/// Tristate quirk (Flutter parity: `_handleSelectAll`'s `someChecked ||
-/// (checked ?? false)`): tapping the heading checkbox while it is in the
+/// Tristate quirk (`some_checked || checked.unwrap_or(false)`): tapping the heading checkbox while it is in the
 /// INDETERMINATE state (some, not all, rows checked) always SELECTS all
 /// rows — it never clears them, even though the checkbox's own naive
 /// tap-cycle would suggest otherwise. A broken `someChecked ||` (e.g.

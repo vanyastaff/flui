@@ -1,9 +1,7 @@
 # Flutter → FLUI mapping
 
 A vocabulary table for readers coming from Flutter. Every row is checked against the real trait or
-struct in `crates/` — see AGENTS.md's Design stance on why an unverified mapping isn't
-acceptable here: a wrong row would misrepresent either what FLUI follows from Flutter or what it
-deliberately changed.
+struct in `crates/`.
 
 | Flutter | FLUI | Where |
 |---|---|---|
@@ -17,7 +15,7 @@ deliberately changed.
 | `WidgetsApp` | `WidgetsApp` (`WidgetsApp::new(home)` or `WidgetsApp::router(router)`) | `crates/flui-widgets/src/app/widgets_app.rs` |
 | `MaterialApp` / `CupertinoApp` | `MaterialApp` / `CupertinoApp` | `packages/flui-material/src/app.rs`, `packages/flui-cupertino/src/app.rs` |
 
-## Notes on the divergences
+## Notes
 
 - **`Router` is the primary navigation API.** Routes are values: a `#[derive(Routable)]` enum
   with one `#[route("…")]` pattern per variant, and a `Router<R>` that keeps the stack of route

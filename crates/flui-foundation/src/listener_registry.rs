@@ -1,11 +1,9 @@
 //! `ListenerRegistry<S>` — unified value + status listener registry with lazy
 //! first/last edge hooks and RAII [`ListenerSubscription`] teardown.
 //!
-//! Collapses Flutter's four-mixin listener lattice (`AnimationLazyListenerMixin`
-//! XOR `AnimationEagerListenerMixin`, plus `AnimationLocalListenersMixin` and
-//! `AnimationLocalStatusListenersMixin`, all sharing one listener count) into a
-//! single composed type. An animation embeds one registry and its `Listenable`
-//! impl becomes a one-line delegation.
+//! One composed type owns both the value and status listener sets, sharing a
+//! single listener count for the lazy edge hooks. An animation embeds one
+//! registry and its `Listenable` impl becomes a one-line delegation.
 //!
 //! # Lazy edges
 //!
@@ -116,7 +114,7 @@ impl<S: Send + Sync + 'static> RemoveFrom for RegistryInner<S> {
     fn remove(&self, channel: Channel, id: ListenerId) {
         // After `dispose()` both channels have already cleared their listeners.
         // The Value channel (`ChangeNotifier::remove_listener`) tolerates
-        // post-dispose removal per Flutter parity, so its guard below is merely
+        // post-dispose removal, so its guard below is merely
         // redundant; the Status channel (`Notifier::remove`) still debug-panics
         // on use-after-dispose, so ITS guard is load-bearing. A live
         // `ListenerSubscription` dropped after the registry is disposed must stay

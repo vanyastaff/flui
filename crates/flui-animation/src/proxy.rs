@@ -144,9 +144,8 @@ where
     /// Set a new parent animation.
     ///
     /// Value listeners are always notified (the value type has no equality
-    /// bound, so the proxy cannot compare old vs. new — Flutter only notifies
-    /// on change). Status listeners are notified only when the status actually
-    /// differs across the swap, matching Flutter's `ProxyAnimation.parent=`.
+    /// bound, so the proxy cannot compare old vs. new). Status listeners are
+    /// notified only when the status actually differs across the swap.
     pub fn set_parent(&self, new_parent: Arc<dyn Animation<T>>) {
         let old_status = self.parent.read().status();
         // Subscribe to the new parent first, then swap; replacing the stored
@@ -261,7 +260,7 @@ mod tests {
         }));
 
         // Dismissed -> Completed across the swap must fire once with the new
-        // status (Flutter `ProxyAnimation.parent=` parity).
+        // status.
         proxy.set_parent(controller2.clone() as Arc<dyn Animation<f64>>);
         assert_eq!(seen.lock().as_slice(), &[AnimationStatus::Completed]);
 

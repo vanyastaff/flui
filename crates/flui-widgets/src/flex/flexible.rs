@@ -18,7 +18,7 @@ use flui_view::{BoxedView, IntoView, ParentDataView, View, ViewExt, impl_parent_
 /// Gives its child a share of the main axis of a [`Row`]/[`Column`]/[`Flex`],
 /// proportional to `flex` relative to the other flexible siblings.
 ///
-/// Flutter parity: `widgets/basic.dart` `Flexible`. The default `fit` is
+/// The default `fit` is
 /// [`FlexFit::Loose`] (the child may be smaller than its share); [`Expanded`]
 /// is the [`FlexFit::Tight`] specialization that forces the child to fill it.
 ///
@@ -98,8 +98,7 @@ impl_parent_data_view!(Flexible);
 /// A [`Flexible`] that forces its child to fill its share of the main axis
 /// (a [`FlexFit::Tight`] fit).
 ///
-/// Flutter parity: `widgets/basic.dart` `Expanded` — `Flexible` fixed to
-/// `FlexFit.tight`.
+/// `Flexible` fixed to `FlexFit::Tight`.
 #[derive(Clone, Debug)]
 pub struct Expanded {
     flex: i32,

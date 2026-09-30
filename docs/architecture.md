@@ -74,7 +74,7 @@ View Tree        ──build──▶   Element Tree   ──layout──▶   R
 | Phase | Owner | Input | Output | Constraint |
 |-------|-------|-------|--------|------------|
 | Build | `BuildOwner` | dirty `View` nodes | reconciled `Element` tree | `View::build()` is pure — no I/O, no external mutation |
-| Layout | `PipelineOwner<Layout>` | `Constraints` | `Size` per `RenderBox` | Single-pass O(n) where possible (Flutter constraint protocol) |
+| Layout | `PipelineOwner<Layout>` | `Constraints` | `Size` per `RenderBox` | Single-pass O(n) where possible (constraints down, sizes up) |
 | Paint | `PipelineOwner<PaintPhase>` | `RenderBox` tree | `DisplayList` → layers | Recording is in `flui-painting`; GPU submission in `flui-engine` |
 
 The pipeline is **on-demand**. The platform event loop waits (`ControlFlow::Wait`, or `WaitUntil` for a scheduled deadline), and a frame runs only when something asks for one: a dirty tree (`mark_needs_layout`, `mark_needs_paint`), or a scheduled frame callback (a ticker, a transient callback, an async completion), which `UpdateScheduler::schedule_frame_callback` turns into a frame request even when no tree is dirty. A render loop that polls every frame is not an accepted design.
@@ -154,7 +154,7 @@ let platform = current_platform()?; // Result<Box<dyn Platform>, PlatformError>
 
 Backends: `WindowsPlatform` (Win32), `MacOSPlatform` (AppKit), `WebPlatform`, `AndroidPlatform`, `IOSPlatform` (UIKit), `HeadlessPlatform` (CI / tests), and `WinitPlatform` (the `winit-backend` feature), which is the Linux backend: with that feature on (as `flui-app` enables it) `current_platform()` returns it on Linux, and without it the call fails with `PlatformError::Init`. `LinuxPlatform` is an unimplemented placeholder whose constructor panics. The platform backends' types (`windows::*`, `objc2::*`/`objc2-app-kit::*`/`objc2-ui-kit::*`, `winit::*`) stay inside this crate. Two narrow Windows FFI calls live elsewhere: `flui-hot-reload`'s library loading (`LoadLibraryW`/`GetProcAddress`, `src/dynlib.rs`) and `flui-cli`'s handle-inheritance call (`SetHandleInformation`, `src/proc.rs`). The Apple backends both use the `objc2` binding family — macOS/AppKit and iOS/UIKit alike; the older `cocoa`/`objc` crates this backend used are gone (ADR-0071).
 
-Text shaping is **not** a `Platform` method — that Flutter binding (`PlatformTextSystem`) was deliberately not carried over. `flui-painting` shapes text with `cosmic-text` by default. Its `parley-layout` feature makes `TextPainter` measure size, baselines and intrinsics with Parley over a per-realm `TextContext`, while glyphs and carets stay on cosmic-text; `parley` alone only compiles the Parley path without choosing it (the migration [ADR-0092](adr/ADR-0092-per-realm-text-over-parley.md) describes); `flui-engine` rasterizes glyphs through `flui-painting` into its own glyph atlas.
+Text shaping is **not** a `Platform` method — a platform text-system binding (`PlatformTextSystem`) is deliberately absent. `flui-painting` shapes text with `cosmic-text` by default. Its `parley-layout` feature makes `TextPainter` measure size, baselines and intrinsics with Parley over a per-realm `TextContext`, while glyphs and carets stay on cosmic-text; `parley` alone only compiles the Parley path without choosing it (the migration [ADR-0092](adr/ADR-0092-per-realm-text-over-parley.md) describes); `flui-engine` rasterizes glyphs through `flui-painting` into its own glyph atlas.
 
 ## Confinement of `unsafe`
 
@@ -169,10 +169,10 @@ The workspace sets `unsafe_code = "warn"`; `flui-painting` and `flui-platform-ap
 
 FLUI is designed against two external codebases for read-only architectural reference:
 
-- Flutter framework source (UI architecture, widget patterns, layout algorithms).
+- Flutter framework source (the declarative widget composition FLUI takes its inspiration from).
 - GPUI Rust UI library (platform abstraction, callback registries, type erasure patterns).
 
-Maintainer checkouts may include local `.flutter/` and `.gpui/` mirrors for parity work, but those external source trees are not required for normal builds. Both references are studied, never copied. Patterns are translated to FLUI idioms (Arity, no nullability, strict layered DAG).
+The Flutter and GPUI sources are read on GitHub (`gh`); a maintainer may keep shallow clones in the gitignored `.flutter/` and `.gpui/`, but nothing requires them. Both are studied, never copied; patterns are designed as FLUI idioms (Arity, no nullability, strict layered DAG).
 
 ## Hot Reload (Dev-Time)
 

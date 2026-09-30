@@ -18,19 +18,14 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// child, the child is positioned via `alignment`; if the child still does
 /// not fit, it is clipped per `clip_behavior`.
 ///
-/// Flutter parity: `widgets/basic.dart` `UnconstrainedBox` (tag `3.44.0`) —
-/// itself a `StatelessWidget` built by selecting one of
-/// `ConstraintsTransformBox.unconstrained` / `.widthUnconstrained` /
-/// `.heightUnconstrained` from `constrainedAxis` and handing it to a
-/// `ConstraintsTransformBox`. FLUI carries no `ConstraintsTransformBox`
-/// widget (no general `BoxConstraintsTransform`-function surface) — this
-/// widget targets [`RenderConstraintsTransformBox`] directly, whose own
-/// `constrained_axis: Option<Axis>` field already IS that narrowed
-/// three-way choice (see that render object's module doc for the exact
-/// per-axis transform mapping and the shared clip/overflow contract).
-/// `create_render_object`/`update_render_object` push every field, mirroring
-/// the oracle's own `createRenderObject`/`updateRenderObject` (both
-/// `..`-cascade every property on every call).
+/// This widget targets [`RenderConstraintsTransformBox`] directly, whose
+/// `constrained_axis: Option<Axis>` field is the three-way choice between
+/// unconstrained on both axes, width only, or height only (see that render
+/// object's module doc for the exact per-axis transform mapping and the
+/// shared clip/overflow contract). There is no general
+/// constraints-transform-function widget.
+/// `create_render_object`/`update_render_object` push every field on every
+/// call.
 ///
 /// `textDirection`/`AlignmentDirectional` are not exposed: no widget in
 /// FLUI's shifted-box family (`Align`, `OverflowBox`, `SizedOverflowBox`,
@@ -47,8 +42,7 @@ pub struct UnconstrainedBox {
 
 impl UnconstrainedBox {
     /// A center-aligned, unclipped box removing constraints on both axes —
-    /// Flutter's `UnconstrainedBox()` with every other parameter left at its
-    /// oracle default.
+    /// with every other parameter left at its default.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -76,7 +70,7 @@ impl UnconstrainedBox {
     }
 
     /// Sets how the child is clipped when it overflows this box. Defaults
-    /// to [`Clip::None`] (oracle default).
+    /// to [`Clip::None`].
     #[must_use]
     pub fn clip_behavior(mut self, clip_behavior: Clip) -> Self {
         self.clip_behavior = clip_behavior;

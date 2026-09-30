@@ -1,6 +1,4 @@
 //! `RenderMouseRegion` — mouse hover/cursor hit-test proxy.
-//!
-//! Flutter parity: `rendering/proxy_box.dart` `RenderMouseRegion`.
 
 use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Size};

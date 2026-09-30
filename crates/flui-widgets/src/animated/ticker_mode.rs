@@ -1,18 +1,12 @@
 //! [`TickerMode`] — pause a subtree's animations without unmounting it.
 //!
-//! # Flutter parity
-//!
-//! `.flutter/packages/flutter/lib/src/widgets/ticker_provider.dart`, master
-//! `3.33.0-0.0.pre-6280-g88e87cd963f`: `TickerMode` (`:25`), whose
-//! `_TickerModeState` mutes every ticker created by a descendant
-//! `TickerProvider` (`:397`) and ANDs its own `enabled` with the ancestor's
-//! (`_updateEffectiveMode`, `:246-252`) — a nested enabled `TickerMode` cannot
+//! A `TickerMode` mutes every animation controller below it and ANDs its own
+//! `enabled` with the ancestor's — a nested enabled `TickerMode` cannot
 //! re-enable a disabled ancestor.
 //!
-//! # The Rust shape
+//! # How it works
 //!
-//! Flutter's tickers are created *by* a `TickerProvider` (the `State`), so a
-//! notifier can reach each one. FLUI's animated widgets instead register their
+//! FLUI's animated widgets register their
 //! `AnimationController` with the ambient [`Vsync`] registry a
 //! [`VsyncScope`] hands down. So a `TickerMode` owns a
 //! **nested registry**: it attaches a child [`Vsync`] to the ambient one and
@@ -23,9 +17,8 @@
 //! `TickerMode(false)` never receives the frame it would forward. No flag to
 //! compose, and no way to get it wrong.
 //!
-//! **The clock keeps running while muted.** Flutter's `Ticker.muted` is "a
-//! ticker's clock can still run, but the callback will not be called"
-//! (`ticker.dart:102-104`): a disabled subtree delivers no ticks, and when it
+//! **The clock keeps running while muted.** A disabled subtree delivers no
+//! ticks, and when it
 //! is re-enabled its animations land where the wall clock says they should be
 //! — they do not resume from where they stopped. A `TickerMode` is a mute
 //! button, not a pause button. (FLUI's `Ticker::mute` freezes elapsed time
@@ -33,9 +26,8 @@
 //!
 //! # Deferred, and named
 //!
-//! * `TickerMode.of` / `getNotifier` (`:78`, `:118`) — no consumer; FLUI's
-//!   descendants need the registry, not the flag.
-//! * `forceFrames` (`:249-258`) — its consumer is Flutter's test binding.
+//! * A query for the current mode — no consumer; descendants need the
+//!   registry, not the flag.
 //! * A widget that *creates* controllers outside the ambient registry (its own
 //!   wall-clock ticker fallback) is not muted: it is not in the registry to
 //!   mute. Every in-tree animated widget prefers the ambient `VsyncScope`.
@@ -46,13 +38,12 @@ use flui_view::prelude::*;
 
 use super::VsyncScope;
 
-/// Pauses (or resumes) every animation in its subtree — Flutter's `TickerMode`
-/// (`ticker_provider.dart:25`).
+/// Pauses (or resumes) every animation in its subtree.
 ///
 /// While `enabled` is `false`, descendant animation controllers receive no
 /// ticks. **The clock keeps running** — this is a mute button, not a pause
 /// button: a re-enabled subtree lands where the wall clock says it should be,
-/// not where it stopped (Flutter's `Ticker.muted`, `ticker.dart:102-104`).
+/// not where it stopped.
 /// Nesting composes as an AND — a `TickerMode` inside a disabled one cannot
 /// re-enable its subtree.
 ///
@@ -69,8 +60,8 @@ pub struct TickerMode {
 }
 
 impl TickerMode {
-    /// A ticker scope around `child`. `enabled` defaults to `true`
-    /// (`ticker_provider.dart:32`), so a bare `TickerMode` changes nothing.
+    /// A ticker scope around `child`. `enabled` defaults to `true`,
+    /// so a bare `TickerMode` changes nothing.
     pub fn new(child: impl IntoView) -> Self {
         Self {
             child: BoxedView(Box::new(child.into_view())),
@@ -174,8 +165,8 @@ impl ViewState<TickerMode> for TickerModeState {
         self.renest(ctx);
     }
 
-    /// `_updateEffectiveMode` (`ticker_provider.dart:246-252`) — minus the AND,
-    /// which the nesting already performs.
+    /// Re-applies the mute flag; the AND with ancestors is already performed
+    /// by the nesting.
     fn did_update_view(&mut self, _old: &TickerMode, new_view: &TickerMode) {
         self.registry.set_muted(!new_view.enabled);
     }

@@ -1,26 +1,21 @@
 //! [`CupertinoDynamicColor`] and [`CupertinoColors`] — the iOS
 //! brightness/contrast/elevation-adaptive color system.
-//!
-//! Flutter parity: `cupertino/colors.dart` (oracle tag `3.44.0`).
 
 use flui_sdk::painting::Color;
 use flui_sdk::platform::Brightness;
 use flui_sdk::view::prelude::BuildContext;
 
 // =============================================================================
-// CupertinoColor — the Rust-native answer to Dart's `Color`/`CupertinoDynamicColor`
-// polymorphism
+// CupertinoColor — a literal color or a dynamic one
 // =============================================================================
 
 /// A color that is either a concrete, already-resolved [`Color`] or a
 /// [`CupertinoDynamicColor`] still waiting to be resolved against a
 /// [`BuildContext`].
 ///
-/// **Rust-native improvement over the oracle.** Dart's `CupertinoDynamicColor
-/// implements Color`, so any `Color`-typed field (`CupertinoButton.color`,
-/// `CupertinoThemeData.primaryColor`, …) can transparently hold either a
-/// literal color or a dynamic one, checked at runtime with `is
-/// CupertinoDynamicColor`. FLUI's [`Color`] is a concrete RGBA struct, not an
+/// Fields such as `CupertinoButton::color` and
+/// `CupertinoThemeData::primary_color` must be able to hold either a literal
+/// color or a dynamic one. FLUI's [`Color`] is a concrete RGBA struct, not an
 /// interface — it cannot carry that polymorphism. This enum makes the two
 /// cases explicit at the type level instead of hiding a runtime type-check
 /// inside `resolve`: illegal "a `Color` that might secretly be something
@@ -64,25 +59,20 @@ impl From<CupertinoDynamicColor> for CupertinoColor {
 // CupertinoDynamicColor
 // =============================================================================
 
-/// A color that adapts to the ambient brightness (and, in the oracle, also
-/// contrast and interface elevation — see the "Resolution scope" section
+/// A color that adapts to the ambient brightness (and, in the full iOS model,
+/// also contrast and interface elevation — see the "Resolution scope" section
 /// below) of the [`BuildContext`] it is resolved against.
 ///
-/// Flutter parity: `CupertinoDynamicColor` (`cupertino/colors.dart`, oracle
-/// tag `3.44.0`) — the full 8-variant data struct (`color`/`darkColor`/
-/// `highContrastColor`/`darkHighContrastColor`/`elevatedColor`/
-/// `darkElevatedColor`/`highContrastElevatedColor`/
-/// `darkHighContrastElevatedColor`).
+/// The data is the full 8-variant struct: light/dark, each at normal or high
+/// contrast, each at base or elevated interface level.
 ///
 /// ## Resolution scope (named V1 reduction)
 ///
-/// [`resolve_from`](Self::resolve_from) implements full oracle parity for the
-/// **brightness** axis only: `CupertinoTheme`'s ambient `brightness` field,
+/// [`resolve_from`](Self::resolve_from) fully resolves the **brightness**
+/// axis only: `CupertinoTheme`'s ambient `brightness` field,
 /// falling back to `MediaQuery::platform_brightness` when no `CupertinoTheme`
-/// ancestor sets one (mirrors `CupertinoDynamicColor.resolveFrom`'s own
-/// `CupertinoTheme.maybeBrightnessOf ?? MediaQuery.maybePlatformBrightnessOf`
-/// chain exactly). The **contrast** and **interface-elevation** axes are
-/// stored — every variant value below is ported verbatim, so a future
+/// ancestor sets one. The **contrast** and **interface-elevation** axes are
+/// stored — every variant value below is carried, so a future
 /// increment can wire them up without touching this table — but resolution
 /// always treats them as "normal contrast, base elevation" (`highContrast:
 /// false`, `elevated: false`), because FLUI's `MediaQueryData` has no
@@ -109,12 +99,11 @@ pub struct CupertinoDynamicColor {
 }
 
 impl CupertinoDynamicColor {
-    /// Full 8-variant constructor. Flutter parity:
-    /// `CupertinoDynamicColor(...)`.
+    /// Full 8-variant constructor.
     #[must_use]
     #[expect(
         clippy::too_many_arguments,
-        reason = "verbatim port of the oracle's 8-variant constructor — a builder would obscure \
+        reason = "the full 8-variant constructor — a builder would obscure \
                   the const-table call sites below, which are meant to read as a direct table"
     )]
     pub const fn new(
@@ -140,8 +129,7 @@ impl CupertinoDynamicColor {
     }
 
     /// A color that varies by brightness and contrast, but not interface
-    /// elevation (the elevated variants mirror the base ones). Flutter
-    /// parity: `CupertinoDynamicColor.withBrightnessAndContrast`.
+    /// elevation (the elevated variants mirror the base ones).
     #[must_use]
     pub const fn with_brightness_and_contrast(
         color: Color,
@@ -161,16 +149,14 @@ impl CupertinoDynamicColor {
         )
     }
 
-    /// A color that varies by brightness only. Flutter parity:
-    /// `CupertinoDynamicColor.withBrightness`.
+    /// A color that varies by brightness only.
     #[must_use]
     pub const fn with_brightness(color: Color, dark_color: Color) -> Self {
         Self::with_brightness_and_contrast(color, dark_color, color, dark_color)
     }
 
-    /// Whether any variant differs across the light/dark axis — mirrors the
-    /// oracle's `_isPlatformBrightnessDependent`, which gates whether
-    /// `resolveFrom` even needs to look up `CupertinoTheme`/`MediaQuery`.
+    /// Whether any variant differs across the light/dark axis — gates whether
+    /// `resolve_from` even needs to look up `CupertinoTheme`/`MediaQuery`.
     fn is_platform_brightness_dependent(&self) -> bool {
         self.color != self.dark_color
             || self.elevated_color != self.dark_elevated_color
@@ -179,10 +165,8 @@ impl CupertinoDynamicColor {
     }
 
     /// Resolves this dynamic color against `ctx`, per the "Resolution scope"
-    /// section on the type doc: full brightness-axis parity, contrast and
+    /// section on the type doc: brightness fully resolved, contrast and
     /// elevation always resolved as their base variant.
-    ///
-    /// Flutter parity: `CupertinoDynamicColor.resolveFrom`.
     #[must_use]
     pub fn resolve_from(&self, ctx: &dyn BuildContext) -> Color {
         let brightness = if self.is_platform_brightness_dependent() {
@@ -201,17 +185,14 @@ impl CupertinoDynamicColor {
     /// concrete [`CupertinoColor::Static`] is returned unchanged, a
     /// [`CupertinoColor::Dynamic`] is resolved against `ctx`.
     ///
-    /// Flutter parity: `CupertinoDynamicColor.resolve` (the static entry
-    /// point, kept on this type for the same discoverability the oracle
-    /// has — see [`CupertinoColor`]'s doc for why the parameter type differs
-    /// from the oracle's polymorphic `Color`).
+    /// Kept on this type for discoverability — see [`CupertinoColor`]'s doc
+    /// for why the parameter is an enum rather than a plain `Color`.
     #[must_use]
     pub fn resolve(resolvable: CupertinoColor, ctx: &dyn BuildContext) -> Color {
         resolvable.resolve(ctx)
     }
 
-    /// [`resolve`](Self::resolve), but for an `Option`. Flutter parity:
-    /// `CupertinoDynamicColor.maybeResolve`.
+    /// [`resolve`](Self::resolve), but for an `Option`.
     #[must_use]
     pub fn maybe_resolve(
         resolvable: Option<CupertinoColor>,
@@ -230,32 +211,30 @@ impl CupertinoDynamicColor {
 /// ([`crate::theme`]'s defaults, [`crate::text_theme`]'s label/action colors,
 /// [`crate::button`]'s fill/disabled/foreground colors).
 ///
-/// Flutter parity: `CupertinoColors` (`cupertino/colors.dart`, oracle tag
-/// `3.44.0`). Every value below is pinned by an oracle-diffed const-table
-/// test (`tests/colors.rs`) asserting the exact ARGB channels, including the
-/// dark-mode `systemBlue` variant — `(10, 132, 255)`, not the visually
-/// similar `(9, 132, 255)` a from-memory port would be one digit away from.
+/// Every value below is pinned by a const-table test (`tests/colors.rs`)
+/// asserting the exact ARGB channels, including the dark-mode `SYSTEM_BLUE`
+/// variant — `(10, 132, 255)`, not the visually similar `(9, 132, 255)` a
+/// from-memory value would be one digit away from.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct CupertinoColors;
 
 impl CupertinoColors {
-    /// Pure opaque white. Flutter parity: `CupertinoColors.white`.
+    /// Pure opaque white.
     pub const WHITE: Color = Color::rgb(255, 255, 255);
-    /// Pure opaque black. Flutter parity: `CupertinoColors.black`.
+    /// Pure opaque black.
     pub const BLACK: Color = Color::rgb(0, 0, 0);
-    /// Fully transparent. Flutter parity: `CupertinoColors.transparent`.
+    /// Fully transparent.
     pub const TRANSPARENT: Color = Color::rgba(0, 0, 0, 0);
 
     /// The disabled-button gray. Not the same gray as
-    /// [`Self::SYSTEM_GREY`]. Flutter parity: `CupertinoColors.inactiveGray`.
+    /// [`Self::SYSTEM_GREY`].
     pub const INACTIVE_GRAY: CupertinoDynamicColor = CupertinoDynamicColor::with_brightness(
         Color::rgb(0x99, 0x99, 0x99),
         Color::rgb(0x75, 0x75, 0x75),
     );
 
-    /// A blue that can adapt to the given context. Flutter parity:
-    /// `CupertinoColors.systemBlue`.
+    /// A blue that can adapt to the given context.
     pub const SYSTEM_BLUE: CupertinoDynamicColor =
         CupertinoDynamicColor::with_brightness_and_contrast(
             Color::rgb(0, 122, 255),
@@ -264,13 +243,10 @@ impl CupertinoColors {
             Color::rgb(64, 156, 255),
         );
 
-    /// Alias for [`Self::SYSTEM_BLUE`]. Flutter parity:
-    /// `CupertinoColors.activeBlue`.
+    /// Alias for [`Self::SYSTEM_BLUE`].
     pub const ACTIVE_BLUE: CupertinoDynamicColor = Self::SYSTEM_BLUE;
 
-    /// A red used for destructive actions. Flutter parity:
-    /// `CupertinoColors.systemRed` / `CupertinoColors.destructiveRed` (an
-    /// alias of `systemRed` in the oracle).
+    /// A red used for destructive actions.
     pub const SYSTEM_RED: CupertinoDynamicColor =
         CupertinoDynamicColor::with_brightness_and_contrast(
             Color::rgb(255, 59, 48),
@@ -279,11 +255,10 @@ impl CupertinoColors {
             Color::rgb(255, 105, 97),
         );
 
-    /// Alias for [`Self::SYSTEM_RED`]. Flutter parity:
-    /// `CupertinoColors.destructiveRed`.
+    /// Alias for [`Self::SYSTEM_RED`].
     pub const DESTRUCTIVE_RED: CupertinoDynamicColor = Self::SYSTEM_RED;
 
-    /// The base gray. Flutter parity: `CupertinoColors.systemGrey`.
+    /// The base gray.
     pub const SYSTEM_GREY: CupertinoDynamicColor =
         CupertinoDynamicColor::with_brightness_and_contrast(
             Color::rgb(142, 142, 147),
@@ -292,8 +267,7 @@ impl CupertinoColors {
             Color::rgb(174, 174, 178),
         );
 
-    /// A second-level shade of grey. Flutter parity:
-    /// `CupertinoColors.systemGrey2`.
+    /// A second-level shade of grey.
     pub const SYSTEM_GREY2: CupertinoDynamicColor =
         CupertinoDynamicColor::with_brightness_and_contrast(
             Color::rgb(174, 174, 178),
@@ -302,8 +276,7 @@ impl CupertinoColors {
             Color::rgb(124, 124, 128),
         );
 
-    /// A third-level shade of grey. Flutter parity:
-    /// `CupertinoColors.systemGrey3`.
+    /// A third-level shade of grey.
     pub const SYSTEM_GREY3: CupertinoDynamicColor =
         CupertinoDynamicColor::with_brightness_and_contrast(
             Color::rgb(199, 199, 204),
@@ -312,8 +285,7 @@ impl CupertinoColors {
             Color::rgb(84, 84, 86),
         );
 
-    /// A fourth-level shade of grey. Flutter parity:
-    /// `CupertinoColors.systemGrey4`.
+    /// A fourth-level shade of grey.
     pub const SYSTEM_GREY4: CupertinoDynamicColor =
         CupertinoDynamicColor::with_brightness_and_contrast(
             Color::rgb(209, 209, 214),
@@ -322,8 +294,7 @@ impl CupertinoColors {
             Color::rgb(68, 68, 70),
         );
 
-    /// A fifth-level shade of grey. Flutter parity:
-    /// `CupertinoColors.systemGrey5`.
+    /// A fifth-level shade of grey.
     pub const SYSTEM_GREY5: CupertinoDynamicColor =
         CupertinoDynamicColor::with_brightness_and_contrast(
             Color::rgb(229, 229, 234),
@@ -332,8 +303,7 @@ impl CupertinoColors {
             Color::rgb(54, 54, 56),
         );
 
-    /// A sixth-level shade of grey. Flutter parity:
-    /// `CupertinoColors.systemGrey6`.
+    /// A sixth-level shade of grey.
     pub const SYSTEM_GREY6: CupertinoDynamicColor =
         CupertinoDynamicColor::with_brightness_and_contrast(
             Color::rgb(242, 242, 247),
@@ -342,7 +312,7 @@ impl CupertinoColors {
             Color::rgb(36, 36, 38),
         );
 
-    /// Primary-content text labels. Flutter parity: `CupertinoColors.label`.
+    /// Primary-content text labels.
     pub const LABEL: CupertinoDynamicColor = CupertinoDynamicColor::new(
         Color::rgb(0, 0, 0),
         Color::rgb(255, 255, 255),
@@ -354,8 +324,7 @@ impl CupertinoColors {
         Color::rgb(255, 255, 255),
     );
 
-    /// Secondary-content text labels. Flutter parity:
-    /// `CupertinoColors.secondaryLabel`.
+    /// Secondary-content text labels.
     pub const SECONDARY_LABEL: CupertinoDynamicColor = CupertinoDynamicColor::new(
         Color::rgba(60, 60, 67, 153),
         Color::rgba(235, 235, 245, 153),
@@ -367,8 +336,7 @@ impl CupertinoColors {
         Color::rgba(235, 235, 245, 173),
     );
 
-    /// Tertiary-content text labels. Flutter parity:
-    /// `CupertinoColors.tertiaryLabel`.
+    /// Tertiary-content text labels.
     pub const TERTIARY_LABEL: CupertinoDynamicColor = CupertinoDynamicColor::new(
         Color::rgba(60, 60, 67, 76),
         Color::rgba(235, 235, 245, 76),
@@ -380,8 +348,7 @@ impl CupertinoColors {
         Color::rgba(235, 235, 245, 96),
     );
 
-    /// The default background for a screen. Flutter parity:
-    /// `CupertinoColors.systemBackground`.
+    /// The default background for a screen.
     pub const SYSTEM_BACKGROUND: CupertinoDynamicColor = CupertinoDynamicColor::new(
         Color::rgb(255, 255, 255),
         Color::rgb(0, 0, 0),
@@ -394,8 +361,7 @@ impl CupertinoColors {
     );
 
     /// Grouped-content background, one level up from
-    /// [`Self::SYSTEM_BACKGROUND`]. Flutter parity:
-    /// `CupertinoColors.secondarySystemBackground`.
+    /// [`Self::SYSTEM_BACKGROUND`].
     pub const SECONDARY_SYSTEM_BACKGROUND: CupertinoDynamicColor = CupertinoDynamicColor::new(
         Color::rgb(242, 242, 247),
         Color::rgb(28, 28, 30),
@@ -407,8 +373,7 @@ impl CupertinoColors {
         Color::rgb(54, 54, 56),
     );
 
-    /// The color for thin separator lines between content. Flutter parity:
-    /// `CupertinoColors.separator`.
+    /// The color for thin separator lines between content.
     pub const SEPARATOR: CupertinoDynamicColor = CupertinoDynamicColor::new(
         Color::rgba(60, 60, 67, 73),
         Color::rgba(84, 84, 88, 153),
@@ -420,8 +385,7 @@ impl CupertinoColors {
         Color::rgba(84, 84, 88, 173),
     );
 
-    /// An opaque separator, for when translucency is undesirable. Flutter
-    /// parity: `CupertinoColors.opaqueSeparator`.
+    /// An opaque separator, for when translucency is undesirable.
     pub const OPAQUE_SEPARATOR: CupertinoDynamicColor = CupertinoDynamicColor::new(
         Color::rgb(198, 198, 200),
         Color::rgb(56, 56, 58),
@@ -433,8 +397,7 @@ impl CupertinoColors {
         Color::rgb(56, 56, 58),
     );
 
-    /// An overlay fill for thin and small shapes. Flutter parity:
-    /// `CupertinoColors.systemFill`.
+    /// An overlay fill for thin and small shapes.
     pub const SYSTEM_FILL: CupertinoDynamicColor = CupertinoDynamicColor::new(
         Color::rgba(120, 120, 128, 51),
         Color::rgba(120, 120, 128, 91),
@@ -446,8 +409,7 @@ impl CupertinoColors {
         Color::rgba(120, 120, 128, 112),
     );
 
-    /// An overlay fill for medium-size shapes. Flutter parity:
-    /// `CupertinoColors.secondarySystemFill`.
+    /// An overlay fill for medium-size shapes.
     pub const SECONDARY_SYSTEM_FILL: CupertinoDynamicColor = CupertinoDynamicColor::new(
         Color::rgba(120, 120, 128, 40),
         Color::rgba(120, 120, 128, 81),
@@ -459,8 +421,7 @@ impl CupertinoColors {
         Color::rgba(120, 120, 128, 102),
     );
 
-    /// An overlay fill for large shapes. Flutter parity:
-    /// `CupertinoColors.tertiarySystemFill`.
+    /// An overlay fill for large shapes.
     pub const TERTIARY_SYSTEM_FILL: CupertinoDynamicColor = CupertinoDynamicColor::new(
         Color::rgba(118, 118, 128, 30),
         Color::rgba(118, 118, 128, 61),
@@ -472,8 +433,7 @@ impl CupertinoColors {
         Color::rgba(118, 118, 128, 81),
     );
 
-    /// An overlay fill for the largest shapes. Flutter parity:
-    /// `CupertinoColors.quaternarySystemFill` — `CupertinoButton`'s default
+    /// An overlay fill for the largest shapes — `CupertinoButton`'s default
     /// `disabledColor` for its plain (no-background) style.
     pub const QUATERNARY_SYSTEM_FILL: CupertinoDynamicColor = CupertinoDynamicColor::new(
         Color::rgba(116, 116, 128, 20),

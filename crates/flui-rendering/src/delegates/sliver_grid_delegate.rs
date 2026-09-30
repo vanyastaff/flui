@@ -43,20 +43,17 @@ impl SliverGridLayout {
 
     /// Returns the cross-axis offset (leading edge) of the child at `index`.
     ///
-    /// Flutter parity: `SliverGridRegularTileLayout.getGeometryForChildIndex` /
-    /// `_getOffsetFromStartInCrossAxis`
-    /// (`.flutter/flutter-master/packages/flutter/lib/src/rendering/sliver_grid.dart`).
     /// The cross-axis offset is determined entirely by the layout's own fields
-    /// (`cross_axis_count`, `cross_axis_stride`, `child_cross_axis_extent`); the
-    /// prior signature took an external `cross_axis_extent` and dropped the
-    /// `(stride − child_extent)` spacing term, so reversed grids were off by the
+    /// (`cross_axis_count`, `cross_axis_stride`, `child_cross_axis_extent`); an
+    /// external `cross_axis_extent` argument would drop the
+    /// `(stride − child_extent)` spacing term, leaving reversed grids off by the
     /// cross-axis spacing.
     pub fn get_cross_axis_offset_of_child(&self, index: usize) -> f64 {
         let column = index % self.cross_axis_count;
         let cross_axis_start = column as f64 * self.cross_axis_stride;
 
         if self.reverse_cross_axis {
-            // Oracle: crossAxisCount*stride − start − childExtent − (stride − childExtent),
+            // crossAxisCount*stride − start − childExtent − (stride − childExtent),
             // which simplifies to (crossAxisCount − 1 − column) * stride.
             let total = self.cross_axis_count as f64 * self.cross_axis_stride;
             total
@@ -84,24 +81,19 @@ impl SliverGridLayout {
     /// (`targetEndScrollOffset`); the result is the last child of the rows whose
     /// top lies strictly above that offset.
     ///
-    /// Flutter parity: `SliverGridRegularTileLayout.getMaxChildIndexForScrollOffset`
-    /// (`.flutter/flutter-master/packages/flutter/lib/src/rendering/sliver_grid.dart`),
-    /// `max(0, crossAxisCount * ceil(scrollOffset / mainAxisStride) - 1)`. The
-    /// prior `(row + 1) * crossAxisCount - 1` form over-counted by one full row.
+    /// The index is `max(0, crossAxisCount * ceil(scrollOffset / mainAxisStride) - 1)`;
+    /// a `(row + 1) * crossAxisCount - 1` form would over-count by one full row.
     pub fn get_max_child_index_for_scroll_offset(&self, scroll_offset: f64) -> usize {
         if self.main_axis_stride <= 0.0 {
             return 0;
         }
         let main_axis_count = (scroll_offset / self.main_axis_stride).ceil() as usize;
-        // `saturating_sub` is the `usize` form of Flutter's `math.max(0, … - 1)`:
+        // `saturating_sub` is the `usize` form of `max(0, … - 1)`:
         // at `scroll_offset == 0` the count is 0 and the result clamps to 0.
         (self.cross_axis_count * main_axis_count).saturating_sub(1)
     }
 
     /// Returns the maximum scroll extent for a grid with `child_count` items.
-    ///
-    /// Flutter parity: `SliverGridRegularTileLayout.computeMaxScrollOffset`
-    /// (`.flutter/flutter-master/packages/flutter/lib/src/rendering/sliver_grid.dart:257-266`).
     ///
     /// The result is the scroll offset of the trailing edge of the last row:
     /// `main_axis_stride * row_count - main_axis_spacing`, where
@@ -207,7 +199,7 @@ pub struct SliverGridDelegateWithFixedCrossAxisCount {
 
     /// Explicit main-axis extent per child. When `Some`, it overrides
     /// `child_aspect_ratio`; when `None`, the main-axis extent is derived from
-    /// the aspect ratio (Flutter's `mainAxisExtent`).
+    /// the aspect ratio.
     pub main_axis_extent: Option<f64>,
 }
 
@@ -250,14 +242,12 @@ impl SliverGridDelegateWithFixedCrossAxisCount {
 
 impl SliverGridDelegate for SliverGridDelegateWithFixedCrossAxisCount {
     fn get_layout(&self, constraints: SliverConstraints) -> SliverGridLayout {
-        // Flutter SliverGridDelegateWithFixedCrossAxisCount.getLayout
-        // (.flutter/flutter-master/packages/flutter/lib/src/rendering/sliver_grid.dart:392)
-        // clamps the usable cross extent at 0 so heavy cross-axis spacing can't
-        // drive the per-child extent negative.
+        // The usable cross extent is clamped at 0 so heavy cross-axis spacing
+        // can't drive the per-child extent negative.
         let used_cross_axis = self.cross_axis_spacing * (self.cross_axis_count - 1) as f64;
         let usable_cross_axis_extent = (constraints.cross_axis_extent - used_cross_axis).max(0.0);
         let child_cross_axis_extent = usable_cross_axis_extent / self.cross_axis_count as f64;
-        // Flutter: `mainAxisExtent ?? childCrossAxisExtent / childAspectRatio`.
+        // `main_axis_extent`, else `child_cross_axis_extent / child_aspect_ratio`.
         let child_main_axis_extent = self
             .main_axis_extent
             .unwrap_or(child_cross_axis_extent / self.child_aspect_ratio);
@@ -268,8 +258,7 @@ impl SliverGridDelegate for SliverGridDelegateWithFixedCrossAxisCount {
             cross_axis_stride: child_cross_axis_extent + self.cross_axis_spacing,
             child_main_axis_extent,
             child_cross_axis_extent,
-            // Flutter derives this from the cross-axis direction
-            // (axisDirectionIsReversed), not a hardcoded false.
+            // Derived from the cross-axis direction, not a hardcoded false.
             reverse_cross_axis: constraints.cross_axis_direction.is_reversed(),
         }
     }
@@ -311,7 +300,7 @@ pub struct SliverGridDelegateWithMaxCrossAxisExtent {
     pub child_aspect_ratio: f64,
 
     /// Explicit main-axis extent per child. When `Some`, it overrides
-    /// `child_aspect_ratio` (Flutter's `mainAxisExtent`).
+    /// `child_aspect_ratio`.
     pub main_axis_extent: Option<f64>,
 }
 
@@ -354,23 +343,21 @@ impl SliverGridDelegateWithMaxCrossAxisExtent {
 
 impl SliverGridDelegate for SliverGridDelegateWithMaxCrossAxisExtent {
     fn get_layout(&self, constraints: SliverConstraints) -> SliverGridLayout {
-        // Flutter SliverGridDelegateWithMaxCrossAxisExtent.getLayout
-        // (.flutter/flutter-master/packages/flutter/lib/src/rendering/sliver_grid.dart:502):
         // count = ceil(crossAxisExtent / (maxCrossAxisExtent + crossAxisSpacing)),
         // floored at 1. The numerator is the bare cross extent — adding the
-        // spacing there (as the prior code did) over-counts columns by one when
-        // the extent is an exact multiple of the denominator.
+        // spacing there would over-count columns by one when the extent is an
+        // exact multiple of the denominator.
         let cross_axis_count = (constraints.cross_axis_extent
             / (self.max_cross_axis_extent + self.cross_axis_spacing))
             .ceil()
             .max(1.0) as usize;
 
         // Use the fixed-count logic with the calculated count, clamping the
-        // usable cross extent at 0 to match the oracle.
+        // usable cross extent at 0.
         let used_cross_axis = self.cross_axis_spacing * (cross_axis_count - 1) as f64;
         let usable_cross_axis_extent = (constraints.cross_axis_extent - used_cross_axis).max(0.0);
         let child_cross_axis_extent = usable_cross_axis_extent / cross_axis_count as f64;
-        // Flutter: `mainAxisExtent ?? childCrossAxisExtent / childAspectRatio`.
+        // `main_axis_extent`, else `child_cross_axis_extent / child_aspect_ratio`.
         let child_main_axis_extent = self
             .main_axis_extent
             .unwrap_or(child_cross_axis_extent / self.child_aspect_ratio);
@@ -381,8 +368,7 @@ impl SliverGridDelegate for SliverGridDelegateWithMaxCrossAxisExtent {
             cross_axis_stride: child_cross_axis_extent + self.cross_axis_spacing,
             child_main_axis_extent,
             child_cross_axis_extent,
-            // Flutter derives this from the cross-axis direction
-            // (axisDirectionIsReversed), not a hardcoded false.
+            // Derived from the cross-axis direction, not a hardcoded false.
             reverse_cross_axis: constraints.cross_axis_direction.is_reversed(),
         }
     }

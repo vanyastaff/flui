@@ -1,16 +1,13 @@
 //! [`CupertinoPageScaffold`] — a single iOS page's layout: a navigation bar
 //! slot on top, content below it.
 //!
-//! Flutter parity: `cupertino/page_scaffold.dart`'s `CupertinoPageScaffold`
-//! (oracle tag `3.44.0`). See "Deferred, named" below for what this V1 does
-//! not carry over.
+//! See "Deferred, named" below for what this V1 does not carry over.
 //!
-//! ## What this ports
+//! ## What it does
 //!
 //! - The `Stack` composition itself: content first, the navigation bar
-//!   `Positioned` on top — `_CupertinoPageScaffoldState.build`'s own shape,
-//!   not a `CustomMultiChildLayoutDelegate` (the oracle doesn't use one
-//!   either; `flui-material`'s `Scaffold` is a different, busier widget with
+//!   `Positioned` on top — not a custom multi-child layout delegate
+//!   (`flui-material`'s `Scaffold` is a different, busier widget with
 //!   a floating-action-button slot this one has no equivalent of).
 //! - The content padding contract: when a navigation bar is present, the
 //!   content is pushed down by exactly
@@ -32,28 +29,23 @@
 //!
 //! ## Deferred, named
 //!
-//! - **`CupertinoPageScaffoldBackgroundColor`** (the `InheritedWidget`
-//!   publishing this scaffold's resolved background so a descendant
-//!   `CupertinoNavigationBar` can lerp toward it under
-//!   `automaticBackgroundVisibility`). Moot today:
-//!   [`crate::CupertinoNavigationBar`] does not implement
-//!   `automaticBackgroundVisibility` yet either (see that module's own
-//!   deferred list) — nothing would consume the publish.
-//! - **The nav bar never fully-obstructs-vs-translucent branches.** The
-//!   oracle picks between two `MediaQuery` transforms depending on
-//!   `navigationBar!.shouldFullyObstruct(context)` (opaque: fully consume
-//!   `padding.top`; translucent: keep it, so content sliding underneath
-//!   still avoids the notch). `flui_sdk::widgets::PreferredSizeView` carries no
+//! - **Publishing the scaffold's resolved background** so a descendant
+//!   `CupertinoNavigationBar` can lerp toward it under automatic background
+//!   visibility. Moot today: [`crate::CupertinoNavigationBar`] does not
+//!   implement that yet either (see that module's own deferred list) —
+//!   nothing would consume the publish.
+//! - **The nav bar's fully-obstructing vs translucent branches.** An opaque
+//!   bar fully consumes `padding.top`; a translucent one keeps it, so content
+//!   sliding underneath still avoids the notch.
+//!   `flui_sdk::widgets::PreferredSizeView` carries no
 //!   `should_fully_obstruct` — this V1 always takes the opaque branch,
 //!   matching `flui-material`'s `AppBar`/`Scaffold` and their own "no translucent
 //!   content-behind-the-bar" contract in this same workspace.
-//! - **Status-bar tap-to-scroll-to-top** (`_HitTestableAtOrigin`,
-//!   `PrimaryScrollController.animateTo`). No `PrimaryScrollController`/
-//!   `ScrollNotificationObserver` substrate in FLUI to wire this through.
-//! - **Text-scaling suppression on the navigation bar**
-//!   (`MediaQuery.withNoTextScaling`). `MediaQueryData` has no
-//!   `TextScaler`/no-scaling variant to apply yet — `text_scale_factor`
-//!   passes through unchanged.
+//! - **Status-bar tap-to-scroll-to-top.** No primary-scroll-controller or
+//!   scroll-notification-observer substrate in FLUI to wire this through.
+//! - **Text-scaling suppression on the navigation bar.** `MediaQueryData` has
+//!   no no-scaling variant to apply yet — `text_scale_factor` passes through
+//!   unchanged.
 
 use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::painting::BoxDecoration;
@@ -65,9 +57,8 @@ use crate::colors::CupertinoColor;
 use crate::theme::CupertinoTheme;
 
 /// A single iOS page's layout: an optional [`crate::CupertinoNavigationBar`]
-/// (or any other [`PreferredSizeView`]) on top, `child` below it. Flutter
-/// parity: `CupertinoPageScaffold` (`page_scaffold.dart`, oracle tag
-/// `3.44.0`) — see the module docs for exactly what is and is not ported.
+/// (or any other [`PreferredSizeView`]) on top, `child` below it — see the
+/// module docs for exactly what is and is not supported.
 ///
 /// ```
 /// use flui_cupertino::{CupertinoNavigationBar, CupertinoPageScaffold};
@@ -102,8 +93,7 @@ impl CupertinoPageScaffold {
     /// Sets the navigation bar slot, drawn at the top of the screen and
     /// shifting `child` down by its
     /// [`preferred_size`](PreferredSizeView::preferred_size) height (plus the
-    /// ambient top inset). Flutter parity:
-    /// `CupertinoPageScaffold.navigationBar`.
+    /// ambient top inset).
     #[must_use]
     pub fn navigation_bar(mut self, navigation_bar: impl PreferredSizeView) -> Self {
         self.navigation_bar_preferred_height = navigation_bar.preferred_size().height;
@@ -112,8 +102,7 @@ impl CupertinoPageScaffold {
     }
 
     /// Overrides the resolved background. Defaults to
-    /// [`crate::CupertinoThemeData::scaffold_background_color`]. Flutter
-    /// parity: `CupertinoPageScaffold.backgroundColor`.
+    /// [`crate::CupertinoThemeData::scaffold_background_color`].
     #[must_use]
     pub fn background_color(mut self, color: impl Into<CupertinoColor>) -> Self {
         self.background_color = Some(color.into());
@@ -121,8 +110,7 @@ impl CupertinoPageScaffold {
     }
 
     /// Whether `child` should size itself to avoid the window's bottom
-    /// inset (e.g. an on-screen keyboard). Defaults to `true`. Flutter
-    /// parity: `CupertinoPageScaffold.resizeToAvoidBottomInset`.
+    /// inset (e.g. an on-screen keyboard). Defaults to `true`.
     #[must_use]
     pub fn resize_to_avoid_bottom_inset(mut self, resize: bool) -> Self {
         self.resize_to_avoid_bottom_inset = resize;
@@ -151,10 +139,9 @@ impl StatelessView for CupertinoPageScaffold {
         let media = MediaQuery::maybe_of(ctx).unwrap_or_default();
 
         let padded_content = if self.navigation_bar.is_some() {
-            // `topPadding = navigationBar!.preferredSize.height +
-            // existingMediaQuery.padding.top` (`page_scaffold.dart`, oracle
-            // tag `3.44.0`) — always the "fully obstructing" branch, see the
-            // module docs' deferred list.
+            // The bar's preferred height plus the ambient top inset — always
+            // the "fully obstructing" branch, see the module docs' deferred
+            // list.
             let top_padding = self.navigation_bar_preferred_height + media.padding.top;
             let bottom_padding = if self.resize_to_avoid_bottom_inset {
                 media.view_insets.bottom

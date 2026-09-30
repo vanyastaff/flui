@@ -109,6 +109,7 @@ mod input;
 mod presentations;
 mod pump;
 
+pub(crate) use agent::DevAgentSlot;
 pub use agent::{AgentError, AgentReply, SemanticsAgent};
 pub use commands::{CommandSendError, DrainReport, UiCommand, UiCommandSender};
 use input::FocusCoordinator;

@@ -1,7 +1,6 @@
 //! [`Theme`] — publishes [`ThemeData`] to a subtree via FLUI's
 //! inherited-data mechanism.
 //!
-//! Flutter parity: `material/theme.dart` `Theme` (oracle tag `3.44.0`).
 //! Implements `flui-widgets`' [`InheritedTheme`] trait so a future
 //! capture/re-parent mechanism (see that trait's module docs) can wrap a
 //! `Theme` the same way it wraps any other ambient theme.
@@ -17,8 +16,6 @@ use crate::theme_data::ThemeData;
 /// Place a `Theme` near the root of the application subtree to supply a
 /// consistent Material visual identity. Any descendant reads the current
 /// theme with [`Theme::of`] / [`Theme::maybe_of`].
-///
-/// Flutter parity: `Theme` (`material/theme.dart`, oracle tag `3.44.0`).
 ///
 /// # Example
 ///
@@ -55,15 +52,10 @@ impl Theme {
     /// Panics if there is no [`Theme`] ancestor. Use
     /// [`maybe_of`](Self::maybe_of) for a non-panicking variant.
     ///
-    /// **Documented divergence from Flutter**: the oracle's `Theme.of`
-    /// (`material/theme.dart`, oracle tag `3.44.0`) never panics — with no
-    /// `Theme` ancestor it falls back to `ThemeData.fallback()` (baked in as
-    /// `_kFallbackTheme`). This crate does not implement `ThemeData::fallback`
-    /// (every FLUI app is expected to wrap its tree in a `Theme`, so a
-    /// themeless default has no consumer yet), so the missing-ancestor case
-    /// panics instead — a defensible choice for surfacing the mistake loudly
-    /// during development, but a deliberate divergence, not a port of the
-    /// oracle's fallback behavior.
+    /// This crate has no `ThemeData::fallback` (every FLUI app is expected to
+    /// wrap its tree in a `Theme`, so a themeless default has no consumer
+    /// yet), so the missing-ancestor case panics — surfacing the mistake
+    /// loudly during development.
     #[must_use]
     pub fn of(ctx: &dyn BuildContext) -> ThemeData {
         Self::maybe_of(ctx).expect(
@@ -131,8 +123,7 @@ impl InheritedView for Theme {
     }
 
     fn update_should_notify(&self, old: &Self) -> bool {
-        // Rebuild descendants whenever any style field changes — same
-        // contract as Flutter's `ThemeData.==`.
+        // Rebuild descendants whenever any style field changes.
         self.data != old.data
     }
 

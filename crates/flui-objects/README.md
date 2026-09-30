@@ -22,10 +22,8 @@ All types re-export flat from the crate root: `flui_objects::RenderPadding`.
 
 ## Guarantees
 
-- **Flutter as the starting point.** Each object starts from the observable
-  behavior (layout math, edge cases, hit-test order) of its Flutter
-  counterpart and differs wherever the result is better; its harness rows pin
-  what it does.
+- **Edge cases are tested.** Each object handles its edge cases (layout math, hit-test
+  order) behind a Rust-shaped API.
 - **Harness-tested.** Every exported object appears in the render-object
   test catalog (`RENDER_OBJECT_TYPES`) with a `harness_*` row in a family table test exercising the
   real pipeline — the catalog completeness is CI-enforced.

@@ -8,8 +8,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// Caps the maximum size of its child *only when* the corresponding incoming
 /// constraint is unbounded; bounded constraints pass through untouched.
 ///
-/// Flutter parity: `widgets/basic.dart` `LimitedBox` over `RenderLimitedBox`.
-/// `f64::INFINITY` for a dimension means "no cap on that axis".
+/// Backed by `RenderLimitedBox`. `f64::INFINITY` for a dimension means "no cap on that axis".
 #[derive(Clone, Debug)]
 pub struct LimitedBox {
     max_width: f64,

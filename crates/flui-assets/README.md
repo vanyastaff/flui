@@ -16,12 +16,12 @@ High-performance asset management system for FLUI framework with smart caching, 
 ## Quick Start
 
 ```rust
-use flui_assets::{AssetRegistry, FontAsset};
+use flui_assets::{AssetRegistryBuilder, FontAsset};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Get the global registry
-    let registry = AssetRegistry::global();
+    // Create a registry
+    let registry = AssetRegistryBuilder::new().with_default_capacity().build();
 
     // Load a font
     let font = FontAsset::file("assets/Roboto-Regular.ttf");
@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Three-Layer Design
 
 ```
-AssetRegistry (Global)
+AssetRegistry (per app)
     ↓
 AssetCache<T> (Per Type) - Moka TinyLFU cache
     ↓
@@ -93,9 +93,9 @@ if cache.is_efficient() {
 ### Fonts (Built-in)
 
 ```rust
-use flui_assets::{AssetRegistry, FontAsset};
+use flui_assets::{AssetRegistryBuilder, FontAsset};
 
-let registry = AssetRegistry::global();
+let registry = AssetRegistryBuilder::new().with_default_capacity().build();
 let font = FontAsset::file("fonts/Roboto-Regular.ttf");
 let handle = registry.load(font).await?;
 
@@ -115,9 +115,9 @@ flui-assets = { git = "https://github.com/vanyastaff/flui", features = ["images"
 ```
 
 ```rust
-use flui_assets::{AssetRegistry, ImageAsset};
+use flui_assets::{AssetRegistryBuilder, ImageAsset};
 
-let registry = AssetRegistry::global();
+let registry = AssetRegistryBuilder::new().with_default_capacity().build();
 let image = ImageAsset::file("assets/logo.png");
 let handle = registry.load(image).await?;
 

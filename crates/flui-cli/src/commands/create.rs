@@ -18,7 +18,7 @@ pub(crate) struct CreateOptions {
     /// never fails the command — so skipping it changes nothing about the
     /// scaffold, only how long `create` takes.
     pub(crate) skip_check: bool,
-    /// Generate the Flutter-parity hot-reload workspace (host/worker/types).
+    /// Generate the hot-reload workspace (host/worker/types).
     pub(crate) hot_reload: bool,
     /// Build the plan and report it without writing anything: no directory,
     /// no git init, no cargo check.

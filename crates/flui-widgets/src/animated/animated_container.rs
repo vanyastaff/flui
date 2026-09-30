@@ -19,7 +19,7 @@ use crate::{AnimatedBuilder, Container};
 /// Animates [`Container`]'s alignment, padding, color, width, height, and margin
 /// whenever any of them changes.
 ///
-/// Flutter parity: `widgets/implicit_animations.dart` `AnimatedContainer`. One
+/// One
 /// controller drives every property in lockstep over `duration` along `curve`.
 /// A property animates only across a present→present change; a property that
 /// appears or disappears snaps (no value to interpolate from/to). The
@@ -198,15 +198,12 @@ impl ViewState<AnimatedContainer> for AnimatedContainerState {
 
     fn did_update_view(&mut self, _old_view: &AnimatedContainer, new_view: &AnimatedContainer) {
         self.child = new_view.child.clone();
-        // Oracle: `controller.duration = widget.duration;` is unconditional
-        // (`implicit_animations.dart` `didUpdateWidget` (`controller.duration` set unconditionally)).
+        // The duration is pushed unconditionally.
         self.controller.set_duration(new_view.duration);
-        // Oracle: a curve-only change swaps the `CurvedAnimation` without
-        // restarting (`implicit_animations.dart` `didUpdateWidget` (curve swap via `_createCurve`)). The swap must
+        // A curve-only change swaps the `CurvedAnimation` without
+        // restarting. The swap must
         // happen BEFORE `t` is sampled below so a target-changed anchor
-        // reads the already-updated curve — matches
-        // `tween.evaluate(_animation)` reading the just-rebuilt `_animation`
-        // at `implicit_animations.dart` `didUpdateWidget` (`tween.evaluate(_animation)` after the curve swap). `build()` re-captures
+        // reads the already-updated curve. `build()` re-captures
         // `controller.curved()` fresh on every reconfigure (this widget
         // rebuilds via `AnimatedBuilder`), so there is no downstream
         // recompute to gate on the swap itself — only on a genuine target
@@ -223,9 +220,8 @@ impl ViewState<AnimatedContainer> for AnimatedContainerState {
         any_target_changed |= self.height.retarget(new_view.height, t);
         any_target_changed |= self.margin.retarget(new_view.margin, t);
         if any_target_changed {
-            // Oracle: `controller.forward(from: 0.0)`, gated strictly on
-            // `_constructTweens()` (a target change) — a curve-only change
-            // never restarts (`implicit_animations.dart` `didUpdateWidget` (`_constructTweens` gating `forward(from: 0.0)`)).
+            // Restart from zero, gated strictly on a target change — a
+            // curve-only change never restarts.
             self.controller.restart_from_zero();
         }
     }

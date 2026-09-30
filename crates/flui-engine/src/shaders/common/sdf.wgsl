@@ -62,7 +62,7 @@ fn sdRoundedBox(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
 /// Rounded superellipse (iOS-squircle) signed distance field.
 ///
 /// Same signature as `sdRoundedBox` so callers can `select` between them
-/// on a clip-kind flag (a `select`, not a branch — see `clipAlpha`). The corner curve uses Flutter's
+/// on a clip-kind flag (a `select`, not a branch — see `clipAlpha`). The corner curve uses the
 /// iOS-squircle parametric form with `n = 4` hardcoded. The interior
 /// (non-corner) regions reduce to the standard axis-aligned rect SDF.
 ///
@@ -73,8 +73,6 @@ fn sdRoundedBox(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
 /// p: point to test (centered at origin)
 /// b: half-extents (half width, half height)
 /// r: corner radii [top-left, top-right, bottom-right, bottom-left]
-///
-/// Reference: Flutter painting/clip.dart.
 fn sdRoundedSuperellipse(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
     // Per-corner radius selection (identical branchless pattern to
     // sdRoundedBox).

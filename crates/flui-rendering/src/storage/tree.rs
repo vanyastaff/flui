@@ -439,11 +439,8 @@ impl RenderTree {
     /// appends it to the parent's children list in one call, so the two
     /// directions of a render-tree edge can never be written independently.
     ///
-    /// Flutter equivalence: `RenderObject.adoptChild` (`rendering/object.dart`
-    /// @ tag `3.44.0`), which asserts `child._parent == null` and that
-    /// adopting will not introduce a cycle before wiring `child._parent =
-    /// this` and appending to the child list as one primitive — the same
-    /// two guards this method asserts below.
+    /// The method asserts that the child has no parent yet and that adopting
+    /// will not introduce a cycle before wiring both links as one primitive.
     ///
     /// [`insert_box_child`](Self::insert_box_child) /
     /// [`insert_sliver_child`](Self::insert_sliver_child) already bake the
@@ -476,10 +473,9 @@ impl RenderTree {
     ///   entry — the same asymmetry this primitive exists to prevent, just
     ///   moved to the donor side. A call site that legitimately moves a
     ///   child must [`drop_child`](Self::drop_child) it from its old parent
-    ///   first, matching Flutter's `assert(child._parent == null)`.
+    ///   first.
     /// - if `parent_id` is a descendant of `child_id` — adopting would
-    ///   close a cycle (`child_id` would become its own indirect ancestor),
-    ///   matching Flutter's cycle guard in `adoptChild`.
+    ///   close a cycle (`child_id` would become its own indirect ancestor).
     pub fn adopt_child(&mut self, parent_id: RenderId, child_id: RenderId) {
         // Both must resolve BEFORE either link is written — a stale id on
         // either side must leave both directions untouched.
@@ -516,9 +512,8 @@ impl RenderTree {
     /// children list AND clears the child's parent link in one call — the
     /// inverse of [`adopt_child`](Self::adopt_child).
     ///
-    /// Flutter equivalence: `RenderObject.dropChild` (`rendering/object.dart`
-    /// @ tag `3.44.0`), which asserts `child._parent == this` before clearing
-    /// `child._parent = null` and removing it from the child list as one
+    /// The method asserts the child's current parent is `parent_id` before
+    /// clearing the link and removing it from the child list as one
     /// primitive.
     ///
     /// Both ids must resolve for either link to be cleared: if either is
@@ -529,8 +524,7 @@ impl RenderTree {
     /// # Panics (debug only)
     ///
     /// If `child_id`'s current parent is not `parent_id` — the caller's
-    /// belief about the tree shape is wrong, matching Flutter's
-    /// `assert(child._parent == this)` in `dropChild`.
+    /// belief about the tree shape is wrong.
     pub fn drop_child(&mut self, parent_id: RenderId, child_id: RenderId) {
         if self.get(parent_id).is_none() || self.get(child_id).is_none() {
             return;
@@ -848,8 +842,8 @@ impl RenderTree {
     ///   (recursion blew at ~5000 with default Rust stack; the
     ///   iterative version is unbounded).
     /// - **Inline 32-deep buffer** via `SmallVec` covers the typical
-    ///   widget tree depth (Flutter's `RenderObject` paint trees
-    ///   measure ~20-40 deep in practice) without heap allocation.
+    ///   widget tree depth (render trees measure ~20-40 deep in
+    ///   practice) without heap allocation.
     ///   Deeper trees spill to heap automatically.
     /// - **No per-node child clone.** The recursive path called
     ///   `node.children().to_vec()` on every visit to dodge a borrow
@@ -861,7 +855,7 @@ impl RenderTree {
     ///
     /// Pre-order semantics preserved: children are pushed in
     /// **reverse** order so the work-stack pops them in original
-    /// child-order (mirrors Flutter's `visitChildren` shape).
+    /// child-order.
     ///
     /// A prior version of this comment claimed `extend_from_slice`.
     /// That was a copy-paste error from an earlier draft; reversing
@@ -1022,8 +1016,7 @@ mod tests {
     // adopt_child / drop_child
     // ========================================================================
 
-    /// Adopting a node's own ancestor would close a cycle — rejected the
-    /// same way Flutter's `adoptChild` guards against it.
+    /// Adopting a node's own ancestor would close a cycle and is rejected.
     #[test]
     // Debug-only: the guard compiles out in release, where `#[should_panic]`
     // would otherwise report "did not panic as expected".

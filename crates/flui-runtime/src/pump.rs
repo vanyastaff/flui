@@ -5,7 +5,7 @@
 //! The host decides *whether* a wake becomes a frame (its per-backend wake
 //! gate, ADR-0058); the pump is the frame itself once that gate says render.
 
-/// Where a pump reads its frame's timestamp (Flutter's vsync time).
+/// Where a pump reads its frame's timestamp (the vsync time).
 ///
 /// Read once per pump and handed to the scheduler's begin frame (its frame
 /// timing, and the timestamp every transient and post-frame callback

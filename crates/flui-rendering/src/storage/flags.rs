@@ -1,22 +1,22 @@
-//! Lock-free render state flags with Flutter compliance.
+//! Lock-free render state flags.
 //!
-//! This module implements Flutter's RenderObject dirty flag system using atomic
+//! This module implements the render object dirty-flag system using atomic
 //! operations for thread-safe, lock-free access. All operations are single
 //! atomic instructions with no locks or contention.
 //!
-//! # Flutter RenderObject Flags
+//! # Render object flags
 //!
-//! Flutter tracks multiple boolean flags on each RenderObject:
-//! - `_needsLayout` - Layout computation required
-//! - `_needsPaint` - Paint pass required
-//! - `_needsCompositingBitsUpdate` - Compositing layer update required
-//! - `_needsSemanticsUpdate` - Accessibility update required
+//! Each render object tracks multiple boolean flags:
+//! - needs layout - Layout computation required
+//! - needs paint - Paint pass required
+//! - needs compositing bits update - Compositing layer update required
+//! - needs semantics update - Accessibility update required
 //!
-//! Additionally, Flutter has boundary flags:
-//! - `isRepaintBoundary` - Creates compositing layer
-//! - Relayout boundary (computed, not stored as flag)
+//! Additionally, there are boundary flags:
+//! - repaint boundary - Creates compositing layer
+//! - relayout boundary - Isolates layout changes
 //!
-//! # FLUI Implementation
+//! # Implementation
 //!
 //! We use a single `AtomicU32` bitset for all flags, providing:
 //! - **O(1) flag mutations** (fetch_or / fetch_and / fetch_xor)
@@ -65,14 +65,14 @@
 //! flags.remove(RenderFlags::NEEDS_LAYOUT);
 //! ```
 //!
-//! ## Flutter-Style API
+//! ## Convenience API
 //!
 //! ```rust
 //! use flui_rendering::storage::AtomicRenderFlags;
 //!
 //! let flags = AtomicRenderFlags::empty();
 //!
-//! // Flutter-style methods
+//! // Named marking methods
 //! flags.mark_needs_layout();
 //! assert!(flags.needs_layout());
 //!
@@ -124,17 +124,6 @@ bitflags! {
     /// ## State Flags (computed properties)
     /// - `HAS_OVERFLOW` - Overflow detected (debug only)
     ///
-    /// # Flutter Equivalents
-    ///
-    /// | FLUI Flag | Flutter Property |
-    /// |-----------|------------------|
-    /// | `NEEDS_LAYOUT` | `_needsLayout` |
-    /// | `NEEDS_PAINT` | `_needsPaint` |
-    /// | `NEEDS_COMPOSITING` | `_needsCompositingBitsUpdate` |
-    /// | `NEEDS_SEMANTICS` | `_needsSemanticsUpdate` |
-    /// | `IS_REPAINT_BOUNDARY` | `isRepaintBoundary` |
-    /// | `IS_RELAYOUT_BOUNDARY` | (computed via `_relayoutBoundary`) |
-    ///
     /// # Memory Layout
     ///
     /// Stored as a single `u32` (4 bytes) with bit positions:
@@ -163,8 +152,6 @@ bitflags! {
         /// - Constraints change
         /// - Children added/removed
         /// - Properties affecting layout change
-        ///
-        /// Flutter equivalent: `_needsLayout = true`
         const NEEDS_LAYOUT = 1 << 0;
 
         /// Painting pass required.
@@ -173,8 +160,6 @@ bitflags! {
         /// - Visual properties change (color, opacity, etc.)
         /// - Layout changes (implies paint)
         /// - Decoration changes
-        ///
-        /// Flutter equivalent: `_needsPaint = true`
         const NEEDS_PAINT = 1 << 1;
 
         /// Compositing bits update required.
@@ -183,8 +168,6 @@ bitflags! {
         /// - Repaint boundary status changes
         /// - Opacity changes
         /// - Transform changes requiring new layer
-        ///
-        /// Flutter equivalent: `_needsCompositingBitsUpdate = true`
         const NEEDS_COMPOSITING = 1 << 2;
 
         /// Semantics (accessibility) update required.
@@ -193,8 +176,6 @@ bitflags! {
         /// - Semantic properties change
         /// - Structure changes affecting a11y tree
         /// - Label or hint text changes
-        ///
-        /// Flutter equivalent: `_needsSemanticsUpdate = true`
         const NEEDS_SEMANTICS = 1 << 5;
 
         // ===== Boundary Flags (Optimization) =====
@@ -204,8 +185,6 @@ bitflags! {
         /// When set, layout changes don't propagate to parent.
         /// This creates a relayout boundary that limits the scope
         /// of layout computation.
-        ///
-        /// Flutter equivalent: `_relayoutBoundary == this`
         const IS_RELAYOUT_BOUNDARY = 1 << 3;
 
         /// Paint change isolation boundary.
@@ -213,8 +192,6 @@ bitflags! {
         /// When set, creates a compositing layer that can be
         /// cached and reused. Paint changes below this boundary
         /// don't require repainting ancestors.
-        ///
-        /// Flutter equivalent: `isRepaintBoundary == true`
         const IS_REPAINT_BOUNDARY = 1 << 4;
 
         // ===== State Flags (Computed Properties) =====
@@ -248,15 +225,9 @@ bitflags! {
         /// when a node is painted. Read by compositing-bits propagation to
         /// detect a transition into or out of repaint-boundary status.
         ///
-        /// Hoisted off the `RenderObject<P>` trait surface (Flutter stores
-        /// this on the render object as `_wasRepaintBoundary`; in FLUI it
-        /// lives here so the paint phase can flip the bit through a single
-        /// atomic store rather than acquiring a write lock on the trait
-        /// object). This flag was
-        /// introduced alongside the refactor that removed the
-        /// `RwLock<Box<dyn RenderObject<P>>>` field.
-        ///
-        /// Flutter equivalent: `_wasRepaintBoundary` field on `RenderObject`.
+        /// It lives here rather than on the `RenderObject<P>` trait surface so
+        /// the paint phase can flip the bit through a single atomic store
+        /// rather than acquiring a write lock on the trait object.
         const WAS_REPAINT_BOUNDARY = 1 << 10;
 
         /// Marks a node whose compositing-bits subtree walk must be
@@ -271,17 +242,13 @@ bitflags! {
         ///
         /// Set through
         /// [`PipelineOwner::mark_needs_compositing_bits_update`](crate::pipeline::PipelineOwner::mark_needs_compositing_bits_update),
-        /// which performs the Flutter-equivalent ancestor walk before it
+        /// which performs the ancestor walk before it
         /// queues the responsible root. Setting this flag and pushing a raw
         /// queue entry separately is insufficient because it can skip that
         /// walk.
         ///
         /// Cleared by `run_compositing` after the subtree walk finishes
         /// (analogous to how `NEEDS_LAYOUT` clears post-layout).
-        ///
-        /// Flutter equivalent: `_needsCompositingBitsUpdate` (the
-        /// dirty-queue signal). `NEEDS_COMPOSITING` aligns with
-        /// Flutter's per-node `needsCompositing` computed-property.
         const NEEDS_COMPOSITING_BITS_UPDATE = 1 << 11;
 
         /// The geometry this node last committed came from a pass that read a
@@ -308,9 +275,6 @@ bitflags! {
         /// boundary it enqueues is not either. Paint always wins — see
         /// `Scheduler::mark_needs_composited_layer_update`, which refuses to
         /// set this on a node already needing paint.
-        ///
-        /// Flutter equivalent: `_needsCompositedLayerUpdate = true`
-        /// (`object.dart`, `markNeedsCompositedLayerUpdate`).
         const NEEDS_COMPOSITED_LAYER_UPDATE = 1 << 13;
     }
 }
@@ -456,14 +420,14 @@ impl fmt::Display for RenderFlags {
 /// assert!(flags.needs_paint());
 /// ```
 ///
-/// ## Flutter-Style API
+/// ## Convenience API
 ///
 /// ```rust
 /// use flui_rendering::storage::AtomicRenderFlags;
 ///
 /// let flags = AtomicRenderFlags::empty();
 ///
-/// // Mark dirty (Flutter style)
+/// // Mark dirty
 /// flags.mark_needs_layout();
 /// flags.mark_needs_paint();
 ///
@@ -668,12 +632,10 @@ impl AtomicRenderFlags {
     }
 
     // ========================================================================
-    // FLUTTER-STYLE API (High-Level Convenience)
+    // HIGH-LEVEL CONVENIENCE API
     // ========================================================================
 
     /// Marks the render object as needing layout.
-    ///
-    /// Flutter equivalent: `markNeedsLayout()`
     ///
     /// # Examples
     ///
@@ -711,8 +673,6 @@ impl AtomicRenderFlags {
 
     /// Checks if the render object needs layout.
     ///
-    /// Flutter equivalent: `_needsLayout` (private field)
-    ///
     /// # Examples
     ///
     /// ```rust
@@ -729,8 +689,6 @@ impl AtomicRenderFlags {
     }
 
     /// Marks the render object as needing paint.
-    ///
-    /// Flutter equivalent: `markNeedsPaint()`
     ///
     /// # Examples
     ///
@@ -755,8 +713,6 @@ impl AtomicRenderFlags {
     }
 
     /// Checks if the render object needs paint.
-    ///
-    /// Flutter equivalent: `_needsPaint` (private field)
     #[inline]
     pub fn needs_paint(&self) -> bool {
         self.contains(RenderFlags::NEEDS_PAINT)
@@ -764,8 +720,7 @@ impl AtomicRenderFlags {
 
     /// Marks the render object as needing a composited-layer update.
     ///
-    /// Flutter equivalent: the `_needsCompositedLayerUpdate = true` half of
-    /// `markNeedsCompositedLayerUpdate()`. The eligibility decision and the
+    /// Only sets the flag. The eligibility decision and the
     /// enqueue live in `Scheduler::mark_needs_composited_layer_update`.
     #[inline]
     pub fn mark_needs_composited_layer_update(&self) {
@@ -782,16 +737,12 @@ impl AtomicRenderFlags {
     }
 
     /// Checks if the render object needs a composited-layer update.
-    ///
-    /// Flutter equivalent: `_needsCompositedLayerUpdate` (private field)
     #[inline]
     pub fn needs_composited_layer_update(&self) -> bool {
         self.contains(RenderFlags::NEEDS_COMPOSITED_LAYER_UPDATE)
     }
 
     /// Marks the render object as needing compositing update.
-    ///
-    /// Flutter equivalent: `markNeedsCompositingBitsUpdate()`
     #[inline]
     pub fn mark_needs_compositing(&self) {
         self.set(RenderFlags::NEEDS_COMPOSITING);
@@ -804,8 +755,6 @@ impl AtomicRenderFlags {
     }
 
     /// Checks if the render object needs compositing update.
-    ///
-    /// Flutter equivalent: `_needsCompositingBitsUpdate` (private field)
     #[inline]
     pub fn needs_compositing(&self) -> bool {
         self.contains(RenderFlags::NEEDS_COMPOSITING)
@@ -819,8 +768,6 @@ impl AtomicRenderFlags {
     /// [`PipelineOwner::mark_needs_compositing_bits_update`](crate::pipeline::PipelineOwner::mark_needs_compositing_bits_update),
     /// whereas `NEEDS_COMPOSITING` is the *computed result* of the
     /// walk.
-    ///
-    /// Flutter equivalent: setting `_needsCompositingBitsUpdate = true`.
     #[inline]
     pub fn mark_needs_compositing_bits_update(&self) {
         self.set(RenderFlags::NEEDS_COMPOSITING_BITS_UPDATE);
@@ -836,16 +783,12 @@ impl AtomicRenderFlags {
     }
 
     /// Checks if the render object's compositing-bits walk is queued.
-    ///
-    /// Flutter equivalent: `_needsCompositingBitsUpdate` (private field).
     #[inline]
     pub fn needs_compositing_bits_update(&self) -> bool {
         self.contains(RenderFlags::NEEDS_COMPOSITING_BITS_UPDATE)
     }
 
     /// Marks the render object as needing semantics update.
-    ///
-    /// Flutter equivalent: `markNeedsSemanticsUpdate()`
     #[inline]
     pub fn mark_needs_semantics(&self) {
         self.set(RenderFlags::NEEDS_SEMANTICS);
@@ -858,8 +801,6 @@ impl AtomicRenderFlags {
     }
 
     /// Checks if the render object needs semantics update.
-    ///
-    /// Flutter equivalent: `_needsSemanticsUpdate` (private field)
     #[inline]
     pub fn needs_semantics(&self) -> bool {
         self.contains(RenderFlags::NEEDS_SEMANTICS)
@@ -888,8 +829,6 @@ impl AtomicRenderFlags {
     }
 
     /// Checks if this is a relayout boundary.
-    ///
-    /// Flutter equivalent: `_relayoutBoundary == this`
     #[inline]
     pub fn is_relayout_boundary(&self) -> bool {
         self.contains(RenderFlags::IS_RELAYOUT_BOUNDARY)
@@ -918,8 +857,6 @@ impl AtomicRenderFlags {
     }
 
     /// Checks if this is a repaint boundary.
-    ///
-    /// Flutter equivalent: `isRepaintBoundary` (getter)
     #[inline]
     pub fn is_repaint_boundary(&self) -> bool {
         self.contains(RenderFlags::IS_REPAINT_BOUNDARY)
@@ -930,8 +867,6 @@ impl AtomicRenderFlags {
     /// Written by the paint phase after a node is painted. Reads happen
     /// in compositing-bits propagation to detect repaint-boundary state
     /// transitions.
-    ///
-    /// Flutter equivalent: `_wasRepaintBoundary = value` (field assignment).
     #[inline]
     pub fn set_was_repaint_boundary(&self, was_boundary: bool) {
         if was_boundary {
@@ -942,8 +877,6 @@ impl AtomicRenderFlags {
     }
 
     /// Returns the previous-frame repaint-boundary value.
-    ///
-    /// Flutter equivalent: `_wasRepaintBoundary` (field read).
     #[inline]
     pub fn was_repaint_boundary(&self) -> bool {
         self.contains(RenderFlags::WAS_REPAINT_BOUNDARY)

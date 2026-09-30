@@ -88,8 +88,8 @@ impl GrowthDirection {
 
     /// Applies growth direction to an axis direction.
     ///
-    /// Mirrors Flutter's `applyGrowthDirectionToAxisDirection`: forward growth
-    /// keeps the axis direction, while reverse growth uses its opposite.
+    /// Forward growth keeps the axis direction, while reverse growth uses its
+    /// opposite.
     #[inline]
     #[must_use]
     pub const fn apply_to_axis_direction(self, axis_direction: AxisDirection) -> AxisDirection {
@@ -133,8 +133,7 @@ impl fmt::Display for GrowthDirection {
 
 /// Applies growth direction to the user scroll direction.
 ///
-/// Mirrors Flutter's composition inside `RenderViewport.layoutChildSequence`:
-/// reverse growth flips the scroll direction; forward growth preserves it.
+/// Reverse growth flips the scroll direction; forward growth preserves it.
 #[inline]
 #[must_use]
 pub fn apply_growth_direction_to_scroll_direction(
@@ -154,8 +153,6 @@ pub fn apply_growth_direction_to_scroll_direction(
 }
 
 /// Whether sliver content is laid out in the "right way up" reading direction.
-///
-/// Mirrors Flutter's `RenderSliverHelpers.rightWayUp`.
 #[inline]
 #[must_use]
 pub const fn right_way_up(

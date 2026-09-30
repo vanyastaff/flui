@@ -1,8 +1,7 @@
 //! Platform haptic feedback capability
 //!
-//! Flutter's `services` package is deliberately dissolved in FLUI
-//! (`docs/FOUNDATIONS.md`); its haptics residue becomes a capability trait
-//! here, following the identical template `PlatformTextInput`'s module doc
+//! FLUI has no standalone `services` layer (`docs/FOUNDATIONS.md`); haptics
+//! is a capability trait here, following the identical template `PlatformTextInput`'s module doc
 //! promised: [`PlatformHaptics`] is reached through
 //! [`PlatformWindow::haptics`](crate::PlatformWindow::haptics) — a fallible accessor returning
 //! `Option<Arc<dyn _>>`, not a method bolted
@@ -20,7 +19,7 @@
 //! [`HapticFeedback`] variant is the *same* operation ("perform
 //! this feedback kind") with no argument beyond which kind. Eight discrete
 //! `fn vibrate(&self)`, `fn light_impact(&self)`, ... methods would make
-//! adding a ninth kind (Flutter's own vocabulary already grew once, see
+//! adding a ninth kind (the vocabulary has already grown once, see
 //! [`HapticFeedback`]'s module doc) a breaking change to this
 //! trait. A single `perform(&self, HapticFeedback)` makes the same addition
 //! a non-breaking enum variant instead — deliberately diverging from
@@ -68,8 +67,7 @@ use crate::HapticFeedback;
 /// `perform` has no return value and cannot fail from a caller's
 /// perspective: a device/OS/permission combination that cannot honor the
 /// request performs no feedback and returns nothing to indicate that,
-/// mirroring Flutter's own `HapticFeedback` degradation contract (see
-/// [`HapticFeedback`]'s module doc).
+/// per the degradation contract in [`HapticFeedback`]'s module doc.
 pub trait PlatformHaptics: Send + Sync {
     /// Perform the given haptic feedback on this window, best-effort.
     fn perform(&self, feedback: HapticFeedback);

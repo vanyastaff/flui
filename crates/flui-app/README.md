@@ -1,22 +1,11 @@
 # flui-app
 
-**The application layer — where the three trees meet the platform.**
+**The application layer — where the trees meet the platform.**
 
 `flui-app` is the top of the framework stack: it owns the `run_app` entry
 point, constructs an owner-affine `UiRealm`, hosts the process services still
 being extracted by ADR-0027, and drives the frame loop that turns platform
-callbacks into build → layout → paint → composite passes. FLUI preserves
-Flutter's tree behavior without copying its process/runtime topology:
-
-| FLUI | Flutter |
-|------|---------|
-| `UiRealm` + `AppRuntime` | `WidgetsFlutterBinding` |
-| `run_app` / `run_app_with_config` | `runApp` |
-| `WidgetsBinding` | `WidgetsBinding` |
-| `RenderingFlutterBinding` + `PipelineOwner` | `RendererBinding` |
-| `GestureBinding` / `UpdateScheduler` | `GestureBinding` / `SchedulerBinding` |
-| `flui_painting::shared_font_system()` (installed by `AppRuntime`) | `PaintingBinding` |
-| per-presentation `SemanticsHost` | `SemanticsBinding` |
+callbacks into build → layout → paint → composite passes.
 
 Part of the [FLUI](https://github.com/vanyastaff/flui) workspace — pre-release,
 consumed by path (not published to crates.io).
@@ -30,7 +19,7 @@ run_app(view)                       — bootstrap: window, GPU surface, frame lo
 UiRealm (owner-affine, !Send + !Sync)
     ├── WidgetsBinding              — View → Element, BuildOwner, GlobalKey scope
     ├── GestureBinding              — single-presentation pointer state
-    ├── RenderingFlutterBinding     — render-view registry, first-frame gate
+    ├── RenderingBinding     — render-view registry, first-frame gate
     └── UpdateScheduler             — frame callbacks, animation tickers (flui-scheduler);
                                       one fresh instance per realm, never shared
 
@@ -56,7 +45,7 @@ AppRuntime (loop-scoped composition root)
   backend (the fix is ADR-0039's `on_ready` reorder), has no input handling,
   and does no damage tracking.
 - **Lifecycle** — `flui_scheduler::AppLifecycleState` (resumed, inactive,
-  hidden, paused, detached) is the canonical Flutter-parity state; the
+  hidden, paused, detached) is the canonical state; the
   runner drives `UpdateScheduler::handle_app_lifecycle_state_change` directly at
   bootstrap/shutdown (ADR-0035).
 - **Frame loop** — on-demand rendering: a frame runs only when the tree is
@@ -79,7 +68,7 @@ that implement it are tracked in issue #573.
 ## Known architectural debt
 
 Singleton retirement is complete: `WidgetsBinding`, `GestureBinding`,
-`RenderingFlutterBinding`, `UpdateScheduler`, and GlobalKey identity are all
+`RenderingBinding`, `UpdateScheduler`, and GlobalKey identity are all
 realm-owned now — `AppBinding` is deleted, not slimmed, and no test needs a
 serialization guard against shared binding state any more (each test
 constructs its own independent realm). `AppRuntime` now hosts any number of

@@ -12,9 +12,8 @@
 //! pipeline obtains via `&mut RenderTree` at phase boundaries (Build / Layout
 //! / Paint). The previous shape `RwLock<Box<dyn RenderObject<P>>>` is
 //! deliberately gone. Single-writer-per-frame discipline is enforced by Rust's
-//! borrow checker on `&mut RenderTree`, matching Flutter's single-threaded
-//! pipeline invariant (`_debugDoingThisLayout` / `_debugDoingThisPaint`
-//! debug asserts in `.flutter/flutter-master/packages/flutter/lib/src/rendering/object.dart`).
+//! borrow checker on `&mut RenderTree`, which is the single-threaded
+//! pipeline invariant.
 //!
 //! Pipeline bookkeeping bits that previously required a write lock on the
 //! trait object (specifically `set_was_repaint_boundary`) now live on
@@ -462,7 +461,7 @@ impl<P: Protocol> RenderEntry<P> {
 
         // Bootstrap the per-instance `IS_RELAYOUT_BOUNDARY` flag now
         // that constraints are populated. For `BoxProtocol`, dispatches
-        // to `compute_relayout_boundary` (Flutter `!parent_uses_size ||
+        // to `compute_relayout_boundary` (`!parent_uses_size ||
         // sized_by_parent || constraints.is_tight() || !has_parent`);
         // for `SliverProtocol`, no-op (relayout-boundary semantics not
         // used). Before this bootstrap runs, `PipelineOwner::mark_needs_layout`

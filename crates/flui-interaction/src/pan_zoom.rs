@@ -1,6 +1,6 @@
 //! Trackpad pan/zoom pointer events.
 //!
-//! Flutter 3.27+ exposes a single trackpad gesture source as three distinct
+//! A single trackpad gesture source is exposed as three distinct
 //! [`PointerPanZoomEvent`] variants — `Start`, `Update`, `End` — each carrying
 //! the information its stage needs. The `Update` variant carries the running
 //! pan offset, the per-event pan delta, the cumulative scale, and the
@@ -14,7 +14,7 @@
 //! `ScaleGestureRecognizer` (which needs both pan and scale) to coexist
 //! against the same event stream.
 //!
-//! This module introduces a Flutter-flavoured sum type that:
+//! This module introduces a sum type that:
 //!
 //! - is consumed by the gesture recognizer layer (no W3C enum unpacking in
 //!   recognizer code),
@@ -46,9 +46,6 @@
 //!     // recognizer sees the running pan delta
 //! }
 //! ```
-//!
-//! Flutter reference:
-//! <https://api.flutter.dev/flutter/gestures/PointerPanZoomEvent-class.html>
 
 use crate::PointerDeviceKind;
 use flui_foundation::geometry::Offset;
@@ -79,7 +76,7 @@ fn px_f32(v: f64) -> f64 {
 
 /// A trackpad pan/zoom pointer event.
 ///
-/// Sum type over three Flutter-aligned stages. The `Start` and `End` stages
+/// Sum type over three stages. The `Start` and `End` stages
 /// only carry pointer identity, current position, and a wall-clock
 /// timestamp; the `Update` stage additionally carries the cumulative pan
 /// offset, the per-event pan delta, the cumulative scale (1.0 = no zoom),
@@ -89,7 +86,7 @@ fn px_f32(v: f64) -> f64 {
 pub enum PointerPanZoomEvent {
     /// Trackpad pan/zoom began on this pointer.
     ///
-    /// Mirrors Flutter's `PointerPanZoomStartEvent`. Carries no
+    /// Carries no
     /// pan/scale/rotation deltas — those are introduced in [`Self::Update`].
     Start {
         /// Stable pointer id (primary for the only pointer in a trackpad
@@ -108,7 +105,7 @@ pub enum PointerPanZoomEvent {
 
     /// Trackpad pan/zoom update on this pointer.
     ///
-    /// Mirrors Flutter's `PointerPanZoomUpdateEvent`. Carries the
+    /// Carries the
     /// cumulative `pan` offset, the per-event `pan_delta`, the cumulative
     /// `scale` (1.0 = identity), and the cumulative `rotation` in radians.
     Update {
@@ -133,7 +130,7 @@ pub enum PointerPanZoomEvent {
 
     /// Trackpad pan/zoom ended on this pointer.
     ///
-    /// Mirrors Flutter's `PointerPanZoomEndEvent`. Carries the final
+    /// Carries the final
     /// pointer position only — final pan/scale/rotation are zero by
     /// convention (the gesture is over).
     End {
@@ -222,7 +219,7 @@ impl PointerPanZoomEvent {
 // Conversion from upstream W3C event
 // ============================================================================
 
-/// Convert upstream [`PointerEvent::Gesture`] to a Flutter-flavoured
+/// Convert upstream [`PointerEvent::Gesture`] to a
 /// [`PointerPanZoomEvent`].
 ///
 /// Returns `None` for any non-`Gesture` upstream event.
@@ -238,8 +235,7 @@ impl PointerPanZoomEvent {
 /// when one becomes available. This conversion is a *type-level*
 /// un-collapse, not a magic source of pan data.
 ///
-/// `Pinch` maps to `scale = 1.0 + pinch` (Flutter's `PointerPanZoomUpdateEvent.scale`
-/// semantics). `Rotate` passes through as the cumulative rotation in
+/// `Pinch` maps to `scale = 1.0 + pinch`. `Rotate` passes through as the cumulative rotation in
 /// radians. The `Start` / `End` transition is signalled by the upstream
 /// `PointerButtons` state (pressed vs released) which on most platforms
 /// is *not* a reliable indicator for trackpad gestures — so the default

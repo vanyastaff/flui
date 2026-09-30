@@ -1,12 +1,5 @@
 //! [`GlobalWidgetsLocalizations`] — direction-aware widgets localizations
 //! for any locale.
-//!
-//! Flutter parity: `GlobalWidgetsLocalizations` /
-//! `_WidgetsLocalizationsDelegate`
-//! (`flutter_localizations/lib/src/widgets_localizations.dart`), and the
-//! generated per-language `TextDirection` assignments in
-//! `flutter_localizations/lib/src/l10n/generated_widgets_localizations.dart`
-//! (oracle tag `3.44.0`).
 
 use flui_painting::typography::TextDirection;
 use flui_platform_api::Locale;
@@ -16,27 +9,18 @@ use super::{
     WidgetsLocalizations,
 };
 
-/// The set of [`Locale::language`] codes the oracle's generated
-/// `WidgetsLocalization*` classes construct with `TextDirection.rtl`:
+/// The set of [`Locale::language`] codes resolved as right-to-left:
 /// Arabic, Farsi (Persian), Hebrew, Pashto, Urdu.
 ///
-/// Oracle citation: every `class WidgetsLocalization<Xx> extends
-/// GlobalWidgetsLocalizations` in
-/// `generated_widgets_localizations.dart` whose constructor body is
-/// `super(TextDirection.rtl)` — checked directly against the generated
-/// source, not the class doc comment on `GlobalWidgetsLocalizations`, which
-/// **additionally** lists `sd` (Sindhi) as RTL. That listing is stale: no
-/// `WidgetsLocalizationSd` class exists in the generated file, and `sd` is
-/// absent from `kWidgetsSupportedLanguages`. This port follows the generated
-/// code's actual behavior, not the doc comment describing it.
+/// Sindhi (`sd`) is deliberately absent: it is sometimes listed as RTL, but
+/// there is no shipped Sindhi widgets localization to resolve it against.
 pub const RTL_LANGUAGES: &[&str] = &["ar", "fa", "he", "ps", "ur"];
 
 /// Localized widgets resources for any [`Locale`], with a correctly-resolved
 /// [`TextDirection`] and — for now — [`DefaultWidgetsLocalizations`]'s
 /// English strings for every other field.
 ///
-/// **Deferred:** per-language translated strings (the oracle's ~80-language
-/// generated `getWidgetsTranslation` switch) are not ported. Every
+/// **Deferred:** per-language translated strings are not provided. Every
 /// `GlobalWidgetsLocalizations` instance, regardless of locale, returns the
 /// same English `copy_button_label`/`reorder_item_up`/etc. as
 /// [`DefaultWidgetsLocalizations`] — only [`text_direction`](Self::text_direction)
@@ -125,9 +109,6 @@ impl WidgetsLocalizations for GlobalWidgetsLocalizations {
 /// A [`LocalizationsDelegate`] that resolves a [`GlobalWidgetsLocalizations`]
 /// for any locale — the multi-language counterpart of
 /// [`DefaultWidgetsLocalizationsDelegate`](super::DefaultWidgetsLocalizationsDelegate), which is always LTR.
-///
-/// Flutter parity: `GlobalWidgetsLocalizations.delegate`
-/// (`_WidgetsLocalizationsDelegate` in `widgets_localizations.dart`).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GlobalWidgetsLocalizationsDelegate;
 
@@ -135,12 +116,11 @@ impl LocalizationsDelegate for GlobalWidgetsLocalizationsDelegate {
     type Resources = BoxedWidgetsLocalizations;
 
     /// Always `true` — every locale gets a [`GlobalWidgetsLocalizations`]
-    /// (correct direction, English strings). Flutter's own delegate instead
-    /// gates on `kWidgetsSupportedLanguages`, a proxy for "does this locale
-    /// have translated strings"; since this port has no translated strings
-    /// for *any* locale yet (see [`GlobalWidgetsLocalizations`]'s docs), that
-    /// gate would only ever produce false negatives here, not a meaningful
-    /// signal — so every locale is accepted instead.
+    /// (correct direction, English strings). Gating on "does this locale
+    /// have translated strings" would only ever produce false negatives,
+    /// since there are no translated strings for *any* locale yet (see
+    /// [`GlobalWidgetsLocalizations`]'s docs) — so every locale is accepted
+    /// instead.
     fn is_supported(&self, _locale: &Locale) -> bool {
         true
     }

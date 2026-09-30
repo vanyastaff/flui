@@ -8,11 +8,6 @@ use crate::constraints::BoxConstraints;
 ///
 /// This configuration defines the size constraints and device pixel ratio
 /// for the root of the render tree.
-///
-/// # Flutter Equivalence
-///
-/// Corresponds to Flutter's `ViewConfiguration` class from
-/// `rendering/view.dart`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ViewConfiguration {
     /// The constraints of the output surface in physical pixels.

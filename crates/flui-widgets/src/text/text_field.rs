@@ -1,9 +1,7 @@
 //! [`RawTextField`] — an [`EditableText`] with a plain border decoration and
 //! tap-to-focus behavior, for callers with no `Theme` ancestor.
 //!
-//! **Not a Flutter-parity port.** Flutter has no widgets-layer text field —
-//! `material/text_field.dart`'s `TextField` is the *only* oracle, and its
-//! parity claim belongs to
+//! The themed text field lives in
 //! [`flui_material::TextField`](https://docs.rs/flui-material) (M3
 //! decoration via `InputDecorator`, live focus/enabled/error plumbing, theme
 //! colors). This type is this crate's own plain stand-in: a fixed 1px

@@ -11,8 +11,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// Provides a canvas for a background and/or foreground [`CustomPainter`] to
 /// draw on, around an optional child.
 ///
-/// Flutter parity: `widgets/basic.dart` `CustomPaint` over
-/// `RenderCustomPaint`. Paint order is background painter → child →
+/// Paint order is background painter → child →
 /// foreground painter. Sizes to the child when present, else to
 /// [`Self::size`] (default [`Size::ZERO`]) constrained by the incoming
 /// layout constraints.

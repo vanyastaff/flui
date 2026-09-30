@@ -2,14 +2,12 @@
 
 Hit testing records which render objects are under a pointer and how to
 transform the event into each target's local coordinate space. Ordinary pointer
-delivery follows Flutter's `GestureBinding.dispatchEvent` semantics: dispatch is
-leaf-first, synchronous, localized per entry, and every hit target receives the
+delivery is leaf-first, synchronous, localized per entry, and every hit target receives the
 event.
 
 A handler is invoked with a `PointerDispatch`, not a bare event: `local` is the
 event rewritten into that entry's own space, `global` is the platform's own
-value passed through untouched. Flutter carries the same pair on `PointerEvent`
-itself (`localPosition` and `position`); FLUI's pointer events are `ui_events`
+value passed through untouched. FLUI's pointer events are `ui_events`
 types with room for exactly one position, so the pair travels beside the event.
 Both halves borrow values the dispatch already owns, so carrying the second one
 costs no clone.
@@ -42,7 +40,7 @@ the resolved route from Down through Up/Cancel:
 4. Cancel: invoke cached route so recognizers reject themselves, release route;
    the binding does not sweep and force a winner.
 
-This preserves Flutter's retained hit-target behavior while keeping render data
+Retaining the hit targets this way keeps render data
 `Send + Sync`. If a target unmounts after Down, new hit tests will miss it, but
 the active route keeps the owner-local handler cell alive until Up/Cancel.
 
@@ -115,14 +113,6 @@ child was moved into the child's own frame.**
 - Sliver→box, both paths: `box_hit_offset_from_sliver_position` always
   decomposes the main-axis position into box-local coordinates, override or
   not, so both push.
-
-This matches Flutter, which has no override-position concept for slivers at
-all — every `hitTestChildren` override both repositions and pushes in the
-same call: `RenderSliverHelpers::hitTestBoxChild` and
-`RenderSliverPadding::hitTestChildren` (`rendering/sliver.dart`,
-`rendering/sliver_padding.dart`) always route through
-`SliverHitTestResult::addWithAxisOffset`, which unconditionally pushes
-`paintOffset` when it is non-null.
 
 ## HitTestBehavior
 

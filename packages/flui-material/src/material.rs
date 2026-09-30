@@ -1,9 +1,8 @@
 //! [`Material`] — a piece of material: a colored, elevated, shaped surface.
 //!
-//! # Flutter parity
+//! # Responsibilities
 //!
-//! `material.dart`'s `Material` widget (oracle tag `3.44.0`). `Material` is
-//! responsible for three things (oracle doc, `material.dart` `:112-118`):
+//! `Material` is responsible for three things:
 //! clipping to a shape, elevating on the Z axis with a shadow, and hosting
 //! ink effects (splashes/highlights) below its children. This substrate
 //! ships the first two; see "Scope" below for the third.
@@ -47,8 +46,8 @@
 //!
 //! # Scope: no ink-features registry
 //!
-//! Flutter's `Material` doubles as a `MaterialInkController`: an
-//! `_RenderInkFeatures` render object that ink effects (`InkSplash`,
+//! A full `Material` also acts as an ink controller: a
+//! render object that ink effects (`InkSplash`,
 //! `InkHighlight`) register onto and paint through, so a splash can bleed
 //! outside its originating `InkWell`'s bounds when the `Material` ancestor
 //! is larger. **This substrate ships no such registry** — [`crate::ink_well`]'s
@@ -88,7 +87,7 @@ use flui_sdk::view::{Child, IntoView, RenderView, impl_render_view};
 
 use crate::shape::MaterialShape;
 
-/// A colored, elevated, shaped surface — Flutter's `Material`.
+/// A colored, elevated, shaped surface.
 ///
 /// See the module docs for what this V1 does and does not implement
 /// (clipping + elevation + shadow: yes; ink-feature registry, implicit
@@ -104,9 +103,8 @@ pub struct Material {
 
 impl Material {
     /// A flat (`elevation: 0`), sharp-cornered (`MaterialShape::rectangle()`),
-    /// unclipped (`Clip::None`) surface painted `color` — Flutter's
-    /// `Material(color: color)` with every other parameter left at its
-    /// oracle default.
+    /// unclipped (`Clip::None`) surface painted `color`, with every other
+    /// parameter left at its default.
     #[must_use]
     pub fn new(color: Color) -> Self {
         Self {
@@ -146,9 +144,7 @@ impl Material {
         self
     }
 
-    /// Sets the clip behavior. Defaults to [`Clip::None`] — Flutter parity:
-    /// `Material.clipBehavior` defaults to `Clip.none` "for performance
-    /// considerations" (oracle doc, `material.dart`).
+    /// Sets the clip behavior. Defaults to [`Clip::None`], for performance.
     #[must_use]
     pub fn clip_behavior(mut self, clip_behavior: Clip) -> Self {
         self.clip_behavior = clip_behavior;

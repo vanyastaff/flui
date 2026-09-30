@@ -1,8 +1,6 @@
 //! Stack layout types
 
 /// How a `Stack` sizes its non-positioned children.
-///
-/// Mirrors Flutter's `StackFit`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum StackFit {

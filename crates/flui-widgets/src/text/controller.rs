@@ -16,10 +16,8 @@ use flui_foundation::notifier::{ChangeNotifier, Listenable, ListenerCallback};
 // ControllerInner
 // ============================================================================
 
-/// The selection, as Flutter models it: the caret is a **collapsed
-/// selection**, not a separate concept (`services/text_editing.dart`'s
-/// `TextSelection`, whose `TextSelection.collapsed` sets `baseOffset ==
-/// extentOffset`).
+/// The selection: the caret is a **collapsed selection** (anchor equals caret),
+/// not a separate concept.
 ///
 /// # Why one field, not `anchor` beside `caret`
 ///
@@ -35,11 +33,10 @@ use flui_foundation::notifier::{ChangeNotifier, Listenable, ListenerCallback};
 /// on UTF-8 char boundaries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Selection {
-    /// Where the selection started — Flutter's `baseOffset`. Unmoved by
-    /// extension; a drag moves the caret, not this.
+    /// Where the selection started. Unmoved by extension; a drag moves the
+    /// caret, not this.
     pub(super) anchor: usize,
-    /// Where the caret is — Flutter's `extentOffset`. The end a further
-    /// extension moves.
+    /// Where the caret is. The end a further extension moves.
     pub(super) caret: usize,
 }
 
@@ -157,8 +154,6 @@ pub(super) struct ComposingState {
 
 /// Owns the text buffer and caret position for a text input field.
 ///
-/// Flutter parity: `widgets/editable_text.dart` `TextEditingController`.
-///
 /// # Sharing
 ///
 /// `TextEditingController` is `Clone`: every clone shares the same underlying
@@ -177,7 +172,7 @@ pub(super) struct ComposingState {
 ///
 /// # IME composition
 ///
-/// The controller holds Flutter's `TextEditingValue.composing` model, but
+/// The controller holds the composing region, but
 /// only a mounted [`EditableText`](super::EditableText)'s text store edits
 /// it: the platform's input method reads and edits the field through that
 /// store (ADR-0090), and a push-model `ImeEvent` is projected onto the same
@@ -210,7 +205,7 @@ pub(super) struct ComposingState {
 /// [`Self::extend_selection_left`]/[`Self::extend_selection_right`]) and
 /// single-character deletion ([`Self::backspace`]/[`Self::delete_forward`])
 /// step by **extended grapheme cluster** (UAX #29), the user-perceived
-/// character Flutter's `characters` package / `CharacterRange` walks. A
+/// character. A
 /// Zero-Width-Joiner sequence (`'👨‍👩‍👦'`), a regional-indicator flag (`'🇺🇸'`)
 /// or a base letter with combining marks (`"e\u{301}"`) is one step and one
 /// deletion; stepping by Unicode scalar instead would leave a dangling joiner
@@ -276,9 +271,7 @@ impl TextEditingController {
     ///
     /// Deliberately a named method rather than `PartialEq`: `==` on a value
     /// type reads as value equality, and answering `false` for two controllers
-    /// with identical text under that spelling would be a trap. The reference
-    /// compares Dart object identity for the same purpose
-    /// (`text_field.dart`'s `didUpdateWidget`).
+    /// with identical text under that spelling would be a trap.
     #[must_use]
     pub fn is_same_controller(&self, other: &Self) -> bool {
         std::sync::Arc::ptr_eq(&self.inner, &other.inner)
@@ -377,8 +370,7 @@ impl TextEditingController {
     /// The selected span as a byte range into [`Self::text`], in ascending
     /// order.
     ///
-    /// Empty when nothing is selected — the caret is a collapsed selection
-    /// (Flutter's `TextSelection.collapsed`), so
+    /// Empty when nothing is selected — the caret is a collapsed selection, so
     /// `selection().is_empty() == true` and `selection().start ==
     /// caret_byte_offset()` is the resting state of a focused field.
     ///
@@ -406,8 +398,8 @@ impl TextEditingController {
             .is_collapsed()
     }
 
-    /// The selected text, empty when the selection is collapsed — Flutter's
-    /// `TextSelection.textInside(text)`, what a copy writes to the clipboard.
+    /// The selected text, empty when the selection is collapsed — what a copy
+    /// writes to the clipboard.
     #[must_use]
     pub fn selected_text(&self) -> String {
         let guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
@@ -470,9 +462,7 @@ impl TextEditingController {
 
     /// Insert `text` at the current caret position and advance the caret past it.
     ///
-    /// Clears any active composing region — Flutter parity:
-    /// `TextEditingController`'s `text` setter resets `composing` to empty
-    /// on every programmatic change (`editable_text.dart`, tag `3.44.0`).
+    /// Clears any active composing region: every programmatic change resets it.
     /// A stale composing region left pointing at a now-shifted buffer is
     /// exactly the "stored range no longer describes the current text" bug
     /// class this controller must not reintroduce — this is a non-IME edit,
@@ -483,8 +473,7 @@ impl TextEditingController {
         {
             let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
             // A non-collapsed selection is REPLACED, which is what every text
-            // editor does and what `TextEditingController.text`'s setter
-            // amounts to in Flutter. Deleting first and inserting at the
+            // editor does. Deleting first and inserting at the
             // range's start keeps this one notification, not two.
             let at = guard.delete_selected_range();
             guard.text.insert_str(at, text);
@@ -498,15 +487,10 @@ impl TextEditingController {
     /// the programmatic counterpart to typing. Clears any active composing
     /// region, the same non-IME-edit rule [`Self::insert_str`] documents.
     ///
-    /// **Divergence from Flutter, deliberate:** `TextEditingController.text`'s
-    /// setter (`editable_text.dart`) also replaces the value wholesale, but
-    /// collapses the selection to `TextSelection.collapsed(offset: -1)` — an
-    /// off-the-end sentinel that does not paint a caret at all until
-    /// something else moves it. That is a common source of "my caret
-    /// disappeared after I set `.text`" surprise in Flutter itself. This
-    /// method collapses the caret to `text.len()` instead — the visible,
-    /// unsurprising place to leave it after a programmatic replacement — and
-    /// that choice is the whole point of diverging here, not an oversight.
+    /// The caret collapses to `text.len()` — the visible, unsurprising place to
+    /// leave it after a programmatic replacement. Leaving
+    /// no off-the-end sentinel selection (which would paint no caret until
+    /// something else moves it) is deliberate, not an oversight.
     ///
     /// A no-op (no notification) when `text` already equals the current
     /// buffer — the same "notify only on a real change" rule most mutators
@@ -534,7 +518,6 @@ impl TextEditingController {
 
     /// Empty the buffer and collapse the caret to `0`.
     ///
-    /// Flutter parity: `TextEditingController.clear()` (`editable_text.dart`).
     /// Defined in terms of [`Self::set_text`] so the two cannot drift — same
     /// no-op-when-already-empty rule, same composing-region reset.
     pub fn clear(&self) {
@@ -613,10 +596,8 @@ impl TextEditingController {
     /// Move the selection's EXTENT one character left, leaving the anchor —
     /// Shift+Left.
     ///
-    /// Flutter's `ExtendSelectionByCharacterIntent(collapseSelection: false)`:
-    /// *"Moves the selection's [TextSelection.extent] past the user-perceived
-    /// character before/after it"* (`widgets/editable_text.dart:697`). The
-    /// contrast with [`Self::move_caret_left`] is the whole point of the pair:
+    /// Moves the selection's extent past the user-perceived character before it.
+    /// The contrast with [`Self::move_caret_left`] is the whole point of the pair:
     /// unmodified, an arrow COLLAPSES a selection to its edge and stops;
     /// modified, it steps the caret from wherever it is and grows or shrinks
     /// the span. A selection dragged rightwards then shrunk with Shift+Left
@@ -686,10 +667,7 @@ impl TextEditingController {
         let changed = {
             let mut guard = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
             // With a selection, Left COLLAPSES to its logical start and moves
-            // no further — `widgets/editable_text.dart:685`,
-            // `ExtendSelectionByCharacterIntent(collapseSelection: true)`:
-            // "Collapses the selection to the logical start/end of the
-            // selection". Collapsing *and* stepping would skip a character
+            // no further. Collapsing *and* stepping would skip a character
             // the user can see.
             let moved = if guard.selection.is_extended() {
                 guard.selection = Selection::collapsed(guard.selection.range().start);
@@ -800,9 +778,7 @@ impl TextEditingController {
     /// With an active selection, collapses to its logical start without a
     /// further jump — the same rule [`Self::move_caret_left`] documents for
     /// character movement, kept here for consistency within this
-    /// controller's own API rather than a verified port of Flutter's
-    /// widgets-level `Action` plumbing for the analogous intent (see the
-    /// type doc's `# Word unit` section). Also clears
+    /// controller's own API (see the type doc's `# Word unit` section). Also clears
     /// [`Self::caret_hidden_by_ime`], for the reason
     /// [`Self::move_caret_left`] documents.
     pub fn move_caret_word_left(&self) {
@@ -1103,9 +1079,7 @@ fn next_grapheme_boundary(text: &str, caret: usize) -> usize {
 }
 
 /// Whether a UAX #29 word segment contains nothing but whitespace —
-/// Flutter's `RenderEditable._onlyWhitespace` (`rendering/editable.dart`),
-/// reused here to decide which segments a word jump skips over versus
-/// stops on.
+/// Used to decide which segments a word jump skips over versus stops on.
 fn is_whitespace_only_word(segment: &str) -> bool {
     segment.chars().all(char::is_whitespace)
 }
@@ -1249,9 +1223,6 @@ mod tests {
     // Grapheme-cluster correctness: the unit is the user-perceived
     // character, not the Unicode scalar.
     //
-    // Oracle: `'Can access characters on editing string'`
-    // (`editable_text_test.dart`, tag `3.44.0`) — Flutter's
-    // `TextEditingValue` deletes and steps by `characters`/`CharacterRange`.
     // Red-check: swap either helper back to `char_indices`/`chars` and the
     // ZWJ cases below leave a dangling joiner.
     // ------------------------------------------------------------------
@@ -1276,11 +1247,8 @@ mod tests {
     // Word-boundary correctness: UAX #29 word segmentation, not ASCII
     // whitespace runs.
     //
-    // Oracle (shape, not byte-for-byte tie-break — see
-    // `TextEditingController`'s `# Word unit` doc section for why):
-    // `RenderEditable._handleMoveCursorForwardByWord`/
-    // `_handleMoveCursorBackwardByWord` (`rendering/editable.dart`, tag
-    // `3.44.0`).
+    // See `TextEditingController`'s `# Word unit` doc section for the
+    // forward/backward tie-break.
     // Red-check: swap `next_word_boundary`/`prev_word_boundary` back to an
     // ASCII-whitespace scan and the CJK/Arabic/emoji cases below jump by
     // scalar or byte instead of by word.

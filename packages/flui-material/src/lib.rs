@@ -16,20 +16,13 @@
 //! ([`Chip`], [`FilterChip`]), and secondary tabs ([`TabController`],
 //! [`DefaultTabController`], [`Tab`], [`TabBar`], [`TabBarView`]).
 //!
-//! ## Flutter parity
+//! ## Design tokens
 //!
-//! `package:flutter/material.dart`'s theming surface — primarily
-//! `material/color_scheme.dart`, `material/typography.dart`,
-//! `material/text_theme.dart`, `material/theme_data.dart`,
-//! `material/theme.dart`, `material/material.dart`, `material/ink_well.dart`,
-//! `material/button_style.dart`, `material/button_style_button.dart`, and the
-//! four concrete button files (`elevated_button.dart`, `filled_button.dart`,
-//! `outlined_button.dart`, `text_button.dart`) (oracle tag `3.44.0`). Every
-//! constant table (`ColorScheme::light`/`dark`,
-//! [`typography::english_like_2021`],
+//! The theming surface follows the Material 3 spec. Every constant table
+//! (`ColorScheme::light`/`dark`, [`typography::english_like_2021`],
 //! [`TextTheme::black_mountain_view`]/[`white_mountain_view`](TextTheme::white_mountain_view),
-//! each button's `_TokenDefaultsM3`) is a verbatim, per-value-cited port —
-//! see each module's docs for the exact oracle source.
+//! each button's M3 token defaults) carries the spec's values verbatim —
+//! see each module's docs for the details.
 //!
 //! ## Scope (V1 — constants-first)
 //!
@@ -37,8 +30,7 @@
 //! literal type scale, and the plumbing (`ThemeData`, `Theme`) to compose and
 //! publish them. It deliberately does **not** ship:
 //!
-//! - [`ColorScheme::fromSeed`](https://api.flutter.dev/flutter/material/ColorScheme/ColorScheme.fromSeed.html)
-//!   — dynamic-color generation from a seed. See [`color_scheme`] module docs.
+//! - `ColorScheme::fromSeed` — dynamic-color generation from a seed. See [`color_scheme`] module docs.
 //! - Every shipped widget's own component theme slot (`ElevatedButtonThemeData`
 //!   and friends, [`AppBarThemeData`], [`CardThemeData`], [`DialogThemeData`],
 //!   [`FabThemeData`], [`InputDecorationThemeData`]) is narrowed to the

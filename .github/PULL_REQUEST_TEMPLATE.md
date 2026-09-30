@@ -7,6 +7,7 @@ Describe the change and why it belongs in FLUI.
 - [ ] `cargo xtask check-changed` (CI runs the rest)
 - [ ] New or changed behavior has tests that would fail without this change
 - [ ] Public API changes are documented
+- [ ] A cross-crate contract change is recorded (ADR), or not applicable
 - [ ] A consumer-visible change adds a `changelog.d/<branch-slug>.md` fragment, or not applicable
 
 ## Architecture
@@ -17,5 +18,5 @@ Describe the change and why it belongs in FLUI.
 
 ## Notes
 
-Call out intentional divergences, deferred work, or follow-up issues.
+Call out deferred work, or follow-up issues.
 

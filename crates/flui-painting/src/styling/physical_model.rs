@@ -9,7 +9,7 @@ use flui_foundation::geometry::Offset;
 /// Shape type for physical model layers.
 ///
 /// Determines the clipping shape and shadow outline for Material Design
-/// elevation. Similar to Flutter's `BoxShape`.
+/// elevation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PhysicalShape {

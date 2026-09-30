@@ -3,7 +3,10 @@
 //! These items let the crates that own a realm drive a [`WidgetsBinding`]
 //! from outside `flui-view`: activating its `GlobalKey` registry for one
 //! realm entry, stamping the frame phase at the build-to-finalize boundary,
-//! and running the presentation's terminal lifecycle ladder. Their intended
+//! and running the presentation's terminal lifecycle ladder; and the
+//! development agent's port ([`AgentPort`]), which only the runtime
+//! implements and through which it builds the [`AgentWindow`]s a
+//! [`DevAgentHook`](crate::dev_agent::DevAgentHook) is handed. Their intended
 //! users are `flui-runtime`, `flui-app`, `flui-testing` and `flui-hot-reload`.
 //!
 //! **No semver promise.** Anything here may change or disappear in any
@@ -15,12 +18,67 @@
 //! part of the binding's public surface either: they resolve only where the
 //! trait is imported.
 
+use std::any::Any;
 use std::cell::Cell;
+use std::sync::{Arc, Weak};
+use std::time::Duration;
 
+use flui_protocol::{ActionRequest, ReadQuery, Tree, WindowId};
 use flui_scheduler::AppLifecycleState;
 
 use crate::WidgetsBinding;
+use crate::dev_agent::{AgentAnswer, AgentFault, AgentWindow};
 pub use crate::lifecycle::LifecycleSource;
+
+/// What an [`AgentWindow`] calls: one window's read and act, enqueued on its
+/// owner. The runtime's semantics agent is the implementation.
+pub trait AgentPort: Send + Sync {
+    /// Whether the window is still open. A port a call still holds outlives
+    /// its window's close, so this, not the port's lifetime, says whether
+    /// the next call may be enqueued.
+    fn is_open(&self) -> bool;
+
+    /// Enqueue a read of the window's committed semantics tree.
+    ///
+    /// # Errors
+    ///
+    /// When the request cannot be enqueued.
+    fn read(&self, query: ReadQuery) -> Result<AgentAnswer<Tree>, AgentFault>;
+
+    /// Enqueue an action on one of the window's elements.
+    ///
+    /// # Errors
+    ///
+    /// When the request cannot be enqueued.
+    fn act(&self, request: ActionRequest) -> Result<AgentAnswer<()>, AgentFault>;
+}
+
+/// The pending half of an [`AgentAnswer`].
+pub trait PendingAnswer<T>: Send {
+    /// The answer if it has come; `None` while it has not, and once taken.
+    fn try_take(&mut self) -> Option<Result<T, AgentFault>>;
+
+    /// The answer, waiting up to `timeout`; `None` if it has not come by then,
+    /// and once taken.
+    fn recv_timeout(&mut self, timeout: Duration) -> Option<Result<T, AgentFault>>;
+}
+
+/// The [`AgentWindow`] for window `id`, answering through `port` while the
+/// port is alive and `gone` after, and holding `collecting` (the window's
+/// semantics handle) while any clone of it is alive.
+#[must_use]
+pub fn agent_window(
+    id: WindowId,
+    port: Weak<dyn AgentPort>,
+    collecting: Arc<dyn Any + Send + Sync>,
+) -> AgentWindow {
+    AgentWindow::new(id, port, collecting)
+}
+
+/// Wrap a pending answer.
+pub fn agent_answer<T>(pending: impl PendingAnswer<T> + 'static) -> AgentAnswer<T> {
+    AgentAnswer::new(Box::new(pending))
+}
 
 /// Data-only phase cell shared with an internal frame composition driver.
 ///

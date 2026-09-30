@@ -2,9 +2,6 @@
 //! ambient platform brightness), publication through [`Theme`], and the
 //! shell's composition bands, all through mounted trees.
 //!
-//! Flutter parity oracle: `material/app.dart` `_MaterialAppState.
-//! _themeBuilder` / `_materialBuilder` (oracle tag `3.44.0`).
-//!
 //! The live-republish test drives brightness through the same mechanism the
 //! realm's root `MediaQuery` uses in production (`flui-app`'s
 //! `media_query_root.rs`): an owner-local shared cell re-published by a

@@ -1,7 +1,6 @@
 //! Global key - provides access to the element from anywhere.
 //!
-//! This module is part of the widgets layer, matching Flutter's architecture
-//! where `GlobalKey` is defined in `widgets/framework.dart`.
+//! This module is part of the widgets layer.
 
 use std::{
     any::Any,
@@ -98,10 +97,8 @@ impl<T: 'static> GlobalKey<T> {
     /// quiescent state expected in pure-unit tests that bypass the
     /// framework binding.
     ///
-    /// Flutter parity: `framework.dart:3163`
-    /// `GlobalKey._currentElement` — reads `BuildOwner._globalKeyRegistry`
-    /// indexed by the key. FLUI resolves by key identity too: the
-    /// registries behind the handle bucket entries by
+    /// Resolution is by key identity: the registries behind the handle
+    /// bucket entries by
     /// [`ViewKey::key_hash`] and then decide membership with
     /// [`ViewKey::key_eq`], because `Box<dyn ViewKey>` has no blanket
     /// `Hash + Eq` to hand a `HashMap` directly.
@@ -110,8 +107,8 @@ impl<T: 'static> GlobalKey<T> {
     ///
     /// Called from inside the frame of the presentation that hosts the key
     /// (from `build`, a lifecycle hook, `dispose`, or a layout-builder build),
-    /// this returns `None` (logged at `debug`) instead of the element Flutter
-    /// would return: that presentation's tree is locked for the frame and is
+    /// this returns `None` (logged at `debug`) instead of the element:
+    /// that presentation's tree is locked for the frame and is
     /// not read re-entrantly. Keys held by other presentations of the realm
     /// resolve normally.
     #[must_use]
@@ -159,11 +156,9 @@ impl<T: 'static> GlobalKey<T> {
     /// borrow into the rest of `build()`. Same pattern as
     /// [`BuildContextExt::find_state`](crate::BuildContextExt::find_state).
     ///
-    /// Flutter parity: `framework.dart:3170`
-    /// `GlobalKey<T extends State>.currentState` — returns `T?` after
-    /// a runtime-type check. We surface a closure-callback variant so
-    /// the read-lock on the element tree drops before the caller does
-    /// anything substantial with the value.
+    /// The state is reached after a runtime-type check. The closure-callback
+    /// shape lets the read-lock on the element tree drop before the caller
+    /// does anything substantial with the value.
     ///
     /// # During a frame
     ///

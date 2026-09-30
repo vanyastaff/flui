@@ -1,6 +1,4 @@
 //! [`IconData`] — describes a single glyph from an icon font.
-//!
-//! Flutter parity: `widgets/icon_data.dart` `IconData`.
 
 use std::fmt;
 
@@ -11,8 +9,6 @@ use std::fmt;
 /// package, fallback families, and whether the glyph should mirror under
 /// right-to-left text) to select and shape that glyph. `IconData` alone does
 /// not draw anything.
-///
-/// Flutter parity: `widgets/icon_data.dart` `IconData`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IconData {
     /// The Unicode codepoint at which this icon is stored in the icon font.
@@ -78,9 +74,7 @@ impl IconData {
 impl fmt::Display for IconData {
     /// Renders as `U+{codepoint:05X}`, e.g. `U+E87D`.
     ///
-    /// Divergence: Flutter's `IconData.toString()` wraps this in
-    /// `"IconData(...)"` (icon_data.dart:116); FLUI renders the bare
-    /// codepoint so it composes cleanly into diagnostics without a redundant
+    /// The bare codepoint is rendered, with no `IconData(...)` wrapper, so it composes cleanly into diagnostics without a redundant
     /// type-name prefix.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "U+{:05X}", self.code_point)

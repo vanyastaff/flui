@@ -7,32 +7,25 @@
 //! scope on mount, moved with [`FocusScopeNode::adopt_node`] when that scope
 //! changes, and detached on dispose.
 //!
-//! # Flutter parity
-//!
-//! `.flutter/packages/flutter/lib/src/widgets/focus_scope.dart`, master
-//! `3.33.0-0.0.pre-6280-g88e87cd963f`: `Focus` (`:126-153`), `_FocusState`
-//! (`:554-742`), `FocusScope` (`:804-834`, incl. `withExternalFocusNode`).
-//!
-//! # Divergences, each named (ADR-0026)
+//! # Design notes (ADR-0026)
 //!
 //! * **Nodes parent to the nearest focus *node*** — scope or plain `Focus` —
-//!   through one provider, Flutter's `_FocusInheritedScope` shape. (An earlier
-//!   design flattened to the nearest scope; key bubbling made the node tree's
-//!   shape observable and superseded that decision — ADR-0026, ADR-0023.)
+//!   through one provider. (An earlier design flattened to the nearest scope;
+//!   key bubbling made the node tree's shape observable and superseded that
+//!   decision — ADR-0026, ADR-0023.)
 //! * **Reparenting happens in `did_change_dependencies`**, not on every build
-//!   as Flutter's `_focusAttachment.reparent()` does — the provider notifying
-//!   is the only way the enclosing scope changes without a remount. Observable
-//!   only through `parentNode`, which is not ported.
-//! * **Focus changes apply synchronously.** Flutter batches into
-//!   `applyFocusChangesIfNeeded` at end of frame; FLUI's `FocusManager` is
-//!   synchronous throughout, so `autofocus` runs inline from `init_state`.
-//! * Not ported: `onKey` (legacy), `includeSemantics` (needs the semantics
-//!   layer), `parentNode`, `descendantsAreTraversable` (no node-layer flag).
-//!   `Focus.of`/`maybeOf`/`FocusScope.of` ARE ported (ADR-0076's
-//!   `OverlayScope` precedent, applied here — see [`Focus::of`]) — only their
-//!   `scopeOk: true` variant of `Focus.of`/`maybeOf` is not: nothing in this
-//!   crate needs a Focus-flavored lookup that also accepts a scope node,
-//!   since [`FocusScope::of`] already covers "give me the nearest scope".
+//!   — the provider notifying is the only way the enclosing scope changes
+//!   without a remount. Observable only through the parent node, which is not
+//!   exposed.
+//! * **Focus changes apply synchronously.** FLUI's `FocusManager` is
+//!   synchronous throughout, so `autofocus` runs inline from `init_state`
+//!   rather than being batched to the end of the frame.
+//! * Not provided: a legacy raw-key handler, a parent-node accessor, and a
+//!   per-node descendants-traversable flag (no node-layer flag). [`Focus::of`],
+//!   [`Focus::maybe_of`] and [`FocusScope::of`] exist (ADR-0076's
+//!   `OverlayScope` precedent), but there is no `Focus` lookup that also
+//!   accepts a scope node: [`FocusScope::of`] already covers "give me the
+//!   nearest scope".
 
 use std::{
     cell::{Cell, OnceCell, RefCell},
@@ -89,8 +82,8 @@ fn key_handler(handler: &FocusKeyHandler, writer: &WriterSlot) -> KeyEventHandle
 // ============================================================================
 
 /// Provides the nearest enclosing focus **node** — scope or plain `Focus` —
-/// to descendants: Flutter's `_FocusInheritedScope`, which every `Focus`
-/// widget provides (`focus_scope.dart:946`). Private: [`Focus`] and
+/// to descendants, which every `Focus`
+/// widget provides. Private: [`Focus`] and
 /// [`FocusScope`] are the public surface.
 ///
 /// The parent being a *node*, not always a scope, is what makes the
@@ -147,29 +140,22 @@ pub fn enclosing_focus_parent(ctx: &dyn BuildContext) -> Rc<FocusNode> {
 
 /// Raw lookup behind [`Focus::of`]/[`Focus::maybe_of`]/[`FocusScope::of`]:
 /// the nearest enclosing [`FocusParentProvider`]'s node, registering a
-/// dependency, with **no** scope-node filtering. Flutter's own
-/// `Focus.maybeOf(context, scopeOk: true)` (`focus_scope.dart:452`, tag
-/// `3.44.0`) — the call [`FocusScope::of`] makes internally; [`Focus::maybe_of`]
-/// layers the `scopeOk: false` filter back on top.
+/// dependency, with **no** scope-node filtering. This is the call
+/// [`FocusScope::of`] makes internally; [`Focus::maybe_of`] layers the
+/// scope-node filter back on top.
 ///
 /// # Depend, not get
 ///
-/// Unlike `Overlay::maybe_of` (`overlay/mod.rs`), routing through
-/// [`BuildContextExt::depend_on`] here is not a FLUI-native divergence from
-/// the oracle — it is the loyal port. Flutter's `Focus.maybeOf` calls
-/// `context.dependOnInheritedWidgetOfExactType` under its **default**
-/// `createDependency: true` (not an override, the way `Overlay.maybeOf`
-/// explicitly passes `createDependency: false`), so registering a dependency
-/// is what the oracle itself does by default.
+/// Unlike `Overlay::maybe_of` (`overlay/mod.rs`), this registers a dependency
+/// through [`BuildContextExt::depend_on`], so a build that reads it rebuilds
+/// when the enclosing node changes.
 ///
 /// This resolves the SAME [`FocusParentProvider`] marker `Focus`/`FocusScope`'s
 /// own `build` already mounts around their child for
-/// [`enclosing_focus_parent`]'s mount-time attach/reparent lookups —
-/// Flutter's `_FocusInheritedScope`. No second, redundant marker is mounted
-/// just for this public entry point.
+/// [`enclosing_focus_parent`]'s mount-time attach/reparent lookups. No second,
+/// redundant marker is mounted just for this public entry point.
 ///
-/// Like Flutter's `InheritedNotifier<FocusNode>`, each provider carries a
-/// revision advanced by its node listener. `update_should_notify` therefore
+/// Each provider carries a revision advanced by its node listener. `update_should_notify` therefore
 /// invalidates dependents on node-state changes as well as identity changes;
 /// a build that reads `Focus::of(ctx).has_focus()` stays live.
 fn nearest_focus_node(ctx: &dyn BuildContext) -> Option<Rc<FocusNode>> {
@@ -270,10 +256,10 @@ enum FocusNodeOwnership {
 
 /// Makes its subtree focusable: owns a [`FocusNode`] (or adopts an external
 /// one), attaches it under the nearest enclosing [`FocusScope`] on mount, and
-/// detaches it on dispose. Flutter's `Focus` (`focus_scope.dart:126`).
+/// detaches it on dispose.
 #[derive(Clone)]
-// Ported property names (`autofocus`, `can_request_focus`) end with the widget's
-// own name; keeping Flutter's names beats a lint-driven rename.
+// Property names (`autofocus`, `can_request_focus`) end with the widget's
+// own name; keeping the familiar names beats a lint-driven rename.
 #[expect(clippy::struct_field_names)]
 pub struct Focus {
     child: BoxedView,
@@ -306,8 +292,7 @@ impl Focus {
     }
 
     /// Whether the subtree tells assistive technology it is focusable and
-    /// when it holds the focus — `true` by default, as Flutter's
-    /// `Focus.includeSemantics` (`focus_scope.dart:715-729`, tag `3.44.0`).
+    /// when it holds the focus — `true` by default.
     /// Without it a screen reader cannot follow keyboard focus: Narrator
     /// read nothing when Tab moved to the counter's button on a live window.
     #[must_use]
@@ -317,8 +302,7 @@ impl Focus {
     }
 
     /// Host `node` and let this widget manage the attributes explicitly set
-    /// through the builder methods — Flutter's regular `Focus.focusNode`
-    /// path (`focus_scope.dart:159`).
+    /// through the builder methods.
     ///
     /// Omitted attributes retain their current value on an external node.
     /// The caller keeps ownership of the node itself; this widget only
@@ -334,8 +318,7 @@ impl Focus {
     /// Host an external node without ever overwriting its focusability,
     /// traversal, or key-handler attributes.
     ///
-    /// This is Flutter's `Focus.withExternalFocusNode`: the caller-owned node
-    /// is the source of truth, while the widget still owns the presentation
+    /// The caller-owned node is the source of truth, while the widget still owns the presentation
     /// attachment lifecycle. Configuration builder methods remain useful
     /// when constructing both modes generically, but their node-attribute
     /// values are intentionally ignored in this mode.
@@ -347,9 +330,8 @@ impl Focus {
         }
     }
 
-    /// Request focus on mount if the enclosing scope has no focused child —
-    /// Flutter's `autofocus` (`:190-205`); at most one child of a scope should
-    /// set it.
+    /// Request focus on mount if the enclosing scope has no focused child;
+    /// at most one child of a scope should set it.
     #[must_use]
     pub fn autofocus(mut self, autofocus: bool) -> Self {
         self.autofocus = autofocus;
@@ -379,7 +361,7 @@ impl Focus {
     }
 
     /// Called with `true`/`false` as this widget's node gains/loses the
-    /// primary focus — Flutter's `onFocusChange` (`:167`) — and the
+    /// primary focus, and the
     /// dispatch's `&mut EventCx<'_>`, so it writes a signal directly
     /// (ADR-0086): `.on_focus_change(move |cx, focused| has_focus.set(cx, focused))`.
     ///
@@ -398,8 +380,7 @@ impl Focus {
     }
 
     /// Key handler invoked during the leaf→root dispatch walk while this
-    /// node — or a descendant — holds the primary focus: Flutter's
-    /// `onKeyEvent` (`:170-180`). Return
+    /// node — or a descendant — holds the primary focus. Return
     /// [`Handled`](flui_interaction::KeyEventResult::Handled) to consume the
     /// event, [`Ignored`](flui_interaction::KeyEventResult::Ignored) to let it
     /// bubble to the enclosing `Focus`, or
@@ -428,15 +409,13 @@ impl Focus {
     }
 
     /// Returns the [`FocusNode`] of the [`Focus`] that most tightly encloses
-    /// `ctx` — Flutter's `Focus.of` (`focus_scope.dart:398`, tag `3.44.0`),
-    /// `scopeOk: false` only (see the module divergence notes for the
-    /// unported `scopeOk: true` variant; [`FocusScope::of`] covers that case).
+    /// `ctx`. Only plain [`Focus`] nodes qualify; [`FocusScope::of`] covers
+    /// the scope-node case.
     ///
     /// # Panics
     ///
     /// Panics with a message naming the missing ancestor if no enclosing
-    /// [`Focus`] provides one (Flutter's own assert-time `FlutterError`,
-    /// `focus_scope.dart:398-424`). Use [`maybe_of`](Self::maybe_of) for a
+    /// [`Focus`] provides one. Use [`maybe_of`](Self::maybe_of) for a
     /// non-panicking lookup.
     #[must_use]
     pub fn of(ctx: &dyn BuildContext) -> Rc<FocusNode> {
@@ -449,14 +428,11 @@ impl Focus {
     }
 
     /// Returns the [`FocusNode`] of the [`Focus`] that most tightly encloses
-    /// `ctx`, registering a dependency — Flutter's `Focus.maybeOf`
-    /// (`focus_scope.dart:452`, tag `3.44.0`) with its default
-    /// `createDependency: true` (see `nearest_focus_node`'s doc for why
-    /// that default, not `Overlay::maybe_of`'s override, is what this
-    /// mirrors).
+    /// `ctx`, registering a dependency (see `nearest_focus_node`'s doc for why
+    /// it depends, unlike `Overlay::maybe_of`).
     ///
     /// `None` if the nearest enclosing node is a [`FocusScope`]'s own scope
-    /// node rather than a plain [`Focus`] (`scopeOk: false` — a scope only
+    /// node rather than a plain [`Focus`] (a scope only
     /// satisfies [`FocusScope::of`], not this), or if there is no enclosing
     /// [`Focus`]/[`FocusScope`] at all.
     #[must_use]
@@ -576,7 +552,7 @@ impl StatefulView for Focus {
     }
 }
 
-/// `_FocusState` (`focus_scope.dart:554`). `pub` because `StatefulView::State`
+/// The state behind [`Focus`]. `pub` because `StatefulView::State`
 /// requires it, and re-exported like every other widget's state in this crate
 /// (`GestureDetectorState`, `AnimatedAlignState`, …) so a caller can name it.
 pub struct FocusState {
@@ -630,7 +606,7 @@ pub struct FocusState {
     /// Captured at `create_state`: `init_state` has no view reference.
     autofocus: bool,
     /// One-shot latch: whether this widget has already attempted its
-    /// autofocus request — Flutter's `_didAutofocus` (`focus_scope.dart`).
+    /// autofocus request.
     /// Set the moment the attempt is made, win or lose (an already-focused
     /// sibling can still make the attempt lose), so a later rebuild that
     /// merely re-asserts the same `autofocus` value does not re-request.
@@ -657,8 +633,7 @@ impl FocusState {
             .expect("BUG: Focus lifecycle used before init_state installed its focus manager")
     }
 
-    /// The rebuild-on-focus-change listener — Flutter's `_handleFocusChanged`
-    /// `setState` (`:684-712`): descendants that read the node's state during
+    /// The rebuild-on-focus-change listener: descendants that read the node's state during
     /// build stay current, and `on_focus_change` fires on the edges.
     fn add_focus_listener(&self, node: &Rc<FocusNode>) -> ListenerId {
         let rebuild = self
@@ -722,7 +697,7 @@ impl FocusState {
         }
     }
 
-    /// `_handleAutofocus` (`focus_scope.dart`, tag `3.44.0`): a one-shot
+    /// A one-shot autofocus
     /// attempt, made the first time `autofocus` is (or becomes) `true` and
     /// never repeated —
     /// [`FocusState::did_autofocus`] latches regardless of whether the
@@ -785,8 +760,7 @@ fn record_action_chain(
 impl ViewState<Focus> for FocusState {
     /// Listen, attach, autofocus — in that order, so a focus request queued on
     /// an external node before mount is observed when attach fulfills it
-    /// (`_FocusState.initState` + `didChangeDependencies`,
-    /// `focus_scope.dart:565-630`).
+    /// (`did_change_dependencies` repeats the lookup).
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.writer
             .set(ctx.writer_source())
@@ -812,8 +786,7 @@ impl ViewState<Focus> for FocusState {
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         // The provider changed: move the node — with focus — under the new
-        // parent. `_focusAttachment.reparent()` in `didChangeDependencies`
-        // (`focus_scope.dart:618-623`), via ADR-0026's adopt.
+        // parent, via ADR-0026's adopt.
         let parent = enclosing_focus_parent(ctx);
         if self
             .parent
@@ -897,14 +870,12 @@ impl ViewState<Focus> for FocusState {
             self.context_registration = replacement_context_registration;
             self.attachment = Some(replacement_attachment);
         } else {
-            // Re-sync flags and handlers from the latest configuration
-            // (`didUpdateWidget`, `:646-682`).
+            // Re-sync flags and handlers from the latest configuration.
             new_view.configure(&self.node, &mut self.key_handler_registration, &self.writer);
         }
 
         self.autofocus = new_view.autofocus;
-        // `didUpdateWidget`'s `oldWidget.autofocus != widget.autofocus` guard
-        // (`focus_scope.dart`, tag `3.44.0`) is folded into `try_autofocus`'s
+        // A changed-`autofocus` guard is folded into `try_autofocus`'s
         // own `did_autofocus` latch: a rebuild that flips `autofocus` from
         // `false` to `true` makes the one still-unattempted autofocus
         // request; one that merely repeats an already-`true` value is a
@@ -946,17 +917,14 @@ impl ViewState<Focus> for FocusState {
         self.focus_manager = None;
     }
 
-    /// Every `Focus` provides itself as the parent for descendants —
-    /// Flutter's `_FocusInheritedScope` in `_FocusState.build`
-    /// (`focus_scope.dart:714-741`) — and anchors the child so the node's
+    /// Every `Focus` provides itself as the parent for descendants,
+    /// and anchors the child so the node's
     /// rect provider has a render node to measure.
     ///
     /// The subtree publishes whether its node can take focus (`focusable`)
-    /// and, while it holds the primary focus, `focused` — `_FocusState.build`'s
-    /// `Semantics(focusable: _couldRequestFocus, focused: _hadPrimaryFocus)`
-    /// (`focus_scope.dart:715-729`). The node listener rebuilds this widget on
+    /// and, while it holds the primary focus, `focused`. The node listener rebuilds this widget on
     /// every focus edge, so the flag follows the focus. The semantics
-    /// `onFocus` action (focus requested by an assistive technology) is not
+    /// focus action (focus requested by an assistive technology) is not
     /// wired yet.
     fn build(&self, view: &Focus, _ctx: &dyn BuildContext) -> impl IntoView {
         // Only a node that can take focus is annotated. A node that cannot —
@@ -1015,14 +983,12 @@ pub fn install_rect_provider(
 
 /// A [`Focus`] whose node is a [`FocusScopeNode`]: descendants attach under it
 /// rather than the enclosing scope, Tab traversal cycles within it, and its
-/// focused-child history remembers who to restore. Flutter's `FocusScope`
-/// (`focus_scope.dart:804-834`).
+/// focused-child history remembers who to restore.
 #[derive(Clone)]
 pub struct FocusScope {
     child: BoxedView,
-    /// An externally owned scope node — Flutter's
-    /// `FocusScope.withExternalFocusNode` (`:826-834`), the constructor a
-    /// route uses so *it* can drive the scope. `None` = widget-owned.
+    /// An externally owned scope node, the way a
+    /// route drives its own scope. `None` = widget-owned.
     external_scope: Option<Rc<FocusScopeNode>>,
 }
 
@@ -1045,10 +1011,9 @@ impl FocusScope {
     }
 
     /// Returns the [`FocusScopeNode`] of the nearest enclosing [`Focus`] or
-    /// [`FocusScope`], walked up to its scope — Flutter's `FocusScope.of`
-    /// (`focus_scope.dart:834`, tag `3.44.0`): `Focus.maybeOf(context,
-    /// scopeOk: true)` (unfiltered — `nearest_focus_node` directly, not
-    /// [`Focus::maybe_of`]'s scope-filtering wrapper), then `.nearestScope`
+    /// [`FocusScope`], walked up to its scope: the unfiltered
+    /// `nearest_focus_node` (not [`Focus::maybe_of`]'s scope-filtering
+    /// wrapper), then its nearest scope
     /// (itself if it already is a scope, else the nearest scope ancestor —
     /// [`FocusNode::as_scope`]/[`FocusNode::enclosing_scope`], the exact pair
     /// `FocusState::try_autofocus` already uses to find "the enclosing
@@ -1277,8 +1242,8 @@ impl ViewState<FocusScope> for FocusScopeState {
 ///
 /// Exclusion is active by default. Activating it unfocuses an already-focused
 /// descendant, which is not automatically restored when exclusion is disabled.
-/// FLUI currently clears primary focus to `None`; unlike Flutter, it does not
-/// yet move focus to the enclosing scope's previously focused child.
+/// Primary focus is cleared to `None`; it is not
+/// yet moved to the enclosing scope's previously focused child.
 /// Descendants' own request-focus flags are not rewritten.
 #[derive(Clone, StatelessView)]
 pub struct ExcludeFocus {

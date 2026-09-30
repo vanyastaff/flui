@@ -591,8 +591,8 @@ mod transform_clip;
 /// Each growing pass expands the filter halo by its radius; bounds-preserving
 /// passes contribute 0.  Summing the per-pass contributions is the correct
 /// conservative bound: each growing pass enlarges the halo of the result of all
-/// prior passes, so radii compose additively (matches Flutter
-/// `dl_compose_image_filter.cc:33-51` inner→outer bounds chaining).
+/// prior passes, so radii compose additively (inner→outer bounds
+/// chaining).
 ///
 /// ## Exhaustiveness
 ///

@@ -16,10 +16,9 @@ use crate::Transform;
 /// Rotates its child about its center as an [`Animation<f64>`] of *turns*
 /// changes (`1.0` turn = a full 360° revolution).
 ///
-/// Flutter parity: `widgets/transitions.dart` `RotationTransition` — an
-/// `AnimatedWidget` wrapping a center-aligned `Transform.rotate`, where the
-/// animation value is measured in turns. Rotation is paint-only; the child is
-/// laid out as if unrotated.
+/// Wraps a center-aligned `Transform::rotate`, where the animation value is
+/// measured in turns. Rotation is paint-only; the child is laid out as if
+/// unrotated.
 #[derive(Clone)]
 pub struct RotationTransition {
     turns: Arc<dyn Animation<f64>>,

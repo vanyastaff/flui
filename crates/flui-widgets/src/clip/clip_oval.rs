@@ -8,9 +8,8 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// Clips its child to the axis-aligned oval inscribed in this widget's bounds
 /// (a circle when the bounds are square — the common avatar case).
 ///
-/// Flutter parity: `widgets/basic.dart` `ClipOval` over `RenderClipOval`.
 /// Layout is a pass-through; only painting is clipped. `clip_behavior` defaults
-/// to [`Clip::AntiAlias`] (Flutter's `ClipOval` default — smooth edges).
+/// to [`Clip::AntiAlias`] (smooth edges).
 #[derive(Clone, Debug)]
 pub struct ClipOval {
     clip_behavior: Clip,
@@ -29,7 +28,7 @@ impl Default for ClipOval {
 }
 
 impl ClipOval {
-    /// Create an oval clip with Flutter's default `AntiAlias` behavior.
+    /// Create an oval clip with the default `AntiAlias` behavior.
     pub fn new() -> Self {
         Self::default()
     }

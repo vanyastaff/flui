@@ -1,12 +1,12 @@
 //! Basic usage example for flui-assets.
 //!
 //! This example demonstrates:
-//! - Loading assets using the global registry
+//! - Loading assets through a registry built with `AssetRegistryBuilder`
 //! - Using the cache for efficient asset management
 //! - Working with different asset types (images and fonts)
 //! - Using memory loaders for embedded assets
 
-use flui_assets::{AssetRegistry, FontAsset};
+use flui_assets::{AssetRegistryBuilder, FontAsset};
 
 #[cfg(feature = "images")]
 use flui_assets::ImageAsset;
@@ -15,8 +15,8 @@ use flui_assets::ImageAsset;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== FLUI Assets Basic Usage Example ===\n");
 
-    // Get the global registry
-    let registry = AssetRegistry::global();
+    // Create a registry
+    let registry = AssetRegistryBuilder::new().with_default_capacity().build();
 
     // Example 1: Loading a font asset from memory
     println!("1. Loading Font Asset from Memory");

@@ -1,13 +1,5 @@
 //! ADR-0021: `PipelineOwner::{transform_to, local_to_global, global_to_local}`.
 //!
-//! # Parity oracles
-//!
-//! `.flutter/packages/flutter/lib/src/rendering/object.dart:3686`
-//! (`RenderObject.getTransformTo`), `:3639` (`applyPaintTransform`);
-//! `.../rendering/box.dart:3014` (`RenderBox.applyPaintTransform`), `:3062`
-//! (`globalToLocal`), `:3113` (`localToGlobal`). Expected values are read from the
-//! reference, not from running this code.
-//!
 //! The render objects here are local fixtures: `flui-rendering` cannot depend on
 //! `flui-objects`, where the real transforming objects live. Those get their own
 //! coverage in `flui-objects/tests/render_object_harness.rs`.
@@ -67,9 +59,8 @@ fn assert_point_eq(actual: Point, expected: Point) {
     );
 }
 
-/// `RenderBox.applyPaintTransform` translates by the child's committed offset
-/// (`box.dart:3014`), and `getTransformTo` composes one step per level
-/// (`object.dart:3728-3731`). Two nested offsets must add.
+/// A box's paint transform translates by the child's committed offset, and
+/// `transform_to` composes one step per level. Two nested offsets must add.
 pub(crate) fn transform_to_accumulates_offsets_through_a_plain_chain() {
     let run = RenderTester::mount(
         box_node(OffsetBox(Offset::new(10.0, 5.0)))

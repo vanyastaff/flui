@@ -1,16 +1,13 @@
 //! [`FilledButton`] — a filled M3 button that does not elevate on press, plus
 //! its `tonal` variant.
 //!
-//! # Flutter parity
+//! # Defaults and scope
 //!
-//! `material/filled_button.dart`'s `FilledButton` (oracle tag `3.44.0`).
-//! `default_style` ports `_FilledButtonDefaultsM3`/`_FilledTonalButtonDefaultsM3`
-//! (`filled_button.dart` `:531-671` / `:672-810`) field-by-field, narrowed to
-//! the V1 slots [`ButtonStyle`] carries — see that module's docs. Ported:
+//! `default_style` holds the M3 filled and filled-tonal defaults, narrowed to
+//! the V1 slots [`ButtonStyle`] carries — see that module's docs. Populated:
 //! `text_style`, `background_color`, `foreground_color`, `overlay_color`,
 //! `elevation`, `padding`, `minimum_size`, `maximum_size`, `shape`. Neither
-//! table sets a default `side` or `fixed_size` (both oracle tables' own "No
-//! default fixedSize"/"No default side" comments), so neither field is
+//! variant sets a default `side` or `fixed_size`, so neither field is
 //! populated here.
 
 use flui_sdk::geometry::{EdgeInsets, Size};
@@ -31,7 +28,7 @@ enum FilledButtonVariant {
     /// `_FilledButtonDefaultsM3`: `primary`/`onPrimary` fill.
     Filled,
     /// `_FilledTonalButtonDefaultsM3`: `secondaryContainer`/
-    /// `onSecondaryContainer` fill. Flutter parity: `FilledButton.tonal`.
+    /// `onSecondaryContainer` fill.
     Tonal,
 }
 
@@ -78,7 +75,7 @@ impl FilledButton {
     }
 
     /// The "filled tonal" variant: `secondaryContainer`/`onSecondaryContainer`
-    /// in place of `primary`/`onPrimary`. Flutter parity: `FilledButton.tonal`.
+    /// in place of `primary`/`onPrimary`.
     pub fn tonal(child: impl IntoView) -> Self {
         Self {
             variant: FilledButtonVariant::Tonal,

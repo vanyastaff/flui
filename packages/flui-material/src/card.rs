@@ -2,44 +2,39 @@
 //! defaults: a colored, softly-rounded, lightly-elevated panel wrapped in a
 //! fixed margin.
 //!
-//! # Flutter parity
+//! # M3 elevated card
 //!
-//! `material/card.dart`'s `Card`, `build` composed with `_CardDefaultsM3`
-//! (oracle tag `3.44.0`) — the M3 **elevated** variant only (Flutter's
-//! un-named default constructor; `_CardVariant.elevated`). `_CardDefaultsM3`
-//! sets:
+//! This is the M3 **elevated** variant only. Its token defaults:
 //!
-//! | Token | Value | Oracle |
-//! |---|---|---|
-//! | `color` | `ColorScheme.surfaceContainerLow` | `_CardDefaultsM3.color` |
-//! | `shadowColor` | `ColorScheme.shadow` | `_CardDefaultsM3.shadowColor` |
-//! | `surfaceTintColor` | `Colors.transparent` | `_CardDefaultsM3.surfaceTintColor` |
-//! | `elevation` | `1.0` | `_CardDefaultsM3` constructor |
-//! | `shape` | `RoundedRectangleBorder(borderRadius: 12.0)` | `_CardDefaultsM3.shape` |
-//! | `clipBehavior` | `Clip.none` | `_CardDefaultsM3` constructor |
-//! | `margin` | `EdgeInsets.all(4.0)` | `_CardDefaultsM3` constructor |
+//! | Token | Value |
+//! |---|---|
+//! | `color` | `ColorScheme.surfaceContainerLow` |
+//! | `shadowColor` | `ColorScheme.shadow` |
+//! | `surfaceTintColor` | transparent |
+//! | `elevation` | `1.0` |
+//! | `shape` | rounded rectangle, radius `12.0` |
+//! | `clipBehavior` | `Clip::None` |
+//! | `margin` | `EdgeInsets::all(4.0)` |
 //!
 //! `M3 ColorScheme.shadow` is opaque black in both the light and dark
 //! baselines (`color_scheme.rs`'s `shadow: Color::from_argb(0xFF00_0000)`),
 //! which is exactly [`Material`]'s own built-in shadow color (it has no
 //! `shadow_color` setter — see that module's docs) — so no plumbing gap
-//! exists there. `surfaceTintColor: Colors.transparent` is the same named
+//! exists there. A transparent surface tint is the same named
 //! deferral [`Material`] already carries (no theme-driven surface-tint
 //! overlay substrate yet); nothing new to defer here.
 //!
-//! `card.dart`'s `build` also wraps the child in two `Semantics` nodes
-//! (`semanticContainer`/`explicitChildNodes`) and threads `borderOnForeground`
+//! The M3 card also wraps the child in two `Semantics` nodes (semantic
+//! container / explicit child nodes) and threads a border-on-foreground flag
 //! (painting the shape's border in front of vs. behind the child) — neither
 //! has a home in this substrate yet ([`Material`] paints no border at all,
-//! and FLUI's semantics tree has no `Semantics.container` merge knob wired to
+//! and FLUI's semantics tree has no container merge knob wired to
 //! a `StatelessView` this shallow). Both are named, not silently dropped.
 //!
 //! # Deferred, and named
 //!
-//! - **`Card.filled` / `Card.outlined`** (`_FilledCardDefaultsM3`,
-//!   `_OutlinedCardDefaultsM3`) — the two other M3 variants. Add as
-//!   `Card::filled`/`Card::outlined` constructors once a caller needs them;
-//!   the M3 token tables are already read above for the citation trail
+//! - **`Card::filled` / `Card::outlined`** — the two other M3 variants. Add
+//!   them once a caller needs them; the M3 token tables are already known
 //!   (`surfaceContainerHighest`/`elevation 0.0` for filled,
 //!   `ColorScheme.surface` + an `OutlinedBorder` side in
 //!   `ColorScheme.outlineVariant` for outlined) but nothing is wired.
@@ -60,11 +55,11 @@ use crate::shape::MaterialShape;
 use crate::theme::Theme;
 use crate::theme_data::ThemeData;
 
-/// `_CardDefaultsM3`'s corner radius (`card.dart`, oracle tag `3.44.0`).
+/// The M3 elevated card's corner radius.
 const DEFAULT_CORNER_RADIUS: f64 = 12.0;
-/// `_CardDefaultsM3`'s elevation (`card.dart`, oracle tag `3.44.0`).
+/// The M3 elevated card's elevation.
 const DEFAULT_ELEVATION: f64 = 1.0;
-/// `_CardDefaultsM3`'s margin (`card.dart`, oracle tag `3.44.0`).
+/// The M3 elevated card's margin.
 const DEFAULT_MARGIN: f64 = 4.0;
 
 /// A Material Design elevated card — a panel with rounded corners and an
@@ -137,16 +132,14 @@ impl Card {
         self
     }
 
-    /// Overrides the card's clip behavior. Defaults to [`Clip::None`] —
-    /// `_CardDefaultsM3`'s `clipBehavior` (`card.dart`, oracle tag `3.44.0`).
+    /// Overrides the card's clip behavior. Defaults to [`Clip::None`].
     #[must_use]
     pub fn clip_behavior(mut self, clip_behavior: Clip) -> Self {
         self.clip_behavior = Some(clip_behavior);
         self
     }
 
-    /// Overrides the outer margin. Defaults to `EdgeInsets.all(4.0)` —
-    /// `_CardDefaultsM3`'s `margin` (`card.dart`, oracle tag `3.44.0`).
+    /// Overrides the outer margin. Defaults to `EdgeInsets::all(4.0)`.
     #[must_use]
     pub fn margin(mut self, margin: EdgeInsets) -> Self {
         self.margin = Some(margin);
@@ -168,10 +161,8 @@ struct ResolvedCardStyle {
 
 /// Resolve `Card`'s M3 defaults through the widget → theme → default
 /// cascade, per field: `color`/`elevation`/`shape`/`margin` each fall back
-/// through `ThemeData.card_theme`'s own field before the `_CardDefaultsM3`
-/// constant. Flutter parity: `color ?? cardTheme.color ?? defaults.color`
-/// (and the `elevation`/`shape`/`margin` equivalents), `card.dart`, oracle
-/// tag `3.44.0`.
+/// through `ThemeData.card_theme`'s own field before the M3 default
+/// constant.
 fn resolve_style(
     theme: &ThemeData,
     color: Option<Color>,

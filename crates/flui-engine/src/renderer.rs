@@ -442,8 +442,7 @@ impl crate::layer_walk::LayerVisitor for RenderLayerVisitor<'_, '_> {
         // Follower resolves its render-time position (leader pose, or the
         // plain unlinked fallback) before descending into children; an
         // unlinked follower with `show_when_unlinked == false` hides its
-        // subtree entirely (oracle `FollowerLayer.addToScene`,
-        // `layer.dart:2857-2865`), which is the one case that skips.
+        // subtree entirely, which is the one case that skips.
         //
         // A resolved offset is pushed here and popped in `exit` for THIS id —
         // see `pushed_follower_offsets`. Descending rather than walking the
@@ -1550,7 +1549,7 @@ impl Renderer {
     /// lands on the paused UI thread. It is accepted, because the alternative
     /// is dropping the surface after the handle is gone; what is not
     /// negotiable is that nothing else happens here: no probe, no submit, no
-    /// wait on any Flutter lock beyond this renderer's own.
+    /// wait on any lock beyond this renderer's own.
     ///
     /// Idempotent, and a no-op for a renderer that owns no window — there the
     /// requested post-state ("no surface is held") is already true, and this
@@ -2000,7 +1999,7 @@ impl Renderer {
         // target the layer-level path uses: the retained target on a
         // retained frame, the swapchain image on a direct one.
         // Without this bind, that command path falls back to passthrough
-        // — a visible regression vs Flutter.
+        // — a visible regression.
         backend.bind_surface(render_view, render_texture);
 
         // Reset per-frame clip/transform/opacity/layer state so that

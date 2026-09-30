@@ -1,44 +1,38 @@
 //! [`PageView`] — a scrollable list that works page by page, plus its
 //! [`PageController`] and [`PageScrollPhysics`].
 //!
-//! # Flutter parity
+//! # Composition
 //!
-//! Mirrors `widgets/page_view.dart` (tag `3.44.0`): `PageView` composes a
-//! [`Scrollable`] with [`PageScrollPhysics`] and a [`PageController`],
-//! `viewport_builder`-ing a [`Viewport`] over a single
-//! [`SliverFillViewport`] — the same "one sliver whose children each fill a
-//! `viewport_fraction`-sized page" shape the oracle uses (`SliverFillViewport`
-//! over `SliverChildDelegate` there; a plain eager child list here, see
-//! [`PageView`]'s own docs for that divergence).
+//! `PageView` composes a [`Scrollable`] with [`PageScrollPhysics`] and a
+//! [`PageController`], `viewport_builder`-ing a [`Viewport`] over a single
+//! [`SliverFillViewport`]: one sliver whose children each fill a
+//! `viewport_fraction`-sized page, over a plain eager child list (see
+//! [`PageView`]'s own docs).
 //!
-//! # Deferred / documented divergences from the oracle (v1)
+//! # Deferred / not modelled (v1)
 //!
 //! - **Eager children.** `SliverFillViewport` (`flui-widgets`) has no lazy
-//!   child delegate yet — every page attaches up front, not
-//!   `PageView.builder`'s on-demand construction.
+//!   child delegate yet — every page attaches up front, with no on-demand
+//!   construction.
 //! - **`on_page_changed` is listener-based and runs after the frame**, not
-//!   inside `NotificationListener<ScrollNotification>` — FLUI has no
-//!   scroll-notification bubbling yet. The controller's listener records a
-//!   change when `round(page)` moves (same as the oracle's
-//!   `_lastReportedPage` tracking); the callback runs on the local
-//!   post-frame lane with the `EventCx` its writes need, one frame after the
-//!   oracle's synchronous report, every recorded page in order (ADR-0086;
-//!   mapping decision 37 in `crates/flui-widgets/ARCHITECTURE.md`).
-//! - **`pageSnapping: false`, `reverse`, `padEnds`, `allowImplicitScrolling`,
-//!   `PageStorage` restoration, and `viewport_fraction > 1.0` centering** are
-//!   not modeled — [`PageScrollPhysics`] is always applied (page snapping is
-//!   the only supported mode) and [`DimensionChangePolicy::KeepFractionalPage`]
+//!   inside a scroll-notification listener — there is no scroll-notification
+//!   bubbling yet. The controller's listener records a change when
+//!   `round(page)` moves; the callback runs on the local post-frame lane with
+//!   the `EventCx` its writes need, one frame after the change, every recorded
+//!   page in order (ADR-0086; mapping decision 37 in
+//!   `crates/flui-widgets/ARCHITECTURE.md`).
+//! - **Non-snapping mode, `reverse`, end padding, implicit scrolling, page
+//!   storage restoration, and `viewport_fraction > 1.0` centering** are not
+//!   modeled — [`PageScrollPhysics`] is always applied (page snapping is the
+//!   only supported mode) and [`DimensionChangePolicy::KeepFractionalPage`]
 //!   already documents the `viewport_fraction > 1.0` gap it inherits.
-//!   [`PageView::cache_extent`]'s default DOES match the oracle's
-//!   `allowImplicitScrolling: false` default (`ScrollCacheExtent.viewport(0.0)`)
-//!   even though `allowImplicitScrolling` itself isn't modeled — see that
-//!   method's docs.
+//!   [`PageView::cache_extent`]'s default keeps no neighbouring pages laid out,
+//!   the same as with implicit scrolling off — see that method's docs.
 //! - **`PageController::animate_to_page`/`next_page`/`previous_page`**
 //!   (ADR-0037) delegate to [`ScrollController::animate_to`] — see that
-//!   type's module docs for the "no `Future`" divergence this inherits, and
+//!   type's module docs for the "no `Future`" limitation this inherits, and
 //!   [`PageController::next_page`]/[`PageController::previous_page`]'s own
-//!   docs for how end-of-range behavior diverges from the oracle's
-//!   physics-clamped ticks.
+//!   docs for end-of-range behavior.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -76,45 +70,32 @@ use crate::support::{ValueCallback, value_callback};
 /// Scroll physics that snap a [`PageView`] to page boundaries after a drag or
 /// fling.
 ///
-/// # Flutter parity
-///
-/// Mirrors `PageScrollPhysics` (`widgets/page_view.dart`, tag `3.44.0`):
-/// `_getTargetPixels`' velocity-vs-tolerance ±half-page bias, rounded to the
-/// nearest whole page, sprung to via [`ScrollSpringSimulation`]. FLUI's
-/// `ScrollPhysics` trait has no `parent`-chaining (see `scroll_physics.rs`'s
-/// module docs), so where the oracle defers out-of-range handling to
-/// `super.createBallisticSimulation` (its `parent` physics), this instead
-/// owns [`boundary`](Self::boundary) directly and delegates to it — the same
-/// effective behavior (Flutter's real usage always resolves `parent` to a
-/// platform physics anyway), without adding general trait-level chaining out
-/// of this PR's scope.
+/// The target page is picked with a velocity-vs-tolerance ±half-page bias,
+/// rounded to the nearest whole page, and sprung to via
+/// [`ScrollSpringSimulation`]. The `ScrollPhysics` trait has no
+/// `parent`-chaining (see `scroll_physics.rs`'s module docs), so out-of-range
+/// handling is delegated to [`boundary`](Self::boundary), which this type owns
+/// directly.
 #[derive(Debug, Clone)]
 pub struct PageScrollPhysics {
     /// Fraction of the viewport one logical page occupies. Must match the
-    /// [`PageController`] driving the same [`PageView`] — this is how
-    /// `_getPage`/`_getPixels` in the oracle special-case `_PagePosition`
-    /// (which knows its own `viewportFraction`); FLUI's `ScrollMetrics`
+    /// [`PageController`] driving the same [`PageView`] — the `ScrollMetrics`
     /// snapshot carries no such field, so this physics must be told
     /// separately.
     pub viewport_fraction: f64,
     /// Boundary-clamping and out-of-range ballistic physics this delegates
-    /// to. Defaults to [`ClampingScrollPhysics`] (Flutter's platform default
-    /// on most targets).
+    /// to. Defaults to [`ClampingScrollPhysics`].
     pub boundary: SharedScrollPhysics,
-    /// Spring configuration for the page-to-page snap. Flutter's base
-    /// `ScrollPhysics.spring` default (`SpringDescription.withDampingRatio(
-    /// mass: 0.5, stiffness: 100.0, ratio: 1.1)`) — `PageScrollPhysics` does
-    /// not override `spring` in the oracle, so this is NOT
-    /// `BouncingScrollPhysics`'s bouncier tuning.
+    /// Spring configuration for the page-to-page snap (damping ratio 1.1, mass
+    /// 0.5, stiffness 100) — NOT `BouncingScrollPhysics`'s bouncier tuning.
     pub spring: SpringDescription,
-    /// Below this absolute velocity (logical px/s), `_getTargetPixels`
+    /// Below this absolute velocity (logical px/s), the target-page pick
     /// applies no directional bias — the drag settles to the nearest page
-    /// rather than committing to next/previous. Mirrors `toleranceFor`'s
-    /// velocity term (`1.0 / (0.050 * devicePixelRatio)`) evaluated at
-    /// `devicePixelRatio == 1.0` — FLUI's `ScrollMetrics` carries no
-    /// device-pixel-ratio field (documented divergence, consistent with the
+    /// rather than committing to next/previous. Equals
+    /// `1.0 / (0.050 * devicePixelRatio)` at a device pixel ratio of 1.0:
+    /// `ScrollMetrics` carries no device-pixel-ratio field, consistent with the
     /// fixed velocity thresholds `ClampingScrollPhysics`/
-    /// `BouncingScrollPhysics` already use).
+    /// `BouncingScrollPhysics` already use.
     pub velocity_tolerance_px_per_sec: f64,
 }
 
@@ -152,8 +133,7 @@ impl ScrollPhysics for PageScrollPhysics {
         velocity_px_per_sec: f64,
     ) -> Option<Box<dyn Simulation>> {
         // Out of range and not heading back in: defer entirely to the
-        // boundary physics, mirroring `super.createBallisticSimulation`
-        // (the oracle's `parent` chain).
+        // boundary physics.
         if (velocity_px_per_sec <= 0.0 && metrics.pixels <= metrics.min_scroll_extent)
             || (velocity_px_per_sec >= 0.0 && metrics.pixels >= metrics.max_scroll_extent)
         {
@@ -189,14 +169,8 @@ impl ScrollPhysics for PageScrollPhysics {
 
 /// Controls which page is visible in a [`PageView`].
 ///
-/// # Flutter parity
-///
-/// Mirrors `PageController` (`widgets/page_view.dart`, tag `3.44.0`).
-/// `initial_page` and `viewport_fraction` are fixed at construction (Flutter
-/// declares both `final`) rather than mutable builder fields — retargeting
-/// either after construction has no oracle behavior to port (Flutter's own
-/// `viewportFraction` setter, used internally by `attach`, is not part of the
-/// public `PageController` API this port targets).
+/// `initial_page` and `viewport_fraction` are fixed at construction rather than
+/// mutable builder fields; retargeting either afterwards is not supported.
 #[derive(Clone, Debug)]
 pub struct PageController {
     scroll: ScrollController,
@@ -211,8 +185,7 @@ impl Default for PageController {
 }
 
 impl PageController {
-    /// A controller starting at page `0` with `viewport_fraction: 1.0` —
-    /// Flutter's `PageController()` defaults.
+    /// A controller starting at page `0` with `viewport_fraction: 1.0`.
     #[must_use]
     pub fn new() -> Self {
         Self::with_params(0, 1.0)
@@ -223,8 +196,7 @@ impl PageController {
     ///
     /// # Panics
     ///
-    /// Panics when `viewport_fraction <= 0.0` (Flutter asserts the same at
-    /// `PageController` construction).
+    /// Panics when `viewport_fraction <= 0.0`.
     #[must_use]
     pub fn with_params(initial_page: usize, viewport_fraction: f64) -> Self {
         assert!(
@@ -260,18 +232,14 @@ impl PageController {
     /// The current fractional page, or `None` before the controlled
     /// [`PageView`] has completed its first layout.
     ///
-    /// # Flutter parity
-    ///
-    /// Mirrors `_PagePosition.page`'s `_cachedPage ?? getPageFromPixels(...)`:
-    /// consults [`ScrollPosition::cached_page`] first (the collapsed-viewport
+    /// Consults [`ScrollPosition::cached_page`] first (the collapsed-viewport
     /// case — a page tracked while the viewport reads `0.0`, which
     /// `pixels / viewport_dimension` could never recover), falling back to
-    /// the guarded [`ScrollMetrics::page`] formula (`PageMetrics.page`) —
-    /// not the internal recompute `apply_viewport_dimension` drives — only
-    /// when not collapsed. FLUI's `ScrollPosition` always "has pixels" (no
-    /// `hasPixels == false` state to mirror Flutter's pre-attach `null`), so
-    /// [`ScrollPosition::has_applied_viewport_dimension`] is the substitute
-    /// "not yet answerable" signal instead.
+    /// the guarded [`ScrollMetrics::page`] formula — not the internal
+    /// recompute `apply_viewport_dimension` drives — only when not collapsed.
+    /// A `ScrollPosition` always "has pixels", so
+    /// [`ScrollPosition::has_applied_viewport_dimension`] is the "not yet
+    /// answerable" signal.
     #[must_use]
     pub fn page(&self) -> Option<f64> {
         let position = self.scroll.position();
@@ -287,20 +255,15 @@ impl PageController {
 
     /// Jumps to `page` without animation.
     ///
-    /// # Flutter parity
-    ///
-    /// Mirrors `jumpToPage`'s three-way branch (`widgets/page_view.dart`, tag
-    /// `3.44.0`):
+    /// Three cases:
     /// - **Currently collapsed** (a real dimension was established at least
     ///   once, but the viewport currently reads `0.0`) — overwrites the
-    ///   cached page directly (`_cachedPage = page`), so a page jump
-    ///   requested while temporarily hidden takes effect the moment the
-    ///   viewport regains a real dimension.
-    /// - **Never established** — updates the pending startup page (mirrors
-    ///   `_pageToUseOnStartup`), same as before any layout has run.
-    /// - **Real, established dimension** — jumps directly, unclamped,
-    ///   matching `jumpTo`'s "without checking if the new value is in range"
-    ///   contract.
+    ///   cached page directly, so a page jump requested while temporarily
+    ///   hidden takes effect the moment the viewport regains a real dimension.
+    /// - **Never established** — updates the pending startup page, same as
+    ///   before any layout has run.
+    /// - **Real, established dimension** — jumps directly, unclamped, without
+    ///   checking whether the new value is in range.
     pub fn jump_to_page(&self, page: usize) {
         let page_f = page as f64;
         let mut position = self.scroll.position();
@@ -323,11 +286,7 @@ impl PageController {
     /// pixels via the guarded [`ScrollMetrics::pixels_from_page`] formula,
     /// then delegates to [`ScrollController::animate_to`].
     ///
-    /// # Flutter parity
-    ///
-    /// Mirrors `PageController.animateToPage`'s three-way branch
-    /// (`widgets/page_view.dart`, tag `3.44.0`) — the same shape
-    /// [`jump_to_page`](Self::jump_to_page) uses: a page requested while the
+    /// The same three cases as [`jump_to_page`](Self::jump_to_page): a page requested while the
     /// viewport is collapsed just overwrites the cached page (there is no
     /// viewport for an animation to visibly run in), one requested before any
     /// layout has committed a real dimension updates the pending startup
@@ -335,8 +294,8 @@ impl PageController {
     ///
     /// The target page is **not** bounds-checked against a page count —
     /// `PageController` has no visibility into how many children the
-    /// `PageView` holds, matching the oracle: `getPixelsFromPage` never
-    /// clamps `page` either. [`ScrollController::animate_to`]'s own clamp to
+    /// `PageView` holds, and the page-to-pixels conversion never clamps
+    /// `page` either. [`ScrollController::animate_to`]'s own clamp to
     /// `[min_scroll_extent, max_scroll_extent]` is what stops the run at the
     /// last/first real page instead of overshooting past it — see
     /// [`next_page`](Self::next_page)/[`previous_page`](Self::previous_page)'s
@@ -368,20 +327,12 @@ impl PageController {
     /// page, rounded (`page().round() + 1`). A no-op before the first layout
     /// — there is no current [`page`](Self::page) to round from yet.
     ///
-    /// # Flutter parity
-    ///
-    /// Mirrors `PageController.nextPage` (`page!.round() + 1`,
-    /// `widgets/page_view.dart`, tag `3.44.0`) — including NOT clamping the
-    /// requested page to a known last page: `PageController` doesn't track a
-    /// page count, so neither does the oracle here. Past the last real page,
+    /// The requested page is NOT clamped to a known last page:
+    /// `PageController` doesn't track a page count. Past the last real page,
     /// [`animate_to_page`](Self::animate_to_page)'s delegated
     /// [`ScrollController::animate_to`] clamps the resulting pixel target to
     /// `max_scroll_extent`, so the run visibly stops AT the last page instead
-    /// of scrolling past it — the oracle reaches the same visible stopping
-    /// point through its physics' boundary-clamped per-tick `setPixels`
-    /// (`ClampingScrollPhysics.applyBoundaryConditions`) instead, since
-    /// `ScrollPositionWithSingleContext.animateTo` itself does not pre-clamp
-    /// the target the way this port's `animate_to` does.
+    /// of scrolling past it.
     pub fn next_page(
         &self,
         duration: Duration,
@@ -392,13 +343,12 @@ impl PageController {
     }
 
     /// Animates backward to the previous whole page (`page().round() - 1`),
-    /// saturating at page `0` rather than underflowing — FLUI's page index is
-    /// `usize`, unlike the oracle's signed `int` (which can pass a transient
-    /// negative page into `getPixelsFromPage`); the saturated pixel target is
-    /// the same either way, since a negative page produces a negative pixel
-    /// offset that [`animate_to_page`](Self::animate_to_page)'s delegated
-    /// `animate_to` clamps to `min_scroll_extent` regardless. A no-op before
-    /// the first layout.
+    /// saturating at page `0` rather than underflowing — the page index is
+    /// `usize`; the saturated pixel target is the same as a negative page
+    /// would give, since a negative page produces a negative pixel offset that
+    /// [`animate_to_page`](Self::animate_to_page)'s delegated `animate_to`
+    /// clamps to `min_scroll_extent` regardless. A no-op before the first
+    /// layout.
     pub fn previous_page(
         &self,
         duration: Duration,
@@ -443,15 +393,11 @@ type OnPageChanged = ValueCallback<usize>;
 /// [`SliverFillViewport`] — no new render objects. A horizontal
 /// `scroll_direction` resolves its `AxisDirection` from the ambient
 /// [`Directionality`](crate::Directionality) (`RightToLeft` under an RTL
-/// ancestor), matching `ScrollView.getDirection` (`widgets/scroll_view.dart`);
-/// the vertical axis never consults it.
+/// ancestor); the vertical axis never consults it.
 ///
-/// # Flutter parity
-///
-/// Mirrors `PageView` (`widgets/page_view.dart`, tag `3.44.0`). See the
-/// module docs for the documented v1 divergences (eager children,
-/// listener-based `on_page_changed` delivered after the frame, no
-/// `pageSnapping: false`/`reverse`/`padEnds`).
+/// See the module docs for the v1 limits (eager children, listener-based
+/// `on_page_changed` delivered after the frame, no non-snapping mode, `reverse`
+/// or end padding).
 #[derive(Clone, StatefulView)]
 pub struct PageView {
     /// `None` when the caller never called [`PageView::controller`] — in
@@ -467,11 +413,8 @@ pub struct PageView {
 }
 
 impl PageView {
-    /// A horizontally-scrolling page view over `children` (Flutter's default
-    /// `scrollDirection: Axis.horizontal`). With no explicit
-    /// [`PageView::controller`], mirrors the oracle's default
-    /// `ScrollCacheExtent.viewport(0.0)` (`allowImplicitScrolling: false`'s
-    /// default) for [`PageView::cache_extent`] too.
+    /// A horizontally-scrolling page view over `children`. By default
+    /// [`PageView::cache_extent`] keeps no neighbouring pages laid out.
     pub fn new(children: impl ViewSeq) -> Self {
         Self {
             controller: None,
@@ -489,10 +432,9 @@ impl PageView {
     /// with a fresh [`PageController::new`] on every rebuild: `PageViewState`
     /// creates its own default controller exactly once (`create_state`) and
     /// keeps it — and the current page it's tracking — alive across rebuilds
-    /// that don't pass an explicit controller. Mirrors Flutter's
-    /// `_PageViewState._initController`: `widget.controller ??
-    /// PageController()` only re-evaluates when `widget.controller` itself
-    /// changes, never unconditionally on every `build`.
+    /// that don't pass an explicit controller. The default is only
+    /// re-evaluated when the supplied controller itself changes, never
+    /// unconditionally on every `build`.
     #[must_use]
     pub fn controller(mut self, controller: PageController) -> Self {
         self.controller = Some(controller);
@@ -514,9 +456,8 @@ impl PageView {
     /// build, with every recorded page delivered in order. A change observed
     /// during build or input (a drag, `jump_to_page`) is delivered after that
     /// same frame; one observed during layout (a viewport resize) is
-    /// delivered after the following frame. See the
-    /// module docs for how this diverges from Flutter's synchronous
-    /// `NotificationListener<ScrollNotification>` report.
+    /// delivered after the following frame. See the module docs for why the
+    /// report is not synchronous.
     #[must_use]
     pub fn on_page_changed<F, R>(mut self, callback: F) -> Self
     where
@@ -530,14 +471,11 @@ impl PageView {
     /// Set how far beyond the visible page(s) to keep neighboring pages laid
     /// out and painted ([`Viewport::cache_extent`] passthrough).
     ///
-    /// Defaults to `(0.0, CacheExtentStyle::Viewport)` — matching the
-    /// oracle's `PageView.scrollCacheExtent` default of
-    /// `ScrollCacheExtent.viewport(allowImplicitScrolling ? 1.0 : 0.0)`
-    /// evaluated at `allowImplicitScrolling: false` (the only value this
-    /// port models). `Viewport`'s own render-object default (250px, `Pixel`
-    /// style — `RenderViewport`'s general-purpose default, unrelated to
-    /// `PageView`) would otherwise silently keep neighboring pages laid out
-    /// and painted where the oracle keeps none.
+    /// Defaults to `(0.0, CacheExtentStyle::Viewport)`: no neighbouring pages
+    /// (implicit scrolling is not modelled). `Viewport`'s own render-object
+    /// default (250px, `Pixel` style — `RenderViewport`'s general-purpose
+    /// default, unrelated to `PageView`) would otherwise silently keep
+    /// neighboring pages laid out and painted.
     #[must_use]
     pub fn cache_extent(mut self, cache_extent: f64, style: CacheExtentStyle) -> Self {
         self.cache_extent = Some((cache_extent, style));
@@ -772,8 +710,7 @@ impl ViewState<PageView> for PageViewState {
         // `reverse` isn't modeled on `PageView` yet (see the module docs'
         // deferred-divergences list), so it's always `false` here — the
         // resolution still consults ambient `Directionality` for a
-        // horizontal `scroll_direction`, matching `ScrollView.getDirection`
-        // (`widgets/scroll_view.dart`).
+        // horizontal `scroll_direction`.
         let axis_direction =
             axis_direction_from_axis_reverse_and_directionality(ctx, scroll_direction, false);
         let children = view.children.clone();

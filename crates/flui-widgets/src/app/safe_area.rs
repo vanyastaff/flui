@@ -22,8 +22,6 @@ use crate::layout::Padding;
 /// The `minimum` [`EdgeInsets`] is applied even when a toggle is `false`,
 /// so it acts as a guaranteed floor independent of the media data.
 ///
-/// Flutter parity: `widgets/safe_area.dart` `SafeArea`.
-///
 /// Selected OS padding is consumed in the descendant `MediaQuery`, so nested
 /// safe areas do not apply it again. Unselected edges and all other media data
 /// remain available. The app runner installs the root `MediaQuery`; detached
@@ -31,8 +29,8 @@ use crate::layout::Padding;
 ///
 /// # Panics
 /// Panics in `build` if no `MediaQuery` ancestor exists.
-// Four independent per-edge toggle bools mirror Flutter's `SafeArea` API
-// (left/top/right/bottom as separate constructor params). There is no semantic
+// Four independent per-edge toggle bools (left/top/right/bottom as
+// separate constructor params). There is no semantic
 // grouping that warrants a state machine or enum — each edge is truly
 // independent. Suppress the lint rather than invent an artificial abstraction.
 #[derive(Clone, StatelessView)]
@@ -126,7 +124,6 @@ impl fmt::Debug for SafeArea {
 
 impl StatelessView for SafeArea {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        // Flutter oracle: `safe_area.dart` lines 121-135.
         // Effective inset per edge: max(toggle ? media_side : 0, minimum_side).
         let mut media = MediaQuery::of(ctx);
         let media_padding = media.padding;

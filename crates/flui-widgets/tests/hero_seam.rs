@@ -1,15 +1,14 @@
 //! The executable half of the support seams.
 //!
 //! These tests predate the public Hero baseline and still pin the four support seams
-//! `HeroController` reaches for, each against the
-//! `heroes.dart` line that reaches for it:
+//! `HeroController` reaches for:
 //!
-//! | Seam | Flutter | Test group |
+//! | Seam | What it exposes | Test group |
 //! |---|---|---|
-//! | 2. Observer attachment | `NavigatorObserver.navigator` (`navigator.dart:779`) | `observer_*` |
-//! | 3. Route introspection | `route.animation`, `route.isCurrent` (`heroes.dart:331`, `:941`) | `route_peer_*`, `is_current_*` |
-//! | 4. Route subtree | `route.subtreeContext` (`routes.dart:1966`) | `route_subtree_*` |
-//! | 5. Overlay access | `navigator.overlay` (`heroes.dart:990`) | `overlay_*` |
+//! | 2. Observer attachment | the observer's navigator handle | `observer_*` |
+//! | 3. Route introspection | the route's animation and `is_current` | `route_peer_*`, `is_current_*` |
+//! | 4. Route subtree | the route's subtree context | `route_subtree_*` |
+//! | 5. Overlay access | the navigator's overlay | `overlay_*` |
 
 // ADR-0027: these tests capture owner-local handles in shared cells. The
 // library carries the same lint expectation; an integration test is a
@@ -94,8 +93,8 @@ fn mount_navigator(navigator: &NavigatorHandle) -> Harness {
 // Seam 2, continued — the handle is usable from inside a callback
 // ============================================================================
 
-/// Mutating the stack from `did_push` is **defined** in FLUI, where Flutter would
-/// `assert(!_debugLocked)` (`navigator.dart:4452`): notifications are delivered
+/// Mutating the stack from `did_push` is **defined** in FLUI rather than
+/// rejected as re-entrancy: notifications are delivered
 /// after the flush that produced them has fully settled and released the mutex, so
 /// a push raised from a callback simply runs a fresh flush, and *its* notifications
 /// are delivered after the outer drain finishes.

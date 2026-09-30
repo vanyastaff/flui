@@ -1,19 +1,11 @@
 //! `RenderConstrainedBox` — imposes additional constraints on its child.
 //!
-//! # Flutter equivalence
+//! # Design
 //!
-//! Behavior-faithful port of Flutter's
-//! [`RenderConstrainedBox`](https://api.flutter.dev/flutter/rendering/RenderConstrainedBox-class.html)
-//! (`packages/flutter/lib/src/rendering/proxy_box.dart`).
-//!
-//! # Rust-native improvements
-//!
-//! Flutter exposes a public `additionalConstraints` field of type
-//! `BoxConstraints` and relies on a runtime debug-only assertion that the
-//! caller normalized them. The Rust port preserves the same constructor
-//! ergonomics but routes every mutation through `set_additional_constraints`,
-//! which always re-normalizes — eliminating the bottom half of Flutter's
-//! "constraints not normalized" debug check at the API boundary.
+//! Every mutation of the additional constraints goes through
+//! `set_additional_constraints`, which always re-normalizes them, so a
+//! "constraints not normalized" state is unrepresentable at the API boundary
+//! rather than caught by a debug-only assertion.
 
 use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Size};
@@ -115,8 +107,7 @@ impl RenderBox for RenderConstrainedBox {
             let child_size = ctx.layout_child(0, combined);
             ctx.position_child(0, Offset::ZERO);
             // Our size = child size, but it MUST satisfy the incoming
-            // constraints (Flutter parity: the parent ultimately decides
-            // the box bounds).
+            // constraints (the parent ultimately decides the box bounds).
             incoming.constrain(child_size)
         } else {
             self.has_child = false;
@@ -127,10 +118,9 @@ impl RenderBox for RenderConstrainedBox {
 
     flui_rendering::forward_single_child_box_hit_test!();
 
-    // ----- Intrinsic dimensions (Flutter parity) --------------------------
+    // ----- Intrinsic dimensions -------------------------------------------
 
-    // Flutter parity: proxy_box.dart `RenderConstrainedBox` — a tight
-    // additional constraint answers directly; otherwise the child's
+    // A tight additional constraint answers directly; otherwise the child's
     // intrinsic is constrained by the additional bounds (unless those
     // bounds are infinite, which would poison the fold).
 

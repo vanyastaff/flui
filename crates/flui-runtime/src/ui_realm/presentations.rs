@@ -234,6 +234,19 @@ impl UiRealm {
         self.presentations.get(id).map(|p| p.clock().is_hidden())
     }
 
+    /// Whether `id`'s pipeline holds a semantics tree: something (assistive
+    /// technology, or an agent) asked for one and a frame has run since. `None`
+    /// if `id` is not resident.
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn presentation_collects_semantics_for_test(&self, id: PresentationId) -> Option<bool> {
+        self.presentations.get(id).map(|presentation| {
+            presentation
+                .pipeline()
+                .with(|pipeline| pipeline.semantics_owner().is_some())
+        })
+    }
+
     /// The primary presentation's own `FrameClock::produced_count` — for
     /// tests in a sibling module (`runner.rs`) that need to observe the
     /// clock's produce count without reaching into the private
@@ -444,7 +457,7 @@ impl UiRealm {
         needs_redraw
     }
 
-    /// Apply a hot reload at the given tier (Flutter parity entry point),
+    /// Apply a hot reload at the given tier,
     /// requesting a redraw if it actually changed anything. Moved here from
     /// the retired `AppBinding::perform_hot_reload_entered`.
     #[cfg(feature = "hot-reload")]
@@ -566,7 +579,7 @@ impl UiRealm {
     ///    `BuildOwner` are reclaimed, traced — automatic, via `BuildOwner`'s
     ///    own `Drop`, once step 6 drops the last reference to it.
     /// 6. The removed `PresentationState` — and with it its `WidgetsBinding`
-    ///    (whose drop triggers step 5), `RenderingFlutterBinding`, and every
+    ///    (whose drop triggers step 5), `RenderingBinding`, and every
     ///    other owned resource — drops after [`Self::enter`] returns.
     ///
     /// # Why this is two calls, not one `&mut`-threaded closure

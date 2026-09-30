@@ -78,7 +78,7 @@ impl Shadow<f64> {
     /// Converts a blur radius in pixels to sigma units for use in Gaussian
     /// blur.
     ///
-    /// This follows the same conversion that Flutter uses.
+    /// Uses the Skia blur-radius to sigma conversion (`radius * 0.57735 + 0.5`).
     #[inline]
     pub fn convert_radius_to_sigma(radius: f64) -> f64 {
         radius * 0.57735 + 0.5
@@ -109,10 +109,9 @@ where
         }
     }
 
-    /// Linearly interpolate between two lists of shadows (Flutter's
-    /// `Shadow.lerpList`): pairs lerp; a shadow only one list has keeps its
-    /// color and has its geometry scaled by `1 - t` (from `a`) or `t` (from
-    /// `b`).
+    /// Linearly interpolate between two lists of shadows: pairs lerp; a
+    /// shadow only one list has keeps its color and has its geometry scaled
+    /// by `1 - t` (from `a`) or `t` (from `b`).
     #[inline]
     pub fn lerp_list(a: &[Self], b: &[Self], t: f64) -> Vec<Self> {
         let t = t.clamp(0.0, 1.0);
@@ -322,10 +321,9 @@ where
         }
     }
 
-    /// Linearly interpolate between two lists of box shadows (Flutter's
-    /// `BoxShadow.lerpList`): pairs lerp; a shadow only one list has keeps
-    /// its color and has its geometry scaled by `1 - t` (from `a`) or `t`
-    /// (from `b`).
+    /// Linearly interpolate between two lists of box shadows: pairs lerp; a
+    /// shadow only one list has keeps its color and has its geometry scaled
+    /// by `1 - t` (from `a`) or `t` (from `b`).
     #[inline]
     pub fn lerp_list(a: &[Self], b: &[Self], t: f64) -> Vec<Self> {
         let t = t.clamp(0.0, 1.0);

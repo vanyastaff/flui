@@ -209,10 +209,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// The matrix mapping points in `descendant`'s local coordinate space into
     /// `ancestor`'s.
     ///
-    /// Flutter's `RenderObject.getTransformTo` (`object.dart:3686`), **narrowed
-    /// to a strict descendant → ancestor walk**: Flutter also handles two nodes
-    /// that merely share a common ancestor, by inverting the target's half of the
-    /// path. Nothing in FLUI needs that yet, and the narrow
+    /// This is a **strict descendant → ancestor walk**. Two nodes that merely
+    /// share a common ancestor would need the target's half of the path
+    /// inverted; nothing in FLUI needs that yet, and the narrow
     /// walk needs no inverse, so it cannot fail on a singular matrix.
     ///
     /// # When this returns `None`
@@ -221,14 +220,12 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// answered, for one of two reasons:
     ///
     /// 1. `ancestor` is not an ancestor of `descendant` — including a missing id,
-    ///    or two nodes in different trees. Flutter throws here
-    ///    (`object.dart:3708`).
+    ///    or two nodes in different trees.
     /// 2. Some node on the path has **not been laid out**. Every step needs its
     ///    parent's committed size, and a size-dependent object — a `FittedBox`, a
     ///    rotation about its centre, a `RenderFractionalTranslation`, a
     ///    `RenderFlow` — yields a different, entirely plausible matrix if that
-    ///    size is assumed to be `Size::ZERO`. Flutter asserts `hasSize` at the
-    ///    call sites instead (`box.dart:3016`).
+    ///    size is assumed to be `Size::ZERO`.
     ///
     /// `Some(IDENTITY)` when `descendant == ancestor`: a node's own space maps to
     /// itself whatever its size, and no step runs.
@@ -251,8 +248,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // local spaces we step *into*, in outermost-first order.
         //
         // Running out of parents is the **only** way to learn that `ancestor` is
-        // not an ancestor — Flutter throws there (`object.dart:3708`). Everything
-        // below this loop is then guaranteed by the tree's own invariants.
+        // not an ancestor. Everything below this loop is then guaranteed by
+        // the tree's own invariants.
         let mut path = Vec::new();
         let mut current = descendant;
         loop {
@@ -298,8 +295,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// Converts `point` from `id`'s local coordinate space into `ancestor`'s, or
     /// into the render root's when `ancestor` is `None`.
     ///
-    /// Flutter's `RenderBox.localToGlobal` (`box.dart:3113`), which is
-    /// `MatrixUtils.transformPoint(getTransformTo(ancestor), point)`.
+    /// The point is transformed by [`transform_to`](Self::transform_to).
     ///
     /// `None` when [`transform_to`](Self::transform_to) is `None`, or when there
     /// is no render root to convert against.
@@ -320,17 +316,17 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// `point` from `ancestor`'s space (the render root's, when `None`) into
     /// `id`'s local space.
     ///
-    /// Flutter's `RenderBox.globalToLocal` (`box.dart:3062`) un-projects through
-    /// the perspective divide onto the local z = 0 plane. FLUI's transforms are
-    /// affine 2-D (`Matrix4::translation`/`scaling`/`rotation_z`/`skew_2d`), so a
+    /// FLUI's transforms are affine 2-D
+    /// (`Matrix4::translation`/`scaling`/`rotation_z`/`skew_2d`), so a
     /// plain inverse is exact for every matrix any render object here produces.
-    /// **A perspective transform would need Flutter's un-projection**; none exists
-    /// in this repository, and one arriving must revisit this method.
+    /// **A perspective transform would need an un-projection through the
+    /// perspective divide onto the local z = 0 plane**; none exists in this
+    /// repository, and one arriving must revisit this method.
     ///
     /// `None` when the transform is missing or **singular** — a zero-scale
     /// `FittedBox`, for instance, which maps every local point to one global
-    /// point and cannot be inverted. Flutter returns `Offset.zero` there; a
-    /// `None` says so instead of inventing an answer.
+    /// point and cannot be inverted. A `None` says so instead of inventing an
+    /// answer.
     #[must_use]
     pub fn global_to_local(
         &self,
@@ -567,9 +563,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 // Correlated as a follower this frame but resolved to hidden
                 // (unlinked, `show_when_unlinked == false`) — mirrors the
                 // render path's `resolve_follower_offset -> None -> don't
-                // descend` (flui-engine's `render_layer_recursive`) and
-                // oracle's early return in `FollowerLayer.addToScene`
-                // (`layer.dart:2857-2865`). No HitTestEntry, no descent.
+                // descend` (flui-engine's `render_layer_recursive`).
+                // No HitTestEntry, no descent.
                 return false;
             } else {
                 self.last_follower_offsets.get(&id).copied()
@@ -592,12 +587,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // stack BEFORE recursing, so child entries captured during
         // hit_test_raw see the correct accumulated transform. The
         // transform stays on the stack until after the parent entry
-        // is added (Flutter parity: `addWithPaintTransform`
-        // (`rendering/box.dart:799-812`) inverts the incoming transform at
-        // line 805 and delegates at line 811 to `addWithRawTransform`,
-        // which pushes the (already-inverted) transform at line 876). The
-        // hook gets `own_size` from RenderState for alignment-relative
-        // origins.
+        // is added. The hook gets `own_size` from RenderState for
+        // alignment-relative origins.
         //
         // Pushed as the INVERSE of `hit_test_transform`: `HitTestResult`
         // composes the global-to-local mapping by left-multiplying each
@@ -666,9 +657,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             // `push_offset` calls (`BoxHitTestCtx::composed_transform`).
             // `with_paint_transform` pushes its INVERSE onto the shared
             // `HitTestResult`, matching every other forward-transform push
-            // in this walk (`hit_test_transform` above, the follower offset,
-            // Flutter's own `addWithPaintTransform`). Scoped to exactly this
-            // one child recursion — the ctx that accumulated it already
+            // in this walk (`hit_test_transform` above, the follower offset).
+            // Scoped to exactly this one child recursion — the ctx that accumulated it already
             // scoped the push/pop to the same call.
             let dispatch_child = |result: &mut crate::hit_testing::HitTestResult| -> bool {
                 if child_node.as_sliver().is_some() {
@@ -971,13 +961,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             // Rule for whether this closure pushes the child's paint offset
             // onto the `HitTestResult` transform stack: push iff the
             // position handed to the child below was moved into the
-            // child's own frame. Flutter parity:
-            // `RenderSliverHelpers::hitTestBoxChild` (`rendering/sliver.dart`)
-            // and `RenderSliverPadding::hitTestChildren`
-            // (`rendering/sliver_padding.dart`) both always push
-            // `paintOffset` via `SliverHitTestResult::addWithAxisOffset`
+            // child's own frame. A sliver protocol without an
+            // override-position concept always pushes `paintOffset`
             // regardless of how the caller derived the position, because
-            // Flutter's sliver protocol has no override-position concept —
             // every call site both repositions and pushes.
             if child_node.as_sliver().is_some() {
                 if let Some(child_position) = override_pos {
@@ -1285,10 +1271,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// **Current consumer scope:** the compositing-bits walk consults
     /// `RenderNode::is_repaint_boundary_flag()`. The paint walk
     /// (`paint_subtree`) still reads `render_object.is_repaint_boundary()`
-    /// directly — this matches Flutter parity (Flutter's `paint`
-    /// reads the `isRepaintBoundary` final getter, equivalent to our
-    /// trait answer; the bootstrap flag is the optimization target
-    /// for a later sweep that swaps the paint check too).
+    /// directly — equivalent to the storage flag's answer; the bootstrap
+    /// flag is the optimization target for a later sweep that swaps the
+    /// paint check too.
     ///
     /// Before this bootstrap existed, the storage flag was effectively
     /// `false` for every node from the moment it entered the tree,
@@ -1335,7 +1320,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     }
 
     // ========================================================================
-    // Dirty Node Access (Flutter API)
+    // Dirty Node Access
     // ========================================================================
 
     /// Returns the nodes needing layout.
@@ -1404,9 +1389,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// up the ancestor chain and pushing the **relayout boundary** onto
     /// `dirty.needs_layout` for the next `run_layout` pass.
     ///
-    /// Ports Flutter's `markNeedsLayout`
-    /// walk (`.flutter/.../object.dart:2658-2700`). Thin forwarder: the walk
-    /// logic lives in `DirtyTracker::mark_needs_layout` so it is
+    /// Thin forwarder: the walk logic lives in `DirtyTracker::mark_needs_layout` so it is
     /// unit-testable without a full owner. The `scheduler`, `render_tree`,
     /// and `layout_poison` fields are disjoint, so the split borrow
     /// compiles.
@@ -1424,8 +1407,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// Marks a node as needing paint and schedules the nearest established
     /// repaint boundary.
     ///
-    /// Ports Flutter's `RenderObject.markNeedsPaint`: the invalidation flag
-    /// propagates toward the root until an existing repaint boundary owns the
+    /// The invalidation flag propagates toward the root until an existing repaint boundary owns the
     /// affected retained layer. A boundary introduced this frame has no layer
     /// to update yet, so the walk continues to the nearest established owner.
     pub fn mark_needs_paint(&mut self, id: RenderId) {
@@ -1460,7 +1442,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             .mark_needs_composited_layer_update(&self.render_tree, id);
     }
 
-    /// Marks compositing bits dirty using Flutter's repaint-boundary walk.
+    /// Marks compositing bits dirty using the repaint-boundary walk.
     ///
     /// A stale ID is a no-op. The walk marks the necessary ancestor chain and
     /// queues exactly the node responsible for recomputing the affected bits.
@@ -1537,9 +1519,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// firing the already-scaffolded
     /// [`fire_semantics_owner_created`](crate::pipeline::notifier::VisualUpdateNotifier::fire_semantics_owner_created).
     /// Disposes the owner on the `true` → `false` transition, firing
-    /// `fire_semantics_owner_disposed` — Flutter's `PipelineOwner
-    /// .ensureSemantics()` / handle-drop parity, collapsed onto the single
-    /// boolean flag this crate already used to gate `run_semantics`.
+    /// `fire_semantics_owner_disposed`. Enablement is a single boolean flag
+    /// that gates `run_semantics`.
     ///
     /// A freshly-created owner has an empty tree even though the render
     /// tree may already hold content built while semantics was off, so this
