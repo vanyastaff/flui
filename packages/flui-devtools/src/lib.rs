@@ -12,7 +12,7 @@
 //! - **`inspector`** — [`inspector::InspectorCounters`], a counting
 //!   `TreeObserver` over the ADR-0040 observation seam: mounts, moves,
 //!   rebuilds per cause, unmounts.
-//! - **`agent`** (off by default) — [`agent::AgentServer`], a
+//! - **`agent`** (off by default) — `agent::AgentServer`, a
 //!   `DevAgentHook` that serves the application's semantics tree to an agent
 //!   over a local endpoint: a named pipe or Unix socket with a launch token,
 //!   in debug builds only (ADR-0095 §3). It reads and acts through each
@@ -62,7 +62,7 @@
 //!   scheduler bridge, `serde` for the exporters).
 //! - `inspector`: [`inspector`] (`flui_sdk::foundation::observe` for the
 //!   seam).
-//! - `agent`: [`agent`] (`flui-protocol` for the wire schema, `interprocess`
+//! - `agent`: the `agent` module (`flui-protocol` for the wire schema, `interprocess`
 //!   for the endpoint). Off by default.
 //! - `full`: all of the above, as one name for feature-matrix runs.
 
