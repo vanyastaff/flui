@@ -70,8 +70,8 @@ use flui_runtime::execution::{ExecutionServices, HostExecutors};
 /// [`FontCollection`] (ADR-0092 §2), which every realm builds its own
 /// `TextContext` from. It initializes the shared font system through
 /// [`flui_painting::shared_font_system`] and feeds the collection from it
-/// ([`FontCollection::with_host_faces`], ADR-0092 §7), so text measures and
-/// paints in the host's faces, and its carets are shaped in the same ones. "Per owner thread" is per app while
+/// ([`FontCollection::with_host_faces`], ADR-0092 §7), so text measures,
+/// paints and places its carets in the host's faces. "Per owner thread" is per app while
 /// ADR-0091 fixes one owner thread per process. Semantics state belongs
 /// to each presentation's `SemanticsHost`; scheduling belongs to each realm
 /// (see `flui_runtime`'s `RealmServices::construct`). The retired `SemanticsBinding`
@@ -114,22 +114,21 @@ impl SharedEngineServices {
         // the CONSTRUCTING owner of the free-standing `FONT_SYSTEM`
         // `OnceLock` slot (`flui-painting/src/text_layout/layout.rs`):
         // initialize it explicitly, here, at a known point, rather than
-        // leaving it to whichever text layout happens to shape first on this
-        // thread. Measurement does not read it: layout, intrinsics and dry
-        // queries measure on each realm's `TextContext` over `fonts` below,
-        // and paint draws that layout's runs. The caret layout still shapes
-        // on it, ambiently, until ADR-0092 §10 step 5.
+        // leaving it to whatever happens to reach it first on this thread.
+        // It is host font discovery and nothing else: layout, intrinsics,
+        // dry queries and carets read each realm's `TextContext` over
+        // `fonts` below, and paint draws that layout's runs.
         //
         // The collection is fed from that font system's discovery here, on
         // the owner thread before the first frame: text measured before a
         // later feed would stay measured in other faces until something
         // re-laid it out. A face registered later goes through the collection
         // (`AppRuntime::register_font`), which re-lays out what it changes.
-        let carets = flui_painting::shared_font_system();
+        let host = flui_painting::shared_font_system();
 
         Self {
             accessibility_features: RwLock::new(AccessibilityFeatures::default()),
-            fonts: FontCollection::with_host_faces(&carets),
+            fonts: FontCollection::with_host_faces(&host),
         }
     }
 }

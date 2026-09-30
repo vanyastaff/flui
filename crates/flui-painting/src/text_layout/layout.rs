@@ -14,19 +14,16 @@ use cosmic_text::FontSystem;
 use cosmic_text::fontdb::Family;
 use parking_lot::Mutex;
 
-use crate::error::RegisterFontError;
 use crate::typography::TextStyle;
 
 use super::fallback_chain::{ChainFallback, FallbackChain};
 use super::font_resolve;
 
 /// The process font system and what is kept beside it, behind one lock.
+/// Nothing changes the database after it is built.
 #[derive(Debug)]
 pub(super) struct FontState {
     pub(super) system: FontSystem,
-    /// Bumped by [`SharedFontSystem::add_face`], the one door through
-    /// which the database changes after construction.
-    db_generation: u64,
     /// The fallback lists `system` was built with, shared with every
     /// collection fed from this font system (`SharedFontSystem::host_faces`).
     chain: Arc<FallbackChain>,
@@ -39,7 +36,6 @@ impl FontState {
     fn new(system: FontSystem, chain: Arc<FallbackChain>) -> Self {
         Self {
             system,
-            db_generation: 0,
             chain,
             host_feeds: 0,
         }
@@ -222,27 +218,19 @@ pub fn font_system_initialized() -> bool {
 
 /// The process-wide font system, as a shared handle.
 ///
-/// The caret layout shapes on it, and the app's collection is fed from its
-/// host faces: a font registered through that collection
-/// ([`FontCollection::register_font`](super::FontCollection::register_font))
-/// is loaded here too, so carets sit on the glyphs measurement and paint
-/// shaped.
+/// The app's collection is fed from its host faces, once
+/// ([`FontCollection::with_host_faces`](super::FontCollection::with_host_faces)).
+/// Nothing shapes on it and a registration does not reach it.
 pub fn shared_font_system() -> SharedFontSystem {
     SharedFontSystem(Arc::clone(font_system_arc()))
 }
 
-/// A cheaply-cloneable handle to the process-wide [`FontSystem`] the caret
-/// layout shapes with, and the host faces the app's collection is fed from.
+/// A cheaply-cloneable handle to the process-wide [`FontSystem`]: the host
+/// faces, generic bindings and fallback lists the app's collection is fed
+/// from.
 ///
-/// cosmic-text's `FontSystem` needs `&mut` access to shape and owns a large
-/// font database plus shaping caches, so it cannot be snapshotted or handed
-/// out by value. This handle shares one instance behind a lock (per
-/// ADR-0016) and mediates access through a scoped callback, so the lock type
-/// never appears in a public signature. `Clone` is an `Arc` bump —
-/// clone it to give another subsystem access to the *same* faces, so a font
-/// registered through the collection fed from it
-/// ([`FontCollection::register_font`](super::FontCollection::register_font))
-/// is visible to measurement, paint and carets alike.
+/// The one instance is shared behind a lock (per ADR-0016) that no public
+/// signature names. `Clone` is an `Arc` bump.
 #[derive(Clone)]
 pub struct SharedFontSystem(Arc<Mutex<FontState>>);
 
@@ -261,43 +249,6 @@ impl SharedFontSystem {
 }
 
 impl SharedFontSystem {
-    /// The number of times the font database has changed since the font
-    /// system was built. A cache of shaped text keys on it: a face registered
-    /// after the cache was filled changes what the same text shapes to.
-    #[must_use]
-    pub fn generation(&self) -> u64 {
-        self.0.lock().db_generation
-    }
-
-    /// Loads every face in `font_bytes` into the shared font database.
-    ///
-    /// The one mutation of the database, and append-only: a face is never
-    /// removed, so a font id recorded anywhere stays valid for the life of
-    /// the process. The face is visible to the caret layout from the next
-    /// shape onward, and [`Self::generation`] advances so a `TextPainter`
-    /// drops its caret layout at its next `layout()`. Reached through
-    /// [`FontCollection::register_font`](super::FontCollection::register_font),
-    /// which loads the face for measurement and paint as well and tells the
-    /// pipelines what to lay out again.
-    ///
-    /// # Errors
-    ///
-    /// [`RegisterFontError`] when `font_bytes` parses to zero loadable faces
-    /// (empty, truncated, or not a font at all).
-    #[tracing::instrument(skip(self, font_bytes), fields(bytes = font_bytes.len()))]
-    pub(crate) fn add_face(&self, font_bytes: &[u8]) -> Result<(), RegisterFontError> {
-        let mut state = self.0.lock();
-        let faces_before = state.system.db().len();
-        state.system.db_mut().load_font_data(font_bytes.to_vec());
-        let faces_added = state.system.db().len() - faces_before;
-        if faces_added == 0 {
-            return Err(RegisterFontError);
-        }
-        state.db_generation = state.db_generation.wrapping_add(1);
-        tracing::debug!(faces_added, "registered font");
-        Ok(())
-    }
-
     /// What this font system holds, for a collection to be fed from
     /// ([`FontCollection::with_host_faces`](super::FontCollection::with_host_faces)).
     ///

@@ -85,7 +85,8 @@ testing = []
 name = "painting_it"
 path = "tests/main.rs"
 
-# Appends to the process-wide font database, so it runs in its own process.
+# Builds the process font system from the host's fonts, so it runs in its
+# own process.
 [[test]]
 name = "font_registration"
 path = "tests/font_registration.rs"

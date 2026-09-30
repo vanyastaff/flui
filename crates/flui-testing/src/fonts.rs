@@ -1,15 +1,14 @@
-//! Pinning the shared font system so a committed layout is reproducible.
+//! Pinning the shared font system so a host-fed collection is reproducible.
 //!
 //! # Why a test has to care
 //!
 //! `flui-painting`'s process-wide `FontSystem` is built from whatever fonts
-//! the *host machine* has installed. Text is measured on the realm's
-//! `FontCollection`, which holds only the bundled faces and those registered
-//! on it, and painted from the same layout, so neither layout nor paint
-//! depends on the host; but carets and selection still shape on the process
-//! `FontSystem` until ADR-0092 §10 step 5, so caret geometry does. Before
-//! measurement and paint moved to the collection, the host decided layout
-//! too:
+//! the *host machine* has installed. Text is measured, painted and given its
+//! carets on the realm's `FontCollection`, so a collection holding only the
+//! bundled faces and those registered on it depends on no host. A collection
+//! fed from the host (`FontCollection::with_host_faces`, which every app
+//! builds) reads its faces, generic families and fallback order from that
+//! `FontSystem`, and there the host decides layout:
 //!
 //! That is not hypothetical. Measured on this repository's demo trees, the
 //! same Cupertino button was 61.18 px wide on a host with fonts installed and
@@ -17,13 +16,13 @@
 //! (9.4%) wider against the fonts of the machine that captured this
 //! repository's old golden PNGs than against a Linux container's. Any test
 //! that commits *layout* — a layer-tree snapshot, a geometry assertion tighter
-//! than a few pixels, a pixel golden — is pinned to its author's font
-//! installation until the face set is pinned instead.
+//! than a few pixels, a pixel golden — over a host-fed collection is pinned
+//! to its author's font installation until the face set is pinned instead.
 //!
 //! [`pin_font_faces`] is that pin.
 
-/// Builds the process-wide font system from `faces` alone, so the caret
-/// layout resolves against repository-shipped bytes on every host.
+/// Builds the process-wide font system from `faces` alone, so a collection
+/// fed from it resolves against repository-shipped bytes on every host.
 ///
 /// Call this **before any text is measured or shaped in the process**, and
 /// before anything else touches the font system: it initializes the shared
@@ -50,8 +49,8 @@ pub fn pin_font_faces(faces: &[&[u8]], default_family: &str) {
     assert!(
         flui_painting::text_layout::init_font_system_with_faces(faces, default_family, "en-US"),
         "pin_font_faces: the shared font system was already initialized, so this \
-         pin changed nothing and the caret layout would still resolve against \
-         the host's fonts. Pin before the first text is shaped — earlier in the \
+         pin changed nothing and a host-fed collection would still read the \
+         host's fonts. Pin before the first text is shaped — earlier in the \
          test, or before the code that shaped text first.",
     );
 }
