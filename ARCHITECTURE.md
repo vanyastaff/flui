@@ -49,8 +49,8 @@ because each corrected a real flaw in the one before it:
    reuses the same type instead of declaring its own copy.
 
 The codebase's every real caller of `flui::material::TextField`
-(`examples/material_demo`, `examples/workload_probe`, and `examples/todo` until it moved to
-the widgets catalog)
+(`examples/material_demo`, `examples/workload_probe.rs`, and `examples/todo.rs` until it moved
+to the widgets catalog)
 already imported it explicitly under all three revisions and needed no
 changes across any of them — every fix here was about what an *unqualified*
 `TextField` resolves to for code that hasn't been written yet, never about

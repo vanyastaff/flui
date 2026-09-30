@@ -50,7 +50,7 @@ cargo nextest run -p flui-painting
 ```
 
 `flui_painting::testing::record` (the `testing` feature) records a closure's
-drawing into a `DisplayList` — see `docs/TESTING.md`.
+drawing into a `DisplayList` — see `docs/testing.md`.
 
 [`ARCHITECTURE.md`](ARCHITECTURE.md) has the module map, the recorder and
 text contracts, the mapping decisions, and the open items.

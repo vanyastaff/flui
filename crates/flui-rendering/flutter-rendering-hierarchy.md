@@ -1,6 +1,6 @@
 # Flutter Rendering Module - Complete Class Hierarchy
 
-This document provides a comprehensive analysis of all classes, their inheritance relationships, and mixins from Flutter's `src/rendering` module.
+This document provides a comprehensive analysis of all classes, their inheritance relationships, and mixins from Flutter's `packages/flutter/lib/src/rendering` library.
 
 ## Table of Contents
 

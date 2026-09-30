@@ -238,23 +238,23 @@ match registry.load(asset).await {
 
 ```bash
 # Run all tests
-cargo test -p flui_assets
+cargo test -p flui-assets
 
 # Run with all features
-cargo test -p flui_assets --all-features
+cargo test -p flui-assets --all-features
 
 # Check documentation
-cargo doc -p flui_assets --open
+cargo doc -p flui-assets --open
 ```
 
 ## Examples
 
 ```bash
 # Basic usage
-cargo run -p flui_assets --example assets_basic_usage
+cargo run -p flui-assets --example assets_basic_usage
 
 # With images (requires 'images' feature)
-cargo run -p flui_assets --example assets_basic_usage --features images
+cargo run -p flui-assets --example assets_basic_usage --features images
 ```
 
 ## API Compliance

@@ -216,18 +216,18 @@ let results = join_all(handles).await;
 
 Full API documentation available at:
 - **docs.rs**: https://docs.rs/flui_assets
-- **Local**: `cargo doc -p flui_assets --open`
+- **Local**: `cargo doc -p flui-assets --open`
 
 ## Examples
 
-Located in `crates/flui_assets/examples/`:
+Located in `crates/flui-assets/examples/`:
 
 - `assets_basic_usage.rs` - Simple font loading
 - (More examples coming soon)
 
 Run with:
 ```bash
-cargo run -p flui_assets --example assets_basic_usage
+cargo run -p flui-assets --example assets_basic_usage
 ```
 
 ## Best Practices

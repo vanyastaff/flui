@@ -186,8 +186,7 @@ comment records that supersession).
 path — `RenderBehavior::on_mount`'s diagnostic when an element-tree parent
 with an active `PipelineOwner` leaves the chain with no render ancestor,
 plus its `orphaned_render_mount` test family
-(`crates/flui-view/tests/orphaned_render_mount.rs` and
-`crates/flui-view/src/tree/element_tree/orphaned_render_mount_tests.rs`).
+(`crates/flui-view/tests/orphaned_render_mount.rs`).
 That gate and its tests arrived with the #1198 fix and are untouched here;
 the else-arm diagnostics the same fix added to the six (now deleted) seam
 methods vanish with them, as intended.
