@@ -363,7 +363,7 @@ impl ParagraphLayout {
     }
 
     /// The word at `position` in the kept text (see
-    /// [`word_at`](super::boundaries::word_at) for the tie-break).
+    /// [`word_at`] for the tie-break).
     pub(crate) fn word_boundary(&self, position: TextPosition) -> TextRange {
         let (start, end) = word_at(&self.text[..self.kept_text], position.offset);
         TextRange::new(start, end)
