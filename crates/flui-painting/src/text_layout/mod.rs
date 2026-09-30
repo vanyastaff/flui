@@ -12,6 +12,8 @@ use flui_foundation::geometry::Size;
 
 mod context;
 pub(crate) mod fallback_chain;
+#[cfg(test)]
+mod fallback_recorded;
 pub(crate) mod font_resolve;
 pub(crate) mod layout;
 

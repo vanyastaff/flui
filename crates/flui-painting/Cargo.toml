@@ -136,6 +136,14 @@ harness = false
 name = "color_bench"
 harness = false
 
+# What text costs before the first frame and while it is held: collection
+# build, host scan and feed timings, and the heap a collection and a laid-out
+# painter keep (ADR-0092 gate 6). Run with
+# `cargo bench -p flui-painting --bench text_startup`.
+[[bench]]
+name = "text_startup"
+harness = false
+
 [package.metadata.flui]
 layer = 2
 tier = "S"

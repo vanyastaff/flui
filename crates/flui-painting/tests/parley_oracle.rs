@@ -26,6 +26,8 @@ use parley::{FontContext, FontData, Layout, LayoutContext};
 
 #[path = "support/cases.rs"]
 mod cases;
+#[path = "support/raster_recorded.rs"]
+mod raster_recorded;
 
 const ROBOTO: &[u8] = include_bytes!("../assets/fonts/Roboto-Regular.ttf");
 const MATERIAL_ICONS: &[u8] = include_bytes!("../assets/fonts/MaterialIcons-Regular.ttf");
@@ -407,6 +409,107 @@ fn the_raster_path_never_builds_the_process_font_system() {
     assert!(!flui_painting::text_layout::font_system_initialized());
 }
 
+fn fnv1a(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
+/// The recorded row for `key` in `sample`, if the recording has one.
+fn recorded(sample: &str, key: GlyphKey) -> Option<&'static raster_recorded::Recorded> {
+    let bin = (key.x_bin().offset() * 4.0).round();
+    raster_recorded::RECORDED.iter().find(|row| {
+        row.0 == sample
+            && row.1 == key.glyph_id()
+            && (row.2 - key.size()).abs() < 1e-3
+            && f32::from(row.3) == bin
+    })
+}
+
+/// swash on Parley's keys draws what cosmic-text's scaler drew, as recorded
+/// (`support/raster_recorded.rs`): every distinct key of every sample, at
+/// every size and bin, matches its row in placement, content kind and bytes,
+/// and every row is drawn. Fails on a bitmap that moves by a pixel or one
+/// coverage value, and on a sample that shapes other glyphs than it did.
+fn swash_matches_the_recorded_reference() {
+    let mut failures = Vec::new();
+    let mut matched = 0;
+    for sample in &SAMPLES {
+        let mut shaper = Shaper::new();
+        let family = shaper.register(sample.face.to_vec());
+        let mut rasterizer = SwashRasterizer::new();
+        let mut seen = HashSet::new();
+        for size in SIZES {
+            for origin in ORIGINS {
+                let keys: Vec<GlyphKey> = place(
+                    &mut shaper,
+                    rasterizer.fonts_mut(),
+                    sample.text,
+                    size,
+                    &family,
+                    origin,
+                )
+                .into_iter()
+                .map(|placed| placed.key)
+                .filter(|key| seen.insert(*key))
+                .collect();
+                for key in keys {
+                    let Some(row) = recorded(sample.name, key) else {
+                        failures.push(format!("{}: no recorded row for {key:?}", sample.name));
+                        continue;
+                    };
+                    let image = rasterizer.rasterize(key).expect("swash rasterizes");
+                    let got = (
+                        image.width,
+                        image.height,
+                        image.left,
+                        image.top,
+                        image.content == GlyphContent::Color,
+                        fnv1a(&image.data),
+                    );
+                    if got != (row.4, row.5, row.6, row.7, row.8, row.9) {
+                        failures.push(format!(
+                            "{}: {key:?} drew {got:?}, recorded {row:?}",
+                            sample.name
+                        ));
+                    }
+                    matched += 1;
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert_eq!(
+        matched,
+        raster_recorded::RECORDED.len(),
+        "every recorded key is shaped again"
+    );
+}
+
+/// Rasterizing the same keys twice on one rasterizer, the second pass in
+/// reverse order, draws the same bitmaps: the scaler carries nothing from
+/// one glyph to the next that changes what it draws.
+fn rasterizing_a_key_twice_draws_the_same_bitmap() {
+    let mut shaper = Shaper::new();
+    let family = shaper.register(ROBOTO.to_vec());
+    let mut rasterizer = SwashRasterizer::new();
+    let keys = latin_keys(&mut shaper, rasterizer.fonts_mut(), &family);
+    let first: Vec<GlyphImage> = keys
+        .iter()
+        .map(|key| rasterizer.rasterize(*key).expect("swash rasterizes"))
+        .collect();
+    let again: Vec<GlyphImage> = keys
+        .iter()
+        .rev()
+        .map(|key| rasterizer.rasterize(*key).expect("swash rasterizes"))
+        .collect();
+    assert!(first.len() > 1, "the sample shapes several keys");
+    assert!(
+        first.iter().eq(again.iter().rev()),
+        "a key drew a different bitmap the second time"
+    );
+}
+
 #[test]
 fn parley_oracle_contract() {
     cases::run_cases(
@@ -415,6 +518,14 @@ fn parley_oracle_contract() {
             (
                 "swash_matches_cosmic_text_bit_for_bit",
                 swash_matches_cosmic_text_bit_for_bit,
+            ),
+            (
+                "swash_matches_the_recorded_reference",
+                swash_matches_the_recorded_reference,
+            ),
+            (
+                "rasterizing_a_key_twice_draws_the_same_bitmap",
+                rasterizing_a_key_twice_draws_the_same_bitmap,
             ),
             (
                 "the_raster_path_never_builds_the_process_font_system",

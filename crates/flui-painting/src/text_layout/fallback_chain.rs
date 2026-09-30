@@ -277,6 +277,50 @@ mod tests {
         );
     }
 
+    /// The recording of cosmic-text's platform lists (`fallback_recorded`)
+    /// agrees with the `PlatformFallback` this host compiles: its common list
+    /// and, for every recorded locale, every script's list.
+    #[test]
+    fn the_recorded_lists_are_this_hosts_platform_fallback() {
+        use cosmic_text::{Fallback as _, PlatformFallback};
+        use unicode_script::UnicodeScript as _;
+
+        let host = if cfg!(target_os = "windows") {
+            "windows"
+        } else if cfg!(target_os = "macos") {
+            "macos"
+        } else if cfg!(all(unix, not(target_os = "android"))) {
+            "unix"
+        } else {
+            "other"
+        };
+        let (_, common, locales) = super::super::fallback_recorded::RECORDED
+            .iter()
+            .find(|(platform, _, _)| *platform == host)
+            .expect("every platform is recorded");
+        assert_eq!(PlatformFallback.common_fallback(), *common);
+        let mut scripts: Vec<unicode_script::Script> = Vec::new();
+        for c in (0..=0x10_FFFF_u32).filter_map(char::from_u32) {
+            if !scripts.contains(&c.script()) {
+                scripts.push(c.script());
+            }
+        }
+        for (locale, lists) in *locales {
+            for script in &scripts {
+                let recorded = lists
+                    .iter()
+                    .find(|(tag, _)| *tag == script.short_name())
+                    .map_or(&[][..], |(_, list)| *list);
+                assert_eq!(
+                    PlatformFallback.script_fallback(*script, locale),
+                    recorded,
+                    "{host} {locale} {}",
+                    script.short_name()
+                );
+            }
+        }
+    }
+
     /// An emoji cluster walks the style's family, then the emoji generic:
     /// the whole common list, in order, as cosmic-text walks it.
     #[test]
