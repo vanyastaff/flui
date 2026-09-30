@@ -623,10 +623,11 @@ sans-serif, serif, cursive, fantasy and monospace to it before the host
 generics are bound (`fonts::bind_generics_to_bundled`), as every
 `FontCollection` does; the app's collection, fed from the host, binds its
 generics to the families the process font system binds them to, so Roboto
-there too (decision 17). A weight Roboto lacks snaps to the Regular it has, the
-monospace generic included (`font_resolve::snap_weight`). Text whose style
-names no family, names "Roboto" or names a generic is measured and painted in
-the bundled Roboto Regular on every host.
+there too (decision 17). In the caret layout, a weight Roboto lacks snaps to
+the Regular it has, the monospace generic included (`font_resolve::snap_weight`).
+Text whose style names no family, names "Roboto" or names a generic is
+measured, painted and given carets in the bundled Roboto Regular on every host;
+paint synthesizes a bold weight on it instead of snapping (decisions 10 and 18).
 
 **Flutter:** the default family is the platform's (Segoe UI on Windows, the
 system font on Apple platforms, Roboto on Android). Recalled, not checked
@@ -794,6 +795,15 @@ cosmic-text paint it replaced:
   last kept line with the ellipsis fits the width, so the painted line no
   longer overhangs the measured width
   (`truncated_paragraph_paints_what_it_measured`, `tests/text_overflow_unit.rs`).
+
+The raster side's registry is append-only and keys a face by its blob's id,
+not its bytes: every `FontCollection` build and every `register_font` wraps
+the bytes in a new blob, so registering the same file again, or building a
+second collection over the bundled faces (the performance overlay's
+`WgpuPainter::draw_label` builds its own), adds one more face to each
+painter's registry and rasterizes its glyphs again under new keys; neither is
+released while the painter lives. The growth is bounded by how often an app
+registers or builds a collection, not by frames.
 
 The ink bounds a damage extent is built from grow by the synthetic bold and
 oblique the rasterizer applies (`paragraph_extent_covers_every_rasterized_glyph`,

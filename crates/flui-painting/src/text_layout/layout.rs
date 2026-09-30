@@ -376,10 +376,11 @@ impl SharedFontSystem {
     ///
     /// The only public mutation of the database, and append-only: a face is
     /// never removed, so a font id recorded anywhere stays valid for the life
-    /// of the process. The face is visible to measurement and to the engine's
-    /// glyph pipeline from the next shape onward, and [`Self::generation`]
-    /// advances so shaped-text caches refill — text already laid out is not
-    /// re-laid-out by this call.
+    /// of the process. The face is visible to the caret layout from the next
+    /// shape onward, and [`Self::generation`] advances so a `TextPainter`
+    /// drops its caret layout at its next `layout()`. Measurement and paint
+    /// shape on the realm's `FontCollection` and do not see it (flui-painting
+    /// `ARCHITECTURE.md`, mapping decision 15).
     ///
     /// # Errors
     ///

@@ -476,8 +476,10 @@ that wires what it adds.
      Icons and CupertinoIcons in place of any host face of those names (the collection measures
      those families in the bundled faces alone), binds its generic families to Roboto, as the
      collection does, and
-     snaps a weight the family lacks to one it has, so default-family and generic text, bold
-     included, paints in the face it was measured in (mapping decision 16). The fed collection
+     snaps a weight the family lacks to one it has, so the caret layout, on cosmic-text until
+     step 5, lays default-family and generic text out in the face it was measured in (mapping
+     decision 16); paint draws the measured Parley runs (4b), a bold Roboto lacks synthesized
+     rather than snapped (mapping decision 18). The fed collection
      binds its generics to the families the process font system binds them to, so both sides
      name Roboto.
    - (4a) Merge gate. Face agreement, decided by the owner on 2026-09-30: host faces go into
@@ -492,7 +494,8 @@ that wires what it adds.
      too. That half of the gate is closed. The other half is still open: the registration half
      of step 3b (the font-collection-changed event, and `register_font` moving to the
      collection) merges first, unless the owner waives the ordering here; until then a face
-     registered at run time reaches paint and not measurement (mapping decision 15).
+     registered at run time on the process font system reaches the caret layout and neither
+     measurement nor paint (mapping decision 15).
    - (4a) Merge gate, line breaks: closed by the owner on 2026-09-30, by landing 4a with 4b,
      and `"A\n"` is two lines, as Parley lays it out. `"A\r\nB"` is three lines on Parley,
      an empty one between; whether CR LF breaks once is open with the owner, and pinned as
@@ -506,8 +509,9 @@ that wires what it adds.
      no setting of either shaper aligns them. With paint on Parley that difference moves
      to the caret layout until step 5 (mapping decision 15).
    - *Acceptance (4a):* measurement is Parley's in the default build, at the painter
-     (`text_context_contract`, a face registered only on the process font system reaches paint
-     and not measurement) and at the realm (a face registered on one realm's collection sizes
+     (`text_context_contract`, and a face registered only on the process font system reaches
+     the caret layout and neither measurement nor paint,
+     `a_face_registered_on_the_process_font_system_reaches_carets_not_measurement_or_paint`) and at the realm (a face registered on one realm's collection sizes
      that realm's paragraph); measured and painted metrics agree on the bundled Roboto, named,
      as the default family and as the monospace generic, regular and bold, and a host face named
      "Roboto", "Material Icons" or "CupertinoIcons" does not replace the bundled one; on the host's faces they agree for every row of
@@ -529,6 +533,10 @@ that wires what it adds.
    - (4b) The cosmic-text paint path is removed: `TextLayout::placed_glyphs` and its ink
      bounds, `SharedFontSystem::rasterize` and its `GlyphRasterizer` impl, and the cosmic
      `GlyphKey`, whose name `ParleyGlyphKey` takes.
+   - (4b) No rollback for measurement or paint: with the features and the cosmic-text paint
+     path removed, no flag brings cosmic-text measurement or paint back, and a paint regression
+     found after this step is fixed forward. The rollback step 5 keeps covers carets and
+     selection only.
    - *Acceptance:* the `DrawOp` payload is one `Arc`; the text readback suite passes
      unmodified; `the_engine_does_not_shape` is extended so the engine's manifest names no
      parley, fontique, skrifa, swash or cosmic-text. Glyph baselines round as today
@@ -546,7 +554,8 @@ that wires what it adds.
      `system` feature question is settled: `fontique/system` reaches `windows`, which tier S
      forbids, and needs fontconfig headers on Linux, so it is not used. Host discovery is
      fontdb's, which the collection is fed from (step 3c); no reach grant is needed.
-   - The cosmic-text path stays behind a flag for one release as the rollback.
+   - The cosmic-text caret layout stays behind a flag for one release as the rollback for
+     carets and selection; measurement and paint have had none since step 4.
    - *Acceptance:* gates 2–7. The existing selection and offset↔cursor tests pass unchanged for
      LTR, RTL and mixed bidi. The `complex-scripts` decision is recorded.
 6. **cosmic-text removed; `FONT_SYSTEM` leaves.**

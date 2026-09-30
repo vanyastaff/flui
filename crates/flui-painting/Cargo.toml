@@ -70,10 +70,11 @@ serde = ["dep:serde", "flui-foundation/serde"]
 
 # bundled-fonts: embed Roboto Regular, Material Icons, and Cupertino Icons.
 # Every `FontCollection` holds them and binds its generic families to Roboto;
-# the process-wide font system, which paints, installs whichever it lacks and
-# binds its generic families to Roboto as well, so text paints in the face it
-# was measured in on every host. Off, a collection holds only the faces
-# registered on it, so text measures with no face until one is.
+# the process-wide font system, which lays out carets, installs each in place
+# of any host face of that family and binds its generic families to Roboto as
+# well, so carets sit in the face text was measured and painted in on every
+# host. Off, a collection holds only the faces registered on it, so text
+# measures and paints with no face until one is.
 bundled-fonts = []
 
 # testing: opt-in painting test harness (`crate::testing`) — a `record`
