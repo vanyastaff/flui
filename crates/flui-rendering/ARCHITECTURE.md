@@ -1015,6 +1015,49 @@ walk's `catch_unwind` turns it into `Poisoned`. Locked by
 `a_taken_pipeline_leaves_an_owner_that_measures_through_the_same_context`
 (`tests/text_context.rs`), and the `compile_fail` doctests on `PipelineOwner::new`.
 
+### A font collection change re-lays out what measured text, found by its loans, not by an opt-in mixin
+
+**Rule.** Every loan of the text context a walk makes records the node it was made for: the
+walk mints each node's `TextSource` from a crate-private `TextLender` (the context's cell and
+the pipeline's `TextMeasurers`, a set of `RenderId`s), and `lend` inserts the node before it
+borrows. `PipelineOwner::apply_font_change` reads the collection's generation through a
+`try_borrow` of the context: while the context is lent (a drain run from inside a
+measurement) it does nothing and the change waits for the next drain, rather than panic. When
+the generation differs from the one the pipeline last applied, it takes the set and marks each node still in the tree for layout and paint, through the ordinary
+`mark_needs_layout` (which clears cached intrinsics up the ancestor walk and requests a visual
+update) and `mark_needs_paint`. `drain_pending_dirty` calls it last, and both frame entries
+drain before their first phase: `run_frame` and the runtime's pending-work gate. A test's
+`TextContextHandle::source` records nothing.
+
+**Why.** A face registered after text was laid out can change what that text measures to, and
+the node that measured it cannot notice: the painter's cache heals only when asked to lay out
+again. The pipeline already hands out every loan, so it knows exactly which nodes depend on the
+collection, including a third-party render object that measures through `ctx.text()` with no
+code of its own.
+
+**Divergence from Flutter.** Checked at flutter `1be6586f8`: `RelayoutWhenSystemFontsChangeMixin`
+(`rendering/object.dart:4718-4784`) is opted into per render-object class, subscribes each
+attached object to the process-wide `PaintingBinding.systemFonts` notifier
+(`painting/binding.dart:173-205`, fed by the engine's `'fontsChange'` system message), and on a
+notification schedules a frame callback that calls `markNeedsLayout` in the next frame's
+transient-callback phase. That `loadFontFromList` sends `'fontsChange'` is recalled, not
+checked. FLUI differs on purpose:
+
+- nothing opts in: measuring through the context is what registers a node, so no text render
+  object can forget the mixin;
+- no global notifier: each pipeline compares its collection's generation at its next drain,
+  before build and layout, the same boundary Flutter's transient callbacks run at;
+- paint is marked explicitly, since a repaint boundary's retained layer would otherwise keep
+  the old glyphs of a node whose size did not change;
+- the cost moves to the frame path: one hash-set insert per measurement, where Flutter pays one
+  listener per attached text object.
+
+**Accepted trade-off.** The record is sticky: a node that measured once stays recorded until the
+next change takes the set, so a node that stopped measuring text is laid out once more than it
+needs, at worst. A removed node's id stays in the set until then and is skipped (render ids are
+generational, so a reused slot never matches it). Locked by `font_change_contract`
+(`tests/text_context.rs`).
+
 
 ## Thread safety
 

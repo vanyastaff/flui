@@ -476,7 +476,7 @@ impl PipelineOwner<Layout> {
             &mut self.render_tree,
             id,
             &self.layout_poison,
-            text.cell(),
+            crate::pipeline::TextLender::new(text.cell(), &self.text_measurers),
             #[cfg(any(test, feature = "testing"))]
             &self.parent_data_seeds,
         )?;

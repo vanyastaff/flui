@@ -225,3 +225,231 @@ fn a_taken_pipeline_leaves_an_owner_that_measures_through_the_same_context() {
         "the placeholder measured through the context the pipeline was built with"
     );
 }
+
+// ============================================================================
+// A font collection change re-lays out what measured text
+// ============================================================================
+
+/// "FLUI Probe Mono" Thin, which no pipeline here names: registering it only
+/// changes the collection's generation.
+const PROBE_MONO: &[u8] = include_bytes!("../../flui-painting/assets/fonts/probe-mono-100.ttf");
+
+/// A leaf that measures through the realm's context and nothing else: no
+/// hook, no painter, no font listener of its own.
+#[derive(Debug)]
+struct MeasuresThroughTheContext;
+
+impl flui_foundation::Diagnosticable for MeasuresThroughTheContext {}
+
+impl RenderBox for MeasuresThroughTheContext {
+    type Arity = Leaf;
+    type ParentData = BoxParentData;
+
+    fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
+        let _lent = ctx.text();
+        Size::new(10.0, 10.0)
+    }
+
+    fn hit_test(&self, _ctx: &mut BoxHitTestContext<'_, Leaf, BoxParentData>) -> bool {
+        false
+    }
+}
+
+/// Registers the probe face on the collection `text` was built over.
+fn register_probe(text: &TextContextHandle) {
+    text.with(|text| text.fonts().register_font(PROBE_MONO))
+        .expect("the probe face loads");
+}
+
+fn needs_layout(owner: &PipelineOwner, id: flui_foundation::RenderId) -> bool {
+    owner
+        .render_tree()
+        .get(id)
+        .expect("the node is live")
+        .needs_layout()
+}
+
+fn needs_paint(owner: &PipelineOwner, id: flui_foundation::RenderId) -> bool {
+    owner
+        .render_tree()
+        .get(id)
+        .expect("the node is live")
+        .needs_paint()
+}
+
+/// A column of a paragraph and a leaf that measures nothing, laid out once.
+fn laid_out_paragraph_and_box(
+    text: &TextContextHandle,
+) -> (
+    PipelineOwner,
+    flui_foundation::RenderId,
+    flui_foundation::RenderId,
+) {
+    let (owner, labels) = mount(
+        text,
+        box_node(RenderFlex::column())
+            .child(paragraph("measured"))
+            .child(box_node(flui_objects::RenderColoredBox::red(10.0, 10.0)).label("box")),
+    );
+    let paragraph = labels.get("paragraph").expect("labelled");
+    let colored = labels.get("box").expect("labelled");
+    let (owner, result) = owner.run_frame();
+    result.expect("the first frame lays out");
+    assert!(
+        !owner.has_dirty_nodes(),
+        "the first frame leaves nothing dirty"
+    );
+    (owner, paragraph, colored)
+}
+
+/// A face registered on the collection marks for layout and paint the node
+/// that measured text, and not the one that measured none. Fails if the
+/// pipeline never learns of the change, or marks the whole tree.
+fn a_font_change_marks_only_the_nodes_that_measured_text() {
+    let text = realm_text();
+    let (mut owner, paragraph, colored) = laid_out_paragraph_and_box(&text);
+
+    register_probe(&text);
+    owner.drain_pending_dirty();
+
+    assert!(
+        needs_layout(&owner, paragraph),
+        "the paragraph lays out again"
+    );
+    assert!(needs_paint(&owner, paragraph), "the paragraph repaints");
+    assert!(
+        !needs_layout(&owner, colored),
+        "a node that measured no text is not laid out again"
+    );
+    let (owner, result) = owner.run_frame();
+    result.expect("the frame after the change lays out");
+    assert!(!owner.has_dirty_nodes(), "the change is applied once");
+}
+
+/// A render object is marked because it measured through its context, with
+/// no code of its own that listens for fonts. Fails if the marking needs the
+/// render object to opt in.
+fn a_render_object_with_no_font_hook_is_marked() {
+    let text = realm_text();
+    let (owner, labels) = mount(&text, box_node(MeasuresThroughTheContext).label("leaf"));
+    let leaf = labels.get("leaf").expect("labelled");
+    let (mut owner, result) = owner.run_frame();
+    result.expect("the leaf lays out");
+
+    register_probe(&text);
+    owner.drain_pending_dirty();
+
+    assert!(
+        needs_layout(&owner, leaf),
+        "the leaf that measured is marked"
+    );
+}
+
+/// Without a registration a drain marks nothing, frame after frame: the
+/// record costs no layout while the collection is unchanged. Fails if a
+/// drain treats the record itself as a change.
+fn no_change_marks_nothing() {
+    let text = realm_text();
+    let (mut owner, _, _) = laid_out_paragraph_and_box(&text);
+
+    owner.drain_pending_dirty();
+    owner.drain_pending_dirty();
+
+    assert!(!owner.apply_font_change(), "nothing changed");
+    assert!(!owner.has_dirty_nodes(), "no drain dirtied a node");
+}
+
+/// A drain while the context is lent neither panics nor loses the change: it
+/// leaves it for the next drain, which applies it. Fails if the drain borrows
+/// the lent context unconditionally (a `BUG:` panic), or if a deferred change
+/// is forgotten.
+fn a_drain_while_the_context_is_lent_defers_the_change() {
+    let text = realm_text();
+    let (mut owner, paragraph, _) = laid_out_paragraph_and_box(&text);
+
+    text.with(|lent| {
+        lent.fonts()
+            .register_font(PROBE_MONO)
+            .expect("the probe face loads");
+        owner.drain_pending_dirty();
+    });
+    assert!(
+        !needs_layout(&owner, paragraph),
+        "the change waits while the context is lent"
+    );
+
+    owner.drain_pending_dirty();
+    assert!(
+        needs_layout(&owner, paragraph),
+        "the next drain lays the paragraph out again"
+    );
+}
+
+/// A node removed after it measured is skipped, and a survivor that measured
+/// is still marked. Fails if a stale record stops the walk or the change
+/// reaches no one.
+fn a_node_removed_after_measuring_is_skipped() {
+    let text = realm_text();
+    let (owner, labels) = mount(
+        &text,
+        box_node(RenderFlex::column())
+            .child(paragraph("removed"))
+            .child(
+                box_node(RenderParagraph::new(
+                    TextSpan::new("kept"),
+                    TextDirection::Ltr,
+                ))
+                .label("kept"),
+            ),
+    );
+    let removed = labels.get("paragraph").expect("labelled");
+    let kept = labels.get("kept").expect("labelled");
+    let (mut owner, result) = owner.run_frame();
+    result.expect("the first frame lays out");
+    assert_eq!(owner.remove_render_object(removed), 1);
+    let (mut owner, result) = owner.run_frame();
+    result.expect("the frame after the removal lays out");
+
+    register_probe(&text);
+    owner.drain_pending_dirty();
+
+    assert!(owner.render_tree().get(removed).is_none());
+    assert!(
+        needs_layout(&owner, kept),
+        "the surviving paragraph is marked"
+    );
+}
+
+/// A face registered on the pipeline's font collection lays out again what
+/// measured text through the pipeline's context, and nothing else.
+#[test]
+fn font_change_contract() {
+    let cases: &[(&str, fn())] = &[
+        (
+            "a_font_change_marks_only_the_nodes_that_measured_text",
+            a_font_change_marks_only_the_nodes_that_measured_text,
+        ),
+        (
+            "a_render_object_with_no_font_hook_is_marked",
+            a_render_object_with_no_font_hook_is_marked,
+        ),
+        ("no_change_marks_nothing", no_change_marks_nothing),
+        (
+            "a_drain_while_the_context_is_lent_defers_the_change",
+            a_drain_while_the_context_is_lent_defers_the_change,
+        ),
+        (
+            "a_node_removed_after_measuring_is_skipped",
+            a_node_removed_after_measuring_is_skipped,
+        ),
+    ];
+    let failed: Vec<&str> = cases
+        .iter()
+        .filter(|(_, case)| std::panic::catch_unwind(*case).is_err())
+        .map(|(name, _)| *name)
+        .collect();
+    assert!(
+        failed.is_empty(),
+        "font_change_contract: failing cases: {failed:?}"
+    );
+}
