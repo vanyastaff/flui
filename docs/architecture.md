@@ -108,7 +108,7 @@ impl RenderBox for RenderPadding {
 
 ## ID Offset Pattern
 
-Slab-based storage uses 0-based indices internally; public IDs are 1-based, so `Option<Id>` costs no extra space (niche optimization). There are two shapes in `flui_foundation::id`:
+Slab-based storage uses 0-based indices internally. Every public ID has a niche (a `NonZero*` payload), so `Option<Id>` costs no extra space, but only the plain slab-backed IDs are the slot plus one. There are two shapes in `flui_foundation::id`:
 
 - **Plain IDs** wrap a `NonZeroUsize`. The slab-backed ones (`ViewId`, `LayerId`, `SemanticsId`) are the slot plus one: insert `slab_index + 1`, look up `id.get() - 1`. The rest (`ListenerId`, `ObserverId`, `FrameCallbackId`, `FrameId`, `TaskId`, `TickerId`) are opaque counters with no slot behind them.
 - **Generational IDs** (`ElementId`, `RenderId`, `RealmId`, …) pack the slab index with a `NonZeroU32` generation into a `NonZeroU64`, so an id held across a slot's reuse fails the generation check instead of addressing the new occupant. They have no `get()`; the owning tree's accessors use `.index()` (0-based) and `.generation()`.
