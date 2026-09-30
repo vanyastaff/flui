@@ -53,6 +53,35 @@ pub(crate) fn wide_ellipsis_floors_min_intrinsic_width() {
     );
 }
 
+/// The ellipsis floor is shaped in the style truncation paints the ellipsis
+/// in, the first run's, not the root's: a 10 px empty root holding a 100 px
+/// `"i i"` under one line lays out, at its own min intrinsic width, no wider
+/// than that width. Fails if the floor is shaped in the root's 10 px, which
+/// leaves a 100 px ellipsis-only line overflowing it.
+pub(crate) fn a_rich_span_ellipsis_floors_min_intrinsic_width() {
+    use flui_painting::typography::TextStyle;
+
+    let size = |size: f64| TextStyle {
+        font_size: Some(size),
+        ..TextStyle::default()
+    };
+    let mut painter = TextPainter::new()
+        .with_text(
+            TextSpan::styled("", size(10.0)).with_child(TextSpan::styled("i i", size(100.0))),
+        )
+        .with_text_direction(TextDirection::Ltr)
+        .with_max_lines(Some(1))
+        .with_ellipsis(Some("…".to_owned()));
+
+    let min = painter.min_intrinsic_width(&mut text_cx());
+    painter.layout(&mut text_cx(), 0.0, min);
+    let painted = painter.width();
+    assert!(
+        painted <= min + 0.01,
+        "laid out at its min intrinsic width {min}, the paragraph is {painted} wide"
+    );
+}
+
 /// An empty paragraph measures the line box and baseline a line of text in
 /// the same style measures, so an empty `Text` in a baseline-aligned row
 /// sits on its neighbours' baseline (painting mapping decision 15). Every

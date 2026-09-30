@@ -258,15 +258,23 @@ impl TextPainter {
             reason = "f64 layout values narrow to Parley's f32 layout space"
         )]
         let font_size = self.scaled_font_size(text) as f32;
-        let spans = vec![(
-            ellipsis.to_string(),
-            text.style()
-                .map(|style| effective_style(style, self.text_scale_factor)),
-        )];
+        // The one paragraph truncation keeps whatever the width is the
+        // ellipsis alone, and `ellipsize` styles it as the first run: shaped
+        // the same way, over the root as the paragraph default, the floor is
+        // that paragraph's width, however the runs' styles differ from the
+        // root's.
+        let first = collect_styled_spans(text, self.text_scale_factor)
+            .into_iter()
+            .next()
+            .and_then(|(_, style)| style);
+        let root = text
+            .style()
+            .map(|style| effective_style(style, self.text_scale_factor));
+        let spans = vec![(ellipsis.to_string(), first)];
         text_cx
             .shape(&crate::parley_text::ParagraphSpec {
                 spans: &spans,
-                default_style: None,
+                default_style: root.as_ref(),
                 font_size,
                 max_width: None,
                 line_height: None,

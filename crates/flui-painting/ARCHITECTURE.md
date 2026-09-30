@@ -406,8 +406,10 @@ with the ellipsis as a lower bound when truncation can leave only that glyph str
 
 **Accepted trade-off:** `max_lines` does not shrink min/max intrinsic *width* below the
 shaped content (or the ellipsis floor). Parents that need truncated size use dry layout /
-committed layout. The ellipsis floor is locked by `wide_ellipsis_floors_min_intrinsic_width`
-(`tests/text_painter_unit.rs`). For `max_lines` without an ellipsis, and for the `RenderParagraph`
+committed layout. The ellipsis floor is the width of the ellipsis-only paragraph truncation
+can keep, shaped in the first run's style as `ellipsize` shapes it; locked by
+`wide_ellipsis_floors_min_intrinsic_width` and
+`a_rich_span_ellipsis_floors_min_intrinsic_width` (`tests/text_painter_unit.rs`). For `max_lines` without an ellipsis, and for the `RenderParagraph`
 intrinsics: **Unasserted:** no test pins this.
 
 ### 10. Synthetic bold uses an interpolated stroke width
