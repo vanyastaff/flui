@@ -1,4 +1,4 @@
-//! Complete ParentData hierarchy - 15+ types matching Flutter's architecture.
+//! Complete ParentData hierarchy - 15+ types.
 //!
 //! Comprehensive parent data system supporting all major layout protocols:
 //! - Box layouts (Flex, Stack, Flow, Table, etc)

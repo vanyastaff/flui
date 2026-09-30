@@ -116,7 +116,7 @@ pub struct AppConfig {
     /// row reports p99 present/input latency, deferred/dropped counts, and
     /// whether input attribution was truncated by the bounded per-frame buffer.
     ///
-    /// Flutter's `showPerformanceOverlay`. The bootstrap runner forwards this
+    /// The bootstrap runner forwards this
     /// to `UiRealm::set_performance_overlay`, which is what actually starts
     /// the rolling frame-time window; the frame path then appends a
     /// `PerformanceOverlayLayer` as the root layer's last child. Off costs a
@@ -131,8 +131,8 @@ pub struct AppConfig {
     ///
     /// Not currently wired: `From<&AppConfig> for flui_platform::WindowOptions`
     /// drops this field and no paint-phase debug visualization reads it yet.
-    /// Intended consumer: a future paint-phase hook analogous to Flutter's
-    /// `debugPaintSizeEnabled`.
+    /// Intended consumer: a future paint-phase hook that draws render-object
+    /// bounds.
     pub debug_paint: bool,
 
     /// The development reload driver, if the application installed one with

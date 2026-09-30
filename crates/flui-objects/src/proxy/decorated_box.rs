@@ -1,7 +1,6 @@
 //! `RenderDecoratedBox` — paints a [`BoxDecoration`] around its child.
 //!
-//! Flutter parity: proxy_box.dart `RenderDecoratedBox`. The decoration
-//! paints either BEHIND the child (`DecorationPosition::Background`,
+//! The decoration paints either BEHIND the child (`DecorationPosition::Background`,
 //! the default) or IN FRONT of it (`Foreground`) — in the fragment
 //! paint model that is simply the order of canvas ops around the
 //! `paint_child` marker. Hit testing delegates to the decoration's
@@ -37,9 +36,8 @@ pub struct RenderDecoratedBox {
     decoration: BoxDecoration<f64>,
     /// Behind or in front of the child.
     position: DecorationPosition,
-    /// Whether the decoration's background edges are anti-aliased. Flutter
-    /// keeps this on the render object rather than on the decoration
-    /// (`_RenderColoredBox.isAntiAlias`), and so does this.
+    /// Whether the decoration's background edges are anti-aliased. Kept
+    /// on the render object rather than on the decoration.
     anti_alias: bool,
     /// Whether we have a child.
     has_child: bool,
@@ -65,9 +63,7 @@ impl RenderDecoratedBox {
     /// Sets whether the background's edges are anti-aliased.
     ///
     /// Reaches the background fill only — the border, shadow and image passes
-    /// keep the default. Flutter's `isAntiAlias` is a `ColoredBox` parameter,
-    /// and a `ColoredBox` has none of those, so nothing in the reference says
-    /// what they should do when it is off.
+    /// keep the default; what they should do when it is off is unspecified.
     pub fn set_anti_alias(&mut self, value: bool) -> flui_rendering::RenderUpdateImpact {
         if self.anti_alias == value {
             return flui_rendering::RenderUpdateImpact::NONE;
@@ -174,11 +170,9 @@ impl RenderBox for RenderDecoratedBox {
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, Self::ParentData>) -> bool {
-        // Flutter's default `RenderBox.hitTest` is `hitTestChildren() ||
-        // hitTestSelf()` within the bounding box: the CHILD is tested first, and
-        // the decoration shape (rounded corners exclude the rect's corners) is
-        // only the fallback (`RenderDecoratedBox.hitTestSelf` →
-        // `BoxDecoration.hitTest`). Testing the shape first wrongly rejected a
+        // Within the bounding box the CHILD is tested first, and the
+        // decoration shape (rounded corners exclude the rect's corners) is
+        // only the fallback. Testing the shape first wrongly rejected a
         // child hittable in a rounded-corner cut-out.
         if !ctx.is_within_own_size() {
             return false;
@@ -186,7 +180,7 @@ impl RenderBox for RenderDecoratedBox {
         if self.has_child && ctx.hit_test_child_at_offset(0, Offset::ZERO) {
             return true;
         }
-        // hitTestSelf: the decorated area is hit-opaque within the decoration
+        // Self test: the decorated area is hit-opaque within the decoration
         // shape (a Container with a color absorbs taps), excluding cut corners.
         box_decoration_hit_test(
             Self::paint_rect(ctx.own_size()),

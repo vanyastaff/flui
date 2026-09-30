@@ -3,8 +3,7 @@
 /// How children within a run should be placed in the main axis of a
 /// `Wrap` layout.
 ///
-/// Mirrors Flutter's `WrapAlignment`. Applies to each run (line)
-/// independently.
+/// Applies to each run (line) independently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum WrapAlignment {
@@ -62,8 +61,6 @@ impl WrapAlignment {
 
 /// How children within a run should be aligned relative to each other
 /// in the cross axis of a `Wrap` layout.
-///
-/// Mirrors Flutter's `WrapCrossAlignment`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum WrapCrossAlignment {

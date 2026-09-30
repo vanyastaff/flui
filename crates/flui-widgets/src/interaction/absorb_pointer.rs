@@ -9,8 +9,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// [`IgnorePointer`](crate::IgnorePointer)) it stops events from reaching
 /// widgets visually behind it.
 ///
-/// Flutter parity: `widgets/basic.dart` `AbsorbPointer` over
-/// `RenderAbsorbPointer`. `absorbing` defaults to `true`.
+/// `absorbing` defaults to `true`.
 #[derive(Clone, Debug)]
 pub struct AbsorbPointer {
     absorbing: bool,

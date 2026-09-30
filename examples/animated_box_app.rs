@@ -5,7 +5,7 @@
 //! (perceptually uniform — no muddy gray midpoint like gamma-sRGB lerp).
 //! The box itself fills the window: the root hands a bare render child
 //! tight window constraints, exactly like a bare `ColoredBox` under
-//! Flutter's root.
+//! the app root.
 //!
 //! The full production loop, no shortcuts:
 //!
@@ -46,7 +46,7 @@
 //! tree. That ambient process-wide reach retired along with `AppBinding`:
 //! `AppRuntime`/`UiRealm` are deliberately `pub(crate)`, not a public escape
 //! hatch, so an application author now drives per-tick recoloring the
-//! idiomatic way Flutter's own `AnimatedWidget` does instead: subscribe an
+//! idiomatic way instead: subscribe an
 //! `AnimatedView` to the controller's `Listenable` and let the framework
 //! mark it dirty and rebuild on every tick.
 
@@ -185,7 +185,7 @@ impl App {
         // ambient `VsyncScope` the realm wraps every mounted tree in — the same
         // seam `AnimatedSize` uses internally — so it advances once mounted
         // under a real realm. But `is_animating()` is intentionally
-        // ticker-based (Flutter parity: `Ticker.isActive`, not this
+        // ticker-based (it reports whether a ticker is active, not this
         // controller's own status), so a ticker-less controller can never
         // report it, and `repeat()` on one logs "the animation will not
         // advance" — which is false here, since `Vsync` drives the value ticks

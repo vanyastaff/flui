@@ -13,19 +13,14 @@
 //! and [`CupertinoTabScaffold`]/[`CupertinoTabBar`] (the lazy-build,
 //! state-retaining tabbed root layout).
 //!
-//! ## Flutter parity
+//! ## Design spec
 //!
-//! `package:flutter/cupertino.dart`'s theming and single-page/tabbed-app
-//! surface — primarily `cupertino/colors.dart`, `cupertino/text_theme.dart`,
-//! `cupertino/theme.dart`, `cupertino/constants.dart`, `cupertino/button.dart`,
-//! `cupertino/route.dart`, `cupertino/nav_bar.dart`, `cupertino/page_scaffold.dart`,
-//! `cupertino/tab_scaffold.dart`, and `cupertino/bottom_tab_bar.dart` (oracle
-//! tag `3.44.0`). Every constant table (`CupertinoColors`' 30-odd
-//! dynamic-color statics, `_kDefaultTextStyle` and its siblings,
-//! `_kDefaultTheme`, the per-[`CupertinoButtonSize`] geometry maps in
-//! `constants.dart`, `_kNavBarPersistentHeight`, `_kTabBarHeight`, the
-//! nav-bar/tab-bar border colors) is a verbatim, per-value-cited port — see
-//! each module's docs for the exact oracle source.
+//! The theming and single-page/tabbed-app surface follows Apple's Human
+//! Interface Guidelines. Every constant table (`CupertinoColors`' 30-odd
+//! dynamic-color statics, the default text styles, the default theme, the
+//! per-[`CupertinoButtonSize`] geometry maps, the navigation-bar and tab-bar
+//! heights and border colors) carries the iOS system values — see each
+//! module's docs.
 //!
 //! ## ADR-0088: built on `flui-sdk` alone
 //!
@@ -62,12 +57,12 @@
 //!   restoration for `CupertinoTabScaffold` — see [`bottom_tab_bar`]'s and
 //!   [`tab_scaffold`]'s module docs.
 //! - The contrast and interface-elevation axes of [`CupertinoDynamicColor`]
-//!   resolution — both are stored (all 8 variants of every color are ported
-//!   verbatim) but resolution always treats them as "normal contrast, base
+//!   resolution — both are stored (all 8 variants of every color are
+//!   carried) but resolution always treats them as "normal contrast, base
 //!   elevation": there is no `MediaQuery::high_contrast` field or
 //!   `CupertinoUserInterfaceLevel` ambient in FLUI yet to resolve them
-//!   against. Only the brightness axis (`CupertinoTheme` ambient ??
-//!   `MediaQuery::platform_brightness`) is full oracle parity. See
+//!   against. Only the brightness axis (`CupertinoTheme` ambient, falling back
+//!   to `MediaQuery::platform_brightness`) is fully resolved. See
 //!   [`colors`] module docs.
 //! - [`CupertinoButton`]'s focus ring (`RoundedSuperellipseBorder`
 //!   outline — `flui-painting` has the primitive, this crate does not draw

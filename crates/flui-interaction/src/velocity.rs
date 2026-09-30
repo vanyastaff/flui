@@ -9,8 +9,7 @@ use flui_foundation::geometry::Offset;
 
 /// A velocity in two dimensions
 ///
-/// Similar to Flutter's `Velocity`. Describes the speed of movement
-/// in pixels per second along the x and y axes.
+/// Describes the speed of movement in pixels per second along the x and y axes.
 ///
 /// # Memory Safety
 /// - Stack-allocated `Copy` type with no heap allocations
@@ -356,8 +355,7 @@ impl Default for Velocity {
 
 /// An estimate of the velocity of a pointer
 ///
-/// Similar to Flutter's `VelocityEstimate`. Includes position, velocity,
-/// and confidence information.
+/// Includes position, velocity, and confidence information.
 ///
 /// # Examples
 ///

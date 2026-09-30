@@ -2,13 +2,11 @@
 //! actions composition built on top of it; [`show_dialog`] — pushes either
 //! one as a modal popup route.
 //!
-//! # Flutter parity
+//! # Defaults and scope
 //!
-//! `material/dialog.dart`'s `Dialog`/`AlertDialog`/`showDialog`/`DialogRoute`
-//! and `widgets/routes.dart`'s `RawDialogRoute` (the generic base
-//! `DialogRoute` extends) (oracle tag `3.44.0`).
+//! The values below follow the Material 3 dialog spec.
 //!
-//! ## `Dialog` — `_DialogDefaultsM3` (`dialog.dart`, oracle tag `3.44.0`)
+//! ## `Dialog` — M3 defaults
 //!
 //! | Token | Value | Oracle |
 //! |---|---|---|
@@ -37,7 +35,7 @@
 //! `Dialog.fullscreen` (`_fullscreen`, `_DialogFullscreenDefaultsM3`) is not
 //! ported either — no caller yet.
 //!
-//! ## `AlertDialog` (`dialog.dart`, oracle tag `3.44.0`)
+//! ## `AlertDialog`
 //!
 //! Ported: `title`, `content`, `actions`, composed into the oracle's
 //! `Column(mainAxisSize: min, crossAxisAlignment: stretch)` wrapped in
@@ -46,8 +44,8 @@
 //! `titlePadding`, `contentPadding`, `actionsPadding`, and every alignment
 //! knob are left at their oracle defaults (which is the only configuration
 //! this V1 offers — see below). The non-scrollable `columnChildren` branch's
-//! `if (contentWidget != null) Flexible(child: contentWidget)` (`dialog.dart`,
-//! oracle tag `3.44.0`) is ported too — content is wrapped in
+//! `if (contentWidget != null) Flexible(child: contentWidget)` is ported too —
+//! content is wrapped in
 //! [`Flexible`] (the default loose fit, matching the
 //! oracle's own unqualified `Flexible(...)`) so content taller than the
 //! `Dialog`'s available height shrinks instead of overflowing.
@@ -96,13 +94,11 @@
 //!   wrapper nodes.
 //! - **`AlertDialog.adaptive`** — the Cupertino/Material platform switch.
 //!
-//! ## `show_dialog` (`material/dialog.dart`'s `showDialog`/`DialogRoute`)
+//! ## `show_dialog`
 //!
-//! Pushes `builder`'s content as a [`PopupRoute`] with `showDialog`'s own
-//! defaults (`material/dialog.dart`, oracle tag `3.44.0` — not
-//! `RawDialogRoute`'s generic base default, `0x80000000`, which `showDialog`
-//! overrides): `barrierDismissible: true`, `barrierColor: Colors.black54`
-//! (`0x8A000000`, `colors.dart`, oracle tag `3.44.0`).
+//! Pushes `builder`'s content as a [`PopupRoute`] with the Material dialog
+//! defaults (not a generic route's `0x80000000` barrier): `barrierDismissible:
+//! true`, `barrierColor: Colors.black54` (`0x8A000000`).
 //!
 //! **Takes a [`NavigatorHandle`] directly, not a `BuildContext`.** The
 //! oracle resolves one itself — `Navigator.of(context, rootNavigator:
@@ -126,8 +122,7 @@
 //!   `fullscreenDialog`, `requestFocus`, `animationStyle`.
 //! - **The transition itself.** `DialogRoute` runs a 150ms `FadeTransition`
 //!   (`transitionDuration: const Duration(milliseconds: 150)`,
-//!   `transitionBuilder: _buildMaterialDialogTransitions`, `dialog.dart`,
-//!   oracle tag `3.44.0`). `show_dialog` rides [`PopupRoute`]'s plain
+//!   `transitionBuilder: _buildMaterialDialogTransitions`). `show_dialog` rides [`PopupRoute`]'s plain
 //!   framework default instead — a 300ms jump cut, no fade.
 //! - **No `barrierDismissible`/`barrierColor`/`barrierLabel` knobs.** These
 //!   are `showDialog` *parameters* in the oracle, not internal constants;
@@ -167,18 +162,15 @@ use crate::shape::MaterialShape;
 use crate::theme::Theme;
 use crate::theme_data::ThemeData;
 
-/// `_DialogDefaultsM3`'s elevation (`dialog.dart`, oracle tag `3.44.0`).
+/// The M3 dialog's default elevation.
 const DEFAULT_ELEVATION: f64 = 6.0;
-/// `_DialogDefaultsM3`'s corner radius (`dialog.dart`, oracle tag `3.44.0`).
+/// The M3 dialog's default corner radius.
 const DEFAULT_CORNER_RADIUS: f64 = 28.0;
-/// `Dialog.build`'s fallback `constraints.minWidth` (`dialog.dart`, oracle
-/// tag `3.44.0`).
+/// The fallback `constraints.minWidth` for a dialog.
 const DEFAULT_MIN_WIDTH: f64 = 280.0;
-/// `_defaultInsetPadding`'s horizontal component (`dialog.dart`, oracle tag
-/// `3.44.0`).
+/// The default horizontal inset padding around a dialog.
 const INSET_PADDING_HORIZONTAL: f64 = 40.0;
-/// `_defaultInsetPadding`'s vertical component (`dialog.dart`, oracle tag
-/// `3.44.0`).
+/// The default vertical inset padding around a dialog.
 const INSET_PADDING_VERTICAL: f64 = 24.0;
 
 /// The Material dialog surface: an elevated, rounded, centered
@@ -298,9 +290,8 @@ struct ResolvedDialogStyle {
 /// Resolve `Dialog`'s M3 defaults through the widget → theme → default
 /// cascade, per field: `color`/`elevation`/`shape` each fall back through
 /// `ThemeData.dialog_theme`'s own field before the `_DialogDefaultsM3`
-/// constant. Flutter parity: `backgroundColor ?? dialogTheme.backgroundColor
-/// ?? defaults.backgroundColor` (and the `elevation`/`shape` equivalents),
-/// `dialog.dart`, oracle tag `3.44.0`.
+/// constant: `backgroundColor ?? dialogTheme.backgroundColor ??
+/// defaults.backgroundColor` (and the `elevation`/`shape` equivalents).
 fn resolve_style(
     theme: &ThemeData,
     color: Option<Color>,
@@ -358,8 +349,7 @@ impl StatelessView for Dialog {
 }
 
 /// The 8px gap between adjacent `actions` — `(buttonPadding?.horizontal ??
-/// 16) / 2` with `buttonPadding` at its `null` default (`dialog.dart`,
-/// oracle tag `3.44.0`).
+/// 16) / 2` with `buttonPadding` at its `null` default.
 const ACTION_SPACING: f64 = 8.0;
 
 /// A Material Design alert dialog: an optional title, an optional content
@@ -428,10 +418,10 @@ impl AlertDialog {
 
 /// `AlertDialog`'s title text style, through the theme → default cascade —
 /// no per-instance `AlertDialog::title_style` override exists yet (named V1
-/// deferral, see the module docs), so there is no widget tier here. Flutter
-/// parity: `titleTextStyle ?? dialogTheme.titleTextStyle ??
-/// defaults.titleTextStyle!` (`dialog.dart`, oracle tag `3.44.0`), narrowed
-/// to the theme/default tiers this crate exposes. Factored out as a pure
+/// deferral, see the module docs), so there is no widget tier here. The
+/// cascade is `titleTextStyle ?? dialogTheme.titleTextStyle ??
+/// defaults.titleTextStyle!`, narrowed to the theme/default tiers this
+/// crate exposes. Factored out as a pure
 /// function (like `Dialog`'s own `resolve_style`) so the cascade is
 /// unit-testable without mounting a widget tree.
 fn resolve_title_style(theme: &ThemeData) -> TextStyle {
@@ -443,7 +433,7 @@ fn resolve_title_style(theme: &ThemeData) -> TextStyle {
 }
 
 /// `AlertDialog`'s content text style — same theme → default cascade as
-/// [`resolve_title_style`]. Flutter parity: `contentTextStyle ??
+/// [`resolve_title_style`]: `contentTextStyle ??
 /// dialogTheme.contentTextStyle ?? defaults.contentTextStyle!`.
 fn resolve_content_style(theme: &ThemeData) -> TextStyle {
     theme
@@ -471,10 +461,8 @@ impl StatelessView for AlertDialog {
         }
 
         if let Some(content) = &self.content {
-            // `if (contentWidget != null) Flexible(child: contentWidget)`
-            // (`dialog.dart`'s non-scrollable `columnChildren` branch, oracle
-            // tag `3.44.0`): the default loose fit lets content taller than
-            // the Dialog's available height shrink instead of overflowing.
+            // The default loose fit lets content taller than the Dialog's
+            // available height shrink instead of overflowing.
             children.push(
                 Flexible::new(Padding::new(EdgeInsets::new(16.0, 24.0, 24.0, 24.0)).child(
                     DefaultTextStyle::new(resolve_content_style(&theme), content.clone()),
@@ -508,8 +496,7 @@ impl StatelessView for AlertDialog {
     }
 }
 
-/// `Colors.black54` (`colors.dart`, oracle tag `3.44.0`) — `showDialog`'s
-/// `barrierColor` fallback.
+/// `Colors.black54` — the Material dialog's default barrier color.
 const BARRIER_COLOR: Color = Color::from_argb(0x8A00_0000);
 
 /// Pushes `builder`'s content as a modal dialog: a dismissible

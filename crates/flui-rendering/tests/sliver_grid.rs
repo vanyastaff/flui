@@ -1,7 +1,6 @@
-//! `RenderSliverGrid` — oracle-derived golden tests.
+//! `RenderSliverGrid` — golden tests.
 //!
-//! All expected values are derived from Flutter's `RenderSliverGrid.performLayout`
-//! (`.flutter/flutter-master/packages/flutter/lib/src/rendering/sliver_grid.dart:594-728`)
+//! All expected values are derived by hand from the grid layout algorithm
 //! and verified independently in the plan comments.
 //!
 //! Primary scenario: vertical grid, `SliverGridDelegateWithFixedCrossAxisCount(2)`,

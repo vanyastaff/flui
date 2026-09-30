@@ -2,19 +2,19 @@
 
 > Источник: 7-агентный аудит подсистем (pipeline, storage, traits/protocol, box-objects,
 > slivers/viewport/virtualization, foundations, testing/docs). Каждая находка сверена с
-> `.flutter/` и привязана к `file:line`. Breaking-изменения разрешены.
+> кодом и привязана к `file:line`. Breaking-изменения разрешены.
 
 ---
 
 ## 0. Executive summary
 
 **Здоровое ядро, протёкшая периферия.** Несущая инфраструктура крейта — в хорошем состоянии и
-местами превосходит наивный порт:
+местами превосходит наивную реализацию:
 
 - Storage: generational `GenId<Render>` (ABA-safe), **ноль `unsafe`** в `storage/`,
   lock-free `RenderState` (атомики + `Option<T>`, не `OnceCell`), корректный re-layout и
   инвалидация intrinsics-кэша.
-- Intrinsics: **настоящая parity** — честный порт Flutter `_LayoutCacheStorage`, реально
+- Intrinsics: полноценный кэш раскладки, реально
   подключён к пайплайну (не MVP — это классическая ловушка, которой здесь избежали).
 - Virtualization: `sumtree` (B-дерево) корректен, нет достижимых паник, противоречивые
   proptest'ы; `RenderViewport` — реальный мульти-сливер вьюпорт, не заглушка.
@@ -26,7 +26,7 @@
    layout-walk размазан по нему. Кейстоун рефакторинга.
 2. **Тройной налог на capability-трейты:** каждый рендер-объект обязан писать 3 пустых `impl`
    (`PaintEffectsCapability`/`SemanticsCapability`/`HotReloadCapability`) — **108 пустых impl'ов**
-   на 34 файла + макрос-затычка. Flutter держит эти три как default-методы на одном базовом классе.
+   на 34 файла + макрос-затычка. Их место — default-методы на одном базовом трейте.
 3. **Каталог "harness ✓" — ложный сигнал комфорта:** все объекты проходят catalog-guard, но
    **10 из 24 box-объектов — MVP-partial**, часть с *молчаливыми* расхождениями (см. §3).
 4. **Массивный doc-drift:** `ARCHITECTURE.md` "Outstanding refactors" и `ROADMAP.md` описывают
@@ -50,16 +50,16 @@
   но это заглушка**: `retained_subtrees.insert(id, LayerTree::new())` хранит *пустое* дерево;
   чистый retained repaint-boundary **со своими draw-ops молча теряет картинку**, а дети всё равно
   перерисовываются. Либо убрать путь ретенции (рисовать boundary безусловно), либо реализовать
-  настоящий кэш субдерева. (Flutter `flushPaint` переиспользует весь слой чистого boundary.)
+  настоящий кэш субдерева (переиспользовать весь слой чистого boundary).
 
-### P1 — архитектура / parity-gap
+### P1 — архитектура / пробелы
 - `pipeline/owner.rs:1681-1714` — `add_node_needing_compositing_bits_update` и
   `add_node_needing_semantics` **не будят** `fire_need_visual_update()` (в отличие от layout/paint).
   Одиночная пометка из idle-цикла не планирует кадр → «GIF замёрз». + при отсутствии узла запись
   всё равно пушится, воссоздавая ровно тот silent-loss, от которого защищается инвариант.
 - `pipeline/owner.rs:3794-3880` — `run_paint` обходит **всё** дерево от корня, а dirty-list
   использует только как lookup ретенции (вместо обхода по dirty repaint-boundary deepest-first).
-  Документированное расхождение, но крупнейший parity-gap подсистемы.
+  Документированное ограничение, крупнейший пробел подсистемы.
 - `pipeline/owner.rs:4303-4372` — `run_semantics` — **no-op + `tracing::warn!` на каждый dirty-узел
   каждый кадр**. Ни `SemanticsConfiguration`, ни регистрации owner'а. (Warn-спам на hot-path — сам
   по себе баг.)
@@ -74,7 +74,7 @@
   `hit_test_raw` задокументирован как «still a placeholder». Код живой (мост на render_box.rs:443,
   драйвер owner.rs:806, тесты). Поправить доки.
 - `objects/sliver_opacity.rs:105-208` — alpha==0 возвращает `Some(0)` → пушит OpacityLayer и **всё
-  равно рисует ребёнка**; `needs_compositing` инвертирован vs Flutter (`alpha>0`). Модульный доккомм
+  равно рисует ребёнка**; `needs_compositing` инвертирован (должен быть `alpha>0`). Модульный доккомм
   обещает поведение, которого нет.
 - `objects/sliver_fixed_extent_list.rs:88-132`, `objects/sliver_fill_viewport.rs:109-153` —
   **жадная раскладка всех прикреплённых детей**; весь lazy-протокол fixed-extent адаптера
@@ -89,25 +89,24 @@
   переходах, которые потребляют `self` и возвращают единственный хэндл пайплайна). См. §2.
 - `traits/render_object.rs:59-141` — 3 обязательных no-op capability-супертрейта → 108 пустых
   impl'ов + `impl_sliver_test_caps!`. Свернуть в default-методы на `RenderObject<P>`. См. §2.
-- `traits/render_object.rs:140` — `HotReloadCapability::reassemble` — пустой default, но у Flutter
-  тело реальное (`markNeedsLayout/Paint/CompositingBits/Semantics + visitChildren`). Hot-reload
-  молча ничего не инвалидирует. MVP-as-parity.
+- `traits/render_object.rs:140` — `HotReloadCapability::reassemble` — пустой default: должен
+  помечать layout/paint/compositing-bits/semantics и обходить детей. Hot-reload
+  молча ничего не инвалидирует.
 - ~~`objects/sliver_list_lazy.rs:546-547` (+4 сливера) — `has_visual_overflow = … || scroll_offset>0`~~
-  **[FALSE POSITIVE — Phase 1, 2026-06-24]** Сверка с `.flutter` (`sliver_fill.dart:157/228/306`,
-  `sliver_list.dart:331`, `sliver_fixed_extent_list.dart:486`, `sliver.dart:2115`) показала: `|| scrollOffset > 0.0`
-  — **намеренное** поведение Flutter (контент за краем вьюпорта визуально клипается). Не баг, не трогать.
+  **[FALSE POSITIVE]** `|| scroll_offset > 0.0` — **намеренное** поведение (контент за
+  краем вьюпорта визуально клипается). Не баг, не трогать.
 - `objects/viewport.rs:312-318` — реверс-проход (center-sliver) переиспользует cache-окно прямого
   прохода → неверная cache-полоса над центром.
 - `storage/mod.rs:17-23`, `state/mod.rs:134-156`, `state/tests.rs:30-31` — **ASCII-диаграмма и
   доки показывают забаненные `RwLock<Box<dyn>>` и `OnceCell<Size>` как текущие** (мигрировано в
   by-value + `Option<T>`). Опасно: показывает refusal-trigger-1 как актуальный.
-- `constraints/box_constraints.rs:213` — **`normalize()` коллизия имён с Flutter**: у Flutter это
-  семантический clamp (`min≥0, max≥min`), у FLUI — округление до сотых для cache-key. Переименовать
+- `constraints/box_constraints.rs:213` — **`normalize()` вводит в заблуждение по имени**: название
+  обещает семантический clamp (`min≥0, max≥min`), а делает округление до сотых для cache-key. Переименовать
   в `round_for_cache`/`quantized`; при нужде добавить настоящий `normalize()`.
 - `context/hit_test.rs:270` — `add_self(target_id: u64)` берёт сырой `u64` на публичной границе
   вместо `RenderId`.
 - `objects/*` — молчаливые расхождения: `RenderClipPath/ClipOval::contains()==true` всегда
-  (clip.rs:319, Flutter отвергает попадания вне пути); `RenderStack`/`RenderFlex` без
+  (clip.rs:319, попадания вне пути должны отвергаться); `RenderStack`/`RenderFlex` без
   `textDirection` → RTL молча неверный.
 - `SubtreeBorrows` (owner.rs:2574+) держит 3 `Mutex` только чтобы пройти `Send+Sync` на замыкании,
   при том что `check_thread()` уже запрещает кросс-тред. Можно дешевле (`RefCell` + локальный
@@ -167,7 +166,7 @@
 **Capability-трейты → свернуть в default-методы `RenderObject<P>`.** ISP здесь иллюзорен: ни один
 потребитель не выбирает подмножество — все три всегда требуются bound'ами blanket-impl'а. Выигрыша
 ноль, налог — 108 пустых impl'ов + тест-макрос. Свёртка заодно даёт `reassemble` реальное
-Flutter-тело в одном месте (чинит hot-reload parity).
+реальное тело в одном месте (чинит hot-reload).
 
 **Storage by-value `Box<dyn RenderObject<P>>` → KEEP.** Отложенный в ARCHITECTURE.md «inner-mutability
 split (Arc<dyn> config + mutation в RenderState)» — закрыть как «won't-do»: решает проблему, которой
@@ -188,15 +187,15 @@ parent↔child без локов/Arc). Это и есть верная долг�
 
 ---
 
-## 3. Матрица паритета box-объектов (10/24 — MVP-partial)
+## 3. Матрица полноты box-объектов (10/24 — MVP-partial)
 
-| Объект | Статус | Ключевые пробелы vs Flutter |
+| Объект | Статус | Ключевые пробелы |
 |---|---|---|
-| ColoredBox, SizedBox, ConstrainedBox, LimitedBox, AspectRatio, Opacity, RepaintBoundary, FractionalTranslation, FractionallySizedBox, ClipRect, ClipRRect, Baseline, Offstage, Transform | **parity** | — |
+| ColoredBox, SizedBox, ConstrainedBox, LimitedBox, AspectRatio, Opacity, RepaintBoundary, FractionalTranslation, FractionallySizedBox, ClipRect, ClipRRect, Baseline, Offstage, Transform | **полный** | — |
 | **Padding** | MVP | нет `EdgeInsetsDirectional`/TextDirection |
 | **DecoratedBox** | MVP | только color bg/fg; нет image/gradient/boxShadow/BlendMode/shape.circle |
 | **FittedBox** | MVP | `clipBehavior` хранится, но **не применяется** (overflow не клипается) |
-| **ClipOval / ClipPath** | MVP / **молч. дивергенция** | `contains()→true` всегда; Flutter отвергает попадания вне формы |
+| **ClipOval / ClipPath** | MVP / **молч. дивергенция** | `contains()→true` всегда; попадания вне формы не отвергаются |
 | **Center** | MVP | хардкод-центр, **нет `Alignment`** → не заменяет `RenderAlign` |
 | **AbsorbPointer / IgnorePointer / MetaData** | MVP | self/metadata **не регистрируются** в hit-result (gesture-id не протянут); нет `ignoringSemantics` |
 | **Flex** | MVP | **нет `paint`/overflow-clip/индикатора**, нет `textDirection`/`verticalDirection`, нет baseline-методов, нет `clipBehavior` |
@@ -205,9 +204,9 @@ parent↔child без локов/Arc). Это и есть верная долг�
 | **Paragraph** | MVP | нет `hit_test`, нет clip/fade `TextOverflow`, нет inline-children/selection/semantics |
 
 Сливеры: `SliverToBoxAdapter`, `SliverPadding`, `SliverFillRemaining`(×3), `SliverOffstage`,
-`SliverIgnorePointer` — **parity**. `SliverListLazy` — MVP→good (реальная виртуализация).
+`SliverIgnorePointer` — **полные**. `SliverListLazy` — MVP→good (реальная виртуализация).
 `SliverOpacity` (alpha-0 баг), `SliverFixedExtentList`/`SliverFillViewport` (жадные) — MVP.
-`RenderViewport` — near-parity.
+`RenderViewport` — почти полный.
 
 ---
 
@@ -237,7 +236,7 @@ parent↔child без локов/Arc). Это и есть верная долг�
 1.3 SliverOpacity alpha-0: пропустить paint ребёнка + снять слой; инвертировать `needs_compositing`;
     добавить падающий harness-тест.
 1.4 ClipPath/ClipOval `contains()`: реальный тест попадания (winding / engine path-hit).
-1.5 ~~`has_visual_overflow`: убрать `|| scroll_offset>0.0`~~ **FALSE POSITIVE** (verified vs `.flutter` — намеренное поведение, не баг; см. §1).
+1.5 ~~`has_visual_overflow`: убрать `|| scroll_offset>0.0`~~ **FALSE POSITIVE** (намеренное поведение, не баг; см. §1).
 1.6 `normalize()` коллизия: переименовать в `round_for_cache`; при нужде — настоящий `normalize()`.
 1.7 `add_self(u64)` → `RenderId`; `TextRange::len()` → `saturating_sub`.
 1.8 свернуть per-node warn-спам в `run_semantics` в один агрегированный.
@@ -252,7 +251,7 @@ parent↔child без локов/Arc). Это и есть верная долг�
 2.5 `#[must_use]` на переходах фаз/запросах; rename `state/flags.rs`→`flag_accessors.rs`;
     подрезать `ProtocolCompatible`/`BidirectionalProtocol`; убрать 3 `Mutex` из `SubtreeBorrows`.
 
-### Phase 3 — Закрыть parity-gaps существующих объектов
+### Phase 3 — Закрыть пробелы существующих объектов
 3.1 **Flex**: `paint`+overflow-clip+индикатор, `textDirection`/`verticalDirection`,
     `compute_distance_to_actual_baseline`+`compute_dry_baseline`, `clipBehavior`. **(L)**
 3.2 **Stack**: протянуть `textDirection` (RTL). **(S)**
@@ -293,9 +292,9 @@ AbsorbPointer/MetaData (gesture-id через `BoxHitTestContext`).
 
 ## 5. Что НЕ трогать (подтверждённо здорово)
 - Storage arena (`GenId`, disjoint-borrow в safe Rust, lock-free state) — образцово.
-- Intrinsics-кэш — настоящий порт `_LayoutCacheStorage`, оставить.
+- Intrinsics-кэш — полноценный кэш раскладки, оставить.
 - `sumtree`/`Virtualizer` — корректен и оправдан (добавить лишь empty-leaf `debug_assert`).
-- `RenderViewport` layout-ядро, sliver-протокол (constraints/geometry/helpers) — parity.
+- `RenderViewport` layout-ядро, sliver-протокол (constraints/geometry/helpers) — полные.
 - Erasure-машинерия (`LayoutCtxErased` GAT, Direct/Proxy) — несущая для disjoint parent+child
   borrow; не упрощать.
 - By-value `Box<dyn RenderObject<P>>` storage-модель — верная долгосрочная форма.

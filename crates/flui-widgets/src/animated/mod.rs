@@ -1,4 +1,4 @@
-//! Implicitly-animated widgets — Flutter's `ImplicitlyAnimatedWidget` family.
+//! Implicitly-animated widgets.
 //!
 //! Each widget here animates a visual property *implicitly*: you rebuild it with
 //! a new target value and it animates from the old value to the new one, with no

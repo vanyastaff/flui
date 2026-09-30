@@ -1,29 +1,23 @@
 //! [`ColorScheme`] — the full Material 3 color-role palette.
 //!
-//! Flutter parity: `material/color_scheme.dart` `ColorScheme` (oracle tag
-//! `3.44.0`). Field list, order, and the `light`/`dark` default hex values are
-//! ported verbatim from the oracle's `ColorScheme` constructor and its
-//! generated `_colorSchemeLightM3` / `_colorSchemeDarkM3` const tables
-//! (`material/theme_data.dart`, oracle tag `3.44.0`).
+//! The field list and the `light`/`dark` default hex values are the two M3
+//! baseline schemes.
 //!
-//! ## Deferred: `ColorScheme.fromSeed`
+//! ## Deferred: seed-color derivation
 //!
-//! Flutter derives a full palette from one seed color via the
-//! `material_color_utilities` HCT/tonal-palette algorithm
-//! (`ColorScheme.fromSeed`, `color_scheme.dart`). Porting that algorithm needs
-//! its own crate (or a `material-colors`-equivalent dependency) validated
-//! against `color_scheme_test.dart`'s literal expected-output table — out of
-//! scope for this theming-foundation unit, which ships the two fixed M3
+//! Deriving a full palette from one seed color needs the HCT/tonal-palette
+//! algorithm from Material's color utilities. That needs its own crate (or an
+//! equivalent dependency) validated against a literal expected-output table —
+//! out of scope for this theming-foundation unit, which ships the two fixed M3
 //! baseline schemes ([`ColorScheme::light`], [`ColorScheme::dark`]) only.
 //! Tracked as a named follow-up gated on a standalone spike.
 //!
 //! ## Deprecated-but-included roles
 //!
-//! `background`/`on_background`/`surface_variant` are deprecated in Flutter
-//! (superseded by `surface`/`on_surface`/`surface_container_highest`) but are
-//! kept here as normal fields: the oracle's own default-value tables still
-//! populate them, and dropping them would silently fail parity assertions
-//! against `color_scheme_test.dart`.
+//! `background`/`on_background`/`surface_variant` are deprecated in the M3
+//! spec (superseded by `surface`/`on_surface`/`surface_container_highest`) but
+//! are kept here as normal fields: the M3 baseline tables still populate
+//! them, and dropping them would silently break consumers that read them.
 
 use flui_sdk::painting::Color;
 use flui_sdk::platform::Brightness;
@@ -31,193 +25,190 @@ use flui_sdk::platform::Brightness;
 /// The full set of Material 3 color roles
 /// (<https://m3.material.io/styles/color/the-color-system/color-roles>).
 ///
-/// Construct one of the two ported M3 baseline schemes with
+/// Construct one of the two M3 baseline schemes with
 /// [`ColorScheme::light`] / [`ColorScheme::dark`], then adjust individual
-/// roles with [`ColorScheme::copy_with`]. `#[non_exhaustive]`: Flutter's own
-/// role list has grown across releases (most recently the `*Fixed`/`*FixedDim`
-/// roles), so construction always goes through a named constructor rather
-/// than a struct literal.
+/// roles with [`ColorScheme::copy_with`]. `#[non_exhaustive]`: the M3 role
+/// list has grown over time (most recently the `*Fixed`/`*FixedDim` roles),
+/// so construction always goes through a named constructor rather than a
+/// struct literal.
 ///
-/// Flutter parity: `ColorScheme` (`material/color_scheme.dart`, oracle tag
-/// `3.44.0`) — 50 fields (49 color roles + `brightness`), matching the
-/// oracle's constructor field count exactly, including the three deprecated
-/// roles (see module docs).
+/// 50 fields: 49 color roles plus `brightness`, including the three
+/// deprecated roles (see module docs).
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ColorScheme {
     /// Whether this scheme is designed for a light or dark surface.
-    ///
-    /// Flutter parity: `ColorScheme.brightness`.
     pub brightness: Brightness,
 
-    /// Flutter parity: `ColorScheme.primary`.
+    /// The primary color: high-emphasis fills and text on the surface.
     pub primary: Color,
 
-    /// Flutter parity: `ColorScheme.onPrimary`.
+    /// Content (text, icons) drawn on [`primary`](Self::primary).
     pub on_primary: Color,
 
-    /// Flutter parity: `ColorScheme.primaryContainer`.
+    /// A lower-emphasis fill for containers tied to the primary color.
     pub primary_container: Color,
 
-    /// Flutter parity: `ColorScheme.onPrimaryContainer`.
+    /// Content drawn on [`primary_container`](Self::primary_container).
     pub on_primary_container: Color,
 
-    /// Flutter parity: `ColorScheme.primaryFixed`.
+    /// A primary-tone fill that stays the same in light and dark schemes.
     pub primary_fixed: Color,
 
-    /// Flutter parity: `ColorScheme.primaryFixedDim`.
+    /// A dimmer variant of [`primary_fixed`](Self::primary_fixed).
     pub primary_fixed_dim: Color,
 
-    /// Flutter parity: `ColorScheme.onPrimaryFixed`.
+    /// Content drawn on [`primary_fixed`](Self::primary_fixed).
     pub on_primary_fixed: Color,
 
-    /// Flutter parity: `ColorScheme.onPrimaryFixedVariant`.
+    /// Lower-emphasis content drawn on [`primary_fixed`](Self::primary_fixed).
     pub on_primary_fixed_variant: Color,
 
-    /// Flutter parity: `ColorScheme.secondary`.
+    /// The secondary color: less prominent components such as filter chips.
     pub secondary: Color,
 
-    /// Flutter parity: `ColorScheme.onSecondary`.
+    /// Content drawn on [`secondary`](Self::secondary).
     pub on_secondary: Color,
 
-    /// Flutter parity: `ColorScheme.secondaryContainer`.
+    /// A lower-emphasis fill for containers tied to the secondary color.
     pub secondary_container: Color,
 
-    /// Flutter parity: `ColorScheme.onSecondaryContainer`.
+    /// Content drawn on [`secondary_container`](Self::secondary_container).
     pub on_secondary_container: Color,
 
-    /// Flutter parity: `ColorScheme.secondaryFixed`.
+    /// A secondary-tone fill that stays the same in light and dark schemes.
     pub secondary_fixed: Color,
 
-    /// Flutter parity: `ColorScheme.secondaryFixedDim`.
+    /// A dimmer variant of [`secondary_fixed`](Self::secondary_fixed).
     pub secondary_fixed_dim: Color,
 
-    /// Flutter parity: `ColorScheme.onSecondaryFixed`.
+    /// Content drawn on [`secondary_fixed`](Self::secondary_fixed).
     pub on_secondary_fixed: Color,
 
-    /// Flutter parity: `ColorScheme.onSecondaryFixedVariant`.
+    /// Lower-emphasis content drawn on
+    /// [`secondary_fixed`](Self::secondary_fixed).
     pub on_secondary_fixed_variant: Color,
 
-    /// Flutter parity: `ColorScheme.tertiary`.
+    /// The tertiary color: contrasting accents that balance primary and
+    /// secondary.
     pub tertiary: Color,
 
-    /// Flutter parity: `ColorScheme.onTertiary`.
+    /// Content drawn on [`tertiary`](Self::tertiary).
     pub on_tertiary: Color,
 
-    /// Flutter parity: `ColorScheme.tertiaryContainer`.
+    /// A lower-emphasis fill for containers tied to the tertiary color.
     pub tertiary_container: Color,
 
-    /// Flutter parity: `ColorScheme.onTertiaryContainer`.
+    /// Content drawn on [`tertiary_container`](Self::tertiary_container).
     pub on_tertiary_container: Color,
 
-    /// Flutter parity: `ColorScheme.tertiaryFixed`.
+    /// A tertiary-tone fill that stays the same in light and dark schemes.
     pub tertiary_fixed: Color,
 
-    /// Flutter parity: `ColorScheme.tertiaryFixedDim`.
+    /// A dimmer variant of [`tertiary_fixed`](Self::tertiary_fixed).
     pub tertiary_fixed_dim: Color,
 
-    /// Flutter parity: `ColorScheme.onTertiaryFixed`.
+    /// Content drawn on [`tertiary_fixed`](Self::tertiary_fixed).
     pub on_tertiary_fixed: Color,
 
-    /// Flutter parity: `ColorScheme.onTertiaryFixedVariant`.
+    /// Lower-emphasis content drawn on
+    /// [`tertiary_fixed`](Self::tertiary_fixed).
     pub on_tertiary_fixed_variant: Color,
 
-    /// Flutter parity: `ColorScheme.error`.
+    /// The color for errors and destructive states.
     pub error: Color,
 
-    /// Flutter parity: `ColorScheme.onError`.
+    /// Content drawn on [`error`](Self::error).
     pub on_error: Color,
 
-    /// Flutter parity: `ColorScheme.errorContainer`.
+    /// A lower-emphasis fill for error containers.
     pub error_container: Color,
 
-    /// Flutter parity: `ColorScheme.onErrorContainer`.
+    /// Content drawn on [`error_container`](Self::error_container).
     pub on_error_container: Color,
 
-    /// Flutter parity: `ColorScheme.surface`.
+    /// The base surface color for components such as cards and sheets.
     pub surface: Color,
 
-    /// Flutter parity: `ColorScheme.onSurface`.
+    /// Content drawn on [`surface`](Self::surface).
     pub on_surface: Color,
 
-    /// Flutter parity: `ColorScheme.surfaceDim`.
+    /// The dimmest surface tone, for surfaces that recede.
     pub surface_dim: Color,
 
-    /// Flutter parity: `ColorScheme.surfaceBright`.
+    /// The brightest surface tone, for surfaces that stand out.
     pub surface_bright: Color,
 
-    /// Flutter parity: `ColorScheme.surfaceContainerLowest`.
+    /// The lowest of the five surface-container elevations.
     pub surface_container_lowest: Color,
 
-    /// Flutter parity: `ColorScheme.surfaceContainerLow`.
+    /// A surface container one step above the lowest elevation.
     pub surface_container_low: Color,
 
-    /// Flutter parity: `ColorScheme.surfaceContainer`.
+    /// The default surface container elevation.
     pub surface_container: Color,
 
-    /// Flutter parity: `ColorScheme.surfaceContainerHigh`.
+    /// A surface container one step below the highest elevation.
     pub surface_container_high: Color,
 
-    /// Flutter parity: `ColorScheme.surfaceContainerHighest`.
+    /// The highest of the five surface-container elevations.
     pub surface_container_highest: Color,
 
-    /// Flutter parity: `ColorScheme.onSurfaceVariant`.
+    /// Lower-emphasis content drawn on a surface.
     pub on_surface_variant: Color,
 
-    /// Flutter parity: `ColorScheme.outline`.
+    /// A subtle border color, for example around text fields.
     pub outline: Color,
 
-    /// Flutter parity: `ColorScheme.outlineVariant`.
+    /// A lower-emphasis border color, for example for dividers.
     pub outline_variant: Color,
 
-    /// Flutter parity: `ColorScheme.shadow`.
+    /// The color of drop shadows.
     pub shadow: Color,
 
-    /// Flutter parity: `ColorScheme.scrim`.
+    /// The color of scrims drawn over content behind modal surfaces.
     pub scrim: Color,
 
-    /// Flutter parity: `ColorScheme.inverseSurface`.
+    /// A surface with the opposite brightness, for example for snack bars.
     pub inverse_surface: Color,
 
-    /// Flutter parity: `ColorScheme.onInverseSurface`.
+    /// Content drawn on [`inverse_surface`](Self::inverse_surface).
     pub on_inverse_surface: Color,
 
-    /// Flutter parity: `ColorScheme.inversePrimary`.
+    /// A primary-tone accent for use on
+    /// [`inverse_surface`](Self::inverse_surface).
     pub inverse_primary: Color,
 
-    /// Flutter parity: `ColorScheme.surfaceTint`.
+    /// The tint applied to surfaces to indicate elevation.
     ///
-    /// Set to the same color as `primary` (see the oracle's inline comment on both const tables).
+    /// Set to the same color as `primary` in both baseline tables.
     pub surface_tint: Color,
 
-    /// Flutter parity: `ColorScheme.background`.
+    /// The background color behind scrollable content.
     ///
-    /// **Deprecated in Flutter** (`3.18.0-0.1.pre`) in favor of `surface`; kept here because the oracle's default-value table still asserts it.
+    /// **Deprecated** in the M3 spec in favor of `surface`; kept because the
+    /// baseline tables still populate it.
     pub background: Color,
 
-    /// Flutter parity: `ColorScheme.onBackground`.
+    /// Content drawn on [`background`](Self::background).
     ///
-    /// **Deprecated in Flutter** (`3.18.0-0.1.pre`) in favor of `on_surface`; kept for the same reason as `background`.
+    /// **Deprecated** in the M3 spec in favor of `on_surface`; kept for the
+    /// same reason as `background`.
     pub on_background: Color,
 
-    /// Flutter parity: `ColorScheme.surfaceVariant`.
+    /// A surface variant used for lower-emphasis surfaces.
     ///
-    /// **Deprecated in Flutter** (`3.18.0-0.1.pre`) in favor of `surface_container_highest`; kept for the same reason as `background`.
+    /// **Deprecated** in the M3 spec in favor of `surface_container_highest`;
+    /// kept for the same reason as `background`.
     pub surface_variant: Color,
 }
 
 impl ColorScheme {
     /// The default Material 3 light color scheme.
     ///
-    /// Verbatim port of the oracle's generated `_colorSchemeLightM3` const
-    /// table (`material/theme_data.dart`, oracle tag `3.44.0`) — every hex
-    /// value below is cited from that table, not recomputed. This is the
-    /// table `ThemeData`'s factory constructor defaults to
-    /// (`colorScheme ??= isDark ? _colorSchemeDarkM3 : _colorSchemeLightM3`,
-    /// `theme_data.dart`, oracle tag `3.44.0`) whenever no seed color or
-    /// explicit `colorScheme` is supplied — i.e. this is the scheme a plain
-    /// `ThemeData()` gets in Flutter today, not the legacy M2
-    /// `ColorScheme.light()` baseline.
+    /// Every hex value below is the fixed M3 baseline, not recomputed. This
+    /// is the scheme a plain `ThemeData::default()` gets, not the legacy M2
+    /// baseline.
     #[must_use]
     pub const fn light() -> Self {
         Self {
@@ -276,10 +267,8 @@ impl ColorScheme {
 
     /// The default Material 3 dark color scheme.
     ///
-    /// Verbatim port of the oracle's generated `_colorSchemeDarkM3` const
-    /// table (`material/theme_data.dart`, oracle tag `3.44.0`) — see
-    /// [`ColorScheme::light`]'s doc comment for the citation and defaulting
-    /// rationale, mirrored here for the dark branch.
+    /// The fixed M3 dark baseline — see [`ColorScheme::light`]'s doc comment
+    /// for the defaulting rationale, mirrored here for the dark branch.
     #[must_use]
     pub const fn dark() -> Self {
         Self {
@@ -338,9 +327,8 @@ impl ColorScheme {
 
     /// Return a copy of this scheme with the given roles replaced.
     ///
-    /// Mirrors Flutter's `ColorScheme.copyWith(...)` (all-optional named
-    /// parameters); build the patch with [`ColorSchemeOverrides::default`]
-    /// and struct-update syntax:
+    /// Build the patch with [`ColorSchemeOverrides::default`] and
+    /// struct-update syntax:
     ///
     /// ```
     /// use flui_material::{ColorScheme, ColorSchemeOverrides};
@@ -453,7 +441,7 @@ impl ColorScheme {
 }
 
 impl Default for ColorScheme {
-    /// Same default as Flutter's `ThemeData()`: the M3 light baseline.
+    /// The M3 light baseline.
     fn default() -> Self {
         Self::light()
     }
@@ -468,9 +456,8 @@ impl Default for ColorScheme {
 /// callers build this patch. A future role added to [`ColorScheme`] still
 /// gets a matching field here additively, without needing that ceremony.
 ///
-/// Flutter parity: the optional-parameter list of `ColorScheme.copyWith`
-/// (`material/color_scheme.dart`, oracle tag `3.44.0`), reshaped as a
-/// struct because Rust has no optional named parameters.
+/// A struct rather than an optional-parameter list, because Rust has no
+/// optional named parameters.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ColorSchemeOverrides {
     /// Overrides [`ColorScheme::brightness`].

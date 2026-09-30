@@ -1,6 +1,4 @@
 //! `RenderListBody` — lays children sequentially along one axis.
-//!
-//! Flutter parity: `rendering/list_body.dart` `RenderListBody`.
 
 use flui_foundation::Variable;
 use flui_foundation::geometry::Axis;
@@ -31,20 +29,19 @@ const fn baseline_kind_index(baseline: TextBaseline) -> usize {
 /// A multi-child box that stretches children in the cross axis and places them
 /// sequentially along [`axis_direction`](Self::axis_direction).
 ///
-/// Like Flutter, `RenderListBody` expects unlimited space along its main axis
+/// `RenderListBody` expects unlimited space along its main axis
 /// and a bounded cross axis; it does not clip or resize overflow in the main
 /// axis.
 #[derive(Debug, Clone)]
 pub struct RenderListBody {
     axis_direction: AxisDirection,
     child_count: usize,
-    /// Baselines recorded during layout using Flutter's first-child-in-list rule.
+    /// Baselines recorded during layout using the first-child-in-list rule.
     reported_baselines: [Option<f64>; 2],
 }
 
 impl RenderListBody {
-    /// Creates a vertical top-to-bottom list body, matching Flutter's default
-    /// `AxisDirection.down`.
+    /// Creates a vertical top-to-bottom list body.
     pub const fn new() -> Self {
         Self::with_axis_direction(TopToBottom)
     }

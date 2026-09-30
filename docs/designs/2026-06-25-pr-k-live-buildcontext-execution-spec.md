@@ -108,7 +108,7 @@ the sink apply after — never during. No `&mut` spans a second slab access.
   consumer whose `build` calls `cx.depend_on::<ThemeProvider>()` returns
   `Some(RED)` after / `None` before (fails today against the dummy tree).
 - `same_pass_provider_update_and_new_dependent`.
-- `self_mark_during_build_is_noop` (Flutter `framework.dart:5848`).
+- `self_mark_during_build_is_noop`.
 
 ## Out of scope (later PRs)
 O(1) persistent inherited map (PR-2), `ElementBase` shrink (PR-3, fork F2),

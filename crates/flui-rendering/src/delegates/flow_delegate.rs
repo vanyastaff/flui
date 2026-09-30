@@ -106,8 +106,8 @@ pub trait FlowDelegate: Send + Sync + Debug {
     /// transforms for hit testing (paint's `&self` gives it nowhere to
     /// cache them). A delegate that consults external mutable state or
     /// randomness here will make paint and hit-test silently disagree —
-    /// the same implicit purity assumption Flutter's own `RenderFlow` and
-    /// [`Self::should_repaint`]/[`Self::should_relayout`] already rely on.
+    /// the same implicit purity assumption [`Self::should_repaint`] and
+    /// [`Self::should_relayout`] already rely on.
     ///
     /// # Arguments
     ///
@@ -137,15 +137,12 @@ pub trait FlowDelegate: Send + Sync + Debug {
     fn should_repaint(&self, old_delegate: &dyn FlowDelegate) -> bool;
 
     /// An optional repaint [`Listenable`]: when it notifies, the hosting
-    /// `RenderFlow` marks itself needing paint — the FLUI equivalent of
-    /// Flutter's `Flow(delegate:)` `repaint:` listenable, letting a flow
-    /// driven by an [`Animation`] repaint without a widget rebuild.
+    /// `RenderFlow` marks itself needing paint, letting a flow driven by an
+    /// animation repaint without a widget rebuild.
     ///
     /// Implementations that return `Some` MUST return the *same* instance
     /// across calls, so the host can unsubscribe on detach / delegate swap.
     /// Defaults to `None`.
-    ///
-    /// [`Animation`]: https://api.flutter.dev/flutter/animation/Animation-class.html
     fn repaint(&self) -> Option<Arc<dyn Listenable>> {
         None
     }
@@ -161,9 +158,8 @@ pub trait FlowDelegate: Send + Sync + Debug {
 /// recording-only replay with nowhere to draw (hit-test — [`Self::for_replay`]).
 /// `RenderFlow::paint` and `RenderFlow::hit_test` are both `&self`, so
 /// there is nowhere on the render object to cache "what transform did
-/// paint assign to child N" for hit-test to read back later (Flutter's
-/// `RenderFlow` gets away with this because `paint()` isn't `const` and
-/// mutates `FlowParentData._transform`). Hit-test instead re-invokes
+/// paint assign to child N" for hit-test to read back later. Hit-test
+/// instead re-invokes
 /// [`FlowDelegate::paint_children`] a second time against a `for_replay`
 /// context: same recorded `(index -> transform)` data, no live [`PaintCx`]
 /// to draw into.
@@ -173,16 +169,15 @@ pub struct FlowPaintingContext<'ctx, 'cx> {
     /// `Some` in paint mode (drives the real paint pipeline); `None`
     /// during a hit-test replay (recording only, nothing is drawn).
     live: Option<&'ctx mut PaintCx<'cx, Variable>>,
-    /// Child indices in the order `paint_child` was called — Flutter's
-    /// `_lastPaintOrder`. Hit-testing walks this in reverse (top-most
-    /// painted first).
+    /// Child indices in the order `paint_child` was called. Hit-testing walks
+    /// this in reverse (top-most painted first).
     paint_order: &'ctx mut Vec<usize>,
     /// Every child's most recently recorded transform, indexed by child
     /// index. Recorded in both modes so hit-test's replay pass produces
     /// the identical data paint's real pass would have.
     transforms: &'ctx mut Vec<Option<Matrix4>>,
-    /// Per-child dup-paint guard (oracle `paintChild` asserts no child is
-    /// painted twice in one `paintChildren` call).
+    /// Per-child dup-paint guard: no child may be painted twice in one
+    /// `paint_children` call.
     painted: &'ctx mut Vec<bool>,
 }
 
@@ -272,9 +267,9 @@ impl<'ctx, 'cx> FlowPaintingContext<'ctx, 'cx> {
     /// ([`Self::for_replay`]), only the bookkeeping below runs — nothing
     /// is drawn.
     ///
-    /// Always records: `index` into [`Self`]'s paint order (Flutter's
-    /// `_lastPaintOrder`) and `transform` into the per-child transform
-    /// table, both consumed later by `RenderFlow::hit_test`.
+    /// Always records: `index` into [`Self`]'s paint order and `transform`
+    /// into the per-child transform table, both consumed later by
+    /// `RenderFlow::hit_test`.
     ///
     /// # Arguments
     ///
@@ -284,8 +279,8 @@ impl<'ctx, 'cx> FlowPaintingContext<'ctx, 'cx> {
     /// # Panics
     ///
     /// Panics if the index is out of bounds, or if this child was already
-    /// painted earlier in the same `paint_children` call (oracle
-    /// `paintChild`'s double-paint assert).
+    /// painted earlier in the same `paint_children` call (the
+    /// double-paint assert).
     pub fn paint_child(&mut self, index: usize, transform: Matrix4) {
         assert!(index < self.child_sizes.len(), "Child index out of bounds");
         assert!(

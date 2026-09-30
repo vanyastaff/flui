@@ -1,21 +1,17 @@
 //! `RenderFlow` — positions children with paint-time transform matrices
 //! chosen by a [`FlowDelegate`], instead of layout-time offsets.
 //!
-//! Flutter parity: `rendering/flow.dart` `RenderFlow`. Every other
-//! multi-child render object in this crate positions children during
-//! layout (`ctx.position_child`); `RenderFlow` never does — every child is
-//! positioned at [`Offset::ZERO`] by layout and repositioned purely by
-//! paint-time [`FlowDelegate::paint_children`] transforms, so moving
-//! children costs a repaint, not a relayout (oracle L165-168).
+//! Every other multi-child render object in this crate positions children
+//! during layout (`ctx.position_child`); `RenderFlow` never does — every
+//! child is positioned at [`Offset::ZERO`] by layout and repositioned purely
+//! by paint-time [`FlowDelegate::paint_children`] transforms, so moving
+//! children costs a repaint, not a relayout.
 //!
 //! # Hit-testing without mutable paint state
 //!
-//! Flutter's `RenderFlow` mutates `FlowParentData._transform` and
-//! `_lastPaintOrder` *during* `paint()` (legal there — `paint()` isn't
-//! `const`) and reads them back in `hitTestChildren()`. FLUI's
-//! `RenderBox::paint`/`hit_test` are both `&self`, so there is nowhere to
-//! cache "what transform did paint assign to child N" for hit-test to read
-//! later. This port resolves that by having [`RenderFlow::hit_test`]
+//! FLUI's `RenderBox::paint`/`hit_test` are both `&self`, so there is nowhere
+//! to cache "what transform did paint assign to child N" for hit-test to read
+//! later. Instead [`RenderFlow::hit_test`]
 //! **replay** [`FlowDelegate::paint_children`] a second time against a
 //! non-drawing [`FlowPaintingContext::for_replay`] context that only
 //! records `(paint_order, transforms)` — legitimate because
@@ -26,31 +22,30 @@
 //!
 //! # ParentData
 //!
-//! Flutter's `FlowParentData` exists solely to cache `_transform` for the
-//! hit-test readback above; since this port replays the delegate instead
-//! of caching, there is nothing to add to parent data — `RenderFlow` uses
-//! plain [`BoxParentData`], a deliberate simplification, not an oversight.
+//! Nothing needs caching from paint, since the delegate is replayed instead,
+//! so there is nothing to add to parent data — `RenderFlow` uses plain
+//! [`BoxParentData`], a deliberate simplification, not an oversight.
 //!
-//! # Deferred (documented, not silently dropped)
+//! # Repaint listenable
 //!
-//! - `FlowDelegate`'s `Listenable? repaint` + `attach`/`detach` listener
-//!   wiring (oracle L64-68, L230-233, L249-259) is **implemented** via
-//!   ADR-0013: [`FlowDelegate::repaint`] returns an optional `Listenable`
-//!   that [`RenderBox::attach`] subscribes to (marking this node needing paint
-//!   on notify) and [`RenderBox::detach`] tears down; a delegate swap migrates
-//!   the subscription (mirrors `RenderCustomPaint`).
-//! - `FlowPaintingContext.paintChild`'s `opacity` parameter (oracle L352,
-//!   `pushOpacity` wrapping) — FLUI's `FlowDelegate::paint_children`/
-//!   `paint_child(index, transform)` signature has no opacity parameter
-//!   already; this is a pre-existing scope cut, not a new one.
-//! - ~~`RenderObject.applyPaintTransform`/`getTransformTo`/`localToGlobal`
-//!   (oracle L455-462)~~ — **landed.** `apply_paint_transform`
-//!   below replays `paint_children` to recover the child's paint matrix, the way
-//!   `hit_test` already does; `getTransformTo` / `localToGlobal` live on
-//!   `PipelineOwner`, because a FLUI render object has no parent link.
-//! - `markNeedsSemanticsUpdate` on `clip_behavior` change (oracle L245) —
-//!   FLUI has no semantics tree yet, consistent with every other render
-//!   object in the catalog.
+//! Per ADR-0013, [`FlowDelegate::repaint`] returns an optional `Listenable`
+//! that [`RenderBox::attach`] subscribes to (marking this node needing paint
+//! on notify) and [`RenderBox::detach`] tears down; a delegate swap migrates
+//! the subscription (as `RenderCustomPaint` does).
+//!
+//! # Coordinate mapping
+//!
+//! `apply_paint_transform` replays `paint_children` to recover the child's
+//! paint matrix, the way `hit_test` does; the transform-to and
+//! local-to-global queries live on `PipelineOwner`, because a FLUI render
+//! object has no parent link.
+//!
+//! # Not supported
+//!
+//! - `FlowPaintingContext::paint_child(index, transform)` has no opacity
+//!   parameter.
+//! - No semantics update on `clip_behavior` change: FLUI has no semantics
+//!   tree yet, consistent with every other render object in the catalog.
 
 use std::sync::Arc;
 
@@ -96,8 +91,7 @@ pub struct RenderFlow {
 }
 
 impl RenderFlow {
-    /// Creates a flow render object with `clip_behavior = Clip::HardEdge`
-    /// (the oracle's default, L191/L240).
+    /// Creates a flow render object with `clip_behavior = Clip::HardEdge`.
     pub fn new(delegate: Arc<dyn FlowDelegate>) -> Self {
         Self {
             delegate,
@@ -145,15 +139,14 @@ impl RenderFlow {
         self.clip_behavior
     }
 
-    /// The oracle's `_getSize` (L261-264) — the single sizing formula
-    /// reused by layout, dry layout, and all four intrinsics.
+    /// The single sizing formula reused by layout, dry layout, and all four
+    /// intrinsics.
     fn get_size(&self, constraints: BoxConstraints) -> Size {
         constraints.constrain(self.delegate.get_size(constraints))
     }
 
-    /// Shared by both width intrinsics — the oracle reuses the identical
-    /// formula for `computeMinIntrinsicWidth` and `computeMaxIntrinsicWidth`
-    /// (its own "dubious" TODO, L269-271: intrinsics never touch children).
+    /// Shared by both width intrinsics: min and max use the identical
+    /// formula, and intrinsics never touch children.
     fn intrinsic_width(&self, height: f64) -> f64 {
         let width = self
             .get_size(BoxConstraints::tight_for_finite(f64::INFINITY, height))
@@ -172,8 +165,7 @@ impl RenderFlow {
     /// Replaces the delegate, reporting whether the swap needs relayout,
     /// just a repaint, or neither.
     ///
-    /// Mirrors the oracle's `delegate` setter (L216-234): a delegate
-    /// *type* change always relayouts; otherwise `should_relayout` on the
+    /// A delegate *type* change always relayouts; otherwise `should_relayout` on the
     /// new delegate (compared against the old one) wins, falling back to
     /// `should_repaint`. The caller is responsible for actually marking
     /// the render object dirty — this is paint/layout-affecting state,
@@ -218,9 +210,8 @@ impl RenderFlow {
 
 impl flui_foundation::Diagnosticable for RenderFlow {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        // The oracle's own `RenderFlow` does not override
-        // `debugFillProperties` at all (no delegate info surfaced), so
-        // clip_behavior is the only field worth reporting.
+        // No delegate info is surfaced, so clip_behavior is the only field
+        // worth reporting.
         builder.add_enum("clip_behavior", self.clip_behavior);
     }
 }
@@ -238,9 +229,8 @@ impl RenderBox for RenderFlow {
         for i in 0..n {
             let inner = self.delegate.get_constraints_for_child(i, constraints);
             let child_size = ctx.layout_child(i, inner);
-            // Oracle L327: children are NEVER positioned by layout, only
-            // by the paint-time transform `FlowDelegate::paint_children`
-            // chooses.
+            // Children are NEVER positioned by layout, only by the
+            // paint-time transform `FlowDelegate::paint_children` chooses.
             ctx.position_child(i, Offset::ZERO);
             self.child_sizes.push(child_size);
         }
@@ -252,7 +242,7 @@ impl RenderBox for RenderFlow {
         constraints: BoxConstraints,
         _ctx: &mut BoxDryLayoutCtx<'_>,
     ) -> Size {
-        // Oracle L311-313: children are never touched for dry layout either.
+        // Children are never touched for dry layout either.
         self.get_size(constraints)
     }
 
@@ -273,8 +263,7 @@ impl RenderBox for RenderFlow {
     }
 
     fn is_repaint_boundary(&self) -> bool {
-        // Oracle L266-267: unconditional. Same precedent as
-        // `RenderRepaintBoundary`.
+        // Unconditional, as with `RenderRepaintBoundary`.
         true
     }
 
@@ -283,9 +272,8 @@ impl RenderBox for RenderFlow {
     /// transform scope the delegate pushes, exactly where `paint` used to
     /// open it itself.
     ///
-    /// Gated on `!= Clip::None` rather than reported unconditionally: this
-    /// mirrors `RenderStack`'s FLUI idiom (no layer at all when clipping is
-    /// off) rather than the oracle's unconditional `pushClipRect`, so
+    /// Gated on `!= Clip::None` rather than reported unconditionally, as
+    /// `RenderStack` does (no layer at all when clipping is off), so
     /// `set_clip_behavior` across `Clip::None` is a layer-COUNT change and
     /// stays a structural `PAINT` — the one clip producer whose clip can
     /// appear and disappear.
@@ -316,16 +304,15 @@ impl RenderBox for RenderFlow {
         self.delegate.paint_children(&mut flow_ctx);
     }
 
-    /// Flutter's `RenderFlow.applyPaintTransform` (`flow.dart:456-462`), which
-    /// multiplies in the child's cached `FlowParentData._transform`.
+    /// Multiplies in the transform the delegate painted the child under.
     ///
     /// **The default would be wrong here.** A flow paints each child under a
     /// per-child transform scope chosen by the delegate, not at its committed
     /// offset. FLUI caches no per-child transform (see the module docs), so this
     /// replays `paint_children` exactly as `hit_test` does.
     ///
-    /// A child the delegate never painted contributes no transform — Flutter's
-    /// `_transform == null` branch, which likewise leaves the matrix alone.
+    /// A child the delegate never painted contributes no transform and leaves
+    /// the matrix alone.
     fn apply_paint_transform(
         &self,
         child: usize,
@@ -359,8 +346,8 @@ impl RenderBox for RenderFlow {
         }
 
         // Side-effect-free replay of the SAME delegate call `paint` made —
-        // see the module docs for why this stands in for Flutter's
-        // paint-time `FlowParentData._transform` cache.
+        // see the module docs for why this stands in for a paint-time
+        // transform cache.
         let n = self.child_sizes.len();
         let (mut painted, mut paint_order, mut transforms) =
             (vec![false; n], Vec::with_capacity(n), vec![None; n]);
@@ -374,7 +361,7 @@ impl RenderBox for RenderFlow {
         self.delegate.paint_children(&mut flow_ctx);
 
         let position = *ctx.position();
-        // Oracle L430: reverse paint order = top-most-painted-first.
+        // Reverse paint order = top-most-painted-first.
         for &index in paint_order.iter().rev() {
             let Some(transform) = transforms[index] else {
                 continue;

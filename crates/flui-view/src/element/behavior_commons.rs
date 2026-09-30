@@ -36,7 +36,7 @@ use flui_foundation::RenderId;
 use super::{arity::ElementArity, generic::ElementCore};
 use crate::{
     owner::{LifecycleHook, RecoveredAt, RecoveredPanic},
-    view::{FlutterError, IntoView, View},
+    view::{FrameworkError, IntoView, View},
 };
 
 // ============================================================================
@@ -118,11 +118,10 @@ pub(crate) fn stamp_sliver_slot(
 /// on a caught panic, substitute the registered `ErrorView`.
 ///
 /// This is the producer half of the `ErrorView` recovery path — the
-/// receiver (`ErrorView` + `FlutterError` +
+/// receiver (`ErrorView` + `FrameworkError` +
 /// `set_error_view_builder`) already exists; this wires the catch that
-/// feeds it. Mirrors Flutter's `ComponentElement.performRebuild`
-/// (`framework.dart:5810-5859`), whose first `try/catch` wraps `build()`
-/// and replaces the built widget with `ErrorWidget.builder`.
+/// feeds it. The catch wraps `build()` and replaces the built view with the
+/// registered error view.
 ///
 /// # Panic-safety boundary
 ///
@@ -146,12 +145,11 @@ pub(crate) fn stamp_sliver_slot(
 /// (`build_into_views`) returns it as the single child view, and the slab
 /// id-reconciler in `build_scope` replaces the prior child element with a
 /// fresh `ErrorElement`. That id-reconcile (type mismatch → remove old +
-/// insert new) is the Rust-native, slab-resident shape of Flutter's
-/// `_child?.deactivate()` + `updateChild(null, errorWidget, slot)`
-/// force-from-null rebuild (`framework.dart:5854-5858`).
+/// insert new) is the slab-resident form of a force-from-null rebuild: the
+/// old child is deactivated and the error view mounted fresh.
 ///
 /// `behavior_name` names what was building (e.g. `"building
-/// StatelessElement"`) for the `FlutterError` breadcrumb.
+/// StatelessElement"`) for the `FrameworkError` breadcrumb.
 ///
 /// # Recording the panic
 ///
@@ -199,8 +197,10 @@ where
         Err(payload) => {
             let Some(element) = core.self_id() else {
                 // No slab id — see the doc comment above.
-                let error =
-                    FlutterError::from_panic(payload.as_ref(), format!("building {behavior_name}"));
+                let error = FrameworkError::from_panic(
+                    payload.as_ref(),
+                    format!("building {behavior_name}"),
+                );
                 tracing::error!(
                     behavior_name,
                     panic_message = %error.message,
@@ -210,9 +210,9 @@ where
                 return crate::view::ErrorView::build_error_view(&error);
             };
             // `RecoveredPanic::from_payload` classifies and builds the
-            // `FlutterError` in one step; the ErrorView borrows it before
+            // `FrameworkError` in one step; the ErrorView borrows it before
             // the record moves into `push_recovered_panic` below, so the
-            // panic is converted to a `FlutterError` exactly once.
+            // panic is converted to a `FrameworkError` exactly once.
             let panic = RecoveredPanic::from_payload(
                 RecoveredAt::Element {
                     element,

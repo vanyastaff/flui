@@ -47,7 +47,6 @@ fn next_frame_id() -> FrameId {
 
 /// UpdateScheduler phase - which part of the frame lifecycle is executing
 ///
-/// This follows Flutter's SchedulerPhase model for proper frame coordination.
 /// The phases execute in order:
 ///
 /// ```text
@@ -70,7 +69,6 @@ pub enum SchedulerPhase {
 
     /// Transient callbacks are being executed.
     /// Animation tickers fire during this phase.
-    /// Corresponds to Flutter's `handleBeginFrame`.
     TransientCallbacks = 1,
 
     /// Microtasks scheduled during TransientCallbacks are being executed.
@@ -79,7 +77,6 @@ pub enum SchedulerPhase {
 
     /// Persistent callbacks are being executed.
     /// The rendering pipeline (build/layout/paint) runs during this phase.
-    /// Corresponds to Flutter's `handleDrawFrame`.
     PersistentCallbacks = 3,
 
     /// Post-frame callbacks are being executed.
@@ -180,7 +177,7 @@ impl fmt::Display for SchedulerPhase {
     }
 }
 
-/// Application lifecycle state (follows Flutter's AppLifecycleState)
+/// Application lifecycle state
 ///
 /// This tracks the overall state of the application as seen by the platform.
 /// Different platforms may not support all states - the scheduler normalizes
@@ -354,8 +351,8 @@ impl AppLifecycleState {
     #[expect(
         clippy::match_same_arms,
         reason = "deliberate transition table: each state pair is listed explicitly \
-                  (Flutter AppLifecycleState parity) so a future tightening edits one \
-                  arm instead of reconstructing the table"
+                  so a future tightening edits one arm instead of reconstructing \
+                  the table"
     )]
     pub const fn can_transition_to(self, next: Self) -> bool {
         match (self, next) {

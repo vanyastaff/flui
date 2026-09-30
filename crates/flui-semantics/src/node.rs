@@ -22,9 +22,8 @@ use crate::{
 /// render tree. Non-boundary render objects are merged into their parent
 /// semantics boundary.
 ///
-/// # Flutter Protocol
+/// # Contents
 ///
-/// Similar to Flutter's `SemanticsNode`:
 /// - Properties for screen readers (label, hint, value)
 /// - Supported actions (tap, scroll, increase/decrease)
 /// - Geometry for spatial navigation
@@ -322,11 +321,9 @@ impl SemanticsNode {
     /// render-object geometry. A merged descendant contributes payload, not a
     /// larger accessibility hit region.
     ///
-    /// **Naming**: renamed from `merge` → `absorb` for consistency
-    /// with [`SemanticsConfiguration::absorb`] and the Flutter convention
-    /// (Flutter has no separate `SemanticsNode.merge` — merging happens
-    /// via `SemanticsConfiguration.absorb` plus the tree-assembly walker;
-    /// FLUI keeps the convenience but aligns naming).
+    /// **Naming**: named `absorb` for consistency with
+    /// [`SemanticsConfiguration::absorb`], which does the actual merging;
+    /// this is a convenience that keeps the node's own geometry.
     pub fn absorb(&mut self, other: &SemanticsNode) {
         self.config.absorb(&other.config);
         self.dirty = true;

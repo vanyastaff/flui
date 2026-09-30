@@ -427,8 +427,8 @@ impl HeadlessRealm {
     ///
     /// The realm coalesces pointer moves and dispatches them at the next
     /// frame; the flush makes a synthetic move observable before that frame,
-    /// as Flutter's test binding delivers events immediately. It runs the
-    /// same queue and dispatch code the frame would.
+    /// so a test sees its effect immediately. It runs the same queue and
+    /// dispatch code the frame would.
     ///
     /// # Panics
     ///

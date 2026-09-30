@@ -55,7 +55,7 @@ pub type SubmitCallback = Rc<dyn Fn(&mut EventCx<'_>, &str)>;
 // EditableText
 // ============================================================================
 
-/// Flutter's own `EditableText.obscuringCharacter` default, U+2022 BULLET.
+/// The default mask character, U+2022 BULLET.
 const DEFAULT_OBSCURING_CHARACTER: char = '\u{2022}';
 
 /// The masked text, and each of `offsets` mapped into it.
@@ -73,15 +73,10 @@ const DEFAULT_OBSCURING_CHARACTER: char = '\u{2022}';
 /// user-perceived character, not the Unicode scalar and not the UTF-16 code
 /// unit.
 ///
-/// **Why not the reference's unit.** Flutter builds the mask as
-/// `obscuringCharacter * text.length`, and Dart's `String.length` counts
-/// UTF-16 code units, so a single emoji becomes TWO bullets and a
-/// family-emoji ZWJ sequence becomes eleven. That is an artifact of Dart's
-/// string representation rather than a designed contract, and it leaks: the
-/// bullet count tells an onlooker which keystrokes were astral. Flutter's own
-/// docs warn against `String.length` for user-visible character counts
-/// (`editable_text.dart:1440-1444`) — the obscuring path just predates or
-/// ignores that.
+/// **Why not UTF-16 code units.** Counting code units would turn a single emoji
+/// into TWO bullets and a family-emoji ZWJ sequence into eleven. That is an
+/// artifact of the string representation rather than a designed contract, and
+/// it leaks: the bullet count tells an onlooker which keystrokes were astral.
 ///
 /// **Why the grapheme.** `TextEditingController` moves and deletes by
 /// grapheme cluster (see its "Character unit" doc), so the mask counts the
@@ -241,9 +236,9 @@ pub(super) fn source_offset_for_masked_offset(
 
 /// A single-line text field that accepts keyboard input when focused.
 ///
-/// Flutter parity: `widgets/editable_text.dart` `EditableText` — the low-level
-/// editable primitive.  [`RawTextField`](super::text_field::RawTextField) wraps
-/// this with decoration and tap-to-focus.
+/// The low-level editable primitive.
+/// [`RawTextField`](super::text_field::RawTextField) wraps this with decoration
+/// and tap-to-focus.
 ///
 /// # Key routing
 ///
@@ -301,10 +296,8 @@ pub(super) fn source_offset_for_masked_offset(
 /// [`RenderEditable::caret_local_rect`] — and forwards it to
 /// [`TextInputHandle::set_cursor_area`] whenever it changes, so the platform
 /// IME candidate window follows the composing text (or the caret, once
-/// composition ends). This is a winit single-rect reduction of Flutter's
-/// transform+local-rect protocol (`editable_text.dart`'s
-/// `_updateSizeAndTransform`/`_updateComposingRectIfNeeded`/
-/// `_schedulePeriodicPostFrameCallbacks`, tag `3.44.0`) — see ADR-0030 for
+/// composition ends). This is a winit-style single-rect protocol rather than a
+/// transform plus local rect — see ADR-0030 for
 /// the loop mechanics (why it is per-attach: a fresh alive-flag and a fresh
 /// last-sent cache each attach, rather than shared across the field's
 /// lifetime) and ADR-0030 for the composing-rect-over-caret-rect fallback
@@ -328,7 +321,7 @@ pub(super) fn source_offset_for_masked_offset(
 ///
 /// A disabled action leaves the key unconsumed, so an obscured field's
 /// Ctrl+C keeps bubbling. Paste consumes the key even when the clipboard is
-/// empty, as Flutter's does.
+/// empty.
 ///
 /// The clipboard is acquired in `init_state` through
 /// [`LifecycleContext::clipboard_handle`]. ADR-0084: acquired as
@@ -348,7 +341,7 @@ pub(super) fn source_offset_for_masked_offset(
 ///   [`RenderEditable::word_range_at_local_offset`] is already there for the
 ///   double-tap case when one is wired above this.
 /// - **Selection handles and the selection toolbar** — the draggable
-///   endpoints and the copy/paste menu Flutter shows on touch platforms.
+///   endpoints and the copy/paste menu shown on touch platforms.
 /// - **Multi-line** — newlines are inserted as literal characters but line
 ///   wrapping, multi-line layout, and vertical scrolling are not implemented.
 /// - **Input formatters** — no validation or transformation pipeline.
@@ -358,7 +351,7 @@ pub struct EditableText {
     /// Controller that owns the text buffer and caret.
     pub(super) controller: TextEditingController,
     /// Focus ownership is explicit and presentation-local. The caller owns
-    /// the node, matching Flutter's required `EditableText.focusNode`.
+    /// the node.
     pub(super) focus_node: Rc<FocusNode>,
     /// Height of the rendered caret bar in logical pixels.
     pub(super) caret_height: f64,
@@ -367,14 +360,10 @@ pub struct EditableText {
     pub(super) selection_color: Color,
     /// Whether this field accepts focus and input. `true` by default.
     ///
-    /// **Named hoist, not a direct port**: the oracle has no
-    /// `EditableText.enabled` property at this tag — `enabled` lives on
-    /// `TextField` and flows down as `_isEnabled` into
-    /// `_effectiveFocusNode.canRequestFocus`
-    /// (`text_field.dart:1183,1282-1299`, tag `3.44.0`). FLUI's
-    /// [`RawTextField`](super::text_field::RawTextField) has no
-    /// decoration/enabled plumbing yet, so this substrate hoists the behavior
-    /// onto `EditableText` itself, one layer lower than the oracle — see
+    /// **Named hoist**: `enabled` conceptually belongs to the decorated field,
+    /// but [`RawTextField`](super::text_field::RawTextField) has no
+    /// decoration/enabled plumbing yet, so this substrate carries it on
+    /// `EditableText` itself, one layer lower — see
     /// [`enabled`](Self::enabled)'s doc comment for exactly what it
     /// withholds.
     pub(super) enabled: bool,
@@ -395,8 +384,7 @@ pub struct EditableText {
     /// stronger than redacting at each of those points, because it cannot be
     /// forgotten at a new one.
     pub(super) obscure_text: bool,
-    /// The character painted in place of each source character. Flutter's
-    /// default, and Flutter asserts it is exactly one character.
+    /// The character painted in place of each source character.
     pub(super) obscuring_character: char,
     /// Called with the current text when Enter is pressed while this field
     /// has focus — see [`Self::on_submitted`]'s doc.
@@ -420,8 +408,7 @@ impl EditableText {
             caret_height: 18.0,
             caret_color: Color::BLACK,
             // Transparent by default, so the primitive paints no highlight
-            // until a caller (a decorated `TextField`, a theme) chooses one —
-            // the same arm Flutter reaches with a null `selectionColor`.
+            // until a caller (a decorated `TextField`, a theme) chooses one.
             selection_color: Color::TRANSPARENT,
             enabled: true,
             text_style: None,
@@ -472,11 +459,10 @@ impl EditableText {
     }
 
     /// Override the character painted in place of each source character
-    /// (default `'\u{2022}'`, Flutter's own).
+    /// (default `'\u{2022}'`).
     ///
-    /// Takes a `char`, so "exactly one character" is a type rather than the
-    /// `assert(obscuringCharacter.length == 1)` the reference performs at
-    /// runtime on a `String`.
+    /// Takes a `char`, so "exactly one character" is a type rather than a
+    /// runtime check on a string.
     #[must_use]
     pub fn obscuring_character(mut self, character: char) -> Self {
         self.obscuring_character = character;
@@ -485,15 +471,13 @@ impl EditableText {
 
     /// Set whether the field accepts focus and keyboard input (default
     /// `true`) — see the [`enabled`](Self::enabled) field's doc comment for
-    /// why this is a named hoist of `TextField.enabled`, not a direct
-    /// `EditableText` parity port.
+    /// why this lives on `EditableText` rather than on the decorated field.
     ///
     /// A disabled field withholds focus acquisition by marking its explicit
     /// node
     /// [`FocusNode::set_can_request_focus`]`(false)`, which keyboard-traversal
-    /// (`focus_next`/`focus_previous`) already honors and which — matching
-    /// Flutter's `FocusNode.canRequestFocus` setter — releases primary focus
-    /// itself if the field is focused when it becomes disabled; no separate
+    /// (`focus_next`/`focus_previous`) already honors and which releases
+    /// primary focus itself if the field is focused when it becomes disabled; no separate
     /// `did_update_view` unfocus step is needed. Its key handler also stops
     /// mutating the controller while disabled, so even a stray dispatch
     /// reaching an already-focused-then-disabled node is a no-op.
@@ -518,8 +502,7 @@ impl EditableText {
     /// Call `callback` with the field's current text when Enter is pressed
     /// while it has focus.
     ///
-    /// Flutter parity: `EditableText.onSubmitted` (`editable_text.dart`) —
-    /// fires on a raw Enter keypress here rather than an IME action-button
+    /// Fires on a raw Enter keypress rather than an IME action-button
     /// commit, since this substrate has no platform IME-action-button
     /// integration yet (see the type doc's `# DEFERRED (v1)` list). The key
     /// is consumed ([`KeyEventResult::Handled`](flui_interaction::routing::KeyEventResult))
@@ -545,8 +528,7 @@ impl EditableText {
     }
 
     /// Call `callback` with the new text after each edit the user makes —
-    /// typing, deleting, an IME commit, a cut or a paste — Flutter's
-    /// `EditableText.onChanged`.
+    /// typing, deleting, an IME commit, a cut or a paste.
     ///
     /// Only user edits: a caller changing the controller itself
     /// (`set_text`, `clear`) does not call it, which is what keeps a form
@@ -1490,11 +1472,10 @@ impl ViewState<EditableText> for EditableTextState {
         }
 
         // A field disabled while focused must not keep the caret and keyboard
-        // input — mirrors Flutter's `TextField`/`EditableText` unfocusing when
-        // `enabled` flips false mid-focus. `FocusNode::set_can_request_focus`
-        // itself releases primary focus on a true-to-false change (Flutter's
-        // `FocusNode.canRequestFocus` setter semantics), so this call alone
-        // covers the unfocus — no separate `has_primary_focus` check needed.
+        // input, so the field must unfocus when `enabled` flips false
+        // mid-focus. `FocusNode::set_can_request_focus`
+        // itself releases primary focus on a true-to-false change, so this
+        // call alone covers the unfocus — no separate `has_primary_focus` check needed.
         //
         self.focus_node.set_can_request_focus(new_view.enabled);
     }
@@ -1640,7 +1621,7 @@ impl ViewState<EditableText> for EditableTextState {
         // (this method) runs before that child unmounts.
         //
         // `ChangeNotifier::remove_listener` is a safe no-op after dispose
-        // (Flutter parity — see `Listenable::remove_listener`'s doc), so
+        // (see `Listenable::remove_listener`'s doc), so
         // calling `dispose()` here first would no longer panic against the
         // child's later `remove_listener` call. It is still left undone: an
         // explicit `dispose()` would mark the shared notifier disposed while
@@ -1661,9 +1642,8 @@ impl ViewState<EditableText> for EditableTextState {
 /// One instance is created per IME attach (focus gain). Each firing reads the
 /// caret's current global rect and forwards it through
 /// [`TextInputHandle::set_cursor_area`] when it changed, then reschedules
-/// itself for the next completed frame — Flutter's own
-/// `_schedulePeriodicPostFrameCallbacks` cadence (`editable_text.dart`, tag
-/// `3.44.0`), dormant whenever no frame runs. `Clone` because
+/// itself for the next completed frame, dormant whenever no frame runs.
+/// `Clone` because
 /// [`flui_scheduler::LocalPostFrameHandle::schedule_local`] takes an `FnOnce`, so the only way to
 /// make it self-rescheduling without boxing a trait object is for each
 /// firing to consume `self` and, if still alive, construct the next firing's
@@ -1745,9 +1725,8 @@ impl CursorAreaLoop {
     /// it equals `inner_anchor`'s, since `RenderSubtreeAnchor` lays its
     /// child out at its own origin), applied to the editable's composing
     /// region rect when one is active, falling back to its collapsed caret
-    /// rect otherwise — Flutter's own `_updateComposingRectIfNeeded` order
-    /// (`editable_text.dart`, tag `3.44.0`: prefer the composing rect,
-    /// fall back to the caret rect when none is available). ADR-0030
+    /// rect otherwise (prefer the composing rect, fall back to the caret rect
+    /// when none is available). ADR-0030
     /// upgrades this loop from the caret-rect-only reduction ADR-0030
     /// originally landed.
     ///
@@ -1786,8 +1765,8 @@ pub(super) fn bounds_from_rect(rect: Rect) -> Bounds<f64> {
 /// untypeable on most non-US keyboards.
 ///
 /// The cost of that carve-out, stated rather than discovered: a genuine
-/// Ctrl+Alt+X shortcut is delivered as text. Browsers and Flutter make the
-/// same trade for the same reason.
+/// Ctrl+Alt+X shortcut is delivered as text. Browsers make the same trade for
+/// the same reason.
 #[inline]
 fn is_command_chord(modifiers: Modifiers) -> bool {
     modifiers.contains(Modifiers::META)
@@ -1795,13 +1774,13 @@ fn is_command_chord(modifiers: Modifiers) -> bool {
 }
 
 /// The modifier that requests WORD-granularity caret/selection/delete
-/// movement on `platform` — Flutter's `DefaultTextEditingShortcuts` binds
-/// a different modifier per platform, not the same one everywhere:
+/// movement on `platform` — the modifier differs per platform, it is not the
+/// same one everywhere:
 ///
 /// | Platform | Word-jump modifier | Why not the other one too |
 /// |---|---|---|
 /// | macOS, iOS | Alt (Option) | Ctrl is unbound for word-jump on macOS |
-/// | Windows, Linux, Android, Fuchsia, Unknown | Control | Alt+Left/Right/Backspace are reserved by Flutter for LINE-boundary intents this crate does not implement yet (see [`is_word_jump_modifier`]'s `# DEFERRED`); treating Alt as word-jump here too would silently claim that reservation early |
+/// | Windows, Linux, Android, Fuchsia, Unknown | Control | Alt+Left/Right/Backspace are reserved for LINE-boundary intents this crate does not implement yet (see [`is_word_jump_modifier`]'s `# DEFERRED`); treating Alt as word-jump here too would silently claim that reservation early |
 ///
 /// A pure function of `platform`, table-tested against every
 /// [`TargetPlatform`] variant so the mapping itself is verified
@@ -1839,8 +1818,7 @@ fn word_jump_modifier(platform: TargetPlatform) -> Modifiers {
 /// # DEFERRED
 ///
 /// Alt+Left/Right/Backspace as a line-boundary intent on non-Apple
-/// platforms (Flutter: `ExtendSelectionToLineBreakIntent`/
-/// `DeleteToLineBreakIntent`). Left unhandled (falls through to a plain
+/// platforms (extend-selection-to-line-break and delete-to-line-break). Left unhandled (falls through to a plain
 /// per-character move) rather than silently reinterpreted as word-jump,
 /// so a later line-boundary implementation is not fighting an existing,
 /// wrong meaning for the chord.
@@ -1854,8 +1832,8 @@ fn word_jump_modifier(platform: TargetPlatform) -> Modifiers {
 /// {Ctrl, Alt, Meta} — Shift composes independently (it selects
 /// move-vs-extend, handled by the caller) and is not part of this check,
 /// but any OTHER command modifier held at the same time disqualifies the
-/// chord. Flutter's `SingleActivator` matches the complete modifier
-/// state the same way (apart from Shift), and without this a chord that
+/// chord. The complete modifier state is matched (apart from Shift), and
+/// without this a chord that
 /// is not meant to be word-jump at all — Ctrl+Alt+Right on Linux,
 /// Option+Command+Right on macOS — would wrongly take the word-jump path
 /// just because it happens to also hold the required key. Lock-state
@@ -1959,13 +1937,9 @@ fn build_key_handler(
             // the selection, and the two are not the same operation with a
             // flag: unmodified, an arrow collapses a selection to its edge and
             // stops there; modified, it steps the extent from wherever it is
-            // and leaves the anchor. Flutter draws the same line between
-            // `ExtendSelectionByCharacterIntent`'s two `collapseSelection`
-            // values (`widgets/editable_text.dart:685,697`). Ctrl/Alt raises
+            // and leaves the anchor. Ctrl/Alt raises
             // the granularity from character to WORD without changing that
-            // axis — the two modifiers compose independently, matching
-            // Flutter's separate `ExtendSelectionByCharacterIntent`/
-            // `ExtendSelectionToNextWordBoundaryIntent` pair.
+            // axis — the two modifiers compose independently.
             Key::Named(NamedKey::ArrowLeft) => {
                 let extend = event.modifiers.contains(Modifiers::SHIFT);
                 let by_word = is_word_jump_modifier(event.modifiers, platform);
@@ -2068,10 +2042,9 @@ struct EditableTextRenderView {
     caret_byte_offset: usize,
     show_caret: bool,
     /// The IME composing region to underline, gated on `enabled &&
-    /// has_primary_focus()` by [`build_field_view`] — the FLUI analog of
-    /// Flutter's `buildTextSpan`'s `withComposing: !widget.readOnly` (plus
-    /// its own focus gating), named rather than a direct port since no
-    /// `readOnly` field exists (see [`EditableText::enabled`]'s doc).
+    /// has_primary_focus()` by [`build_field_view`]. There is no `readOnly`
+    /// field, so `enabled` stands in for it (see [`EditableText::enabled`]'s
+    /// doc).
     composing_range: Option<Range<usize>>,
     /// The selected byte range, in the SAME space as `text` — masked when the
     /// field is obscured, because [`build_field_view`] masks before this point
@@ -2198,10 +2171,8 @@ fn build_field_view(
     // A collapsed selection is the caret's business, and the render object
     // skips it anyway — `None` says so at the seam rather than relying on it.
     let selection = (!selection.is_empty()).then_some(selection);
-    // The field's node for assistive technology: Flutter's
-    // `RenderEditable.describeSemanticsConfiguration` (`isTextField`,
-    // `isObscured`, `value`, tag `3.44.0`), outside the inner anchor so the
-    // IME loop still finds the editable as that anchor's first child. The
+    // The field's node for assistive technology (text field, obscured, value),
+    // outside the inner anchor so the IME loop still finds the editable as that anchor's first child. The
     // value is the text the render object shows — the mask when obscured.
     let semantics = Semantics::new()
         .container(true)
@@ -2217,14 +2188,11 @@ fn build_field_view(
             caret_byte_offset,
             show_caret: focused && !controller.caret_hidden_by_ime(),
             // Composing-region underline gated on the same `focused` check
-            // as `show_caret` — Flutter's `buildTextSpan`'s
-            // `withComposing: !widget.readOnly` plus its focus gating
-            // (`_EditableTextState.buildTextSpan`, `editable_text.dart`,
-            // tag `3.44.0`): an unfocused field must not keep painting a
+            // as `show_caret`: an unfocused field must not keep painting a
             // stale composing underline for text it no longer owns input
             // for.
-            // Suppressed entirely while obscured, matching the reference:
-            // its obscured branch returns a plain span and never applies the
+            // Suppressed entirely while obscured: the obscured branch builds a
+            // plain span and never applies the
             // composing decoration. Two reasons, and the second is the one
             // that matters — the underline's extent would report how many
             // characters the in-progress IME composition holds, which is a

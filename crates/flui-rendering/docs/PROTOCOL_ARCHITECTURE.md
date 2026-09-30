@@ -218,16 +218,16 @@ impl RenderBox for RenderPadding {
 }
 ```
 
-## Comparison with Flutter
+## Design summary
 
-| Aspect | Flutter | FLUI |
-|--------|---------|------|
-| Protocol definition | Implicit via inheritance | Explicit trait composition |
-| Type safety | Runtime checks | Compile-time via GATs |
-| Child count | Runtime validation | Arity system |
-| ParentData | Casting required | Type-safe access |
-| Paint backend | Skia only | Pluggable via CanvasApi |
-| Extensibility | Inheritance chains | Capability composition |
+| Aspect | FLUI |
+|--------|------|
+| Protocol definition | Explicit trait composition |
+| Type safety | Compile-time via GATs |
+| Child count | Arity system |
+| ParentData | Type-safe access |
+| Paint backend | Pluggable via CanvasApi |
+| Extensibility | Capability composition |
 
 ## File Organization
 

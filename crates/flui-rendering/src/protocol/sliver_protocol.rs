@@ -71,8 +71,7 @@ impl Protocol for SliverProtocol {
         }
         if let Some(reason) = geometry.content_contract_violation() {
             // A content bug, not a pipeline hazard: commit and consume the
-            // geometry the way a Flutter RELEASE build does (the matching
-            // Flutter checks are debug-only asserts, `sliver.dart:881-894`).
+            // geometry, as a release build would for a debug-only assert.
             // Rejecting it instead leaves the previous committed geometry
             // in place on every retry — a silent, permanent viewport
             // freeze.

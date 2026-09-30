@@ -135,7 +135,7 @@ macro_rules! scene_plugin {
     };
 }
 
-/// Generates `extern "C"` entry points for a Flutter-parity **worker** crate.
+/// Generates `extern "C"` entry points for a hot-reload **worker** crate.
 ///
 /// The worker owns reloadable `build()` logic only; the host binary retains
 /// element-tree `State`. Call an init function that registers build dispatch

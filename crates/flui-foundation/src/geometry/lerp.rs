@@ -1,8 +1,7 @@
 //! `Lerp` and `MaybeLerp` — the interpolation substrate for the animation system.
 //!
 //! A single `Lerp` trait lets one generic `Tween<V: Lerp>` interpolate every
-//! animatable value type, replacing the per-type tween structs Flutter needs
-//! because Dart dispatches `begin + (end - begin) * t` dynamically.
+//! animatable value type, so no per-type tween structs are needed.
 //!
 //! # Extrapolation contract
 //!

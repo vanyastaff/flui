@@ -307,7 +307,7 @@ impl HeadlessBinding {
     /// mounts and lays out, and the first `draw_frame` comes after. Folding a
     /// whole frame into the mount would make a harness *less* faithful — a
     /// `StreamBuilder` would deliver an already-queued event before any test
-    /// could observe the `Waiting` state Flutter guarantees.
+    /// could observe the `Waiting` state a real frame sequence guarantees.
     ///
     /// # Panics
     ///

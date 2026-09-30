@@ -1,21 +1,13 @@
 //! Post-frame callbacks run **after** the pipeline, in the same frame.
 //!
-//! # Parity oracles
+//! # Persistent callbacks and the pipeline
 //!
-//! `.flutter/packages/flutter/lib/src/scheduler/binding.dart:1338-1378`
-//! (`handleDrawFrame`: persistent phase, then post-frame phase, inside a
-//! `try { … } finally { _schedulerPhase = idle; }`);
-//! `.../rendering/binding.dart:61`, `:557-558` (`drawFrame()` registered as the
-//! first persistent callback). Expected values are read from the reference, not
-//! from running this code.
-//!
-//! # The divergence this file documents, and does not claim away
-//!
-//! In Flutter the pipeline **is** a persistent callback. In FLUI the pipeline is
+//! The pipeline is not itself a persistent callback: it is
 //! a closure passed to `UpdateScheduler::drive_frame`, so a *registered* persistent
-//! callback runs **before** it. Post-frame ordering — the only thing
-//! `HeroController` needs — matches. Persistent-phase ordering does not, and
-//! `persistent_callbacks_run_before_the_pipeline` pins that honestly.
+//! callback runs **before** it. Post-frame ordering — the only thing a
+//! geometry-measuring post-frame callback needs — is unaffected.
+//! `persistent_callbacks_run_before_the_pipeline` pins the persistent-phase
+//! ordering.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
@@ -44,8 +36,7 @@ impl Log {
     }
 }
 
-/// `handleDrawFrame`'s two phases, in order: persistent, then post-frame
-/// (`scheduler/binding.dart:1343-1358`). The pipeline sits in the persistent
+/// The draw-frame phases run in order: persistent, then post-frame. The pipeline sits in the persistent
 /// slot, so a post-frame callback must observe everything it did.
 fn drive_frame_runs_post_frame_callbacks_after_the_pipeline() {
     let scheduler = UpdateScheduler::new();
@@ -68,9 +59,8 @@ fn drive_frame_runs_post_frame_callbacks_after_the_pipeline() {
 /// panic, calls `abort_frame` (phase → `Idle`, **no** post-frame callbacks), and
 /// resumes the unwind. The queued callbacks survive to the next completed frame.
 ///
-/// This mirrors Flutter: a throwing persistent callback skips the post-frame loop,
-/// and `finally { _schedulerPhase = idle; }` still resets the phase
-/// (`scheduler/binding.dart:1341-1374`).
+/// A panicking persistent callback skips the post-frame loop, and the phase is
+/// still reset.
 ///
 /// `abort_frame` must not go through `set_scheduler_phase`: `PersistentCallbacks
 /// -> Idle` is an illegal transition, so its `debug_assert!` would fire and — were
@@ -128,14 +118,12 @@ fn a_frame_after_a_panicking_frame_starts_cleanly() {
     assert_eq!(scheduler.phase(), SchedulerPhase::Idle);
 }
 
-/// **The remaining divergence, pinned rather than claimed away.**
+/// **Persistent callbacks run before the pipeline.**
 ///
-/// Flutter registers `drawFrame()` as the first persistent callback
-/// (`rendering/binding.dart:61`, `:557-558`), so a persistent callback added
-/// later runs *after* the pipeline. FLUI's pipeline is a closure, so every
+/// The pipeline is a closure, not a registered persistent callback, so every
 /// registered persistent callback runs *before* it. Nothing in the framework
 /// registers one today.
-fn persistent_callbacks_run_before_the_pipeline_a_divergence_from_flutter() {
+fn persistent_callbacks_run_before_the_pipeline() {
     let scheduler = UpdateScheduler::new();
     let log = Log::default();
 
@@ -156,7 +144,7 @@ fn persistent_callbacks_run_before_the_pipeline_a_divergence_from_flutter() {
     assert_eq!(
         log.get(),
         vec!["persistent", "pipeline", "post_frame"],
-        "in Flutter the pipeline IS the first persistent callback; here it follows them"
+        "persistent callbacks run first; the pipeline follows them"
     );
 }
 
@@ -178,8 +166,8 @@ fn post_frame_ordering_matrix() {
                 a_frame_after_a_panicking_frame_starts_cleanly as fn(),
             ),
             (
-                "persistent_callbacks_run_before_the_pipeline_a_divergence_from_flutter",
-                persistent_callbacks_run_before_the_pipeline_a_divergence_from_flutter as fn(),
+                "persistent_callbacks_run_before_the_pipeline",
+                persistent_callbacks_run_before_the_pipeline as fn(),
             ),
         ],
     );

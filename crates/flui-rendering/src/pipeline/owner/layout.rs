@@ -37,7 +37,7 @@ impl PipelineOwner<Layout> {
     /// - Objects may dirty paint or compositing
     ///
     /// Nodes are sorted by depth (shallow first) so parents are laid out
-    /// before their children. This matches Flutter's `flushLayout` behavior.
+    /// before their children.
     ///
     /// # Synchronous Child Layout
     ///
@@ -51,7 +51,7 @@ impl PipelineOwner<Layout> {
                 .entered();
 
         // Process own dirty nodes if any
-        // Flutter pattern: while loop to handle nodes added during layout
+        // While loop to handle nodes added during layout
         while self.scheduler.has_layout_work() {
             self.scheduler.enter_phase(PhaseKind::Layout);
 
@@ -230,13 +230,11 @@ impl PipelineOwner<Layout> {
                     }
                 }
 
-                // Flutter parity (object.dart: `RenderObject.layout`
-                // unconditionally ends with `markNeedsPaint()`): a
-                // subtree that re-laid out must repaint, otherwise a
+                // A subtree that re-laid out must repaint, otherwise a
                 // pure-layout invalidation (setState moving a child)
                 // leaves stale pixels on screen.
                 //
-                // Flutter marks per OBJECT, and the difference is not
+                // The mark must be per OBJECT, and the difference is not
                 // cosmetic. `mark_needs_paint` walks UP to the nearest
                 // established boundary, so marking only the relayout root
                 // reaches the boundary ABOVE the subtree and never the
@@ -501,17 +499,15 @@ impl PipelineOwner<Layout> {
         drop(arena);
         self.counters.nodes_laid_out += laid_out_count;
 
-        // Flutter marks needs-paint per object at the end of
-        // `RenderObject.layout`; this is the same rule, applied once per walk
-        // to exactly the boundaries that reached layout. Anything else is
+        // Needs-paint is marked per object that laid out, applied once per
+        // walk to exactly the boundaries that reached layout. Anything else is
         // covered by `mark_needs_paint` finding its enclosing boundary.
         for id in laid_out {
             self.mark_needs_paint(id);
         }
 
-        // Flutter pairs `performLayout()` with `markNeedsSemanticsUpdate()` in
-        // both of `RenderObject`'s layout entry points, so a node that lays out
-        // re-publishes its semantics geometry. Without it a frame that only
+        // A node that lays out re-publishes its semantics geometry. Without
+        // that, a frame that only
         // re-laid-out publishes nothing, and a scroll — which is exactly that
         // frame, since the viewport's offset listener requests layout and
         // nothing else — leaves the accessibility tree describing where the

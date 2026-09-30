@@ -14,11 +14,6 @@ Initial → Active ⇄ Inactive → Defunct
   reactivated within the same frame (its `RenderObject`, if any, is detached but not disposed).
 - **`Defunct`** — permanently removed; the `Element` will be dropped.
 
-This is the same four-state shape as Flutter's own `_ElementLifecycle` (`initial` / `active` /
-`inactive` / `defunct`) — a case where FLUI follows the Flutter contract directly rather than
-diverging from it, per AGENTS.md's Design stance: name the contract, and the behavior is proven
-by test rather than assumed from the name alone.
-
 Platform/lifecycle-scoped capabilities — `rebuild_handle()`, `post_frame_handle()`,
 `text_input_handle()`, `focus_manager()` — are acquired only while an `Element` is transitioning
 through `init_state`/`did_change_dependencies`, never from inside `build`/`perform_layout`/`paint`.

@@ -40,8 +40,7 @@ generic view derives.
 
 ### Routable derive: specificity order, compile-time pattern validation, hidden helpers
 
-**Oracle:** Flutter has no derive; a `RouteInformationParser` is written by
-hand. The shape follows Dioxus's `#[derive(Routable)]` with `#[route("…")]`
+**Oracle:** The shape follows Dioxus's `#[derive(Routable)]` with `#[route("…")]`
 per variant.
 
 **Choice:** `#[derive(Routable)]` (ADR-0093 §1) checks every pattern while

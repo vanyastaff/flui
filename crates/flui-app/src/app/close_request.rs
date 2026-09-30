@@ -44,7 +44,7 @@
 //! *human*; a timer that fires mid-decision would destroy exactly the data
 //! the veto exists to protect. No reference does this — AppKit's
 //! `windowShouldClose:`, Win32's `WM_CLOSE`, GTK's `delete-event`, Qt's
-//! `closeEvent` and Flutter's `PopScope` all leave that wait unbounded.
+//! `closeEvent` all leave that wait unbounded.
 //! What the application owes instead is the means to finish the close, and
 //! it is handed that up front:
 //! [`request_presentation_close`](crate::request_presentation_close) closes

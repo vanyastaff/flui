@@ -1,13 +1,13 @@
 //! Application-scoped widgets: the [`WidgetsApp`] shell, [`MediaQuery`], and
 //! the [`InheritedTheme`] trait.
 //!
-//! These are the closest Flutter-equivalent infrastructure widgets — they sit
+//! These are infrastructure widgets that sit
 //! near the root of the widget tree and provide ambient data every descendant
 //! can read without explicit parameter threading.
 //!
-//! | Widget | Data type | Flutter equivalent |
-//! |---|---|---|
-//! | [`MediaQuery`] | [`MediaQueryData`] | `MediaQuery` / `MediaQueryData` |
+//! | Widget | Data type |
+//! |---|---|
+//! | [`MediaQuery`] | [`MediaQueryData`] |
 //!
 //! The Material `Theme`/`ThemeData` inherited widget itself now lives in
 //! `flui-material` (`flui_material::Theme`/`ThemeData`), which depends on

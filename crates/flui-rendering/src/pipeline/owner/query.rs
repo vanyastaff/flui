@@ -31,10 +31,8 @@ use super::{
 impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// One intrinsic dimension of a box subtree, memoized per node.
     ///
-    /// The walk mirrors Flutter's `getMinIntrinsicWidth`-family wrapper
-    /// layer (box.dart `_computeIntrinsics`): every node's answer for
-    /// `(dimension, extent)` is cached in its `RenderState` layout
-    /// cache, and `mark_needs_layout` clears the cache with
+    /// Every node's answer for `(dimension, extent)` is cached in its
+    /// `RenderState` layout cache, and `mark_needs_layout` clears the cache with
     /// boundary-crossing escalation. Repeated probes of the same child
     /// at the same extent — the canonical N-child container pattern —
     /// cost one computation each.
@@ -94,7 +92,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     }
 
     /// The size a box subtree WOULD take under `constraints`, memoized
-    /// per `(node, constraints)` — Flutter's `getDryLayout`.
+    /// per `(node, constraints)` (a dry layout).
     ///
     /// # Errors
     ///
@@ -135,7 +133,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     }
 
     /// The dry baseline of a box node for `constraints`, memoized per
-    /// `(constraints, baseline)` — Flutter's `getDryBaseline`. The
+    /// `(constraints, baseline)` (a dry baseline). The
     /// computed answer may be `None` ("no baseline"); that answer is
     /// cached too.
     ///

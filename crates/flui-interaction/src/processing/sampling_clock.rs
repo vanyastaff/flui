@@ -1,6 +1,6 @@
 //! Frame-paced clock for pointer-event resampling.
 //!
-//! Flutter's `PointerEventResampler.sample(...)` is caller-paced: the
+//! `PointerEventResampler::sample(...)` is caller-paced: the
 //! caller passes a `(sampleTime, nextSampleTime)` pair on every frame
 //! tick. The resampler interpolates queued events between those two
 //! instants. To keep the call sites consistent and to surface the
@@ -36,16 +36,12 @@
 //! let (now, next) = clock.tick();
 //! resampler.sample(now, next, |event| dispatch(event));
 //! ```
-//!
-//! Flutter reference: `gestures/resampler.dart` (caller-paced sampling
-//! loop) and `scheduler/ticker.dart` (frame-tick clock).
 
 use web_time::{Duration, Instant};
 
-/// Default sampling period: 60 Hz (Flutter's `kDefaultSamplePeriod`).
+/// Default sampling period: 60 Hz (16,667 µs).
 ///
-/// Matches Flutter's [`kDefaultSamplePeriod`](https://api.flutter.dev/flutter/scheduler/kDefaultSamplePeriod-constant.html)
-/// (16,667 µs). Touch sensors commonly run at 120 Hz, displays at 60 Hz;
+/// Touch sensors commonly run at 120 Hz, displays at 60 Hz;
 /// the resampler bridges the two.
 pub const DEFAULT_SAMPLE_PERIOD: Duration = Duration::from_micros(16_667);
 

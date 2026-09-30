@@ -1,8 +1,7 @@
 //! Layout constraints system for FLUI rendering pipeline.
 //!
-//! This module provides constraint types that follow Flutter's proven
-//! constraint model while leveraging Rust's type system and performance
-//! characteristics.
+//! This module provides the constraint types layout passes down the tree,
+//! leveraging Rust's type system and performance characteristics.
 //!
 //! # Core Concepts
 //!
@@ -67,15 +66,6 @@
 //!     .with_tight_height(50.0);
 //! ```
 //!
-//! # Flutter Equivalence
-//!
-//! Types map directly to Flutter's constraint system:
-//!
-//! - `BoxConstraints` ↔ Flutter `BoxConstraints`
-//! - `SliverConstraints` ↔ Flutter `SliverConstraints`
-//! - `SliverGeometry` ↔ Flutter `SliverGeometry`
-//! - `GrowthDirection` ↔ Flutter `GrowthDirection`
-
 mod axis_direction;
 mod box_constraints;
 mod direction;
@@ -95,10 +85,9 @@ pub use sliver_geometry::SliverGeometry;
 /// can call it without adding an internal API surface.
 pub use sliver_layout::{child_paint_offset, grid_child_paint_offset};
 
-/// Abstract constraint trait following Flutter's protocol.
+/// Abstract constraint trait.
 ///
-/// Defines the contract for all constraint types in FLUI, matching Flutter's
-/// abstract `Constraints` class.
+/// Defines the contract for all constraint types in FLUI.
 pub trait Constraints: Clone + PartialEq + fmt::Debug + Send + Sync + 'static {
     /// Returns whether exactly one size satisfies these constraints.
     ///

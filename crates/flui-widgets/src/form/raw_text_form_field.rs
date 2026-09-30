@@ -24,14 +24,14 @@ use flui_objects::{CrossAxisAlignment, MainAxisSize};
 const ERROR_COLOR: Color = Color::rgb(176, 0, 32);
 
 /// A [`RawTextField`] in a [`FormField<String>`](super::FormField) with a
-/// plain error line — the theme-free stand-in for Flutter's `TextFormField`;
-/// `flui_material::TextFormField` is the Flutter-parity type.
+/// plain error line — the theme-free text form field;
+/// `flui_material::TextFormField` is the themed one.
 ///
 /// Named `Raw…` for the reason [`RawTextField`] is: the facade's
 /// `TextFormField` means the Material one whenever that feature is on.
 ///
-/// Two constructors put Flutter's "`initialValue` or `controller`, not both"
-/// assert into the types: [`Self::new`] edits a caller's controller and
+/// Two constructors put "an initial value or a controller, not both"
+/// into the types: [`Self::new`] edits a caller's controller and
 /// starts from its text, [`Self::with_initial_value`] owns its controller.
 ///
 /// The error line is a live region, so assistive technology announces an

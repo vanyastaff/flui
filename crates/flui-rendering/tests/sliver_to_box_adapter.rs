@@ -6,7 +6,7 @@
 //!
 //! 1. derive tight-cross-axis `BoxConstraints` from `SliverConstraints`;
 //! 2. lay out the Box child through the pipeline's Sliver -> Box callback;
-//! 3. compose Flutter-parity sliver geometry from the child's main-axis size;
+//! 3. compose sliver geometry from the child's main-axis size;
 //! 4. commit the child's paint offset so hit-test/paint use the same source.
 
 use flui_foundation::Leaf;

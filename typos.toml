@@ -18,9 +18,9 @@ extend-exclude = [
 ]
 
 [default]
-# Allow common Rust/Flutter identifier conventions that look like typos.
+# Allow identifiers that look like typos.
 extend-ignore-identifiers-re = [
-    # Type names from Flutter that look like typos to typos
+    # Type names that look like typos to typos
     "RSuperellipse",
     # `_TransitionableNavigationBar` (cupertino/nav_bar.dart) — the real oracle
     # class name, not a typo of "Transitional".

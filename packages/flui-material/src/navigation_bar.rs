@@ -2,17 +2,10 @@
 //! bar: a persistent row of equal-width destinations with a pill-shaped
 //! selection indicator.
 //!
-//! # Flutter parity
-//!
-//! `material/navigation_bar.dart`'s `NavigationBar`/`NavigationDestination`/
-//! `NavigationIndicator` and `material/navigation_bar_theme.dart`'s
-//! `NavigationBarThemeData` (oracle tag `3.44.0`).
-//!
 //! # V1 scope: a controlled, static-geometry component
 //!
-//! `NavigationBar` is a plain [`StatelessView`] here, exactly as in the
-//! oracle (`NavigationBar extends StatelessWidget`) — `selected_index` is a
-//! fully caller-controlled prop (Flutter parity: the widget itself holds no
+//! `NavigationBar` is a plain [`StatelessView`] — `selected_index` is a
+//! fully caller-controlled prop (the widget itself holds no
 //! selection state, `onDestinationSelected` is expected to drive a rebuild
 //! with a new `selectedIndex`), so no `WidgetStatesController` needs to be
 //! threaded down to carry `Selected` the way [`crate::Switch`]/[`crate::Checkbox`]/
@@ -22,7 +15,7 @@
 //! `Hovered`/`Focused`/`Pressed`/`Disabled` still lives inside its private
 //! `InkWell` element (unshared, persists across `NavigationBar` rebuilds the
 //! same way any other stateful child element does), but never needs to
-//! react outward: `_NavigationBarDefaultsM3`'s `iconTheme`/`labelTextStyle`
+//! react outward: the M3 `iconTheme`/`labelTextStyle` defaults
 //! only branch on `disabled`/`selected` — never `hovered`/`focused`/`pressed`
 //! — so icon/label color has nothing to recompute when those transient
 //! states change.
@@ -97,27 +90,22 @@
 //! [`crate::Switch`]'s own module docs already establish for its thumb-splash
 //! substitution.
 //!
-//! # Semantics: a direct `SemanticsRole` port
+//! # Semantics
 //!
 //! `Semantics(role: SemanticsRole.tabBar, ...)`/`Semantics(role: SemanticsRole.tab,
-//! selected: ...)` (`:293-296`, `:304-306`) port directly: FLUI's
-//! `flui_semantics::SemanticsRole` already carries `Tab`/`TabBar` variants —
-//! no substitution needed. This V1 flattens the oracle's two-widget-deep
-//! per-destination wrapper (an outer `Semantics(role: tab, selected: ...)`
-//! from `NavigationBar.build`, an inner `Semantics(enabled: ..., button:
-//! true)` from `_NavigationBarDestinationSemantics`) into one
-//! [`flui_sdk::widgets::Semantics`] node carrying every flag at once — the two
-//! nodes only exist in the oracle because two different widgets each own
-//! one; [`flui_sdk::widgets::Semantics`] can carry `role`/`selected`/`enabled`/
-//! `button` on a single builder, so nothing is lost by not re-nesting.
-//! [`flui_sdk::widgets::MergeSemantics`] still wraps it (Flutter parity:
-//! `MergeSemantics`, `:303`), which is load-bearing if a destination's own
-//! icon/label subtree ever contributes its own semantics nodes (Flutter
-//! parity: folding the label `Text`'s node into the tab node rather than
-//! leaving it a sibling).
+//! selected: ...)` map directly: FLUI's
+//! `flui_semantics::SemanticsRole` already carries `Tab`/`TabBar` variants.
+//! Each destination is one
+//! [`flui_sdk::widgets::Semantics`] node carrying every flag at once
+//! (`role`/`selected`/`enabled`/`button`), rather than an outer
+//! `Semantics(role: tab, selected: ...)` around an inner
+//! `Semantics(enabled: ..., button: true)`.
+//! [`flui_sdk::widgets::MergeSemantics`] still wraps it, which is
+//! load-bearing if a destination's own
+//! icon/label subtree ever contributes its own semantics nodes (folding the
+//! label `Text`'s node into the tab node rather than leaving it a sibling).
 //!
-//! **Named deferral**: the oracle's extra "Tab N of M" accessibility label
-//! (`_NavigationBarDestinationSemantics`'s non-web `Stack` branch, `:1013-1026`)
+//! **Named deferral**: the extra "Tab N of M" accessibility label
 //! needs a `MaterialLocalizations.tabLabel`-equivalent localized string
 //! table this crate does not have yet — not wired.
 //!
@@ -159,28 +147,22 @@ use crate::state_color::resolve_state_color;
 use crate::theme::Theme;
 use crate::theme_data::NavigationBarThemeData;
 
-/// The bar's default height. Flutter parity: `_NavigationBarDefaultsM3`'s
-/// `super(height: 80.0, ...)` (`navigation_bar.dart`, oracle tag `3.44.0`).
+/// The bar's default height (M3: 80.0).
 pub const NAVIGATION_BAR_HEIGHT: f64 = 80.0;
 
-/// The bar's default elevation. Flutter parity:
-/// `_NavigationBarDefaultsM3`'s `super(elevation: 3.0, ...)`.
+/// The bar's default elevation (M3: 3.0).
 pub const NAVIGATION_BAR_ELEVATION: f64 = 3.0;
 
-/// The selection indicator's width. Flutter parity: `_kIndicatorWidth`
-/// (`navigation_bar.dart`, `64.0`).
+/// The selection indicator's width (M3: 64.0).
 const NAVIGATION_INDICATOR_WIDTH: f64 = 64.0;
 
-/// The selection indicator's height. Flutter parity: `_kIndicatorHeight`
-/// (`32.0`).
+/// The selection indicator's height (M3: 32.0).
 const NAVIGATION_INDICATOR_HEIGHT: f64 = 32.0;
 
-/// Each destination's icon side length. Flutter parity:
-/// `_NavigationBarDefaultsM3.iconTheme`'s `size: 24.0`.
+/// Each destination's icon side length (M3: 24.0).
 const NAVIGATION_DESTINATION_ICON_SIZE: f64 = 24.0;
 
-/// The label's top padding. Flutter parity:
-/// `_NavigationBarDefaultsM3.labelPadding`, `EdgeInsets.only(top: 4)`.
+/// The label's top padding, `EdgeInsets.only(top: 4)`.
 const NAVIGATION_LABEL_PADDING_TOP: f64 = 4.0;
 
 // Compile-time geometry invariant (not a runtime test — every side is
@@ -194,9 +176,6 @@ const _: () = assert!(NAVIGATION_DESTINATION_ICON_SIZE <= NAVIGATION_INDICATOR_H
 type DestinationSelectedCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>, usize)>;
 
 /// One destination (icon + label) in a [`NavigationBar`].
-///
-/// Flutter parity: `NavigationDestination` (`navigation_bar.dart`, oracle tag
-/// `3.44.0`).
 ///
 /// # Examples
 ///
@@ -289,11 +268,9 @@ pub struct NavigationBar {
 impl NavigationBar {
     /// A bar over `destinations`, `selected_index: 0`, no overrides.
     ///
-    /// Flutter parity: `NavigationBar`'s constructor asserts `destinations.length
-    /// >= 2` and `0 <= selectedIndex < destinations.length` (`navigation_bar.dart`
-    /// `:122-123`) — Dart `assert`s are stripped in release builds, so this
-    /// is a debug-only contract check there, not a production-enforced
-    /// invariant; `debug_assert!` mirrors that exactly.
+    /// Requires `destinations.len() >= 2` and
+    /// `selected_index < destinations.len()`; this is a debug-only contract
+    /// check (`debug_assert!`), not a production-enforced invariant.
     #[must_use]
     pub fn new(destinations: Vec<NavigationDestination>) -> Self {
         debug_assert!(
@@ -385,9 +362,9 @@ impl std::fmt::Debug for NavigationBar {
 }
 
 /// Resolves `height`/`elevation`/`background_color`/`indicator_color`
-/// through the widget → theme → default cascade — Flutter parity:
-/// `NavigationBar.build`'s `height ?? navigationBarTheme.height ?? defaults.height!`
-/// family (`navigation_bar.dart` `:281-287`), extracted as its own pure
+/// through the widget → theme → default cascade
+/// (`height ?? navigationBarTheme.height ?? defaults.height!` and so on),
+/// extracted as its own pure
 /// function per field so the tier precedence is unit-testable without
 /// mounting a widget tree.
 fn resolve_bar_geometry(
@@ -428,8 +405,7 @@ fn navigation_destination_default_icon_color(colors: &ColorScheme, states: Widge
 }
 
 /// Resolves a destination's icon color through the theme → default cascade
-/// (there is no widget-level icon-color override — Flutter parity: neither
-/// `NavigationBar` nor `NavigationDestination` exposes one either).
+/// (there is no widget-level icon-color override).
 fn resolve_navigation_destination_icon_color(
     theme_icon_color: Option<&WidgetStateProperty<Option<Color>>>,
     colors: &ColorScheme,
@@ -473,18 +449,18 @@ fn resolve_navigation_destination_label_style(
 /// Builds the PURE (never-combined) `WidgetStates` query set a destination's
 /// icon/label color resolves against.
 ///
-/// Flutter parity: `NavigationDestination.build` resolves its icon/label
+/// A destination resolves its icon/label
 /// themes with three INDEPENDENT constant sets — `selectedState =
 /// {selected}`, `unselectedState = {}`, `disabledState = {disabled}`
-/// (`navigation_bar.dart:427-429`) — never a set containing both `selected`
+/// — never a set containing both `selected`
 /// AND `disabled` together, then picks ONE of the three resolved values via
-/// a plain `enabled ? (selected-branch) : disabledIconTheme` bool check
-/// (`:450-457`, `:498-502`). A combined `{selected, disabled}` query would
+/// a plain `enabled ? (selected-branch) : disabledIconTheme` bool check.
+/// A combined `{selected, disabled}` query would
 /// let a theme [`WidgetStateProperty::Map`]
 /// ordered `[Is(Selected), Is(Disabled), Any]` resolve the SELECTED entry
 /// for a disabled destination (first-match-wins still matches `Is(Selected)`
-/// against the combined set), instead of the disabled entry the oracle's
-/// pure-set query guarantees — see
+/// against the combined set), instead of the disabled entry the pure-set
+/// query guarantees — see
 /// `theme_disabled_and_selected_resolves_the_disabled_entry_not_the_selected_one`.
 fn navigation_destination_states(selected: bool, enabled: bool) -> WidgetStates {
     if !enabled {
@@ -554,15 +530,11 @@ fn build_destination(
     let column = Column::new(vec![icon_stack.boxed(), label.boxed()])
         .main_axis_alignment(MainAxisAlignment::Center);
 
-    // Flutter parity: `NavigationBar._handleTap` always returns a real
-    // `VoidCallback` — the real callback when `onDestinationSelected` is
-    // set, a no-op closure `() {}` otherwise (`navigation_bar.dart:272-274`)
-    // — and `_IndicatorInkWell.onTap` is `enabled ? info.onTap : null`
-    // (`:606`), never gated on whether a callback was actually supplied. So
-    // `InkResponse.enabled` (`isWidgetEnabled`, any tap-family callback
-    // non-null) is `true` for an enabled destination even with no
-    // `on_destination_selected` at all — it still paints its hover/press
-    // overlay. Wiring `on_tap` only when a callback is present would leave
+    // The tap handler is always a real callback — the real one when
+    // `on_destination_selected` is set, a no-op otherwise — and is never
+    // gated on whether a callback was actually supplied. So an enabled
+    // destination is interactive even with no `on_destination_selected`
+    // at all — it still paints its hover/press overlay. Wiring `on_tap` only when a callback is present would leave
     // a callback-less-but-enabled destination reading as disabled to
     // `InkWell`, silently dropping its overlay.
     let mut ink_well = InkWell::new(column).overlay_color(overlay_color.clone());

@@ -1,9 +1,7 @@
 //! Process-wide decoded-image cache and in-flight load coalescing.
 //!
-//! Mirrors Flutter's `PaintingBinding.instance.imageCache`
-//! (`painting/image_cache.dart`, 3.44.0): a small, count-bounded cache of
-//! already-decoded images (`_cache`) plus a `_pendingImages`-shaped map so two
-//! widgets requesting the same image share one load.
+//! A small, count-bounded cache of already-decoded images plus a map of
+//! in-flight loads so two widgets requesting the same image share one load.
 //!
 //! # Why not `flui-assets`' own cache?
 //!
@@ -13,8 +11,7 @@
 //! layer wants to hold onto for as long as it is actually displayed, however
 //! long that is. `flui-assets`' registry stays the byte/asset loader only;
 //! this module is the count-bounded, non-expiring cache a UI layer probes
-//! synchronously before deciding whether to spawn a load at all — Flutter's
-//! `ImageCache.putIfAbsent` does exactly this synchronous check.
+//! synchronously before deciding whether to spawn a load at all.
 //!
 //! # Coalescing
 //!
@@ -35,10 +32,9 @@
 //! captured, e.g. an `Arc<AssetRegistry>` and its background runtime —
 //! in the map forever, because the in-future cleanup that removes a
 //! completed entry only runs if something polls the future to completion,
-//! which nobody does for an abandoned load. Flutter's `ImageCache` guards
-//! against exactly this by removing `_pendingImages[key]` when the last
-//! listener detaches, not only on completion. [`CoalescedLoad`] reproduces
-//! that: the map's own reference does not count as a subscriber, and the
+//! which nobody does for an abandoned load. [`CoalescedLoad`] guards against
+//! this by removing the pending entry when the last subscriber detaches, not
+//! only on completion: the map's own reference does not count as a subscriber, and the
 //! LAST outstanding [`CoalescedLoad`] handle removes the entry on `Drop`,
 //! whether or not the load ever finished.
 
@@ -60,10 +56,9 @@ use super::provider::ImageProviderError;
 
 /// Default number of decoded images the cache retains.
 ///
-/// A small, conservative bound (Flutter's own default `maximumSize` is 1000,
-/// but flui has no eviction-pressure telemetry yet to justify matching it —
-/// revisit alongside `docs/ROADMAP.md`'s deferred `evict`/`clearLiveImages`
-/// API). Callers who need to bypass the cache entirely can pre-decode and use
+/// A small, conservative bound (there is no eviction-pressure telemetry yet to
+/// justify a larger one —
+/// revisit alongside `docs/ROADMAP.md`'s deferred cache eviction API). Callers who need to bypass the cache entirely can pre-decode and use
 /// [`DirectImageProvider`](super::DirectImageProvider) instead.
 const DEFAULT_CAPACITY: usize = 100;
 
@@ -97,8 +92,7 @@ static CACHE: LazyLock<DecodedImageCache> =
     LazyLock::new(|| DecodedImageCache::new(DEFAULT_CAPACITY));
 
 /// Returns the cached decoded image for `key`, if present — the synchronous
-/// probe [`Image`](crate::Image) makes before spawning an async load
-/// (`ImageCache.putIfAbsent`'s synchronous fast path).
+/// probe [`Image`](crate::Image) makes before spawning an async load.
 pub(crate) fn cached(key: &ImageCacheKey) -> Option<PixelImage> {
     CACHE.entries.lock().get(key).cloned()
 }
@@ -143,7 +137,7 @@ impl Drop for CoalescedLoad {
 ///
 /// A second caller for a key already loading receives a handle to the same
 /// underlying load (a cheap [`Shared`] clone) rather than invoking `start`
-/// again — Flutter's `_pendingImages` de-duplication. The decoded image is
+/// again. The decoded image is
 /// written to the sync cache before the future resolves, so a [`cached`]
 /// probe made immediately after any awaiter observes completion already sees
 /// the hit. An abandoned load (every subscriber dropped before completion) is
@@ -227,9 +221,8 @@ mod tests {
     /// Abandoning the only subscriber to a load BEFORE it completes (the
     /// `Image` widget unmounts, the key is never requested again) must
     /// remove the pending entry immediately — not leave it pinned in the map
-    /// forever waiting for a completion nobody will ever observe. This is
-    /// the leak Flutter's `ImageCache` avoids by removing `_pendingImages`
-    /// entries when the last listener detaches, not only on completion.
+    /// forever waiting for a completion nobody will ever observe. The entry
+    /// must go when the last subscriber detaches, not only on completion.
     async fn abandoning_the_only_subscriber_before_completion_removes_the_pending_entry() {
         let _cache = isolated_cache().await;
         let key = fresh_key("abandoned-before-completion");

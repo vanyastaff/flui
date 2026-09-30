@@ -87,10 +87,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   queue before invoking user code, so this one was the sole holdout, and
   Flutter's `SchedulerBinding` carries no equivalent second,
   `&FrameTiming`-argument registration path to preserve: its one
-  production caller, `RenderingFlutterBinding::request_visual_update`,
+  production caller, `RenderingBinding::request_visual_update`,
   passed an empty closure. Use `schedule_frame_callback` (transient,
   vsync-timestamped) instead.
-- **`RenderingFlutterBinding::request_visual_update`** now calls
+- **`RenderingBinding::request_visual_update`** now calls
   `UpdateScheduler::ensure_visual_update()` (the existing `frames_enabled`
   gate via `schedule_frame_if_enabled`) instead of the deleted
   `schedule_frame`, so a binding with frames disabled no longer schedules a

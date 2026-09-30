@@ -23,11 +23,6 @@ use crate::{
 /// - Compute what portion is visible and space consumed
 /// - Return [`SliverGeometry`] with scroll/paint extents
 ///
-/// # Flutter Equivalence
-///
-/// This corresponds to Flutter's `RenderSliver` abstract class in
-/// `rendering/sliver.dart`.
-///
 /// # Layout Protocol
 ///
 /// 1. Parent (viewport) calls `perform_layout()` with context
@@ -102,16 +97,12 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     /// paint window `[scroll_offset, scroll_offset + remaining_paint_extent]`.
     ///
     /// Returns the **extent** (length) of the visible intersection, not a
-    /// coordinate offset — matching Flutter's `calculatePaintOffset` naming.
+    /// coordinate offset, despite the `offset` in the name.
     ///
     /// # Arguments
     ///
     /// * `from` - Start of the range in sliver coordinates
     /// * `to` - End of the range in sliver coordinates
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// Corresponds to `RenderSliver.calculatePaintOffset` in Flutter.
     fn calculate_paint_offset(&self, constraints: &SliverConstraints, from: f64, to: f64) -> f64 {
         debug_assert!(from <= to);
         let remaining_painted_extent = constraints.remaining_paint_extent;
@@ -131,10 +122,6 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     ///
     /// * `from` - Start of the range in sliver coordinates
     /// * `to` - End of the range in sliver coordinates
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// Corresponds to `RenderSliver.calculateCacheOffset` in Flutter.
     fn calculate_cache_offset(&self, constraints: &SliverConstraints, from: f64, to: f64) -> f64 {
         debug_assert!(from <= to);
         let remaining_cache_extent = constraints.remaining_cache_extent;
@@ -160,10 +147,6 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     ///
     /// * `constraints` - This sliver's layout constraints
     /// * `child` - The child to query
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// Corresponds to `RenderSliver.childMainAxisPosition` in Flutter.
     fn child_main_axis_position(
         &self,
         constraints: &SliverConstraints,
@@ -179,10 +162,6 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     ///
     /// * `constraints` - This sliver's layout constraints
     /// * `child` - The child to query
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// Corresponds to `RenderSliver.childCrossAxisPosition` in Flutter.
     fn child_cross_axis_position(
         &self,
         constraints: &SliverConstraints,
@@ -201,10 +180,6 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     ///
     /// * `constraints` - This sliver's layout constraints
     /// * `child` - The child to query
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// Corresponds to `RenderSliver.childScrollOffset` in Flutter.
     fn child_scroll_offset(
         &self,
         constraints: &SliverConstraints,
@@ -226,10 +201,6 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     /// # Arguments
     ///
     /// * `paint_extent` - The extent along the main axis
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// Corresponds to `RenderSliver.getAbsoluteSize` in Flutter.
     fn get_absolute_size(&self, constraints: &SliverConstraints, paint_extent: f64) -> Size {
         let cross_axis_extent = constraints.cross_axis_extent;
 
@@ -252,11 +223,6 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     /// # Arguments
     ///
     /// * `paint_extent` - The extent along the main axis
-    ///
-    /// # Flutter Equivalence
-    ///
-    /// Corresponds to `RenderSliver.getAbsoluteSizeRelativeToOrigin` in
-    /// Flutter.
     fn get_absolute_size_relative_to_origin(
         &self,
         constraints: &SliverConstraints,
@@ -301,8 +267,7 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     /// - Position via `ctx.main_axis()`, `ctx.cross_axis()`
     /// - Child testing via `ctx.hit_test_child()`
     ///
-    /// Mirrors Flutter's `RenderSliver.hitTest` dispatcher shape:
-    /// children first, then [`Self::hit_test_self`]. The pipeline owns
+    /// Dispatches children first, then [`Self::hit_test_self`]. The pipeline owns
     /// the geometry/cross-axis gate and appends the sliver's hit entry
     /// when this method returns `true`.
     fn hit_test(&self, ctx: &mut SliverHitTestContext<'_, Self::Arity, Self::ParentData>) -> bool {

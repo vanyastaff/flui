@@ -1,27 +1,24 @@
 # flui-rendering Architecture
 
-This document is the per-crate architecture record for `flui-rendering`. It records the Flutter → Rust mapping for this crate, the divergence decisions taken so far, the current thread-safety surface, the known friction not yet refactored, and the planned cleanups still to pick up.
+This document is the per-crate architecture record for `flui-rendering`. It records the module map for this crate, the design decisions taken so far, the current thread-safety surface, the known friction not yet refactored, and the planned cleanups still to pick up.
 
-The deeper architectural write-ups for individual subsystems (protocol, layout, paint, hit-test) live alongside this file under [`docs/`](docs/) and migration plans under [`migration/`](migration/). The Flutter class hierarchy walk lives in [`flutter-rendering-hierarchy.md`](flutter-rendering-hierarchy.md) as a sibling appendix and is referenced from `## Flutter source mapping` below.
+The deeper architectural write-ups for individual subsystems (protocol, layout, paint, hit-test) live alongside this file under [`docs/`](docs/) and migration plans under [`migration/`](migration/).
 
 ---
 
-## Flutter source mapping
+## Module map
 
-| Flutter source | FLUI module | Notes |
+| Area | FLUI module | Notes |
 |---|---|---|
-| `.flutter/flutter-master/packages/flutter/lib/src/rendering/object.dart` | [`src/storage/entry.rs`](src/storage/entry.rs), [`src/storage/state/mod.rs`](src/storage/state/mod.rs), [`src/storage/flags.rs`](src/storage/flags.rs), [`src/traits/render_object.rs`](src/traits/render_object.rs) | The `RenderObject` base class is split: trait surface in `traits/render_object.rs`, owned storage in `storage/entry.rs`, mutable per-frame state in `storage/state.rs`, atomic flags in `storage/flags.rs`. The Flutter `AbstractNode` parent-linkage role is in [`src/storage/links.rs`](src/storage/links.rs). |
-| `.flutter/flutter-master/packages/flutter/lib/src/rendering/object.dart` `PipelineOwner` (line 1019+) | [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs) | Single-threaded phase serialisation. Flutter's `flushLayout` / `flushCompositingBits` / `flushPaint` / `flushSemantics` map to FLUI's `run_layout` / `run_compositing` / `run_paint` / `run_semantics`, each living on the matching `PipelineOwner<Phase>` impl block (typestate-enforced ordering). Holds the root node and dirty lists. The `debug_doing_layout` / `debug_doing_paint` flags on the owner are the FLUI runtime analog of Flutter's `_debugActiveLayout` / `_debugDoingThisPaint` static asserts (kept as a debug-build cross-check; the type system is the load-bearing enforcement). |
-| `.flutter/flutter-master/packages/flutter/lib/src/rendering/box.dart` | [`src/protocol/box_protocol.rs`](src/protocol/box_protocol.rs), [`src/parent_data/box_parent_data.rs`](src/parent_data/box_parent_data.rs) | `BoxConstraints`, `BoxParentData`, `Size`-based geometry. |
-| `.flutter/flutter-master/packages/flutter/lib/src/rendering/sliver.dart` | [`src/protocol/sliver_protocol.rs`](src/protocol/sliver_protocol.rs), [`src/parent_data/sliver_parent_data.rs`](src/parent_data/sliver_parent_data.rs) | Sliver protocol for scrollable layout. |
-| `RenderObjectWithChildMixin`, `ContainerRenderObjectMixin` (`object.dart` lines 4160-4400+) | [`src/storage/links.rs`](src/storage/links.rs), [`src/parent_data/container_mixin.rs`](src/parent_data/container_mixin.rs) | Single-child + variable-children storage. Flutter uses Dart linked lists; FLUI stores `Vec<RenderId>` on the parent. |
-| `proxy_box.dart`, `shifted_box.dart`, `flex.dart` | [`flui-objects`](../flui-objects/src/) crate | Concrete render objects (`Padding`, `Center`, `ColoredBox`, `Flex`, `Opacity`, `SizedBox`, `Transform`, …), extracted to the sibling `flui-objects` crate; this crate keeps only the protocol/pipeline machinery. |
-| Layer-related (`layer.dart`, container layers) | `flui-layer` crate | Compositing layers live in a sibling crate per the layered DAG ([`docs/architecture.md`](../../docs/architecture.md)). |
+| Render object storage and state | [`src/storage/entry.rs`](src/storage/entry.rs), [`src/storage/state/mod.rs`](src/storage/state/mod.rs), [`src/storage/flags.rs`](src/storage/flags.rs), [`src/traits/render_object.rs`](src/traits/render_object.rs) | The render-object base is split: trait surface in `traits/render_object.rs`, owned storage in `storage/entry.rs`, mutable per-frame state in `storage/state.rs`, atomic flags in `storage/flags.rs`. Parent linkage is in [`src/storage/links.rs`](src/storage/links.rs). |
+| Pipeline | [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs) | `PipelineOwner` holds the root node and dirty lists. Single-threaded phase serialisation: `run_layout` / `run_compositing` / `run_paint` / `run_semantics`, each living on the matching `PipelineOwner<Phase>` impl block (typestate-enforced ordering). The `debug_doing_layout` / `debug_doing_paint` flags on the owner are a debug-build cross-check; the type system is the load-bearing enforcement. |
+| Box protocol | [`src/protocol/box_protocol.rs`](src/protocol/box_protocol.rs), [`src/parent_data/box_parent_data.rs`](src/parent_data/box_parent_data.rs) | `BoxConstraints`, `BoxParentData`, `Size`-based geometry. |
+| Sliver protocol | [`src/protocol/sliver_protocol.rs`](src/protocol/sliver_protocol.rs), [`src/parent_data/sliver_parent_data.rs`](src/parent_data/sliver_parent_data.rs) | Sliver protocol for scrollable layout. |
+| Child storage | [`src/storage/links.rs`](src/storage/links.rs), [`src/parent_data/container_mixin.rs`](src/parent_data/container_mixin.rs) | Single-child + variable-children storage; the parent stores `Vec<RenderId>`. |
+| Concrete render objects | [`flui-objects`](../flui-objects/src/) crate | `Padding`, `Center`, `ColoredBox`, `Flex`, `Opacity`, `SizedBox`, `Transform`, …; this crate keeps only the protocol/pipeline machinery. |
+| Compositing layers | `flui-layer` crate | A sibling crate per the layered DAG ([`docs/architecture.md`](../../docs/architecture.md)). |
 
-The full Flutter class hierarchy is enumerated in the sibling appendix [`flutter-rendering-hierarchy.md`](flutter-rendering-hierarchy.md) (1352 LOC, generated from a class-name sweep of `.flutter/flutter-master/packages/flutter/lib/src/rendering/`). That file is kept as a search index; it is not part of the template proper.
-
-Render-subtree relocation is deliberately narrower than Flutter's ambient
-owner mutation: only `PipelineOwner<Idle>` can detach, attach, or release a
+Render-subtree relocation is deliberately narrow: only `PipelineOwner<Idle>` can detach, attach, or release a
 batch. Detach returns an opaque, non-cloneable `DetachedRenderSubtrees` token
 bound to the originating owner by private `Rc` identity. Reattach and
 finalization release consume that token, returning it inside a typed failure
@@ -33,13 +30,12 @@ deepest-first element unmount so view lifecycle hooks remain canonical.
 
 ## Mapping decisions
 
-This section records places where the Rust shape diverges from the Dart shape and why. Each entry follows the "Accepted trade-offs" format established by [`docs/plans/2026-03-31-custom-render-callback-design.md`](../../docs/plans/2026-03-31-custom-render-callback-design.md): state the rule (or absence of rule), the choice, the alternatives considered, the trade-off accepted.
+This section records design decisions and why they were taken. Each entry follows the "Accepted trade-offs" format established by [`docs/plans/2026-03-31-custom-render-callback-design.md`](../../docs/plans/2026-03-31-custom-render-callback-design.md): state the rule (or absence of rule), the choice, the alternatives considered, the trade-off accepted.
 
 ### Canvas clips belong to one fragment run
 
-Flutter's `PaintingContext` warns that painting a child may replace its canvas
-(`rendering/object.dart`, Flutter 3.44.0). FLUI makes that boundary deterministic:
-`PaintCx::canvas` state belongs to the current run; `paint_child` seals it and
+Painting a child may replace the parent's canvas, so the boundary is
+deterministic: `PaintCx::canvas` state belongs to the current run; `paint_child` seals it and
 later drawing starts with a fresh canvas. Effects covering children use the
 `with_clip_*` layer scopes.
 
@@ -54,10 +50,9 @@ clip, an unclipped child, and the resumed parent run through a real frame and GP
 ### The set POSITION is published; the set size waits, and the delegates do not wrap
 
 **Rule:** a screen reader announces "item 12 of 100" from the platform's set-position concept.
-Flutter carries the two halves separately — `SemanticsConfiguration.indexInParent` on the item and
-`scrollChildCount` on the scrollable — and leaves each platform bridge to reconcile them; its lazy
-delegates supply the first by wrapping every materialised item in an `IndexedSemantics`
-(`addSemanticIndexes`, on by default), a `SingleChildRenderObjectWidget`.
+The two halves are the item's index in its parent and the scrollable's child count; a bridge that
+carried them separately would leave each platform to reconcile them, and wrapping every
+materialised item in an `IndexedSemantics` widget costs a node per item.
 
 **Choice:** AccessKit has the concept directly, so `accesskit_translation` can emit the pair —
 `position_in_set` (one-based, converted there from the framework's zero-based index) and
@@ -79,11 +74,10 @@ probe walk and charging every mount for one is not worth it: that degrades to "i
 missing total is honest where a wrong one misleads. A caller who wants the total declares
 `ItemCount::Exact`, which that variant's own doc already recommends for unrelated reasons.
 
-**Placement differs from the reference.** An `IndexedSemantics` goes *inside* the row's semantics
-container here, not outside it: a non-boundary configuration is absorbed by its nearest ANCESTOR
+**Placement.** An `IndexedSemantics` goes *inside* the row's semantics
+container, not outside it: a non-boundary configuration is absorbed by its nearest ANCESTOR
 boundary in this assembler, so a wrapper above the container would index the node that forms
-above the row — the sliver — instead of the row. Flutter's delegates wrap outside because its
-merge runs the other way.
+above the row — the sliver — instead of the row.
 
 **Now done: the position is derived, not wrapped.** Each item's position comes from the index the
 sliver already stamps in `SliverMultiBoxAdaptorParentData` — zero extra nodes, and an index the
@@ -133,8 +127,8 @@ no semantics update.
 
 **Rule:** a multi-child render object that lays out a *subset* of its children — a lazy sliver's
 band, anything virtualised — leaves the rest holding an offset and a size from an earlier pass.
-Flutter's slivers keep the discipline per object: `RenderSliverMultiBoxAdaptor` tracks its own
-child list and paints only what it laid out.
+Each object could keep the discipline itself by tracking its own child list and painting only
+what it laid out.
 
 **Choice:** the pipeline enforces it instead. A layout advances its own `layout_generation` and
 stamps it onto every child it laid out (`placed_generation`); the paint driver and the hit-test
@@ -186,9 +180,8 @@ above). A child its parent has **never** laid out reads as placed, because `plac
 harness has the first kind — a `Single`-arity object mounted with two children — and is untouched.
 
 And for the case the gate exists for, a lazy sliver's out-of-band resident, exclusion is not a
-worse trade but the reference's own behaviour: Flutter removes an off-screen or kept-alive child
-from the render child list, so it publishes no semantics at all. Announcing one at a rect from a
-pass that no longer holds sends a screen reader somewhere with nothing on it.
+worse trade: an off-screen or kept-alive child should publish no semantics at all. Announcing one
+at a rect from a pass that no longer holds sends a screen reader somewhere with nothing on it.
 
 **What the stamp cannot express, recorded rather than left to be rediscovered.** Because an
 unstamped child reads as placed, exclusion is history-dependent: a child laid out and *then*
@@ -222,14 +215,9 @@ first draft did. `FrameRun::run_frame_again` is added for it.
 
 ### A composited-layer update patches the enclosing capture; no node is promoted to a boundary
 
-**Rule:** Design stance (behavior is the floor, design is ours) — this
-is a deliberate improvement over the reference and owes its accounting here.
-
-**Choice:** Flutter serves `markNeedsCompositedLayerUpdate` by giving the render
-object its own layer to mutate in place, which requires the object to BE a
-repaint boundary (`proxy_box.dart`: `RenderOpacity.isRepaintBoundary =>
-alwaysNeedsCompositing`) and requires `LayerHandle` ref-counting plus
-`Layer.dispose` to manage that layer's lifetime.
+**Choice:** giving the render object its own layer to mutate in place would
+require the object to BE a repaint boundary and require ref-counting plus
+explicit disposal to manage that layer's lifetime.
 
 FLUI does neither. `RetainedSubtree` is a flat `Vec<RetainedNode>`, so a node's
 own effect layers are addressable by index inside the ENCLOSING boundary's
@@ -238,7 +226,7 @@ same `own_effect_layers` constructor the paint walk uses, patches them into the
 grafted output, and writes them back into the stored capture — with the node
 still an ordinary non-boundary.
 
-**Alternatives:** port Flutter's promotion — rejected on two grounds, both
+**Alternatives:** promoting the node to its own repaint boundary — rejected on two grounds, both
 measured or verified rather than argued. (a) It buys nothing: the enclosing
 boundary's capture is already what gets grafted, so promotion adds an
 `OffsetLayer` and a whole retained capture per node to reach a position already
@@ -300,38 +288,24 @@ two-frame version cannot see a missing write-back),
 (`tests/retained_boundary_layers.rs`), plus pixel equivalence against a forced
 repaint in the facade's `tests/composited_layer_update_readback.rs`.
 
-**Where this diverges observably: the STATIC sliver opacity.** Upstream serves an
-alpha change with `markNeedsCompositedLayerUpdate()` exactly where the node is a
-repaint boundary, and it is one in two places: `RenderOpacity`
-(`isRepaintBoundary => alwaysNeedsCompositing`) and `RenderAnimatedOpacityMixin`
-(`isRepaintBoundary => child != null && _currentlyIsRepaintBoundary!`), which is
-generic over `RenderObject` and so covers the animated case on BOTH protocols —
-matching FLUI's `animated_opacity.rs` and `sliver_animated_opacity.rs`, which
-already mark layer updates.
-
-The one node it leaves out is the static `RenderSliverOpacity`: it declares
-`alwaysNeedsCompositing` but never `isRepaintBoundary` (`isRepaintBoundary` does
-not appear in `proxy_sliver.dart` at all), so the mechanism has no path to it and
-its setter calls `markNeedsPaint()` — a full subtree repaint on every alpha tick.
-Re-derive with `grep -rn "updateCompositedLayer\|isRepaintBoundary"
-packages/flutter/lib/src/rendering/` inside `.flutter` at the pinned tag.
+**The static sliver opacity.** An alpha change is served as a layer update
+on every opacity node: `RenderOpacity`, the animated opacity nodes on BOTH
+protocols (`animated_opacity.rs` and `sliver_animated_opacity.rs` already mark
+layer updates) and the static `RenderSliverOpacity`. The static sliver node
+declares `alwaysNeedsCompositing` but is never a repaint boundary, so a setter
+that only marks paint would cost a full subtree repaint on every alpha tick.
 
 `RenderSliverOpacity::set_opacity` reports `COMPOSITED_LAYER_UPDATE` instead.
-The promotion the reference needs is exactly what this design removed: a flat
+Promoting the node to a boundary is exactly what this design removed: a flat
 capture makes any node's effect layers addressable inside the ENCLOSING
-boundary, so the sliver needs no `isRepaintBoundary` of its own to be served.
-The same argument that justifies not promoting the box case is what gives the
-sliver case a path the reference does not have.
+boundary, so the sliver needs no boundary of its own to be served.
 
-Behaviour is unchanged in every other respect, and the structural transitions
-still repaint (`skip_paint` crossings and compositing-threshold crossings), so
-the edge cases upstream handles by repainting unconditionally are handled here
-by repainting deliberately. **Oracles:**
+The structural transitions still repaint (`skip_paint` crossings and
+compositing-threshold crossings), so those edge cases are handled by
+repainting deliberately. Tests:
 `a_sliver_alpha_change_updates_the_layer_without_repainting_the_subtree` and
 `a_sliver_layer_update_is_written_back_into_the_retained_capture`
-(`tests/retained_boundary_layers.rs`). Net-new, not replacements: upstream has no
-test that drives `RenderSliverOpacity.opacity` as a setter, so no Flutter
-coverage was dropped here.
+(`tests/retained_boundary_layers.rs`).
 
 They are the first coverage of the update-only path over the Sliver protocol at
 all. What that buys is narrower than "the machinery is protocol-agnostic" and
@@ -350,18 +324,12 @@ when the setter is reverted. The one place the protocols genuinely diverge is th
 never sets `transform`, so the transform arm of `own_effect_layers` stays
 unexercised for slivers.
 
-**Known gap, pre-existing and not introduced here:** upstream gates the
-semantics mark on `alwaysIncludeSemantics`, a field neither FLUI opacity render
-object has. Both report semantics unconditionally on a visibility flip.
+**Known gap:** neither opacity render object has an `always_include_semantics`
+field. Both report semantics unconditionally on a visibility flip.
 
-**And again, further from the reference: `RenderTransform`.** Upstream has no
-composited-layer-update path for a transform *at all* — verified at the pinned
-tag in `proxy_box.dart`: `RenderTransform`'s `transform`, `origin` and
-`alignment` setters each call `markNeedsPaint()` + `markNeedsSemanticsUpdate()`,
-`isRepaintBoundary` is never overridden for the class, and its
-`alwaysNeedsCompositing` is gated on `filterQuality`, not on the matrix. A
-`ScaleTransition` or `RotationTransition` therefore repaints its subtree on
-every animation frame upstream.
+**`RenderTransform`.** A transform change is also served as a layer update, so
+a `ScaleTransition` or `RotationTransition` does not repaint its subtree on
+every animation frame.
 
 FLUI reports `COMPOSITED_LAYER_UPDATE` for a matrix change that stays within the
 layered range, on the same flat-capture argument as the opacity cases: the
@@ -384,11 +352,9 @@ Two things this costs, both deliberate:
    non-translation is a layer-count change and the setters report `PAINT`
    across it, as they do across singular ↔ non-singular. This is what keeps
    `Transform.translate` and every `SlideTransition` from paying for a
-   compositing layer per frame — a cost upstream's unconditional
-   `markNeedsPaint` never incurs either.
+   compositing layer per frame.
 
-**Oracles** (net-new; upstream has no test driving these setters, so nothing was
-replaced): `a_transform_change_updates_the_layer_without_repainting_the_subtree`
+**Tests:** `a_transform_change_updates_the_layer_without_repainting_the_subtree`
 and `a_transform_layer_update_is_written_back_into_the_retained_capture` are the
 red-green pair; `a_patched_transform_subtree_matches_a_full_repaint_at_any_size`
 is the control that keeps the benchmark's flat update arm from also describing a
@@ -396,15 +362,9 @@ patch that dropped the subtree; and
 `a_same_frame_layout_change_forces_the_repaint_a_transform_patch_relies_on`
 pins the invariant the whole thing rests on — see the next entry.
 
-**And `RenderRotatedBox`.** Upstream's `quarterTurns` setter is `if
-(_quarterTurns == value) { return; } _quarterTurns = value;
-markNeedsLayout();` (`rotated_box.dart`, 3.44.0 — read `set quarterTurns`
-directly rather than grepping for `markNeeds` alone, which finds the call but
-hides the equality guard in front of it). The guard compares the RAW value,
-not a reduced form, and nothing narrower than that exists: two turns that are
-merely unequal — including two that share parity, like `0` and `2` — cost a
-full relayout and repaint upstream, exactly as `0` → `1` does. There is no
-fast path at all, mod-4 or otherwise.
+**`RenderRotatedBox`.** A setter that compared the RAW value and relaid out
+on any inequality would cost a full relayout and repaint for two turns that
+merely differ — including two that share parity, like `0` and `2`.
 
 `RenderRotatedBox::set_quarter_turns` splits on how much of the turn actually
 changes, not on whether it changed: an unchanged effective angle (mod 4,
@@ -492,8 +452,7 @@ constant factor. The benches install no `SemanticsOwner`, so these ratios
 measure the paint side only; the `SEMANTICS` bit's cost is the unchanged
 baseline argued above, not something the numbers cover.
 
-**Oracles** (net-new; upstream has no test driving `quarterTurns` as a
-setter, so nothing was replaced):
+**Tests:**
 `a_rotated_box_quarter_turn_update_patches_the_layer_and_writes_back`,
 `a_rotated_box_parity_change_relayouts_and_swaps_size`, and
 `a_childless_rotated_box_layer_update_falls_back_to_a_repaint_and_clears_the_flag`
@@ -501,37 +460,22 @@ setter, so nothing was replaced):
 `crates/flui-objects/src/layout/rotated_box.rs` and the layout-parity harness
 test named above.
 
-**And now, the clip family: `RenderClip` and `RenderFlow`.** Upstream's gap
-is not specific to opacity, transform, or rotated boxes — it is structural,
-and the improvement stated above for those three producers applies to any
-node's own effects:
+**The clip family: `RenderClip` and `RenderFlow`.** The design is not specific
+to opacity, transform, or rotated boxes; it applies to any node's own effects:
 
-> Upstream can serve a layer-property change without a repaint only for a
-> node that IS a repaint boundary: `markNeedsCompositedLayerUpdate` degrades
-> to `markNeedsPaint` for any other node (`object.dart`),
-> `updateLayerProperties` asserts `isRepaintBoundary`, and the class must own
-> its layer through a `LayerHandle` and override `updateCompositedLayer` —
-> `RenderOpacity` therefore declares `isRepaintBoundary =>
-> alwaysNeedsCompositing` to qualify, at the cost of an `OffsetLayer` and a
-> retained capture per node. FLUI reads one `PaintEffects` value from any
-> node and builds its layers inside the ENCLOSING boundary's flat capture
-> through one constructor with two callers, so every effect expressed
-> through the value is patchable with no promotion, no layer ownership, and
-> no per-class override; the value fixes the nesting (opacity outermost,
-> transform innermost, node-local shapes between), which is what lets a
-> single per-position layer-kind compare stand as the whole structure guard.
-> Re-derive upstream's contract from `markNeedsCompositedLayerUpdate` and
-> `updateLayerProperties` in `object.dart` and `RenderOpacity` in
-> `proxy_box.dart`, not from a mark grep.
+> Serving a layer-property change without a repaint would normally require a
+> node that IS a repaint boundary, owning its own layer, at the cost of an
+> `OffsetLayer` and a retained capture per node. FLUI reads one
+> `PaintEffects` value from any node and builds its layers inside the
+> ENCLOSING boundary's flat capture through one constructor with two callers,
+> so every effect expressed through the value is patchable with no promotion,
+> no layer ownership, and no per-class override; the value fixes the nesting
+> (opacity outermost, transform innermost, node-local shapes between), which
+> is what lets a single per-position layer-kind compare stand as the whole
+> structure guard.
 
-Concretely, for clips: at 3.44.0 `_RenderCustomClip<T>` (`proxy_box.dart`)
-extends `RenderProxyBox` and never overrides `isRepaintBoundary`, so it never
-qualifies for the promoted path either — its `clipper` setter (`_markNeedsClip`
-→ `markNeedsPaint()` + `markNeedsSemanticsUpdate()`) and its `clipBehavior`
-setter (`markNeedsPaint()` directly, no semantics) both fall back to a full
-subtree repaint on every change, the same degrade as any other non-boundary.
-FLUI serves the identical change — a border radius, a clip shape, a path
-source token, or `clipBehavior` itself — as a layer patch inside the
+Concretely, for clips: a border radius, a clip shape, a path
+source token, or `clipBehavior` itself changes as a layer patch inside the
 enclosing boundary's capture, through `RenderClip<S>::paint_effects` /
 `clip_descriptor` (`crates/flui-objects/src/proxy/clip.rs`).
 
@@ -610,9 +554,9 @@ composited_layer_update_readback --locked --test-threads 1`).
 
 | Producer | Why not now | Trigger | Shape when reopened |
 |---|---|---|---|
-| `RenderBackdropFilter` filter/blend (`enabled` → `PAINT`) | no widget → no caller | the `BackdropFilter` widget (upstream driver: `FlexibleSpaceBar` blur) | `backdrop_filter:` field at a fixed position (alpha does not commute — position decided at the field) |
+| `RenderBackdropFilter` filter/blend (`enabled` → `PAINT`) | no widget → no caller | the `BackdropFilter` widget (driver: a `FlexibleSpaceBar` blur) | `backdrop_filter:` field at a fixed position (alpha does not commute — position decided at the field) |
 | `RenderShaderMask` | no widget; its shader is lane-resolved like a path clipper | the `ShaderMask` widget | `shader_mask:` field with a walk-resolved target, as `PathTarget` |
-| `ImageFiltered` | no render object | its port (upstream driver: `StretchingOverscrollIndicator`) | a field; `enabled` → `PAINT` |
+| `ImageFiltered` | no render object | its port (driver: a stretching overscroll indicator) | a field; `enabled` → `PAINT` |
 | `RenderPhysicalModel`/`RenderPhysicalShape` | shadow + fill are display-list content, and a descriptor clip wraps own draws | `Material` implicit elevation/shape animation (`_MaterialInterior`) | seal a drawing scope-owner's own draw runs into a picture of their own and re-record only that picture on a property change; measure the layered shape first; needs an ADR |
 | `RenderFlow` per-child transforms | variable fragment | an animated `Flow` delegate in the catalog | re-record the flow's own fragment (a per-node picture re-record, not a layer patch); the `paint_effects` clip stays the prefix outside it |
 | `RenderFittedBox` | NOT nesting (the fixed order is exactly its clip-outside-transform) but its translation fast path (`paint_child_at`, a `Some ↔ None` transform transition) and its overflow-gated layout-derived clip | a per-frame fit animation in the catalog | a per-node fragment re-record for the child offset; the overflow clip stays structural |
@@ -630,26 +574,17 @@ display list, the same contract `PaintEffects` gives FLUI.
 
 ### `RenderRotatedBox` reports a baseline only for an even turn
 
-**Rule:** Design stance ("Flutter is a reference, not a spec") — a deliberate improvement over the reference,
-accounted for here.
-
-**Upstream:** `RenderRotatedBox` has no baseline override at all
-(`rotated_box.dart`, 3.44.0: `grep -c aseline` is 0), so its live query
-inherits `RenderBox.computeDistanceToActualBaseline`'s `null` for every turn
-— a baseline-aligned `Row` places a rotated box at the cross start whatever
-the turn, even an unrotated one — and its dry query falls through to
-`RenderBox.computeDryBaseline`'s default, which asserts in debug builds
-(`box.dart`, `debugCannotComputeDryLayout`) rather than answering.
-
 **Choice:** a baseline is a layout line. An even turn keeps the box's size and
 its horizontal axis, so the box takes part in baseline alignment exactly as
 its unrotated self would — the child's baseline is forwarded unchanged and the
 glyphs flip in place at turn 2. That is the model every draw-time rotation
-already uses: `RenderTransform` here (a proxy, via
+uses: `RenderTransform` here (a proxy, via
 `forward_single_child_box_queries!`), Compose's `Modifier.rotate`, SwiftUI's
 `.rotationEffect`. An odd turn rotates the baseline axis into the vertical, so
 there is no horizontal baseline to offer and the box is treated like any child
-without one — as upstream treats it at every turn.
+without one. A baseline-aligned `Row` therefore places an even-turn box where
+its child would sit and an odd-turn box at the cross start; the dry query
+answers the same way rather than asserting.
 
 Both halves of the query answer from the same predicate: the dry half in
 `compute_dry_baseline`, and the live half through
@@ -660,7 +595,7 @@ rotated box's baseline is a baseline-aligned parent's `perform_layout`, which
 asks the live query — a dry-only forward is inert there, and a same-parity
 equality pin cannot tell either half's value.
 
-**Alternatives:** match upstream (`None` for every turn) — loses the identity
+**Alternatives:** report no baseline for any turn — loses the identity
 case for nothing. Forward only at turn 0, or mirror the line to
 `height − baseline` at turn 2 — both read the exact turn rather than its
 parity, which breaks the layout-turn-blindness the same-parity fast path above
@@ -670,7 +605,7 @@ animation drives (`RotationTransition` drives `Transform::rotation`; a widget
 rebuild 0→2 does occur and is what the layer-update route serves). Rejected
 on that cost, not on geometry.
 
-**Replacement oracle:**
+**Test:**
 `harness_rotated_box_baseline_follows_the_child_for_even_turns_and_is_absent_for_odd`
 (`crates/flui-objects/tests/render_object_harness.rs`) — a baseline-aligned
 `Row` places `RotatedBox(0)` and `RotatedBox(2)` where their child would sit
@@ -678,8 +613,7 @@ and `RotatedBox(1)` / `RotatedBox(3)` at the cross start, and asserts the dry
 answer by value at all four quadrants; red on the turn-0 offset when the live
 forward is refused, red on the turn-1 offset when it is granted for an odd
 turn, red on the dry rows when `compute_dry_baseline` drifts to either
-"always" answer. Upstream has no baseline test for the class, so nothing was
-replaced.
+"always" answer.
 
 ### A transform patch may reuse a captured origin only because layout forces a repaint
 
@@ -695,9 +629,8 @@ every ancestor up to the relayout boundary, so a flagged node cannot take the
 constraints-cache short-circuit — the enclosing repaint boundary re-enters
 layout and is recorded as having laid out (`pipeline/owner/layout.rs`), and if
 the relayout boundary sits below the boundary that owns the capture, the
-dirty-root mark (FLUI's once-per-walk counterpart of the per-object
-`markNeedsPaint()` Flutter's `RenderObject.layout` ends with) walks up to it
-too. Either
+dirty-root mark (a once-per-walk paint mark rather than a per-object one)
+walks up to it too. Either
 route enqueues `Repaint`, which upgrades the `LayerUpdate` entry the setter
 queued (`PaintQueue::enqueue` never downgrades). So any same-frame layout
 change inside a boundary — anything that could move the node — reaches it one
@@ -743,9 +676,8 @@ exercise the arm at all.
 handles". The detach and reattach halves apply; the device-loss half does not,
 and the reason is worth recording so it is not re-litigated.
 
-**Choice:** nothing to do. The criterion is written against Flutter's model,
-where `Layer` owns an `EngineLayer` that IS a GPU resource — which is exactly
-why `LayerHandle`, ref-counting and `Layer.dispose` exist there. FLUI's `Layer`
+**Choice:** nothing to do. The criterion assumes a layer that owns a GPU
+resource, which would need handles, ref-counting and explicit disposal. FLUI's `Layer`
 is a pure value: `TextureLayer` and `PlatformViewLayer` hold plain ids into the
 engine's own registries, and `PictureLayer` holds an `Arc<DisplayList>` whose
 image commands hold `Arc<Vec<u8>>` RGBA bytes. A retained capture is therefore
@@ -794,9 +726,7 @@ Tests: `tests/boundary_content_tokens.rs`.
 
 ### Layout marks semantics once per walk, at the dirty root
 
-**Rule:** Flutter pairs `performLayout()` with `markNeedsSemanticsUpdate()` in *both* of
-`RenderObject`'s layout entry points (`rendering/object.dart`, `layoutWithoutResize` and
-`layout`), per object. Every node that lays out re-publishes its semantics geometry, which is
+**Rule:** every node that lays out re-publishes its semantics geometry, which is
 what makes a scroll update the accessibility tree at all: a viewport's offset listener requests
 layout and nothing else.
 
@@ -804,9 +734,9 @@ layout and nothing else.
 (`layout_dirty_root`) rather than once per laid-out node.
 
 **Alternatives considered:** recording every laid-out node in the arena and marking each, which
-is the literal transcription — rejected on two counts. It is redundant: the arena walks the
+is the literal reading — rejected on two counts. It is redundant: the arena walks the
 subtree of the dirty root, so every node that laid out is already under it, and `try_graft_pass`
-re-assembles a marked node's whole subtree. And it is expensive in a way the transcription hides:
+re-assembles a marked node's whole subtree. And it is expensive in a way that is easy to miss:
 each `add_node_needing_semantics` fires `fire_need_visual_update`, whose production callback asks
 the platform to redraw, and the graft resolves every marked node by walking its ancestor chain —
 so an N-node relayout would cost N redraw requests and O(N·depth) graft work.
@@ -825,25 +755,21 @@ passes with the change reverted, which the first draft did.
 
 ### The hit-test path is driver-owned; the protocol carries no result accumulator
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — a contract may be improved, and an
-improvement owes a record plus a replacement test. This is that record.
-
 **Choice:** `HitTestCapability::Result` and `::Entry` are vocabulary only. There is no
 `ctx.result()`, `result_mut()`, `add_hit(entry)` or `add_self(id)`: the driver
 (`PipelineOwner`'s hit-test walk) owns the path and builds each entry from the node's own
 `RenderId`. A render object says it was hit by returning `true`, or calls
 `ctx.register_self_hit_entry()` to appear in the path without blocking what is behind it.
 
-**The reference's shape:** Flutter's `hitTest` takes a `HitTestResult` and each render object
-calls `result.add(BoxHitTestEntry(this, position))`. The accumulator is the protocol.
+**The alternative shape:** a result accumulator passed to `hit_test`, where each render object
+adds its own entry.
 
-**Why the divergence is better here, in checkable terms:**
+**Why the driver-owned path is better, in checkable terms:**
 
-1. **A render object cannot get the id wrong**, because it never supplies one. Flutter's
-   `add(BoxHitTestEntry(this, …))` takes the node as an argument; passing the wrong one, or
-   adding twice, is expressible and silent.
+1. **A render object cannot get the id wrong**, because it never supplies one. An API that takes
+   the node as an argument makes passing the wrong one, or adding twice, expressible and silent.
 2. **There is one writer, not N.** The driver knows the node, its transform and its position in
-   the walk, so the entry is assembled once from state that cannot disagree with itself. FLUI's
+   the walk, so the entry is assembled once from state that cannot disagree with itself. The
    accumulator was the second writer, and — this is the finding that produced the deletion — it
    was *unread*: `add_self` compiled, ran, and did nothing, because nothing downstream consumed
    the protocol-level result (issue #844).
@@ -869,13 +795,13 @@ of how the dead path was found.
 
 ### Lazy-sliver scroll correction keeps the first visible item stationary
 
-**Rule:** Design stance ("Flutter is a reference, not a spec": improve a Flutter contract where it can be improved, record it, replace the oracle); [ADR-0051](../../docs/adr/ADR-0051-anchor-stationary-scroll-correction.md).
+**Rule:** [ADR-0051](../../docs/adr/ADR-0051-anchor-stationary-scroll-correction.md).
 
 **Choice:** `Virtualizer::set_measured` / `adapt_default_estimate` report the offset delta of the anchor (the first visible item) whenever an extent above it changes; the consumer sliver accumulates the deltas and emits them as `SliverGeometry::scroll_offset_correction` at the end of the pass, in either scroll direction. The viewport applies the correction and re-runs layout in the same pass, so the anchor never moves on screen.
 
-**Alternatives:** Flutter's `RenderSliverList` retains each resident child's stale `layoutOffset`, walks forward from the first retained child with current sizes, and corrects only at a boundary — growth of a retained-but-invisible child shifts visible content. ADR-0003's original consumer note additionally withheld corrections during a backward scroll; measured on the oracle scene it changed nothing and, where it can act, it is a one-frame anchor drift.
+**Alternatives:** retaining each resident child's stale layout offset, walking forward from the first retained child with current sizes, and correcting only at a boundary — growth of a retained-but-invisible child then shifts visible content. ADR-0003's original consumer note additionally withheld corrections during a backward scroll; measured on the pinned scene it changed nothing and, where it can act, it is a one-frame anchor drift.
 
-**Accepted trade-off:** the `slivers_test.dart` 'inaccurate scroll offset' windows differ from the oracle's by exactly the growth Flutter shows as a jump (192 px in that scene); the pinned oracle stays `#[ignore]`d as the statement of the declined behaviour and a FLUI oracle stands beside it. Items above a jump that were never resident stay hinted until they enter the band (O(band) layout, ADR-0003), where Flutter's O(distance) walk would be exact.
+**Accepted trade-off:** the pinned 'inaccurate scroll offset' windows differ from a boundary-only correction by exactly the growth it shows as a jump (192 px in that scene); the pinned test stays `#[ignore]`d as the statement of the declined behaviour and a FLUI test stands beside it. Items above a jump that were never resident stay hinted until they enter the band (O(band) layout, ADR-0003), where an O(distance) walk would be exact.
 
 ### Render-tree storage uses a `Slab<RenderNode>` with `RenderId` (NonZeroUsize) keys
 
@@ -883,7 +809,7 @@ of how the dead path was found.
 
 **Choice:** `RenderTree` stores `Slab<RenderNode>`. `RenderId` is a `NonZeroUsize` newtype that adds `+1` to the slab index, so `Option<RenderId>` niche-optimises to 8 bytes for parent / child references. The slab is reached from one strong root (`PipelineOwner::root_id`) and every other node is reached by walking child IDs in `NodeLinks`.
 
-**Alternatives:** Flutter holds the tree as a graph of Dart references with direct child pointers on every render object. Direct translation would require `Arc<RwLock<RenderObject>>` or `Rc<RefCell<RenderObject>>` for parent/child cycles, which the constitution forbids for tree structures. `typed-arena::Arena` was considered but cannot delete individual entries, which the element reconciler needs.
+**Alternatives:** a graph of references with direct child pointers on every render object would require `Arc<RwLock<RenderObject>>` or `Rc<RefCell<RenderObject>>` for parent/child cycles, which the constitution forbids for tree structures. `typed-arena::Arena` was considered but cannot delete individual entries, which the element reconciler needs.
 
 **Accepted trade-off:** one extra indirection (slab lookup) on the tree-walk hot path, paid back by O(1) insert/delete, deterministic ID stability across mutations, and elimination of `Arc<Mutex<>>` cycles. The same pattern is used by `flui-view`'s `ElementTree`.
 
@@ -891,15 +817,15 @@ of how the dead path was found.
 
 **Rule:** strategy clause "sync hot path, async на краях" (lock contention on the hot path is functionally async-flavoured); no lock on per-node render storage touched during `perform_layout` / `paint` (no `RwLock<Box<dyn RenderObject<P>>>`).
 
-**Choice:** `RenderEntry<P>::render_object` is a plain `Box<dyn RenderObject<P>>` (see [`src/storage/entry.rs`](src/storage/entry.rs)). Mutable access goes through `&mut self`, which the pipeline obtains via `PipelineOwner::render_tree_mut() -> &mut RenderTree` at phase boundaries. Re-entrant access from a parent to a child during layout uses disjoint-borrow primitives on `RenderTree` (`get_two_mut`, `get_many_mut`; the underlying `unsafe` is local and disjoint-keys-invariant — see [Thread safety](#thread-safety)). The Flutter `_debugDoingThisLayout` / `_debugDoingThisPaint` debug asserts are mirrored by `PipelineOwner::debug_doing_layout` / `debug_doing_paint` (see [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs)).
+**Choice:** `RenderEntry<P>::render_object` is a plain `Box<dyn RenderObject<P>>` (see [`src/storage/entry.rs`](src/storage/entry.rs)). Mutable access goes through `&mut self`, which the pipeline obtains via `PipelineOwner::render_tree_mut() -> &mut RenderTree` at phase boundaries. Re-entrant access from a parent to a child during layout uses disjoint-borrow primitives on `RenderTree` (`get_two_mut`, `get_many_mut`; the underlying `unsafe` is local and disjoint-keys-invariant — see [Thread safety](#thread-safety)). Debug-build re-entrancy checks live in `PipelineOwner::debug_doing_layout` / `debug_doing_paint` (see [`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs)).
 
-**Alternatives considered (full study in [`docs/plans/2026-05-19-001-feat-flutter-port-methodology-plan.md`](../../docs/plans/2026-05-19-001-feat-flutter-port-methodology-plan.md)):**
+**Alternatives considered:**
 - `OnceCell<Box<dyn>>` — rejected. `OnceCell::get()` returns `&T`; the trait still has `&mut self` methods that need mutation, so the lock would have to come back under another name.
 - Arity-keyed enum dispatch — rejected. The trait is open-set via the blanket `impl<T: RenderBox + Diagnosticable> RenderObject<P> for T` (see [`src/traits/render_box.rs`](src/traits/render_box.rs)). Closing it to a known enum would force every user-defined render object into a derive-macro discipline and break the widget extensibility story.
 - `RenderObjectId` indirection (render object lives in a separate slab keyed by ID) — considered. Adds one extra indirection per access and doubles the lifecycle invariants (insert/delete across two slabs). Equivalent soundness-wise but more moving parts than necessary.
 - Inner-mutability split (immutable `Arc<dyn>` config + all mutation moved to `RenderState`) — considered. Largest API change of all the options; would force every concrete render object in `src/objects/` to be refactored. Filed as future work.
 
-**Accepted trade-off:** the layout and update paths must hold `&mut RenderTree` for the duration of the phase. Multi-child layout requires the `get_many_mut` primitive. The borrow checker, not a lock, enforces single-writer-per-frame — closer to Flutter's actual model (single-threaded with debug asserts) than the previous `RwLock`-based shape.
+**Accepted trade-off:** the layout and update paths must hold `&mut RenderTree` for the duration of the phase. Multi-child layout requires the `get_many_mut` primitive. The borrow checker, not a lock, enforces single-writer-per-frame — single-threaded with debug asserts, in place of the previous `RwLock`-based shape.
 
 ### `set_was_repaint_boundary` removed from the trait surface; bit lives on `RenderState::flags`
 
@@ -909,8 +835,7 @@ of how the dead path was found.
 
 **Alternatives:** keep the trait method and live with the per-paint write lock — rejected, this is the canonical refusal-trigger violation. Move the bit to a per-tree side table — rejected, would add a second source-of-truth for state already structured around `RenderState<P>`.
 
-**Accepted trade-off:** subclasses that wanted to override `set_was_repaint_boundary` (none currently do) lose the hook. The flag's owner is now framework code, not user code. This mirrors Flutter's actual model where `_wasRepaintBoundary` is a private field on `RenderObject` (`object.dart` line 3560) that no subclass overrides.
-
+**Accepted trade-off:** subclasses that wanted to override `set_was_repaint_boundary` (none currently do) lose the hook. The flag's owner is now framework code, not user code.
 ### `unsafe impl Send + Sync for RenderTree` removed
 
 **Rule:** constitution Principle III ("zero unsafe in widget/app layer; `unsafe` only in `flui-platform`, `flui-painting`, `flui-engine`"); the prior `unsafe impl` was a soundness carve-out documented in [`docs/plans/2026-03-31-core-crates-hardening.md`](../../docs/plans/2026-03-31-core-crates-hardening.md) Task 7.
@@ -935,9 +860,7 @@ The phase entry points (`run_layout` / `run_compositing` / `run_paint` / `run_se
 
 `Poisoned`'s `phase` is a [`PoisonPhase`](src/error.rs) (`Layout` | `Paint` | `LayerUpdate`, rendered `"layout"` / `"paint"` / `"layer-update"` by its `Display` impl) — the enum itself is the authoritative, closed set; nothing today produces a fourth variant.
 
-This whole per-node partial-failure-recovery mechanism diverges deliberately from Flutter, and in the opposite direction from what a first read of `object.dart` suggests. `RenderObject._paintWithContext` (3.44.0) wraps only the call to `paint(context, offset)` in `try { … } catch (e, stack) { _reportException('paint', e, stack); }`; `_reportException` forwards to `FlutterError.reportError` and returns — it does **not** rethrow. `PipelineOwner.flushPaint` then continues its depth-sorted walk of `_nodesNeedingPaint` with the next dirty node: one node's exception is isolated to that node, and the rest of the frame still paints and reaches the compositor. `_debugDoingThisPaint` is a debug-only reentrancy assert (catches painting the same node twice in one pass) — it plays no part in exception handling, and does not abort anything. The one gap in Flutter's own isolation is `PaintingContext.updateLayerProperties`, the composited-layer-update-only arm `flushPaint` takes instead of a full repaint: it calls `child.updateCompositedLayer(oldLayer: childLayer)` with no surrounding `try`/`catch` at all, so an exception there is not caught the way `paint`'s is.
-
-FLUI diverges on both arms, in the stricter direction: a panic in `paint_effects` (`PoisonPhase::Paint`) or in `layer_patches_for`'s rebuild (`PoisonPhase::LayerUpdate`) discards the WHOLE frame as `Poisoned` rather than isolating the one node — the dirty queue survives, so the node is retried next frame, but nothing from the poisoned frame reaches the compositor. The trade-off: no partially painted frame is ever presented (Flutter's per-node isolation can and does present one), at the cost that a node stuck panicking blocks the whole frame from completing until it is replaced or stops panicking.
+Isolation is deliberately strict: a panic in `paint_effects` (`PoisonPhase::Paint`) or in `layer_patches_for`'s rebuild (`PoisonPhase::LayerUpdate`) discards the WHOLE frame as `Poisoned` rather than isolating the one node — the dirty queue survives, so the node is retried next frame, but nothing from the poisoned frame reaches the compositor. The trade-off: no partially painted frame is ever presented, at the cost that a node stuck panicking blocks the whole frame from completing until it is replaced or stops panicking.
 
 `RenderObject<P>::debug_name(&self) -> &'static str` is the static identifier embedded in `RenderError::Poisoned`. Its default body monomorphizes per concrete impl via `core::any::type_name::<Self>()`; calling through `&dyn RenderObject<P>` yields the concrete type name because the vtable carries the monomorphized stub.
 
@@ -953,7 +876,7 @@ FLUI diverges on both arms, in the stricter direction: a panic in `paint_effects
 
 ### Phase ORDERING lives in the type system; one runtime COMPLETENESS gate remains
 
-**Rule:** Flutter validates phase discipline at runtime, debug-side. `RenderObject._debugDoingThisLayout` / `_debugDoingThisPaint` (3.44.0, `object.dart`) guard re-entrancy per phase — `performLayout` opens with `assert(!_debugDoingThisLayout)` and `_paintWithContext` throws "Tried to paint a RenderObject reentrantly" on a second entry — and nothing stops a driver from calling `flushPaint` with `_nodesNeedingLayout` still holding entries — the pump runs the phases in a fixed order, but the invariant lives in convention plus asserts, not in types.
+**Rule:** phase discipline enforced only by runtime debug asserts and driver convention would let a driver call the paint flush with layout work still queued; the invariant belongs in types.
 
 **Choice:** FLUI lifts ORDERING into the type system entirely. Each `run_*` method lives only on its phase's impl block (`PipelineOwner<Layout>::run_layout`, `PipelineOwner<PaintPhase>::run_paint`, …) and the phase transitions are by-value `rebind_phase` moves, so `run_paint` cannot even be named on an owner that has not come back from the layout phase — an out-of-order call is error[E0599], not a runtime condition. `PipelineOwner::run_frame` is the only sequencing authority in-tree.
 
@@ -970,12 +893,12 @@ The remaining phase-misuse variants — `LayoutDuringPaint`, `LayoutDetached`, `
 
 ### Multi-source design references in this crate
 
-Strategy clause "Behavior as floor, everything else designed for Rust" treats Flutter as the **semantic** floor, not the design. The structural shape of individual components in this crate has been informed by multiple Rust-side audited references as recorded in prior plans:
+The structural shape of individual components in this crate is designed for Rust and has been informed by multiple Rust-side audited references as recorded in prior plans:
 
 - `slab::Slab` storage pattern with `+1/-1` ID offset — internal precedent in [`src/storage/tree.rs`](src/storage/tree.rs); the offset rationale lives in [`docs/architecture.md`](../../docs/architecture.md).
 - `Weak<RwLock<PipelineOwner>>` parent back-reference replacing a raw pointer — [`docs/plans/2026-03-31-core-crates-hardening.md`](../../docs/plans/2026-03-31-core-crates-hardening.md) Task 7.
 - Lock-free atomic dirty tracking (`AtomicRenderFlags`); the offset lives in an `OffsetCell` (`Cell<Offset>`, two `f64` components; the tree is `!Send + !Sync`); geometry/constraints as `Option<T>` mutated via `&mut RenderState`) — documented in [`src/storage/state/mod.rs`](src/storage/state/mod.rs) module docstring.
-- Multi-source design references (GPUI, Iced, Makepad, Vello, Skia) — [`docs/plans/2026-03-31-engine-hardening.md`](../../docs/plans/2026-03-31-engine-hardening.md) precedent for citing reference codebases beyond Flutter when the structural pattern fits Rust idioms better.
+- Multi-source design references (GPUI, Iced, Makepad, Vello, Skia) — [`docs/plans/2026-03-31-engine-hardening.md`](../../docs/plans/2026-03-31-engine-hardening.md) precedent for citing reference codebases when the structural pattern fits Rust idioms better.
 
 ---
 
@@ -1006,8 +929,8 @@ borrowed slot map can hold only one `&mut`-capturing child callback. The dry dri
 `Intrinsic` with the same take-out `intrinsic_query` it already uses (the queried child is a
 different node from the one taken out), sharing the per-node intrinsic cache with the layout
 path. `RenderIntrinsicWidth`/`RenderIntrinsicHeight` build child constraints in one helper
-parameterized by an intrinsic closure and call it from all three passes, matching
-`proxy_box.dart`'s `_childConstraints`: IntrinsicWidth forces width to the intrinsic whenever
+parameterized by an intrinsic closure and call it from all three passes:
+IntrinsicWidth forces width to the intrinsic whenever
 width is not tight, queries with the raw cross-axis maximum, and steps before clamping.
 
 **Why.** Approximating the intrinsic with a loose dry layout gives the wrong answer for exactly
@@ -1024,17 +947,16 @@ container computes its own baseline while positioning children in `perform_layou
 layout context's `child_distance_to_actual_baseline` and the offsets it just assigned — and
 serves it from a field. `RenderFlex` records both baseline kinds (`reported_baselines`):
 horizontal reports the highest child baseline plus its cross offset, vertical the first child
-with a baseline plus its main offset (Flutter's `defaultComputeDistanceToHighestActualBaseline`
-/ `…FirstActualBaseline`). Nesting composes because an inner container's recorded value is what
-the outer one reads. Dry baseline shares the positioning math through `compute_child_offsets`
-rather than duplicating it as Flutter does.
+with a baseline plus its main offset. Nesting composes because an inner container's recorded
+value is what the outer one reads. Dry baseline shares the positioning math through
+`compute_child_offsets` rather than duplicating it.
 
-**Divergence.** Flutter computes the baseline lazily on first query and memoizes it; FLUI pays
-an eager read of each child's baseline per layout. The observable value is identical.
+**Cost.** FLUI pays an eager read of each child's baseline per layout rather than computing
+the baseline lazily on first query and memoizing it.
 
 **Alternatives.** A child-query channel on `actual_baseline_raw` would change a widely
 implemented signature and need the driver to reconstruct child offsets that containers keep in
-their own fields; a lazy memoized port would import `&mut` aliasing into a read that is `&self`
+their own fields; a lazy memoized query would import `&mut` aliasing into a read that is `&self`
 today.
 
 ### A follower hit-tests at its last composited position
@@ -1050,8 +972,7 @@ shifts the position by `-r` for a follower's subtree, and skips a hidden followe
 `RenderFollowerLayer::hit_test` stays a plain structural forward; `hit_test_transform`'s
 signature is unchanged.
 
-**Divergence.** None in behavior: this is Flutter's `FollowerLayer.getLastTransform()` —
-hit-testing uses the last completed composite, with the same one-frame staleness. The offset is
+**Staleness.** Hit-testing uses the last completed composite, so it is one frame stale. The offset is
 computed twice (engine for pixels, rendering for hit-test) because a single computation would
 need the downstream engine to write into the upstream owner; the logic lives once in
 `resolve_follower_offset`. Translation only, like the render path.
@@ -1075,9 +996,9 @@ handle builds a private context on first use; a context built by hand (a test he
 leaf-only layout) lends one of its own. Slivers get no text accessor: nothing that measures
 text is a sliver.
 
-**Divergence.** Flutter has no such channel: `TextPainter` reaches the engine-wide font
-collection ambiently. FLUI's realm owns its text context, so the context has to reach the
-render object through the pipeline that lays it out.
+**Why a channel.** The realm owns its text context (no ambient, engine-wide font
+collection), so the context has to reach the render object through the pipeline that lays it
+out.
 
 **Alternatives.** Threading `&mut TextContext` down from the realm would change
 `PipelineOwner::run_frame`, `run_layout` and every binding and harness that drives them, and
@@ -1122,7 +1043,7 @@ owning crate.
 Known sites that do not yet match the intended design but do not break a current rule. Each entry names the site and the next planned step.
 
 - **`PipelineOwner` paint-loop downcasts to `Box<dyn ContainerLayer>`** ([`src/pipeline/owner/mod.rs`](src/pipeline/owner/mod.rs)) — the paint phase uses `Box<dyn ContainerLayer>` returned from `RenderObject::paint`. This is correct for compositing-layer heterogeneity but worth periodic audit to ensure the cost stays at the boundary, not in the per-frame inner loop.
-- **`docs/PROTOCOL_ARCHITECTURE.md` predates this template** ([`docs/PROTOCOL_ARCHITECTURE.md`](docs/PROTOCOL_ARCHITECTURE.md)) — a deeper design write-up that overlaps with `## Flutter source mapping` above for protocol-specific concerns. Not migrated under this template in U3; remains as a companion document.
+- **`docs/PROTOCOL_ARCHITECTURE.md` predates this template** ([`docs/PROTOCOL_ARCHITECTURE.md`](docs/PROTOCOL_ARCHITECTURE.md)) — a deeper design write-up that overlaps with `## Module map` above for protocol-specific concerns. Not migrated under this template in U3; remains as a companion document.
 - **`docs/LAYOUT_SYSTEM.md`, `docs/PAINT_SYSTEM.md`, `docs/HIT_TEST_SYSTEM.md`** — subsystem-level deep-dives. Not part of the template surface. Stay as companion documents.
 
 ---

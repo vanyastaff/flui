@@ -3,18 +3,14 @@
 //!
 //! Concrete implementations live in `flui_app`.
 //!
-//! # Flutter Equivalence
-//!
-//! Corresponds to Flutter's `rendering/binding.dart` `RendererBinding`
-//! mixin. Flutter's `PipelineManifold` and `HitTestable`-on-`RendererBinding`
-//! mixins are folded into this single trait. The `HitTestDispatcher` mixin
-//! (Flutter's `GestureBinding`-side dispatch) is omitted entirely -- it had
-//! zero production implementations in FLUI.
+//! The pipeline-manifold and view-hit-testing surfaces are folded into this
+//! single trait; a separate hit-test dispatcher trait is omitted entirely --
+//! it had zero production implementations.
 //!
 //! # Architecture
 //!
 //! ```text
-//! flui_app::RenderingFlutterBinding implements RendererBinding
+//! flui_app::RenderingBinding implements RendererBinding
 //! ```
 //!
 //! The three-trait stack (`PipelineManifold`, `HitTestDispatcher`,
@@ -41,15 +37,9 @@ use crate::{
 /// implement. It manages multiple independent render trees, each rooted in
 /// a [`RenderView`]. It also exposes the integration surface for visual-
 /// update requests, semantics enablement, and view-routed hit testing --
-/// historically split across `PipelineManifold` and `ViewHitTestable` mixins
-/// in Flutter, but unified here because every concrete binding implements
+/// historically split across `PipelineManifold` and `ViewHitTestable`
+/// traits, but unified here because every concrete binding implements
 /// all three together and the abstraction earned nothing.
-///
-/// # Flutter Equivalence
-///
-/// Corresponds to Flutter's `RendererBinding` mixin from
-/// `rendering/binding.dart`, plus the merged surface of `PipelineManifold`
-/// and the `HitTestable` mixin.
 ///
 /// # Responsibilities
 ///
@@ -85,7 +75,7 @@ use crate::{
 /// doc for why. The production incarnation is
 /// `UiRealm::render_frame_entered` (`flui-app`; there is no `AppBinding`
 /// any more — that type was retired), which consults
-/// `RenderingFlutterBinding::send_frames_to_engine` before presenting.
+/// `RenderingBinding::send_frames_to_engine` before presenting.
 pub trait RendererBinding {
     // ========================================================================
     // Pipeline / Manifold (formerly PipelineManifold)
@@ -246,11 +236,8 @@ pub trait RendererBinding {
     /// If false, the framework does all frame work but doesn't render.
     /// Used for deferring the first frame until ready.
     ///
-    /// # Flutter Equivalence
-    ///
-    /// Corresponds to `RendererBinding.sendFramesToEngine` (oracle tag
-    /// `3.44.0`, `packages/flutter/lib/src/rendering/binding.dart`):
-    /// `_firstFrameSent || _firstFrameDeferredCount == 0`.
+    /// Answers `true` once the first frame has been sent, or while no
+    /// first-frame deferral is outstanding.
     ///
     /// This is a **required** method (no default) deliberately: the
     /// deferral counter behind it is per-binding state (a nested
@@ -258,7 +245,7 @@ pub trait RendererBinding {
     /// flag), and a `true`-returning default previously let an
     /// implementer silently skip wiring the counter at all — the exact
     /// drift this trait method's history was flagged for. The one
-    /// production implementation lives on `RenderingFlutterBinding`
+    /// production implementation lives on `RenderingBinding`
     /// (`flui-runtime`'s `crates/flui-runtime/src/renderer_binding.rs`);
     /// implement this by delegating to that same counter rather than
     /// growing a second one.

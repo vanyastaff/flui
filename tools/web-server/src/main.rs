@@ -1,7 +1,7 @@
 //! Built-in dev server for FLUI web applications.
 //!
-//! Mirrors `flutter run -d chrome`: builds WASM via wasm-pack, starts an HTTP
-//! server with correct MIME types, and opens the browser automatically.
+//! Builds WASM via wasm-pack, starts an HTTP server with correct MIME types, and
+//! opens the browser automatically.
 //!
 //! # Usage
 //!
@@ -62,12 +62,12 @@ async fn main() {
         std::process::exit(1);
     }
 
-    // Step 1: Build WASM (like flutter run builds Dart)
+    // Step 1: Build WASM (wasm-pack compiles the crate)
     if !args.skip_build {
         build_wasm(&web_dir, args.release);
     }
 
-    // Step 2: Serve (like flutter's built-in dev server)
+    // Step 2: Serve (static files with correct MIME types)
     let addr = SocketAddr::from(([127, 0, 0, 1], args.port));
     let url = format!("http://{addr}");
 
@@ -79,7 +79,7 @@ async fn main() {
     println!("  \x1b[90mPress Ctrl+C to stop\x1b[0m");
     println!();
 
-    // Step 3: Open browser (like flutter opens Chrome)
+    // Step 3: Open browser (the default browser)
     if !args.no_open
         && let Err(e) = open::that(&url)
     {

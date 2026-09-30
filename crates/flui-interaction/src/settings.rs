@@ -32,20 +32,16 @@ pub const DEFAULT_TOUCH_SLOP: f64 = 18.0;
 
 /// Default touch slop for mouse devices (1 logical pixel).
 ///
-/// Mouse input is more precise, so the slop is much smaller. Matches
-/// Flutter's `kPrecisePointerHitSlop` (`gestures/constants.dart`, tag
-/// `3.44.0`) — the threshold `computeHitSlop` returns for
-/// `PointerDeviceKind.mouse`, used by `VerticalDragGestureRecognizer` and
-/// `HorizontalDragGestureRecognizer`.
+/// Mouse input is more precise, so the slop is much smaller. This is the
+/// threshold [`GestureSettings::hit_slop`] returns for the mouse, used by
+/// the axis-constrained drag recognizers.
 pub const DEFAULT_MOUSE_SLOP: f64 = 1.0;
 
 /// Default pan slop for mouse devices (2 logical pixels).
 ///
-/// Matches Flutter's `kPrecisePointerPanSlop = kPrecisePointerHitSlop * 2.0`
-/// (`gestures/constants.dart`, tag `3.44.0`) — the threshold
-/// `computePanSlop` returns for `PointerDeviceKind.mouse`, used by
-/// `PanGestureRecognizer` (free-direction drag). Free movement gets double
-/// the axis-constrained hit slop.
+/// The threshold [`GestureSettings::pan_slop_for`] returns for the mouse,
+/// used by free-direction drag. Free movement gets double the
+/// axis-constrained hit slop.
 pub const DEFAULT_MOUSE_PAN_SLOP: f64 = DEFAULT_MOUSE_SLOP * 2.0;
 
 /// Default touch slop for pen/stylus devices (8 logical pixels).
@@ -56,8 +52,8 @@ pub const DEFAULT_PAN_SLOP: f64 = 18.0;
 
 /// Default vertical-only pan slop.
 ///
-/// Matches Flutter's `kVerticalDragSlopThreshold = kTouchSlop` (18 logical px)
-/// for vertical drag. Same numeric value as [`DEFAULT_PAN_SLOP`] by default
+/// Same as the touch slop (18 logical px) for vertical drag. Same numeric
+/// value as [`DEFAULT_PAN_SLOP`] by default
 /// — the split exists so apps can tune vertical drag more aggressively than
 /// free pan (or vice versa) without touching the other.
 pub const DEFAULT_PAN_SLOP_VERTICAL: f64 = 18.0;
@@ -65,21 +61,19 @@ pub const DEFAULT_PAN_SLOP_VERTICAL: f64 = 18.0;
 /// Default horizontal-only pan slop.
 ///
 /// See [`DEFAULT_PAN_SLOP_VERTICAL`] for the rationale behind the per-axis
-/// split (Flutter parity).
+/// split.
 pub const DEFAULT_PAN_SLOP_HORIZONTAL: f64 = 18.0;
 
 /// Default scale slop (minimum scale factor change to start scaling).
 ///
-/// A *ratio* tolerance, not a distance: the reference's acceptance test reads
-/// `max(a / b, b / a) > 1.05` (`gestures/scale.dart`), and this is that
-/// `0.05`. It is dimensionless, which is why — unlike every other slop here —
+/// A *ratio* tolerance, not a distance: the acceptance test reads
+/// `max(a / b, b / a) > 1.05`, and this is that `0.05`. It is dimensionless, which is why — unlike every other slop here —
 /// it has no per-kind variant: a 5% pinch is 5% whatever moved.
 pub const DEFAULT_SCALE_SLOP: f64 = 0.05;
 
 /// Default span slop for imprecise devices (18 logical pixels).
 ///
-/// Matches Flutter's `kScaleSlop = kTouchSlop` (`gestures/constants.dart`,
-/// tag `3.44.0`) — the threshold `computeScaleSlop` returns for every kind but
+/// The threshold [`GestureSettings::span_slop_for`] returns for every kind but
 /// mouse. This is the *absolute* distance the span between two pointers must
 /// change by, the tier [`DEFAULT_SCALE_SLOP`]'s ratio cannot express: a pinch
 /// starting from a wide span moves a long way before it moves 5%.
@@ -87,9 +81,8 @@ pub const DEFAULT_SPAN_SLOP: f64 = DEFAULT_TOUCH_SLOP;
 
 /// Default span slop for mouse devices (1 logical pixel).
 ///
-/// Matches Flutter's `kPrecisePointerScaleSlop = kPrecisePointerHitSlop`
-/// (`gestures/constants.dart`, tag `3.44.0`) — what `computeScaleSlop` returns
-/// for `PointerDeviceKind.mouse`.
+/// The same precise-pointer slop as [`DEFAULT_MOUSE_SLOP`]; what
+/// [`GestureSettings::span_slop_for`] returns for the mouse.
 pub const DEFAULT_MOUSE_SPAN_SLOP: f64 = DEFAULT_MOUSE_SLOP;
 
 /// Default double-tap distance tolerance (100 logical pixels).
@@ -250,25 +243,24 @@ impl GestureSettings {
 
     /// Platform-faithful settings for a **runtime** [`TargetPlatform`].
     ///
-    /// This is the primary platform-adaptation entry point, mirroring
-    /// Flutter's `defaultTargetPlatform`: the platform is a *value*, not a
+    /// This is the primary platform-adaptation entry point: the platform is a *value*, not a
     /// compile-time fact, because the compile target alone is wrong in
     /// several real configurations —
     ///
     /// - **web/wasm**: one binary serves iOS Safari and Android Chrome; the
     ///   feel must be chosen from the user agent at runtime;
     /// - **tests**: widget tests exercise Android and iOS behavior on a
-    ///   desktop host (Flutter's `debugDefaultTargetPlatformOverride`);
+    ///   desktop host;
     /// - **ChromeOS / iPad-on-macOS**: the app's nominal platform and the
     ///   input hardware disagree.
     ///
     /// Use [`Self::native`] when the compile target *is* the right answer
     /// (a plain mobile/desktop build).
     ///
-    /// Mapping: `Android`/`Fuchsia` → [`Self::android_defaults`] (Flutter
-    /// also treats Fuchsia as Android-like); `iOS` →
+    /// Mapping: `Android`/`Fuchsia` → [`Self::android_defaults`] (Fuchsia is
+    /// treated as Android-like); `iOS` →
     /// [`Self::ios_defaults`]; desktop and `Unknown` →
-    /// [`Self::touch_defaults`] (the universal Flutter `kTouchSlop = 18`
+    /// [`Self::touch_defaults`] (the universal 18 px touch-slop
     /// baseline — per-device precision is layered on top via
     /// [`Self::for_device`]).
     #[must_use]
@@ -277,7 +269,7 @@ impl GestureSettings {
             TargetPlatform::Android | TargetPlatform::Fuchsia => Self::android_defaults(),
             TargetPlatform::iOS => Self::ios_defaults(),
             // Desktop, Unknown, and any future `#[non_exhaustive]` variant:
-            // the universal Flutter baseline is the safe feel.
+            // the universal touch baseline is the safe feel.
             _ => Self::touch_defaults(),
         }
     }
@@ -298,8 +290,8 @@ impl GestureSettings {
     /// (`frameworks/base/core/java/android/view/ViewConfiguration.java`),
     /// in dp ≡ logical px.
     ///
-    /// Differences from [`Self::touch_defaults`] (which mirrors Flutter's
-    /// `kTouchSlop = 18`): Android's native scroll-disambiguation slop is
+    /// Differences from [`Self::touch_defaults`] (the 18 px baseline):
+    /// Android's native scroll-disambiguation slop is
     /// **8 dp** — noticeably more eager to scroll — and the double-tap
     /// window is 300 ms. Pan slop uses `PAGING_TOUCH_SLOP` (2× touch slop).
     pub fn android_defaults() -> Self {
@@ -398,18 +390,11 @@ impl GestureSettings {
     /// [`PointerType::Mouse`] is precise, so it gets a fixed small constant
     /// that no profile customises. Every other kind — here `Pen`, `Touch`,
     /// and `Unknown` — resolves through this settings object's touch tier.
-    /// **A pen is not precise under this rule**, which is the reference's
-    /// deliberate answer (`computeHitSlop` gives `PointerDeviceKind.stylus`
-    /// the touch tier), not an omission.
+    /// **A pen is not precise under this rule**: that is deliberate (a
+    /// stylus gets the touch tier), not an omission.
     ///
-    /// Flutter parity: the free function `computeHitSlop(kind, settings)`
-    /// (`gestures/events.dart`). It lives on the settings here rather than
-    /// beside them because the settings are the only argument that can be
-    /// absent in Dart, and in Rust they cannot be — so a method removes the
-    /// nullable and the `?? kTouchSlop` fallback along with it.
-    ///
-    /// **Read this rather than `touch_slop()` wherever the reference calls
-    /// `computeHitSlop`.** The rule was implemented separately in two
+    /// **Read this rather than `touch_slop()` wherever a recognizer checks
+    /// drift against the hit slop.** The rule was implemented separately in two
     /// recognizers before this existed, and a third copy would have been the
     /// point where they drifted: no *built-in* profile makes the two tiers
     /// coincide (a caller can of course build one with
@@ -428,8 +413,7 @@ impl GestureSettings {
     /// The pan slop for `kind` — how far a pointer of that kind must move
     /// before a pan is recognised.
     ///
-    /// Same rule as [`Self::hit_slop`], one tier up. Flutter parity:
-    /// `computePanSlop(kind, settings)`.
+    /// Same rule as [`Self::hit_slop`], one tier up.
     ///
     /// The two tiers differ on every built-in platform profile —
     /// `android_defaults` is 8 against 16, `ios_defaults` 10 against 20 — and
@@ -475,10 +459,9 @@ impl GestureSettings {
     /// The span slop for `kind` — how far the *distance between two pointers*
     /// must change, in logical pixels, before a scale is recognised.
     ///
-    /// This is `computeScaleSlop(kind)` (`gestures/events.dart`, tag
-    /// `3.44.0`). Like `computeHitSlop`, it special-cases exactly the mouse as
-    /// precise; unlike it, the reference's version takes no settings at all,
-    /// so neither arm here is configurable.
+    /// Like [`Self::hit_slop`], it special-cases exactly the mouse as
+    /// precise; unlike it, it reads no settings at all, so neither arm here
+    /// is configurable.
     ///
     /// Distinct from [`Self::scale_slop`], which is a dimensionless ratio. The
     /// two are separate acceptance criteria, not two spellings of one: a pinch

@@ -157,7 +157,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // INIT above is op-dependent).  Using `vec4(0)` is what makes erode shrink
         // at a decal boundary (`min(acc, 0) == 0`); an op-dependent neutral here
         // (the old `vec4(1)` for erode) was a no-op and silently disabled
-        // edge-erosion — a parity bug vs Flutter/Impeller.
+        // edge-erosion — a bug against the reference filter.
         let inside: bool =
             sample_uv.x >= u.content_rect_uv.x &&
             sample_uv.y >= u.content_rect_uv.y &&

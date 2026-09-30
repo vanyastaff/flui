@@ -143,7 +143,7 @@ pub use ui_events::ScrollDelta;
 // `PointerPanZoomEvent` and the `from_w3c_event` / `convert_gesture` helpers
 // are re-exported from the crate root (`crate::PointerPanZoomEvent`)
 // so the events module stays a thin W3C re-export surface and recognizers
-// reach the Flutter-aligned trackpad type through the canonical path.
+// reach the trackpad type through the canonical path.
 
 /// Alias for KeyboardEvent for compatibility
 pub type KeyEvent = KeyboardEvent;
@@ -531,11 +531,10 @@ impl ScrollEventData {
         match delta {
             ScrollDelta::PixelDelta(pos) => Offset::new(pos.x, pos.y),
             ScrollDelta::LineDelta(x, y) => {
-                // One wheel line = 53 logical pixels — the exact factor
-                // Flutter's Linux embedder applies to GTK scroll units
-                // (`kScrollOffsetMultiplier`, `fl_scrolling_manager.cc`), so
-                // wheel speed and `InteractiveViewer`'s scroll-to-scale
-                // math match Flutter-on-Linux tick for tick.
+                // One wheel line = 53 logical pixels — the factor commonly
+                // applied to GTK scroll units, so wheel speed and
+                // `InteractiveViewer`'s scroll-to-scale math feel the same
+                // as other Linux UI toolkits tick for tick.
                 Offset::new(f64::from(*x) * 53.0, f64::from(*y) * 53.0)
             }
             ScrollDelta::PageDelta(x, y) => {
@@ -729,8 +728,7 @@ pub fn make_cancel_event_for_id(pointer_id: PointerId, pointer_type: PointerType
 ///
 /// Secondary/tertiary button parity — defaults to
 /// [`PointerButton::Primary`], pass [`PointerButton::Secondary`] for
-/// right-click and [`PointerButton::Auxiliary`] for middle-click
-/// (Flutter "tertiary" convention).
+/// right-click and [`PointerButton::Auxiliary`] for middle-click.
 pub fn make_down_event_with_button(
     position: Offset<f64>,
     pointer_type: PointerType,
@@ -965,9 +963,6 @@ pub fn make_scroll_event_with_modifiers(
 /// the `NonZeroU64` id down into the local `PointerId(i32)`. After widening
 /// to `ui_events::pointer::PointerId` this is a zero-cost field load — the
 /// id is already in its canonical form.
-///
-/// Flutter parity: `gestures/binding.dart::_handlePointerEventImmediately`
-/// reads `event.pointer` directly with no transform.
 #[inline]
 #[must_use]
 pub fn extract_pointer_id(event: &PointerEvent) -> crate::ids::PointerId {

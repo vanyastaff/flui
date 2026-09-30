@@ -4,8 +4,7 @@
 //! [`FrameClock`] over its OWN virtual clock and its OWN `Vsync` registry,
 //! so a script can pump one presentation while a sibling sits untouched, or
 //! drive two presentations at independent scripted cadences in one
-//! interleaved script — the test Flutter's single-view `WidgetTester.pump`
-//! cannot write.
+//! interleaved script.
 
 use std::num::NonZeroU32;
 use std::time::Duration;
@@ -18,7 +17,7 @@ fn presentation(index: u32) -> PresentationId {
     PresentationId::new_gen(index, NonZeroU32::MIN)
 }
 
-/// The test Flutter cannot write: A on a scripted 144 Hz cadence and B on
+/// A on a scripted 144 Hz cadence and B on
 /// 60 Hz, advanced in one interleaved script ⇒ per-presentation tick counts
 /// and animation values match their own cadences exactly.
 pub(crate) fn two_presentations_at_independent_scripted_cadences_tick_and_advance_independently() {

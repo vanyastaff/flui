@@ -22,14 +22,7 @@ use crate::{
 /// Trait for types that can be hit test targets.
 ///
 /// Any render object that can receive pointer events should implement this
-/// trait. This follows Flutter's `HitTestTarget` interface exactly.
-///
-/// # Flutter Equivalence
-/// ```dart
-/// abstract interface class HitTestTarget {
-///   void handleEvent(PointerEvent event, HitTestEntry<HitTestTarget> entry);
-/// }
-/// ```
+/// trait.
 pub trait HitTestTarget: Send + Sync {
     /// Handles a pointer event dispatched to this target.
     ///
@@ -120,8 +113,7 @@ impl PointerEventExtTrait for PointerEvent {
     fn pointer_id(&self) -> PointerId {
         // PointerId is `ui_events::pointer::PointerId(NonZeroU64)`.
         // Delegate to the canonical extractor — zero-cost field load,
-        // no per-event hasher allocation. Matches Flutter
-        // `gestures/binding.dart` `event.pointer` semantics.
+        // no per-event hasher allocation.
         crate::events::extract_pointer_id(self)
     }
 

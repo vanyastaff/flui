@@ -1,12 +1,6 @@
 //! `RenderShaderMask` — applies a GPU shader as a mask over a single child.
 //!
-//! # Flutter equivalence
-//!
-//! Behavior-faithful port of Flutter's
-//! [`RenderShaderMask`](https://api.flutter.dev/flutter/rendering/RenderShaderMask-class.html)
-//! (`packages/flutter/lib/src/rendering/proxy_box.dart:1128-1195`).
-//!
-//! # Rust-native shape
+//! # Shape
 //!
 //! Not built on [`super::clip::ClipGeometry`] or shared with
 //! [`super::backdrop_filter::RenderBackdropFilter`] via a generic body —
@@ -21,15 +15,11 @@
 //! `docs/research/2026-07-01-render-backdrop-filter-shader-mask-plan.md`,
 //! §3).
 //!
-//! # Divergence from the oracle
+//! # Diagnostics
 //!
-//! Flutter's `RenderShaderMask` has **zero** `debugFillProperties`
-//! entries (grepped the full class body: no override at all). This port
-//! deliberately surfaces `blend_mode` anyway — a documented FLUI-side
-//! improvement for catalog-wide consistency (every other proxy render
-//! object in this crate — `RenderClip`, `RenderOpacity`,
-//! `RenderPhysicalModel` — surfaces all of its fields), not a silent
-//! divergence.
+//! `blend_mode` is surfaced in diagnostics for catalog-wide consistency
+//! (every other proxy render object in this crate — `RenderClip`,
+//! `RenderOpacity`, `RenderPhysicalModel` — surfaces all of its fields).
 
 use std::fmt;
 
@@ -49,7 +39,7 @@ use flui_rendering::{
 /// The shader is resolved once per paint. Static masks use the stored fallback
 /// [`Shader`]. Bounds-dependent masks store a data-only [`ShaderMaskTarget`]
 /// and resolve the executable factory through the active owner interaction
-/// lane with the node's LOCAL bounds rect (oracle: `Offset.zero & size`).
+/// lane with the node's LOCAL bounds rect (origin zero, extent the node's size).
 /// Draws nothing of its own; see [`RenderBox::paint`] below.
 ///
 /// # Engine note
@@ -67,8 +57,7 @@ pub struct RenderShaderMask {
     shader: Shader,
     shader_target: Option<ShaderMaskTarget>,
     /// Blend mode used when compositing the masked result.
-    /// Default `BlendMode::Modulate` — oracle `proxy_box.dart:1133`,
-    /// **not** `SrcOver` (contrast [`super::backdrop_filter::RenderBackdropFilter`]'s
+    /// Default `BlendMode::Modulate`, **not** `SrcOver` (contrast [`super::backdrop_filter::RenderBackdropFilter`]'s
     /// default).
     blend_mode: BlendMode,
     /// Whether a child is attached (tracked for hit testing / paint /
@@ -78,7 +67,7 @@ pub struct RenderShaderMask {
 
 impl RenderShaderMask {
     /// Creates a shader mask with the given static fallback shader and the
-    /// oracle's default blend mode (`BlendMode::Modulate`).
+    /// default blend mode (`BlendMode::Modulate`).
     ///
     /// Bounds-dependent shader factories are registered in the owner runtime
     /// and connected with [`with_shader_target`](Self::with_shader_target);
@@ -146,7 +135,7 @@ impl RenderShaderMask {
     }
 
     /// Replaces the blend mode and returns the exact pipeline impact.
-    /// Paint-only — Flutter parity: `markNeedsPaint()`, never a relayout.
+    /// Paint-only, never a relayout.
     pub fn set_blend_mode(&mut self, blend_mode: BlendMode) -> flui_rendering::RenderUpdateImpact {
         if self.blend_mode == blend_mode {
             return flui_rendering::RenderUpdateImpact::NONE;
@@ -195,9 +184,6 @@ impl fmt::Debug for RenderShaderMask {
 
 impl flui_foundation::Diagnosticable for RenderShaderMask {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        // Oracle has zero diagnostics for this class (see module doc) —
-        // `blend_mode` is a deliberate FLUI-side addition, not a
-        // transcription.
         builder.add_enum("blend_mode", self.blend_mode);
         builder.add_flag(
             "shader_target",
@@ -215,8 +201,8 @@ impl RenderBox for RenderShaderMask {
 
     flui_rendering::forward_single_child_box_queries!();
 
-    // Oracle `:1174-1175` — `alwaysNeedsCompositing => child != null`,
-    // data-dependent (not an unconditional `true`). This trait default
+    // Compositing is needed iff there is a child: data-dependent (not an
+    // unconditional `true`). This trait default
     // (`false`) is live, consumed infrastructure in this pipeline (see
     // design research plan §2.7), so the override matters.
     fn always_needs_compositing(&self) -> bool {
@@ -228,12 +214,12 @@ impl RenderBox for RenderShaderMask {
     // closure cannot be replaced by a method reference.
     #[expect(clippy::redundant_closure_for_method_calls)]
     fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
-        // Oracle `:1191-1193` — no child means nothing at all is drawn
-        // (not even an empty mask layer).
+        // No child means nothing at all is drawn (not even an empty mask
+        // layer).
         if ctx.child_count() == 0 {
             return;
         }
-        // LOCAL rect (oracle `Offset.zero & size`) — the shader callback
+        // LOCAL rect (origin zero) — the shader callback
         // must see LOCAL coordinates, and so must the scope's recorded
         // `bounds`; the composer applies the origin shift for us (see
         // `PaintCx::with_shader_mask`'s doc and the design research
@@ -246,9 +232,8 @@ impl RenderBox for RenderShaderMask {
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
         // RenderBox's trait default is LEAF-shaped (bounds check only,
         // no child recursion) — RenderShaderMask MUST override to
-        // forward, mirroring oracle's `RenderProxyBoxMixin.hitTestChildren`
-        // (`:127`). No shape gate: the mask is purely visual, oracle
-        // imposes no hit-test restriction beyond the child's own bounds.
+        // forward. No shape gate: the mask is purely visual, so there is
+        // no hit-test restriction beyond the child's own bounds.
         if !ctx.is_within_own_size() {
             return false;
         }

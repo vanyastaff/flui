@@ -6,8 +6,7 @@ use crate::TreeId;
 
 /// Indexed slot for efficient child reconciliation.
 ///
-/// This mirrors Flutter's `IndexedSlot` pattern used in
-/// `updateChildren()` for O(1) child insertion.
+/// It gives child reconciliation O(1) child insertion.
 ///
 /// When inserting a child, you need to know both the index AND the
 /// previous sibling to insert after. Keeping both together enables O(1)

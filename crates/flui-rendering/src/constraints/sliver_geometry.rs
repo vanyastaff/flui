@@ -27,10 +27,6 @@ const PRECISION_ERROR_TOLERANCE: f64 = flui_foundation::EPSILON;
 /// ```ignore
 /// cache.insert(sliver_id, geometry);
 /// ```
-///
-/// # Flutter Equivalence
-///
-/// Maps directly to Flutter's `SliverGeometry` class.
 #[derive(Clone, Copy, PartialEq)]
 pub struct SliverGeometry {
     /// Total scrollable extent consumed by this sliver.
@@ -128,16 +124,13 @@ impl SliverGeometry {
 
     /// Creates geometry with basic extents.
     ///
-    /// Applies Flutter's constructor default chain
-    /// (`.flutter/packages/flutter/lib/src/rendering/sliver.dart:662-665`) as
-    /// it resolves for a call that passes only these three arguments:
     /// `layout_extent`, `hit_test_extent` and `cache_extent` all default to
     /// `paint_extent`, and `visible` to `paint_extent > 0.0`.
     ///
-    /// Note the chain is resolved ONCE, here — these are plain field values,
-    /// not lazy rules. Flutter's `cacheExtent ?? layoutExtent ?? paintExtent`
-    /// means a caller that narrows `layout_extent` also narrows `cache_extent`;
-    /// with a builder the two are independent, so
+    /// Note the defaults are resolved ONCE, here — these are plain field
+    /// values, not lazy rules. A lazy `cache_extent ?? layout_extent ??
+    /// paint_extent` chain would mean a caller that narrows `layout_extent`
+    /// also narrows `cache_extent`; with a builder the two are independent, so
     /// [`with_layout_extent`](Self::with_layout_extent) does NOT drag
     /// `cache_extent` down with it. Narrow both when that is what you mean —
     /// every persistent-header variant does. Prefer this plus
@@ -146,10 +139,9 @@ impl SliverGeometry {
     /// omits, which is a *different* contract and has produced three separate
     /// header bugs (`layout_extent`, `visible`, and `hit_test_extent`).
     ///
-    /// # Divergence from Flutter
+    /// # Derived defaults
     ///
-    /// This also sets `max_paint_extent = paint_extent`, where Flutter
-    /// requires it explicitly and defaults it to `0.0`. Callers that know
+    /// This also sets `max_paint_extent = paint_extent`. Callers that know
     /// their unconstrained extent must say so with
     /// [`with_max_paint_extent`](Self::with_max_paint_extent).
     #[inline]
@@ -274,7 +266,7 @@ impl SliverGeometry {
     /// sliver's layout offset, which may be less than what it paints.
     ///
     /// Only needed to *narrow* it: [`new`](Self::new) already defaults it to
-    /// `paint_extent`, matching Flutter's `layoutExtent ??= paintExtent`.
+    /// `paint_extent`.
     #[inline]
     #[must_use]
     pub const fn with_layout_extent(mut self, extent: f64) -> Self {
@@ -296,7 +288,7 @@ impl SliverGeometry {
     /// Sets visibility explicitly.
     ///
     /// Only needed to override it: [`new`](Self::new) already derives it as
-    /// `paint_extent > 0.0`, matching Flutter's `visible ??= paintExtent > 0`.
+    /// `paint_extent > 0.0`.
     #[inline]
     #[must_use]
     pub const fn with_visible(mut self, visible: bool) -> Self {
@@ -361,7 +353,8 @@ impl SliverGeometry {
     // VALIDATION
     // ============================================================================
 
-    /// Returns the first Flutter-compatible geometry invariant violation.
+    /// Returns the first violated invariant the pipeline needs to consume the
+    /// geometry (non-finite or negative extents, a zero scroll correction).
     #[inline]
     #[must_use]
     pub fn validation_error(&self) -> Option<&'static str> {
@@ -439,11 +432,10 @@ impl SliverGeometry {
     /// sized below the header's extent), not that the pipeline cannot
     /// consume the numbers.
     ///
-    /// Flutter draws the same line: these two rules are DEBUG-ONLY asserts
-    /// (`sliver.dart:881-894`, `debugAssertIsValid`) — a release build
+    /// These two rules are not commit-time rejections — a release build
     /// commits and consumes the geometry as-is, placing the successor at
     /// `layout_extent` past the shorter paint. Rejecting them from the
-    /// commit instead leaves the node's previous geometry committed
+    /// commit instead would leave the node's previous geometry committed
     /// forever — every retry re-violates, and the viewport freezes
     /// silently. The commit path warns on these instead.
     pub fn content_contract_violation(&self) -> Option<&'static str> {

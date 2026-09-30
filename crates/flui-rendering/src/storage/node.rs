@@ -392,7 +392,7 @@ impl RenderNode {
     /// The previously-removed `RenderNode::mark_needs_layout()` did
     /// propagation; the new owner-side walk supersedes it. Direct callers
     /// should still use `PipelineOwner::mark_needs_layout` for correct
-    /// Flutter-parity boundary semantics.
+    /// relayout-boundary semantics.
     #[inline]
     pub fn mark_layout_flag(&self) {
         with_entry!(self, entry => entry.state().mark_needs_layout());
@@ -403,9 +403,8 @@ impl RenderNode {
     ///
     /// `true` means an ancestor's layout consumed this node's intrinsic
     /// queries: the invalidation walk must escalate to the parent even
-    /// across a relayout boundary (Flutter `RenderBox.markNeedsLayout`,
-    /// box.dart:2840). Sliver nodes carry no cache yet and always return
-    /// `false`.
+    /// across a relayout boundary. Sliver nodes carry no cache yet and
+    /// always return `false`.
     #[inline]
     pub fn clear_layout_cache(&mut self) -> bool {
         with_entry!(self, entry => entry.state_mut().clear_layout_cache())
@@ -587,7 +586,7 @@ impl RenderNode {
     ///
     /// Reads the per-instance `IS_RELAYOUT_BOUNDARY`
     /// storage flag (set by [`RenderState::compute_relayout_boundary`] during
-    /// layout per Flutter `!parentUsesSize || sizedByParent || constraints.isTight() || !hasParent`).
+    /// layout: `!parent_uses_size || sized_by_parent || constraints.is_tight() || !has_parent`).
     /// Prior behaviour returned the hardcoded `RenderObject::is_relayout_boundary()`
     /// trait answer; that value was never consulted in production (zero
     /// callers via grep) and reflected the type-level default rather than
@@ -730,9 +729,8 @@ impl RenderNode {
     /// rotation about its centre, a `RenderFractionalTranslation`, a `RenderFlow`
     /// — produces a *different, plausible-looking* matrix at `Size::ZERO`.
     /// Substituting zero here made [`PipelineOwner::transform_to`] quietly wrong
-    /// before the first layout (ADR-0021). Flutter asserts `box.hasSize` at
-    /// the corresponding call sites (`heroes.dart:380`, `box.dart:3016`) rather
-    /// than inventing a size.
+    /// before the first layout (ADR-0021). Callers must have a size; the
+    /// accessor refuses rather than inventing one.
     ///
     /// Forwards to
     /// [`crate::traits::RenderObject::apply_paint_transform`].
@@ -858,11 +856,11 @@ impl RenderNode {
     /// of protocol (Box or Sliver). Returns `None` if the stored object is not
     /// a `T`.
     ///
-    /// This is the View layer's hook for Flutter's `RenderObjectElement`
-    /// update path: when a `RenderObjectWidget` updates, the framework downcasts the live
-    /// render object to the widget's concrete `RenderObject` type and calls
+    /// This is the View layer's hook for the render-object update path: when
+    /// a render view updates, the framework downcasts the live render object
+    /// to the view's concrete `RenderObject` type and calls
     /// `RenderView::update_render_object` to apply the new configuration in
-    /// place (Flutter's `Widget.updateRenderObject`).
+    /// place.
     pub fn downcast_render_object_mut<T: std::any::Any>(&mut self) -> Option<&mut T> {
         with_entry!(self, entry => entry.render_object_mut().as_any_mut().downcast_mut::<T>())
     }
@@ -908,8 +906,7 @@ impl RenderNode {
     /// Set by the paint phase after a node was painted as a repaint
     /// boundary. The compositing-bits walk consults this to detect the
     /// "lost-boundary-status" transition (`!is_repaint_boundary &&
-    /// was_repaint_boundary`) per Flutter `_updateCompositingBits`
-    /// (object.dart:3246-3251).
+    /// was_repaint_boundary`).
     #[inline]
     pub fn was_repaint_boundary(&self) -> bool {
         with_entry!(self, entry => entry.state().flags().was_repaint_boundary())

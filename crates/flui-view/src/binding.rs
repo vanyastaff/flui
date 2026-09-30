@@ -5,25 +5,6 @@
 //! - ElementTree for storing elements
 //! - Root element attachment
 //!
-//! # Flutter Equivalence
-//!
-//! This corresponds to Flutter's `WidgetsBinding` mixin:
-//!
-//! ```dart
-//! mixin WidgetsBinding on BindingBase, ServicesBinding, SchedulerBinding,
-//!     GestureBinding, RendererBinding, SemanticsBinding {
-//!   @override
-//!   void initInstances() {
-//!     super.initInstances();
-//!     _instance = this;
-//!     // ...
-//!   }
-//!
-//!   static WidgetsBinding get instance => BindingBase.checkInstance(_instance);
-//!   static WidgetsBinding? _instance;
-//! }
-//! ```
-//!
 //! # Architecture
 //!
 //! ```text
@@ -93,17 +74,13 @@ const DEFAULT_ROOT_VIEW_SIZE: (f64, f64) = (800.0, 600.0);
 // ============================================================================
 
 /// Information about a route for navigation.
-///
-/// # Flutter Equivalent
-///
-/// Corresponds to Flutter's `RouteInformation` from `router.dart`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouteInformation {
     /// The URI of the route (path + query + fragment).
     pub uri: String,
     /// Optional state key associated with this route.
-    /// Unlike Flutter which uses arbitrary state, we use a string key
-    /// that can reference stored state elsewhere.
+    /// A string key that can reference stored state elsewhere, rather than
+    /// carrying arbitrary state.
     pub state_key: Option<String>,
 }
 
@@ -130,10 +107,6 @@ impl RouteInformation {
 // ============================================================================
 
 /// Response to an app exit request.
-///
-/// # Flutter Equivalent
-///
-/// Corresponds to Flutter's `AppExitResponse` enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppExitResponse {
     /// Allow the app to exit.
@@ -147,10 +120,6 @@ pub enum AppExitResponse {
 // ============================================================================
 
 /// Event describing a change in view focus state.
-///
-/// # Flutter Equivalent
-///
-/// Corresponds to Flutter's `ViewFocusEvent`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ViewFocusEvent {
     /// The view ID that changed focus.
@@ -186,10 +155,6 @@ pub enum ViewFocusDirection {
 // ============================================================================
 
 /// Event for predictive back gesture (Android 13+).
-///
-/// # Flutter Equivalent
-///
-/// Corresponds to Flutter's `PredictiveBackEvent`.
 #[derive(Debug, Clone, Copy)]
 pub struct PredictiveBackEvent {
     /// Progress of the back gesture (0.0 to 1.0).
@@ -215,10 +180,6 @@ pub struct PredictiveBackEvent {
 /// - Memory pressure
 /// - Navigation events
 /// - Back gestures (Android predictive back)
-///
-/// # Flutter Equivalent
-///
-/// Corresponds to Flutter's `WidgetsBindingObserver` mixin class.
 ///
 /// # Example
 ///
@@ -252,10 +213,6 @@ pub trait WidgetsBindingObserver {
     /// This is triggered by the system back button or back gesture.
     /// Return `true` if handled (e.g., by closing a dialog), `false` otherwise.
     /// If no observer returns `true`, the application may quit.
-    ///
-    /// # Flutter Equivalent
-    ///
-    /// Corresponds to `WidgetsBindingObserver.didPopRoute()`.
     fn did_pop_route(&self) -> Pin<Box<dyn Future<Output = bool> + Send + '_>> {
         Box::pin(async { false })
     }
@@ -263,10 +220,6 @@ pub trait WidgetsBindingObserver {
     /// Called when the host tells the app to push a new route.
     ///
     /// Return `true` if handled, `false` otherwise.
-    ///
-    /// # Flutter Equivalent
-    ///
-    /// Corresponds to `WidgetsBindingObserver.didPushRouteInformation()`.
     fn did_push_route_information(
         &self,
         _route: &RouteInformation,
@@ -295,10 +248,6 @@ pub trait WidgetsBindingObserver {
     /// Return `true` to handle the gesture (start animation), `false`
     /// otherwise. If `true`, subsequent gesture events will be sent to this
     /// observer.
-    ///
-    /// # Flutter Equivalent
-    ///
-    /// Corresponds to `WidgetsBindingObserver.handleStartBackGesture()`.
     fn handle_start_back_gesture(&self, _event: PredictiveBackEvent) -> bool {
         false
     }
@@ -342,10 +291,6 @@ pub trait WidgetsBindingObserver {
     fn did_change_app_lifecycle_state(&self, _state: AppLifecycleState) {}
 
     /// Called when the view focus changes.
-    ///
-    /// # Flutter Equivalent
-    ///
-    /// Corresponds to `WidgetsBindingObserver.didChangeViewFocus()`.
     fn did_change_view_focus(&self, _event: ViewFocusEvent) {}
 
     /// Called when a request is received from the system to exit the
@@ -353,10 +298,6 @@ pub trait WidgetsBindingObserver {
     ///
     /// Return `AppExitResponse::Cancel` to prevent exit.
     /// All observers are asked before exiting.
-    ///
-    /// # Flutter Equivalent
-    ///
-    /// Corresponds to `WidgetsBindingObserver.didRequestAppExit()`.
     fn did_request_app_exit(&self) -> Pin<Box<dyn Future<Output = AppExitResponse> + Send + '_>> {
         Box::pin(async { AppExitResponse::Exit })
     }
@@ -375,8 +316,8 @@ pub trait WidgetsBindingObserver {
 /// Application lifecycle states.
 ///
 /// Re-exported from [`flui_scheduler::AppLifecycleState`] — the canonical
-/// Flutter-parity lifecycle enum (`UpdateScheduler::handle_app_lifecycle_state_change`,
-/// binding.dart:414-441). `flui-view` previously defined its own parallel
+/// lifecycle enum (`UpdateScheduler::handle_app_lifecycle_state_change`).
+/// `flui-view` previously defined its own parallel
 /// `Resumed`/`Inactive`/`Hidden`/`Paused`/`Detached` enum; the two were
 /// consolidated onto the scheduler's copy (ADR-0035) since it is the one
 /// tied to real frame-scheduling behavior (`frames_enabled`).
@@ -426,7 +367,7 @@ pub struct WidgetsBinding {
     /// Whether binding is ready to produce frames.
     ready_to_produce_frames: AtomicBool,
 
-    /// Whether we are currently building dirty elements (Flutter parity flag).
+    /// Whether we are currently building dirty elements (debug-only flag).
     ///
     /// Hoisted out of `WidgetsBindingInner` so that `handle_build_scheduled`
     /// can check it WITHOUT taking the `inner` RwLock. This eliminates the
@@ -440,8 +381,8 @@ pub struct WidgetsBinding {
     ///   no lock acquired.
     ///
     /// The flag is set/cleared in `draw_frame` at the same program points
-    /// the previous `inner.debug_building_dirty_elements` field was, so
-    /// Flutter-parity semantics are preserved.
+    /// the previous `inner.debug_building_dirty_elements` field was, so the
+    /// semantics are unchanged.
     #[cfg(debug_assertions)]
     debug_building_dirty_elements: AtomicBool,
 }
@@ -617,11 +558,6 @@ impl WidgetsBinding {
     /// `UiRealm`) before attaching the root widget. The pipeline cell will
     /// be propagated to elements during mounting so they can create their
     /// RenderObjects.
-    ///
-    /// # Flutter Equivalent
-    ///
-    /// In Flutter, this is handled by the RendererBinding mixin which provides
-    /// access to `pipelineOwner` and `rootPipelineOwner`.
     pub fn set_pipeline_owner(&self, owner: PipelineCell) {
         self.inner.write().pipeline_owner = Some(owner);
         tracing::debug!("WidgetsBinding: PipelineOwner set");
@@ -757,14 +693,6 @@ impl WidgetsBinding {
     /// `PipelineOwner`'s root node). This is the single root-bootstrap
     /// path — there is no parallel direct-mount of the user view.
     ///
-    /// # Flutter Equivalent
-    ///
-    /// Mirrors `WidgetsBinding.attachRootWidget` →
-    /// `RootWidget.attach` → `RenderObjectToWidgetAdapter`
-    /// (`packages/flutter/lib/src/widgets/binding.dart`), where the
-    /// user widget is likewise wrapped in a root widget that owns the
-    /// `RenderView` before being attached to the build owner.
-    ///
     /// # Errors
     ///
     /// Returns [`AttachError::AlreadyAttached`] if a root widget is
@@ -808,8 +736,7 @@ impl WidgetsBinding {
         }
 
         // Wrap the user view in `RootRenderView` so the render tree is
-        // bootstrapped through `RootRenderElement` (Flutter's
-        // `RenderObjectToWidgetAdapter` shape) instead of mounting the
+        // bootstrapped through `RootRenderElement` instead of mounting the
         // user view directly.
         //
         // The user view is cloned (not `BoxedView`-wrapped) so the
@@ -1009,10 +936,8 @@ impl WidgetsBinding {
 
     /// Called when a build has been scheduled.
     ///
-    /// # Flutter Equivalent
-    ///
-    /// In Flutter, this checks that we're not currently building and calls
-    /// `ensureVisualUpdate()` which schedules a frame via `SchedulerBinding`.
+    /// Checks that we're not currently building, then requests a frame from
+    /// the scheduler.
     ///
     /// # Deadlock-safety
     ///
@@ -1026,10 +951,10 @@ impl WidgetsBinding {
     /// `on_need_frame` is its own separate `RwLock` that is never held
     /// across any `inner` critical section.
     ///
-    /// # Panics (debug only — Flutter parity)
+    /// # Panics (debug only)
     ///
-    /// Panics if called while building dirty elements. In Flutter this check
-    /// catches `setState()` called from a layout or paint callback.
+    /// Panics if called while building dirty elements. This check catches
+    /// `setState()` called from a layout or paint callback.
     pub fn handle_build_scheduled(&self) {
         #[cfg(debug_assertions)]
         {
@@ -1042,7 +967,7 @@ impl WidgetsBinding {
             );
         }
 
-        // Request a frame from the scheduler (ensureVisualUpdate).
+        // Request a frame from the scheduler.
         // `on_need_frame` is a leaf RwLock — it is never held across any
         // acquisition of `self.inner`, so taking it here is deadlock-free.
         if let Some(ref callback) = *self.on_need_frame.read() {
@@ -1060,7 +985,7 @@ impl WidgetsBinding {
         self.inner.read().build_owner.dirty_count()
     }
 
-    /// Flutter `WidgetsBinding.performReassemble()` — hot reload entry point.
+    /// Hot reload entry point.
     ///
     /// Marks every element dirty without unmounting or disposing state. The
     /// next [`draw_frame`](Self::draw_frame) re-runs all `build()` methods while
@@ -1126,7 +1051,7 @@ impl WidgetsBinding {
             );
             // Set before build_scope so that any on_build_scheduled callback
             // fired from within build_scope sees building=true and panics with
-            // the Flutter-parity message rather than enqueuing a second frame.
+            // the diagnostic message rather than enqueuing a second frame.
             //
             // Cleared by RAII rather than a store at the end of this
             // function: a panic that unwinds out of `build_scope` or
@@ -1230,7 +1155,7 @@ impl WidgetsBinding {
     /// before calling, but the unconditional call is simpler and the cost is
     /// negligible in practice.
     ///
-    /// # Flutter parity — production↔headless convergence point
+    /// # Production↔headless convergence point
     ///
     /// This call site is the **production↔headless convergence point** for the
     /// post-`run_frame` pipeline tail steps. `HeadlessBinding::pump_frame`
@@ -1428,14 +1353,12 @@ impl WidgetsBinding {
 
     // Note: the first-frame *deferral counter* (`defer_first_frame` /
     // `allow_first_frame` / `send_frames_to_engine`) used to be duplicated
-    // here as its own independent `AtomicU32` + `AtomicBool` pair. Flutter
-    // has exactly one such counter, on `RendererBinding` (`WidgetsBinding`
-    // is a mixin on top of it and shares the same state); a second,
-    // unrelated counter on this binding could drift from the real one and
-    // never actually gated anything reachable from the production frame
-    // path. It has been removed — the single canonical counter lives on
-    // `RenderingFlutterBinding` (`crates/flui-app/src/bindings/
-    // renderer_binding.rs`), forwarded through `UiRealm::defer_first_frame`
+    // here as its own independent `AtomicU32` + `AtomicBool` pair. There
+    // must be exactly one such counter; a second, unrelated counter on this
+    // binding could drift from the real one and never actually gated
+    // anything reachable from the production frame path. It has been
+    // removed — the single canonical counter lives on the renderer binding
+    // (`crates/flui-app/src/bindings/renderer_binding.rs`), forwarded through `UiRealm::defer_first_frame`
     // / `allow_first_frame` / `send_frames_to_engine`, and consulted by
     // `UiRealm::render_frame_entered`.
 
@@ -1457,10 +1380,6 @@ impl WidgetsBinding {
     ///
     /// Notifies observers until one returns `true`, meaning it handled the
     /// request. If none return `true`, the application may quit.
-    ///
-    /// # Flutter Equivalent
-    ///
-    /// Corresponds to `WidgetsBinding.handlePopRoute()`.
     pub async fn handle_pop_route(&self) -> bool {
         let observers: Vec<_> = self.inner.read().observers.clone();
         for observer in observers {
@@ -1473,10 +1392,6 @@ impl WidgetsBinding {
     }
 
     /// Handle a push route request from the host.
-    ///
-    /// # Flutter Equivalent
-    ///
-    /// Corresponds to `WidgetsBinding.handlePushRoute()`.
     pub async fn handle_push_route(&self, route: &RouteInformation) -> bool {
         let observers: Vec<_> = self.inner.read().observers.clone();
         for observer in observers {
@@ -1562,10 +1477,6 @@ impl WidgetsBinding {
     /// Snapshots the observer list under the read lock and releases the
     /// lock before invoking callbacks. See
     /// [`Self::handle_locale_changed`] for the deadlock-safety rationale.
-    ///
-    /// # Flutter Equivalent
-    ///
-    /// Corresponds to `WidgetsBinding.handleViewFocusChanged()`.
     pub fn handle_view_focus_changed(&self, event: ViewFocusEvent) {
         let observers: Vec<Arc<dyn WidgetsBindingObserver>> = self.inner.read().observers.clone();
         for observer in &observers {
@@ -1580,10 +1491,6 @@ impl WidgetsBinding {
     /// Handle an app exit request from the system.
     ///
     /// All observers are asked. If any returns `Cancel`, the exit is prevented.
-    ///
-    /// # Flutter Equivalent
-    ///
-    /// Corresponds to `WidgetsBinding.handleRequestAppExit()`.
     pub async fn handle_request_app_exit(&self) -> AppExitResponse {
         let observers: Vec<_> = self.inner.read().observers.clone();
         let mut should_cancel = false;

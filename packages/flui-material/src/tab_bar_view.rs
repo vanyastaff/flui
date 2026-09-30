@@ -1,17 +1,16 @@
 //! [`TabBarView`] — a [`crate::TabController`]-synced page switcher, the
 //! usual body for a [`crate::TabBar`].
 //!
-//! # Flutter parity
+//! # Observable contract
 //!
-//! `material/tabs.dart`'s `TabBarView` (oracle tag `3.44.0`) — for the
-//! OBSERVABLE contract only: the active child tracks the controller's index,
-//! an already-visited child's state survives switching away and back, and a
-//! not-yet-visited child is never built. See "The switching mechanism: no
-//! `PageView`" below for what does *not* carry over.
+//! The active child tracks the controller's index, an already-visited
+//! child's state survives switching away and back, and a not-yet-visited
+//! child is never built. See "The switching mechanism: no `PageView`" below
+//! for what a full tab view does beyond this.
 //!
 //! ## The switching mechanism: no `PageView`
 //!
-//! The oracle's `_TabBarViewState` drives a real `PageView` (`PageController`,
+//! A full tab view drives a real `PageView` (`PageController`,
 //! `Scrollable`, `Viewport`): every child is a scrollable page, dragging
 //! between tabs is native, and `TabController.animateTo` warps the page
 //! controller to the target index over its animation duration. This
@@ -19,10 +18,9 @@
 //! can host a viewport of arbitrary, individually-sized pages) — swiping is
 //! a **named deferral**, not a silent drop.
 //!
-//! Instead, this ports the OTHER lazy-keep-alive switcher this workspace
+//! Instead, this reuses the OTHER lazy-keep-alive switcher this workspace
 //! already established: `flui_cupertino::CupertinoTabScaffold`'s private
-//! `_TabSwitchingView` mechanic (`cupertino/tab_scaffold.dart`, oracle tag
-//! `3.44.0`) — every child mounts a slot up front, but a child is only ever
+//! tab-switching view — every child mounts a slot up front, but a child is only ever
 //! *built* the first time its index becomes active (tracked per index, never
 //! reset — "once visited, stays built"), and every non-active child is
 //! [`Offstage`]-hidden + [`TickerMode`]-disabled rather than unmounted, so an
@@ -43,8 +41,7 @@
 //! Exactly [`crate::TabBar`]'s own contract: an explicit
 //! [`controller`](TabBarView::controller) wins; otherwise the nearest
 //! [`crate::DefaultTabController`] ancestor's controller is used. Exactly one
-//! must be reachable, or `build` panics (Flutter parity: the oracle's
-//! `_updateTabController`'s `FlutterError`/`assert`). The listener
+//! must be reachable, or `build` panics. The listener
 //! subscription is registered the same way `TabBarState` registers its own
 //! (re-resolved every `build`, re-homed on controller-identity change) and
 //! removed in `dispose`: a controller that outlives this view must not keep
@@ -54,10 +51,10 @@
 //! ## Length mismatch
 //!
 //! [`TabBarView::new`]'s `children` count must equal the controller's
-//! [`length`](crate::TabController::length). Flutter / an earlier FLUI port
-//! used `debug_assert!` and documented a release fall-through where an
-//! out-of-range current index matched no child and every page stayed
-//! `Offstage`. That hole is closed: `build` uses a release `assert!` so a
+//! [`length`](crate::TabController::length). A `debug_assert!` alone would
+//! leave a release fall-through where an out-of-range current index
+//! matched no child and every page stayed `Offstage`, so `build` uses a
+//! release `assert!` so a
 //! mismatch surfaces as a framework `ErrorView` (via the build-error
 //! boundary) in every profile — same public-widget invariant class as
 //! [`TabController`] index bounds (#1101).
@@ -131,8 +128,7 @@ pub struct TabBarViewState {
     controller: RefCell<Option<TabController>>,
     listener_id: RefCell<Option<ListenerId>>,
     rebuild: Option<RebuildHandle>,
-    /// Flutter parity: `_TabSwitchingViewState.shouldBuildTab` — grown to
-    /// match `view.children.len()` on every build, never reset for an index
+    /// Grown to match `view.children.len()` on every build, never reset for an index
     /// that already built once. See the module docs' "switching mechanism"
     /// section.
     should_build: RefCell<Vec<bool>>,
@@ -171,8 +167,7 @@ impl TabBarViewState {
     /// # Panics
     ///
     /// Panics if `view` has no explicit controller and there is no
-    /// `DefaultTabController` ancestor. Flutter parity: `_updateTabController`'s
-    /// `FlutterError`.
+    /// `DefaultTabController` ancestor.
     fn resolve_controller(&self, view: &TabBarView, ctx: &dyn BuildContext) -> TabController {
         let resolved = view
             .controller

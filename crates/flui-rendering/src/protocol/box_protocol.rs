@@ -112,26 +112,24 @@ impl Protocol for BoxProtocol {
     }
 
     /// Overrides the default no-op with the actual
-    /// Flutter-parity `compute_relayout_boundary` call.
+    /// `compute_relayout_boundary` call.
     ///
-    /// `parent_uses_size = true` (conservative default per Copilot P1 review
-    /// on PR #139): with the Flutter formula
+    /// `parent_uses_size = true` (the conservative default): with the formula
     /// `is_boundary = !parent_uses_size || sized_by_parent || constraints.is_tight() || !has_parent`,
     /// passing `parent_uses_size = false` would make `!false = true` ⇒ EVERY
     /// non-root node defaults to a relayout boundary, immediately blocking
     /// [`PipelineOwner::mark_needs_layout`](crate::pipeline::PipelineOwner::mark_needs_layout)
     /// propagation at the leaf and breaking parents-depend-on-child-size
     /// flows. The conservative `true` default makes boundary-ness depend on
-    /// the remaining three signals: tight constraints (always a boundary in
-    /// Flutter — parent is forcing a single valid size), root (no parent),
+    /// the remaining three signals: tight constraints (always a boundary —
+    /// the parent is forcing a single valid size), root (no parent),
     /// or `sized_by_parent` (constraints alone determine size). Non-tight
     /// non-root non-sized-by-parent nodes correctly default to non-boundary,
     /// preserving propagation.
     ///
-    /// `sized_by_parent = false`: full Flutter parity for both parameters
-    /// requires per-render-object trait methods that report their layout
-    /// dependency shape; deferred to Core.2 alongside the intrinsic-
-    /// dimension protocol.
+    /// `sized_by_parent = false`: deriving both parameters exactly requires
+    /// per-render-object trait methods that report their layout dependency
+    /// shape; deferred to Core.2 alongside the intrinsic-dimension protocol.
     fn bootstrap_relayout_boundary(
         state: &crate::storage::RenderState<Self>,
         sized_by_parent: bool,
@@ -140,9 +138,8 @@ impl Protocol for BoxProtocol {
         state.compute_relayout_boundary(true, sized_by_parent, has_parent);
     }
 
-    /// Flutter's `debugAssertDoesMeetConstraints` (`box.dart`): a node's own
-    /// committed size must be finite and satisfy the constraints it was laid
-    /// out under. A render object that needs to overflow passes modified
+    /// A node's own committed size must be finite and satisfy the
+    /// constraints it was laid out under. A render object that needs to overflow passes modified
     /// constraints down to its children — its own size still stays in range,
     /// so this catches the silent-commit of an infinite or constraint-
     /// violating size at the source.
@@ -162,7 +159,7 @@ impl Protocol for BoxProtocol {
     }
 
     /// Runtime counterpart to [`Self::debug_assert_layout_output`] — surfaces
-    /// Flutter's `debugAssertDoesMeetConstraints` as
+    /// the same violation as
     /// [`RenderError::InvalidGeometry`](crate::error::RenderError::InvalidGeometry)
     /// so bad sizes fail the frame instead of committing silently.
     fn validate_layout_output(
@@ -370,9 +367,7 @@ pub type SliverLayoutChildCallback<'a> =
 /// the sliver→box intrinsic path — so no fresh `&mut RenderTree` is needed.
 ///
 /// The `extent` argument carries the cross-axis extent (height for width
-/// queries, width for height queries), matching Flutter's
-/// `getMinIntrinsicWidth(double height)` / `getMaxIntrinsicWidth(double height)`
-/// parameter convention.
+/// queries, width for height queries).
 ///
 /// Returns `0.0` when the callback cannot route the query (out-of-bounds index,
 /// error in child layout, or no callback wired on the Direct-storage path).
@@ -521,8 +516,8 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
     /// Creates a new box layout context with full access for synchronous child
     /// layout. Direct storage.
     ///
-    /// This constructor enables proper Flutter-style layout where parent's
-    /// `layout_child()` triggers synchronous child layout through the
+    /// This constructor enables synchronous child layout: a parent's
+    /// `layout_child()` lays the child out immediately through the
     /// RenderTree.
     pub fn with_layout_callback(
         constraints: BoxConstraints,
@@ -990,7 +985,7 @@ pub trait BoxLayoutCtxErased {
     ///
     /// `dimension` — which of the four intrinsic axes to query
     /// (`MinWidth`/`MaxWidth` pass a height extent; `MinHeight`/`MaxHeight`
-    /// pass a width extent — matching Flutter's `_IntrinsicDimension`).
+    /// pass a width extent).
     fn child_intrinsic(
         &mut self,
         _index: usize,
@@ -1600,8 +1595,7 @@ pub type HitTestChildCallback<'a> =
 /// chain on every hit-test entry. Hit testing is hot-path; a 30-deep
 /// tree paid 30 mat-mults per entry.
 ///
-/// The fix mirrors Flutter's `HitTestResult._localTransforms` cache:
-/// alongside the explicit `transform_stack`, the ctx maintains
+/// The fix is a cached composition: alongside the explicit `transform_stack`, the ctx maintains
 /// `composed_transform: Matrix4` updated incrementally on
 /// `push_transform` (one mat-mult) and recomputed on `pop_transform`
 /// (one full re-fold over the now-shorter stack). Per-call cost

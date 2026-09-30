@@ -33,7 +33,7 @@ Keep the image loaded until both its allocation and every retained plugin-backed
 payload have been destroyed, including payloads moved out or cloned from a
 scene. Destroying the allocation alone does not discharge this obligation.
 
-This follows Rust's ownership rules, rather than a Flutter lifecycle contract:
+This follows Rust's ownership rules:
 [`Box::from_raw`](https://doc.rust-lang.org/std/boxed/struct.Box.html#method.from_raw)
 requires the original allocation layout and compatible allocator;
 [`ptr::read`](https://doc.rust-lang.org/std/ptr/fn.read.html) moves ownership without

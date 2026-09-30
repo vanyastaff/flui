@@ -1,23 +1,12 @@
-//! RenderingFlutterBinding - Concrete implementation of RendererBinding.
+//! RenderingBinding - Concrete implementation of RendererBinding.
 //!
 //! This is the glue between the render trees and the FLUI engine.
 //! It manages multiple independent render trees, each rooted in a RenderView.
 //!
-//! # Flutter Equivalence
-//!
-//! Corresponds to Flutter's `RenderingFlutterBinding` class from
-//! `rendering/binding.dart`:
-//!
-//! ```dart
-//! class RenderingFlutterBinding extends BindingBase
-//!     with GestureBinding, SchedulerBinding, ServicesBinding,
-//!          SemanticsBinding, PaintingBinding, RendererBinding { }
-//! ```
-//!
 //! # Architecture
 //!
 //! ```text
-//! RenderingFlutterBinding
+//! RenderingBinding
 //!   ├── root_pipeline_owner   - Root of PipelineOwner tree
 //!   ├── render_views          - Map<ViewId, RenderView>
 //!   └── semantics enablement  - fan-out via add_semantics_enabled_listener;
@@ -30,7 +19,7 @@
 //!
 //! For most applications, use `UiRealm` instead ([`crate::ui_realm`]),
 //! which owns this binding plus widgets support per window. Use
-//! `RenderingFlutterBinding` directly only when working with the rendering
+//! `RenderingBinding` directly only when working with the rendering
 //! layer without widgets.
 
 use std::{
@@ -52,7 +41,7 @@ use parking_lot::RwLock;
 
 use flui_scheduler::{UpdateScheduler, WeakUpdateScheduler};
 
-/// A subscriber to [`RenderingFlutterBinding::set_semantics_enabled`] changes.
+/// A subscriber to [`RenderingBinding::set_semantics_enabled`] changes.
 ///
 /// Named alias for `Arc<dyn Fn(bool) + Send + Sync>` so the field and impl
 /// signatures below read as intent rather than nested generics (kills the
@@ -62,9 +51,9 @@ use flui_scheduler::{UpdateScheduler, WeakUpdateScheduler};
 /// trait without repeating the trait's own long-hand spelling here.
 type SemanticsEnabledListener = Arc<dyn Fn(bool) + Send + Sync>;
 
-/// Shared body for [`RenderingFlutterBinding::redirty_root_for_represent`]:
+/// Shared body for [`RenderingBinding::redirty_root_for_represent`]:
 /// operates on the bare [`PipelineCell`] (rather than requiring a full
-/// `RenderingFlutterBinding` reference) so a caller that only holds that
+/// `RenderingBinding` reference) so a caller that only holds that
 /// handle can reuse the identical logic instead of re-deriving it.
 pub(crate) fn redirty_pipeline_root(pipeline_owner: &PipelineCell) {
     let render_invalidation_handle = pipeline_owner.with(|root_owner| {
@@ -85,7 +74,7 @@ pub(crate) fn redirty_pipeline_root(pipeline_owner: &PipelineCell) {
 }
 
 // ============================================================================
-// RenderingFlutterBinding
+// RenderingBinding
 // ============================================================================
 
 /// Concrete binding for applications using the Rendering framework directly.
@@ -118,10 +107,10 @@ pub(crate) fn redirty_pipeline_root(pipeline_owner: &PipelineCell) {
 /// this binding cannot cross a thread boundary:
 ///
 /// ```compile_fail
-/// use flui_runtime::renderer_binding::RenderingFlutterBinding;
+/// use flui_runtime::renderer_binding::RenderingBinding;
 /// use flui_rendering::binding::RendererBinding;
 ///
-/// let binding = RenderingFlutterBinding::new();
+/// let binding = RenderingBinding::new();
 /// let pipeline = binding.root_pipeline_owner().clone();
 /// // error[E0277]: `Rc<RefCell<PipelineOwner>>` cannot be sent between
 /// // threads safely -- `PipelineCell` is `!Send` by construction, so this
@@ -131,7 +120,7 @@ pub(crate) fn redirty_pipeline_root(pipeline_owner: &PipelineCell) {
 ///     pipeline.with(|owner| owner.root_id());
 /// });
 /// ```
-pub struct RenderingFlutterBinding {
+pub struct RenderingBinding {
     /// Root of the PipelineOwner tree (shared with the owning `UiRealm`'s
     /// presentation).
     root_pipeline_owner: PipelineCell,
@@ -174,9 +163,9 @@ pub struct RenderingFlutterBinding {
     standalone_scheduler: Option<UpdateScheduler>,
 }
 
-impl std::fmt::Debug for RenderingFlutterBinding {
+impl std::fmt::Debug for RenderingBinding {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RenderingFlutterBinding")
+        f.debug_struct("RenderingBinding")
             .field("render_views_count", &self.render_views.read().len())
             .field(
                 "semantics_enabled",
@@ -190,13 +179,13 @@ impl std::fmt::Debug for RenderingFlutterBinding {
     }
 }
 
-impl Default for RenderingFlutterBinding {
+impl Default for RenderingBinding {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl RenderingFlutterBinding {
+impl RenderingBinding {
     /// Creates a new rendering binding with its own PipelineOwner and a
     /// fresh `UpdateScheduler` it owns for its own lifetime — test/standalone use
     /// only. Production always goes through
@@ -278,7 +267,7 @@ impl RenderingFlutterBinding {
         // Semantics enablement is per-presentation now (`SemanticsHost`,
         // `crate::semantics_host`) -- there is no process-wide semantics
         // binding for this method to touch.
-        tracing::info!("RenderingFlutterBinding initialized");
+        tracing::info!("RenderingBinding initialized");
     }
 
     // ========================================================================
@@ -298,50 +287,17 @@ impl RenderingFlutterBinding {
     // `crates/flui-runtime/src/ui_realm/`, which the production
     // `render_frame` path actually calls) forwards to this struct.
     //
-    // # Flutter Equivalence (oracle tag `3.44.0`)
+    // # First-frame gate
     //
-    // `packages/flutter/lib/src/rendering/binding.dart`,
-    // `RendererBinding`:
-    // ```dart
-    // int _firstFrameDeferredCount = 0;
-    // bool _firstFrameSent = false;
-    // bool get sendFramesToEngine =>
-    //     _firstFrameSent || _firstFrameDeferredCount == 0;
-    // void deferFirstFrame() {
-    //   assert(_firstFrameDeferredCount >= 0);
-    //   _firstFrameDeferredCount += 1;
-    // }
-    // void allowFirstFrame() {
-    //   assert(_firstFrameDeferredCount > 0);
-    //   _firstFrameDeferredCount -= 1;
-    //   if (!_firstFrameSent) {
-    //     scheduleWarmUpFrame();
-    //   }
-    // }
-    // ```
-    // and `drawFrame`'s gate:
-    // ```dart
-    // rootPipelineOwner.flushLayout();
-    // rootPipelineOwner.flushCompositingBits();
-    // rootPipelineOwner.flushPaint();
-    // if (sendFramesToEngine) {
-    //   for (final RenderView renderView in renderViews) {
-    //     renderView.compositeFrame();
-    //   }
-    //   rootPipelineOwner.flushSemantics();
-    //   _firstFrameSent = true;
-    // }
-    // ```
+    // `send_frames_to_engine` is `first_frame_sent || deferred_count == 0`.
     // Layout/compositing-bits/paint always run; only the composite-to-engine
-    // step (and Flutter's semantics flush alongside it) is gated. FLUI's
-    // production mirror of this split lives in `UiRealm::
+    // step is gated. The production split lives in `UiRealm::
     // render_frame` (`crates/flui-runtime/src/ui_realm/`): the
     // build/layout/paint pipeline always runs in `draw_frame_entered`, and
     // only the GPU `render_scene` (present) call is gated on
-    // `send_frames_to_engine`. FLUI's `run_frame` does not yet gate its own
-    // semantics phase behind this flag the way the oracle's `flushSemantics`
-    // does — a documented, narrower scope than the oracle's for this unit,
-    // not a silent gap.
+    // `send_frames_to_engine`. `run_frame` does not yet gate its own
+    // semantics phase behind this flag — a documented, narrower scope for
+    // this unit, not a silent gap.
     // ========================================================================
 
     /// Tell the framework to not send the first frames to the engine until
@@ -468,7 +424,7 @@ impl RenderingFlutterBinding {
     /// either way, matching the oracle's `drawFrame` split (see the module
     /// note above `defer_first_frame`).
     ///
-    /// This is a convenience for using `RenderingFlutterBinding` directly,
+    /// This is a convenience for using `RenderingBinding` directly,
     /// without `WidgetsBinding` (see the module doc). The production
     /// frame path (`UiRealm::render_frame_entered`) does **not** call
     /// this method — it drives the shared pipeline through
@@ -537,7 +493,7 @@ impl RenderingFlutterBinding {
 // RendererBinding Implementation
 // ============================================================================
 
-impl RendererBinding for RenderingFlutterBinding {
+impl RendererBinding for RenderingBinding {
     // ---- formerly PipelineManifold ----
 
     fn request_visual_update(&self) {
@@ -545,9 +501,8 @@ impl RendererBinding for RenderingFlutterBinding {
         // there is no frame left to schedule.
         //
         // Routes through the scheduler's gated pair (`ensure_visual_update`
-        // -> `schedule_frame_if_enabled`), matching Flutter's
-        // `ensureVisualUpdate` (`binding.dart` @ 3.44.0), which no-ops while
-        // frames are disabled instead of unconditionally requesting one.
+        // -> `schedule_frame_if_enabled`), which no-ops while frames are
+        // disabled instead of unconditionally requesting one.
         if let Some(scheduler) = self.scheduler.upgrade() {
             scheduler.ensure_visual_update();
         }
@@ -638,7 +593,7 @@ impl RendererBinding for RenderingFlutterBinding {
 mod tests {
     use super::*;
 
-    // `RenderingFlutterBinding` is no longer singleton-backed — each test
+    // `RenderingBinding` is no longer singleton-backed — each test
     // below constructs its own, independent instance instead of sharing a
     // process-wide one, so there is nothing left for a test lock to
     // serialize (the retired semantics-binding test lock guarded exactly
@@ -673,7 +628,7 @@ mod tests {
         // path instead, so it must keep its own scheduler alive the ordinary
         // way, via a local binding that outlives the statement).
         let scheduler = flui_scheduler::UpdateScheduler::new();
-        let binding = RenderingFlutterBinding::new_with_pipeline(owner, &scheduler);
+        let binding = RenderingBinding::new_with_pipeline(owner, &scheduler);
 
         // Deferred: the pipeline still runs (warm-up) but the output
         // is withheld.

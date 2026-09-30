@@ -27,10 +27,6 @@ use crate::constraints::BoxConstraints;
 /// [`PipelineOwner`](crate::pipeline::PipelineOwner) back-reference -- the
 /// owner reaches the tree through the regular insert path, not through the
 /// view.
-///
-/// # Flutter Equivalence
-///
-/// Corresponds to Flutter's `RenderView` class from `rendering/view.dart`.
 pub struct RenderView {
     /// The view configuration.
     configuration: Option<ViewConfiguration>,
@@ -135,10 +131,7 @@ impl RenderView {
     ///
     /// This is typically called by the binding when the view is registered.
     ///
-    /// # Flutter Protocol
-    ///
-    /// Mirrors `RenderView.configuration`'s setter (`.flutter/.../view.dart:173-186`):
-    /// the new configuration is installed *before* the root layer is
+    /// The new configuration is installed *before* the root layer is
     /// rebuilt, since rebuilding it reads the new configuration to compute
     /// the updated matrix.
     pub fn set_configuration(&mut self, configuration: ViewConfiguration) {
@@ -217,7 +210,7 @@ impl RenderView {
     // System UI
     // ========================================================================
 
-    /// Whether Flutter should automatically compute the desired system UI.
+    /// Whether the framework should automatically compute the desired system UI.
     pub fn automatic_system_ui_adjustment(&self) -> bool {
         self.automatic_system_ui_adjustment
     }
@@ -391,7 +384,7 @@ impl crate::protocol::RenderObject<crate::protocol::BoxProtocol> for RenderViewA
         // frame). The mount-time ViewConfiguration is a snapshot that
         // goes stale on the first resize; sizing from it left every
         // newly exposed pixel unpainted. The root fills whatever the
-        // window gives it (Flutter parity: tight root constraints), and
+        // window gives it (tight root constraints), and
         // children get that size as tight constraints at the origin.
         let typed_inner = crate::protocol::BoxLayoutCtx::<
             flui_foundation::Variable,

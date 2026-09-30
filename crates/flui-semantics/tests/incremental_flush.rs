@@ -1,8 +1,7 @@
 //! The incremental-publish contract of `SemanticsOwner::flush`.
 //!
-//! Flutter's `SemanticsOwner.sendSemanticsUpdate` serializes only dirty
-//! nodes into the platform update and returns immediately when nothing is
-//! dirty. FLUI rebuilds its semantics arena every assembly pass (flui-semantics ARCHITECTURE.md, semantics assembly),
+//! The flush serializes only changed nodes into the platform update and
+//! returns immediately when nothing is dirty. FLUI rebuilds its semantics arena every assembly pass (flui-semantics ARCHITECTURE.md, semantics assembly),
 //! so "dirty" alone cannot distinguish a real change from a rebuild that
 //! reproduced the same tree — the flush diffs per-node payloads, keyed by
 //! stable [`AccessibilityNodeId`], against the last delivered update. These

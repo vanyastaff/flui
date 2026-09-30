@@ -674,8 +674,7 @@ impl FrictionSimulation {
     /// This is how scrollables fling to a *specific* resting point (e.g. snapping
     /// to a page boundary): the drag is solved so the object arrives at
     /// `end_position` with `end_velocity`, and the tolerance is set so the
-    /// simulation reports done at that velocity. Mirrors Flutter's
-    /// `FrictionSimulation.through`.
+    /// simulation reports done at that velocity.
     ///
     /// # Panics
     /// Panics if the solved drag is not in `(0, 1)` — which happens only for
@@ -696,7 +695,7 @@ impl FrictionSimulation {
             "FrictionSimulation::through requires start_position != end_position: \
              zero travel distance has no finite drag solution"
         );
-        // drag = e^((vStart - vEnd) / (xStart - xEnd))  (Flutter's `_dragFor`).
+        // drag = e^((vStart - vEnd) / (xStart - xEnd)).
         let drag = std::f64::consts::E
             .powf((start_velocity - end_velocity) / (start_position - end_position));
         Self::with_tolerance(
@@ -808,7 +807,6 @@ impl Simulation for GravitySimulation {
 /// A spring tuned for scroll overscroll: identical to [`SpringSimulation`] but
 /// it never snaps to the end, so the spring's natural overshoot is visible —
 /// that is exactly the bounce a scrollable shows when dragged past its edge.
-/// Mirrors Flutter's `ScrollSpringSimulation`.
 #[derive(Debug, Clone)]
 pub struct ScrollSpringSimulation {
     spring: SpringSimulation,
@@ -842,7 +840,7 @@ impl Simulation for ScrollSpringSimulation {
 }
 
 /// Wraps another simulation, clamping its position to `[x_min, x_max]` and its
-/// velocity to `[dx_min, dx_max]`. Mirrors Flutter's `ClampedSimulation`.
+/// velocity to `[dx_min, dx_max]`.
 pub struct ClampedSimulation {
     inner: Box<dyn Simulation>,
     x_min: f64,
@@ -899,9 +897,8 @@ impl Simulation for ClampedSimulation {
 }
 
 /// A [`FrictionSimulation`] clamped to a position range, finishing when the
-/// friction settles *or* the object reaches a bound. Mirrors Flutter's
-/// `BoundedFrictionSimulation` — used by scrollables so a fling that overshoots
-/// the content extent stops cleanly at the edge.
+/// friction settles *or* the object reaches a bound. Used by scrollables so a fling that overshoots the
+/// content extent stops cleanly at the edge.
 #[derive(Debug, Clone)]
 pub struct BoundedFrictionSimulation {
     friction: FrictionSimulation,

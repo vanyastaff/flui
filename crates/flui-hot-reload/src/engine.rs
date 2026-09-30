@@ -1,8 +1,8 @@
-//! Flutter-parity hot reload engine — tiers, outcomes, and host/worker contract.
+//! Hot reload engine — tiers, outcomes, and host/worker contract.
 //!
-//! See `docs/designs/2026-06-28-flutter-parity-hot-reload.md` for the full plan.
+//! See `docs/designs/2026-06-28-hot-reload-runtime-protocol.md` for the full plan.
 
-/// How a code change is applied at runtime (Flutter vocabulary).
+/// How a code change is applied at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HotReloadTier {
     /// Re-run `build()` on the retained element tree; preserve `State`.

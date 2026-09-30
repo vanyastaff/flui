@@ -6,11 +6,11 @@
 //! dependency beyond [`std::future`] / [`std::task`]. Futures are polled on the
 //! **frame thread**, in the gap between a frame's transient callbacks
 //! (animation ticks) and its persistent callbacks (build → layout → paint) —
-//! Flutter's `SchedulerPhase.midFrameMicrotasks`.
+//! [`SchedulerPhase::MidFrameMicrotasks`](crate::SchedulerPhase::MidFrameMicrotasks).
 //!
-//! That is Flutter parity, not a compromise: a Dart `Future` completes on the UI
-//! isolate's event loop, and `FutureBuilder`'s callbacks run there. Polling on
-//! the frame thread reproduces it, and keeps an async runtime out of
+//! That is not a compromise: a future's completion callbacks (a future
+//! builder's, say) run on the UI thread, and polling on the frame thread
+//! gives exactly that, while keeping an async runtime out of
 //! `flui-view` / `flui-widgets` / `flui-app`.
 //!
 //! # Waking
@@ -77,7 +77,7 @@
 //! [`TaskToken`] cancels on drop: the future is removed from the driver and
 //! dropped, so it is never polled again and its destructors run. A `Waker` held
 //! by a cancelled task is inert — it sets a flag nobody reads and finds no task
-//! to poll. This is real cancellation, not Dart's "ignore the late callback".
+//! to poll. This is real cancellation, not "ignore the late callback".
 //!
 //! # What it never does
 //!
@@ -516,19 +516,17 @@ impl AsyncDriver {
     ///
     /// # Why this exists
     ///
-    /// Flutter's `_FutureBuilderState._subscribe` calls `future.then(...)`, and a
-    /// `SynchronousFuture` runs that callback **inline**, so an
-    /// already-complete future never shows `ConnectionState.waiting`
-    /// (`'gives expected snapshot with SynchronousFuture'`). The Rust analogue is
-    /// a future that is `Ready` on its first poll.
+    /// A future builder subscribes to its future in `init_state`; an
+    /// already-complete future must run its completion **inline** there, so it
+    /// never shows a `waiting` state. The Rust analogue is a future that is
+    /// `Ready` on its first poll.
     ///
     /// `spawn_local` cannot reproduce it: a subscription is created in
     /// `ViewState::init_state`, which runs inside `build_scope`, and the frame's
     /// driver step already ran *before* `build_scope`. The task would first be
     /// polled on the next frame, so the first build would show `Waiting`.
     ///
-    /// The inline poll runs user code during the build phase — exactly as Dart's
-    /// synchronous `.then` does. It does **not** go through
+    /// The inline poll runs user code during the build phase, deliberately. It does **not** go through
     /// [`UpdateScheduler::drive_async_tasks`](crate::UpdateScheduler::drive_async_tasks), and
     /// so does not trip that method's "never poll during persistent callbacks"
     /// guard: this is a single task polled at its own subscription point, not the

@@ -1,12 +1,8 @@
 //! Overflow box render objects — lay child out under modified or fixed constraints.
 //!
-//! # Flutter equivalence
-//!
-//! * [`RenderConstrainedOverflowBox`] → Flutter `RenderConstrainedOverflowBox`
-//!   (`shifted_box.dart`, lines 635–800).  Optional per-axis constraint overrides
+//! * [`RenderConstrainedOverflowBox`] — optional per-axis constraint overrides
 //!   let the child intentionally exceed the parent's available space.
-//! * [`RenderSizedOverflowBox`] → Flutter `RenderSizedOverflowBox`
-//!   (`shifted_box.dart`, lines 1043–1145).  Claims a fixed requested size for
+//! * [`RenderSizedOverflowBox`] — claims a fixed requested size for
 //!   itself while laying the child out under the incoming constraints; the child
 //!   may overflow.
 //!
@@ -32,8 +28,6 @@ use super::shifted_box::AligningShiftedBox;
 // ============================================================================
 
 /// Determines how `RenderConstrainedOverflowBox` computes its own size.
-///
-/// Flutter parity: `OverflowBoxFit` in `shifted_box.dart`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OverflowBoxFit {
     /// Size to the maximum extent allowed by the parent constraints (`constraints.biggest()`).
@@ -67,8 +61,6 @@ pub enum OverflowBoxFit {
 /// The `fit` knob controls how this object reports its own size back to its
 /// parent: `Max` (take all available space) or `DeferToChild` (shrink-wrap
 /// the child within constraints).
-///
-/// Flutter parity: `RenderConstrainedOverflowBox` in `shifted_box.dart`.
 #[derive(Debug, Clone)]
 pub struct RenderConstrainedOverflowBox {
     /// Per-axis constraint overrides (all optional).
@@ -118,9 +110,8 @@ impl RenderConstrainedOverflowBox {
 
     /// Replaces the child alignment.
     ///
-    /// Delegates to the inner shared alignment component's own setter, which
-    /// mirrors Flutter `RenderAligningShiftedBox`'s `alignment` setter
-    /// (`shifted_box.dart:339-345`) — a relayout-affecting change.
+    /// Delegates to the inner shared alignment component's own setter; an
+    /// alignment change is a relayout-affecting change.
     pub fn set_alignment(&mut self, alignment: Alignment) -> flui_rendering::RenderUpdateImpact {
         if self.inner.set_alignment(alignment) {
             flui_rendering::RenderUpdateImpact::LAYOUT
@@ -184,8 +175,8 @@ impl RenderConstrainedOverflowBox {
 
     /// Computes the constraints passed to the child.
     ///
-    /// Mirrors Flutter's `_getInnerConstraints`: replace each axis with the
-    /// corresponding override when `Some`, otherwise keep the parent's value.
+    /// Replaces each axis with the corresponding override when `Some`,
+    /// otherwise keeps the parent's value.
     fn inner_constraints(&self, constraints: BoxConstraints) -> BoxConstraints {
         BoxConstraints::new(
             self.min_width.unwrap_or(constraints.min_width),
@@ -252,7 +243,7 @@ impl RenderBox for RenderConstrainedOverflowBox {
 
     // ---- intrinsic dimensions -----------------------------------------------
     //
-    // Flutter parity: RenderShiftedBox delegates all four intrinsics to child.
+    // All four intrinsics delegate to the child.
     // No constraint override is applied — intrinsics are a property of the
     // child's content, independent of what constraints we pass during layout.
 
@@ -286,14 +277,9 @@ impl RenderBox for RenderConstrainedOverflowBox {
 
     /// Dry layout uses the SAME inner (override) constraints as `perform_layout`,
     /// so FLUI's dry size always equals its laid-out size (the dry==committed
-    /// invariant). This is an INTENTIONAL divergence from Flutter, whose
-    /// `RenderConstrainedOverflowBox` dry path passes the OUTER constraints
-    /// (`shifted_box.dart:737`) and therefore disagrees with its own
-    /// `performLayout` (which uses inner constraints) — a Flutter dry/layout
-    /// inconsistency FLUI deliberately does not replicate (Prime Directive
-    /// rule #2). Concretely, with override `maxW=50` under incoming `(0,200)`
-    /// and a child intrinsic of 100, FLUI dry = 50 (== its committed layout),
-    /// whereas Flutter dry = 100 (≠ its own committed layout).
+    /// invariant), so the two never diverge. Concretely, with override `maxW=50` under incoming
+    /// `(0,200)` and a child intrinsic of 100, dry = 50 (== the committed
+    /// layout), where passing the outer constraints would give 100.
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,
@@ -339,8 +325,6 @@ impl RenderBox for RenderConstrainedOverflowBox {
 /// but the *child* is allowed to be a different size.  Useful for sizing an
 /// indicator or placeholder while a larger or smaller piece of content renders
 /// behind it.
-///
-/// Flutter parity: `RenderSizedOverflowBox` in `shifted_box.dart`.
 #[derive(Debug, Clone)]
 pub struct RenderSizedOverflowBox {
     /// The size this box reports to its parent (`constraints.constrain(requested_size)`).
@@ -371,9 +355,8 @@ impl RenderSizedOverflowBox {
 
     /// Replaces the child alignment.
     ///
-    /// Delegates to the inner shared alignment component's own setter, which
-    /// mirrors Flutter `RenderAligningShiftedBox`'s `alignment` setter
-    /// (`shifted_box.dart:339-345`) — a relayout-affecting change.
+    /// Delegates to the inner shared alignment component's own setter; an
+    /// alignment change is a relayout-affecting change.
     pub fn set_alignment(&mut self, alignment: Alignment) -> flui_rendering::RenderUpdateImpact {
         if self.inner.set_alignment(alignment) {
             flui_rendering::RenderUpdateImpact::LAYOUT
@@ -429,9 +412,8 @@ impl RenderBox for RenderSizedOverflowBox {
 
     // ---- intrinsic dimensions -----------------------------------------------
     //
-    // Flutter parity: RenderSizedOverflowBox OVERRIDES all four intrinsics to
-    // report its `requested_size` (the size it claims for itself), regardless of
-    // the child — `shifted_box.dart` RenderSizedOverflowBox.computeMin/MaxIntrinsic*.
+    // All four intrinsics report `requested_size` (the size this box claims
+    // for itself), regardless of the child.
     // (The child is laid out under the incoming constraints and may overflow, so
     // the child's intrinsics do not describe this box's size.)
 

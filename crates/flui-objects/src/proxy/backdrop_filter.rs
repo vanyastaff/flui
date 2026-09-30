@@ -1,27 +1,17 @@
 //! `RenderBackdropFilter` — filters whatever was already painted behind a
 //! single child before painting that child on top.
 //!
-//! # Flutter equivalence
+//! # Scope
 //!
-//! Behavior-faithful port of Flutter's
-//! [`RenderBackdropFilter`](https://api.flutter.dev/flutter/rendering/RenderBackdropFilter-class.html)
-//! (`packages/flutter/lib/src/rendering/proxy_box.dart:1201-1364`), scoped
-//! to the classic, still-stable surface: `filter: ImageFilter`,
-//! `blend_mode: BlendMode`, `enabled: bool`.
-//!
-//! # Scope decision — not transcribed verbatim
-//!
-//! Current `.flutter/` master has grown a `filterConfig: ImageFilterConfig`
-//! (a layout-aware filter blueprint with bounded-blur/tile-mode/compose
-//! support) plus a `backdropKey: BackdropKey?` for `BackdropGroup`-shared
-//! backdrop sampling. Neither has any FLUI-side backing today —
+//! The surface is `filter: ImageFilter`, `blend_mode: BlendMode`,
+//! `enabled: bool`. A layout-aware filter blueprint (bounded-blur/tile-mode/
+//! compose support) and a shared backdrop key for grouped backdrop sampling
+//! have no FLUI-side backing today —
 //! `flui_painting::paint::ImageFilter` has no bounded/tile-mode blur
 //! variant, and `flui-layer`'s `BackdropFilterLayer` has no
 //! `backdrop_key` field at all. Adding either speculatively would be dead
-//! plumbing with zero consumers. This port targets the classic
-//! `filter`/`blendMode`/`enabled` surface (the deprecated oracle `filter`
-//! getter/setter this already IS, modulo naming) and documents the
-//! newer surface as deferred — see the design research doc,
+//! plumbing with zero consumers, so they are deferred — see the design
+//! research doc,
 //! `docs/research/2026-07-01-render-backdrop-filter-shader-mask-plan.md`,
 //! §1.3 and §6.
 //!
@@ -37,8 +27,8 @@
 //! `ImageFilter::Blur`; every other `ImageFilter` variant (`Dilate`,
 //! `Erode`, `Matrix`, `ColorAdjust`, `Compose`) currently degrades to
 //! "children only, no backdrop effect" with a `tracing::warn!`. The
-//! `filter` field here accepts any `ImageFilter` variant — this port
-//! does not claim full-variant GPU coverage, only that the render-object
+//! `filter` field here accepts any `ImageFilter` variant — this does
+//! not claim full-variant GPU coverage, only that the render-object
 //! and `LayerTree` wiring is variant-agnostic and correct.
 
 use flui_foundation::Single;
@@ -53,8 +43,7 @@ use flui_rendering::{
 
 /// A render object that filters the backdrop behind its child.
 ///
-/// Two **independent** gates control `paint` (oracle
-/// `proxy_box.dart:1328-1353`; see [`RenderBox::paint`] below):
+/// Two **independent** gates control `paint` (see [`RenderBox::paint`] below):
 /// `enabled = false` bypasses the filter machinery entirely and paints
 /// the child unfiltered (or nothing, if there is no child); `enabled =
 /// true` with no child paints nothing at all. Collapsing these into one
@@ -65,12 +54,10 @@ pub struct RenderBackdropFilter {
     /// The image filter applied to the backdrop.
     filter: ImageFilter,
     /// Blend mode used when compositing the filtered backdrop with the
-    /// child painted on top. Default `BlendMode::SrcOver` — oracle
-    /// `proxy_box.dart:1212`, **not** `Modulate` (contrast
-    /// [`super::shader_mask::RenderShaderMask`]'s default).
+    /// child painted on top. Default `BlendMode::SrcOver`, **not** `Modulate`
+    /// (contrast [`super::shader_mask::RenderShaderMask`]'s default).
     blend_mode: BlendMode,
-    /// Gate 1 — bypasses the filter entirely when `false`. Default `true`
-    /// (oracle `:1213`).
+    /// Gate 1 — bypasses the filter entirely when `false`. Default `true`.
     enabled: bool,
     /// Whether a child is attached (tracked for hit testing / paint /
     /// `always_needs_compositing`, mirroring `RenderClip`'s `has_child`).
@@ -79,7 +66,7 @@ pub struct RenderBackdropFilter {
 
 impl RenderBackdropFilter {
     /// Creates a backdrop filter with the given `filter`, `enabled =
-    /// true`, and the oracle's default blend mode (`BlendMode::SrcOver`).
+    /// true`, and the default blend mode (`BlendMode::SrcOver`).
     pub fn new(filter: ImageFilter) -> Self {
         Self {
             filter,
@@ -122,7 +109,7 @@ impl RenderBackdropFilter {
     }
 
     /// Replaces the image filter and returns the exact pipeline impact.
-    /// Paint-only — Flutter parity: `markNeedsPaint()`, never a relayout.
+    /// Paint-only — never a relayout.
     pub fn set_filter(&mut self, filter: ImageFilter) -> flui_rendering::RenderUpdateImpact {
         if self.filter == filter {
             return flui_rendering::RenderUpdateImpact::NONE;
@@ -166,8 +153,8 @@ impl RenderBox for RenderBackdropFilter {
 
     flui_rendering::forward_single_child_box_queries!();
 
-    // Oracle `:1325-1326` — `alwaysNeedsCompositing => child != null`,
-    // data-dependent (not an unconditional `true`). This trait default
+    // Compositing is needed iff there is a child: data-dependent (not an
+    // unconditional `true`). This trait default
     // (`false`) is live, consumed infrastructure in this pipeline (see
     // design research plan §2.7), so the override matters.
     fn always_needs_compositing(&self) -> bool {
@@ -175,7 +162,7 @@ impl RenderBox for RenderBackdropFilter {
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
-        // Gate 1 (oracle `:1330-1333`) — bypasses the filter machinery
+        // Gate 1 — bypasses the filter machinery
         // ENTIRELY, independent of gate 2 below. A child, if present,
         // still paints unfiltered; `paint_child()` is itself a no-op
         // when there is no child.
@@ -183,7 +170,7 @@ impl RenderBox for RenderBackdropFilter {
             ctx.paint_child();
             return;
         }
-        // Gate 2 (oracle `:1350-1352`) — only reachable when enabled.
+        // Gate 2 — only reachable when enabled.
         // No child means nothing at all is painted (not even a filtered,
         // childless backdrop).
         if ctx.child_count() == 0 {
@@ -201,9 +188,8 @@ impl RenderBox for RenderBackdropFilter {
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
         // RenderBox's trait default is LEAF-shaped (bounds check only,
         // no child recursion) — RenderBackdropFilter MUST override to
-        // forward, mirroring oracle's `RenderProxyBoxMixin.hitTestChildren`
-        // (`:127`). No shape gate: the filter is purely visual, oracle
-        // imposes no hit-test restriction beyond the child's own bounds.
+        // forward. No shape gate: the filter is purely visual, so there is
+        // no hit-test restriction beyond the child's own bounds.
         if !ctx.is_within_own_size() {
             return false;
         }

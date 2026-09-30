@@ -10,7 +10,7 @@
 //! is removed: after unwrapping any `BoxedView` (below), a genuine
 //! concrete-type mismatch returns `false`, the caller (`Phase 2
 //! reconciler`) replaces the element, and no silent stale state
-//! remains in the tree (Flutter-correct).
+//! remains in the tree.
 //!
 //! ## `BoxedView` unwrap, then `as_any().type_id()`
 //!
@@ -33,8 +33,7 @@
 //! `impl<T: 'static + ?Sized> Any for T` reads the discriminant
 //! from the vtable) against `TypeId::of::<V>()`. On match the inner
 //! is cloned and `Box::downcast::<V>` succeeds (so the element
-//! updates in place — consistent with `can_update_by_id` and with
-//! Flutter's update-in-place); on a real mismatch it returns
+//! updates in place — consistent with `can_update_by_id`); on a real mismatch it returns
 //! `false` and the reconciler replaces the element. Without the
 //! unwrap a boxed rebuild was neither updated (TypeId saw
 //! `BoxedView`) nor replaced (`can_update` saw `Inner`) — a
@@ -110,8 +109,8 @@ where
     }
     if effective.as_any().type_id() != TypeId::of::<V>() {
         // Genuinely different concrete type → caller (`Phase 2 reconciler`)
-        // replaces the element. No tracing::warn — Flutter-correct
-        // "different type → new element" semantics.
+        // replaces the element. No tracing::warn — "different type → new
+        // element" is the normal reconciliation outcome.
         return false;
     }
 

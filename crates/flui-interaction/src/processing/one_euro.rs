@@ -15,8 +15,8 @@
 //!   strokes track with minimal lag.
 //!
 //! This is the standard smoothing filter for stylus/ink, AR/VR pointing, and
-//! cursor stabilization. Neither Flutter nor any Rust UI framework ships
-//! one in its input pipeline.
+//! cursor stabilization. It is not commonly part of a UI framework's input
+//! pipeline.
 //!
 //! # Tuning (from the paper)
 //!

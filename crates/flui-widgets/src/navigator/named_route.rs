@@ -2,18 +2,12 @@
 //! private registry that [`NavigatorHandle`]'s `*_named` entry points resolve
 //! through.
 //!
-//! # Flutter parity
+//! # Resolution path
 //!
-//! `.flutter/packages/flutter/lib/src/widgets/navigator.dart` at tag `3.44.0`,
-//! **by symbol** (this ADR's original line citations had all moved by the time
-//! its gate ran): `RouteFactory` (the `Route<dynamic>? Function(RouteSettings)`
-//! typedef), `Navigator.onGenerateRoute` / `Navigator.onUnknownRoute`, and
-//! `NavigatorState._routeNamed`, which builds the settings, calls the generator,
-//! and falls back to `onUnknownRoute`. The `routes: Map<String, WidgetBuilder>`
-//! table is not on `Navigator` at all — `WidgetsApp._onGenerateRoute`
-//! (`lib/src/widgets/app.dart`) folds `home`, `routes` and the user's
-//! `onGenerateRoute` into the single hook the navigator reads. FLUI folds the
-//! same three sources here, so one navigator has one resolution path.
+//! A named request builds its settings, calls the catch-all generator, and falls
+//! back to the unknown-route hook. The registered name table, the catch-all
+//! generator and the unknown-route fallback are all folded here into one
+//! resolution path per navigator.
 //!
 //! # What is erased, and what is not
 //!
@@ -33,33 +27,28 @@
 //!
 //! # Not implemented, and not claimed
 //!
-//! `Navigator.initialRoute` / `Navigator.defaultRouteName` /
-//! `Navigator.defaultGenerateInitialRoutes` — the initial-route back-stack
-//! synthesis. Deferred by decision (ADR-0024);
+//! The initial-route back-stack synthesis. Deferred by decision (ADR-0024);
 //! FLUI bootstraps with `NavigatorHandle::seed_initial` meanwhile.
 //!
 //! It is **not** a deep-link-only feature, though U3 originally said so:
-//! **any** initial name but `/` takes
-//! `Navigator.defaultGenerateInitialRoutes`' expansion branch, which seeds `/`
-//! first, so `initialRoute: "/settings"` is `["/", "/settings"]` — an ordinary
-//! `MaterialApp` setting, and a two-deep stack whose back button returns home.
-//! A one-deep stack would make back exit the app. The correction is recorded in
-//! ADR-0024
+//! **any** initial name but `/` takes an expansion branch that seeds `/`
+//! first, so an initial route of `"/settings"` is `["/", "/settings"]` — an
+//! ordinary app-shell setting, and a two-deep stack whose back button returns
+//! home. A one-deep stack would make back exit the app. The correction is
+//! recorded in ADR-0024
 //!
 //! What the gap owes when it is built:
 //!
 //! - build the prefix chain for the requested name, seeding `/` first;
-//! - filter out segments the registry does not resolve (Flutter's
-//!   `result.removeWhere`), so an unmatched *middle* segment is a gap, not a
-//!   failure;
+//! - filter out segments the registry does not resolve, so an unmatched *middle*
+//!   segment is a gap, not a failure;
 //! - treat an unmatched **final** segment as an error: dispose every route
 //!   generated for the attempt, and seed `/` alone;
-//! - carry the two upstream cases that pin those last two apart —
-//!   `'Initial route can have gaps'` and
-//!   `'The full initial route has to be matched'`.
+//! - carry the two cases that pin those last two apart — an initial route can
+//!   have gaps, and the full initial route has to be matched.
 //!
-//! Also absent: `restorablePushNamed` (restoration is unbuilt) and
-//! `replaceNamed` (`replace` itself is private).
+//! Also absent: restorable named pushes (restoration is unbuilt) and
+//! `replace_named` (`replace` itself is private).
 
 use std::any::{Any, TypeId, type_name};
 use std::collections::HashMap;
@@ -80,8 +69,8 @@ use super::route::{AnyResult, Route, RouteArguments, RouteId, RouteSettings};
 /// Builds the route a [`RouteRequest`] resolves to, or `None` to pass the
 /// request on to the next resolution stage.
 ///
-/// Flutter's `RouteFactory` typedef, plus the navigator — see [`RouteRequest`]
-/// for why. `Rc`, not `Arc`: a route owns owner-local view builders
+/// See [`RouteRequest`] for why the factory is not handed the navigator.
+/// `Rc`, not `Arc`: a route owns owner-local view builders
 /// ([`RouteContentBuilder`](super::overlay_route::RouteContentBuilder) is
 /// already `Rc`), and [`NavigatorHandle`] is `!Send + !Sync` by construction, so
 /// a `Send + Sync` bound here would be unsatisfiable by the very routes the
@@ -113,8 +102,8 @@ pub(crate) type RouteFactory = Rc<dyn Fn(&RouteRequest<'_>) -> Option<GeneratedR
 ///   *reason* to capture a handle — a captured handle closes an `Arc` cycle
 ///   through the registry — but a route's content never needed one either:
 ///   [`RouteContentBuilder`](super::overlay_route::RouteContentBuilder) receives
-///   a `&dyn BuildContext` and `NavigatorHandle::maybe_of(ctx)` resolves from it,
-///   exactly as Flutter's `Navigator.of(context)` does. With no need to capture,
+///   a `&dyn BuildContext` and `NavigatorHandle::maybe_of(ctx)` resolves from it.
+///   With no need to capture,
 ///   there was no cycle to avoid, and the accessor's only remaining use was
 ///   navigating *during resolution*.
 /// - It had zero production call sites, and every test call site existed to
@@ -143,12 +132,11 @@ pub struct RouteRequest<'a> {
 impl<'a> RouteRequest<'a> {
     /// The request, as a whole.
     ///
-    /// Flutter's factories hand this straight to the route
-    /// (`MaterialPageRoute(settings: settings)`); **FLUI's route builders take
-    /// no settings**, so the analogous relay does not exist here. Read what you
-    /// need — [`name`](Self::name), [`argument`](Self::argument) — and move it
-    /// into the route's content builder, which is strictly better than Dart's
-    /// ambient read-back. The gap and the one change that would make it wrong
+    /// **FLUI's route builders take no settings**, so there is no relay handing
+    /// this straight to the route.
+    /// Read what you need — [`name`](Self::name), [`argument`](Self::argument) —
+    /// and move it into the route's content builder, which is strictly better than
+    /// an ambient read-back. The gap and the one change that would make it wrong
     /// are recorded in `ARCHITECTURE.md`'s `## Mapping decisions`.
     #[must_use]
     pub fn settings(&self) -> &'a RouteSettings {
@@ -227,9 +215,7 @@ trait ErasedPush {
     ///
     /// [`Route::dispose`] is an explicit method here, not `Drop` — so a
     /// generated route that is refused (wrong `T`) or simply dropped would
-    /// otherwise never run it. Flutter has the same obligation and discharges it
-    /// the same way: `Navigator.defaultGenerateInitialRoutes`' failure branch
-    /// walks its partial result calling `route?.dispose()`.
+    /// otherwise never run it.
     fn dispose_unpushed(self: Box<Self>);
 
     /// Whether the route is a pageless popup — the one kind a `Router`'s
@@ -310,9 +296,6 @@ pub struct GeneratedRoute {
 /// assumes a never-installed route gets disposed. Two routine paths end here:
 /// [`NavigatorHandle::push_named_typed`] refusing a mismatched `T`, and a
 /// factory that builds a route and then decides to answer `None` after all.
-/// Flutter carries the same obligation —
-/// `Navigator.defaultGenerateInitialRoutes`' failure branch disposes every route
-/// it had generated.
 impl Drop for GeneratedRoute {
     fn drop(&mut self) {
         if let Some(unpushed) = self.push.take() {
@@ -376,8 +359,8 @@ impl GeneratedRoute {
     ///
     /// This is the whole content of ADR-0024's "with nothing pushed": the
     /// comparison happens against a `TypeId` captured at construction, so a
-    /// mismatched `T` is refused while the stack is still untouched. Flutter
-    /// re-types through an unchecked `as Route<T?>?` and never notices.
+    /// mismatched `T` is refused while the stack is still untouched, rather than
+    /// re-typed through an unchecked cast.
     ///
     /// For the **keyed** path its remit is now narrow, and deliberately so. Two
     /// registration sites disagreeing about one name are caught earlier, at the
@@ -445,8 +428,8 @@ impl<T: Send + 'static> TypedPush<T> {
 
 /// A route name that remembers what its route delivers.
 ///
-/// The string path (`route` / `push_named` / `push_named_typed`) is Flutter's,
-/// and it loses the result type at the registration boundary: nothing connects
+/// The string path (`route` / `push_named` / `push_named_typed`) loses the
+/// result type at the registration boundary: nothing connects
 /// `"/details"` to the `PageRoute<Order>` behind it, so
 /// [`push_named_typed`](NavigatorHandle::push_named_typed) has to check at
 /// runtime and can answer [`NamedRouteError::ResultType`]. A `RouteKey<T>`
@@ -673,16 +656,14 @@ impl<T> From<RouteKey<T>> for KeyedSettings<T> {
 ///
 /// Both variants are *caller* errors — a route name is input, not a framework
 /// invariant — which is why [`PANIC-POLICY`](../../../../../docs/PANIC-POLICY.md)
-/// puts them on the `Result` side. Flutter throws for the first and never
-/// detects the second.
+/// puts them on the `Result` side.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum NamedRouteError {
     /// No registered factory answered the request: the table had no entry, and
     /// neither [`on_generate_route`](NavigatorHandle::on_generate_route) nor
     /// [`on_unknown_route`](NavigatorHandle::on_unknown_route) produced a route
-    /// (or neither was registered). Flutter's
-    /// `'Navigator.onGenerateRoute returned null'` assertion.
+    /// (or neither was registered).
     #[error("no route was generated for the name {name:?}")]
     Unresolved {
         /// The requested name, or `""` when the request carried none.
@@ -784,7 +765,7 @@ impl RouteRegistry {
         // drops the displaced `Rc<dyn Fn …>`, and that closure is user code
         // whose captured state may run arbitrary `Drop` — including a call back
         // into this registry, which `parking_lot::Mutex` would deadlock on.
-        // There is no compile-time oracle for that: dropping it under the guard
+        // Nothing at compile time catches that: dropping it under the guard
         // compiles clean and hangs. Every path here that displaces or discards a
         // registration follows the same rule (`register_generator`,
         // `register_unknown_fallback`, `clear`), pinned by
@@ -859,7 +840,7 @@ impl RouteRegistry {
         drop(dropped);
     }
 
-    /// Install the catch-all generator — Flutter's `Navigator.onGenerateRoute`.
+    /// Install the catch-all generator.
     pub(super) fn register_generator(&self, factory: RouteFactory) {
         // The displaced hook is released *outside* the guard — see
         // [`register_named`](Self::register_named) for why a user closure must
@@ -869,7 +850,7 @@ impl RouteRegistry {
         drop(displaced);
     }
 
-    /// Install the last-resort fallback — Flutter's `Navigator.onUnknownRoute`.
+    /// Install the last-resort fallback.
     pub(super) fn register_unknown_fallback(&self, factory: RouteFactory) {
         // Same guard discipline as [`register_generator`](Self::register_generator).
         let displaced = { self.registrations.lock().unknown.replace(factory) };

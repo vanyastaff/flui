@@ -6,12 +6,6 @@
 //! unmount with same-frame state migration on remount (finalized at
 //! end-of-frame), and the lookup methods.
 //!
-//! Flutter parity:
-//! - `framework.dart:3148`  — `_globalKeyRegistry` (BuildOwner.globalKeyRegistry).
-//! - `framework.dart:4571`  — `_retakeInactiveElement` (pull keyed element back).
-//! - `framework.dart:4636`  — `deactivateChild` (push onto `_inactiveElements`).
-//! - `framework.dart:2099`  — `_InactiveElements` queue + finalization ordering.
-//!
 //! These tests are written TEST-FIRST: before this wiring lands,
 //! `current_element`/`current_state` return `None` and reconciliation
 //! creates fresh state on remount; the implementation below makes them
@@ -199,9 +193,8 @@ fn set_sentinel(
 /// after the first mount stay intact, proving the state was migrated,
 /// not recreated.
 ///
-/// Flutter parity: `framework.dart:4571` `_retakeInactiveElement` pulls
-/// the previously-keyed element out of `_inactiveElements` and re-mounts
-/// it under the new parent.
+/// The previously-keyed element is pulled out of the inactive queue and
+/// re-mounted under the new parent.
 #[serial_test::serial(global_key_registry)]
 pub(crate) fn global_key_state_migrates_to_new_parent_slot() {
     let (tree, owner) = fresh_tree();
@@ -232,8 +225,8 @@ pub(crate) fn global_key_state_migrates_to_new_parent_slot() {
     flui_view::test_only_set_global_key_registry(&tree, &owner);
     assert!(set_sentinel(&tree, &key, 0xCAFE_BABE));
 
-    // Soft-remove from parent A — should push to inactive (Flutter
-    // `deactivateChild`), not slab-remove.
+    // Soft-remove from parent A — should push to inactive,
+    // not slab-remove.
     tree.write()
         .remove(original_id, &mut owner.write().element_owner_mut());
 
@@ -277,8 +270,8 @@ pub(crate) fn global_key_state_migrates_to_new_parent_slot() {
 // Duplicate GlobalKey — debug panic + release diagnostic
 // ============================================================================
 
-/// Two active elements cannot share the same `GlobalKey`. Flutter panics in
-/// debug; FLUI mirrors that with a debug panic before a duplicate child can
+/// Two active elements cannot share the same `GlobalKey`. A debug build
+/// panics before a duplicate child can
 /// enter the element tree.
 #[cfg(debug_assertions)]
 #[test]

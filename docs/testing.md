@@ -640,7 +640,7 @@ crates again.
 
 Two behaviours worth knowing before you write an assertion:
 
-- **Lazy children build after paint**, not during layout as Flutter does, so a
+- **Lazy children build after paint**, not during layout, so a
   triggering change (initial mount, a root swap, a scroll) needs two ticks to
   settle. Use `settle_lazy`.
 - **A contact's route is captured on its Down** and reused for that contact's

@@ -2,15 +2,14 @@
 //!
 //! A filled box that stands in for a subtree whose build panicked. In a debug
 //! build it is dark red and paints the caught message; in release it is a
-//! neutral grey box and the message reaches diagnostics only. Flutter parity:
-//! `RenderErrorBox` (`rendering/error.dart`) — same two background colours,
-//! same yellow monospace text in debug, message withheld in release.
+//! neutral grey box and the message reaches diagnostics only. The debug text is
+//! yellow monospace; in release the message is withheld.
 //!
 //! # Sizing
 //!
-//! Flutter's box asks for `100000 × 100000` and lets the constraints clamp
-//! it, which fills any bounded parent and explodes an unbounded one. FLUI
-//! fills a bounded axis the same way and falls back to a fixed extent on an
+//! Asking for a huge size and letting the constraints clamp it would fill any
+//! bounded parent and explode an unbounded one. Instead a bounded axis is
+//! filled and an unbounded axis falls back to a fixed extent on an
 //! unbounded axis ([`ERROR_BOX_FALLBACK_EXTENT`]): a panicking item inside a
 //! lazy list — whose main axis is unbounded — must occupy a visible, finite
 //! row, not the whole scroll extent.
@@ -32,11 +31,11 @@ use flui_rendering::{
 /// The extent the box takes on an axis its constraints leave unbounded.
 pub const ERROR_BOX_FALLBACK_EXTENT: f64 = 48.0;
 
-/// Debug background — Flutter's `RenderErrorBox.backgroundColor` in debug.
+/// Debug background.
 const DEBUG_BACKGROUND: Color = Color::from_argb(0xF090_0000);
-/// Release background — Flutter's `RenderErrorBox.backgroundColor` in release.
+/// Release background.
 const RELEASE_BACKGROUND: Color = Color::from_argb(0xF0C0_C0C0);
-/// Debug text colour — Flutter's `RenderErrorBox.textStyle`.
+/// Debug text colour.
 const DEBUG_TEXT: Color = Color::from_argb(0xFFFF_FF66);
 const DEBUG_FONT_SIZE: f64 = 14.0;
 
@@ -166,8 +165,7 @@ impl RenderBox for RenderErrorBox {
         ctx.canvas().draw_rect(rect, &Paint::fill(background));
         if cfg!(debug_assertions) {
             // The message is developer-facing and may name private state; it
-            // is painted in debug builds only, exactly as Flutter withholds
-            // the text from release `ErrorWidget`s.
+            // is painted in debug builds only.
             let style = TextStyle::new()
                 .with_color(DEBUG_TEXT)
                 .with_font_size(DEBUG_FONT_SIZE)

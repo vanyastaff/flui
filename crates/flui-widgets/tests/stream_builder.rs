@@ -3,14 +3,11 @@
 //! Driven through the real `flui_widgets::prelude` surface and a real
 //! `HeadlessBinding` frame — the path `UiRealm::draw_frame` takes.
 //!
-//! # Parity oracles
+//! # Scenarios
 //!
-//! `.flutter/packages/flutter/test/widgets/async_test.dart`
-//! (`'tracks events and errors of stream until completion'`,
-//! `'runs the builder using given initial data'`,
-//! `'ignores initialData when reconfiguring'`,
-//! `'gracefully handles transition to other stream'`,
-//! `'gracefully handles transition to null stream'`).
+//! Tracking events and errors of a stream until completion, the builder
+//! running with initial data, initial data being ignored on reconfigure, and
+//! transitions to another stream or to none.
 
 use std::collections::VecDeque;
 use std::pin::Pin;

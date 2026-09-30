@@ -66,11 +66,10 @@
 /// *all* typing after [`ImeEvent::Enabled`] would silently kill plain
 /// (non-IME) keyboard input for the rest of the session. [`ImeEvent::Disabled`]
 /// delivered mid-composition strips the in-progress composing slice from the
-/// buffer — winit's semantics, applied by the projection as an explicit edit,
-/// and a documented divergence from Flutter's
-/// `TextInputConnection.connectionClosed`, which instead *keeps* the
-/// uncommitted text. Detach-on-dispose is part of the same client contract
-/// (the bound-drop-cascade knot class this workspace has hit before with
+/// buffer — winit's semantics, applied by the projection as an explicit edit.
+/// Closing an input connection without stripping would instead *keep* the
+/// uncommitted text; FLUI deliberately does not. Detach-on-dispose is part
+/// of the same client contract (the bound-drop-cascade knot class this workspace has hit before with
 /// other owner-thread callback registries).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]

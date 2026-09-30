@@ -10,8 +10,7 @@
 //! Geometry and constraints previously used `OnceCell` for write-once
 //! semantics; the resulting panic-on-second-set crashed any re-layout.
 //! They are stored as `Option<T>` so re-layout overwrites unconditionally,
-//! mirroring Flutter `.flutter/.../object.dart:2865` `_size = size`
-//! straight assignment. `set_constraints`/`set_geometry`/`set_size`/
+//! as a straight assignment. `set_constraints`/`set_geometry`/`set_size`/
 //! `set_sliver_geometry` take `&mut self`; production callers
 //! (`RenderEntry::layout` and the RenderBox/RenderSliver helpers) already
 //! hold a mut state borrow.
@@ -19,7 +18,7 @@
 //! Production dirty marking does **not** live here. Authoritative render-object
 //! setters return `RenderUpdateImpact`; `flui-view` forwards that value to
 //! [`PipelineOwner::apply_render_update_impact`](crate::pipeline::PipelineOwner::apply_render_update_impact),
-//! whose layout branch performs the Flutter-style `markNeedsLayout` walk.
+//! whose layout branch performs the `mark_needs_layout` walk.
 //! The boundary-aware propagation methods that previously hung off
 //! `RenderState<P>` were removed as unreachable code; the
 //! `RenderDirtyPropagation` trait that was kept around as a "cost-cheap
@@ -39,7 +38,7 @@
 //! ```text
 //! RenderState<P>
 //!  ├── flags: AtomicRenderFlags (lock-free, &self mutation)
-//!  ├── geometry: Option<ProtocolGeometry<P>> (&mut self set/clear; Flutter parity)
+//!  ├── geometry: Option<ProtocolGeometry<P>> (&mut self set/clear)
 //!  ├── constraints: Option<ProtocolConstraints<P>> (&mut self set/clear)
 //!  └── offset: OffsetCell (lock-free atomic updates)
 //! ```
@@ -178,9 +177,7 @@ pub struct RenderState<P: Protocol> {
     ///
     /// Mutated each layout pass via [`set_geometry`](Self::set_geometry).
     /// Stored as `Option` rather than `OnceCell` — re-layout must be
-    /// idempotent (a second-write panic would crash frame 2's re-layout;
-    /// Flutter `_size` is straight-assigned each layout at
-    /// `.flutter/.../object.dart:2865`).
+    /// idempotent (a second-write panic would crash frame 2's re-layout).
     geometry: Option<ProtocolGeometry<P>>,
 
     /// Last constraints used for layout.
@@ -238,8 +235,7 @@ pub struct RenderState<P: Protocol> {
     /// outcome, since a node the parent stopped laying out has no place on
     /// screen to announce; the alternative is an assistive technology reading
     /// a row at coordinates nothing occupies. See `ARCHITECTURE.md`'s
-    /// `## Mapping decisions` entry for the reasoning and the Flutter
-    /// comparison.
+    /// `## Mapping decisions` entry for the reasoning.
     placed_generation: AtomicU64,
 
     /// The [`RenderId`](flui_foundation::RenderId) of the parent that issued
@@ -254,10 +250,10 @@ pub struct RenderState<P: Protocol> {
     /// It would then paint and hit-test at A's offset.
     placed_by: AtomicU64,
 
-    /// Per-node layout calculation cache (Flutter `_LayoutCacheStorage`):
+    /// Per-node layout calculation cache:
     /// memoized intrinsic dimensions / dry layout / dry baselines.
     /// Cleared by `mark_needs_layout`; a non-empty clear escalates the
-    /// invalidation past relayout boundaries (box.dart:2840).
+    /// invalidation past relayout boundaries.
     layout_cache: P::LayoutCache,
 
     /// Persistent parent data for this node, set by the parent during
@@ -424,8 +420,7 @@ impl<P: Protocol> RenderState<P> {
     ///
     /// `true` means an ancestor's layout consumed this node's
     /// intrinsics/baseline, so the caller must escalate the invalidation
-    /// to the parent even across a relayout boundary
-    /// (Flutter `RenderBox.markNeedsLayout`, box.dart:2840).
+    /// to the parent even across a relayout boundary.
     pub fn clear_layout_cache(&mut self) -> bool {
         self.layout_cache.clear()
     }

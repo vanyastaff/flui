@@ -2,12 +2,7 @@
 //! [`RenderFollowerLayer`](super::follower::RenderFollowerLayer) instances
 //! can position themselves relative to.
 //!
-//! # Flutter equivalence
-//!
-//! Behavior-faithful port of Flutter's
-//! [`RenderLeaderLayer`](https://api.flutter.dev/flutter/rendering/RenderLeaderLayer-class.html)
-//! (`packages/flutter/lib/src/rendering/proxy_box.dart:4475-4535`), backing
-//! `CompositedTransformTarget`.
+//! Backs `CompositedTransformTarget`.
 //!
 //! # Scope — Tier 1 of a two-tier plan
 //!
@@ -24,17 +19,16 @@
 //!
 //! Not a shared generic with
 //! [`RenderFollowerLayer`](super::follower::RenderFollowerLayer) — Leader has
-//! **zero** hit-test/`applyPaintTransform` override in oracle at all (relies
-//! entirely on inherited `RenderProxyBoxMixin` defaults), while Follower has
-//! a materially different, non-trivial custom `hitTest` override and three
-//! extra fields with no Leader analogue (plan §5).
+//! **no** hit-test or paint-transform override at all (it relies entirely on
+//! the plain proxy defaults), while Follower has a materially different,
+//! non-trivial hit-test path and three extra fields with no Leader analogue.
 //!
-//! # Divergence from the immediately-preceding ShaderMask/BackdropFilter pair
+//! # Difference from ShaderMask/BackdropFilter
 //!
-//! Oracle pushes the `LeaderLayer` and reports `alwaysNeedsCompositing`
-//! **unconditionally**, regardless of child presence (`:4498-4499`,
-//! `:4513-4528`) — unlike `RenderShaderMask`/`RenderBackdropFilter`, which
-//! gate both on `child != null`. A childless leader is a coordinate anchor,
+//! This object pushes the `LeaderLayer` and reports
+//! `always_needs_compositing` **unconditionally**, regardless of child
+//! presence — unlike `RenderShaderMask`/`RenderBackdropFilter`, which gate
+//! both on having a child. A childless leader is a coordinate anchor,
 //! not a visual effect, so it still needs its own compositor layer.
 
 use flui_foundation::Single;
@@ -52,7 +46,7 @@ use flui_rendering::{
 /// instances can anchor to it.
 ///
 /// Draws nothing of its own — see [`RenderBox::paint`] below. Zero or one
-/// child (a `RenderProxyBox`, oracle `:4477`).
+/// child.
 #[derive(Debug, Clone)]
 pub struct RenderLeaderLayer {
     link: LayerLink,
@@ -78,10 +72,8 @@ impl RenderLeaderLayer {
     }
 
     /// Replaces the layer link and returns the exact pipeline impact.
-    /// Paint-only — Flutter parity: `markNeedsPaint()`, never a relayout
-    /// (oracle `:4486-4496`; FLUI has no embedded-mutable-`LayerLink`
-    /// `leaderSize` field to migrate between links, so the swap is a
-    /// plain overwrite).
+    /// Paint-only, never a relayout (there is no per-link size field to
+    /// migrate between links, so the swap is a plain overwrite).
     pub fn set_link(&mut self, link: LayerLink) -> flui_rendering::RenderUpdateImpact {
         if self.link == link {
             return flui_rendering::RenderUpdateImpact::NONE;
@@ -93,7 +85,7 @@ impl RenderLeaderLayer {
 
 impl flui_foundation::Diagnosticable for RenderLeaderLayer {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
-        // Oracle surfaces `link` only (`:4531-4534`).
+        // Only `link` is surfaced.
         builder.add_enum("link", self.link);
     }
 }
@@ -106,7 +98,7 @@ impl RenderBox for RenderLeaderLayer {
 
     flui_rendering::forward_single_child_box_queries!();
 
-    // Oracle `:4498-4499` — UNCONDITIONAL, unlike ShaderMask/BackdropFilter's
+    // UNCONDITIONAL, unlike ShaderMask/BackdropFilter's
     // `self.has_child`-gated version: a leader with no child still needs
     // its own compositor layer (it's a coordinate anchor, not a visual
     // effect).
@@ -115,17 +107,14 @@ impl RenderBox for RenderLeaderLayer {
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
-        // Oracle `:4513-4528` — pushes the LeaderLayer regardless of
-        // child presence; `super.paint` (paints nothing when childless)
-        // runs inside the scope either way.
+        // Pushes the LeaderLayer regardless of child presence; the children
+        // paint (nothing, when childless) inside the scope either way.
         let size = ctx.size();
         ctx.with_leader(self.link, size, PaintCx::paint_children_in_order);
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        // No override at all in oracle — relies on `RenderProxyBoxMixin`
-        // defaults (plain forward, no shape gate beyond the child's own
-        // bounds, `:129-132`).
+        // Plain forward, no shape gate beyond the child's own bounds.
         if !ctx.is_within_own_size() {
             return false;
         }

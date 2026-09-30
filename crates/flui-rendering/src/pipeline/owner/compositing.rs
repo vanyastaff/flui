@@ -26,13 +26,8 @@ impl PipelineOwner<Compositing> {
 
     /// Updates compositing bits for all dirty render objects.
     ///
-    /// Port of Flutter's
-    /// `PipelineOwner.flushCompositingBits` + per-object
-    /// `RenderObject._updateCompositingBits`
-    /// (`.flutter/.../object.dart:3226-3258`). For each entry in
-    /// `dirty.needs_compositing` (sorted shallow-first to match
-    /// Flutter's `_nodesNeedingCompositingBitsUpdate.sort`), this
-    /// method recursively walks the subtree, recomputing
+    /// For each entry in `dirty.needs_compositing` (sorted shallow-first),
+    /// this method recursively walks the subtree, recomputing
     /// `NEEDS_COMPOSITING` bottom-up:
     ///
     /// 1. If a node does NOT have `NEEDS_COMPOSITING_BITS_UPDATE`
@@ -47,12 +42,12 @@ impl PipelineOwner<Compositing> {
     ///    - **Lost-boundary**: if the node previously was a repaint
     ///      boundary (`WAS_REPAINT_BOUNDARY`) but no longer is, clear
     ///      its accumulated paint state and re-enqueue for paint so
-    ///      a new boundary owner picks it up (Flutter object.dart:3246).
+    ///      a new boundary owner picks it up.
     ///    - **Compositing changed**: if `old_needs_compositing !=
     ///      new_needs_compositing`, mark dirty for paint so the
-    ///      compositor sees the new shape (Flutter object.dart:3252).
+    ///      compositor sees the new shape.
     ///    - **No change**: clear `NEEDS_COMPOSITING_BITS_UPDATE` and
-    ///      leave paint state untouched (Flutter object.dart:3255).
+    ///      leave paint state untouched.
     ///
     /// The walk is staged via a private `CompositingWalkActions`
     /// accumulator so that post-walk paint-queue mutations don't
@@ -71,8 +66,7 @@ impl PipelineOwner<Compositing> {
         )
         .entered();
 
-        // Sort shallow-first per Flutter
-        // `_nodesNeedingCompositingBitsUpdate.sort((a, b) => a.depth - b.depth)`.
+        // Sort shallow-first so a parent's walk covers its descendants.
         self.scheduler.sort_compositing_shallow_first();
 
         // Iterate the dirty list by shared reference: the recursion takes
@@ -174,7 +168,7 @@ impl PipelineOwner<Compositing> {
         let is_boundary = node.is_repaint_boundary_flag();
         let was_boundary = node.was_repaint_boundary();
 
-        // Flutter object.dart:3246 — lost-boundary status: drop the
+        // Lost-boundary status: drop the
         // accumulated paint state so a NEW boundary parent picks this
         // node up for paint. The id is removed from the dirty paint
         // queue (since the queued paint targeted us-as-a-boundary)
@@ -183,9 +177,8 @@ impl PipelineOwner<Compositing> {
         // boundary owner.
         if !is_boundary && was_boundary {
             node.clear_needs_paint();
-            // Flutter clears `_needsCompositedLayerUpdate` alongside
-            // `_needsPaint` here (`object.dart`, the lost-boundary branch):
-            // the node is about to be re-marked for a real repaint, which
+            // The pending composited-layer update is cleared alongside
+            // the paint flag here: the node is about to be re-marked for a real repaint, which
             // rebuilds its layers from current properties, so a pending
             // update on top of that is stale bookkeeping.
             node.clear_needs_composited_layer_update();
@@ -193,12 +186,12 @@ impl PipelineOwner<Compositing> {
             node.clear_needs_compositing_bits_update();
             actions.mark_needs_paint.push(id);
         } else if old_needs_compositing != new_needs_compositing {
-            // Flutter object.dart:3252 — compositing shape changed:
+            // Compositing shape changed:
             // mark paint dirty so the compositor sees the new shape.
             node.clear_needs_compositing_bits_update();
             actions.mark_needs_paint.push(id);
         } else {
-            // Flutter object.dart:3255 — no shape change: just clear
+            // No shape change: just clear
             // the bits-update flag.
             node.clear_needs_compositing_bits_update();
         }

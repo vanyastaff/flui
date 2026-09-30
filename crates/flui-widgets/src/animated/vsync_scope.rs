@@ -15,10 +15,8 @@ use flui_view::{BoxedView, InheritedView, impl_inherited_view};
 /// the binding's `pump_frame` advances all of them on the same virtual clock —
 /// deterministically, with no `thread::sleep`.
 ///
-/// Flutter parity: Flutter's `SchedulerBinding` owns every `Ticker` ambiently
-/// through `vsync: this`. FLUI is non-singleton, so the registry is handed down
-/// explicitly as inherited data — the analogue of that ambient binding, scoped
-/// to a subtree.
+/// FLUI is non-singleton, so there is no ambient ticker owner: the registry is
+/// handed down explicitly as inherited data, scoped to a subtree.
 ///
 /// An implicitly-animated widget with no `VsyncScope` above it still functions:
 /// its controller is created with its own scheduler-ticker (which drives it off

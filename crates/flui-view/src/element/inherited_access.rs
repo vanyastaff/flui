@@ -11,11 +11,6 @@
 //! a distinct concrete type at `V`-instantiation time. The bridge is a
 //! small object-safe trait that exposes the two operations
 //! `BuildContext` needs without leaking `V` into the trait surface.
-//!
-//! Flutter parity: `framework.dart:5081`
-//! `dependOnInheritedWidgetOfExactType<T>` resolves the ancestor via
-//! `_inheritedElements` lookup then invokes
-//! `inheritedElement.updateDependencies(self, null)` — same shape.
 
 use flui_foundation::ElementId;
 
@@ -41,8 +36,7 @@ pub trait InheritedElementAccess {
     /// Borrow the inherited view as `&dyn Any` so the caller can
     /// downcast to the concrete `V` (the `InheritedView` type).
     ///
-    /// This is the typed payload Flutter's `InheritedElement.widget`
-    /// returns to the dependent's `BuildContext`.
+    /// This is the typed payload handed to the dependent's `BuildContext`.
     fn view_as_any(&self) -> &dyn std::any::Any;
 
     /// How many elements currently depend on this inherited element.
@@ -118,8 +112,7 @@ pub trait InheritedElementAccess {
     ///
     /// The reverse ownership index supplies the exact provider ids, so
     /// lifecycle cleanup never scans the tree or waits for a later
-    /// notification to prune stale entries. This mirrors Flutter's
-    /// `InheritedElement.removeDependent`, invoked from `Element.deactivate`.
-    /// No-op when the id is not registered.
+    /// notification to prune stale entries. Invoked when the dependent
+    /// deactivates. No-op when the id is not registered.
     fn remove_dependent(&mut self, token: crate::context::CrateToken, dependent: ElementId);
 }

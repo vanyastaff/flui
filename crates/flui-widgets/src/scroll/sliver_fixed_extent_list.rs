@@ -14,30 +14,29 @@ use flui_view::{BuildContext, IntoView};
 /// each occupying the same `item_extent` — cheaper to lay out than measuring
 /// every child, the backbone of a fixed-row-height [`ListView`](crate::ListView).
 ///
-/// The children are handed to the element tree as a static delegate
-/// (Flutter's `SliverChildListDelegate`): only the ones inside the viewport's
+/// The children are handed to the element tree as a static delegate:
+/// only the ones inside the viewport's
 /// cache window are built, keyed children are found by their key when the
 /// list is reordered, and everything outside the window is evicted.
 ///
-/// Flutter parity: `widgets/sliver.dart` `SliverFixedExtentList` over
-/// `RenderSliverFixedExtentList`. Lives inside a [`Viewport`](crate::Viewport).
+/// Backed by `RenderSliverFixedExtentList`. Lives inside a
+/// [`Viewport`](crate::Viewport).
 #[derive(Clone, StatelessView)]
 pub struct SliverFixedExtentList {
     item_extent: f64,
     source: Source,
     /// How this sliver's children number themselves for a screen reader.
     /// `None` leaves the adaptor's default — every child a member, at its own
-    /// logical index — which is what the reference does when
-    /// `semanticIndexCallback` and `semanticIndexOffset` are left alone.
+    /// logical index.
     semantics: Option<SemanticSetMapping>,
 }
 
 /// Where the children come from.
 #[derive(Clone)]
 enum Source {
-    /// A fixed list, served lazily by index (Flutter's `SliverChildListDelegate`).
+    /// A fixed list, served lazily by index.
     Static(Rc<StaticChildren>),
-    /// Built on demand up to `item_count` (Flutter's `SliverChildBuilderDelegate`).
+    /// Built on demand up to `item_count`.
     Builder {
         item_count: usize,
         builder: Rc<dyn Fn(usize) -> Option<flui_view::BoxedView>>,
@@ -84,8 +83,7 @@ impl SliverFixedExtentList {
     }
 
     /// A fixed-extent list of up to `item_count` children built on demand;
-    /// the builder answers `None` at the end of the data (Flutter's
-    /// `SliverFixedExtentList.builder`). Pass `usize::MAX` for a count the
+    /// the builder answers `None` at the end of the data. Pass `usize::MAX` for a count the
     /// builder alone knows: the first `None` clamps it.
     ///
     /// # Panics

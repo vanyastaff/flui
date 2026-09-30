@@ -35,9 +35,6 @@ pub fn child_paint_offset(
 /// horizontal one.  The `cross_axis_offset` is already in the layout's chosen
 /// direction (forward or mirrored) because `SliverGridLayout::get_cross_axis_offset_of_child`
 /// applies the `reverse_cross_axis` flip before this function is called.
-///
-/// Flutter parity: `RenderSliverGrid.performLayout` position pass
-/// (`.flutter/flutter-master/packages/flutter/lib/src/rendering/sliver_grid.dart`).
 #[inline]
 pub fn grid_child_paint_offset(
     constraints: &SliverConstraints,

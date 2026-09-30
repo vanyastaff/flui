@@ -1,23 +1,14 @@
 //! [`Switch`] — a binary on/off M3 selection control.
 //!
-//! # Flutter parity
-//!
-//! `material/switch.dart`, `material/switch_theme.dart`, and
-//! `widgets/toggleable.dart`'s `ToggleableStateMixin`/`ToggleablePainter`
-//! (oracle tag `3.44.0`).
-//!
 //! # V1 scope: static states, no toggle/reaction animation, no drag
 //!
 //! Same shape as [`crate::Checkbox`]'s V1 scope, see that module's docs for
 //! the full rationale: no `positionController`-driven thumb slide (the
-//! thumb snaps straight to its settled `start`/`end` position — Flutter
-//! parity: `_SwitchPainter`'s `currentValue`-interpolated `thumbPosition`
-//! evaluated at its `t == 1.0` endpoint), no radial-splash reaction
+//! thumb snaps straight to its settled `start`/`end` position, the
+//! interpolated position's `t == 1.0` endpoint), no radial-splash reaction
 //! painting (substituted by [`InkWell`]'s single resolved-color overlay).
-//! Also **no drag-to-toggle**: the oracle wires
-//! `onHorizontalDragStart`/`onHorizontalDragUpdate`/`onHorizontalDragEnd`
-//! (`switch.dart` `:1076-1081`) so a swipe — not just a tap — flips the
-//! value; [`InkWell`] has no horizontal-drag hook (only `on_tap`), so this
+//! Also **no drag-to-toggle**: a full Material switch flips its value on a
+//! horizontal swipe, not just a tap; [`InkWell`] has no horizontal-drag hook (only `on_tap`), so this
 //! V1 is tap-only, matching [`crate::Checkbox`]'s own tap-only precedent.
 //!
 //! # Composition: same InkWell-sharing shape as `Checkbox`
@@ -25,8 +16,7 @@
 //! [`SwitchState`] owns one [`WidgetStatesController`] shared with the
 //! [`InkWell`] it builds — `InkWell` manages
 //! `Hovered`/`Focused`/`Pressed`/`Disabled`, `Switch` manages `Selected`
-//! (`if (value) WidgetState.selected`, `Switch` has no tristate `null` to
-//! special-case, unlike `Checkbox`).
+//! (`Switch` has no tristate `null` to special-case, unlike `Checkbox`).
 //!
 //! # Painting: track pill + thumb circle, both real `Canvas` shapes
 //!
@@ -36,21 +26,20 @@
 //! and the thumb as a filled circle ([`Canvas::draw_circle`]) at its
 //! settled `start`/`end` position.
 //!
-//! **Named deferral**: the oracle's M3 thumb radius differs when
+//! **Named deferral**: the M3 thumb radius differs when
 //! `disabled`/`selected` (`activeThumbRadius = 12.0`) vs. unselected
-//! (`inactiveThumbRadius = 8.0`) — both ported (see
+//! (`inactiveThumbRadius = 8.0`) — both implemented (see
 //! `switch_default_thumb_radius`) — but the ADDITIONAL press-grow
-//! (`pressedThumbRadius = 14.0`, only reachable via the
-//! `positionController`-driven `_thumbSize`/`Tween` chain `_SwitchPainter`
-//! interpolates through, `switch.dart` `:1210-1264`) is skipped: there is
+//! (`pressedThumbRadius = 14.0`, which the spec drives through an
+//! animated thumb-size interpolation) is skipped: there is
 //! no animated intermediate frame to grow into under V1's snap model,
 //! and applying it as a static "grows while `Pressed`" rule would itself be
-//! a display GUESS about the oracle's actual (motion-driven) shape, not a
-//! port of one — so `Pressed` does not affect radius here.
+//! a guess at a motion-driven shape — so `Pressed` does not affect radius
+//! here.
 //!
 //! # Overlay shape: the whole tap target, not a per-thumb circle
 //!
-//! Flutter's own `ToggleablePainter.paintRadialReaction` draws a free
+//! The M3 radial reaction is a free
 //! (unclipped) circle **centered on the thumb's current position**, sized
 //! by `splashRadius` (`20.0`). `InkWell`'s single-fill substitution (see
 //! [`crate::Checkbox`]'s module docs) has no per-position clip — it paints
@@ -58,7 +47,7 @@
 //! as [`MaterialShape::Stadium`] over the FULL tap target (the same
 //! substitution `Checkbox` makes, sized to the whole control rather than
 //! the thumb) — a named, position-independent approximation of the
-//! oracle's thumb-following splash.
+//! thumb-following splash.
 //!
 //! # Deferred (named, not silently dropped)
 //!
@@ -106,41 +95,34 @@ use crate::shape::MaterialShape;
 use crate::state_color::resolve_state_color;
 use crate::theme::Theme;
 
-/// The track's width. Flutter parity: `_SwitchConfigM3.trackWidth`/
-/// `switchWidth` (`switch.dart`, oracle tag `3.44.0`), both `52.0`.
+/// The track's width (M3: `52.0`).
 pub const SWITCH_TRACK_WIDTH: f64 = 52.0;
 
-/// The track's height. Flutter parity: `_SwitchConfigM3.trackHeight`
-/// (`32.0`).
+/// The track's height (M3: `32.0`).
 pub const SWITCH_TRACK_HEIGHT: f64 = 32.0;
 
 /// The M3 default horizontal padding added to the track to form the tap
-/// target, each side. Flutter parity: `_SwitchDefaultsM3.padding`,
-/// `EdgeInsets.symmetric(horizontal: 4)`.
+/// target, each side: `EdgeInsets.symmetric(horizontal: 4)`.
 const TAP_TARGET_HORIZONTAL_PADDING: f64 = 4.0;
 
 /// The tap target's width: the track plus the M3 default horizontal
 /// padding on both sides.
 pub const SWITCH_TAP_TARGET_WIDTH: f64 = SWITCH_TRACK_WIDTH + TAP_TARGET_HORIZONTAL_PADDING * 2.0;
 
-/// The tap target's height. Flutter parity: `_SwitchConfigM3.switchHeight`,
-/// `switchMinSize.height + 8.0` where `switchMinSize.height =
-/// kMinInteractiveDimension - 8.0` (i.e. `40.0 + 8.0`) — the
-/// `MaterialTapTargetSize.padded` branch `Switch._getSwitchSize` always
-/// takes in this V1 (no override yet, matching [`crate::Checkbox`]'s own
+/// The tap target's height: the minimum interactive dimension, `48.0`
+/// (`40.0 + 8.0`) — the `MaterialTapTargetSize.padded` branch this V1
+/// always takes (no override yet, matching [`crate::Checkbox`]'s own
 /// deferral).
 pub const SWITCH_TAP_TARGET_HEIGHT: f64 = 48.0;
 
 /// The thumb radius when selected (or thumb-iconed, which V1 doesn't
-/// paint). Flutter parity: `_SwitchConfigM3.activeThumbRadius`, `24.0 / 2`.
+/// paint): `24.0 / 2`.
 const ACTIVE_THUMB_RADIUS: f64 = 12.0;
 
-/// The thumb radius when unselected. Flutter parity:
-/// `_SwitchConfigM3.inactiveThumbRadius`, `16.0 / 2`.
+/// The thumb radius when unselected: `16.0 / 2`.
 const INACTIVE_THUMB_RADIUS: f64 = 8.0;
 
-/// The track border's stroke width. Flutter parity:
-/// `_SwitchDefaultsM3.trackOutlineWidth`, `2.0`.
+/// The track border's stroke width, `2.0`.
 const TRACK_OUTLINE_WIDTH: f64 = 2.0;
 
 // Compile-time geometry invariants — not runtime tests (every side is
@@ -192,8 +174,7 @@ impl Switch {
 
     /// Sets the change handler. Presence of a handler is what makes this
     /// switch interactive — `None` (the default) renders disabled and
-    /// swallows taps. On tap, fires with `!value`. Flutter parity:
-    /// `Switch.onChanged`.
+    /// swallows taps. On tap, fires with `!value`.
     #[must_use]
     pub fn on_changed<R: flui_sdk::view::EventOutcome>(
         mut self,
@@ -204,15 +185,13 @@ impl Switch {
     }
 
     /// Overrides the thumb color used when this switch is on (and enabled).
-    /// Flutter parity: `Switch.activeThumbColor`.
     #[must_use]
     pub fn active_thumb_color(mut self, color: Color) -> Self {
         self.active_thumb_color = Some(color);
         self
     }
 
-    /// Whether this switch responds to taps. Flutter parity:
-    /// `ToggleableStateMixin.isInteractive` (`onChanged != null`).
+    /// Whether this switch responds to taps (`on_changed` is set).
     fn is_interactive(&self) -> bool {
         self.on_changed.is_some()
     }
@@ -347,14 +326,13 @@ impl ViewState<Switch> for SwitchState {
 /// cascade, then alpha-blends the result over `colors.surface` — extracted
 /// as its own pure function (not left inline in `build`) specifically so
 /// both the tier-precedence order AND the surface-blend fix are
-/// unit-testable without mounting a widget tree. Flutter parity:
-/// `_MaterialSwitchState.build`'s `?? switchTheme.thumbColor?.resolve ??
-/// defaults.thumbColor.resolve` chain, `active_thumb_color` substituting
+/// unit-testable without mounting a widget tree. The cascade is
+/// `switchTheme.thumbColor?.resolve ?? defaults.thumbColor.resolve`,
+/// `active_thumb_color` substituting
 /// only when [`WidgetState::Selected`] AND NOT [`WidgetState::Disabled`]
 /// (same shape `crate::checkbox`'s own `resolve_checkbox_fill_color` uses
-/// for its `activeColor` gate), composed with `_SwitchPainter.paint`'s
-/// `Color.alphaBlend(lerpedThumbColor, surfaceColor)` (`switch.dart`
-/// `:1664-1667`) — the blend keeps a translucent thumb (e.g. the
+/// for its `activeColor` gate), composed with a
+/// `Color.alphaBlend(thumbColor, surfaceColor)` — the blend keeps a translucent thumb (e.g. the
 /// disabled+unselected `onSurface@38%` default tier) from letting the
 /// track paint underneath it show through.
 fn resolve_switch_thumb_color(
@@ -458,10 +436,8 @@ fn switch_default_overlay_color(colors: &ColorScheme, states: WidgetStates) -> O
 }
 
 /// The settled thumb radius for `states`: [`ACTIVE_THUMB_RADIUS`] when
-/// selected, [`INACTIVE_THUMB_RADIUS`] otherwise. Flutter parity:
-/// `_MaterialSwitchState.build`'s `effectiveActiveThumbRadius`/
-/// `effectiveInactiveThumbRadius` selection (`switch.dart` `:1064-1070`,
-/// the no-icon/no-image branch — V1 paints neither) — see the module docs'
+/// selected, [`INACTIVE_THUMB_RADIUS`] otherwise (the no-icon/no-image
+/// case — V1 paints neither) — see the module docs'
 /// "Named deferral" section for why `Pressed` does not grow this further.
 fn switch_default_thumb_radius(states: WidgetStates) -> f64 {
     if states.contains_state(WidgetState::Selected) {
@@ -472,11 +448,10 @@ fn switch_default_thumb_radius(states: WidgetStates) -> f64 {
 }
 
 /// Paints the switch's track (fill + border) and thumb, always at the
-/// fully-settled shape (see the module docs' V1-scope section). Flutter
-/// parity: `_SwitchPainter` (`switch.dart` `:1144-1281`), evaluated at
-/// `currentValue`'s settled endpoint throughout (no `position` interpolation)
-/// with no `ToggleablePainter.paintRadialReaction` call (the overlay comes
-/// from [`InkWell`] instead — see the module docs' "Overlay shape" section).
+/// fully-settled shape (see the module docs' V1-scope section), at the
+/// settled endpoint throughout (no `position` interpolation) with no
+/// radial-reaction paint (the overlay comes from [`InkWell`] instead — see
+/// the module docs' "Overlay shape" section).
 #[derive(Debug, Clone, PartialEq)]
 struct SwitchPainter {
     thumb_color: Color,
@@ -510,10 +485,9 @@ impl CustomPainter for SwitchPainter {
             );
         }
 
-        // Flutter parity: `trackInnerStart = trackHeight / 2.0`,
-        // `trackInnerEnd = trackWidth - trackInnerStart` (`switch.dart`
-        // `:841-842`) — the thumb's center travels between these two
-        // track-local x-coordinates; the settled (non-animated) position is
+        // `trackInnerStart = trackHeight / 2.0`,
+        // `trackInnerEnd = trackWidth - trackInnerStart` — the thumb's
+        // center travels between these two track-local x-coordinates; the settled (non-animated) position is
         // one endpoint or the other.
         let track_inner_start = SWITCH_TRACK_HEIGHT / 2.0;
         let track_inner_end = SWITCH_TRACK_WIDTH - track_inner_start;

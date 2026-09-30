@@ -659,7 +659,7 @@ ids! {
     plain: {
         /// View ID - index into the View tree.
         ///
-        /// Views are immutable configuration objects (like Flutter's Widgets).
+        /// Views are immutable configuration objects.
         /// They describe what the UI should look like but don't contain mutable state.
         pub type ViewId View;
 

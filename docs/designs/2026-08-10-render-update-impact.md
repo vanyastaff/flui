@@ -18,7 +18,7 @@ layout-and-paint invalidation with precise, composable update effects.
 
 1. Make `RenderView::update_render_object` report exactly which pipeline work
    its mutation requires.
-2. Preserve Flutter's setter-level decisions, including false
+2. Keep setter-level decisions, including false
    `should_relayout`/`should_repaint` results and independent semantics work.
 3. Apply the combined report once, after the mutable render-object borrow has
    ended.
@@ -237,7 +237,7 @@ pub fn apply_render_update_impact(
 All three methods return `()`. `apply_render_update_impact` is the canonical
 cross-crate applicator; no parallel applicator exists in `flui-view`.
 
-`mark_needs_compositing_bits_update` owns Flutter-compatible compositing
+`mark_needs_compositing_bits_update` owns compositing-bits
 propagation. Starting at `render_id`, it marks/walks the necessary ancestor
 chain and queues the responsible root. The former
 `add_node_needing_compositing_bits_update(render_id, depth)` raw operation was
@@ -247,10 +247,7 @@ Every owner-side compositing request, including replay of
 `DirtyKind::Compositing` in `drain_pending_dirty`, routes through the canonical
 method.
 
-The canonical behavior is exactly Flutter's
-`RenderObject.markNeedsCompositingBitsUpdate` at
-`packages/flutter/lib/src/rendering/object.dart:3209-3227`. Starting at the
-target node:
+The canonical behavior, starting at the target node:
 
 1. If its `NEEDS_COMPOSITING_BITS_UPDATE` flag is already set, return.
 2. Set that flag on the target.
@@ -567,8 +564,8 @@ that the setter may skip required ownership/lifecycle work.
 | Any setter | Effective value is unchanged | `NONE` |
 
 The broad family rows are classification rules, not permission to guess. Each
-setter is cross-checked against the corresponding Flutter setter before its
-impact is committed. When one field affects several independent phases, the
+setter is checked field by field against the phases it actually affects before
+its impact is committed. When one field affects several independent phases, the
 setter returns their union.
 
 ### Custom painter decisions are independent
@@ -600,16 +597,15 @@ schedule the compositing-bits walk merely because a layer exists.
 
 ### Clips are not one uniform category
 
-Flutter distinguishes changing *how* an existing clip is rendered from
-changing the clip geometry:
+Changing *how* an existing clip is rendered differs from changing the clip
+geometry:
 
 - `clip_behavior` changes paint output only for the ordinary `RenderClip*`
   objects, so they return `PAINT`;
 - border-radius, path-target, or delegate/clipper geometry changes alter the
   approximate semantics clip too, so they return `PAINT | SEMANTICS`;
 - `RenderFlow::clip_behavior` and fitted-box overflow clipping affect both
-  paint and semantics in their Flutter counterparts and therefore return the
-  union.
+  paint and semantics and therefore return the union.
 
 This distinction must remain visible in setter tests. A shared method name is
 not evidence that all owning render-object types have the same impact.
@@ -799,7 +795,7 @@ of the atomic ripple.
   geometry layout, and that identical `RawImage` configuration is `NONE`.
 - Assert unchanged values return `NONE` for every migrated setter family.
 - Assert real configuration changes still schedule every downstream phase
-  required by the corresponding Flutter setter.
+  required by that setter.
 
 ### Mutation evidence
 
@@ -862,8 +858,8 @@ typos
 ```
 
 The render/layout/lifecycle Definition of Done also requires checking the
-implemented setter mappings against the Flutter files named below. A green
-gate alone does not prove parity.
+implemented setter mappings against the checklist below. A green gate alone
+does not prove the impacts are right.
 
 ## Breaking-change and compatibility policy
 
@@ -903,22 +899,18 @@ owner, global capability, scheduling topology, or root-export family monitored
 by that registry. No `docs/workspace-layers.toml` change is needed: dependency
 directions are unchanged.
 
-## Flutter reference checklist
+## Setter checklist
 
-Reference checkout: `/mnt/data/dev/flutter`, commit
-`f2d640ef01561447051f582059295a68ca2046ae` (2026-08-09).
-
-| Behavior | Flutter source |
+| Behavior | Rule |
 |---|---|
-| Element invokes updater without blanket invalidation | `packages/flutter/lib/src/widgets/framework.dart`, `RenderObjectElement._performRebuild` |
-| Layout, paint, compositing, semantics dirty semantics | `packages/flutter/lib/src/rendering/object.dart` |
-| Independent painter paint/semantics decisions | `packages/flutter/lib/src/rendering/custom_paint.dart`, `_didUpdatePainter` |
-| Flow delegate precedence and clip effects | `packages/flutter/lib/src/rendering/flow.dart`, `delegate` and `clipBehavior` setters |
-| Grid delegate relayout decision | `packages/flutter/lib/src/rendering/sliver_grid.dart`, `gridDelegate` setter |
-| Custom clip source vs. clip behavior | `packages/flutter/lib/src/rendering/proxy_box.dart`, `_RenderCustomClip` |
-| Opacity/compositing transitions and proxy setters | `packages/flutter/lib/src/rendering/proxy_box.dart` |
+| Element invokes updater without blanket invalidation | The element never marks the node dirty itself; the returned impact is the only source |
+| Layout, paint, compositing, semantics dirty semantics | Each phase is requested independently |
+| Independent painter paint/semantics decisions | A painter change can require paint without semantics, and the reverse |
+| Flow delegate precedence and clip effects | Delegate changes and `clip_behavior` are classified separately |
+| Grid delegate relayout decision | A delegate that reports no relayout need returns no layout impact |
+| Custom clip source vs. clip behavior | Clip geometry returns `PAINT \| SEMANTICS`, clip behavior alone returns `PAINT` |
+| Opacity/compositing transitions and proxy setters | Compositing bits update only when the layer requirement changes |
 
-For every migrated setter not explicitly listed, locate and read its Flutter
-counterpart before assigning the impact. Record any intentional FLUI
-divergence in code documentation or an ADR rather than hiding it in a broader
-constant.
+For every migrated setter not explicitly listed, work out which phases its
+field feeds before assigning the impact, and keep the result visible in code
+documentation instead of hiding it in a broader constant.

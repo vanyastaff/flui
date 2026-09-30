@@ -82,8 +82,8 @@ pub trait GestureRecognizer: GestureArenaMember {
 /// - Initial position tracking
 /// - Disposal
 ///
-/// Renamed from `GestureRecognizerState` to free that name for the
-/// canonical Flutter `GestureRecognizerState` FSM enum (see below).
+/// Named `RecognizerBase` to free `GestureRecognizerState` for the
+/// recognizer FSM enum (see below).
 #[derive(Clone)]
 pub struct RecognizerBase {
     /// Gesture arena for conflict resolution
@@ -373,9 +373,7 @@ impl std::fmt::Debug for RecognizerBase {
     }
 }
 
-/// Canonical gesture recognizer FSM state, matching Flutter
-/// [`recognizer.dart:585`](https://github.com/flutter/flutter/blob/master/packages/flutter/lib/src/gestures/recognizer.dart)
-/// `GestureRecognizerState` enum.
+/// Canonical gesture recognizer FSM state.
 ///
 /// A recognizer cycles `Ready` → `Possible` → (`Ready` | `Defunct`) and stays
 /// in `Defunct` until all tracked pointers are removed, at which point it

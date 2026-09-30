@@ -10,8 +10,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// When the parent's height is already tight, that tight value propagates
 /// directly without querying the child.
 ///
-/// Flutter parity: `widgets/basic.dart` `IntrinsicHeight` over
-/// [`RenderIntrinsicHeight`].
+/// Backed by [`RenderIntrinsicHeight`].
 #[derive(Clone, Debug)]
 pub struct IntrinsicHeight {
     child: Child,

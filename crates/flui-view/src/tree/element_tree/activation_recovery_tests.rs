@@ -6,7 +6,8 @@ use flui_foundation::panic::payload_text;
 
 use super::*;
 use crate::view::{
-    FlutterError, clear_error_view_builder, isolate_error_view_builder_test, set_error_view_builder,
+    FrameworkError, clear_error_view_builder, isolate_error_view_builder_test,
+    set_error_view_builder,
 };
 
 struct ResetErrorViewBuilder;
@@ -17,7 +18,7 @@ impl Drop for ResetErrorViewBuilder {
     }
 }
 
-fn recovery_factory_panics(_error: &FlutterError) -> Box<dyn View> {
+fn recovery_factory_panics(_error: &FrameworkError) -> Box<dyn View> {
     panic!("activation recovery factory panic");
 }
 

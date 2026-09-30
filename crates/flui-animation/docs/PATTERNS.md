@@ -24,25 +24,6 @@ controller.reverse()?;
 controller.dispose();
 ```
 
-### Flutter Equivalent
-
-```dart
-class _State extends State<W> with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  
-  @override
-  void initState() {
-    _controller = AnimationController(duration: Duration(ms: 300), vsync: this);
-  }
-  
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-}
-```
-
 ### Benefits
 
 - Animations survive widget rebuilds

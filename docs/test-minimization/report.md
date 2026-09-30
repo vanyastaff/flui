@@ -101,9 +101,9 @@ unchanged, five copies of the same body removed).
 | Missed | 0 | 0 |
 
 **Not a candidate after review:** `BoxFit` in `painting/image.rs`. Phase 1 proposed folding its
-tests into one table; read closely, each test targets a different branch of Flutter's
-`applyBoxFit` (cover crops height vs width, fit-width/fit-height contain vs cover branch,
-`None` crop vs no crop, `ScaleDown`'s two-step shrink) and carries the parity note for it. A
+tests into one table; read closely, each test targets a different branch of the
+box-fit algorithm (cover crops height vs width, fit-width/fit-height contain vs cover branch,
+`None` crop vs no crop, `ScaleDown`'s two-step shrink) and carries its own note. A
 case table would hide which branch a regression broke.
 
 **`types_it`:** 415 → 406 tests, all passing.
@@ -114,7 +114,7 @@ From here on every slice follows the same loop: run `cargo mutants` over the sou
 the surviving mutants, replace example tests with properties, tables or oracle checks that kill
 them, delete what the new tests subsume, and rerun. Where a surviving mutant turned out to be a
 production bug rather than a missing assertion, the bug was fixed in its own commit with a test
-that fails without the fix. Flutter parity claims were checked against the 3.44.0 sources.
+that fails without the fix.
 
 ### Production bugs found and fixed
 
@@ -122,19 +122,19 @@ that fails without the fix. Flutter parity claims were checked against the 3.44.
 |---|---|
 | `62aea6d30` | SIMD `Color::lerp` truncated where the scalar path rounds |
 | `080827d0a` | `Color::blend` truncated on un-premultiply: `Src`/`Dst` were not identities (engine CPU image-filter path) |
-| `256244ce7` | `Color::blend_over` differed from Flutter's `alphaBlend`; SIMD and scalar disagreed by one |
+| `256244ce7` | `Color::blend_over` differed from the standard alpha-blend formula; SIMD and scalar disagreed by one |
 | `334f2dfc7` | `BoxConstraints::normalize` could return `max < min` |
 | `a678d8924` | `CircularNotchedRectangle`'s notch was drawn upside down |
 | `262d5417c` | `TextRange::overlaps` said an empty range overlapped |
 | `b860c549f` | `BorderRadius::horizontal` swapped the bottom corners |
-| `85209157c` | `BorderSide::lerp` darkened toward black and flipped style at 0.5 (Flutter fades) |
-| `673338ca5` | `Border::symmetric` put `vertical` on top/bottom, the reverse of Flutter |
+| `85209157c` | `BorderSide::lerp` darkened toward black and flipped style at 0.5 (it now fades) |
+| `673338ca5` | `Border::symmetric` put `vertical` on top/bottom, the reverse of what the name says |
 | `124e00aee` | `Paint::is_opaque` ignored the shader |
 | `59e392a26` | `BoxDecoration::lerp` faded one-sided fields in a V and ended wrong at `t = 1` |
 | `e1d415353` | HSL/HSV → `Color` truncated, so the roundtrip was not exact |
 | `7a241df41` | `FontWeight::from_css` mapped negative weights to `W900` |
 | `4a03e1264` | `Locale` tags dropped the script; Pashto was not RTL |
-| `a5f0fdef6` | Shadow/BoxShadow `lerp_list` faded unpaired shadows' colour (Flutter scales geometry) |
+| `a5f0fdef6` | Shadow/BoxShadow `lerp_list` faded unpaired shadows' colour (it now scales geometry) |
 | `20f23f914` | `ColorFilter::invert` used 255 offsets on normalized channels: every image turned white |
 | `5e15330bd` | `Color::approx_eq` rejected some one-unit differences (f32 subtraction of normalized channels) |
 

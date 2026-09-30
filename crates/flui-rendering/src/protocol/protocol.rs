@@ -86,8 +86,7 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
     ///
     /// For `BoxProtocol` this is the four-map
     /// [`BoxLayoutCache`](crate::storage::BoxLayoutCache) (intrinsic
-    /// dimensions, dry layout, dry baselines — Flutter's
-    /// `_LayoutCacheStorage`); the sliver protocol carries no cache yet
+    /// dimensions, dry layout, dry baselines); the sliver protocol carries no cache yet
     /// (`()`), so its `clear` never triggers the boundary-crossing
     /// invalidation escalation.
     type LayoutCache: crate::storage::ProtocolLayoutCache;
@@ -112,7 +111,7 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
     /// semantics today; that's deferred to Core.2). The `BoxProtocol`
     /// override calls [`RenderState::<BoxProtocol>::compute_relayout_boundary`]
     /// with `parent_uses_size = false` and `sized_by_parent = false` —
-    /// Flutter parity for those parameters lands later in Core.2 alongside
+    /// deriving those parameters exactly lands later in Core.2 alongside
     /// the intrinsic-dimension protocol.
     ///
     /// This bootstrap exists so that
@@ -138,9 +137,8 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
     ///
     /// Called at every layout-commit site (leaf and container paths). The
     /// default is a no-op — sliver geometry validation is deferred to Core.2.
-    /// `BoxProtocol` overrides it with Flutter's `debugAssertDoesMeetConstraints`
-    /// (`box.dart`): a node's own size must be finite and within its
-    /// constraints. The `debug_assert!` bodies compile out in release builds,
+    /// `BoxProtocol` overrides it: a node's own size must be finite and
+    /// within its constraints. The `debug_assert!` bodies compile out in release builds,
     /// leaving the override an empty call the optimizer can drop.
     fn debug_assert_layout_output(
         constraints: &<Self::Layout as LayoutCapability>::Constraints,
@@ -203,8 +201,8 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
 
 /// How a parent uses a child's geometry during layout.
 ///
-/// This replaces Flutter's boolean `parentUsesSize` with a 3-state enum
-/// inspired by Jetpack Compose's `UsageByParent`:
+/// This is a 3-state enum inspired by Jetpack Compose's `UsageByParent`
+/// (rather than a boolean `parent_uses_size`):
 ///
 /// - `NotUsed` — parent doesn't depend on child's size at all
 /// - `InLayout` — parent reads child's geometry during its own layout
@@ -218,9 +216,9 @@ pub trait Protocol: Send + Sync + Debug + Clone + Copy + sealed::Sealed + 'stati
 ///     || !has_parent
 /// ```
 ///
-/// # Why 3 states instead of Flutter's boolean
+/// # Why 3 states instead of a boolean
 ///
-/// Flutter's `parentUsesSize = false` makes `!false = true` ⇒ every node
+/// A boolean `parent_uses_size = false` makes `!false = true` ⇒ every node
 /// is a boundary. `InPlacement` is the middle ground: the parent uses the
 /// child's size for positioning (scroll offset) but not for its own size
 /// computation. This is the common case for viewport → sliver children.

@@ -10,15 +10,11 @@
 //!   NOT rebuild when it hasn't — the edge-trigger the whole seam exists
 //!   for, and the test the issue's acceptance names ("fails if the hook is
 //!   re-stubbed to a no-op");
-//! - `should_rebuild` gates delegate swaps the way Flutter's contract says;
+//! - `should_rebuild` gates delegate swaps;
 //! - all four pinned × floating variants mount and build through the seam.
 //!
-//! The 22-case Flutter oracle
-//! (`test/widgets/sliver_persistent_header_test.dart`) is a follow-up parity
-//! unit — those cases lean on stretch/snap configurations and `SliverAppBar`
-//! scaffolding this widget defers; porting them rides the parity-file
-//! conventions (content sweep, per-case ledger) that deserve their own
-//! change rather than an appendix to this one.
+//! Stretch/snap configurations and `SliverAppBar` scaffolding are deferred by
+//! this widget and not covered here.
 
 use std::cell::RefCell;
 use std::rc::Rc;

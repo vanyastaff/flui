@@ -33,7 +33,7 @@ A god-shaped library that owns its own dispatch story, its own observability sto
 
 ## Main state owner
 
-`PipelineOwner` owns the render tree and dirty-state vectors. There is exactly one mutable owner at any time. No `Arc<RwLock<PipelineOwner>>`. No "child pipelines". The hierarchical-pipeline pattern Flutter uses is a Dart-flavoured workaround for not having Rust's borrow checker; we have the borrow checker — we don't need the workaround.
+`PipelineOwner` owns the render tree and dirty-state vectors. There is exactly one mutable owner at any time. No `Arc<RwLock<PipelineOwner>>`. No "child pipelines". A hierarchy of pipeline owners is a workaround for lacking Rust's borrow checker; we have the borrow checker — we don't need the workaround.
 
 ## Main trust boundary
 
@@ -110,7 +110,7 @@ LayerTree (output) ─▶ flui-layer/flui-engine for compositing
 No `Arc<RwLock<…>>` on the diagram. No hierarchical pipelines. No `Box<dyn Fn() + Send + Sync>` callbacks. No traits in the hot path that don't appear on the diagram.
 
 What goes away from current code:
-- `binding/` module — Flutter mixin-translation noise. Folded into a thin `RendererBinding` trait that lives in `flui-view` or `flui-app`, not here. The current 4-trait stack (`PipelineManifold`, `HitTestDispatcher`, `ViewHitTestable`, `RendererBinding`) collapses to one purpose-specific trait, or to a concrete adapter struct, depending on whether `flui-view` and `flui-app` are competing implementations (they are not).
+- `binding/` module — mixin-translation noise. Folded into a thin `RendererBinding` trait that lives in `flui-view` or `flui-app`, not here. The current 4-trait stack (`PipelineManifold`, `HitTestDispatcher`, `ViewHitTestable`, `RendererBinding`) collapses to one purpose-specific trait, or to a concrete adapter struct, depending on whether `flui-view` and `flui-app` are competing implementations (they are not).
 - `children_access.rs` + `child_handle.rs` — the closure-based iterator was a workaround for fighting the borrow checker. Once `RenderTree` exposes `&mut self` properly at phase boundaries, plain `for child_id in node.children() { tree.layout_child(child_id, constraints) }` works. Both files: delete.
 - `arity.rs` — 48 LOC of re-exports. Delete; let callers import from `flui_tree::Arity` directly.
 
@@ -224,7 +224,7 @@ pub struct RenderEntry<P: Protocol> {
 // keyed on capability (`HitTestCapability`, `SemanticsCapability`). Concrete
 // proposal:
 pub trait RenderObject<P: Protocol>: 'static {
-    // Layout — &mut self because Flutter render objects mutate internal state
+    // Layout — &mut self because render objects mutate internal state
     // during layout (RenderFlex stores child positions on self).
     fn perform_layout(&mut self, ctx: &mut LayoutContext<P>) -> ProtocolGeometry<P>;
 
@@ -665,11 +665,11 @@ Each test must prove a design guarantee.
 
 For each rejected design: what it was, why it was tempting, why it is wrong here.
 
-### Hierarchical pipeline owners (Flutter parity)
+### Hierarchical pipeline owners
 
 **What:** `PipelineOwner` adopts child `Arc<RwLock<PipelineOwner>>` and recursively flushes each phase across the tree of owners.
 
-**Why tempting:** Flutter has this. It is convenient for multi-window scenarios where each window has its own root render object.
+**Why tempting:** It is convenient for multi-window scenarios where each window has its own root render object.
 
 **Why wrong:** Multi-window does not require nested pipelines. It requires multiple `PipelineOwner` instances. `flui-app` (the windowing crate) owns the multiplicity; this crate owns one pipeline. The current `Arc<RwLock<PipelineOwner>>` for "children" creates `Arc<RwLock<_>>` cycles on tree structures — exactly the anti-pattern the constitution forbids.
 

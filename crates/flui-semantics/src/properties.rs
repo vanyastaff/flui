@@ -174,9 +174,7 @@ impl From<SmolStr> for AttributedString {
 
 /// Concatenates two attributed strings in a text-direction-aware manner.
 ///
-/// Mirrors Flutter
-/// [`packages/flutter/lib/src/semantics/semantics.dart:937`](../../../../.flutter/flutter-master/packages/flutter/lib/src/semantics/semantics.dart)
-/// `_concatAttributedString` helper. Used during
+/// Used during
 /// [`SemanticsConfiguration::absorb`](crate::configuration::SemanticsConfiguration::absorb) when the parent and child each carry
 /// a label or hint that must be joined into a single string for the
 /// platform accessibility surface.
@@ -186,9 +184,9 @@ impl From<SmolStr> for AttributedString {
 ///
 /// Phase-1 simplification: same-direction strings join with a single
 /// ASCII space; mixed-direction strings *also* join with a single space
-/// in this port. Full Unicode bidi-override sequences for mixed-direction
-/// strings (matching Flutter `semantics.dart:937-1010`) are deferred —
-/// the audit's P0 set does not include a mixed-direction case.
+/// for now. Full Unicode bidi-override sequences for mixed-direction
+/// strings are deferred — the audit's P0 set does not include a
+/// mixed-direction case.
 /// Attribute offsets carry over from the left operand; right-operand
 /// attributes are shifted by `left.string.len() + 1` for the inserted
 /// space.
@@ -233,8 +231,7 @@ pub fn concat_attributed_string(
 
 /// Bitmask of `SemanticsAction` variants that can be absorbed from a child
 /// configuration into its parent **even when** the child has set
-/// `blocks_user_actions = true`. Mirrors Flutter
-/// `semantics.dart::_kUnblockedUserActions`.
+/// `blocks_user_actions = true`.
 ///
 /// Accessibility-focus lifecycle notifications remain available because they
 /// are emitted by the accessibility system rather than pointer interaction.

@@ -5,7 +5,7 @@
 //! # Fixture isolation
 //!
 //! `flui_widgets::image::decode_cache`'s sync cache and pending-load map are
-//! process-wide statics (mirroring Flutter's singleton `ImageCache`).
+//! process-wide statics.
 //! `nextest` runs every test in this binary as OS threads within ONE process,
 //! so two tests racing on the SAME asset path would observe each other's
 //! cache entries. Each test below therefore loads its own dedicated fixture

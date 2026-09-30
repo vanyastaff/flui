@@ -1,24 +1,19 @@
 //! [`DefaultTextStyle`] — the ambient text style descendant [`Text`](crate::Text) runs merge
 //! with their own.
 //!
-//! # Flutter parity
+//! # Consumption contract
 //!
-//! `.flutter/packages/flutter/lib/src/widgets/text.dart`, master
-//! `3.33.0-0.0.pre-6280-g88e87cd963f`: `DefaultTextStyle` (`:55-73`) and the
-//! `Text.build` consumption contract (`:716-765`): the ambient style merges
-//! **under** the run's own style, and `textAlign` / `maxLines` fall back to the
-//! ambient values when the run sets none.
+//! The ambient style merges **under** the run's own style, and `text_align` /
+//! `max_lines` fall back to the ambient values when the run sets none.
 //!
-//! # Not ported, and named
+//! # Not implemented
 //!
-//! * `softWrap`, `overflow`, `textWidthBasis`, `textHeightBehavior` — FLUI's
-//!   `Text` has no counterpart properties yet; they join when it grows them.
-//! * `DefaultTextStyle.merge` (`:120-136`), the wrapper that layers a partial
-//!   style over the enclosing scope's — a convenience over `of(context)`, which
-//!   FLUI expresses as a plain `depend_on` read; add it when a caller exists.
-//! * `TextStyle.inherit` — FLUI's `TextStyle` fields are all optional and unset
-//!   fields always inherit via `merge`, so Flutter's `inherit: false` opt-out
-//!   (`text.dart:718-720`) has no analogue: a run that wants no inheritance
+//! * Soft wrap, overflow, text width basis and text height behavior — `Text` has
+//!   no counterpart properties yet; they join when it grows them.
+//! * A `merge` wrapper that layers a partial style over the enclosing scope's —
+//!   a convenience over a plain `depend_on` read; add it when a caller exists.
+//! * An inheritance opt-out — `TextStyle` fields are all optional and unset
+//!   fields always inherit via `merge`, so a run that wants no inheritance
 //!   sets every field it cares about.
 
 use flui_painting::typography::{TextAlign, TextStyle};
@@ -26,13 +21,12 @@ use flui_view::impl_inherited_view;
 use flui_view::prelude::*;
 
 /// The text style to apply to descendant [`Text`](crate::Text) runs that do not
-/// set their own. Flutter's `DefaultTextStyle` (`text.dart:55`).
+/// set their own.
 ///
 /// A run's own [`style`](crate::Text::style) is merged **over** this one, field
 /// by field; [`text_align`](Self::text_align) and [`max_lines`](Self::max_lines)
 /// apply only when the run sets none. Without an enclosing `DefaultTextStyle`,
-/// `Text` behaves as if this were empty (Flutter's `DefaultTextStyle.fallback`,
-/// `:81-88`).
+/// `Text` behaves as if this were empty.
 ///
 /// # Examples
 ///
@@ -63,16 +57,14 @@ impl DefaultTextStyle {
         }
     }
 
-    /// The alignment for descendant runs that set none (`text.dart:66`, consumed
-    /// at `:757`).
+    /// The alignment for descendant runs that set none.
     #[must_use]
     pub fn text_align(mut self, text_align: TextAlign) -> Self {
         self.text_align = Some(text_align);
         self
     }
 
-    /// The line cap for descendant runs that set none (`text.dart:69`, consumed
-    /// at `:765`).
+    /// The line cap for descendant runs that set none.
     #[must_use]
     pub fn max_lines(mut self, max_lines: u32) -> Self {
         self.max_lines = Some(max_lines);
@@ -107,7 +99,7 @@ impl InheritedView for DefaultTextStyle {
     }
 
     fn update_should_notify(&self, old: &Self) -> bool {
-        // `text.dart:196-202`, minus the properties FLUI's `Text` lacks.
+        // Notify when any property `Text` consumes changed.
         self.style != old.style
             || self.text_align != old.text_align
             || self.max_lines != old.max_lines

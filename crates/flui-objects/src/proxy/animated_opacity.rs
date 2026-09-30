@@ -2,27 +2,20 @@
 //! a single child, driven by an injected, hot-swappable
 //! [`ProxyAnimation<f64>`].
 //!
-//! # Flutter equivalence
+//! # Dirty-marking rule
 //!
-//! Behavior-faithful port of Flutter's `RenderAnimatedOpacityMixin` +
-//! `RenderAnimatedOpacity` (`packages/flutter/lib/src/rendering/proxy_box.dart`,
-//! tag `3.44.0`). The oracle's mixin caches an `_alpha`, recomputes it on
-//! every `opacity` animation tick via a listener registered in `attach`
-//! (and once more, unconditionally, right after registering — "in case it
-//! changed while we weren't listening"), and on each recompute: marks
-//! needs-paint whenever the alpha value changed, and additionally marks
-//! needs-compositing-bits whenever the recompute crosses the
-//! `_alpha > 0` repaint-boundary threshold (`isRepaintBoundary` flips).
+//! The object caches an alpha, recomputes it on every `opacity` animation tick
+//! via a listener registered in `attach` (and once more, unconditionally,
+//! right after registering — in case it changed while nothing was
+//! listening), and on each recompute: marks needs-paint whenever the alpha
+//! value changed, and additionally marks needs-compositing-bits whenever the
+//! recompute crosses the layered threshold.
 //!
-//! # Composited-layer updates — how this port reaches Flutter's efficiency path
+//! # Composited-layer updates
 //!
-//! Flutter's mixin is an `isRepaintBoundary` node: on a tick it calls
-//! `updateCompositedLayer`, which mutates the *retained* `OpacityLayer`'s alpha
-//! in place, so a tick never repaints the child subtree — only the compositor
-//! re-blends the cached layer.
-//!
-//! FLUI reaches the same outcome by a different route, and without the
-//! promotion: the frame rebuilds just this node's own effect layers inside the
+//! A tick never repaints the child subtree — only the compositor re-blends
+//! the cached layer. This is reached without promoting the node to a repaint
+//! boundary: the frame rebuilds just this node's own effect layers inside the
 //! ENCLOSING repaint boundary's retained capture, so the node stays an ordinary
 //! non-boundary. The design and its accepted trade-offs are recorded in
 //! `flui-rendering/ARCHITECTURE.md`, "A composited-layer update patches the
@@ -39,11 +32,10 @@
 //! synchronous seam, used by the plain `RenderOpacity`/`RenderSliverOpacity`
 //! setters; conflating the two hides the retry contract.
 //!
-//! # Retargeting — the proxy absorbs `didUpdateAnimation`
+//! # Retargeting — the proxy absorbs the swap
 //!
-//! Flutter's mixin exposes a settable `opacity` (an `Animation<double>`); a
-//! configuration change that swaps to a new controller/curve calls
-//! `didUpdateAnimation`, which re-subscribes the tick listener to the new
+//! A configuration change that swaps to a new controller/curve would
+//! normally require re-subscribing the tick listener to the new
 //! animation. This render object never sees that swap: it is handed a
 //! [`ProxyAnimation<f64>`] once, at construction, and listens to that SAME
 //! proxy for its entire lifetime. The `AnimatedOpacity` widget's state (`
@@ -51,9 +43,9 @@
 //! retarget, swaps its *parent* animation (`ProxyAnimation::set_parent`) —
 //! the proxy re-fires this render object's listener with the new parent's
 //! curve/tween composition, and no field or subscription here ever changes.
-//! `didUpdateAnimation` is unreachable by construction not because no
-//! retarget path exists, but because the proxy absorbs it entirely on the
-//! widget side; this render object never bakes a curve of its own.
+//! Re-subscription is unnecessary not because no retarget path exists, but
+//! because the proxy absorbs it entirely on the widget side; this render
+//! object never bakes a curve of its own.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -79,7 +71,7 @@ use flui_rendering::{
 /// and retarget algebra owned by the calling widget) and updates itself on
 /// every animation tick via a listener registered in
 /// [`attach`](RenderBox::attach). See the module docs for the exact
-/// dirty-marking rule ported from Flutter's `RenderAnimatedOpacityMixin`, and
+/// dirty-marking rule, and
 /// the *Retargeting* section for how a configuration change reaches this
 /// object without ever replacing it.
 ///
@@ -109,10 +101,10 @@ pub struct RenderAnimatedOpacity {
     /// guaranteed to run after the store that produced it, via the
     /// channel's own happens-before, independent of atomic memory order.
     alpha: Arc<AtomicU8>,
-    /// Whether child semantics are included regardless of alpha (Flutter
-    /// parity: `alwaysIncludeSemantics`). Stored for diagnostics/API parity;
-    /// this port does not yet gate `visitChildrenForSemantics` on it (no
-    /// semantics-tree visitor override exists on this proxy today).
+    /// Whether child semantics are included regardless of alpha. Stored for
+    /// diagnostics/API; this object does not yet gate child-semantics
+    /// visiting on it (no semantics-tree visitor override exists on this
+    /// proxy today).
     always_include_semantics: bool,
     /// Tick-listener subscription on `animation`, torn down in `detach`.
     listener_id: Option<ListenerId>,
@@ -171,17 +163,16 @@ impl RenderAnimatedOpacity {
 
     /// Whether `alpha` sits in the "layered" range `(0, 255)` — the exact
     /// threshold `paint_effects`/`skip_paint` use to decide whether an
-    /// `OpacityLayer` is needed. Crossing this threshold is what Flutter's
-    /// mixin calls a `isRepaintBoundary` flip (`_alpha! > 0`); FLUI's own
-    /// `RenderOpacity` uses the same `alpha != 255` narrowing for its
-    /// no-layer fast path at full/zero opacity (see `proxy/opacity.rs`).
+    /// `OpacityLayer` is needed. `RenderOpacity` uses the same
+    /// `alpha != 255` narrowing for its no-layer fast path at full/zero
+    /// opacity (see `proxy/opacity.rs`).
     #[inline]
     fn is_layered(alpha: u8) -> bool {
         alpha > 0 && alpha < 255
     }
 
     /// Recomputes `alpha` from `animation`'s current value and marks the
-    /// node dirty through `handle` per the module docs' ported rule:
+    /// node dirty through `handle` per the module docs' rule:
     /// needs-paint whenever alpha changed, plus needs-compositing-bits
     /// whenever the recompute crosses the [`is_layered`](Self::is_layered)
     /// threshold. Returns `true` iff alpha changed AND every required mark
@@ -234,8 +225,7 @@ impl RenderAnimatedOpacity {
         //
         // A tick that CROSSED the layered threshold already sent a
         // compositing-bits mark above; that walk marks paint, which wins over
-        // this by the `!needs_paint()` filter in `run_paint`. Flutter's
-        // `_updateOpacity` has exactly this shape.
+        // this by the `!needs_paint()` filter in `run_paint`.
         // Crossing alpha 0 starts or stops suppressing the subtree's paint
         // entirely, and that is invisible to the layer-update path: at both
         // alpha 0 and alpha 255 no `OpacityLayer` is emitted, so there is no
@@ -315,8 +305,7 @@ impl RenderBox for RenderAnimatedOpacity {
     flui_rendering::forward_single_child_box_queries!();
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
-        // Flutter parity: an animated-opacity node does not override
-        // `hitTestChildren` — it hit-tests regardless of alpha, same as
+        // An animated-opacity node hit-tests regardless of alpha, same as
         // `RenderOpacity` (see `proxy/opacity.rs`).
         if !ctx.is_within_own_size() {
             return false;
@@ -330,7 +319,7 @@ impl RenderBox for RenderAnimatedOpacity {
     fn paint_effects(&self, _size: Size) -> PaintEffects {
         let alpha = self.alpha();
         // None when fully opaque (255) or fully transparent (0): neither
-        // requires an OpacityLayer. Flutter: alpha=0 -> layer=null.
+        // requires an OpacityLayer.
         if alpha == 255 || alpha == 0 {
             PaintEffects::NONE
         } else {
@@ -339,7 +328,7 @@ impl RenderBox for RenderAnimatedOpacity {
     }
 
     fn skip_paint(&self) -> bool {
-        // Flutter RenderAnimatedOpacityMixin.paint: `if (_alpha == 0) return;`
+        // Fully transparent: nothing to paint.
         self.alpha() == 0
     }
 
@@ -354,19 +343,13 @@ impl RenderBox for RenderAnimatedOpacity {
     // `RenderBox` trait's default `false` (`render_box.rs`'s
     // `always_needs_compositing` default) and never allocate the layer.
     //
-    // Flutter parity: `RenderAnimatedOpacityMixin.isRepaintBoundary`
-    // (`proxy_box.dart:985`) = `child != null && _currentlyIsRepaintBoundary`
-    // where `_currentlyIsRepaintBoundary = _alpha! > 0` — Flutter's own
-    // threshold is plain `alpha > 0` (fully opaque still counts as
-    // needing its own layer). This port instead uses
-    // [`is_layered`](Self::is_layered) (`0 < alpha < 255`), the SAME
-    // predicate `paint_effects`/`skip_paint` above already use, and the one
-    // `RenderOpacity`/`RenderSliverOpacity` establish for this crate: at
-    // `alpha == 255` no layer is ever allocated (`paint_effects` returns no
+    // The threshold is [`is_layered`](Self::is_layered) (`0 < alpha < 255`),
+    // the SAME predicate `paint_effects`/`skip_paint` above already use, and
+    // the one `RenderOpacity`/`RenderSliverOpacity` establish for this crate:
+    // at `alpha == 255` no layer is ever allocated (`paint_effects` returns no
     // opacity effect), so requiring compositing there would be pure
-    // overhead with no visual effect — consistency with the sibling opacity
-    // pair's predicate wins over a literal transcription of Flutter's
-    // threshold.
+    // overhead with no visual effect: fully opaque does not count as
+    // needing its own layer.
     //
     // `RenderOpacity` (the non-animated box sibling) has no analogous
     // override at all — a separate, pre-existing gap in this crate that
@@ -387,9 +370,8 @@ impl RenderBox for RenderAnimatedOpacity {
             Self::recompute_alpha(&animation, &alpha, &mark_handle);
         })));
 
-        // Oracle (`proxy_box.dart` attach): `opacity.addListener(_updateOpacity);
-        // _updateOpacity();` — refresh once more in case the animation's value
-        // changed while this node wasn't listening (e.g. a detach/reattach).
+        // Refresh once more in case the animation's value changed while this
+        // node wasn't listening (e.g. a detach/reattach).
         Self::recompute_alpha(&self.animation, &self.alpha, &handle);
     }
 

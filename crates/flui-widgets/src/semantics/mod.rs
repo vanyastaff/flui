@@ -1,8 +1,8 @@
 //! Accessibility semantics widgets.
 //!
 //! These widgets are thin `RenderView` wrappers over the semantics proxy render
-//! objects in `flui-objects`, matching Flutter's `Semantics`,
-//! `MergeSemantics`, and `ExcludeSemantics` split.
+//! objects in `flui-objects`, split into `Semantics`, `MergeSemantics`, and
+//! `ExcludeSemantics`.
 //!
 //! # The `Send + Sync` bound on action handlers comes from storage, not from threading
 //!
@@ -657,9 +657,8 @@ impl_render_view!(MergeSemantics);
 /// This is the "12" a screen reader announces in "item 12 of 100"; the "100"
 /// comes from the enclosing scrollable's own child count, not from here.
 ///
-/// Flutter's `IndexedSemantics`, and in the reference every lazy sliver
-/// delegate wraps every materialised item in one by default. FLUI's do not —
-/// see flui-rendering's `## Mapping decisions` — so this is for content you
+/// Lazy sliver delegates do not wrap their materialised items in one — see
+/// flui-rendering's `## Mapping decisions` — so this is for content you
 /// index yourself: a hand-built list, a grid of cards, anything a lazy sliver
 /// does not own.
 ///

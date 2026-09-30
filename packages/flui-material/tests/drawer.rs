@@ -157,7 +157,7 @@ impl StatelessView for HandleProbe {
 // 3. Scrim.
 // ============================================================================
 
-/// Flutter parity: the scrim is a tappable `ColoredBox`
+/// The scrim is a tappable `ColoredBox`
 /// (`RenderDecoratedBox`) that closes the drawer on tap
 /// (`drawerBarrierDismissible`, default `true`), and stays gone once the
 /// close fling settles — not just reported as closed via
@@ -257,10 +257,10 @@ pub fn scrim_mounts_when_open_and_a_tap_closes_the_drawer() {
 // 4. Handle: ScaffoldScope::of, open/close, no-flash mount, has_drawer.
 // ============================================================================
 
-/// `_settle`'s two branches disagree here, which is the whole point: the drag
+/// The settle logic's two branches disagree here, which is the whole point: the drag
 /// is released **below** the halfway mark, so the position branch would close
-/// the drawer, while a qualifying opening velocity flings it open. Flutter's
-/// `_settle` checks velocity first (`drawer.dart`), so open is the correct
+/// the drawer, while a qualifying opening velocity flings it open. Velocity
+/// is checked first, so open is the correct
 /// outcome — and observing it proves the release velocity this harness feeds
 /// the recognizer is real.
 ///

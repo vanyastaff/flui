@@ -9,7 +9,7 @@
 //! `add_with_paint_offset` / `add_with_raw_transform` helpers). It
 //! competed with `flui_interaction::routing::HitTestResult`, which
 //! carries data-attached entries (`RenderId target` + handler
-//! closures + cursor) and Flutter-parity lazy transform globalization.
+//! closures + cursor) and lazy transform globalization.
 //! `flui-app`'s pointer-dispatch path had a literal `// TODO: Convert
 //! rendering HitTestEntry targets to interaction targets` bridge
 //! between the two types because conversion was never wired.
@@ -20,8 +20,8 @@
 //! between them. The interaction-side type won out because:
 //!   - only its entries carry runtime-dispatch data (handler closure
 //!     + cursor),
-//!   - Flutter's canonical `HitTestResult` lives in `gestures/`,
-//!     which `flui-interaction` is the workspace equivalent of,
+//!   - hit-test results belong with event routing, which is what
+//!     `flui-interaction` owns,
 //!   - the rendering-side `HitTestTarget` trait had ONE production
 //!     impl (`RenderView`) and TWO file-private `DummyTarget` stubs --
 //!     vestigial dyn-dispatch surface, not a system the workspace

@@ -49,10 +49,10 @@ The `port-check.sh` Trigger 3 scope is **extended in U13 of this chain** to cove
 - `text_painter.rs` is 990 LOC. Likely mixes `TextPainter` + `TextBaseline` + measurement + painting + `DEFAULT_FONT_SIZE` constant. **Split.**
 - Companion `docs/MIGRATION.md` documents migration from 0.0.x to 0.1.x of a crate that never had a 0.0.x release. Obsolete. **Delete** or compress to a stub note.
 - `Paint::clone()` per `Canvas::draw_*` call is an allocation hot spot. For 1000+ commands per frame with reused Paint, this is measurable. **Document** the cost; **file** a Paint-interning Outstanding refactor; do not premature-optimise without measured benefit.
-- `restore()` silently no-ops on empty save stack AND `finish()` silently `tracing::warn`s about unrestored saves. Neither catches the programmer error during development. **Promote** the imbalance check to `debug_assert!` in debug builds; keep release-build no-op for Flutter parity.
+- `restore()` silently no-ops on empty save stack AND `finish()` silently `tracing::warn`s about unrestored saves. Neither catches the programmer error during development. **Promote** the imbalance check to `debug_assert!` in debug builds; keep the release-build no-op.
 - `#[forbid(unsafe_code)]` at `lib.rs:151` stays. Zero `unsafe` blocks in the crate today; net unsafe delta for this chain is **0**.
 
-This is not architecture. It is the visible cost of porting Flutter's `Canvas` + `PaintingBinding` + `ShaderWarmUp` class hierarchy 1:1 into Rust without asking whether the abstractions earn their existence at the call sites. The Rust auto-derived `Send`, the closed enum dispatch, the `Drop` trait, the `Option<T>` enum, the `&mut self` borrow checker, and the consumed-once `finish(self)` shape subsume most of the ceremony Flutter's API recommends.
+This is not architecture. It is the visible cost of a `Canvas` + `PaintingBinding` + `ShaderWarmUp` class hierarchy carried into Rust without asking whether the abstractions earn their existence at the call sites. The Rust auto-derived `Send`, the closed enum dispatch, the `Drop` trait, the `Option<T>` enum, the `&mut self` borrow checker, and the consumed-once `finish(self)` shape subsume most of that ceremony.
 
 ---
 
@@ -91,7 +91,7 @@ The hot consumption pattern is `for cmd in display_list.commands() { match cmd {
 
 **Key invariants.**
 1. **Single-writer-during-recording.** Canvas is `&mut self` for every mutating method. The borrow checker enforces single-writer.
-2. **Save/restore stack depth never underflows.** `restore()` is a no-op when the stack is empty (Flutter parity); `debug_assert!` in debug builds catches imbalance at `finish()` time.
+2. **Save/restore stack depth never underflows.** `restore()` is a no-op when the stack is empty; `debug_assert!` in debug builds catches imbalance at `finish()` time.
 3. **Clip stack depth matches save_stack's `clip_depth` markers.** `save()` records the current clip depth; `restore()` truncates the clip stack to that depth.
 4. **Bounds union is monotonic.** Adding a command unions its bounds (if any) with the existing bounds. Removing requires `recalculate_bounds()` (used by `filter`/`map`).
 5. **Transform is baked at recording time.** Every `DrawCommand` variant stores its own `Matrix4` (64 bytes). The GPU backend applies the matrix without consulting any external transform state.
@@ -101,10 +101,10 @@ The hot consumption pattern is `for cmd in display_list.commands() { match cmd {
 **Failure modes -- normal, not exceptional.**
 - `Canvas::draw_circle(.., radius = NaN, ..)` or `radius < 0.0`: today fires a `debug_assert!` in debug builds; in release, records the command with the bad value and lets GPU/lyon reject it. **Mythos:** keep `debug_assert!`; document the invariant in `## Mapping decisions`; file typed `NonNegativePixels` wrapper in Outstanding refactors.
 - `Canvas::draw_shadow(.., elevation < 0.0, ..)`: same pattern.
-- `Canvas::restore()` on empty save stack: today silent no-op (Flutter parity); we keep the no-op and add `debug_assert!` opt-in at finish() time.
+- `Canvas::restore()` on empty save stack: today silent no-op; we keep the no-op and add `debug_assert!` opt-in at finish() time.
 - `Canvas::finish()` with N unrestored saves: today `tracing::warn!(unrestored_saves = N)`; release-build behaviour preserved. Add `debug_assert!(self.save_stack.is_empty(), ...)` for tests.
 - Tessellation failure (`lyon` rejects a malformed path): returns `TessellationError::FillError`/`StrokeError`. Kept separate from `PaintingError` (narrow callers, narrow propagation).
-- cosmic-text font lookup miss: cosmic-text falls back to the default font; no error surface today; documented as Flutter parity (Flutter's `TextPainter` does the same).
+- cosmic-text font lookup miss: cosmic-text falls back to the default font; no error surface today; a missing font is not a caller error.
 - `PaintingBinding::image_cache::put` over the configured byte limit: silent LRU eviction. Caller does not see backpressure. Documented (image cache is best-effort, not a guarantee).
 - `Canvas::add_hit_region(...)` records a `HitRegion` carrying an `Arc<dyn Fn(&PointerEvent) + Send + Sync>`. The callback panics during `flui-interaction`'s hit-test pump: not this crate's concern; `flui-interaction` is responsible for `catch_unwind`-style sandboxing.
 
@@ -178,7 +178,7 @@ No `Arc<RwLock<Canvas>>` on the diagram. No `Box<dyn Drawable>` plugin trait. No
 - `tessellation` module (feature-gated, `lyon`-backed). Stays as-is; clean.
 - `text_layout` + `text_painter` (feature-gated, `cosmic-text`-backed). Split into submodules; flatten the `mod inner` cfg layer.
 - `error.rs` with `PaintingError` + 5 variants. Stays; one variant may be added in U10 if a real surface emerges.
-- `Picture = DisplayList` type alias for Flutter parity. Stays.
+- `Picture = DisplayList` type alias for familiarity. Stays.
 - `lib.rs` re-exports. Trimmed to drop `WarmUpCanvas`, `ShaderWarmUp`, `DefaultShaderWarmUp`. Other re-exports stay.
 
 ---
@@ -461,7 +461,7 @@ save_stack: Vec<CanvasState>       ◄── (transform, clip_depth, is_layer) t
 save()                                  push current state; clip_depth = clip_stack.len()
 save_layer(bounds, paint)               same as save() + is_layer = true + emit SaveLayer command
 restore()                               if pop returns is_layer: emit RestoreLayer; restore transform; truncate clip_stack
-restore() on empty stack                no-op (Flutter parity)
+restore() on empty stack                no-op
 finish() with non-empty save_stack      debug_assert!(empty); tracing::warn(unrestored_saves = N); release-safe
 ```
 
@@ -600,7 +600,7 @@ TessellationError: FillError(String) / StrokeError(String) / InvalidPath(String)
 PaintingError (5 variants, non_exhaustive, Cow-backed)
 pub type Result<T> = std::result::Result<T, PaintingError>;
 
-// ── Flutter parity alias
+// ── Picture alias
 pub type Picture = DisplayList;
 
 // ── Re-exports from flui_types::painting
@@ -679,7 +679,7 @@ crates/flui-painting/src/
 **What earned its place vs. what didn't.**
 
 Earned existence:
-- `binding.rs` -- PaintingBinding + ImageCache + SystemFontsNotifier. Process-wide singleton + image cache + system font listener. Without it, no Flutter-parity binding for the painting subsystem.
+- `binding.rs` -- PaintingBinding + ImageCache + SystemFontsNotifier. Process-wide singleton + image cache + system font listener. Without it, the painting subsystem has no binding.
 - `clip_context.rs` -- the cross-crate seam consumed by `flui-rendering::CanvasContext`. The three default methods save ~50 LOC of boilerplate at the caller; deleting them would push that boilerplate into flui-rendering.
 - `canvas/state.rs` -- save/restore is its own state machine and deserves a focused file.
 - `canvas/transform.rs` -- 7 transform methods + Matrix4 ops form a coherent concern.
@@ -728,7 +728,7 @@ Estimated final re-export count: ~40 names (down from 47 today).
 
 **Retry.** Not applicable at the painting level. If a frame fails to record (would only happen if a render-object panics during `paint()`), the higher-level pipeline (`flui-rendering`'s pipeline phase, Mythos Step 12 commit `dc0fa1ad`) handles it via `catch_unwind`.
 
-**Idempotency.** Tree mutation is **not** strictly idempotent at `draw_*` level -- calling `canvas.draw_rect(rect, &paint)` twice records two `DrawCommand::DrawRect` entries. This is intentional Flutter parity. The GPU will draw the rectangle twice (overdraw); the engine does not coalesce duplicates.
+**Idempotency.** Tree mutation is **not** strictly idempotent at `draw_*` level -- calling `canvas.draw_rect(rect, &paint)` twice records two `DrawCommand::DrawRect` entries. This is intentional: the recorder stays a plain log. The GPU will draw the rectangle twice (overdraw); the engine does not coalesce duplicates.
 
 **Backpressure.** Not applicable -- no channel, no queue. The image cache silently LRU-evicts when over its byte/count limits; documented as best-effort with no caller-visible signal.
 
@@ -867,7 +867,7 @@ pub type Result<T> = std::result::Result<T, PaintingError>;
 
 **Today's panic-flavoured paths:**
 - `Canvas::draw_circle(.., radius < 0.0, ..)` and `Canvas::draw_shadow(.., elevation < 0.0, ..)` -- `debug_assert!` in debug builds; silent in release. **Kept** as-is for U10. Filing typed `NonNegativePixels` wrapper in Outstanding refactors (would require an `flui-types` change, out of this chain's scope).
-- `Canvas::restore()` on empty save stack -- silent no-op (Flutter parity). **Kept**.
+- `Canvas::restore()` on empty save stack -- silent no-op. **Kept**.
 - `Canvas::finish(self)` with non-empty save stack -- `tracing::warn!(unrestored_saves = N)`. **Strengthened in U10:** add `debug_assert!(self.save_stack.is_empty(), "Canvas finished with N unrestored save() calls")` so tests catch the bug; keep `tracing::warn` for release-build observability. The `finish()` signature stays `(self) -> DisplayList`, **not** `Result<DisplayList, PaintingError>`. Rejected design ("Make finish() fallible", see Section 12) explains why.
 
 **No new variants added in this chain** unless a real surface emerges during U10 implementation. The 5 existing variants cover the failure surface adequately. Future work may add `RecordingFinished`, `SaveRestoreImbalance`, `PathBoundsExceeded`, `InvalidGeometry` once typed wrappers (`NonNegativePixels`, `BoundedSaveDepth`) land in `flui-types`.
@@ -960,7 +960,7 @@ For each rejected design: what it was, why it was tempting, why it is wrong here
 
 **What:** Replace the closed `DrawCommand` enum with a trait: `Box<dyn Drawable + Send + Sync>` where each "command" implements `fn lower(&self, backend: &mut WgpuBackend)`. Each command type ships with its own GPU translation.
 
-**Why tempting:** Mirrors Flutter's "everything is an object" Dart shape. Enables third-party extension (a downstream crate could define `MyCustomDrawCommand` implementing `Drawable`).
+**Why tempting:** Mirrors an "everything is an object" shape. Enables third-party extension (a downstream crate could define `MyCustomDrawCommand` implementing `Drawable`).
 
 **Why wrong:** The wgpu backend in `flui-engine` cannot lower arbitrary `dyn Drawable` to draw calls without inverting the dependency (engine depends on each plugin). The exhaustive-match contract gives compile-time coverage; the trait surface loses that. Same shape as `flui-layer::Layer` enum (see [`docs/designs/2026-05-20-mythos-flui-layer-redesign.md`](2026-05-20-mythos-flui-layer-redesign.md) Mapping decisions #1). 29 variants are the entire compositor primitive vocabulary; a 30th is a coordinated change, not a plugin extension.
 
@@ -978,7 +978,7 @@ For each rejected design: what it was, why it was tempting, why it is wrong here
 
 **Why tempting:** Surfaces the bug class. Honest about the structural invariant.
 
-**Why wrong:** Massive caller-side ripple (every paint phase call site has to handle `Result`). Flutter parity is **silent finalisation** (Flutter's `PictureRecorder.endRecording()` does not return an error; it silently completes with whatever state exists). The pragmatic middle ground: keep `finish() -> DisplayList` infallible; add `debug_assert!(save_stack.is_empty())` for catch-during-tests; keep `tracing::warn!(unrestored_saves = N)` for release-build observability.
+**Why wrong:** Massive caller-side ripple (every paint phase call site has to handle `Result`). The chosen behaviour is **silent finalisation**: finishing a recording does not return an error and completes with whatever state exists. The pragmatic middle ground: keep `finish() -> DisplayList` infallible; add `debug_assert!(save_stack.is_empty())` for catch-during-tests; keep `tracing::warn!(unrestored_saves = N)` for release-build observability.
 
 ### Make every `draw_*` method fallible
 
@@ -1220,7 +1220,7 @@ Ordered. Each step lands as a reviewable commit. Each step compiles and passes t
 ### Step 12 — Per-crate `ARCHITECTURE.md` template + PORT.md Index flip
 
 - Create `crates/flui-painting/ARCHITECTURE.md` at crate root per the `docs/PORT.md` template:
-  - `## Flutter source mapping` (table: `painting/painting.dart` / `painting/canvas.dart` / `painting/clip.dart` / `painting/binding.dart` / `painting/image_cache.dart` / `painting/shader_warm_up.dart` / Skia `SkCanvas` etc. → `flui-painting/src/*`)
+  - `## Module map` (table: canvas / clip / binding / image cache / shader warm-up / Skia `SkCanvas` etc. → `flui-painting/src/*`)
   - `## Mapping decisions` (Accepted trade-offs for: closed `DrawCommand` enum vs `Box<dyn Drawable>`, sealed `DisplayListCore`/`DisplayListExt` pair, `WarmUpCanvas`/`ShaderWarmUp` deletion, `ClipContext` retention as cross-crate seam, `finish(self)` infallibility, `Paint::clone()` per draw call deferred to Outstanding)
   - `## Thread safety` (table: ImageCache RwLocks, SystemFontsNotifier listener vec, FontSystem Mutex, Canvas single-owner, DisplayList consumed-once)
   - `## Friction log` (companion `docs/MIGRATION.md` obsolete; `text_layout::mod inner` cfg pre-flattening; allocation hot-path documented from U9)
@@ -1272,7 +1272,7 @@ Ordered. Each step lands as a reviewable commit. Each step compiles and passes t
   - **Did NOT** attempt flat-bytecode DisplayList without measured benefit (filed in Outstanding).
   - **Did NOT** demote `ClipContext` to a private function despite 1 impl (legitimate cross-crate seam; documented).
   - **Did NOT** introduce typestate on `Canvas` (consumed-once finish already enforces the invariant).
-  - **Did NOT** make `finish()` fallible (Flutter parity + caller-side ripple; debug_assert + tracing::warn covers the bug class).
+  - **Did NOT** make `finish()` fallible (caller-side ripple; debug_assert + tracing::warn covers the bug class).
 - **Did I encode invariants in types where possible?** Yes. `Canvas::finish(self)` consumes the canvas; the type system forbids reuse. `DrawCommand` `#[non_exhaustive]` future-proofs internal additions. `DisplayList::commands_mut` demoted to `pub(crate)` in U10. `#[forbid(unsafe_code)]` stays. Net unsafe delta: 0.
 - **Did I reject bad alternatives?** Eleven rejected designs documented in Section 12.
 - **Could a Rust developer implement this design without guessing?** Yes, given the implementation plan in Section 13 and the type sketches in Section 3.

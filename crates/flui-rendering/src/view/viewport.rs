@@ -3,10 +3,6 @@
 //! This module provides the interface for viewports - render objects that
 //! display a portion of their content, which can be controlled by a scroll
 //! offset.
-//!
-//! # Flutter Equivalence
-//!
-//! This corresponds to parts of Flutter's `rendering/viewport.dart`.
 
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::Rect;

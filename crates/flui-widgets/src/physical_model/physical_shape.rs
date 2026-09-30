@@ -11,8 +11,7 @@ use flui_rendering::protocol::BoxProtocol;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// The user-supplied clip-shape function: maps the laid-out box size to the
-/// [`Path`] to clip against — Flutter's `CustomClipper<Path>` (`clipper`).
-/// The closure stays owner-local (UI-realm affine, never sent across
+/// [`Path`] to clip against. The closure stays owner-local (UI-realm affine, never sent across
 /// threads); render storage receives only a data-plane target token — the
 /// same convention [`ClipPath`](crate::ClipPath) uses for its own
 /// `Fn(Size) -> Path` clipper.
@@ -22,18 +21,14 @@ type PathClipper = Rc<dyn Fn(Size) -> Path>;
 /// from the child's laid-out size, casts a drop shadow at `elevation`, and
 /// fills the shape with `color`.
 ///
-/// Flutter parity: `widgets/basic.dart` `PhysicalShape` (tag `3.44.0`) over
-/// [`RenderPhysicalShape`] (`RenderPhysicalModelBase<PathClip>`,
-/// `crates/flui-objects/src/proxy/physical_model.rs`) — the render object
+/// Backed by [`RenderPhysicalShape`]
+/// (`crates/flui-objects/src/proxy/physical_model.rs`) — the render object
 /// already implements clip + `Canvas::draw_shadow` + fill; this widget is a
 /// thin configuration wrapper over it. `create_render_object` /
-/// `update_render_object` push every field, mirroring the oracle's own
-/// `createRenderObject`/`updateRenderObject` (both `..`-cascade every
-/// property on every call).
+/// `update_render_object` push every field on every call.
 ///
 /// `clip_behavior` defaults to [`Clip::None`] — physical-model surfaces
-/// don't clip by default (oracle `proxy_box.dart:2071`, inherited unchanged
-/// by [`RenderPhysicalShape`]'s own default).
+/// don't clip by default, matching [`RenderPhysicalShape`]'s own default.
 #[derive(Clone)]
 pub struct PhysicalShape {
     clipper: PathClipper,
@@ -47,7 +42,7 @@ pub struct PhysicalShape {
 
 impl PhysicalShape {
     /// Clips to the path returned by `clipper` for the laid-out size, filled
-    /// with `color`, at Flutter's defaults: `elevation: 0`,
+    /// with `color`, at the defaults `elevation: 0`,
     /// `clip_behavior: Clip::None`, opaque-black `shadow_color`.
     #[must_use]
     pub fn new(clipper: impl Fn(Size) -> Path + 'static, color: Color) -> Self {
@@ -70,7 +65,7 @@ impl PhysicalShape {
     }
 
     /// Sets the elevation. Must be non-negative — the underlying render
-    /// object debug-asserts this (oracle: `assert(elevation >= 0.0)`).
+    /// object debug-asserts this.
     #[must_use]
     pub fn elevation(mut self, elevation: f64) -> Self {
         self.elevation = elevation;

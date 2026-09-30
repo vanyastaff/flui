@@ -1,32 +1,12 @@
 //! Clipping render-object family — `RenderClipRect`, `RenderClipRRect`,
 //! `RenderClipOval`, `RenderClipPath`.
 //!
-//! # Flutter equivalence
+//! # Shape
 //!
-//! Behavior-faithful port of Flutter's
-//! [`RenderClipRect`](https://api.flutter.dev/flutter/rendering/RenderClipRect-class.html),
-//! [`RenderClipRRect`](https://api.flutter.dev/flutter/rendering/RenderClipRRect-class.html),
-//! [`RenderClipOval`](https://api.flutter.dev/flutter/rendering/RenderClipOval-class.html),
-//! and [`RenderClipPath`](https://api.flutter.dev/flutter/rendering/RenderClipPath-class.html)
-//! (`packages/flutter/lib/src/rendering/proxy_box.dart`).
-//!
-//! # Rust-native improvement
-//!
-//! Flutter encodes the clip family as a 4-class private mixin tree:
-//!
-//! ```text
-//!  _RenderCustomClip<T> (abstract, private)
-//!  ├── RenderClipRect    (T = Rect)
-//!  ├── RenderClipRRect   (T = RRect)
-//!  ├── RenderClipOval    (T = Rect, hit-tested as ellipse)
-//!  └── RenderClipPath    (T = Path)
-//! ```
-//!
-//! Each subclass duplicates the same `_clipper` / `_clip` /
-//! `clipBehavior` field cluster and only differs in `_defaultClip`,
-//! `hitTest`, and which `canvas.clipXXX` call is used. That structure
-//! is a clean diamond-shaped mixin chain in Dart; in Rust we collapse
-//! it to **one generic struct + one sealed trait**:
+//! The clip family is **one generic struct + one sealed trait**, rather than
+//! four classes that would each duplicate the same clip-shape /
+//! `clip_behavior` field cluster and differ only in the default clip,
+//! hit test, and which canvas clip call is used:
 //!
 //! ```text
 //!  trait ClipGeometry        (sealed; impls for Rect, RRect, Oval, Path)
@@ -148,12 +128,10 @@ impl ClipSourceToken {
 
 /// An axis-aligned ellipse inscribed in a rectangle.
 ///
-/// Flutter's `RenderClipOval` carries a `Rect` and hit-tests as the
-/// inscribed ellipse. Lifting the semantic to a distinct type means the
-/// "treat this rect as an oval" intent is visible in the type system —
-/// passing a bare `Rect` to a `RenderClip<Rect>` would clip rectangularly
-/// (the wrong thing) without a compiler error in Flutter. Here it is
-/// unrepresentable.
+/// Hit-tests as the inscribed ellipse. Lifting the semantic to a distinct
+/// type means the "treat this rect as an oval" intent is visible in the type
+/// system — passing a bare `Rect` to a `RenderClip<Rect>` would clip
+/// rectangularly (the wrong thing), so that mistake is unrepresentable.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Oval {
     /// The bounding rectangle of the ellipse.
@@ -209,14 +187,13 @@ mod sealed {
 /// Trait abstracting the four clip shapes used by `RenderClip<S>`.
 ///
 /// **Sealed.** Only the four canonical shapes implement this trait.
-/// Downstream crates cannot add new variants — this matches Flutter's
-/// `_RenderCustomClip<T>` access control (the parent class is library-
-/// private), preserves engine-level dispatch invariants, and lets the
-/// compiler monomorphise the clip-emission path per shape.
+/// Downstream crates cannot add new variants — this preserves engine-level
+/// dispatch invariants and lets the compiler monomorphise the clip-emission
+/// path per shape.
 pub trait ClipGeometry:
     sealed::Sealed + Clone + fmt::Debug + PartialEq + Send + Sync + 'static
 {
-    /// Flutter-parity diagnostics label (`RenderClipRect`, `RenderClipRRect`, …).
+    /// Diagnostics label (`RenderClipRect`, `RenderClipRRect`, …).
     ///
     /// Generic `RenderClip<S>` would otherwise surface as
     /// `RenderClip<Rect>` via `type_name`, which breaks structured
@@ -430,8 +407,7 @@ impl ClipGeometry for Path {
     fn contains(&self, position: Point<f64>) -> bool {
         // Delegate to the fill-type-aware algorithm in flui_painting::paint::Path:
         // even-odd (ray-casting) or non-zero (winding number), selected
-        // by the path's PathFillType. This matches Flutter's hit-test
-        // semantics for RenderClipPath.
+        // by the path's PathFillType.
         self.contains(position)
     }
 
@@ -576,16 +552,15 @@ impl<S: ClipGeometry> RenderClip<S> {
 
     /// Replaces the default whole-box clip with a fixed shape.
     ///
-    /// **Data, not a callback, and that is the whole design.** The reference's
-    /// answer here is `CustomClipper<T>` — an abstract class with `getClip(size)`
-    /// and a hand-written `shouldReclip(old)`. Its own test clipper
-    /// (`ValueClipper` in `clip_test.dart`) holds a fixed `value`, ignores the
-    /// `size` it is handed, and implements `shouldReclip` as
-    /// `oldClipper.value != value`. In Rust that is a field and a `!=`.
+    /// **Data, not a callback, and that is the whole design.** A callback
+    /// clipper — an abstract type with `get_clip(size)` and a hand-written
+    /// `should_reclip(old)` — is typically a fixed value that ignores the
+    /// `size` it is handed and compares itself to the old one. In Rust that is
+    /// a field and a `!=`.
     ///
     /// What that buys, concretely:
     ///
-    /// * **No `shouldReclip` to get wrong.** The reference's version needs a
+    /// * **No `should_reclip` to get wrong.** A hand-written version needs a
     ///   downcast that silently degrades to always- or never-reclip if written
     ///   badly. Here the comparison is the derived `PartialEq` the setter
     ///   already performs, so a wrong answer is not expressible.
@@ -597,8 +572,7 @@ impl<S: ClipGeometry> RenderClip<S> {
     ///   owner-lane side table resolved at paint time.
     ///
     /// **What it does not cover, stated rather than dropped:** a clip that is a
-    /// FUNCTION of the box's size. The reference allows one and no case in its
-    /// own suite uses it. If you need it, `ClipPath::new(|size| …)` takes a
+    /// FUNCTION of the box's size. If you need it, `ClipPath::new(|size| …)` takes a
     /// closure and a path can express any rect or oval, so the capability
     /// exists — it is these two convenience widgets that do not carry it.
     ///
@@ -856,10 +830,8 @@ impl<S: ClipGeometry> RenderBox for RenderClip<S> {
 
     /// Content this clip paints over carries no accessibility presence.
     ///
-    /// Oracle: `_RenderCustomClip.describeApproximatePaintClip`
-    /// (`rendering/proxy_box.dart`) returns the clip when the behaviour is not
-    /// `none`. Without this the semantics walk saw the trait's `None` default,
-    /// so a `ClipRect` published full-size rects for children it visibly cut
+    /// Reports the clip when the behaviour is not `None`. Without this the
+    /// semantics walk saw the trait's `None` default, so a `ClipRect` published full-size rects for children it visibly cut
     /// in half — the clip was honoured by paint and by hit-test, and by
     /// nothing a screen reader could see.
     ///
@@ -882,7 +854,7 @@ impl<S: ClipGeometry> RenderBox for RenderClip<S> {
             return false;
         }
         // Honour the clip: a hit outside the clip shape doesn't reach
-        // the child. Flutter parity.
+        // the child.
         let position = Point::new(ctx.x(), ctx.y());
         let stored = self.resolve_clip(ctx.own_size());
         if !S::contains(<S::Stored as Borrow<S>>::borrow(&stored), position) {
@@ -897,19 +869,19 @@ impl<S: ClipGeometry> RenderBox for RenderClip<S> {
 }
 
 // =============================================================================
-// Type aliases — ergonomic per-shape names matching Flutter's class names.
+// Type aliases — ergonomic per-shape names.
 // =============================================================================
 
-/// Rectangular clip — Flutter's `RenderClipRect`.
+/// Rectangular clip.
 pub type RenderClipRect = RenderClip<Rect<f64>>;
 
-/// Rounded-rectangle clip — Flutter's `RenderClipRRect`.
+/// Rounded-rectangle clip.
 pub type RenderClipRRect = RenderClip<RRect>;
 
-/// Oval (inscribed-ellipse) clip — Flutter's `RenderClipOval`.
+/// Oval (inscribed-ellipse) clip.
 pub type RenderClipOval = RenderClip<Oval>;
 
-/// Arbitrary-path clip — Flutter's `RenderClipPath`.
+/// Arbitrary-path clip.
 pub type RenderClipPath = RenderClip<Path>;
 
 // =============================================================================

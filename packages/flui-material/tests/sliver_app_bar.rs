@@ -2,7 +2,7 @@
 //! collapsing app bar through the full render pipeline (`tests/common/
 //! mod.rs`, matching `tests/app_bar.rs`'s established pattern).
 //!
-//! The extent arithmetic is unit-tested against Flutter's formulas in
+//! The extent arithmetic is unit-tested in
 //! `sliver_app_bar.rs` itself; what only a mount can prove is the
 //! composition: the delegate builds the real `AppBar` through the
 //! build-during-layout seam, the header's box tracks the computed extents

@@ -17,11 +17,6 @@
 //!   record the caller in the InheritedElement's dependent map. Used for
 //!   one-time reads (settings/theme captured at mount).
 //! - Edge: no ancestor of `T` -> returns `None`, no dependent-set write.
-//!
-//! Flutter parity: `framework.dart:5081` (`dependOnInheritedWidgetOfExactType`),
-//! `framework.dart:5092` (`getInheritedWidgetOfExactType`, the
-//! non-recording read), and `framework.dart:6414`
-//! (`InheritedElement.notifyClients`).
 
 // Target-level lint relaxations — crate-level allows don't reach this
 // target. `unwrap` in test/example code: a panic IS the failure report
@@ -285,8 +280,7 @@ pub(crate) fn unmounted_dependent_is_removed_from_provider_before_next_notificat
 
 // ============================================================================
 // get_inherited returns the value WITHOUT recording a
-// dependent — Flutter parity framework.dart:5092
-// `getInheritedWidgetOfExactType` (no `updateDependencies` call).
+// dependent.
 // ============================================================================
 
 // ============================================================================
@@ -300,9 +294,7 @@ pub(crate) fn unmounted_dependent_is_removed_from_provider_before_next_notificat
 //
 // When `InheritedView::update_should_notify` returns `true`, the
 // dependent's typed `ViewState::did_change_dependencies` hook fires
-// exactly once, BEFORE the dependent's `perform_build`. Mirrors Flutter
-// `framework.dart:5977-5982` `StatefulElement.performRebuild` reading
-// the `_didChangeDependencies` flag set at `framework.dart:6117`.
+// exactly once, BEFORE the dependent's `perform_build`.
 // ============================================================================
 
 mod did_change_dependencies_on_inherited_update {
@@ -562,7 +554,7 @@ mod did_change_dependencies_on_inherited_update {
 // Before PR-K, `build_into_views` handed user `build()` an empty process-
 // shared dummy context, so `depend_on` inside a real build returned `None`
 // and recorded nothing — inherited data was unreachable from the very place
-// Flutter makes it reachable (`framework.dart:5081`). This module pins the
+// it should be reachable. This module pins the
 // wired behavior end to end: read-during-build → record → notify-on-update.
 // ============================================================================
 

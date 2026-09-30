@@ -24,7 +24,7 @@ User callbacks
 
 ### Hit Testing
 
-Determines which UI elements are under a point. Follows Flutter's pattern with full transform support.
+Determines which UI elements are under a point, with full transform support.
 
 ```rust
 use flui_interaction::prelude::*;
@@ -410,10 +410,10 @@ FLUI separates executable UI ownership from data-plane routing:
 
 ---
 
-## Beyond Flutter
+## Input processing
 
-Input-processing capabilities Flutter does not ship, each implemented from
-the canonical published source:
+Input-processing capabilities, each implemented from the canonical published
+source:
 
 | Capability | Source | API |
 |---|---|---|

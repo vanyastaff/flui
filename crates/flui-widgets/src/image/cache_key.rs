@@ -8,13 +8,12 @@
 ///
 /// A bare `String` cannot serve this role: `AssetImage("x")` and
 /// `NetworkImage("x")` must never alias the same cache slot even though their
-/// path/URL text happens to match. Flutter's own `ImageProvider` avoids this
-/// collision via `runtimeType` plus the provider's own `==` — Rust has no
-/// analogue for that on a `dyn ImageProvider` trait object, so the provider
-/// namespace becomes part of the key's identity explicitly instead.
+/// path/URL text happens to match. A `dyn ImageProvider` trait object has no
+/// type-plus-equality identity to lean on, so the provider namespace is part
+/// of the key's identity explicitly.
 ///
-/// `#[non_exhaustive]`: a future provider (e.g. a `dart:ui`-style
-/// `MemoryImage` with an async decode) adds a variant, not a breaking change
+/// `#[non_exhaustive]`: a future provider (e.g. a `MemoryImage`
+/// with an async decode) adds a variant, not a breaking change
 /// to existing match arms.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]

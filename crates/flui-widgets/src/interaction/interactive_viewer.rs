@@ -1,49 +1,37 @@
 //! [`InteractiveViewer`] — pans and zooms its child through a transformation
 //! matrix.
 //!
-//! Flutter parity: `widgets/interactive_viewer.dart` (tag `3.44.0`). The
-//! contract this ports: a single [`TransformationController`]-held
+//! The contract: a single [`TransformationController`]-held
 //! [`Matrix4`] maps the child's scene coordinates to viewport coordinates;
 //! gestures update that matrix; `min_scale`/`max_scale` clamp the zoom level;
 //! `boundary_margin` constrains how far the transformed viewport may drift
 //! from the child's own rect (an all-infinite margin removes the boundary
 //! entirely); `pan_enabled`/`scale_enabled` gate whether a gesture is allowed
 //! to *apply*, though `on_interaction_*` callbacks still fire regardless
-//! (matching Flutter's documented "will be called even if the interaction is
-//! disabled" contract).
+//! ("will be called even if the interaction is disabled").
 //!
-//! # Scope of this port (V1)
+//! # Scope (V1)
 //!
 //! - **Pan** is wired through [`GestureDetector::on_pan_start`]/`on_pan_update`/
 //!   `on_pan_end` — a genuine single-pointer drag, dispatched and slop-tested
 //!   through the real gesture arena in tests.
 //! - **Scale** is wired through [`Listener::on_pointer_signal`] — a real mouse
-//!   wheel / discrete-scroll event, matching Flutter's `_receivedPointerSignal`
-//!   mouse-wheel branch (`scaleChange = exp(-scrollDelta.dy / scaleFactor)`).
+//!   wheel / discrete-scroll event, with an exponential scale change
+//!   (`exp(-scroll_dy / scale_factor)`).
 //! - **Trackpad pinch** arrives on the pan-zoom lane
 //!   ([`Listener::on_pointer_pan_zoom_claim`]) and is *arbitrated*: the
 //!   leaf-most viewer that will actually transform claims the tick, so
-//!   nested viewers do not all zoom on one pinch. Flutter resolves the same
-//!   contention through the SCALE GESTURE ARENA
-//!   (`PointerPanZoomStartEvent` opens a `ScaleGestureRecognizer` entry,
-//!   `gestures/scale.dart`); this claim walk is FLUI's interim arbitration
-//!   until that recognizer lands, deliberately shaped like the
-//!   pointer-signal claim the wheel branch already uses. It is not the
-//!   recognizer: nothing here tracks a gesture's start/end boundary or
-//!   competes with a pan in the arena.
+//!   nested viewers do not all zoom on one pinch. This claim walk is FLUI's
+//!   interim arbitration until a scale recognizer joins the gesture arena,
+//!   deliberately shaped like the pointer-signal claim the wheel branch
+//!   already uses. It is not that recognizer: nothing here tracks a gesture's
+//!   start/end boundary or competes with a pan in the arena.
 //! - **Two-pointer pinch-to-zoom and two-finger rotation are out of scope.**
-//!   Flutter recognizes them through `GestureDetector`'s combined scale
-//!   gesture (`onScaleStart`/`onScaleUpdate`/`onScaleEnd`, fed by two
-//!   simultaneous pointers); FLUI's `GestureDetector` has no such recognizer
-//!   yet — this is a framework-level gap, not merely a test-harness one.
-//!   Rotation is in the same position Flutter's own upstream is: `_rotateEnabled` is hardcoded
-//!   `false` in the oracle too (`interactive_viewer.dart` — rotation is
-//!   unimplemented pending flutter/flutter#57698), so dropping the
-//!   `Quad`/rotation-aware boundary math it would otherwise need is a
-//!   faithful simplification, not a cut corner: with rotation permanently
-//!   off, the general `Quad` axis-aligned-bounding-box algorithm and the
-//!   plain-`Rect` containment math below produce identical boundary
-//!   decisions.
+//!   They need a combined scale gesture fed by two simultaneous pointers;
+//!   FLUI's `GestureDetector` has no such recognizer yet — this is a
+//!   framework-level gap, not merely a test-harness one. With rotation
+//!   permanently off, the boundary math is plain axis-aligned `Rect`
+//!   containment, with no rotation-aware quad algorithm needed.
 //! - **`constrained: false`** (an unconstrained child laid out via an
 //!   `OverflowBox`-equivalent, escaping the viewport) is **deferred**. V1
 //!   only supports `constrained: true` — the child is laid out under
@@ -55,17 +43,14 @@
 //!   child's own (unmargined) rect are numerically identical in V1** — see
 //!   [`InteractiveViewerState::geometry`]. Adding `constrained: false` later
 //!   means that identity stops holding and a second, viewport-only anchor
-//!   (mirroring Flutter's `_parentKey` vs. `_childKey` split) becomes load
-//!   bearing again.
-//! - **Inertia/fling after a pan release** (Flutter's `FrictionSimulation` in
-//!   `_onScaleEnd`) is deferred — `on_interaction_end` fires with the
-//!   release velocity, but no animation follows it. Needs an
+//!   becomes load bearing again.
+//! - **Inertia/fling after a pan release** is deferred — `on_interaction_end`
+//!   fires with the release velocity, but no animation follows it. Needs an
 //!   `AnimationController`/`Vsync` wiring pass of its own.
 //!
 //! `on_interaction_start`/`on_interaction_update`/`on_interaction_end` carry
-//! FLUI's own detail types ([`InteractionStartDetails`] etc.), not a literal
-//! port of Flutter's `ScaleStartDetails`/`ScaleUpdateDetails`/`ScaleEndDetails`
-//! — those describe a combined pan+scale+rotate gesture this port does not
+//! FLUI's own detail types ([`InteractionStartDetails`] etc.) rather than
+//! those of a combined pan+scale+rotate gesture, which this widget does not
 //! recognize as one gesture. The shape here carries what pan and wheel-scale
 //! actually produce: a focal point, a scale multiplier (1.0 for a pure pan),
 //! a translation delta, and a release velocity.
@@ -99,8 +84,6 @@ use super::transformation_controller::TransformationController;
 // ============================================================================
 
 /// Constrains which axis (or axes) [`InteractiveViewer`] pans along.
-///
-/// Flutter parity: `widgets/interactive_viewer.dart` `PanAxis`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PanAxis {
     /// Panning is allowed only along the horizontal axis.
@@ -170,15 +153,14 @@ type EndCallback = Rc<dyn Fn(&mut EventCx<'_>, InteractionEndDetails)>;
 /// The desktop contract "wheel scrolls, ctrl+wheel zooms" is only
 /// composable when the viewer restricts itself to the chord — an enclosing
 /// scrollable declines ctrl+wheel ticks, so under [`CtrlWheel`] the two
-/// gestures split cleanly. [`AnyWheel`] keeps Flutter's own behavior
-/// (`_receivedPointerSignal` zooms on every vertical tick) and is the
+/// gestures split cleanly. [`AnyWheel`] zooms on every vertical tick and is the
 /// default.
 ///
 /// [`CtrlWheel`]: WheelScaleGate::CtrlWheel
 /// [`AnyWheel`]: WheelScaleGate::AnyWheel
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WheelScaleGate {
-    /// Every vertical wheel tick zooms (Flutter parity).
+    /// Every vertical wheel tick zooms.
     #[default]
     AnyWheel,
     /// Only ctrl+wheel zooms; plain ticks are left to enclosing consumers.
@@ -228,15 +210,13 @@ impl Default for InteractiveViewer {
         Self {
             controller: TransformationController::new(),
             boundary_margin: EdgeInsets::ZERO,
-            // Eyeballed defaults, matching Flutter's own (`minScale: 0.8`,
-            // `maxScale: 2.5`) — reasonable limits for common use cases.
+            // Eyeballed defaults — reasonable limits for common use cases.
             min_scale: 0.8,
             max_scale: 2.5,
             pan_enabled: true,
             scale_enabled: true,
             wheel_scale_gate: WheelScaleGate::default(),
             pan_axis: PanAxis::Free,
-            // Flutter parity: `kDefaultMouseScrollToScaleFactor`.
             scale_factor: 200.0,
             clip_behavior: Clip::HardEdge,
             alignment: None,
@@ -249,8 +229,8 @@ impl Default for InteractiveViewer {
 }
 
 impl InteractiveViewer {
-    /// A new `InteractiveViewer` with Flutter's default limits (`minScale:
-    /// 0.8`, `maxScale: 2.5`, zero boundary margin, pan and wheel-scale both
+    /// A new `InteractiveViewer` with default limits (`min_scale: 0.8`,
+    /// `max_scale: 2.5`, zero boundary margin, pan and wheel-scale both
     /// enabled).
     #[must_use]
     pub fn new() -> Self {
@@ -275,8 +255,7 @@ impl InteractiveViewer {
     /// # Precondition
     ///
     /// Every edge must be finite, or every edge must be infinite — not a mix
-    /// (checked with `debug_assert!`, matching Flutter's own `assert`, which
-    /// is likewise debug-only).
+    /// (checked with `debug_assert!`, so debug-only).
     #[must_use]
     pub fn boundary_margin(mut self, boundary_margin: EdgeInsets) -> Self {
         debug_assert!(
@@ -320,7 +299,7 @@ impl InteractiveViewer {
     }
 
     /// If `false`, single-pointer drags do not pan the child.
-    /// `on_interaction_*` callbacks still fire (Flutter parity).
+    /// `on_interaction_*` callbacks still fire.
     #[must_use]
     pub fn pan_enabled(mut self, pan_enabled: bool) -> Self {
         self.pan_enabled = pan_enabled;
@@ -328,7 +307,7 @@ impl InteractiveViewer {
     }
 
     /// If `false`, mouse-wheel scroll does not scale the child.
-    /// `on_interaction_*` callbacks still fire (Flutter parity).
+    /// `on_interaction_*` callbacks still fire.
     #[must_use]
     pub fn scale_enabled(mut self, scale_enabled: bool) -> Self {
         self.scale_enabled = scale_enabled;
@@ -336,7 +315,7 @@ impl InteractiveViewer {
     }
 
     /// Gate wheel-driven zooming on the ctrl chord (default: every vertical
-    /// tick zooms, Flutter parity). See [`WheelScaleGate`].
+    /// tick zooms). See [`WheelScaleGate`].
     #[must_use]
     pub fn wheel_scale_gate(mut self, gate: WheelScaleGate) -> Self {
         self.wheel_scale_gate = gate;
@@ -354,8 +333,7 @@ impl InteractiveViewer {
     /// The divisor applied to a mouse-wheel scroll delta before it becomes an
     /// exponential scale change (`scale_change = exp(-scroll_dy /
     /// scale_factor)`). Larger values feel slower; smaller values feel
-    /// faster. Defaults to Flutter's `kDefaultMouseScrollToScaleFactor`
-    /// (`200.0`).
+    /// faster. Defaults to `200.0`.
     #[must_use]
     pub fn scale_factor(mut self, scale_factor: f64) -> Self {
         self.scale_factor = scale_factor;
@@ -606,14 +584,11 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
 
             // -- Wheel scale (Listener::on_scroll_claim) -------------------
             //
-            // Documented divergence: Flutter's `InteractiveViewer` acts on
-            // `onPointerSignal` directly WITHOUT registering in its
-            // `PointerSignalResolver`, so a viewer nested in a scrollable
-            // both zooms and scrolls on one wheel tick (the resolver's own
-            // class doc names this exact conflict as what it exists to
-            // prevent). FLUI routes the viewer through the arbitrated claim
-            // walk instead: when the tick will actually zoom, the viewer
-            // claims it and the outer scrollable stays still.
+            // The viewer goes through the arbitrated claim walk rather than
+            // acting on the raw pointer signal: acting directly would make a
+            // viewer nested in a scrollable both zoom and scroll on one wheel
+            // tick. When the tick will actually zoom, the viewer claims it and
+            // the outer scrollable stays still.
             let controller_wheel = controller.clone();
             let anchor_wheel = anchor.clone();
             let pipeline_cell_wheel = pipeline_cell.clone();
@@ -631,9 +606,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                         return EventPropagation::Continue;
                     }
                     if data.delta.dy == 0.0 {
-                        // Ignore horizontal-only wheel scroll, matching the
-                        // oracle (`_receivedPointerSignal` returns early on
-                        // `scrollDelta.dy == 0.0`).
+                        // Ignore horizontal-only wheel scroll.
                         return EventPropagation::Continue;
                     }
 
@@ -669,7 +642,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                         controller_wheel.set_value(scaled);
 
                         // Keep the same scene point under the cursor before and
-                        // after the scale (Flutter parity).
+                        // after the scale.
                         let scene_after = controller_wheel.to_scene(data.position);
                         let correction = Offset::new(
                             scene_after.dx - scene_before.dx,
@@ -709,7 +682,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                     // to a no-op (e.g. zoom-out at identity with a zero
                     // boundary margin), leaves the tick to an enclosing
                     // scrollable; the interaction callbacks above still observed
-                    // it (Flutter fires them even then).
+                    // it even then.
                     if controller_wheel.value().m == value_before_zoom.m {
                         EventPropagation::Continue
                     } else {
@@ -731,9 +704,9 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                 .child(transform);
 
             let recognized = GestureDetector::new()
-                // Flutter parity: `HitTestBehavior.opaque` — "necessary when
-                // panning off screen" (the child's own hit-test area can end
-                // up smaller than the viewport once transformed).
+                // Opaque is necessary when panning off screen (the child's own
+                // hit-test area can end up smaller than the viewport once
+                // transformed).
                 .behavior(HitTestBehavior::Opaque)
                 .on_pan_start(pan_start_details)
                 .on_pan_update(pan_update_details)
@@ -746,9 +719,9 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
             // ordinary pan-zoom delivery reaches every listener on the hit
             // path, so two nested enabled viewers would both scale on one
             // pinch tick. The claim walk hands the tick to the leaf-most
-            // viewer that actually transforms. (Flutter arbitrates this
-            // through the scale gesture arena instead, which FLUI's V1
-            // viewer scopes out; see this module's own docs.)
+            // viewer that actually transforms. (A scale-recognizer arena entry
+            // would do this instead, which V1 scopes out; see this module's
+            // own docs.)
             //
             // The pan-zoom lane delivers per-tick updates whose `scale` is
             // the tick's own factor (each converted gesture is a one-tick
@@ -868,11 +841,9 @@ impl InteractiveViewerState {
     /// `Listener`/`GestureDetector`/`ClipRect`/`Transform` are all
     /// layout-transparent proxies that adopt the child's own size — nothing
     /// between this widget's box and the child imposes a different size. So
-    /// the **viewport** rect (Flutter's `_viewport`, `parentRenderBox.size`)
-    /// and the child's own unmargined rect (the base Flutter inflates by
-    /// `boundaryMargin` to get `_boundaryRect`) are the same rectangle. This
-    /// collapses Flutter's two keys (`_parentKey` on the outer `Listener`,
-    /// `_childKey` inside `Transform`) into the single `subtree_anchor` field.
+    /// the **viewport** rect and the child's own unmargined rect (the base
+    /// inflated by `boundary_margin` to get the boundary rect) are the same
+    /// rectangle, so one `subtree_anchor` field serves both.
     fn geometry(
         pipeline_cell: Option<&PipelineCell>,
         anchor: &SubtreeAnchor,
@@ -914,13 +885,10 @@ fn transform_viewport(matrix: Matrix4, viewport: Rect<f64>) -> Rect<f64> {
 /// one axis, signed so that adding it to the viewport's position moves it
 /// back inside the boundary. Zero when already inside (inclusive).
 ///
-/// Flutter parity: the axis-aligned specialization of
-/// `InteractiveViewer._exceedsBy`/`getNearestPointInside` — with rotation
-/// permanently disabled (see the module docs), the general `Quad`
-/// nearest-point algorithm and this plain interval comparison agree on every
-/// case, including a viewport wider than the boundary on this axis (checked
-/// against both edges; the edge quoting the larger-magnitude excess wins,
-/// exactly as the `Quad` algorithm's per-corner comparison would).
+/// With rotation permanently disabled (see the module docs), this plain
+/// interval comparison is sufficient, including a viewport wider than the
+/// boundary on this axis (checked against both edges; the edge quoting the
+/// larger-magnitude excess wins).
 fn axis_excess(view_min: f64, view_max: f64, bound_min: f64, bound_max: f64) -> f64 {
     let excess_min = if view_min < bound_min {
         bound_min - view_min
@@ -959,17 +927,10 @@ fn rect_excess(boundary: Rect<f64>, viewport: Rect<f64>) -> Offset<f64> {
 /// Floating-point tolerance for the "did this transform round-trip produce
 /// zero excess" checks in [`clamp_translation`].
 ///
-/// Flutter parity: `InteractiveViewer`'s own `_round` helper exists for
-/// exactly this reason — `_exceedsBy`'s result is rounded to 9 decimal
-/// places before the `== Offset.zero` check, because
-/// `_transformViewport`'s inverse-then-transform round trip leaves residue
-/// that *should* be exactly zero but isn't once the matrix carries a
-/// non-unit (and non-power-of-two) scale, per the oracle's own comment:
-/// "values that should have been zero were given as within 10^-10 of zero".
-/// `f64` carries far fewer significant digits than the `f64` the oracle
-/// rounds, so a fixed decimal count doesn't transfer numerically; this
-/// snaps anything within `EXCESS_EPSILON` of zero back to exactly zero
-/// instead. Chosen against the scale of one gesture's excess (tens to
+/// The viewport's inverse-then-transform round trip leaves residue that
+/// *should* be exactly zero but isn't once the matrix carries a non-unit (and
+/// non-power-of-two) scale. This snaps anything within `EXCESS_EPSILON` of
+/// zero back to exactly zero. Chosen against the scale of one gesture's excess (tens to
 /// thousands of pixels) rather than absolute machine epsilon — comfortably
 /// larger than the ~1e-4 residue a `scale * (a - b)` round trip leaves at
 /// these magnitudes, comfortably smaller than any excess a real boundary
@@ -1008,11 +969,10 @@ fn align_to_axis(delta: Offset<f64>, axis: Axis) -> Offset<f64> {
 /// Applies `translation` (in scene units) to `matrix`, clamped so the
 /// transformed viewport stays within `boundary` when `boundary` is finite.
 ///
-/// Flutter parity: `_InteractiveViewerState._matrixTranslate`. Composed via
+/// Composed via
 /// `matrix * Matrix4::translation(..)` (post-multiply — the translation
 /// happens in the matrix's own local/scene space before the rest of the
-/// transform is applied), matching `vector_math`'s `translateByDouble`
-/// instance-method convention that the oracle relies on. `flui_foundation::geometry`'s
+/// transform is applied). `flui_foundation::geometry`'s
 /// own `Matrix4::translate` mutator has the *opposite* (pre-multiply,
 /// global-space) convention and must not be used here.
 fn clamp_translation(
@@ -1051,8 +1011,7 @@ fn clamp_translation(
 
     if !is_negligible(corrected_excess.dx) && !is_negligible(corrected_excess.dy) {
         // Neither axis fits at all (the viewport is larger than the
-        // boundary in both directions): no translation, matching the
-        // oracle.
+        // boundary in both directions): no translation.
         return matrix;
     }
 
@@ -1075,7 +1034,7 @@ fn clamp_translation(
 /// resulting overall scale stays within `[min_scale, max_scale]` and never
 /// shrinks the child so much it can't cover `boundary` from `viewport`.
 ///
-/// Flutter parity: `_InteractiveViewerState._matrixScale`. Composed via
+/// Composed via
 /// `matrix * Matrix4::scaling(..)` — see [`clamp_translation`]'s doc for why
 /// the mutating `Matrix4::scale` method is the wrong tool here.
 fn clamp_scale(
@@ -1089,9 +1048,7 @@ fn clamp_scale(
     if scale == 1.0 {
         return matrix;
     }
-    // Flutter parity: `assert(maxScale >= minScale)` on `InteractiveViewer`'s
-    // constructor — debug-only there too (Dart's `assert` is stripped in
-    // release), so this does not replace `clamp_double`'s non-panicking
+    // Debug-only: this does not replace `clamp_double`'s non-panicking
     // behavior below; it only surfaces the misconfiguration in debug builds.
     debug_assert!(
         max_scale >= min_scale,
@@ -1108,11 +1065,10 @@ fn clamp_scale(
     matrix * Matrix4::scaling(applied, applied, applied)
 }
 
-/// Flutter parity: `foundation.dart`'s `clampDouble`. Unlike `f64::clamp`
+/// Unlike `f64::clamp`
 /// (which panics — in every build profile, not just debug — whenever `min >
 /// max`), this never panics: a misconfigured `min_scale > max_scale` falls
-/// through to Dart's own release-mode behavior (the `assert` above is
-/// debug-only) instead of crashing a release build over a caller error that
+/// through (the assertion above is debug-only) instead of crashing a release build over a caller error that
 /// should have been caught in testing.
 fn clamp_double(x: f64, min: f64, max: f64) -> f64 {
     if x < min {

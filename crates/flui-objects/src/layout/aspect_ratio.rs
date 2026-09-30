@@ -1,22 +1,17 @@
 //! `RenderAspectRatio` — sizes the child to a target width:height ratio.
 //!
-//! # Flutter equivalence
+//! # Sizing
 //!
-//! Behavior-faithful port of Flutter's
-//! [`RenderAspectRatio`](https://api.flutter.dev/flutter/rendering/RenderAspectRatio-class.html)
-//! (`packages/flutter/lib/src/rendering/proxy_box.dart`). The sizing
-//! algorithm follows Flutter's `_applyAspectRatio` exactly: width-first
-//! resolution, biased toward inflexibility by checking tighter bounds first.
+//! Width-first resolution, biased toward inflexibility by checking tighter
+//! bounds first (see [`RenderAspectRatio`] for the steps).
 //!
-//! # Rust-native improvements
+//! # Design
 //!
 //! * The ratio is wrapped in [`AspectRatioFactor`] — a validated newtype that
-//!   cannot represent a non-positive or non-finite value. Flutter's
-//!   `double aspectRatio` field can hold `NaN` and would silently produce
-//!   `NaN`-sized layouts; in this port that mistake is unrepresentable.
-//! * Constraint queries (`hasBoundedWidth`/`hasBoundedHeight`) are typed
-//!   methods on [`BoxConstraints`] returning real `bool`s; Flutter uses
-//!   `isFinite` checks on raw doubles.
+//!   cannot represent a non-positive or non-finite value, so a `NaN` ratio
+//!   cannot silently produce `NaN`-sized layouts.
+//! * Constraint queries (`has_bounded_width`/`has_bounded_height`) are typed
+//!   methods on [`BoxConstraints`] returning real `bool`s.
 
 use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Size};
@@ -120,7 +115,7 @@ impl From<AspectRatioFactor> for f64 {
 
 /// A render object that forces its child to a specific aspect ratio.
 ///
-/// The algorithm matches Flutter's `RenderAspectRatio` step-for-step:
+/// The algorithm:
 /// 1. Default to width = `constraints.max_width`, height = width / ratio.
 /// 2. If width is unbounded, swap: take height = `constraints.max_height`
 ///    and compute width = height × ratio.
@@ -137,7 +132,7 @@ impl From<AspectRatioFactor> for f64 {
 /// At least one of `max_width` / `max_height` must be bounded. With both
 /// unbounded, the layout is undefined (there is no finite size that
 /// satisfies the ratio); the box falls back to `Size::ZERO` and emits a
-/// `tracing::warn!`, matching the Flutter debug-mode assertion in spirit.
+/// `tracing::warn!`.
 ///
 /// # Example
 ///
@@ -181,9 +176,9 @@ impl RenderAspectRatio {
     }
 
     /// Computes the size implied by the aspect ratio for the given
-    /// constraints, following Flutter's `_applyAspectRatio` exactly.
+    /// constraints.
     fn apply_aspect_ratio(&self, constraints: BoxConstraints) -> Size {
-        // Flutter asserts at least one dimension is bounded.
+        // At least one dimension must be bounded.
         if !constraints.has_bounded_width() && !constraints.has_bounded_height() {
             tracing::warn!(
                 ratio = self.aspect_ratio.value(),
@@ -249,8 +244,8 @@ impl RenderBox for RenderAspectRatio {
 
         if ctx.child_count() > 0 {
             self.has_child = true;
-            // Flutter passes tight constraints to the child so it can't escape
-            // the aspect-ratio sizing decision.
+            // The child gets tight constraints so it can't escape the
+            // aspect-ratio sizing decision.
             let child_constraints = BoxConstraints::tight(target_size);
             let _child_size = ctx.layout_child(0, child_constraints);
             ctx.position_child(0, Offset::ZERO);
@@ -265,9 +260,8 @@ impl RenderBox for RenderAspectRatio {
 
     // ---- intrinsic dimensions ------------------------------------------
 
-    // Flutter parity: proxy_box.dart `RenderAspectRatio` — a finite
-    // extent answers with pure ratio math; an unbounded extent defers
-    // to the child's own intrinsic (`child?.get* ?? 0.0`).
+    // A finite extent answers with pure ratio math; an unbounded extent
+    // defers to the child's own intrinsic (0 with no child).
 
     fn compute_min_intrinsic_width(
         &self,
@@ -335,8 +329,7 @@ impl RenderBox for RenderAspectRatio {
         _ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
     ) -> Size {
         // Sizing is fully determined by the ratio + constraints; the
-        // child is laid out tight to this size and never consulted
-        // (proxy_box.dart `RenderAspectRatio.computeDryLayout`).
+        // child is laid out tight to this size and never consulted.
         self.apply_aspect_ratio(constraints)
     }
 

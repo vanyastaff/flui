@@ -215,9 +215,8 @@ impl WgpuPainter {
     ///
     /// Until this, nothing was installed at all, which is issue #934.
     /// `RenderPhysicalShape` under `Clip::AntiAliasWithSaveLayer` fills its
-    /// colour with `Canvas::draw_paint` INSIDE the clip scope — deliberate
-    /// Flutter parity, so the shape's edge is anti-aliased once rather than
-    /// twice (`proxy_box.dart:2346`, citing flutter/flutter#18057) — and a fill
+    /// colour with `Canvas::draw_paint` INSIDE the clip scope — deliberate,
+    /// so the shape's edge is anti-aliased once rather than twice — and a fill
     /// with no geometry of its own is bounded by nothing but the clip. A
     /// `Material` therefore painted the entire window.
     ///

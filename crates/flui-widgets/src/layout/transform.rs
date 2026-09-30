@@ -9,17 +9,14 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Applies a [`Matrix4`] transform to its child before painting.
 ///
-/// Flutter parity: `widgets/basic.dart` `Transform` over `RenderTransform`.
-/// The transform affects painting and hit-testing but not layout — the child
+/// Backed by `RenderTransform`. The transform affects painting and hit-testing but not layout — the child
 /// is laid out as if untransformed.
 ///
-/// `alignment` follows the reference per constructor: [`new`](Self::new) has
+/// `alignment` depends on the constructor: [`new`](Self::new) has
 /// none, so an [`origin`](Self::origin) set alone acts alone, while
 /// [`scale`](Self::scale) and [`rotation`](Self::rotation) pivot about the
-/// centre. That is Flutter's own split — its bare `Transform(transform:,
-/// origin:)` leaves `alignment` null and its `rotate`/`scale`/`flip`
-/// factories pass `Alignment.center` explicitly.
-// `transform` names the Flutter-parity concept the struct wraps (matches
+/// centre.
+// `transform` names the concept the struct wraps (matches
 // `RenderTransform`'s own field of the same name); renaming it to dodge the
 // lint would trade a clear name for a weaker one.
 #[expect(clippy::struct_field_names)]
@@ -60,7 +57,7 @@ impl Transform {
     }
 
     /// Sets the alignment of the transform's pivot, relative to the child's
-    /// size (Flutter parity: `Transform.alignment`). Combines additively with
+    /// size. Combines additively with
     /// [`origin`](Self::origin) when both are set.
     #[must_use]
     pub fn alignment(mut self, alignment: Alignment) -> Self {
@@ -73,8 +70,7 @@ impl Transform {
     /// With `false` the child is hit where it was LAID OUT rather than where
     /// it paints — what a decorative transform wants, so the moved pixels do
     /// not move the touch target. Painting and the global coordinates a hit
-    /// entry carries are unaffected either way (Flutter parity:
-    /// `Transform.transformHitTests`).
+    /// entry carries are unaffected either way.
     #[must_use]
     pub const fn transform_hit_tests(mut self, value: bool) -> Self {
         self.transform_hit_tests = value;
@@ -82,7 +78,7 @@ impl Transform {
     }
 
     /// Sets an explicit pivot offset, on top of [`alignment`](Self::alignment)'s
-    /// contribution (Flutter parity: `Transform.origin`).
+    /// contribution.
     #[must_use]
     pub fn origin(mut self, origin: Offset) -> Self {
         self.origin = Some(origin);

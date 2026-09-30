@@ -1,7 +1,6 @@
 //! RelativeRect - positioning relative to parent bounds
 //!
-//! Similar to Flutter's `RelativeRect`. Used for `Positioned` widget
-//! and animations like `RelativeRectTween`.
+//! Used for the `Positioned` widget and animations like `RelativeRectTween`.
 
 use std::ops::{Add, Mul, Neg, Sub};
 
@@ -11,8 +10,8 @@ use crate::geometry::{Offset, Size};
 /// A rectangle expressed as distances from the edges of a parent rectangle.
 ///
 /// Unlike a plain rect, each field is an inset from the corresponding parent
-/// edge, so the described rectangle depends on the parent's size. Equivalent
-/// to Flutter's `RelativeRect`, used by `Positioned` and `RelativeRectTween`.
+/// edge, so the described rectangle depends on the parent's size. Used by
+/// `Positioned` and `RelativeRectTween`.
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RelativeRect<T: Unit = f64> {

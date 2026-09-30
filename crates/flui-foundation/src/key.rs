@@ -9,14 +9,13 @@
 //!   - Runtime unique generation: `Key::new()`
 //!   - From external ID: `Key::from_u64(id)`
 //!
-//! # Flutter-Style Keys (for reconciliation)
+//! # Keys (for reconciliation)
 //!
 //! - [`ViewKey`] - Trait for all reconciliation keys
 //! - [`ValueKey<T>`] - Key by value (string, number, struct)
 //! - [`UniqueKey`] - Guaranteed unique, never matches another
 //!
-//! Note: `ObjectKey` and `GlobalKey<T>` are in `flui-view` (widgets layer),
-//! matching Flutter's architecture where they live in `widgets/framework.dart`.
+//! Note: `ObjectKey` and `GlobalKey<T>` are in `flui-view` (widgets layer).
 //!
 //! # When to Use Which
 //!
@@ -392,13 +391,11 @@ pub trait ViewKey: Send + Sync + 'static {
     /// to decide whether to soft-remove into the inactive queue (R13 /
     /// R14).
     ///
-    /// Flutter parity: `framework.dart:3148` keys the registry by
-    /// `GlobalKey` identity rather than by a hash AND a "this is a
-    /// global key" boolean. We split the check across the two methods
-    /// because `ViewKey::key_hash()` already returns `u64` from any key
-    /// impl (incl. `ValueKey`, `UniqueKey`, `ObjectKey`), and we need a
-    /// cheap, type-erased way to skip non-global keys without an `Any`
-    /// downcast at every mount site.
+    /// The check is split across two methods (a hash and a "this is a
+    /// global key" boolean) because `ViewKey::key_hash()` already returns
+    /// `u64` from any key impl (incl. `ValueKey`, `UniqueKey`, `ObjectKey`),
+    /// and we need a cheap, type-erased way to skip non-global keys without
+    /// an `Any` downcast at every mount site.
     fn is_global_key(&self) -> bool {
         false
     }
@@ -514,11 +511,10 @@ impl<T: Clone + Hash + Eq + Send + Sync + fmt::Debug + 'static> ViewKey for Valu
 
 /// A key that a *wrapper* element carries on behalf of the child it wraps.
 ///
-/// A lazy sliver reconciles its children by key, and Flutter restores each
-/// item's key outside the per-item `RepaintBoundary` with a `KeyedSubtree`
-/// carrying a `_SaltedValueKey` (`widgets/scroll_delegate.dart`). FLUI's
-/// wrapper owns the render node the sliver needs, so the wrapper carries the
-/// key itself — salted, for the same two reasons Flutter salts it:
+/// A lazy sliver reconciles its children by key, and each item's key must
+/// live outside the per-item `RepaintBoundary`. The wrapper owns the render
+/// node the sliver needs, so the wrapper carries the key itself — salted, for
+/// two reasons:
 ///
 /// - **it is not the item's key.** Two elements may not answer to the same
 ///   key in one parent; the salt makes the wrapper's key equal only to another

@@ -254,8 +254,8 @@ fn a_panicking_activate_removes_the_reactivated_element_instead_of_stranding_it(
     );
     // Drive the first build so `init_state` actually runs before the
     // retake — `StatefulBehavior::on_activate` is
-    // gated on a completed `init_state` (matching Flutter's guaranteed
-    // `initState` -> `activate` ordering), so an item that was only
+    // gated on a completed `init_state` (the guaranteed
+    // `init_state` -> `activate` ordering), so an item that was only
     // mounted, never built, never runs its `activate` callback (and
     // this fixture's induced panic would never fire).
     build_owner.build_scope(&mut tree);

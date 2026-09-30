@@ -8,7 +8,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 description = "Runtime developer tooling for FLUI - frame profiler, timeline and tree-observation counters"
-keywords = ["gui", "profiler", "devtools", "flutter", "flui"]
+keywords = ["gui", "profiler", "devtools", "flui"]
 categories = ["development-tools::profiling", "gui"]
 # The criterion bench is a development file; the published archive ships the
 # library, its tests and examples only.

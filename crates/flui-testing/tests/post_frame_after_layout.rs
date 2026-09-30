@@ -1,13 +1,12 @@
 //! A post-frame callback registered on the **binding's own**
 //! scheduler observes THIS frame's committed layout.
 //!
-//! # Parity oracle
+//! # Contract
 //!
-//! `.flutter/packages/flutter/lib/src/scheduler/binding.dart:1338-1358` — the
-//! post-frame phase follows the persistent phase, which is where the pipeline
-//! runs. `heroes.dart:966-971` is the caller that depends on it: it forces a
-//! route offstage, schedules a post-frame callback, and measures the destination
-//! hero in that same frame.
+//! The post-frame phase follows the persistent phase, which is where the
+//! pipeline runs. A hero transition depends on it: it forces a route offstage,
+//! schedules a post-frame callback, and measures the destination hero in that
+//! same frame.
 //!
 //! Previously, `pump_frame` never drained the post-frame queue at all, and never
 //! opened a scheduler frame.

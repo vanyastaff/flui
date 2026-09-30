@@ -18,9 +18,9 @@
 //!                 └── ...
 //! ```
 //!
-//! Note: The canonical Flutter trait hierarchy
+//! Note: The layered trait hierarchy
 //! `GestureRecognizer ← OneSequenceGestureRecognizer ← PrimaryPointerGestureRecognizer`
-//! is re-introduced as proper traits; the zero-consumer scaffolds previously
+//! is expressed as proper traits; the zero-consumer scaffolds previously
 //! living here were deleted.
 //!
 //! # Available Recognizers

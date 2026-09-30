@@ -37,9 +37,7 @@ pub(crate) struct Slot<T, E> {
     ///
     /// Dropping the `TaskToken` already cancels the task, so this is defence in
     /// depth for the window where a task produced a value but its writer has not
-    /// yet taken the lock. Flutter's `_activeCallbackIdentity` plays the same
-    /// role — and for Dart it is the *only* defence, since a `Future` cannot be
-    /// cancelled at all.
+    /// yet taken the lock.
     pub(crate) generation: u64,
 
     /// True only while `AsyncDriver::spawn_local_eager`'s inline poll runs.
@@ -47,7 +45,7 @@ pub(crate) struct Slot<T, E> {
     /// A completion in that window must not schedule a rebuild: the build that
     /// reads it has not run yet, so scheduling would cost a wasted frame. Only
     /// `FutureBuilder` opens this window — `StreamBuilder` never polls inline,
-    /// because Dart's `Stream.listen` never delivers an event synchronously.
+    /// because a stream subscription never delivers an event synchronously.
     pub(crate) inline_window: bool,
 }
 

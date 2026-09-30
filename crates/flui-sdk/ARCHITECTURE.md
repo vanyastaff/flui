@@ -115,9 +115,7 @@ needs the nightly JSON tooling and replaces this table when it lands.
 
 ## Mapping decisions
 
-### No Flutter counterpart
+### One SDK crate with its own version
 
-Flutter's packages import `package:flutter/*.dart` libraries directly, and the SDK version is
-one constraint in `pubspec.yaml`. Cargo resolves each crate separately, so FLUI gives packages
-one crate with its own version instead of the internal crates. The divergence and its reasons
-are ADR-0088; the tests above pin it.
+Cargo resolves each crate separately, so FLUI gives packages one crate with its own version
+instead of the internal crates. The reasons are ADR-0088; the tests above pin it.

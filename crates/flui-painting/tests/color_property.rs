@@ -1,6 +1,6 @@
 //! `Color` contracts: the `to_hex`/`from_hex` roundtrip and the Porter-Duff
 //! mirror algebra of `blend` checked for arbitrary colors, `blend_over`
-//! against Flutter's `Color.alphaBlend` by hand, and multi-stop lerp.
+//! against hand-computed values, and multi-stop lerp.
 
 use flui_painting::paint::{BlendMode, BlendMode::*};
 use flui_painting::styling::Color;

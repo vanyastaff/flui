@@ -63,7 +63,7 @@ This is not architecture. It is the visible cost of porting Dart class shapes in
 
 `SceneBuilder` is consumed by `flui-rendering`'s paint context; the other crates only touch the finished `Scene`.
 
-**Lifecycle.** A `Scene` is constructed once per frame, consumed once by the engine, dropped. `LayerTree` inside `Scene` is mutable only during construction (when `SceneBuilder` holds `&mut LayerTree`) and read-only during rendering. There is no "long-lived layer tree across frames" — Flutter's retained-layer optimisation will be modelled later via a separate retention store on `flui-rendering`'s side (currently a stub `SceneCompositor::retained`).
+**Lifecycle.** A `Scene` is constructed once per frame, consumed once by the engine, dropped. `LayerTree` inside `Scene` is mutable only during construction (when `SceneBuilder` holds `&mut LayerTree`) and read-only during rendering. There is no "long-lived layer tree across frames" — a retained-layer optimisation will be modelled later via a separate retention store on `flui-rendering`'s side (currently a stub `SceneCompositor::retained`).
 
 **Key invariants.**
 1. **Single-writer-during-build.** While a `SceneBuilder` holds `&mut LayerTree`, no other code can touch the tree. Compiler-enforced.
@@ -123,7 +123,7 @@ No `Arc<RwLock<…>>` on the diagram. No `Box<dyn Layer>`. No `LayerHandle<T>`. 
 **What earns its place:**
 - `tree/layer_tree.rs` — Slab-based arena + LayerNode storage. Without it, no tree. Stays after extracting the 720 LOC test suite and the 5 deleted `push_*` helpers.
 - `tree/tree_traits.rs` — `TreeRead<LayerId>` and `TreeNav<LayerId>` impls for `LayerTree`. ~100 LOC of production code + 200 LOC tests. Stays.
-- `layer/` directory with 18 concrete layer struct files — each is one Flutter Layer subclass and one GPU lowering. Stays.
+- `layer/` directory with 18 concrete layer struct files — each is one layer kind and one GPU lowering. Stays.
 - `layer/mod.rs` — `Layer` enum + `LayerBounds` trait. Trimmed from 1075 LOC to ~300 LOC after collapsing the `is_*`/`as_*` boilerplate and moving `LayerBounds` to its own file.
 - `compositor.rs::SceneBuilder` — the public scene-construction API. ~600 LOC of `push_*` / `add_*` / `pop` methods. Stays, but `SceneCompositor` (retained-layer manager) moves to its own file.
 - `scene.rs` — the public scene value. ~150 LOC after deletions. Stays.
@@ -290,7 +290,7 @@ pub enum LayerError {
 pub type LayerResult<T> = Result<T, LayerError>;
 ```
 
-`SceneCompositor` (the retained-layer manager) **does not appear in the core types**. It is a forward-looking helper that lives in its own file (`compositor/retained.rs`) and is consumed by `flui-rendering` once Flutter's retained-layer optimisation lands. Today it has 80 LOC and 5 callers, none of which are production code. Stays but is separate from `SceneBuilder`.
+`SceneCompositor` (the retained-layer manager) **does not appear in the core types**. It is a forward-looking helper that lives in its own file (`compositor/retained.rs`) and is consumed by `flui-rendering` once the retained-layer optimisation lands. Today it has 80 LOC and 5 callers, none of which are production code. Stays but is separate from `SceneBuilder`.
 
 ---
 
@@ -652,7 +652,7 @@ For each rejected design: what it was, why it was tempting, why it is wrong here
 
 **What:** Replace the closed `Layer` enum with a trait object: `Box<dyn Layer + Send + Sync>`. Each layer type implements the trait and the engine matches by `Any::type_id` or via a vtable method.
 
-**Why tempting:** Mirrors Flutter's Dart class hierarchy directly (`abstract class Layer`, 18 concrete subclasses). Open-set extension point for downstream crates.
+**Why tempting:** Mirrors an object-oriented class hierarchy directly (an abstract `Layer` base, 18 concrete subclasses). Open-set extension point for downstream crates.
 
 **Why wrong:** The GPU backend in `flui-engine` cannot lower an arbitrary `dyn Layer` to wgpu draw calls — every variant needs a hand-written translation. Either every "third-party" layer ships with its own wgpu shader pack (massive extension surface) or the trait is closed by convention (in which case the enum is cheaper and more honest). Rust's borrow checker also gives the closed enum match-exhaustiveness checks that catch missing translations at compile time; the trait object loses that.
 
@@ -660,13 +660,13 @@ For each rejected design: what it was, why it was tempting, why it is wrong here
 
 **What:** Today's documentation literally recommends `Arc<RwLock<LayerTree>>` for "multi-threaded access". Make that the default shape: every `Scene` carries an `Arc<RwLock<LayerTree>>` so background work can mutate it.
 
-**Why tempting:** Allows async layer construction (e.g. background image decoders feeding `Layer::Texture` updates into a live `LayerTree`). Mirrors Flutter's `addToScene` Dart pattern where layers can be appended on different microtasks.
+**Why tempting:** Allows async layer construction (e.g. background image decoders feeding `Layer::Texture` updates into a live `LayerTree`). Mirrors a pattern where layers can be appended on different microtasks.
 
 **Why wrong:** Lock contention on the render-thread → painter-thread boundary, plus the lock guards an arena that has no actual cross-thread mutation today. The single-owner shape with `Scene: Send` and value-moving across threads gives the same flexibility (background workers build their own subtrees and emit them as values; the merge happens on the render thread in O(subtree-size)). The `Arc<RwLock<>>` shape is a tax with no payback.
 
 ### `LayerHandle<T>` as today, kept "for future GPU lifecycle"
 
-**What:** Keep the 467 LOC `LayerHandle<T>` and its 17 type aliases. Argument: "Flutter has `LayerHandle<T extends Layer>` to manage GPU resource lifecycles. We will need it eventually."
+**What:** Keep the 467 LOC `LayerHandle<T>` and its 17 type aliases. Argument: "A `LayerHandle<T>` manages GPU resource lifecycles. We will need it eventually."
 
 **Why tempting:** Avoids the discomfort of deleting working code. Insurance against a future need.
 
@@ -676,7 +676,7 @@ For each rejected design: what it was, why it was tempting, why it is wrong here
 
 **What:** Keep today's shape — `Arc<Mutex<Vec<(Id, Box<dyn Fn() + Send + Sync>)>>>` with a `Clone` impl that shares the storage and a separate `HasCompositionCallbacks` trait for layers to implement.
 
-**Why tempting:** Mirrors Flutter's `Layer.addCompositionCallback` pattern where each container layer carries its own callback list and they bubble up at composite time.
+**Why tempting:** Mirrors a composition-callback pattern where each container layer carries its own callback list and they bubble up at composite time.
 
 **Why wrong:** `HasCompositionCallbacks` has zero impls today; the trait is dead. The registry is a shared `Arc<Mutex<>>` that no caller actually shares across threads (no `Clone` in production code). The `Box<dyn Fn() + Send + Sync>` heap allocation per callback is paid for callbacks that may never fire. The correct shape is `Scene::add_composition_callback(FnOnce() + Send + 'static)` storing them in a plain `Vec<CompositionCallback>` on `Scene` and firing them once at scene-finalisation. One ownership chain, no lock, `FnOnce` not `Fn` (one-shot semantics match the callback's actual use), no `Arc`.
 
@@ -827,7 +827,7 @@ Ordered. Each step lands as a reviewable commit. Each step compiles and passes t
 ### Step 12 — Per-crate `ARCHITECTURE.md`
 
 - Create `crates/flui-layer/ARCHITECTURE.md` per the `docs/PORT.md` template:
-  - `## Flutter source mapping` (table: layer.dart class → `flui-layer/src/layer/*.rs`)
+  - `## Layer catalog` (table: layer kind → `flui-layer/src/layer/*.rs`)
   - `## Mapping decisions` (Accepted trade-offs for: closed enum vs `Box<dyn>`, `Vec<CompositionCallback>` vs `Arc<Mutex<>>`, single-owner `LayerTree` vs `Arc<RwLock<>>`, delete `LayerHandle`)
   - `## Thread safety` (table: `Scene` Send-only, `LayerTree` no locks, `LinkRegistry` HashMaps off hot path)
   - `## Friction log` (anything not yet refactored at end of chain)

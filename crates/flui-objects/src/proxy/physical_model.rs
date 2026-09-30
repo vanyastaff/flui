@@ -1,19 +1,9 @@
 //! `RenderPhysicalModel` / `RenderPhysicalShape` — a clipped, shadow-casting,
 //! filled surface around a single child.
 //!
-//! # Flutter equivalence
+//! # Shape
 //!
-//! Behavior-faithful port of Flutter's
-//! [`RenderPhysicalModel`](https://api.flutter.dev/flutter/rendering/RenderPhysicalModel-class.html)
-//! and
-//! [`RenderPhysicalShape`](https://api.flutter.dev/flutter/rendering/RenderPhysicalShape-class.html)
-//! (`packages/flutter/lib/src/rendering/proxy_box.dart`,
-//! `_RenderPhysicalModelBase<T>` `:2062-2126`, `RenderPhysicalModel`
-//! `:2132-2269`, `RenderPhysicalShape` `:2280-2373`).
-//!
-//! # Rust-native shape
-//!
-//! The two oracle classes share their entire paint recipe, hit-test
+//! The two variants share their entire paint recipe, hit-test
 //! recipe, and four field-level setters — only how the clip shape is
 //! derived from `size` differs (`BoxShape` + `BorderRadius` vs. an owner-lane
 //! [`PathClipTarget`]). That is collapsed to one generic body,
@@ -28,22 +18,19 @@
 //! [`PhysicalClipShape`] are a small, local trait pair scoped to exactly
 //! this family instead.
 //!
-//! # Divergences from a literal transcription (all backed by the design
-//! research doc, `docs/research/2026-07-01-render-physical-model-plan.md`)
+//! # Design notes (see the design research doc,
+//! `docs/research/2026-07-01-render-physical-model-plan.md`)
 //!
-//! - **Hit-test always tests the clip shape for both variants.** The oracle
-//!   gates this on `_clipper != null`, which for `RenderPhysicalModel`
-//!   (which never exposes a public clipper) means the gate never engages —
-//!   a circular `RenderPhysicalModel` hit-tests as its full bounding box in
-//!   real Flutter. This port applies the already-shipped
-//!   [`super::clip::RenderClip`] convention (always test the shape) to both
-//!   variants for FLUI-wide consistency. See [`RenderBox::hit_test`] below.
-//! - **`debugFillProperties` surfaces the real `shadow_color`.** The oracle
-//!   has a confirmed bug (`proxy_box.dart:2124`) that passes `color` twice
-//!   instead of `shadowColor`. Not reproduced here.
+//! - **Hit-test always tests the clip shape for both variants.** Gating the
+//!   test on a custom clipper being present would mean it never engages for
+//!   `RenderPhysicalModel` (which has no public clipper), and a circular one
+//!   would hit-test as its full bounding box. Instead the
+//!   [`super::clip::RenderClip`] convention (always test the shape) applies
+//!   to both variants. See [`RenderBox::hit_test`] below.
+//! - **`debug_fill_properties` surfaces the real `shadow_color`.**
 //! - **`clip_behavior` defaults to `Clip::None`**, not `Clip::AntiAlias` —
 //!   the opposite of `RenderClip<S>`'s own default. Physical-model surfaces
-//!   don't clip by default (oracle `:2071`).
+//!   don't clip by default.
 
 use std::fmt;
 
@@ -156,7 +143,7 @@ pub trait PhysicalClipSource: Clone + fmt::Debug + Send + Sync + 'static {
     /// The clip-shape type this source produces.
     type Shape: PhysicalClipShape;
 
-    /// Flutter-parity diagnostics label (`RenderPhysicalModel`,
+    /// Diagnostics label (`RenderPhysicalModel`,
     /// `RenderPhysicalShape`) — generic `RenderPhysicalModelBase<C>` would
     /// otherwise surface an unreadable monomorphised type name.
     const DIAGNOSTIC_NAME: &'static str;
@@ -178,7 +165,7 @@ pub struct RectangleClip {
     /// The box shape (`Rectangle` or `Circle`).
     pub shape: BoxShape,
     /// The border radius, applied only when `shape == BoxShape::Rectangle`.
-    /// `None` behaves like `BorderRadius::ZERO` (oracle `:2169-2174`).
+    /// `None` behaves like `BorderRadius::ZERO`.
     pub border_radius: Option<BorderRadius>,
 }
 
@@ -202,11 +189,10 @@ impl PhysicalClipSource for RectangleClip {
                     br.bottom_left,
                 )
             }
-            // Oracle `proxy_box.dart:2188` — `width/2, height/2` as TWO
-            // INDEPENDENT radii (an ellipse inscribed in the bounding box),
-            // NOT a true circle for non-square boxes. This deliberately
-            // contradicts `BoxShape::Circle`'s own doc comment; follow the
-            // oracle formula, not the doc comment (research plan trap §4.4).
+            // `width/2, height/2` as TWO INDEPENDENT radii (an ellipse
+            // inscribed in the bounding box), NOT a true circle for
+            // non-square boxes. This deliberately contradicts
+            // `BoxShape::Circle`'s own doc comment (research plan trap §4.4).
             BoxShape::Circle => RRect::from_rect_xy(rect, rect.width() * 0.5, rect.height() * 0.5),
         }
     }
@@ -222,8 +208,8 @@ impl PhysicalClipSource for RectangleClip {
 
 /// [`RenderPhysicalShape`]'s clip source: an owner-local path clip target.
 ///
-/// Stored as `Option` (matching the oracle's nullable base-class `clipper`
-/// field) because clearing it falls back to the whole-box rectangle default.
+/// Stored as `Option` because clearing it falls back to the whole-box
+/// rectangle default.
 #[derive(Clone)]
 pub struct PathClip {
     /// The active owner-lane path target, or `None` to fall back to the
@@ -238,9 +224,9 @@ pub struct PathClip {
 
 /// Comparable configuration for the built-in size-dependent path clippers.
 ///
-/// This lets higher-level shape widgets implement Flutter's
-/// `ShapeBorderClipper::shouldReclip` contract without comparing callback
-/// addresses or replacing an unchanged owner-lane clipper.
+/// This lets higher-level shape widgets decide whether a clip changed
+/// without comparing callback addresses or replacing an unchanged
+/// owner-lane clipper.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum PathClipConfiguration {
@@ -277,8 +263,8 @@ impl PhysicalClipSource for PathClip {
             }
         }
 
-        // Oracle `:2296`'s `_defaultClip` fallback — reachable once a path
-        // target is cleared or cannot be resolved by the active owner lane.
+        // Default fallback — reachable once a path target is cleared or
+        // cannot be resolved by the active owner lane.
         let mut path = Path::new();
         path.add_rect(Rect::from_origin_size(Point::ZERO, size));
         path
@@ -322,17 +308,15 @@ pub struct RenderPhysicalModelBase<C: PhysicalClipSource> {
     has_child: bool,
 }
 
-/// `BoxShape` + `BorderRadius` variant — Flutter's `RenderPhysicalModel`.
+/// `BoxShape` + `BorderRadius` variant.
 pub type RenderPhysicalModel = RenderPhysicalModelBase<RectangleClip>;
 
-/// Arbitrary-path-target variant — Flutter's `RenderPhysicalShape`.
+/// Arbitrary-path-target variant.
 pub type RenderPhysicalShape = RenderPhysicalModelBase<PathClip>;
 
 impl<C: PhysicalClipSource> RenderPhysicalModelBase<C> {
     /// Shared field baseline: `elevation = 0.0`, `shadow_color` = opaque
-    /// black (oracle `Color(0xFF000000)`), `clip_behavior = Clip::None`
-    /// (oracle `:2071` — overridden down from `_RenderCustomClip`'s own
-    /// `Clip::AntiAlias`).
+    /// black, `clip_behavior = Clip::None`.
     fn with_clip_source(clip_source: C, color: Color) -> Self {
         Self {
             clip_source,
@@ -350,8 +334,7 @@ impl<C: PhysicalClipSource> RenderPhysicalModelBase<C> {
         self.elevation
     }
 
-    /// Builder: sets the elevation (debug-asserts non-negative, matching
-    /// the oracle's own triple-asserted invariant).
+    /// Builder: sets the elevation (debug-asserts non-negative).
     #[must_use]
     pub fn with_elevation(mut self, elevation: f64) -> Self {
         debug_assert!(
@@ -445,7 +428,7 @@ impl<C: PhysicalClipSource> RenderPhysicalModelBase<C> {
 impl RenderPhysicalModelBase<RectangleClip> {
     /// Creates a `RenderPhysicalModel`: `shape = BoxShape::Rectangle`,
     /// `border_radius = None`, `elevation = 0.0`, `shadow_color` = opaque
-    /// black, `clip_behavior = Clip::None` (oracle defaults).
+    /// black, `clip_behavior = Clip::None`.
     pub fn new(color: Color) -> Self {
         Self::with_clip_source(
             RectangleClip {
@@ -484,8 +467,8 @@ impl RenderPhysicalModelBase<RectangleClip> {
     }
 
     /// Replaces the box shape and returns the exact pipeline impact.
-    /// Paint/hit-test only — Flutter parity: `_markNeedsClip()`, never a
-    /// relayout (the clip shape never affects `size`).
+    /// Paint/hit-test only, never a relayout (the clip shape never affects
+    /// `size`).
     pub fn set_shape(&mut self, shape: BoxShape) -> RenderUpdateImpact {
         if self.clip_source.shape == shape {
             return RenderUpdateImpact::NONE;
@@ -584,15 +567,11 @@ impl RenderPhysicalModelBase<PathClip> {
 
     /// Replaces the path clip target; returns paint plus semantics if changed
     /// (`None` -> `Some`, `Some` -> `None`, or a swap between two distinct
-    /// targets). `None` falls back to the whole-box rectangle default clip
-    /// (oracle `:2296`).
+    /// targets). `None` falls back to the whole-box rectangle default clip.
     ///
     /// Comparing the full `Option<PathClipTarget>`, not just presence, is
-    /// load-bearing: oracle `RenderPhysicalShape`'s `clipper` setter compares
-    /// the new `CustomClipper` for equality and calls `markNeedsPaint()`
-    /// whenever it differs (`_markNeedsClip()`), including a swap between two
-    /// distinct non-null clippers — a presence-only check would silently miss
-    /// that swap and never signal a repaint.
+    /// load-bearing: a swap between two distinct non-null targets must signal
+    /// a repaint, which a presence-only check would silently miss.
     pub fn set_path_clip_target(&mut self, target: Option<PathClipTarget>) -> RenderUpdateImpact {
         if self.clip_source.target == target {
             return RenderUpdateImpact::NONE;
@@ -614,9 +593,6 @@ impl<C: PhysicalClipSource> flui_foundation::Diagnosticable for RenderPhysicalMo
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
         builder.add_double("elevation", self.elevation, None);
         builder.add_color("color", format!("{:?}", self.color));
-        // Oracle bug (`proxy_box.dart:2124`) passes `color` a second time
-        // here instead of `shadowColor` — not reproduced; this reads the
-        // real field.
         builder.add_color("shadow_color", format!("{:?}", self.shadow_color));
         builder.add_enum("clip_behavior", self.clip_behavior);
         self.clip_source.debug_fill_extra(builder);
@@ -632,8 +608,7 @@ impl<C: PhysicalClipSource> RenderBox for RenderPhysicalModelBase<C> {
     flui_rendering::forward_single_child_box_queries!();
 
     fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
-        // Oracle `:2206-2209`/`:2311-2314` — no child means nothing is
-        // drawn at all, not even the shadow or fill.
+        // No child means nothing is drawn at all, not even the shadow or fill.
         if ctx.child_count() == 0 {
             return;
         }
@@ -646,11 +621,10 @@ impl<C: PhysicalClipSource> RenderBox for RenderPhysicalModelBase<C> {
                 .draw_shadow(&shape.shadow_path(), self.shadow_color, self.elevation);
         }
 
-        // The `usesSaveLayer` fork controls WHERE the fill is drawn, not
+        // The `uses_save_layer` fork controls WHERE the fill is drawn, not
         // just whether: `!uses_save_layer` fills OUTSIDE the clip (on the
         // current canvas, before the scope is entered); `uses_save_layer`
-        // fills INSIDE the clip scope via `draw_paint` (oracle
-        // `:2235-2249`, citing flutter/flutter#18057 — avoids double
+        // fills INSIDE the clip scope via `draw_paint` (avoids double
         // anti-aliasing the same edge). Exactly one fill happens either way.
         let uses_save_layer = self.clip_behavior == Clip::AntiAliasWithSaveLayer;
         let fill_paint = Paint::fill(self.color);
@@ -671,14 +645,12 @@ impl<C: PhysicalClipSource> RenderBox for RenderPhysicalModelBase<C> {
             return false;
         }
         // FLUI-wide convention (`RenderClip<S>`, `clip.rs`): always test
-        // the shape. This is a deliberate divergence from the oracle for
-        // `RenderPhysicalModel` specifically — the oracle gates this test
-        // on `_clipper != null`, which is always false for
-        // `RenderPhysicalModel` (it never exposes a public clipper), so a
-        // circular or rounded-corner `RenderPhysicalModel` hit-tests as its
-        // full bounding box in real Flutter. See the module doc and the
-        // design research plan (`docs/research/2026-07-01-render-physical-model-plan.md`,
-        // trap §4.2) for the full citation. `RenderPhysicalShape` uses the
+        // the shape. Gating on a custom clipper would never engage for
+        // `RenderPhysicalModel` (it has no public clipper), so a circular or
+        // rounded-corner one would hit-test as its full bounding box. See the
+        // module doc and the design research plan
+        // (`docs/research/2026-07-01-render-physical-model-plan.md`,
+        // trap §4.2). `RenderPhysicalShape` uses the
         // same shape gate when an owner-lane path target is installed, and
         // otherwise falls back to the whole-box default clip.
         let shape = self.clip_source.compute_clip(ctx.own_size());

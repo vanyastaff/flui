@@ -3,27 +3,13 @@
 //! **Private.** No `ModalRoute`, no barrier, no `PageRoute`, no
 //! public API. The first consumer of the `RouteBinding` seam.
 //!
-//! # Flutter parity
+//! # The route drives its own lifecycle
 //!
-//! `.flutter/packages/flutter/lib/src/widgets/routes.dart:111-639`
-//! (`TransitionRoute`), master `3.33.0-0.0.pre-6280-g88e87cd963f`.
-//!
-//! The whole class turns on one observation: **the route drives its own lifecycle
+//! The whole type turns on one observation: **the route drives its own lifecycle
 //! from an animation status listener**, calling back into the navigator. It is not
-//! the navigator that waits on the animation.
-//!
-//! ```dart
-//! void _handleStatusChanged(AnimationStatus status) {              // :293-321
-//!   switch (status) {
-//!     case AnimationStatus.completed: …overlayEntries.first.opaque = opaque;
-//!     case AnimationStatus.forward:
-//!     case AnimationStatus.reverse:  …overlayEntries.first.opaque = false;
-//!     case AnimationStatus.dismissed:
-//!       if (!isActive) { navigator!.finalizeRoute(this); _popFinalized = true; }
-//!   }
-//! }
-//! bool get finishedWhenPopped => _controller!.isDismissed && !_popFinalized;  // :177
-//! ```
+//! the navigator that waits on the animation. On `Completed` the route writes its
+//! `opaque` flag to the overlay entry; on `Forward`/`Reverse` it clears it; on
+//! `Dismissed`, if the route is no longer active, it finalizes itself once.
 //!
 //! Both callbacks reach the navigator through a `RouteBinding`, which enqueues a
 //! `RouteCommand` rather than re-entering the flush (see `binding.rs`
@@ -32,36 +18,31 @@
 //!
 //! # Deliberately not implemented here
 //!
-//! - **`opaque`.** `_handleStatusChanged` writes `overlayEntries.first.opaque`
-//!   (`:297`, `:304`). FLUI's `Overlay` has no `opaque` (deferred),
-//!   so there is nothing to write to and **nothing is claimed**. A later pass adds it.
-//! - **`didReplace`'s controller-value inheritance** (`:363-374`). It needs the
-//!   *replaced* route's controller, and FLUI's routes are named by `RouteId`; the
+//! - **`did_replace`'s controller-value inheritance.** It needs the
+//!   *replaced* route's controller, and routes are named by `RouteId`; the
 //!   `TransitionPeer` registry publishes the primary `Animation`, not the
-//!   `AnimationController`. Its only producer is the `Replace` lifecycle —
-//!   Flutter's `replace()` / `replaceRouteBelow()`, which are not exported.
+//!   `AnimationController`. Its only producer would be the `Replace` lifecycle
+//!   (a route replacing the one below it), which is not exported.
 //!   (`push_replacement` **is** exported, but its `PushReplace` lifecycle runs
-//!   `did_push`, a full entrance animation, exactly as Flutter's `handlePush`
-//!   does — it never reaches `didReplace`.) Recorded, not faked.
-//! # `didPopNext` and `completed` — two claims this file first got wrong
+//!   `did_push`, a full entrance animation, and never reaches `did_replace`.)
+//!   Recorded, not faked.
+//! - **Predictive back and platform performance modes.** Platform work.
+//!
+//! # `did_pop_next` and `completed`
 //!
 //! An early draft made `did_pop_next` a no-op and skipped the `completed` signal,
 //! reasoning that the flush's `did_change_next(None)` would reset the proxy. Both
 //! were wrong, and two tests caught it.
 //!
-//! `_RouteEntry.handleDidPopNext(poppedRoute)` hands `didPopNext` the **popped**
-//! route, and `TransitionRoute.didPopNext` wires the secondary to *its* animation
-//! (`routes.dart:393-402`). That is the point: the lower route animates back out
+//! `did_pop_next` receives the **popped** route, and the secondary is wired to
+//! *its* animation. That is the point: the lower route animates back out
 //! as the upper one reverses away. And `did_change_next(None)` never arrives —
-//! `shouldAnnounceChangeToNext` suppresses it precisely because `didPopNext`
-//! already spoke (`navigator.dart:3541-3546`).
+//! the flush suppresses it precisely because `did_pop_next` already spoke.
 //!
-//! So the proxy must be released some other way, which is exactly what
-//! `nextRoute.completed` does (`routes.dart:503-509`), guarded by
-//! `if (_secondaryAnimation.parent == animation)` so a stale disposal cannot
-//! clobber a newer parent. FLUI's [`CompletedSignal`] is that channel — private,
+//! So the proxy must be released some other way: when the route above completes,
+//! guarded by a check that the proxy still points at it so a stale disposal cannot
+//! clobber a newer parent. [`CompletedSignal`] is that channel — private,
 //! synchronous, and added only because the contract demanded it.
-//! - **Predictive back / `_simulation` / `DartPerformanceMode`.** Platform work.
 
 // `TransitionRoute` is private and reached only through `ModalRoute` and,
 // above it, the public `PageRoute` / `PopupRoute`. Exporting those removed
@@ -85,24 +66,21 @@ use super::binding::{CompletedSignal, RouteBindingSlot, TransitionGroup, Transit
 use super::overlay_route::{NavigatorRoute, RouteContentBuilder};
 use super::route::{PushCompletion, Route, RouteId, RouteSettings};
 
-/// The always-dismissed animation a `secondary_animation` rests at.
-///
-/// Flutter's `kAlwaysDismissedAnimation` (`routes.dart:198`, `:491`;
-/// `animation/animations.dart:56-86` — `value == 0.0`, `status == dismissed`).
+/// The always-dismissed animation a `secondary_animation` rests at
+/// (`value == 0.0`, `status == dismissed`).
 pub(crate) fn always_dismissed() -> Arc<dyn Animation<f64>> {
     Arc::new(ConstantAnimation::dismissed(ALWAYS_DISMISSED.value()))
 }
 
-/// Flutter's `kAlwaysCompleteAnimation` (`animation/animations.dart:26-54` —
-/// `value == 1.0`, `status == completed`). What an **offstage** `ModalRoute`'s
-/// primary animation points at (`routes.dart:1958`).
+/// The always-complete animation (`value == 1.0`, `status == completed`). What an
+/// **offstage** `ModalRoute`'s primary animation points at.
 pub(crate) fn always_complete() -> Arc<dyn Animation<f64>> {
     Arc::new(ConstantAnimation::completed(ALWAYS_COMPLETE.value()))
 }
 
 /// What the `secondary_animation` proxy currently points at.
 enum SecondaryParent {
-    /// `kAlwaysDismissedAnimation`: no route above, or it cannot be coordinated.
+    /// The always-dismissed animation: no route above, or it cannot be coordinated.
     Dismissed,
     /// Pointed straight at the next route's primary animation.
     Direct(RouteId),
@@ -114,8 +92,7 @@ enum SecondaryParent {
 }
 
 impl SecondaryParent {
-    /// The animation currently *driving* the proxy — Flutter's `currentTrain`
-    /// (`routes.dart:434-436`), which unwraps a hopper.
+    /// The animation currently *driving* the proxy, unwrapping a hopper.
     fn current_train(&self, proxy: &ProxyAnimation<f64>) -> Option<Arc<dyn Animation<f64>>> {
         match self {
             Self::Dismissed => None,
@@ -141,21 +118,19 @@ struct TransitionInner {
     status_wake: Mutex<Option<Arc<ChangeNotifier>>>,
 
     /// The proxy handed to the route *below* this one is **this** route's
-    /// secondary; the primary is the controller, unproxied. Flutter is the same:
-    /// "only `secondaryAnimation` is a `ProxyAnimation`" (`routes.dart:197-198`).
+    /// secondary; the primary is the controller, unproxied. Only the secondary
+    /// animation is a `ProxyAnimation`.
     secondary: Arc<ProxyAnimation<f64>>,
     secondary_parent: Mutex<SecondaryParent>,
 
-    /// Flutter's `isActive` is `navigator.contains(this) && entry.isPresent`
-    /// (`navigator.dart:584-643`). A popped route is not present, so this is the
-    /// half that matters to `_handleStatusChanged`'s `dismissed` guard.
+    /// Set once the route is popped: a popped route is no longer active, which is
+    /// the half that matters to the status handler's `Dismissed` guard.
     popped: AtomicBool,
-    /// Flutter's `_popFinalized` (`routes.dart:180`).
+    /// Whether the pop has already been finalized.
     pop_finalized: AtomicBool,
 
-    /// `TransitionRoute.opaque` (`routes.dart:156`) — whether the route obscures
-    /// the ones below **once its entrance transition completes**. Abstract in
-    /// Flutter; `PageRoute` returns `true`, `PopupRoute` `false`. FLUI defaults to
+    /// Whether the route obscures the ones below **once its entrance transition
+    /// completes**. `PageRoute` sets `true`, `PopupRoute` `false`. Defaults to
     /// `false`, the conservative value: nothing is skipped unless a route asks.
     opaque: AtomicBool,
 
@@ -163,28 +138,23 @@ struct TransitionInner {
     will_dispose_controller: bool,
 
     /// Fired in `dispose`. The route **below** listens on it to release its
-    /// secondary proxy — Flutter's `nextRoute.completed` (`routes.dart:503-509`).
+    /// secondary proxy.
     completed: Arc<CompletedSignal>,
 
     /// How many times the status listener raised `finalize()`. Test-facing: the
-    /// `_popFinalized` guard is what keeps this at one, and nothing else observes
-    /// it — FLUI's `finalize` command is idempotent, where Flutter's
-    /// `finalizeRoute` asserts. Compiled into every build so the route has one
+    /// `pop_finalized` guard is what keeps this at one, and nothing else observes
+    /// it, since the `finalize` command is idempotent. Compiled into every build so the route has one
     /// layout whether or not the integration tests link it (ADR-0083 §4).
     finalize_calls: AtomicUsize,
 }
 
 impl TransitionInner {
-    /// Flutter's `isActive` (`routes.dart:314` reads it).
+    /// Whether the route is still active (not yet popped).
     fn is_active(&self) -> bool {
         !self.popped.load(Ordering::Acquire)
     }
 
-    /// `_handleStatusChanged` (`routes.dart:293-321`).
-    ///
-    /// All four arms have behavior since the overlay entry gained an
-    /// `opaque` flag to write. `_performanceModeRequestHandle` has no FLUI
-    /// analogue and is not claimed.
+    /// React to an animation status change.
     fn handle_status_changed(&self, status: AnimationStatus) {
         let Some(binding) = self.binding.get() else {
             return;
@@ -192,21 +162,20 @@ impl TransitionInner {
 
         match status {
             AnimationStatus::Completed => {
-                // `overlayEntries.first.opaque = opaque` (`routes.dart:296`).
+                // Publish `opaque` to the route's overlay entry.
                 // The entrance settling `pushing` → `idle` is driven by
                 // `NavigatorShared::apply` awaiting the `TickerFuture`
                 // `did_push` already handed the navigator (ADR-0064), not by
                 // this listener — which owns only the opaque flag.
                 binding.set_entry_opaque(self.opaque.load(Ordering::Relaxed));
             }
-            // `overlayEntries.first.opaque = false` (`routes.dart:303-305`): a
-            // route in motion never occludes, because the routes beneath it show
+            // A route in motion never occludes, because the routes beneath it show
             // through the transition.
             AnimationStatus::Forward | AnimationStatus::Reverse => {
                 binding.set_entry_opaque(false);
             }
-            // "We might still be an active route if a subclass is controlling the
-            // transition and hits the dismissed status." (`routes.dart:310-313`)
+            // A route may still be active if something else is controlling the
+            // transition and hits the dismissed status.
             AnimationStatus::Dismissed
                 if !self.is_active() && !self.pop_finalized.swap(true, Ordering::AcqRel) =>
             {
@@ -230,7 +199,7 @@ impl TransitionInner {
 /// A route whose entrance and exit are animated.
 ///
 /// Private: `TransitionRoute` is not exported, and `transition_route_is_not_exported`
-/// keeps it that way until its parity + sign-off gate.
+/// keeps it that way until its sign-off gate.
 pub struct TransitionRoute<T> {
     settings: RouteSettings,
     builder: RouteContentBuilder,
@@ -238,9 +207,9 @@ pub struct TransitionRoute<T> {
     reverse_duration: Option<Duration>,
     current_result: Option<T>,
 
-    /// `canTransitionTo(nextRoute)` (`routes.dart:536`), default `true`.
+    /// Whether this route may coordinate with the route above it; default `true`.
     can_transition_to: bool,
-    /// `canTransitionFrom(previousRoute)` (`:561`), default `true`. Published to
+    /// Whether the route below may coordinate with this one; default `true`. Published to
     /// the registry so the route *below* can ask it.
     can_transition_from: bool,
     /// The family this route coordinates transitions with. `PageRoute` sets
@@ -294,15 +263,14 @@ impl<T> TransitionRoute<T> {
         self
     }
 
-    /// Flutter's `transitionDuration` (`routes.dart:140-147`). Read once, in
-    /// `install()`, so a builder may change it any time before the push.
+    /// The entrance duration. Read once, in `install()`, so a builder may change
+    /// it any time before the push.
     pub(crate) fn duration(mut self, duration: Duration) -> Self {
         self.duration = duration;
         self
     }
 
-    /// Flutter's `reverseTransitionDuration`, which defaults to
-    /// `transitionDuration` (`routes.dart:148`).
+    /// The exit duration; defaults to the entrance duration.
     pub(crate) fn reverse_duration(mut self, duration: Duration) -> Self {
         self.reverse_duration = Some(duration);
         self
@@ -313,15 +281,15 @@ impl<T> TransitionRoute<T> {
         self
     }
 
-    /// `canTransitionTo` (`routes.dart:536`), default `true`. No public route sets
-    /// it: `PageRoute`'s family restriction is a [`TransitionGroup`], not a bool.
+    /// Whether this route may coordinate with the route above; default `true`. No
+    /// public route sets it: `PageRoute`'s family restriction is a [`TransitionGroup`], not a bool.
     #[must_use]
     pub fn can_transition_to(mut self, allow: bool) -> Self {
         self.can_transition_to = allow;
         self
     }
 
-    /// `canTransitionFrom` (`routes.dart:561`), default `true`. See
+    /// Whether the route below may coordinate with this one; default `true`. See
     /// [`can_transition_to`](Self::can_transition_to).
     #[must_use]
     pub fn can_transition_from(mut self, allow: bool) -> Self {
@@ -329,17 +297,16 @@ impl<T> TransitionRoute<T> {
         self
     }
 
-    /// Flutter's `TransitionRoute.opaque` (`routes.dart:156`). Written to the
-    /// route's overlay entry when the entrance transition completes, and cleared
-    /// while it moves.
     /// The transition family — `PageRoute` coordinates only with other
-    /// `PageRoute`s (`pages.dart:58-61`).
+    /// `PageRoute`s.
     pub(crate) fn group(mut self, group: TransitionGroup) -> Self {
         self.group = group;
         self.inner.binding.set_group(group);
         self
     }
 
+    /// Written to the route's overlay entry when the entrance transition
+    /// completes, and cleared while it moves.
     pub(crate) fn opaque(self, opaque: bool) -> Self {
         self.inner.opaque.store(opaque, Ordering::Relaxed);
         self
@@ -364,7 +331,7 @@ impl<T> TransitionRoute<T> {
         let _prev = self.inner.status_wake.lock().replace(wake);
     }
 
-    /// Flutter's `_updateSecondaryAnimation(nextRoute)` (`routes.dart:422-496`).
+    /// Point the secondary animation at the next route's primary animation.
     ///
     /// Reads the next route's `TransitionPeer` (its primary animation and its
     /// `canTransitionFrom`), gates on both predicates, and either points the proxy
@@ -376,9 +343,10 @@ impl<T> TransitionRoute<T> {
             return;
         };
 
-        // `nextRoute is TransitionRoute && canTransitionTo(next) && next.canTransitionFrom(this)`
-        // (`routes.dart:429-431`). A non-transition route has no peer, and a route
-        // of another family never coordinates — see [`TransitionGroup`].
+        // Coordinate only when the next route is a transition route and both
+        // `can_transition_*` predicates allow it. A non-transition route has no
+        // peer, and a route of another family never coordinates — see
+        // [`TransitionGroup`].
         let target = next.and_then(|id| binding.peer(id).map(|peer| (id, peer)));
         let Some((next_id, peer)) = target.filter(|(_, peer)| {
             self.can_transition_to && peer.can_transition_from && peer.group == self.group
@@ -402,12 +370,10 @@ impl<T> TransitionRoute<T> {
         let current_train = parent.current_train(&self.inner.secondary);
         let next_animation = Arc::clone(&peer.animation);
 
-        // `currentTrain.value == nextTrain.value || !nextTrain.isAnimating`
-        // (`routes.dart:438-439`).
+        // Jump when the two trains are at the same value or the next one is not moving.
         //
-        // **Not** `Animation::is_animating`. Flutter's `isAnimating` is
-        // status-based (`forward || reverse`), but FLUI's `AnimationController`
-        // *overrides* it to mean "the ticker is running", which stays true after a
+        // **Not** `Animation::is_animating`, which for an `AnimationController` is
+        // *overridden* to mean "the ticker is running", and stays true after a
         // controller has settled at `Completed`. Using the override here makes a
         // settled route look like a moving train and forces a spurious hop —
         // caught by `a_stale_train_does_not_clobber_a_newer_parent`. The
@@ -433,8 +399,8 @@ impl<T> TransitionRoute<T> {
             let proxy = Arc::clone(&self.inner.secondary);
             let target_for_hop = Arc::clone(&next_animation);
             let switch = AnimationSwitch::new(train, Some(Arc::clone(&next_animation)))
-                // `onSwitchedTrain`: point the proxy **directly** at the target and
-                // drop the hopper (`routes.dart:473-483`).
+                // On the switch: point the proxy **directly** at the target and
+                // drop the hopper.
                 .on_switched(move || proxy.set_parent(Arc::clone(&target_for_hop)));
             self.inner
                 .secondary
@@ -445,20 +411,18 @@ impl<T> TransitionRoute<T> {
             };
         }
 
-        // "You cannot dispose the old hopper until its replacement exists."
-        // (`routes.dart:495` — the previous remover runs last.)
+        // The old hopper is disposed only after its replacement exists.
         //
         // No test reaches this ordering: `ProxyAnimation::set_parent` re-subscribes
         // eagerly, so once the new parent is installed the proxy holds no reference
         // to the old hopper and disposing it early is invisible. Kept because it is
-        // faithful and free; stated rather than claimed.
+        // free; stated rather than claimed.
         drop(parent);
         if let SecondaryParent::Hopping { switch, .. } = previous {
             switch.dispose();
         }
 
-        // `_setSecondaryAnimation(animation, nextRoute.completed)` (`routes.dart:498-509`):
-        // release the reference when the route above is disposed, but only if we
+        // Release the reference when the route above is disposed, but only if we
         // are still pointing at it — a stale disposal must not clobber a newer parent.
         let inner = Arc::downgrade(&self.inner);
         peer.completed.on_completed(Rc::new(move || {
@@ -510,9 +474,8 @@ impl TransitionHandle {
         self.inner.controller.lock().clone()
     }
 
-    /// Flutter's `animation` (`routes.dart:190-195`): the controller, erased.
-    /// `kAlwaysDismissedAnimation` before `install()` — a route that is not yet
-    /// pushed has no controller, and Flutter's getter is likewise nullable.
+    /// The controller, erased. The always-dismissed animation before `install()` —
+    /// a route that is not yet pushed has no controller.
     pub(crate) fn primary_animation(&self) -> Arc<dyn Animation<f64>> {
         match self.controller() {
             Some(controller) => Arc::new(controller) as Arc<dyn Animation<f64>>,
@@ -534,14 +497,14 @@ impl TransitionHandle {
         self.inner.drain_pending_statuses();
     }
 
-    /// Flutter's `secondaryAnimation` (`routes.dart:197`). A `ProxyAnimation`
-    /// resting at `kAlwaysDismissedAnimation`.
+    /// The secondary animation: a `ProxyAnimation` resting at the
+    /// always-dismissed animation.
     #[must_use]
     pub fn secondary_animation(&self) -> Arc<ProxyAnimation<f64>> {
         Arc::clone(&self.inner.secondary)
     }
 
-    /// Flutter's `_popFinalized` (`routes.dart:180`).
+    /// Whether the pop has already been finalized.
     #[must_use]
     pub fn is_pop_finalized(&self) -> bool {
         self.inner.pop_finalized.load(Ordering::Acquire)
@@ -592,14 +555,13 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
         self.current_result.clone()
     }
 
-    /// `finishedWhenPopped => _controller!.isDismissed && !_popFinalized`
-    /// (`routes.dart:177-178`).
+    /// Finished when the controller is dismissed and the pop is not yet finalized.
     ///
     /// False while the exit transition runs, so `handle_pop` leaves the entry in
     /// `Popping` and the overlay entry alive. True when the controller was
-    /// **already** dismissed at pop time (the Cupertino dismiss gesture,
-    /// `routes.dart:173-176`), which finalizes synchronously; `_popFinalized` then
-    /// stops the status listener finalizing a second time.
+    /// **already** dismissed at pop time (the Cupertino dismiss gesture), which
+    /// finalizes synchronously; `pop_finalized` then stops the status listener
+    /// finalizing a second time.
     fn finished_when_popped(&self) -> bool {
         let dismissed = self
             .inner
@@ -610,11 +572,11 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
         dismissed && !self.inner.pop_finalized.load(Ordering::Acquire)
     }
 
-    /// `install()` (`routes.dart:323-334`): create the controller, attach the
-    /// status listener, then let the overlay entry be created.
+    /// Create the controller, attach the status listener, then let the overlay
+    /// entry be created.
     ///
-    /// The controller is created **here**, not in the constructor — Flutter is the
-    /// same, and it is what lets a route be constructed before it has a navigator.
+    /// The controller is created **here**, not in the constructor, which is what
+    /// lets a route be constructed before it has a navigator.
     fn install(&mut self) {
         debug_assert!(
             self.inner.binding.is_bound(),
@@ -625,7 +587,7 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
         // A real, but permanently detached, ticker -- not `without_ticker`:
         // this controller's `is_animating()` is read by `BackGestureController`
         // and by tests (`tests/transition_route.rs`), and `is_animating` is
-        // intentionally ticker-based (Flutter parity: `Ticker.isActive`),
+        // intentionally ticker-based (whether the ticker is active),
         // not status-based — a ticker-less controller can never report
         // `is_animating() == true`. The navigator's `Vsync` (registered
         // below when present) drives the actual value ticks
@@ -646,8 +608,7 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
             }
         }));
 
-        // The navigator's clock — the FLUI shape of `vsync: navigator!`.
-        // Absent a `VsyncScope`, there is no wall-clock fallback: the
+        // The navigator's clock. Absent a `VsyncScope`, there is no wall-clock fallback: the
         // controller simply never advances (its ticker never fires; see the
         // constructor's own doc above).
         if let Some(binding) = self.inner.binding.get()
@@ -670,8 +631,6 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
                 completed: Arc::clone(&self.inner.completed),
             });
 
-            // `if (_animation!.isCompleted && overlayEntries.isNotEmpty) {
-            //    overlayEntries.first.opaque = opaque; }` (`routes.dart:328-330`).
             // A controller that installs already completed never fires a status
             // change, so the status listener would never write `opaque`.
             if controller.is_completed() {
@@ -682,8 +641,7 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
         let _prev = self.inner.controller.lock().replace(controller);
     }
 
-    /// `didPush()` (`routes.dart:336-350`): drive the controller forward and
-    /// hand the navigator the same future Flutter's `handlePush` awaits.
+    /// Drive the controller forward and hand the navigator the resulting future.
     ///
     /// `forward()`'s only error is
     /// [`AnimationError::Disposed`](flui_animation::AnimationError::Disposed),
@@ -705,25 +663,22 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
         PushCompletion::Animating(future)
     }
 
-    /// `didAdd()` (`routes.dart:352-361`): jump to the end, no animation.
+    /// Jump to the end, no animation.
     fn did_add(&mut self) {
         if let Some(controller) = self.inner.controller.lock().as_ref() {
             controller.set_value(1.0);
         }
     }
 
-    /// `didPop(result)` (`routes.dart:376-391`): drive the controller in reverse
-    /// and consent. The route's `RouteResult` completes **now**, via
+    /// Drive the controller in reverse and consent. The route's `RouteResult` completes **now**, via
     /// `RouteRecord::did_pop`; only its disposal waits for `dismissed`.
     ///
     /// A gesture-driven pop rides its own pacing in here: `pop_paced` (see
     /// `navigator.rs`) publishes a one-shot `PopPacing`
     /// for exactly this route immediately before triggering the pop, and this
-    /// is where it is consumed — Flutter's
-    /// `_CupertinoBackGestureController.dragEnd` calling `_controller.animateBack`
-    /// with its own duration/curve instead of the route's plain `reverse()`
-    /// (`cupertino/route.dart`, 3.44.0). No pacing published (the ordinary,
-    /// programmatic pop) falls back to the plain reverse.
+    /// is where it is consumed: the back gesture's drag end animates back with its
+    /// own duration/curve instead of the route's plain `reverse()`. No pacing
+    /// published (the ordinary, programmatic pop) falls back to the plain reverse.
     fn did_pop(&mut self) -> bool {
         self.inner.popped.store(true, Ordering::Release);
         let pacing = self
@@ -742,14 +697,14 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
         true
     }
 
-    /// `didChangeNext(nextRoute)` (`routes.dart:404-413`).
+    /// Re-point the secondary animation at the new next route.
     fn did_change_next(&mut self, next: Option<RouteId>) {
         self.update_secondary_animation(next);
     }
 
-    /// `didPopNext(nextRoute)` (`routes.dart:393-402`).
+    /// The route above was popped.
     ///
-    /// The argument is the **popped** route (`navigator.dart:3312`), and the
+    /// The argument is the **popped** route, and the
     /// secondary is wired to *its* animation on purpose: this route animates back
     /// out as the one above reverses away. It is released when that route
     /// completes — see the module docs.
@@ -757,7 +712,7 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
         self.update_secondary_animation(Some(popped));
     }
 
-    /// `dispose()` (`routes.dart:627-638`): detach the listener, unregister the
+    /// Detach the listener, unregister the
     /// clock, drop the peer, and dispose the controller **only if we own it**.
     fn dispose(&mut self) {
         if let Some(binding) = self.inner.binding.get() {

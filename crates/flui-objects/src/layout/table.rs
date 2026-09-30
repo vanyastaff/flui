@@ -2,38 +2,26 @@
 //! row-major grid, with per-column width resolution and per-row height sized
 //! to the tallest cell.
 //!
-//! # Flutter equivalence
-//!
-//! Behavior-faithful port of Flutter's
-//! [`RenderTable`](https://api.flutter.dev/flutter/rendering/RenderTable-class.html)
-//! (`packages/flutter/lib/src/rendering/table.dart`).
-//!
-//! # Rust-native differences (documented, not silent)
+//! # Design notes
 //!
 //! - **No null cells / column span.** Every row-major flat-child-list slot is
 //!   a real, present child — `column_count` children per row, always.
-//!   Flutter's `RenderBox?` sparse-cell support is out of scope for this
-//!   slice; the widget layer (`Table`/`TableRow`) is responsible for keeping
-//!   every row exactly `column_count` cells long.
+//!   Sparse cells are out of scope; the widget layer (`Table`/`TableRow`) is
+//!   responsible for keeping every row exactly `column_count` cells long.
 //! - **Column ordering follows `text_direction`.** `Rtl` places column 0 at the
-//!   RIGHT edge, mirroring `table.dart`'s two-branch position fill. `Ltr` is
-//!   the default, so callers predating this see no change.
-//! - **`TableColumnWidth::Fraction` clamps to `0.0..=1.0`.** The oracle's
-//!   `FractionColumnWidth` does NOT clamp (`table.dart`'s
-//!   `FractionColumnWidth.minIntrinsicWidth`/`maxIntrinsicWidth` multiply the
-//!   raw value unclamped) — this port instead honors
-//!   `TableColumnWidth::Fraction`'s own FLUI doc contract ("Values are
-//!   clamped to the 0.0-1.0 range"), a deliberate, flagged divergence from
-//!   the oracle rather than a bug.
-//! - **`MaxColumnWidth`/`MinColumnWidth`** are supported via
+//!   RIGHT edge. `Ltr` is the default.
+//! - **`TableColumnWidth::Fraction` clamps to `0.0..=1.0`.** This honors
+//!   `TableColumnWidth::Fraction`'s own doc contract ("Values are
+//!   clamped to the 0.0-1.0 range"); a fraction above one would otherwise
+//!   produce a column wider than its container.
+//! - **`Max`/`Min` column widths** are supported via
 //!   [`TableColumnWidth::Max`]/[`TableColumnWidth::Min`]
 //!   (`table_column`): each folds both operands' widths (by
-//!   max/min) and flex factors, faithfully to the oracle
-//!   (`table.dart:235-340`), and nests recursively.
-//! - **`IntrinsicColumnWidth`'s optional flex** is supported via
+//!   max/min) and flex factors, and nests recursively.
+//! - **`Intrinsic`'s optional flex** is supported via
 //!   [`TableColumnWidth::Intrinsic`]`{ flex }`: the intrinsic width is the
 //!   column's floor and a `Some(flex)` also claims leftover space in the grow
-//!   pass, faithfully to the oracle (`table.dart:94`).
+//!   pass.
 //! - **`compute_dry_baseline`** reports the first row's baseline without
 //!   committing layout — the dry mirror of
 //!   [`compute_distance_to_actual_baseline`](RenderTable::compute_distance_to_actual_baseline):
@@ -84,8 +72,7 @@ enum WidthQuery {
 ///
 /// A `None` operand contributes no flex, so the other operand's flex passes
 /// through unchanged; when both carry flex, `fold` (`f64::max` for `Max`,
-/// `f64::min` for `Min`) picks between them. Mirrors the oracle's
-/// `MaxColumnWidth.flex`/`MinColumnWidth.flex` (`table.dart:266-276`/`:318-328`).
+/// `f64::min` for `Min`) picks between them.
 fn combine_flex(a: Option<f64>, b: Option<f64>, fold: impl Fn(f64, f64) -> f64) -> Option<f64> {
     match (a, b) {
         (Some(a), Some(b)) => Some(fold(a, b)),
@@ -124,8 +111,7 @@ pub struct RenderTable {
     /// Column left offsets, indexed BY COLUMN, length `column_count`.
     ///
     /// Ascending under `Ltr` and descending under `Rtl`, because column 0 is
-    /// the rightmost column there. Cell offsets index this directly, as the
-    /// reference's `positions` does.
+    /// the rightmost column there. Cell offsets index this directly.
     column_lefts: Vec<f64>,
     /// The x of each INTERIOR vertical divider, length `column_count - 1`.
     ///
@@ -133,9 +119,7 @@ pub struct RenderTable {
     /// entry to drop is the table's own left edge, which is index 0 under `Ltr`
     /// and the LAST index under `Rtl`. Slicing `[1..]` unconditionally drops a
     /// real divider and adds the table edge as a fake one under `Rtl` -- and
-    /// nothing about the resulting picture looks wrong enough to notice. The
-    /// reference solves the same problem with a separate ascending
-    /// `_columnLefts = positions.reversed` (`table.dart:1348`).
+    /// nothing about the resulting picture looks wrong enough to notice.
     interior_column_lefts: Vec<f64>,
     /// Reading direction; decides which edge column 0 sits against.
     text_direction: TextDirection,
@@ -150,7 +134,7 @@ pub struct RenderTable {
 }
 
 impl RenderTable {
-    /// Creates a table with `column_count` columns and Flutter's defaults:
+    /// Creates a table with `column_count` columns and these defaults:
     /// `default_column_width = Flex(1.0)`, `default_vertical_alignment =
     /// Top`, no border, no row decorations, no explicit text baseline.
     pub fn new(column_count: usize) -> Self {
@@ -362,9 +346,7 @@ impl RenderTable {
     ///
     /// `Fixed`/`Flex`/`Fraction` never touch a cell (their formula is a pure
     /// function of `container_width`); only `Intrinsic` probes cells, via
-    /// `query(index, extent, query_kind)`, taking the max across the column
-    /// exactly like the oracle's `IntrinsicColumnWidth.minIntrinsicWidth`/
-    /// `maxIntrinsicWidth` (`table.dart:106-121`).
+    /// `query(index, extent, query_kind)`, taking the max across the column.
     fn column_extent(
         &self,
         x: usize,
@@ -383,8 +365,7 @@ impl RenderTable {
     ///
     /// The combinators evaluate BOTH operands against the same cells and
     /// `container_width` and fold the results — width by `max`/`min`, flex by
-    /// [`combine_flex`] — exactly like the oracle's `MaxColumnWidth`/
-    /// `MinColumnWidth` (`table.dart:235-340`). Recursion depth equals the
+    /// [`combine_flex`]. Recursion depth equals the
     /// nesting depth of the spec (typically 1); each leaf is O(rows) only for
     /// `Intrinsic`, O(1) otherwise.
     fn extent_for_spec(
@@ -400,8 +381,7 @@ impl RenderTable {
             TableColumnWidth::Fixed(value) => ((*value), None),
             TableColumnWidth::Flex(flex) => (0.0, Some(*flex)),
             TableColumnWidth::Fraction(fraction) => {
-                // Divergence from the oracle: see the module doc's
-                // "Fraction clamps" note.
+                // See the module doc's "Fraction clamps" note.
                 let fraction = fraction.clamp(0.0, 1.0);
                 let width = if container_width.is_finite() {
                     fraction * container_width
@@ -417,8 +397,7 @@ impl RenderTable {
                     extent = extent.max(query(idx, f64::INFINITY, query_kind));
                 }
                 // The intrinsic width is the column's floor; `flex` (if any)
-                // lets it also claim leftover space in the grow pass, exactly
-                // like the oracle's `IntrinsicColumnWidth.flex`.
+                // lets it also claim leftover space in the grow pass.
                 (extent, *flex)
             }
             TableColumnWidth::Max(a, b) => {
@@ -438,7 +417,7 @@ impl RenderTable {
         }
     }
 
-    /// The 4-pass column-width algorithm (`table.dart:1070-1236`), generic
+    /// The 4-pass column-width algorithm, generic
     /// over a single intrinsic-width-query closure so `perform_layout`,
     /// `compute_dry_layout`, and the nested call inside
     /// `compute_min_intrinsic_height` all share ONE implementation (mirrors
@@ -451,11 +430,11 @@ impl RenderTable {
     /// style choice) — one closure discriminated by [`WidthQuery`] sidesteps
     /// it entirely.
     ///
-    /// Pass 1 (`L1082-1120`): ideal widths + min widths + flex.
-    /// Pass 2 (`L1124-1153`): grow flexed columns toward the target width, or
+    /// Pass 1: ideal widths + min widths + flex.
+    /// Pass 2: grow flexed columns toward the target width, or
     /// grow all columns equally toward `min_width_constraint` if none are
-    /// flexed (mutually exclusive branches, oracle's own comment).
-    /// Pass 3 (`L1168-1234`): two-round shrink when the table exceeds
+    /// flexed (mutually exclusive branches).
+    /// Pass 3: two-round shrink when the table exceeds
     /// `max_width_constraint` — proportional shrink of flexed columns toward
     /// their floors (re-accumulating `total_flex` as columns hit floor), then
     /// equal-delta shrink of the remaining non-floored columns.
@@ -471,7 +450,7 @@ impl RenderTable {
             return Vec::new();
         }
 
-        // ---- Pass 1 (`L1082-1120`): ideal widths, min widths, flex ---------
+        // ---- Pass 1: ideal widths, min widths, flex ---------
         let mut widths = vec![0.0_f64; column_count];
         let mut min_widths = vec![0.0_f64; column_count];
         let mut flexes: Vec<Option<f64>> = vec![None; column_count];
@@ -507,11 +486,11 @@ impl RenderTable {
         widths.into_iter().collect()
     }
 
-    /// Passes 2 and 3 of the column-width algorithm (`table.dart:1124-1234`),
+    /// Passes 2 and 3 of the column-width algorithm,
     /// factored out of [`Self::compute_column_widths`]'s cell-touching Pass 1
     /// so the grow/shrink arithmetic can be exercised directly against
-    /// hand-picked `widths`/`min_widths`/`flexes` — including the oracle's
-    /// own adversarial doc-comment scenario (`table.dart:1170-1179`): a
+    /// hand-picked `widths`/`min_widths`/`flexes` — including an
+    /// adversarial scenario: a
     /// low-ideal/high-flex column paired with a high-ideal/low-flex column
     /// under a tiny `max_width_constraint` must shrink toward each column's
     /// floor without ever going negative.
@@ -519,7 +498,7 @@ impl RenderTable {
     /// Pass 2: grows flexed columns toward the target width (`max_width_constraint`
     /// if finite, else `min_width_constraint`), or — absent any flex — grows
     /// all columns equally toward `min_width_constraint` (mutually exclusive
-    /// branches, oracle's own comment).
+    /// branches).
     /// Pass 3: if the table exceeds `max_width_constraint`, shrinks in two
     /// rounds — proportional shrink of flexed columns toward their floors
     /// (re-accumulating `total_flex` as columns hit floor), then equal-delta
@@ -697,7 +676,7 @@ impl RenderBox for RenderTable {
             },
         );
 
-        // Column positions, indexed BY COLUMN. Ported from `table.dart`'s two
+        // Column positions, indexed BY COLUMN. Two
         // branches: `Ltr` fills forward from the left edge, `Rtl` fills
         // BACKWARD from the right, so column 0 ends up rightmost.
         let mut column_lefts = vec![0.0; column_count];
@@ -731,9 +710,8 @@ impl RenderBox for RenderTable {
             row_tops.push(row_top);
 
             // Resolve each cell's effective alignment once, and stamp `x`/`y`
-            // onto its parent data for API/diagnostics parity with the
-            // oracle's public getters (`table.dart:1376-1377`) — RenderTable's
-            // own layout logic never reads them back.
+            // onto its parent data for API/diagnostics —
+            // RenderTable's own layout logic never reads them back.
             let mut alignments = Vec::with_capacity(column_count);
             for x in 0..column_count {
                 let idx = x + y * column_count;
@@ -748,7 +726,7 @@ impl RenderBox for RenderTable {
                 }
             }
 
-            // ---- Measure pass (table.dart:1399-1421) ------------------------
+            // ---- Measure pass -----------------------------------------------
             let mut row_height = 0.0_f64;
             let mut have_baseline = false;
             let mut before_baseline = 0.0_f64;
@@ -765,9 +743,8 @@ impl RenderBox for RenderTable {
                         cell_sizes[x] = size;
                         // A cell missing an actual baseline (or the table
                         // missing an explicit `text_baseline`) degrades to a
-                        // top-anchored contribution — the oracle's own
-                        // `childBaseline == null` branch, generalized to also
-                        // cover an unset `text_baseline` instead of asserting
+                        // top-anchored contribution — this also covers an
+                        // unset `text_baseline` instead of asserting
                         // (library code must not panic on a config gap).
                         let baseline = self
                             .text_baseline
@@ -787,7 +764,7 @@ impl RenderBox for RenderTable {
                     // `IntrinsicHeight` is measured here, unlike `Fill`:
                     // its own content is part of what makes the row tall,
                     // and the position pass then stretches it to that
-                    // height (table.dart:1401-1405).
+                    // height.
                     TableCellVerticalAlignment::Top
                     | TableCellVerticalAlignment::Middle
                     | TableCellVerticalAlignment::Bottom
@@ -811,7 +788,7 @@ impl RenderBox for RenderTable {
                 row_height = row_height.max(before_baseline + after_baseline);
             }
 
-            // ---- Position pass (table.dart:1418-1444) ------------------------
+            // ---- Position pass ----------------------------------------------
             for x in 0..column_count {
                 let idx = x + y * column_count;
                 let offset = match alignments[x] {
@@ -828,7 +805,7 @@ impl RenderBox for RenderTable {
                     }
                     // Both are re-laid-out tight to the settled row height;
                     // they differ only in whether the measure pass above saw
-                    // them (table.dart:1437-1441).
+                    // them.
                     TableCellVerticalAlignment::Fill
                     | TableCellVerticalAlignment::IntrinsicHeight => {
                         let cc = BoxConstraints::tight_for(Some(widths[x]), Some(row_height));
@@ -885,9 +862,8 @@ impl RenderBox for RenderTable {
                     .unwrap_or(self.default_vertical_alignment);
                 match alignment {
                     TableCellVerticalAlignment::Baseline => {
-                        // Oracle asserts this combination unsupported for dry
-                        // layout (`table.dart:1305-1312`) — baseline metrics
-                        // require a real layout pass.
+                        // Baseline metrics require a real layout pass, so
+                        // this combination is unsupported for dry layout.
                         return Size::ZERO;
                     }
                     TableCellVerticalAlignment::Top
@@ -970,9 +946,8 @@ impl RenderBox for RenderTable {
                 WidthQuery::Max => ctx.child_max_intrinsic_width(i, h),
             });
 
-        // Winner of the 2016 world's most expensive intrinsic dimension
-        // function award (the oracle's own doc comment, `table.dart:998`) —
-        // note MAX even inside the MIN function, preserved exactly.
+        // The most expensive intrinsic dimension function — note MAX even
+        // inside the MIN function, kept deliberately.
         let mut total = 0.0_f64;
         for y in 0..row_count {
             let mut row_height = 0.0_f64;
@@ -986,9 +961,8 @@ impl RenderBox for RenderTable {
     }
 
     fn compute_max_intrinsic_height(&self, width: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
-        // Oracle's own quirk (`table.dart:1023-1026`): `computeMaxIntrinsicHeight`
-        // literally returns `getMinIntrinsicHeight(width)` — verified against
-        // the oracle, not a transcription typo.
+        // Deliberate: the max intrinsic height is the min intrinsic height,
+        // not a typo.
         self.compute_min_intrinsic_height(width, ctx)
     }
 
@@ -1075,7 +1049,7 @@ impl RenderBox for RenderTable {
     fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Variable>) {
         let row_count = self.row_tops.len().saturating_sub(1);
 
-        // 1. Row decorations (table.dart:1478-1494).
+        // 1. Row decorations.
         for y in 0..row_count {
             if let Some(Some(decoration)) = self.row_decorations.get(y) {
                 let rect = Rect::from_ltrb(
@@ -1102,7 +1076,7 @@ impl RenderBox for RenderTable {
             ctx.paint_child(index);
         }
 
-        // 3. Table border, on top of everything (table.dart:1508-1525).
+        // 3. Table border, on top of everything.
         if let Some(border) = &self.border {
             let table_height = self.row_tops.last().copied().unwrap_or(0.0);
             let rect = Rect::from_ltrb(0.0, 0.0, self.table_width, table_height);
@@ -1166,10 +1140,9 @@ mod tests {
     }
 
     #[test]
-    fn fraction_value_above_one_is_clamped_a_documented_divergence_from_the_oracle() {
-        // The oracle's `FractionColumnWidth` does NOT clamp (see the module
-        // doc's "Fraction clamps" note) — FLUI's `TableColumnWidth::Fraction`
-        // doc contract promises a 0.0..=1.0 clamp, so 1.5 must behave as 1.0,
+    fn fraction_value_above_one_is_clamped() {
+        // `TableColumnWidth::Fraction`'s doc contract promises a 0.0..=1.0
+        // clamp (see the module doc's "Fraction clamps" note), so 1.5 must behave as 1.0,
         // not produce a 150px column from a 100px container.
         let table = table_with(&[TableColumnWidth::Fraction(1.5)]);
         let widths = table.compute_column_widths(1, 0.0, 100.0, deny_query());

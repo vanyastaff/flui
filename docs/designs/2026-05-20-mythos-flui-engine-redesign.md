@@ -1001,7 +1001,7 @@ Ordered. Each step lands as a reviewable commit. Each step compiles, `cargo test
 ### Step 12 — `crates/flui-engine/ARCHITECTURE.md`
 
 Create the per-crate template instance:
-- `## wgpu / Vulkan / Metal mapping` (N/A for "Flutter source mapping"; the engine has no Flutter parity. Document the wgpu API surface the engine consumes.).
+- `## wgpu / Vulkan / Metal mapping` (the engine has no upstream source to map. Document the wgpu API surface the engine consumes.).
 - `## Mapping decisions` — Accepted trade-offs for: deletion of `Painter` trait (vs keep for future backends); deletion of `wgpu/scene.rs` (vs keep as internal IR); deletion of platform capability files (vs keep as documentation); `OffscreenRenderer` direct ownership (vs `Arc<Mutex<>>`); `TexturePool` explicit release (vs `Arc<Mutex<>>`); closed `LayerRender<R>` static dispatch (vs `Box<dyn Backend>` plugin trait).
 - `## Thread safety` — table: `Renderer` Send (not Sync); `WgpuPainter` Send; `OffscreenRenderer` Send; `Arc<wgpu::Device>` / `Arc<wgpu::Queue>` Send+Sync (wgpu convention); no other locks anywhere.
 - `## Friction log` — anything not yet refactored. Candidates: `painter.rs` 3,772 LOC un-split (if Step 13's split is deferred); `text_renderer.rs` vs `text.rs` if both kept; the `unsafe { instance.create_surface_unsafe(...) }` block at `renderer.rs:189-192`.

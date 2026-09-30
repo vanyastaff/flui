@@ -13,8 +13,7 @@ use flui_view::{
 
 /// Fades its child in and out as an [`Animation<f64>`] (the opacity) changes.
 ///
-/// Flutter parity: `widgets/transitions.dart` `FadeTransition` backed by
-/// `RenderAnimatedOpacity`. The render object listens to `opacity` directly,
+/// Backed by `RenderAnimatedOpacity`. The render object listens to `opacity` directly,
 /// so a tick marks paint/compositing work without rebuilding the element tree.
 /// `0.0` is fully transparent, `1.0` fully opaque; the child is always laid out.
 ///

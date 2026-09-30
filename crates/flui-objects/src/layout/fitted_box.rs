@@ -1,62 +1,34 @@
 //! `RenderFittedBox` — single-child proxy that scales its child to fit
 //! its own box per a [`BoxFit`] mode and aligns it via [`Alignment`].
 //!
-//! # Flutter equivalence
+//! # Design
 //!
-//! Behavior-faithful port of Flutter's
-//! [`RenderFittedBox`](https://api.flutter.dev/flutter/rendering/RenderFittedBox-class.html)
-//! (`packages/flutter/lib/src/rendering/proxy_box.dart`).
-//!
-//! # Rust-native improvements
-//!
-//! * The scaling math is delegated to the existing typed
-//!   [`BoxFit::apply`] (from `flui_painting`), which returns a
-//!   structured [`FittedSizes`] with both `source` and `destination`
-//!   regions. Flutter's `RenderFittedBox` reimplements the same math
-//!   inline; the Rust port keeps the math in one place so the seven
-//!   `BoxFit` variants only have to be debugged once.
+//! * The scaling math is delegated to the typed [`BoxFit::apply`] (from
+//!   `flui_painting`), which returns a structured [`FittedSizes`] with both
+//!   `source` and `destination` regions, so the seven `BoxFit` variants are
+//!   implemented once.
 //! * The scale + alignment transform is a single composed [`Matrix4`]
 //!   (`effective_transform`) that `paint` pushes and
 //!   `apply_paint_transform` folds into coordinate mapping —
-//!   one matrix, two consumers, so paint and `localToGlobal` cannot drift.
-//!   Flutter splits the same two duties the same way.
-//! * `has_visual_overflow()` is a public post-layout query method
-//!   (Flutter keeps the equivalent flag private and only consults it
-//!   internally for clip-decision branching).
+//!   one matrix, two consumers, so paint and `local_to_global` cannot drift.
+//! * `has_visual_overflow()` is a public post-layout query method.
 //!
-//! # Divergence found and fixed (widget-parity port, `parity/fitted_box_test.rs`)
+//! # Cropping
 //!
-//! Porting Flutter's `'Child can cover'` (`fitted_box_test.dart`, 3.44.0)
-//! surfaced a real bug, but **not in this file** — it lived one layer down,
-//! in `flui_painting::BoxFit::apply`. Every branch there answered
-//! `source: input_size` unconditionally, so `BoxFit::Cover`/`FitWidth`/
-//! `FitHeight` never actually cropped the source the way Flutter's
-//! `applyBoxFit` does (`box_fit.dart`, 3.44.0) — instead of a cropped
-//! source with an exactly-filled destination, FLUI produced a full source
-//! with an OVERFLOWING destination. `RenderFittedBox` here faithfully
-//! consumed whatever `apply()` handed it, so this file's own math was never
-//! the problem; it just had nothing to compute an offset from.
-//!
-//! Two things changed as a result:
-//! 1. `BoxFit::apply` (`flui-painting`) now crops the source exactly as
-//!    `applyBoxFit` does for `Cover`/`FitWidth`/`FitHeight`/`None`.
-//! 2. This render object gained a `source_offset` field — the cropped
-//!    source region's own top-left within the child, i.e. Flutter's
-//!    `sourceRect.left`/`top` (`RenderFittedBox._updatePaintData`,
-//!    `proxy_box.dart`) — folded into `RenderFittedBox::effective_transform` as a
-//!    third `translate(-source_offset)` term alongside the pre-existing
-//!    `translate(align_offset) * scale`. Before the `BoxFit::apply` fix, this
-//!    term would have been a permanent no-op (`source_offset` could never
-//!    be anything but zero); it is now live for any crop under a
-//!    non-degenerate alignment, including the default `CENTER`.
+//! `BoxFit::Cover`/`FitWidth`/`FitHeight`/`None` crop the source: the result
+//! is a cropped source with an exactly-filled destination, not a full source
+//! with an overflowing one. This render object therefore carries a
+//! `source_offset` — the cropped source region's own top-left within the
+//! child — folded into `RenderFittedBox::effective_transform` as a third
+//! `translate(-source_offset)` term alongside
+//! `translate(align_offset) * scale`. The term is live for any crop under a
+//! non-degenerate alignment, including the default `CENTER`.
 //!
 //! # Clipping
 //!
-//! `paint` clips to this box when the fit cropped the source, matching
-//! Flutter's `_hasVisualOverflow && clipBehavior != Clip.none` branch. This
-//! module used to record active clipping as deferred, "awaiting the
-//! layer-level clip integration"; that had gone stale — the machinery
-//! (`PaintCx::with_clip_rect`) was already in place, used by the rest of
+//! `paint` clips to this box when the fit cropped the source and
+//! `clip_behavior` is not `Clip::None`. The machinery
+//! (`PaintCx::with_clip_rect`) is shared with the rest of
 //! the overflow-gated family that clips from `paint` rather than
 //! `paint_effects` — `RenderViewport`, `RenderConstraintsTransformBox`,
 //! `RenderWrap`, `RenderStack`, `RenderAnimatedSize`. (`RenderClip` is not
@@ -64,7 +36,7 @@
 //! composited-layer-patchable property rather than a canvas clip scope —
 //! see `crates/flui-rendering/ARCHITECTURE.md`'s clip-producer accounting.)
 //!
-//! What genuinely blocked it was **ordering**, and it is why `paint` pushes
+//! The constraint is **ordering**, and it is why `paint` pushes
 //! the fit transform itself rather than leaving it to `paint_effects`: the
 //! paint walk emits a node's `paint_effects` transform layer *before*
 //! replaying the fragment ops that node's `paint` recorded, so a clip opened
@@ -75,7 +47,7 @@
 //! coordinate mapping working without re-emitting the layer.
 //!
 //! Verified at both layers: `flui-painting`'s own unit tests pin every
-//! `BoxFit::apply` variant against oracle-computed `(source, destination)`
+//! `BoxFit::apply` variant against expected `(source, destination)`
 //! pairs; this crate's `tests/render_object_harness.rs` drives
 //! `perform_layout` through the real pipeline
 //! (`harness_fitted_box_cover_crops_the_source_and_offsets_the_transform`)
@@ -206,8 +178,7 @@ impl RenderFittedBox {
     /// `transform` field stays `None` (see `paint` for why). Identity when
     /// nothing is cached (pre-layout / unit-scale defaults).
     ///
-    /// Three parts, matching Flutter's `RenderFittedBox._updatePaintData`
-    /// (`proxy_box.dart`) exactly: translate to the destination region's
+    /// Three parts: translate to the destination region's
     /// top-left, scale, then translate by the NEGATIVE of the source
     /// region's top-left within the child. That third term only matters
     /// when [`BoxFit::apply`] crops the child (`Cover`/`FitWidth`/
@@ -303,8 +274,7 @@ impl RenderFittedBox {
     }
 
     /// Recomputes the fit transform and overflow state from the most recent
-    /// layout sizes. Flutter performs this lazily in `_updatePaintData`; FLUI
-    /// computes it eagerly so paint, hit testing, and coordinate mapping share
+    /// layout sizes. It is computed eagerly (not lazily at paint time) so paint, hit testing, and coordinate mapping share
     /// one current cache even when only paint was invalidated.
     fn update_paint_data(&mut self, size: Size, child_size: Size) {
         let FittedSizes {
@@ -345,9 +315,9 @@ impl RenderFittedBox {
     }
 
     /// The box's own size: honours the parent `constraints` while preserving
-    /// the child's aspect ratio. Flutter `RenderFittedBox.performLayout`
-    /// (`proxy_box.dart`) uses `constrainSizeAndAttemptToPreserveAspectRatio`;
-    /// `ScaleDown` loosens first then re-constrains. Shared by `perform_layout`
+    /// the child's aspect ratio (via
+    /// `constrain_size_and_attempt_to_preserve_aspect_ratio`, not a plain
+    /// `constrain`); `ScaleDown` loosens first then re-constrains. Shared by `perform_layout`
     /// and `compute_dry_layout` so the wet and dry sizes can never drift.
     fn fitted_size(&self, constraints: BoxConstraints, child_size: Size) -> Size {
         match self.fit {
@@ -371,7 +341,7 @@ impl RenderFittedBox {
 
 impl Default for RenderFittedBox {
     /// Defaults: `fit = BoxFit::Contain`, `alignment = CENTER`,
-    /// `clip_behavior = Clip::None` (Flutter parity).
+    /// `clip_behavior = Clip::None`.
     fn default() -> Self {
         Self::new(BoxFit::Contain, Alignment::CENTER, Clip::None)
     }
@@ -416,15 +386,14 @@ impl RenderBox for RenderFittedBox {
         self.child_is_empty = false;
 
         // (4) Our size honours the parent constraints while preserving the
-        //     child's aspect ratio (Flutter uses
-        //     constrainSizeAndAttemptToPreserveAspectRatio, not a plain
-        //     constrain). Shared with compute_dry_layout via `fitted_size` so
-        //     the wet and dry sizes agree.
+        //     child's aspect ratio (not a plain constrain). Shared with
+        //     compute_dry_layout via `fitted_size` so the wet and dry sizes
+        //     agree.
         let size = self.fitted_size(incoming, child_size);
 
         // (5) Resolve transform and overflow paint data. The retained size
         // pair also lets paint-only fit/alignment setters refresh this cache
-        // without forcing layout, matching Flutter's `_updatePaintData`.
+        // without forcing layout.
         self.update_paint_data(size, child_size);
 
         size
@@ -464,10 +433,9 @@ impl RenderBox for RenderFittedBox {
         if !ctx.is_within_own_size() {
             return false;
         }
-        // Flutter's `hitTestChildren` carries the same pair of guards its
-        // `paint` does: `if (size.isEmpty || (child?.size.isEmpty ?? false))`.
         // A child that cannot be painted must not be reachable by a pointer
-        // either — the box's own size gate above covers the empty-box half.
+        // either (the same guards `paint` applies) — the box's own size gate
+        // above covers the empty-box half.
         if !self.has_child {
             return false;
         }
@@ -503,9 +471,9 @@ impl RenderBox for RenderFittedBox {
     /// Paints the child through the fit transform, clipped to this box when
     /// the fit cropped the source.
     ///
-    /// Flutter's `RenderFittedBox.paint` wraps the transformed child paint in
-    /// `pushClipRect` when `_hasVisualOverflow && clipBehavior != Clip.none`,
-    /// so the composited chain reads clip-outside-transform
+    /// The transformed child paint is wrapped in a clip when
+    /// `has_visual_overflow && clip_behavior != Clip::None`, so the composited
+    /// chain reads clip-outside-transform
     /// (`[…, ClipRectLayer, TransformLayer, …]`).
     ///
     /// **The order is why this pushes the transform itself instead of leaving
@@ -522,16 +490,15 @@ impl RenderBox for RenderFittedBox {
     /// transform scope, or the child offset for a pure translation), applying
     /// the fit twice. Coordinate mapping (`transform_to` and the
     /// local-to-global family) is a separate concern from layer emission and
-    /// reads the `apply_paint_transform` override below — Flutter likewise
-    /// keeps `applyPaintTransform` alongside `paint`.
+    /// reads the `apply_paint_transform` override below.
     fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Single>) {
         if !self.has_child {
             return;
         }
 
         let size = ctx.size();
-        // Flutter: `if (child == null || size.isEmpty || child!.size.isEmpty)
-        // return;`. All three clauses matter — a zero-area child still paints
+        // Bail out when there is no child, the box is empty, or the child is
+        // empty. All three clauses matter — a zero-area child still paints
         // whatever its own `paint` draws (a `CustomPaint` ignores its size
         // happily), and the fit transform onto or from a zero extent is
         // degenerate, so neither a collapsed box nor a collapsed child may
@@ -542,11 +509,9 @@ impl RenderBox for RenderFittedBox {
 
         let transform = self.effective_transform();
         // A fit that neither scales nor crops leaves a pure translation, which
-        // is cheaper — and, per the oracle, correct — to apply as a child
-        // offset than as a compositing layer. Flutter's
-        // `_paintChildWithTransform` forks on `MatrixUtils.getAsTranslation`
-        // for exactly this; `BoxFit::None` under an off-centre alignment is
-        // the case that reaches it.
+        // is cheaper — and equally correct — to apply as a child offset than
+        // as a compositing layer; `BoxFit::None` under an off-centre alignment
+        // is the case that reaches it.
         let paint_transformed_child = |ctx: &mut flui_rendering::context::PaintCx<'_, Single>| {
             if let Some((dx, dy)) = transform.as_translation() {
                 ctx.paint_child_at(Offset::new(dx, dy));
@@ -575,10 +540,6 @@ impl RenderBox for RenderFittedBox {
     /// the paint walk would push a *second* transform around the one `paint`
     /// already opened — applying the fit twice. Mapping still needs the
     /// matrix, so it is supplied here.
-    ///
-    /// Flutter splits the same two duties the same way: `RenderFittedBox`
-    /// overrides `paint` and `applyPaintTransform` separately, each
-    /// multiplying in `_transform` for its own purpose.
     fn apply_paint_transform(
         &self,
         _child: usize,

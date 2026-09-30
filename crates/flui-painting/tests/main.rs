@@ -52,8 +52,8 @@ fn color_contract() {
                 color_property::hex_roundtrips_and_porter_duff_modes_mirror,
             ),
             (
-                "blend_over_matches_flutter_alpha_blend",
-                color_blend::blend_over_matches_flutter_alpha_blend,
+                "blend_over_is_source_over_alpha_blend",
+                color_blend::blend_over_is_source_over_alpha_blend,
             ),
             (
                 "lerp_multi_stop_brackets_and_clamps",
@@ -136,8 +136,8 @@ fn decoration_contract() {
         "decoration",
         &[
             (
-                "flutter_paint_order_shadow_background_border",
-                decoration_unit::flutter_paint_order_shadow_background_border,
+                "paint_order_is_shadow_background_border",
+                decoration_unit::paint_order_is_shadow_background_border,
             ),
             (
                 "hit_test_respects_rounded_corners",

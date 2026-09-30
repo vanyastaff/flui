@@ -5,31 +5,6 @@
 //! `BuildOwner::build_scope` / `BuildOwner::finalize_tree`; the fourth is
 //! closed by caching instead — see below.
 //!
-//! Flutter's own boundaries for the caught hooks are coarser, not absent:
-//! - `dispose` — `_InactiveElements._unmountAll()` carries no per-element
-//!   `try`/`catch` of its own, but `BuildOwner.finalizeTree` wraps the
-//!   whole drain in one `try`/`catch` that reports through
-//!   `_reportException("while finalizing the widget tree")` and lets the
-//!   frame continue. Flutter's failure mode is "the rest of `_elements` is
-//!   leaked un-unmounted, the frame continues", not an unwound frame; FLUI's
-//!   is per element.
-//! - `deactivate` — Flutter DOES contain it:
-//!   `_InactiveElements._deactivateRecursively` catches, runs
-//!   `_deactivateFailedSubtreeRecursively` (the whole subtree is marked
-//!   `_ElementLifecycle.failed`), and rethrows into
-//!   `ComponentElement.performRebuild`'s second `catch`, which substitutes
-//!   an `ErrorWidget` at the *rebuilding ancestor*. FLUI's improvement is a
-//!   narrower blast radius: per element, the element stays parked inactive
-//!   and is still disposed normally at `finalize_tree` — Flutter never
-//!   disposes a `failed` subtree.
-//! - `did_unmount_render_object` — `RenderObjectElement.unmount` runs
-//!   `super.unmount()` (which detaches the render object) and its
-//!   detach-related asserts BEFORE calling
-//!   `widget.didUnmountRenderObject(renderObject)`, with no `try`/`catch`
-//!   around the hook. A throwing hook there does NOT skip the detach — that
-//!   already happened; the lifecycle work it skips is the subsequent
-//!   `renderObject.dispose()`.
-//!
 //! FLUI bounds the panic to the one element whose hook threw and lets the
 //! rest of the frame continue: see `StatefulBehavior::{on_unmount,
 //! on_deactivate, on_activate}` and `RenderBehavior::on_unmount`
@@ -44,12 +19,10 @@
 //! called again on the removal path at all.
 //!
 //! Also pins the `initialized` gate: `dispose` runs only for a state whose
-//! `init_state` actually completed. FLUI's split mount/build (unlike
-//! Flutter's synchronous `mount` -> `initState`) means an element can be
-//! mounted and removed again before its first `build_scope` drain ever
-//! reaches it; `create_state` must not itself acquire lifecycle resources
-//! (mirrors Flutter's `createState` contract), so skipping `dispose` there
-//! costs nothing a well-behaved state depends on.
+//! `init_state` actually completed. Mount and build are split, so an element
+//! can be mounted and removed again before its first `build_scope` drain ever
+//! reaches it; `create_state` must not itself acquire lifecycle resources, so
+//! skipping `dispose` there costs nothing a well-behaved state depends on.
 
 use std::{any::TypeId, cell::Cell, rc::Rc};
 

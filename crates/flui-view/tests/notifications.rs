@@ -1,11 +1,8 @@
 //! Acceptance + edge-case tests for `BuildContext::dispatch_notification`
 //! and the object-safe `ElementBase::on_notification` handler protocol.
 //!
-//! Flutter parity: `notification_listener.dart:67` (`Notification.dispatch`)
-//! and `notification_listener.dart:127` (`_NotificationElement.onNotification`)
-//! — Flutter walks the ancestor chain, invokes each listener's typed
-//! `onNotification(notification)` callback, and stops bubbling when a
-//! listener returns `true`.
+//! Dispatch walks the ancestor chain, invokes each listener's typed
+//! callback, and stops bubbling when a listener returns `true`.
 //!
 //! Single `dyn` boundary at dispatch. `Notification` is a marker
 //! trait; `ElementBase::on_notification(type_id, &dyn Any) -> bool` is the
@@ -69,8 +66,7 @@ impl View for DummyChild {
     }
 }
 
-/// A NotificationListener<N> View — analog of Flutter's
-/// `NotificationListener<T extends Notification>` (notification_listener.dart:39).
+/// A NotificationListener<N> View that handles notifications of type `N`.
 ///
 /// Owns a typed callback `Fn(&N) -> bool`. The listener's element overrides
 /// the object-safe `ElementBase::on_notification(type_id, &dyn Any)` to
@@ -183,10 +179,8 @@ impl<N: Notification> ElementBase for NotificationListenerElement<N> {
     /// `false` so the bubble walks past this listener (it doesn't handle
     /// this notification type).
     ///
-    /// Mirrors Flutter's `_NotificationElement.onNotification`
-    /// (notification_listener.dart:127) which performs the
-    /// `is T` runtime-type check before invoking the listener's
-    /// `widget.onNotification` callback.
+    /// The runtime-type check on `N` happens before the listener's callback
+    /// is invoked.
     fn on_notification(&self, type_id: std::any::TypeId, notification: &dyn std::any::Any) -> bool {
         if type_id != std::any::TypeId::of::<N>() {
             return false;
@@ -217,8 +211,7 @@ fn create_tree_and_owner() -> (Arc<RwLock<ElementTree>>, Arc<RwLock<BuildOwner>>
 pub(crate) fn dispatch_notification_calls_handler_and_stops_on_true() {
     // Tree shape: Root[outer-listener] → Inner[middle-listener] → DummyChild.
     // The inner listener returns `true`. The outer listener MUST NOT fire.
-    // This locks down the "stops on true" semantics of Flutter
-    // notification_listener.dart:127.
+    // This locks down the "stops on true" semantics.
     let (tree, owner) = create_tree_and_owner();
 
     let outer_called = Arc::new(AtomicBool::new(false));

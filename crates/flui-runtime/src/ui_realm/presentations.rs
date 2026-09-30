@@ -448,7 +448,7 @@ impl UiRealm {
         needs_redraw
     }
 
-    /// Apply a hot reload at the given tier (Flutter parity entry point),
+    /// Apply a hot reload at the given tier,
     /// requesting a redraw if it actually changed anything. Moved here from
     /// the retired `AppBinding::perform_hot_reload_entered`.
     #[cfg(feature = "hot-reload")]
@@ -570,7 +570,7 @@ impl UiRealm {
     ///    `BuildOwner` are reclaimed, traced — automatic, via `BuildOwner`'s
     ///    own `Drop`, once step 6 drops the last reference to it.
     /// 6. The removed `PresentationState` — and with it its `WidgetsBinding`
-    ///    (whose drop triggers step 5), `RenderingFlutterBinding`, and every
+    ///    (whose drop triggers step 5), `RenderingBinding`, and every
     ///    other owned resource — drops after [`Self::enter`] returns.
     ///
     /// # Why this is two calls, not one `&mut`-threaded closure

@@ -240,17 +240,14 @@ fn loose(max: f64) -> BoxConstraints {
 }
 
 // ============================================================================
-// Intrinsics test doubles (RenderIntrinsicWidth / RenderIntrinsicHeight oracle port)
+// Intrinsics test doubles (RenderIntrinsicWidth / RenderIntrinsicHeight)
 // ============================================================================
 
 /// Leaf reporting independently configurable min/max intrinsic width and
-/// height, regardless of the queried extent — a Rust port of Flutter's own
-/// `RenderTestBox` fixture (`test/rendering/intrinsic_width_test.dart`,
-/// 3.44.0), which is itself test-only code, not a production Flutter class.
+/// height, regardless of the queried extent — a test-only fixture.
 ///
 /// Lays itself out at the midpoint of its min/max on each axis, clamped to
-/// whatever constraints its parent hands it — mirroring the oracle's
-/// `performResize` (`sizedByParent = true`, `size = constraints.constrain(...)`).
+/// whatever constraints its parent hands it (`constraints.constrain(...)`).
 #[derive(Debug, Clone, Copy)]
 struct RenderTestBox {
     min_width: f64,
@@ -600,7 +597,7 @@ fn error_box_size(run: &flui_rendering::testing::FrameRun) -> (f64, f64) {
 
 fn harness_render_error_box_falls_back_to_a_finite_extent_on_an_unbounded_axis() {
     // A lazy list's main axis is unbounded: the box must take a finite row,
-    // not the whole scroll extent (Flutter's 100000 px would).
+    // not the whole scroll extent.
     let run = RenderTester::mount(box_node(RenderErrorBox::new("boom", None)))
         .with_constraints(BoxConstraints::new(0.0, 200.0, 0.0, f64::INFINITY))
         .run_frame();
@@ -643,9 +640,8 @@ fn harness_custom_paint_orders_background_child_foreground() {
     );
     // CustomPaint sizes to its child (20x10 `RenderColoredBox`), so both
     // painters must be invoked with THAT size, not the Size::ZERO preferred
-    // size given at construction (Flutter parity: background/foreground
-    // painters share the node's one committed `size`, custom_paint.dart
-    // `paint()`).
+    // size given at construction (background/foreground painters share the
+    // node's one committed `size`).
     assert!(
         rects
             .iter()
@@ -660,19 +656,15 @@ fn harness_custom_paint_orders_background_child_foreground() {
 /// `paint()` returns must poison the paint phase rather than silently
 /// corrupting the canvas save/restore stack.
 ///
-/// Divergence from the oracle (documented, not silently dropped): Flutter's
-/// `custom_paint_test.dart` "Throws FlutterError on custom painter incorrect
-/// restore/save calls" asserts the exact multi-line `FlutterError` diagnostic
-/// text produced by a *catchable* Dart exception. FLUI's parity check is the
-/// `debug_assert_eq!` in `paint_with_painter`
+/// The check is the `debug_assert_eq!` in `paint_with_painter`
 /// (`crates/flui-objects/src/proxy/custom_paint.rs`), which raises a Rust
 /// panic; the pipeline's `catch_unwind` wrapper
 /// (`crates/flui-rendering/src/pipeline/owner/paint.rs`) converts ANY paint
 /// panic into `RenderError::Poisoned { render_object, phase }` and discards
 /// the panic payload — so the specific "must pair every canvas.save()..."
-/// message the oracle asserts on has no observable equivalent here. What IS
-/// verified, faithfully: the imbalance is detected and the paint phase is
-/// rejected rather than producing a broken display.
+/// message has no observable equivalent here. What IS verified: the imbalance
+/// is detected and the paint phase is rejected rather than producing a broken
+/// display.
 // Debug-only: the imbalance is detected by a `debug_assert_eq!`
 // (`flui-rendering/src/context/paint_cx.rs`), so in release nothing panics,
 // nothing is poisoned, and this test's own `panic!` arm fires instead.
@@ -938,9 +930,8 @@ fn harness_editable_lays_out_and_paints_collapsed_caret() {
     );
 }
 
-/// The selection highlight paints **behind** the glyphs, matching Flutter's
-/// `_TextHighlightPainter`, which is composed into `_builtInPainters` — the
-/// background list, run before `_textPainter.paint`.
+/// The selection highlight paints **behind** the glyphs: it runs before the
+/// text is painted.
 ///
 /// The caret is hidden so the only `DrawRect` in the frame is the highlight;
 /// the assertion is a strict index comparison, not "a rect exists somewhere".
@@ -1195,11 +1186,9 @@ fn harness_baseline_positions_text_at_offset() {
     assert_eq!(baseline, 0.0);
 }
 
-/// Oracle: `3.44.0` `test/rendering/baseline_test.dart`
-/// `test('RenderBaseline different baseline types')`.
+/// Baselines of different kinds.
 ///
-/// A leaf probe reports independent alphabetic/ideographic offsets (FLUI's
-/// equivalent of the oracle's private `_RenderBaselineTester`). With the box's
+/// A leaf probe reports independent alphabetic/ideographic offsets. With the box's
 /// own kind set to Alphabetic:
 /// - a same-kind query cancels to the configured `baseline_offset` alone
 ///   (`1.0 + 50 - 50 = 1.0`);
@@ -1208,18 +1197,18 @@ fn harness_baseline_positions_text_at_offset() {
 ///   `baseline_offset + requested - own` formula.
 ///
 /// After the probe's offsets are cleared to `None` and the child is marked
-/// layout-dirty (the oracle's "Clears baseline cache" step), a relayout must
+/// layout-dirty (clearing the baseline cache), a relayout must
 /// recompute both queries to `None` rather than serve the prior 1.0/11.0 —
-/// the same stale-value regression the oracle guards against (whether FLUI's
-/// dry-baseline query is memoized per call or always recomputed live, the
-/// observable contract — fresh state in, fresh answer out — must hold).
+/// a stale-value regression (whether the dry-baseline query is memoized per
+/// call or always recomputed live, the observable contract — fresh state in,
+/// fresh answer out — must hold).
 fn harness_baseline_dry_baseline_recomputes_per_kind_offsets_after_relayout() {
     use flui_foundation::Leaf;
     use flui_rendering::context::{BoxDryBaselineCtx, BoxDryLayoutCtx, BoxLayoutContext};
     use flui_rendering::parent_data::BoxParentData;
 
     /// Leaf render object with independently settable per-kind baseline
-    /// offsets, mirroring Flutter's `_RenderBaselineTester` test double.
+    /// offsets.
     #[derive(Debug)]
     struct BaselineOffsetProbe {
         box_size: Size,
@@ -1315,7 +1304,7 @@ fn harness_baseline_dry_baseline_recomputes_per_kind_offsets_after_relayout() {
 
 /// Leaf render object with independently settable per-kind baseline offsets
 /// and a fixed size — the deterministic (size, baseline) pair the flex
-/// cross-extent tests need, mirroring Flutter's `_RenderBaselineTester`.
+/// cross-extent tests need.
 #[derive(Debug)]
 struct SizedBaselineProbe {
     box_size: Size,
@@ -1373,10 +1362,6 @@ impl RenderBox for SizedBaselineProbe {
 /// child neither aligns to nor grows a baseline-aligned row: the row falls
 /// back to the remaining children's ascent/descent stack, and the wrapped
 /// child sits flush at the cross start.
-///
-/// Flutter parity: `RenderIgnoreBaseline` (`proxy_box.dart`, tag `3.44.0`)
-/// nulls both baseline queries; `basic_test.dart` `'Row and IgnoreBaseline
-/// (with ignored baseline)'` pins the row-level consequence.
 fn harness_ignore_baseline_hides_its_child_from_a_baseline_row() {
     let run = RenderTester::mount(
         box_node(
@@ -1427,7 +1412,7 @@ fn harness_ignore_baseline_hides_its_child_from_a_baseline_row() {
 
 fn harness_aspect_ratio_enforces_ratio() {
     // Loose constraints let `_apply_aspect_ratio` honour the ratio; tight
-    // constraints return `constraints.smallest()` unchanged (Flutter parity).
+    // constraints return `constraints.smallest()` unchanged.
     let run = RenderTester::mount(
         box_node(RenderAspectRatio::new(AspectRatioFactor::new_unchecked(
             2.0,
@@ -1465,7 +1450,7 @@ fn harness_constrained_box_enforces_minimums() {
 }
 
 // ════════════════════════════════════════════════════════════════════════
-// RenderContainer — the collapsed form of Flutter's Container widget stack
+// RenderContainer — the collapsed form of the Container widget stack
 // ════════════════════════════════════════════════════════════════════════
 
 /// One configuration of the stack `RenderContainer` collapses, used by
@@ -1475,13 +1460,13 @@ struct ContainerStackCase {
     case: &'static str,
     margin: EdgeInsets,
     extra: Option<BoxConstraints>,
-    /// `None` means padding was never set — `Container.build` inserts no
-    /// `Padding` level at all in that case (`_paddingIncludingDecoration`
-    /// is null), distinct from `Some(EdgeInsets::ZERO)`, which still gets a
-    /// real (zero-inset) level that gates a hit-test the way any other
-    /// level does. Collapsing the two into a bare `EdgeInsets` is exactly
-    /// the bug this case's oracle exists to catch, so the composed tree
-    /// below must actually omit the level when this is `None`.
+    /// `None` means padding was never set — the container stack inserts no
+    /// `Padding` level at all in that case, distinct from
+    /// `Some(EdgeInsets::ZERO)`, which still gets a real (zero-inset) level
+    /// that gates a hit-test the way any other level does. Collapsing the two
+    /// into a bare `EdgeInsets` is exactly the bug this case exists to catch,
+    /// so the composed tree below must actually omit the level when this is
+    /// `None`.
     padding: Option<EdgeInsets>,
     alignment: Option<Alignment>,
     child: Size,
@@ -1503,23 +1488,23 @@ struct ContainerStackCase {
 }
 
 /// Asserts that one `RenderContainer` configuration is geometrically
-/// indistinguishable from the widget stack Flutter would have built for it.
+/// indistinguishable from the widget stack it collapses.
 ///
 /// The stack is assembled here out of the individual render objects, each of
-/// which already carries its own Flutter-verified tests — so this is the
-/// oracle for the collapse: size, child size, absolute child position, the
+/// which already carries its own tests — so this is the reference for the
+/// collapse: size, child size, absolute child position, the
 /// child hit path, and chrome self-hit (whether *anything* was hit, not only
 /// whether the child was) all have to agree.
 ///
 /// `Align` and `ConstrainedBox` appear only when their property is set,
-/// mirroring Flutter's conditional stack. The margin `Padding` level is
-/// always present (`Container.build` inserts one whenever `margin` is
+/// as in the conditional stack. The margin `Padding` level is
+/// always present (the container inserts one whenever `margin` is
 /// set, which every case here does). The INNER `Padding` level — the one
 /// `padding` controls — is present only when `padding` is `Some`, even
 /// `Some(EdgeInsets::ZERO)`: an explicit zero inset still gets a real
 /// (zero-inset) level that gates a hit-test the way any other level does,
-/// but an absent `padding` gets no level at all
-/// (`_paddingIncludingDecoration` is null), which is observably different
+/// but an absent `padding` gets no level at all,
+/// which is observably different
 /// for hit-testing even though the two are geometrically identical. A
 /// version of this helper that always inserted a `Padding(EdgeInsets::ZERO)`
 /// level regardless would silently endorse that divergence instead of
@@ -1826,7 +1811,7 @@ fn harness_container_matches_the_widget_stack_it_collapses() {
     // unbounded axis that never shrinks commits a non-finite size on
     // `RenderContainer` itself, which panics before either tree's geometry
     // is compared. The absolute pin right after this case is the
-    // independent oracle: a fixed expected size and child offset, computed
+    // independent reference: a fixed expected size and child offset, computed
     // by hand from the constraint math, not from the shared function.
     let unbounded_case = ContainerStackCase {
         case: "an unbounded incoming width shrink-wraps to the child under alignment",
@@ -1928,7 +1913,7 @@ fn harness_container_matches_the_widget_stack_it_collapses() {
     });
 }
 
-/// A childless container stands in for Flutter's placeholder subtree,
+/// A childless container stands in for a placeholder subtree,
 /// `LimitedBox(0, 0, child: ConstrainedBox(expand))`: it fills the space it is
 /// given, and collapses where that space is unbounded.
 fn harness_container_childless_fills_bounded_and_collapses_unbounded() {
@@ -1988,42 +1973,32 @@ fn harness_limited_box_caps_unbounded_width_in_row() {
     assert_eq!(run.box_geometry(run.id("child")).width, 60.0);
 }
 
-// ---- Oracle port: rendering/limited_box_test.dart (3.44.0) -----------------
+// ---- RenderLimitedBox under an overflow-box parent ---------------------------
 //
 // Every case below mounts `RenderConstrainedOverflowBox` as the parent
-// fixture exactly as the oracle does, with the oracle's own per-axis
-// constraint overrides — never a substitute fixture — so `RenderLimitedBox`'s
-// constraint plumbing runs through the same path Flutter's test exercises.
-// Root constraints mirror the oracle's `layout()` harness default: a tight
-// 800×600 (`rendering_tester.dart`), which is why every case's own
-// `toStringDeep` dump reads `constraints: BoxConstraints(w=800.0, h=600.0)`.
+// fixture, with per-axis constraint overrides — never a substitute fixture —
+// so `RenderLimitedBox`'s constraint plumbing runs through the same path.
+// Root constraints are a tight 800×600.
 //
-// The one LimitedBox-subject case outside this oracle file at the tag —
-// `proxy_getters_and_setters_test.dart`'s `'RenderLimitedBox getters and
-// setters'` (3.44.0; default no-cap state + setter read-back) — is already
-// covered by `limited_box.rs`'s own unit tests (`defaults_are_unset`,
-// `const_constructors`, `setters_return_change_flag`) and is not re-ported
-// here.
+// `RenderLimitedBox`'s getters and setters (default no-cap state + setter
+// read-back) are covered by `limited_box.rs`'s own unit tests
+// (`defaults_are_unset`, `const_constructors`, `setters_return_change_flag`).
 //
-// The oracle also asserts `hasAGoodToStringDeep` plus a full `toStringDeep`
-// dump per case; FLUI has no deep-string-matching harness (see
+// There is no deep-string-matching harness (see
 // `crates/flui-rendering/docs/TESTING.md`), so the observable content —
-// sizes and, where the dump supplies numbers, offsets — is ported instead of
-// the dump text. Dropped fragments, with reasons:
-// - the parent's own `alignment`/`minWidth`/`maxWidth`/`minHeight`/
-//   `maxHeight`/`fit` diagnostics: `RenderConstrainedOverflowBox` already
-//   carries a filed Cross.H known gap (`docs/ROADMAP.md` —
-//   `debug_fill_properties` omits `alignment` and has no `ifNull` placeholder
-//   for unset overrides), so that text can't be ported faithfully; not
-//   re-filed here.
-// - `RenderLimitedBox`'s own `maxWidth`/`maxHeight` diagnostics: already
+// sizes and offsets — is asserted rather than a diagnostics dump. Not
+// asserted, with reasons:
+// - the parent's own `alignment`/min/max/`fit` diagnostics:
+//   `RenderConstrainedOverflowBox` has a known gap (`docs/ROADMAP.md` —
+//   `debug_fill_properties` omits `alignment` and has no placeholder for
+//   unset overrides).
+// - `RenderLimitedBox`'s own `max_width`/`max_height` diagnostics: already
 //   covered generically just above by
 //   `harness_limited_box_self_describes_and_caps_unbounded_height`.
-// - `RenderConstrainedBox`'s `additionalConstraints` diagnostics: already
+// - `RenderConstrainedBox`'s `additional_constraints` diagnostics: already
 //   covered generically by the `harness_constrained_box_*` tests.
-// - the `NEEDS-PAINT`/`NEEDS-COMPOSITING-BITS-UPDATE` dirty-flag markers and
-//   `relayoutBoundary=upN` annotations: Flutter-internal render-object
-//   bookkeeping with no FLUI diagnostics equivalent to assert against.
+// - dirty-flag markers and relayout-boundary annotations: internal
+//   bookkeeping with no diagnostics equivalent to assert against.
 
 fn harness_offstage_hidden_collapses_and_misses_hits() {
     let run = RenderTester::mount(
@@ -2043,8 +2018,7 @@ fn harness_offstage_hidden_collapses_and_misses_hits() {
     );
 }
 
-/// An offstage subtree is dropped from the semantics walk — Flutter's
-/// `visitChildrenForSemantics` returns early (`proxy_box.dart:3945-3951`). The
+/// An offstage subtree is dropped from the semantics walk. The
 /// node's own config is still built; only its descendants vanish.
 ///
 /// Red-check: delete `RenderOffstage::excludes_semantics_subtree`; the child's
@@ -2135,8 +2109,8 @@ fn harness_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255
         assert_eq!(
             run.structure().contains(&"Opacity"),
             expect_layer,
-            "opacity={value} must {}emit an OpacityLayer (Flutter: alpha 0/255 -> \
-             layer=null): {:?}",
+            "opacity={value} must {}emit an OpacityLayer (alpha 0/255 -> \
+             no layer): {:?}",
             if expect_layer { "" } else { "NOT " },
             run.structure(),
         );
@@ -2293,9 +2267,8 @@ fn harness_transform_paints_with_transform_layer() {
 
 fn harness_fitted_box_preserves_aspect_ratio_when_sizing_box() {
     // child 100×50 (aspect 2.0); under maxW=60 with loose height, Contain sizes
-    // the BOX preserving aspect → (60, 30), not a plain clamp (60, 50). Flutter
-    // uses constrainSizeAndAttemptToPreserveAspectRatio. Before the fix
-    // perform_layout used a plain constrain → (60, 50), disagreeing with
+    // the BOX preserving aspect → (60, 30), not a plain clamp (60, 50). Before
+    // the fix perform_layout used a plain constrain → (60, 50), disagreeing with
     // compute_dry_layout.
     let run = RenderTester::mount(
         box_node(RenderFittedBox::new(
@@ -2324,9 +2297,8 @@ fn harness_fractionally_sized_box_applies_width_factor() {
 fn harness_fractional_translation_hits_shifted_child_outside_own_bounds() {
     // translation (1.0, 0.0) shifts the 40×40 child to visual x ∈ [40, 80). A
     // pointer at (50, 20) is OUTSIDE the box's own [0,40) bounds but inside the
-    // shifted child → must hit (child-local (10, 20)). Flutter's
-    // RenderFractionalTranslation.hitTest skips the own-bounds check; the prior
-    // `is_within_own_size` gate returned no hit here.
+    // shifted child → must hit (child-local (10, 20)). The own-bounds check
+    // is skipped; the prior `is_within_own_size` gate returned no hit here.
     let run = RenderTester::mount(
         box_node(RenderFractionalTranslation::translated(
             TranslationFraction::new(1.0, 0.0),
@@ -2369,8 +2341,7 @@ fn harness_decorated_box_circle_shape_hit_test_misses_the_corner() {
 }
 
 fn harness_decorated_box_paints_background_before_child() {
-    // Flutter parity: proxy_box.dart `RenderDecoratedBox.paint` (3.44.0) — with
-    // the default `DecorationPosition::Background`, the decoration's fill must
+    // With the default `DecorationPosition::Background`, the decoration's fill must
     // land on the canvas BEFORE the child's. `harness_decorated_box_wraps_child`
     // only asserts `run.painted()` (a layer tree exists somewhere), which would
     // stay green even if the decoration painted the wrong color or after the
@@ -2500,18 +2471,17 @@ fn harness_backdrop_filter_paints_with_backdrop_filter_layer() {
 fn harness_leader_layer_always_pushes_layer_even_with_zero_children() {
     // Regression test for the highest-risk trap in the design research
     // plan: unlike ShaderMask/BackdropFilter's OWN no-child
-    // test (which asserts the layer is ABSENT), oracle's
-    // `RenderLeaderLayer.paint` pushes its `LeaderLayer` UNCONDITIONALLY
-    // (`proxy_box.dart:4513-4528`) — a childless leader is still a
-    // coordinate anchor and must still appear in the structure.
+    // test (which asserts the layer is ABSENT), `RenderLeaderLayer::paint`
+    // pushes its `LeaderLayer` UNCONDITIONALLY — a childless leader is still
+    // a coordinate anchor and must still appear in the structure.
     let run = RenderTester::mount(box_node(RenderLeaderLayer::new(LayerLink::new())))
         .with_constraints(loose(200.0))
         .run_frame();
 
     assert!(
         run.structure().contains(&"Leader"),
-        "a childless Leader MUST still push its layer (oracle: unconditional \
-         push, unlike ShaderMask/BackdropFilter): {:?}",
+        "a childless Leader MUST still push its layer (unconditional push, \
+         unlike ShaderMask/BackdropFilter): {:?}",
         run.structure(),
     );
 }
@@ -2532,11 +2502,10 @@ fn harness_leader_layer_always_pushes_layer_even_with_zero_children() {
 ///  │     └─ RenderLeaderLayer(link)         (no child — a pure anchor)
 ///  └─ "branch_b" @ Stack(top:0, left:0, width:300, height:300) = RenderRepaintBoundary
 ///        └─ RenderFollowerLayer(link)
-///              └─ RenderAlign(TOP_LEFT)       (mirrors Flutter's own
-///                    └─ "follower_child"       `Positioned.fill` + `Align`
-///                       = RenderColoredBox      idiom for a follower whose
-///                         (30x30)               resolved position can land
-///                                                anywhere in the overlay)
+///              └─ RenderAlign(TOP_LEFT)       (the `Positioned.fill` + `Align`
+///                    └─ "follower_child"       idiom for a follower whose
+///                       = RenderColoredBox      resolved position can land
+///                         (30x30)               anywhere in the overlay)
 /// ```
 ///
 /// `branch_b` is given an explicit large size (rather than sizing tightly to
@@ -2680,9 +2649,9 @@ fn harness_physical_shape_hit_test_triangular_clipper() {
         .run_layout()
     });
 
-    // The oracle and the "always test shape" convention already agree for
-    // `RenderPhysicalShape` (it always has a clipper), so this is a plain
-    // shape hit-test, not a divergence test.
+    // Gating on a custom clipper and the "always test shape" convention
+    // already agree for `RenderPhysicalShape` (it always has a clipper), so
+    // this is a plain shape hit-test, not a divergence test.
     assert_eq!(
         lane.enter(|| run.hit_first(1.0, 1.0)),
         None,
@@ -2925,15 +2894,13 @@ fn harness_sliver_fixed_extent_list_geometry() {
     assert_has_committed_geometry(sliver);
 }
 
-// Render-level parity oracle: `rendering/sliver_fixed_extent_layout_test.dart`
-// (tag `3.44.0`). Its `group('getMaxChildIndexForScrollOffset')` (9 cases),
-// the two `'… correctly references itemExtent …'` cases and the rounding-error
-// layout test are ported as unit tests on the index helpers inside
+// The index-helper cases (max child index for a scroll offset, item-extent
+// references and the rounding-error layout) are unit tests on the index
+// helpers inside
 // `crates/flui-objects/src/sliver/sliver_fixed_extent_list.rs` (the tolerance
-// nudges are `f64`-scaled there, see that module's mapping decisions). The
-// `'Implements paintsChild correctly'` and leading/trailing-garbage cases are
-// about a child manager's residency, which the pins above cover through the
-// request and retain-band sinks instead.
+// nudges are `f64`-scaled there, see that module's mapping decisions).
+// Child-manager residency is covered by the pins above through the request
+// and retain-band sinks.
 //
 // Non-finite scroll-window edges (`NaN` / `±∞`) cannot be injected through a
 // healthy viewport host; the finite-domain contract and empty-band fallback
@@ -3078,20 +3045,13 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_panic_band_after_a_poisoned_rel
     );
 }
 
-// Render-level parity oracle: `rendering/sliver_cache_test.dart`'s
-// `'RenderSliverGrid calculates correct geometry'` (tag `3.44.0`, the one
-// genuine `RenderSliverGrid`-subject case in that file — confirmed by the
-// `SliverGrid` widget-level port's own content sweep,
-// `crates/flui-widgets/tests/parity/sliver_grid_test.rs`). Not portable here,
-// but for a TEST-HARNESS reason, not a production gap — no Cross.H entry
-// follows from this one, same disposition as that file's own
-// `find_text`-vs-`skipOffstage` note. The oracle constructs 60 pre-existing
-// `RenderBox` children via a `TestRenderSliverBoxChildManager`, scrolls the
-// SAME mounted `RenderViewport` through four offsets (`root.offset = ...;
-// pumpFrame();`), and asserts which of the 60 boxes are `.attached` at each
-// position — i.e. it exercises a genuine child-manager request/attach/evict
-// protocol across multiple relayouts of one persistent tree. This harness's
-// `LayoutRun::update`/`relayout` (`crates/flui-rendering/src/testing/
+// Not covered here: a grid scroll scenario that constructs 60 pre-existing
+// `RenderBox` children via a fake child manager, scrolls the SAME mounted
+// `RenderViewport` through four offsets, and asserts which of the 60 boxes are
+// attached at each position — i.e. a genuine child-manager
+// request/attach/evict protocol across multiple relayouts of one persistent
+// tree. The reason is a TEST-HARNESS gap, not a production one. This
+// harness's `LayoutRun::update`/`relayout` (`crates/flui-rendering/src/testing/
 // harness.rs`) DOES support mutating and re-laying-out an already-mounted
 // tree — the mechanism itself is not the blocker. The blocker is
 // `RenderSliverGrid::perform_layout` (`crates/flui-objects/src/sliver/
@@ -3105,10 +3065,9 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_panic_band_after_a_poisoned_rel
 // this harness mounts render objects directly with no element tree at all,
 // there is no consumer for that retain-band signal — pre-seeding all 60
 // children and scrolling would show every one still `.attached` forever,
-// the OPPOSITE of what the oracle asserts. Reproducing the oracle's actual
-// scenario needs a fake render-level child-manager that creates/disposes
-// real `RenderBox` children on demand (Flutter's
-// `TestRenderSliverBoxChildManager`); this harness's
+// the OPPOSITE of what such a scenario asserts. Reproducing it needs a fake
+// render-level child-manager that creates/disposes real `RenderBox`
+// children on demand; this harness's
 // `viewport()`/`sliver_node()` builders have no such concept for ANY lazy
 // sliver, grid or list alike — a test-infrastructure gap, not something
 // wrong in `RenderSliverGrid`'s own (correct, checked separately by the two
@@ -3411,9 +3370,8 @@ fn harness_sliver_offstage_hidden_reports_zero_geometry() {
     );
 }
 
-// An alpha=0 sliver must not emit an Opacity layer. Flutter
-// proxy_sliver.dart: alpha 0 → layer=null, return — no layer painted. The
-// defect this pins: reporting `Some(0)` through `paint_effects().opacity`
+// An alpha=0 sliver must not emit an Opacity layer: alpha 0 → no layer
+// painted. The defect this pins: reporting `Some(0)` through `paint_effects().opacity`
 // makes the owner wrap the child in a 0-alpha OpacityLayer (present in
 // structure); the correct answer at alpha=0 is `None`, no layer emitted.
 fn harness_sliver_opacity_alpha_zero_emits_no_opacity_layer() {
@@ -3431,7 +3389,7 @@ fn harness_sliver_opacity_alpha_zero_emits_no_opacity_layer() {
     assert!(
         !run.structure().contains(&"Opacity"),
         "fully-transparent sliver (alpha=0) must NOT emit an OpacityLayer \
-         (Flutter: alpha=0 → layer=null): {:?}",
+         (alpha=0 → no layer): {:?}",
         run.structure(),
     );
 }
@@ -3497,10 +3455,9 @@ fn harness_viewport_stacks_two_slivers() {
 // Regression coverage for the `RenderViewport::attempt_layout` sign bug
 // documented in docs/research/widget-renderobject-map.md ("Two pre-existing
 // infrastructure defects"): the forward sequence's `overlap` used
-// `center_offset.min(0.0)` (== `(-corrected_offset).min(0.0)`) instead of the
-// oracle's `corrected_offset.min(0.0)` (`rendering/viewport.dart:1834`,
-// `overlap: leadingNegativeChild == null ? math.min(0.0, -centerOffset) :
-// 0.0`). At a positive scroll offset with no leading reverse-growth group,
+// `center_offset.min(0.0)` (== `(-corrected_offset).min(0.0)`) instead of
+// `corrected_offset.min(0.0)` when there is no leading reverse-growth group
+// (and `0.0` when there is one). At a positive scroll offset with no leading reverse-growth group,
 // `overlap` must be `0.0`; with one, it must be `0.0` for BOTH sequences.
 // `RenderSliverFillRemainingWithScrollable` reads `constraints.overlap.min(0.0)`
 // directly into its `extent` formula, so a wrong sign inflates `extent` and
@@ -3510,7 +3467,7 @@ fn harness_viewport_stacks_two_slivers() {
 // [0,1) forward / [1,2) reverse — child 0 ("forward_filler") was forward,
 // child 1 ("fill") was reverse, and the forward group's own absolute scroll
 // offset (`corrected_offset.max(0.0)`) fed straight into "fill"'s
-// `sliver_scroll_offset`. Under Flutter's model `center` is the first
+// `sliver_scroll_offset`. Under the current model `center` is the first
 // FORWARD child, so `center: Some(1)` now makes child 0 the REVERSE group
 // and child 1 ("fill") the FORWARD group instead — and a forward group's own
 // `sliver_scroll_offset` is `(-center_offset).max(0.0)`, which is `0.0`
@@ -3876,9 +3833,9 @@ fn harness_render_wrap_wraps_to_second_run() {
 // RenderIntrinsicWidth
 // ============================================================================
 
-// ---- Oracle port: rendering/intrinsic_width_test.dart (3.44.0) ------------
+// ---- RenderIntrinsicWidth shrink-wrapping -----------------------------------
 
-/// Oracle: `test('Shrink-wrapping width', ...)`.
+/// Shrink-wrapping width.
 fn harness_intrinsic_width_shrink_wrapping_width_oracle() {
     let mut run = RenderTester::mount(
         box_node(RenderIntrinsicWidth::unconstrained())
@@ -4028,11 +3985,9 @@ fn harness_dry_layout_child_intrinsic_channel_matches_standalone_query() {
 // RenderIntrinsicHeight
 // ============================================================================
 
-// ---- Oracle port: rendering/intrinsic_width_test.dart (3.44.0) ------------
-// (RenderIntrinsicHeight cases live in the same oracle file as
-// RenderIntrinsicWidth's.)
+// ---- RenderIntrinsicHeight shrink-wrapping ----------------------------------
 
-/// Oracle: `test('Shrink-wrapping height', ...)`.
+/// Shrink-wrapping height.
 fn harness_intrinsic_height_shrink_wrapping_height_oracle() {
     let mut run = RenderTester::mount(
         box_node(RenderIntrinsicHeight::new())
@@ -4622,9 +4577,8 @@ fn harness_render_animated_size_retarget_mid_flight_has_no_discontinuous_jump() 
 // *real* `RenderViewport` to a nonzero scroll offset and inspecting the first
 // sliver's `constraints.overlap` revealed that `RenderViewport::attempt_layout`
 // (`crates/flui-objects/src/sliver/viewport.rs`, the `overlap: center_offset
-// .min(0.0)` line) computed the wrong sign relative to both the oracle
-// (`rendering/viewport.dart:1834`: `overlap: ... math.min(0.0, -centerOffset)`)
-// and FLUI's own `RenderShrinkWrappingViewport::attempt_layout` sibling
+// .min(0.0)` line) computed the wrong sign relative to
+// `RenderShrinkWrappingViewport::attempt_layout`, its sibling
 // (already correct: `overlap: corrected_offset.min(0.0)`) — confirmed
 // empirically (a Pinned header at scroll_offset=300 reported
 // `paint_origin == -300.0`, i.e. `overlap == -300.0`, where a correct
@@ -4632,7 +4586,7 @@ fn harness_render_animated_size_retarget_mid_flight_has_no_discontinuous_jump() 
 // sliver). **Fixed** (see `harness_viewport_forward_overlap_is_zero_without_
 // leading_reverse_group` / `harness_viewport_reverse_group_overlap_is_always_
 // zero` above, near the other `RenderViewport` harness tests): the formula now
-// matches the oracle for both the no-reverse-group case and the
+// is right for both the no-reverse-group case and the
 // leading-negative-child case (which forces `overlap` to `0.0` for both
 // sequences). It was a pre-existing defect, not something introduced by this
 // family's pass — no existing sliver in the catalog read `constraints.overlap`
@@ -4967,10 +4921,7 @@ fn harness_sliver_persistent_header_floating_pinned_shares_reveal_sequence_but_c
 // RenderLayoutBuilder (ADR-0017) — the render half of the
 // build-during-layout seam. It publishes constraints; it never builds.
 //
-// Parity is NOT claimed: `.flutter/` is absent from this checkout, so these
-// assertions encode the algorithm recorded in ADR-0017, not a verified match
-// against `widgets/layout_builder.dart`. Full parity verification against
-// that oracle remains the gate.
+// These assertions encode the algorithm recorded in ADR-0017.
 // ============================================================================
 
 /// A layout pass must publish the **real** incoming constraints — not a
@@ -5060,9 +5011,8 @@ fn render_object_types_match_exports() {
 // ── RenderTheater ─────────────────────────────────────────────────────────────
 
 /// The leading `skip_count` children are offstage: not laid out, not painted,
-/// not hit-tested. Flutter's `_childrenInPaintOrder` / `_childrenInHitTestOrder`
-/// both start at `_firstOnstageChild` (`overlay.dart:1424-1458`), and
-/// `performLayout` only walks paint order (`:1481-1484`).
+/// not hit-tested. Paint and hit-test order both start at the first onstage
+/// child, and layout only walks paint order.
 fn harness_theater_skips_leading_children_in_layout_paint_and_hit_test() {
     let run = RenderTester::mount(
         box_node(RenderTheater::new().with_skip_count(1))
@@ -5236,9 +5186,8 @@ fn harness_sliver_main_axis_group_composes_scroll_extents_and_places_children() 
 /// stretched. That is the whole difference between the two, and it is what
 /// decides how tall the row is.
 ///
-/// Oracle: `rendering/table.dart` groups `intrinsicHeight` with
-/// `top`/`middle`/`bottom` in the measure pass (`:1401-1405`) and with `fill`
-/// in the position pass (`:1437-1441`).
+/// `IntrinsicHeight` is grouped with `Top`/`Middle`/`Bottom` in the measure
+/// pass and with `Fill` in the position pass.
 fn harness_table_intrinsic_height_measures_the_row_then_stretches_every_cell_to_it() {
     let run = RenderTester::mount(
         box_node(
@@ -5316,9 +5265,7 @@ impl RenderBox for LaysOutFirstN {
 ///
 /// The third walk, after paint and hit-test. A screen reader sent to a row
 /// that is no longer laid out lands somewhere with nothing on it — worse than
-/// not announcing it, which is what the reference does: Flutter removes an
-/// off-screen or kept-alive child from the render child list, so it publishes
-/// nothing at all.
+/// not announcing it.
 ///
 /// This gate was deferred once, because `harness_merge_semantics_collapses_
 /// descendant_boundaries` lost a descendant's `is_button` under it. That is no

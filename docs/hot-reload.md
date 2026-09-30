@@ -2,15 +2,15 @@
 
 # Hot Reload
 
-FLUI targets **Flutter-parity hot reload** (state preserved, `build()` re-run). The operational two-layer model below is the dev-time/build side; the runtime parity protocol is in the [Flutter-parity design](designs/2026-06-28-flutter-parity-hot-reload.md).
+FLUI targets **hot reload** (state preserved, `build()` re-run). The operational two-layer model below is the dev-time/build side; the runtime protocol is in the [hot-reload design](designs/2026-06-28-hot-reload-runtime-protocol.md).
 
 ## Target vs today
 
-| Capability | Flutter | FLUI today | FLUI target |
-|------------|---------|------------|-------------|
-| Hot reload (state kept) | Yes | Yes — `flui run` worker dylib swap (`perform_reassemble`) | Keep |
-| Hot restart | Yes | Partial (types change → process restart; in-process remount not wired) | `HotReloadTier::HotRestart` |
-| Scene plugin reload | N/A | Yes | Keep for GPU demos |
+| Capability | FLUI today | FLUI target |
+|------------|------------|-------------|
+| Hot reload (state kept) | Yes — `flui run` worker dylib swap (`perform_reassemble`) | Keep |
+| Hot restart | Partial (types change → process restart; in-process remount not wired) | `HotReloadTier::HotRestart` |
+| Scene plugin reload | Yes | Keep for GPU demos |
 
 **Critical insight:** state must live in the **host binary** (Element tree), not in the reloadable `.so`. See the design doc §2.
 

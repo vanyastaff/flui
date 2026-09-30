@@ -1,6 +1,5 @@
 //! Intrinsics / dry-layout cache: memoization, invalidation, and the
-//! boundary-crossing escalation (Flutter `_LayoutCacheStorage`,
-//! box.dart:2840).
+//! boundary-crossing escalation.
 //!
 //! Scenarios:
 //! 1. a walk memoizes EVERY level — re-querying the root or the child

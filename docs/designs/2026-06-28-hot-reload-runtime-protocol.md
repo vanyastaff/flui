@@ -1,4 +1,4 @@
-# Flutter-Parity Hot Reload — Architecture Design
+# State-Preserving Hot Reload — Architecture Design
 
 **Date:** 2026-06-28  
 **Status:** approved direction — implementation in phases  
@@ -8,19 +8,19 @@
 
 ## 1. Goal
 
-Match Flutter's developer experience:
+Hot reload that keeps `State` and re-runs `build()`, in three tiers:
 
-| Flutter | FLUI target |
-|---------|-------------|
-| **Hot reload** — code changes, `State` preserved, `build()` re-run | Same semantics |
-| **Hot restart** — code changes, state reset, process kept | Same |
-| **Full restart** — kill process | `flui run` today |
+| Tier | Behaviour |
+|------|-----------|
+| **Hot reload** | Code changes, `State` preserved, `build()` re-run |
+| **Hot restart** | Code changes, state reset, process kept |
+| **Full restart** | Kill process; `flui run` today |
 
-This is **not** a quick-win layer-1/layer-2 cleanup. It is a **product requirement** for DX parity with Flutter, Makepad, and modern Rust UI tooling.
+This is **not** a quick-win layer-1/layer-2 cleanup. It is a **product requirement** for the developer experience of a declarative UI framework, in line with Makepad and modern Rust UI tooling.
 
 ---
 
-## 2. Why the current `PluginPipeline` model cannot reach parity
+## 2. Why the current `PluginPipeline` model cannot preserve state
 
 Today `app_plugin!` puts the **entire** three-tree inside the `.so`:
 
@@ -33,7 +33,7 @@ Host (binary)          Plugin (.so)
 
 On reload the `OnceLock` resets → **hot restart**. State lives in the plugin address space; when the `.so` is replaced, every `State<T>` is gone.
 
-**This is the wrong split.** Research doc Contract 9 correctly identified the symptom but drew the wrong conclusion ("stateful reload is unreachable with cdylib"). The fix is **not** to abandon parity — it is to **invert ownership**:
+**This is the wrong split.** Research doc Contract 9 correctly identified the symptom but drew the wrong conclusion ("stateful reload is unreachable with cdylib"). The fix is **not** to abandon state preservation — it is to **invert ownership**:
 
 ```text
 Host (binary) — IMMUTABLE across reload
@@ -46,22 +46,20 @@ Worker (reloadable) — SWAPPED on reload
   Stateless view configs (recreated each build)
 ```
 
-Flutter's Dart VM keeps the heap in the host; only **method bodies** change. FLUI's analogue: keep the **retained trees in the host binary**, reload only the **worker crate** that exports build logic.
+The principle: the heap stays in the host and only **method bodies** change. For FLUI that means keeping the **retained trees in the host binary** and reloading only the **worker crate** that exports build logic.
 
-Makepad achieves parity via a **Live VM / Splash** (interpreted layer) for declarative UI — a valid Phase 3 option for FLUI widget *definitions*, but Phase 1 targets native Rust via host/worker split (closer to Flutter's mental model for widget authors).
+Makepad reaches the same goal via a **Live VM / Splash** (interpreted layer) for declarative UI — a valid Phase 3 option for FLUI widget *definitions*, but Phase 1 targets native Rust via host/worker split, which keeps widget authors writing ordinary Rust.
 
 ---
 
-## 3. Three tiers (Flutter vocabulary)
+## 3. Three tiers
 
 ```rust
 pub enum HotReloadTier {
     /// Re-run `build()` on the whole element tree; preserve `State`.
-    /// Flutter: `flutter run` + save → hot reload.
     HotReload,
 
     /// Remount root widget; drop all `State`; keep process + GPU context.
-    /// Flutter: hot restart (`R` in CLI).
     HotRestart,
 
     /// Kill process; `flui run` respawn.
@@ -79,19 +77,19 @@ Mapping to dev orchestration ([`ReloadStrategy`](../hot-reload.md)):
 
 ---
 
-## 4. Hot reload protocol (Flutter `reassemble` port)
+## 4. Hot reload protocol (`reassemble`)
 
 On **HotReload** after the worker dylib is rebuilt and reloaded:
 
 1. **Invalidate const caches** (Phase 2 — `const` view memoization).
-2. **`BuildOwner::reassemble(tree)`** — mark every element dirty (Flutter `Element.reassemble`).
+2. **`BuildOwner::reassemble(tree)`** — mark every element dirty.
 3. **`PipelineOwner::reassemble()`** — call `RenderObject::reassemble`, mark layout+paint dirty.
 4. **`WidgetsBinding::draw_frame()`** — drain build scope; reconciliation runs with **preserved** elements.
 5. **`RendererBinding::draw_frame()`** — layout/paint as usual.
 
 State preservation is automatic if step 4 never unmounts stateful elements (same `ElementId`, same `can_update`).
 
-On **layout/type change** that breaks `can_update` → degrade to **HotRestart** (explicit, logged — Flutter does the same with reload rejection).
+On **layout/type change** that breaks `can_update` → degrade to **HotRestart** (explicit, logged, with the rejection reason).
 
 ---
 
@@ -129,7 +127,7 @@ extern "C" fn flui_worker_type_fingerprint() -> u64; // for layout-change detect
 
 ## 6. Code reload mechanisms (Phase 1 vs 2)
 
-### Phase 1 — Worker dylib swap (MVP parity path)
+### Phase 1 — Worker dylib swap (MVP path)
 
 - Host loads `my_app_logic.dll` via existing `DynLib`.
 - On mtime change: `unload` → `load` → `perform_hot_reload(HotReloadTier::HotReload)`.
@@ -146,7 +144,7 @@ extern "C" fn flui_worker_type_fingerprint() -> u64; // for layout-change detect
 
 - Declarative widget trees in hot-swappable scripts for designer workflow.
 - Rust worker for performance-critical paths.
-- Optional; not required for widget-author parity.
+- Optional; not required for state-preserving reload of widget code.
 
 ---
 
@@ -165,7 +163,7 @@ extern "C" fn flui_worker_type_fingerprint() -> u64; // for layout-change detect
 ### Phase B — Host/worker project template
 
 - [ ] `flui new --hot-reload` scaffolds three-crate layout
-- [ ] `hot_reload_app!` macro (replaces stateful `app_plugin!` for parity path)
+- [ ] `hot_reload_app!` macro (replaces stateful `app_plugin!` for the state-preserving path)
 - [ ] `flui run` builds logic crate + runs host with `FLUI_WORKER_PLUGIN`
 - [ ] Deprecate `PluginPipeline`-inside-plugin for widget apps (keep for scene-only)
 
@@ -176,7 +174,7 @@ extern "C" fn flui_worker_type_fingerprint() -> u64; // for layout-change detect
 - [ ] DevTools: reload tier indicator, rejection reasons
 - [ ] const/inherited widget invalidation
 
-### Phase D — Platform parity
+### Phase D — Other platforms
 
 - [ ] Android: same host/worker split (host APK + reloadable logic `.so`)
 - [ ] WASM: HotRestart only (no dylib); script layer for true reload
@@ -185,7 +183,7 @@ extern "C" fn flui_worker_type_fingerprint() -> u64; // for layout-change detect
 
 ## 8. Non-goals (honest limits)
 
-- **Arbitrary `State` layout changes across HotReload** — same as Flutter (reload fails → restart).
+- **Arbitrary `State` layout changes across HotReload** — reload is rejected and degrades to a restart.
 - **Global statics in worker** — leak or stale; forbidden by worker crate lint.
 - **`tracing` subscriber in worker** — known `hot-lib-reloader` hazard; host owns tracing.
 - **Production hot reload** — dev-only; release builds static-link worker.
@@ -205,5 +203,4 @@ extern "C" fn flui_worker_type_fingerprint() -> u64; // for layout-change detect
 
 - [Hot Reload (operational guide)](../hot-reload.md)
 - [Architecture](../architecture.md)
-- Flutter: `BindingBase.reassemble`, `Element.reassemble`, `PipelineOwner.flushReassemble`
 - Makepad: Live/Splash system ([makepad.rs](https://makepad.rs/guide/start/makepad-framework-architecture))

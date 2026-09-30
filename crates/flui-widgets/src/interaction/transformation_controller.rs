@@ -33,9 +33,8 @@ impl Listenable for Inner {
 /// A shared, cheaply-cloneable handle to an `InteractiveViewer`'s
 /// transformation matrix.
 ///
-/// Flutter parity: `widgets/interactive_viewer.dart` `TransformationController`
-/// — "a thin wrapper on `ValueNotifier` whose value is a `Matrix4`". FLUI
-/// shapes it the way sibling controllers in this crate are shaped (see
+/// A thin wrapper on a notifier whose value is a `Matrix4`. It is
+/// shaped the way sibling controllers in this crate are shaped (see
 /// [`ScrollController`](crate::ScrollController) /
 /// `flui_rendering::view::ScrollPosition`): `Arc`-backed shared state plus a
 /// [`ChangeNotifier`], so every clone observes the same transform and the
@@ -89,12 +88,11 @@ impl TransformationController {
 
     /// Replaces the transform and notifies listeners if it actually changed.
     ///
-    /// Flutter parity: `ValueNotifier.value=` — no clamping is applied here.
+    /// No clamping is applied here.
     /// `InteractiveViewer`'s own gesture handling is what runs a candidate
     /// transform through `boundaryMargin`/`minScale`/`maxScale` before
     /// writing it through this setter; a direct `set_value` call (from a
-    /// test, or an external animation) bypasses those clamps entirely,
-    /// exactly as it does in Flutter.
+    /// test, or an external animation) bypasses those clamps entirely.
     pub fn set_value(&self, value: Matrix4) {
         let mut guard = self.inner.value.lock();
         if guard.m == value.m {
@@ -112,8 +110,7 @@ impl TransformationController {
     /// transforms as the inverse of the child (moving the child left is
     /// equivalent to moving the viewport right).
     ///
-    /// Flutter parity: `TransformationController.toScene`. Returns
-    /// `viewport_point` unchanged if the current value is singular (should
+    /// Returns `viewport_point` unchanged if the current value is singular (should
     /// not happen for a matrix built solely from translation + uniform
     /// scale, but a non-invertible matrix has no meaningful scene point).
     #[must_use]

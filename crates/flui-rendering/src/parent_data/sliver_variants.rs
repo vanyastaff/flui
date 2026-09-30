@@ -80,7 +80,7 @@ impl Eq for SliverLogicalParentData {}
 ///
 /// Minted by the sparse host, inherited through however many component
 /// elements sit between it and the child's first render descendant, and
-/// consumed once at adopt time — Flutter's `didAdoptChild` slot.
+/// consumed once at adopt time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SliverSlot {
     /// The logical index: what layout and the band walk key on.
@@ -168,8 +168,8 @@ pub struct SliverMultiBoxAdaptorParentData {
     /// Distinct from [`Self::index`], which is the LOGICAL index layout and the
     /// band walk key on. The two coincide for a delegate that materialises one
     /// set member per logical index — every delegate FLUI ships today — and
-    /// diverge for any that interleaves non-members, the way Flutter's
-    /// `ListView.separated` puts separators at odd logical indices. `None`
+    /// diverge for any that interleaves non-members, such as a separated
+    /// list that puts separators at odd logical indices. `None`
     /// means "not a member of the set": a separator has a logical index and no
     /// position to announce.
     ///

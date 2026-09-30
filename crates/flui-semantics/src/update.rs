@@ -10,14 +10,10 @@
 //! matches inbound actions against. `SemanticsId` — an arena position in a
 //! tree the pipeline rebuilds every pass — never appears here.
 //!
-//! This mirrors Flutter, whose update payload
-//! (`SemanticsUpdateBuilder.updateNode`) carries the node's stable
-//! `SemanticsNode.id` and its children (`childrenInTraversalOrder`) in that
-//! one id space, with no positional identity anywhere in the payload. FLUI
-//! derives the stable id from the boundary's generational render identity
-//! instead of a construction-time counter — see
-//! [`AccessibilityNodeId`] for that documented
-//! divergence — but the payload contract is the same: a node that logically
+//! The payload carries each node's stable id and its children in that one id
+//! space, with no positional identity anywhere in the payload. FLUI derives
+//! the stable id from the boundary's generational render identity instead of
+//! a construction-time counter — see [`AccessibilityNodeId`]. A node that logically
 //! persists keeps its id across rebuilds and sibling reorders, so an adapter
 //! can diff two updates and assistive-technology focus stays attached.
 //!
@@ -112,19 +108,18 @@ pub struct SemanticsNodeData {
     /// Scroll child count.
     pub scroll_child_count: Option<i32>,
     /// This node's zero-based index among its parent's semantic children, as
-    /// an `IndexedSemantics` ancestor declared it (Flutter's
-    /// `SemanticsConfiguration.indexInParent`).
+    /// an `IndexedSemantics` ancestor declared it.
     ///
     /// Zero-based here and converted at the platform boundary — AccessKit's
     /// `position_in_set` is one-based and pairs with the container's
     /// `size_of_set`. Keeping the framework side zero-based matches every
-    /// other index in the codebase and matches the reference, so a delegate's
-    /// `semantic_index_offset` arithmetic reads the same as Flutter's.
+    /// other index in the codebase, so a delegate's
+    /// `semantic_index_offset` arithmetic stays natural.
     pub index_in_parent: Option<i32>,
     /// The node's explicit accessibility role.
     ///
     /// Carried separately from [`Self::flags`] because the two encode role at
-    /// different granularities, exactly as Flutter does. The common controls —
+    /// different granularities. The common controls —
     /// button, link, text field, slider — are identified by a *flag* and leave
     /// this [`SemanticsRole::None`]; the structural roles a screen reader needs
     /// for navigation — `Tab`, `Table`, `ColumnHeader`, `MenuItemRadio` — have
