@@ -31,6 +31,10 @@ fn a_path_needs_a_known_root_and_a_slash() {
         ),
         ("docs/adr/", &["docs/adr/"]),
         (
+            ".rust-studio/specs/x/plan.md",
+            &[".rust-studio/specs/x/plan.md"],
+        ),
+        (
             "see docs/testing.md and crates/flui-view",
             &["docs/testing.md", "crates/flui-view"],
         ),
@@ -93,19 +97,36 @@ fn a_pattern_a_placeholder_or_a_foreign_layout_is_not_a_path() {
 }
 
 fn packages_are_read_only_from_cargo_commands() {
+    let (test, build) = (Some("test"), Some("build"));
     for (code, want) in [
-        ("cargo test -p flui-view", &[(0, "flui-view")][..]),
-        ("cargo nextest run --package flui-app", &[(0, "flui-app")]),
-        ("cargo build -p a -p b", &[(0, "a"), (0, "b")]),
+        ("cargo test -p flui-view", &[(0, test, "flui-view")][..]),
+        (
+            "cargo nextest run --package flui-app",
+            &[(0, Some("nextest"), "flui-app")],
+        ),
+        ("cargo build -p a -p b", &[(0, build, "a"), (0, build, "b")]),
         (
             "cargo run --package=flui-cli -p=flui-app",
-            &[(0, "flui-cli"), (0, "flui-app")],
+            &[(0, Some("run"), "flui-cli"), (0, Some("run"), "flui-app")],
         ),
-        ("cargo update -p wgpu@25.0.0", &[(0, "wgpu")]),
-        ("~/.cargo/bin/cargo test -p flui-view", &[(0, "flui-view")]),
-        ("cargo test \\\n  -p flui-view", &[(1, "flui-view")]),
-        ("RUSTFLAGS=x; cargo build -p flui-view", &[(0, "flui-view")]),
-        ("x\ncargo test -p flui-view", &[(1, "flui-view")]),
+        ("cargo test -pflui-view", &[(0, test, "flui-view")]),
+        (
+            "cargo update -p wgpu@25.0.0",
+            &[(0, Some("update"), "wgpu")],
+        ),
+        ("cargo +nightly miri test -p a", &[(0, Some("miri"), "a")]),
+        ("cargo --locked test -p a", &[(0, test, "a")]),
+        ("cargo -p a test", &[(0, None, "a")]),
+        (
+            "~/.cargo/bin/cargo test -p flui-view",
+            &[(0, test, "flui-view")],
+        ),
+        ("cargo test \\\n  -p flui-view", &[(1, test, "flui-view")]),
+        (
+            "RUSTFLAGS=x; cargo build -p flui-view",
+            &[(0, build, "flui-view")],
+        ),
+        ("x\ncargo test -p flui-view", &[(1, test, "flui-view")]),
         // not cargo, or cargo's command ended
         ("mkdir -p target/x", &[]),
         ("cargo build && mkdir -p out", &[]),
@@ -113,13 +134,51 @@ fn packages_are_read_only_from_cargo_commands() {
         ("cargo build | grep -p x", &[]),
         ("cargo test\nmkdir -p out", &[]),
         ("rg -p flui-view", &[]),
+        ("cargo test --profile ci", &[]),
         // placeholders
         ("cargo test -p <crate>", &[]),
         ("cargo test -p $CRATE", &[]),
         ("cargo test -p {name}", &[]),
     ] {
-        assert_eq!(extract::packages(code), want, "{code:?}");
+        let got: Vec<(usize, Option<&str>, &str)> = extract::packages(code)
+            .into_iter()
+            .map(|selected| (selected.line, selected.subcommand, selected.name))
+            .collect();
+        assert_eq!(got, want, "{code:?}");
     }
+}
+
+fn a_lockfile_package_is_selected_only_by_update_and_tree() {
+    let packages = Packages {
+        local: ["flui-view".to_owned()].into(),
+        locked: ["wgpu".to_owned()].into(),
+    };
+    for (code, selects) in [
+        ("cargo test -p flui-view", true),
+        ("cargo update -p wgpu", true),
+        ("cargo tree -p wgpu", true),
+        ("cargo test -p wgpu", false),
+        ("cargo -p wgpu", false),
+        ("cargo update -p flui-types", false),
+    ] {
+        let selected = extract::packages(code);
+        assert_eq!(selected.len(), 1, "{code:?}");
+        assert_eq!(packages.selects(&selected[0]), selects, "{code:?}");
+    }
+}
+
+fn headings_give_github_anchors() {
+    let markdown = "# Start here\n## The `View` tree: a guide!\n## Start here\n\
+                    ## Custom {#own-id}\n\n```\n# not a heading\n```\n";
+    let want: BTreeSet<String> = [
+        "own-id",
+        "start-here",
+        "start-here-1",
+        "the-view-tree-a-guide",
+    ]
+    .map(str::to_owned)
+    .into();
+    assert_eq!(extract::anchors(markdown), want);
 }
 
 fn code_spans_and_blocks_carry_their_lines() {
@@ -200,7 +259,7 @@ fn an_llms_link_resolves_like_a_github_link() {
         ("https://example.com/x.md", None),
         ("https://github.com/vanyastaff/flui/issues/1", None),
         ("mailto:a@b.c", None),
-        ("#start-here", None),
+        ("#start-here", Some(Some("llms.txt"))),
     ] {
         let got = link_target("llms.txt", dest);
         assert_eq!(got.as_ref().map(|path| path.as_deref()), target, "{dest:?}");
@@ -209,13 +268,19 @@ fn an_llms_link_resolves_like_a_github_link() {
 
 fn a_doc_reports_each_stale_name_once() {
     let known = known();
-    let packages: BTreeSet<String> = ["flui-view", "flui-app", "wgpu"].map(str::to_owned).into();
+    let packages = Packages {
+        local: ["flui-view", "flui-app"].map(str::to_owned).into(),
+        locked: ["wgpu".to_owned()].into(),
+    };
+    let read = |path: &str| (path == "docs/testing.md").then(|| "# The harness\n".to_owned());
     let text = "`crates/flui-view/src/lib.rs` `crates/flui-types/` `crates/flui-types/`\n\
                 `cargo test -p flui_view`\n\n\
-                ```sh\ncargo update -p wgpu\ncargo test -p flui-types\n```\n\n\
-                [ok](docs/testing.md) [gone](docs/gone.md) [out](../x.md) [web](https://a.b/)\n";
+                ```sh\ncargo update -p wgpu\ncargo test -p flui-types\ncargo test -p wgpu\n```\n\n\
+                [ok](docs/testing.md) [gone](docs/gone.md) [out](../x.md) [web](https://a.b/)\n\
+                [h](docs/testing.md#the-harness) [no](docs/testing.md#no-heading) \
+                [dir](crates/flui-view#x) [self](#no-heading)\n";
     let names = |doc: &str| -> Vec<(usize, Kind, String)> {
-        stale(doc, text, &known, &packages)
+        stale(doc, text, &known, &packages, &read)
             .into_iter()
             .map(|stale| (stale.line, stale.kind, stale.name))
             .collect()
@@ -224,12 +289,16 @@ fn a_doc_reports_each_stale_name_once() {
         (1, Kind::Path, "crates/flui-types/".to_owned()),
         (2, Kind::Package, "flui_view".to_owned()),
         (6, Kind::Package, "flui-types".to_owned()),
+        // a lockfile package, selected by a command that takes members only
+        (7, Kind::Package, "wgpu".to_owned()),
     ];
     // Markdown links are lychee's; `llms.txt`'s are this gate's
     assert_eq!(names("README.md"), want);
     want.extend([
-        (9, Kind::Link, "docs/gone.md".to_owned()),
-        (9, Kind::Link, "../x.md".to_owned()),
+        (10, Kind::Link, "docs/gone.md".to_owned()),
+        (10, Kind::Link, "../x.md".to_owned()),
+        (11, Kind::Link, "docs/testing.md#no-heading".to_owned()),
+        (11, Kind::Link, "#no-heading".to_owned()),
     ]);
     want.sort();
     assert_eq!(names("llms.txt"), want);
@@ -391,6 +460,14 @@ fn docs_paths_contract() {
             (
                 "packages_are_read_only_from_cargo_commands",
                 packages_are_read_only_from_cargo_commands as fn(),
+            ),
+            (
+                "a_lockfile_package_is_selected_only_by_update_and_tree",
+                a_lockfile_package_is_selected_only_by_update_and_tree as fn(),
+            ),
+            (
+                "headings_give_github_anchors",
+                headings_give_github_anchors as fn(),
             ),
             (
                 "code_spans_and_blocks_carry_their_lines",

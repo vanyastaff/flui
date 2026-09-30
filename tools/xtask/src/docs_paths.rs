@@ -4,9 +4,11 @@
 //!
 //! - a repository path in a code span (`crates/flui-view/ARCHITECTURE.md`)
 //!   of a Markdown file, or of `llms.txt`;
-//! - the link destinations of `llms.txt`, which lychee reads as plain text;
+//! - the link destinations of `llms.txt`, which lychee reads as plain text,
+//!   with an `#anchor` into Markdown naming one of its headings;
 //! - the package after `-p`/`--package` in a cargo command, in a code span or
-//!   a code block, which must be one the checkout has ([`packages`]).
+//!   a code block, which must be one the checkout has, or for `cargo update`
+//!   and `cargo tree` one in `Cargo.lock` ([`Packages`]).
 //!
 //! [`extract`] says what counts as a path or a package. A path resolves
 //! against the repository root, the doc's own directory, or the package the
@@ -78,7 +80,8 @@ pub(crate) fn docs_paths(args: &DocsPathsArgs) -> anyhow::Result<ExitCode> {
     for doc in &docs {
         let text =
             std::fs::read_to_string(root.join(doc)).with_context(|| format!("reading {doc}"))?;
-        found.extend(stale(doc, &text, &known, &packages));
+        let read = |path: &str| std::fs::read_to_string(root.join(path)).ok();
+        found.extend(stale(doc, &text, &known, &packages, &read));
     }
     if args.seed {
         print!("{}", seed(&found));
@@ -131,10 +134,33 @@ fn listed(root: &std::path::Path) -> anyhow::Result<Vec<String>> {
         .collect())
 }
 
-/// The packages a `-p` may name: the workspace members, every other package
-/// the checkout has a manifest for (the Android examples are excluded from
-/// the workspace), and every package in `Cargo.lock` (`cargo update -p wgpu`).
-fn packages(root: &std::path::Path, known: &Known) -> anyhow::Result<BTreeSet<String>> {
+/// The cargo subcommands whose `-p` takes any package of the resolved graph,
+/// a dependency too (`cargo update -p wgpu`, `cargo tree -p parley`).
+const GRAPH_SUBCOMMANDS: [&str; 2] = ["tree", "update"];
+
+/// The packages a `-p` may name.
+#[derive(Debug, Default)]
+struct Packages {
+    /// The workspace members, and every other package the checkout has a
+    /// manifest for (the Android examples are excluded from the workspace).
+    local: BTreeSet<String>,
+    /// Every package in `Cargo.lock`, for a [`GRAPH_SUBCOMMANDS`] command.
+    locked: BTreeSet<String>,
+}
+
+impl Packages {
+    /// Whether the command `selected` is in names a package it can select.
+    fn selects(&self, selected: &extract::Selected<'_>) -> bool {
+        self.local.contains(selected.name)
+            || (selected
+                .subcommand
+                .is_some_and(|subcommand| GRAPH_SUBCOMMANDS.contains(&subcommand))
+                && self.locked.contains(selected.name))
+    }
+}
+
+/// The packages of the checkout at `root`.
+fn packages(root: &std::path::Path, known: &Known) -> anyhow::Result<Packages> {
     #[derive(Deserialize)]
     struct Manifest {
         package: Option<Named>,
@@ -170,8 +196,14 @@ fn packages(root: &std::path::Path, known: &Known) -> anyhow::Result<BTreeSet<St
     }
     let lock: Lock =
         toml::from_str(&crate::util::read("Cargo.lock")?).context("parsing Cargo.lock")?;
-    names.extend(lock.package.into_iter().map(|package| package.name));
-    Ok(names)
+    Ok(Packages {
+        local: names,
+        locked: lock
+            .package
+            .into_iter()
+            .map(|package| package.name)
+            .collect(),
+    })
 }
 
 /// The docs the scan reads, sorted.
@@ -296,7 +328,7 @@ impl fmt::Display for Stale {
         let why = match self.kind {
             Kind::Path => "no such file or directory",
             Kind::Package => "not a workspace member",
-            Kind::Link => "the link resolves to no file or directory",
+            Kind::Link => "the link resolves to no file, directory or heading",
         };
         write!(
             f,
@@ -309,8 +341,15 @@ impl fmt::Display for Stale {
     }
 }
 
-/// Every stale name in `text`, the doc at `doc`.
-fn stale(doc: &str, text: &str, known: &Known, packages: &BTreeSet<String>) -> Vec<Stale> {
+/// Every stale name in `text`, the doc at `doc`; `read` reads a file of the
+/// checkout, for the headings a link's `#anchor` must name.
+fn stale(
+    doc: &str,
+    text: &str,
+    known: &Known,
+    packages: &Packages,
+    read: &dyn Fn(&str) -> Option<String>,
+) -> Vec<Stale> {
     let mut found = Vec::new();
     let mut push = |line: usize, kind: Kind, name: &str| {
         found.push(Stale {
@@ -328,18 +367,29 @@ fn stale(doc: &str, text: &str, known: &Known, packages: &BTreeSet<String>) -> V
                 }
             }
         }
-        for (offset, name) in extract::packages(&code.text) {
-            if !packages.contains(name) {
+        for selected in extract::packages(&code.text) {
+            if !packages.selects(&selected) {
                 // `code.line` is the line of the block's first line of text
-                push(code.line + offset, Kind::Package, name);
+                push(code.line + selected.line, Kind::Package, selected.name);
             }
         }
     }
     if EXTRA_DOCS.contains(&doc) {
         for (line, dest) in extract::links(text) {
-            if let Some(path) = link_target(doc, &dest)
-                && !path.as_deref().is_some_and(|path| known.has(path))
-            {
+            let Some(path) = link_target(doc, &dest) else {
+                continue;
+            };
+            let anchor = dest.split_once('#').map(|(_, anchor)| anchor);
+            let resolves = path.as_deref().is_some_and(|path| {
+                known.has(path)
+                    && anchor.is_none_or(|anchor| {
+                        // an anchor into Markdown names a heading, as lychee checks it
+                        !(extract::has_extension(path, "md") || path == doc)
+                            || read(path)
+                                .is_some_and(|text| extract::anchors(&text).contains(anchor))
+                    })
+            });
+            if !resolves {
                 push(line, Kind::Link, &dest);
             }
         }
@@ -349,9 +399,9 @@ fn stale(doc: &str, text: &str, known: &Known, packages: &BTreeSet<String>) -> V
     found
 }
 
-/// What the link `dest` in `doc` names in the checkout: `None` when it is
-/// not a local link (another site, an in-page anchor), `Some(None)` when it
-/// climbs above the root.
+/// What the link `dest` in `doc` names in the checkout (`doc` itself for an
+/// in-page `#anchor`): `None` when it is not a local link, `Some(None)` when
+/// it climbs above the root.
 #[expect(
     clippy::option_option,
     reason = "not local, and local but outside the checkout, are different answers"
@@ -363,7 +413,8 @@ fn link_target(doc: &str, dest: &str) -> Option<Option<String>> {
         .map(|rest| format!("/{rest}"));
     let dest = match &local {
         Some(dest) => dest.as_str(),
-        None if dest.contains(':') || dest.starts_with('#') || dest.is_empty() => return None,
+        None if dest.starts_with('#') => return Some(Some(doc.to_owned())),
+        None if dest.contains(':') || dest.is_empty() => return None,
         None => dest,
     };
     let dest = dest.split(['#', '?']).next().unwrap_or_default();

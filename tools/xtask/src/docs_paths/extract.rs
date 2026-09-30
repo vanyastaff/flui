@@ -10,18 +10,22 @@
 //! not read. A `:line` or `#anchor` suffix is dropped, and so is a `::item`
 //! after a `.rs` file.
 //!
-//! A package is the word after `-p`/`--package` (or joined by `=`) in a command
-//! that `cargo` starts, read in code spans and in code blocks, where a line
+//! A package is the word after `-p`/`--package` (or joined to it, `-px`,
+//! `-p=x`, `--package=x`) in a command that `cargo` starts, with the
+//! subcommand before it, read in code spans and in code blocks, where a line
 //! that ends in `\` continues on the next. A cargo command ends at `&&`, `||`,
 //! `;` or `|`, so `mkdir -p` after it is not read.
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
 /// The top-level directories a path in a code span must start at.
-pub(super) const ROOTS: [&str; 15] = [
+pub(super) const ROOTS: [&str; 16] = [
     ".cargo",
     ".config",
     ".github",
+    ".rust-studio",
     "book",
     "changelog.d",
     "crates",
@@ -114,6 +118,54 @@ pub(super) fn links(markdown: &str) -> Vec<(usize, String)> {
         .collect()
 }
 
+/// The `#anchor`s the headings of `markdown` give, as GitHub makes them: an
+/// explicit `{#id}`, or the text lowercased, spaces turned to `-`, other
+/// punctuation but `-` and `_` dropped, and `-1`, `-2`, … after a repeat.
+pub(super) fn anchors(markdown: &str) -> BTreeSet<String> {
+    let mut anchors = BTreeSet::new();
+    let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+    let mut heading: Option<(Option<String>, String)> = None;
+    for event in Parser::new_ext(markdown, Options::all()) {
+        match event {
+            Event::Start(Tag::Heading { id, .. }) => {
+                heading = Some((id.map(pulldown_cmark::CowStr::into_string), String::new()));
+            }
+            Event::Text(text) | Event::Code(text) => {
+                if let Some((_, heading)) = &mut heading {
+                    heading.push_str(&text);
+                }
+            }
+            Event::End(TagEnd::Heading(_)) => {
+                let Some((id, text)) = heading.take() else {
+                    continue;
+                };
+                if let Some(id) = id {
+                    anchors.insert(id);
+                    continue;
+                }
+                let slug: String = text
+                    .to_lowercase()
+                    .chars()
+                    .filter_map(|c| match c {
+                        ' ' => Some('-'),
+                        c if c.is_alphanumeric() || c == '-' || c == '_' => Some(c),
+                        _ => None,
+                    })
+                    .collect();
+                let repeat = seen.entry(slug.clone()).or_default();
+                anchors.insert(if *repeat == 0 {
+                    slug
+                } else {
+                    format!("{slug}-{repeat}")
+                });
+                *repeat += 1;
+            }
+            _ => {}
+        }
+    }
+    anchors
+}
+
 /// The repository paths a code span names, each without its `:line`,
 /// `#anchor` or `::item` suffix; a trailing `/` is kept (a directory).
 pub(super) fn paths(span: &str) -> Vec<&str> {
@@ -156,45 +208,66 @@ fn strip_line(word: &str) -> &str {
     word
 }
 
-/// The packages the cargo commands in `code` select, each with the 0-based
-/// line of `code` it is on.
-pub(super) fn packages(code: &str) -> Vec<(usize, &str)> {
+/// A package a cargo command selects.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct Selected<'a> {
+    /// The 0-based line of the code it is on.
+    pub(super) line: usize,
+    /// The cargo subcommand (`test`, `update`), when one came before it.
+    pub(super) subcommand: Option<&'a str>,
+    pub(super) name: &'a str,
+}
+
+/// The packages the cargo commands in `code` select, in every spelling cargo
+/// takes: `-p x`, `--package x`, `-p=x`, `--package=x` and `-px`.
+pub(super) fn packages(code: &str) -> Vec<Selected<'_>> {
     let mut found = Vec::new();
     let mut continued = false;
-    let mut in_cargo = false;
+    // `Some(subcommand)` inside a cargo command
+    let mut cargo: Option<Option<&str>> = None;
     let mut after_flag = false;
     for (index, line) in code.lines().enumerate() {
         if !continued {
-            in_cargo = false;
+            cargo = None;
             after_flag = false;
         }
         let body = line.trim_end();
         continued = body.ends_with('\\');
         for word in body.trim_end_matches('\\').split_whitespace() {
             let word = word.trim_matches(['`', '"', '\'']);
+            let mut select = |subcommand, word| {
+                found.extend(package(word).map(|name| Selected {
+                    line: index,
+                    subcommand,
+                    name,
+                }));
+            };
             if after_flag {
                 after_flag = false;
-                found.extend(package(word).map(|name| (index, name)));
+                select(cargo.flatten(), word);
                 continue;
             }
             if matches!(word, "&&" | "||" | ";" | "|") {
-                in_cargo = false;
+                cargo = None;
                 continue;
             }
             if word == "cargo" || word.ends_with("/cargo") {
-                in_cargo = true;
-            } else if in_cargo {
+                cargo = Some(None);
+            } else if let Some(subcommand) = &mut cargo {
                 if matches!(word, "-p" | "--package") {
                     after_flag = true;
                 } else if let Some(name) = word
                     .strip_prefix("--package=")
                     .or_else(|| word.strip_prefix("-p="))
+                    .or_else(|| word.strip_prefix("-p").filter(|_| !word.starts_with("--")))
                 {
-                    found.extend(package(name).map(|name| (index, name)));
+                    select(*subcommand, name);
+                } else if subcommand.is_none() && !word.starts_with(['-', '+']) {
+                    *subcommand = Some(word.trim_end_matches(';'));
                 }
             }
             if word.ends_with(';') {
-                in_cargo = false;
+                cargo = None;
             }
         }
     }
