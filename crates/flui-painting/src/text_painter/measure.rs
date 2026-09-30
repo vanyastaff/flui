@@ -6,14 +6,13 @@ use std::sync::Arc;
 use crate::typography::{InlineSpan, TextAlign, TextDirection, TextStyle};
 use flui_foundation::geometry::{Offset, Size};
 
-use super::{
-    DEFAULT_FONT_SIZE, LayoutMetrics, MeasureBackend, TextBaseline, TextLayoutCache, TextPainter,
-};
+use super::{DEFAULT_FONT_SIZE, LayoutMetrics, TextBaseline, TextLayoutCache, TextPainter};
 use crate::text_layout::{FontsKey, TextContext, TextLayout, TextLayoutResult};
 
 impl TextPainter {
-    /// What a cached layout was measured against: the process font
-    /// database's generation, and `text_cx`'s collection and its generation.
+    /// What a cached layout was taken against: the process font database's
+    /// generation, which the painted layout was shaped on, and `text_cx`'s
+    /// collection and its generation, which measured it.
     fn font_key(text_cx: &TextContext) -> (u64, FontsKey) {
         (
             crate::shared_font_system().generation(),
@@ -69,16 +68,12 @@ impl TextPainter {
             .text_direction
             .expect("TextPainter.text_direction must be set before layout");
 
-        // The cosmic-text layout is built on every backend: paint, carets and
-        // selection read it until ADR-0092 §10 step 5.
-        let layout = self.cosmic_layout(text, max_width, LineOverflow::Enforce);
-        let result = match self.backend {
-            MeasureBackend::Cosmic => layout.metrics(),
-            #[cfg(feature = "parley")]
-            MeasureBackend::Parley => self
-                .parley_paragraph(text_cx, text, max_width, LineOverflow::Enforce)
-                .metrics(),
-        };
+        // The painted layout: glyphs come from it until ADR-0092 §10 step 4b,
+        // carets and selection until step 5. It measures nothing.
+        let layout = self.cosmic_layout(text, max_width);
+        let result = self
+            .parley_paragraph(text_cx, text, max_width, LineOverflow::Enforce)
+            .metrics();
         let metrics = self.metrics_from(&result, min_width, max_width);
 
         // Precompute intrinsic widths (shape once, query many).
@@ -124,32 +119,16 @@ impl TextPainter {
             * self.text_scale_factor
     }
 
-    /// Shapes `text` on cosmic-text at `max_width`.
-    ///
-    /// [`LineOverflow::Enforce`] applies `max_lines` / ellipsis (committed
-    /// layout, dry size, height probes). [`LineOverflow::IgnoreForWidthIntrinsic`]
-    /// shapes without line-count truncation so a zero-width wrap cannot erase
-    /// visible content under `max_lines` (#1085). Callers that need the
-    /// ellipsis as a width floor apply [`Self::ellipsis_width_floor`] on top.
-    fn cosmic_layout(
-        &self,
-        text: &InlineSpan,
-        max_width: f64,
-        line_overflow: LineOverflow,
-    ) -> TextLayout {
+    /// Shapes `text` on cosmic-text at `max_width` for paint, with
+    /// `max_lines` and the ellipsis applied so the painted glyphs keep the
+    /// lines the measurement kept.
+    fn cosmic_layout(&self, text: &InlineSpan, max_width: f64) -> TextLayout {
         let direction = self.text_direction.unwrap_or(TextDirection::Ltr);
         // RICH shaping: the span tree flattens to per-run styles with
         // inheritance (`TextStyle::merge`), so a bold or larger child
         // span measures as bold or larger. The text scale factor is baked
         // into each run's font size here, where the effective size is known.
         let spans = collect_styled_spans(text, self.text_scale_factor);
-        // max_lines/ellipsis are ENFORCED by the shaper-level truncation:
-        // size, line metrics, and painted glyphs all agree on the kept
-        // lines. Intrinsic width probes skip this path.
-        let (max_lines, ellipsis) = match line_overflow {
-            LineOverflow::Enforce => (self.max_lines.map(|n| n as usize), self.ellipsis.as_deref()),
-            LineOverflow::IgnoreForWidthIntrinsic => (None, None),
-        };
         TextLayout::from_spans(
             spans,
             text.style(),
@@ -157,16 +136,21 @@ impl TextPainter {
             max_width.is_finite().then_some(max_width),
             None,
             direction,
-            max_lines,
-            ellipsis,
+            self.max_lines.map(|n| n as usize),
+            self.ellipsis.as_deref(),
         )
     }
 
     /// Shapes `text` on Parley through `text_cx` at `max_width`, with the
-    /// same span flattening and scale as the cosmic-text path. Every span
+    /// same span flattening and scale as the painted layout. Every span
     /// carries its merged style, so no paragraph default style is passed: a
     /// default would lay its unscaled size under the scaled spans.
-    #[cfg(feature = "parley")]
+    ///
+    /// [`LineOverflow::Enforce`] applies `max_lines` (committed layout, dry
+    /// size, height probes). [`LineOverflow::IgnoreForWidthIntrinsic`]
+    /// shapes without line-count truncation so a zero-width wrap cannot erase
+    /// visible content under `max_lines` (#1085). Callers that need the
+    /// ellipsis as a width floor apply [`Self::ellipsis_width_floor`] on top.
     #[expect(
         clippy::cast_possible_truncation,
         reason = "f64 layout values narrow to Parley's f32 layout space"
@@ -194,14 +178,7 @@ impl TextPainter {
         })
     }
 
-    /// The backend's metrics for `text` broken at `max_width`.
-    #[cfg_attr(
-        not(feature = "parley"),
-        expect(
-            unused_variables,
-            reason = "only the Parley backend shapes on the context"
-        )
-    )]
+    /// Parley's metrics for `text` broken at `max_width`.
     fn measure(
         &self,
         text_cx: &mut TextContext,
@@ -209,13 +186,8 @@ impl TextPainter {
         max_width: f64,
         line_overflow: LineOverflow,
     ) -> TextLayoutResult {
-        match self.backend {
-            MeasureBackend::Cosmic => self.cosmic_layout(text, max_width, line_overflow).metrics(),
-            #[cfg(feature = "parley")]
-            MeasureBackend::Parley => self
-                .parley_paragraph(text_cx, text, max_width, line_overflow)
-                .metrics(),
-        }
+        self.parley_paragraph(text_cx, text, max_width, line_overflow)
+            .metrics()
     }
 
     /// The box metrics a shaped result gives under the width constraints.
@@ -242,25 +214,14 @@ impl TextPainter {
     /// ellipsis.
     fn intrinsic_widths(&self, text_cx: &mut TextContext, text: &InlineSpan) -> (f64, f64) {
         let floor = self.ellipsis_width_floor(text_cx, text);
-        let (min, max) = match self.backend {
-            MeasureBackend::Cosmic => (
-                self.cosmic_layout(text, 0.0, LineOverflow::IgnoreForWidthIntrinsic)
-                    .metrics()
-                    .width,
-                self.cosmic_layout(text, f64::INFINITY, LineOverflow::IgnoreForWidthIntrinsic)
-                    .metrics()
-                    .width,
-            ),
-            #[cfg(feature = "parley")]
-            MeasureBackend::Parley => self
-                .parley_paragraph(
-                    text_cx,
-                    text,
-                    f64::INFINITY,
-                    LineOverflow::IgnoreForWidthIntrinsic,
-                )
-                .content_widths(),
-        };
+        let (min, max) = self
+            .parley_paragraph(
+                text_cx,
+                text,
+                f64::INFINITY,
+                LineOverflow::IgnoreForWidthIntrinsic,
+            )
+            .content_widths();
         (min.max(floor), max.max(floor))
     }
 
@@ -270,13 +231,6 @@ impl TextPainter {
     /// prefix is exhausted, so width intrinsics must not report a value
     /// narrower than that ellipsis even when line-count truncation is skipped
     /// for the main probe (#1085 follow-up).
-    #[cfg_attr(
-        not(feature = "parley"),
-        expect(
-            unused_variables,
-            reason = "only the Parley backend shapes on the context"
-        )
-    )]
     fn ellipsis_width_floor(&self, text_cx: &mut TextContext, text: &InlineSpan) -> f64 {
         let Some(ellipsis) = self.ellipsis.as_deref().filter(|e| !e.is_empty()) else {
             return 0.0;
@@ -285,49 +239,28 @@ impl TextPainter {
             return 0.0;
         }
 
-        let scaled_font_size = self.scaled_font_size(text);
-        let direction = self.text_direction.unwrap_or(TextDirection::Ltr);
-        match self.backend {
-            MeasureBackend::Cosmic => {
-                TextLayout::from_spans(
-                    vec![(ellipsis.to_string(), text.style().cloned())],
-                    text.style(),
-                    scaled_font_size,
-                    None,
-                    None,
-                    direction,
-                    None,
-                    None,
-                )
-                .metrics()
-                .width
-            }
-            #[cfg(feature = "parley")]
-            MeasureBackend::Parley => {
-                #[expect(
-                    clippy::cast_possible_truncation,
-                    reason = "f64 layout values narrow to Parley's f32 layout space"
-                )]
-                let font_size = scaled_font_size as f32;
-                let spans = vec![(
-                    ellipsis.to_string(),
-                    text.style()
-                        .map(|style| scaled_style(style, self.text_scale_factor)),
-                )];
-                text_cx
-                    .shape(&crate::parley_text::ParagraphSpec {
-                        spans: &spans,
-                        default_style: None,
-                        font_size,
-                        max_width: None,
-                        line_height: None,
-                        direction,
-                        max_lines: None,
-                    })
-                    .metrics()
-                    .width
-            }
-        }
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "f64 layout values narrow to Parley's f32 layout space"
+        )]
+        let font_size = self.scaled_font_size(text) as f32;
+        let spans = vec![(
+            ellipsis.to_string(),
+            text.style()
+                .map(|style| scaled_style(style, self.text_scale_factor)),
+        )];
+        text_cx
+            .shape(&crate::parley_text::ParagraphSpec {
+                spans: &spans,
+                default_style: None,
+                font_size,
+                max_width: None,
+                line_height: None,
+                direction: self.text_direction.unwrap_or(TextDirection::Ltr),
+                max_lines: None,
+            })
+            .metrics()
+            .width
     }
 
     /// Computes the paint offset based on text alignment.

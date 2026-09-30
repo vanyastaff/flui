@@ -5,12 +5,12 @@
 //! - `measure` — `layout` and the queries over its cached metrics.
 //! - `paint` — `paint` and the cursor queries.
 //!
-//! Every measurement goes through the [`TextContext`](crate::TextContext)
-//! the caller lends: a render object lends its realm's. The default build
-//! measures on cosmic-text and only counts the loan; under `parley-layout`
-//! size, baselines and intrinsics come from Parley shaping on that context,
-//! while glyphs and carets still come from the cosmic-text layout until
-//! ADR-0092 §10 step 5 (flui-painting `ARCHITECTURE.md`, mapping decision 15).
+//! Every measurement shapes on Parley through the lent
+//! [`TextContext`](crate::TextContext): a render object lends its realm's.
+//! Glyphs, carets, selection, line metrics and hit-testing still come from
+//! the cosmic-text `TextLayout` built beside it until ADR-0092 §10 step 4b
+//! (paint) and step 5 (carets) (flui-painting `ARCHITECTURE.md`, mapping
+//! decision 15).
 
 use std::sync::Arc;
 
@@ -89,44 +89,6 @@ pub struct TextPainter {
 
     /// Cached layout result.
     pub(super) layout_cache: Option<TextLayoutCache>,
-
-    /// The shaper that answers size, baselines and intrinsics.
-    pub(crate) backend: MeasureBackend,
-}
-
-/// Which shaper a [`TextPainter`] measures with.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MeasureBackend {
-    /// cosmic-text on the process font system; the lent context is counted
-    /// but not shaped on.
-    #[cfg_attr(
-        feature = "parley-layout",
-        expect(dead_code, reason = "`parley-layout` measures every painter on Parley")
-    )]
-    Cosmic,
-    /// Parley on the lent context.
-    #[cfg(feature = "parley")]
-    #[cfg_attr(
-        not(any(feature = "parley-layout", test, feature = "testing")),
-        expect(
-            dead_code,
-            reason = "chosen by `parley-layout`, or pinned by tests through `testing`"
-        )
-    )]
-    Parley,
-}
-
-impl MeasureBackend {
-    /// The build's backend: Parley under `parley-layout`, cosmic-text
-    /// otherwise. `parley` alone compiles the Parley measurement without
-    /// choosing it, because the workspace test scope turns `parley` on and
-    /// must still test the default build (ADR-0092 §10 step 3).
-    #[cfg(feature = "parley-layout")]
-    pub(crate) const DEFAULT: Self = Self::Parley;
-    /// The build's backend: Parley under `parley-layout`, cosmic-text
-    /// otherwise.
-    #[cfg(not(feature = "parley-layout"))]
-    pub(crate) const DEFAULT: Self = Self::Cosmic;
 }
 
 /// Cached layout information.
@@ -192,17 +154,6 @@ impl TextPainter {
             max_lines: None,
             ellipsis: None,
             layout_cache: None,
-            backend: MeasureBackend::DEFAULT,
-        }
-    }
-
-    /// Measures on Parley whatever the build's default; the testing door
-    /// `testing::measure_with_parley` reaches it.
-    #[cfg(all(feature = "parley", any(test, feature = "testing")))]
-    pub(crate) fn pin_parley_measurement(&mut self) {
-        if self.backend != MeasureBackend::Parley {
-            self.backend = MeasureBackend::Parley;
-            self.mark_needs_layout();
         }
     }
 

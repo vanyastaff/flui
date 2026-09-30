@@ -41,11 +41,3 @@ pub fn font_collection_holders(fonts: &FontCollection) -> usize {
 pub fn text_context_lends(text: &TextContext) -> u64 {
     text.lends()
 }
-
-/// Makes `painter` measure on Parley through the context it is given,
-/// whatever the build's default, so the Parley measurement runs under
-/// `parley` alone (flui-painting `ARCHITECTURE.md`, mapping decision 15).
-#[cfg(feature = "parley")]
-pub fn measure_with_parley(painter: &mut crate::TextPainter) {
-    painter.pin_parley_measurement();
-}

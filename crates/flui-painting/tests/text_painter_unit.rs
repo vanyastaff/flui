@@ -53,10 +53,11 @@ pub(crate) fn wide_ellipsis_floors_min_intrinsic_width() {
     );
 }
 
-#[cfg(feature = "parley")]
+/// Measurement is Parley on the lent context in the default build: the probe
+/// face is registered only on a collection, never on the process font system,
+/// so a painter measuring on cosmic-text would never see it.
 pub(crate) mod parley_measurement {
     use flui_painting::parley_text::ParagraphSpec;
-    use flui_painting::testing::measure_with_parley;
     use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
     use flui_painting::{FontCollection, TextContext, TextPainter};
 
@@ -79,11 +80,9 @@ pub(crate) mod parley_measurement {
     }
 
     fn probe_painter() -> TextPainter {
-        let mut painter = TextPainter::new()
+        TextPainter::new()
             .with_text(TextSpan::styled("AAAA", probe_style()))
-            .with_text_direction(TextDirection::Ltr);
-        measure_with_parley(&mut painter);
-        painter
+            .with_text_direction(TextDirection::Ltr)
     }
 
     /// The same painter measures through whichever context it is lent: the

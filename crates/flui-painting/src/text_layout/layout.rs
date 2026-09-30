@@ -131,11 +131,9 @@ static FONT_SYSTEM: OnceLock<Arc<Mutex<FontState>>> = OnceLock::new();
 /// Gets or initializes the process-wide font system as a shared handle.
 ///
 /// Held in an `Arc` (per ADR-0016) so the render engine's glyph pipeline
-/// can shape against the *same* `FontSystem` this module measures with:
-/// a font registered through
-/// [`SharedFontSystem::register_font`]
-/// becomes visible to both measurement and rendering, closing the historic
-/// two-`FontSystem` gap where a registered face could measure but not paint.
+/// rasterizes against the *same* `FontSystem` this module shapes the painted
+/// layout with. Measurement does not read it: `TextPainter` measures on
+/// Parley through the realm's `TextContext` (ADR-0092 §10 step 4a).
 fn font_system_arc() -> &'static Arc<Mutex<FontState>> {
     FONT_SYSTEM.get_or_init(|| {
         tracing::debug!("Initializing global FontSystem");
@@ -150,10 +148,15 @@ fn font_system_arc() -> &'static Arc<Mutex<FontState>> {
         // flag and its GPOS/GSUB scripts, never from the generic names, so
         // binding afterwards changes nothing it froze.
         let mut discovered = FontSystem::new();
-        // The embedded faces go in before the generics are bound, so an
-        // empty host binds sans-serif to Roboto rather than to nothing.
+        // The embedded faces go in, and the generics point at Roboto, before
+        // the host's generics are bound: Parley measures in Roboto, so paint
+        // must use it too (mapping decision 16), and the binding below keeps
+        // a generic that already names a carried family.
         #[cfg(feature = "bundled-fonts")]
-        crate::fonts::load_missing_into(discovered.db_mut());
+        {
+            crate::fonts::load_missing_into(discovered.db_mut());
+            crate::fonts::bind_generics_to_bundled(discovered.db_mut());
+        }
         font_resolve::bind_generic_families(discovered.db_mut());
         // Then rebuild once around the host's own emoji faces. Binding the
         // generics closes the fall-through for styles that name *no* family;

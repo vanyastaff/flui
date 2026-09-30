@@ -219,9 +219,8 @@ fn text_contract() {
     );
 }
 
-/// A painter measures through the context it is lent, and its cache answers
-/// only for the fonts that measured it (ADR-0092 §10 step 3a).
-#[cfg(feature = "parley")]
+/// A painter measures on Parley through the context it is lent, and its cache
+/// answers only for the fonts that measured it (ADR-0092 §10 steps 3a and 4a).
 #[test]
 fn text_context_contract() {
     use text_painter_unit::parley_measurement as pm;

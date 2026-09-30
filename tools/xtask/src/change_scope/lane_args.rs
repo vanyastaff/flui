@@ -645,7 +645,7 @@ mod tests {
         assert_eq!(
             a.ci_test_args,
             "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests \
-             --features flui/material,flui/cupertino,flui-painting/parley,flui-devtools/agent \
+             --features flui/material,flui/cupertino,flui-devtools/agent \
              -E package(flui)|package(flui-material)|package(flui-sdk)|package(flui-web-counter)"
         );
         // check-changed keeps the scoped build

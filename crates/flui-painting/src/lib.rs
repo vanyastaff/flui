@@ -29,9 +29,9 @@
 //! [`TextPainter`] lays out an inline span against a width constraint,
 //! answers caret / hit-test / line queries on the result, and paints it —
 //! the shape a `RenderParagraph` drives. [`TextLayout`] underneath shapes
-//! through the process-wide font system, which the engine's glyph pipeline
-//! shares ([`shared_font_system`]) so a face registered through
-//! [`SharedFontSystem::register_font`] measures and paints alike.
+//! for paint through the process-wide font system, which the engine's glyph
+//! pipeline shares ([`shared_font_system`]); size, baselines and intrinsics
+//! are measured on Parley through the realm's [`TextContext`].
 //!
 //! # Decorations
 //!
@@ -82,10 +82,9 @@ pub mod text_layout;
 pub mod text_painter;
 
 // The Parley path: paragraph shaping and the raster side (ADR-0092 §10 steps 1
-// to 3). The runtime builds the app's `FontCollection`, each realm owns a
-// `TextContext` over it, and layout lends that context to `TextPainter`, which
-// shapes on it under `parley-layout`.
-#[cfg(feature = "parley")]
+// to 4a). The runtime builds the app's `FontCollection`, each realm owns a
+// `TextContext` over it, and layout measures on it through `TextPainter`;
+// shaped runs join the display list in step 4b.
 pub mod parley_text;
 
 // Test harness: `record` (`cfg(test)`, or the `testing` feature).

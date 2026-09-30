@@ -16,9 +16,10 @@ fn text_cx() -> flui_painting::TextContext {
     flui_painting::TextContext::new(&flui_painting::FontCollection::new())
 }
 
-/// What `paint` records is the layout that was measured — the very `Arc`,
-/// not a re-shape — so a truncated paragraph paints exactly the lines it
-/// measured, ellipsis included.
+/// What `paint` records is the painted layout `layout` built — the very
+/// `Arc`, not a re-shape — truncated to the lines the measurement kept,
+/// ellipsis included. The measured width is Parley's (painting mapping
+/// decision 15).
 pub(crate) fn a_truncated_paragraph_paints_exactly_the_lines_it_measured() {
     use flui_foundation::geometry::Offset;
     use flui_painting::styling::Color;

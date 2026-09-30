@@ -3,10 +3,10 @@
 //! key that names its face by font blob, the registry that keeps those faces
 //! alive, and a swash rasterizer that draws the keys.
 //!
-//! Layout reaches this module through `TextPainter` under `parley-layout`
-//! (ADR-0092 §10 step 3): size, baselines and intrinsics come from
-//! [`ParagraphLayout`]. Shaped runs join the display list, with the engine's
-//! atlas on [`SwashRasterizer`], in step 4. It holds no `static` and takes
+//! `TextPainter` measures every paragraph here (ADR-0092 §10 step 4a): size,
+//! baselines and intrinsics come from [`ParagraphLayout`]. Shaped runs join
+//! the display list, with the engine's atlas on [`SwashRasterizer`], in step
+//! 4b. It holds no `static` and takes
 //! no lock; every object is owned and used through `&mut`.
 //!
 //! - `shape` — [`ParagraphSpec`] in, [`ParagraphLayout`] out, through

@@ -5,8 +5,12 @@
 //! Its own test target: these tests append to the process-wide font database,
 //! which the `painting_it` binary's tests deliberately never do.
 
+use std::sync::Arc;
+
+use flui_foundation::geometry::Offset;
+use flui_painting::text_layout::TextLayout;
 use flui_painting::typography::{FontWeight, TextDirection, TextSpan, TextStyle};
-use flui_painting::{TextPainter, shared_font_system};
+use flui_painting::{Canvas, DrawOp, TextPainter, shared_font_system};
 
 /// A text context over a fresh collection, lent to each measurement.
 fn text_cx() -> flui_painting::TextContext {
@@ -30,29 +34,53 @@ fn probe_painter(text: &str) -> TextPainter {
         .with_text_direction(TextDirection::Ltr)
 }
 
-#[test]
-#[cfg_attr(
-    feature = "parley-layout",
-    ignore = "painting mapping decision 15: registration reaches the process font system, not the collection Parley measures on"
-)]
-fn register_font_invalidates_a_laid_out_painter() {
-    let fonts = shared_font_system();
-    let mut painter = probe_painter("iiii wwww");
-    painter.layout(&mut text_cx(), 0.0, f64::INFINITY);
-    let before = painter.size();
-    // Same constraints: without a registration this is the cached early
-    // return, and the size cannot change.
-    painter.layout(&mut text_cx(), 0.0, f64::INFINITY);
-    assert_eq!(painter.size(), before);
+/// The layout `paint` records for `painter`.
+fn painted_layout(painter: &TextPainter) -> Arc<TextLayout> {
+    let mut canvas = Canvas::new();
+    painter.paint(&mut canvas, Offset::ZERO);
+    let list = canvas.finish();
+    list.iter()
+        .find_map(|command| match &command.op {
+            DrawOp::Paragraph { layout, .. } => Some(Arc::clone(layout)),
+            _ => None,
+        })
+        .expect("a laid-out painter records a paragraph")
+}
 
-    fonts
+/// Measurement shapes on Parley through the lent context and never reads the
+/// process font system, while paint still shapes on it (painting mapping
+/// decision 15): a face registered there re-shapes the painted layout and
+/// leaves the measured size alone. With cosmic-text measurement the size would
+/// follow the painted layout and change with it.
+#[test]
+fn a_face_registered_on_the_process_font_system_reaches_paint_not_measurement() {
+    let mut text_cx = text_cx();
+    let mut painter = probe_painter("iiii wwww");
+    painter.layout(&mut text_cx, 0.0, f64::INFINITY);
+    let measured = painter.size();
+    let painted = painted_layout(&painter);
+
+    shared_font_system()
         .register_font(PROBE_MONO)
         .expect("the probe face loads");
-    painter.layout(&mut text_cx(), 0.0, f64::INFINITY);
-    assert_ne!(
+    painter.layout(&mut text_cx, 0.0, f64::INFINITY);
+    let repainted = painted_layout(&painter);
+
+    assert!(
+        !Arc::ptr_eq(&painted, &repainted),
+        "a face registered on the process font system shapes the painted layout again"
+    );
+    assert!(
+        (repainted.metrics().width - painted.metrics().width).abs() > 1.0,
+        "the painted layout moves to the probe: in the proportional fallback 'iiii' and \
+         'wwww' differ, in the monospace probe they do not ({} vs {})",
+        painted.metrics().width,
+        repainted.metrics().width
+    );
+    assert_eq!(
         painter.size(),
-        before,
-        "a face registered after layout must shape the same text again: in the \
-         proportional fallback 'iiii' and 'wwww' differ, in the monospace probe they do not"
+        measured,
+        "measurement is Parley's on the context's collection, which the process \
+         registration does not reach"
     );
 }

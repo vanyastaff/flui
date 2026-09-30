@@ -12,16 +12,14 @@
 //! each context re-reads the data on its next query after a bump, one atomic
 //! load otherwise. A context is owner-thread state used through `&mut`.
 //!
-//! The types exist in every build so their shape does not depend on features;
-//! without `parley` they hold nothing and shape nothing.
+//! Without `bundled-fonts` a new collection holds no face, and text shapes
+//! with none until one is registered.
 
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
-#[cfg(feature = "parley")]
 use crate::error::RegisterFontError;
-#[cfg(feature = "parley")]
 use crate::parley_text::SpanBrush;
 
 /// The app's font collection: shared, add-only, passed explicitly.
@@ -37,21 +35,19 @@ struct FontCollectionInner {
     /// cached against an older value is stale.
     generation: AtomicU64,
     /// fontique's collection in shared mode, with no host scan.
-    #[cfg(feature = "parley")]
     collection: parley::fontique::Collection,
     /// One source cache shared by every context built from the collection.
-    #[cfg(feature = "parley")]
     source_cache: parley::fontique::SourceCache,
 }
 
 impl FontCollection {
     /// A new collection.
     ///
-    /// With `parley` and `bundled-fonts` it holds the embedded Roboto,
-    /// Material Icons and Cupertino Icons faces, and binds the generic
-    /// families (sans-serif, serif, monospace, system-ui) to Roboto, so text
-    /// shapes the same on every host. Without `parley` it is an empty handle
-    /// and loads nothing.
+    /// With `bundled-fonts` it holds the embedded Roboto, Material Icons and
+    /// Cupertino Icons faces, and binds the generic families (sans-serif,
+    /// serif, monospace, system-ui) to Roboto, so text shapes the same on
+    /// every host. Without `bundled-fonts` it starts empty: text measures
+    /// with no face until one is registered.
     #[must_use]
     pub fn new() -> Self {
         Self(Arc::new(FontCollectionInner::new()))
@@ -100,7 +96,6 @@ impl FontCollection {
     ///
     /// [`RegisterFontError`] if the bytes hold no face; nothing is added and
     /// no context re-reads the collection.
-    #[cfg(feature = "parley")]
     pub fn register_font(&self, font_bytes: &[u8]) -> Result<(), RegisterFontError> {
         // Checked before fontique sees the bytes: its registration bumps the
         // shared version even when it finds no face, which would make every
@@ -149,14 +144,6 @@ impl fmt::Debug for FontsKey {
 }
 
 impl FontCollectionInner {
-    #[cfg(not(feature = "parley"))]
-    fn new() -> Self {
-        Self {
-            generation: AtomicU64::new(0),
-        }
-    }
-
-    #[cfg(feature = "parley")]
     fn new() -> Self {
         use parley::fontique::{Collection, CollectionOptions, SourceCache};
 
@@ -179,7 +166,7 @@ impl FontCollectionInner {
 }
 
 /// Registers the embedded faces and binds every generic family to Roboto.
-#[cfg(all(feature = "parley", feature = "bundled-fonts"))]
+#[cfg(feature = "bundled-fonts")]
 fn bind_bundled_faces(collection: &mut parley::fontique::Collection) {
     use parley::fontique::{Blob, GenericFamily};
 
@@ -229,9 +216,7 @@ pub struct TextContext {
     /// through `testing::text_context_lends`.
     #[cfg(any(test, feature = "testing"))]
     lent: u64,
-    #[cfg(feature = "parley")]
     pub(crate) font_cx: parley::FontContext,
-    #[cfg(feature = "parley")]
     pub(crate) layout_cx: parley::LayoutContext<SpanBrush>,
 }
 
@@ -244,12 +229,10 @@ impl TextContext {
             fonts: fonts.clone(),
             #[cfg(any(test, feature = "testing"))]
             lent: 0,
-            #[cfg(feature = "parley")]
             font_cx: parley::FontContext {
                 collection: fonts.0.collection.clone(),
                 source_cache: fonts.0.source_cache.clone(),
             },
-            #[cfg(feature = "parley")]
             layout_cx: parley::LayoutContext::new(),
         }
     }
