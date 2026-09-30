@@ -103,10 +103,12 @@ fn frame(realm: &UiRealm, sink: &mut ScriptedSink) {
     });
 }
 
-/// Serves the inbox, inside the realm's entry as a pump drains it, and takes
-/// the answer the drain produced.
+/// Serves the inbox through the public drain, deliberately without entering
+/// the realm first: the drain enters it itself, so an act still reaches a
+/// handler that lives in the realm's interaction lane. Takes the answer the
+/// drain produced.
 fn answer<T>(realm: &UiRealm, mut reply: AgentReply<T>) -> Result<T, AgentError> {
-    let _report = realm.enter(UiRealm::drain_commands);
+    let _report = realm.drain_commands();
     reply
         .try_take()
         .expect("the drain answers every request it serves")
