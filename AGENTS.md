@@ -187,6 +187,62 @@ the history.
 | **Official package** | Under `packages/<name>/`, `tier = "pkg"`, `tier-kind = "official"`, no `edge-exceptions`; its only FLUI normal dependency is `flui-sdk` (plus the contract crates), and its code names the framework as `flui_sdk::…` (the view, inherited and animation derives resolve through it; `Diagnosticable`'s has no SDK path yet). An item the SDK lacks is added to `flui-sdk` by ADR-0088 §4, with a line in its `tests/surface.rs` pinned list |
 | **Example using `material`/`cupertino`** | `[[example]] required-features = [...]` (`cargo xtask facade-combos` relies on it) |
 
+## Writing tests
+
+A test earns its place by pinning a contract, not a structure. The suite is small on purpose (a
+few hundred tests): a new test needs a reason to exist next to the ones already there. No gate
+caps the count, so the review question is which existing table the new case joins.
+
+- **Test through the public API.** A test lives in `tests/` and sees what a consumer sees. An
+  in-`src` `mod tests` is for what a consumer cannot reach: a failure-path matrix that needs a
+  private seam, a recorded Flutter divergence. Compile-fail cases are not among them: they are
+  trybuild fixtures driven from `tests/` (or `compile_fail` doctests on public items), so
+  privacy and sealing are checked the way a consumer meets them. Do not pin private fields or
+  helpers, which dirty flag a setter raises, `size_of`, an implementation's constants and token
+  tables, or `Default`/`Debug`/getter round trips: a refactor that keeps behavior must not touch
+  a test. Values a consumer sees and a document fixes (wire spellings such as `flui-protocol`'s
+  ADR-0080 names, ABI, other ADR-pinned tokens) are contract, and their tests stay.
+- **One behavior, one test; a family is one table.** Cases that differ only in their input are
+  rows of one table-driven `#[test]`: each row a plain `fn` named after the case, every row run
+  after an ordinary panic, and the failure report naming each failing row. Use the crate's
+  existing runner (`table_test::run_table`, `test_cases::run_cases`, `tests/contracts.rs`)
+  instead of a new one. Most runners do not contain a panic payload whose `Drop` itself panics
+  (those in `flui-foundation` and `flui-animation` do): a row must not throw one. A new
+  `#[test]` beside a near-identical one is a row.
+- **Few binaries.** Every root `tests/*.rs` file is its own binary: it links the whole dependency
+  stack and grows `target/`. Crates build their integration tests as modules of one binary
+  (`tests/main.rs` with `#[path = "x.rs"] mod x;`, `autotests = false` and one `[[test]]` in the
+  manifest, as `flui-widgets`, `flui-material` and `flui-rendering` do). A new file is a new
+  `mod` line, not a new `[[test]]` (with `autotests = false` only the `[[test]]` entries are
+  targets). Subdirectories are never auto-discovered as targets: a helper directory
+  (`tests/common/`, `tests/support/`) is mounted from `main.rs` as a module, a trybuild fixture
+  directory (`tests/ui/`) is not mounted at all, since its sources are meant not to compile. A
+  separate target is for process-global state (`Registry::global`, a global subscriber,
+  allocation counting) and for a feature the rest of the crate builds without.
+- **Do not fold what runs its own process.** Tests that spawn `cargo` or another program
+  (trybuild suites, `cli_create::generated_*`, `flui::facade_consumer`) stay separate tests:
+  `.config/nextest.toml` names them one by one (group `nested-cargo`) so nextest runs them in
+  parallel, and a folded one runs serially and holds the whole job. GPU readbacks share a
+  single-threaded group and fold freely.
+- **Keep what the Definition of Done requires.** Every concrete `RenderBox`/`RenderSliver` has
+  a row in the `render_object_harness` family tables (`RENDER_OBJECT_TYPES` is checked against
+  them); a Flutter divergence has its test, named in the crate's `## Mapping decisions`; a
+  failure-path matrix keeps each failure point alone, two in competition, and the next
+  operation after containment.
+- **Test names are references.** ARCHITECTURE.md files, ADRs and `docs/` cite tests by name:
+  `rg` the name before renaming, folding or deleting a test.
+
+What only CI sees: the host compiles one platform, so a test written on Windows can be red on
+Linux, macOS or wasm.
+
+- A helper kept alive by `cfg(any(target_os = "windows", test))` is dead once the test that used
+  it goes: gate the item, and any import only a `cfg`'d test uses, with the same `cfg`.
+- Once a function stops being `#[test]` (a table row), clippy applies `unwrap_used` to it.
+- A test that reads its own source with `include_str!` must not depend on line endings.
+- `cargo clippy --all-targets --target x86_64-unknown-linux-gnu` and `--target aarch64-apple-darwin`
+  check unix test code without linking (without `--all-targets` the test targets are skipped),
+  except in crates whose dependencies have a C build script; `cargo xtask wasm-check` covers wasm.
+
 ## Definition of Done
 
 A green gate proves the gates pass, not that the behavior exists. So a change is done when:
