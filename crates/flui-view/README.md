@@ -9,7 +9,7 @@ using Rust-native storage and dispatch:
 
 - public view identity is `TypeId + Option<&dyn ViewKey>`;
 - element storage is the closed `ElementKind` enum;
-- public IDs use the workspace 1-based `NonZeroUsize` pattern;
+- `ElementId` is a generational key (the 0-based slot plus a generation) and `ViewId` a 1-based `NonZeroUsize`;
 - widget-author code returns `impl IntoView`, not `Box<dyn View>`;
 - multi-child slots accept `ViewSeq` (`()` / tuples up to 16 / `Vec<V>` /
   `Vec<BoxedView>`);
