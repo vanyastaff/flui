@@ -155,13 +155,6 @@ impl TextContext {
             .collect();
         let line_height = paragraph.line_height.unwrap_or(paragraph.font_size * 1.2);
 
-        // Unquantized: the layout is in logical pixels, and Parley's
-        // quantization would round ascent, descent and the leading halves to
-        // whole logical pixels, which at a device scale other than 1 is not
-        // the device grid. Metrics stay exact, as on the cosmic-text path, and
-        // a baseline reaches the device grid once, when it is painted
-        // (`(line_y * scale).round()`); `tests/parley_metrics_oracle.rs` pins
-        // the agreement.
         // Families are resolved against the collection before the builder
         // borrows it: the same rule the process font system resolves with.
         let collection = &mut self.font_cx.collection;
@@ -185,6 +178,13 @@ impl TextContext {
             })
             .collect();
 
+        // Unquantized: the layout is in logical pixels, and Parley's
+        // quantization would round ascent, descent and the leading halves to
+        // whole logical pixels, which at a device scale other than 1 is not
+        // the device grid. Metrics stay exact, as on the cosmic-text path, and
+        // a baseline reaches the device grid once, when it is painted
+        // (`(line_y * scale).round()`); `tests/parley_metrics_oracle.rs` pins
+        // the agreement.
         let mut builder = self
             .layout_cx
             .ranged_builder(&mut self.font_cx, &text, 1.0, false);
