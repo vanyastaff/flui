@@ -37,13 +37,8 @@ user-observable action. Concretely: a `Duration::ZERO` implicit-animation
 retarget snaps the controller's value synchronously in `did_update_view`,
 and the dependent `AnimatedBuilder`'s listener fires in that same instant —
 but used to need a second pump to actually rebuild, because its schedule
-missed the retargeting build's own drain by one absorb call. This is also
-Flutter's contract, precisely at 3.44.0: `BuildScope._dirtyElementIndexAfter`
-re-sorts `_dirtyElements` only when a mid-flush `_scheduleBuildFor` set
-`_dirtyElementsNeedsResorting` (not on every iteration unconditionally),
-and a `markNeedsBuild` mid-build is absorbed by `Element`'s own
-`if (dirty) return` guard — FLUI's inbox-based external scheduling had no
-equivalent per-iteration re-entry point.
+missed the retargeting build's own drain by one absorb call. The inbox-based
+external scheduling had no per-iteration re-entry point.
 
 **Choice:** absorb per pop, bounded by a per-*frame* budget
 (`BuildOwner::mid_drain_absorbs_left`, reset to `MAX_MID_DRAIN_ABSORBS = 16`
@@ -70,26 +65,19 @@ re-arming only after a frame that ends with budget left — there is no
 frame-complete hook on `BuildOwner`, so the re-arm check runs retroactively
 at the *next* `build_scope` entry.
 
-**Divergence 1 (no descendant-only debug assert):** Flutter's
-`Element.markNeedsBuild` debug-asserts, from inside `buildScope`, that a
-mid-build `markNeedsBuild` names a descendant of the element currently
-building (`_debugCurrentBuildTarget`). FLUI has no equivalent assert here.
-The inbox is FLUI's only route for a listener-driven or cross-thread
-rebuild — Flutter routes the identical shape through `setState`, which is
-always issued by the element's own `State` object and therefore always
-structurally a self-notification. A `RebuildHandle::schedule` call carries
-no such structural guarantee (`RebuildHandle` is `Send + Sync`, callable
-from a worker thread or from an unrelated element's build with no
-relationship to whichever element the drain happens to be building), so
-there is no cheap invariant to assert here; recording the gap is the honest
-choice over a debug assert that would either never fire (too weak to catch
-anything) or reject a legitimate cross-subtree listener (too strong).
+**Decision 1 (no descendant-only debug assert):** a mid-build schedule is
+not asserted to name a descendant of the element currently building.
+The inbox is the only route for a listener-driven or cross-thread
+rebuild, and a `RebuildHandle::schedule` call carries no structural
+guarantee that it targets the building element's subtree (`RebuildHandle` is
+`Send + Sync`, callable from a worker thread or from an unrelated element's
+build with no relationship to whichever element the drain happens to be
+building), so there is no cheap invariant to assert; an assert would either
+never fire (too weak to catch anything) or reject a legitimate
+cross-subtree listener (too strong).
 
-**Divergence 2 (a re-entered element keeps rebuilding; Flutter drops it):**
-Flutter's `if (dirty) return` in `markNeedsBuild` silently drops a
-self-`setState` issued *during* the element's own build — the dirty flag is
-already set, so the second call is a no-op, and the element builds once for
-both causes combined. FLUI cannot tell "during my own build" from "after it,
+**Decision 2 (a re-entered element keeps rebuilding):**
+FLUI cannot tell "during my own build" from "after it,
 before the next pop" apart from a synchronous `schedule` call alone: by the
 time the drain gets back around to absorbing the inbox, the building
 element's build has already returned and its `dirty_reasons` entry has
@@ -99,10 +87,9 @@ completed a build in this `build_scope` call — looks identical whether it
 is that same element rescheduling itself, a child notifying its
 already-built parent, or one half of an A↔B ping-pong. FLUI therefore
 rebuilds a re-entered element once per re-entry, up to
-`MAX_MID_DRAIN_ABSORBS` — Flutter's tighter contract would need
+`MAX_MID_DRAIN_ABSORBS`. Coalescing them would need
 `RebuildHandle`'s inbox entry to also record "was this scheduled during a
-build the current drain has not yet reconciled," which is out of scope for
-this change.
+build the current drain has not yet reconciled," which is out of scope.
 
 The re-entries are visible in `BuildOwner::last_frame_build_report`:
 `elements_built` counts distinct elements (the size of `built_this_frame`),
@@ -112,48 +99,28 @@ frame's re-entries (pinned by
 `a_re_entered_element_counts_once_in_elements_built_and_twice_in_builds_run`),
 which is why the perf baseline records both.
 
-**Divergence 3 (`on_build_scheduled` fires mid-drain; Flutter latches its
-frame request through TWO nested guards, one at each level FLUI's
-`schedule` conflates):** at 3.44.0, `BuildOwner.scheduleBuildFor` guards its
-own frame-request callback with `if (!_scheduledFlushDirtyElements &&
-onBuildScheduled != null)` (`framework.dart`), then calls into
-`BuildScope._scheduleBuildFor`, which separately guards ITS OWN per-scope
-`scheduleRebuild?.call()` with `if (!_buildScheduled && !_building)`. Every
-Flutter schedule — `setState`, a `Listenable` firing, a `BuildOwner`-level
-reassemble — passes through BOTH guards uniformly, since there is only one
-`scheduleBuildFor` entry point. FLUI's `ExternalBuildScheduler::schedule`
-has no equivalent at either level: it fires `on_build_scheduled` on every
+**Decision 3 (`on_build_scheduled` fires mid-drain):**
+`ExternalBuildScheduler::schedule` fires `on_build_scheduled` on every
 newly-queued id regardless of whether a drain is already running (pinned by
 `mid_drain_schedule_still_requests_a_frame_like_an_out_of_frame_schedule`).
-Recorded as the deliberate alternative rather than built: the redundant
+Latching the frame request while a drain runs is the alternative not built: the redundant
 frame request this can cause is discarded downstream by the ordinary
 dirty-state gate a wake-with-nothing-new-to-do already hits, so adding the
 latch(es) would trade a real per-callsite invariant (every fresh inbox
 entry asks for a frame) for a saving with no measured cost — take it up
 only if a wake-count oracle ever shows the cost is real.
 
-### Flutter: parent-inserts-child → FLUI: child-adopts-itself
+### Render children adopt themselves at mount
 
 **Rule:** a render child enters the render tree by adopting ITSELF at mount
-time. FLUI has no element-side child-mutation seam — the port of Flutter's
-`RenderObjectElement` seam (`insertRenderObjectChild` /
-`moveRenderObjectChild` / `removeRenderObjectChild` /
-`attachRenderObject` / `detachRenderObject`, `framework.dart`, pinned tag
-3.44.0) was deleted as dead code: it had zero production callers across the
-workspace, and every Flutter consumer family of that seam has a live FLUI
-equivalent reached by a different direction. The audit table behind this
-decision is recorded in issue #1203; it mapped all ten Flutter consumer
-families, including the hard cases (multi-child reorder, GlobalKey
-reparent, parent-data attach).
+time. There is no element-side child-mutation seam (insert / move / remove /
+attach / detach of a child render object on the parent element): a seam
+of that shape had zero production callers across the workspace and was
+deleted. The audit table behind this decision is recorded in issue #1203; it
+mapped every consumer family of such a seam, including the hard cases
+(multi-child reorder, GlobalKey reparent, parent-data attach).
 
-**Flutter's model:** the PARENT acts. `attachRenderObject` walks up to the
-nearest `RenderObjectElement` ancestor, which then calls
-`insertRenderObjectChild(child, slot)` to slot the child into its own
-render object; `move`/`remove` go through the same parent-driven surface;
-the root overrides `attachRenderObject` to set
-`pipelineOwner.rootNode` instead (`RenderTreeRootElement`).
-
-**FLUI's live equivalents, family by family:**
+**The live paths, family by family:**
 
 - *Adopt/insert* — the freshly mounted element adopts itself:
   `RenderBehavior::on_mount` reads the `parent_render_id` propagated
@@ -164,23 +131,18 @@ the root overrides `attachRenderObject` to set
   `ElementBase::child_render_id` / `ElementCore::child_parent_render_id`,
   and the root passes its own render id for its child), then calls
   `PipelineOwner::adopt_render_child`, which writes both link directions
-  in one call. The sliver-slot half of Flutter's `didAdoptChild` rides the
+  in one call. The sliver-slot half of adoption rides the
   same propagation and is stamped at adoption time.
 - *Remove* — `RenderBehavior::on_unmount` → `remove_render_object_from_tree`
   (the dispose cascade), with keyed soft-remove relocation tokens for
   children that are merely leaving view rather than dying.
 - *Move/reorder* — no per-child mutation at all: a post-build batch pass,
   `ElementTree::reorder_render_children_after_build`, settles render
-  children into slot order after a build; its own doc calls it "the arena
-  analogue of Flutter slotting each child via `insertRenderObjectChild`".
+  children into slot order after a build.
 - *Attach/detach* — pipeline-owner wiring at mount/unmount (`on_mount` /
   `on_unmount`) and, for GlobalKey reparent, the render-relocation tokens
   (`PipelineOwner::detach_render_subtrees` / `attach_render_subtrees`,
   carried through the inactive-element record).
-
-The slab-resident architecture superseded the old box-graph propagation
-this trait ported (the `element_tree.rs` "E3 atomic box→arena swap"
-comment records that supersession).
 
 **Replacement guarantee:** the loud half-state gate on the LIVE adoption
 path — `RenderBehavior::on_mount`'s diagnostic when an element-tree parent
@@ -191,13 +153,6 @@ plus its `orphaned_render_mount` test family
 That gate and its tests arrived with the #1198 fix and are untouched here;
 the else-arm diagnostics the same fix added to the six (now deleted) seam
 methods vanish with them, as intended.
-
-**Reference-tag caveat:** the 3.44.0 pin for the Flutter citations above
-was verified via the `.flutter` clone's `.git` refs as part of the #1203
-audit (the clone is a local gitignored checkout, so the tag's version file
-is gitignored/absent and the tag is read from the clone's refs); a fresh
-clone must re-run `git describe --tags` inside `.flutter` before citing
-further.
 
 
 ### Lifecycle capability types are nameable through the facade
@@ -236,9 +191,8 @@ with a `BUG:` message — there is no inert "minimal" context to fall back to.
 `depend_on`/`find_ancestor_*` silently returned nothing in production. By-value extraction gives
 a live tree without re-locking the tree the drain already holds.
 
-**Divergence.** Flutter's `BuildContext` *is* the element and can be stashed and used after the
-element is defunct (caught only by a debug assert). FLUI's context is only reachable inside
-build/lifecycle calls. Capability acquisition is split out by type (ADR-0078:
+**Scope.** The context is only reachable inside build/lifecycle calls, so it cannot be
+stashed and used after its element is defunct. Capability acquisition is split out by type (ADR-0078:
 `LifecycleContext` in `init_state`/`did_change_dependencies`, `BuildContext` in `build`).
 
 ### Inherited reads are O(1) and field-precise; reading is depending
@@ -252,15 +206,11 @@ provider update rebuilds only dependents whose mask intersects the change. The w
 is the all-bits mask; an empty mask is promoted to a whole-provider dependency rather than
 silently opting out. There is no read path that does not record a dependency.
 
-**Divergence.** Flutter's `InheritedModel` aspects are untyped objects and reading without
-depending (`getInheritedWidgetOfExactType`) is allowed; FLUI's aspects are compile-time field
-masks and every public read depends. There is no blanket `Data: PartialEq` bound — the diff
+**Typing.** Aspects are compile-time field masks and every public read depends. There is no blanket `Data: PartialEq` bound — the diff
 comes from the opt-in derive. The dependent registry is the same reader registry signals use
 (ADR-0074 §5.5).
 
 ### Signal reads subscribe through a private sink
-
-Signals have no Flutter counterpart, so this is a local invariant rather than a divergence.
 
 **Rule.** The reactive graph (`reactive/mod.rs`, one `Reactive` per `BuildOwner`) implements
 `flui_foundation::read_scope::ReadGraph` — pure reads, enough for `Signal::peek` — and never
@@ -277,7 +227,7 @@ marked as building. `begin_element_build`/`end_element_build` bracket every buil
 
 ### Writes open through a WriterSource
 
-Signals have no Flutter counterpart; this is a local invariant (ADR-0086).
+A local invariant (ADR-0086).
 
 **Rule.** `SignalWriteExt::set`/`update`/`set_if_changed` take `&W` where `W: WriteTarget`, a
 sealed trait whose graph accessor takes a token only this crate can make
@@ -313,8 +263,7 @@ context's writes the owner's graph, a write opened in `build` is refused), the
 
 ### Signal mutation is commit-on-unwind, not transactional
 
-Signals have no Flutter counterpart; this is the unwind half of ADR-0074's
-write-to-dirty contract.
+The unwind half of ADR-0074's write-to-dirty contract.
 
 **Rule.** An `update` closure that mutates its value and then panics leaves the
 partial value committed while the slot remains live. Before the original panic resumes, every registered
@@ -391,8 +340,7 @@ updater/wake/telemetry panics,
 `Reuse`, `Reorder`, `Unmount`, `Reparent`) through the `flui::reconcile` tracing target, so the
 reconciliation stream observed by tools is the production one, not a test-only reconciler's.
 
-**Divergence.** Flutter exposes rebuild tracking only in debug mode through the devtools
-protocol; FLUI's stream is typed and zero-cost when nothing subscribes.
+The stream is typed and zero-cost when nothing subscribes.
 
 ### A GlobalKey read inside its own presentation's frame resolves to nothing
 
@@ -415,8 +363,7 @@ the teardown, where `dispose` runs (`closing_presentations_own_key_resolves_whil
 in the realm tests; `dispose_opening_a_window_mid_teardown_defers_and_does_not_reenter` in
 `flui-app`'s dispatch tests).
 
-**Divergence.** Flutter's `GlobalKey.currentElement`/`currentState` (`framework.dart:3163-3170`)
-return the element during build. FLUI returns nothing for keys of the presentation whose frame is
+**Limitation.** A read returns nothing for keys of the presentation whose frame is
 running. The exit is to serve those reads from the frame's own tree once the realm owns the
 binding by value (ADR-0083). Pinned by
 `global_key_lookup_from_build_during_draw_frame_returns_instead_of_deadlocking`,
@@ -429,8 +376,7 @@ through the realm by `ui_realm/tests/global_key_lookup_during_frame.rs` in `flui
 `dev_reload::DevReloadHook` (ADR-0094 §1) is the only seam between a host and a reload tool.
 It sits in this crate, below the runtime, so the host (`flui-app`) and the tool
 (`flui-hot-reload`) each name it without naming each other, and a package reaches it through
-`flui-sdk`'s `view` glob re-export with no new SDK item. Flutter has no counterpart: its
-reload is the VM's, not a framework trait. The trait is the driver half — `attach`, `detach`,
+`flui-sdk`'s `view` glob re-export with no new SDK item. The trait is the driver half — `attach`, `detach`,
 `poll` and `scene_frame`; the per-call seam a code patcher needs arrives with its first
 producer. Its bound is `Send + 'static` because the instance travels in the application's
 configuration; it is only ever called on the owner thread. `scene_frame` lends the scene to a
@@ -457,8 +403,7 @@ What the realm-owning crates (`flui-runtime`, `flui-app`, `flui-testing`, `flui-
 need from a binding lives in `#[doc(hidden)] pub mod __runtime` (ADR-0081 §4): the
 `GlobalKey` registry activation, the frame-phase stamp at the build-to-finalize boundary
 (`FramePhaseMarker`), the multi-presentation `GlobalKeyRegistryComposite`, and the terminal
-lifecycle ladder (`LifecycleSource`). Flutter has no counterpart: its bindings are one
-process-wide mixin stack, with no second crate to hand the seam to. The module is always
+lifecycle ladder (`LifecycleSource`). The module is always
 compiled, so no build configuration changes what `WidgetsBinding` holds, and it has no semver
 promise. The methods it adds to `WidgetsBinding` are on the sealed `BindingRuntime` trait
 rather than inherent, so they resolve only where the trait is imported and are not part of the

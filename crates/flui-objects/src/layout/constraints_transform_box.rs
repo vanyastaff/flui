@@ -3,39 +3,29 @@
 //! narrowed constraints, then adopts the child's size (clamped back into the
 //! original constraints, so the child may overflow this box).
 //!
-//! # Flutter equivalence
+//! # Constraint transform
 //!
-//! Flutter's `RenderConstraintsTransformBox` (`rendering/shifted_box.dart`,
-//! tag `3.44.0`) accepts an arbitrary `BoxConstraintsTransform` — a
-//! `BoxConstraints -> BoxConstraints` function — of which the
-//! `ConstraintsTransformBox` widget predefines seven named variants
-//! (`unmodified`, `unconstrained`, `widthUnconstrained`, `heightUnconstrained`,
-//! `maxWidthUnconstrained`, `maxHeightUnconstrained`, `maxUnconstrained`).
-//! FLUI has no `ConstraintsTransformBox` widget and no general
-//! transform-function surface; the sole consumer of this render object is the
-//! `UnconstrainedBox` widget (`flui-widgets`), which only ever needs the
-//! three variants `Axis`-shaped: free both axes, or keep exactly one. The
-//! transform is therefore narrowed from an arbitrary function to a
-//! `constrained_axis: Option<Axis>` field — a Rust-native, illegal-states-free
-//! shape (Prime Directive #1: structure is Rust-native, behavior stays
-//! loyal) — computed by [`RenderConstraintsTransformBox::transform_constraints`]:
+//! There is no general transform-function surface; the sole consumer of this
+//! render object is the `UnconstrainedBox` widget (`flui-widgets`), which only
+//! ever needs to free both axes or keep exactly one. The transform is
+//! therefore a `constrained_axis: Option<Axis>` field — an
+//! illegal-states-free shape — computed by
+//! [`RenderConstraintsTransformBox::transform_constraints`]:
 //!
-//! | `constrained_axis` | Flutter transform | Effect |
-//! |---|---|---|
-//! | `None` | `unconstrained` | both axes freed (`BoxConstraints.UNCONSTRAINED`) |
-//! | `Some(Axis::Horizontal)` | `heightUnconstrained` (→ `constraints.widthConstraints()`) | width kept, height freed |
-//! | `Some(Axis::Vertical)` | `widthUnconstrained` (→ `constraints.heightConstraints()`) | height kept, width freed |
+//! | `constrained_axis` | Effect |
+//! |---|---|
+//! | `None` | both axes freed (`BoxConstraints::UNCONSTRAINED`) |
+//! | `Some(Axis::Horizontal)` | width kept, height freed |
+//! | `Some(Axis::Vertical)` | height kept, width freed |
 //!
-//! Sizing (`performLayout`/`computeDryLayout`), the four intrinsics
-//! (`computeMin/MaxIntrinsicWidth/Height`), and clip-on-overflow painting are
-//! ported behavior-faithfully from the Flutter source above.
+//! Sizing, the four intrinsics, and clip-on-overflow painting all go through
+//! that one transform.
 //!
 //! # Known gap: no debug overflow indicator
 //!
-//! Flutter's `RenderConstraintsTransformBox` mixes in `DebugOverflowIndicatorMixin`
-//! to paint the yellow-and-black striped warning (and emit a `FlutterError`
-//! diagnostic) when the child overflows AND `clipBehavior == Clip.none`. FLUI
-//! has no equivalent debug-paint/diagnostic-error machinery anywhere in
+//! A striped debug-paint warning (and a diagnostic error) when the child
+//! overflows AND `clip_behavior == Clip::None` would be the usual affordance.
+//! FLUI has no debug-paint/diagnostic-error machinery anywhere in
 //! `flui-rendering`/`flui-objects` (confirmed repo-wide, not just here) — see
 //! `docs/ROADMAP.md` Cross.H. [`RenderConstraintsTransformBox::has_visual_overflow`] is exposed as a
 //! plain queryable flag instead, matching the precedent already established
@@ -63,9 +53,8 @@ use super::shifted_box::AligningShiftedBox;
 /// both axes), then adopts the child's size — clamped back into the
 /// original incoming constraints, so the child may overflow this box.
 ///
-/// Flutter parity: `RenderConstraintsTransformBox` in `shifted_box.dart`
-/// (see the module doc for the narrowed `constrained_axis` surface and the
-/// documented debug-overflow-indicator gap).
+/// See the module doc for the `constrained_axis` surface and the documented
+/// debug-overflow-indicator gap.
 #[derive(Debug, Clone)]
 pub struct RenderConstraintsTransformBox {
     /// The axis whose incoming constraint is retained; the other axis (or
@@ -150,8 +139,7 @@ impl RenderConstraintsTransformBox {
     /// Narrows `constraints` to the retained axis, freeing the other (or
     /// both, when `constrained_axis` is `None`) to `(0, infinity)`.
     ///
-    /// Mirrors Flutter's three `UnconstrainedBox`-reachable
-    /// `BoxConstraintsTransform`s — see the module doc's mapping table.
+    /// See the module doc's table.
     fn transform_constraints(&self, constraints: BoxConstraints) -> BoxConstraints {
         match self.constrained_axis {
             None => BoxConstraints::UNCONSTRAINED,
@@ -202,7 +190,6 @@ impl RenderBox for RenderConstraintsTransformBox {
 
         self.inner.align_child(ctx, our_size, child_size);
         // Overflow is the ALIGNED child rect leaving the box rect —
-        // Flutter's `RelativeRect.fromRect(container, child).hasInsets` —
         // not a size-only comparison: an out-of-range alignment can push a
         // smaller-than-box child outside the box.
         let child_offset = self.inner.child_offset();
@@ -215,8 +202,7 @@ impl RenderBox for RenderConstraintsTransformBox {
     }
 
     /// Serves the live baseline recorded at the last layout, shifted by the
-    /// aligned child offset — Flutter's `RenderShiftedBox` contract
-    /// (`child_baseline + offset.dy`). Without this override the trait
+    /// aligned child offset (`child_baseline + offset.dy`). Without this override the trait
     /// default returns `None` and the `record_child_baselines` call above
     /// would be a dead write.
     fn compute_distance_to_actual_baseline(&self, baseline: TextBaseline) -> Option<f64> {
@@ -229,11 +215,7 @@ impl RenderBox for RenderConstraintsTransformBox {
 
     /// Paints the child, clipping to this box's own bounds when the child
     /// overflowed at the last layout and `clip_behavior` is not `Clip::None`.
-    ///
-    /// Flutter parity: `RenderConstraintsTransformBox.paint` wraps the child
-    /// paint in `pushClipRect` under the same `_isOverflowing &&
-    /// clipBehavior != Clip.none` guard; the debug-mode overflow indicator
-    /// painted in the `else` branch has no FLUI equivalent (see module doc).
+    /// There is no debug overflow indicator otherwise (see module doc).
     fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
         if self.has_visual_overflow && self.clip_behavior != Clip::None {
             let bounds = Rect::from_origin_size(Point::ZERO, ctx.size());
@@ -246,10 +228,10 @@ impl RenderBox for RenderConstraintsTransformBox {
 
     // ---- intrinsic dimensions -----------------------------------------------
     //
-    // Flutter parity: `RenderConstraintsTransformBox` probes a one-axis
-    // constraint through `constraintsTransform`, then queries the child with
-    // whatever that axis transformed to — NOT a bare passthrough of the
-    // caller's `width`/`height` (unlike the sibling `RenderConstrainedOverflowBox`,
+    // A one-axis constraint is probed through `transform_constraints`, then
+    // the child is queried with whatever that axis transformed to — NOT a
+    // bare passthrough of the caller's `width`/`height` (unlike the sibling
+    // `RenderConstrainedOverflowBox`,
     // which intentionally does pass through unmodified — see that type's own
     // intrinsics doc). A freed axis must probe the child at that axis'
     // infinite extent, exactly as layout would.
@@ -291,10 +273,8 @@ impl RenderBox for RenderConstraintsTransformBox {
     }
 
     /// Dry layout uses the SAME transformed constraints as `perform_layout`,
-    /// so FLUI's dry size always equals its laid-out size (the dry==committed
-    /// invariant). Flutter's own `computeDryLayout` does the same here (unlike
-    /// `RenderConstrainedOverflowBox`, which has a documented Flutter-only
-    /// dry/layout inconsistency this crate deliberately does not replicate).
+    /// so the dry size always equals the laid-out size (the dry==committed
+    /// invariant), unlike `RenderConstrainedOverflowBox`'s dry layout.
     fn compute_dry_layout(
         &self,
         constraints: BoxConstraints,

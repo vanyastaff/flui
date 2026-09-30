@@ -248,8 +248,8 @@ pub fn action_press_closes_the_snack_bar_and_is_single_fire() {
 //    substrate.
 //
 // A literal "the SAME Scaffold element persists in place while its ANCESTOR
-// messenger identity changes" scenario is not exercised here: FLUI (like
-// Flutter) reconciles `ScaffoldMessenger::new(...)` at the same type+position
+// messenger identity changes" scenario is not exercised here: FLUI
+// reconciles `ScaffoldMessenger::new(...)` at the same type+position
 // in the tree as an UPDATE to the existing element, not a fresh mount — so
 // two structurally-identical `ScaffoldMessenger::new(...)` calls in
 // sequence are the SAME element/handle, not "old" vs "new" (confirmed
@@ -270,7 +270,7 @@ pub fn action_press_closes_the_snack_bar_and_is_single_fire() {
 //    immediately.
 //
 // `register_scaffold`'s "queue non-empty -> schedule an immediate rebuild"
-// branch (Flutter parity: `_register`, `scaffold.dart:211-223`) is what this
+// branch is what this
 // test SETS OUT to isolate, but a mutation run against it (dropping the
 // branch entirely) still leaves this test green: a freshly-mounted
 // `Scaffold`'s `init_state` (which registers) always runs immediately

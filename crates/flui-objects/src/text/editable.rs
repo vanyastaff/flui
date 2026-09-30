@@ -1,12 +1,11 @@
 //! RenderEditable - single-line editable text visual core.
 //!
-//! This is the render-object half of Flutter's `RenderEditable`: it owns text
+//! This is the render-object half of editable text: it owns text
 //! layout, paints the collapsed caret, participates in hit testing, and reports
 //! text metrics. It deliberately does not own keyboard input, focus, IME
 //! composition state, or the editing buffer; those stay in
 //! `flui-widgets::EditableText` and `TextEditingController` (which does track
-//! an IME composing region — see its "IME composition" doc section), matching
-//! Flutter's widget/render split.
+//! an IME composing region — see its "IME composition" doc section).
 //!
 //! Scope so far:
 //! - single-line text layout, caret margin, caret paint;
@@ -26,12 +25,10 @@
 //! **Composing-region underline** (ADR-0030): [`RenderEditable::composing_range`]
 //! paints one thin rect per selection box under the composing text — a
 //! declared **1px-at-baseline+1 approximation**, not real font underline
-//! metrics (`TextStyle` has no `decoration` field to merge, unlike Flutter's
-//! `TextStyle(decoration: TextDecoration.underline)`) — do not call this
-//! parity. [`RenderEditable::rect_for_composing_range`] exposes the same
+//! metrics (`TextStyle` has no `decoration` field to merge).
+//! [`RenderEditable::rect_for_composing_range`] exposes the same
 //! geometry as a bounding rect for the IME cursor-area loop (ADR-0030), with
-//! Flutter's own caret-rect fallback order (`_updateComposingRectIfNeeded`,
-//! `editable_text.dart`, tag `3.44.0`). Single-line only: box-to-byte-range
+//! a caret-rect fallback. Single-line only: box-to-byte-range
 //! mapping (`get_boxes_for_range`) compares a global byte range against
 //! per-run glyph indices, which is only correct while this object is
 //! constrained to one line (`max_lines(1)`) — revisit when multiline lands.
@@ -97,23 +94,20 @@ pub struct RenderEditable {
     /// [`Self::clamp_text_range`] as the composing range.
     ///
     /// A *collapsed* range is the caret's business, not the highlight's:
-    /// `paint` skips it, matching Flutter's `_TextHighlightPainter`, which
-    /// returns early on `range.isCollapsed`. Storing it collapsed rather than
+    /// `paint` skips it. Storing it collapsed rather than
     /// normalising it to `None` keeps the setter's dedupe honest — a caller
     /// that moves a collapsed selection is not making a paint-visible change,
     /// and the impact it reports says so.
     selection: Option<Range<usize>>,
     /// Fill for the selection highlight. Fully transparent by default so a
-    /// caller that sets a selection without choosing a colour paints nothing,
-    /// which is the arm Flutter reaches with a null `selectionColor`.
+    /// caller that sets a selection without choosing a colour paints nothing.
     selection_color: Color,
 }
 
 impl RenderEditable {
     /// Creates editable text laid out in `direction`.
     ///
-    /// Defaults follow Flutter's `RenderEditable` constructor where possible:
-    /// `force_line = true` and `cursorWidth = 1.0`. The public
+    /// Defaults: `force_line = true` and a cursor width of `1.0`. The public
     /// `EditableText` widget may choose a different cursor width to preserve
     /// its own widget-level default.
     #[must_use]
@@ -211,8 +205,7 @@ impl RenderEditable {
     /// Sets the selection highlight fill (builder form).
     ///
     /// Defaults to [`Color::TRANSPARENT`], so a caller that sets a selection
-    /// and no colour paints nothing — the arm Flutter reaches with a null
-    /// `selectionColor`.
+    /// and no colour paints nothing.
     #[must_use]
     pub fn with_selection_color(mut self, color: Color) -> Self {
         self.selection_color = color;
@@ -222,7 +215,7 @@ impl RenderEditable {
     /// Disables `force_line` sizing (builder form).
     ///
     /// With `force_line = true`, finite incoming max width becomes this box's
-    /// width, matching Flutter's single-line editable default.
+    /// width, the single-line editable default.
     #[must_use]
     pub fn without_force_line(mut self) -> Self {
         self.force_line = false;
@@ -349,8 +342,7 @@ impl RenderEditable {
     /// as "the composing region is at the origin" instead of "there is no
     /// composing region." `flui_widgets::EditableText`'s IME cursor-area
     /// loop (ADR-0030) prefers this over [`Self::caret_local_rect`] and
-    /// falls back to it on `None` — Flutter's own
-    /// `_updateComposingRectIfNeeded` order.
+    /// falls back to it on `None`.
     #[must_use]
     pub fn rect_for_composing_range(&self) -> Option<Rect> {
         let range = self.composing_range.clone()?;
@@ -450,8 +442,8 @@ impl RenderEditable {
     /// object's local coordinates falls on.
     ///
     /// The query a gesture layer needs to turn a tap or a drag into a caret
-    /// position — Flutter's `RenderEditable::getPositionForPoint`, minus the
-    /// global-to-local conversion, which happens above this object.
+    /// position, minus the global-to-local conversion, which happens above
+    /// this object.
     ///
     /// Returns `None` before layout, because there is no geometry to ask.
     /// Callers that know layout has run may treat that as the start of the
@@ -516,9 +508,8 @@ impl RenderEditable {
             available_min_width
         };
 
-        // This first slice is single-line: matching Flutter's non-multiline
-        // `_adjustConstraints`, the text itself lays out with unbounded max
-        // width and may overflow the box until scrolling lands.
+        // This first slice is single-line: the text itself lays out with
+        // unbounded max width and may overflow the box until scrolling lands.
         (min_width, f64::INFINITY)
     }
 
@@ -748,19 +739,15 @@ impl RenderBox for RenderEditable {
 impl RenderEditable {
     /// Paints the selection highlight behind the glyphs.
     ///
-    /// Mirrors Flutter's `_TextHighlightPainter.paint`
-    /// (`rendering/editable.dart`), which is composed into `_builtInPainters`
-    /// — the *background* painter list, run before `_textPainter.paint` — so
-    /// the fill sits under the text rather than over it.
+    /// The fill runs before the text is painted, so it sits under the text
+    /// rather than over it.
     ///
-    /// # Divergence: no clip to the text box
+    /// # No clip to the text box
     ///
-    /// Flutter intersects every highlight box with
-    /// `Rect.fromLTWH(0, 0, textPainter.width, textPainter.height)`. It needs
-    /// that because `getBoxesForSelection` takes `BoxHeightStyle` /
-    /// `BoxWidthStyle`, and the non-`tight` styles deliberately return boxes
-    /// larger than the glyphs — up to the strut. FLUI's
-    /// [`TextPainter::get_boxes_for_selection`] takes no such parameter: every
+    /// Intersecting every highlight box with the text's size is only needed
+    /// when a box query can return boxes larger than the glyphs (up to the
+    /// strut). FLUI's
+    /// [`TextPainter::get_boxes_for_selection`] takes no box-style parameter: every
     /// box comes from the same layout that produced
     /// [`TextPainter::size`], so none can exceed it. The intersection was
     /// written and then removed, because reverting it changed no test and no
@@ -783,9 +770,8 @@ impl RenderEditable {
     /// a caret with no selection is the steady state of a focused field — and
     /// it should not reach a box query on every frame.
     ///
-    /// The box **deduplication** is different: it is Flutter's (it collects
-    /// into a `Set`) and it is unpinned here, because no input FLUI's layout
-    /// accepts produces a duplicate box today. With a translucent highlight a
+    /// The box **deduplication** is different: it is unpinned, because no
+    /// input FLUI's layout accepts produces a duplicate box today. With a translucent highlight a
     /// duplicate blends twice and reads as a darker rectangle, so it is kept
     /// as cheap insurance against a layout change, not as a proven guard.
     fn paint_selection(&self, ctx: &mut PaintCx<'_, Leaf>) {

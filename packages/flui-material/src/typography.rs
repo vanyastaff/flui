@@ -1,9 +1,7 @@
 //! The Material 3 (2021) English-like type scale.
 //!
-//! Flutter parity: `_M3Typography.englishLike` (`material/typography.dart`,
-//! oracle tag `3.44.0`), exposed there as `Typography.englishLike2021`. Every
-//! `font_size`/`font_weight`/`letter_spacing`/`height` value below is copied
-//! verbatim from that const table.
+//! Every `font_size`/`font_weight`/`letter_spacing`/`height` value below is
+//! the M3 spec's `englishLike` type scale, verbatim.
 //!
 //! ## Deferred: dense / tall script geometries
 //!
@@ -41,10 +39,8 @@ fn style(font_size: f64, font_weight: FontWeight, letter_spacing: f64, height: f
 
 /// The M3 2021 `englishLike` type scale — 15 roles, geometry only (no color).
 ///
-/// Flutter parity: `Typography.englishLike2021` (`material/typography.dart`,
-/// oracle tag `3.44.0`), which is `_M3Typography.englishLike` — every value
-/// below is that const table's `fontSize`/`fontWeight`/`letterSpacing`/
-/// `height`, in the oracle's declared order.
+/// Every value below is the spec's `fontSize`/`fontWeight`/`letterSpacing`/
+/// `height`, in the spec's declared order.
 #[must_use]
 pub fn english_like_2021() -> TextTheme {
     TextTheme {

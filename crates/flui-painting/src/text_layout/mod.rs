@@ -3,6 +3,8 @@
 //!
 //! - `context` — [`FontCollection`], the app's add-only font collection, and
 //!   [`TextContext`], the per-realm service built from it (ADR-0092 §2–§3).
+//! - `fallback_chain` — the fallback order both shapers walk past a style's
+//!   family.
 //! - `font_resolve` — picking a family the host actually carries.
 //! - `layout` — the process-wide font system, `TextLayout` (shape, truncate,
 //!   caret/hit-test/line queries), and the style → `Attrs` mapping.
@@ -11,6 +13,7 @@
 use flui_foundation::geometry::Size;
 
 mod context;
+pub(crate) mod fallback_chain;
 pub(crate) mod font_resolve;
 pub(crate) mod glyphs;
 pub(crate) mod layout;

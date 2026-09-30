@@ -4,48 +4,32 @@
 //! (`insert`/`remove`/`mark_needs_build`) are public so design systems and
 //! apps can place their own layers (ADR-0076).
 //!
-//! # Flutter parity
+//! An entry is **not a widget**, and not a render object: it is a handle holding
+//! a builder.
 //!
-//! `.flutter/packages/flutter/lib/src/widgets/overlay.dart` (master
-//! `3.33.0-0.0.pre-6280-g88e87cd963f`):
+//! # Design notes
 //!
-//! - `class OverlayEntry implements Listenable` (`overlay.dart:109`) — **not a
-//!   widget**, and not a render object. A handle holding a `WidgetBuilder`.
-//! - `OverlayEntry.remove()` (`:226-243`)
-//! - `OverlayEntry.markNeedsBuild()` (`:250`)
-//!
-//! # Divergences from the reference, all deliberate
-//!
-//! - **No `GlobalKey`.** Flutter's entry owns a `GlobalKey<_OverlayEntryWidgetState>`
-//!   (`overlay.dart:214`) for two jobs: reaching the entry's `State` from
-//!   `markNeedsBuild`, and keeping the entry's subtree state alive across a
-//!   `rearrange` reorder. FLUI does the first by having the entry's `ViewState`
+//! - **No `GlobalKey`.** The entry needs to reach its own `ViewState` from
+//!   `mark_needs_build`, and to keep its subtree state alive across a
+//!   `rearrange` reorder. The first is done by having the entry's `ViewState`
 //!   publish its own [`RebuildHandle`] here at `init_state` (ADR-0018's pattern),
 //!   and the second through keyed reconciliation. Not using a `GlobalKey` matters
 //!   because the registry lookup re-enters `WidgetsBinding::inner.read()`, and
 //!   doing that under a `BuildContext`'s tree borrow is a lock-order hazard.
-//! - **No mid-frame deferral.** `OverlayEntry.remove` posts a post-frame callback
-//!   when it runs during `persistentCallbacks` (`:236-242`), because Dart's
-//!   `setState` throws during build. [`RebuildHandle::schedule`] only inserts an
-//!   id into an inbox drained by the next `build_scope`, so it is already safe
-//!   from any phase and any thread. The hack has no analogue to port.
-//! - **No `tickerEnabled: false` for covered entries.** Flutter mutes the tickers
-//!   of a `maintainState` entry that an opaque entry covers (`overlay.dart:906`).
-//!   FLUI has no per-subtree ticker gate, so a covered entry's animations keep
-//!   running. Recorded, not claimed.
-//! - **No `canSizeOverlay`.** It only bites under unbounded constraints; see
+//! - **No mid-frame deferral.** [`RebuildHandle::schedule`] only inserts an
+//!   id into an inbox drained by the next `build_scope`, so `remove` is already
+//!   safe from any phase and any thread; there is no need to defer it to a
+//!   post-frame callback.
+//! - **No ticker muting for covered entries.** There is no per-subtree ticker
+//!   gate, so the animations of a `maintain_state` entry that an opaque entry
+//!   covers keep running. Recorded, not claimed.
+//! - **No overlay sizing under unbounded constraints.** It only bites there; see
 //!   [`RenderTheater`](flui_objects::RenderTheater).
-//! - **Not a `Listenable`, no separate `dispose()`.** Flutter's `OverlayEntry`
-//!   implements `Listenable` and carries its own `dispose()`, independent of
-//!   `remove()` (`overlay.dart:109-243`): a caller can listen for `mounted`
-//!   flipping, and must `dispose()` an entry (even one never inserted, or
-//!   already removed) to release its `ChangeNotifier` resources — skipping
-//!   that is a leak-tracker failure in the oracle's own test suite. FLUI's
-//!   `OverlayEntry` is a cheap `Arc`-backed handle with no listener list and
-//!   no disposal step of its own; dropping every clone is enough. The one
-//!   behavior from that group FLUI does port — a second `remove()` is inert
-//!   rather than panicking (`overlay.dart`'s `assert` in `remove()`,
-//!   `:226-243`) — is `crates/flui-widgets/tests/overlay.rs`'s
+//! - **Not a listenable, no separate `dispose()`.** `OverlayEntry`
+//!   is a cheap `Arc`-backed handle with no listener list and
+//!   no disposal step of its own; dropping every clone is enough. A second
+//!   `remove()` is inert rather than panicking, pinned by
+//!   `crates/flui-widgets/tests/overlay.rs`'s
 //!   `removed_entry_cannot_reinsert_or_rebuild_silently`.
 //!
 //! [`Overlay`]: super::Overlay
@@ -61,7 +45,7 @@ use parking_lot::Mutex;
 
 use super::OverlayShared;
 
-/// Builds an entry's subtree. Flutter's `WidgetBuilder`.
+/// Builds an entry's subtree.
 ///
 /// `Rc<dyn Fn>` rather than `Box<dyn FnOnce>`: an entry is rebuilt many times,
 /// and the [`OverlayEntry`] handle is cloned into the view tree on every overlay
@@ -104,11 +88,11 @@ struct EntryInner {
     rebuild: Mutex<Option<RebuildHandle>>,
 
     /// Whether this entry occludes the whole overlay, so the ones below it need
-    /// not be built. Flutter's `OverlayEntry.opaque` (`overlay.dart:136-146`).
+    /// not be built.
     opaque: AtomicBool,
 
     /// Whether this entry stays in the tree even when an [`opaque`] entry covers
-    /// it. Flutter's `OverlayEntry.maintainState` (`overlay.dart:163-173`).
+    /// it.
     ///
     /// [`opaque`]: EntryInner::opaque
     maintain_state: AtomicBool,
@@ -134,8 +118,7 @@ pub struct OverlayEntry {
 impl OverlayEntry {
     /// An entry that builds its subtree with `builder`, attached to no overlay.
     ///
-    /// `opaque` and `maintain_state` both default to `false`, as in Flutter
-    /// (`overlay.dart:117-121`). The builder runs on each build of this entry's
+    /// `opaque` and `maintain_state` both default to `false`. The builder runs on each build of this entry's
     /// layer (its first build, [`mark_needs_build`](Self::mark_needs_build),
     /// and an ancestor rebuild that reaches it), never on insertion.
     #[must_use]
@@ -180,8 +163,8 @@ impl OverlayEntry {
     /// Set whether this entry covers the whole overlay, so the entries below it
     /// that do not [`maintain state`](Self::set_maintain_state) are not built.
     ///
-    /// Flutter's `opaque` setter (`overlay.dart:138-146`): a change rebuilds the
-    /// **overlay**, not the entry, because `OverlayState.build` reads it.
+    /// A change rebuilds the **overlay**, not the entry, because the overlay's
+    /// build reads it.
     /// Setting the value it already has does nothing. On an entry that is not
     /// [attached](Self::is_attached), or whose overlay is unmounted, the flag is
     /// stored and read by the next build that includes the entry.
@@ -192,15 +175,12 @@ impl OverlayEntry {
     /// Set whether this entry stays built (its state kept) while an
     /// [opaque](Self::set_opaque) entry above covers it.
     ///
-    /// Flutter's `maintainState` setter (`overlay.dart:165-173`), which likewise
-    /// goes through `_didChangeEntryOpacity`: same rebuild and no-op rules as
-    /// [`set_opaque`](Self::set_opaque).
+    /// Same rebuild and no-op rules as [`set_opaque`](Self::set_opaque).
     pub fn set_maintain_state(&self, maintain_state: bool) {
         self.set_build_flag(&self.inner.maintain_state, maintain_state);
     }
 
-    /// Store `value`, and rebuild the whole overlay only if it changed —
-    /// Flutter's `if (_opaque == value) return;` short-circuit.
+    /// Store `value`, and rebuild the whole overlay only if it changed.
     fn set_build_flag(&self, flag: &AtomicBool, value: bool) {
         if flag.swap(value, Ordering::Relaxed) == value {
             return;
@@ -219,9 +199,8 @@ impl OverlayEntry {
         &self.inner.builder
     }
 
-    /// Whether the entry's subtree is currently mounted — Flutter's
-    /// `OverlayEntry.mounted` (`overlay.dart:196`), which likewise reports
-    /// whether the entry's `State` exists.
+    /// Whether the entry's subtree is currently mounted, i.e. whether its
+    /// `ViewState` exists.
     pub(crate) fn is_mounted(&self) -> bool {
         self.inner
             .rebuild
@@ -235,7 +214,7 @@ impl OverlayEntry {
     /// built, or whether that overlay is mounted; for the overlay, see
     /// [`OverlayHandle::is_mounted`](super::OverlayHandle::is_mounted).
     ///
-    /// Flutter's `_overlay != null`. `true` from
+    /// `true` from
     /// [`OverlayHandle::insert`](super::OverlayHandle::insert) (or `rearrange`)
     /// until [`remove`](Self::remove), including while the overlay is not
     /// mounted; `false` once every handle to the overlay is dropped.
@@ -259,9 +238,7 @@ impl OverlayEntry {
     /// Rebuild **only this entry's** subtree on the next frame. Call it when
     /// state the builder reads has changed outside the widget tree.
     ///
-    /// Flutter's `OverlayEntry.markNeedsBuild` (`overlay.dart:250`), which reaches
-    /// one `_OverlayEntryWidgetState` through the entry's `GlobalKey` and calls
-    /// `setState` on it — deliberately *not* rebuilding the whole `Overlay`.
+    /// Deliberately *not* rebuilding the whole `Overlay`.
     ///
     /// Inert before mount and after unmount.
     ///
@@ -282,25 +259,21 @@ impl OverlayEntry {
     /// Detach from the overlay holding this entry and schedule that overlay to
     /// rebuild without it; the layer's state is disposed on that frame.
     ///
-    /// Flutter's `OverlayEntry.remove` (`overlay.dart:226-243`). Two of its three
-    /// guards are ported; the third has no analogue:
+    /// Guards:
     ///
-    /// - *"An OverlayEntry should be removed only once"* — Flutter `assert`s.
-    ///   Removing twice is caller error, not a framework invariant, so
+    /// - Removing an entry twice is caller error, not a framework invariant, so
     ///   [`PANIC-POLICY`] forbids a panic here: the second call logs and returns.
-    /// - `if (!overlay.mounted) return;` is **not** ported, deliberately. In
-    ///   Flutter the entry list dies with the unmounted `OverlayState`; here the
+    /// - There is **no** early return for an unmounted overlay: the
     ///   [`OverlayHandle`](super::OverlayHandle) owns the list and a later mount
     ///   builds it (ADR-0076 §2), so returning early would leave a detached
     ///   entry in the list for that mount to build, with no way left to remove
     ///   it. The entry always leaves the list; the rebuild is scheduled only if
     ///   the overlay is mounted. A dropped overlay (every handle gone) still
     ///   makes this a no-op: the `Weak` upgrade fails and nothing is resurrected.
-    /// - the `persistentCallbacks` post-frame deferral is unnecessary (see module
-    ///   docs).
+    /// - No post-frame deferral is needed (see module docs).
     ///
     /// After `remove`, [`is_attached`](Self::is_attached) is `false` and the
-    /// entry may be inserted again (only dispose is terminal in Flutter too).
+    /// entry may be inserted again.
     ///
     /// [`PANIC-POLICY`]: ../../../../../docs/PANIC-POLICY.md
     pub fn remove(&self) {
@@ -314,8 +287,8 @@ impl OverlayEntry {
         };
 
         // Always out of the list, mounted or not: the handle's list outlives the
-        // mounted overlay (see the doc above for why Flutter's unmounted early
-        // return does not apply). `schedule_rebuild` is inert when unmounted.
+        // mounted overlay (see the doc above for why there is no early return
+        // for an unmounted overlay). `schedule_rebuild` is inert when unmounted.
         shared.retain_entries(|entry| entry.id() != self.inner.id);
         shared.schedule_rebuild();
     }
@@ -338,8 +311,8 @@ impl OverlayEntry {
 
     /// Bind this entry to `shared`. Called by the overlay on insertion.
     ///
-    /// Re-attaching a previously removed entry is legal — Flutter also allows it
-    /// (`_overlay` is nulled, not poisoned; only `dispose` is terminal).
+    /// Re-attaching a previously removed entry is legal: removal only clears the
+    /// back-reference and does not poison the entry.
     pub(crate) fn attach(&self, shared: &Arc<OverlayShared>) {
         *self.inner.overlay.lock() = Some(Arc::downgrade(shared));
     }

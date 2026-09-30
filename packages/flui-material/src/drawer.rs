@@ -2,23 +2,21 @@
 //! in horizontally from the edge of a [`crate::Scaffold`], plus
 //! [`DrawerHandle`] — the runtime capability to open/close it.
 //!
-//! # Flutter parity
+//! # Structure
 //!
-//! `material/drawer.dart`'s `Drawer`/`DrawerController` (oracle tag
-//! `3.44.0`). `DrawerController` owns a 246ms [`AnimationController`] that
+//! `DrawerController` owns a 246ms [`AnimationController`] that
 //! drives the open/close/drag/fling state machine; `Drawer` is the
 //! M3-styled content panel it wraps.
 //!
 //! ## The `GlobalKey` bridge (why `DrawerHandle` exists)
 //!
-//! The oracle's `ScaffoldState.openDrawer()` reaches into its own
-//! `DrawerController` child via `_drawerKey.currentState!.open()` — a
-//! `GlobalKey<DrawerControllerState>` the `Scaffold`'s own `State` holds.
-//! [`DrawerHandle`] ports that exact mechanism: it wraps the same two
+//! The `Scaffold` opens a drawer by reaching into its own
+//! `DrawerController` child through a
+//! `GlobalKey<DrawerControllerState>` its `State` holds.
+//! [`DrawerHandle`] wraps the same two
 //! `GlobalKey<DrawerControllerState>` instances [`crate::Scaffold`]'s state
 //! attaches to the `drawer`/`end_drawer` `DrawerController`s it builds, so
-//! `DrawerHandle::open_drawer`/`close_drawer` are direct, faithful ports of
-//! `ScaffoldState::openDrawer`/`closeDrawer`.
+//! `DrawerHandle::open_drawer`/`close_drawer` drive them directly.
 //!
 //! `DrawerHandle` is deliberately **`Rc`-based and `!Send`**, not
 //! `Arc`/`Send + Sync`. `GlobalKey::with_current_state` resolves against the
@@ -90,7 +88,7 @@ use crate::material::Material;
 use crate::shape::MaterialShape;
 use crate::theme::Theme;
 
-/// Default width of a [`Drawer`] — Flutter's `_kWidth` (`drawer.dart`).
+/// Default width of a [`Drawer`].
 pub const DEFAULT_DRAWER_WIDTH: f64 = 304.0;
 /// Default width of the closed-state edge-drag detection zone — `_kEdgeDragWidth`.
 const EDGE_DRAG_WIDTH: f64 = 20.0;
@@ -113,9 +111,9 @@ const BLACK54: Color = Color {
 
 /// Which edge of the [`crate::Scaffold`] a drawer slides in from.
 ///
-/// Flutter parity: `DrawerAlignment` (`drawer.dart`). RTL mirroring is a
-/// named deferral — see the module docs — so `Start`/`End` map directly to
-/// left/right rather than resolving against `Directionality`.
+/// RTL mirroring is a named deferral — see the module docs — so
+/// `Start`/`End` map directly to left/right rather than resolving against
+/// `Directionality`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DrawerAlignment {
     /// The start (left, under the LTR-only mapping this substrate uses) edge.
@@ -127,7 +125,7 @@ pub enum DrawerAlignment {
 /// Publishes the enclosing [`DrawerController`]'s [`DrawerAlignment`] to its
 /// mounted content, so a [`Drawer`] can pick the correctly-mirrored rounded
 /// corner. Private: `DrawerController` is the only publisher, `Drawer` the
-/// only reader — Flutter parity: `_DrawerControllerScope`, similarly private.
+/// only reader.
 #[derive(Clone)]
 struct DrawerAlignmentScope {
     alignment: DrawerAlignment,
@@ -172,7 +170,7 @@ fn end_rounded_shape(alignment: DrawerAlignment) -> MaterialShape {
 /// A Material Design panel that slides in horizontally to show navigation
 /// links, set on [`crate::Scaffold::drawer`]/[`crate::Scaffold::end_drawer`].
 ///
-/// Flutter parity: `Drawer` (`drawer.dart`, oracle tag `3.44.0`). M3 styling:
+/// M3 styling:
 /// [`ColorScheme::surface_container_low`](crate::ColorScheme::surface_container_low)
 /// background, elevation `1.0`, a 16dp end-rounded shape (mirrored for
 /// [`DrawerAlignment::End`]), width [`DEFAULT_DRAWER_WIDTH`] (304.0) by
@@ -390,7 +388,7 @@ impl DrawerHandle {
     }
 
     /// Opens the start-side drawer, closing the end-side drawer first if it
-    /// is open. Flutter parity: `ScaffoldState.openDrawer`.
+    /// is open.
     ///
     /// A no-op if no [`crate::Scaffold::drawer`] is mounted, or when called
     /// from inside the frame of the presentation that hosts it — the
@@ -405,7 +403,7 @@ impl DrawerHandle {
             .with_current_state(DrawerControllerState::open);
     }
 
-    /// Closes the start-side drawer. Flutter parity: `ScaffoldState.closeDrawer`.
+    /// Closes the start-side drawer.
     pub fn close_drawer(&self) {
         let _ = self
             .shared
@@ -414,7 +412,7 @@ impl DrawerHandle {
     }
 
     /// Opens the end-side drawer, closing the start-side drawer first if it
-    /// is open. Flutter parity: `ScaffoldState.openEndDrawer`.
+    /// is open.
     pub fn open_end_drawer(&self) {
         if self.is_drawer_open() {
             self.close_drawer();
@@ -425,7 +423,7 @@ impl DrawerHandle {
             .with_current_state(DrawerControllerState::open);
     }
 
-    /// Closes the end-side drawer. Flutter parity: `ScaffoldState.closeEndDrawer`.
+    /// Closes the end-side drawer.
     pub fn close_end_drawer(&self) {
         let _ = self
             .shared
@@ -434,16 +432,13 @@ impl DrawerHandle {
     }
 }
 
-/// Signature for [`DrawerController::on_open_changed`] — Flutter's
-/// `DrawerCallback`.
+/// Signature for [`DrawerController::on_open_changed`].
 type DrawerCallback = Rc<dyn Fn(&mut EventCx<'_>, bool)>;
 type BoundDrawerCallback = Rc<dyn Fn(bool)>;
 
 /// Provides interactive behavior for [`Drawer`] content: open/close
 /// animation, edge-swipe-to-open, drag-to-close, and the scrim. Built by
 /// [`crate::Scaffold`] — rarely constructed directly.
-///
-/// Flutter parity: `DrawerController` (`drawer.dart`, oracle tag `3.44.0`).
 #[derive(Clone)]
 pub struct DrawerController {
     key: GlobalKey<DrawerControllerState>,
@@ -493,8 +488,7 @@ impl DrawerController {
     /// Whether the drawer should render open. Primarily used by
     /// `crate::Scaffold` to reflect its own tracked opened-state back into a
     /// freshly (re)built controller. Ignored while the controller is
-    /// mid-animation (Flutter parity: `didUpdateWidget`'s
-    /// `_controller.status.isAnimating` guard).
+    /// mid-animation (an `is_animating` status guard).
     #[must_use]
     pub fn is_open(mut self, is_open: bool) -> Self {
         self.is_open = is_open;
@@ -502,7 +496,7 @@ impl DrawerController {
     }
 
     /// Called whenever the drawer opens or closes — via drag, fling,
-    /// `open()`/`close()`, or the scrim tap. Flutter parity: `drawerCallback`.
+    /// `open()`/`close()`, or the scrim tap.
     #[must_use]
     pub fn on_open_changed<F, R>(mut self, callback: F) -> Self
     where
@@ -569,11 +563,10 @@ struct DrawerControllerCore {
     vsync: RefCell<Option<Vsync>>,
     vsync_registration: RefCell<Option<VsyncRegistration>>,
     rebuild: RefCell<Option<RebuildHandle>>,
-    /// Flutter parity: `_previouslyOpened` — starts `false` regardless of
-    /// the controller's initial value (an oracle quirk this substrate ports
-    /// verbatim: a drawer that starts open still fires one on-changed(true)
-    /// the first time its value is nudged, since nothing has "previously"
-    /// been recorded as opened yet).
+    /// Starts `false` regardless of the controller's initial value (a
+    /// drawer that starts open still fires one on-changed(true) the first
+    /// time its value is nudged, since nothing has "previously" been
+    /// recorded as opened yet).
     previously_opened: Cell<bool>,
     alignment: Cell<DrawerAlignment>,
     panel_width: Cell<f64>,
@@ -597,8 +590,7 @@ impl DrawerControllerCore {
         }
     }
 
-    /// Flutter parity: `_directionFactor` (`drawer.dart`), LTR-only — see
-    /// the module docs.
+    /// The slide direction, LTR-only — see the module docs.
     fn direction_factor(&self) -> f64 {
         match self.alignment.get() {
             DrawerAlignment::Start => 1.0,
@@ -606,10 +598,9 @@ impl DrawerControllerCore {
         }
     }
 
-    /// Flutter parity: `_move` (`drawer.dart`). Fires `on_open_changed` the
-    /// instant the value crosses `0.5`, independent of `open()`/`close()`'s
-    /// own immediate firing — the second of the three oracle-documented
-    /// firing paths.
+    /// Fires `on_open_changed` the instant the value crosses `0.5`,
+    /// independent of `open()`/`close()`'s own immediate firing — the second
+    /// of the three firing paths.
     fn move_by(&self, primary_delta: f64) {
         let width = self.panel_width.get();
         let new_value = self.controller.value() + primary_delta / width * self.direction_factor();
@@ -622,9 +613,8 @@ impl DrawerControllerCore {
         }
     }
 
-    /// Flutter parity: `_settle` (`drawer.dart`). Fires `on_open_changed`
-    /// immediately when the fling threshold is crossed (the third
-    /// oracle-documented firing path — independent of the value later
+    /// Fires `on_open_changed` immediately when the fling threshold is
+    /// crossed (the third firing path — independent of the value later
     /// crossing `0.5` as the fling animates).
     fn settle(&self, primary_velocity: f64) {
         if self.is_dismissed() {
@@ -642,9 +632,8 @@ impl DrawerControllerCore {
         }
     }
 
-    /// Flutter parity: `_handleDragCancel` (`drawer.dart`) — only reachable
-    /// from the open panel's gesture detector; the closed-state edge strip
-    /// wires no `on_horizontal_drag_cancel`, matching the oracle.
+    /// Only reachable from the open panel's gesture detector; the
+    /// closed-state edge strip wires no `on_horizontal_drag_cancel`.
     fn handle_drag_cancel(&self) {
         if self.is_dismissed() || self.controller.is_animating() {
             return;
@@ -656,16 +645,14 @@ impl DrawerControllerCore {
         }
     }
 
-    /// Flutter parity: `open()` (`drawer.dart`). Fires `on_open_changed`
-    /// immediately — the first oracle-documented firing path, independent
-    /// of the fling animation that follows.
+    /// Fires `on_open_changed` immediately — the first firing path,
+    /// independent of the fling animation that follows.
     fn open(&self) {
         let _ = self.controller.fling(1.0);
         self.notify_open_changed(true);
     }
 
-    /// Flutter parity: `close()` (`drawer.dart`) — the mirror of
-    /// [`Self::open`].
+    /// The mirror of [`Self::open`].
     fn close(&self) {
         let _ = self.controller.fling(-1.0);
         self.notify_open_changed(false);
@@ -765,8 +752,7 @@ impl ViewState<DrawerController> for DrawerControllerState {
     }
 
     fn did_update_view(&mut self, old_view: &DrawerController, new_view: &DrawerController) {
-        // Flutter parity: `didUpdateWidget` checks
-        // `controller.status.isAnimating`, not the controller's ticker-based
+        // Check the controller's status, not its ticker-based
         // `isAnimating`. Setting `AnimationController.value` during a drag
         // stops the ticker but intentionally leaves an interior value in a
         // directional status. That distinction prevents Scaffold's
@@ -839,8 +825,7 @@ impl View for DrawerController {
 
 /// The closed-state edge-drag strip — `translucent` hit-testing (the body
 /// stays tappable both inside and outside its bounds), only mounted when
-/// [`DrawerController::enable_open_drag_gesture`] is set (Flutter parity:
-/// `_buildDrawer`'s dismissed branch).
+/// [`DrawerController::enable_open_drag_gesture`] is set.
 fn closed_edge_strip(
     core: &Rc<DrawerControllerCore>,
     alignment: DrawerAlignment,
@@ -855,9 +840,8 @@ fn closed_edge_strip(
     // whatever height Align's loose upper bound actually is (the slot's
     // full, bounded height — Scaffold's own `get_size` already requires
     // bounded constraints from ITS parent, so this is never truly
-    // unbounded) — Flutter parity: `SizedBox(height: double.infinity)`
-    // inside the oracle's `LimitedBox(maxHeight: 0.0, ...)`, whose
-    // unbounded-height guard this substrate skips as a named
+    // unbounded) — a `SizedBox(height: f64::INFINITY)`; the
+    // unbounded-height guard is skipped as a named
     // simplification (see the type docs).
     Align::new(outer_alignment(alignment)).child(
         GestureDetector::new()
@@ -871,7 +855,6 @@ fn closed_edge_strip(
 }
 
 /// The open-state scrim + panel, wrapped in the drag-to-close detector.
-/// Flutter parity: `_buildDrawer`'s non-dismissed branch.
 fn open_panel(core: &Rc<DrawerControllerCore>, view: &DrawerController) -> impl IntoView {
     let value = core.controller.value();
 
@@ -881,14 +864,12 @@ fn open_panel(core: &Rc<DrawerControllerCore>, view: &DrawerController) -> impl 
         let close_core = Rc::clone(core);
         scrim_detector = scrim_detector.on_tap(move |_cx| close_core.close());
     }
-    // `Stack` gives a non-positioned child LOOSE constraints (Flutter's
-    // default `StackFit.loose`) — a bare `ColoredBox` (no size of its own)
+    // `Stack` gives a non-positioned child LOOSE constraints (the default
+    // `StackFit.loose`) — a bare `ColoredBox` (no size of its own)
     // collapses to zero under that looseness, same as the edge strip's
     // `SizedBox` needed `f64::INFINITY` above. `SizedBox::expand` clamps to
     // the Stack's own (bounded — the drawer slot is always tight) size, so
     // the scrim genuinely covers, and is tappable across, the whole area.
-    // Flutter parity: the oracle's scrim is `ColoredBox(child: LimitedBox(...,
-    // child: SizedBox.expand()))`.
     let scrim = scrim_detector.child(SizedBox::expand().child(ColoredBox::new(scrim_color)));
 
     let panel = Align::new(outer_alignment(view.alignment)).child(
@@ -932,8 +913,8 @@ fn inner_alignment(alignment: DrawerAlignment) -> Alignment {
     }
 }
 
-/// Scales `color`'s alpha channel by `factor` (clamped to `[0, 1]`).
-/// Flutter parity: `Color.withValues(alpha: scrimColor.a * _controller.value)`.
+/// Scales `color`'s alpha channel by `factor` (clamped to `[0, 1]`); the
+/// scrim's alpha is `scrim_color.a * controller.value`.
 fn scale_alpha(color: Color, factor: f64) -> Color {
     let factor = factor.clamp(0.0, 1.0);
     let scaled = (f64::from(color.a) * factor).round().clamp(0.0, 255.0);

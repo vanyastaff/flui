@@ -2,9 +2,8 @@
 //!
 //! # Why this exists
 //!
-//! Flutter's `LayoutBuilder` builds its child **inside** `performLayout`, via
-//! `invokeLayoutCallback`, mutating the element and render trees mid-walk under
-//! nothing but a debug flag. FLUI cannot, for two structural reasons:
+//! A `LayoutBuilder` cannot build its child **inside** `perform_layout`,
+//! mutating the element and render trees mid-walk, for two structural reasons:
 //!
 //! 1. `PipelineOwner::layout_node_with_children` holds `&mut RenderTree` for the
 //!    entire recursive walk (the `SubtreeArena`), so mid-walk structural
@@ -17,9 +16,9 @@
 //! live: **between** layout passes. [`BuildOwner::run_frame_with_layout_builders`]
 //! drives `run_layout` → [`BuildOwner::service_layout_builders`] → `run_layout`
 //! … to a fixpoint, then hands the settled tree to the ordinary
-//! `PipelineOwner::run_frame`. Observable semantics are Flutter's: a builder sees
+//! `PipelineOwner::run_frame`. A builder sees
 //! the real incoming constraints and its child is laid out and painted in the
-//! **same frame**. Only the internal pass count differs.
+//! **same frame**; the cost is only extra internal layout passes.
 //!
 //! This requires no change to `flui-rendering`: the phase transitions
 //! (`into_layout` / `into_idle`) are already public, `run_layout` is re-drivable
@@ -59,7 +58,7 @@ use crate::tree::ElementTree;
 /// needed only when a newly mounted nested builder first publishes constraints.
 /// Reaching the bound means builder output keeps changing incoming constraints.
 ///
-/// Flutter asserts on the same class of bug. We bound the loop so a release
+/// The loop is bounded so a release
 /// build degrades to a stale frame rather than hanging the UI thread.
 const MAX_LAYOUT_BUILD_PASSES: usize = 10;
 

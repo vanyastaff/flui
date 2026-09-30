@@ -10,11 +10,11 @@
 //! ## Loading Fonts
 //!
 //! ```rust,no_run
-//! use flui_assets::{AssetRegistry, FontAsset};
+//! use flui_assets::{AssetRegistryBuilder, FontAsset};
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let registry = AssetRegistry::global();
+//! let registry = AssetRegistryBuilder::new().with_default_capacity().build();
 //! let font = FontAsset::file("assets/Roboto-Regular.ttf");
 //! let handle = registry.load(font).await?;
 //! println!("Font: {} bytes", handle.bytes.len());
@@ -32,9 +32,9 @@
 //! ```
 //!
 //! ```rust,ignore
-//! use flui_assets::{AssetRegistry, ImageAsset};
+//! use flui_assets::{AssetRegistryBuilder, ImageAsset};
 //!
-//! let registry = AssetRegistry::global();
+//! let registry = AssetRegistryBuilder::new().with_default_capacity().build();
 //! let image = ImageAsset::file("assets/logo.png");
 //! let handle = registry.load(image).await?;
 //! println!("Image: {}x{}", handle.width(), handle.height());

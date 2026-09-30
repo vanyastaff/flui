@@ -16,33 +16,31 @@
 //!
 //! # Mapping decisions
 //!
-//! Flutter's `RenderSliverFixedExtentBoxAdaptor` (`rendering/sliver_fixed_extent_list.dart`)
-//! is the behavioural reference for the index math (`getMinChildIndexForScrollOffset`,
-//! `getMaxChildIndexForScrollOffset`, `indexToLayoutOffset`, `computeMaxScrollOffset`),
-//! the geometry (`paintExtent` / `cacheExtent` from the leading and trailing
-//! layout offsets, `hasVisualOverflow` from `targetLastIndexForPaint`) and the
-//! empty / past-the-end arms. What differs, and why:
+//! The index math (first and last index for a scroll offset, layout offset of
+//! an index, max scroll offset), the geometry (paint and cache extent from the
+//! leading and trailing layout offsets, visual overflow from the last painted
+//! index) and the empty / past-the-end arms follow directly from the fixed
+//! extent. Design notes:
 //!
-//! - **No `scrollOffsetCorrection`.** Flutter teleports the viewport when a
-//!   *leading* child fails to build mid-layout. Under the request strategy the
-//!   sliver never builds mid-layout, so an absent index is a request, not a
+//! - **No scroll-offset correction.** A viewport teleport when a *leading*
+//!   child fails to build mid-layout is not needed: under the request strategy
+//!   the sliver never builds mid-layout, so an absent index is a request, not a
 //!   failure; a data source that shrinks is reported by the builder to the
 //!   element tree, which clamps the item count, and the next pass reports the
 //!   real extent and the viewport clamps its pixels. A non-monotone builder
-//!   therefore truncates at its first `None` where Flutter would teleport.
-//! - **The precision tolerance is Flutter's.** Offsets are `f64`, as Flutter's
-//!   doubles are, so `PRECISION_ERROR_TOLERANCE` is `precisionErrorTolerance`
-//!   (`1e-10` px, ADR-0098): wide enough for the division's rounding, narrow
-//!   enough that an edge `1e-4` px past a boundary reaches the next child.
+//!   therefore truncates at its first `None`.
+//! - **The precision tolerance.** Offsets are `f64`, so
+//!   `PRECISION_ERROR_TOLERANCE` is `1e-10` px (ADR-0098): wide enough for the
+//!   division's rounding, narrow enough that an edge `1e-4` px past a boundary
+//!   reaches the next child.
 //! - **An unbounded window is bounded here.** With an infinite
-//!   `remainingCacheExtent` Flutter lays out to the end of the data; so does
-//!   this sliver for a real count (shrink-wrap materialises everything, as
-//!   Flutter does), but a `usize::MAX` "unknown" count is read as the sentinel
+//!   `remaining_cache_extent` this sliver lays out to the end of the data for
+//!   a real count (shrink-wrap materialises everything), but a `usize::MAX`
+//!   "unknown" count is read as the sentinel
 //!   it is and served as a small bounded window, exactly as the lazy grid does
 //!   (`MAX_UNBOUNDED_WINDOW_CHILDREN`, `UNBOUNDED_SENTINEL_WINDOW`).
-//! - **Non-finite scroll-window inputs never reach `as usize`.** Flutter's
-//!   `RenderSliverFixedExtentBoxAdaptor` crashes on `Infinity or NaN toInt`
-//!   (flutter/flutter#105630). Rust's float-to-int cast saturates instead
+//! - **Non-finite scroll-window inputs never reach `as usize`.** Rust's
+//!   float-to-int cast saturates on an infinite or NaN input
 //!   (`+∞ → usize::MAX`, `NaN → 0`), which is worse operationally: a poisoned
 //!   retain band or build window can freeze the viewport without a crisp
 //!   error. Index helpers and `window` reject `NaN` and `+∞` leading edges
@@ -69,7 +67,7 @@ use flui_rendering::{
 use super::sliver_grid::{MAX_UNBOUNDED_WINDOW_CHILDREN, UNBOUNDED_SENTINEL_WINDOW};
 
 /// How far a layout offset may miss an exact multiple of the item extent and
-/// still count as that multiple, in pixels: Flutter's `precisionErrorTolerance`.
+/// still count as that multiple, in pixels.
 pub const PRECISION_ERROR_TOLERANCE: f64 = flui_foundation::EPSILON;
 
 /// A sliver that places lazily built Box children one after another along the
@@ -159,8 +157,7 @@ impl RenderSliverFixedExtentList {
         flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
-    /// The first child index whose extent reaches `scroll_offset`
-    /// (Flutter's `getMinChildIndexForScrollOffset`).
+    /// The first child index whose extent reaches `scroll_offset`.
     ///
     /// An offset within `PRECISION_ERROR_TOLERANCE` of an item boundary
     /// counts as that boundary, so accumulated rounding never pulls in the
@@ -198,9 +195,8 @@ impl RenderSliverFixedExtentList {
         float_to_index(index)
     }
 
-    /// The last child index that starts before `scroll_offset`
-    /// (Flutter's `getMaxChildIndexForScrollOffset`): the child that ends
-    /// exactly at the offset is not included.
+    /// The last child index that starts before `scroll_offset`: the child that
+    /// ends exactly at the offset is not included.
     ///
     /// # Non-finite offsets
     ///
@@ -231,15 +227,14 @@ impl RenderSliverFixedExtentList {
         float_to_index(index)
     }
 
-    /// The layout offset of child `index` (Flutter's `indexToLayoutOffset`).
+    /// The layout offset of child `index`.
     #[inline]
     #[must_use]
     pub fn index_to_layout_offset(&self, index: usize) -> f64 {
         self.item_extent * index as f64
     }
 
-    /// The scroll extent of `item_count` children
-    /// (Flutter's `computeMaxScrollOffset`).
+    /// The scroll extent of `item_count` children.
     #[inline]
     #[must_use]
     pub fn compute_max_scroll_offset(&self, item_count: usize) -> f64 {
@@ -380,9 +375,7 @@ impl RenderSliver for RenderSliverFixedExtentList {
             // The window starts past the last item (scrolled beyond the end,
             // or the source shrank under the viewport), or the leading /
             // trailing cache edge was non-finite: report the extent the count
-            // implies and let the viewport clamp. Flutter's `addInitialChild`
-            // failing for `firstIndex > 0` reports the same `scrollExtent` /
-            // `maxPaintExtent` pair. A non-finite leading edge must never be
+            // implies and let the viewport clamp. A non-finite leading edge must never be
             // converted to an index — that path saturates at `usize::MAX`.
             let scroll_extent = self.compute_max_scroll_offset(effective_count_for_past_end(
                 self.item_count,

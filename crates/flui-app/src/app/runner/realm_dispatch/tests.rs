@@ -423,15 +423,26 @@ fn two_realms_via_separate_windows_policy_share_nothing() {
 /// Android, iOS, secondary windows) builds its realm with, and each realm's
 /// `TextContext` must be built over `runtime_font_collection()`. Realm A comes
 /// from `UiRealm::for_test`, which builds its own collection, so it is not
-/// asserted on. Fails if that call hands a realm a fresh collection, or if
-/// the runtime resolves a new one per call.
+/// asserted on. Fails if that call hands a realm a fresh collection, if the
+/// runtime resolves a new one per call, or if building a realm feeds the
+/// host's faces again (two realms would feed twice). The feed count is only
+/// bounded here: the runtime may have resolved its collection before this
+/// test's window opened, so zero passes too.
+/// `the_runtime_feeds_host_faces_once_for_every_realm` pins that the feed
+/// happens, exactly once.
 fn separate_realm_windows_shape_over_the_runtimes_font_collection() {
     let (dispatcher_a, _clear_guard) = install_realm_a_through_a_real_owner_platform();
 
+    let feeds_before = flui_painting::testing::host_face_feeds();
     for _ in 0..2 {
         open_secondary_window(AppConfig::default(), WindowPolicy::SeparateRealms)
             .expect("WindowPolicy::SeparateRealms must install a second realm cleanly");
     }
+    assert!(
+        flui_painting::testing::host_face_feeds() - feeds_before <= 1,
+        "two realms feed the host's faces at most once, when the runtime first \
+         resolves its collection"
+    );
 
     let secondaries: Vec<RealmDispatcher> = APP_RUNTIME.with(|slot| {
         let state = slot.borrow();

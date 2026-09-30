@@ -14,10 +14,6 @@ use smol_str::SmolStr;
 ///
 /// Semantics events are used to notify assistive technologies about
 /// changes that don't necessarily result in a tree structure change.
-///
-/// # Flutter Equivalence
-///
-/// Corresponds to Flutter's `SemanticsEvent` abstract class.
 #[derive(Debug, Clone)]
 pub struct SemanticsEvent {
     /// The type of event.
@@ -175,10 +171,6 @@ impl SemanticsEvent {
 // ============================================================================
 
 /// The type of semantics event.
-///
-/// # Flutter Equivalence
-///
-/// Corresponds to different subclasses of `SemanticsEvent` in Flutter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SemanticsEventType {
     /// A tap gesture was recognized.

@@ -109,9 +109,9 @@ fn sdfToAlpha(dist: f32) -> f32 {
 ///
 /// It is separate from the instance's own `aliased` lane on purpose — that one
 /// is the *paint's* `anti_alias`, and a shape drawn with a hard edge inside a
-/// smooth clip must still get the smooth clip. Flutter treats the two as
-/// independent for the same reason: `Clip` belongs to the clip layer,
-/// `isAntiAlias` to the paint.
+/// smooth clip must still get the smooth clip. The two are
+/// independent for the same reason: the clip mode belongs to the clip layer,
+/// the anti-alias flag to the paint.
 ///
 /// The whole evaluation lives here rather than being pasted into each fragment
 /// shader for the same reason the distance functions do: every clip-capable

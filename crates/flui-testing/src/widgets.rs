@@ -349,7 +349,7 @@ pub fn lay_out(root: impl View, constraints: BoxConstraints) -> LaidOut {
 /// RenderViews own a node directly. Composition roots (`StatelessView` /
 /// `StatefulView`, e.g. [`AnimatedContainer`](flui_widgets::AnimatedContainer)) do
 /// not: walk to the first render-owning descendant so `LaidOut::root` still
-/// names the caller's outermost laid-out box (Flutter's "size of the
+/// names the caller's outermost laid-out box (the "size of the
 /// widget"). [`Container`](flui_widgets::Container) is a `RenderView` and takes the
 /// direct path.
 fn resolve_logical_render_root(host: &WidgetHost, logical_root_type: TypeId) -> RenderId {
@@ -436,6 +436,30 @@ impl LaidOut {
     /// Run an owner-side action inside the realm's owner scope.
     pub fn enter_owner_scope<R>(&self, callback: impl FnOnce() -> R) -> R {
         self.host.realm().enter(|_| callback())
+    }
+
+    /// Deliver an accessibility action to the node it addresses, as a platform
+    /// adapter would, inside this tree's realm — where a widget's owner-local
+    /// action handlers run.
+    ///
+    /// Synchronous: the handler has run when this returns. The production
+    /// path queues the request and runs it at the next pump's drain; this
+    /// resolves and invokes it immediately, at the same kind of frame
+    /// boundary.
+    ///
+    /// # Errors
+    ///
+    /// See [`InvokeActionError`](crate::InvokeActionError): a malformed node
+    /// identity, a platform action FLUI does not route, or a request the
+    /// semantics tree does not resolve.
+    pub fn invoke_semantics_action(
+        &self,
+        request: crate::ActionRequest,
+    ) -> Result<(), crate::InvokeActionError> {
+        let pipeline = self.pipeline_owner();
+        self.host
+            .realm()
+            .enter(|_| crate::a11y::invoke_semantics_action(&pipeline, request))
     }
 
     /// The owner-local post-frame handle the realm installed on this tree's
@@ -830,8 +854,7 @@ impl LaidOut {
     }
 
     /// Whether the [`RenderOpacity`] node at `id` suppresses painting its
-    /// child entirely — Flutter's `RenderOpacity.paint`: `if (_alpha == 0)
-    /// return;`. Panics if `id` is not a `RenderOpacity`.
+    /// child entirely (a fully transparent opacity paints nothing). Panics if `id` is not a `RenderOpacity`.
     pub fn opacity_skip_paint(&self, id: RenderId) -> bool {
         use flui_rendering::traits::RenderBox;
 
@@ -934,9 +957,8 @@ impl LaidOut {
     /// Whether the render node at `id` reported visual overflow at its last
     /// layout — `RenderFittedBox::has_visual_overflow` or
     /// `RenderConstraintsTransformBox::has_visual_overflow` (both a plain
-    /// queryable flag, in place of Flutter's debug-mode overflow-indicator
-    /// paint that neither render object implements — see each type's own module
-    /// doc). Panics if `id` is neither.
+    /// queryable flag; neither render object paints a debug overflow
+    /// indicator — see each type's own module doc). Panics if `id` is neither.
     pub fn has_visual_overflow(&self, id: RenderId) -> bool {
         self.pipeline_owner.with_mut(|owner| {
             let node = owner
@@ -999,11 +1021,8 @@ impl LaidOut {
     }
 
     /// One intrinsic dimension of a box-protocol render node at `extent`,
-    /// queried through the live pipeline — Flutter's
-    /// `RenderBox.getMinIntrinsicWidth`/`getMaxIntrinsicWidth`/
-    /// `getMinIntrinsicHeight`/`getMaxIntrinsicHeight` family, all four of
-    /// which route through the same `computeMinIntrinsicWidth`-style
-    /// dispatch on the Dart side.
+    /// queried through the live pipeline — min/max width/height, all four of
+    /// which route through the same dispatch.
     ///
     /// # Panics
     ///
@@ -1137,12 +1156,10 @@ impl LaidOut {
     /// last layout — the distance from its top edge down to the line the
     /// glyphs sit on.
     ///
-    /// Flutter's oracle derives this from the `FlutterTest` font's fixed 0.75
-    /// ascent ratio and hard-codes the result. FLUI shapes with whatever real
-    /// font the machine resolves, so the number is not portable; tests that
-    /// need it read the measured value here and assert the layout *relation*
-    /// the oracle asserts (row height = tallest ascent + deepest descent,
-    /// child shift = tallest ascent − own ascent) rather than the oracle's
+    /// FLUI shapes with whatever real font the machine resolves, so the number
+    /// is not portable; tests that need it read the measured value here and
+    /// assert the layout *relation* (row height = tallest ascent + deepest
+    /// descent, child shift = tallest ascent − own ascent) rather than
     /// font-specific constants.
     ///
     /// Panics if `id` is not a laid-out `RenderParagraph`.
@@ -1163,8 +1180,7 @@ impl LaidOut {
         })
     }
 
-    /// Replace the root widget with `new_root` and drive a frame — Flutter's
-    /// `tester.pumpWidget(w2)` called a second time (root-swap).
+    /// Replace the root widget with `new_root` and drive a frame (a root swap).
     ///
     /// The harness root rebuilds with `new_root` under the same constraint
     /// wrappers, so a root of the same type updates in place (its state
@@ -1244,10 +1260,9 @@ impl LaidOut {
     /// The composited layer tree from the most recent pumped frame.
     ///
     /// The structural form of [`layer_kinds`](Self::layer_kinds), for the cases
-    /// that need parent/child shape rather than a flat list — upstream's
-    /// `fitted_box_test.dart` walks a single-child *container chain* and asserts
-    /// `firstChild == lastChild` at every step, which a flattened list cannot
-    /// express. It is the scene the realm last submitted to its sink, retained
+    /// that need parent/child shape rather than a flat list — e.g. walking a
+    /// single-child *container chain* and asserting `first_child == last_child`
+    /// at every step, which a flattened list cannot express. It is the scene the realm last submitted to its sink, retained
     /// across frames that painted nothing.
     pub fn layer_tree(&self) -> Option<&flui_rendering::layer::LayerTree> {
         self.host.realm().sink().layer_tree()
@@ -1264,8 +1279,7 @@ impl LaidOut {
     }
 
     /// The kinds of every layer the most recent pumped frame composited, in
-    /// depth-first pre-order from the root — FLUI's answer to Flutter's
-    /// `tester.layers`.
+    /// depth-first pre-order from the root.
     ///
     /// Layers exist only as a product of **paint**, so this answers questions
     /// the render tree structurally cannot: whether a widget forced a clip, a
@@ -1275,7 +1289,7 @@ impl LaidOut {
     /// matrix collapses to identity has a render object and no
     /// `TransformLayer`.
     ///
-    /// The mount is itself a frame, as Flutter's `pumpWidget` is, so the
+    /// The mount is itself a frame, so the
     /// layers are there from [`lay_out`] on; a later frame over a tree with
     /// nothing dirty composites nothing new, and the last scene stands.
     pub fn layer_kinds(&self) -> Vec<&'static str> {
@@ -1507,9 +1521,8 @@ impl LaidOut {
     /// As [`dispatch_pointer_move`](Self::dispatch_pointer_move), but advances
     /// the virtual clock by a caller-chosen `dt` instead of the default
     /// sample interval — for a test that builds velocity and needs to say
-    /// explicitly how far apart its samples are (mirrors Flutter's
-    /// `WidgetController.timedDrag`/`flingFrom`, which stamp each synthetic
-    /// move with an explicit `timeStamp` rather than the wall clock).
+    /// explicitly how far apart its samples are (each synthetic move is
+    /// stamped with an explicit timestamp rather than the wall clock).
     pub fn dispatch_pointer_move_after(&self, x: f64, y: f64, dt: Duration) {
         self.advance_pointer_clock(dt);
         let event =
@@ -1610,7 +1623,7 @@ impl LaidOut {
 /// Drives a lazy sliver adaptor's (`SliverList`/`SliverGrid`) request ->
 /// service -> re-layout settle sequence to completion: two ticks.
 ///
-/// Lazy children build **after** paint, not during layout as Flutter does
+/// Lazy children build **after** paint, not during layout
 /// (`SliverChildBuilderDelegate`'s "First-frame settling" doc,
 /// `crates/flui-widgets/src/scroll/sliver_list.rs`) — so a triggering change
 /// (initial mount, a root swap via [`LaidOut::pump_widget`], or a

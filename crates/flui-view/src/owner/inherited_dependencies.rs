@@ -22,9 +22,9 @@ pub(crate) struct InheritedDependencies {
     active: HashMap<ElementId, ProviderIds>,
     /// Deactivated elements that had dependencies.
     ///
-    /// Flutter removes provider registrations during `deactivate`, then calls
-    /// `didChangeDependencies` if that element is reactivated. This sparse
-    /// marker preserves the lifecycle fact without retaining stale provider
+    /// Provider registrations are removed during `deactivate`, and
+    /// `did_change_dependencies` fires if that element is reactivated. This
+    /// sparse marker preserves the lifecycle fact without retaining stale provider
     /// ids or adding state to every element node.
     inactive_with_dependencies: HashSet<ElementId>,
 }

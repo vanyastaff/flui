@@ -58,9 +58,9 @@ pub fn tap_sets_the_controller_index_through_real_pointer_dispatch() {
 }
 
 /// A `DefaultTabController` whose `length` shrinks while its last tab is
-/// selected re-creates the controller with a clamped index (Flutter parity:
-/// `_DefaultTabControllerState.didUpdateWidget`; see `tab_controller.rs`'s
-/// own `recreate_for_length_change_clamps_an_out_of_range_index_to_the_last_tab`
+/// selected re-creates the controller with a clamped index (see
+/// `tab_controller.rs`'s own
+/// `recreate_for_length_change_clamps_an_out_of_range_index_to_the_last_tab`
 /// for the pure-function proof) — end to end, through a real root swap:
 /// mounting does not panic, and a subsequent tap still dispatches correctly
 /// through the re-created controller.

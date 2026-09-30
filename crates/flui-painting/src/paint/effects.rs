@@ -44,7 +44,7 @@ pub enum BlurMode {
 /// Similar to CSS filter functions and SVG color matrix filters.
 /// These are high-level color adjustments (brightness, contrast, etc.)
 /// as opposed to [`crate::paint::ColorFilter`] which is a low-level
-/// Skia/Flutter-style color filter with blend modes.
+/// Skia-style color filter with blend modes.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ColorAdjustment {
@@ -672,8 +672,7 @@ impl ImageFilter {
     }
 
     /// Whether the filter turns a transparent black pixel into a visible
-    /// one, so a layer it filters changes pixels its children never inked
-    /// (Flutter's `DlImageFilter::modifies_transparent_black`).
+    /// one, so a layer it filters changes pixels its children never inked.
     ///
     /// A colour matrix or adjustment answers as its matrix does
     /// ([`ColorMatrix::modifies_transparent_black`]); a composition does when

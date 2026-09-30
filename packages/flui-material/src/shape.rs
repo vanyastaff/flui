@@ -1,12 +1,10 @@
 //! [`MaterialShape`] — the minimal shape vocabulary [`crate::material::Material`]
 //! clips and paints its surface to.
 //!
-//! # Flutter parity
+//! # Scope
 //!
-//! Flutter's `Material.shape` takes an arbitrary `ShapeBorder` — `material.dart`
-//! (oracle tag `3.44.0`) resolves the default (M3's pill-shaped
-//! `StadiumBorder`, or a rectangle, per `MaterialType`) into a path at paint
-//! time via `ShapeBorder.getOuterPath`. FLUI ships the two concrete shapes
+//! A surface's shape is resolved (M3's pill-shaped stadium, or a rectangle)
+//! into a path at paint time. FLUI ships the two concrete shapes
 //! `Material` actually needs today — a plain/rounded rectangle and the M3
 //! stadium (pill) shape — rather than the full `ShapeBorder` hierarchy
 //! (`RoundedRectangleBorder`, `CircleBorder`, `ContinuousRectangleBorder`,
@@ -17,9 +15,9 @@
 //!
 //! # Named deferral: `OutlinedBorder` sides
 //!
-//! The oracle's `ShapeBorder`/`OutlinedBorder` hierarchy also carries a
-//! `BorderSide` (stroke color/width/style) that `getInnerPath`/`paint`
-//! render on top of the fill. [`MaterialShape`] is fill-and-clip-only — no
+//! A full `ShapeBorder`/`OutlinedBorder` hierarchy also carries a
+//! `BorderSide` (stroke color/width/style) rendered on top of the fill.
+//! [`MaterialShape`] is fill-and-clip-only — no
 //! side is drawn. `Material.shape`'s border painting is deferred to when a
 //! component actually needs an outlined surface (M3's `OutlinedButton`,
 //! not yet built).
@@ -34,9 +32,7 @@ use flui_sdk::{
 /// Both variants resolve to an [`RRect`] via [`to_rrect`](Self::to_rrect) —
 /// [`Stadium`](Self::Stadium)'s corner radius is `shortest_side / 2.0`, which
 /// depends on the laid-out [`Size`] and so can only be computed at paint
-/// time (Flutter parity: `StadiumBorder.getOuterPath`,
-/// `Radius.circular(rect.shortestSide / 2.0)`, `painting/stadium_border.dart`
-/// oracle tag `3.44.0`). [`RoundedRect`](Self::RoundedRect)'s radius is a
+/// time (`Radius.circular(rect.shortestSide / 2.0)`). [`RoundedRect`](Self::RoundedRect)'s radius is a
 /// fixed value independent of size, but is resolved through the same
 /// size-dependent path so [`crate::material::Material`] can register one
 /// owner-lane path clipper regardless of which variant it holds — see
@@ -44,21 +40,16 @@ use flui_sdk::{
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum MaterialShape {
-    /// A rectangle with per-corner radii. Flutter's
-    /// `RoundedRectangleBorder`/`Material`'s `borderRadius` path — a zero
-    /// [`BorderRadius`] is a plain sharp-cornered rectangle (Flutter's
-    /// `MaterialType.canvas` default).
+    /// A rectangle with per-corner radii — a zero [`BorderRadius`] is a
+    /// plain sharp-cornered rectangle (the canvas-material default).
     RoundedRect(BorderRadius),
     /// A pill shape: both ends fully rounded to a semicircle whose radius is
-    /// half the shortest side. Flutter's `StadiumBorder` — the M3 default
-    /// shape for filled buttons.
+    /// half the shortest side — the M3 default shape for filled buttons.
     Stadium,
 }
 
 impl MaterialShape {
-    /// A plain, sharp-cornered rectangle — [`MaterialShape`]'s default
-    /// (Flutter's `MaterialType.canvas`, the oracle default when no `shape`,
-    /// `borderRadius`, or non-canvas `type` is given).
+    /// A plain, sharp-cornered rectangle — [`MaterialShape`]'s default.
     #[must_use]
     pub fn rectangle() -> Self {
         Self::RoundedRect(BorderRadius::all(Radius::ZERO))
@@ -96,7 +87,7 @@ impl MaterialShape {
 }
 
 impl Default for MaterialShape {
-    /// [`Self::rectangle`] — Flutter's `MaterialType.canvas` default.
+    /// [`Self::rectangle`].
     fn default() -> Self {
         Self::rectangle()
     }

@@ -1,18 +1,13 @@
 //! `RenderMetaData` — single-child proxy that attaches an opaque
 //! piece of user data to the hit-test entry it produces.
 //!
-//! # Flutter equivalence
+//! Downstream gesture detectors fish the data back out of the
+//! `HitTestEntry`.
 //!
-//! Behavior-faithful port of Flutter's
-//! [`RenderMetaData`](https://api.flutter.dev/flutter/rendering/RenderMetaData-class.html)
-//! (`packages/flutter/lib/src/rendering/proxy_box.dart`). Flutter
-//! stores `metaData: Object?`; downstream gesture detectors fish it
-//! back out of `HitTestEntry`.
-//!
-//! # Rust-native improvements
+//! # Design
 //!
 //! * Metadata is stored as `Option<Arc<dyn Any + Send + Sync + 'static>>`
-//!   — type-erased like Flutter, but `Arc`-shared so the render
+//!   — type-erased, but `Arc`-shared so the render
 //!   object stays `Clone` without putting executable callbacks in render
 //!   storage.
 //! * Hit-test policy is the typed [`HitTestBehavior`] enum

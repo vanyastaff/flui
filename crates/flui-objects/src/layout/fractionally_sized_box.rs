@@ -1,30 +1,28 @@
 //! `RenderFractionallySizedBox` — sizes the child as a fraction of the
 //! parent's available space, and aligns it inside the parent.
 //!
-//! # Flutter equivalence
+//! # Scope
 //!
-//! Port of Flutter's
-//! [`RenderFractionallySizedOverflowBox`](https://api.flutter.dev/flutter/rendering/RenderFractionallySizedOverflowBox-class.html)
-//! restricted to the non-overflow case (matching the `FractionallySizedBox`
-//! widget contract), behavior-faithful except for one deliberate divergence on
-//! unbounded constraints (see *Rust-native improvements*).
+//! Covers the non-overflow case (matching the `FractionallySizedBox` widget
+//! contract), with one deliberate rule on unbounded constraints (see
+//! *Design*).
 //!
-//! # Rust-native improvements
+//! # Design
 //!
 //! * Fraction factors are typed via [`FractionFactor`], a newtype that
-//!   forbids negative values at the API boundary (Flutter accepts any
-//!   `double` and silently zeroes-out negatives at runtime).
+//!   forbids negative values at the API boundary rather than silently
+//!   zeroing them out at runtime.
 //! * `width_factor`/`height_factor` are `Option<FractionFactor>` —
-//!   matching Flutter's `null = inherit parent constraint` semantics
-//!   without overloading `0.0` as a magic sentinel.
+//!   `None` means "inherit the parent constraint" without overloading `0.0`
+//!   as a magic sentinel.
 //! * Alignment uses [`flui_painting::Alignment`] (`x`,`y` ∈ `[-1, 1]`) rather
 //!   than the painting-side parallel definition, keeping the alignment
 //!   math consistent with `RenderTransform` / `RenderCenter`.
-//! * **Divergence (intentional):** on a factored axis whose incoming `max` is
+//! * **Unbounded axes:** on a factored axis whose incoming `max` is
 //!   unbounded, the child is sized as `parent_min × factor` rather than
-//!   Flutter's `parent_max × factor` (which would be a degenerate infinite
-//!   child). See the per-axis note on `child_constraints` and the
-//!   infinite-`max` factor tests.
+//!   `parent_max × factor` (which would be a degenerate infinite child).
+//!   See the per-axis note on `child_constraints` and the infinite-`max`
+//!   factor tests.
 
 use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Size};
@@ -216,8 +214,8 @@ impl RenderFractionallySizedBox {
 
     /// Computes the tight constraints to pass to the child for these
     /// incoming constraints.
-    /// Width factor as a bare multiplier, `1.0` when unset (Flutter's
-    /// `_widthFactor ?? 1.0` in the intrinsic formulas).
+    /// Width factor as a bare multiplier, `1.0` when unset (as used in the
+    /// intrinsic formulas).
     fn width_factor_or_one(&self) -> f64 {
         self.width_factor.map_or(1.0, FractionFactor::value)
     }
@@ -347,8 +345,7 @@ impl RenderBox for RenderFractionallySizedBox {
         }
     }
 
-    // Flutter parity: shifted_box.dart `RenderFractionallySizedOverflowBox`
-    // — the child is probed at the OTHER axis's scaled extent (infinity
+    // The child is probed at the OTHER axis's scaled extent (infinity
     // absorption keeps an unbounded extent unbounded), and the answer is
     // divided back by this axis's factor.
 

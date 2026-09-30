@@ -1,19 +1,17 @@
 //! [`OutlinedButton`] — an M3 button with an outlined border and no fill.
 //!
-//! # Flutter parity
+//! # Defaults and scope
 //!
-//! `material/outlined_button.dart`'s `OutlinedButton` (oracle tag `3.44.0`).
-//! `default_style` ports `_OutlinedButtonDefaultsM3` (`outlined_button.dart`
-//! `:460-575`) field-by-field, narrowed to the V1 slots [`ButtonStyle`]
-//! carries — see that module's docs. Ported: `text_style`, `background_color`
-//! (constant transparent), `foreground_color`, `overlay_color`, `elevation`
-//! (constant `0.0`), `padding`, `minimum_size`, `maximum_size`, `side`,
-//! `shape`. The oracle table sets no default `fixed_size` (its own "No
-//! default fixedSize" comment), so that field is left unset here.
+//! `default_style` holds the M3 outlined-button defaults, narrowed to the V1
+//! slots [`ButtonStyle`] carries — see that module's docs. Populated:
+//! `text_style`, `background_color` (constant transparent), `foreground_color`,
+//! `overlay_color`, `elevation` (constant `0.0`), `padding`, `minimum_size`,
+//! `maximum_size`, `side`, `shape`. The M3 defaults set no `fixed_size`, so
+//! that field is left unset here.
 //!
 //! `side` is this button's whole reason to exist, and it resolves correctly
 //! (disabled `onSurface@12%`, focused `primary`, else `outline`, all at the
-//! oracle's default `1.0` stroke width) — but see
+//! default `1.0` stroke width) — but see
 //! [`ButtonStyle::side`](crate::ButtonStyle::side)'s doc comment: `Material`
 //! has no border-side painting path yet, so this V1 `OutlinedButton` does
 //! not yet draw a visible outline. A pre-existing deferral (`shape.rs`), not

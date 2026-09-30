@@ -25,5 +25,7 @@ pub use crate::error::RegisterFaceError;
 pub use key::{FaceKey, ParleyGlyphKey, SubpixelBin, Synthesis, VariationId};
 pub use registry::{FontBytes, FontRegistry};
 pub(crate) use shape::SpanBrush;
+#[cfg(test)]
+pub(crate) use shape::holds_exactly;
 pub use shape::{ParagraphLayout, ParagraphSpec};
 pub use swash::SwashRasterizer;

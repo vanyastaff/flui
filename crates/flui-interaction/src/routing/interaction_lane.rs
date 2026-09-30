@@ -189,6 +189,30 @@ impl fmt::Debug for ShaderMaskTarget {
     }
 }
 
+/// Opaque data-plane identity for an owner-local payload of any type.
+///
+/// The untyped counterpart of the targets above, for a widget whose
+/// executable state is richer than one callback shape: a drag target's slot,
+/// a semantics node's action table. The payload stays in the owner lane as
+/// an `Rc<dyn Any>`; render objects and hit-test metadata carry only this
+/// ticket, and the owner resolves it back — synchronously, on the owner
+/// thread, inside the active lane — when it dispatches to the payload.
+///
+/// Like every other target it is a copyable `Send + Sync` identity bound to
+/// its originating lane, with no raw constructor, accessor, default, or
+/// serialization contract.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LocalPayloadTarget {
+    lane_id: LaneId,
+    target_id: TargetId,
+}
+
+impl fmt::Debug for LocalPayloadTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LocalPayloadTarget").finish_non_exhaustive()
+    }
+}
+
 /// Opaque key for an owner-local resolved route.
 ///
 /// It carries its minting lane identity, so realm recreation cannot make an old
@@ -280,11 +304,9 @@ fn try_mint_lane_id(source: &AtomicU64) -> Result<LaneId, InteractionDispatchErr
 /// One pointer event as delivered to one hit-test target, in both of the
 /// coordinate spaces a handler can legitimately need.
 ///
-/// Flutter's `PointerEvent` carries `position` (the root's space) and
-/// `localPosition` (the receiving target's space) on the same object, so a
-/// widget always has both. FLUI's pointer events are [`ui_events`] types with
-/// room for exactly one position, and dispatch rewrites that one into the
-/// receiving entry's space, so the pair is carried side by side instead.
+/// FLUI's pointer events are [`ui_events`] types with room for exactly one
+/// position, and dispatch rewrites that one into the receiving entry's space,
+/// so the root-space and target-space events are carried side by side.
 ///
 /// Both fields borrow values the dispatch already owns, so building one costs
 /// no clone and no matrix work beyond the localisation dispatch performs
@@ -527,9 +549,8 @@ impl ResolvedHitRoute {
     ///
     /// The first panic payload is captured and returned so the dispatch owner
     /// can perform mandatory cleanup (arena close/sweep, route release) before
-    /// resuming it; later panics are traced without replacing the first,
-    /// matching Flutter's per-entry exception isolation in
-    /// `GestureBinding.dispatchEvent`.
+    /// resuming it; later panics are traced without replacing the first, so
+    /// one target's panic never starves the entries after it.
     fn invoke(&self, event: &PointerEvent) -> Option<RoutePanic> {
         let mut first_panic = None;
         for entry in &self.entries {
@@ -725,6 +746,7 @@ struct LocalLaneInner {
     pan_zoom_targets: RefCell<HashMap<TargetId, Rc<PanZoomCell>>>,
     path_clip_targets: RefCell<HashMap<TargetId, Rc<PathClipCell>>>,
     shader_mask_targets: RefCell<HashMap<TargetId, Rc<ShaderMaskCell>>>,
+    payload_targets: RefCell<HashMap<TargetId, Rc<dyn Any>>>,
     routes: RefCell<HashMap<RouteId, Rc<ResolvedHitRoute>>>,
 }
 
@@ -766,6 +788,7 @@ impl InteractionLane {
             pan_zoom_targets: RefCell::new(HashMap::new()),
             path_clip_targets: RefCell::new(HashMap::new()),
             shader_mask_targets: RefCell::new(HashMap::new()),
+            payload_targets: RefCell::new(HashMap::new()),
             routes: RefCell::new(HashMap::new()),
         });
         LOCAL_LANES.with(|registry| {
@@ -880,6 +903,7 @@ impl Drop for InteractionLane {
         let pan_zoom_targets = self.inner.pan_zoom_targets.take();
         let path_clip_targets = self.inner.path_clip_targets.take();
         let shader_mask_targets = self.inner.shader_mask_targets.take();
+        let payload_targets = self.inner.payload_targets.take();
 
         let mut routes: Vec<_> = routes.into_iter().collect();
         routes.sort_unstable_by_key(|(id, _)| *id);
@@ -908,6 +932,10 @@ impl Drop for InteractionLane {
         let mut shader_mask_targets: Vec<_> = shader_mask_targets.into_iter().collect();
         shader_mask_targets.sort_unstable_by_key(|(id, _)| *id);
         drop(shader_mask_targets);
+
+        let mut payload_targets: Vec<_> = payload_targets.into_iter().collect();
+        payload_targets.sort_unstable_by_key(|(id, _)| *id);
+        drop(payload_targets);
     }
 }
 
@@ -1077,9 +1105,8 @@ impl InteractionDispatchHandle {
     /// registered (see `MouseRegion::sync_mouse_region_target`,
     /// `crates/flui-widgets/src/interaction/mouse_region.rs`, which calls
     /// [`replace_mouse_region`](Self::replace_mouse_region) with the empty
-    /// set instead of this method — Flutter's `RenderMouseRegion` has no
-    /// "unregister while attached" concept either, its callback fields are
-    /// just nulled in place). What remains for this method is releasing a
+    /// set instead of this method: a mounted region's callbacks are replaced
+    /// in place, never unregistered). What remains for this method is releasing a
     /// target this lane no longer wants to resolve fresh annotations
     /// against. Because it only drops the *lane's* map entry, an existing
     /// strong `Rc` clone held elsewhere — e.g.
@@ -1115,10 +1142,8 @@ impl InteractionDispatchHandle {
     /// device's next postframe recheck
     /// ([`MouseTracker::update_all_devices`](super::MouseTracker::update_all_devices))
     /// would still invoke the unmounted region's `on_exit` — the spurious
-    /// exit Flutter's `validForMouseTracker` flag
-    /// (`rendering/proxy_box.dart` `RenderMouseRegion.detach`) exists to
-    /// prevent. Overwriting the shared cell's contents here is FLUI's
-    /// equivalent invalidation: every remaining holder of the `Rc`,
+    /// exit a detached region must never produce. Overwriting the shared
+    /// cell's contents here is the invalidation: every remaining holder of the `Rc`,
     /// including that cached clone, observes empty callbacks on its next
     /// `snapshot()`.
     pub fn detach_mouse_region(
@@ -1460,6 +1485,95 @@ impl InteractionDispatchHandle {
         Ok(shader)
     }
 
+    /// Register an owner-local payload in the active owner lane.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InteractionDispatchError`] when no lane is active on this
+    /// thread, or when the lane's private identity source is exhausted.
+    pub fn register_local_payload(
+        &self,
+        payload: Rc<dyn Any>,
+    ) -> Result<LocalPayloadTarget, InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        let target_id = TargetId(lane.target_ids.try_next()?);
+        lane.payload_targets.borrow_mut().insert(target_id, payload);
+        Ok(LocalPayloadTarget {
+            lane_id: self.ticket.lane_id,
+            target_id,
+        })
+    }
+
+    /// Replace a payload without changing its data-plane identity.
+    ///
+    /// The previous payload is dropped after the lane's borrow is released,
+    /// so its destructor may re-enter this handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InteractionDispatchError`] when no lane is active, when the
+    /// target belongs to a different lane, or when it is already gone.
+    pub fn replace_local_payload(
+        &self,
+        target: LocalPayloadTarget,
+        payload: Rc<dyn Any>,
+    ) -> Result<(), InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_lane(target.lane_id)?;
+        let previous = {
+            let mut payloads = lane.payload_targets.borrow_mut();
+            let slot = payloads
+                .get_mut(&target.target_id)
+                .ok_or(InteractionDispatchError::TargetGone)?;
+            std::mem::replace(slot, payload)
+        };
+        drop(previous);
+        Ok(())
+    }
+
+    /// Remove a payload from future resolution.
+    ///
+    /// A caller that resolved the payload earlier keeps its own strong
+    /// reference until it drops it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InteractionDispatchError`] when no lane is active, when the
+    /// target belongs to a different lane, or when it is already gone.
+    pub fn unregister_local_payload(
+        &self,
+        target: LocalPayloadTarget,
+    ) -> Result<(), InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_lane(target.lane_id)?;
+        let removed = lane
+            .payload_targets
+            .borrow_mut()
+            .remove(&target.target_id)
+            .ok_or(InteractionDispatchError::TargetGone)?;
+        drop(removed);
+        Ok(())
+    }
+
+    /// Resolve a payload to a strong owner-local reference.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InteractionDispatchError`] when no lane is active, when the
+    /// target belongs to a different lane, or when it is already gone.
+    pub fn resolve_local_payload(
+        &self,
+        target: LocalPayloadTarget,
+    ) -> Result<Rc<dyn Any>, InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_lane(target.lane_id)?;
+        lane.payload_targets
+            .borrow()
+            .get(&target.target_id)
+            .cloned()
+            .ok_or(InteractionDispatchError::TargetGone)
+    }
+
     /// Resolve the target-bearing entries of a hit path into one ordered
     /// owner-local route, capturing each entry's local transform.
     ///
@@ -1558,11 +1672,8 @@ impl InteractionDispatchHandle {
     /// Resolve and invoke a hit path's pointer targets and mouse-hover
     /// regions together, leaf-first, in a single per-entry pass — so a
     /// `Listener` and a nested `MouseRegion` on the same path fire in
-    /// hit-test order relative to EACH OTHER, matching Flutter's single
-    /// per-entry `entry.target.handleEvent` loop (`gestures/binding.dart:496`,
-    /// `HitTestResult.path` ordered leaf-first per
-    /// `gestures/hit_test.dart:131-132`) instead of two independent full
-    /// passes over the path.
+    /// hit-test order relative to EACH OTHER (one per-entry loop over the
+    /// leaf-first path) instead of two independent full passes over it.
     ///
     /// Used only by the coalesced ephemeral hover-move dispatch
     /// (`GestureBinding::flush_pending_moves_kernel`'s `PendingMove::Hover`
@@ -1618,9 +1729,8 @@ impl InteractionDispatchHandle {
         }
 
         // Mirrors `MouseTracker::dispatch_hover`'s own gate: only a
-        // buttons-empty `Move` carries hover semantics (Flutter's
-        // `PointerHoverEvent` vs `PointerMoveEvent` split at the event-class
-        // level). Gating resolution (not just invocation) means a
+        // buttons-empty `Move` carries hover semantics (a contact drag is
+        // not a hover). Gating resolution (not just invocation) means a
         // non-hover-shaped event never resolves mouse-region callbacks at
         // all.
         let hover_qualifies = matches!(
@@ -1766,6 +1876,26 @@ pub fn resolve_shader_mask_target(
     active_dispatch_handle()?.invoke_shader_mask(target, bounds)
 }
 
+/// Resolve an owner-local payload through the currently active owner lane.
+///
+/// The dispatcher that found `target` in render data or hit-test metadata
+/// calls this on the owner thread and downcasts the result to the type the
+/// registering widget stored. Holding the returned `Rc` keeps the payload
+/// alive past a later unregistration, the same as a resolved pointer route.
+///
+/// # Errors
+///
+/// [`InactiveRealm`](InteractionDispatchError::InactiveRealm) outside any lane
+/// scope, [`WrongRealm`](InteractionDispatchError::WrongRealm) for a ticket another
+/// lane minted (a dropped lane's included), and
+/// [`TargetGone`](InteractionDispatchError::TargetGone) once it was
+/// unregistered.
+pub fn resolve_local_payload(
+    target: LocalPayloadTarget,
+) -> Result<Rc<dyn Any>, InteractionDispatchError> {
+    active_dispatch_handle()?.resolve_local_payload(target)
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
@@ -1861,6 +1991,135 @@ mod tests {
                 .expect("panic payload is the original &str");
             assert_eq!(message, "first target panic");
         });
+    }
+
+    // Owner-local payload tickets: identity, replacement, removal, realm
+    // checks and lane-drop release, each alone.
+    #[test]
+    fn local_payload_matrix() {
+        let cases: &[(&str, fn())] = &[
+            (
+                "resolve_returns_the_registered_payload",
+                resolve_returns_the_registered_payload,
+            ),
+            (
+                "replace_keeps_the_ticket_and_swaps_the_payload",
+                replace_keeps_the_ticket_and_swaps_the_payload,
+            ),
+            (
+                "an_unregistered_payload_is_target_gone",
+                an_unregistered_payload_is_target_gone,
+            ),
+            (
+                "resolving_outside_any_lane_is_inactive_realm",
+                resolving_outside_any_lane_is_inactive_realm,
+            ),
+            (
+                "another_lanes_ticket_is_wrong_realm",
+                another_lanes_ticket_is_wrong_realm,
+            ),
+            (
+                "dropping_the_lane_releases_its_payloads",
+                dropping_the_lane_releases_its_payloads,
+            ),
+        ];
+        for &(name, case) in cases {
+            if let Err(payload) = std::panic::catch_unwind(case) {
+                eprintln!("matrix case `{name}` failed");
+                std::panic::resume_unwind(payload);
+            }
+        }
+    }
+
+    fn resolve_returns_the_registered_payload() {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        lane.enter(|| {
+            let payload: Rc<dyn Any> = Rc::new(7_u32);
+            let target = handle
+                .register_local_payload(Rc::clone(&payload))
+                .expect("register");
+            let resolved = resolve_local_payload(target).expect("resolve");
+            assert!(Rc::ptr_eq(&resolved, &payload));
+        });
+    }
+
+    fn replace_keeps_the_ticket_and_swaps_the_payload() {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        lane.enter(|| {
+            let target = handle
+                .register_local_payload(Rc::new(1_u32))
+                .expect("register");
+            handle
+                .replace_local_payload(target, Rc::new(2_u32))
+                .expect("replace");
+            let resolved = resolve_local_payload(target).expect("resolve");
+            assert_eq!(resolved.downcast_ref::<u32>(), Some(&2));
+        });
+    }
+
+    fn an_unregistered_payload_is_target_gone() {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        lane.enter(|| {
+            let target = handle
+                .register_local_payload(Rc::new(()))
+                .expect("register");
+            handle.unregister_local_payload(target).expect("unregister");
+            assert_eq!(
+                resolve_local_payload(target).err(),
+                Some(InteractionDispatchError::TargetGone)
+            );
+            assert_eq!(
+                handle.replace_local_payload(target, Rc::new(())).err(),
+                Some(InteractionDispatchError::TargetGone)
+            );
+        });
+    }
+
+    fn resolving_outside_any_lane_is_inactive_realm() {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let target = lane.enter(|| {
+            handle
+                .register_local_payload(Rc::new(()))
+                .expect("register")
+        });
+        assert_eq!(
+            resolve_local_payload(target).err(),
+            Some(InteractionDispatchError::InactiveRealm)
+        );
+    }
+
+    fn another_lanes_ticket_is_wrong_realm() {
+        let first = InteractionLane::try_new().expect("first lane");
+        let second = InteractionLane::try_new().expect("second lane");
+        let first_handle = first.dispatch_handle();
+        let target = first.enter(|| {
+            first_handle
+                .register_local_payload(Rc::new(()))
+                .expect("register")
+        });
+        second.enter(|| {
+            assert_eq!(
+                resolve_local_payload(target).err(),
+                Some(InteractionDispatchError::WrongRealm)
+            );
+        });
+    }
+
+    fn dropping_the_lane_releases_its_payloads() {
+        let lane = InteractionLane::try_new().expect("lane");
+        let handle = lane.dispatch_handle();
+        let payload: Rc<dyn Any> = Rc::new(3_u32);
+        let weak = Rc::downgrade(&payload);
+        lane.enter(|| {
+            let _target = handle.register_local_payload(payload).expect("register");
+        });
+        assert!(weak.upgrade().is_some(), "the lane holds the payload");
+        drop(lane);
+        assert!(weak.upgrade().is_none(), "the lane released it on drop");
     }
 
     struct ReentrantReplacementDropProbe {

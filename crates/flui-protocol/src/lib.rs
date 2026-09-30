@@ -3,7 +3,7 @@
 //! Two vocabularies live here, and they are deliberately separate:
 //!
 //! - [`semantics`]: FLUI's own [`SemanticsRole`] and [`SemanticsAction`],
-//!   modelled on Flutter's `dart:ui` enums. flui-semantics builds its tree
+//!   the accessibility vocabulary. flui-semantics builds its tree
 //!   from them and re-exports them.
 //! - [`wire`]: the agent-protocol names of ADR-0080 — [`Role`],
 //!   [`ActionName`] and [`Checked`] — which an agent reads in every reply and

@@ -3,11 +3,8 @@
 //! focus/enabled/error plumbing and a tap target spanning the whole
 //! decorated area.
 //!
-//! Flutter parity: `material/text_field.dart` `TextField` (oracle tag
-//! `3.44.0`). The oracle has no widgets-layer `TextField` to extend —
-//! `_TextFieldState.build` composes a raw `widgets.EditableText` and
-//! `InputDecorator` inline (`text_field.dart:1684-1782`), which is exactly
-//! this substrate's own shape: no
+//! The field composes a raw [`EditableText`] and [`InputDecorator`] inline,
+//! with no
 //! [`flui_sdk::widgets::RawTextField`](flui_sdk::widgets::text::text_field::RawTextField)
 //! in the middle — that type is this crate's theme-free sibling for a tree
 //! with no `Theme` ancestor, named `RawTextField` (not `TextField`)
@@ -77,27 +74,19 @@
 //! # Caret color and text style
 //!
 //! Caret color: `colors.error` when [`InputDecoration::error_text`] is set,
-//! `colors.primary` otherwise — Flutter parity: the oracle's
-//! `cursorColor = _hasError ? _errorColor : (widget.cursorColor ??
-//! selectionStyle.cursorColor ?? theme.colorScheme.primary)`
-//! (`text_field.dart:1637-1641`, the desktop/Android branch; every platform
-//! branch shares the same `_hasError ? _errorColor : ...` shape). No
-//! `cursorColor`/`cursorErrorColor` override slot yet — named deferral.
+//! `colors.primary` otherwise (an error always wins over any caret color
+//! override). No `cursorColor`/`cursorErrorColor` override slot yet — named
+//! deferral.
 //!
-//! Text style: `theme.text_theme.body_large`, unconditionally — Flutter
-//! parity: `_m3InputStyle` (`text_field.dart:1893`) is `Theme.of(context)
-//! .textTheme.bodyLarge!`, the M3 branch of `_getInputStyleForState`'s base
-//! style (`text_field.dart:1547-1549`). The oracle's per-state resolution
-//! table (`_m3StateInputStyle`) and the `TextField.style` override are both
-//! named deferrals — this substrate always renders `bodyLarge` verbatim.
+//! Text style: `theme.text_theme.body_large`, unconditionally — the M3 input
+//! style. The per-state resolution table and the `TextField.style` override
+//! are both named deferrals — this substrate always renders `bodyLarge` verbatim.
 //!
 //! # Tap-to-focus over the whole decorated area
 //!
 //! A [`GestureDetector`] wraps the composed [`InputDecorator`] (not just the
-//! inner [`EditableText`]) — Flutter parity: the oracle's outer
-//! `MouseRegion` → `TextFieldTapRegion` → `Semantics(onTap: ...
-//! _requestKeyboard())` composition (`text_field.dart:1797,1811-1820`) makes
-//! the *entire* decorated box (fill, underline, label/hint rows) a valid tap
+//! inner [`EditableText`]), so the
+//! *entire* decorated box (fill, underline, label/hint rows) is a valid tap
 //! target, not just the text-content rect. `GestureDetector`'s default
 //! [`flui_sdk::widgets::HitTestBehavior::DeferToChild`] is sufficient here
 //! because `InputDecorator`'s own inner `MouseRegion` defaults to
@@ -192,11 +181,10 @@ impl TextField {
     /// so the real characters never reach the render object or anything below
     /// it.
     ///
-    /// Narrowed against the oracle, deliberately: Flutter's `TextField` also
-    /// exposes `obscuringCharacter`, and asserts `!obscureText || maxLines == 1`
-    /// — this field is single-line by construction, so the assertion has
-    /// nothing to check, and the character override is available one layer
-    /// down on `EditableText` until a caller needs it here.
+    /// Deliberately narrow: there is no `obscuringCharacter` override, and no
+    /// `!obscureText || maxLines == 1` invariant to check — this field is
+    /// single-line by construction. The character override is available one
+    /// layer down on `EditableText` until a caller needs it here.
     #[must_use]
     pub fn obscure_text(mut self, obscure: bool) -> Self {
         self.obscure_text = obscure;
@@ -265,7 +253,7 @@ impl TextField {
     }
 
     /// Call `callback` with the dispatch's `&mut EventCx<'_>` and the new
-    /// text after each user edit — Flutter's `TextField.onChanged`. Forwards
+    /// text after each user edit. Forwards
     /// to [`EditableText::on_changed`]; a caller's own controller edits do
     /// not call it.
     #[must_use]

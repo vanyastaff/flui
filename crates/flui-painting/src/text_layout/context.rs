@@ -12,13 +12,19 @@
 //! each context re-reads the data on its next query after a bump, one atomic
 //! load otherwise. A context is owner-thread state used through `&mut`.
 //!
-//! Without `bundled-fonts` a new collection holds no face, and text shapes
-//! with none until one is registered.
+//! The app's collection is fed from the host
+//! ([`FontCollection::with_host_faces`]): the faces the process font system
+//! discovered, its generic families and its fallback order, so the Parley
+//! path measures text in the face cosmic-text paints it with (ADR-0092 §7).
+//! [`FontCollection::new`] holds the bundled faces alone; without
+//! `bundled-fonts` it starts empty, and text shapes with no face until one is
+//! registered.
 
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
+use super::layout::{HostFaces, SharedFontSystem};
 use crate::error::RegisterFontError;
 use crate::parley_text::SpanBrush;
 
@@ -34,7 +40,8 @@ struct FontCollectionInner {
     /// Bumped once per registration that added a face; a measurement
     /// cached against an older value is stale.
     generation: AtomicU64,
-    /// fontique's collection in shared mode, with no host scan.
+    /// fontique's collection in shared mode. It never scans the host itself:
+    /// host faces come from the process font system's discovery.
     collection: parley::fontique::Collection,
     /// One source cache shared by every context built from the collection.
     source_cache: parley::fontique::SourceCache,
@@ -50,7 +57,27 @@ impl FontCollection {
     /// with no face until one is registered.
     #[must_use]
     pub fn new() -> Self {
-        Self(Arc::new(FontCollectionInner::new()))
+        Self(Arc::new(FontCollectionInner::build(None)))
+    }
+
+    /// A collection fed from the host: [`FontCollection::new`]'s faces, then
+    /// every face `fonts` holds whose families the collection does not
+    /// already hold, with the generic families bound to the families `fonts`
+    /// binds them to (system-ui to sans-serif's) and the fallback order
+    /// `fonts` was built with.
+    ///
+    /// Text measured on it resolves the family the process font system
+    /// paints with, and falls back in the same order past it (ADR-0092 §7).
+    /// The app's composition root builds one per app, before the first
+    /// frame; it reads the font files again, outside `fonts`' lock, so it
+    /// costs a second scan of the host's fonts. A file that cannot be read is
+    /// skipped.
+    #[must_use]
+    pub fn with_host_faces(fonts: &SharedFontSystem) -> Self {
+        fonts.count_host_feed();
+        Self(Arc::new(FontCollectionInner::build(Some(
+            &fonts.host_faces(),
+        ))))
     }
 
     /// Whether `a` and `b` are the same collection.
@@ -83,6 +110,12 @@ impl FontCollection {
     #[cfg(any(test, feature = "testing"))]
     pub(crate) fn holders(&self) -> usize {
         Arc::strong_count(&self.0)
+    }
+
+    /// Whether the collection holds a family named `family`.
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn holds(&self, family: &str) -> bool {
+        self.0.collection.clone().family_id(family).is_some()
     }
 
     /// Adds every face in `font_bytes` to the collection.
@@ -144,19 +177,22 @@ impl fmt::Debug for FontsKey {
 }
 
 impl FontCollectionInner {
-    fn new() -> Self {
+    /// Builds the collection unshared, so no step takes fontique's shared
+    /// mutex, and shares it last: it starts at generation zero whatever it
+    /// holds.
+    fn build(host: Option<&HostFaces>) -> Self {
         use parley::fontique::{Collection, CollectionOptions, SourceCache};
 
-        #[cfg_attr(
-            not(feature = "bundled-fonts"),
-            expect(unused_mut, reason = "only the bundled faces are registered here")
-        )]
         let mut collection = Collection::new(CollectionOptions {
-            shared: true,
+            shared: false,
             system_fonts: false,
         });
         #[cfg(feature = "bundled-fonts")]
         bind_bundled_faces(&mut collection);
+        if let Some(host) = host {
+            feed_host_faces(&mut collection, host);
+        }
+        collection.make_shared();
         Self {
             generation: AtomicU64::new(0),
             collection,
@@ -165,10 +201,69 @@ impl FontCollectionInner {
     }
 }
 
-/// Registers the embedded faces and binds every generic family to Roboto.
+/// Adds `host`'s faces, generics and fallback order to `collection`.
+///
+/// A source any of whose families the collection already holds is left out,
+/// so a host copy never joins a bundled family. Generics bind only to a
+/// family the collection then holds; one that is absent keeps its binding.
+#[tracing::instrument(skip_all, fields(sources = host.sources.len()))]
+fn feed_host_faces(collection: &mut parley::fontique::Collection, host: &HostFaces) {
+    use std::collections::HashSet;
+
+    use parley::fontique::{Blob, GenericFamily};
+
+    use super::fallback_chain::install_into;
+    use super::layout::HostData;
+
+    let held: HashSet<String> = collection.family_names().map(str::to_lowercase).collect();
+    let mut paths = Vec::new();
+    for source in &host.sources {
+        if source
+            .families
+            .iter()
+            .any(|family| held.contains(&family.to_lowercase()))
+        {
+            continue;
+        }
+        match &source.data {
+            HostData::Path(path) => paths.push(path.as_path()),
+            HostData::Blob(data) => {
+                collection.register_fonts(Blob::new(Arc::clone(data)), None);
+            }
+        }
+    }
+    let files = paths.len();
+    collection.load_fonts_from_paths(paths);
+
+    for (generic, name) in [
+        (GenericFamily::SansSerif, &host.sans_serif),
+        (GenericFamily::SystemUi, &host.sans_serif),
+        (GenericFamily::Serif, &host.serif),
+        (GenericFamily::Monospace, &host.monospace),
+        (GenericFamily::Cursive, &host.cursive),
+        (GenericFamily::Fantasy, &host.fantasy),
+    ] {
+        if let Some(id) = collection.family_id(name) {
+            collection.set_generic_families(generic, std::iter::once(id));
+        }
+    }
+    install_into(&host.chain, collection);
+    // The span above records how long the feed took; no clock is read here,
+    // since `std::time::Instant` panics on wasm32-unknown-unknown.
+    tracing::debug!(files, "fed the host's faces into the font collection");
+}
+
+/// Registers the embedded faces, binds every generic family to Roboto and
+/// makes Roboto every script's fallback.
+///
+/// fontique has no last resort past a style's families and its script's
+/// fallbacks, so without the fallback a glyph the style's family lacks (a
+/// Cyrillic letter in an icon font) would measure as `.notdef`, where
+/// cosmic-text paints it in Roboto. A host feed replaces the fallbacks with
+/// the host's order (`install_into`).
 #[cfg(feature = "bundled-fonts")]
 fn bind_bundled_faces(collection: &mut parley::fontique::Collection) {
-    use parley::fontique::{Blob, GenericFamily};
+    use parley::fontique::{Blob, FallbackKey, GenericFamily};
 
     use crate::fonts::{CUPERTINO_ICONS, MATERIAL_ICONS_REGULAR, ROBOTO_REGULAR};
 
@@ -189,6 +284,9 @@ fn bind_bundled_faces(collection: &mut parley::fontique::Collection) {
         GenericFamily::SystemUi,
     ] {
         collection.set_generic_families(generic, roboto.iter().copied());
+    }
+    for script in super::fallback_chain::fontique_scripts() {
+        collection.set_fallbacks(FallbackKey::new(script, None), roboto.iter().copied());
     }
 }
 
@@ -271,5 +369,89 @@ impl fmt::Debug for TextContext {
         f.debug_struct("TextContext")
             .field("fonts", &self.fonts)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use parley::fontique::{FallbackKey, GenericFamily, Script};
+
+    use super::super::fallback_chain::FallbackChain;
+    use super::super::layout::{HostData, HostFaces, HostSource};
+    use super::FontCollectionInner;
+
+    const ROBOTO: &[u8] = include_bytes!("../../assets/fonts/Roboto-Regular.ttf");
+
+    struct CommonIsRoboto;
+
+    impl cosmic_text::Fallback for CommonIsRoboto {
+        fn common_fallback(&self) -> &[&'static str] {
+            &["Roboto"]
+        }
+
+        fn forbidden_fallback(&self) -> &[&'static str] {
+            &[]
+        }
+
+        fn script_fallback(&self, _: unicode_script::Script, _: &str) -> &[&'static str] {
+            &[]
+        }
+    }
+
+    /// A font file that is gone by the time the collection reads it is
+    /// skipped, and the feed still completes: the other sources are added,
+    /// the generics bound and the fallback order installed.
+    #[test]
+    fn a_missing_path_is_skipped_and_the_feed_completes() {
+        let host = HostFaces {
+            sources: vec![
+                HostSource {
+                    data: HostData::Path("no/such/dir/ghost-face.ttf".into()),
+                    families: vec!["Ghost Family".to_owned()],
+                },
+                HostSource {
+                    data: HostData::Blob(Arc::new(ROBOTO)),
+                    families: vec!["Roboto".to_owned()],
+                },
+            ],
+            sans_serif: "Roboto".to_owned(),
+            serif: "Ghost Family".to_owned(),
+            monospace: "Roboto".to_owned(),
+            cursive: "Roboto".to_owned(),
+            fantasy: "Roboto".to_owned(),
+            chain: Arc::new(FallbackChain::new("en-US".to_owned(), CommonIsRoboto)),
+        };
+        let mut collection = FontCollectionInner::build(Some(&host)).collection;
+
+        let roboto = collection
+            .family_id("Roboto")
+            .expect("the readable source is fed");
+        assert!(collection.family_id("Ghost Family").is_none());
+        for generic in [
+            GenericFamily::SansSerif,
+            GenericFamily::SystemUi,
+            GenericFamily::Monospace,
+        ] {
+            assert_eq!(
+                collection.generic_families(generic).collect::<Vec<_>>(),
+                [roboto],
+                "{generic:?} binds to the host's family"
+            );
+        }
+        assert_eq!(
+            collection
+                .fallback_families(FallbackKey::new(Script::from_str_unchecked("Latn"), None))
+                .collect::<Vec<_>>(),
+            [roboto],
+            "the fallback order is installed"
+        );
+        assert_eq!(
+            collection
+                .generic_families(GenericFamily::Emoji)
+                .collect::<Vec<_>>(),
+            [roboto]
+        );
     }
 }

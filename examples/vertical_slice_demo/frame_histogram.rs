@@ -113,9 +113,9 @@ impl<V: View + Clone + 'static> HistogramProbe<V> {
 
         // `with_detached_ticker`, not `without_ticker`: this controller is
         // driven by the ambient `VsyncScope` through `tick_at`, but `repeat()`
-        // below is a real run and `is_animating()` is ticker-based (Flutter
-        // parity: `Ticker.isActive`), so a ticker-less controller could never
-        // report it and would log "the animation will not advance" while
+        // below is a real run and `is_animating()` is ticker-based (it
+        // reports whether a ticker is active), so a ticker-less controller
+        // could never report it and would log "the animation will not advance" while
         // demonstrably advancing. Same choice, for the same reason, as
         // `AnimatedSize`.
         let controller = AnimationController::with_detached_ticker(CONTROLLER_CYCLE);

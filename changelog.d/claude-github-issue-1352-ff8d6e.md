@@ -5,7 +5,7 @@
 - Paint, style and text values live in `flui-painting`: `flui::painting::{paint, styling, typography}`, plus `Alignment`, `BoxFit`, `BoxShape` and `TextBaseline`. Platform values (`Brightness`, `Locale`, `TargetPlatform`, `ImeEvent`, `HapticFeedback`) live in `flui-platform-api`, reachable as `flui::platform`; gesture details and `Velocity` in `flui-interaction`; `AxisDirection` and `TableCellVerticalAlignment` in `flui-rendering`; the flex, stack, wrap and table-column enums in `flui-objects`.
 - `Color::lerp` and `Tween<Color>` (so `ColorTween` and `AnimatedContainer`) interpolate premultiplied, so a fade to transparent keeps its hue instead of darkening; between opaque colours the result is unchanged.
 - `flui/serde` enables serialization in every crate that owns a value type, not only `flui-painting`.
-- `Wrap` run breaking and `SliverFixedExtentList` child indexing compare against Flutter's `1e-10` tolerance, so an overlap of a thousandth of a pixel counts.
+- `Wrap` run breaking and `SliverFixedExtentList` child indexing compare with a `1e-10` tolerance, so an overlap of a thousandth of a pixel counts.
 - `Path` is backed by kurbo: containment uses the exact winding number, bounds are tight, and rectangles, ovals and arcs are curves. `Path::commands()` returns an iterator of `MoveTo`, `LineTo`, `QuadraticTo`, `CubicTo` and `Close`.
 - A hard-edged rectangular clip keeps exactly the pixels whose centres are inside it, and the damage region, the scissor in front of a rounded clip, and backdrop and blend copy regions cover every pixel they touch.
 - Geometry value types are no longer `Eq` or `Hash`; `Color` still is.

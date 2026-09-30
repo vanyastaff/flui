@@ -1,13 +1,13 @@
-//! Per-node layout calculation cache (Flutter's `_LayoutCacheStorage`).
+//! Per-node layout calculation cache.
 //!
-//! Mirrors `box.dart`'s four lazy maps: intrinsic dimensions keyed by
+//! Four lazy maps: intrinsic dimensions keyed by
 //! `(dimension, extent)`, dry-layout sizes keyed by the incoming
 //! constraints, and one dry-baseline map per [`TextBaseline`] variant.
 //! The storage lives on the framework side (`RenderState`), not on the
 //! render object: objects stay pure `compute_*` functions and the
 //! pipeline owns memoization and invalidation.
 //!
-//! Invalidation contract (`box.dart:2840`): `mark_needs_layout` clears
+//! Invalidation contract: `mark_needs_layout` clears
 //! this storage; a non-empty clear means SOME ancestor's layout read
 //! this node's intrinsics/baseline, so the dirty walk must escalate to
 //! the parent even across a relayout boundary — the boundary only
@@ -22,7 +22,7 @@ use crate::traits::TextBaseline;
 /// Which intrinsic dimension a query asks for.
 ///
 /// `MinWidth`/`MaxWidth` take a height extent; `MinHeight`/`MaxHeight`
-/// take a width extent (Flutter `_IntrinsicDimension`).
+/// take a width extent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntrinsicDimension {
     /// Minimum width for a given height.
@@ -66,7 +66,7 @@ impl From<BoxConstraints> for ConstraintsKey {
     }
 }
 
-/// Box-protocol layout cache: Flutter's four maps, lazily allocated
+/// Box-protocol layout cache: four maps, lazily allocated
 /// behind ONE boxed allocation — most nodes are never probed for
 /// intrinsics, and `RenderState` carries a per-node size budget, so a
 /// cold cache costs a single null pointer rather than four map headers.
@@ -174,7 +174,7 @@ pub trait ProtocolLayoutCache: std::fmt::Debug + Default + Send + Sync + 'static
     /// Drops every cached entry. Returns `true` if anything WAS cached —
     /// the signal that an ancestor's layout consumed this node's
     /// intrinsics and the invalidation must escalate past relayout
-    /// boundaries (Flutter `RenderBox.markNeedsLayout`, box.dart:2840).
+    /// boundaries.
     fn clear(&mut self) -> bool;
 }
 
@@ -188,8 +188,8 @@ impl ProtocolLayoutCache for BoxLayoutCache {
             || !maps.alphabetic_baselines.is_empty()
             || !maps.ideographic_baselines.is_empty();
         if had_cache {
-            // Keep the allocation (Flutter clears the maps, not the
-            // fields): the same parent will re-probe the same extents
+            // Keep the allocation (clear the maps, not the boxed
+            // storage): the same parent will re-probe the same extents
             // next frame.
             maps.intrinsic_dimensions.clear();
             maps.dry_layout_sizes.clear();

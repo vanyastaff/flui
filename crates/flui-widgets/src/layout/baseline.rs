@@ -9,7 +9,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// Positions its child so the child's `baseline_type` baseline sits `baseline`
 /// device pixels below this box's top edge.
 ///
-/// Flutter parity: `widgets/basic.dart` `Baseline` over `RenderBaseline`.
+/// Backed by `RenderBaseline`.
 #[derive(Clone, Debug)]
 pub struct Baseline {
     distance: f64,

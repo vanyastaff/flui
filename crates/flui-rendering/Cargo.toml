@@ -12,7 +12,7 @@ categories = ["gui", "rendering"]
 
 # Dev-only files a `cargo package --list` sweep found leaking into the
 # published archive (internal architecture docs, criterion benches, etc.):
-exclude = ["/ARCHITECTURE.md", "/benches/", "/docs/", "/flutter-rendering-hierarchy.md"]
+exclude = ["/ARCHITECTURE.md", "/benches/", "/docs/"]
 repository.workspace = true
 # Benches are declared explicitly below; disable auto-discovery so the shared
 # `benches/helpers.rs` module is not itself compiled as a standalone bench target.

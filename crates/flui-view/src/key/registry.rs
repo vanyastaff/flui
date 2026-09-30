@@ -4,12 +4,10 @@
 //!
 //! # Why this shape
 //!
-//! Flutter stores `_globalKeyRegistry` directly on `Element._owner`
-//! (`framework.dart:3148`) — a `Map<GlobalKey, Element>` carried inside
-//! the active `BuildOwner`. Element lifecycle paths reach the map via
-//! the element's mutable backreference to its owner. Rust can't take a
-//! mutable backreference of that shape (the borrow-checker forbids
-//! mutable aliasing), so flui introduced [`ElementOwner`](crate::ElementOwner)
+//! The global-key registry lives in the active `BuildOwner`. Element lifecycle
+//! paths cannot reach it through a mutable backreference from the element to
+//! its owner (the borrow-checker forbids that mutable aliasing), so FLUI
+//! introduced [`ElementOwner`](crate::ElementOwner)
 //! as the split-borrow handle used DURING `mount`/`unmount`. That handle
 //! is fine for register/unregister at the lifecycle boundary, but it
 //! does NOT solve the OTHER side of the registry: external callers

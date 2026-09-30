@@ -361,7 +361,7 @@ impl TextPainter {
     // Returns 0 when no text is set.
 
     /// The width the text wants with no line wrapping — its single-line
-    /// width (Flutter `RenderParagraph.computeMaxIntrinsicWidth`).
+    /// width.
     ///
     /// Skips `max_lines` truncation so the probe measures shaped content
     /// (#1085). When an ellipsis is configured with `max_lines`, the result
@@ -385,7 +385,7 @@ impl TextPainter {
 
     /// The narrowest width the text can take without overflowing — the
     /// width of its widest unbreakable run, found by wrapping at every
-    /// opportunity (Flutter `RenderParagraph.computeMinIntrinsicWidth`).
+    /// opportunity.
     ///
     /// Skips `max_lines` truncation so a zero-width wrap probe cannot
     /// erase visible text (#1085). When an ellipsis is configured with
@@ -409,8 +409,7 @@ impl TextPainter {
     }
 
     /// The height the text takes when laid out at `width` — both the min
-    /// and max intrinsic height for a paragraph (Flutter
-    /// `RenderParagraph._computeIntrinsicHeight`).
+    /// and max intrinsic height for a paragraph.
     #[must_use]
     pub fn intrinsic_height(&self, text_cx: &mut TextContext, width: f64) -> f64 {
         text_cx.note_lent();
@@ -422,8 +421,7 @@ impl TextPainter {
     }
 
     /// The size the text would take under the given width constraints,
-    /// without committing to `layout_cache` — Flutter's
-    /// `TextPainter`-backed dry layout. Returns `Size::ZERO` when no text
+    /// without committing to `layout_cache` (a dry layout). Returns `Size::ZERO` when no text
     /// is set.
     #[must_use]
     pub fn dry_size(&self, text_cx: &mut TextContext, min_width: f64, max_width: f64) -> Size<f64> {

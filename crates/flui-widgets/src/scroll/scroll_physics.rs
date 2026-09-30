@@ -1,17 +1,14 @@
-//! Scroll-physics strategies — `ScrollPhysics` trait plus the two standard
-//! implementations Flutter ships: `ClampingScrollPhysics` (Android-style hard
-//! clamp) and `BouncingScrollPhysics` (iOS-style overscroll + spring-back).
+//! Scroll-physics strategies — the `ScrollPhysics` trait plus two standard
+//! implementations: `ClampingScrollPhysics` (Android-style hard clamp) and
+//! `BouncingScrollPhysics` (iOS-style overscroll + spring-back).
 //!
-//! # Flutter parity
+//! # Contract
 //!
-//! Mirrors `widgets/scroll_physics.dart` `ScrollPhysics`:
-//! - `apply_boundary_conditions` ↔ `applyBoundaryConditions` (returns the
-//!   _allowed_ position rather than the rejected overshoot, which is the
-//!   simpler contract for FLUI's purely-eager callbacks; both take a
-//!   `ScrollMetrics`, mirroring `widgets/scroll_metrics.dart`'s `ScrollMetrics`
-//!   mixin).
-//! - `create_ballistic_simulation` ↔ `createBallisticSimulation` (returns
-//!   `Option<Box<dyn Simulation>>` for the fling/spring-back animation).
+//! - `apply_boundary_conditions` returns the _allowed_ position rather than the
+//!   rejected overshoot, which is the simpler contract for purely-eager
+//!   callbacks; it takes a `ScrollMetrics` snapshot.
+//! - `create_ballistic_simulation` returns `Option<Box<dyn Simulation>>` for the
+//!   fling/spring-back animation.
 //!
 //! # Deferred (v1)
 //!
@@ -39,14 +36,9 @@ use flui_rendering::view::ScrollPosition;
 /// physics implementation always sees a self-consistent set of fields even
 /// if the underlying [`ScrollPosition`] is mutated concurrently afterward.
 ///
-/// # Flutter parity
-///
-/// Mirrors the `ScrollMetrics` mixin (`widgets/scroll_metrics.dart`, tag
-/// `3.44.0`): FLUI exposes it as a plain `Copy` struct rather than a
-/// mixin/live interface, since `ScrollPhysics` never needs to observe further
-/// extent changes mid-call — the Dart docs for `applyBoundaryConditions`/
-/// `createBallisticSimulation` say as much ("the given `ScrollMetrics` are
-/// only valid during this method call").
+/// It is a plain `Copy` struct rather than a live interface, since
+/// `ScrollPhysics` never needs to observe further extent changes mid-call: the
+/// given metrics are only valid during the physics method call.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ScrollMetrics {
@@ -91,11 +83,8 @@ impl ScrollMetrics {
     /// guarded to be callable at any time (including before real content
     /// dimensions exist).
     ///
-    /// # Flutter parity
-    ///
-    /// Mirrors `PageMetrics.page` (`widgets/page_view.dart`, tag `3.44.0`):
-    /// `max(0.0, clamp(pixels, min, max)) / max(1.0, viewport_dimension *
-    /// viewport_fraction)`. This is the *public*, defensively-guarded
+    /// Computed as `max(0.0, clamp(pixels, min, max)) / max(1.0,
+    /// viewport_dimension * viewport_fraction)`. This is the *public*, defensively-guarded
     /// formula — distinct from the internal recompute
     /// `ScrollPosition::apply_viewport_dimension` drives — used by both
     /// `PageController::page` and `PageScrollPhysics` (`page_view.rs`) so the
@@ -120,10 +109,7 @@ impl ScrollMetrics {
     /// The inverse of [`page`](Self::page): the pixel offset for `page` at
     /// `viewport_fraction`.
     ///
-    /// # Flutter parity
-    ///
-    /// Mirrors `_PagePosition.getPixelsFromPage` (`widgets/page_view.dart`,
-    /// tag `3.44.0`): `page * viewport_dimension * viewport_fraction`. Unlike
+    /// Computed as `page * viewport_dimension * viewport_fraction`. Unlike
     /// [`page`](Self::page), this has no `max(1.0, ...)` guard — it is a
     /// forward computation, not a division, so there is no zero-denominator
     /// hazard to guard against.
@@ -158,12 +144,9 @@ impl From<&ScrollPosition> for ScrollMetrics {
 /// Implement this trait to provide custom boundary clamping and ballistic
 /// (fling / spring-back) behaviour for a [`Scrollable`](super::Scrollable).
 ///
-/// # Flutter parity
-///
-/// Corresponds to `ScrollPhysics` in `widgets/scroll_physics.dart`. The FLUI
-/// contract is slightly different: `apply_boundary_conditions` returns the
-/// _allowed position_ (not the rejected overshoot), which is ergonomically
-/// simpler for a callback-driven update model.
+/// `apply_boundary_conditions` returns the _allowed position_ (not the rejected
+/// overshoot), which is ergonomically simpler for a callback-driven update
+/// model.
 pub trait ScrollPhysics: Send + Sync + std::fmt::Debug {
     /// Return the position the scroller should move to given a `proposed_pixels`
     /// offset in the context of `metrics`.
@@ -173,12 +156,7 @@ pub trait ScrollPhysics: Send + Sync + std::fmt::Debug {
     /// physics a position past the edge is partially allowed with increasing
     /// resistance.
     ///
-    /// # Flutter parity
-    ///
-    /// Corresponds to `applyBoundaryConditions(ScrollMetrics position, double
-    /// value)`: the sign difference is that Flutter returns the _rejected_
-    /// overshoot; FLUI returns the _accepted_ position. The net visual result
-    /// is identical.
+    /// The return value is the _accepted_ position, not the rejected overshoot.
     fn apply_boundary_conditions(&self, metrics: &ScrollMetrics, proposed_pixels: f64) -> f64;
 
     /// Create a `Simulation` that coasts the viewport to rest after the user
@@ -192,11 +170,6 @@ pub trait ScrollPhysics: Send + Sync + std::fmt::Debug {
     /// `ScrollController.pixels()`. The caller is responsible for advancing
     /// (ticking) the simulation; see the `DEFERRED` note in
     /// `Scrollable::on_pan_end`.
-    ///
-    /// # Flutter parity
-    ///
-    /// Corresponds to `createBallisticSimulation(ScrollMetrics position,
-    /// double velocity)`.
     fn create_ballistic_simulation(
         &self,
         metrics: &ScrollMetrics,
@@ -217,20 +190,16 @@ pub type SharedScrollPhysics = Arc<dyn ScrollPhysics>;
 ///
 /// Scroll cannot go past the content edge; the boundary snaps instantly and
 /// post-fling coast is bounded so the final position lands within range.
-///
-/// # Flutter parity
-///
-/// Mirrors `ClampingScrollPhysics` from `widgets/scroll_physics.dart`.
 #[derive(Debug, Clone, Copy)]
 pub struct ClampingScrollPhysics {
     /// Below this absolute velocity (logical px / s) no fling is started.
     ///
-    /// Flutter default is ~50 px/s; 0 px/s disables the threshold (always
+    /// Default is ~50 px/s; 0 px/s disables the threshold (always
     /// fling). Kept as a field rather than a constant so callers can tune it
     /// without a full custom implementation.
     pub min_fling_velocity_px_per_sec: f64,
     /// Friction drag coefficient for the fling deceleration. Must be in `(0,
-    /// 1)`. Flutter uses a value corresponding to approximately `0.135` in
+    /// 1)`. The default is approximately `0.135` in
     /// `BoundedFrictionSimulation`.
     pub fling_drag_coefficient: f64,
 }
@@ -295,25 +264,18 @@ impl ScrollPhysics for ClampingScrollPhysics {
 /// resistance, then springs back to the boundary on release.
 ///
 /// During a drag, positions past `[min, max]` are allowed but dampened by the
-/// `overscroll_spring_coefficient` (Flutter uses 0.52). On release, a
+/// `overscroll_spring_coefficient` (default 0.52). On release, a
 /// `ScrollSpringSimulation` returns the position to the nearest valid edge.
-///
-/// # Flutter parity
-///
-/// Mirrors `BouncingScrollPhysics` from `widgets/scroll_physics.dart`.
 #[derive(Debug, Clone, Copy)]
 pub struct BouncingScrollPhysics {
-    /// Resistance applied when dragging past the edge. Flutter hard-codes
-    /// 0.52 in `applyPhysicsToUserOffset`. Range `(0, 1)`: smaller = stiffer.
+    /// Resistance applied when dragging past the edge, default 0.52.
+    /// Range `(0, 1)`: smaller = stiffer.
     pub overscroll_spring_coefficient: f64,
-    /// Spring configuration used for the snap-back animation.
-    ///
-    /// Flutter's `ScrollSpringSimulation` uses
-    /// `SpringDescription.withDampingRatio(1.0, 500.0, 0.75)` (the "bouncy"
-    /// preset). The FLUI default mirrors this.
+    /// Spring configuration used for the snap-back animation. The default is
+    /// `SpringDescription::with_damping_ratio(1.0, 500.0, 0.75)` (the "bouncy"
+    /// preset).
     pub spring: SpringDescription,
-    /// Below this absolute velocity (px/s) no fling is started. Flutter's
-    /// bouncing physics also skips a fling for low velocities.
+    /// Below this absolute velocity (px/s) no fling is started.
     pub min_fling_velocity_px_per_sec: f64,
     /// Friction drag coefficient for in-bounds fling deceleration.
     pub fling_drag_coefficient: f64,

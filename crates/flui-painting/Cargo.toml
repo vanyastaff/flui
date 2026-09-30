@@ -110,6 +110,14 @@ path = "tests/text_context.rs"
 name = "parley_metrics_oracle"
 path = "tests/parley_metrics_oracle.rs"
 
+# Parley measurement against cosmic-text paint on the host's own faces, over a
+# collection fed from the process font system (ADR-0092 §7). Its own binary:
+# it builds the process font system from the host's fonts.
+[[test]]
+name = "host_faces_oracle"
+path = "tests/host_faces_oracle.rs"
+required-features = ["parley"]
+
 # cargo-shear reports the trybuild compile-fail inputs as unlinked: the
 # `compile_fail` test hands them to rustc by glob, no module declares them.
 [package.metadata.cargo-shear]

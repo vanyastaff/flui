@@ -1,17 +1,59 @@
 //! Semantics proxy render objects.
 //!
-//! These mirror Flutter's `RenderSemanticsAnnotations`,
-//! `RenderMergeSemantics`, and `RenderExcludeSemantics` from
-//! `rendering/proxy_box.dart`. Layout, paint, and hit-testing are transparent
-//! single-child proxy behavior; only the semantics hooks differ.
+//! Semantics annotations, merging and exclusion. Layout, paint, and
+//! hit-testing are transparent single-child proxy behavior; only the
+//! semantics hooks differ.
 
 use flui_foundation::Single;
 
 use flui_rendering::{
+    hit_testing::LocalPayloadTarget,
     parent_data::BoxParentData,
-    semantics::{SemanticsConfiguration, SemanticsProperties},
+    semantics::{SemanticsActionHandler, SemanticsConfiguration, SemanticsProperties},
     traits::RenderBox,
 };
+
+/// Where a semantics node's owner-local action handlers live.
+///
+/// A widget whose action handlers are owner-local closures keeps them in the
+/// owner's interaction lane under `target`, and advertises each action in the
+/// configuration through one `Send + Sync` `handler` that resolves `target`
+/// when the action is invoked. The render object stores the pair so a rebuild
+/// can replace the lane payload under the same ticket and reuse the same
+/// `handler`, which keeps the configuration comparing equal.
+#[derive(Clone)]
+pub struct SemanticsActionRoute {
+    target: LocalPayloadTarget,
+    handler: SemanticsActionHandler,
+}
+
+impl SemanticsActionRoute {
+    /// Pair a lane ticket with the handler that resolves it.
+    #[must_use]
+    pub fn new(target: LocalPayloadTarget, handler: SemanticsActionHandler) -> Self {
+        Self { target, handler }
+    }
+
+    /// The owner-lane ticket of the action table.
+    #[must_use]
+    pub fn target(&self) -> LocalPayloadTarget {
+        self.target
+    }
+
+    /// The handler every routed action is advertised with.
+    #[must_use]
+    pub fn handler(&self) -> &SemanticsActionHandler {
+        &self.handler
+    }
+}
+
+impl std::fmt::Debug for SemanticsActionRoute {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SemanticsActionRoute")
+            .field("target", &self.target)
+            .finish_non_exhaustive()
+    }
+}
 
 /// A render object that annotates its subtree with semantics properties.
 #[derive(Debug, Clone)]
@@ -22,6 +64,7 @@ pub struct RenderSemanticsAnnotations {
     exclude_semantics: bool,
     block_user_actions: bool,
     has_child: bool,
+    action_route: Option<SemanticsActionRoute>,
 }
 
 impl RenderSemanticsAnnotations {
@@ -40,7 +83,24 @@ impl RenderSemanticsAnnotations {
             exclude_semantics: false,
             block_user_actions: false,
             has_child: false,
+            action_route: None,
         }
+    }
+
+    /// The owner-lane route of this node's action handlers, if its widget
+    /// registered any. Data only: layout, paint, hit-testing and semantics
+    /// assembly never read it.
+    #[must_use]
+    pub fn action_route(&self) -> Option<&SemanticsActionRoute> {
+        self.action_route.as_ref()
+    }
+
+    /// Replace the owner-lane route, returning the previous one.
+    pub fn set_action_route(
+        &mut self,
+        route: Option<SemanticsActionRoute>,
+    ) -> Option<SemanticsActionRoute> {
+        std::mem::replace(&mut self.action_route, route)
     }
 
     /// Returns the semantic properties configuration.
@@ -241,9 +301,8 @@ impl RenderBox for RenderSemanticsAnnotations {
 /// A render object that annotates its child's semantics node with an index
 /// among its siblings.
 ///
-/// Flutter's `RenderIndexedSemantics` (`rendering/proxy_box.dart`). The index
-/// is the "12" a screen reader announces in "item 12 of 100", and is
-/// **zero-based** as the reference's is; the one-based conversion AccessKit's
+/// The index is the "12" a screen reader announces in "item 12 of 100", and is
+/// **zero-based**; the one-based conversion AccessKit's
 /// `position_in_set` wants happens once, at the platform boundary.
 #[derive(Debug, Clone)]
 pub struct RenderIndexedSemantics {
@@ -269,8 +328,7 @@ impl RenderIndexedSemantics {
 
     /// Sets the index, reporting whether semantics must be republished.
     ///
-    /// An unchanged index reports [`RenderUpdateImpact::NONE`](flui_rendering::RenderUpdateImpact::NONE) — Flutter's
-    /// setter returns early on the same comparison. Index churn is the norm on
+    /// An unchanged index reports [`RenderUpdateImpact::NONE`](flui_rendering::RenderUpdateImpact::NONE). Index churn is the norm on
     /// a scrolling list (every item's wrapper is rebuilt as the band moves),
     /// so a setter that always marked would republish the whole subtree's
     /// semantics on every frame of a scroll.

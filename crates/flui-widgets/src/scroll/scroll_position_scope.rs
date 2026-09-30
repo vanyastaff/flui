@@ -15,9 +15,8 @@ use flui_view::{BoxedView, InheritedView, impl_inherited_view};
 /// the gestures drive, without threading it through every intermediate
 /// widget by hand.
 ///
-/// Flutter parity: the discovery role of `Scrollable.of(context).position`,
-/// carried as inherited data because FLUI's `Scrollable` state is not
-/// otherwise reachable from a descendant.
+/// Carried as inherited data because `Scrollable`'s state is not otherwise
+/// reachable from a descendant.
 ///
 /// The handle itself is `Arc`-backed and stable for a given controller;
 /// [`update_should_notify`](InheritedView::update_should_notify) fires only

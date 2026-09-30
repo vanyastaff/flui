@@ -7,8 +7,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// During hit-testing, makes its child (and subtree) invisible to pointer
 /// events while still laying it out and painting it.
 ///
-/// Flutter parity: `widgets/basic.dart` `IgnorePointer` over
-/// `RenderIgnorePointer`. `ignoring` defaults to `true`.
+/// `ignoring` defaults to `true`.
 #[derive(Clone, Debug)]
 pub struct IgnorePointer {
     ignoring: bool,

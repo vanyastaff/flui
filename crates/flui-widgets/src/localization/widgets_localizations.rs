@@ -1,8 +1,5 @@
 //! [`WidgetsLocalizations`] and [`DefaultWidgetsLocalizations`] — localized
 //! resources for the lowest levels of the widget catalog.
-//!
-//! Flutter parity: `widgets/localizations.dart` `WidgetsLocalizations` /
-//! `DefaultWidgetsLocalizations` (oracle tag `3.44.0`).
 
 use std::any::Any;
 use std::fmt;
@@ -20,8 +17,6 @@ use flui_painting::typography::TextDirection;
 ///
 /// [`LocalizationsDelegate`]: crate::LocalizationsDelegate
 /// [`Localizations::of`]: crate::Localizations::of
-///
-/// Flutter parity: `WidgetsLocalizations` (`widgets/localizations.dart`).
 pub trait WidgetsLocalizations: Any + fmt::Debug + Send + Sync {
     /// The reading direction for text in this locale.
     fn text_direction(&self) -> TextDirection;
@@ -72,11 +67,9 @@ pub trait WidgetsLocalizations: Any + fmt::Debug + Send + Sync {
 /// US English localizations for the widgets library — the only locale FLUI
 /// ships resource strings for today.
 ///
-/// Flutter parity: `DefaultWidgetsLocalizations`
-/// (`widgets/localizations.dart`). Always [`TextDirection::Ltr`], matching
-/// the oracle (`DefaultWidgetsLocalizations` is unconditionally LTR; only
+/// Always [`TextDirection::Ltr`]; only
 /// [`GlobalWidgetsLocalizations`](super::GlobalWidgetsLocalizations)
-/// resolves RTL locales).
+/// resolves RTL locales.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DefaultWidgetsLocalizations;
 

@@ -1,14 +1,11 @@
 //! RenderTreeRootElement - marker trait for the render-tree root element.
 //!
-//! The element-side child-mutation seam Flutter's `RenderObjectElement`
-//! carries (`insertRenderObjectChild` / `moveRenderObjectChild` /
-//! `removeRenderObjectChild` / `attachRenderObject` /
-//! `detachRenderObject`) does not exist in FLUI: it was deleted as dead
-//! code after the child-adopts-itself audit mapped every Flutter consumer
-//! family to a live equivalent. The live model and the divergence
-//! accounting live in this crate's `ARCHITECTURE.md`
-//! (`## Mapping decisions` → "Flutter: parent-inserts-child → FLUI:
-//! child-adopts-itself"); the replacement guarantee for the live contract
+//! FLUI has no element-side child-mutation seam (insert / move / remove /
+//! attach / detach of a child render object on the parent element): each
+//! render element adopts itself into its parent's render object at mount.
+//! The live model lives in this crate's
+//! `ARCHITECTURE.md` (`## Mapping decisions` → "Render children adopt
+//! themselves at mount"); the replacement guarantee for the live contract
 //! is `RenderBehavior::on_mount`'s orphaned-mount gate plus its
 //! `orphaned_render_mount` test family
 //! (`crates/flui-view/tests/orphaned_render_mount.rs`).
@@ -19,18 +16,6 @@
 /// - Does NOT insert its render object into a parent render object
 /// - Instead, sets pipelineOwner.rootNode = renderObject
 /// - Creates its own PipelineOwner (or uses a provided one)
-///
-/// # Flutter Equivalent
-///
-/// ```dart
-/// abstract class RenderTreeRootElement extends RenderObjectElement {
-///   @override
-///   void attachRenderObject(Object? newSlot) {
-///     _slot = newSlot;
-///     // Does NOT call ancestor.insertRenderObjectChild
-///   }
-/// }
-/// ```
 ///
 /// Attach / detach to the pipeline owner is implemented inline in
 /// `mount()` / `unmount()` on the concrete root element (see

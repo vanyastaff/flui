@@ -19,10 +19,8 @@ use crate::image::provider::{DirectImageProvider, FileImage, ImageProvider, Memo
 ///
 /// Resolves the image source synchronously or asynchronously — see
 /// [`ImageProvider::cache_key`] — and displays it via a private `RawImage`
-/// leaf render view (Flutter's `Image`-wraps-`RawImage` split:
-/// `widgets/image.dart` `Image` is the stateful/stateless resolver, wrapping
-/// `rendering/image.dart` `RawImage`, the dumb leaf that just paints an
-/// already-decoded image).
+/// leaf render view (`Image` is the resolver; `RawImage` is the dumb leaf that
+/// just paints an already-decoded image).
 ///
 /// On resolution failure the widget renders an empty zero-sized box — no
 /// panic; a `WARN`-level trace event is emitted so the failure is visible.
@@ -68,9 +66,8 @@ use crate::image::provider::{DirectImageProvider, FileImage, ImageProvider, Memo
 /// # Gapless playback
 ///
 /// Changing the provider key clears the displayed frame to the placeholder in
-/// the same frame the change lands, matching Flutter's default
-/// (`gaplessPlayback: false`) — a stale image under a changed caption is the
-/// failure that default exists to prevent.
+/// the same frame the change lands — a stale image under a changed caption is
+/// the failure that default exists to prevent.
 /// [`gapless_playback(true)`](Image::gapless_playback) keeps the last decoded
 /// frame on screen until the new one is ready instead.
 ///
@@ -81,19 +78,16 @@ use crate::image::provider::{DirectImageProvider, FileImage, ImageProvider, Memo
 /// `BoxConstraints::tighten`; omitting one lets the image's aspect ratio
 /// determine the other axis.
 ///
-/// # Flutter parity
+/// # Scope
 ///
-/// Mirrors `widgets/image.dart` `Image` over `rendering/image.dart`
-/// `RenderImage`. `Image` here is a one-shot resolver, not a port of
-/// Flutter's `ImageStream`: no chunk/progress events, no multi-frame
-/// (animated-image) support — FLUI's `Image` view is single-frame. Revisit
-/// when animated images land.
+/// `Image` is a one-shot resolver, not an image stream: no chunk/progress
+/// events, no multi-frame (animated-image) support — the view is
+/// single-frame. Revisit when animated images land.
 ///
-/// Deferred (tracked, not silently missing): `frameBuilder`, `loadingBuilder`,
-/// `errorBuilder` (an error renders the same empty box as no data, with a
-/// `tracing::warn!`), `ImageConfiguration`/`devicePixelRatio`-based cache-key
-/// scaling, an `evict`/`clearLiveImages` cache-management API, and font
-/// unification.
+/// Deferred (tracked, not silently missing): frame, loading and error
+/// builders (an error renders the same empty box as no data, with a
+/// `tracing::warn!`), device-pixel-ratio-based cache-key scaling, a cache
+/// eviction API, and font unification.
 ///
 /// [`from_image`]: Image::from_image
 /// [`memory`]: Image::memory
@@ -103,8 +97,7 @@ use crate::image::provider::{DirectImageProvider, FileImage, ImageProvider, Memo
 /// [`height`]: Image::height
 #[derive(Clone, Debug)]
 // Async resolution is a subscription with lifecycle (start, cancel, retire),
-// so `Image` is stateful exactly where that subscription exists — Flutter's
-// `Image` is a `StatefulWidget` unconditionally, but without `asset-images`
+// so `Image` is stateful exactly where that subscription exists: without `asset-images`
 // there is no decode cache to subscribe to and every provider resolves inline
 // in `build`.
 #[cfg_attr(feature = "asset-images", derive(StatefulView))]
@@ -170,11 +163,9 @@ impl Image {
     /// Creates an `Image` that loads and decodes `path` asynchronously
     /// through `registry`, a `flui-assets` asset registry.
     ///
-    /// `registry` is an explicit argument — never
-    /// [`AssetRegistry::global()`](flui_assets::AssetRegistry::global) — so
-    /// the load runs on whichever background runtime and byte-loader cache
-    /// the application already owns. See the [async dispatch](#async-dispatch)
-    /// section above.
+    /// `registry` is an explicit argument, so the load runs on whichever
+    /// background runtime and byte-loader cache the application already owns.
+    /// See the [async dispatch](#async-dispatch) section above.
     ///
     /// Requires the `flui-widgets/asset-images` feature.
     #[cfg(feature = "asset-images")]
@@ -235,8 +226,7 @@ impl Image {
     /// loads, instead of clearing to the placeholder the moment the provider
     /// key changes.
     ///
-    /// Defaults to `false` — Flutter's `gaplessPlayback` default, and for the
-    /// same reason: when the image is coupled to other content that has
+    /// Defaults to `false`, because when the image is coupled to other content that has
     /// already changed (an avatar beside a name), holding the old frame shows
     /// a combination that was never true. Turn it on for a sequence of frames
     /// that are all views of the same thing, where a placeholder flash is the
@@ -320,12 +310,12 @@ pub struct ImageState {
 
 #[cfg(feature = "asset-images")]
 impl ViewState<Image> for ImageState {
-    /// `_ImageState.initState`: resolve the provider the widget mounted with.
+    /// Resolve the provider the widget mounted with.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.resolver.init(ctx);
     }
 
-    /// `_ImageState.build`: paint whatever frame the resolver has published.
+    /// Paint whatever frame the resolver has published.
     ///
     /// A provider that opted out of async resolution (no cache key) never
     /// publishes anything, and resolves inline here instead — the same
@@ -337,13 +327,13 @@ impl ViewState<Image> for ImageState {
         view.raw(self.resolver.frame())
     }
 
-    /// `_ImageState.didUpdateWidget`: re-resolve when the cache key changed.
+    /// Re-resolve when the cache key changed.
     fn did_update_view(&mut self, _old_view: &Image, new_view: &Image) {
         self.resolver
             .did_update(Arc::clone(&new_view.provider), new_view.gapless_playback);
     }
 
-    /// `_ImageState.dispose`: cancel the load this widget owns.
+    /// Cancel the load this widget owns.
     fn dispose(&mut self) {
         self.resolver.dispose();
     }
@@ -357,11 +347,10 @@ impl StatelessView for Image {
 }
 
 /// The leaf render view [`Image`] builds into once its provider has been
-/// resolved (or has failed) — Flutter's `RawImage`: a dumb view over an
+/// resolved (or has failed): a dumb view over an
 /// already-decoded (or absent) image, with no provider, no resolution logic.
 ///
-/// Private: [`Image`] is the only public entry point, matching Flutter's
-/// convention of not exposing `RawImage` as a widget-catalog type.
+/// Private: [`Image`] is the only public entry point.
 #[derive(Clone, Debug)]
 struct RawImage {
     image: Option<PixelImage>,
@@ -405,9 +394,8 @@ impl RenderView for RawImage {
             | render.set_width(self.width)
             | render.set_height(self.height);
 
-        // The box is sized by the image it is showing, matching Flutter's
-        // `RenderImage._sizeForConstraints` (`constraints.smallest` while
-        // `_image == null`). `RenderImage` itself *retains* the last
+        // The box is sized by the image it is showing (the smallest
+        // constraints while there is no image). `RenderImage` itself *retains* the last
         // intrinsic size across `set_image(None)` — a deliberate superset so
         // a caller can reserve space for a not-yet-loaded image — so the
         // widget layer drives that dimension explicitly rather than

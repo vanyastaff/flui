@@ -61,7 +61,7 @@ use flui_widgets::prelude::*;
 // ============================================================================
 
 // ============================================================================
-// Repaint boundaries per item (Flutter parity)
+// Repaint boundaries per item
 // ============================================================================
 
 // ============================================================================
@@ -238,8 +238,8 @@ pub(crate) fn lazy_list_view_builder_pathological_extents_defer_instead_of_panic
     // Past the entry point the remaining 375 items sum to under 200 px, so a
     // settled band reaches the list's end: every one of them is resident
     // (one boundary + one box each, plus the viewport and the sliver). The
-    // 25 items above the entry are never measured — they stay hinted, as in
-    // Flutter — so the total extent is deliberately not asserted here.
+    // 25 items above the entry are never measured — they stay hinted — so the
+    // total extent is deliberately not asserted here.
     let resident_items = laid.render_node_count().saturating_sub(2) / 2;
     assert!(
         resident_items >= ITEM_COUNT - ENTRY,
@@ -432,7 +432,7 @@ pub(crate) fn lazy_list_view_builder_keyed_row_moving_with_the_viewport_keeps_st
     );
     // Its state is the one it was born with: the element moved, it was not
     // remounted — a remount would read `row1` too (the id is the data), so
-    // the oracle is the state log: exactly one state ever created for id 1.
+    // the evidence is the state log: exactly one state ever created for id 1.
     let states_for_1 = inits.lock().iter().filter(|&&id| id == 1).count();
     assert_eq!(
         states_for_1, 1,

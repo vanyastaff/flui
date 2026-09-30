@@ -1,5 +1,4 @@
-//! Shared machinery for the implicitly-animated widget family — the FLUI port
-//! of Flutter's `ImplicitlyAnimatedWidgetState` / `AnimatedWidgetBaseState`.
+//! Shared machinery for the implicitly-animated widget family.
 //!
 //! Each implicitly-animated widget (`AnimatedOpacity`, `AnimatedPadding`, …) is
 //! a [`StatefulView`](flui_view::StatefulView) whose state owns one
@@ -29,7 +28,7 @@ use flui_foundation::geometry::Lerp;
 
 /// The default implicit-animation duration when a widget does not override it.
 ///
-/// 200 ms matches Flutter's common default for implicit transitions — long
+/// 200 ms is long
 /// enough to read as motion, short enough to feel responsive.
 pub(crate) const DEFAULT_DURATION: Duration = Duration::from_millis(200);
 
@@ -43,8 +42,7 @@ pub(crate) const DEFAULT_DURATION: Duration = Duration::from_millis(200);
 /// — which, under `ArcCurve`'s reference-equality comparison, would make
 /// every single reconfigure look like a curve change, defeating
 /// [`ImplicitController::set_curve`]'s no-op gate. This is the Rust-native
-/// equivalent of the `const` canonicalization Dart's compiler gives
-/// `Curves.easeInOut` for free — see `ArcCurve`'s doc for the full citation.
+/// equivalent of canonicalizing a `const` curve — see `ArcCurve`'s doc.
 pub(crate) fn default_curve() -> ArcCurve {
     static DEFAULT: OnceLock<ArcCurve> = OnceLock::new();
     DEFAULT
@@ -112,9 +110,8 @@ impl ImplicitController {
 
     /// Update the controller's base forward duration.
     ///
-    /// Oracle: `controller.duration = widget.duration;` is unconditional on
-    /// every `didUpdateWidget`, independent of whether a target or curve
-    /// actually changed (`implicit_animations.dart` `didUpdateWidget` (`controller.duration` set unconditionally) at tag `3.44.0`).
+    /// This is unconditional on every reconfigure, independent of whether a
+    /// target or curve actually changed.
     /// Never retimes a run already in flight — see
     /// `AnimationController::set_duration`'s own doc.
     pub(crate) fn set_duration(&mut self, duration: Duration) {
@@ -129,9 +126,8 @@ impl ImplicitController {
     /// the controller's value subscription. Returns whether the curve
     /// actually changed.
     ///
-    /// Oracle: a curve-only change disposes the old `CurvedAnimation` and
-    /// builds a fresh one over the same `controller` — `_createCurve`,
-    /// `implicit_animations.dart` `didUpdateWidget`/`_createCurve`. The controller is never
+    /// A curve-only change disposes the old `CurvedAnimation` and builds a
+    /// fresh one over the same `controller`. The controller is never
     /// restarted for a curve-only change; see
     /// [`restart_from_zero`](Self::restart_from_zero)'s doc for what is.
     pub(crate) fn set_curve(&mut self, curve: ArcCurve) -> bool {
@@ -148,9 +144,8 @@ impl ImplicitController {
     /// after the owner's tween(s) were re-anchored (a genuine target
     /// change), so the curved progress sweeps `0`→`1` afresh.
     ///
-    /// Oracle: `controller.forward(from: 0.0)`, gated on `_constructTweens()`
-    /// returning `true` (`implicit_animations.dart` `didUpdateWidget` (`_constructTweens` gating `forward(from: 0.0)`)) — a curve-only
-    /// change never reaches this restart.
+    /// Gated on a genuine target change — a curve-only change never reaches
+    /// this restart.
     pub(crate) fn restart_from_zero(&mut self) {
         // Owned, freshly registered controller: `forward_from` only errors when
         // disposed, which cannot happen before `dispose`.
@@ -238,17 +233,12 @@ impl<T: Lerp + Clone + PartialEq + Send + Sync + 'static> ImplicitAnimation<T> {
     /// recompute on this report so an unrelated rebuild does not reallocate
     /// it.
     ///
-    /// `duration` is pushed to the controller unconditionally, matching the
-    /// oracle's unconditional `controller.duration = widget.duration;`
-    /// (`implicit_animations.dart` `didUpdateWidget` (`controller.duration` set unconditionally)). Only a genuine TARGET change
+    /// `duration` is pushed to the controller unconditionally. Only a genuine TARGET change
     /// restarts the run from `0`; a curve-only change swaps the easing
     /// applied to the run already in flight — see
-    /// [`ImplicitController::set_curve`]/[`ImplicitController::restart_from_zero`]
-    /// for the oracle citations. The curve swap happens FIRST so a
+    /// [`ImplicitController::set_curve`]/[`ImplicitController::restart_from_zero`]. The curve swap happens FIRST so a
     /// target-changed anchor (`current_value()`, used as the new tween's
-    /// `begin`) reads the already-updated curve, matching
-    /// `tween.evaluate(_animation)` reading the just-rebuilt `_animation` at
-    /// `implicit_animations.dart` `didUpdateWidget` (`tween.evaluate(_animation)` after the curve swap).
+    /// `begin`) reads the already-updated curve.
     pub(crate) fn retarget(&mut self, new_target: T, duration: Duration, curve: ArcCurve) -> bool {
         self.controller.set_duration(duration);
         let curve_changed = self.controller.set_curve(curve);
@@ -273,7 +263,7 @@ impl<T: Lerp + Clone + PartialEq + Send + Sync + 'static> ImplicitAnimation<T> {
 /// (`AnimatedContainer`). The tween exists only while the property is set; the
 /// property animates only across a Some→Some change, and snaps on a Some↔None
 /// transition (a value appearing or disappearing has no "from"/"to" to lerp,
-/// matching the pragmatic edge of Flutter's nullable geometry tweens).
+/// the pragmatic edge for optional geometry tweens).
 #[derive(Debug, Clone)]
 pub(crate) struct OptTween<T: Lerp + Clone + PartialEq> {
     tween: Option<Tween<T>>,

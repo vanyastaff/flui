@@ -47,13 +47,8 @@ trait depends on `flui-platform-api` instead.
 
 ### The Win32 clipboard opens with a message-only owner window on a dedicated pump thread
 
-Flutter matches the window, not the thread. Its Windows embedder
-(`engine/src/flutter/shell/platform/windows/platform_handler.cc`, read at
-flutter/flutter `07510ad9a9`) creates an `HWND_MESSAGE` window in
-`PlatformHandler`'s constructor and opens the clipboard with it, on the
-platform thread, whose engine loop pumps it. FLUI's `WindowsClipboard` has no
-such single thread: any thread may read or write, and the winit backend has no
-FLUI-pumped loop. Opening with a `NULL` owner, as `arboard` and FLUI used to,
+`WindowsClipboard` has no single owning thread: any thread may read or
+write, and the winit backend has no FLUI-pumped loop. Opening with a `NULL` owner, as `arboard` and FLUI used to,
 does not exclude other threads of the process, since all `NULL` openers count
 as one owner (see "Win32 clipboard: cross-thread sessions" in
 `docs/safety-review.md`).
@@ -85,8 +80,7 @@ a test.
 
 ### Win32 callbacks live in the window's owner-thread context; off-owner registration is refused
 
-Flutter's Windows embedder has no counterpart: its callbacks are set and run on
-the platform thread, and Dart has no `Send`. FLUI's registration methods take
+Registration methods take
 `&self` on `Send + Sync` traits, so any thread can call them. ADR-0082 §4 step
 one for Win32 makes that safe without changing a signature.
 
@@ -326,7 +320,7 @@ the winit backend and does not need a new one.
 
 **Further reading:** [`.rust-studio/specs/1092-winit-physical-key-map/survey.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/.rust-studio/specs/1092-winit-physical-key-map/survey.md)
 is the market/reference survey that motivated this decision (`ui-events-winit`
-coverage measurement, Flutter's generated `PhysicalKeyboardKey` catalog as
+coverage measurement, a generated physical-key catalog as
 the completeness precedent, and the three options evaluated before choosing
 production delegation) — read it for context, not as the source of a fact;
 figures cited in this entry are measured directly against this repository
@@ -680,28 +674,15 @@ in this backend's own state (`TextInputState::reports_key_release`), so a releas
 inside an open composition is suppressed for the same reason the press was: the
 application never saw that key go down.
 
-**Divergences from Flutter, both deliberate.** Flutter's framework closes a
-connection *without discarding the composed characters*:
-`EditableTextState.connectionClosed` (`editable_text.dart:4138`, checked at the
-pinned 3.44.0) nulls the connection, drops `_lastKnownRemoteTextEditingValue`
-and unfocuses; the unfocus routes through `_openOrCloseInputConnectionIfNeeded`
-to `controller.clearComposing()`, and `clearComposing`
-(`editable_text.dart:378`) assigns only `composing: TextRange.empty` — the
-controller's `text` is untouched. The characters the user was composing are
-therefore still there afterwards, as ordinary text. What Flutter does *not* do
-on teardown is announce a commit: the text simply remains, and the commit the
-application finally observes is the input method's own last
-`updateEditingValue` before the close. `set_ime_allowed(false)` here **drops**
+**Teardown drops the composition.** `set_ime_allowed(false)` **drops**
 the composition (ADR-0069) and `unmarkText` emits
-`ImeEvent::Preedit { text: String::new(), cursor: None }` rather than nothing, so
-the second divergence is a *third* answer to the same situation rather than the
-inverse of Flutter's. It is grounded in the client-side bug class
+`ImeEvent::Preedit { text: String::new(), cursor: None }` rather than nothing.
+It is grounded in the client-side bug class
 `flui-platform-api/src/ime.rs` records — a client left holding composition state it was
 never told ended suppresses `Key::Character` for the rest of the focus session
 and keeps the cancelled slice in its buffer — and in winit's own macOS
 implementation, which drops the marked text on `set_ime_allowed(false)`, so
-ADR-0069 cites that implementation for the drop-vs-commit half rather than the
-Flutter contrast. AppKit's header does not say whether an empty
+ADR-0069 cites that implementation for the drop-vs-commit half. AppKit's header does not say whether an empty
 `setMarkedText:` always precedes `unmarkText`, so both paths are covered; the
 event is inert when nothing is composing, which is why the callback carries no
 `hasMarkedText` check.

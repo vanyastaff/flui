@@ -1,11 +1,7 @@
 //! [`Dismissible`] — drag a child out of view to dismiss it, then collapse the
 //! space it occupied.
 //!
-//! Flutter parity: `widgets/dismissible.dart` (tag `3.44.0`) — `Dismissible`,
-//! `_DismissibleState`, `DismissDirection`, `DismissUpdateDetails`,
-//! `_FlingGestureKind`, `_DismissibleClipper`, and the four tuned constants
-//! `_kResizeTimeCurve` / `_kMinFlingVelocity` / `_kMinFlingVelocityDelta` /
-//! `_kFlingVelocityScale` / `_kDismissThreshold`. State machine: a drag (or a
+//! State machine: a drag (or a
 //! sufficiently fast fling) accumulates a signed `drag_extent`; releasing past
 //! [`Dismissible::dismiss_threshold`] (default `0.4`, per direction) or with a
 //! qualifying fling drives `move_controller` to 1.0 over
@@ -14,73 +10,60 @@
 //! [`Dismissible::on_dismissed`] immediately when that is `None`) and then
 //! fires `on_dismissed`.
 //!
-//! # Deliberate divergences from the oracle (framework-surface gaps)
+//! # Known limits (framework-surface gaps)
 //!
-//! 1. **No `confirmDismiss`.** The oracle's `confirmDismiss` is an async gate
-//!    (`Future<bool?> Function(DismissDirection)`) awaited between the move
-//!    animation completing and the resize collapse starting. FLUI has no
-//!    established widget-level "await a caller future, then keep going"
-//!    seam yet (`FutureBuilder` rebuilds *from* future state; it does not let
-//!    an imperative callback block a state transition on one). Inventing that
-//!    seam here — one-off, for a single widget — would be exactly the kind of
-//!    local hack this port avoids. Deferred; tracked as a follow-up rather
-//!    than faked with a synchronous stand-in that would silently misrepresent
-//!    the oracle's actual (async, vetoable) contract.
-//! 2. **No progressive background clip.** The oracle's `_DismissibleClipper`
-//!    is a `CustomClipper<Rect>` that reveals only the sliver of `background`
-//!    between the sliding child's edge and the container edge, growing as the
-//!    drag proceeds. `flui-widgets`' [`ClipRect`] has no
+//! 1. **No `confirm_dismiss`.** An async veto gate awaited between the move
+//!    animation completing and the resize collapse starting would need a
+//!    widget-level "await a caller future, then keep going" seam, which FLUI
+//!    does not have yet (`FutureBuilder` rebuilds *from* future state; it does
+//!    not let an imperative callback block a state transition on one).
+//!    Inventing that seam here, one-off, for a single widget would be a local
+//!    hack; it is deferred rather than faked with a synchronous stand-in that
+//!    would misrepresent an async, vetoable contract.
+//! 2. **No progressive background clip.** Ideally `background` is revealed
+//!    only as the sliver between the sliding child's edge and the container
+//!    edge, growing as the drag proceeds. [`ClipRect`] has no
 //!    arbitrary-rect / custom-clipper primitive yet — only a fixed
-//!    [`flui_painting::paint::Clip`] behavior. This port shows/hides
+//!    [`flui_painting::paint::Clip`] behavior. This widget shows/hides
 //!    `background` by *presence* (mounted whenever `move_controller.value()
-//!    != 0.0`, matching the oracle's `!_moveAnimation.isDismissed` guard) but
-//!    does not crop it to the revealed sliver — it paints at full extent
-//!    under the sliding child from the first pixel of drag. Visually
-//!    observable divergence; behaviorally the presence/absence signal (what
-//!    the parity corpus asserts) matches exactly.
+//!    != 0.0`) but does not crop it to the revealed sliver — it paints at full
+//!    extent under the sliding child from the first pixel of drag. The
+//!    presence/absence signal is exact; the crop is visually observable.
 //! 3. **`Vertical`/`Up`/`Down` ride `on_pan_*`, not a vertical-drag family.**
 //!    `GestureDetector` has no `on_vertical_drag_*` recognizer family (see
 //!    that type's own docs on why) — only `on_horizontal_drag_*` and the
-//!    free-axis `on_pan_*`. For the vertical-family directions this port
+//!    free-axis `on_pan_*`. For the vertical-family directions this widget
 //!    wires `on_pan_*` and reads the raw `delta.dy` / `velocity.dy` component
 //!    directly instead of `primary_delta` / `primary_velocity` (which are
 //!    `Free`-axis distance *magnitudes* on that recognizer, not the signed
-//!    per-axis component the oracle's math needs). Functionally equivalent
+//!    per-axis component the math needs). Functionally equivalent
 //!    for the one component this widget reads, but slightly looser: a pan
 //!    recognizer's slop is not axis-locked the way a dedicated vertical
 //!    recognizer's would be, so a mostly-horizontal drag can still start a
-//!    vertical `Dismissible`'s gesture where the oracle's `VerticalDragGestureRecognizer`
-//!    would hold off. Horizontal-family directions are unaffected — they use
-//!    the real `on_horizontal_drag_*` family.
-//! 4. **No live "my own size" query.** The oracle reads `context.size!`
-//!    (this widget's last-laid-out size) from event handlers running well
-//!    after `build`. FLUI's `BuildContext` has no such accessor. This port
+//!    vertical `Dismissible`'s gesture. Horizontal-family directions are
+//!    unaffected — they use the real `on_horizontal_drag_*` family.
+//! 4. **No live "my own size" query.** Event handlers run well after `build`
+//!    and would need this widget's last-laid-out size, but FLUI's
+//!    `BuildContext` has no such accessor. This widget
 //!    wraps its content in [`LayoutBuilder`] instead and
 //!    uses the incoming `BoxConstraints` (`max_width`/`max_height`) as the
 //!    drag-axis extent and the resize collapse's prior size — exact when the
 //!    constraints are tight (the common case: a fixed-extent list item), but
 //!    **`Dismissible` requires bounded constraints along its dismiss axis**;
 //!    an unbounded axis has no extent to divide the drag fraction by.
-//! 5. **No `AutomaticKeepAlive`.** The oracle mixes in
-//!    `AutomaticKeepAliveClientMixin` so a mid-flight `Dismissible` is not
-//!    disposed by a lazy list's viewport GC. FLUI has no keep-alive mechanism
-//!    at all yet — a framework-wide gap, not a regression specific to this
-//!    port.
-//! 6. **No required `Key`.** The oracle's constructor requires one (so a
-//!    dismissed list item's slot doesn't get re-synced onto the next item by
-//!    index). FLUI's reconciliation is not index-keyed the same way; omitted
-//!    as orthogonal to the drag/threshold/callback behavior this port
-//!    targets.
-//! 7. **No `dragStartBehavior`.** The oracle's `dragStartBehavior` field
-//!    (`DragStartBehavior.start` by default, `.down` optionally) is passed
-//!    straight through to its `GestureDetector`, choosing whether the drag's
-//!    origin is where the gesture *won the arena* (`start`, smoother) or
-//!    where the initial *down* event landed (`down`, more reactive).
-//!    `flui-widgets`' [`GestureDetector`] has no
-//!    `DragStartBehavior` concept at all yet — every drag effectively behaves
-//!    as `start`. Not configurable here for the same reason divergence #3's
-//!    vertical-drag family and this list's #5 keep-alive gap aren't: the
-//!    primitive this widget would delegate to does not exist in FLUI yet.
+//! 5. **No keep-alive.** A mid-flight `Dismissible` can be disposed by a lazy
+//!    list's viewport GC. FLUI has no keep-alive mechanism at all yet — a
+//!    framework-wide gap, not specific to this widget.
+//! 6. **No required `Key`.** A dismissed list item's slot is not re-synced
+//!    onto the next item by index, because FLUI's reconciliation is not
+//!    index-keyed that way; a key is orthogonal to the
+//!    drag/threshold/callback behavior here.
+//! 7. **No drag-start behavior.** The drag's origin is where the gesture *won
+//!    the arena*, never where the initial *down* event landed (more
+//!    reactive). [`GestureDetector`] has no drag-start-behavior concept at all
+//!    yet, so this is not configurable, for the same reason divergence #3's
+//!    vertical-drag family and #5's keep-alive gap aren't: the primitive this
+//!    widget would delegate to does not exist in FLUI yet.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -112,23 +95,21 @@ use crate::{
     ClipRect, FractionalTranslation, GestureDetector, LayoutBuilder, Positioned, SizedBox, Stack,
 };
 
-/// `_kMinFlingVelocity` (`dismissible.dart:19`) — a fling below this speed
+/// Minimum fling speed — a fling below this speed
 /// never dismisses, regardless of direction.
 const MIN_FLING_VELOCITY: f64 = 700.0;
-/// `_kMinFlingVelocityDelta` (`dismissible.dart:20`) — the primary-axis
+/// Minimum margin — the primary-axis
 /// velocity must clear the cross-axis velocity by at least this much, or the
 /// gesture is not "generally in the right direction".
 const MIN_FLING_VELOCITY_DELTA: f64 = 400.0;
-/// `_kFlingVelocityScale` (`dismissible.dart:21`) — pointer velocity
+/// Pointer velocity
 /// (px/s) is scaled into the `AnimationController.fling` velocity domain.
 const FLING_VELOCITY_SCALE: f64 = 1.0 / 300.0;
-/// `_kDismissThreshold` (`dismissible.dart:22`) — the default fraction of
+/// The default fraction of
 /// `overall_drag_axis_extent` that must be crossed to dismiss.
 const DEFAULT_DISMISS_THRESHOLD: f64 = 0.4;
 
 /// The direction(s) in which a [`Dismissible`] can be dismissed.
-///
-/// Flutter parity: `DismissDirection` (`dismissible.dart:42`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DismissDirection {
     /// Dismissible by dragging up or down.
@@ -151,14 +132,10 @@ pub enum DismissDirection {
 
 /// Fired when the [`Dismissible`] has been dismissed, after any resize
 /// collapse has finished (or immediately, if `resize_duration` is `None`).
-///
-/// Flutter parity: `DismissDirectionCallback` (`dismissible.dart:28`).
 pub type DismissDirectionCallback = Rc<dyn Fn(&mut EventCx<'_>, DismissDirection)>;
 
 /// Fired on every drag/threshold-state change while a [`Dismissible`] is
 /// being dragged.
-///
-/// Flutter parity: `DismissUpdateCallback` (`dismissible.dart:39`).
 pub type DismissUpdateCallback = Rc<dyn Fn(&mut EventCx<'_>, DismissUpdateDetails)>;
 
 type ResizeCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
@@ -166,8 +143,6 @@ type DirectionDelivery = Rc<dyn Fn(DismissDirection)>;
 type UpdateDelivery = Rc<dyn Fn(DismissUpdateDetails)>;
 
 /// Details delivered to [`Dismissible::on_update`].
-///
-/// Flutter parity: `DismissUpdateDetails` (`dismissible.dart:231`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DismissUpdateDetails {
     /// The direction the dismissible is currently being dragged toward.
@@ -183,8 +158,8 @@ pub struct DismissUpdateDetails {
 
 /// A widget that can be dismissed by dragging in [`DismissDirection`].
 ///
-/// See the module docs for the oracle citation and this port's documented
-/// divergences (no `confirmDismiss`, no progressive background clip, no
+/// See the module docs for the documented
+/// limits (no `confirm_dismiss`, no progressive background clip, no
 /// vertical-drag recognizer family, bounded-constraints contract, no
 /// keep-alive, no required key).
 #[derive(Clone, StatefulView)]
@@ -205,7 +180,7 @@ pub struct Dismissible {
 
 impl Dismissible {
     /// A `Dismissible` wrapping `child`, dismissible horizontally by default
-    /// (Flutter parity default), collapsing over 300ms after a 200ms slide.
+    /// collapsing over 300ms after a 200ms slide.
     pub fn new(child: impl IntoView) -> Self {
         Self {
             child: child.into_view().boxed(),
@@ -345,8 +320,7 @@ impl std::fmt::Debug for Dismissible {
 // machine's math is unit-testable without a laid-out tree.
 // ============================================================================
 
-/// Whether `direction` drags along the horizontal axis. Flutter parity:
-/// `_directionIsXAxis` (`dismissible.dart:337`).
+/// Whether `direction` drags along the horizontal axis.
 fn direction_is_x_axis(direction: DismissDirection) -> bool {
     matches!(
         direction,
@@ -360,7 +334,7 @@ fn drag_sign(extent: f64) -> f64 {
     if extent == 0.0 { 0.0 } else { extent.signum() }
 }
 
-/// Flutter parity: `_extentToDirection` (`dismissible.dart:343`).
+/// The direction a signed extent points toward for `direction`.
 fn extent_to_direction(
     extent: f64,
     direction: DismissDirection,
@@ -382,8 +356,7 @@ fn extent_to_direction(
     }
 }
 
-/// Flutter parity: the direction-gating `switch` inside `_handleDragUpdate`
-/// (`dismissible.dart:390`-`431`) — accumulates `delta` into `current` only
+/// Accumulates `delta` into `current` only
 /// when doing so keeps the extent on the side `direction` (and, for the
 /// reading-direction-relative variants, `text_direction`) allows.
 fn accumulate_drag_extent(
@@ -423,8 +396,8 @@ fn accumulate_drag_extent(
     }
 }
 
-/// The resolved threshold for `direction` (Flutter parity:
-/// `widget.dismissThresholds[_dismissDirection] ?? _kDismissThreshold`).
+/// The resolved threshold for `direction`: the per-direction override, else the
+/// default.
 fn dismiss_threshold_for(
     thresholds: &HashMap<DismissDirection, f64>,
     direction: DismissDirection,
@@ -435,7 +408,7 @@ fn dismiss_threshold_for(
         .unwrap_or(DEFAULT_DISMISS_THRESHOLD)
 }
 
-/// Flutter parity: `_FlingGestureKind` (`dismissible.dart:296`).
+/// How a release velocity relates to the drag axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FlingGestureKind {
     /// Too slow, or not clearly aimed along the drag axis — not a fling.
@@ -446,7 +419,8 @@ enum FlingGestureKind {
     Reverse,
 }
 
-/// Flutter parity: `_describeFlingGesture` (`dismissible.dart:468`).
+/// Classifies a release velocity as a fling toward the dismiss edge, away
+/// from it, or no fling.
 fn describe_fling_gesture(
     drag_extent: f64,
     direction: DismissDirection,
@@ -477,9 +451,7 @@ fn describe_fling_gesture(
 
 /// Interior-mutable drag/animation progress, shared (via `Rc`) between
 /// `DismissibleState` and the `'static` `GestureDetector` closures `build()`
-/// reconstructs every rebuild. Flutter parity: the mutable instance fields of
-/// `_DismissibleState` (`_dragExtent`, `_dragUnderway`,
-/// `_sizePriorToCollapse`, `_dismissThresholdReached`, `_resizeController`).
+/// reconstructs every rebuild.
 ///
 /// Kept out of `AnimationController` listener closures (which must be
 /// `Send + Sync`, per `flui_foundation::ListenerCallback`): those closures
@@ -489,17 +461,14 @@ fn describe_fling_gesture(
 /// signals and mutates this state.
 #[derive(Default)]
 struct DragState {
-    /// Signed pixel extent dragged so far. Flutter parity: `_dragExtent`.
+    /// Signed pixel extent dragged so far.
     drag_extent: Cell<f64>,
-    /// Whether a drag contact is currently down. Flutter parity:
-    /// `_dragUnderway`.
+    /// Whether a drag contact is currently down.
     drag_underway: Cell<bool>,
-    /// The size occupied right before the resize collapse began. Flutter
-    /// parity: `_sizePriorToCollapse`.
+    /// The size occupied right before the resize collapse began.
     size_prior_to_collapse: Cell<Option<Size>>,
     /// The dismiss-threshold-reached flag from the last `on_update`
-    /// delivery, for `DismissUpdateDetails::previous_reached`. Flutter
-    /// parity: `_dismissThresholdReached`.
+    /// delivery, for `DismissUpdateDetails::previous_reached`.
     dismiss_threshold_reached: Cell<bool>,
     /// `move_controller.value()` at the last `on_update` delivery, so an
     /// unrelated rebuild (e.g. a parent prop change) that leaves the drag
@@ -512,7 +481,6 @@ struct DragState {
     move_vsync_registration: Cell<Option<VsyncRegistration>>,
 
     /// Lazily created once the move animation completes past threshold.
-    /// Flutter parity: `_resizeController`.
     resize_controller: RefCell<Option<AnimationController>>,
     resize_listener_id: RefCell<Option<ListenerId>>,
     resize_vsync_registration: Cell<Option<VsyncRegistration>>,
@@ -628,7 +596,7 @@ impl DismissEvents {
 }
 
 /// State for [`Dismissible`]. Owns the persistent `move_controller` (created
-/// once, per Flutter's `late final _moveController`) plus the shared
+/// once) plus the shared
 /// `DragState` and the [`RebuildHandle`] acquired in `init_state` (per
 /// ADR-0018 — never acquired from `build`/layout) that the lazily created
 /// resize controller's listener needs later.
@@ -660,8 +628,8 @@ impl StatefulView for Dismissible {
         // A real, but permanently detached, ticker -- not `without_ticker`:
         // this module reads `move_controller.is_animating()` extensively
         // (`handle_drag_start`/`handle_drag_update`/`handle_drag_end`), and
-        // `is_animating` is intentionally ticker-based (Flutter parity:
-        // `Ticker.isActive`), not status-based — a ticker-less controller
+        // `is_animating` is intentionally ticker-based,
+        // not status-based — a ticker-less controller
         // can never report `is_animating() == true`. `VsyncScope` still
         // drives the actual value ticks deterministically via `tick_at`;
         // `with_detached_ticker` gives this controller a ticker whose
@@ -723,8 +691,7 @@ impl ViewState<Dismissible> for DismissibleState {
     }
 
     fn build(&self, view: &Dismissible, ctx: &dyn BuildContext) -> impl IntoView {
-        // Flutter parity: `_directionIsXAxis || debugCheckHasDirectionality`
-        // (`dismissible.dart:611`) requires an ambient `Directionality` only
+        // An ambient `Directionality` matters only
         // for the X-axis directions (`EndToStart`/`StartToEnd` read it to
         // resolve against the reading direction; plain `Horizontal` reads it
         // too, for `DismissUpdateDetails`/`on_dismissed`'s reported
@@ -738,9 +705,7 @@ impl ViewState<Dismissible> for DismissibleState {
         // dependency, so calling it for a purely-vertical `Dismissible` would
         // rebuild it on every ambient direction change while
         // `extent_to_direction` -- the only consumer -- ignores the value on
-        // that path. The reference draws the same line with
-        // `assert(!_directionIsXAxis || debugCheckHasDirectionality(context))`
-        // (`dismissible.dart:611`).
+        // that path.
         let text_direction = if direction_is_x_axis(view.direction) {
             Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr)
         } else {
@@ -982,14 +947,12 @@ impl ViewState<Dismissible> for DismissibleState {
 }
 
 // ============================================================================
-// Gesture handlers — free functions mirroring `_DismissibleState`'s private
-// methods, called from the `'static` closures `build()` reconstructs.
+// Gesture handlers — free functions called from the `'static` closures `build()` reconstructs.
 // ============================================================================
 
 /// Unregisters `move_controller` from `vsync` for the duration of a raw drag.
 ///
-/// `set_value` (called on every drag update, exactly like the oracle's
-/// `_moveController.value = ...`) leaves the controller's `AnimationStatus`
+/// `set_value` (called on every drag update) leaves the controller's `AnimationStatus`
 /// at `Forward`/`Reverse` for any value strictly between the bounds — the
 /// same status a REAL `.forward()`/`.reverse()` run leaves it at
 /// (`AnimationController::settled_status_keep_direction`, which "keeps
@@ -1055,24 +1018,23 @@ fn ensure_move_controller_registered(
 /// `[0.0, 1.0]`, and a drag whose extent reaches (or overshoots) 100% of
 /// `overall_extent` therefore lands the controller at the upper bound —
 /// which `AnimationController` reports as `Completed`, *mid-drag*, well
-/// before `handle_drag_end` ever runs. The oracle's own status listener
-/// (`_handleDismissStatusChanged`) discards exactly this case:
-/// `status.isCompleted && !_dragUnderway` — a `Completed` event that fires
-/// while still dragging is dropped outright, never queued for later.
+/// before `handle_drag_end` ever runs. The right behavior is to discard
+/// exactly this case — a `Completed` event that fires while still dragging is
+/// dropped outright, never queued for later.
 ///
-/// This port cannot replicate that check *in the listener*: the listener
+/// That check cannot live *in the listener*: the listener
 /// registered in `init_state` must be `Send + Sync` (`flui_foundation::ListenerCallback`),
 /// so it can only touch the `Arc<AtomicU64>` `move_completed_runs` counter,
 /// never the `Cell<bool>` `drag_underway` flag (see `DragState`'s own doc on
-/// why). Earlier drafts of this port bumped the counter unconditionally and
-/// left `deliver_move_completion`'s build()-driven consumer to skip
+/// why). Bumping the counter unconditionally and
+/// leaving `deliver_move_completion`'s build()-driven consumer to skip
 /// delivery *while* `drag_underway` was still true — but skipping is not
 /// discarding: the bump stayed on the counter, unconsumed. The very next
 /// time `deliver_move_completion` ran with `drag_underway` false again (e.g.
 /// after the user dragged back below threshold and released, which
 /// correctly springs back via `.reverse()`), it saw a "new" completion it
 /// had never delivered and ran the collapse + `on_dismissed` anyway — a
-/// false dismissal the oracle never produces.
+/// false dismissal.
 ///
 /// The fix moves the discard to the only place that reliably knows
 /// `drag_underway` is true: right here, synchronously after every direct
@@ -1082,16 +1044,14 @@ fn ensure_move_controller_registered(
 /// legitimate "released exactly at 100%" dismissal does not depend on this
 /// counter at all: `handle_drag_end` calls [`run_move_completion`] directly
 /// and unconditionally when `move_controller.is_completed()` holds at the
-/// exact moment of release — mirroring the oracle's own direct
-/// `_handleDragEnd` bypass, which likewise never consults the status
-/// listener for that case.
+/// exact moment of release, which never consults the status
+/// listener.
 fn discard_transient_move_completion(drag: &DragState) {
     let completed_runs = drag.move_completed_runs.load(Ordering::Relaxed);
     drag.delivered_move_completions.set(completed_runs);
 }
 
-/// Flutter parity: `_handleDragStart` (`dismissible.dart:366`), minus the
-/// `_confirming` guard (no `confirmDismiss` — see module docs divergence #1).
+/// Begins a drag (no confirm-dismiss guard — see module docs limit #1).
 fn handle_drag_start(
     drag: &Rc<DragState>,
     move_controller: &AnimationController,
@@ -1123,8 +1083,8 @@ fn handle_drag_start(
     discard_transient_move_completion(drag);
 }
 
-/// Flutter parity: `_handleDragUpdate` (`dismissible.dart:383`) — `delta` is
-/// the raw signed per-axis pointer delta (see module docs divergence #3 on
+/// Applies a drag update — `delta` is
+/// the raw signed per-axis pointer delta (see module docs limit #3 on
 /// why this reads the raw component rather than `primary_delta`).
 fn handle_drag_update(
     drag: &Rc<DragState>,
@@ -1147,17 +1107,16 @@ fn handle_drag_update(
         move_controller.set_value(new_extent.abs() / overall_extent);
         // A drag that reaches (or overshoots) 100% of `overall_extent` clamps
         // `set_value` to the upper bound, which reports `Completed` — mid-drag,
-        // exactly like the oracle's own `AnimationController.value` setter can.
-        // The oracle's status listener discards that case explicitly
-        // (`status.isCompleted && !_dragUnderway`, dismissible.dart); see
-        // `discard_transient_move_completion`'s doc for why this port discards
-        // it here instead of in the listener.
+        // as any `AnimationController.value` write can.
+        // That case must be discarded; see
+        // `discard_transient_move_completion`'s doc for why it is discarded
+        // here instead of in the listener.
         discard_transient_move_completion(drag);
     }
 }
 
-/// Flutter parity: `_handleDragEnd` (`dismissible.dart:500`).
-#[expect(clippy::too_many_arguments)] // mirrors the oracle's own `_handleDragEnd`, which reaches the same seven pieces of state via `widget`/instance fields rather than parameters
+/// Ends a drag: fling, threshold, or spring back.
+#[expect(clippy::too_many_arguments)] // the seven pieces of state the release handler needs are not otherwise grouped
 fn handle_drag_end(
     drag: &Rc<DragState>,
     move_controller: &AnimationController,
@@ -1173,8 +1132,7 @@ fn handle_drag_end(
     }
     drag.drag_underway.set(false);
     if move_controller.is_completed() {
-        // The direct bypass — mirrors the oracle's own `if (_moveController.isCompleted)
-        // { _handleMoveCompleted(); return; }` in `_handleDragEnd`. Calls
+        // The direct bypass for a drag released exactly at 100%. Calls
         // `run_move_completion` unconditionally, NOT the counter-gated
         // `deliver_move_completion`: a drag released exactly at 100% never
         // bumped `move_completed_runs` in the first place (see
@@ -1224,25 +1182,21 @@ fn handle_drag_end(
     }
 }
 
-/// Flutter parity: `_handleMoveCompleted` (`dismissible.dart:548`-`561`) — the
-/// actual completion behavior, run unconditionally (no counter/latch gate of
-/// any kind). Two call sites reach this, matching the oracle's own two ways
-/// into `_handleMoveCompleted`:
+/// The actual completion behavior, run unconditionally (no counter/latch gate
+/// of any kind). Two call sites reach this:
 ///
 /// - `handle_drag_end`'s direct bypass, when `move_controller.is_completed()`
-///   holds at the exact moment of release (oracle: `_handleDragEnd`'s own
-///   `if (_moveController.isCompleted) { _handleMoveCompleted(); return; }`).
+///   holds at the exact moment of release.
 /// - [`deliver_move_completion`], the deferred, counter-gated path for a
 ///   `.forward()`/`.fling()` run that settles to `Completed` sometime AFTER
-///   release (oracle: `_handleDismissStatusChanged`, driven by the status
-///   listener).
+///   release, driven by the status listener.
 ///
 /// Calling this twice for the "same" logical completion cannot happen: the
 /// direct-bypass site is reached only once per release, and the deferred
 /// site only ever observes a completion the direct-bypass site did not
 /// already consume (see `discard_transient_move_completion`'s doc for why a
 /// mid-drag `Completed` never reaches the deferred path's counter at all).
-// mirrors the oracle's own `_handleMoveCompleted`, which reaches the same six pieces of state via `widget`/instance fields rather than parameters
+// the six pieces of state the completion needs are not otherwise grouped
 fn run_move_completion(
     drag: &Rc<DragState>,
     move_controller: &AnimationController,
@@ -1278,8 +1232,7 @@ fn run_move_completion(
     }
 }
 
-/// Flutter parity: the deferred half of `_handleDismissStatusChanged`
-/// (`dismissible.dart:539`-`546`) — reacts to `move_controller` completing
+/// The deferred half of completion handling: reacts to `move_controller` completing
 /// AFTER release (a `.forward()`/`.fling()` run settling), observed via the
 /// status listener registered in `init_state` and the `move_completed_runs` /
 /// `delivered_move_completions` counter pair. Idempotent: a call that finds
@@ -1306,7 +1259,7 @@ fn deliver_move_completion(
     run_move_completion(drag, move_controller, resolved, vsync, rebuild, constraints);
 }
 
-/// Flutter parity: `_startResizeAnimation` (`dismissible.dart:576`), the
+/// Starts the resize collapse: the
 /// `resize_duration.is_some()` branch (the `None` branch is handled inline in
 /// [`deliver_move_completion`]).
 fn start_resize_animation(
@@ -1350,8 +1303,7 @@ fn start_resize_animation(
         .replace(resize_controller);
 }
 
-/// Flutter parity: `_handleResizeProgressChanged` (`dismissible.dart:599`) —
-/// fires `on_resize` for every delivered progress tick, or `on_dismissed`
+/// Fires `on_resize` for every delivered progress tick, or `on_dismissed`
 /// once when the resize controller completes.
 fn deliver_resize_progress(drag: &Rc<DragState>, resolved: &Rc<ResolvedConfig>) {
     if drag.resize_completed.load(Ordering::Relaxed) {
@@ -1380,7 +1332,7 @@ fn deliver_resize_progress(drag: &Rc<DragState>, resolved: &Rc<ResolvedConfig>) 
     }
 }
 
-/// Flutter parity: `_handleDismissUpdateValueChanged` (`dismissible.dart:442`).
+/// Delivers `on_update` when the drag or threshold state changed.
 fn deliver_on_update(
     drag: &Rc<DragState>,
     move_controller: &AnimationController,
@@ -1414,7 +1366,7 @@ fn deliver_on_update(
 // ============================================================================
 
 /// `background`, or `secondary_background` while dragging toward
-/// `EndToStart`/`Up` (Flutter parity: `dismissible.dart:613`-`619`).
+/// `EndToStart`/`Up`.
 fn resolve_background(
     view: &Dismissible,
     drag_extent: f64,
@@ -1434,12 +1386,8 @@ fn resolve_background(
 }
 
 /// The slid-and-translated content: `FractionalTranslation` driven directly
-/// by `move_controller.value()` and the drag's current sign — mathematically
-/// identical to the oracle's `Tween<Offset>(begin: Offset.zero, end:
-/// ...).animate(_moveController)` (a zero-`begin` tween's value at `t` is
-/// just `t * end`). Flutter parity: `_updateMoveAnimation` +
-/// `SlideTransition` inside `build` (`dismissible.dart:456`-`466`,
-/// `648`-`651`).
+/// by `move_controller.value()` and the drag's current sign (a
+/// zero-`begin` offset tween's value at `t` is just `t * end`).
 fn sliding_content_view(
     move_controller: &AnimationController,
     drag_extent: f64,
@@ -1458,10 +1406,9 @@ fn sliding_content_view(
 }
 
 /// The post-dismiss collapse: a `background`-filled box shrinking along the
-/// axis perpendicular to the dismiss direction, per `_kResizeTimeCurve`
-/// (`Interval(0.4, 1.0, Curves.ease)`) — a 40% pause, then an eased collapse
-/// to zero. Flutter parity: the `SizeTransition` branch of `build`
-/// (`dismissible.dart:621`-`646`); see module docs divergence #2 for why this
+/// axis perpendicular to the dismiss direction, on an
+/// `Interval(0.4, 1.0, Curves::Ease)` — a 40% pause, then an eased collapse
+/// to zero. See module docs limit #2 for why this
 /// clips at full size rather than progressively (`ClipRect::clip_behavior`
 /// has no arbitrary-rect clipper to crop the un-collapsed axis to the
 /// revealed sliver — irrelevant here anyway, since by this point the

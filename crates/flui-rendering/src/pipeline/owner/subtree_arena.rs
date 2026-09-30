@@ -195,10 +195,9 @@ pub(super) struct SubtreeArena<'tree> {
     /// drain: only boundaries are ever used from this list, and pushing every
     /// laid-out node instead cost a measurable ~5% on `layout/flat/1000`,
     /// where the tree holds no boundaries at all.
-    /// `run_layout` marks the repaint boundaries among these for paint, which
-    /// is Flutter's per-object `markNeedsPaint()` at the end of
-    /// `RenderObject.layout` expressed as one drain instead of one call per
-    /// object.
+    /// `run_layout` marks the repaint boundaries among these for paint, a
+    /// per-object needs-paint mark expressed as one drain instead of one call
+    /// per object.
     ///
     /// The alternative it replaced was a downward sweep over the dirty root's
     /// subtree, which had to queue every boundary it found because it could
@@ -998,8 +997,8 @@ unsafe fn layout_subtree_borrowed_impl(
     };
 
     // Short-circuit clean children: if NEEDS_LAYOUT is not set AND
-    // constraints match the cached value, skip layout entirely.
-    // (Flutter rendering/object.dart:2852: early return before recurse)
+    // constraints match the cached value, skip layout entirely (early
+    // return before recursing).
     if !needs_layout_flag {
         if let Some(geometry) = cached_geometry {
             // Serving a cache built by a degraded pass is itself a
@@ -1069,8 +1068,8 @@ unsafe fn layout_subtree_borrowed_impl(
     if !is_leaf {
         // Seed each ChildState from the child's persisted RenderState.
         // A parent that does not re-position a child during this walk must
-        // preserve the child's prior offset (Flutter parity:
-        // BoxParentData.offset persists until positionChild overwrites it).
+        // preserve the child's prior offset (the offset persists until a
+        // parent positions the child again).
         // Box parents can host both Box and Sliver children, so seed through
         // RenderNode's protocol-generic accessors.
         //
@@ -1230,8 +1229,7 @@ unsafe fn layout_subtree_borrowed_impl(
             // child-slot derefs in this file use; this one was missing it.
             // A pure proxy has no baseline of its own and cannot reach its
             // child from `actual_baseline_raw` (that query takes no context),
-            // so it flags the forward and the walk continues here — mirroring
-            // Flutter's `RenderProxyBoxMixin.computeDistanceToActualBaseline`.
+            // so it flags the forward and the walk continues here.
             // Bounded so a malformed proxy chain cannot spin: past the bound
             // the query answers `None`, the same as an absent baseline.
             const MAX_PROXY_HOPS: usize = 64;
@@ -1406,8 +1404,8 @@ unsafe fn layout_subtree_borrowed_impl(
         // return early so NEEDS_LAYOUT stays set for next-frame retry.
         //
         // Same protocol-generic geometry guards as layout_leaf_only.  Runtime
-        // validation happens before state commit; debug assertions mirror
-        // Flutter's debug-only contract checks.
+        // validation happens before state commit; the debug assertions are
+        // debug-only contract checks.
         <BoxProtocol as Protocol>::validate_layout_output(debug_name, &constraints, &geometry)?;
         <BoxProtocol as Protocol>::debug_assert_layout_output(&constraints, &geometry);
 
@@ -1522,7 +1520,7 @@ unsafe fn layout_subtree_borrowed_impl(
 
 /// Recursive Box intrinsic query over the pre-acquired layout subtree.
 ///
-/// Used when a Sliver parent needs Flutter-style Box child intrinsics during
+/// Used when a Sliver parent needs Box child intrinsics during
 /// layout.  It shares the layout walk's [`SubtreeArena`] pool instead of
 /// re-entering `PipelineOwner`, preserving the same disjoint-slot discipline
 /// as `layout_subtree_borrowed`.

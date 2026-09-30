@@ -29,7 +29,7 @@ let velocity = tracker.get_velocity();
 tracing::trace!(speed = velocity.magnitude(), "pointer velocity");
 ```
 
-The tracker uses least-squares polynomial regression (Flutter's algorithm),
+The tracker uses least-squares polynomial regression,
 the only estimator in the canonical pipeline.
 
 **Algorithm Constants:**

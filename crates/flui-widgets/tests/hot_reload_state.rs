@@ -1,18 +1,14 @@
 //! Hot-reload state preservation: `perform_reassemble` re-runs every `build()`
 //! while `StatefulView` state stays in the element tree.
 //!
-//! # Parity oracle
+//! # Contract
 //!
-//! Flutter `WidgetsBinding.performReassemble()` → `BuildOwner.reassemble` →
-//! every element rebuilt in place. The property that makes hot reload useful —
-//! and the one this test pins — is that the *state object* survives: the same
-//! `ElementId`, the same render id, no second `create_state`, and the mutated
-//! value still readable after the rebuild.
+//! A reassemble rebuilds every element in place. The property that makes hot
+//! reload useful — and the one this test pins — is that the *state object*
+//! survives: the same `ElementId`, the same render id, no second
+//! `create_state`, and the mutated value still readable after the rebuild.
 //!
-//! This is the FLUI half of the parity design's success criterion #2
-//! (`docs/designs/2026-06-28-flutter-parity-hot-reload.md` §9: "`StatefulElement`
-//! state ptr stable across `perform_reassemble`"), driving the headless frame
-//! driver's `perform_reassemble`/`reassemble_render_tree` pair — the same two
+//! This drives the headless frame driver's `perform_reassemble`/`reassemble_render_tree` pair — the same two
 //! calls production `PresentationState::apply_hot_reload` makes.
 
 use std::sync::Arc;

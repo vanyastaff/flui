@@ -15,8 +15,8 @@ Animation listeners still carry `Send + Sync`. `AnimatedSize` therefore
 observes completion counts during build but invokes `on_end` after the frame.
 `Dismissible` likewise calculates transitions with layout constraints, then
 queues the event payloads on the owner-local post-frame lane; its fully-slid
-input-time completion bypass remains synchronous. This intentionally differs
-from Flutter's synchronous animation-listener notifications: user effects must
+input-time completion bypass remains synchronous. Animation-listener
+notifications are never delivered synchronously to user code: user effects must
 not execute during a FLUI build. Deferred events use the latest configured
 callback and are cancelled when their widget is disposed. A missing or closed
 post-frame lane reports a warning and drops the event, never dispatches inline.
@@ -52,19 +52,22 @@ Tests: `animated_size_completion_writes_a_signal_after_build`,
 `tests/draggable_events.rs`, `tests/page_view_events.rs`, and the
 `event_cx_tests` module of `tests/shortcuts.rs`.
 
-This does not migrate the drag-target hit-test payload callbacks, the raw
-semantics action handlers, or the unmounted `LocalHistoryEntry::on_remove`
-navigation primitive. The first two travel in `Send + Sync` render-object
-metadata and change with it (ADR-0091 §1); the last needs an explicit
-navigation write-context contract rather than an invented ambient writer.
+`DragTarget`'s `on_accept`/`on_leave`/`on_move` and `Semantics`' action
+handlers take `EventCx` too. Their render data must stay `Send + Sync`, so each
+widget registers its owner-local state (the drag target's slot, the node's
+action table, each with its `WriterSource`) in the interaction lane and stores
+only the lane's `LocalPayloadTarget` ticket; the drag session and the semantics
+action handler resolve it inside the realm (ADR-0086 §3, amended 2026-09-30;
+mapping decisions 1 and 17). The unmounted `LocalHistoryEntry::on_remove`
+navigation primitive is not migrated: it needs an explicit navigation
+write-context contract rather than an invented ambient writer.
 
 The user-facing widget catalog: configuration objects over the `flui-objects`
 render catalog, plus the stateful widgets that own gesture, focus, routing and
 overlay behavior. Layer rules, dependency direction, and the crate's place in
 the workspace DAG live in [`docs/FOUNDATIONS.md`](../../docs/FOUNDATIONS.md)
 and this crate's `[package.metadata.flui] layer`; this file
-records the per-widget decisions that diverge from the Flutter reference and
-would otherwise read as drift.
+records the per-widget design decisions that would otherwise read as drift.
 
 Cross-crate protocol decisions belong in an ADR (`docs/adr/`). What belongs
 here is a decision local to this crate: a widget's internal shape, a callback
@@ -87,8 +90,7 @@ tests, `SizedBox` under the clip and paint tests).
 `interaction` sits above `overlay`, `animated`, `stack` and `clip` because
 `Draggable` and `Dismissible` are composites: `Draggable` inserts its feedback
 into the `Overlay` and `Dismissible` slides its child with a `Stack`, a
-`ClipRect` and a `VsyncScope`, as Flutter's `drag_target.dart` and
-`dismissible.dart` compose the same widgets. The focus widgets (`Focus`,
+`ClipRect` and a `VsyncScope`. The focus widgets (`Focus`,
 `Actions`, `Shortcuts`) live in `interaction` too; they import each other in
 a cycle, so they can become a node of their own only after they move together
 into one module.
@@ -122,89 +124,72 @@ find one with `rg <name> tests/`.
 
 ### 1. `DragTarget` publishes a shared `DragTargetSlot`, not its `State`
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — behavior is the
-floor, structure is designed for Rust; every divergence names what is better,
-replaces the oracle's test, and drops no edge case by accident.
+**Choice:** the target keeps an owner-local `Rc<DragTargetSlot>` — a
+non-generic object that owns the entered list (keyed by `PointerId`), holds the
+current build's callbacks type-erased behind a private `TargetCallbacks` trait,
+and carries the target element's `RebuildHandle` and `WriterSource` so a
+transition can schedule a rebuild and open its callbacks' `EventCx`. The slot
+is registered in the owner's interaction lane, and the hit-test payload is only
+the lane's `LocalPayloadTarget` ticket, which the drag session resolves back to
+the slot inside pointer dispatch. `DragTargetState<T>` keeps only the slot and
+reads its candidate/rejected lists back out of it; `build` refreshes the
+callbacks into the slot so a rebuilt view's closures are the ones a later
+transition invokes.
 
-**Oracle:** `widgets/drag_target.dart`. `_DragTargetState.build` wraps its
-child in `MetaData(metaData: this)`, and `_DragAvatar._getDragTargets` walks
-the hit path for a `RenderMetaData` whose `metaData` *is* a
-`_DragTargetState`, then calls `didEnter`/`didMove`/`didLeave`/`didDrop` on
-that object directly. Dart can do this because the payload is a GC'd reference
-to the live `State`, and because a `State` can reach `widget` for the
-callbacks.
-
-**Choice:** the payload is an `Arc<DragTargetSlot>` — a non-generic object that
-owns the entered list (keyed by `PointerId`), holds the current build's
-callbacks type-erased behind a private `TargetCallbacks` trait, and carries the
-target element's `RebuildHandle` so a transition can schedule the rebuild the
-oracle gets from `setState`. `DragTargetState<T>` keeps only the slot and reads
-its candidate/rejected lists back out of it; `build` refreshes the callbacks
-into the slot so a rebuilt view's closures are the ones a later transition
-invokes.
-
-**Why the oracle's shape does not transcribe.** Two independent reasons, both
+**Why the payload is not the state.** Two independent reasons, both
 structural:
 
 - A hit-test payload is `Arc<dyn Any + Send + Sync>` (`HitTestEntry::metadata`).
-  A `DragTargetState` holding `Rc<dyn Fn …>` callbacks could not be one.
+  Neither a `DragTargetState` nor a slot holding `Rc<dyn Fn …>` callbacks can
+  be one, so the payload is a ticket and the slot stays in the lane.
 - FLUI's callbacks live on the *view*, which the state does not own. A payload
   reaching only the state could not invoke them at all.
 
 **Consequences:**
 
-- **`DragTarget`'s four transition callbacks change from `Rc<dyn Fn …>` to
-  `Arc<dyn Fn … + Send + Sync>`** — a breaking public-API change, forced by
-  the `Send + Sync` hit-test payload above; it puts the target's cross-thread
-  contract in the type system instead of resting on GC. `Draggable`'s
-  callbacks, which never cross the payload, are owner-local and take
-  `EventCx`; `DragTarget` keeps `Send + Sync` until the metadata becomes
-  owner-local (ADR-0086 Status). The *builder* stays `Rc`: it produces a
-  `BoxedView`, which is owner-local by construction, and it is only ever called
-  from `build`.
+- **`on_accept`, `on_leave` and `on_move` take `&mut EventCx<'_>`** and run
+  synchronously inside the drag's dispatch, so a drop lands before the
+  draggable's `on_drag_end`
+  (`a_drop_writes_through_the_targets_on_accept_before_the_draggable_completes`).
+  `on_will_accept` is a query and takes none. None of the four needs
+  `Send + Sync`. The *builder* stays `Rc`: it produces a `BoxedView`, which is
+  owner-local by construction, and it is only ever called from `build`.
 - The veto (`on_will_accept`) stays **synchronous**, which a deferred
   drain-on-next-build queue would have lost — a drag has to know at move time
   which targets are candidates.
-- The slot outlives its element by `Arc`. A target that leaves the tree
+- The slot outlives its element by `Rc`. A target that leaves the tree
   mid-drag is `retire`d in `dispose`, and every later transition is a no-op —
-  the oracle's `if (!mounted) return;` in a form that cannot be forgotten at one
-  call site. One deliberate improvement rides on this: `did_drop` on a retired
-  slot returns `false`, so the drag reports the drop as *not* accepted, where
-  the oracle's `finishDrag` records `wasAccepted = true` even though its
-  `didDrop` returned early. Covered by
+  a "not mounted" early return in a form that cannot be forgotten at one
+  call site. `did_drop` on a retired
+  slot returns `false`, so the drag reports the drop as *not* accepted. Covered by
   `a_target_removed_mid_drag_receives_nothing_further_and_accepts_nothing`.
-- `DragTarget` tags itself `HitTestBehavior::Translucent`, the oracle's own
-  default `hitTestBehavior`. Making it configurable stays a named deferral.
+- `DragTarget` tags itself `HitTestBehavior::Translucent`.
+  Making it configurable stays a named deferral.
 
-**Replacement tests:** the whole `DragTargetSlot` protocol group in
+**Tests:** the whole `DragTargetSlot` protocol group in
 `tests/parity/draggable_test.rs` (group 2), plus the live-discovery group
 (group 4) which pins the enter/move/leave/drop ordering for nested and
-overlapping targets against `_DragAvatar.updateDrag`'s own rules.
+overlapping targets.
 
 ### 2. `DragTargetDetails` carries a target-local position as well as a global one
 
-**Oracle:** `DragTargetDetails.offset` is a global position and nothing else. A
-Dart target that wants a local one calls `globalToLocal` on its own render
-object.
-
-**Choice:** `offset` keeps the oracle's global meaning; `local_offset` adds the
+**Choice:** `offset` is the global position; `local_offset` adds the
 same point mapped through the hit entry's own global-to-local transform.
 
-**Why:** FLUI callback code cannot reach a render object, so the oracle's
-escape hatch does not exist here — a target would have had *no* way to learn
+**Why:** callback code cannot reach a render object, so it has no way to
+map a global point itself — a target would have had *no* way to learn
 where the drag is in its own space. Taking the value from
 `HitTestEntry::transform` composes the entire ancestor chain, so it is exact
 under scale and rotation, where subtracting a remembered origin is not.
 
-**Replacement test:**
+**Test:**
 `a_transformed_target_is_told_the_drag_position_in_its_own_space`, whose
 expected value is reachable only by composing the real transform.
 
 ### 3. `Draggable` recovers its global position through a private origin probe
 
-**Oracle:** `_DragAvatar.updateDrag` hit-tests at `globalPosition +
-feedbackOffset` on every move. Flutter's `PointerEvent` carries `position`
-(global) *and* `localPosition`, so a widget always has both.
+**Need:** the drag hit-tests at `globalPosition + feedbackOffset` on every
+move, so it needs the global position of the pointer.
 
 **Choice:** `Draggable` mounts a payload-free `DragOrigin` view as its
 `Listener`'s direct child. That view's `find_render_object()` resolves to the
@@ -226,14 +211,11 @@ axis restriction, and `to_global` are all built on that one space being the
 relabelled — so the probe stays until the recognizers carry the pair.
 
 **What the recognizers need, so the follow-up is not re-derived from scratch:**
-Flutter's answer is `OffsetPair` (`gestures/events.dart`), which
-`DragGestureRecognizer` threads through `_initialPosition` and `_lastPosition`
-(`gestures/monodrag.dart:417`, `:686`) and hands to every detail struct; the
-velocity tracker samples the *local* half (`:664`) and deltas are mapped to
-global via `PointerEvent.transformDeltaViaPositions`. Porting that means the
+a local/global position pair threaded through the drag recognizers'
+initial and last positions and handed to every detail struct, with the velocity
+tracker sampling the *local* half and deltas mapped to global. That means the
 trait signatures, `RecognizerBase`'s tracked position, and each of the ten
-recognizers' internal position plumbing — a change of its own size, with its
-own per-recognizer parity evidence.
+recognizers' internal position plumbing — a change of its own size.
 
 **Alternatives rejected:**
 
@@ -257,11 +239,10 @@ own per-recognizer parity evidence.
 
 **Consequences named rather than left to be discovered:**
 
-- A drag carrying no data discovers nothing. The oracle's null-data drag enters
-  every target; `ErasedDragData` erases a concrete value, not an `Option`, so
-  that state has no representation here.
+- A drag carrying no data discovers nothing: `ErasedDragData` erases a concrete
+  value, not an `Option`, so a data-less drag has no representation here.
 - `axis` restriction applies to deltas in the `Listener`'s space rather than the
-  root's, which differs from the oracle only under a rotating ancestor.
+  root's, which differs only under a rotating ancestor.
 - **A transform that changes mid-contact is still converted inconsistently.**
   Pointer dispatch localizes with the `HitTestEntry` transform captured in the
   route resolved at `PointerDown`, while `local_to_global` converts with the
@@ -274,23 +255,18 @@ own per-recognizer parity evidence.
   the `Listener`, one layer above where this widget reads its position. Not
   worked around.
 
-**Replacement tests:** group 4 of `tests/parity/draggable_test.rs` drives real
+**Tests:** group 4 of `tests/parity/draggable_test.rs` drives real
 pointer input across a tree where the draggable and the targets are at
 different offsets, so a local-position implementation enters targets the
 pointer was never over.
 
 ### 4. Named routes split into six untyped entry points and two typed ones, and a request that cannot be served is a typed error
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — behavior is the
-floor, and a divergence names what is better, replaces the oracle's test, and
-drops no edge case by accident. Gated as [ADR-0024](../../docs/adr/ADR-0024-named-routes-seam.md) §7.3.
+**Rule:** gated as [ADR-0024](../../docs/adr/ADR-0024-named-routes-seam.md) §7.3.
 
-**Oracle:** `widgets/navigator.dart`, `NavigatorState._routeNamed` and the four
-`*Named` methods. Flutter asserts (debug-only) when `onGenerateRoute` is absent
-or returns null with no `onUnknownRoute`, and re-types the generated route
-through an unchecked `as Route<T?>?` — so in a release build an unresolvable
-name is a null dereference and a *wrong* `T` is never detected at all.
-`pushNamed<T>` returns `Future<T?>`, which cannot express either failure.
+**Problem:** a name that no table entry or generator resolves, and a caller's
+result type that differs from the route's, are both failures a
+`Future<T?>`-shaped push cannot express.
 
 **Choice:** two shapes, not one.
 
@@ -326,21 +302,19 @@ its own**.
 than the bug it fixed. `push_named::<()>("/settings")` against a
 `PageRoute<i32>` generator would return `Err` and *not navigate* — a caller who
 just wants to go to a screen has no reason to know what that screen completes
-with, and Flutter's `pushNamed<void>` pushes it without complaint. Trading a
+with. Trading a
 silent-`None` for a refusal-to-navigate in the common case is a regression. The
 split keeps the strong guarantee exactly where the caller has asserted a type.
 Typed siblings for replacement and remove-until are deliberately not offered:
 no consumer yet, and each is purely additive later.
 
-**Why the oracle's shape does not transcribe.** Two reasons, one per variant:
+**Why a typed error.** Two reasons, one per variant:
 
 - A route name is *caller input*, not a framework invariant, and
   [`PANIC-POLICY`](../../docs/PANIC-POLICY.md) puts caller input on the `Result`
-  side. Flutter's assert is also debug-only, so its release behavior is worse
-  than either option here.
-- The type mismatch is genuinely detectable in Rust and genuinely undetectable
-  in Dart: FLUI's registration stays typed, so the generated route knows its own
-  `Output`. Reporting it as an indistinguishable `None` at delivery — this ADR's
+  side; a debug-only assert would behave differently in release.
+- The type mismatch is genuinely detectable in Rust: FLUI's registration stays
+  typed, so the generated route knows its own `Output`. Reporting it as an indistinguishable `None` at delivery — this ADR's
   own first answer — would have thrown that information away for nothing.
 
 **Consequence, named rather than left to be discovered:** the *result* a `_with`
@@ -350,7 +324,7 @@ route's `Output`. Only `push_named_typed`'s `T` is checked early. So
 `push_replacement_named_with(name, Wrong)` still completes the replaced route
 with `None` and a log line, exactly as `push_replacement_with` does.
 
-**Replacement tests:** in `tests/navigator_public.rs` —
+**Tests:** in `tests/navigator_public.rs` —
 `a_route_whose_output_the_caller_never_names_is_still_navigable_by_name`
 (a registered `PageRoute<i32>` reached through `push_named` with no `T` in
 sight: the regression the split prevents) and its sibling
@@ -371,12 +345,6 @@ and leaves the typed one green.
 
 **Rule:** as §4 above; same ADR.
 
-**Oracle:** `NavigatorState.popAndPushNamed` is literally
-`pop<TO>(result); return pushNamed<T>(routeName, arguments: arguments);` — the pop
-is committed before `_routeNamed` is called. `pushReplacementNamed` instead
-evaluates `_routeNamed(..)` in *argument* position and then replaces whatever is
-on top.
-
 **Choice:** read the target route's id **first**, then resolve the name, then act
 on that captured id. Resolution happens before any mutation, so an unresolvable
 name changes nothing; and the operation acts on the route the caller meant, not
@@ -394,19 +362,14 @@ its removal is defined by a **predicate**, not by a captured top, so a nested
 push is swept along with everything else — do not harmonise it into the captured
 shape.
 
-**Three divergences from the oracle, all real, all only for a re-entrant factory:**
+**Three consequences, all only for a re-entrant factory:**
 
 1. **Ordering.** The nested `didPush` precedes the dismissal of the caller's
-   route. Flutter's `popAndPushNamed` pops *first* and cannot produce this, so
-   **this exposure is created by the divergence, not inherited.** An earlier
-   revision of this entry claimed the success-path stream was "identical to the
-   oracle's" and that "nothing is lost". Both were false; a divergence's cost is
-   not visible until something else changes, and `RouteRequest::navigator()` was
-   what changed.
+   route, because the pop is deferred until after resolution.
 
-   **That accessor is now withdrawn (§9), and these two divergences change
-   meaning rather than disappearing.** They were the price of a capability the
-   crate offered. They are now what still happens if a factory mutates the stack
+   **The `RouteRequest::navigator()` accessor is withdrawn (§9), so these two
+   consequences change meaning rather than disappearing.** They were the price of
+   a capability the crate offered. They are now what still happens if a factory mutates the stack
    — which the crate no longer offers a way to do, and cannot prevent, because a
    factory is an `Rc<dyn Fn>` and closures capture freely. Measured, not assumed:
    a factory that captures a handle reproduces the window exactly, and reverting
@@ -430,7 +393,7 @@ shape.
    while it was still on the stack, with the genuinely replaced route never
    reported at all. An observer acting on that would tear down a live route.
    `RouteEntry::replacing` now carries the id the completion used, resolved once,
-   and the observation reads it. Note this is invisible to a kind-only oracle:
+   and the observation reads it. Note this is invisible to a kind-only assertion:
    the stream is identical either way, which is why the pin asserts the payload.
 
    The sibling arms keep the positional answer, deliberately: `Push` means "the
@@ -461,7 +424,7 @@ The two surprises:
   be wrong, so it is the one worth stating.
 - **The "gone" pop-and-push case is indistinguishable from the no-factory case.**
   The factory's own `pop` produces the `pop`, and the operation's dismissal is
-  then a no-op — so divergence 2 shows only in the *buried* case, not in every
+  then a no-op — so consequence 2 shows only in the *buried* case, not in every
   factory mutation.
 
 **Undelivered results.** A caller-supplied result that reaches no route is
@@ -490,7 +453,7 @@ result. It is left armed rather than removed, because reachability here is a
 property of the current call graph and this feature has already watched that
 graph change four times.
 
-That last one is not an edge case at all. `Route::pop_disposition` is Flutter's
+That last one is not an edge case at all. `Route::pop_disposition` is
 `isFirst ? bubble : pop`, so the bottom-most route **bubbles by design**; before
 this was fixed, `maybe_pop_with(v)` on a one-route navigator discarded the
 caller's value on *every* call, under the guard. The commonest possible stack
@@ -535,13 +498,7 @@ flush time, because nothing can run between their call and the flush. The named
 ones capture it *before* resolving, because a factory can. That difference is
 the whole of this entry.
 
-**Where this beats the reference.** `pushReplacementNamed` has the identical
-defect in Flutter: the generator runs in argument position, and a Dart factory
-can navigate through `Navigator.of(context)` just as ours can, after which the
-replacement targets the wrong route. FLUI's capture removes it — completion and
-observation both, per point 3 above.
-
-**Replacement tests** (`tests/navigator_public.rs`), each with the mutation it
+**Tests** (`tests/navigator_public.rs`), each with the mutation it
 detects:
 
 - `pop_and_push_named_with_an_unresolvable_name_pops_nothing` and
@@ -561,21 +518,16 @@ detects:
   on the `didReplace` **payload**; deriving the reported id positionally again
   makes it name the factory's route. Its sibling
   `a_re_entrant_replacements_observer_stream_is_pinned` records the stream, and
-  is deliberately *not* the oracle for point 3 — the stream does not change when
+  is deliberately *not* the pin for point 3 — the stream does not change when
   the identity is wrong.
 
 ### 6. Named-route registration lives on the handle, and the app builder will replace the table wholesale
 
 **Rule:** as §4 above; ADR-0024.
 
-**Oracle:** Flutter splits registration across two widgets. `Navigator` owns
-`onGenerateRoute`/`onUnknownRoute`; `WidgetsApp` owns `routes: Map<String,
-WidgetBuilder>` and `home`, and `WidgetsApp._onGenerateRoute` folds all three
-into the single hook `Navigator` reads.
-
 **Choice:** all three register on `NavigatorHandle` — `route(name, factory)`,
 `on_generate_route`, `on_unknown_route` — and one private `RouteRegistry`
-resolves them in Flutter's order (table → generator → unknown). FLUI's
+resolves them in order (table → generator → unknown). FLUI's
 `Navigator` widget is a thin shell over the handle and every push already goes
 through it, so a widget-level generator would need widget-diff plumbing to reach
 the same place.
@@ -608,7 +560,7 @@ natural code does, and `NavigatorHandle::clear_routes` is the explicit escape fo
 a caller who captured anyway. Caller-controlled by necessity: only the caller
 knows whether it intends to register again.
 
-**Replacement tests:**
+**Tests:**
 `route_registrations_survive_an_unmount_and_remount_over_a_retained_handle` and
 `clear_routes_drops_every_registration_including_the_generator_hooks`
 (`tests/navigator.rs`) for the lifecycle contract above — restoring the dispose
@@ -622,12 +574,6 @@ clear fails the first;
 ### 7. A generated route that is never pushed still runs `dispose`
 
 **Rule:** as §4 above — "never lose an edge case by accident".
-
-**Oracle:** `Route.dispose` is an explicit lifecycle method, and
-`Navigator.defaultGenerateInitialRoutes`' failure branch walks the routes it had
-already generated calling `route?.dispose()` before giving up. Discarding a
-generated route without disposing it is a leak in Flutter too; Flutter simply
-never leaves one undisposed.
 
 **Choice:** `GeneratedRoute` holds its erased route in an `Option` and
 implements `Drop`, which forwards to `Route::dispose` through a
@@ -644,7 +590,7 @@ route and then answers `None` after all — so the obligation is load-bearing, n
 theoretical. It is also invisible: nothing observes the omission except a route
 that quietly never released what it held.
 
-**Replacement test:**
+**Test:**
 `push_named_typed_with_the_wrong_result_type_errors_disposes_the_route_and_changes_nothing`
 (`tests/navigator_public.rs`) counts `dispose()` calls on a probe route and
 asserts exactly one. Deleting `impl Drop for GeneratedRoute` fails it.
@@ -653,10 +599,9 @@ asserts exactly one. Deleting `impl Drop for GeneratedRoute` fails it.
 
 **Rule:** as §4 above.
 
-**Oracle:** Dart's `RouteSettings.arguments` is an `Object?` reference, and the
-upstream `'arguments for named routes'` tests assert it with `same(...)` —
-pointer identity, not value equality. Relaying one settings object's arguments
-onto another is free there.
+**Need:** tests assert a route's arguments by pointer identity, not value
+equality, so relaying one settings object's arguments onto another must keep
+the same payload.
 
 **Choice:** `with_arguments<T>(value)` keeps taking the value and minting a
 fresh `Arc` (it is the construction case), and a second constructor
@@ -664,7 +609,7 @@ fresh `Arc` (it is the construction case), and a second constructor
 
 **Why:** `RouteSettings`' own `PartialEq` compares the payload by `Arc::ptr_eq`,
 so a relay through `with_arguments` silently changes the answer to the exact
-question the oracle asks — and the two constructors are one character apart at
+question identity-based assertions ask — and the two constructors are one character apart at
 the call site with no type error between them.
 
 **What it does *not* claim.** It is not the only way to move a payload: a caller
@@ -676,7 +621,7 @@ so the safe form is as short as the unsafe one — rather than a fact about
 `with_arguments` that every relay site has to remember. That is a real but
 modest gain, and it is stated here as such.
 
-**Replacement tests:**
+**Tests:**
 `route_key_with_arguments_shared_relays_a_payload_without_changing_its_identity` covers
 the keyed counterpart `RouteKey::with_arguments_shared`, which exists because
 `RouteKey::with_arguments` takes its payload by value and would wrap an `Arc` in
@@ -691,15 +636,6 @@ settings object it was handed.
 
 ### 9. A route factory is handed the request only — the navigator accessor is withdrawn
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — the reference's
-observable behavior is the floor; where a contract can be improved, improve it
-and record what is better.
-
-**Oracle:** `widgets/navigator.dart`, the `RouteFactory` typedef —
-`Route<dynamic>? Function(RouteSettings)`. A Dart factory that needs to navigate
-closes over `Navigator.of(context)` and the resulting reference cycle is
-collected.
-
 **Choice:** the factory takes a `RouteRequest<'_>` carrying the request only —
 `settings()`, `name()`, `argument::<T>()`. A redirect is expressed by *returning a
 different route*, which is what a factory is for.
@@ -711,7 +647,7 @@ Both are withdrawn, for two reasons:
 - **The argument was circular.** It existed to remove the *reason* to capture a
   handle. But a route's content never needed one either — a `RouteContentBuilder`
   receives `&dyn BuildContext` and `NavigatorHandle::maybe_of(ctx)` resolves from
-  it, exactly as `Navigator.of(context)` does. With no need to capture there was
+  it. With no need to capture there was
   no cycle to avoid, and the accessor's only remaining use was navigating
   *during resolution*.
 - **It had zero production call sites.** All four were tests, every one
@@ -729,7 +665,7 @@ would have to refuse mutation from `pop()` and `remove_route()` too, which retur
 `bool` — leaving silent failure, a `docs/PANIC-POLICY.md` violation, or a partial
 guard that does not close the window anyway.
 
-**Why the oracle's shape does not transcribe.** Rust does not collect cycles, and
+**Why the handle is not captured.** Rust does not collect cycles, and
 the registry is owned by the navigator. A factory that captured a
 `NavigatorHandle` — the obvious way to navigate from inside one — closed
 `Arc<NavigatorShared>` → registry → `Rc<dyn Fn>` → handle → back on itself, so
@@ -741,7 +677,7 @@ the cycle is yours".
 
 Note the route's *content* never needed a captured handle: a
 `RouteContentBuilder` receives a `&dyn BuildContext` and `NavigatorHandle::maybe_of(ctx)`
-resolves from it, exactly as `Navigator.of(context)` does. So after this change
+resolves from it. So after this change
 there is no remaining case where capturing is the right answer.
 
 **Consequences, named rather than left to be discovered.** Two, and the second
@@ -752,14 +688,14 @@ is the one that cost a review round:
 - **It made re-entrant navigation *advertised*, which is what surfaced §5's
   hazard.** Handing the factory a navigator turned "a factory could conceivably
   navigate" into a documented, ergonomic shape with a passing test. §5's
-  captured-target fix, its three observable divergences, and §4's qualifier about a
+  captured-target fix, its three observable consequences, and §4's qualifier about a
   declining factory's own mutations were all written because of that. Withdrawing
   the accessor un-advertises the shape; it does not un-reach it, so all three
   survive the withdrawal — see the measurement above. What the accessor really
   cost, then, was not the defences (those defend an invariant that was always
   worth defending) but the six rounds it took to notice they were needed.
 
-**Replacement tests:** `a_factory_is_handed_the_callers_name_and_arguments` pins
+**Tests:** `a_factory_is_handed_the_callers_name_and_arguments` pins
 what the request delivers. Its predecessor also asserted that `navigator()`
 returned *this* navigator rather than any navigator; that claim's subject no
 longer exists, so nothing pins it and nothing needs to.
@@ -773,9 +709,8 @@ owner thread — and its claim is now the weaker *survivable*, not *supported*.
 
 **Rule:** as §9 above.
 
-**Oracle:** Flutter routes by `String` and re-types through an unchecked
-`as Route<T?>?`. Nothing connects `'/details'` to the `MaterialPageRoute<Order>`
-behind it, in either direction, at any time.
+**Problem:** a route addressed by a bare string is re-typed unchecked, so
+nothing connects `'/details'` to the `PageRoute<Order>` behind it.
 
 **Choice:** `RouteKey<T>` — a `&'static str` plus `PhantomData<fn() -> T>`,
 `const`-constructible so an app declares its routes once as constants.
@@ -833,7 +768,7 @@ this entry claimed before the keyed-vs-keyed case was written down and run:
 - `on_generate_route` answering the name when the table misses.
 
 Closing it properly needs a type-carrying registry key, which the string-keyed
-table cannot express and Flutter's `onGenerateRoute` fallback would defeat
+table cannot express and the `on_generate_route` fallback would defeat
 anyway.
 
 **What the `TypeId` guard actually buys: a pre-mutation, non-panicking
@@ -844,12 +779,12 @@ push and *then* fail its `BUG:` `expect`, panicking mid-operation with the stack
 already mutated. That is the stronger and more honest claim, and it is what the
 mutation below actually demonstrates.
 
-**Replacement tests:**
+**Tests:**
 `a_route_key_carries_its_result_type_from_registration_to_delivery` (dropping
 `push_keyed`'s result handle fails it),
 `route_key_identity_is_its_name_and_costs_its_output_type_no_bounds` (deriving
 the impls instead of writing them stops it compiling, since its `Output` type
-implements nothing), and two collision oracles —
+implements nothing), and two collision tests —
 `a_name_registered_by_both_paths_with_different_outputs_is_reported_not_silently_wrong`
 (typed-vs-untyped) and
 `two_route_keys_sharing_a_name_collide_even_though_both_registrations_compile`
@@ -860,16 +795,8 @@ clean `Err`.
 
 ### 11. A route's `settings` are write-only, so the factory relays values instead — recorded, with its trigger
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — a behavior the
-reference handles is dropped only by decision, recorded where a reader will find
-it.
-
-**Oracle:** every Flutter route factory ends
-`MaterialPageRoute(settings: settings)`, relaying the request's name *and*
-`arguments` onto the route it builds, so the pushed screen can read
-`ModalRoute.of(context)!.settings.arguments` back ambiently.
-
-**Choice:** not ported. No FLUI route builder accepts a `RouteSettings` —
+**Choice:** the request's name and arguments are not relayed onto the built
+route. No FLUI route builder accepts a `RouteSettings` —
 `SimpleRoute` / `PageRoute` / `PopupRoute` offer `.named(name)` only — so a
 named-pushed route's own `settings().argument::<T>()` is always `None`. The
 factory reads `request.argument::<T>()` and **moves the value into the content
@@ -882,9 +809,8 @@ workspace-wide the only consumers are two internal delegations
 (`modal_route.rs`, `page_route.rs`) and one `Debug` field. There is no
 `ModalRoute::of`, no observer that reports a route name, no name-based finder. A
 pushed route's settings are written by its author and read by nobody. And the
-capability the oracle's relay serves is served *better* here: moving the value
-into the builder is a typed capture, where Dart needs `settings:` only because
-its screens read arguments back ambiently.
+capability a relay would serve is served by moving the value
+into the builder, which is a typed capture.
 
 **The trigger — this is the part that makes recording correct rather than a
 trap.** The first read path added — an observer reporting route names, a
@@ -893,7 +819,7 @@ silently wrong, and `with_settings` on `SimpleRoute` / `PageRoute` / `PopupRoute
 must land **in that same change**, not after it. `RouteSettings::with_arguments_shared`
 (§8) already exists as the identity-preserving half such a builder needs.
 
-**Replacement test:** none, and deliberately — there is no behavior to pin, only
+**Test:** none, and deliberately — there is no behavior to pin, only
 an absent capability. What is pinned is the *documentation*: `RouteRequest::settings`
 no longer claims a relay that does not exist, which is what its doc said before.
 
@@ -902,10 +828,8 @@ no longer claims a relay that does not exist, which is what its doc said before.
 **Rule:** as §11 above. The house rule for caller error in this repo is
 repair-and-warn, not refuse.
 
-**Oracle:** none. Flutter's table is `Map<String, WidgetBuilder>` and its routes
-are `Route<dynamic>`; there is no type to disagree about, so the reference has
-nothing to say here. This is a hazard FLUI's own `RouteKey<T>` creates by making
-a promise the name-keyed table cannot keep.
+**Problem:** a hazard `RouteKey<T>` creates by making a promise the name-keyed
+table cannot keep.
 
 **Choice:** each table entry stores `TypeId::of::<R::Output>()` and its
 `type_name` beside the factory — `route` has `R` in scope and `route_keyed` knows
@@ -959,7 +883,7 @@ is no compile-time oracle — dropping under the guard compiles clean and hangs 
 so it is pinned by a test rather than by review, and the pin was written after
 all four paths had shipped with the defect.
 
-**Replacement tests:**
+**Tests:**
 `a_registration_dropped_while_replacing_or_clearing_may_re_enter_the_registry`
 covers all four displacement paths; reverting any one of them to drop under the
 guard makes it **hang** rather than fail, which is why it asserts progress
@@ -977,65 +901,43 @@ pins the re-entrancy above.
 `a_keyed_entry_that_declines_falls_through_to_a_generator_whose_type_is_still_checked`
 (`navigator_public.rs`) pins the shape the warning cannot reach.
 
-### 13. We keep the oracle's callback-before-observers order and drop its refusal, so an effect can be observed before its cause
+### 13. A `PopScope` callback runs before the observers, and may navigate, so an effect can be observed before its cause
 
 **Rule:** as §4 above; same ADR.
 
-**Oracle:** `Route.onPopInvokedWithResult` is called from `_RouteEntry.handlePop`,
-inside `_flushHistoryUpdates`; the pop observation is only *queued* there, and
-observers are notified afterwards by `NavigatorState._flushObserverNotifications`.
-So a `PopScope` callback runs **before** `NavigatorObserver.didPop` in the
-reference too.
-
-**Choice:** keep that order. `apply` runs step 0 — everything the flush owes user
+**Choice:** `apply` runs step 0 — everything the flush owes user
 code, including deferred `PopScope` effects — before step 1 delivers to observers.
-This is parity, and reordering would *create* a divergence rather than remove one.
+So a `PopScope` callback runs **before** `NavigatorObserver.didPop`.
 
-**Where we diverge, and it is not the ordering.** `handlePop` runs under
-`assert(navigator._debugLocked)`, and every imperative entry point on
-`NavigatorState` asserts `!_debugLocked` — 13 of them. So in the reference a
-synchronous navigation from `onPopInvokedWithResult` **aborts a debug build**.
-Flutter's answer to "an effect observed before its cause" is not an ordering rule:
-it is that you cannot get there.
-
-FLUI permits it, deliberately — `pop_scope_callbacks_may_call_back_into_the_navigator`
+**Re-entrancy is permitted.** Refusing a synchronous navigation from inside the
+callback would mean never having to sequence the interleaving; FLUI permits it,
+deliberately — `pop_scope_callbacks_may_call_back_into_the_navigator`
 guarantees it, and the permission exists because refusing re-entrancy is what
-produced a fan-out deadlock here. **So we kept the reference's ordering and removed
-its refusal, and the inversion is the price of that.** A `PopScope` callback that
-navigates is observed before the pop that invoked it:
+produced a fan-out deadlock here. **The inversion is the price of that.** A
+`PopScope` callback that navigates is observed before the pop that invoked it:
 
 ```
 ["push(RouteId(3), prev=Some(RouteId(1)))",
  "pop(RouteId(2),  prev=Some(RouteId(1)))"]
 ```
 
-**Why not restore the refusal.** A `_debugLocked` equivalent would revert a
-recorded improvement to buy back a restriction removed on purpose. Flutter can
-afford the refusal because it never had to order the interleaving — refusing
-re-entrancy means never having to sequence it. Having solved the harder problem,
-adopting the easier prohibition would be a regression wearing a parity badge.
+**Why not restore the refusal.** A debug-lock equivalent would revert a
+restriction removed on purpose; refusing re-entrancy is the easier prohibition,
+and this design sequences the interleaving instead.
 
-**What was missing until now** is exactly this entry: the *permission* was recorded
-as an improvement and its *ordering consequence* was not. An improvement's cost is
-not visible until something else changes, and the something else was already in the
-tree.
-
-**Replacement test:**
+**Test:**
 `a_pop_scope_callback_that_navigates_is_observed_before_the_pop_that_caused_it`
 (`tests/navigator.rs`), red-checked by swapping step 0 and step 1 — which yields
-`[pop, push]`, i.e. **the divergence, not the fix**.
+`[pop, push]`.
 
 ### 14. `ParentDataView` ancestry is checked at attach, with catalog diagnostic labels
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — framework-user
+**Rule:** framework-user
 composition errors must not surface as internal render-protocol panics.
 
-**Oracle:** Flutter's `ParentDataWidget` / `_updateParentData` rejects misuse
-(e.g. `Expanded` under `Stack`) with an "Incorrect use of ParentDataWidget"
-diagnostic naming the widget, typical ancestor, and ownership chain. Debug and
-profile/release are meant to agree on the contract (see flutter/flutter#108186).
-
-**Choice:** keep Flutter's *observable* early-reject contract, expressed in Rust
+**Choice:** misuse (e.g. `Expanded` under `Stack`) is rejected early with a
+diagnostic naming the widget, its typical ancestor and the ownership chain, and
+debug and release agree on the contract. It is expressed in Rust
 as:
 
 - `ParentDataView::{debug_type_name, typical_ancestor_description}` — catalog
@@ -1052,40 +954,32 @@ as:
 the offending widget behind `TypeId` text, and let secondary bootstrap
 `InvalidGeometry` panics mask the primary failure in harnesses.
 
-**Replacement tests:** `parent_data_ancestry.rs` (`expanded_under_stack_…`,
+**Tests:** `parent_data_ancestry.rs` (`expanded_under_stack_…`,
 `positioned_under_row_…`) — assert the attach-seam diagnostic and that the
 message is not `BoxLayoutCtx::from_erased`. Happy paths remain in
 `flex_parent_data.rs` / `stack_positioned.rs`.
 
 ### 15. `Container` is one render object, not a conditional widget stack
 
-**Rule:** Design stance ("Flutter is a reference, not a spec") — a convenience widget's implementation shape must
+**Rule:** a convenience widget's implementation shape must
 not make the caller's unkeyed child state depend on which cosmetic options are
 set.
 
-**Oracle:** `widgets/container.dart` builds `Align` / `Padding` / `ColoredBox` /
-`DecoratedBox` / `ConstrainedBox` / margin `Padding` / `Transform` only when the
-matching field is set. Toggling a field inserts or removes a level between the
-parent and the child, so reconciliation diverges there and an unkeyed stateful
-child below is rebuilt from scratch (flutter/flutter#161698). That issue is
-still open, and the thread is worth reading before touching this decision:
-maintainers weighed GlobalKey-like reparenting (goderbauer — concluded it
-duplicates the GlobalKey mechanism and its cost, so a caller may as well key
-the child), a "compressed element" holding the intermediate widgets (chunhtai),
-a local deactivated-element map, and render-level composition. Hixie's position
-is to fix the docs rather than the widget, and to steer people away from
-`Container` entirely.
+**Problem:** a `Container` built as a conditional stack of `Align` / `Padding` /
+`ColoredBox` / `DecoratedBox` / `ConstrainedBox` / margin `Padding` / `Transform`,
+one level per set field, inserts or removes a level between the parent and the
+child whenever a field is toggled, so reconciliation diverges there and an
+unkeyed stateful child below is rebuilt from scratch. Alternatives (keyed
+reparenting, a "compressed element" holding the intermediate widgets, a local
+deactivated-element map) each duplicate an existing mechanism or add a new one.
 
-**Choice:** take the render-level composition — the option loic-sharma proposed
-upstream (2025-05-13) and later prototyped as `Container2` in
-`loic-sharma/flutter_playground` (2025-12-26). `Container` is a `RenderView`
+**Choice:** render-level composition. `Container` is a `RenderView`
 over one `RenderContainer` (`flui-objects`) that carries margin, additional
 constraints, padding, alignment, color, decoration and transform as *fields*.
 The child's slot is therefore structurally fixed and no option can move it.
 
-**Where we diverge from that prototype, and what it costs.** The upstream
-sketch keeps composition in the render layer: its `RenderContainer` extends a
-`RenderComposedBox` that builds a real render-object subtree
+**What it costs.** One alternative keeps composition in the render layer, with a
+composed box building a real render-object subtree
 (`RenderPadding` → `RenderDecoratedBox` → …) behind one widget/element. FLUI's
 is a single render object that *re-derives* that subtree's geometry, paint,
 hit-test and intrinsics as its own code. The upside is one node and no
@@ -1097,49 +991,48 @@ child-recursion gate is conditional — see **Hit-testing** below), and the
 layered-range predicate now exists in two places (issue #1143). A composed
 shape would make those classes unrepresentable rather than tested-for. It is a
 legitimate future reshape, not a defect in this one; tracked in issue #1144.
-chunhtai's objection to render-level composition applies to us unchanged —
-it fixes `Container` and not the general class, so any other conditional-layer
-widget in this catalog keeps the same hazard.
+Render-level composition fixes `Container` and not the general class, so any
+other conditional-layer widget in this catalog keeps the same hazard.
 
-Two properties follow, and both are the reason for the divergence:
+Three properties follow:
 
 * **State survives every toggle** with no `GlobalKey`, no retake, and no
   lifecycle churn — nothing for the caller to opt into, and no reparenting
   semantics leaking into an unmoved subtree.
 * **The element tree is where the win is, not the render tree.** A conditional
   stack inflates and deflates an *element* per toggled option, and elements are
-  not free: knopp reports on the upstream issue (2026-04-12) that element
-  inflation/deflation is a measured bottleneck during fast scrolling — "a
-  thousand cuts problem" — and names constraining `Container` to a single
-  element as a direct improvement. That is the load-bearing argument for this
-  divergence. The render-node accounting below is an honest cost statement, not
+  not free: an upstream report on the equivalent widget-stack `Container`
+  (2026-04-12) measures element inflation/deflation as a bottleneck during fast
+  scrolling — "a thousand cuts problem" — and names constraining `Container` to
+  a single element as a direct improvement. That is the load-bearing argument
+  for this shape. The render-node accounting below is a cost statement, not
   the justification; read it as "what this costs", not "why we did it". FLUI has
   no equivalent measurement of its own yet, so this rests on an upstream
   maintainer's profiling, not ours.
 * **Node count depends on whether there is a child.** With a child, identity
-  (no options at all) is the widget passing the child straight through —
-  zero extra nodes — so Flutter is cheaper there. At exactly one option,
-  Flutter's stack is also exactly one extra node (a single `padding` builds
+  (no options at all) in a widget stack passes the child straight through —
+  zero extra nodes — so the stack is cheaper there. At exactly one option,
+  the stack is also exactly one extra node (a single `padding` builds
   one `RenderPadding`), so node count ties. `RenderContainer` only wins on
-  count from two options up, where Flutter would otherwise stack one level
-  per option (up to seven if every option is set). **Childless, Flutter is
-  never free**: `build` reaches for a two-node placeholder (`LimitedBox` +
+  count from two options up, where the stack would otherwise add one level
+  per option (up to seven if every option is set). **Childless, the stack is
+  never free**: it reaches for a two-node placeholder (`LimitedBox` +
   `ConstrainedBox`) even with no option set at all (`Container()`), so
   `RenderContainer` already wins there. The only childless tie is a *tight*
   effective constraint — both `width` and `height` set, or an explicit tight
-  `constraints` — which suppresses the placeholder and leaves Flutter a
+  `constraints` — which suppresses the placeholder and leaves the stack a
   single `ConstrainedBox` against one node here; a lone `width` does not
   qualify, since `BoxConstraints::is_tight` requires both axes, so that case
   still takes the placeholder and costs three. Every
   other childless option (color, padding, decoration, an alignment paired
-  with a fixed size) only grows Flutter's node count further, never brings
+  with a fixed size) only grows the stack's node count further, never brings
   it back below one. **What node count never buys, in either regime, is
   node weight**: `RenderContainer` carries every field — alignment, padding,
   margin, color, decoration, additional constraints, transform, plus the
   committed child offset/size/baselines — whether or not that option is
   set, so it is heavier than whichever single-purpose object the stack
   would have used, in every configuration including identity. The reason
-  for the divergence is the stable slot, not a cheaper or lighter
+  for this shape is the stable slot, not a cheaper or lighter
   `Container`.
 
 **Intrinsics:** a tight additional width or height answers before the child
@@ -1147,14 +1040,14 @@ is queried, matching `RenderConstrainedBox`. Without that short-circuit a
 `LayoutBuilder` (or any child that rejects speculative intrinsic queries)
 would be asked even though the result is discarded.
 
-**Parent-data transparency:** Flutter's identity `Container` (every option
-absent) builds to the child itself, so `Row → Container → Expanded` and
+**Parent-data transparency:** a widget-stack identity `Container` (every option
+absent) would build to the child itself, so `Row → Container → Expanded` and
 `Stack → Container → Positioned` attach the parent-data widget directly to
 Flex/Stack. A `RenderView` always inserts `RenderContainer`
 (`ParentData = BoxParentData`) between them, so those trees panic at
 `apply_ancestor_parent_data`. That is a named consequence of the stable-slot
-choice, not an accidental drop: restoring identity passthrough would recreate
-flutter/flutter#161698 the moment any option is toggled on. The supported
+choice, not an accidental drop: restoring identity passthrough would rebuild
+the unkeyed child's state the moment any option is toggled on. The supported
 shape is `Row → Expanded → Container` / `Stack → Positioned → Container`.
 Covered by
 `identity_container_between_flex_and_expanded_is_not_parent_data_transparent`.
@@ -1162,24 +1055,24 @@ Covered by
 Parent data is not the only consequence of that always-a-node choice.
 Hit-testing has the same shape one level up: `RenderContainer` always bounds
 the incoming position against its own box before doing anything else, while
-Flutter's identity `Container` is not a node at all and so bounds nothing. A
+an identity widget-stack `Container` is not a node at all and so bounds nothing. A
 child whose own `hit_test` deliberately does not bound itself — `RenderTransform`
 is the documented case — is therefore reachable outside the container's box in
-Flutter and not here, whenever *no* margin and *none* of the five gated
+that stack and not here, whenever *no* margin and *none* of the five gated
 properties are set. Measured under a shared `RenderPadding` parent with a
-scaled child, three of four probe points outside the box hit in Flutter's tree
+scaled child, three of four probe points outside the box hit in the stack's tree
 and miss here. Unlike the margin-band gate below, this one is **not** closed:
 the gated-level reasoning that fixes that case does not extend to the outer
 gate, because at identity there is no level to reason about — the node itself
-is the divergence. Tracked in issue #1143.
+is the difference. Tracked in issue #1143.
 
-**Collapsed branch:** Flutter's three childless shapes — the placeholder
+**Collapsed branch:** the stack's three childless shapes — the placeholder
 `LimitedBox(0, 0, child: ConstrainedBox(expand))`, an empty `Align`, and no
 inner widget at all — all resolve to the same box, so `RenderContainer` has no
 childless branch. The equality is proven, not assumed, by
-`harness_container_childless_matches_each_flutter_shape_it_replaces`, which
+`harness_container_matches_the_widget_stack_it_collapses`, which
 diffs each real shape against `RenderContainer` under the configuration
-Flutter would pick it for, and additionally forces the placeholder shape
+that would select it, and additionally forces the placeholder shape
 under the tight additional constraints branches two and three use, so all
 three shapes are diffed against EACH OTHER too, not only each against
 `RenderContainer`.
@@ -1190,8 +1083,8 @@ different kinds of gap, not one undifferentiated "not yet":
 
 - **`clipBehavior` does not fit this shape at all.** [`PaintEffects`] gives a
   node exactly one clip slot, wrapping everything the node's `paint` records
-  as one fragment. Flutter's `ClipPath` (the `clipBehavior != Clip.none`
-  branch in `Container.build`) sits between `ColoredBox` and `DecoratedBox`:
+  as one fragment. A stacked `ClipPath` (the `clipBehavior != Clip.none`
+  branch) sits between `ColoredBox` and `DecoratedBox`:
   it clips the padding, color and child, and explicitly does **not** clip
   the decoration (`DecoratedBox` wraps the already-clipped `current`
   afterward, unclipped). `RenderContainer::paint` records decoration, color
@@ -1200,8 +1093,8 @@ different kinds of gap, not one undifferentiated "not yet":
   recorded fragment, or a clip scoped to a sub-range of one), not a new
   `Option` field.
 - **`foregroundDecoration` is additive.** A second decoration field, a
-  `paint_box_decoration` call after the child (Flutter's `DecorationPosition
-  .foreground`, painted on top rather than behind), and a hit arm —
+  `paint_box_decoration` call after the child (painted on top rather than
+  behind), and a hit arm —
   `DecoratedBox`'s own doc states a foreground decoration participates in
   `hitTestSelf` exactly like the background one does.
 - **`transformAlignment` is additive but not local.** It needs an
@@ -1211,9 +1104,8 @@ different kinds of gap, not one undifferentiated "not yet":
   `apply_paint_transform`, `hit_test`'s inverse, `paint_translation`,
   `skip_paint` and `owns_effect_layer` — every site that reads `self.transform`
   today.
-- **`isAntiAlias` is additive and narrow.** In Flutter it is a `ColoredBox`-
-  only flag (`Container.build`'s `ColoredBox(color:, isAntiAlias:, …)` call);
-  nothing else in the stack reads it. FLUI's own color fill
+- **`isAntiAlias` is additive and narrow.** In the stack it is a
+  `ColoredBox`-only flag; nothing else in the stack reads it. FLUI's own color fill
   (`ctx.canvas().draw_rect(rect, &Paint::fill(color))`) always anti-aliases
   (`Paint::fill`'s default), with `Paint::with_anti_alias` already available
   to turn it off — adding the setter is one field plus one call-site change,
@@ -1221,18 +1113,18 @@ different kinds of gap, not one undifferentiated "not yet":
 
 A `BoxDecoration` border's thickness is separately still not folded into the
 effective padding (`_paddingIncludingDecoration`) because
-`flui_painting::styling::BoxDecoration` exposes no border insets. Flutter also `assert`s that `color`
-and `decoration` are mutually exclusive; FLUI accepts both and paints color
+`flui_painting::styling::BoxDecoration` exposes no border insets. `color`
+and `decoration` are not mutually exclusive: FLUI accepts both and paints color
 over the decoration — the order the widget stack would have produced
 (`DecoratedBox` enclosing `ColoredBox`) — rather than panicking.
 
-**Replacement tests:** the geometry the collapsed stack owes is pinned against
+**Tests:** the geometry the collapsed stack owes is pinned against
 the stack itself by `harness_container_matches_the_widget_stack_it_collapses`
 (size, child size, absolute child position and hit path, over eight
 configurations spanning both wet layout and hit-testing, each making a
 different level decide), plus
 `harness_container_paints_its_chrome_inside_the_margin` for the decorated box's
-own rect — the level Flutter's `paints..rect(...)` oracle pins and the one a
+own rect — the level a stacked `DecoratedBox` exposes and the one a
 single node no longer exposes as a separate render object. State stability is
 covered by `container.rs`'s `container_optional_*_preserves_unkeyed_child_state`
 family and `animated_container_optional_color_preserves_unkeyed_child_state`;
@@ -1250,8 +1142,8 @@ baselines add the child's offset
 when a level exists to gate on, and none always does.** `RenderContainer::
 hit_test` tests the child before the decoration/color path (a child hittable
 in a cut-out the decoration's rounded corners exclude must stay reachable),
-but ordering is not the only thing that has to match the stack: `Container.
-build` inserts `Padding`/`ColoredBox`/`DecoratedBox`/`ConstrainedBox`/`Align`
+but ordering is not the only thing that has to match the stack: the stack
+inserts `Padding`/`ColoredBox`/`DecoratedBox`/`ConstrainedBox`/`Align`
 between `Padding(margin)` and the child only when `padding`/`color`/
 `decoration`/`additional_constraints`/`alignment` (respectively) is set —
 `_paddingIncludingDecoration` is null, and so no `Padding` level exists,
@@ -1290,20 +1182,14 @@ same padding, no alignment — the content-box gate must not bind on its
 own). The differential carries the matching pair of cases too, and
 `padding` is `Option<EdgeInsets>` on `ContainerStackCase` for the same
 reason it is on `RenderContainer` — a composed tree that always inserted a
-zero-inset `Padding` level would silently endorse the divergence instead of
+zero-inset `Padding` level would silently endorse the difference instead of
 detecting it.
 
 ### 16. A push's entrance-transition future is awaited outside the flush that installed it
 
-**Rule:** Design stance ("Flutter is a reference, not a spec") — a Flutter contract carried over a flush-timing
-constraint the reference never has, so the mapping decision belongs here
-beside the local placement it governs; [ADR-0064](../../docs/adr/ADR-0064-animation-completion-is-one-controller-resolved-future.md)
+**Rule:** a flush-timing constraint governs the local placement, so the decision
+belongs here; [ADR-0064](../../docs/adr/ADR-0064-animation-completion-is-one-controller-resolved-future.md)
 records the cross-crate design this decision consumes.
-
-**Oracle:** `handlePush` (`navigator.dart:3273-3290`) parks an entry in
-`pushing` and attaches `routeFuture.whenCompleteOrCancel(...)`, which always
-arrives on a later microtask — Flutter can never observe that callback firing
-while `_flushHistoryUpdates` itself is still on the stack.
 
 **Choice:** `PushCompletion::Animating(TickerFuture)` carries the future
 `AnimationController::forward()` (or an equivalent run-starting call) returns,
@@ -1313,8 +1199,7 @@ never from inside `RouteEntry::handle_push` itself. `RouteHistory::flush()`
 re-drains any `RouteCommand`s a route raised between its own passes, so a
 continuation registered mid-flush on an already-resolved future (a
 zero-duration push, or one canceled before the flush even returns) would
-settle within that same flush rather than on the next one — a timing FLUI can
-reach and Flutter's microtask model cannot. The continuation itself may only
+settle within that same flush rather than on the next one. The continuation itself may only
 push `RouteCommand::PushCompleted(id)` onto the `Send` route-command queue and
 schedule the Navigator's rebuild through `NavigatorShared::settle_wake`, read
 at the moment the continuation fires rather than captured at registration:
@@ -1325,108 +1210,69 @@ completion — there is no separate "the push was canceled" state at this
 layer, only whichever lifecycle state the entry has moved to by the time the
 queued command is drained.
 
-### 17. `Semantics` action builders take `Send + Sync` handlers, so the caller hoists the `Arc` where the reference's closure captures a `State` field
+### 17. `Semantics` action handlers are owner-local `EventCx` callbacks behind one `Send + Sync` ticket handler per node
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — the reference's
-observable behavior is the floor; where a contract is better, improve it and
-record what is. This file's own scope note puts a callback bound here rather
-than in an ADR: it is local to this crate.
-
-**Oracle:** `Semantics(onTap: …, onSetText: …)` (`src/semantics/semantics.dart`,
-tag `3.44.0`) relays Dart closures into the `SemanticsConfiguration` setters,
-which store them and hand them to the engine. Dart's type system has no thread
-affinity, so the reference states no bound anywhere. The nearest FLUI analogue
-of that configuration object is `SemanticsConfiguration`, and the widget-level
-builders are new ergonomics over it rather than a transcription of it — the
-reference's own widget does not surface `onShowOnScreen` or `onScrollToOffset`
-at all, though its configuration does.
+**Rule:** the lane mechanism is ADR-0086 §3 (amended 2026-09-30); how this
+widget uses it is local to this crate, so it is recorded here rather than in an
+ADR.
 
 **Choice:** eleven payload-free builders — `on_tap`, `on_long_press`,
 `on_scroll_{left,right,up,down}`, `on_increase`, `on_decrease`,
 `on_show_on_screen`, `on_focus`, `on_blur` — take
-`impl Fn() + Send + Sync + 'static`; `on_set_text` takes `impl Fn(&str) + …`
-and `on_scroll_to_offset` takes `impl Fn(f64, f64) + …`. `on_action` registers
-any `SemanticsAction` verbatim for the two things the typed set deliberately
-does not cover. All of them go through one private `add_action_handler`.
+`Fn(&mut EventCx<'_>) -> R`; `on_set_text` takes `Fn(&mut EventCx<'_>, &str)`,
+`on_scroll_to_offset` takes `Fn(&mut EventCx<'_>, f64, f64)`, and `on_action`
+takes any `SemanticsAction` with `Fn(&mut EventCx<'_>, Option<ActionArgs>)`
+for what the typed set does not cover. None needs `Send + Sync`: the closures
+never reach the configuration.
 
-**Why the oracle's shape does not transcribe.** The bound is already at the
-storage, so it has to be met somewhere, and this is where it is met:
-
-- `SemanticsActionHandler` is
-  `Arc<dyn Fn(SemanticsAction, Option<ActionArgs>) + Send + Sync>`
-  (`crates/flui-semantics/src/action.rs`). **The bounds come from storage, not
-  from a calling convention:** the handler is stored in a
-  `SemanticsConfiguration`, which rides in the annotation render object, whose
-  `RenderView::RenderObject` associated type is pinned `Send + Sync + 'static`.
-  The handler is *not* invoked across a thread — resolution is owner-local and
-  commits only at the pipeline's `Idle` point
-  (`PipelineOwner::resolve_semantics_action`, whose module doc says exactly
-  this), which is why the invocation it returns holds a cloned handler rather
-  than a borrow. The genuinely cross-thread seam in this story is one layer out,
-  in the platform's action *listener*. An earlier draft of this entry gave the
-  thread-crossing reason; it sounded right and was wrong.
-- `RenderView::RenderObject` is bounded
-  `RenderObject<_> + Send + Sync + 'static`
-  (`crates/flui-view/src/view/render.rs`), so the annotation render object the
-  widget wraps cannot hold a `!Send` closure either.
-- The catalog's **dominant** callback convention is `Rc<dyn Fn(..)>`, owner-thread-local: the
-  callback type aliases in `flui-widgets/src` and `flui-material/src` are `Rc<dyn Fn…>`, spelled
-  out or through `support::EventCallback`/`ValueCallback`
-  (`git grep -nE "type \w+(<[^=]*>)? = (Rc<dyn Fn|EventCallback|ValueCallback)" --
-  crates/flui-widgets/src packages/flui-material/src` lists them). This bound is stricter than
-  that convention, and a caller meets it on the first handler they write.
-- It is **not unprecedented**. The one other public family that takes `impl Fn(..) + Send + Sync
-  + 'static` is `interaction/drag_target.rs` (4 builders), for the same reason: its callbacks
-  ride `Send + Sync` render-object metadata. `Draggable` and `PageView::on_page_changed` used
-  to, and moved to owner-local `EventCx` callbacks once nothing `Send` stored them. Each
-  `DragTarget` builder stores the callback as `Arc::new(<the caller's closure>)`; none shows the
-  hoist pattern a caller needs when the closure must be shared with something else, so
-  `on_action`'s own docs carry that example instead of pointing at them.
+**Why the handlers stay owner-local, and how the storage bound is met.**
+`SemanticsActionHandler` is
+`Arc<dyn Fn(SemanticsAction, Option<ActionArgs>) + Send + Sync>`
+(`crates/flui-semantics/src/action.rs`), stored in a `SemanticsConfiguration`
+that rides in the annotation render object, which `RenderView::RenderObject`
+pins `Send + Sync + 'static`. The handler is *not* invoked across a thread —
+resolution is owner-local (`PipelineOwner::resolve_semantics_action`) and the
+realm drains it at a frame boundary, inside its entry. So the widget keeps its
+closures and its `WriterSource` in the interaction lane as one table per node,
+stores only the lane's ticket on the render object (`SemanticsActionRoute`),
+and advertises every action through one `Send + Sync` handler that holds the
+ticket and resolves it when invoked. This is the shape the surveyed frameworks
+point at — none puts `Send` on the handler; Bevy, Iced, Slint and Dioxus/Blitz
+put it on something the widget owns — reached through ADR-0086's lane payload.
 
 **Consequences, named rather than left to be discovered:**
 
-- **The ordinary "activation toggles this control's own state" closure does not
-  compile.** A widget's state is `Rc<RefCell<_>>`, which is neither `Send` nor
-  `Sync`. `Arc<Mutex<_>>`, or a shared store, is the way through — the same
-  trade `CustomPainter` already makes, which is `Send + Sync` and
-  widget-facing. `on_action`'s own docs show the hoist.
+- **The ordinary "activation toggles this control's own state" closure is a
+  signal write.** `on_increase(move |cx| value.update(cx, |v| *v += 1))`
+  (`an_action_handler_writes_a_signal_and_rebuilds_its_reader`); a refused
+  write is reported, not panicked
+  (`a_refused_write_in_an_action_handler_is_reported_not_panicked`).
+- **An action invoked outside its realm is dropped with a warning.** A caller
+  that holds a `SemanticsActionInvocation` and invokes it with no realm entered
+  has no owner to run the closure in
+  (`an_action_invoked_outside_its_realm_is_dropped_with_a_warning`). A node
+  mounted in a detached render-object context advertises none of these
+  actions, so no platform sees a control nothing can run
+  (`a_detached_mount_advertises_no_actions`). Unmount releases the node's
+  table from the lane, closures and their captures with it
+  (`unmounting_a_node_releases_its_action_table`; a `DragTarget`'s slot the
+  same way, `unmounting_a_target_releases_its_slot`).
 - **This publishes actions; it does not make any shipped control
-  activatable.** No Material or Cupertino widget gains a semantics action here,
-  so nothing in the catalog can be activated through the semantics tree yet.
-  Flutter's `InkResponse` publishes `Semantics(onTap: …)` itself
-  (`material/ink_well.dart`), which is why the reference's nodes carry
-  `SemanticsAction.tap` while FLUI's do not — the gap is on FLUI's side, not a
-  shape the two share. `Button`, `Checkbox` and `ListTile` publish no tap
-  semantics of their own in either framework, so the wiring belongs at
-  `InkResponse`'s layer when it lands. Bridging a widget's *existing* gesture
-  callback into an action is a separate change, and what blocks it is storage and
-  threading — not this surface.
-- **The likelier long-term shape is the opposite one, and it is rejected here
-  only for want of a design.** No surveyed framework puts the bound on the
-  handler: GPUI's listener carries none at all, and Bevy, Iced, Slint, and
-  Dioxus/Blitz each put `Send` on a sender the widget owns rather than on the
-  callback. What FLUI would need to reach that shape is the `!Send` closure
-  carried beside an owner-local handle — a handle type and its own design
-  record, so it is not this widget's change; until then the bound is the
-  documented contract rather than an accident a later reader has to guess at.
+  activatable by itself.** No Material or Cupertino widget gains a semantics
+  action here; `Button`, `Checkbox` and `ListTile` publish no tap semantics of
+  their own, so that wiring belongs at `InkResponse`'s layer when it lands.
+  `GestureDetector` advertises its own `on_tap`/`on_long_press` and delivers
+  them one frame late through its local post-frame bridge, while a raw
+  `Semantics` handler runs synchronously in the drain.
 
-**A handler allocated on every build costs a `SEMANTICS` impact on every
-rebuild — the price of comparing handlers by identity, pinned rather than
-assumed.** The configuration stores the handler it is handed and compares two
-configurations' handlers with `Arc::ptr_eq`
-(`crates/flui-semantics/src/configuration.rs`), so a handler built on the spot
-inside `build` is a fresh `Arc` each time, the mounted configuration compares
-unequal, and `RenderSemanticsAnnotations::set_configuration` answers
-`RenderUpdateImpact::SEMANTICS` even when nothing semantic changed — every typed
-builder allocates one through `add_action_handler` (`src/semantics/mod.rs`). The
-escape is the hoist `on_action`'s own rustdoc demonstrates: build the handler
-once where the widget's state lives and let each build take an `Arc::clone`.
-What holds that consequence in place is
-`a_handler_allocated_per_build_costs_a_semantics_impact_per_rebuild`, a unit
-test in `src/semantics/mod.rs` beside the identity pin: a later change that
-dedupes the builders, caches the handler, or relaxes the comparison has to flip
-that test deliberately rather than move the re-publish rate of every
-action-bearing node in silence.
+**A rebuild with a fresh closure costs no semantics update.** The
+configuration compares handlers with `Arc::ptr_eq`
+(`crates/flui-semantics/src/configuration.rs`). The per-node ticket handler is
+minted once, at mount, and reused by every update, which replaces only the
+lane's table under the same ticket; so a closure literal in `build` leaves the
+mounted configuration equal and `set_configuration` answers `NONE`, and the
+action runs the rebuilt closure
+(`rebuilding_with_fresh_handlers_keeps_the_configuration_and_runs_the_new_one`).
 
 **Builder inventory, and what has no builder.** FLUI's action vocabulary
 (`crates/flui-semantics/src/action.rs`) has 24 `SemanticsAction` variants, of
@@ -1435,8 +1281,7 @@ deliberately (the four cursor moves, copy, cut, paste, and dismiss) plus
 `DidGainAccessibilityFocus`, which is advertised outbound and unreachable
 inbound. Of the 15 routable ones, 13 have a typed builder and `SetSelection` /
 `CustomAction` are reachable through `on_action` only. `expand` / `collapse`
-have no `SemanticsAction` variant to map to, so the reference's `onExpand` /
-`onCollapse` are not merely unwired here. `on_blur` is deliberately *not* the
+have no `SemanticsAction` variant to map to, so they are not merely unwired. `on_blur` is deliberately *not* the
 mirror of `on_focus`: the platform reports losing accessibility focus as a
 notification about something that already happened, whereas a focus request is a
 command the node may refuse.
@@ -1448,7 +1293,7 @@ both legitimate values a platform can mean, so substituting either turns a lost
 payload into a silent edit or a scroll to the origin — a wrong result that reads
 as a right one.
 
-**Replacement tests** (`tests/semantics.rs`), each with what it can fail on:
+**Tests** (`tests/semantics.rs`), each with what it can fail on:
 
 - `a_tap_handler_round_trips_from_a_platform_click_to_the_callback` — the
   acceptance test, and it asserts both halves: the node *tells* the platform the
@@ -1488,20 +1333,8 @@ halves are independently pinned), and the same mutation of `on_set_text` turns
 
 ### 18. Replacing a `HeroController` retires its in-flight flights, restoring both heroes
 
-**Rule:** Design stance ("Flutter is a reference, not a spec") — the reference's observable behavior is the floor;
-where the reference has no behaviour (no analogue exists), FLUI names the rule,
-justifies it, and pins it with a test. This entry is local to the crate, so it
-lives here rather than in an ADR.
-
-**Oracle:** Flutter's `HeroController` is owned by its `NavigatorState` for the
-navigator's whole life (`widgets/navigator.dart`), so there is no "replaced
-controller" state to define. The two reference seams that do touch flight
-cleanup are `_HeroFlight.dispose` (`heroes.dart:654-665`) and
-`HeroController.dispose` (`heroes.dart:1112-1116`): dispose removes the overlay
-entry and un-links the proxy, but it does **not** call `endFlight` — both
-heroes' placeholders stay frozen, which is fine in Flutter only because the
-whole tree is being torn down with the navigator, so the blank placeholder is
-about to be destroyed anyway.
+**Rule:** FLUI names the rule, justifies it, and pins it with a test. This entry
+is local to the crate, so it lives here rather than in an ADR.
 
 **Choice:** when a `HeroController` is detached — replaced by
 `NavigatorHandle::add_observer` (which takes the auto-installed default),
@@ -1510,14 +1343,13 @@ removed by `remove_observer`, or its navigator unmounts —
 every flight still in the air: it removes each overlay entry and calls
 `end_flight(false)` on **both** heroes. Distinguishing an abort from the
 ordinary `finish` is load-bearing: a normal `finish` ends one hero hidden and
-the other revealed, chosen by the terminal animation status (the
-`heroes.dart:608-614` comment), whereas an abort has no status to choose with
+the other revealed, chosen by the terminal animation status, whereas an abort has no status to choose with
 and must leave both pages — which stay alive and in the stack — showing their
 real children rather than a blank placeholder.
 
-**Why the reference's shape does not transcribe.** Flutter's controller is never
-replaced in place, so its cleanup is a full-tree teardown that tolerates frozen
-placeholders. FLUI's controller is a swappable observer, and the flight it
+**Why abort rather than leave the flight.** The controller is a swappable
+observer, so a detach does not tear down the tree and frozen placeholders would
+stay visible. The flight it
 launched is retired through a `Weak<FlightManager>` held by the overlay entry's
 shuttle (`FlightManager::finish`'s `manager.upgrade()`). A detached controller
 drops its `FlightManager`, so that upgrade returns `None` from then on: the
@@ -1545,7 +1377,7 @@ mean guessing a flight plan the replacement never measured.
   costs nothing and keeps the drop outside the animation listener family, the
   one invariant the type docs rest on.
 
-**Replacement test**
+**Test**
 (`tests/hero_gesture.rs`, `replacing_the_auto_hero_observer_retires_its_in_flight_flight`):
 pushes two same-tagged hero pages so the auto observer launches a real
 programmatic flight, then installs a manual controller and asserts (a) the
@@ -1559,10 +1391,8 @@ entry high (`left: 4, right: 3`) and both placeholders set.
 **Rule:** Design stance ("Look around before settling") — search the market/existing dependency graph
 before adding one, and cite what an unmatched reference actually needs.
 
-**Oracle:** Flutter's `TextPainter.getWordBoundary` (which
-`RenderEditable`'s Ctrl+Arrow word-jump and double-tap word selection both
-call) wraps `dart:ui`'s `Paragraph.getWordBoundary`, backed by ICU's
-`UBreakIterator` in word mode. ICU's word breaking is **dictionary-based**
+**Background:** ICU's word-mode break iterator (the usual backing for Ctrl+Arrow
+word-jump and double-tap word selection) is **dictionary-based**
 for two distinct groups: Thai, Lao, Khmer, and Myanmar (scripts with no
 spaces between words at all, where the Unicode Standard Annex #29
 default algorithm — rule-based, no lexicon — cannot find a linguistically
@@ -1580,9 +1410,9 @@ no new dependency, no C binding, and no data-table download — unlike an
 ICU binding (`rust_icu`, `icu4x`), which would be a materially heavier
 addition for the one feature this touches.
 
-**Why the reference's shape does not transcribe.** ICU's dictionary data
+**Why not ICU.** ICU's dictionary data
 — both the Thai/Lao/Khmer/Myanmar lexicons and `cjdict` — is the expensive
-part of the reference's behavior, megabytes of data, not an algorithm,
+part, megabytes of data, not an algorithm,
 and nothing else in this workspace needs it. Bringing in a full ICU
 dependency to correct word-jump behavior for a handful of scripts, when
 every script with UAX #29-recognized boundaries (Latin, Cyrillic, Greek,
@@ -1612,7 +1442,7 @@ the wrong trade for what this feature is worth today.
 - **Grapheme-cluster correctness is unaffected.** The dictionary gap is
   specific to WORD boundaries; cluster boundaries (caret, Backspace,
   Delete) use `GraphemeCursor`, a different UAX #29 mode with no
-  dictionary dependency in the reference either, and are correct for
+  dictionary dependency, and are correct for
   every script including all the ones named above.
 - **The word-jump modifier's platform source is compile-time only, and
   that is already known wrong for at least one real target.**
@@ -1638,7 +1468,7 @@ the wrong trade for what this feature is worth today.
   `flui-widgets`, and inventing one for this one call site would be
   premature relative to `GestureSettings`' own still-open gap.
 
-**Replacement tests**
+**Tests**
 (`flui-widgets::controller::tests::{word_right_lands_on_the_next_words_start_skipping_trailing_whitespace,
 word_left_returns_to_the_current_words_own_start_without_skipping_it,
 a_run_of_whitespace_is_skipped_as_one_stop_not_a_stop_per_space,
@@ -1662,7 +1492,7 @@ the boundary tie-break matrices (`"foo bar"` at 0/3/4/7; `"(foo"` at 1;
 trailing whitespace at a buffer's own edges) — rather than a loose "some
 boundary was found" check. Arabic is the one exception, asserted only as
 "never lands inside a char, always makes progress",
-because this port does not claim cluster-vs-word segmentation parity for
+because no cluster-vs-word segmentation claim is made for
 that script specifically, only that it is never corrupted.
 
 ### 20. `GestureDetector` composes AROUND `Listener`, not inside it, for double-tap word selection
@@ -1672,12 +1502,6 @@ that script specifically, only that it is never corrupted.
 `flui_widgets::GestureDetector`) rather than hand-rolling tap-count/slop/
 timeout tracking a second time inside `EditableText`'s own pointer
 handlers.
-
-**Oracle:** Flutter's `EditableText` composes its own
-`TextSelectionGestureDetector` (a `RawGestureDetector` subclass) around
-the text span, wiring `onDoubleTapDown` to
-`_handleDoubleTapDown` → `renderEditable.selectWord`
-(`widgets/editable_text.dart`, `widgets/text_selection.dart`).
 
 **Choice:** `EditableTextState::wrap_double_tap_word_select` composes the
 existing, generic `flui_widgets::GestureDetector` as the OUTER parent of
@@ -1710,12 +1534,10 @@ the second contact's next move before it lifts — near-guaranteed on
 touch, where a finger is essentially never perfectly still between down
 and up.
 
-**Why the reference's shape does not transcribe.** Flutter's
-`TextSelectionGestureDetector` is a text-specific subtype that also owns
-triple-tap and drag-selection-handle gestures this port does not have
-yet; building an equivalent specialized subtype for one callback would be
-premature machinery for what `GestureDetector`'s existing generic API,
-widened by one method, already covers.
+**Why not a text-specific detector.** A specialized gesture-detector subtype
+would also own triple-tap and drag-selection-handle gestures that do not exist
+yet; building one for a single callback would be premature machinery for what
+`GestureDetector`'s existing generic API, widened by one method, already covers.
 
 **Consequences, named rather than left to be discovered:**
 
@@ -1729,7 +1551,7 @@ widened by one method, already covers.
   never have joined the arena and its own callback would never have
   fired. Caught before it shipped by writing a detector-only test first.
 
-**Replacement tests**
+**Tests**
 (`flui-interaction::recognizers::double_tap::tests::on_double_tap_down_fires_at_the_second_contacts_own_down_not_its_up`,
 `flui-widgets::tests::gesture_detector_advanced::{double_tap_down_fires_before_the_second_contact_lifts,
 on_double_tap_down_alone_with_no_on_double_tap_still_participates}`,
@@ -1744,10 +1566,6 @@ the second tap.
 
 ### 21. The `Router` is derived from the route type, and its handle is lifecycle-only
 
-**Oracle:** Flutter's `Router` takes a hand-written `RouteInformationParser`
-and `RouterDelegate` (`widgets/router.dart`), and `Navigator.of(context)` is
-callable from `build`.
-
 **Choice:** `Router<R>` (`src/router/`, ADR-0093) needs only `R: Routable` —
 `to_path`, `from_path`, and a provided `back_stack` — and keeps its stack
 of `R` itself; the parser and delegate are the route type. The page per value
@@ -1755,7 +1573,7 @@ is a `PageRoute<()>` named with the value's path, on a `Navigator` the router
 builds, so transitions, heroes and `PopScope` are unchanged.
 `Router::<R>::handle` takes `&dyn LifecycleContext` (ADR-0078), so a handle
 is acquired in `init_state`/`did_change_dependencies` and resolves the
-**nearest** `Router<R>`, which is `Navigator.of`'s contract. The page builder
+**nearest** `Router<R>`, as `Navigator`'s handle does. The page builder
 and transitions are shared with every page, so a parent rebuild reaches the
 pages already on the stack; a transition duration is fixed when a page is
 placed, because the page's animation controller is made with it.
@@ -1766,10 +1584,6 @@ placed, because the page's animation controller is made with it.
 `Router::handle`, and `route_path_round_trips_a_hand_written_routable`.
 
 ### 22. A Router's navigator refuses pages pushed through its facade, and admits pageless popups
-
-**Oracle:** Flutter's `Navigator` under a `Router` accepts pageless routes
-(`Navigator.push`, `showDialog`) beside its pages; a pageless route is not in
-the URL and is removed silently with the page below it.
 
 **Choice:** every page on a Router's stack has a path (ADR-0093 §2), and only
 the Router places, replaces or seeds pages. The navigator a Router builds is
@@ -1799,14 +1613,11 @@ location follows it.
 
 ### 23. A Router never pops or removes its last page
 
-**Oracle:** Flutter's `Navigator.pop` on a one-route navigator removes that
-route and leaves the navigator empty.
-
 **Choice:** a Router always has a location. The navigator records the pages
 the Router places, and no pop or removal takes the last present one, whether
 it is on top or beneath a popup: `RouterHandle::pop` answers `Ok(false)`, the
 facade's `pop`, `pop_with` and `remove_route[_with]` answer `false`,
-`maybe_pop` bubbles (as a lone route does in Flutter), and `pop_until` stops
+`maybe_pop` bubbles (as a lone route does), and `pop_until` stops
 there, all with the stack unchanged. A top page that handles the pop itself
 (a local-history entry) still pops, since that removes no page.
 
@@ -1815,14 +1626,7 @@ there, all with the stack unchanged. A top page that handles the pop itself
 `a_routers_last_page_cannot_be_removed_even_under_a_popup`,
 `pops_never_take_the_last_page_from_above_a_popup`.
 
-### 24. `go` reconciles by common prefix, as Flutter's page-list diff does
-
-**Oracle:** `NavigatorState._updatePages` (a new page list keeps the matching
-bottom entries, removes the rest, adds the new pages beneath the new top
-without a transition and pushes the new top), and
-`Navigator.defaultGenerateInitialRoutes` (`'Initial route can have gaps'`,
-`'The full initial route has to be matched'`), from Flutter 3.44 as
-remembered — not checked against a local clone of that tag.
+### 24. `go` reconciles by common prefix
 
 **Choice:** `RouterHandle::go(location)` derives the new stack with
 `Routable::back_stack` — every prefix of the path that parses, the full path
@@ -1832,9 +1636,9 @@ pops back to it with exit transitions; otherwise the pages above the common
 prefix are removed and the new pages are placed in one flush, the ones
 beneath the new top entering quietly (`RouteLifecycle::Add`) and only the new
 top running its entrance. The pages that stay keep their state; a page above
-the divergence point is rebuilt. **Divergence:** where Flutter falls back to
-the default route when the full initial route does not match, `go` and
-`Router::from_location` report `RouteParseError::NoMatch` and change nothing.
+the divergence point is rebuilt. When the full path does not match, `go` and
+`Router::from_location` report `RouteParseError::NoMatch` and change nothing,
+rather than falling back to a default route.
 
 **Pinned by:** `go_reconciles_only_the_diverging_tail`,
 `go_adds_the_new_back_stack_beneath_the_new_top`,
@@ -1844,15 +1648,7 @@ the default route when the full initial route does not match, `go` and
 
 ### 25. Every Router page scopes a semantics route, and a labelled route names it
 
-**Oracle:** Flutter's `ModalRoute` wraps a page in no route-scoping
-`Semantics`: `_ModalScopeState` and `ModalRoute.buildModalScope` in
-`widgets/routes.dart` add only `sortKey` wrappers, `RawDialogRoute.buildPage`
-scopes a dialog's route, and a page's route name comes from inside the page,
-typically `AppBar`'s title (`namesRoute`). Read from the stable branch's
-`routes.dart` on 2026-09-26 through a partial fetch, not a local clone of a
-tagged release; treat the page-side half as recalled.
-
-**Choice — a divergence:** a Router page is an addressable screen, so the
+**Choice:** a Router page is an addressable screen, so the
 Router wraps each one in `Semantics::scopes_route(true)
 .explicit_child_nodes(true)`, and adds `names_route(true)` with the label when
 `Routable::semantics_label` returns one. An assistive technology then hears a
@@ -1860,21 +1656,14 @@ route change on every navigation, with no app bar required.
 
 **Pinned by:** `router_pages_scope_and_name_a_semantics_route`.
 
-### 26. Global widgets localizations live in the catalog, not in a separate `flutter_localizations` package
-
-**Oracle:** `package:flutter_localizations`
-(`lib/src/widgets_localizations.dart`,
-`lib/src/l10n/generated_widgets_localizations.dart`, tag `3.44.0`) is a
-package of its own beside the widgets library. It holds
-`GlobalWidgetsLocalizations`, its delegate, and one generated class per
-supported language.
+### 26. Global widgets localizations live in the catalog, not in a separate package
 
 **Choice:** `GlobalWidgetsLocalizations`, `GlobalWidgetsLocalizationsDelegate`
 and `RTL_LANGUAGES` live in `flui_widgets::localization`, next to the
 `WidgetsLocalizations` contract they implement.
 
-**Why the oracle's shape does not transcribe.** Flutter's split carries
-about 80 languages of translated strings. This port has none: every string
+**Why not a separate package.** A separate package pays off when it carries
+translated strings. Here there are none: every string
 forwards to `DefaultWidgetsLocalizations`, and the only behavior is the RTL
 language table and the delegate. A separate crate held that one table in a
 layer of its own, which ADR-0081 deleted; the table moved down into the
@@ -1882,9 +1671,8 @@ crate whose contract it implements.
 
 **Consequences:**
 
-- The delegate's `is_supported` is always `true`. Flutter's delegate gates
-  on `kWidgetsSupportedLanguages`, a proxy for "this locale has translated
-  strings"; with no translations for any locale that gate would only
+- The delegate's `is_supported` is always `true`: a gate on "this locale has
+  translated strings" would, with no translations for any locale, only
   produce false negatives.
 - Translated string catalogs, when they arrive, are a separate decision
   about where FLUI sources translations; they do not reopen a crate here.
@@ -1898,18 +1686,15 @@ alias, and `is_supported`.
 
 ### 22. A form field validates at the event, not in `build`
 
-**Oracle:** `FormFieldState.build` and `FormState.build` (`widgets/form.dart`,
-tag `3.44.0`) run the autovalidate switch on every build.
-
-**Choice:** FLUI's `build(&self)` cannot mutate, so the same switch runs at the
-moments that would schedule Flutter's build: `did_change` (a user edit),
+**Choice:** `build(&self)` cannot mutate, so the autovalidate switch runs at the
+moments that would schedule a build: `did_change` (a user edit),
 `init_state` (mount), `did_update_view` (reconfiguration), a field joining an
 `Always` form, the field's focus wrapper losing focus, and the form's
 `validate()`/`reset()`. A field whose shown error changed schedules its own
 rebuild through the `RebuildHandle` it took in `init_state`. A form `reset()`
-defers the form-level autovalidation to the end of its loop, as Flutter's
-single rebuild after `reset` does. Flutter wraps a field in its unfocus
-`Focus` only when a mode asks for it; FLUI always wraps (not focusable, so
+defers the form-level autovalidation to the end of its loop, so it runs once
+after `reset`. A field is always wrapped in its unfocus
+`Focus` (not focusable, so
 never a traversal stop, and no semantics) and checks the modes at focus loss, so a
 mode change never remounts the field's content
 (`tab_and_shift_tab_move_focus_between_form_fields_in_order`,
@@ -1935,9 +1720,6 @@ reset state, before the controller sink and `on_reset`, so an unwind cannot hide
 that partial commit behind stale UI. `a_panicking_reset_callback_does_not_disable_later_form_validation`
 pins recovery and visibility, and the signal-write form tests pin context forwarding.
 
-**Oracle:** Flutter reaches `FormState`/`FormFieldState` through a
-`GlobalKey` or `Form.of(context)`.
-
 **Choice:** The caller creates a `FormHandle`/`FormFieldHandle` and passes it
 to the widget (`Form::handle`, `FormField::handle`), or reads `Form::of`. A
 handle is a cheap `Rc` clone that owns the state, so it outlives the build
@@ -1955,10 +1737,9 @@ admission is infallible. The tracing error is paired with the typed
 `take_attachment_error` drain on the requested handle, matching the framework's
 duplicate-`GlobalKey` diagnostic shape instead of making a mount-time error look
 like an event-time `Result`.
-Flutter would remount a field whose `GlobalKey` changed and lose its state;
-a handle is not the element's identity here, so the element and its state
-stay. A text form field rebuilt without the caller's controller moves its
-text into a controller it owns, as Flutter's `_createLocalController` does.
+A handle is not the element's identity, so a field rebuilt with a different
+handle keeps its element and state. A text form field rebuilt without the
+caller's controller moves its text into a controller it owns.
 **Tests:** every `tests/form.rs` case drives the form through a handle;
 `a_new_handle_on_rebuild_takes_the_mounted_field_over`,
 `dropping_the_callers_controller_moves_the_text_into_a_field_owned_one`,
@@ -1969,12 +1750,9 @@ the two `a_busy_*_rebind_*` tests, and
 
 ### 24. A field registers with its form in lifecycle hooks
 
-**Oracle:** `FormFieldState.build` calls `Form.maybeOf(context)?._register(this)`
-and `deactivate` unregisters.
-
 **Choice:** `init_state` registers, `did_change_dependencies` moves the
 registration when the enclosing form changed, and `dispose` unregisters.
-Registration order is kept, as Flutter's insertion-ordered set keeps it; the
+Registration order is kept; the
 form holds each field strongly and each field holds the form weakly, so a
 `FormHandle` captured in a field callback is a cycle only until that field's
 `dispose`. **Tests:** `save_calls_on_saved_with_each_fields_value_in_registration_order`,
@@ -1982,26 +1760,18 @@ form holds each field strongly and each field holds the form weakly, so a
 
 ### 25. A text field's error line is a live region instead of an announcement
 
-**Oracle:** `FormState.validate` announces the first error through
-`SemanticsService.announce`.
-
-**Choice:** FLUI has no widget-facing announce API, so `RawTextFormField`'s
+**Choice:** there is no widget-facing announce API, so `RawTextFormField`'s
 error line is a `Semantics(live_region: true)` container, which assistive
 technology reads when it appears. **Test:**
 `form_reports_the_form_role_and_the_error_line_is_a_live_region`.
 
 ### 26. `Form` carries the form semantics role
 
-**Oracle:** Flutter's `Form` adds no semantics node.
-
 **Choice:** `Form` is a semantics container with `SemanticsRole::Form`
 (AccessKit `Role::Form`), so a screen reader can name the group. **Test:**
 `form_reports_the_form_role_and_the_error_line_is_a_live_region`.
 
 ### 27. Clipboard bindings come from `DefaultFocusTraversal`
-
-**Oracle:** `WidgetsApp` installs `DefaultTextEditingShortcuts`, which binds
-`CopySelectionTextIntent` and `PasteTextIntent` to Ctrl/Cmd+C, X and V.
 
 **Choice:** `DefaultFocusTraversal`, which every `FocusRoot` builds, binds the
 three chords (Cmd on macOS and iOS, Control elsewhere — a pure table resolved
@@ -2015,25 +1785,17 @@ bubbling. **Tests:** `interaction::shortcuts::tests::clipboard_activators_map_ev
 
 ### 28. `EditableText`'s clipboard actions win over ancestor bindings
 
-**Oracle:** Flutter's `EditableText` wraps its default actions in
-`Action.overridable`, so an ancestor `Actions` can replace them.
-
 **Choice:** `EditableText` layers its actions over the chain at its position
 and records the result on its node, so they are the nearest declaration of
-the two intent types and an ancestor mapping never replaces them. There is no
-`_makeOverridable`. **Test:** `an_ancestor_paste_action_does_not_replace_the_fields_own`
+the two intent types and an ancestor mapping never replaces them. **Test:** `an_ancestor_paste_action_does_not_replace_the_fields_own`
 (an ancestor `CallbackAction<PasteTextIntent>` is never invoked, and the
 field's own paste runs).
 
 ### 29. Paste drops `\r` as well as `\n`
 
-**Oracle:** the single-line field's `FilteringTextInputFormatter.singleLineFormatter`
-is `FilteringTextInputFormatter.deny('\n')` (`services/text_formatter.dart`,
-tag `3.44.0`, checked against the published source), so a Windows `\r\n`
-leaves a `\r` behind.
-
-**Choice:** a paste into FLUI's single-line field removes both, since a stray
-carriage return is never text the user meant. **Test:**
+**Choice:** a paste into the single-line field removes both, since a stray
+carriage return is never text the user meant (denying only `\n` would leave a
+`\r` behind from a Windows `\r\n`). **Test:**
 `paste_replaces_the_selection_and_drops_line_breaks`.
 
 ### 30. `RawTextFormField`, not `TextFormField`
@@ -2042,25 +1804,18 @@ carriage return is never text the user meant. **Test:**
 facade-additivity reason `RawTextField` is: with the `material` feature on,
 `flui::prelude::TextFormField` means exactly the Material type, and enabling a
 feature never changes what an existing name resolves to.
-`flui_material::TextFormField` is the Flutter-parity type.
+`flui_material::TextFormField` is the Material type.
 
 ### 31. `SingleActivator` compares ASCII letters without case
 
-**Oracle:** `SingleActivator(LogicalKeyboardKey.keyC, control: true)` names a
-key, which has no case.
-
-**Choice:** FLUI's `Key::Character` carries what the key produced, so Caps
+**Choice:** `Key::Character` carries what the key produced, so Caps
 Lock turns Ctrl+C into a `"C"` event. A single ASCII letter trigger therefore
 matches either case; the exact Shift comparison still tells Ctrl+Shift+C
 apart. **Test:** `interaction::shortcuts::tests::a_character_activator_matches_regardless_of_caps_lock`.
 
 ### 32. `EditableText::on_changed` reports only the user's edits, and a text form field reads its controller
 
-**Oracle:** Flutter's `TextFormField` listens to its controller and calls
-`didChange` on any text change it did not make itself, so a caller's
-`controller.text = …` counts as the user's interaction.
-
-**Choice:** controller listeners are `Send + Sync` in FLUI and cannot reach
+**Choice:** controller listeners are `Send + Sync` and cannot reach
 owner-thread form state, so a text form field takes the user's edits from
 `EditableText::on_changed` (typing, deletion, IME commit, cut, paste — not
 `set_text`, and not the edit an `on_submitted` callback makes), and reads the
@@ -2068,19 +1823,16 @@ controller's text before it validates or saves. A caller's own controller
 edit is therefore validated and saved but does not mark the field interacted,
 and a reset's write-back needs no equality guard. Because the controller is
 the value, `FormFieldHandle::set_value` on a text form field writes the text
-into the controller too; Flutter's `setValue` stores `_value` alone, and the
-field's value and its controller disagree until the next edit. **Tests:**
+into the controller too, so the field's value and its controller never
+disagree. **Tests:**
 `tests/editable_text.rs::on_changed_reports_user_edits_but_not_the_callers_own`,
 `reset_restores_initial_values_and_clears_errors_and_interaction`,
 `set_value_on_a_text_form_field_is_seen_by_value_validate_and_save`.
 
 ### 33. `RawButton` is a widgets-layer button whose press writes through `EventCx`
 
-**Oracle:** Flutter's widgets library has no button. `RawMaterialButton` lives
-in the Material library, and a theme-free press target is a `GestureDetector`
-with a `Semantics(button: true)` around it.
-
-**Choice:** `RawButton` is that composition as one widget, so an application
+**Choice:** `RawButton` is a theme-free press target, a `GestureDetector`
+with a `Semantics(button: true)` around it, as one widget, so an application
 that uses no design system has a button, and its `on_press` takes
 `Fn(&mut EventCx<'_>)`, the typed write capability of ADR-0086. It builds
 `Semantics::new().container(true).button(true).enabled(on_press.is_some())`
@@ -2089,7 +1841,7 @@ callback. The detector owns the lifecycle-acquired writer source; `RawButton`
 is stateless. The gesture arena's lower-level callback aliases do not change
 (ADR-0086 §4). Without
 `on_press` the node is disabled and advertises no click, and a tap does
-nothing (Flutter's disabled-button semantics). A press may return a write's
+nothing. A press may return a write's
 `Result`; a refused write is logged on `flui::signals`. Keyboard activation
 (Enter and Space through `ButtonActivateIntent`) and pressed and hovered
 state are not implemented yet. **Tests:** `tests/raw_button.rs`
@@ -2098,10 +1850,6 @@ state are not implemented yet. **Tests:** `tests/raw_button.rs`
 rebuild, `callback` and refused-write cases).
 
 ### 34. `EditableText` answers an input method's pulls; one platform session is one change
-
-**Oracle:** Flutter's `EditableTextState` is a `TextInputClient`: the engine
-pushes whole `TextEditingValue`s through `updateEditingValue`, and each push is
-one controller change and one `onChanged`.
 
 **Choice:** `EditableText` is a `flui_platform_api::TextStore` (ADR-0090). The
 input method reads the text, selection, composition and geometry in UTF-16
@@ -2122,10 +1870,7 @@ commit. **Tests:** `tests/text_store_kit.rs`
 
 ### 35. Platform selection is exact; user selection snaps
 
-**Oracle:** Flutter's `updateEditingValue` applies the platform's selection as
-the engine sends it.
-
-**Choice:** the same for the platform: a selection set through the text store
+**Choice:** a selection set through the text store
 is kept at any scalar boundary, including inside a grapheme cluster (offset 4
 of `"a😀e\u{301}…"` is between the `e` and its combining mark), because TSF and
 AppKit address scalars and a snapped answer would disagree with what they set.
@@ -2137,25 +1882,18 @@ the kit's `selection_inside_a_grapheme_is_kept_exactly`.
 
 ### 36. `WidgetsApp::router`: a bare Router as the routing subtree, and a form without navigator builders
 
-**Oracle:** Flutter's `_WidgetsAppState.build` (`widgets/app.dart`, checked
-against a local copy of the file) mounts `Router`/`Router.withConfig` as the
-routing subtree with no `FocusScope` around it, below `Localizations` and the
-`builder` callback; only the navigator form builds `FocusScope(autofocus:
-true, child: Navigator(...))`. `WidgetsApp.router` asserts that
-`navigatorKey` and `navigatorObservers` are not given with it.
-
 **Choice:** `WidgetsApp::router(Router<R>)` keeps the Router as a
 `BoxedView` and mounts it bare, under the same `builder`, `DefaultTextStyle`
 and `Localizations` bands; each of its pages has its route's focus scope. The
 app has no navigator of its own: the Router's is its root navigator, and its
 facade refuses a stray page pushed through `NavigatorHandle::maybe_of_root`.
 A rebuilt app updates the boxed Router in place (same view type), so the
-stack and page state survive. Divergence: the routing form is a type
+stack and page state survive. The routing form is a type
 parameter, not a run-time assertion. `router` returns a
 `WidgetsApp<RouterForm>` and `new`/`with_builder` a
 `WidgetsApp<NavigatorForm>` (the default, so `WidgetsApp` alone still names
 it); only the navigator form has `navigator` and `observer`, so the
-configuration Flutter asserts against does not compile. The two forms are two
+configuration of a router app with a navigator key or observers does not compile. The two forms are two
 view types, so switching one to the other remounts the shell, and the
 navigator form's `dispose` releases its navigator and observers. Owning the
 presentation's URL waits for ADR-0093 step 3's `RouterScope`. **Tests:**
@@ -2168,10 +1906,6 @@ navigation and localization cases); `tests/routable_ui/fail/router_app_takes_no_
 
 ### 37. `PageView` reports page changes after the frame, in order
 
-**Oracle:** `widgets/page_view.dart` (tag `3.44.0`) reports `onPageChanged`
-from a `NotificationListener<ScrollNotification>`, synchronously, as the
-scroll update that crosses a page's midpoint is dispatched.
-
 **Choice:** the controller's listener is `Send + Sync` (a foundation
 `ListenerCallback`) and cannot hold the owner-local callback or its writer. It
 keeps the synchronous `round(page)` dedupe, records the page and schedules the
@@ -2179,7 +1913,7 @@ page view's rebuild. `build` hands every recorded page to the local post-frame
 lane, one entry per page. Each entry holds only a weak reference to the
 state's delivery target and runs the callback current at that moment inside
 a write the state's `WriterSource` opens. So the callback runs after the
-frame that next rebuilds the page view (one frame later than Flutter's for a
+frame that next rebuilds the page view (one frame later for a
 change seen during input; two for one seen during layout, whose rebuild
 lands in the next frame), never inside a build, with every page a frame
 recorded in order. A page recorded before a rebuild reaches the rebuilt
@@ -2189,17 +1923,14 @@ because `finalize_tree` drops the state before the lane runs; either way it
 delivers nothing. Without a post-frame lane the pages are dropped with a
 warning. A callback that panics loses only its own page, and the panic
 leaves the frame on the post-frame lane rather than from inside a scroll
-listener, as Flutter's would; the pages after it run on the next frame. The
+listener; the pages after it run on the next frame. The
 same accepted latency as `AnimatedSize` and `Dismissible`. **Tests:**
 `tests/page_view_events.rs`.
 
 ### 38. `on_draggable_canceled` takes one `DraggableCanceledDetails`
 
-**Oracle:** `DraggableCanceledCallback = void Function(Velocity velocity,
-Offset offset)`.
-
 **Choice:** the callback is `Fn(&mut EventCx<'_>, DraggableCanceledDetails)`,
-a `Copy` value with the same `velocity` and `offset`. The catalog's event
+a `Copy` value with `velocity` and `offset`. The catalog's event
 callbacks take `cx` and at most one value, which is the shape
 `callback_with` fixes for a `let`-bound closure; two value arguments would
 need a closure annotation there. **Tests:** `tests/draggable_events.rs`
@@ -2207,15 +1938,12 @@ need a closure annotation there. **Tests:** `tests/draggable_events.rs`
 
 ### 39. Actions are invoked with the key event's `EventCx`; `maybe_invoke` has no counterpart
 
-**Oracle:** `Action.invoke(T intent)` runs from `ShortcutManager` or from any
-code holding a `BuildContext` through `Actions.maybeInvoke`/`Actions.invoke`.
-
 **Choice:** `Action::invoke(&self, cx: &mut EventCx<'_>, intent: &T)`; the
 `Shortcuts` key handler passes its own `cx`, as `CallbackShortcuts` passes it
 to its bindings (ADR-0086, amending ADR-0023). `Actions::maybe_invoke` is
 removed: its only caller could hold a `BuildContext` only in `build`, which
 has no event context, and a write there is refused. An invoker resolved at
-build time and called from an event (Flutter's `Actions.handler`) is deferred
+build time and called from an event is deferred
 until a consumer needs one. `is_enabled` and `to_key_event_result` stay
 queries. **Tests:** `tests/actions.rs` (resolution through key dispatch),
 `tests/shortcuts.rs`'s `event_cx_tests`.

@@ -1,18 +1,11 @@
 //! `RenderLimitedBox` — caps unbounded incoming constraints with explicit
 //! `max_width` / `max_height` values, leaving bounded constraints untouched.
 //!
-//! # Flutter equivalence
+//! # Representation
 //!
-//! Behavior-faithful port of Flutter's
-//! [`RenderLimitedBox`](https://api.flutter.dev/flutter/rendering/RenderLimitedBox-class.html)
-//! (`packages/flutter/lib/src/rendering/proxy_box.dart`).
-//!
-//! # Rust-native improvements
-//!
-//! Flutter stores `maxWidth` / `maxHeight` as `double` with `double.infinity`
-//! as the "no limit" sentinel. The Rust port models them as
-//! `Option<f64>` — `None` means "do not impose a cap" — so no caller can
-//! mistake an infinite cap for a meaningful upper bound.
+//! The caps are `Option<f64>` — `None` means "do not impose a cap" — rather
+//! than an infinite sentinel, so no caller can mistake an infinite cap for a
+//! meaningful upper bound.
 
 use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Size};
@@ -57,9 +50,9 @@ pub struct RenderLimitedBox {
 }
 
 impl RenderLimitedBox {
-    /// Default maximum width (matches Flutter's `double.infinity`).
+    /// Default maximum width (no cap).
     pub const DEFAULT_MAX_WIDTH: Option<f64> = None;
-    /// Default maximum height (matches Flutter's `double.infinity`).
+    /// Default maximum height (no cap).
     pub const DEFAULT_MAX_HEIGHT: Option<f64> = None;
 
     /// Creates a limited box with optional caps for each dimension.
@@ -184,7 +177,7 @@ impl RenderBox for RenderLimitedBox {
             incoming.constrain(child_size)
         } else {
             self.has_child = false;
-            // Match Flutter: if no child, take the minimum of (incoming.min,
+            // With no child, take the minimum of (incoming.min,
             // limited.max) for each axis — i.e. become as small as possible
             // without violating the parent's lower bound.
             incoming.constrain(Size::new(limited.min_width, limited.min_height))
@@ -200,8 +193,7 @@ impl RenderBox for RenderLimitedBox {
         constraints: BoxConstraints,
         ctx: &mut flui_rendering::context::BoxDryLayoutCtx<'_>,
     ) -> Size {
-        // Flutter parity: proxy_box.dart `RenderLimitedBox._computeSize`
-        // — with a child, its dry size under the limited constraints,
+        // With a child, its dry size under the limited constraints,
         // re-constrained by the incoming set; without one, the smallest
         // size satisfying the limited constraints.
         let limited = self.limit_constraints(constraints);

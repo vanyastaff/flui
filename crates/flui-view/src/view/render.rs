@@ -129,8 +129,7 @@ impl<'a> RenderObjectContext<'a> {
     ///
     /// Unlike an ordinary pointer handler (which only observes), a scroll
     /// handler *competes* for the tick: leaf-first dispatch stops at the first
-    /// handler returning `EventPropagation::Stop` — the FLUI port of Flutter's
-    /// `PointerSignalResolver` arbitration. The returned target is data-only
+    /// handler returning `EventPropagation::Stop`. The returned target is data-only
     /// and may be stored in a render object.
     ///
     /// # Errors
@@ -273,9 +272,8 @@ impl<'a> RenderObjectContext<'a> {
     /// (`crates/flui-widgets/src/interaction/mouse_region.rs`) keeps
     /// the target registered and calls
     /// [`replace_mouse_region`](Self::replace_mouse_region) with the empty
-    /// set instead, matching Flutter's `RenderMouseRegion`, which stays a
-    /// valid annotation with null callback fields until `detach()`
-    /// (`rendering/proxy_box.dart`). This method is the lower-level lane
+    /// set instead, so the region stays a valid annotation with empty
+    /// callbacks until it is detached. This method is the lower-level lane
     /// primitive underneath it: existing tracker state may still retain a
     /// strong owner-local cell clone long enough to emit a matching exit
     /// callback for an annotation that was already resolved before this
@@ -409,6 +407,54 @@ impl<'a> RenderObjectContext<'a> {
     ) -> Result<(), RenderObjectContextError> {
         Ok(self.dispatch_handle()?.unregister_shader_mask(target)?)
     }
+
+    /// Register an owner-local payload in the active owner lane.
+    ///
+    /// For a render view whose executable state does not fit one callback
+    /// shape — a drag target's slot, a semantics node's action table. The
+    /// returned target is data-only and may be stored in a render object or
+    /// published as hit-test metadata; its dispatcher resolves it back with
+    /// `flui_interaction::resolve_local_payload` on the owner thread.
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error when no owner lane is active,
+    /// the element was mounted detached, or the owner is gone.
+    pub fn register_local_payload(
+        &self,
+        payload: std::rc::Rc<dyn std::any::Any>,
+    ) -> Result<flui_interaction::LocalPayloadTarget, RenderObjectContextError> {
+        Ok(self.dispatch_handle()?.register_local_payload(payload)?)
+    }
+
+    /// Replace an existing payload without changing its data-plane identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error for wrong/detached owner state
+    /// or for a target that no longer belongs to the active owner lane.
+    pub fn replace_local_payload(
+        &self,
+        target: flui_interaction::LocalPayloadTarget,
+        payload: std::rc::Rc<dyn std::any::Any>,
+    ) -> Result<(), RenderObjectContextError> {
+        Ok(self
+            .dispatch_handle()?
+            .replace_local_payload(target, payload)?)
+    }
+
+    /// Remove a payload from future owner-lane resolution.
+    ///
+    /// # Errors
+    ///
+    /// Returns the lane's typed dispatch error for wrong/detached owner state
+    /// or for a target already removed from the active owner lane.
+    pub fn unregister_local_payload(
+        &self,
+        target: flui_interaction::LocalPayloadTarget,
+    ) -> Result<(), RenderObjectContextError> {
+        Ok(self.dispatch_handle()?.unregister_local_payload(target)?)
+    }
 }
 
 // ============================================================================
@@ -424,13 +470,6 @@ impl<'a> RenderObjectContext<'a> {
 /// # Type Parameters
 ///
 /// * `R` - The RenderObject type this View creates
-///
-/// # Flutter Equivalent
-///
-/// This corresponds to Flutter's `RenderObjectWidget` and its subclasses:
-/// - `LeafRenderObjectWidget` - No children
-/// - `SingleChildRenderObjectWidget` - One child
-/// - `MultiChildRenderObjectWidget` - Multiple children
 ///
 /// # Example
 ///

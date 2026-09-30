@@ -67,7 +67,7 @@ View Tree        ──build──▶   Element Tree   ──layout──▶   R
 | Phase | Owner | Input | Output | Constraint |
 |-------|-------|-------|--------|------------|
 | Build | `BuildOwner` | dirty `View` nodes | reconciled `Element` tree | `View::build()` is pure — no I/O, no external mutation |
-| Layout | `LayoutPhase` | `Constraints` | `Size` per `RenderBox` | Single-pass O(n) where possible (Flutter constraint protocol) |
+| Layout | `LayoutPhase` | `Constraints` | `Size` per `RenderBox` | Single-pass O(n) where possible (constraints down, sizes up) |
 | Paint | `PaintPhase` | `RenderBox` tree | `DisplayList` → layers | Recording is in `flui-painting`; GPU submission in `flui-engine` |
 
 The pipeline is **on-demand**. The platform event loop uses `ControlFlow::Wait`. Nothing runs unless a tree is dirty (`mark_needs_layout`, `mark_needs_paint`). Polling render loops are forbidden by the constitution.
@@ -145,7 +145,7 @@ let platform = current_platform().expect("failed to initialize platform");
 
 Backends: `WindowsPlatform` (Win32), `MacOSPlatform` (AppKit), `HeadlessPlatform` (CI / tests), and a `winit` fallback. All platform-specific imports (`windows::*`, `objc2::*`/`objc2-app-kit::*`/`objc2-ui-kit::*`, `winit::*`) are confined to this crate. The Apple backends both use the `objc2` binding family — macOS/AppKit and iOS/UIKit alike; the older `cocoa`/`objc` crates this backend used are gone (ADR-0071).
 
-Text shaping is **not** a `Platform` method — that Flutter binding (`PlatformTextSystem`) was deliberately not carried over; `cosmic-text` (shaping, flui-painting) + the engine's glyph atlas (+ `flui-assets`) cover the responsibility end-to-end.
+Text shaping is **not** a `Platform` method — a platform text-system binding (`PlatformTextSystem`) is deliberately absent; `cosmic-text` (shaping, flui-painting) + the engine's glyph atlas (+ `flui-assets`) cover the responsibility end-to-end.
 
 ## Confinement of `unsafe`
 
@@ -160,10 +160,10 @@ Text shaping is **not** a `Platform` method — that Flutter binding (`PlatformT
 
 FLUI is designed against two external codebases for read-only architectural reference:
 
-- Flutter framework source (UI architecture, widget patterns, layout algorithms).
+- Flutter framework source (the declarative widget composition FLUI takes its inspiration from).
 - GPUI Rust UI library (platform abstraction, callback registries, type erasure patterns).
 
-Maintainer checkouts may include local `.flutter/` and `.gpui/` mirrors for parity work, but those external source trees are not required for normal builds. Both references are studied, never copied. Patterns are translated to FLUI idioms (Arity, Ambassador delegation, no nullability, strict layered DAG).
+The Flutter and GPUI sources are read on GitHub (`gh`); a maintainer may keep shallow clones in the gitignored `.flutter/` and `.gpui/`, but nothing requires them. Both are studied, never copied; patterns are designed as FLUI idioms (Arity, Ambassador delegation, no nullability, strict layered DAG).
 
 ## Hot Reload (Dev-Time)
 

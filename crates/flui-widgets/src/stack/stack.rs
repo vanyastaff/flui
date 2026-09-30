@@ -13,8 +13,7 @@ use crate::support::generic_render_view_element;
 /// Overlaps its children, sizing itself to the largest non-positioned child and
 /// aligning each by `alignment`.
 ///
-/// Flutter parity: `widgets/basic.dart` `Stack` over `RenderStack`. Defaults
-/// match Flutter: `alignment = Alignment::TOP_LEFT`, `fit = StackFit::Loose`.
+/// Defaults are `alignment = Alignment::TOP_LEFT` and `fit = StackFit::Loose`.
 /// Wrap a child in [`Positioned`](crate::Positioned) to place it at explicit
 /// edges instead of being aligned.
 ///
@@ -28,7 +27,7 @@ pub struct Stack<C = Vec<BoxedView>> {
 }
 
 impl<C> Stack<C> {
-    /// A stack of the given children with Flutter's default alignment/fit.
+    /// A stack of the given children with the default alignment and fit.
     pub fn new(children: C) -> Self {
         Self {
             alignment: Alignment::TOP_LEFT,
@@ -103,7 +102,7 @@ generic_render_view_element!(Stack);
 
 /// Overlaps its children like [`Stack`], but displays only one child by index.
 ///
-/// Flutter parity: all children are still laid out, so the stack's size is
+/// All children are still laid out, so the stack's size is
 /// resolved exactly like [`Stack`]. Only the selected child participates in
 /// paint, hit testing, semantics, and baseline reporting. `index = None`
 /// displays no child.
@@ -116,7 +115,7 @@ pub struct IndexedStack<C = Vec<BoxedView>> {
 }
 
 impl<C> IndexedStack<C> {
-    /// An indexed stack with Flutter's default alignment, fit, and `index = 0`.
+    /// An indexed stack with the default alignment and fit, and `index = 0`.
     pub fn new(children: C) -> Self {
         Self {
             alignment: Alignment::TOP_LEFT,

@@ -35,8 +35,8 @@ type PressCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
 /// [`GestureDetector::on_tap`], whose own [`WriterSource`] opens the
 /// [`EventCx`] for each press.
 ///
-/// Flutter has no counterpart in its widgets layer (`RawMaterialButton` lives
-/// in the Material library); see `ARCHITECTURE.md` "Mapping decisions".
+/// It is a design-agnostic press primitive with no Material styling; see
+/// `ARCHITECTURE.md` "Mapping decisions".
 /// Keyboard activation and pressed or hovered state are not implemented yet.
 #[derive(Clone, StatelessView)]
 pub struct RawButton {

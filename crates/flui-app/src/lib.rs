@@ -50,7 +50,7 @@ pub mod embedder;
 #[cfg(test)]
 mod table_test;
 
-// Primary exports - Flutter naming
+// Primary exports
 pub use app::{
     AppConfig, DiagnosticsProfile, RootRenderElement, RootRenderView, run_app, run_app_with_config,
 };
@@ -121,8 +121,7 @@ pub use android_activity;
 pub use app::{run_app_android, run_app_android_with_config};
 // Bindings re-exports
 pub use bindings::{
-    GestureBinding, PipelineCell, PipelineOwner, RenderingFlutterBinding, UpdateScheduler,
-    WidgetsBinding,
+    GestureBinding, PipelineCell, PipelineOwner, RenderingBinding, UpdateScheduler, WidgetsBinding,
 };
 // Application identity is part of `AppConfig`; low-level subscriber/filter
 // controls remain in `flui-log` rather than leaking through this API surface.
@@ -155,7 +154,7 @@ pub mod prelude {
     pub use crate::{AppConfig, run_app, run_app_with_config};
     // Bindings
     pub use crate::{
-        GestureBinding, PipelineOwner, RenderingFlutterBinding, UpdateScheduler, WidgetsBinding,
+        GestureBinding, PipelineOwner, RenderingBinding, UpdateScheduler, WidgetsBinding,
     };
 }
 

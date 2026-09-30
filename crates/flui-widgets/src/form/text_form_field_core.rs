@@ -163,8 +163,7 @@ impl TextFormFieldCore {
         }
     }
 
-    /// Follow a reconfiguration — Flutter's
-    /// `_TextFormFieldState.didUpdateWidget`: a new caller controller is
+    /// Follow a reconfiguration: a new caller controller is
     /// edited from now on; dropping the caller's controller moves the text
     /// into one the field owns; a new handle takes the field over.
     pub fn update(&mut self, old: &TextFormFieldConfig, new: &TextFormFieldConfig) {

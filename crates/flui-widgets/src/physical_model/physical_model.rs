@@ -14,18 +14,14 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// [`BoxShape::Rectangle`]), casts a drop shadow at `elevation`, and fills
 /// the shape with `color`.
 ///
-/// Flutter parity: `widgets/basic.dart` `PhysicalModel` (tag `3.44.0`) over
-/// [`RenderPhysicalModel`] (`RenderPhysicalModelBase<RectangleClip>`,
-/// `crates/flui-objects/src/proxy/physical_model.rs`) — the render object
+/// Backed by [`RenderPhysicalModel`]
+/// (`crates/flui-objects/src/proxy/physical_model.rs`) — the render object
 /// already implements clip + `Canvas::draw_shadow` + fill; this widget is a
 /// thin configuration wrapper over it. `create_render_object` /
-/// `update_render_object` push every field, mirroring the oracle's own
-/// `createRenderObject`/`updateRenderObject` (both `..`-cascade every
-/// property on every call).
+/// `update_render_object` push every field on every call.
 ///
 /// `clip_behavior` defaults to [`Clip::None`] — physical-model surfaces
-/// don't clip by default (oracle `proxy_box.dart:2071`, inherited unchanged
-/// by [`RenderPhysicalModel`]'s own default).
+/// don't clip by default, matching [`RenderPhysicalModel`]'s own default.
 #[derive(Clone, Debug)]
 pub struct PhysicalModel {
     shape: BoxShape,
@@ -40,9 +36,7 @@ pub struct PhysicalModel {
 impl PhysicalModel {
     /// A flat (`elevation: 0`), unrounded (`border_radius: None`),
     /// rectangular, unclipped (`Clip::None`) surface filled with `color`
-    /// and an opaque-black shadow color — Flutter's
-    /// `PhysicalModel(color: color)` with every other parameter left at its
-    /// oracle default.
+    /// and an opaque-black shadow color.
     #[must_use]
     pub fn new(color: Color) -> Self {
         Self {
@@ -71,8 +65,7 @@ impl PhysicalModel {
     }
 
     /// Sets the corner radius. Ignored unless `shape` is
-    /// [`BoxShape::Rectangle`]. Unset behaves like `BorderRadius::ZERO`
-    /// (oracle default: `borderRadius: null`).
+    /// [`BoxShape::Rectangle`]. Unset behaves like `BorderRadius::ZERO`.
     #[must_use]
     pub fn border_radius(mut self, border_radius: BorderRadius) -> Self {
         self.border_radius = Some(border_radius);
@@ -80,7 +73,7 @@ impl PhysicalModel {
     }
 
     /// Sets the elevation. Must be non-negative — the underlying render
-    /// object debug-asserts this (oracle: `assert(elevation >= 0.0)`).
+    /// object debug-asserts this.
     #[must_use]
     pub fn elevation(mut self, elevation: f64) -> Self {
         self.elevation = elevation;

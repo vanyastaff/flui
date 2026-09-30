@@ -37,14 +37,10 @@ pub(crate) fn gesture_detector_fires_on_tap_for_a_down_up_on_the_child() {
     );
 }
 
-/// Flutter parity (tag `3.44.0`): `packages/flutter/lib/src/gestures/arena.dart`
-/// `GestureArenaManager` — "The first member to accept or the last member to
-/// not reject wins" (line 110). A drag past the slop makes the tap recognizer
+/// The gesture arena's rule is that the first member to accept, or the last
+/// member not to reject, wins. A drag past the slop makes the tap recognizer
 /// reject itself, leaving the pan recognizer as the last remaining (and thus
-/// winning) member. The upstream Flutter case asserts exactly this
-/// arena-elimination behavior, and this test already covers it end to end, so
-/// the citation lives here instead of duplicating the case in the parity
-/// corpus.
+/// winning) member.
 pub(crate) fn gesture_detector_recognizes_a_pan_and_suppresses_the_tap() {
     let taps = Arc::new(AtomicUsize::new(0));
     let starts = Arc::new(AtomicUsize::new(0));
@@ -107,9 +103,8 @@ pub(crate) fn gesture_detector_recognizes_a_pan_and_suppresses_the_tap() {
     );
 }
 
-/// Flutter parity: once a drag has won its arena, `PointerCancel` follows
-/// `didStopTrackingLastPointer`'s accepted branch and fires `onEnd`, not
-/// `onCancel`. The terminal event must still leave the recognizer reusable.
+/// Once a drag has won its arena, `PointerCancel` takes the accepted branch
+/// and fires `onEnd`, not `onCancel`. The terminal event must still leave the recognizer reusable.
 pub(crate) fn horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_wedge_the_detector()
 {
     let cancels = Arc::new(AtomicUsize::new(0));
@@ -173,8 +168,7 @@ pub(crate) mod event_cx {
     use crate::common::{LaidOut, ProbeSignals, SignalProbe, lay_out, tight};
 
     use flui_painting::styling::Color;
-    use flui_rendering::pipeline::PipelineCell;
-    use flui_testing::{A11yTree, Action, ActionRequest, TreeId, invoke_semantics_action};
+    use flui_testing::{A11yTree, Action, ActionRequest, TreeId};
     use flui_view::prelude::*;
     use flui_widgets::{ColoredBox, GestureDetector, Semantics, Text};
 
@@ -215,22 +209,19 @@ pub(crate) mod event_cx {
             .child(detector.child(Text::new("Tap")))
     }
 
-    fn invoke_labelled_action(pipeline_owner: &PipelineCell, tree: &A11yTree, action: Action) {
+    fn invoke_labelled_action(app: &LaidOut, tree: &A11yTree, action: Action) {
         let id = tree
             .find_by_label("Tap")
             .unwrap_or_else(|error| {
                 panic!("one node labelled \"Tap\": {error}\n{}", tree.describe())
             })
             .id();
-        invoke_semantics_action(
-            pipeline_owner,
-            ActionRequest {
-                action,
-                target_tree: TreeId::ROOT,
-                target_node: id,
-                data: None,
-            },
-        )
+        app.invoke_semantics_action(ActionRequest {
+            action,
+            target_tree: TreeId::ROOT,
+            target_node: id,
+            data: None,
+        })
         .expect("a click on a node advertising one resolves");
     }
 
@@ -250,9 +241,8 @@ pub(crate) mod event_cx {
         app.enable_semantics();
         app.pump();
         let tree = app.a11y_tree().expect("semantics enabled before the frame");
-        let owner = app.pipeline_owner();
-        invoke_labelled_action(&owner, &tree, Action::Click);
-        invoke_labelled_action(&owner, &tree, Action::ShowContextMenu);
+        invoke_labelled_action(&app, &tree, Action::Click);
+        invoke_labelled_action(&app, &tree, Action::ShowContextMenu);
 
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| app.tick()));
         assert!(

@@ -4,11 +4,8 @@
 //! sides: the horizontal lines between rows and the vertical lines between
 //! columns.
 //!
-//! Flutter parity: `rendering/table_border.dart` `TableBorder`.
-//!
-//! [`TableBorder::border_radius`] rounds the outer border when it is uniform
-//! (matching the oracle, which only rounds a uniform outer edge); see
-//! `flui_painting::paint_table_border`.
+//! [`TableBorder::border_radius`] rounds the outer border only when it is
+//! uniform; see `flui_painting::paint_table_border`.
 
 use crate::styling::{BorderRadius, BorderRadiusExt, BorderSide};
 
@@ -37,8 +34,7 @@ pub struct TableBorder {
 
     /// Corner rounding for the outer border.
     ///
-    /// Only takes effect when the outer border is uniform (Flutter rounds a
-    /// uniform outer edge only); a non-uniform outer border paints square
+    /// Only takes effect when the outer border is uniform; a non-uniform outer border paints square
     /// regardless. Defaults to [`BorderRadius::ZERO`] (square corners).
     pub border_radius: BorderRadius,
 }
@@ -149,8 +145,7 @@ impl TableBorder {
 }
 
 impl Default for TableBorder {
-    /// All sides default to [`BorderSide::NONE`] — Flutter parity
-    /// (`TableBorder`'s constructor defaults, `table_border.dart:22-28`).
+    /// All sides default to [`BorderSide::NONE`].
     #[inline]
     fn default() -> Self {
         Self::NONE

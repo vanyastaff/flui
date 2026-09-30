@@ -3,8 +3,7 @@
 //! This module is a thin protocol-extension surface over
 //! `flui_interaction::routing` and `flui_interaction::mouse_tracker`.
 //! The canonical `HitTestResult` / `HitTestEntry` / `HitTestBehavior`
-//! types live in `flui-interaction` (Flutter's `gestures/` ↔
-//! `flui-interaction`); this module re-exports them for caller
+//! types live in `flui-interaction`; this module re-exports them for caller
 //! convenience and owns the rendering-protocol-specific
 //! `MatrixTransformPart` helper.
 //!
@@ -51,13 +50,6 @@
 //! the workspace, the trait and its module were removed rather than
 //! kept as dead code.
 //!
-//! # Flutter Equivalence
-//!
-//! Mirrors Flutter's hit-testing split: `gestures/hit_test.dart`
-//! owns the base types (now `flui-interaction`), `rendering/box.dart`
-//! and `rendering/sliver.dart` own the protocol-specific wrappers
-//! (`crate::protocol`).
-//!
 //! # Example
 //!
 //! ```ignore
@@ -91,10 +83,10 @@ pub use flui_interaction::routing::HitTestBehavior;
 // signals and trackpad pan-zoom.
 pub use flui_interaction::events::{CursorIcon, InputEvent, PointerEvent, PointerEventExt};
 pub use flui_interaction::routing::{
-    DeviceId, EventPropagation, MouseEnterCallback, MouseExitCallback, MouseHoverCallback,
-    MouseRegionCallbacks, MouseRegionTarget, MouseTrackerAnnotation, PanZoomTarget, PathClipTarget,
-    PointerDispatch, PointerTarget, ScrollTarget, ShaderMaskTarget, resolve_path_clip_target,
-    resolve_shader_mask_target,
+    DeviceId, EventPropagation, LocalPayloadTarget, MouseEnterCallback, MouseExitCallback,
+    MouseHoverCallback, MouseRegionCallbacks, MouseRegionTarget, MouseTrackerAnnotation,
+    PanZoomTarget, PathClipTarget, PointerDispatch, PointerTarget, ScrollTarget, ShaderMaskTarget,
+    resolve_path_clip_target, resolve_shader_mask_target,
 };
 pub use result::HitTestResult;
 pub use transform::MatrixTransformPart;

@@ -15,9 +15,8 @@ type BuilderFn = Rc<dyn Fn() -> BoxedView>;
 
 /// Rebuilds whatever its `builder` returns whenever `listenable` notifies.
 ///
-/// Flutter parity: `widgets/transitions.dart` `AnimatedBuilder` — the general
-/// reactive primitive the explicit transitions (`FadeTransition`, …) are
-/// special cases of. Hand it an animation (or any [`Listenable`]) and a closure
+/// The general reactive primitive the explicit transitions
+/// (`FadeTransition`, …) are special cases of. Hand it an animation (or any [`Listenable`]) and a closure
 /// that reads the animation's current value; each notification schedules a
 /// rebuild that re-invokes the closure.
 ///

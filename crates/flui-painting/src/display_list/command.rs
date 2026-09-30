@@ -69,7 +69,7 @@ pub enum DrawOp {
         clip_behavior: Clip,
     },
 
-    /// Clip to a rounded superellipse (Flutter `RSuperellipse`).
+    /// Clip to a rounded superellipse.
     ///
     /// Same shape carrier as [`Self::ClipRRect`]; the *intent* is the
     /// rounded-superellipse (iOS-squircle) corner curve, which has a
@@ -81,9 +81,6 @@ pub enum DrawOp {
     /// the wgpu backend does. Note the direction of that approximation: the
     /// rrect built from the same outer rect and radii is INSCRIBED in the
     /// squircle, so it clips more, not less.
-    /// Matches Flutter's `Canvas.clipRSuperellipse` and
-    /// `ClipContext.clipRSuperellipseAndPaint` at the command-vocabulary
-    /// level.
     ClipRSuperellipse {
         /// Rounded superellipse to clip to.
         rsuperellipse: RSuperellipse,

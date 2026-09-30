@@ -33,9 +33,7 @@ use crate::layout::SizedBox;
 ///    has no additional effect beyond `maintain_state` behaviour; see the
 ///    divergence note below.
 ///
-/// Flutter parity: `widgets/indexed_stack.dart` `Visibility`.
-///
-/// **Divergences from Flutter:**
+/// **Current limits:**
 /// - `maintainAnimation` controls descendants registered through an ambient
 ///   `VsyncScope`, as a production `UiRealm` root provides (it auto-wraps the
 ///   attached root view in one — see `flui_app`'s realm attach path). Without
@@ -43,11 +41,11 @@ use crate::layout::SizedBox;
 ///   through so an undriven nested registry cannot swallow wall-clock
 ///   fallback animations.
 /// - `maintainSemantics` — absent by design rather than deferred-and-inert:
-///   the oracle implements it by overriding `visitChildrenForSemantics` on
-///   `_RenderVisibility`, and FLUI's render traits expose no equivalent hook,
-///   so no knob is offered that would silently do nothing.
-/// - Flutter also wraps the result in `_VisibilityScope`; FLUI omits that
-///   scope widget (no equivalent query API yet).
+///   it would need a hook to skip a render object's children during the
+///   semantics walk, and FLUI's render traits expose none, so no knob is
+///   offered that would silently do nothing.
+/// - There is no visibility scope widget for descendants to query (no
+///   equivalent query API yet).
 #[derive(Clone, StatelessView)]
 pub struct Visibility {
     visible: bool,
@@ -117,8 +115,8 @@ impl Visibility {
     ///
     /// Requires `maintain_state = true` and is only effective while hidden.
     /// With the default `false`, hiding a retained subtree clears its primary
-    /// focus to `None`; FLUI does not yet perform Flutter's enclosing-scope
-    /// previously-focused-child fallback.
+    /// focus to `None`; FLUI does not yet fall back to the enclosing scope's
+    /// previously-focused child.
     #[must_use]
     pub fn maintain_focusability(mut self, maintain_focusability: bool) -> Self {
         self.maintain_focusability = maintain_focusability;
@@ -128,8 +126,8 @@ impl Visibility {
     /// Keep the child occupying its space while hidden, instead of collapsing
     /// it away.
     ///
-    /// Requires `maintain_animation = true` (and so `maintain_state = true`),
-    /// matching the oracle's constructor chain. With this set the child is
+    /// Requires `maintain_animation = true` (and so `maintain_state = true`).
+    /// With this set the child is
     /// laid out exactly as if visible and merely not painted, which is what
     /// makes [`maintain_interactivity`](Self::maintain_interactivity)
     /// meaningful: there is still a box in the tree for a pointer to land on.
@@ -191,8 +189,6 @@ impl StatelessView for Visibility {
             "maintain_focusability requires maintain_state"
         );
 
-        // Flutter oracle: `indexed_stack.dart` `Visibility.build`.
-        //
         //   result = ExcludeFocus(excluding: !visible && !maintainFocusability, child)
         //   if (maintainSize)  → _Visibility(visible, IgnorePointer(
         //                            ignoring: !visible && !maintainInteractivity, result))
@@ -201,8 +197,8 @@ impl StatelessView for Visibility {
         //                            (TickerMode skipped when maintainAnimation)
         //   else                  → visible ? child : replacement
         //
-        // Note the last arm reads `child`, not `result`: the oracle discards
-        // the focus wrapper there, so FLUI does too.
+        // Note the last arm reads `child`, not `result`: the focus wrapper is
+        // discarded there.
         let focusable_child = || {
             ExcludeFocus::new(self.child.clone())
                 .excluding(!self.visible && !self.maintain_focusability)

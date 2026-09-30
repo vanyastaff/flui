@@ -125,16 +125,13 @@ pub trait CustomPainter: Send + Sync + Debug {
     fn should_repaint(&self, old_delegate: &dyn CustomPainter) -> bool;
 
     /// An optional repaint [`Listenable`]: when it notifies, the hosting
-    /// `RenderCustomPaint` marks itself needing paint — the FLUI equivalent of
-    /// Flutter's `CustomPainter(repaint:)` / `addListener`/`removeListener`
-    /// wiring, which lets a painter driven by an [`Animation`] (or any
-    /// `ChangeNotifier`) repaint without a widget rebuild.
+    /// `RenderCustomPaint` marks itself needing paint, which lets a painter
+    /// driven by an animation (or any `ChangeNotifier`) repaint without a
+    /// widget rebuild.
     ///
     /// Implementations that return `Some` MUST return the *same* instance
     /// across calls, so the host can unsubscribe on detach / painter swap.
     /// Defaults to `None` (a static painter that never self-invalidates).
-    ///
-    /// [`Animation`]: https://api.flutter.dev/flutter/animation/Animation-class.html
     fn repaint(&self) -> Option<Arc<dyn Listenable>> {
         None
     }
@@ -147,7 +144,7 @@ pub trait CustomPainter: Send + Sync + Debug {
     /// behavior.
     ///
     /// The default implementation returns `None`. `RenderCustomPaint`
-    /// resolves the tri-state per Flutter parity: a *background* painter
+    /// resolves the tri-state by role: a *background* painter
     /// defaults to hit (`None` → `true`) and a *foreground* painter defaults
     /// to miss (`None` → `false`) — the trait itself is direction-agnostic,
     /// so it cannot pick a single default for both roles.

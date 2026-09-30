@@ -10,12 +10,15 @@ use std::fmt;
 
 use crate::styling::Color;
 use crate::typography::{FontStyle, TextDirection, TextStyle};
+use cosmic_text::fontdb::Family;
+use parley::fontique::Collection;
 use parley::style::{
     FontFamily, FontFamilyName, FontStyle as ParleyFontStyle, FontWeight, GenericFamily,
     LineHeight, StyleProperty,
 };
 use parley::{Alignment, AlignmentOptions, Layout};
 
+use crate::text_layout::font_resolve::resolve_family_name;
 use crate::text_layout::{TextContext, TextLayoutResult, paint_color};
 
 /// What one paragraph is shaped from.
@@ -152,6 +155,29 @@ impl TextContext {
             .collect();
         let line_height = paragraph.line_height.unwrap_or(paragraph.font_size * 1.2);
 
+        // Families are resolved against the collection before the builder
+        // borrows it: the same rule the process font system resolves with.
+        let collection = &mut self.font_cx.collection;
+        let default_family = family(collection, None);
+        let default_properties = paragraph
+            .default_style
+            .map(|style| properties(collection, style))
+            .unwrap_or_default();
+        let mut start = 0;
+        let span_properties: Vec<_> = paragraph
+            .spans
+            .iter()
+            .map(|(span, style)| {
+                let range = start..start + span.len();
+                start = range.end;
+                let properties = style
+                    .as_ref()
+                    .map(|style| properties(collection, style))
+                    .unwrap_or_default();
+                (range, properties)
+            })
+            .collect();
+
         // Unquantized: the layout is in logical pixels, and Parley's
         // quantization would round ascent, descent and the leading halves to
         // whole logical pixels, which at a device scale other than 1 is not
@@ -162,7 +188,7 @@ impl TextContext {
         let mut builder = self
             .layout_cx
             .ranged_builder(&mut self.font_cx, &text, 1.0, false);
-        builder.push_default(family(None));
+        builder.push_default(default_family);
         builder.push_default(StyleProperty::FontSize(paragraph.font_size));
         // No explicit height is 1.2 em of each run's own size, so a larger
         // span grows its line box, as on the cosmic-text path; an explicit
@@ -171,19 +197,12 @@ impl TextContext {
             Some(height) => LineHeight::Absolute(height),
             None => LineHeight::FontSizeRelative(1.2),
         }));
-        if let Some(style) = paragraph.default_style {
-            for property in properties(style) {
-                builder.push_default(property);
-            }
+        for property in default_properties {
+            builder.push_default(property);
         }
-        let mut start = 0;
-        for (span, style) in paragraph.spans {
-            let range = start..start + span.len();
-            start = range.end;
-            if let Some(style) = style {
-                for property in properties(style) {
-                    builder.push(property, range.clone());
-                }
+        for (range, properties) in span_properties {
+            for property in properties {
+                builder.push(property, range.clone());
             }
         }
         let mut layout = builder.build(&text);
@@ -202,35 +221,40 @@ impl TextContext {
     }
 }
 
-/// The family list a style asks for: its family, its fallbacks, then
-/// sans-serif, so a family the collection lacks shapes in the default face.
-/// A generic spelled as the painted layout reads one (`"monospace"`,
-/// `"serif"`, …) names the collection's generic, not a family of that name.
-fn family(style: Option<&TextStyle>) -> StyleProperty<'static, SpanBrush> {
-    let named = style
-        .into_iter()
-        .flat_map(|style| style.font_family.iter().chain(&style.font_family_fallback))
-        .map(|name| family_name(name));
-    let families: Vec<_> = named
-        .chain([FontFamilyName::Generic(GenericFamily::SansSerif)])
-        .collect();
-    StyleProperty::FontFamily(FontFamily::List(Cow::Owned(families)))
+/// The one family a style is shaped with: FLUI's family rule
+/// (`resolve_family_name`) over the families `collection` holds, the rule
+/// the process font system resolves with over its own database. Nothing
+/// follows it in the list: past that family, Parley walks the collection's
+/// fallback families, which mirror the process font system's fallback order
+/// in a collection fed from the host (`FontCollection::with_host_faces`).
+fn family(
+    collection: &mut Collection,
+    style: Option<&TextStyle>,
+) -> StyleProperty<'static, SpanBrush> {
+    let family = resolve_family_name(style, |name| holds_exactly(collection, name));
+    let name = match family {
+        Family::Name(name) => FontFamilyName::Named(Cow::Owned(name.to_owned())),
+        Family::Serif => FontFamilyName::Generic(GenericFamily::Serif),
+        Family::SansSerif => FontFamilyName::Generic(GenericFamily::SansSerif),
+        Family::Cursive => FontFamilyName::Generic(GenericFamily::Cursive),
+        Family::Fantasy => FontFamilyName::Generic(GenericFamily::Fantasy),
+        Family::Monospace => FontFamilyName::Generic(GenericFamily::Monospace),
+    };
+    StyleProperty::FontFamily(FontFamily::Single(name))
 }
 
-/// One family name, read with the painted layout's generic spellings
-/// (`font_resolve::generic_family`).
-fn family_name(name: &str) -> FontFamilyName<'static> {
-    use cosmic_text::fontdb::Family;
-
-    let generic = match crate::text_layout::font_resolve::generic_family(name) {
-        Some(Family::Serif) => GenericFamily::Serif,
-        Some(Family::SansSerif) => GenericFamily::SansSerif,
-        Some(Family::Monospace) => GenericFamily::Monospace,
-        Some(Family::Cursive) => GenericFamily::Cursive,
-        Some(Family::Fantasy) => GenericFamily::Fantasy,
-        Some(Family::Name(_)) | None => return FontFamilyName::Named(Cow::Owned(name.to_owned())),
-    };
-    FontFamilyName::Generic(generic)
+/// Whether `collection` holds a family spelled exactly `name`.
+///
+/// fontique looks family names up without regard to case, fontdb (and so the
+/// paint side's `InstalledFamilies`) exactly; the rule is asked the paint
+/// side's question, so a style naming `"segoe ui"` degrades to the
+/// sans-serif generic on both sides instead of measuring in Segoe UI and
+/// painting in the generic's family.
+pub(crate) fn holds_exactly(collection: &mut Collection, name: &str) -> bool {
+    collection
+        .family_id(name)
+        .and_then(|id| collection.family_name(id))
+        .is_some_and(|held| held == name)
 }
 
 /// The Parley properties `style` sets; a field left unset adds nothing.
@@ -238,10 +262,13 @@ fn family_name(name: &str) -> FontFamilyName<'static> {
     clippy::cast_possible_truncation,
     reason = "f64 style values narrow to Parley's f32 layout space"
 )]
-fn properties(style: &TextStyle) -> Vec<StyleProperty<'static, SpanBrush>> {
+fn properties(
+    collection: &mut Collection,
+    style: &TextStyle,
+) -> Vec<StyleProperty<'static, SpanBrush>> {
     let mut properties = Vec::new();
     if style.font_family.is_some() {
-        properties.push(family(Some(style)));
+        properties.push(family(collection, Some(style)));
     }
     if let Some(weight) = style.font_weight {
         properties.push(StyleProperty::FontWeight(FontWeight::new(f32::from(
@@ -332,6 +359,40 @@ mod tests {
                 .layout
                 .is_rtl(),
             "Hebrew-first text takes an RTL base direction under Ltr"
+        );
+    }
+
+    /// On a collection holding only the bundled faces, a glyph the style's
+    /// family lacks measures in Roboto, the face cosmic-text's last resort
+    /// paints it with, not as `.notdef`: Cyrillic in Material Icons measures
+    /// exactly as Cyrillic in Roboto.
+    #[test]
+    fn a_glyph_the_named_family_lacks_measures_in_roboto_on_the_bundled_collection() {
+        let fonts = FontCollection::new();
+        let width = |family: &str| {
+            let style = TextStyle {
+                font_family: Some(family.to_owned()),
+                ..TextStyle::default()
+            };
+            let spans: Vec<(String, Option<TextStyle>)> = vec![("Привет".to_owned(), Some(style))];
+            TextContext::new(&fonts)
+                .shape(&ParagraphSpec {
+                    spans: &spans,
+                    default_style: None,
+                    font_size: 16.0,
+                    max_width: None,
+                    line_height: None,
+                    direction: TextDirection::Ltr,
+                    max_lines: None,
+                })
+                .metrics()
+                .width
+        };
+        let roboto = width("Roboto");
+        let icons = width("Material Icons");
+        assert!(
+            (icons - roboto).abs() < 1e-3,
+            "Cyrillic in Material Icons measures {icons}, in Roboto {roboto}"
         );
     }
 

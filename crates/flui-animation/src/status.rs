@@ -2,8 +2,6 @@
 
 /// The status of an animation.
 ///
-/// Similar to Flutter's `AnimationStatus`.
-///
 /// # Examples
 ///
 /// ```
@@ -97,13 +95,10 @@ impl AnimationStatus {
 /// Configures how an animation should behave when animations are globally
 /// disabled (e.g. the platform's reduce-motion accessibility setting).
 ///
-/// Similar to Flutter's `AnimationBehavior`.
-///
 /// This is a policy carrier: `AnimationController` does not read it itself —
 /// the accessibility/bindings layer consults it when deciding whether to
 /// fast-forward (`Normal`) or run unchanged (`Preserve`) under a
-/// disable-animations setting, mirroring Flutter where `AnimationBehavior`
-/// only takes effect through `SemanticsBinding.disableAnimations`.
+/// disable-animations setting.
 ///
 /// # Examples
 ///

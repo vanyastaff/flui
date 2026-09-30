@@ -13,8 +13,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// unset axes inherit the parent's value.  The `fit` field controls how
 /// this widget reports its own size back to its parent.
 ///
-/// Flutter parity: `widgets/basic.dart` `OverflowBox` over
-/// [`RenderConstrainedOverflowBox`].
+/// Backed by [`RenderConstrainedOverflowBox`].
 #[derive(Clone, Debug)]
 pub struct OverflowBox {
     alignment: Alignment,

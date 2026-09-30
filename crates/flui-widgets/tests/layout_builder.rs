@@ -5,14 +5,11 @@
 //! `flui-view` unit tests cover the seam's internals; this file covers what an
 //! app author can actually observe.
 //!
-//! # Parity oracles
+//! # Scenarios
 //!
-//! Expected values come from Flutter, not from running the code first:
-//! `.flutter/packages/flutter/test/widgets/layout_builder_test.dart`
-//! (`'LayoutBuilder parent size'`, `'LayoutBuilder does not crash at zero area'`,
-//! `'LayoutBuilder can change size without rebuild'`) and
-//! `.flutter/packages/flutter/lib/src/widgets/layout_builder.dart`
-//! (`_RenderLayoutBuilder.performLayout`).
+//! Expected values are fixed by the documented contract, not by running the
+//! code first: the builder sees the parent's size, a zero-area layout does not
+//! crash, and a size change does not require a rebuild.
 
 use std::sync::Arc;
 
@@ -71,11 +68,11 @@ pub(crate) fn layout_builder_constraint_change_rebuilds_in_the_same_frame() {
         Some(bounds(80.0, 60.0)),
         "the builder must re-run under the NEW constraints"
     );
-    // Documented divergence (ADR-0017): `pump_widget` both rebuilds the widget
+    // Documented behavior (ADR-0017): `pump_widget` both rebuilds the widget
     // and changes the constraints, so FLUI invokes the builder twice this frame —
     // once in the leading `build_scope` with the last-published constraints, once
-    // in the layout<->build fixpoint with the fresh ones. Flutter invokes it once,
-    // because its `_LayoutBuilderElement` defers all building to layout. Both
+    // in the layout<->build fixpoint with the fresh ones. A design that defers
+    // all building to layout would invoke it once. Both
     // paint the same final child; the builder must be a pure function of its
     // inputs. Pinned here so a change to that behavior is deliberate.
     assert_eq!(

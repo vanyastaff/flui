@@ -32,8 +32,8 @@ pub trait BoxQueryRun {
     /// Mutable access to the backing owner (used by default method bodies).
     fn pipeline_mut(&mut self) -> &mut PipelineOwner<Self::Phase>;
 
-    /// Flutter `computeMinIntrinsicWidth` / `computeMaxIntrinsicWidth` /
-    /// `computeMinIntrinsicHeight` / `computeMaxIntrinsicHeight` dispatch.
+    /// Dispatches to the min/max intrinsic width/height computation for
+    /// `dimension`.
     fn intrinsic_dimension(
         &mut self,
         id: RenderId,
@@ -66,7 +66,7 @@ pub trait BoxQueryRun {
     }
 
     /// Size the subtree would take under `constraints` without mutating layout
-    /// state — Flutter's `getDryLayout`.
+    /// state.
     fn dry_layout(&mut self, id: RenderId, constraints: BoxConstraints) -> Size {
         self.pipeline_mut()
             .box_dry_layout(id, constraints)
@@ -74,7 +74,7 @@ pub trait BoxQueryRun {
     }
 
     /// Baseline distance from the top edge under `constraints` without laying
-    /// out — Flutter's `getDryBaseline`. `None` means the subtree reports no
+    /// out. `None` means the subtree reports no
     /// baseline for that axis/constraints pair (a valid, cacheable answer).
     fn dry_baseline(
         &mut self,

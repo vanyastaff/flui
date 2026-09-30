@@ -80,8 +80,7 @@ no new channel or scheduling abstraction is needed for these events.
 `queued_window_snapshots_preserve_transitions_and_address_the_sibling` drives
 the production FIFO with suspension followed by resumption and observes both on
 the addressed sibling. `admitted_close_refuses_a_later_typed_window_snapshot`
-pins terminal admission. This preserves the existing lifecycle behavior; it
-introduces no new Flutter divergence.
+pins terminal admission. This preserves the existing lifecycle behavior.
 
 This narrows the arbitrary-operation surface but does not complete ADR-0083's
 closed owner vocabulary or bound lossless queue memory. Backend frame pumps still

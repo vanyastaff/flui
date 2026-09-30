@@ -17,12 +17,11 @@ use crate::__private::generic_render_view_element;
 /// full viewport page, making this the backing primitive for page-view style
 /// layouts. Set a smaller fraction (e.g. `0.9`) to peek at adjacent children.
 ///
-/// Flutter parity: `widgets/sliver.dart` `SliverFillViewport` over
-/// `RenderSliverFillViewport`. Lives inside a [`Viewport`](crate::Viewport).
+/// Backed by `RenderSliverFillViewport`. Lives inside a
+/// [`Viewport`](crate::Viewport).
 ///
-/// **Divergence:** Flutter's `SliverFillViewport` accepts a lazy child
-/// delegate (`SliverChildDelegate`); FLUI's widget is eager (all children
-/// attached up-front). The geometry behaviour is identical.
+/// The widget is eager: all children are attached up-front, with no lazy child
+/// delegate.
 ///
 /// # Panics
 ///

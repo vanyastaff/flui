@@ -1,8 +1,7 @@
 //! [`HeroControllerScope`] — the ambient host for a [`HeroController`].
 //!
-//! **Public.** Flutter's `HeroControllerScope`
-//! (`navigator.dart:851-920`): an inherited widget that provides an optional
-//! `HeroController` to the `Navigator`s beneath it.
+//! **Public.** An inherited widget that provides an optional `HeroController` to
+//! the `Navigator`s beneath it.
 //!
 //! # Why this exists
 //!
@@ -11,12 +10,10 @@
 //! its controller — or, when **no** scope is present, creates a default one so heroes
 //! fly with zero boilerplate. `HeroControllerScope::none` blocks that.
 //!
-//! # Flutter parity, and the one divergence
+//! # The auto-default
 //!
-//! `HeroControllerScope(controller:, child:)` and `HeroControllerScope.none(child:)`
-//! map 1:1. The divergence is the **auto-default**: Flutter's automatic attach comes
-//! from `MaterialApp` installing an app-level scope; FLUI has no `MaterialApp`, so the
-//! outermost `Navigator` self-provides.
+//! With no scope above, the outermost `Navigator` self-provides a default controller
+//! (a design-system app shell could install an app-level scope instead).
 
 use std::fmt;
 use std::sync::Arc;
@@ -45,8 +42,7 @@ pub struct HeroControllerScope {
 }
 
 impl HeroControllerScope {
-    /// Provide `controller` to the `Navigator`s below. Flutter's
-    /// `HeroControllerScope(controller:, child:)`.
+    /// Provide `controller` to the `Navigator`s below.
     pub fn new(controller: Arc<HeroController>, child: impl IntoView) -> Self {
         Self {
             controller: Some(controller),
@@ -55,7 +51,6 @@ impl HeroControllerScope {
     }
 
     /// Block the subtree from receiving any hero controller — no flights run under it.
-    /// Flutter's `HeroControllerScope.none(child:)`.
     pub fn none(child: impl IntoView) -> Self {
         Self {
             controller: None,

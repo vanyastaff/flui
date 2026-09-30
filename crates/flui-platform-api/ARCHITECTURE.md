@@ -43,22 +43,18 @@ path.
 
 ## Mapping decisions
 
-### Flutter's `services` layer becomes capability traits in a contract crate
+### Platform services are capability traits in a contract crate
 
-Flutter has no equivalent crate. Its `services` library carries text input,
-haptics, clipboard and system chrome as method-channel messages to one
-embedder. FLUI dissolves that layer into typed capability traits
-(ADR-0030, ADR-0031, ADR-0038) and keeps the traits apart from their
-implementations, so a crate that names a capability links no OS code and a
-plugin can implement one without the backends. The observable contracts of
-each capability are those of its own ADR; only where the trait is defined
-changed.
+Text input, haptics, clipboard and system chrome are typed capability traits
+(ADR-0030, ADR-0031, ADR-0038), not messages to one embedder, and the traits
+live apart from their implementations, so a crate that names a capability links no OS code and a
+plugin can implement one without the backends. The contract of each
+capability is that of its own ADR.
 
-### A TSF-shaped pull store replaces Flutter's `TextInputClient` push
+### A TSF-shaped pull store carries text input
 
-Flutter's text input is a push protocol: the engine sends whole
-`TextEditingValue`s to a `TextInputClient` over a method channel, and the
-client pushes its value back. `text_store` inverts it (ADR-0090): the field is
+`text_store` is a pull protocol (ADR-0090), not a push of whole editing values
+between engine and client: the field is
 a `TextStore` the platform locks, reads and edits, in UTF-16 offsets, the
 shape of TSF's `ITextStoreACP` that AppKit's `NSTextInputClient` and Android's
 `InputConnection` also map onto. A push source (winit's `ImeEvent`) goes

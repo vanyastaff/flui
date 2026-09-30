@@ -28,7 +28,7 @@ fn controller(ms: u64) -> AnimationController {
     AnimationController::new(Duration::from_millis(ms), &scheduler)
 }
 
-// ---- remaining-fraction duration scaling (Flutter `_animateToInternal`) ----
+// ---- remaining-fraction duration scaling ----
 
 fn forward_from_mid_scales_run_duration() {
     let _serial = serial();
@@ -102,7 +102,7 @@ fn disposed_controller_rejects_forward() {
 
 // ---- #1183: unboundedness is a constructor fact ----------------------
 
-/// `+-inf` still CLAMPS on a bounded controller (Flutter's own "go to
+/// `+-inf` still CLAMPS on a bounded controller (the "go to
 /// the end" idiom) -- only a bound-less direction refuses.
 fn bounded_controller_clamps_infinite_target_and_from_to_the_pointed_at_bound() {
     let _serial = serial();
@@ -276,10 +276,8 @@ fn repeat_consumes_all_cycles_in_one_long_frame() {
 }
 
 /// The `min == max` equality case, distinct from `repeat_with_rejects_inverted_range`'s
-/// `min > max` — Flutter permits this degenerate range (its own dropped
-/// `min: 1.0, max: 1.0` oracle sub-case, `animation_controller_test.dart`
-/// "calling repeat with specified min and max values" @ 3.44.0); FLUI
-/// rejects it, the mapping entry's rationale.
+/// `min > max`. A degenerate `min == max` range is rejected too; the
+/// mapping entry gives the rationale.
 fn repeat_with_rejects_equal_min_and_max() {
     let _serial = serial();
     let c = controller(100);
@@ -344,16 +342,12 @@ fn repeat_value_is_partition_invariant_across_a_skipped_cycle() {
     partitioned.dispose();
 }
 
-/// Flutter oracle: `animation_controller_test.dart` "calling repeat by
-/// setting count as valid with reverse as true..." (@ 3.44.0). Its
-/// harness ticks are ABSOLUTE frame timestamps
-/// (`scheduler_tester.dart`'s `tick` calls `handleBeginFrame` with the
-/// argument directly), so `tick(100ms)` then `tick(60ms)` REWINDS the
-/// clock to 60ms — the oracle's `0.6` sample is elapsed 60ms, not a
-/// cumulative 160ms. Pure sampling makes that rewind exact, with no
-/// `toStringAsFixed` rounding needed. The exhaustion assertion is
-/// FLUI's own addition — the oracle never ticks that far.
-fn repeat_bounce_flutter_oracle_finite_count_and_absolute_time_rewind() {
+/// A finite-count bouncing repeat, ticked with ABSOLUTE frame timestamps:
+/// `tick(100ms)` then `tick(60ms)` REWINDS the clock to 60ms, so the `0.6`
+/// sample is elapsed 60ms, not a cumulative 160ms. Pure sampling makes that
+/// rewind exact, with no rounding needed. The test also ticks past the last
+/// repeat to assert exhaustion.
+fn repeat_bounce_finite_count_and_absolute_time_rewind() {
     let _serial = serial();
     let c = controller(100);
     c.repeat_with(None, None, true, None, Some(4)).unwrap();
@@ -409,7 +403,7 @@ fn repeat_tick_at_infinity_exhausts_a_finite_count_instead_of_rewinding() {
 
 /// A zero effective period settles SYNCHRONOUSLY at the call — Android's
 /// rule ("0 duration animator, ignore the repeat count and skip to the
-/// end"); Compose rejects it, Flutter asserts. A later `tick_at`
+/// end"); Compose rejects it. A later `tick_at`
 /// changes nothing (no run was ever installed), and `run_generation` is
 /// untouched.
 fn repeat_with_zero_period_settles_synchronously_at_the_call() {
@@ -446,9 +440,8 @@ fn repeat_with_zero_period_settles_synchronously_at_the_call() {
     c2.dispose();
 }
 
-/// `velocity()` on a reverse leg is SIGNED (a deliberate divergence
-/// from Flutter's `_RepeatingSimulation.dx`, which is always positive)
-/// — see `docs/ARCHITECTURE.md`'s "Repeat sampling" mapping entry, (g).
+/// `velocity()` on a reverse leg is SIGNED (negative while the
+/// value falls) — see `docs/ARCHITECTURE.md`'s "Repeat sampling" mapping entry, (g).
 /// Previously uncited/untested: the mapping entry's citation of
 /// `reverse_mid_flight_keeps_full_range_velocity` as this behavior's
 /// "sibling repeat coverage" named a test that has no `.velocity()`
@@ -616,7 +609,7 @@ fn a_panicking_status_listener_leaves_the_finished_run_ok() {
     // `Drop for TickerDelivery` emptied out, since `finish` never
     // reaches its own `delivery.deliver()` line when `fire_status`
     // panics — only the unwind dropping the `delivery` parameter runs
-    // it. This continuation is the oracle for that drop actually firing.
+    // it. This continuation proves that drop actually fires.
     let seen = Arc::new(Mutex::new(None));
     let seen2 = Arc::clone(&seen);
     future.when_complete_or_cancel(move |outcome| {
@@ -685,7 +678,7 @@ fn controller_contract() {
 }
 
 #[test]
-fn repeat_contract_and_flutter_divergences() {
+fn repeat_contract() {
     crate::test_cases::run_cases(&[
         (
             "repeat consumes all cycles in one long frame",
@@ -700,8 +693,8 @@ fn repeat_contract_and_flutter_divergences() {
             repeat_value_is_partition_invariant_across_a_skipped_cycle,
         ),
         (
-            "repeat bounce flutter oracle finite count and absolute time rewind",
-            repeat_bounce_flutter_oracle_finite_count_and_absolute_time_rewind,
+            "repeat bounce finite count and absolute time rewind",
+            repeat_bounce_finite_count_and_absolute_time_rewind,
         ),
         (
             "repeat tick at infinity exhausts a finite count instead of rewinding",

@@ -469,7 +469,17 @@ impl UiRealm {
     /// transaction. Enforced in debug builds against the transitional global
     /// scheduler's phase; the thread affinity itself is structural
     /// (`UiRealm: !Send + !Sync`), not asserted.
+    ///
+    /// The drain runs inside the realm's entry ([`Self::enter`]), whether or
+    /// not the caller already entered it (entry nests): a semantics action's
+    /// handler lives in the realm's interaction lane, so an action drained
+    /// outside it would be counted as invoked while its handler never ran.
     pub fn drain_commands(&self) -> DrainReport {
+        self.enter(Self::drain_commands_entered)
+    }
+
+    /// [`Self::drain_commands`]'s body, run inside the realm's entry.
+    fn drain_commands_entered(&self) -> DrainReport {
         debug_assert_eq!(
             self.scheduler.phase(),
             SchedulerPhase::Idle,
@@ -531,8 +541,8 @@ impl UiRealm {
                             report.invoked += 1;
                         }
                         Err(error) => {
-                            // Flutter deliberately ignores actions for stale
-                            // views/nodes because screen readers may lag behind
+                            // Actions for stale views/nodes are deliberately
+                            // ignored because screen readers may lag behind
                             // the latest semantics update.
                             tracing::trace!(
                                 { flui_foundation::diagnostics::PRESENTATION_ID } =

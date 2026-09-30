@@ -89,11 +89,8 @@ pub use unified::Element;
 /// child's 0-based index plus an optional previous-sibling `ElementId` (the
 /// payload semantics view-local code used to spell `IndexedSlot<Option<ElementId>>`).
 ///
-/// # Flutter equivalent
-///
-/// Mirrors Flutter's `IndexedSlot<T extends Element?>` used by
-/// `MultiChildRenderObjectElement` for O(1) child insertion. The previous-sibling
-/// reference enables in-place reordering without re-mounting.
+/// Used by multi-child render elements for O(1) child insertion. The
+/// previous-sibling reference enables in-place reordering without re-mounting.
 ///
 /// # Example
 ///

@@ -6,10 +6,6 @@ use flui_foundation::geometry::{Matrix4, Offset};
 ///
 /// This is used to efficiently transform positions during hit testing
 /// without having to compute full matrix inverses for simple operations.
-///
-/// # Flutter Equivalence
-///
-/// Corresponds to Flutter's `_TransformPart` and related classes.
 #[derive(Debug, Clone)]
 pub enum MatrixTransformPart {
     /// A simple offset translation.

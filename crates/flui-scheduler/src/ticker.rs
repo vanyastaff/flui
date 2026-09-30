@@ -14,9 +14,8 @@
 //!   embedders that own their own frame scheduler.
 //! - **Auto-schedule** ([`Ticker::new_with_scheduler`] / vended via
 //!   [`TickerProvider::create_ticker`] on a [`UpdateScheduler`](crate::scheduler::UpdateScheduler)): the ticker
-//!   self-registers a transient frame callback on every start/unmute,
-//!   matching Flutter [`ticker.dart:283`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
-//!   `scheduleTick(rescheduling: true)`. `stop`/`mute`/`dispose` cancel the
+//!   self-registers a transient frame callback on every start/unmute and
+//!   re-registers it after each tick. `stop`/`mute`/`dispose` cancel the
 //!   pending callback via [`UpdateScheduler::cancel_frame_callback`](crate::scheduler::UpdateScheduler::cancel_frame_callback).
 //!
 //! ## Manual Ticker Example
@@ -35,7 +34,7 @@
 //! ticker.tick(&scheduler);
 //! ```
 //!
-//! ## Auto-scheduling Ticker Example (Flutter-like)
+//! ## Auto-scheduling Ticker Example
 //!
 //! ```rust
 //! use flui_scheduler::{UpdateScheduler, Ticker};
@@ -77,10 +76,9 @@ fn next_ticker_id() -> TickerId {
 /// Ticker callback - receives elapsed time in seconds
 pub type TickerCallback = Box<dyn FnMut(f64) + Send>;
 
-/// Ticker provider trait — Flutter-faithful factory shape.
+/// Ticker provider trait — a factory for tickers.
 ///
-/// Flutter parity: [`ticker.dart:248`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
-/// `Ticker createTicker(TickerCallback)`. The provider vends an owned
+/// The provider vends an owned
 /// [`Ticker`] preloaded with the caller-supplied callback; the caller drives
 /// state transitions via `start`/`stop`/`mute`/`unmute`/`dispose`.
 ///
@@ -97,8 +95,6 @@ pub trait TickerProvider: Send + Sync {
     /// Returns a ticker in [`TickerState::Idle`]. The caller must call
     /// [`Ticker::start_default`] (or [`Ticker::start`] with an explicit
     /// override) to begin ticking.
-    ///
-    /// Flutter parity: `ticker.dart:248 Ticker createTicker(TickerCallback)`.
     fn create_ticker(&self, on_tick: TickerCallback) -> Ticker {
         let mut ticker = Ticker::new();
         ticker.set_pending_callback(on_tick);
@@ -279,10 +275,8 @@ struct TickerInner {
     /// cleared on `stop`/`mute`/`dispose` or when the callback fires.
     ///
     /// `None` for manually-driven tickers (no [`UpdateScheduler`](crate::scheduler::UpdateScheduler) attached) and
-    /// auto-scheduling tickers that are not currently registered.
-    ///
-    /// Flutter parity: `ticker.dart:254 _animationId` (sentinel for
-    /// "already-scheduled").
+    /// auto-scheduling tickers that are not currently registered. `Some`
+    /// doubles as the "already-scheduled" sentinel.
     scheduled_callback_id: Option<CallbackId>,
 }
 
@@ -298,8 +292,7 @@ impl TickerInner {
     /// `unmute()` call reaches this predicate while the slot is still
     /// `CheckedOut`, before the lease has restored it (issue #1059).
     ///
-    /// Flutter parity: [`ticker.dart:270`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
-    /// `shouldScheduleTick = !muted && isActive && !scheduled`.
+    /// Eligible means: not muted, active, and not already scheduled.
     fn should_schedule_tick(&self) -> bool {
         self.state == TickerState::Active
             && matches!(self.slot, CallbackSlot::Ready(_))
@@ -394,9 +387,8 @@ pub struct Ticker {
     /// failed upgrade is silently done, matching [`Self::disposed`]'s own
     /// short-circuit.
     ///
-    /// Flutter parity: `Ticker(this._onTick, ...)` ([`ticker.dart:80`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart))
-    /// implicitly carries `SchedulerBinding.instance` (singleton); FLUI
-    /// stores the scheduler explicitly to keep the dependency typed.
+    /// The scheduler is stored explicitly rather than reached through a
+    /// singleton, to keep the dependency typed.
     scheduler: Option<crate::scheduler::WeakUpdateScheduler>,
 
     /// Disposed-state flag (lock-free).
@@ -404,8 +396,7 @@ pub struct Ticker {
     /// Set once on `dispose()`. After that, all public methods are no-ops in
     /// release mode and panic via `debug_assert!` in debug. Matches the PR #84
     /// `ChangeNotifier::dispose` pattern at
-    /// [`flui-foundation/src/notifier.rs`](../../crates/flui-foundation/src/notifier.rs)
-    /// and Flutter [`ticker.dart:362-379`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart).
+    /// [`flui-foundation/src/notifier.rs`](../../crates/flui-foundation/src/notifier.rs).
     disposed: Arc<AtomicBool>,
 }
 
@@ -436,9 +427,7 @@ impl Ticker {
     ///
     /// After [`start`](Self::start) or [`unmute`](Self::unmute) is called, the
     /// ticker self-registers a transient frame callback that fires the user
-    /// callback and re-schedules itself on each frame, matching Flutter
-    /// [`ticker.dart:283`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
-    /// `scheduleTick(rescheduling: true)`.
+    /// callback and re-schedules itself on each frame.
     ///
     /// [`stop`](Self::stop) / [`mute`](Self::mute) / [`dispose`](Self::dispose)
     /// cancel the pending callback via
@@ -476,7 +465,7 @@ impl Ticker {
     /// Pre-load a callback to be used when `start()` is called without
     /// passing one.
     ///
-    /// Used by [`TickerProvider::create_ticker`] (Flutter factory shape) to
+    /// Used by [`TickerProvider::create_ticker`] to
     /// vend a ticker preloaded with its tick callback. The callback is
     /// installed into the ticker's callback slot when [`start`](Self::start)
     /// is next invoked without a callback argument; explicit
@@ -508,9 +497,7 @@ impl Ticker {
     /// needs "this run ended, cancelled" resolved to an awaiter owns that
     /// future's completer and cancels it around this call.
     ///
-    /// Mirrors Flutter [`ticker.dart:362-379`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
-    /// `@mustCallSuper dispose()` semantics and PR #84's `ChangeNotifier::dispose`
-    /// adoption template.
+    /// Follows the same dispose semantics as `ChangeNotifier::dispose`.
     pub fn dispose(&mut self) {
         if self.disposed.swap(true, Ordering::Release) {
             return; // already disposed — idempotent
@@ -581,9 +568,8 @@ impl Ticker {
     /// # Panics
     ///
     /// Debug-asserts that the ticker has not been disposed and that it is
-    /// not already in [`TickerState::Active`] (matches Flutter
-    /// [`ticker.dart:188`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
-    /// `throw FlutterError('A ticker was started twice.')`).
+    /// not already in [`TickerState::Active`] (a ticker cannot be started
+    /// twice).
     pub fn start<F>(&mut self, callback: F)
     where
         F: FnMut(f64) + Send + 'static,
@@ -607,9 +593,8 @@ impl Ticker {
         }
         // Refuse a start while a run is already installed, keyed on the
         // durable fact — is a run in progress? — and never on a single
-        // `TickerState` variant. Flutter's own predicate is
-        // `isActive => _future != null`; `is_running()` (Active OR Muted) is
-        // this ticker's equivalent now that there is no future to check:
+        // `TickerState` variant: `is_running()` (Active OR Muted) is the
+        // predicate, since there is no future to check:
         // muting pauses a run without ending it, so `mute(); start()` must
         // be refused exactly like starting an `Active` ticker.
         //
@@ -679,8 +664,6 @@ impl Ticker {
         };
         drop(displaced);
         // Auto-scheduling tickers register a transient frame callback now.
-        // Flutter parity: `ticker.dart:200-202 if (shouldScheduleTick)
-        // scheduleTick()`.
         self.schedule_tick_if_active();
     }
 
@@ -757,9 +740,7 @@ impl Ticker {
     /// This temporarily pauses the ticker without clearing the callback.
     /// Time does not advance while muted. Cancels the pending transient frame
     /// callback it can observe (auto-scheduling tickers — same window as
-    /// [`stop`](Self::stop)) — matches Flutter
-    /// [`ticker.dart:124-128`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
-    /// where `muted = true` calls `unscheduleTick()`.
+    /// [`stop`](Self::stop)).
     pub fn mute(&mut self) {
         if !self.assert_not_disposed("mute") {
             return;
@@ -787,10 +768,7 @@ impl Ticker {
     ///
     /// Resumes a muted ticker. Time continues from where it was paused.
     /// Re-registers the auto-scheduling transient callback if attached to
-    /// a scheduler — matches Flutter
-    /// [`ticker.dart:126-128`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
-    /// where setting `muted = false` calls `scheduleTick()` when
-    /// `shouldScheduleTick`.
+    /// a scheduler and eligible to tick.
     pub fn unmute(&mut self) {
         if !self.assert_not_disposed("unmute") {
             return;
@@ -868,9 +846,8 @@ impl Ticker {
 
     /// Check if the ticker is currently ticking ([`TickerState::Active`]).
     ///
-    /// **This is narrower than Flutter's `Ticker.isActive`**, which is
-    /// `_future != null` and stays true while the ticker is muted. Here a muted
-    /// ticker reports `false` even though its run is still live, so the ported
+    /// **This is narrower than "has a live run"**: a muted
+    /// ticker reports `false` even though its run is still live, so the
     /// idiom `if !ticker.is_active() { ticker.start(cb) }` will hit
     /// [`start`](Self::start)'s refusal on a muted ticker: the call drops the
     /// supplied callback and logs at `error!` rather than starting anything.
@@ -946,9 +923,6 @@ impl Ticker {
     /// Register a transient frame callback if this ticker is auto-scheduling,
     /// active, and not already scheduled. No-op for manual tickers, inactive
     /// tickers, or tickers that already have a pending callback.
-    ///
-    /// Flutter parity: [`ticker.dart:270`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
-    /// `shouldScheduleTick = !muted && isActive && !scheduled`.
     fn schedule_tick_if_active(&self) {
         let Some(weak_scheduler) = self.scheduler.as_ref() else {
             return; // Manual ticker — no auto-schedule.
@@ -1017,9 +991,8 @@ impl Ticker {
     /// Tick + auto-reschedule entry point invoked by the scheduler's
     /// transient-callback drain.
     ///
-    /// Flutter parity: [`ticker.dart:272-285`](../../../.flutter/flutter-master/packages/flutter/lib/src/scheduler/ticker.dart)
-    /// `_tick(timeStamp)` — clear `_animationId`, fire `_onTick`, then
-    /// `scheduleTick(rescheduling: true)` if still `shouldScheduleTick`.
+    /// Clears the scheduled callback id, fires the tick callback, then
+    /// re-registers if the ticker is still eligible to tick.
     ///
     /// This is a free associated function rather than a method so it can
     /// be invoked from inside the captured closure without retaining a
@@ -1089,8 +1062,7 @@ impl Ticker {
         if !should_reschedule {
             return;
         }
-        // Upgrade to register the next frame's callback — mirrors Flutter
-        // `scheduleTick(rescheduling: true)`. A failed upgrade means the
+        // Upgrade to register the next frame's callback. A failed upgrade means the
         // realm tore down between this tick firing and now; nothing is left
         // to reschedule against.
         let Some(strong) = scheduler.upgrade() else {
@@ -1647,9 +1619,8 @@ impl TickerFuture {
     /// If the future is already resolved when this method is called —
     /// including in the window between a [`TickerCompleter`] publishing and
     /// its [`TickerDelivery`] running registered continuations — `f` runs
-    /// immediately, on the calling thread. That is a deliberate divergence
-    /// from Dart's `whenCompleteOrCancel`, which always schedules a
-    /// microtask: callers here must be safe to re-enter from this call, and
+    /// immediately, on the calling thread. Callers must therefore be safe to
+    /// re-enter from this call (nothing is deferred to a later turn), and
     /// the relative order between two different registrants racing a
     /// resolution is not a contract.
     ///

@@ -32,17 +32,14 @@ use flui_painting::Alignment;
 use flui_painting::styling::{BorderRadius, Color};
 
 /// A value that can be animated.
-///
-/// Similar to Flutter's `Animatable<T>`.
 pub trait Animatable<T> {
     /// Returns the value of this object at the given animation value.
     fn transform(&self, t: f64) -> T;
 }
 
 /// A tween that linearly interpolates between a `begin` and `end` value of any
-/// [`Lerp`] type. One generic struct replaces Flutter's per-type tween classes
-/// (`ColorTween`, `SizeTween`, ...), which exist only because Dart dispatches
-/// `begin + (end - begin) * t` dynamically.
+/// [`Lerp`] type. One generic struct covers every per-type tween
+/// (`ColorTween`, `SizeTween`, ...), which are aliases of it.
 ///
 /// `transform` does **not** clamp `t`: bouncy/elastic/spring curves emit
 /// `t > 1` (or `t < 0`) and the overshoot must reach the value. The exact
@@ -82,8 +79,6 @@ impl<V: Lerp> Animatable<V> for Tween<V> {
 
 /// A tween that linearly interpolates between two floats.
 ///
-/// Similar to Flutter's `Tween<double>`.
-///
 /// # Examples
 ///
 /// ```
@@ -99,8 +94,6 @@ pub type FloatTween = Tween<f64>;
 
 /// A tween that linearly interpolates between two integers, rounding to the
 /// nearest integer.
-///
-/// Similar to Flutter's `IntTween`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct IntTween {
@@ -128,8 +121,6 @@ impl Animatable<i32> for IntTween {
 
 /// A tween that linearly interpolates between two integers, flooring to the
 /// nearest integer.
-///
-/// Similar to Flutter's `StepTween`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct StepTween {
@@ -156,8 +147,6 @@ impl Animatable<i32> for StepTween {
 }
 
 /// A tween that always returns the same value.
-///
-/// Similar to Flutter's `ConstantTween<T>`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ConstantTween<T: Clone> {
@@ -212,15 +201,13 @@ impl<T, A: Animatable<T>> Animatable<T> for ReverseTween<T, A> {
 // ============================================================================
 
 /// A tween that linearly interpolates between two colors.
-///
-/// Similar to Flutter's `ColorTween`.
 /// Tween between two colors. Alias for `Tween<Color>`.
 pub type ColorTween = Tween<Color>;
 
 /// A color tween that interpolates through Oklab space (perceptually
 /// uniform) instead of componentwise sRGB.
 ///
-/// Flutter has no equivalent: `Color.lerp` averages gamma-encoded channels,
+/// `Color::lerp` averages gamma-encoded channels,
 /// so cross-hue transitions pass through dark, gray midpoints (blue→yellow
 /// goes through mud). Interpolating in Oklab keeps perceived lightness and
 /// chroma steady across the whole transition.
@@ -272,32 +259,22 @@ impl Animatable<Color> for OklabColorTween {
 }
 
 /// A tween that linearly interpolates between two sizes.
-///
-/// Similar to Flutter's `SizeTween`.
 /// Tween between two sizes. Alias for `Tween<Size>`.
 pub type SizeTween = Tween<Size<f64>>;
 
 /// A tween that linearly interpolates between two rectangles.
-///
-/// Similar to Flutter's `RectTween`.
 /// Tween between two rectangles. Alias for `Tween<Rect>`.
 pub type RectTween = Tween<Rect<f64>>;
 
 /// A tween that linearly interpolates between two offsets.
-///
-/// Similar to Flutter's `OffsetTween` (but `Offset::lerp` is used directly in Flutter).
 /// Tween between two offsets. Alias for `Tween<Offset>`.
 pub type OffsetTween = Tween<Offset<f64>>;
 
 /// A tween that linearly interpolates between two alignments.
-///
-/// Similar to Flutter's `AlignmentTween`.
 /// Tween between two alignments. Alias for `Tween<Alignment>`.
 pub type AlignmentTween = Tween<Alignment>;
 
 /// A tween that linearly interpolates between two edge insets.
-///
-/// Similar to Flutter's `EdgeInsetsTween`.
 /// Tween between two edge insets. Alias for `Tween<EdgeInsets>`.
 pub type EdgeInsetsTween = Tween<Edges<f64>>;
 
@@ -315,8 +292,8 @@ pub type Matrix4Tween = Tween<Matrix4>;
 
 /// A tween that chains together multiple tweens in sequence.
 ///
-/// Similar to Flutter's `TweenSequence<T>`. Each item in the sequence has a
-/// weight that determines what portion of the animation duration it occupies.
+/// Each item in the sequence has a weight that determines what portion of the
+/// animation duration it occupies.
 ///
 /// # Type Parameters
 ///
@@ -446,8 +423,6 @@ impl<T, A: Animatable<T>> Animatable<T> for TweenSequence<T, A> {
 
 /// An item in a [`TweenSequence`].
 ///
-/// Similar to Flutter's `TweenSequenceItem<T>`.
-///
 /// # Type Parameters
 ///
 /// - `T`: The output type of the animation.
@@ -491,8 +466,6 @@ impl<T, A: Animatable<T>> TweenSequenceItem<T, A> {
 ///
 /// Unlike [`CurvedAnimation`] in `flui_animation` which wraps an `Animation`,
 /// `CurveTween` implements [`Animatable`] and can be chained with other tweens.
-///
-/// Similar to Flutter's `CurveTween`.
 ///
 /// # Examples
 ///

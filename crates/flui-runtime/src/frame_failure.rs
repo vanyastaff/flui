@@ -138,7 +138,7 @@ impl FrameFailureDetail {
     }
 
     /// Convert one lower-level recovery record without formatting its
-    /// `FlutterError` or reconsidering its raw-payload classification.
+    /// diagnostic error or reconsidering its raw-payload classification.
     pub(crate) fn recovered_panic_kind(self, recovered: ViewRecoveredPanic) -> FrameFailureKind {
         let ViewRecoveredPanic {
             at,

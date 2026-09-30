@@ -1,19 +1,17 @@
 //! `ScrollController` — the user-facing handle for reading and driving scroll
-//! position. Analogous to Flutter's `ScrollController`.
+//! position.
 //!
 //! A `ScrollController` is cheaply cloneable: every clone shares the same
 //! underlying state via an `Arc`. Gesture callbacks inside `Scrollable` hold
 //! a clone and mutate the position; `AnimatedView`'s listenable subscription
 //! on the same `Arc` triggers a rebuild whenever the position changes.
 //!
-//! # Flutter parity
+//! # Handle and position
 //!
-//! Corresponds to `ScrollController` + `ScrollPosition` in
-//! `widgets/scroll_controller.dart`. FLUI keeps the split as two types —
-//! `ScrollController` (this one) as the user-facing handle, and
-//! [`flui_rendering::view::ScrollPosition`] as the shared, `RenderViewport`-
-//! consumable state it wraps — but restricts a controller to exactly one
-//! position (Flutter's multi-position attach/detach is deferred).
+//! The split is two types — `ScrollController` (this one) as the user-facing
+//! handle, and [`flui_rendering::view::ScrollPosition`] as the shared,
+//! `RenderViewport`-consumable state it wraps — and a controller is restricted
+//! to exactly one position (multi-position attach/detach is deferred).
 //!
 //! # Deferred (v1)
 //!
@@ -31,14 +29,11 @@
 //! same controller; [`jump_to`](ScrollController::jump_to) cancels through a
 //! SECOND path as well — a `stop_hook` installed the same way — which fires
 //! even when `jump_to` writes a pixel value equal to the current one and so
-//! notifies nothing at all (Flutter parity: `ScrollPosition.jumpTo` calls
-//! `goIdle()` unconditionally and synchronously, even when the value doesn't
-//! change).
+//! notifies nothing at all (a jump cancels whatever activity owns the position
+//! unconditionally and synchronously, even when the value doesn't change).
 //!
-//! **Divergence: no `Future`.** The oracle's `ScrollController.animateTo`
-//! returns `Future<void>` so a caller can `await` completion
-//! (`scroll_controller.dart`, tag `3.44.0`). FLUI has no widget-level async
-//! gate to await from `build`/event-handler code, so `animate_to` returns
+//! **No completion future.** There is no widget-level async gate to await
+//! from `build`/event-handler code, so `animate_to` returns
 //! nothing — a caller cannot observe when the run finishes short of polling
 //! [`ScrollController::pixels`] or watching [`ScrollController::as_listenable`].
 //! Named follow-up: `flui-material`'s `TabController`/`TabBarView`
@@ -79,10 +74,8 @@ type StopHook = Arc<dyn Fn() + Send + Sync>;
 /// (`scrollable.rs`).
 ///
 /// One slot, not a queue: a later command always supersedes an earlier,
-/// not-yet-serviced one — mirrors `ScrollPosition.jumpTo` cancelling whatever
-/// activity (ballistic or driven) is currently running, and a second
-/// `animateTo` replacing the first
-/// (`scroll_position_with_single_context.dart`, tag `3.44.0`).
+/// not-yet-serviced one: a jump cancels whatever activity (ballistic or driven)
+/// is currently running, and a second `animate_to` replaces the first.
 enum PendingScrollCommand {
     /// Drive the fling controller through a curve/duration tween to
     /// `target_pixels` (already clamped to `[min_scroll_extent,
@@ -144,8 +137,7 @@ pub struct ScrollController {
     /// that same frame's tick step would already have advanced (and
     /// overwritten) the position via the not-yet-stopped controller's value
     /// listener. Calling `stop()` here, synchronously, at `jump_to` call time
-    /// closes that gap — matching `ScrollPosition.jumpTo`'s `goIdle()`, which
-    /// the oracle also calls synchronously, before touching `pixels`.
+    /// closes that gap: the activity goes idle before `pixels` is touched.
     stop_hook: Arc<Mutex<Option<StopHook>>>,
 }
 
@@ -193,8 +185,7 @@ impl ScrollController {
     /// Create a new controller pre-seeded at `initial_scroll_offset` pixels,
     /// before any layout has committed extents.
     ///
-    /// Flutter parity: `ScrollController(initialScrollOffset: ...)`
-    /// (`widgets/scroll_controller.dart`). The value is **not** clamped here —
+    /// The value is **not** clamped here —
     /// extents are unknown until the first layout — so it is clamped exactly
     /// like a value set via [`set_pixels`](Self::set_pixels) before mount: the
     /// first `apply_content_dimensions` call a `Scrollable`/`Viewport` in
@@ -261,11 +252,9 @@ impl ScrollController {
     /// Notifies listeners on a real change; does not animate. Use this for
     /// programmatic jumps (e.g. `jump_to(0.0)` to scroll to the top).
     ///
-    /// Flutter parity: `ScrollPosition.jumpTo` calls `goIdle()` — cancelling
-    /// whatever activity currently owns the position — unconditionally,
-    /// before comparing the value (`scroll_position_with_single_context.dart`,
-    /// tag `3.44.0`). This cancels the same way, synchronously, via the
-    /// installed `stop_hook` (see that field's doc on [`ScrollController`]):
+    /// A jump cancels whatever activity currently owns the position
+    /// unconditionally, before comparing the value. It cancels
+    /// synchronously, via the installed `stop_hook` (see that field's doc on [`ScrollController`]):
     /// a ballistic fling or an [`animate_to`](Self::animate_to) run currently
     /// in flight on the driving `ScrollableState` is stopped THIS INSTANT
     /// (not merely queued — see that field's doc for why a frame's delay is
@@ -296,12 +285,7 @@ impl ScrollController {
     /// over `duration`, easing through `curve` — clamped to
     /// `[min_scroll_extent, max_scroll_extent]`, same as [`jump_to`](Self::jump_to).
     ///
-    /// # Flutter parity
-    ///
-    /// Mirrors `ScrollController.animateTo` /
-    /// `ScrollPositionWithSingleContext.animateTo`
-    /// (`scroll_controller.dart`/`scroll_position_with_single_context.dart`,
-    /// tag `3.44.0`): any activity currently driving the position — a
+    /// Any activity currently driving the position — a
     /// ballistic fling, or an earlier `animate_to` — is interrupted, and the
     /// new run starts from wherever the position currently sits. A user grab
     /// (`Scrollable`'s `on_pan_start`) cancels the run for free, since it
@@ -310,28 +294,21 @@ impl ScrollController {
     ///
     /// `duration == Duration::ZERO` jumps immediately via
     /// [`jump_to`](Self::jump_to) instead of scheduling a zero-length
-    /// animation — the oracle instead asserts `duration > Duration.zero` at
-    /// the driving activity and requires callers to use `jumpTo` for that
-    /// case; panicking on a public entry point is not this crate's contract
-    /// (`docs/PANIC-POLICY.md`), so this documents the same "duration must be
-    /// positive to actually animate" rule as a graceful fallback instead.
+    /// animation: animating needs a positive duration, and panicking on a public
+    /// entry point is not this crate's contract (`docs/PANIC-POLICY.md`), so a
+    /// zero duration falls back gracefully.
     ///
-    /// # Tolerance short-circuit divergence
+    /// # Tolerance short-circuit
     ///
-    /// The oracle also skips the animation (jumping instead) when already
-    /// within `physics.toleranceFor(this).distance` of the target
-    /// (`scroll_position_with_single_context.dart:178-182`, tag `3.44.0`) —
-    /// a *physics-derived* tolerance. `ScrollController` is deliberately
-    /// physics-agnostic (see this module's docs), so threading a
-    /// `ScrollPhysics` dependency through just for this check isn't a fit
-    /// here; this instead short-circuits on EXACT equality only (below),
-    /// which still skips the queued-command round-trip's one-frame delay for
-    /// the common "already there" case, but — unlike the oracle — still
-    /// queues (and pays that one frame) for a target merely *close* to, but
-    /// not exactly at, the current position.
+    /// `ScrollController` is deliberately physics-agnostic (see this module's
+    /// docs), so there is no physics-derived tolerance for "close enough to
+    /// jump instead". The call short-circuits on EXACT equality only (below),
+    /// which skips the queued-command round-trip's one-frame delay for the
+    /// common "already there" case, but still queues (and pays that one frame)
+    /// for a target merely *close* to, but not exactly at, the current
+    /// position.
     ///
-    /// See this module's docs for why this returns nothing where the oracle
-    /// returns `Future<void>`.
+    /// See this module's docs for why this returns no completion future.
     pub fn animate_to(
         &self,
         target_pixels: f64,
@@ -490,10 +467,9 @@ impl ScrollController {
                 // would visibly jump instead of starting from where the
                 // position actually sits.
                 fling.set_value(self.pixels());
-                // Flutter parity: `animateTo` runs inside a driven scroll
-                // activity, so `isScrollingNotifier` holds true for the run
-                // (`scroll_position.dart`, `beginActivity`) — while the USER
-                // direction stays idle, because nobody's finger is down. The
+                // `animate_to` runs inside a driven scroll activity, so
+                // the scrolling notifier holds true for the run — while the
+                // USER direction stays idle, because nobody's finger is down. The
                 // fling controller's status listener (installed by
                 // `ScrollableState`) ends the activity when the run settles,
                 // exactly as it does for a ballistic fling.
@@ -563,8 +539,7 @@ impl ScrollController {
     /// `thumb_offset_fraction = (pixels - min_scroll_extent) / scroll_extent`.
     /// Multiplying this by `available_track` (`viewport_dimension_pixels -
     /// thumb_height`, using the ACTUAL, already-min-clamped thumb height)
-    /// gives the thumb's pixel offset — the same `_thumbOffset` contract as
-    /// Flutter's `ScrollbarPainter` (`widgets/scrollbar.dart`, 3.44.0): flush
+    /// gives the thumb's pixel offset: flush
     /// with the track's start at `pixels == min_scroll_extent` and flush with
     /// its end at `pixels == max_scroll_extent`, in both the unclamped and
     /// min-thumb-length-clamped cases.

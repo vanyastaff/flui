@@ -1,27 +1,22 @@
 //! `RenderRotatedBox` — rotates its child by a whole number of quarter turns.
 //!
-//! # Flutter equivalence
+//! Layout swaps width↔height constraints for odd turn counts; the paint matrix
+//! rotates the child around the center of the parent's slot. Two recorded
+//! decisions, both in `flui-rendering/ARCHITECTURE.md` (`## Mapping decisions`):
+//! a same-parity turn change is served as a composited-layer update rather
+//! than a relayout, and an even turn reports the child's baseline.
 //!
-//! Port of Flutter's `RenderRotatedBox`
-//! (`packages/flutter/lib/src/rendering/rotated_box.dart`): layout swaps
-//! width↔height constraints for odd turn counts; the paint matrix rotates the
-//! child around the center of the parent's slot. Two recorded divergences,
-//! both in `flui-rendering/ARCHITECTURE.md` (`## Mapping decisions`): a
-//! same-parity turn change is served as a composited-layer update rather
-//! than a relayout, and an even turn reports the child's baseline where
-//! upstream reports none.
+//! # Design notes
 //!
-//! # Rust-native improvements
-//!
-//! * `quarter_turns: i32` (vs Dart's unconstrained `int`) — negative values
+//! * `quarter_turns: i32` — negative values
 //!   rotate counter-clockwise, and the angle is reduced via `rem_euclid(4)`
 //!   before constructing the paint matrix so large inputs don't accumulate
 //!   floating-point error.
 //! * The paint matrix is a pure computation over `(parent_size, child_size,
-//!   quarter_turns)` — no stale cached `_paintTransform` field that can
+//!   quarter_turns)` — no stale cached transform field that can
 //!   drift from state.
 //! * `set_quarter_turns` reports the narrowest impact the change actually
-//!   needs instead of upstream's relayout on every changed value: an unchanged
+//!   needs instead of a relayout on every changed value: an unchanged
 //!   effective angle (mod 4) reports no impact at all, a parity-preserving
 //!   turn (same even/odd class, different quadrant) reports an update-only
 //!   composited-layer commit instead of a full repaint, and only a parity
@@ -55,8 +50,6 @@ use flui_rendering::{
 /// The widget's own size is:
 /// - **Even turns**: same as the child's size.
 /// - **Odd turns**: `(child.height, child.width)` — width and height swapped.
-///
-/// Flutter parity: `RenderRotatedBox` in `rotated_box.dart`.
 #[derive(Debug, Clone)]
 pub struct RenderRotatedBox {
     /// Number of clockwise 90° rotations.  Negative = counter-clockwise.
@@ -162,9 +155,6 @@ impl RenderRotatedBox {
 
     /// Builds the paint matrix for the given parent and child sizes.
     ///
-    /// Flutter parity: `RenderRotatedBox.performLayout` paint-transform
-    /// computation via `Matrix4.identity()..translate..rotateZ..translate`.
-    ///
     /// Step 1: shift to the parent's center (`parent_size / 2`).
     /// Step 2: rotate by `quarter_turns mod 4 × π/2`.
     /// Step 3: shift back by the child's center (`-child_size / 2`).
@@ -199,7 +189,7 @@ impl RenderBox for RenderRotatedBox {
             self.has_child = false;
             self.child_size = Size::ZERO;
             // Nothing to rotate: the smallest size the constraints allow,
-            // whatever the turn — as upstream. Flipping first would swap the
+            // whatever the turn. Flipping first would swap the
             // axes of a non-square constraint and answer a size outside it.
             return constraints.smallest();
         }
@@ -270,7 +260,6 @@ impl RenderBox for RenderRotatedBox {
 
     // ---- intrinsic dimensions -----------------------------------------------
     //
-    // Flutter parity: rotated_box.dart RenderRotatedBox.
     // Odd quarter_turns swap width↔height axes; even turns pass through.
 
     fn compute_min_intrinsic_width(&self, height: f64, ctx: &mut BoxIntrinsicsCtx<'_>) -> f64 {
@@ -359,14 +348,10 @@ impl RenderBox for RenderRotatedBox {
     /// vertical, so there is no horizontal baseline and the box is treated
     /// like any child without one.
     ///
-    /// Upstream `RenderRotatedBox` has no baseline override at all
-    /// (`rotated_box.dart`, 3.44.0): its live query reports `null` for every
-    /// turn and its dry query falls through to `RenderBox`'s default, which
-    /// asserts in debug builds. The even-turn answer is a recorded divergence
-    /// — see
+    /// The even-turn answer follows the child. See
     /// `flui-rendering/ARCHITECTURE.md` (`## Mapping decisions`,
     /// "`RenderRotatedBox` reports a baseline only for an even turn") and its
-    /// replacement oracle,
+    /// test,
     /// `harness_rotated_box_baseline_follows_the_child_for_even_turns_and_is_absent_for_odd`.
     /// Reads the turn only through `is_vertical()`, which is what keeps
     /// `set_quarter_turns`'s same-parity fast path valid.

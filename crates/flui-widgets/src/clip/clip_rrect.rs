@@ -9,9 +9,8 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Clips its child to a rounded rectangle whose corners follow `border_radius`.
 ///
-/// Flutter parity: `widgets/basic.dart` `ClipRRect` over `RenderClipRRect`.
 /// Layout is a pass-through; only painting is clipped. `clip_behavior` defaults
-/// to [`Clip::AntiAlias`] (Flutter's `ClipRRect` default — smooth rounded
+/// to [`Clip::AntiAlias`] (smooth rounded
 /// edges); `border_radius` defaults to zero (a sharp rectangle, i.e. a plain
 /// `ClipRect`) until set.
 #[derive(Clone, Debug)]
@@ -37,7 +36,7 @@ impl Default for ClipRRect {
 }
 
 impl ClipRRect {
-    /// A rounded-rect clip with zero radius (a sharp rect) and Flutter's default
+    /// A rounded-rect clip with zero radius (a sharp rect) and the default
     /// `AntiAlias` behavior — chain [`border_radius`](Self::border_radius) to
     /// round the corners.
     pub fn new() -> Self {

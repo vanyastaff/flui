@@ -8,8 +8,7 @@ use flui_view::{Child, IntoView, RenderView, View};
 /// Isolates its child into a separate compositing layer so repaints of the
 /// child (or its siblings) don't force each other to re-paint.
 ///
-/// Flutter parity: `widgets/basic.dart` `RepaintBoundary` over
-/// `RenderRepaintBoundary`. Layout is a pass-through (the child's size); the
+/// Layout is a pass-through (the child's size); the
 /// boundary only affects paint/compositing.
 #[derive(Clone, Debug, Default)]
 pub struct RepaintBoundary {
@@ -17,14 +16,11 @@ pub struct RepaintBoundary {
     /// The item's key, salted, when this boundary is the per-item wrapper of
     /// a lazy sliver.
     ///
-    /// The scrolling delegates set it. Flutter keeps the boundary keyless and
-    /// restores the item's key OUTSIDE it with a `KeyedSubtree` carrying a
-    /// `_SaltedValueKey` (`widgets/scroll_delegate.dart:559`, `:572`). FLUI
-    /// cannot copy the wrapper: a lazy sliver requires every child element to
-    /// own a render node, and a `KeyedSubtree` equivalent is a stateless view
-    /// with none. So the boundary — which does own one — carries the key at
-    /// the level Flutter puts it, and carries it *salted* for the same two
-    /// reasons Flutter does: it is not the item's key (two elements may not
+    /// The scrolling delegates set it. The key cannot live on a keyed wrapper
+    /// outside the boundary: a lazy sliver requires every child element to
+    /// own a render node, and a keyed-subtree wrapper is a stateless view
+    /// with none. So the boundary — which does own one — carries the key,
+    /// *salted* for two reasons: it is not the item's key (two elements may not
     /// answer to one key in one parent), and it is never a `GlobalKey`, so the
     /// boundary registers nothing and the item inside registers its own key
     /// exactly once. A sliver looking an item up by key sees through the salt

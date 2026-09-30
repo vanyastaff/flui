@@ -70,7 +70,9 @@ pub use proxy::{
     RenderRepaintBoundary, RenderSemanticsAnnotations, RenderShaderMask, RenderSubtreeAnchor,
     RenderVisibility, SubtreeAnchor,
 };
-pub use proxy::{RenderExcludeSemantics, RenderIndexedSemantics, RenderMergeSemantics};
+pub use proxy::{
+    RenderExcludeSemantics, RenderIndexedSemantics, RenderMergeSemantics, SemanticsActionRoute,
+};
 
 // --- flat re-exports (interaction) ---
 pub use interaction::{

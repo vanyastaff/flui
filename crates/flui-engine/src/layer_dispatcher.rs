@@ -495,7 +495,7 @@ impl Drop for LayerDispatcher<'_> {
 ///
 /// The CANVAS clip commands (`clip_rect` / `clip_rrect` / `clip_rsuperellipse`
 /// on the `CommandRenderer` impl, the `DrawCommand` path) still do, and for them
-/// the mode really is approximated by `AntiAlias`. Flutter's own shape for it
+/// the mode really is approximated by `AntiAlias`. The natural shape for it
 /// on a canvas — clip anti-aliased, then `saveLayer` — would here be a
 /// `save_layer_alpha(.., 255)`, but that layer composites at opacity 1.0 with a
 /// white tint and `SrcOver`, which `LayerCompositor::pop_layer` reintegrates
@@ -508,14 +508,13 @@ impl Drop for LayerDispatcher<'_> {
 /// Whether a clip layer's mode asks for an offscreen around the clipped
 /// subtree.
 ///
-/// `AntiAliasWithSaveLayer` and nothing else. Flutter renders the clipped
+/// `AntiAliasWithSaveLayer` and nothing else. That mode renders the clipped
 /// subtree into an offscreen so the group composites against the clip edge
 /// ONCE; applying the coverage per draw instead makes the edge darker or more
 /// opaque wherever the content overlaps itself, because each draw is attenuated
 /// by the clip and then blended over an already-attenuated one. The offscreen
 /// is also what isolates a destructive or advanced blend inside the clip from
-/// the backdrop behind it — Flutter's own docs call that out as a semantic
-/// change, not a side effect.
+/// the backdrop behind it — a semantic change, not a side effect.
 ///
 /// This answers only the MODE half of the question. Whether a layer is actually
 /// opened is [`LayerDispatcher::opens_offscreen`], which also requires that no
@@ -1405,7 +1404,7 @@ impl LayerStateStack for LayerDispatcher<'_> {
 /// Flatten a `Compose(Vec<ImageFilter>)` AST into an ordered `ImageFilterPass` vec.
 ///
 /// Traverses `filters` depth-first, left-to-right (index 0 = innermost = applied
-/// first, PINNED #4 verified against Flutter `dl_compose_image_filter.cc:33-51`).
+/// first).
 /// Nested `Compose` nodes are recursed into at record time — the resulting `out`
 /// vec is flat with no GPU-side recursion and no nested IR.
 ///

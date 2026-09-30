@@ -1,6 +1,6 @@
 //! # FLUI Widgets
 //!
-//! The user-facing, Flutter-style widget catalog for FLUI — the layer an app
+//! The user-facing widget catalog for FLUI — the layer an app
 //! author composes. Every widget here is a small, immutable **configuration
 //! object** that either:
 //!
@@ -8,8 +8,8 @@
 //! - composes other widgets (a [`StatelessView`]), or
 //! - configures parent-layout data on its single child (a [`ParentDataView`]).
 //!
-//! This mirrors Flutter's `widgets/` package: a widget is "a thin configuration
-//! object over a render object." The render *machine* (layout/paint/compositing)
+//! A widget is a thin configuration
+//! object over a render object. The render *machine* (layout/paint/compositing)
 //! lives in [`flui_rendering`] and [`flui_objects`]; this crate is the
 //! declarative surface over it.
 //!
@@ -28,7 +28,7 @@
 //!
 //! ## Authoring style
 //!
-//! Widgets favour a Flutter-like constructor + chainable-config surface (with
+//! Widgets favour a constructor + chainable-config surface (with
 //! `bon` builders reserved for the widest future configuration objects). Single
 //! children are taken as `impl IntoView`; heterogeneous child lists use the
 //! [`ViewSeq`](flui_view::seq::ViewSeq)-backed `column!`/`row!` macros (the
@@ -128,8 +128,7 @@ pub mod widget_state;
 pub mod wrap;
 
 // ============================================================================
-// Flat re-exports — `flui_widgets::Padding`, identical depth to Flutter's
-// single-import surface.
+// Flat re-exports — `flui_widgets::Padding`, one import path for every widget.
 // ============================================================================
 
 // Application-scoped inherited widgets: ambient screen data, and the
@@ -145,8 +144,7 @@ pub use app::{
 // `use flui_widgets::Brightness`.
 pub use flui_platform_api::Brightness;
 // Ambient direction + localized-resource infrastructure — see
-// `localization`'s module docs for the sync-only-v1 divergences from the
-// Flutter oracle.
+// `localization`'s module docs for the sync-only-v1 limits.
 pub use localization::{
     BoxedLocalizationsDelegate, BoxedWidgetsLocalizations, DefaultWidgetsLocalizations,
     DefaultWidgetsLocalizationsDelegate, Directionality, GlobalWidgetsLocalizations,
@@ -264,8 +262,8 @@ pub use value_listenable_builder::{
     ValueListenableBuilder, ValueListenableBuilderState, ValueWidgetBuilder,
 };
 // The interactive-state vocabulary a widget's visual properties can vary
-// over (hover/focus/press/…) — see the module's own docs for Flutter parity
-// and named deferrals.
+// over (hover/focus/press/…) — see the module's own docs for named
+// deferrals.
 pub use widget_state::{
     WidgetState, WidgetStateConstraint, WidgetStateProperty, WidgetStates, WidgetStatesController,
 };
@@ -289,7 +287,7 @@ pub use flui_rendering::parent_data::FlexFit;
 // Grid, custom-paint, flow, and custom layout delegates — always
 // available (un-gated since their companion render objects ship in the
 // default build). Re-exported here so widget authors need only import from
-// `flui_widgets`, matching Flutter's single-import surface.
+// `flui_widgets`.
 pub use flui_rendering::delegates::{
     AspectRatioDelegate, CenterLayoutDelegate, CustomPainter, FlowDelegate, FlowPaintingContext,
     MultiChildLayoutContext, MultiChildLayoutDelegate, SingleChildLayoutDelegate,

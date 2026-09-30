@@ -4,8 +4,7 @@ iOS-style (Cupertino) theming foundation for [FLUI](https://github.com/vanyastaf
 `CupertinoDynamicColor`/`CupertinoColors`, `CupertinoTextThemeData`, `CupertinoTheme`/
 `CupertinoThemeData`, the `CupertinoApp` application shell, and the Cupertino widget family —
 `CupertinoButton`, `CupertinoNavigationBar`, `CupertinoTabBar`/`CupertinoTabScaffold`,
-`CupertinoPageScaffold`, and `cupertino_page_route`. It is the Rust analog of
-`package:flutter/cupertino.dart`'s theming and widget surface.
+`CupertinoPageScaffold`, and `cupertino_page_route`.
 
 It is an official package (ADR-0088): its only FLUI dependency is `flui-sdk`, the
 package-author surface, the same one a third-party design system builds on.

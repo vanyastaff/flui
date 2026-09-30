@@ -5,13 +5,12 @@
 //! object owns a painter, drives its layout from box constraints, and
 //! forwards intrinsics / baseline / paint to it. Every measurement goes
 //! through the realm's text context, lent by the layout, intrinsics and dry
-//! contexts as `ctx.text()` (ADR-0092 §10 step 3). Ports the
-//! renderable core of Flutter's `RenderParagraph` (`paragraph.dart`): layout,
-//! dry layout, the four intrinsics, baseline, and paint — with `softWrap`,
-//! `maxLines`, and ellipsis truncation.
+//! contexts as `ctx.text()` (ADR-0092 §10 step 3). It covers
+//! the renderable core of a paragraph: layout, dry layout, the four
+//! intrinsics, baseline, and paint — with soft wrap, `max_lines`, and
+//! ellipsis truncation.
 //!
-//! Out of scope for this object (separable per Flutter's own structure):
-//! inline `WidgetSpan` children, text selection, semantics, and the
+//! Out of scope for this object (separable): inline `WidgetSpan` children, text selection, semantics, and the
 //! clip/fade `TextOverflow` policies (only `ellipsis` is wired here).
 
 use flui_foundation::Diagnosticable;
@@ -36,7 +35,7 @@ pub struct RenderParagraph {
     painter: TextPainter,
     /// Whether the text wraps at the box's max width. When `false` the text
     /// lays out at unbounded width (single logical line per hard break) and
-    /// can overflow — Flutter `RenderParagraph.softWrap`.
+    /// can overflow.
     soft_wrap: bool,
 }
 
@@ -132,8 +131,7 @@ impl RenderParagraph {
 
     /// The width to lay out at for the given constraints. The box width
     /// matters — and the finite max is used — when the text wraps OR an
-    /// ellipsis is configured (Flutter `_layoutText`:
-    /// `widthMatters = softWrap || overflow == ellipsis`). A no-wrap label
+    /// ellipsis is configured. A no-wrap label
     /// still needs the finite width so its ellipsis truncation can trigger;
     /// only a no-wrap, no-ellipsis paragraph lays out at unbounded width.
     fn layout_max_width(&self, constraints: &BoxConstraints) -> f64 {
@@ -211,8 +209,7 @@ impl RenderBox for RenderParagraph {
         let max_width = self.layout_max_width(&constraints);
         self.painter
             .layout(&mut ctx.text(), constraints.min_width, max_width);
-        // The text's own size, then clamped into the box constraints
-        // (Flutter `size = constraints.constrain(textPainter.size)`).
+        // The text's own size, then clamped into the box constraints.
         constraints.constrain(self.painter.size())
     }
 
@@ -290,21 +287,16 @@ impl RenderBox for RenderParagraph {
         }
     }
 
-    /// Flutter parity: `RenderParagraph.describeSemanticsConfiguration`
-    /// (`paragraph.dart`, oracle tag `3.44.0`), narrowed to the plain-text
-    /// case this object supports (no `WidgetSpan` children, no gesture
-    /// recognizers on the span — see the module doc's "Out of scope" list).
-    /// The oracle's `needsAssembleSemanticsNode`/`childConfigurationsDelegate`
-    /// branches exist to handle inline recognizers and placeholders; with
-    /// neither possible here, only its `else` branch applies: `config.label
-    /// = text.toPlainText()` and `config.textDirection = textDirection`.
+    /// Covers the plain-text case this object supports (no `WidgetSpan`
+    /// children, no gesture recognizers on the span — see the module doc's
+    /// "Out of scope" list): the label is the plain text and the text
+    /// direction is the paragraph's.
     ///
     /// Mapping decision (see `crates/flui-objects/ARCHITECTURE.md` "Mapping
     /// decisions"): an EMPTY plain-text span sets neither `label` nor
     /// `text_direction`, so the paragraph stays un-annotated and contributes
-    /// no semantics node of its own — Flutter's oracle sets both
-    /// unconditionally, but `SemanticsConfiguration::set_text_direction`
-    /// alone marks the configuration annotated in this port (see that
+    /// no semantics node of its own. `SemanticsConfiguration::set_text_direction`
+    /// alone marks the configuration annotated (see that
     /// setter's doc comment), which would otherwise publish an empty,
     /// unlabelled node for every text-less paragraph in the tree.
     fn describe_semantics_configuration(&self, config: &mut SemanticsConfiguration) {
@@ -323,8 +315,7 @@ impl RenderBox for RenderParagraph {
 }
 
 /// Maps the painting-side [`TextDirection`] onto `flui-semantics`'s own
-/// parallel enum of the same name (two definitions of the same Flutter
-/// concept).
+/// parallel enum of the same name (two definitions of the same concept).
 fn semantics_text_direction(direction: TextDirection) -> flui_rendering::semantics::TextDirection {
     match direction {
         TextDirection::Ltr => flui_rendering::semantics::TextDirection::Ltr,

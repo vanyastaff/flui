@@ -1,4 +1,4 @@
-//! [`Container`] — the Flutter convenience widget that composes padding,
+//! [`Container`] — the convenience widget that composes padding,
 //! alignment, sizing, decoration, margin, and a transform around a child.
 
 use flui_foundation::geometry::{EdgeInsets, Matrix4};
@@ -15,43 +15,39 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 ///
 /// # One render object, not a stack
 ///
-/// Flutter builds `Container` as a conditional widget stack
-/// (`widgets/container.dart`): from the child outward, `Align` → `Padding` →
+/// `Container` is not a conditional widget stack (`Align` → `Padding` →
 /// `ColoredBox` → `DecoratedBox` → `ConstrainedBox` → `Padding` (margin) →
-/// `Transform`, each layer present only while its property is set. FLUI keeps
-/// that stack's observable geometry and folds it into one
-/// [`RenderContainer`]. Two things follow, and both are the reason:
+/// `Transform`, each layer present only while its property is set). FLUI keeps
+/// that stack's observable geometry and folds it into one [`RenderContainer`].
+/// Two things follow, and both are the reason:
 ///
-/// * **Toggling an option does not recreate the child.** In the conditional
+/// * **Toggling an option does not recreate the child.** In a conditional
 ///   stack, an option turning on or off inserts or removes a level between the
 ///   parent and the child, so reconciliation diverges there and every element
-///   below — including an unkeyed stateful child — is rebuilt from scratch
-///   (flutter/flutter#161698). Here the options are render-object fields, so
+///   below — including an unkeyed stateful child — is rebuilt from scratch.
+///   Here the options are render-object fields, so
 ///   the child's slot never moves and no state is lost. No `GlobalKey`, no
 ///   reparenting, nothing for the caller to opt into.
-/// * **Node count depends on whether there is a child.** With a child,
-///   Flutter's stack costs zero extra nodes at identity (no options → the
-///   child itself) and exactly one extra node per option set below that — a
-///   single option (say, just `padding`) built exactly one `RenderPadding`
-///   there too, so one node here is a wash on count against one node there
-///   at one option, and only wins from two up (up to seven if every option
-///   is set). Childless, Flutter is never free: `build` reaches for a
-///   two-node placeholder (`LimitedBox` + `ConstrainedBox`) even with no
-///   option set at all (`Container()`), so one node here already wins there;
-///   the only childless tie is a *tight* effective constraint — both `width`
-///   and `height` set, or an explicit tight `constraints` — which suppresses
-///   the placeholder and leaves Flutter a single `ConstrainedBox` against one
-///   node here. A lone `width` does not qualify: `BoxConstraints::is_tight`
-///   requires both axes, so that case still takes the placeholder and costs
-///   three. Every other childless option —
-///   color, padding, decoration, an alignment paired with a fixed size —
-///   only grows Flutter's node count further. What one node here does *not*
-///   buy, in either regime, is a lighter node: `RenderContainer` carries
-///   every field whether or not that option is set, so it is heavier than
-///   whichever single-purpose object the stack would have used. The reason
-///   for the divergence is the stable child slot, not a cheaper or lighter
-///   `Container`. Because the identity case (with a child) is still a
-///   `RenderContainer`, it is **not** parent-data-transparent: put
+/// * **Node count depends on whether there is a child.** With a child, the
+///   stack costs zero extra nodes at identity (no options → the child itself)
+///   and exactly one extra node per option set below that, so one node here is
+///   a wash on count at one option, and only wins from two up (up to seven if
+///   every option is set). Childless, the stack is never free: it reaches for
+///   a two-node placeholder (`LimitedBox` + `ConstrainedBox`) even with no
+///   option set at all (`Container()`), so one node here already wins; the
+///   only childless tie is a *tight* effective constraint — both `width` and
+///   `height` set, or an explicit tight `constraints` — which suppresses the
+///   placeholder and leaves a single `ConstrainedBox` against one node here.
+///   A lone `width` does not qualify: `BoxConstraints::is_tight` requires both
+///   axes, so that case still takes the placeholder and costs three. Every
+///   other childless option — color, padding, decoration, an alignment paired
+///   with a fixed size — only grows the stack's node count further. What one
+///   node here does *not* buy, in either regime, is a lighter node:
+///   `RenderContainer` carries every field whether or not that option is set,
+///   so it is heavier than whichever single-purpose object the stack would
+///   have used. The reason for the divergence is the stable child slot, not a
+///   cheaper or lighter `Container`. Because the identity case (with a child)
+///   is still a `RenderContainer`, it is **not** parent-data-transparent: put
 ///   [`crate::Expanded`] / [`crate::Positioned`] *around* the container
 ///   (`Row → Expanded → Container`), not inside it.
 ///
@@ -59,12 +55,12 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// the geometry is pinned against the stack it replaces by
 /// `harness_container_matches_the_widget_stack_it_collapses`.
 ///
-/// # Parity scope
+/// # Decoration limits
 ///
 /// Decoration *painting* (color, gradient, border, radius, shadow) is
-/// faithful. One Flutter nuance is not yet modelled: a [`BoxDecoration`]
-/// border's thickness is not folded into the effective layout padding
-/// (`_paddingIncludingDecoration`), because `flui-painting`'s `BoxDecoration` does
+/// complete, but a [`BoxDecoration`]
+/// border's thickness is not folded into the effective layout padding,
+/// because `flui-painting`'s `BoxDecoration` does
 /// not expose border insets. Set `padding` explicitly if a bordered container
 /// must reserve the border's thickness.
 ///
@@ -95,7 +91,7 @@ impl Container {
     }
 
     /// Align the child within the container (also makes a childless container
-    /// expand to fill, per Flutter).
+    /// expand to fill).
     #[must_use]
     pub fn alignment(mut self, alignment: Alignment) -> Self {
         self.alignment = Some(alignment);
@@ -111,7 +107,7 @@ impl Container {
 
     /// Paint a solid background `color` behind the child.
     ///
-    /// Mutually exclusive with [`Container::decoration`] in Flutter; if both
+    /// Conceptually exclusive with [`Container::decoration`]; if both
     /// are set here, the color paints *over* the decoration, which is the
     /// order the widget stack produces (`DecoratedBox` encloses `ColoredBox`).
     #[must_use]
@@ -170,9 +166,9 @@ impl Container {
         self
     }
 
-    /// `width`/`height` fold into the additional constraints exactly as
-    /// Flutter does: tighten the explicit constraints when present, else
-    /// `tightFor`.
+    /// `width`/`height` fold into the additional constraints as
+    /// follows: tighten the explicit constraints when present, else
+    /// tight-for the given size.
     fn effective_constraints(&self) -> Option<BoxConstraints> {
         if self.width.is_some() || self.height.is_some() {
             let width = self.width;

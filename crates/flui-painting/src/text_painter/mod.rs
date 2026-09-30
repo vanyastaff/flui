@@ -30,10 +30,8 @@ pub(crate) const DEFAULT_FONT_SIZE: f64 = 14.0;
 
 /// What a property change invalidates — the shaped/paint split.
 ///
-/// Flutter cannot update paint attributes without recreating the engine
-/// paragraph ("no API to only make those updates",
-/// text_painter.dart:1335-1352): a color change re-shapes. flui's
-/// [`TextPainter::set_text`] diffs the old and new span trees
+/// A paragraph that cannot update paint attributes in place must re-shape
+/// on a color change. FLUI's [`TextPainter::set_text`] diffs the old and new span trees
 /// ([`InlineSpan::layout_affecting_eq`]) and reports which half
 /// actually changed; a paint-only change KEEPS the shaped layout —
 /// metrics, baselines, and cursor geometry stay valid, and the next
@@ -294,8 +292,7 @@ impl TextPainter {
     ///
     /// Alignment is a PAINT offset over the shaped lines, not a shaping
     /// input: the cached layout is kept and only its paint offset is
-    /// recomputed (Flutter bakes alignment into the paragraph and
-    /// re-shapes here).
+    /// recomputed (no re-shape).
     pub fn set_text_align(&mut self, align: TextAlign) -> Invalidation {
         if self.text_align == align {
             return Invalidation::None;

@@ -42,9 +42,8 @@ pub struct RenderTransform {
     ///
     /// `None` is not the same as `Alignment::TOP_LEFT`: it means the
     /// alignment term is absent from the pivot, so an `origin` set alone acts
-    /// alone. Flutter's `alignment` is nullable for exactly this reason, and
-    /// its bare `Transform(...)` constructor leaves it null while the
-    /// `rotate`/`scale`/`flip` factories pass `Alignment.center` explicitly.
+    /// alone. The bare constructor leaves it `None` while the
+    /// `rotate`/`scale`/`flip` factories pass `Alignment::CENTER` explicitly.
     alignment: Option<Alignment>,
     /// Explicit origin offset, added to (not overriding) `alignment`'s own
     /// contribution — see `compute_origin`'s doc comment for the additive
@@ -60,7 +59,7 @@ pub struct RenderTransform {
     /// OUT rather than where it paints — what a decorative transform wants,
     /// so the moved pixels do not move the touch target. Paint and
     /// `hit_test_transform`-derived global coordinates are unaffected either
-    /// way (Flutter's `transformHitTests`).
+    /// way.
     transform_hit_tests: bool,
 }
 
@@ -69,8 +68,8 @@ impl RenderTransform {
     pub fn new(transform: Matrix4) -> Self {
         Self {
             transform,
-            // Flutter's bare constructor leaves `alignment` null; the named
-            // factories below opt into CENTER the way its own do.
+            // The bare constructor leaves `alignment` unset; the named
+            // factories below opt into CENTER.
             alignment: None,
             origin: None,
             has_child: false,
@@ -265,7 +264,7 @@ impl RenderTransform {
     }
 
     /// Removes the alignment contribution, leaving `origin` (if any) as the
-    /// whole pivot — Flutter's null `alignment`.
+    /// whole pivot.
     #[must_use]
     pub const fn without_alignment(mut self) -> Self {
         self.alignment = None;
@@ -303,17 +302,14 @@ impl RenderTransform {
     /// Computes the effective pivot offset for the transform from the laid-out
     /// `size` (supplied by the driver from `RenderState`).
     ///
-    /// Flutter's `RenderTransform._effectiveTransform` applies the origin AND the
-    /// alignment **additively** — `T(origin)·T(alignment.alongSize)·transform·…`
-    /// — so the pivot is `alignment.alongSize(size) + origin`, not one or the
-    /// other (proxy_box.dart). `alignment` is always present (default `CENTER`);
-    /// `origin` is optional. The prior code returned `origin` alone whenever it
-    /// was set, silently dropping the alignment contribution.
+    /// The origin AND the alignment apply **additively** —
+    /// `T(origin)·T(alignment.along_size)·transform·…` — so the pivot is
+    /// `alignment.along_size(size) + origin`, not one or the other. When
+    /// `alignment` is present it always contributes; `origin` is optional.
     fn compute_origin(&self, size: Size) -> Offset {
         let origin = self.origin.unwrap_or(Offset::ZERO);
         let Some(alignment) = self.alignment else {
-            // No alignment term: an `origin` set alone acts alone
-            // (`_effectiveTransform`'s `resolvedAlignment == null` branch).
+            // No alignment term: an `origin` set alone acts alone.
             return origin;
         };
         let align_x = size.width * f64::midpoint(alignment.x, 1.0);
@@ -380,17 +376,15 @@ impl RenderBox for RenderTransform {
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
         // A transform does NOT test its own (untransformed) size — how the
         // untransformed size and the child's transformed position interact
-        // is ill-defined, so only the child decides (Flutter parity:
-        // `RenderTransform.hitTest`, box.dart). A scale(2) child visually
+        // is ill-defined, so only the child decides. A scale(2) child visually
         // covering 80×80 must be hittable across that whole area even
         // though this node's laid-out size is 40×40.
         if !self.has_child {
             return false;
         }
         if !self.transform_hit_tests {
-            // The child is hit where it was LAID OUT, not where it paints —
-            // Flutter's `transformHitTests: false`, which passes a null
-            // transform to `addWithPaintTransform`. A degenerate matrix does
+            // The child is hit where it was LAID OUT, not where it paints
+            // (`transform_hit_tests: false`). A degenerate matrix does
             // not disqualify the child here either: nothing is being
             // inverted, so there is nothing to be singular.
             return ctx.hit_test_child(0, *ctx.position());
@@ -417,11 +411,9 @@ impl RenderBox for RenderTransform {
     }
 
     fn skip_paint(&self) -> bool {
-        // Flutter `RenderTransform.paint`: "if the matrix is singular the
-        // children would be compressed to a line or single point, instead
-        // short-circuit and paint nothing" — it clears its layer and returns
-        // on `det == 0 || !det.isFinite`. Painting such a subtree records
-        // draw commands and composites layers for output that cannot occupy
+        // If the matrix is singular the children would be compressed to a
+        // line or single point, so paint nothing (`det == 0 || !det.is_finite()`).
+        // Painting such a subtree records draw commands and composites layers for output that cannot occupy
         // a single pixel.
         //
         // `self.transform`, not `effective_transform(size)`: the effective
@@ -441,10 +433,8 @@ impl RenderBox for RenderTransform {
     /// Paints the child through the effective transform — or, when that
     /// transform is a pure translation, at a plain offset with no layer at all.
     ///
-    /// Flutter's `RenderTransform.paint` takes the same fork on
-    /// `MatrixUtils.getAsTranslation` (`rendering/proxy_box.dart`): a matrix
-    /// that only translates is applied as `super.paint(context, offset +
-    /// childOffset)`, and the node's layer is cleared. A compositing layer per
+    /// A matrix that only translates is applied as a plain child offset, with
+    /// no layer. A compositing layer per
     /// `Transform` is not free, and translation is the common case —
     /// `Transform.translate`, and every `SlideTransition` built on it, paid for
     /// one on every frame.
@@ -456,8 +446,7 @@ impl RenderBox for RenderTransform {
     /// whole fragment — including the bare child splice below — in it.
     /// Pushing the matrix again here would wrap the child in it twice.
     /// Coordinate mapping keeps the matrix through `apply_paint_transform`
-    /// below regardless of which branch painted — the same split Flutter
-    /// makes between `paint` and `applyPaintTransform`.
+    /// below regardless of which branch painted.
     fn paint(&self, ctx: &mut flui_rendering::context::PaintCx<'_, Single>) {
         if !self.has_child {
             return;
@@ -506,8 +495,7 @@ impl RenderBox for RenderTransform {
     /// plain child offset instead of a layer. Coordinate mapping needs the
     /// matrix in **both** branches, so deriving it from the value would
     /// silently drop the translation from `transform_to` / local-to-global
-    /// and every hero flight built on them. Unconditional here, as Flutter's
-    /// `applyPaintTransform` is.
+    /// and every hero flight built on them. Hence unconditional here.
     fn apply_paint_transform(
         &self,
         _child: usize,
@@ -525,12 +513,10 @@ impl RenderBox for RenderTransform {
         //
         // This hook feeds the hit ENTRY's transform stack — the global-to-local
         // mapping a delivered event is localized through
-        // (`PipelineOwner::hit_test_subtree` pushes its inverse). It is the
-        // analogue of the `transform:` argument Flutter passes to
-        // `addWithPaintTransform`, which is exactly what
-        // `transformHitTests: false` sets to null — NOT of
-        // `applyPaintTransform`, which stays unconditional because it answers
-        // a different question (where the child paints, for `localToGlobal`).
+        // (`PipelineOwner::hit_test_subtree` pushes its inverse), and is unset
+        // by `transform_hit_tests: false` — NOT like `apply_paint_transform`,
+        // which stays unconditional because it answers a different question
+        // (where the child paints, for local-to-global).
         //
         // Reporting the matrix here while hit-testing untransformed would hand
         // the child a `local_position` mapped through a transform its hit did
