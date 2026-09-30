@@ -154,14 +154,29 @@ struct Packages {
 
 impl Packages {
     /// Whether the command `selected` is in names a package it can select.
-    /// `name@1` or `name@1.3.2` picks the versions that start with it, a local
-    /// package's too. A lockfile package locked at two versions is ambiguous
-    /// by name alone to every graph subcommand but `clean`, which cleans them all.
+    /// `name@version` picks versions as a cargo package-ID spec does
+    /// ([`version_matches`]), a local package's too. A lockfile package locked
+    /// at two versions is ambiguous by name alone to every graph subcommand but
+    /// `clean`, which cleans them all. A glob (`flui-*`) must match a package
+    /// the command can select. `cargo uninstall -p` names an installed binary,
+    /// which the checkout cannot know.
     fn selects(&self, selected: &extract::Selected) -> bool {
+        let subcommand = selected.subcommand.as_deref();
+        if subcommand == Some("uninstall") {
+            return true;
+        }
+        let graph = subcommand.filter(|subcommand| GRAPH_SUBCOMMANDS.contains(subcommand));
+        if extract::is_glob(&selected.name) {
+            let mut names = self
+                .local
+                .keys()
+                .chain(graph.map(|_| self.locked.keys()).into_iter().flatten());
+            return names.any(|name| extract::glob_matches(&selected.name, name));
+        }
         let matching = |versions: &BTreeSet<String>| match &selected.version {
             Some(version) => versions
                 .iter()
-                .filter(|known| *known == version || known.starts_with(&format!("{version}.")))
+                .filter(|known| version_matches(version, known))
                 .count(),
             None => versions.len(),
         };
@@ -169,11 +184,7 @@ impl Packages {
             // a manifest that inherits its version states none to check against
             return selected.version.is_none() || versions.is_empty() || matching(versions) > 0;
         }
-        let Some(subcommand) = selected
-            .subcommand
-            .as_deref()
-            .filter(|subcommand| GRAPH_SUBCOMMANDS.contains(subcommand))
-        else {
+        let Some(subcommand) = graph else {
             return false;
         };
         let Some(versions) = self.locked.get(&selected.name) else {
@@ -182,6 +193,19 @@ impl Packages {
         let matching = matching(versions);
         matching == 1 || (matching > 1 && subcommand == "clean")
     }
+}
+
+/// Whether the version of a package-ID spec (`1`, `1.3`, `1.3.2`,
+/// `0.2.0-dev`) picks the `known` version, as cargo matches them: a full
+/// version, prerelease included, matches exactly; a partial one matches every
+/// version that starts with it at a component boundary, but no prerelease.
+fn version_matches(spec: &str, known: &str) -> bool {
+    if spec == known {
+        return true;
+    }
+    let prerelease = known.split('+').next().unwrap_or(known).contains('-');
+    let partial = spec.split('.').count() < 3;
+    partial && !prerelease && known.starts_with(&format!("{spec}."))
 }
 
 /// The packages of the checkout at `root`.

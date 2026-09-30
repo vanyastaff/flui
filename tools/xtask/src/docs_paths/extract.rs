@@ -272,6 +272,9 @@ pub(super) struct Selected {
 /// (`cargo --color always update`).
 const GLOBAL_VALUE_OPTIONS: [&str; 4] = ["--color", "--config", "-C", "-Z"];
 
+/// GNU `time`'s options that take a value in the next word.
+const TIME_VALUE_OPTIONS: [&str; 4] = ["-f", "--format", "-o", "--output"];
+
 /// `env`'s options that take a value in the next word.
 const ENV_VALUE_OPTIONS: [&str; 4] = ["-u", "--unset", "-C", "--chdir"];
 
@@ -304,6 +307,15 @@ pub(super) fn packages(code: &str) -> Vec<Selected> {
                 },
                 PackageFlag::None => {
                     if subcommand.is_none() {
+                        // script mode (`cargo -Zscript app.rs ARGS`, `cargo app.rs`):
+                        // what follows the manifest is the script's
+                        let script = word == "-Zscript"
+                            || (word == "-Z"
+                                && words.front().is_some_and(|(_, next)| next == "script"))
+                            || has_extension(&word, "rs");
+                        if script {
+                            break;
+                        }
                         if GLOBAL_VALUE_OPTIONS.contains(&word.as_str()) {
                             words.pop_front();
                         } else if !word.starts_with(['-', '+']) {
@@ -338,6 +350,18 @@ fn cargo_command(words: &mut VecDeque<(usize, String)>) -> bool {
         };
         if program == "cargo" || program.ends_with("/cargo") {
             return true;
+        }
+        // `time [OPTION]... COMMAND`: the shell keyword and GNU time alike
+        if program == "time" || program.ends_with("/time") {
+            while let Some((line, word)) = words.pop_front() {
+                if TIME_VALUE_OPTIONS.contains(&word.as_str()) {
+                    words.pop_front();
+                } else if !word.starts_with('-') {
+                    words.push_front((line, word));
+                    break;
+                }
+            }
+            continue;
         }
         if program != "env" && !program.ends_with("/env") {
             return false;
@@ -419,14 +443,14 @@ fn assignment(word: &str) -> bool {
     })
 }
 
-/// `word` as a package spec: its name and the version after `@`, if any;
-/// `None` for a placeholder (`<crate>`, `$CRATE`, `{name}`, `…`), which names
-/// no one package. Any other word is taken as written, so a malformed name
+/// `word` as a package spec: its name (a glob too, [`is_glob`]) and the
+/// version after `@`, if any; `None` for a placeholder (`<crate>`, `$CRATE`,
+/// `{name}`, `…`), which names no one package. Any other word is taken as written, so a malformed name
 /// (`definitely.missing`) is a finding, as cargo rejects it.
 fn package(word: &str) -> Option<(&str, Option<&str>)> {
     let placeholder = word.is_empty()
         || word.starts_with('@')
-        || word.contains(['<', '>', '$', '{', '}', '*', '…'])
+        || word.contains(['<', '>', '$', '{', '}', '…'])
         || word.contains("...");
     if placeholder {
         return None;
@@ -435,6 +459,43 @@ fn package(word: &str) -> Option<(&str, Option<&str>)> {
         Some((name, version)) => (name, Some(version)),
         None => (word, None),
     })
+}
+
+/// Whether a `-p` value is a glob cargo matches against package names
+/// (`flui-*`, `flui-?iew`).
+pub(super) fn is_glob(name: &str) -> bool {
+    name.contains(['*', '?'])
+}
+
+/// Whether the glob `pattern` (`*` any run, `?` any one character) matches
+/// all of `name`.
+pub(super) fn glob_matches(pattern: &str, name: &str) -> bool {
+    let (pattern, name): (Vec<char>, Vec<char>) =
+        (pattern.chars().collect(), name.chars().collect());
+    // the classic two-pointer walk, backtracking to the last `*`
+    let (mut p, mut n) = (0, 0);
+    let mut star: Option<(usize, usize)> = None;
+    while n < name.len() {
+        match pattern.get(p) {
+            Some('*') => {
+                star = Some((p, n));
+                p += 1;
+            }
+            Some(&c) if c == '?' || c == name[n] => {
+                p += 1;
+                n += 1;
+            }
+            _ => match star {
+                Some((star_p, star_n)) => {
+                    p = star_p + 1;
+                    n = star_n + 1;
+                    star = Some((star_p, star_n + 1));
+                }
+                None => return false,
+            },
+        }
+    }
+    pattern[p..].iter().all(|&c| c == '*')
 }
 
 /// Byte offsets to 1-based line numbers.

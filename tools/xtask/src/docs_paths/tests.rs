@@ -162,6 +162,12 @@ fn packages_are_read_only_from_cargo_commands() {
         ("env RUSTFLAGS=x cargo test -p a", &[(0, test, "a")]),
         ("env -i -u X -C dir cargo build -p a", &[(0, build, "a")]),
         ("/usr/bin/env cargo test -p a", &[(0, test, "a")]),
+        // `time` runs the command after its own options (`-p` is time's)
+        ("time cargo tree -p a", &[(0, Some("tree"), "a")]),
+        ("time -p cargo test -p a", &[(0, test, "a")]),
+        ("/usr/bin/time -o out cargo test -p a", &[(0, test, "a")]),
+        // a glob is a spec to check, not a placeholder
+        ("cargo test -p 'flui-*'", &[(0, test, "flui-*")]),
         // `env -S` splits its value into the command it runs
         ("env -S 'cargo test -p a'", &[(0, test, "a")]),
         (
@@ -175,6 +181,10 @@ fn packages_are_read_only_from_cargo_commands() {
         ("cargo test -vqp=a", &[(0, test, "a")]),
         ("cargo build -j4", &[]),
         ("cargo -Zpolonius test", &[]),
+        // script mode: what follows the manifest is the script's
+        ("cargo -Zscript app.rs -p 8080", &[]),
+        ("cargo -Z script app.rs -p 8080", &[]),
+        ("cargo app.rs -p 8080", &[]),
         // a line continuation inside double quotes
         ("cargo test -p \"flui-\\\nview\"", &[(0, test, "flui-view")]),
         // a malformed name is taken as written, for the check to reject
@@ -230,7 +240,7 @@ fn locked(packages: &[(&str, &str)]) -> BTreeMap<String, BTreeSet<String>> {
 
 fn a_lockfile_package_is_selected_only_by_update_and_tree() {
     let packages = Packages {
-        local: locked(&[("flui-view", "0.2.0")]),
+        local: locked(&[("flui-view", "0.2.0-dev"), ("flui-app", "0.2.0")]),
         locked: locked(&[
             ("wgpu", "25.0.0"),
             ("bitflags", "1.3.2"),
@@ -240,8 +250,21 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
     for (code, selects) in [
         ("cargo test -p flui-view", true),
         // a local package's version is checked too
-        ("cargo test -p flui-view@0.2", true),
+        ("cargo test -p flui-app@0.2", true),
+        ("cargo test -p flui-app@0.2.0", true),
         ("cargo test -p flui-view@999", false),
+        // a prerelease matches only its full version
+        ("cargo test -p flui-view@0.2.0-dev", true),
+        ("cargo pkgid -p flui-view@0.2", false),
+        ("cargo pkgid -p flui-view@0.2.0", false),
+        // a glob must match a package the command can select
+        ("cargo test -p flui-*", true),
+        ("cargo test -p flui-?iew", true),
+        ("cargo test -p definitely-*", false),
+        ("cargo test -p wg*", false),
+        ("cargo tree -p wg*", true),
+        // `uninstall` names an installed binary, not a checkout package
+        ("cargo uninstall -p cargo-nextest", true),
         ("cargo update -p wgpu", true),
         ("cargo tree -p wgpu", true),
         ("cargo pkgid -p wgpu", true),
