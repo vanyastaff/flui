@@ -8,14 +8,18 @@
   fixes one owner thread), `UiRealm::new` takes it, and each realm owns a `TextContext` over
   it. §10 step 3a landed: layout, intrinsics and dry queries measure through the realm's
   `TextContext`, lent through each presentation's pipeline; Parley measures behind
-  `parley-layout`; registration re-layout is 3b. A passed gate is evidence, not shipped
+  `parley-layout`; registration re-layout is 3b. §10 step 3b's pipeline half landed: every
+  `PipelineOwner` is built with a `TextContextHandle`, nothing in layout, intrinsics or dry
+  queries builds a context of its own, and the hot-reload plugin pipeline measures over its own
+  image's collection; the font-collection-changed event is the other half. A passed gate is evidence, not shipped
   behaviour: the record is accepted section by section as the text migration lands §§1–7, and
   gates 2–8 bind those changes. The three supersessions below take effect together, when §§1–5
   are accepted; a section accepted before then supersedes nothing.
 - **Date:** 2026-09-25
 - **Revised:** 2026-09-26 (rasterization prototype; see Context); 2026-09-29 (§10 step 3
   split into 3a and 3b; the realm lends its context through a shared handle; Parley
-  measurement behind `parley-layout`)
+  measurement behind `parley-layout`; a pipeline is built with its context, and the hot-reload
+  plugin image is a realm of its own for text)
 - **Supersedes (when §§1–5 are accepted):** [ADR-0077](ADR-0077-migrate-to-parley.md)
   (absorbed: its direction, its preconditions and its "If later Rejected" branch are carried
   here)
@@ -341,8 +345,7 @@ that wires what it adds.
      scoped borrow, taken from `&mut` context, so it cannot hold two loans or lay out a child
      while it holds one. The raw `RenderObject` methods and the erased layout context carry the
      context as `TextSource`, an opaque token only flui-rendering can borrow, so a direct
-     `RenderObject` implementation cannot hold a loan across a child query either. A pipeline
-     never given the handle measures on a private context.
+     `RenderObject` implementation cannot hold a loan across a child query either.
    - (3a) Parley measures behind `parley-layout`, not `parley`: the workspace test scope turns
      `parley` on for CI's `test` and `fast-lane` jobs, and if `parley` switched measurement, CI
      would measure every text-size test with Parley while the build that ships measures with
@@ -353,10 +356,23 @@ that wires what it adds.
    - (3b) Registering raises a font-collection-changed event on every realm, which marks text
      render objects for layout (ADR-0065's named gap); flui-app's `register_font` moves from
      `FONT_SYSTEM` to the collection.
-   - (3b) The hot-reload plugin pipeline (`flui-hot-reload`'s `pipeline.rs`) is built with
-     `PipelineOwner::new()` and never given the realm's handle, so its text measures on a
-     private collection that lacks the app's registered faces. It takes the realm's handle in
-     this step.
+   - (3b) Every pipeline is built with a text context: `PipelineOwner::new` and
+     `new_with_capacity` take a `TextContextHandle`, `PipelineOwner` has no `Default`, and a
+     layout, intrinsic or dry-query context takes a `TextSource`, so no path builds a context
+     of its own. A presentation's pipeline is built inside `PresentationState::new` from
+     `RealmCapabilities::text`. A frame driver that moves the owner out of its slot for a
+     typestate transition uses `PipelineOwner::take_idle`, whose placeholder shares the
+     context. A pipeline with no realm behind it passes `TextContextHandle::standalone`, a
+     context over a collection of its own holding the bundled faces.
+   - (3b) The hot-reload plugin pipeline (`flui-hot-reload`'s `pipeline.rs`) is one such
+     pipeline: `app_plugin!` mounts it with a standalone context, not the host realm's. The
+     plugin is a `dlopen`ed image the host reaches only through `flui_app_build`; the host's
+     `TextContextHandle` is an `Rc<RefCell<TextContext>>`, and shaping into it from the plugin
+     would grow and free host-allocated Parley buffers with the plugin image's allocator, while
+     the scene ABI frees memory only inside the image that allocated it (`flui_app_free`). The
+     plugin image is therefore a realm of its own for text, and faces the host app registers do
+     not reach it; carrying font bytes across the FFI into the plugin's collection is a
+     follow-up, or goes with ADR-0094's replacement of the `dlopen` path.
    - *Acceptance (3a):* two realms over two collections measure through their own contexts, and
      a frame on one lends nothing of the other's; every presentation's pipeline holds the
      realm's handle; a painter measures through the context it is given, and a registration on
@@ -364,6 +380,11 @@ that wires what it adds.
      today's baselines; a layout that panics while holding the context releases it.
    - *Acceptance (3b):* a two-realm test: a font registered through realm A re-lays out text in
      realm B (fails on main). Test bootstraps construct the collection.
+   - *Acceptance (3b, pipelines):* a pipeline constructor without a context does not compile; an
+     owner taken out of its slot leaves one that measures through the same context; a plugin
+     pipeline measures through the context it is mounted with. The default build still measures
+     with cosmic-text through `FONT_SYSTEM`, and `parley-layout` still shapes for paint there,
+     until steps 4 and 5.
 4. **Neutral shaped runs on the display list.**
    - `DrawOp::Paragraph` carries flui-painting's `ShapedParagraph`: runs naming a FLUI-owned
      font blob id, face index, size, interned variation and synthesis, with glyph id, position,
@@ -483,9 +504,13 @@ exist yet.
   `measurement_follows_the_context_it_is_given` and
   `a_registration_on_the_collection_invalidates_the_painter_cache`; in
   `crates/flui-rendering/tests/text_context.rs`,
-  `a_layout_that_panics_while_holding_the_text_context_releases_it`,
-  `intrinsic_and_dry_queries_measure_through_the_pipelines_context` and
-  `a_pipeline_without_a_handle_measures_on_its_own_context`.
+  `a_layout_that_panics_while_holding_the_text_context_releases_it` and
+  `intrinsic_and_dry_queries_measure_through_the_pipelines_context`.
+- Every pipeline is built with a text context (§10 step 3b): the `compile_fail` doctests on
+  `PipelineOwner::new`; in `crates/flui-rendering/tests/text_context.rs`,
+  `a_taken_pipeline_leaves_an_owner_that_measures_through_the_same_context`; in
+  `crates/flui-hot-reload/tests/plugin_pipeline_text.rs` (under `app-plugin`),
+  `a_plugin_pipeline_measures_through_the_context_it_is_given`.
 - A two-realm test: registering a font in one realm makes text in the other re-lay out (§10
   step 3b).
 - A registry test: a source-cache prune while the registry holds the blob keeps keys equal, and
