@@ -12,9 +12,8 @@
 //!    job's `if:`. Every lane runs `checks` and `plan`; then:
 //!    - `docs`: nothing else;
 //!    - `tooling`: `deps`, and `standalone` when plan names a standalone crate;
-//!    - `fast`: `deps`, `fast-lane`, and `fast-lane-ios` when plan puts the
-//!      iOS runner in scope (`cross_ios`);
-//!    - `wide`: `deps` and the `HEAVY_JOBS` list (every Linux job);
+//!    - `wide`: `deps` and the `HEAVY_JOBS` list (every Linux job), and
+//!      `ios-runner` when plan puts the iOS runner in scope (`cross_ios`);
 //!    - `full`: `wide` plus `FULL_JOBS` (the Windows and macOS jobs);
 //!    - `extended`: `full` plus `EXTENDED_JOBS`.
 //!
@@ -186,7 +185,7 @@ pub(super) struct LaneJobs {
 pub(super) struct Plan<'a> {
     /// `plan`'s own result (`success`, `failure`, ...).
     pub(super) result: Option<&'a str>,
-    /// `docs`, `tooling`, `fast`, `wide`, `full` or `extended`.
+    /// `docs`, `tooling`, `wide`, `full` or `extended`.
     pub(super) lane: &'a str,
     pub(super) cross_ios: bool,
     /// Whether plan names a standalone crate for the `standalone` job.
@@ -226,10 +225,12 @@ fn planned_runs(plan: &Plan<'_>, lanes: &LaneJobs) -> Option<BTreeSet<String>> {
         "docs" => {}
         "tooling" if plan.standalone => add(&["deps", "standalone"]),
         "tooling" => add(&["deps"]),
-        "fast" if plan.cross_ios => add(&["deps", "fast-lane", "fast-lane-ios"]),
-        "fast" => add(&["deps", "fast-lane"]),
         "wide" | "full" | "extended" => {
             add(&["deps"]);
+            // the lanes above run the same clippy in `cli-macos`
+            if plan.lane == "wide" && plan.cross_ios {
+                add(&["ios-runner"]);
+            }
             runs.extend(lanes.wide.iter().cloned());
             if plan.lane != "wide" {
                 runs.extend(lanes.full.iter().cloned());
@@ -464,9 +465,10 @@ mod tests {
             .collect()
     }
 
-    /// The fast-lane jobs and `standalone`, which no whole-workspace lane runs.
+    /// `ios-runner` (out of scope in [`run`]) and `standalone`, which no
+    /// whole-workspace lane runs.
     fn not_whole_workspace() -> Vec<String> {
-        names(&["fast-lane", "fast-lane-ios", "standalone"])
+        names(&["ios-runner", "standalone"])
     }
 
     fn heavy_jobs_list_matches_the_jobs_gated_on_heavy() {
@@ -492,10 +494,9 @@ mod tests {
         let w = workflow();
         let expected: BTreeMap<&str, &str> = [
             ("deps", "needs.plan.outputs.lane != 'docs'"),
-            ("fast-lane", "needs.plan.outputs.lane == 'fast'"),
             (
-                "fast-lane-ios",
-                "needs.plan.outputs.lane == 'fast' && needs.plan.outputs.cross_ios == 'true'",
+                "ios-runner",
+                "needs.plan.outputs.lane == 'wide' && needs.plan.outputs.cross_ios == 'true'",
             ),
             (
                 "standalone",
@@ -561,7 +562,7 @@ mod tests {
             "gpu-test",
         );
         red(&main, &with(full.clone(), "test", "failure"), "test");
-        red(&main, &without(full, "fast-lane"), "fast-lane");
+        red(&main, &without(full, "ios-runner"), "ios-runner");
     }
 
     fn extended_jobs_skipped_on_main_is_green_and_on_schedule_is_red() {
@@ -589,57 +590,53 @@ mod tests {
         red(&push, &without(main_push, "macos-ci"), "macos-ci");
     }
 
-    fn fast_lane() {
-        let w = workflow();
-        let whole: Vec<String> = w
-            .lanes
-            .wide
-            .iter()
-            .chain(&w.lanes.full)
-            .chain(&w.lanes.extended)
-            .cloned()
-            .chain(names(&["fast-lane-ios", "standalone"]))
-            .collect();
-        let fast = skipping(&whole);
-        green(&run("fast"), &fast);
-        red(
-            &run("fast"),
-            &with(fast.clone(), "fast-lane", "failure"),
-            "fast-lane",
-        );
-        red(&run("fast"), &with(fast.clone(), "deps", "skipped"), "deps");
-        red(&run("fast"), &without(fast, "doc"), "doc");
-    }
-
     fn ios_leg_follows_the_plan() {
         let w = workflow();
-        let whole: Vec<String> = w
+        // the wide lane's jobs run; the platform lanes' and standalone skip
+        let others: Vec<String> = w
             .lanes
-            .wide
+            .full
             .iter()
-            .chain(&w.lanes.full)
             .chain(&w.lanes.extended)
             .cloned()
             .chain(names(&["standalone"]))
             .collect();
         let ios = Run {
             cross_ios: true,
-            ..run("fast")
+            ..run("wide")
         };
         // in scope: it must run and pass
-        green(&ios, &skipping(&whole));
+        green(&ios, &skipping(&others));
         red(
             &ios,
-            &with(skipping(&whole), "fast-lane-ios", "skipped"),
-            "fast-lane-ios",
+            &with(skipping(&others), "ios-runner", "skipped"),
+            "ios-runner",
         );
         red(
             &ios,
-            &with(skipping(&whole), "fast-lane-ios", "failure"),
-            "fast-lane-ios",
+            &with(skipping(&others), "ios-runner", "failure"),
+            "ios-runner",
         );
         // out of scope: it must skip
-        red(&run("fast"), &skipping(&whole), "fast-lane-ios");
+        red(&run("wide"), &skipping(&others), "ios-runner");
+        // the full lane's cli-macos runs the same command: ios-runner skips
+        let main = Run {
+            event: "push",
+            cross_ios: true,
+            ..run("full")
+        };
+        red(
+            &main,
+            &skipping(
+                &w.lanes
+                    .extended
+                    .iter()
+                    .cloned()
+                    .chain(names(&["standalone"]))
+                    .collect::<Vec<_>>(),
+            ),
+            "ios-runner",
+        );
     }
 
     fn tooling_and_docs_lanes() {
@@ -651,7 +648,7 @@ mod tests {
             .chain(&w.lanes.full)
             .chain(&w.lanes.extended)
             .cloned()
-            .chain(names(&["fast-lane", "fast-lane-ios"]))
+            .chain(names(&["ios-runner"]))
             .collect();
         let tooling = skipping(compiling.iter().chain(&names(&["standalone"])));
         green(&run("tooling"), &tooling);
@@ -770,19 +767,19 @@ mod tests {
             .chain(&w.lanes.full)
             .chain(&w.lanes.extended)
             .cloned()
-            .chain(names(&["fast-lane-ios", "standalone"]))
+            .chain(names(&["ios-runner", "standalone"]))
             .collect();
-        let fast = skipping(&whole);
-        green(&run("fast"), &fast);
+        let tooling = skipping(&whole);
+        green(&run("tooling"), &tooling);
         for event in ["push", "merge_group"] {
             red(
                 &Run {
                     event,
-                    ..run("fast")
+                    ..run("tooling")
                 },
-                &fast,
+                &tooling,
                 &format!(
-                    "event={event} must take lane full or extended, but plan chose lane='fast'"
+                    "event={event} must take lane full or extended, but plan chose lane='tooling'"
                 ),
             );
         }
@@ -883,7 +880,6 @@ mod tests {
                     "extended_jobs_skipped_on_main_is_green_and_on_schedule_is_red",
                     extended_jobs_skipped_on_main_is_green_and_on_schedule_is_red as fn(),
                 ),
-                ("fast_lane", fast_lane as fn()),
                 ("ios_leg_follows_the_plan", ios_leg_follows_the_plan as fn()),
                 ("tooling_and_docs_lanes", tooling_and_docs_lanes as fn()),
                 (

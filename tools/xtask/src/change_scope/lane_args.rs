@@ -1,12 +1,15 @@
-//! Turns a [`Scope`] into the lane a run takes and the cargo arguments the
-//! fast lane runs -- the one place the lane and test-scope policy lives, for
-//! CI's `plan` job and `cargo xtask check-changed` alike.
+//! Turns a [`Scope`] into the lane a CI run takes and the cargo arguments
+//! `cargo xtask check-changed` runs -- the one place the lane and the scoped
+//! test policy live.
 //!
 //! The lane ([`Lane::decide`]) comes from the event, the `full-ci` label and
-//! the classification: `docs` and `tooling` compile nothing, `fast` is the
-//! scoped `fast-lane` job, `wide` every Linux job over the whole workspace,
-//! `full` adds the Windows and macOS jobs, `extended` the nightly-only platform
-//! jobs on top. The fast lane's arguments:
+//! the classification: `docs` and `tooling` compile nothing, `wide` runs every
+//! Linux job over the whole workspace in parallel, `full` adds the Windows and
+//! macOS jobs, `extended` the nightly-only platform jobs on top. A pull request
+//! that compiles anything takes `wide`: one serial job over the changed crates
+//! measured slower than the parallel jobs over everything (35 against 18
+//! minutes, median of the runs of 2026-09-30), and hosted runners do not queue
+//! for this repository. The scoped arguments, `check-changed`'s:
 //!
 //! - tests exclude flui-platform (its suite needs a display server: a separate
 //!   headless leg runs it when it is in scope);
@@ -21,44 +24,25 @@
 //!   covers the changed crates that have features, any crate whose Cargo.toml
 //!   changed, and every dependent in scope whose edge to an in-scope package
 //!   only exists under one of its features (optional, or named in a feature):
-//!   the default build never compiles the code on that edge; past
-//!   [`MAX_PER_FEATURE_PACKAGES`] packages that pass would outrun the job's
-//!   timeout, and the wide lane's sharded feature-matrix job runs instead;
+//!   the default build never compiles the code on that edge;
 //! - the flui-app/flui iOS runner gets a macOS clippy leg whenever either is in
-//!   scope, like the Android runner (it needs xcrun, so it is a separate job,
-//!   `fast-lane-ios`);
+//!   scope, like the Android runner (it needs xcrun: in CI the `ios-runner`
+//!   job, whose `cross_ios` output is the one scoped value CI reads);
 //! - rustdoc -D warnings runs over the scope with its packages' `testing`
 //!   features (the doc job's flags, narrowed): a moved item's broken intra-doc
 //!   link otherwise merges green and fails main's `doc` job;
 //! - doctests run over the scope's library packages (the `doc-test` job,
 //!   narrowed): nextest never executes them; both name the facade's catalogs
-//!   when `flui` is in scope, as the tests do;
-//! - CI's `fast-lane` runs its tests as `ci_test_args`: the workspace's
-//!   [`TEST_SCOPE`](crate::tasks::TEST_SCOPE) build, narrowed to the scope by a
-//!   nextest filterset, so it builds what the `workspace-tests` cache holds
-//!   (`test_args`, the scoped build, stays for `check-changed`).
+//!   when `flui` is in scope, as the tests do.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 /// The facade's design-system features, none on by default (ADR-0088 §6):
-/// every fast-lane step that selects `flui` names them.
+/// every scoped step that selects `flui` names them.
 const FACADE_CATALOGS: [&str; 2] = ["flui/material", "flui/cupertino"];
 
 use super::classify::{Mode, Package, Repo, Scope, Workspace};
-
-/// More feature-gated dependents than this: the wide lane (see [`lane_args`]).
-const MAX_FEATURE_GATED_DEPENDENTS: usize = 3;
-
-/// More packages in the fast lane's per-feature pass than this: the wide lane.
-///
-/// The pass runs `cargo hack clippy --each-feature` twice (library, then
-/// tests/benches/examples) inside the 40-minute `fast-lane` job, after about
-/// 20 minutes of other steps on a wide scope. Measured on CI, the library pass
-/// alone costs from 2 s (flui-layer) to 3 minutes (the facade) per package and
-/// the second pass about as much again, so the six heaviest packages fill the
-/// roughly 15 minutes left.
-const MAX_PER_FEATURE_PACKAGES: usize = 6;
 
 /// The GitHub event a run was started by (`github.event_name`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -82,9 +66,8 @@ pub(super) enum Lane {
     Docs,
     /// Repository tooling or a standalone crate: `deps` and `standalone` too.
     Tooling,
-    /// A set of packages: `deps`, `fast-lane` and, for the iOS runner, `fast-lane-ios`.
-    Fast,
-    /// The whole workspace on a pull request: every Linux job (`HEAVY_JOBS`).
+    /// A pull request that compiles anything: every Linux job over the whole
+    /// workspace (`HEAVY_JOBS`), and `ios-runner` when the iOS runner is in scope.
     Wide,
     /// `main` and the merge queue: `wide` plus the Windows and macOS jobs (`FULL_JOBS`).
     Full,
@@ -97,7 +80,6 @@ impl Lane {
         match self {
             Self::Docs => "docs",
             Self::Tooling => "tooling",
-            Self::Fast => "fast",
             Self::Wide => "wide",
             Self::Full => "full",
             Self::Extended => "extended",
@@ -119,21 +101,16 @@ impl Lane {
             Event::PullRequest if full_ci_label => Self::Extended,
             Event::PullRequest if heavy_required => Self::Wide,
             Event::PullRequest => match mode {
-                Mode::Full => Self::Wide,
-                Mode::Packages => Self::Fast,
+                Mode::Full | Mode::Packages => Self::Wide,
                 Mode::None => Self::Tooling,
                 Mode::Docs => Self::Docs,
             },
         }
     }
-
-    /// Whether the lane's jobs build the whole workspace.
-    fn is_whole_workspace(self) -> bool {
-        matches!(self, Self::Wide | Self::Full | Self::Extended)
-    }
 }
 
-/// The `plan` outputs, one field per output, in output order.
+/// `cargo xtask affected`'s outputs (CI's `plan` reads `lane`, `mode`,
+/// `cross_ios` and `standalone`), one field per output, in output order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct LaneArgs {
     pub(super) lane: Lane,
@@ -158,15 +135,11 @@ pub(super) struct LaneArgs {
     /// Standalone crate directories the change touches (own `[workspace]`,
     /// outside every member's graph), space-separated.
     pub(super) standalone: String,
-    /// CI `fast-lane`'s nextest arguments: [`TEST_SCOPE`](crate::tasks::TEST_SCOPE)
-    /// plus `-E` and the scope's packages as a filterset without spaces (the
-    /// job word-splits it); empty when nothing but flui-platform is in scope.
-    pub(super) ci_test_args: String,
 }
 
 impl LaneArgs {
     /// `(key, value)` in output order; booleans as `true`/`false`.
-    pub(super) fn fields(&self) -> [(&'static str, String); 21] {
+    pub(super) fn fields(&self) -> [(&'static str, String); 20] {
         let b = |v: bool| if v { "true" } else { "false" }.to_owned();
         [
             ("lane", self.lane.as_str().to_owned()),
@@ -193,7 +166,6 @@ impl LaneArgs {
             ("doc_args", self.doc_args.clone()),
             ("doctest_args", self.doctest_args.clone()),
             ("standalone", self.standalone.clone()),
-            ("ci_test_args", self.ci_test_args.clone()),
         ]
     }
 }
@@ -315,51 +287,7 @@ fn feature_gated_dependents<'a>(
     found
 }
 
-/// CI's `plan` outputs: [`lane_args`], rebuilt over the whole workspace when
-/// the lane builds the whole workspace but the classification scoped it (a
-/// heavy-job input, many feature-gated dependents, the `full-ci` label). The
-/// classification's reason stays. `check-changed` reads [`lane_args`] itself
-/// and so keeps its scoped build.
-pub(super) fn plan_args(
-    repo: &Repo,
-    scope: &Scope,
-    event: Event,
-    full_ci_label: bool,
-) -> anyhow::Result<LaneArgs> {
-    let args = lane_args(repo, scope, event, full_ci_label)?;
-    if !args.lane.is_whole_workspace() || scope.mode == Mode::Full {
-        return Ok(args);
-    }
-    let mut whole = Scope::whole_workspace();
-    whole.reason = args.reason;
-    whole.heavy_required = args.heavy_required;
-    Ok(LaneArgs {
-        lane: args.lane,
-        ..lane_args(repo, &whole, event, full_ci_label)?
-    })
-}
-
-/// The `test_args` of CI's `fast-lane`: [`TEST_SCOPE`](crate::tasks::TEST_SCOPE)
-/// and a filterset naming `packages` but flui-platform (its own leg runs it),
-/// or empty when no other package is in scope: an empty `-E ''` would not
-/// parse. No spaces inside the filterset: the job word-splits the value.
-fn ci_test_args(packages: &BTreeSet<&str>) -> String {
-    let filter: Vec<String> = packages
-        .iter()
-        .filter(|n| **n != "flui-platform")
-        .map(|n| format!("package({n})"))
-        .collect();
-    if filter.is_empty() {
-        return String::new();
-    }
-    format!(
-        "{} -E {}",
-        crate::tasks::TEST_SCOPE.join(" "),
-        filter.join("|")
-    )
-}
-
-/// The lane and the fast lane's arguments for `scope`, on `event`.
+/// The lane for `scope` on `event`, and `check-changed`'s arguments for it.
 pub(super) fn lane_args(
     repo: &Repo,
     scope: &Scope,
@@ -444,10 +372,7 @@ pub(super) fn lane_args(
     }
 
     // Dependents that compile the change only under a feature get the
-    // per-feature pass; past a handful, that is the wide lane's sliced
-    // feature-matrix job, not a fast-lane step.
-    let mut heavy_required = scope.heavy_required;
-    let mut reason = scope.reason.clone();
+    // per-feature pass: the default build never compiles that edge.
     let mut hack_args = String::new();
     if scope.mode == Mode::Packages {
         let packages = &repo.workspace()?.packages;
@@ -461,47 +386,23 @@ pub(super) fn lane_args(
             .into_iter()
             .filter(|n| featured(n) && !seeds.contains(n))
             .collect();
-        if gated.len() > MAX_FEATURE_GATED_DEPENDENTS {
-            heavy_required = true;
-            let first: Vec<&str> = gated.iter().copied().take(4).collect();
-            let _ = write!(
-                reason,
-                "; {} dependents reach the change only under a feature ({}, ...): the feature-matrix job covers them",
-                gated.len(),
-                first.join(", ")
-            );
-        }
         // per-feature clippy for the crates the change is IN (seeds) that have
         // features, for any crate whose manifest changed, and for dependents
         // whose edge into the scope only a feature compiles; other dependents
         // get the default build only (the wide lane's feature-matrix covers the rest)
-        let per_feature: BTreeSet<&str> = seeds
+        hack_args = p(seeds
             .iter()
             .copied()
             .filter(|n| featured(n))
             .chain(scope.manifests.iter().map(String::as_str))
-            .chain(gated.iter().copied())
-            .collect();
-        if gated.len() <= MAX_FEATURE_GATED_DEPENDENTS
-            && per_feature.len() > MAX_PER_FEATURE_PACKAGES
-        {
-            heavy_required = true;
-            let first: Vec<&str> = per_feature.iter().copied().take(4).collect();
-            let _ = write!(
-                reason,
-                "; {} packages need the per-feature pass ({}, ...), past the fast lane's {MAX_PER_FEATURE_PACKAGES}: the feature-matrix job covers them",
-                per_feature.len(),
-                first.join(", ")
-            );
-        }
-        hack_args = p(per_feature.iter().copied());
+            .chain(gated.iter().copied()));
     }
 
     Ok(LaneArgs {
-        lane: Lane::decide(event, full_ci_label, scope.mode, heavy_required),
+        lane: Lane::decide(event, full_ci_label, scope.mode, scope.heavy_required),
         mode: scope.mode.as_str().to_owned(),
-        heavy_required,
-        reason,
+        heavy_required: scope.heavy_required,
+        reason: scope.reason.clone(),
         packages: scope.packages.join(" "),
         pkg_args: if full {
             "--workspace".to_owned()
@@ -544,11 +445,6 @@ pub(super) fn lane_args(
         doc_args,
         doctest_args,
         standalone: scope.standalone.join(" "),
-        ci_test_args: if scope.mode == Mode::Packages {
-            ci_test_args(&set)
-        } else {
-            String::new()
-        },
     })
 }
 
@@ -563,21 +459,14 @@ mod tests {
 
     /// The lane a pull request changing `files` takes.
     fn pr_lane(files: &[&str], full_ci_label: bool) -> Lane {
-        plan_args(repo(), &scope(files), Event::PullRequest, full_ci_label)
-            .expect("plan args")
+        lane_args(repo(), &scope(files), Event::PullRequest, full_ci_label)
+            .expect("lane args")
             .lane
     }
 
     fn whole_workspace_pr_takes_the_wide_lane() {
-        // the lane machinery is a workspace-wide input: every Linux job runs,
-        // not the whole workspace serially in fast-lane
-        let a = plan_args(
-            repo(),
-            &scope(&["tools/xtask/src/change_scope/classify.rs"]),
-            Event::PullRequest,
-            false,
-        )
-        .expect("plan args");
+        // the lane machinery is a workspace-wide input: every Linux job runs
+        let a = args(&["tools/xtask/src/change_scope/classify.rs"]);
         assert_eq!((a.lane, a.mode.as_str()), (Lane::Wide, "full"));
         assert!(
             a.reason.starts_with("workspace-wide input changed: "),
@@ -618,30 +507,7 @@ mod tests {
                 pr(Mode::Packages),
                 pr(Mode::Full)
             ],
-            [Lane::Docs, Lane::Tooling, Lane::Fast, Lane::Wide]
-        );
-        // feature-gated edges into many dependents need feature-matrix
-        assert_eq!(
-            pr_lane(&["crates/flui-layer/src/lib.rs"], false),
-            Lane::Wide
-        );
-        let a = plan_args(
-            repo(),
-            &scope(&["crates/flui-layer/src/lib.rs"]),
-            Event::PullRequest,
-            false,
-        )
-        .expect("plan args");
-        assert_eq!(
-            (a.pkg_args.as_str(), a.ci_test_args.as_str()),
-            ("--workspace", ""),
-            "the wide lane's jobs build the whole workspace"
-        );
-        assert!(a.reason.contains("feature-matrix"), "{}", a.reason);
-        // check-changed keeps its scoped build
-        assert_ne!(
-            args(&["crates/flui-view/src/lib.rs"]).pkg_args,
-            "--workspace"
+            [Lane::Docs, Lane::Tooling, Lane::Wide, Lane::Wide]
         );
         let names: Vec<String> = [PullRequest, Push, MergeGroup, Schedule, WorkflowDispatch]
             .iter()
@@ -665,16 +531,9 @@ mod tests {
         );
     }
 
-    fn fast_lane_builds_the_test_scope_and_filters() {
+    fn a_package_change_takes_the_wide_lane_and_scopes_check_changed() {
         let a = args(&["packages/flui-material/src/lib.rs"]);
-        assert_eq!(a.lane, Lane::Fast);
-        assert_eq!(
-            a.ci_test_args,
-            "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests \
-             --features flui/material,flui/cupertino,flui-devtools/agent \
-             -E package(flui)|package(flui-material)|package(flui-sdk)|package(flui-web-counter)"
-        );
-        // check-changed keeps the scoped build
+        assert_eq!((a.lane, a.mode.as_str()), (Lane::Wide, "packages"));
         assert_eq!(
             a.test_args,
             "-p flui -p flui-material -p flui-sdk -p flui-web-counter --lib --bins --tests"
@@ -692,7 +551,7 @@ mod tests {
             reason: String::new(),
         };
         let a = lane_args(repo(), &only_platform, Event::PullRequest, false).expect("lane args");
-        assert_eq!((a.ci_test_args.as_str(), a.test_args.as_str()), ("", ""));
+        assert_eq!(a.test_args, "");
         assert!(a.platform, "its own leg runs it");
     }
 
@@ -767,36 +626,6 @@ mod tests {
         assert_eq!(
             args(&["packages/flui-material/src/lib.rs"]).hack_args,
             "-p flui"
-        );
-    }
-
-    fn many_feature_gated_dependents_take_the_wide_lane() {
-        let a = args(&["crates/flui-layer/src/lib.rs"]);
-        assert!(a.heavy_required);
-        assert_eq!(a.lane, Lane::Wide);
-        assert!(a.reason.contains("feature-matrix"));
-    }
-
-    fn many_per_feature_packages_take_the_wide_lane() {
-        // a sweep over the upper crates' sources: few dependents are left to
-        // reach them only under a feature, but every one is a featured seed,
-        // and their per-feature passes together outrun the fast lane's timeout
-        let a = args(&[
-            "src/lib.rs",
-            "crates/flui-app/src/lib.rs",
-            "crates/flui-hot-reload/src/lib.rs",
-            "crates/flui-objects/src/lib.rs",
-            "crates/flui-runtime/src/lib.rs",
-            "crates/flui-testing/src/lib.rs",
-            "crates/flui-widgets/src/lib.rs",
-            "packages/flui-devtools/src/lib.rs",
-        ]);
-        assert!(a.heavy_required, "{}", a.reason);
-        assert_eq!(a.lane, Lane::Wide);
-        assert!(
-            a.reason.contains("packages need the per-feature pass"),
-            "{}",
-            a.reason
         );
     }
 
@@ -882,7 +711,7 @@ mod tests {
     fn the_wide_lane_selects_the_whole_workspace() {
         let a =
             lane_args(repo(), &Scope::whole_workspace(), Event::Push, false).expect("lane args");
-        assert_eq!((a.lane, a.ci_test_args.as_str()), (Lane::Full, ""));
+        assert_eq!(a.lane, Lane::Full);
         assert_eq!(
             (a.pkg_args.as_str(), a.test_args.as_str()),
             (
@@ -933,7 +762,6 @@ mod tests {
                 &a.hack_args,
                 &a.doc_args,
                 &a.doctest_args,
-                &a.ci_test_args,
                 &a.standalone,
             ];
             assert!(empty.iter().all(|v| v.is_empty()), "{files:?}: {a:?}");
@@ -961,8 +789,8 @@ mod tests {
                 ),
                 ("events_pick_their_lane", events_pick_their_lane as fn()),
                 (
-                    "fast_lane_builds_the_test_scope_and_filters",
-                    fast_lane_builds_the_test_scope_and_filters as fn(),
+                    "a_package_change_takes_the_wide_lane_and_scopes_check_changed",
+                    a_package_change_takes_the_wide_lane_and_scopes_check_changed as fn(),
                 ),
                 (
                     "platform_only_scope_has_no_test_args",
@@ -987,14 +815,6 @@ mod tests {
                 (
                     "per_feature_pass_covers_feature_gated_dependents",
                     per_feature_pass_covers_feature_gated_dependents as fn(),
-                ),
-                (
-                    "many_feature_gated_dependents_take_the_wide_lane",
-                    many_feature_gated_dependents_take_the_wide_lane as fn(),
-                ),
-                (
-                    "many_per_feature_packages_take_the_wide_lane",
-                    many_per_feature_packages_take_the_wide_lane as fn(),
                 ),
                 (
                     "a_design_system_change_gets_the_facades_per_feature_pass",

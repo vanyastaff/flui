@@ -40,7 +40,7 @@
 //!   ADR-0081 keep, and the self-test exercises it. Examples and tools are
 //!   applications and may depend on anything.
 //! - **wasm32.** `wasm = false` marks a package that cannot build for wasm32;
-//!   wasm-check and the fast lane leave it out. `globals` is ADR-0097's
+//!   wasm-check and `check-changed` leave it out. `globals` is ADR-0097's
 //!   allowlist, which `cargo xtask globals` reads and checks. Any other key in
 //!   `[package.metadata.flui]`, or a mistyped value, is an error rather than a
 //!   silently ignored setting.
