@@ -24,9 +24,7 @@
 //! `RenderState<P>` were removed as unreachable code; the
 //! `RenderDirtyPropagation` trait that was kept around as a "cost-cheap
 //! option" was deleted because its `ElementId` typing did not match the
-//! crate's `RenderId` key — see the `propagation` submodule's
-//! module-level docstring for the audit trail
-//! (`docs/research/2026-05-22-flui-rendering-engine-audit.md`).
+//! crate's `RenderId` key.
 //!
 //! # Design Philosophy
 //!
@@ -106,9 +104,6 @@ mod layout_cache;
 mod offset;
 
 pub use layout_cache::{BoxLayoutCache, IntrinsicDimension, ProtocolLayoutCache};
-
-#[cfg(test)]
-mod tests;
 
 use offset::OffsetCell;
 

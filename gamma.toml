@@ -1,5 +1,5 @@
 # cargo-gamma configuration: mutation testing, the measure a test suite is
-# judged by here (see docs/testing.md and docs/test-minimization/). Mutation
+# judged by here (see docs/testing.md, "Mutation Testing"). Mutation
 # score, not test count or line coverage, is what shows a rewritten or pruned
 # suite still catches what the old one did.
 #
@@ -26,11 +26,18 @@ minimum-test-timeout = 60.0
 # reject a run whose crates lack the named target.
 cargo-test-args = [
     "--skip",
-    "trybuild_ui",
+    "trybuild_ui",            # flui-engine, flui-rendering, flui-painting, flui-view
+    "--skip",
+    "routable_derive_ui",     # flui-widgets' routable_ui trybuild suite
     "--skip",
     "cli_create::generated_",
+    # the facade_consumer target, every test of which builds a project
     "--skip",
     "ordinary_facade_graph_excludes_test_support",
     "--skip",
-    "external_consumers_can_name_custom_paint_contract",
+    "external_consumers_extend_and_test_through_the_facade",
+    "--skip",
+    "plugin_factory_requires_the_canonical_scene",
+    "--skip",
+    "plugin_teardown_requires_unsafe",
 ]

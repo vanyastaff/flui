@@ -7,9 +7,7 @@
 //!
 //! # What this models
 //!
-//! This prototype must not modify production storage (per
-//! [`docs/plans/2026-05-22-005-feat-view-element-core-contracts-plan.md`]).
-//! We are measuring two candidate storage *shapes* for the `key` field on
+//! This prototype must not modify production storage. We are measuring two candidate storage *shapes* for the `key` field on
 //! `ElementNode` independently of the rest of the production lifecycle:
 //!
 //! - **Baseline** — `key: Option<Box<dyn ViewKey>>`. The shape spec FR-022

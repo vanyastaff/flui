@@ -107,6 +107,3 @@ impl CustomClipper<Rect> for RectClipper {
         self
     }
 }
-
-#[cfg(test)]
-mod tests {}

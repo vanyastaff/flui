@@ -135,6 +135,3 @@ pub fn pointer_event_kind(event: &crate::events::PointerEvent) -> &'static str {
         _ => "other",
     }
 }
-
-#[cfg(test)]
-mod tests {}

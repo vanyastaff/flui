@@ -8,13 +8,8 @@ extend-exclude = [
     ".gpui/**",
     ".claude/**",
     "Cargo.lock",
-    "docs/research/**/*.md",     # audits quote external code; preserve verbatim
-    "docs/brainstorms/**/*.md",
-    "docs/plans/**/*.md",        # plans are reviewed artifacts; preserve verbatim
-    "specs/**/*.md",             # speckit artifacts: reviewed, preserved verbatim
-    "platforms/**/*.storyboard", # auto-generated Apple XIB
-    "platforms/**/*.xib",
-    "platforms/**/*.pbxproj",
+    "docs/research/**/*.md", # research quotes external code; preserve verbatim
+    "docs/plans/**/*.md",    # plans are reviewed artifacts; preserve verbatim
 ]
 
 [default]
@@ -40,12 +35,9 @@ ser = "ser"
 lod = "lod"
 # Win32 API: `TrackMouseEvent` / `TRACKMOUSEEVENT` / `TME_LEAVE`.
 tme = "tme"
-# Plug-and-Play (PnP) — Windows monitor / device class abbreviation.
-# `pn` covers tokenization of `PnP` -> `Pn` + `P`.
-pnp = "pnp"
+# `PNGs` tokenizes to `PN` + `Gs`.
 pn = "pn"
-# Variable-name pair convention: `int_ab` and `int_ba` for a-vs-b /
-# b-vs-a intersections in property-tests.
+# Commit hashes cited in docs (`c2ba3ae51`) split into tokens such as `ba`.
 ba = "ba"
 # Apple UDID — "Unique Device IDentifier" — standard iOS terminology.
 udid = "udid"
@@ -53,11 +45,6 @@ udid = "udid"
 # the bare token `mis`, which typos flags as `miss`/`mist`. The prefix is valid
 # English; allow the token so the hyphenated forms pass.
 mis = "mis"
-# Intentional pre-insert text in a TextEditingController test: start "helo",
-# insert "l" before 'o' → "hello".
-helo = "helo"
-# Relm4 — the GTK4 Rust framework, cited by name in the landscape survey.
-relm = "relm"
 # OpenType table tag: `loca` is the glyph-location table (spec name, exactly
 # four characters like every other tag), not a truncation of "local".
 loca = "loca"

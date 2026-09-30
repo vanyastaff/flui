@@ -1,7 +1,0 @@
-{
-  "mcpServers": {
-    "cratesio": {
-      "command": "cratesio-mcp"
-    }
-  }
-}

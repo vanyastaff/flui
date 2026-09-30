@@ -563,6 +563,3 @@ impl VelocityEstimate {
         self.velocity().magnitude()
     }
 }
-
-#[cfg(test)]
-mod tests {}

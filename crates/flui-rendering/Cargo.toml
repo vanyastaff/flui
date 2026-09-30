@@ -12,13 +12,7 @@ categories = ["gui", "rendering"]
 
 # Dev-only files a `cargo package --list` sweep found leaking into the
 # published archive (internal architecture docs, criterion benches, etc.):
-exclude = [
-    "/ARCHITECTURE.md",
-    "/benches/",
-    "/docs/",
-    "/migration/",
-    "/flutter-rendering-hierarchy.md",
-]
+exclude = ["/ARCHITECTURE.md", "/benches/", "/docs/", "/flutter-rendering-hierarchy.md"]
 repository.workspace = true
 # Benches are declared explicitly below; disable auto-discovery so the shared
 # `benches/helpers.rs` module is not itself compiled as a standalone bench target.
@@ -121,8 +115,8 @@ static_assertions.workspace = true
 # Property-based tests for the virtualization B+-tree: random
 # insert/delete/set_measured/set_count sequences checked against a naive
 # Vec oracle + structural invariants. Test-only; no production dependency.
-# Version matches flui-painting / flui-interaction (already resolved in the lockfile).
-proptest = "1.5"
+# The workspace-pinned proptest, as flui-painting uses.
+proptest = { workspace = true }
 # Animation -> render-pipeline integration scenarios (tests only; no
 # production dependency between the layers). flui-scheduler moved to
 # `[dependencies]` above — `ScrollPosition` names it in production now.

@@ -14,7 +14,6 @@
 //!    child's picture.
 //!
 //! Refs:
-//!   * docs/research/2026-06-10-rendering-design-amendments.md §D1/§D9
 //!   * crates/flui-rendering/src/context/paint_cx.rs (recording side)
 
 use flui_foundation::Variable;

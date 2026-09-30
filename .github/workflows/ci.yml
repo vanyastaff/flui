@@ -579,8 +579,8 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────────
   # standalone — a crate under the repository with its own [workspace] that
-  # no member depends on (`plan`'s `standalone` output, e.g.
-  # tools/text-spike): nothing in the workspace compiles it, so a change to
+  # no member depends on (`plan`'s `standalone` output; the repository has
+  # none today): nothing in the workspace compiles it, so a change to
   # it runs the tooling lane and this job checks that it still builds
   # against its own lockfile. Warnings are not denied: these crates are
   # outside the workspace lints. Runs only when such a crate changed, never

@@ -75,7 +75,9 @@ Text is one process-wide, locked object today.
   boundaries can disagree.
 
 [ADR-0077](ADR-0077-migrate-to-parley.md) proposed moving to Parley on the strength of a spike
-(`tools/text-spike`, `parley = "=0.11.1"` at `tools/text-spike/Cargo.toml:23`) that measured
+(`tools/text-spike`, `parley = "=0.11.1"` at
+[`tools/text-spike/Cargo.toml:23`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/tools/text-spike/Cargo.toml#L23))
+that measured
 shaping and layout only, and made a rasterization prototype its blocking precondition. Since then
 the market survey reports that Parley shapes with HarfRust and analyses with ICU4X, that fontique
 offers a shared collection mode (`CollectionOptions { shared: true }`) whose changes are visible

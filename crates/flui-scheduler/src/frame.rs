@@ -791,11 +791,3 @@ impl Default for FrameTimingBuilder {
         Self::new()
     }
 }
-
-#[cfg(test)]
-mod tests {
-
-    // AppLifecycleState tests
-
-    // FrameTiming::phase_duration / record_phase_duration
-}

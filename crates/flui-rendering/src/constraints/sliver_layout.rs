@@ -63,9 +63,3 @@ pub fn grid_child_paint_offset(
         Axis::Vertical => Offset::new(cross_f, main_axis_delta),
     }
 }
-
-#[cfg(test)]
-mod tests {
-
-    // ── grid_child_paint_offset ───────────────────────────────────────────────
-}

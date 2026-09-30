@@ -1,9 +1,9 @@
-[← Roadmap Tracker](../ROADMAP-TRACKER.md) · [← Roadmap](../ROADMAP.md) · [Polish-pass research](2026-05-24-flui-geometry-polish-pass-research.md)
+[← Roadmap Tracker](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/archive/ROADMAP-TRACKER.md) · [← Roadmap](../ROADMAP.md) · [Polish-pass research](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-24-flui-geometry-polish-pass-research.md)
 
 # U17 — euclid-wrapper spike: Option C cost measurement + PR-2 decision
 
 > **Status:** spike complete / decision gate. Executes the pre-agreed N-geom **U17** risk gate from
-> [`2026-05-24-flui-geometry-polish-pass-research.md` §VIII](2026-05-24-flui-geometry-polish-pass-research.md).
+> [`2026-05-24-flui-geometry-polish-pass-research.md` §VIII](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-24-flui-geometry-polish-pass-research.md).
 > **Date:** 2026-05-29. **Author role:** senior Rust engineer, flui port discipline.
 > **Drives:** ROADMAP-TRACKER rows `N-geom.U17` (this), `N-geom.U14C` (Option C), `N-geom.U14` (Option D).
 
@@ -208,4 +208,4 @@ rg -t rust --glob '!**/tests/**' --glob '!**/test*.rs' \
 
 ---
 
-[← Roadmap Tracker](../ROADMAP-TRACKER.md) · [← Roadmap](../ROADMAP.md) · [Polish-pass research](2026-05-24-flui-geometry-polish-pass-research.md)
+[← Roadmap Tracker](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/archive/ROADMAP-TRACKER.md) · [← Roadmap](../ROADMAP.md) · [Polish-pass research](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-24-flui-geometry-polish-pass-research.md)

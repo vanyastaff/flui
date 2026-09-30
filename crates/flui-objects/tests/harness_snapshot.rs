@@ -24,8 +24,7 @@ fn colored_box_snapshot() {
 // Snapshots — paint-logic-heavy objects
 //
 // Each test proves the structural snapshot catches facts that geometry/structure
-// asserts miss: shadow/border ordering, clip-layer scoping, opacity layer
-// alpha, and virtualized-child count at the paint layer.
+// asserts miss, such as the shadow, fill and border ordering of a decorated box.
 // ============================================================================
 
 // ---------------------------------------------------------------------------
@@ -71,15 +70,7 @@ fn decorated_box_snapshot() {
 }
 
 // ---------------------------------------------------------------------------
-// 2. RenderClipRect — clip layer wraps the child's picture
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// 3. RenderOpacity — opacity layer with alpha = 0.5
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// 4. RenderSliverList — the request-strategy band tracks scroll position
+// 2. RenderSliverList — the request-strategy band tracks scroll position
 //    across head/mid/tail stops, staying bounded
 // ---------------------------------------------------------------------------
 //

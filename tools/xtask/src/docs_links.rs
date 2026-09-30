@@ -31,18 +31,7 @@ pub(crate) const LYCHEE_VERSION: &str = "0.24.2";
 
 /// Dated records AGENTS.md exempts from upkeep: a link there that rotted is
 /// history, not a defect, and neither `docs-links` nor `markers` reads them.
-pub(crate) const ARCHIVAL_ROOTS: [&str; 10] = [
-    "docs/archive/",
-    "docs/audits/",
-    "docs/brainstorms/",
-    "docs/ideation/",
-    "docs/plans/",
-    "docs/research/",
-    "docs/superpowers/",
-    ".rust-studio/specs/",
-    "specs/",
-    "openspec/",
-];
+pub(crate) const ARCHIVAL_ROOTS: [&str; 2] = ["docs/plans/", "docs/research/"];
 
 /// A link to this repository's `main` on GitHub (a regex; the path after it
 /// is the file in the checkout).
@@ -332,29 +321,24 @@ mod tests {
         let listed = [
             "README.md",
             "docs/testing.md",
-            "docs/designs/2026-06-30-rasterbackend-seam.md",
-            "docs/archive/ROADMAP.md",
+            "docs/designs/x.md",
             "docs/plans/x.md",
             "docs/research/x.md",
-            ".rust-studio/specs/001/spec.md",
-            ".rust-studio/research/notes.md",
-            "specs/004-view-element-core/spec.md",
-            "openspec/x.md",
+            "docs/research/2026-09-25-architecture-review/synthesis.md",
             // a root, not a prefix: these are live docs
             "docs/plans.md",
-            "crates/flui-view/specs/x.md",
-            "book/src/specs/x.md",
+            "crates/flui-view/docs/research/x.md",
+            "book/src/docs/plans/x.md",
         ];
         assert_eq!(
             gated(listed),
             [
                 "README.md",
                 "docs/testing.md",
-                "docs/designs/2026-06-30-rasterbackend-seam.md",
-                ".rust-studio/research/notes.md",
+                "docs/designs/x.md",
                 "docs/plans.md",
-                "crates/flui-view/specs/x.md",
-                "book/src/specs/x.md",
+                "crates/flui-view/docs/research/x.md",
+                "book/src/docs/plans/x.md",
             ]
         );
     }

@@ -235,6 +235,3 @@ pub type DeviceId = i32;
 /// Re-exported from `flui_foundation::RenderId` since regions correspond to
 /// render objects (hit-testable visual elements).
 pub use flui_foundation::RenderId as RegionId;
-
-#[cfg(test)]
-mod tests {}

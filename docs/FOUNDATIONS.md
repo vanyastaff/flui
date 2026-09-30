@@ -19,14 +19,14 @@ This document is the bedrock under [`ROADMAP.md`](ROADMAP.md). The roadmap seque
 
 | Document | What it establishes |
 |---|---|
-| [`research/2026-05-22-flutter-flui-gap-matrix.md`](research/2026-05-22-flutter-flui-gap-matrix.md) | Flutter↔FLUI coverage across all 12 packages |
-| [`research/2026-05-22-port-phasing-dependency-order.md`](research/2026-05-22-port-phasing-dependency-order.md) | Dependency graph, critical path, phase order |
-| [`research/2026-05-22-architectural-contracts.md`](research/2026-05-22-architectural-contracts.md) | The high-stakes public-surface contracts |
-| [`research/2026-05-22-rust-ui-ecosystem-lessons.md`](research/2026-05-22-rust-ui-ecosystem-lessons.md) | Lessons from GPUI / Xilem / Druid / Iced / Vello |
-| [`research/2026-05-22-technology-adoption-matrix.md`](research/2026-05-22-technology-adoption-matrix.md) | Per-subsystem behavior/structure adoption decisions |
-| [`research/2026-05-22-architecture-correction-plan.md`](research/2026-05-22-architecture-correction-plan.md) | The systemic-defect inventory |
-| [`research/2026-05-22-crate-decomposition-redesign.md`](research/2026-05-22-crate-decomposition-redesign.md) | The target workspace topology |
-| [`research/2026-08-01-ui-runtime-evolution-study.md`](research/2026-08-01-ui-runtime-evolution-study.md) | Cross-framework runtime, multi-window, concurrency, embedding, and frame-pacing evidence |
+| [`research/2026-05-22-flutter-flui-gap-matrix.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-22-flutter-flui-gap-matrix.md) | Flutter↔FLUI coverage across all 12 packages |
+| [`research/2026-05-22-port-phasing-dependency-order.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-22-port-phasing-dependency-order.md) | Dependency graph, critical path, phase order |
+| [`research/2026-05-22-architectural-contracts.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-22-architectural-contracts.md) | The high-stakes public-surface contracts |
+| [`research/2026-05-22-rust-ui-ecosystem-lessons.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-22-rust-ui-ecosystem-lessons.md) | Lessons from GPUI / Xilem / Druid / Iced / Vello |
+| [`research/2026-05-22-technology-adoption-matrix.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-22-technology-adoption-matrix.md) | Per-subsystem behavior/structure adoption decisions |
+| [`research/2026-05-22-architecture-correction-plan.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-22-architecture-correction-plan.md) | The systemic-defect inventory |
+| [`research/2026-05-22-crate-decomposition-redesign.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-22-crate-decomposition-redesign.md) | The target workspace topology |
+| [`research/2026-08-01-ui-runtime-evolution-study.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-08-01-ui-runtime-evolution-study.md) | Cross-framework runtime, multi-window, concurrency, embedding, and frame-pacing evidence |
 | [`research/2026-08-01-runtime-architecture-execution-plan.md`](research/2026-08-01-runtime-architecture-execution-plan.md) | Dependency-ordered completion plan for ADR-0027/0037 and hostable runtime foundations |
 
 **Grounding.** Architecture decisions in this document are graded against *A Philosophy of Software Design* (Ousterhout): deep vs shallow modules, information hiding, "different layer, different abstraction". The other anchors are the canonical Rust corpus (*Programming Rust*, *Rust for Rustaceans*, *Rust Atomics and Locks*, *The Rust Performance Book*) and the Rust API Guidelines. FLUI's product is developer experience: the success metric is whether an external contributor finds the mental model legible from outside.
@@ -58,7 +58,7 @@ Every subsystem has two axes. **Behavior** is always Flutter — the constraint,
 | Platform abstraction | `services/*` (dissolved) | GPUI platform traits | `Platform` trait (`flui-platform`), `PlatformWindow` and capability traits (`flui-platform-api`), callback registry |
 | Asset pipeline | `painting/image_provider.dart` | Flutter `ImageProvider` + Rust async IO | `ImageProvider` trait, async confined to `flui-assets` |
 
-Four subsystems needed FLUI's code to **change direction** before the widget catalog leaned on them — reconciliation, layer lifecycle, reactivity (additively), and heterogeneous children; those changes are the locked contracts of [Part III](#part-iii--the-locked-contracts). For the rest the discipline is to *hold the line*. The per-subsystem reasoning is in [`research/2026-05-22-technology-adoption-matrix.md`](research/2026-05-22-technology-adoption-matrix.md).
+Four subsystems needed FLUI's code to **change direction** before the widget catalog leaned on them — reconciliation, layer lifecycle, reactivity (additively), and heterogeneous children; those changes are the locked contracts of [Part III](#part-iii--the-locked-contracts). For the rest the discipline is to *hold the line*. The per-subsystem reasoning is in [`research/2026-05-22-technology-adoption-matrix.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-22-technology-adoption-matrix.md).
 
 ---
 
@@ -84,7 +84,7 @@ These are not "nice to have." Items 1, 2, and 4 are *contracts* — they are bak
 
 ## Part III — The locked contracts
 
-These nine decisions are the "right contract." Each is committed by the **first widget written**; changing one after the catalog exists is a catalog-wide rewrite, not a refactor. They were locked before the first vertical slice of the widget catalog was built; the historical roadmap is in [`archive/ROADMAP.md`](archive/ROADMAP.md).
+These nine decisions are the "right contract." Each is committed by the **first widget written**; changing one after the catalog exists is a catalog-wide rewrite, not a refactor. They were locked before the first vertical slice of the widget catalog was built; the historical roadmap is in [`archive/ROADMAP.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/archive/ROADMAP.md).
 
 ### C1 — Reactivity: `setState` canonical, `memoize` added, realm-scoped signals (amended by ADR-0074)
 
@@ -247,7 +247,7 @@ Edges worth knowing the reason for:
 - **`runtime`, not `app`, holds the frame transaction** ([ADR-0083](adr/ADR-0083-one-frame-transaction-in-flui-runtime.md)). The product runners and the headless test driver run the same frame transaction, so `flui-runtime` (tier K, above `flui-widgets`) holds it and `flui-testing` drives it; `flui-app` keeps the runners, platform wiring and raster lane. The runtime's normal graph reaches no platform backend, windowing, GPU or engine crate, and the realm renders through a `FrameSink` the host implements. Its `allowed-dependents` are `flui-app` and `flui-testing`.
 - **`flui-log`** is composition-only: it exists so that installing a process-global subscriber is not `flui-foundation`'s business, and its `allowed-dependents` (`flui-app`, `flui-cli`, the facade) stop it becoming universal again.
 
-The guarantee: every crate declares its layer and tier in its own manifest, and `cargo xtask workspace` validates **every** in-workspace normal and build edge against them — same layer or lower, a lower tier or a smaller `order` in the same tier, never an example or tool, and no crate without a layer; Cargo rejects cycles itself. Dev edges may point up (tests use `flui-testing`), except where the kind rule reads them: only applications name an official package in any dependency kind, dev included, and any other crate that does lists the edge in its `edge-exceptions` ([ADR-0028](adr/ADR-0028-design-system-decoupling-contract.md), ADR-0081 §3, ADR-0088 §2). `cargo xtask reach` separately checks what each tier may reach transitively. Full reasoning behind the original decomposition: [`research/2026-05-22-crate-decomposition-redesign.md`](research/2026-05-22-crate-decomposition-redesign.md).
+The guarantee: every crate declares its layer and tier in its own manifest, and `cargo xtask workspace` validates **every** in-workspace normal and build edge against them — same layer or lower, a lower tier or a smaller `order` in the same tier, never an example or tool, and no crate without a layer; Cargo rejects cycles itself. Dev edges may point up (tests use `flui-testing`), except where the kind rule reads them: only applications name an official package in any dependency kind, dev included, and any other crate that does lists the edge in its `edge-exceptions` ([ADR-0028](adr/ADR-0028-design-system-decoupling-contract.md), ADR-0081 §3, ADR-0088 §2). `cargo xtask reach` separately checks what each tier may reach transitively. Full reasoning behind the original decomposition: [`research/2026-05-22-crate-decomposition-redesign.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-22-crate-decomposition-redesign.md).
 
 ---
 
@@ -267,7 +267,7 @@ This section is deliberately short. The current code's unfinished and wrong part
 | Paint | `run_paint` refuses to run with layout pending (`RenderError::PaintBeforeLayout`) and tracks which queued nodes its descent reached |
 | Contracts | C2 / C3 / C4+C6 are implemented (`ViewSeq`, `IntoView`, `ElementKind`, keyed reconciliation) |
 
-Open work is tracked in [`ROADMAP.md`](ROADMAP.md), [`BETA.md`](BETA.md) and the Status lines of the ADRs, not here. The original inventory, with the per-defect blast radius, is [`research/2026-05-22-architecture-correction-plan.md`](research/2026-05-22-architecture-correction-plan.md).
+Open work is tracked in [`ROADMAP.md`](ROADMAP.md), [`BETA.md`](BETA.md) and the Status lines of the ADRs, not here. The original inventory, with the per-defect blast radius, is [`research/2026-05-22-architecture-correction-plan.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-05-22-architecture-correction-plan.md).
 
 ---
 

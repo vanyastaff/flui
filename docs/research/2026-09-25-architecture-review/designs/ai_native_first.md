@@ -354,7 +354,7 @@ Nothing here requires a second rewrite. The costly structural moves (contract cr
 ---
 
 **Files relevant to this review (read, not modified):**
-- `C:\Users\vanya\AppData\Local\Temp\claude\D--flui\bbb28042-f972-4a10-8e94-731819e26161\scratchpad\context.md`, `plan.md`, `roadmap.md`
-- `D:\flui\tools\desktop-mcp\Cargo.toml`, `D:\flui\tools\desktop-mcp\src\a11y\{mod.rs,role.rs}`
-- `D:\flui\crates\flui-semantics\Cargo.toml`, `D:\flui\crates\flui-devtools\Cargo.toml`
-- `D:\flui\Cargo.toml`, `D:\flui\src\lib.rs`
+- `<scratchpad>\context.md`, `plan.md`, `roadmap.md`
+- `tools\desktop-mcp\Cargo.toml`, `tools\desktop-mcp\src\a11y\{mod.rs,role.rs}`
+- `crates\flui-semantics\Cargo.toml`, `crates\flui-devtools\Cargo.toml`
+- `Cargo.toml`, `src\lib.rs`

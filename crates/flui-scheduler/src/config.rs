@@ -226,10 +226,3 @@ pub(crate) fn adjust_duration_for_epoch(
         web_time::Duration::from_secs_f64(since_epoch.as_secs_f64() / dilation)
     }
 }
-
-// ============================================================================
-// Tests
-// ============================================================================
-
-#[cfg(test)]
-mod tests {}

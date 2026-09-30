@@ -277,19 +277,3 @@ mod resilient_setup_tests {
         assert!(matches!(error, super::SetupError::Filter(_)));
     }
 }
-
-#[cfg(all(test, target_os = "android"))]
-mod android_entry_point_shape {
-    //! Compiles only on Android, which is the point: it pins the exact call
-    //! shape an Android entry point uses, so a signature change breaks the
-    //! Android target check rather than a device build.
-    //!
-    //! The Android example packages are not `workspace.members` and cannot be
-    //! compiled by cargo from this repository today, so this is what stands in
-    //! for compiling them.
-
-    use super::{AppIdentity, LogConfig, SubscriberPolicy};
-
-    const DISPLAY_NAME: &str = "flui_android_demo";
-    const LOG_DIRECTIVES: &str = "info,flui_engine=debug,wgpu=warn";
-}
