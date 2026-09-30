@@ -70,7 +70,10 @@ impl Lexer<'_> {
                 '<' if self.chars.peek() == Some(&'<') => {
                     self.chars.next();
                     self.flush();
-                    if self.chars.next_if_eq(&'<').is_none() {
+                    if self.chars.next_if_eq(&'<').is_some() {
+                        // `<<< word`: a here-string, a redirection like `<`
+                        self.redirect();
+                    } else {
                         self.open_heredoc();
                     }
                 }

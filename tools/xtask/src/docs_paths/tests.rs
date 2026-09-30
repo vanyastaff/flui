@@ -198,6 +198,13 @@ fn packages_are_read_only_from_cargo_commands() {
         ("cargo build -p a < in", &[(0, build, "a")]),
         // a `<name>` placeholder is a word, not a redirection
         ("cargo tree -p <crate> -e normal", &[]),
+        // a leading here-string is a redirection; `exec` runs its operand
+        ("<<< input cargo test -p a", &[(0, test, "a")]),
+        ("exec cargo test -p a", &[(0, test, "a")]),
+        ("exec -c -a name cargo build -p a", &[(0, build, "a")]),
+        // Windows' executable
+        ("cargo.exe test -p a", &[(0, test, "a")]),
+        ("C:/Rust/bin/cargo.exe build -p a", &[(0, build, "a")]),
         // the `command` builtin runs its operand; `-v` only looks it up
         ("command cargo test -p a", &[(0, test, "a")]),
         ("command -p cargo test -p a", &[(0, test, "a")]),
@@ -289,6 +296,24 @@ fn locked(packages: &[(&str, &str)]) -> BTreeMap<String, BTreeSet<String>> {
     locked
 }
 
+/// crates.io's source, as `Cargo.lock` spells it.
+const CRATES_IO: &str = "registry+https://github.com/rust-lang/crates.io-index";
+
+/// A `Cargo.lock` of `(name, version, source)` packages.
+fn lockfile(packages: &[(&str, &str, Option<&str>)]) -> BTreeMap<String, Vec<LockedVersion>> {
+    let mut locked: BTreeMap<String, Vec<LockedVersion>> = BTreeMap::new();
+    for (name, version, source) in packages {
+        locked
+            .entry((*name).to_owned())
+            .or_default()
+            .push(LockedVersion {
+                version: (*version).to_owned(),
+                source: source.map(str::to_owned),
+            });
+    }
+    locked
+}
+
 fn a_lockfile_package_is_selected_only_by_update_and_tree() {
     let packages = Packages {
         local: locked(&[
@@ -296,10 +321,10 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
             ("flui-app", "0.2.0"),
             ("alpha", "1.2.3+meta"),
         ]),
-        locked: locked(&[
-            ("wgpu", "25.0.0"),
-            ("bitflags", "1.3.2"),
-            ("bitflags", "2.13.2"),
+        locked: lockfile(&[
+            ("wgpu", "25.0.0", Some(CRATES_IO)),
+            ("bitflags", "1.3.2", Some(CRATES_IO)),
+            ("bitflags", "2.13.2", Some(CRATES_IO)),
         ]),
     };
     for (code, selects) in [
@@ -333,6 +358,18 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
             "cargo pkgid -p 'registry+https://github.com/rust-lang/crates.io-index#bitflags@2.13.2'",
             true,
         ),
+        // the source must be the locked package's, its kind optional
+        (
+            "cargo pkgid -p 'registry+https://example.com/index#bitflags@2.13.2'",
+            false,
+        ),
+        (
+            "cargo pkgid -p 'https://github.com/rust-lang/crates.io-index#bitflags@2.13.2'",
+            true,
+        ),
+        // a path source names a checkout package
+        ("cargo pkgid -p 'path+file:///repo/crates/flui-app'", true),
+        ("cargo pkgid -p 'path+file:///repo/crates/gone'", false),
         // glob classes, as cargo's package patterns take them
         ("cargo test -p 'flui-[v]iew'", true),
         ("cargo test -p 'flui-[a-z]pp'", true),
@@ -366,7 +403,7 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
 fn headings_give_github_anchors() {
     let markdown = "# Start here\n## The `View` tree: a guide!\n## Start here\n\
                     ## Custom {#own-id}\n\n```\n# not a heading\n```\n\
-                    # Foo\n# Foo-1\n# Foo\n# The $x$ value\n";
+                    # Foo\n# Foo-1\n# Foo\n# The $x$ value\n# Foo--bar\n";
     // GitHub renders `{#own-id}` as text; it is no anchor of its own. The
     // second `Foo` takes `foo-2`: `foo-1` is a heading's already
     let want: BTreeSet<String> = [
@@ -378,6 +415,8 @@ fn headings_give_github_anchors() {
         "start-here-1",
         "the-view-tree-a-guide",
         "the-x-value",
+        // no smart punctuation: `--` stays two dashes
+        "foo--bar",
     ]
     .map(str::to_owned)
     .into();
@@ -522,7 +561,7 @@ fn a_doc_reports_each_stale_name_once() {
     let known = known();
     let packages = Packages {
         local: locked(&[("flui-view", "0.2.0"), ("flui-app", "0.2.0")]),
-        locked: locked(&[("wgpu", "25.0.0")]),
+        locked: lockfile(&[("wgpu", "25.0.0", Some(CRATES_IO))]),
     };
     let read = |path: &str| (path == "docs/testing.md").then(|| "# The harness\n".to_owned());
     let text = "`crates/flui-view/src/lib.rs` `crates/flui-types/` `crates/flui-types/`\n\

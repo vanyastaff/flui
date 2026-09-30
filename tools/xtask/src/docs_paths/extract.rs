@@ -161,7 +161,10 @@ pub(super) fn anchors(markdown: &str) -> BTreeSet<String> {
     let mut anchors = BTreeSet::new();
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
     let mut heading: Option<String> = None;
-    let options = Options::all().difference(Options::ENABLE_HEADING_ATTRIBUTES);
+    // GitHub keeps `--` and quotes as written: no smart punctuation
+    let options = Options::all()
+        .difference(Options::ENABLE_HEADING_ATTRIBUTES)
+        .difference(Options::ENABLE_SMART_PUNCTUATION);
     for event in Parser::new_ext(markdown, options) {
         match event {
             Event::Start(Tag::Heading { .. }) => heading = Some(String::new()),
@@ -278,6 +281,8 @@ pub(super) struct Selected {
     pub(super) name: String,
     /// The version after `@` (`bitflags@2`), when the spec names one.
     pub(super) version: Option<String>,
+    /// The source a fully qualified spec names (`registry+https://…`).
+    pub(super) source: Option<String>,
 }
 
 /// Cargo's options before the subcommand that take a value in the next word
@@ -343,11 +348,12 @@ pub(super) fn packages(code: &str) -> Vec<Selected> {
                     continue;
                 }
             };
-            found.extend(package(&name).map(|(name, version)| Selected {
+            found.extend(package(&name).map(|(name, version, source)| Selected {
                 line,
                 subcommand: subcommand.clone(),
                 name,
                 version,
+                source,
             }));
         }
     }
@@ -369,8 +375,20 @@ fn cargo_command(words: &mut VecDeque<(usize, String)>) -> bool {
         let Some((_, program)) = words.pop_front() else {
             return false;
         };
-        if program == "cargo" || program.ends_with("/cargo") {
+        if is_cargo(&program) {
             return true;
+        }
+        // `exec [-cl] [-a NAME] COMMAND` runs it in the shell's place
+        if program == "exec" {
+            while let Some((line, word)) = words.pop_front() {
+                if word == "-a" {
+                    words.pop_front();
+                } else if !word.starts_with('-') {
+                    words.push_front((line, word));
+                    break;
+                }
+            }
+            continue;
         }
         // `command [-p] COMMAND` runs it; `command -v`/`-V` only looks it up
         if program == "command" {
@@ -477,11 +495,19 @@ fn assignment(word: &str) -> bool {
     })
 }
 
-/// `word` as a package spec: its name (a glob too, [`is_glob`]) and the
-/// version after `@`, if any; `None` for a placeholder (`<crate>`, `$CRATE`,
+/// Whether `program` is cargo: `cargo`, or `cargo.exe` on Windows, bare or at
+/// the end of a path.
+fn is_cargo(program: &str) -> bool {
+    let file = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    file == "cargo" || file.eq_ignore_ascii_case("cargo.exe")
+}
+
+/// `word` as a package spec: its name (a glob too, [`is_glob`]), the
+/// version after `@`, if any, and the source a fully qualified spec names;
+/// `None` for a placeholder (`<crate>`, `$CRATE`,
 /// `{name}`, `…`), which names no one package. Any other word is taken as written, so a malformed name
 /// (`definitely.missing`) is a finding, as cargo rejects it.
-fn package(word: &str) -> Option<(String, Option<String>)> {
+fn package(word: &str) -> Option<(String, Option<String>, Option<String>)> {
     let placeholder = word.is_empty()
         || word.starts_with('@')
         || word.contains(['<', '>', '$', '{', '}', '…'])
@@ -490,23 +516,24 @@ fn package(word: &str) -> Option<(String, Option<String>)> {
         return None;
     }
     // a fully qualified spec, `[kind+]url[#name][@|:version]`: the name is the
-    // fragment's, or else the URL's last path segment; its source is not checked
-    let spec = match word.rsplit_once('#') {
+    // fragment's, or else the URL's last path segment; the URL is its source
+    let (spec, source) = match word.rsplit_once('#') {
         Some((url, fragment)) if url.contains("://") => {
-            if fragment.starts_with(|c: char| c.is_ascii_alphabetic()) {
+            let spec = if fragment.starts_with(|c: char| c.is_ascii_alphabetic()) {
                 fragment.to_owned()
             } else {
                 format!("{}@{fragment}", last_segment(url))
-            }
+            };
+            (spec, Some(url.to_owned()))
         }
-        _ if word.contains("://") => last_segment(word).to_owned(),
-        _ => word.to_owned(),
+        _ if word.contains("://") => (last_segment(word).to_owned(), Some(word.to_owned())),
+        _ => (word.to_owned(), None),
     };
     // `name@version`, or the legacy `name:version`
     Some(
         match spec.split_once('@').or_else(|| spec.split_once(':')) {
-            Some((name, version)) => (name.to_owned(), Some(version.to_owned())),
-            None => (spec, None),
+            Some((name, version)) => (name.to_owned(), Some(version.to_owned()), source),
+            None => (spec, None, source),
         },
     )
 }

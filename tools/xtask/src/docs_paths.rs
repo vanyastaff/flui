@@ -161,9 +161,18 @@ struct Packages {
     /// manifest for (the Android examples are excluded from the workspace),
     /// each with its version when the manifest states one.
     local: BTreeMap<String, BTreeSet<String>>,
-    /// Every package in `Cargo.lock` and its locked versions, for a
-    /// [`GRAPH_SUBCOMMANDS`] command.
-    locked: BTreeMap<String, BTreeSet<String>>,
+    /// Every package in `Cargo.lock`, each locked version with its source,
+    /// for a [`GRAPH_SUBCOMMANDS`] command.
+    locked: BTreeMap<String, Vec<LockedVersion>>,
+}
+
+/// One locked version of a `Cargo.lock` package.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LockedVersion {
+    version: String,
+    /// `registry+https://…`, `git+https://…?rev=…#sha`; none for a workspace
+    /// member.
+    source: Option<String>,
 }
 
 impl Packages {
@@ -189,26 +198,55 @@ impl Packages {
                     .keys()
                     .any(|name| extract::glob_matches(&selected.name, name));
         }
-        let matching = |versions: &BTreeSet<String>| match &selected.version {
-            Some(version) => versions
-                .iter()
-                .filter(|known| version_matches(version, known))
-                .count(),
-            None => versions.len(),
+        let version_ok = |known: &str| {
+            selected
+                .version
+                .as_deref()
+                .is_none_or(|version| version_matches(version, known))
         };
-        if let Some(versions) = self.local.get(&selected.name) {
-            // a manifest that inherits its version states none to check against
-            return selected.version.is_none() || versions.is_empty() || matching(versions) > 0;
+        match selected.source.as_deref() {
+            None => {
+                if let Some(versions) = self.local.get(&selected.name) {
+                    // a manifest that inherits its version states none to check
+                    return versions.is_empty() || versions.iter().any(|known| version_ok(known));
+                }
+            }
+            // a path source is a checkout package's
+            Some(source) if source.starts_with("path+") || source.starts_with("file:") => {
+                return self.local.contains_key(&selected.name);
+            }
+            Some(_) => {}
         }
         let Some(subcommand) = graph else {
             return false;
         };
-        let Some(versions) = self.locked.get(&selected.name) else {
+        let Some(locked) = self.locked.get(&selected.name) else {
             return false;
         };
-        let matching = matching(versions);
+        let matching = locked
+            .iter()
+            .filter(|locked| {
+                version_ok(&locked.version)
+                    && selected
+                        .source
+                        .as_deref()
+                        .is_none_or(|source| source_matches(source, locked.source.as_deref()))
+            })
+            .count();
         matching == 1 || (matching > 1 && subcommand == "clean")
     }
+}
+
+/// Whether the source of a package-ID spec (`registry+https://…/index`, or
+/// the URL without its kind) is the `known` source of a locked package, whose
+/// `?query` and `#revision` it need not spell.
+fn source_matches(spec: &str, known: Option<&str>) -> bool {
+    let Some(known) = known else {
+        return false;
+    };
+    let base = known.split(['?', '#']).next().unwrap_or(known);
+    let url = base.split_once('+').map_or(base, |(_, url)| url);
+    spec == known || spec == base || spec == url
 }
 
 /// Whether the version of a package-ID spec (`1`, `1.3`, `1.3.2`,
@@ -245,6 +283,7 @@ fn packages(root: &std::path::Path, known: &Known) -> anyhow::Result<Packages> {
     struct Locked {
         name: String,
         version: String,
+        source: Option<String>,
     }
     #[derive(Deserialize)]
     struct Named {
@@ -279,12 +318,12 @@ fn packages(root: &std::path::Path, known: &Known) -> anyhow::Result<Packages> {
     }
     let lock: Lock =
         toml::from_str(&crate::util::read("Cargo.lock")?).context("parsing Cargo.lock")?;
-    let mut locked: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut locked: BTreeMap<String, Vec<LockedVersion>> = BTreeMap::new();
     for package in lock.package {
-        locked
-            .entry(package.name)
-            .or_default()
-            .insert(package.version);
+        locked.entry(package.name).or_default().push(LockedVersion {
+            version: package.version,
+            source: package.source,
+        });
     }
     Ok(Packages {
         local: names,
