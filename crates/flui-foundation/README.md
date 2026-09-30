@@ -95,7 +95,8 @@ any_tree_id(render_id);
 
 | Kind | Types |
 |------|-------|
-| **Plain `Id<T>`** (1-based slab index) | `ViewId`, `LayerId`, `SemanticsId`, `ListenerId`, `ObserverId`, `FrameCallbackId`, `FrameId`, `TaskId`, `TickerId` |
+| **Plain `Id<T>`**, slab slot + 1 | `ViewId`, `LayerId`, `SemanticsId` |
+| **Plain `Id<T>`**, opaque counter (no slot) | `ListenerId`, `ObserverId`, `FrameCallbackId`, `FrameId`, `TaskId`, `TickerId` |
 | **Generational** (slab index + generation) | `ElementId`, `RenderId`, `RealmId`, `DataTransferId`, `PresentationId` |
 | **Composite** | `PresentationAddress` (a `RealmId` plus a `PresentationId`) |
 
@@ -239,7 +240,7 @@ pub trait Identifier {
 
 ### Index Offset Convention
 
-**CRITICAL**: for the `Id<T>` family (`ViewId`/`LayerId`/`SemanticsId`, …)
+**CRITICAL**: for the slab-backed plain ids (`ViewId`, `LayerId`, `SemanticsId`)
 the Slab uses 0-based indices while IDs use 1-based `NonZeroUsize` values:
 
 ```rust
