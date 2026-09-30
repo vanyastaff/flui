@@ -408,7 +408,10 @@ impl cosmic_text::Fallback for EmojiForbiddenFallback {
 /// turning the suite red. The generated fixtures exist for exactly this:
 /// `probe-mono-{100,600}.ttf` is one monospaced family at two weights, and
 /// `probe-variable-wght.ttf` carries an `fvar` `wght` axis over a
-/// `usWeightClass` of 400. See `tools/decoy-face/generate.py`.
+/// `usWeightClass` of 400 (see `tools/decoy-face/generate.py`).
+/// `requested_weights_resolve_to_ones_the_family_serves` in
+/// `tests/font_registration.rs` resolves styles against them, one row per
+/// arm.
 fn family_accepts_weight(db: &Database, family: &str, weight: u16) -> bool {
     db.faces()
         .filter(|face| face.families.iter().any(|(name, _)| name == family))
@@ -481,8 +484,8 @@ pub(crate) fn snap_weight(db: &Database, family: &Family<'_>, requested: u16) ->
     }
     carried.sort_unstable();
     carried.dedup();
-    // Pinned through this call, not only on the rule:
-    // `the_snap_takes_the_css_answer_not_the_nearest_one` drives a family
+    // Pinned through this call, not only on the rule: the
+    // `a_missing_weight_snaps_in_css_order_not_by_distance` row drives a family
     // carrying 100 and 600 at a W500 request, which is a case where CSS order
     // (100) and nearest-by-distance (600) disagree.
     css_nearest_weight(&carried, requested).unwrap_or(requested)
@@ -899,10 +902,6 @@ mod tests {
     /// removes the skip branch entirely — a Rust test that returns early is
     /// reported PASSED, so the old absent-font path needed
     /// `FLUI_REQUIRE_EMOJI_FONT` to stay honest, and now needs nothing.
-    ///
-    /// Its hermetic counterpart,
-    /// `an_uninstalled_family_shapes_in_the_bound_generic_both_ways`, pins the
-    /// same fix through family selection and needs no fixture at all.
     fn oversized_space_from_an_emoji_face_is_closed() {
         let style = styled(Some("CupertinoSystemText"));
         let fixture = || database(&[ROBOTO, DECOY_WIDE_SPACE]);
