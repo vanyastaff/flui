@@ -321,9 +321,11 @@ impl ParagraphLayout {
                 };
                 let range = line.text_range();
                 let with_newline = range.end.min(self.kept_text);
-                let text = &self.text[range.start.min(with_newline)..with_newline];
-                let end_index = range.start + text.trim_end_matches(is_break).len();
-                let visible_end = range.start + text[..end_index - range.start].trim_end().len();
+                let start = range.start.min(with_newline);
+                let text = &self.text[start..with_newline];
+                let without_newline = text.trim_end_matches(is_break);
+                let end_index = start + without_newline.len();
+                let visible_end = start + without_newline.trim_end().len();
                 LineMetrics::new(
                     line.break_reason() == BreakReason::Explicit,
                     f64::from(m.baseline - m.block_min_coord),
@@ -334,7 +336,7 @@ impl ParagraphLayout {
                     f64::from(self.line_start(m, box_width) + m.inline_min_coord + hang),
                     f64::from(m.baseline),
                     number,
-                    range.start.min(with_newline),
+                    start,
                     end_index,
                     visible_end,
                     with_newline,
