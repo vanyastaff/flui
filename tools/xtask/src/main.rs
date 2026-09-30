@@ -52,7 +52,7 @@ enum Command {
     Gate(tasks::GateArgs),
     /// Run the workspace test suite the way CI does.
     Test(tasks::TestArgs),
-    /// Link every example and bench with the test suite's features.
+    /// Link the examples and benches with the test suite's features.
     BuildAllTargets(tasks::BuildAllTargetsArgs),
     /// `gate`, `test` and the doctests: the local mirror of CI's required checks.
     Ci(tasks::CiArgs),

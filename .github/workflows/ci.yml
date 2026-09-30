@@ -42,7 +42,7 @@ name: CI
 #   miri           — UB check on flui-rendering's pipeline owner and
 #                    flui-view's GlobalKey plane
 #   macos-ci       — extended lane: `cargo xtask ci` + the iOS runner clippy on macos-latest
-#   test-windows   — extended lane: `cargo xtask test --fast` on windows-latest
+#   test-windows   — extended lane: `cargo xtask test` on windows-latest
 #   ci             — aggregator: designed to be the one status check branch
 #                    protection would name, if a ruleset required one — as of
 #                    this writing `main` has no required-status-checks rule
@@ -471,8 +471,9 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   # test — the workspace suite on Linux (`cargo xtask test --fast`: nextest
   # over TEST_SCOPE, then flui-platform under Xvfb), then the build that
-  # links every example and bench with the same features, so it compiles
-  # nothing twice. The nested-cargo group runs beside it in `test-nested`.
+  # links the examples and benches with the same features, so it compiles
+  # nothing twice (a target whose `required-features` the test scope leaves
+  # off is compiled per feature by `feature-matrix`, not linked). The nested-cargo group runs beside it in `test-nested`.
   # Windows and macOS run the suite in `test-windows` and `macos-ci`.
   # `cross-typecheck` is the only job touching the AppKit/Win32/Android
   # backends on a pull request, and it only type-checks them.
@@ -1492,7 +1493,7 @@ jobs:
         run: cargo clippy -p flui-app -p flui --locked --target aarch64-apple-ios -- -D warnings
 
   # ─────────────────────────────────────────────────────────────────────────
-  # test-windows — `cargo xtask test --fast` on windows-latest: the workspace
+  # test-windows — `cargo xtask test` on windows-latest: the workspace
   # suite on the platform day-to-day development happens on, which the Linux
   # `test` job cannot stand in for (paths, process spawning, the Win32
   # backend under the whole suite). Extended lane only: nightly, dispatch
@@ -1525,11 +1526,13 @@ jobs:
         with:
           tool: cargo-nextest@0.9
 
-      # The nested-cargo group (trybuild, generated projects, facade
-      # consumers) checks nothing host-specific, and Linux runs it in
-      # `test-nested`: here it was 17 of 51 minutes on a cold cache.
-      - name: cargo xtask test --fast
-        run: cargo xtask test --fast
+      # The whole suite, the nested-cargo group included: `cli_create`'s
+      # generated projects and the facade consumers run a native `cargo`
+      # on this host, with their own feature graphs, which Linux's
+      # `test-nested` cannot stand in for. It is 17 of the job's 51 minutes
+      # on a cold cache, paid only in the extended lane.
+      - name: cargo xtask test
+        run: cargo xtask test
 
   # ─────────────────────────────────────────────────────────────────────────
   # ci — aggregator over every job above (tokio pattern), designed so that a

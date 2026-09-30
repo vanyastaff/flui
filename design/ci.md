@@ -666,8 +666,9 @@ Decisions, each in `ci.yml` and `tools/xtask/src/change_scope/`:
    all-targets build with `TEST_SCOPE`'s features, which reuses the test build.
 3. **`test-nested` runs the nested-cargo group beside `test`** (`cargo xtask test --nested`), off
    the critical path: 5.7 of `test`'s ~10 min in run 36752979987. It restores `test`'s cache and
-   saves none of its own. `test-windows` runs `cargo xtask test --fast`: the group checks nothing
-   host-specific, and it was 17 of the job's 51 min on a cold cache (run 36663455643).
+   saves none of its own. `test-windows` keeps the whole suite: `cli_create`'s generated
+   projects and the facade consumers run a native `cargo` with their own feature graphs, so the
+   group is host-specific there, whatever its 17 of the job's 51 min (run 36663455643).
 4. **Advisory jobs whose own graduation rule is met are blocking**: `miri` (67 green runs, no
    red), `macos-ci` and `test-windows` (three green runs each, the rule their comments stated).
 5. **Single-entry matrices dropped** (`test`, `bench-compile`: `os: [ubuntu-latest]`, with a

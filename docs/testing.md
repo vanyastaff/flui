@@ -906,7 +906,7 @@ cargo xtask deps --strict --only advisories                   # same job: RustSe
 cargo bench -p flui-rendering --no-run                        # bench-compile job
 cargo xtask doc-strict                                        # doc job
 cargo xtask test --fast                                       # test job: nextest over the test scope, then flui-platform under Xvfb (FLUI_HEADLESS=1)
-cargo xtask build-all-targets                                 # same job: links the examples and benches with the test scope's features
+cargo xtask build-all-targets                                 # same job: links the examples and benches the test scope's features reach
 cargo xtask test --nested                                     # test-nested job: the nested-cargo group
 cargo nextest run -p flui-platform --locked [--all-features] --no-fail-fast                           # platform-windows job (windows-latest), both feature sets
 cargo test --workspace --locked --doc
@@ -1002,7 +1002,7 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `ios-runner` | `cargo xtask check-changed` (on a Mac with the iOS target) | the same iOS runner clippy as `cli-macos`, run in the wide lane when the change reaches `flui-app` or `flui` |
 | `standalone` | `cargo check --locked --all-targets --manifest-path <crate>/Cargo.toml` | tooling lane only, for each standalone crate the change touches; warnings are not denied (the crate is outside the workspace lints) |
 | `clippy` | `cargo xtask lint` (in `gate`) | — |
-| `test` | `cargo xtask test --fast`, then `cargo xtask build-all-targets` | the same commands; the all-targets build uses the test scope's features, so it links the examples and benches without rebuilding the rest (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-platform leg needs `xvfb-run` (Linux) |
+| `test` | `cargo xtask test --fast`, then `cargo xtask build-all-targets` | the same commands; the all-targets build uses the test scope's features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-platform leg needs `xvfb-run` (Linux) |
 | `test-nested` | `cargo xtask test --nested` | the nested-cargo group (trybuild, generated projects, facade consumers), beside `test`; `cargo xtask test` without a flag runs both |
 | `test-features` | the job's `cargo nextest run` lines (`ci-full` runs them) | — |
 | `live-smoke` | `cargo xtask live-smoke`, `cargo xtask live-smoke --wayland` | the job runs these two commands; Linux only (Xvfb, lavapipe, weston); `ci-full` runs them on Linux and says it skipped them elsewhere |
@@ -1018,7 +1018,7 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `cli-macos` | `cargo xtask test` (flui-cli's tests) + `cargo xtask cross-typecheck` (its iOS clippy line) | the same commands; they only mean "macOS" on a Mac |
 | `cross-typecheck` | `cargo xtask cross-typecheck` | needs the four targets (`cargo xtask doctor full`) |
 | `macos-ci` | `cargo xtask ci` + `cargo xtask cross-typecheck`'s iOS runner line (on a Mac) | the job runs the same commands on macos-latest; extended lane only |
-| `test-windows` | `cargo xtask test --fast` (on Windows) | the job runs the same command on windows-latest; extended lane only; the nested-cargo group runs on Linux (`test-nested`) |
+| `test-windows` | `cargo xtask test` (on Windows) | the job runs the same command on windows-latest, the nested-cargo group included (its generated projects and facade consumers run a native `cargo` there); extended lane only |
 | `ci` | — | CI only: the single check a ruleset would require. `cargo xtask ci-verify` verifies that every gated job ran and passed, and that the jobs which skipped are exactly those the lane skips |
 | `notify-main-red` | — | CI only: opens or updates the "CI is red on main" issue after a red run on main or nightly |
 

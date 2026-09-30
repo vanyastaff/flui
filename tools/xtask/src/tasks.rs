@@ -69,9 +69,12 @@ pub(crate) const TEST_SCOPE: [&str; 10] = [
 /// The features [`TEST_SCOPE`] turns on (see there for each one's reason).
 const TEST_FEATURES: &str = "flui/material,flui/cupertino,flui-devtools/agent";
 
-/// The only build that links every example and bench: the workspace's
+/// The build that links the examples and benches: the workspace's
 /// `--all-targets` with [`TEST_SCOPE`]'s features, so it reuses what a test
-/// run built instead of resolving features a second time.
+/// run built instead of resolving features a second time. Cargo skips a
+/// target whose `required-features` those features leave off (devtools'
+/// `profiler_demo`, the engine's `testing` benches): `feature-matrix`
+/// compiles them per feature, and nothing links them.
 fn build_all_targets() -> Cmd {
     Cmd::cargo([
         "build",
@@ -718,7 +721,7 @@ pub(crate) struct BuildAllTargetsArgs {
     run: RunOpts,
 }
 
-/// `cargo xtask build-all-targets`: link every example and bench (see [`build_all_targets`]).
+/// `cargo xtask build-all-targets`: link the examples and benches the test features reach (see [`build_all_targets`]).
 pub(crate) fn build_all_targets_task(args: &BuildAllTargetsArgs) -> anyhow::Result<ExitCode> {
     done(args.run.runner().run(&build_all_targets()))
 }
