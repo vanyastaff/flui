@@ -184,9 +184,7 @@ impl FontCollection {
             // the bytes.
             #[cfg(not(feature = "parley"))]
             None => {
-                let mut scratch = cosmic_text::fontdb::Database::new();
-                scratch.load_font_data(font_bytes.to_vec());
-                if scratch.is_empty() {
+                if !paints_a_face(font_bytes) {
                     return Err(RegisterFontError);
                 }
             }
@@ -205,6 +203,39 @@ impl FontCollection {
         self.0.generation.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
+
+    /// Whether [`Self::register_font`] would accept `font_bytes` on a
+    /// collection fed from the host: both the paint side and the measuring
+    /// side find a face in them. Changes nothing anywhere.
+    ///
+    /// For a caller that must answer for bytes before it has a collection
+    /// to register them on, such as the app holding a registration made
+    /// before its first window.
+    ///
+    /// # Errors
+    ///
+    /// [`RegisterFontError`] if either side finds no face in the bytes.
+    pub fn check_font(font_bytes: &[u8]) -> Result<(), RegisterFontError> {
+        #[cfg(feature = "parley")]
+        if ::swash::FontRef::from_index(font_bytes, 0).is_none()
+            || !measures_a_family(&parley::fontique::Blob::new(Arc::new(font_bytes.to_vec())))
+        {
+            return Err(RegisterFontError);
+        }
+        if paints_a_face(font_bytes) {
+            Ok(())
+        } else {
+            Err(RegisterFontError)
+        }
+    }
+}
+
+/// Whether fontdb, which the paint side loads faces with, finds a face in
+/// `font_bytes`, asked of a scratch database.
+fn paints_a_face(font_bytes: &[u8]) -> bool {
+    let mut scratch = cosmic_text::fontdb::Database::new();
+    scratch.load_font_data(font_bytes.to_vec());
+    !scratch.is_empty()
 }
 
 /// Whether fontique finds a family in `blob`, asked of a scratch collection
