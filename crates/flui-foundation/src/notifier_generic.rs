@@ -11,7 +11,7 @@
 //! `Notifier<()>` and the *status* channel is a `Notifier<AnimationStatus>`.
 //!
 //! It is also the core `ChangeNotifier` itself is seated on: `ChangeNotifier`
-//! wraps a `Notifier<()>` and adds only its Flutter-parity seams (the branded
+//! wraps a `Notifier<()>` and adds only its own seams (the branded
 //! use-after-dispose message, and `remove_listener` tolerating a disposed
 //! receiver via [`Notifier::remove_even_if_disposed`]).
 
@@ -150,11 +150,10 @@ impl<Arg> Notifier<Arg> {
     /// Remove a previously registered listener. No-op if absent.
     ///
     /// Unlike `ChangeNotifier::remove_listener` (which tolerates post-dispose
-    /// removal for Flutter parity), this generic notifier keeps its disposed
-    /// gate: it has no Flutter reference contract, and `ListenerRegistry`'s
-    /// Status-channel guard depends on the current shape. The parity
-    /// behaviour lives in [`Self::remove_even_if_disposed`], which
-    /// `ChangeNotifier` delegates to.
+    /// removal), this generic notifier keeps its disposed gate:
+    /// `ListenerRegistry`'s Status-channel guard depends on the current shape.
+    /// The tolerant behaviour lives in [`Self::remove_even_if_disposed`],
+    /// which `ChangeNotifier` delegates to.
     pub fn remove(&self, id: ListenerId) {
         if self.check_disposed() {
             return;
@@ -165,9 +164,9 @@ impl<Arg> Notifier<Arg> {
     /// [`Self::remove`] without the disposed gate: always a silent no-op on a
     /// disposed channel (whose listener map is already empty).
     ///
-    /// This is the Flutter-parity flavour `ChangeNotifier::remove_listener`
-    /// needs — `ChangeNotifier.removeListener` upstream carries no
-    /// `debugAssertNotDisposed` so teardown code can always detach.
+    /// This is the flavour `ChangeNotifier::remove_listener` needs, so that
+    /// teardown code can always detach without tripping a use-after-dispose
+    /// check.
     pub fn remove_even_if_disposed(&self, id: ListenerId) {
         drop(self.extract_locked(|listeners| listeners.remove(&id)));
     }

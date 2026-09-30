@@ -1,14 +1,5 @@
 //! Tests for the route stack.
 //!
-//! # Parity oracles
-//!
-//! `.flutter/packages/flutter/test/widgets/navigator_test.dart` —
-//! `'Can push, pop, and replace in sequence'`, `'Push and pop should trigger the
-//! observers'`, `'initial route trigger observer in the right order'`,
-//! `'pushReplacement correctly reports didReplace to the observer'`,
-//! `'removeRoute'`, `'remove a route whose value is awaited'`.
-//! Expected values are read from `navigator.dart`, not from running this code.
-//!
 //! Every test here constructs a `RouteHistory` and nothing else. No element tree,
 //! no build owner, no render pipeline, no overlay.
 
@@ -46,7 +37,7 @@ type Log = Arc<Mutex<Vec<Event>>>;
 struct Probe {
     settings: RouteSettings,
     log: Log,
-    /// Flutter's `currentResult` fallback.
+    /// The `current_result` fallback.
     current_result: Option<i32>,
     /// Whether `did_pop` consents. `false` models `LocalHistoryRoute`.
     consents_to_pop: bool,
@@ -150,9 +141,8 @@ fn boxed(value: i32) -> super::route::AnyResult {
 // 3-5. RESULT CHANNEL
 // ============================================================================
 
-/// The completer fires exactly once. Dart's `Completer.complete` throws on the
-/// second call; `_RouteEntry.complete`'s `>= remove` early-return
-/// (`navigator.dart:3431`) is what stops it being reached.
+/// The completer fires exactly once: `RouteEntry::arm_complete`'s
+/// `>= remove` early-return is what stops a second completion being reached.
 ///
 /// Red-check: delete that early-return in `RouteEntry::arm_complete`; the second
 /// `remove_route` re-arms a disposed-or-removing entry.
@@ -197,8 +187,8 @@ fn double_pop_or_double_remove_does_not_double_complete() {
 // 10. RE-ENTRANCY
 // ============================================================================
 
-/// A **directly recursive** `flush` is still forbidden and still loud
-/// (`navigator.dart:4452-4453`). This is framework misuse, so `PANIC-POLICY`
+/// A **directly recursive** `flush` is still forbidden and still loud.
+/// This is framework misuse, so `PANIC-POLICY`
 /// permits the panic.
 ///
 /// The route-binding command queue did **not** relax this. What changed is that
@@ -242,8 +232,7 @@ fn reentrant_flush_panics_with_bug() {
 struct SeamRoute {
     settings: RouteSettings,
     binding: Option<RouteBinding>,
-    /// Raised from `did_pop`, i.e. inside the flush that pops it — Flutter's
-    /// `OverlayRoute.didPop` → `navigator.finalizeRoute` (`routes.dart:87-94`).
+    /// Raised from `did_pop`, i.e. inside the flush that pops it.
     finalize_on_pop: bool,
     push: PushCompletion,
     finished_when_popped: bool,
@@ -320,8 +309,7 @@ fn binding_for(history: &RouteHistory, id: RouteId) -> RouteBinding {
 }
 
 /// A route raising `finalize()` from `did_pop` — i.e. **inside** the flush that
-/// pops it — must not re-enter `flush`. Flutter's `finalizeRoute` handles this
-/// with `if (!_flushingHistory)` (`navigator.dart:5825-5828`); FLUI enqueues a
+/// pops it — must not re-enter `flush`. The binding enqueues a
 /// `RouteCommand` and the running flush drains it, costing one extra pass.
 ///
 /// Before the command queue existed this shape was structurally unreachable. It is the reason the

@@ -3,11 +3,11 @@
 //!
 //! # What this is
 //!
-//! Flutter's `SliverMultiBoxAdaptorElement` is the element responsible for
-//! lazily building and disposing the children of a `RenderSliverMultiBoxAdaptor`
-//! (and its subclasses `RenderSliverList` / `RenderSliverGrid`). FLUI splits
-//! this responsibility across two crates AND generalizes it over the render
-//! object family via one trait, [`LazyMultiBoxRender`]:
+//! The adaptor element is responsible for lazily building and disposing the
+//! children of a multi-box sliver render object (`RenderSliverList`,
+//! `RenderSliverGrid`, …). The responsibility is split across two crates and
+//! generalized over the render object family via one trait,
+//! [`LazyMultiBoxRender`]:
 //!
 //! - **Render half** (`flui-objects`): a concrete `RenderSliver` implementor
 //!   (`RenderSliverList`, `RenderSliverGrid`, …) — emits build requests via
@@ -77,7 +77,7 @@ use crate::{
     view::{RenderView, View},
 };
 
-/// A delegate's key → index callback (Flutter's `findChildIndexCallback`).
+/// A delegate's key → index callback.
 pub(crate) type FindIndexByKey = Rc<dyn Fn(&dyn ViewKey) -> Option<usize>>;
 
 /// A delegate's item factory: the view at a logical index, `None` past the end.
@@ -135,11 +135,9 @@ pub trait LazyMultiBoxRender:
 ///
 /// A builder delegate always must: it is an opaque closure that may read
 /// state the adaptor cannot see, so a reused `Rc` says nothing about its
-/// output (Flutter's `SliverChildBuilderDelegate.shouldRebuild` is always
-/// `true`). A static delegate's output is a function of its identity, so two
+/// output. A static delegate's output is a function of its identity, so two
 /// adaptors over the same [`StaticChildren`] (same builder and key callback
-/// `Rc`s, same count) are the same delegate (`SliverChildListDelegate.
-/// shouldRebuild` is `children != oldDelegate.children`). Config changes
+/// `Rc`s, same count) are the same delegate. Config changes
 /// reach the render object through `update_render_object` and need no
 /// resident refresh.
 fn delegate_changed<R: LazyMultiBoxRender>(
@@ -159,10 +157,8 @@ fn delegate_changed<R: LazyMultiBoxRender>(
 /// A fixed `Vec<BoxedView>` served by index, with the key → index map that
 /// lets a keyed child whose data moved be found without a callback.
 ///
-/// Flutter's `SliverChildListDelegate` (`widgets/scroll_delegate.dart`):
-/// `build` answers `None` out of range, `findIndexByKey` consults a lazily
-/// filled `_keyToIndex`, and two delegates compare by the identity of their
-/// `children`. The map here is built on the first lookup, keyed by
+/// `build` answers `None` out of range, and two delegates compare by the
+/// identity of their `children`. The key map is built on the first lookup, keyed by
 /// `key_hash` and decided by `key_eq` inside the bucket; the adaptor's
 /// reconcile hands the callback the item's own key (the per-item wrapper's
 /// salt is stripped before the call).
@@ -176,8 +172,7 @@ pub struct StaticChildren {
     /// The builder and key callback handed to adaptors, created once: two
     /// adaptors built over one delegate carry the same `Rc`s, which is what
     /// the adaptor's update compares to decide whether the residents need
-    /// a refresh (Flutter's `SliverChildListDelegate.shouldRebuild` is
-    /// `children != oldDelegate.children` — identity).
+    /// a refresh (identity of the children decides).
     delegate_pair: std::cell::OnceCell<(ItemBuilder, FindIndexByKey)>,
 }
 
@@ -329,8 +324,7 @@ pub struct SliverMultiBoxAdaptor<R: LazyMultiBoxRender> {
     /// the adaptor keeps it alive (its closures hold only weak references)
     /// and compares it by identity on update. `None` for an opaque builder
     /// closure, which may read state the adaptor cannot see and is
-    /// re-consulted on every update (Flutter's
-    /// `SliverChildBuilderDelegate.shouldRebuild` is always `true`).
+    /// re-consulted on every update.
     pub(crate) static_children: Option<Rc<StaticChildren>>,
     /// Total number of items in the data source.
     pub(crate) item_count: ItemCount,
@@ -339,7 +333,7 @@ pub struct SliverMultiBoxAdaptor<R: LazyMultiBoxRender> {
     pub(crate) builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
     /// Maps an item's key to its current index in the data source, so a
     /// keyed child whose data moved *out of the resident band* is still
-    /// found and its state kept — Flutter's `findChildIndexCallback`. Keyed
+    /// found and its state kept. Keyed
     /// moves *within* the band need no callback: the reconcile matches
     /// residents by key on its own.
     pub(crate) find_index_by_key: Option<FindIndexByKey>,
@@ -555,9 +549,7 @@ pub(crate) struct SliverAdaptorManager<R: LazyMultiBoxRender> {
     /// Set by [`SliverAdaptorBehavior::on_view_updated`] whenever the parent
     /// hands this element a new view; consumed (and cleared) by the next
     /// `service` call, which re-consults `builder` for every currently-
-    /// resident index via `SparseChildren::reconcile`. Mirrors Flutter's
-    /// `SliverChildBuilderDelegate.shouldRebuild => true` default
-    /// (`widgets/scroll_delegate.dart`, tag `3.44.0`): a delegate change
+    /// resident index via `SparseChildren::reconcile`. A delegate change
     /// re-builds every resident child, not only newly-visible ones.
     ///
     /// The "next `service` call" is guaranteed to land in the SAME frame as
@@ -617,8 +609,7 @@ impl<R: LazyMultiBoxRender> ChildManager for SliverAdaptorManager<R> {
         // the new band but whose data moved inside it is relocated by the
         // reconcile, and only then does the band eviction judge it — by its
         // new index. Evicting first destroyed such a resident and the
-        // request pass mounted fresh state (Flutter runs `performRebuild`'s
-        // remap before `collectGarbage` for the same reason).
+        // request pass mounted fresh state.
         let refresh_did_work = if self.needs_resident_refresh {
             self.needs_resident_refresh = false;
             let outcome = self.sparse_children.reconcile(
@@ -685,8 +676,7 @@ impl<R: LazyMultiBoxRender> ChildManager for SliverAdaptorManager<R> {
                 None => {
                     // The builder declined: the data source ends here. The
                     // render object's count follows, so the next pass reports
-                    // the real extent and the viewport clamps (Flutter's
-                    // `childCount` / `addInitialChild` failing → max extent).
+                    // the real extent and the viewport clamps.
                     reached_end_at =
                         Some(reached_end_at.map_or(logical_index, |end| end.min(logical_index)));
                 }
@@ -975,7 +965,7 @@ where
         // Refresh the stored builder and flag the resident children for
         // re-consultation on the next `service` call — see
         // `SliverAdaptorManager::needs_resident_refresh`'s doc comment for
-        // the Flutter contract this mirrors and why it is needed at all
+        // the contract and why it is needed at all
         // (`SparseChildren::ensure` is otherwise idempotent for an
         // already-built index, so without this an already-resident child
         // would show stale content forever across a `pump_widget` root-swap
@@ -994,11 +984,8 @@ where
 
         if !delegate_changed(old_view, core.view()) {
             // Same builder, same key callback, same count: the residents
-            // cannot read differently — Flutter's `SliverChildListDelegate.
-            // shouldRebuild` (`children != oldDelegate.children`) says the
-            // same for a list handed over unchanged; a builder delegate is a
-            // fresh closure per build and never compares equal, exactly as
-            // `SliverChildBuilderDelegate.shouldRebuild` is always true.
+            // cannot read differently. A builder delegate is a fresh closure
+            // per build and never compares equal, so it always refreshes.
             //
             // A changed mapping is the exception, and it is why this is not a
             // bare return. The residents read the same content but must
@@ -1233,20 +1220,16 @@ impl From<usize> for ItemCount {
 
 /// Resolve an [`ItemCount::Unknown`] by probing `builder` for its end.
 ///
-/// Doubling search for an upper bound, then bisection — Flutter's
-/// `SliverMultiBoxAdaptorElement.childCount`, which does the same walk. Two
-/// differences, both deliberate:
+/// Doubling search for an upper bound, then bisection. Two properties, both
+/// deliberate:
 ///
-/// * **It probes, it does not build.** Flutter's search calls `_build`, which
-///   inflates a widget inside a `buildScope` for every probe; the reference's
-///   own doc tells callers to supply a count "to avoid the cost of searching".
-///   Here the builder returns a view *value* and nothing is mounted, so the
-///   search costs `2·log₂(n)` closure calls and the allocations they make.
-/// * **The overflow case cannot throw.** Flutter raises a `FlutterError` when
-///   even `i64::MAX` yields a child. A builder that answers `Some` for every
-///   index is infinite, which is a legitimate thing to write, so the search
-///   reports `usize::MAX` and lets the caller's window bound it — the same
-///   answer the unbounded-window path already gives.
+/// * **It probes, it does not build.** The builder returns a view *value* and
+///   nothing is mounted, so the search costs `2·log₂(n)` closure calls and the
+///   allocations they make. Supplying the count is still the cheaper option.
+/// * **The overflow case cannot throw.** A builder that answers `Some` for
+///   every index is infinite, which is a legitimate thing to write, so the
+///   search reports `usize::MAX` and lets the caller's window bound it — the
+///   same answer the unbounded-window path already gives.
 ///
 /// Every probe goes through `build_item_or_error`, the same boundary the
 /// adaptor's own builder calls use, so a panicking builder does not unwind out
@@ -1258,9 +1241,8 @@ impl From<usize> for ItemCount {
 /// builder that panics everywhere.
 ///
 /// The view a probe builds is discarded. A builder with side effects per index
-/// therefore sees calls for indices that are never mounted, which is true of
-/// Flutter's search too and is why both document supplying the count as the
-/// cheaper option.
+/// therefore sees calls for indices that are never mounted, which is why
+/// supplying the count is the cheaper option.
 #[must_use]
 pub fn probe_item_count(builder: &dyn Fn(usize) -> Option<BoxedView>) -> usize {
     // `lo` is a count known to be reachable (every index below it exists);
@@ -1282,9 +1264,8 @@ pub fn probe_item_count(builder: &dyn Fn(usize) -> Option<BoxedView>) -> usize {
         hi = hi.saturating_mul(2);
         if hi == usize::MAX && exists(usize::MAX - 1) {
             // Even the last representable index yields a child, so the source
-            // is unbounded in any sense that matters. Flutter raises a
-            // `FlutterError` here; an always-`Some` builder is a legitimate
-            // infinite source, so this reports the sentinel the
+            // is unbounded in any sense that matters. An always-`Some`
+            // builder is a legitimate infinite source, so this reports the sentinel the
             // unbounded-window path already handles.
             return usize::MAX;
         }
@@ -1334,18 +1315,16 @@ impl SliverList {
     /// Construct a lazy-sliver adaptor that interleaves `item_count` items
     /// with separators placed between them.
     ///
-    /// Mirrors Flutter's `SliverList.separated` named constructor
-    /// (`widgets/sliver.dart` `SliverList.separated`, tag `3.44.0`): even
-    /// logical indices delegate to `item_builder(index / 2)`, odd logical
+    /// Even logical indices delegate to `item_builder(index / 2)`, odd logical
     /// indices to `separator_builder((index - 1) / 2)`. The effective child
     /// count is `2 * item_count - 1` for `item_count > 0`, and `0` when
-    /// `item_count` is `0` — Flutter's own `math.max(0, itemCount * 2 - 1)`.
+    /// `item_count` is `0`.
     ///
     /// This is an inherent `SliverList` constructor, not a `flui-widgets`
     /// wrapper type, because `.separated` produces the exact same
     /// `SliverList` view FLUI already has — just a different interleaving
-    /// builder — mirroring how Flutter's own `.builder`/`.separated`/`.list`
-    /// all construct one `SliverList` widget class.
+    /// builder; `new`, `separated` and `list` all construct one `SliverList`
+    /// view.
     ///
     /// # Panics
     ///
@@ -1365,17 +1344,15 @@ impl SliverList {
             .saturating_sub(1);
         let builder: Rc<dyn Fn(usize) -> Option<BoxedView>> = Rc::new(move |index: usize| {
             // Out-of-range consultation answers `None` before either
-            // user builder runs — `SliverChildBuilderDelegate.build`'s own
-            // index guard (`widgets/scroll_delegate.dart`, tag `3.44.0`).
+            // user builder runs.
             if index >= child_count {
                 return None;
             }
             if index.is_multiple_of(2) {
                 (item_builder)(index / 2)
             } else {
-                // Flutter's `SliverList.separated` asserts the separator
-                // builder returns a widget; a `None` here would silently
-                // truncate the list at the first separator instead.
+                // The separator builder must return a view; a `None` here
+                // would silently truncate the list at the first separator.
                 let separator = (separator_builder)((index - 1) / 2);
                 debug_assert!(
                     separator.is_some(),
@@ -1410,20 +1387,16 @@ impl SliverList {
     /// Construct a lazy-sliver adaptor over a fixed list of pre-built child
     /// views.
     ///
-    /// Mirrors Flutter's `SliverList.list` named constructor
-    /// (`widgets/sliver.dart` `SliverList.list`, tag `3.44.0`), backed by
-    /// `SliverChildListDelegate`: logical index `i` serves `children[i]`.
+    /// Logical index `i` serves `children[i]`.
     ///
-    /// FLUI's lazy-adaptor protocol may re-consult the builder for an
+    /// The lazy-adaptor protocol may re-consult the builder for an
     /// already-resident index (`SparseChildren::refresh_resident`, driven by
     /// `SliverAdaptorManager`'s internal `needs_resident_refresh` flag), so
     /// an owned `Vec<BoxedView>` cannot be handed out by value more than
     /// once. Each call instead clones the stored [`BoxedView`] — a real,
     /// deep `dyn_clone` of the underlying view (`BoxedView`'s own `Clone`
     /// impl, `crates/flui-view/src/view/into_view.rs`), not a shared handle
-    /// — which mirrors Flutter's own semantics: `SliverChildListDelegate.build`
-    /// hands back the same immutable `Widget` value on every call, and
-    /// FLUI's clone reproduces an equivalent view every time.
+    /// — so every call reproduces an equivalent view.
     ///
     /// # Panics
     ///
@@ -1434,7 +1407,7 @@ impl SliverList {
 
     /// The same as [`Self::list`] over an already shared delegate: two views
     /// built over one `Rc` compare as the same delegate on update, so the
-    /// residents are not refreshed (Flutter's `shouldRebuild` by identity).
+    /// residents are not refreshed (identity decides).
     #[must_use]
     pub fn over(item_extent_estimate: f64, children: &Rc<StaticChildren>) -> Self {
         Self::new(0, item_extent_estimate, Rc::new(|_| None)).over_static_children(children)
@@ -1485,8 +1458,7 @@ impl SliverGrid {
     }
 
     /// A grid over a fixed list of children, served lazily by index with the
-    /// delegate's key map (Flutter's `SliverGrid` with a
-    /// `SliverChildListDelegate`).
+    /// delegate's key map.
     #[must_use]
     pub fn list(
         grid_delegate: Arc<dyn flui_rendering::delegates::SliverGridDelegate>,
@@ -1552,7 +1524,6 @@ impl LazyMultiBoxRender for RenderSliverFixedExtentList {
 
 /// A lazily built list whose children all share one main-axis extent: the
 /// index math needs no measurement, so any offset is a multiplication.
-/// Flutter's `SliverFixedExtentList`.
 pub type SliverFixedExtentList = SliverMultiBoxAdaptor<RenderSliverFixedExtentList>;
 
 impl SliverFixedExtentList {
@@ -1787,8 +1758,8 @@ mod probe_tests {
 /// derivation from the logical index alone would announce the separators and
 /// give the real items positions 1, 3, 5.
 ///
-/// FLUI's shape of Flutter's `semanticIndexCallback` + `semanticIndexOffset`,
-/// with one difference that matters: **the size travels with the mapping**. A
+/// The membership rule, the offset and the set size form one value: **the size
+/// travels with the mapping**. A
 /// rule saying which children are members and a count that disagrees with it is
 /// the drift this whole design exists to prevent, so neither is settable alone.
 #[derive(Clone)]
@@ -1799,11 +1770,8 @@ pub struct SemanticSetMapping {
     set_size: Option<i32>,
     /// Added to every position this mapping produces.
     ///
-    /// Flutter's `semanticIndexOffset`, and for the reason its docs give:
-    /// "If multiple delegates are used in a single scroll view, then the
-    /// indexes will not be correct by default." Two slivers in one viewport
-    /// each number their own children from zero — which is the reference's
-    /// default too — so a caller composing them offsets the second by the
+    /// Two slivers in one viewport each number their own children from zero
+    /// by default, so a caller composing them offsets the second by the
     /// first's member count to make the whole scroll view read monotonically.
     offset: i32,
 }

@@ -48,7 +48,7 @@
 //!   `Family::SansSerif`; the binding above points that generic at a carried
 //!   family whenever the database holds any Latin-capable face. This is
 //!   the Cupertino path, whose roles all name `CupertinoSystemText` — a family
-//!   Flutter's engine aliases to San Francisco and that exists nowhere else.
+//!   the platform aliases to San Francisco and that exists nowhere else.
 //!
 //! * The requested **weight**, snapped to one the resolved family can serve
 //!   ([`snap_weight`]). Not snapping was tried first, on the reasoning that
@@ -768,16 +768,15 @@ mod tests {
         FontSystem::new_with_locale_and_db("en-US".to_owned(), db)
     }
 
-    /// The recorded divergence from Flutter, pinned so it cannot drift
-    /// unnoticed in either direction.
+    /// The recorded limitation of family-level fallback, pinned so it cannot
+    /// drift unnoticed in either direction.
     ///
-    /// Flutter searches `fontFamilyFallback` **per glyph**: a family that is
-    /// installed but lacks the glyph is skipped and the next one is tried
-    /// (`painting/text_style.dart`, the `fontFamily` doc). `Attrs::family`
+    /// A per-glyph fallback search would skip an installed family that lacks
+    /// the glyph and try the next one. `Attrs::family`
     /// holds exactly one family, so the walk here can only ask "is this
     /// family installed" — and `Material Icons` IS installed while carrying no
     /// Latin at all. The chain therefore stops on it, and the `Roboto` entry
-    /// behind it is never reached; Flutter would render the text.
+    /// behind it is never reached; a per-glyph search would render the text.
     ///
     /// The two directions this guards:
     ///
@@ -790,7 +789,7 @@ mod tests {
     /// The control matters: the same chain with an ABSENT primary reaches
     /// `Roboto`, so the stop is about presence and not about the chain being
     /// unread.
-    fn a_present_but_narrow_family_stops_the_chain_where_flutter_would_not() {
+    fn a_present_but_narrow_family_stops_the_chain_without_per_glyph_fallback() {
         let mut system = font_system(database(&[ROBOTO, MATERIAL_ICONS]));
         let mut installed = InstalledFamilies::default();
 
@@ -803,7 +802,7 @@ mod tests {
             resolve_family(Some(&narrow), &mut system, &mut installed, 0),
             Family::Name("Material Icons"),
             "an installed family stops the walk even though it carries no \
-             Latin -- Flutter would fall through to Roboto per glyph"
+             Latin -- fallback is per style, not per glyph"
         );
 
         let absent = TextStyle {
@@ -944,7 +943,7 @@ mod tests {
         let cases: [(&str, fn()); 2] = [
             (
                 "a_present_but_narrow_family_stops_the_chain",
-                a_present_but_narrow_family_stops_the_chain_where_flutter_would_not,
+                a_present_but_narrow_family_stops_the_chain_without_per_glyph_fallback,
             ),
             (
                 "oversized_space_from_an_emoji_face_is_closed",

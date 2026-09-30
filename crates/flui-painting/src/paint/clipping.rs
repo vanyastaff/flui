@@ -17,7 +17,7 @@ pub enum ClipOp {
 
 /// The quality (and cost) with which content is clipped.
 ///
-/// Ordered from cheapest to most expensive; mirrors Flutter's `Clip` enum.
+/// Ordered from cheapest to most expensive.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Clip {

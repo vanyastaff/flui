@@ -1,10 +1,10 @@
-//! Host-side worker dylib loader (Flutter-parity hot reload).
+//! Host-side worker dylib loader (state-preserving hot reload).
 //!
 //! Unlike [`ScenePlugin`](crate::ScenePlugin), a worker plugin does **not** own
 //! the widget pipeline. It exports an `init` entry point that registers reloadable
 //! `build()` implementations while the host binary retains element tree state.
 //!
-//! See `docs/designs/2026-06-28-flutter-parity-hot-reload.md`.
+//! See `docs/designs/2026-06-28-hot-reload-runtime-protocol.md`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

@@ -1,8 +1,7 @@
 //! `RenderAlign` — positions a single child according to an [`Alignment`].
 //!
-//! Mirrors Flutter's `RenderPositionedBox` (`rendering/shifted_box.dart`).
-//! Stores a **resolved** [`Alignment`] (not `AlignmentGeometry` — RTL wiring
-//! is Phase 4).
+//! Stores a **resolved** [`Alignment`] (not `AlignmentGeometry`); RTL
+//! resolution is not wired in yet.
 //!
 //! Width and height factors are optional multipliers that control how much of
 //! the parent's space this object claims when an axis is unconstrained.  See
@@ -28,7 +27,7 @@ use flui_rendering::{
 
 /// Computes the parent size for a positioned box (Align / Center).
 ///
-/// Mirrors Flutter `RenderPositionedBox.performLayout` sizing branches:
+/// Sizing branches:
 ///
 /// - `shrink_width = width_factor.is_some() || max_width.is_infinite()`
 ///   → shrinking: `width = child_width * width_factor.unwrap_or(1.0)`;
@@ -61,8 +60,8 @@ pub(crate) fn positioned_box_size(
 
 /// Computes the no-child size for a positioned box.
 ///
-/// When there is no child, Flutter uses `0` for a shrinking axis and
-/// `double.infinity` for an expanding axis.
+/// When there is no child, a shrinking axis is `0` and an expanding axis is
+/// infinite (clamped by `constrain`).
 pub(crate) fn positioned_box_size_no_child(
     constraints: &BoxConstraints,
     width_factor: Option<f64>,
@@ -86,12 +85,9 @@ pub(crate) fn positioned_box_size_no_child(
 /// or the axis is unconstrained, the object shrinks to `child_size * factor`
 /// (or `child_size * 1.0 = child_size` when only the unbounded flag fires).
 ///
-/// Factors must be `>= 0.0` (asserted in debug builds, matching Flutter).
+/// Factors must be `>= 0.0` (asserted in debug builds).
 ///
-/// # Flutter parity
-///
-/// Mirrors `RenderPositionedBox` from `rendering/shifted_box.dart`.  RTL
-/// resolution (`AlignmentGeometry` + `text_direction`) is deferred to Phase 4.
+/// RTL resolution (`AlignmentGeometry` + `text_direction`) is not wired in yet.
 #[derive(Debug, Clone)]
 pub struct RenderAlign {
     inner: AligningShiftedBox,
@@ -115,10 +111,7 @@ impl RenderAlign {
     /// expanding to the parent's max width.
     #[must_use]
     pub fn with_width_factor(mut self, factor: f64) -> Self {
-        debug_assert!(
-            factor >= 0.0,
-            "width_factor must be >= 0.0 (got {factor}); Flutter asserts the same"
-        );
+        debug_assert!(factor >= 0.0, "width_factor must be >= 0.0 (got {factor})");
         self.width_factor = Some(factor);
         self
     }
@@ -129,10 +122,7 @@ impl RenderAlign {
     /// than expanding to the parent's max height.
     #[must_use]
     pub fn with_height_factor(mut self, factor: f64) -> Self {
-        debug_assert!(
-            factor >= 0.0,
-            "height_factor must be >= 0.0 (got {factor}); Flutter asserts the same"
-        );
+        debug_assert!(factor >= 0.0, "height_factor must be >= 0.0 (got {factor})");
         self.height_factor = Some(factor);
         self
     }
@@ -274,8 +264,8 @@ impl RenderBox for RenderAlign {
             self.width_factor,
             self.height_factor,
         );
-        // Mirror Flutter RenderPositionedBox.computeDryBaseline:
-        //   resolvedAlignment.alongOffset(size − childSize).dy + childBaseline
+        // Dry baseline = the alignment's vertical offset of the child inside
+        // the parent, plus the child's baseline.
         let child_offset_dy = self.inner.dry_child_offset(parent_size, child_size).dy;
         Some(child_baseline + child_offset_dy)
     }

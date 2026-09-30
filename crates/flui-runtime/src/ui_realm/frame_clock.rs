@@ -2,7 +2,7 @@
 
 use super::UiRealm;
 use crate::presentation::PresentationState;
-use crate::renderer_binding::RenderingFlutterBinding;
+use crate::renderer_binding::RenderingBinding;
 use flui_animation::Vsync;
 use flui_platform_api::HapticFeedback;
 use flui_rendering::binding::RendererBinding as _;
@@ -24,7 +24,7 @@ impl UiRealm {
                       this accessor exists for tests and future external callers"
         )
     )]
-    pub(crate) fn renderer(&self) -> &RenderingFlutterBinding {
+    pub(crate) fn renderer(&self) -> &RenderingBinding {
         self.presentations.primary().renderer()
     }
 
@@ -81,7 +81,7 @@ impl UiRealm {
     /// 2. the timestamp of the frame [`Self::pump`] is running — the one
     ///    instant its [`FrameClockSource`](crate::pump::FrameClockSource)
     ///    returned, so `Vsync` controllers advance on the frame's clock, as
-    ///    Flutter's tickers see the frame's timestamp;
+    ///    every ticker sees the frame's timestamp;
     /// 3. the realm's clock source now, for a frame driven outside a pump
     ///    (the wall clock for a host's `ClockSource::Platform`).
     pub(super) fn now_secs(&self) -> f64 {
@@ -317,7 +317,7 @@ impl UiRealm {
     // ========================================================================
     // First-frame deferral and frame accounting (moved from the retired
     // `AppBinding`; the deferral gate itself is re-homed from
-    // `RenderingFlutterBinding`'s own counter onto the primary presentation's
+    // `RenderingBinding`'s own counter onto the primary presentation's
     // `FrameClock` — see `render_frame`'s own doc for the submit-gate
     // check that is the actual production consumer now)
     // ========================================================================
@@ -343,12 +343,11 @@ impl UiRealm {
     /// [`FrameClock::lift`](flui_scheduler::FrameClock::lift).
     ///
     /// A deferred pump's segment already ran and produced a real (withheld)
-    /// scene — see `FrameClock`'s module doc's `.flutter/` citation — so
+    /// scene — see `FrameClock`'s module doc — so
     /// `poll` already cleared that demand; there is nothing retained for a
-    /// bare `lift()` alone to produce from. FLUI has no retained-scene
-    /// layer to fall back on the way Flutter's `scheduleWarmUpFrame`
-    /// re-composites the retained layer tree (see
-    /// `RenderingFlutterBinding::redirty_root_for_represent`'s own doc for
+    /// bare `lift()` alone to produce from. There is no retained-scene
+    /// layer to fall back on and re-composite (see
+    /// `RenderingBinding::redirty_root_for_represent`'s own doc for
     /// the identical problem that method exists to solve), so this method
     /// re-dirties the root itself whenever it actually lifts an active
     /// deferral — the withheld work does not sit blank until some UNRELATED

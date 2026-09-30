@@ -8,13 +8,8 @@
 //! top safe-area inset — is [`AppBar`], reused whole. The scrolling box —
 //! extent interpolation, pinning, floating re-reveal — is
 //! [`SliverPersistentHeader`] over the four persistent-header render
-//! objects. What this widget owns is exactly what Flutter's
-//! `_SliverAppBarDelegate` owns: the extent arithmetic joining the two, and
-//! the layering of `flexible_space` behind the toolbar.
-//!
-//! Flutter parity: `material/app_bar.dart` `SliverAppBar` /
-//! `_SliverAppBarDelegate` (extent formulas cross-checked at
-//! `app_bar.dart:1339-1345` and `:2092-2094`).
+//! objects. What this widget owns is the extent arithmetic joining the two,
+//! and the layering of `flexible_space` behind the toolbar.
 //!
 //! # Deferred, deliberately
 //!
@@ -149,8 +144,7 @@ impl SliverAppBar {
     }
 
     /// Sets the bottom widget (a tab bar, say). See [`AppBar::bottom`]; its
-    /// preferred height joins the extent arithmetic exactly as Flutter's
-    /// `_bottomHeight` does.
+    /// preferred height joins the extent arithmetic.
     #[must_use]
     pub fn bottom(mut self, bottom: impl PreferredSizeView) -> Self {
         self.bottom_height = bottom.preferred_size().height;
@@ -208,9 +202,8 @@ impl SliverAppBar {
 
     /// Snap a [`floating`](Self::floating) bar fully open when a scroll
     /// gesture toward the start ends, instead of leaving it partially
-    /// revealed. Ignored unless `floating` is also set, matching Flutter's
-    /// contract. The animation uses the oracle's defaults (`Curves.ease`,
-    /// 300ms — `rendering/sliver_persistent_header.dart:488-491`).
+    /// revealed. Ignored unless `floating` is also set. The animation uses
+    /// the default snap curve and duration (`Curves.ease`, 300ms).
     #[must_use]
     pub fn snap(mut self, snap: bool) -> Self {
         self.snap = snap;
@@ -235,9 +228,9 @@ impl std::fmt::Debug for SliverAppBar {
     }
 }
 
-/// The extent pair for a sliver app bar, in Flutter's own formulas.
+/// The extent pair for a sliver app bar.
 ///
-/// `app_bar.dart:2092-2094`: collapsed = (collapsedHeight ?? toolbarHeight)
+/// Collapsed =(collapsedHeight ?? toolbarHeight)
 /// plus bottomHeight plus topPadding — except pinned + floating + a bottom,
 /// where the toolbar contribution drops to `collapsedHeight ?? 0.0` (the
 /// toolbar floats away and only the bottom stays pinned).
@@ -305,7 +298,7 @@ fn toolbar_opacity_for(inputs: &ToolbarOpacityInputs) -> f64 {
 ///
 /// Extents are resolved numbers by the time this exists — the top inset is
 /// read at widget build time (the delegate's extent getters are
-/// context-free, so Flutter snapshots `topPadding` the same way).
+/// context-free, so `topPadding` is snapshotted the same way).
 struct SliverAppBarDelegate {
     app_bar: AppBar,
     min_extent: f64,
@@ -327,9 +320,8 @@ impl SliverPersistentHeaderDelegate for SliverAppBarDelegate {
         _overlaps_content: bool,
     ) -> BoxedView {
         // The collapse state, republished on every seam rebuild so a
-        // FlexibleSpaceBar inside the flexible-space slot re-interpolates —
-        // Flutter's FlexibleSpaceBar.createSettings, fed from the same
-        // shrink offset this build was called with.
+        // FlexibleSpaceBar inside the flexible-space slot re-interpolates,
+        // fed from the same shrink offset this build was called with.
         let current_extent = (self.max_extent - shrink_offset).max(self.min_extent);
         let toolbar_opacity = toolbar_opacity_for(&ToolbarOpacityInputs {
             shrink_offset,
@@ -343,7 +335,7 @@ impl SliverPersistentHeaderDelegate for SliverAppBarDelegate {
             top_padding: self.top_padding,
         });
         // Expand to the header's current box: the bar's Material covers the
-        // whole expanded area (Flutter's SliverAppBar paints its background
+        // whole expanded area (the bar paints its background
         // across it), with the flexible space and toolbar layered INSIDE
         // that surface by the AppBar itself — the slot order that keeps the
         // opaque background behind the flexible content, never over it.
@@ -384,7 +376,7 @@ impl SliverPersistentHeaderDelegate for SliverAppBarDelegate {
 impl StatelessView for SliverAppBar {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         // Snapshot the inset at build time — the delegate's extent getters
-        // are context-free, exactly why Flutter passes `topPadding` in.
+        // are context-free, exactly why `topPadding` is passed in.
         let top_padding = MediaQuery::maybe_of(ctx).map_or(0.0, |data| data.padding.top);
         let (min_extent, max_extent) = extents(&ExtentInputs {
             toolbar_height: self.toolbar_height,

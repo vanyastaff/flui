@@ -1,20 +1,12 @@
 //! `RenderSliverOffstage` — single-child sliver that can hide its
 //! subtree entirely (zero geometry, skipped paint, no hit-testing).
-//! The child is still laid out (Flutter parity), but when offstage its
+//! The child is still laid out, but when offstage its
 //! geometry — including any `scroll_offset_correction` it produced — is
 //! discarded: `SliverGeometry::ZERO` is reported to the viewport
-//! unconditionally.
+//! unconditionally, so an offstage sliver reports zero and never forwards a
+//! child scroll correction to the viewport.
 //!
-//! # Flutter equivalence
-//!
-//! Behavior-faithful port of Flutter's
-//! [`RenderSliverOffstage`](https://api.flutter.dev/flutter/rendering/RenderSliverOffstage-class.html)
-//! (`packages/flutter/lib/src/rendering/proxy_sliver.dart`). The child is
-//! always laid out, then — when offstage — `geometry` is set to
-//! `SliverGeometry.zero` unconditionally, so an offstage sliver reports zero
-//! and never forwards a child scroll correction to the viewport.
-//!
-//! # Rust-native improvements
+//! # Design notes
 //!
 //! * The `offstage` flag is a typed `bool` boundary; no `Visibility`
 //!   enum overload. The setter returns the exact pipeline impact.
@@ -52,8 +44,7 @@ pub struct RenderSliverOffstage {
 }
 
 impl RenderSliverOffstage {
-    /// Creates an offstage sliver render object. Default flag matches
-    /// Flutter: `offstage = true`.
+    /// Creates an offstage sliver render object with the given flag.
     #[must_use]
     pub const fn new(offstage: bool) -> Self {
         Self { offstage }
@@ -111,8 +102,7 @@ impl RenderSliver for RenderSliverOffstage {
         let constraints = *ctx.constraints();
 
         if self.offstage {
-            // Flutter parity (proxy_sliver.dart RenderSliverOffstage.performLayout):
-            // the child is still laid out, but when offstage `geometry` is set to
+            // The child is still laid out, but when offstage the geometry is
             // zero *unconditionally* — a hidden sliver must not forward the
             // child's scroll_offset_correction to the viewport.
             if ctx.child_count() > 0 {

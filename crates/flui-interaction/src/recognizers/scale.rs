@@ -6,8 +6,6 @@
 //! - Two or more pointers down
 //! - Distance between pointers changes
 //! - Calculates scale factor, rotation angle, and focal point (center)
-//!
-//! Flutter reference: <https://api.flutter.dev/flutter/gestures/ScaleGestureRecognizer-class.html>
 
 use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
 
@@ -131,7 +129,7 @@ impl std::fmt::Debug for ScaleGestureRecognizer {
     }
 }
 
-// Field names keep Flutter's `onScaleStart`-style callback names (parity).
+// Field names keep the `on_start`/`on_update`-style callback names.
 #[expect(clippy::struct_field_names)]
 #[derive(Default)]
 struct ScaleCallbacks {
@@ -313,10 +311,8 @@ impl ScaleGestureRecognizer {
 
     /// Whether the gesture has moved enough to claim the arena.
     ///
-    /// Mirrors `_advanceStateMachine`'s three-way test
-    /// (`gestures/scale.dart`, tag `3.44.0`): a scale is accepted on absolute
-    /// span change, **or** focal-point movement, **or** the scale ratio —
-    /// any one of them, not all three.
+    /// A scale is accepted on absolute span change, **or** focal-point
+    /// movement, **or** the scale ratio — any one of them, not all three.
     ///
     /// The arms are not redundant, and dropping any of them loses a whole
     /// class of gesture rather than a little precision:
@@ -383,9 +379,8 @@ impl ScaleGestureRecognizer {
                 // follows. A competitor can still take the arena, and an
                 // observer that saw `on_start` before that was decided would
                 // have acted on a gesture that then gets cancelled.
-                // `accept_gesture` is the sole start transition; the reference
-                // resolves here too (`scale.dart:749`'s
-                // `resolve(GestureDisposition.accepted)`).
+                // `accept_gesture` is the sole start transition; crossing
+                // resolves the arena entry as accepted here too.
                 if crossed {
                     self.state.accept_tracked();
                 }
@@ -540,9 +535,8 @@ impl ScaleGestureRecognizer {
             return (0.0, 0.0, 0.0);
         }
 
-        // Mean deviation from the FOCAL POINT, not mean pairwise distance --
-        // `_ScaleGestureRecognizer._update` (`gestures/scale.dart`, tag
-        // `3.44.0`): "Span is the average deviation from focal point."
+        // Mean deviation from the FOCAL POINT, not mean pairwise distance:
+        // span is the average deviation from the focal point.
         //
         // For two pointers the two definitions differ by exactly a factor of
         // two, which every RATIO consumer here is blind to (`current /
@@ -660,9 +654,7 @@ impl GestureRecognizer for ScaleGestureRecognizer {
         if !self.state.assert_not_disposed("handle_event") {
             return;
         }
-        // Route by the event's own pointer id (Flutter parity:
-        // `ScaleGestureRecognizer.handleEvent` keys `_pointerLocations` by
-        // `event.pointer`). Attributing a secondary finger's events to the
+        // Route by the event's own pointer id. Attributing a secondary finger's events to the
         // primary pointer corrupts span and focal point and leaves two-finger
         // pinch inert.
         match event {
@@ -685,9 +677,8 @@ impl GestureRecognizer for ScaleGestureRecognizer {
 
     fn dispose(&self) {
         self.state.mark_disposed();
-        // Reject arena entries + clear tracked pointer (Flutter parity:
-        // gestures/recognizer.dart:485-493 disposing GestureRecognizer
-        // clears arena state for tracked pointers).
+        // Reject arena entries + clear tracked pointer, so a disposed
+        // recognizer never lingers in the arena for a tracked pointer.
         self.state.reject();
         self.callbacks.borrow_mut().on_start = None;
         self.callbacks.borrow_mut().on_update = None;
@@ -704,9 +695,8 @@ impl GestureRecognizer for ScaleGestureRecognizer {
 // Canonical trait hierarchy adoption
 // =============================================================================
 //
-// Flutter parity: `scale.dart:345 ScaleGestureRecognizer extends
-// OneSequenceGestureRecognizer`. Scale tracks multiple pointers (2+
-// for pinch) but resolves as a single sequence in the arena.
+// Scale tracks multiple pointers (2+ for pinch) but resolves as a single
+// sequence in the arena.
 
 impl crate::recognizers::OneSequenceGestureRecognizer for ScaleGestureRecognizer {
     fn tracked_pointers(&self) -> Vec<PointerId> {

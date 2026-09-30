@@ -19,7 +19,7 @@
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::num::NonZeroU32;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TryRecvError, TrySendError};
@@ -29,7 +29,9 @@ use flui_protocol::{
     ActionName, ActionRequest, ElementId, ErrorCode, ReadQuery, Retry, Tree, WindowId,
 };
 use flui_semantics::{Placement, SemanticsActionError, WireActionError, WireReadError};
-use parking_lot::Mutex;
+use flui_view::__runtime::{AgentPort, PendingAnswer};
+use flui_view::dev_agent::{AgentAnswer, AgentFault, AgentWindow, HandleKind};
+use parking_lot::{Mutex, RwLock};
 
 use super::UiRealm;
 use super::commands::{CommandSendError, UiCommand, UiCommandSender};
@@ -59,7 +61,10 @@ pub enum AgentError {
         /// The element addressed.
         element: ElementId,
         /// Whether this agent's reads ever reported the element: if so it is
-        /// gone, if not the handle was never issued to this agent.
+        /// gone, if not the handle was never issued to this agent. Exact but
+        /// for one bound: once a render slot has shown an agent more than
+        /// `IssuedHandles::MAX_RUNS` separate runs of generations, the oldest
+        /// gaps between them count as reported.
         issued: bool,
     },
     /// The element does not advertise the action now.
@@ -177,6 +182,24 @@ impl AgentError {
     }
 }
 
+impl From<AgentError> for AgentFault {
+    /// The development seam's view of the error: its code, retry advice and
+    /// effect, and a message that names element ids only.
+    fn from(error: AgentError) -> Self {
+        let kind = match &error {
+            AgentError::PresentationGone => Some(HandleKind::Window),
+            AgentError::NodeNotFound { .. } => Some(HandleKind::Element),
+            _ => None,
+        };
+        let fault = AgentFault::new(error.code(), error.retry(), error.to_string())
+            .with_may_have_run(error.may_have_run());
+        match kind {
+            Some(kind) => fault.with_kind(kind),
+            None => fault,
+        }
+    }
+}
+
 /// The owner's half of an [`AgentReply`].
 pub(super) type ReplySender<T> = Sender<Result<T, AgentError>>;
 
@@ -188,16 +211,26 @@ pub(super) type ReplySender<T> = Sender<Result<T, AgentError>>;
 /// An element handle is the generational accessibility id of its render
 /// object: the render slot in the low 32 bits, the slot's generation in the
 /// high 32 (`RenderId::new_gen`), and a removed element's slot is reused only
-/// under a higher generation. So the record keeps, per slot, the newest
-/// generation a read reported: a handle at or below it was issued (the
-/// element it names is gone if the tree no longer shows it), and one above it,
-/// or at a slot no read reported, was not.
+/// under a higher generation. So the record keeps, per slot, the runs of
+/// consecutive generations reads reported, as inclusive ranges: a handle in
+/// one was issued (the element it names is gone if the tree no longer shows
+/// it), and one outside every run, or at a slot no read reported, was not.
+///
+/// A slot's generations reported one read after another form one run, so a
+/// slot usually holds one or two. Each generation that came and went between
+/// two reads without either reporting it splits a run; past
+/// [`Self::MAX_RUNS`] a slot's two oldest runs merge, and the old gap between
+/// them counts as issued from then on (`gone` rather than `unknown_handle`).
+/// Recent gaps stay exact, and the record stays bounded by the slots.
 #[derive(Debug, Default)]
 pub(super) struct IssuedHandles {
-    newest: HashMap<u32, NonZeroU32>,
+    runs: HashMap<u32, Vec<(u32, u32)>>,
 }
 
 impl IssuedHandles {
+    /// The most runs of reported generations one slot keeps.
+    pub(super) const MAX_RUNS: usize = 16;
+
     fn split(element: ElementId) -> (u32, Option<NonZeroU32>) {
         let packed = element.get();
         let slot = u32::try_from(packed & u64::from(u32::MAX))
@@ -211,22 +244,52 @@ impl IssuedHandles {
         let (slot, Some(generation)) = Self::split(element) else {
             return;
         };
-        let newest = self.newest.entry(slot).or_insert(generation);
-        *newest = (*newest).max(generation);
+        let generation = generation.get();
+        let runs = self.runs.entry(slot).or_default();
+        // The first run that ends at or after the generation's predecessor:
+        // the only runs the generation can fall in, extend or join.
+        let at = runs.partition_point(|&(_, end)| u64::from(end) + 1 < u64::from(generation));
+        match runs.get(at).copied() {
+            Some((start, end)) if start <= generation && generation <= end => return,
+            Some((start, end)) if u64::from(end) + 1 == u64::from(generation) => {
+                runs[at] = (start, generation);
+                if let Some(&(next_start, next_end)) = runs.get(at + 1)
+                    && u64::from(generation) + 1 == u64::from(next_start)
+                {
+                    runs[at] = (start, next_end);
+                    runs.remove(at + 1);
+                }
+            }
+            Some((start, end)) if u64::from(generation) + 1 == u64::from(start) => {
+                runs[at] = (generation, end);
+            }
+            _ => runs.insert(at, (generation, generation)),
+        }
+        if runs.len() > Self::MAX_RUNS {
+            let (_, end) = runs.remove(1);
+            runs[0].1 = end;
+        }
     }
 
     pub(super) fn was_issued(&self, element: ElementId) -> bool {
         let (slot, generation) = Self::split(element);
         generation.is_some_and(|generation| {
-            self.newest
-                .get(&slot)
-                .is_some_and(|newest| generation <= *newest)
+            let generation = generation.get();
+            self.runs.get(&slot).is_some_and(|runs| {
+                let at = runs.partition_point(|&(_, end)| end < generation);
+                runs.get(at).is_some_and(|&(start, _)| start <= generation)
+            })
         })
     }
 
     #[cfg(test)]
     pub(super) fn slots(&self) -> usize {
-        self.newest.len()
+        self.runs.len()
+    }
+
+    #[cfg(test)]
+    pub(super) fn runs(&self) -> usize {
+        self.runs.values().map(Vec::len).sum()
     }
 }
 
@@ -293,6 +356,27 @@ impl<T> AgentReply<T> {
     }
 }
 
+impl<T: Send + 'static> PendingAnswer<T> for AgentReply<T> {
+    fn try_take(&mut self) -> Option<Result<T, AgentFault>> {
+        AgentReply::try_take(self).map(|answer| answer.map_err(AgentFault::from))
+    }
+
+    fn recv_timeout(&mut self, timeout: Duration) -> Option<Result<T, AgentFault>> {
+        AgentReply::recv_timeout(self, timeout).map(|answer| answer.map_err(AgentFault::from))
+    }
+}
+
+/// What a presentation keeps for the development agent: see
+/// [`UiRealm::dev_agent_window`]. Owner thread only.
+pub(crate) struct DevAgentSlot {
+    /// The port every window handle answers through. Closed, and dropped,
+    /// with the presentation.
+    pub(super) agent: Arc<DevAgentPort>,
+    /// The semantics handle the window handles share; dead once the hook
+    /// has dropped them all.
+    collecting: Weak<SemanticsHandle>,
+}
+
 /// A capability to read one presentation's semantics tree and act on its
 /// elements, from any thread, through the realm's owner inbox.
 ///
@@ -306,8 +390,9 @@ impl<T> AgentReply<T> {
 #[derive(Debug, Clone)]
 pub struct SemanticsAgent {
     sender: UiCommandSender,
-    /// Keeps semantics collected while any clone is alive.
-    _semantics: Arc<SemanticsHandle>,
+    /// Keeps semantics collected while any clone is alive. `None` for the
+    /// development agent's, whose [`AgentWindow`]s hold the handle instead.
+    _semantics: Option<Arc<SemanticsHandle>>,
     /// What this agent's reads reported. Touched only on the agent's side,
     /// never by the owner.
     issued: Arc<Mutex<IssuedHandles>>,
@@ -381,6 +466,72 @@ impl SemanticsAgent {
     }
 }
 
+/// The development seam's port: a [`flui_view::dev_agent::AgentWindow`]
+/// reads and acts through the agent the realm vended for it, while its
+/// presentation is open.
+///
+/// A call on another thread can hold the port (upgraded from the window's
+/// weak reference) past the presentation's close, so the port's lifetime
+/// does not say whether the window is open; the flag does, cleared when the
+/// presentation's [`DevAgentSlot`] goes.
+///
+/// Admission and close are serialized: a call enqueues while holding the
+/// flag's read lock, and the close takes its write lock, so once the close
+/// returns no call is still enqueueing and none that starts later is
+/// admitted. The lock is held across a non-blocking enqueue only.
+pub(crate) struct DevAgentPort {
+    agent: SemanticsAgent,
+    open: RwLock<bool>,
+}
+
+impl DevAgentPort {
+    /// Run `enqueue` if the window is open, holding admission open for it.
+    fn admit<T>(
+        &self,
+        enqueue: impl FnOnce(&SemanticsAgent) -> Result<AgentReply<T>, AgentError>,
+    ) -> Result<AgentAnswer<T>, AgentFault>
+    where
+        T: Send + 'static,
+    {
+        let open = self.open.read();
+        if !*open {
+            return Err(AgentFault::window_gone());
+        }
+        enqueue(&self.agent)
+            .map(flui_view::__runtime::agent_answer)
+            .map_err(AgentFault::from)
+    }
+
+    /// Close admission, waiting for any call already admitted to finish
+    /// enqueueing.
+    fn close(&self) {
+        *self.open.write() = false;
+    }
+}
+
+impl AgentPort for DevAgentPort {
+    fn is_open(&self) -> bool {
+        *self.open.read()
+    }
+
+    fn read(&self, query: ReadQuery) -> Result<AgentAnswer<Tree>, AgentFault> {
+        self.admit(|agent| agent.read(query))
+    }
+
+    fn act(&self, request: ActionRequest) -> Result<AgentAnswer<()>, AgentFault> {
+        self.admit(|agent| agent.act(request))
+    }
+}
+
+impl Drop for DevAgentSlot {
+    /// The presentation closed: every window handle answers `gone` from
+    /// now on, even through a port a call still holds, and nothing is
+    /// enqueued for the closed window after this returns.
+    fn drop(&mut self) {
+        self.agent.close();
+    }
+}
+
 /// Sends `result` to an agent that may have stopped waiting. A receiver that
 /// is gone is traced by the element and code alone: the answer can carry
 /// labels and values, which stay out of the log.
@@ -410,14 +561,64 @@ impl UiRealm {
     pub fn semantics_agent(&self, presentation: PresentationId) -> Option<SemanticsAgent> {
         let state = self.presentations.get(presentation)?;
         let handle = state.semantics_host().ensure_semantics();
+        self.request_redraw_for(state);
+        Some(self.agent_for(presentation, Some(Arc::new(handle))))
+    }
+
+    fn agent_for(
+        &self,
+        presentation: PresentationId,
+        semantics: Option<Arc<SemanticsHandle>>,
+    ) -> SemanticsAgent {
         let mut sender = self.sender_prototype.clone();
         sender.presentation_id = presentation;
-        self.request_redraw_for(state);
-        Some(SemanticsAgent {
+        SemanticsAgent {
             sender,
-            _semantics: Arc::new(handle),
+            _semantics: semantics,
             issued: Arc::new(Mutex::new(IssuedHandles::default())),
-        })
+        }
+    }
+
+    /// The development agent's window for `presentation`, or `None` when this
+    /// realm does not host it.
+    ///
+    /// The presentation keeps one [`SemanticsAgent`] for the development
+    /// agent, so every window handle shares one record of issued element
+    /// handles. The returned [`AgentWindow`] holds that agent weakly: closing
+    /// the presentation drops it, and every call on the window answers
+    /// `gone`. It holds the presentation's semantics handle strongly: while
+    /// any window handle is alive the presentation collects semantics, and
+    /// once the hook has dropped them all collection stops on the next
+    /// frame. A call made while none is alive turns collection back on and
+    /// requests a frame, as [`Self::semantics_agent`] does.
+    #[must_use]
+    pub fn dev_agent_window(&self, presentation: PresentationId) -> Option<AgentWindow> {
+        let state = self.presentations.get(presentation)?;
+        let (agent, collecting, fresh) = {
+            let mut slot = state.dev_agent.borrow_mut();
+            let slot = slot.get_or_insert_with(|| DevAgentSlot {
+                agent: Arc::new(DevAgentPort {
+                    agent: self.agent_for(presentation, None),
+                    open: RwLock::new(true),
+                }),
+                collecting: Weak::new(),
+            });
+            let kept = slot.collecting.upgrade();
+            let fresh = kept.is_none();
+            let collecting = kept.unwrap_or_else(|| {
+                let handle = Arc::new(state.semantics_host().ensure_semantics());
+                slot.collecting = Arc::downgrade(&handle);
+                handle
+            });
+            (Arc::clone(&slot.agent), collecting, fresh)
+        };
+        if fresh {
+            self.request_redraw_for(state);
+        }
+        let window = WindowId::from_u64(presentation.as_u64())
+            .expect("BUG: a presentation id packs a non-zero generation");
+        let port: Weak<dyn AgentPort> = Arc::downgrade(&agent) as _;
+        Some(flui_view::__runtime::agent_window(window, port, collecting))
     }
 
     /// The owner half of [`SemanticsAgent::read`].

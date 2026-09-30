@@ -8,8 +8,8 @@ use flui_view::{RenderView, impl_render_view};
 /// Displays a tree of styled [`InlineSpan`]s (most commonly a
 /// [`TextSpan`](flui_painting::typography::TextSpan)) in a single paragraph.
 ///
-/// Flutter parity: `widgets/basic.dart` `RichText` over `RenderParagraph` —
-/// the same render object [`Text`](crate::Text) uses. Unlike `Text`, which
+/// Backed by `RenderParagraph`, the same render object [`Text`](crate::Text)
+/// uses. Unlike `Text`, which
 /// applies one style to a flat string, `RichText` accepts a span tree where
 /// each node carries its own style, letting a sentence mix e.g. bold and
 /// colored words without splitting it across multiple widgets.

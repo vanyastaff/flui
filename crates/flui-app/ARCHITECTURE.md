@@ -73,7 +73,7 @@ Existing `VecDeque` storage and incarnation/close admission remain sufficient;
 no new channel or scheduling abstraction is needed for these events.
 
 **Unasserted:** no test pins this. This preserves the existing lifecycle
-behavior; it introduces no new Flutter divergence.
+behavior.
 
 This narrows the arbitrary-operation surface but does not complete ADR-0083's
 closed owner vocabulary or bound lossless queue memory. Backend frame pumps still

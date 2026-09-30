@@ -2,6 +2,7 @@
 use super::realm_dispatch::{RealmDispatcher, close_this_window};
 use crate::app::hot_reload::WorkerWatcherGuard;
 use flui_platform::HostWindow;
+use flui_runtime::dev_agent::DevAgentAttachment;
 use std::{collections::HashMap, hash::Hash, sync::Arc};
 
 pub(super) fn contain(body: impl FnOnce()) {
@@ -16,16 +17,21 @@ pub(in crate::app) struct SessionController<K: Eq + Hash> {
     installer: Option<SessionInstaller>,
     sessions: HashMap<K, RealmDispatcher>,
     watcher: Option<WorkerWatcherGuard>,
+    /// The loop's development agent attachment; dropping it detaches the
+    /// hook.
+    agent: Option<DevAgentAttachment>,
 }
 impl<K: Eq + Hash> SessionController<K> {
     pub(super) fn new(
         installer: impl FnMut(Arc<dyn HostWindow>) -> anyhow::Result<RealmDispatcher> + 'static,
         watcher: Option<WorkerWatcherGuard>,
+        agent: Option<DevAgentAttachment>,
     ) -> Self {
         Self {
             installer: Some(Box::new(installer)),
             sessions: HashMap::new(),
             watcher,
+            agent,
         }
     }
 
@@ -67,8 +73,10 @@ impl<K: Eq + Hash> Drop for SessionController<K> {
     fn drop(&mut self) {
         let installer = self.installer.take();
         let watcher = self.watcher.take();
+        let agent = self.agent.take();
         contain(|| drop(installer));
         contain(|| drop(watcher));
+        contain(|| drop(agent));
     }
 }
 
@@ -188,6 +196,7 @@ mod tests {
                 let window: Arc<dyn flui_platform::PlatformWindow> = window;
                 Ok(install_realm_alongside(realm, &window)?)
             },
+            None,
             None,
         );
         let platform = flui_platform::headless_platform();

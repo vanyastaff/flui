@@ -2,12 +2,10 @@
 //! [`crate::ScaffoldMessengerHandle::show_snack_bar`] — and
 //! [`SnackBarAction`], its single-fire action button.
 //!
-//! # Flutter parity
+//! # Scope
 //!
-//! `material/snack_bar.dart`'s `SnackBar`/`SnackBarAction`/`_SnackBarState`
-//! (oracle tag `3.44.0`), narrowed to `SnackBarBehavior.fixed` — see the
-//! module docs' "V1 scope" section. M3 token values are `_SnackbarDefaultsM3`
-//! (`snack_bar.dart:941-999`), cited per value below.
+//! Narrowed to `SnackBarBehavior.fixed` — see the module docs' "V1 scope"
+//! section. M3 token values are cited per value below.
 //!
 //! ## Entrance animation
 //!
@@ -87,8 +85,7 @@ const HORIZONTAL_PADDING: f64 = 24.0;
 /// bottom of the screen via
 /// [`crate::ScaffoldMessengerHandle::show_snack_bar`].
 ///
-/// Flutter parity: `SnackBar` (`snack_bar.dart`, oracle tag `3.44.0`). See
-/// the module docs for the fixed-only V1 scope.
+/// See the module docs for the fixed-only V1 scope.
 ///
 /// # Examples
 ///
@@ -129,8 +126,7 @@ impl SnackBar {
     }
 
     /// Overrides how long the snack bar stays visible before auto-dismissing.
-    /// Defaults to `DEFAULT_DISPLAY_DURATION` (4000ms) — Flutter's
-    /// `snackBar.duration`.
+    /// Defaults to `DEFAULT_DISPLAY_DURATION` (4000ms).
     #[must_use]
     pub fn duration(mut self, duration: Duration) -> Self {
         self.duration = duration;
@@ -175,9 +171,6 @@ impl std::fmt::Debug for SnackBar {
 /// A button for a [`SnackBar`], known as an "action". Single-fire: a second
 /// press after the first is ignored, and the button visually disables
 /// (`disabledTextColor`) once pressed.
-///
-/// Flutter parity: `SnackBarAction`/`_SnackBarActionState` (`snack_bar.dart`,
-/// oracle tag `3.44.0`).
 ///
 /// # Examples
 ///
@@ -284,9 +277,7 @@ impl ViewState<SnackBarAction> for SnackBarActionState {
 
 /// Builds the static (non-animated) visual content of a [`SnackBar`]:
 /// `Material(color, elevation) > SafeArea(top: false) > Padding > Row[content,
-/// action?]`. Flutter parity: `_SnackBarState.build`'s content assembly
-/// (`snack_bar.dart:622-826`), narrowed to the fixed-behavior branches (see
-/// the module docs).
+/// action?]`, narrowed to the fixed-behavior branches (see the module docs).
 fn build_content(snack_bar: &SnackBar, theme: &ThemeData) -> BoxedView {
     let colors = theme.color_scheme;
     let background_color = snack_bar.background_color.unwrap_or(colors.inverse_surface);
@@ -364,9 +355,9 @@ impl StatelessView for SnackBarPresenter {
         let animation = self.animation.clone();
         let listenable = Arc::new(self.animation.clone()) as Arc<dyn Listenable>;
 
-        // Flutter parity: `_SnackBarState.build`'s outermost wrap is
-        // `ClipRect(clipBehavior: widget.clipBehavior, child: snackBarTransition)`
-        // (`snack_bar.dart:877-881`), around the exact `Align(heightFactor:)`
+        // The outermost wrap is
+        // `ClipRect(clipBehavior: widget.clipBehavior, child: snackBarTransition)`,
+        // around the exact `Align(heightFactor:)`
         // transition this builds. `Align`/`RenderPositionedBox` lays its
         // child out LOOSE at that child's full natural height regardless of
         // `heightFactor` — only `Align`'s own REPORTED size shrinks — and

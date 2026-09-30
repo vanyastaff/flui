@@ -26,8 +26,6 @@ enum SwitchMode {
 /// This is useful for implementing "train hopping" behavior where an animation
 /// can seamlessly transition from one train to another.
 ///
-/// Similar to Flutter's `TrainHoppingAnimation`.
-///
 /// # Examples
 ///
 /// ```
@@ -397,12 +395,10 @@ mod tests {
         controller
     }
 
-    /// `TrainHoppingAnimation.dispose` detaches from
-    /// **both** trains (`animations.dart:601-613`): status + value listeners from
-    /// `_currentTrain`, and the value listener from `_nextTrain`. The route layer
-    /// disposes a hopper that never hopped (`jumpOnAnimationEnd`, and the
-    /// `disposed`-future path in `_setSecondaryAnimation`), so a leak here would
-    /// keep a disposed route's controller alive and notifying.
+    /// Disposing an `AnimationSwitch` detaches from **both** trains: status +
+    /// value listeners from the current train, and the value listener from the
+    /// next one. The route layer disposes a hopper that never hopped, so a leak
+    /// here would keep a disposed route's controller alive and notifying.
     ///
     /// This pins the *pre-hop* case.
     ///

@@ -54,9 +54,8 @@ impl ViewState<Probe> for ProbeState {
 }
 
 /// An inactive tab's own element state survives a switch away and back —
-/// `Offstage`, not unmount. Flutter parity: the same
-/// `_TabSwitchingViewState` contract above, proven this time via a
-/// `StatefulView`'s `create_state` count rather than a builder-call count.
+/// `Offstage`, not unmount. The same contract as above, proven this time via
+/// a `StatefulView`'s `create_state` count rather than a builder-call count.
 ///
 /// Red-check: key each tab's `Offstage` subtree by `(index, current_index)`
 /// instead of `index` alone (forcing a fresh element on every switch) — this

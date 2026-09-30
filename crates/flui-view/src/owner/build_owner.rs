@@ -61,8 +61,8 @@ const MAX_MID_DRAIN_ABSORBS: usize = 16;
 /// fired *outside* any frame, with no `&mut BuildOwner` in scope — enqueue an
 /// element for the next [`BuildOwner::build_scope`] drain and request a frame.
 ///
-/// This is the arena analogue of Flutter's `Element.markNeedsBuild` reaching
-/// `BuildOwner.scheduleBuildFor` + `SchedulerBinding.scheduleFrame`: an
+/// It carries a mark-dirty request from an element to the owner's build queue
+/// and the scheduler's frame request: an
 /// `AnimatedView`'s mark-dirty callback captures one of these at mount (via
 /// [`ElementOwner::external_scheduler`](super::ElementOwner::external_scheduler))
 /// and calls [`schedule`](Self::schedule) when the listenable changes. The
@@ -378,10 +378,6 @@ impl PartialOrd for DirtyElement {
 /// BuildOwner tracks which elements need rebuilding and processes them
 /// in the correct order (depth-first, shallowest first).
 ///
-/// # Flutter Equivalent
-///
-/// This corresponds to Flutter's `BuildOwner` class.
-///
 /// # Responsibilities
 ///
 /// - Maintain list of dirty elements
@@ -444,8 +440,7 @@ pub struct BuildOwner {
     /// dirty element's `perform_build` and fires
     /// `ElementBase::notify_dependency_change` (which routes through the
     /// behavior to call `ViewState::did_change_dependencies`) when the
-    /// id is present, then removes the entry — Flutter parity for
-    /// `_didChangeDependencies` flag at `framework.dart:6114`.
+    /// id is present, then removes the entry.
     ///
     /// Populated by [`InheritedBehavior::on_view_updated`](crate::element::InheritedBehavior)
     /// when `update_should_notify == true`. Cleared on element unmount
@@ -1043,8 +1038,7 @@ impl BuildOwner {
     /// Mark every live element dirty so the next [`build_scope`](Self::build_scope)
     /// re-runs all `build()` methods.
     ///
-    /// Flutter parity: `BuildOwner.reassemble()` / `Element.reassemble()` during
-    /// hot reload. **Does not** unmount elements or dispose `State` — stateful
+    /// Used by hot reload. **Does not** unmount elements or dispose `State` — stateful
     /// elements keep their in-tree `ViewState` across the call.
     ///
     /// Both halves are required, and for a while only one was here: the drain
@@ -1076,7 +1070,7 @@ impl BuildOwner {
     /// depth by its caller and trusts it. A caller that passes a stale or
     /// wrong depth would let a deeply-nested rebuild sort as if it were
     /// shallow, so a child could rebuild before its parent — violating
-    /// Flutter's shallowest-first contract. Rebuilding the heap keyed on each
+    /// the shallowest-first contract. Rebuilding the heap keyed on each
     /// node's current depth (`ElementNode::depth`, the same authority the
     /// external-inbox drain uses) keeps the contract regardless of what
     /// `schedule_build_for` was told.
@@ -1096,8 +1090,8 @@ impl BuildOwner {
     }
 
     /// Return the nearest mounted layout-builder scope containing `element`.
-    /// The search includes `element` itself, matching Flutter's BuildScope
-    /// ownership rule for the scope root.
+    /// The search includes `element` itself: a scope root belongs to its own
+    /// scope.
     fn live_layout_scope_ids(&self, tree: &ElementTree) -> HashSet<ElementId> {
         self.layout_builder_registry.with_entries(|entries| {
             entries
@@ -1537,7 +1531,7 @@ impl BuildOwner {
         payload: Box<dyn Any + Send>,
     ) {
         let (parent, slot) = replacement_location;
-        let error = crate::view::FlutterError::from_panic(
+        let error = crate::view::FrameworkError::from_panic(
             payload.as_ref(),
             "running a stateful lifecycle hook during rebuild",
         );
@@ -1618,9 +1612,8 @@ impl BuildOwner {
         // passes; a stale one (a subtree moved by a GlobalKey after the
         // schedule) would let a deeply-nested rebuild sort as if it were
         // shallow, so a child could build before its parent and violate
-        // Flutter's shallowest-first build contract (`framework.dart`
-        // `_dirtyElements.sort(Element._sort)` keys on the element's real
-        // depth). Re-derive each id's depth from its node — the same authority
+        // the shallowest-first build contract, which keys on the element's
+        // real depth. Re-derive each id's depth from its node — the same authority
         // `absorb_mid_drain_inbox` uses for a freshly-absorbed id.
         self.rekey_dirty_depths(tree);
 
@@ -1648,8 +1641,7 @@ impl BuildOwner {
         // element's `RebuildHandle::schedule` synchronously (the inbox is the
         // only route a cross-thread or listener-driven rebuild has), and that
         // schedule must join THIS drain rather than sit until the next
-        // `build_scope` — Flutter's analogue is `buildScope`'s own
-        // per-iteration re-sort of `_dirtyElements`. See
+        // `build_scope`; the heap is re-sorted every iteration. See
         // `Self::absorb_mid_drain_inbox` for the Occupied/Vacant/budget rules.
         //
         // Each iteration pops one entry first so `pop()`'s mutation of
@@ -1702,8 +1694,7 @@ impl BuildOwner {
                 .copied()
                 .expect("BUG: every dirty heap entry must own rebuild reasons");
 
-            // Flutter parity (`framework.dart:5977-5982`): if this
-            // dependent received an inherited-dependency change since its
+            // If this dependent received an inherited-dependency change since its
             // last build, fire `ViewState::did_change_dependencies` BEFORE
             // the build. Consumed here so the typed hook runs exactly once
             // per dependency-change-then-rebuild cycle.
@@ -1739,8 +1730,7 @@ impl BuildOwner {
             // the reconcile is what makes the newest build authoritative:
             // the reconcile below immediately re-reserves whatever this
             // build still declares, and anything it has dropped simply does
-            // not come back. Flutter clears the same two populations at this
-            // point in `buildScope`'s loop.
+            // not come back.
             self.global_key_reservations.note_parent_rebuild(id);
 
             let rebuild_span = tracing::info_span!(
@@ -1850,8 +1840,8 @@ impl BuildOwner {
             // whether the build returned or unwound. With `&mut tree` free
             // again we then apply the dependents buffered during the read-only
             // build onto their provider nodes; recording in the SAME iteration
-            // (before the next dirty pop) preserves Flutter's
-            // record-before-notify ordering (`framework.dart:5086`).
+            // (before the next dirty pop) preserves the record-before-notify
+            // ordering.
             tree.put_element(id, element);
 
             let new_views: Vec<Box<dyn View>> = match build_outcome {
@@ -1928,8 +1918,8 @@ impl BuildOwner {
                     });
                 }
             }
-            // Reset-on-build (ADR-0074 §5.5, a deliberate divergence from Flutter,
-            // whose `_dependencies` accumulate until unmount): the fields this
+            // Reset-on-build (ADR-0074 §5.5; dependencies do not
+            // accumulate until unmount): the fields this
             // element is recorded as reading at each of its providers go back
             // to NONE, the build's own reads are re-applied from the sink, and a
             // provider it no longer read drops the entry. A field read only in
@@ -2090,10 +2080,8 @@ impl BuildOwner {
     /// synchronous `schedule` — a build calling another element's
     /// [`RebuildHandle`](super::RebuildHandle) on the owner thread — joins
     /// THIS SAME drain instead of waiting for the next `build_scope` call,
-    /// collapsing the double-frame the issue describes into one. Flutter's
-    /// analogue is `BuildOwner.buildScope`'s own per-iteration re-sort of
-    /// `_dirtyElements` plus `markNeedsBuild`'s `if (dirty) return`
-    /// absorption — except FLUI has no debug-mode assert that a mid-build
+    /// collapsing the double-frame the issue describes into one. There is no
+    /// debug-mode assert that a mid-build
     /// schedule targets a descendant of the element currently building (see
     /// the `## Mapping decisions` entry in `crates/flui-view/ARCHITECTURE.md`
     /// for why: the inbox is the only route a cross-thread or
@@ -2569,10 +2557,7 @@ impl BuildOwner {
     ///
     /// Runs at the very end of [`Self::finalize_tree`], AFTER the inactive
     /// sweep, so a key whose only remaining claimant was unmounted this
-    /// frame is not reported. Flutter calls
-    /// `_debugVerifyGlobalKeyReservation` from the same point in
-    /// `finalizeTree` (`framework.dart:3364`), after
-    /// `_inactiveElements._unmountAll`.
+    /// frame is not reported.
     ///
     /// Reports are appended to the diagnostic drain rather than raised, and
     /// each one has already had its losing parent's dangling child edge
@@ -2825,14 +2810,9 @@ impl BuildOwner {
     /// A duplicate `GlobalKey` is caller-controlled input, so
     /// [`Self::finalize_tree`] reports it as data rather than panicking:
     /// the offending frame still completes, with the losing parent's
-    /// dangling child edge already repaired. Hosts that want the Flutter
-    /// behaviour — a hard failure — can drain this and escalate; tests
-    /// assert on it directly.
-    ///
-    /// Flutter parity: `_debugVerifyGlobalKeyReservation`
-    /// (`framework.dart:3228`) throws a `FlutterError` out of
-    /// `finalizeTree` instead, and only in debug builds. Same verdict, and
-    /// FLUI reaches it in every profile; the channel is what differs.
+    /// dangling child edge already repaired. Hosts that want a hard failure
+    /// can drain this and escalate; tests assert on it directly. The verdict
+    /// is reached in every build profile.
     pub fn take_global_key_diagnostics(&mut self) -> Vec<DuplicateGlobalKey> {
         std::mem::take(&mut self.global_key_diagnostics)
     }

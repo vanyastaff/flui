@@ -6,7 +6,7 @@
 //!
 //! # Architecture
 //!
-//! FLUI uses a three-tree architecture inspired by Flutter:
+//! FLUI uses a three-tree architecture:
 //!
 //! ```text
 //! View Tree (immutable) → Element Tree (mutable) → Render Tree (layout/paint)
@@ -49,7 +49,7 @@ use crate::{
 
 /// Result of a raw hit-test bridge call.
 ///
-/// Flutter's hit testing has two related but separate effects: a render object
+/// Hit testing has two related but separate effects: a render object
 /// may add itself to the hit-test path, and it may return `true` to stop
 /// sibling traversal behind it. `HitTestBehavior::Translucent` relies on that
 /// split: it contributes an entry but can still let lower siblings be tested.
@@ -85,7 +85,7 @@ impl HitTestOutcome {
     }
 
     /// Add the current render object to the hit path without blocking lower
-    /// siblings. This is the Flutter translucent side effect.
+    /// siblings. This is the translucent side effect.
     #[must_use]
     pub const fn add_self_without_blocking() -> Self {
         Self {
@@ -138,11 +138,9 @@ impl HitTestOutcome {
 ///
 /// `reassemble` here is an object-local hook and defaults to a no-op, because a
 /// render object holds no pipeline-owner handle and cannot reach the dirty
-/// queues itself. Flutter's `RenderObject.reassemble()` is really the
-/// pipeline-owner operation — `markNeedsLayout` / `markNeedsCompositingBitsUpdate`
-/// / `markNeedsPaint` / `markNeedsSemanticsUpdate` / `visitChildren` — and its
-/// FLUI counterpart is [`PipelineOwner::reassemble`](crate::pipeline::PipelineOwner::reassemble),
-/// which performs that traverse and marks all four phases. This object-level
+/// queues itself. The real reassemble is a pipeline-owner operation —
+/// [`PipelineOwner::reassemble`](crate::pipeline::PipelineOwner::reassemble)
+/// traverses the tree and marks all four phases. This object-level
 /// hook exists for a concrete object that must do additional per-object work on
 /// reload; the framework's tree-wide reassemble does not depend on it.
 ///
@@ -329,7 +327,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// `text` is the realm's text context the node measures with; `None`
     /// leaves the typed context one of its own.
     ///
-    /// Default: `0.0` — Flutter's `RenderBox` default for every
+    /// Default: `0.0` for every
     /// intrinsic dimension; protocols without intrinsic sizing (sliver)
     /// keep it.
     fn intrinsic_raw(
@@ -351,9 +349,8 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// [`intrinsic_raw`](Self::intrinsic_raw); `child_dry` answers the
     /// dry-layout question for a tree child.
     ///
-    /// Default: the protocol's default geometry (Flutter's `RenderBox`
-    /// debug-throws here; a wrong dry size is loud in layout tests
-    /// without poisoning release builds).
+    /// Default: the protocol's default geometry (a wrong dry size is loud
+    /// in layout tests without poisoning release builds).
     fn dry_layout_raw(
         &self,
         _constraints: ProtocolConstraints<P>,
@@ -414,9 +411,6 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// [`RenderBox::forwards_baseline_to_only_child`](crate::traits::RenderBox::forwards_baseline_to_only_child),
     /// which `forward_single_child_box_queries!` sets alongside the dry-baseline
     /// forward so the two answers cannot drift apart.
-    ///
-    /// Mirrors Flutter's `RenderProxyBoxMixin.computeDistanceToActualBaseline`,
-    /// which forwards to `child` (`rendering/proxy_box.dart`).
     fn forwards_baseline_to_only_child(&self) -> bool {
         false
     }
@@ -520,16 +514,14 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// Composes onto `transform` the mapping from child `child`'s local
     /// coordinate space into **this** object's local coordinate space.
     ///
-    /// Flutter's `RenderObject.applyPaintTransform` (`object.dart:3639`), whose
-    /// `RenderBox` override translates by the child's `BoxParentData.offset`
-    /// (`box.dart:3014`). It is what [`PipelineOwner::transform_to`] composes at
-    /// every step of an ancestor walk.
+    /// A box object translates by the child's paint offset. It is what
+    /// [`PipelineOwner::transform_to`] composes at every step of an ancestor
+    /// walk.
     ///
     /// # Why the extra parameters
     ///
-    /// A Flutter render object owns its children and their parent data, so
-    /// `applyPaintTransform(child, transform)` can read the offset off the child.
-    /// A FLUI render object owns neither: children live in the
+    /// A render object owns neither its children nor their parent data:
+    /// children live in the
     /// [`RenderTree`](crate::storage::RenderTree) and geometry lives in
     /// [`RenderState`](crate::storage::RenderState). The pipeline therefore hands
     /// in what the object cannot reach — the child's committed paint offset and
@@ -597,9 +589,8 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// [`PointerEvent`]. Delivery is leaf-first to every target with no
     /// propagation result (ADR-0027). Default `None` — only a render object
     /// that listens for pointer events (e.g. `RenderListener`) overrides it.
-    /// The executable callback never lives in render storage; this is the
-    /// arena analogue of Flutter's `RenderPointerListener` registering itself
-    /// as the `HitTestEntry`'s target.
+    /// The executable callback never lives in render storage; the render
+    /// object registers itself as the `HitTestEntry`'s target by identity.
     ///
     /// [`PointerEvent`]: crate::hit_testing::PointerEvent
     fn pointer_target(&self) -> Option<crate::hit_testing::PointerTarget> {
@@ -609,15 +600,13 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// The data-only arbitrated scroll-signal target this render object
     /// contributes to its hit entry.
     ///
-    /// Pointer-signal (wheel/trackpad-scroll) delivery has TWO channels, ported
-    /// from Flutter's `Listener.onPointerSignal` + `PointerSignalResolver`
-    /// pair: every pointer target on the path *observes* the raw event, but
+    /// Pointer-signal (wheel/trackpad-scroll) delivery has TWO channels:
+    /// every pointer target on the path *observes* the raw event, but
     /// only the first (leaf-most) scroll target whose handler returns
     /// `EventPropagation::Stop` *acts* on it
     /// (`HitTestResult::dispatch_scroll`). A scrollable claims a tick only
-    /// when it can actually move (`widgets/scrollable.dart`
-    /// `_receivedPointerSignal`: register only if the target offset differs
-    /// from the current pixels), so nested scrollables hand the wheel from the
+    /// when it can actually move (it registers only if the target offset
+    /// differs from the current pixels), so nested scrollables hand the wheel from the
     /// inner to the outer at an extent instead of both scrolling.
     ///
     /// Default `None` — only a render object that arbitrates scroll signals
@@ -663,8 +652,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// caller downcasts it with `metadata_as::<T>()`. This is how a drag finds
     /// the `DragTarget`s it has moved over: it cannot ask the element tree who
     /// is under a point, and a bare `RenderId` is only resolvable inside the
-    /// pipeline. Flutter's `RenderMetaData` is the same mechanism, reached the
-    /// same way from `_DragAvatar.updateDrag`.
+    /// pipeline.
     ///
     /// Default `None` — only a render object that exists to be *found*
     /// overrides it.
@@ -699,7 +687,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     ///
     /// Consulted by `flui-rendering`'s `run_semantics` assembly walk
     /// (flui-semantics ARCHITECTURE.md, semantics assembly) before it recurses into children — the least-privilege
-    /// counterpart of Flutter's `visitChildrenForSemantics` override that
+    /// counterpart of a visit-children override that
     /// `RenderExcludeSemantics` uses to visit no children while excluding.
     /// This node's own config is still built and merged/boundary-decided
     /// normally; only its descendants are dropped from the walk.
@@ -719,8 +707,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// not present — `RenderTheater`'s entries below the topmost opaque one —
     /// needs this one: those are real children it deliberately does not show.
     ///
-    /// Default: `true`. Flutter parity:
-    /// `RenderObject.visitChildrenForSemantics`.
+    /// Default: `true`.
     fn visits_child_for_semantics(&self, _child_slot: usize) -> bool {
         true
     }
@@ -733,7 +720,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// rect falls entirely outside the accumulated paint clip is still
     /// published, but flagged hidden: it exists for a screen reader to scroll
     /// to, and must not be announced as if it were on screen. "Approximate"
-    /// is Flutter's word and its contract — a conservative superset is
+    /// is the contract — a conservative superset is
     /// allowed, so a rounded or path clip may report its bounding box.
     ///
     /// Default: `None`. Override on [`RenderBox`](crate::traits::RenderBox)
@@ -760,7 +747,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// part that survives.
     ///
     /// Unlike the paint clip, an inner value REPLACES the accumulated one
-    /// rather than intersecting with it (Flutter's rule) — a nested viewport
+    /// rather than intersecting with it — a nested viewport
     /// re-grants its own cache area to its own children.
     ///
     /// Default: `None`.
@@ -878,7 +865,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     // Historical note: the trait
     // formerly carried a `set_was_repaint_boundary(&mut self, bool)` method.
     // It was a leaky abstraction -- framework bookkeeping that only existed
-    // on the trait because Flutter's Dart classes are flat. The bit now lives
+    // on the trait because a flat object model has nowhere else to put it. The bit now lives
     // on `RenderState<P>::flags` as `WAS_REPAINT_BOUNDARY` (see
     // `crates/flui-rendering/src/storage/flags.rs`) and is flipped by the
     // paint phase via an atomic store, without acquiring a lock on the

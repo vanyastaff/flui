@@ -46,8 +46,7 @@ type PanZoomClaimCallback = Rc<dyn Fn(&PointerPanZoomEvent) -> EventPropagation>
 
 /// Calls callbacks in response to raw pointer events on its child.
 ///
-/// Flutter parity: `widgets/basic.dart` `Listener` over `RenderPointerListener`
-/// — the foundation the higher-level gesture widgets build on. Layout and paint
+/// The foundation the higher-level gesture widgets build on. Layout and paint
 /// pass through; the listener registers itself in the hit-test path per its
 /// [`HitTestBehavior`] (default [`DeferToChild`](HitTestBehavior::DeferToChild):
 /// fires only for pointers that land on a descendant), so the matching callback
@@ -67,8 +66,7 @@ type PanZoomClaimCallback = Rc<dyn Fn(&PointerPanZoomEvent) -> EventPropagation>
 /// the event in two spaces: `local` (this listener's own box, the value to
 /// measure against its size or child offsets) and `global` (the root's space,
 /// the value to compare against another widget's position or to hand to a
-/// fresh hit test). Flutter puts the same pair on `PointerEvent` itself as
-/// `localPosition` and `position`; FLUI's pointer events come from
+/// fresh hit test). FLUI's pointer events come from
 /// [`ui_events`] and hold one position each, so the pair is delivered
 /// alongside the event instead of on it.
 ///
@@ -100,7 +98,6 @@ impl Default for Listener {
             on_scroll_claim: None,
             on_pointer_pan_zoom_update: None,
             on_pointer_pan_zoom_claim: None,
-            // Flutter's `Listener` default.
             behavior: HitTestBehavior::DeferToChild,
             child: Child::empty(),
         }
@@ -180,7 +177,7 @@ impl Listener {
 
     /// Called when a pointer moves without active buttons over the listener.
     ///
-    /// FLUI models Flutter's distinct `PointerHoverEvent` as
+    /// Hover is modelled as a
     /// [`PointerEvent::Move`] whose current button mask is empty.
     #[must_use]
     pub fn on_pointer_hover<F, R>(mut self, callback: F) -> Self
@@ -209,8 +206,7 @@ impl Listener {
     /// FLUI currently models pointer signals as [`PointerEvent::Scroll`].
     ///
     /// This channel *observes*: every listener on the hit path sees the
-    /// signal (Flutter parity — `Listener.onPointerSignal` fires for the whole
-    /// path). A widget that should *act* on the tick only when it is the
+    /// signal (this fires for the whole path). A widget that should *act* on the tick only when it is the
     /// leaf-most interested party registers with
     /// [`on_scroll_claim`](Self::on_scroll_claim) instead.
     #[must_use]
@@ -223,9 +219,8 @@ impl Listener {
         self
     }
 
-    /// Register this listener in the arbitrated scroll-signal walk — the FLUI
-    /// port of Flutter's `PointerSignalResolver` pair to
-    /// `Listener.onPointerSignal`.
+    /// Register this listener in the arbitrated scroll-signal walk, the
+    /// arbitrated counterpart of [`on_pointer_signal`](Self::on_pointer_signal).
     ///
     /// After the whole hit path has observed a scroll signal, the leaf-first
     /// claim walk invokes each registered handler until one returns
@@ -233,9 +228,7 @@ impl Listener {
     /// Return `Stop` only when this widget will actually consume the tick
     /// (a scrollable that can still move, a viewer that will zoom) and
     /// [`EventPropagation::Continue`] otherwise, so an inner scrollable at its
-    /// extent hands the wheel to the outer one — the oracle's
-    /// `_receivedPointerSignal` registers only when the target offset differs
-    /// from the current pixels (`widgets/scrollable.dart`).
+    /// extent hands the wheel to the outer one.
     #[must_use]
     pub fn on_scroll_claim(
         mut self,
@@ -248,7 +241,7 @@ impl Listener {
     /// Called when a trackpad pan/zoom update reaches the listener.
     ///
     /// Current FLUI routing converts upstream [`PointerEvent::Gesture`] into a
-    /// Flutter-shaped [`PointerPanZoomEvent::Update`]. Start/end callbacks are
+    /// [`PointerPanZoomEvent::Update`]. Start/end callbacks are
     /// intentionally not exposed until the platform layer can provide reliable
     /// gesture-boundary events.
     ///
@@ -278,9 +271,8 @@ impl Listener {
     /// [`EventPropagation::Continue`] otherwise, so a viewer pinned at its
     /// scale extent hands the pinch to the one enclosing it.
     ///
-    /// Flutter arbitrates the same contention through the scale gesture
-    /// arena (`gestures/scale.dart`) rather than a signal-style claim; this
-    /// surface is the interim arbitration until that recognizer lands.
+    /// This surface is the interim arbitration until a scale recognizer in the
+    /// gesture arena lands.
     #[must_use]
     pub fn on_pointer_pan_zoom_claim(
         mut self,

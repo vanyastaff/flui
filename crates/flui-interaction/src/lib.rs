@@ -230,7 +230,7 @@ pub use events::{CursorIcon, KeyboardEvent, PointerEvent};
 // Re-export observability surface — typed event names + span constants.
 pub use observability::{GestureEvent, SPAN_ARENA, SPAN_RECOGNIZER, pointer_event_kind};
 // Trackpad pan/zoom module — canonical public entry point for the
-// Flutter-aligned `PointerPanZoomEvent` type and its W3C conversion helpers
+// `PointerPanZoomEvent` type and its W3C conversion helpers
 // (`from_w3c_event`, `convert_gesture`). Re-exported at the crate root so
 // `use crate::PointerPanZoomEvent` is the single import path.
 pub use pan_zoom::{PointerPanZoomEvent, convert_gesture, from_w3c_event};
@@ -258,10 +258,9 @@ pub use recognizers::{
     TapDragEndDetails, TapDragStartCallback, TapDragStartDetails, TapDragUpCallback,
     TapDragUpDetails, TapDragUpdateCallback, TapDragUpdateDetails, TapGestureRecognizer,
 };
-// Re-exports for drag axis sub-recognisers (Flutter parity for
-// `VerticalDragGestureRecognizer` / `HorizontalDragGestureRecognizer` /
-// `PanGestureRecognizer`). Aliased to `DragGestureRecognizer` so a
-// recogniser's axis is fixed at the type level.
+// Re-exports for the drag axis sub-recognisers (vertical, horizontal, pan).
+// Aliased to `DragGestureRecognizer` so a recogniser's axis is fixed at the
+// type level.
 pub use recognizers::drag_variants::{
     HorizontalDragGestureRecognizer, PanGestureRecognizer, VerticalDragGestureRecognizer,
 };

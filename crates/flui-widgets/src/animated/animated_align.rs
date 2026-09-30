@@ -17,7 +17,7 @@ use crate::{Align, AnimatedBuilder};
 /// Animates the [`Alignment`] of its child within itself whenever a new
 /// alignment is given.
 ///
-/// Flutter parity: `widgets/implicit_animations.dart` `AnimatedAlign`. First
+/// First
 /// build sits at the given alignment; each later build with a different
 /// alignment animates the child's position over `duration` along `curve`.
 /// Driven by a binding under a [`VsyncScope`].
@@ -35,11 +35,10 @@ impl AnimatedAlign {
     /// Size the box to `factor` x the child's width, animating the factor when
     /// it changes.
     ///
-    /// The oracle tweens this alongside the alignment
-    /// (`_AnimatedAlignState._widthFactorTween`), so a changed factor
+    /// The factor is tweened alongside the alignment, so a changed factor
     /// interpolates rather than snapping. Leaving it unset is not the same as
     /// setting `1.0`: an unset factor makes the box fill its constraints on
-    /// that axis, which is what `'AnimatedAlign null widthFactor'` pins.
+    /// that axis, which is what the null-width-factor test pins.
     #[must_use]
     pub fn width_factor(mut self, factor: f64) -> Self {
         self.width_factor = Some(factor);
@@ -134,8 +133,7 @@ impl ViewState<AnimatedAlign> for AnimatedAlignState {
         AnimatedBuilder::new(self.controller.listenable(), move || {
             let t = curved.value();
             // An unset factor must reach `Align` as unset, not as `1.0`: the
-            // oracle's `build` passes `_widthFactorTween?.evaluate(animation)`,
-            // so a null factor stays null and the axis fills its constraints.
+            // an unset factor stays unset and the axis fills its constraints.
             let mut align = Align::new(
                 alignment
                     .current(t)
@@ -156,7 +154,7 @@ impl ViewState<AnimatedAlign> for AnimatedAlignState {
         self.controller.set_duration(new_view.duration);
         // Swap the curve before sampling `t`, so a target change anchors
         // against the already-updated curve — same ordering as
-        // `AnimatedContainer`, which carries the oracle citations for it.
+        // `AnimatedContainer`, which explains it.
         self.controller.set_curve(new_view.curve.clone());
         let t = self.controller.value();
 

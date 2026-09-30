@@ -794,7 +794,7 @@ pub fn commands_of(tree: Option<&LayerTree>) -> Vec<DrawCommandSummary> {
 /// On failure the panic message includes the full snapshot so the developer
 /// can see what was actually painted.
 ///
-/// Unlike Flutter's `paints..something()` matcher this assertion is **strict**:
+/// This assertion is **strict**:
 /// if `pred` never matches it is always a test failure, never a silent pass.
 pub fn assert_any(tree: Option<&LayerTree>, pred: impl Fn(&DrawCommandSummary) -> bool) {
     assert!(

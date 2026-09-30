@@ -4,8 +4,7 @@ The fifth tree: the accessibility tree assembled from the render tree and
 exported to the platform through AccessKit. Layer rules and the crate's place in
 the workspace DAG live in [`docs/FOUNDATIONS.md`](../../docs/FOUNDATIONS.md) and
 this crate's `[package.metadata.flui] layer`; this file
-records the per-decision divergences from the Flutter reference that would
-otherwise read as drift.
+records the per-decision rules that would otherwise read as drift.
 
 Cross-crate protocol decisions belong in an ADR (`docs/adr/`). What belongs here
 is a decision local to this crate: a translation rule, a precedence, a payload
@@ -15,19 +14,10 @@ shape.
 
 ### 1. Role resolution is a single-valued specificity cascade, and checkable state outranks the broad `IsButton`
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — the reference's
-observable behavior is the floor; where a contract can be improved, improve it
-and record what is better. The precedence below is a rule FLUI has to invent,
-because the shape it exports into has no equivalent of the reference's.
-
-**Oracle:** Flutter publishes a semantics node as a *set* of
-`SemanticsFlag`s and lets each platform read the ones it wants. Its own corpus
-asserts that set directly — for example
-`test/material/radio_list_tile_test.dart` (tag `3.44.0`) asserts one node
-carrying `isButton`, `hasCheckedState`, `hasEnabledState`, `isEnabled`,
-`isInMutuallyExclusiveGroup`, `isFocusable` and `hasSelectedState` **together**,
-with `[SemanticsAction.tap, SemanticsAction.focus]`. There is no single "role"
-in the reference and therefore no precedence question to answer.
+**Rule:** a semantics node carries a *set* of flags, and a radio tile, for example,
+carries `IsButton`, `HasCheckedState`, `HasEnabledState`, `IsInMutuallyExclusiveGroup`,
+`IsFocusable` and `HasSelectedState` together. The shape FLUI exports into is
+single-valued, so the precedence below is a rule FLUI has to define.
 
 **Choice:** AccessKit's `Node::role` is one `Role`, so `resolve_role` picks
 exactly one from the union of flags the node carries, in this order:
@@ -54,11 +44,9 @@ descendant's node**, so one node can arrive here carrying both an ancestor's
 resolves `Button` under the old order and `RadioButton` under this one, with the
 same node id either way. That composition is reachable through the public API —
 the `Semantics` widget and its `button` builder are both public. The other
-composition this precedence is measured to affect is the reference's own:
-`MergeSemantics` over a `ListTile` carrying a `Radio`, which is what
-`RadioListTile` builds (`material/radio_list_tile.dart`, tag `3.44.0`, wraps its
-tile in `MergeSemantics` so the whole tile is "a single interactive entity").
-Measured through `packages/flui-material/tests/list_tile.rs`'s fixture, that tree
+composition this precedence is measured to affect is
+`MergeSemantics` over a `ListTile` carrying a `Radio`, the shape of a radio list
+tile whose whole tile is a single interactive entity. Measured through `packages/flui-material/tests/list_tile.rs`'s fixture, that tree
 exports one merged node, and it resolves `Button` under the old order and
 `RadioButton` under this one.
 
@@ -95,48 +83,18 @@ tile under a default `MediaQueryData` for exactly this reason. Removing the
 group flag, which turns the radio's node into a `CheckBox`, is the only thing
 that changes the answer.
 
-**The reference splits that node the same way; its one-node oracle is a merge.**
-Flutter's corpus asserts the tile-and-radio composition as **one** node:
-`test/material/radio_list_tile_test.dart`, `testWidgets('RadioListTile semantics')`
-(tag `3.44.0`), one node carrying `isButton`, `hasCheckedState`, `hasEnabledState`,
-`isEnabled`, `isInMutuallyExclusiveGroup`, `isFocusable` and `hasSelectedState`,
-with `actions: [SemanticsAction.tap, SemanticsAction.focus]` and `label: 'Title'`
-(the `isButton` there depends on the test passing `internalAddSemanticForOnTap:
-true`). No flag bit lets the reference merge where FLUI splits. The
-reference's `isCompatibleWith` rejects actions on the same raw bit intersection
-FLUI uses, and rejects flags through `_flags.hasConflictingFlags(..)`, which for
-every state the tile and the radio share tests the same "both carry the trait"
-condition FLUI's bit intersection does: `isEnabled.hasConflict(..)` is
-`both != Tristate.none`, and `hasEnabledState` *is* `isEnabled != none` — the
-same for `isFocused`/`isFocusable` and `isChecked`/`hasCheckedState`. So the
-reference's own predicate marks the radio as conflicting
-(`rendering/object.dart`, `_marksConflictsInMergeGroup`), the radio forms its
-own `SemanticsNode` (`shouldFormSemanticsNode`, via `_hasSiblingConflict`), and
-what the oracle sees as one node is `MergeSemantics`: `getSemanticsData` folds
-every descendant's flags and actions into the parent under
-`mergeAllDescendantsIntoThisNode` (`semantics/semantics.dart`), and the tester
-reports zero children for such a node. The bare `ListTile` FLUI measures above
-is therefore *not* the oracle's composition; the like-for-like one is
-`MergeSemantics::new().child(ListTile…Radio)`, and measured it exports **one**
-node with role `RadioButton` — the same shape. A bare tile splits in both
-frameworks — on the reference's side by its predicate as traced above; no
-reference test mounts a bare `ListTile` with a `Radio`, so that half is an
-inference at the tag, not an oracle. Provenance, since it is the one weak link: `hasConflictingFlags`
-is defined on `SemanticsFlags` in the engine's `lib/ui`, which `.flutter` does
-not carry; its body was read from the engine source bundled with a local SDK
-(framework `3.44.8`, engine `0cd6107`), a different patch release from the
-pinned tag. The tristate shape is not in doubt at the tag — the framework there
-already drives it through `_tristateFromBoolOrNull` — but the exact member list
-is read from that revision, not from `3.44.0`.
+A bare `ListTile` with a `Radio` splits into separate nodes; the like-for-like
+composition of one interactive entity is
+`MergeSemantics::new().child(ListTile…Radio)`, which exports **one** node with
+role `RadioButton`.
 
-What the merged node still lacks against the oracle is named rather than left
-to be discovered: it carries **no label** (`Text` → `RenderParagraph` publishes
-no semantics — a deferral already recorded in
-`crates/flui-objects/src/text/paragraph.rs`'s module doc, so the tile's `title`
-cannot label it the way the reference's is labelled `'Title'`) and **no tap
-action** (Flutter's `InkResponse` publishes `Semantics(onTap: ..)` itself;
-FLUI's does not — see `packages/flui-material/ARCHITECTURE.md`). Role matches;
-label and action are the recorded gaps.
+What the merged node still lacks is named rather than left to be discovered: it
+carries **no label** (`Text` → `RenderParagraph` publishes no semantics — a
+deferral already recorded in `crates/flui-objects/src/text/paragraph.rs`'s module
+doc, so the tile's `title` cannot label it) and **no tap action** (FLUI's ink
+response does not publish `Semantics(onTap: ..)` itself — see
+`packages/flui-material/ARCHITECTURE.md`). Role matches; label and action are the
+recorded gaps.
 
 **Consequences, named rather than left to be discovered:**
 
@@ -144,11 +102,10 @@ label and action are the recorded gaps.
   behaviour change for any node that carries a checkable flag beside it.** A
   widget that deliberately publishes both — a toggle styled as a button — now
   resolves to `Switch`/`CheckBox`. That is the correct reading of the flag set,
-  and it is the reading the reference's corpus asserts, but it is a change to
-  existing output rather than a new capability.
+  but it is a change to existing output rather than a new capability.
 - **The cascade is still lossy, and cannot be made lossless here.** Any node
-  carrying two unrelated roles in its flag set loses one. The reference does not
-  have this problem because it does not have to choose. The mitigation is
+  carrying two unrelated roles in its flag set loses one, because AccessKit's
+  role is single-valued. The mitigation is
   order-of-specificity, not completeness — a genuinely two-role node has no
   correct single answer, only a defensible one.
 - **The order is load-bearing and is not obvious from any single flag's
@@ -183,58 +140,18 @@ label and action are the recorded gaps.
   `RadioButton`, so the group flag is what distinguishes them rather than checked
   state alone.
 
-### 2. `IsButton` outranks `IsLink` and `IsTextField`, and the reference's corpus is not silent about it
+### 2. `IsButton` outranks `IsLink` and `IsTextField`
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — a divergence from the
-reference is kept only by decision, recorded where a reader will find it, with a
-test that replaces the reference's coverage.
+**Rule:** the cascade in mapping decision 1 leaves `IsLink`, `IsTextField`, `IsSlider`,
+`IsImage` and `IsHeader` *below* `IsButton`, so a node carrying `IsButton` beside one of them
+loses that other role. The collision is real: a dropdown's text field with a trailing button
+carries `IsTextField` and `IsButton` together, and a linked button carries `IsButton` and
+`IsLink`. `Role` is single-valued where the flag set is not, so a node reported as `Button`
+may also be a link or a text field.
 
-**The divergence.** The cascade in mapping decision 1 leaves `IsLink`,
-`IsTextField`, `IsSlider`, `IsImage` and `IsHeader` *below* `IsButton`, so a node
-carrying `IsButton` beside one of them loses that other role. That is not an
-absence of reference coverage, which an earlier draft of this file asserted: the
-corpus pins the collision directly. Measured over
-`.flutter/packages/flutter/test/**/*.dart` (tag `3.44.0`), counting every `flags:`
-list literal — one per expectation node — 105 of 590 carry
-`SemanticsFlag.isButton`, and among them:
-
-| flags beside `isButton` | lists | files |
-|---|---|---|
-| `hasCheckedState` | 20 | `radio_list_tile_test.dart`, `switch_list_tile_test.dart`, `chip_test.dart`, `toggle_buttons_test.dart`, `custom_painter_test.dart`, `time_picker_test.dart` |
-| `hasToggledState` | 1 | `switch_list_tile_test.dart` |
-| `isTextField` | 1 | `dropdown_menu_test.dart` |
-| `isLink` | 1 | `semantics_merge_test.dart` |
-| `isSlider`, `isImage`, `isHeader`, `isKeyboardKey` | 0 | — |
-
-**What the instrument cannot see, so this table is a floor and not a population:**
-it matches the literal spelling `SemanticsFlag.x` inside a `flags: [...]` literal,
-so a test that assembles its flag list from a local constant or a spread is not
-counted at all. The two collisions that matter here are pinned by tests it does
-see and were read directly; the counts beside them are context for "the corpus is
-not silent", not an exhaustive census of it.
-
-The two the earlier draft denied outright are the two that matter here, and both
-were read directly rather than counted:
-
-- `test/material/dropdown_menu_test.dart`,
-  `testWidgets('ensure exclude semantics for trailing button')` — one node
-  carrying `isTextField`, `isFocusable`, `hasEnabledState`, `isEnabled`,
-  `isReadOnly`, `isButton` and `hasExpandedState`, with
-  `actions: [SemanticsAction.focus, SemanticsAction.expand]`.
-- `test/widgets/semantics_merge_test.dart`,
-  `testWidgets('LinkUri from child is passed up to the parent when merging nodes')`
-  — one node carrying `isButton`, `hasEnabledState`, `isEnabled`, `isFocusable`
-  and `isLink`, plus a `linkUrl`.
-
-So the corpus is a *floor* here and FLUI does not meet it. `Role` is
-single-valued where the reference publishes a flag set and lets each platform
-read what it wants, so a node FLUI reports as `Button` is one the reference
-reports as a button **and** a link (or a text field).
-
-**Choice:** keep `IsButton` above them. This is a **pre-existing divergence, not
-a regression**: `IsButton` was already tested above `IsLink` and `IsTextField`
-before this change, and the reorder above moved only the checkable states. The
-behaviour is unchanged and deliberate; what this entry adds is the accounting.
+**Choice:** keep `IsButton` above them. This precedence predates the checkable reorder in
+decision 1, which moved only the checkable states; the behaviour is unchanged and deliberate,
+and this entry records it.
 
 **Why it is not merely theoretical.** `Semantics::new().button(true).link(true)`
 and `Semantics::new().button(true).text_field(true)` both compile today and each
@@ -272,11 +189,9 @@ notifier hooks). Assembly runs in the existing post-paint semantics phase (`run_
   realm holds per window (ADR-0082 §2). It names only AccessKit types, never a semantics type:
   what crosses it is already translated.
 
-**Divergence.** Flutter's current `_RenderObjectSemantics` compiler is a nullable-per-node
-state machine (`_SemanticsFragment`, `mergeUp`, sibling merge groups, geometry-dirty tracking).
-FLUI keeps the observable `SemanticsNode` tree as the contract and implements incrementality as
-anchor-scoped re-assembly over the classic merge model instead. Freshness is mark-driven, as in
-Flutter's `flushSemantics`: geometry outside re-assembled subtrees keeps its last published
+**Incrementality.** The observable `SemanticsNode` tree is the contract; incrementality is
+anchor-scoped re-assembly over the classic merge model, not a per-node fragment state machine.
+Freshness is mark-driven: geometry outside re-assembled subtrees keeps its last published
 value.
 
 **Not implemented.** `RenderBlockSemantics` / blocking of previously painted siblings; sibling
@@ -296,10 +211,8 @@ empty name for Narrator and Orca. The AppKit adapter falls back to the label, wh
 VoiceOver read it and the macOS check passed. Keeping the label as well leaves queries by
 label (`flui::testing::a11y`, the harnesses) unchanged.
 
-**Divergence.** Flutter's platform bridges expose a static text's label as its name and its
-value separately. AccessKit's `Label` has one text slot on UIA and AT-SPI, so the two are
-joined with the separator the reference uses to join merged labels (`_concatAttributedString`
-in `packages/flutter/lib/src/semantics/semantics.dart`, tag `3.44.0`, `'\n'`).
+AccessKit's `Label` has one text slot on UIA and AT-SPI, so the label and the value are
+joined with a newline, the same separator used when merged labels are concatenated.
 
 **Test.** `advertised_actions_follow_the_uia_patterns` in `src/agent/tests.rs` reads a static
 text's name through `accesskit_consumer` the way the adapters do; `cargo xtask device
@@ -337,10 +250,8 @@ frame, and a `GestureDetector` runs a semantics tap only in the frame after the 
 would close this, because the handler would receive the requested direction instead of a
 toggle.
 
-**Divergence.** Flutter's `dart:ui` has discrete `SemanticsAction.expand` (`1 << 24`) and
-`collapse` (`1 << 25`) (`engine/src/flutter/lib/ui/semantics.dart`, checked on 2026-09-26).
-FLUI has no such actions and keeps those bits reserved
-(`flui_protocol::SemanticsAction::RESERVED_BITS`); adding the two actions at Flutter's bits
+**Discrete actions.** FLUI has no discrete expand and collapse actions and keeps bits 24 and
+25 reserved (`flui_protocol::SemanticsAction::RESERVED_BITS`); adding the two actions there
 is the follow-up that would remove the `Tap` route. A numeric `set_value` (a slider through
 UI Automation's `RangeValue`) arrives as `SetValue` with `ActionData::NumericValue`, which has
 no FLUI argument shape: the handler receives `SetText` with no arguments. Nothing sends
@@ -392,7 +303,7 @@ vocabulary is the desktop server's, and ADR-0095 §4 compares the two backends a
 normalization. The direction check does not close mapping decision 5's double-toggle race: it
 reads the last committed tree, which lags the request as the adapter's copy does.
 
-**Divergence.** Not a Flutter behaviour: Flutter has no agent read. The rectangles are
+**Geometry and dialog roles.** The rectangles are
 surface-relative physical pixels, reported as `surface_rect` with no screen `rect`: the realm
 knows no window position, and a client that reads `rect` as screen pixels must find none rather
 than a misplaced one. `AlertDialog` and `Dialog` read as `dialog` (UIA's `Window` with `IsDialog`),

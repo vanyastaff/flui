@@ -10,26 +10,15 @@
 //!
 //! [`rearrange`]: OverlayHandle::rearrange
 //!
-//! # Flutter parity
-//!
-//! `.flutter/packages/flutter/lib/src/widgets/overlay.dart` (master
-//! `3.33.0-0.0.pre-6280-g88e87cd963f`): `Overlay`, `OverlayState`,
-//! `OverlayEntry`, `_OverlayEntryWidget`, `_Theater` / `_RenderTheater`.
-//!
 //! The load-bearing contract, which the tests pin: **`entries` is ordered
-//! bottom → top, and the last entry paints on top.** Flutter establishes this by
-//! filling `children` from `_entries.reversed` and then reversing again
-//! (`overlay.dart:894`, `:916`), with `_RenderTheater.paint` walking
-//! first-onstage → last (`:1157-1161`).
+//! bottom → top, and the last entry paints on top.** The build fills `children`
+//! from the entries top-first and then reverses, and the theater's paint walks
+//! first-onstage → last.
 //!
-//! # `opaque` / `maintainState` / `skipCount`
+//! # `opaque` / `maintain_state` / `skip_count`
 //!
-//! This originally shipped as a plain `Stack` with `StackFit::Expand`, deferring
-//! the three flags; they landed later, because `ModalRoute`'s
-//! `maintainState` would otherwise be a field that lies.
-//!
-//! [`OverlayState::build`] is now a port of `overlay.dart:886-918`: walk the
-//! entries **top-first**, keep building until an [`opaque`] entry is reached, then
+//! [`OverlayState::build`] walks the
+//! entries **top-first**, keeps building until an [`opaque`] entry is reached, then
 //! keep only the entries below it that set [`maintain_state`]. The kept-but-covered
 //! entries end up as the *leading* children of the reversed list, so they are
 //! exactly the first `skip_count` children — which [`RenderTheater`] does not lay
@@ -37,10 +26,10 @@
 //!
 //! An entry below an opaque one **without** `maintain_state` is absent from the
 //! view tree entirely: its state is disposed, and rebuilt fresh when it is
-//! uncovered. That is Flutter's contract, and routes depend on it.
+//! uncovered. Routes depend on this.
 //!
-//! Two divergences, both recorded in the `entry` module: no `tickerEnabled: false` for the
-//! covered entries, and no `canSizeOverlay`.
+//! Two gaps, both recorded in the `entry` module: no ticker muting for the
+//! covered entries, and no overlay sizing under unbounded constraints.
 //!
 //! [`opaque`]: OverlayEntry::set_opaque
 //! [`maintain_state`]: OverlayEntry::set_maintain_state
@@ -88,16 +77,13 @@ use self::theater::Theater;
 
 /// Where [`OverlayHandle::insert`] places a new entry in the bottom → top list.
 ///
-/// Flutter passes `above:`/`below:` named arguments and asserts they are not both
-/// given (`overlay.dart:661`); an enum makes that unrepresentable instead.
-/// Resolves to Flutter's `_insertionIndex` (`overlay.dart:660-669`).
+/// An enum, so "both above and below" is unrepresentable.
 ///
 /// A reference entry the overlay does not hold (never inserted, or removed
-/// since) falls back to [`Top`](Self::Top), as Flutter's `indexOf` of `-1`
-/// does after its assert.
+/// since) falls back to [`Top`](Self::Top).
 #[derive(Debug, Clone)]
 pub enum InsertPosition {
-    /// Append — the new entry paints above every existing one. Flutter's default.
+    /// Append — the new entry paints above every existing one. The default.
     Top,
     /// Directly above `.0`, i.e. at `index_of(entry) + 1`.
     Above(OverlayEntry),
@@ -124,18 +110,13 @@ pub(crate) struct OverlayShared {
 
 impl OverlayShared {
     /// Schedule the mounted overlay to rebuild. No-op when unmounted.
-    ///
-    /// Flutter's `OverlayState._markDirty` (`overlay.dart:848-852`), which is
-    /// `if (mounted) setState((){})`.
     pub(crate) fn schedule_rebuild(&self) {
         if let Some(handle) = self.rebuild.lock().as_ref() {
             handle.schedule(flui_view::RebuildReason::StateChange);
         }
     }
 
-    /// Whether the overlay is mounted. Flutter's `OverlayState.mounted`, consulted
-    /// by `OverlayEntry.remove` before it touches the entry list
-    /// (`overlay.dart:233`).
+    /// Whether the overlay is mounted.
     pub(crate) fn is_mounted(&self) -> bool {
         self.rebuild
             .lock()
@@ -188,7 +169,7 @@ impl OverlayShared {
     /// The entries of `candidates` this overlay may take: not owned by another
     /// live overlay, not already in this list, and not repeated within
     /// `candidates` (the first occurrence wins). Each refusal is logged; none
-    /// panics (PANIC-POLICY: this is caller error, which Flutter `assert`s).
+    /// panics (PANIC-POLICY: this is caller error).
     fn admissible(
         self: &Arc<Self>,
         candidates: &[OverlayEntry],
@@ -239,9 +220,8 @@ impl OverlayShared {
 /// - **after unmount**, the list still changes but nothing rebuilds. The
 ///   change takes effect if an [`Overlay`] mounts with this handle again.
 ///
-/// This replaces Flutter's `GlobalKey<OverlayState>` (`navigator.dart:3746`),
-/// which `Navigator` uses purely to call `rearrange`. The `GlobalKey` route is
-/// not merely unnecessary but hazardous here: resolving it from inside a
+/// `Navigator` holds one purely to call `rearrange`. A `GlobalKey` lookup would
+/// not merely be unnecessary but hazardous here: resolving it from inside a
 /// tree-borrow callback would nest the `WidgetsBinding` registry lock inside
 /// the lock already held for the ancestor walk.
 #[derive(Clone)]
@@ -267,9 +247,8 @@ impl OverlayHandle {
     /// state is alive. Not the same as [`OverlayEntry::is_attached`], which
     /// asks whether one *entry* is in this handle's list.
     ///
-    /// Flutter's `OverlayState.mounted`. `false` before the first mount and
-    /// after the overlay is disposed; while it is `false`, mutations change the
-    /// list without rebuilding anything.
+    /// `false` before the first mount and after the overlay is disposed; while it
+    /// is `false`, mutations change the list without rebuilding anything.
     #[must_use]
     pub fn is_mounted(&self) -> bool {
         self.shared
@@ -305,9 +284,8 @@ impl OverlayHandle {
     /// Insert `entry` at `position` and, if the overlay is mounted, schedule it
     /// to rebuild with the new layer.
     ///
-    /// Flutter's `OverlayState.insert` (`overlay.dart:742-749`). Call it from
-    /// outside a build (an event handler, a post-frame callback, a `Navigator`
-    /// flush): the entry is built on the overlay's next frame.
+    /// Call it from outside a build (an event handler, a post-frame callback, a
+    /// `Navigator` flush): the entry is built on the overlay's next frame.
     ///
     /// On an unmounted overlay (before the first mount, or after dispose) the
     /// entry still joins the list and [`is_attached`](OverlayEntry::is_attached)
@@ -317,16 +295,13 @@ impl OverlayHandle {
     /// An entry can be in one overlay, once. Inserting an entry another
     /// overlay holds, or one this overlay already holds, is refused: logged
     /// with `tracing::error!`, the list unchanged ([`remove`](OverlayEntry::remove)
-    /// it from its overlay first). Flutter asserts the same precondition.
+    /// it from its overlay first).
     pub fn insert(&self, entry: &OverlayEntry, position: &InsertPosition) {
         self.insert_all(std::slice::from_ref(entry), position);
     }
 
     /// Insert `entries` as a contiguous group at `position`, preserving their
-    /// relative order, and schedule a rebuild.
-    ///
-    /// Flutter's `OverlayState.insertAll` (`overlay.dart:758-771`), which
-    /// early-returns on an empty iterable.
+    /// relative order, and schedule a rebuild. An empty slice does nothing.
     pub(crate) fn insert_all(&self, entries: &[OverlayEntry], position: &InsertPosition) {
         let entries = self.shared.admissible(entries, false);
         if entries.is_empty() {
@@ -346,18 +321,15 @@ impl OverlayHandle {
     /// Reorder the overlay to `new_entries`, then place any entry **not**
     /// mentioned on top of them, preserving that group's relative order.
     ///
-    /// Flutter's `OverlayState.rearrange` (`overlay.dart:813-846`) with neither
-    /// `above:` nor `below:` — the only form `Navigator._flushHistoryUpdates`
-    /// uses (`navigator.dart:4612`), where `newEntries` names every entry anyway.
-    /// Entries in `new_entries` that the overlay does not hold are inserted, as
-    /// Flutter documents (`:798`).
+    /// This is the only form `Navigator` uses, where `new_entries` names every
+    /// entry anyway. Entries in `new_entries` that the overlay does not hold are
+    /// inserted.
     ///
-    /// Two of Flutter's guards are ported: the empty early-return (`:830`), and
-    /// the `listEquals` short-circuit (`:833`) that makes a no-op reorder cost
-    /// **no rebuild**.
+    /// An empty `new_entries` does nothing, and a reorder to the order already in
+    /// place costs **no rebuild**.
     ///
-    /// **Deferred:** the `above:` / `below:` placement of the unmentioned group.
-    /// Nothing needs it yet; `Navigator` never passes either.
+    /// **Deferred:** choosing where the unmentioned group goes (above or below).
+    /// Nothing needs it yet; `Navigator` never asks.
     ///
     /// On an unmounted overlay the list is reordered but nothing rebuilds, as
     /// with [`insert`](Self::insert). Entries another overlay holds are
@@ -384,12 +356,12 @@ impl OverlayHandle {
                     .zip(new_entries)
                     .all(|(old, new)| old.is_same(new))
             {
-                return; // listEquals short-circuit: no mutation, no rebuild.
+                return; // Same order already: no mutation, no rebuild.
             }
 
             // Entries the overlay holds that `new_entries` does not name, in
-            // their existing relative order. Flutter keeps these as a group and,
-            // with no `above`/`below`, leaves them on top (`:798-811`, `:845`).
+            // their existing relative order. They stay together as a group and
+            // are left on top.
             let unmentioned: Vec<OverlayEntry> = list
                 .iter()
                 .filter(|held| !new_entries.iter().any(|new| new.is_same(held)))
@@ -420,12 +392,10 @@ impl fmt::Debug for OverlayHandle {
     }
 }
 
-/// Flutter's `_insertionIndex` (`overlay.dart:660-669`).
+/// The list index a new entry goes to for `position`.
 ///
 /// An `Above`/`Below` naming an entry the overlay does not hold falls back to
-/// `Top`. Flutter would return `-1` from `indexOf` and then either insert at
-/// `-1` (a runtime error) or at `0`; neither is a contract worth porting, and
-/// [`PANIC-POLICY`](../../../../docs/PANIC-POLICY.md) reserves panics for
+/// `Top`: [`PANIC-POLICY`](../../../../docs/PANIC-POLICY.md) reserves panics for
 /// framework invariants, not caller mistakes.
 fn insertion_index(entries: &[OverlayEntry], position: &InsertPosition) -> usize {
     let find = |needle: &OverlayEntry| entries.iter().position(|held| held.is_same(needle));
@@ -447,12 +417,12 @@ pub(crate) struct OnstagePlan {
     pub(crate) skip_count: usize,
 }
 
-/// `OverlayState.build`'s onstage loop, as pure data (`overlay.dart:888-918`).
+/// The overlay build's onstage loop, as pure data.
 ///
-/// Flutter walks `_entries.reversed` — top first — adding children until it
-/// passes an `opaque` entry, then adding only the `maintainState` ones below it.
-/// It reverses once at the end, which is why the covered entries land at the
-/// front of the list and `skipCount` counts a *prefix*.
+/// Walks the entries top first, adding children until it passes an `opaque`
+/// entry, then adding only the `maintain_state` ones below it. It reverses once at
+/// the end, which is why the covered entries land at the front of the list and
+/// `skip_count` counts a *prefix*.
 pub(crate) fn onstage_plan(entries: &[OverlayEntry]) -> OnstagePlan {
     let mut build = Vec::new();
     let mut onstage = true;
@@ -466,8 +436,8 @@ pub(crate) fn onstage_plan(entries: &[OverlayEntry]) -> OnstagePlan {
                 onstage = false;
             }
         } else if entry.maintain_state() {
-            // Flutter also passes `tickerEnabled: false` here; FLUI has no
-            // per-subtree ticker gate. See `entry`'s module docs.
+            // There is no per-subtree ticker gate to mute a covered entry's
+            // animations. See `entry`'s module docs.
             build.push(index);
         }
     }
@@ -485,8 +455,8 @@ pub(crate) fn onstage_plan(entries: &[OverlayEntry]) -> OnstagePlan {
 ///
 /// The entry list lives in the [`OverlayHandle`] the caller supplies, so it
 /// survives this view being rebuilt and can be mutated from outside the tree.
-/// Flutter's `Overlay.initialEntries` (`overlay.dart:655-658`, inserted in
-/// `initState`) has no analogue: insert into the handle before mounting instead.
+/// There is no initial-entries argument: insert into the handle before mounting
+/// instead.
 #[derive(Clone)]
 pub struct Overlay {
     handle: OverlayHandle,
@@ -512,17 +482,12 @@ impl Overlay {
 
     /// The nearest ancestor [`Overlay`]'s handle, registering a dependency so
     /// this element rebuilds if a *different* overlay identity ever replaces
-    /// the one found here — a FLUI-native divergence from the oracle; see
-    /// [`maybe_of`](Self::maybe_of)'s doc for why.
+    /// the one found here; see [`maybe_of`](Self::maybe_of)'s doc for why.
     ///
     /// # Panics
     ///
     /// Panics if there is no `Overlay` ancestor. Use
     /// [`maybe_of`](Self::maybe_of) for a non-panicking variant.
-    ///
-    /// Flutter parity (API shape, not the dependency behavior below):
-    /// `Overlay.of(context)` (`.flutter/packages/flutter/lib/src/widgets/overlay.dart`,
-    /// tag `3.44.0`).
     #[must_use]
     pub fn of(ctx: &dyn BuildContext) -> OverlayHandle {
         Self::maybe_of(ctx).expect(
@@ -535,44 +500,27 @@ impl Overlay {
     /// Look up the nearest ancestor [`Overlay`]'s handle, registering a
     /// dependency. Returns `None` if there is no `Overlay` ancestor.
     ///
-    /// # Depend, not get — a FLUI-native divergence, not oracle parity
+    /// # Depend, not get
     ///
-    /// Resolves via [`BuildContextExt::depend_on`], not the lookup-only `get`.
-    /// **This is not what the oracle does**: Flutter 3.44's `Overlay.maybeOf`
-    /// calls the private `_RenderTheaterMarker.maybeOf` with
-    /// `createDependency: false` explicitly (`overlay.dart`) — `_RenderTheaterMarker`'s
-    /// own `maybeOf` helper defaults that parameter to `true`, but `Overlay.maybeOf`
-    /// overrides it to `false`, and `Overlay.of` routes through `maybeOf`. So
-    /// neither oracle entry point registers a dependency at all; a
-    /// dependency-free `get` would in fact be the *loyal* port.
+    /// Resolves via [`BuildContextExt::depend_on`], not the lookup-only `get`,
+    /// deliberately: it is what makes `Overlay::maybe_of` re-fire from
+    /// `did_change_dependencies` if a *different* overlay identity ever replaces
+    /// the resolved one. That re-resolution is load-bearing: a
+    /// `MultiDragHandle` is owner-local but holds no borrowed `BuildContext`, so
+    /// the overlay has to be resolved and cached *ahead of time*, in a lifecycle
+    /// hook, for a context-free gesture callback to read later (see
+    /// `draggable.rs`'s `DraggableState`). `depend_on` is what keeps that cached
+    /// value honest if the ancestor ever changes underneath it; `get`, resolved
+    /// once and never re-checked, would silently go stale. This differs from
+    /// `ScaffoldScope::maybe_of` (`flui-material`), which uses `get` because
+    /// nothing there needs to survive past the immediate lookup into a
+    /// context-free callback.
     ///
-    /// `depend_on` is used anyway, deliberately: it is what makes
-    /// `Overlay::maybe_of` re-fire from `did_change_dependencies` if a
-    /// *different* overlay identity ever replaces the resolved one. That
-    /// re-resolution is load-bearing here in a way the oracle never needs it
-    /// to be. Flutter's `_DragAvatar.update` can call `Overlay.of(context)`
-    /// fresh, on demand, because Dart closures keep `context` alive for free.
-    /// FLUI's `MultiDragHandle` is owner-local but still holds no borrowed
-    /// `BuildContext`; the overlay therefore has to be resolved and cached
-    /// *ahead of time*, in a lifecycle hook, for a context-free gesture
-    /// callback to read later (see `draggable.rs`'s `DraggableState`).
-    /// `depend_on` is what keeps that cached value honest if the ancestor
-    /// ever changes underneath it; `get`, resolved once and never
-    /// re-checked, would silently go stale. This differs from
-    /// `ScaffoldScope::maybe_of` (`flui-material`), which uses `get` for the
-    /// same reason the oracle would here too: nothing there needs to survive
-    /// past the immediate lookup into a context-free callback.
-    ///
-    /// Resolves an `OverlayScope` marker (crate-internal) mounted **per entry** (wrapping
-    /// that entry's built child, not once per `Overlay`) — the 3.44.0 oracle's
-    /// own shift from `findAncestorStateOfType<OverlayState>` to resolving a
-    /// private `_RenderTheaterMarker` `InheritedWidget` each
-    /// `_OverlayEntryWidgetState` mounts around its entry's child. A nested
+    /// Resolves an `OverlayScope` marker (crate-internal) mounted **per entry**
+    /// (wrapping that entry's built child, not once per `Overlay`). A nested
     /// `Overlay`'s own entries therefore see the nearest enclosing overlay,
     /// falling out of the ordinary inherited-map nearest-wins shadowing with
     /// no extra code here.
-    ///
-    /// Flutter parity: `Overlay.maybeOf(context)`.
     #[must_use]
     pub fn maybe_of(ctx: &dyn BuildContext) -> Option<OverlayHandle> {
         ctx.depend_on::<OverlayScope, _>(|scope| scope.data().clone())
@@ -667,8 +615,7 @@ impl ViewState<Overlay> for OverlayState {
     /// Bottom → top: `entries[i]` paints below `entries[i + 1]`, because
     /// `Theater` paints its children in order.
     ///
-    /// A line-for-line port of `OverlayState.build` (`overlay.dart:886-918`).
-    /// The loop runs **top-first** over `_entries.reversed`, so `children` comes
+    /// The loop runs **top-first** over the entries, so `children` comes
     /// out top→bottom and is reversed once at the end; `skip_count` therefore
     /// counts the covered `maintain_state` entries, which are the leading ones.
     fn build(&self, _view: &Overlay, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -693,8 +640,7 @@ impl ViewState<Overlay> for OverlayState {
     }
 
     /// Drop the rebuild capability, making every surviving [`OverlayHandle`]
-    /// inert. Flutter gets this from `_markDirty`'s `if (mounted)` guard
-    /// (`overlay.dart:849`).
+    /// inert.
     fn dispose(&mut self) {
         if self.serving {
             self.shared
@@ -709,14 +655,13 @@ impl ViewState<Overlay> for OverlayState {
 
 /// The child the [`Overlay`] builds for each entry.
 ///
-/// Flutter's `_OverlayEntryWidget` (`overlay.dart:297`), which is likewise
-/// `Stateful` — and for the same primary reason: it is the thing
-/// `markNeedsBuild` rebuilds on its own, without touching the `Overlay`.
+/// Stateful, because it is the thing `mark_needs_build` rebuilds on its own,
+/// without touching the `Overlay`.
 ///
 /// Keyed by [`OverlayEntryId`] so a `rearrange` reorder is a permutation the
-/// keyed reconciler recognises, preserving each layer's subtree state. Flutter
-/// spends a `GlobalKey` on this (`overlay.dart:214`); a plain [`ValueKey`] is
-/// enough, because the moves are always among siblings of one parent.
+/// keyed reconciler recognises, preserving each layer's subtree state. A plain
+/// [`ValueKey`] is enough, because the moves are always among siblings of one
+/// parent.
 #[derive(Clone)]
 struct OverlayEntryView {
     entry: OverlayEntry,
@@ -788,8 +733,7 @@ impl ViewState<OverlayEntryView> for OverlayEntryViewState {
     ///
     /// Wraps the entry's built child in an [`OverlayScope`] marker — the
     /// per-entry mount point `Overlay::of`/`maybe_of` resolve against
-    /// (ADR-0076), matching the 3.44.0 oracle's `_OverlayEntryWidgetState`,
-    /// which wraps each entry's child in its own `_RenderTheaterMarker`.
+    /// (ADR-0076).
     fn build(&self, view: &OverlayEntryView, ctx: &dyn BuildContext) -> impl IntoView {
         OverlayScope::new(view.overlay.clone(), (view.entry.builder())(ctx))
     }
@@ -822,15 +766,8 @@ impl ViewState<OverlayEntryView> for OverlayEntryViewState {
 /// lookups. Mounted **per entry**, wrapping that entry's built child — never
 /// once per `Overlay` — by [`OverlayEntryViewState::build`].
 ///
-/// This is FLUI's analogue of the 3.44.0 oracle's private
-/// `_RenderTheaterMarker`: `_OverlayEntryWidgetState.build` wraps each
-/// entry's child in one, and `Overlay.maybeOf` resolves it via
-/// `dependOnInheritedWidgetOfExactType`. Earlier Flutter releases used
-/// `context.findAncestorStateOfType<OverlayState>()` instead — a lookup with
-/// no dependency and no per-entry granularity. `OverlayScope` stays
-/// `pub(crate)`, matching its oracle counterpart's own privacy: nothing
-/// outside `overlay` ever names it directly — [`Overlay::of`]/[`Overlay::maybe_of`]
-/// are the only door.
+/// `OverlayScope` stays `pub(crate)`: nothing outside `overlay` ever names it
+/// directly — [`Overlay::of`]/[`Overlay::maybe_of`] are the only door.
 #[derive(Clone)]
 pub(crate) struct OverlayScope {
     handle: OverlayHandle,

@@ -3,11 +3,8 @@
 //!
 //! **Scope**: M3 filled text field decoration — underline indicator, hint,
 //! floating label (snap), helper/error line, hover fill blend, and the M3
-//! state table — composed from existing widgets; NOT a `_RenderDecoration`
-//! port.
-//!
-//! Flutter parity: `material/input_decorator.dart` (oracle tag `3.44.0`),
-//! narrowed to the filled/underline variant.
+//! state table — composed from existing widgets rather than a dedicated
+//! decoration render object, and narrowed to the filled/underline variant.
 //!
 //! # Named divergences / deferrals
 //!
@@ -70,10 +67,9 @@ use crate::theme_data::InputDecorationThemeData;
 /// state. Carries no layout knobs: a future render-object decorator
 /// consumes this struct unchanged.
 ///
-/// Flutter parity: `InputDecoration` (`material/input_decorator.dart`,
-/// oracle tag `3.44.0`), narrowed to the V1 field list — see the module
-/// docs for the full named-divergence list (no `Widget` slots, no
-/// `prefix`/`suffix`, no `isDense`, no `border` override).
+/// Narrowed to the V1 field list — see the module docs for the full
+/// named-divergence list (no `Widget` slots, no `prefix`/`suffix`, no
+/// `isDense`, no `border` override).
 ///
 /// Every field is a plain public field; build one with a struct literal and
 /// `..Default::default()`, the same convention as [`crate::ButtonStyle`].
@@ -93,9 +89,8 @@ pub struct InputDecoration {
     pub error_text: Option<String>,
     /// Whether the container is filled (the M3 filled variant this
     /// substrate implements). `false` renders a fully transparent
-    /// container with no hover blend — Flutter parity: `_getFillColor`
-    /// returns `Colors.transparent` when `filled != true`
-    /// (`input_decorator.dart:2131-2140`, tag `3.44.0`).
+    /// container with no hover blend (the fill color is
+    /// `Colors.transparent` when `filled != true`).
     pub filled: bool,
     /// Overrides the container's content padding. `None` falls through to
     /// the ambient [`InputDecorationThemeData::content_padding`], then the
@@ -295,8 +290,7 @@ fn hover_blended_fill(
 /// Whether the label should float above the content row rather than sit
 /// inline in place of the hint.
 ///
-/// Flutter parity: `_labelShouldWithdraw` (`input_decorator.dart:1969`, tag
-/// `3.44.0`): `!isEmpty || (isFocused && decoration.enabled)`. The `enabled`
+/// The label floats when `!isEmpty || (isFocused && decoration.enabled)`. The `enabled`
 /// guard is load-bearing: a disabled, empty, "focused" field (focus a field
 /// then disable it) must NOT float — see the module's disabled-row test.
 #[must_use]
@@ -306,9 +300,8 @@ fn label_should_float(is_empty: bool, focused: bool, enabled: bool) -> bool {
 
 /// Whether the hint text should be visible.
 ///
-/// Flutter parity: `showHint` (`input_decorator.dart:2346`) =
-/// `isEmpty && !_hasInlineLabel`, where `_hasInlineLabel`
-/// (`:2176-2178`) is `!labelShouldWithdraw && hasLabel` — i.e. the label is
+/// The hint shows when `isEmpty && !has_inline_label`, where
+/// `has_inline_label` is `!label_should_float && hasLabel` — i.e. the label is
 /// "inline" (occupying the hint's slot) exactly when it is NOT floating and
 /// a label is set.
 #[must_use]
@@ -317,8 +310,7 @@ fn should_show_hint(is_empty: bool, has_label: bool, float: bool) -> bool {
 }
 
 /// The helper-or-error line to render: error replaces helper when both are
-/// set (Flutter parity: `_HelperError` shows one or the other, never both —
-/// `input_decorator.dart`'s `_HelperErrorState`, tag `3.44.0`). Returns the
+/// set (the line shows one or the other, never both). Returns the
 /// text and whether it is the error line (vs. the helper line), so the
 /// caller can pick [`default_error_style`] vs [`default_helper_style`].
 #[must_use]
@@ -345,8 +337,7 @@ fn helper_or_error_line(decoration: &InputDecoration) -> Option<(&str, bool)> {
 /// # State inputs
 ///
 /// [`focused`](Self::focused) and [`is_empty`](Self::is_empty) are explicit
-/// widget inputs — Flutter parity: `InputDecorator.isFocused`/`isEmpty`
-/// (`input_decorator.dart:1868-1958`, tag `3.44.0`). `enabled`/`error` come
+/// widget inputs. `enabled`/`error` come
 /// from [`InputDecoration`] itself. `hovered` is the one state this widget
 /// tracks internally, via its own [`MouseRegion`] (the seam is
 /// `flui_sdk::widgets::MouseRegion`, not `InkWell`'s press/ripple machinery) —
@@ -362,8 +353,7 @@ pub struct InputDecorator {
 
 impl InputDecorator {
     /// Create a decorator around `decoration`, initially unfocused and
-    /// non-empty (Flutter's own `isFocused`/`isEmpty` defaults — both
-    /// `false`, `input_decorator.dart:1877,1879`).
+    /// non-empty (`focused` and `is_empty` both default to `false`).
     #[must_use]
     pub fn new(decoration: InputDecoration) -> Self {
         Self {
@@ -446,9 +436,8 @@ impl ViewState<InputDecorator> for InputDecoratorState {
             theme.input_decoration_theme.clone().unwrap_or_default();
         let decoration = &view.decoration;
 
-        // Flutter parity: `_InputDecoratorState.widgetState`
-        // (`input_decorator.dart:2250-2254`, tag `3.44.0`) — disabled,
-        // focused, hovering (already enabled-gated), error.
+        // Widget state set: disabled, focused, hovering (already
+        // enabled-gated), error.
         let is_hovering =
             decoration.enabled && self.hover.value().contains_state(WidgetState::Hovered);
         let mut states = WidgetStates::NONE;

@@ -8,15 +8,15 @@
 //!
 //! # Identity is an explicit key
 //!
-//! Flutter compares `oldWidget.future == widget.future`. A Rust `Future`/`Stream`
+//! A Rust `Future`/`Stream`
 //! is move-only, not `Clone`, not `Eq`, and cannot live in a view that is cloned
 //! on every rebuild. So both take an explicit `key: Option<K>` plus a factory:
 //! the subscription is recreated exactly when the key changes, and `None` means
-//! "no future / no stream". This also makes Flutter's worst `FutureBuilder`
+//! "no future / no stream". This also makes the worst `FutureBuilder`
 //! footgun — constructing the future inside `build` — unrepresentable.
 //!
 //! See [`ADR-0018`](../../../../docs/adr/ADR-0018-async-builder-seam.md) for the
-//! seam, the parity findings, and the documented divergences.
+//! seam and its documented limits.
 
 pub use flui_view::element::{
     BoxedResultFuture, BoxedResultStream, FutureBuilder, FutureFactory, InitialDataFactory,

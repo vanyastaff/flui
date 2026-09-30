@@ -15,7 +15,7 @@ fn test_device_and_queue() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
 /// Format used for all color-readback tests: plain UNorm so the stored bytes
 /// equal the sRGB-encoded bytes the shader emits 1:1 (no OETF on store),
 /// matching the production surface format chosen by `select_surface_format`
-/// and Flutter/Impeller's onscreen convention.
+/// and the usual onscreen convention.
 const READBACK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 /// Render `draw` into a `size`×`size` UNorm target cleared to `clear`, then

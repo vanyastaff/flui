@@ -1,7 +1,7 @@
 //! `flui doctor`: audit the toolchains FLUI can build against.
 //!
 //! Checks are data (see [`Check`]), not print statements, so the same pass
-//! renders as Flutter-style `[✓]/[!]/[✗]` lines in human mode and as NDJSON
+//! renders as `[✓]/[!]/[✗]` lines in human mode and as NDJSON
 //! `doctor.check` / `doctor.summary` events in `--json` mode. `rustc`,
 //! `cargo`, `rustup` and `git` are always required; Android/iOS/Web
 //! toolchains only warn unless the caller asked for that section

@@ -216,7 +216,7 @@ impl DirtyTracker {
                 // schedule; idempotence keeps it cheap.
                 node.mark_layout_flag();
                 on_invalidated(current);
-                // Flutter box.dart:2840 — a non-empty layout cache means an
+                // A non-empty layout cache means an
                 // ANCESTOR's layout consumed this node's intrinsics/dry
                 // layout/baseline, so the invalidation must reach that
                 // ancestor: keep walking past a relayout boundary (the
@@ -238,8 +238,7 @@ impl DirtyTracker {
                 // duplicate entries.
                 if self.dirty.needs_layout.push(DirtyNode::new(current, depth)) {
                     // Wake the platform: an idle event loop must produce a
-                    // frame for this invalidation (Flutter parity:
-                    // markNeedsLayout → owner.requestVisualUpdate()).
+                    // frame for this invalidation.
                     // Fired only on a NEW boundary entry — an existing entry
                     // means a frame is already scheduled.
                     self.notifier.read().fire_need_visual_update();
@@ -278,7 +277,7 @@ impl DirtyTracker {
                 return;
             };
 
-            // Flutter's idempotence rule: an already-dirty node proves that
+            // Idempotence rule: an already-dirty node proves that
             // an earlier walk has marked or reached the same paint owner.
             // Initial attachment uses `schedule_initial_paint` because fresh
             // RenderState deliberately starts dirty.
@@ -409,23 +408,20 @@ impl DirtyTracker {
     /// repaint boundary can replay its retained output and have just this
     /// node's effect layers rebuilt on the way through.
     ///
-    /// Ports `RenderObject.markNeedsCompositedLayerUpdate` (`object.dart`),
-    /// including its two refusals:
+    /// Two cases refuse the shortcut:
     ///
     /// - **Paint wins.** A node already needing paint, or already carrying this
-    ///   flag, returns immediately. Flutter:
-    ///   `if (_needsCompositedLayerUpdate || _needsPaint) return;`. A repaint
+    ///   flag, returns immediately. A repaint
     ///   rebuilds the layer from current properties anyway, so an update on top
     ///   of it would be redundant work; and letting the update mark run would
     ///   enqueue a second, weaker entry for a node the walk is going to repaint.
-    ///   Parity and efficiency rather than correctness: `run_paint` filters a
+    ///   Efficiency rather than correctness: `run_paint` filters a
     ///   boundary that needs paint out of the update set regardless, so a
     ///   mutation removing this line changes no output — it only lets pointless
     ///   marks through.
     /// - **No retained output, no shortcut.** If no ancestor boundary owns
-    ///   output to patch, this degrades to [`Self::mark_needs_paint`], which is
-    ///   what Flutter's `else { markNeedsPaint(); }` branch does. The flag is
-    ///   still left set, as Flutter leaves it, so a boundary that gains
+    ///   output to patch, this degrades to [`Self::mark_needs_paint`]. The flag
+    ///   is still left set, so a boundary that gains
     ///   retained output later can serve the node without a fresh mark.
     ///
     /// Unlike `mark_needs_paint` this does **not** flag the nodes it walks
@@ -500,7 +496,6 @@ impl DirtyTracker {
     /// Marks compositing bits dirty and schedules the node responsible for the
     /// update, preserving repaint-boundary transition behavior.
     ///
-    /// This ports Flutter's `RenderObject.markNeedsCompositingBitsUpdate`.
     /// Established boundaries stop at themselves, introduced or removed
     /// boundaries walk through non-boundary ancestors, and a boundary parent
     /// leaves its child as the responsible queued root.
@@ -799,8 +794,8 @@ impl DirtyTracker {
 
     /// Sorts the paint queue deep-first.
     ///
-    /// Deepest-first ordering (leaves before ancestors) is the Flutter
-    /// `flushPaint` discipline: boundary children emit their layers before
+    /// Deepest-first ordering (leaves before ancestors) means boundary
+    /// children emit their layers before
     /// ancestor compositing decisions are resolved.
     pub(super) fn sort_paint_deep_first(&mut self) {
         self.dirty.needs_paint.sort_deep_first();
@@ -817,7 +812,7 @@ impl DirtyTracker {
     /// Sorts the semantics queue shallow-first.
     ///
     /// Roots dispatch before their descendants so a parent's config is
-    /// assembled before children fold into it (Flutter's `flushSemantics`).
+    /// assembled before children fold into it.
     pub(super) fn sort_semantics_shallow_first(&mut self) {
         self.dirty.needs_semantics.sort_shallow_first();
     }

@@ -1,18 +1,15 @@
-//! [`InheritedTheme`] — the `wrap`-only subset of Flutter's contract.
+//! [`InheritedTheme`] — the `wrap`-only contract for themes.
 //!
-//! Flutter parity: `widgets/inherited_theme.dart` `InheritedTheme` (oracle
-//! tag `3.44.0`).
+//! ## Deferred: `capture` / `capture_all`
 //!
-//! ## Deferred: `capture` / `captureAll`
-//!
-//! The oracle's `InheritedTheme.capture`/`captureAll` and `CapturedThemes`
+//! A `capture`/`capture_all` pair and a captured-themes value would
 //! walk the element tree between two `BuildContext`s to freeze a set of
 //! ambient themes for a widget that is about to be shown in a *different*
 //! part of the tree (a new route, an overlay) than the one it was built in —
 //! `Navigator`'s route-push machinery is the canonical caller. FLUI's
 //! `Overlay`/`Navigator` do not yet re-parent a subtree across such a
-//! boundary in a way that needs this, so `capture`/`captureAll` are cut here
-//! as speculative (zero consumers) rather than ported unused. Porting them is
+//! boundary in a way that needs this, so `capture`/`capture_all` are cut here
+//! as speculative (zero consumers) rather than built unused. Adding them is
 //! a named follow-up for the material-`Overlay` unit, once a concrete
 //! consumer exists to pin the API against.
 
@@ -28,14 +25,11 @@ use flui_view::{BoxedView, BuildContext, InheritedView};
 /// subtree it was originally built in, but should still see the ambient
 /// theme from where it *was* built.
 ///
-/// Flutter parity: `InheritedTheme` (`widgets/inherited_theme.dart`),
-/// `capture`/`captureAll`/`CapturedThemes` deferred (see module docs).
+/// Theme capture is deferred (see module docs).
 pub trait InheritedTheme: InheritedView {
     /// Return a widget that wraps `child` in a fresh copy of this theme.
     ///
-    /// `ctx` is part of the oracle's signature (`wrap(BuildContext context,
-    /// Widget child)`) for parity with the eventual `capture` call site,
-    /// even though every implementation so far — Flutter's own examples
-    /// included — ignores it.
+    /// `ctx` is part of the signature for the eventual `capture` call site,
+    /// even though every implementation so far ignores it.
     fn wrap(&self, ctx: &dyn BuildContext, child: BoxedView) -> BoxedView;
 }

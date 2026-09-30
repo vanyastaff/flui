@@ -36,10 +36,9 @@ so `publish = false` is not a substitute for designing that closure.
 | Distribution | The candidate installs and builds outside this checkout, with its full dependency closure available through the chosen distribution channel. | Package/dependency audit, clean consumer build, licenses, changelog, version/migration notes, and reproducible release instructions. |
 
 The user-facing mental model remains declarative composition over the retained
-View → Element → Render trees, with keys and lifecycle. Flutter is a useful
-behavioral reference; copying its entire catalog is not the beta acceptance
-condition. Deliberate contract differences still need an ADR or mapping decision
-and a test, as required by [AGENTS.md](../AGENTS.md).
+View → Element → Render trees, with keys and lifecycle. Copying another
+framework's entire catalog is not the beta acceptance condition; cross-crate
+contracts still need an ADR and a test, as required by [AGENTS.md](../AGENTS.md).
 
 ## Platform evidence
 
@@ -739,8 +738,7 @@ The first run found two defects, both fixed the same day:
   neither `Text` — a labelled node with no role-bearing flag resolved to
   AccessKit's `GenericContainer`, which AccessKit's consumer filter drops
   from what an assistive technology sees. A labelled, flagless node is now
-  `Role::Label` (static text, what Flutter's bridges publish for the same
-  node); both texts appear as `AXStaticText` with their values.
+  `Role::Label` (static text); both texts appear as `AXStaticText` with their values.
 - `AXPress` was accepted (status 0) and nothing happened: `GestureDetector`
   advertised no semantics action, so the button's node had no tap for the
   platform to route. The detector now publishes tap and long-press actions
@@ -1046,9 +1044,9 @@ not a backend property: `FlexStyle::default()` is `MainAxisSize::Max` with
 `MainAxisAlignment::Start` (`crates/flui-widgets/src/flex/flex.rs:35-45`) and
 `Center` shrink-wraps only when a factor is set
 (`crates/flui-objects/src/layout/align.rs:39-59`), so `Center(child: Column(...))`
-lays out exactly as it does in Flutter — the column fills the height and packs
-its children at the top. Flutter's own counter sample passes
-`MainAxisAlignment.center`; the same misuse appears at four sites — the generated
+lays out with the column filling the height and packing
+its children at the top. Centering it needs
+`MainAxisAlignment::Center`; the same misuse appears at four sites — the generated
 template, `examples/material_demo/tree.rs`'s counter tab, and
 `examples/cupertino_demo/tree.rs`'s home page, details route and settings counter
 (the earlier citation named only the first two of those) — with
@@ -1129,8 +1127,8 @@ implementation — and reports changes to the presentation its window was opened
 for. Each presentation owns its root `MediaQuery`, seeded from the live window
 when the presentation is created, so a consumer that mounts after a change reads
 the current value instead of a default. `SafeArea` now consumes the edges it
-selects in the descendant `MediaQuery` (Flutter's `removePadding` behaviour),
-which removes the divergence its own docs previously carried — nested safe areas
+selects in the descendant `MediaQuery`,
+which fixes nested safe areas that
 over-padded because nothing reduced the ambient padding. Consuming exactly the
 selected edges is verified headless; `Scaffold`'s own slot padding removal
 operates on the same fields and is unaffected.

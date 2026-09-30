@@ -132,7 +132,7 @@ let unique2 = UniqueKey::new();
 assert_ne!(unique1, unique2);
 ```
 
-> **Note**: `GlobalKey` and `ObjectKey` are in `flui-view` (widgets layer), matching Flutter's architecture.
+> **Note**: `GlobalKey` and `ObjectKey` are in `flui-view` (widgets layer).
 
 ### Change Notification
 
@@ -311,7 +311,7 @@ Foundation sits at the base of the FLUI architecture:
 └─────────────────┘
 ```
 
-See [ARCHITECTURE.md](./ARCHITECTURE.md) for complete Flutter foundation types reference.
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for the crate's design notes.
 
 ## Performance
 

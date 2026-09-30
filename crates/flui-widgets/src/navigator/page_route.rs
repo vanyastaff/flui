@@ -3,28 +3,17 @@
 //! These are the first routes with an animation that an app author
 //! can construct, and the API sign-off gate that lets them out.
 //!
-//! # Flutter parity
+//! # Closures, not subclasses
 //!
-//! - `PageRoute` (`.flutter/packages/flutter/lib/src/widgets/pages.dart:23-67`)
-//! - `PageRouteBuilder` (`pages.dart:89-170`)
-//! - `PopupRoute` (`.../widgets/routes.dart:2380-2399`)
-//!
-//! master `3.33.0-0.0.pre-6280-g88e87cd963f`.
-//!
-//! # Why there is no `PageRouteBuilder`
-//!
-//! Flutter needs two types because `PageRoute` is an abstract class you subclass,
-//! and `PageRouteBuilder` is the escape hatch for people who would rather pass
-//! closures. Rust has no subclassing, and this crate declines to export
+//! Rust has no subclassing, and this crate declines to export
 //! `TransitionRoute` / `ModalRoute` as extensible bases until a trait shape is
-//! designed and signed off. So [`PageRoute`] *is* the builder: it takes a
+//! designed and signed off. So [`PageRoute`] takes a
 //! [`RoutePageBuilder`] and an optional [`RouteTransitionsBuilder`], and every
-//! property `PageRouteBuilder` exposes as a constructor argument is a method here.
+//! property is a builder method.
 //!
 //! One consequence, stated rather than hidden: **`PageRoute` is not extensible.**
-//! An app cannot today write a route with custom `buildPage` *state* (Flutter's
-//! `CupertinoPageRoute` pattern). Closures cover the cases that matter now; the
-//! trait shape is a problem for a later pass.
+//! An app cannot today write a route with custom page-building *state*. Closures
+//! cover the cases that matter now; the trait shape is a problem for a later pass.
 //!
 //! # What these two fix that `ModalRoute` alone cannot
 //!
@@ -33,17 +22,17 @@
 //! unless they set `maintain_state` (`RenderTheater`'s skip-count work). A
 //! [`PopupRoute`] is not: the page under a dialog stays visible.
 //!
-//! And `PageRoute` coordinates its `secondaryAnimation` only with other
-//! `PageRoute`s (`pages.dart:58-61`), which FLUI expresses as a
+//! And `PageRoute` coordinates its secondary animation only with other
+//! `PageRoute`s, expressed as a
 //! [`TransitionGroup`] travelling with the published peer — a popup opening over a
 //! page must not slide the page away.
 //!
-//! # Divergences, inherited from the private layers
+//! # Not implemented, inherited from the private layers
 //!
 //! Everything `modal_route.rs` records: no `FocusScope`, no `BlockSemantics` or
-//! barrier semantics, no `AnimatedModalBarrier` colour tween, no `PopScope`, no
-//! `LocalHistoryRoute`, no predictive back. Plus, here: no `fullscreenDialog`, no
-//! `allowSnapshotting`, no `barrierLabel`, no `filter`. None of these is claimed.
+//! barrier semantics, no animated barrier colour tween, no `PopScope`, no
+//! local-history routes, no predictive back. Plus, here: no fullscreen-dialog flag,
+//! no snapshotting, no barrier label, no backdrop filter. None of these is claimed.
 //!
 //! [`RouteTransitionsBuilder`]: super::overlay_route::RouteTransitionsBuilder
 
@@ -59,10 +48,7 @@ use super::modal_route::ModalRoute;
 use super::overlay_route::{NavigatorRoute, RouteAnimation, RouteContentBuilder, RoutePageBuilder};
 use super::route::{PushCompletion, Route, RouteId, RouteSettings};
 
-/// `PageRouteBuilder`'s `transitionDuration` default (`pages.dart:95`).
-///
-/// `PageRoute` and `PopupRoute` are abstract in Flutter and declare no default;
-/// 300 ms is the one every concrete builder in the framework picks.
+/// The default transition duration for both route shapes.
 const DEFAULT_TRANSITION_DURATION: Duration = Duration::from_millis(300);
 
 /// Erase a page closure into a [`RoutePageBuilder`].
@@ -173,7 +159,6 @@ macro_rules! delegate_modal_route {
 
 /// A modal route that replaces the entire screen.
 ///
-/// Flutter's `PageRoute` (`pages.dart:23`) with `PageRouteBuilder`'s closures.
 /// `opaque` is `true`, so once the entrance transition completes the routes below
 /// are dropped from the widget tree — unless they set `maintain_state`.
 ///
@@ -196,8 +181,7 @@ macro_rules! delegate_modal_route {
 ///
 /// # Transitions
 ///
-/// The default is a jump cut, as `PageRouteBuilder`'s is
-/// (`pages.dart:68-75`). Supply one with [`transitions`](Self::transitions); the
+/// The default is a jump cut. Supply one with [`transitions`](Self::transitions); the
 /// `animation` argument drives this route's entrance and exit, and
 /// `secondary_animation` drives it while *another* `PageRoute` covers it.
 pub struct PageRoute<T> {
@@ -213,16 +197,13 @@ impl<T: Send + Clone + 'static> PageRoute<T> {
     {
         Self {
             modal: ModalRoute::new(DEFAULT_TRANSITION_DURATION, page_builder(page))
-                // `PageRoute.opaque => true` (`pages.dart:50`).
                 .opaque(true)
-                // `canTransitionTo/From(other) => other is PageRoute`
-                // (`pages.dart:58-61`).
+                // Coordinates transitions only with other `PageRoute`s.
                 .group(TransitionGroup::Page),
         }
     }
 
-    /// `buildTransitions` (`routes.dart:1591`): wrap the page in its entrance and
-    /// exit animation.
+    /// Wrap the page in its entrance and exit animation.
     #[must_use]
     pub fn transitions<F>(mut self, transitions: F) -> Self
     where
@@ -233,21 +214,21 @@ impl<T: Send + Clone + 'static> PageRoute<T> {
         self
     }
 
-    /// `RouteSettings.name`.
+    /// The route's name.
     #[must_use]
     pub fn named(mut self, name: impl Into<String>) -> Self {
         self.modal = self.modal.named(name);
         self
     }
 
-    /// `transitionDuration` (`routes.dart:140`). Defaults to 300 ms.
+    /// The entrance duration. Defaults to 300 ms.
     #[must_use]
     pub fn transition_duration(mut self, duration: Duration) -> Self {
         self.modal = self.modal.duration(duration);
         self
     }
 
-    /// `reverseTransitionDuration` (`routes.dart:148`), which defaults to
+    /// The exit duration; defaults to
     /// [`transition_duration`](Self::transition_duration).
     #[must_use]
     pub fn reverse_transition_duration(mut self, duration: Duration) -> Self {
@@ -255,7 +236,7 @@ impl<T: Send + Clone + 'static> PageRoute<T> {
         self
     }
 
-    /// `maintainState` (`routes.dart:1893`), default `true`.
+    /// Whether the route keeps its state while covered; default `true`.
     ///
     /// `false` lets an opaque route above this one destroy its subtree, and rebuild
     /// it fresh when uncovered — cheaper, but the page loses its state.
@@ -265,7 +246,7 @@ impl<T: Send + Clone + 'static> PageRoute<T> {
         self
     }
 
-    /// `barrierDismissible` (`pages.dart:32`, `:53`), default `false`.
+    /// Whether tapping the barrier dismisses the route; default `false`.
     ///
     /// A page route's barrier is invisible and covers the whole screen, so this is
     /// mostly useful for full-screen dialogs.
@@ -275,28 +256,23 @@ impl<T: Send + Clone + 'static> PageRoute<T> {
         self
     }
 
-    /// `ModalRoute.barrierColor` (`routes.dart:1774`). Absent (the default), the
+    /// The barrier colour. Absent (the default), the
     /// barrier is invisible — but still absorbs pointers once this route's entry
-    /// transition has covered the routes below (`PageRoute.opaque => true`).
+    /// transition has covered the routes below (the route is `opaque`).
     ///
-    /// `PopupRoute` already exposes this; a plain `PageRoute` did not, though
-    /// `ModalRoute` has always carried the field — `CupertinoPageRoute`
-    /// (`cupertino/route.dart`, 3.44.0) is the first `PageRoute` consumer that
-    /// needs its own transition-only dim (`_kCupertinoPageTransitionBarrierColor`),
-    /// so this closes that gap the same way `PopupRoute::barrier_color` already
-    /// does.
+    /// The Cupertino page route needs its own transition-only dim, so this
+    /// mirrors `PopupRoute::barrier_color`.
     ///
-    /// **Divergence**, inherited from `ModalRoute`: Flutter drives the colour
-    /// through `barrierCurve` with an `AnimatedModalBarrier`; FLUI paints it flat
-    /// for the barrier's entire visible lifetime, not faded in with the transition.
+    /// The colour is painted flat for the barrier's entire visible lifetime, not
+    /// faded in with the transition.
     #[must_use]
     pub fn barrier_color(mut self, color: Color) -> Self {
         self.modal = self.modal.barrier_color(color);
         self
     }
 
-    /// The `result ?? currentResult` fallback (`navigator.dart:426`): what a
-    /// `pop()` with no value delivers.
+    /// The `result ?? current_result` fallback: what a `pop()` with no value
+    /// delivers.
     #[must_use]
     pub fn with_current_result(mut self, result: T) -> Self {
         self.modal = self.modal.with_current_result(result);
@@ -305,13 +281,9 @@ impl<T: Send + Clone + 'static> PageRoute<T> {
 
     /// Opt into an iOS-style edge-swipe-back gesture. Default `false`.
     ///
-    /// Flutter's `CupertinoPageRoute`/`CupertinoRouteTransitionMixin` wire this
-    /// on automatically under the Cupertino theme; FLUI has no platform-theme
-    /// selection yet, so it is an explicit opt-in per route instead. Ports
-    /// `PageRoute.popGestureEnabled` ∘ `ModalRoute.popGestureEnabled`
-    /// (`pages.dart:63-66`, `routes.dart:1908-1930`, 3.44.0) minus the
-    /// `!fullscreenDialog` half — FLUI has no `fullscreenDialog` flag, so
-    /// this opt-in itself is the substitute gate.
+    /// There is no platform-theme selection yet, so the gesture is an explicit
+    /// opt-in per route rather than something a Cupertino theme turns on. There is
+    /// no fullscreen-dialog flag either, so this opt-in itself is the gate.
     ///
     /// **Not a mid-life toggle.** Set it once, before pushing the route:
     /// `ModalScopeState::build` reads the flag on every build to decide
@@ -328,7 +300,7 @@ impl<T: Send + Clone + 'static> PageRoute<T> {
 
 impl<T: Send + Clone + 'static> PageRoute<T> {
     /// The modal handle, whose `set_offstage` is the seam `HeroController` drives
-    /// to measure a route's final hero geometry (`heroes.dart:967`). Test-facing
+    /// to measure a route's final hero geometry. Test-facing
     /// until `HeroController` gives it a production caller; read through
     /// `crate::__test_access::RouteProbe`.
     pub(crate) fn modal_handle(&self) -> super::modal_route::ModalHandle {
@@ -352,8 +324,8 @@ delegate_modal_route!(PageRoute);
 
 /// A modal route that shows over the current page — a dialog, a menu, a sheet.
 ///
-/// Flutter's `PopupRoute` (`routes.dart:2380`): `opaque` is `false` and
-/// `maintainState` is `true`, so the route below stays built **and** visible.
+/// `opaque` is `false` and `maintain_state` is `true`, so the route below stays
+/// built **and** visible.
 ///
 /// # Example
 ///
@@ -371,8 +343,7 @@ delegate_modal_route!(PageRoute);
 /// ```
 ///
 /// A dismissible barrier pops the route with no value, so `RouteResult<bool>`
-/// resolves to `None` — Flutter's `Navigator.maybePop(context)` from
-/// `ModalBarrier`.
+/// resolves to `None`.
 pub struct PopupRoute<T> {
     modal: ModalRoute<T>,
 }
@@ -386,16 +357,15 @@ impl<T: Send + Clone + 'static> PopupRoute<T> {
         F: Fn(&dyn BuildContext, &RouteAnimation, &RouteAnimation) -> BoxedView + 'static,
     {
         Self {
-            // `PopupRoute.opaque => false`, `maintainState => true`
-            // (`routes.dart:2391-2394`); `TransitionGroup::Default` is
-            // `TransitionRoute`'s `canTransitionTo/From => true`.
+            // Not opaque, and keeps its state; `TransitionGroup::Default`
+            // coordinates with any transition route.
             modal: ModalRoute::new(DEFAULT_TRANSITION_DURATION, page_builder(page))
                 .opaque(false)
                 .maintain_state(true),
         }
     }
 
-    /// `buildTransitions` (`routes.dart:1591`).
+    /// Wrap the page in its entrance and exit animation.
     #[must_use]
     pub fn transitions<F>(mut self, transitions: F) -> Self
     where
@@ -406,28 +376,28 @@ impl<T: Send + Clone + 'static> PopupRoute<T> {
         self
     }
 
-    /// `RouteSettings.name`.
+    /// The route's name.
     #[must_use]
     pub fn named(mut self, name: impl Into<String>) -> Self {
         self.modal = self.modal.named(name);
         self
     }
 
-    /// `transitionDuration` (`routes.dart:140`). Defaults to 300 ms.
+    /// The entrance duration. Defaults to 300 ms.
     #[must_use]
     pub fn transition_duration(mut self, duration: Duration) -> Self {
         self.modal = self.modal.duration(duration);
         self
     }
 
-    /// `reverseTransitionDuration` (`routes.dart:148`).
+    /// The exit duration; defaults to the entrance duration.
     #[must_use]
     pub fn reverse_transition_duration(mut self, duration: Duration) -> Self {
         self.modal = self.modal.reverse_duration(duration);
         self
     }
 
-    /// `barrierDismissible` (`routes.dart:1804`), default `false`.
+    /// Whether tapping the barrier dismisses the route; default `false`.
     ///
     /// When `true`, a tap on the barrier pops this route with no value.
     #[must_use]
@@ -436,25 +406,24 @@ impl<T: Send + Clone + 'static> PopupRoute<T> {
         self
     }
 
-    /// `barrierColor` (`routes.dart:1774`). Absent, the barrier is invisible —
+    /// The barrier colour. Absent, the barrier is invisible —
     /// but it still absorbs pointers.
     ///
-    /// **Divergence:** Flutter drives the colour through `barrierCurve` with an
-    /// `AnimatedModalBarrier`; FLUI paints it flat.
+    /// The colour is painted flat, not faded with the transition.
     #[must_use]
     pub fn barrier_color(mut self, color: Color) -> Self {
         self.modal = self.modal.barrier_color(color);
         self
     }
 
-    /// `maintainState` (`routes.dart:2394`), default `true`.
+    /// Whether the route keeps its state while covered; default `true`.
     #[must_use]
     pub fn maintain_state(mut self, maintain_state: bool) -> Self {
         self.modal = self.modal.maintain_state(maintain_state);
         self
     }
 
-    /// The `result ?? currentResult` fallback (`navigator.dart:426`).
+    /// The `result ?? current_result` fallback.
     #[must_use]
     pub fn with_current_result(mut self, result: T) -> Self {
         self.modal = self.modal.with_current_result(result);

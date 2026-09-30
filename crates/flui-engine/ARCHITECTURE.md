@@ -12,10 +12,9 @@ pluggable: the crate re-exports the exact `wgpu` it links against
 that abstracts over "a thing that renders a scene" ([`RasterBackend`]) is a
 GPU-free test seam for the application frame loop, not a plugin point.
 
-The reference for the widget-facing behaviour is Flutter's compositor
-contract (what a layer means, in what order it paints); the reference for
-everything below the `Scene` is wgpu itself. Protocol-level divergences from
-Flutter carry an ADR; crate-local shapes are recorded under
+The contract for the widget-facing behaviour is what a layer means and in what
+order it paints; the reference for everything below the `Scene` is wgpu itself.
+Cross-crate contracts carry an ADR; crate-local shapes are recorded under
 [Mapping decisions](#mapping-decisions).
 
 [`flui_layer::Scene`]: ../flui-layer/src/scene.rs
@@ -326,7 +325,6 @@ clip stack that can evaluate `1 − coverage`, and waits for that.
 
 ### 9. `Clip::AntiAliasWithSaveLayer` opens an offscreen bounded by the clip's own scissor, and declines it inside an image filter
 
-Flutter clips anti-aliased and then `saveLayer`s with the clip's bounds. Here
 `LayerDispatcher::opens_offscreen` grants the offscreen when the mode asks
 and no enclosing layer routes through a bounds-growing image filter; the
 layer's bounds are the scissor the clip just installed (already intersected
@@ -464,8 +462,7 @@ This replaced three rules that disagreed: the identity-transform scissor
 truncated every edge (keeping column 0 of a clip starting at 0.75 and
 dropping column 10 of one ending at 10.75), the transformed scissor floored
 the origin and ceiled the extent, and the backdrop copies rounded half away
-from zero. Flutter has no single rule to follow here (Impeller and Skia each
-round per call site). Content quads are not yet snapped; see Open items.
+from zero. One rule now covers every call site. Content quads are not yet snapped; see Open items.
 Locked by `a_hard_rect_clip_keeps_the_pixels_whose_centres_are_inside`
 (`src/state_stack.rs`).
 
@@ -506,13 +503,9 @@ plugin's scene): it renders in full, invalidates the target and makes the
 next frame full, because the owner's differ compares against scenes it
 submitted and would otherwise scissor over pixels it never saw.
 
-Flutter's `flow` `DiffContext` (flutter/flutter 3.44.0,
-`engine/src/flutter/flow/diff_context.cc`) pairs layers by their unique id,
-combines the frame's damage with the embedder's accumulated per-buffer damage
-(buffer age) in `ComputeDamage`, and aligns the result to the embedder's
-clip alignment in `AlignRect`. FLUI has no buffer age, so it keeps one
-retained target instead; it rounds outward with a 1 px anti-aliasing margin
-(`DamageRect::covering`) rather than aligning to tiles; and a frame with
+FLUI has no per-buffer damage accumulation (buffer age), so it keeps one
+retained target instead; it rounds damage outward with a 1 px anti-aliasing
+margin (`DamageRect::covering`) rather than aligning to tiles; and a frame with
 nothing damaged does not present (`PresentDisposition::NoDamage`).
 
 Measured by `render_throughput`'s `damage_retained_target` group (1920×1080,
@@ -536,9 +529,8 @@ developer machine: CI has no surface.
   decides whether this family stays. Until decided, it is tested but not
   wired.
 - **`catch_unwind` around `render_scene`.** A panic inside a layer's paint
-  poisons the frame rather than isolating the layer, which is a deliberate
-  divergence from Flutter's per-layer isolation; changing it is a contract
-  change that needs its own ADR.
+  poisons the frame rather than isolating the layer; changing that is a
+  contract change that needs its own ADR.
 - **Content snapping (ADR-0098 §6).** Solid, gradient and image quads are
   still drawn at their fractional device positions, antialiased; §6 has them
   snap their edges under a translation plus a positive scale, with animated

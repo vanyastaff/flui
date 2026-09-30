@@ -168,8 +168,7 @@ pub fn disabled_chip_and_its_delete_icon_are_both_inert_through_dispatch() {
     assert_eq!(
         *deletions.borrow(),
         0,
-        "a disabled chip must swallow taps on its delete icon too — Flutter parity: \
-         `onTap: widget.isEnabled ? widget.onDeleted : null`",
+        "a disabled chip must swallow taps on its delete icon too",
     );
 }
 

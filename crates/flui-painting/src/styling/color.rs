@@ -1,11 +1,11 @@
 //! Color types and utilities for Flui.
 //!
 //! This module provides a comprehensive Color type with conversions between
-//! different color spaces (RGB, HSL, HSV), similar to Flutter's Color system.
+//! different color spaces (RGB, HSL, HSV).
 
 /// An RGBA color with four 8-bit channels and straight (unmultiplied) alpha.
 ///
-/// Channels are in sRGB gamma space, matching Flutter's `Color`. The
+/// Channels are in sRGB gamma space. The
 /// renderer premultiplies when it converts a color for the GPU.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -167,8 +167,7 @@ impl Color {
     /// Returns a new color with the specified opacity (0.0-1.0).
     ///
     /// Values are clamped to the valid range, and the alpha rounds to the
-    /// nearest of its 256 steps, as Flutter's `withOpacity` does
-    /// (`(255 * opacity).round()`).
+    /// nearest of its 256 steps (`(255 * opacity).round()`).
     ///
     /// # Examples
     ///
@@ -247,8 +246,8 @@ impl Color {
 
     /// Premultiplied interpolation (ADR-0098 §7): each colour channel is
     /// weighted by its endpoint's alpha, so a fade to transparent keeps its
-    /// hue instead of passing through dark grey (Flutter's straight
-    /// interpolation does, flutter#48674; CSS Color 4 premultiplies too).
+    /// hue instead of passing through dark grey (straight interpolation
+    /// does; CSS Color 4 premultiplies too).
     #[inline]
     fn lerp_scalar(a: Color, b: Color, t: f32) -> Color {
         Self::lerp_unclamped(a, b, t.clamp(0.0, 1.0))
@@ -409,9 +408,9 @@ impl Color {
     // ===== Helper methods for rendering =====
 
     /// Alpha-blends this color over `background` (Porter-Duff "source over",
-    /// straight alpha, gamma space): Flutter's `Color.alphaBlend`.
+    /// straight alpha, gamma space).
     ///
-    /// Follows Flutter's float formulation: the background keeps
+    /// Uses a float formulation: the background keeps
     /// `back = a_bg · (1 − a_fg)` of its alpha, the result's alpha is
     /// `a_fg + back` (exactly 1 over an opaque background), each channel is
     /// `(fg · a_fg + bg · back) / alpha`, and channels round to nearest when
@@ -599,8 +598,8 @@ impl Color {
 
     /// Perceptually uniform interpolation through Oklab space.
     ///
-    /// Componentwise sRGB lerp (what [`Color::lerp`] and Flutter's
-    /// `Color.lerp` compute) averages gamma-encoded values, so midpoints go
+    /// Componentwise sRGB lerp (what [`Color::lerp`] computes)
+    /// averages gamma-encoded values, so midpoints go
     /// dark and gray — blue→yellow passes through mud. Interpolating L/a/b
     /// linearly keeps lightness and chroma perceptually steady. Costs two
     /// conversions per call (`powf`/`cbrt`); use [`Color::lerp`] when the

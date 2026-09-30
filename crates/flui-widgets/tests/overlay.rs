@@ -1,20 +1,14 @@
 //! Tests for [`Overlay`] / [`OverlayEntry`].
 //!
-//! # Parity oracles
+//! # Scenarios
 //!
-//! `.flutter/packages/flutter/test/widgets/overlay_test.dart` (tag `3.44.0`,
-//! 43 cases total — `grep -cE '^\s*(testWidgets|test)\('`) —
-//! `'insert top'`, `'insert below'`, `'insert above'`, `'insertAll top'`,
-//! `'insertAll below'`, `'insertAll above'`, `'rearrange'`,
-//! `'OverlayState.of() throws when called if an Overlay does not exist'`,
-//! `'OverlayState.maybeOf() works when an Overlay does and doesn't exist'`,
-//! `'OverlayEntry.opaque can be changed when OverlayEntry is not part of an
-//! Overlay (yet)'`, `'OverlayEntries do not rebuild when opaqueness changes'`
-//! (red by design — see below), `'OverlayEntries do not rebuild when opaque
-//! entry is added'` (same), `'Can use Positioned within OverlayEntry'`,
-//! `'asserts when remove is called twice'`. Expected values are read from
-//! `overlay.dart`, not from running this code. Almost none of the remaining
-//! oracle cases are reachable through the crate's public API at all.
+//! Inserting an entry at the top, below and above another entry (singly and
+//! in bulk), `rearrange`, the failure and the `maybe` variants of looking up
+//! the overlay from a context, changing an entry's opacity before it is part of
+//! an overlay, entries not rebuilding when opacity changes or an opaque entry
+//! is added (red by design — see below), `Positioned` inside an entry, and
+//! removing an entry twice. Expected values are fixed by the documented
+//! contract, not by running this code.
 //!
 //! # Surface
 //!
@@ -137,9 +131,8 @@ fn overlay_with(entries: &[OverlayEntry]) -> (OverlayHandle, Overlay) {
 /// `rearrange` reorders, and the keyed reconciler reuses each layer's element —
 /// so subtree state survives the move.
 ///
-/// **This is the load-bearing precondition for dropping Flutter's
-/// `GlobalKey<_OverlayEntryWidgetState>`** (`overlay.dart:214`). If it fails, the
-/// `GlobalKey` must come back and the lock hazard must be resolved for real.
+/// **This is the load-bearing precondition for not keying entries with a
+/// `GlobalKey`.** If it fails, the `GlobalKey` must come back and the lock hazard must be resolved for real.
 ///
 /// Red-check: delete `OverlayEntryView::key`. Reconciliation then matches by
 /// index and type, so element ids stay put while the *views* swap — A's element
@@ -188,7 +181,7 @@ pub(crate) fn overlay_rearrange_reorders_and_preserves_entry_state() {
 // opaque / maintainState / skipCount
 // ============================================================================
 
-/// `overlay.dart:890-897`: the loop stops adding onstage children once an opaque
+/// The build loop stops adding onstage children once an opaque
 /// entry is reached, and an entry below it without `maintainState` is not added
 /// at all — it never enters the view tree.
 ///

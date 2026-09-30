@@ -7,26 +7,25 @@
 //! inherited scope the `SliverAppBar` delegate wraps around its child on
 //! every seam rebuild — carries `(min_extent, max_extent, current_extent,
 //! toolbar_opacity)`, and this widget derives everything from those four
-//! numbers. Flutter's shape exactly (`FlexibleSpaceBar.createSettings`);
-//! there, as here, it is what lets the same widget serve any
+//! numbers. That is what lets the same widget serve any
 //! persistent-header delegate, not only the app bar's.
 //!
-//! # The oracle's formulas, ported verbatim
+//! # Collapse formulas
 //!
 //! With `t = clamp(1 − (current − min) / (max − min), 0, 1)` (0 = expanded,
-//! 1 = collapsed) — `material/flexible_space_bar.dart:237-241`:
+//! 1 = collapsed):
 //!
 //! - **background opacity** = `1 − Interval(fade_start, 1).transform(t)`
 //!   where `fade_start = max(0, 1 − kToolbarHeight / delta)`; equal extents
-//!   cannot collapse, so opacity stays 1 (`:244-252`).
+//!   cannot collapse, so opacity stays 1.
 //! - **parallax offset** = `−lerp(0, delta / 4, t)` applied as the
-//!   background's `top` (`:220`, `CollapseMode.parallax`, the default).
+//!   background's `top` (`CollapseMode.parallax`, the default).
 //! - **title scale** = `lerp(expanded_title_scale, 1, t)` about the title's
-//!   own corner (`:330-335`).
-//! - **toolbar opacity** fades the title (`:316-321`). Named divergence:
-//!   Flutter rewrites the title style's COLOR alpha; FLUI wraps the title
-//!   layer in an `Opacity`, which is visually equivalent for the title
-//!   layer and directly assertable in tests.
+//!   own corner.
+//! - **toolbar opacity** fades the title. The title layer is wrapped in an
+//!   `Opacity` rather than rewriting the title style's color alpha, which
+//!   is visually equivalent for the title layer and directly assertable in
+//!   tests.
 //!
 //! # Deferred, deliberately
 //!
@@ -60,8 +59,7 @@ pub struct FlexibleSpaceBarData {
     pub toolbar_opacity: f64,
 }
 
-/// Inherited scope carrying [`FlexibleSpaceBarData`] — Flutter's
-/// `FlexibleSpaceBarSettings`.
+/// Inherited scope carrying [`FlexibleSpaceBarData`].
 #[derive(Clone)]
 pub struct FlexibleSpaceBarSettings {
     data: FlexibleSpaceBarData,
@@ -115,9 +113,6 @@ impl_inherited_view!(FlexibleSpaceBarSettings);
 /// the delegate provides the [`FlexibleSpaceBarSettings`] it reads. Without
 /// a settings ancestor the bar renders fully expanded (`t = 0`) — a
 /// stand-alone preview rather than a panic.
-///
-/// Flutter parity: `material/flexible_space_bar.dart` `FlexibleSpaceBar`
-/// (formulas cited on the module).
 #[derive(Clone, StatelessView)]
 pub struct FlexibleSpaceBar {
     title: Option<BoxedView>,
@@ -160,8 +155,7 @@ impl FlexibleSpaceBar {
         self
     }
 
-    /// How much larger the title renders fully expanded (Flutter default
-    /// 1.5).
+    /// How much larger the title renders fully expanded (default 1.5).
     #[must_use]
     pub fn expanded_title_scale(mut self, scale: f64) -> Self {
         self.expanded_title_scale = scale;
@@ -185,7 +179,7 @@ impl std::fmt::Debug for FlexibleSpaceBar {
 }
 
 /// `Interval(fade_start, 1).transform(t)` for the background fade — the
-/// only piece of Flutter's `Interval` curve this widget needs.
+/// only piece of an `Interval` curve this widget needs.
 fn interval_transform(fade_start: f64, t: f64) -> f64 {
     if fade_start >= 1.0 {
         return if t >= 1.0 { 1.0 } else { 0.0 };
@@ -253,7 +247,7 @@ impl StatelessView for FlexibleSpaceBar {
             } else {
                 Alignment::BOTTOM_LEFT
             };
-            // Flutter's default title padding: bottom 16, and a 72px START
+            // Default title padding: bottom 16, and a 72px START
             // inset when leading-aligned (past the leading slot).
             let start_inset = if self.center_title { 0.0 } else { 72.0 };
             let padding = EdgeInsets {

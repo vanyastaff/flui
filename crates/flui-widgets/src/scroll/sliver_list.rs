@@ -20,7 +20,7 @@ pub use flui_view::element::SliverList;
 // SliverChildBuilderDelegate
 // ============================================================================
 
-/// A delegate's key → index callback (Flutter's `findChildIndexCallback`).
+/// A delegate's key → index callback.
 pub(crate) type FindIndexByKey = Rc<dyn Fn(&dyn flui_foundation::ViewKey) -> Option<usize>>;
 
 /// Delegate that builds sliver list items on demand.
@@ -35,8 +35,7 @@ pub(crate) type FindIndexByKey = Rc<dyn Fn(&dyn flui_foundation::ViewKey) -> Opt
 /// Lazy children are built between the layout passes of the frame that
 /// requested them (the layout↔build fixpoint `LayoutBuilder` also uses), so
 /// a band that scrolls into view is built, laid out, and painted in that
-/// frame — the observable result Flutter gets from building during layout,
-/// without the reentrant build. A frame that needs more passes than the
+/// frame, without a reentrant build during layout. A frame that needs more passes than the
 /// lazy-band budget allows defers the remainder to the next frame; the
 /// item-extent estimate adapts to the measured children so that is rare.
 ///
@@ -44,13 +43,12 @@ pub(crate) type FindIndexByKey = Rc<dyn Fn(&dyn flui_foundation::ViewKey) -> Opt
 ///
 /// A builder that panics yields the registered error view at that index
 /// only — a render-owning error box in a finite row — and every other index
-/// is untouched (Flutter's `SliverChildBuilderDelegate.build` try/catch).
+/// is untouched.
 #[derive(Clone)]
 pub struct SliverChildBuilderDelegate {
     pub(crate) item_count: usize,
     pub(crate) builder: Rc<dyn Fn(usize) -> Option<BoxedView>>,
-    /// Maps an item's key to its current index (Flutter's
-    /// `findChildIndexCallback`), so a keyed item whose data moved out of
+    /// Maps an item's key to its current index, so a keyed item whose data moved out of
     /// the resident band keeps its state. Moves within the band need no
     /// callback.
     pub(crate) find_index_by_key: Option<FindIndexByKey>,
@@ -78,10 +76,8 @@ impl SliverChildBuilderDelegate {
 
 /// Wrap each child in a [`RepaintBoundary`](crate::paint::RepaintBoundary).
 ///
-/// Flutter parity: the delegates in `widgets/scroll_delegate.dart` do this by
-/// default (`addRepaintBoundaries = true`) so that "children in a scrolling
-/// container ... do not need to be repainted as the list scrolls". Without it
-/// the paint walk descends into every visible item every frame and there is
+/// Done by default because children in a scrolling container do not need to be
+/// repainted as the list scrolls. Without it the paint walk descends into every visible item every frame and there is
 /// nothing for `PipelineOwner::retained_boundaries` to reuse.
 #[must_use]
 pub(crate) fn wrap_in_repaint_boundaries(children: Vec<BoxedView>) -> Vec<BoxedView> {
@@ -105,10 +101,9 @@ pub(crate) fn wrap_builder_in_repaint_boundaries(
 ///
 /// The key matters: a lazy sliver reconciles its children by key, and an
 /// unkeyed wrapper would hide the item's own key, costing element state on
-/// insert, remove, and reorder. Flutter restores the key outside the boundary
-/// with `KeyedSubtree`; FLUI carries it on the boundary itself, because a lazy
-/// sliver child must own a render node and a stateless `KeyedSubtree`
-/// equivalent has none — see `RepaintBoundary::salted_child_key`.
+/// insert, remove, and reorder. The key is carried on the boundary itself,
+/// because a lazy sliver child must own a render node and a stateless keyed
+/// wrapper has none — see `RepaintBoundary::salted_child_key`.
 pub(crate) fn wrap_in_repaint_boundary(child: BoxedView) -> BoxedView {
     BoxedView(Box::new(
         crate::paint::RepaintBoundary::new()

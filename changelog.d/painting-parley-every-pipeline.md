@@ -1,7 +1,7 @@
 ### Changed
 
 - `PipelineOwner::new` and `new_with_capacity` take the `TextContextHandle` the pipeline measures through; every layout, intrinsic and dry query lends it (ADR-0092 §10 step 3b). A realm's presentations are built with the realm's context; a pipeline with no realm behind it passes `TextContextHandle::standalone()`.
-- `RenderingFlutterBinding::new` and `PluginPipeline::mount` take a `TextContextHandle`, and `PluginPipeline::draw_frame` takes the frame's surface width and height. `app_plugin!` mounts the plugin pipeline with a context over the plugin image's own collection, not the host realm's.
+- `RenderingBinding::new` and `PluginPipeline::mount` take a `TextContextHandle`, and `PluginPipeline::draw_frame` takes the frame's surface width and height. `app_plugin!` mounts the plugin pipeline with a context over the plugin image's own collection, not the host realm's.
 - The raw text parameters of `RenderObject::intrinsic_raw`, `dry_layout_raw` and `dry_baseline_raw`, `Protocol::with_leaf_erased_ctx`, `RenderEntry::layout_leaf_only`, `RenderNode::layout_leaf_erased` and `ErasedBoxLayoutCtx::new` are a `TextSource<'_>`, no longer optional; `BoxLayoutCtx::new`, `with_children` and `with_layout_callback` take one too, and `BoxLayoutCtxErased::text_source` is a required method.
 
 ### Added
@@ -11,7 +11,7 @@
 
 ### Removed
 
-- `PipelineOwner::set_text_context`, `PipelineOwner::with_callbacks`, `Default` for `PipelineOwner` and `RenderingFlutterBinding`, and `RendererBinding::create_root_pipeline_owner`. No pipeline measures on a text context it built for itself.
+- `PipelineOwner::set_text_context`, `PipelineOwner::with_callbacks`, `Default` for `PipelineOwner` and `RenderingBinding`, and `RendererBinding::create_root_pipeline_owner`. No pipeline measures on a text context it built for itself.
 
 ### Fixed
 

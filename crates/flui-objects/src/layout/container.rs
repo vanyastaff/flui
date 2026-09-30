@@ -1,10 +1,10 @@
 //! `RenderContainer` — margin, constraints, decoration, padding, alignment and
 //! a transform folded into one render object.
 //!
-//! Flutter builds `Container` as a conditional widget stack
-//! (`widgets/container.dart`): from the child outward, `Align` → `Padding` →
-//! `ColoredBox` → `DecoratedBox` → `ConstrainedBox` → `Padding` (margin) →
-//! `Transform`, each layer present only while its property is set. This object
+//! The alternative is a conditional widget stack: from the child outward,
+//! `Align` → `Padding` → `ColoredBox` → `DecoratedBox` → `ConstrainedBox` →
+//! `Padding` (margin) → `Transform`, each layer present only while its
+//! property is set. This object
 //! reproduces that stack's observable geometry — layout, paint order, hit
 //! testing, intrinsics and baselines — in a single node.
 //!
@@ -13,26 +13,25 @@
 //! * **The child's slot is structurally stable.** In the conditional stack an
 //!   option that turns on or off inserts or removes a level between the parent
 //!   and the child, so reconciliation diverges at that level and every element
-//!   below it — including an unkeyed stateful child — is rebuilt from scratch
-//!   (flutter/flutter#161698). Here the options are *fields*, so no element
-//!   moves and no state is lost.
+//!   below it — including an unkeyed stateful child — is rebuilt from scratch.
+//!   Here the options are *fields*, so no element moves and no state is lost.
 //! * **Node count depends on whether there is a child.** With a child,
-//!   Flutter's stack costs zero extra nodes at identity (no options set —
+//!   the stack costs zero extra nodes at identity (no options set —
 //!   the widget passes the child straight through) and exactly one extra
 //!   node per option set below that: a single option (say, just `padding`)
 //!   built exactly one `RenderPadding` there too, so folding into
 //!   `RenderContainer` is a wash on count at one option and only wins from
-//!   two up. **Childless, Flutter is never free**: `build` reaches for a
+//!   two up. **Childless, the stack is never free**: `build` reaches for a
 //!   two-node placeholder (`LimitedBox` + `ConstrainedBox`) even with no
 //!   option set at all (`Container()`), so the collapse already wins there;
 //!   the only childless tie is a *tight* effective constraint — both `width`
 //!   and `height` set, or an explicit tight `constraints` — which suppresses
-//!   the placeholder and leaves Flutter a single `ConstrainedBox` against
+//!   the placeholder and leaves a single `ConstrainedBox` against
 //!   this one node. A lone `width` does not qualify: `BoxConstraints::is_tight`
 //!   requires both axes, so that case still takes the placeholder and costs
 //!   three. Every other childless option —
 //!   color, padding, decoration, an alignment paired with a fixed size —
-//!   only grows Flutter's node count further.
+//!   only grows the stack's node count further.
 //! * **The collapsed node is heavier in every configuration**, identity
 //!   included: `RenderContainer` carries every field — alignment, padding,
 //!   margin, color, decoration, additional constraints, transform, plus the
@@ -81,11 +80,11 @@ pub struct RenderContainer {
     /// The child's inset from the decorated area, or `None` if never set.
     ///
     /// This is `Option`, not a plain `EdgeInsets` defaulting to zero,
-    /// because Flutter's `Container.build` inserts a `Padding` level only
+    /// because the stack this collapses inserts a `Padding` level only
     /// when `padding` (or a decoration's own padding, which FLUI's
-    /// `BoxDecoration` has no equivalent of) is non-null
-    /// (`_paddingIncludingDecoration`) — an explicit `EdgeInsets.zero` still
-    /// gets a (zero-inset) level, but an absent `padding` gets none at all.
+    /// `BoxDecoration` has no equivalent of) is set — an explicit
+    /// zero inset still gets a (zero-inset) level, but an absent `padding`
+    /// gets none at all.
     /// That absence is observable in hit-testing: a level, even a zero-inset
     /// one, gates on its own box (`is_within_own_size`) before descending;
     /// no level gates on nothing. See [`hit_test`](RenderBox::hit_test).
@@ -130,9 +129,8 @@ impl RenderContainer {
         self.padding
     }
 
-    /// The padding actually used for layout math: zero when unset, the same
-    /// way Flutter's own `EdgeInsetsGeometry` arithmetic treats an absent
-    /// value. Layout geometry does not depend on whether `padding` was ever
+    /// The padding actually used for layout math: zero when unset. Layout
+    /// geometry does not depend on whether `padding` was ever
     /// set — only [`hit_test`](RenderBox::hit_test) does.
     fn effective_padding(&self) -> EdgeInsets {
         self.padding.unwrap_or_default()
@@ -359,7 +357,7 @@ impl RenderContainer {
     /// The content extent of a childless container: fill a bounded axis,
     /// collapse an unbounded one.
     ///
-    /// Flutter's `build` picks between three childless shapes — the
+    /// The stack this collapses picks between three childless shapes — the
     /// placeholder `LimitedBox(0, 0, child: ConstrainedBox(expand))`, an empty
     /// `Align`, and nothing at all — on whether the additional constraints are
     /// tight and whether an alignment is set. **All three produce this same
@@ -375,7 +373,7 @@ impl RenderContainer {
     /// Collapsing the stack therefore collapses the branch too. The resulting
     /// size is pinned by
     /// `harness_container_childless_fills_bounded_and_collapses_unbounded`;
-    /// no test diffs it against the three Flutter shapes themselves.
+    /// no test diffs it against the three shapes themselves.
     fn childless_content_size(constraints: &BoxConstraints) -> Size {
         let width = if constraints.has_bounded_width() {
             constraints.max_width
@@ -639,7 +637,7 @@ impl RenderBox for RenderContainer {
     fn skip_paint(&self) -> bool {
         // A singular matrix compresses the subtree to a line or a point:
         // recording draw commands for it produces output that cannot occupy a
-        // pixel. Flutter's `RenderTransform.paint` short-circuits the same way.
+        // pixel.
         match self.transform {
             Some(matrix) => {
                 let determinant = matrix.determinant();
@@ -649,9 +647,9 @@ impl RenderBox for RenderContainer {
         }
     }
 
-    /// Paints the decoration, then the color, then the child — Flutter's order
-    /// for the stack this collapses, where `DecoratedBox` encloses
-    /// `ColoredBox`, which encloses the content.
+    /// Paints the decoration, then the color, then the child — the order of
+    /// the stack this collapses, where `DecoratedBox` encloses `ColoredBox`,
+    /// which encloses the content.
     fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
         let shift = self.paint_translation();
         let rect = Rect::from_origin_size(
@@ -695,8 +693,7 @@ impl RenderBox for RenderContainer {
     ///
     /// Unconditional in the transform, unlike `paint_effects` above: a pure
     /// translation still moves the child, and `local_to_global` and every
-    /// hero flight built on it need that term in both branches. This is the
-    /// same split Flutter makes between `paint` and `applyPaintTransform`.
+    /// hero flight built on it need that term in both branches.
     fn apply_paint_transform(
         &self,
         _child: usize,
@@ -831,8 +828,7 @@ impl RenderBox for RenderContainer {
         {
             return true;
         }
-        // A colored box is hit-opaque across its whole rect — Flutter's
-        // `_RenderColoredBox` is a proxy with `HitTestBehavior.opaque`.
+        // A colored box is hit-opaque across its whole rect.
         self.color.is_some()
     }
 }

@@ -2,8 +2,7 @@
 //! size whenever that size changes, clipping overflow while the animation is
 //! in flight.
 //!
-//! Flutter parity: `rendering/animated_size.dart` `RenderAnimatedSize`. Unlike
-//! every other render object in this crate, this one drives its **own**
+//! Unlike every other render object in this crate, this one drives its **own**
 //! layout over time: it holds an [`AnimationController`] (built and
 //! registered with a `Vsync` by the owning `AnimatedSize` view, then handed
 //! in at construction, see `docs/adr/ADR-0013-render-object-attach-self-dirty-handle.md`)
@@ -13,8 +12,7 @@
 //!
 //! # The retarget state machine
 //!
-//! [`AnimatedSizeState`] tracks four states, exactly mirroring the oracle's
-//! `_AnimatedSizeState` enum (`animated_size.dart:15-51`):
+//! [`AnimatedSizeState`] tracks four states:
 //!
 //! - [`Start`](AnimatedSizeState::Start) — no committed size yet.
 //! - [`Stable`](AnimatedSizeState::Stable) — settled: either idle at the
@@ -79,7 +77,7 @@ pub enum AnimatedSizeState {
 /// Animates its size toward its child's natural size whenever that size
 /// changes.
 ///
-/// Mirrors Flutter's `RenderAnimatedSize`. See the module docs for the
+/// See the module docs for the
 /// retarget state machine and the constructor for the controller-injection
 /// contract (this object never builds or sees a `Vsync`/`UpdateScheduler`).
 pub struct RenderAnimatedSize {
@@ -89,8 +87,7 @@ pub struct RenderAnimatedSize {
     curve: ArcCurve,
     size_tween: SizeTween,
     state: AnimatedSizeState,
-    /// Last frame's already-`constrain()`-ed committed size — mirrors the
-    /// oracle's `_currentSize` (`animated_size.dart:137`). Read only by
+    /// Last frame's already-`constrain()`-ed committed size. Read only by
     /// [`layout_stable`](Self::layout_stable)'s retarget branch and by
     /// [`dry_size_for`](Self::dry_size_for)'s `Stable` branch.
     current_size: Size,
@@ -146,8 +143,7 @@ impl RenderAnimatedSize {
     }
 
     /// Sets the base forward duration on the owned controller. An inert
-    /// pass-through (matches the oracle's plain-assignment setter,
-    /// `animated_size.dart:148-153`) — it does not restart an in-flight run.
+    /// pass-through — it does not restart an in-flight run.
     pub fn set_duration(&self, duration: Duration) {
         self.controller.set_duration(duration);
     }
@@ -195,7 +191,7 @@ impl RenderAnimatedSize {
     }
 
     // ------------------------------------------------------------------
-    // The retarget state machine (oracle animated_size.dart:309-377)
+    // The retarget state machine
     // ------------------------------------------------------------------
 
     /// `start -> stable`: both tween ends collapse to the child's size — no
@@ -216,8 +212,8 @@ impl RenderAnimatedSize {
             self.state = AnimatedSizeState::Changed;
         } else if self.controller.status() == AnimationStatus::Completed {
             // Both ends already equal `child_size`; a no-op snap that just
-            // clears any float drift (oracle's `value == upperBound` check,
-            // replaced by `status()` — see the module docs on `restart_animation`).
+            // clears any float drift (detected via `status()` rather than by
+            // comparing the controller value with its upper bound).
             self.size_tween = SizeTween::new(child_size, child_size);
         } else if !self.controller.is_animating() {
             // Resume after a detach, from the CURRENT value — not `forward_from(0)`.
@@ -261,8 +257,7 @@ impl RenderAnimatedSize {
         }
     }
 
-    /// Always-forward restart, matching the oracle's `_restartAnimation`
-    /// (`animated_size.dart:309-312`) exactly — never `.reverse()`.
+    /// Always-forward restart — never `.reverse()`.
     fn restart_animation(&mut self) {
         let _ = self.controller.forward_from(Some(0.0));
     }
@@ -324,11 +319,10 @@ impl RenderBox for RenderAnimatedSize {
         self.has_visual_overflow = false;
         let constraints = *ctx.constraints();
 
-        // Fast path (oracle animated_size.dart:249-256): no child, or the
-        // parent gave us no freedom to animate into. The child is still laid
-        // out (so its own subtree stays consistent) but `align_child` is
-        // deliberately NOT called — the child keeps whatever offset it had,
-        // possibly stale, matching the oracle's quirk exactly.
+        // Fast path: no child, or the parent gave us no freedom to animate
+        // into. The child is still laid out (so its own subtree stays
+        // consistent) but `align_child` is deliberately NOT called — the
+        // child keeps whatever offset it had, possibly stale.
         if ctx.child_count() == 0 || constraints.is_tight() {
             let _ = self.controller.stop();
             let snapped = constraints.smallest();
@@ -448,7 +442,7 @@ impl RenderBox for RenderAnimatedSize {
         })));
 
         // Resume an interrupted resizing animation in case the node wasn't
-        // marked dirty already (oracle animated_size.dart:225-227).
+        // marked dirty already.
         if matches!(
             self.state,
             AnimatedSizeState::Changed | AnimatedSizeState::Unstable
@@ -458,11 +452,10 @@ impl RenderBox for RenderAnimatedSize {
     }
 
     fn detach(&mut self) {
-        // Deliberately does NOT call `self.controller.stop()` — a documented
-        // FLUI divergence from the oracle (`animated_size.dart:233-236`).
-        // Flutter's `detach` fires far more often (e.g. temporarily-offstage
-        // subtrees); FLUI's `detach` only fires on structural tree removal,
-        // and controller lifecycle/disposal is the owning `State`'s job.
+        // Deliberately does NOT call `self.controller.stop()`: `detach` only
+        // fires on structural tree removal (not for temporarily-offstage
+        // subtrees), and controller lifecycle/disposal is the owning
+        // `State`'s job.
         // Stopping here would also race a fresh `attach` on a remove+insert
         // reparent.
         if let Some(id) = self.listener_id.take() {

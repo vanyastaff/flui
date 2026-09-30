@@ -10,11 +10,7 @@
 ///
 /// This struct represents the accessibility settings that the platform
 /// has enabled, such as reduced motion or high contrast mode.
-///
-/// # Flutter Equivalence
-///
-/// Corresponds to Flutter's `AccessibilityFeatures` from dart:ui.
-#[expect(clippy::struct_excessive_bools)] // Mirrors Flutter's AccessibilityFeatures flags
+#[expect(clippy::struct_excessive_bools)] // One independent platform toggle per flag
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AccessibilityFeatures {
     /// Whether accessible navigation is enabled.

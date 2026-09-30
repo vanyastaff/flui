@@ -27,12 +27,11 @@
 //! rebuild, and the *only* remaining channel through which a leaf can
 //! rebuild is `InheritedElement`'s dependents-notify path
 //! (`update_should_notify` + the per-element dependents set), which is
-//! exactly the mechanism this test exists to hold accountable. This mirrors
-//! Flutter's own mechanism for the same problem: `InheritedWidget.child` is
-//! a stored field reused verbatim across a `pumpWidget` swap (Dart identity
-//! short-circuits `Element.updateChild`), not reconstructed — `StaticChild`
-//! is FLUI's explicit, opt-in equivalent (see `View::should_skip_rebuild`'s
-//! doc comment on `Memo<V>`, the general-purpose version of this opt-out).
+//! exactly the mechanism this test exists to hold accountable. The child
+//! must be a stored value reused verbatim across the swap, not
+//! reconstructed — `StaticChild` is FLUI's explicit, opt-in mechanism for
+//! that (see `View::should_skip_rebuild`'s doc comment on `Memo<V>`, the
+//! general-purpose version of this opt-out).
 //!
 //! ## Falsification evidence (both directions, both restored)
 //!

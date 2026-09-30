@@ -1,7 +1,6 @@
 //! Baseline types for text alignment
 
-/// A horizontal line used for aligning text, equivalent to Flutter's
-/// `TextBaseline`.
+/// A horizontal line used for aligning text.
 ///
 /// Baseline-aligned layout (e.g. `CrossAxisAlignment::Baseline`) lines up
 /// children along the selected baseline kind rather than their box edges.

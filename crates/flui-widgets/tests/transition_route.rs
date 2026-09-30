@@ -1,17 +1,15 @@
 //! Tests for the private `TransitionRoute`, reached through the temporary
 //! `flui_widgets::__test_access` path (ADR-0083 §4).
 //!
-//! # Parity oracles
+//! # Scenarios
 //!
-//! `.flutter/packages/flutter/test/widgets/routes_test.dart` —
-//! `'secondary animation is kDismissed when next route finishes pop'`,
-//! `'secondary animation is kDismissed when next route is removed'`,
-//! `'secondary animation is kDismissed after train hopping finishes and pop'`,
-//! `'secondary animation is kDismissed when train hopping is interrupted'`.
-//! Expected values are read from `routes.dart`, not from running this code.
+//! The secondary animation is dismissed when the next route finishes its pop,
+//! when it is removed, after train hopping finishes and pops, and when train
+//! hopping is interrupted. Expected values are fixed by the documented
+//! contract, not by running this code.
 //!
 //! Most of these drive the transition by hand with `set_value` — which is
-//! deterministic, and is what makes `_handleStatusChanged`'s four arms
+//! deterministic, and is what makes the status-change handler's four arms
 //! individually testable — rather than by awaiting the `TickerFuture`
 //! `did_push` returns (ADR-0064). A handful that need the run to have real,
 //! not-yet-covered distance left (so a `reverse()` cannot collapse
@@ -95,8 +93,7 @@ fn dismiss(handle: &TransitionHandle) {
 // ============================================================================
 
 /// `didPush` drives the controller forward and the entry parks in `Pushing` until
-/// the controller reports `Completed` (`routes.dart:336-350`; the navigator side
-/// is `navigator.dart:3274-3290`).
+/// the controller reports `Completed`.
 ///
 /// Red-check: return `PushCompletion::Immediate` from `TransitionRoute::did_push`.
 pub(crate) fn push_transition_parks_the_entry_in_pushing_until_the_controller_completes() {

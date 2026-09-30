@@ -7,8 +7,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Imposes additional [`BoxConstraints`] on its child.
 ///
-/// Flutter parity: `widgets/basic.dart` `ConstrainedBox` over
-/// `RenderConstrainedBox`. The additional constraints are *enforced against*
+/// Backed by `RenderConstrainedBox`. The additional constraints are *enforced against*
 /// (intersected with) the constraints this box receives from its parent.
 #[derive(Clone, Debug)]
 pub struct ConstrainedBox {

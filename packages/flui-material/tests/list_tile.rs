@@ -25,9 +25,8 @@ fn themed(theme: ThemeData, child: impl IntoView) -> MediaQuery {
 
 /// A tap anywhere on the tile — including inside the content padding gutter,
 /// well away from `title`'s own text glyphs — fires `on_tap`: the whole tile
-/// is the tap target, not just the title. Flutter parity: `ListTile.build`
-/// wraps its ENTIRE content (padding included) in a single `InkWell`
-/// (`list_tile.dart`, oracle tag `3.44.0`), so the test probes the mounted
+/// is the tap target, not just the title: the tile wraps its ENTIRE content
+/// (padding included) in a single `InkWell`, so the test probes the mounted
 /// surface rather than the title's own bounds.
 pub fn whole_tile_tap_fires_from_a_point_inside_the_content_padding() {
     let taps = Arc::new(AtomicUsize::new(0));

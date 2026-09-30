@@ -29,10 +29,9 @@ use common::{lay_out, tight};
 use flui_material::{Checkbox, Theme, ThemeData};
 use flui_testing::a11y::Toggled;
 
-/// The checkbox's full tap target — Flutter parity: `kMinInteractiveDimension`
-/// (`constants.dart`, `48.0`, oracle tag `3.44.0`), the branch
-/// `Checkbox.build` always takes in this V1 (no `materialTapTargetSize`
-/// override yet).
+/// The checkbox's full tap target — the minimum interactive dimension
+/// (`48.0`), the branch `Checkbox` always takes in this V1 (no
+/// `materialTapTargetSize` override yet).
 const TAP_TARGET: f64 = 48.0;
 
 fn constraints() -> flui_sdk::rendering::BoxConstraints {
@@ -48,8 +47,7 @@ fn themed(checkbox: Checkbox) -> Theme {
 }
 
 pub fn tristate_cycle_survives_a_rebuild_between_each_tap() {
-    // Flutter parity: `_handleTap`'s tristate cycle (`checkbox.dart`
-    // `:241-248`) — false -> true -> null -> false. Each tap here rebuilds
+    // The tristate cycle is false -> true -> null -> false. Each tap here rebuilds
     // the tree with the previously-observed value (mirroring how a real
     // caller's `setState` re-renders `Checkbox` with the new `value` from
     // `onChanged`), proving the cycle end to end through real dispatch, not

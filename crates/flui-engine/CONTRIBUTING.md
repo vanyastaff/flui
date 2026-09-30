@@ -182,6 +182,6 @@ The crate is ~40k non-test lines. The densest files, and what each owns:
 - A bug: the issue template asks for the reproduction, the expected vs. actual
   behavior, and `RUST_LOG=debug` output — the crate logs through `tracing`,
   and `flui.gpu` target events carry the per-frame GPU detail.
-- A behavior question about what Flutter would do: `.flutter/` is the
-  reference, pinned at tag `3.44.0` (`git -C .flutter describe --tags`). Check
-  it rather than reasoning from memory.
+- A behavior question about prior art: `.flutter/` is an optional gitignored
+  reference clone, pinned at tag `3.44.0` (`git -C .flutter describe --tags`).
+  Check it rather than reasoning from memory.

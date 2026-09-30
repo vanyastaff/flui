@@ -1,8 +1,7 @@
 //! [`MaterialApp`] and [`ThemeMode`] — the Material application shell.
 //!
-//! Flutter parity: `material/app.dart` `MaterialApp` / `ThemeMode` (oracle
-//! tag `3.44.0`), composed over `flui-widgets`' design-neutral `WidgetsApp`
-//! exactly as the oracle composes it (ADR-0042 §5, ADR-0028): `WidgetsApp`
+//! Composed over `flui-widgets`' design-neutral `WidgetsApp`
+//! (ADR-0042 §5, ADR-0028): `WidgetsApp`
 //! knows nothing about this widget; this widget adds theme *selection*
 //! ([`ThemeMode`] resolved against the ambient
 //! `MediaQueryData::platform_brightness`) and theme *publication* (the
@@ -12,45 +11,42 @@
 //!
 //! ## Composition
 //!
-//! `MaterialApp` hands `WidgetsApp` a builder (the oracle's
-//! `_materialBuilder`) that wraps the routing subtree in, outermost first:
+//! `MaterialApp` hands `WidgetsApp` a builder that wraps the routing subtree
+//! in, outermost first:
 //!
 //! 1. [`Theme`] — publishing the [`ThemeData`] resolved by
-//!    [`ThemeMode`] × ambient platform brightness (`_themeBuilder`).
+//!    [`ThemeMode`] × ambient platform brightness.
 //! 2. [`ScaffoldMessenger`] — so `Scaffold`s anywhere below share one
 //!    snack-bar rail.
 //! 3. The caller's [`builder`](MaterialApp::builder) hook, run from its own
 //!    child element so its context resolves the `Theme` published in step 1
-//!    (the oracle's builder-inside-a-`Builder` trick, `material/app.dart`'s
-//!    "Why are we surrounding a builder with a builder?").
+//!    (a builder nested inside a `Builder`).
 //!
 //! ## Deferred (named gaps, not silent ones)
 //!
 //! - **High-contrast themes** (`highContrastTheme` / `highContrastDarkTheme`)
 //!   — FLUI's `MediaQueryData` has no `high_contrast` field yet; the two
 //!   slots land with it.
-//! - **`AnimatedTheme`** — a theme change is a jump cut, not the oracle's
-//!   200ms animated lerp; `themeAnimationDuration`/`Curve`/`Style` defer
+//! - **`AnimatedTheme`** — a theme change is a jump cut, not a 200ms
+//!   animated lerp; the animation duration/curve/style settings defer
 //!   with it (`flui-material`'s `AGENTS.md` already names lerp as deferred).
 //! - **`DefaultSelectionStyle`**, **`ScrollConfiguration`** /
 //!   `MaterialScrollBehavior` — neither widget exists in FLUI yet.
-//! - **Material hero motion** — the oracle installs a `HeroControllerScope`
-//!   whose controller flies heroes along `MaterialRectArcTween`; FLUI has no
-//!   arc tween yet, and the `Navigator`'s auto-installed default controller
-//!   already provides (linear) flights, so no scope is inserted here.
+//! - **Material hero motion** — Material spec heroes fly along an arc; FLUI
+//!   has no arc tween yet, and the `Navigator`'s auto-installed default
+//!   controller already provides (linear) flights, so no hero-controller scope
+//!   is inserted here.
 //! - **`MaterialLocalizations`** — FLUI ships no Material resource set yet;
-//!   when one lands its delegate is appended here the way the oracle appends
-//!   `DefaultMaterialLocalizations.delegate`. Caller delegates pass through
-//!   to `WidgetsApp` unchanged.
+//!   when one lands its delegate is appended here. Caller delegates pass
+//!   through to `WidgetsApp` unchanged.
 //! - **`Title`/`color`, named routes/`Router`, restoration, debug overlays**
 //!   — deferred at the `WidgetsApp` layer; see its module docs.
 //!
-//! ## Documented divergences
+//! ## Documented behavior
 //!
-//! - With **no `MediaQuery` ancestor** the oracle's
-//!   `MediaQuery.platformBrightnessOf` throws; FLUI resolves
-//!   [`ThemeMode::System`] against `MediaQueryData::default()`'s brightness
-//!   (light) instead. Under `run_app` the realm always installs the live
+//! - With **no `MediaQuery` ancestor**, [`ThemeMode::System`] resolves against
+//!   `MediaQueryData::default()`'s brightness (light) rather than failing.
+//!   Under `run_app` the realm always installs the live
 //!   root `MediaQuery`, so this path is reachable only from embedders and
 //!   harnesses that bypass it — and a panic inside `build` would surface as
 //!   a silently-childless subtree (the framework's build-error boundary),
@@ -74,8 +70,7 @@ use crate::scaffold_messenger::ScaffoldMessenger;
 use crate::theme::Theme;
 use crate::theme_data::ThemeData;
 
-/// Which theme a [`MaterialApp`] uses. Flutter parity: `ThemeMode`
-/// (`material/app.dart`, oracle tag `3.44.0`).
+/// Which theme a [`MaterialApp`] uses.
 ///
 /// Lives in `flui-material`, next to the [`ThemeData`] it selects between —
 /// theme *selection* belongs to the design system that defines the tokens,
@@ -89,36 +84,34 @@ pub enum ThemeMode {
     /// Always use [`MaterialApp::theme`], regardless of the platform signal.
     Light,
     /// Always use [`MaterialApp::dark_theme`] (falling back to
-    /// [`MaterialApp::theme`] when no dark theme is provided — the oracle's
-    /// `darkTheme != null` guard).
+    /// [`MaterialApp::theme`] when no dark theme is provided).
     Dark,
 }
 
 impl ThemeMode {
-    /// Whether this is [`ThemeMode::System`]. Flutter parity: `isSystem`.
+    /// Whether this is [`ThemeMode::System`].
     #[must_use]
     pub fn is_system(self) -> bool {
         self == Self::System
     }
 
-    /// Whether this is [`ThemeMode::Light`]. Flutter parity: `isLight`.
+    /// Whether this is [`ThemeMode::Light`].
     #[must_use]
     pub fn is_light(self) -> bool {
         self == Self::Light
     }
 
-    /// Whether this is [`ThemeMode::Dark`]. Flutter parity: `isDark`.
+    /// Whether this is [`ThemeMode::Dark`].
     #[must_use]
     pub fn is_dark(self) -> bool {
         self == Self::Dark
     }
 }
 
-/// The oracle's `_errorTextStyle`: the deliberately ugly fallback style for
-/// text rendered outside a `Material`/`DefaultTextStyle`, passed to
-/// `WidgetsApp` as the application-level text style. The oracle's underline
-/// decoration is dropped — FLUI's [`TextStyle`] carries no decoration
-/// fields yet.
+/// The deliberately ugly fallback style for text rendered outside a
+/// `Material`/`DefaultTextStyle`, passed to `WidgetsApp` as the
+/// application-level text style. It has no underline decoration — FLUI's
+/// [`TextStyle`] carries no decoration fields yet.
 fn error_text_style() -> TextStyle {
     TextStyle {
         color: Some(Color::from_argb(0xD0FF_0000)),
@@ -129,12 +122,11 @@ fn error_text_style() -> TextStyle {
     }
 }
 
-/// The oracle's `_themeBuilder` (`material/app.dart`, oracle tag `3.44.0`),
-/// minus the high-contrast branches (see the module docs): pick dark when
-/// the mode says dark, or when the mode is system and the ambient platform
-/// brightness is dark; otherwise (or when no dark theme is provided) fall
-/// back to `theme`, and finally to `ThemeData::default()` — the M3 light
-/// baseline, the same fallback as the oracle's bare `ThemeData()`.
+/// Picks the theme, without high-contrast branches (see the module docs):
+/// dark when the mode says dark, or when the mode is system and the ambient
+/// platform brightness is dark; otherwise (or when no dark theme is provided)
+/// fall back to `theme`, and finally to `ThemeData::default()` — the M3 light
+/// baseline.
 fn resolve_theme(
     mode: ThemeMode,
     theme: Option<&ThemeData>,
@@ -142,7 +134,7 @@ fn resolve_theme(
     ctx: &dyn BuildContext,
 ) -> ThemeData {
     let platform_brightness = MediaQuery::maybe_of(ctx).map_or_else(
-        // Documented divergence (module docs): the oracle throws here.
+        // Documented fallback (module docs): no ancestor resolves as light.
         || flui_sdk::widgets::MediaQueryData::default().platform_brightness,
         |data| data.platform_brightness,
     );
@@ -158,9 +150,8 @@ fn resolve_theme(
 /// the resolved [`ThemeData`] through [`Theme`], with a
 /// [`ScaffoldMessenger`] installed above the routing subtree.
 ///
-/// Flutter parity: `MaterialApp` (`material/app.dart`, oracle tag
-/// `3.44.0`) — see the module docs for composition order, named deferrals,
-/// and divergences.
+/// See the module docs for composition order, named deferrals, and
+/// documented behavior.
 ///
 /// # Example
 ///
@@ -238,7 +229,7 @@ impl MaterialApp {
         }
     }
 
-    /// The light (or only) theme — the oracle's `theme`. Defaults to
+    /// The light (or only) theme. Defaults to
     /// [`ThemeData::default`] (the M3 light baseline) when absent.
     #[must_use]
     pub fn theme(mut self, theme: ThemeData) -> Self {
@@ -246,9 +237,9 @@ impl MaterialApp {
         self
     }
 
-    /// The theme used when dark is selected — the oracle's `darkTheme`.
+    /// The theme used when dark is selected.
     /// Without one, dark selection falls back to [`theme`](Self::theme)
-    /// (never an automatic dark derivation — the oracle's behavior).
+    /// (never an automatic dark derivation).
     #[must_use]
     pub fn dark_theme(mut self, theme: ThemeData) -> Self {
         self.dark_theme = Some(theme);
@@ -256,7 +247,7 @@ impl MaterialApp {
     }
 
     /// How [`theme`](Self::theme) vs [`dark_theme`](Self::dark_theme) is
-    /// chosen — the oracle's `themeMode`, default [`ThemeMode::System`].
+    /// chosen; default [`ThemeMode::System`].
     #[must_use]
     pub fn theme_mode(mut self, mode: ThemeMode) -> Self {
         self.theme_mode = mode;
@@ -271,18 +262,17 @@ impl MaterialApp {
         self
     }
 
-    /// Register `observer` on the navigator at mount — the oracle's
-    /// `navigatorObservers`; see `WidgetsApp::observer`.
+    /// Register `observer` on the navigator at mount; see
+    /// `WidgetsApp::observer`.
     #[must_use]
     pub fn observer(mut self, observer: Arc<dyn NavigatorObserver>) -> Self {
         self.observers.push(observer);
         self
     }
 
-    /// Wrap the routing subtree — the oracle's `builder`. Runs **below**
+    /// Wrap the routing subtree. Runs **below**
     /// the published [`Theme`] and [`ScaffoldMessenger`], so `Theme::of`
-    /// inside it resolves the theme this app just selected (the oracle's
-    /// double-`Builder` contract).
+    /// inside it resolves the theme this app just selected.
     #[must_use]
     pub fn builder(
         mut self,
@@ -307,9 +297,7 @@ impl MaterialApp {
     ///
     /// An empty list always fails: debug builds panic here, at
     /// construction; release builds panic later, during build, when locale
-    /// resolution reads the first supported locale (the oracle's own
-    /// split — `assert(supportedLocales.isNotEmpty)` in debug, a
-    /// `StateError` from `supportedLocales.first` in release).
+    /// resolution reads the first supported locale.
     #[must_use]
     pub fn supported_locales(mut self, locales: Vec<Locale>) -> Self {
         debug_assert!(
@@ -332,7 +320,7 @@ impl MaterialApp {
 
 impl StatelessView for MaterialApp {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        // The oracle's `_materialBuilder`, handed to `WidgetsApp` as its
+        // The Material builder, handed to `WidgetsApp` as its
         // builder: resolves the theme against the ambient MediaQuery *at the
         // builder's own altitude* (below `Localizations`, above routing) and
         // wraps the routing subtree in the Material bands. `MediaQuery::
@@ -347,7 +335,7 @@ impl StatelessView for MaterialApp {
         let material_builder = move |ctx: &dyn BuildContext, child: Option<BoxedView>| {
             let resolved = resolve_theme(mode, theme.as_ref(), dark_theme.as_ref(), ctx);
             let inner: BoxedView = match &user_builder {
-                // The double-Builder trick: the caller's builder runs from
+                // The nested-builder trick: the caller's builder runs from
                 // its own element BELOW the Theme published here, so
                 // `Theme::of` inside it resolves this resolved theme.
                 Some(builder) => MaterialBuilderScope {
@@ -382,9 +370,7 @@ impl StatelessView for MaterialApp {
 }
 
 /// Runs the caller's builder hook from its own element, below the [`Theme`]
-/// and [`ScaffoldMessenger`] bands — the oracle's builder-inside-a-`Builder`
-/// ("Why are we surrounding a builder with a builder?", `material/app.dart`,
-/// oracle tag `3.44.0`): without an element boundary between them,
+/// and [`ScaffoldMessenger`] bands: without an element boundary between them,
 /// `Theme::of` inside the caller's builder could not see the theme published
 /// above it.
 #[derive(Clone, StatelessView)]

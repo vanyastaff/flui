@@ -6,9 +6,8 @@
 //! Resolving a `GlobalKey` is *optimistic*: when a parent declares a child
 //! carrying a key that some other parent currently holds, the framework
 //! grafts the existing element across rather than mounting a second one.
-//! Flutter says so in `_retakeInactiveElement`'s own comment — the
-//! "inactivity" is forward-looking, and "the only way that assumption could
-//! be false is if the global key is being duplicated".
+//! The graft assumes the holder is about to be deactivated, and the only way
+//! that assumption could be false is if the global key is being duplicated.
 //!
 //! The graft alone therefore cannot tell a legal reparent from an illegal
 //! duplicate: both look identical at the moment they happen. What separates
@@ -42,41 +41,28 @@
 //! Reservations and displacements are per-frame, so a key legally moving
 //! from parent A in one frame to parent B in the next is never reported.
 //!
-//! Flutter parity: the two ledgers are
-//! `BuildOwner._debugGlobalKeyReservations` (`framework.dart:3180`,
-//! populated by `_debugReserveGlobalKeyFor` from `Element.updateChild` at
-//! `:4086`) and
-//! `_debugElementsThatWillNeedToBeRebuiltDueToGlobalKeyShenanigans`
-//! (`:3148`, populated by `_retakeInactiveElement` at `:4539` and cleared by
-//! `_debugElementWasRebuilt`). Both are verified inside `finalizeTree`.
+//! Both ledgers are verified in `finalize_tree`.
 //!
-//! # Four deliberate divergences
+//! # Four deliberate properties
 //!
-//! 1. **It is not debug-only.** Flutter's whole apparatus lives inside
-//!    `assert(...)` and evaporates in release. FLUI records and verifies in
-//!    every profile: the cost is two small maps per frame, and a duplicate
-//!    `GlobalKey` corrupts a release tree exactly as badly as a debug one.
-//! 2. **It reports, it does not throw.** Flutter raises a `FlutterError`
-//!    out of `finalizeTree`. A duplicate key is caller-controlled input, so
-//!    FLUI surfaces a typed [`DuplicateGlobalKey`] through the owner's
-//!    diagnostic drain (`BuildOwner::take_global_key_diagnostics`) and a
-//!    `tracing::error!`, and the frame completes. Same verdict, different
-//!    channel — the same split the eager same-parent check already has.
-//! 3. **Verification order is deterministic.** Flutter iterates a
-//!    `HashMap`, so which of two conflicting parents is named "older"
-//!    depends on hash order. Both ledgers here are held in declaration
-//!    order, so the report is reproducible: the parent that declared the
-//!    key first in the frame is always `first_parent`.
-//! 4. **One parent declaring a key for two children is reported here.**
-//!    Flutter skips that shape in `_debugVerifyGlobalKeyReservation`
-//!    (`:3248`) and leaves it to a third mechanism,
-//!    `_debugVerifyIllFatedPopulation`, which watches the key *registry*
-//!    for a displaced-but-still-live element. FLUI has no third mechanism
-//!    to leave it to: the eager check in
+//! 1. **It is not debug-only.** FLUI records and verifies in every profile:
+//!    the cost is two small maps per frame, and a duplicate `GlobalKey`
+//!    corrupts a release tree exactly as badly as a debug one.
+//! 2. **It reports, it does not throw.** A duplicate key is caller-controlled
+//!    input, so FLUI surfaces a typed [`DuplicateGlobalKey`] through the
+//!    owner's diagnostic drain (`BuildOwner::take_global_key_diagnostics`)
+//!    and a `tracing::error!`, and the frame completes — the same split the
+//!    eager same-parent check already has.
+//! 3. **Verification order is deterministic.** Both ledgers are held in
+//!    declaration order rather than hash order, so the report is
+//!    reproducible: the parent that declared the key first in the frame is
+//!    always `first_parent`.
+//! 4. **One parent declaring a key for two children is reported here.** There
+//!    is no separate mechanism to leave it to: the eager check in
 //!    `element_tree::retake_active_global_key` catches the shape in debug
 //!    and is compiled out in release, where the second attachment therefore
 //!    mounts a genuine second element under one key. Folding it in here is
-//!    what keeps divergence 1 true.
+//!    what keeps property 1 true.
 //!
 //! # Repair before reporting
 //!
@@ -84,8 +70,7 @@
 //! other parent still listing it has a dangling child edge that would make
 //! teardown cascade secondary failures. [`verify`] therefore repairs first
 //! — dropping the child from every parent that is not its real parent —
-//! and only then records the report. Flutter does the same with
-//! `forgetChild` (`framework.dart:3272`), and for the same stated reason.
+//! and only then records the report.
 
 use std::collections::HashMap;
 
@@ -146,11 +131,6 @@ struct Reservation {
 /// the frame inconsistent with its own build output. That is the one
 /// cross-parent duplicate the reservation ledger alone cannot see, because
 /// the losing parent never ran and therefore never reserved.
-///
-/// Flutter tracks the same population separately, in
-/// `_debugElementsThatWillNeedToBeRebuiltDueToGlobalKeyShenanigans`
-/// (`framework.dart:3148`), recorded by `_retakeInactiveElement` when it
-/// takes an element from a live parent and cleared by `_debugElementWasRebuilt`.
 struct Displacement {
     child: ElementId,
     key: Box<dyn ViewKey>,
@@ -160,7 +140,7 @@ struct Displacement {
 /// The frame's reservations, in declaration order.
 ///
 /// Declaration order is load-bearing, not incidental: it is what makes the
-/// duplicate report reproducible across runs (see this module's divergence
+/// duplicate report reproducible across runs (see this module's property
 /// 3). `parents` is the ordered parent list and `by_parent` holds each
 /// parent's own ordered declarations.
 #[derive(Default)]
@@ -207,8 +187,7 @@ impl GlobalKeyReservations {
     ///
     /// Called when a parent gives a child up mid-frame (the reconciler
     /// replacing or removing it), so a child the parent no longer declares
-    /// cannot make it look like a duplicate claimant. Flutter parity:
-    /// `_debugRemoveGlobalKeyReservationFor` (`framework.dart:3188`).
+    /// cannot make it look like a duplicate claimant.
     pub(crate) fn forget(&mut self, parent: ElementId, child: ElementId) {
         let Some(entries) = self.by_parent.get_mut(&parent) else {
             return;
@@ -269,10 +248,6 @@ impl GlobalKeyReservations {
     /// linger as a competing claim. Its displacements go because rebuilding
     /// is exactly how a parent consents to having lost a child: the tree it
     /// is about to produce is the one that will be checked.
-    ///
-    /// Flutter clears the same two populations at the same point —
-    /// `_debugRemoveGlobalKeyReservationFor` from `updateChild`'s old-child
-    /// branch and `_debugElementWasRebuilt` from `buildScope`'s loop.
     pub(crate) fn note_parent_rebuild(&mut self, parent: ElementId) {
         if self.by_parent.remove(&parent).is_some() {
             self.parents.retain(|&id| id != parent);
@@ -343,8 +318,7 @@ impl SeenKeys {
 /// claimed by three parents yields two reports, each naming the first
 /// claimant and the newcomer, so no conflict is collapsed away.
 ///
-/// Two populations are skipped, matching Flutter's
-/// `_debugVerifyGlobalKeyReservation` (`framework.dart:3231`):
+/// Two populations are skipped:
 ///
 /// - a parent that is no longer in the tree — it was unmounted later in the
 ///   frame, so its declaration cannot conflict with anything live;
@@ -352,10 +326,7 @@ impl SeenKeys {
 ///   parent — it was deactivated and never re-attached, so the reservation
 ///   describes a claim nobody kept.
 ///
-/// Flutter states the first as *two* conditions (`_lifecycleState ==
-/// defunct` **or** `renderObject?.attached == false`), because a deactivated
-/// element is still reachable from its map there. One condition covers both
-/// here because of where this runs: `finalize_tree` sweeps the inactive
+/// One condition covers the first because of where this runs: `finalize_tree` sweeps the inactive
 /// queue immediately before calling it, so a parent that was deactivated
 /// this frame and not re-taken is already out of the tree by the time the
 /// walk starts, and one that *was* re-taken is active again.
@@ -392,9 +363,7 @@ pub(crate) fn verify(
             }
 
             // A key claimed twice by ONE parent for two different children
-            // is reported here too, unlike Flutter, which skips this shape
-            // in `_debugVerifyGlobalKeyReservation` (`framework.dart:3248`)
-            // and leaves it to `_debugVerifyIllFatedPopulation`. FLUI has no
+            // is reported here too. There is no
             // second mechanism to leave it to: the eager check in
             // `element_tree::retake_active_global_key` catches it in debug
             // and is compiled out in release, where the second attachment
@@ -495,9 +464,6 @@ fn report_duplicate(
 /// A no-op in the common case — the graft already unlinked the child when
 /// it moved it — but the check costs one lookup and closes the window in
 /// which a reservation outlives an edge the graft did not clean up.
-///
-/// Flutter parity: the `forgetChild` calls in
-/// `_debugVerifyGlobalKeyReservation` (`framework.dart:3272`).
 fn repair_losing_parent(tree: &mut ElementTree, parent: ElementId, child: ElementId) {
     if tree
         .get(child)

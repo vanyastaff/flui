@@ -55,10 +55,9 @@ pub fn tap_sets_the_controller_index_through_real_pointer_dispatch() {
 }
 
 /// A `DefaultTabController` whose `length` shrinks while its last tab is
-/// selected re-creates the controller with a clamped index (Flutter parity:
-/// `_DefaultTabControllerState.didUpdateWidget`) — end to end, through a
-/// real root swap: mounting does not panic, and a subsequent tap still
-/// dispatches correctly through the re-created controller.
+/// selected re-creates the controller with a clamped index — end to end,
+/// through a real root swap: mounting does not panic, and a subsequent tap
+/// still dispatches correctly through the re-created controller.
 pub fn default_tab_controller_survives_a_length_shrink_past_the_selected_index() {
     let three_tabs = vec![
         Tab::new().text("One"),

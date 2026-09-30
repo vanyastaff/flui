@@ -41,7 +41,7 @@ fn counting_entry(calls: &Calls) -> OverlayEntry {
 /// `skip_count`, and `harness_theater_*` in `flui-objects` covers what the render
 /// object then does with it.
 #[test]
-fn overlay_build_plan_matches_flutters_onstage_loop() {
+fn overlay_build_plan_skips_covered_maintained_entries() {
     let plain = || OverlayEntry::new(|_ctx| SizedBox::new(10.0, 10.0).into_view().boxed());
     let opaque = || plain().with_opaque(true);
     let maintained = || plain().with_maintain_state(true);

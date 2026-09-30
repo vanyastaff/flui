@@ -1,13 +1,11 @@
 //! Tests for the private [`ModalRoute`], reached through the temporary
 //! `flui_widgets::__test_access` path (ADR-0083 §4).
 //!
-//! # Parity oracles
+//! # Scenarios
 //!
-//! `.flutter/packages/flutter/lib/src/widgets/routes.dart` — `TransitionRoute.
-//! _handleStatusChanged` (`:293-321`), `ModalRoute.offstage` (`:1949-1962`),
-//! `ModalRoute.changedInternalState` (`:2221-2231`), `createOverlayEntries`
-//! (`:2350-2356`). Expected values are read from the reference, not from running
-//! this code.
+//! The route's opacity on transition completion, its offstage state, state
+//! maintenance, and overlay-entry creation. Expected values are fixed by the
+//! documented contract, not by running this code.
 //!
 //! # What is *not* proven here
 //!
@@ -114,10 +112,10 @@ fn complete_entrance(transition: &TransitionHandle, harness: &mut Harness) {
 }
 
 // ============================================================================
-// opaque — `_handleStatusChanged` (routes.dart:293-321)
+// opaque — applied when the transition completes
 // ============================================================================
 
-/// `case completed: overlayEntries.first.opaque = opaque` (`routes.dart:296`).
+/// On completion the route's first overlay entry takes the route's `opaque` value.
 ///
 /// Previously this write had nowhere to go. Now it drops the route below out of
 /// the tree entirely, because that route has no `maintain_state`.
@@ -148,11 +146,11 @@ pub(crate) fn modal_opaque_route_occludes_the_route_below_once_its_transition_co
 }
 
 // ============================================================================
-// maintainState — routes.dart:1893, :2230
+// maintainState
 // ============================================================================
 
 // ============================================================================
-// changedInternalState — routes.dart:2221-2231
+// changedInternalState
 // ============================================================================
 
 // ============================================================================
@@ -161,10 +159,10 @@ pub(crate) fn modal_opaque_route_occludes_the_route_below_once_its_transition_co
 
 /// A non-dismissible modal builds an `AbsorbPointer` and no gesture recogniser;
 /// a dismissible one wraps it in a `GestureDetector` whose tap pops the route
-/// (`modal_barrier.dart`'s `onDismiss ?? Navigator.maybePop`).
+/// (`on_dismiss` or `maybe_pop`).
 ///
-/// **Divergence, not parity.** FLUI has no `ModalBarrier`, no `BlockSemantics`
-/// and no `barrierLabel`; the barrier absorbs pointers only. See the module docs.
+/// FLUI has no `ModalBarrier`, no `BlockSemantics` and no `barrierLabel`; the
+/// barrier absorbs pointers only. See the module docs.
 pub(crate) fn modal_barrier_absorbs_pointers_and_a_dismissible_one_adds_a_gesture_detector() {
     let (navigator, mut harness, _bottom) = navigator_with_seed();
     let _result = navigator.push(modal(&Built::default(), &Arc::new(AtomicUsize::new(0))));

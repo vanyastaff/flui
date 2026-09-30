@@ -104,7 +104,7 @@ impl PipelineOwner<PaintPhase> {
 
         self.scheduler.enter_phase(PhaseKind::Paint);
 
-        // Deepest-first ordering retained (Flutter `flushPaint`): the
+        // Deepest-first ordering retained: the
         // full-tree descent below repaints everything, but per-boundary
         // dirty-driven repaints will rely on this order once retention
         // lands, and keeping it now means the dirty-list semantics
@@ -135,9 +135,9 @@ impl PipelineOwner<PaintPhase> {
             // Boundaries queued only to have some node's own effect layers
             // rebuilt. Intersected with "does not need paint", which is where
             // paint precedence is enforced: a boundary marked for a real
-            // repaint after its layer-update mark drops out here, matching
-            // Flutter's `if (node._needsPaint) repaintCompositedChild(node)
-            // else updateLayerProperties(node)`.
+            // repaint after its layer-update mark drops out here: a node that
+            // needs paint is repainted, otherwise only its layer properties
+            // are updated.
             //
             // `dirty_ids` above deliberately stays the FULL queue, so a
             // boundary becomes graft-eligible only by appearing in this set —
@@ -397,7 +397,7 @@ impl PipelineOwner<PaintPhase> {
 
         // exit_phase clears debug_doing_paint AND drains mid-paint marks back
         // into dirty so paint marks made during this pass become next-frame
-        // work rather than being stranded — Flutter's flushPaint semantics.
+        // work rather than being stranded.
         //
         // Finding 2 (intentional improvement over pre-refactor behavior):
         // exit_phase also drains mid-marks on the ERROR path (the early-return
@@ -415,8 +415,7 @@ impl PipelineOwner<PaintPhase> {
     /// Records one node's paint fragment and replays it into the
     /// composer, recursing at child markers.
     ///
-    /// Per-node order follows Flutter's `PaintingContext._paintWithContext`:
-    /// `WAS_REPAINT_BOUNDARY` is written and `NEEDS_PAINT` cleared
+    /// Per-node order: `WAS_REPAINT_BOUNDARY` is written and `NEEDS_PAINT` cleared
     /// **before** the node paints, so a paint body that re-marks its own
     /// node is caught by the debug check below instead of silently
     /// erasing the evidence.
@@ -607,18 +606,17 @@ impl PipelineOwner<PaintPhase> {
         // cached FLAG, which is bootstrapped once at insert and never re-synced.
         //
         // While every production `is_repaint_boundary()` returns a literal
-        // constant they agree trivially. A dynamic one — the obvious port of
-        // Flutter's `RenderOpacity.isRepaintBoundary => alwaysNeedsCompositing` —
+        // constant they agree trivially. A dynamic one — say an opacity object
+        // whose boundary status follows whether it always needs compositing —
         // desyncs them, and fails in two directions at once: inert on the fast
         // path (a fade mounting at an endpoint bootstraps `false` and stays
         // there), and CORRUPTING on relayout (paint pushes a boundary layer and
         // stores a capture, but flag-gated `laid_out` never marks it needs-paint,
         // so the next frame grafts a stale capture over new geometry).
         //
-        // Flutter avoids this by caching `_currentlyIsRepaintBoundary` at the
-        // same moment `markNeedsCompositingBitsUpdate` fires (`proxy_box.dart`).
-        // Porting the predicate without the cache is the trap; this assert is
-        // what makes walking into it loud instead of silent. Issue #995.
+        // Avoiding this needs the flag re-synced at the same moment
+        // `mark_needs_compositing_bits_update` fires; this assert is what
+        // makes walking into the trap loud instead of silent. Issue #995.
         debug_assert_eq!(
             is_repaint_boundary,
             render_node.is_repaint_boundary_flag(),
@@ -635,7 +633,7 @@ impl PipelineOwner<PaintPhase> {
         // that pass and is skipped at the splice below.
         let parent_generation = render_node.layout_generation();
 
-        // Written unconditionally PRE-paint (Flutter object.dart:3560):
+        // Written unconditionally PRE-paint:
         // a node flipping boundary→non-boundary leaves exactly one
         // `WAS_REPAINT_BOUNDARY=true` trail for the next compositing
         // walk's lost-boundary branch.
@@ -653,9 +651,8 @@ impl PipelineOwner<PaintPhase> {
         // longer needs paint — reclassified as update-only — whose target is no
         // longer flagged, so it would graft the pre-error capture unpatched.
         //
-        // Recorded before the early returns below for the same reason Flutter
-        // clears it outside `_paintWithContext`: a node skipped for layout must
-        // not strand the request either.
+        // Recorded before the early returns below: a node skipped for layout
+        // must not strand the request either.
         if render_node.needs_composited_layer_update() {
             composer.consumed_updates.push(node_id);
         }
@@ -666,23 +663,20 @@ impl PipelineOwner<PaintPhase> {
         // Uses `skip_paint()` rather than `effects.opacity`'s alpha being
         // `Some(0)` so that `paint_effects()`'s opacity field only controls
         // layer-emission; the skip-paint decision is a separate, explicit
-        // contract (Flutter: `if (_alpha == 0) return;` in
-        // RenderOpacity.paint).
+        // contract (a fully transparent opacity paints nothing).
         if render_node.skip_paint() {
             return Ok(());
         }
 
-        // Flutter object.dart:3497 — a node that still needs layout must
-        // not paint stale geometry. Layout runs before paint in the
-        // pipeline, so this guards descendant-error and partial-frame
+        // A node that still needs layout must not paint stale geometry.
+        // Layout runs before paint in the pipeline, so this guards descendant-error and partial-frame
         // paths where a poisoned layout left the flag set.
         if render_node.needs_layout() {
             return Ok(());
         }
 
         // Sliver visibility cull: a sliver with zero paint extent
-        // (`!visible`) paints nothing and splices no children (Flutter:
-        // the viewport skips invisible slivers). The gate lives here, in
+        // (`!visible`) paints nothing and splices no children. The gate lives here, in
         // the driver — next to the sliver hit-test extent gate — so sliver
         // objects no longer cache `geometry` just to short-circuit their
         // own `paint`. Box nodes (`geometry_sliver() == None`) are never
@@ -740,8 +734,8 @@ impl PipelineOwner<PaintPhase> {
         // A node's own paint effects wrap the ENTIRE node fragment (self
         // draws AND children). The pre-fragment walk wrapped children only;
         // `paint_effects()` implementors draw nothing themselves, so the
-        // visible result is identical and the rule matches Flutter
-        // (RenderOpacity wraps its child's whole paint).
+        // visible result is identical (an opacity wraps its child's whole
+        // paint).
         let effect_layers = own_effects.len();
         for layer in own_effects {
             let layer_id = composer.push_layer(layer);
@@ -1213,7 +1207,7 @@ impl FragmentComposer {
     /// `device_pixel_ratio` becomes the root layer's scale: the
     /// framework paints in LOGICAL pixels, the engine rasterizes in
     /// physical surface pixels — the root transform is the single
-    /// place the two meet (Flutter's RenderView root transform).
+    /// place the two meet.
     ///
     /// `root_boundary` stamps the root layer when the root render object
     /// declares itself a repaint boundary (`RenderView` does). It has to be
@@ -1557,8 +1551,7 @@ impl FragmentComposer {
 /// value's `transform` field (one transform for the whole node, applied
 /// here) and the per-child [`FragmentOp::PushTransform`] op (`RenderFlow`
 /// and any other Variable-arity node giving each child its own paint-time
-/// transform). Flutter `PaintingContext.pushTransform`:
-/// `T(offset)·M·T(−offset)`.
+/// transform). The result is `T(offset)·M·T(−offset)`.
 fn conjugate(
     matrix: flui_foundation::geometry::Matrix4,
     origin: Offset,
@@ -1578,9 +1571,9 @@ fn conjugate(
 /// Scope shapes/bounds are recorded in the node's LOCAL coordinates, while
 /// the runs they bracket carry the accumulated `origin` baked into their
 /// canvas transforms — so every variant is shifted by `origin` here
-/// (Flutter `pushClipRect`: `clipRect.shift(offset)`; `RenderShaderMask`'s
-/// `maskRect = offset & size`; `RenderBackdropFilter`'s backdrop bounds
-/// follow the same `offset & size` convention), or a scope away from the
+/// (a clip rect is `clipRect.shift(offset)`; a shader mask's rect and a
+/// backdrop filter's bounds follow the same `offset & size` convention),
+/// or a scope away from the
 /// parent origin would apply at the layer's (0,0) instead of the node's
 /// position.
 ///
@@ -1617,9 +1610,8 @@ fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
         FragmentScope::Leader { link, size } => {
             Layer::Leader(LeaderLayer::with_offset(link, size, origin))
         }
-        // `Layer::Follower` carries no resolved position at all —
-        // matching oracle, where a `FollowerLayer`'s `linkedOffset`/
-        // `unlinkedOffset` are inputs to a LATER resolution pass, never
+        // `Layer::Follower` carries no resolved position at all — the
+        // linked/unlinked offsets are inputs to a LATER resolution pass, never
         // stored as the final on-screen transform. `target_offset` is
         // recorded as-authored (not origin-shifted): resolving it against
         // the leader's position is deliberately deferred past this pass

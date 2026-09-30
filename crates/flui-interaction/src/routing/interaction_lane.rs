@@ -280,11 +280,9 @@ fn try_mint_lane_id(source: &AtomicU64) -> Result<LaneId, InteractionDispatchErr
 /// One pointer event as delivered to one hit-test target, in both of the
 /// coordinate spaces a handler can legitimately need.
 ///
-/// Flutter's `PointerEvent` carries `position` (the root's space) and
-/// `localPosition` (the receiving target's space) on the same object, so a
-/// widget always has both. FLUI's pointer events are [`ui_events`] types with
-/// room for exactly one position, and dispatch rewrites that one into the
-/// receiving entry's space, so the pair is carried side by side instead.
+/// FLUI's pointer events are [`ui_events`] types with room for exactly one
+/// position, and dispatch rewrites that one into the receiving entry's space,
+/// so the root-space and target-space events are carried side by side.
 ///
 /// Both fields borrow values the dispatch already owns, so building one costs
 /// no clone and no matrix work beyond the localisation dispatch performs
@@ -527,9 +525,8 @@ impl ResolvedHitRoute {
     ///
     /// The first panic payload is captured and returned so the dispatch owner
     /// can perform mandatory cleanup (arena close/sweep, route release) before
-    /// resuming it; later panics are traced without replacing the first,
-    /// matching Flutter's per-entry exception isolation in
-    /// `GestureBinding.dispatchEvent`.
+    /// resuming it; later panics are traced without replacing the first, so
+    /// one target's panic never starves the entries after it.
     fn invoke(&self, event: &PointerEvent) -> Option<RoutePanic> {
         let mut first_panic = None;
         for entry in &self.entries {
@@ -1077,9 +1074,8 @@ impl InteractionDispatchHandle {
     /// registered (see `MouseRegion::sync_mouse_region_target`,
     /// `crates/flui-widgets/src/interaction/mouse_region.rs`, which calls
     /// [`replace_mouse_region`](Self::replace_mouse_region) with the empty
-    /// set instead of this method — Flutter's `RenderMouseRegion` has no
-    /// "unregister while attached" concept either, its callback fields are
-    /// just nulled in place). What remains for this method is releasing a
+    /// set instead of this method: a mounted region's callbacks are replaced
+    /// in place, never unregistered). What remains for this method is releasing a
     /// target this lane no longer wants to resolve fresh annotations
     /// against. Because it only drops the *lane's* map entry, an existing
     /// strong `Rc` clone held elsewhere — e.g.
@@ -1115,10 +1111,8 @@ impl InteractionDispatchHandle {
     /// device's next postframe recheck
     /// ([`MouseTracker::update_all_devices`](super::MouseTracker::update_all_devices))
     /// would still invoke the unmounted region's `on_exit` — the spurious
-    /// exit Flutter's `validForMouseTracker` flag
-    /// (`rendering/proxy_box.dart` `RenderMouseRegion.detach`) exists to
-    /// prevent. Overwriting the shared cell's contents here is FLUI's
-    /// equivalent invalidation: every remaining holder of the `Rc`,
+    /// exit a detached region must never produce. Overwriting the shared
+    /// cell's contents here is the invalidation: every remaining holder of the `Rc`,
     /// including that cached clone, observes empty callbacks on its next
     /// `snapshot()`.
     pub fn detach_mouse_region(
@@ -1558,11 +1552,8 @@ impl InteractionDispatchHandle {
     /// Resolve and invoke a hit path's pointer targets and mouse-hover
     /// regions together, leaf-first, in a single per-entry pass — so a
     /// `Listener` and a nested `MouseRegion` on the same path fire in
-    /// hit-test order relative to EACH OTHER, matching Flutter's single
-    /// per-entry `entry.target.handleEvent` loop (`gestures/binding.dart:496`,
-    /// `HitTestResult.path` ordered leaf-first per
-    /// `gestures/hit_test.dart:131-132`) instead of two independent full
-    /// passes over the path.
+    /// hit-test order relative to EACH OTHER (one per-entry loop over the
+    /// leaf-first path) instead of two independent full passes over it.
     ///
     /// Used only by the coalesced ephemeral hover-move dispatch
     /// (`GestureBinding::flush_pending_moves_kernel`'s `PendingMove::Hover`
@@ -1618,9 +1609,8 @@ impl InteractionDispatchHandle {
         }
 
         // Mirrors `MouseTracker::dispatch_hover`'s own gate: only a
-        // buttons-empty `Move` carries hover semantics (Flutter's
-        // `PointerHoverEvent` vs `PointerMoveEvent` split at the event-class
-        // level). Gating resolution (not just invocation) means a
+        // buttons-empty `Move` carries hover semantics (a contact drag is
+        // not a hover). Gating resolution (not just invocation) means a
         // non-hover-shaped event never resolves mouse-region callbacks at
         // all.
         let hover_qualifies = matches!(

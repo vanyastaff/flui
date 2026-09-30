@@ -1,8 +1,8 @@
 //! Recording 2D drawing into a [`DisplayList`], and shaping text with
 //! cosmic-text.
 //!
-//! [`Canvas`] is `dart:ui`'s `Canvas`: a render object (or a `CustomPaint`
-//! painter) draws against it, every command is recorded with the current
+//! [`Canvas`] is where a render object (or a `CustomPaint`
+//! painter) draws: every command is recorded with the current
 //! transform baked in, and [`Canvas::finish`] hands back the immutable list
 //! that `flui-engine` replays on the GPU. Nothing is rasterised here.
 //!
@@ -36,7 +36,7 @@
 //! # Decorations
 //!
 //! [`paint_box_decoration`] and [`paint_table_border`] are the two
-//! Flutter-shaped painters (`BoxDecoration`, `TableBorder`) that record
+//! painters (`BoxDecoration`, `TableBorder`) that record
 //! straight into a canvas; [`box_decoration_hit_test`] is the matching
 //! hit-test.
 //!

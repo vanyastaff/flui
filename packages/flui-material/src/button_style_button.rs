@@ -1,34 +1,29 @@
 //! [`ButtonStyleButtonCore`] — the composition machinery shared by every M3
 //! button (`ElevatedButton`, `FilledButton`, `OutlinedButton`, `TextButton`).
 //!
-//! # Flutter parity
+//! # Structure
 //!
-//! `material/button_style_button.dart`'s `ButtonStyleButton`/`_ButtonStyleState`
-//! (oracle tag `3.44.0`). The oracle is an abstract `StatefulWidget` base
-//! class each concrete button subclasses, overriding `defaultStyleOf` /
-//! `themeStyleOf`. Rust has no implementation inheritance, so this crate
-//! inverts the relationship: each concrete button (`elevated_button.rs` etc.)
+//! Rust has no implementation inheritance, so there is no abstract button base
+//! class: each concrete button (`elevated_button.rs` etc.)
 //! is a thin [`StatelessView`] that reads
 //! the ambient [`Theme`](crate::Theme), computes its own `default_style`
 //! table, reads its own `ThemeData` component-theme slot (`elevated_button_theme`
 //! and friends), and hands all three to this module's [`ButtonStyleButtonCore`]
 //! — the `StatefulView` that owns the interactive-state machinery and the
-//! actual composition. **Named reduction**: the oracle also has a standalone
-//! `ElevatedButtonTheme` `InheritedTheme` widget per button (so a subtree can
-//! override just that button's style without touching the whole
-//! `ThemeData`); FLUI V1 has no per-widget `InheritedTheme` wrappers yet, so
-//! every concrete button reads only its `ThemeData` slot via `Theme::of` —
-//! see each concrete button's own module docs for the simplified
-//! `ElevatedButtonTheme.of(context)?.style` chain this collapses to.
+//! actual composition. **Named reduction**: there is no standalone
+//! per-button theme widget (so a subtree cannot override just that button's
+//! style without touching the whole `ThemeData`); FLUI V1 has no per-widget
+//! inherited-theme wrappers yet, so every concrete button reads only its
+//! `ThemeData` slot via `Theme::of` — see each concrete button's own module
+//! docs for the simplified chain this collapses to.
 //!
 //! # The resolve-then-coalesce cascade
 //!
-//! Oracle: `_ButtonStyleState.build`'s local `effectiveValue`/`resolve`
-//! helpers (`button_style_button.dart` `:315-327`) — for each property,
-//! `getProperty(widgetStyle)?.resolve(states) ?? getProperty(themeStyle)?.resolve(states)
-//! ?? getProperty(defaultStyle)?.resolve(states)`. [`resolve_property`] is
-//! the direct Rust translation: three tiers, each independently resolved
-//! against the *current* [`WidgetStates`] and coalesced with `Option::or_else`.
+//! For each property, the widget's own style wins, then the theme's, then the
+//! button's default: each tier is resolved against the current states and the
+//! first that yields a value is used. [`resolve_property`] does this: three
+//! tiers, each independently resolved against the *current* [`WidgetStates`]
+//! and coalesced with `Option::or_else`.
 //!
 //! `theme_style` is threaded in via [`ButtonStyleButtonCore::theme_style`] —
 //! each concrete button passes its own `ThemeData` component-theme slot's
@@ -39,12 +34,11 @@
 //!
 //! # Composition
 //!
-//! Oracle: `_ButtonStyleState.build`'s widget tree (`button_style_button.dart`
-//! `:497-543`), trimmed to the properties [`crate::ButtonStyle`] actually
-//! carries (see that module's docs for the omitted slots this composition
-//! therefore also skips — `visual_density`/`tap_target_size` drop the
-//! `_InputPadding` wrapper, `alignment` drops the `Align` wrapper, and there
-//! is no `Semantics`/`Tooltip` layer). What ships, outermost to innermost:
+//! The widget tree is trimmed to the properties [`crate::ButtonStyle`]
+//! actually carries (see that module's docs for the omitted slots this
+//! composition therefore also skips — `visual_density`/`tap_target_size` drop
+//! the tap-target padding wrapper, `alignment` drops the `Align` wrapper, and
+//! there is no tooltip layer). What ships, outermost to innermost:
 //!
 //! ```text
 //! Semantics(container: true, button: true, enabled: on_pressed.is_some())
@@ -56,13 +50,9 @@
 //!             child
 //! ```
 //!
-//! The `Semantics` wrapper is outermost, matching the oracle's own
-//! `Semantics(container: true, button: widget.isSemanticButton, enabled:
-//! widget.enabled, child: _InputPadding(...))` (`button_style_button.dart`
-//! `:591-598`) with `_InputPadding` dropped (see above) and
-//! `isSemanticButton` narrowed to always-`true` — every concrete button this
-//! core composes for is semantically a button in this V1, so there is no
-//! per-button override to thread through yet.
+//! The `Semantics` wrapper is outermost, with the button role always set —
+//! every concrete button this core composes for is semantically a button in
+//! this V1, so there is no per-button override to thread through yet.
 //!
 //! # Own `WidgetStatesController`, shared with the inner `InkWell`
 //!
@@ -78,18 +68,14 @@
 //! order is load-bearing). Both this state and the inner `InkWell` state end
 //! up listening on the *same* controller and syncing the *same* `Disabled`
 //! bit from the *same* `enabled` predicate — redundant but harmless (each
-//! sync is idempotent), and it is not a divergence: the oracle's own
-//! `_ButtonStyleState` and `_InkResponseState` do the identical double-sync
-//! on the same shared `MaterialStatesController` (`ButtonStyleButton` passes
-//! `statesController: statesController` straight into its `InkWell`).
+//! sync is idempotent).
 //!
 //! [`overlay_color`](crate::ButtonStyle::overlay_color) is the one property
 //! NOT baked to a single value here: it is handed to `InkWell` as a live
 //! [`WidgetStateProperty`] (closing over the widget/default styles) so
 //! `InkWell`'s own internal rebuilds (e.g. its press-deactivation timer,
 //! which fires independently of this type's rebuild — see `ink_well.rs`)
-//! keep resolving it fresh, exactly matching the oracle's own
-//! `overlayColor: WidgetStateProperty.resolveWith(...)` wrapper.
+//! keep resolving it fresh.
 
 use std::sync::Arc;
 
@@ -113,11 +99,9 @@ pub(crate) use crate::event_callback::PressCallback;
 /// Resolves one [`ButtonStyle`] property through the widget → theme →
 /// default cascade — see the module docs.
 ///
-/// `default` is `Option`, not a bare reference, because the oracle
-/// explicitly allows a concrete button's `defaultStyleOf` to leave some
-/// slots unset (`fixed_size` and `side`, in every V1 default table — see
-/// `button_style_button.dart`'s `defaultStyleOf` doc comment, "Properties
-/// that can be null").
+/// `default` is `Option`, not a bare reference, because a concrete button's
+/// default table may leave some slots unset (`fixed_size` and `side`, in
+/// every V1 default table).
 pub(crate) fn resolve_property<T: Clone + Default>(
     states: &WidgetStates,
     widget: Option<&WidgetStateProperty<Option<T>>>,
@@ -175,9 +159,8 @@ impl ButtonStyleButtonCore {
     }
 
     /// Sets the press handler. Its presence is what makes this button
-    /// [`enabled`](Self::is_interactive) — Flutter parity:
-    /// `ButtonStyleButton.enabled => onPressed != null || onLongPress != null`
-    /// (narrowed to `onPressed`; `onLongPress` is not part of this V1).
+    /// [`enabled`](Self::is_interactive) (a long-press handler is not part of
+    /// this V1).
     #[must_use]
     pub(crate) fn on_pressed(mut self, callback: PressCallback) -> Self {
         self.on_pressed = Some(callback);
@@ -384,10 +367,8 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
     }
 }
 
-/// Folds `foreground_color` into `text_style`'s own `color` — Flutter
-/// parity: `resolvedTextStyle?.copyWith(color: resolvedForegroundColor)`
-/// (`button_style_button.dart` `:539`). `foreground_color` takes precedence
-/// over whatever color `text_style` already carries (see
+/// Folds `foreground_color` into `text_style`'s own `color`.
+/// `foreground_color` takes precedence over whatever color `text_style` already carries (see
 /// [`ButtonStyle::foreground_color`](crate::ButtonStyle::foreground_color)'s
 /// doc comment).
 fn fold_foreground_into_text_style(
@@ -402,19 +383,15 @@ fn fold_foreground_into_text_style(
 }
 
 /// Builds the [`BoxConstraints`] the button's `ConstrainedBox` enforces from
-/// its three resolved size slots. Flutter parity:
-/// `_ButtonStyleState.build`'s `effectiveConstraints` construction
-/// (`button_style_button.dart` `:517-533`, oracle tag `3.44.0`), narrowed to
-/// the V1 slots (no `visualDensity` adjustment — see
-/// `crate::button_style`'s module docs).
+/// its three resolved size slots, for the V1 slots only (no `visual_density`
+/// adjustment — see `crate::button_style`'s module docs).
 ///
 /// `minimum`/`maximum` build the base envelope; `fixed`, if present, is
-/// clamped INTO that already-built envelope (`effectiveConstraints.constrain
-/// (resolvedFixedSize)`) before pinning `min == max` on each of its finite
+/// clamped INTO that already-built envelope before pinning `min == max` on each of its finite
 /// axes — clamping first, not pinning `fixed` directly, is load-bearing: a
 /// `fixed` smaller than `minimum` (or larger than `maximum`) would otherwise
 /// invert `min > max` into a malformed [`BoxConstraints`] instead of
-/// clamping to the envelope's edge, matching the oracle's own behavior.
+/// clamping to the envelope's edge.
 fn effective_constraints(
     minimum: flui_sdk::geometry::Size,
     maximum: flui_sdk::geometry::Size,

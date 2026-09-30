@@ -4,13 +4,9 @@
 //! without explicitly passing callbacks. A notification bubbles up from the
 //! dispatch point until it reaches a listener that handles it.
 //!
-//! # Flutter Equivalent
-//!
-//! This corresponds to Flutter's `Notification` class and
-//! `NotifiableElementMixin`:
-//! - `Notification.dispatch()` → start bubbling
-//! - `NotificationListener` → widget that handles notifications
-//! - `NotifiableElementMixin` → element mixin for notification handling
+//! - `BuildContext::dispatch_notification` starts bubbling
+//! - `NotificationListener` is the widget that handles notifications
+//! - `NotifiableElement` is the element-side typed handler
 
 use std::any::{Any, TypeId};
 
@@ -44,11 +40,6 @@ use std::any::{Any, TypeId};
 /// protocol does the runtime-type check + downcast at the dispatch
 /// boundary; user-impls don't need to provide any methods, the empty
 /// body `impl Notification for MyEvent {}` is enough.
-///
-/// # Flutter Equivalent
-///
-/// Corresponds to Flutter's `Notification` abstract class
-/// (`notification_listener.dart:39`).
 pub trait Notification: Any + Send + Sync + 'static {
     /// Get the type ID of this notification for type checking.
     ///
@@ -109,14 +100,7 @@ pub trait Notification: Any + Send + Sync + 'static {
 ///
 /// Default impl returns `false` (no-op), so Elements only need to
 /// override when they actually want to intercept notifications of type
-/// `N`.
-///
-/// # Flutter Equivalent
-///
-/// Corresponds to Flutter's `NotifiableElementMixin` + the per-listener
-/// `_NotificationElement<T extends Notification>`
-/// (`notification_listener.dart:127`). Flutter parameterises the
-/// listener element on `T`; we mirror that with `N`.
+/// `N`. The listener element is parameterised on the notification type `N`.
 pub trait NotifiableElement<N: Notification>: crate::view::ElementBase {
     /// Called when a notification of type `N` arrives at this element
     /// during bubble dispatch.
@@ -138,10 +122,6 @@ pub trait NotifiableElement<N: Notification>: crate::view::ElementBase {
 /// Notification sent when a layout change occurs.
 ///
 /// Use this to notify ancestors that layout assumptions may be invalid.
-///
-/// # Flutter Equivalent
-///
-/// Corresponds to Flutter's `LayoutChangedNotification`.
 #[derive(Debug, Clone)]
 pub struct LayoutChangedNotification;
 
@@ -152,10 +132,6 @@ impl Notification for LayoutChangedNotification {
 }
 
 /// Notification sent when size changes.
-///
-/// # Flutter Equivalent
-///
-/// Corresponds to Flutter's `SizeChangedLayoutNotification`.
 #[derive(Debug, Clone)]
 pub struct SizeChangedNotification {
     /// The new size after the change.
@@ -173,10 +149,6 @@ impl Notification for SizeChangedNotification {
 }
 
 /// Notification sent during scrolling.
-///
-/// # Flutter Equivalent
-///
-/// Corresponds to Flutter's `ScrollNotification` family.
 #[derive(Debug, Clone)]
 pub struct ScrollNotification {
     /// The scroll offset.

@@ -150,7 +150,7 @@ regressions each direction produced):
   fired once per call on the cap with work still queued, not a
   process-wide latch. A microtask
   enqueued reentrantly BY another one in the same pass still runs, one pass
-  later, before this flush call returns — Dart's own nested-microtask
+  later, before this flush call returns — nested-microtask
   semantics are preserved — **but only up to the cap.** A FINITE chain
   deeper than 32 passes (33 levels of nesting, no genuinely unbounded
   re-enqueuing anywhere in it) is deferred exactly like an unbounded one:
@@ -170,13 +170,11 @@ regressions each direction produced):
   `schedule_microtask` has never called `request_frame` the way `TaskQueue::add`
   does for Build-or-higher priority, and this cap does not change that
   pre-existing contract; a leftover simply waits for the next frame's
-  `handle_begin_frame` to flush it. Divergence from Dart, recorded rather
-  than silently improved: Dart's own microtask queue has no such outer
-  cap at all — a browser or VM microtask that re-enqueues itself forever
-  genuinely starves that isolate, and even a merely deep FINITE chain runs
-  to completion in the SAME turn there; FLUI trades a one-frame deferral on
-  that legitimate-but-deep case, plus a small chance of under-running a
-  genuinely pathological one, for the guarantee that no single frame hangs.
+  `handle_begin_frame` to flush it. An uncapped queue would let a microtask
+  that re-enqueues itself forever starve the frame; FLUI trades a one-frame
+  deferral on the legitimate-but-deep case, plus a small chance of
+  under-running a genuinely pathological one, for the guarantee that no
+  single frame hangs.
 
 The result: **the panicking entry itself is consumed; every entry still
 queued behind it is preserved and runs on the next completed frame — not
@@ -239,22 +237,10 @@ and its own waker called — and the first such panic is re-raised only once
 every waiter has been notified, matching `end_frame_impl`'s own
 catch-then-resume shape for a panicking post-frame callback.
 
-**Honest Flutter comparison:** `.flutter/packages/flutter/lib/src/scheduler/binding.dart`
-@ 3.44.0 cannot unwind out of either `handleBeginFrame` or `handleDrawFrame`
-at all — `_invokeFrameCallback` wraps every individual transient/
-persistent/post-frame callback in its own `FlutterError`-reporting boundary,
-and `drawFrame()` — the pipeline's own equivalent — is itself registered and
-invoked as a persistent callback through that SAME boundary
-(`rendering/binding.dart:61`, `:557-558`), so no callback's exception,
-`drawFrame`'s included, ever unwinds Dart's call stack far enough to reach
-either `finally { _schedulerPhase = ... }` at all. Per-callback isolation is
-what the source actually shows holding there; each `finally` covers whatever
-else could still escape past it — the source does not say what that is, and
-neither does this entry. FLUI does not isolate per callback — this issue
-does not change that, and does not attempt to (see
+**Scope:** FLUI does not isolate per callback (see
 `docs/PANIC-POLICY.md` and the doc note this crate already carries on the
 topic) — a panic here still poisons and propagates the
-whole frame. What this issue closes is narrower and Rust-specific: the
+whole frame. What this closes is narrower and Rust-specific: the
 scheduler's OWN bookkeeping must never be left half-closed by an unwind it
 did not choose to isolate.
 
@@ -299,12 +285,11 @@ to become the one the caller observes.
   *while already panicking* — a double panic, i.e. `abort` — and running
   user-callback-adjacent cleanup during an unwind is a second hazard for no
   benefit.
-- Isolating each callback family per-entry (Flutter's own shape), so a
-  panicking transient callback cannot take the rest of the frame down with
-  it. Rejected: this crate's panic policy is that a panic poisons the whole
-  operation (`docs/PANIC-POLICY.md`); adopting Flutter's per-callback
-  isolation here would be a policy change well beyond this issue's scope,
-  not a bookkeeping fix.
+- Isolating each callback family per-entry, so a panicking transient
+  callback cannot take the rest of the frame down with it. Rejected: this
+  crate's panic policy is that a panic poisons the whole operation
+  (`docs/PANIC-POLICY.md`); per-callback isolation would be a policy change
+  well beyond a bookkeeping fix.
 
 **Trade-off accepted:** `TaskQueue::execute_until`'s count budget also accepts
 that a reentrant HIGHER-priority task displaces a still-queued, lower-
@@ -331,13 +316,12 @@ under edition 2024's if-let rescoping. A registered callback that called
 5 seconds.
 
 **Choice:** delete the API outright rather than fix the lock scope in
-place. Flutter's `SchedulerBinding` has no second, "legacy" transient
-registration path carrying different timing-argument semantics next to
-`scheduleFrameCallback` (`scheduler/binding.dart` @ 3.44.0): its transient
-callbacks receive the vsync `Instant`, and there is no `&FrameTiming`-argument
-sibling of that same family. The retired API had no distinct
+place. Transient callbacks receive the vsync `Instant`, and a second,
+"legacy" registration path carrying different timing-argument semantics
+(a `&FrameTiming` argument) next to `schedule_frame_callback` has no
+reason to exist. The retired API had no distinct
 semantics to preserve: its only production caller
-(`RenderingFlutterBinding::request_visual_update`) passed an empty
+(`RenderingBinding::request_visual_update`) passed an empty
 closure, and every other caller in the crate's own doctest/examples used it
 identically to `schedule_frame_callback`. Per this crate's
 active-development posture (no shims, no deprecated aliases), the fix is
@@ -388,13 +372,12 @@ unpublished) depends on it.
 ### `request_visual_update` routes through the `frames_enabled` gate, not the raw one
 
 **Rule:** a caller of `UpdateScheduler::ensure_visual_update` must have its
-request honor `frames_enabled`. It adopts Flutter's `ensureVisualUpdate`
-(`scheduler/binding.dart` @ 3.44.0) in full: it calls the equally
-`framesEnabled`-gated `scheduleFrame()` from `SchedulerPhase.idle`/
-`.postFrameCallbacks` (a call from `.postFrameCallbacks` requests the NEXT
+request honor `frames_enabled`. It calls the equally
+`frames_enabled`-gated frame request from `SchedulerPhase::Idle`/
+`PostFrameCallbacks` (a call from `PostFrameCallbacks` requests the NEXT
 frame, since the current frame's own pipeline has already run by that
 phase), and no-ops during the three mid-frame phases
-(`.transientCallbacks`, `.midFrameMicrotasks`, `.persistentCallbacks`) —
+(`TransientCallbacks`, `MidFrameMicrotasks`, `PersistentCallbacks`) —
 but only for the thread already driving the frame (see `frame_thread`'s
 own doc; a caller on any other thread always requests, since a lost
 cross-thread wake is worse than a surplus frame). Even for the driving
@@ -416,7 +399,7 @@ driving the frame, only `Idle`/`PostFrameCallbacks` reach the
 `frames_enabled`-gated `schedule_frame_if_enabled` call; on any other
 thread, every phase reaches it.
 
-**Conflict:** `RenderingFlutterBinding::request_visual_update`
+**Conflict:** `RenderingBinding::request_visual_update`
 (`flui-runtime`'s `renderer_binding.rs`) called the retired
 `schedule_frame`, which pushed onto the (now-deleted) legacy queue and then
 called the **ungated** `request_frame()` directly. A binding whose
@@ -444,9 +427,7 @@ request.
 phase-based dedup `request_frame_impl`'s `frame_scheduled` coalescing
 alone cannot provide: that flag says "a frame is already scheduled," not
 "a frame is already running and would observe this request anyway." It
-carries a same-thread requirement `ensureVisualUpdate` itself never
-needed: Flutter is single-isolate, so its phase switch is exact for every
-caller by construction, but `UpdateScheduler` is `Send + Sync` and
+carries a same-thread requirement: `UpdateScheduler` is `Send + Sync` and
 documented as reachable from any thread, so the mid-frame no-op arms only
 apply when `frame_thread` names the calling thread. Scoped to
 `ensure_visual_update` alone: `schedule_frame_if_enabled` (shared with
@@ -471,8 +452,8 @@ closure a presentation registers via `owner.set_on_need_visual_update`
 (`flui-runtime/src/presentation.rs`) — but that closure no longer calls
 the realm's shared `visual_wake()` and no longer pokes
 `window.request_redraw()` unconditionally. It now captures a
-`WeakUpdateScheduler` (matching `RenderingFlutterBinding.scheduler`'s
-convention) and calls `scheduler.ensure_visual_update()`; only when that
+`WeakUpdateScheduler` (as `RenderingBinding` holds its scheduler)
+and calls `scheduler.ensure_visual_update()`; only when that
 returns `true` (phase gate passed AND frames enabled) does it poke
 `window.request_redraw()`.
 
@@ -573,9 +554,7 @@ after the fact:
 
 **One scheduling predicate, not one check per site:**
 `TickerInner::should_schedule_tick` (`state == Active && matches!(slot,
-Ready(_)) && scheduled_callback_id.is_none()`) is Flutter parity —
-[`ticker.dart:269`](https://github.com/flutter/flutter/blob/3.44.0/packages/flutter/lib/src/scheduler/ticker.dart#L269)
-`shouldScheduleTick = !muted && isActive && !scheduled` — and is now the
+Ready(_)) && scheduled_callback_id.is_none()`) is the
 ONLY scheduling check, shared by `start_inner`, `unmute` (via
 `schedule_tick_if_active`), and the auto-tick tail. Checking the SLOT, not
 just `state`, is what closes the duplicate-registration failure above:
@@ -605,26 +584,22 @@ stop/dispose/reset never fights the lease over the same callback), and
 now `mem::replace` the slot and bind the displaced value out of the lock's
 block before dropping it).
 
-**Why FLUI needs a slot protocol Flutter does not:** Flutter's `Ticker`
-holds one `_onTick` for its entire life, assigned once at construction
-(`Ticker(this._onTick, ...)`); there is no `start(callback)` that installs
-a NEW callback per run, so Dart's own `_tick` has no "which run does this
-checked-out closure belong to" question to answer — `_animationId` alone
-(this crate's `scheduled_callback_id`) is Flutter's whole story. FLUI's
+**Why the ticker needs a slot protocol:** a ticker that held one callback
+for its entire life would need only its registration id
+(`scheduled_callback_id`) to answer "which run does this checked-out
+closure belong to". FLUI's
 `Ticker::start` accepts a fresh callback on every run (`TickerProvider`'s
 factory shape plus ad hoc `start(closure)` call sites), so the SAME ticker
 legitimately dispatches through a sequence of different closures over its
 life — the slot state machine is what tracks which one a given dispatch is
 allowed to restore.
 
-**Recorded divergences and limitations, not closed by this fix:**
+**Recorded limitations, not closed by this fix:**
 
 - **`start_inner` while `Muted` bypasses the `Idle`/`Stopped` contract.**
-  Flutter's `Ticker.isActive` is `_future != null` and its doc states that
-  a muted ticker "can be active" — muting gates `isTicking` and
-  `shouldScheduleTick`, never `isActive` — so `start` on a muted Flutter
-  ticker hits `'A ticker that is already active cannot be started again'`
-  and is REJECTED. `Ticker::start_inner`'s own `debug_assert!`/early-return
+  A muted ticker is still active (muting gates ticking and scheduling,
+  never activity), so `start` on it is a second start of an active ticker.
+  `Ticker::start_inner`'s own `debug_assert!`/early-return
   rejects only `TickerState::Active`, so FLUI accepts the call, silently
   overwriting the muted run's callback and future and re-anchoring its
   start time. Named here as a known gap; closing it is a `start_inner`
@@ -735,10 +710,9 @@ and are not measured to have widened under it.
 scheduler hands every transient callback, is ignored (`_vsync_time` in both
 auto-tick registrations).
 
-**Conflict:** Flutter's `Ticker._tick(timeStamp)` (`ticker.dart`, the method
-`tick_and_reschedule_static` ports) anchors `_startTime` on the first frame's
-timestamp and reports `timeStamp - _startTime`, so every ticker in a frame
-sees the same instant and a test's fake clock drives them. Here a host that
+**Consequence:** anchoring on the first frame's timestamp would give every
+ticker in a frame the same instant and let a test's fake clock drive them.
+Here a host that
 drives frames on a virtual clock (`flui-runtime`'s `UiRealm::pump` with a
 `ManualClock`) moves the frame timestamp, the realm's `Vsync` controllers and
 the scheduler's frame timing, but not an `AnimationController` built on the
@@ -754,9 +728,7 @@ Moving the ticker onto the frame timestamp should delete this entry.
 
 **Rule:** `UpdateScheduler::end_of_frame` pushes its waiter onto the completion
 registry FIRST and issues the frame demand second, and it issues one only when
-the registry held no live waiter before that push. Flutter's `endOfFrame`
-(`scheduler/binding.dart` @ 3.44.0) orders it the other way: it calls
-`scheduleFrame()`, then hands back the shared `_nextFrameCompleter`'s future.
+the registry held no live waiter before that push.
 
 **Conflict:** demand-then-register is not equivalent once a frame can run
 concurrently. A frame beginning on another thread can both start and drain the
@@ -765,19 +737,15 @@ the very frame it paid for and silently buys a redundant next one. Registering
 first makes the registration the linearization point. An entry is then either
 inside the batch a drain took under the registry guard, and is served by that
 frame, or it was pushed after that guard was released, in which case its own
-predicate reads the post-drain registry and demands. Flutter never faces this
-ordering question: `SchedulerBinding` is confined to one isolate, there is no
-per-waiter registry to race against at all, and every caller within one frame
-coalesces onto a single completer the binding owns.
+predicate reads the post-drain registry and demands.
 
-FLUI keeps the per-waiter registry because its futures are independently
-cancellable values rather than listeners on one shared `Future`, which is also
+The per-waiter registry exists because the futures are independently
+cancellable values rather than listeners on one shared future, which is also
 what makes the registry the natural place to keep the demand memo.
 
 **Choice:** the predicate is "no LIVE entry", evaluated on the vec already held
 under the registry guard, and the demand call is `schedule_frame_if_enabled()`
-rather than the ungated `request_frame()` (Dart's `scheduleFrame()` carries the
-same enablement check internally). The guard is released before the demand,
+rather than the ungated `request_frame()`. The guard is released before the demand,
 because the demand reaches the `on_frame_scheduled` hook, which must find every
 scheduler mutex, `completion_waiters` included, free. **Unasserted:** no test
 pins this.
@@ -818,8 +786,7 @@ That predicate has two halves, and only the first belongs to the registry:
     `SeqCst`, not `Acquire`/`Release`.
   - **A frames-enabled edge re-issues a demand the pump left for dead while
     frames were disabled** — the case the pump's own re-check cannot reach,
-    since it reads `frames_enabled` false there and stays silent on purpose
-    (Dart's `scheduleFrame()` carries the identical enablement gate).
+    since it reads `frames_enabled` false there and stays silent on purpose.
     **The production carrier is `handle_app_lifecycle_state_change`**, whose
     `if !frames_were_enabled && should_render { self.request_frame(); }` leg
     predates issue #1162 and is pinned by
@@ -858,8 +825,7 @@ That predicate has two halves, and only the first belongs to the registry:
   The registry now carries a cursor that retires the tombstones it walks past,
   which makes the scan amortized O(1) and brought the same 121 registrations to
   241 probes. **Unasserted:** no test pins this.
-- Gating the demand on `phase() == Idle`, the closest reading of Flutter's own
-  `endOfFrame`. Rejected: it goes silent in the post-drain window, where
+- Gating the demand on `phase() == Idle`. Rejected: it goes silent in the post-drain window, where
   `notify_frame_completion` has already emptied the registry but the phase is
   still `PostFrameCallbacks`, so a waiter registered from a completion waker
   hangs. **Unasserted:** no test pins this.
@@ -1019,13 +985,10 @@ race instance. No single-threaded test can redden a regression from
 `SeqCst` back to `Acquire`/`Release` here; only a `loom` model could prove
 it, and none exists in this crate yet.
 
-**Divergence from Flutter, recorded rather than silently improved:**
-`SchedulerBinding.endOfFrame` (`scheduler/binding.dart` @ 3.44.0) resolves a
-bare `Future<void>` — Dart has no outcome signal here at all, successful or
-otherwise, and no teardown sentinel either (`SchedulerBinding` is a
-process-lifetime singleton in Dart; there is no analogue of dropping it).
-FLUI's per-realm `UpdateScheduler` can be dropped mid-flight, so it needs an
-answer Dart's own binding never had to give.
+**Outcome and teardown:** a bare completion signal would carry no outcome,
+successful or otherwise, and no teardown sentinel. FLUI's per-realm
+`UpdateScheduler` can be dropped mid-flight, so `end_of_frame` needs an
+answer for that case.
 
 **Alternatives considered:** a flat `enum FrameCompletionOutcome { Completed,
 Aborted, SchedulerClosed }` (the issue's own sketch) — rejected above for
@@ -1043,9 +1006,9 @@ notification is only a hint to re-read it. Polling `TickerFuture` must have a
 listener linked *before* it takes the state read that decides to return
 `Poll::Pending`.
 
-**Conflict:** Flutter's `TickerFuture` is built on a `Completer`, so this class
-of bug does not exist there — there is no listener to register and therefore no
-window between observing the state and subscribing to a change. FLUI models a
+**Hazard:** a future built on a completer has no listener to register, and
+therefore no window between observing the state and subscribing to a change.
+FLUI models a
 once-only, monotone transition (a *level* fact) with `event_listener::Event` (an
 *edge* primitive) whose own documentation says a notification sent with no
 listener registered "simply gets lost". The original `poll` read the state,
@@ -1083,11 +1046,9 @@ in this crate creates a `TickerFuture` for a ticker's own run any more —
 `TickerFuture::pending()` hands its caller a `TickerCompleter`/`TickerFuture`
 pair, and that caller (never the ticker) decides when and how to resolve it.
 
-**Conflict:** Flutter's `Ticker.start()` returns the `TickerFuture` it owns,
-and `stop({canceled})`/`dispose()` resolve it directly — `_startSimulation`
-returns `_ticker!.start()` verbatim (`animation_controller.dart:861-871`) and
-`stop` forwards straight to `_ticker!.stop` (`:891-900`). FLUI kept that shape
-through #1167 and it was a defect waiting to happen: every `ticker.stop()`
+**Conflict:** a ticker that owned its run future and resolved it in
+`stop`/`dispose` was the earlier shape (through #1167), and it was a defect
+waiting to happen: every `ticker.stop()`
 `AnimationController` calls runs **under the controller's own `inner` lock**
 (`reset`, `settle_at_target`, `tick_simulation`, both `tick_time_based`
 completion arms, `dispose`, `restart_ticker`, `stop_running`). A future the
@@ -1095,26 +1056,20 @@ ticker resolved would run its continuations and wake its pollers — arbitrary
 user code — from inside that non-reentrant mutex.
 
 **Choice:** move resolution up to the layer that owns the lock and the
-cancel/complete distinction. The ticker keeps exactly one thing Flutter's does
-not need to separate out: a "run in progress" fact
-(`TickerState::is_running()`), used only to refuse a second `start`. Flutter's
-topology is one fact told once; FLUI's is the same fact, held by the layer
-that can safely act on it. See
+cancel/complete distinction. The ticker keeps exactly one thing: a "run in
+progress" fact (`TickerState::is_running()`), used only to refuse a second
+`start`. See
 `docs/adr/ADR-0064-animation-completion-is-one-controller-resolved-future.md`
 for the full accounting, including why this is a moved fact and not a
 different one.
 
-### A second resolution is ignored where Flutter asserts
+### A second resolution is ignored, not asserted
 
 **Rule:** `TickerCompleter::publish` is once-only; a second `complete`/`cancel`
 call (including the implicit one `Drop` performs) is a silent no-op and the
 first outcome stands.
 
-**Conflict:** Flutter's `_complete()`/`_cancel()` open with
-`assert(_completed == null)` — a debug assertion that the transition happens
-exactly once, stripped in release.
-
-**Choice:** keep the no-op, do not assert. `TickerCompleter::complete`/`cancel`
+**Choice:** a no-op, not an assertion that the transition happens exactly once. `TickerCompleter::complete`/`cancel`
 consume `self`, so only `Drop` can ever attempt a second transition (when the
 completer was explicitly resolved and then falls out of scope) — a hard
 failure there would fire on the ordinary, correct path, not a bug. The
@@ -1130,9 +1085,7 @@ registered so far, in one locked step — and return a `TickerDelivery`, which
 pollers. A caller finishes publishing while still holding its own lock and
 defers delivery until after that lock is released.
 
-**Conflict:** Flutter's `Completer.complete()` is one call because Dart has no
-equivalent non-reentrant-mutex hazard — completion always schedules a
-microtask. FLUI's fan-out is synchronous, so a single-phase resolve would
+**Conflict:** FLUI's fan-out is synchronous, so a single-phase resolve would
 either run under whatever lock the resolver holds (the exact hazard the
 previous section moves resolution to avoid) or force every resolver to
 manually stage a two-step unlock dance with no shared shape.
@@ -1179,9 +1132,8 @@ diff, not by a red test.
 logs at `error!` and drops the caller's callback; it does not touch ticker
 state.
 
-**Conflict:** Flutter guards this with `assert(!isActive)`, where
-`isActive => _future != null`; stripped in release, a second `start()`
-overwrites `_future` and the displaced future never completes. Before the
+**Reason:** an unguarded second `start()` would overwrite the run and
+the displaced future would never complete. Before the
 controller took over resolution, FLUI keyed this same refusal on
 `active_future.is_some()` — the future's own presence was the durable fact
 `mute()` never touched, so the refusal survived muting where a narrower
@@ -1192,10 +1144,10 @@ always the same thing here.
 
 **Choice:** refuse on `is_running()`; keep the existing `debug_assert!` on
 `state == Active` unchanged — two different questions, not two guesses at
-one: the assertion answers "is this Flutter's *started twice* programming
+one: the assertion answers "is this a *started twice* programming
 error?" and the refusal answers "is there a live run I must not silently
-replace?". The divergence from Flutter is that a start on a *muted* ticker is
-a supported, refused operation here rather than a thrown error.
+replace?". A start on a *muted* ticker is a supported, refused operation
+rather than a thrown error.
 
 **Lock discipline, because the refusal runs user code:** the decision is taken
 under `Mutex<TickerInner>` and acted on after it. Both the `tracing` event
@@ -1217,16 +1169,12 @@ including in the window between a `TickerCompleter` publishing and its
 it stores the callback and returns; whichever `complete`/`cancel` (or its
 `Drop`) resolves the future runs it later, from inside `TickerDelivery::deliver`.
 
-**Conflict:** Flutter's `whenCompleteOrCancel` is
-`orCancel.then(thunk, onError: thunk)` — it registers a continuation and
-returns immediately, never blocking, and Dart always defers the callback to a
-microtask. FLUI's used to block the calling thread on a still-pending future,
-which meant there was no non-blocking route to react to a resolution without
+**Conflict:** the earlier implementation blocked the calling thread on a
+still-pending future, which meant there was no non-blocking route to react to a resolution without
 `async`/`await`, and its wasm path silently reported a completion that had
 not happened.
 
-**Choice:** match Flutter's non-blocking shape exactly, with one recorded
-divergence: an already-resolved (or resolving) future runs the callback
+**Choice:** register a continuation and return immediately; an already-resolved (or resolving) future runs the callback
 **synchronously on the caller's thread**, not on a microtask, so a registrant
 must be safe to re-enter from this call, and the relative order between two
 different registrants racing a resolution is not a contract. This removes the

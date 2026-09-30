@@ -1,4 +1,4 @@
-//! Host binary for the Flutter-parity hot-reload counter demo.
+//! Host binary for the state-preserving hot-reload counter demo.
 //!
 //! ```bash
 //! cd examples/hot_reload_counter

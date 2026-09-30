@@ -14,15 +14,14 @@ use flui_view::seq::ViewSeq;
 use crate::localization::Directionality;
 use crate::support::generic_render_view_element;
 
-/// Shared main/cross-axis configuration for the flex family, with Flutter's
-/// defaults (`MainAxisAlignment::Start`, `CrossAxisAlignment::Center`,
+/// Shared main/cross-axis configuration for the flex family, with defaults
+/// (`MainAxisAlignment::Start`, `CrossAxisAlignment::Center`,
 /// `MainAxisSize::Max`, `spacing: 0.0`).
 ///
-/// `text_baseline` is FLUI's own default rather than a ported one: Flutter's
-/// `textBaseline` is nullable and required only under
-/// `CrossAxisAlignment.baseline`, which it enforces by throwing. FLUI carries a
-/// plain [`TextBaseline`], so it defaults to `Alphabetic` — the value that
-/// makes the required case work and that every other alignment ignores.
+/// `text_baseline` is a plain [`TextBaseline`] rather than an optional value
+/// required only under `CrossAxisAlignment::Baseline`, so it defaults to
+/// `Alphabetic` — the value that makes the baseline case work and that every
+/// other alignment ignores.
 #[derive(Clone, Copy, Debug)]
 struct FlexStyle {
     main_axis_alignment: MainAxisAlignment,
@@ -99,8 +98,7 @@ macro_rules! flex_style_builders {
 
         /// How much space to place between children on the main axis.
         ///
-        /// Flutter parity: `widgets/basic.dart` `Flex.spacing` /
-        /// `RenderFlex.spacing` (`rendering/flex.dart`), tag `3.44.0` — applied
+        /// Applied
         /// strictly *between* children (never before the first or after the
         /// last), regardless of [`MainAxisAlignment`]. Defaults to `0.0`.
         #[must_use]
@@ -113,15 +111,14 @@ macro_rules! flex_style_builders {
 
 /// Lays out children along a configurable [`FlexDirection`].
 ///
-/// Flutter parity: `widgets/basic.dart` `Flex` over `RenderFlex`. Prefer
+/// Prefer
 /// [`Row`] / [`Column`] for the common fixed-direction cases.
 ///
 /// Generic over `C: ViewSeq`: a static `column!`/`row!` tuple keeps each child
 /// monomorphic (the contract-C2 fast path), while a `Vec<BoxedView>` carries a
 /// dynamic, runtime-sized child list.
 ///
-/// Resolves the ambient [`Directionality`] the way Flutter's `RenderFlex`
-/// does (`rendering/flex.dart`): a horizontal flex (`Row`) consults it for
+/// Resolves the ambient [`Directionality`] as follows: a horizontal flex (`Row`) consults it for
 /// its *main* axis (`Start`/`End` and child order flip under `Rtl`); a
 /// vertical flex (`Column`) consults it for its *cross* axis instead — its
 /// main axis is governed by `VerticalDirection`, which FLUI does not model.
@@ -192,7 +189,7 @@ where
     }
 }
 
-/// Lays out children horizontally (Flutter's `Row`).
+/// Lays out children horizontally.
 #[derive(Clone)]
 pub struct Row<C = Vec<BoxedView>> {
     style: FlexStyle,
@@ -244,7 +241,7 @@ where
     }
 }
 
-/// Lays out children vertically (Flutter's `Column`).
+/// Lays out children vertically.
 #[derive(Clone)]
 pub struct Column<C = Vec<BoxedView>> {
     style: FlexStyle,
@@ -303,8 +300,7 @@ where
 
 /// Whether this flex needs the ambient [`Directionality`] at all.
 ///
-/// Ported from `widgets/basic.dart`'s `Flex._needTextDirection`: a HORIZONTAL
-/// flex always needs it, "because it affects the layout order"; a VERTICAL one
+/// A HORIZONTAL flex always needs it, "because it affects the layout order"; a VERTICAL one
 /// needs it only when its cross-axis alignment is direction-sensitive
 /// (`Start`/`End`), because those name a reading edge rather than a physical
 /// one.
@@ -312,8 +308,7 @@ where
 /// This gates the LOOKUP, not just its result. `Directionality::maybe_of`
 /// registers an inherited dependency, so calling it unconditionally makes every
 /// `Column` rebuild whenever the ambient direction changes -- even a centred one
-/// whose layout cannot move. The reference skips the call for the same reason
-/// (`getEffectiveTextDirection`, `basic.dart:5571`).
+/// whose layout cannot move. Skipping the call avoids that.
 fn needs_text_direction(direction: FlexDirection, cross: CrossAxisAlignment) -> bool {
     match direction {
         FlexDirection::Horizontal => true,

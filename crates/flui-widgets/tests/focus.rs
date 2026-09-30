@@ -48,14 +48,11 @@ impl StatelessView for Host {
     }
 }
 
-/// The mount shape (`_FocusState.initState` + `FocusScope`,
-/// `focus_scope.dart:565-630`): the widget scope hangs under the
+/// The mount shape: the widget scope hangs under the
 /// presentation's standard shortcut focus, the node hangs under the
 /// widget scope, and unmounting detaches both and releases primary focus.
 ///
-/// Flutter parity: `focus_scope_test.dart`'s `'Removing a FocusScope
-/// removes its node from the tree'` (the unmount-detaches-both half) and
-/// `'Autofocus works'` (the autofocus-on-mount half), tag `3.44.0`.
+/// Also covers autofocus on mount.
 ///
 /// Red-check: make `enclosing_scope` always answer the root scope — the
 /// node parents to the root and the first assertion fails.

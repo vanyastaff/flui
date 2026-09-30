@@ -67,7 +67,7 @@ impl<R: Routable> RouterHandle<R> {
     }
 
     /// Push `route` as a new page, with its entrance transition. A value equal
-    /// to the current top is pushed again, as Flutter allows.
+    /// to the current top is pushed again.
     ///
     /// # Errors
     ///
@@ -83,7 +83,7 @@ impl<R: Routable> RouterHandle<R> {
         Ok(())
     }
 
-    /// Replace the top page with `route` — Flutter's `pushReplacement`. Popups
+    /// Replace the top page with `route`, running the entrance transition. Popups
     /// above the top page are popped first.
     ///
     /// # Errors
@@ -105,8 +105,7 @@ impl<R: Routable> RouterHandle<R> {
     /// one, else the top page.
     ///
     /// Answers `Ok(false)` and changes nothing when the only thing left is one
-    /// page: a Router always has a location. Flutter's `Navigator.pop` would
-    /// empty the stack here.
+    /// page: a Router always has a location, so it never empties the stack.
     ///
     /// # Errors
     ///
@@ -127,8 +126,7 @@ impl<R: Routable> RouterHandle<R> {
     /// state. When the new stack is a prefix of the current one, the pages
     /// above it pop with their exit transitions. Otherwise the pages above the
     /// shared part are removed, the new pages beneath the new top are added
-    /// without a transition, and only the new top runs its entrance — Flutter's
-    /// page-list diff. A page below the point where the stacks diverge is
+    /// without a transition, and only the new top runs its entrance. A page below the point where the stacks diverge is
     /// rebuilt from scratch, so its state is not kept.
     ///
     /// # Errors

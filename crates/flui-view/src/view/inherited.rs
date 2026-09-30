@@ -4,7 +4,7 @@
 //! [`ElementNode`](crate::tree::ElementNode) carries an `inherited` map
 //! (`provider view TypeId → provider ElementId`) built at mount, so
 //! `ctx.depend_on::<T>()` is one hash lookup rather than an O(depth) parent
-//! walk. Mirrors Flutter's per-element `_inheritedElements` map.
+//! walk.
 
 use super::view::View;
 
@@ -253,28 +253,6 @@ pub trait InheritedData: Clone + 'static {
 ///
 /// InheritedViews allow efficient data propagation down the tree.
 /// Descendants can access the data via `ctx.depend_on::<T>()`.
-///
-/// # Flutter Equivalent
-///
-/// This corresponds to Flutter's `InheritedWidget`:
-///
-/// ```dart
-/// class ThemeData extends InheritedWidget {
-///   final Color primaryColor;
-///
-///   ThemeData({required this.primaryColor, required Widget child})
-///       : super(child: child);
-///
-///   @override
-///   bool updateShouldNotify(ThemeData old) {
-///     return primaryColor != old.primaryColor;
-///   }
-///
-///   static ThemeData of(BuildContext context) {
-///     return context.dependOnInheritedWidgetOfExactType<ThemeData>()!;
-///   }
-/// }
-/// ```
 ///
 /// # Example
 ///

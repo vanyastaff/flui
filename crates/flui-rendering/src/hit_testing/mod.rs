@@ -3,8 +3,7 @@
 //! This module is a thin protocol-extension surface over
 //! `flui_interaction::routing` and `flui_interaction::mouse_tracker`.
 //! The canonical `HitTestResult` / `HitTestEntry` / `HitTestBehavior`
-//! types live in `flui-interaction` (Flutter's `gestures/` ↔
-//! `flui-interaction`); this module re-exports them for caller
+//! types live in `flui-interaction`; this module re-exports them for caller
 //! convenience and owns the rendering-protocol-specific
 //! `MatrixTransformPart` helper.
 //!
@@ -50,13 +49,6 @@
 //! structs they supported. With no implementors or consumers left in
 //! the workspace, the trait and its module were removed rather than
 //! kept as dead code.
-//!
-//! # Flutter Equivalence
-//!
-//! Mirrors Flutter's hit-testing split: `gestures/hit_test.dart`
-//! owns the base types (now `flui-interaction`), `rendering/box.dart`
-//! and `rendering/sliver.dart` own the protocol-specific wrappers
-//! (`crate::protocol`).
 //!
 //! # Example
 //!

@@ -1,7 +1,7 @@
 //! Runtime developer tooling for FLUI: the half that runs *inside* the
-//! application. Three small, feature-gated modules, each an adapter over a
-//! seam the framework already exposes, so nothing here reaches into a widget,
-//! element or render tree:
+//! application. Small, feature-gated modules, each an adapter over a seam the
+//! framework already exposes, so nothing here reaches into a widget, element
+//! or render tree:
 //!
 //! - **`profiling`** — [`Profiler`] with per-phase frame statistics, fed by
 //!   [`FrameTimingLayer`], a `tracing` layer that subscribes to the `frame`
@@ -12,15 +12,20 @@
 //! - **`inspector`** — [`inspector::InspectorCounters`], a counting
 //!   `TreeObserver` over the ADR-0040 observation seam: mounts, moves,
 //!   rebuilds per cause, unmounts.
+//! - **`agent`** (off by default) — `agent::AgentServer`, a
+//!   `DevAgentHook` that serves the application's semantics tree to an agent
+//!   over a local endpoint: a named pipe or Unix socket with a launch token,
+//!   in debug builds only (ADR-0095 §3). It reads and acts through each
+//!   window's owner inbox, the way assistive technology does.
 //!
 //! # What this crate is not
 //!
-//! It is not an inspector UI, not a DevTools server, and not a hot-reload
-//! tool: it walks no tree, opens no port, and watches no files (the source
-//! watcher lives in the `flui` CLI). Earlier documentation of this crate
-//! promised a widget inspector, a network monitor, a memory profiler and a
-//! remote-debug protocol; none of them was ever implemented, and no feature
-//! here claims them.
+//! It is not an inspector UI and not a hot-reload tool: it opens no TCP
+//! port, walks no tree itself, and watches no files (the source watcher
+//! lives in the `flui` CLI). Earlier documentation of this crate promised a
+//! widget inspector, a network monitor, a memory profiler and a remote-debug
+//! protocol; none of them was ever implemented, and no feature here claims
+//! them.
 //!
 //! # Profiling a running app
 //!
@@ -49,7 +54,7 @@
 //!
 //! # Feature flags
 //!
-//! All three are on by default; disable what you do not need.
+//! The first three are on by default; disable what you do not need.
 //!
 //! - `profiling`: [`Profiler`] and [`FrameTimingLayer`] (`tracing` +
 //!   `tracing-subscriber`).
@@ -57,12 +62,16 @@
 //!   scheduler bridge, `serde` for the exporters).
 //! - `inspector`: [`inspector`] (`flui_sdk::foundation::observe` for the
 //!   seam).
+//! - `agent`: the `agent` module (`flui-protocol` for the wire schema, `interprocess`
+//!   for the endpoint). Off by default.
 //! - `full`: all of the above, as one name for feature-matrix runs.
 
 // Every public item is documented; keep it that way.
 #![deny(missing_docs)]
 #![warn(missing_debug_implementations)]
 
+#[cfg(feature = "agent")]
+pub mod agent;
 /// Feeds the profiler from the framework's own frame spans — the only seam
 /// layering permits, since nothing in the framework may depend on this crate.
 #[cfg(feature = "profiling")]

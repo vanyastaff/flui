@@ -54,8 +54,7 @@ impl FocusCoordinator {
     ///
     /// A `WindowFocus(false)` (focus LOST) never calls this: losing focus
     /// names no new owner, so the coordinator keeps pointing at whichever
-    /// presentation held it most recently — the same retention Flutter's
-    /// own single-view focus model has (losing OS focus does not un-focus
+    /// presentation held it most recently (losing OS focus does not un-focus
     /// the last-focused element; a *different* window gaining focus does).
     pub(super) fn note_focus_gained(&self, id: PresentationId) {
         self.active.set(id);

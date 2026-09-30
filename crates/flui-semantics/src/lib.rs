@@ -47,13 +47,12 @@
 //! - [`SmallVec`](smallvec::SmallVec) for children/actions (stack allocation)
 //! - [`FxHashMap`](rustc_hash::FxHashMap) for fast lookups
 //!
-//! ## Flutter Compatibility
+//! ## Core types
 //!
-//! This follows Flutter's semantics protocol closely:
-//! - `SemanticsNode` ≈ Flutter's `SemanticsNode`
-//! - `SemanticsConfiguration` ≈ Flutter's `SemanticsConfiguration`
-//! - `SemanticsOwner` ≈ Flutter's `SemanticsOwner`
-//! - `SemanticsAction` ≈ Flutter's `SemanticsAction`
+//! - `SemanticsNode` — one node of the semantics tree
+//! - `SemanticsConfiguration` — what a render object says about itself
+//! - `SemanticsOwner` — owns the tree and publishes updates
+//! - `SemanticsAction` — actions assistive technology can request
 
 // Lint levels come from `[workspace.lints]` (Cargo.toml `[lints] workspace = true`).
 // Ship bar (wave 2): every public item is documented; keep it that way.

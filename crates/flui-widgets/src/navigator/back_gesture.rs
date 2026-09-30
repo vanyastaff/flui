@@ -3,14 +3,10 @@
 //! `pub(crate)`, nameable outside the crate only through the doc-hidden,
 //! temporary `__test_access` (ADR-0083 §4).
 //!
-//! # Oracle
+//! # Pacing
 //!
-//! `.flutter/packages/flutter/lib/src/cupertino/route.dart` (3.44.0):
-//! `_CupertinoBackGestureController`, `_CupertinoBackGestureDetector`,
-//! `_CupertinoBackGestureDetectorState`. Cited by method name, not by line —
-//! this file ports the *3.44.0* flat pacing (a fixed 350ms /
-//! `Curves.fastEaseInToSlowEaseOut` "stay" animation), not the pre-3.4x
-//! velocity-scaled lerp shape.
+//! The release animation is a fixed 350ms / `Curves::FastEaseInToSlowEaseOut`
+//! settle, not a velocity-scaled lerp.
 //!
 //! # Deferred by design
 //!
@@ -18,8 +14,8 @@
 //! edge-shadow/visuals, no per-hero `Hero.transitionOnUserGestures` opt-in
 //! (see `hero_controller.rs`'s doc block — every hero currently behaves as
 //! `transitionOnUserGestures = false`), and no `fullscreenDialog` (FLUI has
-//! no such route flag yet; opting a route into `back_gesture` is this port's
-//! substitute gate, not a `!fullscreenDialog` check).
+//! no such route flag yet; opting a route into `back_gesture` is the gate
+//! instead of a `!fullscreenDialog` check).
 //!
 //! # Ambient `Directionality`
 //!
@@ -51,18 +47,17 @@ use super::navigator::NavigatorHandle;
 use super::route::RouteId;
 use crate::{Directionality, GestureArenaScope, Listener, Positioned, SizedBox, Stack, StackFit};
 
-/// Flutter's `_kBackGestureWidth` (`cupertino/route.dart`, 3.44.0): the
-/// width of the edge-anchored hit region that can start a drag.
+/// The width of the edge-anchored hit region that can start a drag.
 pub(crate) const BACK_GESTURE_WIDTH: f64 = 20.0;
 
-/// Flutter's `_kMinFlingVelocity`: screen-widths per second.
+/// The minimum fling velocity that decides a release, in screen-widths per
+/// second.
 const MIN_FLING_VELOCITY: f64 = 1.0;
 
-/// Flutter's `_kDroppedSwipePageAnimationDuration`.
+/// How long the page takes to settle after the finger is released.
 const DROPPED_SWIPE_DURATION: Duration = Duration::from_millis(350);
 
-/// Flutter's `_CupertinoBackGestureDetectorState._convertToLogical`:
-/// normalizes a horizontal delta/velocity fraction into pop-direction
+/// Normalizes a horizontal delta/velocity fraction into pop-direction
 /// coordinates (positive = toward revealing the previous route), in exactly
 /// one place — see the module docs on the ambient `Directionality` read.
 pub(crate) fn convert_to_logical(value: f64, direction: TextDirection) -> f64 {
@@ -72,12 +67,10 @@ pub(crate) fn convert_to_logical(value: f64, direction: TextDirection) -> f64 {
     }
 }
 
-/// A controller for an iOS-style back gesture — Flutter's
-/// `_CupertinoBackGestureController`.
+/// A controller for an iOS-style back gesture.
 ///
 /// Works entirely in logical fractions of the controller's own `0.0..1.0`
-/// range (`0.0` = new page dismissed, `1.0` = new page fully on top), exactly
-/// as the oracle documents itself.
+/// range (`0.0` = new page dismissed, `1.0` = new page fully on top).
 ///
 /// `pub` only so `crate::__test_access` can re-export it (ADR-0083 §4); the
 /// module is private, so nothing else names it.
@@ -96,8 +89,8 @@ impl std::fmt::Debug for BackGestureController {
 }
 
 impl BackGestureController {
-    /// Flutter's ctor body: `navigator.didStartUserGesture()` fires
-    /// immediately, before the first `drag_update`.
+    /// `navigator.did_start_user_gesture()` fires immediately, before the
+    /// first `drag_update`.
     pub fn new(
         navigator: NavigatorHandle,
         route: RouteId,
@@ -113,9 +106,8 @@ impl BackGestureController {
 
     /// `dragUpdate(delta)`: `controller.value -= delta`.
     ///
-    /// `AnimationController::set_value` now stops any active run first (step
-    /// 0's Flutter-parity fix) — exactly Flutter's `value -=` setter
-    /// semantics, so no separate `stop()` call is needed here.
+    /// `AnimationController::set_value` stops any active run first, so no
+    /// separate `stop()` call is needed here.
     pub fn drag_update(&self, delta: f64) {
         self.controller.set_value(self.controller.value() - delta);
     }
@@ -131,10 +123,9 @@ impl BackGestureController {
         let curve: Arc<dyn Curve + Send + Sync> = Arc::new(Curves::FastEaseInToSlowEaseOut); // see `PopPacing`'s doc (binding.rs) — same erased easing-curve boundary
         let is_current = self.navigator.current() == Some(self.route);
         let animate_forward = if !is_current {
-            // https://github.com/flutter/flutter/issues/141268 — a route
-            // already navigated away from (but perhaps still in the stack)
-            // animates by whether it is still active, never by velocity or
-            // drag position.
+            // A route already navigated away from (but perhaps still in the
+            // stack) animates by whether it is still active, never by
+            // velocity or drag position.
             self.navigator.route_is_active(self.route)
         } else if velocity.abs() >= MIN_FLING_VELOCITY {
             velocity <= 0.0
@@ -156,17 +147,16 @@ impl BackGestureController {
                 // atomically — the controller's very first reverse run after
                 // this drag uses the gesture's pacing, never a transient
                 // default one (see `navigator.rs`'s `pop_paced` doc for why
-                // this is not Flutter's own two-step
-                // `navigator.pop(); controller.animateBack(...)`).
+                // this is not a two-step pop-then-animate-back).
                 let _ = self.navigator.pop_paced(
                     self.route,
                     DROPPED_SWIPE_DURATION,
                     Arc::clone(&curve),
                 );
             }
-            // Flutter's fallback: "The popping may have finished inline if
-            // already at the target destination" — covers both that case
-            // (nothing left to override) and `!is_current` (no pop happened
+            // The pop may have finished inline if already at the target
+            // destination — this covers both that case (nothing left to
+            // override) and `!is_current` (no pop happened
             // above at all, but this route's own controller may still need
             // to settle toward 0).
             if self.controller.is_animating() {
@@ -201,9 +191,7 @@ pub struct BackGestureRuntime {
     navigator: NavigatorHandle,
     route: RouteId,
     controller: AnimationController,
-    /// Re-evaluated on **every** pointer-down, never baked at build time —
-    /// Flutter's `_CupertinoBackGestureDetectorState._handlePointerDown`
-    /// reading `widget.enabledCallback()` fresh each time.
+    /// Re-evaluated on **every** pointer-down, never baked at build time.
     enabled: Rc<dyn Fn() -> bool>,
     /// Refreshed from the ambient `Directionality` on every `build` (see
     /// `BackGestureDetectorState::build`) — `create_state` has no
@@ -276,9 +264,8 @@ impl BackGestureRuntime {
             return;
         }
         // Multi-touch: while a drag is active, a second pointer-down in the
-        // edge region must not start a second gesture — Flutter's
-        // `assert(_backGestureController == null)` in `_handleDragStart`,
-        // enforced here as a hard guard rather than a debug-only assertion.
+        // edge region must not start a second gesture — a hard guard rather
+        // than a debug-only assertion.
         if self.gesture.borrow().is_some() {
             return;
         }
@@ -323,9 +310,8 @@ impl BackGestureRuntime {
     }
 
     fn on_drag_cancel(&self) {
-        // "This can be called even if start is not called" — Flutter's
-        // `_handleDragCancel`. `finish_drag` is a no-op if no gesture is
-        // in flight.
+        // A cancel can arrive even if the drag never started, so
+        // `finish_drag` is a no-op if no gesture is in flight.
         self.finish_drag(0.0);
     }
 
@@ -340,9 +326,9 @@ impl BackGestureRuntime {
         }
     }
 
-    /// Flutter's trailing status listener in `dragEnd`: "Keep the
-    /// userGestureInProgress in true state so we don't change the curve of
-    /// the page transition mid-flight." Expressed as a poll, called from
+    /// Keeps the user-gesture-in-progress state true until the release
+    /// animation settles, so the page transition's curve does not change
+    /// mid-flight. Expressed as a poll, called from
     /// `BackGestureDetectorState::build` on every rebuild — which happens on
     /// every tick of the release animation, because that `ViewState` is an
     /// `AnimatedView` subscribed to this same controller. A genuine second
@@ -358,10 +344,9 @@ impl BackGestureRuntime {
 
     /// A dispose-time safety net for a gesture whose finger is still down
     /// when the detector unmounts (e.g. the route was swept away by a
-    /// `push_and_remove_until` mid-drag) — Flutter's
-    /// `_CupertinoBackGestureDetectorState.dispose`: post a deferred
-    /// `didStopUserGesture` rather than calling it synchronously from
-    /// `dispose` (an unmount is not a frame phase the navigator's own
+    /// `push_and_remove_until` mid-drag): post a deferred
+    /// `did_stop_user_gesture` rather than calling it synchronously from
+    /// dispose (an unmount is not a frame phase the navigator's own
     /// bookkeeping expects a gesture-stop from), and only if the navigator is
     /// still mounted.
     ///
@@ -379,13 +364,9 @@ impl BackGestureRuntime {
     ///    `!controller.is_animating()`. Checking only `self.gesture` misses
     ///    this case entirely and leaks the count forever.
     ///
-    /// Either owes the same deferred `did_stop_user_gesture` Flutter's
-    /// `_CupertinoBackGestureDetectorState.dispose` posts unconditionally
-    /// whenever `_backGestureController != null` — its `null` check happens
-    /// to conflate both cases because `_backGestureController` is not
-    /// separately tracked from "is a release animation still owed a stop"
-    /// there; this port keeps them as two flags (`gesture`/`awaiting_settle`)
-    /// so `poll_settle`'s cheap common case doesn't need a live controller.
+    /// Either owes the same deferred `did_stop_user_gesture`. The two cases
+    /// are kept as two flags (`gesture`/`awaiting_settle`) so
+    /// `poll_settle`'s cheap common case doesn't need a live controller.
     pub fn dispose_safety_net(&self) {
         let had_live_gesture = self.gesture.borrow_mut().take().is_some();
         let was_awaiting_settle = self.awaiting_settle.replace(false);
@@ -415,9 +396,7 @@ impl BackGestureRuntime {
         }
     }
 
-    /// The route's own laid-out width — Flutter's `context.size!.width`,
-    /// read straight off `context` in `_handleDragUpdate`/`_handleDragEnd`.
-    /// FLUI has no "my own rendered size" query off `BuildContext`, so this
+    /// The route's own laid-out width. FLUI has no "my own rendered size" query off `BuildContext`, so this
     /// reads the page's committed geometry the same way
     /// `hero_controller.rs`'s `MeasurementPass::run` does: through the
     /// route's registered subtree and the navigator's render tree, live on
@@ -439,9 +418,8 @@ impl BackGestureRuntime {
 
 /// An edge-anchored, arena-fed detector that turns a horizontal drag inside
 /// [`BACK_GESTURE_WIDTH`] of the leading edge into a
-/// [`BackGestureController`]-driven pop. Flutter's
-/// `_CupertinoBackGestureDetector`. `pub(crate)`: no public detector API is
-/// exposed yet.
+/// [`BackGestureController`]-driven pop. `pub(crate)`: no public detector API
+/// is exposed yet.
 #[derive(Clone)]
 pub(crate) struct BackGestureDetector {
     navigator: NavigatorHandle,

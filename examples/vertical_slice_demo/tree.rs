@@ -339,7 +339,7 @@ impl ViewState<DemoHome> for DemoHomeState {
             // happens to sit — same reasoning as the "+" button above.
             .behavior(HitTestBehavior::Opaque)
             .on_pan_update(move |_cx, details: DragUpdateDetails| {
-                // Flutter convention (matches `Scrollable`'s own pan-update
+                // Scroll-drag convention (matches `Scrollable`'s own pan-update
                 // wiring in `scrollable.rs`): a downward finger drag (positive
                 // delta on the scroll axis) moves the viewport toward the
                 // START of the content, so the offset DECREASES; dragging up
@@ -393,7 +393,7 @@ impl ViewState<DemoHome> for DemoHomeState {
                 // An empty `Text` filler, not `SizedBox` — a `SizedBox`
                 // nested inside this container's own tight width/height
                 // constraint would be tightened down to the SAME committed
-                // size (Flutter's `enforce` semantics: an incoming tight
+                // size (an incoming tight
                 // constraint always wins), so it would carry no information
                 // and only add a node the tests must then disambiguate.
                 AnimatedContainer::new(Text::new(""))

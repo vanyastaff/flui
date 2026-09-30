@@ -233,8 +233,7 @@ where
     /// exists for behaviors that need the prior view (e.g. `StatefulBehavior`
     /// forwarding to `ViewState::did_update_view`, or `InheritedBehavior`
     /// scheduling rebuilds for its dependents when
-    /// `update_should_notify(old)` is true — see Flutter
-    /// `framework.dart:6414` `InheritedElement.notifyClients`).
+    /// `update_should_notify(old)` is true).
     ///
     /// The split-borrow `owner` handle is threaded through so behaviors
     /// can call `ElementOwner::schedule_build_for` for affected
@@ -262,9 +261,8 @@ where
     /// Returns `None` for every behavior except
     /// [`InheritedBehavior`], whose override returns `Some(self)`. The
     /// unified `Element::as_inherited` delegates to this so
-    /// `BuildContext::depend_on_inherited` (Flutter
-    /// `framework.dart:5081`) can record dependents and read the view
-    /// without naming `V` at the call site.
+    /// `BuildContext::depend_on_inherited` can record dependents and read the
+    /// view without naming `V` at the call site.
     fn as_inherited_access(&self) -> Option<&dyn crate::element::InheritedElementAccess> {
         None
     }
@@ -286,11 +284,8 @@ where
     /// to hand out `&self.state as &dyn Any`. Used by
     /// [`BuildContext::find_ancestor_state`] to surface
     /// the typed `ViewState` to the dispatch boundary without naming
-    /// `V` at the object-safe trait surface.
-    ///
-    /// Flutter parity: `framework.dart:5132`
-    /// `findAncestorStateOfType<T>` reads `element.state` after a
-    /// runtime-type check.
+    /// `V` at the object-safe trait surface. The caller reads the state
+    /// after a runtime-type check.
     fn state_as_any(&self) -> Option<&dyn std::any::Any> {
         None
     }
@@ -304,11 +299,6 @@ where
     /// so it keeps the default). Used by
     /// [`BuildContext::find_render_object`] to surface
     /// the nearest ancestor's `RenderId` to the dispatch boundary.
-    ///
-    /// Flutter parity: `framework.dart:5160`
-    /// `findAncestorRenderObjectOfType<T>` reads
-    /// `(ancestor as RenderObjectElement).renderObject` after a
-    /// runtime-type check.
     fn render_id(&self) -> Option<flui_foundation::RenderId> {
         None
     }
@@ -318,8 +308,7 @@ where
     /// Only the lazy-sliver adaptor behaviors answer `true`. The slab reads
     /// it through [`ElementBase::child_sliver_slot`] to seed the inherited
     /// slot that [`RenderBehavior::on_mount`] stamps into the child's
-    /// `SliverMultiBoxAdaptorParentData` — the moment Flutter calls
-    /// `didAdoptChild`.
+    /// `SliverMultiBoxAdaptorParentData` — the moment the child adopts itself.
     ///
     /// [`ElementBase::child_sliver_slot`]: crate::view::ElementBase::child_sliver_slot
     fn hosts_sparse_children(&self) -> bool {
@@ -347,9 +336,8 @@ where
     /// render parent, if it is a `ParentDataView` (Flexible / Positioned).
     ///
     /// Default `None`; `ParentDataBehavior` overrides it. Read at the
-    /// `ElementTree` insert/update seams (`apply_ancestor_parent_data`) — the
-    /// port of Flutter's `RenderObjectElement.attachRenderObject` →
-    /// `_findAncestorParentDataElements` → `ParentDataWidget.applyParentData`.
+    /// `ElementTree` insert/update seams (`apply_ancestor_parent_data`), which
+    /// find the ancestor parent-data elements and apply their data.
     #[expect(unused_variables)]
     fn parent_data_config(
         &self,
@@ -443,9 +431,6 @@ where
     /// `tests/notifications.rs` exercise the protocol via a hand-rolled
     /// `ElementBase` impl so the wiring is validated end-to-end without
     /// adding production scaffolding the framework doesn't yet need).
-    ///
-    /// Flutter parity: `notification_listener.dart:127`
-    /// (`_NotificationElement.onNotification`).
     fn on_notification(&self, type_id: std::any::TypeId, notification: &dyn std::any::Any) -> bool {
         let _ = (type_id, notification);
         false
@@ -458,10 +443,7 @@ where
     /// [`ElementBase::notify_dependency_change`](crate::view::ElementBase::notify_dependency_change)
     /// by `BuildOwner::build_scope` immediately before the dependent's
     /// `perform_build`, when an inherited ancestor's
-    /// `update_should_notify` returned `true` since the last build —
-    /// Flutter parity for `framework.dart:5977-5982`
-    /// `StatefulElement.performRebuild` reading the
-    /// `_didChangeDependencies` flag set at `framework.dart:6117`.
+    /// `update_should_notify` returned `true` since the last build.
     ///
     /// Default is a no-op — Stateless, Proxy, Inherited, and Render
     /// behaviors own no `ViewState`, so the scheduled rebuild alone
@@ -532,8 +514,7 @@ where
         // build is caught and substituted with the registered
         // `ErrorView`. The catch covers ONLY the build expression — the
         // `view` borrow is moved into the closure so nothing of `core`
-        // is mutated under the catch (Flutter parity:
-        // `ComponentElement.performRebuild`, `framework.dart:5810`).
+        // is mutated under the catch.
         let view = core.view().clone();
         let child_view =
             super::behavior_commons::build_or_recover(core, owner, "StatelessElement", move || {
@@ -603,9 +584,7 @@ where
 /// through to the wrapped child (whose render object attaches to the nearest
 /// ancestor render object). The parent-data the view contributes is surfaced
 /// via [`parent_data_config`](ElementBehavior::parent_data_config) and written
-/// onto the child render node by the `ElementTree` insert/update seams — the
-/// port of Flutter's `RenderObjectElement.attachRenderObject` →
-/// `_updateParentData`.
+/// onto the child render node by the `ElementTree` insert/update seams.
 #[derive(Debug, Clone, Copy)]
 pub struct ParentDataBehavior;
 
@@ -767,8 +746,7 @@ where
         // panicking build is caught and substituted with the registered
         // `ErrorView`. The catch covers ONLY the build expression — the
         // `view` borrow is moved into the closure (cloned) and `state` is
-        // captured by reference, independent of `core` (Flutter parity:
-        // `ComponentElement.performRebuild`, `framework.dart:5810`).
+        // captured by reference, independent of `core`.
         let view = core.view().clone();
         let state = &self.state;
         let child_view =
@@ -789,15 +767,12 @@ where
     ///
     /// # The `initialized` gate
     ///
-    /// Flutter's `mount` runs `initState` synchronously
-    /// (`StatefulElement.mount`, `framework.dart`), so `dispose`
-    /// (`StatefulElement.unmount`) always follows a completed `initState`.
-    /// FLUI's split mount/build means a state whose `init_state` never ran
-    /// — it panicked, or the element was removed before its first
-    /// `build_scope` drain ever reached it — has never acquired whatever
-    /// `dispose` would release, so `dispose` must not run for it either;
-    /// `create_state` (like Flutter's `createState`) must not itself
-    /// acquire lifecycle resources, so nothing leaks by skipping it here.
+    /// FLUI's split mount/build means `init_state` does not run synchronously
+    /// at mount, so a state whose `init_state` never ran — it panicked, or the
+    /// element was removed before its first `build_scope` drain ever reached
+    /// it — has never acquired whatever `dispose` would release, so `dispose`
+    /// must not run for it either; `create_state` must not itself acquire
+    /// lifecycle resources, so nothing leaks by skipping it here.
     /// `self.initialized` is set `true` only after `init_state` *returns*
     /// (see `build_into_views` above), so a panicking `init_state` leaves
     /// it `false` and this guard holds.
@@ -815,18 +790,9 @@ where
     /// only reaching `tracing`, mirroring `build_or_recover`'s producer
     /// side.
     ///
-    /// # Flutter contrast
-    ///
-    /// Flutter's `_unmountAll` (`BuildOwner.finalizeTree`'s drain of
-    /// `_inactiveElements`) carries no per-element `try`/`catch` of its
-    /// own, but the pass itself is not uncontained: `finalizeTree` wraps
-    /// the whole drain in one `try`/`catch` that reports through
-    /// `_reportException("while finalizing the widget tree")` and lets the
-    /// frame continue. Its failure mode is therefore coarser than FLUI's,
-    /// not absent — a throwing `dispose` there leaves every element after
-    /// it in `_elements` un-unmounted for the rest of that pass, while
-    /// FLUI's per-element catch here contains the damage to the one
-    /// element whose `dispose` panicked.
+    /// The per-element catch contains the damage to the one element whose
+    /// `dispose` panicked, rather than leaving every later element in the
+    /// finalize pass un-unmounted.
     fn on_unmount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
         if !self.initialized {
             return;
@@ -881,25 +847,13 @@ where
         }
     }
 
-    /// # Flutter contrast
-    ///
-    /// `StatefulElement.deactivate` (`framework.dart`) calls
-    /// `state.deactivate()` with no `try`/`catch` of its own, and (unlike
-    /// `dispose`) Flutter DOES catch a throwing one: `_InactiveElements
-    /// ._deactivateRecursively` wraps the whole subtree's deactivation,
-    /// and on a caught exception marks every element in it
-    /// `_ElementLifecycle.defunct`-adjacent (`_ElementLifecycle.failed`
-    /// applied recursively via `_deactivateFailedSubtreeRecursively`)
-    /// before rethrowing into `ComponentElement.performRebuild`'s second
-    /// `try`/`catch`, which substitutes an `ErrorWidget` at the
-    /// *rebuilding ancestor* — not at the failed element itself. FLUI's
-    /// improvement is a narrower blast radius: only the one element whose
-    /// `deactivate` panicked is affected, it stays parked `Inactive` (not
-    /// a whole-subtree `failed` state), and it is still disposed normally
-    /// at `finalize_tree` — Flutter never disposes a `failed` subtree at
-    /// all. A panic is caught and reported instead of unwinding out of the
-    /// reconcile that dropped this element, mirroring `on_unmount`'s
-    /// containment shape one hook over — see
+    /// Runs `ViewState::deactivate` under a panic boundary with a narrow
+    /// blast radius: only the one element whose `deactivate` panicked is
+    /// affected, it stays parked `Inactive` (not a whole-subtree failed
+    /// state), and it is still disposed normally at `finalize_tree`. A panic
+    /// is caught and reported instead of unwinding out of the reconcile that
+    /// dropped this element, mirroring `on_unmount`'s containment shape one
+    /// hook over — see
     /// `crates/flui-view/tests/lifecycle_panic_containment.rs`.
     ///
     /// The catch sits in the behavior, not around `ElementBase::deactivate`
@@ -931,8 +885,7 @@ where
         old_view: &V,
         _owner: &mut crate::ElementOwner<'_>,
     ) {
-        // `core.view()` is already the freshly-swapped-in configuration here —
-        // Flutter's `this.widget` at `didUpdateWidget` time.
+        // `core.view()` is already the freshly-swapped-in configuration here.
         self.state.did_update_view(old_view, core.view());
     }
 
@@ -940,8 +893,7 @@ where
     ///
     /// Called by `BuildOwner::build_scope` right before this
     /// dependent's `perform_build` when an inherited ancestor's
-    /// `update_should_notify` returned true since the last build —
-    /// Flutter parity for `framework.dart:5977-5982`.
+    /// `update_should_notify` returned true since the last build.
     ///
     /// `init_state` always runs before any `did_change_dependencies`
     /// dispatch because `state_as_any` reaches the typed
@@ -949,18 +901,16 @@ where
     /// only fire after the element is `Active` (it's gated on
     /// `lifecycle().can_build()` in `build_scope`). Defunct or already-
     /// inactive lifecycles are skipped by the build-scope check itself,
-    /// so we get the defensive-shape Flutter calls for free without a
-    /// second guard here.
+    /// so no second guard is needed here.
     fn did_change_dependencies(
         &mut self,
         core: &ElementCore<V, A>,
         owner: &mut crate::ElementOwner<'_>,
     ) {
-        // Live tree-backed context (PR-K) when fired from a `build_scope`
+        // Live tree-backed context when fired from a `build_scope`
         // drain — so a user `did_change_dependencies` that re-reads the
         // changed inherited value via `depend_on` resolves against the real
-        // ancestor chain, matching Flutter (`framework.dart:5977-5982` runs
-        // the hook with the element's live `BuildContext`).
+        // ancestor chain.
         let ctx_choice = make_build_ctx(core, owner);
         let sink_start = lifecycle_sink_len(owner);
         let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
@@ -1032,9 +982,8 @@ where
     /// `PipelineOwner` is in scope) so [`BuildContext::find_render_object`]
     /// can surface it to the dispatch boundary.
     ///
-    /// Returns `None` until `on_mount` has run with a PipelineOwner —
-    /// matches Flutter's behavior where `findAncestorRenderObjectOfType`
-    /// returns `null` for an unmounted `RenderObjectElement`.
+    /// Returns `None` until `on_mount` has run with a PipelineOwner, so an
+    /// unmounted render element is never found as an ancestor.
     fn render_id(&self) -> Option<flui_foundation::RenderId> {
         self.render_id
     }
@@ -1142,7 +1091,7 @@ where
                     );
                 }
 
-                // Adopt-time stamp — Flutter's `didAdoptChild`. The inherited
+                // Adopt-time stamp. The inherited
                 // slot reaches this render object through however many
                 // composite elements sit between it and the sparse sliver
                 // host, so a bare `Text` or a `StatefulView` item carries
@@ -1183,19 +1132,10 @@ where
     /// `remove_render_object_from_tree` still runs unconditionally after,
     /// whether or not the hook panicked.
     ///
-    /// # Flutter contrast
-    ///
-    /// `RenderObjectElement.unmount` (`framework.dart`, tag 3.44.0) runs
-    /// `super.unmount()` — which detaches the render object from its
-    /// parent — and its detach-related asserts BEFORE calling
-    /// `widget.didUnmountRenderObject(renderObject)`, with no
-    /// `try`/`catch` around the hook. So a throwing hook there does NOT
-    /// skip the detach — the detach already happened. The lifecycle work it
-    /// skips is `renderObject.dispose()`, which follows the hook. FLUI's `remove_render_object_from_tree`
-    /// below runs unconditionally either way, so this containment closes
-    /// that same narrower gap rather than a leaked-detach one; ADR-0048
-    /// (the frame transaction boundary) is where the accounting for the
-    /// removal-path seams lives.
+    /// A panicking hook therefore never skips the detach; the only work it
+    /// can skip is the render object's own disposal, which follows the hook.
+    /// ADR-0048 (the frame transaction boundary) is where the accounting for
+    /// the removal-path seams lives.
     fn on_unmount(&mut self, core: &mut ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
         let mut recovered: Option<Box<dyn Any + Send>> = None;
         if let Some(render_id) = self.render_id
@@ -1238,8 +1178,7 @@ where
 
     fn on_update(&mut self, core: &ElementCore<V, A>, owner: &mut crate::ElementOwner<'_>) {
         // Apply the widget's new configuration to the *existing* render object
-        // before marking it dirty — Flutter's `RenderObjectElement.update` ->
-        // `widget.updateRenderObject(context, renderObject)`. Without this the
+        // before marking it dirty (`update_render_object`). Without this the
         // render object keeps its `create_render_object()` configuration and a
         // `setState` that changes a render-object widget (padding, size, text,
         // colour, …) would never be reflected after the first frame.
@@ -1345,12 +1284,6 @@ impl DependentEntry {
 /// `ElementOwner::schedule_build_for` with a typed rebuild reason, without an
 /// extra tree traversal (the tree is not in scope at `on_view_updated`
 /// time because we only see `ElementCore<V, A>`).
-///
-/// Flutter parity: `framework.dart:6252` `_dependents:
-/// HashMap<Element, Object?>` in `InheritedElement`. Flutter uses a
-/// HashMap because dependents may attach dependency aspects (the
-/// `Object?` value); we will gain that capability if we expand
-/// `aspect` support — for now the value slot holds the depth.
 #[derive(Debug)]
 pub struct InheritedBehavior<V: InheritedView> {
     /// Cached data for dependents.
@@ -1358,9 +1291,8 @@ pub struct InheritedBehavior<V: InheritedView> {
     /// Cached clone of the inherited view itself.
     ///
     /// `BuildContext::depend_on_inherited` must hand a `&V` to the
-    /// caller's typed callback (Flutter's `dependOnInheritedWidgetOfExactType`
-    /// returns the widget, not the data). The unified element's view
-    /// lives in `ElementCore`, but the
+    /// caller's typed callback (the view itself, not just its data). The
+    /// unified element's view lives in `ElementCore`, but the
     /// [`InheritedElementAccess`](crate::element::InheritedElementAccess)
     /// trait surface only carries `&mut InheritedBehavior<V>` through
     /// the behavior-trait routing — so we cache a clone of the view
@@ -1545,11 +1477,6 @@ where
         // provider that never opted in), and only dependents whose recorded
         // mask intersects are scheduled.
         //
-        // Flutter parity: `framework.dart:6414`
-        // `InheritedElement.notifyClients(InheritedWidget old)` calls
-        // `widget.updateShouldNotify(old)` and on true iterates
-        // `_dependents.keys` to enqueue each dependent for build; the mask
-        // intersection is the typed form of `InheritedModel`'s aspect check.
         // Field-granular (#1090): the provider reports WHICH fields changed
         // (`ALL` for a provider that never opted in — the
         // `update_should_notify` default), and only dependents whose recorded
@@ -1568,10 +1495,8 @@ where
                     continue;
                 }
                 let dep_depth = entry.depth;
-                // Flutter parity (`framework.dart:6371-6374`):
-                // `notifyDependent` calls `dependent.didChangeDependencies`.
-                // We split this across two phases — the set-flag part
-                // (`note_dependency_change`) here, and the fire part
+                // Notifying a dependent is split across two phases — the
+                // set-flag part (`note_dependency_change`) here, and the fire part
                 // (`ElementBase::notify_dependency_change`) inside
                 // `BuildOwner::build_scope` right before the dependent's
                 // `perform_build`. The typed
@@ -1622,31 +1547,6 @@ where
 /// disambiguate from the `flui_animation::AnimationBehavior` enum
 /// (which describes how an animation behaves when the framework reduces
 /// motion — a separate concern from the element-tree behavior here).
-///
-/// # Flutter Equivalent
-///
-/// Corresponds to the `_AnimatedState` implementation that Flutter generates
-/// for AnimatedWidget:
-///
-/// ```dart
-/// class _AnimatedState extends State<AnimatedWidget> {
-///   @override
-///   void initState() {
-///     super.initState();
-///     widget.listenable.addListener(_handleChange);
-///   }
-///
-///   void _handleChange() {
-///     setState(() {});
-///   }
-///
-///   @override
-///   void dispose() {
-///     widget.listenable.removeListener(_handleChange);
-///     super.dispose();
-///   }
-/// }
-/// ```
 pub struct AnimatedBehavior<V>
 where
     V: AnimatedView,
@@ -1789,11 +1689,8 @@ where
         owner: &mut crate::ElementOwner<'_>,
     ) {
         // Swap the subscription only when the listenable *instance* actually
-        // changed — `Arc::ptr_eq`, matching Flutter's reference-identity
-        // `Listenable` comparison (see `_AnimatedState.didUpdateWidget`'s
-        // `widget.listenable != oldWidget.listenable`, and FLUI's own
-        // `ValueListenableBuilderState::did_update_view`, which uses the same
-        // guard). A rebuild that passes the same `Arc<dyn Listenable>` through
+        // changed — `Arc::ptr_eq`, a reference-identity comparison (the same
+        // guard `ValueListenableBuilderState::did_update_view` uses). A rebuild that passes the same `Arc<dyn Listenable>` through
         // unchanged (by far the common case — the parent rebuilt but the
         // animation itself didn't) must not unsubscribe/resubscribe.
         //
@@ -1813,9 +1710,8 @@ where
             // Safe to unsubscribe unconditionally, even if the old
             // listenable's backing `ChangeNotifier` were already disposed:
             // `Listenable::remove_listener` is a silent no-op on a disposed
-            // notifier (Flutter parity — `ChangeNotifier.removeListener`
-            // carries no `debugAssertNotDisposed`, precisely so teardown
-            // code can detach from an already-disposed listenable).
+            // notifier, precisely so teardown code can detach from an
+            // already-disposed listenable.
             if let Some((old_listenable, listener_id)) = self.subscribed.take() {
                 old_listenable.remove_listener(listener_id);
             }
@@ -1834,9 +1730,7 @@ where
 
     /// Delegate to the composed `StatefulBehavior` so animated
     /// dependents also fire the typed
-    /// `ViewState::did_change_dependencies` hook before rebuilding —
-    /// Flutter parity (animated widgets in Flutter inherit the
-    /// `StatefulElement._didChangeDependencies` flag-and-fire path).
+    /// `ViewState::did_change_dependencies` hook before rebuilding.
     fn did_change_dependencies(
         &mut self,
         core: &ElementCore<V, A>,

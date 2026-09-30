@@ -8,8 +8,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 /// Paints a [`BoxDecoration`] (color, border, gradient, shadow, …) before or
 /// after painting its child.
 ///
-/// Flutter parity: `widgets/basic.dart` `DecoratedBox` over
-/// `RenderDecoratedBox`. The decoration is painted in the background by default
+/// The decoration is painted in the background by default
 /// (behind the child); use [`DecoratedBox::foreground`] to paint over the child.
 #[derive(Clone, Debug)]
 pub struct DecoratedBox {

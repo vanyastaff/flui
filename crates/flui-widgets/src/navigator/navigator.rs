@@ -4,28 +4,20 @@
 //! `Navigator` baseline was exported; public page/popup routes were added, then
 //! the public Hero baseline that rides on this navigator.
 //!
-//! # Flutter parity
-//!
-//! `.flutter/packages/flutter/lib/src/widgets/navigator.dart` (master
-//! `3.33.0-0.0.pre-6280-g88e87cd963f`): `NavigatorState`, `Navigator.of` /
-//! `maybeOf` (`:2947-3001`), `canPop` (`:5551`), `maybePop` (`:5582`),
-//! `_allRouteOverlayEntries` (`:4151`), and `build` returning an `Overlay`
-//! (`:5984`).
-//!
-//! # How this avoids Flutter's two `GlobalKey`s, and the lock hazard behind them
+//! # Why no `GlobalKey`s, and the lock hazard behind them
 //!
 //! `BuildContext::find_ancestor_state` yields `&dyn Any` —
 //! *immutable* — while the element tree is borrowed. So `Navigator::of` can never
 //! return `&mut NavigatorState`, and it must not perform a second lookup inside
-//! that callback: Flutter's `_overlayKey.currentState` would take the GlobalKey
-//! registry's `WidgetsBinding::inner.read()` while the tree borrow is held, and
+//! that callback: a `GlobalKey` lookup would take the registry's
+//! `WidgetsBinding::inner.read()` while the tree borrow is held, and
 //! `parking_lot::RwLock` is not reentrant.
 //!
 //! Both problems dissolve the same way. `Navigator::of` clones an owned,
 //! `'static` [`NavigatorHandle`] out of the state *inside* the callback and does
 //! nothing else there; every mutation runs after the borrow is released. Navigator
-//! and Overlay couple through an `Arc`, not through the tree — so
-//! `GlobalKey<OverlayState>` is not ported either.
+//! and Overlay couple through an `Arc`, not through the tree — so no
+//! `GlobalKey<OverlayState>` is needed.
 //!
 //! # Not implemented, and not claimed
 //!
@@ -34,15 +26,14 @@
 //! `addressing.rs`, which also make its facade refuse unaddressable pages. No
 //! restoration, `PopScope`,
 //! `LocalHistoryRoute`, `HeroControllerScope`, `NavigationNotification`,
-//! pointer-cancelling wrapper, or per-route focus scope that Flutter's `build` adds
-//! (`:5946-5998`). `TransitionRoute` / `ModalRoute` stay implementation details
+//! pointer-cancelling wrapper, or per-route focus scope in the navigator's own
+//! `build`. `TransitionRoute` / `ModalRoute` stay implementation details
 //! behind public `PageRoute` / `PopupRoute`, not public API (nameable only
 //! through the doc-hidden, temporary `__test_access`, ADR-0083 §4).
 //!
 //! Named-route generation *is* here — see the `Named routes` impl block below
-//! and `named_route.rs`. What that feature deliberately leaves out is
-//! `Navigator.initialRoute` / `defaultGenerateInitialRoutes` hierarchy
-//! synthesis; `navigator/mod.rs` records why.
+//! and `named_route.rs`. What that feature deliberately leaves out is the
+//! initial-route hierarchy synthesis; `navigator/mod.rs` records why.
 
 use std::any::{TypeId, type_name};
 use std::cell::RefCell;
@@ -128,27 +119,23 @@ fn register_command_target(shared: &Arc<NavigatorShared>) -> NavigatorCommandTar
 /// Everything a [`NavigatorHandle`] and the mounted [`NavigatorState`] share.
 ///
 /// The route stack lives behind a private `Mutex` because `ViewState::build` takes
-/// `&self` and nothing can obtain `&mut NavigatorState`. That is
-/// not a workaround: Flutter's `NavigatorState` mutates `_history` from `this` too.
+/// `&self` and nothing can obtain `&mut NavigatorState`.
 struct NavigatorShared {
     history: Mutex<RouteHistory>,
 
-    /// The overlay this navigator presents its routes in. Flutter reaches it
-    /// through `GlobalKey<OverlayState>` (`navigator.dart:3746`); we hold the
-    /// capability directly.
+    /// The overlay this navigator presents its routes in, held as a capability
+    /// directly rather than looked up through a `GlobalKey`.
     overlay: OverlayHandle,
 
     /// The `RouteId`-keyed maps every binding shares: overlay entries, transition
-    /// peers, page subtrees and modal (`offstage`) controls. Flutter reads all four
-    /// straight off the `Route` object; FLUI's routes live behind
-    /// `Box<dyn ErasedRoute>` inside the history's mutex, so they publish here
-    /// instead (ADR-0019).
+    /// peers, page subtrees and modal (`offstage`) controls. FLUI's routes live
+    /// behind `Box<dyn ErasedRoute>` inside the history's mutex, so they publish
+    /// here instead of being read off the route object (ADR-0019).
     registries: RouteRegistries,
 
-    /// This navigator's name → route table and its two generator hooks — the
-    /// three sources Flutter's `WidgetsApp._onGenerateRoute` folds into the
-    /// single `Navigator.onGenerateRoute` hook (`app.dart`). Owned per
-    /// navigator, so two navigators resolve the same name independently.
+    /// This navigator's name → route table and its two generator hooks, folded
+    /// into a single resolution path. Owned per navigator, so two navigators
+    /// resolve the same name independently.
     named_routes: RouteRegistry,
 
     /// The clock this navigator's route transitions register with.
@@ -159,23 +146,20 @@ struct NavigatorShared {
     /// The binding's post-frame capability and render tree, both read **once** from
     /// `NavigatorState::init_state` — a lifecycle hook, since only `LifecycleContext`
     /// offers them. `HeroController` reaches them through its `NavigatorHandle`, which
-    /// is how it schedules its measurement (`heroes.dart:968`) and then resolves the
-    /// geometry that measurement was waiting for.
+    /// is how it schedules its measurement and then resolves the geometry that
+    /// measurement was waiting for.
     ///
     /// `None` when the navigator is unmounted, or when the binding installed no
-    /// post-frame handle — a `HeroController` then simply never measures, which is
-    /// Flutter's `if (navigator == null) return;` (`heroes.dart:970`).
+    /// post-frame handle — a `HeroController` then simply never measures.
     post_frame: Mutex<Option<flui_scheduler::LocalPostFrameHandle>>,
     render_tree: Mutex<Option<flui_rendering::pipeline::PipelineCell>>,
 
     /// Whether the mounted `NavigatorState` currently holds the observers
-    /// attached. Flutter's `NavigatorObserver._navigators[observer] != null`
-    /// (`navigator.dart:779`, `:3836`), which is per-observer only because Dart
-    /// has no way to ask the navigator; here it is one flag, because every
-    /// observer of one navigator attaches and detaches together.
+    /// attached. It is one flag, because every observer of one navigator attaches
+    /// and detaches together.
     observers_attached: AtomicBool,
 
-    /// Flutter's `_effectiveObservers` (`navigator.dart:3769`).
+    /// The observers notified of route changes.
     ///
     /// **Not on `RouteHistory`.** An observer holds a [`NavigatorHandle`], so
     /// notifying one is re-entrant by construction; the route stack must therefore
@@ -188,16 +172,15 @@ struct NavigatorShared {
 
     /// This navigator's cross-flight visibility hook, published to the nearest
     /// enclosing route's `HeroScope` from every `build` (see
-    /// `NavigatorState::sync_nested_hero_registration`) — Flutter's
-    /// nested-`Navigator` branch of `Hero._allHeroesFor` (`heroes.dart:317-333`).
+    /// `NavigatorState::sync_nested_hero_registration`), so heroes inside a nested
+    /// navigator are visible to an outer flight.
     /// `None` for a top-level navigator, which has no enclosing route to publish
     /// to. Cleared in `dispose`, together with the registry it was registered
     /// on, so a disposed navigator's heroes are never visited again.
     nested_hero_registration: Mutex<Option<(HeroRegistry, NestedHeroSource)>>,
 
     /// How many overlapping user gestures (e.g. edge swipe-backs) are
-    /// currently manipulating this navigator. Flutter's
-    /// `NavigatorState._userGesturesInProgress` (`navigator.dart:5803`) — only
+    /// currently manipulating this navigator. Only
     /// the 0→1 and 1→0 transitions notify observers, so nested gestures on
     /// the same navigator collapse to one notification pair.
     ///
@@ -206,8 +189,7 @@ struct NavigatorShared {
     /// listener) without holding the owner-affine [`NavigatorHandle`] itself.
     user_gestures_in_progress: Arc<AtomicU32>,
 
-    /// Flutter's `userGestureInProgressNotifier` (`ValueNotifier<bool>`,
-    /// `navigator.dart:5819`): fires exactly on the 0→1 and 1→0 transitions
+    /// Fires exactly on the 0→1 and 1→0 transitions
     /// of [`user_gestures_in_progress`](Self::user_gestures_in_progress) —
     /// the same edges that notify [`NavigatorObserver::did_start_user_gesture`]
     /// / [`did_stop_user_gesture`](NavigatorObserver::did_stop_user_gesture).
@@ -220,17 +202,15 @@ struct NavigatorShared {
     /// `TransitionRouteInner::status_wake` already use to bridge a Send+Sync
     /// animation callback back to owner-local code. `HeroFlight` subscribes
     /// once, for its whole life, to replay a terminal status update parked
-    /// mid-gesture (`_handleAnimationUpdate`, `heroes.dart:622-650`).
+    /// mid-gesture.
     user_gesture_in_progress_notifier: ChangeNotifier,
 
     /// What a push's
     /// [`PushCompletion::Animating`](super::route::PushCompletion::Animating)
     /// continuation schedules the Navigator's rebuild through, once its
-    /// future resolves — Flutter's
-    /// analogue is `handlePush`'s `whenCompleteOrCancel` reaching straight
-    /// back into `NavigatorState`; FLUI's continuation instead holds only this
-    /// `Arc` (and a clone of the route-command queue), so it structurally
-    /// cannot touch the history or anything else `NavigatorShared` owns.
+    /// future resolves. The continuation holds only this `Arc` (and a clone of
+    /// the route-command queue), so it structurally cannot touch the history or
+    /// anything else `NavigatorShared` owns.
     ///
     /// Resolved from `LifecycleContext::rebuild_handle` in
     /// [`NavigatorState::init_state`](struct@NavigatorState), cleared in
@@ -247,32 +227,23 @@ struct NavigatorShared {
 }
 
 impl NavigatorShared {
-    /// Apply what a flush left behind — Flutter's tail of `_flushHistoryUpdates`
-    /// (`navigator.dart:4609-4613`), in that order:
+    /// Apply what a flush left behind, in this order:
     ///
-    /// 1. remove each disposed route's overlay entries (`_disposeRouteEntry`);
-    /// 2. `overlay.rearrange(_allRouteOverlayEntries)`, but **only** when the
-    ///    flush asked for it. `pop` and `remove_route` pass `rearrangeOverlay:
-    ///    false` (`:5671`, `:5747`) precisely because step 1 already updated the
-    ///    overlay's list.
+    /// 1. remove each disposed route's overlay entries;
+    /// 2. rearrange the overlay to match the route stack, but **only** when the
+    ///    flush asked for it. `pop` and `remove_route` do not ask, precisely
+    ///    because step 1 already updated the overlay's list.
     fn apply(&self, mut outcome: FlushOutcome) {
         // 0. Everything the flush owed to user code, **in the order it was
         //    produced** — a multi-pass flush must not deliver a later pass's
         //    refusal ahead of an earlier pass's pop — and before the observers
-        //    hear `didPop`, which is Flutter's relative order:
-        //    `onPopInvokedWithResult` fires inside `_RouteEntry.handlePop`, i.e.
-        //    during `_flushHistoryUpdates`, while the pop observation is only
-        //    queued there and delivered afterwards by
-        //    `NavigatorState._flushObserverNotifications`. Cited by symbol: the
-        //    line numbers this comment used to carry had both drifted.
+        //    hear the pop: the pop-invoked callback fires inside the flush, while
+        //    the pop observation is only queued there and delivered afterwards.
         //
-        //    Note what this order does NOT inherit. `handlePop` runs under
-        //    `assert(navigator._debugLocked)` and every imperative entry point
-        //    asserts `!_debugLocked`, so the reference aborts a debug build
-        //    rather than let a callback navigate from here. FLUI permits it
-        //    deliberately (ARCHITECTURE.md mapping decision 13), which makes the
-        //    resulting "effect observed before its cause" sequence reachable here
-        //    and unreachable there.
+        //    Note what this order does NOT do. FLUI permits navigating
+        //    from a callback fired here, deliberately (ARCHITECTURE.md mapping
+        //    decision 13), which makes the resulting "effect observed before its
+        //    cause" sequence reachable.
         //
         //    With **no lock held**: these are user callbacks, they may call
         //    straight back into this navigator, and even a `can_pop()` read
@@ -312,7 +283,7 @@ impl NavigatorShared {
         }
 
         // 0b. The new top route takes the keyboard: its scope becomes active and
-        //     the focus it remembers is restored (`routes.dart:1692`, `:1137`).
+        //     the focus it remembers is restored.
         //     Also outside the lock — moving the focus fires user focus-change
         //     listeners, and one that calls back into this navigator would
         //     deadlock the same thread if this ran inside the flush.
@@ -337,8 +308,7 @@ impl NavigatorShared {
         //    flush whose notifications land after this loop drains).
         deliver(&outcome.notifications, &self.observers());
 
-        // 2. Each disposed route's overlay entries, then the route itself —
-        //    Flutter's `_disposeRouteEntry` order (`navigator.dart:3978-3987`).
+        // 2. Each disposed route's overlay entries, then the route itself.
         {
             let mut entries = self.registries.entries.lock();
             for id in &outcome.disposed {
@@ -355,8 +325,7 @@ impl NavigatorShared {
             return;
         }
 
-        // `_allRouteOverlayEntries`: the entries of every route in `_history`
-        // order, bottom → top (`navigator.dart:4151-4153`).
+        // The entries of every route in history order, bottom → top.
         let ordered: Vec<OverlayEntry> = {
             let ids = self.history.lock().ids();
             let entries = self.registries.entries.lock();
@@ -462,7 +431,7 @@ impl NavigatorShared {
     /// Remove the auto-created hero controller, if one exists.
     ///
     /// Returns the removed observer so the caller can run `did_detach` with no
-    /// `observers` lock held. Flutter's observer callbacks are user code; holding the
+    /// `observers` lock held. Observer callbacks are user code; holding the
     /// lock would reintroduce a deadlock class this design removed.
     fn take_auto_hero_observer(&self) -> Option<Arc<dyn NavigatorObserver>> {
         let mut auto = self.auto_hero_observer.lock();
@@ -473,9 +442,7 @@ impl NavigatorShared {
         Some(removed)
     }
 
-    /// Flutter's `initState` / `activate` loop (`navigator.dart:3834-3837`,
-    /// `:4118-4122`): hand every observer, in registration order, the capability
-    /// it observes.
+    /// Hand every observer, in registration order, the capability it observes.
     fn attach_observers(&self, handle: &NavigatorHandle) {
         if self.observers_attached.swap(true, Ordering::Relaxed) {
             return;
@@ -485,8 +452,7 @@ impl NavigatorShared {
         }
     }
 
-    /// Flutter's `deactivate` loop (`navigator.dart:4106-4110`), which nulls the
-    /// Expando entry so `observer.navigator` reads `null` again.
+    /// Tell every observer it no longer observes a navigator.
     fn detach_observers(&self) {
         if !self.observers_attached.swap(false, Ordering::Relaxed) {
             return;
@@ -496,7 +462,7 @@ impl NavigatorShared {
         }
     }
 
-    /// Flutter's `NavigatorState.didStartUserGesture` (`navigator.dart:5826-5841`).
+    /// Begin a user gesture (e.g. an edge swipe-back).
     ///
     /// Only the 0→1 transition resolves the current route and notifies
     /// observers — a nested/overlapping gesture on the same navigator just
@@ -510,9 +476,8 @@ impl NavigatorShared {
         if count_before != 0 {
             return;
         }
-        // Flutter's `ValueNotifier` setter fires before the observer loop
-        // (`navigator.dart:5806`, then `:5826-5841`) — no navigator lock is
-        // held at this call, so a listener that reads back through a
+        // The gesture notifier fires before the observer loop — no navigator lock
+        // is held at this call, so a listener that reads back through a
         // `NavigatorHandle` cannot deadlock on it.
         self.user_gesture_in_progress_notifier.notify_listeners();
         let Some((route, previous)) = self.history.lock().top_and_previous_for_gesture() else {
@@ -523,8 +488,7 @@ impl NavigatorShared {
         }
     }
 
-    /// Flutter's `NavigatorState.didStopUserGesture` (`navigator.dart:5847-5855`).
-    /// Only the 1→0 transition notifies observers.
+    /// End a user gesture. Only the 1→0 transition notifies observers.
     fn did_stop_user_gesture(&self) {
         // Saturating, not `fetch_sub`: `fetch_sub` on an unmatched call at 0
         // wraps to `u32::MAX` in release (the debug_assert below is compiled
@@ -546,8 +510,7 @@ impl NavigatorShared {
             return;
         }
         // Same ordering as `did_start_user_gesture`: the notifier fires
-        // before the observer loop (`navigator.dart:5806`, `:5848-5855`),
-        // with no navigator lock held. A `HeroFlight` parked on this notifier
+        // before the observer loop, with no navigator lock held. A `HeroFlight` parked on this notifier
         // fires here, *before* `HeroController::did_stop_user_gesture` below
         // sweeps whatever flights are still airborne — but that reply only
         // writes the flight's terminal-status flag and wakes its shuttle
@@ -564,8 +527,7 @@ impl NavigatorShared {
     }
 
     /// Whether at least one user gesture is currently in progress on this
-    /// navigator. Flutter's `NavigatorState.userGestureInProgress`
-    /// (`navigator.dart:5816`).
+    /// navigator.
     fn user_gesture_in_progress(&self) -> bool {
         self.user_gestures_in_progress.load(Ordering::Acquire) > 0
     }
@@ -669,8 +631,7 @@ fn report_undelivered(operation: &'static str, undelivered: Vec<UndeliveredResul
                     route = route.get(),
                     expected,
                     supplied,
-                    "pop result has the wrong type for this route; completed with None. \
-                     Flutter throws a cast error here"
+                    "pop result has the wrong type for this route; completed with None"
                 );
                 drop(value);
             }
@@ -841,8 +802,7 @@ fn resolve_command_target(
 /// in-progress count and its change notifier, bundled.
 ///
 /// What a data-plane animation status listener needs to defer a terminal
-/// status update until a gesture ends (`_HeroFlight._handleAnimationUpdate`,
-/// `heroes.dart:622-650`) without capturing the owner-affine
+/// status update until a gesture ends, without capturing the owner-affine
 /// [`NavigatorHandle`] itself — `ProxyAnimation::add_status_listener` requires
 /// `Send + Sync`, which `NavigatorHandle` deliberately is not (see its own
 /// doc). Cloning this is cheap: both fields are `Arc`-backed.
@@ -853,9 +813,8 @@ pub(crate) struct UserGestureSignal {
 }
 
 impl UserGestureSignal {
-    /// Whether a user gesture is in progress right now — Flutter's
-    /// `NavigatorState.userGestureInProgress` (`navigator.dart:5816`), read
-    /// from a Send+Sync context.
+    /// Whether a user gesture is in progress right now, read from a Send+Sync
+    /// context.
     pub(crate) fn in_progress(&self) -> bool {
         self.in_progress.load(Ordering::Acquire) > 0
     }
@@ -936,11 +895,10 @@ impl NavigatorHandle {
             .count()
     }
 
-    /// Register an observer. Flutter's `Navigator.observers`.
+    /// Register an observer.
     ///
-    /// If the navigator is already mounted the observer is attached at once —
-    /// Flutter's `didUpdateWidget` path (`navigator.dart:4058-4061`). Registered
-    /// before mount, it is attached by `init_state` instead. Either way it holds a
+    /// If the navigator is already mounted the observer is attached at once.
+    /// Registered before mount, it is attached by `init_state` instead. Either way it holds a
     /// handle exactly while the navigator is mounted.
     pub fn add_observer(&self, observer: Arc<dyn NavigatorObserver>) {
         let replaced_auto = if observer.observes_hero_flights() {
@@ -963,10 +921,7 @@ impl NavigatorHandle {
     /// Deregister one previous [`add_observer`](Self::add_observer)
     /// registration of `observer` (matched by `Arc` identity), notifying it
     /// with [`NavigatorObserver::did_detach`] if the navigator is currently
-    /// mounted — the deregistration half of the oracle's observer
-    /// reconciliation (`NavigatorState.didUpdateWidget` /
-    /// `NavigatorState.dispose` clear `NavigatorObserver._navigators`,
-    /// `navigator.dart:4034`, `:4056`, `:4108`, oracle tag `3.44.0`).
+    /// mounted — the deregistration half of observer reconciliation.
     ///
     /// Crate-internal: `WidgetsApp` uses it to keep a caller-retained handle
     /// free of stale shell registrations across unmount/remount and
@@ -993,13 +948,8 @@ impl NavigatorHandle {
         }
     }
 
-    /// Rebuild `route`'s content subtree on the next frame — the rebuild
-    /// half of the oracle's `Route.changedExternalState` sweep, which
-    /// `NavigatorState.didUpdateWidget` / `didChangeDependencies` run over
-    /// every live route so a route whose builder reads the navigator
-    /// widget's configuration re-reads it (`navigator.dart:3931-3937`,
-    /// `:4055-4059`, oracle tag `3.44.0`; `ModalRoute.changedExternalState`
-    /// marks the route's scope needs-build).
+    /// Rebuild `route`'s content subtree on the next frame, so a route whose
+    /// builder reads the navigator widget's configuration re-reads it.
     ///
     /// Crate-internal: `WidgetsApp` marks its seeded home route after
     /// writing an updated `home` into the shared cell that route's builder
@@ -1017,8 +967,7 @@ impl NavigatorHandle {
         }
     }
 
-    /// Whether the navigator is mounted. Flutter's `State.mounted`, consulted by
-    /// `maybePop` (`navigator.dart:5595`).
+    /// Whether the navigator is mounted; `maybe_pop` consults it.
     ///
     /// Derived from the overlay rather than a separate flag: the overlay is this
     /// navigator's only child, so it is mounted exactly when the navigator is.
@@ -1028,8 +977,7 @@ impl NavigatorHandle {
     }
 
     /// Report that a user gesture (e.g. an edge swipe-back) started
-    /// manipulating this navigator. Flutter's
-    /// `NavigatorState.didStartUserGesture` (`navigator.dart:5826-5841`).
+    /// manipulating this navigator.
     ///
     /// Pair with a matching [`did_stop_user_gesture`](Self::did_stop_user_gesture)
     /// once the gesture settles. Calls nest: only the first call (0→1) resolves
@@ -1041,21 +989,18 @@ impl NavigatorHandle {
 
     /// Report that the gesture reported by a matching
     /// [`did_start_user_gesture`](Self::did_start_user_gesture) has finished.
-    /// Flutter's `NavigatorState.didStopUserGesture` (`navigator.dart:5847-5855`).
     ///
     /// # Panics (debug only)
     ///
     /// Debug-asserts it is never called more often than
     /// [`did_start_user_gesture`](Self::did_start_user_gesture) — an unmatched
-    /// call is a caller bug (mirrors Flutter's `assert(_userGesturesInProgress
-    /// > 0)`).
+    /// call is a caller bug.
     pub fn did_stop_user_gesture(&self) {
         self.shared.did_stop_user_gesture();
     }
 
     /// Whether at least one user gesture is currently in progress on this
-    /// navigator. Flutter's `NavigatorState.userGestureInProgress`
-    /// (`navigator.dart:5816`).
+    /// navigator.
     #[must_use]
     pub fn user_gesture_in_progress(&self) -> bool {
         self.shared.user_gesture_in_progress()
@@ -1064,8 +1009,7 @@ impl NavigatorHandle {
     /// A Send+Sync-safe snapshot of this navigator's user-gesture state — the
     /// live count and its notifier, bundled — for a data-plane animation
     /// listener that cannot hold this owner-affine handle. `HeroFlight` uses
-    /// it to defer a terminal status update mid-gesture
-    /// (`_handleAnimationUpdate`, `heroes.dart:622-650`).
+    /// it to defer a terminal status update mid-gesture.
     pub(crate) fn user_gesture_signal(&self) -> UserGestureSignal {
         UserGestureSignal {
             in_progress: Arc::clone(&self.shared.user_gestures_in_progress),
@@ -1090,9 +1034,8 @@ impl NavigatorHandle {
         self.command_target
     }
 
-    /// Seed an initial route **without flushing** — Flutter's `restoreState`
-    /// (`navigator.dart:3900-3934`), which appends every route
-    /// `onGenerateInitialRoutes` produced and flushes exactly once, on mount.
+    /// Seed an initial route **without flushing**: the navigator flushes exactly
+    /// once, on mount, after every seeded route is appended.
     ///
     /// Seed before handing the handle to [`Navigator::new`]. A deep link's
     /// synthesized back-stack is several `seed_initial` calls.
@@ -1159,14 +1102,11 @@ impl NavigatorHandle {
         )
     }
 
-    /// Flutter's `NavigatorState.push` (`navigator.dart:5060-5063`). The future is
-    /// created before any lifecycle runs.
+    /// Push `route`. The future is created before any lifecycle runs.
     ///
     /// The route is bound and its overlay entry inserted **before** the flush.
     /// `install()` and a zero-duration route's first animation status change both
-    /// run inside `push_with_id`, and both reach for that entry — Flutter has the
-    /// same order, since `OverlayRoute.install` creates the entries and *then*
-    /// calls `super.install()` (`routes.dart:69-71`).
+    /// run inside `push_with_id`, and both reach for that entry.
     ///
     /// # Under a `Router`
     ///
@@ -1200,8 +1140,7 @@ impl NavigatorHandle {
         })
     }
 
-    /// Flutter's `NavigatorState.pushReplacement` (`navigator.dart:5245-5268`):
-    /// push `route` and complete the current top **as replaced** — observers see
+    /// Push `route` and complete the current top **as replaced** — observers see
     /// `did_replace`, never `did_remove`, and the replaced route's future resolves
     /// with `None`.
     pub fn push_replacement<R: NavigatorRoute>(&self, route: R) -> RouteResult<R::Output> {
@@ -1212,8 +1151,8 @@ impl NavigatorHandle {
     }
 
     /// [`push_replacement`](Self::push_replacement), delivering `result` to
-    /// whoever awaits the **replaced** route's [`RouteResult`] — Flutter's
-    /// `pushReplacement(newRoute, result: …)`. Same delivery-time type contract as
+    /// whoever awaits the **replaced** route's [`RouteResult`]. Same delivery-time
+    /// type contract as
     /// [`pop_with`](Self::pop_with).
     pub fn push_replacement_with<R: NavigatorRoute, T: Send + 'static>(
         &self,
@@ -1259,20 +1198,19 @@ impl NavigatorHandle {
         })
     }
 
-    /// Flutter's `NavigatorState.pushAndRemoveUntil` (`navigator.dart:5347-5371`):
-    /// push `route`, then walk downward from the old top completing every present
+    /// Push `route`, then walk downward from the old top completing every present
     /// route until `keep` answers `true` — the addition and all removals share one
-    /// flush. Removed routes complete their futures with `None` (`:5360`) and
+    /// flush. Removed routes complete their futures with `None` and
     /// observers see `did_remove` for each.
     ///
     /// `keep` receives each route's [`RouteId`]; `|_| false` clears everything
-    /// beneath the new route. Flutter's `RoutePredicate` is handed the `Route`
-    /// object itself — FLUI routes name each other by id (ADR-0019).
+    /// beneath the new route. FLUI routes name each other by id, so the
+    /// predicate is handed an id rather than the route object (ADR-0019).
     ///
     /// `keep` runs with the history lock **released**: a
     /// predicate that queries the handle back (`|id| handle.route_ids().first()
-    /// == Some(&id)`, the Rust shape of Flutter's `route.isFirst` /
-    /// `ModalRoute.withName`) would otherwise re-enter `NavigatorShared`'s
+    /// == Some(&id)`, an "is first route" or "route with name" check) would
+    /// otherwise re-enter `NavigatorShared`'s
     /// non-reentrant `parking_lot::Mutex` and deadlock the owner thread
     /// against itself. The push and the removal-completion are two separate
     /// locked sections around that unlocked evaluation; `NavigatorHandle` is
@@ -1319,7 +1257,7 @@ impl NavigatorHandle {
     /// its overlay entry, then `commit` against the locked history and apply the
     /// flush outcome. The route is bound and its entry inserted **before** the
     /// flush — `install()` and a zero-duration route's first status change both
-    /// reach for the entry (`routes.dart:69-71`).
+    /// reach for the entry.
     fn push_prepared<R: NavigatorRoute, O>(
         &self,
         operation: &'static str,
@@ -1366,8 +1304,7 @@ impl NavigatorHandle {
         })
     }
 
-    /// Pop the top route with no result — Flutter's `Navigator.pop()`
-    /// (`navigator.dart:5642-5675`).
+    /// Pop the top route with no result.
     ///
     /// The popped route's future resolves with its `current_result()` fallback, or
     /// `None`. Returns whether a present route was found. A route that refuses
@@ -1383,12 +1320,12 @@ impl NavigatorHandle {
     }
 
     /// Pop the top route, delivering `result` to whoever awaits its
-    /// [`RouteResult`] — Flutter's `Navigator.pop(result)`.
+    /// [`RouteResult`].
     ///
     /// `T` is checked at **delivery**, not at the call site: the navigator holds a
     /// heterogeneous stack and cannot know the top route's `Output`. Passing the
     /// wrong type logs an error and completes the future with `None` rather than
-    /// panicking; Flutter throws a cast error here.
+    /// panicking.
     pub fn pop_with<T: Send + 'static>(&self, result: T) -> bool {
         self.pop_erased(Some(AnyResult::new(result)))
     }
@@ -1396,14 +1333,10 @@ impl NavigatorHandle {
     /// Pop `route`, but drive its exit transition with `duration`/`curve`
     /// instead of its own default reverse pacing — for a gesture-driven pop
     /// whose pacing comes from the drag itself (fling velocity, or the flat
-    /// "stay" pacing), not the route's static configuration. Flutter's
-    /// `_CupertinoBackGestureController.dragEnd` calling
-    /// `route.navigator!.pop()` while overriding `_controller.animateBack`'s
-    /// duration/curve (`cupertino/route.dart`, 3.44.0).
+    /// "stay" pacing), not the route's static configuration.
     ///
     /// Returns `false` and pops nothing if `route` is no longer the current
-    /// top route — Flutter's `!route.isCurrent` branch: a route swept away by
-    /// something else between the gesture's last frame and this call must not
+    /// top route: a route swept away by something else between the gesture's last frame and this call must not
     /// have a stale drag finish it. Only a [`TransitionRoute`](super::transition_route::TransitionRoute)
     /// (directly, or via `ModalRoute`/`PageRoute`) consumes the pacing; a plain
     /// route's `did_pop` never asks for it.
@@ -1440,12 +1373,11 @@ impl NavigatorHandle {
         popped
     }
 
-    /// Remove `id` without popping it — Flutter's `Navigator.removeRoute`
-    /// (`:5733-5751`).
+    /// Remove `id` without popping it.
     ///
     /// **The removed route still completes its future**, with its
-    /// `current_result()` fallback or `None`. A port that completed only on `pop`
-    /// would hang every awaiter.
+    /// `current_result()` fallback or `None`. Completing only on `pop` would hang
+    /// every awaiter.
     pub fn remove_route(&self, id: RouteId) -> bool {
         self.remove_route_erased(id, None)
     }
@@ -1456,8 +1388,7 @@ impl NavigatorHandle {
         self.remove_route_erased(id, Some(AnyResult::new(result)))
     }
 
-    /// Pop routes one at a time until `keep` accepts the route now on top —
-    /// Flutter's `NavigatorState.popUntil` (`navigator.dart:5651-5660`).
+    /// Pop routes one at a time until `keep` accepts the route now on top.
     ///
     /// The route `keep` accepts is **not** popped. Unlike
     /// [`push_and_remove_until`](Self::push_and_remove_until), which removes
@@ -1466,7 +1397,7 @@ impl NavigatorHandle {
     /// (`did_pop`/`did_complete`/`did_pop_next`/`dispose`) and gets its own
     /// flush before the next candidate is read, exactly as repeated calls to
     /// `pop()` would. A predicate that never accepts empties the stack with
-    /// no error — Flutter's `'Able to pop all routes'` regression.
+    /// no error (the "able to pop all routes" case).
     ///
     /// The loop also stops at a pop that is refused: under a
     /// [`Router`](crate::Router) it stops at the Router's last page, which
@@ -1489,23 +1420,21 @@ impl NavigatorHandle {
         }
     }
 
-    /// Flutter's `NavigatorState.canPop` (`:5551-5566`).
+    /// Whether a pop would remove a route (or be handled internally by one).
     #[must_use]
     pub fn can_pop(&self) -> bool {
         self.shared.history.lock().can_pop()
     }
 
-    /// Flutter's `NavigatorState.maybePop` (`:5582-5615`), minus the deprecated
-    /// `willPop` await — which is the only reason Flutter's is `async`. The
-    /// remaining logic is a synchronous `switch` on `popDisposition`, and porting
-    /// it as `async fn` would buy nothing and violate the no-async-in-hot-paths
-    /// rule.
+    /// Consult the top route's pop disposition and act on it. This is a
+    /// synchronous `match` on the disposition; there is no async pop-approval
+    /// step, which would buy nothing and violate the no-async-in-hot-paths rule.
     ///
     /// Returns whether the pop request was **handled**. `false` means "bubble":
     /// nobody here dealt with it, so an ancestor navigator or the system should.
     fn maybe_pop_erased(&self, result: Option<AnyResult>) -> bool {
         if !self.is_mounted() {
-            // "Forget about this pop, we were disposed in the meantime." (`:5595`)
+            // Forget about this pop, we were disposed in the meantime.
             // The caller's result has nowhere to go. Reported and dropped here —
             // no guard is held yet, but the reporting is owed either way.
             report_undelivered(
@@ -1518,16 +1447,15 @@ impl NavigatorHandle {
         // Disposition and the acted-on pop share **one** critical section:
         // deciding "Pop — an entry/route is there" and popping must not be
         // separated by a racing `entry_handle.remove()` or `remove_route`
-        // retargeting the answer (ADR-0025). Flutter is immune only by
-        // being single-threaded.
+        // retargeting the answer (ADR-0025).
         // Three of the four arms below consume nothing, and all three run **under
         // the history guard**, so the result cannot be dropped inline: its `Drop`
         // is user code. They record into the history's own undelivered channel,
         // which `mutate` drains once the guard releases — the same path every
         // other undeliverable result takes.
         //
-        // `Bubble` is not an edge case: `popDisposition` is `isFirst ? bubble :
-        // pop`, so a lone route bubbles *by design*, and `maybe_pop_with` on a
+        // `Bubble` is not an edge case: the disposition is bubble for the first
+        // route and pop otherwise, so a lone route bubbles *by design*, and `maybe_pop_with` on a
         // one-route navigator took this arm every time.
         self.shared.mutate("maybe_pop", |history| {
             let Some(disposition) = history.pop_disposition_of_top() else {
@@ -1558,11 +1486,12 @@ impl NavigatorHandle {
         })
     }
 
-    /// Consult the top route's `popDisposition` and act on it, with no result.
+    /// Consult the top route's pop disposition and act on it, with no result.
     ///
     /// Returns whether the pop request was **handled**. `false` means "bubble":
     /// nothing here dealt with it, so an ancestor navigator or the system should —
-    /// which is what a lone route does (`popDisposition` is `isFirst ? bubble : pop`).
+    /// which is what a lone route does (the disposition is bubble for the first
+    /// route, pop otherwise).
     pub fn maybe_pop(&self) -> bool {
         self.maybe_pop_erased(None)
     }
@@ -1584,9 +1513,8 @@ impl NavigatorHandle {
         self.shared.history.lock().ids()
     }
 
-    /// Whether `route` is present in this navigator's stack — Flutter's
-    /// `Route.isActive`. Used by a gesture's `!isCurrent` fallback
-    /// (`back_gesture.rs`): a route that has been swept off the stack
+    /// Whether `route` is present in this navigator's stack. Used by a gesture's
+    /// "no longer current" fallback (`back_gesture.rs`): a route that has been swept off the stack
     /// entirely (not just covered) animates forward rather than trying to
     /// pop again.
     pub(crate) fn route_is_active(&self, route: RouteId) -> bool {
@@ -1640,8 +1568,6 @@ impl NavigatorHandle {
 
     /// The nearest enclosing navigator, or `None`.
     ///
-    /// Flutter's `Navigator.maybeOf(context)` (`navigator.dart:2992-3001`).
-    ///
     /// Clones an owned handle out under the tree borrow and returns it; it takes
     /// no second lock and consults no `GlobalKey` registry. See the module docs.
     #[must_use]
@@ -1649,14 +1575,11 @@ impl NavigatorHandle {
         ctx.find_state::<NavigatorState, _>(NavigatorState::handle)
     }
 
-    /// The **root-most** navigator — Flutter's `Navigator.of(context,
-    /// rootNavigator: true)` → `findRootAncestorStateOfType<NavigatorState>()`
-    /// (`navigator.dart:2947-2968`), which is how you push above every nested
+    /// The **root-most** navigator, which is how you push above every nested
     /// navigator.
     ///
-    /// Flutter falls back to the local navigator when the root walk finds none;
-    /// here the root walk cannot find fewer navigators than the nearest walk, so
-    /// the fallback is unreachable and omitted.
+    /// The root walk cannot find fewer navigators than the nearest walk, so no
+    /// fall back to the local navigator is needed.
     #[must_use]
     pub fn maybe_of_root(ctx: &dyn BuildContext) -> Option<Self> {
         ctx.find_root_state::<NavigatorState, _>(NavigatorState::handle)
@@ -1668,19 +1591,15 @@ impl NavigatorHandle {
 ///
 /// # Registration
 ///
-/// Flutter spreads these over two widgets — `WidgetsApp` owns the
-/// `routes: Map<String, WidgetBuilder>` table and folds it, `home`, and the
-/// user's `onGenerateRoute` into the single `Navigator.onGenerateRoute` hook
-/// (`app.dart`, `WidgetsApp._onGenerateRoute`). FLUI's `Navigator` widget is a
-/// thin shell over this handle and every push already goes through it, so all
-/// three register here and `_routeNamed`'s resolution order becomes one
+/// FLUI's `Navigator` widget is a thin shell over this handle and every push
+/// already goes through it, so the name table, the catch-all generator and the
+/// unknown-route fallback all register here, and resolution order is one
 /// function: [`route`](Self::route) table entry →
 /// [`on_generate_route`](Self::on_generate_route) →
 /// [`on_unknown_route`](Self::on_unknown_route). They are mutators, not
-/// constructor state, because Flutter lets a rebuilt `Navigator` swap its
-/// callbacks.
+/// constructor state, because a rebuilt `Navigator` may swap its callbacks.
 ///
-/// When a `WidgetsApp`-level route table lands (a later slice), the contract is
+/// When an app-level route table lands (a later slice), the contract is
 /// that **the app builder replaces the table wholesale at mount and these
 /// mutators serve imperative or late registration** — recorded in
 /// `ARCHITECTURE.md`'s `## Mapping decisions` so two registration sites never
@@ -1688,9 +1607,9 @@ impl NavigatorHandle {
 ///
 /// # The entry points
 ///
-/// Six untyped, mirroring Flutter's `pushNamed`, `pushReplacementNamed`,
-/// `popAndPushNamed` and `pushNamedAndRemoveUntil` plus the `result:` variants
-/// of the middle two, and one typed
+/// Six untyped — `push_named`, `push_replacement_named`, `pop_and_push_named`
+/// and `push_named_and_remove_until` plus the `_with` result variants of the
+/// middle two — and one typed
 /// [`push_named_typed`](Self::push_named_typed). Each takes an
 /// `impl Into<RouteSettings>`, so a bare name needs no `RouteSettings` at the
 /// call site and an argument-carrying request builds one:
@@ -1730,8 +1649,8 @@ impl NavigatorHandle {
 /// [`maybe_pop_with`](Self::maybe_pop_with)) and keeps that meaning here.
 /// Arguments ride in the request, never in a `_with`.
 impl NavigatorHandle {
-    /// Bind `name` to a route, replacing any previous binding — one entry of
-    /// Flutter's `WidgetsApp.routes` map.
+    /// Bind `name` to a route, replacing any previous binding — one entry of the
+    /// name → route table.
     ///
     /// Typed sugar over [`on_generate_route`](Self::on_generate_route): one
     /// name maps to one route type, so the factory returns a concrete
@@ -1827,8 +1746,7 @@ impl NavigatorHandle {
         self.route(key.name(), factory);
     }
 
-    /// Install the catch-all route generator — Flutter's
-    /// `Navigator.onGenerateRoute`.
+    /// Install the catch-all route generator.
     ///
     /// Consulted for every name the [`route`](Self::route) table did not
     /// answer. It cannot be generic over one route type the way `route` is —
@@ -1843,8 +1761,7 @@ impl NavigatorHandle {
     /// elsewhere** — see [`RouteRequest`]. A route's *content* needs no captured
     /// handle either: a
     /// [`RouteContentBuilder`](super::overlay_route::RouteContentBuilder) gets a
-    /// `&dyn BuildContext` and [`maybe_of`](Self::maybe_of) resolves from it,
-    /// exactly as Flutter's `Navigator.of(context)` does.
+    /// `&dyn BuildContext` and [`maybe_of`](Self::maybe_of) resolves from it.
     ///
     /// Capturing one anyway is possible — closures capture freely — and costs two
     /// things. It closes an `Arc` cycle (the navigator owns the registry, the
@@ -1878,8 +1795,7 @@ impl NavigatorHandle {
             .register_generator(Rc::new(factory));
     }
 
-    /// Install the last-resort fallback — Flutter's `Navigator.onUnknownRoute`,
-    /// consulted only when neither the table nor the generator produced a
+    /// Install the last-resort fallback, consulted only when neither the table nor the generator produced a
     /// route. It receives the same [`RouteSettings`] they were offered.
     ///
     /// Returning `None` here is the end of the line: the entry point answers
@@ -1988,14 +1904,12 @@ impl NavigatorHandle {
         Ok(generated)
     }
 
-    /// Resolve `request` and [`push`](Self::push) the route it names — Flutter's
-    /// `NavigatorState.pushNamed`.
+    /// Resolve `request` and [`push`](Self::push) the route it names.
     ///
     /// Returns the new route's [`RouteId`], which pairs with
     /// [`current`](Self::current) and feeds [`remove_route`](Self::remove_route).
     /// The route's own pop result is **dropped**: a caller navigating to a screen
-    /// has no reason to know what type that screen completes with, and Flutter's
-    /// `pushNamed<void>` behaves the same way. Reach for
+    /// has no reason to know what type that screen completes with. Reach for
     /// [`push_named_typed`](Self::push_named_typed) when you want the result.
     ///
     /// Everything below the name layer is the unnamed path: this calls
@@ -2039,8 +1953,7 @@ impl NavigatorHandle {
     /// it fails **before** anything is pushed: the generated route is concrete
     /// and carries its own `Output`, so `T` is checked against a `TypeId` the
     /// carrier captured at construction and a mismatch leaves the stack
-    /// untouched. Flutter re-types through an unchecked `as Route<T?>?` and
-    /// never detects the mismatch.
+    /// untouched, rather than re-typing through an unchecked cast.
     ///
     /// # Errors
     ///
@@ -2147,18 +2060,14 @@ impl NavigatorHandle {
         self.push_named_typed::<T>(request.into().into_settings())
     }
 
-    /// Resolve `request` and [`push_replacement`](Self::push_replacement) —
-    /// Flutter's `NavigatorState.pushReplacementNamed`. The replaced route's
-    /// [`RouteResult`] resolves with `None`.
+    /// Resolve `request` and [`push_replacement`](Self::push_replacement). The
+    /// replaced route's [`RouteResult`] resolves with `None`.
     ///
-    /// **Better than the reference, and the accounting for it.** Flutter's
-    /// `pushReplacementNamed` is
-    /// `pushReplacement<T?, TO>(_routeNamed<T>(..)!, result: result)`: the
-    /// generator runs in argument position, before `pushReplacement`, and a Dart
-    /// factory reaching `Navigator.of(context)` can move the top in between
-    /// exactly as ours can. Flutter then replaces whatever is on top *now*,
-    /// which is the factory's route rather than the caller's. FLUI captures the
-    /// route to replace **before** resolving, so it replaces the one the caller
+    /// **The route to replace is captured before resolving.** A factory that
+    /// reaches the navigator can move the top between resolution and the
+    /// replacement; replacing whatever is on top *now* would then replace the
+    /// factory's route rather than the caller's. FLUI captures the route to
+    /// replace **before** resolving, so it replaces the one the caller
     /// meant.
     ///
     /// # Errors
@@ -2187,8 +2096,7 @@ impl NavigatorHandle {
     }
 
     /// [`push_replacement_named`](Self::push_replacement_named), delivering
-    /// `result` to whoever awaits the **replaced** route — Flutter's
-    /// `pushReplacementNamed(routeName, result: …)`.
+    /// `result` to whoever awaits the **replaced** route.
     ///
     /// `result` carries the same delivery-time type contract as
     /// [`pop_with`](Self::pop_with): the navigator cannot know the replaced
@@ -2236,16 +2144,15 @@ impl NavigatorHandle {
         }
     }
 
-    /// [`pop`](Self::pop) the current route and push the one `request` names —
-    /// Flutter's `NavigatorState.popAndPushNamed`. Unlike
-    /// [`push_replacement_named`](Self::push_replacement_named) the departing
-    /// route runs its full exit transition.
+    /// [`pop`](Self::pop) the current route and push the one `request` names.
+    /// Unlike [`push_replacement_named`](Self::push_replacement_named) the
+    /// departing route runs its full exit transition.
     ///
-    /// **Documented divergence: this resolves before it pops.** Flutter's
-    /// `popAndPushNamed` is `pop<TO>(result); return pushNamed<T>(..)` — it pops
-    /// first, so a name its generator declines leaves the stack already mutated
-    /// and throws from the middle. Ordering the two the other way makes the
-    /// failure total: this operation pops nothing and pushes nothing. (A factory
+    /// **This resolves before it pops.** Popping first would leave the stack
+    /// already mutated when the generator declines a name, failing from the
+    /// middle. Ordering the two the
+    /// other way makes the failure total: this operation pops nothing and pushes
+    /// nothing. (A factory
     /// that navigated before declining keeps its own changes — see
     /// [`push_named`](Self::push_named).)
     ///
@@ -2255,10 +2162,10 @@ impl NavigatorHandle {
     /// rather than supported, since `RouteRequest::navigator()` was withdrawn
     /// (ADR-0024) but a capture still reaches one. So when a factory
     /// navigates, its `didPush` is observed
-    /// **before** this operation's own dismissal — an ordering Flutter cannot
-    /// produce here, because it has already popped. The departing route is then
-    /// buried, and is removed by id rather than popped (`didRemove`, not
-    /// `didPop`).
+    /// **before** this operation's own dismissal — an ordering that pop-first
+    /// cannot produce, because it has already popped. The departing route is then
+    /// buried, and is removed by id rather than popped (`did_remove`, not
+    /// `did_pop`).
     ///
     /// When no factory navigates — every ordinary call — the pop and the push
     /// are the same two calls in the same order and the stream is identical.
@@ -2288,10 +2195,9 @@ impl NavigatorHandle {
     }
 
     /// [`pop_and_push_named`](Self::pop_and_push_named), delivering `result` to
-    /// whoever awaits the **popped** route — Flutter's
-    /// `popAndPushNamed(routeName, result: …)`. Same delivery-time contract for
+    /// whoever awaits the **popped** route. Same delivery-time contract for
     /// `result` as [`pop_with`](Self::pop_with), and the same resolve-before-pop
-    /// divergence.
+    /// order.
     ///
     /// # Errors
     ///
@@ -2330,8 +2236,7 @@ impl NavigatorHandle {
     }
 
     /// Resolve `request` and
-    /// [`push_and_remove_until`](Self::push_and_remove_until) — Flutter's
-    /// `NavigatorState.pushNamedAndRemoveUntil`.
+    /// [`push_and_remove_until`](Self::push_and_remove_until).
     ///
     /// `keep` receives each candidate's [`RouteId`] and runs with the history
     /// lock released, exactly as
@@ -2366,8 +2271,8 @@ impl NavigatorHandle {
 /// The introspection seams: everything `HeroController` reads that is
 /// not already on the public surface.
 ///
-/// Each method is one thing Flutter reads straight off a `Route` object or off
-/// `NavigatorState` — neither of which FLUI can reach, because routes live behind
+/// Each method is one thing that would otherwise be read straight off a `Route`
+/// object — which FLUI cannot reach, because routes live behind
 /// `Box<dyn ErasedRoute>` inside the history's mutex. Nothing here
 /// hands out a borrow into the trees, and nothing takes a second lock under a
 /// first.
@@ -2377,11 +2282,9 @@ impl NavigatorHandle {
 /// about *this* navigator's stack. Cross-navigator flights still work: a hero inside
 /// a nested `Navigator`'s current `PageRoute` is reachable through a
 /// `NestedHeroSource`, which this navigator publishes on the nearest enclosing route
-/// from every `build` (`heroes.dart:317-333`'s nested-`Navigator` branch), not
-/// through anything read here.
+/// from every `build`, not through anything read here.
 impl NavigatorHandle {
-    /// Whether `id` names a [`TransitionGroup::Page`] route — Flutter's
-    /// `route is PageRoute` (`heroes.dart:331`, `:941-948`). Shared by
+    /// Whether `id` names a [`TransitionGroup::Page`] route. Shared by
     /// `HeroController::maybe_start`'s own eligibility test and by a nested
     /// `Navigator`'s [`NestedHeroSource`] hook, which asks the identical question
     /// about its own current top route.
@@ -2390,9 +2293,8 @@ impl NavigatorHandle {
             .is_some_and(|peer| peer.group == TransitionGroup::Page)
     }
 
-    /// This navigator's overlay — Flutter's `NavigatorState.overlay`, read by
-    /// `HeroController._startHeroTransition` (`heroes.dart:990`) to insert the
-    /// flight's `OverlayEntry`.
+    /// This navigator's overlay, read by `HeroController` to insert a flight's
+    /// `OverlayEntry`.
     ///
     /// `pub(crate)`: `Overlay` and `OverlayEntry` stay
     /// unexported, so this widens no public surface.
@@ -2403,16 +2305,12 @@ impl NavigatorHandle {
     /// What `id` publishes about its transition — its primary animation, and the
     /// family it transitions with.
     ///
-    /// Flutter reads `route.animation` and tests `route is PageRoute`
-    /// (`heroes.dart:331`, `:941-948`). `None` for a route that is not a
-    /// `TransitionRoute`, matching `nextRoute is TransitionRoute`
-    /// (`routes.dart:429`).
+    /// `None` for a route that is not a `TransitionRoute`.
     pub(crate) fn route_peer(&self, id: RouteId) -> Option<TransitionPeer> {
         self.shared.registries.peers.lock().get(&id).cloned()
     }
 
-    /// Where `id`'s page subtree lives — Flutter's `route.subtreeContext`
-    /// (`routes.dart:1966`).
+    /// Where `id`'s page subtree lives.
     ///
     /// `None` unless the route is a `ModalRoute` whose page is **mounted and
     /// attached**. Resolving to `Some` says nothing about layout: ask
@@ -2424,8 +2322,7 @@ impl NavigatorHandle {
         self.shared.registries.subtrees.lock().get(&id)?.resolve()
     }
 
-    /// Flutter's `Route.isCurrent` (`routes.dart:196-201`), read by
-    /// `Hero._allHeroesFor`'s route guard (`heroes.dart:331`).
+    /// Whether `id` is the current (topmost present) route.
     ///
     /// Test-facing: `did_change_top` no longer asserts on it (the over-strict
     /// `is_current` check was removed because FLUI's re-entrant notification model
@@ -2434,8 +2331,7 @@ impl NavigatorHandle {
         self.current() == Some(id)
     }
 
-    /// `id`'s `offstage` control and animation proxies — Flutter reads them off the
-    /// `Route` object (`routes.dart:1951`, `:1969`, `:1973`).
+    /// `id`'s `offstage` control and animation proxies.
     ///
     /// `None` for a route that is not a `ModalRoute`, or one already disposed.
     pub(crate) fn route_modal(&self, id: RouteId) -> Option<ModalHandle> {
@@ -2443,25 +2339,19 @@ impl NavigatorHandle {
     }
 
     /// Whether `route` may start an edge-swipe-back gesture right now.
-    /// Flutter's `PageRoute.popGestureEnabled` (`pages.dart:63-66`) composed
-    /// with `super.popGestureEnabled` = `ModalRoute.popGestureEnabled`
-    /// (`routes.dart:1908-1930`): not the first (present) route, does not
-    /// handle its own pop, the pop disposition allows it (no `PopScope` veto,
-    /// no `WillPopScope` — FLUI has none, so that half is vacuously clear),
-    /// and the primary animation has finished (`animation!.isCompleted`).
-    /// `fullscreenDialog` is not ported (see `PageRoute::back_gesture`'s
-    /// doc), so that half of `PageRoute`'s own override is skipped.
+    /// Requires: not the first (present) route, does not handle its own pop, the
+    /// pop disposition allows it (no `PopScope` veto), and the primary animation
+    /// has finished. There is no fullscreen-dialog route flag (see
+    /// `PageRoute::back_gesture`'s doc), so that condition is not checked.
     ///
-    /// **FLUI addition, not in the oracle text:** also `false` while a user
-    /// gesture is already in progress on this navigator — the per-pointer-down
-    /// predicate must not admit a second, overlapping gesture start.
+    /// Also `false` while a user gesture is already in progress on this
+    /// navigator — the per-pointer-down predicate must not admit a second,
+    /// overlapping gesture start.
     pub(crate) fn pop_gesture_enabled(&self, route: RouteId) -> bool {
         if self.user_gesture_in_progress() {
             return false;
         }
-        // `popDisposition == RoutePopDisposition.doNotPop` in the oracle
-        // reads *this* route's own `popDisposition` (`ModalRoute
-        // .popDisposition`, `routes.dart`), not the top of the stack —
+        // The veto is *this* route's own, not the top of the stack's —
         // `RouteHistory::vetoes_pop` is that per-route check. See its doc.
         let (is_first, will_handle_pop_internally, vetoes_pop) = {
             let history = self.shared.history.lock();
@@ -2478,8 +2368,7 @@ impl NavigatorHandle {
             .is_some_and(|modal| modal.primary_animation().status().is_completed())
     }
 
-    /// The binding's post-frame capability — `WidgetsBinding.instance
-    /// .addPostFrameCallback` (`heroes.dart:968`), as an owned handle.
+    /// The binding's post-frame capability, as an owned handle.
     ///
     /// `None` before mount and after unmount, so a stale `HeroController` schedules
     /// nothing. Acquired in `init_state`; never in `build`/layout/paint.
@@ -2488,8 +2377,7 @@ impl NavigatorHandle {
     }
 
     /// The render tree this navigator is mounted in, for resolving the `RenderId`s
-    /// [`route_subtree`](Self::route_subtree) hands out — Flutter reaches it through
-    /// `navigator.context.findRenderObject()` (`heroes.dart:999`).
+    /// [`route_subtree`](Self::route_subtree) hands out.
     ///
     /// `None` before mount and after unmount.
     pub(crate) fn render_tree(&self) -> Option<flui_rendering::pipeline::PipelineCell> {
@@ -2557,7 +2445,7 @@ impl StatefulView for Navigator {
     }
 }
 
-/// Persistent state for [`Navigator`]. Flutter's `NavigatorState`.
+/// Persistent state for [`Navigator`].
 ///
 /// Holds nothing of its own: the stack and the overlay live behind the shared
 /// `Arc`, because they must be reachable from an owned handle that outlives any
@@ -2587,12 +2475,10 @@ impl NavigatorState {
     }
 
     /// Keep this navigator's cross-flight visibility hook pointed at the nearest
-    /// enclosing route's `HeroScope` — the nested-`Navigator` branch of Flutter's
-    /// `Hero._allHeroesFor` (`heroes.dart:317-333`): a hero inside this navigator
-    /// is still invited into an *outer* flight when this navigator's own current
-    /// route is a `PageRoute`. Independent of `HeroControllerScope`: Flutter's
-    /// predicate does not consult it either, only `Route.isCurrent` and
-    /// `is PageRoute`.
+    /// enclosing route's `HeroScope`: a hero inside this navigator is still
+    /// invited into an *outer* flight when this navigator's own current route is
+    /// a `PageRoute`. Independent of `HeroControllerScope`: only the route being
+    /// current and a `PageRoute` matter.
     ///
     /// Called from `build`, **not** `init_state`. `init_state` runs exactly once
     /// and never again on a `GlobalKey` reparent (`ElementBase::activate` reuses
@@ -2678,9 +2564,8 @@ impl NavigatorState {
 }
 
 impl ViewState<Navigator> for NavigatorState {
-    /// Flush the seeded initial routes, exactly once — Flutter's `restoreState`
-    /// tail (`navigator.dart:3922-3934`), which asserts the history is non-empty
-    /// and then calls `_flushHistoryUpdates()`.
+    /// Flush the seeded initial routes, exactly once, after asserting the history
+    /// is non-empty.
     ///
     /// The overlay is not mounted yet (it is this view's child, built next), so
     /// the rearrange only fills the overlay's entry list; its first `build` reads
@@ -2691,8 +2576,7 @@ impl ViewState<Navigator> for NavigatorState {
     /// lifecycle-only — alongside the other three
     /// lifecycle-only captures below.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        // The navigator owns the clock its route transitions
-        // register with — the FLUI shape of Flutter's `vsync: navigator!`. Read
+        // The navigator owns the clock its route transitions register with. Read
         // once, here, exactly as `AnimatedSize`/`Scrollable` read theirs.
         let _prev = std::mem::replace(
             &mut *self.shared.vsync.lock(),
@@ -2731,8 +2615,7 @@ impl ViewState<Navigator> for NavigatorState {
         }
 
         // Before the seeded flush, so the first `did_push` an observer sees is
-        // already one it can act on — Flutter attaches at `:3834-3837` and only
-        // then calls `restoreState` → `_flushHistoryUpdates` (`:3922-3934`).
+        // already one it can act on.
         self.shared.attach_observers(&self.handle());
 
         debug_assert!(
@@ -2745,8 +2628,7 @@ impl ViewState<Navigator> for NavigatorState {
         });
     }
 
-    /// Flutter's `NavigatorState.build` returns an `Overlay` and nothing else that
-    /// matters here (`navigator.dart:5984-5990`); its `HeroControllerScope`,
+    /// Builds an `Overlay` and nothing else that matters here; a
     /// `NavigationNotification` listener, pointer-cancelling `Listener` and
     /// `FocusTraversalGroup` all belong to features deferred for now.
     ///
@@ -2764,28 +2646,25 @@ impl ViewState<Navigator> for NavigatorState {
         // `sync_nested_hero_registration`'s doc for why `init_state` cannot do this.
         self.sync_nested_hero_registration(ctx);
 
-        // `HeroControllerScope.none` (`navigator.dart:5955`): a nested navigator under
-        // this one must not pick up this navigator's controller. It resolves the
+        // `HeroControllerScope::none`: a nested navigator under this one must not pick up this navigator's controller. It resolves the
         // `.none` in its own `init_state` and attaches nothing.
         HeroControllerScope::none(Overlay::new(self.shared.overlay.clone()))
     }
 
-    /// Flutter's `NavigatorState.deactivate` (`navigator.dart:4105-4111`).
+    /// Detach the observers.
     fn deactivate(&mut self) {
         self.shared.detach_observers();
     }
 
-    /// Flutter's `NavigatorState.activate` (`navigator.dart:4114-4123`) — a
-    /// navigator moved by a `GlobalKey` is deactivated and reactivated in the same
-    /// frame, and its observers must survive the round trip.
+    /// A navigator moved by a `GlobalKey` is deactivated and reactivated in the
+    /// same frame, and its observers must survive the round trip.
     fn activate(&mut self) {
         self.shared.attach_observers(&self.handle());
     }
 
-    /// Flutter asserts `_effectiveObservers.isEmpty` here (`:4133`), because
-    /// `deactivate` always precedes `dispose`. FLUI's `ElementBase::unmount` calls
-    /// `dispose` directly, so this is the detach that actually runs on a plain
-    /// unmount; `detach_observers` is idempotent, so the deactivate-then-dispose
+    /// `deactivate` does not always precede `dispose`: FLUI's
+    /// `ElementBase::unmount` calls `dispose` directly, so this is the detach that
+    /// actually runs on a plain unmount; `detach_observers` is idempotent, so the deactivate-then-dispose
     /// path notifies exactly once.
     fn dispose(&mut self) {
         self.shared.detach_observers();

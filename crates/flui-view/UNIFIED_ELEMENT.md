@@ -97,18 +97,16 @@ pub type RenderElement<V> = Element<V, Variable, RenderBehavior<V>>;
 
 ### Render Adoption (child-adopts-itself)
 
-FLUI does not carry Flutter's element-side child-mutation seam
-(`RenderObjectElement.insertRenderObjectChild` and friends) — it was deleted
-as dead code with zero production callers. A render element adopts ITSELF at
+FLUI has no element-side child-mutation seam (an insert/move/remove
+render-child API on the element). A render element adopts ITSELF at
 mount: `RenderBehavior::on_mount` takes the `parent_render_id` propagated
 before mount (`ElementBase::child_render_id` pass-through) and calls
 `PipelineOwner::adopt_render_child`. Removal runs through `on_unmount`
 (`remove_render_object_from_tree`), reordering through the post-build batch
 pass (`ElementTree::reorder_render_children_after_build`), and reparent /
 GlobalKey moves through relocation tokens (`detach_render_subtrees` /
-`attach_render_subtrees`). The full divergence accounting lives in this
-crate's `ARCHITECTURE.md` (`## Mapping decisions` → "Flutter:
-parent-inserts-child → FLUI: child-adopts-itself").
+`attach_render_subtrees`). The full accounting lives in this
+crate's `ARCHITECTURE.md` (`## Mapping decisions`).
 
 ### Behavior Callbacks
 
@@ -211,6 +209,6 @@ The unified Element architecture is now **production-ready** with:
 - ✅ All old implementations removed (6 element types unified)
 - ✅ Type-safe arity system
 - ✅ Clean separation of concerns (Core + Behavior)
-- ✅ InheritedView now part of unified architecture (following Flutter pattern)
+- ✅ InheritedView now part of unified architecture
 - ✅ AnimatedView with automatic listener management (eliminates boilerplate)
 - ✅ Interior mutability for dirty flag (Arc<AtomicBool>) enables reactive patterns

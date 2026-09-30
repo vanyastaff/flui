@@ -1,39 +1,22 @@
 //! `RenderVisibility` — single-child proxy that keeps its child laid out
 //! while suppressing its paint.
 //!
-//! # Flutter equivalence
-//!
-//! Behavior-faithful port of the private `_RenderVisibility`
-//! (`packages/flutter/lib/src/widgets/indexed_stack.dart`), the render object
-//! behind `Visibility`'s `maintainSize` branch:
-//!
-//! ```dart
-//! @override
-//! void paint(PaintingContext context, Offset offset) {
-//!   if (!visible) {
-//!     return;
-//!   }
-//!   super.paint(context, offset);
-//! }
-//! ```
-//!
-//! Layout is pure pass-through, which is the entire point: a hidden child
-//! keeps occupying exactly the space it would occupy visible.
+//! The render object behind `Visibility`'s `maintain_size` branch. Paint is
+//! skipped while hidden; layout is pure pass-through, which is the entire
+//! point: a hidden child keeps occupying exactly the space it would occupy
+//! visible.
 //!
 //! # Why not `RenderOpacity`
 //!
-//! An opacity of zero would hide the child too, and Flutter's own
-//! `Visibility` was written that way once. The oracle moved to a dedicated
-//! render object for a specific reason, quoted at `_SliverVisibility`'s
-//! definition: a fully opaque opacity widget must leave its opacity layer in
-//! the layer tree, which forces every ancestor to composite as well and can
-//! shatter one simple scene into many layers. A paint gate has no layer and
-//! no compositing cost.
+//! An opacity of zero would hide the child too, but a fully opaque opacity
+//! object must leave its opacity layer in the layer tree, which forces every
+//! ancestor to composite as well and can shatter one simple scene into many
+//! layers. A paint gate has no layer and no compositing cost.
 //!
 //! # Not covered here
 //!
-//! The oracle also overrides `visitChildrenForSemantics` to gate the subtree
-//! on `maintainSemantics || visible`. FLUI's render traits expose no
+//! Gating the subtree's semantics on `maintain_semantics || visible` is not
+//! covered. FLUI's render traits expose no
 //! semantics-visiting hook, so that half is **not** implemented and
 //! `Visibility` deliberately carries no `maintain_semantics` knob to imply
 //! otherwise.
@@ -47,7 +30,7 @@ use flui_rendering::{RenderUpdateImpact, parent_data::BoxParentData, traits::Ren
 ///
 /// Hit-testing is left alone: whether a hidden child still receives pointer
 /// events is `Visibility::maintain_interactivity`'s business, composed one
-/// level up through `IgnorePointer`, exactly as the oracle composes it.
+/// level up through `IgnorePointer`.
 #[derive(Debug, Clone)]
 pub struct RenderVisibility {
     visible: bool,
@@ -74,8 +57,7 @@ impl RenderVisibility {
     /// Updates the visible flag, reporting whether a repaint is needed.
     ///
     /// Paint only — the child's geometry does not depend on this flag, which
-    /// is why `maintainSize` maintains the size at all. The oracle's setter
-    /// calls `markNeedsPaint()` for the same reason.
+    /// is why `maintain_size` maintains the size at all.
     pub fn set_visible(&mut self, visible: bool) -> RenderUpdateImpact {
         if self.visible == visible {
             return RenderUpdateImpact::NONE;
@@ -95,9 +77,7 @@ impl Default for RenderVisibility {
 impl flui_foundation::Diagnosticable for RenderVisibility {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
         // `add_flag` prints nothing when the flag is false, which would hide
-        // the one state worth seeing here. The oracle prints both sides —
-        // `FlagProperty('visible', ifFalse: 'hidden', ifTrue: 'visible')` — so
-        // this reports unconditionally.
+        // the one state worth seeing here, so this reports unconditionally.
         builder.add("visible", if self.visible { "visible" } else { "hidden" });
     }
 }
@@ -111,7 +91,6 @@ impl RenderBox for RenderVisibility {
     flui_rendering::forward_single_child_box_queries!();
 
     fn skip_paint(&self) -> bool {
-        // Oracle: `if (!visible) { return; }` before `super.paint`.
         !self.visible
     }
 

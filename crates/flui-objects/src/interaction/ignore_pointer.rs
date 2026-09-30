@@ -2,13 +2,7 @@
 //! its entire subtree invisible to pointer events. Pointers pass
 //! through to whatever is painted *behind* the stack.
 //!
-//! # Flutter equivalence
-//!
-//! Behavior-faithful port of Flutter's
-//! [`RenderIgnorePointer`](https://api.flutter.dev/flutter/rendering/RenderIgnorePointer-class.html)
-//! (`packages/flutter/lib/src/rendering/proxy_box.dart`).
-//!
-//! # Rust-native improvements
+//! # Design
 //!
 //! * `ignoring` is a typed `bool` boundary; setter returns
 //!   `bool` change-flag for pipeline `mark_needs_paint` /
@@ -61,7 +55,7 @@ impl RenderIgnorePointer {
 }
 
 impl Default for RenderIgnorePointer {
-    /// Defaults to `ignoring = true` (Flutter parity).
+    /// Defaults to `ignoring = true`.
     fn default() -> Self {
         Self::new(true)
     }

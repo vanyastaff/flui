@@ -1,39 +1,35 @@
 # flui-layer Architecture
 
-The per-crate record for `flui-layer`: the
-Flutter → Rust mapping, every divergence from `layer.dart` with the reason and the test that
-replaces the Flutter one, the thread-safety surface, and what is deliberately not here.
+The per-crate record for `flui-layer`: the module map, each design decision with its reason and
+the tests that pin it, the thread-safety surface, and what is deliberately not here.
 
-The behavioural reference is `.flutter/packages/flutter/lib/src/rendering/layer.dart` at the
-pinned tag (`git -C .flutter describe --tags` must print `3.44.0`). Citations below name symbols,
-not line numbers.
+Citations below name symbols, not line numbers.
 
 ---
 
-## Flutter source mapping
+## Module map
 
-| Flutter (`layer.dart`) | FLUI | Notes |
+| Layer | FLUI | Notes |
 |---|---|---|
-| `abstract class Layer` + `ContainerLayer` | [`src/layer/mod.rs`](src/layer/mod.rs) `enum Layer` | Closed enum, 19 variants; no `Box<dyn Layer>` (decision 1). |
+| `Layer` and its container behaviour | [`src/layer/mod.rs`](src/layer/mod.rs) `enum Layer` | Closed enum, 19 variants; no `Box<dyn Layer>` (decision 1). |
 | `PictureLayer` | [`src/layer/picture.rs`](src/layer/picture.rs) | `Arc<DisplayList>`; the leaf the paint walk emits. |
 | `TextureLayer`, `PlatformViewLayer`, `PerformanceOverlayLayer` | `texture.rs`, `platform_view.rs`, `performance_overlay.rs` | Present as vocabulary; see [Producers](#producers). |
-| `OffsetLayer` (base of `ImageFilterLayer`, `TransformLayer`, `OpacityLayer`) | `offset.rs`, and an `offset` field on `image_filter.rs`, `opacity.rs`, `leader.rs` | The inheritance is flattened; the one virtual it carried (`applyTransform`) is `Layer::local_translation` (decision 3). |
+| `OffsetLayer` (and the `offset` field on `ImageFilterLayer`, `TransformLayer`, `OpacityLayer`) | `offset.rs`, and an `offset` field on `image_filter.rs`, `opacity.rs`, `leader.rs` | Translation is a per-variant field; the shared query is `Layer::local_translation` (decision 3). |
 | `ClipRectLayer`, `ClipRRectLayer`, `ClipRSuperellipseLayer`, `ClipPathLayer` | `clip_rect.rs`, `clip_rrect.rs`, `clip_superellipse.rs`, `clip_path.rs` | `Clip::None` is accepted by all four and lowered as "no clip" by the engine. |
 | `ColorFilterLayer`, `ImageFilterLayer`, `ShaderMaskLayer`, `BackdropFilterLayer` | `color_filter.rs`, `image_filter.rs`, `shader_mask.rs`, `backdrop_filter.rs` | |
-| `LayerLink` (`link.dart`), `LeaderLayer`, `FollowerLayer`, `FollowerLayer._establishTransform` | [`src/link.rs`](src/link.rs) `LayerLink` + `resolve_follower_offset`; `leader.rs`; `follower.rs` | The leader index lives on the tree, not on the link (decision 2); the anchor math lives on the follower layer (decision 4). |
+| `LayerLink`, `LeaderLayer`, `FollowerLayer` | [`src/link.rs`](src/link.rs) `LayerLink` + `resolve_follower_offset`; `leader.rs`; `follower.rs` | The leader index lives on the tree, not on the link (decision 2); the anchor math lives on the follower layer (decision 4). |
 | `AnnotatedRegionLayer<T>` | `annotated_region.rs` | Writer half only; see [Producers](#producers). |
-| `ui.SceneBuilder` push/pop | [`src/compositor/builder.rs`](src/compositor/builder.rs) `SceneBuilder` | Hand-authored scenes only; the production frame is built through the tree (decision 5). |
-| `ui.Scene` | [`src/scene.rs`](src/scene.rs) `Scene` | A frozen `LayerTree` (decision 6). |
-| retained rendering: `_needsAddToScene`, `addRetained`, `EngineLayer`, `Layer.dispose` | none | The engine rebuilds every frame from the tree. Cross-frame reuse of painted output is `flui-rendering`'s (`FragmentComposer::capture`/`graft`, keyed on the boundary's `RenderId`); cross-frame damage is `LayerDiffer`'s comparison of boundary stamps (`RenderId` plus `ContentToken`, decision 8), not a retained engine layer. |
-| `Layer.addCompositionCallback` | none | Fires after `addToScene`, a step this architecture does not have. |
-| no analog | `Layer::Canvas(CanvasLayer)` | A live recorder inside the tree; see [Producers](#producers). |
+| `SceneBuilder` push/pop | [`src/compositor/builder.rs`](src/compositor/builder.rs) `SceneBuilder` | Hand-authored scenes only; the production frame is built through the tree (decision 5). |
+| `Scene` | [`src/scene.rs`](src/scene.rs) `Scene` | A frozen `LayerTree` (decision 6). |
+| Retained layers across frames | none | The engine rebuilds every frame from the tree. Cross-frame reuse of painted output is `flui-rendering`'s (`FragmentComposer::capture`/`graft`, keyed on the boundary's `RenderId`); cross-frame damage is `LayerDiffer`'s comparison of boundary stamps (`RenderId` plus `ContentToken`, decision 8), not a retained engine layer. |
+| Composition callbacks | none | They would fire after a scene-add step this architecture does not have. |
+| `Layer::Canvas(CanvasLayer)` | `Layer::Canvas(CanvasLayer)` | A live recorder inside the tree; see [Producers](#producers). |
 
 ---
 
 ## Mapping decisions
 
-Each decision names what is better than the reference and why, and the FLUI test that replaces
-the Flutter coverage it displaces.
+Each decision names the shape chosen and why, and the tests that pin it.
 
 ### 1. Closed `Layer` enum, not a `Layer` class hierarchy
 
@@ -49,8 +45,7 @@ and unboxed, so a sealed picture run costs no heap allocation beyond its `Arc`. 
 
 ### 2. Append-only `LayerTree` with a leader index, not a mutable tree plus a side registry
 
-Flutter's tree is a retained, mutable object graph (`append`, `remove`, `dispose`) because it is
-reused across frames. FLUI builds a fresh tree per frame, so the tree needs exactly one structural
+The tree is not retained across frames: a fresh one is built per frame, so it needs exactly one structural
 primitive: `LayerTree::push_child(parent, node)`, which mints the child's id in the call that links
 it. A fresh id has no descendants, so a cycle or a doubly-parented node cannot be expressed; there
 is no `remove`, no re-parenting, no node-level link setter, no `&mut` reach into a node, and no
@@ -61,14 +56,13 @@ alias (nothing is ever freed). A parent is always pushed before its child, so it
 allocation. `LayerId` stays a plain 1-based index; a generational id is only
 needed if a holder ever outlives the frame that minted it (none does today).
 
-Flutter keeps "which leader has this link" on `LayerLink.leader`. FLUI's link is a `Copy` token,
-so the tree holds `leaders: HashMap<LayerLink, LayerId>`, filled in `push_child` when the layer is
+`LayerLink` is a `Copy` token, so the tree holds `leaders: HashMap<LayerLink, LayerId>`, filled in `push_child` when the layer is
 a `Leader`. The earlier shape — a `LinkRegistry` beside the tree that the composer filled and the
 realm had to commit "as one pair" with the tree — duplicated the leader's offset and size off the
 `LeaderLayer` and kept a reverse follower index nothing read. Two leaders on one link in one frame
-is a widget-tree error (Flutter asserts); a debug build trips, a release build keeps the later one.
+is a widget-tree error; a debug build trips, a release build keeps the later one.
 
-Replacement coverage: `tree/layer_tree.rs` tests (`push_child_links_both_sides_in_paint_order`),
+Tests: `tree/layer_tree.rs` tests (`push_child_links_both_sides_in_paint_order`),
 `link.rs` (`linked_across_offset_branches_sums_both_chains`, which finds a leader pushed under a
 branch through the index), `flui-engine/src/layer_walk.rs` (`a_deep_chain_survives_a_small_stack`).
 That `push_child` under an unknown parent panics, and that a semantics-failure retry submits the
@@ -76,24 +70,20 @@ retained tree with its leader index intact: **Unasserted:** no test pins this.
 
 ### 3. One `Layer::local_translation`, read by the walk and the resolver
 
-Flutter's chain math (`_collectTransformForLayerChain`) calls one virtual, `applyTransform`, on
-every container. Flattening `OffsetLayer` into per-variant `offset` fields had lost that single
-dispatch point: the engine pushed translations for `Offset`, `Transform`, `Opacity`, `ImageFilter`
+The chain math needs one dispatch point for "this layer translates its children". Flattening `OffsetLayer` into per-variant `offset` fields had lost it: the engine pushed translations for `Offset`, `Transform`, `Opacity`, `ImageFilter`
 and `Leader`, while the resolver summed only `Offset` and `Transform` — so a follower nested under
 its own leader rendered double-translated. `Layer::local_translation` is now the one place the set
 of translating variants is written down; `resolve_follower_offset` sums it along both chains
-inclusive of the common ancestor (which cancels), exactly as `_establishTransform` does. Known limitations, named rather than silent: a `Transform` contributes only its
+inclusive of the common ancestor (which cancels). Known limitations, named rather than silent: a `Transform` contributes only its
 translation (the follower system is offset-only), and a follower on another follower's chain
 contributes zero.
 
-A follower nested under its own leader resolving to zero (Flutter's `_establishTransform` as
-oracle), and an `Opacity` offset on the follower's chain being counted: **Unasserted:** no test
-pins this.
+A follower nested under its own leader resolving to zero, and an `Opacity` offset on the
+follower's chain being counted: **Unasserted:** no test pins this.
 
 ### 4. Anchors and size on `FollowerLayer`, resolution at composite time
 
-Flutter keeps `leaderAnchor`/`followerAnchor` on `RenderFollowerLayer` and stores only
-`linkedOffset` on the layer. FLUI moves both anchors and the follower's own `size` onto the layer so
+Both anchors and the follower's own `size` live on the layer so
 `FollowerLayer::calculate_offset` (`Alignment::along_size` on both rectangles, plus
 `target_offset`) runs from the layer tree alone — the same value the GPU walk and the follower
 hit-test side table both read. Anchors outside `[-1, 1]` are legal off-rectangle pivots.
@@ -160,19 +150,17 @@ Why a token rather than `Arc::ptr_eq` on pictures: an outer boundary re-records 
 pictures whenever a nested boundary is dirty, so pointer identity reports it changed on frames
 whose content did not. Why an `Arc<()>` rather than a counter: a counter restarts with each
 `PipelineOwner`, and the differ, holding the previous frame's clones, makes an allocation
-address impossible to reuse while compared. Flutter's `DiffContext` (flutter/flutter 3.44.0,
-`engine/src/flutter/flow/diff_context.cc`) pairs retained layers by unique id and keys paint
-regions on it; FLUI pairs by the boundary `RenderId` and decides "unchanged" by the token, and
+address impossible to reuse while compared. The differ pairs by the boundary `RenderId` and decides "unchanged" by the token, and
 the granularity is one boundary's own region, not a layer. `damage_diff` bench: about 200 µs for
 1,000 boundaries, 4 ns with the mode off. Tests: `src/damage/tests.rs`,
 `scene_snapshot.rs`'s `union_table` and `bounds_round_outward_with_aa_margin`.
 
 ### Deleted, with the reason
 
-`LayerHandle<T>` (Flutter's `EngineLayer` lifecycle has no counterpart here); `LayerBounds` trait
+`LayerHandle<T>` (no engine-layer lifecycle exists here); `LayerBounds` trait
 (one impl per type, no generic consumer); annotation search (no reader after the writer lost its
-producer); composition callbacks (see the mapping table); the `needs_add_to_scene` dirty-bit
-protocol (feeds `addRetained`, which this architecture never calls); `LayerNode::offset` (a second
+producer); composition callbacks (see the module map); the `needs_add_to_scene` dirty-bit
+protocol (it fed retained-layer reuse, which this architecture does not have); `LayerNode::offset` (a second
 way to say "translate" that no production tree ever set); the 57 generated `is_*/as_*/as_*_mut`
 accessors bar the four with callers (`as_leader`, `as_follower`, `as_performance_overlay`); the
 `f32` sugar constructors (`OffsetLayer::from_xy`, `FollowerLayer::below/above/..`,
@@ -186,7 +174,7 @@ feature's `LayerSpec`/`LayerTester` DSL (a third builder with no consumer); `pre
 
 Five variants have no production producer today: `Canvas`, `Texture`, `PlatformView`,
 `ClipSuperellipse`, `AnnotatedRegion` (the composer emits the other fourteen; `flui-app` adds
-`PerformanceOverlay`). `Texture` and `PlatformView` carry real Flutter contracts (`freeze`,
+`PerformanceOverlay`). `Texture` and `PlatformView` carry real contracts (`freeze`,
 `hit_test_behavior`) awaiting the platform layer; `AnnotatedRegion`'s reader half was deleted
 with annotation search and a producer would bring it back as one change; `Canvas` is a recorder
 inside the output vocabulary that `PictureLayer` already covers. Whether each is "not wired yet" or

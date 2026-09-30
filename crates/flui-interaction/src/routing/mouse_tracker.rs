@@ -1,11 +1,9 @@
 //! Mouse tracking for hover, enter, and exit events.
 //!
 //! The tracker owns per-device enter/exit/cursor state, gated to
-//! `Mouse | Pen` (Flutter's own `MouseTracker.updateWithEvent` gate,
-//! `rendering/mouse_tracker.dart:302`). `MouseRegion::on_hover` is deliberately
-//! **not** part of that device state machine, and has no device-kind gate,
-//! mirroring `RenderMouseRegion.handleEvent` (`rendering/proxy_box.dart`)
-//! firing `onHover` for any `PointerHoverEvent` reaching a hit-test target.
+//! `Mouse | Pen`. `MouseRegion::on_hover` is deliberately
+//! **not** part of that device state machine, and has no device-kind gate:
+//! it fires for any hover-shaped move reaching a hit-test target.
 //! Executable region callbacks do not live in render objects or hit-test
 //! entries either way: hit testing contributes a data-only
 //! [`MouseRegionTarget`], resolved through the active owner-local
@@ -15,8 +13,8 @@
 //! form of that resolve-and-invoke step and remains public for exactly that.
 //! Production `GestureBinding` delivery does NOT call it: a `Listener` and a
 //! nested `MouseRegion` must fire in hit-test order relative to each other
-//! (Flutter's single per-entry `entry.target.handleEvent` loop,
-//! `gestures/binding.dart:496`), so the binding instead resolves and invokes
+//! (one per-entry loop over the leaf-first hit path), so the binding instead
+//! resolves and invokes
 //! pointer targets and mouse-hover regions together in one per-entry walk
 //! (`InteractionDispatchHandle::dispatch_hover_interleaved`,
 //! `routing/interaction_lane.rs`) — calling `dispatch_hover` as its own
@@ -57,7 +55,7 @@ pub use crate::events::DeviceId;
 /// Neither invokes `MouseRegion::on_hover` — see
 /// [`MouseTracker::dispatch_hover`] for that, which does not take a `kind`
 /// because it derives the hover/contact distinction from the event itself
-/// (an empty-buttons `Move`, Flutter's `PointerHoverEvent` shape).
+/// (an empty-buttons `Move`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointerMotionKind {
     /// Motion without an active Down sequence.
@@ -158,9 +156,9 @@ struct MouseTrackerInner {
     devices: HashMap<DeviceId, DeviceState>,
     /// Last resolved annotations by region.
     ///
-    /// Entries stay here until their exit callback has been collected. This is
-    /// the FLUI equivalent of Flutter replacing `_MouseState.annotations` only
-    /// after the previous map is available to `_handleDeviceUpdateMouseEvents`.
+    /// Entries stay here until their exit callback has been collected: the
+    /// previous map is replaced only after it has been diffed against the
+    /// fresh one.
     annotations: HashMap<RegionId, ResolvedMouseTrackerAnnotation>,
     /// Whether any mouse is connected.
     mouse_connected: bool,
@@ -240,11 +238,8 @@ impl MouseTracker {
     /// clears that hover state, and resets the cursor — the cursor has left
     /// the window, so nothing is hovered any more.
     ///
-    /// Flutter parity: `MouseTracker.updateWithEvent` reaches the same end
-    /// state through a `PointerRemovedEvent`/empty-hit-test update when the
-    /// platform reports the pointer leaving the view; FLUI's winit wire has
-    /// no synthetic remove event, so the window-leave signal calls this
-    /// directly. Without it, a widget hovered at the moment the cursor
+    /// The winit wire has no synthetic remove event, so the window-leave
+    /// signal calls this directly. Without it, a widget hovered at the moment the cursor
     /// crosses the window edge keeps its hover visuals forever and
     /// `MouseRegion::on_exit` never fires.
     ///
@@ -424,19 +419,15 @@ impl MouseTracker {
     /// Invokes `MouseRegion::on_hover` for every region under a hover-shaped
     /// pointer move, with no device-kind gate.
     ///
-    /// Flutter parity: `RenderMouseRegion.handleEvent`
-    /// (`rendering/proxy_box.dart`) fires `onHover` for any
-    /// `PointerHoverEvent` reaching a hit-test target, regardless of device
-    /// kind — unlike `MouseTracker.updateWithEvent`
-    /// (`rendering/mouse_tracker.dart`), which gates enter/exit to
+    /// `on_hover` fires for any hover-shaped move reaching a hit-test target,
+    /// regardless of device kind, whereas enter/exit are gated to
     /// mouse/stylus only. [`update_with_motion`](Self::update_with_motion)
     /// keeps that gate for enter/exit; this method carries the ungated hover
     /// half of the contract, called from the ordinary coalesced-move
     /// dispatch path rather than the enter/exit device-state machine.
     ///
     /// A non-`Move` event, or a `Move` with any button held (a contact drag,
-    /// not a hover), is a no-op — mirroring Flutter's `PointerHoverEvent` vs
-    /// `PointerMoveEvent` split at the event-class level.
+    /// not a hover), is a no-op.
     ///
     /// Per-target panics are isolated the same way the render tree isolates
     /// resolved pointer-route dispatch: the first is returned for the caller

@@ -635,8 +635,8 @@ impl FrameRun {
     /// Panics unless at least one painted command satisfies `pred`.
     ///
     /// The panic message includes the full snapshot so it is immediately clear
-    /// what was actually painted. Unlike Flutter's `paints..something()` this
-    /// assertion never passes silently when `pred` never matches.
+    /// what was actually painted. The assertion never passes silently when
+    /// `pred` never matches.
     pub fn assert_paints_any(&self, pred: impl Fn(&super::snapshot::DrawCommandSummary) -> bool) {
         super::snapshot::assert_any(self.layer_tree.as_ref(), pred);
     }

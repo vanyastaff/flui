@@ -531,8 +531,8 @@ impl UiRealm {
                             report.invoked += 1;
                         }
                         Err(error) => {
-                            // Flutter deliberately ignores actions for stale
-                            // views/nodes because screen readers may lag behind
+                            // Actions for stale views/nodes are deliberately
+                            // ignored because screen readers may lag behind
                             // the latest semantics update.
                             tracing::trace!(
                                 { flui_foundation::diagnostics::PRESENTATION_ID } =

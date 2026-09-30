@@ -40,8 +40,6 @@
 //! - **SmallVec**: Inline storage avoids heap allocation for typical cases
 //! - **Exact generations**: stale entry handles cannot resolve a reused pointer
 //! - **Owner affinity**: executable callbacks never acquire a cross-thread API
-//!
-//! Flutter reference: <https://api.flutter.dev/flutter/gestures/GestureArenaManager-class.html>
 
 // Submodules — these are part of the crate's public surface (they're
 // referenced from recognizer code) so they're `pub` rather than `pub(crate)`.
@@ -274,7 +272,7 @@ pub struct GestureArenaEntry {
 
 /// Registration of one recognizer whose timer must outlive arena resolution.
 ///
-/// Flutter's primary-pointer deadlines are scheduled independently from the
+/// Primary-pointer deadlines are scheduled independently from the
 /// gesture arena: a lone long press can win the arena's default resolution on
 /// Down and still fire after its hold timeout. FLUI drives those timers from
 /// the owner frame clock, so this token keeps only the polling registration
@@ -630,7 +628,7 @@ impl ArenaEntryData {
         let mut losers = PendingNotifications::new();
         let mut accepted = PendingNotifications::new();
 
-        // Flutter's explicit/eager resolution rejects every loser before
+        // Explicit/eager resolution rejects every loser before
         // accepting the winner. This ordering is observable when callbacks
         // re-enter or panic.
         for member in members {
@@ -675,7 +673,7 @@ impl ArenaEntryData {
         losers
     }
 
-    /// Flutter sweep ordering is intentionally different from an explicit
+    /// Sweep ordering is intentionally different from an explicit
     /// resolution: the front member is accepted first, then later members are
     /// rejected in registration order.
     #[must_use]
@@ -707,9 +705,8 @@ impl ArenaEntryData {
 
 /// Who owns the close/sweep lifecycle of an arena.
 ///
-/// This is the FLUI-native encoding of the Flutter contract that the
-/// *binding* — not a recognizer — drives `close(pointer)` on pointer-down and
-/// `sweep(pointer)` on pointer-up (`gestures/binding.dart` `handleEvent`).
+/// The contract is that the *binding* — not a recognizer — drives
+/// `close(pointer)` on pointer-down and `sweep(pointer)` on pointer-up.
 ///
 /// - [`SelfDriven`](Self::SelfDriven) — a low-level recognizer owns its private
 ///   arena lifecycle, so [`RecognizerBase::stop_tracking`] sweeps on up. This
@@ -736,8 +733,7 @@ pub enum SweepModel {
 
 /// Run the binding-owned close/sweep lifecycle for a single pointer event.
 ///
-/// Mirrors Flutter's `GestureBinding.handleEvent` (`gestures/binding.dart`):
-/// on `PointerDown` the arena is closed; on `PointerUp` it is swept. Every
+/// On `PointerDown` the arena is closed; on `PointerUp` it is swept. Every
 /// other event — including `PointerCancel` — is a no-op for the arena
 /// lifecycle (recognizers self-reject on cancel; sweeping on cancel would
 /// force the first member to win an interrupted gesture). Callers run
@@ -815,7 +811,7 @@ pub struct GestureArena {
     /// transaction. Exact entry tokens can still release these generations,
     /// while a reused pointer ID opens a fresh active slot.
     retained: Arc<DashMap<ArenaGeneration, Arc<ArenaSlot>>>,
-    /// Typed replacement for Flutter's single-member microtask closure queue.
+    /// Typed queue of deferred single-member resolutions.
     deferred: Arc<Mutex<VecDeque<DeferredResolution>>>,
     /// Owner-frame deadline polling, independent from arena-slot lifetime.
     deadlines: Arc<DeadlineRegistry>,
@@ -1269,8 +1265,7 @@ impl GestureArena {
     /// Unlike [`resolve`](Self::resolve) with no winner — which resolves the
     /// whole entry and rejects *every* member — this removes only `member`.
     /// When exactly one member remains in a closed arena, that member wins
-    /// (Flutter parity: `GestureArenaEntry.resolve(rejected)` withdraws the
-    /// caller without rejecting its competitors).
+    /// (the caller is withdrawn without rejecting its competitors).
     pub fn reject_member(&self, pointer: PointerId, member: &Arc<dyn GestureArenaMember>) {
         let Some(slot) = self.current_slot(pointer) else {
             return;
@@ -1499,7 +1494,7 @@ impl GestureArena {
     /// user callbacks and re-enter the arena to resolve — invoking it under the
     /// entry lock would re-introduce the arena re-entrancy deadlock.
     /// Explicit deadline registrations remain visible after arena resolution,
-    /// matching Flutter timers whose lifetime is independent from the arena.
+    /// since the timers' lifetime is independent from the arena.
     /// Exact recognizer identities are de-duplicated, so a registered member
     /// that is also still competing is polled only once.
     ///
@@ -1847,7 +1842,7 @@ mod tests {
 
         assert!(
             !member.was_accepted(),
-            "Flutter resolves the final member from a deferred microtask boundary"
+            "close alone must not resolve the final member; resolution is deferred"
         );
         assert!(arena.contains(pointer));
     }

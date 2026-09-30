@@ -1,7 +1,7 @@
 //! Alignment types for layout widgets
 //!
 //! This module contains enums and utilities for aligning children
-//! within parent containers, similar to Flutter's alignment system.
+//! within parent containers.
 
 use std::ops::{Add, Neg};
 
@@ -9,7 +9,7 @@ use flui_foundation::geometry::{Offset, Rect, Size};
 
 /// A point within a rectangle, in normalized coordinates.
 ///
-/// Mirrors Flutter's `Alignment`: both axes run from -1.0 to 1.0,
+/// Both axes run from -1.0 to 1.0,
 /// where (-1, -1) is the top-left corner, (0, 0) the center, and
 /// (1, 1) the bottom-right corner. Values outside that range place
 /// the point outside the rectangle. For text-direction-aware
@@ -71,8 +71,7 @@ impl Alignment {
     /// Linearly interpolates between two alignments.
     ///
     /// `t == 0.0` returns `a`; `t == 1.0` returns `b`. Values of `t` outside
-    /// `[0, 1]` extrapolate — they are **not** clamped. This matches Flutter's
-    /// `Alignment.lerp` contract and lets overshoot animation curves
+    /// `[0, 1]` extrapolate — they are **not** clamped, which lets overshoot animation curves
     /// (elastic, back) propagate through `Tween<Alignment>` without flattening.
     #[must_use]
     #[inline]
@@ -85,12 +84,12 @@ impl Alignment {
     /// `free_space` is the gap between the parent and child (`parent_size − child_size`).
     /// The result is the child's top-left offset within the parent, in logical pixels.
     ///
-    /// Mirrors Flutter `Alignment.alongSize`: `Offset(w/2 + x*w/2, h/2 + y*h/2)`.
+    /// The result is `Offset(w/2 + x*w/2, h/2 + y*h/2)`.
     ///
-    /// The companion methods `inscribe(Size, Rect)` (Flutter `Alignment.inscribe`) and
-    /// `along_offset(Offset)` (Flutter `Alignment.alongOffset`) are intentionally deferred
-    /// to a later phase — they serve `FittedBox` and direct `Offset`-input consumers
-    /// respectively.  Their absence here is deliberate, not an oversight.
+    /// The companion methods `inscribe(Size, Rect)` and `along_offset(Offset)`
+    /// are intentionally deferred — they serve `FittedBox` and direct
+    /// `Offset`-input consumers respectively.  Their absence here is
+    /// deliberate, not an oversight.
     ///
     /// # Examples
     ///
@@ -186,7 +185,7 @@ impl Neg for Alignment {
 
 /// An `Alignment` whose horizontal component depends on text direction.
 ///
-/// Mirrors Flutter's `AlignmentDirectional`: `start` is the reading
+/// `start` is the reading
 /// edge (left in LTR, right in RTL) and must be resolved with
 /// [`resolve`](Self::resolve) before use; the vertical axis matches
 /// `Alignment`.
@@ -250,8 +249,8 @@ impl AlignmentDirectional {
     /// Linear interpolation between two directional alignments.
     ///
     /// Values of `t` outside `[0, 1]` extrapolate — they are **not** clamped,
-    /// matching [`Alignment::lerp`] and Flutter's `AlignmentDirectional.lerp`
-    /// so overshoot animation curves propagate without flattening.
+    /// matching [`Alignment::lerp`], so overshoot animation curves propagate
+    /// without flattening.
     #[must_use]
     #[inline]
     pub fn lerp(a: Self, b: Self, t: f64) -> Self {
@@ -286,8 +285,7 @@ impl Neg for AlignmentDirectional {
 
 /// Either an absolute or a text-direction-relative alignment.
 ///
-/// Mirrors Flutter's `AlignmentGeometry` base class as a Rust enum;
-/// call [`resolve`](Self::resolve) to obtain an absolute `Alignment`.
+/// Call [`resolve`](Self::resolve) to obtain an absolute `Alignment`.
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum AlignmentGeometry {

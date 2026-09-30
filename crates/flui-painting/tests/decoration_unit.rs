@@ -1,4 +1,4 @@
-//! `BoxDecoration` painter: Flutter's draw order (shadows → background
+//! `BoxDecoration` painter: draw order (shadows → background
 //! → image → border), gradient resolution against the paint rect, and
 //! rounded-rect hit testing.
 //!
@@ -37,7 +37,7 @@ fn commands_in(rect: Rect<f64>, decoration: &BoxDecoration<f64>) -> Vec<DrawOp> 
     canvas.finish().iter().map(|c| c.op.clone()).collect()
 }
 
-pub(crate) fn flutter_paint_order_shadow_background_border() {
+pub(crate) fn paint_order_is_shadow_background_border() {
     let decoration = BoxDecoration::with_color(Color::WHITE)
         .set_border(Some(Border::all(BorderSide::new(
             Color::BLACK,

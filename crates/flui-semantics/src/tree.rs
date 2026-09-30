@@ -17,7 +17,7 @@ use crate::node::SemanticsNode;
 
 /// SemanticsTree - Slab-based storage for accessibility nodes.
 ///
-/// This is the fifth of FLUI's five trees, corresponding to Flutter's Semantics
+/// This is the fifth of FLUI's five trees, the Semantics
 /// tree used for accessibility services (screen readers, voice control, etc.).
 ///
 /// # Architecture
@@ -66,9 +66,7 @@ pub struct SemanticsTree {
     /// This is what makes [`Self::has_dirty_nodes`] O(1) — and, as a set
     /// rather than the earlier plain counter, what makes *iterating* the
     /// dirty nodes ([`Self::dirty_ids`]) O(dirty) instead of an O(arena)
-    /// filter scan. Flutter maintains the same information as
-    /// `SemanticsOwner._dirtyNodes` (a set filled by `_markDirty`); this is
-    /// the arena-storage port of that.
+    /// filter scan.
     ///
     /// Deliberately a superset, not an exact set: handing out
     /// `&mut SemanticsNode` (via [`Self::get_mut`] / [`Self::iter_mut`])
@@ -371,8 +369,7 @@ impl SemanticsTree {
     /// short-circuit no-op (`SemanticsNode::add_child` carries the
     /// containment dedup so the children vector never holds a duplicate
     /// id). Mirrors the layer-side guarantee that [`LayerTree::add_child`]
-    /// provides and matches Flutter `semantics.dart` `_SemanticsTreeWalker`
-    /// reparent semantics.
+    /// provides.
     ///
     /// Missing-id lookups (either `parent_id` or `child_id` not in the
     /// tree) are silent no-ops.

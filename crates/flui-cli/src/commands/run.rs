@@ -1500,7 +1500,7 @@ fn spawn_app(profile: Option<&str>, verbose: bool) -> CliResult<AppChild> {
 }
 
 // ============================================================================
-// Strategy: worker host (Flutter-parity hot reload)
+// Strategy: worker host (state-preserving hot reload)
 // ============================================================================
 
 /// Resolved host/worker project paths for `flui run`.

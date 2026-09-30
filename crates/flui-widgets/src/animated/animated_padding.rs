@@ -15,7 +15,7 @@ use crate::{AnimatedBuilder, Padding};
 /// Animates the [`EdgeInsets`] padding around its child whenever a new padding
 /// is given.
 ///
-/// Flutter parity: `widgets/implicit_animations.dart` `AnimatedPadding`. First
+/// First
 /// build sits at the given padding; each later build with different insets
 /// animates from the current insets to the new ones over `duration` along
 /// `curve`. Driven by a binding under a [`VsyncScope`].
@@ -94,13 +94,11 @@ impl ViewState<AnimatedPadding> for AnimatedPaddingState {
         let tween = self.animation.tween();
         let child = self.child.clone();
         AnimatedBuilder::new(self.animation.listenable(), move || {
-            // Oracle: `_padding!.evaluate(animation).clamp(EdgeInsets.zero,
-            // EdgeInsetsGeometry.infinity)` (`implicit_animations.dart`
-            // `AnimatedPaddingState.build`) — a curve that overshoots below `0`
-            // (e.g. `Curves.easeInOutBack`) must never hand `RenderPadding` a
-            // negative inset. `AnimatedContainer`'s sibling `_padding` tween is
-            // NOT clamped by its oracle, so that widget is intentionally left
-            // as-is; this clamp is specific to `AnimatedPadding`.
+            // A curve that overshoots below `0` (e.g. `Curves::EaseInOutBack`)
+            // must never hand `RenderPadding` a negative inset.
+            // `AnimatedContainer`'s sibling padding tween is NOT clamped, so
+            // that widget is intentionally left as-is; this clamp is specific
+            // to `AnimatedPadding`.
             let padding = tween.transform(curved.value()).clamp_non_negative();
             Padding::new(padding).child(child.clone())
         })

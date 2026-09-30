@@ -18,13 +18,8 @@
 //! `key_hash()` and then decides membership with [`ViewKey::key_eq`]. Two
 //! colliding-but-distinct keys land in one bucket and stay two entries; the
 //! same key looked up through any clone resolves to the one entry it owns.
-//!
-//! Flutter parity: `BuildOwner._globalKeyRegistry`
-//! (`framework.dart:3165`) is a `Map<GlobalKey, Element>` keyed on the key
-//! object itself — Dart's `Map` gives identity semantics for free because
-//! `GlobalKey` uses default (reference) equality. `Box<dyn ViewKey>` has no
-//! blanket `Hash + Eq`, so we get the same semantics explicitly: hash to a
-//! bucket, then `key_eq` within it.
+//! `Box<dyn ViewKey>` has no blanket `Hash + Eq`, so identity semantics are
+//! explicit: hash to a bucket, then `key_eq` within it.
 //!
 //! # Not the uniqueness authority
 //!

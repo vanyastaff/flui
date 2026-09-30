@@ -1,13 +1,10 @@
 //! Diagnostics and debugging support
 //!
-//! This module provides types for debugging and introspection,
-//! similar to Flutter's diagnostics system.
+//! This module provides types for debugging and introspection.
 
 use std::{fmt, str::FromStr};
 
 /// The level of importance of a diagnostic message.
-///
-/// Similar to Flutter's `DiagnosticLevel`.
 ///
 /// # Examples
 ///
@@ -135,8 +132,6 @@ impl std::error::Error for ParseDiagnosticLevelError {}
 
 /// How a tree should be rendered.
 ///
-/// Similar to Flutter's `DiagnosticsTreeStyle`.
-///
 /// # Examples
 ///
 /// ```rust
@@ -238,9 +233,8 @@ impl std::error::Error for ParseDiagnosticsTreeStyleError {}
 
 /// The kind of a diagnostics property, determining how it is displayed.
 ///
-/// Mirrors Flutter's typed `DiagnosticsProperty<T>` subclass hierarchy
-/// (`EnumProperty`, `FlagProperty`, `IterableProperty`, etc.) but as an
-/// enum variant instead of class inheritance.
+/// Each kind of property (enum, flag, iterable, etc.) is an enum variant
+/// rather than a subclass.
 ///
 /// The `Generic` variant is the fallback for all types not explicitly listed.
 ///
@@ -302,8 +296,6 @@ impl Default for DiagnosticsPropertyKind {
 }
 
 /// A diagnostic property
-///
-/// Similar to Flutter's `DiagnosticsProperty`.
 ///
 /// # Examples
 ///
@@ -594,8 +586,6 @@ impl fmt::Display for DiagnosticsProperty {
 }
 
 /// A node in the diagnostics tree
-///
-/// Similar to Flutter's `DiagnosticsNode`.
 ///
 /// # Examples
 ///
@@ -1034,8 +1024,6 @@ impl fmt::Display for DiagnosticsNode {
 
 /// Trait for objects that can provide diagnostics information.
 ///
-/// Similar to Flutter's `Diagnosticable`.
-///
 /// # Examples
 ///
 /// ```rust
@@ -1402,8 +1390,8 @@ fn parse_numeric_property_value(property: &DiagnosticsProperty) -> Option<f64> {
 /// feature, all fields are `false` and the config is a zero-cost
 /// no-op.
 // Four independent debug-overlay toggles, not a state machine — each
-// overlay is orthogonal and combined freely (mirrors Flutter's separate
-// `debugPaint*Enabled` flags). A bitflags/enum would obscure, not clarify.
+// overlay is orthogonal and combined freely. A bitflags/enum would obscure,
+// not clarify.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[expect(clippy::struct_excessive_bools)]
 pub struct DebugPaintConfig {

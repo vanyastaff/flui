@@ -71,9 +71,9 @@ pub fn disabled_ink_well_does_not_fire_a_tap_callback() {
 // lifecycle hook triggered it, so neither approach can observe "extra
 // rebuild" as a distinguishable side effect through this harness. The
 // architectural fix (never mutate a possibly-caller-shared controller from
-// `build`, matching Flutter's own "no setState during build" contract —
+// `build`, i.e. no rebuild scheduled during build —
 // `ink_well.rs`'s `init_state`/`did_update_view`) is applied and is correct
-// on the oracle's own terms independent of whether this harness can prove
+// independent of whether this harness can prove
 // the "spurious rebuild" symptom specifically; the existing `Disabled`-state
 // assertions (`disabled_ink_well_does_not_fire_a_tap_callback`) already prove the sync
 // itself still happens correctly at the new call sites.

@@ -8,10 +8,6 @@ use parking_lot::{Mutex, RwLock};
 ///
 /// This indicates the direction that the user is scrolling, not the direction
 /// that the scroll offset is changing.
-///
-/// # Flutter Equivalence
-///
-/// Corresponds to Flutter's `ScrollDirection` enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub enum ScrollDirection {
     /// No scrolling is underway.
@@ -50,10 +46,6 @@ impl ScrollDirection {
 ///
 /// This trait is a `ChangeNotifier`-like that notifies its listeners when
 /// `pixels` changes.
-///
-/// # Flutter Equivalence
-///
-/// Corresponds to Flutter's `ViewportOffset` abstract class.
 pub trait ViewportOffset: Debug + Send + Sync {
     /// The number of pixels to offset the children in the opposite of the axis
     /// direction.
@@ -123,10 +115,6 @@ pub trait ViewportOffset: Debug + Send + Sync {
 /// A simple fixed viewport offset that doesn't change.
 ///
 /// The `pixels` value does not change unless the viewport issues a correction.
-///
-/// # Flutter Equivalence
-///
-/// Corresponds to Flutter's `_FixedViewportOffset` class.
 pub struct FixedViewportOffset {
     pixels: f64,
 }
@@ -224,10 +212,6 @@ impl ViewportOffset for FixedViewportOffset {
 /// A mutable viewport offset that can be scrolled.
 ///
 /// This is a more complete implementation that tracks scroll state.
-///
-/// # Flutter Equivalence
-///
-/// Similar to Flutter's `ScrollPosition` but simplified.
 pub struct ScrollableViewportOffset {
     /// Current scroll position in pixels.
     pixels: f64,

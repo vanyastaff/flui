@@ -117,7 +117,7 @@ a `viewDidChangeEffectiveAppearance:` hook on `FLUIContentView`. iOS:
 
 **Must not break.** `desktop.rs`'s existing appearance wire and
 `WindowAppearance`'s four-variant vocabulary (Light/Dark/VibrantLight/
-VibrantDark — Flutter's names).
+VibrantDark).
 
 ### 4. `WindowInsets` / safe area
 

@@ -16,19 +16,17 @@
 //! `NetworkImage` (behind `network-images`) override both to genuinely load
 //! off-thread.
 //!
-//! FLUI's `Image` widget is a one-shot resolver, not a port of Flutter's
-//! `ImageStream`: it has no chunk/progress events and no multi-frame
-//! (animated-image) support, because FLUI's `Image` view is single-frame.
-//! This is a documented divergence from `widgets/image.dart`, to revisit when
+//! FLUI's `Image` widget is a one-shot resolver, not an image stream: it has
+//! no chunk/progress events and no multi-frame (animated-image) support,
+//! because the `Image` view is single-frame. To revisit when
 //! animated images land.
 //!
 //! # Deferred functionality
 //!
-//! Not yet built (tracked, not silently missing): `frameBuilder`,
-//! `loadingBuilder`, `errorBuilder` (an error currently renders the same
-//! empty box as no data, with a `tracing::warn!`), `gaplessPlayback`,
-//! `ImageConfiguration`/`devicePixelRatio`-based cache-key scaling, an
-//! `evict`/`clearLiveImages` cache-management API, and font unification.
+//! Not yet built (tracked, not silently missing): frame, loading and error
+//! builders (an error currently renders the same empty box as no data, with a
+//! `tracing::warn!`), device-pixel-ratio-based cache-key scaling, a cache
+//! eviction API, and font unification.
 
 use std::future::Future;
 use std::path::PathBuf;

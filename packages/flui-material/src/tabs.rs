@@ -1,42 +1,35 @@
 //! [`Tab`] and [`TabBar`] — the secondary M3 tab bar. See the module docs
-//! below for exactly which oracle contract this V1 ships.
-//!
-//! # Flutter parity
-//!
-//! `material/tabs.dart` (oracle tag `3.44.0`).
+//! below for exactly which contract this V1 ships.
 //!
 //! # `TabBar` ships the SECONDARY contract only
 //!
-//! The oracle's `TabBar` has two constructors sharing one `_TabBarState`:
-//! the default (primary — a 3dp, `TabBarIndicatorSize.label`-by-default
-//! indicator meant for an `AppBar.bottom`) and `TabBar.secondary` (a 2dp,
-//! `TabBarIndicatorSize.tab` indicator meant to separate content within a
-//! page body, `_TabsSecondaryDefaultsM3`). This crate ships **only** the
+//! Material 3 defines two tab bars: the primary (a 3dp,
+//! label-width indicator meant for an `AppBar.bottom`) and the secondary (a
+//! 2dp, full-tab-width indicator meant to separate content within a page
+//! body). This crate ships **only** the
 //! secondary style, as [`TabBar::secondary`] — there is no plain
 //! `TabBar::new` that could read as "the primary bar, just less finished".
 //! Shipping a primary bar honestly needs `TabBarIndicatorSize::Label`, which
 //! needs the *width of each tab's own label content* after layout
-//! (`_IndicatorPainter.indicatorRect`'s `tabKeys[tabIndex].currentContext!.size!.width`
-//! — a `GlobalKey`-mediated post-layout measurement this crate has no
+//! (a `GlobalKey`-mediated post-layout measurement this crate has no
 //! established pattern for yet). Rather than ship a primary bar that
 //! silently degrades to `TabBarIndicatorSize::Tab` sizing, primary is
 //! deferred wholesale until that measurement exists.
 //!
 //! # Fixed equal-share layout only (no `isScrollable`)
 //!
-//! The oracle's non-scrollable path already gives every tab an equal share
-//! via `Expanded` (`_TabBarState.build`'s `effectiveTabAlignment ==
-//! TabAlignment.fill` branch) — that is the only layout this crate ports.
+//! A non-scrollable bar gives every tab an equal share via `Expanded` —
+//! that is the only layout this crate implements.
 //! `isScrollable`, `TabAlignment::{Start, StartOffset, Center}`, and
 //! `scrollController` are named deferrals: the scrollable path additionally
-//! needs `_saveTabOffsets`'s post-layout tab-offset bookkeeping and a
+//! needs post-layout tab-offset bookkeeping and a
 //! horizontal `SingleChildScrollView`, neither of which any test in this
 //! unit's acceptance list exercises.
 //!
 //! # Indicator: per-cell reserved band, not a `CustomPainter`
 //!
-//! The oracle's `_IndicatorPainter` computes one animated `Rect` per frame
-//! from `Animation<double>` + `TabController.index`/`previousIndex` and
+//! A full tab bar computes one animated `Rect` per frame
+//! from an animation + `TabController.index`/`previousIndex` and
 //! paints it (plus the divider) directly on a `Canvas`. This crate has no
 //! `AnimationController` wired to [`crate::TabController`] (see that type's
 //! module docs), so there is no per-frame interpolated value to paint in the
@@ -48,8 +41,8 @@
 //! reserved, painted transparent when unselected" shape
 //! [`crate::NavigationBar`]'s destination indicator already uses. Because
 //! every tab cell is an equal `Expanded` share of the bar's width (see
-//! above), this composition renders **exactly** the rect the oracle's
-//! `_IndicatorPainter.indicatorRect` computes for `TabBarIndicatorSize::Tab`
+//! above), this composition renders **exactly** the rect a full tab bar
+//! computes for `TabBarIndicatorSize::Tab`
 //! with `indicatorPadding: EdgeInsets.zero`. The *horizontal* bounds (one
 //! equal tab-cell share per band) are asserted against the mounted render
 //! tree by `packages/flui-material/tests/tabs.rs`'s
@@ -62,8 +55,7 @@
 //! `Positioned` full-width strip at the bar's bottom edge, stacked *behind*
 //! the tab row — so an unselected tab's transparent band still lets the
 //! divider line show through beneath it, and a selected tab's opaque
-//! indicator band paints over it, matching the oracle's paint order
-//! (divider drawn first, indicator second, in the same `Canvas` pass): the
+//! indicator band paints over it (divider drawn first, indicator second): the
 //! `Stack`'s divider layer is its first, earlier-painted child; the tab row
 //! is its second, later-painted — hence on top — child.
 //!
@@ -74,17 +66,16 @@
 //!   `AnimationController` `TabController` doesn't have yet.
 //! - **`TabBarIndicatorSize::Label`**, custom `indicator: Decoration`,
 //!   `indicatorPadding`, rounded-corner indicators — primary-bar-only or
-//!   `Label`-sizing-only oracle features; see the "SECONDARY contract"
+//!   `Label`-sizing-only features; see the "SECONDARY contract"
 //!   section above.
-//! - **`WidgetStateColor` for `labelColor`** — the oracle lets `labelColor`
-//!   itself be state-varying, ignoring `unselectedLabelColor` when it is.
-//!   This crate resolves `labelColor`/`unselectedLabelColor` as two plain
-//!   colors (exactly the M3 default table's own shape:
-//!   `_TabsSecondaryDefaultsM3.labelColor`/`unselectedLabelColor` are both
-//!   plain `Color`s, not `WidgetStateColor`s).
+//! - **`WidgetStateColor` for `labelColor`** — a full tab bar lets
+//!   `labelColor` itself be state-varying, ignoring `unselectedLabelColor`
+//!   when it is. This crate resolves `labelColor`/`unselectedLabelColor` as
+//!   two plain colors (exactly the shape of the M3 secondary default
+//!   table, whose label colors are plain `Color`s).
 //!   `overlayColor` — the hover/press/focus ramp — IS state-resolved (a
 //!   genuine `WidgetStateProperty`), since the M3 default table needs it.
-//! - **Icon recoloring** — the oracle wraps tab content in
+//! - **Icon recoloring** — a full tab bar wraps tab content in
 //!   `IconTheme.merge` so a bare `Icon` child inherits the resolved
 //!   label/icon color. This crate wraps only in
 //!   [`flui_sdk::widgets::DefaultTextStyle`] (text recoloring); a caller-supplied
@@ -96,21 +87,20 @@
 //! - **`onHover`/`onFocusChange`/`mouseCursor`/`splashFactory`/
 //!   `splashBorderRadius`/`dragStartBehavior`/`physics`/`textScaler`** — no
 //!   consumer yet; `InkWell`'s own defaults apply.
-//! - **Per-tab `Semantics`** — the oracle wraps each tab in
+//! - **Per-tab `Semantics`** — a full tab bar wraps each tab in
 //!   `Semantics(role: SemanticsRole.tab, child: Stack([content,
 //!   Semantics(selected: ..., label: "Tab N of M")]))` plus a
-//!   `SemanticsRole.tabBar` container on the bar itself
-//!   (`_TabBarState.build`, `tabs.dart`, oracle tag `3.44.0`). This crate
+//!   `SemanticsRole.tabBar` container on the bar itself. This crate
 //!   mounts no semantics annotation at all for `TabBar` — no "Tab 2 of 3"
 //!   label, no `selected` flag, no `tab`/`tabBar` role — so an assistive
 //!   technology gets no structured information about a mounted `TabBar`
 //!   today. Named, not silently dropped: a real gap, not a stylistic
 //!   simplification.
-//! - **`enableFeedback`** — the oracle's `InkWell.enableFeedback` (haptic/
+//! - **`enableFeedback`** — `InkWell.enableFeedback` (haptic/
 //!   acoustic click feedback on tap, defaulting to `true`) has no analog
 //!   here; [`crate::InkWell`] itself has no `enableFeedback` parameter yet
 //!   (see that module's own docs), so `TabBar` has nothing to plumb it to.
-//! - **`automaticIndicatorColorAdjustment`** — the oracle snaps
+//! - **`automaticIndicatorColorAdjustment`** — a full tab bar snaps
 //!   `indicatorColor` to white when it would otherwise match the ambient
 //!   `Material`'s own fill color (avoiding an invisible indicator). This
 //!   crate's indicator band is a plain `Container` fill with no ambient-color
@@ -137,22 +127,19 @@ use crate::tab_controller::{DefaultTabController, TabController};
 use crate::theme::Theme;
 use crate::theme_data::ThemeData;
 
-/// A `Tab` with no icon's height. Flutter parity: `_kTabHeight`
-/// (`tabs.dart`, oracle tag `3.44.0`).
+/// A `Tab` with no icon's height.
 pub const TAB_HEIGHT: f64 = 46.0;
 
-/// A `Tab` with both an icon and text/child's height. Flutter parity:
-/// `_kTextAndIconTabHeight`.
+/// A `Tab` with both an icon and text/child's height.
 pub const TEXT_AND_ICON_TAB_HEIGHT: f64 = 72.0;
 
-/// The horizontal padding every tab label gets, both sides. Flutter parity:
-/// `kTabLabelPadding` (`constants.dart`, `EdgeInsets.symmetric(horizontal:
-/// 16.0)`) — see the module docs for why this crate has no override surface
+/// The horizontal padding every tab label gets, both sides
+/// (`EdgeInsets.symmetric(horizontal: 16.0)`) — see the module docs for why this crate has no override surface
 /// for it yet.
 pub const TAB_LABEL_HORIZONTAL_PADDING: f64 = 16.0;
 
 /// One [`TabBar`] tab's label content: some combination of `text`/`child`
-/// and `icon`. Flutter parity: `Tab` (`tabs.dart`, oracle tag `3.44.0`).
+/// and `icon`.
 ///
 /// ```
 /// use flui_material::Tab;
@@ -177,9 +164,8 @@ impl Tab {
     }
 
     /// Sets the tab's text label. Mutually exclusive with
-    /// [`child`](Self::child) — the last one set wins (mirrors the oracle's
-    /// constructor-time assert as a "last write wins" builder instead, since
-    /// a builder has no single constructor call to assert against).
+    /// [`child`](Self::child) — the last one set wins (a builder has no
+    /// single constructor call to assert against).
     #[must_use]
     pub fn text(mut self, text: impl Into<String>) -> Self {
         self.text = Some(text.into());
@@ -204,7 +190,7 @@ impl Tab {
     }
 
     /// Overrides the computed height (`46.0`, or `72.0` when both an icon
-    /// and text/child are present). Flutter parity: `Tab.height`.
+    /// and text/child are present).
     #[must_use]
     pub fn height(mut self, height: f64) -> Self {
         self.height = Some(height);
@@ -221,9 +207,7 @@ impl Tab {
 }
 
 /// This tab's content height: `height` override first, else `72.0` when
-/// both an icon and text/child are present, else `46.0`. Flutter parity:
-/// `Tab.preferredSize`/`Tab.build`'s `calculatedHeight` (`tabs.dart`, oracle
-/// tag `3.44.0`) — the two oracle computations agree, so one function here
+/// both an icon and text/child are present, else `46.0`. One function here
 /// serves both [`Tab::preferred_size`] and [`TabBar`]'s own height math.
 fn tab_content_height(tab: &Tab) -> f64 {
     if let Some(height) = tab.height {
@@ -300,13 +284,10 @@ impl PreferredSizeView for Tab {
 /// ships (secondary only, fixed equal-share layout, no indicator
 /// animation).
 ///
-/// Flutter parity: `TabBar.secondary` (`tabs.dart`, oracle tag `3.44.0`).
-///
 /// A [`TabController`] is required either explicitly (via
 /// [`controller`](Self::controller)) or via a
 /// [`DefaultTabController`] ancestor — exactly
-/// one must be reachable, or `build` panics (Flutter parity: the oracle's
-/// `_updateTabController` `FlutterError`/`assert`).
+/// one must be reachable, or `build` panics.
 ///
 /// ```
 /// use flui_material::{DefaultTabController, Tab, TabBar};
@@ -345,7 +326,6 @@ impl TabBar {
 
     /// A callback fired with the tapped tab's index, in addition to (not
     /// instead of) the default `controller.animate_to(index)` dispatch.
-    /// Flutter parity: `TabBar.onTap`.
     #[must_use]
     pub fn on_tap<R: flui_sdk::view::EventOutcome>(
         mut self,
@@ -372,10 +352,8 @@ impl PreferredSizeView for TabBar {
 }
 
 /// The bar's total height: the tallest tab's content height (`46.0` if
-/// `tabs` is empty — Flutter parity: `TabBar.preferredSize`'s `maxHeight`
-/// seed) plus `indicator_weight`. Also, unmodified, the oracle's zero-tab
-/// special case (`_kTabHeight + indicatorWeight`, `_TabBarState.build`'s
-/// early return) — no separate branch is needed here because folding over
+/// `tabs` is empty) plus `indicator_weight`. This also covers the zero-tab
+/// special case (`TAB_HEIGHT + indicator_weight`) — no separate branch is needed here because folding over
 /// an empty `tabs` slice already returns the `TAB_HEIGHT` seed.
 fn bar_height(tabs: &[Tab], indicator_weight: f64) -> f64 {
     let max_content_height = tabs
@@ -386,8 +364,7 @@ fn bar_height(tabs: &[Tab], indicator_weight: f64) -> f64 {
 }
 
 /// Whether any tab in `tabs` has both an icon and text/child (i.e. its
-/// content height is `TEXT_AND_ICON_TAB_HEIGHT`). Flutter parity:
-/// `TabBar.tabHasTextAndIcon`.
+/// content height is `TEXT_AND_ICON_TAB_HEIGHT`).
 fn tab_has_text_and_icon(tabs: &[Tab]) -> bool {
     tabs.iter()
         .any(|tab| tab_content_height(tab) == TEXT_AND_ICON_TAB_HEIGHT)
@@ -408,19 +385,19 @@ struct ResolvedTabBarStyle {
     overlay_color: WidgetStateProperty<Option<Color>>,
 }
 
-/// Resolves the M3 secondary defaults (`_TabsSecondaryDefaultsM3`,
-/// `tabs.dart`, oracle tag `3.44.0`) through the theme → default cascade:
-/// `TabBarThemeData` field if set, else the literal M3 secondary default.
+/// Resolves the M3 secondary tab bar defaults through the theme → default
+/// cascade: `TabBarThemeData` field if set, else the literal M3 secondary
+/// default.
 ///
-/// | Field | M3 secondary default | Oracle |
-/// |---|---|---|
-/// | `indicator_color` | `ColorScheme.primary` | `_TabsSecondaryDefaultsM3.indicatorColor` |
-/// | `label_color` | `ColorScheme.onSurface` | `_TabsSecondaryDefaultsM3.labelColor` |
-/// | `unselected_label_color` | `ColorScheme.onSurfaceVariant` | `_TabsSecondaryDefaultsM3.unselectedLabelColor` |
-/// | `label_style` / `unselected_label_style` | `TextTheme.titleSmall` | `_TabsSecondaryDefaultsM3.labelStyle`/`unselectedLabelStyle` |
-/// | `divider_color` | `ColorScheme.outlineVariant` | `_TabsSecondaryDefaultsM3.dividerColor` |
-/// | `divider_height` | `1.0` | `_TabsSecondaryDefaultsM3.dividerHeight` |
-/// | `overlay_color` | pressed→`onSurface@0.1`, hovered→`onSurface@0.08`, focused→`onSurface@0.1`, else none | `_TabsSecondaryDefaultsM3.overlayColor` |
+/// | Field | M3 secondary default |
+/// |---|---|
+/// | `indicator_color` | `ColorScheme.primary` |
+/// | `label_color` | `ColorScheme.onSurface` |
+/// | `unselected_label_color` | `ColorScheme.onSurfaceVariant` |
+/// | `label_style` / `unselected_label_style` | `TextTheme.titleSmall` |
+/// | `divider_color` | `ColorScheme.outlineVariant` |
+/// | `divider_height` | `1.0` |
+/// | `overlay_color` | pressed→`onSurface@0.1`, hovered→`onSurface@0.08`, focused→`onSurface@0.1`, else none |
 fn resolve_style(theme: &ThemeData) -> ResolvedTabBarStyle {
     let tab_bar_theme = theme.tab_bar_theme.as_ref();
     let colors = &theme.color_scheme;
@@ -452,11 +429,10 @@ fn resolve_style(theme: &ThemeData) -> ResolvedTabBarStyle {
     }
 }
 
-/// `_TabsSecondaryDefaultsM3.overlayColor`'s resolver — pressed/hovered/
+/// The secondary overlay color's resolver — pressed/hovered/
 /// focused ramp over `on_surface`, identical whether or not the tab is
-/// selected (the oracle's own `selected`-branch and non-`selected`-branch
-/// happen to produce the same three values — see `tabs.dart`'s
-/// `_TabsSecondaryDefaultsM3.overlayColor` getter, oracle tag `3.44.0`).
+/// selected (the M3 spec's selected and unselected branches happen to
+/// produce the same three values).
 fn default_overlay_color(on_surface: Color) -> WidgetStateProperty<Option<Color>> {
     WidgetStateProperty::from_map([
         (
@@ -478,12 +454,10 @@ fn default_overlay_color(on_surface: Color) -> WidgetStateProperty<Option<Color>
 /// plus `±13.0` vertical when `tab`'s own content height is `TAB_HEIGHT`
 /// (`46.0`) but the bar as a whole has a text-and-icon tab (`72.0`) — the
 /// mechanism that centers a plain tab's content inside a taller mixed bar.
-/// Flutter parity: `_TabBarState.build`'s `verticalAdjustment` (`(
-/// _kTextAndIconTabHeight - _kTabHeight) / 2.0`, i.e. `13.0`), added to
-/// `kTabLabelPadding` when `tab.preferredSize.height == _kTabHeight &&
-/// widget.tabHasTextAndIcon` (`tabs.dart`, oracle tag `3.44.0`) — ported
-/// honestly as padding, not as a `Center`-widget trick, because that is
-/// exactly the mechanism the oracle itself uses.
+/// The vertical adjustment is `(TEXT_AND_ICON_TAB_HEIGHT - TAB_HEIGHT) / 2.0`,
+/// i.e. `13.0`, added to the label padding when the tab's height is
+/// `TAB_HEIGHT` and the bar has a text-and-icon tab — done as padding, not
+/// as a `Center`-widget trick.
 fn label_padding(tab: &Tab, bar_has_mixed_tabs: bool) -> EdgeInsets {
     let vertical = if bar_has_mixed_tabs && tab_content_height(tab) == TAB_HEIGHT {
         (TEXT_AND_ICON_TAB_HEIGHT - TAB_HEIGHT) / 2.0
@@ -538,8 +512,7 @@ impl TabBarState {
     /// # Panics
     ///
     /// Panics if `view` has no explicit controller and there is no
-    /// `DefaultTabController` ancestor. Flutter parity: `_updateTabController`'s
-    /// `FlutterError`.
+    /// `DefaultTabController` ancestor.
     fn resolve_controller(&self, view: &TabBar, ctx: &dyn BuildContext) -> TabController {
         let resolved = view
             .controller
@@ -585,10 +558,7 @@ impl ViewState<TabBar> for TabBarState {
     }
 
     /// Unregisters this bar's listener from whatever controller it's
-    /// currently subscribed to — Flutter parity: `_TabBarState.dispose`'s
-    /// `_controller!.animation!.removeListener(...)`/
-    /// `_controller!.removeListener(_handleTabControllerTick)`. Without
-    /// this, a controller that outlives the bar (an explicit
+    /// currently subscribed to. Without this, a controller that outlives the bar (an explicit
     /// `TabBar::controller` shared with a sibling, or any
     /// `DefaultTabController` ancestor that itself outlives one particular
     /// `TabBar` child) keeps firing an `Rc` closure that calls
@@ -616,20 +586,15 @@ impl ViewState<TabBar> for TabBarState {
         let height = bar_height(&view.tabs, view.indicator_weight);
 
         if view.tabs.is_empty() {
-            // Flutter parity: `_TabBarState.build`'s zero-tabs early return
-            // (`LimitedBox(maxWidth: 0.0, child: SizedBox(width:
-            // double.infinity, height: _kTabHeight + indicatorWeight))`).
-            // The `LimitedBox(maxWidth: 0.0)` half only matters when the
-            // incoming width constraint is unbounded — a plain
-            // width-unconstrained `SizedBox::height` behaves identically in
-            // every bounded parent this bar is normally mounted under; named
-            // simplification for that one unbounded-width edge case.
+            // Zero-tabs early return: a full-width `SizedBox` of height
+            // `TAB_HEIGHT + indicator_weight`. A width-unconstrained
+            // `SizedBox::height` behaves identically in every bounded parent
+            // this bar is normally mounted under; a named simplification
+            // for the one unbounded-width edge case.
             //
-            // A controller is still resolved above even for zero tabs —
-            // matching the oracle exactly: `_updateTabController`'s
-            // controller resolution runs in `didChangeDependencies`,
-            // unconditionally, before `build` ever checks
-            // `_controller!.length == 0`. A zero-tab `TabBar` with no
+            // A controller is still resolved above even for zero tabs:
+            // controller resolution runs unconditionally, before `build`
+            // ever checks `controller.length() == 0`. A zero-tab `TabBar` with no
             // controller and no `DefaultTabController` ancestor still
             // panics, same as a non-empty one.
             assert!(
@@ -693,9 +658,8 @@ impl ViewState<TabBar> for TabBarState {
 
 /// Builds one tab's `Expanded` cell: label content (recolored/padded per
 /// selection), the reserved indicator band, wrapped in an [`InkWell`] that
-/// dispatches taps to `controller`/`on_tap`. Flutter parity: the relevant
-/// slice of `_TabBarState.build` (label wrapping, `_TabStyle`, `InkWell`,
-/// `Expanded`) — see the module docs for what is and is not ported.
+/// dispatches taps to `controller`/`on_tap`. See the module docs for what
+/// is and is not implemented.
 #[expect(clippy::too_many_arguments, reason = "internal helper, not public API")]
 fn build_tab_cell(
     index: usize,

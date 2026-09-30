@@ -102,8 +102,8 @@ pub trait RenderElementBase<A: ElementArity>: ElementBase {}
 
 /// `ElementBase`-equivalent surface tagging the render-tree ROOT element.
 ///
-/// Companion to [`ElementKind::Root`]. The root (`RootRenderElement`,
-/// Flutter's `RenderTreeRootElement` / `_RawViewElement`) is a first-class
+/// Companion to [`ElementKind::Root`]. The root (`RootRenderElement`)
+/// is a first-class
 /// element *kind*, not a behavior-family element: it owns the `PipelineOwner`
 /// and bootstraps the render tree, so it neither composes a `View`-behavior nor
 /// fits the `Element<V, A, Behavior>` shape. A dedicated sealed sub-trait keeps
@@ -183,8 +183,7 @@ where
 // `AnimatedBehavior` composes the stateful body, so an `AnimatedElement` routes
 // to the `Stateful` variant — its `AnimationListener` is captured into the
 // variant's `animation_listener` field at `create_element` time (FR-020), NOT
-// here. `ParentDataBehavior` is proxy-shaped (Flutter's `ParentDataWidget
-// extends ProxyWidget`), so a `ParentDataElement` routes to the `Proxy` variant.
+// here. `ParentDataBehavior` is proxy-shaped, so a `ParentDataElement` routes to the `Proxy` variant.
 impl<V> StatefulElementBase for Element<V, Single, AnimatedBehavior<V>>
 where
     V: AnimatedView + Clone + 'static,
@@ -351,8 +350,7 @@ pub enum ElementKind {
     /// `Stack`). The only render arity with a concrete blanket impl in
     /// Phase 1.
     RenderVariable(Box<dyn RenderElementBase<Variable>>),
-    /// The render-tree ROOT element (`RootRenderElement`, Flutter's
-    /// `RenderTreeRootElement`). Owns the `PipelineOwner` + render-tree
+    /// The render-tree ROOT element (`RootRenderElement`). Owns the `PipelineOwner` + render-tree
     /// bootstrap; a first-class kind distinct from the behavior families.
     /// See [`RootElementBase`].
     Root(Box<dyn RootElementBase>),

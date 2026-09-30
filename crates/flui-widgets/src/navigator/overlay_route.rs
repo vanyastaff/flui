@@ -3,32 +3,20 @@
 //!
 //! Private; nothing here is exported.
 //!
-//! # Flutter parity
+//! # Where the overlay entry lives
 //!
-//! `.flutter/packages/flutter/lib/src/widgets/routes.dart:55` (`OverlayRoute`) —
-//! *"A route that displays widgets in the Navigator's Overlay"*. It is the layer
-//! that owns `overlayEntries`, `createOverlayEntries()`, `install()`, and the
-//! `didPop` → `navigator.finalizeRoute` bridge.
-//!
-//! # Where FLUI puts the overlay entry
-//!
-//! Flutter's `OverlayRoute` **owns** its `List<OverlayEntry>`, and the navigator
-//! reaches them through `route.overlayEntries` (`navigator.dart:4151`). FLUI
-//! cannot: the route lives behind `Box<dyn ErasedRoute>` inside `RouteHistory`,
-//! and exposing overlay entries there would break the route stack's pure-data
-//! invariant.
+//! A route does **not** own its overlay entries: the route lives behind
+//! `Box<dyn ErasedRoute>` inside `RouteHistory`, and exposing overlay entries there
+//! would break the route stack's pure-data invariant.
 //!
 //! So the `NavigatorState` keeps the entries, in a `RouteId -> OverlayEntry` map
 //! it maintains alongside the stack. The route only supplies the *builder*. The
-//! two arrangements are observationally identical — `_allRouteOverlayEntries`
-//! (`navigator.dart:4151-4153`) flattens the entries in `_history` order, which is
-//! exactly what the map lookup over `RouteHistory::ids()` produces.
+//! entries are flattened in history order, which is exactly what the map lookup
+//! over `RouteHistory::ids()` produces.
 //!
-//! One consequence, recorded rather than hidden: Flutter's `_disposeRouteEntry`
-//! removes a route's overlay entries **before** calling `entry.dispose()`
-//! (`:3978-3987`). FLUI disposes the route inside the flush and removes the
-//! overlay entry just after. Nothing observes the difference, because a FLUI route
-//! holds no reference to its overlay entry.
+//! One consequence, recorded rather than hidden: the route is disposed inside the
+//! flush and its overlay entry is removed just after. Nothing observes the
+//! order, because a route holds no reference to its overlay entry.
 //!
 //! # `SimpleRoute` is the floor, not the ceiling
 //!
@@ -51,25 +39,22 @@ use super::route::{Route, RouteSettings};
 ///
 /// Structurally identical to the private `overlay::OverlayBuilder`; named here so
 /// that the public [`NavigatorRoute`] surface does not mention `Overlay`, which
-/// stays private until it has its own parity gate.
+/// stays private until its surface is settled.
 pub type RouteContentBuilder = Rc<dyn Fn(&dyn BuildContext) -> BoxedView>;
 
 /// One of a route's two animations, as seen by a page or transitions builder.
 ///
 /// The **primary** animation runs 0 → 1 as the route enters and 1 → 0 as it
 /// leaves. The **secondary** animation is the primary animation of the route
-/// *above* this one, when the two coordinate — Flutter's `secondaryAnimation`
-/// (`routes.dart:197`, `:422-496`).
+/// *above* this one, when the two coordinate.
 pub type RouteAnimation = Arc<dyn Animation<f64>>;
 
-/// Builds a route's page. Flutter's `RoutePageBuilder` / `ModalRoute.buildPage`
-/// (`routes.dart:1455-1459`).
+/// Builds a route's page.
 pub type RoutePageBuilder =
     Rc<dyn Fn(&dyn BuildContext, &RouteAnimation, &RouteAnimation) -> BoxedView>;
 
-/// Wraps a route's page in its entrance/exit transition. Flutter's
-/// `RouteTransitionsBuilder` / `ModalRoute.buildTransitions`
-/// (`routes.dart:1591-1598`), whose default is a jump cut — `child` unchanged.
+/// Wraps a route's page in its entrance/exit transition. The default is a jump
+/// cut — `child` unchanged.
 pub type RouteTransitionsBuilder =
     Rc<dyn Fn(&dyn BuildContext, &RouteAnimation, &RouteAnimation, BoxedView) -> BoxedView>;
 
@@ -78,8 +63,7 @@ pub type RouteTransitionsBuilder =
 /// The split from [`Route`] is the `OverlayRoute` layer: [`Route`] is lifecycle
 /// and result, this adds "what to show".
 pub trait NavigatorRoute: Route {
-    /// Builds this route's subtree. Flutter's `OverlayRoute.createOverlayEntries`
-    /// (`routes.dart:61`) plus `ModalRoute.buildPage`.
+    /// Builds this route's subtree.
     ///
     /// Returned as a shared closure, not `&self`, because the navigator installs
     /// it into an `OverlayEntry` that outlives any borrow of the route.
@@ -101,18 +85,16 @@ pub trait NavigatorRoute: Route {
 
 /// The floor: a route with content, an instant transition, and a typed result.
 ///
-/// Flutter's nearest equivalent is a bare `OverlayRoute` subclass — no
-/// `TransitionRoute`, so `finishedWhenPopped` stays `true` and a pop finalizes
-/// synchronously (`routes.dart:84`, `:90`).
+/// There is no transition, so a pop finalizes synchronously.
 pub struct SimpleRoute<T> {
     settings: RouteSettings,
     builder: RouteContentBuilder,
-    /// Flutter's `currentResult` (`navigator.dart:426`) — the `??` fallback.
+    /// The `??` fallback for a pop that carries no value.
     current_result: Option<T>,
     /// Set by tests / `LocalHistoryRoute`-shaped routes.
     handles_pop_internally: bool,
-    /// When `false`, `did_pop` refuses, as `LocalHistoryRoute.didPop` does while
-    /// it still has local entries (`routes.dart:950-967`).
+    /// When `false`, `did_pop` refuses, as a route with local history entries
+    /// does while any remain.
     consents_to_pop: bool,
 }
 
@@ -136,7 +118,7 @@ impl<T> SimpleRoute<T> {
         }
     }
 
-    /// Give the route a name (Flutter's `RouteSettings.name`).
+    /// Give the route a name.
     #[must_use]
     pub fn named(mut self, name: impl Into<String>) -> Self {
         self.settings = RouteSettings::named(name);

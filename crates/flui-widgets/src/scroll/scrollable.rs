@@ -9,8 +9,7 @@
 //! # Scrolling is a layout event, not a build event
 //!
 //! `RenderViewport` subscribes to the offset and marks itself needing layout
-//! (`crates/flui-objects/src/sliver/viewport.rs`, Flutter's
-//! `offset.addListener(markNeedsLayout)`), so a scroll re-lays out the
+//! (`crates/flui-objects/src/sliver/viewport.rs`), so a scroll re-lays out the
 //! viewport and rebuilds nothing. `Scrollable` used to *also* wrap the whole
 //! viewport in an `AnimatedBuilder` on the controller's notify, which
 //! re-created every sliver view — and every delegate closure — on every
@@ -35,9 +34,7 @@
 //! the resolved [`AxisDirection`] (see [`Scrollable::axis_direction`]), not
 //! the bare [`Axis`] alone: a horizontal `Scrollable` under an RTL ambient
 //! `Directionality` resolves `RightToLeft` and flips the sign relative to
-//! the default `LeftToRight` case, matching `axisDirectionIsReversed`
-//! (`painting/basic_types.dart`) and `ScrollDragController.update`/`.end`
-//! (`widgets/scroll_activity.dart`).
+//! the default `LeftToRight` case.
 //!
 //! # `animate_to` servicing (ADR-0037)
 //!
@@ -51,11 +48,10 @@
 //! (fling or curve-driven tween) happens to be active — and `jump_to` queues
 //! an explicit cancel for the same reason.
 //!
-//! # Flutter parity
+//! # One position per controller
 //!
-//! Corresponds to `widgets/scrollable.dart` `Scrollable`. FLUI merges
-//! `ScrollPosition` into `ScrollController` (v1 restriction: one position per
-//! controller).
+//! `ScrollPosition` is merged into `ScrollController` (v1 restriction: one
+//! position per controller).
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -221,8 +217,7 @@ impl Scrollable {
     /// field docs). Pass the exact `AxisDirection` a
     /// [`Scrollable::viewport_builder`]'s composed content resolved for
     /// itself, so a drag in a given physical direction moves the offset the
-    /// way that content actually paints (Flutter parity:
-    /// `axisDirectionIsReversed`, `painting/basic_types.dart`).
+    /// way that content actually paints.
     #[must_use]
     pub fn axis_direction(mut self, direction: AxisDirection) -> Self {
         self.axis_direction = Some(direction);
@@ -321,8 +316,7 @@ pub struct ScrollableState {
     /// the frame-capability scope rule. A wheel tick raises the scroll
     /// activity synchronously and this ends it AFTER the frame that
     /// consumed the pixel write, so the viewport's layout still observes
-    /// the user direction (the oracle's `pointerScroll` reaches the same
-    /// state through `goBallistic(0)` settling a frame later).
+    /// the user direction.
     post_frame: Option<PostFrameHandle>,
     /// Vsync handle kept for `unregister` in `dispose`.
     vsync: Option<Vsync>,
@@ -534,8 +528,7 @@ impl ViewState<Scrollable> for ScrollableState {
 
         // The viewport re-lays itself out from the render side:
         // `RenderViewport` subscribes to the offset and marks needs-layout
-        // (`crates/flui-objects/src/sliver/viewport.rs`, Flutter's
-        // `offset.addListener(markNeedsLayout)`). So this build runs when the
+        // (`crates/flui-objects/src/sliver/viewport.rs`). So this build runs when the
         // *configuration* changes, never per scroll pixel — the
         // `AnimatedBuilder` that used to wrap it rebuilt the viewport and
         // every sliver view underneath on every `set_pixels`. What genuinely
@@ -579,7 +572,7 @@ impl ViewState<Scrollable> for ScrollableState {
                 scsv.boxed()
             };
 
-            // Flutter parity: Scrollable uses HitTestBehavior::Opaque so the
+            // Scrollable uses HitTestBehavior::Opaque so the
             // gesture area fires regardless of whether the child content is
             // itself hittable (e.g. an empty SizedBox).
             let position_start = ctrl_update.position();
@@ -589,8 +582,7 @@ impl ViewState<Scrollable> for ScrollableState {
                 .behavior(HitTestBehavior::Opaque)
                 .on_pan_start(move |_cx, _details| {
                     // Grab: halt any in-flight fling so the list stops at the
-                    // finger's contact position (Flutter parity — ScrollPosition
-                    // calls `activity.cancel()` on `handleDragStart`).
+                    // finger's contact position.
                     let _ = fling_stop.stop();
                     // AFTER the stop: stopping fires the status listener,
                     // which marks the position idle — the grab that begins a
@@ -599,15 +591,13 @@ impl ViewState<Scrollable> for ScrollableState {
                     position_start.set_is_scrolling(true);
                 })
                 .on_pan_update(move |_cx, details| {
-                    // Flutter convention: a downward/rightward finger drag
+                    // A downward/rightward finger drag
                     // (positive delta on the scroll axis) moves the viewport
                     // toward the axis's START, so the offset DECREASES — but
                     // only for a NOT-reversed `AxisDirection` (`down`/`right`).
                     // For a reversed one (`up`/`left`, e.g. `RightToLeft`
-                    // under RTL `Directionality`) the sign flips, mirroring
-                    // `ScrollDragController.update`'s `if (_reversed) { offset
-                    // = -offset; }` (`widgets/scroll_activity.dart`) ahead of
-                    // `ScrollPosition.applyUserOffset`'s `pixels - delta`.
+                    // under RTL `Directionality`) the sign flips before the
+                    // `pixels - delta` below.
                     //
                     // `apply_boundary_conditions` enforces the physics limits
                     // (hard clamp or spring resistance) before committing.
@@ -638,10 +628,7 @@ impl ViewState<Scrollable> for ScrollableState {
                     // = finger moving down/right. For a NOT-reversed axis
                     // direction the scroll offset increases when the finger
                     // moves the opposite way, so we negate; for a reversed one
-                    // (`up`/`left`) the two negations cancel — mirroring
-                    // `ScrollDragController.end`'s `double velocity =
-                    // -details.primaryVelocity!; if (_reversed) { velocity =
-                    // -velocity; }` (`widgets/scroll_activity.dart`).
+                    // (`up`/`left`) the two negations cancel.
                     let raw_velocity = match scroll_direction {
                         Axis::Vertical => details.velocity.pixels_per_second.dy,
                         Axis::Horizontal => details.velocity.pixels_per_second.dx,
@@ -651,7 +638,7 @@ impl ViewState<Scrollable> for ScrollableState {
                     } else {
                         -raw_velocity
                     };
-                    // Cap at Flutter's `kMaxFlingVelocity` (8 000 px/s). The LSQ
+                    // Cap the fling velocity at 8 000 px/s. The LSQ
                     // velocity tracker can produce astronomically large velocities
                     // when pointer samples arrive with sub-millisecond timestamps
                     // (headless test timing); an unbounded velocity drives
@@ -690,30 +677,23 @@ impl ViewState<Scrollable> for ScrollableState {
                 .child(scroll_view);
 
             // Wheel / trackpad pointer-scroll: an immediate scroll with no
-            // drag semantics — no slop, no arena hold-and-release. Mirrors
-            // the oracle end to end: `Listener.onPointerSignal` →
-            // `PointerSignalResolver.register` → `position.pointerScroll`
-            // (`widgets/scrollable.dart`,
-            // `scroll_position_with_single_context.dart`) — clamp HARD to
-            // the extents (a wheel never overscrolls), pulse the scroll
-            // activity with the USER direction around the pixel write, and
-            // end the pulse after the frame that consumes it.
+            // drag semantics — no slop, no arena hold-and-release. The tick
+            // clamps HARD to the extents (a wheel never overscrolls), pulses the
+            // scroll activity with the USER direction around the pixel write, and
+            // ends the pulse after the frame that consumes it.
             //
             // The claim channel makes nested scrollables arbitrate instead
             // of both scrolling: `Continue` when the tick cannot move this
-            // position (zero delta, or already clamped at the extent) is the
-            // oracle's "only express interest in the event if it would
-            // actually result in a scroll" — the outer scrollable then takes
-            // the tick.
+            // position (zero delta, or already clamped at the extent) means
+            // "only express interest in the event if it would actually result
+            // in a scroll" — the outer scrollable then takes the tick.
             let ctrl_wheel = scroll_controller.clone();
             let post_frame_wheel = post_frame.clone();
             let fling_wheel = fling_controller.clone();
             Listener::new()
                 .on_scroll_claim(move |data: &ScrollEventData| {
-                    // Deliberately modifier-agnostic — the oracle's
-                    // `_receivedPointerSignal` reads no modifiers, so a
-                    // ctrl+wheel tick over a plain list scrolls exactly as
-                    // Flutter's does. The ctrl+wheel-zooms contract needs no
+                    // Deliberately modifier-agnostic: a ctrl+wheel tick over a
+                    // plain list scrolls like any other. The ctrl+wheel-zooms contract needs no
                     // decline here: a chord-gated zoom consumer sits INSIDE
                     // the scrollable, and the leaf-first claim walk asks it
                     // first.
@@ -721,9 +701,8 @@ impl ViewState<Scrollable> for ScrollableState {
                         Axis::Vertical => data.delta.dy,
                         Axis::Horizontal => data.delta.dx,
                     };
-                    // Platform deltas arrive already normalized to the
-                    // oracle's `scrollDelta` convention — positive = content
-                    // scrolls down (each backend converts its native axes
+                    // Platform deltas arrive already normalized —
+                    // positive = content scrolls down (each backend converts its native axes
                     // and units at its own boundary). Only the reversed-axis
                     // flip the drag arms use applies here.
                     let mut delta = axis_delta;
@@ -748,10 +727,9 @@ impl ViewState<Scrollable> for ScrollableState {
                     // A wheel tick interrupts whatever animation is driving
                     // the position — otherwise the fling controller's value
                     // listener overwrites the wheel write on its next tick
-                    // (the oracle's `pointerScroll` starts from `goIdle()`,
-                    // the same cancel the drag-grab and `jump_to` paths do).
+                    // (the same cancel the drag-grab and `jump_to` paths do).
                     let _ = fling_wheel.stop();
-                    // `pointerScroll`'s pulse: direction is only recordable
+                    // The wheel pulse: direction is only recordable
                     // while an activity is live, so raise first.
                     position.set_is_scrolling(true);
                     position.set_user_scroll_direction(if delta > 0.0 {

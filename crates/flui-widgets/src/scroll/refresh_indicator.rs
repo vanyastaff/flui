@@ -28,11 +28,8 @@
 //! - DEFERRED (v1): nested-scroll coordination and horizontal pull-to-refresh.
 //! - DEFERRED (v1): custom indicator builder callbacks.
 //!
-//! # Flutter parity
-//!
-//! Corresponds to `widgets/refresh_indicator.dart` `RefreshIndicator`. FLUI
-//! v1 uses a synchronous `Fn()` completion model rather than Dart's `Future`
-//! because the view layer has no async executor.
+//! v1 uses a synchronous completion model rather than a future because the view
+//! layer has no async executor.
 
 use std::{
     rc::Rc,
@@ -60,11 +57,10 @@ use crate::{AnimatedBuilder, ColoredBox, GestureDetector, Positioned, Stack};
 // ---------------------------------------------------------------------------
 
 /// Default pull distance (logical pixels) required to trigger a refresh.
-/// Matches Flutter's `kRefreshIndicatorTriggerDistance`.
 const DEFAULT_THRESHOLD_PX: f64 = 80.0;
 
 /// Height of the indicator overlay while refreshing (logical pixels).
-/// Matches Flutter's `kRefreshIndicatorExtent` (56 dp, a standard FAB height).
+/// 56 dp, a standard FAB height.
 const INDICATOR_HEIGHT_PX: f64 = 56.0;
 
 /// Indicator background colour: Material Blue 500 at 80 % opacity.
@@ -506,8 +502,8 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
                         if rc_update.is_refreshing() {
                             return;
                         }
-                        // Flutter convention: positive dy (finger moving DOWN) maps
-                        // to a decrease in scroll offset (reveals content above).
+                        // Positive dy (finger moving DOWN) maps to a decrease in
+                        // scroll offset (reveals content above).
                         let raw_delta_y = details.delta.dy;
                         let proposed = sc_update.pixels() - raw_delta_y;
 

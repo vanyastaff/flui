@@ -1,8 +1,6 @@
 //! The kind of device behind a pointer.
 
 /// The kind of pointer device
-///
-/// Similar to Flutter's `PointerDeviceKind`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Default)]

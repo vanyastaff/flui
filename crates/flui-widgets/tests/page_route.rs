@@ -1,12 +1,11 @@
 //! Tests for [`PageRoute`] and [`PopupRoute`].
 //!
-//! # Parity oracles
+//! # Scenarios
 //!
-//! `.flutter/packages/flutter/lib/src/widgets/pages.dart:50-61` (`PageRoute.opaque`,
-//! `canTransitionTo`, `canTransitionFrom`), `.../widgets/routes.dart:2391-2394`
-//! (`PopupRoute.opaque`, `maintainState`), `:293-321` (`_handleStatusChanged`),
-//! `:422-496` (`_updateSecondaryAnimation`). Expected values are read from the
-//! reference, not from running this code.
+//! `PageRoute` opacity and transition eligibility, `PopupRoute` opacity and
+//! state maintenance, status-change handling, and the secondary animation.
+//! Expected values are fixed by the documented contract, not by running this
+//! code.
 //!
 //! These drive the animation by hand, through the temporary test-access probe
 //! `RouteProbe::transition_handle()` (ADR-0083 §4).
@@ -55,10 +54,10 @@ fn complete_entrance(transition: &TransitionHandle, harness: &mut Harness) {
 }
 
 // ============================================================================
-// opaque — pages.dart:50, routes.dart:2391
+// opaque
 // ============================================================================
 
-/// `PageRoute.opaque => true` (`pages.dart:50`): once the entrance transition
+/// `PageRoute` is opaque: once the entrance transition
 /// completes, the route below is dropped from the widget tree.
 pub(crate) fn page_route_occludes_the_route_below_once_its_transition_completes() {
     let (navigator, mut harness, bottom) = navigator_with_seed();
@@ -88,17 +87,17 @@ pub(crate) fn page_route_occludes_the_route_below_once_its_transition_completes(
 }
 
 // ============================================================================
-// maintainState — routes.dart:1893, :2230, :2394
+// maintainState
 // ============================================================================
 
 // ============================================================================
-// secondaryAnimation — routes.dart:422-496, pages.dart:58-61
+// secondaryAnimation
 // ============================================================================
 
 /// Pushing a `PageRoute` over a `PageRoute` drives the lower route's
 /// `secondaryAnimation` from the upper route's primary animation
-/// (`routes.dart:429-443`). Popping it re-points the proxy at the popped route,
-/// so the lower page animates back in as the upper reverses away (`:393-402`).
+/// Popping it re-points the proxy at the popped route,
+/// so the lower page animates back in as the upper reverses away.
 pub(crate) fn secondary_animation_runs_on_the_previous_page_route_when_pushing_and_popping() {
     let (navigator, mut harness, _bottom) = navigator_with_seed();
 
@@ -143,15 +142,15 @@ pub(crate) fn secondary_animation_runs_on_the_previous_page_route_when_pushing_a
 }
 
 // ============================================================================
-// pop — routes.dart:84-94, :177, :308-317
+// pop
 // ============================================================================
 
 // ============================================================================
-// barrier — routes.dart:2273-2330
+// barrier
 // ============================================================================
 
 // ============================================================================
-// buildPage / buildTransitions — routes.dart:1229-1240, :1656
+// buildPage / buildTransitions
 // ============================================================================
 
 // ============================================================================
@@ -192,7 +191,7 @@ pub(crate) fn back_gesture_edge_drag_normalizes_against_the_routes_real_width_no
     assert_eq!(controller.value(), 1.0);
 
     // Down at x=1 (inside [0, 20)). This is the arena's lone recognizer, so
-    // Flutter's deferred default accepts it after Down; both subsequent moves
+    // the deferred default accepts it after Down; both subsequent moves
     // are updates. The total logical movement is therefore 18.9px, and both
     // positions stay inside the 20px strip.
     harness.dispatch_pointer_down(1.0, 300.0);

@@ -175,7 +175,7 @@ are cases where the raw research, or the code, disagrees with the reports.
    rejecting the mitigation is not recorded.
 9. **Dropped from [synthesis][synth] without a recorded reason.** No pageless routes;
    the agent-facing surface (§11); device loss per `GpuContext`; the paint-poison error box;
-   the "route push" frame budget; the benchmark suite that mirrors Flutter's.
+   the "route push" frame budget; the benchmark suite.
 10. **AccessKit `Blur`.** [interaction_semantics][m-inter] calls the mapping wrong. The code
     documents it as deliberate (`crates/flui-semantics/src/accesskit_translation.rs:296-297`).
     Unresolved; it needs a screen-reader run, not a reading.

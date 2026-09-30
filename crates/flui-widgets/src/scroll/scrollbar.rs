@@ -18,12 +18,8 @@
 //! - Horizontal scrollbar orientation.
 //! - `ScrollbarTheme` look customization beyond `thumb_color`/`thumb_width`.
 //!
-//! # Flutter parity
-//!
-//! Corresponds to `widgets/scrollbar.dart` `Scrollbar`. FLUI's v1 version is
-//! purely additive: it paints on top of the child without clipping or resizing
-//! it. The thumb width defaults to 6 px (mobile), matching Flutter's
-//! `ScrollbarThemeData.thickness`.
+//! The v1 version is purely additive: it paints on top of the child without
+//! clipping or resizing it. The thumb width defaults to 6 px (mobile).
 
 use flui_painting::styling::Color;
 use flui_rendering::hit_testing::HitTestBehavior;
@@ -33,8 +29,7 @@ use flui_view::{BuildContext, Child, IntoView, ViewExt};
 use crate::scroll::ScrollController;
 use crate::{AnimatedBuilder, ColoredBox, GestureDetector, Positioned, Stack};
 
-/// Minimum thumb extent in logical pixels — matches Flutter's
-/// `ScrollbarPainter.minLength` default.
+/// Minimum thumb extent in logical pixels.
 const MIN_THUMB_PX: f64 = 18.0;
 
 /// Default thumb width in logical pixels.
@@ -86,7 +81,7 @@ impl Default for Scrollbar {
     fn default() -> Self {
         Self {
             controller: ScrollController::new(),
-            // Semi-transparent black — matches Flutter's CupertinoScrollbar default.
+            // Semi-transparent black, the Cupertino scrollbar look.
             thumb_color: Color::rgba(0, 0, 0, 128),
             thumb_width: DEFAULT_THUMB_WIDTH_PX,
             child: Child::empty(),
@@ -171,10 +166,8 @@ impl StatelessView for Scrollbar {
                 // `thumb_top = available_track * thumb_offset_fraction`
                 // (see that method's doc):
                 //   dP/d(thumb_top) = scroll_extent / available_track
-                // matching Flutter's `ScrollbarPainter` thumb-drag contract
-                // (`widgets/scrollbar.dart`, `_ScrollbarPainter`/`_startDrag`,
-                // 3.44.0), which maps track delta to scroll delta through the
-                // same `scrollExtent / trackExtent` ratio.
+                // i.e. track delta maps to scroll delta through the
+                // `scroll_extent / available_track` ratio.
                 let thumb_gesture = GestureDetector::new()
                     .behavior(HitTestBehavior::Opaque)
                     .on_pan_update(move |_cx, details| {

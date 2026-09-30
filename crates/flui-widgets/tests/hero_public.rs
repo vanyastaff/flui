@@ -6,17 +6,17 @@
 //!
 //! A flight is observed the only way public API allows: by scanning the render tree
 //! (`LaidOut::pipeline_owner`) for the shuttle's `RenderIgnorePointer`
-//! (`heroes.dart:594`), across the whole transition rather than at one fragile frame.
+//! across the whole transition rather than at one fragile frame.
 //! `max == 1` means a single shuttle flew and never stacked; `end == 0` means it
 //! landed. Entry-count and internal-state assertions go through the temporary
 //! test-access path instead (`hero_flight.rs`, ADR-0083 §4).
 //!
-//! # Parity oracles
+//! # Scenarios
 //!
-//! `.flutter/packages/flutter/test/widgets/heroes_test.dart` — `'Heroes animate'`,
-//! `'Stateful hero child state survives flight'` (`:1674`), `'Destination hero
-//! disappears mid-flight'` (`:1233`), `'Hero push transition interrupted by a pop'`
-//! (`:1063`), `'One route, two heroes, same tag, throws'` (`:1004` — FLUI logs).
+//! Heroes animate; a stateful hero child's state survives the flight; a
+//! destination hero disappearing mid-flight is handled; a push interrupted by
+//! a pop is diverted; one route with two heroes of the same tag logs instead
+//! of throwing.
 
 use std::time::Duration;
 
@@ -111,7 +111,7 @@ pub(crate) fn a_hero_push_flight_runs_and_settles() {
 }
 
 // ============================================================================
-// Advanced hooks — public surface, better-than-Flutter placeholder shape
+// Advanced hooks — public surface, placeholder shape
 // ============================================================================
 
 // ============================================================================

@@ -36,11 +36,8 @@ use crate::{
 /// intentionally making the context `!Send + !Sync` even though tree access is
 /// currently protected by `RwLock`.
 ///
-/// # Flutter Equivalent
-///
-/// In Flutter, `Element` implements `BuildContext` directly. Here we use
-/// a separate struct to avoid borrow checker issues with self-referential
-/// borrows during build.
+/// `Element` does not implement `BuildContext` directly: a separate struct
+/// avoids borrow checker issues with self-referential borrows during build.
 pub struct ElementBuildContext {
     /// The ElementId this context represents.
     element_id: ElementId,
@@ -159,8 +156,7 @@ impl ElementBuildContext {
     ///
     /// Reads the resolved inherited scope
     /// ([`ElementNode::inherited`](crate::tree::ElementNode)) instead of
-    /// walking the ancestor chain — Flutter parity for `_inheritedElements[T]`
-    /// (`framework.dart:5094`, the O(1) per-element map). flui builds that map
+    /// walking the ancestor chain, so the lookup is O(1). FLUI builds that map
     /// at mount as an `Arc<HashMap>` shared by refcount down non-provider runs.
     fn find_inherited_provider(&self, type_id: std::any::TypeId) -> Option<ElementId> {
         self.tree
@@ -187,12 +183,6 @@ impl ElementBuildContext {
     /// `&dyn ElementBase` reference handed to `predicate` cannot escape
     /// the closure — preserves the declarative-build invariant
     /// (Constitution Principle 5).
-    ///
-    /// Flutter parity: `framework.dart:5104-5160`
-    /// `_ancestorRenderObjectElement` / `findAncestorStateOfType` /
-    /// `findRootAncestorStateOfType` — Flutter uses an inline
-    /// `Element ancestor = _parent` loop with the same break-on-match
-    /// shape.
     fn walk_strict_ancestors<R>(
         &self,
         mut predicate: impl FnMut(&dyn crate::view::ElementBase) -> std::ops::ControlFlow<R>,
@@ -274,11 +264,6 @@ impl BuildContext for ElementBuildContext {
         // Records this element (with the fields it read, #1090) in the
         // matched InheritedElement's dependent map so a later provider update
         // whose `changed_fields` intersects that mask schedules us for rebuild.
-        //
-        // Flutter parity: `framework.dart:5081`
-        // `dependOnInheritedWidgetOfExactType` -> the matched
-        // `InheritedElement` then has `updateDependencies(self, null)`
-        // called on it (`framework.dart:5034`).
         let Some(ancestor_id) = self.find_inherited_provider(type_id) else {
             return false;
         };
@@ -382,10 +367,8 @@ impl BuildContext for ElementBuildContext {
         // while the tree read-lock is held — preserves declarative-build
         // invariant.
         //
-        // Flutter parity: `framework.dart:5122`
-        // `findAncestorWidgetOfExactType<T>` returns `element.widget` of
-        // the first ancestor whose widget runtimeType equals T. No
-        // dependency recording (this is a read-only walk).
+        // Returns the view of the first ancestor whose view type equals the
+        // requested one. No dependency recording (this is a read-only walk).
         let invoked = self.walk_strict_ancestors::<()>(|element| {
             if element.view_type_id() == type_id
                 && let Some(view_any) = element.view_as_any()
@@ -403,11 +386,8 @@ impl BuildContext for ElementBuildContext {
         // `TypeId` (via `Any::type_id`) matches. Stateless elements
         // return `None` from `state_as_any`, so they're skipped.
         //
-        // Flutter parity: `framework.dart:5132`
-        // `findAncestorStateOfType<T extends State>` matches against
-        // the State runtime type (T is the State subtype, not the
-        // StatefulWidget). We do the same: `type_id` is
-        // `TypeId::of::<S>()` where S is the State type.
+        // Matches against the State runtime type, not the StatefulView's:
+        // `type_id` is `TypeId::of::<S>()` where S is the State type.
         let invoked = self.walk_strict_ancestors::<()>(|element| {
             if let Some(state_any) = element.state_as_any()
                 && (*state_any).type_id() == type_id
@@ -446,11 +426,6 @@ impl BuildContext for ElementBuildContext {
         // (no id-yielding variant) is a YAGNI call; if a future need
         // arises for id-yielding walks we can widen the surface then.
         //
-        // Flutter parity: `framework.dart:5146`
-        // `findRootAncestorStateOfType<T>` — Flutter walks
-        // `element._parent` repeatedly, updating a local `ancestor`
-        // whenever a match is found, and returns `ancestor?.state` at
-        // the end.
         let mut root_most: Option<ElementId> = None;
 
         // Phase 1: walk all strict-ancestors, record the root-most match.
@@ -512,11 +487,8 @@ impl BuildContext for ElementBuildContext {
         // can hand it out directly without extending a `&self` borrow
         // into the rest of `build()` (plan §D2).
         //
-        // Flutter parity: `framework.dart:5160`
-        // `findAncestorRenderObjectOfType<T>` — Flutter walks `_parent`
-        // and returns the first matching `RenderObjectElement`'s
-        // `renderObject`. We do the equivalent walk and read
-        // `RenderBehavior::render_id` at the dispatch boundary.
+        // The walk reads `RenderBehavior::render_id` at the dispatch boundary
+        // of the first matching render element.
         self.walk_strict_ancestors(|ancestor| {
             if let Some(id) = ancestor.render_id() {
                 std::ops::ControlFlow::Break(id)
@@ -586,10 +558,9 @@ impl BuildContext for ElementBuildContext {
         // `Any::type_id` — sound because `Notification: Any` guarantees
         // the concrete-type vtable carries it.
         //
-        // Flutter parity: `notification_listener.dart:67`
-        // (`Notification.dispatch`) walks `_parent`, invoking each
-        // `_NotificationElement.onNotification` handler with the typed
-        // notification and stopping when one returns `true`.
+        // The dispatch walks the ancestors, invoking each notification
+        // listener's handler with the typed notification and stopping when
+        // one returns `true`.
         //
         // Single-`dyn`-boundary discipline per
         // Constitution Principle 4: the walk uses `&dyn ElementBase` (the
@@ -680,8 +651,8 @@ pub(crate) struct DependentRecord {
     /// The provider fields the dependent read (#1090).
     pub(crate) mask: crate::view::FieldSet,
     /// Recorded from `init_state` / `did_change_dependencies` rather than
-    /// `build`: such reads are kept until unmount (Flutter's accumulate
-    /// semantics), not re-derived per build (ADR-0074 §5.5). Set by the
+    /// `build`: such reads are kept until unmount (they accumulate),
+    /// not re-derived per build (ADR-0074 §5.5). Set by the
     /// stateful behavior after the hook returns.
     pub(crate) lifecycle: bool,
 }
@@ -701,7 +672,7 @@ pub(crate) struct DependentRecord {
 /// Inherited dependencies cannot be written here (the tree is read-only),
 /// so they are buffered into `dep_sink` and applied by `build_scope` after
 /// the element is restored. `mark_needs_build` during build is a
-/// Flutter-forbidden no-op.
+/// forbidden no-op.
 /// Owner- and presentation-scoped capabilities a `BuildContext` is handed
 /// rather than computing or selecting from ambient state.
 ///
@@ -799,8 +770,7 @@ impl<'b> BuildCtx<'b> {
     /// ([`ElementNode::inherited`](crate::tree::ElementNode)) — a node field
     /// that survives the `build_scope` element hole — rather than walking the
     /// ancestor chain. For a non-provider that scope is its parent's set, so
-    /// the result is the nearest strict-ancestor provider; matches Flutter's
-    /// `_inheritedElements[T]` lookup.
+    /// the result is the nearest strict-ancestor provider.
     fn find_inherited_provider(&self, type_id: TypeId) -> Option<ElementId> {
         self.tree.get(self.element_id)?.inherited_provider(type_id)
     }
@@ -871,9 +841,8 @@ impl BuildContext for BuildCtx<'_> {
         // Buffer the dependent BEFORE invoking the user callback. The tree is
         // read-only here, so the write itself is deferred to the `build_scope`
         // drain (see [`DependentRecord`]) — but it is *recorded* first, matching
-        // `ElementBuildContext::depend_on_inherited` and Flutter
-        // (`dependOnInheritedElement` calls `updateDependencies` before
-        // returning the widget). This matters on the error path: if the user
+        // `ElementBuildContext::depend_on_inherited` (registration precedes
+        // returning the provider's view). This matters on the error path: if the user
         // `build()` panics after this `depend_on` (caught by `build_or_recover`,
         // which substitutes an `ErrorView`), the element stays registered as a
         // dependent, so a later inherited change reschedules it and it recovers.
@@ -1011,8 +980,7 @@ impl BuildContext for BuildCtx<'_> {
         // Forbidden during build: a `BuildCtx` is ALWAYS mid-build, and the
         // node's `child_ids` here are the PRE-reconcile list — for an update
         // build they may be removed or reordered moments later. Mirrors the
-        // guard on `ElementBuildContext::visit_child_elements` and Flutter's
-        // build-target check (`framework.dart` `_debugCheckOwnerBuildTargetExists`).
+        // guard on `ElementBuildContext::visit_child_elements`.
         debug_assert!(
             !self.is_building(),
             "visit_child_elements cannot be called during build (a BuildCtx is always \
@@ -1027,8 +995,8 @@ impl BuildContext for BuildCtx<'_> {
 
     fn mark_needs_build(&self) {
         tracing::warn!(
-            "BuildCtx::mark_needs_build called during build — no-op (Flutter forbids \
-             mark-dirty during the build of the same element)"
+            "BuildCtx::mark_needs_build called during build — no-op (an element cannot \
+             be marked dirty during its own build)"
         );
     }
 

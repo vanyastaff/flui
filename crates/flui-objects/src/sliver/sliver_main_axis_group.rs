@@ -1,11 +1,9 @@
 //! `RenderSliverMainAxisGroup` — places multiple sliver children in a linear
 //! array along the main axis, composing their geometries into one sliver.
 //!
-//! # Flutter equivalence
+//! # Layout
 //!
-//! Behavior-faithful port of Flutter's `RenderSliverMainAxisGroup`
-//! (`packages/flutter/lib/src/rendering/sliver_group.dart`, tag `3.44.0`):
-//! children are laid out one by one in growth-direction order; a child at or
+//! Children are laid out one by one in growth-direction order; a child at or
 //! above the top of the viewport receives a nonzero scroll offset telling it
 //! where along the main axis to start; children after it are placed by the
 //! space consumed so far. Pinned descendants (a pinned persistent header
@@ -13,11 +11,10 @@
 //! pulled back so every child paints within the group's own remaining scroll
 //! extent — the group never lets a pinned child escape its bounds.
 //!
-//! Paint order is Flutter's: LAST child first, so earlier children (the
-//! pinned header preceding its content) draw on top. Hit-testing walks
-//! first-to-last, mirroring `hitTestChildren`.
+//! Paint order is LAST child first, so earlier children (the pinned header
+//! preceding its content) draw on top. Hit-testing walks first-to-last.
 //!
-//! # Divergences (documented)
+//! # Notes
 //!
 //! - `child_scroll_offset` / `child_main_axis_position` (the per-child query
 //!   hooks on [`RenderSliver`]) keep their trait defaults: FLUI's pipeline
@@ -37,9 +34,8 @@ use flui_rendering::{
     traits::RenderSliver,
 };
 
-/// Absolute values below this threshold collapse to zero — the oracle's
-/// `_fixPrecisionError`, guarding the running subtractions in the child
-/// constraint derivation against f64 drift.
+/// Absolute values below this threshold collapse to zero, guarding the
+/// running subtractions in the child constraint derivation against f64 drift.
 const PRECISION_ERROR_TOLERANCE: f64 = flui_foundation::EPSILON;
 
 fn fix_precision_error(value: f64) -> f64 {
@@ -54,7 +50,7 @@ fn fix_precision_error(value: f64) -> f64 {
 /// main axis and reports their composed geometry.
 ///
 /// See the module docs for the layout contract and the paint/hit-test
-/// ordering it preserves from the oracle.
+/// ordering it guarantees.
 #[derive(Clone, Default)]
 pub struct RenderSliverMainAxisGroup {
     /// Child count committed by the last layout — bounds the hit-test walk
@@ -101,8 +97,7 @@ impl RenderSliver for RenderSliverMainAxisGroup {
         }
 
         // Growth-direction iteration order: forward walks 0..n, reverse
-        // walks n..0 (the oracle's firstChild/childAfter vs
-        // lastChild/childBefore pairing).
+        // walks n..0.
         let order: Vec<usize> = match constraints.growth_direction {
             GrowthDirection::Forward => (0..child_count).collect(),
             GrowthDirection::Reverse => (0..child_count).rev().collect(),
@@ -176,8 +171,7 @@ impl RenderSliver for RenderSliverMainAxisGroup {
         }
 
         // Pull pinned children (and any child painting past the group's
-        // remaining scroll extent) back inside the group's bounds — the
-        // oracle's post-loop paint correction.
+        // remaining scroll extent) back inside the group's bounds.
         let remaining_extent = (scroll_offset - constraints.scroll_offset).max(0.0);
         if paint_offset > remaining_extent {
             let pinned_children_overflow =
@@ -205,7 +199,7 @@ impl RenderSliver for RenderSliverMainAxisGroup {
         let paint_extent = paint_offset.clamp(0.0, constraints.remaining_paint_extent);
 
         // Reversed effective axes (up/left) place each child from the far
-        // edge — the oracle's final pass, run after `paint_extent` is known.
+        // edge — a final pass, run after `paint_extent` is known.
         let reversed = constraints
             .growth_direction
             .apply_to_axis_direction(constraints.axis_direction)
@@ -223,10 +217,9 @@ impl RenderSliver for RenderSliverMainAxisGroup {
             ctx.position_child(index, offset);
         }
 
-        // `..ZERO` struct-update drops the oracle constructor's defaults
-        // (`layoutExtent ??= paintExtent`, `visible ??= paintExtent > 0`,
-        // `hitTestExtent ??= paintExtent`) — all restated explicitly here,
-        // the exact omission class that produced three real header bugs in
+        // `..ZERO` struct-update drops the constructor's derived defaults
+        // (`layout_extent`, `visible`, `hit_test_extent`) — all restated
+        // explicitly here, the exact omission class that produced three real header bugs in
         // this workspace (and, unstated, made this group unhittable in its
         // first cut).
         SliverGeometry {
@@ -244,8 +237,7 @@ impl RenderSliver for RenderSliverMainAxisGroup {
     }
 
     /// Paint LAST child first so earlier children draw on top — a pinned
-    /// header preceding its content must overlap it, exactly the oracle's
-    /// `paint` walking `lastChild` backward. The oracle's per-child
+    /// header preceding its content must overlap it. A per-child
     /// `geometry.visible` gate is NOT restated here: FLUI's paint pipeline
     /// already skips any sliver whose committed geometry is invisible
     /// (`pipeline/owner/paint.rs`), and the harness paint-cull test pins
@@ -254,8 +246,7 @@ impl RenderSliver for RenderSliverMainAxisGroup {
         ctx.paint_children_reverse();
     }
 
-    /// First-to-last child walk, stopping at the first hit — the oracle's
-    /// `hitTestChildren`. Positions resolve from the offsets layout
+    /// First-to-last child walk, stopping at the first hit. Positions resolve from the offsets layout
     /// committed; the walk is bounded by the children the last layout
     /// committed (the hit context carries no child count of its own).
     fn hit_test_children(

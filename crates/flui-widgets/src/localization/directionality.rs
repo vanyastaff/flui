@@ -1,6 +1,4 @@
 //! [`Directionality`] — the ambient text/layout direction for a subtree.
-//!
-//! Flutter parity: `widgets/directionality.dart` `Directionality`.
 
 use flui_foundation::geometry::Axis;
 use flui_painting::typography::TextDirection;
@@ -15,8 +13,6 @@ use flui_view::{BoxedView, InheritedView, impl_inherited_view};
 /// delta into a logical one (e.g. `Navigator`'s edge-swipe back gesture) read
 /// the ambient direction with [`Directionality::of`]/[`Directionality::maybe_of`]
 /// instead of hard-coding [`TextDirection::Ltr`].
-///
-/// Flutter parity: `Directionality` (`widgets/directionality.dart`).
 #[derive(Clone)]
 pub struct Directionality {
     /// The direction this node provides to descendants.
@@ -44,8 +40,6 @@ impl Directionality {
     ///
     /// Panics if there is no `Directionality` ancestor. Use
     /// [`maybe_of`](Self::maybe_of) for a non-panicking variant.
-    ///
-    /// Flutter parity: `Directionality.of(context)`.
     #[must_use]
     pub fn of(ctx: &dyn BuildContext) -> TextDirection {
         Self::maybe_of(ctx).expect(
@@ -58,8 +52,6 @@ impl Directionality {
     /// Look up the nearest ancestor [`Directionality`]'s direction,
     /// registering a dependency. Returns `None` if there is no
     /// `Directionality` ancestor.
-    ///
-    /// Flutter parity: `Directionality.maybeOf(context)`.
     #[must_use]
     pub fn maybe_of(ctx: &dyn BuildContext) -> Option<TextDirection> {
         ctx.depend_on::<Self, _>(|d| d.direction)
@@ -111,8 +103,8 @@ impl_inherited_view!(Directionality);
 /// `update_render_object`; the only invocation is on a parent-driven view swap.
 /// So a dependency registered on a render element would mark it dirty, rebuild
 /// it, and change nothing: an RTL flip would silently do nothing, with no panic
-/// and no failing test. FLUI has no equivalent of Flutter's
-/// `RenderObjectElement.performRebuild() -> updateRenderObject`.
+/// and no failing test. A dirty render element has no rebuild path that
+/// re-runs `update_render_object`.
 ///
 /// [`Flex`](crate::Flex) and [`ListBody`](crate::ListBody) answer this by being
 /// public `StatelessView`s over private render views. This function applies the
@@ -161,8 +153,7 @@ pub fn resolve_alignment(
 }
 
 /// Resolves an [`AxisDirection`] from a layout/scroll `axis`, its `reverse`
-/// flag, and the ambient [`Directionality`] — Flutter's
-/// `getAxisDirectionFromAxisReverseAndDirectionality` (`widgets/basic.dart`).
+/// flag, and the ambient [`Directionality`].
 /// Only `Axis::Horizontal` consults `Directionality` (defaulting to `Ltr`
 /// with no ancestor, matching every other FLUI widget that reads it) — a
 /// vertical caller never registers a dependency on it, so a `Directionality`

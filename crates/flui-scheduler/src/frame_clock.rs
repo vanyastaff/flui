@@ -51,12 +51,9 @@
 //!
 //! # First-frame deferral withholds the SUBMIT, never the segment
 //!
-//! `.flutter/packages/flutter/lib/src/rendering/binding.dart`'s
-//! `RendererBinding.deferFirstFrame` is explicit: "the framework will still
-//! do all the work to produce frames, but those frames are never sent to the
-//! engine and will not appear on screen" (binding.dart:582-599's
-//! `sendFramesToEngine` doc: "Whether frames produced by `drawFrame` are sent
-//! to the engine"). Deferral gates the **submit** only. [`FrameClock::poll`]
+//! While the first frame is deferred, the framework still does all the work
+//! to produce frames, but those frames are never sent to the engine and do
+//! not appear on screen. Deferral gates the **submit** only. [`FrameClock::poll`]
 //! honors this: while deferred, a nonzero demand mask still runs the
 //! caller's segment ([`PollDecision::ProduceWithheld`]) — build/layout/paint
 //! happen exactly as they would undeferred — and only the separate
@@ -196,8 +193,8 @@ pub enum PollDecision {
     /// Run the segment now (build/layout/paint, exactly as for `Produce` —
     /// the mask clears the same way) but the caller must WITHHOLD the
     /// result from the engine: first-frame deferral
-    /// ([`FrameClock::defer`]) is active. See the module doc's `.flutter/`
-    /// citation — deferral withholds the submit, never the pipeline work.
+    /// ([`FrameClock::defer`]) is active. See the module doc — deferral
+    /// withholds the submit, never the pipeline work.
     /// A caller checks [`FrameClock::is_deferred`] at its own submit point;
     /// `poll` itself does not repeat that check on a later call once the
     /// mask it already cleared here is gone.
@@ -592,7 +589,7 @@ impl FrameClock {
 
     // ------------------------------------------------------------------
     // First-frame deferral — withholds the submit, never the segment; see
-    // the module doc's `.flutter/` citation.
+    // the module doc.
     // ------------------------------------------------------------------
 
     /// Defer sending a produced frame to the engine until a matching
@@ -609,15 +606,10 @@ impl FrameClock {
     /// [`reset_first_frame_sent`](Self::reset_first_frame_sent)
     /// deliberately un-masks it, at which
     /// point every `defer` ever called (including ones issued after the
-    /// first frame shipped) becomes active again. This is exactly the
-    /// oracle's own contract, not a simplification of it:
-    /// `.flutter/packages/flutter/lib/src/rendering/binding.dart` —
-    /// `deferFirstFrame` (:603-606) increments `_firstFrameDeferredCount`
-    /// with no check on `_firstFrameSent` at all; `sendFramesToEngine`
-    /// (:591) is `_firstFrameSent || _firstFrameDeferredCount == 0` (the
-    /// count is masked, not cleared); `resetFirstFrameSent` (:627-634)
-    /// exists specifically so a test's later `deferFirstFrame`/
-    /// `allowFirstFrame` calls have an effect again.
+    /// first frame shipped) becomes active again. The deferral count is
+    /// masked by the first-frame-sent flag, never cleared, and
+    /// `reset_first_frame_sent` exists specifically so a test's later
+    /// `defer`/`lift` calls have an effect again.
     ///
     /// Deferring does NOT stop [`poll`](Self::poll) from running the
     /// segment: a nonzero demand mask still returns
@@ -654,8 +646,7 @@ impl FrameClock {
     }
 
     /// Test/embedder escape hatch: pretend no frame has been sent yet, so a
-    /// fresh `defer`/`lift` pair has an effect again. Mirrors
-    /// `RenderingFlutterBinding::reset_first_frame_sent`.
+    /// fresh `defer`/`lift` pair has an effect again.
     pub fn reset_first_frame_sent(&self) {
         self.first_frame_sent.set(false);
     }
@@ -1033,7 +1024,7 @@ mod tests {
 
     // ----------------------------------------------------------------
     // First-frame deferral: the segment still runs (`ProduceWithheld`),
-    // never a `Skip` -- see the module doc's `.flutter/` citation. Lift
+    // never a `Skip` -- see the module doc. Lift
     // with retained demand produces exactly once, immediately (kills "lift
     // without re-arm").
     // ----------------------------------------------------------------

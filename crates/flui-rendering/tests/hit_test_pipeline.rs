@@ -46,8 +46,7 @@ pub(crate) fn padding_child_hits_leaf_first_at_laid_out_offset() {
     );
 
     // (3,3) → child-local (-2,-2): inside padding's own area but the
-    // padding is hit-transparent (Flutter parity — it forwards to the
-    // child only).
+    // padding is hit-transparent (it forwards to the child only).
     assert!(
         hits(&owner, 3.0, 3.0).is_empty(),
         "padding's own border area claims no hit",

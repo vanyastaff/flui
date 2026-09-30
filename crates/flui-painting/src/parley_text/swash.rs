@@ -55,7 +55,7 @@ impl std::fmt::Debug for SwashRasterizer {
 
 /// The fake-bold outline growth at `size` px, in total: `size × ratio`, with
 /// the ratio interpolated linearly from 1/24 at 9 px to 1/32 at 36 px and
-/// clamped outside. A FLUI choice with no checked Flutter reference; painting
+/// clamped outside. A FLUI choice; painting
 /// ARCHITECTURE, mapping decision 10.
 pub(super) fn fake_bold_width(size: f32) -> f32 {
     const KEYS: [f32; 2] = [9.0, 36.0];

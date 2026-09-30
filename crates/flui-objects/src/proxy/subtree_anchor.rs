@@ -13,12 +13,10 @@
 //!
 //! * A `RenderId` exists only for a render-object element; a stateful view owns
 //!   none.
-//! * `BuildContext::find_render_object()` walks strict **ancestors** — it is
-//!   Flutter's `findAncestorRenderObjectOfType`, not `context.findRenderObject()`
-//!   — so a view can never learn the id of the subtree *below* it.
-//! * A `GlobalKey` would work, and is what Flutter uses (`routes.dart:1229` puts
-//!   `_subtreeKey` on a `RepaintBoundary`), but it costs a registry lookup and a
-//!   keyed element.
+//! * `BuildContext::find_render_object()` walks strict **ancestors**, so a view
+//!   can never learn the id of the subtree *below* it.
+//! * A `GlobalKey` on a `RepaintBoundary` would work, but it costs a registry
+//!   lookup, a keyed element and a repaint boundary that is not otherwise needed.
 //!
 //! The first — and only — lifecycle hook where a render object's own id is
 //! guaranteed is [`RenderBox::attach`], which receives a [`RenderInvalidationHandle`]
@@ -34,13 +32,7 @@
 //! remains hittable there, just as it was before the identity node was inserted.
 //! This object is not a repaint boundary and does not force compositing. Its only
 //! effect is to exist, so that something above it has a `RenderId` to point at.
-//!
-//! # Flutter equivalence
-//!
-//! None directly. Flutter reaches the same place with `RepaintBoundary` + a
-//! `GlobalKey` (`routes.dart:1229`, `ModalRoute._subtreeKey`), paying a repaint
-//! boundary it does not otherwise need. This is the narrower object: identity
-//! without the compositing side effect.
+//! It is the narrower object: identity without the compositing side effect.
 
 use std::sync::Arc;
 

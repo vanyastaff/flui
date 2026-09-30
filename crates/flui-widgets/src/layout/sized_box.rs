@@ -7,7 +7,7 @@ use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// A box with a specific size that forces its child to that size.
 ///
-/// Flutter parity: `widgets/basic.dart` `SizedBox`. Like Flutter, this is a
+/// This is a
 /// `RenderConstrainedBox` whose additional constraints are tight for the given
 /// width/height; an unset dimension passes the parent's constraint through on
 /// that axis (`BoxConstraints.tightFor`).
@@ -52,13 +52,13 @@ impl SizedBox {
     }
 
     /// A box that becomes as large as its parent allows (infinite tight on
-    /// both axes — Flutter's `SizedBox.expand`).
+    /// both axes).
     pub fn expand() -> Self {
         Self::new(f64::INFINITY, f64::INFINITY)
     }
 
-    /// A box that becomes as small as its parent allows (zero on both axes —
-    /// Flutter's `SizedBox.shrink`).
+    /// A box that becomes as small as its parent allows (tight zero on both
+    /// axes).
     pub fn shrink() -> Self {
         Self::new(0.0, 0.0)
     }

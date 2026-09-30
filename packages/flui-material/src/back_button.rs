@@ -1,36 +1,27 @@
 //! [`BackButton`] — an [`IconButton`] with a back-arrow glyph that pops the
 //! nearest [`Navigator`](flui_sdk::widgets::Navigator).
 //!
-//! # Flutter parity
+//! # Composition
 //!
-//! `material/action_buttons.dart`'s `BackButton`/`BackButtonIcon` (oracle
-//! tag `3.44.0`; `material/back_button.dart` is a pure re-export of the same
-//! file, so this cites `action_buttons.dart` directly). The oracle's
-//! `BackButton extends _ActionButton extends IconButton`, whose default
-//! `_onPressedCallback` calls `Navigator.maybePop(context)` — this type
-//! composes [`IconButton`] the same way (not by subclassing, since Rust has
-//! no implementation inheritance), wiring
+//! This type composes [`IconButton`], wiring
 //! [`NavigatorHandle::maybe_pop`](flui_sdk::widgets::NavigatorHandle::maybe_pop)
-//! as the default handler and [`BackButton::on_pressed`] as the override that
-//! replaces it — Flutter parity: "The `onPressed` callback can … be used to
-//! pop the platform's navigation stack … instead of Flutter's `Navigator`."
+//! as the default press handler and [`BackButton::on_pressed`] as the override
+//! that replaces it (for example to pop the platform's navigation stack
+//! instead of the `Navigator`).
 //!
-//! # Glyph: `Icons.arrow_back`'s codepoint, not a bundled asset
+//! # Glyph: the `arrow_back` codepoint, not a bundled asset
 //!
-//! `BackButtonIcon` resolves a platform-specific glyph
-//! (`Icons.arrow_back_ios_new_rounded` on iOS/macOS, `Icons.arrow_back`
-//! everywhere else, including web) through the ambient `Theme.platform` and
-//! an `ActionIconTheme` override hook. FLUI has no `TargetPlatform`/
-//! `ActionIconTheme` substrate to switch on, and — as
+//! The Material spec uses a platform-specific glyph (an iOS-style chevron on
+//! iOS/macOS, the `arrow_back` arrow everywhere else). FLUI has no
+//! platform/action-icon-theme substrate to switch on, and — as
 //! [`Icon`]'s own module docs state plainly — **no
 //! bundled icon font**: every codepoint shapes to tofu (the "missing glyph"
 //! box) until font-registration infrastructure lands, regardless of which
 //! icon is requested. Given that pre-existing, already-named rendering gap,
-//! [`back_arrow_icon_data`] carries `Icons.arrow_back`'s exact identity —
+//! [`back_arrow_icon_data`] carries the `arrow_back` icon's exact identity —
 //! codepoint `0xE092`, font family `"Material Icons"`, `match_text_direction:
-//! true` (`icons.dart`'s `arrow_back` constant, tag `3.44.0`) — rather than
-//! inventing a substitute glyph or a hand-drawn path (no such drawn-path
-//! convention exists in this crate). **Named divergence:** no
+//! true` — rather than inventing a substitute glyph or a hand-drawn path (no
+//! such drawn-path convention exists in this crate). **Named limitation:** no
 //! iOS/macOS-specific glyph switch, and (per `Icon`'s own docs)
 //! `match_text_direction` is carried on the data but not yet applied by
 //! `Icon::build` — both wait on their respective missing substrates
@@ -43,9 +34,9 @@ use flui_sdk::widgets::{Icon, IconData, NavigatorHandle};
 use crate::button_style_button::PressCallback;
 use crate::icon_button::IconButton;
 
-/// `Icons.arrow_back` — Flutter parity: `icons.dart`'s `arrow_back` constant
-/// (tag `3.44.0`). See the module docs' "Glyph" section for why this
-/// codepoint is used even with no bundled icon font to shape it against.
+/// The Material `arrow_back` icon. See the module docs' "Glyph" section for
+/// why this codepoint is used even with no bundled icon font to shape it
+/// against.
 #[must_use]
 pub fn back_arrow_icon_data() -> IconData {
     IconData {
@@ -57,11 +48,9 @@ pub fn back_arrow_icon_data() -> IconData {
 /// An [`IconButton`] with a back-arrow glyph. With no [`Self::on_pressed`]
 /// override, tapping it calls
 /// [`NavigatorHandle::maybe_pop`](flui_sdk::widgets::NavigatorHandle::maybe_pop)
-/// on the nearest enclosing [`Navigator`](flui_sdk::widgets::Navigator) — Flutter
-/// parity: `Navigator.maybePop(context)`. With no navigator ancestor at all
-/// (and no override), the button mounts disabled rather than panicking — a
-/// named divergence from the oracle, which unconditionally assumes an
-/// ancestor `Navigator` exists.
+/// on the nearest enclosing [`Navigator`](flui_sdk::widgets::Navigator). With
+/// no navigator ancestor at all (and no override), the button mounts disabled
+/// rather than panicking.
 ///
 /// ```rust
 /// use flui_material::BackButton;

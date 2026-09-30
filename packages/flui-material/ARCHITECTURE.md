@@ -1,24 +1,12 @@
 # flui-material Architecture
 
 Per-crate ledger for Material widgets and theming.
-Mapping decisions that span more than one module in this crate land here so
-later parity work does not treat a deliberate divergence as accidental drift.
+Design decisions that span more than one module in this crate land here.
 Module-level docs may repeat a local note and should cite this file when the
 contract is shared.
 
 Adopted incrementally: sections below cover the decisions this crate has
-recorded so far; Flutter source mapping for the full catalog grows as widgets
-are touched.
-
----
-
-## Flutter source mapping
-
-| Flutter source | FLUI module | Notes |
-|---|---|---|
-| `material/checkbox.dart` `Checkbox` | [`src/checkbox.rs`](src/checkbox.rs) | Dual constructors + private mode enum; see mapping decision below. |
-| `material/tab_controller.dart` `TabController` / `DefaultTabController` | [`src/tab_controller.rs`](src/tab_controller.rs) | Release index bounds; see mapping decision below. |
-| `material/tab_bar_view.dart` / `tabs.dart` `TabBar` | [`src/tab_bar_view.rs`](src/tab_bar_view.rs), [`src/tabs.rs`](src/tabs.rs) | Release children/tabs↔length agreement. |
+recorded so far.
 
 ---
 
@@ -48,12 +36,11 @@ exercise the production dispatch, signal mutation and reader rebuild.
 
 ### Checkbox value/tristate is a private mode enum, not independent fields
 
-**Rule:** Flutter's `Checkbox` takes `bool? value` plus `bool tristate` and
-guards with a debug-only constructor assert
-(`assert(tristate || value != null)` in `checkbox.dart`). In release the
-illegal pair can paint an indeterminate dash while semantics report
-unchecked / not mixed — an a11y contradiction. Rust's `Option<bool>` + `bool`
-fields reproduce that hole unless the type forbids it.
+**Rule:** An `Option<bool>` value paired with a `bool` tristate flag admits an
+illegal pair (`tristate == false` with `value == None`). If only a debug assert
+guards it, a release build can paint an indeterminate dash while semantics
+report unchecked / not mixed — an a11y contradiction. The type has to forbid
+the pair.
 
 **Choice:** FLUI stores a private `CheckboxMode::{Binary(bool),
 Tristate(Option<bool>)}` and exposes two constructors:
@@ -67,18 +54,17 @@ Semantics flags are derived from the mode via `checkbox_semantics_flags`
 
 **Alternatives considered:**
 
-- Release `assert!` in `build` alone (Flutter-shaped) — still admits the pair
+- Release `assert!` in `build` alone — still admits the pair
   until first build; forgeable in-module; weaker than the type system.
 - Public `CheckboxValue` enum on the API surface — stronger than needed for
   callers; dual constructors already close the cross-crate hole.
 - Fallible constructor returning `Result` — worse ergonomics for a widget that
   can encode the invariant at compile time.
 
-**Trade-off:** breaking vs Flutter's single constructor + `tristate:` named
-arg. Call sites migrate `new(Some(x))` → `new(x)` and
-`new(v).tristate(true)` → `tristate(v)`. Steady-state tap cycle, paint marks,
-and AccessKit checked/mixed semantics stay aligned with the oracle for every
-*legal* state.
+**Trade-off:** a single constructor with a `tristate` flag is not offered.
+Call sites migrate `new(Some(x))` → `new(x)` and
+`new(v).tristate(true)` → `tristate(v)`. The steady-state tap cycle, paint
+marks and AccessKit checked/mixed semantics agree for every legal state.
 
 **Replacement coverage:**
 
@@ -92,21 +78,19 @@ unrepresentable illegal states over `debug_assert!` alone.
 
 ### TabController length/index is enforced in release
 
-**Rule:** Flutter's `TabController` / `TabBarView` use debug-only asserts for
-`initialIndex` / `set_index` bounds and children↔length agreement
-(`tab_controller.dart`, `tab_bar_view.dart`). In release, FLUI previously
-could store an out-of-range index (listeners rebuild against impossible
-state) or hide every `TabBarView` child when lengths disagreed.
+**Rule:** Debug-only asserts on `initialIndex` / `set_index` bounds and
+children↔length agreement are not enough. In release, `TabController` could
+store an out-of-range index (listeners rebuild against impossible state) or
+`TabBarView` could hide every child when lengths disagreed.
 
 **Choice:**
 
 - Construction (`TabController::new`, `with_previous`,
   `DefaultTabController::initial_index`): release
   `assert_construction_tab_index` — `(length == 0 && index == 0) || index <
-  length`. Stricter than Flutter's constructor assert when `length == 0`
-  (Flutter allows any non-negative `initialIndex`; FLUI requires `0`).
+  length`. With `length == 0` only `initialIndex == 0` is accepted.
 - Mutation (`set_index` / `animate_to`): release `assert_set_index_in_range`
-  matching Flutter `_changeIndex` — `index < length || length == 0`. When
+  — `index < length || length == 0`. When
   `length < 2`, the call remains a no-op after the check (including any
   index on a length-0 controller).
 - `TabBarView::build` / `TabBar::build`: release-assert
@@ -115,14 +99,14 @@ state) or hide every `TabBarView` child when lengths disagreed.
 
 Length shrink via `DefaultTabController` still clamps through
 `recreate_for_length_change` before constructing the next controller.
-`previous_index` may remain out of range after a shrink (Flutter
-`_copyWithAndDispose`); only the live `index` is construction-validated.
+`previous_index` may remain out of range after a shrink; only the live
+`index` is construction-validated.
 
 A bounded `TabIndex` newtype was considered but deferred: tab count is
 dynamic across controller identities, so type-level encoding alone does not
 close `set_index(usize)` without also changing the public mutation API.
 Release assert matches the AGENTS temporary fallback for caller-violable
-`usize` contracts while the API stays Flutter-shaped.
+`usize` contracts.
 
 **Trade-off / recovery paths:**
 
@@ -133,36 +117,23 @@ Release assert matches the AGENTS temporary fallback for caller-violable
 | Construction `new` / `initial_index` | Process panic at the call site |
 
 Callers must keep controller length and `TabBar`/`TabBarView` lists in sync —
-the same requirement the oracle documents, now non-optional. Sync-in-`build`
-is stricter than Flutter's post-frame debug tab-count check.
+a requirement that is now enforced in release, checked in `build`.
 
 **Unasserted:** no test pins this.
 
 ### `Radio` publishes its group membership, and the role cascade has to prefer it
 
-**Rule:** [`AGENTS.md`](../../AGENTS.md) Design stance ("Flutter is a reference, not a spec") — a behavior the
-reference handles is dropped only by decision, recorded where a reader will find
-it.
+**Rule:** a behavior the platform accessibility contract requires is dropped
+only by decision, recorded where a reader will find it.
 
-**Oracle:** `material/radio.dart` builds its UI through
-`RawRadio<T>` (`radio.dart:553`), and `RawRadio` is where the accessibility
-contract lives: `widgets/raw_radio.dart` wraps its child in
-`Semantics(inMutuallyExclusiveGroup: true, checked: value, selected:
-accessibilitySelected, hint: semanticsHint, child: buildToggleableWithChild(…))`,
-and `widgets/toggleable.dart` adds the inner `Semantics(enabled: isInteractive)`
-around the child. The `inMutuallyExclusiveGroup` flag is what separates a radio
-from a checkbox to a screen reader: the two publish identical checked state, and
-only the group flag says the checked state is one-of-a-set rather than
-independent. `selected` and `hint` are `TargetPlatform`-conditional in the
-oracle, computed two lines above the `Semantics` call — Android/Fuchsia/Linux/
-Windows null both, iOS/macOS set `selected` to the value and supply a hint only
-for an *unselected* radio (the selected state is announced by the platform
-already, so a hint would duplicate it).
+**Why:** the mutually-exclusive-group flag is what separates a radio from a
+checkbox to a screen reader: the two publish identical checked state, and only
+the group flag says the checked state is one-of-a-set rather than independent.
 
-**Choice:** `Radio::build` publishes the same flag —
-`.checked(selected).in_mutually_exclusive_group(true).enabled(interactive)` —
-and `Semantics` grew the `in_mutually_exclusive_group(true)` builder this needed
-(it previously had no such method, which is why the flag was unwired).
+**Choice:** `Radio::build` publishes
+`.checked(selected).in_mutually_exclusive_group(true).enabled(interactive)`,
+and `Semantics` grew the `in_mutually_exclusive_group(true)` builder this
+needed (it previously had no such method, which is why the flag was unwired).
 
 **Why the flag alone was not enough, and what else had to change.** Publishing
 it exposed a defect one layer up, in the role cascade rather than in this
@@ -185,50 +156,29 @@ radio**, and the group flag published here is what makes it. The cascade reorder
 is not load-bearing there: the radio's own node carries no `IsButton`, so it
 resolves `RadioButton` under either arm order. So the precedence neither fixes
 nor is exercised by the tile composition, while publishing the flag *does* fix
-it. The reference splits a bare tile the same way — by its predicate, traced
-below; no reference test mounts that bare composition — and its one-node oracle
-is a *merge*: `RadioListTile` wraps its `ListTile` in `MergeSemantics`
-(`material/radio_list_tile.dart`, tag `3.44.0`), and that is what
-`test/material/radio_list_tile_test.dart`'s `testWidgets('RadioListTile
-semantics')` asserts as one node carrying `isButton` and the radio's own flags
-together (the `isButton` there depends on the test passing
-`internalAddSemanticForOnTap: true`). Its compatibility predicate is not the reason — `isCompatibleWith`
-rejects actions on the same raw bit intersection FLUI uses and rejects flags
-through `_flags.hasConflictingFlags(..)`, whose tristate `hasConflict` is
-`both != none`, i.e. the same "both carry the trait" test as FLUI's bit
-intersection for `hasEnabledState`, `isFocusable` and `hasCheckedState` — so the
-reference's own pipeline gives the radio a `SemanticsNode` of its own under the
-tile, and `MergeSemantics` folds it into the parent's data afterwards. The
-like-for-like FLUI composition is therefore `MergeSemantics` over the tile, and
+it.
+
+A single node for a tile plus its radio is a *merge*: wrapping the `ListTile` in
+`MergeSemantics` folds the radio's own node into the parent's data, and
 measured it exports **one** node resolving `RadioButton` — the reorder above is
 what makes that merged node a radio (it resolves `Button` with the cascade
-reverted). That composition is pinned in `tests/list_tile.rs`. A comparison
-of a bare FLUI tile against a merged reference one is not a
-divergence in `is_compatible_with`, and is not recorded as one. (`hasConflictingFlags` lives in the
-engine's `lib/ui`, outside `.flutter`; its body was read from a local SDK at
-framework `3.44.8` / engine `0cd6107`, not the pinned tag — provenance stated
-because it is the one link that cannot be checked at `3.44.0`.) The precedence
+reverted). That composition is pinned in `tests/list_tile.rs`. The precedence
 itself is flui-semantics' decision and is recorded in full in
 [`crates/flui-semantics/ARCHITECTURE.md`](../../crates/flui-semantics/ARCHITECTURE.md).
 
-**What is still not wired, named rather than implied.** The oracle's
-`selected` and `hint` fields are `TargetPlatform`-conditional
-(`widgets/raw_radio.dart`) and FLUI's semantics surface has no platform
-dimension, so neither is published — a deliberate drop of a
-platform-dependent behavior, not an oversight.
+**What is still not wired, named rather than implied.** Platform-conditional
+`selected` and `hint` fields are not published: FLUI's semantics surface has no
+platform dimension, so this is a deliberate drop of a platform-dependent
+behavior, not an oversight.
 `focus_node` / `autofocus` keep the whole-substrate `InkWell` gap `Checkbox` and
 `Switch` already name. And **no `Radio` gains a semantics *action*** — publishing
 the group flag changes what the control *is* to a screen reader, not what a
-platform request can *do* to it. This is where FLUI is narrower than the
-reference rather than equal to it: Flutter's `InkResponse` publishes
-`Semantics(onTap: …)` itself, so the oracle's node carries
-`actions: [tap, focus]` alongside those flags (`radio_list_tile_test.dart`, tag
-`3.44.0`), and a screen reader can activate the control through the semantics
+platform request can *do* to it. `InkResponse` does not publish a tap semantics
+action, so a screen reader cannot activate the control through the semantics
 tree. In FLUI the widget-layer gesture callback is `Rc<dyn Fn(..)>` while
 `SemanticsActionHandler` is `Arc<dyn Fn(..) + Send + Sync>`, so bridging the two
 is a storage-and-lifetime decision that owes its own design record; until then
-activation reaches the tree only through the pointer path. Naming this as a
-present gap rather than reading "the `InkResponse` owns activation" as parity.
+activation reaches the tree only through the pointer path.
 
 **Replacement coverage:**
 
@@ -243,17 +193,12 @@ present gap rather than reading "the `InkResponse` owns activation" as parity.
 
 ### `TextFormField` is a `FormField<String>` over `TextField`, and takes the user's edits from `on_changed`
 
-**Oracle:** `material/text_form_field.dart` (tag `3.44.0`): a
-`FormField<String>` whose builder returns a `TextField` with
-`decoration.copyWith(errorText: field.errorText)`, a controller listener that
-calls `didChange`, and a `reset` that writes `initialValue` back into the
-controller.
-
-**Choice:** the same composition, with two named differences. A field error
+**Choice:** a `FormField<String>` whose builder returns a `TextField` with the
+field's error written into the decoration, and a `reset` that writes
+`initialValue` back into the controller. A field error
 replaces the decoration's `error_text`, so it reaches `InputDecorator`'s error
 line and the error caret colour exactly as a hand-set error does; with no
-field error a caller-set `error_text` stays, as `copyWith(errorText: null)`
-keeps it. The user's
+field error a caller-set `error_text` stays. The user's
 edits come from `TextField::on_changed` rather than a controller listener,
 because FLUI's controller listeners are `Send + Sync` and cannot reach the
 owner-thread field state; the controller is read before the field validates or
@@ -282,6 +227,5 @@ elsewhere in the widget layer.
 
 | Item | Notes |
 |------|-------|
-| Full Flutter source mapping table | Deferred; fill as individual widgets are re-touched. |
 | Cupertino tab index still `debug_assert!` | `flui-cupertino` `CupertinoTabScaffold` — audit for the same policy when that surface is retouched. |
 | Bounded `TabIndex` API | Optional follow-up if mutation ergonomics need fallible `try_set_index` without panic. |
