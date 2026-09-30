@@ -55,7 +55,7 @@ env:
 jobs:
   latest-deps:
     name: latest deps (cargo update + build + nextest)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -100,7 +100,7 @@ jobs:
 
   bench:
     name: bench (criterion numbers, trend artifact)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     # Advisory by design: a noisy-runner outlier must not page anyone.
     continue-on-error: true
@@ -131,7 +131,7 @@ jobs:
 
   nightly-canary:
     name: nightly canary (check + clippy + future-incompat, advisory)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     # Advisory by design (see the header): a failure here is information
     # about a coming stable release, not a regression in this tree.
@@ -174,7 +174,7 @@ jobs:
 
   release-lints:
     name: release-profile clippy (advisory)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     # Advisory: nothing in PR CI compiles most of the workspace in release,
     # so a finding here is latent debt to schedule, not a broken build. It is
@@ -211,7 +211,7 @@ jobs:
   # lockfile into the project and builds offline.
   cli-live-build:
     name: flui create + build desktop / web + dev server (live)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -261,7 +261,7 @@ jobs:
         with:
           tool: wasm-bindgen-cli@${{ steps.wasm_bindgen_version.outputs.version }}
 
-      # Chromium is preinstalled on ubuntu-latest, so `flui devices` lists a
+      # Chromium is preinstalled on the Ubuntu runner image, so `flui devices` lists a
       # browser and the serve half runs; `--no-open` keeps it headless.
       - name: live web build and dev server of a generated project
         env:

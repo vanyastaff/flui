@@ -266,15 +266,14 @@ fn platform_suite(host: Host) -> Step {
     }
 }
 
-/// `cargo nextest run` over [`TEST_SCOPE`], limited to the nested-cargo test
-/// group (.config/nextest.toml) or to everything outside it. The filterset is
-/// the only `-E`: a second one would be ORed with it, not intersected.
-fn scoped_nextest(nested_cargo: bool) -> Cmd {
-    let filterset = if nested_cargo {
-        "group(nested-cargo)"
-    } else {
-        "not group(nested-cargo)"
-    };
+/// The tests that run a `cargo` or `rustc` of their own (.config/nextest.toml):
+/// the trybuild suites (group `trybuild`) and the generated projects and
+/// facade consumers (group `nested-cargo`).
+const NESTED: &str = "group(nested-cargo) | group(trybuild)";
+
+/// `cargo nextest run` over [`TEST_SCOPE`] with `filterset`, the only `-E`: a
+/// second one would be ORed with it, not intersected.
+fn scoped_nextest(filterset: &str) -> Cmd {
     Cmd::cargo(["nextest", "run"])
         .args(TEST_SCOPE)
         .args(["-E", filterset])
@@ -285,33 +284,43 @@ fn scoped_nextest(nested_cargo: bool) -> Cmd {
 enum Stages {
     /// Everything: the default.
     All,
-    /// Everything but the nested-cargo group (`--fast`).
+    /// Everything but the nested tests (`--fast`).
     Fast,
-    /// The nested-cargo group alone (`--nested`): CI runs it as its own job.
+    /// The nested tests alone (`--nested`): CI runs them as their own job.
     Nested,
+    /// Everything but the trybuild suites (`--no-trybuild`): what CI's
+    /// Windows job runs, since compiler diagnostics do not depend on the host
+    /// and Linux checks them.
+    NoTrybuild,
 }
 
-/// The test suite: everything outside the nested-cargo group, flui-platform on
-/// its own, then the nested-cargo group (the tests that run a `cargo` of their
-/// own on a project they generate; they dominate the wall-clock, so they run
-/// last). Same scope in both stages, so nothing is rebuilt, and the two
-/// filtersets are complements, so together they are the whole suite.
+/// The test suite: everything outside the nested tests, flui-platform on its
+/// own, then the nested tests (they run a `cargo` or `rustc` of their own and
+/// dominate the wall-clock, so they run last). Same scope in every stage, so
+/// nothing is rebuilt, and the filtersets are complements, so together they
+/// are the whole suite.
 fn test_plan(host: Host, stages: Stages) -> Vec<Step> {
-    let nested = scoped_nextest(true);
+    let base = || scoped_nextest(&format!("not ({NESTED})"));
+    let nested = scoped_nextest(NESTED);
     match stages {
-        Stages::All => vec![
-            scoped_nextest(false).into(),
-            platform_suite(host),
-            nested.into(),
-        ],
+        Stages::All => vec![base().into(), platform_suite(host), nested.into()],
         Stages::Fast => vec![
-            scoped_nextest(false).into(),
+            base().into(),
             platform_suite(host),
             Step::Note(format!(
-                "test --fast: SKIPPED the nested-cargo group (trybuild compile_fail suites, flui-cli cli_create::generated_*, flui::facade_consumer; filter in .config/nextest.toml). Run them with: {nested}"
+                "test --fast: SKIPPED the nested tests (trybuild compile_fail suites, flui-cli cli_create::generated_*, flui::facade_consumer; groups in .config/nextest.toml). Run them with: {nested}"
             )),
         ],
         Stages::Nested => vec![nested.into()],
+        Stages::NoTrybuild => vec![
+            base().into(),
+            platform_suite(host),
+            scoped_nextest("group(nested-cargo)").into(),
+            Step::Note(format!(
+                "test --no-trybuild: SKIPPED the trybuild suites. Run them with: {}",
+                scoped_nextest("group(trybuild)")
+            )),
+        ],
     }
 }
 
@@ -693,23 +702,30 @@ pub(crate) fn gate(args: &GateArgs) -> anyhow::Result<ExitCode> {
 /// Arguments for `cargo xtask test`.
 #[derive(Debug, clap::Args)]
 pub(crate) struct TestArgs {
-    /// Leave out the nested-cargo group (trybuild, generated projects, facade
+    /// Leave out the nested tests (trybuild, generated projects, facade
     /// consumers): the quick local loop.
     #[arg(long)]
     fast: bool,
-    /// Run only the nested-cargo group.
+    /// Run only the nested tests.
     #[arg(long, conflicts_with = "fast")]
     nested: bool,
+    /// Leave out only the trybuild suites (host-independent compiler output).
+    #[arg(long, conflicts_with_all = ["fast", "nested"])]
+    no_trybuild: bool,
     #[command(flatten)]
     run: RunOpts,
 }
 
 /// `cargo xtask test`: run the workspace test suite the way CI does.
 pub(crate) fn test(args: &TestArgs) -> anyhow::Result<ExitCode> {
-    let stages = match (args.fast, args.nested) {
-        (true, _) => Stages::Fast,
-        (_, true) => Stages::Nested,
-        _ => Stages::All,
+    let stages = if args.fast {
+        Stages::Fast
+    } else if args.nested {
+        Stages::Nested
+    } else if args.no_trybuild {
+        Stages::NoTrybuild
+    } else {
+        Stages::All
     };
     done(args.run.runner().steps(&test_plan(Host::current(), stages)))
 }
@@ -1077,9 +1093,9 @@ mod tests {
         assert_eq!(
             lines(&test_plan(Host::Linux, Stages::All)),
             [
-                format!("$ cargo nextest run {SCOPE} -E 'not group(nested-cargo)'"),
+                format!("$ cargo nextest run {SCOPE} -E 'not (group(nested-cargo) | group(trybuild))'"),
                 "$ FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast".to_owned(),
-                format!("$ cargo nextest run {SCOPE} -E 'group(nested-cargo)'"),
+                format!("$ cargo nextest run {SCOPE} -E 'group(nested-cargo) | group(trybuild)'"),
             ]
         );
         assert_eq!(
@@ -1091,20 +1107,33 @@ mod tests {
         );
         let fast = lines(&test_plan(Host::Linux, Stages::Fast));
         assert_eq!(fast.len(), 3);
-        assert!(fast[2].starts_with("test --fast: SKIPPED the nested-cargo group"));
+        assert!(fast[2].starts_with("test --fast: SKIPPED the nested tests"));
         assert!(
             fast[2].ends_with(&format!(
-                "cargo nextest run {SCOPE} -E 'group(nested-cargo)'"
+                "cargo nextest run {SCOPE} -E 'group(nested-cargo) | group(trybuild)'"
             )),
             "{}",
             fast[2]
         );
-        // CI's test-nested job: the group alone, with no platform leg
+        // CI's test-nested job: both groups alone, with no platform leg
         assert_eq!(
             lines(&test_plan(Host::Linux, Stages::Nested)),
             [format!(
-                "$ cargo nextest run {SCOPE} -E 'group(nested-cargo)'"
+                "$ cargo nextest run {SCOPE} -E 'group(nested-cargo) | group(trybuild)'"
             )]
+        );
+        // CI's Windows job: the host-specific nested group, not trybuild
+        let windows = lines(&test_plan(Host::Windows, Stages::NoTrybuild));
+        assert_eq!(windows.len(), 4);
+        assert_eq!(
+            windows[2],
+            format!("$ cargo nextest run {SCOPE} -E 'group(nested-cargo)'")
+        );
+        assert!(
+            windows[3].starts_with("test --no-trybuild: SKIPPED the trybuild suites")
+                && windows[3].ends_with("-E 'group(trybuild)'"),
+            "{}",
+            windows[3]
         );
         // the example link reuses the test build: the same features
         assert_eq!(

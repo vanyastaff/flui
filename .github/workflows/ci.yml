@@ -5,14 +5,22 @@ name: CI
 #   docs      a PR changing only documentation: nothing else
 #   tooling   a PR changing only repository tooling or a standalone crate
 #             (its own [workspace]): `deps`, and `standalone` for the crate
-#   wide      a PR that compiles anything: `deps` and every Linux job
-#             (HEAVY_JOBS in `ci`) over the whole workspace, in parallel, and
-#             `ios-runner` when the change reaches the iOS runner; no Windows
-#             or macOS suite. One serial job over the changed crates
-#             measured 35 min median against this lane's
-#             18 (2026-09-30), and hosted runners do not queue here.
-#   full      push to main, merge_group: `wide` plus the Windows and macOS
-#             jobs (FULL_JOBS)
+#   wide      a PR that compiles anything: `deps` and the pull-request gate
+#             (HEAVY_JOBS in `ci`: clippy, cross-typecheck, test,
+#             test-nested, doc, wasm-check, test-features, live-smoke; the
+#             last two are the only compile of the non-default feature paths
+#             and the only run above synthetic event dispatch, which
+#             AGENTS.md requires of event-translation changes) over the
+#             whole workspace, in
+#             parallel, and `ios-runner` when the change reaches the iOS
+#             runner. One serial job over the changed crates measured 35 min
+#             median against this lane's 18 (2026-09-30), and hosted runners
+#             do not queue here.
+#   full      push to main, merge_group: `wide` plus FULL_JOBS: the Windows
+#             and macOS jobs, and the Linux jobs that caught nothing clippy
+#             and test missed in 171 runs (2026-09-26..30): feature-matrix,
+#             miri, bench-compile, doc-test. A break they find turns main
+#             red and is fixed forward.
 #   extended  the nightly schedule, workflow_dispatch, a PR labelled
 #             `full-ci`: `full` plus the nightly-only platform jobs
 #             (EXTENDED_JOBS)
@@ -42,13 +50,27 @@ name: CI
 #   miri           — UB check on flui-rendering's pipeline owner and
 #                    flui-view's GlobalKey plane
 #   macos-ci       — extended lane: `cargo xtask ci` + the iOS runner clippy on macos-latest
-#   test-windows   — extended lane: `cargo xtask test` on windows-latest
+#   test-windows   — extended lane: `cargo xtask test --no-trybuild` on windows-latest
 #   ci             — aggregator: designed to be the one status check branch
 #                    protection would name, if a ruleset required one — as of
 #                    this writing `main` has no required-status-checks rule
 #                    (verified: GET /branches/main/protection -> 404), so
 #                    nothing here actually blocks a merge yet; that's a repo-
 #                    settings decision for the maintainer, not this file
+# Caches: the repository gets 10 GB, least-recently-used entries evicted past
+# it, and every job that saves from main writes a new entry whenever
+# Cargo.lock moves. So a job keeps a target cache only when its cold run
+# would outlast its lane's longest jobs (`test`, `test-nested`, about 9 min
+# warm, on a pull request; `gpu-test`, 23 min, on main): `test` (shared
+# with `test-nested`), `wasm-check`, `test-features`, `live-smoke` and
+# `gpu-test`. Cold, `test` took 18 min, `test-nested` 27, `wasm-check` 13
+# (run 36776652181) and `test-features` about 17. Every other job builds
+# cold: the pull-request ones in under 9 min, the main-only ones (a
+# `feature-matrix` shard 19 min) inside `gpu-test`'s 23. One key per job: a key shared across jobs with
+# different build modes lost time (clippy restoring `test`'s build-mode
+# artifacts re-checked every crate). Saved on main only.
+# Runners: named images (`ubuntu-26.04`), not `-latest`, so an image change
+# is a commit here and not a mid-rollout surprise in the apt steps.
 # Toolchain: every job compiles with rust-toolchain.toml's pinned channel;
 # `dtolnay/rust-toolchain@stable` only installs rustup and components, and
 # rustup then overrides to the pin (each job's log says so). `cargo xtask
@@ -127,7 +149,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   checks:
     name: checks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     env:
       # Single source of truth for the cache key below and the download URL
@@ -161,7 +183,7 @@ jobs:
           # falls back to cargo-binstall, which cannot resolve a Go tool that
           # is not on crates.io ("actionlint is not found", exit 76). It is
           # fetched from its own release below.
-          tool: typos-cli@1.48,taplo-cli@0.10,zizmor@1.30.1
+          tool: typos-cli@1.50,taplo-cli@0.10,zizmor@1.30.1
 
       # actionlint is a Go release binary, not a crates.io package: it has no
       # taiki-e/install-action recipe (falls back to cargo-binstall, which
@@ -291,7 +313,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   plan:
     name: plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     # `pull-requests: read`: the `full-ci` label is read from the API, not
     # from the event payload (a re-run replays the payload it started with).
@@ -370,13 +392,6 @@ jobs:
       - name: Add the iOS target to the pinned toolchain
         run: rustup target add aarch64-apple-ios
 
-      - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          cache-on-failure: true
-          shared-key: macos-ios
-          save-if: false
-          cache-bin: false
 
       - name: cargo clippy (ios runner)
         run: cargo clippy -p flui-app -p flui --locked --target aarch64-apple-ios -- -D warnings
@@ -394,7 +409,7 @@ jobs:
     name: standalone
     needs: [checks, plan]
     if: needs.plan.outputs.lane == 'tooling' && needs.plan.outputs.standalone != ''
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
       CARGO_BUILD_WARNINGS: warn
@@ -428,7 +443,7 @@ jobs:
     name: clippy
     needs: [checks, plan]
     if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -440,22 +455,6 @@ jobs:
         with:
           components: clippy
 
-      - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          # Per-job key, saved only from main (#822). A shared key across
-          # clippy / test / test-features / live-smoke / doc-test was tried
-          # (#819, #823) and measured on a warm re-run of main: it LOST time
-          # on every run. GitHub keeps one immutable entry per key, so only
-          # one job can write it; with `test` as the writer, clippy restored
-          # build-mode artifacts that cannot serve check-mode and re-checked
-          # 428 crates (3.3 min vs 1.2 with its own cache), and test-features
-          # could never save its non-default-feature dependencies (10.5 min
-          # vs 4.9). The cap pressure that motivated sharing came from
-          # per-PR saves, which #822 already removed; five main-only per-job
-          # entries are ~4 GB and fit.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-on-failure: true
 
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -482,7 +481,7 @@ jobs:
     name: test
     needs: [checks, plan]
     if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -545,9 +544,9 @@ jobs:
           retention-days: 7
 
   # ─────────────────────────────────────────────────────────────────────────
-  # test-nested — the nested-cargo group (`cargo xtask test --nested`: the
-  # trybuild compile_fail suites, flui-cli's generated projects, the facade
-  # consumers; each runs a `cargo` of its own). It was over half of `test`'s
+  # test-nested — the nested tests (`cargo xtask test --nested`: the trybuild
+  # compile_fail suites, flui-cli's generated projects, the facade consumers;
+  # each runs a `cargo` or `rustc` of its own). It was over half of `test`'s
   # wall-clock (5.7 of ~10 min in a PR run), so it runs beside it. Linux
   # only: what these tests check (compiler diagnostics, that a generated or
   # consuming crate builds) does not depend on the host.
@@ -556,7 +555,7 @@ jobs:
     name: test-nested
     needs: [checks, plan]
     if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -630,7 +629,7 @@ jobs:
     name: test-features
     needs: [checks, plan]
     if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -645,6 +644,7 @@ jobs:
         with:
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
+
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
@@ -720,7 +720,7 @@ jobs:
     name: live-smoke
     needs: [checks, plan]
     if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -735,6 +735,7 @@ jobs:
         with:
           cache-on-failure: true
           save-if: ${{ github.ref == 'refs/heads/main' }}
+
 
       # xvfb for the virtual display; libxkbcommon-x11 because winit's X11
       # backend dlopens it at startup (`xkbcommon-dl` panics without it, so
@@ -870,10 +871,6 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
-      - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
@@ -897,8 +894,8 @@ jobs:
   bench-compile:
     name: bench-compile
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
-    runs-on: ubuntu-latest
+    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane)
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -908,10 +905,6 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
-      - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: cargo bench --no-run
         run: cargo bench -p flui-rendering --no-run --locked
@@ -930,7 +923,7 @@ jobs:
     name: doc
     needs: [checks, plan]
     if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -940,10 +933,6 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
-      - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: cargo doc --no-deps (every `testing` feature on)
         run: cargo xtask doc-strict
@@ -974,7 +963,7 @@ jobs:
     name: deps
     needs: [checks, plan]
     if: needs.plan.outputs.lane != 'docs'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1016,8 +1005,8 @@ jobs:
   doc-test:
     name: doc-test
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
-    runs-on: ubuntu-latest
+    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane)
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1027,11 +1016,6 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
-      - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          cache-on-failure: true
-          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: cargo test --doc
         run: cargo test --workspace --locked --doc
@@ -1059,8 +1043,8 @@ jobs:
   miri:
     name: miri
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
-    runs-on: ubuntu-latest
+    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane)
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
       # Relax the workflow-level warnings gate: nightly deprecates APIs and
@@ -1081,10 +1065,6 @@ jobs:
         with:
           components: miri
 
-      - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # `+nightly` is required: the committed rust-toolchain.toml pin overrides
       # the job's installed default toolchain, and the pinned stable has no
@@ -1142,20 +1122,13 @@ jobs:
   feature-matrix:
     name: feature-matrix (${{ matrix.slice }})
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
-    runs-on: ubuntu-latest
+    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane)
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        # `cache` names each entry's cache: slices compile different packages
-        # under different feature sets, so a shared cache would be overwritten
-        # by whichever slice finished last.
-        include:
-          - { slice: "1/3", cache: shard-1 }
-          - { slice: "2/3", cache: shard-2 }
-          - { slice: "3/3", cache: shard-3 }
-          - { slice: combinations, cache: combinations }
+        slice: ["1/3", "2/3", "3/3", combinations]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1166,12 +1139,6 @@ jobs:
         with:
           components: clippy
 
-      - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          prefix-key: v2-rust-feature-matrix-${{ matrix.cache }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-on-failure: true
 
       - name: Install cargo-hack
         uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
@@ -1203,7 +1170,7 @@ jobs:
     name: wasm-check
     needs: [checks, plan]
     if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1313,15 +1280,6 @@ jobs:
       - name: Add the iOS target to the pinned toolchain
         run: rustup target add aarch64-apple-ios
 
-      - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          cache-on-failure: true
-          # Shared with `ios-runner`, which restores what this job saves on main.
-          shared-key: macos-ios
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          # Per tokio: binary caching breaks on macOS.
-          cache-bin: false
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
@@ -1347,7 +1305,7 @@ jobs:
     name: cross-typecheck
     needs: [checks, plan]
     if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1359,10 +1317,6 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc,aarch64-apple-darwin,aarch64-linux-android,aarch64-apple-ios
 
-      - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # `dtolnay/rust-toolchain@stable` installs the target for the toolchain
       # named `stable`, but the committed `rust-toolchain.toml` makes `1.98.1`
@@ -1493,7 +1447,7 @@ jobs:
         run: cargo clippy -p flui-app -p flui --locked --target aarch64-apple-ios -- -D warnings
 
   # ─────────────────────────────────────────────────────────────────────────
-  # test-windows — `cargo xtask test` on windows-latest: the workspace
+  # test-windows — `cargo xtask test --no-trybuild` on windows-latest: the workspace
   # suite on the platform day-to-day development happens on, which the Linux
   # `test` job cannot stand in for (paths, process spawning, the Win32
   # backend under the whole suite). Extended lane only: nightly, dispatch
@@ -1526,13 +1480,13 @@ jobs:
         with:
           tool: cargo-nextest@0.9
 
-      # The whole suite, the nested-cargo group included: `cli_create`'s
-      # generated projects and the facade consumers run a native `cargo`
-      # on this host, with their own feature graphs, which Linux's
-      # `test-nested` cannot stand in for. It is 17 of the job's 51 minutes
-      # on a cold cache, paid only in the extended lane.
-      - name: cargo xtask test
-        run: cargo xtask test
+      # The whole suite but the trybuild suites: `cli_create`'s generated
+      # projects and the facade consumers (group `nested-cargo`) run a
+      # native `cargo` on this host with their own feature graphs, which
+      # Linux's `test-nested` cannot stand in for; compiler diagnostics
+      # (group `trybuild`) do not depend on the host.
+      - name: cargo xtask test --no-trybuild
+        run: cargo xtask test --no-trybuild
 
   # ─────────────────────────────────────────────────────────────────────────
   # ci — aggregator over every job above (tokio pattern), designed so that a
@@ -1546,7 +1500,7 @@ jobs:
     name: ci
     if: always()
     needs: [checks, plan, ios-runner, standalone, clippy, feature-matrix, wasm-check, cross-typecheck, cli-macos, test, test-nested, test-features, live-smoke, gpu-test, platform-windows, bench-compile, doc, deps, doc-test, miri, macos-ci, test-windows]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       # The aggregator reads its own workflow file so it can prove the `needs`
@@ -1589,11 +1543,11 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
           HEAVY_JOBS: >-
-            clippy feature-matrix wasm-check cross-typecheck test
-            test-nested test-features live-smoke bench-compile doc doc-test
-            miri
+            clippy wasm-check cross-typecheck test test-nested doc
+            test-features live-smoke
           FULL_JOBS: >-
-            gpu-test platform-windows cli-macos
+            gpu-test platform-windows cli-macos feature-matrix bench-compile
+            doc-test miri
           EXTENDED_JOBS: >-
             macos-ci test-windows
           LANE: ${{ needs.plan.outputs.lane }}
@@ -1613,7 +1567,7 @@ jobs:
     name: notify-main-red
     needs: [ci]
     if: ${{ !cancelled() && needs.ci.result == 'failure' && (github.event_name == 'push' || github.event_name == 'schedule') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       issues: write

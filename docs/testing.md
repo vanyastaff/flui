@@ -184,30 +184,32 @@ set.
 
 ### Nested-cargo tests
 
-The group is the nested-cargo tests that dominate the suite's wall-clock:
-tests that run a `cargo` build of their own on a project they generate —
-the trybuild `compile_fail` suites (`flui-engine`, `flui-rendering`,
-`flui-painting`, `flui-view`'s `trybuild_ui`), the
-`flui-cli` template tests (`cli_create::generated_*`), and every
-`flui::facade_consumer` test. Locally, with their build caches cold, most take
-one to five minutes; the rest are quick. `.config/nextest.toml`
-names them with one filter, in the override that puts them in the nextest
-test group `nested-cargo`; `cargo nextest show-config test-groups` lists the
-group's members. Selecting by group needs nextest 0.9.133 or newer (the
+The nested tests dominate the suite's wall-clock: tests that run a `cargo` or
+`rustc` of their own. Two nextest test groups hold them: `trybuild`, the
+`compile_fail` suites (`flui-engine`, `flui-rendering`, `flui-painting`,
+`flui-view`'s `trybuild_ui`, `flui-widgets`' `routable_ui`), whose compiler
+output does not depend on the host; and `nested-cargo`, the `flui-cli`
+template tests (`cli_create::generated_*`) and every `flui::facade_consumer`
+test, which build a project with its own feature graph on the host. Locally,
+with their build caches cold, most take one to five minutes; the rest are
+quick. `.config/nextest.toml` names each group with one filter;
+`cargo nextest show-config test-groups` lists the members. Selecting by group needs nextest 0.9.133 or newer (the
 config's `nextest-version` enforces it).
 
 - `cargo xtask test` (and so `cargo xtask ci`) runs
-  `-E 'not group(nested-cargo)'` first, then `-E 'group(nested-cargo)'` as
-  its last stage. Nothing is dropped: the two filtersets are complements, so
-  together they are the whole suite, and CI runs it as one invocation.
+  `-E 'not (group(nested-cargo) | group(trybuild))'` first, then
+  `-E 'group(nested-cargo) | group(trybuild)'` as its last stage. Nothing is
+  dropped: the two filtersets are complements, so together they are the
+  whole suite.
 - `cargo xtask test --fast` is the quick local loop: the same scope without
-  the group, ending with a line that names what it skipped.
-- `cargo nextest run -E 'group(nested-cargo)'` with the same scope runs only
-  the group.
+  the nested tests, ending with a line that names what it skipped.
+- `cargo xtask test --nested` runs only the nested tests (CI's `test-nested`
+  job); `cargo xtask test --no-trybuild` everything but the `trybuild` group
+  (CI's `test-windows`).
 
 To narrow either stage, combine with `&` inside the single `-E`:
-`-E 'not group(nested-cargo) & package(flui-view)'`. A second `-E` is ORed
-with the first, not intersected: `-E 'not group(nested-cargo)' -E
+`-E 'not group(trybuild) & package(flui-view)'`. A second `-E` is ORed
+with the first, not intersected: `-E 'not group(trybuild)' -E
 'package(flui-view)'` runs everything outside the group *and* flui-view's
 `trybuild_ui` test inside it. `group()` works only on the command line (a
 profile's `default-filter` rejects it), which is why the stages are filtersets
@@ -929,8 +931,8 @@ runs `checks`, `plan` and the `ci` aggregator:
 |---|---|---|
 | `docs` | a pull request that changes only documentation | nothing |
 | `tooling` | a pull request that changes only repository tooling, or a standalone crate | `deps`; `standalone` for the crate |
-| `wide` | a pull request that compiles anything | `deps` and every Linux job (`HEAVY_JOBS`) over the whole workspace; `ios-runner` when the change reaches the iOS runner; no Windows or macOS suite |
-| `full` | a push to `main`, the merge queue | `wide` plus the Windows and macOS jobs (`FULL_JOBS`) |
+| `wide` | a pull request that compiles anything | `deps` and the pull-request gate (`HEAVY_JOBS`: `clippy`, `cross-typecheck`, `test`, `test-nested`, `doc`, `wasm-check`, `test-features`, `live-smoke`) over the whole workspace; `ios-runner` when the change reaches the iOS runner |
+| `full` | a push to `main`, the merge queue | `wide` plus `FULL_JOBS`: the Windows and macOS jobs, `feature-matrix`, `miri`, `bench-compile`, `doc-test` |
 | `extended` | the nightly schedule, `workflow_dispatch`, a pull request labelled `full-ci` | `full` plus the nightly-only platform jobs (`EXTENDED_JOBS`) |
 
 - **Wide lane**: every pull request that compiles anything runs every Linux
@@ -975,8 +977,12 @@ runs `checks`, `plan` and the `ci` aggregator:
   A red run on main or nightly opens (or comments on) the "CI is red on main"
   issue. The rule is fix forward within the hour, or revert.
 
-**Only `full` and `extended` check these**, so even a wide pull request can
-merge green and still turn main red: every Windows and macOS job, that is
+**Only `full` and `extended` check these**, so a pull request can merge green
+and still turn main red: the per-feature matrix (`feature-matrix`), miri,
+bench linking (`bench-compile`) and the doctests (`doc-test`) — over 171 runs
+of 2026-09-26..30 none of them failed where `clippy` and `test` passed, so
+they run after the merge and a break is fixed forward — and every Windows and
+macOS job, that is
 GPU readback on WARP (`gpu-test`), flui-platform's Windows suite
 (`platform-windows`), macOS's `flui-cli` suite and the iOS runner clippy
 (`cli-macos`; on a pull request the iOS clippy runs in `ios-runner` when
@@ -1018,7 +1024,7 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `cli-macos` | `cargo xtask test` (flui-cli's tests) + `cargo xtask cross-typecheck` (its iOS clippy line) | the same commands; they only mean "macOS" on a Mac |
 | `cross-typecheck` | `cargo xtask cross-typecheck` | needs the four targets (`cargo xtask doctor full`) |
 | `macos-ci` | `cargo xtask ci` + `cargo xtask cross-typecheck`'s iOS runner line (on a Mac) | the job runs the same commands on macos-latest; extended lane only |
-| `test-windows` | `cargo xtask test` (on Windows) | the job runs the same command on windows-latest, the nested-cargo group included (its generated projects and facade consumers run a native `cargo` there); extended lane only |
+| `test-windows` | `cargo xtask test --no-trybuild` (on Windows) | the job runs the same command on windows-latest: the `nested-cargo` group's generated projects and facade consumers run a native `cargo` there, while the `trybuild` group's compiler output is the same on every host and runs on Linux; extended lane only |
 | `ci` | — | CI only: the single check a ruleset would require. `cargo xtask ci-verify` verifies that every gated job ran and passed, and that the jobs which skipped are exactly those the lane skips |
 | `notify-main-red` | — | CI only: opens or updates the "CI is red on main" issue after a red run on main or nightly |
 

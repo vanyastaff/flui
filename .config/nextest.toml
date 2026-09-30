@@ -29,16 +29,20 @@ leak-timeout = "1s"
 # run of the whole suite 21 of them took 83-305 s each (2026-09-22, e9a5456d, jobs=6),
 # and no other test in the workspace reached 20 s.
 #
-# This override is the one place that names them: it puts them in test group
-# `nested-cargo`, and everything else selects the group, never the filter.
-# `cargo xtask test` runs the suite in two stages, `-E 'not group(nested-cargo)'`
-# then `-E 'group(nested-cargo)'` (`--fast` stops after the first): complements
-# by construction, so no test runs twice or not at all. `cargo nextest
-# show-config test-groups` lists the members. Keep this override first: a test
-# takes its group from the first override that matches it and sets one, so
-# only here is the group exactly this filter.
+# These two overrides are the one place that names them: the trybuild suites
+# in test group `trybuild` (compiler diagnostics: nothing depends on the host,
+# so CI checks them on Linux only), the generated projects and facade
+# consumers in `nested-cargo` (a native `cargo` with its own feature graph:
+# host-specific). Everything else selects the groups, never the filters.
+# `cargo xtask test` runs the suite in two stages,
+# `-E 'not (group(nested-cargo) | group(trybuild))'` then
+# `-E 'group(nested-cargo) | group(trybuild)'` (`--fast` stops after the
+# first): complements by construction, so no test runs twice or not at all.
+# `cargo nextest show-config test-groups` lists the members. Keep these
+# overrides first: a test takes its group from the first override that
+# matches it and sets one, so only here is each group exactly its filter.
 #
-# The group names them; it does not limit them (`max-threads = "num-cpus"`
+# The groups name them; they do not limit them (`max-threads = "num-cpus"`
 # below). Serializing them was measured slower both cold (713.6 s vs 563.1 s
 # for the 24) and warm (25.9 s vs 13.7 s), 2026-09-22, M1/8 GB, jobs=6.
 #
@@ -47,7 +51,12 @@ leak-timeout = "1s"
 # run to run with cache state -- a 4-minute global killed both template tests
 # once.
 [[profile.default.overrides]]
-filter = 'binary_id(flui-engine::compile_fail) | binary_id(flui-rendering::compile_fail) | binary_id(flui-widgets::routable_ui) | (binary_id(flui-painting::painting_it) & test(=compile_fail::trybuild_ui)) | test(=trybuild_ui::ui_tests) | (binary_id(flui-cli::cli_it) & test(/^cli_create::generated_/)) | binary_id(flui::facade_consumer)'
+filter = 'binary_id(flui-engine::compile_fail) | binary_id(flui-rendering::compile_fail) | binary_id(flui-widgets::routable_ui) | (binary_id(flui-painting::painting_it) & test(=compile_fail::trybuild_ui)) | test(=trybuild_ui::ui_tests)'
+slow-timeout = { period = "300s", terminate-after = 4 }
+test-group = 'trybuild'
+
+[[profile.default.overrides]]
+filter = '(binary_id(flui-cli::cli_it) & test(/^cli_create::generated_/)) | binary_id(flui::facade_consumer)'
 slow-timeout = { period = "300s", terminate-after = 4 }
 test-group = 'nested-cargo'
 
@@ -67,8 +76,9 @@ test-group = 'nested-cargo'
 [test-groups]
 gpu-readback = { max-threads = 1 }
 system-clipboard = { max-threads = 1 }
-# Named, not limited: see the nested-cargo override at the top.
+# Named, not limited: see the trybuild and nested-cargo overrides at the top.
 nested-cargo = { max-threads = "num-cpus" }
+trybuild = { max-threads = "num-cpus" }
 
 [[profile.default.overrides]]
 filter = 'binary_id(flui::composited_layer_update_readback) | (binary_id(flui-engine) & (test(/_readback_tests::/) | test(=renderer::tests::renderer_surface_selection_and_layer_compositing_read_back_as_specified)))'

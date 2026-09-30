@@ -1,0 +1,10 @@
+# actionlint configuration (https://github.com/rhysd/actionlint/blob/main/docs/config.md).
+#
+# `ubuntu-26.04` is a GitHub-hosted image (generally available 2026-09-17), but
+# actionlint 1.7.12, the release `checks` pins, predates it and rejects the
+# label as unknown. Declaring it here is actionlint's documented way to accept
+# a label it does not ship. Delete this entry once a pinned actionlint knows
+# the image.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
