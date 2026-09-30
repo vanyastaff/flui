@@ -108,7 +108,7 @@ reason = "the decision's context names the layout the decision changed"
 [[allow]]
 path = "docs/adr/ADR-0082-platform-api-contract-crate.md"
 kind = "path"
-count = 3
+count = 4
 reason = "the decision's context names the layout the decision changed"
 
 [[allow]]

@@ -36,7 +36,8 @@ pub(super) fn commands(code: &str) -> Vec<Command> {
                 end(&mut commands);
                 line += 1;
             }
-            '&' | '|' | ';' => {
+            // `(`/`)` group commands (`(cargo test)`): a command ends there too
+            '&' | '|' | ';' | '(' | ')' => {
                 flush(&mut word, &mut commands);
                 if matches!(c, '&' | '|') && chars.peek() == Some(&c) {
                     chars.next();

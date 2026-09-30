@@ -244,11 +244,15 @@ fn path(word: &str) -> Option<String> {
     Some(path)
 }
 
-/// `word` without a `:12`, `:12:5` or `:12-40` suffix.
+/// `word` without a `:12`, `:12:5`, `:12-40` or `:53,67` suffix.
 fn strip_line(word: &str) -> &str {
     let mut word = word;
     while let Some((head, tail)) = word.rsplit_once(':') {
-        if tail.is_empty() || !tail.bytes().all(|b| b.is_ascii_digit() || b == b'-') {
+        if tail.is_empty()
+            || !tail
+                .bytes()
+                .all(|b| b.is_ascii_digit() || b"-,".contains(&b))
+        {
             break;
         }
         word = head;

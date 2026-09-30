@@ -73,6 +73,10 @@ fn a_path_loses_its_line_anchor_and_item_suffix() {
             "crates/flui-view/src/lib.rs:346-366",
             "crates/flui-view/src/lib.rs",
         ),
+        (
+            "crates/flui-view/src/lib.rs:53,67",
+            "crates/flui-view/src/lib.rs",
+        ),
         ("docs/testing.md#the-harness", "docs/testing.md"),
         (
             "crates/flui-view/src/lib.rs::Element",
@@ -162,6 +166,9 @@ fn packages_are_read_only_from_cargo_commands() {
         ("env RUSTFLAGS=x cargo test -p a", &[(0, test, "a")]),
         ("env -i -u X -C dir cargo build -p a", &[(0, build, "a")]),
         ("/usr/bin/env cargo test -p a", &[(0, test, "a")]),
+        // a subshell groups commands
+        ("(cargo test -p a)", &[(0, test, "a")]),
+        ("x && (cd y; cargo build -p a)", &[(0, build, "a")]),
         // `time` runs the command after its own options (`-p` is time's)
         ("time cargo tree -p a", &[(0, Some("tree"), "a")]),
         ("time -p cargo test -p a", &[(0, test, "a")]),
@@ -240,7 +247,11 @@ fn locked(packages: &[(&str, &str)]) -> BTreeMap<String, BTreeSet<String>> {
 
 fn a_lockfile_package_is_selected_only_by_update_and_tree() {
     let packages = Packages {
-        local: locked(&[("flui-view", "0.2.0-dev"), ("flui-app", "0.2.0")]),
+        local: locked(&[
+            ("flui-view", "0.2.0-dev"),
+            ("flui-app", "0.2.0"),
+            ("alpha", "1.2.3+meta"),
+        ]),
         locked: locked(&[
             ("wgpu", "25.0.0"),
             ("bitflags", "1.3.2"),
@@ -262,9 +273,15 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
         ("cargo test -p flui-?iew", true),
         ("cargo test -p definitely-*", false),
         ("cargo test -p wg*", false),
-        ("cargo tree -p wg*", true),
+        // a graph subcommand's `-p` is a package-ID spec: no pattern
+        ("cargo tree -p wg*", false),
+        ("cargo update -p 'bitf*'", false),
         // `uninstall` names an installed binary, not a checkout package
         ("cargo uninstall -p cargo-nextest", true),
+        // build metadata need not be spelled, but must match when it is
+        ("cargo test -p alpha@1.2.3", true),
+        ("cargo test -p alpha@1.2.3+meta", true),
+        ("cargo test -p alpha@1.2.3+other", false),
         ("cargo update -p wgpu", true),
         ("cargo tree -p wgpu", true),
         ("cargo pkgid -p wgpu", true),
@@ -422,6 +439,12 @@ fn an_llms_link_resolves_like_a_github_link() {
         ("https://github.com/vanyastaff/flui/issues/1", None),
         ("mailto:a@b.c", None),
         ("//example.com/docs", None),
+        // a `:` in a query or an anchor is data, not a scheme
+        ("docs/removed.md?at=12:00", Some(Some("docs/removed.md"))),
+        (
+            "docs/removed.md#:~:text=probe",
+            Some(Some("docs/removed.md")),
+        ),
         // an empty path before a query is the doc itself
         ("?view=compact#missing", Some(Some("llms.txt"))),
         // a percent-escaped name is the file's name

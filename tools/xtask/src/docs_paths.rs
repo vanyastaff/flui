@@ -167,11 +167,13 @@ impl Packages {
         }
         let graph = subcommand.filter(|subcommand| GRAPH_SUBCOMMANDS.contains(subcommand));
         if extract::is_glob(&selected.name) {
-            let mut names = self
-                .local
-                .keys()
-                .chain(graph.map(|_| self.locked.keys()).into_iter().flatten());
-            return names.any(|name| extract::glob_matches(&selected.name, name));
+            // a pattern selects workspace packages; a graph subcommand's `-p`
+            // is a package-ID spec, where `*` is no valid character
+            return graph.is_none()
+                && self
+                    .local
+                    .keys()
+                    .any(|name| extract::glob_matches(&selected.name, name));
         }
         let matching = |versions: &BTreeSet<String>| match &selected.version {
             Some(version) => versions
@@ -197,15 +199,21 @@ impl Packages {
 
 /// Whether the version of a package-ID spec (`1`, `1.3`, `1.3.2`,
 /// `0.2.0-dev`) picks the `known` version, as cargo matches them: a full
-/// version, prerelease included, matches exactly; a partial one matches every
-/// version that starts with it at a component boundary, but no prerelease.
+/// version, prerelease included, matches exactly, and build metadata only
+/// when the spec states it (`1.2.3` picks `1.2.3+meta`); a partial one
+/// matches every version that starts with it at a component boundary, but no
+/// prerelease.
 fn version_matches(spec: &str, known: &str) -> bool {
+    let known = if spec.contains('+') {
+        known
+    } else {
+        known.split('+').next().unwrap_or(known)
+    };
     if spec == known {
         return true;
     }
-    let prerelease = known.split('+').next().unwrap_or(known).contains('-');
     let partial = spec.split('.').count() < 3;
-    partial && !prerelease && known.starts_with(&format!("{spec}."))
+    partial && !known.contains('-') && known.starts_with(&format!("{spec}."))
 }
 
 /// The packages of the checkout at `root`.
@@ -486,8 +494,17 @@ fn link_target(doc: &str, dest: &str) -> Option<Option<String>> {
         Some(dest) => dest.as_str(),
         // an empty path before a query or an anchor is the doc itself
         None if dest.starts_with(['#', '?']) => return Some(Some(doc.to_owned())),
-        // another scheme, or a scheme-relative `//host/path`
-        None if dest.contains(':') || dest.starts_with("//") || dest.is_empty() => return None,
+        // another scheme (a `:` before any `/`, `?` or `#`: one in a query or
+        // anchor is data), or a scheme-relative `//host/path`
+        None if dest
+            .split(['/', '?', '#'])
+            .next()
+            .is_some_and(|head| head.contains(':'))
+            || dest.starts_with("//")
+            || dest.is_empty() =>
+        {
+            return None;
+        }
         None => dest,
     };
     let dest = percent_decoded(dest.split(['#', '?']).next().unwrap_or_default());
