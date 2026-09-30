@@ -2035,7 +2035,6 @@ dependencies = [
  "flui-platform-api",
  "flui-testing",
  "parking_lot",
- "proptest",
  "serde",
  "smallvec",
  "static_assertions",

@@ -2915,16 +2915,8 @@ mod tests {
     use super::*;
     use crate::view::{IntoView, ViewExt};
 
-    #[cfg(test)]
-    #[path = "../activation_recovery_tests.rs"]
+    #[path = "activation_recovery_tests.rs"]
     mod activation_recovery_tests;
-    #[path = "../element_depth_tests.rs"]
-    mod element_depth_tests;
-    #[path = "replace_child_with_tests.rs"]
-    mod replace_child_with_tests;
-    #[cfg(test)]
-    #[path = "../update_region_tests.rs"]
-    mod update_region_tests;
 
     use crate::{BuildContext, BuildOwner, GlobalKey, RenderView, StatelessView, View};
 

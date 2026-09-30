@@ -460,6 +460,3 @@ impl DirtySets {
         self.needs_semantics.clear();
     }
 }
-
-#[cfg(test)]
-mod tests {}

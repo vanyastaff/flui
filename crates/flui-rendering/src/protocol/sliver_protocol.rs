@@ -1219,15 +1219,3 @@ impl<'ctx, A: Arity, P: ParentData> HitTestContextApi<'ctx, SliverHitTest, A, P>
         // No-op for basic sliver hit test
     }
 }
-
-// ============================================================================
-// TESTS
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-
-    // ========================================================================
-    // SliverLayoutCtx (Direct storage) — scalar accessors and child dispatch
-    // ========================================================================
-}

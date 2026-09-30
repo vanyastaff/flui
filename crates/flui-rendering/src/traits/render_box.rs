@@ -926,14 +926,3 @@ where
         std::any::TypeId::of::<T::ParentData>()
     }
 }
-
-// ============================================================================
-// Tests
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-
-    // BoxHitTestResult and BoxHitTestEntry tests are now in
-    // hit_testing/result.rs
-}

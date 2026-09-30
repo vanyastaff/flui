@@ -177,6 +177,3 @@ pub trait CustomPainter: Send + Sync + Debug {
     /// `should_repaint` and `should_rebuild_semantics`.
     fn as_any(&self) -> &dyn Any;
 }
-
-#[cfg(test)]
-mod tests {}

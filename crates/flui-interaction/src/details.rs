@@ -204,6 +204,3 @@ impl ForcePressDetails {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {}

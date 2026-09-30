@@ -112,6 +112,3 @@ impl VisualUpdateNotifier {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {}

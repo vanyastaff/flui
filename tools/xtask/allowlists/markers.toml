@@ -250,11 +250,6 @@ class = "pr-label"
 count = 1
 
 [[allow]]
-path = "crates/flui-rendering/src/traits/render_sliver.rs"
-class = "wave"
-count = 1
-
-[[allow]]
 path = "crates/flui-rendering/tests/cross_protocol_layout.rs"
 class = "wave"
 count = 1

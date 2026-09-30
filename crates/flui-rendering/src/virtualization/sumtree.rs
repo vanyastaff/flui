@@ -1422,25 +1422,3 @@ mod tests {
         assert_eq!(t.seek_offset(70.0), (3, 10.0));
     }
 }
-
-/// Run-length representation: the properties that make an unbounded list
-/// representable, and the compaction that keeps it that way.
-#[cfg(test)]
-mod runs {}
-
-/// Point updates can *shrink* a leaf, which a flat-item tree could never do.
-#[cfg(test)]
-mod set_underflow {}
-
-/// Count changes must cross the unbounded sentinel in bounded time.
-///
-/// `ItemCount::Unknown` makes both directions reachable: a finite feed
-/// discovered to be endless resizes *up* to `usize::MAX`, and an endless feed
-/// that later answers `None` clamps back *down* to a real index. An item-wise
-/// resize hangs on either.
-#[cfg(test)]
-mod resize_across_the_sentinel {}
-
-/// Prefix sums must saturate the same way cached totals do.
-#[cfg(test)]
-mod saturating_prefixes {}
