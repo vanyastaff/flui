@@ -139,7 +139,7 @@ The maintainer usually hands over a whole task and comes back later.
 | Need | Run |
 |------|-----|
 | Every task | `cargo xtask --help` (crate `tools/xtask`; the alias is in `.cargo/config.toml`). Anything else is a plain `cargo` command |
-| Before a PR | `cargo xtask check-changed` — fmt + clippy + nextest over changed crates and their dependents (the same classification as CI's fast lane) |
+| Before a PR | `cargo xtask check-changed` — fmt + clippy + nextest over changed crates and their dependents (the classification CI's `plan` uses) |
 | Full local gate | `cargo xtask ci` = `cargo xtask gate` (`checks`: fmt, typos, taplo, docs-links, docs-paths, workspace, reach, toolchain, wgsl, …; `lint`; `doc-strict`) + `cargo xtask test` + doctests |
 | CI heavy jobs locally | `cargo xtask ci-full`; `cargo xtask doctor full` names any missing tool; job table in `docs/testing.md` |
 | One crate / one test | `cargo nextest run -p <crate>`, `cargo nextest run -p <crate> <test> --no-capture` |

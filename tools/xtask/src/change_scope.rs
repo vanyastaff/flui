@@ -80,15 +80,15 @@ pub(crate) fn affected(args: &AffectedArgs) -> anyhow::Result<ExitCode> {
         };
         classify::classify(&repo, &files)?
     };
-    let values = lane_args::plan_args(&repo, &scope, event, args.full_ci_label)?;
+    let values = lane_args::lane_args(&repo, &scope, event, args.full_ci_label)?;
     print!("{}", render(&values, scope.packages.len(), args.format));
     Ok(ExitCode::SUCCESS)
 }
 
-/// The fast lane for this checkout: its change against `base`, uncommitted and
-/// untracked files included, as the `(key, value)` pairs `affected --worktree
-/// --format shell` prints for a pull request (`cargo xtask check-changed` reads
-/// them in-process). The arguments stay scoped when the lane is `wide`.
+/// The scoped check for this checkout: its change against `base`, uncommitted
+/// and untracked files included, as the `(key, value)` pairs `affected
+/// --worktree --format shell` prints for a pull request (`cargo xtask
+/// check-changed` reads them in-process).
 pub(crate) fn worktree_lane(base: &str) -> anyhow::Result<Vec<(&'static str, String)>> {
     let repo = Repo::open(repo_root());
     let scope = classify::classify(&repo, &repo.changed_files(base, true)?)?;
@@ -100,7 +100,7 @@ pub(crate) fn worktree_lane(base: &str) -> anyhow::Result<Vec<(&'static str, Str
 }
 
 /// The packages that do not build for wasm32 (`[package.metadata.flui]
-/// wasm = false`), which the fast lane's wasm step excludes too.
+/// wasm = false`), which `check-changed`'s wasm step excludes too.
 pub(crate) fn no_wasm_packages() -> anyhow::Result<BTreeSet<String>> {
     let repo = Repo::open(repo_root());
     Ok(lane_args::no_wasm_packages(repo.workspace()?))
@@ -241,7 +241,7 @@ mod tests {
 
     fn sample() -> LaneArgs {
         LaneArgs {
-            lane: lane_args::Lane::Fast,
+            lane: lane_args::Lane::Wide,
             mode: "packages".to_owned(),
             heavy_required: false,
             reason: "changed: flui-material; plus 2 dependents".to_owned(),
@@ -262,20 +262,18 @@ mod tests {
                 .to_owned(),
             doctest_args: "-p flui -p flui-material".to_owned(),
             standalone: String::new(),
-            ci_test_args: "--workspace -E package(flui)|package(flui-material)".to_owned(),
         }
     }
 
     fn github_format_is_one_line_per_key() {
         let out = render(&sample(), 3, Format::Github);
-        let expected = "lane=fast\nmode=packages\nheavy_required=false\nreason=changed: flui-material; plus 2 dependents\n\
+        let expected = "lane=wide\nmode=packages\nheavy_required=false\nreason=changed: flui-material; plus 2 dependents\n\
              packages=flui flui-material flui-web-counter\npkg_args=-p flui -p flui-material -p flui-web-counter\n\
              test_args=-p flui -p flui-material -p flui-web-counter\nfeatures=--features flui/cupertino\n\
              platform=false\ncross_platform=false\ncross_app=true\ncross_cli=false\ncross_desktop_mcp=false\ncross_ios=true\n\
              wasm_args=-p flui -p flui-material -p flui-web-counter\nwasm_facade=true\nhack_args=\n\
              doc_args=-p flui -p flui-material -p flui-web-counter --features flui/testing\n\
-             doctest_args=-p flui -p flui-material\nstandalone=\n\
-             ci_test_args=--workspace -E package(flui)|package(flui-material)\n";
+             doctest_args=-p flui -p flui-material\nstandalone=\n";
         assert_eq!(out, expected);
         let mut multi = sample();
         multi.reason = "a\nb".to_owned();
@@ -285,13 +283,10 @@ mod tests {
     fn shell_format_quotes_like_shlex() {
         let out = render(&sample(), 3, Format::Shell);
         assert!(
-            out.starts_with("LANE=fast\nMODE=packages\nHEAVY_REQUIRED=false\nREASON='changed: flui-material; plus 2 dependents'\n"),
+            out.starts_with("LANE=wide\nMODE=packages\nHEAVY_REQUIRED=false\nREASON='changed: flui-material; plus 2 dependents'\n"),
             "{out}"
         );
-        assert!(
-            out.ends_with("\nCI_TEST_ARGS='--workspace -E package(flui)|package(flui-material)'\n"),
-            "{out}"
-        );
+        assert!(out.ends_with("\nSTANDALONE=''\n"), "{out}");
         assert!(out.contains("\nHACK_ARGS=''\n"), "{out}");
         assert!(
             out.contains("\nFEATURES='--features flui/cupertino'\n"),
