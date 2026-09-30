@@ -133,5 +133,5 @@ the [flui facade's README](../../README.md).
 3. **Separation** — layer types here, GPU lowering in `flui-engine`
 4. **Single owner, value-moved** — built on the paint side, frozen into a `Scene`, rendered on the
    raster side; no lock, no `Arc`
-5. **Every reference divergence is recorded** in [`ARCHITECTURE.md`](ARCHITECTURE.md) with the
-   test that covers it
+5. **Behavior is pinned by tests**; [`ARCHITECTURE.md`](ARCHITECTURE.md) explains the notable
+   choices

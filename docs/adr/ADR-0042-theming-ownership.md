@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-08-02
+- **Amended:** 2026-09-30 — "What is untouched" states this ADR's scope without the "ported 1:1" directive it quoted; FLUI is not a Flutter port ([`AGENTS.md`](../../AGENTS.md) Design stance). The decision is unchanged.
 - **Related:** [ADR-0028](ADR-0028-design-system-decoupling-contract.md) (design-system decoupling — Material and Cupertino are independent siblings above the widget catalog); [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (one realm per window — why appearance is per-presentation, and why package/ownership topology is a sanctioned leapfrog zone); [ADR-0037](ADR-0037-presentation-ownership-domains.md) (per-presentation owner state); [ADR-0041](ADR-0041-workspace-topology-contract.md) (layer policy — `flui-app` is L9, the design systems are L7)
 - **Issue:** [#569](https://github.com/vanyastaff/flui/issues/569) — public package surface cleanup
 
@@ -66,7 +67,7 @@ An application with no Material and no Cupertino must still get navigation, loca
 
 ## What is untouched
 
-Prime Directive #1 is not amended. The three-tree model, lifecycle, the layout/paint/hit-test protocol, and reconciliation stay ported 1:1 from `.flutter/`. `flui_material::ThemeData`, `flui_material::Theme`, `flui_cupertino::CupertinoThemeData`, and `flui_cupertino::CupertinoTheme` are unchanged by this ADR; it decides where theme *ownership* sits, not what the tokens are.
+This ADR does not touch the tree model, lifecycle, the layout/paint/hit-test protocol, or reconciliation. `flui_material::ThemeData`, `flui_material::Theme`, `flui_cupertino::CupertinoThemeData`, and `flui_cupertino::CupertinoTheme` are unchanged by this ADR; it decides where theme *ownership* sits, not what the tokens are.
 
 Ownership topology is the sanctioned leapfrog category ADR-0027 opened: Flutter is the behavioural reference for widget-tree semantics, not for which package owns which configuration object. In substance this lands where Flutter already is — `ThemeMode` in `material`, `platform_brightness` on `MediaQueryData`, `Theme` as an inherited widget, no shared theme supertype — with the per-window scoping made explicit rather than left to a process-global `WidgetsBinding`.
 
