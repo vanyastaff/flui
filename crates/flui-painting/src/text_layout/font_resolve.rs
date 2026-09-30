@@ -74,7 +74,7 @@ use cosmic_text::{Fallback as _, FontSystem, PlatformFallback};
 /// The spellings mirror what the two `style_to_attrs` conversions accepted
 /// before this module existed, so no style that resolved to a generic stops
 /// doing so.
-fn generic_family(name: &str) -> Option<Family<'static>> {
+pub(crate) fn generic_family(name: &str) -> Option<Family<'static>> {
     match name {
         "serif" | "Serif" => Some(Family::Serif),
         "sans-serif" | "SansSerif" | "sans" => Some(Family::SansSerif),

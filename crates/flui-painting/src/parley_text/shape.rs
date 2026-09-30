@@ -204,15 +204,33 @@ impl TextContext {
 
 /// The family list a style asks for: its family, its fallbacks, then
 /// sans-serif, so a family the collection lacks shapes in the default face.
+/// A generic spelled as the painted layout reads one (`"monospace"`,
+/// `"serif"`, …) names the collection's generic, not a family of that name.
 fn family(style: Option<&TextStyle>) -> StyleProperty<'static, SpanBrush> {
     let named = style
         .into_iter()
         .flat_map(|style| style.font_family.iter().chain(&style.font_family_fallback))
-        .map(|name| FontFamilyName::Named(Cow::Owned(name.clone())));
+        .map(|name| family_name(name));
     let families: Vec<_> = named
         .chain([FontFamilyName::Generic(GenericFamily::SansSerif)])
         .collect();
     StyleProperty::FontFamily(FontFamily::List(Cow::Owned(families)))
+}
+
+/// One family name, read with the painted layout's generic spellings
+/// (`font_resolve::generic_family`).
+fn family_name(name: &str) -> FontFamilyName<'static> {
+    use cosmic_text::fontdb::Family;
+
+    let generic = match crate::text_layout::font_resolve::generic_family(name) {
+        Some(Family::Serif) => GenericFamily::Serif,
+        Some(Family::SansSerif) => GenericFamily::SansSerif,
+        Some(Family::Monospace) => GenericFamily::Monospace,
+        Some(Family::Cursive) => GenericFamily::Cursive,
+        Some(Family::Fantasy) => GenericFamily::Fantasy,
+        Some(Family::Name(_)) | None => return FontFamilyName::Named(Cow::Owned(name.to_owned())),
+    };
+    FontFamilyName::Generic(generic)
 }
 
 /// The Parley properties `style` sets; a field left unset adds nothing.

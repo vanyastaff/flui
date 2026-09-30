@@ -45,7 +45,7 @@ impl FontCollection {
     ///
     /// With `bundled-fonts` it holds the embedded Roboto, Material Icons and
     /// Cupertino Icons faces, and binds the generic families (sans-serif,
-    /// serif, monospace, system-ui) to Roboto, so text shapes the same on
+    /// serif, monospace, cursive, fantasy, system-ui) to Roboto, so text shapes the same on
     /// every host. Without `bundled-fonts` it starts empty: text measures
     /// with no face until one is registered.
     #[must_use]
@@ -184,6 +184,8 @@ fn bind_bundled_faces(collection: &mut parley::fontique::Collection) {
         GenericFamily::SansSerif,
         GenericFamily::Serif,
         GenericFamily::Monospace,
+        GenericFamily::Cursive,
+        GenericFamily::Fantasy,
         GenericFamily::SystemUi,
     ] {
         collection.set_generic_families(generic, roboto.iter().copied());
