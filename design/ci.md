@@ -690,12 +690,13 @@ Not changed, with the reason:
   15. `clippy`, `cross-typecheck`, `miri`, `doc`, `doc-test`, `bench-compile` (3 min cold),
   `platform-windows` and the macOS jobs, about 4.3 GB of entries, build cold.
 - **The pull-request gate.** Over the 171 runs of 2026-09-26..30 that ran them, `feature-matrix`,
-  `test-features`, `live-smoke`, `miri`, `bench-compile` and `doc-test` never failed where
-  `clippy` and `test` passed. They moved to `FULL_JOBS` (main, nightly, the label): a pull request
-  runs `checks`, `plan`, `deps`, `clippy`, `cross-typecheck`, `test`, `test-nested`, `doc` and
-  `wasm-check` (plus `ios-runner`), and a break the moved jobs find is fixed forward on main.
-  Without their caches (inside `gpu-test`'s 23 min on main) the repository keeps about 5 GB of
-  entries.
+  `miri`, `bench-compile` and `doc-test` never failed where `clippy` and `test` passed. They moved
+  to `FULL_JOBS` (main, nightly, the label), where a break is fixed forward. `test-features` and
+  `live-smoke` caught nothing alone either but stay on pull requests: the first is the only
+  compile and run of the non-default feature paths (`images`, `asset-images`, `signals`), the
+  second the only run above synthetic event dispatch, which AGENTS.md requires of an
+  event-translation change. The cache keeps `test`, `wasm-check`, `test-features`, `live-smoke`
+  and `gpu-test`, about 7 GB.
 - **Runner images.** Every job names its image (`ubuntu-26.04`) instead of `ubuntu-latest`,
   which moves to 26.04 during 2026-10-19..11-19; the release archives build on `ubuntu-24.04`
   (x86_64 and arm64), which fixes their glibc floor at 2.39 on both (22.04 images are deprecated

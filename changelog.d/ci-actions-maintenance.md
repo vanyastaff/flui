@@ -5,6 +5,5 @@
 
 ### Changed
 
-- CI: a pull request runs `checks`, `clippy`, `cross-typecheck`, `test`, `test-nested`, `doc` and
-  `wasm-check`; `feature-matrix`, `test-features`, `live-smoke`, `miri`, `bench-compile` and
-  `doc-test` run on main, nightly and the `full-ci` label.
+- CI: `feature-matrix`, `miri`, `bench-compile` and `doc-test` run on main, nightly and the
+  `full-ci` label instead of on every pull request.

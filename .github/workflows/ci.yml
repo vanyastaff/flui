@@ -7,7 +7,11 @@ name: CI
 #             (its own [workspace]): `deps`, and `standalone` for the crate
 #   wide      a PR that compiles anything: `deps` and the pull-request gate
 #             (HEAVY_JOBS in `ci`: clippy, cross-typecheck, test,
-#             test-nested, doc, wasm-check) over the whole workspace, in
+#             test-nested, doc, wasm-check, test-features, live-smoke; the
+#             last two are the only compile of the non-default feature paths
+#             and the only run above synthetic event dispatch, which
+#             AGENTS.md requires of event-translation changes) over the
+#             whole workspace, in
 #             parallel, and `ios-runner` when the change reaches the iOS
 #             runner. One serial job over the changed crates measured 35 min
 #             median against this lane's 18 (2026-09-30), and hosted runners
@@ -15,8 +19,8 @@ name: CI
 #   full      push to main, merge_group: `wide` plus FULL_JOBS: the Windows
 #             and macOS jobs, and the Linux jobs that caught nothing clippy
 #             and test missed in 171 runs (2026-09-26..30): feature-matrix,
-#             test-features, live-smoke, miri, bench-compile, doc-test. A
-#             break they find turns main red and is fixed forward.
+#             miri, bench-compile, doc-test. A break they find turns main
+#             red and is fixed forward.
 #   extended  the nightly schedule, workflow_dispatch, a PR labelled
 #             `full-ci`: `full` plus the nightly-only platform jobs
 #             (EXTENDED_JOBS)
@@ -58,11 +62,11 @@ name: CI
 # Cargo.lock moves. So a job keeps a target cache only when its cold run
 # would outlast its lane's longest jobs (`test`, `test-nested`, about 9 min
 # warm, on a pull request; `gpu-test`, 23 min, on main): `test` (shared
-# with `test-nested`), `wasm-check` and `gpu-test`. Cold, `test` took 18 min,
-# `test-nested` 27 and `wasm-check` 13 (run 36776652181). Every other job
-# builds cold: the pull-request ones in under 9 min, the main-only ones
-# (a `feature-matrix` shard 19 min, `test-features` about 17) inside
-# `gpu-test`'s 23. One key per job: a key shared across jobs with
+# with `test-nested`), `wasm-check`, `test-features`, `live-smoke` and
+# `gpu-test`. Cold, `test` took 18 min, `test-nested` 27, `wasm-check` 13
+# (run 36776652181) and `test-features` about 17. Every other job builds
+# cold: the pull-request ones in under 9 min, the main-only ones (a
+# `feature-matrix` shard 19 min) inside `gpu-test`'s 23. One key per job: a key shared across jobs with
 # different build modes lost time (clippy restoring `test`'s build-mode
 # artifacts re-checked every crate). Saved on main only.
 # Runners: named images (`ubuntu-26.04`), not `-latest`, so an image change
@@ -624,7 +628,7 @@ jobs:
   test-features:
     name: test-features
     needs: [checks, plan]
-    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
@@ -634,6 +638,12 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
 
       - name: Install cargo-nextest
@@ -709,7 +719,7 @@ jobs:
   live-smoke:
     name: live-smoke
     needs: [checks, plan]
-    if: contains(fromJSON('["full","extended"]'), needs.plan.outputs.lane)
+    if: contains(fromJSON('["wide","full","extended"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
@@ -719,6 +729,12 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
 
       # xvfb for the virtual display; libxkbcommon-x11 because winit's X11
@@ -1528,9 +1544,10 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
           HEAVY_JOBS: >-
             clippy wasm-check cross-typecheck test test-nested doc
+            test-features live-smoke
           FULL_JOBS: >-
-            gpu-test platform-windows cli-macos feature-matrix test-features
-            live-smoke bench-compile doc-test miri
+            gpu-test platform-windows cli-macos feature-matrix bench-compile
+            doc-test miri
           EXTENDED_JOBS: >-
             macos-ci test-windows
           LANE: ${{ needs.plan.outputs.lane }}
