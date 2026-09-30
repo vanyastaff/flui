@@ -7,13 +7,15 @@
   `Checked` out of the desktop server, the move of `SemanticsRole` and `SemanticsAction` into
   the crate (with ADR-0089 §3's `ALL` rule), and the semantics-to-wire mapping, amended below
   to live in `flui-semantics`; from §3 the realm half of the in-process backend (a
-  `SemanticsAgent` that reads and acts through the realm's owner inbox). Still Proposed: §1's
-  finder criteria, handle kinds beyond elements and windows, `effect`, widget catalog and
-  event-log shapes; the `flui-mcp` library; `flui-testing`'s query types; §3's server in
-  `flui-devtools`, its transport and `flui mcp`; and §§4–5.
+  `SemanticsAgent` that reads and acts through the realm's owner inbox), and the in-process
+  server in `flui-devtools` with its local endpoint (a named pipe or Unix socket, a launch
+  token, debug builds only), amended below. Still Proposed: §1's finder criteria, handle kinds
+  beyond elements and windows, `effect` as a schema type, widget catalog and event-log shapes;
+  the `flui-mcp` library; `flui-testing`'s query types; §3's `flui mcp` and the handle table
+  across windows; and §§4–5.
 - **Date:** 2026-09-25
-- **Amends (once §3's transport is accepted; §3's realm half is):** [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md)
-  (settles its "Not decided here" in-process transport; the wire contract is unchanged)
+- **Amends:** [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md) (settles its "Not
+  decided here" in-process transport; the wire contract is unchanged)
 - **Related:** [ADR-0040](ADR-0040-tree-observation-seam.md),
   [ADR-0079](ADR-0079-keyboard-activation-and-focus-for-assistive-technology.md),
   [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md),
@@ -28,9 +30,9 @@ The accepted part added `crates/flui-protocol` (tier C, order 2, `stable`), move
 action need (`ElementId`, `WindowId`, `Node`, `Tree`, `ReadQuery`, `ActionRequest`,
 `ErrorCode`, `Retry`, `outline`, `PROTOCOL_VERSION`), the semantics-to-wire projection in
 `flui-semantics` (`SemanticsOwner::read_wire` and `resolve_wire_action`), and
-`flui_runtime::SemanticsAgent`, which no production path vends yet: the next step has
-`flui-app` vend it through its development hook and `flui-devtools` serve it. Line citations
-in Context are to `d7007f547`, before that change.
+`flui_runtime::SemanticsAgent`. `flui-app` now vends it through the development-agent hook
+(`flui_view::dev_agent::DevAgentHook`), and `flui-devtools`' `agent` feature serves it over a
+local endpoint. Line citations in Context are to `d7007f547`, before those changes.
 
 ## Context
 
@@ -118,6 +120,34 @@ This settles ADR-0080's open item:
   compatible with a stateless MCP transport. The realm's `SemanticsAgent` reports render
   identities scoped to one presentation (another window can report the same `e<n>`); the
   backend's table maps them when a session spans windows.
+
+**Amended on acceptance (the server and its endpoint).**
+
+- *The seam.* `flui-devtools` is an official package and cannot name `flui-runtime`, and
+  `flui-app` cannot name an official package. So the application installs the server as a
+  `flui_view::dev_agent::DevAgentHook` on its configuration (`AppConfig::with_dev_agent`), which
+  the package reaches through `flui-sdk`; the host attaches it once per event loop and hands it
+  an `AgentWindow` per window with content. `flui_runtime::dev_agent::DevAgentHost` holds the
+  hook's containment for every host (the desktop and iOS runners, and `flui-testing`'s headless
+  realm, which is how CI exercises it); no transport is in the runtime. An `AgentWindow` holds
+  its window's agent weakly, so a closed window answers `gone` with kind `window` and needs no
+  close notification. Android and web drive no hook.
+- *Framing.* Newline-delimited JSON, lines of at most 1 MiB, a `{"hello":{"token":…}}` first
+  line, then `windows`, `read` and `act` requests; every `read` and `act` names its window,
+  because element ids are scoped to a window. Errors use ADR-0080's error object with `kind`
+  and `handle` for a `gone` or `unknown_handle`.
+- *Credentials.* The launching tool passes the endpoint and the token in the environment
+  (`FLUI_AGENT_ENDPOINT`, `FLUI_AGENT_TOKEN`); the token is at least 32 bytes and compared in
+  constant time. It defends against other users and remote callers, not the same user's other
+  processes, which can read the environment. The Windows pipe admits its owner only and refuses
+  remote clients; a Unix socket must sit in a `0700` directory the current user owns.
+- *Timeouts.* The server waits a bounded time for the owner's answer and never makes the owner
+  wait on it. A read that times out answers `timeout` (retry `soon`); an action that times out
+  answers `timeout` with the `may_have_run` effect, because it stays queued and runs at the next
+  drain.
+- *Builds.* The server is compiled only with the package's `agent` feature, which an
+  application enables behind its own development feature, and it stays inert outside
+  `debug_assertions`.
 
 ### 4. A normalized outline projection is the cross-backend contract
 
@@ -237,6 +267,22 @@ For the accepted part:
   drain, a panic before the handler reported as `ResolvePanicked` rather than the handler's, and
   traces without labels or values. The in-process `expand`/`collapse` check reads the committed
   tree and does not close the double-toggle race (`flui-semantics` mapping decisions 5 and 7).
+- **The server of §3.** `cargo nextest run -p flui-devtools --features agent --test
+  agent_endpoint`: `reads_the_counter_and_taps_it_over_the_endpoint` (a headless counter served
+  over a real pipe or socket: the hello, `windows`, a read retried while `busy`, a tap, the new
+  count read back, the handler run once) and the rows of `the_endpoint_contains_every_failure`
+  (`a_connection_without_the_right_token_is_closed_unread`,
+  `a_client_leaving_mid_request_does_not_stall_the_next`,
+  `an_unanswered_request_times_out_and_a_timed_out_act_still_runs`,
+  `malformed_and_oversized_lines`, `a_closed_window_answers_gone_and_leaves_the_list`,
+  `detach_closes_the_endpoint`, `a_bind_failure_leaves_the_realm_running`,
+  `traces_carry_no_labels_or_values`); `dev_agent_host_contains_its_hook` in `flui-runtime`
+  (each hook method panicking alone, a panicking `Drop`, a nested call, a refused second
+  attach, a new loop, nothing vended while unattached); `an_agent_for_a_closed_presentation_answers_gone`
+  (a development window goes with its presentation); and in `flui-app`
+  `main_window_agent_hook_stays_attached_across_failed_reopens_and_detaches_with_loop`. The
+  windowed runners' hand-over (`desktop.rs`, `ios.rs`) runs behind GPU initialisation and is
+  not executed in CI.
 - **Round trip against the wire, in part.** `cargo nextest run -p flui-desktop-mcp`:
   `the_desktop_node_is_a_protocol_node` (the desktop server's node JSON reads as
   `flui_protocol::Node`, writes back unchanged, and outlines the same) and
