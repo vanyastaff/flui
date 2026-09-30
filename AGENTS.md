@@ -19,9 +19,9 @@ now and expensive once consumers exist, so fix a bad shape instead of working ar
 - **Flutter is a reference, not a spec.** Its three-tree model, lifecycle ordering and
   layout/paint/hit-test protocol are a good starting point, and its tests are a useful floor for
   behavior. Structure, API and style are idiomatic Rust (compile-time child arity, `NonZeroUsize`
-  IDs, slab arenas, `thiserror`/`Result`). Diverge whenever the result is better; record why —
-  an ADR for a cross-crate contract, a `## Mapping decisions` entry in the crate's
-  `ARCHITECTURE.md` for a local one — and let a test pin the behavior you ship. Multi-window
+  IDs, slab arenas, `thiserror`/`Result`). FLUI is not a port: diverge whenever the result is
+  better, and let a test pin the behavior you ship; matching Flutter is not a reason by itself,
+  and a difference from it needs no record of its own. Multi-window
   ownership, runtime/scheduling topology, concurrency and presentation architecture aren't bound
   by Flutter at all (ADR-0027). `.flutter/` and `.gpui/` are optional gitignored reference clones.
 - **Look around before settling.** Compose, SwiftUI and the Rust UI crates (egui, Iced,
@@ -179,7 +179,7 @@ the history.
 
 | Adding | What it takes |
 |--------|---------------|
-| **Render object** (`RenderBox`/`RenderSliver`) | Implement in `flui-objects` (protocol in `flui-rendering`) → register in `RENDER_OBJECT_TYPES` → `harness_*` tests in `render_object_harness` → note a Flutter divergence in `## Mapping decisions` |
+| **Render object** (`RenderBox`/`RenderSliver`) | Implement in `flui-objects` (protocol in `flui-rendering`) → register in `RENDER_OBJECT_TYPES` → `harness_*` tests in `render_object_harness` |
 | **Widget** | `View`/`ViewState` in `flui-widgets` or the facade, backed by a render object → `SemanticsConfiguration` for assistive tech → a test that fails without it |
 | **Text-editing widget** | Implement `flui_platform_api::TextStore` (embed a `LockArbiter` and pass it the `CommitGate` that `set_commit_gate` receives; the store keeps no transaction flag of its own), attach it through `TextInputHandle::attach` while focused, which installs the presentation's frame-transaction gate → pass `flui_testing::text_store_kit::assert_conforms` (ADR-0090) |
 | **Platform capability** (a new handle) | Trait in `flui-platform-api`, backend in `flui-platform` with no platform types leaking out → a method on `LifecycleContext`, not `BuildContext`, so `build` cannot reach it → a test that fails without it → ADR if it changes a cross-crate contract |
@@ -195,7 +195,7 @@ caps the count, so the review question is which existing table the new case join
 
 - **Test through the public API.** A test lives in `tests/` and sees what a consumer sees. An
   in-`src` `mod tests` is for what a consumer cannot reach: a failure-path matrix that needs a
-  private seam, a recorded Flutter divergence. Compile-fail cases are not among them: they are
+  private seam. Compile-fail cases are not among them: they are
   trybuild fixtures driven from `tests/` (or `compile_fail` doctests on public items), so
   privacy and sealing are checked the way a consumer meets them. Do not pin private fields or
   helpers, which dirty flag a setter raises, `size_of`, an implementation's constants and token
@@ -226,8 +226,7 @@ caps the count, so the review question is which existing table the new case join
   single-threaded group and fold freely.
 - **Keep what the Definition of Done requires.** Every concrete `RenderBox`/`RenderSliver` has
   a row in the `render_object_harness` family tables (`RENDER_OBJECT_TYPES` is checked against
-  them); a Flutter divergence has its test, named in the crate's `## Mapping decisions`; a
-  failure-path matrix keeps each failure point alone, two in competition, and the next
+  them); a failure-path matrix keeps each failure point alone, two in competition, and the next
   operation after containment.
 - **Test names are references.** ARCHITECTURE.md files, ADRs and `docs/` cite tests by name:
   `rg` the name before renaming, folding or deleting a test.
@@ -248,9 +247,7 @@ Linux, macOS or wasm.
 A green gate proves the gates pass, not that the behavior exists. So a change is done when:
 
 - new behavior has a test that fails without the change, and every concrete
-  `RenderBox`/`RenderSliver` has harness tests;
-- each Flutter divergence is deliberate, recorded (ADR or `## Mapping decisions`), and asserted
-  by a test — an unrecorded divergence counts as a regression.
+  `RenderBox`/`RenderSliver` has harness tests.
 
 ## Where to read next
 
@@ -293,10 +290,10 @@ script gates already run in CI, so style and anything they catch is not worth a 
 - **Unwired surface:** a new `pub` item that no production path reaches (test, example and
   bench callers don't count) is this repository's most common defect. Flag it unless the PR
   names the follow-up that wires it.
-- **Flutter behavior:** a change to render, layout, paint, hit-test, semantics, scheduling or
-  reconciliation either keeps Flutter's observable contract (output, edge cases, ordering) or
-  records the divergence (ADR or `## Mapping decisions`) with a test for the new behavior. A
-  Dart-shaped design is not an improvement by itself.
+- **Behavior changes:** a change to render, layout, paint, hit-test, semantics, scheduling or
+  reconciliation that changes observable behavior (output, edge cases, ordering) comes with a
+  test for the new behavior. Neither matching Flutter nor a Dart-shaped design is an
+  improvement by itself; a difference from Flutter is not a finding.
 - **Rendering specifics:** `SliverGeometry { ..SliverGeometry::ZERO }` drops the constructor's
   derived defaults (`layout_extent`, `visible`) and has caused real header bugs; a layout that
   publishes geometry from a stand-in value (ADR-0054); intrinsics, baselines or hit-testing left

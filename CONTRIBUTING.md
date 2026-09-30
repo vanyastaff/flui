@@ -21,9 +21,9 @@ code, in this order:
    has not been decided, only defaulted into.
 3. **Contract** — what changes for callers: public API, observable behavior, error cases, edge
    cases.
-4. **Reference check** — for render/layout/paint/hit-test/semantics/scheduling changes, what does
-   `.flutter/` do? If FLUI diverges, name what's better and how a test proves it (see
-   [`AGENTS.md`](AGENTS.md)'s Design stance).
+4. **Reference check** — for render/layout/paint/hit-test/semantics/scheduling changes, how do
+   Flutter, Compose, SwiftUI and the Rust UI crates solve it? Take the best shape and say how a
+   test proves it (see [`AGENTS.md`](AGENTS.md)'s Design stance).
 5. **Plan** — the dependency-ordered steps, each one shippable.
 
 Put the record where the change is: an ADR under `docs/adr/` for a protocol-level or cross-crate
