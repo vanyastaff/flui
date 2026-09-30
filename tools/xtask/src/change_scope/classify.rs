@@ -46,8 +46,10 @@ pub(super) const DOCS_ONLY: &[&str] = &[
     ".editorconfig",
     "crates/*/ARCHITECTURE.md",
     "crates/*/CHANGELOG.md",
+    "crates/*/NOTICE", // the root NOTICE's per-crate copies, shipped in each package
     "packages/*/ARCHITECTURE.md",
     "packages/*/CHANGELOG.md",
+    "packages/*/NOTICE",
     "changelog.d/**", // changelog fragments; `changelog --check` in `checks` judges them
 ];
 
@@ -777,6 +779,8 @@ pub(super) mod tests {
             "crates/flui-view/CHANGELOG.md",
             "packages/flui-material/ARCHITECTURE.md",
             "packages/flui-material/CHANGELOG.md",
+            "crates/flui-view/NOTICE",
+            "packages/flui-material/NOTICE",
             "changelog.d/tools-changelog-fragments.md",
             "changelog.d/README.md",
         ] {
@@ -801,6 +805,11 @@ pub(super) mod tests {
 
     fn docs_and_empty() {
         assert_eq!(scope(&["docs/a.md", "README.md"]).mode, Mode::Docs);
+        // a license-notice sweep over every crate compiles nothing
+        assert_eq!(
+            scope(&["crates/flui-view/NOTICE", "packages/flui-material/NOTICE"]).mode,
+            Mode::Docs
+        );
         assert_eq!(scope(&[]).mode, Mode::Docs);
         assert_eq!(scope(&[]).reason, "no changes");
     }
