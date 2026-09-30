@@ -408,10 +408,8 @@ impl cosmic_text::Fallback for EmojiForbiddenFallback {
 /// turning the suite red. The generated fixtures exist for exactly this:
 /// `probe-mono-{100,600}.ttf` is one monospaced family at two weights, and
 /// `probe-variable-wght.ttf` carries an `fvar` `wght` axis over a
-/// `usWeightClass` of 400 (see `tools/decoy-face/generate.py`).
-/// `requested_weights_resolve_to_ones_the_family_serves` in
-/// `tests/font_weight_resolution.rs` resolves styles against them, one row per
-/// arm.
+/// `usWeightClass` of 400 (see `tools/decoy-face/generate.py`). No test
+/// resolves against them yet.
 fn family_accepts_weight(db: &Database, family: &str, weight: u16) -> bool {
     db.faces()
         .filter(|face| face.families.iter().any(|(name, _)| name == family))
@@ -484,10 +482,8 @@ pub(crate) fn snap_weight(db: &Database, family: &Family<'_>, requested: u16) ->
     }
     carried.sort_unstable();
     carried.dedup();
-    // Pinned through this call, not only on the rule: the
-    // `a_missing_weight_snaps_in_css_order_not_by_distance` row drives a family
-    // carrying 100 and 600 at a W500 request, which is a case where CSS order
-    // (100) and nearest-by-distance (600) disagree.
+    // A family carrying 100 and 600 at a W500 request is the case where CSS
+    // order (100) and nearest-by-distance (600) disagree; no test drives it.
     css_nearest_weight(&carried, requested).unwrap_or(requested)
 }
 

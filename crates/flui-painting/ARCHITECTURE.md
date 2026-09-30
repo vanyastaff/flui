@@ -370,10 +370,7 @@ shipped font asset is a single-weight, non-monospaced, static face, so three arm
 were untestable against it. `probe-mono-{100,600}.ttf` is one monospaced family at two weights (the
 `face.monospaced` arm, and the CSS-versus-nearest tie-break, where 100 and 600 disagree at a W500
 request); `probe-variable-wght.ttf` carries an `fvar` `wght` axis spanning 100..900 over a
-`usWeightClass` of 400 (the variable-weight arm).
-`requested_weights_resolve_to_ones_the_family_serves` (`tests/font_weight_resolution.rs`) resolves
-styles against them through `Shaper::resolve_font`; each of its rows fails when its production arm
-is reverted.
+`usWeightClass` of 400 (the variable-weight arm). **Unasserted:** no test pins this.
 
 
 ### 9. Intrinsic width probes skip `max_lines` truncation, floor at ellipsis
