@@ -103,6 +103,7 @@ const BUILD_OUTPUTS: &[&str] = &[
     "target/flui-out/ios/flui.app/Info.plist",
     "target/flui-out/web/pkg/app_bg.wasm",
     "target/flui-out/web/index.html",
+    "target/flui-out/desktop/all-platforms.exe",
 ];
 
 /// Scaffolded or user-added source the builds read, which must stay
@@ -153,7 +154,7 @@ fn scaffolded_platforms_ignore_and_clean_what_builds_write() {
             .expect("create output dir");
         std::fs::write(&path, b"").expect("write output");
     }
-    for platform in ["android", "ios", "web"] {
+    for platform in ["android", "ios", "web", "desktop"] {
         flui()
             .current_dir(&project)
             .args(["clean", "--platform", platform])

@@ -7,7 +7,9 @@ use serde_json::json;
 use std::path::{Path, PathBuf};
 
 /// Platform names `flui clean --platform` accepts.
-const VALID_PLATFORMS: &[&str] = &["android", "ios", "web"];
+/// `desktop` is one output directory for every desktop target
+/// (`target/flui-out/desktop`), the way `flui build` names it.
+const VALID_PLATFORMS: &[&str] = &["android", "ios", "web", "desktop"];
 
 /// Execute the clean command.
 ///
@@ -19,7 +21,8 @@ const VALID_PLATFORMS: &[&str] = &["android", "ios", "web"];
 /// # Errors
 ///
 /// Returns `CliError::CleanFailed` if cargo clean fails, or `CliError::Missing`
-/// if `platform` names something other than `android`, `ios` or `web`.
+/// if `platform` names something other than `android`, `ios`, `web` or
+/// `desktop`.
 pub(crate) fn execute(deep: bool, platform: Option<String>) -> CliResult<()> {
     ui::intro(style(" flui clean ").on_red().white())?;
 
