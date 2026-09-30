@@ -42,15 +42,15 @@
 ///
 /// Panics if `faces` is empty, if none of them load, or if the font system was
 /// already initialized. The last is deliberate: a pin that silently did
-/// nothing would leave the test measuring against host fonts while reading as
+/// nothing would leave the test painting with host fonts while reading as
 /// though it had been pinned, which is the exact failure this exists to
 /// prevent.
 pub fn pin_font_faces(faces: &[&[u8]], default_family: &str) {
     assert!(
         flui_painting::text_layout::init_font_system_with_faces(faces, default_family, "en-US"),
         "pin_font_faces: the shared font system was already initialized, so this \
-         pin changed nothing and measurement would still resolve against the \
-         host's fonts. Pin before the first text is measured — earlier in the \
+         pin changed nothing and the painted layout would still resolve against \
+         the host's fonts. Pin before the first text is shaped — earlier in the \
          test, or before the code that shaped text first.",
     );
 }

@@ -52,6 +52,10 @@ fn painted_layout(painter: &TextPainter) -> Arc<TextLayout> {
 /// decision 15): a face registered there re-shapes the painted layout and
 /// leaves the measured size alone. With cosmic-text measurement the size would
 /// follow the painted layout and change with it.
+///
+/// This pins a known gap, not the contract: once registration goes through the
+/// collection (the rest of ADR-0092 §10 step 3b), a registered face must reach
+/// measurement as well, and this test is inverted rather than deleted.
 #[test]
 fn a_face_registered_on_the_process_font_system_reaches_paint_not_measurement() {
     let mut text_cx = text_cx();

@@ -111,11 +111,11 @@ impl SharedEngineServices {
         // the CONSTRUCTING owner of the free-standing `FONT_SYSTEM`
         // `OnceLock` slot (`flui-painting/src/text_layout/layout.rs`):
         // initialize it explicitly, here, at a known point, rather than
-        // leaving it to whichever text-measurement call happens to run
-        // first on this thread. The read path stays ambient on layout hot
-        // paths: this is a known exclusion, not closed here -- injecting the
-        // font system into every `perform_layout` text-measurement call is a
-        // separate, larger follow-up.
+        // leaving it to whichever text layout happens to shape first on this
+        // thread. Measurement does not read it: layout, intrinsics and dry
+        // queries measure on each realm's `TextContext` over `fonts` below.
+        // The painted layout still shapes on it, ambiently, until ADR-0092
+        // §10 step 4b paints the runs that measured.
         let _ = flui_painting::shared_font_system();
 
         Self {
