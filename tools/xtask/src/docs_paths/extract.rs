@@ -763,7 +763,7 @@ pub(super) fn is_glob(name: &str) -> bool {
 }
 
 /// Whether the glob `pattern` matches all of `name`: `*` any run, `?` any one
-/// character, `[abc]`/`[a-z]` one of a class (`[!…]`/`[^…]` one not in it).
+/// character, `[abc]`/`[a-z]` one of a class (`[!…]` one not in it).
 /// A table over (pattern token, name prefix), so no pattern takes more than
 /// their product in steps (`***…z` does not backtrack).
 pub(super) fn glob_matches(pattern: &str, name: &str) -> bool {
@@ -827,7 +827,8 @@ fn glob_tokens(pattern: &str) -> Vec<GlobToken> {
 /// The class after a `[`: whether a character is in it, and how many
 /// characters of the pattern it takes, its `]` included; `None` when unclosed.
 fn class(pattern: &[char]) -> Option<(impl Fn(char) -> bool + 'static, usize)> {
-    let negated = matches!(pattern.first(), Some('!' | '^'));
+    // cargo's patterns negate with `!` only; a leading `^` is a member
+    let negated = pattern.first() == Some(&'!');
     let body_start = usize::from(negated);
     // a `]` first in the class is a member, not its end
     let close = pattern

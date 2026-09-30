@@ -566,7 +566,9 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
         ("cargo test -p 'flui-[v]iew'", true),
         ("cargo test -p 'flui-[a-z]pp'", true),
         ("cargo test -p 'flui-[!v]iew'", false),
-        ("cargo test -p 'flui-[^a]pp'", false),
+        // cargo negates with `!` only: `[^v]` is the class of `^` and `v`
+        ("cargo test -p 'flui-[^v]pp'", false),
+        ("cargo test -p 'flui-[^a]pp'", true),
         // many stars take linear steps, not exponential backtracking
         ("cargo test -p '*******************************z'", false),
         ("cargo test -p '**f**l**u**i**-**a**p**p**'", true),
@@ -619,7 +621,7 @@ fn headings_give_github_anchors() {
 }
 
 fn a_powershell_fence_is_lexed_as_powershell() {
-    let markdown = "```powershell\n<# cargo test -p gone\n#>\necho x >\"prefix `$(cargo test -p gone)\"\necho x >\"$(cargo test -p c)\"\ncargo test -p a`-b `\n  -p x\\y\n```\n\n```bash\ncargo test -p a`x`\n```\n";
+    let markdown = "```powershell\n<# cargo test -p gone\n#>\necho x >\"prefix `$(cargo test -p gone)\"\necho x >\"$(cargo test -p c)\"\necho x >\"foo\\\"bar; cargo test -p d\necho \"$(Write-Output `); cargo test -p e)\"\ncargo test -p a`-b `\n  -p x\\y\n```\n\n```bash\ncargo test -p a`x`\n```\n";
     let code = extract::code(markdown);
     let dialects: Vec<shell::Dialect> = code.iter().map(|code| code.dialect).collect();
     assert_eq!(
@@ -633,8 +635,10 @@ fn a_powershell_fence_is_lexed_as_powershell() {
             .collect()
     };
     // a backtick escapes and continues the line; `\` is a plain character
-    // a redirection target's `$(…)` runs, unless a backtick escapes its `$`
-    assert_eq!(names(&code[0]), ["a-b", "x\\y", "c"]);
+    // a redirection target's `$(…)` runs, unless a backtick escapes its `$`;
+    // `\"` closes a target's quote (the backslash is plain), and a backtick
+    // keeps a `)` inside a subexpression
+    assert_eq!(names(&code[0]), ["d", "a-b", "x\\y", "c", "e"]);
     // in bash the backtick opens a substitution
     assert_eq!(names(&code[1]), [] as [&str; 0]);
 }

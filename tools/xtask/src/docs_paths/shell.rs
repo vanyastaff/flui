@@ -30,6 +30,16 @@ pub(super) enum Dialect {
     PowerShell,
 }
 
+impl Dialect {
+    /// The character that escapes the next one: `\`, or PowerShell's backtick.
+    fn escape(self) -> char {
+        match self {
+            Self::Posix => '\\',
+            Self::PowerShell => '`',
+        }
+    }
+}
+
 /// The commands of `code`, written for `dialect`, empty ones left out.
 pub(super) fn commands_in(code: &str, dialect: Dialect) -> Vec<Command> {
     let mut lexer = Lexer {
@@ -138,7 +148,7 @@ impl Lexer<'_> {
                     .is_some_and(|(_, word)| word.ends_with('=')) =>
                 {
                     let start = self.line;
-                    let elements = substitution_text(&mut self.chars, ')');
+                    let elements = substitution_text(&mut self.chars, ')', self.dialect);
                     self.line += elements.matches('\n').count();
                     // an element's substitution runs as the array is built
                     for (offset, text) in substitutions(&elements, Quoting::Shell) {
@@ -224,7 +234,7 @@ impl Lexer<'_> {
     /// stands for a `$` in the word around it.
     fn substitution(&mut self, closing: char) {
         let start = self.line;
-        let text = substitution_text(&mut self.chars, closing);
+        let text = substitution_text(&mut self.chars, closing, self.dialect);
         self.line += text.matches('\n').count();
         self.nest(&text, start);
         self.push('$');
@@ -332,13 +342,15 @@ impl Lexer<'_> {
     /// Reads one shell word as written, quotes kept, into `raw`: its end is
     /// where the shell's is, a `$(…)` in it included.
     fn read_raw_word(&mut self, raw: &mut String) {
+        let escape = self.dialect.escape();
         let mut quote: Option<char> = None;
         while let Some(&next) = self.chars.peek() {
             if let Some(open) = quote {
                 self.chars.next();
                 raw.push(next);
-                // inside `"…"` a backslash escapes, so `\"` does not close it
-                if open == '"' && next == '\\' {
+                // inside `"…"` the dialect's escape (`\`, PowerShell's backtick)
+                // keeps a `"` from closing it
+                if open == '"' && next == escape {
                     raw.extend(self.chars.next());
                 } else if next == open {
                     quote = None;
@@ -352,10 +364,10 @@ impl Lexer<'_> {
             raw.push(next);
             match next {
                 '\'' | '"' => quote = Some(next),
-                '\\' => raw.extend(self.chars.next()),
+                c if c == escape => raw.extend(self.chars.next()),
                 '$' if self.chars.next_if_eq(&'(').is_some() => {
                     raw.push('(');
-                    raw.push_str(&substitution_text(&mut self.chars, ')'));
+                    raw.push_str(&substitution_text(&mut self.chars, ')', self.dialect));
                     raw.push(')');
                 }
                 _ => {}
@@ -535,7 +547,8 @@ impl Lexer<'_> {
 /// The text of a command substitution up to its `closing` (`)` of `$(`, or
 /// `` ` ``), quotes and escapes honoured and kept for the nested lexing: a `)`
 /// inside quotes, a comment, or a `case` pattern does not close it.
-fn substitution_text(chars: &mut Peekable<Chars<'_>>, closing: char) -> String {
+fn substitution_text(chars: &mut Peekable<Chars<'_>>, closing: char, dialect: Dialect) -> String {
+    let escape = dialect.escape();
     let mut text = String::new();
     let mut depth = 0_usize;
     // the open quote, and whether `\` escapes inside it
@@ -548,7 +561,7 @@ fn substitution_text(chars: &mut Peekable<Chars<'_>>, closing: char) -> String {
     while let Some(c) = chars.next() {
         if let Some((open, escapes)) = quote {
             text.push(c);
-            if escapes && c == '\\' {
+            if escapes && c == escape {
                 text.extend(chars.next());
             } else if c == open {
                 quote = None;
@@ -576,7 +589,7 @@ fn substitution_text(chars: &mut Peekable<Chars<'_>>, closing: char) -> String {
             }
         }
         match c {
-            '\\' => {
+            c if c == escape => {
                 text.push(c);
                 text.extend(chars.next());
                 continue;
@@ -592,8 +605,8 @@ fn substitution_text(chars: &mut Peekable<Chars<'_>>, closing: char) -> String {
                 }
                 continue;
             }
-            // `\` escapes inside `"…"` and ANSI-C `$'…'`, not inside `'…'`
-            '\'' => quote = Some(('\'', text.ends_with('$'))),
+            // the escape works inside `"…"` and ANSI-C `$'…'`, not inside `'…'`
+            '\'' => quote = Some(('\'', dialect == Dialect::Posix && text.ends_with('$'))),
             '"' => quote = Some(('"', true)),
             ')' if closing == ')' && depth == 0 && cases > 0 => command_start = true,
             c if c == closing && depth == 0 => break,
@@ -673,6 +686,10 @@ enum Quoting {
 /// here-document body, a redirection target, array elements), each with the
 /// 0-based line of the body it starts on.
 fn substitutions(body: &str, quoting: Quoting) -> Vec<(usize, String)> {
+    let dialect = match quoting {
+        Quoting::PowerShell => Dialect::PowerShell,
+        Quoting::Shell | Quoting::HeredocBody => Dialect::Posix,
+    };
     let mut found = Vec::new();
     let mut chars = body.chars().peekable();
     let mut line = 0;
@@ -699,13 +716,13 @@ fn substitutions(body: &str, quoting: Quoting) -> Vec<(usize, String)> {
                 }
             }
             '$' if chars.next_if_eq(&'(').is_some() => {
-                let text = substitution_text(&mut chars, ')');
+                let text = substitution_text(&mut chars, ')', dialect);
                 let start = line;
                 line += text.matches('\n').count();
                 found.push((start, text));
             }
             '`' => {
-                let text = substitution_text(&mut chars, '`');
+                let text = substitution_text(&mut chars, '`', dialect);
                 let start = line;
                 line += text.matches('\n').count();
                 found.push((start, text));
