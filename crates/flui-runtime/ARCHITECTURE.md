@@ -61,8 +61,10 @@ host.
   `GlobalKey` registry composite over all the realm's presentations for the
   whole dynamic extent of the call, closing included. A binding whose own
   lock is held reports itself busy and the composite skips it (`flui-view`'s
-  `key::registry`), so no entry needs to exclude a presentation (pinned by
-  `state_read_across_presentations_during_a_segment_resolves`).
+  `key::registry`), so no entry needs to exclude a presentation.
+  `state_read_across_presentations_during_a_segment_resolves` pins a read of a
+  live sibling's key; a closing presentation's keys are **Unasserted:** no test
+  pins this.
 - **A failed presentation segment is contained to that presentation.**
   `draw_frame_entered` runs each presentation's segment under its own
   `catch_unwind` (ADR-0048); a panic or structured pipeline error is

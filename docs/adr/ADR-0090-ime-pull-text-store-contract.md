@@ -193,9 +193,9 @@ either.
 
 - **Platform selection is exact.** A selection the platform sets is kept at any scalar
   boundary, including inside a grapheme cluster (TSF and AppKit address scalars); a tap or an
-  arrow key still snaps to graphemes, as the controller always has. Pinned by the kit's
-  `selection_inside_a_grapheme_is_kept_exactly` (`flui-widgets/ARCHITECTURE.md` Mapping
-  decision #35).
+  arrow key still snaps to graphemes, as the controller always has. The platform half is pinned
+  by the kit's `selection_inside_a_grapheme_is_kept_exactly` (`flui-widgets/ARCHITECTURE.md`
+  Mapping decision #35); the tap and arrow-key snapping is **Unasserted:** no test pins this.
 - **Obscured means protected.** An obscured field reports `status().protected`: text reads
   return `Protected`, while edits, selection and geometry (through the mask) work. Pinned by
   `obscured_editable_text_conforms_to_kit_v1`.

@@ -306,8 +306,9 @@ Landed with step two:
 - **Derive round trip.** `derived_routable_round_trips` (`crates/flui-widgets/tests/routable_derive.rs`)
   is a property test over generated values of a derived route enum with multi-parameter,
   string, literal-sibling and non-ASCII patterns. `crates/flui-widgets/tests/routable_ui.rs`
-  compiles the accepted shapes (each asserting its round trip; `basic.rs` and `multi_param.rs`
-  also pin the `NoMatch` and `Param` errors, `precedence.rs` the specificity) and every
+  compiles the accepted shapes (`basic.rs` and `multi_param.rs` assert their round trip and pin
+  the `NoMatch` and `Param` errors; `precedence.rs` pins the specificity through `parse` only,
+  so a round trip of its leading-parameter shape is **Unasserted:** no test pins this) and every
   rejection of §1 against its diagnostic. The trait's default back-stack is pinned on a
   hand-written route by `router_opens_at_a_location_with_its_back_stack`; that a derived route
   keeps it is **Unasserted:** no test pins this. The pattern parser,

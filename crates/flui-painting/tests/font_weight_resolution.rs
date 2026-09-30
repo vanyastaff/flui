@@ -59,8 +59,7 @@ fn a_missing_weight_snaps_in_css_order_not_by_distance() {
 }
 
 /// A variable face serves any weight its `wght` axis covers, although its
-/// default instance carries only 400; past the axis the request snaps to the
-/// carried weight.
+/// default instance carries only 400.
 fn a_variable_axis_serves_the_weights_it_covers() {
     assert_eq!(
         resolved_weight("FLUI Probe Variable", FontWeight::W900),
