@@ -2,7 +2,8 @@
 
 - Build outputs (APK, `.app`, web page) go to `<target-dir>/flui-out/<project>/<platform>/`, where
   `<target-dir>` is the one cargo reports (following `CARGO_TARGET_DIR`, `build.target-dir` and an
-  enclosing workspace), instead of `<project>/target/flui-out/<platform>/`. `cargo clean` removes
+  enclosing workspace) and `<project>` is the package in the project directory, instead of
+  `<project>/target/flui-out/<platform>/`. `cargo clean` removes
   them, and projects sharing a target-dir keep apart.
 
 ### Fixed
@@ -30,3 +31,6 @@
   in `platforms/`. The record of those directories is only an index: losing or damaging it
   (`cargo clean`, deleting `target/` by hand) never fails a build or a clean, and the next build
   into a claimed directory records it again.
+  A directory `flui clean` cannot remove (an executable still running on Windows) no longer stops
+  it: the rest, the other platforms and `cargo clean` still run, the failed claim is kept for the
+  next clean, and the first failure is the command's error.

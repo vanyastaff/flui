@@ -1,4 +1,6 @@
-use crate::build::output::{clean_output_dirs, project_output_root};
+use crate::build::output::{
+    Cleaned, RemoveDir, clean_output_dirs, project_output_root, remove_dir_all,
+};
 use crate::error::{CliError, CliResult};
 use crate::runner::{CargoCommand, OutputStyle};
 use crate::ui;
@@ -40,17 +42,25 @@ pub(crate) fn execute(deep: bool, platform: Option<String>) -> CliResult<()> {
         let spinner = ui::spinner();
         spinner.start(format!("Cleaning {plat_lower} artifacts..."));
         let root = std::env::current_dir()?;
-        let removed = clean_platform(&root, &project_output_root(&root), &plat_lower)?;
+        let cleaned = clean_platform(
+            &root,
+            &project_output_root(&root),
+            &plat_lower,
+            remove_dir_all,
+        );
         spinner.stop(format!("{} {plat_lower} cleaned", style("✓").green()));
-        report_removed(&removed)?;
+        report_removed(&cleaned.removed)?;
+        if let Some(failure) = cleaned.failure {
+            return Err(failure.into());
+        }
     } else {
         // Build outputs first: the `--output` directories builds claimed are
         // recorded under `target/`, which `cargo clean` removes.
         let spinner = ui::spinner();
         spinner.start("Cleaning build outputs...");
-        let removed = clean_build_outputs(&std::env::current_dir()?, deep)?;
+        let cleaned = clean_build_outputs(&std::env::current_dir()?, deep, remove_dir_all);
         spinner.stop(format!("{} Build outputs cleaned", style("✓").green()));
-        report_removed(&removed)?;
+        report_removed(&cleaned.removed)?;
 
         let spinner = ui::spinner();
         spinner.start("Cleaning cargo artifacts...");
@@ -58,6 +68,11 @@ pub(crate) fn execute(deep: bool, platform: Option<String>) -> CliResult<()> {
             .output_style(OutputStyle::Silent)
             .run()?;
         spinner.stop(format!("{} Cargo artifacts cleaned", style("✓").green()));
+        // A directory that could not be removed fails the clean, but only
+        // after everything else, cargo's artifacts included, was cleaned.
+        if let Some(failure) = cleaned.failure {
+            return Err(failure.into());
+        }
     }
 
     let mode = if deep { "deep" } else { "standard" };
@@ -82,28 +97,27 @@ fn report_removed(removed: &[PathBuf]) -> CliResult<()> {
 }
 
 /// The build outputs of every platform: each one's output directories and,
-/// with `deep`, what its build tool writes in `platforms/`. Returns the
-/// paths removed.
-fn clean_build_outputs(root: &Path, deep: bool) -> CliResult<Vec<PathBuf>> {
+/// with `deep`, what its build tool writes in `platforms/`. A platform whose
+/// removal fails does not stop the others.
+fn clean_build_outputs(root: &Path, deep: bool, remove: RemoveDir) -> Cleaned {
     let output_root = project_output_root(root);
-    let mut removed = Vec::new();
+    let mut cleaned = Cleaned::default();
     for platform in VALID_PLATFORMS {
-        if deep {
-            removed.extend(clean_platform(root, &output_root, platform)?);
+        cleaned.merge(if deep {
+            clean_platform(root, &output_root, platform, remove)
         } else {
-            removed.extend(clean_output_dirs(root, &output_root, platform)?);
-        }
+            clean_output_dirs(root, &output_root, platform, remove)
+        });
     }
-    Ok(removed)
+    cleaned
 }
 
-/// Clean build artifacts for a specific platform, returning the paths that
-/// were actually removed: the build's output directories (the default one
-/// and each `--output` directory a build claimed, see [`clean_output_dirs`]),
-/// and what the platform's own build tool writes inside
-/// `platforms/<platform>/`.
-fn clean_platform(root: &Path, output_root: &Path, platform: &str) -> CliResult<Vec<PathBuf>> {
-    let mut removed = clean_output_dirs(root, output_root, platform)?;
+/// Clean build artifacts for a specific platform: the build's output
+/// directories (the default one and each `--output` directory a build
+/// claimed, see [`clean_output_dirs`]), and what the platform's own build
+/// tool writes inside `platforms/<platform>/`.
+fn clean_platform(root: &Path, output_root: &Path, platform: &str, remove: RemoveDir) -> Cleaned {
+    let mut cleaned = clean_output_dirs(root, output_root, platform, remove);
 
     let platform_dir = root.join("platforms").join(platform);
     let tool_outputs: &[&str] = match platform {
@@ -113,22 +127,12 @@ fn clean_platform(root: &Path, output_root: &Path, platform: &str) -> CliResult<
     };
     for sub_dir in tool_outputs {
         let dir = platform_dir.join(sub_dir);
-        if remove_dir_if_exists(&dir)? {
-            removed.push(dir);
+        if dir.exists() {
+            let result = remove(&dir);
+            cleaned.record(dir, result);
         }
     }
-
-    Ok(removed)
-}
-
-/// Remove a directory if it exists; returns whether it was removed.
-fn remove_dir_if_exists(path: &Path) -> CliResult<bool> {
-    if path.exists() {
-        std::fs::remove_dir_all(path)?;
-        Ok(true)
-    } else {
-        Ok(false)
-    }
+    cleaned
 }
 
 #[cfg(test)]
@@ -168,7 +172,8 @@ mod tests {
 
     fn a_plain_clean_removes_claimed_out_dirs() {
         let (_tmp, root, claimed, gradle) = built_project();
-        clean_build_outputs(&root, false).expect("clean");
+        let cleaned = clean_build_outputs(&root, false, remove_dir_all);
+        assert!(cleaned.failure.is_none(), "clean failed");
         for out in &claimed {
             assert!(!out.exists(), "{} survived a plain clean", out.display());
         }
@@ -177,11 +182,34 @@ mod tests {
 
     fn a_deep_clean_also_removes_build_tool_output() {
         let (_tmp, root, claimed, gradle) = built_project();
-        clean_build_outputs(&root, true).expect("clean");
+        let cleaned = clean_build_outputs(&root, true, remove_dir_all);
+        assert!(cleaned.failure.is_none(), "clean failed");
         for out in &claimed {
             assert!(!out.exists(), "{} survived a deep clean", out.display());
         }
         assert!(!gradle.exists(), "a deep clean left Gradle's output");
+    }
+
+    /// A remover that fails on the web build's claimed directory.
+    fn remove_all_but_web(dir: &Path) -> std::io::Result<()> {
+        if dir.ends_with("dist-web") {
+            return Err(std::io::Error::other("locked"));
+        }
+        remove_dir_all(dir)
+    }
+
+    fn one_platforms_failure_does_not_stop_the_others() {
+        let (_tmp, root, claimed, _gradle) = built_project();
+        let cleaned = clean_build_outputs(&root, false, remove_all_but_web);
+        assert!(
+            cleaned.failure.is_some(),
+            "the web failure was not reported"
+        );
+        assert!(claimed[0].is_dir(), "the locked web output was removed");
+        assert!(
+            !claimed[1].exists(),
+            "the desktop output was skipped after the web failure"
+        );
     }
 
     #[test]
@@ -194,6 +222,10 @@ mod tests {
             (
                 "a_deep_clean_also_removes_build_tool_output",
                 a_deep_clean_also_removes_build_tool_output,
+            ),
+            (
+                "one_platforms_failure_does_not_stop_the_others",
+                one_platforms_failure_does_not_stop_the_others,
             ),
         ]);
     }
