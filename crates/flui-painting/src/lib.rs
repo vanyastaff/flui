@@ -100,10 +100,6 @@ pub use canvas::Canvas;
 pub use decoration::{DecorationPaintOptions, box_decoration_hit_test, paint_box_decoration};
 pub use display_list::{DamageExtent, DisplayList, DrawCommand, DrawOp, ShapedParagraph};
 pub use error::RegisterFontError;
-// The one cosmic-text type on this crate's surface (ADR-0016 boundary), until
-// FLUI has a family type of its own (ADR-0092 §10 step 6): paragraphs cross
-// the display list as `ShapedParagraph`s, which name no shaper (ADR-0092 §4).
-pub use cosmic_text::fontdb::Family;
 pub use glyphs::{GlyphContent, GlyphImage, GlyphKey, GlyphRasterizer, PlacedGlyph};
 pub use table_border::paint_table_border;
 pub use text_layout::{
