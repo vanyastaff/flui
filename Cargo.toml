@@ -421,7 +421,12 @@ percent-encoding = "2"
 swash = { version = "0.2.10", default-features = false, features = ["std", "scale", "render"] }
 # Host font discovery (ADR-0092 §7): one scan of the platform's font
 # directories, and fontconfig's configuration through a pure-Rust parser.
-fontdb = { version = "0.23", default-features = false, features = ["std", "fs", "memmap", "fontconfig"] }
+fontdb = { version = "0.23", default-features = false, features = [
+    "std",
+    "fs",
+    "memmap",
+    "fontconfig",
+] }
 # The host's locale, which picks the Han fallback list (ADR-0092 §7).
 sys-locale = "0.3"
 # A character's Unicode script, for the painting test harness's
