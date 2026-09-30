@@ -52,11 +52,13 @@ enum Command {
     Gate(tasks::GateArgs),
     /// Run the workspace test suite the way CI does.
     Test(tasks::TestArgs),
+    /// Link the examples and benches with the test suite's features.
+    BuildAllTargets(tasks::BuildAllTargetsArgs),
     /// `gate`, `test` and the doctests: the local mirror of CI's required checks.
     Ci(tasks::CiArgs),
     /// `ci` plus every heavy CI job this host can run.
     CiFull(tasks::CiFullArgs),
-    /// fmt, clippy and tests over the crates a change touches (CI's fast lane).
+    /// fmt, clippy and tests over the crates a change touches and their dependents.
     CheckChanged(tasks::CheckChangedArgs),
     /// Check the dependency graph and the manifests (cargo-deny, cargo-shear).
     Deps(tasks::DepsArgs),
@@ -92,7 +94,7 @@ enum Command {
     Reach(workspace::ReachArgs),
     /// Check the declared import direction between a crate's top-level modules.
     ModuleDag(module_dag::ModuleDagArgs),
-    /// Print the packages a change touches (CI fast lane, `check-changed`).
+    /// Print the lane and the packages a change touches (CI's `plan`, `check-changed`).
     Affected(change_scope::AffectedArgs),
     /// Check that no include_str! target is classified as docs-only.
     PathsFilter(change_scope::PathsFilterArgs),
@@ -143,6 +145,7 @@ fn main() -> ExitCode {
         Command::Lint(args) => tasks::lint(&args),
         Command::Gate(args) => tasks::gate(&args),
         Command::Test(args) => tasks::test(&args),
+        Command::BuildAllTargets(args) => tasks::build_all_targets_task(&args),
         Command::Ci(args) => tasks::ci(&args),
         Command::CiFull(args) => tasks::ci_full(&args),
         Command::CheckChanged(args) => tasks::check_changed(&args),

@@ -49,13 +49,10 @@ const PLATFORM_TARGETS: [&str; 4] = [WINDOWS_TARGET, MACOS_TARGET, ANDROID_TARGE
 ///   in the same jobs.
 /// - `--lib --bins --tests`: build and run what has tests without LINKING the
 ///   ~60 examples, which `cargo nextest run` otherwise links on every run.
-///   Examples still compile in `lint` (`--all-targets`); CI's `test` job and
-///   `ci-full`'s `cargo build --workspace --all-targets` link them.
+///   Examples still compile in `lint` (`--all-targets`);
+///   [`build_all_targets`] links them with the same features, so after a test
+///   run it rebuilds nothing but the example and bench targets.
 /// - flui-platform is excluded: it runs on its own (see [`platform_suite`]).
-///
-/// CI's `fast-lane` builds the same scope and narrows the run with a nextest
-/// filterset (`change_scope`'s `ci_test_args`), so it builds what the `test`
-/// job's cache holds.
 pub(crate) const TEST_SCOPE: [&str; 10] = [
     "--workspace",
     "--exclude",
@@ -66,8 +63,28 @@ pub(crate) const TEST_SCOPE: [&str; 10] = [
     "--bins",
     "--tests",
     "--features",
-    "flui/material,flui/cupertino,flui-devtools/agent",
+    TEST_FEATURES,
 ];
+
+/// The features [`TEST_SCOPE`] turns on (see there for each one's reason).
+const TEST_FEATURES: &str = "flui/material,flui/cupertino,flui-devtools/agent";
+
+/// The build that links the examples and benches: the workspace's
+/// `--all-targets` with [`TEST_SCOPE`]'s features, so it reuses what a test
+/// run built instead of resolving features a second time. Cargo skips a
+/// target whose `required-features` those features leave off (devtools'
+/// `profiler_demo`, the engine's `testing` benches): `feature-matrix`
+/// compiles them per feature, and nothing links them.
+fn build_all_targets() -> Cmd {
+    Cmd::cargo([
+        "build",
+        "--workspace",
+        "--all-targets",
+        "--locked",
+        "--features",
+        TEST_FEATURES,
+    ])
+}
 
 /// Options every task takes.
 #[derive(Debug, Clone, Copy, clap::Args)]
@@ -263,23 +280,39 @@ fn scoped_nextest(nested_cargo: bool) -> Cmd {
         .args(["-E", filterset])
 }
 
+/// Which part of the suite `cargo xtask test` runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stages {
+    /// Everything: the default.
+    All,
+    /// Everything but the nested-cargo group (`--fast`).
+    Fast,
+    /// The nested-cargo group alone (`--nested`): CI runs it as its own job.
+    Nested,
+}
+
 /// The test suite: everything outside the nested-cargo group, flui-platform on
 /// its own, then the nested-cargo group (the tests that run a `cargo` of their
 /// own on a project they generate; they dominate the wall-clock, so they run
-/// last, and `fast` leaves them out). Same scope in both stages, so nothing
-/// is rebuilt, and the two filtersets are complements, so together they are
-/// the whole suite.
-fn test_plan(host: Host, fast: bool) -> Vec<Step> {
+/// last). Same scope in both stages, so nothing is rebuilt, and the two
+/// filtersets are complements, so together they are the whole suite.
+fn test_plan(host: Host, stages: Stages) -> Vec<Step> {
     let nested = scoped_nextest(true);
-    let mut steps = vec![scoped_nextest(false).into(), platform_suite(host)];
-    if fast {
-        steps.push(Step::Note(format!(
-            "test --fast: SKIPPED the nested-cargo group (trybuild compile_fail suites, flui-cli cli_create::generated_*, flui::facade_consumer; filter in .config/nextest.toml). Run them with: {nested}"
-        )));
-    } else {
-        steps.push(nested.into());
+    match stages {
+        Stages::All => vec![
+            scoped_nextest(false).into(),
+            platform_suite(host),
+            nested.into(),
+        ],
+        Stages::Fast => vec![
+            scoped_nextest(false).into(),
+            platform_suite(host),
+            Step::Note(format!(
+                "test --fast: SKIPPED the nested-cargo group (trybuild compile_fail suites, flui-cli cli_create::generated_*, flui::facade_consumer; filter in .config/nextest.toml). Run them with: {nested}"
+            )),
+        ],
+        Stages::Nested => vec![nested.into()],
     }
-    steps
 }
 
 /// Clippy exactly as CI's `clippy` job runs it: the workspace, then
@@ -581,7 +614,7 @@ fn gate_stage(runner: Runner) -> anyhow::Result<()> {
 
 fn ci_stage(runner: Runner) -> anyhow::Result<()> {
     gate_stage(runner)?;
-    runner.steps(&test_plan(Host::current(), false))?;
+    runner.steps(&test_plan(Host::current(), Stages::All))?;
     // nextest executes no doctests; flui-platform's need neither
     // `--all-features` nor a display server, so it is not carved out
     runner.run(&Cmd::cargo(["test", "--workspace", "--locked", "--doc"]))
@@ -664,17 +697,33 @@ pub(crate) struct TestArgs {
     /// consumers): the quick local loop.
     #[arg(long)]
     fast: bool,
+    /// Run only the nested-cargo group.
+    #[arg(long, conflicts_with = "fast")]
+    nested: bool,
     #[command(flatten)]
     run: RunOpts,
 }
 
 /// `cargo xtask test`: run the workspace test suite the way CI does.
 pub(crate) fn test(args: &TestArgs) -> anyhow::Result<ExitCode> {
-    done(
-        args.run
-            .runner()
-            .steps(&test_plan(Host::current(), args.fast)),
-    )
+    let stages = match (args.fast, args.nested) {
+        (true, _) => Stages::Fast,
+        (_, true) => Stages::Nested,
+        _ => Stages::All,
+    };
+    done(args.run.runner().steps(&test_plan(Host::current(), stages)))
+}
+
+/// Arguments for `cargo xtask build-all-targets`.
+#[derive(Debug, clap::Args)]
+pub(crate) struct BuildAllTargetsArgs {
+    #[command(flatten)]
+    run: RunOpts,
+}
+
+/// `cargo xtask build-all-targets`: link the examples and benches the test features reach (see [`build_all_targets`]).
+pub(crate) fn build_all_targets_task(args: &BuildAllTargetsArgs) -> anyhow::Result<ExitCode> {
+    done(args.run.runner().run(&build_all_targets()))
 }
 
 /// Arguments for `cargo xtask ci`.
@@ -708,12 +757,7 @@ pub(crate) struct CiFullArgs {
 pub(crate) fn ci_full(args: &CiFullArgs) -> anyhow::Result<ExitCode> {
     let runner = args.run.runner();
     ci_stage(runner)?;
-    runner.run(&Cmd::cargo([
-        "build",
-        "--workspace",
-        "--all-targets",
-        "--locked",
-    ]))?;
+    runner.run(&build_all_targets())?;
     runner.steps(&test_features_plan())?;
     feature_matrix_stage(runner, Slice::All)?;
     web::check(runner)?;
@@ -748,7 +792,7 @@ pub(crate) struct CheckChangedArgs {
     run: RunOpts,
 }
 
-/// `cargo xtask check-changed`: fmt, clippy and tests over the crates a change touches (CI's fast lane).
+/// `cargo xtask check-changed`: fmt, clippy and tests over the crates a change touches.
 ///
 /// The crates this branch changes against the base, uncommitted and untracked
 /// work included, and every workspace crate depending on them. Refuses (exit
@@ -1031,7 +1075,7 @@ mod tests {
 
     fn test_runs_both_group_stages_and_the_platform_suite_per_host() {
         assert_eq!(
-            lines(&test_plan(Host::Linux, false)),
+            lines(&test_plan(Host::Linux, Stages::All)),
             [
                 format!("$ cargo nextest run {SCOPE} -E 'not group(nested-cargo)'"),
                 "$ FLUI_HEADLESS=1 xvfb-run -a cargo nextest run -p flui-platform --locked --all-features --no-fail-fast".to_owned(),
@@ -1039,11 +1083,13 @@ mod tests {
             ]
         );
         assert_eq!(
-            lines(&test_plan(Host::Windows, false))[1],
+            lines(&test_plan(Host::Windows, Stages::All))[1],
             "$ cargo nextest run -p flui-platform --locked --all-features --no-fail-fast"
         );
-        assert!(lines(&test_plan(Host::MacOs, false))[1].starts_with("Skipping flui-platform"));
-        let fast = lines(&test_plan(Host::Linux, true));
+        assert!(
+            lines(&test_plan(Host::MacOs, Stages::All))[1].starts_with("Skipping flui-platform")
+        );
+        let fast = lines(&test_plan(Host::Linux, Stages::Fast));
         assert_eq!(fast.len(), 3);
         assert!(fast[2].starts_with("test --fast: SKIPPED the nested-cargo group"));
         assert!(
@@ -1053,6 +1099,21 @@ mod tests {
             "{}",
             fast[2]
         );
+        // CI's test-nested job: the group alone, with no platform leg
+        assert_eq!(
+            lines(&test_plan(Host::Linux, Stages::Nested)),
+            [format!(
+                "$ cargo nextest run {SCOPE} -E 'group(nested-cargo)'"
+            )]
+        );
+        // the example link reuses the test build: the same features
+        assert_eq!(
+            lines(&[build_all_targets().into()]),
+            [format!(
+                "$ cargo build --workspace --all-targets --locked --features {TEST_FEATURES}"
+            )]
+        );
+        assert!(SCOPE.ends_with(&format!("--features {TEST_FEATURES}")));
     }
 
     fn feature_matrix_slices_parse() {
