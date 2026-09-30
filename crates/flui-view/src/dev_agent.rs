@@ -302,7 +302,14 @@ impl AgentWindow {
     /// before the next call, which then answers `gone`.
     #[must_use]
     pub fn is_open(&self) -> bool {
-        self.port.strong_count() > 0
+        self.open_port().is_some()
+    }
+
+    /// The port, while the window is open. A call on another thread may
+    /// still hold the port after the window closed, so the port's own flag
+    /// is read too.
+    fn open_port(&self) -> Option<Arc<dyn AgentPort>> {
+        self.port.upgrade().filter(|port| port.is_open())
     }
 
     /// Read the window's semantics tree as ADR-0080 wire nodes, as of the
@@ -314,8 +321,7 @@ impl AgentWindow {
     /// owner's inbox is full; `shutting_down` when the owner has gone. The
     /// answer carries the rest.
     pub fn read(&self, query: ReadQuery) -> Result<AgentAnswer<Tree>, AgentFault> {
-        self.port
-            .upgrade()
+        self.open_port()
             .ok_or_else(AgentFault::window_gone)?
             .read(query)
     }
@@ -329,8 +335,7 @@ impl AgentWindow {
     ///
     /// As [`Self::read`]; the answer carries the rest.
     pub fn act(&self, request: ActionRequest) -> Result<AgentAnswer<()>, AgentFault> {
-        self.port
-            .upgrade()
+        self.open_port()
             .ok_or_else(AgentFault::window_gone)?
             .act(request)
     }
@@ -369,6 +374,10 @@ mod tests {
     }
 
     impl AgentPort for Answering {
+        fn is_open(&self) -> bool {
+            true
+        }
+
         fn read(&self, _query: ReadQuery) -> Result<AgentAnswer<Tree>, AgentFault> {
             Ok(crate::__runtime::agent_answer(Ready(Some(Tree::new(
                 Vec::new(),

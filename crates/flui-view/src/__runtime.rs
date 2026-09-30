@@ -33,6 +33,11 @@ pub use crate::lifecycle::LifecycleSource;
 /// What an [`AgentWindow`] calls: one window's read and act, enqueued on its
 /// owner. The runtime's semantics agent is the implementation.
 pub trait AgentPort: Send + Sync {
+    /// Whether the window is still open. A port a call still holds outlives
+    /// its window's close, so this, not the port's lifetime, says whether
+    /// the next call may be enqueued.
+    fn is_open(&self) -> bool;
+
     /// Enqueue a read of the window's committed semantics tree.
     ///
     /// # Errors

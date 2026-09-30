@@ -348,7 +348,9 @@ Pinned by `src/ui_realm/tests/agent_semantics.rs`.
 agent per presentation, keeps it on the `PresentationState`, and hands out
 `flui_view::dev_agent::AgentWindow`s that hold it weakly through the hidden
 `flui_view::__runtime::AgentPort`, so the hook never keeps a closed window alive: closing the
-presentation drops the agent and every call on a window answers `gone` (kind `window`). The
+presentation drops the agent and every call on a window answers `gone` (kind `window`), at once
+and before anything is enqueued, even while another thread's call still holds the port: the port
+carries an open flag the presentation clears as it closes. The
 windows hold the presentation's semantics handle strongly instead of the presentation, so the
 cost lasts exactly as long as the hook keeps a window: a hook that does not serve is handed none,
 and one that detaches or panics drops its windows, and collection stops on the next frame. `flui-app`'s desktop and iOS runners

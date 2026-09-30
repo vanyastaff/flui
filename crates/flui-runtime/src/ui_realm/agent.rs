@@ -19,6 +19,7 @@
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::num::NonZeroU32;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -326,8 +327,9 @@ impl<T: Send + 'static> PendingAnswer<T> for AgentReply<T> {
 /// What a presentation keeps for the development agent: see
 /// [`UiRealm::dev_agent_window`]. Owner thread only.
 pub(crate) struct DevAgentSlot {
-    /// The port every window handle answers through. Dropped at close.
-    agent: Arc<SemanticsAgent>,
+    /// The port every window handle answers through. Closed, and dropped,
+    /// with the presentation.
+    pub(super) agent: Arc<DevAgentPort>,
     /// The semantics handle the window handles share; dead once the hook
     /// has dropped them all.
     collecting: Weak<SemanticsHandle>,
@@ -423,18 +425,43 @@ impl SemanticsAgent {
 }
 
 /// The development seam's port: a [`flui_view::dev_agent::AgentWindow`]
-/// reads and acts through the agent the realm vended for it.
-impl AgentPort for SemanticsAgent {
+/// reads and acts through the agent the realm vended for it, while its
+/// presentation is open.
+///
+/// A call on another thread can hold the port (upgraded from the window's
+/// weak reference) past the presentation's close, so the port's lifetime
+/// does not say whether the window is open; the flag does, cleared when the
+/// presentation's [`DevAgentSlot`] goes.
+pub(crate) struct DevAgentPort {
+    agent: SemanticsAgent,
+    open: AtomicBool,
+}
+
+impl AgentPort for DevAgentPort {
+    fn is_open(&self) -> bool {
+        self.open.load(Ordering::Acquire)
+    }
+
     fn read(&self, query: ReadQuery) -> Result<AgentAnswer<Tree>, AgentFault> {
-        SemanticsAgent::read(self, query)
+        self.agent
+            .read(query)
             .map(flui_view::__runtime::agent_answer)
             .map_err(AgentFault::from)
     }
 
     fn act(&self, request: ActionRequest) -> Result<AgentAnswer<()>, AgentFault> {
-        SemanticsAgent::act(self, request)
+        self.agent
+            .act(request)
             .map(flui_view::__runtime::agent_answer)
             .map_err(AgentFault::from)
+    }
+}
+
+impl Drop for DevAgentSlot {
+    /// The presentation closed: every window handle answers `gone` from
+    /// now on, even through a port a call still holds.
+    fn drop(&mut self) {
+        self.agent.open.store(false, Ordering::Release);
     }
 }
 
@@ -503,7 +530,10 @@ impl UiRealm {
         let (agent, collecting, fresh) = {
             let mut slot = state.dev_agent.borrow_mut();
             let slot = slot.get_or_insert_with(|| DevAgentSlot {
-                agent: Arc::new(self.agent_for(presentation, None)),
+                agent: Arc::new(DevAgentPort {
+                    agent: self.agent_for(presentation, None),
+                    open: AtomicBool::new(true),
+                }),
                 collecting: Weak::new(),
             });
             let kept = slot.collecting.upgrade();

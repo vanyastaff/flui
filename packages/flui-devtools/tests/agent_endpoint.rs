@@ -85,8 +85,14 @@ impl Address {
     fn new() -> Self {
         #[cfg(unix)]
         {
-            // `tempfile` creates the directory with mode 0700.
-            let dir = tempfile::tempdir().expect("a temporary directory");
+            // The server refuses a socket whose directory others can enter,
+            // and `tempfile` creates directories with the umask's mode
+            // (usually 0755), so the mode is asked for explicitly.
+            use std::os::unix::fs::PermissionsExt as _;
+            let dir = tempfile::Builder::new()
+                .permissions(std::fs::Permissions::from_mode(0o700))
+                .tempdir()
+                .expect("a temporary directory");
             let address = dir
                 .path()
                 .join("agent.sock")
@@ -783,6 +789,25 @@ impl io::Write for LogWriter {
     }
 }
 
+fn unbounded_timeouts_wait_without_a_deadline() {
+    let address = Address::new();
+    let endpoint = address
+        .endpoint()
+        .with_handshake_timeout(Duration::MAX)
+        .with_reply_timeout(Duration::MAX);
+    let mut owner = Owner::new(AgentServer::new(endpoint));
+    let at = address.address.clone();
+    owner.drive(move |_| {
+        let mut client = Client::hello(&at);
+        let window = client.only_window();
+        let button = client.button(&window);
+        let reply = client.tap(&window, &button);
+        assert_eq!(reply["result"], json!({}), "the tap is answered: {reply}");
+        client.wait_for_count(&window, 1);
+    });
+    assert_eq!(owner.presses(), 1, "the button's handler ran once");
+}
+
 /// Runs every row, then fails naming each row that failed.
 fn run_cases(cases: &[(&str, fn())]) {
     let mut failures = Vec::new();
@@ -838,6 +863,10 @@ fn the_endpoint_contains_every_failure() {
         (
             "traces_carry_no_labels_or_values",
             traces_carry_no_labels_or_values,
+        ),
+        (
+            "unbounded_timeouts_wait_without_a_deadline",
+            unbounded_timeouts_wait_without_a_deadline,
         ),
     ]);
 }

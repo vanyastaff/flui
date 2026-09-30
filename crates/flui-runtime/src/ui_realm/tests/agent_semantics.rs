@@ -430,6 +430,16 @@ fn an_agent_for_a_closed_presentation_answers_gone() {
         .expect("the realm hosts the second presentation");
     assert_eq!(dev_window.id(), again.id());
     assert!(dev_window.is_open());
+    // A call on another thread that upgraded the window's port and is still
+    // enqueueing when the presentation closes.
+    let in_flight = {
+        let state = realm
+            .presentations
+            .get(second)
+            .expect("the realm hosts the second presentation");
+        let slot = state.dev_agent.borrow();
+        Arc::clone(&slot.as_ref().expect("a window was vended").agent)
+    };
     assert!(realm.close_presentation_entered(second));
     assert!(realm.semantics_agent(second).is_none());
     assert!(realm.dev_agent_window(second).is_none());
@@ -447,6 +457,16 @@ fn an_agent_for_a_closed_presentation_answers_gone() {
             Some(flui_view::dev_agent::HandleKind::Window)
         )
     );
+    assert!(
+        !dev_window.is_open(),
+        "closed, though the in-flight call still holds the port"
+    );
+    let element = ElementId::from_u64(1).expect("non-zero");
+    let fault = dev_window
+        .act(ActionRequest::new(element, ActionName::Invoke))
+        .expect_err("an action on a closed window answers at once");
+    assert_eq!(fault.code(), ErrorCode::Gone);
+    drop(in_flight);
 
     let reply = agent.read(ReadQuery::new()).expect("the inbox has room");
     let report = realm.drain_commands();

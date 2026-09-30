@@ -35,8 +35,9 @@ pub(super) fn serve(stream: Stream, shared: &Shared) {
         stream,
         buffer: Vec::new(),
     };
-    let deadline = Instant::now() + shared.handshake_timeout;
-    let Next::Line(hello) = connection.next_line(Some(deadline), shared) else {
+    // A timeout too long to reach (`Duration::MAX`) is no deadline at all.
+    let deadline = Instant::now().checked_add(shared.handshake_timeout);
+    let Next::Line(hello) = connection.next_line(deadline, shared) else {
         return;
     };
     if !is_hello(&hello, &shared.token) {
@@ -366,11 +367,14 @@ fn window(
 }
 
 /// Waits for the owner's answer, up to the reply timeout, looking at the
-/// stop flag between slices. `None` on a timeout or a stop.
+/// stop flag between slices. `None` on a timeout or a stop. A timeout too
+/// long to reach (`Duration::MAX`) waits until the answer or a stop.
 fn wait<T>(mut answer: AgentAnswer<T>, shared: &Shared) -> Option<Result<T, AgentFault>> {
-    let deadline = Instant::now() + shared.reply_timeout;
+    let deadline = Instant::now().checked_add(shared.reply_timeout);
     loop {
-        let left = deadline.saturating_duration_since(Instant::now());
+        let left = deadline.map_or(Duration::MAX, |deadline| {
+            deadline.saturating_duration_since(Instant::now())
+        });
         if let Some(result) = answer.recv_timeout(left.min(WAIT_SLICE)) {
             return Some(result);
         }
