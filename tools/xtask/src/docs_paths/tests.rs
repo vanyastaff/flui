@@ -30,6 +30,11 @@ fn a_path_needs_a_known_root_and_a_slash() {
             &["crates/flui-view/ARCHITECTURE.md"][..],
         ),
         ("docs/adr/", &["docs/adr/"]),
+        // a misspelt crate is this repository's path, not another's
+        (
+            "crates/fluu-view/src/lib.rs",
+            &["crates/fluu-view/src/lib.rs"],
+        ),
         (
             ".rust-studio/specs/x/plan.md",
             &[".rust-studio/specs/x/plan.md"],
@@ -91,6 +96,8 @@ fn a_pattern_a_placeholder_or_a_foreign_layout_is_not_a_path() {
         "packages/flutter/lib/src/rendering/object.dart",
         "packages/flutter_test/lib/x",
         "crates/gpui/src/window.rs",
+        "crates/gpui_macos/src/display_link.rs",
+        "crates/bevy_animation/src/lib.rs",
     ] {
         assert_eq!(extract::paths(span), [] as [&str; 0], "{span:?}");
     }
@@ -136,22 +143,41 @@ fn packages_are_read_only_from_cargo_commands() {
             &[(0, build, "flui-view")],
         ),
         ("x\ncargo test -p flui-view", &[(1, test, "flui-view")]),
+        ("A=1 B=2 cargo test -p a", &[(0, test, "a")]),
+        (
+            "$env:RUSTFLAGS='-C x'; cargo build -p a",
+            &[(0, build, "a")],
+        ),
+        (
+            "cargo run -p flui-cli -- -p 8080",
+            &[(0, Some("run"), "flui-cli")],
+        ),
         // not cargo, or cargo's command ended
         ("mkdir -p target/x", &[]),
         ("cargo build && mkdir -p out", &[]),
+        ("cargo build&& mkdir -p out", &[]),
+        ("cargo build||mkdir -p out", &[]),
+        ("cargo build|grep -p x", &[]),
         ("cargo build; mkdir -p out", &[]),
         ("cargo build | grep -p x", &[]),
         ("cargo test\nmkdir -p out", &[]),
         ("rg -p flui-view", &[]),
+        ("echo cargo test -p gone", &[]),
+        ("echo \"cargo test -p gone\"", &[]),
+        ("# cargo test -p gone", &[]),
         ("cargo test --profile ci", &[]),
         // placeholders
         ("cargo test -p <crate>", &[]),
         ("cargo test -p $CRATE", &[]),
         ("cargo test -p {name}", &[]),
     ] {
-        let got: Vec<(usize, Option<&str>, &str)> = extract::packages(code)
-            .into_iter()
-            .map(|selected| (selected.line, selected.subcommand, selected.name))
+        let selected = extract::packages(code);
+        let got: Vec<(usize, Option<&str>, &str)> = selected
+            .iter()
+            .map(|selected| {
+                let subcommand = selected.subcommand.as_deref();
+                (selected.line, subcommand, selected.name.as_str())
+            })
             .collect();
         assert_eq!(got, want, "{code:?}");
     }
@@ -178,10 +204,15 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
 
 fn headings_give_github_anchors() {
     let markdown = "# Start here\n## The `View` tree: a guide!\n## Start here\n\
-                    ## Custom {#own-id}\n\n```\n# not a heading\n```\n";
-    // GitHub renders `{#own-id}` as text; it is no anchor of its own
+                    ## Custom {#own-id}\n\n```\n# not a heading\n```\n\
+                    # Foo\n# Foo-1\n# Foo\n";
+    // GitHub renders `{#own-id}` as text; it is no anchor of its own. The
+    // second `Foo` takes `foo-2`: `foo-1` is a heading's already
     let want: BTreeSet<String> = [
         "custom-own-id",
+        "foo",
+        "foo-1",
+        "foo-2",
         "start-here",
         "start-here-1",
         "the-view-tree-a-guide",
@@ -193,11 +224,12 @@ fn headings_give_github_anchors() {
 
 fn code_spans_and_blocks_carry_their_lines() {
     // a code span labelling a permalink to a commit cites the file as it was
-    // then; any other link's label is still a path to check
+    // then; any other link's label, a branch (or `main` misspelt) too, is still
+    // a path to check
     let markdown = "# T\n\nSee `docs/x.md`.\n\n```bash\ncargo test\ncargo run -p a\n```\n\n    indented\n\n\
                     [l](docs/y.md) ![i](/z.png) \
                     [`docs/old.md`](https://github.com/vanyastaff/flui/blob/e30ab71/docs/old.md) \
-                    [`docs/now.md`](https://github.com/vanyastaff/flui/blob/main/docs/now.md) \
+                    [`docs/now.md`](https://github.com/vanyastaff/flui/blob/mian/docs/now.md) \
                     [`docs/testng.md`](docs/testing.md)\n";
     let code = extract::code(markdown);
     assert_eq!(
@@ -241,7 +273,7 @@ fn code_spans_and_blocks_carry_their_lines() {
             ),
             (
                 12,
-                "https://github.com/vanyastaff/flui/blob/main/docs/now.md".to_owned()
+                "https://github.com/vanyastaff/flui/blob/mian/docs/now.md".to_owned()
             ),
             (12, "docs/testing.md".to_owned()),
         ]
@@ -297,6 +329,7 @@ fn an_llms_link_resolves_like_a_github_link() {
         ("https://example.com/x.md", None),
         ("https://github.com/vanyastaff/flui/issues/1", None),
         ("mailto:a@b.c", None),
+        ("//example.com/docs", None),
         ("#start-here", Some(Some("llms.txt"))),
     ] {
         let got = link_target("llms.txt", dest);

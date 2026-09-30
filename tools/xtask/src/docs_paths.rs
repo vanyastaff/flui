@@ -30,6 +30,7 @@
 //! are findings. `--seed` prints the allowlist the tree needs.
 
 mod extract;
+mod shell;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write as _};
@@ -150,12 +151,13 @@ struct Packages {
 
 impl Packages {
     /// Whether the command `selected` is in names a package it can select.
-    fn selects(&self, selected: &extract::Selected<'_>) -> bool {
-        self.local.contains(selected.name)
+    fn selects(&self, selected: &extract::Selected) -> bool {
+        self.local.contains(&selected.name)
             || (selected
                 .subcommand
+                .as_deref()
                 .is_some_and(|subcommand| GRAPH_SUBCOMMANDS.contains(&subcommand))
-                && self.locked.contains(selected.name))
+                && self.locked.contains(&selected.name))
     }
 }
 
@@ -370,7 +372,7 @@ fn stale(
         for selected in extract::packages(&code.text) {
             if !packages.selects(&selected) {
                 // `code.line` is the line of the block's first line of text
-                push(code.line + selected.line, Kind::Package, selected.name);
+                push(code.line + selected.line, Kind::Package, &selected.name);
             }
         }
     }
@@ -414,7 +416,8 @@ fn link_target(doc: &str, dest: &str) -> Option<Option<String>> {
     let dest = match &local {
         Some(dest) => dest.as_str(),
         None if dest.starts_with('#') => return Some(Some(doc.to_owned())),
-        None if dest.contains(':') || dest.is_empty() => return None,
+        // another scheme, or a scheme-relative `//host/path`
+        None if dest.contains(':') || dest.starts_with("//") || dest.is_empty() => return None,
         None => dest,
     };
     let dest = dest.split(['#', '?']).next().unwrap_or_default();

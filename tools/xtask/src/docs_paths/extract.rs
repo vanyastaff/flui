@@ -12,11 +12,13 @@
 //!
 //! A package is the word after `-p`/`--package` (or joined to it, `-px`,
 //! `-p=x`, `--package=x`) in a command that `cargo` starts, with the
-//! subcommand before it, read in code spans and in code blocks, where a line
-//! that ends in `\` continues on the next. A cargo command ends at `&&`, `||`,
-//! `;` or `|`, so `mkdir -p` after it is not read.
+//! subcommand before it, read in code spans and in code blocks as a shell
+//! splits them ([`super::shell`]): `mkdir -p` after `&&` is not cargo's, nor is
+//! `echo "cargo test -p x"`, nor a `-p` after `--`.
 
 use std::collections::{BTreeMap, BTreeSet};
+
+use super::shell;
 
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
@@ -40,15 +42,18 @@ pub(super) const ROOTS: [&str; 16] = [
     "tools",
 ];
 
+/// The crate directories of other repositories the docs cite as references:
+/// GPUI's (`crates/gpui/src/window.rs`, `crates/gpui_macos/…`) and Bevy's.
+const FOREIGN_CRATES: [&str; 2] = ["crates/gpui", "crates/bevy_"];
+
 /// Whether `path` names another repository's layout: Flutter's sources
 /// (`packages/flutter/lib/src/rendering/object.dart`, any `.dart` file), or a
-/// crate whose name is not a FLUI one (GPUI's `crates/gpui/src/window.rs`).
+/// [`FOREIGN_CRATES`] one. Any other `crates/` path is this repository's, so a
+/// misspelt crate name is a finding.
 fn foreign(path: &str) -> bool {
     path.starts_with("packages/flutter")
         || has_extension(path, "dart")
-        || path
-            .strip_prefix("crates/")
-            .is_some_and(|rest| !rest.starts_with("flui"))
+        || FOREIGN_CRATES.iter().any(|prefix| path.starts_with(prefix))
 }
 
 /// Whether `path`'s extension is `extension`, in any case.
@@ -110,13 +115,19 @@ pub(super) fn code(markdown: &str) -> Vec<Code> {
     found
 }
 
-/// Whether `dest` is a permalink to this repository at a commit or tag, not
-/// `main`: it cites a file as it was then, deleted since or not.
+/// Whether `dest` is a permalink to this repository at a commit (a hex hash of
+/// 7 to 40 digits): it cites a file as it was then, deleted since or not. A
+/// branch, `main` or a misspelling of it, is not a pinned revision.
 fn pinned(dest: &str) -> bool {
     ["blob", "tree"].iter().any(|kind| {
         dest.strip_prefix(&format!("https://github.com/vanyastaff/flui/{kind}/"))
             .and_then(|rest| rest.split_once('/'))
-            .is_some_and(|(reference, _)| reference != "main")
+            .is_some_and(|(reference, _)| {
+                (7..=40).contains(&reference.len())
+                    && reference
+                        .bytes()
+                        .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+            })
     })
 }
 
@@ -136,7 +147,7 @@ pub(super) fn links(markdown: &str) -> Vec<(usize, String)> {
 
 /// The `#anchor`s the headings of `markdown` give, as GitHub makes them: the
 /// text lowercased, spaces turned to `-`, other punctuation but `-` and `_`
-/// dropped, and `-1`, `-2`, … after a repeat. GitHub has no `{#id}` heading
+/// dropped, and after a repeat the first of `-1`, `-2`, … no heading has. GitHub has no `{#id}` heading
 /// attribute: it renders the braces as text, so the parser's extension is off.
 pub(super) fn anchors(markdown: &str) -> BTreeSet<String> {
     let mut anchors = BTreeSet::new();
@@ -164,13 +175,14 @@ pub(super) fn anchors(markdown: &str) -> BTreeSet<String> {
                         _ => None,
                     })
                     .collect();
-                let repeat = seen.entry(slug.clone()).or_default();
-                anchors.insert(if *repeat == 0 {
-                    slug
-                } else {
-                    format!("{slug}-{repeat}")
-                });
-                *repeat += 1;
+                // a repeat takes the next `-N` no heading has taken yet
+                let mut anchor = slug.clone();
+                while anchors.contains(&anchor) {
+                    let repeat = seen.entry(slug.clone()).or_default();
+                    *repeat += 1;
+                    anchor = format!("{slug}-{repeat}");
+                }
+                anchors.insert(anchor);
             }
             _ => {}
         }
@@ -222,12 +234,12 @@ fn strip_line(word: &str) -> &str {
 
 /// A package a cargo command selects.
 #[derive(Debug, PartialEq, Eq)]
-pub(super) struct Selected<'a> {
+pub(super) struct Selected {
     /// The 0-based line of the code it is on.
     pub(super) line: usize,
     /// The cargo subcommand (`test`, `update`), when one came before it.
-    pub(super) subcommand: Option<&'a str>,
-    pub(super) name: &'a str,
+    pub(super) subcommand: Option<String>,
+    pub(super) name: String,
 }
 
 /// Cargo's options before the subcommand that take a value in the next word
@@ -235,68 +247,62 @@ pub(super) struct Selected<'a> {
 const GLOBAL_VALUE_OPTIONS: [&str; 4] = ["--color", "--config", "-C", "-Z"];
 
 /// The packages the cargo commands in `code` select, in every spelling cargo
-/// takes: `-p x`, `--package x`, `-p=x`, `--package=x` and `-px`, a quoted
-/// value too (`--package='x'`).
-pub(super) fn packages(code: &str) -> Vec<Selected<'_>> {
+/// takes: `-p x`, `--package x`, `-p=x`, `--package=x` and `-px`. A command is
+/// cargo's when its first word, after any `NAME=value` assignments, is
+/// `cargo` (or a path ending in `/cargo`); its arguments stop at `--`, after
+/// which they are the program's.
+pub(super) fn packages(code: &str) -> Vec<Selected> {
     let mut found = Vec::new();
-    let mut continued = false;
-    // `Some(subcommand)` inside a cargo command
-    let mut cargo: Option<Option<&str>> = None;
-    let mut after_flag = false;
-    let mut after_global = false;
-    for (index, line) in code.lines().enumerate() {
-        if !continued {
-            cargo = None;
-            after_flag = false;
-            after_global = false;
+    for command in shell::commands(code) {
+        let mut words = command.into_iter().skip_while(|(_, word)| assignment(word));
+        let Some((_, program)) = words.next() else {
+            continue;
+        };
+        if program != "cargo" && !program.ends_with("/cargo") {
+            continue;
         }
-        let body = line.trim_end();
-        continued = body.ends_with('\\');
-        for word in body.trim_end_matches('\\').split_whitespace() {
-            let word = word.trim_matches(['`', '"', '\'']);
-            let mut select = |subcommand, word| {
-                found.extend(package(word).map(|name| Selected {
-                    line: index,
-                    subcommand,
-                    name,
-                }));
-            };
-            if after_flag {
-                after_flag = false;
-                select(cargo.flatten(), word);
-                continue;
-            }
-            if matches!(word, "&&" | "||" | ";" | "|") {
-                cargo = None;
-                continue;
-            }
-            if after_global {
-                after_global = false;
-                continue;
-            }
-            if word == "cargo" || word.ends_with("/cargo") {
-                cargo = Some(None);
-            } else if let Some(subcommand) = &mut cargo {
-                if subcommand.is_none() && GLOBAL_VALUE_OPTIONS.contains(&word) {
-                    after_global = true;
-                } else if matches!(word, "-p" | "--package") {
-                    after_flag = true;
-                } else if let Some(name) = word
-                    .strip_prefix("--package=")
-                    .or_else(|| word.strip_prefix("-p="))
-                    .or_else(|| word.strip_prefix("-p").filter(|_| !word.starts_with("--")))
-                {
-                    select(*subcommand, name.trim_matches(['"', '\'']));
-                } else if subcommand.is_none() && !word.starts_with(['-', '+']) {
-                    *subcommand = Some(word.trim_end_matches(';'));
+        let mut subcommand: Option<String> = None;
+        while let Some((line, word)) = words.next() {
+            let (line, name) = if word == "--" {
+                break;
+            } else if matches!(word.as_str(), "-p" | "--package") {
+                match words.next() {
+                    Some(value) => value,
+                    None => break,
                 }
-            }
-            if word.ends_with(';') {
-                cargo = None;
-            }
+            } else if let Some(name) = word
+                .strip_prefix("--package=")
+                .or_else(|| word.strip_prefix("-p="))
+                .or_else(|| word.strip_prefix("-p").filter(|_| !word.starts_with("--")))
+            {
+                (line, name.to_owned())
+            } else {
+                if subcommand.is_none() {
+                    if GLOBAL_VALUE_OPTIONS.contains(&word.as_str()) {
+                        words.next();
+                    } else if !word.starts_with(['-', '+']) {
+                        subcommand = Some(word);
+                    }
+                }
+                continue;
+            };
+            found.extend(package(&name).map(|name| Selected {
+                line,
+                subcommand: subcommand.clone(),
+                name: name.to_owned(),
+            }));
         }
     }
     found
+}
+
+/// Whether `word` is a `NAME=value` assignment before a command (PowerShell's
+/// `$env:NAME=value` too).
+fn assignment(word: &str) -> bool {
+    word.split_once('=').is_some_and(|(name, _)| {
+        let name = name.strip_prefix("$env:").unwrap_or(name);
+        !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    })
 }
 
 /// `word` as a package name, without a `@version`, when it is not a placeholder.
