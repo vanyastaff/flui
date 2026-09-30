@@ -14,9 +14,9 @@ use crate::{
 };
 use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, RSuperellipse, Rect};
 
+use super::ShapedParagraph;
 use super::{ColorFilter, ImageRepeat};
 use crate::display_list::{BlendMode, Clip, ClipOp, FilterQuality, Paint, PointMode, TextureId};
-use crate::text_layout::TextLayout;
 
 /// One recorded paint operation: the canvas transform at recording time
 /// and the operation itself.
@@ -156,14 +156,15 @@ pub enum DrawOp {
     // === Text ===
     /// Draw a shaped paragraph.
     ///
-    /// The layout is what the recorder measured — `TextPainter::paint` hands
-    /// over the very `Arc` its cache holds — so what the engine rasterises
-    /// is, by identity, what was laid out: line breaks, `max_lines`, the
-    /// ellipsis, per-span faces. `color` is the paragraph's root colour; a
-    /// span whose colour differs carries its own in the layout.
+    /// The paragraph is what the recorder measured — `TextPainter::paint`
+    /// hands over the very `Arc` its cache holds, built from the layout that
+    /// gave its size — so what the engine rasterises is, by identity, what
+    /// was laid out: line breaks, `max_lines`, the ellipsis, per-span faces.
+    /// `color` is the paragraph's root colour; a span whose colour differs
+    /// carries its own in its runs.
     Paragraph {
         /// The shaped text.
-        layout: Arc<TextLayout>,
+        paragraph: Arc<ShapedParagraph>,
         /// Top-left of the paragraph's box.
         offset: Offset<f64>,
         /// The colour of every glyph that has no span colour of its own.

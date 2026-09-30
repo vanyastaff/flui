@@ -1,15 +1,16 @@
-//! [`SwashRasterizer`]: [`ParleyGlyphKey`]s drawn by swash's scaler.
+//! [`SwashRasterizer`]: [`GlyphKey`]s drawn by swash's scaler.
 
 use swash::scale::image::Content;
 use swash::scale::{Render, ScaleContext, Source, StrikeWith};
 use swash::zeno::{Angle, Format, Transform, Vector};
 
-use super::key::{ParleyGlyphKey, Synthesis};
+use super::key::{GlyphKey, Synthesis};
 use super::registry::FontRegistry;
-use crate::text_layout::{GlyphContent, GlyphImage, GlyphRasterizer};
+use super::{GlyphContent, GlyphImage, GlyphRasterizer};
 
-/// Rasterizes [`ParleyGlyphKey`]s through swash, the scaler the cosmic-text
-/// path drives today, with the same sources, format and offsets. Owns its
+/// Rasterizes [`GlyphKey`]s through swash, with the sources, format and
+/// offsets cosmic-text's rasterizer used, so a glyph draws the bitmap it
+/// drew there. Owns its
 /// registry and scaler; `Send`, no lock.
 #[derive(Default)]
 pub struct SwashRasterizer {
@@ -57,7 +58,7 @@ impl std::fmt::Debug for SwashRasterizer {
 /// the ratio interpolated linearly from 1/24 at 9 px to 1/32 at 36 px and
 /// clamped outside. A FLUI choice; painting
 /// ARCHITECTURE, mapping decision 10.
-pub(super) fn fake_bold_width(size: f32) -> f32 {
+pub(crate) fn fake_bold_width(size: f32) -> f32 {
     const KEYS: [f32; 2] = [9.0, 36.0];
     const RATIOS: [f32; 2] = [1.0 / 24.0, 1.0 / 32.0];
     let t = ((size - KEYS[0]) / (KEYS[1] - KEYS[0])).clamp(0.0, 1.0);
@@ -65,9 +66,9 @@ pub(super) fn fake_bold_width(size: f32) -> f32 {
 }
 
 impl GlyphRasterizer for SwashRasterizer {
-    type Key = ParleyGlyphKey;
+    type Key = GlyphKey;
 
-    fn rasterize(&mut self, key: ParleyGlyphKey) -> Option<GlyphImage> {
+    fn rasterize(&mut self, key: GlyphKey) -> Option<GlyphImage> {
         let size = key.size();
         if !size.is_finite() || size <= 0.0 {
             return None;

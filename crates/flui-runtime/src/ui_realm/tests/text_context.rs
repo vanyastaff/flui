@@ -155,6 +155,66 @@ fn every_presentation_pipeline_holds_the_realms_text_context() {
     }
 }
 
+/// A face only the probe family carries; it maps `A` one em wide.
+const PROBE_MONO: &[u8] = flui_painting::testing::PROBE_MONO_100;
+
+/// The width the realm's `RenderParagraph` was laid out at, for `AAAA` in the
+/// probe family at 20 px, centred so the paragraph takes its own width.
+fn probe_paragraph_width(realm: &UiRealm) -> f64 {
+    let style = flui_painting::typography::TextStyle {
+        font_family: Some("FLUI Probe Mono".to_owned()),
+        font_weight: Some(flui_painting::typography::FontWeight::W100),
+        font_size: Some(20.0),
+        ..flui_painting::typography::TextStyle::default()
+    };
+    realm
+        .enter(|realm| {
+            realm.attach_root_widget(
+                &flui_widgets::Center::new().child(flui_widgets::Text::new("AAAA").style(style)),
+            )
+        })
+        .expect("attach succeeds");
+    let _ = realm.draw_frame(BoxConstraints::tight(flui_foundation::geometry::Size::new(
+        400.0, 300.0,
+    )));
+    realm.pipeline_for_test().with(|owner| {
+        let paragraph = owner
+            .render_tree()
+            .iter()
+            .find(|(_, node)| node.debug_name().contains("RenderParagraph"))
+            .map(|(id, _)| id)
+            .expect("the Text mounted a RenderParagraph");
+        owner
+            .box_size(paragraph)
+            .expect("the paragraph was laid out")
+            .width
+    })
+}
+
+/// A realm measures text in the faces of its own collection (ADR-0092 §10
+/// step 4a): the probe face, registered only on A's collection and never on
+/// the process font system, sizes A's paragraph at four em, while B's falls
+/// back. Fails if layout measures on cosmic-text, which never sees the face.
+fn a_realm_measures_text_with_the_faces_of_its_own_collection() {
+    let with_probe = FontCollection::new();
+    with_probe
+        .register_font(PROBE_MONO)
+        .expect("the probe face loads");
+    let a = realm_over(&with_probe);
+    let b = realm_over(&FontCollection::new());
+
+    let through_a = probe_paragraph_width(&a);
+    let through_b = probe_paragraph_width(&b);
+    assert!(
+        (through_a - 80.0).abs() < 0.01,
+        "four one-em `A`s at 20 px through A's collection are 80 px, got {through_a}"
+    );
+    assert!(
+        (through_b - through_a).abs() > 1.0,
+        "B's collection lacks the face, so B measures the fallback: A {through_a} vs B {through_b}"
+    );
+}
+
 #[test]
 fn text_context_matrix() {
     crate::table_test::run_table(
@@ -179,6 +239,10 @@ fn text_context_matrix() {
             (
                 "every_presentation_pipeline_holds_the_realms_text_context",
                 every_presentation_pipeline_holds_the_realms_text_context as fn(),
+            ),
+            (
+                "a_realm_measures_text_with_the_faces_of_its_own_collection",
+                a_realm_measures_text_with_the_faces_of_its_own_collection as fn(),
             ),
         ],
     );

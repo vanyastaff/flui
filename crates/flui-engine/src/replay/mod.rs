@@ -46,7 +46,7 @@ use crate::error::EngineResult;
 use crate::{
     advanced_blend::{AdvancedBlendOp, flush_advanced_layer},
     command_ir::{DrawItem, DrawSegment},
-    glyph_atlas::GlyphAtlas,
+    glyph_atlas::TextAtlas,
     instancing::{InstanceBatch, TextureInstance},
     layer_offscreen::apply_image_filter_passes,
     pipeline_set::PipelineSet,
@@ -256,7 +256,7 @@ impl GpuReplay {
         queue: &Arc<wgpu::Queue>,
         pipelines: &mut PipelineSet,
         resources: &mut GpuResources,
-        glyphs: &GlyphAtlas,
+        glyphs: &TextAtlas,
         encoder: &mut wgpu::CommandEncoder,
         target: RenderTarget<'_>,
     ) -> EngineResult<()> {

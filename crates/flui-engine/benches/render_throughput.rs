@@ -114,7 +114,7 @@ static GRADIENT_COLORS: &[Color] = &[
 ///   - 1 text call (exercises text cache key path)
 ///
 /// All geometry fits inside an 800×600 viewport.
-fn build_frame(painter: &mut WgpuPainter) {
+fn build_frame(painter: &mut WgpuPainter, label: &std::sync::Arc<flui_painting::ShapedParagraph>) {
     // 50 solid rects — 10 columns × 5 rows across the viewport.
     // Colours vary per rect so the compiler cannot constant-fold the loop.
     for i in 0_u32..50 {
@@ -143,13 +143,11 @@ fn build_frame(painter: &mut WgpuPainter) {
     ));
     painter.draw_rect(black_box(gradient_rect), &gradient_paint);
 
-    // 1 text label (exercises text buffer + cache-key path)
-    let text_paint = Paint::fill(Color::WHITE);
-    painter.draw_text(
-        black_box("Hello, flui bench!"),
+    // 1 text label (exercises the run placement + glyph-key path)
+    painter.draw_paragraph(
+        std::sync::Arc::clone(black_box(label)),
         flui_foundation::geometry::Point::new(10.0, 480.0),
-        24.0,
-        &text_paint,
+        Color::WHITE,
     );
 }
 
@@ -186,6 +184,23 @@ fn render_throughput(c: &mut Criterion) {
 
     // Build the painter once — shader compilation is a one-time cost that is
     // NOT part of the benchmark; it runs before `bench_function` is called.
+    // The label is shaped once, as a widget's `TextPainter` would cache it:
+    // the bench measures the engine, not the shaper.
+    let spans = [("Hello, flui bench!".to_owned(), None)];
+    let label = std::sync::Arc::new(
+        flui_painting::TextContext::new(&flui_painting::FontCollection::new())
+            .shape(&flui_painting::parley_text::ParagraphSpec {
+                spans: &spans,
+                default_style: None,
+                font_size: 24.0,
+                max_width: None,
+                line_height: None,
+                direction: flui_painting::typography::TextDirection::Ltr,
+                max_lines: None,
+                ellipsis: None,
+            })
+            .to_shaped(None),
+    );
     let mut painter = WgpuPainter::with_shared_device(
         Arc::clone(&device),
         Arc::clone(&queue),
@@ -196,7 +211,7 @@ fn render_throughput(c: &mut Criterion) {
     // Warm-up frame: ensures pipeline caches (path, text buffer, gradient-stop
     // SmallVec) are in steady state before criterion starts measurement.
     {
-        build_frame(&mut painter);
+        build_frame(&mut painter, &label);
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("bench-warmup"),
         });
@@ -212,7 +227,7 @@ fn render_throughput(c: &mut Criterion) {
     // which is what the Phase-1 allocation-reduction work optimised.
     c.bench_function("painter_render_50rects_gradient_text", |b| {
         b.iter(|| {
-            build_frame(&mut painter);
+            build_frame(&mut painter, &label);
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("bench-frame"),
             });

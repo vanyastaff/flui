@@ -557,7 +557,7 @@ fn harness_colored_box_self_describes_and_paints() {
 }
 
 fn harness_render_error_box_fills_bounded_constraints_and_paints() {
-    let run = RenderTester::mount(box_node(RenderErrorBox::new("boom", None)))
+    let mut run = RenderTester::mount(box_node(RenderErrorBox::new("boom", None)))
         .with_size(Size::new(100.0, 60.0))
         .run_frame();
     assert!(run.painted(), "an error box must paint something visible");
@@ -571,6 +571,33 @@ fn harness_render_error_box_fills_bounded_constraints_and_paints() {
         "the caught message reaches diagnostics in every build"
     );
     assert_eq!(error_box_size(&run), (100.0, 60.0));
+    // The message is shaped at layout, through the realm's text context, and
+    // painted in debug builds only.
+    let paints = |run: &flui_rendering::testing::FrameRun, message: &str| {
+        run.display_commands()
+            .iter()
+            .any(|command| command.line.contains("Paragraph") && command.line.contains(message))
+    };
+    assert_eq!(
+        paints(&run, "boom"),
+        cfg!(debug_assertions),
+        "a debug build paints the message, a release build withholds it"
+    );
+
+    // A new message is shaped at the next layout: the impact `set_error`
+    // reports must schedule one, or the old paragraph is painted again.
+    let root = run.root();
+    flui_rendering::testing::update_render_object::<RenderErrorBox, _>(
+        run.owner_mut(),
+        root,
+        |error_box| error_box.set_error("bang", None),
+    );
+    run.pump();
+    assert_eq!(
+        (paints(&run, "bang"), paints(&run, "boom")),
+        (cfg!(debug_assertions), false),
+        "the next frame paints the new message and not the old one"
+    );
 }
 
 /// The committed size of the mounted `RenderErrorBox`, read back from its

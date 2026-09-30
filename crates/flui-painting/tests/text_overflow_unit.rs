@@ -1,24 +1,49 @@
 //! Shaper-derived baselines + max_lines/ellipsis ENFORCEMENT.
 //!
-//! Pre-fix the painter only *detected* overflow (`did_exceed_max_lines`)
+//! The painter once only *detected* overflow (`did_exceed_max_lines`)
 //! while size and paint still covered every line, and baselines were
-//! font-size guesses (`height × 0.8`, `alphabetic × 1.125`). Now the
-//! truncation re-shapes the kept prefix — size, line metrics, and
-//! painted glyphs agree — and baselines come from cosmic-text's
-//! per-line `line_y`.
+//! font-size guesses (`height × 0.8`, `alphabetic × 1.125`). Truncation
+//! keeps the lines it measured — size, line metrics and painted glyphs
+//! agree, an ellipsis shaped into the last kept line — and baselines come
+//! from the shaped lines.
 
-use flui_painting::text_layout::TextLayout;
+use flui_painting::ShapedParagraph;
 use flui_painting::text_painter::TextPainter;
 use flui_painting::typography::{TextDirection, TextSpan};
+
+/// The rightmost device column any glyph of `paragraph` inks at scale 1 from
+/// the origin, drawn by the rasterizer the engine uses.
+fn rasterized_ink_right(paragraph: &ShapedParagraph) -> f64 {
+    use flui_painting::GlyphRasterizer;
+    use flui_painting::glyphs::SwashRasterizer;
+
+    let mut rasterizer = SwashRasterizer::new();
+    let mut right = f64::NEG_INFINITY;
+    for run in paragraph.runs() {
+        let key = rasterizer
+            .fonts_mut()
+            .prepare_run(&run)
+            .expect("a shaped face registers");
+        for glyph in run.placed_glyphs(key, (0.0, 0.0), 1.0) {
+            if let Some(image) = rasterizer.rasterize(glyph.key)
+                && image.width > 0
+            {
+                right = right.max(f64::from(glyph.x + image.left) + f64::from(image.width));
+            }
+        }
+    }
+    right
+}
 
 /// A text context over a fresh collection, lent to each measurement.
 fn text_cx() -> flui_painting::TextContext {
     flui_painting::TextContext::new(&flui_painting::FontCollection::new())
 }
 
-/// What `paint` records is the layout that was measured — the very `Arc`,
-/// not a re-shape — so a truncated paragraph paints exactly the lines it
-/// measured, ellipsis included.
+/// What `paint` records is the paragraph `layout` built — the very `Arc`,
+/// not a re-shape — truncated to the lines the measurement kept, ellipsis
+/// included, and no glyph of the last line inks past the width it was
+/// measured at.
 pub(crate) fn a_truncated_paragraph_paints_exactly_the_lines_it_measured() {
     use flui_foundation::geometry::Offset;
     use flui_painting::styling::Color;
@@ -40,28 +65,43 @@ pub(crate) fn a_truncated_paragraph_paints_exactly_the_lines_it_measured() {
     let recorded: Vec<_> = list
         .iter()
         .filter_map(|command| match &command.op {
-            DrawOp::Paragraph { layout, color, .. } => Some((layout, *color)),
+            DrawOp::Paragraph {
+                paragraph, color, ..
+            } => Some((paragraph, *color)),
             _ => None,
         })
         .collect();
     assert_eq!(recorded.len(), 1, "one paragraph op, got {list:?}");
     let (layout, color) = recorded[0];
-    let metrics = layout.metrics();
     assert_eq!(
-        metrics.line_count, 1,
-        "the recorded layout has exactly the measured line"
+        layout.line_count(),
+        1,
+        "the recorded paragraph has exactly the measured line"
     );
-    assert!(metrics.truncated);
     assert!(
         layout.text().ends_with('…'),
         "the ellipsis is in the recorded text, got {:?}",
         layout.text()
     );
+    assert!(
+        painter.width() <= 80.0 && layout.size().width <= 80.0,
+        "measured {} and painted {} within the 80 px it was laid out at",
+        painter.width(),
+        layout.size().width
+    );
+    let ink_right = rasterized_ink_right(layout);
+    assert!(
+        ink_right <= 80.0 + 1.0,
+        "the painted ellipsis line inks to {ink_right}, past the 80 px it was measured at"
+    );
     assert_eq!(color, Color::BLACK, "no root colour set → black");
     // The same paint records the same layout: nothing re-shaped at paint.
     let mut again = Canvas::new();
     painter.paint(&mut again, Offset::ZERO);
-    let DrawOp::Paragraph { layout: second, .. } = &again.finish()[0].op else {
+    let DrawOp::Paragraph {
+        paragraph: second, ..
+    } = &again.finish()[0].op
+    else {
         unreachable!("the first paint recorded a Paragraph");
     };
     assert!(std::sync::Arc::ptr_eq(layout, second));
@@ -81,13 +121,16 @@ pub(crate) fn root_recolor_keeps_the_shaped_buffer_and_span_recolor_reshapes_onc
             .with_style(TextStyle::new().with_color(root))
             .with_child(TextSpan::new("FLUI").with_style(TextStyle::new().with_color(child)))
     }
-    fn recorded(painter: &TextPainter) -> (std::sync::Arc<TextLayout>, Color) {
+    fn recorded(painter: &TextPainter) -> (std::sync::Arc<ShapedParagraph>, Color) {
         let mut canvas = Canvas::new();
         painter.paint(&mut canvas, Offset::ZERO);
-        let DrawOp::Paragraph { layout, color, .. } = &canvas.finish()[0].op else {
+        let DrawOp::Paragraph {
+            paragraph, color, ..
+        } = &canvas.finish()[0].op
+        else {
             unreachable!("paint records a Paragraph");
         };
-        (std::sync::Arc::clone(layout), *color)
+        (std::sync::Arc::clone(paragraph), *color)
     }
 
     let red = Color::rgb(255, 0, 0);
@@ -124,7 +167,7 @@ pub(crate) fn root_recolor_keeps_the_shaped_buffer_and_span_recolor_reshapes_onc
         !std::sync::Arc::ptr_eq(&second, &third),
         "a span recolour reshapes"
     );
-    let runs = third.describe_runs();
+    let runs = third.describe_spans();
     assert!(
         runs.iter().any(|run| run.contains("color=#ff0000ff")),
         "the span's own colour reaches the shaped run, got {runs:?}"

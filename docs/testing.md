@@ -149,13 +149,9 @@ only runs when someone remembers to run it by hand.
 
 One scope for the whole local suite:
 `--workspace --exclude flui-platform --lib --bins --tests
---features flui/material,flui/cupertino,flui-painting/parley`, run as the two stages below.
-`flui-painting/parley` is on so the Parley raster path's oracle test runs until
-ADR-0092 §10 makes that path the default. It compiles Parley measurement
-without choosing it; `flui-painting/parley-layout`, which makes `TextPainter`
-measure on Parley, stays out of the scope, so every text-size test measures the
-way the default build does. The Parley measurement tests pin a painter to
-Parley themselves (`flui_painting::testing::measure_with_parley`).
+--features flui/material,flui/cupertino,flui-devtools/agent`, run as the two
+stages below. Text-size tests measure on Parley because the default build does
+(ADR-0092 §10 step 4a); no feature selects another measurement.
 Two choices in it differ from CI on purpose:
 
 - **One feature slice.** The facade turns no catalog on by default, so both
@@ -841,11 +837,16 @@ since the suite ran on no job.
 
 ### Determinism
 
-Text measurement resolves against the host's fonts, and widgets sized to their
-text inherit that: the same Cupertino button measured 61.18 px wide on a host
-with fonts installed and 129.55 px on one without. `flui_testing::fonts::pin_font_faces`
-builds the process-wide `FontSystem` from the faces this repository ships
-(`flui_painting::fonts`), so the committed geometry is reproducible off any one
+Text is measured and painted on the realm's `FontCollection`. A test bootstrap
+builds it with `FontCollection::new()`, which holds only the bundled faces and
+those registered on it, so measured geometry and painted glyphs do not depend
+on the host; the app's collection is fed from the host's fonts. Carets and
+selection still shape on the process-wide `FontSystem` until ADR-0092 §10
+step 5, and that one resolves against the host's fonts: the same Cupertino
+button once measured 61.18 px wide on a host with fonts installed and
+129.55 px on one without. `flui_testing::fonts::pin_font_faces` builds the
+process-wide `FontSystem` from the faces this repository ships
+(`flui_painting::fonts`), so caret geometry is reproducible off any one
 machine.
 
 It *builds* the font system rather than editing it, and that distinction is

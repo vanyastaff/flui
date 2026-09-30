@@ -62,11 +62,11 @@ pub(crate) fn dispatch_command<R: CommandRenderer + ?Sized>(
             renderer.render_path(path, paint, transform);
         }
         DrawOp::Paragraph {
-            layout,
+            paragraph,
             offset,
             color,
         } => {
-            renderer.render_paragraph(layout, *offset, *color, transform);
+            renderer.render_paragraph(paragraph, *offset, *color, transform);
         }
         DrawOp::Image { image, dst, paint } => {
             renderer.render_image(image, *dst, paint.as_deref(), transform);

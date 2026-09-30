@@ -875,9 +875,9 @@ fn a_registration_from_inside_a_realm_task_reaches_that_realm_after_it_returns()
 }
 
 /// A face registered on a thread that runs no app reaches neither the
-/// process font system paint shapes with nor the app's collection, so paint
+/// process font system carets shape with nor the app's collection, so carets
 /// and measurement cannot disagree over it. Fails if the call registers on
-/// the paint side from a thread whose collection no window reads.
+/// the caret side from a thread whose collection no window reads.
 fn a_registration_on_a_thread_that_runs_no_app_changes_neither_side() {
     let dispatcher = install_test_realm();
     clear_redraw(dispatcher);
@@ -892,7 +892,11 @@ fn a_registration_on_a_thread_that_runs_no_app_changes_neither_side() {
         .expect("the worker does not panic")
         .expect("the bytes hold a face");
 
-    assert_eq!(paint.generation(), paint_before, "paint gained no face");
+    assert_eq!(
+        paint.generation(),
+        paint_before,
+        "the caret side gained no face"
+    );
     assert_eq!(
         super::super::host::runtime_font_collection().generation(),
         fonts_before,
@@ -905,8 +909,9 @@ fn a_registration_on_a_thread_that_runs_no_app_changes_neither_side() {
 
 /// A face registered before a thread builds its first realm is held, and
 /// lands on both sides when the collection is built: the first window
-/// measures and paints with it. Fails if a registration before the start is
-/// lost, reaches paint before the collection exists, or accepts bytes with
+/// measures and paints with it and lays carets out in it. Fails if a
+/// registration before the start is lost, reaches carets before the
+/// collection exists, or accepts bytes with
 /// no face because nothing judges them yet.
 fn a_registration_before_the_first_realm_lands_with_the_collection() {
     std::thread::spawn(|| {
@@ -935,7 +940,11 @@ fn a_registration_before_the_first_realm_lands_with_the_collection() {
         // What the runner does as it builds the first realm.
         let fonts = super::super::host::runtime_font_collection();
         assert_eq!(fonts.generation(), 1, "the collection gained the face");
-        assert_eq!(paint.generation(), paint_before + 1, "paint gained it too");
+        assert_eq!(
+            paint.generation(),
+            paint_before + 1,
+            "the caret side gained it too"
+        );
     })
     .join()
     .expect("the registration lands with the collection");

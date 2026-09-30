@@ -215,7 +215,8 @@ pub use flui_app::run_app;
 /// [`run_app`] with an explicit [`AppConfig`] (window title, size, services,
 /// failure policy). Re-exported from [`app`] (`flui-app`).
 pub use flui_app::run_app_with_config;
-/// Registers a font's faces with the app, for measurement and paint alike;
+/// Registers a font's faces with the app, for measurement, paint and carets
+/// alike;
 /// every realm lays its text out again on its next frame. Re-exported from
 /// [`app`] (`flui-app`).
 pub use flui_app::{FontRegistrationError, register_font};

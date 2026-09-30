@@ -220,27 +220,35 @@ impl super::WgpuPainter {
         );
     }
 
-    /// Draws a plain-text string at `position` (device pixels) in a single
-    /// style: shapes it through the shared font system and records the
-    /// paragraph. For anything richer, shape a
-    /// [`flui_painting::TextLayout`] yourself and call
-    /// [`Self::draw_paragraph`].
-    pub fn draw_text(
+    /// Draws an overlay label at `position` (local pixels) in one style:
+    /// the performance overlay's readouts, which no recorder shapes. Shaped
+    /// through flui-painting's [`flui_painting::TextContext`] over the
+    /// bundled faces, built on the first label; everything a recorder paints
+    /// arrives shaped through [`Self::draw_paragraph`].
+    pub(crate) fn draw_label(
         &mut self,
         text: &str,
         position: flui_foundation::geometry::Point<f64>,
         font_size: f32,
-        paint: &flui_painting::Paint,
+        color: flui_painting::styling::Color,
     ) {
-        let layout = flui_painting::TextLayout::new(
-            text,
-            None,
-            f64::from(font_size),
-            None,
-            None,
-            flui_painting::typography::TextDirection::Ltr,
-        );
-        self.draw_paragraph(Arc::new(layout), position, paint.color);
+        let labels = self.labels.get_or_insert_with(|| {
+            flui_painting::TextContext::new(&flui_painting::FontCollection::new())
+        });
+        let spans = [(text.to_owned(), None)];
+        let paragraph = labels
+            .shape(&flui_painting::parley_text::ParagraphSpec {
+                spans: &spans,
+                default_style: None,
+                font_size,
+                max_width: None,
+                line_height: None,
+                direction: flui_painting::typography::TextDirection::Ltr,
+                max_lines: None,
+                ellipsis: None,
+            })
+            .to_shaped(None);
+        self.draw_paragraph(Arc::new(paragraph), position, color);
     }
 
     /// Draws a shaped paragraph with its top-left at `position` (local
@@ -251,12 +259,12 @@ impl super::WgpuPainter {
     /// not yet in the atlas are rasterised now.
     pub fn draw_paragraph(
         &mut self,
-        layout: Arc<flui_painting::TextLayout>,
+        paragraph: Arc<flui_painting::ShapedParagraph>,
         position: flui_foundation::geometry::Point<f64>,
         color: flui_painting::styling::Color,
     ) {
         tracing::trace!(
-            lines = layout.metrics().line_count,
+            lines = paragraph.line_count(),
             ?position,
             ?color,
             "WgpuPainter::draw_paragraph"
@@ -268,7 +276,7 @@ impl super::WgpuPainter {
             &self.state,
             &mut self.glyph_atlas,
             opacity,
-            &layout,
+            &paragraph,
             position,
             color,
         );

@@ -204,6 +204,14 @@ fn text_contract() {
                 text_painter_unit::wide_ellipsis_floors_min_intrinsic_width,
             ),
             (
+                "a_rich_span_ellipsis_floors_min_intrinsic_width",
+                text_painter_unit::a_rich_span_ellipsis_floors_min_intrinsic_width,
+            ),
+            (
+                "an_empty_paragraph_measures_a_line_of_its_style",
+                text_painter_unit::an_empty_paragraph_measures_a_line_of_its_style,
+            ),
+            (
                 "truncated_paragraph_paints_what_it_measured",
                 text_overflow_unit::a_truncated_paragraph_paints_exactly_the_lines_it_measured,
             ),
@@ -219,9 +227,8 @@ fn text_contract() {
     );
 }
 
-/// A painter measures through the context it is lent, and its cache answers
-/// only for the fonts that measured it (ADR-0092 §10 step 3a).
-#[cfg(feature = "parley")]
+/// A painter measures on Parley through the context it is lent, and its cache
+/// answers only for the fonts that measured it (ADR-0092 §10 steps 3a and 4a).
 #[test]
 fn text_context_contract() {
     use text_painter_unit::parley_measurement as pm;

@@ -19,9 +19,10 @@ use std::sync::Arc;
 use flui_foundation::Diagnosticable;
 use flui_foundation::Leaf;
 use flui_foundation::geometry::{Offset, Point, Rect, Size};
+use flui_painting::parley_text::ParagraphSpec;
 use flui_painting::styling::Color;
 use flui_painting::typography::{TextDirection, TextStyle};
-use flui_painting::{Paint, TextLayout};
+use flui_painting::{Paint, ShapedParagraph};
 
 use flui_rendering::{
     constraints::BoxConstraints, context::BoxLayoutContext, parent_data::BoxParentData,
@@ -44,6 +45,9 @@ const DEBUG_FONT_SIZE: f64 = 14.0;
 pub struct RenderErrorBox {
     message: String,
     details: Option<String>,
+    /// The message shaped at the committed width, in debug builds; `None`
+    /// before the first layout and in release.
+    painted: Option<Arc<ShapedParagraph>>,
 }
 
 impl RenderErrorBox {
@@ -53,6 +57,7 @@ impl RenderErrorBox {
         Self {
             message: message.into(),
             details,
+            painted: None,
         }
     }
 
@@ -68,8 +73,9 @@ impl RenderErrorBox {
         self.details.as_deref()
     }
 
-    /// Replace the message and details; a change repaints (the size does not
-    /// depend on the text).
+    /// Replace the message and details. A new message is shaped again at the
+    /// next layout, in debug builds, where it is painted; the size does not
+    /// depend on it. New details only reach diagnostics.
     pub fn set_error(
         &mut self,
         message: impl Into<String>,
@@ -79,9 +85,14 @@ impl RenderErrorBox {
         if self.message == message && self.details == details {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
+        let impact = if self.message != message && cfg!(debug_assertions) {
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        } else {
+            flui_rendering::RenderUpdateImpact::PAINT
+        };
         self.message = message;
         self.details = details;
-        flui_rendering::RenderUpdateImpact::PAINT
+        impact
     }
 
     fn size_for(constraints: &BoxConstraints) -> Size {
@@ -111,7 +122,32 @@ impl RenderBox for RenderErrorBox {
     type ParentData = BoxParentData;
 
     fn perform_layout(&mut self, ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>) -> Size {
-        Self::size_for(ctx.constraints())
+        let size = Self::size_for(ctx.constraints());
+        // The message is developer-facing and may name private state; it is
+        // shaped and painted in debug builds only.
+        self.painted = cfg!(debug_assertions).then(|| {
+            let style = TextStyle::new()
+                .with_color(DEBUG_TEXT)
+                .with_font_size(DEBUG_FONT_SIZE)
+                .with_font_family("monospace");
+            let spans = [(self.message.clone(), Some(style.clone()))];
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "logical sizes narrow to the shaper's f32 layout space"
+            )]
+            let paragraph = ctx.text().shape(&ParagraphSpec {
+                spans: &spans,
+                default_style: Some(&style),
+                font_size: DEBUG_FONT_SIZE as f32,
+                max_width: Some(size.width as f32),
+                line_height: None,
+                direction: TextDirection::Ltr,
+                max_lines: None,
+                ellipsis: None,
+            });
+            Arc::new(paragraph.to_shaped(Some(DEBUG_TEXT)))
+        });
+        size
     }
 
     fn compute_min_intrinsic_width(
@@ -163,23 +199,9 @@ impl RenderBox for RenderErrorBox {
             RELEASE_BACKGROUND
         };
         ctx.canvas().draw_rect(rect, &Paint::fill(background));
-        if cfg!(debug_assertions) {
-            // The message is developer-facing and may name private state; it
-            // is painted in debug builds only.
-            let style = TextStyle::new()
-                .with_color(DEBUG_TEXT)
-                .with_font_size(DEBUG_FONT_SIZE)
-                .with_font_family("monospace");
-            let layout = TextLayout::new(
-                &self.message,
-                Some(&style),
-                DEBUG_FONT_SIZE,
-                Some(size.width),
-                None,
-                TextDirection::Ltr,
-            );
+        if let Some(paragraph) = &self.painted {
             ctx.canvas()
-                .draw_paragraph(&Arc::new(layout), Offset::ZERO, DEBUG_TEXT);
+                .draw_paragraph(paragraph, Offset::ZERO, DEBUG_TEXT);
         }
     }
 }

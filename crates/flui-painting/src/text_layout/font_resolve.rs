@@ -457,16 +457,14 @@ fn variable_weight_covers(db: &Database, id: fontdb::ID, weight: u16) -> bool {
 /// `title_*` and `label_*` style is W500 with **no** family, so it resolves to
 /// `Family::SansSerif` and skipped the probe entirely.
 ///
-/// `Family::Monospace` is the one family that genuinely needs no probe, and
-/// for a reason that is about the request rather than the binding:
-/// `next_item`'s `(true, None)` arm does not `break` the family loop, and its
-/// `font_match_keys_iter(is_mono)` accepts every face regardless of weight
-/// diff. A monospace request is never abandoned over weight, so snapping it
-/// would only strip a variable instance for nothing.
+/// `Family::Monospace` is probed like the rest. A monospace request is never
+/// abandoned outright (`next_item`'s `(true, None)` arm does not `break` the
+/// family loop), but at a weight the bound family lacks it moves on to another
+/// monospaced face that has it: with the generics bound to the bundled Roboto
+/// Regular, a bold "monospace" painted in the host's mono bold while the
+/// collection measured it in Roboto (painting mapping decision 16). The probe
+/// accepts a variable face first, so no instance is stripped for nothing.
 pub(crate) fn snap_weight(db: &Database, family: &Family<'_>, requested: u16) -> u16 {
-    if matches!(family, Family::Monospace) {
-        return requested;
-    }
     // Resolves `Family::Name(n)` to `n` and every generic to its bound name.
     let name = db.family_name(family);
     if family_accepts_weight(db, name, requested) {
@@ -716,10 +714,6 @@ pub(crate) fn resolve_family<'a>(
 /// the same fallback order (`fallback_chain`).
 ///
 /// The returned `Family` borrows `style`, so resolution allocates nothing.
-#[cfg_attr(
-    not(feature = "parley"),
-    expect(dead_code, reason = "the Parley path's shaping is its only caller")
-)]
 pub(crate) fn resolve_family_name(
     style: Option<&TextStyle>,
     carries: impl FnMut(&str) -> bool,
@@ -971,7 +965,6 @@ mod tests {
     /// carried or generic entry of the chain past absent ones, the
     /// sans-serif degrade, and a carried family spelled in another case,
     /// which fontdb does not match and so degrades too.
-    #[cfg(feature = "parley")]
     fn the_collection_resolves_the_family_the_font_system_does() {
         use parley::fontique::{Blob, Collection, CollectionOptions};
         use std::sync::Arc;
@@ -1037,7 +1030,6 @@ mod tests {
                 "oversized_space_from_an_emoji_face_is_closed",
                 oversized_space_from_an_emoji_face_is_closed,
             ),
-            #[cfg(feature = "parley")]
             (
                 "the_collection_resolves_the_family_the_font_system_does",
                 the_collection_resolves_the_family_the_font_system_does,

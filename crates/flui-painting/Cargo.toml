@@ -47,10 +47,10 @@ unicode-script = { version = "=0.5.8" }
 # this is a direct edge onto the same copy, not a new one. See the
 # workspace-level comment on this dependency in the root `Cargo.toml`.
 unicode-segmentation = { workspace = true }
-# The Parley path (`parley_text`, `TextContext`), behind the `parley` feature:
-# swash rasterizes, Parley shapes over fontique's shared collection.
-swash = { workspace = true, optional = true }
-parley = { workspace = true, optional = true }
+# The Parley path (`parley_text`, `TextContext`): Parley shapes and measures
+# over fontique's shared collection, swash rasterizes.
+swash = { workspace = true }
+parley = { workspace = true }
 
 [dev-dependencies]
 # Colour property tests and the compile-fail suite.
@@ -68,30 +68,19 @@ default = ["bundled-fonts"]
 # they hold. The display list carries no serde (ADR-0066).
 serde = ["dep:serde", "flui-foundation/serde"]
 
-# bundled-fonts: embed Roboto Regular, Material Icons, and Cupertino Icons and
-# install whichever the host lacks into the process-wide font system at
-# construction, so text and icons measure and paint in the same face on every
-# machine. Off, the font system holds only what the host provides (and what
-# `register_font` adds).
+# bundled-fonts: embed Roboto Regular, Material Icons, and Cupertino Icons.
+# Every `FontCollection` holds them and binds its generic families to Roboto;
+# the process-wide font system, which lays out carets, installs each in place
+# of any host face of that family and binds its generic families to Roboto as
+# well, so carets sit in the face text was measured and painted in on every
+# host. Off, a collection holds only the faces registered on it, so text
+# measures and paints with no face until one is.
 bundled-fonts = []
 
 # testing: opt-in painting test harness (`crate::testing`) — a `record`
 # builder for `DisplayList`s plus diagnostics helpers. Off by default;
 # enabled for this crate's dev targets via the self dev-dependency above.
 testing = []
-
-# parley: the Parley path — shaping on a per-realm `TextContext` over the
-# app's `FontCollection`, and the raster side (`ParleyGlyphKey`,
-# `FontRegistry`, `SwashRasterizer`). Off by default. It compiles the Parley
-# measurement without choosing it: the workspace test scope turns `parley` on,
-# and CI must still measure the way the default build does.
-parley = ["dep:swash", "dep:parley"]
-
-# parley-layout: `TextPainter` measures size, baselines and intrinsics with
-# Parley on the realm's `TextContext` (ADR-0092 §10 step 3). Glyphs and carets
-# still come from cosmic-text until step 5. Off by default and outside the test
-# scope.
-parley-layout = ["parley"]
 
 [[test]]
 name = "painting_it"
@@ -107,7 +96,6 @@ path = "tests/font_registration.rs"
 [[test]]
 name = "parley_oracle"
 path = "tests/parley_oracle.rs"
-required-features = ["parley"]
 
 # Two realms' text contexts over one collection (ADR-0092 §10 step 2). Its own
 # binary, so its check that the Parley path never builds the process font
@@ -115,23 +103,20 @@ required-features = ["parley"]
 [[test]]
 name = "text_context"
 path = "tests/text_context.rs"
-required-features = ["parley"]
 
-# Parley's paragraph metrics against cosmic-text's on the bundled Roboto
-# (ADR-0092 gate 8, measurement side). Its own binary: it builds the process
+# Parley's paragraph metrics and painted baselines against cosmic-text's on
+# the bundled Roboto (ADR-0092 gate 8). Its own binary: it builds the process
 # font system, which `text_context` asserts the Parley path never does.
 [[test]]
 name = "parley_metrics_oracle"
 path = "tests/parley_metrics_oracle.rs"
-required-features = ["parley"]
 
-# Parley measurement against cosmic-text paint on the host's own faces, over a
+# Parley measurement against the cosmic-text caret layout on the host's own faces, over a
 # collection fed from the process font system (ADR-0092 §7). Its own binary:
 # it builds the process font system from the host's fonts.
 [[test]]
 name = "host_faces_oracle"
 path = "tests/host_faces_oracle.rs"
-required-features = ["parley"]
 
 # cargo-shear reports the trybuild compile-fail inputs as unlinked: the
 # `compile_fail` test hands them to rustc by glob, no module declares them.

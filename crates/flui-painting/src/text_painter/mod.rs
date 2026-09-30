@@ -5,18 +5,19 @@
 //! - `measure` — `layout` and the queries over its cached metrics.
 //! - `paint` — `paint` and the cursor queries.
 //!
-//! Every measurement goes through the [`TextContext`](crate::TextContext)
-//! the caller lends: a render object lends its realm's. The default build
-//! measures on cosmic-text and only counts the loan; under `parley-layout`
-//! size, baselines and intrinsics come from Parley shaping on that context,
-//! while glyphs and carets still come from the cosmic-text layout until
-//! ADR-0092 §10 step 5 (flui-painting `ARCHITECTURE.md`, mapping decision 15).
+//! Every measurement shapes on Parley through the lent
+//! [`TextContext`](crate::TextContext): a render object lends its realm's,
+//! and `paint` records the runs of the layout that measured. Carets,
+//! selection, line metrics and hit-testing still come from a cosmic-text
+//! `TextLayout`, built on the first such query, until ADR-0092 §10 step 5
+//! (flui-painting `ARCHITECTURE.md`, mapping decision 15).
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::typography::{InlineSpan, TextAlign, TextDirection};
 use flui_foundation::geometry::{Offset, Size};
 
+use crate::display_list::ShapedParagraph;
 use crate::text_layout::TextLayout;
 
 pub mod baseline;
@@ -87,52 +88,11 @@ pub struct TextPainter {
 
     /// Cached layout result.
     pub(super) layout_cache: Option<TextLayoutCache>,
-
-    /// The shaper that answers size, baselines and intrinsics.
-    pub(crate) backend: MeasureBackend,
-}
-
-/// Which shaper a [`TextPainter`] measures with.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MeasureBackend {
-    /// cosmic-text on the process font system; the lent context is counted
-    /// but not shaped on.
-    #[cfg_attr(
-        feature = "parley-layout",
-        expect(dead_code, reason = "`parley-layout` measures every painter on Parley")
-    )]
-    Cosmic,
-    /// Parley on the lent context.
-    #[cfg(feature = "parley")]
-    #[cfg_attr(
-        not(any(feature = "parley-layout", test, feature = "testing")),
-        expect(
-            dead_code,
-            reason = "chosen by `parley-layout`, or pinned by tests through `testing`"
-        )
-    )]
-    Parley,
-}
-
-impl MeasureBackend {
-    /// The build's backend: Parley under `parley-layout`, cosmic-text
-    /// otherwise. `parley` alone compiles the Parley measurement without
-    /// choosing it, because the workspace test scope turns `parley` on and
-    /// must still test the default build (ADR-0092 §10 step 3).
-    #[cfg(feature = "parley-layout")]
-    pub(crate) const DEFAULT: Self = Self::Parley;
-    /// The build's backend: Parley under `parley-layout`, cosmic-text
-    /// otherwise.
-    #[cfg(not(feature = "parley-layout"))]
-    pub(crate) const DEFAULT: Self = Self::Cosmic;
 }
 
 /// Cached layout information.
 #[derive(Debug)]
 pub(super) struct TextLayoutCache {
-    /// The font database generation the layout was shaped against; a face
-    /// registered since makes the same text shape differently.
-    pub(super) font_generation: u64,
     /// The collection the layout was measured on and its generation, so a
     /// layout from another realm's fonts, or from before a registration, is
     /// measured again.
@@ -151,8 +111,14 @@ pub(super) struct TextLayoutCache {
     pub(super) did_exceed_max_lines: bool,
     /// Computed paint offset based on alignment.
     pub(super) paint_offset: Offset<f64>,
-    /// The underlying text layout for cursor/hit testing.
-    pub(super) layout: Arc<TextLayout>,
+    /// The paragraph `paint` records: the runs of the layout that gave
+    /// `size`, so what is painted is, by identity, what was measured.
+    pub(super) paragraph: Arc<ShapedParagraph>,
+    /// The cosmic-text layout carets, selection, line metrics and
+    /// hit-testing read, with the process font database's generation it was
+    /// shaped at; built on the first such query (ADR-0092 §10 step 5 moves
+    /// them to Parley).
+    pub(super) caret_layout: OnceLock<(u64, Arc<TextLayout>)>,
 
     /// Precomputed min intrinsic width (narrowest unbreakable run).
     /// Computed once during `layout()` — O(1) access for intrinsics queries.
@@ -190,17 +156,6 @@ impl TextPainter {
             max_lines: None,
             ellipsis: None,
             layout_cache: None,
-            backend: MeasureBackend::DEFAULT,
-        }
-    }
-
-    /// Measures on Parley whatever the build's default; the testing door
-    /// `testing::measure_with_parley` reaches it.
-    #[cfg(all(feature = "parley", any(test, feature = "testing")))]
-    pub(crate) fn pin_parley_measurement(&mut self) {
-        if self.backend != MeasureBackend::Parley {
-            self.backend = MeasureBackend::Parley;
-            self.mark_needs_layout();
         }
     }
 
@@ -234,7 +189,8 @@ impl TextPainter {
         self
     }
 
-    /// Sets the maximum number of lines.
+    /// Sets the maximum number of lines; `Some(0)` is no limit, as `None`
+    /// is ([`set_max_lines`](Self::set_max_lines)).
     #[must_use]
     pub fn with_max_lines(mut self, max_lines: Option<u32>) -> Self {
         self.set_max_lines(max_lines);
@@ -376,7 +332,12 @@ impl TextPainter {
     }
 
     /// Sets the maximum number of lines.
+    ///
+    /// `Some(0)` is no limit, as `None` is, and reads back as `None`: a
+    /// paragraph that kept no line would measure empty while painting every
+    /// line, so zero never reaches either shaper.
     pub fn set_max_lines(&mut self, max_lines: Option<u32>) {
+        let max_lines = max_lines.filter(|&lines| lines > 0);
         if self.max_lines != max_lines {
             self.max_lines = max_lines;
             self.mark_needs_layout();

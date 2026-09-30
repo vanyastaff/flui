@@ -1,13 +1,39 @@
-//! `TextPainter` painting and cursor queries, all over the layout that
-//! [`super::measure`]'s `layout()` cached.
+//! `TextPainter` painting and cursor queries over what
+//! [`super::measure`]'s `layout()` cached: paint records its paragraph, the
+//! cursor queries read a cosmic-text layout built on the first of them.
+
+use std::sync::Arc;
 
 use crate::typography::{LineMetrics, TextBox, TextPosition, TextRange};
 use flui_foundation::geometry::Offset;
 
-use super::TextPainter;
+use super::{TextLayoutCache, TextPainter};
 use crate::Canvas;
+use crate::text_layout::TextLayout;
 
 impl TextPainter {
+    /// The cosmic-text layout the cursor queries read, shaped at the cached
+    /// width on the first query and kept until the next `layout()`, which
+    /// drops it when a face has been registered on the process font database
+    /// since it was shaped. So a registration costs one reshape, at the first
+    /// query after the next `layout()`, and never one per query.
+    #[expect(clippy::expect_used)] // Documented precondition: layout() sets text
+    fn caret_layout(&self, cache: &TextLayoutCache) -> Arc<TextLayout> {
+        let (_, layout) = cache.caret_layout.get_or_init(|| {
+            let text = self.text.as_ref().expect(
+                "BUG: a TextPainter with a cached layout has text — set_text drops the cache",
+            );
+            // Read before shaping: a face registered while this shapes leaves
+            // the stamp behind, and the next `layout()` shapes again.
+            let generation = crate::shared_font_system().generation();
+            (
+                generation,
+                Arc::new(self.cosmic_layout(text, cache.max_width)),
+            )
+        });
+        Arc::clone(layout)
+    }
+
     // ===== Cursor and Selection =====
 
     /// Returns the screen offset for a caret at the given text
@@ -25,7 +51,7 @@ impl TextPainter {
             .as_ref()
             .expect("BUG: TextPainter::layout() must be called before get_offset_for_caret() — it reads the cached layout that layout() populates");
 
-        let offset = cache.layout.get_offset_for_caret(position);
+        let offset = self.caret_layout(cache).get_offset_for_caret(position);
 
         offset + cache.paint_offset
     }
@@ -45,7 +71,7 @@ impl TextPainter {
             .expect("BUG: TextPainter::layout() must be called before get_position_for_offset() — it reads the cached layout that layout() populates");
 
         let adjusted = offset - cache.paint_offset;
-        cache.layout.get_position_for_offset(adjusted)
+        self.caret_layout(cache).get_position_for_offset(adjusted)
     }
 
     /// Returns metrics for each line in the laid out text.
@@ -62,7 +88,7 @@ impl TextPainter {
             .as_ref()
             .expect("BUG: TextPainter::layout() must be called before get_line_metrics() — it reads the cached layout that layout() populates");
 
-        cache.layout.get_line_metrics()
+        self.caret_layout(cache).get_line_metrics()
     }
 
     /// Returns bounding boxes for a text selection.
@@ -79,7 +105,9 @@ impl TextPainter {
             .as_ref()
             .expect("BUG: TextPainter::layout() must be called before get_boxes_for_selection() — it reads the cached layout that layout() populates");
 
-        let mut boxes = cache.layout.get_boxes_for_range(TextRange::new(start, end));
+        let mut boxes = self
+            .caret_layout(cache)
+            .get_boxes_for_range(TextRange::new(start, end));
 
         for text_box in &mut boxes {
             text_box.rect = text_box.rect.translate_offset(cache.paint_offset);
@@ -102,7 +130,7 @@ impl TextPainter {
             .as_ref()
             .expect("BUG: TextPainter::layout() must be called before get_word_boundary() — it reads the cached layout that layout() populates");
 
-        cache.layout.get_word_boundary(position)
+        self.caret_layout(cache).get_word_boundary(position)
     }
 
     // ===== Painting =====
@@ -134,8 +162,8 @@ impl TextPainter {
             .style()
             .and_then(crate::text_layout::paint_color)
             .unwrap_or(crate::styling::Color::BLACK);
-        // The very layout this painter measured: what the engine rasterises
-        // is, by identity, what was laid out.
-        canvas.draw_paragraph(&cache.layout, paint_offset, color);
+        // The very paragraph this painter measured: what the engine
+        // rasterises is, by identity, what was laid out.
+        canvas.draw_paragraph(&cache.paragraph, paint_offset, color);
     }
 }

@@ -23,11 +23,12 @@ use crate::text::RichText;
 /// [`IconData::font_family`]. With its default `bundled-fonts` feature,
 /// `flui-painting` embeds the Material Icons (family `"Material Icons"`) and
 /// Cupertino Icons (family `"CupertinoIcons"`) faces and installs each one
-/// the host lacks (`flui_painting::fonts`), so those families' codepoints
-/// shape to real glyphs in measurement and paint alike. Any other icon font
-/// must be registered first with `flui::register_font`, which loads it for
-/// measurement and paint alike and lays laid-out text out again. Without a
-/// registration its codepoints shape to tofu (the "missing glyph" box).
+/// in every `FontCollection` (`flui_painting::fonts`), so those families'
+/// codepoints shape to real glyphs in measurement and paint alike. Any other
+/// icon font must be registered first with `flui::register_font`, which
+/// loads it for measurement, paint and carets alike and lays laid-out text
+/// out again on the next frame. Without a registration its codepoints shape
+/// to tofu (the "missing glyph" box).
 ///
 /// # Deferred
 ///

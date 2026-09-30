@@ -44,9 +44,6 @@ const PLATFORM_TARGETS: [&str; 4] = [WINDOWS_TARGET, MACOS_TARGET, ANDROID_TARGE
 ///   shared crate under a second hash. The facade with no feature is then not
 ///   tested here, CI's `test` job included (it runs this scope);
 ///   `cargo xtask facade-combos` and `feature-matrix` lint it.
-/// - `flui-painting/parley`: the Parley path's raster side, off by default
-///   until ADR-0092 §10 folds it into the default build; on here so its
-///   `parley_oracle` test runs in CI's `test` job.
 /// - `flui-devtools/agent`: the development agent server, off by default
 ///   because it opens an endpoint; on here so its `agent_endpoint` test runs
 ///   in the same jobs.
@@ -70,7 +67,7 @@ pub(crate) const TEST_SCOPE: [&str; 10] = [
 ];
 
 /// The features [`TEST_SCOPE`] turns on (see there for each one's reason).
-const TEST_FEATURES: &str = "flui/material,flui/cupertino,flui-painting/parley,flui-devtools/agent";
+const TEST_FEATURES: &str = "flui/material,flui/cupertino,flui-devtools/agent";
 
 /// The only build that links every example and bench: the workspace's
 /// `--all-targets` with [`TEST_SCOPE`]'s features, so it reuses what a test
@@ -1058,7 +1055,7 @@ mod tests {
         steps.iter().map(ToString::to_string).collect()
     }
 
-    const SCOPE: &str = "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/material,flui/cupertino,flui-painting/parley,flui-devtools/agent";
+    const SCOPE: &str = "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/material,flui/cupertino,flui-devtools/agent";
 
     fn workflow_lint_runs_each_installed_linter_and_skips_the_rest() {
         assert_eq!(

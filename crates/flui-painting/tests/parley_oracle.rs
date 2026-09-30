@@ -15,8 +15,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use cosmic_text::{CacheKey, CacheKeyFlags, FontSystem, SwashCache, SwashContent, fontdb};
-use flui_painting::parley_text::{
-    FaceKey, FontRegistry, ParleyGlyphKey, SubpixelBin, SwashRasterizer, Synthesis,
+use flui_painting::glyphs::{
+    FaceKey, FontRegistry, GlyphKey, SubpixelBin, SwashRasterizer, Synthesis,
 };
 use flui_painting::{GlyphContent, GlyphImage, GlyphRasterizer};
 use parley::fontique::{Blob, Collection, CollectionOptions, SourceCache};
@@ -125,7 +125,7 @@ impl Shaper {
 /// One placed glyph: its key, and what the reference needs to draw it.
 #[derive(Clone)]
 struct Placed {
-    key: ParleyGlyphKey,
+    key: GlyphKey,
     font: FontData,
     coords: Vec<i16>,
 }
@@ -166,7 +166,7 @@ fn place(
             let skew_degrees = synthesis.skew().map_or(0, |degrees| degrees as i8);
             for glyph in glyph_run.positioned_glyphs() {
                 let (_, x_bin) = SubpixelBin::split(origin_x + glyph.x);
-                let key = ParleyGlyphKey::new(
+                let key = GlyphKey::new(
                     face,
                     u16::try_from(glyph.id).expect("an OpenType glyph id"),
                     run.font_size(),
@@ -386,7 +386,7 @@ fn swash_matches_cosmic_text_bit_for_bit() {
     }
 }
 
-fn latin_keys(shaper: &mut Shaper, fonts: &mut FontRegistry, family: &str) -> Vec<ParleyGlyphKey> {
+fn latin_keys(shaper: &mut Shaper, fonts: &mut FontRegistry, family: &str) -> Vec<GlyphKey> {
     place(shaper, fonts, LATIN, 16.0, family, 0.3)
         .into_iter()
         .map(|placed| placed.key)
