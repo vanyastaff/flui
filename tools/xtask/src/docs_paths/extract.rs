@@ -42,18 +42,18 @@ pub(super) const ROOTS: [&str; 16] = [
     "tools",
 ];
 
-/// The crate directories of other repositories the docs cite as references:
-/// GPUI's (`crates/gpui/src/window.rs`, `crates/gpui_macos/…`) and Bevy's.
-const FOREIGN_CRATES: [&str; 2] = ["crates/gpui", "crates/bevy_"];
-
 /// Whether `path` names another repository's layout: Flutter's sources
-/// (`packages/flutter/lib/src/rendering/object.dart`, any `.dart` file), or a
-/// [`FOREIGN_CRATES`] one. Any other `crates/` path is this repository's, so a
-/// misspelt crate name is a finding.
+/// (`packages/flutter/…`, `packages/flutter_test/…`, any `.dart` file), GPUI's
+/// (`crates/gpui/…`, `crates/gpui_macos/…`) or Bevy's (`crates/bevy_ecs/…`),
+/// matched at a whole segment. Any other `crates/` path is this repository's,
+/// so a misspelt name (`crates/gpuii`, `packages/flutterish`) is a finding.
 fn foreign(path: &str) -> bool {
-    path.starts_with("packages/flutter")
-        || has_extension(path, "dart")
-        || FOREIGN_CRATES.iter().any(|prefix| path.starts_with(prefix))
+    let mut segments = path.split('/');
+    let (root, name) = (segments.next(), segments.next().unwrap_or_default());
+    let family = |stem: &str| name == stem || name.starts_with(&format!("{stem}_"));
+    has_extension(path, "dart")
+        || (root == Some("packages") && family("flutter"))
+        || (root == Some("crates") && (family("gpui") || name.starts_with("bevy_")))
 }
 
 /// Whether `path`'s extension is `extension`, in any case.
@@ -74,6 +74,9 @@ pub(super) struct Code {
     /// The shell the code is written for: PowerShell for a `powershell`,
     /// `pwsh` or `ps1` fence, POSIX otherwise.
     pub(super) dialect: shell::Dialect,
+    /// A code span labelling a [`pinned`] permalink: a path in it is cited as
+    /// it was then, but a command in it is read as any other.
+    pub(super) pinned: bool,
 }
 
 /// The shell a code fence's info string (`bash`, `powershell title=x`) names.
@@ -89,8 +92,7 @@ fn dialect(info: &str) -> shell::Dialect {
     }
 }
 
-/// The code spans and code blocks of `markdown`, in order, but for a code
-/// span labelling a [`pinned`] permalink.
+/// The code spans and code blocks of `markdown`, in order.
 pub(super) fn code(markdown: &str) -> Vec<Code> {
     let lines = LineIndex::new(markdown);
     let mut found = Vec::new();
@@ -101,12 +103,12 @@ pub(super) fn code(markdown: &str) -> Vec<Code> {
         match event {
             Event::Start(Tag::Link { dest_url, .. }) => in_pinned = pinned(&dest_url),
             Event::End(TagEnd::Link) => in_pinned = false,
-            Event::Code(_) if in_pinned => {}
             Event::Code(text) => found.push(Code {
                 line: lines.line(range.start),
                 text: text.into_string(),
                 block: false,
                 dialect: shell::Dialect::Posix,
+                pinned: in_pinned,
             }),
             Event::Start(Tag::CodeBlock(kind)) => {
                 let dialect = match kind {
@@ -118,6 +120,7 @@ pub(super) fn code(markdown: &str) -> Vec<Code> {
                     text: String::new(),
                     block: true,
                     dialect,
+                    pinned: false,
                 });
             }
             Event::Text(text) => {
@@ -326,7 +329,7 @@ const RESERVED: [&str; 9] = [
 ];
 
 /// `sudo`'s options that take a value in the next word.
-const SUDO_VALUE_OPTIONS: [&str; 20] = [
+const SUDO_VALUE_OPTIONS: [&str; 22] = [
     "-u",
     "-g",
     "-C",
@@ -347,6 +350,8 @@ const SUDO_VALUE_OPTIONS: [&str; 20] = [
     "--type",
     "--other-user",
     "--command-timeout",
+    "-R",
+    "--chroot",
 ];
 
 /// GNU `time`'s options that take a value in the next word.
@@ -463,6 +468,11 @@ fn cargo_command(words: &mut VecDeque<(usize, String)>) -> bool {
                     break;
                 }
             }
+            continue;
+        }
+        // `function NAME { BODY }`: the body's commands run when it is called
+        if program == "function" {
+            words.pop_front();
             continue;
         }
         // `command [-p] COMMAND` runs it; `command -v`/`-V` only looks it up

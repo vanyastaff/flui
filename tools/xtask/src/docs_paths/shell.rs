@@ -102,6 +102,19 @@ impl Lexer<'_> {
                     }
                 }
                 // a doc's `<crate>` is a placeholder word, not a redirection
+                // PowerShell's `<# … #>` block comment
+                '<' if self.dialect == Dialect::PowerShell
+                    && self.chars.next_if_eq(&'#').is_some() =>
+                {
+                    let mut last = ' ';
+                    for c in self.chars.by_ref() {
+                        self.line += usize::from(c == '\n');
+                        if last == '#' && c == '>' {
+                            break;
+                        }
+                        last = c;
+                    }
+                }
                 '<' if self.placeholder_ahead() => {
                     self.push('<');
                     while let Some(c) = self.chars.next() {
@@ -116,6 +129,20 @@ impl Lexer<'_> {
                     // `&>file`: stdout and stderr both
                     self.chars.next();
                     self.redirect();
+                }
+                // `args=(…)`: an array's elements are words, not a command
+                '(' if self
+                    .word
+                    .as_ref()
+                    .is_some_and(|(_, word)| word.ends_with('=')) =>
+                {
+                    let elements = substitution_text(&mut self.chars, ')');
+                    self.line += elements.matches('\n').count();
+                    self.push('(');
+                    for c in elements.chars() {
+                        self.push(c);
+                    }
+                    self.push(')');
                 }
                 '&' | '|' | ';' | '(' | ')' => {
                     self.flush();
@@ -477,18 +504,21 @@ impl Lexer<'_> {
 fn substitution_text(chars: &mut Peekable<Chars<'_>>, closing: char) -> String {
     let mut text = String::new();
     let mut depth = 0_usize;
-    let mut quote: Option<char> = None;
+    // the open quote, and whether `\` escapes inside it
+    let mut quote: Option<(char, bool)> = None;
     // `case … esac` blocks open: in one, an unmatched `)` ends a pattern. A
     // keyword counts only as a whole word at a command's start.
     let mut cases = 0_usize;
     let mut word = String::new();
     let mut command_start = true;
     while let Some(c) = chars.next() {
-        if let Some(open) = quote {
-            if c == open {
+        if let Some((open, escapes)) = quote {
+            text.push(c);
+            if escapes && c == '\\' {
+                text.extend(chars.next());
+            } else if c == open {
                 quote = None;
             }
-            text.push(c);
             continue;
         }
         if c.is_alphanumeric() || c == '_' {
@@ -525,7 +555,9 @@ fn substitution_text(chars: &mut Peekable<Chars<'_>>, closing: char) -> String {
                 }
                 continue;
             }
-            '\'' | '"' => quote = Some(c),
+            // `\` escapes inside `"…"` and ANSI-C `$'…'`, not inside `'…'`
+            '\'' => quote = Some(('\'', text.ends_with('$'))),
+            '"' => quote = Some(('"', true)),
             ')' if closing == ')' && depth == 0 && cases > 0 => command_start = true,
             c if c == closing && depth == 0 => break,
             '(' if closing == ')' => depth += 1,

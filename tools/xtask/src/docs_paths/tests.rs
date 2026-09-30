@@ -30,6 +30,15 @@ fn a_path_needs_a_known_root_and_a_slash() {
             &["crates/flui-view/ARCHITECTURE.md"][..],
         ),
         ("docs/adr/", &["docs/adr/"]),
+        // a name that only starts like another repository's is this one's
+        (
+            "packages/flutterish/README.md",
+            &["packages/flutterish/README.md"],
+        ),
+        (
+            "crates/gpuii/src/window.rs",
+            &["crates/gpuii/src/window.rs"],
+        ),
         // `.` and `..` resolve, so a stale path behind them is still checked
         ("docs/./adr/../testing.md", &["docs/testing.md"]),
         ("docs/../removed.md", &["removed.md"]),
@@ -229,6 +238,27 @@ fn packages_are_read_only_from_cargo_commands() {
         ("{fd}>build.log cargo test -p a", &[(0, test, "a")]),
         // sudo's long options take their value too
         ("sudo --user root cargo test -p a", &[(0, test, "a")]),
+        ("sudo -R /newroot cargo test -p a", &[(0, test, "a")]),
+        (
+            "sudo --chroot /newroot cargo build -p a",
+            &[(0, build, "a")],
+        ),
+        // an escaped quote inside `$'…'` within a substitution
+        (
+            "echo \"$(printf '%s' $'\\')' ; cargo test -p a)\"",
+            &[(0, test, "a")],
+        ),
+        // a keyword function's body runs when it is called
+        (
+            "function check { cargo test -p a; }; check",
+            &[(0, test, "a")],
+        ),
+        // an array's elements are words, not a command
+        ("args=(cargo test -p gone)", &[]),
+        (
+            "args+=(cargo test -p gone); cargo build -p a",
+            &[(0, build, "a")],
+        ),
         ("cat <<\\EOF\n$(cargo test -p gone)\nEOF", &[]),
         (
             "cat <<'END MARK'\ncargo test -p gone\nEND MARK\ncargo build -p a",
@@ -378,6 +408,7 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
                 "2.0.0",
                 Some("git+https://example.com/flui?rev=1#abc"),
             ),
+            ("gitdep", "1.2.3", Some("git+file:///tmp/dep?rev=abc#abc")),
         ]),
     };
     for (code, selects) in [
@@ -392,6 +423,12 @@ fn a_lockfile_package_is_selected_only_by_update_and_tree() {
         // shares it; `clean` takes both
         ("cargo tree -p flui-view", false),
         ("cargo clean -p flui-view", true),
+        // a git source's `?rev=` query is part of it; its `#revision` is not
+        (
+            "cargo pkgid -p 'git+file:///tmp/dep?rev=abc#gitdep@1.2.3'",
+            true,
+        ),
+        ("cargo pkgid -p 'git+file:///tmp/dep#gitdep@1.2.3'", false),
         // cargo canonicalizes the source kind's case and a default port
         (
             "cargo pkgid -p 'REGISTRY+https://github.com:443/rust-lang/crates.io-index#bitflags@2.13.2'",
@@ -504,8 +541,7 @@ fn headings_give_github_anchors() {
 }
 
 fn a_powershell_fence_is_lexed_as_powershell() {
-    let markdown =
-        "```powershell\ncargo test -p a`-b `\n  -p x\\y\n```\n\n```bash\ncargo test -p a`x`\n```\n";
+    let markdown = "```powershell\n<# cargo test -p gone\n#>\ncargo test -p a`-b `\n  -p x\\y\n```\n\n```bash\ncargo test -p a`x`\n```\n";
     let code = extract::code(markdown);
     let dialects: Vec<shell::Dialect> = code.iter().map(|code| code.dialect).collect();
     assert_eq!(
@@ -525,8 +561,8 @@ fn a_powershell_fence_is_lexed_as_powershell() {
 }
 
 fn code_spans_and_blocks_carry_their_lines() {
-    // a code span labelling a permalink to a commit (its scheme and host in
-    // any case) cites the file as it was
+    // a code span labelling a permalink to a commit (its scheme, host and
+    // repository in any case) is pinned: its path is cited as it was
     // then; any other link's label, a branch (or `main` misspelt) too, is still
     // a path to check
     let markdown = "# T\n\nSee `docs/x.md`.\n\n```bash\ncargo test\ncargo run -p a\n```\n\n    indented\n\n\
@@ -543,30 +579,42 @@ fn code_spans_and_blocks_carry_their_lines() {
                 text: "docs/x.md".to_owned(),
                 block: false,
                 dialect: shell::Dialect::Posix,
+                pinned: false,
             },
             extract::Code {
                 line: 6,
                 text: "cargo test\ncargo run -p a\n".to_owned(),
                 block: true,
                 dialect: shell::Dialect::Posix,
+                pinned: false,
             },
             extract::Code {
                 line: 10,
                 text: "indented\n".to_owned(),
                 block: true,
                 dialect: shell::Dialect::Posix,
+                pinned: false,
+            },
+            extract::Code {
+                line: 12,
+                text: "docs/old.md".to_owned(),
+                block: false,
+                dialect: shell::Dialect::Posix,
+                pinned: true,
             },
             extract::Code {
                 line: 12,
                 text: "docs/now.md".to_owned(),
                 block: false,
                 dialect: shell::Dialect::Posix,
+                pinned: false,
             },
             extract::Code {
                 line: 12,
                 text: "docs/testng.md".to_owned(),
                 block: false,
                 dialect: shell::Dialect::Posix,
+                pinned: false,
             },
         ]
     );
@@ -663,7 +711,7 @@ fn an_llms_link_resolves_like_a_github_link() {
     }
 }
 
-fn a_doc_reports_each_stale_name_once() {
+fn a_doc_reports_every_stale_occurrence() {
     let known = known();
     let packages = Packages {
         local: locked(&[("flui-view", "0.2.0"), ("flui-app", "0.2.0")]),
@@ -683,7 +731,9 @@ fn a_doc_reports_each_stale_name_once() {
             .map(|stale| (stale.line, stale.kind, stale.name))
             .collect()
     };
+    // the same stale name twice on a line is two occurrences
     let mut want = vec![
+        (1, Kind::Path, "crates/flui-types/".to_owned()),
         (1, Kind::Path, "crates/flui-types/".to_owned()),
         (2, Kind::Package, "flui_view".to_owned()),
         (6, Kind::Package, "flui-types".to_owned()),
@@ -700,6 +750,20 @@ fn a_doc_reports_each_stale_name_once() {
     ]);
     want.sort();
     assert_eq!(names("llms.txt"), want);
+}
+
+fn a_pinned_label_is_no_path_but_its_command_is_read() {
+    let packages = Packages {
+        local: locked(&[("flui-view", "0.2.0")]),
+        locked: BTreeMap::new(),
+    };
+    let text = "[`docs/gone.md`](https://github.com/vanyastaff/flui/blob/e30ab71/docs/gone.md) \
+                [`cargo test -p gone`](https://github.com/vanyastaff/flui/blob/e30ab71/x.md)\n";
+    let found: Vec<(Kind, String)> = stale("README.md", text, &known(), &packages, &|_| None)
+        .into_iter()
+        .map(|stale| (stale.kind, stale.name))
+        .collect();
+    assert_eq!(found, [(Kind::Package, "gone".to_owned())]);
 }
 
 fn the_docs_are_live_markdown_and_llms_txt() {
@@ -884,8 +948,12 @@ fn docs_paths_contract() {
                 an_llms_link_resolves_like_a_github_link as fn(),
             ),
             (
-                "a_doc_reports_each_stale_name_once",
-                a_doc_reports_each_stale_name_once as fn(),
+                "a_doc_reports_every_stale_occurrence",
+                a_doc_reports_every_stale_occurrence as fn(),
+            ),
+            (
+                "a_pinned_label_is_no_path_but_its_command_is_read",
+                a_pinned_label_is_no_path_but_its_command_is_read as fn(),
             ),
             (
                 "the_docs_are_live_markdown_and_llms_txt",

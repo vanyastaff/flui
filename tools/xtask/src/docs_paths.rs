@@ -254,12 +254,13 @@ impl Packages {
 
 /// Whether the source of a package-ID spec (`registry+https://…/index`, or
 /// the URL without its kind) is the `known` source of a locked package, whose
-/// `?query` and `#revision` it need not spell.
+/// `#revision` it need not spell (its `?query` it must).
 fn source_matches(spec: &str, known: Option<&str>) -> bool {
     let Some(known) = known else {
         return false;
     };
-    let base = known.split(['?', '#']).next().unwrap_or(known);
+    // the `#revision` is optional; a git source's `?rev=`/`?branch=` query is not
+    let base = known.split('#').next().unwrap_or(known);
     let url = base.split_once('+').map_or(base, |(_, url)| url);
     let spec = normalized_url(spec);
     [known, base, url]
@@ -538,7 +539,7 @@ fn stale(
         });
     };
     for code in extract::code(text) {
-        if !code.block {
+        if !code.block && !code.pinned {
             for path in extract::paths(&code.text) {
                 if !known.resolves(doc, &path) {
                     push(code.line, Kind::Path, &path);
@@ -576,8 +577,8 @@ fn stale(
             }
         }
     }
+    // every occurrence counts, two on one line too: the allowlist is exact
     found.sort();
-    found.dedup();
     found
 }
 
