@@ -1,76 +1,65 @@
 [workspace]
-# Resolver 3 (stable since 1.84) is the MSRV-aware resolver: `cargo update` /
-# `cargo add` prefer dependency versions whose own `rust-version` fits the
-# declared MSRV instead of leaving a failed build as the only guard. Edition
-# 2024 makes it the default for packages, but a virtual workspace must say so.
+# Resolver 3 is the MSRV-aware resolver: `cargo update` / `cargo add` prefer
+# dependency versions whose own `rust-version` fits the declared MSRV instead of
+# leaving a failed build as the only guard. The root package's edition (2024)
+# already selects it; the key keeps the choice explicit.
 resolver = "3"
+# Grouped by `[package.metadata.flui] tier` (the `tiers` list below), in each
+# crate's `order`; the facade is the root package.
 members = [
-    # === Phase 1: Foundation Layer ===
-    "crates/flui-foundation",   # Foundation types and utilities (ACTIVE)
-    "crates/flui-macros",       # Proc-macros (view, diagnostics, and animation derives)
-    "crates/flui-log",          # Composition-only cross-platform tracing backend (ACTIVE)
-    "crates/flui-platform-api", # Platform contracts: capability traits, window/input vocabulary
-    "crates/flui-protocol",     # Semantics and agent-protocol vocabulary (contract crate)
-    "crates/flui-platform",     # Platform abstraction (ACTIVE)
+    # V: values
+    "crates/flui-macros",     # View, diagnostics and animation derives
+    "crates/flui-foundation", # IDs, keys, diagnostics, the f64 geometry values (ADR-0098)
 
-    # === Phase 2: Core Framework ===
-    "crates/flui-painting",    # Painting primitives (ACTIVE)
-    "crates/flui-semantics",   # Accessibility (ACTIVE)
-    "crates/flui-scheduler",   # Frame scheduling (ACTIVE)
-    "crates/flui-layer",       # Layer composition (ACTIVE)
-    "crates/flui-interaction", # Gesture recognition (ACTIVE)
-    "crates/flui-engine",      # GPU rendering engine (ACTIVE)
-    "crates/flui-hot-reload",  # Hot-reload scene plugins via dlopen (ACTIVE)
+    # C: contracts
+    "crates/flui-platform-api", # Platform capability traits, window and input vocabulary (ADR-0082)
+    "crates/flui-protocol",     # Semantics roles and actions, agent-protocol vocabulary (ADR-0095)
 
-    # === Phase 3: Framework Layer ===
-    "crates/flui-rendering", # Render tree / engine (ACTIVE)
-    "crates/flui-objects",   # Concrete RenderBox/RenderSliver catalog (ACTIVE)
-    "crates/flui-view",      # View/Element tree (ACTIVE)
-    "crates/flui-widgets",   # User-facing widget catalog (ACTIVE — Core.1 slice)
-    "crates/flui-runtime",   # Frame runtime: per-presentation lanes a realm drives (ADR-0083)
-    "crates/flui-sdk",       # Package-author surface: what official and third-party packages build on (ADR-0088)
-    "crates/flui-testing",   # Test-support: headless realm host, widget harness, substrate driver (ACTIVE)
+    # S: substrate
+    "crates/flui-log",         # Tracing backend; only composition roots link it
+    "crates/flui-scheduler",   # Frame phases
+    "crates/flui-painting",    # Paint, styling and typography values; DisplayList recording
+    "crates/flui-interaction", # Event routing and gestures
+    "crates/flui-semantics",   # Accessibility tree
+    "crates/flui-animation",   # Animation system
+    "crates/flui-assets",      # Asset loading and caching
 
-    # === Phase 4: Application Layer ===
-    "crates/flui-app",    # Application framework (ACTIVE - Migration)
-    "crates/flui-assets", # Asset loading/caching (ACTIVE — wired into Image per Cross.A)
+    # R: render machine
+    "crates/flui-layer",     # Retained compositing layers
+    "crates/flui-rendering", # RenderBox / RenderSliver protocols
+    "crates/flui-objects",   # Concrete render-object catalog
+    "crates/flui-engine",    # Layers to wgpu
 
-    # === Official packages (ADR-0088) ===
-    # Built on `flui-sdk` alone, as a third-party package would be.
-    "packages/flui-material",  # Material Design: ColorScheme/TextTheme/ThemeData/Theme and the M3 widget catalog
-    "packages/flui-cupertino", # iOS-style (Cupertino) theming and widget family
-    "packages/flui-devtools",  # Profiler / timeline / inspector counters
+    # K: spine and runtime
+    "crates/flui-view",    # View/Element, BuildContext/LifecycleContext, reconciliation, signals
+    "crates/flui-widgets", # Widget catalog
+    "crates/flui-runtime", # Frame runtime a realm drives (ADR-0083)
+    "crates/flui-sdk",     # Package-author surface (ADR-0088)
+    "crates/flui-testing", # Headless realm host, widget harness, substrate driver
 
-    # === Examples (platform-specific) ===
-    "examples/desktop_scene",                # Hot-reloadable scene plugin for desktop — loaded via HotReloadDriver
+    # H: hosts
+    "crates/flui-platform", # Platform backends: windows, input, IME, clipboard
+    "crates/flui-app",      # Per-window UiRealms and the run loop
+    "crates/flui-cli",      # `flui` CLI: create, run, build, doctor, devices
+
+    # pkg: official packages, built on flui-sdk alone (ADR-0088)
+    "packages/flui-material",  # Material Design theming and the M3 widget catalog
+    "packages/flui-cupertino", # Cupertino theming and widget family
+    "packages/flui-devtools",  # Profiler, timeline and inspector counters
+    "crates/flui-hot-reload",  # Hot reload; an official package still under crates/ (AGENTS.md)
+
+    # Examples and tools (tier-kind = "tool")
+    "examples/desktop_scene",                # Hot-reloadable scene plugin, loaded by HotReloadDriver
     "examples/hot_reload_counter/types",
     "examples/hot_reload_counter/logic",
     "examples/hot_reload_counter/host",
-    "examples/hot_reload_lifecycle_fixture", # Dev-only app_plugin! fixture, dlopen'd by flui-hot-reload's own reload-lifecycle test
-
-    # NOTE: Web examples are excluded from default workspace members because they
-    # require wasm32 target. Build with:
-    #   cd examples/web_demo && wasm-pack build --target web --out-dir pkg
-    "examples/web_demo",      # Web/WASM platform demo (cdylib)
-    "examples/painting_demo", # Web/WASM painting + engine demo (cdylib)
-    "examples/web_counter",   # The counter template through `flui::run_app` on the web (cdylib)
-
-    # === Tools ===
-    "tools/live-smoke",  # Live E2E harness: real window, real X11 input, real teardown
-    "tools/desktop-mcp", # MCP server that drives desktop apps: windows, screenshots, accessibility tree, input
-    "tools/xtask",       # `cargo xtask`: CI gates, change scoping, release and weekly tooling
-
-    # === Animation Layer ===
-    "crates/flui-animation", # Animation system (ACTIVE)
-
-    # === DX tooling ===
-    "crates/flui-cli", # `flui` CLI (create / run / build / doctor / devices); owns the build pipeline and the source watcher
-    # NOTE: there is deliberately NO signals crate. flui-reactivity (a signals/
-    # hooks experiment) was removed 2026-07-28: it had zero consumers, could not
-    # build even standalone (inherited workspace deps that were never declared),
-    # and contract C1 locks the catalog to the setState/Inherited model. Its
-    # process-global runtime also predated the UiRealm model — any future
-    # signals story is a new realm-scoped design, not a revival. History: git.
+    "examples/hot_reload_lifecycle_fixture", # app_plugin! fixture flui-hot-reload's reload-lifecycle test loads
+    "examples/web_demo",                     # wasm32 cdylibs; build steps in examples/README.md
+    "examples/painting_demo",
+    "examples/web_counter",
+    "tools/live-smoke",                      # Live end-to-end harness: real window, X11 input, teardown
+    "tools/desktop-mcp",                     # MCP server that drives desktop apps
+    "tools/xtask",                           # `cargo xtask`: gates, change scoping, release and weekly tooling
 ]
 
 # No `default-members`: a bare `cargo build` at the root builds the `flui`
@@ -90,7 +79,7 @@ members = [
 # in any kind, and an official package's normal and build dependencies are
 # flui-sdk and the contract crates (ADR-0081 §3, ADR-0088 §2).
 tiers = [
-    "V",   # values: geometry, types, macros, foundation
+    "V",   # values: macros, foundation
     "C",   # contracts: flui-platform-api, flui-protocol
     "S",   # substrate: log, scheduler, painting, interaction, semantics, animation, assets
     "R",   # render machine: layer, rendering, objects, engine
@@ -104,7 +93,7 @@ tiers = [
 # same layer or lower, never higher, and never at an example or tool. Cargo
 # itself rejects cycles. Checked by `cargo xtask workspace` (ADR-0041).
 layers = [
-    "Foundation (value types)",        # 0
+    "(empty, ADR-0098)",               # 0
     "Framework primitives",            # 1
     "Substrate",                       # 2
     "Compositing / a11y / animation",  # 3
