@@ -63,7 +63,8 @@ fn caret_line_width(painter: &TextPainter) -> f64 {
 /// Measurement and paint shape on Parley through the lent context and never
 /// read the process font system, while carets still shape on it (painting
 /// mapping decision 15): a face registered there re-shapes the caret layout
-/// and leaves the measured size and the painted paragraph alone.
+/// once, at the next `layout()`, and leaves the measured size and the painted
+/// paragraph alone.
 ///
 /// This pins a known gap, not the contract: once registration goes through the
 /// collection (the rest of ADR-0092 §10 step 3b), a registered face must reach
@@ -81,6 +82,17 @@ fn a_face_registered_on_the_process_font_system_reaches_carets_not_measurement_o
     shared_font_system()
         .register_font(PROBE_MONO)
         .expect("the probe face loads");
+    // Until the next `layout()` the cursor queries keep the caret layout
+    // they have: shaping it again on every query would put a full cosmic-text
+    // shape, under the process font lock, on each caret and selection read.
+    for query in 0..2 {
+        assert_eq!(
+            caret_line_width(&painter),
+            caret_width,
+            "caret query {query} after the registration and before `layout()` reads the \
+             caret layout it already had"
+        );
+    }
     painter.layout(&mut text_cx, 0.0, WIDTH);
 
     assert!(
@@ -89,12 +101,14 @@ fn a_face_registered_on_the_process_font_system_reaches_carets_not_measurement_o
     );
     assert!(
         (caret_line_width(&painter) - caret_width).abs() > 1.0,
-        "the caret layout moves to the probe: in the proportional fallback 'iiii' and          'wwww' differ, in the monospace probe they do not ({caret_width} vs {})",
+        "the caret layout moves to the probe: in the proportional fallback 'iiii' and \
+         'wwww' differ, in the monospace probe they do not ({caret_width} vs {})",
         caret_line_width(&painter)
     );
     assert_eq!(
         painter.size(),
         measured,
-        "measurement is Parley's on the context's collection, which the process          registration does not reach"
+        "measurement is Parley's on the context's collection, which the process \
+         registration does not reach"
     );
 }

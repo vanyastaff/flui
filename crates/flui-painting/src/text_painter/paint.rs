@@ -13,25 +13,25 @@ use crate::text_layout::TextLayout;
 
 impl TextPainter {
     /// The cosmic-text layout the cursor queries read, shaped at the cached
-    /// width on the first query and kept while the process font database is
-    /// unchanged; one shaped since a face was registered there is not kept.
+    /// width on the first query and kept until the next `layout()`, which
+    /// drops it when a face has been registered on the process font database
+    /// since it was shaped. So a registration costs one reshape, at the first
+    /// query after the next `layout()`, and never one per query.
     #[expect(clippy::expect_used)] // Documented precondition: layout() sets text
     fn caret_layout(&self, cache: &TextLayoutCache) -> Arc<TextLayout> {
-        let generation = crate::shared_font_system().generation();
-        if let Some((shaped_at, layout)) = cache.caret_layout.get()
-            && *shaped_at == generation
-        {
-            return Arc::clone(layout);
-        }
-        let text = self
-            .text
-            .as_ref()
-            .expect("BUG: a TextPainter with a cached layout has text — set_text drops the cache");
-        let layout = Arc::new(self.cosmic_layout(text, cache.max_width));
-        // Taken only when empty: a layout from an older generation stays and
-        // each later query shapes again, until the next `layout()`.
-        let _ = cache.caret_layout.set((generation, Arc::clone(&layout)));
-        layout
+        let (_, layout) = cache.caret_layout.get_or_init(|| {
+            let text = self.text.as_ref().expect(
+                "BUG: a TextPainter with a cached layout has text — set_text drops the cache",
+            );
+            // Read before shaping: a face registered while this shapes leaves
+            // the stamp behind, and the next `layout()` shapes again.
+            let generation = crate::shared_font_system().generation();
+            (
+                generation,
+                Arc::new(self.cosmic_layout(text, cache.max_width)),
+            )
+        });
+        Arc::clone(layout)
     }
 
     // ===== Cursor and Selection =====

@@ -48,10 +48,23 @@ impl TextPainter {
         text_cx.note_lent();
 
         let fonts = Self::font_key(text_cx);
-        if let Some(cache) = self.cache_for(text_cx)
+        if let Some(cache) = self
+            .layout_cache
+            .as_mut()
+            .filter(|cache| cache.fonts.matches(&fonts))
             && (cache.min_width - min_width).abs() < f64::EPSILON
             && (cache.max_width - max_width).abs() < f64::EPSILON
         {
+            // The measurement stands; a caret layout shaped before a face
+            // was registered on the process font database is dropped, so the
+            // next cursor query shapes it once against that face. Checked
+            // only when a caret layout exists, which has already built the
+            // process font system: measurement alone never builds it.
+            if let Some((shaped_at, _)) = cache.caret_layout.get()
+                && *shaped_at != crate::shared_font_system().generation()
+            {
+                cache.caret_layout = OnceLock::new();
+            }
             return;
         }
 
