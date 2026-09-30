@@ -153,9 +153,9 @@ impl UiRealm {
     /// wakes an idle event loop at all) but marks the ADDRESSED
     /// presentation's own pump wake bit, never a sibling's, so an
     /// idle-and-quiet sibling presentation is not woken by a redraw request
-    /// that was never its own (`redraw_request_from_a_does_not_wake_bs_window`
-    /// covers the platform-window half of this same requirement via each
-    /// presentation's own `on_need_visual_update` wiring, `presentation.rs`).
+    /// that was never its own (the platform-window half of this same
+    /// requirement is each presentation's own `on_need_visual_update`
+    /// wiring, `presentation.rs`).
     pub(super) fn request_redraw_for(&self, presentation: &PresentationState) {
         self.needs_redraw.store(true, Ordering::Relaxed);
         presentation.mark_redraw_pending();

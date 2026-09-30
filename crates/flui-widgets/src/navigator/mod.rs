@@ -7,9 +7,7 @@
 //! `_flushHistoryUpdates` never touches Flutter's element tree, and its only
 //! tree-visible effect is the `overlay.rearrange` at the very end, which the
 //! `Navigator` view performs. So this layer is testable with no element tree, no
-//! build owner, no render pipeline, and no overlay, and
-//! `route_stack_flush_is_pure_data` enforces that mechanically rather than on
-//! trust.
+//! build owner, no render pipeline, and no overlay.
 //!
 //! The `Navigator` view, `NavigatorState` and the owned
 //! `NavigatorHandle` sit on top: the `navigator` and `overlay_route` modules are the

@@ -41,8 +41,8 @@ const FALLBACK_TAG: &str = "flui";
 /// Android log priorities, as `android_log-sys` numbers them.
 ///
 /// Mirrored here rather than re-exported so the mapping is testable on hosts
-/// that have no NDK. The `android_priorities_match_the_ndk` test below pins the
-/// two together on Android itself.
+/// that have no NDK. The values must stay equal to
+/// `android_log_sys::LogPriority`'s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(i32)]
 pub enum LogcatPriority {

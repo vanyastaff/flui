@@ -43,10 +43,9 @@
 //!   that is a leak-tracker failure in the oracle's own test suite. FLUI's
 //!   `OverlayEntry` is a cheap `Arc`-backed handle with no listener list and
 //!   no disposal step of its own; dropping every clone is enough. The one
-//!   behavior from that group FLUI does port — a second `remove()` is inert
-//!   rather than panicking (`overlay.dart`'s `assert` in `remove()`,
-//!   `:226-243`) — is `crates/flui-widgets/tests/overlay.rs`'s
-//!   `removed_entry_cannot_reinsert_or_rebuild_silently`.
+//!   behavior from that group FLUI does port is that a second `remove()` is
+//!   inert rather than panicking (`overlay.dart`'s `assert` in `remove()`,
+//!   `:226-243`).
 //!
 //! [`Overlay`]: super::Overlay
 //! [`RebuildHandle`]: flui_view::RebuildHandle

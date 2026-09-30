@@ -1,6 +1,5 @@
 //! Tests for the private `TransitionRoute`, reached through the temporary
-//! `flui_widgets::__test_access` path (ADR-0083 §4). Its export boundary keeps
-//! a unit test in `src/navigator/transition_route_tests.rs`.
+//! `flui_widgets::__test_access` path (ADR-0083 §4).
 //!
 //! # Parity oracles
 //!
@@ -73,10 +72,9 @@ fn navigator() -> (NavigatorHandle, Harness) {
 /// Drive a controller to `Completed` (entrance finished).
 ///
 /// `set_value` **cancels** the active run rather than completing its
-/// `TickerFuture` (`set_value_cancels_the_active_run`, flui-animation) — this
-/// helper drives `status`, not the future. A test that needs the future to
-/// resolve `Ok(())` through natural completion drives a real `Vsync` instead
-/// (see `tests/routes.rs`'s `PUMPS`-based coverage).
+/// `TickerFuture` — this helper drives `status`, not the future. A test that
+/// needs the future to resolve `Ok(())` through natural completion drives a
+/// real `Vsync` instead.
 fn complete(handle: &TransitionHandle) {
     let controller = handle.controller().expect("install created the controller");
     controller.set_value(1.0);
@@ -140,10 +138,10 @@ pub(crate) fn push_transition_parks_the_entry_in_pushing_until_the_controller_co
 ///
 /// Needs a real, ticking `Vsync`: popping at `value == 0` (this file's usual
 /// hand-driven setup, which never advances the controller) would let
-/// `reverse()` collapse straight to `Dismissed` — the
-/// `an_already_dismissed_controller_finalizes_synchronously_…` shape, not this
-/// one — so this pumps the entrance to its midpoint first, leaving `reverse()`
-/// real distance to cover.
+/// `reverse()` collapse straight to `Dismissed` — an already-dismissed
+/// controller finalizing synchronously, a different shape from this one — so
+/// this pumps the entrance to its midpoint first, leaving `reverse()` real
+/// distance to cover.
 ///
 /// Red-check: drop the `entry.state == RouteLifecycle::Pushing` guard in
 /// `RouteHistory::apply_pending_commands`'s `PushCompleted` arm — the stale
@@ -166,7 +164,7 @@ pub(crate) fn pop_mid_push_cancels_the_push_future_inside_the_flush_and_ends_pop
 
     // The first pump after a run starts only anchors `t = 0` for the
     // registry's per-run clock (`Vsync`'s own doc); a second pump is what
-    // actually advances it — `tests/routes.rs` documents the same thing.
+    // actually advances it.
     laid.pump_for(Duration::ZERO);
     // Halfway through the 300ms entrance: `Forward`, not yet `Completed` —
     // `reverse()` below has real distance to cover.

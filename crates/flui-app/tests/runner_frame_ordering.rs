@@ -167,10 +167,9 @@ fn every_runner_frame_site_drives_the_realm_pump() {
 /// Every background wake — each `WakeAction::PumpAsync` arm (desktop,
 /// Android, iOS, web) and iOS's owner turn — must pump the async driver
 /// through `UiRealm::pump_background`, which clears the `frame_scheduled`
-/// latch before polling. Its order is pinned by `flui-runtime`'s
-/// `pump_background_clears_the_frame_latch_before_polling`; this pins that
-/// every arm reaches it. An arm that skips it silently stops a spawned future
-/// from advancing while the app is backgrounded.
+/// latch before polling; this pins that every arm reaches it. An arm that
+/// skips it silently stops a spawned future from advancing while the app is
+/// backgrounded.
 ///
 /// Red-check: delete the `realm.pump_background();` call from the desktop
 /// `PumpAsync` arm and this fails (found 4, not 5).

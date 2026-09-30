@@ -15,16 +15,11 @@
 //! use) — see `radio.rs`'s module docs for why no monomorphic fallback was
 //! needed.
 //!
-//! **Not covered here** (see `radio.rs`'s own unit tests instead, since
-//! neither needs a render tree): the M3 default token-table branch
-//! order/combined-state pins, and the widget -> theme -> default tier
-//! precedence + `active_color`'s `!Disabled && Selected` gate — both
-//! exercised directly against `resolve_radio_ring_color` (extracted out of
-//! `build` specifically so this cascade is unit-testable without mounting
-//! a widget tree; see `theme_tier_beats_the_m3_default_when_no_widget_override_is_set`/
-//! `widget_override_is_ignored_when_disabled_even_if_selected`), plus `RadioPainter`'s own
-//! paint-invocation proof (`inner_dot_is_present_only_when_selected`, a
-//! real `Canvas`/`DisplayList` recording).
+//! **Not covered here:** the M3 default token-table branch
+//! order/combined-state values, the widget -> theme -> default tier
+//! precedence and `active_color`'s `!Disabled && Selected` gate (computed by
+//! `resolve_radio_ring_color`, outside `build`), and `RadioPainter`'s paint
+//! output. No test asserts them.
 
 use crate::common;
 

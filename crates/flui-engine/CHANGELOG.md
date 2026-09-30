@@ -104,8 +104,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`Renderer`** holds `lease`, `config`, `painter`, `offscreen` as
   non-`Option` fields; `GpuStackOrigin`, `new_offscreen`, and the
   `device`/`queue`/`surface`/`surface_config` getters are deleted.
-  `render_scene_content` returns `EngineResult` and runs end-of-frame
-  maintenance on the error path. `reconfigure_surface` returns `()`.
+  The swapchain frame's content step (`FrameSteps::content`) returns
+  `EngineResult` and runs end-of-frame maintenance on the error path. `reconfigure_surface` returns `()`.
 - **`SurfaceLease::release`** returns a `#[must_use] Released` token that
   `replace_surface` consumes; the surface/target drop order is a type
   obligation, not a comment.
@@ -281,8 +281,8 @@ one states what the thing is without opening the file:
   surface lacks `COPY_SRC`. Per-draw `Paint.blendMode` for shapes (Porter-Duff). (#224,
   #251, #252, #254, #255, #256, #257)
 - **C-IR record/replay architecture**: a `GpuReplay::submit` record/replay split,
-  `command_ir` IR types, a **deterministic-replay A/B gate** + IR-purity witness, and a
-  GPU timestamp profiler (`wgpu-profiler` 0.27). (#225, #242–#249)
+  `command_ir` IR types, an IR-purity witness, and a GPU timestamp profiler
+  (`wgpu-profiler` 0.27). (#225, #242–#249)
 - **Device-loss detection + recovery** on the renderer. (#217)
 - Windowed GPU filter demos `examples/filter_demo.rs` and `examples/color_filter_demo.rs`
   (built via `SceneBuilder`'s programmatic filter producers). (#276, #278)

@@ -48,9 +48,8 @@ impl StatelessView for IconThemeProbe {
 /// The middle cascade tier, proven end to end: a configured
 /// `icon_button_theme.style.foreground_color` must reach the icon's
 /// `IconTheme` — the same coalesce `resolve_property` performs for
-/// `IconButton::build`'s widget-level override (see
-/// `a_style_foreground_color_override_reaches_the_icons_icon_theme` below),
-/// now with a theme-tier value and no widget-level override in the way.
+/// `IconButton::build`'s widget-level override, here with a theme-tier value
+/// and no widget-level override in the way.
 pub fn icon_button_theme_slot_reaches_the_icons_icon_theme() {
     let themed_color = Color::rgb(30, 40, 50);
     let captured = Rc::new(RefCell::new(None));

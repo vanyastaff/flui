@@ -17,10 +17,10 @@
 //! `runtime.rs`) rather than reached ambiently. There is no process-global
 //! graph left to alias, so nothing enforces at-most-one instance any more —
 //! any number of realms may be constructed and driven concurrently, on one
-//! thread or several (see `two_realms_coexist_same_thread` and
-//! `two_realms_two_threads_no_shared_state` below). Each incarnation still
-//! gets a fresh generational [`RealmId`], so results stamped for a dead
-//! runtime are droppable by identity, not by convention.
+//! thread or several (see `dropping_realm_a_cannot_wake_realm_b` and
+//! `two_realms_two_threads_no_shared_state` in the tests). Each incarnation
+//! still gets a fresh generational [`RealmId`], so results stamped for a
+//! dead runtime are droppable by identity, not by convention.
 
 mod presentation_lifecycle;
 use presentation_lifecycle::HostLifecycle;

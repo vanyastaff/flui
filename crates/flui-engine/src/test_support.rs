@@ -11,8 +11,8 @@
 //! and scene builders stay local to their suites.
 //!
 //! Two device flavours exist on purpose:
-//! - [`test_device_and_queue`] / [`test_device`] panic when no adapter is
-//!   present — for suites that only run on GPU-enabled hosts.
+//! - [`test_device_and_queue`] panics when no adapter is present — for
+//!   suites that only run on GPU-enabled hosts.
 //! - [`try_test_device_and_queue`] returns `None` instead — for suites whose
 //!   tests self-skip on hosts without a usable adapter.
 //!

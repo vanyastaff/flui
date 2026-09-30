@@ -1086,10 +1086,8 @@ mod tests {
     // self-consistent), so `first == second` can still hold even though
     // `now` was never actually the value the test advanced the manual clock
     // to. `now` must be made LOAD-BEARING in the decision -- a configured
-    // throttle is what `in_flight_and_throttle_are_independent_backpressure_
-    // sources`/`throttled_interval_skips_with_backpressure_reason` above
-    // already use for exactly this reason -- and the expectation must be an
-    // ABSOLUTE, hand-computed sequence, not just "the two runs agree".
+    // throttle does that -- and the expectation must be an ABSOLUTE,
+    // hand-computed sequence, not just "the two runs agree".
     // ----------------------------------------------------------------
 
     // ----------------------------------------------------------------

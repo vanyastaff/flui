@@ -295,13 +295,7 @@ struct AnimationControllerInner {
     /// `Option<TickerCompleter>` so its displaced value reaches
     /// [`AnimationController::finish`] instead. `Option<T>` does not
     /// inherit `T`'s `#[must_use]`, so nothing in the compiler catches a
-    /// dropped binding here — the backstop is the source-guard test in this
-    /// file's `tests` module
-    /// (`ticker_completer_resolution_never_bypasses_the_finish_chokepoint`),
-    /// checked per statement (comments stripped, rustfmt-wrapped chains
-    /// rejoined) for a direct assignment to this field, an unbound
-    /// replace-or-take call on it, or any `TickerCompleter`/`TickerDelivery`
-    /// call — bare, `let _ =`-discarded, or `drop(..)`-wrapped.
+    /// dropped binding here.
     active_run: Option<TickerCompleter>,
 
     /// Latches the "received a non-finite value" warning so a poisoned
@@ -2273,9 +2267,7 @@ impl AnimationController {
     /// `TickerDelivery::deliver` is called from nowhere else in this file:
     /// every site that obtains one from [`TickerCompleter::complete`]/
     /// [`cancel`](TickerCompleter::cancel) hands it here instead of
-    /// delivering it itself, which is what lets one source-guard test
-    /// (`ticker_completer_resolution_never_bypasses_the_finish_chokepoint`) cover
-    /// every call site in this file at once. Status fires BEFORE delivery:
+    /// delivering it itself. Status fires BEFORE delivery:
     /// a new run's status is observable before the run it displaced reports
     /// its own cancellation, matching the order a caller sees them settle.
     ///

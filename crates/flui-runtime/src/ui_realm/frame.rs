@@ -938,13 +938,7 @@ impl UiRealm {
         // neither of which a bare running controller with no other
         // tree-visible effect keeps true — that clobber is a genuine,
         // silent stall: the controller never receives another tick after
-        // its anchor frame. Confirmed red before this fix, green after, by
-        // `runner.rs`'s
-        // `a_running_controller_with_no_other_dirty_state_keeps_producing_across_the_real_wake_action_gate`,
-        // which drives the exact `record_compositor_tick` -> dirty-gate ->
-        // `render_frame` sequence `bootstrap_desktop`'s closure
-        // uses, not `draw_frame_entered` called directly (which never
-        // exercises `wake_action` at all and could not have caught this).
+        // its anchor frame.
         //
         // Marks a fresh `Animation` demand here (this pump's own mask was
         // already cleared by the produce above) specifically so

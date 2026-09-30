@@ -1,10 +1,9 @@
 //! Ergonomic [`SliverConstraints`] construction for tests.
 //!
-//! [`SliverConstraints`] is a wide plain-data struct; building one by hand
-//! is noisy and was duplicated as `vertical_constraints` /
-//! `horizontal_constraints` helpers across the sliver tests. This module
-//! offers a small builder that starts from a sensible viewport and lets a
-//! test override only the fields it cares about.
+//! [`SliverConstraints`] is a wide plain-data struct and building one by
+//! hand is noisy. This module offers a small builder that starts from a
+//! sensible viewport and lets a test override only the fields it cares
+//! about.
 //!
 //! The axis pair is derived for you: [`vertical`] scrolls top-to-bottom
 //! with a left-to-right cross axis, [`horizontal`] scrolls left-to-right

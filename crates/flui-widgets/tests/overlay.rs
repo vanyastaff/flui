@@ -13,12 +13,8 @@
 //! (red by design — see below), `'OverlayEntries do not rebuild when opaque
 //! entry is added'` (same), `'Can use Positioned within OverlayEntry'`,
 //! `'asserts when remove is called twice'`. Expected values are read from
-//! `overlay.dart`, not from running this code. These 14 of the 43 oracle
-//! cases are everything this suite reasonably ports; `tests/parity/
-//! overlay_test.rs`'s module doc carries the full 43-case accounting —
-//! every case ported, cited, or named out of scope with a reason — since
-//! almost none of the remaining 29 are reachable through the crate's public
-//! API at all.
+//! `overlay.dart`, not from running this code. Almost none of the remaining
+//! oracle cases are reachable through the crate's public API at all.
 //!
 //! # Surface
 //!
@@ -26,8 +22,7 @@
 //! (`insert`/`rearrange`/`InsertPosition`, ADR-0076) are public. The entry
 //! list is read back through the temporary test-access probe
 //! `flui_widgets::__test_access::OverlayProbe` (ADR-0083 §4). The private
-//! onstage plan and `OverlayScope`'s notification predicate keep unit tests in
-//! `src/overlay/tests.rs`.
+//! onstage plan keeps a unit test in `src/overlay/tests.rs`.
 
 // ADR-0027: these tests capture owner-local handles in shared cells. The
 // library carries the same lint expectation; an integration test is a

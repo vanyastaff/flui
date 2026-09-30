@@ -16,7 +16,7 @@
 //! reaches them through `route.overlayEntries` (`navigator.dart:4151`). FLUI
 //! cannot: the route lives behind `Box<dyn ErasedRoute>` inside `RouteHistory`,
 //! and exposing overlay entries there would break the route stack's pure-data
-//! invariant, which `route_stack_flush_is_pure_data` enforces.
+//! invariant.
 //!
 //! So the `NavigatorState` keeps the entries, in a `RouteId -> OverlayEntry` map
 //! it maintains alongside the stack. The route only supplies the *builder*. The

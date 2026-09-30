@@ -372,11 +372,10 @@ impl RenderContainer {
     /// * the third shape is reachable only under tight additional
     ///   constraints, where `min == max` makes every candidate coincide.
     ///
-    /// Collapsing the stack therefore collapses the branch too. The three
-    /// Flutter shapes are diffed against `RenderContainer` AND against each
-    /// other — including the placeholder forced under the tight additional
-    /// constraints Flutter itself never builds it under — by
-    /// `harness_container_childless_matches_each_flutter_shape_it_replaces`.
+    /// Collapsing the stack therefore collapses the branch too. The resulting
+    /// size is pinned by
+    /// `harness_container_childless_fills_bounded_and_collapses_unbounded`;
+    /// no test diffs it against the three Flutter shapes themselves.
     fn childless_content_size(constraints: &BoxConstraints) -> Size {
         let width = if constraints.has_bounded_width() {
             constraints.max_width

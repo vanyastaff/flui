@@ -541,8 +541,8 @@ pub(crate) struct SavedLayer {
 /// `TextureView` / `Buffer` are `Clone` in wgpu 30 (ref-counted handles), so
 /// only a `PooledTexture` — this crate's owned texture, `!Clone` because it
 /// returns its slot on `Drop` — is barred by the derive. Textures are acquired
-/// at replay, never stored here; the deterministic-replay A/B test is the
-/// runtime evidence that replay leaves the IR unchanged.
+/// at replay, never stored here. No test checks at run time that replay
+/// leaves the IR unchanged.
 #[derive(Debug, Clone)]
 pub(crate) struct DrawSegment {
     /// Rectangle instance batch

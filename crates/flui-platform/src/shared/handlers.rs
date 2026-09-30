@@ -145,8 +145,8 @@ impl PlatformHandlers {
 
     /// Consult the exit-policy hook (see [`Self::exit_policy`]'s doc). `true`
     /// when unset — the pre-#555 unconditional "last window closed -> exit"
-    /// default a real native backend (winit) had. Only a storage-level test
-    /// calls this directly today: winit's own `CloseRequested` handling
+    /// default a real native backend (winit) had. Nothing calls this
+    /// directly: winit's own `CloseRequested` handling
     /// leases the hook out of the lock first (`WinitPlatform::
     /// lease_exit_policy_hook`) rather than calling this while the lock is
     /// held. The headless backend does NOT use this method at all — its own
@@ -168,9 +168,7 @@ impl PlatformHandlers {
     /// this method takes `&self` and calling it would keep the platform
     /// state lock held for the hook's entire re-entrant call — see
     /// [`Self::wake_deadline`]'s own doc for why that ordering matters.
-    /// Only a storage-level test calls this directly today
-    /// (`set_wake_deadline_hook_installs_into_the_shared_handler_slot`,
-    /// `flui-platform/src/platforms/winit/platform.rs`), the same posture
+    /// Nothing calls this directly, the same posture
     /// [`Self::invoke_exit_policy`] documents for itself above.
     #[inline]
     pub fn invoke_wake_deadline(&self) -> Option<web_time::Instant> {

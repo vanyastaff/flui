@@ -347,9 +347,9 @@ In place with moves 2 and 3:
   normal and build dependencies are `flui-sdk` and `tracing`; the kind rule above fails
   `cargo xtask workspace` on any other framework edge, and neither keeps an
   `allowed-dependents` list.
-- **Derives through the SDK.** `sdk_consumers_derive_through_the_sdk_even_beside_the_facade` in
-  `tests/facade_consumer.rs` builds a consumer on `flui-sdk` alone (plain and renamed) and one
-  with the facade as a dev-dependency, each using the FLUI derives.
+- **Derives through the SDK.** A consumer on `flui-sdk` alone (plain and renamed), and one with
+  the facade as a dev-dependency, each builds with the FLUI derives. **Unasserted:** no test pins
+  this.
 
 In place with move 4 (devtools):
 

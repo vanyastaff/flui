@@ -183,9 +183,9 @@ pub fn paint_box_decoration(
     //
     // The test is `== 0`, not `<= 0`. A rect whose min exceeds its max is
     // INVERTED, not empty, and this module deliberately normalizes those
-    // through `shortest_side`'s `.abs()` — `circle_zero_size_and_negative_area_rects_do_not_panic`
-    // pins an inverted 100x100 resolving to the same r=50 circle an upright
-    // one gives. A signed test would have swallowed that whole case.
+    // through `shortest_side`'s `.abs()`, so an inverted 100x100 resolves to
+    // the same r=50 circle an upright one gives. A signed test would have
+    // swallowed that whole case.
     let paints_no_area = rect.width() == 0.0 || rect.height() == 0.0;
     if paints_no_area {
         // fall through to the border/shadow/image passes

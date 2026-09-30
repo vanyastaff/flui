@@ -6,18 +6,16 @@
 //! `#[path]`-includes the exact tree `examples/material_demo/main.rs` runs
 //! (not a duplicate) and mounts it through `flui_testing::HeadlessBinding`'s
 //! public surface, then drives it the way an app author's fingers would: tap
-//! the floating action button, fill and dismiss its dialog, tap a card,
-//! push/pop the settings route, drag the list — asserting on the resulting
-//! render tree, not merely "no panic".
+//! a card, push the settings route from the app bar and pop it with the back
+//! button — asserting on the resulting render tree, not merely "no panic".
 //!
 //! This test lives in the root crate (not `flui-material`'s own `tests/`)
 //! for the same reason `tests/vertical_slice_demo.rs` does: it re-bootstraps
 //! a headless tree from `flui-view`/`flui-rendering`/`flui-testing`'s public
 //! API only, mirroring `HeadlessBinding`'s own documented mount sequence.
-//! Every helper below (`tap`/`drag_*`/`find_text`/`absolute_position`/
-//! `advance_gesture_clock`) is therefore duplicated from
-//! `tests/vertical_slice_demo.rs` rather than shared — neither test crate
-//! can see the other's private helpers.
+//! Every helper below (`tap`/`find_text`/`absolute_position`) is therefore
+//! duplicated from `tests/vertical_slice_demo.rs` rather than shared — neither
+//! test crate can see the other's private helpers.
 //!
 //! Honesty notes (Definition of Done) — what this app does **not** exercise,
 //! restated from `tree.rs`'s module doc: ink ripple/splash visuals (`InkWell`
@@ -49,15 +47,11 @@ use flui_testing::HeadlessBinding;
 use flui_testing::bootstrap::{MountOptions, MountOwners};
 use flui_widgets::{FocusRoot, GestureArenaScope, MediaQuery, MediaQueryData, VsyncScope};
 
-/// The mounted root's logical width — wide enough for a card row, narrow
-/// enough that the FAB's end-float offset from the trailing edge is easy to
-/// pin down exactly (see [`FAB_MARGIN`]/`FAB_SIZE` in
-/// `scaffold_mounts_with_app_bar_at_top_and_fab_at_the_end_float_position`).
+/// The mounted root's logical width — wide enough for a card row.
 const ROOT_WIDTH: f64 = 480.0;
 /// The mounted root's logical height — tall enough to show several cards but
 /// short enough that [`tree::INITIAL_ITEM_COUNT`] cards (at
-/// [`tree::ITEM_EXTENT`] each) genuinely overflow it, so the drag-to-scroll
-/// test exercises a real overflow.
+/// [`tree::ITEM_EXTENT`] each) overflow it, as they do on a phone.
 const ROOT_HEIGHT: f64 = 800.0;
 
 fn root_constraints() -> BoxConstraints {
@@ -257,35 +251,8 @@ fn back_button_glyph_text() -> String {
 }
 
 // ============================================================================
-// (1) Scaffold slots present: AppBar at the top, FAB at the endFloat position
-// ============================================================================
-
-// ============================================================================
-// (2) Tapping the FAB opens the dialog; the page beneath becomes
-//     un-hit-testable while the dialog's barrier covers it
-// ============================================================================
-
-// ============================================================================
-// (3) Dialog "Add" appends an item; the home route's state survives the
-//     round trip
-// ============================================================================
-
-// ============================================================================
-// (3b) Add shows a snack bar via the scope-mounted ScaffoldMessenger, which
-//      auto-dismisses after its own display duration
-// ============================================================================
-
-// ============================================================================
-// (4) Dialog "Cancel" dismisses without appending
-// ============================================================================
-
-// ============================================================================
-// (5) Tapping a Card updates the selected-item display
-// ============================================================================
-
-// ============================================================================
-// (6) The app bar action pushes route 2; the implied BackButton pops back
-//     with home state intact
+// The app bar action pushes route 2; the implied BackButton pops back
+// with home state intact
 // ============================================================================
 
 #[test]

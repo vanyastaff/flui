@@ -487,8 +487,7 @@ impl ViewState<ModalScope> for ModalScopeState {
 
 /// A route that covers the routes below it with a barrier and a page.
 ///
-/// Private: `modal_route_is_not_exported` keeps it that way until its parity +
-/// sign-off gate.
+/// Private: not exported until its parity + sign-off gate.
 pub struct ModalRoute<T> {
     transition: TransitionRoute<T>,
     inner: Arc<ModalInner>,

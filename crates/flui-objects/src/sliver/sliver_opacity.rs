@@ -120,8 +120,8 @@ impl RenderSliverOpacity {
     /// so demanding compositing there is pure overhead with no visual
     /// effect. The full rationale is recorded once, on the sibling that
     /// first made the call —
-    /// see `proxy::animated_opacity`'s `is_repaint_boundary` comment. Oracle
-    /// for the divergent value: `opaque_and_transparent_constructors` below.
+    /// see `proxy::animated_opacity`'s `is_repaint_boundary` comment. No test
+    /// asserts the divergent value.
     #[inline]
     pub fn needs_compositing(&self) -> bool {
         self.always_needs_compositing || (self.alpha > 0 && self.alpha != 255)
@@ -175,11 +175,8 @@ impl RenderSliverOpacity {
         //
         // FLUI has the path here because a retained capture is a flat list and
         // a node's own effect layers are addressable INSIDE the enclosing
-        // boundary's capture, so nothing is promoted. Oracles (net-new — no
-        // upstream test drives this setter, so nothing was replaced):
-        // `a_sliver_alpha_change_updates_the_layer_without_repainting_the_subtree`
-        // and `a_sliver_layer_update_is_written_back_into_the_retained_capture`
-        // (`flui-rendering/tests/retained_boundary_layers.rs`).
+        // boundary's capture, so nothing is promoted. No test drives this
+        // setter through the layer-update path, here or upstream.
         let mut impact = flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE;
         if old_needs_compositing != self.needs_compositing() {
             // Crossing the layered threshold changes which layers exist, not
@@ -204,9 +201,7 @@ impl RenderSliverOpacity {
         // so with the flag set it is false on both sides of the crossing and
         // nothing is added here — while `paint_effects` keeps returning an
         // opacity effect at alpha 0, so the layer survives and the patch has
-        // a slot after all. That is the acceleration
-        // `an_always_compositing_sliver_updates_its_layer_even_when_going_invisible`
-        // pins.
+        // a slot after all. No test pins that acceleration.
         //
         // This is the honest impact rather than the last line of defence. The
         // paint phase refuses to graft when a node that requested an update

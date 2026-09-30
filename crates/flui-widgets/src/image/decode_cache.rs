@@ -22,9 +22,7 @@
 //! [`ImageCacheKey`]: the second caller for a key already loading receives
 //! the SAME shared future rather than starting a second load. This is what
 //! makes two `Image` widgets mounted with the same provider key issue exactly
-//! one load between them (test:
-//! `two_images_same_key_both_decode_through_the_shared_cache` in
-//! `tests/image_async.rs`).
+//! one load between them.
 //!
 //! # Abandoned loads do not leak
 //!

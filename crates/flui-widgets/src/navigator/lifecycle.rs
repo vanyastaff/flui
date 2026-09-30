@@ -18,8 +18,7 @@
 //!
 //! So `#[derive(PartialOrd, Ord)]` over the variants — which orders by
 //! declaration — reproduces them as range checks. Reordering a variant silently
-//! changes four predicates at once; `lifecycle_order_matches_flush_ranges` pins
-//! every membership.
+//! changes four predicates at once, and no test pins the memberships.
 //!
 //! # Two of Flutter's sixteen states are deliberately absent
 //!

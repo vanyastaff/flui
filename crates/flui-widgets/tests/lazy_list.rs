@@ -1,6 +1,6 @@
 //! Integration tests for the lazy-sliver backend.
 //!
-//! Exercises the 7 correctness paths the single-node `LeafBox` harness missed.
+//! Exercises the correctness paths the single-node `LeafBox` harness misses.
 //! Each test uses the headless frame driver (`pump_frame`) which, since the
 //! child-manager wiring landed, calls `service_child_requests` after `run_frame` — so two `tick` calls
 //! are enough to settle a visible window: the first dispatches the child-build
@@ -26,48 +26,6 @@ use std::sync::Arc;
 use crate::common::{LaidOut, lay_out, tight};
 use flui_view::ViewExt;
 use flui_widgets::prelude::*;
-
-// ============================================================================
-// Test 1 — basic settle: all visible items built
-// ============================================================================
-
-// ============================================================================
-// Test 1b — composite (non-render) children settle and carry their index
-// ============================================================================
-
-// ============================================================================
-// ============================================================================
-// Test 2 — None-at-K caps the build count
-// ============================================================================
-
-// ============================================================================
-// Test 3 — multi-node child view (subtree build + subtree evict soundness)
-// ============================================================================
-
-// ============================================================================
-// Test 4 — third tick is idempotent (build-count invariant)
-// ============================================================================
-
-// ============================================================================
-// Test 5 — host unmount cleans up all lazy children
-// ============================================================================
-
-// ============================================================================
-// Test 6 — convergence: items taller than estimate reach a fixed point
-// ============================================================================
-
-// ============================================================================
-// Test 7 — off-band eviction is bounded (no ABA double-remove)
-// ============================================================================
-
-// ============================================================================
-// Repaint boundaries per item (Flutter parity)
-// ============================================================================
-
-// ============================================================================
-// Same-frame materialisation — the band a layout pass requests is built,
-// laid out, and painted in that same frame
-// ============================================================================
 
 // ============================================================================
 // Stateful items — init on entering the band, dispose on leaving it
@@ -303,10 +261,6 @@ pub(crate) fn lazy_list_view_builder_exhausted_pass_budget_defers_the_rest_to_th
 }
 
 // ============================================================================
-// GlobalKey'd items — the per-item repaint boundary must not claim the key
-// ============================================================================
-
-// ============================================================================
 // Keyed identity — insert, reorder, duplicate keys, and a GlobalKey graft
 // ============================================================================
 
@@ -439,7 +393,3 @@ pub(crate) fn lazy_list_view_builder_keyed_row_moving_with_the_viewport_keeps_st
         "row 1's state must be created once and carried to its new index"
     );
 }
-
-// ---------------------------------------------------------------------------
-// Keep-alive (#835)
-// ---------------------------------------------------------------------------

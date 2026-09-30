@@ -1,6 +1,5 @@
-//! Tests for `AbsorbPointer` — a layout pass-through (mirroring
-//! `tests/clip.rs`/`tests/decorated_box.rs`'s convention for paint/no-op
-//! proxy widgets) whose real behavior is hit-test absorption: when
+//! Tests for `AbsorbPointer` — a layout pass-through whose real behavior is
+//! hit-test absorption: when
 //! `absorbing = true` (the default), its subtree must never receive a hit,
 //! not even a `GestureDetector` directly beneath it.
 

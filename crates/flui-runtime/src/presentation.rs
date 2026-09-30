@@ -640,8 +640,7 @@ impl PresentationState {
         // Once a realm hosts more than one presentation, each needs its OWN
         // window poked when IT dirties — never a sibling's. The poke is gated
         // on `ensure_visual_update`'s return so it fires only when the
-        // scheduler actually accepted the demand. See
-        // `redraw_request_from_a_does_not_wake_bs_window`.
+        // scheduler actually accepted the demand.
         let scheduler = capabilities.scheduler.downgrade();
         let redraw_window = Arc::downgrade(&window);
         pipeline.with_mut(|owner| {
@@ -1339,9 +1338,9 @@ impl PresentationState {
     /// dispatch site depends on an explicit, production-checked invariant:
     /// `UiRealm::drain_commands` (the sole caller) only runs at a frame
     /// boundary, so nothing should still hold the pipeline checked out by
-    /// the time a semantics-action handler runs. The `ui_realm` test
-    /// `semantics_action_commits_on_the_owner_after_releasing_the_pipeline_lock`
-    /// runs through this assert.
+    /// the time a semantics-action handler runs. The `flui-testing` test
+    /// `an_action_sent_off_thread_is_applied_by_the_next_harness_pump` runs
+    /// through this assert.
     pub(crate) fn dispatch_semantics_action(
         &self,
         request: SemanticsActionRequest,

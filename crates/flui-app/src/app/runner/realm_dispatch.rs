@@ -1991,8 +1991,7 @@ pub(super) fn teardown_platform_realm() {
     // service persists its final state. Ordering is load-bearing: the
     // execution shutdown below cancels the pools' root token and
     // hard-drops any future still running at its next await point, so a
-    // service joined AFTER that would lose its flush window every time —
-    // pinned by `teardown_gives_services_their_flush_window_before_the_pools_close`.
+    // service joined AFTER that would lose its flush window every time.
     let report = APP_RUNTIME.with(|slot| {
         slot.borrow_mut()
             .shutdown_lifecycles(SERVICE_SHUTDOWN_DEADLINE)

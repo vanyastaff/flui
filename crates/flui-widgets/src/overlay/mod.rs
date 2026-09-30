@@ -354,7 +354,7 @@ impl OverlayHandle {
     ///
     /// Two of Flutter's guards are ported: the empty early-return (`:830`), and
     /// the `listEquals` short-circuit (`:833`) that makes a no-op reorder cost
-    /// **no rebuild** — pinned by `overlay_rearrange_to_the_same_order_is_a_noop`.
+    /// **no rebuild**.
     ///
     /// **Deferred:** the `above:` / `below:` placement of the unmentioned group.
     /// Nothing needs it yet; `Navigator` never passes either.

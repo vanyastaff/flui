@@ -527,8 +527,7 @@ impl ExecutionServices {
                 // Cancellation point: shutdown resolves this early, dropping
                 // `future` (and running its destructors) at whatever await
                 // point it had reached. Load-bearing especially for HOST
-                // pools, whose tasks FLUI cannot drop any other way — see
-                // `shutdown_cancels_work_handed_to_host_pools`.
+                // pools, whose tasks FLUI cannot drop any other way.
                 let _ = cancel.run_until_cancelled(future).await;
             });
             match &self.backend {
@@ -774,7 +773,7 @@ impl DeterministicExecutors {
             // lock guard drops BEFORE the job runs — a `while let` scrutinee
             // temporary would live across the loop body, and a job that
             // spawns (same lock) would then deadlock on this non-reentrant
-            // mutex. Pinned by `deterministic_job_may_spawn_during_drive`.
+            // mutex.
             loop {
                 let job = self.inner.jobs.lock().pop_front();
                 let Some(job) = job else { break };
@@ -936,8 +935,8 @@ mod tests {
     /// The frame lane needs no pool: with the compute admission window full
     /// and every worker parked, frame-thread work (an `AsyncDriver` poll on
     /// this thread) still completes immediately. This pins the structural
-    /// half of "background work cannot starve frame-required compute" — the
-    /// sizing half is `compute_pool_sizing_leaves_owner_thread_headroom`.
+    /// half of "background work cannot starve frame-required compute"; the
+    /// sizing half (`default_compute_worker_count`'s headroom) has no test.
     fn frame_lane_makes_progress_while_background_lanes_are_saturated() {
         let services = ExecutionServices::with_limits(None, 2, 2);
         let gate = Arc::new(AtomicBool::new(false));

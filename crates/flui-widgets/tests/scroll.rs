@@ -212,8 +212,10 @@ pub(crate) fn scrollable_jump_to_during_animate_to_cancels_it_synchronously() {
     let mut scoped = fling_scoped(widget, vsync, tight(300.0, 300.0));
 
     controller.animate_to(1000.0, Duration::from_millis(300), Arc::new(Curves::Linear));
-    // Three pumps of warm-up — see `scrollable_animate_to_reaches_the_target_through_the_curve`'s
-    // doc for why this needs one more pump than a direct `animate_with` fling.
+    // Three pumps of warm-up, one more than a direct `animate_with` fling:
+    // `animate_to` queues a command, and pump 1's rebuild services it after
+    // pump 1's own controller tick; pump 2 anchors the new run at `t = 0`;
+    // pump 3 is the first tick that advances the value.
     scoped.pump_for(Duration::from_millis(16));
     scoped.pump_for(Duration::from_millis(16));
     scoped.pump_for(Duration::from_millis(16));

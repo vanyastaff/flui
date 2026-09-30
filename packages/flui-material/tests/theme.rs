@@ -1,8 +1,6 @@
 //! Integration test for [`Theme::of`] — the panicking ancestor accessor.
 //!
-//! `tests/inherited_theme.rs` already proves `Theme::maybe_of` finds the
-//! ancestor and returns `None` without one. `Theme::of` wraps the exact same
-//! lookup with `.expect(...)` — distinct code, so far exercised by nothing —
+//! `Theme::of` wraps `Theme::maybe_of`'s ancestor lookup with `.expect(...)`,
 //! and this file proves its success path returns the ancestor's data
 //! unchanged.
 //!
@@ -49,8 +47,7 @@ impl StatelessView for ThemeOfCapture {
 }
 
 /// `Theme::of` returns exactly the ancestor's data when a `Theme` is present
-/// — the success path of the panicking accessor, distinct from (and until
-/// now uncovered by) the `Theme::maybe_of` tests in `inherited_theme.rs`.
+/// — the success path of the panicking accessor.
 pub fn theme_of_panicking_accessor_returns_ancestor_theme_data() {
     let captured: Arc<Mutex<Option<ThemeData>>> = Arc::new(Mutex::new(None));
     // Sentinel primary color distinct from both presets so the assertion

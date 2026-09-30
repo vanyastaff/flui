@@ -50,9 +50,8 @@ The wire carries no serde ([ADR-0066](../../docs/adr/ADR-0066-display-list-comma
 `Paint` is interned per canvas: each `draw_*` scans a small `Vec<Arc<Paint>>`
 for an equal paint and shares the `Arc`. `Path` is copy-on-write
 (`Arc<Vec<PathCommand>>`), so recording a caller's path copies nothing.
-`DrawOp` is at most 128 bytes and `DrawCommand` 192, pinned by
-`draw_command_fits_its_budget`; `display_list_record` (criterion) measures
-the recording cost.
+`DrawOp` is at most 128 bytes and `DrawCommand` 192;
+`display_list_record` (criterion) measures the recording cost.
 
 `Canvas::finish` is infallible: an unbalanced save fires a `debug_assert`
 and a `tracing::warn!`, then the list ships as recorded, which is what
@@ -231,14 +230,11 @@ precisely the reason the guard was worth adding for `ColoredBox` in the first pl
 - Give `ColoredBox` its own render object so each class can carry its own guard — rejected as
   duplication for one boolean. `RenderColoredBox` exists but is `Leaf` arity, so it is not the
   analogue of Flutter's child-bearing `_RenderColoredBox` either.
-- Signed comparison (`<= 0`) instead of `== 0` — rejected after it broke
-  `circle_zero_size_and_negative_area_rects_do_not_panic`. A rect whose min exceeds its max is
+- Signed comparison (`<= 0`) instead of `== 0` — rejected. A rect whose min exceeds its max is
   INVERTED, not empty, and this module deliberately normalizes those through `shortest_side`'s
-  `.abs()`; the signed test swallowed that whole case.
+  `.abs()`; the signed test swallows that whole case.
 
-**Replacement test:** `harness_decorated_box_skips_the_fill_rect_at_zero_size_like_flutter`
-(`crates/flui-objects/tests/render_object_harness.rs`) covers all three degenerate shapes. The twin
-that pinned the old unconditional behaviour is deleted rather than left contradicting it.
+**Unasserted:** no test pins this.
 
 
 ### 7. `anti_alias` is a paint OPTION, not a `BoxDecoration` field
@@ -281,10 +277,7 @@ reason: it used to write the whole vector, which dropped the paint's bit, and di
 - A second `paint_box_decoration_aliased` entry point — rejected; two names for one operation, and
   it does not extend to the next option.
 
-**Replacement tests:** `harness_decorated_box_background_carries_the_anti_alias_flag` (render
-level, red when the flag is dropped between the render object and the canvas) and
-`colored_box_anti_alias_defaults_on_and_reaches_the_recorded_paint` (widget level, the two oracle
-cases from `basic_test.dart`, reading the composited layer tree's own `DrawRect`).
+**Unasserted:** no test pins this.
 
 **Test-support note:** the harness's paint summary
 (`flui_rendering::testing::snapshot::summarize_paint`) now prints ` aliased` for a paint that opted
@@ -374,12 +367,11 @@ guards the divergence in both directions: it fails if the walk is "fixed" to ski
 ever lands — which is the signal to retire this record rather than let it go stale. Its control
 asserts that an ABSENT primary still reaches the chain, so the stop is about presence and not about
 the chain being unread.
-Replacement coverage, per rule #1, in two tests because no single fixture gives both properties.
-`an_uninstalled_family_shapes_in_the_bound_generic_both_ways` pins which family a run shapes in,
-hermetically and in both fixture orders so that no load order satisfies it — but its fixture carries
-no emoji face, so it never observes the letters and the space landing apart.
-`oversized_space_from_an_emoji_face_is_closed` is the one that does: it asserts the red state
-(space above 1 em, on a different face from the letters) before asserting the fix. It is hermetic,
+Replacement coverage, per rule #1. Which family a run shapes in, in both fixture load orders so that
+no load order satisfies it, is **Unasserted:** no test pins this.
+`oversized_space_from_an_emoji_face_is_closed` observes the letters and the space landing apart: it
+asserts the red state (space above 1 em, on a different face from the letters) before asserting the
+fix. It is hermetic,
 because the face it needs — one carrying `' '` and no letters, with "Emoji" in the PostScript name
 so cosmic-text classifies it as one — is *generated*, not borrowed:
 `tools/decoy-face/generate.py` writes `decoy-wide-space.ttf`, whose space advance is fixed at 1.3 em
@@ -393,8 +385,9 @@ shipped font asset is a single-weight, non-monospaced, static face, so three arm
 were untestable against it. `probe-mono-{100,600}.ttf` is one monospaced family at two weights (the
 `face.monospaced` arm, and the CSS-versus-nearest tie-break, where 100 and 600 disagree at a W500
 request); `probe-variable-wght.ttf` carries an `fvar` `wght` axis spanning 100..900 over a
-`usWeightClass` of 400 (the variable-weight arm). Each of the three fails when its production arm is
-reverted; that was verified, not assumed.
+`usWeightClass` of 400 (the variable-weight arm). `requested_weights_resolve_to_ones_the_family_serves`
+(`tests/font_registration.rs`) resolves styles against them through `Shaper::resolve_font`; each of
+its rows fails when its production arm is reverted.
 
 
 ### 9. Intrinsic width probes skip `max_lines` truncation, floor at ellipsis
@@ -429,9 +422,9 @@ with the ellipsis as a lower bound when truncation can leave only that glyph str
 
 **Accepted trade-off:** `max_lines` does not shrink min/max intrinsic *width* below the
 shaped content (or the ellipsis floor). Parents that need truncated size use dry layout /
-committed layout. Locked by `max_lines_does_not_collapse_min_intrinsic_width`,
-`wide_ellipsis_floors_min_intrinsic_width`, and the matching `RenderParagraph` intrinsic
-tests.
+committed layout. The ellipsis floor is locked by `wide_ellipsis_floors_min_intrinsic_width`
+(`tests/text_painter_unit.rs`). For `max_lines` without an ellipsis, and for the `RenderParagraph`
+intrinsics: **Unasserted:** no test pins this.
 
 ### 10. Synthetic bold uses an interpolated stroke width
 
@@ -462,8 +455,7 @@ regular-only face would draw regular.
 **Accepted trade-off:** only `parley_text` applies it; the cosmic-text path
 keeps drawing no fake bold until ADR-0092 §10 step 5 moves paragraphs to
 Parley, which checks the strength against Skia's source per platform and
-against paragraph output. Locked by `synthetic_bold_adds_the_interpolated_width`
-(width gain at 9, 20, 36 and 144 px).
+against paragraph output. **Unasserted:** no test pins this.
 
 ### 11. The font collection is app-scoped and passed explicitly; each realm shapes through its own context
 
@@ -537,9 +529,7 @@ same fade stays red: `(255, 0, 0, 128)`. Between two opaque colours the result
 is Flutter's. When the mixed alpha is zero there is nothing to weight by and the
 channels interpolate straight, which keeps both endpoints exact. Everything that
 lerps a colour inherits it: border sides, shadows, decorations and gradient
-stops. Locked by `lerp_to_transparent_keeps_the_hue`
-(`tests/color_property.rs`) and `lerp_follows_flutter`
-(`src/styling/border.rs`).
+stops. **Unasserted:** no test pins this.
 
 ### 14. `TextPainter` measures through the context it is given
 
@@ -621,8 +611,8 @@ restricted third-party test font. Its static, non-monospaced W400/Normal metadat
 keeps the fallback tie with Roboto intact, and explicit `A`, `B`, `o`, and space
 coverage gives the `Ao Bo` probe real glyph IDs and positive advances. Empty
 outlines are sufficient for shaping metrics; no rasterization claim is made.
-Both fixture load orders remain asserted, and bypassing family resolution fails
-the family-selection regression. The four older generated fixtures are unchanged.
+No test loads it: the load-order regression it was made for is **Unasserted:** no test
+pins this. The xtask font gate's self-test still uses its bytes and its generator entry.
 
 `assets/fonts/inventory.toml` binds each font to reviewed bytes, source provenance,
 and complete local license/attribution texts. The font asset gate discovers

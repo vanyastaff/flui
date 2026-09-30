@@ -282,46 +282,45 @@ agent protocol from naming a widget-catalog type.
 
 ## Verification
 
-Landed with step one (`crates/flui-widgets/tests/router.rs` and the unit tests in
-`crates/flui-widgets/src/router/`):
+Landed with step one (`crates/flui-widgets/tests/router.rs`):
 
-- **Round trip, hand-written.** `route_path_round_trips_a_hand_written_routable` and
-  `parse_reports_no_match_and_bad_params` over a hand-written `Routable`.
-- **Nearest ancestor.** `nested_router_handle_targets_the_nearest_router`: a handle acquired
-  inside the inner `Router<R>` pushes to the inner stack and leaves the outer one unchanged.
-  `router_handle_without_a_router_is_no_router`: with no `Router` above, `NoRouter`.
+- **Round trip, hand-written.** `to_path` and `from_path` over a hand-written `Routable`, and
+  its `NoMatch`, `Param` and `Malformed` errors. **Unasserted:** no test pins this.
+- **Nearest ancestor.** A handle acquired inside the inner `Router<R>` pushes to the inner stack
+  and leaves the outer one unchanged; with no `Router` above, `NoRouter`. **Unasserted:** no
+  test pins this.
 - **Acquisition is typed.** The `compile_fail` doctest on `Router::handle`, beside a compiling
   twin that takes a `&dyn LifecycleContext`.
-- **Every push is addressable.** `pushing_a_page_route_under_a_router_is_not_addressable`: a
-  `PageRoute`, a `SimpleRoute` and a named route pushed through the facade are refused and the
-  stack and location are unchanged; `facade_pop_updates_the_router_location` pins that the
-  facade's pops reach the Router. `popup_routes_are_admitted_and_leave_the_location_alone` pins
-  the popup admission that lasts until step 7.
-- **Back-stack from a location.** `back_stack_is_the_matching_prefix_chain`,
-  `router_opens_at_a_location_with_its_back_stack`, `go_reconciles_only_the_diverging_tail`,
-  `go_adds_the_new_back_stack_beneath_the_new_top`.
+- **Every push is addressable.** A `PageRoute`, a `SimpleRoute` and a named route pushed through
+  the facade are refused and the stack and location are unchanged, and the facade's pops reach
+  the Router. **Unasserted:** no test pins this.
+  `popup_routes_are_admitted_and_leave_the_location_alone` pins the popup admission that lasts
+  until step 7.
+- **Back-stack from a location.** `router_opens_at_a_location_with_its_back_stack` (the chain of
+  matching prefixes, gaps skipped, and a location that fully matches nothing refused). `go`
+  reconciling only the diverging tail and adding the new back-stack beneath the new top:
+  **Unasserted:** no test pins this.
 
 Landed with step two:
 
 - **Derive round trip.** `derived_routable_round_trips` (`crates/flui-widgets/tests/routable_derive.rs`)
   is a property test over generated values of a derived route enum with multi-parameter,
-  string, literal-sibling and non-ASCII patterns; `derived_routable_reports_no_match_and_bad_params`,
-  `literal_segments_win_over_parameters` and `derived_back_stack_skips_gaps` pin the errors,
-  specificity and back-stack. `crates/flui-widgets/tests/routable_ui.rs` compiles the accepted
-  shapes (each asserting its round trip) and every rejection of §1 against its diagnostic; the
-  pattern parser, specificity order and conflict detection have unit tests in
+  string, literal-sibling and non-ASCII patterns. `crates/flui-widgets/tests/routable_ui.rs`
+  compiles the accepted shapes (each asserting its round trip; `basic.rs` and `multi_param.rs`
+  also pin the `NoMatch` and `Param` errors, `precedence.rs` the specificity) and every
+  rejection of §1 against its diagnostic; the back-stack is the trait's default, which the
+  derive keeps, pinned by `router_opens_at_a_location_with_its_back_stack`. The pattern parser,
+  specificity order and conflict detection have unit tests in
   `crates/flui-macros/src/derive_routable/pattern.rs`. The derive resolves through the facade,
-  a renamed owner (`tests/fixtures/facade_consumer.rs`) and a package on `flui-sdk` alone
-  (`sdk_consumers_derive_through_the_sdk_even_beside_the_facade` in `tests/facade_consumer.rs`).
+  a renamed owner and a package on `flui-sdk` alone. **Unasserted:** no test pins this.
 - **App root.** `crates/flui-widgets/tests/widgets_app_router.rs`:
-  `widgets_app_router_roots_the_app_in_its_router` (the app's root navigator is the Router's,
-  and it refuses a stray page), `widgets_app_router_navigates_by_handle_and_the_url_follows`,
-  `widgets_app_router_pages_see_localizations_and_builder`,
-  `rebuilt_widgets_app_router_keeps_its_stack` (a rebuilt app updates its Router in place),
+  `widgets_app_router_navigates_by_handle_and_the_url_follows` and
   `switching_widgets_app_from_home_to_router_releases_the_navigator` (the two forms are two view
-  types, so the switch remounts the shell and disposes its navigator),
-  `widgets_app_router_adds_no_focus_scope_above_the_router`, and the compile-fail case
-  `router_app_takes_no_navigator` in `crates/flui-widgets/tests/routable_ui.rs`.
+  types, so the switch remounts the shell and disposes its navigator), and the compile-fail case
+  `router_app_takes_no_navigator` in `crates/flui-widgets/tests/routable_ui.rs`. The app's root
+  navigator being the Router's (refusing a stray page), pages seeing the app's localizations and
+  builder, a rebuilt app updating its Router in place, and no focus scope added above the
+  Router: **Unasserted:** no test pins this.
 
 Still to land, each with its step:
 

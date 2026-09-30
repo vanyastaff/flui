@@ -318,8 +318,7 @@ build: its tier K forbids `flui-platform`, `winit`, `android-activity`, `ndk`, `
 `objc2-app-kit`, `objc2-ui-kit`, `wgpu`, `flui-engine` and `flui-app`, and no
 `reach-exceptions` entry excuses any of them.
 
-Two defects the realm core would have carried across are fixed with move 1, each pinned by a
-test that failed before the fix:
+Two defects the realm core would have carried across are fixed with move 1:
 
 - **A `GlobalKey` read inside its own presentation's frame deadlocked.** `WidgetsBinding` holds
   its own write lock across a frame, attach, detach and layout-builder build, and the registry
@@ -328,18 +327,14 @@ test that failed before the fix:
   presentation whose frame is running (a Flutter divergence recorded in `flui-view`'s
   `ARCHITECTURE.md`). This made the closing-presentation exclusion in
   `UiRealm::enter_for_close` redundant; move 4 deleted it, so a key of the closing
-  presentation now resolves while it detaches, before its teardown takes the lock
-  (`closing_presentations_own_key_resolves_while_it_detaches`). Tests:
-  `global_key_lookup_from_build_during_draw_frame_returns_instead_of_deadlocking`,
-  `global_key_in_a_sibling_binding_resolves_during_this_bindings_frame`,
-  `global_key_lookup_from_dispose_during_detach_returns_instead_of_deadlocking` (`flui-view`),
-  `drawer_style_state_read_during_the_realm_frame_does_not_deadlock` and
-  `state_read_across_presentations_during_a_segment_resolves` (`flui-app`).
+  presentation now resolves while it detaches, before its teardown takes the lock.
+  **Unasserted:** no test pins this. Tests:
+  `global_key_lookup_from_build_during_draw_frame_returns_instead_of_deadlocking` (`flui-view`)
+  and `state_read_across_presentations_during_a_segment_resolves` (`flui-runtime`).
 - **`ElementBase::depth` returned the sibling slot.** The tree now stamps the depth on the
   element whenever it sets a node's depth (`ElementBase::set_depth`), as Flutter's
-  `Element._depth` is set in `mount` and repaired in `_updateDepth`. Tests:
-  `element_depth_is_the_tree_depth_not_the_sibling_slot`,
-  `globalkey_retake_restamps_element_depth_for_the_moved_subtree`.
+  `Element._depth` is set in `mount` and repaired in `_updateDepth`. **Unasserted:** no test
+  pins this.
 
 ## Verification
 
@@ -361,11 +356,10 @@ driver adds on top is tested in `flui-testing` (`tests/headless_realm.rs`,
 - A grep-free structural check (done): a `reach-forbid` fact (ADR-0081 §2) that `flui-testing`
   is absent from `flui-widgets`' normal closure with all features, `reach-forbid = ["flui-testing"]`
   in `flui-widgets`' manifest. (`cargo tree -i` cannot state it: it errors on an absent package.)
-- A test that fails when the begin-frame phase is skipped: an animation controller driven through
-  `UiRealm::pump` with a manual clock advances its value between two frames
-  (`pump_advances_a_scheduler_ticker_between_two_pumps`); and one that fails when the pump does
-  not publish its clock: a `Vsync` controller lands exactly halfway after two pumps 50 ms apart
-  on the manual clock (`pump_ticks_vsync_controllers_at_the_frame_clocks_time`).
+- The begin-frame phase: an animation controller driven through `UiRealm::pump` with a manual
+  clock advances its value between two frames; and the pump publishing its clock: a `Vsync`
+  controller lands exactly halfway after two pumps 50 ms apart on the manual clock.
+  **Unasserted:** no test pins this.
 - The owner-turn regression test installs realms A and B, dispatches an A operation whose user
   callback synchronously requests B's close, and proves: A finishes first; B's close and
   Detached teardown run exactly once afterwards; B's address is gone; A remains live; and the

@@ -110,25 +110,15 @@ FLUI has no `separated` constructor yet; the threading landed first so that cons
 inherits a hook they must answer rather than a 1:1 assumption they must discover. The delegate-
 supplied rule (`semantic_index_callback`, `semantic_index_offset`) is still open on #837.
 
-**Replacement tests**, all in `crates/flui-widgets/tests/semantics.rs` and all asserting on the
-published AccessKit nodes rather than the framework configuration — the whole chain existed in
-pieces before this and connected to nothing, so the near end proves nothing about what a reader
-receives:
+**Unasserted:** no test pins this. A test for it asserts on the published AccessKit nodes rather
+than the framework configuration, since the near end proves nothing about what a reader receives,
+and covers three things: the set size lands on the item nodes and only on them, a lazy row carrying
+no wrapper still publishes its derived position, and an explicit index wins over the stamped one
+(declared indices the reverse of the stamped ones, so either wrong precedence fails).
 
-- `an_indexed_item_publishes_its_position_in_the_set` — the explicit `IndexedSemantics` path, and
-  the set size beside it. It asserts the size lands on the ITEM nodes and only on them, so a total
-  drifting onto the container — the first attempt's mistake, invisible to a reader querying a row —
-  fails rather than passing as "a size is published somewhere".
-- `a_lazy_child_publishes_its_position_without_an_indexed_semantics_wrapper` — the derived path,
-  on rows carrying no wrapper at all.
-- `an_explicit_index_overrides_the_one_the_sliver_stamped` — precedence. Its declared indices are
-  the REVERSE of the stamped ones, so it fails whichever way the precedence is wrong; with them
-  equal it would pass against both orders.
-
-Plus
 `harness_indexed_semantics_reports_its_index_and_only_republishes_on_change`
-(`crates/flui-objects/tests/render_object_harness.rs`), including that an unchanged index requests
-no semantics update.
+(`crates/flui-objects/tests/render_object_harness.rs`) pins the render object alone, including
+that an unchanged index requests no semantics update.
 ### A layout stamps the children it laid out; paint and hit-test skip the rest
 
 **Rule:** a multi-child render object that lays out a *subset* of its children — a lazy sliver's
@@ -213,12 +203,13 @@ and requeues nothing, so the stale capture is grafted and the update is gone for
 now evicts the capture alongside the flag, which also closes the pre-existing detached-subtree
 case it had only been warning about.
 
-**Replacement tests:** `a_child_dropped_from_a_later_layout_pass_stops_painting`,
-`…_stops_being_hit`, and `a_skipped_boundary_repaints_rather_than_grafting_a_stale_capture`
-(`crates/flui-rendering/tests/placed_generation_gate.rs`), each verified red with its own change
-reverted. Both need **two frames**: a child never laid out at all has size zero
-and paints nothing regardless, so a single-frame version passes with the gate removed — which the
-first draft did. `FrameRun::run_frame_again` is added for it.
+**Unasserted:** no test pins this. That covers the paint gate, the hit-test gate and the capture
+eviction; the semantics gate is pinned by
+`harness_placed_generation_gate_excludes_a_dropped_child_from_semantics`
+(`crates/flui-objects/tests/render_object_harness.rs`). A test for any of the three needs **two
+frames**: a child never laid out at all has size zero and paints nothing
+regardless, so a single-frame version passes with the gate removed. `FrameRun::run_frame_again`
+exists for it.
 
 ### A composited-layer update patches the enclosing capture; no node is promoted to a boundary
 
@@ -282,8 +273,7 @@ never whether the frame is correct.
    frame that grafts it to replay. Declining costs the outer boundary's reuse
    on those frames and keeps both captures consistent, because the outer
    re-captures the patched result on its way back out.
-   (`an_update_under_nested_boundaries_does_not_leave_the_inner_capture_stale`
-   is red without this, restoring the old alpha on the third frame.)
+   **Unasserted:** no test pins this.
 3. **The root boundary is never retained, so an effect whose only enclosing
    boundary is the root gets no fast path.** `run_paint` enters through
    `paint_subtree(root)` directly rather than the boundary-child arm that
@@ -292,13 +282,14 @@ never whether the frame is correct.
    not accelerated. A tree with any `RepaintBoundary` above the effect, which
    includes every per-item boundary in a list, is unaffected.
 
-**Replacement tests:** `an_alpha_change_updates_the_layer_without_repainting_the_subtree`,
-`a_layer_update_is_written_back_into_the_retained_capture` (three frames — a
-two-frame version cannot see a missing write-back),
-`a_structural_alpha_change_falls_back_to_a_repaint`,
-`a_repaint_in_the_same_frame_wins_over_a_layer_update`
+**Replacement tests:** `an_alpha_change_updates_the_layer_without_repainting_the_subtree`
+and `a_failed_pass_does_not_downgrade_a_real_repaint_to_an_update`
 (`tests/retained_boundary_layers.rs`), plus pixel equivalence against a forced
-repaint in the facade's `tests/composited_layer_update_readback.rs`.
+repaint in the facade's `tests/composited_layer_update_readback.rs`. The
+write-back into the stored capture (a test for it needs three frames — a
+two-frame version cannot see a missing write-back), the repaint fallback for a
+structural alpha change, and a same-frame repaint winning over a layer update
+outside a failed pass: **Unasserted:** no test pins this.
 
 **Where this diverges observably: the STATIC sliver opacity.** Upstream serves an
 alpha change with `markNeedsCompositedLayerUpdate()` exactly where the node is a
@@ -326,25 +317,22 @@ sliver case a path the reference does not have.
 Behaviour is unchanged in every other respect, and the structural transitions
 still repaint (`skip_paint` crossings and compositing-threshold crossings), so
 the edge cases upstream handles by repainting unconditionally are handled here
-by repainting deliberately. **Oracles:**
-`a_sliver_alpha_change_updates_the_layer_without_repainting_the_subtree` and
-`a_sliver_layer_update_is_written_back_into_the_retained_capture`
-(`tests/retained_boundary_layers.rs`). Net-new, not replacements: upstream has no
+by repainting deliberately. **Unasserted:** no test pins this. Upstream has no
 test that drives `RenderSliverOpacity.opacity` as a setter, so no Flutter
-coverage was dropped here.
+coverage is missing either.
 
-They are the first coverage of the update-only path over the Sliver protocol at
-all. What that buys is narrower than "the machinery is protocol-agnostic" and
-worth stating exactly: `RenderNode::paint_effects()`
+A test over the Sliver protocol would be the first coverage of the update-only
+path there at all. What that buys is narrower than "the machinery is
+protocol-agnostic" and worth stating exactly: `RenderNode::paint_effects()`
 (`crates/flui-rendering/src/storage/node.rs`) resolves `size` per protocol
 (box → committed `geometry().unwrap_or(Size::ZERO)`, sliver →
 `absolute_paint_size()`) and calls the render object's `paint_effects(size)`
 the same way in both arms, so every field of the value — opacity included —
-now rides the one protocol split, not a dispatch specific to alpha. What
-these two tests pin is unchanged: a sliver's `RenderSliver::is_repaint_boundary`
-is honoured by the layer-update walk — without it the walk reaches the viewport
-paint root and degrades to a plain repaint, which is exactly how both tests fail
-when the setter is reverted. The one place the protocols genuinely diverge is the
+now rides the one protocol split, not a dispatch specific to alpha. What such
+a test pins is that a sliver's `RenderSliver::is_repaint_boundary` is honoured
+by the layer-update walk — without it the walk reaches the viewport paint root
+and degrades to a plain repaint, which is how it fails when the setter is
+reverted. The one place the protocols genuinely diverge is the
 `size` argument `paint_effects` is called with (`geometry()` for a box,
 `absolute_paint_size()` for a sliver); `RenderSliverOpacity`'s `paint_effects`
 never sets `transform`, so the transform arm of `own_effect_layers` stays
@@ -387,14 +375,14 @@ Two things this costs, both deliberate:
    compositing layer per frame — a cost upstream's unconditional
    `markNeedsPaint` never incurs either.
 
-**Oracles** (net-new; upstream has no test driving these setters, so nothing was
-replaced): `a_transform_change_updates_the_layer_without_repainting_the_subtree`
-and `a_transform_layer_update_is_written_back_into_the_retained_capture` are the
-red-green pair; `a_patched_transform_subtree_matches_a_full_repaint_at_any_size`
-is the control that keeps the benchmark's flat update arm from also describing a
-patch that dropped the subtree; and
-`a_same_frame_layout_change_forces_the_repaint_a_transform_patch_relies_on`
-pins the invariant the whole thing rests on — see the next entry.
+**Oracles** (net-new; upstream has no test driving these setters): pixel
+equivalence against a forced repaint,
+`the_transform_update_path_and_a_repaint_produce_the_same_pixels`
+(`tests/composited_layer_update_readback.rs`). The layer-tree side — the
+update skipping the subtree repaint, its write-back into the stored capture, a
+patched subtree matching a full repaint at every benchmark size, and the
+same-frame layout invariant the next entry states: **Unasserted:** no test pins
+this.
 
 **And `RenderRotatedBox`.** Upstream's `quarterTurns` setter is `if
 (_quarterTurns == value) { return; } _quarterTurns = value;
@@ -422,19 +410,15 @@ constraints.
 **Why the captured origin stays valid.** Two things, not one. First,
 `perform_layout`, `compute_dry_layout`, all four intrinsic queries, and
 `compute_dry_baseline` read `quarter_turns` ONLY through `is_vertical()` (its
-parity) — never the exact value — pinned by a dedicated harness test rather
-than the type system, since nothing in `quarter_turns: i32` stops a future
-method from branching on the exact turn instead:
-`harness_rotated_box_layout_is_turn_blind_up_to_parity`
-(`flui-objects/tests/render_object_harness.rs`). A same-parity quadrant
+parity) — never the exact value. Nothing in `quarter_turns: i32` stops a
+future method from branching on the exact turn instead. **Unasserted:** no
+test pins this. A same-parity quadrant
 change therefore never re-enters `perform_layout` for the rotated box itself
 — the setter reports `COMPOSITED_LAYER_UPDATE`, not `LAYOUT`, so the pipeline
 never calls it — which answers "did the rotated box's OWN layout move its
 origin" trivially: no, it did not run. Second, "did something ELSE inside the
 boundary move it" is the general invariant the next entry below states for
-`RenderTransform` and pins with
-`a_same_frame_layout_change_forces_the_repaint_a_transform_patch_relies_on`:
-any same-frame layout change anywhere inside a boundary marks that boundary
+`RenderTransform`: any same-frame layout change anywhere inside a boundary marks that boundary
 needing paint, upgrading a queued `LayerUpdate` to a `Repaint`
 (`PaintQueue::enqueue` never downgrades) — so a sibling or ancestor that moved
 the rotated box's accumulated position forces a repaint, which recomputes the
@@ -443,7 +427,7 @@ the COMMITTED `geometry()` either way (`storage/node.rs`), and the matrix's
 third input, `child_size`, is a field
 `perform_layout` caches — the one input `RenderTransform` does not have — so
 it cannot move without a relayout either. Neither size argument is in
-question; only the origin is, and both halves of that are covered.
+question; only the origin is.
 
 **Cost.** A patch is O(effect-owning nodes in the boundary) + O(captured
 boundary size) — `layer_patches_for` walks every `effect_slots` entry in the
@@ -466,10 +450,9 @@ unaccelerated. Not worth a `has_child` gate on the setter: that would trade
 this well-understood degrade for a live state read whose own staleness would
 need its own argument. (The case is reachable — `RotatedBox::new(n)` seeds an
 empty child, so rebuilding such a widget 1→3 takes exactly this route — and
-comes out correct through the refusal, which is what
-`a_childless_rotated_box_layer_update_falls_back_to_a_repaint_and_clears_the_flag`
-pins: the flag is cleared by the fallback repaint, so a later mark is not
-self-refused.) And a
+comes out correct through the refusal: the flag is cleared by the fallback
+repaint, so a later mark is not self-refused. **Unasserted:** no test pins
+this.) And a
 setter call before the very first frame is refused outright:
 `mark_needs_composited_layer_update` tests `node.needs_paint()`
 (`pipeline/scheduler.rs`), not `needs_layout()`, and freshly mounted state
@@ -493,13 +476,12 @@ measure the paint side only; the `SEMANTICS` bit's cost is the unchanged
 baseline argued above, not something the numbers cover.
 
 **Oracles** (net-new; upstream has no test driving `quarterTurns` as a
-setter, so nothing was replaced):
-`a_rotated_box_quarter_turn_update_patches_the_layer_and_writes_back`,
-`a_rotated_box_parity_change_relayouts_and_swaps_size`, and
-`a_childless_rotated_box_layer_update_falls_back_to_a_repaint_and_clears_the_flag`
-(`tests/retained_boundary_layers.rs`), plus the unit impact-table tests in
-`crates/flui-objects/src/layout/rotated_box.rs` and the layout-parity harness
-test named above.
+setter): **Unasserted:** no test pins this. That covers the same-parity
+update patching the layer and writing it back, a parity change relaying out,
+the childless fallback above, and the setter's impact table;
+`harness_rotated_box_odd_turns_swaps_axes`
+(`crates/flui-objects/tests/render_object_harness.rs`) pins only the size
+swap of an odd turn at mount.
 
 **And now, the clip family: `RenderClip` and `RenderFlow`.** Upstream's gap
 is not specific to opacity, transform, or rotated boxes — it is structural,
@@ -550,10 +532,8 @@ enclosing boundary's capture, through `RenderClip<S>::paint_effects` /
   `ClipRectLayer::clips()`/`ClipRRectLayer::clips()`/`ClipPathLayer::clips()`
   (`crates/flui-layer/src/layer/clip_rect.rs` and its rrect/path
   siblings) gate `LayerRender::render`/`cleanup`
-  (`crates/flui-engine/src/layer_render.rs`), pinned by
-  `test_clip_rect_layer_no_clip_is_noop`, `test_clip_rrect_layer_no_clip_is_noop`
-  and `test_clip_path_layer_no_clip_is_noop` — so crossing `Clip::None` never
-  changes the layer count. A token-driven path clip is reported as
+  (`crates/flui-engine/src/layer_render.rs`) — so crossing `Clip::None` never
+  changes the layer count. **Unasserted:** no test pins this. A token-driven path clip is reported as
   `PaintClip::PathTarget` (`ClipGeometry::path_target_descriptor`) and
   resolved exactly once, by the walk, never by the setter and never on a
   coordinate query: building the descriptor runs no caller code, and a
@@ -595,16 +575,15 @@ one patched layer, once as part of the whole-subtree repaint — adding the
 same ~140 ns to each side of the same division, which compresses the ratio
 toward 1x and cannot push it below 1x.
 
-**Replacement tests:**
-`a_border_radius_change_updates_the_clip_layer_without_repainting_the_subtree`
-and `two_path_clips_under_one_boundary_resolve_in_paint_order`
-(`tests/retained_boundary_layers.rs`; `cargo nextest run -p flui-rendering
---locked -E 'test(<name>)'`), and the
-pixel oracle, `the_clip_update_path_and_a_repaint_produce_the_same_pixels`
-plus `a_different_radius_produces_different_pixels`
+**Replacement tests:** the pixel oracle,
+`the_clip_update_path_and_a_repaint_produce_the_same_pixels`
 (`tests/composited_layer_update_readback.rs`; `cargo nextest run -p flui
 --features gpu-readback-tests --no-default-features --test
-composited_layer_update_readback --locked --test-threads 1`).
+composited_layer_update_readback --locked --test-threads 1`). The layer-tree
+side — a border-radius change updating the clip layer without repainting the
+subtree, two path clips under one boundary resolving in paint order, and a
+different radius producing different pixels: **Unasserted:** no test pins
+this.
 
 **Deferred producers.** Not served by this change, each for a stated reason:
 
@@ -670,16 +649,11 @@ animation drives (`RotationTransition` drives `Transform::rotation`; a widget
 rebuild 0→2 does occur and is what the layer-update route serves). Rejected
 on that cost, not on geometry.
 
-**Replacement oracle:**
-`harness_rotated_box_baseline_follows_the_child_for_even_turns_and_is_absent_for_odd`
-(`crates/flui-objects/tests/render_object_harness.rs`) — a baseline-aligned
-`Row` places `RotatedBox(0)` and `RotatedBox(2)` where their child would sit
-and `RotatedBox(1)` / `RotatedBox(3)` at the cross start, and asserts the dry
-answer by value at all four quadrants; red on the turn-0 offset when the live
-forward is refused, red on the turn-1 offset when it is granted for an odd
-turn, red on the dry rows when `compute_dry_baseline` drifts to either
-"always" answer. Upstream has no baseline test for the class, so nothing was
-replaced.
+**Unasserted:** no test pins this. A test for it places `RotatedBox(0)` and
+`RotatedBox(2)` in a baseline-aligned `Row` where their child would sit and
+`RotatedBox(1)` / `RotatedBox(3)` at the cross start, and asserts the dry
+answer by value at all four quadrants. Upstream has no baseline test for the
+class, so no Flutter coverage is missing.
 
 ### A transform patch may reuse a captured origin only because layout forces a repaint
 
@@ -708,9 +682,9 @@ origin.
 nowhere in the code they connect. An optimisation that decouples "the boundary
 moved" from "the boundary is marked needing paint" — a plausible future change to
 that `mark_needs_paint` loop — silently makes transform patches render about the
-wrong point. `a_same_frame_layout_change_forces_the_repaint_a_transform_patch_relies_on`
-exists to fail loudly if that happens; replacing the loop body with a no-op fails
-it with the layer count and discriminant right and the translation column wrong.
+wrong point. **Unasserted:** no test pins this; a test for it fails with the layer
+count and discriminant right and the translation column wrong when the loop body
+is replaced with a no-op.
 
 **A patch that panics poisons the frame instead of being refused.**
 Unlike a structural shape mismatch — which `layer_patches_for` refuses by
@@ -722,12 +696,9 @@ node and panic a second time. So it poisons instead
 (`RenderError::Poisoned { phase: PoisonPhase::LayerUpdate, .. }`), the frame
 is discarded whole, and the queued update survives on the node for the retry.
 
-The captured-origin invariant above now has a clip oracle beside the
-transform one:
-`a_same_frame_layout_change_forces_the_repaint_a_clip_patch_relies_on`
-(`tests/retained_boundary_layers.rs`) pins the identical
-same-frame-layout-forces-a-repaint invariant through a clip patch instead of
-a transform one. The two differ in one respect worth being precise about: a
+The captured-origin invariant above holds through a clip patch as well as a
+transform one. **Unasserted:** no test pins this. The two differ in one
+respect worth being precise about: a
 clip rect is *translated* by the captured origin (`clip_layer`, same file),
 never conjugated by it the way a transform matrix is — but a stale origin is
 exactly as wrong for a translation as for a conjugation, so the same
@@ -817,11 +788,10 @@ predictable branch. A relayout of a subtree re-assembles that subtree even where
 geometry did not move — the graft's granularity is the anchor, not the node, which is the same
 bargain the existing graft already makes.
 
-**Replacement test:** `scrolling_republishes_the_semantics_rects`
-(`crates/flui-widgets/tests/semantics.rs`). It scrolls a viewport whose rows are *all* inside the
-cache band, so the frame materialises nothing new, and asserts on a build counter that no row
-rebuilt — without that assertion the test measures a newly-built row's own semantics mark and
-passes with the change reverted, which the first draft did.
+**Unasserted:** no test pins this. A test for it scrolls a viewport whose rows are *all* inside
+the cache band, so the frame materialises nothing new, and asserts on a build counter that no row
+rebuilt — without that assertion it measures a newly-built row's own semantics mark and passes
+with the change reverted.
 
 ### The hit-test path is driver-owned; the protocol carries no result accumulator
 
@@ -859,13 +829,11 @@ calls `result.add(BoxHitTestEntry(this, position))`. The accumulator is the prot
 - *Keep the API and document the trap* — rejected; the deleted method's own module already
   documented it in passing ("dead in production") and that stopped nobody.
 
-**Replacement coverage:** `register_self_hit_entry` is exercised end-to-end by the widget-level
-hit-test ports that dispatch through a real pipeline — the `Transform`, `ClipPath`, `ClipRect`,
-`Wrap` and viewport-order cases in `crates/flui-widgets/tests/parity/`, each asserting a tap
-reaches or misses a specific child. The deleted tests asserted a write landed in a structure
-nobody read, so they were removed rather than adapted: they could not fail for a reason a user
-would notice. `crates/flui-widgets/tests/parity/render_viewport_test.rs` carries the debug trail
-of how the dead path was found.
+**Replacement coverage:** `register_self_hit_entry` is exercised end-to-end by
+`mouse_region_cursor_reaches_the_window_through_the_realm` (`crates/flui-testing/tests/realm_driver.rs`):
+`RenderMouseRegion` enters the hit path only through it, and the test asserts the hovered region's
+cursor reaches the window. The deleted tests asserted a write landed in a structure nobody read, so
+they were removed rather than adapted: they could not fail for a reason a user would notice.
 
 ### Lazy-sliver scroll correction keeps the first visible item stationary
 
@@ -927,7 +895,7 @@ of how the dead path was found.
 
 **Choice:** every third-party trait call site has its call wrapped in `std::panic::catch_unwind(AssertUnwindSafe(|| ...))`. A panicking render object surfaces as `RenderError::Poisoned { render_object, phase }` rather than aborting the process. Specifically:
 
-- `RenderEntry::layout` ([`src/storage/entry.rs`](src/storage/entry.rs)) wraps `render_object.perform_layout_raw(...)` and returns `RenderResult<ProtocolGeometry<P>>`. On the panic path, state is left untouched (`NEEDS_LAYOUT` stays set) so the next frame can retry. The retry is not unbounded: the pipeline counts consecutive layout failures per node and poisons nodes that fail structurally or exhaust the budget ([`src/pipeline/owner/poison.rs`](src/pipeline/owner/poison.rs)); a poisoned node is skipped in later walks until `mark_needs_layout` freshly invalidates it. What a reader can tell apart afterwards, and where: a poisoned node that once committed keeps that geometry — `RenderNode::geometry_box()` is `Some(last committed)` — while one that never succeeded reads `None` and is served as `Size::ZERO`; the parent that consumed the stand-in carries `RenderNode::geometry_degraded()`; and the node's own layout-call counter shows the poison skipped the re-attempt. Pinned by `a_poisoned_leaf_stands_in_with_its_last_committed_size_not_zero` and `a_leaf_that_never_committed_stands_in_with_zero` (`tests/layout_poison.rs`), whose doc states the two mutations that turn them red.
+- `RenderEntry::layout` ([`src/storage/entry.rs`](src/storage/entry.rs)) wraps `render_object.perform_layout_raw(...)` and returns `RenderResult<ProtocolGeometry<P>>`. On the panic path, state is left untouched (`NEEDS_LAYOUT` stays set) so the next frame can retry. The retry is not unbounded: the pipeline counts consecutive layout failures per node and poisons nodes that fail structurally or exhaust the budget ([`src/pipeline/owner/poison.rs`](src/pipeline/owner/poison.rs)); a poisoned node is skipped in later walks until `mark_needs_layout` freshly invalidates it. What a reader can tell apart afterwards, and where: a poisoned node that once committed keeps that geometry — `RenderNode::geometry_box()` is `Some(last committed)` — while one that never succeeded reads `None` and is served as `Size::ZERO`; the parent that consumed the stand-in carries `RenderNode::geometry_degraded()`; and the node's own layout-call counter shows the poison skipped the re-attempt. Pinned by `a_poisoned_leaf_stands_in_with_its_last_committed_size_not_zero` (`tests/layout_poison.rs`), whose doc states the two mutations that turn it red. The never-committed half (`None`, served as `Size::ZERO`): **Unasserted:** no test pins this.
 - `PipelineOwner::<PaintPhase>::paint_subtree_impl` ([`src/pipeline/owner/paint.rs`](src/pipeline/owner/paint.rs)) wraps `render_node.paint_raw(&mut recorder, ...)` (the fragment recorder) together with the node's own effect-layer build, `own_effect_layers(render_node.paint_effects(), origin)`, in ONE `catch_unwind`. Both run only after the walk's three return gates (`skip_paint`, `needs_layout`, the sliver visibility cull): a gated-out node never builds a `PaintEffects` descriptor it will not use. Building it there matters: reached outside those gates, a node whose `needs_layout` flag is still set carries stale geometry — its last committed size, or `Size::ZERO` if it has never been laid out — so its descriptor would be built against a size this pass never computed. A panic in either half — the node's own `paint_effects`, or the walk's resolution of a `PaintClip::PathTarget` inside `own_effect_layers`'s clip arm — surfaces as `Poisoned { phase: PoisonPhase::Paint, .. }`, one poison point per node rather than two.
 - `PipelineOwner::<PaintPhase>::layer_patches_for` ([`src/pipeline/owner/paint.rs`](src/pipeline/owner/paint.rs)), the composited-layer-update patch arm, wraps the same `own_effect_layers(node.paint_effects(), slots.origin)` rebuild — run once per target being patched into a retained boundary's capture — in its own `catch_unwind`. A panic surfaces as `Poisoned { phase: PoisonPhase::LayerUpdate, .. }` and the function returns `Err` instead of `Ok(None)`: the whole frame is discarded and the queued composited-layer-update request survives on the node for the retry. Falling back to a repaint instead (the way a structural shape mismatch does, via `Ok(None)`) was rejected — the repaint would call the same panicking `paint_effects` on the same node and panic a second time.
 
@@ -1172,7 +1140,7 @@ The forwarding wrappers left over from the previous lock-based API are deleted; 
 | `semantics_nodes_updated` | `run_semantics`, from `SemanticsOwner::flush`'s return | nodes in the delivered accessibility update; 0 when the diff is empty |
 | `frames_produced` | `run_frame` | frames that committed a layer tree |
 
-The composer's counts are folded into the owner only on `run_paint`'s commit path, so a paint pass that fails partway adds nothing. Every field is a plain integer (a `Cell` on the `!Send` layout arena): no atomics, no locks. `tests/phase_counters.rs` pins the counting rules on small trees.
+The composer's counts are folded into the owner only on `run_paint`'s commit path, so a paint pass that fails partway adds nothing. Every field is a plain integer (a `Cell` on the `!Send` layout arena): no atomics, no locks. `perf_counters_are_live_on_a_full_reassemble` (`crates/flui-widgets/tests/perf.rs`) pins that every increment site but `layers_reused` moves on a full frame, and `perf_scrolling_a_10k_list_one_screen_lays_out_only_the_band` bounds `nodes_laid_out` by the band; the exact per-counter rules above are unasserted.
 
 ### Criterion frame benchmarks (deferred -- needs workload generator)
 

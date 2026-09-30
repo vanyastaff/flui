@@ -7,8 +7,8 @@
 //! # Parity oracles
 //!
 //! Flutter 3.44 `navigator_test.dart` — `'Initial route can have gaps'`,
-//! `'The full initial route has to be matched'` (`Routable::back_stack`, unit
-//! tests in `router/routable.rs`), and the page-list diff of
+//! `'The full initial route has to be matched'` (`Routable::back_stack`), and
+//! the page-list diff of
 //! `NavigatorState._updatePages` for `go`. From memory of that release; not
 //! checked against a local clone.
 

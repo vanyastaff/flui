@@ -491,23 +491,20 @@ What exists:
   path (`make_build_ctx`, `BuildCtx::scope`) has no `debug_assertions` branch, so the file runs
   in the debug profile only; the one debug-gated read branch, `ElementBuildContext::is_building`,
   belongs to the test seam, which subscribes nobody in release:
-  - `signal_reads_accept_every_context_shape`: `sig.get(cx)` for `&dyn BuildContext`,
-    `&&dyn BuildContext`, `&Box<dyn BuildContext>`, generic `C: BuildContext` with and without
-    `?Sized`, `&dyn ReadScope`, `&dyn LifecycleContext` and a closure. It does not compile on
-    main: `ReadScope` does not exist there, and the generic `?Sized` shape cannot coerce to
-    `&dyn BuildContext`.
+  - `sig.get(cx)` for `&dyn BuildContext`, `&&dyn BuildContext`, `&Box<dyn BuildContext>`,
+    generic `C: BuildContext` with and without `?Sized`, `&dyn ReadScope`,
+    `&dyn LifecycleContext` and a closure. **Unasserted:** no test pins this.
   - `a_read_in_build_subscribes_through_the_production_context`: a real mount, so the build
     goes through `make_build_ctx` and `BuildCtx`; a write rebuilds the reader and not its
     parent, and the reader stays subscribed. The frame report shows two builds: one
     `SignalChange` (the reader) and one `ParentUpdate` (the leaf under it, updated by the
     reader's rebuild, as for any rebuild). That second build is expected, not a second
     subscriber. With `BuildCtx::scope` passing no sink it fails on the reader set.
-  - `a_write_through_the_wrong_type_rebuilds_no_reader`: a mounted reader, then a write
-    through a handle of the wrong `T`: `TypeMismatch`, and the next frame rebuilds nothing
-    for `SignalChange`. It fails if the write marks readers before the type check.
-  - `a_signal_handle_of_the_wrong_type_is_a_typed_error`: `try_get`, `peek` and `set` through
-    a handle of the wrong `T` all return `SignalError::TypeMismatch` and leave the slot intact.
-    Main panics with `BUG:` there.
+  - A write through a handle of the wrong `T` to a slot with a mounted reader returns
+    `TypeMismatch`, and the next frame rebuilds nothing for `SignalChange`.
+    **Unasserted:** no test pins this.
+  - `try_get`, `peek` and `set` through a handle of the wrong `T` all return
+    `SignalError::TypeMismatch` and leave the slot intact. **Unasserted:** no test pins this.
   - `Signal<T>` is `!Send + !Sync` and `SignalSender<T>` is `Send + Sync` (`static_assertions`).
 - §2, trybuild (`crates/flui-view/tests/trybuild_ui.rs`): `scope_ref_exposes_no_graph.rs`
   (neither `.graph`, `.graph()` nor `.sink` compiles on a `ScopeRef`), and

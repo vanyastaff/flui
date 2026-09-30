@@ -367,10 +367,7 @@ impl std::fmt::Debug for CupertinoButton {
 /// alpha) but is the oracle's real, verified behavior: `CupertinoColors.separator`
 /// is alpha 73 light / 153 dark (`colors.dart`, oracle tag `3.44.0`), and a
 /// `.separator`-colored `Plain`/`Filled` button under a Dark theme really
-/// does render at alpha 73 in real Flutter — see
-/// `background_dynamic_color_keeps_the_light_variants_alpha_under_a_dark_theme`
-/// in `tests/button.rs`, which mounts a `.separator`-colored button under a
-/// Dark theme and pins this exact (surprising but oracle-faithful) value.
+/// does render at alpha 73 in real Flutter.
 /// Ported here as a direct alpha-channel copy (`Color::with_alpha`, `u8`)
 /// rather than the oracle's `opacity` (`f64`) round trip through
 /// `with_opacity` — same source byte, no float-precision risk.

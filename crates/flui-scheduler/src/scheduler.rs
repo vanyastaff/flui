@@ -571,10 +571,8 @@ impl FrameCompletionRegistry {
     /// gap is not small: hold `3 * COMPACTION_SLACK` waiters until a scan
     /// lifts the threshold, drop all of them, then keep registering and
     /// cancelling, and the registry sits at `len = 3 * COMPACTION_SLACK`
-    /// with `live = 0` against a ceiling of one slack.
-    /// `the_completion_registry_compacts_within_its_amortized_bound`
-    /// asserts exactly that instant. At the shipped `COMPACTION_SLACK = 8`
-    /// that is 24 entries against a budget of 8, measured.
+    /// with `live = 0` against a ceiling of one slack. At the shipped
+    /// `COMPACTION_SLACK = 8` that is 24 entries against a budget of 8.
     ///
     /// It also does **not** buy "dead entries do not accumulate", which is
     /// a stronger claim than amortized doubling makes.
@@ -2950,14 +2948,7 @@ impl UpdateScheduler {
         };
         // The guard is released HERE, before the demand. The hook
         // `schedule_frame_if_enabled` can reach must find every scheduler
-        // mutex free, `completion_waiters` included. The detector is
-        // `end_of_frame_demand_runs_the_frame_scheduled_hook_with_no_scheduler_lock_held`
-        // in `scheduler/lock_discipline_tests.rs`, which reaches the hook
-        // through THIS function. Its older sibling
-        // `frame_scheduled_hook_runs_with_no_scheduler_lock_held` calls
-        // `request_frame()` directly and so never holds this guard at all:
-        // it cannot catch a regression here, and citing it would be a false
-        // sense of coverage.
+        // mutex free, `completion_waiters` included.
         if needs_demand {
             self.schedule_frame_if_enabled();
         }

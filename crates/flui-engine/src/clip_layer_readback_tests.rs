@@ -1,12 +1,10 @@
 //! Readback evidence that a clip layer clips, and that its ABSENCE does not.
 //!
 //! This is the engine half of the viewport's `clip_behavior` contract. The
-//! other half lives at the widget layer
-//! (`flui_widgets`'s `viewport_clip_behavior_controls_the_clip_layer`), which
-//! pins that `Clip::None` pushes NO clip layer while an overflowing viewport
-//! under any other behaviour pushes one. Neither half is evidence on its own:
-//! the widget test reads layer kinds and never a pixel, and this one knows
-//! nothing about viewports. Together they say what a user sees.
+//! other half — that `Clip::None` pushes NO clip layer while an overflowing
+//! viewport under any other behaviour pushes one — belongs to the widget
+//! layer, and no test there pins it; this suite knows nothing about
+//! viewports.
 //!
 //! **The modes.** The backend used to take a clip layer's `Clip` and discard
 //! it, so all three clipped modes were one picture. Now:
@@ -14,9 +12,7 @@
 //! - a **rounded** clip honours `HardEdge` vs `AntiAlias`;
 //! - a **rect** clip does not — it is the hardware scissor under both modes,
 //!   because routing it to the SDF costs text clipping, nested intersection
-//!   and exactness (`Painter::clip_rect` has the full reasoning). That one is
-//!   still pinned by a test asserting the known-wrong equality, deliberately,
-//!   so it fails in the right place when the shader grows a clip stack;
+//!   and exactness (`Painter::clip_rect` has the full reasoning);
 //! - `AntiAliasWithSaveLayer` renders the clipped subtree into an offscreen and
 //!   applies the clip's coverage ONCE, to the finished group. The offscreen
 //!   is declined in one case, and it is not keyed on the clip's shape: inside a
@@ -426,9 +422,8 @@ fn a_clip_beside_a_sibling(with_filter: bool) -> LayerTree {
 /// rect would take the red channel down with it.
 ///
 /// The other direction — that the refusal is narrow, and an offscreen is still
-/// opened everywhere else — is
-/// `a_rect_clip_in_the_save_layer_mode_isolates_a_destructive_blend`, which
-/// fails the moment `opens_offscreen` declines unconditionally.
+/// opened everywhere else — is not pinned: no test fails if `opens_offscreen`
+/// declines unconditionally.
 ///
 /// What is NOT pinned, deliberately: that the degraded content inside a filter
 /// layer takes per-draw coverage rather than group coverage. The two differ

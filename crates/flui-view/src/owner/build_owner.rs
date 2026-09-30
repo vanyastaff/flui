@@ -3514,10 +3514,8 @@ mod tests {
     /// putting the override there would silently change what code path those
     /// tests exercise (a config-changed child skipping its own reconcile
     /// instead of going through it) even though none of their assertions
-    /// would break — a coverage change nothing would catch. Only
-    /// `mid_drain_schedule_still_requests_a_frame_like_an_out_of_frame_schedule`
-    /// (the wake-count pin) actually depends on the skip; the others merely
-    /// tolerate the extra noise without asserting on it.
+    /// would break — a coverage change nothing would catch. The fixtures that
+    /// mount it tolerate the extra wake noise without asserting on it.
     #[derive(Clone)]
     struct MidDrainStableLeaf;
 

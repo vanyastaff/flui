@@ -14,8 +14,7 @@
 //!
 //! The legal bare-mount root (render element mounted as the element-tree
 //! root, no element-tree parent) is pinned by
-//! `flui-testing/tests/mount_bootstrap.rs` and the in-crate
-//! `orphaned_render_mount_tests` and is untouched.
+//! `flui-testing/tests/mount_bootstrap.rs` and is untouched.
 
 use flui_objects::RenderSizedBox;
 use flui_rendering::RenderUpdateImpact;
@@ -99,8 +98,7 @@ fn misuse_tree() -> (
 
 // Debug-only: the refusal is the `debug_assert!` arm, which release compiles
 // out — there the mount succeeds and the tracing::error event is the only
-// signal, pinned by the profile-portable sibling below
-// (`the_release_arm_traces_the_orphaned_adoption_as_an_error`).
+// signal, which no test here asserts.
 #[test]
 #[cfg(debug_assertions)]
 #[should_panic(expected = "orphan the render object")]

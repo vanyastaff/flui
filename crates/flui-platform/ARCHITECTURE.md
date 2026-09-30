@@ -434,17 +434,14 @@ submit, and why the `TerminateWindow` release that follows `Pause` in the ordina
 cycle is an idempotent no-op — while its caller holds the raster lane's guard across
 it by design, so the wait does happen with the lane held.
 
-**Replacement coverage:** `platforms/headless/platform.rs`'s
-`test_on_surface_status_change` is the wire test — registration goes through the
-`PlatformWindow` trait method, the `simulate_surface_status` affordance drives the
-platform's own dispatch, and the closure asserts both edges — because a backend left
-out of `impl_window_callback_setters!` still compiles the registration and silently
-drops it, which a direct `dispatch_surface_status_change` test cannot see.
-`shared/handlers.rs`'s `surface_status_change_reaches_its_callback_with_the_parameter`
-and `surface_status_change_cleared_from_inside_is_not_resurrected` cover the slot's
-FIFO and lease behavior. The Android arms themselves are **type-checked by
-`cargo xtask cross-typecheck` and executed by nothing**: no gate on this host runs the
-Android backend, so their mapping is an inference from `android-activity`'s
+**Unasserted:** no test pins this. A covering test has to be a wire test —
+registration through the `PlatformWindow` trait method, the `simulate_surface_status`
+affordance driving the platform's own dispatch, and both edges asserted in the
+closure — because a backend left out of `impl_window_callback_setters!` still
+compiles the registration and silently drops it, which a direct
+`dispatch_surface_status_change` test cannot see. The Android arms themselves are
+**type-checked by `cargo xtask cross-typecheck` and executed by nothing**: no gate
+on this host runs the Android backend, so their mapping is an inference from `android-activity`'s
 documented contract, recorded rather than measured.
 
 ### AppKit's frame source stays `drawRect:`, and its re-arm crosses one owner-lane turn
@@ -861,11 +858,11 @@ The signal holds admission and scheduling state; the callback waits between
 turns in a `TurnSlot` the caller passes to `register_in` and `drive_in`. Win32
 keeps an `OwnerTurnSlot` (`!Send`) in its owner control context, so closing or
 dropping the last `Arc<OwnerSignal>` on another thread never drops the
-callback there (test: `off_owner_quit_leaves_the_owner_turn_callback_to_the_owner`);
-the owner clears the slot on quit, or `WM_NCDESTROY` frees it with the
-context, and a platform dropped off its owner leaks it with the context. macOS, UIKit, winit and headless still use `register` and
-`drive`, backed by a shared slot inside the signal, until their own steps of
-ADR-0082 §4 (test: `close_off_owner_does_not_drop_the_turn_callback_there`).
+callback there; the owner clears the slot on quit, or `WM_NCDESTROY` frees it
+with the context, and a platform dropped off its owner leaks it with the
+context. **Unasserted:** no test pins this. macOS, UIKit, winit and headless
+still use `register` and `drive`, backed by a shared slot inside the signal,
+until their own steps of ADR-0082 §4.
 
 macOS posts through GCD, winit through its existing EventLoopProxy, and Win32
 through a dedicated message-only class with its own typed userdata. Headless
@@ -883,10 +880,9 @@ python3 tools/device-checks/check-owner-wake.py target/debug/examples/owner_wake
 ```
 
 External counters assert owner affinity, nonrecursive delivery, shutdown capture
-release and rejected work after quit. On Windows,
-`owner_turn_runs_on_the_owner_and_is_released_there` runs one wake-and-quit
-turn through the real message loop; it runs on a Windows host only, since CI
-only type-checks Win32. Mobile/web registration remains explicitly
+release and rejected work after quit. On Windows, a turn through the real
+message loop runs on the owner and is released there. **Unasserted:** no test
+pins this. CI only type-checks Win32. Mobile/web registration remains explicitly
 unsupported; proxy window creation support is separate from wake/quit support.
 
 ### Reveal without changing window mode

@@ -790,7 +790,8 @@ mod tests {
         let state = recognizer.gesture_state.lock();
         assert_eq!(state.pointers.len(), 2);
         assert!(state.initial_span.is_some());
-        // Half the 100 px separation -- see `test_span_calculation`.
+        // Half the 100 px separation: the span is the mean deviation from
+        // the focal point, not the pairwise distance.
         assert!((state.initial_span.expect("captured") - 50.0).abs() < 0.01);
 
         // Manually test scale calculation by updating pointer and checking span

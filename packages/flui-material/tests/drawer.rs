@@ -161,9 +161,7 @@ impl StatelessView for HandleProbe {
 /// (`RenderDecoratedBox`) that closes the drawer on tap
 /// (`drawerBarrierDismissible`, default `true`), and stays gone once the
 /// close fling settles — not just reported as closed via
-/// [`DrawerHandle::is_drawer_open`] (the synchronous half, already pinned at
-/// the `DrawerControllerCore` unit level by
-/// `open_fires_on_open_changed_synchronously`), but actually unmounted, so
+/// [`DrawerHandle::is_drawer_open`], but actually unmounted, so
 /// a stale alpha-0 scrim can never sit there eating every body tap after the
 /// drawer visually looks closed.
 ///
@@ -174,10 +172,9 @@ impl StatelessView for HandleProbe {
 /// justify only checking `is_drawer_open`, not the mount; the mount check
 /// below is what would have caught it). [`FLING_SETTLE_PUMPS`] budgets for
 /// the FULL 1.0 -> 0.0 fling distance a close from a fully-open, fully-rested
-/// drawer takes (a `close()` fired from a drag-shortened distance, as in
-/// `drag_open_then_close_round_trip_updates_the_handles_tracked_state`, has
-/// less distance to cover and settles inside the smaller [`PUMPS`] budget;
-/// this test's full-distance close does not).
+/// drawer takes (a `close()` fired from a drag-shortened distance has less
+/// distance to cover and settles inside the smaller [`PUMPS`] budget; this
+/// test's full-distance close does not).
 ///
 /// Red-check: drop the `.on_tap(move || close_core.close())` wiring from
 /// `open_panel`'s scrim detector in `drawer.rs` — the scrim still mounts
@@ -210,11 +207,10 @@ pub fn scrim_mounts_when_open_and_a_tap_closes_the_drawer() {
         .expect("HandleProbe captures the handle on its first build");
 
     // Open via a full-width drag past the fling-free threshold (value > 0.5).
-    // Two moves: the first crosses the recognizer's slop (see
-    // `mid_drag_panel_offset_follows_the_value_minus_one_times_width_formula`'s
-    // comment for why), the second carries the value well past 0.5 so
-    // `_settle` opens regardless of whatever velocity this near-instantaneous
-    // dispatch sequence happens to compute.
+    // Two moves: the first crosses the recognizer's slop, the second
+    // carries the value well past 0.5 so `_settle` opens regardless of
+    // whatever velocity this near-instantaneous dispatch sequence happens to
+    // compute.
     laid.dispatch_pointer_down(5.0, 400.0);
     laid.dispatch_pointer_move(30.0, 400.0);
     laid.dispatch_pointer_move(395.0, 400.0);

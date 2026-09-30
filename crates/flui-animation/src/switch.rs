@@ -404,8 +404,7 @@ mod tests {
     /// `disposed`-future path in `_setSecondaryAnimation`), so a leak here would
     /// keep a disposed route's controller alive and notifying.
     ///
-    /// `switch_rebinds_listeners_to_new_current` covers the *post-hop* case. This
-    /// is the *pre-hop* case, which nothing covered.
+    /// This pins the *pre-hop* case.
     ///
     /// Red-check: delete the `next_listener_id` branch of `AnimationSwitch::dispose`.
     #[test]

@@ -74,8 +74,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ctm * command.transform`.
 - `flui_types::painting::Path` is copy-on-write (`Arc<Vec<PathCommand>>`);
   a clone is a refcount bump, and `Path::shares_commands_with` observes it.
-- `DrawOp` is at most 128 bytes and `DrawCommand` 192
-  (`draw_command_fits_its_budget`); the previous command was 560 bytes.
+- `DrawOp` is at most 128 bytes and `DrawCommand` 192; the previous
+  command was 560 bytes.
 - New criterion bench `display_list_record`.
 
 ### Changed — text crosses the display list shaped (ADR-0065 part 2, 2026-09-18)

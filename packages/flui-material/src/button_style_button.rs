@@ -29,9 +29,6 @@
 //! ?? getProperty(defaultStyle)?.resolve(states)`. [`resolve_property`] is
 //! the direct Rust translation: three tiers, each independently resolved
 //! against the *current* [`WidgetStates`] and coalesced with `Option::or_else`.
-//! This is exactly the shape `flui_sdk::widgets::widget_state`'s
-//! `option_property_coalesce_chain_mirrors_button_style_button` test
-//! demonstrates for a single tier — here extended to three.
 //!
 //! `theme_style` is threaded in via [`ButtonStyleButtonCore::theme_style`] —
 //! each concrete button passes its own `ThemeData` component-theme slot's

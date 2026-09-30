@@ -1,7 +1,7 @@
-//! Issue #1055 reproducer, verbatim from the issue body: RED evidence against
-//! unfixed `UpdateScheduler::end_of_frame`. Design-independent of the fix
-//! (weak-slot vs `event-listener` vs anything else) — it exercises only the
-//! public API. Kept as the outer acceptance test once a fix lands.
+//! Acceptance tests for `UpdateScheduler::end_of_frame`'s demand-driven
+//! registration (issue #1055). Design-independent of the implementation
+//! (weak-slot vs `event-listener` vs anything else) — they exercise only
+//! the public API.
 #![forbid(unsafe_code)]
 
 use std::future::Future;
@@ -16,13 +16,7 @@ use flui_scheduler::UpdateScheduler;
 
 // ─────────────────────────────────────────────────────────────────────────
 // Acceptance criteria for the demand-driven, cancellation-safe registration
-// (issue #1055). The three tests above are the issue's own reproducer, and
-// TWO of them were red against the unfixed code: `explicit_frame_completes_
-// waiter_and_releases_waker` passed there, since an explicit frame always
-// did resolve and release. Even the two that failed are evidence rather
-// than pins -- `idle_frame_waiter_requests_a_frame` polls after
-// registering, so it stays green whether the demand happens at
-// registration or at first poll. The tests below are the pins.
+// (issue #1055).
 //
 // Two construction rules hold for every oracle in this file, and both exist
 // because the obvious version of the test passes against the unfixed code:
@@ -87,8 +81,8 @@ impl Wake for RegisteringWaker {
     }
 }
 
-/// Criterion 1 — an idle registration IS the demand, and the frame it buys
-/// is the one it resolves with.
+/// An idle registration IS the demand, and the frame it buys is the one it
+/// resolves with.
 fn an_idle_registration_demands_one_frame_and_resolves_with_its_timing() {
     let scheduler = UpdateScheduler::new();
     let edges = counting_wake_hook(&scheduler);
@@ -116,7 +110,8 @@ fn an_idle_registration_demands_one_frame_and_resolves_with_its_timing() {
     );
 }
 
-/// Criterion 3 — the same, on the abort path, asserting EXACTLY one demand.
+/// A registration made from inside an aborted frame's completion waker
+/// demands EXACTLY one frame.
 ///
 /// # This oracle fails by HANGING, not by asserting
 ///
@@ -182,6 +177,3 @@ fn end_of_frame_demand_matrix() {
         ],
     );
 }
-
-// ── Guards: green against the unfixed code too, so a green run proves
-// nothing about this fix. They defend the shape against a future change.

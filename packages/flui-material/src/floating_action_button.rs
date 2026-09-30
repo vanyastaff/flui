@@ -321,9 +321,6 @@ impl ViewState<FloatingActionButton> for FloatingActionButtonState {
     /// currently distinguishes this resync having run from it never running.
     /// Kept for structural parity with the oracle's own `didUpdateWidget`
     /// and in case a future consumer of this states controller needs it.
-    /// See `tests/floating_action_button.rs`'s
-    /// `removing_the_press_handler_via_swap_makes_a_later_tap_a_no_op` for
-    /// the mutation run that established this.
     fn did_update_view(
         &mut self,
         old_view: &FloatingActionButton,

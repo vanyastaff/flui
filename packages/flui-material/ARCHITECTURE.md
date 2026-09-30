@@ -40,9 +40,7 @@ ordering.
 default and setter shape as the other buttons. An optional generic callback
 in the constructor obstructed higher-ranked closure inference and forced
 type annotations even for a disabled button. The setter gives the closure
-its expected signature directly; the mounted test
-`inline_press_callback_writes_a_signal_without_type_annotations` pins that
-ergonomics together with actual signal delivery.
+its expected signature directly. **Unasserted:** no test pins this.
 
 `tests/ink_well.rs::pointer_and_keyboard_activation_write_the_owning_signal`
 and `tests/checkbox.rs::a_toggle_passes_its_value_and_writer_to_the_callback`
@@ -84,11 +82,7 @@ and AccessKit checked/mixed semantics stay aligned with the oracle for every
 
 **Replacement coverage:**
 
-- Unit: `semantics_flags_agree_with_mode_so_paint_and_a11y_cannot_diverge`,
-  constructor mode pins, `draws_the_correct_mark_per_tristate_value`
-- Integration (`tests/checkbox.rs`): `indeterminate_tristate_exports_mixed_semantics`,
-  `binary_checkbox_never_exports_mixed_semantics`,
-  `tristate_some_values_export_checked_not_mixed`
+- Integration (`tests/checkbox.rs`): `indeterminate_tristate_exports_mixed_semantics`
 
 Same public-widget invariant class as GitHub #1101 (tabs length/index):
 caller-violable construction contracts ship in release, preferring
@@ -140,14 +134,7 @@ Callers must keep controller length and `TabBar`/`TabBarView` lists in sync —
 the same requirement the oracle documents, now non-optional. Sync-in-`build`
 is stricter than Flutter's post-frame debug tab-count check.
 
-**Replacement coverage:**
-
-- Unit: `set_index_out_of_range_fails_the_release_invariant`,
-  `set_index_on_a_zero_length_controller_is_a_no_op` (incl. nonzero index),
-  `new_rejects_an_out_of_range_initial_index`,
-  `default_tab_controller_initial_index_rejects_out_of_range`
-- Integration: `a_children_count_mismatched_with_the_controllers_length_builds_an_error`,
-  `a_tab_count_mismatched_with_the_controllers_length_builds_an_error`
+**Unasserted:** no test pins this.
 
 ### `Radio` publishes its group membership, and the role cascade has to prefer it
 
@@ -213,8 +200,8 @@ tile, and `MergeSemantics` folds it into the parent's data afterwards. The
 like-for-like FLUI composition is therefore `MergeSemantics` over the tile, and
 measured it exports **one** node resolving `RadioButton` — the reorder above is
 what makes that merged node a radio (it resolves `Button` with the cascade
-reverted). That composition is pinned in `tests/list_tile.rs` beside the bare
-one. A comparison of a bare FLUI tile against a merged reference one is not a
+reverted). That composition is pinned in `tests/list_tile.rs`. A comparison
+of a bare FLUI tile against a merged reference one is not a
 divergence in `is_compatible_with`, and is not recorded as one. (`hasConflictingFlags` lives in the
 engine's `lib/ui`, outside `.flutter`; its body was read from a local SDK at
 framework `3.44.8` / engine `0cd6107`, not the pinned tag — provenance stated
@@ -241,32 +228,16 @@ is a storage-and-lifetime decision that owes its own design record; until then
 activation reaches the tree only through the pointer path. Naming this as a
 present gap rather than reading "the `InkResponse` owns activation" as parity.
 
-**Replacement coverage** (`tests/radio.rs`):
+**Replacement coverage:**
 
-- `a_mounted_radio_announces_as_a_radio_button` /
-  `a_mounted_radio_does_not_announce_as_a_checkbox` — the direct case, with the
-  negative half asserted separately so a resolution that answered
-  `RadioButton` for everything would not pass.
-- `a_radio_nested_under_an_annotated_ancestor_still_announces_as_a_radio_button`
-  — the absorbed case, and the only leg that can fail on the precedence:
-  mounting the radio as the render *root* makes it form its own node, so nothing
-  merges and the composition never arises.
-- `a_radio_without_a_tap_handler_still_announces_as_a_radio_button` — kind and
-  interactivity are independent; a missing `on_changed` does not make it
-  something else.
-- `a_checkbox_still_announces_as_a_checkbox` /
-  `a_checkbox_never_announces_as_a_radio_button` (`tests/checkbox.rs`) — the
-  other arm of the cascade. Publishing the group flag for radios must not leak
-  onto the other checkables, which would announce every checkbox as a radio.
-  Both pass before *and* after the reorder, since a checkbox carries neither
-  `IsButton` nor the group flag: they guard the flag against leaking, not the
-  cascade order.
-- `a_radio_inside_a_list_tile_announces_as_a_radio_button` (`tests/list_tile.rs`)
-  — the composition a user actually writes, and the only test here that mounts it
-  through a `MediaQuery` ancestor. It asserts both roles the composition exports
-  (`Button` from the tile's tap target, `RadioButton` from the radio's separate
-  node) and reddens to `[GenericContainer, Button, CheckBox]` when the group flag
-  is removed from `Radio::build`.
+- `a_mounted_radio_announces_as_a_radio_button` (`tests/radio.rs`) — the direct
+  case.
+- `merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button`
+  (`tests/list_tile.rs`) — the absorbed case, and the only leg that can fail on
+  the precedence: the merged node carries the tile's `IsButton` together with
+  the radio's checked and group flags, and resolves `Button` with the cascade
+  reverted. Mounting the radio as the render *root* makes it form its own node,
+  so nothing merges and the composition never arises.
 
 ### `TextFormField` is a `FormField<String>` over `TextField`, and takes the user's edits from `on_changed`
 
@@ -293,7 +264,7 @@ mapping decision 31. `initialValue` and `controller` are two constructors
 **Tests** (`tests/text_form_field.rs`):
 `validator_error_reaches_the_input_decorator_error_line` (no "Required" is
 rendered when the builder does not write the field's error into the
-decoration) and `reset_restores_the_initial_value`.
+decoration).
 
 ---
 

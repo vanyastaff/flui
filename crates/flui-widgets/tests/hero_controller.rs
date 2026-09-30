@@ -6,8 +6,6 @@
 //! offstage animation proxies — **compose** into a destination rect.
 //!
 //! They do not prove the flight overlay itself; `hero_flight.rs` owns that layer.
-//! The private flight-validity predicate keeps a unit test in
-//! `src/navigator/hero_controller_tests.rs`.
 
 use std::sync::Arc;
 use std::time::Duration;

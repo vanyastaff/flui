@@ -376,12 +376,12 @@ that wires what it adds.
    - `TextPainter` measures on Parley in the default build and the `parley-layout` feature is
      removed, so the runs painted come from the layout that measured. Folding `parley` alone
      would leave measurement on cosmic-text while paint moves to Parley runs.
-   - *Acceptance:* `draw_command_fits_its_budget` holds; the text readback suite passes
-     unmodified; `the_engine_does_not_shape` is extended so the engine's manifest names no
-     parley, fontique, skrifa, swash or cosmic-text. Glyph baselines round as today
-     (`(run.line_y * scale).round()`), pinned against today's output (gate 8, second half). A
-     registry test: a source-cache prune while the registry holds the blob keeps keys equal, and
-     fails without the registry.
+   - *Acceptance:* the text readback suite passes unmodified; `the_engine_does_not_shape` is
+     extended so the engine's manifest names no parley, fontique, skrifa, swash or cosmic-text.
+     Glyph baselines round as today (`(run.line_y * scale).round()`), pinned against today's
+     output (gate 8, second half). A registry test: a source-cache prune while the registry
+     holds the blob keeps keys equal, and fails without the registry. `DrawCommand` stays within
+     its size budget: **Unasserted:** no test pins this.
 5. **Paragraph and editable text on Parley.**
    - `TextLayout` shapes one Parley `Layout` per paragraph on the realm's `TextContext`.
      Carets, selection and hit-testing come from clusters.
@@ -452,20 +452,18 @@ that wires what it adds.
 
 ## Verification
 
-The gate 1 prototype exists on `spike/parley_atlas` (not merged). The raster seam, the
-same-key-twice test, and the per-realm text context (§10 step 2, both halves) with its tests
-exist, and so does layout measuring through the realm's context (§10 step 3a); the rest do not
-exist yet.
+The gate 1 prototype exists on `spike/parley_atlas` (not merged). The raster seam and the
+per-realm text context (§10 step 2, both halves) with its tests exist, and so does layout
+measuring through the realm's context (§10 step 3a); the rest do not exist yet.
 
 - The raster seam, `ParleyGlyphKey`, `FontRegistry` and `SwashRasterizer` exist behind
   flui-painting's `parley` feature, with the oracle (`crates/flui-painting/tests/parley_oracle.rs`).
 - The gate 1 prototype and its oracle glyph tests, with the glifo/skrifa choice recorded.
 - `FontCollection` and `TextContext` exist, with `crates/flui-painting/tests/text_context.rs`:
   `two_realms_shape_in_parallel` (two contexts over one collection shape on two threads whose
-  intervals overlap, with equal metrics), `a_face_registered_after_the_fork_shapes_in_every_realm`
-  (fails when the collection is not shared), and
-  `the_parley_path_never_builds_the_process_font_system` (its own binary, so it holds under
-  `cargo test` too, which closes the prototype's per-process caveat).
+  intervals overlap, with equal metrics) and `a_face_registered_after_the_fork_shapes_in_every_realm`
+  (fails when the collection is not shared). That shaping through a context never builds the
+  process font system: **Unasserted:** no test pins this.
 - FLUI's text path names no `Mutex` or `RwLock`: clippy `disallowed_types` in
   `crates/flui-painting/clippy.toml`, with `FONT_SYSTEM` the one `#[expect]`ed site until §10
   step 6. fontique's own locks are outside that check (§3).
@@ -474,7 +472,7 @@ exist yet.
   `dropping_a_realm_releases_its_text_context` and `a_second_presentation_adds_no_text_context`;
   in flui-app, `separate_realm_windows_shape_over_the_runtimes_font_collection` (through
   `build_runtime_realm`, the one call every runner site builds its realm with) and
-  `ensure_services_resolves_both_and_caches_them` (one collection per runtime).
+  `font_collection_is_the_one_the_services_own` (one collection per runtime).
 - Layout measures through the realm's context (§10 step 3a): in
   `crates/flui-runtime/src/ui_realm/tests/text_context.rs`,
   `two_realms_measure_text_through_their_own_contexts` and
@@ -490,8 +488,8 @@ exist yet.
   step 3b).
 - A registry test: a source-cache prune while the registry holds the blob keeps keys equal, and
   the test fails without the registry.
-- A same-key-twice test: rasterizing one key twice yields equal bitmaps
-  (`one_key_rasterizes_to_equal_images_twice`).
+- A same-key-twice test: rasterizing one key twice yields equal bitmaps. **Unasserted:** no
+  test pins this.
 - A baseline test against today's rounding, measurement side:
   `crates/flui-painting/tests/parley_metrics_oracle.rs` (`parley`) measures the bundled Roboto
   on both paths at 13, 14, 16, 18 and 32 px, default and 1.5 line height, and finds equal width

@@ -25,8 +25,7 @@
 //! `'static` [`NavigatorHandle`] out of the state *inside* the callback and does
 //! nothing else there; every mutation runs after the borrow is released. Navigator
 //! and Overlay couple through an `Arc`, not through the tree — so
-//! `GlobalKey<OverlayState>` is not ported either, and `navigator_uses_no_global_key`
-//! keeps it that way.
+//! `GlobalKey<OverlayState>` is not ported either.
 //!
 //! # Not implemented, and not claimed
 //!
@@ -271,10 +270,9 @@ impl NavigatorShared {
         //    `assert(navigator._debugLocked)` and every imperative entry point
         //    asserts `!_debugLocked`, so the reference aborts a debug build
         //    rather than let a callback navigate from here. FLUI permits it
-        //    deliberately (see `pop_scope_callbacks_may_call_back_into_the_navigator`),
-        //    which makes the resulting "effect observed before its cause"
-        //    sequence reachable here and unreachable there — pinned by
-        //    `a_pop_scope_callback_that_navigates_is_observed_before_the_pop_that_caused_it`.
+        //    deliberately (ARCHITECTURE.md mapping decision 13), which makes the
+        //    resulting "effect observed before its cause" sequence reachable here
+        //    and unreachable there.
         //
         //    With **no lock held**: these are user callbacks, they may call
         //    straight back into this navigator, and even a `can_pop()` read
@@ -2161,8 +2159,7 @@ impl NavigatorHandle {
     /// exactly as ours can. Flutter then replaces whatever is on top *now*,
     /// which is the factory's route rather than the caller's. FLUI captures the
     /// route to replace **before** resolving, so it replaces the one the caller
-    /// meant. Pinned by
-    /// `push_replacement_named_replaces_the_route_that_was_current_when_it_was_called`.
+    /// meant.
     ///
     /// # Errors
     ///
@@ -2261,8 +2258,7 @@ impl NavigatorHandle {
     /// **before** this operation's own dismissal — an ordering Flutter cannot
     /// produce here, because it has already popped. The departing route is then
     /// buried, and is removed by id rather than popped (`didRemove`, not
-    /// `didPop`). Pinned by
-    /// `a_re_entrant_factory_is_observed_before_the_pop_it_precedes`.
+    /// `didPop`).
     ///
     /// When no factory navigates — every ordinary call — the pop and the push
     /// are the same two calls in the same order and the stream is identical.

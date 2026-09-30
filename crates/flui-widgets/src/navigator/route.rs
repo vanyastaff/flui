@@ -35,7 +35,8 @@
 //! On a type mismatch FLUI logs and completes with `None`, where Flutter throws a
 //! cast error. A wrong `pop` type is caller error, and
 //! [`PANIC-POLICY`](../../../../../docs/PANIC-POLICY.md) reserves panics for
-//! framework invariants. Pinned by `pop_with_mismatched_result_type_yields_none`.
+//! framework invariants. Pinned by
+//! `a_mismatched_pop_result_is_reported_and_dropped_outside_the_history_lock`.
 
 use std::any::Any;
 use std::fmt;

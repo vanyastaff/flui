@@ -103,12 +103,8 @@ impl RenderRotatedBox {
     ///   key off `is_vertical` (private) — the turn's parity — and never the
     ///   exact value, so layout is unchanged and only the paint matrix
     ///   rotates: the retained subtree can be patched in place instead of
-    ///   repainted. Pinned by
-    ///   `harness_rotated_box_layout_is_turn_blind_up_to_parity` (the dry
-    ///   queries, same-parity equality) and
-    ///   `harness_rotated_box_baseline_follows_the_child_for_even_turns_and_is_absent_for_odd`
-    ///   (both baseline halves, by value, at every quadrant) in
-    ///   `flui-objects/tests/render_object_harness.rs`.
+    ///   repainted. No test pins that these methods are turn-blind up to
+    ///   parity.
     /// - Parity change (e.g. `0` → `1`, `3` → `4`):
     ///   [`LAYOUT`](flui_rendering::RenderUpdateImpact::LAYOUT) — axes swap,
     ///   so the child must be re-laid-out under (un)flipped constraints.
@@ -144,15 +140,10 @@ impl RenderRotatedBox {
     ///
     /// `set_quarter_turns`'s parity-preserving fast path (module doc)
     /// depends on every layout-phase method reading `quarter_turns` ONLY
-    /// through this predicate, never the exact raw value — pinned by
-    /// `harness_rotated_box_layout_is_turn_blind_up_to_parity` for the dry
-    /// queries and by
-    /// `harness_rotated_box_baseline_follows_the_child_for_even_turns_and_is_absent_for_odd`
-    /// for the live baseline flag
-    /// (`flui-objects/tests/render_object_harness.rs`). A method that
-    /// branches on the exact turn instead would go stale under that fast
-    /// path: the setter would report no relayout for a change the method
-    /// actually treats differently.
+    /// through this predicate, never the exact raw value; no test pins it. A
+    /// method that branches on the exact turn instead would go stale under
+    /// that fast path: the setter would report no relayout for a change the
+    /// method actually treats differently.
     #[inline]
     fn is_vertical(&self) -> bool {
         // `rem_euclid(2)` handles negative values correctly:
@@ -365,11 +356,9 @@ impl RenderBox for RenderRotatedBox {
     /// asserts in debug builds. The even-turn answer is a recorded divergence
     /// — see
     /// `flui-rendering/ARCHITECTURE.md` (`## Mapping decisions`,
-    /// "`RenderRotatedBox` reports a baseline only for an even turn") and its
-    /// replacement oracle,
-    /// `harness_rotated_box_baseline_follows_the_child_for_even_turns_and_is_absent_for_odd`.
-    /// Reads the turn only through `is_vertical()`, which is what keeps
-    /// `set_quarter_turns`'s same-parity fast path valid.
+    /// "`RenderRotatedBox` reports a baseline only for an even turn"); no test
+    /// asserts it. Reads the turn only through `is_vertical()`, which is what
+    /// keeps `set_quarter_turns`'s same-parity fast path valid.
     fn compute_dry_baseline(
         &self,
         constraints: BoxConstraints,

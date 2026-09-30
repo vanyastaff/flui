@@ -1,8 +1,7 @@
 //! [`RouteHistory`] and `flush_history_updates` — the route stack.
 //!
 //! Private, and **pure data**: this module touches no element tree,
-//! no build owner, no render pipeline, and no overlay. `route_stack_flush_is_pure_data`
-//! enforces that mechanically.
+//! no build owner, no render pipeline, and no overlay.
 //!
 //! # Flutter parity
 //!
@@ -951,9 +950,8 @@ impl RouteHistory {
     ///
     /// Appends the new route in `Push`, **without** flushing or evaluating
     /// any predicate, and hands back every existing entry's id, top-to-
-    /// bottom, exactly as they stood immediately before the push — the same
-    /// walk order the test-only, single-locked-section `push_and_remove_until_with_id`
-    /// used to compute inline. [`complete_removed_and_flush`](Self::complete_removed_and_flush)
+    /// bottom, exactly as they stood immediately before the push.
+    /// [`complete_removed_and_flush`](Self::complete_removed_and_flush)
     /// is the second half, run under a second, separate lock acquisition.
     pub(crate) fn push_for_remove_until_with_id<R: Route>(
         &mut self,
@@ -973,8 +971,7 @@ impl RouteHistory {
     /// The removal half of `push_and_remove_until`: complete every present
     /// entry named in `remove_ids` — Flutter's `entry.remove()` — then flush
     /// **once**, so the push and every removal the caller's `keep` decided
-    /// on land in a single flush (`navigator.dart:5347-5371`), exactly as
-    /// `push_and_remove_until_with_id`'s single-locked-section version did.
+    /// on land in a single flush (`navigator.dart:5347-5371`).
     pub(crate) fn complete_removed_and_flush(&mut self, remove_ids: &[RouteId]) {
         let mut displaced = Vec::new();
         for &target in remove_ids {

@@ -91,11 +91,12 @@ fn decorated_box_snapshot() {
 // bare render-only harness carries no `ChildManager`, so seeding a bounded
 // set of residents directly would prove nothing about virtualization — it
 // would just paint exactly the residents seeded, whatever that count is.
-// That end-to-end claim (bounded render-tree node count against a huge
-// declared item count, through a real `ChildManager`) is covered by
+// That end-to-end claim (bounded materialization against a large declared
+// item count, through a real `ChildManager`) is covered by
 // `crates/flui-widgets/tests/lazy_list.rs`
-// (`lazy_list_view_builder_convergence_stabilizes`,
-// `lazy_list_view_builder_off_band_eviction_bounded`).
+// (`lazy_list_view_builder_stateful_items_init_and_dispose_with_the_band`:
+// an off-band item is never created, and items leaving the band are
+// disposed).
 //
 // What a render-only harness CAN still verify is the render-side half of the
 // seam: the layout pass's own windowing math must ask for the right logical

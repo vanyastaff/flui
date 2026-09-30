@@ -118,9 +118,7 @@ fn gesture_fixture_with(
     // never reads, so it cannot contaminate `controller.flights()`. `install`
     // below both swaps which observer receives FUTURE notifications and —
     // since `did_detach` sweeps the auto observer's in-flight flights — retires
-    // the flight that push launched, so the explicit `controller` starts clean
-    // (pinned by
-    // `replacing_the_auto_hero_observer_retires_its_in_flight_flight`).
+    // the flight that push launched, so the explicit `controller` starts clean.
     let mut harness = mount_navigator(&navigator);
 
     let to_route = hero_page(to_opt_in, 40.0, 24.0).maintain_state(to_maintain_state);
@@ -193,8 +191,7 @@ fn gesture_fixture(
 /// zero) pops through to the destination route — synchronously, since the
 /// stack mutation itself does not wait for the release animation. Once the
 /// release's own 350ms pacing run actually settles (driven here by
-/// `AnimationController::tick_at`, matching `back_gesture.rs`'s own
-/// `full_settle_after_release_reports_did_stop_and_clears_the_counter`) and
+/// `AnimationController::tick_at`) and
 /// the navigator reports the gesture stopped, the parked terminal status
 /// replays and the flight lands: `finish`'s `Completed` arm keeps the
 /// (now-gone) from-hero's placeholder rather than clearing it

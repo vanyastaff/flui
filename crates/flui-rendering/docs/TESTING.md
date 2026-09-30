@@ -441,8 +441,7 @@ The same file's `scrolling_lazy_sliver_request_band_tracks_scroll_position_and_s
 position and stays bounded; the paint-layer claim it replaces (bounded materialization end to
 end, through a real `ChildManager`) is covered by
 [`flui-widgets/tests/lazy_list.rs`](../../flui-widgets/tests/lazy_list.rs)
-(`lazy_list_view_builder_convergence_stabilizes`,
-`lazy_list_view_builder_off_band_eviction_bounded`).
+(`lazy_list_view_builder_stateful_items_init_and_dispose_with_the_band`).
 
 ## See also
 

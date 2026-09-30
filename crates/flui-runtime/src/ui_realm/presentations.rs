@@ -556,8 +556,7 @@ impl UiRealm {
     ///    only within THIS presentation's own tree:
     ///    `RebuildHandle`/`ExternalBuildScheduler` are minted one-per-owner
     ///    and never shared, so a dispose hook has no path to a sibling
-    ///    presentation's build inbox even if it tries (see
-    ///    `dispose_during_teardown_cannot_reach_sibling_or_dead_services`).
+    ///    presentation's build inbox even if it tries.
     /// 4. **Async-task disposition:** the realm-level `AsyncDriver` is not
     ///    told about this closure — an in-flight task this presentation
     ///    spawned is NOT cancelled here, matching `PresentationState`'s own

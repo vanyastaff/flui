@@ -32,7 +32,7 @@ impl DrawBatcher {
     /// are placed in the paragraph's raster space and each quad carries the
     /// CTM's linear part divided by the raster scale, so the bitmap is
     /// resampled into the transformed shape rather than drawn upright at the
-    /// larger axis's size (`anisotropic_scale_squashes_glyphs_on_one_axis`).
+    /// larger axis's size.
     ///
     /// `color` paints every glyph the layout did not colour itself; a span
     /// colour on the glyph wins. Both are scaled by `opacity`.

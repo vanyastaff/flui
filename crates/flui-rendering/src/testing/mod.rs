@@ -100,9 +100,8 @@ pub use tree::{
     RenderLabelRegistry, TreeNode, box_node, box_node_boxed, sliver_node, sliver_node_boxed,
 };
 
-// Harness self-tests were moved to `tests/harness_self_test.rs` (integration
-// test) after the flui-objects extraction. Internal lib unit tests
-// cannot import from `flui_objects` without creating a duplicate-crate-version
+// Harness self-tests belong in integration tests under `tests/`. Internal lib
+// unit tests cannot import from `flui_objects` without creating a duplicate-crate-version
 // error (flui-objects has a production dep on flui-rendering; the lib-under-test
 // and flui-objects' copy of flui-rendering are distinct compiled artifacts).
 // Integration tests link the already-built library and do not have this problem.

@@ -6,8 +6,8 @@
 //! cdylib artifact automatically as a side effect of building
 //! `flui-hot-reload`'s tests — no nested `cargo build` from inside a test.
 //! See `reload_lifecycle.rs`'s module doc for why this one test earns the
-//! "build + dlopen a real plugin" cost that `tests/loader.rs` documents
-//! avoiding for everything else in this crate.
+//! "build + dlopen a real plugin" cost that the rest of `flui-hot-reload`'s
+//! tests avoid.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 

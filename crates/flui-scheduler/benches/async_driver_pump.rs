@@ -10,11 +10,11 @@
 //! `bench-compile` (`cargo bench --no-run`) only targets `flui-rendering`.
 //! Run it locally, on demand: `cargo bench -p flui-scheduler --bench
 //! async_driver_pump`. `tests/async_driver_ready_index_allocation.rs` (a
-//! counting-allocator test) and `an_empty_pump_touches_no_dormant_task_flags`
-//! (a flag-load counter, in the crate's own `#[cfg(test)]` unit tests) are
-//! the actual CI-run complexity proofs for issue #1056's acceptance
-//! criteria. Numbers here are local measurements, reported in the PR body
-//! alongside a before/after table, not asserted.
+//! counting-allocator test) is the CI-run check for issue #1056's
+//! allocation criterion; no CI-run test tells an O(N) scan from an O(R)
+//! drain at R=0, where neither allocates. Numbers here are local
+//! measurements, reported in the PR body alongside a before/after table,
+//! not asserted.
 //!
 //! Every driver is constructed OUTSIDE `b.iter`; each closure re-arms
 //! whatever it consumed on the previous iteration (a completed/removed task

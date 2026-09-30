@@ -322,9 +322,8 @@ fn a_panicking_activate_removes_the_reactivated_element_instead_of_stranding_it(
     // behavior-level catch the retake window one level up would be the
     // only thing to record it, and could only name the retake as a
     // `Substituted { element: Some(first), .. }` (a coarser identity
-    // than the element whose hook actually panicked; see
-    // `a_panicking_activate_records_the_actual_panicking_descendant_not_the_retake_root`
-    // for the case where those two differ).
+    // than the element whose hook actually panicked, which differs from
+    // `first` when the panic comes from a descendant's `activate`).
     assert!(matches!(
         recovered_panics[0].at,
         RecoveredAt::Element {

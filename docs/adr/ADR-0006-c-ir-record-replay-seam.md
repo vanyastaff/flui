@@ -44,7 +44,7 @@ ever has a consumer, is a second concrete implementation behind the same `Scene`
 trait designed today for a backend that does not exist.
 
 **6. Replay is deterministic.** Recording holds no `&mut` device, queue or encoder; replaying
-the same IR to two encoders emits the same command stream (`deterministic_replay_tests.rs`).
+the same IR to two encoders emits the same command stream. **Unasserted:** no test pins this.
 Text is recorded like every other primitive: paragraphs arrive shaped (ADR-0065) and are placed
 through the engine-owned glyph atlas (ADR-0067).
 

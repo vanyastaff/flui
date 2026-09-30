@@ -15,7 +15,8 @@
 //! a closure passed to `UpdateScheduler::drive_frame`, so a *registered* persistent
 //! callback runs **before** it. Post-frame ordering — the only thing
 //! `HeroController` needs — matches. Persistent-phase ordering does not, and
-//! `persistent_callbacks_run_before_the_pipeline` pins that honestly.
+//! `persistent_callbacks_run_before_the_pipeline_a_divergence_from_flutter`
+//! pins that honestly.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;

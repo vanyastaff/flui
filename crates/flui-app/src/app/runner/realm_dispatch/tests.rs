@@ -352,10 +352,9 @@ fn install_realm_a_through_a_real_owner_platform() -> (RealmDispatcher, OwnerHos
 /// `WindowPolicy::SeparateRealms`, driven through the REAL embedder seam
 /// (`open_secondary_window`) rather than a direct
 /// `install_realm_alongside` call — proves the POLICY-driven fork itself
-/// routes to the share-nothing path, not just the underlying primitive
-/// (`two_window_realms_share_no_ui_state_through_app_runtime` already
-/// covers that). Same oracle: a pointer dispatched only to realm A must
-/// leave realm B's gesture arena completely untouched.
+/// routes to the share-nothing path, not just the underlying primitive.
+/// The oracle: a pointer dispatched only to realm A must leave realm B's
+/// gesture arena completely untouched.
 fn two_realms_via_separate_windows_policy_share_nothing() {
     let (dispatcher_a, _clear_guard) = install_realm_a_through_a_real_owner_platform();
 
@@ -523,15 +522,14 @@ fn one_realm_two_windows_policy_routes_by_presentation() {
     teardown_platform_realm();
 }
 
-/// [`install_realm_a_with_exit_policy_and_quit_counter`] plus the parked
-/// re-evaluation handle.
+/// Installs realm A under `ExitPolicy::OnLastWindowClosed` with a quit
+/// counter, and returns the parked re-evaluation handle with them.
 ///
 /// The headless mock has no event loop, so a
 /// `Platform::request_exit_policy_reevaluation` is PARKED and its
 /// owner-thread half runs only when a test calls
 /// `HeadlessExitReevaluation::drive`. A test asserting on an exit that a
-/// re-evaluation produces therefore needs the handle; the nine tests that
-/// do not keep the shorter tuple.
+/// re-evaluation produces therefore needs the handle.
 fn install_realm_a_with_exit_policy_quit_counter_and_reevaluation() -> (
     RealmDispatcher,
     std::sync::Arc<dyn flui_platform::traits::PlatformWindow>,

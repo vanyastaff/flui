@@ -983,11 +983,9 @@ mod tests {
         );
     }
 
-    // Audit I-5: `impl Default for Key` removed. The pre-cycle test
-    // `test_default` exercised the surprising "default returns a
-    // fresh unique key" behaviour that the finding flagged.
-    // `Key::new()` is the canonical construction path now;
-    // `test_new` and `test_uniqueness` cover the uniqueness contract.
+    // `Key` has no `Default` impl: a default that returned a fresh unique
+    // key would be surprising. `Key::new()` is the explicit construction
+    // path for a unique key.
 
     // ========================================================================
     // ViewKey impl for Key

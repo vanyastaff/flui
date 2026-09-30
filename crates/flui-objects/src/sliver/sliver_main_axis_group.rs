@@ -282,4 +282,4 @@ impl RenderSliver for RenderSliverMainAxisGroup {
 // A vertical group of two fixed-extent slivers must compose their scroll
 // extents and lay the second past the first — covered by the render-object
 // harness in `crates/flui-objects/tests/render_object_harness.rs` (catalog
-// row + `harness_sliver_main_axis_group`) and the widget-level parity file.
+// row + `harness_sliver_main_axis_group_composes_scroll_extents_and_places_children`).

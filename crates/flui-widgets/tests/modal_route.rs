@@ -1,6 +1,5 @@
 //! Tests for the private [`ModalRoute`], reached through the temporary
-//! `flui_widgets::__test_access` path (ADR-0083 §4). Its export boundary and
-//! handle keep unit tests in `src/navigator/modal_route_tests.rs`.
+//! `flui_widgets::__test_access` path (ADR-0083 §4).
 //!
 //! # Parity oracles
 //!
