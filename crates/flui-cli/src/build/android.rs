@@ -87,10 +87,9 @@ impl AndroidBuilder {
 
         let profile_dir = if release { "release" } else { "debug" };
 
-        // Find the .so file — scene crates produce lib{name}.so
-        let target_dir = self
-            .workspace_root
-            .join("target")
+        // Find the .so file — scene crates produce lib{name}.so, in the
+        // target-dir cargo uses, not necessarily the project's `target/`.
+        let target_dir = crate::build::util::cargo::target_directory(&self.workspace_root)?
             .join(rust_target)
             .join(profile_dir);
 
