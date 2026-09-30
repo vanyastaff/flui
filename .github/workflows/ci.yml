@@ -52,12 +52,14 @@ name: CI
 # Caches: the repository gets 10 GB, least-recently-used entries evicted past
 # it, and every job that saves from main writes a new entry whenever
 # Cargo.lock moves. So a job keeps a target cache only when its cold run
-# would outlast the wide lane's longest jobs (`test`, `test-nested`, about
-# 9 min): `test` (shared with `test-nested`), `test-features`,
-# `feature-matrix`, `wasm-check`, `live-smoke`, `bench-compile` (the bench
-# profile's thin LTO) and the Windows jobs. `clippy`, `cross-typecheck`,
-# `miri`, `doc`, `doc-test` and the macOS jobs build cold (each under ~8 min
-# cold, 2026-09-30). One key per job: a key shared across jobs with
+# would outlast its lane's longest jobs (`test`, `test-nested`, about 9 min
+# warm, on a pull request; `gpu-test` on main): `test` (shared with
+# `test-nested`), `test-features`, `feature-matrix`, `wasm-check`,
+# `live-smoke` and `gpu-test`. Cold, `test` took 18 min, `test-nested` 27,
+# `wasm-check` 13 and a `feature-matrix` shard 19 (run 36776652181).
+# `clippy`, `cross-typecheck`, `miri`, `doc`, `doc-test`, `bench-compile`,
+# `platform-windows` and the macOS jobs build cold (under 9 min each; 3 for
+# `bench-compile`). One key per job: a key shared across jobs with
 # different build modes lost time (clippy restoring `test`'s build-mode
 # artifacts re-checked every crate). Saved on main only.
 # Runners: named images (`ubuntu-26.04`), not `-latest`, so an image change
@@ -860,10 +862,6 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
-      - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
@@ -898,10 +896,6 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
-      - name: Cache cargo registry + target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: cargo bench --no-run
         run: cargo bench -p flui-rendering --no-run --locked

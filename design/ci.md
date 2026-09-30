@@ -684,9 +684,11 @@ Not changed, with the reason:
   `Cargo.lock` change found no cache for `doc`, `doc-test`, the xtask jobs, `actionlint` and
   `lychee`, and one main push later `test-features`, `live-smoke`, `gpu-test` and
   `platform-windows` were gone too. The rule now in `ci.yml`'s header: a job keeps a target cache
-  only when its cold run would outlast the wide lane's longest jobs (about 9 min). `clippy`,
-  `cross-typecheck`, `miri`, `doc`, `doc-test` and the macOS jobs (about 3.6 GB of entries) build
-  cold; their cold times are what the follow-up's own CI run measures.
+  only when its cold run would outlast its lane's longest jobs (about 9 min on a pull request,
+  `gpu-test` on main). Run 36776652181 showed what eviction costs: with no cache `test` took
+  18 min, `test-nested` 27, `wasm-check` 13, a `feature-matrix` shard 19, and the run 31 against
+  15. `clippy`, `cross-typecheck`, `miri`, `doc`, `doc-test`, `bench-compile` (3 min cold),
+  `platform-windows` and the macOS jobs, about 4.3 GB of entries, build cold.
 - **Runner images.** Every job names its image (`ubuntu-26.04`) instead of `ubuntu-latest`,
   which moves to 26.04 during 2026-10-19..11-19; the release archives build on `ubuntu-24.04`
   (x86_64 and arm64), which fixes their glibc floor at 2.39 on both (22.04 images are deprecated
