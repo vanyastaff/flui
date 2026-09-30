@@ -884,4 +884,204 @@ mod tests {
             );
         }
     }
+
+    /// The family rule (`resolve_family_name`) over what a collection holds,
+    /// and what it keeps out of a shaped run (ADR-0059; ADR-0092 §7, gate 5).
+    mod family_resolution {
+        use std::sync::Arc;
+
+        use cosmic_text::fontdb::Family;
+        use parley::fontique::{Blob, Collection, CollectionOptions};
+
+        use super::super::super::fallback_chain::FallbackChain;
+        use super::super::super::font_resolve::resolve_family_name;
+        use super::super::super::layout::{HostData, HostFaces, HostSource};
+        use super::super::{FontCollection, FontCollectionInner, TextContext};
+        use super::ROBOTO;
+        use crate::parley_text::{ParagraphSpec, holds_exactly};
+        use crate::typography::{TextDirection, TextStyle};
+
+        const MATERIAL_ICONS: &[u8] =
+            include_bytes!("../../assets/fonts/MaterialIcons-Regular.ttf");
+        /// Maps only `U+0020`, at 1.3 em, as family `FLUI Decoy Emoji` with
+        /// "Emoji" in its PostScript name (`tools/decoy-face/generate.py`).
+        const DECOY_WIDE_SPACE: &[u8] = include_bytes!("../../assets/fonts/decoy-wide-space.ttf");
+
+        /// A collection holding exactly `faces`.
+        fn holding(faces: &[&'static [u8]]) -> Collection {
+            let mut collection = Collection::new(CollectionOptions {
+                shared: false,
+                system_fonts: false,
+            });
+            for bytes in faces {
+                collection.register_fonts(Blob::new(Arc::new(*bytes)), None);
+            }
+            collection
+        }
+
+        fn chained(family: &str, chain: &[&str]) -> TextStyle {
+            TextStyle {
+                font_family: Some(family.to_owned()),
+                font_family_fallback: chain.iter().map(|name| (*name).to_owned()).collect(),
+                ..TextStyle::default()
+            }
+        }
+
+        /// Each style resolves to one family: a held primary; the first held
+        /// or generic entry of its chain past absent ones; the sans-serif
+        /// degrade; and a held family spelled in another case, which the
+        /// rule does not match and so degrades too. A held family that sets
+        /// no Latin (Material Icons) still stops the chain, since fallback is
+        /// per style and not per glyph; an absent primary with the same chain
+        /// reaches Roboto.
+        fn a_style_resolves_by_the_family_rule() {
+            let mut collection = holding(&[ROBOTO, MATERIAL_ICONS]);
+            let rows = [
+                (TextStyle::default(), Family::SansSerif),
+                (chained("Roboto", &[]), Family::Name("Roboto")),
+                (chained("roboto", &[]), Family::SansSerif),
+                (
+                    chained("material icons", &["Material Icons"]),
+                    Family::Name("Material Icons"),
+                ),
+                (
+                    chained("CupertinoSystemText", &["-apple-system", "Material Icons"]),
+                    Family::Name("Material Icons"),
+                ),
+                (
+                    chained(
+                        "CupertinoSystemText",
+                        &["-apple-system", "monospace", "Roboto"],
+                    ),
+                    Family::Monospace,
+                ),
+                (
+                    chained("Nothing Carries This", &["system-ui"]),
+                    Family::SansSerif,
+                ),
+                (
+                    chained("Material Icons", &["Roboto"]),
+                    Family::Name("Material Icons"),
+                ),
+                (
+                    chained("Nothing Carries This", &["Roboto"]),
+                    Family::Name("Roboto"),
+                ),
+            ];
+            for (style, expected) in &rows {
+                let got =
+                    resolve_family_name(Some(style), |name| holds_exactly(&mut collection, name));
+                assert_eq!(got, *expected, "{style:?}");
+            }
+        }
+
+        /// Only the decoy is on the common fallback list: the host shape of
+        /// issue #927, a unix host whose only listed family is its emoji
+        /// face.
+        struct EmojiFirst;
+
+        impl cosmic_text::Fallback for EmojiFirst {
+            fn common_fallback(&self) -> &[&'static str] {
+                &["FLUI Decoy Emoji"]
+            }
+
+            fn forbidden_fallback(&self) -> &[&'static str] {
+                &[]
+            }
+
+            fn script_fallback(&self, _: unicode_script::Script, _: &str) -> &[&'static str] {
+                &[]
+            }
+        }
+
+        /// A style naming a family the collection lacks never takes its space
+        /// from an emoji face (issue #927). On a collection fed from a host
+        /// whose fallback order puts an emoji face before Roboto, `"Ao Bo"`
+        /// styled `CupertinoSystemText` shapes letters and space in one face,
+        /// the space under half an em. Fails if the family reaches Parley
+        /// unresolved: Parley then walks the fallback order per cluster, and
+        /// the space, which the decoy maps, lands in it at 1.3 em while the
+        /// letters fall through to Roboto.
+        fn a_missing_family_never_takes_its_space_from_an_emoji_face() {
+            const SIZE: f32 = 32.0;
+            let host = HostFaces {
+                sources: vec![
+                    HostSource {
+                        data: HostData::Blob(Arc::new(ROBOTO)),
+                        families: vec!["Roboto".to_owned()],
+                    },
+                    HostSource {
+                        data: HostData::Blob(Arc::new(DECOY_WIDE_SPACE)),
+                        families: vec!["FLUI Decoy Emoji".to_owned()],
+                    },
+                ],
+                sans_serif: "Roboto".to_owned(),
+                serif: "Roboto".to_owned(),
+                monospace: "Roboto".to_owned(),
+                cursive: "Roboto".to_owned(),
+                fantasy: "Roboto".to_owned(),
+                chain: Arc::new(FallbackChain::new("en-US".to_owned(), EmojiFirst)),
+            };
+            let fonts = FontCollection(Arc::new(FontCollectionInner::build(Some(&host))));
+            let style = TextStyle {
+                font_family: Some("CupertinoSystemText".to_owned()),
+                ..TextStyle::default()
+            };
+            let spans: Vec<(String, Option<TextStyle>)> = vec![("Ao Bo".to_owned(), Some(style))];
+            let paragraph = TextContext::new(&fonts)
+                .shape(&ParagraphSpec {
+                    spans: &spans,
+                    default_style: None,
+                    font_size: SIZE,
+                    max_width: None,
+                    line_height: None,
+                    direction: TextDirection::Ltr,
+                    max_lines: None,
+                    ellipsis: None,
+                })
+                .to_shaped(None);
+            let glyphs: Vec<_> = paragraph
+                .runs()
+                .flat_map(|run| {
+                    let face = run.face().key();
+                    run.glyphs().iter().map(move |glyph| (face, *glyph))
+                })
+                .collect();
+            assert_eq!(glyphs.len(), 5, "one glyph per character: {glyphs:?}");
+            assert!(
+                glyphs
+                    .iter()
+                    .all(|(face, glyph)| glyph.id != 0 && *face == glyphs[0].0),
+                "letters and space shape in one face, none as .notdef: {glyphs:?}"
+            );
+            let space_em = (glyphs[3].1.x - glyphs[2].1.x) / SIZE;
+            assert!(
+                space_em < 0.5,
+                "a space of {space_em} em is a foreign face's advance, not a text face's"
+            );
+        }
+
+        #[test]
+        fn family_resolution() {
+            let cases: &[(&str, fn())] = &[
+                (
+                    "a_style_resolves_by_the_family_rule",
+                    a_style_resolves_by_the_family_rule,
+                ),
+                (
+                    "a_missing_family_never_takes_its_space_from_an_emoji_face",
+                    a_missing_family_never_takes_its_space_from_an_emoji_face,
+                ),
+            ];
+            let failed: Vec<&str> = cases
+                .iter()
+                .filter(|(_, case)| std::panic::catch_unwind(*case).is_err())
+                .map(|(name, _)| *name)
+                .collect();
+            assert!(
+                failed.is_empty(),
+                "family_resolution: failing cases: {failed:?}"
+            );
+        }
+    }
 }

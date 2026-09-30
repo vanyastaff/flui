@@ -44,23 +44,22 @@
 //!   size, weight, letter-spacing and height, and no family) falls into the
 //!   tail. Each generic is re-pointed only when its configured family is
 //!   missing.
-//! * `resolve_family` degrades a named family the database lacks to
+//! * [`resolve_family_name`] degrades a named family the fonts lack to
 //!   `Family::SansSerif`; the binding above points that generic at a carried
-//!   family whenever the database holds any Latin-capable face. This is
-//!   the Cupertino path, whose roles all name `CupertinoSystemText` — a family
+//!   family whenever the fonts hold any Latin-capable face. This is the
+//!   Cupertino path, whose roles all name `CupertinoSystemText` — a family
 //!   the platform aliases to San Francisco and that exists nowhere else.
 //!
-//! Nothing shapes on the process font system any more: the rule it resolved
-//! families by now serves the collection ([`resolve_family_name`]), and its
-//! cosmic-text side (`resolve_family`) is kept for the test that pins the
-//! two sides agree.
-
-#[cfg(test)]
-use std::collections::HashSet;
+//! Nothing shapes on the process font system any more. The routes above are
+//! how cosmic-text reached the emoji face; Parley has the first one too, since
+//! a family the collection lacks sends every cluster down the collection's
+//! fallback order, which a host feed copies from the process font system's
+//! lists. The family rule ([`resolve_family_name`]) closes it on the
+//! collection: the Parley path is handed a held family or a generic, never an
+//! absent name. The process side keeps the generic binding
+//! ([`bind_generic_families`]), whose names the host feed copies.
 
 use crate::typography::TextStyle;
-#[cfg(test)]
-use cosmic_text::FontSystem;
 use cosmic_text::fontdb::{self, Database, Family};
 use cosmic_text::{Fallback as _, PlatformFallback};
 
@@ -87,45 +86,11 @@ fn database_carries(db: &Database, family: &str) -> bool {
         .any(|face| face.families.iter().any(|(name, _)| name == family))
 }
 
-/// Whether any generic family currently names a family the database does not
-/// carry — the read-only precondition for [`bind_generic_families`].
-///
-/// Exists because `bind_generic_families` needs `&mut Database` to do its
-/// writes, and `FontSystem::db_mut()` is not a plain borrow: it **clears
-/// cosmic-text's `font_matches_cache`** (`font/system.rs`), so the next
-/// shaping pass rebuilds a `FontMatchKey` for every installed face. Measured
-/// on a 466-face host: a shape with a warm match cache takes 26 µs, and the
-/// same shape immediately after one `db_mut()` takes 3.46 ms — 133×. The
-/// database-mutation generation is bumped by every `SharedFontSystem::with_mut`,
-/// including the shaping call the renderer makes each frame, so taking
-/// `db_mut()` on every generation change put that 3.46 ms on the frame path.
-///
-/// On a database with no Latin-capable face this stays `true` forever, since
-/// `bind_generic_families` binds nothing there and the generics keep naming
-/// families that are absent. That is harmless: an empty or letterless database
-/// has no match cache worth preserving.
-///
-/// Average and worst case O(faces), the same scan `bind_generic_families`
-/// would do anyway — the saving is the cache, not the scan.
-#[cfg(test)]
-fn generics_need_rebinding(db: &Database) -> bool {
-    [
-        Family::SansSerif,
-        Family::Serif,
-        Family::Cursive,
-        Family::Fantasy,
-        Family::Monospace,
-    ]
-    .iter()
-    .any(|generic| !database_carries(db, db.family_name(generic)))
-}
-
 /// Points every generic family name at a family this database carries.
 ///
-/// Called on a freshly built [`Database`] and again, through
-/// `InstalledFamilies::sync`, whenever the database changes — generic names
-/// live in the database and are read at query time, so a later call takes
-/// effect on a live `FontSystem` too.
+/// Called on a freshly built [`Database`]: generic names live in the
+/// database and are read at query time, so a later call would take effect on
+/// a live `FontSystem` too.
 ///
 /// Idempotent and monotone, which is what makes repeating it safe: a generic
 /// whose configured name is already carried is left alone, so an explicitly
@@ -188,12 +153,10 @@ pub(crate) fn bind_generic_families(db: &mut Database) {
 /// Coverage of `'A'` and `' '` is the actual requirement, and every face that
 /// should win a generic binding has it.
 ///
-/// Reached only while (re)building `InstalledFamilies`, never per shaped
-/// run — but it is not cheap and it is not paid once: `fontdb::with_face_data`
-/// opens, maps and parses the file on every call with no cache of its own, and
-/// the cost is candidates × faces, repeated on every observed database change
-/// (at least twice on a host that starts with an empty database). That is why
-/// [`pick_family`] puts every cheaper discriminator ahead of it.
+/// Reached only while binding the generics, never per shaped run — but it is
+/// not cheap: `fontdb::with_face_data` opens, maps and parses the file on
+/// every call with no cache of its own, and the cost is candidates × faces.
+/// That is why [`pick_family`] puts every cheaper discriminator ahead of it.
 fn can_render_latin(db: &Database, id: fontdb::ID) -> bool {
     use cosmic_text::skrifa::{self, MetadataProvider as _};
 
@@ -250,8 +213,7 @@ fn can_render_latin(db: &Database, id: fontdb::ID) -> bool {
 /// added to the database *after* construction is never forbidden. Nothing
 /// adds one today: a registration loads the collection alone.
 ///
-/// That is the same growth `InstalledFamilies::sync` exists to track, and it
-/// is not hypothetical: on a host where `FontSystem::new()` finds no faces at
+/// It is not hypothetical: on a host where `FontSystem::new()` finds no faces at
 /// all — headless, CI, a minimal container — this scan sees an empty database
 /// and forbids nothing for the life of the process. The asymmetry is stated
 /// rather than fixed because closing it means rebuilding the font system, and
@@ -421,126 +383,6 @@ fn pick_family(db: &Database, want_monospace: bool) -> Option<String> {
         })
 }
 
-/// The set of family names a font database carries, so resolution costs a hash
-/// lookup rather than a scan of every face.
-///
-/// The scan it replaces is not cheap in context: text measurement reaches
-/// resolution three times per `TextPainter::layout` (main plus both
-/// intrinsics) and again, uncached, from `dry_size`, `dry_baseline` and
-/// `intrinsic_height`.
-#[cfg(test)]
-#[derive(Debug, Default)]
-pub(crate) struct InstalledFamilies {
-    names: HashSet<Box<str>>,
-    /// The database-mutation generation the set was built from.
-    built_at: u64,
-    /// Distinguishes "never built" from "built against an empty database",
-    /// which a `names.is_empty()` check would conflate into a rebuild on
-    /// every call.
-    built: bool,
-    /// Families already reported absent, so the diagnostic below is emitted
-    /// once per family rather than once per shaped run.
-    reported_absent: HashSet<Box<str>>,
-}
-
-#[cfg(test)]
-impl InstalledFamilies {
-    /// Brings the set — and the generic family bindings — up to date with the
-    /// font database, if it has gained or lost faces since the last build.
-    ///
-    /// # Why the generic bindings are re-established here and not only at
-    /// construction
-    ///
-    /// The shared database grows *after* text has already been measured. On a
-    /// host where `FontSystem::new()` finds no faces at all — headless, CI, a
-    /// minimal container — construction-time binding has nothing to choose
-    /// from and binds nothing, leaving sans-serif pointing at cosmic-text's
-    /// hard-coded `"Open Sans"`. `register_font` then loads faces into that
-    /// same database (as the bundled fonts once did from the engine). Without a
-    /// rebind, every later run resolves through a generic that names a family
-    /// the database still does not carry, which is the exact condition this
-    /// module exists to prevent — and no test would catch it, because the
-    /// test harness pins its generics explicitly.
-    ///
-    /// Rebinding costs a `db_mut()` (which clears cosmic-text's own family
-    /// match cache) and is therefore done only on the rebuild path, never on
-    /// a call that finds the set already fresh.
-    ///
-    /// # Staleness signal
-    ///
-    /// `db_generation` counts *mutations*, not faces: it is bumped once per
-    /// `SharedFontSystem::with_mut`, the single door through which anything
-    /// outside this module reaches the database. Face count was the obvious
-    /// signal and is the wrong one — `with_mut` hands out `&mut FontSystem`,
-    /// so a caller can remove one face and load another and leave the count
-    /// identical, after which the set describes a database that no longer
-    /// exists and every style resolves through the wrong family
-    /// indefinitely. Counting the door cannot be defeated that way, whatever
-    /// happens behind it.
-    ///
-    /// Average and worst case O(1) when fresh, O(faces) on the rebuild.
-    fn sync(&mut self, font_system: &mut FontSystem, db_generation: u64) {
-        if self.built && db_generation == self.built_at {
-            return;
-        }
-
-        // Probed through `db()` first: `db_mut()` clears cosmic-text's
-        // font-match cache, and this runs on a generation the renderer's own
-        // per-frame `with_mut` bumps. See `generics_need_rebinding`.
-        if generics_need_rebinding(font_system.db()) {
-            bind_generic_families(font_system.db_mut());
-        }
-
-        let db = font_system.db();
-        self.names.clear();
-        for face in db.faces() {
-            for (name, _) in &face.families {
-                if !self.names.contains(name.as_str()) {
-                    self.names.insert(name.as_str().into());
-                }
-            }
-        }
-        self.built_at = db_generation;
-        self.built = true;
-    }
-
-    fn carries(&self, family: &str) -> bool {
-        self.names.contains(family)
-    }
-}
-
-/// The family to shape `style` with, against the process font system.
-///
-/// [`resolve_family_name`] over the families `font_system` carries. Every
-/// path, the generic ones included, first brings `InstalledFamilies` and
-/// the generic bindings up to date with `font_system`, so a database that
-/// gained faces after construction resolves against what it now holds rather
-/// than what it held then. A named family that degrades to the sans-serif
-/// generic is reported once per family.
-///
-/// Average and worst case O(1) once `installed` is in sync, O(faces) on the
-/// call that observes a database change.
-#[cfg(test)]
-pub(crate) fn resolve_family<'a>(
-    style: Option<&'a TextStyle>,
-    font_system: &mut FontSystem,
-    installed: &mut InstalledFamilies,
-    db_generation: u64,
-) -> Family<'a> {
-    installed.sync(font_system, db_generation);
-    let (family, degraded_from) = resolve(style, |name| installed.carries(name));
-    if let Some(requested) = degraded_from
-        && installed.reported_absent.insert(requested.into())
-    {
-        tracing::debug!(
-            family = requested,
-            "font family not installed, and no declared fallback is either; \
-             shaping through the sans-serif generic instead"
-        );
-    }
-    family
-}
-
 /// The family to shape `style` with, given which families the fonts carry.
 ///
 /// Returns the style's own family when `carries` says so, the matching
@@ -548,42 +390,30 @@ pub(crate) fn resolve_family<'a>(
 /// declared fallback chain that is a generic or is carried, and
 /// `Family::SansSerif` when nothing is. The generic binding points that
 /// fallback at a carried family whenever the fonts hold a Latin-capable face.
-/// A generic is returned *as a generic*, so `Family::Monospace` keeps
-/// cosmic-text's monospace-specific fallback path — its `is_mono` bypass of
-/// the exact-weight filter, and its panose-driven monospace candidate set.
+/// A generic is returned *as a generic*, so the collection's binding for it
+/// applies.
 ///
-/// The one family rule of both shapers: the process font system asks it with
-/// the families its database carries, and the Parley path with the families
-/// its collection holds (ADR-0092 §7), so both are handed the same family for
-/// the same style when both hold the same faces. Past that family, both walk
-/// the same fallback order (`fallback_chain`).
+/// The Parley path asks it with the families its collection holds, spelled
+/// exactly (ADR-0092 §7); past that family, Parley walks the collection's
+/// fallback order (`fallback_chain`).
 ///
 /// The returned `Family` borrows `style`, so resolution allocates nothing.
 pub(crate) fn resolve_family_name(
     style: Option<&TextStyle>,
-    carries: impl FnMut(&str) -> bool,
-) -> Family<'_> {
-    resolve(style, carries).0
-}
-
-/// [`resolve_family_name`], and the requested family when resolution
-/// degraded it to the sans-serif generic.
-fn resolve(
-    style: Option<&TextStyle>,
     mut carries: impl FnMut(&str) -> bool,
-) -> (Family<'_>, Option<&str>) {
+) -> Family<'_> {
     let Some(requested) = style.and_then(|style| style.font_family.as_deref()) else {
         // Matches what `Attrs::new()` has always defaulted to; a style naming
         // no family is unchanged by this module beyond the generic binding.
-        return (Family::SansSerif, None);
+        return Family::SansSerif;
     };
 
     if let Some(generic) = generic_family(requested) {
-        return (generic, None);
+        return generic;
     }
 
     if carries(requested) {
-        return (Family::Name(requested), None);
+        return Family::Name(requested);
     }
 
     // The declared chain, before giving up on it. `TextStyle::font_family_fallback`
@@ -598,297 +428,12 @@ fn resolve(
     // the degrade below.
     for candidate in style.map_or(&[][..], |style| style.font_family_fallback.as_slice()) {
         if let Some(generic) = generic_family(candidate) {
-            return (generic, None);
+            return generic;
         }
         if carries(candidate) {
-            return (Family::Name(candidate), None);
+            return Family::Name(candidate);
         }
     }
 
-    (Family::SansSerif, Some(requested))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const ROBOTO: &[u8] = include_bytes!("../../assets/fonts/Roboto-Regular.ttf");
-    const MATERIAL_ICONS: &[u8] = include_bytes!("../../assets/fonts/MaterialIcons-Regular.ttf");
-    /// Maps ONLY `U+0020`, at 1.3 em, with "Emoji" in its PostScript name.
-    ///
-    /// Generated by `tools/decoy-face/generate.py`. This test used to build
-    /// its fixture from the HOST's emoji font, because no shipped font can
-    /// play the part — a decoy has to carry `U+0020` and no letters, and both
-    /// icon fonts carry neither. That made a merge-blocking assertion depend
-    /// on a distro package's space advance (issue #932).
-    const DECOY_WIDE_SPACE: &[u8] = include_bytes!("../../assets/fonts/decoy-wide-space.ttf");
-
-    fn database(faces: &[&[u8]]) -> Database {
-        let mut db = Database::new();
-        for face in faces {
-            db.load_font_data((*face).to_vec());
-        }
-        db
-    }
-
-    fn font_system(db: Database) -> FontSystem {
-        FontSystem::new_with_locale_and_db("en-US".to_owned(), db)
-    }
-
-    /// The recorded limitation of family-level fallback, pinned so it cannot
-    /// drift unnoticed in either direction.
-    ///
-    /// A per-glyph fallback search would skip an installed family that lacks
-    /// the glyph and try the next one. `Attrs::family`
-    /// holds exactly one family, so the walk here can only ask "is this
-    /// family installed" — and `Material Icons` IS installed while carrying no
-    /// Latin at all. The chain therefore stops on it, and the `Roboto` entry
-    /// behind it is never reached; a per-glyph search would render the text.
-    ///
-    /// The two directions this guards:
-    ///
-    /// * If someone "fixes" the walk to skip a present family, this fails and
-    ///   points at `ARCHITECTURE.md`'s mapping decision — the change would
-    ///   need to be per-glyph to be a fix rather than a different guess.
-    /// * If per-glyph fallback ever does land, this fails too, which is the
-    ///   signal to retire the divergence record instead of leaving it stale.
-    ///
-    /// The control matters: the same chain with an ABSENT primary reaches
-    /// `Roboto`, so the stop is about presence and not about the chain being
-    /// unread.
-    fn a_present_but_narrow_family_stops_the_chain_without_per_glyph_fallback() {
-        let mut system = font_system(database(&[ROBOTO, MATERIAL_ICONS]));
-        let mut installed = InstalledFamilies::default();
-
-        let narrow = TextStyle {
-            font_family: Some("Material Icons".to_owned()),
-            font_family_fallback: vec!["Roboto".to_owned()],
-            ..TextStyle::default()
-        };
-        assert_eq!(
-            resolve_family(Some(&narrow), &mut system, &mut installed, 0),
-            Family::Name("Material Icons"),
-            "an installed family stops the walk even though it carries no \
-             Latin -- fallback is per style, not per glyph"
-        );
-
-        let absent = TextStyle {
-            font_family: Some("Nothing Carries This".to_owned()),
-            font_family_fallback: vec!["Roboto".to_owned()],
-            ..TextStyle::default()
-        };
-        assert_eq!(
-            resolve_family(Some(&absent), &mut system, &mut installed, 0),
-            Family::Name("Roboto"),
-            "control: the chain IS walked -- an absent primary reaches it"
-        );
-    }
-
-    fn styled(family: Option<&str>) -> TextStyle {
-        TextStyle {
-            font_family: family.map(str::to_owned),
-            ..TextStyle::default()
-        }
-    }
-
-    fn shape_probe(
-        db: Database,
-        style: &TextStyle,
-        weight: u16,
-        resolve: bool,
-    ) -> (String, String, f32) {
-        use cosmic_text::{Attrs, AttrsOwned, Buffer, Metrics, Shaping, Weight};
-
-        const TEXT: &str = "Ao Bo";
-        const SIZE: f32 = 17.0;
-
-        let mut font_system = font_system(db);
-        let family = if resolve {
-            let mut installed = InstalledFamilies::default();
-            resolve_family(Some(style), &mut font_system, &mut installed, 0)
-        } else {
-            // The pre-fix path: the style's family goes to the shaper unchecked.
-            style
-                .font_family
-                .as_deref()
-                .map_or(Family::SansSerif, Family::Name)
-        };
-        let attrs = Attrs::new()
-            .family(family)
-            .weight(Weight(weight))
-            .metrics(Metrics::new(SIZE, SIZE * 1.2));
-        let owned = AttrsOwned::new(&attrs);
-
-        let mut buffer = Buffer::new(&mut font_system, Metrics::new(SIZE, SIZE * 1.2));
-        buffer.set_size(Some(f32::MAX), None);
-        buffer.set_rich_text(
-            std::iter::once((TEXT, owned.as_attrs())),
-            &Attrs::new(),
-            Shaping::Advanced,
-            None,
-        );
-        buffer.shape_until_scroll(&mut font_system, false);
-
-        let name_of = |id| {
-            font_system
-                .db()
-                .face(id)
-                .and_then(|face| face.families.first().map(|(name, _)| name.clone()))
-                .unwrap_or_else(|| "<unknown face>".to_owned())
-        };
-        let run = buffer
-            .layout_runs()
-            .next()
-            .expect("one line of shaped text");
-        for glyph in run.glyphs {
-            assert_ne!(glyph.glyph_id, 0, "shaping probe must not use .notdef");
-            assert!(glyph.w > 0.0, "shaping probe glyphs need positive advances");
-        }
-        let letter = run.glyphs.first().expect("a letter glyph");
-        let space = run
-            .glyphs
-            .iter()
-            .find(|glyph| &TEXT[glyph.start..glyph.end] == " ")
-            .expect("a space glyph");
-        (
-            name_of(letter.font_id),
-            name_of(space.font_id),
-            space.w / SIZE,
-        )
-    }
-
-    /// Issue #927's actual symptom: an emoji face shaping the SPACE of a Latin
-    /// run at ~1.3 em while the letters shape elsewhere.
-    ///
-    /// The fixture is committed (`DECOY_WIDE_SPACE`), not built from the
-    /// host's emoji font as it once was. That mattered: the `unresolved_em`
-    /// assertion is merge-blocking, and parameterising it on a distro font
-    /// package meant a Noto Color Emoji metrics change could turn CI red on a
-    /// FONT update, with the cause nowhere near the diff (issue #932). It also
-    /// removes the skip branch entirely — a Rust test that returns early is
-    /// reported PASSED, so the old absent-font path needed
-    /// `FLUI_REQUIRE_EMOJI_FONT` to stay honest, and now needs nothing.
-    fn oversized_space_from_an_emoji_face_is_closed() {
-        let style = styled(Some("CupertinoSystemText"));
-        let fixture = || database(&[ROBOTO, DECOY_WIDE_SPACE]);
-
-        // Red state: the family reaches the shaper unchecked.
-        let (unresolved_letter, unresolved_space, unresolved_em) =
-            shape_probe(fixture(), &style, 400, false);
-        assert!(
-            unresolved_em > 1.0,
-            "precondition: without resolution the space must come from the \
-             decoy at 1.3 em, got {unresolved_em} em (letters in \
-             {unresolved_letter}, space in {unresolved_space}). Roboto's own \
-             space is ~0.25 em, which is what this reads if the decoy is \
-             missing from the fixture"
-        );
-        assert_ne!(
-            unresolved_letter, unresolved_space,
-            "precondition: the defect is letters and space landing on \
-             different faces"
-        );
-
-        let (letter, space, em) = shape_probe(fixture(), &style, 400, true);
-        assert_eq!(
-            letter, "Roboto",
-            "letters must shape in the only text family present"
-        );
-        assert_eq!(
-            space, letter,
-            "the space must shape in the same face as the letters"
-        );
-        assert!(
-            em < 0.5,
-            "a space of {em} em is a foreign face's advance, not a text face's"
-        );
-    }
-
-    /// Over the same faces, the Parley path's check (the collection holds a
-    /// family spelled exactly so) resolves every style to the family the
-    /// process font system resolves it to: a carried primary, the first
-    /// carried or generic entry of the chain past absent ones, the
-    /// sans-serif degrade, and a carried family spelled in another case,
-    /// which fontdb does not match and so degrades too.
-    fn the_collection_resolves_the_family_the_font_system_does() {
-        use parley::fontique::{Blob, Collection, CollectionOptions};
-        use std::sync::Arc;
-
-        let mut system = font_system(database(&[ROBOTO, MATERIAL_ICONS]));
-        let mut installed = InstalledFamilies::default();
-        let mut collection = Collection::new(CollectionOptions {
-            shared: false,
-            system_fonts: false,
-        });
-        for bytes in [ROBOTO, MATERIAL_ICONS] {
-            collection.register_fonts(Blob::new(Arc::new(bytes)), None);
-        }
-
-        let chained = |family: &str, chain: &[&str]| TextStyle {
-            font_family: Some(family.to_owned()),
-            font_family_fallback: chain.iter().map(|name| (*name).to_owned()).collect(),
-            ..TextStyle::default()
-        };
-        let rows = [
-            (TextStyle::default(), Family::SansSerif),
-            (chained("Roboto", &[]), Family::Name("Roboto")),
-            (chained("roboto", &[]), Family::SansSerif),
-            (
-                chained("material icons", &["Material Icons"]),
-                Family::Name("Material Icons"),
-            ),
-            (
-                chained("CupertinoSystemText", &["-apple-system", "Material Icons"]),
-                Family::Name("Material Icons"),
-            ),
-            (
-                chained(
-                    "CupertinoSystemText",
-                    &["-apple-system", "monospace", "Roboto"],
-                ),
-                Family::Monospace,
-            ),
-            (
-                chained("Nothing Carries This", &["system-ui"]),
-                Family::SansSerif,
-            ),
-        ];
-        for (style, expected) in &rows {
-            let paint = resolve_family(Some(style), &mut system, &mut installed, 0);
-            let measure = resolve_family_name(Some(style), |name| {
-                crate::parley_text::holds_exactly(&mut collection, name)
-            });
-            assert_eq!(paint, *expected, "{style:?} on the font system");
-            assert_eq!(measure, paint, "{style:?}: the collection agrees");
-        }
-    }
-
-    /// Font resolution rows: each names the family-selection rule it pins.
-    #[test]
-    fn family_resolution_contract() {
-        let cases: Vec<(&str, fn())> = vec![
-            (
-                "a_present_but_narrow_family_stops_the_chain",
-                a_present_but_narrow_family_stops_the_chain_without_per_glyph_fallback,
-            ),
-            (
-                "oversized_space_from_an_emoji_face_is_closed",
-                oversized_space_from_an_emoji_face_is_closed,
-            ),
-            (
-                "the_collection_resolves_the_family_the_font_system_does",
-                the_collection_resolves_the_family_the_font_system_does,
-            ),
-        ];
-        let mut failed = Vec::new();
-        for (name, case) in cases {
-            if std::panic::catch_unwind(case).is_err() {
-                failed.push(name);
-            }
-        }
-        assert!(
-            failed.is_empty(),
-            "font resolution: failing rows: {failed:?}"
-        );
-    }
+    Family::SansSerif
 }

@@ -3,7 +3,7 @@
 
 Why it exists
 -------------
-`oversized_space_from_an_emoji_face_is_closed` reproduces issue #927's actual
+`a_missing_family_never_takes_its_space_from_an_emoji_face` reproduces issue #927's actual
 symptom: an emoji face shaping the SPACE of a Latin run at ~1.24 em while the
 letters shape elsewhere. Reproducing it needs a face that carries `U+0020` and
 no letters. Neither shipped icon font qualifies — both map neither — so the
