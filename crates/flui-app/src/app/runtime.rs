@@ -35,7 +35,7 @@ use std::sync::atomic::Ordering;
 use flui_foundation::{PresentationId, RealmId};
 use flui_scheduler::UpdateScheduler;
 
-use std::cell::OnceCell;
+use std::cell::{OnceCell, RefCell};
 use std::collections::{HashSet, VecDeque};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -55,7 +55,7 @@ use parking_lot::{Mutex, RwLock};
 use super::lifecycle::{
     ServiceDefinition, ServiceRegistry, ServiceShutdownReport, ServiceStartError,
 };
-use super::runner::{RealmDispatcher, RealmTask, SurfaceApplier};
+use super::runner::{FontRegistrationError, RealmDispatcher, RealmTask, SurfaceApplier};
 use super::ui_realm::UiRealm;
 use super::window_registry::{RegistryError, WindowRegistry};
 #[cfg(not(target_arch = "wasm32"))]
@@ -99,6 +99,9 @@ pub(crate) struct SharedEngineServices {
     /// a `TextContext` over it, so a face registered here reaches every
     /// realm, and the host's faces are read once per app, not per realm.
     pub(super) fonts: FontCollection,
+    /// The fonts [`AppRuntime::register_font`] added, by digest, so the same
+    /// bytes are never added twice.
+    registered_fonts: RefCell<HashSet<FontDigest>>,
 }
 
 impl SharedEngineServices {
@@ -123,15 +126,28 @@ impl SharedEngineServices {
         // The collection is fed from that font system's discovery here, on
         // the owner thread before the first frame: text measured before a
         // later feed would stay measured in other faces until something
-        // re-laid it out, and nothing does until the font-collection-changed
-        // event exists (ADR-0092 §10 step 3b).
+        // re-laid it out. A face registered later goes through the collection
+        // (`AppRuntime::register_font`), which re-lays out what it changes.
         let paint = flui_painting::shared_font_system();
 
         Self {
             accessibility_features: RwLock::new(AccessibilityFeatures::default()),
             fonts: FontCollection::with_host_faces(&paint),
+            registered_fonts: RefCell::new(HashSet::new()),
         }
     }
+}
+
+/// What identifies a registered font's bytes: a hash of them and their
+/// length.
+type FontDigest = (u64, usize);
+
+fn font_digest(font_bytes: &[u8]) -> FontDigest {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    font_bytes.hash(&mut hasher);
+    (hasher.finish(), font_bytes.len())
 }
 
 // ============================================================================
@@ -845,6 +861,29 @@ impl AppRuntime {
             .get_or_init(SharedEngineServices::resolve)
             .fonts
             .clone()
+    }
+
+    /// Registers `font_bytes` on the app's font collection, which loads the
+    /// face into the process font system paint shapes with too; resolves the
+    /// services first if no realm has been built yet.
+    ///
+    /// Telling the realms is the caller's work, outside this borrow
+    /// (`runner::register_font`).
+    ///
+    /// # Errors
+    ///
+    /// [`FontRegistrationError::AlreadyRegistered`] for bytes registered
+    /// before, [`FontRegistrationError::Font`] for bytes with no face; either
+    /// way nothing changes.
+    pub(super) fn register_font(&self, font_bytes: &[u8]) -> Result<(), FontRegistrationError> {
+        let services = self.services.get_or_init(SharedEngineServices::resolve);
+        let digest = font_digest(font_bytes);
+        if services.registered_fonts.borrow().contains(&digest) {
+            return Err(FontRegistrationError::AlreadyRegistered);
+        }
+        services.fonts.register_font(font_bytes)?;
+        services.registered_fonts.borrow_mut().insert(digest);
+        Ok(())
     }
 
     /// Stash the host's executors ahead of the first realm install (the
