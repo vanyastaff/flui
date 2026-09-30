@@ -366,11 +366,11 @@ that wires what it adds.
      context over a collection of its own holding the bundled faces.
    - (3b) The hot-reload plugin pipeline (`flui-hot-reload`'s `pipeline.rs`) is one such
      pipeline: `app_plugin!` mounts it with a standalone context, not the host realm's. The
-     plugin is a `dlopen`ed image the host reaches only through `flui_app_build`; the host's
-     `TextContextHandle` is an `Rc<RefCell<TextContext>>`, and shaping into it from the plugin
-     would grow and free host-allocated Parley buffers with the plugin image's allocator, while
-     the scene ABI frees memory only inside the image that allocated it (`flui_app_free`). The
-     plugin image is therefore a realm of its own for text, and faces the host app registers do
+     plugin is a `dlopen`ed image the host reaches only through `flui_app_build(width,
+     height)`, which has no parameter that could carry the host's handle, and `abi_token` covers
+     only the `Scene` and `LayerTree` layouts, so nothing would check that the two images agree
+     on `TextContext`'s layout if one were passed. The plugin image is therefore a realm of its
+     own for text, and faces the host app registers do
      not reach it; carrying font bytes across the FFI into the plugin's collection is a
      follow-up, or goes with ADR-0094's replacement of the `dlopen` path.
    - *Acceptance (3a):* two realms over two collections measure through their own contexts, and
@@ -382,7 +382,8 @@ that wires what it adds.
      realm B (fails on main). Test bootstraps construct the collection.
    - *Acceptance (3b, pipelines):* a pipeline constructor without a context does not compile; an
      owner taken out of its slot leaves one that measures through the same context; a plugin
-     pipeline measures through the context it is mounted with. The default build still measures
+     pipeline measures through the context it is mounted with and lays its root out at each
+     frame's surface size. The default build still measures
      with cosmic-text through `FONT_SYSTEM`, and `parley-layout` still shapes for paint there,
      until steps 4 and 5.
 4. **Neutral shaped runs on the display list.**
@@ -510,7 +511,8 @@ exist yet.
   `PipelineOwner::new`; in `crates/flui-rendering/tests/text_context.rs`,
   `a_taken_pipeline_leaves_an_owner_that_measures_through_the_same_context`; in
   `crates/flui-hot-reload/tests/plugin_pipeline_text.rs` (under `app-plugin`),
-  `a_plugin_pipeline_measures_through_the_context_it_is_given`.
+  `a_plugin_pipeline_measures_through_the_context_it_is_given`, and in
+  `plugin_pipeline_layout.rs`, `a_plugin_pipeline_lays_out_at_the_size_of_each_frame`.
 - A two-realm test: registering a font in one realm makes text in the other re-lay out (§10
   step 3b).
 - A registry test: a source-cache prune while the registry holds the blob keeps keys equal, and

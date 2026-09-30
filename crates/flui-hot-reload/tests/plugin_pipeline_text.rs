@@ -27,7 +27,7 @@ fn a_plugin_pipeline_measures_through_the_context_it_is_given() {
     let text = TextContextHandle::standalone();
     let mut pipeline = flui_hot_reload::PluginPipeline::mount(Label, 320.0, 240.0, text.clone());
 
-    let _scene = pipeline.draw_frame();
+    let _scene = pipeline.draw_frame(320.0, 240.0);
 
     assert!(
         text.with(|text| text_context_lends(text)) > 0,

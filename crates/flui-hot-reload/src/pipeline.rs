@@ -12,9 +12,8 @@
 //! [`TextContextHandle`] it is mounted with, and `app_plugin!` passes a
 //! [`TextContextHandle::standalone`] one: a context over the plugin image's
 //! own font collection, holding the bundled faces. The host realm's context
-//! cannot cross the `dlopen` boundary: shaping into it from the plugin would
-//! grow and free host-allocated buffers with the plugin image's allocator,
-//! and the scene ABI frees memory only inside the image that allocated it.
+//! does not cross the `dlopen` boundary: `flui_app_build` has no parameter
+//! that could carry it, and `abi_token` does not cover `TextContext`'s layout.
 //! Faces the host app registers are not visible to the plugin (ARCHITECTURE.md,
 //! "The plugin image is a realm of its own for text").
 
@@ -56,7 +55,7 @@ fn log(msg: &str) {
 ///
 /// Encapsulates `WidgetsBinding` (element tree) and `PipelineOwner` (render
 /// tree), mounts a root widget, and produces `Scene` objects on each
-/// `draw_frame()` call.
+/// `draw_frame(width, height)` call.
 ///
 /// # Usage
 ///
@@ -65,7 +64,8 @@ fn log(msg: &str) {
 /// # Lifecycle
 ///
 /// 1. `mount()` — Creates pipeline, mounts root widget
-/// 2. `draw_frame()` — Build → Layout → Paint → Scene (called per frame)
+/// 2. `draw_frame(width, height)` — Build → Layout → Paint → Scene (called
+///    per frame, at that frame's surface size)
 /// 3. Drop — Cleans up element and render trees
 #[expect(missing_debug_implementations)]
 pub struct PluginPipeline {
@@ -105,12 +105,6 @@ impl PluginPipeline {
     {
         let widgets = WidgetsBinding::new();
         let pipeline_owner = PipelineCell::new(PipelineOwner::new(text));
-        // The root lays out at the plugin's surface size, as the host realm's
-        // root does at its window's. Without root constraints the pipeline
-        // lays nothing out and paints an unmeasured tree.
-        pipeline_owner.with_mut(|owner| {
-            owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(width, height))));
-        });
 
         // Connect WidgetsBinding to PipelineOwner
         widgets.set_pipeline_owner(pipeline_owner.clone());
@@ -150,7 +144,11 @@ impl PluginPipeline {
     /// 2. **Layout / Compositing / Paint / Semantics** — Via the
     ///    typestate-driven `PipelineOwner::run_frame`.
     /// 3. **Scene** — Extract `LayerTree` and create `Scene`
-    pub fn draw_frame(&mut self) -> Scene {
+    ///
+    /// The root is laid out tight to `width` x `height`, the surface size of
+    /// this frame: the host passes it on every call, so a resized surface is
+    /// laid out at its new size on the next frame.
+    pub fn draw_frame(&mut self, width: f64, height: f64) -> Scene {
         let widgets = &self.widgets;
         let pipeline_owner = &self.pipeline_owner;
         widgets.with_global_key_registry(|| {
@@ -186,6 +184,12 @@ impl PluginPipeline {
                 } else {
                     log("draw_frame: WARNING — no root_id in pipeline");
                 }
+                // The root lays out at this frame's surface size, as the host
+                // realm's root does at its window's every frame. Without root
+                // constraints the pipeline lays nothing out and paints an
+                // unmeasured tree; constraints set once at mount would keep the
+                // first size after a resize.
+                guard.set_root_constraints(Some(BoxConstraints::tight(Size::new(width, height))));
                 let owner = guard.take_idle();
                 let (owner, result) = owner.run_frame();
                 *guard = owner;
@@ -284,7 +288,7 @@ mod tests {
             observed_in_probe.store(key_in_probe.current_element().is_some(), Ordering::Relaxed);
         }));
 
-        let _scene = pipeline.draw_frame();
+        let _scene = pipeline.draw_frame(320.0, 240.0);
         assert!(
             observed.load(Ordering::Relaxed),
             "real draw_frame must keep plugin registry active after build lock release"

@@ -186,7 +186,7 @@ impl Protocol for BoxProtocol {
     }
 
     /// Wraps the given `BoxConstraints` in a typed
-    /// `BoxLayoutCtx::<Leaf, BoxParentData>::new(constraints)` (no
+    /// `BoxLayoutCtx::<Leaf, BoxParentData>::new(constraints, text)` (no
     /// children, no callback) and hands an erased `&mut dyn
     /// BoxLayoutCtxErased` view to `f`.
     ///
@@ -488,6 +488,10 @@ enum BoxLayoutCtxStorage<'ctx, P: ParentData + Default> {
 impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
     /// Creates a new box layout context with given constraints (no children
     /// access), measuring text through `text`. Direct storage.
+    ///
+    /// Only flui-rendering can call this: a [`TextSource`] is lent by a
+    /// pipeline, and nothing outside the crate can build one (the `testing`
+    /// feature's `TextContextHandle::source` aside).
     pub fn new(constraints: BoxConstraints, text: TextSource<'ctx>) -> Self {
         Self {
             storage: BoxLayoutCtxStorage::Direct {
@@ -503,6 +507,8 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
 
     /// Creates a new box layout context with children access, measuring text
     /// through `text`. Direct storage.
+    ///
+    /// Only flui-rendering can call this, for the reason [`Self::new`] gives.
     pub fn with_children(
         constraints: BoxConstraints,
         children: &'ctx mut Vec<ChildState<P>>,
@@ -526,6 +532,8 @@ impl<'ctx, A: Arity, P: ParentData + Default> BoxLayoutCtx<'ctx, A, P> {
     /// This constructor enables proper Flutter-style layout where parent's
     /// `layout_child()` triggers synchronous child layout through the
     /// RenderTree.
+    ///
+    /// Only flui-rendering can call this, for the reason [`Self::new`] gives.
     pub fn with_layout_callback(
         constraints: BoxConstraints,
         children: &'ctx mut Vec<ChildState<P>>,
@@ -832,6 +840,10 @@ pub trait BoxLayoutCtxErased {
 
     /// The text context of the pipeline that built this context; the typed
     /// view lends it through `BoxLayoutCtx::text`.
+    ///
+    /// Required, and a [`TextSource`] is built only inside flui-rendering, so
+    /// only flui-rendering implements this trait: every layout context
+    /// measures through a pipeline's text context.
     fn text_source(&self) -> TextSource<'_>;
 
     /// Number of children visible to this context.

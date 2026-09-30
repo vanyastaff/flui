@@ -428,7 +428,7 @@ macro_rules! app_plugin {
                         $crate::__private_text::TextContextHandle::standalone(),
                     ))
                 });
-                let scene = pipeline.draw_frame();
+                let scene = pipeline.draw_frame(width, height);
                 ::std::boxed::Box::into_raw(::std::boxed::Box::new(scene))
                     .cast::<::std::ffi::c_void>()
             })

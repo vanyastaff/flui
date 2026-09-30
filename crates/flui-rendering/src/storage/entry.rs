@@ -305,7 +305,7 @@ impl<P: Protocol> RenderEntry<P> {
     ///
     /// This method constructs a leaf-mode typed layout context via
     /// [`Protocol::with_leaf_erased_ctx`]
-    /// (`BoxLayoutCtx::<Leaf, BoxParentData>::new(constraints)` with
+    /// (`BoxLayoutCtx::<Leaf, BoxParentData>::new(constraints, text)` with
     /// **no children**). Non-leaf render objects (Padding, Flex,
     /// Center, etc.) routed through this method observe
     /// `ctx.child_count() == 0` and take their no-child branches —

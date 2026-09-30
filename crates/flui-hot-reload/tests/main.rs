@@ -8,3 +8,7 @@ mod scene_ownership;
 #[cfg(feature = "app-plugin")]
 #[path = "plugin_pipeline_text.rs"]
 mod plugin_pipeline_text;
+
+#[cfg(feature = "app-plugin")]
+#[path = "plugin_pipeline_layout.rs"]
+mod plugin_pipeline_layout;
