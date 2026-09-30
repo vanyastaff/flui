@@ -25,27 +25,8 @@ use std::path::{Path, PathBuf};
 /// cargo's own default.
 #[must_use]
 pub(crate) fn project_output_root(workspace_root: &Path) -> PathBuf {
-    let metadata = cargo_metadata::MetadataCommand::new()
-        .current_dir(workspace_root)
-        .no_deps()
-        .exec();
-    let (target_dir, project) = match metadata {
-        Ok(metadata) => {
-            let here = std::fs::canonicalize(workspace_root).ok();
-            let project = metadata
-                .packages
-                .iter()
-                .find(|package| {
-                    here.is_some()
-                        && package
-                            .manifest_path
-                            .parent()
-                            .and_then(|dir| std::fs::canonicalize(dir).ok())
-                            == here
-                })
-                .map(|package| package.name.to_string());
-            (metadata.target_directory.into_std_path_buf(), project)
-        }
+    let (target_dir, project) = match crate::build::util::cargo::cargo_project(workspace_root) {
+        Ok(cargo) => (cargo.target_dir, cargo.package),
         Err(error) => {
             crate::ui::debug(format!(
                 "cargo metadata failed in {}: {error}; using its target/",
