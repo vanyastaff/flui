@@ -267,7 +267,9 @@ For the accepted part:
   signal's new value reads two frames on), `busy` before the first semantics frame, collection
   stopping with the last agent even while a reply is unanswered, `gone` for a node that left the
   tree and for a closed window, `unknown_handle` for a handle no read reported (for a read scoped
-  to it as for an action), a record of issued handles bounded by render slots, `busy` on a full
+  to it as for an action, and for an older or skipped generation of a slot a read did report),
+  a record of issued handles that is exact and bounded by render slots (runs of reported
+  generations per slot, at most 16, the oldest gap filled past that), `busy` on a full
   inbox, a panicking handler failing its reply first and leaving the queued read for the next
   drain, a panic before the handler reported as `ResolvePanicked` rather than the handler's, and
   traces without labels or values. The in-process `expand`/`collapse` check reads the committed

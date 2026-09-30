@@ -19,7 +19,6 @@
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::num::NonZeroU32;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -32,7 +31,7 @@ use flui_protocol::{
 use flui_semantics::{Placement, SemanticsActionError, WireActionError, WireReadError};
 use flui_view::__runtime::{AgentPort, PendingAnswer};
 use flui_view::dev_agent::{AgentAnswer, AgentFault, AgentWindow, HandleKind};
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 
 use super::UiRealm;
 use super::commands::{CommandSendError, UiCommand, UiCommandSender};
@@ -62,7 +61,10 @@ pub enum AgentError {
         /// The element addressed.
         element: ElementId,
         /// Whether this agent's reads ever reported the element: if so it is
-        /// gone, if not the handle was never issued to this agent.
+        /// gone, if not the handle was never issued to this agent. Exact but
+        /// for one bound: once a render slot has shown an agent more than
+        /// `IssuedHandles::MAX_RUNS` separate runs of generations, the oldest
+        /// gaps between them count as reported.
         issued: bool,
     },
     /// The element does not advertise the action now.
@@ -209,16 +211,26 @@ pub(super) type ReplySender<T> = Sender<Result<T, AgentError>>;
 /// An element handle is the generational accessibility id of its render
 /// object: the render slot in the low 32 bits, the slot's generation in the
 /// high 32 (`RenderId::new_gen`), and a removed element's slot is reused only
-/// under a higher generation. So the record keeps, per slot, the newest
-/// generation a read reported: a handle at or below it was issued (the
-/// element it names is gone if the tree no longer shows it), and one above it,
-/// or at a slot no read reported, was not.
+/// under a higher generation. So the record keeps, per slot, the runs of
+/// consecutive generations reads reported, as inclusive ranges: a handle in
+/// one was issued (the element it names is gone if the tree no longer shows
+/// it), and one outside every run, or at a slot no read reported, was not.
+///
+/// A slot's generations reported one read after another form one run, so a
+/// slot usually holds one or two. Each generation that came and went between
+/// two reads without either reporting it splits a run; past
+/// [`Self::MAX_RUNS`] a slot's two oldest runs merge, and the old gap between
+/// them counts as issued from then on (`gone` rather than `unknown_handle`).
+/// Recent gaps stay exact, and the record stays bounded by the slots.
 #[derive(Debug, Default)]
 pub(super) struct IssuedHandles {
-    newest: HashMap<u32, NonZeroU32>,
+    runs: HashMap<u32, Vec<(u32, u32)>>,
 }
 
 impl IssuedHandles {
+    /// The most runs of reported generations one slot keeps.
+    pub(super) const MAX_RUNS: usize = 16;
+
     fn split(element: ElementId) -> (u32, Option<NonZeroU32>) {
         let packed = element.get();
         let slot = u32::try_from(packed & u64::from(u32::MAX))
@@ -232,22 +244,52 @@ impl IssuedHandles {
         let (slot, Some(generation)) = Self::split(element) else {
             return;
         };
-        let newest = self.newest.entry(slot).or_insert(generation);
-        *newest = (*newest).max(generation);
+        let generation = generation.get();
+        let runs = self.runs.entry(slot).or_default();
+        // The first run that ends at or after the generation's predecessor:
+        // the only runs the generation can fall in, extend or join.
+        let at = runs.partition_point(|&(_, end)| u64::from(end) + 1 < u64::from(generation));
+        match runs.get(at).copied() {
+            Some((start, end)) if start <= generation && generation <= end => return,
+            Some((start, end)) if u64::from(end) + 1 == u64::from(generation) => {
+                runs[at] = (start, generation);
+                if let Some(&(next_start, next_end)) = runs.get(at + 1)
+                    && u64::from(generation) + 1 == u64::from(next_start)
+                {
+                    runs[at] = (start, next_end);
+                    runs.remove(at + 1);
+                }
+            }
+            Some((start, end)) if u64::from(generation) + 1 == u64::from(start) => {
+                runs[at] = (generation, end);
+            }
+            _ => runs.insert(at, (generation, generation)),
+        }
+        if runs.len() > Self::MAX_RUNS {
+            let (_, end) = runs.remove(1);
+            runs[0].1 = end;
+        }
     }
 
     pub(super) fn was_issued(&self, element: ElementId) -> bool {
         let (slot, generation) = Self::split(element);
         generation.is_some_and(|generation| {
-            self.newest
-                .get(&slot)
-                .is_some_and(|newest| generation <= *newest)
+            let generation = generation.get();
+            self.runs.get(&slot).is_some_and(|runs| {
+                let at = runs.partition_point(|&(_, end)| end < generation);
+                runs.get(at).is_some_and(|&(start, _)| start <= generation)
+            })
         })
     }
 
     #[cfg(test)]
     pub(super) fn slots(&self) -> usize {
-        self.newest.len()
+        self.runs.len()
+    }
+
+    #[cfg(test)]
+    pub(super) fn runs(&self) -> usize {
+        self.runs.values().map(Vec::len).sum()
     }
 }
 
@@ -432,36 +474,61 @@ impl SemanticsAgent {
 /// weak reference) past the presentation's close, so the port's lifetime
 /// does not say whether the window is open; the flag does, cleared when the
 /// presentation's [`DevAgentSlot`] goes.
+///
+/// Admission and close are serialized: a call enqueues while holding the
+/// flag's read lock, and the close takes its write lock, so once the close
+/// returns no call is still enqueueing and none that starts later is
+/// admitted. The lock is held across a non-blocking enqueue only.
 pub(crate) struct DevAgentPort {
     agent: SemanticsAgent,
-    open: AtomicBool,
+    open: RwLock<bool>,
+}
+
+impl DevAgentPort {
+    /// Run `enqueue` if the window is open, holding admission open for it.
+    fn admit<T>(
+        &self,
+        enqueue: impl FnOnce(&SemanticsAgent) -> Result<AgentReply<T>, AgentError>,
+    ) -> Result<AgentAnswer<T>, AgentFault>
+    where
+        T: Send + 'static,
+    {
+        let open = self.open.read();
+        if !*open {
+            return Err(AgentFault::window_gone());
+        }
+        enqueue(&self.agent)
+            .map(flui_view::__runtime::agent_answer)
+            .map_err(AgentFault::from)
+    }
+
+    /// Close admission, waiting for any call already admitted to finish
+    /// enqueueing.
+    fn close(&self) {
+        *self.open.write() = false;
+    }
 }
 
 impl AgentPort for DevAgentPort {
     fn is_open(&self) -> bool {
-        self.open.load(Ordering::Acquire)
+        *self.open.read()
     }
 
     fn read(&self, query: ReadQuery) -> Result<AgentAnswer<Tree>, AgentFault> {
-        self.agent
-            .read(query)
-            .map(flui_view::__runtime::agent_answer)
-            .map_err(AgentFault::from)
+        self.admit(|agent| agent.read(query))
     }
 
     fn act(&self, request: ActionRequest) -> Result<AgentAnswer<()>, AgentFault> {
-        self.agent
-            .act(request)
-            .map(flui_view::__runtime::agent_answer)
-            .map_err(AgentFault::from)
+        self.admit(|agent| agent.act(request))
     }
 }
 
 impl Drop for DevAgentSlot {
     /// The presentation closed: every window handle answers `gone` from
-    /// now on, even through a port a call still holds.
+    /// now on, even through a port a call still holds, and nothing is
+    /// enqueued for the closed window after this returns.
     fn drop(&mut self) {
-        self.agent.open.store(false, Ordering::Release);
+        self.agent.close();
     }
 }
 
@@ -532,7 +599,7 @@ impl UiRealm {
             let slot = slot.get_or_insert_with(|| DevAgentSlot {
                 agent: Arc::new(DevAgentPort {
                     agent: self.agent_for(presentation, None),
-                    open: AtomicBool::new(true),
+                    open: RwLock::new(true),
                 }),
                 collecting: Weak::new(),
             });
