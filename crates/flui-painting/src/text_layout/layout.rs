@@ -53,10 +53,14 @@ pub(super) struct FontState {
     /// cannot reach the database and so never bumps it.
     db_generation: u64,
     /// The fallback lists `system` was built with, shared with every
-    /// collection fed from this font system ([`SharedFontSystem::host_faces`]).
+    /// collection fed from this font system (`SharedFontSystem::host_faces`).
+    #[cfg_attr(
+        not(feature = "parley"),
+        expect(dead_code, reason = "only the Parley path's collection reads it")
+    )]
     chain: Arc<FallbackChain>,
-    /// How many times [`SharedFontSystem::host_faces`] was taken: one per
-    /// collection fed from the host, which is one per app.
+    /// How many collections were built from the host
+    /// ([`SharedFontSystem::count_host_feed`]): one per app.
     host_feeds: u64,
 }
 
@@ -449,7 +453,7 @@ impl SharedFontSystem {
     /// in-memory font's data (shared, not copied), every source's family
     /// names, the five generic families' names and the fallback chain.
     /// Parsing the files again is the caller's work, outside the lock.
-    /// Counted: one per collection fed.
+    #[cfg(feature = "parley")]
     pub(crate) fn host_faces(&self) -> HostFaces {
         use cosmic_text::fontdb::Source;
         use std::collections::HashMap;
@@ -460,8 +464,7 @@ impl SharedFontSystem {
             Blob(usize),
         }
 
-        let mut state = self.0.lock();
-        state.host_feeds += 1;
+        let state = self.0.lock();
         let db = state.system.db();
         let mut sources: Vec<HostSource> = Vec::new();
         let mut index: HashMap<SourceKey, usize> = HashMap::new();
@@ -501,10 +504,28 @@ impl SharedFontSystem {
         }
     }
 
-    /// How many times [`Self::host_faces`] was taken.
+    /// Records that a collection was built from this font system's host
+    /// faces ([`FontCollection::with_host_faces`](super::FontCollection::with_host_faces)),
+    /// whether or not the build has the Parley path to feed them into.
+    pub(crate) fn count_host_feed(&self) {
+        self.0.lock().host_feeds += 1;
+    }
+
+    /// How many collections were built from the host.
     #[cfg(any(test, feature = "testing"))]
     pub(crate) fn host_feeds(&self) -> u64 {
         self.0.lock().host_feeds
+    }
+
+    /// The family the sans-serif generic names.
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn sans_serif_family(&self) -> String {
+        self.0
+            .lock()
+            .system
+            .db()
+            .family_name(&Family::SansSerif)
+            .to_owned()
     }
 
     /// The first family name of every face, each once, in database order.
@@ -526,21 +547,53 @@ impl SharedFontSystem {
     /// `text` that is not whitespace.
     #[cfg(any(test, feature = "testing"))]
     pub(crate) fn covers(&self, text: &str) -> bool {
-        use cosmic_text::skrifa::{self, MetadataProvider as _};
+        let state = self.0.lock();
+        let db = state.system.db();
+        text.chars()
+            .filter(|c| !c.is_whitespace())
+            .all(|c| db.faces().any(|face| face_maps(db, face, c)))
+    }
+
+    /// Whether every character of `text` that is not whitespace is mapped by
+    /// a face of a family both shapers reach past the style's own: the
+    /// sans-serif generic's family, the chain's list for the character's
+    /// script, or the chain's common list. cosmic-text's last resort, the
+    /// walk over every other face, is left out, since the Parley path has
+    /// none (flui-painting `ARCHITECTURE.md`, mapping decision 16).
+    #[cfg(all(feature = "parley", any(test, feature = "testing")))]
+    pub(crate) fn chain_covers(&self, text: &str) -> bool {
+        use unicode_script::UnicodeScript as _;
 
         let state = self.0.lock();
         let db = state.system.db();
+        let sans_serif = db.family_name(&Family::SansSerif);
         text.chars().filter(|c| !c.is_whitespace()).all(|c| {
+            let script = state.chain.script(c.script());
+            let reachable = |name: &str| {
+                name == sans_serif || script.contains(&name) || state.chain.common().contains(&name)
+            };
             db.faces().any(|face| {
-                db.with_face_data(face.id, |data, index| {
-                    skrifa::FontRef::from_index(data, index)
-                        .ok()
-                        .and_then(|font| font.charmap().map(c))
-                        .is_some()
-                }) == Some(true)
+                face.families.iter().any(|(name, _)| reachable(name)) && face_maps(db, face, c)
             })
         })
     }
+}
+
+/// Whether `face` maps `c` to a glyph.
+#[cfg(any(test, feature = "testing"))]
+fn face_maps(
+    db: &cosmic_text::fontdb::Database,
+    face: &cosmic_text::fontdb::FaceInfo,
+    c: char,
+) -> bool {
+    use cosmic_text::skrifa::{self, MetadataProvider as _};
+
+    db.with_face_data(face.id, |data, index| {
+        skrifa::FontRef::from_index(data, index)
+            .ok()
+            .and_then(|font| font.charmap().map(c))
+            .is_some()
+    }) == Some(true)
 }
 
 /// The faces a process font system holds, taken by

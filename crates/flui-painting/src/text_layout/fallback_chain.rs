@@ -86,29 +86,44 @@ impl Fallback for ChainFallback {
     }
 }
 
-/// Writes `chain` into `collection`: for every script fontique names, its
-/// fallback families are the chain's list for that script followed by the
-/// common list, and the emoji generic is the common list.
-///
-/// Only families the collection holds are written, in the chain's order,
-/// each once. Only the default key of each script is set (no locale): the
-/// Parley path shapes with no locale today. A script whose list and the
-/// common list are both absent from the collection gets no entry, so it
-/// keeps whatever it had.
+/// Every script fontique names, and the Common, Inherited and Unknown
+/// scripts: the keys a collection's fallbacks are set under.
 #[cfg(feature = "parley")]
-pub(crate) fn install_into(chain: &FallbackChain, collection: &mut parley::fontique::Collection) {
-    use parley::fontique::{FallbackKey, GenericFamily, Script, ScriptExt as _};
+pub(crate) fn fontique_scripts() -> impl Iterator<Item = parley::fontique::Script> {
+    use parley::fontique::{Script, ScriptExt as _};
 
-    let common = held(collection, chain.common(), Vec::new());
-    let scripts = Script::all_samples()
+    Script::all_samples()
         .iter()
         .map(|(script, _)| *script)
-        .chain([Script::COMMON, Script::INHERITED, Script::UNKNOWN]);
-    for script in scripts {
+        .chain([Script::COMMON, Script::INHERITED, Script::UNKNOWN])
+}
+
+/// Writes `chain` into `collection`: for every script fontique names, its
+/// fallback families are the chain's list for that script, then the common
+/// list, then the family the collection's sans-serif generic names; the
+/// emoji generic is the common list.
+///
+/// Only families the collection holds are written, in the chain's order,
+/// each once. The trailing sans-serif family stands in for cosmic-text's
+/// last resort, which fontique lacks, so a glyph no listed family has still
+/// reaches the face the paint side's generic names rather than `.notdef`
+/// (a host whose common list is empty, as on Android, falls back there
+/// alone). Only the default key of each script is set (no locale): the
+/// Parley path shapes with no locale today. A script with no held family at
+/// all gets no entry, so it keeps whatever it had.
+#[cfg(feature = "parley")]
+pub(crate) fn install_into(chain: &FallbackChain, collection: &mut parley::fontique::Collection) {
+    use parley::fontique::{FallbackKey, GenericFamily};
+
+    let common = held(collection, chain.common(), Vec::new());
+    let sans_serif: Vec<_> = collection
+        .generic_families(GenericFamily::SansSerif)
+        .collect();
+    for script in fontique_scripts() {
         let own = unicode_script::Script::from_short_name(script.as_str())
             .map_or(&[][..], |script| chain.script(script));
         let mut families = held(collection, own, Vec::new());
-        for id in &common {
+        for id in common.iter().chain(&sans_serif) {
             if !families.contains(id) {
                 families.push(*id);
             }
@@ -235,6 +250,40 @@ mod tests {
             cosmic_text::Fallback::script_fallback(&paint, unicode_script::Script::Han, "ja-JP"),
             ["Material Icons", "Roboto"],
             "the paint side reads the same Han list"
+        );
+    }
+
+    /// Past the chain's lists, every script falls back to the family the
+    /// collection's sans-serif generic names, once, standing in for
+    /// cosmic-text's last resort.
+    #[test]
+    fn the_sans_serif_family_ends_every_script_fallback() {
+        let chain = FallbackChain::new("en-US".to_owned(), Fixture);
+        let mut collection = fixture_collection();
+        let icons = ids(&mut collection, &["Material Icons"]);
+        collection.set_generic_families(GenericFamily::SansSerif, icons.into_iter());
+        install_into(&chain, &mut collection);
+
+        let latin: Vec<_> = collection
+            .fallback_families(FallbackKey::new(Script::from_str_unchecked("Latn"), None))
+            .collect();
+        assert_eq!(
+            latin,
+            ids(
+                &mut collection,
+                &["Roboto", "CupertinoIcons", "Material Icons"]
+            )
+        );
+        let han: Vec<_> = collection
+            .fallback_families(FallbackKey::new(Script::from_str_unchecked("Hani"), None))
+            .collect();
+        assert_eq!(
+            han,
+            ids(
+                &mut collection,
+                &["Roboto", "CupertinoIcons", "Material Icons"]
+            ),
+            "Han for en-US: Roboto, the common list, then the sans-serif family once"
         );
     }
 

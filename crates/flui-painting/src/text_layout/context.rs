@@ -77,12 +77,16 @@ impl FontCollection {
     /// The app's composition root builds one per app, before the first
     /// frame; it reads the font files again, outside `fonts`' lock, so it
     /// costs a second scan of the host's fonts. A file that cannot be read is
-    /// skipped. Without `parley` it holds nothing, as `new` does.
+    /// skipped. Without `parley` it holds nothing, as `new` does, and takes
+    /// no snapshot of `fonts`.
     #[must_use]
     pub fn with_host_faces(fonts: &SharedFontSystem) -> Self {
-        Self(Arc::new(FontCollectionInner::build(Some(
-            &fonts.host_faces(),
-        ))))
+        fonts.count_host_feed();
+        #[cfg(feature = "parley")]
+        let inner = FontCollectionInner::build(Some(&fonts.host_faces()));
+        #[cfg(not(feature = "parley"))]
+        let inner = FontCollectionInner::build(None);
+        Self(Arc::new(inner))
     }
 
     /// Whether `a` and `b` are the same collection.
@@ -230,7 +234,6 @@ fn feed_host_faces(collection: &mut parley::fontique::Collection, host: &HostFac
     use super::fallback_chain::install_into;
     use super::layout::HostData;
 
-    let started = std::time::Instant::now();
     let held: HashSet<String> = collection.family_names().map(str::to_lowercase).collect();
     let mut paths = Vec::new();
     for source in &host.sources {
@@ -264,17 +267,22 @@ fn feed_host_faces(collection: &mut parley::fontique::Collection, host: &HostFac
         }
     }
     install_into(&host.chain, collection);
-    tracing::debug!(
-        files,
-        elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
-        "fed the host's faces into the font collection"
-    );
+    // The span above records how long the feed took; no clock is read here,
+    // since `std::time::Instant` panics on wasm32-unknown-unknown.
+    tracing::debug!(files, "fed the host's faces into the font collection");
 }
 
-/// Registers the embedded faces and binds every generic family to Roboto.
+/// Registers the embedded faces, binds every generic family to Roboto and
+/// makes Roboto every script's fallback.
+///
+/// fontique has no last resort past a style's families and its script's
+/// fallbacks, so without the fallback a glyph the style's family lacks (a
+/// Cyrillic letter in an icon font) would measure as `.notdef`, where
+/// cosmic-text paints it in Roboto. A host feed replaces the fallbacks with
+/// the host's order (`install_into`).
 #[cfg(all(feature = "parley", feature = "bundled-fonts"))]
 fn bind_bundled_faces(collection: &mut parley::fontique::Collection) {
-    use parley::fontique::{Blob, GenericFamily};
+    use parley::fontique::{Blob, FallbackKey, GenericFamily};
 
     use crate::fonts::{CUPERTINO_ICONS, MATERIAL_ICONS_REGULAR, ROBOTO_REGULAR};
 
@@ -293,6 +301,9 @@ fn bind_bundled_faces(collection: &mut parley::fontique::Collection) {
         GenericFamily::SystemUi,
     ] {
         collection.set_generic_families(generic, roboto.iter().copied());
+    }
+    for script in super::fallback_chain::fontique_scripts() {
+        collection.set_fallbacks(FallbackKey::new(script, None), roboto.iter().copied());
     }
 }
 
