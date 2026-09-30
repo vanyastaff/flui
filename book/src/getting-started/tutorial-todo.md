@@ -4,7 +4,8 @@
 shape one step further — a list instead of a single number — by comparing
 [`examples/counter.rs`](https://github.com/vanyastaff/flui/blob/main/examples/counter.rs) against
 [`examples/todo.rs`](https://github.com/vanyastaff/flui/blob/main/examples/todo.rs) line by line.
-Both are real, compiling examples in the repository; nothing on this page is pseudocode.
+Both are real, compiling examples in the repository. The snippets below are excerpts from them,
+trimmed to the lines that differ; `/* … */` marks what an excerpt leaves out.
 
 ```bash
 cargo run --example todo

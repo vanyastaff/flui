@@ -396,9 +396,11 @@ The CLI run admission check now recognizes the sole-facade applications it
 creates. It uses Cargo-resolved normal dependency identities, including aliases
 and workspace inheritance, rather than searching manifest text for internal
 crate names. Headless CLI fixtures execute marker binaries and reject unrelated
-members, dev/build-only dependencies, comments and prefix lookalikes. This tests
-admission, not live UI behavior. The admission check is
-`metadata_identifies_project` in `crates/flui-cli/src/commands/run.rs`.
+members, dev/build-only dependencies, comments and prefix lookalikes. This tested
+admission, not live UI behavior. That fixture matrix is historical evidence: it is no
+longer in the suite, whose one run test (`crates/flui-cli/tests/cli_run.rs`) covers an
+ordinary `flui` dependency. The admission check itself is `metadata_identifies_project`
+in `crates/flui-cli/src/commands/run.rs`.
 
 ## Desktop build artifact discovery
 

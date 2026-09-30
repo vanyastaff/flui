@@ -9,10 +9,10 @@ reasoning as an ADR. See [`AGENTS.md`](https://github.com/vanyastaff/flui/blob/m
 Design stance for the full policy.
 
 This book is a work in progress, published at <https://vanyastaff.github.io/flui/>: the structure
-is here, and every section is either filled with real, verified content or an explicit stub
-pointing at the working reference material that exists today (`docs/`, `examples/`, rustdoc). Nothing in this book invents
-an API that isn't in the source tree — a code sample is either copied from a compiling example or
-CLI template, or fenced as `rust,ignore` and labeled as illustrative.
+is here; sections still being written are stubs that point at the working reference material
+(`docs/`, `examples/`, rustdoc). A code sample is either copied from a compiling example or CLI
+template, or fenced as `rust,ignore`. Nothing compiles an ignored fence, so read it as an
+illustration and check the linked source for the exact API.
 
 ## Where to start
 

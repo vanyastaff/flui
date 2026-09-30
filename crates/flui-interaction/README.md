@@ -233,8 +233,10 @@ Resolves conflicts when multiple recognizers compete for the same pointer.
 use flui_interaction::prelude::*;
 use flui_interaction::GestureRecognizer; // `add_pointer`
 
-// Recognizers built on clones of one arena share it.
-let arena = GestureArena::new();
+// Competing recognizers share the binding's arena, which sweeps a pointer's
+// entry only after the whole hit path has been routed (`GestureArena::new()`
+// is self-driven, for a lone recognizer).
+let arena = binding.arena().clone(); // `binding: &GestureBinding`
 let tap = TapGestureRecognizer::new(arena.clone());
 let drag = DragGestureRecognizer::new(arena.clone(), DragAxis::Free);
 
