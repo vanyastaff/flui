@@ -1143,7 +1143,8 @@ The forwarding wrappers left over from the previous lock-based API are deleted; 
 | `semantics_nodes_updated` | `run_semantics`, from `SemanticsOwner::flush`'s return | nodes in the delivered accessibility update; 0 when the diff is empty |
 | `frames_produced` | `run_frame` | frames that committed a layer tree |
 
-The composer's counts are folded into the owner only on `run_paint`'s commit path, so a paint pass that fails partway adds nothing. Every field is a plain integer (a `Cell` on the `!Send` layout arena): no atomics, no locks. `perf_counters_are_live_on_a_full_reassemble` (`crates/flui-widgets/tests/perf.rs`) pins that every increment site but `layers_reused` moves on a full frame, and `perf_scrolling_a_10k_list_one_screen_lays_out_only_the_band` bounds `nodes_laid_out` by the band; the exact per-counter rules above are unasserted.
+The composer's counts are folded into the owner only on `run_paint`'s commit path, so a paint pass that fails partway adds nothing. Every field is a plain integer (a `Cell` on the `!Send` layout arena): no atomics, no locks. `perf_counters_are_live_on_a_full_reassemble` (`crates/flui-widgets/tests/perf.rs`) pins that every counter but `layers_reused` moves on a full frame (not that each of a counter's
+increment sites does), and `perf_scrolling_a_10k_list_one_screen_lays_out_only_the_band` bounds `nodes_laid_out` by the band; the exact per-counter rules above are unasserted.
 
 ### Criterion frame benchmarks (deferred -- needs workload generator)
 

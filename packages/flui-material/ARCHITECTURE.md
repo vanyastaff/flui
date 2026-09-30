@@ -83,6 +83,8 @@ and AccessKit checked/mixed semantics stay aligned with the oracle for every
 **Replacement coverage:**
 
 - Integration (`tests/checkbox.rs`): `indeterminate_tristate_exports_mixed_semantics`
+  (the `None` state exports mixed). The paint mark for each state and a binary
+  checkbox never exporting mixed are **Unasserted:** no test pins this.
 
 Same public-widget invariant class as GitHub #1101 (tabs length/index):
 caller-violable construction contracts ship in release, preferring

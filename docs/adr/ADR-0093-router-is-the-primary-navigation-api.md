@@ -308,8 +308,9 @@ Landed with step two:
   string, literal-sibling and non-ASCII patterns. `crates/flui-widgets/tests/routable_ui.rs`
   compiles the accepted shapes (each asserting its round trip; `basic.rs` and `multi_param.rs`
   also pin the `NoMatch` and `Param` errors, `precedence.rs` the specificity) and every
-  rejection of §1 against its diagnostic; the back-stack is the trait's default, which the
-  derive keeps, pinned by `router_opens_at_a_location_with_its_back_stack`. The pattern parser,
+  rejection of §1 against its diagnostic. The trait's default back-stack is pinned on a
+  hand-written route by `router_opens_at_a_location_with_its_back_stack`; that a derived route
+  keeps it is **Unasserted:** no test pins this. The pattern parser,
   specificity order and conflict detection have unit tests in
   `crates/flui-macros/src/derive_routable/pattern.rs`. The derive resolves through the facade,
   a renamed owner and a package on `flui-sdk` alone. **Unasserted:** no test pins this.

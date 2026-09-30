@@ -26,9 +26,12 @@ at delivery, after configuration updates, and checks that the state is still
 mounted. Each accepted platform action remains a distinct FIFO command across
 tap and long-press kinds; only the rebuild used to wake the UI thread may
 coalesce. Removing a handler or disposing the widget cancels delivery; queued
-requests never retain an obsolete user closure. This is pinned by
-`queued_semantics_delivery_rechecks_the_callback_and_mount_lifetime` and
-`a_panicking_assistive_action_does_not_discard_the_fifo_tail`.
+requests never retain an obsolete user closure. The delivery-time recheck and
+cancellation are pinned by
+`queued_semantics_delivery_rechecks_the_callback_and_mount_lifetime`, and FIFO
+order across a tap and a long press by
+`a_panicking_assistive_action_does_not_discard_the_fifo_tail`. That two queued
+actions of the same kind stay distinct is **Unasserted:** no test pins this.
 Post-frame entries hold only a weak reference to the detector-owned delivery
 target. Teardown therefore releases the live callbacks and presentation-bound
 writer even when an aborted or absent frame leaves the queue entry pending;
