@@ -344,7 +344,7 @@ pub(crate) fn unmounting_a_target_releases_its_slot() {
         SizedBox::new(40.0, 40.0).into_view().boxed()
     })
     .on_accept(move |_cx, _details| {
-        let _held = &captured;
+        std::hint::black_box(&captured);
     });
     let mut app = lay_out(target, tight(400.0, 400.0));
     assert!(

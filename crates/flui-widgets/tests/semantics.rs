@@ -303,7 +303,7 @@ pub(crate) fn unmounting_a_node_releases_its_action_table() {
     let mut harness = crate::common::harness::mount(
         host()
             .on_tap(move |_cx| {
-                let _held = &captured;
+                std::hint::black_box(&captured);
                 counted.set(counted.get() + 1);
             })
             .child(SizedBox::new(40.0, 20.0)),
