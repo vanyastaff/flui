@@ -99,8 +99,7 @@ Rules:
   space marker is needed. Constants (`Offset::ZERO`, `Size::INFINITY`) and inherent methods
   are FLUI's.
 - **Semantics are chosen on their merits**, not copied from Flutter or from an upstream crate.
-  Each rule is pinned by a test, and each difference from Flutter is recorded in the owning
-  crate's `## Mapping decisions`:
+  Each rule is pinned by a test:
   - `Rect::contains` is half-open (`left <= x < right`), so a point on an edge shared by two
     rectangles hits exactly one of them. Today's inclusive version hits both.
   - `expand_to_include` counts empty rectangles, so a zero-size node still contributes its
@@ -199,8 +198,7 @@ fractional ratios ([flutter#151065](https://github.com/flutter/flutter/issues/15
   - The defaults are Oklab and premultiplied, as CSS Color 4 chose for modern colour syntax.
     Two-stop gradients then keep a perceptually even midpoint and no dark band.
   - sRGB and linear sRGB stay selectable, for matching designs made in tools that use them.
-  - Both defaults differ from Flutter and are recorded in `## Mapping decisions`, each with a
-    test.
+  - Both defaults differ from Flutter, and each is pinned by a test.
 - **Upstream crates stay inside.**
   - `color` may back `Color`'s conversions internally.
   - peniko is added only where the display list stores its type as-is.

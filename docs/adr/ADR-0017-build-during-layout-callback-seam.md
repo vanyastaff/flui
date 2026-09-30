@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-07-08
 - **Revised:** 2026-09-26 (a LayoutCallbackScope spike; the decision stands)
+- **Amended:** 2026-09-30 — the R1/R2 landing conditions no longer ask for `## Mapping decisions` entries; FLUI records no divergence from Flutter as such ([`AGENTS.md`](../../AGENTS.md) Design stance). The decision is unchanged.
 - **Related:** ADR-0003 (lazy slivers use the same fixpoint)
 
 ## Context
@@ -282,10 +283,7 @@ heterogeneous small scrolls from 40 to 34, and the heterogeneous scroll from 2 t
   `service_child_requests_evict_only` (`crates/flui-view/src/owner/build_owner.rs:2288`),
   marking layout, because that path evicts children the last pass did place.
 - R2 becomes a per-render-object opt-in, not an `as_sliver()` check.
-- It needs `## Mapping decisions` entries in
-  [`crates/flui-rendering/ARCHITECTURE.md`](../../crates/flui-rendering/ARCHITECTURE.md#mapping-decisions)
-  for R2 and [`crates/flui-view/ARCHITECTURE.md`](../../crates/flui-view/ARCHITECTURE.md#mapping-decisions)
-  for R1, tests that fail without each rule, and an updated
+- It needs tests that fail without each rule and an updated
   `crates/flui-widgets/perf/baseline.toml`.
 
 Until then R1 and R2 are candidates only.

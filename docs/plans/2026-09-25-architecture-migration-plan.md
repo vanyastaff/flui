@@ -46,8 +46,7 @@ that adds it is named. The commands that exist today are the subcommands in
 `cross-typecheck`, `device`, `bench-collect`, and the rest).
 
 **Definition of done** stays the one in [AGENTS.md](../../AGENTS.md): a test that fails without
-the change, harness tests for every concrete render object, and each Flutter divergence recorded
-and pinned.
+the change, and harness tests for every concrete render object.
 
 **ADRs.** Each step names the ADR it implements. An ADR moves from Proposed to Accepted in the PR
 that ships the first behavior it decides, not before. The back-links on the older ADRs
@@ -130,8 +129,8 @@ two rules alone, without the layout callback (ADR-0017, "Revisited"): R1, a serv
 only evicted unplaced children marks paint, compositing bits and semantics instead of layout; R2,
 a layout mark on a child its sliver parent did not place stops there, as a per-render-object
 opt-in. They cut variable-extent small scrolls from 52 to 41 passes and heterogeneous ones from
-40 to 34. Landing them needs an explicit amendment of ADR-0017 §8, `## Mapping decisions` entries
-in `flui-rendering` and `flui-view`, a test that fails without each rule, and an updated
+40 to 34. Landing them needs an explicit amendment of ADR-0017 §8, a test that fails without each
+rule, and an updated
 `crates/flui-widgets/perf/baseline.toml`. A follow-up `LayoutCallbackScope` spike is a separate
 owner decision.
 
