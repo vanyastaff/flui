@@ -40,7 +40,6 @@ pub(super) const DOCS_ONLY: &[&str] = &[
     "docs/**",
     "design/**",
     "book/**",
-    ".rust-studio/**",
     ".github/**/*.md",
     ".github/ISSUE_TEMPLATE/**",
     ".github/CODEOWNERS",
@@ -756,8 +755,12 @@ pub(super) mod tests {
     }
 
     pub(crate) fn scope(files: &[&str]) -> Scope {
+        scope_in(repo(), files)
+    }
+
+    fn scope_in(repo: &Repo, files: &[&str]) -> Scope {
         classify(
-            repo(),
+            repo,
             &files.iter().map(|f| (*f).to_owned()).collect::<Vec<_>>(),
         )
         .expect("classify")
@@ -769,7 +772,6 @@ pub(super) mod tests {
             "docs/testing.md",
             "design/architecture.md",
             "book/src/intro.md",
-            ".rust-studio/specs/x.md",
             ".github/PULL_REQUEST_TEMPLATE.md",
             "crates/flui-view/ARCHITECTURE.md",
             "crates/flui-view/CHANGELOG.md",
@@ -939,30 +941,59 @@ pub(super) mod tests {
         );
     }
 
+    /// A throwaway repository holding `tools/spike`, a crate with its own
+    /// `[workspace]`, beside the workspace `packages` returns for its root.
+    fn with_a_standalone_crate(packages: impl FnOnce(&Path) -> Vec<Package>) -> (TempRepo, Repo) {
+        let tmp = TempRepo::new();
+        std::fs::create_dir_all(tmp.0.join("tools/spike/src")).expect("mkdir");
+        std::fs::write(
+            tmp.0.join("tools/spike/Cargo.toml"),
+            "[package]\nname = \"spike\"\n\n[workspace]\n",
+        )
+        .expect("write");
+        let repo = Repo {
+            root: tmp.0.clone(),
+            ci_yml: None,
+            xtask_main: None,
+            workspace: OnceLock::from(Workspace::from_packages(&tmp.0, packages(&tmp.0))),
+        };
+        (tmp, repo)
+    }
+
     fn a_standalone_crate_is_tooling() {
-        let s = scope(&[
-            "tools/text-spike/Cargo.toml",
-            "tools/text-spike/src/main.rs",
-        ]);
+        let (_tmp, repo) = with_a_standalone_crate(|_| Vec::new());
+        let s = scope_in(
+            &repo,
+            &["tools/spike/Cargo.toml", "tools/spike/src/main.rs"],
+        );
         assert_eq!(
             (s.mode, s.standalone.as_slice()),
-            (Mode::None, ["tools/text-spike".to_owned()].as_slice())
+            (Mode::None, ["tools/spike".to_owned()].as_slice())
         );
         assert!(
-            s.reason.contains("tools/text-spike") && s.reason.contains("[workspace]"),
+            s.reason.contains("tools/spike") && s.reason.contains("[workspace]"),
             "{}",
             s.reason
         );
     }
 
     fn a_standalone_crate_beside_a_member_change_is_not_unowned() {
-        let s = scope(&[
-            "tools/text-spike/src/main.rs",
-            "crates/flui-foundation/src/lib.rs",
-        ]);
+        let (_tmp, repo) = with_a_standalone_crate(|root| {
+            vec![
+                serde_json::from_value(serde_json::json!({
+                    "name": "member",
+                    "manifest_path": root.join("member/Cargo.toml"),
+                    "dependencies": [],
+                    "targets": [],
+                    "features": {},
+                }))
+                .expect("a package"),
+            ]
+        });
+        let s = scope_in(&repo, &["tools/spike/src/main.rs", "member/src/lib.rs"]);
         assert_eq!(s.mode, Mode::Packages, "{}", s.reason);
-        assert_eq!(s.standalone, ["tools/text-spike"]);
-        assert!(s.packages.contains(&"flui-foundation".to_owned()));
+        assert_eq!(s.standalone, ["tools/spike"]);
+        assert_eq!(s.packages, ["member"]);
     }
 
     fn a_crate_a_member_depends_on_is_not_standalone() {

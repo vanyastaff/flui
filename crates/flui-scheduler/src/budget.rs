@@ -628,6 +628,3 @@ pub type SharedBudget = Arc<Mutex<FrameBudget>>;
 pub fn shared_budget(target_fps: u32) -> SharedBudget {
     Arc::new(Mutex::new(FrameBudget::new(target_fps)))
 }
-
-#[cfg(test)]
-mod tests {}

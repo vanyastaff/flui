@@ -199,6 +199,3 @@ impl SingleChildLayoutDelegate for AspectRatioDelegate {
         self
     }
 }
-
-#[cfg(test)]
-mod tests {}

@@ -28,8 +28,7 @@
 //! [`PhysicalClipShape`] are a small, local trait pair scoped to exactly
 //! this family instead.
 //!
-//! # Divergences from a literal transcription (all backed by the design
-//! research doc, `docs/research/2026-07-01-render-physical-model-plan.md`)
+//! # Divergences from a literal transcription (all backed by the [design research](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-07-01-render-physical-model-plan.md))
 //!
 //! - **Hit-test always tests the clip shape for both variants.** The oracle
 //!   gates this on `_clipper != null`, which for `RenderPhysicalModel`
@@ -677,8 +676,7 @@ impl<C: PhysicalClipSource> RenderBox for RenderPhysicalModelBase<C> {
         // `RenderPhysicalModel` (it never exposes a public clipper), so a
         // circular or rounded-corner `RenderPhysicalModel` hit-tests as its
         // full bounding box in real Flutter. See the module doc and the
-        // design research plan (`docs/research/2026-07-01-render-physical-model-plan.md`,
-        // trap §4.2) for the full citation. `RenderPhysicalShape` uses the
+        // design research it links (trap §4.2) for the full citation. `RenderPhysicalShape` uses the
         // same shape gate when an owner-lane path target is installed, and
         // otherwise falls back to the whole-box default clip.
         let shape = self.clip_source.compute_clip(ctx.own_size());

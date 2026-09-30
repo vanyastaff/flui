@@ -196,7 +196,7 @@ What changes against today:
    on `main`. That is the owner's "no platform-specific heavy runs during active work". It would
    have moved the 59 unlabelled heavy PR runs of the window off the Windows and macOS runners.
 3. **A standalone crate is not "unowned"** (#1279, gap 1). A changed file under a directory whose
-   `Cargo.toml` declares its own `[workspace]` and is not a member (today `tools/text-spike`) puts
+   `Cargo.toml` declares its own `[workspace]` and is not a member (then `tools/text-spike`) puts
    the run in `tooling`. No member can depend on it: a path dependency inside the workspace root
    becomes a member, so such a crate is outside every member's graph.
 4. **The fast lane builds what the cache holds** (§4). It builds with the workspace's own feature
@@ -459,7 +459,7 @@ pinning test can read them:
 
 | Test | Asserts | Fails today because |
 |---|---|---|
-| `classify::a_standalone_crate_is_tooling` | `tools/text-spike/Cargo.toml` and `tools/text-spike/src/main.rs` classify as `Mode::None` with a reason naming the standalone manifest | they are "no package owns" → `Mode::Full` (`classify.rs:613-619`) |
+| `classify::a_standalone_crate_is_tooling` | the manifest and a source file of a crate with its own `[workspace]` (`tools/spike` in a temporary repository) classify as `Mode::None` with a reason naming the standalone manifest | they are "no package owns" → `Mode::Full` (`classify.rs:613-619`) |
 | `lane_args::whole_workspace_pr_takes_the_wide_lane` | a PR changing `tools/xtask/src/change_scope/classify.rs` gets `lane=wide` | today `heavy=false mode=full` |
 | `lane_args::heavy_triggers_on_a_pr_take_the_wide_lane_not_full` | `Cargo.lock`, `.github/workflows/ci.yml`, `deny.toml` on a PR → `wide`; the same with `--full-ci-label true` → `extended` | there is no `wide`: the result is `heavy=true` |
 | `lane_args::events_pick_their_lane` | `push` → `full`, `schedule` → `extended`, `workflow_dispatch` → `extended`, `merge_group` → `full`, `pull_request` with `--full-ci-label true` → `extended` | `--event` does not exist |

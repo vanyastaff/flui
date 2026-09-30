@@ -443,6 +443,3 @@ impl SemanticsNodeSnapshot {
         self.index_in_parent
     }
 }
-
-#[cfg(test)]
-mod tests {}

@@ -54,11 +54,6 @@
 //!
 //! Both variants are run; the doc's verdict tabulates both against the linear
 //! baseline.
-//!
-//! # Plan / spec references
-//!
-//! - [`docs/plans/2026-05-22-005-feat-view-element-core-contracts-plan.md`]
-//! - [`specs/004-view-element-core/spec.md`] Deferred S2, FR-016
 
 use std::any::TypeId;
 use std::collections::HashMap;
@@ -319,8 +314,7 @@ pub fn reconcile_positional_specialised(
 /// **Complexity:** O(N) average (size-1 buckets, immediate match), O(N²)
 /// worst case under adversarial bucket collisions across all N positions.
 /// Bounded to N = `TUPLE_ARITY` = 16 by FR-013, so the worst-case absolute
-/// cost is capped at 256 probes per reconcile call — see the worst-case
-/// timing table in `docs/research/2026-05-22-s2-static-path-sketch.md`.
+/// cost is capped at 256 probes per reconcile call.
 ///
 /// The stack-allocated index is the structural win over the linear keyed
 /// algorithm: no `HashMap::with_capacity(TUPLE_ARITY)` heap allocation per

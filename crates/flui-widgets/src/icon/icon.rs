@@ -26,8 +26,7 @@ use crate::text::RichText;
 /// and the two independent font-shaping systems (layout-time measurement and
 /// render-time painting) have no public font-registration API today — an
 /// icon-font codepoint shapes to tofu (the "missing glyph" box) until that
-/// infrastructure lands. See `docs/research/2026-07-02-icon-widget-plan.md`
-/// §"THE GAP" for the tracked follow-up (a font-registration ADR).
+/// infrastructure lands.
 ///
 /// # Deferred from the oracle
 ///

@@ -204,6 +204,3 @@ impl core::fmt::Display for ErasedGeometryMismatch {
 }
 
 impl std::error::Error for ErasedGeometryMismatch {}
-
-#[cfg(test)]
-mod tests {}
