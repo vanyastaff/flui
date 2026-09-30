@@ -93,6 +93,7 @@ High-level gesture detection with arena-based conflict resolution.
 
 ```rust
 use flui_interaction::prelude::*;
+use flui_interaction::GestureRecognizer; // `add_pointer`
 
 // Recognizers compete in one shared arena; `new` returns an `Arc<Self>`
 // and each `with_on_*` builder consumes and returns it.
@@ -230,6 +231,7 @@ Resolves conflicts when multiple recognizers compete for the same pointer.
 
 ```rust
 use flui_interaction::prelude::*;
+use flui_interaction::GestureRecognizer; // `add_pointer`
 
 // Recognizers built on clones of one arena share it.
 let arena = GestureArena::new();
