@@ -441,9 +441,11 @@ impl Known {
     }
 
     /// Whether the code-span `path` in `doc` resolves from the root, the
-    /// doc's directory, its package or the package's `src/`; a path in a package's layout
-    /// ([`PACKAGE_LAYOUT`]) from any package, since a doc outside a crate
-    /// names one crate's `tests/x.rs` with the crate in the prose around it.
+    /// doc's directory, its package or the package's `src/`. For a doc outside
+    /// every package, a path in a package's layout ([`PACKAGE_LAYOUT`]) also
+    /// resolves from any package, since such a doc names one crate's
+    /// `tests/x.rs` with the crate in the prose around it; a doc inside a
+    /// package names its own layout, and another crate's by its full path.
     fn resolves(&self, doc: &str, path: &str) -> bool {
         let dir = doc.rsplit_once('/').map(|(dir, _)| dir);
         let package = self.package_of(doc);
@@ -452,9 +454,12 @@ impl Known {
             .into_iter()
             .flatten()
             .any(|base| self.has(&joined(base, path)));
-        let in_layout = PACKAGE_LAYOUT
-            .iter()
-            .any(|layout| path.split('/').next() == Some(*layout));
+        // a doc inside a package names its own layout; only one outside every
+        // package may mean some crate's
+        let in_layout = package.is_none()
+            && PACKAGE_LAYOUT
+                .iter()
+                .any(|layout| path.split('/').next() == Some(*layout));
         found || (in_layout && self.packages().any(|base| self.has(&joined(base, path))))
     }
 }

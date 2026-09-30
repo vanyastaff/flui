@@ -337,7 +337,10 @@ impl Lexer<'_> {
             if let Some(open) = quote {
                 self.chars.next();
                 raw.push(next);
-                if next == open {
+                // inside `"…"` a backslash escapes, so `\"` does not close it
+                if open == '"' && next == '\\' {
+                    raw.extend(self.chars.next());
+                } else if next == open {
                     quote = None;
                 }
                 continue;

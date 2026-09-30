@@ -302,6 +302,16 @@ fn packages_are_read_only_from_cargo_commands() {
         ("sh -c 'cargo test -p a'", &[(0, test, "a")]),
         ("bash -lc \"cargo build -p a\"", &[(0, build, "a")]),
         ("bash script.sh -p x", &[]),
+        ("bash -O extglob -c 'cargo test -p a'", &[(0, test, "a")]),
+        ("bash -- -c 'cargo test -p gone'", &[]),
+        ("nohup -- cargo test -p a", &[(0, test, "a")]),
+        // an escaped quote keeps a redirection target whole
+        ("echo >\"foo\\\"; cargo test -p gone\"", &[]),
+        // help, version, list and explain exit before any selection
+        ("cargo --version test -p gone", &[]),
+        ("cargo test -p gone --help", &[]),
+        ("cargo --explain E0001", &[]),
+        ("cargo test -p a -- --help", &[(0, test, "a")]),
         ("cat <<\\EOF\n$(cargo test -p gone)\nEOF", &[]),
         (
             "cat <<'END MARK'\ncargo test -p gone\nEND MARK\ncargo build -p a",
@@ -715,8 +725,8 @@ fn a_path_resolves_from_the_root_the_doc_or_its_package() {
         ("docs/NOTES.md", true),
         ("tests/main.rs", true),
         ("src/platforms/mod.rs", true),
-        // a package's layout, in whichever package has it
-        ("tests/realm.rs", true),
+        // a doc inside a package names its own layout, not another's
+        ("tests/realm.rs", false),
         ("src/lib.rs", true),
         // a directory, and one asked for as a directory
         ("crates/flui-view/src", true),
@@ -730,9 +740,11 @@ fn a_path_resolves_from_the_root_the_doc_or_its_package() {
     ] {
         assert_eq!(known.resolves(doc, path), resolves, "{path:?}");
     }
-    // outside a package, only the root and the doc's directory, and package layouts
+    // outside a package, only the root and the doc's directory, and package
+    // layouts, in whichever package has the path
     assert!(!known.resolves("docs/testing.md", "platforms/mod.rs"));
     assert!(known.resolves("docs/testing.md", "adr/ADR-0081-tiers.md"));
+    assert!(known.resolves("docs/testing.md", "tests/realm.rs"));
 }
 
 fn an_llms_link_resolves_like_a_github_link() {

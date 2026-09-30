@@ -385,13 +385,23 @@ fn shell_script(words: &VecDeque<(usize, String)>) -> Option<(usize, String)> {
         return None;
     }
     while let Some((_, word)) = words.next() {
+        // `--` ends the options: a `-c` after it is a script file's name
+        if word == "--" {
+            return None;
+        }
+        // `-o option`, `-O shopt_option` (and their `+` forms) take a value
+        if matches!(word.as_str(), "-o" | "-O" | "+o" | "+O") {
+            words.next();
+            continue;
+        }
         match word.strip_prefix('-') {
             // `-c`, or a cluster holding it (`-lc`, `-ec`)
             Some(flags) if !flags.starts_with('-') && flags.contains('c') => {
                 return words.next().map(|(line, script)| (*line, script.clone()));
             }
             Some(_) => {}
-            // a script file, not a command string
+            // a `+` option, or else a script file, not a command string
+            None if word.starts_with('+') => {}
             None => return None,
         }
     }
@@ -435,8 +445,20 @@ pub(super) fn packages_in(code: &str, dialect: shell::Dialect) -> Vec<Selected> 
             continue;
         }
         let mut subcommand: Option<String> = None;
+        let mut selected = Vec::new();
+        let mut exits = false;
         while let Some((line, word)) = words.pop_front() {
             if word == "--" {
+                break;
+            }
+            // help, anywhere, and a global version, list or explanation print
+            // and exit before cargo selects any package
+            if matches!(word.as_str(), "-h" | "--help")
+                || (subcommand.is_none()
+                    && (matches!(word.as_str(), "-V" | "--version" | "--list")
+                        || word.starts_with("--explain")))
+            {
+                exits = true;
                 break;
             }
             let (line, name) = match package_flag(&word) {
@@ -465,13 +487,16 @@ pub(super) fn packages_in(code: &str, dialect: shell::Dialect) -> Vec<Selected> 
                     continue;
                 }
             };
-            found.extend(package(&name).map(|(name, version, source)| Selected {
+            selected.extend(package(&name).map(|(name, version, source)| Selected {
                 line,
                 subcommand: subcommand.clone(),
                 name,
                 version,
                 source,
             }));
+        }
+        if !exits {
+            found.extend(selected);
         }
     }
     found
@@ -526,6 +551,9 @@ fn cargo_command(words: &mut VecDeque<(usize, String)>) -> bool {
         }
         // `nohup COMMAND`: the command, immune to hangups
         if program == "nohup" || program.ends_with("/nohup") {
+            if words.front().is_some_and(|(_, word)| word == "--") {
+                words.pop_front();
+            }
             continue;
         }
         // `function NAME { BODY }`: the body's commands run when it is called

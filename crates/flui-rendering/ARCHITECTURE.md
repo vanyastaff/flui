@@ -1033,8 +1033,8 @@ walk's `catch_unwind` turns it into `Poisoned`. Locked by
 | `PipelineOwner::text` (`src/pipeline/text_context.rs`) | `Rc<RefCell<TextContext>>` | Owner-thread shared infrastructure | The realm's text context, shared by its presentations' pipelines. Borrowed once per measurement, never across a child's layout; `!Send`, like the owner. See "Layout contexts lend the realm's text context". |
 
 Two rows left this table because their sites left the crate: the mouse tracker
-lives in `flui-interaction` (`src/routing/mouse_tracker.rs`) and the render-view
-error builder in `flui-view` (`src/view/error.rs`); each is accounted for in its
+lives in `flui-interaction` (`crates/flui-interaction/src/routing/mouse_tracker.rs`) and
+the render-view error builder in `flui-view` (`crates/flui-view/src/view/error.rs`); each is accounted for in its
 owning crate.
 
 `NodePtr` in `src/pipeline/owner/subtree_arena.rs` is a plain raw-pointer newtype for the disjoint-subtree-borrow substrate ([`SubtreeArena`]) — `!Send + !Sync` by the language default, no manual impl. Confinement to the constructing thread is structural (`SubtreeArena` itself is `!Send + !Sync`, pinned by `static_assertions::assert_not_impl_any!`); there is no runtime thread check (`check_thread` and the pointer's former `unsafe impl Send/Sync` were both deleted once `PipelineCell`/dropped `Send + Sync` bounds made confinement type-enforced). Re-entrancy primitives `RenderTree::get_two_mut` and `get_parent_and_children_mut` (both in `src/storage/tree.rs`) are implemented and shipped; their unsafe is local to each function with unit-testable disjoint-keys invariants.
@@ -1095,7 +1095,7 @@ The forwarding wrappers left over from the previous lock-based API are deleted; 
 | `semantics_nodes_updated` | `run_semantics`, from `SemanticsOwner::flush`'s return | nodes in the delivered accessibility update; 0 when the diff is empty |
 | `frames_produced` | `run_frame` | frames that committed a layer tree |
 
-The composer's counts are folded into the owner only on `run_paint`'s commit path, so a paint pass that fails partway adds nothing. Every field is a plain integer (a `Cell` on the `!Send` layout arena): no atomics, no locks. `perf_counters_are_live_on_a_full_reassemble` (flui-widgets `tests/perf.rs`) checks that the counters move on a real frame; no test pins the per-rule counts.
+The composer's counts are folded into the owner only on `run_paint`'s commit path, so a paint pass that fails partway adds nothing. Every field is a plain integer (a `Cell` on the `!Send` layout arena): no atomics, no locks. `perf_counters_are_live_on_a_full_reassemble` (`crates/flui-widgets/tests/perf.rs`) checks that the counters move on a real frame; no test pins the per-rule counts.
 
 ### Criterion frame benchmarks (deferred -- needs workload generator)
 
