@@ -17,7 +17,7 @@ use super::provider::{ImageProvider, ImageProviderError};
 /// calling thread.
 ///
 /// Like [`AssetImage`](super::AssetImage), the registry is an explicit
-/// constructor argument — never [`AssetRegistry::global()`] — so the request
+/// constructor argument, so the request
 /// runs on whichever background runtime and byte-loader machinery the
 /// application already owns.
 ///

@@ -170,11 +170,9 @@ impl Image {
     /// Creates an `Image` that loads and decodes `path` asynchronously
     /// through `registry`, a `flui-assets` asset registry.
     ///
-    /// `registry` is an explicit argument — never
-    /// [`AssetRegistry::global()`](flui_assets::AssetRegistry::global) — so
-    /// the load runs on whichever background runtime and byte-loader cache
-    /// the application already owns. See the [async dispatch](#async-dispatch)
-    /// section above.
+    /// `registry` is an explicit argument, so the load runs on whichever
+    /// background runtime and byte-loader cache the application already owns.
+    /// See the [async dispatch](#async-dispatch) section above.
     ///
     /// Requires the `flui-widgets/asset-images` feature.
     #[cfg(feature = "asset-images")]
